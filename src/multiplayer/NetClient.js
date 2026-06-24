@@ -7,19 +7,29 @@
 
 import { C2S, S2C } from './protocol.js';
 
-/** Host the client should talk to — same origin unless ?server= overrides. */
+/**
+ * Host the client should talk to. Precedence:
+ *   1. ?server= URL override (also remembered for the session)
+ *   2. saved session override
+ *   3. VITE_API_URL baked in at build time — for split deploys where the client
+ *      (e.g. Vercel) and backend (e.g. Fly.io) live on different origins
+ *   4. same origin — LAN / host-mode where the backend also serves the client
+ */
 function mpServerHost() {
+  const strip = (s) => s.replace(/^https?:\/\//, '').replace(/\/$/, '');
   try {
     const fromUrl = new URLSearchParams(location.search).get('server');
     if (fromUrl) {
       sessionStorage.setItem('mp-server', fromUrl);
-      return fromUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      return strip(fromUrl);
     }
     const saved = sessionStorage.getItem('mp-server');
-    if (saved) return saved.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    if (saved) return strip(saved);
   } catch {
     /* ignore */
   }
+  const apiUrl = import.meta.env.VITE_API_URL;
+  if (apiUrl) return strip(apiUrl);
   return location.host;
 }
 

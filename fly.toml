@@ -1,0 +1,56 @@
+# ---------------------------------------------------------------------------
+# fly.toml — AIM4 multiplayer backend (HTTP config API + /ws WebSocket)
+#
+# Deploys server/index.js as a persistent Node process using Fly's Node
+# buildpack (no Dockerfile needed — `fly launch` / nixpacks detects package.json
+# and runs `npm run server`). The client is hosted separately on Vercel.
+#
+# Deploy:  fly launch --no-deploy   (first time, to create the app)
+#          fly deploy
+# ---------------------------------------------------------------------------
+
+app = "aim4-backend"            # change to your unique Fly app name
+primary_region = "iad"          # pick a region close to your players
+
+[build]
+  # No [build] image/dockerfile: Fly uses its Node buildpack and the package.json
+  # "start" / "server" script. See [processes] below for the exact command.
+
+[processes]
+  app = "node server/index.js"
+
+[env]
+  # 0.0.0.0 is REQUIRED on Fly so the process accepts traffic from the proxy
+  # (the default 127.0.0.1 would only bind loopback and fail health checks).
+  AIM4_HOST = "0.0.0.0"
+  # Bind explicitly to the port Fly routes to (matches internal_port below).
+  # The server reads AIM4_API_PORT first, then PORT, then 3784.
+  AIM4_API_PORT = "8080"
+  # Leave AIM4_SERVE_STATIC unset: the client is served by Vercel, not Node.
+
+[http_service]
+  internal_port = 8080
+  force_https = true            # redirect http->https; wss upgrades ride this
+  auto_start_machines = true
+  auto_stop_machines = "off"    # keep the box up: a stopped machine drops live
+                                # WebSocket matches and adds cold-start latency
+  min_machines_running = 1
+
+  # WebSocket connections are long-lived — count concurrency by connections,
+  # not requests, so Fly's load balancing/autoscaling behaves sensibly.
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 200
+    soft_limit = 150
+
+  # Liveness probe -> GET /health returns {"ok":true} (added in server/index.js).
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

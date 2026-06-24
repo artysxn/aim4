@@ -16,7 +16,9 @@ import { MultiplayerServer } from './lobby.js';
 import { tryServeStatic, distExists } from './static.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
 
-const PORT = Number(process.env.AIM4_API_PORT || 3784);
+// PORT (no prefix) is the convention most PaaS inject (Fly.io, Render, etc.);
+// AIM4_API_PORT still wins so existing local/host scripts are unaffected.
+const PORT = Number(process.env.AIM4_API_PORT || process.env.PORT || 3784);
 const HOST = process.env.AIM4_HOST || '127.0.0.1';
 const SERVE_STATIC =
   process.env.AIM4_SERVE_STATIC === '1' || process.env.AIM4_SERVE_STATIC === 'true';
@@ -26,6 +28,14 @@ const MAX_BODY = 64 * 1024;
 // build an invite link that works for friends over the internet. Filled in
 // asynchronously at startup when serving statically (host mode).
 let publicHost = null;
+
+// Basic, low-risk hardening applied to every HTTP response. Intentionally no
+// CSP here — a strict policy can break Three.js / WebSocket without care.
+function setSecurityHeaders(res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+}
 
 function send(res, status, body) {
   const json = JSON.stringify(body);
@@ -57,6 +67,8 @@ function readBody(req) {
 }
 
 const server = http.createServer(async (req, res) => {
+  setSecurityHeaders(res);
+
   if (req.method === 'OPTIONS') {
     send(res, 204, {});
     return;
@@ -97,6 +109,14 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/api/mp/status') {
       send(res, 200, { ok: true, ws: '/ws', publicHost });
+      return;
+    }
+
+    // Liveness probe for platform monitoring (Fly.io health checks). Answered in
+    // every mode — declared before the static handler so it isn't swallowed by
+    // the SPA fallback when AIM4_SERVE_STATIC is on.
+    if (req.method === 'GET' && url.pathname === '/health') {
+      send(res, 200, { ok: true });
       return;
     }
 

@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "description": "A web-based Aim Trainer built with Three.js, Pointer Lock API and Vite.",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vite --host",
     "dev:mp": "node server/run-dev.js",
