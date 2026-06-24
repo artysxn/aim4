@@ -1,3 +1,8 @@
 node_modules/
 dist/
 server/data/
+
+# Local env files (never commit keys — only .env.example is tracked)
+.env
+.env.local
+.env.*.local

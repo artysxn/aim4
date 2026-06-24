@@ -1,0 +1,18 @@
+# The image only needs package*.json + server/ (see Dockerfile). Everything
+# else — installed deps, the client build, source, git, host-mode data — is
+# excluded to keep the build context small and the image clean.
+node_modules
+dist
+.git
+.gitignore
+index.html
+vite.config.js
+vercel.json
+fly.toml
+Dockerfile
+.dockerignore
+server/data
+*.bat
+.env
+.env.*
+*.md
