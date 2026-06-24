@@ -30,7 +30,8 @@ const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
 const MAX_PITCH = degToRad(89);
 const DEATH_FX_DUR = 0.55;
 const DEATH_FX_PITCH = degToRad(38);
-const INTERP_RATE = 16; // exponential follow rate for remote interpolation
+const INTERP_RATE = 50; // exponential follow rate for remote interpolation
+const STATE_HZ = 64; // cap upstream state sends (server sim is 128 Hz)
 
 export class MultiplayerDuelScenario extends BaseScenario {
   constructor(opts) {
@@ -53,6 +54,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
 
     this._deathFx = null;
     this._dead = false;
+    this._stateSendAccum = 0;
 
     this._buildEnvironment();
     if (this.config.spawns) this.setSpawns(this.config.spawns);
@@ -151,6 +153,8 @@ export class MultiplayerDuelScenario extends BaseScenario {
       r = this._makeAvatar();
       r.cur = { x: 0, z: 0, y: STAND_EYE, yaw: 0, crouch: 0 };
       r.target = { x: 0, z: 0, y: STAND_EYE, yaw: 0, crouch: 0 };
+      r.vel = { x: 0, y: 0, z: 0 };
+      r.lastSnapSt = 0;
       r.dead = false;
       this.remotes.set(id, r);
     }
@@ -191,9 +195,18 @@ export class MultiplayerDuelScenario extends BaseScenario {
 
   // ---- Net event application (called by the controller) -------------------
   applySnapshot(msg) {
+    const st = msg.st || Date.now();
     for (const p of msg.players) {
       if (p.id === this.myId) continue;
       const r = this._ensureRemote(p.id);
+      const prev = r.target;
+      const dt = r.lastSnapSt ? (st - r.lastSnapSt) / 1000 : 0;
+      if (dt > 0.001 && dt < 0.25) {
+        r.vel.x = (p.x - prev.x) / dt;
+        r.vel.y = (p.y - prev.y) / dt;
+        r.vel.z = (p.z - prev.z) / dt;
+      }
+      r.lastSnapSt = st;
       r.target.x = p.x;
       r.target.y = p.y;
       r.target.z = p.z;
@@ -204,10 +217,8 @@ export class MultiplayerDuelScenario extends BaseScenario {
   }
 
   applyHit(msg) {
-    if (msg.shooterId === this.myId) {
-      this.hits++;
-      this.crosshair?.hit();
-    }
+    // Hitmarker + local hits count are handled at fire time from the client raycast.
+    if (msg.shooterId === this.myId) return;
   }
 
   applyKill(msg) {
@@ -241,7 +252,11 @@ export class MultiplayerDuelScenario extends BaseScenario {
 
   onUpdate(dt) {
     this._updateDeathFx(dt);
-    this._sendState();
+    this._stateSendAccum += dt;
+    if (this._stateSendAccum >= 1 / STATE_HZ) {
+      this._stateSendAccum = 0;
+      this._sendState();
+    }
     this._interpRemotes(dt);
   }
 
@@ -261,10 +276,15 @@ export class MultiplayerDuelScenario extends BaseScenario {
 
   _interpRemotes(dt) {
     const a = 1 - Math.exp(-INTERP_RATE * dt);
+    // Extrapolate remote targets forward by ~half RTT so they don't always trail.
+    const ext = Math.min(0.06, (this.net?.pingMs || 0) * 0.0005);
     for (const r of this.remotes.values()) {
-      r.cur.x += (r.target.x - r.cur.x) * a;
-      r.cur.y += (r.target.y - r.cur.y) * a;
-      r.cur.z += (r.target.z - r.cur.z) * a;
+      const tx = r.target.x + r.vel.x * ext;
+      const ty = r.target.y + r.vel.y * ext;
+      const tz = r.target.z + r.vel.z * ext;
+      r.cur.x += (tx - r.cur.x) * a;
+      r.cur.y += (ty - r.cur.y) * a;
+      r.cur.z += (tz - r.cur.z) * a;
       r.cur.crouch += (r.target.crouch - r.cur.crouch) * a;
       // Shortest-arc yaw interpolation.
       let dy = r.target.yaw - r.cur.yaw;
@@ -308,9 +328,34 @@ export class MultiplayerDuelScenario extends BaseScenario {
   // ---- Shooting -----------------------------------------------------------
   onShoot(raycaster) {
     if (this._dead) return;
+
+    const colliders = [];
+    for (const r of this.remotes.values()) {
+      if (!r.dead) for (const c of r.colliders) colliders.push(c);
+    }
+    const coverHit = raycaster.intersectObjects(this.coverMeshes, false)[0];
+    const hits = raycaster.intersectObjects(colliders, false);
+
+    let claim = null;
+    if (hits.length && (!coverHit || hits[0].distance < coverHit.distance)) {
+      const obj = hits[0].object;
+      for (const [id, r] of this.remotes) {
+        if (r.dead) continue;
+        if (r.colliders.includes(obj)) {
+          const zone = obj.userData.zone === 'head' ? 'head' : 'body';
+          claim = { victimId: id, zone };
+          break;
+        }
+      }
+      if (claim) {
+        this.hits++;
+        this.crosshair?.hit();
+      }
+    }
+
     const o = raycaster.ray.origin;
     const d = raycaster.ray.direction;
-    this.net?.sendShot({ x: o.x, y: o.y, z: o.z }, { x: d.x, y: d.y, z: d.z });
+    this.net?.sendShot({ x: o.x, y: o.y, z: o.z }, { x: d.x, y: d.y, z: d.z }, claim);
   }
 
   // ---- HUD helpers --------------------------------------------------------

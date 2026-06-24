@@ -18,7 +18,10 @@ export class Crosshair {
     this._trackProgress = 0;
 
     window.addEventListener('resize', () => this.draw());
-    settings.onChange(() => this.draw());
+    settings.onChange(() => {
+      this.draw();
+      this.drawPreview();
+    });
     this.setVisible(false);
   }
 
@@ -39,9 +42,30 @@ export class Crosshair {
     if (this.settings.data.crosshair.hitmarker === false) return;
     this._hitFlashUntil = performance.now() + 120;
     this.draw();
-    // Schedule one redraw to clear the marker after it expires.
     clearTimeout(this._hitTimer);
     this._hitTimer = setTimeout(() => this.draw(), 140);
+  }
+
+  /** Live preview in Settings → Crosshair. */
+  drawPreview(showHitmarker = false) {
+    const canvas = document.getElementById('xh-preview-canvas');
+    if (!canvas) return;
+    const w = canvas.clientWidth || 180;
+    const h = canvas.clientHeight || 180;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    this._paint(ctx, w / 2, h / 2, {
+      scale: 1,
+      trackProgress: 0,
+      hitFlash: showHitmarker || (
+        this.settings.data.crosshair.hitmarker !== false &&
+        performance.now() < this._hitFlashUntil
+      )
+    });
   }
 
   draw() {
@@ -58,16 +82,21 @@ export class Crosshair {
     ctx.clearRect(0, 0, w, h);
     if (!this.visible) return;
 
-    const { color, innerGap: rawGap, length: rawLen, thickness: rawThick, dotPercentage } = this.settings.data.crosshair;
-    const cx = Math.round(w / 2);
-    const cy = Math.round(h / 2);
-
-    // Scale crosshair to match the render resolution so it stays proportional
-    // when the game runs at a lower backbuffer size stretched to fill the viewport.
     const res = RESOLUTIONS[this.settings.data.resolution];
     const scale = (res && res.size) ? h / res.size[1] : 1;
+    this._paint(ctx, Math.round(w / 2), Math.round(h / 2), {
+      scale,
+      trackProgress: this._trackProgress,
+      hitFlash: this.settings.data.crosshair.hitmarker !== false &&
+        performance.now() < this._hitFlashUntil
+    });
+  }
+
+  _paint(ctx, cx, cy, { scale, trackProgress, hitFlash }) {
+    const { color, innerGap: rawGap, length: rawLen, thickness: rawThick, dotPercentage } =
+      this.settings.data.crosshair;
     const innerGap = rawGap * scale;
-    const length   = rawLen  * scale;
+    const length = rawLen * scale;
     const thickness = Math.max(1, rawThick * scale);
 
     ctx.strokeStyle = color;
@@ -76,44 +105,38 @@ export class Crosshair {
     ctx.lineCap = 'butt';
 
     ctx.beginPath();
-    // Top
     ctx.moveTo(cx, cy - innerGap);
     ctx.lineTo(cx, cy - innerGap - length);
-    // Bottom
     ctx.moveTo(cx, cy + innerGap);
     ctx.lineTo(cx, cy + innerGap + length);
-    // Left
     ctx.moveTo(cx - innerGap, cy);
     ctx.lineTo(cx - innerGap - length, cy);
-    // Right
     ctx.moveTo(cx + innerGap, cy);
     ctx.lineTo(cx + innerGap + length, cy);
     ctx.stroke();
 
-    if (this._trackProgress > 0) {
+    if (trackProgress > 0) {
       const barW = 56 * scale;
       const barH = Math.max(2, 2.5 * scale);
       const barY = cy + innerGap + length + 10 * scale;
       ctx.fillStyle = 'rgba(255,255,255,0.18)';
       ctx.fillRect(cx - barW / 2, barY, barW, barH);
       ctx.fillStyle = color;
-      ctx.fillRect(cx - barW / 2, barY, barW * this._trackProgress, barH);
+      ctx.fillRect(cx - barW / 2, barY, barW * trackProgress, barH);
     }
 
-    // Center dot — radius scales with dotPercentage (0–100 -> 0–5px).
     if (dotPercentage > 0) {
-      const r = (dotPercentage / 100) * 5;
+      const r = (dotPercentage / 100) * 5 * scale;
       ctx.beginPath();
       ctx.arc(cx, cy, Math.max(0.5, r), 0, Math.PI * 2);
       ctx.fill();
     }
 
-    // Hitmarker flash.
-    if (this.settings.data.crosshair.hitmarker !== false && performance.now() < this._hitFlashUntil) {
+    if (hitFlash) {
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2;
       const g = innerGap + 3;
-      const l = 7;
+      const l = 7 * scale;
       ctx.beginPath();
       ctx.moveTo(cx - g, cy - g);
       ctx.lineTo(cx - g - l, cy - g - l);

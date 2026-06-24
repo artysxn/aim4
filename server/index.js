@@ -108,15 +108,17 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && url.pathname === '/api/mp/status') {
-      send(res, 200, { ok: true, ws: '/ws', publicHost });
+      send(res, 200, {
+        ok: true,
+        ws: '/ws',
+        publicHost,
+        region: process.env.FLY_REGION || null
+      });
       return;
     }
 
-    // Liveness probe for platform monitoring (Fly.io health checks). Answered in
-    // every mode — declared before the static handler so it isn't swallowed by
-    // the SPA fallback when AIM4_SERVE_STATIC is on.
     if (req.method === 'GET' && url.pathname === '/health') {
-      send(res, 200, { ok: true });
+      send(res, 200, { ok: true, region: process.env.FLY_REGION || null });
       return;
     }
 

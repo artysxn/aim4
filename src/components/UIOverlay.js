@@ -18,6 +18,7 @@ import { exportConfig, importConfig, copyText, normalizeCode } from '../utils/Co
 import { MultiplayerController } from '../multiplayer/MultiplayerController.js';
 import { SCORE_TARGETS } from '../multiplayer/constants.js';
 import { getMap } from '../multiplayer/maps.js';
+import { formatServerRegion } from '../multiplayer/regionLabels.js';
 
 const SCENARIO_META = {
   gridshot: { title: 'Gridshot' },
@@ -171,6 +172,9 @@ export class UIOverlay {
         id: 'crosshair',
         label: 'Crosshair',
         body: `
+          <div class="xh-preview">
+            <canvas id="xh-preview-canvas" width="180" height="180"></canvas>
+          </div>
           <div class="color-row">
             <span>Color</span>
             <input type="color" id="set-xh-color" />
@@ -179,7 +183,7 @@ export class UIOverlay {
           ${rf('set-xh-len', 'Length', 0, 30, 1)}
           ${rf('set-xh-thick', 'Thickness', 1, 8, 1)}
             ${rf('set-xh-dot', 'Center dot (%)', 0, 100, 5)}
-            <label class="field-check"><input type="checkbox" id="set-xh-hitmarker" /> Show hitmarker cross on hit</label>`
+            <label class="field-check"><input type="checkbox" id="set-xh-hitmarker" /> Hitmarker</label>`
       },
       {
         id: 'colors',
@@ -584,6 +588,7 @@ export class UIOverlay {
         const cat = tab.dataset.settingsCat;
         tabs.forEach((t) => t.classList.toggle('active', t === tab));
         panels.forEach((p) => p.classList.toggle('active', p.dataset.settingsCat === cat));
+        if (cat === 'crosshair') this.crosshair.drawPreview();
       });
     });
   }
@@ -658,6 +663,7 @@ export class UIOverlay {
     $('#set-xh-hitmarker').addEventListener('change', (e) => {
       s.data.crosshair.hitmarker = e.target.checked;
       s.save();
+      this.crosshair.drawPreview(e.target.checked);
     });
 
     this._bindRange('set-grid-size', (v) => (s.data.gridshot.targetSize = v));
@@ -1040,6 +1046,18 @@ export class UIOverlay {
     return `${net.pingMs}ms · ${net.lossPct}% loss`;
   }
 
+  _mpServerFootnote() {
+    const region = formatServerRegion(this.mp?.net?.serverRegion);
+    return region ? `Server · ${region}` : '';
+  }
+
+  _mpNetFooter() {
+    const net = this._mpNetLine();
+    const region = this._mpServerFootnote();
+    if (!net && !region) return '';
+    return `${net}${net && region ? '<br>' : ''}${region}`;
+  }
+
   _refreshMpNetStats() {
     if (!this._isMpPlaying()) return;
     if (this._mpTabBoardHeld) this._renderMpTabScoreboard();
@@ -1083,7 +1101,7 @@ export class UIOverlay {
         .join('')}</tr>`;
 
     const goal = this._mpTarget > 0 ? `First to ${this._mpTarget}` : 'Endless';
-    const net = this._mpNetLine();
+    const net = this._mpNetFooter();
     this.mpTabScoreboard.innerHTML = `
       <div class="mp-tab-board">
         <div class="mp-tab-board-head">
@@ -1145,7 +1163,7 @@ export class UIOverlay {
         return `<div class="mp-sb-row${me}"><span class="mp-sb-name">${p.name}</span><span class="mp-sb-score">${s}</span></div>`;
       })
       .join('');
-    const net = this._mpNetLine();
+    const net = this._mpNetFooter();
     this.mpScoreboard.innerHTML = `<div class="mp-sb-goal">${goalLine}</div>${rows}${net ? `<div class="mp-sb-net">${net}</div>` : ''}`;
   }
 
@@ -1249,6 +1267,7 @@ export class UIOverlay {
     this._setRange('set-xh-thick', s.crosshair.thickness);
     this._setRange('set-xh-dot', s.crosshair.dotPercentage);
     $('#set-xh-hitmarker').checked = s.crosshair.hitmarker !== false;
+    this.crosshair.drawPreview();
 
     this._setRange('set-grid-size', s.gridshot.targetSize);
     $('#set-grid-mode').value = s.gridshot.mode || 'clicking';
@@ -1307,6 +1326,7 @@ export class UIOverlay {
       if (!isMp) this._closeMpChatTyping(false);
     }
     this.crosshair.setVisible(inRun);
+    if (name === 'settings') this.crosshair.drawPreview();
     // Hide the system cursor only while actively playing — when paused (Esc),
     // the cursor must reappear so the menu is clickable.
     document.body.classList.toggle('in-run', inRun);

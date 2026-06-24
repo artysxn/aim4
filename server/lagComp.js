@@ -50,5 +50,5 @@ export function sampleTransformAt(player, targetTime) {
 /** Rewind window from client RTT (ms). */
 export function lagRewindMs(rttMs) {
   const rtt = Number.isFinite(rttMs) ? rttMs : 0;
-  return Math.min(280, Math.max(80, rtt * 0.5 + 40));
+  return Math.min(200, Math.max(35, rtt * 0.5 + 15));
 }

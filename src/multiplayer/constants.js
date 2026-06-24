@@ -9,6 +9,10 @@
 export const TICK_RATE = 128;
 export const TICK_MS = 1000 / TICK_RATE; // 7.8125 ms
 
+// Snapshots to clients — decoupled from sim tick to cut WS bandwidth/CPU load.
+export const SNAPSHOT_RATE = 32;
+export const SNAPSHOT_EVERY = Math.max(1, Math.round(TICK_RATE / SNAPSHOT_RATE));
+
 // Player avatar dimensions — identical to the Duels enemy bot model so remote
 // players render (and are hit-tested) exactly like the singleplayer enemy.
 export const BODY_R = 0.35; // body cylinder radius (m)

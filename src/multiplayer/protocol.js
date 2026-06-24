@@ -14,7 +14,7 @@ export const C2S = {
   CONFIG: 'config', // host: { target?, isPublic? }
   START: 'start', // host
   STATE: 'state', // { x,y,z, yaw, pitch, crouch }
-  SHOOT: 'shoot', // { ox,oy,oz, dx,dy,dz, rtt? }
+  SHOOT: 'shoot', // { ox,oy,oz, dx,dy,dz, rtt?, victimId?, zone? }
   CHAT: 'chat', // { text }
   LIST: 'list', // subscribe to the public lobby browser
   UNLIST: 'unlist', // stop receiving lobby-browser updates

@@ -429,6 +429,22 @@ h4 {
   display: block;
 }
 
+.xh-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 18px;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+#xh-preview-canvas {
+  display: block;
+  width: 180px;
+  height: 180px;
+}
+
 .config-code-input {
   width: 100%;
   padding: 10px 12px;
@@ -883,10 +899,11 @@ input[type='checkbox'] {
 }
 .mp-sb-net {
   margin-top: 8px;
-  font-size: 12px;
-  letter-spacing: 1px;
+  font-size: 11px;
+  letter-spacing: 0.5px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  line-height: 1.5;
 }
 
 /* In-match chat — passive overlay; only captures input while typing. */
@@ -1049,11 +1066,12 @@ input[type='checkbox'] {
   margin-top: 10px;
   padding-top: 8px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-  font-size: 12px;
-  letter-spacing: 1px;
+  font-size: 11px;
+  letter-spacing: 0.5px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   text-align: center;
+  line-height: 1.5;
 }
 .mp-tab-table tbody tr + tr td,
 .mp-tab-table tbody tr + tr th {

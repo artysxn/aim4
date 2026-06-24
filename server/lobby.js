@@ -16,7 +16,8 @@ import {
   RESPAWN_DELAY,
   STAND_EYE,
   eyeOffset,
-  SPAWN_GRACE
+  SPAWN_GRACE,
+  SNAPSHOT_EVERY
 } from '../src/multiplayer/constants.js';
 import { getMap, spawnFor, pickRandomMap, spawnPair } from '../src/multiplayer/maps.js';
 import { resolveShot } from './hitscan.js';
@@ -44,6 +45,7 @@ export class MultiplayerServer {
     this.browsers = new Set(); // players currently viewing the lobby browser
     this._timer = setInterval(() => this._tick(), TICK_MS);
     this._lastTick = Date.now();
+    this._simTick = 0;
   }
 
   // ---- Connection lifecycle ----------------------------------------------
@@ -297,19 +299,29 @@ export class MultiplayerServer {
     d[0] /= len; d[1] /= len; d[2] /= len;
     const rtt = Number.isFinite(msg.rtt) ? Math.max(0, Math.min(800, msg.rtt)) : player.rttMs;
     if (Number.isFinite(msg.rtt)) player.rttMs = rtt;
-    player.shotQueue.push({ o, d, at: Date.now(), rtt });
+    player.shotQueue.push({
+      o,
+      d,
+      at: Date.now(),
+      rtt,
+      victimId: Number.isFinite(msg.victimId) ? msg.victimId : null,
+      zone: msg.zone === 'head' || msg.zone === 'body' ? msg.zone : null
+    });
   }
 
   // ---- Authoritative tick -------------------------------------------------
   _tick() {
     const now = Date.now();
     this._lastTick = now;
+    this._simTick++;
     for (const lobby of this.lobbies.values()) {
       if (!lobby.started) continue;
       this._resolveShots(lobby);
       this._resolveRespawns(lobby, now);
       for (const p of lobby.players) pushTransformHistory(p, now);
-      this._broadcastSnapshot(lobby, now);
+      if (this._simTick % SNAPSHOT_EVERY === 0) {
+        this._broadcastSnapshot(lobby, now);
+      }
     }
   }
 
@@ -322,6 +334,15 @@ export class MultiplayerServer {
       if (shooter.dead) continue;
 
       for (const shot of shots) {
+        // Client-reported hit: if their screen showed a hit, accept it.
+        if (shot.victimId != null && shot.zone) {
+          const victim = lobby.players.find((p) => p.id === shot.victimId);
+          if (victim && victim !== shooter && !victim.dead) {
+            this._registerHit(lobby, shooter, victim, shot.zone);
+            continue;
+          }
+        }
+
         const rewind = lagRewindMs(shot.rtt);
         const sampleTimes = [shot.at, shot.at - rewind * 0.35, shot.at - rewind];
 
@@ -343,15 +364,18 @@ export class MultiplayerServer {
         }
         if (!best) continue;
 
-        const { victim, res } = best;
-        if (!shooter.stats) shooter.stats = freshStats();
-        shooter.stats.hits++;
-        this._broadcast(lobby, { t: S2C.HIT, shooterId: shooter.id, victimId: victim.id, zone: res.zone });
-        const damage = res.zone === 'head' ? 2 : 1;
-        victim.hp -= damage;
-        if (victim.hp <= 0) this._registerKill(lobby, shooter, victim);
+        this._registerHit(lobby, shooter, best.victim, best.res.zone);
       }
     }
+  }
+
+  _registerHit(lobby, shooter, victim, zone) {
+    if (!shooter.stats) shooter.stats = freshStats();
+    shooter.stats.hits++;
+    this._broadcast(lobby, { t: S2C.HIT, shooterId: shooter.id, victimId: victim.id, zone });
+    const damage = zone === 'head' ? 2 : 1;
+    victim.hp -= damage;
+    if (victim.hp <= 0) this._registerKill(lobby, shooter, victim);
   }
 
   _registerKill(lobby, shooter, victim) {

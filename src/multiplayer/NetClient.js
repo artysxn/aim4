@@ -55,6 +55,7 @@ export class NetClient {
     this.id = null;
     this.connected = false;
     this.serverPublicHost = null;
+    this.serverRegion = null;
 
     this.pingMs = 0;
     this.lossPct = 0;
@@ -91,8 +92,10 @@ export class NetClient {
       try {
         const body = await res.json();
         this.serverPublicHost = body && body.publicHost ? body.publicHost : null;
+        this.serverRegion = body && body.region ? body.region : null;
       } catch {
         this.serverPublicHost = null;
+        this.serverRegion = null;
       }
     } catch {
       throw new Error('Server unreachable');
@@ -169,6 +172,7 @@ export class NetClient {
     this._connecting = null;
     this.pingMs = 0;
     this.lossPct = 0;
+    this.serverRegion = null;
     this._pendingPings.clear();
   }
 
@@ -302,12 +306,14 @@ export class NetClient {
   sendState(s) {
     this._send({ t: C2S.STATE, ...s });
   }
-  sendShot(o, d) {
+  sendShot(o, d, claim) {
     this._send({
       t: C2S.SHOOT,
       ox: o.x, oy: o.y, oz: o.z,
       dx: d.x, dy: d.y, dz: d.z,
-      rtt: this.pingMs || undefined
+      rtt: this.pingMs || undefined,
+      victimId: claim?.victimId,
+      zone: claim?.zone
     });
   }
   sendChat(text) {
