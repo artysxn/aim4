@@ -77,7 +77,7 @@ export class MultiplayerController {
   async _ensureConnected() {
     if (this.net.connected) return true;
     try {
-      this.ui.mpStatus('Connecting to server…');
+      this.ui.mpStatus('Connecting…');
       await this.net.connect();
       this.ui.mpStatus('');
       return true;

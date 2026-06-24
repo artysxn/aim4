@@ -10,7 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
-import { degToRad, countsPer360 } from '../utils/MathUtils.js';
+import { degToRad } from '../utils/MathUtils.js';
 import { RESOLUTIONS } from '../core/SettingsManager.js';
 import { SCENARIOS } from '../core/SceneManager.js';
 import * as Storage from '../utils/Storage.js';
@@ -103,6 +103,9 @@ export class UIOverlay {
     this._bindMpChat();
     this._bindMpTabScoreboard();
 
+    this.mp.net.onNetStats = () => this._refreshMpNetStats();
+    setInterval(() => this._refreshMpNetStats(), 500);
+
     this.input.onLockChange = (locked) => this._onLockChange(locked);
     this.input.onUnlockedClick = () => this._onUnlockedClick();
     this.sceneManager.onFinish = (results) => this._onFinish(results);
@@ -148,8 +151,7 @@ export class UIOverlay {
         label: 'Mouse',
         body: `
           ${numField('set-cm360', 'Sensitivity (cm / 360°)', '0.5')}
-          ${numField('set-dpi', 'Mouse DPI / CPI', '50')}
-          <p class="readout" id="sens-readout"></p>`
+          ${numField('set-dpi', 'Mouse DPI / CPI', '50')}`
       },
       {
         id: 'display',
@@ -189,8 +191,7 @@ export class UIOverlay {
           ${colorRow('set-col-ehead', 'Enemy head')}
           ${colorRow('set-col-cover', 'Cover / columns')}
           ${colorRow('set-col-target', 'Gridshot target')}
-          <button type="button" class="btn btn-block" data-reset-colors>Reset colors</button>
-          <p class="readout muted">World colors apply on next run.</p>`
+          <button type="button" class="btn btn-block" data-reset-colors>Reset colors</button>`
       },
       {
         id: 'gridshot',
@@ -252,8 +253,7 @@ export class UIOverlay {
               <option value="10">10 · Left Bulwark</option>
             </select>
           </div>
-          ${rf('set-duels-ttk', 'Time to kill (s)', 0.2, 2.0, 0.1)}
-          <p class="readout">WASD move · Shift walk · Ctrl/C crouch · 250 u/s peeks.</p>`
+          ${rf('set-duels-ttk', 'Time to kill (s)', 0.2, 2.0, 0.1)}`
       },
       {
         id: 'range',
@@ -281,7 +281,6 @@ export class UIOverlay {
         id: 'share',
         label: 'Share',
         body: `
-          <p class="readout">Paste a code to load settings, or export yours to share.</p>
           <div class="field field-plain">
             <div class="field-top">
               <span class="field-label">Settings code</span>
@@ -332,11 +331,11 @@ export class UIOverlay {
     <!-- MULTIPLAYER CHAT (Enter / Y to open · Tab to return to game) -->
     <div id="mp-chat" class="mp-chat">
       <div id="mp-chat-log" class="mp-chat-log"></div>
-      <input id="mp-chat-input" type="text" class="mp-chat-input" maxlength="120" placeholder="Enter or Y to chat · Hold Tab for stats" spellcheck="false" autocomplete="off" />
+      <input id="mp-chat-input" type="text" class="mp-chat-input" maxlength="120" placeholder="" spellcheck="false" autocomplete="off" />
     </div>
 
     <!-- CLICK-TO-AIM PROMPT (multiplayer, when pointer lock is not held) -->
-    <div id="mp-aim-hint" class="mp-aim-hint"><span>Click to aim</span></div>
+    <div id="mp-aim-hint" class="mp-aim-hint"><span>Click</span></div>
 
     <!-- HOLD-TAB SCOREBOARD -->
     <div id="mp-tab-scoreboard" class="mp-tab-scoreboard"></div>
@@ -345,7 +344,6 @@ export class UIOverlay {
     <div class="screen menu" data-screen="menu">
       <div class="panel wide">
         <h1 class="logo text-big">AIM4<span>.io</span></h1>
-        <p class="subtitle">Three.js · Pointer Lock · cm/360 true sensitivity</p>
         <div class="cards">
           ${Object.keys(SCENARIOS)
             .map(
@@ -365,7 +363,6 @@ export class UIOverlay {
           <button class="btn" data-goto="settings">⚙ Settings</button>
           <button class="btn" data-goto="leaderboard">🏆 Leaderboards</button>
         </div>
-        <p class="hint">Singleplayer above · <b>Multiplayer</b> for online 1v1 duels · <b>WASD</b> + <b>Shift</b> + <b>Ctrl</b> + <b>Space</b> · <b>Esc</b> to pause</p>
       </div>
     </div>
 
@@ -396,7 +393,6 @@ export class UIOverlay {
     <div class="screen leaderboard" data-screen="leaderboard">
       <div class="panel wide">
         <h2 class="text-big">Leaderboards</h2>
-        <p class="muted">Top 10 for your <b>current settings</b> of each scenario.</p>
         <div class="tabs" id="lb-tabs">
           ${Object.keys(SCENARIOS)
             .map(
@@ -416,7 +412,6 @@ export class UIOverlay {
     <div class="screen pause" data-screen="paused">
       <div class="panel">
         <h2 class="text-big pause-title">Paused</h2>
-        <p class="muted">Your run is frozen. Resume to re-lock the mouse.</p>
         <div class="menu-actions">
           <button class="btn primary" data-resume>Resume</button>
           <button class="btn" data-quit>Quit to menu</button>
@@ -428,8 +423,6 @@ export class UIOverlay {
     <div class="screen mp" data-screen="mp">
       <div class="panel wide">
         <h2 class="text-big">Multiplayer</h2>
-        <p class="muted">Online 1v1 duels · arenas rotate each round · server runs at <b>128 tick</b>.</p>
-        <p class="readout muted">To host for friends: run <b>start-host.bat</b>, then share the invite link from your lobby (not just the code).</p>
         <div class="field field-plain">
           <div class="field-top"><span class="field-label">Display name</span></div>
           <input type="text" id="mp-name" class="config-code-input" maxlength="24" placeholder="Your name" spellcheck="false" autocomplete="off" />
@@ -444,12 +437,11 @@ export class UIOverlay {
         <div class="mp-cols">
           <div class="mp-col">
             <h4>Create a lobby</h4>
-            <p class="muted mp-map-note">Map is chosen randomly each round.</p>
             <div class="field field-plain">
               <div class="field-top"><span class="field-label">Win condition</span></div>
               <select id="mp-create-target">${this._targetOptions()}</select>
             </div>
-            <label class="field-check"><input type="checkbox" id="mp-create-private" /> Private lobby (join by code/link only)</label>
+            <label class="field-check"><input type="checkbox" id="mp-create-private" /> Private</label>
             <button type="button" class="btn primary btn-block" id="mp-create-btn">Create lobby</button>
           </div>
           <div class="mp-col">
@@ -474,19 +466,16 @@ export class UIOverlay {
         <h2 class="text-big">Lobby <span id="mp-lobby-code" class="mp-code"></span></h2>
         <div id="mp-players" class="mp-players"></div>
         <div class="mp-invite" id="mp-invite">
-          <p class="readout"><b>Invite link</b> — friends must open this exact URL (not localhost on their PC):</p>
           <code class="config-export-code" id="mp-invite-url"></code>
-          <button type="button" class="btn btn-block" id="mp-invite-copy">Copy invite link</button>
+          <button type="button" class="btn btn-block" id="mp-invite-copy">Copy link</button>
         </div>
         <div class="mp-cols">
           <div class="mp-col">
-            <p class="muted mp-map-note">Map cycles randomly — first arena picked when the match starts.</p>
             <div class="field field-plain">
               <div class="field-top"><span class="field-label">Win condition</span></div>
               <select id="mp-lobby-target">${this._targetOptions()}</select>
             </div>
-            <label class="field-check"><input type="checkbox" id="mp-lobby-private" /> Private lobby</label>
-            <p class="readout muted" id="mp-host-note"></p>
+            <label class="field-check"><input type="checkbox" id="mp-lobby-private" /> Private</label>
           </div>
           <div class="mp-col mp-col-actions">
             <button type="button" class="btn primary btn-block" id="mp-ready-btn">Ready</button>
@@ -643,8 +632,8 @@ export class UIOverlay {
       });
     };
 
-    numOnly('#set-cm360', (v) => (s.data.cm360 = v), { after: () => this._updateSensReadout() });
-    numOnly('#set-dpi', (v) => (s.data.dpi = v), { after: () => this._updateSensReadout() });
+    numOnly('#set-cm360', (v) => (s.data.cm360 = v));
+    numOnly('#set-dpi', (v) => (s.data.dpi = v));
 
     this._bindRange('set-fov', (v) => (s.data.hFov = v));
     numOnly('#set-dur', (v) => (s.data.runDuration = v), { parse: (v) => parseInt(v, 10) });
@@ -768,7 +757,7 @@ export class UIOverlay {
     joinCode.addEventListener('input', () => { joinCode.value = joinCode.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4); });
     $('#mp-join-btn').addEventListener('click', () => {
       const code = joinCode.value.trim();
-      if (code.length !== 4) return this.mpStatus('Enter the 4-character lobby code.', false);
+      if (code.length !== 4) return this.mpStatus('Invalid code', false);
       this.mp.join({ name: name(), code });
     });
 
@@ -776,8 +765,8 @@ export class UIOverlay {
       const url = $('#mp-invite-url')?.textContent;
       if (!url) return;
       navigator.clipboard?.writeText(url).then(
-        () => this.mpStatus('Invite link copied.', true),
-        () => this.mpStatus('Could not copy — select the link and copy manually.', false)
+        () => this.mpStatus('Copied', true),
+        () => this.mpStatus('Copy failed', false)
       );
     });
 
@@ -839,11 +828,11 @@ export class UIOverlay {
     const el = this.root.querySelector('#mp-lobby-list');
     if (!el) return;
     if (lobbies === null) {
-      el.innerHTML = '<div class="mp-lobby-empty">Loading lobbies…</div>';
+      el.innerHTML = '<div class="mp-lobby-empty">…</div>';
       return;
     }
     if (!lobbies.length) {
-      el.innerHTML = '<div class="mp-lobby-empty">No public lobbies right now. Create one below.</div>';
+      el.innerHTML = '<div class="mp-lobby-empty">—</div>';
       return;
     }
     el.innerHTML = lobbies
@@ -904,10 +893,10 @@ export class UIOverlay {
         const tags = [];
         if (p.id === lobby.hostId) tags.push('<span class="mp-tag host">HOST</span>');
         tags.push(p.ready ? '<span class="mp-tag ready">READY</span>' : '<span class="mp-tag">NOT READY</span>');
-        const youName = p.id === this.mp.myId ? `${p.name} <span class="muted">(you)</span>` : p.name;
+        const youName = p.name;
         return `<div class="mp-player"><span class="mp-side">${p.side || '–'}</span><span class="mp-name">${youName}</span>${tags.join('')}</div>`;
       })
-      .join('') + (lobby.players.length < 2 ? '<div class="mp-player waiting">Waiting for an opponent…</div>' : '');
+      .join('');
 
     $('#mp-lobby-target').value = String(lobby.target);
     $('#mp-lobby-private').checked = lobby.isPublic === false;
@@ -916,9 +905,6 @@ export class UIOverlay {
 
     const inviteUrl = this._mpInviteUrl(lobby.code);
     $('#mp-invite-url').textContent = inviteUrl;
-    $('#mp-host-note').innerHTML = isHost
-      ? 'You are host — pick win condition and privacy. Maps rotate each round. Copy the invite link above for friends.'
-      : 'Only the host can change settings. Maps rotate each round.';
 
     const readyBtn = $('#mp-ready-btn');
     readyBtn.textContent = me && me.ready ? 'Unready' : 'Ready';
@@ -1048,6 +1034,19 @@ export class UIOverlay {
     this.mpTabScoreboard?.classList.remove('visible');
   }
 
+  _mpNetLine() {
+    const net = this.mp?.net;
+    if (!net?.connected) return '';
+    return `${net.pingMs}ms · ${net.lossPct}% loss`;
+  }
+
+  _refreshMpNetStats() {
+    if (!this._isMpPlaying()) return;
+    if (this._mpTabBoardHeld) this._renderMpTabScoreboard();
+    const sc = this.sceneManager.current;
+    if (sc?.getScores) this.updateMpScore(sc.getScores(), this.mp.lobby, this._mpMapId);
+  }
+
   updateMpTabScoreboard(stats) {
     this._mpTabStats = stats || {};
     if (this._mpTabBoardHeld) this._renderMpTabScoreboard();
@@ -1070,8 +1069,7 @@ export class UIOverlay {
     const cols = players
       .map((p) => {
         const me = p.id === this.mp.myId ? ' me' : '';
-        const you = p.id === this.mp.myId ? ' <span class="muted">(you)</span>' : '';
-        return `<th class="mp-tab-name${me}">${this._esc(p.name)}${you}</th>`;
+        return `<th class="mp-tab-name${me}">${this._esc(p.name)}</th>`;
       })
       .join('');
 
@@ -1085,10 +1083,11 @@ export class UIOverlay {
         .join('')}</tr>`;
 
     const goal = this._mpTarget > 0 ? `First to ${this._mpTarget}` : 'Endless';
+    const net = this._mpNetLine();
     this.mpTabScoreboard.innerHTML = `
       <div class="mp-tab-board">
         <div class="mp-tab-board-head">
-          <span class="mp-tab-board-title">Match Stats</span>
+          <span class="mp-tab-board-title">Stats</span>
           <span class="mp-tab-board-goal">${goal}</span>
         </div>
         <table class="mp-tab-table">
@@ -1103,6 +1102,7 @@ export class UIOverlay {
             ${row('Avg TTK', (s) => (s.avgTtk != null ? `${s.avgTtk.toFixed(2)}s` : '—'))}
           </tbody>
         </table>
+        ${net ? `<div class="mp-tab-net">${net}</div>` : ''}
       </div>`;
   }
 
@@ -1145,7 +1145,8 @@ export class UIOverlay {
         return `<div class="mp-sb-row${me}"><span class="mp-sb-name">${p.name}</span><span class="mp-sb-score">${s}</span></div>`;
       })
       .join('');
-    this.mpScoreboard.innerHTML = `<div class="mp-sb-goal">${goalLine}</div>${rows}`;
+    const net = this._mpNetLine();
+    this.mpScoreboard.innerHTML = `<div class="mp-sb-goal">${goalLine}</div>${rows}${net ? `<div class="mp-sb-net">${net}</div>` : ''}`;
   }
 
   showMpResults(msg, lobby, myId) {
@@ -1170,7 +1171,7 @@ export class UIOverlay {
     this._hideMpTabScoreboard();
     this.input.exitLock();
     this.sceneManager.unload();
-    this.mpStatus('Disconnected from server.', false);
+    this.mpStatus('Disconnected', false);
     this.showScreen('mp');
   }
 
@@ -1188,13 +1189,13 @@ export class UIOverlay {
 
     const doImport = async () => {
       try {
-        setStatus('Importing…');
+        setStatus('…');
         const settings = await importConfig(codeIn.value);
         this.settings.applyPayload(settings);
         this._populateSettings();
-        setStatus('Settings imported.');
+        setStatus('OK');
       } catch (e) {
-        setStatus(e.message || 'Import failed.', false);
+        setStatus(e.message || 'Failed', false);
       }
     };
 
@@ -1208,14 +1209,14 @@ export class UIOverlay {
 
     $('#btn-config-export').addEventListener('click', async () => {
       try {
-        setStatus('Generating code…');
+        setStatus('…');
         const code = await exportConfig(this.settings.getExportPayload());
         exportCode.textContent = code;
         exportBox.hidden = false;
         codeIn.value = code;
-        setStatus('Code ready — copy or share it.');
+        setStatus('OK');
       } catch (e) {
-        setStatus(e.message || 'Export failed. Is the config server running?', false);
+        setStatus(e.message || 'Failed', false);
       }
     });
 
@@ -1224,9 +1225,9 @@ export class UIOverlay {
       if (!code) return;
       try {
         await copyText(code);
-        setStatus('Copied to clipboard.');
+        setStatus('Copied');
       } catch {
-        setStatus('Could not copy — select the code manually.', false);
+        setStatus('Failed', false);
       }
     });
   }
@@ -1285,16 +1286,6 @@ export class UIOverlay {
     this._setRange('set-range-cover-dist', s.range.coverDistance ?? 4);
     this._setRange('set-range-cover-thick', s.range.coverThickness ?? 1.2);
     this._setRange('set-range-cover-height', s.range.coverHeight ?? 3);
-
-    this._updateSensReadout();
-  }
-
-  _updateSensReadout() {
-    const s = this.settings.data;
-    const counts = countsPer360(s.cm360, s.dpi);
-    this.root.querySelector('#sens-readout').innerHTML =
-      `≈ <b>${Math.round(counts).toLocaleString()}</b> counts / 360° · ` +
-      `<b>${(this.settings.radiansPerCount * 1000).toFixed(4)}</b> mrad / count`;
   }
 
   // -------------------------------------------------------------------------
@@ -1463,7 +1454,7 @@ export class UIOverlay {
     const key = this._configKeyFor(scenario);
     const list = Storage.getLeaderboard(scenario, key).slice(0, 10);
     if (!list.length) {
-      return `<p class="muted center">No scores yet for these settings. Be the first.</p>`;
+      return `<p class="center">—</p>`;
     }
     const rows = list
       .map((r, i) => {

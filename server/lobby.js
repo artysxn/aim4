@@ -20,6 +20,7 @@ import {
 } from '../src/multiplayer/constants.js';
 import { getMap, spawnFor, pickRandomMap, spawnPair } from '../src/multiplayer/maps.js';
 import { resolveShot } from './hitscan.js';
+import { pushTransformHistory, sampleTransformAt, lagRewindMs } from './lagComp.js';
 
 const VALID_TARGETS = new Set([0, 13, 30, 60, 100]);
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous 0/O/1/I
@@ -60,7 +61,9 @@ export class MultiplayerServer {
       hp: 2,
       dead: false,
       respawnAt: 0,
-      shotQueue: []
+      shotQueue: [],
+      history: [],
+      rttMs: 0
     };
     this.players.set(id, player);
     this._send(player, { t: S2C.WELCOME, id });
@@ -106,6 +109,8 @@ export class MultiplayerServer {
         return this._shoot(player, msg);
       case C2S.CHAT:
         return this._chat(player, msg);
+      case C2S.PING:
+        return this._ping(player, msg);
       case C2S.LIST:
         this.browsers.add(player);
         return this._sendLobbyList(player);
@@ -251,7 +256,9 @@ export class MultiplayerServer {
       p.dead = false;
       p.respawnAt = 0;
       p.shotQueue.length = 0;
+      p.history = [];
       p.roundStartAt = Date.now();
+      pushTransformHistory(p);
       spawns[p.id] = { pos: sp.pos, yaw: sp.yaw, side: p.side };
     }
     return spawns;
@@ -268,6 +275,12 @@ export class MultiplayerServer {
     if (Number.isFinite(msg.yaw)) tr.yaw = msg.yaw;
     if (Number.isFinite(msg.pitch)) tr.pitch = msg.pitch;
     if (Number.isFinite(msg.crouch)) tr.crouch = Math.max(0, Math.min(1, msg.crouch));
+    pushTransformHistory(player);
+  }
+
+  _ping(player, msg) {
+    if (!Number.isFinite(msg.id)) return;
+    this._send(player, { t: S2C.PONG, id: msg.id, ct: msg.ct, st: Date.now() });
   }
 
   _shoot(player, msg) {
@@ -282,7 +295,9 @@ export class MultiplayerServer {
     // Normalise direction defensively.
     const len = Math.hypot(d[0], d[1], d[2]) || 1;
     d[0] /= len; d[1] /= len; d[2] /= len;
-    player.shotQueue.push({ o, d });
+    const rtt = Number.isFinite(msg.rtt) ? Math.max(0, Math.min(800, msg.rtt)) : player.rttMs;
+    if (Number.isFinite(msg.rtt)) player.rttMs = rtt;
+    player.shotQueue.push({ o, d, at: Date.now(), rtt });
   }
 
   // ---- Authoritative tick -------------------------------------------------
@@ -293,6 +308,7 @@ export class MultiplayerServer {
       if (!lobby.started) continue;
       this._resolveShots(lobby);
       this._resolveRespawns(lobby, now);
+      for (const p of lobby.players) pushTransformHistory(p, now);
       this._broadcastSnapshot(lobby, now);
     }
   }
@@ -306,18 +322,24 @@ export class MultiplayerServer {
       if (shooter.dead) continue;
 
       for (const shot of shots) {
-        // Resolve against every other living player.
+        const rewind = lagRewindMs(shot.rtt);
+        const sampleTimes = [shot.at, shot.at - rewind * 0.35, shot.at - rewind];
+
         let best = null;
         for (const victim of lobby.players) {
           if (victim === shooter || victim.dead) continue;
-          const footY = victim.transform.y - eyeOffset(victim.transform.crouch || 0);
-          const res = resolveShot(
-            shot.o,
-            shot.d,
-            { x: victim.transform.x, z: victim.transform.z, crouch: victim.transform.crouch, footY },
-            map.boxes
-          );
-          if (res && (!best || res.t < best.res.t)) best = { victim, res };
+
+          for (const t of sampleTimes) {
+            const sample = sampleTransformAt(victim, t);
+            const footY = sample.y - eyeOffset(sample.crouch || 0);
+            const res = resolveShot(
+              shot.o,
+              shot.d,
+              { x: sample.x, z: sample.z, crouch: sample.crouch, footY },
+              map.boxes
+            );
+            if (res && (!best || res.t < best.res.t)) best = { victim, res };
+          }
         }
         if (!best) continue;
 

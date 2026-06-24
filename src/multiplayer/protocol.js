@@ -14,10 +14,11 @@ export const C2S = {
   CONFIG: 'config', // host: { target?, isPublic? }
   START: 'start', // host
   STATE: 'state', // { x,y,z, yaw, pitch, crouch }
-  SHOOT: 'shoot', // { ox,oy,oz, dx,dy,dz }
+  SHOOT: 'shoot', // { ox,oy,oz, dx,dy,dz, rtt? }
   CHAT: 'chat', // { text }
   LIST: 'list', // subscribe to the public lobby browser
-  UNLIST: 'unlist' // stop receiving lobby-browser updates
+  UNLIST: 'unlist', // stop receiving lobby-browser updates
+  PING: 'ping' // { id, ct }
 };
 
 // Server -> Client
@@ -33,5 +34,6 @@ export const S2C = {
   CHAT: 'chat', // { fromId, fromName, text }
   MATCH_END: 'matchEnd', // { winnerId, scores }
   PLAYER_LEFT: 'playerLeft', // { id }
-  LOBBY_LIST: 'lobbyList' // { lobbies:[{code,host,map,target,players,max}] }
+  LOBBY_LIST: 'lobbyList', // { lobbies:[{code,host,map,target,players,max}] }
+  PONG: 'pong' // { id, ct, st }
 };

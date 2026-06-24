@@ -7,14 +7,13 @@
 
 import { C2S, S2C } from './protocol.js';
 
-/**
- * Host the client should talk to. Precedence:
- *   1. ?server= URL override (also remembered for the session)
- *   2. saved session override
- *   3. VITE_API_URL baked in at build time — for split deploys where the client
- *      (e.g. Vercel) and backend (e.g. Fly.io) live on different origins
- *   4. same origin — LAN / host-mode where the backend also serves the client
- */
+function resolveApiUrl() {
+  const raw = import.meta.env.VITE_API_URL;
+  if (!raw) return null;
+  return raw.startsWith('http') ? raw : `https://${raw}`;
+}
+
+/** Host the client should talk to. Precedence: ?server= → session → VITE_API_URL → same origin. */
 function mpServerHost() {
   const strip = (s) => s.replace(/^https?:\/\//, '').replace(/\/$/, '');
   try {
@@ -28,34 +27,26 @@ function mpServerHost() {
   } catch {
     /* ignore */
   }
-  const apiUrl = import.meta.env.VITE_API_URL;
-  if (apiUrl) return strip(apiUrl);
+  const apiUrl = resolveApiUrl();
+  if (apiUrl) return new URL(apiUrl).host;
   return location.host;
 }
 
 function httpOrigin() {
+  const apiUrl = resolveApiUrl();
+  if (apiUrl) return new URL(apiUrl).origin;
   return `${location.protocol}//${mpServerHost()}`;
 }
 
 function wsUrl() {
+  const apiUrl = resolveApiUrl();
+  if (apiUrl) {
+    const u = new URL(apiUrl);
+    const proto = u.protocol === 'https:' ? 'wss' : 'ws';
+    return `${proto}://${u.host}/ws`;
+  }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   return `${proto}://${mpServerHost()}/ws`;
-}
-
-function serverUnreachableMessage() {
-  const host = location.hostname;
-  const onLocalhost = host === 'localhost' || host === '127.0.0.1';
-  if (onLocalhost) {
-    return (
-      'Cannot reach the multiplayer server on this PC. ' +
-      'If you are joining a friend, open their full invite link (not localhost). ' +
-      'If you are hosting, run start-host.bat or npm run server.'
-    );
-  }
-  return (
-    'Cannot reach the multiplayer server at this address. ' +
-    'Ask the host for their invite link and make sure they have start-host.bat running.'
-  );
 }
 
 export class NetClient {
@@ -63,7 +54,16 @@ export class NetClient {
     this.ws = null;
     this.id = null;
     this.connected = false;
-    this.serverPublicHost = null; // "ip:port" reported by the host server, if any
+    this.serverPublicHost = null;
+
+    this.pingMs = 0;
+    this.lossPct = 0;
+
+    this._pingSeq = 0;
+    this._pendingPings = new Map();
+    this._pingSent = 0;
+    this._pingAcked = 0;
+    this._pingTimer = null;
 
     // Event hooks (assign functions): each receives the message object.
     this.onWelcome = null;
@@ -78,6 +78,7 @@ export class NetClient {
     this.onMatchEnd = null;
     this.onClose = null;
     this.onLobbyList = null;
+    this.onNetStats = null;
   }
 
   async _checkServer(timeoutMs = 5000) {
@@ -94,7 +95,7 @@ export class NetClient {
         this.serverPublicHost = null;
       }
     } catch {
-      throw new Error(serverUnreachableMessage());
+      throw new Error('Server unreachable');
     } finally {
       clearTimeout(timer);
     }
@@ -135,26 +136,29 @@ export class NetClient {
 
       const timer = setTimeout(() => {
         try { ws.close(); } catch { /* ignore */ }
-        finish(reject, new Error('Timed out connecting to the server.'));
+        finish(reject, new Error('Connection timed out'));
       }, timeoutMs);
 
       ws.addEventListener('open', () => {
         this.connected = true;
+        this._startPingLoop();
         finish(resolve);
       });
       ws.addEventListener('message', (ev) => this._onMessage(ev));
       ws.addEventListener('close', () => {
         this.connected = false;
-        finish(reject, new Error('Could not reach the server (connection closed).'));
+        this._stopPingLoop();
+        finish(reject, new Error('Connection closed'));
         this.onClose?.();
       });
       ws.addEventListener('error', () => {
-        finish(reject, new Error('Could not reach the multiplayer server.'));
+        finish(reject, new Error('Connection failed'));
       });
     });
   }
 
   disconnect() {
+    this._stopPingLoop();
     try {
       this.ws?.close();
     } catch {
@@ -163,6 +167,57 @@ export class NetClient {
     this.ws = null;
     this.connected = false;
     this._connecting = null;
+    this.pingMs = 0;
+    this.lossPct = 0;
+    this._pendingPings.clear();
+  }
+
+  _startPingLoop() {
+    this._stopPingLoop();
+    this._pingSent = 0;
+    this._pingAcked = 0;
+    this._pendingPings.clear();
+    this._sendPing();
+    this._pingTimer = setInterval(() => this._sendPing(), 500);
+  }
+
+  _stopPingLoop() {
+    if (this._pingTimer) {
+      clearInterval(this._pingTimer);
+      this._pingTimer = null;
+    }
+  }
+
+  _sendPing() {
+    if (!this.connected) return;
+    const id = ++this._pingSeq;
+    this._pendingPings.set(id, Date.now());
+    this._pingSent++;
+    this._send({ t: C2S.PING, id, ct: performance.now() });
+    this._updateLoss();
+  }
+
+  _onPong(msg) {
+    const sentAt = this._pendingPings.get(msg.id);
+    if (sentAt == null) return;
+    this._pendingPings.delete(msg.id);
+    this._pingAcked++;
+    const rtt = Date.now() - sentAt;
+    this.pingMs = this.pingMs ? Math.round(this.pingMs * 0.65 + rtt * 0.35) : rtt;
+    this._updateLoss();
+    this.onNetStats?.({ pingMs: this.pingMs, lossPct: this.lossPct });
+  }
+
+  _updateLoss() {
+    const pending = this._pendingPings.size;
+    const window = Math.max(1, this._pingSent);
+    const acked = Math.max(0, this._pingAcked);
+    const lost = Math.max(0, window - acked - pending);
+    this.lossPct = Math.round((lost / window) * 100);
+    if (this._pingSent > 40) {
+      this._pingSent = Math.round(this._pingSent * 0.5);
+      this._pingAcked = Math.round(this._pingAcked * 0.5);
+    }
   }
 
   _onMessage(ev) {
@@ -207,6 +262,9 @@ export class NetClient {
       case S2C.LOBBY_LIST:
         this.onLobbyList?.(msg.lobbies || []);
         break;
+      case S2C.PONG:
+        this._onPong(msg);
+        break;
     }
   }
 
@@ -245,7 +303,12 @@ export class NetClient {
     this._send({ t: C2S.STATE, ...s });
   }
   sendShot(o, d) {
-    this._send({ t: C2S.SHOOT, ox: o.x, oy: o.y, oz: o.z, dx: d.x, dy: d.y, dz: d.z });
+    this._send({
+      t: C2S.SHOOT,
+      ox: o.x, oy: o.y, oz: o.z,
+      dx: d.x, dy: d.y, dz: d.z,
+      rtt: this.pingMs || undefined
+    });
   }
   sendChat(text) {
     this._send({ t: C2S.CHAT, text });

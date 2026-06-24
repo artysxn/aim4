@@ -204,8 +204,10 @@ export class MultiplayerDuelScenario extends BaseScenario {
   }
 
   applyHit(msg) {
-    // Local hitmarker is drawn immediately on our own shot; this confirms it.
-    if (msg.shooterId === this.myId) this.crosshair?.hit();
+    if (msg.shooterId === this.myId) {
+      this.hits++;
+      this.crosshair?.hit();
+    }
   }
 
   applyKill(msg) {
@@ -306,19 +308,6 @@ export class MultiplayerDuelScenario extends BaseScenario {
   // ---- Shooting -----------------------------------------------------------
   onShoot(raycaster) {
     if (this._dead) return;
-    // Immediate local feedback against interpolated avatars.
-    const colliders = [];
-    for (const r of this.remotes.values()) {
-      if (!r.dead) for (const c of r.colliders) colliders.push(c);
-    }
-    const hits = raycaster.intersectObjects(colliders, false);
-    const coverHit = raycaster.intersectObjects(this.coverMeshes, false)[0];
-    if (hits.length && (!coverHit || hits[0].distance < coverHit.distance)) {
-      this.hits++;
-      this.crosshair?.hit();
-    }
-
-    // Authoritative shot to the server.
     const o = raycaster.ray.origin;
     const d = raycaster.ray.direction;
     this.net?.sendShot({ x: o.x, y: o.y, z: o.z }, { x: d.x, y: d.y, z: d.z });

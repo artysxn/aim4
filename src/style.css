@@ -881,6 +881,13 @@ input[type='checkbox'] {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
+.mp-sb-net {
+  margin-top: 8px;
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 
 /* In-match chat — passive overlay; only captures input while typing. */
 .mp-chat {
@@ -1037,6 +1044,16 @@ input[type='checkbox'] {
 }
 .mp-tab-val.me {
   color: var(--accent);
+}
+.mp-tab-net {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 .mp-tab-table tbody tr + tr td,
 .mp-tab-table tbody tr + tr th {
