@@ -112,13 +112,18 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         ws: '/ws',
         publicHost,
-        region: process.env.FLY_REGION || null
+        region: process.env.FLY_REGION || null,
+        machineId: process.env.FLY_MACHINE_ID || null
       });
       return;
     }
 
     if (req.method === 'GET' && url.pathname === '/health') {
-      send(res, 200, { ok: true, region: process.env.FLY_REGION || null });
+      send(res, 200, {
+        ok: true,
+        region: process.env.FLY_REGION || null,
+        machineId: process.env.FLY_MACHINE_ID || null
+      });
       return;
     }
 

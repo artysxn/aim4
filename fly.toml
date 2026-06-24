@@ -21,6 +21,9 @@ primary_region = 'fra'
   force_https = true
   auto_stop_machines = 'off'
   auto_start_machines = true
+  # Lobbies are in-memory per machine — MUST stay at exactly 1 machine or joins fail
+  # when Fly load-balances WS to a different instance. After region changes:
+  #   fly scale count 1 --region fra -a aim4-backend --yes
   min_machines_running = 1
 
   [http_service.concurrency]

@@ -223,7 +223,7 @@ export class MultiplayerServer {
     }
 
     lobby.started = true;
-    lobby.mapId = pickRandomMap(null).id;
+    lobby.mapId = pickRandomMap(lobby.mapId).id;
     lobby.scores = {};
     for (const p of lobby.players) {
       lobby.scores[p.id] = 0;
@@ -391,10 +391,11 @@ export class MultiplayerServer {
     const score = lobby.scores[shooter.id];
     const win = lobby.target > 0 && score >= lobby.target;
 
-    // Round reset: random arena + both players back to spawn (unless match ends).
+    // New arena every round — winner or loser, including the match-ending kill.
+    lobby.mapId = pickRandomMap(lobby.mapId).id;
+
     let spawns = null;
     if (!win) {
-      lobby.mapId = pickRandomMap(lobby.mapId).id;
       spawns = this._spawnAll(lobby);
     } else {
       victim.dead = true;

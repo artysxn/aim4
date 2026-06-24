@@ -16,20 +16,32 @@ function resolveApiUrl() {
 /** Host the client should talk to. Precedence: ?server= → session → VITE_API_URL → same origin. */
 function mpServerHost() {
   const strip = (s) => s.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const apiUrl = resolveApiUrl();
   try {
     const fromUrl = new URLSearchParams(location.search).get('server');
     if (fromUrl) {
       sessionStorage.setItem('mp-server', fromUrl);
       return strip(fromUrl);
     }
+    // Production builds bake in VITE_API_URL — ignore a stale session override
+    // left over from LAN/host testing or an old Fly region.
+    if (apiUrl) {
+      sessionStorage.removeItem('mp-server');
+      return new URL(apiUrl).host;
+    }
     const saved = sessionStorage.getItem('mp-server');
     if (saved) return strip(saved);
   } catch {
     /* ignore */
   }
-  const apiUrl = resolveApiUrl();
   if (apiUrl) return new URL(apiUrl).host;
   return location.host;
+}
+
+function serverLabel() {
+  const apiUrl = resolveApiUrl();
+  if (apiUrl) return new URL(apiUrl).host;
+  return mpServerHost();
 }
 
 function httpOrigin() {
@@ -98,7 +110,7 @@ export class NetClient {
         this.serverRegion = null;
       }
     } catch {
-      throw new Error('Server unreachable');
+      throw new Error(`Server unreachable (${serverLabel()})`);
     } finally {
       clearTimeout(timer);
     }
