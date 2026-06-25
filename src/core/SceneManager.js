@@ -99,7 +99,7 @@ export class SceneManager {
   update(dt) {
     if (!this.current) return;
     this.current.update(dt);
-    if (this.current.running && !this.finished && this.current.elapsed >= this.duration) {
+    if (this.current.running && !this.finished && Number.isFinite(this.duration) && this.current.elapsed >= this.duration) {
       this.finished = true;
       this.current.pause();
       if (this.onFinish) this.onFinish(this.current.results());
@@ -108,6 +108,7 @@ export class SceneManager {
 
   get timeRemaining() {
     if (!this.current) return this.duration;
+    if (!Number.isFinite(this.duration)) return Infinity;
     return Math.max(0, this.duration - this.current.elapsed);
   }
 }

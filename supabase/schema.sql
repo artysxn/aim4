@@ -58,6 +58,39 @@ create table if not exists public.user_settings (
   updated_at timestamptz default now()
 );
 
+-- Migrate saved settings: cm360 + dpi → unified sensitivity (linear scale).
+-- 35 × 1200 CPI → 2.58; default 2.5; half the value = half turn speed (e.g. 1.25 vs 2.5).
+update public.user_settings us
+set
+  settings = (coalesce(us.settings, '{}'::jsonb) - 'cm360' - 'dpi')
+    || jsonb_build_object(
+      'sensitivity',
+      coalesce(
+        case
+          when us.settings ? 'sensitivity'
+            and (us.settings->>'sensitivity') ~ '^[0-9]+(\.[0-9]+)?$'
+            and (us.settings->>'sensitivity')::double precision > 0
+          then (us.settings->>'sensitivity')::double precision
+          when us.settings ? 'cm360'
+            and us.settings ? 'dpi'
+            and (us.settings->>'cm360') ~ '^[0-9]+(\.[0-9]+)?$'
+            and (us.settings->>'dpi') ~ '^[0-9]+(\.[0-9]+)?$'
+            and (us.settings->>'cm360')::double precision > 0
+            and (us.settings->>'dpi')::double precision > 0
+          then (us.settings->>'cm360')::double precision
+               * (us.settings->>'dpi')::double precision
+               * 2.58 / 42000.0
+          else 2.5
+        end,
+        2.5
+      )
+    ),
+  updated_at = now()
+where us.settings ? 'cm360'
+   or us.settings ? 'dpi'
+   or not us.settings ? 'sensitivity'
+   or coalesce(us.settings->>'sensitivity', '') = '';
+
 alter table public.profiles enable row level security;
 alter table public.scores enable row level security;
 alter table public.user_settings enable row level security;
@@ -68,6 +101,7 @@ drop policy if exists "read scores" on public.scores;
 drop policy if exists "read own scores" on public.scores;
 drop policy if exists "Users can read own scores" on public.scores;
 drop policy if exists "scores_select_own" on public.scores;
+drop policy if exists "Enable read access for all users" on public.scores;
 
 create policy "read profiles" on public.profiles
   for select to anon, authenticated using (true);
@@ -78,12 +112,19 @@ grant select on public.profiles to anon, authenticated;
 grant select on public.scores to anon, authenticated;
 
 -- Users write only their own rows
+drop policy if exists "insert own profile" on public.profiles;
+drop policy if exists "update own profile" on public.profiles;
+drop policy if exists "insert own score" on public.scores;
 create policy "insert own profile" on public.profiles
   for insert with check (auth.uid() = id);
 create policy "update own profile" on public.profiles
   for update using (auth.uid() = id);
 create policy "insert own score" on public.scores
   for insert with check (auth.uid() = user_id);
+
+drop policy if exists "read own settings" on public.user_settings;
+drop policy if exists "insert own settings" on public.user_settings;
+drop policy if exists "update own settings" on public.user_settings;
 create policy "read own settings" on public.user_settings
   for select using (auth.uid() = user_id);
 create policy "insert own settings" on public.user_settings
@@ -144,7 +185,7 @@ security definer
 set search_path = public
 as $$
 begin
-  if p_scenario in ('gridshot', 'pasu') then
+  if p_scenario in ('gridshot', 'pasu', 'spidershot', 'arena', 'duels', 'range') then
     return query
     select distinct on (s.user_id)
       s.user_id,
@@ -162,9 +203,7 @@ begin
       and s.config_key = p_config_key
     order by
       s.user_id,
-      coalesce(s.time_played, 0) desc,
-      coalesce(s.kpm, 0) desc,
-      coalesce(s.kills, 0) desc,
+      coalesce(s.kills, s.score, 0) desc,
       coalesce(s.accuracy, 0) desc,
       s.created_at desc;
   else
@@ -211,7 +250,7 @@ security definer
 set search_path = public
 as $$
 begin
-  if p_scenario in ('gridshot', 'pasu') then
+  if p_scenario in ('gridshot', 'pasu', 'spidershot', 'arena', 'duels', 'range') then
     return query
     select
       ranked.user_id,
@@ -227,9 +266,7 @@ begin
       select * from public.get_leaderboard(p_scenario, p_config_key, 1000)
     ) ranked
     order by
-      coalesce(ranked.time_played, 0) desc,
-      coalesce(ranked.kpm, 0) desc,
-      coalesce(ranked.kills, 0) desc,
+      coalesce(ranked.kills, ranked.score, 0) desc,
       coalesce(ranked.accuracy, 0) desc,
       ranked.achieved_at asc
     limit greatest(1, least(p_limit, 50));

@@ -19,6 +19,7 @@ import { randRange, randInt, clamp, lerp, degToRad } from '../utils/MathUtils.js
 import { SourceMover1D, RUN_SPEED } from '../utils/SourceMovement.js';
 import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
 import { competitivePresetFor } from './competitivePresets.js';
+import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
@@ -54,6 +55,9 @@ export class RangeScenario extends BaseScenario {
     this.coverDistance = preset?.coverDistance ?? this.config.coverDistance ?? r.coverDistance;
     this.coverThickness = preset?.coverThickness ?? this.config.coverThickness ?? r.coverThickness;
     this.coverHeight = preset?.coverHeight ?? this.config.coverHeight ?? r.coverHeight;
+    this.runDuration = this.competitive
+      ? (preset?.runDuration ?? 30)
+      : Infinity;
 
     this.arc = degToRad(this.arcDeg);
     this.full = this.arcDeg >= 360;
@@ -71,7 +75,8 @@ export class RangeScenario extends BaseScenario {
     return 'range';
   }
 
-  static configKeyFor(settings) {
+  static configKeyFor(settings, variant = 'practice') {
+    if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
     const r = settings.data.range;
     const cover = r.coverEnabled
       ? `_c${r.coverCount}_d${r.coverDistance}_t${r.coverThickness}_h${r.coverHeight}`
@@ -79,7 +84,7 @@ export class RangeScenario extends BaseScenario {
     return `arc${r.arc}_n${r.enemyCount}_r${r.radius}${cover}_d${settings.data.runDuration}`;
   }
   configKey() {
-    return RangeScenario.configKeyFor(this.settings);
+    return RangeScenario.configKeyFor(this.settings, this.variant);
   }
 
   // ---- Environment --------------------------------------------------------
@@ -384,6 +389,11 @@ export class RangeScenario extends BaseScenario {
     setTimeout(() => {
       if (this.running && !this._disposed) this._spawnBot(this._freeTheta());
     }, 350);
+  }
+
+  results() {
+    const base = super.results();
+    return { ...base, score: Math.round(this.kills) };
   }
 
   dispose() {

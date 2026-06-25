@@ -12,6 +12,7 @@ import { randRange } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { EYE_HEIGHT } from '../core/Engine.js';
 import { competitivePresetFor } from './competitivePresets.js';
+import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
@@ -39,6 +40,10 @@ export class GridshotScenario extends BaseScenario {
     this.boundsScaleY = preset?.boundsScaleY ?? this.config.boundsScaleY ?? g.boundsScaleY ?? 1;
     this.infiniteAmmo = this.config.infiniteAmmo ?? g.infiniteAmmo !== false;
     this.weaponBloom = false;
+    this.viewmodelRecoil = this.config.viewmodelRecoil ?? g.viewmodelRecoil !== false;
+    this.runDuration = this.competitive
+      ? (preset?.runDuration ?? 30)
+      : this.settings.data.runDuration;
 
     this.wallDistance = 16;
     this.boundsW = BASE_BOUNDS_W * this.boundsScaleX;
@@ -52,12 +57,14 @@ export class GridshotScenario extends BaseScenario {
     return 'gridshot';
   }
 
-  /** One leaderboard per run duration (matches other scenarios' simplicity). */
-  static configKeyFor(settings) {
+  /** One leaderboard per run duration (practice) or fixed competitive board. */
+  static configKeyFor(settings, variant = 'practice') {
+    if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
     return `d${settings.data.runDuration}`;
   }
+
   configKey() {
-    return GridshotScenario.configKeyFor(this.settings);
+    return GridshotScenario.configKeyFor(this.settings, this.variant);
   }
 
   /** Parse run duration from a gridshot config key (legacy or current). */

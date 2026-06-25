@@ -32,7 +32,7 @@ npm run dev:mp     # Vite client (:5173) + backend (:3784) together
 and `VITE_API_URL` should stay empty.
 
 Other scripts: `npm run dev` (client only), `npm run server` (backend only),
-`npm run host` / `start-host.bat` (build + serve everything on `0.0.0.0` for LAN
+`npm run host` (build + serve everything on `0.0.0.0` for LAN
 or port-forwarded internet play).
 
 ## Production: Vercel (client) + Fly.io (backend)

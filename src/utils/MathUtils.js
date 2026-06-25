@@ -14,30 +14,39 @@ export const randInt = (min, max) => Math.floor(randRange(min, max + 1));
 // 1 inch = 2.54 cm  ->  cm to inches factor.
 const INCH_PER_CM = 0.393701;
 
+/** Reference sensitivity on the unified scale (35 × 1200 CPI equivalent). */
+export const SENSITIVITY_REF = 2.58;
+export const SENSITIVITY_DEFAULT = 2.5;
+
+/** Legacy calibration: cm/360 × DPI product that maps to {@link SENSITIVITY_REF}. */
+const LEGACY_SENS_PRODUCT = 35 * 1200;
+const COUNTS_PER_360_AT_REF = LEGACY_SENS_PRODUCT * INCH_PER_CM;
+
+/** Radians per mouse count at sensitivity 1.0 (linear scale: 1.25 = half of 2.5). */
+const RADIANS_PER_COUNT_AT_SENS_1 =
+  (Math.PI * 2) / (COUNTS_PER_360_AT_REF * SENSITIVITY_REF);
+
 /**
- * Counts (raw mouse units) required for a full 360° turn.
- *
- *   Counts per 360 = cm360 * DPI * 0.393701
- *
- * Derivation: DPI is counts per inch, and 1 cm = 0.393701 inch, so counts per
- * centimeter = DPI * 0.393701. Multiplying by the centimeters of travel for a
- * full turn (cm360) gives the counts per 360°.
- *
- * @param {number} cm360 centimeters of mouse travel per 360° (true sensitivity)
- * @param {number} dpi   mouse DPI / CPI
+ * Raw mouse counts for a full 360° at the given unified sensitivity.
+ * Turn speed is linear in sensitivity (half the value → half the speed).
  */
-export function countsPer360(cm360, dpi) {
-  if (cm360 <= 0 || dpi <= 0) return 1;
-  return cm360 * dpi * INCH_PER_CM;
+export function countsPer360FromSensitivity(sensitivity) {
+  if (sensitivity <= 0) return COUNTS_PER_360_AT_REF;
+  return (Math.PI * 2) / (RADIANS_PER_COUNT_AT_SENS_1 * sensitivity);
 }
 
 /**
- * Radians of camera rotation to apply per single mouse count (pixel delta).
- *
- *   Radians per count = 2π / (Counts per 360)
+ * Radians of camera rotation per raw mouse count (Pointer Lock movementX/Y).
+ * Linear: radiansPerCount(s) = RADIANS_PER_COUNT_AT_SENS_1 × s.
  */
-export function radiansPerCount(cm360, dpi) {
-  return (Math.PI * 2) / countsPer360(cm360, dpi);
+export function radiansPerCountFromSensitivity(sensitivity) {
+  if (sensitivity <= 0) return RADIANS_PER_COUNT_AT_SENS_1 * SENSITIVITY_REF;
+  return RADIANS_PER_COUNT_AT_SENS_1 * sensitivity;
+}
+
+/** Convert saved cm/360 + DPI settings to the unified sensitivity scale. */
+export function sensitivityFromLegacy(cm360, dpi) {
+  return (cm360 * dpi * SENSITIVITY_REF) / LEGACY_SENS_PRODUCT;
 }
 
 /**

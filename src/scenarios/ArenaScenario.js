@@ -23,6 +23,7 @@ import { Target } from '../components/Target.js';
 import { randRange, randInt, lerp, degToRad } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { competitivePresetFor } from './competitivePresets.js';
+import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { startMissFlash, updateMissFlash } from './missFlash.js';
 
 const BODY_R = 0.35;
@@ -53,6 +54,9 @@ export class ArenaScenario extends BaseScenario {
     this.competitiveMissPenalty = !!preset?.competitiveMissPenalty;
     this.botR = this.ringR + 1;
     this.enemyScale = this.config.enemyScale ?? a.enemyScale;
+    this.runDuration = this.competitive
+      ? (preset?.runDuration ?? 30)
+      : this.settings.data.runDuration;
 
     this.step = ARC_SPAN / (this.colCount - 1); // angular gap between columns
     this.halfStep = this.step / 2;
@@ -75,12 +79,17 @@ export class ArenaScenario extends BaseScenario {
     return 'arena';
   }
 
-  static configKeyFor(settings) {
+  static configKeyFor(settings, variant = 'practice') {
+    if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
     const a = settings.data.arena;
     return `cross${a.crossDuration}_col${a.columns}_cr${a.columnRadius}_r${a.ringRadius}_es${a.enemyScale}_d${settings.data.runDuration}`;
   }
   configKey() {
-    return ArenaScenario.configKeyFor(this.settings);
+    return ArenaScenario.configKeyFor(this.settings, this.variant);
+  }
+
+  tracerRaycastExtras() {
+    return this.columns;
   }
 
   // ---- Environment --------------------------------------------------------
@@ -221,7 +230,8 @@ export class ArenaScenario extends BaseScenario {
     this.timer = 0.25;
   }
 
-  _competitiveMissPenalty() {
+  _penalizeMissShot() {
+    this.kills = Math.max(0, this.kills - 1);
     if (!this.competitiveMissPenalty || this.phase === 'cooldown') return;
     this.misses++;
     if (this.circle) {
@@ -235,6 +245,10 @@ export class ArenaScenario extends BaseScenario {
     this.phase = 'cooldown';
     this.timer = 0.25;
     this._missFlash = startMissFlash();
+  }
+
+  _competitiveMissPenalty() {
+    this._penalizeMissShot();
   }
 
   _killBot(green = 0x35e06a) {
@@ -268,13 +282,13 @@ export class ArenaScenario extends BaseScenario {
     const colMeshes = this.columns; // cover blocks shots
     const hit = this.raycastTargets(raycaster, colMeshes);
     if (!hit) {
-      this._competitiveMissPenalty();
+      this._penalizeMissShot();
       return;
     }
     const obj = hit.object;
     const tgt = obj.userData.target;
     if (!tgt) {
-      this._competitiveMissPenalty();
+      this._penalizeMissShot();
       return;
     }
 
@@ -322,6 +336,11 @@ export class ArenaScenario extends BaseScenario {
         }
       }
     }
+  }
+
+  results() {
+    const base = super.results();
+    return { ...base, score: Math.round(this.kills) };
   }
 
   dispose() {

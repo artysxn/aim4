@@ -2,6 +2,7 @@
 
 export const COMPETITIVE_PRESETS = {
   gridshot: {
+    runDuration: 30,
     floatEnabled: false,
     targetSize: 0.35,
     targetCount: 5,
@@ -10,12 +11,14 @@ export const COMPETITIVE_PRESETS = {
     mode: 'clicking'
   },
   pasu: {
+    runDuration: 30,
     targetSize: 0.15,
     angleOffset: 180,
     targetCount: 4,
     travelSpeedMax: 3.5
   },
   arena: {
+    runDuration: 30,
     crossDuration: 375,
     peekHold: 400,
     columns: 5,
@@ -25,9 +28,11 @@ export const COMPETITIVE_PRESETS = {
     competitiveMissPenalty: true
   },
   duels: {
+    runDuration: 60,
     ttk: 0.3
   },
   range: {
+    runDuration: 30,
     enemyCount: 8,
     radius: 15,
     coverEnabled: true,
@@ -35,6 +40,24 @@ export const COMPETITIVE_PRESETS = {
     coverDistance: 4,
     coverThickness: 1.5,
     coverHeight: 3
+  },
+  spidershot: {
+    runDuration: 30,
+    timeToKill: 450,
+    targetSize: 0.35,
+    maxDistance: 7,
+    minDistance: 1,
+    heightSpread: 1,
+    angleSpread: 25,
+    streakChance: 0.1,
+    streakLengthMin: 1,
+    streakLengthMax: 2,
+    doubleSpawnChance: 0.07,
+    randomSize: true,
+    randomSizeMin: 0.2,
+    randomSizeMax: 0.35,
+    infiniteAmmo: true,
+    viewmodelRecoil: false
   }
 };
 

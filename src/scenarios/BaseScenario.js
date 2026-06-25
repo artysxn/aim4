@@ -22,7 +22,6 @@ const _quat = new THREE.Quaternion();
 const _dir = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
-const _tmpEnd = new THREE.Vector3();
 const _muzzle = new THREE.Vector3();
 
 // --- Tiny WebAudio blip used for hit feedback (lazily created) -------------
@@ -81,6 +80,7 @@ export class BaseScenario {
     this.weaponId = 'rifle';
     this.infiniteAmmo = false;
     this.weaponBloom = true; // random spread cone (movement / consecutive shots)
+    this.viewmodelRecoil = true; // gun kick + view-punch on fire (per-mode override)
     this._initVariant();
     this._lastImpact = new THREE.Vector3();
   }
@@ -201,20 +201,21 @@ export class BaseScenario {
       aimDz: aimZ
     };
 
-    // Impact point for the tracer: nearest mesh under the scenario root, else far.
-    const hit = _raycaster.intersectObject(this.root, true)[0];
-    if (hit) this._lastImpact.copy(hit.point);
-    else this._lastImpact.copy(cam.position).addScaledVector(_dir, 120);
+    // Tracer follows the bullet ray (targets + cover), not the nearest floor mesh.
+    this._tracerImpactPoint(_raycaster, cam.position, _dir);
 
     this.onShoot(_raycaster);
 
     // Shared weapon juice.
     const vm = this.engine.viewmodel;
     if (vm) {
-      vm.fire();
+      const recoil = this.viewmodelRecoil !== false;
+      vm.fire({ recoil });
       vm.spawnTracer(vm.getMuzzlePosition(_muzzle), this._lastImpact);
-      const p = punch || viewPunchImpulse(shotIndex);
-      vm.punch(p.pitch, p.yaw);
+      if (recoil) {
+        const p = punch || viewPunchImpulse(shotIndex);
+        vm.punch(p.pitch, p.yaw);
+      }
     }
   }
 
@@ -239,6 +240,18 @@ export class BaseScenario {
       for (const c of t.getColliders()) arr.push(c);
     }
     return arr;
+  }
+
+  /** Optional cover/occluder meshes for the tracer endpoint (not decorative floor). */
+  tracerRaycastExtras() {
+    return [];
+  }
+
+  /** World point the tracer line should end at — follows the bullet ray, not floor geometry. */
+  _tracerImpactPoint(raycaster, origin, dir) {
+    const hit = this.raycastTargets(raycaster, this.tracerRaycastExtras());
+    if (hit) return this._lastImpact.copy(hit.point);
+    return this._lastImpact.copy(origin).addScaledVector(dir, 120);
   }
 
   raycastTargets(raycaster, extra = []) {

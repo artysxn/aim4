@@ -171,9 +171,9 @@ export class Viewmodel {
     }
   }
 
-  /** Trigger the per-shot flash + kick (call when a bullet is actually fired). */
-  fire() {
-    this._kick = 1;
+  /** Trigger the per-shot flash + optional kick (call when a bullet is actually fired). */
+  fire({ recoil = true } = {}) {
+    if (recoil) this._kick = 1;
     this._flashT = FLASH_LIFE;
   }
 

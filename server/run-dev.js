@@ -19,7 +19,7 @@ console.log('');
 console.log('AIM4 dev + multiplayer');
 console.log('  Client:  http://localhost:5173  (share your LAN IP:5173 with friends)');
 console.log('  Backend: http://127.0.0.1:3784  (proxied as /api and /ws)');
-console.log('  For production hosting use start-host.bat instead.');
+console.log('  For production hosting use npm run host instead.');
 console.log('');
 
 const server = run('server', 'node', ['server/index.js']);

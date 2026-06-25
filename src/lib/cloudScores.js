@@ -3,9 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { getSupabase, supabaseConfigured } from './supabase.js';
-import { GridshotScenario } from '../scenarios/GridshotScenario.js';
-import { PasuScenario } from '../scenarios/PasuScenario.js';
-import { isKpmScenario } from '../scenarios/kpmScenarios.js';
+import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 
 function isMissingColumnError(error) {
   const msg = error?.message || '';
@@ -17,35 +15,15 @@ function finiteNum(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-/** KPM-mode boards keyed by run duration; include legacy gridshot long keys too. */
-function kpmConfigKeys(scenario, configKey, runDuration) {
-  const keys = new Set();
-  if (configKey) keys.add(configKey);
-  if (runDuration != null) keys.add(`d${runDuration}`);
-  return [...keys];
-}
-
-function runDurationFromKpmKey(scenario, configKey) {
-  if (scenario === 'gridshot') return GridshotScenario.runDurationFromKey(configKey);
-  if (scenario === 'pasu') return PasuScenario.runDurationFromKey(configKey);
-  return null;
-}
-
 function usernameFor(userId, profileMap) {
   if (profileMap?.[userId]) return profileMap[userId];
   return `player_${String(userId).replace(/-/g, '').slice(0, 8)}`;
 }
 
-function compareGridshot(a, b) {
-  const ta = a.time_played ?? 0;
-  const tb = b.time_played ?? 0;
-  if (tb !== ta) return tb - ta;
-  const ka = a.kpm ?? 0;
-  const kb = b.kpm ?? 0;
+function compareKillLeaderboard(a, b) {
+  const ka = a.kills ?? a.score ?? 0;
+  const kb = b.kills ?? b.score ?? 0;
   if (kb !== ka) return kb - ka;
-  const la = a.kills ?? 0;
-  const lb = b.kills ?? 0;
-  if (lb !== la) return lb - la;
   const aa = a.accuracy ?? 0;
   const ab = b.accuracy ?? 0;
   if (ab !== aa) return ab - aa;
@@ -57,11 +35,15 @@ function compareDefault(a, b) {
   return new Date(a.achieved_at).getTime() - new Date(b.achieved_at).getTime();
 }
 
+function compareRows(scenario, a, b) {
+  return isKillLeaderboardScenario(scenario)
+    ? compareKillLeaderboard(a, b)
+    : compareDefault(a, b);
+}
+
 function isBetterRun(scenario, row, prev) {
   if (!prev) return true;
-  return isKpmScenario(scenario)
-    ? compareGridshot(row, prev) < 0
-    : compareDefault(row, prev) < 0;
+  return compareRows(scenario, row, prev) < 0;
 }
 
 function normalizeRow(row, profileMap) {
@@ -117,57 +99,13 @@ async function fetchLeaderboardDirect(sb, scenario, configKey, limit) {
     'user_id, score, accuracy, crit_ratio, kills, hits, shots, time_played, kpm, created_at';
   const baseSelect = 'user_id, score, accuracy, crit_ratio, kills, created_at';
 
-  const runDuration = isKpmScenario(scenario)
-    ? runDurationFromKpmKey(scenario, configKey)
-    : null;
-  const configKeys = isKpmScenario(scenario)
-    ? kpmConfigKeys(scenario, configKey, runDuration)
-    : [configKey];
-
-  let data = [];
-  let error = null;
-
-  for (const key of configKeys) {
-    const res = await selectScores(sb, scenario, key, fullSelect, baseSelect);
-    error = res.error;
-    if (error && !isMissingColumnError(error)) break;
-    if (res.data?.length) data.push(...res.data);
-  }
-
-  // Legacy gridshot keys: s0.55_mclicking_…_d60 — match any board for this duration.
-  if (
-    scenario === 'gridshot' &&
-    !data.length &&
-    runDuration != null &&
-    (!error || isMissingColumnError(error))
-  ) {
-    let legacy = null;
-    let legacyErr = null;
-    ({ data: legacy, error: legacyErr } = await sb
-      .from('scores')
-      .select(fullSelect)
-      .eq('scenario', 'gridshot')
-      .like('config_key', `%\\_d${runDuration}`));
-    if (legacyErr && isMissingColumnError(legacyErr)) {
-      ({ data: legacy, error: legacyErr } = await sb
-        .from('scores')
-        .select(baseSelect)
-        .eq('scenario', 'gridshot')
-        .like('config_key', `%\\_d${runDuration}`));
-    }
-    if (legacy?.length) {
-      data = legacy;
-      error = null;
-    } else if (legacyErr) {
-      error = legacyErr;
-    }
-  }
+  const { data, error } = await selectScores(sb, scenario, configKey, fullSelect, baseSelect);
 
   if (error && !isMissingColumnError(error)) {
     console.warn('[cloudScores] direct leaderboard query failed', error.message);
     return { list: [], error: error.message };
   }
-  if (!data.length) return { list: [], error: null };
+  if (!data?.length) return { list: [], error: null };
 
   const profileMap = await fetchProfiles(sb, [...new Set(data.map((r) => r.user_id))]);
   const bestByUser = new Map();
@@ -183,9 +121,7 @@ async function fetchLeaderboardDirect(sb, scenario, configKey, limit) {
     }
   }
 
-  const sorted = [...bestByUser.values()].sort((a, b) =>
-    isKpmScenario(scenario) ? compareGridshot(a, b) : compareDefault(a, b)
-  );
+  const sorted = [...bestByUser.values()].sort((a, b) => compareRows(scenario, a, b));
 
   return { list: sorted.slice(0, limit), error: null };
 }
@@ -199,28 +135,25 @@ export async function submitScore(userId, results) {
   const uid = session?.user?.id || userId;
   if (!uid) return { ok: false, reason: 'not signed in' };
 
+  const kills = Math.round(finiteNum(results.kills));
+  const timePlayed = finiteNum(results.timePlayed);
+  const score = isKillLeaderboardScenario(results.scenario)
+    ? kills
+    : Math.round(finiteNum(results.score));
+
   const full = {
     user_id: uid,
     scenario: results.scenario,
     config_key: results.configKey,
-    score: Math.round(finiteNum(results.score)),
+    score,
     accuracy: finiteNum(results.accuracy),
     crit_ratio: finiteNum(results.critRatio),
-    kills: Math.round(finiteNum(results.kills)),
+    kills,
     hits: Math.round(finiteNum(results.hits)),
     shots: Math.round(finiteNum(results.shots)),
-    time_played: finiteNum(results.timePlayed),
-    kpm: finiteNum(results.kpm)
+    time_played: timePlayed,
+    kpm: timePlayed > 0 ? kills / (timePlayed / 60) : 0
   };
-
-  if (isKpmScenario(results.scenario)) {
-    const timePlayed = Math.max(0, finiteNum(results.timePlayed));
-    const kills = Math.round(finiteNum(results.kills));
-    full.score = kills;
-    full.kills = kills;
-    full.time_played = timePlayed;
-    full.kpm = timePlayed > 0 ? kills / (timePlayed / 60) : 0;
-  }
 
   let { error } = await sb.from('scores').insert(full);
   if (error && isMissingColumnError(error)) {
@@ -228,10 +161,10 @@ export async function submitScore(userId, results) {
       user_id: uid,
       scenario: results.scenario,
       config_key: results.configKey,
-      score: Math.round(results.score),
+      score,
       accuracy: results.accuracy,
       crit_ratio: results.critRatio,
-      kills: results.kills
+      kills
     };
     ({ error } = await sb.from('scores').insert(minimal));
   }
@@ -264,7 +197,6 @@ export async function fetchLeaderboardWithMeta(scenario, configKey, limit = 10) 
     return { list: rpcData, error: null };
   }
 
-  // Direct read: required for gridshot legacy config keys; fallback when RPC missing.
   const direct = await fetchLeaderboardDirect(sb, scenario, configKey, limit);
   if (direct.list.length) return direct;
 

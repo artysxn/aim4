@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // InputManager.js
 // Pointer Lock + raw mouse delta handling. Converts movementX/Y into yaw/pitch
-// using the true-sensitivity scale from SettingsManager and writes the result
+// using the unified sensitivity scale from SettingsManager and writes the result
 // directly onto the camera's Euler angles. Pitch is clamped to ±89°.
 // ---------------------------------------------------------------------------
 

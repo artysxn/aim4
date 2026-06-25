@@ -24,6 +24,7 @@ import { randRange, randInt, clamp, lerp, degToRad } from '../utils/MathUtils.js
 import { SourceMover1D, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { competitivePresetFor } from './competitivePresets.js';
+import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
@@ -184,6 +185,9 @@ export class DuelsScenario extends BaseScenario {
 
     const preset = this.competitive ? competitivePresetFor('duels') : null;
     this._ttk = this.config.ttk ?? preset?.ttk ?? d.ttk ?? 0.5;
+    this.runDuration = this.competitive
+      ? (preset?.runDuration ?? 60)
+      : this.settings.data.runDuration;
     this._arenaObjects = [];
     this.coverMeshes = [];
     this.enemy = null;
@@ -194,13 +198,18 @@ export class DuelsScenario extends BaseScenario {
     return 'duels';
   }
 
-  static configKeyFor(settings) {
+  static configKeyFor(settings, variant = 'practice') {
+    if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
     const d = settings.data.duels;
     const a = d.arena >= 1 && d.arena <= ARENAS.length ? d.arena : 'rand';
     return `arena${a}_d${settings.data.runDuration}`;
   }
   configKey() {
-    return DuelsScenario.configKeyFor(this.settings);
+    return DuelsScenario.configKeyFor(this.settings, this.variant);
+  }
+
+  tracerRaycastExtras() {
+    return this.coverMeshes;
   }
 
   _playerBounds(a) {
@@ -606,5 +615,10 @@ export class DuelsScenario extends BaseScenario {
         this._spawnEnemy();
       }
     }
+  }
+
+  results() {
+    const base = super.results();
+    return { ...base, score: Math.round(this.kills) };
   }
 }

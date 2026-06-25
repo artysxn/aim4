@@ -1,12 +1,16 @@
 // ---------------------------------------------------------------------------
 // SettingsManager.js
-// Single source of truth for all user-configurable settings: true sensitivity
-// (cm/360 + DPI), FOV, resolution, crosshair appearance, run duration and
-// per-scenario parameters. Persists to localStorage and notifies listeners.
+// Single source of truth for all user-configurable settings: sensitivity,
+// FOV, resolution, crosshair appearance, run duration and per-scenario
+// parameters. Persists to localStorage and notifies listeners.
 // ---------------------------------------------------------------------------
 
 import * as Storage from '../utils/Storage.js';
-import { radiansPerCount } from '../utils/MathUtils.js';
+import {
+  SENSITIVITY_DEFAULT,
+  radiansPerCountFromSensitivity,
+  sensitivityFromLegacy
+} from '../utils/MathUtils.js';
 
 export const RESOLUTIONS = {
   native: { label: 'Native', size: null },
@@ -17,8 +21,7 @@ export const RESOLUTIONS = {
 };
 
 const DEFAULTS = {
-  cm360: 40,
-  dpi: 800,
+  sensitivity: SENSITIVITY_DEFAULT,
   hFov: 90,
   resolution: 'native',
   rawInput: true, // request unadjusted (raw) mouse movement under Pointer Lock
@@ -56,7 +59,8 @@ const DEFAULTS = {
     floatSpeedMax: 2.0, // m/s cap for horizontal drift
     boundsScaleX: 1.0, // horizontal spawn spread multiplier
     boundsScaleY: 1.0, // vertical spawn spread multiplier (0.5 = tighter)
-    infiniteAmmo: true
+    infiniteAmmo: true,
+    viewmodelRecoil: false
   },
   pasu: {
     targetSize: 0.38,
@@ -80,15 +84,16 @@ const DEFAULTS = {
     heightSpread: 1.0, // vertical spawn multiplier
     angleSpread: 25, // degrees above/below horizontal
     streakChance: 0.15, // 0–1 chance to chain extra targets after a kill
-    streakLengthMin: 2,
-    streakLengthMax: 4,
+    streakLengthMin: 1,
+    streakLengthMax: 3,
     doubleSpawnChance: 0.08, // 0–1 chance for two active targets
     horizontalDrift: false,
     driftSpeedMax: 1.5,
     randomSize: false,
     randomSizeMin: 0.32,
     randomSizeMax: 0.52,
-    infiniteAmmo: true
+    infiniteAmmo: true,
+    viewmodelRecoil: false
   },
   survival: {
     spawnInterval: 1000, // ms between spawns (Practice)
@@ -146,7 +151,25 @@ export class SettingsManager {
 
   _load() {
     const saved = Storage.read('settings', {});
-    return this._deepMerge(structuredClone(DEFAULTS), saved);
+    const merged = this._deepMerge(structuredClone(DEFAULTS), saved);
+    this._normalizeSensitivity(merged);
+    return merged;
+  }
+
+  /** Migrate legacy cm/360 + DPI to unified sensitivity; strip old keys. */
+  _normalizeSensitivity(data) {
+    const sens = Number(data.sensitivity);
+    if (!Number.isFinite(sens) || sens <= 0) {
+      const cm = Number(data.cm360);
+      const dpi = Number(data.dpi);
+      if (Number.isFinite(cm) && Number.isFinite(dpi) && cm > 0 && dpi > 0) {
+        data.sensitivity = sensitivityFromLegacy(cm, dpi);
+      } else {
+        data.sensitivity = SENSITIVITY_DEFAULT;
+      }
+    }
+    delete data.cm360;
+    delete data.dpi;
   }
 
   _deepMerge(base, over) {
@@ -259,7 +282,7 @@ export class SettingsManager {
 
   /** Radians of yaw/pitch to apply per raw mouse count. */
   get radiansPerCount() {
-    return radiansPerCount(this.data.cm360, this.data.dpi);
+    return radiansPerCountFromSensitivity(this.data.sensitivity);
   }
 
   reset() {
@@ -283,6 +306,7 @@ export class SettingsManager {
       throw new Error('Invalid settings data');
     }
     this.data = this._deepMerge(structuredClone(DEFAULTS), payload);
+    this._normalizeSensitivity(this.data);
     if (this.draft) {
       this.draft = structuredClone(this.data);
       this._undoStack = [];

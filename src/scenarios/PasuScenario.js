@@ -12,6 +12,7 @@ import { randRange } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { EYE_HEIGHT } from '../core/Engine.js';
 import { competitivePresetFor } from './competitivePresets.js';
+import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
@@ -39,6 +40,9 @@ export class PasuScenario extends BaseScenario {
     this.angleOffset = preset?.angleOffset ?? this.config.angleOffset ?? p.angleOffset ?? 360;
     this.infiniteAmmo = this.config.infiniteAmmo ?? p.infiniteAmmo !== false;
     this.weaponBloom = false;
+    this.runDuration = this.competitive
+      ? (preset?.runDuration ?? 30)
+      : this.settings.data.runDuration;
 
     this.wallDistance = 16;
     this.boundsW = BASE_BOUNDS_W * this.boundsScaleX;
@@ -52,12 +56,13 @@ export class PasuScenario extends BaseScenario {
     return 'pasu';
   }
 
-  static configKeyFor(settings) {
+  static configKeyFor(settings, variant = 'practice') {
+    if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
     return `d${settings.data.runDuration}`;
   }
 
   configKey() {
-    return PasuScenario.configKeyFor(this.settings);
+    return PasuScenario.configKeyFor(this.settings, this.variant);
   }
 
   static runDurationFromKey(configKey) {
@@ -296,9 +301,17 @@ export class PasuScenario extends BaseScenario {
     for (let i = active; i < this.targetCount; i++) this._spawn();
   }
 
+  _penalizeMiss() {
+    this.misses++;
+    this.kills = Math.max(0, this.kills - 1);
+  }
+
   onShoot(raycaster) {
     const hit = this.raycastTargets(raycaster);
-    if (!hit) return;
+    if (!hit) {
+      this._penalizeMiss();
+      return;
+    }
     const target = hit.object.userData.target;
     if (!target || target.state === 'dying') return;
 

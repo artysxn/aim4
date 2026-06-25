@@ -66,7 +66,7 @@ export async function printHostBanner(port, publicIp) {
     lines.push('  For that public link to work you MUST also:');
     lines.push(`    1. Forward TCP port ${port} on your router to this PC's LAN IP.`);
     lines.push(`    2. Allow Node.js (or TCP port ${port}) through your firewall.`);
-    lines.push('  (start-host.bat tries to add the firewall rule automatically.)');
+    lines.push('  (Allow Node.js or TCP port ' + port + ' through your firewall.)');
   } else {
     lines.push('  Over the internet: find your public IP (e.g. https://api.ipify.org),');
     lines.push(`  forward TCP port ${port} on your router to this PC, allow it through`);

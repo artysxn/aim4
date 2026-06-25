@@ -80,6 +80,14 @@ export class MultiplayerDuelScenario extends BaseScenario {
     return `mp_${this.mapId}`;
   }
 
+  tracerRaycastExtras() {
+    const extras = this.coverMeshes.slice();
+    for (const r of this.remotes.values()) {
+      if (!r.dead) extras.push(...r.colliders);
+    }
+    return extras;
+  }
+
   // ---- World --------------------------------------------------------------
   _clearEnvironment() {
     for (const obj of this._arenaObjects) {

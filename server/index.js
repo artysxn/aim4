@@ -144,7 +144,7 @@ wss.on('connection', (ws) => mp.addConnection(ws));
 
 if (SERVE_STATIC && !distExists()) {
   console.error('');
-  console.error('ERROR: dist/ not found. Run "npm run build" first, or use start-host.bat');
+  console.error('ERROR: dist/ not found. Run "npm run build" first, or use npm run host');
   console.error('');
   process.exit(1);
 }
@@ -158,6 +158,6 @@ server.listen(PORT, HOST, async () => {
   } else {
     console.log(`AIM4 config API on http://${HOST}:${PORT}`);
     console.log(`AIM4 multiplayer (128 tick) on ws://${HOST}:${PORT}/ws`);
-    console.log('(Run "npm run host" or start-host.bat to serve the game for others.)');
+    console.log('(Run "npm run host" to serve the game for others.)');
   }
 });
