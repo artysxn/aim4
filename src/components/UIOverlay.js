@@ -1084,6 +1084,12 @@ export class UIOverlay {
     }
   }
 
+  /** Connection / server errors — visible on both custom games and matchmaking. */
+  netStatus(msg, ok = true) {
+    this.mpStatus(msg, ok);
+    this.mmStatus(msg, ok);
+  }
+
   /** Render the public lobby browser list. `lobbies === null` = loading. */
   renderLobbyList(lobbies) {
     const el = this.root.querySelector('#mp-lobby-list');
@@ -1204,15 +1210,22 @@ export class UIOverlay {
   _renderMatchmaking() {
     const eloEl = this.root.querySelector('#mm-elo');
     const status = this.root.querySelector('#mm-status');
+    const queueBtn = this.root.querySelector('#mm-queue-btn');
     if (eloEl) eloEl.textContent = String(this.auth?.elo ?? 1000);
     if (status) {
-      if (!this.auth?.isLoggedIn) {
+      if (!this.auth?.isConfigured) {
+        status.textContent = 'Ranked matchmaking requires account sign-in (Supabase not configured on this deploy).';
+        status.classList.add('is-error');
+      } else if (!this.auth?.isLoggedIn) {
         status.textContent = 'Sign in to play ranked matchmaking.';
         status.classList.add('is-error');
       } else {
         status.textContent = '';
         status.classList.remove('is-error');
       }
+    }
+    if (queueBtn) {
+      queueBtn.disabled = !this.auth?.isConfigured || !this.auth?.isLoggedIn;
     }
     this._renderMatchmakingControls({
       inQueue: this.mp?.inQueue,
@@ -1228,6 +1241,9 @@ export class UIOverlay {
     const inQueue = !!msg?.inQueue;
     queueBtn?.toggleAttribute('hidden', inQueue);
     leaveBtn?.toggleAttribute('hidden', !inQueue);
+    if (queueBtn && !inQueue) {
+      queueBtn.disabled = !this.auth?.isConfigured || !this.auth?.isLoggedIn;
+    }
     if (inQueue && status && this.auth?.isLoggedIn) {
       const n = msg.queueSize ?? 1;
       const range = Number.isFinite(msg.searchRange) ? ` · ±${msg.searchRange} ELO` : '';
@@ -1258,11 +1274,21 @@ export class UIOverlay {
   _bindMatchmaking() {
     const $ = (id) => this.root.querySelector(id);
     $('#mm-queue-btn')?.addEventListener('click', async () => {
+      if (!this.auth?.isConfigured) {
+        this.mmStatus('Accounts are not configured on this deployment.', false);
+        return;
+      }
       if (!this.auth?.isLoggedIn) {
         this.mmStatus('Sign in to use matchmaking.', false);
         return;
       }
-      await this.auth.refreshElo();
+      this.mmStatus('Connecting…', true);
+      try {
+        await this.auth.refreshElo();
+      } catch (e) {
+        this.mmStatus(e.message || 'Could not refresh ELO.', false);
+        return;
+      }
       this._renderMatchmaking();
       const ok = await this.mp.enterQueue({
         name: this._defaultName(),
@@ -1546,7 +1572,7 @@ export class UIOverlay {
     this._updateQueueChip({ inQueue: false });
     this.input.exitLock();
     this.sceneManager.unload();
-    this.mpStatus('Disconnected', false);
+    this.netStatus('Disconnected', false);
     this.showScreen('mp');
   }
 

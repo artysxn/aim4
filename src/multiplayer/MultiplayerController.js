@@ -49,7 +49,7 @@ export class MultiplayerController {
     net.onLobbyList = (lobbies) => {
       if (this.browsing) this.ui.renderLobbyList(lobbies);
     };
-    net.onError = (msg) => this.ui.mpStatus(msg, false);
+    net.onError = (msg) => this.ui.netStatus(msg, false);
     net.onQueueStatus = (msg) => {
       this.inQueue = !!msg.inQueue;
       if (Number.isFinite(msg.elo)) this.queueElo = msg.elo;
@@ -92,12 +92,12 @@ export class MultiplayerController {
   async _ensureConnected() {
     if (this.net.connected) return true;
     try {
-      this.ui.mpStatus('Connecting…');
+      this.ui.netStatus('Connecting…');
       await this.net.connect();
-      this.ui.mpStatus('');
+      this.ui.netStatus('');
       return true;
     } catch (e) {
-      this.ui.mpStatus(e.message || 'Could not connect to the server.', false);
+      this.ui.netStatus(e.message || 'Could not connect to the server.', false);
       return false;
     }
   }

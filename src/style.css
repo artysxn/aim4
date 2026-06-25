@@ -589,6 +589,9 @@ input[type='checkbox'] {
   margin-top: 8px;
   line-height: 1.5;
 }
+.readout.is-error {
+  color: #ff6b7a;
+}
 .readout b {
   color: var(--accent);
 }
