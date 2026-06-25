@@ -419,23 +419,29 @@ h4 {
   text-align: center;
   cursor: pointer;
   pointer-events: auto;
-  transition: background 0.15s ease;
+  border: none;
+  appearance: none;
+  -webkit-appearance: none;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 .mode-tile:hover {
   background: rgba(255, 255, 255, 0.08);
 }
 .mode-tile-mm {
-  background: var(--accent-dim);
+  background: rgba(245, 37, 37, 0.22);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 .mode-tile-mm:hover {
-  background: rgba(245, 37, 37, 0.26);
+  background: rgba(245, 37, 37, 0.4);
 }
 .mode-tile-icon {
   width: 40px;
   height: 40px;
   object-fit: contain;
   display: block;
-  color: var(--accent);
+}
+.mode-tile-icon-mm {
+  color: var(--accent); /* red crown */
 }
 .mode-tile-title {
   font-size: 16px;
@@ -464,13 +470,14 @@ h4 {
 /* ---- Ammo counter (weapon scenarios) ----------------------------------- */
 .hud-ammo {
   position: absolute;
-  right: 28px;
-  bottom: 24px;
+  right: 58px;
+  bottom: 54px;
   z-index: 3;
   display: none;
   align-items: baseline;
-  gap: 4px;
-  font-family: var(--font-display);
+  gap: 6px;
+  font-family: var(--font-body);
+  font-weight: 600;
   color: var(--text);
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
   pointer-events: none;
@@ -479,15 +486,15 @@ h4 {
   display: flex;
 }
 .hud-ammo-mag {
-  font-size: 46px;
+  font-size: 92px;
   line-height: 1;
 }
 #hud-ammo-sep {
-  font-size: 24px;
+  font-size: 48px;
   color: var(--muted);
 }
 .hud-ammo-size {
-  font-size: 24px;
+  font-size: 48px;
   color: var(--muted);
 }
 .hud-ammo.reloading .hud-ammo-mag {

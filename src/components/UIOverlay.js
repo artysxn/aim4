@@ -26,7 +26,7 @@ import { MultiplayerController } from '../multiplayer/MultiplayerController.js';
 import { SCORE_TARGETS, MM_SCORE_TARGET } from '../multiplayer/constants.js';
 import { getMap } from '../multiplayer/maps.js';
 import { formatServerRegion } from '../multiplayer/regionLabels.js';
-import { SCENARIO_ICONS, MATCHMAKING_ICON } from '../aim4/icons.js';
+import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, CUSTOM_GAMES_ICON } from '../aim4/icons.js';
 
 const SCENARIO_META = {
   gridshot: { title: 'Gridshot' },
@@ -397,32 +397,18 @@ export class UIOverlay {
       <div class="panel wide">
         <h1 class="logo text-big">AIM4<span>.io</span></h1>
         <div class="menu-modes">
-          <div class="menu-group menu-group-sp">
-            <h4 class="menu-group-label">Singleplayer</h4>
-            <div class="cards">
-              ${Object.keys(SCENARIOS)
-                .map(
-                  (key) => `
-                <div class="card" data-scenario="${key}">
-                  <div class="card-icon">
-                    <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="28" height="28" />
-                  </div>
-                  <h3 class="card-title">${SCENARIO_META[key].title}</h3>
-                  <button type="button" class="btn-play" data-play="${key}" aria-label="Play ${SCENARIO_META[key].title}">
-                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
-                  </button>
-                </div>`
-                )
-                .join('')}
-            </div>
-          </div>
+          <button type="button" class="mode-tile mode-tile-training" data-goto="training">
+            <img src="${TRAINING_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
+            <span class="mode-tile-title">Training</span>
+            <span class="mode-tile-sub">Solo aim drills</span>
+          </button>
           <button type="button" class="mode-tile mode-tile-mm" id="menu-mm-tile">
-            <img src="${MATCHMAKING_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
+            <svg class="mode-tile-icon mode-tile-icon-mm" viewBox="0 -960 960 960" width="40" height="40" aria-hidden="true"><path fill="currentColor" d="M233.08-200v-40h493.84v40H233.08Zm-2.31-115.38L172.85-621q-2 .77-4.5.88-2.5.12-4.5.12-18.85 0-31.35-12.79T120-663.85q0-18.91 12.5-32.14 12.5-13.24 31.39-13.24t32.12 13.24q13.22 13.23 13.22 32.14 0 4.17-.35 7.74-.34 3.57-2.34 7.03l128.08 51.39 118.84-161.77q-8.69-5.69-13.77-15.04-5.07-9.34-5.07-20.12 0-18.91 13.22-32.14Q461.06-840 479.95-840q18.9 0 32.17 13.19 13.26 13.19 13.26 32.04 0 11.31-5.07 20.46-5.08 9.16-13.77 14.85l118.84 161.77 128.08-51.39q-1.08-3.19-1.88-7.02-.81-3.82-.81-7.75 0-18.91 12.5-32.14 12.5-13.24 31.39-13.24t32.12 13.24Q840-682.76 840-663.85q0 18.16-13.28 31Q813.44-620 794.47-620q-1.52 0-3.42-.5t-4.16-.5l-57.66 305.62H230.77Zm34.15-40h430.16l49.07-245.47-132.69 52.93L480-727.85 348.54-547.92l-132.69-52.93 49.07 245.47Zm215.08 0Z"/></svg>
             <span class="mode-tile-title">Matchmaking</span>
             <span class="mode-tile-sub" id="menu-mm-userline">Ranked 1v1 duels</span>
           </button>
           <button type="button" class="mode-tile mode-tile-custom" data-goto="mp">
-            <svg class="mode-tile-icon" viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="currentColor" d="M12 2 4 6v6c0 5 3.4 7.7 8 10 4.6-2.3 8-5 8-10V6l-8-4Zm0 4.5 4 2v3.5c0 3.2-2 5.1-4 6.2-2-1.1-4-3-4-6.2V8.5l4-2Z"/></svg>
+            <img src="${CUSTOM_GAMES_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">Custom games</span>
             <span class="mode-tile-sub">Create or join a lobby</span>
           </button>
@@ -439,6 +425,32 @@ export class UIOverlay {
               <button type="button" class="btn btn-sm" id="menu-logout-btn">Log out</button>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TRAINING (singleplayer mode picker) -->
+    <div class="screen training" data-screen="training">
+      <div class="panel wide">
+        <h2 class="text-big">Training</h2>
+        <div class="cards">
+          ${Object.keys(SCENARIOS)
+            .map(
+              (key) => `
+            <div class="card" data-scenario="${key}">
+              <div class="card-icon">
+                <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="28" height="28" />
+              </div>
+              <h3 class="card-title">${SCENARIO_META[key].title}</h3>
+              <button type="button" class="btn-play" data-play="${key}" aria-label="Play ${SCENARIO_META[key].title}">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+              </button>
+            </div>`
+            )
+            .join('')}
+        </div>
+        <div class="menu-actions">
+          <button class="btn primary" data-goto="menu">Back</button>
         </div>
       </div>
     </div>
@@ -501,8 +513,6 @@ export class UIOverlay {
     <!-- LEADERBOARD -->
     <div class="screen leaderboard" data-screen="leaderboard">
       <div class="panel wide">
-        <h2 class="text-big">Leaderboards</h2>
-        <p class="lb-subtitle" id="lb-subtitle">Best score per verified account</p>
         <div class="tabs" id="lb-tabs">
           <button class="tab active" data-lb="elo">Ranked ELO</button>
           ${Object.keys(SCENARIOS)
@@ -1480,7 +1490,6 @@ export class UIOverlay {
     this.mpTabScoreboard.innerHTML = `
       <div class="mp-tab-board">
         <div class="mp-tab-board-head">
-          <span class="mp-tab-board-title">${this._esc(title)}</span>
           ${this._tabFpsHtml()}
         </div>
         <table class="mp-tab-table mp-tab-table-solo">
@@ -1531,10 +1540,8 @@ export class UIOverlay {
     this.mpTabScoreboard.innerHTML = `
       <div class="mp-tab-board">
         <div class="mp-tab-board-head">
-          <span class="mp-tab-board-title">Stats</span>
           <div class="mp-tab-board-meta">
             ${this._tabFpsHtml()}
-            <span class="mp-tab-board-goal">${goal}</span>
           </div>
         </div>
         <table class="mp-tab-table">
@@ -1977,18 +1984,31 @@ export class UIOverlay {
     }
 
     if (scenario === 'elo') {
+      const pct = (v) => (v != null && Number.isFinite(v) ? Math.round(v * 100) + '%' : '—');
       const rows = list
         .map((r, i) => {
           const hl = highlightUserId && r.user_id === highlightUserId ? ' class="hl"' : '';
+          const games = r.games ?? r.games_played ?? '—';
+          const wl = r.wins != null && r.losses != null ? `${r.wins}–${r.losses}` : '—';
+          const kd = r.kd != null
+            ? Number(r.kd).toFixed(2)
+            : (r.kills != null && r.deaths != null
+              ? (r.kills / Math.max(1, r.deaths)).toFixed(2)
+              : '—');
           return `<tr${hl}>
           <td>${i + 1}</td>
           <td class="lb-player">${this._esc(r.username)}</td>
           <td class="score">${Number(r.elo ?? 1000).toLocaleString()}</td>
+          <td>${games}</td>
+          <td>${wl}</td>
+          <td>${kd}</td>
+          <td>${pct(r.accuracy)}</td>
+          <td>${pct(r.hs_accuracy ?? r.headshot_accuracy)}</td>
         </tr>`;
         })
         .join('');
       return `<table class="lb-table">
-      <thead><tr><th>#</th><th>Player</th><th>ELO</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>ELO</th><th>Games</th><th>W–L</th><th>K/D</th><th>Acc</th><th>HS%</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
     }
 

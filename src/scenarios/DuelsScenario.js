@@ -596,6 +596,7 @@ export class DuelsScenario extends BaseScenario {
       this._respawnTimer -= dt;
       if (this._respawnTimer <= 0) {
         this._respawnTimer = null;
+        this.engine.weapon?.reset(); // auto-reload the mag on every round reset
         if (this._switchArenaOnRespawn) {
           this._switchArenaOnRespawn = false;
           this._switchArena();

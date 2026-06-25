@@ -79,8 +79,9 @@ export function bloomRad(state, shotIndex, recentlyLanded = false) {
 
 // View-punch impulse (radians of upward camera kick) for a shot. Grows as the
 // spray is held so a long burst jolts more, then springs back each shot.
+const VIEW_PUNCH_SCALE = 2.5; // overall strength of the visual aimpunch kick
 export function viewPunchImpulse(shotIndex) {
   const base = degToRad(0.45);
   const ramp = Math.min(shotIndex, 12) * degToRad(0.04);
-  return base + ramp;
+  return (base + ramp) * VIEW_PUNCH_SCALE;
 }
