@@ -14,7 +14,10 @@ import {
   MAG_SIZE,
   RELOAD_TIME,
   patternOffset,
-  bloomRad
+  bloomRad,
+  BURST_BREAK_MS,
+  SUSTAIN_CAP_SHOTS,
+  SUSTAIN_RECOVERY_PER_SHOT
 } from './ak47.js';
 
 const LAND_WINDOW = 0.15; // seconds after landing where shots are penalised
@@ -36,6 +39,7 @@ export class WeaponController {
     this.reloading = false;
     this._reloadEndsAt = 0;
     this._shotIndex = 0;
+    this._sustainLevel = 0;
     this._firing = false;
     this._wasAirborne = false;
     this._landedUntil = 0;
@@ -56,12 +60,22 @@ export class WeaponController {
     return 1 - Math.max(0, Math.min(1, left));
   }
 
+  /** Live bloom cone half-angle (rad) for crosshair / UI — matches the next shot. */
+  getBloomRad() {
+    const player = this.engine.player;
+    const state = player
+      ? player.getAccuracyState()
+      : { onGround: true, speedHoriz: 0 };
+    const recentlyLanded = performance.now() < this._landedUntil;
+    return bloomRad(state, this._sustainLevel, recentlyLanded);
+  }
+
   _active() {
     const sc = this.sceneManager.current;
     return sc && sc.usesWeapon && sc.running && !sc._dead ? sc : null;
   }
 
-  update() {
+  update(dt) {
     const sc = this._active();
     if (!sc) {
       this._firing = false;
@@ -80,27 +94,42 @@ export class WeaponController {
       this.reloading = false;
       this.ammo = this.magSize;
       this._shotIndex = 0;
+      this._sustainLevel = 0;
     }
 
     const wantFire = this.input.fireHeld && !this.reloading && this.ammo > 0;
+
+    // Linear bloom recovery while off the trigger (not instant snap to standing accuracy).
+    if (!wantFire) {
+      this._firing = false;
+      if (this._sustainLevel > 0) {
+        this._sustainLevel = Math.max(
+          0,
+          this._sustainLevel - dt / SUSTAIN_RECOVERY_PER_SHOT
+        );
+      }
+    }
+
     if (wantFire) {
+      const sinceLast = this._lastShotAt > 0 ? now - this._lastShotAt : Infinity;
+
+      // Long pause breaks the burst; tap-firing at weapon RPM keeps walking the pattern.
+      if (sinceLast > BURST_BREAK_MS) {
+        this._shotIndex = 0;
+      }
+
       // The cadence is clocked off the real time of the last shot, so spamming
       // clicks (or a lag spike) can never fire faster than the weapon's RPM, and
       // a stale timer (first shot / returning from a tab-out) can't machine-gun
       // a backlog — we clamp it to a single pending shot.
-      if (now - this._lastShotAt > SHOT_INTERVAL_MS * 2) this._lastShotAt = now - SHOT_INTERVAL_MS;
-      if (!this._firing) {
-        this._firing = true;
-        this._shotIndex = 0; // a new pull on the trigger restarts the pattern
+      if (sinceLast > SHOT_INTERVAL_MS * 2) {
+        this._lastShotAt = now - SHOT_INTERVAL_MS;
       }
+      this._firing = true;
       while (this.ammo > 0 && !this.reloading && now - this._lastShotAt >= SHOT_INTERVAL_MS) {
         this._lastShotAt += SHOT_INTERVAL_MS;
         this._fireOne(sc);
       }
-    } else {
-      // Releasing the trigger lets the recoil pattern recover to the start.
-      this._firing = false;
-      this._shotIndex = 0;
     }
 
     if (this.ammo === 0 && !this.reloading) this.reload();
@@ -112,7 +141,8 @@ export class WeaponController {
     const state = player ? player.getAccuracyState() : { onGround: true, speedHoriz: 0 };
     const recentlyLanded = performance.now() < this._landedUntil;
     const offset = patternOffset(idx);
-    const bloom = bloomRad(state, idx, recentlyLanded);
+    const bloom = bloomRad(state, this._sustainLevel, recentlyLanded);
+    this._sustainLevel = Math.min(SUSTAIN_CAP_SHOTS, this._sustainLevel + 1);
 
     sc.shoot(offset, bloom, idx); // flash, kick, tracer + view-punch live in shoot()
 

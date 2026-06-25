@@ -171,7 +171,7 @@ export class UIOverlay {
       },
       {
         id: 'display',
-        label: 'Display',
+        label: 'Game settings',
         body: `
           ${rf('set-fov', 'Horizontal FOV (°)', 60, 130, 1)}
           <div class="field field-plain">
@@ -199,7 +199,7 @@ export class UIOverlay {
           ${rf('set-xh-thick', 'Thickness', 1, 8, 1)}
             ${rf('set-xh-dot', 'Center dot (%)', 0, 100, 5)}
             <label class="field-check"><input type="checkbox" id="set-xh-hitmarker" /> Hitmarker</label>
-            <label class="field-check"><input type="checkbox" id="set-xh-dyn" /> Dynamic gap (movement spread)</label>`
+            <label class="field-check"><input type="checkbox" id="set-xh-dyn" /> Dynamic gap (movement + spray bloom)</label>`
       },
       {
         id: 'viewmodel',
@@ -1802,6 +1802,26 @@ export class UIOverlay {
   }
 
   quit() {
+    const sc = this.sceneManager.current;
+    const gridshotRun =
+      sc?.name === 'gridshot' && sc.modeSeconds > 0 && !this.mp?.inMatch && !this.mp?.lobby;
+
+    if (gridshotRun) {
+      sc.pause();
+      const results = sc.results();
+      this._resetMpChat();
+      this._hideMpTabScoreboard();
+      this.input.exitLock();
+      this.sceneManager.unload();
+      this._updateQueueChip({
+        inQueue: this.mp?.inQueue,
+        queueSize: 0,
+        elo: this.mp?.queueElo ?? this.auth?.elo
+      });
+      this._onFinish(results);
+      return;
+    }
+
     this.state = 'menu';
     this._resetMpChat();
     this._hideMpTabScoreboard();
@@ -1866,7 +1886,11 @@ export class UIOverlay {
       if (this._aimHintShown) this._setClickToAim(false);
     }
     if (this.hud.classList.contains('active') && sc) {
-      this.hudTime.textContent = this.sceneManager.timeRemaining.toFixed(1);
+      if (sc.name === 'gridshot') {
+        this.hudTime.textContent = sc.modeSeconds.toFixed(1);
+      } else {
+        this.hudTime.textContent = this.sceneManager.timeRemaining.toFixed(1);
+      }
       this.hudScore.textContent = Math.round(sc.score).toLocaleString();
       this.hudAcc.textContent = Math.round(sc.accuracy * 100) + '%';
       this.hudKps.textContent = sc.kps.toFixed(1);
@@ -2074,7 +2098,7 @@ export class UIOverlay {
           : 'All accounts · sign in to track your ranked ELO';
       } else {
         const gridshotHint = scenario === 'gridshot'
-          ? 'Ranked by time played, then KPM · '
+          ? 'Ranked by time in mode, then KPM · '
           : 'Best score per verified account · ';
         subtitle.textContent = this.auth?.isLoggedIn
           ? `${gridshotHint}signed in as ${this._accountLabel()}`

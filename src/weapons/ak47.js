@@ -48,14 +48,13 @@ export const PATTERN = PATTERN_DEG.map(([yaw, pitch]) => ({
 }));
 
 /**
- * Per-burst intensity ramp (0-based shot index). Early bullets in a spray use
- * a fraction of the full pattern / punch strength before settling to 100%.
+ * Per-burst intensity ramp (0-based shot index). First bullets in a spray are
+ * slightly softer before settling to full strength from bullet 4 onward.
  */
 export function sprayIntensity(shotIndex) {
-  if (shotIndex <= 1) return 0.10; // bullets 1–2
-  if (shotIndex === 2) return 0.30; // bullet 3
-  if (shotIndex === 3) return 0.80; // bullet 4
-  return 1.0; // bullet 5+
+  if (shotIndex <= 1) return 0.90; // bullets 1–2
+  if (shotIndex === 2) return 0.95; // bullet 3
+  return 1.0; // bullet 4+
 }
 
 /** Cumulative pattern offset for a 0-based shot index (clamped to the mag). */
@@ -69,24 +68,32 @@ export function patternOffset(shotIndex) {
 
 // Bloom tuning (cone half-angle in radians).
 // Standing still, shot 1 is dead-on (0 bloom); a sustained standing spray grows
-// to only ~0.35° (~10 cm at duel range) — barely noticeable but present.
+// a very slight random cone on top of the deterministic pattern.
 const STAND_BLOOM = 0;
 const SUSTAIN_STEP = degToRad(0.02); // added per sustained shot (capped)
-const SUSTAIN_CAP_SHOTS = 18;
+const SPRAY_OVERLAY_BLOOM = degToRad(0.035); // fixed slight cone while spraying
+export const SUSTAIN_CAP_SHOTS = 18;
+/** Idle time to recover one sustain step (linear bloom decay toward standing accuracy). */
+export const SUSTAIN_RECOVERY_PER_SHOT = 0.07;
 const MOVE_BLOOM = degToRad(3.0); // extra at full run speed
 const LAND_BLOOM = degToRad(2.0); // extra for a short window after landing
 const AIR_BLOOM = degToRad(6.0); // airborne: large, low chance to connect
 
+/** Gap without a shot before the spray pattern resets (tap cadence at 600 RPM still chains). */
+export const BURST_BREAK_MS = SHOT_INTERVAL * 1000 * 2.5;
+
 /**
  * Random spread cone half-angle (radians) for this shot.
  * @param {{onGround:boolean, speedHoriz:number}} state movement state
- * @param {number} shotIndex 0-based index within the current burst
+ * @param {number} sustainLevel effective sustained shots (decays linearly while idle)
  * @param {boolean} recentlyLanded true for a short window after touching ground
  */
-export function bloomRad(state, shotIndex, recentlyLanded = false) {
+export function bloomRad(state, sustainLevel, recentlyLanded = false) {
   if (!state.onGround) return AIR_BLOOM;
   let r = STAND_BLOOM;
-  r += Math.min(shotIndex, SUSTAIN_CAP_SHOTS) * SUSTAIN_STEP;
+  const sustain = Math.min(Math.max(0, sustainLevel), SUSTAIN_CAP_SHOTS);
+  r += sustain * SUSTAIN_STEP;
+  if (sustain > 0) r += SPRAY_OVERLAY_BLOOM;
   const moveT = clamp(
     (state.speedHoriz - CROUCH_SPEED) / Math.max(1e-6, RUN_SPEED - CROUCH_SPEED),
     0,

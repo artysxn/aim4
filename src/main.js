@@ -29,6 +29,7 @@ const crosshair = new Crosshair(settings);
 const viewmodel = new Viewmodel(engine, settings);
 engine.viewmodel = viewmodel; // scenarios reach it for muzzle/tracers
 const sceneManager = new SceneManager(engine, input, settings, crosshair);
+engine.sceneManager = sceneManager;
 const weapon = new WeaponController({ engine, input, settings, sceneManager, viewmodel });
 engine.weapon = weapon; // scenarios/UI reach it for ammo + reset
 input.onReload = () => weapon.reload();

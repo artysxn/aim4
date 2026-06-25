@@ -143,10 +143,21 @@ export class Viewmodel {
 
   _applyPunch(dt) {
     const spraying = !!this.engine.player?.input?.fireHeld;
-    const tau = spraying ? PUNCH_TAU_SPRAY : PUNCH_TAU_RECOVER;
-    const decay = Math.exp(-dt / tau);
-    this._punchPitch *= decay;
-    this._punchYaw *= decay;
+    if (spraying) {
+      const decay = Math.exp(-dt / PUNCH_TAU_SPRAY);
+      this._punchPitch *= decay;
+      this._punchYaw *= decay;
+    } else if (this._punchPitch !== 0 || this._punchYaw !== 0) {
+      // Linear recovery to neutral after releasing fire (not instant snap).
+      const pMag = Math.abs(this._punchPitch);
+      const yMag = Math.abs(this._punchYaw);
+      const pStep = (pMag / PUNCH_TAU_RECOVER) * dt;
+      const yStep = (yMag / PUNCH_TAU_RECOVER) * dt;
+      this._punchPitch =
+        pMag <= pStep ? 0 : Math.sign(this._punchPitch) * (pMag - pStep);
+      this._punchYaw =
+        yMag <= yStep ? 0 : Math.sign(this._punchYaw) * (yMag - yStep);
+    }
     if (Math.abs(this._punchPitch) < 1e-4 && Math.abs(this._punchYaw) < 1e-4) {
       this._punchPitch = 0;
       this._punchYaw = 0;

@@ -30,7 +30,7 @@ const DEFAULTS = {
     thickness: 2,
     dotPercentage: 35,
     hitmarker: true, // brief X flash on hit
-    dynamicGap: false // gap grows with movement-based shot spread (airborne/fast = wider)
+    dynamicGap: false // gap grows with movement + weapon bloom (airborne/fast = wider)
   },
   viewmodel: {
     hand: 'right', // 'right' | 'left'

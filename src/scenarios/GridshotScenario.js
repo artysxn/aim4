@@ -61,6 +61,28 @@ export class GridshotScenario extends BaseScenario {
     return m ? parseInt(m[1], 10) : null;
   }
 
+  /** Seconds actively spent in this gridshot run (paused time excluded). */
+  get modeSeconds() {
+    return this.elapsed;
+  }
+
+  results() {
+    const timePlayed = Math.round(this.modeSeconds * 1000) / 1000;
+    return {
+      scenario: this.name,
+      configKey: this.configKey(),
+      score: Math.round(this.kills),
+      accuracy: this.accuracy,
+      critRatio: this.critRatio,
+      kills: this.kills,
+      hits: this.hits,
+      shots: this.shotsFired,
+      misses: this.misses,
+      timePlayed,
+      kpm: timePlayed > 0 ? this.kills / (timePlayed / 60) : 0
+    };
+  }
+
   _buildEnvironment() {
     const c = this.settings.data.colors;
     const [gridCenter, gridEdge] = gridLineColors(c.floor);

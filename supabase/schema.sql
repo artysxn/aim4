@@ -43,7 +43,7 @@ create table if not exists public.scores (
   kills integer,
   hits integer,
   shots integer,
-  time_played real,
+  time_played real, -- gridshot: active seconds in mode (excludes pause); not run-duration setting
   kpm real,
   created_at timestamptz default now()
 );
@@ -213,22 +213,42 @@ as $$
 begin
   if p_scenario = 'gridshot' then
     return query
-    select * from (
+    select
+      ranked.user_id,
+      ranked.username,
+      ranked.score,
+      ranked.accuracy,
+      ranked.crit_ratio,
+      ranked.kills,
+      ranked.time_played,
+      ranked.kpm,
+      ranked.achieved_at
+    from (
       select * from public.get_leaderboard(p_scenario, p_config_key, 1000)
     ) ranked
     order by
-      coalesce(time_played, 0) desc,
-      coalesce(kpm, 0) desc,
-      coalesce(kills, 0) desc,
-      coalesce(accuracy, 0) desc,
-      achieved_at asc
+      coalesce(ranked.time_played, 0) desc,
+      coalesce(ranked.kpm, 0) desc,
+      coalesce(ranked.kills, 0) desc,
+      coalesce(ranked.accuracy, 0) desc,
+      ranked.achieved_at asc
     limit greatest(1, least(p_limit, 50));
   else
     return query
-    select * from (
+    select
+      ranked.user_id,
+      ranked.username,
+      ranked.score,
+      ranked.accuracy,
+      ranked.crit_ratio,
+      ranked.kills,
+      ranked.time_played,
+      ranked.kpm,
+      ranked.achieved_at
+    from (
       select * from public.get_leaderboard(p_scenario, p_config_key, 1000)
     ) ranked
-    order by score desc, achieved_at asc
+    order by ranked.score desc, ranked.achieved_at asc
     limit greatest(1, least(p_limit, 50));
   end if;
 end;

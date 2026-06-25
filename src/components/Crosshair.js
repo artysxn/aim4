@@ -42,9 +42,9 @@ export class Crosshair {
 
   /**
    * Per-frame hook (from the game loop). When the dynamic-gap option is on, the
-   * inner gap grows to show the live movement-based bullet-spread cone: zero at
-   * or below crouch speed, widening as you move faster, and very wide airborne.
-   * Redraws only when the pixel gap actually changes, so it stays cheap.
+   * inner gap grows to show live bullet spread: movement inaccuracy plus weapon
+   * bloom (sustain spray) in weapon scenarios. Redraws only when the pixel gap
+   * actually changes.
    */
   frame(engine) {
     if (!this.visible || !this.settings.data.crosshair.dynamicGap) {
@@ -58,13 +58,22 @@ export class Crosshair {
     const state = player && player.enabled
       ? player.getAccuracyState()
       : { onGround: true, speedHoriz: 0 };
-    const spread = shotSpreadRad(state); // cone half-angle (radians)
-    // Project the spread half-angle to screen pixels: the gap then equals the
-    // radius of the bullet-spread cone at the crosshair.
+
+    const sc = engine.sceneManager?.current;
+    const spread =
+      sc?.usesWeapon && sc.running && engine.weapon
+        ? engine.weapon.getBloomRad()
+        : shotSpreadRad(state);
+
+    // Project the spread half-angle to screen pixels: gap = cone radius at crosshair.
     const h = window.innerHeight;
     const focalPx = (h / 2) / Math.tan(degToRad(engine.camera.fov) / 2);
     const cap = Math.round(h * 0.45);
-    const px = Math.min(cap, Math.round(spread * focalPx));
+    const spreadPx = spread * focalPx;
+    const px =
+      spread <= 1e-7
+        ? 0
+        : Math.min(cap, Math.max(1, Math.round(spreadPx)));
     if (px !== this._dynGapPx) {
       this._dynGapPx = px;
       this.draw();

@@ -204,6 +204,15 @@ export async function submitScore(userId, results) {
     kpm: finiteNum(results.kpm)
   };
 
+  if (results.scenario === 'gridshot') {
+    const timePlayed = Math.max(0, finiteNum(results.timePlayed));
+    const kills = Math.round(finiteNum(results.kills));
+    full.score = kills;
+    full.kills = kills;
+    full.time_played = timePlayed;
+    full.kpm = timePlayed > 0 ? kills / (timePlayed / 60) : 0;
+  }
+
   let { error } = await sb.from('scores').insert(full);
   if (error && isMissingColumnError(error)) {
     const minimal = {
