@@ -819,6 +819,11 @@ export class UIOverlay {
   // -------------------------------------------------------------------------
   // Account auth
   // -------------------------------------------------------------------------
+  _accountLabel() {
+    const name = this.auth?.displayName;
+    return name ? `@${name}` : 'Signed in';
+  }
+
   refreshAccountBar() {
     const section = this.root.querySelector('#menu-auth');
     const hint = this.root.querySelector('#menu-auth-hint');
@@ -837,7 +842,7 @@ export class UIOverlay {
       guest?.classList.add('hidden');
       userRow?.classList.remove('hidden');
       if (hint) hint.classList.add('hidden');
-      if (usernameEl) usernameEl.textContent = `@${this.auth.username}`;
+      if (usernameEl) usernameEl.textContent = this._accountLabel();
     } else {
       guest?.classList.remove('hidden');
       userRow?.classList.add('hidden');
@@ -926,8 +931,8 @@ export class UIOverlay {
   _syncMpNameFromAccount() {
     if (!this.auth?.isLoggedIn) return;
     const nameInput = this.root.querySelector('#mp-name');
-    if (nameInput) nameInput.value = this.auth.username;
-    Storage.write('mpName', this.auth.username);
+    if (nameInput && this.auth.displayName) nameInput.value = this.auth.displayName;
+    if (this.auth.displayName) Storage.write('mpName', this.auth.displayName);
   }
 
   // -------------------------------------------------------------------------
@@ -938,7 +943,7 @@ export class UIOverlay {
   }
 
   _defaultName() {
-    if (this.auth?.isLoggedIn) return this.auth.username;
+    if (this.auth?.isLoggedIn && this.auth.displayName) return this.auth.displayName;
     const n = Storage.read('mpName', '');
     return typeof n === 'string' && n ? n : `Player ${Math.floor(1000 + Math.random() * 9000)}`;
   }
@@ -1721,7 +1726,7 @@ export class UIOverlay {
     body.innerHTML = `<p class="center">…</p>`;
     if (subtitle) {
       subtitle.textContent = this.auth?.isLoggedIn
-        ? 'Best score per verified account · signed in as @' + this.auth.username
+        ? `Best score per verified account · signed in as ${this._accountLabel()}`
         : 'Best score per verified account · sign in to submit scores';
     }
     const list = await this._fetchLeaderboard(scenario);

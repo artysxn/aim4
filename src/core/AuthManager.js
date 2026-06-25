@@ -32,7 +32,15 @@ export class AuthManager {
   }
 
   get username() {
-    return this.profile?.username || null;
+    return this.displayName;
+  }
+
+  /** Username for UI / leaderboards; falls back to auth metadata if profile row is missing. */
+  get displayName() {
+    if (this.profile?.username) return this.profile.username;
+    const meta = this.user?.user_metadata?.username;
+    if (meta) return String(meta).trim().toLowerCase();
+    return null;
   }
 
   onChange(fn) {
@@ -72,24 +80,50 @@ export class AuthManager {
       this._emit();
       return;
     }
-    await this._loadProfile(user.id);
+    await this._ensureProfile(user);
     await this._pullSettings();
     this._hookSettingsSync();
-    if (this.profile?.username) {
-      Storage.write('mpName', this.profile.username);
+    if (this.displayName) {
+      Storage.write('mpName', this.displayName);
     }
     this._emit();
   }
 
-  async _loadProfile(userId) {
+  async _ensureProfile(user) {
     const sb = getSupabase();
     const { data, error } = await sb
       .from('profiles')
       .select('id, username, created_at')
-      .eq('id', userId)
+      .eq('id', user.id)
       .maybeSingle();
     if (error) throw new Error(error.message);
-    this.profile = data;
+    if (data?.username) {
+      this.profile = data;
+      return;
+    }
+
+    let username = user.user_metadata?.username;
+    if (username) username = String(username).trim().toLowerCase();
+    if (!username) {
+      username = `player_${user.id.replace(/-/g, '').slice(0, 8)}`;
+    }
+
+    if (!data) {
+      let { error: insErr } = await sb.from('profiles').insert({ id: user.id, username });
+      if (insErr?.code === '23505') {
+        username = `${username}_${user.id.slice(0, 4)}`;
+        ({ error: insErr } = await sb.from('profiles').insert({ id: user.id, username }));
+      }
+      if (insErr) console.warn('[auth] profile create failed', insErr.message);
+    }
+
+    const { data: refreshed, error: reloadErr } = await sb
+      .from('profiles')
+      .select('id, username, created_at')
+      .eq('id', user.id)
+      .maybeSingle();
+    if (reloadErr) throw new Error(reloadErr.message);
+    this.profile = refreshed;
   }
 
   /**
@@ -136,7 +170,7 @@ export class AuthManager {
     }
 
     await this._applySession(data.user);
-    if (!this.profile) {
+    if (!this.displayName) {
       throw new Error('Account created but profile is missing. Contact support.');
     }
     await this._pushSettings();
@@ -164,7 +198,7 @@ export class AuthManager {
     if (!data.user) throw new Error('Sign-in failed.');
 
     await this._applySession(data.user);
-    if (!this.profile) {
+    if (!this.displayName) {
       throw new Error('Account profile not found. Contact support.');
     }
     return this.profile;
