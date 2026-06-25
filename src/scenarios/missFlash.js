@@ -12,11 +12,7 @@ export function updateMissFlash(engine, fx, dt) {
   if (!fx) return true;
   fx.t += dt;
   const p = Math.min(1, fx.t / fx.duration);
-  let red;
-  if (p < 0.2) red = p / 0.2;
-  else if (p > 0.5) red = 1 - (p - 0.5) / 0.5;
-  else red = 1;
-  engine.setDeathOverlay(red);
+  engine.setDeathOverlay(1 - p);
   if (fx.t >= fx.duration) {
     engine.setDeathOverlay(0);
     return true;

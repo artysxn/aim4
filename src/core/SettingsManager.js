@@ -98,15 +98,15 @@ const DEFAULTS = {
     viewmodelRecoil: false
   },
   survival: {
-    spawnInterval: 1000, // ms between spawns (Practice)
-    despawnTime: 2000, // ms before a dot explodes (Practice)
+    spawnInterval: 800, // ms between spawns (Practice)
+    despawnTime: 1800, // ms before a dot explodes (Practice)
     maxSize: 0.55,
     startSize: 0.12,
     missesAllowed: 3 // missed shots before game over (Practice only)
   },
   arena: {
-    crossDuration: 700, // ms for the bot to cross a gap (exposure window)
-    peekHold: 450, // ms the bot holds an open peek before crossing
+    crossDuration: 775, // ms for the bot to cross a gap (exposure window)
+    peekHold: 525, // ms the bot holds an open peek before crossing
     columns: 7, // number of columns spread across the 80° arc
     columnRadius: 0.55, // metres, cylinder half-width of each cover column
     ringRadius: 9, // metres from player to column arc

@@ -34,7 +34,7 @@ const COL_H = 2.8;
 const CIRCLE_R = 0.45;
 
 const ARC_SPAN = degToRad(80);
-const PEEK_OUT_DUR = 0.18; // s, quick step-out for an open peek
+const PEEK_OUT_DUR = 0.255; // s, quick step-out for an open peek (+75 ms)
 const MIN_DELAY = 0.33; // s, bot reaction-delay window
 const MAX_DELAY = 2.0;
 const PEEK_CHANCE = 0.3;
