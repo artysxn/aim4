@@ -171,7 +171,7 @@ export class UIOverlay {
         id: 'mouse',
         label: 'Mouse',
         body: `
-          ${numField('set-sensitivity', 'Sensitivity', '0.01')}`
+          ${numField('set-sensitivity', 'Sensitivity', '0.001')}`
       },
       {
         id: 'display',
@@ -1689,14 +1689,16 @@ export class UIOverlay {
       `<tr><td class="mp-tab-label">${label}</td><td class="mp-tab-val">${val}</td></tr>`;
     const rows = [
       statRow('Time', this._formatHudTime(sc)),
-      statRow('Score', Math.round(sc.score).toLocaleString()),
+      statRow('Score', Math.round(this._hudScoreValue(sc)).toLocaleString()),
       statRow('Accuracy', `${Math.round(sc.accuracy * 100)}%`),
       statRow('KPS', sc.kps.toFixed(1)),
       statRow('Hits', `${sc.hits}/${sc.shotsFired}`),
       statRow('Headshot %', `${Math.round(sc.critRatio * 100)}%`),
       statRow('Misses', String(sc.misses))
     ];
-    if (sc.kills > 0) rows.push(statRow('Kills', String(sc.kills)));
+    if (!isKillLeaderboardScenario(sc.name) && sc.kills > 0) {
+      rows.push(statRow('Kills', String(sc.kills)));
+    }
 
     this.mpTabScoreboard.innerHTML = `
       <div class="mp-tab-board">
@@ -2130,7 +2132,7 @@ export class UIOverlay {
     }
     if (this.hud.classList.contains('active') && sc) {
       this.hudTime.textContent = this._formatHudTime(sc);
-      this.hudScore.textContent = Math.round(sc.score).toLocaleString();
+      this.hudScore.textContent = Math.round(this._hudScoreValue(sc)).toLocaleString();
       this.hudAcc.textContent = Math.round(sc.accuracy * 100) + '%';
       this.hudKps.textContent = sc.kps.toFixed(1);
       this.hudHits.textContent = `${sc.hits}/${sc.shotsFired}`;
@@ -2219,6 +2221,10 @@ export class UIOverlay {
     const Cls = SCENARIOS[scenario];
     if (!Cls?.configKeyFor) return 'competitive';
     return Cls.configKeyFor(this.settings, 'competitive');
+  }
+
+  _hudScoreValue(sc) {
+    return isKillLeaderboardScenario(sc.name) ? sc.kills : sc.score;
   }
 
   _formatHudTime(sc) {

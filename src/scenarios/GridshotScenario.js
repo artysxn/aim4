@@ -170,6 +170,13 @@ export class GridshotScenario extends BaseScenario {
     this.crosshair?.hit();
   }
 
+  _penalizeMiss() {
+    if (!this.competitive) return;
+    this.misses++;
+    this.kills = Math.max(0, this.kills - 1);
+    this.score = Math.max(0, this.score - 1);
+  }
+
   _spawn() {
     let pos = this._randomPos();
     for (let i = 0; i < 12; i++) {
@@ -283,12 +290,21 @@ export class GridshotScenario extends BaseScenario {
 
   onShoot(raycaster) {
     const hit = this.raycastTargets(raycaster);
-    if (!hit) return;
+    if (!hit) {
+      this._penalizeMiss();
+      return;
+    }
     const target = hit.object.userData.target;
-    if (!target || target.state === 'dying') return;
+    if (!target || target.state === 'dying') {
+      this._penalizeMiss();
+      return;
+    }
 
     if (this.mode === 'tracking' && this.trackResolve === 'click') {
-      if (!target._gridshot?.ready) return;
+      if (!target._gridshot?.ready) {
+        this._penalizeMiss();
+        return;
+      }
     }
 
     this._registerHit(target);

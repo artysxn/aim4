@@ -304,6 +304,7 @@ export class PasuScenario extends BaseScenario {
   _penalizeMiss() {
     this.misses++;
     this.kills = Math.max(0, this.kills - 1);
+    this.score = Math.max(0, this.score - 1);
   }
 
   onShoot(raycaster) {

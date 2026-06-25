@@ -12,6 +12,8 @@ import {
   sensitivityFromLegacy
 } from '../utils/MathUtils.js';
 
+const SETTINGS_VERSION = 2;
+
 export const RESOLUTIONS = {
   native: { label: 'Native', size: null },
   '1920x1080': { label: '1920 × 1080 (16:9)', size: [1920, 1080] },
@@ -156,7 +158,7 @@ export class SettingsManager {
     return merged;
   }
 
-  /** Migrate legacy cm/360 + DPI to unified sensitivity; strip old keys. */
+  /** Migrate legacy cm/360 + DPI and pre-v2 sensitivity scale (÷3). */
   _normalizeSensitivity(data) {
     const sens = Number(data.sensitivity);
     if (!Number.isFinite(sens) || sens <= 0) {
@@ -170,6 +172,14 @@ export class SettingsManager {
     }
     delete data.cm360;
     delete data.dpi;
+
+    const version = data.settingsVersion ?? 0;
+    if (version < SETTINGS_VERSION) {
+      if (Number.isFinite(data.sensitivity) && data.sensitivity >= 1) {
+        data.sensitivity = data.sensitivity / 3;
+      }
+      data.settingsVersion = SETTINGS_VERSION;
+    }
   }
 
   _deepMerge(base, over) {

@@ -15,14 +15,14 @@ export const randInt = (min, max) => Math.floor(randRange(min, max + 1));
 const INCH_PER_CM = 0.393701;
 
 /** Reference sensitivity on the unified scale (35 × 1200 CPI equivalent). */
-export const SENSITIVITY_REF = 2.58;
-export const SENSITIVITY_DEFAULT = 2.5;
+export const SENSITIVITY_REF = 2.58 / 3;
+export const SENSITIVITY_DEFAULT = 2.5 / 3;
 
 /** Legacy calibration: cm/360 × DPI product that maps to {@link SENSITIVITY_REF}. */
 const LEGACY_SENS_PRODUCT = 35 * 1200;
 const COUNTS_PER_360_AT_REF = LEGACY_SENS_PRODUCT * INCH_PER_CM;
 
-/** Radians per mouse count at sensitivity 1.0 (linear scale: 1.25 = half of 2.5). */
+/** Radians per mouse count at sensitivity 1.0 (linear scale). */
 const RADIANS_PER_COUNT_AT_SENS_1 =
   (Math.PI * 2) / (COUNTS_PER_360_AT_REF * SENSITIVITY_REF);
 

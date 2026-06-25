@@ -59,7 +59,7 @@ create table if not exists public.user_settings (
 );
 
 -- Migrate saved settings: cm360 + dpi → unified sensitivity (linear scale).
--- 35 × 1200 CPI → 2.58; default 2.5; half the value = half turn speed (e.g. 1.25 vs 2.5).
+-- 35 × 1200 CPI → 0.86 (2.58 ÷ 3); default 0.833… (2.5 ÷ 3).
 update public.user_settings us
 set
   settings = (coalesce(us.settings, '{}'::jsonb) - 'cm360' - 'dpi')
@@ -79,10 +79,10 @@ set
             and (us.settings->>'dpi')::double precision > 0
           then (us.settings->>'cm360')::double precision
                * (us.settings->>'dpi')::double precision
-               * 2.58 / 42000.0
-          else 2.5
+               * 0.86 / 42000.0
+          else 2.5 / 3.0
         end,
-        2.5
+        2.5 / 3.0
       )
     ),
   updated_at = now()
@@ -90,6 +90,24 @@ where us.settings ? 'cm360'
    or us.settings ? 'dpi'
    or not us.settings ? 'sensitivity'
    or coalesce(us.settings->>'sensitivity', '') = '';
+
+-- Rescale pre-v2 unified sensitivity (stored values were 3× larger; ÷3 preserves feel).
+update public.user_settings us
+set
+  settings = coalesce(us.settings, '{}'::jsonb)
+    || jsonb_build_object(
+      'sensitivity',
+      case
+        when us.settings ? 'sensitivity'
+          and (us.settings->>'sensitivity') ~ '^[0-9]+(\.[0-9]+)?$'
+          and (us.settings->>'sensitivity')::double precision >= 1
+        then (us.settings->>'sensitivity')::double precision / 3.0
+        else coalesce((us.settings->>'sensitivity')::double precision, 2.5 / 3.0)
+      end,
+      'settingsVersion', 2
+    ),
+  updated_at = now()
+where coalesce((us.settings->>'settingsVersion')::int, 0) < 2;
 
 alter table public.profiles enable row level security;
 alter table public.scores enable row level security;
