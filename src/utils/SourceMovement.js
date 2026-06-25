@@ -6,20 +6,20 @@
 // player (2D, x/z) and every bot (1D strafe via SourceMover1D), so "enemies move
 // with the same engine you do" is literally true — there is one implementation.
 //
-//   sv_maxspeed   250 u/s   (running, knife-out cap the user specified)
-//   walk (shift)  130 u/s   (52% slow-walk cap)
+//   sv_maxspeed   215 u/s   (running, AK / rifle — same for tap and spray)
+//   walk (shift)  112 u/s   (52% slow-walk cap)
+//   crouch walk   73 u/s    (ducked move cap)
 //   sv_accelerate 5.5
 //   sv_friction   5.2
 //   sv_stopspeed  80 u/s
-//   crouch speed  = 0.34 × run (duck modifier)
 //   1 unit        = 0.0254 m  (Source player hull: 72 u ≈ 1.83 m → 1 u = 1 inch)
 // ---------------------------------------------------------------------------
 
 export const UNIT = 0.0254; // metres per Source unit
 
-export const RUN_SPEED = 250 * UNIT; // 6.350 m/s
-export const WALK_SPEED = 130 * UNIT; // 3.302 m/s (shift-held slow walk)
-export const CROUCH_SPEED = RUN_SPEED * 0.34; // 2.159 m/s
+export const RUN_SPEED = 215 * UNIT; // 5.461 m/s
+export const WALK_SPEED = 112 * UNIT; // 2.845 m/s (shift-held slow walk)
+export const CROUCH_SPEED = 73 * UNIT; // 1.854 m/s
 export const STOP_SPEED = 80 * UNIT; // 2.032 m/s
 export const ACCEL = 5.5; // sv_accelerate
 export const FRICTION = 5.2; // sv_friction

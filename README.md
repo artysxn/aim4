@@ -44,7 +44,7 @@ The player and every bot share one integrator
 Source-engine `PM_Friction` / `PM_Accelerate` routines:
 
 ```
-sv_maxspeed   250 u/s  (running)     crouch speed = 0.34 × run
+sv_maxspeed   215 u/s  (running, AK)   walk 112 u/s   crouch 73 u/s
 sv_accelerate 5.5                    1 unit       = 0.0254 m
 sv_friction   5.2                    stand eye    = 1.60 m
 sv_stopspeed  80 u/s                 crouch eye   = 1.15 m

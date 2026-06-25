@@ -7,7 +7,7 @@
 // may roam a 5×5 m box (and crouch) if you want to add your own movement.
 //
 // Lateral motion is arc-length driven by SourceMover1D, so each bot accelerates,
-// counter-strafes and tops out at the same 250 u/s Source speed the player has.
+// counter-strafes and tops out at the same 215 u/s Source speed the player has.
 //
 //   Head = instant kill (crit) · Body = 2 shots.
 // ---------------------------------------------------------------------------
