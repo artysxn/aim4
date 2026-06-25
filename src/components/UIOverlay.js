@@ -12,6 +12,7 @@
 import * as THREE from 'three';
 import { degToRad } from '../utils/MathUtils.js';
 import { RESOLUTIONS } from '../core/SettingsManager.js';
+import { DEFAULT_SPRAY_TUNE, getSprayTune } from '../weapons/ak47.js';
 import { SCENARIOS } from '../core/SceneManager.js';
 import * as Storage from '../utils/Storage.js';
 import { exportConfig, importConfig, copyText, normalizeCode } from '../utils/ConfigCodes.js';
@@ -145,7 +146,7 @@ export class UIOverlay {
       el.id = 'error-banner';
       el.style.cssText =
         'position:fixed;top:0;left:0;right:0;z-index:9999;pointer-events:auto;' +
-        'background:#7a1020;color:#fff;font:13px/1.4 monospace;padding:10px 44px 10px 14px;' +
+        'background:#7a1020;color:#fff;font:13px/1.4 "Host Grotesk",sans-serif;padding:10px 44px 10px 14px;' +
         'white-space:pre-wrap;word-break:break-word;box-shadow:0 4px 20px rgba(0,0,0,.5);';
       const close = document.createElement('button');
       close.textContent = 'X';
@@ -219,6 +220,23 @@ export class UIOverlay {
           ${rf('set-vm-oz', 'Offset Z (forward)', 0.2, 1.0, 0.01)}
           <label class="field-check"><input type="checkbox" id="set-vm-bob" /> Weapon bob while moving</label>
           <label class="field-check"><input type="checkbox" id="set-vm-aimpunch" /> Aimpunch (view-punch recoil)</label>`
+      },
+      {
+        id: 'spray-tune',
+        label: 'Spray tune',
+        body: `
+          <p class="settings-note">Temporary dev tuning. Copy values when dialed in — we'll hard-code them and remove this tab.</p>
+          <p class="settings-subhead">Bullet pattern</p>
+          ${rf('set-spray-pattern', 'Pattern scale', 0.25, 2.0, 0.05)}
+          <p class="settings-subhead">View punch (aimpunch)</p>
+          ${rf('set-spray-punch-scale', 'Punch scale', 0.5, 10, 0.05)}
+          ${rf('set-spray-punch-base', 'Punch base (°)', 0, 2, 0.01)}
+          ${rf('set-spray-punch-ramp', 'Punch ramp / bullet (°)', 0, 0.2, 0.005)}
+          ${rf('set-spray-punch-ramp-max', 'Punch ramp max shots', 1, 30, 1)}
+          ${rf('set-spray-tau-spray', 'Punch τ spray (s)', 0.01, 0.5, 0.001)}
+          ${rf('set-spray-tau-recover', 'Punch τ recover (s)', 0.01, 0.5, 0.001)}
+          <button type="button" class="btn btn-block" id="btn-spray-tune-copy">Copy values for report</button>
+          <pre id="spray-tune-readout" class="spray-tune-readout"></pre>`
       },
       {
         id: 'colors',
@@ -817,6 +835,47 @@ export class UIOverlay {
     $('#set-vm-aimpunch').addEventListener('change', (e) => {
       s.data.weapon.aimpunch = e.target.checked;
       s.save();
+    });
+
+    const ensureSprayTune = () => {
+      if (!s.data.weapon.sprayTune) s.data.weapon.sprayTune = structuredClone(DEFAULT_SPRAY_TUNE);
+      return s.data.weapon.sprayTune;
+    };
+    const refreshSprayReadout = () => {
+      const el = $('#spray-tune-readout');
+      if (!el) return;
+      const t = getSprayTune(ensureSprayTune());
+      el.textContent = [
+        `patternScale: ${t.patternScale}`,
+        `punchScale: ${t.punchScale}`,
+        `punchBaseDeg: ${t.punchBaseDeg}`,
+        `punchRampDeg: ${t.punchRampDeg}`,
+        `punchRampMaxShots: ${t.punchRampMaxShots}`,
+        `punchTauSpray: ${t.punchTauSpray}`,
+        `punchTauRecover: ${t.punchTauRecover}`
+      ].join('\n');
+    };
+    this._bindRange('set-spray-pattern', (v) => (ensureSprayTune().patternScale = v), { after: refreshSprayReadout });
+    this._bindRange('set-spray-punch-scale', (v) => (ensureSprayTune().punchScale = v), { after: refreshSprayReadout });
+    this._bindRange('set-spray-punch-base', (v) => (ensureSprayTune().punchBaseDeg = v), { after: refreshSprayReadout });
+    this._bindRange('set-spray-punch-ramp', (v) => (ensureSprayTune().punchRampDeg = v), { after: refreshSprayReadout });
+    this._bindRange('set-spray-punch-ramp-max', (v) => (ensureSprayTune().punchRampMaxShots = v), {
+      parse: (v) => parseInt(v, 10),
+      after: refreshSprayReadout
+    });
+    this._bindRange('set-spray-tau-spray', (v) => (ensureSprayTune().punchTauSpray = v), { after: refreshSprayReadout });
+    this._bindRange('set-spray-tau-recover', (v) => (ensureSprayTune().punchTauRecover = v), { after: refreshSprayReadout });
+    $('#btn-spray-tune-copy')?.addEventListener('click', async () => {
+      refreshSprayReadout();
+      const text = $('#spray-tune-readout')?.textContent;
+      if (!text) return;
+      try {
+        await copyText(text);
+        $('#btn-spray-tune-copy').textContent = 'Copied!';
+        setTimeout(() => { $('#btn-spray-tune-copy').textContent = 'Copy values for report'; }, 1500);
+      } catch {
+        /* clipboard blocked — readout is still visible */
+      }
     });
 
     this._bindRange('set-grid-size', (v) => (s.data.gridshot.targetSize = v));
@@ -1724,6 +1783,27 @@ export class UIOverlay {
     this._setRange('set-vm-oz', s.viewmodel?.offsetZ ?? 0.5);
     $('#set-vm-bob').checked = s.viewmodel?.bob !== false;
     $('#set-vm-aimpunch').checked = s.weapon?.aimpunch !== false;
+
+    const st = getSprayTune(s.weapon?.sprayTune);
+    this._setRange('set-spray-pattern', st.patternScale);
+    this._setRange('set-spray-punch-scale', st.punchScale);
+    this._setRange('set-spray-punch-base', st.punchBaseDeg);
+    this._setRange('set-spray-punch-ramp', st.punchRampDeg);
+    this._setRange('set-spray-punch-ramp-max', st.punchRampMaxShots);
+    this._setRange('set-spray-tau-spray', st.punchTauSpray);
+    this._setRange('set-spray-tau-recover', st.punchTauRecover);
+    const sprayReadout = $('#spray-tune-readout');
+    if (sprayReadout) {
+      sprayReadout.textContent = [
+        `patternScale: ${st.patternScale}`,
+        `punchScale: ${st.punchScale}`,
+        `punchBaseDeg: ${st.punchBaseDeg}`,
+        `punchRampDeg: ${st.punchRampDeg}`,
+        `punchRampMaxShots: ${st.punchRampMaxShots}`,
+        `punchTauSpray: ${st.punchTauSpray}`,
+        `punchTauRecover: ${st.punchTauRecover}`
+      ].join('\n');
+    }
 
     this._setRange('set-grid-size', s.gridshot.targetSize);
     $('#set-grid-mode').value = s.gridshot.mode || 'clicking';

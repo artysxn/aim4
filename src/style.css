@@ -6,14 +6,6 @@
 --------------------------------------------------------------------------- */
 
 @font-face {
-  font-family: 'Fixture Ultra';
-  src: url('./fonts/fixture/FixtureUltra-Medium.ttf') format('truetype');
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
   font-family: 'Host Grotesk';
   src: url('./fonts/host_grotesk/HostGrotesk-Regular.ttf') format('truetype');
   font-weight: 400;
@@ -29,6 +21,14 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: 'Host Grotesk';
+  src: url('./fonts/host_grotesk/HostGrotesk-SemiBold.ttf') format('truetype');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --bg: #0a0a0a;
   --panel: rgba(24, 24, 24, 0.92);
@@ -38,7 +38,7 @@
   --muted: #9a9a9a;
   --chip-bg: rgba(17, 17, 17, 0.55);
   --font-body: 'Host Grotesk', sans-serif;
-  --font-display: 'Fixture Ultra', sans-serif;
+  --font-display: 'Host Grotesk', sans-serif;
   --font-display-base: 26px;
   --font-display-title-scale: 3;
   --font-display-title-size: calc(var(--font-display-base) * var(--font-display-title-scale));
@@ -152,7 +152,7 @@ body.in-run.mp-unlocked {
   letter-spacing: 0;
 }
 
-/* Fixture Ultra screen titles — base size × 3 (e.g. 26px → 78px) */
+/* Screen titles — base size × 3 (e.g. 26px → 78px) */
 h1.text-big:not(.logo),
 h2.text-big,
 .display-title {
@@ -611,7 +611,7 @@ h4 {
   padding: 10px 12px;
   background: rgba(0, 0, 0, 0.35);
   color: var(--text);
-  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-family: var(--font-body);
   font-size: 14px;
   border: none;
   letter-spacing: 0;
@@ -636,7 +636,7 @@ h4 {
   padding: 10px 12px;
   background: rgba(0, 0, 0, 0.35);
   color: var(--accent);
-  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-family: var(--font-body);
   font-size: 14px;
   word-break: break-all;
 }
@@ -660,6 +660,32 @@ h4 {
 .field-label {
   font-size: 13px;
   color: var(--muted);
+}
+.settings-note {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+  margin-bottom: 14px;
+}
+.settings-subhead {
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 16px 0 10px;
+}
+.settings-subhead:first-of-type {
+  margin-top: 0;
+}
+.spray-tune-readout {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  user-select: text;
 }
 .field-num {
   width: 76px;

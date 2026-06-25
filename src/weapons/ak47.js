@@ -36,15 +36,34 @@ const PATTERN_DEG = [
 // Overall strength of the fixed pattern. Lower this to make the spray tamer.
 const PATTERN_SCALE = 1.0;
 
+/** Defaults for weapon.sprayTune (temporary in-game tuning — remove when finalized). */
+export const DEFAULT_SPRAY_TUNE = {
+  patternScale: PATTERN_SCALE,
+  punchScale: 3.25,
+  punchBaseDeg: 0.55,
+  punchRampDeg: 0.06,
+  punchRampMaxShots: 18,
+  punchTauSpray: 0.052,
+  punchTauRecover: 0.075
+};
+
+/** Merge persisted sprayTune with defaults. */
+export function getSprayTune(raw) {
+  return { ...DEFAULT_SPRAY_TUNE, ...(raw || {}) };
+}
+
 export const PATTERN = PATTERN_DEG.map(([yaw, pitch]) => ({
   yaw: degToRad(yaw) * PATTERN_SCALE,
   pitch: degToRad(pitch) * PATTERN_SCALE
 }));
 
 /** Cumulative pattern offset for a 0-based shot index (clamped to the mag). */
-export function patternOffset(shotIndex) {
+export function patternOffset(shotIndex, tune = null) {
   const i = clamp(shotIndex, 0, PATTERN.length - 1) | 0;
-  return PATTERN[i];
+  const p = PATTERN[i];
+  const scale = tune ? getSprayTune(tune).patternScale : PATTERN_SCALE;
+  if (scale === 1) return p;
+  return { yaw: p.yaw * scale, pitch: p.pitch * scale };
 }
 
 // Bloom tuning (cone half-angle in radians).
@@ -79,10 +98,10 @@ export function bloomRad(state, shotIndex, recentlyLanded = false) {
 
 // View-punch impulse (radians of upward camera kick) for a shot. Grows as the
 // spray is held so a long burst climbs hard; decay between bullets is partial
-// (see Viewmodel PUNCH_TAU_SPRAY) so the view never fully resets mid-spray.
-const VIEW_PUNCH_SCALE = 6.5;
-export function viewPunchImpulse(shotIndex) {
-  const base = degToRad(0.95);
-  const ramp = Math.min(shotIndex, 18) * degToRad(0.09);
-  return (base + ramp) * VIEW_PUNCH_SCALE;
+// (see Viewmodel punchTauSpray) so the view never fully resets mid-spray.
+export function viewPunchImpulse(shotIndex, tune = null) {
+  const t = getSprayTune(tune);
+  const base = degToRad(t.punchBaseDeg);
+  const ramp = Math.min(shotIndex, t.punchRampMaxShots) * degToRad(t.punchRampDeg);
+  return (base + ramp) * t.punchScale;
 }
