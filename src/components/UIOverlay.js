@@ -1327,6 +1327,12 @@ export class UIOverlay {
     return this.state === 'playing' && !!this.sceneManager.current?.isMultiplayer;
   }
 
+  /** Hold-Tab stats overlay during any active run (SP or MP). */
+  _canHoldTabOverlay() {
+    return this.state === 'playing' && !!this.sceneManager.current
+      && !this.mpChat?.classList.contains('typing');
+  }
+
   /** A click on the canvas while unlocked re-acquires pointer lock. */
   _onUnlockedClick() {
     if (this.mpChat?.classList.contains('typing')) return;
@@ -1440,8 +1446,47 @@ export class UIOverlay {
     if (this._mpTabBoardHeld) this._renderMpTabScoreboard();
   }
 
+  _tabFpsHtml() {
+    const fps = this.engine.fps || 0;
+    return `<span class="mp-tab-board-fps">${fps} FPS</span>`;
+  }
+
+  _renderSpTabScoreboard(sc) {
+    const title = SCENARIO_META[this.currentScenario]?.title ?? 'Run';
+    const statRow = (label, val) =>
+      `<tr><td class="mp-tab-label">${label}</td><td class="mp-tab-val">${val}</td></tr>`;
+    const rows = [
+      statRow('Time', `${this.sceneManager.timeRemaining.toFixed(1)}s`),
+      statRow('Score', Math.round(sc.score).toLocaleString()),
+      statRow('Accuracy', `${Math.round(sc.accuracy * 100)}%`),
+      statRow('KPS', sc.kps.toFixed(1)),
+      statRow('Hits', `${sc.hits}/${sc.shotsFired}`),
+      statRow('Headshot %', `${Math.round(sc.critRatio * 100)}%`),
+      statRow('Misses', String(sc.misses))
+    ];
+    if (sc.kills > 0) rows.push(statRow('Kills', String(sc.kills)));
+
+    this.mpTabScoreboard.innerHTML = `
+      <div class="mp-tab-board">
+        <div class="mp-tab-board-head">
+          <span class="mp-tab-board-title">${this._esc(title)}</span>
+          ${this._tabFpsHtml()}
+        </div>
+        <table class="mp-tab-table mp-tab-table-solo">
+          <tbody>${rows.join('')}</tbody>
+        </table>
+      </div>`;
+  }
+
   _renderMpTabScoreboard() {
     if (!this.mpTabScoreboard) return;
+
+    if (!this._isMpPlaying()) {
+      const sc = this.sceneManager.current;
+      if (sc) this._renderSpTabScoreboard(sc);
+      return;
+    }
+
     const stats = this._mpTabStats;
     const lobby = this.mp?.lobby;
     const players = [...(lobby?.players || [])].sort((a, b) => {
@@ -1476,7 +1521,10 @@ export class UIOverlay {
       <div class="mp-tab-board">
         <div class="mp-tab-board-head">
           <span class="mp-tab-board-title">Stats</span>
-          <span class="mp-tab-board-goal">${goal}</span>
+          <div class="mp-tab-board-meta">
+            ${this._tabFpsHtml()}
+            <span class="mp-tab-board-goal">${goal}</span>
+          </div>
         </div>
         <table class="mp-tab-table">
           <thead><tr><th></th>${cols}</tr></thead>
@@ -1497,8 +1545,7 @@ export class UIOverlay {
   _bindMpTabScoreboard() {
     const hide = () => this._hideMpTabScoreboard();
     const show = () => {
-      if (!this._isMpPlaying()) return;
-      if (this.mpChat?.classList.contains('typing')) return;
+      if (!this._canHoldTabOverlay()) return;
       this._mpTabBoardHeld = true;
       this._renderMpTabScoreboard();
       this.mpTabScoreboard?.classList.add('visible');
@@ -1506,8 +1553,7 @@ export class UIOverlay {
 
     document.addEventListener('keydown', (e) => {
       if (e.code !== 'Tab' || e.repeat) return;
-      if (!this._isMpPlaying()) return;
-      if (this.mpChat?.classList.contains('typing')) return;
+      if (!this._canHoldTabOverlay()) return;
       e.preventDefault();
       show();
     });
@@ -1805,6 +1851,7 @@ export class UIOverlay {
       this.hudHits.textContent = `${sc.hits}/${sc.shotsFired}`;
       this.hudCrit.textContent = Math.round(sc.critRatio * 100) + '%';
     }
+    if (this._mpTabBoardHeld) this._renderMpTabScoreboard();
     this._updateThreats(sc);
   }
 

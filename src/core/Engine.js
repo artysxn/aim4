@@ -35,6 +35,7 @@ export class Engine {
     this.player = null; // PlayerController, assigned by main.js
     this.deathFxEl = document.getElementById('death-fx');
     this._running = false;
+    this.fps = 0;
 
     this._setupLights();
     this.applyResolution();
@@ -113,6 +114,12 @@ _setupLights() {
       requestAnimationFrame(loop);
       // Cap dt so a backgrounded tab doesn't produce a huge catch-up step.
       const dt = clamp(this.clock.getDelta(), 0, 0.05);
+      if (dt > 0) {
+        const instant = 1 / dt;
+        this.fps = this.fps
+          ? Math.round(this.fps * 0.88 + instant * 0.12)
+          : Math.round(instant);
+      }
       // Guard the per-frame update: a thrown error must never silently freeze
       // the screen. We surface it (once) and keep rendering so the game stays
       // responsive and the failure is diagnosable instead of a blank hang.

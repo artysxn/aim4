@@ -1117,7 +1117,7 @@ input[type='checkbox'] {
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
 }
 
-/* Hold-Tab scoreboard overlay during multiplayer matches. */
+/* Hold-Tab stats overlay during active runs (singleplayer + multiplayer). */
 .mp-tab-scoreboard {
   position: fixed;
   inset: 0;
@@ -1144,6 +1144,21 @@ input[type='checkbox'] {
   align-items: baseline;
   margin-bottom: 14px;
   gap: 12px;
+}
+.mp-tab-board-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.mp-tab-board-fps {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.mp-tab-table-solo .mp-tab-val {
+  text-align: right;
 }
 .mp-tab-board-title {
   font-family: var(--font-display);
