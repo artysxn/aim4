@@ -99,6 +99,8 @@ export class MultiplayerServer {
         return this._join(player, msg);
       case C2S.LEAVE:
         return this._leaveLobby(player, true);
+      case C2S.RETURN_LOBBY:
+        return this._returnToLobby(player);
       case C2S.READY:
         return this._setReady(player, !!msg.ready);
       case C2S.CONFIG:
@@ -195,6 +197,31 @@ export class MultiplayerServer {
     this._broadcastLobby(lobby);
     this._pushLobbyList(); // a freed slot may re-list this lobby
     if (notifySelf) this._send(player, { t: S2C.PLAYER_LEFT, id: player.id });
+  }
+
+  /** End an active match and send everyone back to the pre-match lobby. */
+  _returnToLobby(player) {
+    const lobby = player.lobby;
+    if (!lobby || !lobby.started) return;
+
+    lobby.started = false;
+    for (const p of lobby.players) {
+      p.ready = false;
+      p.dead = false;
+      p.hp = 2;
+      p.shotQueue.length = 0;
+      p.respawnAt = 0;
+    }
+
+    this._broadcast(lobby, {
+      t: S2C.MATCH_END,
+      winnerId: null,
+      scores: { ...lobby.scores },
+      aborted: true,
+      returnToLobby: true
+    });
+    this._broadcastLobby(lobby);
+    this._pushLobbyList();
   }
 
   _setReady(player, ready) {

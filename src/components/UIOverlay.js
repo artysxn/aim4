@@ -83,6 +83,7 @@ export class UIOverlay {
     this.currentScenario = 'gridshot';
     this._authMode = 'login';
     this._lbCache = {};
+    this._returnAfterSettings = null;
     this._suppressLockPause = false;
     this._mpTabStats = {};
     this._mpTabBoardHeld = false;
@@ -355,10 +356,6 @@ export class UIOverlay {
     <!-- MAIN MENU -->
     <div class="screen menu" data-screen="menu">
       <div class="panel wide">
-        <div class="account-bar" id="account-bar">
-          <span class="account-label" id="account-label"></span>
-          <button type="button" class="btn account-btn" id="account-btn"></button>
-        </div>
         <h1 class="logo text-big">AIM4<span>.io</span></h1>
         <div class="cards">
           ${Object.keys(SCENARIOS)
@@ -379,6 +376,17 @@ export class UIOverlay {
           <button class="btn" data-goto="settings">⚙ Settings</button>
           <button class="btn" data-goto="leaderboard">🏆 Leaderboards</button>
         </div>
+        <div class="menu-auth" id="menu-auth">
+          <p class="menu-auth-hint" id="menu-auth-hint">Sign in to sync settings and appear on leaderboards.</p>
+          <div class="menu-auth-actions" id="menu-auth-guest">
+            <button type="button" class="btn" id="menu-login-btn">Log in</button>
+            <button type="button" class="btn primary" id="menu-signup-btn">Sign up</button>
+          </div>
+          <div class="menu-auth-actions hidden" id="menu-auth-user">
+            <span class="menu-auth-username" id="menu-auth-username"></span>
+            <button type="button" class="btn" id="menu-logout-btn">Log out</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -396,7 +404,7 @@ export class UIOverlay {
           </nav>
           <div class="settings-bar-actions">
             <button class="btn" data-reset>Reset all</button>
-            <button class="btn primary" data-goto="menu">Done</button>
+            <button type="button" class="btn primary" id="settings-done-btn">Done</button>
           </div>
         </header>
         <div class="settings-drawer">
@@ -461,9 +469,11 @@ export class UIOverlay {
     <div class="screen pause" data-screen="paused">
       <div class="panel">
         <h2 class="text-big pause-title">Paused</h2>
-        <div class="menu-actions">
-          <button class="btn primary" data-resume>Resume</button>
-          <button class="btn" data-quit>Quit to menu</button>
+        <div class="menu-actions pause-actions">
+          <button type="button" class="btn primary" data-resume>Resume</button>
+          <button type="button" class="btn" id="pause-settings-btn">Settings</button>
+          <button type="button" class="btn" id="pause-leave-lobby-btn" hidden>Leave to lobby</button>
+          <button type="button" class="btn" data-quit>Quit to menu</button>
         </div>
       </div>
     </div>
@@ -598,6 +608,7 @@ export class UIOverlay {
       if (t.dataset.play) this.play(t.dataset.play);
       else if (t.dataset.goto) {
         if (t.dataset.goto === 'leaderboard') this._renderLeaderboard(this._activeLbTab());
+        if (t.dataset.goto === 'settings') this._returnAfterSettings = this.state;
         this.showScreen(t.dataset.goto);
         if (t.dataset.goto === 'mp') this.mp.openBrowser();
         if (t.dataset.goto === 'auth') this._openAuth('login');
@@ -624,6 +635,7 @@ export class UIOverlay {
 
     this._bindSettings();
     this._bindSettingsTabs();
+    this._bindPauseMenu();
     this._bindConfigShare();
   }
 
@@ -774,29 +786,62 @@ export class UIOverlay {
     this._bindRange('set-range-cover-height', (v) => (s.data.range.coverHeight = v));
   }
 
+  _bindPauseMenu() {
+    const $ = (id) => this.root.querySelector(id);
+    $('#pause-settings-btn')?.addEventListener('click', () => {
+      this._returnAfterSettings = 'paused';
+      this.showScreen('settings');
+    });
+    $('#pause-leave-lobby-btn')?.addEventListener('click', () => {
+      this.mp?.returnToLobby();
+    });
+    $('#settings-done-btn')?.addEventListener('click', () => this._closeSettings());
+  }
+
+  _closeSettings() {
+    const ret = this._returnAfterSettings;
+    this._returnAfterSettings = null;
+    if (ret) {
+      this.showScreen(ret);
+      if (ret === 'paused') this._updatePauseMenu();
+    } else {
+      this.showScreen('menu');
+    }
+  }
+
+  _updatePauseMenu() {
+    const leaveBtn = this.root.querySelector('#pause-leave-lobby-btn');
+    if (!leaveBtn) return;
+    const inMpMatch = this.mp?.inMatch && !!this.mp?.lobby;
+    leaveBtn.hidden = !inMpMatch;
+  }
+
   // -------------------------------------------------------------------------
   // Account auth
   // -------------------------------------------------------------------------
   refreshAccountBar() {
-    const bar = this.root.querySelector('#account-bar');
-    const label = this.root.querySelector('#account-label');
-    const btn = this.root.querySelector('#account-btn');
-    if (!bar || !label || !btn) return;
+    const section = this.root.querySelector('#menu-auth');
+    const hint = this.root.querySelector('#menu-auth-hint');
+    const guest = this.root.querySelector('#menu-auth-guest');
+    const userRow = this.root.querySelector('#menu-auth-user');
+    const usernameEl = this.root.querySelector('#menu-auth-username');
+    if (!section) return;
 
     if (!this.auth?.isConfigured) {
-      bar.classList.add('hidden');
+      section.classList.add('hidden');
       return;
     }
-    bar.classList.remove('hidden');
+    section.classList.remove('hidden');
 
     if (this.auth.isLoggedIn) {
-      label.textContent = `@${this.auth.username}`;
-      btn.textContent = 'Log out';
-      btn.dataset.authAction = 'logout';
+      guest?.classList.add('hidden');
+      userRow?.classList.remove('hidden');
+      if (hint) hint.classList.add('hidden');
+      if (usernameEl) usernameEl.textContent = `@${this.auth.username}`;
     } else {
-      label.textContent = 'Not signed in';
-      btn.textContent = 'Sign in';
-      btn.dataset.authAction = 'login';
+      guest?.classList.remove('hidden');
+      userRow?.classList.add('hidden');
+      if (hint) hint.classList.remove('hidden');
     }
   }
 
@@ -808,14 +853,11 @@ export class UIOverlay {
       status.classList.toggle('is-error', !ok);
     };
 
-    $('#account-btn')?.addEventListener('click', async () => {
-      const action = $('#account-btn')?.dataset.authAction;
-      if (action === 'logout') {
-        await this.auth.signOut();
-        this.refreshAccountBar();
-        return;
-      }
-      this._openAuth('login');
+    $('#menu-login-btn')?.addEventListener('click', () => this._openAuth('login'));
+    $('#menu-signup-btn')?.addEventListener('click', () => this._openAuth('register'));
+    $('#menu-logout-btn')?.addEventListener('click', async () => {
+      await this.auth.signOut();
+      this.refreshAccountBar();
     });
 
     $('#auth-tabs')?.addEventListener('click', (e) => {
@@ -1492,6 +1534,7 @@ export class UIOverlay {
     // Hide the system cursor only while actively playing — when paused (Esc),
     // the cursor must reappear so the menu is clickable.
     document.body.classList.toggle('in-run', inRun);
+    if (name === 'menu') this.refreshAccountBar();
   }
 
   play(name) {
@@ -1532,13 +1575,11 @@ export class UIOverlay {
     } else {
       // Chat input steals pointer lock — keep the match running so remotes keep moving.
       if (this._suppressLockPause) return;
-      // In multiplayer, losing the lock (clicking out, alt-tab) must NOT pause:
-      // the match is server-driven and opponents keep moving. frame() shows a
-      // "click to aim" prompt; clicking the canvas re-locks.
-      if (this.state === 'playing' && this.sceneManager.current?.isMultiplayer) return;
-      // Singleplayer: lost the lock mid-run (Esc) -> pause.
       if (this.state === 'playing') {
+        this._closeMpChatTyping(false);
+        this._hideMpTabScoreboard();
         this.sceneManager.pause();
+        this._updatePauseMenu();
         this.showScreen('paused');
       }
     }
@@ -1556,10 +1597,13 @@ export class UIOverlay {
   // -------------------------------------------------------------------------
   frame() {
     const sc = this.sceneManager.current;
-    // Multiplayer keeps running without pointer lock; prompt the user to click
-    // back in to aim whenever we're playing but don't hold the lock. A short
-    // grace period avoids a flash while a normal (focused) lock is resolving.
-    if (this._isMpPlaying() && !this.input.locked && !this.mpChat?.classList.contains('typing')) {
+    // Multiplayer: when unlocked mid-match (not paused), prompt click-to-aim.
+    if (
+      this._isMpPlaying() &&
+      this.state === 'playing' &&
+      !this.input.locked &&
+      !this.mpChat?.classList.contains('typing')
+    ) {
       if (this._unlockSince == null) this._unlockSince = performance.now();
       this._setClickToAim(performance.now() - this._unlockSince > 250);
     } else {

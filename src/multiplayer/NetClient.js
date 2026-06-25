@@ -306,6 +306,9 @@ export class NetClient {
   leaveLobby() {
     this._send({ t: C2S.LEAVE });
   }
+  returnToLobby() {
+    this._send({ t: C2S.RETURN_LOBBY });
+  }
   setReady(ready) {
     this._send({ t: C2S.READY, ready });
   }

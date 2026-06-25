@@ -10,6 +10,7 @@ export const C2S = {
   CREATE: 'create', // { name, target, isPublic }
   JOIN: 'join', // { code, name }
   LEAVE: 'leave',
+  RETURN_LOBBY: 'returnLobby', // end an active match, stay in the lobby
   READY: 'ready', // { ready }
   CONFIG: 'config', // host: { target?, isPublic? }
   START: 'start', // host
@@ -32,7 +33,7 @@ export const S2C = {
   KILL: 'kill', // { shooterId, victimId, scores, mapId?, spawns?, stats? }
   RESPAWN: 'respawn', // { spawns }
   CHAT: 'chat', // { fromId, fromName, text }
-  MATCH_END: 'matchEnd', // { winnerId, scores }
+  MATCH_END: 'matchEnd', // { winnerId, scores, aborted?, returnToLobby? }
   PLAYER_LEFT: 'playerLeft', // { id }
   LOBBY_LIST: 'lobbyList', // { lobbies:[{code,host,map,target,players,max}] }
   PONG: 'pong' // { id, ct, st }

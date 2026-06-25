@@ -135,6 +135,11 @@ export class MultiplayerController {
     this.net.startMatch();
   }
 
+  /** End the active match and return to the pre-match lobby (stay connected). */
+  returnToLobby() {
+    if (this.inMatch) this.net.returnToLobby();
+  }
+
   leave() {
     if (this.net.connected) this.net.leaveLobby();
     this.net.disconnect();
@@ -208,7 +213,21 @@ export class MultiplayerController {
 
   _endMatch(msg) {
     this.inMatch = false;
+    this.input.exitLock();
+    this.sceneManager.unload();
+    this._resetMpChatUi();
+
+    if (msg.returnToLobby && this.lobby) {
+      this.ui.renderLobby(this.lobby);
+      this.ui.showScreen('mp-lobby');
+      return;
+    }
     this.ui.showMpResults(msg, this.lobby, this.myId);
+  }
+
+  _resetMpChatUi() {
+    this.ui._resetMpChat?.();
+    this.ui._hideMpTabScoreboard?.();
   }
 
   _onClose() {
