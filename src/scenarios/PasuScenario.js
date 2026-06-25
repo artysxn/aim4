@@ -11,6 +11,7 @@ import { Target } from '../components/Target.js';
 import { randRange } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { EYE_HEIGHT } from '../core/Engine.js';
+import { competitivePresetFor } from './competitivePresets.js';
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
@@ -23,18 +24,19 @@ export class PasuScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
     this.weaponId = 'pistol';
+    const preset = this.competitive ? competitivePresetFor('pasu') : null;
     const p = this.settings.data.pasu;
-    this.targetSize = this.config.targetSize ?? p.targetSize;
-    this.targetCount = this.config.targetCount ?? p.targetCount;
+    this.targetSize = preset?.targetSize ?? this.config.targetSize ?? p.targetSize;
+    this.targetCount = preset?.targetCount ?? this.config.targetCount ?? p.targetCount;
     this.enableTimeLimit = this.config.enableTimeLimit ?? p.enableTimeLimit;
     this.maxTargetAge = (this.config.maxTargetAge ?? p.maxTargetAge) / 1000;
     this.mode = this.config.mode ?? p.mode ?? 'clicking';
     this.trackTime = this.config.trackTime ?? p.trackTime ?? 0.4;
     this.trackResolve = this.config.trackResolve ?? p.trackResolve ?? 'click';
-    this.travelSpeedMax = this.config.travelSpeedMax ?? p.travelSpeedMax ?? 2.5;
+    this.travelSpeedMax = preset?.travelSpeedMax ?? this.config.travelSpeedMax ?? p.travelSpeedMax ?? 2.5;
     this.boundsScaleX = this.config.boundsScaleX ?? p.boundsScaleX ?? 1;
     this.boundsScaleY = this.config.boundsScaleY ?? p.boundsScaleY ?? 1;
-    this.angleOffset = this.config.angleOffset ?? p.angleOffset ?? 360;
+    this.angleOffset = preset?.angleOffset ?? this.config.angleOffset ?? p.angleOffset ?? 360;
     this.infiniteAmmo = this.config.infiniteAmmo ?? p.infiniteAmmo !== false;
     this.weaponBloom = false;
 
@@ -80,7 +82,8 @@ export class PasuScenario extends BaseScenario {
       shots: this.shotsFired,
       misses: this.misses,
       timePlayed,
-      kpm: timePlayed > 0 ? this.kills / (timePlayed / 60) : 0
+      kpm: timePlayed > 0 ? this.kills / (timePlayed / 60) : 0,
+      ...this._runMeta()
     };
   }
 

@@ -23,6 +23,7 @@ import { Target } from '../components/Target.js';
 import { randRange, randInt, clamp, lerp, degToRad } from '../utils/MathUtils.js';
 import { SourceMover1D, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
+import { competitivePresetFor } from './competitivePresets.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
@@ -181,7 +182,8 @@ export class DuelsScenario extends BaseScenario {
     this.arenaIndex = choice >= 1 && choice <= ARENAS.length ? choice - 1 : randInt(0, ARENAS.length - 1);
     this.arena = ARENAS[this.arenaIndex];
 
-    this._ttk = this.settings.data.duels.ttk ?? 0.5;
+    const preset = this.competitive ? competitivePresetFor('duels') : null;
+    this._ttk = this.config.ttk ?? preset?.ttk ?? d.ttk ?? 0.5;
     this._arenaObjects = [];
     this.coverMeshes = [];
     this.enemy = null;

@@ -12,6 +12,7 @@
 import * as THREE from 'three';
 import { spreadRng, applySpreadToDir } from '../utils/shotAccuracy.js';
 import { viewPunchImpulse } from '../weapons/ak47.js';
+import { isLeaderboardEligible } from './rankedScenarios.js';
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0); // crosshair is always screen center
@@ -80,7 +81,21 @@ export class BaseScenario {
     this.weaponId = 'rifle';
     this.infiniteAmmo = false;
     this.weaponBloom = true; // random spread cone (movement / consecutive shots)
+    this._initVariant();
     this._lastImpact = new THREE.Vector3();
+  }
+
+  /** Practice vs Competitive — set from config.variant at load time. */
+  _initVariant() {
+    this.variant = this.config.variant === 'competitive' ? 'competitive' : 'practice';
+    this.competitive = this.variant === 'competitive';
+  }
+
+  _runMeta() {
+    return {
+      variant: this.variant,
+      leaderboardEligible: isLeaderboardEligible(this.name, this.variant)
+    };
   }
 
   // ---- Identity / derived metrics ----------------------------------------
@@ -251,7 +266,8 @@ export class BaseScenario {
       misses: this.misses,
       duration: this.settings.data.runDuration,
       timePlayed,
-      kpm: timePlayed > 0 ? this.kills / (timePlayed / 60) : 0
+      kpm: timePlayed > 0 ? this.kills / (timePlayed / 60) : 0,
+      ...this._runMeta()
     };
   }
 

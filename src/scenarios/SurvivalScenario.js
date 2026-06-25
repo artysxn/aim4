@@ -17,7 +17,7 @@ const BASE_BOUNDS_H = 6;
 
 /** Fixed Competitive Survival rules — not user-configurable. */
 export const SURVIVAL_COMPETITIVE = {
-  spawnInterval: 0.75,
+  spawnInterval: 0.5,
   despawnTime: 2,
   maxSize: 0.55,
   startSize: 0.12,
@@ -31,9 +31,6 @@ export class SurvivalScenario extends BaseScenario {
     this.infiniteAmmo = true;
     this.weaponBloom = false;
     this.runDuration = Infinity;
-
-    this.variant = this.config.variant === 'competitive' ? 'competitive' : 'practice';
-    this.competitive = this.variant === 'competitive';
 
     const p = this.settings.data.survival;
     if (this.competitive) {
@@ -229,12 +226,6 @@ export class SurvivalScenario extends BaseScenario {
   }
 
   results() {
-    const base = super.results();
-    return {
-      ...base,
-      variant: this.variant,
-      leaderboardEligible: this.competitive,
-      gameOverReason: this._gameOverReason
-    };
+    return { ...super.results(), gameOverReason: this._gameOverReason };
   }
 }

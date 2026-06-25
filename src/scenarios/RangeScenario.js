@@ -18,6 +18,7 @@ import { Target } from '../components/Target.js';
 import { randRange, randInt, clamp, lerp, degToRad } from '../utils/MathUtils.js';
 import { SourceMover1D, RUN_SPEED } from '../utils/SourceMovement.js';
 import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
+import { competitivePresetFor } from './competitivePresets.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
@@ -40,13 +41,19 @@ const CROUCH_RATE = 11;
 export class RangeScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
+    const preset = this.competitive ? competitivePresetFor('range') : null;
     const r = this.settings.data.range;
     this.arcDeg = this.config.arc ?? r.arc;
-    this.enemyCount = this.config.enemyCount ?? r.enemyCount;
-    this.radius = this.config.radius ?? r.radius;
+    this.enemyCount = preset?.enemyCount ?? this.config.enemyCount ?? r.enemyCount;
+    this.radius = preset?.radius ?? this.config.radius ?? r.radius;
     this.botStrafe = this.config.botStrafe ?? r.botStrafe !== false;
     this.botCrouchTap = this.config.botCrouchTap ?? r.botCrouchTap !== false;
     this.infiniteAmmo = this.config.infiniteAmmo ?? r.infiniteAmmo !== false;
+    this.coverEnabled = preset?.coverEnabled ?? this.config.coverEnabled ?? r.coverEnabled;
+    this.coverCount = preset?.coverCount ?? this.config.coverCount ?? r.coverCount;
+    this.coverDistance = preset?.coverDistance ?? this.config.coverDistance ?? r.coverDistance;
+    this.coverThickness = preset?.coverThickness ?? this.config.coverThickness ?? r.coverThickness;
+    this.coverHeight = preset?.coverHeight ?? this.config.coverHeight ?? r.coverHeight;
 
     this.arc = degToRad(this.arcDeg);
     this.full = this.arcDeg >= 360;
@@ -120,20 +127,18 @@ export class RangeScenario extends BaseScenario {
     this._coverMeshes.length = 0;
     this.coverBoxes = [];
 
-    const r = this.settings.data.range;
-    if (!r.coverEnabled || r.coverCount < 1) return;
-
-    const dist = r.coverDistance;
-    const depth = r.coverThickness;
-    const height = r.coverHeight;
+    if (!this.coverEnabled || this.coverCount < 1) return;
+    const dist = this.coverDistance;
+    const depth = this.coverThickness;
+    const height = this.coverHeight;
     const width = Math.max(1.4, depth * 1.5);
     const c = this.settings.data.colors;
     const boxMat = createCoverGridMaterial(c.cover, c.floor);
 
-    for (let i = 0; i < r.coverCount; i++) {
-      const t = r.coverCount === 1
+    for (let i = 0; i < this.coverCount; i++) {
+      const t = this.coverCount === 1
         ? 0.5
-        : i / (r.coverCount - 1);
+        : i / (this.coverCount - 1);
       const theta = lerp(this.thetaMin, this.thetaMax, t);
       const x = dist * Math.sin(theta);
       const z = -dist * Math.cos(theta);

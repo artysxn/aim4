@@ -1,8 +1,7 @@
 // ---------------------------------------------------------------------------
 // SpidershotScenario.js
-// One target starts at screen centre. Each kill spawns the next on either side
-// at a random distance / slight vertical angle. Timed sideward targets reset the
-// chain to centre on a miss. Optional streaks, double spawns, drift, random size.
+// Two-stage loop: (1) centre dot → (2) sideward dot(s) → repeat.
+// Optional streaks widen stage 2, double spawn, drift, random size.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
@@ -44,7 +43,8 @@ export class SpidershotScenario extends BaseScenario {
     this.centerY = EYE_HEIGHT;
     this.wallZ = -this.wallDistance;
 
-    this._streakLeft = 0;
+    /** @type {1 | 2} */
+    this._stage = 1;
 
     this._buildEnvironment();
   }
@@ -119,9 +119,10 @@ export class SpidershotScenario extends BaseScenario {
     target.addCollider(mesh, { zone: 'body', points: 1, crit: false });
 
     const driftDir = Math.random() < 0.5 ? -1 : 1;
-    const driftSpeed = this.horizontalDrift
-      ? randRange(this.driftSpeedMax * 0.35, this.driftSpeedMax)
-      : 0;
+    const driftSpeed =
+      !center && this.horizontalDrift
+        ? randRange(this.driftSpeedMax * 0.35, this.driftSpeedMax)
+        : 0;
 
     target._spider = {
       center,
@@ -137,9 +138,24 @@ export class SpidershotScenario extends BaseScenario {
     return target;
   }
 
-  _spawnCenter() {
-    this._streakLeft = 0;
-    this._spawnAt(0, this.centerY, { center: true, timed: false });
+  _enterStage1() {
+    this._stage = 1;
+    if (this._activeCount() === 0) {
+      this._spawnAt(0, this.centerY, { center: true, timed: false });
+    }
+  }
+
+  _waveSizeForStage2() {
+    let count = Math.random() < this.doubleSpawnChance ? 2 : 1;
+    if (Math.random() < this.streakChance) {
+      count = Math.max(count, randInt(this.streakLengthMin, this.streakLengthMax));
+    }
+    return count;
+  }
+
+  _enterStage2() {
+    this._stage = 2;
+    this._spawnSideward(this._waveSizeForStage2());
   }
 
   _spawnSideward(count = 1) {
@@ -155,23 +171,6 @@ export class SpidershotScenario extends BaseScenario {
     }
   }
 
-  _scheduleAfterKill() {
-    if (this._streakLeft > 0) {
-      this._spawnSideward(1);
-      return;
-    }
-
-    if (Math.random() < this.streakChance) {
-      this._streakLeft = Math.max(
-        this._streakLeft,
-        randInt(this.streakLengthMin, this.streakLengthMax)
-      );
-    }
-
-    const count = Math.random() < this.doubleSpawnChance ? 2 : 1;
-    this._spawnSideward(count);
-  }
-
   _registerHit(target) {
     if (!target || target.state === 'dying') return;
     this.hits++;
@@ -182,24 +181,13 @@ export class SpidershotScenario extends BaseScenario {
     this.crosshair?.hit();
 
     if (target._spider?.center) {
-      this._scheduleAfterKill();
+      this._enterStage2();
       return;
     }
 
-    if (this._streakLeft > 0) {
-      this._streakLeft--;
-      this._spawnSideward(1);
-      return;
+    if (this._stage === 2 && this._activeCount() === 0) {
+      this._enterStage1();
     }
-
-    this._scheduleAfterKill();
-  }
-
-  _resetToCenter() {
-    for (const t of this.targets) {
-      if (t.state !== 'dying') t.startDying(0xff2222);
-    }
-    this._spawnCenter();
   }
 
   _activeCount() {
@@ -207,7 +195,7 @@ export class SpidershotScenario extends BaseScenario {
   }
 
   _updateDrift(dt) {
-    if (!this.horizontalDrift) return;
+    if (!this.horizontalDrift || this._stage !== 2) return;
     const halfX = this.boundsW / 2 - 0.05;
 
     for (const t of this.targets) {
@@ -229,7 +217,8 @@ export class SpidershotScenario extends BaseScenario {
   }
 
   onStart() {
-    this._spawnCenter();
+    this._stage = 1;
+    this._enterStage1();
   }
 
   onUpdate(dt) {
@@ -246,15 +235,14 @@ export class SpidershotScenario extends BaseScenario {
       }
     }
 
-    if (expired && this._activeCount() === 0) {
-      this._resetToCenter();
+    if (expired && this._stage === 2 && this._activeCount() === 0) {
+      this._enterStage1();
     }
   }
 
   onShoot(raycaster) {
     const hit = this.raycastTargets(raycaster);
     if (!hit) return;
-    const target = hit.object.userData.target;
-    this._registerHit(target);
+    this._registerHit(hit.object.userData.target);
   }
 }

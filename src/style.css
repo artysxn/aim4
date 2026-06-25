@@ -262,8 +262,11 @@ h4 {
   margin: 8px 0 14px;
 }
 .card {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
   background: var(--chip-bg);
-  padding: 20px;
   text-align: center;
   transition: background 0.15s ease;
   pointer-events: auto;
@@ -271,19 +274,28 @@ h4 {
 .card:hover {
   background: rgba(255, 255, 255, 0.08);
 }
+.card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 16px 16px;
+  background: var(--accent-dim);
+}
 .card h3,
 .card-title {
-  margin: 12px 0 14px;
+  margin: 12px 0 0;
   font-family: var(--font-body);
   font-weight: 500;
   font-size: 15px;
-  color: var(--muted);
+  color: var(--text);
 }
 .card-icon {
   width: 54px;
   height: 54px;
   margin: 0 auto;
-  background: var(--accent-dim);
+  background: rgba(0, 0, 0, 0.35);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -294,14 +306,44 @@ h4 {
   object-fit: contain;
   display: block;
 }
-.card-actions {
+.card-footer {
   display: flex;
-  gap: 8px;
-  justify-content: center;
-  flex-wrap: wrap;
+  width: 100%;
+  margin-top: auto;
 }
-.card-actions .btn {
-  min-width: 96px;
+.card-footer-split {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.card-play {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 16px;
+  border: none;
+  background: #000;
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.card-play:hover {
+  background: #1a1a1a;
+}
+.card-play:active {
+  background: #000;
+  color: #ccc;
+}
+.card-play svg {
+  display: block;
+  margin-left: 2px;
+}
+.card-play-half + .card-play-half {
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .btn-with-icon {

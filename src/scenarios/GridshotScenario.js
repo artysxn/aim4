@@ -11,6 +11,7 @@ import { Target } from '../components/Target.js';
 import { randRange } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { EYE_HEIGHT } from '../core/Engine.js';
+import { competitivePresetFor } from './competitivePresets.js';
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
@@ -23,18 +24,19 @@ export class GridshotScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
     this.weaponId = 'pistol'; // Gridshot is a pistol mode
+    const preset = this.competitive ? competitivePresetFor('gridshot') : null;
     const g = this.settings.data.gridshot;
-    this.targetSize = this.config.targetSize ?? g.targetSize;
-    this.targetCount = this.config.targetCount ?? g.targetCount;
+    this.targetSize = preset?.targetSize ?? this.config.targetSize ?? g.targetSize;
+    this.targetCount = preset?.targetCount ?? this.config.targetCount ?? g.targetCount;
     this.enableTimeLimit = this.config.enableTimeLimit ?? g.enableTimeLimit;
     this.maxTargetAge = (this.config.maxTargetAge ?? g.maxTargetAge) / 1000;
-    this.mode = this.config.mode ?? g.mode ?? 'clicking';
+    this.mode = preset?.mode ?? this.config.mode ?? g.mode ?? 'clicking';
     this.trackTime = this.config.trackTime ?? g.trackTime ?? 0.4;
     this.trackResolve = this.config.trackResolve ?? g.trackResolve ?? 'click';
-    this.floatEnabled = this.config.floatEnabled ?? g.floatEnabled ?? false;
+    this.floatEnabled = preset?.floatEnabled ?? this.config.floatEnabled ?? g.floatEnabled ?? false;
     this.floatSpeedMax = this.config.floatSpeedMax ?? g.floatSpeedMax ?? 2;
-    this.boundsScaleX = this.config.boundsScaleX ?? g.boundsScaleX ?? 1;
-    this.boundsScaleY = this.config.boundsScaleY ?? g.boundsScaleY ?? 1;
+    this.boundsScaleX = preset?.boundsScaleX ?? this.config.boundsScaleX ?? g.boundsScaleX ?? 1;
+    this.boundsScaleY = preset?.boundsScaleY ?? this.config.boundsScaleY ?? g.boundsScaleY ?? 1;
     this.infiniteAmmo = this.config.infiniteAmmo ?? g.infiniteAmmo !== false;
     this.weaponBloom = false;
 
@@ -82,7 +84,8 @@ export class GridshotScenario extends BaseScenario {
       shots: this.shotsFired,
       misses: this.misses,
       timePlayed,
-      kpm: timePlayed > 0 ? this.kills / (timePlayed / 60) : 0
+      kpm: timePlayed > 0 ? this.kills / (timePlayed / 60) : 0,
+      ...this._runMeta()
     };
   }
 

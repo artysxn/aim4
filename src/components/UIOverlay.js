@@ -30,13 +30,13 @@ import { isKpmScenario } from '../scenarios/kpmScenarios.js';
 import { SurvivalScenario } from '../scenarios/SurvivalScenario.js';
 
 const SCENARIO_META = {
-  gridshot: { title: 'Gridshot' },
-  pasu: { title: 'Pasu' },
-  spidershot: { title: 'Spidershot' },
+  gridshot: { title: 'Gridshot', dualPlay: true },
+  pasu: { title: 'Pasu', dualPlay: true },
+  spidershot: { title: 'Spidershot', dualPlay: true },
   survival: { title: 'Survival', dualPlay: true },
-  arena: { title: 'Crossfire' },
-  duels: { title: 'Duels' },
-  range: { title: 'Range' }
+  arena: { title: 'Crossfire', dualPlay: true },
+  duels: { title: 'Duels', dualPlay: true },
+  range: { title: 'Range', dualPlay: true }
 };
 
 const _v = new THREE.Vector3();
@@ -241,6 +241,7 @@ export class UIOverlay {
         id: 'gridshot',
         label: 'Gridshot',
         body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
           ${rf('set-grid-size', 'Target size', 0.25, 1.2, 0.05)}
           ${rf('set-grid-count', 'Target count', 1, 6, 1)}
           <div class="field field-plain">
@@ -270,6 +271,7 @@ export class UIOverlay {
         id: 'pasu',
         label: 'Pasu',
         body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
           ${rf('set-pasu-size', 'Target size', 0.15, 0.9, 0.05)}
           ${rf('set-pasu-count', 'Target count', 1, 6, 1)}
           <div class="field field-plain">
@@ -299,6 +301,7 @@ export class UIOverlay {
         id: 'spidershot',
         label: 'Spidershot',
         body: `
+          <p class="readout">Competitive uses practice settings for now; edits here affect both modes.</p>
           ${rf('set-spider-size', 'Target size', 0.25, 0.9, 0.05)}
           ${rf('set-spider-ttk', 'Time to kill (ms)', 400, 4000, 50)}
           ${rf('set-spider-max-dist', 'Max distance (m)', 2, 12, 0.5)}
@@ -320,7 +323,7 @@ export class UIOverlay {
         id: 'survival',
         label: 'Survival',
         body: `
-          <p class="readout">Practice settings below. Competitive uses fixed rules: 0.75&nbsp;s spawn, 2&nbsp;s despawn, no missed shots, no other changes.</p>
+          <p class="readout">Practice settings below. Competitive uses fixed rules: 0.5&nbsp;s spawn, 2&nbsp;s despawn, no missed shots, no other changes.</p>
           ${rf('set-surv-spawn', 'Spawn interval (ms)', 300, 3000, 50)}
           ${rf('set-surv-despawn', 'Despawn time (ms)', 500, 5000, 50)}
           ${rf('set-surv-max-size', 'Max target size', 0.25, 1.0, 0.05)}
@@ -330,6 +333,7 @@ export class UIOverlay {
         id: 'arena',
         label: 'Crossfire',
         body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
           ${rf('set-arena-cross', 'Cross speed (ms)', 350, 1500, 50)}
           ${rf('set-arena-peek', 'Peek hold (ms)', 150, 1000, 50)}
           ${rf('set-arena-col', 'Columns', 4, 10, 1)}
@@ -341,6 +345,7 @@ export class UIOverlay {
         id: 'duels',
         label: 'Duels',
         body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
           <div class="field field-plain">
             <div class="field-top">
               <span class="field-label">Arena</span>
@@ -365,6 +370,7 @@ export class UIOverlay {
         id: 'range',
         label: 'Range',
         body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
           <div class="field field-plain">
             <div class="field-top">
               <span class="field-label">Arc</span>
@@ -517,21 +523,25 @@ export class UIOverlay {
           ${Object.keys(SCENARIOS)
             .map((key) => {
               const meta = SCENARIO_META[key];
-              const playBtns = meta.dualPlay
-                ? `<div class="card-actions">
-              <button type="button" class="btn btn-sm card-play-practice" data-play="${key}" data-variant="practice">Practice</button>
-              <button type="button" class="btn btn-sm primary card-play-competitive" data-play="${key}" data-variant="competitive">Competitive</button>
+              const playIcon =
+                '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>';
+              const footer = meta.dualPlay
+                ? `<div class="card-footer card-footer-split">
+              <button type="button" class="card-play card-play-half" data-play="${key}" data-variant="practice">Practice</button>
+              <button type="button" class="card-play card-play-half" data-play="${key}" data-variant="competitive">Competitive</button>
             </div>`
-                : `<button type="button" class="btn-play" data-play="${key}" aria-label="Play ${meta.title}">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
-              </button>`;
+                : `<div class="card-footer">
+              <button type="button" class="card-play" data-play="${key}" aria-label="Play ${meta.title}">${playIcon}</button>
+            </div>`;
               return `
             <div class="card" data-scenario="${key}">
-              <div class="card-icon">
-                <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="28" height="28" />
+              <div class="card-body">
+                <div class="card-icon">
+                  <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="28" height="28" />
+                </div>
+                <h3 class="card-title">${meta.title}</h3>
               </div>
-              <h3 class="card-title">${meta.title}</h3>
-              ${playBtns}
+              ${footer}
             </div>`;
             })
             .join('')}
@@ -555,8 +565,11 @@ export class UIOverlay {
             ${settingsSections.map((s, i) => settingsTab(s.id, s.label, i === 0)).join('')}
           </nav>
           <div class="settings-bar-actions">
+            <span class="settings-unsaved-hint muted" id="settings-unsaved-hint" hidden>Unsaved changes</span>
+            <button type="button" class="btn" id="settings-undo-btn" disabled>Undo</button>
             <button class="btn" data-reset>Reset all</button>
-            <button type="button" class="btn primary" id="settings-done-btn">Done</button>
+            <button type="button" class="btn primary" id="settings-confirm-btn">Confirm</button>
+            <button type="button" class="btn" id="settings-done-btn">Done</button>
           </div>
         </header>
         <div class="settings-drawer">
@@ -785,11 +798,13 @@ export class UIOverlay {
       else if (t.hasAttribute('data-quit')) this.quit();
       else if (t.hasAttribute('data-restart')) this.play(this.currentScenario, this.scenarioConfig);
       else if (t.hasAttribute('data-reset')) {
-        this.settings.reset();
+        this.settings.resetDraft();
         this._populateSettings();
+        this._updateSettingsBar();
       } else if (t.hasAttribute('data-reset-colors')) {
-        this.settings.resetColors();
+        this.settings.resetColorsDraft();
         this._populateSettings();
+        this._updateSettingsBar();
       } else if (t.dataset.lb) {
         this.root.querySelectorAll('#lb-tabs .tab').forEach((b) => b.classList.toggle('active', b === t));
         this._renderLeaderboard(t.dataset.lb);
@@ -834,10 +849,10 @@ export class UIOverlay {
 
     const commit = (v) => {
       if (Number.isNaN(v)) return;
-      apply(v);
+      s.mutateDraft((d) => apply(v, d));
       syncUi(v);
-      s.save();
       after?.();
+      this._updateSettingsBar();
     };
 
     slider.addEventListener('input', (e) => commit(parse(e.target.value)));
@@ -851,169 +866,167 @@ export class UIOverlay {
     if (slider) slider.value = Math.min(+slider.max, Math.max(+slider.min, value));
   }
 
+  _updateSettingsBar() {
+    const undoBtn = this.root.querySelector('#settings-undo-btn');
+    const hint = this.root.querySelector('#settings-unsaved-hint');
+    if (undoBtn) undoBtn.disabled = !this.settings.canUndoDraft();
+    if (hint) hint.hidden = !this.settings.hasDraftChanges();
+  }
+
+  _openSettings() {
+    this.settings.openDraft();
+    this._populateSettings();
+    this.crosshair.drawPreview();
+    this._updateSettingsBar();
+  }
+
   _bindSettings() {
     const s = this.settings;
     const $ = (id) => this.root.querySelector(id);
+    const draft = (fn) => {
+      s.mutateDraft(fn);
+      this._updateSettingsBar();
+    };
 
     const numOnly = (id, apply, { parse = parseFloat, after } = {}) => {
       $(id).addEventListener('change', (e) => {
         const v = parse(e.target.value);
         if (Number.isNaN(v)) return;
-        apply(v);
-        s.save();
+        draft((d) => apply(v, d));
         after?.();
       });
     };
 
-    numOnly('#set-cm360', (v) => (s.data.cm360 = v));
-    numOnly('#set-dpi', (v) => (s.data.dpi = v));
+    numOnly('#set-cm360', (v, d) => { d.cm360 = v; });
+    numOnly('#set-dpi', (v, d) => { d.dpi = v; });
 
-    this._bindRange('set-fov', (v) => (s.data.hFov = v));
-    numOnly('#set-dur', (v) => (s.data.runDuration = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-fov', (v, d) => { d.hFov = v; });
+    numOnly('#set-dur', (v, d) => { d.runDuration = v; }, { parse: (v) => parseInt(v, 10) });
 
     $('#set-res').addEventListener('change', (e) => {
-      s.data.resolution = e.target.value;
-      s.save();
+      draft((d) => { d.resolution = e.target.value; });
     });
     $('#set-raw').addEventListener('change', (e) => {
-      s.data.rawInput = e.target.checked;
-      s.save();
+      draft((d) => { d.rawInput = e.target.checked; });
     });
 
     $('#set-xh-color').addEventListener('input', (e) => {
-      s.data.crosshair.color = e.target.value;
-      s.save();
+      draft((d) => { d.crosshair.color = e.target.value; });
     });
-    this._bindRange('set-xh-gap', (v) => (s.data.crosshair.innerGap = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-xh-len', (v) => (s.data.crosshair.length = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-xh-thick', (v) => (s.data.crosshair.thickness = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-xh-dot', (v) => (s.data.crosshair.dotPercentage = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-xh-gap', (v, d) => { d.crosshair.innerGap = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-xh-len', (v, d) => { d.crosshair.length = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-xh-thick', (v, d) => { d.crosshair.thickness = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-xh-dot', (v, d) => { d.crosshair.dotPercentage = v; }, { parse: (v) => parseInt(v, 10) });
     $('#set-xh-hitmarker').addEventListener('change', (e) => {
-      s.data.crosshair.hitmarker = e.target.checked;
-      s.save();
+      draft((d) => { d.crosshair.hitmarker = e.target.checked; });
       this.crosshair.drawPreview(e.target.checked);
     });
     $('#set-xh-dyn').addEventListener('change', (e) => {
-      s.data.crosshair.dynamicGap = e.target.checked;
-      s.save();
+      draft((d) => { d.crosshair.dynamicGap = e.target.checked; });
     });
 
     $('#set-vm-hand').addEventListener('change', (e) => {
-      s.data.viewmodel.hand = e.target.value === 'left' ? 'left' : 'right';
-      s.save();
+      draft((d) => { d.viewmodel.hand = e.target.value === 'left' ? 'left' : 'right'; });
     });
-    this._bindRange('set-vm-fov', (v) => (s.data.viewmodel.fov = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-vm-ox', (v) => (s.data.viewmodel.offsetX = v));
-    this._bindRange('set-vm-oy', (v) => (s.data.viewmodel.offsetY = v));
-    this._bindRange('set-vm-oz', (v) => (s.data.viewmodel.offsetZ = v));
+    this._bindRange('set-vm-fov', (v, d) => { d.viewmodel.fov = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-vm-ox', (v, d) => { d.viewmodel.offsetX = v; });
+    this._bindRange('set-vm-oy', (v, d) => { d.viewmodel.offsetY = v; });
+    this._bindRange('set-vm-oz', (v, d) => { d.viewmodel.offsetZ = v; });
     $('#set-vm-bob').addEventListener('change', (e) => {
-      s.data.viewmodel.bob = e.target.checked;
-      s.save();
+      draft((d) => { d.viewmodel.bob = e.target.checked; });
     });
     $('#set-vm-aimpunch').addEventListener('change', (e) => {
-      s.data.weapon.aimpunch = e.target.checked;
-      s.save();
+      draft((d) => { d.weapon.aimpunch = e.target.checked; });
     });
 
-    this._bindRange('set-grid-size', (v) => (s.data.gridshot.targetSize = v));
-    this._bindRange('set-grid-count', (v) => (s.data.gridshot.targetCount = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-grid-size', (v, d) => { d.gridshot.targetSize = v; });
+    this._bindRange('set-grid-count', (v, d) => { d.gridshot.targetCount = v; }, { parse: (v) => parseInt(v, 10) });
     $('#set-grid-mode').addEventListener('change', (e) => {
-      s.data.gridshot.mode = e.target.value;
-      s.save();
+      draft((d) => { d.gridshot.mode = e.target.value; });
     });
-    this._bindRange('set-grid-track-time', (v) => (s.data.gridshot.trackTime = v));
+    this._bindRange('set-grid-track-time', (v, d) => { d.gridshot.trackTime = v; });
     $('#set-grid-track-resolve').addEventListener('change', (e) => {
-      s.data.gridshot.trackResolve = e.target.value;
-      s.save();
+      draft((d) => { d.gridshot.trackResolve = e.target.value; });
     });
     $('#set-grid-float').addEventListener('change', (e) => {
-      s.data.gridshot.floatEnabled = e.target.checked;
-      s.save();
+      draft((d) => { d.gridshot.floatEnabled = e.target.checked; });
     });
-    this._bindRange('set-grid-float-speed', (v) => (s.data.gridshot.floatSpeedMax = v));
-    this._bindRange('set-grid-bounds-y', (v) => (s.data.gridshot.boundsScaleY = v));
-    this._bindRange('set-grid-bounds-x', (v) => (s.data.gridshot.boundsScaleX = v));
+    this._bindRange('set-grid-float-speed', (v, d) => { d.gridshot.floatSpeedMax = v; });
+    this._bindRange('set-grid-bounds-y', (v, d) => { d.gridshot.boundsScaleY = v; });
+    this._bindRange('set-grid-bounds-x', (v, d) => { d.gridshot.boundsScaleX = v; });
     $('#set-grid-tl').addEventListener('change', (e) => {
-      s.data.gridshot.enableTimeLimit = e.target.checked;
-      s.save();
+      draft((d) => { d.gridshot.enableTimeLimit = e.target.checked; });
     });
-    this._bindRange('set-grid-age', (v) => (s.data.gridshot.maxTargetAge = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-grid-age', (v, d) => { d.gridshot.maxTargetAge = v; }, { parse: (v) => parseInt(v, 10) });
     $('#set-grid-infinite-ammo')?.addEventListener('change', (e) => {
-      s.data.gridshot.infiniteAmmo = e.target.checked;
-      s.save();
+      draft((d) => { d.gridshot.infiniteAmmo = e.target.checked; });
     });
 
-    this._bindRange('set-pasu-size', (v) => (s.data.pasu.targetSize = v));
-    this._bindRange('set-pasu-count', (v) => (s.data.pasu.targetCount = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-pasu-size', (v, d) => { d.pasu.targetSize = v; });
+    this._bindRange('set-pasu-count', (v, d) => { d.pasu.targetCount = v; }, { parse: (v) => parseInt(v, 10) });
     $('#set-pasu-mode').addEventListener('change', (e) => {
-      s.data.pasu.mode = e.target.value;
-      s.save();
+      draft((d) => { d.pasu.mode = e.target.value; });
     });
-    this._bindRange('set-pasu-track-time', (v) => (s.data.pasu.trackTime = v));
+    this._bindRange('set-pasu-track-time', (v, d) => { d.pasu.trackTime = v; });
     $('#set-pasu-track-resolve').addEventListener('change', (e) => {
-      s.data.pasu.trackResolve = e.target.value;
-      s.save();
+      draft((d) => { d.pasu.trackResolve = e.target.value; });
     });
-    this._bindRange('set-pasu-travel-speed', (v) => (s.data.pasu.travelSpeedMax = v));
-    this._bindRange('set-pasu-bounds-y', (v) => (s.data.pasu.boundsScaleY = v));
-    this._bindRange('set-pasu-bounds-x', (v) => (s.data.pasu.boundsScaleX = v));
-    this._bindRange('set-pasu-angle', (v) => (s.data.pasu.angleOffset = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-pasu-travel-speed', (v, d) => { d.pasu.travelSpeedMax = v; });
+    this._bindRange('set-pasu-bounds-y', (v, d) => { d.pasu.boundsScaleY = v; });
+    this._bindRange('set-pasu-bounds-x', (v, d) => { d.pasu.boundsScaleX = v; });
+    this._bindRange('set-pasu-angle', (v, d) => { d.pasu.angleOffset = v; }, { parse: (v) => parseInt(v, 10) });
     $('#set-pasu-tl').addEventListener('change', (e) => {
-      s.data.pasu.enableTimeLimit = e.target.checked;
-      s.save();
+      draft((d) => { d.pasu.enableTimeLimit = e.target.checked; });
     });
-    this._bindRange('set-pasu-age', (v) => (s.data.pasu.maxTargetAge = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-pasu-age', (v, d) => { d.pasu.maxTargetAge = v; }, { parse: (v) => parseInt(v, 10) });
     $('#set-pasu-infinite-ammo')?.addEventListener('change', (e) => {
-      s.data.pasu.infiniteAmmo = e.target.checked;
-      s.save();
+      draft((d) => { d.pasu.infiniteAmmo = e.target.checked; });
     });
 
-    this._bindRange('set-spider-size', (v) => (s.data.spidershot.targetSize = v));
-    this._bindRange('set-spider-ttk', (v) => (s.data.spidershot.timeToKill = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-spider-max-dist', (v) => (s.data.spidershot.maxDistance = v));
-    this._bindRange('set-spider-min-dist', (v) => (s.data.spidershot.minDistance = v));
-    this._bindRange('set-spider-height', (v) => (s.data.spidershot.heightSpread = v));
-    this._bindRange('set-spider-angle', (v) => (s.data.spidershot.angleSpread = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-spider-streak', (v) => (s.data.spidershot.streakChance = v / 100));
-    this._bindRange('set-spider-streak-min', (v) => (s.data.spidershot.streakLengthMin = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-spider-streak-max', (v) => (s.data.spidershot.streakLengthMax = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-spider-double', (v) => (s.data.spidershot.doubleSpawnChance = v / 100));
+    this._bindRange('set-spider-size', (v, d) => { d.spidershot.targetSize = v; });
+    this._bindRange('set-spider-ttk', (v, d) => { d.spidershot.timeToKill = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-spider-max-dist', (v, d) => { d.spidershot.maxDistance = v; });
+    this._bindRange('set-spider-min-dist', (v, d) => { d.spidershot.minDistance = v; });
+    this._bindRange('set-spider-height', (v, d) => { d.spidershot.heightSpread = v; });
+    this._bindRange('set-spider-angle', (v, d) => { d.spidershot.angleSpread = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-spider-streak', (v, d) => { d.spidershot.streakChance = v / 100; });
+    this._bindRange('set-spider-streak-min', (v, d) => { d.spidershot.streakLengthMin = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-spider-streak-max', (v, d) => { d.spidershot.streakLengthMax = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-spider-double', (v, d) => { d.spidershot.doubleSpawnChance = v / 100; });
     $('#set-spider-drift').addEventListener('change', (e) => {
-      s.data.spidershot.horizontalDrift = e.target.checked;
-      s.save();
+      draft((d) => { d.spidershot.horizontalDrift = e.target.checked; });
     });
-    this._bindRange('set-spider-drift-speed', (v) => (s.data.spidershot.driftSpeedMax = v));
+    this._bindRange('set-spider-drift-speed', (v, d) => { d.spidershot.driftSpeedMax = v; });
     $('#set-spider-random-size').addEventListener('change', (e) => {
-      s.data.spidershot.randomSize = e.target.checked;
-      s.save();
+      draft((d) => { d.spidershot.randomSize = e.target.checked; });
     });
-    this._bindRange('set-spider-size-min', (v) => (s.data.spidershot.randomSizeMin = v));
-    this._bindRange('set-spider-size-max', (v) => (s.data.spidershot.randomSizeMax = v));
+    this._bindRange('set-spider-size-min', (v, d) => { d.spidershot.randomSizeMin = v; });
+    this._bindRange('set-spider-size-max', (v, d) => { d.spidershot.randomSizeMax = v; });
     $('#set-spider-infinite-ammo')?.addEventListener('change', (e) => {
-      s.data.spidershot.infiniteAmmo = e.target.checked;
-      s.save();
+      draft((d) => { d.spidershot.infiniteAmmo = e.target.checked; });
     });
 
-    this._bindRange('set-surv-spawn', (v) => (s.data.survival.spawnInterval = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-surv-despawn', (v) => (s.data.survival.despawnTime = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-surv-max-size', (v) => (s.data.survival.maxSize = v));
-    this._bindRange('set-surv-strikes', (v) => (s.data.survival.missesAllowed = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-surv-spawn', (v, d) => { d.survival.spawnInterval = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-surv-despawn', (v, d) => { d.survival.despawnTime = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-surv-max-size', (v, d) => { d.survival.maxSize = v; });
+    this._bindRange('set-surv-strikes', (v, d) => { d.survival.missesAllowed = v; }, { parse: (v) => parseInt(v, 10) });
 
-    this._bindRange('set-arena-cross', (v) => (s.data.arena.crossDuration = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-arena-peek', (v) => (s.data.arena.peekHold = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-arena-col', (v) => (s.data.arena.columns = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-arena-colr', (v) => (s.data.arena.columnRadius = v));
-    this._bindRange('set-arena-ring', (v) => (s.data.arena.ringRadius = v));
-    this._bindRange('set-arena-enemy', (v) => (s.data.arena.enemyScale = v));
+    this._bindRange('set-arena-cross', (v, d) => { d.arena.crossDuration = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-arena-peek', (v, d) => { d.arena.peekHold = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-arena-col', (v, d) => { d.arena.columns = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-arena-colr', (v, d) => { d.arena.columnRadius = v; });
+    this._bindRange('set-arena-ring', (v, d) => { d.arena.ringRadius = v; });
+    this._bindRange('set-arena-enemy', (v, d) => { d.arena.enemyScale = v; });
 
     $('#set-duels-arena').addEventListener('change', (e) => {
-      s.data.duels.arena = parseInt(e.target.value, 10);
-      s.save();
+      draft((d) => { d.duels.arena = parseInt(e.target.value, 10); });
     });
-    this._bindRange('set-duels-ttk', (v) => (s.data.duels.ttk = v));
+    this._bindRange('set-duels-ttk', (v, d) => { d.duels.ttk = v; });
 
     const col = (id, key) =>
-      $(id).addEventListener('input', (e) => { s.data.colors[key] = e.target.value; s.save(); });
+      $(id).addEventListener('input', (e) => {
+        draft((d) => { d.colors[key] = e.target.value; });
+      });
     col('#set-col-bg', 'bg');
     col('#set-col-floor', 'floor');
     col('#set-col-ebody', 'enemyBody');
@@ -1022,31 +1035,26 @@ export class UIOverlay {
     col('#set-col-target', 'target');
 
     $('#set-range-arc').addEventListener('change', (e) => {
-      s.data.range.arc = parseInt(e.target.value, 10);
-      s.save();
+      draft((d) => { d.range.arc = parseInt(e.target.value, 10); });
     });
-    this._bindRange('set-range-count', (v) => (s.data.range.enemyCount = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-range-rad', (v) => (s.data.range.radius = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-range-count', (v, d) => { d.range.enemyCount = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-range-rad', (v, d) => { d.range.radius = v; }, { parse: (v) => parseInt(v, 10) });
     $('#set-range-bot-move')?.addEventListener('change', (e) => {
-      s.data.range.botStrafe = e.target.value === 'strafe';
-      s.save();
+      draft((d) => { d.range.botStrafe = e.target.value === 'strafe'; });
     });
     $('#set-range-bot-crouch')?.addEventListener('change', (e) => {
-      s.data.range.botCrouchTap = e.target.value === 'tap';
-      s.save();
+      draft((d) => { d.range.botCrouchTap = e.target.value === 'tap'; });
     });
     $('#set-range-infinite-ammo')?.addEventListener('change', (e) => {
-      s.data.range.infiniteAmmo = e.target.checked;
-      s.save();
+      draft((d) => { d.range.infiniteAmmo = e.target.checked; });
     });
     $('#set-range-cover').addEventListener('change', (e) => {
-      s.data.range.coverEnabled = e.target.checked;
-      s.save();
+      draft((d) => { d.range.coverEnabled = e.target.checked; });
     });
-    this._bindRange('set-range-cover-count', (v) => (s.data.range.coverCount = v), { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-range-cover-dist', (v) => (s.data.range.coverDistance = v));
-    this._bindRange('set-range-cover-thick', (v) => (s.data.range.coverThickness = v));
-    this._bindRange('set-range-cover-height', (v) => (s.data.range.coverHeight = v));
+    this._bindRange('set-range-cover-count', (v, d) => { d.range.coverCount = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-range-cover-dist', (v, d) => { d.range.coverDistance = v; });
+    this._bindRange('set-range-cover-thick', (v, d) => { d.range.coverThickness = v; });
+    this._bindRange('set-range-cover-height', (v, d) => { d.range.coverHeight = v; });
   }
 
   _bindPauseMenu() {
@@ -1058,10 +1066,22 @@ export class UIOverlay {
     $('#pause-leave-lobby-btn')?.addEventListener('click', () => {
       this.mp?.returnToLobby();
     });
+    $('#settings-confirm-btn')?.addEventListener('click', () => {
+      this.settings.confirmDraft();
+      this._updateSettingsBar();
+    });
+    $('#settings-undo-btn')?.addEventListener('click', () => {
+      if (this.settings.undoDraft()) {
+        this._populateSettings();
+        this._updateSettingsBar();
+      }
+    });
     $('#settings-done-btn')?.addEventListener('click', () => this._closeSettings());
   }
 
   _closeSettings() {
+    this.settings.discardDraft();
+    this._updateSettingsBar();
     const ret = this._returnAfterSettings;
     this._returnAfterSettings = null;
     if (ret) {
@@ -1884,7 +1904,7 @@ export class UIOverlay {
   }
 
   _populateSettings() {
-    const s = this.settings.data;
+    const s = this.settings.activeSettings();
     const $ = (id) => this.root.querySelector(id);
 
     $('#set-cm360').value = s.cm360;
@@ -2008,7 +2028,7 @@ export class UIOverlay {
       if (!isMp) this._closeMpChatTyping(false);
     }
     this.crosshair.setVisible(inRun);
-    if (name === 'settings') this.crosshair.drawPreview();
+    if (name === 'settings') this._openSettings();
     // Hide the system cursor only while actively playing — when paused (Esc),
     // the cursor must reappear so the menu is clickable.
     document.body.classList.toggle('in-run', inRun);
@@ -2382,7 +2402,10 @@ export class UIOverlay {
             : `Score not saved: ${res.reason}`;
       }
     } else if (results.leaderboardEligible === false) {
-      submitNote = 'Practice runs are not saved to leaderboards';
+      submitNote =
+        results.variant === 'practice'
+          ? 'Practice — not saved to leaderboards'
+          : 'Competitive — not saved to leaderboards yet';
     } else if (supabaseConfigured()) {
       submitNote = 'Sign in to save to leaderboards';
     }

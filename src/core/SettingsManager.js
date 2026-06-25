@@ -135,7 +135,11 @@ const DEFAULTS = {
 export class SettingsManager {
   constructor() {
     this.data = this._load();
+    this.draft = null;
+    this._undoStack = [];
+    this._undoCap = 50;
     this._listeners = [];
+    this._draftListeners = [];
     this._cloudSaveHandler = null;
     this._cloudSyncPaused = false;
   }
@@ -174,8 +178,83 @@ export class SettingsManager {
     this._listeners.push(fn);
   }
 
+  onDraftChange(fn) {
+    this._draftListeners.push(fn);
+  }
+
   _emit() {
     for (const fn of this._listeners) fn(this.data);
+  }
+
+  _emitDraft() {
+    if (!this.draft) return;
+    for (const fn of this._draftListeners) fn(this.draft);
+  }
+
+  /** Settings visible in the UI — draft while editing, otherwise persisted data. */
+  activeSettings() {
+    return this.draft ?? this.data;
+  }
+
+  openDraft() {
+    this.draft = structuredClone(this.data);
+    this._undoStack = [];
+    this._emitDraft();
+  }
+
+  recordUndo() {
+    if (!this.draft) return;
+    this._undoStack.push(structuredClone(this.draft));
+    if (this._undoStack.length > this._undoCap) this._undoStack.shift();
+  }
+
+  mutateDraft(fn) {
+    if (!this.draft) this.openDraft();
+    this.recordUndo();
+    fn(this.draft);
+    this._emitDraft();
+  }
+
+  confirmDraft() {
+    if (!this.draft) return;
+    this.data = structuredClone(this.draft);
+    this.draft = null;
+    this._undoStack = [];
+    this.save();
+  }
+
+  undoDraft() {
+    if (!this._undoStack.length || !this.draft) return false;
+    this.draft = this._undoStack.pop();
+    this._emitDraft();
+    return true;
+  }
+
+  resetDraft() {
+    if (!this.draft) this.openDraft();
+    this.recordUndo();
+    this.draft = structuredClone(DEFAULTS);
+    this._emitDraft();
+  }
+
+  resetColorsDraft() {
+    this.mutateDraft((d) => {
+      d.colors = structuredClone(DEFAULTS.colors);
+    });
+  }
+
+  discardDraft() {
+    this.draft = null;
+    this._undoStack = [];
+  }
+
+  hasDraftChanges() {
+    if (!this.draft) return false;
+    return JSON.stringify(this.draft) !== JSON.stringify(this.data);
+  }
+
+  canUndoDraft() {
+    return this._undoStack.length > 0;
   }
 
   /** Radians of yaw/pitch to apply per raw mouse count. */
@@ -195,7 +274,7 @@ export class SettingsManager {
 
   /** Snapshot of all user settings for export. */
   getExportPayload() {
-    return structuredClone(this.data);
+    return structuredClone(this.activeSettings());
   }
 
   /** Replace local settings from an imported snapshot. */
@@ -204,6 +283,11 @@ export class SettingsManager {
       throw new Error('Invalid settings data');
     }
     this.data = this._deepMerge(structuredClone(DEFAULTS), payload);
+    if (this.draft) {
+      this.draft = structuredClone(this.data);
+      this._undoStack = [];
+      this._emitDraft();
+    }
     this._cloudSyncPaused = true;
     Storage.write('settings', this.data);
     this._cloudSyncPaused = false;

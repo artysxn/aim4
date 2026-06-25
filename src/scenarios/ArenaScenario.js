@@ -22,6 +22,8 @@ import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
 import { randRange, randInt, lerp, degToRad } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
+import { competitivePresetFor } from './competitivePresets.js';
+import { startMissFlash, updateMissFlash } from './missFlash.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
@@ -40,12 +42,15 @@ export class ArenaScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
     this.weaponId = 'pistol'; // Crossfire is a pistol mode
+    const preset = this.competitive ? competitivePresetFor('arena') : null;
     const a = this.settings.data.arena;
-    this.crossDur = (this.config.crossDuration ?? a.crossDuration) / 1000;
-    this.peekHold = (this.config.peekHold ?? a.peekHold) / 1000;
-    this.colCount = Math.max(2, this.config.columns ?? a.columns);
-    this.colRadius = this.config.columnRadius ?? a.columnRadius;
-    this.ringR = this.config.ringRadius ?? a.ringRadius;
+    this.crossDur = (preset?.crossDuration ?? this.config.crossDuration ?? a.crossDuration) / 1000;
+    this.peekHold = (preset?.peekHold ?? this.config.peekHold ?? a.peekHold) / 1000;
+    this.colCount = Math.max(2, preset?.columns ?? this.config.columns ?? a.columns);
+    this.colRadius = preset?.columnRadius ?? this.config.columnRadius ?? a.columnRadius;
+    this.ringR = preset?.ringRadius ?? this.config.ringRadius ?? a.ringRadius;
+    this.infiniteAmmo = preset?.infiniteAmmo ?? this.config.infiniteAmmo ?? a.infiniteAmmo ?? false;
+    this.competitiveMissPenalty = !!preset?.competitiveMissPenalty;
     this.botR = this.ringR + 1;
     this.enemyScale = this.config.enemyScale ?? a.enemyScale;
 
@@ -59,6 +64,7 @@ export class ArenaScenario extends BaseScenario {
     this.plan = 'cross';
     this.circle = null;
     this.bot = null;
+    this._missFlash = null;
 
     this.colAngle = [];
     this.columns = [];
@@ -215,6 +221,22 @@ export class ArenaScenario extends BaseScenario {
     this.timer = 0.25;
   }
 
+  _competitiveMissPenalty() {
+    if (!this.competitiveMissPenalty || this.phase === 'cooldown') return;
+    this.misses++;
+    if (this.circle) {
+      this.circle.startDying(0xff2222);
+      this.circle = null;
+    }
+    if (this.bot) {
+      this.bot.startDying(0xff2222);
+      this.bot = null;
+    }
+    this.phase = 'cooldown';
+    this.timer = 0.25;
+    this._missFlash = startMissFlash();
+  }
+
   _killBot(green = 0x35e06a) {
     if (this.bot) this.bot.startDying(green);
     this.bot = null;
@@ -223,6 +245,9 @@ export class ArenaScenario extends BaseScenario {
   }
 
   onUpdate(dt) {
+    if (this._missFlash && updateMissFlash(this.engine, this._missFlash, dt)) {
+      this._missFlash = null;
+    }
     switch (this.phase) {
       case 'arming':
         this.timer -= dt;
@@ -242,10 +267,16 @@ export class ArenaScenario extends BaseScenario {
   onShoot(raycaster) {
     const colMeshes = this.columns; // cover blocks shots
     const hit = this.raycastTargets(raycaster, colMeshes);
-    if (!hit) return;
+    if (!hit) {
+      this._competitiveMissPenalty();
+      return;
+    }
     const obj = hit.object;
     const tgt = obj.userData.target;
-    if (!tgt) return; // hit a column -> blocked, no damage
+    if (!tgt) {
+      this._competitiveMissPenalty();
+      return;
+    }
 
     // Circle: arms the round.
     if (tgt === this.circle && this.phase === 'ready') {
@@ -291,5 +322,10 @@ export class ArenaScenario extends BaseScenario {
         }
       }
     }
+  }
+
+  dispose() {
+    if (this._missFlash) this.engine.setDeathOverlay(0);
+    super.dispose();
   }
 }
