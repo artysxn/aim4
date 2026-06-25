@@ -70,7 +70,6 @@ export class InputManager {
 
   /** Lock keyboard movement briefly after spawn; mouse look still works. */
   beginSpawnGrace(seconds) {
-    this.keys.clear();
     this.jumpQueued = false;
     this.spawnGraceRemaining = Math.max(0, seconds);
   }
@@ -79,7 +78,6 @@ export class InputManager {
     if (this.spawnGraceRemaining <= 0) return;
     this.spawnGraceRemaining = Math.max(0, this.spawnGraceRemaining - dt);
     if (this.spawnGraceRemaining <= 0) {
-      this.keys.clear();
       this.jumpQueued = false;
     }
   }
@@ -151,10 +149,7 @@ export class InputManager {
     }
     // Swallow so e.g. Ctrl-based browser shortcuts don't fire mid-run.
     e.preventDefault();
-    if (grace) {
-      if (!down) this.keys.delete(e.code);
-      return;
-    }
+    // Always track held keys while locked — spawn grace only blocks moveAxis().
     if (down) this.keys.add(e.code);
     else this.keys.delete(e.code);
   }

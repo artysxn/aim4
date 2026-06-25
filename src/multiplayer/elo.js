@@ -3,7 +3,10 @@
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_ELO = 1000;
-export const K_FACTOR = 32;
+
+/** Win/loss vs an equal-rated opponent (standard Elo uses K = 2× this). */
+export const BASE_ELO_DELTA = 30;
+export const K_FACTOR = BASE_ELO_DELTA * 2;
 
 export function clampElo(n) {
   return Math.max(100, Math.min(4000, Math.round(Number(n) || DEFAULT_ELO)));
@@ -14,7 +17,7 @@ export function expectedScore(eloA, eloB) {
   return 1 / (1 + 10 ** ((eloB - eloA) / 400));
 }
 
-/** Signed Elo change for one player after a match. */
+/** Signed Elo change for one player after a match. Equal ratings → ±BASE_ELO_DELTA. */
 export function eloDelta(yourElo, oppElo, won) {
   const actual = won ? 1 : 0;
   const expected = expectedScore(yourElo, oppElo);

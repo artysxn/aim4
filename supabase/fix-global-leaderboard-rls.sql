@@ -134,3 +134,29 @@ end;
 $$;
 
 grant execute on function public.get_leaderboard_top(text, text, int) to anon, authenticated;
+
+drop function if exists public.get_elo_leaderboard_top(int);
+
+create or replace function public.get_elo_leaderboard_top(p_limit int default 50)
+returns table (
+  user_id uuid,
+  username text,
+  elo integer,
+  joined_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    p.id as user_id,
+    p.username,
+    coalesce(p.elo, 1000) as elo,
+    p.created_at as joined_at
+  from public.profiles p
+  order by coalesce(p.elo, 1000) desc, p.created_at asc
+  limit greatest(1, least(p_limit, 100));
+$$;
+
+grant execute on function public.get_elo_leaderboard_top(int) to anon, authenticated;

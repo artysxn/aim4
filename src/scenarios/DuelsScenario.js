@@ -514,6 +514,7 @@ export class DuelsScenario extends BaseScenario {
   }
 
   onShoot(raycaster) {
+    this.engine.audio?.playLocalShot();
     const hit = this.raycastTargets(raycaster, this.coverMeshes);
     if (!hit) return;
     const obj = hit.object;

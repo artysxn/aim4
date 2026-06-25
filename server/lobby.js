@@ -26,6 +26,7 @@ import {
   DEFAULT_ELO,
   eloResultsForMatch
 } from '../src/multiplayer/elo.js';
+import { resolveShotDirection } from '../src/utils/shotAccuracy.js';
 import { MatchmakingQueue, createRankedLobby } from './matchmaking.js';
 
 const VALID_TARGETS = new Set([0, 13, 30, 60, 100]);
@@ -74,6 +75,7 @@ export class MultiplayerServer {
       rttMs: 0,
       inQueue: false,
       queueElo: DEFAULT_ELO,
+      queueJoinedAt: null,
       userId: null
     };
     this.players.set(id, player);
@@ -369,11 +371,25 @@ export class MultiplayerServer {
     if (!player.stats) player.stats = freshStats();
     player.stats.shots++;
     const o = [msg.ox, msg.oy, msg.oz];
-    const d = [msg.dx, msg.dy, msg.dz];
-    if (!o.every(Number.isFinite) || !d.every(Number.isFinite)) return;
-    // Normalise direction defensively.
-    const len = Math.hypot(d[0], d[1], d[2]) || 1;
-    d[0] /= len; d[1] /= len; d[2] /= len;
+    const aim = [
+      Number.isFinite(msg.aimDx) ? msg.aimDx : msg.dx,
+      Number.isFinite(msg.aimDy) ? msg.aimDy : msg.dy,
+      Number.isFinite(msg.aimDz) ? msg.aimDz : msg.dz
+    ];
+    if (!o.every(Number.isFinite) || !aim.every(Number.isFinite)) return;
+
+    const aimLen = Math.hypot(aim[0], aim[1], aim[2]) || 1;
+    aim[0] /= aimLen;
+    aim[1] /= aimLen;
+    aim[2] /= aimLen;
+
+    const accState = {
+      onGround: msg.onGround !== false,
+      speedHoriz: Number.isFinite(msg.speedHoriz) ? Math.max(0, msg.speedHoriz) : 0
+    };
+    const seed = Number.isFinite(msg.spreadSeed) ? msg.spreadSeed >>> 0 : 0;
+    const resolved = resolveShotDirection(aim, accState, seed);
+    const d = [resolved.x, resolved.y, resolved.z];
     const rtt = Number.isFinite(msg.rtt) ? Math.max(0, Math.min(800, msg.rtt)) : player.rttMs;
     if (Number.isFinite(msg.rtt)) player.rttMs = rtt;
     player.shotQueue.push({
@@ -383,6 +399,13 @@ export class MultiplayerServer {
       rtt,
       victimId: Number.isFinite(msg.victimId) ? msg.victimId : null,
       zone: msg.zone === 'head' || msg.zone === 'body' ? msg.zone : null
+    });
+    this._broadcast(lobby, {
+      t: S2C.SHOT_FIRED,
+      shooterId: player.id,
+      x: player.transform.x,
+      y: player.transform.y,
+      z: player.transform.z
     });
   }
 

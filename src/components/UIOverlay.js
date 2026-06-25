@@ -6,7 +6,7 @@
 // the run lifecycle. The core game loop never touches UI state.
 //
 // States: menu | settings | leaderboard | auth | await-start | playing | paused
-//         | await-resume | results
+//         | results
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
@@ -17,6 +17,7 @@ import * as Storage from '../utils/Storage.js';
 import { exportConfig, importConfig, copyText, normalizeCode } from '../utils/ConfigCodes.js';
 import {
   fetchLeaderboardWithMeta,
+  fetchEloLeaderboardWithMeta,
   submitScore,
   fetchUserRank
 } from '../lib/cloudScores.js';
@@ -469,10 +470,11 @@ export class UIOverlay {
         <h2 class="text-big">Leaderboards</h2>
         <p class="lb-subtitle" id="lb-subtitle">Best score per verified account</p>
         <div class="tabs" id="lb-tabs">
+          <button class="tab active" data-lb="elo">Ranked ELO</button>
           ${Object.keys(SCENARIOS)
             .map(
-              (k, i) =>
-                `<button class="tab ${i === 0 ? 'active' : ''}" data-lb="${k}">${SCENARIO_META[k].title}</button>`
+              (k) =>
+                `<button class="tab" data-lb="${k}">${SCENARIO_META[k].title}</button>`
             )
             .join('')}
         </div>
@@ -1228,7 +1230,8 @@ export class UIOverlay {
     leaveBtn?.toggleAttribute('hidden', !inQueue);
     if (inQueue && status && this.auth?.isLoggedIn) {
       const n = msg.queueSize ?? 1;
-      status.textContent = `In queue (${n} player${n === 1 ? '' : 's'}) — ELO ${msg.elo ?? this.auth.elo}`;
+      const range = Number.isFinite(msg.searchRange) ? ` · ±${msg.searchRange} ELO` : '';
+      status.textContent = `In queue (${n} player${n === 1 ? '' : 's'}) — ${msg.elo ?? this.auth.elo} ELO${range}`;
       status.classList.remove('is-error');
     }
   }
@@ -1247,7 +1250,8 @@ export class UIOverlay {
     chip.hidden = !inQueue;
     if (inQueue && this.mmQueueText) {
       const n = msg.queueSize ?? 1;
-      this.mmQueueText.textContent = `Ranked queue · ${n} waiting · ${msg.elo ?? this.auth?.elo ?? 1000} ELO`;
+      const range = Number.isFinite(msg.searchRange) ? ` · ±${msg.searchRange}` : '';
+      this.mmQueueText.textContent = `Ranked queue · ${n} waiting · ${msg.elo ?? this.auth?.elo ?? 1000} ELO${range}`;
     }
   }
 
@@ -1300,7 +1304,7 @@ export class UIOverlay {
   /** A click on the canvas while unlocked re-acquires pointer lock. */
   _onUnlockedClick() {
     if (this.mpChat?.classList.contains('typing')) return;
-    if (this.state === 'playing' || this.state === 'await-start' || this.state === 'await-resume') {
+    if (this.state === 'playing' || this.state === 'await-start') {
       this.input.requestLock();
     }
   }
@@ -1696,7 +1700,9 @@ export class UIOverlay {
   }
 
   resume() {
-    this.state = 'await-resume';
+    if (this.state !== 'paused') return;
+    this.sceneManager.resume();
+    this.showScreen('playing');
     this.input.requestLock();
   }
 
@@ -1720,12 +1726,10 @@ export class UIOverlay {
 
   _onLockChange(locked) {
     if (locked) {
+      this.engine.audio?.resume();
       this._suppressLockPause = false;
       if (this.state === 'await-start') {
         this.sceneManager.begin();
-        this.showScreen('playing');
-      } else if (this.state === 'await-resume') {
-        this.sceneManager.resume();
         this.showScreen('playing');
       }
     } else {
@@ -1825,7 +1829,7 @@ export class UIOverlay {
   // -------------------------------------------------------------------------
   _activeLbTab() {
     const active = this.root.querySelector('#lb-tabs .tab.active');
-    return active ? active.dataset.lb : 'gridshot';
+    return active ? active.dataset.lb : 'elo';
   }
 
   _configKeyFor(scenario) {
@@ -1850,10 +1854,30 @@ export class UIOverlay {
       return `<p class="center lb-hint lb-error">Could not load leaderboard: ${this._esc(fetchError)}</p>`;
     }
     if (!list.length) {
-      const hint = this.auth?.isLoggedIn
-        ? 'No scores for these settings yet — finish a run to appear here.'
-        : 'No scores yet — sign in and play to appear here.';
+      const hint = scenario === 'elo'
+        ? (this.auth?.isLoggedIn
+          ? 'No ranked accounts yet — sign in and play matchmaking to appear here.'
+          : 'No ranked accounts yet — sign in to track your ELO.')
+        : (this.auth?.isLoggedIn
+          ? 'No scores for these settings yet — finish a run to appear here.'
+          : 'No scores yet — sign in and play to appear here.');
       return `<p class="center lb-hint">${hint}</p>`;
+    }
+
+    if (scenario === 'elo') {
+      const rows = list
+        .map((r, i) => {
+          const hl = highlightUserId && r.user_id === highlightUserId ? ' class="hl"' : '';
+          return `<tr${hl}>
+          <td>${i + 1}</td>
+          <td class="lb-player">${this._esc(r.username)}</td>
+          <td class="score">${Number(r.elo ?? 1000).toLocaleString()}</td>
+        </tr>`;
+        })
+        .join('');
+      return `<table class="lb-table">
+      <thead><tr><th>#</th><th>Player</th><th>ELO</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
     }
 
     if (scenario === 'gridshot') {
@@ -1899,6 +1923,11 @@ export class UIOverlay {
   }
 
   async _fetchLeaderboard(scenario, configKeyOverride = null) {
+    if (scenario === 'elo') {
+      const { list, error } = await fetchEloLeaderboardWithMeta(50);
+      this._lbCache.elo = list;
+      return { list, error, configKey: null };
+    }
     const key = configKeyOverride ?? this._configKeyFor(scenario);
     const cacheKey = `${scenario}:${key}`;
     const { list, error } = await fetchLeaderboardWithMeta(scenario, key, 10);
@@ -1912,12 +1941,18 @@ export class UIOverlay {
     if (!body) return;
     body.innerHTML = `<p class="center">…</p>`;
     if (subtitle) {
-      const gridshotHint = scenario === 'gridshot'
-        ? 'Ranked by time played, then KPM · '
-        : 'Best score per verified account · ';
-      subtitle.textContent = this.auth?.isLoggedIn
-        ? `${gridshotHint}signed in as ${this._accountLabel()}`
-        : `${gridshotHint}sign in to submit scores`;
+      if (scenario === 'elo') {
+        subtitle.textContent = this.auth?.isLoggedIn
+          ? `All accounts · signed in as ${this._accountLabel()} (${this.auth.elo} ELO)`
+          : 'All accounts · sign in to track your ranked ELO';
+      } else {
+        const gridshotHint = scenario === 'gridshot'
+          ? 'Ranked by time played, then KPM · '
+          : 'Best score per verified account · ';
+        subtitle.textContent = this.auth?.isLoggedIn
+          ? `${gridshotHint}signed in as ${this._accountLabel()}`
+          : `${gridshotHint}sign in to submit scores`;
+      }
     }
     const { list, error } = await this._fetchLeaderboard(scenario);
     body.innerHTML = this._leaderboardRowsHtml(list, scenario, this.auth?.user?.id, error);

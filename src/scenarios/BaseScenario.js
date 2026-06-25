@@ -10,6 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
+import { shotSpreadRad, spreadRng, applySpreadToRay } from '../utils/shotAccuracy.js';
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0); // crosshair is always screen center
@@ -112,6 +113,26 @@ export class BaseScenario {
     if (!this.running) return;
     this.shotsFired++;
     _raycaster.setFromCamera(_center, this.camera);
+
+    const player = this.engine.player;
+    if (player?.enabled) {
+      const state = player.getAccuracyState();
+      const seed = (Math.random() * 0xffffffff) >>> 0;
+      const spread = shotSpreadRad(state);
+      const aim = _raycaster.ray.direction.clone();
+      applySpreadToRay(_raycaster.ray, spread, spreadRng(seed));
+      this._lastShotAccuracy = {
+        seed,
+        onGround: state.onGround,
+        speedHoriz: state.speedHoriz,
+        aimDx: aim.x,
+        aimDy: aim.y,
+        aimDz: aim.z
+      };
+    } else {
+      this._lastShotAccuracy = null;
+    }
+
     this.onShoot(_raycaster);
   }
 

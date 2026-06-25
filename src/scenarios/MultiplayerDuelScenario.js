@@ -253,6 +253,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
         r.cur.crouch = 0;
         r.dead = false;
         r.group.visible = true;
+        delete r._sfx;
       }
     }
   }
@@ -301,6 +302,11 @@ export class MultiplayerDuelScenario extends BaseScenario {
 
   applyRespawn(msg) {
     if (msg.spawns) this.setSpawns(msg.spawns);
+  }
+
+  applyShotFired(msg) {
+    if (msg.shooterId === this.myId) return;
+    this.engine.audio?.playRemoteShot(msg.x, msg.y, msg.z);
   }
 
   _die() {
@@ -377,6 +383,8 @@ export class MultiplayerDuelScenario extends BaseScenario {
       r.group.rotation.y = r.cur.yaw;
       r.rig.scale.y = sc;
       r.head.position.y = BODY_H * sc + HEAD_R + HEAD_OFFSET;
+
+      this.engine.audio?.updateRemotePlayer(id, r, _dt);
     }
   }
 
@@ -405,6 +413,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
   // ---- Shooting -----------------------------------------------------------
   onShoot(raycaster) {
     if (this._dead) return;
+    this.engine.audio?.playLocalShot();
 
     const colliders = [];
     for (const r of this.remotes.values()) {
@@ -432,7 +441,12 @@ export class MultiplayerDuelScenario extends BaseScenario {
 
     const o = raycaster.ray.origin;
     const d = raycaster.ray.direction;
-    this.net?.sendShot({ x: o.x, y: o.y, z: o.z }, { x: d.x, y: d.y, z: d.z }, claim);
+    this.net?.sendShot(
+      { x: o.x, y: o.y, z: o.z },
+      { x: d.x, y: d.y, z: d.z },
+      claim,
+      this._lastShotAccuracy
+    );
   }
 
   // ---- HUD helpers --------------------------------------------------------

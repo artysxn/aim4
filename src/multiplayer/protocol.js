@@ -15,7 +15,7 @@ export const C2S = {
   CONFIG: 'config', // host: { target?, isPublic? }
   START: 'start', // host
   STATE: 'state', // { x,y,z, yaw, pitch, crouch }
-  SHOOT: 'shoot', // { ox,oy,oz, dx,dy,dz, rtt?, victimId?, zone? }
+  SHOOT: 'shoot', // { ox,oy,oz, dx,dy,dz, aimDx?,aimDy?,aimDz?, onGround?, speedHoriz?, spreadSeed?, rtt?, victimId?, zone? }
   CHAT: 'chat', // { text }
   LIST: 'list', // subscribe to the public lobby browser
   UNLIST: 'unlist', // stop receiving lobby-browser updates
@@ -31,6 +31,7 @@ export const S2C = {
   ERROR: 'error', // { msg }
   MATCH_START: 'matchStart', // { mapId, target, spawns, scores, stats, isMatchmade?, opponentName?, opponentElo?, yourElo? }
   SNAPSHOT: 'snap', // { players:[...], st }
+  SHOT_FIRED: 'shotFired', // { shooterId, x, y, z }
   HIT: 'hit', // { shooterId, victimId, zone }
   KILL: 'kill', // { shooterId, victimId, scores, mapId?, spawns?, stats? }
   RESPAWN: 'respawn', // { spawns }
@@ -38,6 +39,6 @@ export const S2C = {
   MATCH_END: 'matchEnd', // { winnerId, scores, aborted?, returnToLobby? }
   PLAYER_LEFT: 'playerLeft', // { id }
   LOBBY_LIST: 'lobbyList', // { lobbies:[{code,host,map,target,players,max}] }
-  QUEUE_STATUS: 'queueStatus', // { inQueue, queueSize, elo }
+  QUEUE_STATUS: 'queueStatus', // { inQueue, queueSize, elo, searchRange? }
   PONG: 'pong' // { id, ct, st }
 };

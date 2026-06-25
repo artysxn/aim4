@@ -11,6 +11,7 @@ import { AuthManager } from './core/AuthManager.js';
 import { Engine } from './core/Engine.js';
 import { InputManager } from './core/InputManager.js';
 import { PlayerController } from './core/PlayerController.js';
+import { GameAudio } from './audio/GameAudio.js';
 import { Crosshair } from './components/Crosshair.js';
 import { SceneManager } from './core/SceneManager.js';
 import { UIOverlay } from './components/UIOverlay.js';
@@ -21,6 +22,7 @@ const engine = new Engine(settings);
 const input = new InputManager(engine, settings);
 const player = new PlayerController(engine, input);
 engine.player = player; // scenarios enable/disable it via engine.player
+engine.audio = new GameAudio(engine);
 const crosshair = new Crosshair(settings);
 const sceneManager = new SceneManager(engine, input, settings, crosshair);
 const ui = new UIOverlay({ engine, input, settings, crosshair, sceneManager, auth });
@@ -32,6 +34,9 @@ auth.init().then(() => ui.refreshAccountBar());
 // refresh the (cheap) UI read-outs.
 engine.onUpdate = (dt) => {
   sceneManager.update(dt);
+  if (engine.audio && sceneManager.current?.running) {
+    engine.audio.syncListener(engine.camera);
+  }
   ui.frame(dt);
 };
 

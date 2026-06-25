@@ -45,6 +45,13 @@ export class PlayerController {
     this.colliders = null; // cover/wall boxes for horizontal collision
   }
 
+  getAccuracyState() {
+    return {
+      onGround: this.onGround,
+      speedHoriz: Math.hypot(this.vel.x, this.vel.z)
+    };
+  }
+
   /** Disable + recenter. Called on camera reset / scenario unload. */
   reset() {
     this.enabled = false;
@@ -134,6 +141,7 @@ export class PlayerController {
       this.velY = JUMP_VEL;
       this.onGround = false;
       this.crouchAmt = 0;
+      this.engine.audio?.playLocalJump();
     }
     if (consumedJump) this.input.jumpQueued = false;
 
@@ -174,5 +182,14 @@ export class PlayerController {
 
     const eye = this.footY + lerp(STAND_EYE, CROUCH_EYE, this.crouchAmt);
     this.camera.position.set(this.pos.x, eye, this.pos.z);
+
+    const speedHoriz = Math.hypot(this.vel.x, this.vel.z);
+    this.engine.audio?.updateLocalFootsteps(dt, {
+      onGround: this.onGround,
+      crouchAmt: this.crouchAmt,
+      walkHeld: this.input.walkHeld,
+      spawnGrace: this.input.spawnGraceRemaining,
+      speedHoriz
+    });
   }
 }

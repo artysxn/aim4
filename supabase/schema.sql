@@ -9,6 +9,20 @@ alter table public.scores add column if not exists time_played real;
 alter table public.scores add column if not exists kpm real;
 alter table public.profiles add column if not exists elo integer not null default 1000;
 
+update public.profiles set elo = 1000 where elo is null;
+
+insert into public.profiles (id, username, elo)
+select
+  u.id,
+  coalesce(
+    nullif(lower(trim(u.raw_user_meta_data->>'username')), ''),
+    'player_' || substr(replace(u.id::text, '-', ''), 1, 8)
+  ),
+  1000
+from auth.users u
+where not exists (select 1 from public.profiles p where p.id = u.id)
+on conflict (id) do nothing;
+
 -- Profile per auth user (public username shown on leaderboards)
 create table if not exists public.profiles (
   id uuid primary key references auth.users on delete cascade,
@@ -221,3 +235,30 @@ end;
 $$;
 
 grant execute on function public.get_leaderboard_top(text, text, int) to anon, authenticated;
+
+-- Global ranked Elo board (one row per account; default 1000 until first ranked match)
+drop function if exists public.get_elo_leaderboard_top(int);
+
+create or replace function public.get_elo_leaderboard_top(p_limit int default 50)
+returns table (
+  user_id uuid,
+  username text,
+  elo integer,
+  joined_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    p.id as user_id,
+    p.username,
+    coalesce(p.elo, 1000) as elo,
+    p.created_at as joined_at
+  from public.profiles p
+  order by coalesce(p.elo, 1000) desc, p.created_at asc
+  limit greatest(1, least(p_limit, 100));
+$$;
+
+grant execute on function public.get_elo_leaderboard_top(int) to anon, authenticated;

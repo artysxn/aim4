@@ -60,6 +60,7 @@ export class MultiplayerController {
       this._startMatch(msg);
     };
     net.onSnapshot = (msg) => this._scenario()?.applySnapshot(msg);
+    net.onShotFired = (msg) => this._scenario()?.applyShotFired?.(msg);
     net.onHit = (msg) => this._scenario()?.applyHit(msg);
     net.onKill = (msg) => {
       this._scenario()?.applyKill(msg);
@@ -79,7 +80,7 @@ export class MultiplayerController {
 
   /** Tear down an active singleplayer run when a ranked/custom match starts. */
   _leaveSingleplayerIfActive() {
-    const spStates = new Set(['playing', 'paused', 'await-start', 'await-resume', 'results']);
+    const spStates = new Set(['playing', 'paused', 'await-start', 'results']);
     if (!spStates.has(this.ui.state)) return;
     this.input.exitLock();
     this.sceneManager.unload();

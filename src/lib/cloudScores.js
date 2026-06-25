@@ -272,3 +272,48 @@ export async function fetchUserRank(userId, scenario, configKey) {
   const idx = list.findIndex((r) => r.user_id === userId);
   return idx === -1 ? null : idx + 1;
 }
+
+/** Global ranked Elo board — every account with a profile row (default 1000). */
+export async function fetchEloLeaderboardWithMeta(limit = 50) {
+  if (!supabaseConfigured()) {
+    return { list: [], error: 'Supabase is not configured in this build.' };
+  }
+
+  const sb = getSupabase();
+  const cap = Math.max(1, Math.min(limit, 100));
+
+  const { data: rpcData, error: rpcError } = await sb.rpc('get_elo_leaderboard_top', {
+    p_limit: cap
+  });
+  if (!rpcError && rpcData?.length) {
+    return { list: rpcData, error: null };
+  }
+
+  const { data, error } = await sb
+    .from('profiles')
+    .select('id, username, elo, created_at')
+    .order('elo', { ascending: false })
+    .order('created_at', { ascending: true })
+    .limit(cap);
+
+  if (error) {
+    console.warn('[cloudScores] elo leaderboard failed', error.message);
+    return { list: [], error: rpcError?.message || error.message };
+  }
+
+  const list = (data || []).map((row) => ({
+    user_id: row.id,
+    username: row.username,
+    elo: row.elo ?? 1000,
+    joined_at: row.created_at
+  }));
+
+  return { list, error: null };
+}
+
+/** Rank on the global Elo board (1-based), or null if not on the fetched page. */
+export async function fetchUserEloRank(userId, limit = 100) {
+  const { list } = await fetchEloLeaderboardWithMeta(limit);
+  const idx = list.findIndex((r) => r.user_id === userId);
+  return idx === -1 ? null : idx + 1;
+}

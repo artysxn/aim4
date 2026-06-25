@@ -93,6 +93,7 @@ export class NetClient {
     this.onLobbyList = null;
     this.onNetStats = null;
     this.onQueueStatus = null;
+    this.onShotFired = null;
   }
 
   async _checkServer(timeoutMs = 5000) {
@@ -282,6 +283,9 @@ export class NetClient {
       case S2C.QUEUE_STATUS:
         this.onQueueStatus?.(msg);
         break;
+      case S2C.SHOT_FIRED:
+        this.onShotFired?.(msg);
+        break;
       case S2C.PONG:
         this._onPong(msg);
         break;
@@ -325,15 +329,24 @@ export class NetClient {
   sendState(s) {
     this._send({ t: C2S.STATE, ...s });
   }
-  sendShot(o, d, claim) {
-    this._send({
+  sendShot(o, d, claim, accuracy) {
+    const msg = {
       t: C2S.SHOOT,
       ox: o.x, oy: o.y, oz: o.z,
       dx: d.x, dy: d.y, dz: d.z,
       rtt: this.pingMs || undefined,
       victimId: claim?.victimId,
       zone: claim?.zone
-    });
+    };
+    if (accuracy) {
+      msg.aimDx = accuracy.aimDx;
+      msg.aimDy = accuracy.aimDy;
+      msg.aimDz = accuracy.aimDz;
+      msg.onGround = accuracy.onGround;
+      msg.speedHoriz = accuracy.speedHoriz;
+      msg.spreadSeed = accuracy.seed;
+    }
+    this._send(msg);
   }
   sendChat(text) {
     this._send({ t: C2S.CHAT, text });

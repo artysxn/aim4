@@ -1,6 +1,10 @@
--- AIM4.io — run AFTER the original SETUP.md schema (safe to re-run)
+-- =============================================================================
+-- AIM4.io — Supabase upgrade (run AFTER the SETUP.md base schema)
 -- Supabase SQL Editor → New query → paste → Run
+-- Safe to re-run. Replaces the older "missing pieces" script on the site.
+-- =============================================================================
 
+-- ---- Score columns + ranked Elo ------------------------------------------------
 alter table public.scores add column if not exists hits integer;
 alter table public.scores add column if not exists shots integer;
 alter table public.scores add column if not exists time_played real;
@@ -22,23 +26,28 @@ from auth.users u
 where not exists (select 1 from public.profiles p where p.id = u.id)
 on conflict (id) do nothing;
 
+-- ---- RLS: global reads + own-row writes ----------------------------------------
 drop policy if exists "update own profile" on public.profiles;
 create policy "update own profile" on public.profiles
   for update using (auth.uid() = id);
 
-create index if not exists scores_user_id_idx on public.scores (user_id);
-
--- Global leaderboard reads (all users visible to anon + authenticated)
 drop policy if exists "read profiles" on public.profiles;
 drop policy if exists "read scores" on public.scores;
 drop policy if exists "read own scores" on public.scores;
+drop policy if exists "Users can read own scores" on public.scores;
+drop policy if exists "scores_select_own" on public.scores;
+
 create policy "read profiles" on public.profiles
   for select to anon, authenticated using (true);
 create policy "read scores" on public.scores
   for select to anon, authenticated using (true);
+
 grant select on public.profiles to anon, authenticated;
 grant select on public.scores to anon, authenticated;
 
+create index if not exists scores_user_id_idx on public.scores (user_id);
+
+-- ---- Cloud settings sync ---------------------------------------------------------
 create table if not exists public.user_settings (
   user_id uuid primary key references auth.users on delete cascade,
   settings jsonb not null default '{}',
@@ -59,6 +68,7 @@ drop policy if exists "update own settings" on public.user_settings;
 create policy "update own settings" on public.user_settings
   for update using (auth.uid() = user_id);
 
+-- ---- Sign-up trigger (profile on auth.users insert) ------------------------------
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -85,6 +95,7 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
+-- ---- Scenario leaderboards (security definer) ------------------------------------
 drop function if exists public.get_leaderboard_top(text, text, int);
 drop function if exists public.get_leaderboard(text, text, int);
 
@@ -201,6 +212,7 @@ $$;
 
 grant execute on function public.get_leaderboard_top(text, text, int) to anon, authenticated;
 
+-- ---- Ranked ELO leaderboard (all profiles, default 1000) -------------------------
 drop function if exists public.get_elo_leaderboard_top(int);
 
 create or replace function public.get_elo_leaderboard_top(p_limit int default 50)
