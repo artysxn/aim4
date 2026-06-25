@@ -14,8 +14,7 @@ import {
   MAG_SIZE,
   RELOAD_TIME,
   patternOffset,
-  bloomRad,
-  getSprayTune
+  bloomRad
 } from './ak47.js';
 
 const LAND_WINDOW = 0.15; // seconds after landing where shots are penalised
@@ -112,8 +111,7 @@ export class WeaponController {
     const player = this.engine.player;
     const state = player ? player.getAccuracyState() : { onGround: true, speedHoriz: 0 };
     const recentlyLanded = performance.now() < this._landedUntil;
-    const tune = getSprayTune(this.settings.data.weapon?.sprayTune);
-    const offset = patternOffset(idx, tune);
+    const offset = patternOffset(idx);
     const bloom = bloomRad(state, idx, recentlyLanded);
 
     sc.shoot(offset, bloom, idx); // flash, kick, tracer + view-punch live in shoot()

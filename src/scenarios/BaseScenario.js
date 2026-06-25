@@ -193,7 +193,8 @@ export class BaseScenario {
     if (vm) {
       vm.fire();
       vm.spawnTracer(vm.getMuzzlePosition(_muzzle), this._lastImpact);
-      vm.punch(viewPunchImpulse(shotIndex, this.settings.data.weapon?.sprayTune));
+      const punch = viewPunchImpulse(shotIndex);
+      vm.punch(punch.pitch, punch.yaw);
     }
   }
 

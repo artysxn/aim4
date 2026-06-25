@@ -12,7 +12,7 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
-import { getSprayTune } from '../weapons/ak47.js';
+import { PUNCH_TAU_SPRAY, PUNCH_TAU_RECOVER } from '../weapons/ak47.js';
 
 const TRACER_POOL = 24;
 const TRACER_LIFE = 0.09; // seconds — quick, just a firing indicator
@@ -142,9 +142,8 @@ export class Viewmodel {
   }
 
   _applyPunch(dt) {
-    const tune = getSprayTune(this.settings.data.weapon?.sprayTune);
     const spraying = !!this.engine.player?.input?.fireHeld;
-    const tau = spraying ? tune.punchTauSpray : tune.punchTauRecover;
+    const tau = spraying ? PUNCH_TAU_SPRAY : PUNCH_TAU_RECOVER;
     const decay = Math.exp(-dt / tau);
     this._punchPitch *= decay;
     this._punchYaw *= decay;

@@ -33,37 +33,38 @@ const PATTERN_DEG = [
   [1.2, 8.7], [1.8, 8.7], [2.0, 8.7], [1.7, 8.7], [1.2, 8.7]
 ];
 
-// Overall strength of the fixed pattern. Lower this to make the spray tamer.
-const PATTERN_SCALE = 1.0;
-
-/** Defaults for weapon.sprayTune (temporary in-game tuning — remove when finalized). */
-export const DEFAULT_SPRAY_TUNE = {
-  patternScale: PATTERN_SCALE,
-  punchScale: 3.25,
-  punchBaseDeg: 0.55,
-  punchRampDeg: 0.06,
-  punchRampMaxShots: 18,
-  punchTauSpray: 0.052,
-  punchTauRecover: 0.075
-};
-
-/** Merge persisted sprayTune with defaults. */
-export function getSprayTune(raw) {
-  return { ...DEFAULT_SPRAY_TUNE, ...(raw || {}) };
-}
+const PATTERN_SCALE = 0.9;
+const PUNCH_SCALE = 2.8;
+const PUNCH_BASE_DEG = 0.7;
+const PUNCH_RAMP_DEG = 0.05;
+const PUNCH_RAMP_MAX_SHOTS = 12;
+const PUNCH_YAW_SCALE = 0.4; // fraction of per-shot pattern yaw step applied to view-punch
+export const PUNCH_TAU_SPRAY = 0.1;
+export const PUNCH_TAU_RECOVER = 0.25;
 
 export const PATTERN = PATTERN_DEG.map(([yaw, pitch]) => ({
   yaw: degToRad(yaw) * PATTERN_SCALE,
   pitch: degToRad(pitch) * PATTERN_SCALE
 }));
 
+/**
+ * Per-burst intensity ramp (0-based shot index). Early bullets in a spray use
+ * a fraction of the full pattern / punch strength before settling to 100%.
+ */
+export function sprayIntensity(shotIndex) {
+  if (shotIndex <= 1) return 0.10; // bullets 1–2
+  if (shotIndex === 2) return 0.30; // bullet 3
+  if (shotIndex === 3) return 0.80; // bullet 4
+  return 1.0; // bullet 5+
+}
+
 /** Cumulative pattern offset for a 0-based shot index (clamped to the mag). */
-export function patternOffset(shotIndex, tune = null) {
+export function patternOffset(shotIndex) {
   const i = clamp(shotIndex, 0, PATTERN.length - 1) | 0;
   const p = PATTERN[i];
-  const scale = tune ? getSprayTune(tune).patternScale : PATTERN_SCALE;
-  if (scale === 1) return p;
-  return { yaw: p.yaw * scale, pitch: p.pitch * scale };
+  const f = sprayIntensity(shotIndex);
+  if (f === 1) return p;
+  return { yaw: p.yaw * f, pitch: p.pitch * f };
 }
 
 // Bloom tuning (cone half-angle in radians).
@@ -96,12 +97,17 @@ export function bloomRad(state, shotIndex, recentlyLanded = false) {
   return r;
 }
 
-// View-punch impulse (radians of upward camera kick) for a shot. Grows as the
-// spray is held so a long burst climbs hard; decay between bullets is partial
-// (see Viewmodel punchTauSpray) so the view never fully resets mid-spray.
-export function viewPunchImpulse(shotIndex, tune = null) {
-  const t = getSprayTune(tune);
-  const base = degToRad(t.punchBaseDeg);
-  const ramp = Math.min(shotIndex, t.punchRampMaxShots) * degToRad(t.punchRampDeg);
-  return (base + ramp) * t.punchScale;
+// View-punch impulse per shot: pitch kick + slight yaw following the pattern
+// step. Grows as the spray is held; decay between bullets is partial.
+export function viewPunchImpulse(shotIndex) {
+  const f = sprayIntensity(shotIndex);
+  const base = degToRad(PUNCH_BASE_DEG);
+  const ramp = Math.min(shotIndex, PUNCH_RAMP_MAX_SHOTS) * degToRad(PUNCH_RAMP_DEG);
+  const pitch = (base + ramp) * PUNCH_SCALE * f;
+
+  const cur = patternOffset(shotIndex);
+  const prev = shotIndex > 0 ? patternOffset(shotIndex - 1) : { yaw: 0, pitch: 0 };
+  const yaw = (cur.yaw - prev.yaw) * PUNCH_YAW_SCALE;
+
+  return { pitch, yaw };
 }

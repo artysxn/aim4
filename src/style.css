@@ -41,7 +41,9 @@
   --font-display: 'Host Grotesk', sans-serif;
   --font-display-base: 26px;
   --font-display-title-scale: 3;
-  --font-display-title-size: calc(var(--font-display-base) * var(--font-display-title-scale));
+  --font-display-size-scale: 0.6; /* title text only — 40% smaller than original display size */
+  --font-display-title-size-raw: calc(var(--font-display-base) * var(--font-display-title-scale));
+  --font-display-title-size: calc(var(--font-display-title-size-raw) * var(--font-display-size-scale));
 }
 
 * {
@@ -176,7 +178,7 @@ h2.text-big,
 }
 
 h2 {
-  font-size: var(--font-display-base);
+  font-size: calc(var(--font-display-base) * var(--font-display-size-scale));
   margin-bottom: 6px;
 }
 .pause-panel {
@@ -226,7 +228,7 @@ h4 {
 }
 
 .logo {
-  font-size: 138px;
+  font-size: calc(138px * var(--font-display-size-scale));
   line-height: 1;
   margin-top: -20px;
   margin-bottom: 8px;
@@ -661,32 +663,6 @@ h4 {
   font-size: 13px;
   color: var(--muted);
 }
-.settings-note {
-  font-size: 12px;
-  color: var(--muted);
-  line-height: 1.45;
-  margin-bottom: 14px;
-}
-.settings-subhead {
-  font-size: 11px;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  color: var(--accent);
-  margin: 16px 0 10px;
-}
-.settings-subhead:first-of-type {
-  margin-top: 0;
-}
-.spray-tune-readout {
-  margin-top: 12px;
-  padding: 10px 12px;
-  background: rgba(0, 0, 0, 0.35);
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  user-select: text;
-}
 .field-num {
   width: 76px;
   margin: 0;
@@ -1005,7 +981,7 @@ input[type='checkbox'] {
   display: block;
   font-family: var(--font-display);
   font-weight: 500;
-  font-size: calc(var(--font-display-title-size) * 0.72);
+  font-size: calc(var(--font-display-title-size-raw) * 0.72);
   line-height: 1;
   text-transform: uppercase;
   color: var(--accent);
@@ -1286,7 +1262,7 @@ input[type='checkbox'] {
   background: rgba(8, 10, 16, 0.78);
   border: 1px solid rgba(255, 255, 255, 0.14);
   font-family: var(--font-display);
-  font-size: 20px;
+  font-size: calc(20px * var(--font-display-size-scale));
   letter-spacing: 1px;
   color: var(--text);
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);

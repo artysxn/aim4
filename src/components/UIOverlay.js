@@ -12,15 +12,13 @@
 import * as THREE from 'three';
 import { degToRad } from '../utils/MathUtils.js';
 import { RESOLUTIONS } from '../core/SettingsManager.js';
-import { DEFAULT_SPRAY_TUNE, getSprayTune } from '../weapons/ak47.js';
 import { SCENARIOS } from '../core/SceneManager.js';
 import * as Storage from '../utils/Storage.js';
 import { exportConfig, importConfig, copyText, normalizeCode } from '../utils/ConfigCodes.js';
 import {
   fetchLeaderboardWithMeta,
   fetchEloLeaderboardWithMeta,
-  submitScore,
-  fetchUserRank
+  submitScore
 } from '../lib/cloudScores.js';
 import { supabaseConfigured } from '../lib/supabase.js';
 import { MultiplayerController } from '../multiplayer/MultiplayerController.js';
@@ -222,23 +220,6 @@ export class UIOverlay {
           <label class="field-check"><input type="checkbox" id="set-vm-aimpunch" /> Aimpunch (view-punch recoil)</label>`
       },
       {
-        id: 'spray-tune',
-        label: 'Spray tune',
-        body: `
-          <p class="settings-note">Temporary dev tuning. Copy values when dialed in — we'll hard-code them and remove this tab.</p>
-          <p class="settings-subhead">Bullet pattern</p>
-          ${rf('set-spray-pattern', 'Pattern scale', 0.25, 2.0, 0.05)}
-          <p class="settings-subhead">View punch (aimpunch)</p>
-          ${rf('set-spray-punch-scale', 'Punch scale', 0.5, 10, 0.05)}
-          ${rf('set-spray-punch-base', 'Punch base (°)', 0, 2, 0.01)}
-          ${rf('set-spray-punch-ramp', 'Punch ramp / bullet (°)', 0, 0.2, 0.005)}
-          ${rf('set-spray-punch-ramp-max', 'Punch ramp max shots', 1, 30, 1)}
-          ${rf('set-spray-tau-spray', 'Punch τ spray (s)', 0.01, 0.5, 0.001)}
-          ${rf('set-spray-tau-recover', 'Punch τ recover (s)', 0.01, 0.5, 0.001)}
-          <button type="button" class="btn btn-block" id="btn-spray-tune-copy">Copy values for report</button>
-          <pre id="spray-tune-readout" class="spray-tune-readout"></pre>`
-      },
-      {
         id: 'colors',
         label: 'Colors',
         body: `
@@ -418,7 +399,6 @@ export class UIOverlay {
           <button type="button" class="mode-tile mode-tile-training" data-goto="training">
             <img src="${TRAINING_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">Training</span>
-            <span class="mode-tile-sub">Solo aim drills</span>
           </button>
           <button type="button" class="mode-tile mode-tile-mm" id="menu-mm-tile">
             <svg class="mode-tile-icon mode-tile-icon-mm" viewBox="0 -960 960 960" width="40" height="40" aria-hidden="true"><path fill="currentColor" d="M233.08-200v-40h493.84v40H233.08Zm-2.31-115.38L172.85-621q-2 .77-4.5.88-2.5.12-4.5.12-18.85 0-31.35-12.79T120-663.85q0-18.91 12.5-32.14 12.5-13.24 31.39-13.24t32.12 13.24q13.22 13.23 13.22 32.14 0 4.17-.35 7.74-.34 3.57-2.34 7.03l128.08 51.39 118.84-161.77q-8.69-5.69-13.77-15.04-5.07-9.34-5.07-20.12 0-18.91 13.22-32.14Q461.06-840 479.95-840q18.9 0 32.17 13.19 13.26 13.19 13.26 32.04 0 11.31-5.07 20.46-5.08 9.16-13.77 14.85l118.84 161.77 128.08-51.39q-1.08-3.19-1.88-7.02-.81-3.82-.81-7.75 0-18.91 12.5-32.14 12.5-13.24 31.39-13.24t32.12 13.24Q840-682.76 840-663.85q0 18.16-13.28 31Q813.44-620 794.47-620q-1.52 0-3.42-.5t-4.16-.5l-57.66 305.62H230.77Zm34.15-40h430.16l49.07-245.47-132.69 52.93L480-727.85 348.54-547.92l-132.69-52.93 49.07 245.47Zm215.08 0Z"/></svg>
@@ -428,7 +408,6 @@ export class UIOverlay {
           <button type="button" class="mode-tile mode-tile-custom" data-goto="mp">
             <img src="${CUSTOM_GAMES_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">Custom games</span>
-            <span class="mode-tile-sub">Create or join a lobby</span>
           </button>
         </div>
         <div class="menu-secondary">
@@ -649,8 +628,6 @@ export class UIOverlay {
       <div class="panel wide">
         <h2 class="text-big" id="res-title">Run Complete</h2>
         <div id="res-stats" class="res-stats"></div>
-        <h4>Leaderboard</h4>
-        <p class="lb-subtitle">Best score per verified account</p>
         <div id="res-lb" class="lb-body"></div>
         <div class="menu-actions">
           <button class="btn primary" data-restart>Play again</button>
@@ -835,47 +812,6 @@ export class UIOverlay {
     $('#set-vm-aimpunch').addEventListener('change', (e) => {
       s.data.weapon.aimpunch = e.target.checked;
       s.save();
-    });
-
-    const ensureSprayTune = () => {
-      if (!s.data.weapon.sprayTune) s.data.weapon.sprayTune = structuredClone(DEFAULT_SPRAY_TUNE);
-      return s.data.weapon.sprayTune;
-    };
-    const refreshSprayReadout = () => {
-      const el = $('#spray-tune-readout');
-      if (!el) return;
-      const t = getSprayTune(ensureSprayTune());
-      el.textContent = [
-        `patternScale: ${t.patternScale}`,
-        `punchScale: ${t.punchScale}`,
-        `punchBaseDeg: ${t.punchBaseDeg}`,
-        `punchRampDeg: ${t.punchRampDeg}`,
-        `punchRampMaxShots: ${t.punchRampMaxShots}`,
-        `punchTauSpray: ${t.punchTauSpray}`,
-        `punchTauRecover: ${t.punchTauRecover}`
-      ].join('\n');
-    };
-    this._bindRange('set-spray-pattern', (v) => (ensureSprayTune().patternScale = v), { after: refreshSprayReadout });
-    this._bindRange('set-spray-punch-scale', (v) => (ensureSprayTune().punchScale = v), { after: refreshSprayReadout });
-    this._bindRange('set-spray-punch-base', (v) => (ensureSprayTune().punchBaseDeg = v), { after: refreshSprayReadout });
-    this._bindRange('set-spray-punch-ramp', (v) => (ensureSprayTune().punchRampDeg = v), { after: refreshSprayReadout });
-    this._bindRange('set-spray-punch-ramp-max', (v) => (ensureSprayTune().punchRampMaxShots = v), {
-      parse: (v) => parseInt(v, 10),
-      after: refreshSprayReadout
-    });
-    this._bindRange('set-spray-tau-spray', (v) => (ensureSprayTune().punchTauSpray = v), { after: refreshSprayReadout });
-    this._bindRange('set-spray-tau-recover', (v) => (ensureSprayTune().punchTauRecover = v), { after: refreshSprayReadout });
-    $('#btn-spray-tune-copy')?.addEventListener('click', async () => {
-      refreshSprayReadout();
-      const text = $('#spray-tune-readout')?.textContent;
-      if (!text) return;
-      try {
-        await copyText(text);
-        $('#btn-spray-tune-copy').textContent = 'Copied!';
-        setTimeout(() => { $('#btn-spray-tune-copy').textContent = 'Copy values for report'; }, 1500);
-      } catch {
-        /* clipboard blocked — readout is still visible */
-      }
     });
 
     this._bindRange('set-grid-size', (v) => (s.data.gridshot.targetSize = v));
@@ -1784,27 +1720,6 @@ export class UIOverlay {
     $('#set-vm-bob').checked = s.viewmodel?.bob !== false;
     $('#set-vm-aimpunch').checked = s.weapon?.aimpunch !== false;
 
-    const st = getSprayTune(s.weapon?.sprayTune);
-    this._setRange('set-spray-pattern', st.patternScale);
-    this._setRange('set-spray-punch-scale', st.punchScale);
-    this._setRange('set-spray-punch-base', st.punchBaseDeg);
-    this._setRange('set-spray-punch-ramp', st.punchRampDeg);
-    this._setRange('set-spray-punch-ramp-max', st.punchRampMaxShots);
-    this._setRange('set-spray-tau-spray', st.punchTauSpray);
-    this._setRange('set-spray-tau-recover', st.punchTauRecover);
-    const sprayReadout = $('#spray-tune-readout');
-    if (sprayReadout) {
-      sprayReadout.textContent = [
-        `patternScale: ${st.patternScale}`,
-        `punchScale: ${st.punchScale}`,
-        `punchBaseDeg: ${st.punchBaseDeg}`,
-        `punchRampDeg: ${st.punchRampDeg}`,
-        `punchRampMaxShots: ${st.punchRampMaxShots}`,
-        `punchTauSpray: ${st.punchTauSpray}`,
-        `punchTauRecover: ${st.punchTauRecover}`
-      ].join('\n');
-    }
-
     this._setRange('set-grid-size', s.gridshot.targetSize);
     $('#set-grid-mode').value = s.gridshot.mode || 'clicking';
     this._setRange('set-grid-track-time', s.gridshot.trackTime ?? 0.4);
@@ -2171,7 +2086,6 @@ export class UIOverlay {
   }
 
   async _saveAndRenderResults(results) {
-    let rank = null;
     let submitNote = '';
 
     this.root.querySelector('#res-lb').innerHTML =
@@ -2186,21 +2100,15 @@ export class UIOverlay {
       const res = await submitScore(this.auth.user.id, results);
       if (res.ok) {
         console.info('[leaderboard] score saved', results.scenario, results.configKey);
-        rank = await fetchUserRank(this.auth.user.id, results.scenario, results.configKey);
       } else {
         submitNote =
           res.reason === 'offline'
             ? ''
-            : ` (score not saved: ${res.reason})`;
+            : `Score not saved: ${res.reason}`;
       }
     } else if (supabaseConfigured()) {
-      submitNote = ' · sign in to save to leaderboards';
+      submitNote = 'Sign in to save to leaderboards';
     }
-
-    this.root.querySelector('#res-title').textContent =
-      `${SCENARIO_META[results.scenario].title.toUpperCase()} — ` +
-      (rank === 1 ? 'NEW BEST' : rank ? `RANK #${rank}` : 'RUN COMPLETE') +
-      submitNote;
 
     const showCrit = results.scenario !== 'gridshot';
     const stat = (label, val) =>
@@ -2221,11 +2129,14 @@ export class UIOverlay {
       results.scenario === 'gridshot' ? gridshotStats : defaultStats;
 
     const { list, error } = await this._fetchLeaderboard(results.scenario, results.configKey);
-    this.root.querySelector('#res-lb').innerHTML = this._leaderboardRowsHtml(
+    const lbHtml = this._leaderboardRowsHtml(
       list,
       results.scenario,
       this.auth?.user?.id,
       error
     );
+    this.root.querySelector('#res-lb').innerHTML = submitNote
+      ? `<p class="center lb-hint muted">${submitNote}</p>${lbHtml}`
+      : lbHtml;
   }
 }

@@ -7,7 +7,6 @@
 
 import * as Storage from '../utils/Storage.js';
 import { radiansPerCount } from '../utils/MathUtils.js';
-import { DEFAULT_SPRAY_TUNE } from '../weapons/ak47.js';
 
 export const RESOLUTIONS = {
   native: { label: 'Native', size: null },
@@ -42,9 +41,7 @@ const DEFAULTS = {
     bob: true // weapon bob while moving
   },
   weapon: {
-    aimpunch: true, // view-punch camera kick when firing (toggle for those who dislike it)
-    // TEMP: in-game spray tuning — remove once values are finalized in ak47.js
-    sprayTune: structuredClone(DEFAULT_SPRAY_TUNE)
+    aimpunch: true // view-punch camera kick when firing (toggle for those who dislike it)
   },
   gridshot: {
     targetSize: 0.55,
