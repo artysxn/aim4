@@ -17,7 +17,8 @@ const TRACER_POOL = 24;
 const TRACER_LIFE = 0.09; // seconds — quick, just a firing indicator
 const FLASH_LIFE = 0.045; // seconds — brief, non-distracting
 const MAX_PITCH = (89 * Math.PI) / 180;
-const PUNCH_TAU = 0.045; // spring time constant — kicks up, returns by next shot
+const PUNCH_TAU_SPRAY = 0.28; // while holding fire: ~70% of punch carries to the next bullet
+const PUNCH_TAU_RECOVER = 0.075; // after releasing: spring back to neutral
 
 export class Viewmodel {
   constructor(engine, settings) {
@@ -131,9 +132,9 @@ export class Viewmodel {
   }
 
   /**
-   * View-punch (aimpunch): a transient upward camera jolt that springs back by
-   * the next bullet. Visual-only — it never changes where bullets go. Honors the
-   * weapon.aimpunch toggle so players who dislike it can switch it off.
+   * View-punch (aimpunch): upward camera jolt per shot. During a spray the kick
+   * stacks and only partially recovers between bullets; releasing fire springs
+   * back to neutral. Visual-only — never changes where bullets go.
    */
   punch(pitchRad, yawRad = 0) {
     if (this.settings.data.weapon?.aimpunch === false) return;
@@ -142,7 +143,9 @@ export class Viewmodel {
   }
 
   _applyPunch(dt) {
-    const decay = Math.exp(-dt / PUNCH_TAU);
+    const spraying = !!this.engine.player?.input?.fireHeld;
+    const tau = spraying ? PUNCH_TAU_SPRAY : PUNCH_TAU_RECOVER;
+    const decay = Math.exp(-dt / tau);
     this._punchPitch *= decay;
     this._punchYaw *= decay;
     if (Math.abs(this._punchPitch) < 1e-4 && Math.abs(this._punchYaw) < 1e-4) {
