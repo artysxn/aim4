@@ -53,6 +53,8 @@ export class MultiplayerDuelScenario extends BaseScenario {
 
     this.runDuration = Infinity; // never auto-finishes on the run timer
     this.isMultiplayer = true;
+    // Custom games pick the weapon; ranked matchmaking always uses the rifle.
+    this.weaponId = this.config.weapon === 'pistol' ? 'pistol' : 'rifle';
 
     this.scores = this.config.scores || {};
     this.mpStats = this.config.stats || {};

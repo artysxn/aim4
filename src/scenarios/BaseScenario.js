@@ -73,8 +73,10 @@ export class BaseScenario {
 
     this.elapsed = 0; // seconds, accumulates only while running
     this.running = false;
-    // Every scenario fires the AK: full-auto, recoil pattern, ammo + viewmodel.
+    // Every scenario fires a weapon (ammo + viewmodel). The id selects the model
+    // from the registry; default is the full-auto rifle, overridden per scenario.
     this.usesWeapon = true;
+    this.weaponId = 'rifle';
     this._lastImpact = new THREE.Vector3();
   }
 
@@ -129,7 +131,7 @@ export class BaseScenario {
    * hook still owns hit detection; this method owns aim, spread and the shared
    * weapon juice (flash, kick, tracer, view-punch).
    */
-  shoot(recoil = null, bloom = 0, shotIndex = 0) {
+  shoot(recoil = null, bloom = 0, shotIndex = 0, punch = null) {
     if (!this.running) return;
     this.shotsFired++;
     this.engine.audio?.playLocalShot();
@@ -193,8 +195,8 @@ export class BaseScenario {
     if (vm) {
       vm.fire();
       vm.spawnTracer(vm.getMuzzlePosition(_muzzle), this._lastImpact);
-      const punch = viewPunchImpulse(shotIndex);
-      vm.punch(punch.pitch, punch.yaw);
+      const p = punch || viewPunchImpulse(shotIndex);
+      vm.punch(p.pitch, p.yaw);
     }
   }
 

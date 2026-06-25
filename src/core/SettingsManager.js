@@ -41,7 +41,8 @@ const DEFAULTS = {
     bob: true // weapon bob while moving
   },
   weapon: {
-    aimpunch: true // view-punch camera kick when firing (toggle for those who dislike it)
+    aimpunch: true, // view-punch camera kick when firing (toggle for those who dislike it)
+    customWeapon: 'rifle' // weapon used in custom games ('rifle' | 'pistol')
   },
   gridshot: {
     targetSize: 0.55,

@@ -39,6 +39,7 @@ const PEEK_CHANCE = 0.3;
 export class ArenaScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
+    this.weaponId = 'pistol'; // Crossfire is a pistol mode
     const a = this.settings.data.arena;
     this.crossDur = (this.config.crossDuration ?? a.crossDuration) / 1000;
     this.peekHold = (this.config.peekHold ?? a.peekHold) / 1000;

@@ -22,6 +22,7 @@ const BASE_BOUNDS_H = 5;
 export class GridshotScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
+    this.weaponId = 'pistol'; // Gridshot is a pistol mode
     const g = this.settings.data.gridshot;
     this.targetSize = this.config.targetSize ?? g.targetSize;
     this.targetCount = this.config.targetCount ?? g.targetCount;

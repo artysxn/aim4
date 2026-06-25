@@ -225,6 +225,10 @@ export class MultiplayerController {
     this.inMatch = true;
     this.inQueue = false;
     this.browsing = false;
+    // Ranked matchmaking is always the rifle; custom games use the player's pick.
+    const weapon = msg.isMatchmade
+      ? 'rifle'
+      : this.settings.data.weapon?.customWeapon || 'rifle';
     this.sceneManager.load('mpduel', {
       net: this.net,
       myId: this.myId,
@@ -234,6 +238,7 @@ export class MultiplayerController {
       scores: msg.scores,
       stats: msg.stats,
       players,
+      weapon,
       isMatchmade: !!msg.isMatchmade
     });
     this.ui.beginMpMatch(msg, players);

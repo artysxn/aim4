@@ -565,6 +565,10 @@ export class UIOverlay {
               <div class="field-top"><span class="field-label">Win condition</span></div>
               <select id="mp-create-target">${this._targetOptions()}</select>
             </div>
+            <div class="field field-plain">
+              <div class="field-top"><span class="field-label">Weapon</span></div>
+              <select id="mp-create-weapon"><option value="rifle">Rifle</option><option value="pistol">Pistol</option></select>
+            </div>
             <label class="field-check"><input type="checkbox" id="mp-create-private" /> Private</label>
             <button type="button" class="btn primary btn-block" id="mp-create-btn">Create lobby</button>
           </div>
@@ -598,6 +602,10 @@ export class UIOverlay {
             <div class="field field-plain">
               <div class="field-top"><span class="field-label">Win condition</span></div>
               <select id="mp-lobby-target">${this._targetOptions()}</select>
+            </div>
+            <div class="field field-plain">
+              <div class="field-top"><span class="field-label">Weapon</span></div>
+              <select id="mp-lobby-weapon"><option value="rifle">Rifle</option><option value="pistol">Pistol</option></select>
             </div>
             <label class="field-check"><input type="checkbox" id="mp-lobby-private" /> Private</label>
           </div>
@@ -1056,6 +1064,21 @@ export class UIOverlay {
 
     this._mpName = name; // reused by auto-join
 
+    // Weapon pick is per-player (client-side feel), shared between the create
+    // form and the lobby selector and persisted to settings.
+    const applyWeapon = (v) => {
+      const val = v === 'pistol' ? 'pistol' : 'rifle';
+      this.settings.data.weapon.customWeapon = val;
+      this.settings.save();
+      const a = $('#mp-create-weapon');
+      const b = $('#mp-lobby-weapon');
+      if (a) a.value = val;
+      if (b) b.value = val;
+    };
+    applyWeapon(this.settings.data.weapon?.customWeapon || 'rifle');
+    $('#mp-create-weapon')?.addEventListener('change', (e) => applyWeapon(e.target.value));
+    $('#mp-lobby-weapon')?.addEventListener('change', (e) => applyWeapon(e.target.value));
+
     $('#mp-create-btn').addEventListener('click', () => {
       this.mp.create({
         name: name(),
@@ -1221,6 +1244,8 @@ export class UIOverlay {
       .join('');
 
     $('#mp-lobby-target').value = String(lobby.target);
+    const lobbyWeapon = $('#mp-lobby-weapon');
+    if (lobbyWeapon) lobbyWeapon.value = this.settings.data.weapon?.customWeapon || 'rifle';
     $('#mp-lobby-private').checked = lobby.isPublic === false;
     $('#mp-lobby-target').disabled = !isHost;
     $('#mp-lobby-private').disabled = !isHost;
