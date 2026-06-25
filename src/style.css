@@ -709,6 +709,10 @@ input[type='checkbox'] {
 .lb-hint {
   color: var(--muted);
   font-size: 14px;
+  margin: 1rem 0;
+}
+.lb-error {
+  color: #f87171;
 }
 
 /* ---- Account auth ------------------------------------------------------- */

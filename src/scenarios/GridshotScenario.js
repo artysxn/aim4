@@ -47,17 +47,18 @@ export class GridshotScenario extends BaseScenario {
     return 'gridshot';
   }
 
+  /** One leaderboard per run duration (matches other scenarios' simplicity). */
   static configKeyFor(settings) {
-    const g = settings.data.gridshot;
-    const tl = g.enableTimeLimit ? g.maxTargetAge : 0;
-    const fl = g.floatEnabled ? g.floatSpeedMax : 0;
-    return (
-      `s${g.targetSize.toFixed(2)}_m${g.mode}_tt${g.trackTime}_tr${g.trackResolve}` +
-      `_f${fl}_bx${g.boundsScaleX.toFixed(2)}_by${g.boundsScaleY.toFixed(2)}_tl${tl}_d${settings.data.runDuration}`
-    );
+    return `d${settings.data.runDuration}`;
   }
   configKey() {
     return GridshotScenario.configKeyFor(this.settings);
+  }
+
+  /** Parse run duration from a gridshot config key (legacy or current). */
+  static runDurationFromKey(configKey) {
+    const m = String(configKey || '').match(/(?:^d|_d)(\d+)$/);
+    return m ? parseInt(m[1], 10) : null;
   }
 
   _buildEnvironment() {

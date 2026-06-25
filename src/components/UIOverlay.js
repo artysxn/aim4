@@ -15,7 +15,11 @@ import { RESOLUTIONS } from '../core/SettingsManager.js';
 import { SCENARIOS } from '../core/SceneManager.js';
 import * as Storage from '../utils/Storage.js';
 import { exportConfig, importConfig, copyText, normalizeCode } from '../utils/ConfigCodes.js';
-import { fetchAccountLeaderboard, submitScore, fetchUserRank } from '../lib/cloudScores.js';
+import {
+  fetchLeaderboardWithMeta,
+  submitScore,
+  fetchUserRank
+} from '../lib/cloudScores.js';
 import { supabaseConfigured } from '../lib/supabase.js';
 import { MultiplayerController } from '../multiplayer/MultiplayerController.js';
 import { SCORE_TARGETS } from '../multiplayer/constants.js';
@@ -1590,11 +1594,11 @@ export class UIOverlay {
     }
   }
 
-  _onFinish(results) {
+  async _onFinish(results) {
     this.state = 'results';
     this.input.exitLock();
-    this._saveAndRenderResults(results);
     this.showScreen('results');
+    await this._saveAndRenderResults(results);
   }
 
   // -------------------------------------------------------------------------
@@ -1691,12 +1695,18 @@ export class UIOverlay {
     return `${seconds.toFixed(1)}s`;
   }
 
-  _leaderboardRowsHtml(list, scenario, highlightUserId = null) {
+  _leaderboardRowsHtml(list, scenario, highlightUserId = null, fetchError = null) {
     if (!supabaseConfigured()) {
       return `<p class="center lb-hint">Account leaderboards are not configured.</p>`;
     }
+    if (fetchError) {
+      return `<p class="center lb-hint lb-error">Could not load leaderboard: ${this._esc(fetchError)}</p>`;
+    }
     if (!list.length) {
-      return `<p class="center lb-hint">No scores yet — sign in and play to appear here.</p>`;
+      const hint = this.auth?.isLoggedIn
+        ? 'No scores for these settings yet — finish a run to appear here.'
+        : 'No scores yet — sign in and play to appear here.';
+      return `<p class="center lb-hint">${hint}</p>`;
     }
 
     if (scenario === 'gridshot') {
@@ -1741,12 +1751,12 @@ export class UIOverlay {
       <tbody>${rows}</tbody></table>`;
   }
 
-  async _fetchLeaderboard(scenario) {
-    const key = this._configKeyFor(scenario);
+  async _fetchLeaderboard(scenario, configKeyOverride = null) {
+    const key = configKeyOverride ?? this._configKeyFor(scenario);
     const cacheKey = `${scenario}:${key}`;
-    const list = await fetchAccountLeaderboard(scenario, key, 10);
+    const { list, error } = await fetchLeaderboardWithMeta(scenario, key, 10);
     this._lbCache[cacheKey] = list;
-    return list;
+    return { list, error, configKey: key };
   }
 
   async _renderLeaderboard(scenario) {
@@ -1762,13 +1772,16 @@ export class UIOverlay {
         ? `${gridshotHint}signed in as ${this._accountLabel()}`
         : `${gridshotHint}sign in to submit scores`;
     }
-    const list = await this._fetchLeaderboard(scenario);
-    body.innerHTML = this._leaderboardRowsHtml(list, scenario, this.auth?.user?.id);
+    const { list, error } = await this._fetchLeaderboard(scenario);
+    body.innerHTML = this._leaderboardRowsHtml(list, scenario, this.auth?.user?.id, error);
   }
 
   async _saveAndRenderResults(results) {
     let rank = null;
     let submitNote = '';
+
+    this.root.querySelector('#res-lb').innerHTML =
+      `<p class="center lb-hint">${this.auth?.isLoggedIn ? 'Saving score…' : 'Loading leaderboard…'}</p>`;
 
     if (this.auth?.isLoggedIn) {
       try {
@@ -1778,6 +1791,7 @@ export class UIOverlay {
       }
       const res = await submitScore(this.auth.user.id, results);
       if (res.ok) {
+        console.info('[leaderboard] score saved', results.scenario, results.configKey);
         rank = await fetchUserRank(this.auth.user.id, results.scenario, results.configKey);
       } else {
         submitNote =
@@ -1811,11 +1825,12 @@ export class UIOverlay {
     this.root.querySelector('#res-stats').innerHTML =
       results.scenario === 'gridshot' ? gridshotStats : defaultStats;
 
-    const list = await this._fetchLeaderboard(results.scenario);
+    const { list, error } = await this._fetchLeaderboard(results.scenario, results.configKey);
     this.root.querySelector('#res-lb').innerHTML = this._leaderboardRowsHtml(
       list,
       results.scenario,
-      this.auth?.user?.id
+      this.auth?.user?.id,
+      error
     );
   }
 }
