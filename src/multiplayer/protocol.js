@@ -19,6 +19,8 @@ export const C2S = {
   CHAT: 'chat', // { text }
   LIST: 'list', // subscribe to the public lobby browser
   UNLIST: 'unlist', // stop receiving lobby-browser updates
+  QUEUE: 'queue', // { name, userId?, elo? }
+  DEQUEUE: 'dequeue',
   PING: 'ping' // { id, ct }
 };
 
@@ -27,7 +29,7 @@ export const S2C = {
   WELCOME: 'welcome', // { id }
   LOBBY: 'lobby', // { lobby }
   ERROR: 'error', // { msg }
-  MATCH_START: 'matchStart', // { mapId, target, spawns, scores, stats }
+  MATCH_START: 'matchStart', // { mapId, target, spawns, scores, stats, isMatchmade?, opponentName?, opponentElo?, yourElo? }
   SNAPSHOT: 'snap', // { players:[...], st }
   HIT: 'hit', // { shooterId, victimId, zone }
   KILL: 'kill', // { shooterId, victimId, scores, mapId?, spawns?, stats? }
@@ -36,5 +38,6 @@ export const S2C = {
   MATCH_END: 'matchEnd', // { winnerId, scores, aborted?, returnToLobby? }
   PLAYER_LEFT: 'playerLeft', // { id }
   LOBBY_LIST: 'lobbyList', // { lobbies:[{code,host,map,target,players,max}] }
+  QUEUE_STATUS: 'queueStatus', // { inQueue, queueSize, elo }
   PONG: 'pong' // { id, ct, st }
 };

@@ -22,9 +22,10 @@ import {
 } from '../lib/cloudScores.js';
 import { supabaseConfigured } from '../lib/supabase.js';
 import { MultiplayerController } from '../multiplayer/MultiplayerController.js';
-import { SCORE_TARGETS } from '../multiplayer/constants.js';
+import { SCORE_TARGETS, MM_SCORE_TARGET } from '../multiplayer/constants.js';
 import { getMap } from '../multiplayer/maps.js';
 import { formatServerRegion } from '../multiplayer/regionLabels.js';
+import { SCENARIO_ICONS, MATCHMAKING_ICON } from '../aim4/icons.js';
 
 const SCENARIO_META = {
   gridshot: { title: 'Gridshot' },
@@ -114,6 +115,7 @@ export class UIOverlay {
       crosshair: this.crosshair
     });
     this._bindMultiplayer();
+    this._bindMatchmaking();
     this._bindMpChat();
     this._bindMpTabScoreboard();
 
@@ -330,6 +332,12 @@ export class UIOverlay {
     <!-- THREAT CHEVRONS (Arena) -->
     <div id="threats" class="threats"></div>
 
+    <!-- MATCHMAKING QUEUE CHIP (visible while queued + in SP/menu) -->
+    <div id="mm-queue-chip" class="mm-queue-chip" hidden>
+      <span id="mm-queue-text">Finding ranked match…</span>
+      <button type="button" class="btn btn-sm" id="mm-queue-cancel">Leave queue</button>
+    </div>
+
     <!-- HUD -->
     <div id="hud" class="hud">
       <div class="hud-row">
@@ -366,7 +374,9 @@ export class UIOverlay {
             .map(
               (key) => `
             <div class="card" data-scenario="${key}">
-              <div class="card-icon ${key}"></div>
+              <div class="card-icon">
+                <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="28" height="28" />
+              </div>
               <h3 class="card-title">${SCENARIO_META[key].title}</h3>
               <button type="button" class="btn-play" data-play="${key}" aria-label="Play ${SCENARIO_META[key].title}">
                 <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
@@ -376,7 +386,11 @@ export class UIOverlay {
             .join('')}
         </div>
         <div class="menu-actions">
-          <button class="btn primary" data-goto="mp">⚔ Multiplayer</button>
+          <button class="btn primary btn-with-icon" data-goto="mm">
+            <img src="${MATCHMAKING_ICON}" alt="" class="btn-icon" width="20" height="20" aria-hidden="true" />
+            Matchmaking
+          </button>
+          <button class="btn" data-goto="mp">Custom games</button>
           <button class="btn" data-goto="settings">⚙ Settings</button>
           <button class="btn" data-goto="leaderboard">🏆 Leaderboards</button>
         </div>
@@ -482,10 +496,28 @@ export class UIOverlay {
       </div>
     </div>
 
+    <!-- MATCHMAKING -->
+    <div class="screen mm" data-screen="mm">
+      <div class="panel">
+        <h2 class="text-big mm-title">
+          <img src="${MATCHMAKING_ICON}" alt="" class="screen-title-icon" width="32" height="32" aria-hidden="true" />
+          Matchmaking
+        </h2>
+        <p class="mm-elo-line">Your ELO: <span id="mm-elo">1000</span></p>
+        <p class="readout" id="mm-status"></p>
+        <p class="hint">Ranked duels are first to ${MM_SCORE_TARGET}. Play any singleplayer mode while you wait — you'll be pulled in when a match is found.</p>
+        <div class="menu-actions mm-actions">
+          <button type="button" class="btn primary" id="mm-queue-btn">Find match</button>
+          <button type="button" class="btn" id="mm-leave-queue-btn" hidden>Leave queue</button>
+          <button type="button" class="btn" data-goto="menu">Back</button>
+        </div>
+      </div>
+    </div>
+
     <!-- MULTIPLAYER HOME (create / join) -->
     <div class="screen mp" data-screen="mp">
       <div class="panel wide">
-        <h2 class="text-big">Multiplayer</h2>
+        <h2 class="text-big">Custom games</h2>
         <div class="field field-plain">
           <div class="field-top"><span class="field-label">Display name</span></div>
           <input type="text" id="mp-name" class="config-code-input" maxlength="24" placeholder="Your name" spellcheck="false" autocomplete="off" />
@@ -600,6 +632,8 @@ export class UIOverlay {
     this.hudHits = this.root.querySelector('#hud-hits');
     this.hudCrit = this.root.querySelector('#hud-crit');
     this.hudCritChip = this.root.querySelector('#hud-crit-chip');
+    this.mmQueueChip = this.root.querySelector('#mm-queue-chip');
+    this.mmQueueText = this.root.querySelector('#mm-queue-text');
   }
 
   // -------------------------------------------------------------------------
@@ -615,6 +649,7 @@ export class UIOverlay {
         if (t.dataset.goto === 'settings') this._returnAfterSettings = this.state;
         this.showScreen(t.dataset.goto);
         if (t.dataset.goto === 'mp') this.mp.openBrowser();
+        if (t.dataset.goto === 'mm') this._renderMatchmaking();
         if (t.dataset.goto === 'auth') this._openAuth('login');
       } else if (t.hasAttribute('data-resume')) this.resume();
       else if (t.hasAttribute('data-quit')) this.quit();
@@ -846,7 +881,9 @@ export class UIOverlay {
       guest?.classList.add('hidden');
       userRow?.classList.remove('hidden');
       if (hint) hint.classList.add('hidden');
-      if (usernameEl) usernameEl.textContent = this._accountLabel();
+      if (usernameEl) {
+        usernameEl.textContent = `${this._accountLabel()} · ${this.auth.elo} ELO`;
+      }
     } else {
       guest?.classList.remove('hidden');
       userRow?.classList.add('hidden');
@@ -865,8 +902,10 @@ export class UIOverlay {
     $('#menu-login-btn')?.addEventListener('click', () => this._openAuth('login'));
     $('#menu-signup-btn')?.addEventListener('click', () => this._openAuth('register'));
     $('#menu-logout-btn')?.addEventListener('click', async () => {
+      this.mp?.leaveQueue();
       await this.auth.signOut();
       this.refreshAccountBar();
+      this._updateQueueChip({ inQueue: false });
     });
 
     $('#auth-tabs')?.addEventListener('click', (e) => {
@@ -1018,7 +1057,8 @@ export class UIOverlay {
 
     $('#mp-res-rematch').addEventListener('click', () => {
       if (this.mp.lobby) this.showScreen('mp-lobby');
-      else this.showScreen('mp');
+      else this.showScreen('mm');
+      if (!this.mp.lobby) this._renderMatchmaking();
     });
     $('#mp-res-leave').addEventListener('click', () => {
       this.mp.leave();
@@ -1142,13 +1182,100 @@ export class UIOverlay {
     this._mpMapId = msg.mapId;
     this._resetMpChat();
     this._hideMpTabScoreboard();
+    this._updateQueueChip({ inQueue: false });
     this.updateMpScore(msg.scores, this.mp.lobby, msg.mapId);
     this.hudCritChip.style.display = 'none';
-    this.showScreen('playing'); // sets state = 'playing'
-    // Start the simulation immediately so state is sent and opponents update
-    // even before pointer lock is granted (e.g. the tab isn't focused yet).
+    if (msg.isMatchmade && msg.opponentName) {
+      this.mmStatus(`Ranked vs ${msg.opponentName} (${msg.opponentElo ?? '?'} ELO)`, true);
+    }
+    this.showScreen('playing');
     this.sceneManager.begin();
-    this.input.requestLock(); // best-effort; clicking the canvas will lock too
+    this.input.requestLock();
+  }
+
+  /** Ranked queue status from server. */
+  onQueueStatus(msg) {
+    this._updateQueueChip(msg);
+    this._renderMatchmakingControls(msg);
+  }
+
+  _renderMatchmaking() {
+    const eloEl = this.root.querySelector('#mm-elo');
+    const status = this.root.querySelector('#mm-status');
+    if (eloEl) eloEl.textContent = String(this.auth?.elo ?? 1000);
+    if (status) {
+      if (!this.auth?.isLoggedIn) {
+        status.textContent = 'Sign in to play ranked matchmaking.';
+        status.classList.add('is-error');
+      } else {
+        status.textContent = '';
+        status.classList.remove('is-error');
+      }
+    }
+    this._renderMatchmakingControls({
+      inQueue: this.mp?.inQueue,
+      queueSize: 0,
+      elo: this.auth?.elo
+    });
+  }
+
+  _renderMatchmakingControls(msg) {
+    const queueBtn = this.root.querySelector('#mm-queue-btn');
+    const leaveBtn = this.root.querySelector('#mm-leave-queue-btn');
+    const status = this.root.querySelector('#mm-status');
+    const inQueue = !!msg?.inQueue;
+    queueBtn?.toggleAttribute('hidden', inQueue);
+    leaveBtn?.toggleAttribute('hidden', !inQueue);
+    if (inQueue && status && this.auth?.isLoggedIn) {
+      const n = msg.queueSize ?? 1;
+      status.textContent = `In queue (${n} player${n === 1 ? '' : 's'}) — ELO ${msg.elo ?? this.auth.elo}`;
+      status.classList.remove('is-error');
+    }
+  }
+
+  mmStatus(msg, ok = true) {
+    const el = this.root.querySelector('#mm-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.classList.toggle('is-error', !ok);
+  }
+
+  _updateQueueChip(msg) {
+    const chip = this.mmQueueChip;
+    if (!chip) return;
+    const inQueue = !!msg?.inQueue;
+    chip.hidden = !inQueue;
+    if (inQueue && this.mmQueueText) {
+      const n = msg.queueSize ?? 1;
+      this.mmQueueText.textContent = `Ranked queue · ${n} waiting · ${msg.elo ?? this.auth?.elo ?? 1000} ELO`;
+    }
+  }
+
+  _bindMatchmaking() {
+    const $ = (id) => this.root.querySelector(id);
+    $('#mm-queue-btn')?.addEventListener('click', async () => {
+      if (!this.auth?.isLoggedIn) {
+        this.mmStatus('Sign in to use matchmaking.', false);
+        return;
+      }
+      await this.auth.refreshElo();
+      this._renderMatchmaking();
+      const ok = await this.mp.enterQueue({
+        name: this._defaultName(),
+        userId: this.auth.user.id,
+        elo: this.auth.elo
+      });
+      if (!ok) return;
+      this.mmStatus('Searching for opponent…', true);
+    });
+    $('#mm-leave-queue-btn')?.addEventListener('click', () => {
+      this.mp.leaveQueue();
+      this.mmStatus('Left queue.', true);
+    });
+    $('#mm-queue-cancel')?.addEventListener('click', () => {
+      this.mp.leaveQueue();
+      this.mmStatus('Left queue.', true);
+    });
   }
 
   addMpChatMessage(msg) {
@@ -1384,15 +1511,26 @@ export class UIOverlay {
     this.state = 'mp-results';
     this._resetMpChat();
     this._hideMpTabScoreboard();
+    this._updateQueueChip({ inQueue: false });
     this.input.exitLock();
     const won = msg.winnerId === myId;
     const title = msg.aborted ? 'Match Aborted' : won ? '🏆 Victory' : 'Defeat';
     this.root.querySelector('#mp-res-title').textContent = title;
     const players = (lobby && lobby.players) || [];
     const stat = (label, val) => `<div class="stat"><span class="text-big">${val}</span><label>${label}</label></div>`;
-    this.root.querySelector('#mp-res-score').innerHTML = players
+    let html = players
       .map((p) => stat(p.id === myId ? `${p.name} (you)` : p.name, (msg.scores && msg.scores[p.id]) || 0))
       .join('');
+    const myElo = msg.elo?.[myId];
+    if (myElo) {
+      const sign = myElo.delta >= 0 ? '+' : '';
+      html += stat('ELO', `${myElo.newElo} (${sign}${myElo.delta})`);
+    }
+    this.root.querySelector('#mp-res-score').innerHTML = html;
+    const rematch = this.root.querySelector('#mp-res-rematch');
+    if (rematch) {
+      rematch.textContent = msg.isMatchmade ? 'Queue again' : 'Back to lobby';
+    }
     this.showScreen('mp-results');
   }
 
@@ -1400,6 +1538,7 @@ export class UIOverlay {
     this.state = 'menu';
     this._resetMpChat();
     this._hideMpTabScoreboard();
+    this._updateQueueChip({ inQueue: false });
     this.input.exitLock();
     this.sceneManager.unload();
     this.mpStatus('Disconnected', false);
@@ -1566,8 +1705,16 @@ export class UIOverlay {
     this._resetMpChat();
     this._hideMpTabScoreboard();
     this.input.exitLock();
-    this.mp?.leaveIfActive();
-    this.sceneManager.unload();
+    if (this.mp?.inMatch || this.mp?.lobby) {
+      this.mp.leave();
+    } else {
+      this.sceneManager.unload();
+    }
+    this._updateQueueChip({
+      inQueue: this.mp?.inQueue,
+      queueSize: 0,
+      elo: this.mp?.queueElo ?? this.auth?.elo
+    });
     this.showScreen('menu');
   }
 

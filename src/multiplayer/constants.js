@@ -38,7 +38,7 @@ export function headCenterY(crouch) {
   return BODY_H * crouchScale(crouch) + HEAD_R + HEAD_OFFSET;
 }
 
-// "First to X" win targets offered in the lobby. 0 == endless (no win cond).
+// "First to X" win targets offered in custom-game lobbies. 0 == endless.
 export const SCORE_TARGETS = [
   { value: 13, label: 'First to 13' },
   { value: 30, label: 'First to 30' },
@@ -46,6 +46,9 @@ export const SCORE_TARGETS = [
   { value: 100, label: 'First to 100' },
   { value: 0, label: 'Endless' }
 ];
+
+/** Ranked matchmaking duels always use this win target. */
+export const MM_SCORE_TARGET = 30;
 
 export const RESPAWN_DELAY = 1.4; // seconds between death and respawn
 export const SPAWN_GRACE = 0.5; // seconds after spawn where keyboard movement is locked

@@ -1,75 +1,24 @@
--- AIM4.io — run AFTER the original SETUP.md schema (safe to re-run)
--- Supabase SQL Editor → New query → paste → Run
+-- Fix: leaderboards only showing the logged-in user's own scores
+-- Run in Supabase SQL Editor. Safe to re-run.
 
-alter table public.scores add column if not exists hits integer;
-alter table public.scores add column if not exists shots integer;
-alter table public.scores add column if not exists time_played real;
-alter table public.scores add column if not exists kpm real;
-alter table public.profiles add column if not exists elo integer not null default 1000;
-
-drop policy if exists "update own profile" on public.profiles;
-create policy "update own profile" on public.profiles
-  for update using (auth.uid() = id);
-
-create index if not exists scores_user_id_idx on public.scores (user_id);
-
--- Global leaderboard reads (all users visible to anon + authenticated)
+-- Remove restrictive SELECT policies if they were added in the dashboard
 drop policy if exists "read profiles" on public.profiles;
 drop policy if exists "read scores" on public.scores;
 drop policy if exists "read own scores" on public.scores;
+drop policy if exists "Users can read own scores" on public.scores;
+drop policy if exists "scores_select_own" on public.scores;
+drop policy if exists "Enable read access for all users" on public.scores;
+
+-- Global read: everyone sees every score + username (required for leaderboards)
 create policy "read profiles" on public.profiles
   for select to anon, authenticated using (true);
 create policy "read scores" on public.scores
   for select to anon, authenticated using (true);
+
 grant select on public.profiles to anon, authenticated;
 grant select on public.scores to anon, authenticated;
 
-create table if not exists public.user_settings (
-  user_id uuid primary key references auth.users on delete cascade,
-  settings jsonb not null default '{}',
-  updated_at timestamptz default now()
-);
-
-alter table public.user_settings enable row level security;
-
-drop policy if exists "read own settings" on public.user_settings;
-create policy "read own settings" on public.user_settings
-  for select using (auth.uid() = user_id);
-
-drop policy if exists "insert own settings" on public.user_settings;
-create policy "insert own settings" on public.user_settings
-  for insert with check (auth.uid() = user_id);
-
-drop policy if exists "update own settings" on public.user_settings;
-create policy "update own settings" on public.user_settings
-  for update using (auth.uid() = user_id);
-
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_username text;
-begin
-  v_username := lower(trim(new.raw_user_meta_data->>'username'));
-  if v_username is null or v_username = '' then
-    v_username := 'player_' || substr(replace(new.id::text, '-', ''), 1, 8);
-  end if;
-  if exists (select 1 from public.profiles where username = v_username) then
-    raise exception 'username_taken';
-  end if;
-  insert into public.profiles (id, username) values (new.id, v_username);
-  return new;
-end;
-$$;
-
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute function public.handle_new_user();
-
+-- Leaderboard RPCs run as definer so they work even if RLS is misconfigured
 drop function if exists public.get_leaderboard_top(text, text, int);
 drop function if exists public.get_leaderboard(text, text, int);
 

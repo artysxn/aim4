@@ -22,6 +22,11 @@ import {
 import { getMap, spawnFor, pickRandomMap, spawnPair } from '../src/multiplayer/maps.js';
 import { resolveShot } from './hitscan.js';
 import { pushTransformHistory, sampleTransformAt, lagRewindMs } from './lagComp.js';
+import {
+  DEFAULT_ELO,
+  eloResultsForMatch
+} from '../src/multiplayer/elo.js';
+import { MatchmakingQueue, createRankedLobby } from './matchmaking.js';
 
 const VALID_TARGETS = new Set([0, 13, 30, 60, 100]);
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous 0/O/1/I
@@ -43,6 +48,7 @@ export class MultiplayerServer {
     this.lobbies = new Map(); // code -> lobby
     this.players = new Map(); // id -> player
     this.browsers = new Set(); // players currently viewing the lobby browser
+    this.matchmaking = new MatchmakingQueue(this);
     this._timer = setInterval(() => this._tick(), TICK_MS);
     this._lastTick = Date.now();
     this._simTick = 0;
@@ -65,7 +71,10 @@ export class MultiplayerServer {
       respawnAt: 0,
       shotQueue: [],
       history: [],
-      rttMs: 0
+      rttMs: 0,
+      inQueue: false,
+      queueElo: DEFAULT_ELO,
+      userId: null
     };
     this.players.set(id, player);
     this._send(player, { t: S2C.WELCOME, id });
@@ -86,6 +95,7 @@ export class MultiplayerServer {
   _disconnect(player) {
     if (!this.players.has(player.id)) return;
     this.browsers.delete(player);
+    this.matchmaking.remove(player);
     this._leaveLobby(player);
     this.players.delete(player.id);
   }
@@ -121,10 +131,15 @@ export class MultiplayerServer {
       case C2S.UNLIST:
         this.browsers.delete(player);
         return;
+      case C2S.QUEUE:
+        return this.matchmaking.enqueue(player, msg);
+      case C2S.DEQUEUE:
+        return this.matchmaking.dequeue(player, true);
     }
   }
 
   _create(player, msg) {
+    this.matchmaking.remove(player);
     this._leaveLobby(player);
     this.browsers.delete(player);
     if (msg.name) player.name = String(msg.name).slice(0, 24);
@@ -152,6 +167,7 @@ export class MultiplayerServer {
   }
 
   _join(player, msg) {
+    this.matchmaking.remove(player);
     this._leaveLobby(player);
     const code = String(msg.code || '').trim().toUpperCase();
     const lobby = this.lobbies.get(code);
@@ -242,6 +258,7 @@ export class MultiplayerServer {
   _start(player) {
     const lobby = player.lobby;
     if (!lobby || lobby.hostId !== player.id || lobby.started) return;
+    if (lobby.isMatchmade) return this._beginMatch(lobby);
     if (lobby.players.length < MAX_PLAYERS) {
       return this._send(player, { t: S2C.ERROR, msg: 'Need a second player to start.' });
     }
@@ -249,6 +266,11 @@ export class MultiplayerServer {
       return this._send(player, { t: S2C.ERROR, msg: 'All players must be ready.' });
     }
 
+    this._beginMatch(lobby);
+  }
+
+  /** Start a ranked or custom lobby match (shared setup). */
+  _beginMatch(lobby) {
     lobby.started = true;
     lobby.mapId = pickRandomMap(lobby.mapId).id;
     lobby.scores = {};
@@ -257,20 +279,48 @@ export class MultiplayerServer {
       p.stats = freshStats();
       p.roundStartAt = Date.now();
     }
-    this._pushLobbyList(); // started lobbies leave the browser
+    this._pushLobbyList();
 
     const spawns = this._spawnAll(lobby);
     const stats = this._buildStats(lobby);
     for (const p of lobby.players) {
-      this._send(p, {
+      const opp = lobby.players.find((x) => x.id !== p.id);
+      const startMsg = {
         t: S2C.MATCH_START,
         mapId: lobby.mapId,
         target: lobby.target,
         spawns,
         scores: lobby.scores,
-        stats
-      });
+        stats,
+        isMatchmade: !!lobby.isMatchmade
+      };
+      if (lobby.isMatchmade && opp) {
+        startMsg.opponentName = opp.name;
+        startMsg.opponentElo = lobby.mmElos?.[opp.id];
+        startMsg.yourElo = lobby.mmElos?.[p.id];
+      }
+      this._send(p, startMsg);
     }
+  }
+
+  /** Pair two queued players into a ranked duel and start immediately. */
+  _startRankedDuel(pA, pB) {
+    let code = randomCode();
+    while (this.lobbies.has(code)) code = randomCode();
+
+    const lobby = createRankedLobby(code, pA, pB);
+    this.lobbies.set(code, lobby);
+    pA.lobby = lobby;
+    pB.lobby = lobby;
+    pA.side = 'A';
+    pB.side = 'B';
+    pA.ready = true;
+    pB.ready = true;
+
+    for (const p of lobby.players) {
+      this._send(p, { t: S2C.LOBBY, lobby: this._lobbyView(lobby) });
+    }
+    this._beginMatch(lobby);
   }
 
   /** Assign + reset spawns for everyone; returns { playerId: {pos,yaw,side} }. */
@@ -442,10 +492,31 @@ export class MultiplayerServer {
 
     if (win) {
       lobby.started = false;
-      this._broadcast(lobby, { t: S2C.MATCH_END, winnerId: shooter.id, scores: { ...lobby.scores } });
+      const endMsg = {
+        t: S2C.MATCH_END,
+        winnerId: shooter.id,
+        scores: { ...lobby.scores },
+        isMatchmade: !!lobby.isMatchmade
+      };
+      if (lobby.isMatchmade && lobby.mmElos) {
+        endMsg.elo = eloResultsForMatch(lobby.players, shooter.id, lobby.mmElos);
+        for (const p of lobby.players) {
+          const r = endMsg.elo[p.id];
+          if (r) p.queueElo = r.newElo;
+        }
+      }
+      this._broadcast(lobby, endMsg);
       for (const p of lobby.players) p.ready = false;
-      this._broadcastLobby(lobby);
-      this._pushLobbyList(); // back to joinable
+      if (lobby.isMatchmade) {
+        this.lobbies.delete(lobby.code);
+        for (const p of lobby.players) {
+          p.lobby = null;
+          p.side = null;
+        }
+      } else {
+        this._broadcastLobby(lobby);
+        this._pushLobbyList();
+      }
     }
   }
 
@@ -519,6 +590,7 @@ export class MultiplayerServer {
       target: lobby.target,
       isPublic: lobby.isPublic,
       started: lobby.started,
+      isMatchmade: !!lobby.isMatchmade,
       players: lobby.players.map((p) => ({ id: p.id, name: p.name, ready: p.ready, side: p.side }))
     };
   }

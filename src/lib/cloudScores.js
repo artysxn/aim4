@@ -236,32 +236,25 @@ export async function fetchLeaderboardWithMeta(scenario, configKey, limit = 10) 
 
   const sb = getSupabase();
 
-  // Gridshot boards span multiple legacy config_key formats — aggregate in the client.
-  if (scenario === 'gridshot') {
-    return fetchLeaderboardDirect(sb, scenario, configKey, limit);
-  }
-
-  const { data, error } = await sb.rpc('get_leaderboard_top', {
+  // Prefer RPC (security definer on server) so reads are global even if RLS is tight.
+  const { data: rpcData, error: rpcError } = await sb.rpc('get_leaderboard_top', {
     p_scenario: scenario,
     p_config_key: configKey,
     p_limit: limit
   });
-
-  if (!error && data?.length) {
-    return { list: data, error: null };
+  if (!rpcError && rpcData?.length) {
+    return { list: rpcData, error: null };
   }
 
-  if (error) {
-    console.warn('[cloudScores] leaderboard RPC failed, using direct query', error.message);
-  }
-
+  // Direct read: required for gridshot legacy config keys; fallback when RPC missing.
   const direct = await fetchLeaderboardDirect(sb, scenario, configKey, limit);
   if (direct.list.length) return direct;
 
-  if (error && !direct.list.length) {
-    return { list: [], error: error.message };
+  if (rpcError) {
+    console.warn('[cloudScores] leaderboard RPC failed', rpcError.message);
+    return { list: [], error: rpcError.message };
   }
-  return { list: [], error: null };
+  return { list: [], error: direct.error };
 }
 
 /**

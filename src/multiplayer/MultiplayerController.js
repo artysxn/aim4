@@ -1,16 +1,10 @@
 // ---------------------------------------------------------------------------
 // multiplayer/MultiplayerController.js
-// Orchestrates the multiplayer flow: owns the NetClient, drives the lobby/match
-// lifecycle, and bridges server events into the active MultiplayerDuelScenario
-// and the UIOverlay screens. The UI calls into this for user actions (browse /
-// create / join / ready / start / leave); this calls back into the UI to swap
-// screens, render the lobby browser, and update the live scoreboard.
-//
-// The browser URL carries the lobby code (?lobby=CODE) so a link can be shared
-// and opened to auto-join (when there's space).
+// Orchestrates custom games + ranked matchmaking over NetClient.
 // ---------------------------------------------------------------------------
 
 import { NetClient } from './NetClient.js';
+import { DEFAULT_ELO } from './elo.js';
 
 export class MultiplayerController {
   constructor({ ui, engine, input, settings, sceneManager, crosshair }) {
@@ -22,10 +16,11 @@ export class MultiplayerController {
     this.crosshair = crosshair;
 
     this.net = new NetClient();
-    this.lobby = null; // latest lobby view from the server
+    this.lobby = null;
     this.inMatch = false;
+    this.inQueue = false;
+    this.queueElo = DEFAULT_ELO;
     this.browsing = false;
-    this._pendingAutoJoin = null; // { code } to join right after connect
 
     this._wireNet();
   }
@@ -39,22 +34,31 @@ export class MultiplayerController {
     net.onLobby = (lobby) => {
       this.lobby = lobby;
       this.browsing = false;
-      this._setUrlLobby(lobby.code);
-      try {
-        this.ui.renderLobby(lobby);
-      } catch (e) {
-        console.error('[mp] renderLobby failed', e);
-      }
-      // Entering a lobby from the browser / create / join / auto-join.
-      if (this.ui.state === 'mp' || this.ui.state === 'menu') {
-        this.ui.showScreen('mp-lobby');
+      if (!lobby.isMatchmade) {
+        this._setUrlLobby(lobby.code);
+        try {
+          this.ui.renderLobby(lobby);
+        } catch (e) {
+          console.error('[mp] renderLobby failed', e);
+        }
+        if (this.ui.state === 'mp' || this.ui.state === 'menu') {
+          this.ui.showScreen('mp-lobby');
+        }
       }
     };
     net.onLobbyList = (lobbies) => {
       if (this.browsing) this.ui.renderLobbyList(lobbies);
     };
     net.onError = (msg) => this.ui.mpStatus(msg, false);
-    net.onMatchStart = (msg) => this._startMatch(msg);
+    net.onQueueStatus = (msg) => {
+      this.inQueue = !!msg.inQueue;
+      if (Number.isFinite(msg.elo)) this.queueElo = msg.elo;
+      this.ui.onQueueStatus?.(msg);
+    };
+    net.onMatchStart = (msg) => {
+      this._leaveSingleplayerIfActive();
+      this._startMatch(msg);
+    };
     net.onSnapshot = (msg) => this._scenario()?.applySnapshot(msg);
     net.onHit = (msg) => this._scenario()?.applyHit(msg);
     net.onKill = (msg) => {
@@ -73,7 +77,17 @@ export class MultiplayerController {
     return sc && sc.isMultiplayer ? sc : null;
   }
 
-  /** Ensure a live connection; returns true on success, surfaces errors in the UI. */
+  /** Tear down an active singleplayer run when a ranked/custom match starts. */
+  _leaveSingleplayerIfActive() {
+    const spStates = new Set(['playing', 'paused', 'await-start', 'await-resume', 'results']);
+    if (!spStates.has(this.ui.state)) return;
+    this.input.exitLock();
+    this.sceneManager.unload();
+    if (this.ui.state === 'results' || this.ui.state === 'paused') {
+      this.ui.state = 'menu';
+    }
+  }
+
   async _ensureConnected() {
     if (this.net.connected) return true;
     try {
@@ -87,11 +101,10 @@ export class MultiplayerController {
     }
   }
 
-  // ---- Lobby browser ------------------------------------------------------
-  /** Open the multiplayer home: connect + subscribe to the public lobby list. */
+  // ---- Lobby browser (custom games) ---------------------------------------
   async openBrowser() {
     this.browsing = true;
-    this.ui.renderLobbyList(null); // show "loading" state
+    this.ui.renderLobbyList(null);
     if (!(await this._ensureConnected())) {
       this.browsing = false;
       return;
@@ -106,8 +119,24 @@ export class MultiplayerController {
 
   closeBrowser() {
     this.browsing = false;
-    if (this.net.connected && !this.lobby && !this.inMatch) {
+    if (this.net.connected && !this.lobby && !this.inMatch && !this.inQueue) {
       this.net.stopList();
+      this.net.disconnect();
+    }
+  }
+
+  // ---- Ranked matchmaking -------------------------------------------------
+  async enterQueue({ name, userId, elo }) {
+    if (!(await this._ensureConnected())) return false;
+    this.browsing = false;
+    this.net.queueMatch({ name, userId, elo });
+    return true;
+  }
+
+  leaveQueue() {
+    if (this.net.connected) this.net.dequeueMatch();
+    this.inQueue = false;
+    if (this.net.connected && !this.lobby && !this.inMatch && !this.browsing) {
       this.net.disconnect();
     }
   }
@@ -135,26 +164,25 @@ export class MultiplayerController {
     this.net.startMatch();
   }
 
-  /** End the active match and return to the pre-match lobby (stay connected). */
   returnToLobby() {
     if (this.inMatch) this.net.returnToLobby();
   }
 
   leave() {
+    if (this.inQueue) this.leaveQueue();
     if (this.net.connected) this.net.leaveLobby();
     this.net.disconnect();
     this.lobby = null;
     this.inMatch = false;
     this.browsing = false;
+    this.inQueue = false;
     this._setUrlLobby(null);
   }
 
-  /** Called when the user quits a match/lobby back to the main menu. */
   leaveIfActive() {
-    if (this.net.connected || this.inMatch) this.leave();
+    if (this.inMatch || this.lobby) this.leave();
   }
 
-  // ---- URL helpers --------------------------------------------------------
   _setUrlLobby(code) {
     try {
       const url = new URL(window.location.href);
@@ -166,7 +194,6 @@ export class MultiplayerController {
     }
   }
 
-  /** Lobby code present in the URL (?lobby=CODE), or null. */
   urlLobbyCode() {
     try {
       const code = new URL(window.location.href).searchParams.get('lobby');
@@ -176,7 +203,6 @@ export class MultiplayerController {
     }
   }
 
-  /** Auto-join a lobby from a shared URL on startup. */
   async autoJoinFromUrl(name) {
     const code = this.urlLobbyCode();
     if (!code) return false;
@@ -184,7 +210,6 @@ export class MultiplayerController {
     this.ui.renderLobbyList(null);
     if (!(await this._ensureConnected())) return true;
     this.net.joinLobby({ name, code });
-    // If the join fails (full / not found), fall back to the public browser.
     this.browsing = true;
     this.net.requestList();
     return true;
@@ -197,6 +222,7 @@ export class MultiplayerController {
       for (const p of this.lobby.players) players[p.id] = { name: p.name, side: p.side };
     }
     this.inMatch = true;
+    this.inQueue = false;
     this.browsing = false;
     this.sceneManager.load('mpduel', {
       net: this.net,
@@ -206,36 +232,47 @@ export class MultiplayerController {
       spawns: msg.spawns,
       scores: msg.scores,
       stats: msg.stats,
-      players
+      players,
+      isMatchmade: !!msg.isMatchmade
     });
     this.ui.beginMpMatch(msg, players);
   }
 
-  _endMatch(msg) {
+  async _endMatch(msg) {
     this.inMatch = false;
     this.input.exitLock();
     this.sceneManager.unload();
-    this._resetMpChatUi();
+    this.ui._resetMpChat?.();
+    this.ui._hideMpTabScoreboard?.();
 
-    if (msg.returnToLobby && this.lobby) {
+    if (msg.isMatchmade && msg.elo && this.ui.auth?.user?.id) {
+      const myElo = msg.elo[this.myId];
+      if (myElo?.newElo != null) {
+        await this.ui.auth.applyMatchElo(myElo.newElo);
+      }
+    }
+
+    if (msg.returnToLobby && this.lobby && !this.lobby.isMatchmade) {
       this.ui.renderLobby(this.lobby);
       this.ui.showScreen('mp-lobby');
       return;
     }
+
+    if (this.lobby?.isMatchmade) {
+      this.lobby = null;
+    }
+
     this.ui.showMpResults(msg, this.lobby, this.myId);
   }
 
-  _resetMpChatUi() {
-    this.ui._resetMpChat?.();
-    this.ui._hideMpTabScoreboard?.();
-  }
-
   _onClose() {
+    this.inQueue = false;
     if (this.inMatch || (typeof this.ui.state === 'string' && this.ui.state.startsWith('mp'))) {
       this.inMatch = false;
       this.lobby = null;
       this.browsing = false;
       this.ui.mpDisconnected();
     }
+    this.ui.onQueueStatus?.({ inQueue: false, queueSize: 0, elo: this.queueElo });
   }
 }

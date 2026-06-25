@@ -7,11 +7,13 @@ alter table public.scores add column if not exists hits integer;
 alter table public.scores add column if not exists shots integer;
 alter table public.scores add column if not exists time_played real;
 alter table public.scores add column if not exists kpm real;
+alter table public.profiles add column if not exists elo integer not null default 1000;
 
 -- Profile per auth user (public username shown on leaderboards)
 create table if not exists public.profiles (
   id uuid primary key references auth.users on delete cascade,
   username text unique not null,
+  elo integer not null default 1000,
   created_at timestamptz default now()
 );
 
@@ -46,13 +48,26 @@ alter table public.profiles enable row level security;
 alter table public.scores enable row level security;
 alter table public.user_settings enable row level security;
 
--- Public reads for leaderboards + username checks during sign-up
-create policy "read profiles" on public.profiles for select using (true);
-create policy "read scores" on public.scores for select using (true);
+-- Public reads for global leaderboards (anon + logged-in must see ALL users' rows)
+drop policy if exists "read profiles" on public.profiles;
+drop policy if exists "read scores" on public.scores;
+drop policy if exists "read own scores" on public.scores;
+drop policy if exists "Users can read own scores" on public.scores;
+drop policy if exists "scores_select_own" on public.scores;
+
+create policy "read profiles" on public.profiles
+  for select to anon, authenticated using (true);
+create policy "read scores" on public.scores
+  for select to anon, authenticated using (true);
+
+grant select on public.profiles to anon, authenticated;
+grant select on public.scores to anon, authenticated;
 
 -- Users write only their own rows
 create policy "insert own profile" on public.profiles
   for insert with check (auth.uid() = id);
+create policy "update own profile" on public.profiles
+  for update using (auth.uid() = id);
 create policy "insert own score" on public.scores
   for insert with check (auth.uid() = user_id);
 create policy "read own settings" on public.user_settings
@@ -111,7 +126,8 @@ returns table (
 )
 language plpgsql
 stable
-security invoker
+security definer
+set search_path = public
 as $$
 begin
   if p_scenario = 'gridshot' then
@@ -177,7 +193,8 @@ returns table (
 )
 language plpgsql
 stable
-security invoker
+security definer
+set search_path = public
 as $$
 begin
   if p_scenario = 'gridshot' then

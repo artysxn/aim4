@@ -65,11 +65,17 @@ create table public.scores (
 create index on public.scores (scenario, config_key, score desc);
 
 alter table public.profiles enable row level security;
-alter table public.scores   enable row level security;
+alter table public.scores enable row level security;
 
--- Anyone can read leaderboards + profiles
-create policy "read profiles" on public.profiles for select using (true);
-create policy "read scores"   on public.scores   for select using (true);
+-- Anyone can read leaderboards + profiles (global — all users visible)
+drop policy if exists "read profiles" on public.profiles;
+drop policy if exists "read scores" on public.scores;
+create policy "read profiles" on public.profiles
+  for select to anon, authenticated using (true);
+create policy "read scores" on public.scores
+  for select to anon, authenticated using (true);
+grant select on public.profiles to anon, authenticated;
+grant select on public.scores to anon, authenticated;
 
 -- A logged-in user can write only their own rows
 create policy "insert own profile" on public.profiles

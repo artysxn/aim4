@@ -11,6 +11,7 @@ import {
   validatePassword
 } from '../lib/supabase.js';
 import * as Storage from '../utils/Storage.js';
+import { clampElo, DEFAULT_ELO } from '../multiplayer/elo.js';
 
 export class AuthManager {
   constructor(settings) {
@@ -48,6 +49,10 @@ export class AuthManager {
     const meta = this.user?.user_metadata?.username;
     if (meta) return String(meta).trim().toLowerCase();
     return null;
+  }
+
+  get elo() {
+    return clampElo(this.profile?.elo ?? DEFAULT_ELO);
   }
 
   onChange(fn) {
@@ -100,7 +105,7 @@ export class AuthManager {
     const sb = getSupabase();
     const { data, error } = await sb
       .from('profiles')
-      .select('id, username, created_at')
+      .select('id, username, elo, created_at')
       .eq('id', user.id)
       .maybeSingle();
     if (error) throw new Error(error.message);
@@ -126,11 +131,39 @@ export class AuthManager {
 
     const { data: refreshed, error: reloadErr } = await sb
       .from('profiles')
-      .select('id, username, created_at')
+      .select('id, username, elo, created_at')
       .eq('id', user.id)
       .maybeSingle();
     if (reloadErr) throw new Error(reloadErr.message);
     this.profile = refreshed;
+  }
+
+  /** Persist Elo after a ranked match (server-calculated rating). */
+  async applyMatchElo(newElo) {
+    if (!this.user) return;
+    const rating = clampElo(newElo);
+    const sb = getSupabase();
+    const { error } = await sb.from('profiles').update({ elo: rating }).eq('id', this.user.id);
+    if (error) {
+      console.warn('[auth] elo update failed', error.message);
+      return;
+    }
+    if (this.profile) this.profile.elo = rating;
+    this._emit();
+  }
+
+  async refreshElo() {
+    if (!this.user) return DEFAULT_ELO;
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from('profiles')
+      .select('elo')
+      .eq('id', this.user.id)
+      .maybeSingle();
+    if (error || data?.elo == null) return this.elo;
+    if (this.profile) this.profile.elo = clampElo(data.elo);
+    this._emit();
+    return this.elo;
   }
 
   /**

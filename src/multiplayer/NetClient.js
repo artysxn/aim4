@@ -92,6 +92,7 @@ export class NetClient {
     this.onClose = null;
     this.onLobbyList = null;
     this.onNetStats = null;
+    this.onQueueStatus = null;
   }
 
   async _checkServer(timeoutMs = 5000) {
@@ -278,6 +279,9 @@ export class NetClient {
       case S2C.LOBBY_LIST:
         this.onLobbyList?.(msg.lobbies || []);
         break;
+      case S2C.QUEUE_STATUS:
+        this.onQueueStatus?.(msg);
+        break;
       case S2C.PONG:
         this._onPong(msg);
         break;
@@ -333,5 +337,11 @@ export class NetClient {
   }
   sendChat(text) {
     this._send({ t: C2S.CHAT, text });
+  }
+  queueMatch({ name, userId, elo }) {
+    this._send({ t: C2S.QUEUE, name, userId, elo });
+  }
+  dequeueMatch() {
+    this._send({ t: C2S.DEQUEUE });
   }
 }
