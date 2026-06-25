@@ -1681,6 +1681,16 @@ export class UIOverlay {
     return SCENARIOS[scenario].configKeyFor(this.settings);
   }
 
+  _formatTimePlayed(seconds) {
+    if (seconds == null || !Number.isFinite(seconds)) return '—';
+    if (seconds >= 60) {
+      const m = Math.floor(seconds / 60);
+      const s = seconds % 60;
+      return `${m}:${s.toFixed(1).padStart(4, '0')}`;
+    }
+    return `${seconds.toFixed(1)}s`;
+  }
+
   _leaderboardRowsHtml(list, scenario, highlightUserId = null) {
     if (!supabaseConfigured()) {
       return `<p class="center lb-hint">Account leaderboards are not configured.</p>`;
@@ -1688,6 +1698,26 @@ export class UIOverlay {
     if (!list.length) {
       return `<p class="center lb-hint">No scores yet — sign in and play to appear here.</p>`;
     }
+
+    if (scenario === 'gridshot') {
+      const rows = list
+        .map((r, i) => {
+          const hl = highlightUserId && r.user_id === highlightUserId ? ' class="hl"' : '';
+          return `<tr${hl}>
+          <td>${i + 1}</td>
+          <td class="lb-player">${this._esc(r.username)}</td>
+          <td>${this._formatTimePlayed(r.time_played)}</td>
+          <td>${Math.round((r.accuracy || 0) * 100)}%</td>
+          <td>${r.kills ?? '—'}</td>
+          <td>${Number(r.kpm || 0).toFixed(1)}</td>
+        </tr>`;
+        })
+        .join('');
+      return `<table class="lb-table">
+      <thead><tr><th>#</th><th>Player</th><th>Time</th><th>Acc</th><th>Kills</th><th>KPM</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+    }
+
     const rows = list
       .map((r, i) => {
         const hl = highlightUserId && r.user_id === highlightUserId ? ' class="hl"' : '';
@@ -1725,9 +1755,12 @@ export class UIOverlay {
     if (!body) return;
     body.innerHTML = `<p class="center">…</p>`;
     if (subtitle) {
+      const gridshotHint = scenario === 'gridshot'
+        ? 'Ranked by time played, then KPM · '
+        : 'Best score per verified account · ';
       subtitle.textContent = this.auth?.isLoggedIn
-        ? `Best score per verified account · signed in as ${this._accountLabel()}`
-        : 'Best score per verified account · sign in to submit scores';
+        ? `${gridshotHint}signed in as ${this._accountLabel()}`
+        : `${gridshotHint}sign in to submit scores`;
     }
     const list = await this._fetchLeaderboard(scenario);
     body.innerHTML = this._leaderboardRowsHtml(list, scenario, this.auth?.user?.id);
@@ -1738,11 +1771,19 @@ export class UIOverlay {
     let submitNote = '';
 
     if (this.auth?.isLoggedIn) {
+      try {
+        await this.auth.ensureProfileReady();
+      } catch (e) {
+        console.warn('[ui] profile ensure failed', e);
+      }
       const res = await submitScore(this.auth.user.id, results);
       if (res.ok) {
         rank = await fetchUserRank(this.auth.user.id, results.scenario, results.configKey);
       } else {
-        submitNote = res.reason === 'offline' ? '' : ' (score not saved to cloud)';
+        submitNote =
+          res.reason === 'offline'
+            ? ''
+            : ` (score not saved: ${res.reason})`;
       }
     } else if (supabaseConfigured()) {
       submitNote = ' · sign in to save to leaderboards';
@@ -1755,13 +1796,20 @@ export class UIOverlay {
 
     const showCrit = results.scenario !== 'gridshot';
     const stat = (label, val) => `<div class="stat"><span class="text-big">${val}</span><label>${label}</label></div>`;
-    this.root.querySelector('#res-stats').innerHTML =
+    const gridshotStats =
+      stat('Time', this._formatTimePlayed(results.timePlayed)) +
+      stat('Accuracy', Math.round(results.accuracy * 100) + '%') +
+      stat('Kills', results.kills) +
+      stat('KPM', results.kpm.toFixed(1));
+    const defaultStats =
       stat('Score', results.score.toLocaleString()) +
       stat('Accuracy', Math.round(results.accuracy * 100) + '%') +
       stat('Kills', results.kills) +
       stat('Hits / Shots', `${results.hits}/${results.shots}`) +
       (showCrit ? stat('Crit ratio', Math.round(results.critRatio * 100) + '%') : '') +
       stat('Misses', results.misses);
+    this.root.querySelector('#res-stats').innerHTML =
+      results.scenario === 'gridshot' ? gridshotStats : defaultStats;
 
     const list = await this._fetchLeaderboard(results.scenario);
     this.root.querySelector('#res-lb').innerHTML = this._leaderboardRowsHtml(

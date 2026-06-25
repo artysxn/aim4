@@ -17,10 +17,15 @@ export async function submitScore(userId, results) {
     crit_ratio: results.critRatio,
     kills: results.kills,
     hits: results.hits,
-    shots: results.shots
+    shots: results.shots,
+    time_played: results.timePlayed ?? 0,
+    kpm: results.kpm ?? 0
   };
   const { error } = await sb.from('scores').insert(row);
-  if (error) return { ok: false, reason: error.message };
+  if (error) {
+    console.warn('[cloudScores] submit failed', error.message, row);
+    return { ok: false, reason: error.message };
+  }
   return { ok: true };
 }
 

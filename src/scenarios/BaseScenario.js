@@ -150,6 +150,7 @@ export class BaseScenario {
   }
 
   results() {
+    const timePlayed = this.elapsed;
     return {
       scenario: this.name,
       configKey: this.configKey(),
@@ -160,7 +161,9 @@ export class BaseScenario {
       hits: this.hits,
       shots: this.shotsFired,
       misses: this.misses,
-      duration: this.settings.data.runDuration
+      duration: this.settings.data.runDuration,
+      timePlayed,
+      kpm: timePlayed > 0 ? this.kills / (timePlayed / 60) : 0
     };
   }
 

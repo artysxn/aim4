@@ -5,6 +5,8 @@
 -- ---- Upgrades (safe to re-run if tables already exist from SETUP.md) ----
 alter table public.scores add column if not exists hits integer;
 alter table public.scores add column if not exists shots integer;
+alter table public.scores add column if not exists time_played real;
+alter table public.scores add column if not exists kpm real;
 
 -- Profile per auth user (public username shown on leaderboards)
 create table if not exists public.profiles (
@@ -25,6 +27,8 @@ create table if not exists public.scores (
   kills integer,
   hits integer,
   shots integer,
+  time_played real,
+  kpm real,
   created_at timestamptz default now()
 );
 create index if not exists scores_scenario_config_score_idx
@@ -85,7 +89,10 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
--- Top N accounts (best score each) for a scenario + config permutation
+-- Best run per account for a scenario + config (gridshot: time played, then kpm/kills/acc)
+drop function if exists public.get_leaderboard_top(text, text, int);
+drop function if exists public.get_leaderboard(text, text, int);
+
 create or replace function public.get_leaderboard(
   p_scenario text,
   p_config_key text,
@@ -98,25 +105,57 @@ returns table (
   accuracy real,
   crit_ratio real,
   kills integer,
+  time_played real,
+  kpm real,
   achieved_at timestamptz
 )
-language sql
+language plpgsql
 stable
 security invoker
 as $$
-  select distinct on (s.user_id)
-    s.user_id,
-    p.username,
-    s.score,
-    s.accuracy,
-    s.crit_ratio,
-    s.kills,
-    s.created_at as achieved_at
-  from public.scores s
-  join public.profiles p on p.id = s.user_id
-  where s.scenario = p_scenario
-    and s.config_key = p_config_key
-  order by s.user_id, s.score desc, s.created_at desc
+begin
+  if p_scenario = 'gridshot' then
+    return query
+    select distinct on (s.user_id)
+      s.user_id,
+      coalesce(p.username, 'player_' || substr(replace(s.user_id::text, '-', ''), 1, 8)),
+      s.score,
+      s.accuracy,
+      s.crit_ratio,
+      s.kills,
+      s.time_played,
+      s.kpm,
+      s.created_at as achieved_at
+    from public.scores s
+    left join public.profiles p on p.id = s.user_id
+    where s.scenario = p_scenario
+      and s.config_key = p_config_key
+    order by
+      s.user_id,
+      coalesce(s.time_played, 0) desc,
+      coalesce(s.kpm, 0) desc,
+      coalesce(s.kills, 0) desc,
+      coalesce(s.accuracy, 0) desc,
+      s.created_at desc;
+  else
+    return query
+    select distinct on (s.user_id)
+      s.user_id,
+      coalesce(p.username, 'player_' || substr(replace(s.user_id::text, '-', ''), 1, 8)),
+      s.score,
+      s.accuracy,
+      s.crit_ratio,
+      s.kills,
+      s.time_played,
+      s.kpm,
+      s.created_at as achieved_at
+    from public.scores s
+    left join public.profiles p on p.id = s.user_id
+    where s.scenario = p_scenario
+      and s.config_key = p_config_key
+    order by s.user_id, s.score desc, s.created_at desc;
+  end if;
+end;
 $$;
 
 -- Wrapper so PostgREST can call it easily
@@ -132,17 +171,36 @@ returns table (
   accuracy real,
   crit_ratio real,
   kills integer,
+  time_played real,
+  kpm real,
   achieved_at timestamptz
 )
-language sql
+language plpgsql
 stable
 security invoker
 as $$
-  select * from (
-    select * from public.get_leaderboard(p_scenario, p_config_key, 1000)
-  ) ranked
-  order by score desc, achieved_at asc
-  limit greatest(1, least(p_limit, 50));
+begin
+  if p_scenario = 'gridshot' then
+    return query
+    select * from (
+      select * from public.get_leaderboard(p_scenario, p_config_key, 1000)
+    ) ranked
+    order by
+      coalesce(time_played, 0) desc,
+      coalesce(kpm, 0) desc,
+      coalesce(kills, 0) desc,
+      coalesce(accuracy, 0) desc,
+      achieved_at asc
+    limit greatest(1, least(p_limit, 50));
+  else
+    return query
+    select * from (
+      select * from public.get_leaderboard(p_scenario, p_config_key, 1000)
+    ) ranked
+    order by score desc, achieved_at asc
+    limit greatest(1, least(p_limit, 50));
+  end if;
+end;
 $$;
 
 grant execute on function public.get_leaderboard_top(text, text, int) to anon, authenticated;

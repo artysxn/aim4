@@ -31,6 +31,13 @@ export class AuthManager {
     return Boolean(this.user);
   }
 
+  /** Ensure a profiles row exists before score submission or leaderboard display. */
+  async ensureProfileReady() {
+    if (!this.user) return false;
+    await this._ensureProfile(this.user);
+    return Boolean(this.displayName);
+  }
+
   get username() {
     return this.displayName;
   }
