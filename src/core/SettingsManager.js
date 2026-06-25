@@ -80,6 +80,8 @@ export class SettingsManager {
   constructor() {
     this.data = this._load();
     this._listeners = [];
+    this._cloudSaveHandler = null;
+    this._cloudSyncPaused = false;
   }
 
   _load() {
@@ -102,6 +104,14 @@ export class SettingsManager {
   save() {
     Storage.write('settings', this.data);
     this._emit();
+    if (!this._cloudSyncPaused && this._cloudSaveHandler) {
+      this._cloudSaveHandler();
+    }
+  }
+
+  /** Register debounced cloud push (AuthManager). Pass null to clear. */
+  setCloudSaveHandler(fn) {
+    this._cloudSaveHandler = fn;
   }
 
   onChange(fn) {
@@ -138,6 +148,9 @@ export class SettingsManager {
       throw new Error('Invalid settings data');
     }
     this.data = this._deepMerge(structuredClone(DEFAULTS), payload);
-    this.save();
+    this._cloudSyncPaused = true;
+    Storage.write('settings', this.data);
+    this._cloudSyncPaused = false;
+    this._emit();
   }
 }

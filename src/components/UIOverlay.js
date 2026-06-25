@@ -5,7 +5,7 @@
 // the Arena. Holds the screen state machine and coordinates pointer-lock with
 // the run lifecycle. The core game loop never touches UI state.
 //
-// States: menu | settings | leaderboard | await-start | playing | paused
+// States: menu | settings | leaderboard | auth | await-start | playing | paused
 //         | await-resume | results
 // ---------------------------------------------------------------------------
 
@@ -15,6 +15,8 @@ import { RESOLUTIONS } from '../core/SettingsManager.js';
 import { SCENARIOS } from '../core/SceneManager.js';
 import * as Storage from '../utils/Storage.js';
 import { exportConfig, importConfig, copyText, normalizeCode } from '../utils/ConfigCodes.js';
+import { fetchAccountLeaderboard, submitScore, fetchUserRank } from '../lib/cloudScores.js';
+import { supabaseConfigured } from '../lib/supabase.js';
 import { MultiplayerController } from '../multiplayer/MultiplayerController.js';
 import { SCORE_TARGETS } from '../multiplayer/constants.js';
 import { getMap } from '../multiplayer/maps.js';
@@ -68,16 +70,19 @@ function settingsPanel(id, body, active) {
 }
 
 export class UIOverlay {
-  constructor({ engine, input, settings, crosshair, sceneManager }) {
+  constructor({ engine, input, settings, crosshair, sceneManager, auth }) {
     this.engine = engine;
     this.input = input;
     this.settings = settings;
+    this.auth = auth;
     this.crosshair = crosshair;
     this.sceneManager = sceneManager;
 
     this.root = document.getElementById('ui-root');
     this.state = 'menu';
     this.currentScenario = 'gridshot';
+    this._authMode = 'login';
+    this._lbCache = {};
     this._suppressLockPause = false;
     this._mpTabStats = {};
     this._mpTabBoardHeld = false;
@@ -89,8 +94,11 @@ export class UIOverlay {
     this.root.innerHTML = this._template();
     this._cache();
     this._bind();
+    this._bindAuth();
+    this.auth?.onChange(() => this.refreshAccountBar());
     this._populateSettings();
     this.showScreen('menu');
+    this.refreshAccountBar();
 
     this.mp = new MultiplayerController({
       ui: this,
@@ -347,6 +355,10 @@ export class UIOverlay {
     <!-- MAIN MENU -->
     <div class="screen menu" data-screen="menu">
       <div class="panel wide">
+        <div class="account-bar" id="account-bar">
+          <span class="account-label" id="account-label"></span>
+          <button type="button" class="btn account-btn" id="account-btn"></button>
+        </div>
         <h1 class="logo text-big">AIM4<span>.io</span></h1>
         <div class="cards">
           ${Object.keys(SCENARIOS)
@@ -393,10 +405,43 @@ export class UIOverlay {
       </div>
     </div>
 
+    <!-- AUTH -->
+    <div class="screen auth" data-screen="auth">
+      <div class="panel">
+        <h2 class="text-big" id="auth-title">Sign in</h2>
+        <div class="tabs auth-tabs" id="auth-tabs">
+          <button type="button" class="tab active" data-auth-tab="login">Sign in</button>
+          <button type="button" class="tab" data-auth-tab="register">Register</button>
+        </div>
+        <div class="field field-plain" id="auth-username-wrap">
+          <div class="field-top"><span class="field-label">Username</span></div>
+          <input type="text" id="auth-username" class="config-code-input" maxlength="20" spellcheck="false" autocomplete="username" />
+        </div>
+        <div class="field field-plain">
+          <div class="field-top"><span class="field-label">Email</span></div>
+          <input type="email" id="auth-email" class="config-code-input" maxlength="120" spellcheck="false" autocomplete="email" />
+        </div>
+        <div class="field field-plain">
+          <div class="field-top"><span class="field-label">Password</span></div>
+          <input type="password" id="auth-password" class="config-code-input" autocomplete="current-password" />
+        </div>
+        <div class="field field-plain" id="auth-confirm-wrap" hidden>
+          <div class="field-top"><span class="field-label">Confirm password</span></div>
+          <input type="password" id="auth-password2" class="config-code-input" autocomplete="new-password" />
+        </div>
+        <p class="readout" id="auth-status"></p>
+        <div class="menu-actions">
+          <button type="button" class="btn primary" id="auth-submit">Sign in</button>
+          <button type="button" class="btn" data-goto="menu">Back</button>
+        </div>
+      </div>
+    </div>
+
     <!-- LEADERBOARD -->
     <div class="screen leaderboard" data-screen="leaderboard">
       <div class="panel wide">
         <h2 class="text-big">Leaderboards</h2>
+        <p class="lb-subtitle" id="lb-subtitle">Best score per verified account</p>
         <div class="tabs" id="lb-tabs">
           ${Object.keys(SCENARIOS)
             .map(
@@ -509,6 +554,7 @@ export class UIOverlay {
         <h2 class="text-big" id="res-title">Run Complete</h2>
         <div id="res-stats" class="res-stats"></div>
         <h4>Leaderboard</h4>
+        <p class="lb-subtitle">Best score per verified account</p>
         <div id="res-lb" class="lb-body"></div>
         <div class="menu-actions">
           <button class="btn primary" data-restart>Play again</button>
@@ -554,6 +600,7 @@ export class UIOverlay {
         if (t.dataset.goto === 'leaderboard') this._renderLeaderboard(this._activeLbTab());
         this.showScreen(t.dataset.goto);
         if (t.dataset.goto === 'mp') this.mp.openBrowser();
+        if (t.dataset.goto === 'auth') this._openAuth('login');
       } else if (t.hasAttribute('data-resume')) this.resume();
       else if (t.hasAttribute('data-quit')) this.quit();
       else if (t.hasAttribute('data-restart')) this.play(this.currentScenario);
@@ -728,6 +775,120 @@ export class UIOverlay {
   }
 
   // -------------------------------------------------------------------------
+  // Account auth
+  // -------------------------------------------------------------------------
+  refreshAccountBar() {
+    const bar = this.root.querySelector('#account-bar');
+    const label = this.root.querySelector('#account-label');
+    const btn = this.root.querySelector('#account-btn');
+    if (!bar || !label || !btn) return;
+
+    if (!this.auth?.isConfigured) {
+      bar.classList.add('hidden');
+      return;
+    }
+    bar.classList.remove('hidden');
+
+    if (this.auth.isLoggedIn) {
+      label.textContent = `@${this.auth.username}`;
+      btn.textContent = 'Log out';
+      btn.dataset.authAction = 'logout';
+    } else {
+      label.textContent = 'Not signed in';
+      btn.textContent = 'Sign in';
+      btn.dataset.authAction = 'login';
+    }
+  }
+
+  _bindAuth() {
+    const $ = (id) => this.root.querySelector(id);
+    const status = $('#auth-status');
+    const setStatus = (msg, ok = true) => {
+      status.textContent = msg || '';
+      status.classList.toggle('is-error', !ok);
+    };
+
+    $('#account-btn')?.addEventListener('click', async () => {
+      const action = $('#account-btn')?.dataset.authAction;
+      if (action === 'logout') {
+        await this.auth.signOut();
+        this.refreshAccountBar();
+        return;
+      }
+      this._openAuth('login');
+    });
+
+    $('#auth-tabs')?.addEventListener('click', (e) => {
+      const tab = e.target.closest('[data-auth-tab]');
+      if (!tab) return;
+      this._setAuthMode(tab.dataset.authTab);
+    });
+
+    $('#auth-submit')?.addEventListener('click', async () => {
+      const username = $('#auth-username')?.value?.trim();
+      const email = $('#auth-email')?.value?.trim();
+      const password = $('#auth-password')?.value || '';
+      const password2 = $('#auth-password2')?.value || '';
+      setStatus('…');
+      try {
+        if (this._authMode === 'register') {
+          if (password !== password2) throw new Error('Passwords do not match.');
+          const result = await this.auth.signUp({ username, email, password });
+          if (result.pendingConfirmation) {
+            setStatus(`Check ${result.email} for a confirmation link, then sign in.`, true);
+            this._setAuthMode('login');
+            return;
+          }
+          setStatus('Account created!', true);
+        } else {
+          await this.auth.signIn({ email, password });
+          setStatus('', true);
+        }
+        this.refreshAccountBar();
+        this._syncMpNameFromAccount();
+        this.showScreen('menu');
+      } catch (e) {
+        setStatus(e.message || 'Authentication failed.', false);
+      }
+    });
+
+    $('#auth-password')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') $('#auth-submit')?.click();
+    });
+  }
+
+  _setAuthMode(mode) {
+    this._authMode = mode === 'register' ? 'register' : 'login';
+    const isReg = this._authMode === 'register';
+    this.root.querySelector('#auth-title').textContent = isReg ? 'Create account' : 'Sign in';
+    this.root.querySelector('#auth-submit').textContent = isReg ? 'Register' : 'Sign in';
+    this.root.querySelector('#auth-username-wrap').hidden = !isReg;
+    this.root.querySelector('#auth-confirm-wrap').hidden = !isReg;
+    this.root.querySelector('#auth-password').autocomplete = isReg ? 'new-password' : 'current-password';
+    this.root.querySelector('#auth-email').autocomplete = 'email';
+    this.root.querySelectorAll('#auth-tabs .tab').forEach((t) => {
+      t.classList.toggle('active', t.dataset.authTab === this._authMode);
+    });
+    const st = this.root.querySelector('#auth-status');
+    if (st) {
+      st.textContent = '';
+      st.classList.remove('is-error');
+    }
+  }
+
+  _openAuth(mode = 'login') {
+    this._setAuthMode(mode);
+    this.showScreen('auth');
+  }
+
+  _syncMpNameFromAccount() {
+    if (!this.auth?.isLoggedIn) return;
+    const nameInput = this.root.querySelector('#mp-name');
+    if (nameInput) nameInput.value = this.auth.username;
+    Storage.write('mpName', this.auth.username);
+  }
+
+  // -------------------------------------------------------------------------
   // Multiplayer
   // -------------------------------------------------------------------------
   _targetOptions() {
@@ -735,6 +896,7 @@ export class UIOverlay {
   }
 
   _defaultName() {
+    if (this.auth?.isLoggedIn) return this.auth.username;
     const n = Storage.read('mpName', '');
     return typeof n === 'string' && n ? n : `Player ${Math.floor(1000 + Math.random() * 9000)}`;
   }
@@ -1470,49 +1632,77 @@ export class UIOverlay {
     return SCENARIOS[scenario].configKeyFor(this.settings);
   }
 
-  _leaderboardRows(scenario, highlightDate = null) {
-    const key = this._configKeyFor(scenario);
-    const list = Storage.getLeaderboard(scenario, key).slice(0, 10);
+  _leaderboardRowsHtml(list, scenario, highlightUserId = null) {
+    if (!supabaseConfigured()) {
+      return `<p class="center lb-hint">Account leaderboards are not configured.</p>`;
+    }
     if (!list.length) {
-      return `<p class="center">—</p>`;
+      return `<p class="center lb-hint">No scores yet — sign in and play to appear here.</p>`;
     }
     const rows = list
       .map((r, i) => {
-        const hl = highlightDate && r.date === highlightDate ? ' class="hl"' : '';
-        const crit = scenario !== 'gridshot' ? `<td>${Math.round((r.critRatio || 0) * 100)}%</td>` : '<td>—</td>';
+        const hl = highlightUserId && r.user_id === highlightUserId ? ' class="hl"' : '';
+        const crit = scenario !== 'gridshot'
+          ? `<td>${Math.round((r.crit_ratio || 0) * 100)}%</td>`
+          : '<td>—</td>';
+        const date = r.achieved_at ? new Date(r.achieved_at).toLocaleDateString() : '—';
         return `<tr${hl}>
           <td>${i + 1}</td>
-          <td class="score">${r.score.toLocaleString()}</td>
-          <td>${Math.round(r.accuracy * 100)}%</td>
+          <td class="lb-player">${this._esc(r.username)}</td>
+          <td class="score">${Number(r.score).toLocaleString()}</td>
+          <td>${Math.round((r.accuracy || 0) * 100)}%</td>
           ${crit}
-          <td>${r.kills}</td>
-          <td>${new Date(r.date).toLocaleDateString()}</td>
+          <td>${r.kills ?? '—'}</td>
+          <td>${date}</td>
         </tr>`;
       })
       .join('');
     return `<table class="lb-table">
-      <thead><tr><th>#</th><th>Score</th><th>Acc</th><th>Crit</th><th>Kills</th><th>Date</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>Score</th><th>Acc</th><th>Crit</th><th>Kills</th><th>Date</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
   }
 
-  _renderLeaderboard(scenario) {
-    this.root.querySelector('#lb-body').innerHTML = this._leaderboardRows(scenario);
+  async _fetchLeaderboard(scenario) {
+    const key = this._configKeyFor(scenario);
+    const cacheKey = `${scenario}:${key}`;
+    const list = await fetchAccountLeaderboard(scenario, key, 10);
+    this._lbCache[cacheKey] = list;
+    return list;
   }
 
-  _saveAndRenderResults(results) {
-    const record = {
-      score: results.score,
-      accuracy: results.accuracy,
-      critRatio: results.critRatio,
-      kills: results.kills,
-      hits: results.hits,
-      shots: results.shots,
-      date: Date.now()
-    };
-    const rank = Storage.addLeaderboardRecord(results.scenario, results.configKey, record);
+  async _renderLeaderboard(scenario) {
+    const body = this.root.querySelector('#lb-body');
+    const subtitle = this.root.querySelector('#lb-subtitle');
+    if (!body) return;
+    body.innerHTML = `<p class="center">…</p>`;
+    if (subtitle) {
+      subtitle.textContent = this.auth?.isLoggedIn
+        ? 'Best score per verified account · signed in as @' + this.auth.username
+        : 'Best score per verified account · sign in to submit scores';
+    }
+    const list = await this._fetchLeaderboard(scenario);
+    body.innerHTML = this._leaderboardRowsHtml(list, scenario, this.auth?.user?.id);
+  }
+
+  async _saveAndRenderResults(results) {
+    let rank = null;
+    let submitNote = '';
+
+    if (this.auth?.isLoggedIn) {
+      const res = await submitScore(this.auth.user.id, results);
+      if (res.ok) {
+        rank = await fetchUserRank(this.auth.user.id, results.scenario, results.configKey);
+      } else {
+        submitNote = res.reason === 'offline' ? '' : ' (score not saved to cloud)';
+      }
+    } else if (supabaseConfigured()) {
+      submitNote = ' · sign in to save to leaderboards';
+    }
 
     this.root.querySelector('#res-title').textContent =
-      `${SCENARIO_META[results.scenario].title} · ` + (rank === 1 ? '🥇 New Best!' : rank ? `Rank #${rank}` : 'Run Complete');
+      `${SCENARIO_META[results.scenario].title} · ` +
+      (rank === 1 ? '🥇 New Best!' : rank ? `Rank #${rank}` : 'Run Complete') +
+      submitNote;
 
     const showCrit = results.scenario !== 'gridshot';
     const stat = (label, val) => `<div class="stat"><span class="text-big">${val}</span><label>${label}</label></div>`;
@@ -1524,6 +1714,11 @@ export class UIOverlay {
       (showCrit ? stat('Crit ratio', Math.round(results.critRatio * 100) + '%') : '') +
       stat('Misses', results.misses);
 
-    this.root.querySelector('#res-lb').innerHTML = this._leaderboardRows(results.scenario, record.date);
+    const list = await this._fetchLeaderboard(results.scenario);
+    this.root.querySelector('#res-lb').innerHTML = this._leaderboardRowsHtml(
+      list,
+      results.scenario,
+      this.auth?.user?.id
+    );
   }
 }

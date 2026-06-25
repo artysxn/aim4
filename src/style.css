@@ -687,6 +687,49 @@ input[type='checkbox'] {
 .lb-table tr.hl td {
   background: var(--accent-dim);
 }
+.lb-table td.lb-player {
+  font-weight: 600;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lb-subtitle {
+  margin: -6px 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.lb-hint {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* ---- Account auth ------------------------------------------------------- */
+.account-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin: -8px 0 16px;
+  font-size: 13px;
+}
+.account-bar.hidden {
+  display: none;
+}
+.account-label {
+  color: var(--muted);
+}
+.account-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+}
+.auth-tabs {
+  margin-bottom: 16px;
+}
+
+.hidden {
+  display: none !important;
+}
 
 /* ---- Results ------------------------------------------------------------ */
 .res-stats {

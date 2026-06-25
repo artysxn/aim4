@@ -7,6 +7,7 @@
 
 import './style.css';
 import { SettingsManager } from './core/SettingsManager.js';
+import { AuthManager } from './core/AuthManager.js';
 import { Engine } from './core/Engine.js';
 import { InputManager } from './core/InputManager.js';
 import { PlayerController } from './core/PlayerController.js';
@@ -15,15 +16,17 @@ import { SceneManager } from './core/SceneManager.js';
 import { UIOverlay } from './components/UIOverlay.js';
 
 const settings = new SettingsManager();
+const auth = new AuthManager(settings);
 const engine = new Engine(settings);
 const input = new InputManager(engine, settings);
 const player = new PlayerController(engine, input);
 engine.player = player; // scenarios enable/disable it via engine.player
 const crosshair = new Crosshair(settings);
 const sceneManager = new SceneManager(engine, input, settings, crosshair);
-const ui = new UIOverlay({ engine, input, settings, crosshair, sceneManager });
+const ui = new UIOverlay({ engine, input, settings, crosshair, sceneManager, auth });
 
 ui.init();
+auth.init().then(() => ui.refreshAccountBar());
 
 // One animation loop drives everything: advance the active scenario, then
 // refresh the (cheap) UI read-outs.
@@ -39,5 +42,5 @@ engine.start();
 
 // Dev-only handle for debugging/automated verification (stripped from prod).
 if (import.meta.env.DEV) {
-  window.__aim = { engine, input, player, settings, crosshair, sceneManager, ui };
+  window.__aim = { engine, input, player, settings, crosshair, sceneManager, ui, auth };
 }
