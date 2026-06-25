@@ -77,6 +77,7 @@ export class BaseScenario {
     // from the registry; default is the full-auto rifle, overridden per scenario.
     this.usesWeapon = true;
     this.weaponId = 'rifle';
+    this.infiniteAmmo = false;
     this._lastImpact = new THREE.Vector3();
   }
 

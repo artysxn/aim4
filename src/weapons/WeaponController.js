@@ -46,6 +46,7 @@ export class WeaponController {
 
   /** Player pressed R (or the mag ran dry). */
   reload() {
+    if (this._infiniteAmmo()) return;
     if (this.reloading || this.ammo >= this.magSize) return;
     this.reloading = true;
     this._reloadEndsAt = performance.now() + this.spec.reloadTime * 1000;
@@ -82,6 +83,10 @@ export class WeaponController {
     return sc && sc.usesWeapon && sc.running && !sc._dead ? sc : null;
   }
 
+  _infiniteAmmo() {
+    return !!this._active()?.infiniteAmmo;
+  }
+
   update(dt) {
     const sc = this._active();
     if (!sc) {
@@ -112,7 +117,7 @@ export class WeaponController {
       this._sustainLevel = 0;
     }
 
-    const canFire = !this.reloading && this.ammo > 0;
+    const canFire = !this.reloading && (this._infiniteAmmo() || this.ammo > 0);
     const held = this.input.fireHeld;
 
     if (spec.automatic) {
@@ -135,7 +140,8 @@ export class WeaponController {
         if (sinceLast > spec.burstBreakMs) this._shotIndex = 0;
         if (sinceLast > shotIntervalMs * 2) this._lastShotAt = now - shotIntervalMs;
         this._firing = true;
-        while (this.ammo > 0 && !this.reloading && now - this._lastShotAt >= shotIntervalMs) {
+        const infinite = this._infiniteAmmo();
+        while ((infinite || this.ammo > 0) && !this.reloading && now - this._lastShotAt >= shotIntervalMs) {
           this._lastShotAt += shotIntervalMs;
           this._fireOne(sc);
         }
@@ -152,7 +158,7 @@ export class WeaponController {
     }
 
     this._wasFireHeld = held;
-    if (this.ammo === 0 && !this.reloading) this.reload();
+    if (this.ammo === 0 && !this.reloading && !this._infiniteAmmo()) this.reload();
   }
 
   _fireOne(sc) {
@@ -172,7 +178,7 @@ export class WeaponController {
 
     sc.shoot(offset, bloom, idx, punch); // flash, kick, tracer + view-punch live in shoot()
 
-    this.ammo--;
+    if (!sc.infiniteAmmo) this.ammo--;
     this._shotIndex++;
   }
 }

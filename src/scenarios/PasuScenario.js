@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
-// GridshotScenario.js
-// Spherical targets on a forward wall. Clicking mode: shoot to destroy.
-// Tracking mode: hold crosshair on target, then click when ready or auto-hit.
-// Optional horizontal drift and adjustable spawn-box scale.
+// PasuScenario.js
+// Like Gridshot — spherical targets on a wall — but smaller by default and
+// always drifting on a diagonal, bouncing inside the spawn box. Supports the
+// same clicking / tracking modes as Gridshot.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
@@ -19,23 +19,23 @@ const READY_COLOR = new THREE.Color(0x35e06a);
 const BASE_BOUNDS_W = 9;
 const BASE_BOUNDS_H = 5;
 
-export class GridshotScenario extends BaseScenario {
+export class PasuScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
-    this.weaponId = 'pistol'; // Gridshot is a pistol mode
-    const g = this.settings.data.gridshot;
-    this.targetSize = this.config.targetSize ?? g.targetSize;
-    this.targetCount = this.config.targetCount ?? g.targetCount;
-    this.enableTimeLimit = this.config.enableTimeLimit ?? g.enableTimeLimit;
-    this.maxTargetAge = (this.config.maxTargetAge ?? g.maxTargetAge) / 1000;
-    this.mode = this.config.mode ?? g.mode ?? 'clicking';
-    this.trackTime = this.config.trackTime ?? g.trackTime ?? 0.4;
-    this.trackResolve = this.config.trackResolve ?? g.trackResolve ?? 'click';
-    this.floatEnabled = this.config.floatEnabled ?? g.floatEnabled ?? false;
-    this.floatSpeedMax = this.config.floatSpeedMax ?? g.floatSpeedMax ?? 2;
-    this.boundsScaleX = this.config.boundsScaleX ?? g.boundsScaleX ?? 1;
-    this.boundsScaleY = this.config.boundsScaleY ?? g.boundsScaleY ?? 1;
-    this.infiniteAmmo = this.config.infiniteAmmo ?? g.infiniteAmmo !== false;
+    this.weaponId = 'pistol';
+    const p = this.settings.data.pasu;
+    this.targetSize = this.config.targetSize ?? p.targetSize;
+    this.targetCount = this.config.targetCount ?? p.targetCount;
+    this.enableTimeLimit = this.config.enableTimeLimit ?? p.enableTimeLimit;
+    this.maxTargetAge = (this.config.maxTargetAge ?? p.maxTargetAge) / 1000;
+    this.mode = this.config.mode ?? p.mode ?? 'clicking';
+    this.trackTime = this.config.trackTime ?? p.trackTime ?? 0.4;
+    this.trackResolve = this.config.trackResolve ?? p.trackResolve ?? 'click';
+    this.travelSpeedMax = this.config.travelSpeedMax ?? p.travelSpeedMax ?? 2.5;
+    this.boundsScaleX = this.config.boundsScaleX ?? p.boundsScaleX ?? 1;
+    this.boundsScaleY = this.config.boundsScaleY ?? p.boundsScaleY ?? 1;
+    this.angleOffset = this.config.angleOffset ?? p.angleOffset ?? 360;
+    this.infiniteAmmo = this.config.infiniteAmmo ?? p.infiniteAmmo !== false;
 
     this.wallDistance = 16;
     this.boundsW = BASE_BOUNDS_W * this.boundsScaleX;
@@ -46,24 +46,22 @@ export class GridshotScenario extends BaseScenario {
   }
 
   get name() {
-    return 'gridshot';
+    return 'pasu';
   }
 
-  /** One leaderboard per run duration (matches other scenarios' simplicity). */
   static configKeyFor(settings) {
     return `d${settings.data.runDuration}`;
   }
+
   configKey() {
-    return GridshotScenario.configKeyFor(this.settings);
+    return PasuScenario.configKeyFor(this.settings);
   }
 
-  /** Parse run duration from a gridshot config key (legacy or current). */
   static runDurationFromKey(configKey) {
     const m = String(configKey || '').match(/(?:^d|_d)(\d+)$/);
     return m ? parseInt(m[1], 10) : null;
   }
 
-  /** Seconds actively spent in this gridshot run (paused time excluded). */
   get modeSeconds() {
     return this.elapsed;
   }
@@ -107,25 +105,42 @@ export class GridshotScenario extends BaseScenario {
     this.root.add(grid);
   }
 
-  _randomPos() {
+  _bounds() {
+    const halfX = this.boundsW / 2 - this.targetSize - 0.05;
     const halfH = this.boundsH / 2;
     const yMin = Math.max(this.targetSize + 0.25, this.centerY - halfH);
     const yMax = this.centerY + halfH;
+    return { minX: -halfX, maxX: halfX, yMin, yMax };
+  }
+
+  _randomPos() {
+    const b = this._bounds();
     return new THREE.Vector3(
-      randRange(-this.boundsW / 2, this.boundsW / 2),
-      randRange(yMin, yMax),
+      randRange(b.minX, b.maxX),
+      randRange(b.yMin, b.yMax),
       -this.wallDistance + this.targetSize + 0.05
     );
   }
 
-  _initGridshotState(target, pos) {
-    target._gridshot = {
+  /** Travel angle (rad). 360° = any direction; smaller = near-horizontal only. */
+  _randomTravelAngle() {
+    const spread = Math.max(0, Math.min(360, this.angleOffset));
+    if (spread >= 360) return randRange(0, Math.PI * 2);
+    const half = (spread / 2) * (Math.PI / 180);
+    const base = Math.random() < 0.5 ? 0 : Math.PI;
+    return base + randRange(-half, half);
+  }
+
+  _initPasuState(target, pos) {
+    const speed = randRange(this.travelSpeedMax * 0.45, this.travelSpeedMax);
+    const angle = this._randomTravelAngle();
+    target._pasu = {
       trackT: 0,
       ready: false,
-      driftDir: Math.random() < 0.5 ? -1 : 1,
-      driftSpeed: this.floatEnabled ? randRange(0, this.floatSpeedMax) : 0,
-      posX: pos.x
+      velX: Math.cos(angle) * speed,
+      velY: Math.sin(angle) * speed
     };
+    target.object.position.copy(pos);
   }
 
   _setTargetReady(target, ready) {
@@ -187,8 +202,7 @@ export class GridshotScenario extends BaseScenario {
     );
     target._mesh = mesh;
     target.addCollider(mesh, { zone: 'body', points: 1, crit: false });
-    target.object.position.copy(pos);
-    this._initGridshotState(target, pos);
+    this._initPasuState(target, pos);
     this.addTarget(target);
   }
 
@@ -202,24 +216,24 @@ export class GridshotScenario extends BaseScenario {
 
     for (const t of this.targets) {
       if (t.state === 'dying') continue;
-      const gs = t._gridshot;
-      if (!gs) continue;
+      const ps = t._pasu;
+      if (!ps) continue;
 
       if (t === hovered) {
-        gs.trackT += dt;
-        trackProgress = Math.min(1, gs.trackT / this.trackTime);
-        if (gs.trackT >= this.trackTime) {
+        ps.trackT += dt;
+        trackProgress = Math.min(1, ps.trackT / this.trackTime);
+        if (ps.trackT >= this.trackTime) {
           if (this.trackResolve === 'auto') {
             this._registerHit(t);
-          } else if (!gs.ready) {
-            gs.ready = true;
+          } else if (!ps.ready) {
+            ps.ready = true;
             this._setTargetReady(t, true);
           }
         }
       } else {
-        gs.trackT = 0;
-        if (gs.ready) {
-          gs.ready = false;
+        ps.trackT = 0;
+        if (ps.ready) {
+          ps.ready = false;
           this._setTargetReady(t, false);
         }
       }
@@ -228,24 +242,32 @@ export class GridshotScenario extends BaseScenario {
     this.crosshair?.setTrackProgress(trackProgress);
   }
 
-  _updateFloat(dt) {
-    if (!this.floatEnabled) return;
-    const halfX = this.boundsW / 2 - this.targetSize - 0.05;
+  _updateTravel(dt) {
+    const b = this._bounds();
 
     for (const t of this.targets) {
       if (t.state === 'dying') continue;
-      const gs = t._gridshot;
-      if (!gs || !gs.driftSpeed) continue;
+      const ps = t._pasu;
+      if (!ps) continue;
 
-      gs.posX += gs.driftDir * gs.driftSpeed * dt;
-      if (gs.posX < -halfX) {
-        gs.posX = -halfX;
-        gs.driftDir = 1;
-      } else if (gs.posX > halfX) {
-        gs.posX = halfX;
-        gs.driftDir = -1;
+      const pos = t.object.position;
+      pos.x += ps.velX * dt;
+      pos.y += ps.velY * dt;
+
+      if (pos.x < b.minX) {
+        pos.x = b.minX;
+        ps.velX = Math.abs(ps.velX);
+      } else if (pos.x > b.maxX) {
+        pos.x = b.maxX;
+        ps.velX = -Math.abs(ps.velX);
       }
-      t.object.position.x = gs.posX;
+      if (pos.y < b.yMin) {
+        pos.y = b.yMin;
+        ps.velY = Math.abs(ps.velY);
+      } else if (pos.y > b.yMax) {
+        pos.y = b.yMax;
+        ps.velY = -Math.abs(ps.velY);
+      }
     }
   }
 
@@ -255,7 +277,7 @@ export class GridshotScenario extends BaseScenario {
 
   onUpdate(dt) {
     this._updateTracking(dt);
-    this._updateFloat(dt);
+    this._updateTravel(dt);
 
     if (this.enableTimeLimit) {
       for (const t of this.targets) {
@@ -277,7 +299,7 @@ export class GridshotScenario extends BaseScenario {
     if (!target || target.state === 'dying') return;
 
     if (this.mode === 'tracking' && this.trackResolve === 'click') {
-      if (!target._gridshot?.ready) return;
+      if (!target._pasu?.ready) return;
     }
 
     this._registerHit(target);

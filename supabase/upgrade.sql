@@ -121,7 +121,7 @@ security definer
 set search_path = public
 as $$
 begin
-  if p_scenario = 'gridshot' then
+  if p_scenario in ('gridshot', 'pasu') then
     return query
     select distinct on (s.user_id)
       s.user_id,
@@ -187,7 +187,7 @@ security definer
 set search_path = public
 as $$
 begin
-  if p_scenario = 'gridshot' then
+  if p_scenario in ('gridshot', 'pasu') then
     return query
     select
       ranked.user_id,
@@ -258,3 +258,142 @@ as $$
 $$;
 
 grant execute on function public.get_elo_leaderboard_top(int) to anon, authenticated;
+
+-- ---- Pasu mode: KPM leaderboard (same ranking as Gridshot) -------------------
+-- Safe to re-run; updates leaderboard RPCs if you already applied an earlier upgrade.sql.
+drop function if exists public.get_leaderboard_top(text, text, int);
+drop function if exists public.get_leaderboard(text, text, int);
+
+create or replace function public.get_leaderboard(
+  p_scenario text,
+  p_config_key text,
+  p_limit int default 10
+)
+returns table (
+  user_id uuid,
+  username text,
+  score integer,
+  accuracy real,
+  crit_ratio real,
+  kills integer,
+  time_played real,
+  kpm real,
+  achieved_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_scenario in ('gridshot', 'pasu') then
+    return query
+    select distinct on (s.user_id)
+      s.user_id,
+      coalesce(p.username, 'player_' || substr(replace(s.user_id::text, '-', ''), 1, 8)),
+      s.score,
+      s.accuracy,
+      s.crit_ratio,
+      s.kills,
+      s.time_played,
+      s.kpm,
+      s.created_at as achieved_at
+    from public.scores s
+    left join public.profiles p on p.id = s.user_id
+    where s.scenario = p_scenario
+      and s.config_key = p_config_key
+    order by
+      s.user_id,
+      coalesce(s.time_played, 0) desc,
+      coalesce(s.kpm, 0) desc,
+      coalesce(s.kills, 0) desc,
+      coalesce(s.accuracy, 0) desc,
+      s.created_at desc;
+  else
+    return query
+    select distinct on (s.user_id)
+      s.user_id,
+      coalesce(p.username, 'player_' || substr(replace(s.user_id::text, '-', ''), 1, 8)),
+      s.score,
+      s.accuracy,
+      s.crit_ratio,
+      s.kills,
+      s.time_played,
+      s.kpm,
+      s.created_at as achieved_at
+    from public.scores s
+    left join public.profiles p on p.id = s.user_id
+    where s.scenario = p_scenario
+      and s.config_key = p_config_key
+    order by s.user_id, s.score desc, s.created_at desc;
+  end if;
+end;
+$$;
+
+create or replace function public.get_leaderboard_top(
+  p_scenario text,
+  p_config_key text,
+  p_limit int default 10
+)
+returns table (
+  user_id uuid,
+  username text,
+  score integer,
+  accuracy real,
+  crit_ratio real,
+  kills integer,
+  time_played real,
+  kpm real,
+  achieved_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_scenario in ('gridshot', 'pasu') then
+    return query
+    select
+      ranked.user_id,
+      ranked.username,
+      ranked.score,
+      ranked.accuracy,
+      ranked.crit_ratio,
+      ranked.kills,
+      ranked.time_played,
+      ranked.kpm,
+      ranked.achieved_at
+    from (
+      select * from public.get_leaderboard(p_scenario, p_config_key, 1000)
+    ) ranked
+    order by
+      coalesce(ranked.time_played, 0) desc,
+      coalesce(ranked.kpm, 0) desc,
+      coalesce(ranked.kills, 0) desc,
+      coalesce(ranked.accuracy, 0) desc,
+      ranked.achieved_at asc
+    limit greatest(1, least(p_limit, 50));
+  else
+    return query
+    select
+      ranked.user_id,
+      ranked.username,
+      ranked.score,
+      ranked.accuracy,
+      ranked.crit_ratio,
+      ranked.kills,
+      ranked.time_played,
+      ranked.kpm,
+      ranked.achieved_at
+    from (
+      select * from public.get_leaderboard(p_scenario, p_config_key, 1000)
+    ) ranked
+    order by ranked.score desc, ranked.achieved_at asc
+    limit greatest(1, least(p_limit, 50));
+  end if;
+end;
+$$;
+
+grant execute on function public.get_leaderboard(text, text, int) to anon, authenticated;
+grant execute on function public.get_leaderboard_top(text, text, int) to anon, authenticated;

@@ -26,9 +26,11 @@ import { SCORE_TARGETS, MM_SCORE_TARGET } from '../multiplayer/constants.js';
 import { getMap } from '../multiplayer/maps.js';
 import { formatServerRegion } from '../multiplayer/regionLabels.js';
 import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, CUSTOM_GAMES_ICON } from '../aim4/icons.js';
+import { isKpmScenario } from '../scenarios/kpmScenarios.js';
 
 const SCENARIO_META = {
   gridshot: { title: 'Gridshot' },
+  pasu: { title: 'Pasu' },
   arena: { title: 'Crossfire' },
   duels: { title: 'Duels' },
   range: { title: 'Range' }
@@ -256,7 +258,36 @@ export class UIOverlay {
           ${rf('set-grid-bounds-y', 'Vertical spawn scale', 0.25, 2, 0.05)}
           ${rf('set-grid-bounds-x', 'Horizontal spawn scale', 0.25, 2, 0.05)}
           <label class="field-check"><input type="checkbox" id="set-grid-tl" /> Per-target time limit</label>
-          ${rf('set-grid-age', 'Max target age (ms)', 400, 3000, 100)}`
+          ${rf('set-grid-age', 'Max target age (ms)', 400, 3000, 100)}
+          <label class="field-check"><input type="checkbox" id="set-grid-infinite-ammo" /> Infinite ammo</label>`
+      },
+      {
+        id: 'pasu',
+        label: 'Pasu',
+        body: `
+          ${rf('set-pasu-size', 'Target size', 0.15, 0.9, 0.05)}
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Mode</span></div>
+            <select id="set-pasu-mode">
+              <option value="clicking">Clicking</option>
+              <option value="tracking">Tracking</option>
+            </select>
+          </div>
+          ${rf('set-pasu-track-time', 'Track time (s)', 0.1, 2.0, 0.05)}
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Tracking resolve</span></div>
+            <select id="set-pasu-track-resolve">
+              <option value="click">Click when ready</option>
+              <option value="auto">Auto hit</option>
+            </select>
+          </div>
+          ${rf('set-pasu-travel-speed', 'Max travel speed (m/s)', 0.5, 8, 0.5)}
+          ${rf('set-pasu-bounds-y', 'Vertical spawn scale', 0.25, 2, 0.05)}
+          ${rf('set-pasu-bounds-x', 'Horizontal spawn scale', 0.25, 2, 0.05)}
+          ${rf('set-pasu-angle', 'Angle offset (°)', 15, 360, 15)}
+          <label class="field-check"><input type="checkbox" id="set-pasu-tl" /> Per-target time limit</label>
+          ${rf('set-pasu-age', 'Max target age (ms)', 400, 3000, 100)}
+          <label class="field-check"><input type="checkbox" id="set-pasu-infinite-ammo" /> Infinite ammo</label>`
       },
       {
         id: 'arena',
@@ -309,6 +340,21 @@ export class UIOverlay {
           </div>
           ${rf('set-range-count', 'Enemies', 2, 8, 1)}
           ${rf('set-range-rad', 'Ring radius (m)', 7, 20, 1)}
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Bot movement</span></div>
+            <select id="set-range-bot-move">
+              <option value="strafe">Strafe</option>
+              <option value="static">Static</option>
+            </select>
+          </div>
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Bot crouch</span></div>
+            <select id="set-range-bot-crouch">
+              <option value="tap">Tap crouch</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+          <label class="field-check"><input type="checkbox" id="set-range-infinite-ammo" /> Infinite ammo</label>
           <label class="field-check"><input type="checkbox" id="set-range-cover" /> Cover boxes</label>
           ${rf('set-range-cover-count', 'Cover amount', 1, 6, 1)}
           ${rf('set-range-cover-dist', 'Cover distance (m)', 2, 15, 0.5)}
@@ -844,6 +890,34 @@ export class UIOverlay {
       s.save();
     });
     this._bindRange('set-grid-age', (v) => (s.data.gridshot.maxTargetAge = v), { parse: (v) => parseInt(v, 10) });
+    $('#set-grid-infinite-ammo')?.addEventListener('change', (e) => {
+      s.data.gridshot.infiniteAmmo = e.target.checked;
+      s.save();
+    });
+
+    this._bindRange('set-pasu-size', (v) => (s.data.pasu.targetSize = v));
+    $('#set-pasu-mode').addEventListener('change', (e) => {
+      s.data.pasu.mode = e.target.value;
+      s.save();
+    });
+    this._bindRange('set-pasu-track-time', (v) => (s.data.pasu.trackTime = v));
+    $('#set-pasu-track-resolve').addEventListener('change', (e) => {
+      s.data.pasu.trackResolve = e.target.value;
+      s.save();
+    });
+    this._bindRange('set-pasu-travel-speed', (v) => (s.data.pasu.travelSpeedMax = v));
+    this._bindRange('set-pasu-bounds-y', (v) => (s.data.pasu.boundsScaleY = v));
+    this._bindRange('set-pasu-bounds-x', (v) => (s.data.pasu.boundsScaleX = v));
+    this._bindRange('set-pasu-angle', (v) => (s.data.pasu.angleOffset = v), { parse: (v) => parseInt(v, 10) });
+    $('#set-pasu-tl').addEventListener('change', (e) => {
+      s.data.pasu.enableTimeLimit = e.target.checked;
+      s.save();
+    });
+    this._bindRange('set-pasu-age', (v) => (s.data.pasu.maxTargetAge = v), { parse: (v) => parseInt(v, 10) });
+    $('#set-pasu-infinite-ammo')?.addEventListener('change', (e) => {
+      s.data.pasu.infiniteAmmo = e.target.checked;
+      s.save();
+    });
 
     this._bindRange('set-arena-cross', (v) => (s.data.arena.crossDuration = v), { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-arena-peek', (v) => (s.data.arena.peekHold = v), { parse: (v) => parseInt(v, 10) });
@@ -873,6 +947,18 @@ export class UIOverlay {
     });
     this._bindRange('set-range-count', (v) => (s.data.range.enemyCount = v), { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-range-rad', (v) => (s.data.range.radius = v), { parse: (v) => parseInt(v, 10) });
+    $('#set-range-bot-move')?.addEventListener('change', (e) => {
+      s.data.range.botStrafe = e.target.value === 'strafe';
+      s.save();
+    });
+    $('#set-range-bot-crouch')?.addEventListener('change', (e) => {
+      s.data.range.botCrouchTap = e.target.value === 'tap';
+      s.save();
+    });
+    $('#set-range-infinite-ammo')?.addEventListener('change', (e) => {
+      s.data.range.infiniteAmmo = e.target.checked;
+      s.save();
+    });
     $('#set-range-cover').addEventListener('change', (e) => {
       s.data.range.coverEnabled = e.target.checked;
       s.save();
@@ -1755,6 +1841,19 @@ export class UIOverlay {
     this._setRange('set-grid-bounds-x', s.gridshot.boundsScaleX ?? 1);
     $('#set-grid-tl').checked = s.gridshot.enableTimeLimit;
     this._setRange('set-grid-age', s.gridshot.maxTargetAge);
+    $('#set-grid-infinite-ammo').checked = s.gridshot.infiniteAmmo !== false;
+
+    this._setRange('set-pasu-size', s.pasu?.targetSize ?? 0.38);
+    $('#set-pasu-mode').value = s.pasu?.mode || 'clicking';
+    this._setRange('set-pasu-track-time', s.pasu?.trackTime ?? 0.4);
+    $('#set-pasu-track-resolve').value = s.pasu?.trackResolve || 'click';
+    this._setRange('set-pasu-travel-speed', s.pasu?.travelSpeedMax ?? 2.5);
+    this._setRange('set-pasu-bounds-y', s.pasu?.boundsScaleY ?? 1);
+    this._setRange('set-pasu-bounds-x', s.pasu?.boundsScaleX ?? 1);
+    this._setRange('set-pasu-angle', s.pasu?.angleOffset ?? 360);
+    $('#set-pasu-tl').checked = !!s.pasu?.enableTimeLimit;
+    this._setRange('set-pasu-age', s.pasu?.maxTargetAge ?? 1200);
+    $('#set-pasu-infinite-ammo').checked = s.pasu?.infiniteAmmo !== false;
 
     this._setRange('set-arena-cross', s.arena.crossDuration);
     this._setRange('set-arena-peek', s.arena.peekHold);
@@ -1776,6 +1875,9 @@ export class UIOverlay {
     $('#set-range-arc').value = String(s.range.arc);
     this._setRange('set-range-count', s.range.enemyCount);
     this._setRange('set-range-rad', s.range.radius);
+    $('#set-range-bot-move').value = s.range.botStrafe !== false ? 'strafe' : 'static';
+    $('#set-range-bot-crouch').value = s.range.botCrouchTap !== false ? 'tap' : 'off';
+    $('#set-range-infinite-ammo').checked = s.range.infiniteAmmo !== false;
     $('#set-range-cover').checked = !!s.range.coverEnabled;
     this._setRange('set-range-cover-count', s.range.coverCount ?? 2);
     this._setRange('set-range-cover-dist', s.range.coverDistance ?? 4);
@@ -1812,8 +1914,8 @@ export class UIOverlay {
   play(name) {
     this.currentScenario = name;
     this.sceneManager.load(name);
-    // CRIT chip is meaningful for every mode with head-shots (all but Gridshot).
-    this.hudCritChip.style.display = name === 'gridshot' ? 'none' : '';
+    // CRIT chip is meaningful for every mode with head-shots (all but KPM modes).
+    this.hudCritChip.style.display = isKpmScenario(name) ? 'none' : '';
     this.showScreen('playing');
     this.state = 'await-start';
     this.input.requestLock();
@@ -1828,10 +1930,10 @@ export class UIOverlay {
 
   quit() {
     const sc = this.sceneManager.current;
-    const gridshotRun =
-      sc?.name === 'gridshot' && sc.modeSeconds > 0 && !this.mp?.inMatch && !this.mp?.lobby;
+    const kpmRun =
+      sc && isKpmScenario(sc.name) && sc.modeSeconds > 0 && !this.mp?.inMatch && !this.mp?.lobby;
 
-    if (gridshotRun) {
+    if (kpmRun) {
       sc.pause();
       const results = sc.results();
       this._resetMpChat();
@@ -1911,7 +2013,7 @@ export class UIOverlay {
       if (this._aimHintShown) this._setClickToAim(false);
     }
     if (this.hud.classList.contains('active') && sc) {
-      if (sc.name === 'gridshot') {
+      if (isKpmScenario(sc.name)) {
         this.hudTime.textContent = sc.modeSeconds.toFixed(1);
       } else {
         this.hudTime.textContent = this.sceneManager.timeRemaining.toFixed(1);
@@ -1934,6 +2036,12 @@ export class UIOverlay {
     const show = this.state === 'playing' && sc?.usesWeapon && !!weapon;
     this.hudAmmo.classList.toggle('active', !!show);
     if (!show) return;
+    if (sc.infiniteAmmo) {
+      this.hudAmmo.classList.remove('reloading');
+      this.hudAmmoMag.textContent = '∞';
+      this.hudAmmoSize.textContent = '∞';
+      return;
+    }
     if (weapon.reloading) {
       this.hudAmmo.classList.add('reloading');
       this.hudAmmoMag.textContent = '·';
@@ -2056,7 +2164,7 @@ export class UIOverlay {
       <tbody>${rows}</tbody></table>`;
     }
 
-    if (scenario === 'gridshot') {
+    if (isKpmScenario(scenario)) {
       const rows = list
         .map((r, i) => {
           const hl = highlightUserId && r.user_id === highlightUserId ? ' class="hl"' : '';
@@ -2078,7 +2186,7 @@ export class UIOverlay {
     const rows = list
       .map((r, i) => {
         const hl = highlightUserId && r.user_id === highlightUserId ? ' class="hl"' : '';
-        const crit = scenario !== 'gridshot'
+        const crit = !isKpmScenario(scenario)
           ? `<td>${Math.round((r.crit_ratio || 0) * 100)}%</td>`
           : '<td>—</td>';
         const date = r.achieved_at ? new Date(r.achieved_at).toLocaleDateString() : '—';
@@ -2122,12 +2230,12 @@ export class UIOverlay {
           ? `All accounts · signed in as ${this._accountLabel()} (${this.auth.elo} ELO)`
           : 'All accounts · sign in to track your ranked ELO';
       } else {
-        const gridshotHint = scenario === 'gridshot'
+        const kpmHint = isKpmScenario(scenario)
           ? 'Ranked by time in mode, then KPM · '
           : 'Best score per verified account · ';
         subtitle.textContent = this.auth?.isLoggedIn
-          ? `${gridshotHint}signed in as ${this._accountLabel()}`
-          : `${gridshotHint}sign in to submit scores`;
+          ? `${kpmHint}signed in as ${this._accountLabel()}`
+          : `${kpmHint}sign in to submit scores`;
       }
     }
     const { list, error } = await this._fetchLeaderboard(scenario);
@@ -2159,10 +2267,10 @@ export class UIOverlay {
       submitNote = 'Sign in to save to leaderboards';
     }
 
-    const showCrit = results.scenario !== 'gridshot';
+    const showCrit = !isKpmScenario(results.scenario);
     const stat = (label, val) =>
       `<div class="stat"><span class="stat-value">${val}</span><label>${label}</label></div>`;
-    const gridshotStats =
+    const kpmStats =
       stat('Time', this._formatTimePlayed(results.timePlayed)) +
       stat('Accuracy', Math.round(results.accuracy * 100) + '%') +
       stat('Kills', results.kills) +
@@ -2175,7 +2283,7 @@ export class UIOverlay {
       (showCrit ? stat('Crit ratio', Math.round(results.critRatio * 100) + '%') : '') +
       stat('Misses', results.misses);
     this.root.querySelector('#res-stats').innerHTML =
-      results.scenario === 'gridshot' ? gridshotStats : defaultStats;
+      isKpmScenario(results.scenario) ? kpmStats : defaultStats;
 
     const { list, error } = await this._fetchLeaderboard(results.scenario, results.configKey);
     const lbHtml = this._leaderboardRowsHtml(

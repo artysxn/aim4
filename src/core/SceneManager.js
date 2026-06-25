@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import { GridshotScenario } from '../scenarios/GridshotScenario.js';
+import { PasuScenario } from '../scenarios/PasuScenario.js';
 import { ArenaScenario } from '../scenarios/ArenaScenario.js';
 import { DuelsScenario } from '../scenarios/DuelsScenario.js';
 import { RangeScenario } from '../scenarios/RangeScenario.js';
@@ -14,6 +15,7 @@ import { MultiplayerDuelScenario } from '../scenarios/MultiplayerDuelScenario.js
 // Singleplayer scenarios — these are the ones shown as menu cards + leaderboards.
 export const SCENARIOS = {
   gridshot: GridshotScenario,
+  pasu: PasuScenario,
   arena: ArenaScenario,
   duels: DuelsScenario,
   range: RangeScenario

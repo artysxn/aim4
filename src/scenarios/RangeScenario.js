@@ -44,6 +44,9 @@ export class RangeScenario extends BaseScenario {
     this.arcDeg = this.config.arc ?? r.arc;
     this.enemyCount = this.config.enemyCount ?? r.enemyCount;
     this.radius = this.config.radius ?? r.radius;
+    this.botStrafe = this.config.botStrafe ?? r.botStrafe !== false;
+    this.botCrouchTap = this.config.botCrouchTap ?? r.botCrouchTap !== false;
+    this.infiniteAmmo = this.config.infiniteAmmo ?? r.infiniteAmmo !== false;
 
     this.arc = degToRad(this.arcDeg);
     this.full = this.arcDeg >= 360;
@@ -255,67 +258,75 @@ export class RangeScenario extends BaseScenario {
   onUpdate(dt) {
     const max = RUN_SPEED;
     const cam = this.camera;
+    const strafe = this.botStrafe;
+    const crouchTap = this.botCrouchTap;
     for (const bot of this.bots) {
       if (bot.target.state === 'dying') continue;
 
-      // ADAD burst: fire up to 6 rapid direction flips at random intervals.
-      bot.burstStartTimer -= dt;
-      if (bot.burstStartTimer <= 0 && bot.burstRemaining === 0) {
-        bot.burstRemaining = randInt(2, 6);
-        bot.burstStartTimer = randRange(BURST_GAP_MIN, BURST_GAP_MAX);
-      }
-
-      // Direction reversal — fast cadence during a burst, normal otherwise.
-      bot.reverseTimer -= dt;
-      if (bot.reverseTimer <= 0) {
-        bot.wishDir = -bot.wishDir;
-        if (bot.burstRemaining > 0) {
-          bot.burstRemaining--;
-          bot.reverseTimer = randRange(BURST_MIN, BURST_MAX);
-        } else {
-          bot.reverseTimer = randRange(REVERSE_MIN, REVERSE_MAX);
+      if (strafe) {
+        // ADAD burst: fire up to 6 rapid direction flips at random intervals.
+        bot.burstStartTimer -= dt;
+        if (bot.burstStartTimer <= 0 && bot.burstRemaining === 0) {
+          bot.burstRemaining = randInt(2, 6);
+          bot.burstStartTimer = randRange(BURST_GAP_MIN, BURST_GAP_MAX);
         }
+
+        // Direction reversal — fast cadence during a burst, normal otherwise.
+        bot.reverseTimer -= dt;
+        if (bot.reverseTimer <= 0) {
+          bot.wishDir = -bot.wishDir;
+          if (bot.burstRemaining > 0) {
+            bot.burstRemaining--;
+            bot.reverseTimer = randRange(BURST_MIN, BURST_MAX);
+          } else {
+            bot.reverseTimer = randRange(REVERSE_MIN, REVERSE_MAX);
+          }
+        }
+
+        // Strafe along the arc; reflect at the arc edges for non-full ranges.
+        bot.mover.step(dt, bot.wishDir, max);
+        let theta = bot.mover.s / this.radius;
+        if (this.full) {
+          if (theta > Math.PI) {
+            theta -= 2 * Math.PI;
+            bot.mover.s = theta * this.radius;
+          } else if (theta < -Math.PI) {
+            theta += 2 * Math.PI;
+            bot.mover.s = theta * this.radius;
+          }
+        } else {
+          if (theta <= this.thetaMin) {
+            theta = this.thetaMin;
+            bot.mover.s = theta * this.radius;
+            bot.wishDir = 1;
+          } else if (theta >= this.thetaMax) {
+            theta = this.thetaMax;
+            bot.mover.s = theta * this.radius;
+            bot.wishDir = -1;
+          }
+        }
+        this._placeBot(bot);
       }
 
-      // Random crouch taps.
-      bot.crouchTimer -= dt;
-      if (bot.crouchWant && bot.crouchTimer <= 0) {
+      if (crouchTap) {
+        bot.crouchTimer -= dt;
+        if (bot.crouchWant && bot.crouchTimer <= 0) {
+          bot.crouchWant = 0;
+          bot.crouchTimer = randRange(CROUCH_GAP_MIN, CROUCH_GAP_MAX);
+        } else if (!bot.crouchWant && bot.crouchTimer <= 0) {
+          bot.crouchWant = 1;
+          bot.crouchTimer = randRange(CROUCH_HOLD_MIN, CROUCH_HOLD_MAX);
+        }
+      } else {
         bot.crouchWant = 0;
-        bot.crouchTimer = randRange(CROUCH_GAP_MIN, CROUCH_GAP_MAX);
-      } else if (!bot.crouchWant && bot.crouchTimer <= 0) {
-        bot.crouchWant = 1;
-        bot.crouchTimer = randRange(CROUCH_HOLD_MIN, CROUCH_HOLD_MAX);
       }
+
       bot.crouch = clamp(bot.crouch + (bot.crouchWant - bot.crouch) * Math.min(1, CROUCH_RATE * dt), 0, 1);
       if (bot.target.rig) bot.target.rig.scale.y = lerp(1, 0.55, bot.crouch);
       if (bot.target.headMesh) {
         bot.target.headMesh.position.y = BODY_H * lerp(1, 0.55, bot.crouch) + HEAD_R + 0.02;
       }
 
-      // Strafe along the arc; reflect at the arc edges for non-full ranges.
-      bot.mover.step(dt, bot.wishDir, max);
-      let theta = bot.mover.s / this.radius;
-      if (this.full) {
-        if (theta > Math.PI) {
-          theta -= 2 * Math.PI;
-          bot.mover.s = theta * this.radius;
-        } else if (theta < -Math.PI) {
-          theta += 2 * Math.PI;
-          bot.mover.s = theta * this.radius;
-        }
-      } else {
-        if (theta <= this.thetaMin) {
-          theta = this.thetaMin;
-          bot.mover.s = theta * this.radius;
-          bot.wishDir = 1; // don't zero velocity — let Source friction/accel decelerate naturally
-        } else if (theta >= this.thetaMax) {
-          theta = this.thetaMax;
-          bot.mover.s = theta * this.radius;
-          bot.wishDir = -1;
-        }
-      }
-
-      this._placeBot(bot);
       bot.target.object.lookAt(cam.position.x, bot.target.object.position.y + 1.0, cam.position.z);
     }
   }

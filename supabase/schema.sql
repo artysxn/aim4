@@ -144,7 +144,7 @@ security definer
 set search_path = public
 as $$
 begin
-  if p_scenario = 'gridshot' then
+  if p_scenario in ('gridshot', 'pasu') then
     return query
     select distinct on (s.user_id)
       s.user_id,
@@ -211,7 +211,7 @@ security definer
 set search_path = public
 as $$
 begin
-  if p_scenario = 'gridshot' then
+  if p_scenario in ('gridshot', 'pasu') then
     return query
     select
       ranked.user_id,

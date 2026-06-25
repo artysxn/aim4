@@ -4,6 +4,8 @@
 
 import { getSupabase, supabaseConfigured } from './supabase.js';
 import { GridshotScenario } from '../scenarios/GridshotScenario.js';
+import { PasuScenario } from '../scenarios/PasuScenario.js';
+import { isKpmScenario } from '../scenarios/kpmScenarios.js';
 
 function isMissingColumnError(error) {
   const msg = error?.message || '';
@@ -15,12 +17,18 @@ function finiteNum(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-/** Gridshot boards are keyed by run duration; include legacy long keys too. */
-function gridshotConfigKeys(configKey, runDuration) {
+/** KPM-mode boards keyed by run duration; include legacy gridshot long keys too. */
+function kpmConfigKeys(scenario, configKey, runDuration) {
   const keys = new Set();
   if (configKey) keys.add(configKey);
   if (runDuration != null) keys.add(`d${runDuration}`);
   return [...keys];
+}
+
+function runDurationFromKpmKey(scenario, configKey) {
+  if (scenario === 'gridshot') return GridshotScenario.runDurationFromKey(configKey);
+  if (scenario === 'pasu') return PasuScenario.runDurationFromKey(configKey);
+  return null;
 }
 
 function usernameFor(userId, profileMap) {
@@ -51,7 +59,7 @@ function compareDefault(a, b) {
 
 function isBetterRun(scenario, row, prev) {
   if (!prev) return true;
-  return scenario === 'gridshot'
+  return isKpmScenario(scenario)
     ? compareGridshot(row, prev) < 0
     : compareDefault(row, prev) < 0;
 }
@@ -109,10 +117,11 @@ async function fetchLeaderboardDirect(sb, scenario, configKey, limit) {
     'user_id, score, accuracy, crit_ratio, kills, hits, shots, time_played, kpm, created_at';
   const baseSelect = 'user_id, score, accuracy, crit_ratio, kills, created_at';
 
-  const runDuration =
-    scenario === 'gridshot' ? GridshotScenario.runDurationFromKey(configKey) : null;
-  const configKeys = scenario === 'gridshot'
-    ? gridshotConfigKeys(configKey, runDuration)
+  const runDuration = isKpmScenario(scenario)
+    ? runDurationFromKpmKey(scenario, configKey)
+    : null;
+  const configKeys = isKpmScenario(scenario)
+    ? kpmConfigKeys(scenario, configKey, runDuration)
     : [configKey];
 
   let data = [];
@@ -175,7 +184,7 @@ async function fetchLeaderboardDirect(sb, scenario, configKey, limit) {
   }
 
   const sorted = [...bestByUser.values()].sort((a, b) =>
-    scenario === 'gridshot' ? compareGridshot(a, b) : compareDefault(a, b)
+    isKpmScenario(scenario) ? compareGridshot(a, b) : compareDefault(a, b)
   );
 
   return { list: sorted.slice(0, limit), error: null };
@@ -204,7 +213,7 @@ export async function submitScore(userId, results) {
     kpm: finiteNum(results.kpm)
   };
 
-  if (results.scenario === 'gridshot') {
+  if (isKpmScenario(results.scenario)) {
     const timePlayed = Math.max(0, finiteNum(results.timePlayed));
     const kills = Math.round(finiteNum(results.kills));
     full.score = kills;

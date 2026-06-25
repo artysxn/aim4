@@ -55,7 +55,22 @@ const DEFAULTS = {
     floatEnabled: false,
     floatSpeedMax: 2.0, // m/s cap for horizontal drift
     boundsScaleX: 1.0, // horizontal spawn spread multiplier
-    boundsScaleY: 1.0 // vertical spawn spread multiplier (0.5 = tighter)
+    boundsScaleY: 1.0, // vertical spawn spread multiplier (0.5 = tighter)
+    infiniteAmmo: true
+  },
+  pasu: {
+    targetSize: 0.38,
+    targetCount: 3,
+    enableTimeLimit: false,
+    maxTargetAge: 1200,
+    mode: 'clicking',
+    trackTime: 0.4,
+    trackResolve: 'click',
+    travelSpeedMax: 2.5,
+    boundsScaleX: 1.0,
+    boundsScaleY: 1.0,
+    angleOffset: 360,
+    infiniteAmmo: true
   },
   arena: {
     crossDuration: 700, // ms for the bot to cross a gap (exposure window)
@@ -81,6 +96,9 @@ const DEFAULTS = {
     arc: 180, // degrees the bots are spread across: 90 | 180 | 360
     enemyCount: 5, // bots kept alive at once
     radius: 12, // metres from player centre to the bot ring
+    botStrafe: true, // false = bots stand still on the arc
+    botCrouchTap: true, // false = bots stay standing
+    infiniteAmmo: true,
     coverEnabled: false,
     coverCount: 2,
     coverDistance: 4, // metres from player centre
