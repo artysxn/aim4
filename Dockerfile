@@ -10,11 +10,12 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 # Server source. The client build (dist/) is hosted on Vercel and never served
-# here (AIM4_SERVE_STATIC is unset), but the server shares a few pure-data
-# modules with the client under src/multiplayer/ (lobby.js / hitscan.js import
-# constants.js, protocol.js, maps.js), so that dir must ship too.
+# here (AIM4_SERVE_STATIC is unset), but the server shares pure-data modules with
+# the client under src/multiplayer/ and src/utils/ (shot spread), so those dirs
+# must ship too.
 COPY server ./server
 COPY src/multiplayer ./src/multiplayer
+COPY src/utils/shotAccuracy.js src/utils/SourceMovement.js ./src/utils/
 
 ENV NODE_ENV=production
 EXPOSE 8080
