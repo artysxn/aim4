@@ -12,7 +12,7 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
-import { PUNCH_TAU_SPRAY, PUNCH_TAU_RECOVER } from '../weapons/ak47.js';
+import { PUNCH_TAU_SPRAY, PUNCH_TAU_RECOVER, VIEW_PUNCH_STRENGTH } from '../weapons/ak47.js';
 
 const TRACER_POOL = 24;
 const TRACER_LIFE = 0.09; // seconds — quick, just a firing indicator
@@ -227,8 +227,9 @@ export class Viewmodel {
     }
 
     // Recoil kick: gun slides back (+toward camera) and up briefly, springs back.
-    const kickBack = this._kick * 0.06;
-    const kickUp = this._kick * 0.02;
+    const kickMul = VIEW_PUNCH_STRENGTH;
+    const kickBack = this._kick * 0.06 * kickMul;
+    const kickUp = this._kick * 0.02 * kickMul;
 
     // Compose world position from the camera basis.
     this._pos.copy(cam.position)
@@ -238,7 +239,7 @@ export class Viewmodel {
     this.group.position.copy(this._pos);
     this.group.quaternion.copy(cam.quaternion);
     // A touch of barrel rise as it kicks.
-    this.group.rotateX(-this._kick * 0.05);
+    this.group.rotateX(-this._kick * 0.05 * kickMul);
 
     // Muzzle tip in world space (barrel tip is at local ~ -0.66 z, +0.03 y).
     this._muzzle.copy(this._pos)

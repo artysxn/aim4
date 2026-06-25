@@ -33,14 +33,19 @@ const PATTERN_DEG = [
   [1.2, 8.7], [1.8, 8.7], [2.0, 8.7], [1.7, 8.7], [1.2, 8.7]
 ];
 
-const PATTERN_SCALE = 0.9;
-const PUNCH_SCALE = 2.8;
-const PUNCH_BASE_DEG = 0.7;
-const PUNCH_RAMP_DEG = 0.05;
+/** Visual view-punch / camera kick only (does not move bullets). */
+export const VIEW_PUNCH_STRENGTH = 0.82; // 18% weaker
+/** Bullet spray pattern + sustain bloom (deterministic recoil + random cone). */
+export const SPRAY_STRENGTH = 0.68; // 32% weaker
+
+const PATTERN_SCALE = 0.9 * SPRAY_STRENGTH;
+const PUNCH_SCALE = 2.8 * VIEW_PUNCH_STRENGTH;
+const PUNCH_BASE_DEG = 0.7 * VIEW_PUNCH_STRENGTH;
+const PUNCH_RAMP_DEG = 0.05 * VIEW_PUNCH_STRENGTH;
 const PUNCH_RAMP_MAX_SHOTS = 12;
-const PUNCH_YAW_SCALE = 0.4; // fraction of per-shot pattern yaw step applied to view-punch
+const PUNCH_YAW_SCALE = 0.4 * VIEW_PUNCH_STRENGTH;
 export const PUNCH_TAU_SPRAY = 0.1;
-export const PUNCH_TAU_RECOVER = 0.25;
+export const PUNCH_TAU_RECOVER = 0.25 / 1.5; // linear view-punch reset after releasing fire
 
 export const PATTERN = PATTERN_DEG.map(([yaw, pitch]) => ({
   yaw: degToRad(yaw) * PATTERN_SCALE,
@@ -70,8 +75,8 @@ export function patternOffset(shotIndex) {
 // Standing still, shot 1 is dead-on (0 bloom); a sustained standing spray grows
 // a very slight random cone on top of the deterministic pattern.
 const STAND_BLOOM = 0;
-const SUSTAIN_STEP = degToRad(0.02); // added per sustained shot (capped)
-const SPRAY_OVERLAY_BLOOM = degToRad(0.035); // fixed slight cone while spraying
+const SUSTAIN_STEP = degToRad(0.02) * SPRAY_STRENGTH * 3;
+const SPRAY_OVERLAY_BLOOM = degToRad(0.035) * SPRAY_STRENGTH;
 export const SUSTAIN_CAP_SHOTS = 18;
 /** Idle time to recover one sustain step (linear bloom decay toward standing accuracy). */
 export const SUSTAIN_RECOVERY_PER_SHOT = 0.07;
