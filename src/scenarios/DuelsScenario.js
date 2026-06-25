@@ -21,7 +21,7 @@ import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
 import { randRange, randInt, clamp, lerp, degToRad } from '../utils/MathUtils.js';
-import { SourceMover1D, RUN_SPEED } from '../utils/SourceMovement.js';
+import { SourceMover1D, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 
 const BODY_R = 0.35;
@@ -211,6 +211,10 @@ export class DuelsScenario extends BaseScenario {
     };
   }
 
+  _colliderBoxes(a) {
+    return a.boxes.map((b) => ({ pos: b.pos, size: b.size }));
+  }
+
   // ---- Environment --------------------------------------------------------
   _buildArena() {
     // Dispose previous arena objects (supports mid-run arena switches).
@@ -259,7 +263,8 @@ export class DuelsScenario extends BaseScenario {
     this.engine.player.spawn({
       pos: a.player.pos,
       yaw: a.player.yaw,
-      bounds: this._playerBounds(a)
+      bounds: this._playerBounds(a),
+      colliders: this._colliderBoxes(a)
     });
   }
 
@@ -390,7 +395,8 @@ export class DuelsScenario extends BaseScenario {
     this.engine.player.spawn({
       pos: a.player.pos,
       yaw: a.player.yaw,
-      bounds: this._playerBounds(a)
+      bounds: this._playerBounds(a),
+      colliders: this._colliderBoxes(a)
     });
     this._spawnEnemy();
   }
@@ -465,6 +471,25 @@ export class DuelsScenario extends BaseScenario {
       e.exposedTimer -= dt;
       if (e.exposedTimer <= 0) this._onPlayerDeath();
     }
+
+    this._updateBotFootsteps(e, dt);
+  }
+
+  /** Spatial footsteps for the strafing bot (same rules as MP remotes). */
+  _updateBotFootsteps(e, dt) {
+    const audio = this.engine.audio;
+    if (!audio || !e?.target?.object) return;
+    if (!e._audioRemote) {
+      e._audioRemote = { cur: { x: 0, y: 0, z: 0, crouch: 0 }, dead: false };
+    }
+    const r = e._audioRemote;
+    const pos = e.target.object.position;
+    r.cur.x = pos.x;
+    r.cur.y = pos.y + STAND_EYE;
+    r.cur.z = pos.z;
+    r.cur.crouch = e.crouch;
+    r.dead = e.target.state === 'dying';
+    audio.updateRemotePlayer(0, r, dt);
   }
 
   _onPlayerDeath() {
@@ -514,7 +539,6 @@ export class DuelsScenario extends BaseScenario {
   }
 
   onShoot(raycaster) {
-    this.engine.audio?.playLocalShot();
     const hit = this.raycastTargets(raycaster, this.coverMeshes);
     if (!hit) return;
     const obj = hit.object;

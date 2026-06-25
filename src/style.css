@@ -803,6 +803,14 @@ input[type='checkbox'] {
 }
 
 /* ---- Results ------------------------------------------------------------ */
+.results #res-title,
+.mp-results #mp-res-title {
+  font-size: calc(var(--font-display-title-size) * 1.35);
+  line-height: 0.95;
+  text-transform: uppercase;
+  margin-bottom: 20px;
+}
+
 .res-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -814,17 +822,24 @@ input[type='checkbox'] {
   padding: 16px;
   text-align: center;
 }
-.stat span {
+.stat span,
+.stat .stat-value {
   display: block;
-  font-size: 28px;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: calc(var(--font-display-title-size) * 0.72);
+  line-height: 1;
+  text-transform: uppercase;
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
 .stat label {
   display: block;
-  font-size: 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--muted);
-  margin-top: 4px;
+  margin-top: 8px;
 }
 
 /* ---- Multiplayer -------------------------------------------------------- */

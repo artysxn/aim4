@@ -1518,10 +1518,11 @@ export class UIOverlay {
     this._updateQueueChip({ inQueue: false });
     this.input.exitLock();
     const won = msg.winnerId === myId;
-    const title = msg.aborted ? 'Match Aborted' : won ? '🏆 Victory' : 'Defeat';
+    const title = msg.aborted ? 'MATCH ABORTED' : won ? 'VICTORY' : 'DEFEAT';
     this.root.querySelector('#mp-res-title').textContent = title;
     const players = (lobby && lobby.players) || [];
-    const stat = (label, val) => `<div class="stat"><span class="text-big">${val}</span><label>${label}</label></div>`;
+    const stat = (label, val) =>
+      `<div class="stat"><span class="stat-value">${val}</span><label>${label}</label></div>`;
     let html = players
       .map((p) => stat(p.id === myId ? `${p.name} (you)` : p.name, (msg.scores && msg.scores[p.id]) || 0))
       .join('');
@@ -1986,12 +1987,13 @@ export class UIOverlay {
     }
 
     this.root.querySelector('#res-title').textContent =
-      `${SCENARIO_META[results.scenario].title} · ` +
-      (rank === 1 ? '🥇 New Best!' : rank ? `Rank #${rank}` : 'Run Complete') +
+      `${SCENARIO_META[results.scenario].title.toUpperCase()} — ` +
+      (rank === 1 ? 'NEW BEST' : rank ? `RANK #${rank}` : 'RUN COMPLETE') +
       submitNote;
 
     const showCrit = results.scenario !== 'gridshot';
-    const stat = (label, val) => `<div class="stat"><span class="text-big">${val}</span><label>${label}</label></div>`;
+    const stat = (label, val) =>
+      `<div class="stat"><span class="stat-value">${val}</span><label>${label}</label></div>`;
     const gridshotStats =
       stat('Time', this._formatTimePlayed(results.timePlayed)) +
       stat('Accuracy', Math.round(results.accuracy * 100) + '%') +

@@ -112,6 +112,7 @@ export class BaseScenario {
   shoot() {
     if (!this.running) return;
     this.shotsFired++;
+    this.engine.audio?.playLocalShot();
     _raycaster.setFromCamera(_center, this.camera);
 
     const player = this.engine.player;

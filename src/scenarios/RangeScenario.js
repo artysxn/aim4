@@ -321,7 +321,6 @@ export class RangeScenario extends BaseScenario {
   }
 
   onShoot(raycaster) {
-    this.engine.audio?.playLocalShot();
     const hit = this.raycastTargets(raycaster);
     if (!hit) return;
     const obj = hit.object;

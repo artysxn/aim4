@@ -7,6 +7,32 @@
 import { BODY_R, crouchScale, BODY_H } from '../multiplayer/constants.js';
 
 /**
+ * Highest walkable surface at (x, z): floor plus box tops the feet can reach.
+ * Ignores elevated surfaces far above `footY` so players don't snap onto cover roofs.
+ *
+ * @param {number} x
+ * @param {number} z
+ * @param {{ pos: number[], size: number[] }[] | null} boxes
+ * @param {number} footY — current feet height (used for step-up tolerance)
+ * @param {number} [floorY=0]
+ */
+export function groundHeightAt(x, z, boxes, footY, floorY = 0) {
+  let best = floorY;
+  const stepUp = 0.5;
+
+  if (!boxes?.length) return best;
+
+  for (const box of boxes) {
+    const top = box.pos[1] + box.size[1] / 2;
+    const hw = box.size[0] / 2;
+    const hd = box.size[2] / 2;
+    if (Math.abs(x - box.pos[0]) > hw || Math.abs(z - box.pos[2]) > hd) continue;
+    if (top <= footY + stepUp && top > best) best = top;
+  }
+  return best;
+}
+
+/**
  * Resolve horizontal collisions between a player disc and axis-aligned boxes.
  * Mutates `pos` ({x,z}) and `vel` ({x,z}). Skips boxes the player is jumping over.
  *

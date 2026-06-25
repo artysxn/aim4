@@ -11,7 +11,7 @@
 // ---------------------------------------------------------------------------
 
 import { clamp, lerp } from '../utils/MathUtils.js';
-import { resolveBoxCollisions } from '../utils/BoxCollision.js';
+import { resolveBoxCollisions, groundHeightAt } from '../utils/BoxCollision.js';
 import {
   srcFriction,
   srcAccelerate,
@@ -36,8 +36,8 @@ export class PlayerController {
     this.enabled = false;
     this.vel = { x: 0, z: 0 };
     this.pos = { x: 0, z: 0 };
-    this.baseY = 0; // ground height at spawn (raised on elevated platforms)
     this.footY = 0;
+    this.floorY = 0;
     this.velY = 0;
     this.onGround = true;
     this.crouchAmt = 0; // 0 = standing, 1 = fully ducked
@@ -59,8 +59,8 @@ export class PlayerController {
     this.vel.z = 0;
     this.pos.x = 0;
     this.pos.z = 0;
-    this.baseY = 0;
     this.footY = 0;
+    this.floorY = 0;
     this.velY = 0;
     this.onGround = true;
     this.crouchAmt = 0;
@@ -72,18 +72,21 @@ export class PlayerController {
    * Place the player and take control of the camera position.
    * @param {{pos:[number,number,number], yaw?:number, bounds?:object}} opts
    */
-  spawn({ pos, yaw = 0, bounds = null, colliders = null, spawnGrace = 0 }) {
+  spawn({ pos, yaw = 0, bounds = null, colliders = null, spawnGrace = 0, floorY = 0 }) {
     this.pos.x = pos[0];
     this.pos.z = pos[2];
-    this.baseY = pos[1] || 0;
-    this.footY = this.baseY;
+    this.floorY = floorY;
+    this.colliders = colliders;
+    const spawnY = pos[1] || 0;
+    this.footY = colliders?.length
+      ? Math.max(spawnY, groundHeightAt(pos[0], pos[2], colliders, spawnY, floorY))
+      : spawnY;
     this.vel.x = 0;
     this.vel.z = 0;
     this.velY = 0;
     this.onGround = true;
     this.crouchAmt = 0;
     this.bounds = bounds;
-    this.colliders = colliders;
     this.enabled = true;
 
     if (spawnGrace > 0) this.input.beginSpawnGrace(spawnGrace);
@@ -93,7 +96,11 @@ export class PlayerController {
     this.input.pitch = 0;
     this.camera.rotation.y = yaw;
     this.camera.rotation.x = 0;
-    this.camera.position.set(this.pos.x, this.baseY + STAND_EYE, this.pos.z);
+    this.camera.position.set(this.pos.x, this.footY + STAND_EYE, this.pos.z);
+  }
+
+  _supportY() {
+    return groundHeightAt(this.pos.x, this.pos.z, this.colliders, this.footY, this.floorY);
   }
 
   update(dt) {
@@ -133,6 +140,12 @@ export class PlayerController {
     this.pos.x += this.vel.x * dt;
     this.pos.z += this.vel.z * dt;
 
+    // Drop off ledges before jump/gravity so we don't keep spawn height or jump mid-fall.
+    let supportY = this._supportY();
+    if (this.onGround && this.footY > supportY + 0.06) {
+      this.onGround = false;
+    }
+
     // Jump impulse only off the ground. Source applies gravity in two half-steps
     // around the move (StartGravity / FinishGravity); doing the same makes the
     // apex height exactly v²/2g regardless of frame rate.
@@ -149,10 +162,14 @@ export class PlayerController {
     this.velY -= halfG;
     this.footY += this.velY * dt;
     this.velY -= halfG;
-    if (this.footY <= this.baseY) {
-      this.footY = this.baseY;
-      if (this.velY < 0) this.velY = 0;
-      this.onGround = true;
+
+    supportY = this._supportY();
+    if (this.footY <= supportY + 0.06) {
+      if (this.velY <= 0) {
+        this.footY = supportY;
+        this.velY = 0;
+        this.onGround = true;
+      }
     } else {
       this.onGround = false;
     }

@@ -413,7 +413,6 @@ export class MultiplayerDuelScenario extends BaseScenario {
   // ---- Shooting -----------------------------------------------------------
   onShoot(raycaster) {
     if (this._dead) return;
-    this.engine.audio?.playLocalShot();
 
     const colliders = [];
     for (const r of this.remotes.values()) {
