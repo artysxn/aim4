@@ -36,9 +36,11 @@ export class SceneManager {
     this.finished = false;
     this.onFinish = null; // (results) => void
 
-    // A shot fired only matters if a scenario is actively running.
+    // A click only fires single-shot scenarios; weapon scenarios (full-auto)
+    // are driven by the WeaponController from the held trigger instead.
     input.onShoot = () => {
-      if (this.current && this.current.running) this.current.shoot();
+      const sc = this.current;
+      if (sc && sc.running && !sc.usesWeapon) sc.shoot();
     };
   }
 

@@ -32,6 +32,12 @@ import { MatchmakingQueue, createRankedLobby } from './matchmaking.js';
 const VALID_TARGETS = new Set([0, 13, 30, 60, 100]);
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous 0/O/1/I
 
+// Health model: a body shot does 1, so you survive three body hits and die on
+// the fourth. Headshots deal full HP, so they are always instantly lethal.
+const MAX_HP = 4;
+const BODY_DMG = 1;
+const HEAD_DMG = MAX_HP;
+
 function freshStats() {
   return { deaths: 0, shots: 0, hits: 0, ttkSum: 0, ttkCount: 0 };
 }
@@ -67,7 +73,7 @@ export class MultiplayerServer {
       ready: false,
       // live match state
       transform: { x: 0, y: STAND_EYE, z: 0, yaw: 0, pitch: 0, crouch: 0 },
-      hp: 2,
+      hp: MAX_HP,
       dead: false,
       respawnAt: 0,
       shotQueue: [],
@@ -226,7 +232,7 @@ export class MultiplayerServer {
     for (const p of lobby.players) {
       p.ready = false;
       p.dead = false;
-      p.hp = 2;
+      p.hp = MAX_HP;
       p.shotQueue.length = 0;
       p.respawnAt = 0;
     }
@@ -333,7 +339,7 @@ export class MultiplayerServer {
     for (const p of lobby.players) {
       const sp = pair[p.side] || spawnFor(map, p.side);
       p.transform = { x: sp.pos[0], y: sp.pos[1] + STAND_EYE, z: sp.pos[2], yaw: sp.yaw, pitch: 0, crouch: 0 };
-      p.hp = 2;
+      p.hp = MAX_HP;
       p.dead = false;
       p.respawnAt = 0;
       p.shotQueue.length = 0;
@@ -400,13 +406,21 @@ export class MultiplayerServer {
       victimId: Number.isFinite(msg.victimId) ? msg.victimId : null,
       zone: msg.zone === 'head' || msg.zone === 'body' ? msg.zone : null
     });
-    this._broadcast(lobby, {
+    // Relay shot origin + impact so other clients can draw a matching tracer.
+    const fired = {
       t: S2C.SHOT_FIRED,
       shooterId: player.id,
       x: player.transform.x,
       y: player.transform.y,
-      z: player.transform.z
-    });
+      z: player.transform.z,
+      ox: o[0], oy: o[1], oz: o[2]
+    };
+    if ([msg.ex, msg.ey, msg.ez].every(Number.isFinite)) {
+      fired.ex = msg.ex;
+      fired.ey = msg.ey;
+      fired.ez = msg.ez;
+    }
+    this._broadcast(lobby, fired);
   }
 
   // ---- Authoritative tick -------------------------------------------------
@@ -473,7 +487,7 @@ export class MultiplayerServer {
     if (!shooter.stats) shooter.stats = freshStats();
     shooter.stats.hits++;
     this._broadcast(lobby, { t: S2C.HIT, shooterId: shooter.id, victimId: victim.id, zone });
-    const damage = zone === 'head' ? 2 : 1;
+    const damage = zone === 'head' ? HEAD_DMG : BODY_DMG;
     victim.hp -= damage;
     if (victim.hp <= 0) this._registerKill(lobby, shooter, victim);
   }
@@ -559,7 +573,7 @@ export class MultiplayerServer {
       if (p.dead && now >= p.respawnAt) {
         const sp = spawnPair(map)[p.side];
         p.transform = { x: sp.pos[0], y: sp.pos[1] + STAND_EYE, z: sp.pos[2], yaw: sp.yaw, pitch: 0, crouch: 0 };
-        p.hp = 2;
+        p.hp = MAX_HP;
         p.dead = false;
         p.roundStartAt = Date.now();
         spawns[p.id] = { pos: sp.pos, yaw: sp.yaw, side: p.side };

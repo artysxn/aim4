@@ -31,6 +31,10 @@ import {
 
 const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
 const MAX_PITCH = degToRad(89);
+
+// Reused scratch for drawing remote-shot tracers (no per-shot allocation).
+const _wOrigin = new THREE.Vector3();
+const _wEnd = new THREE.Vector3();
 const DEATH_FX_DUR = 0.55;
 const DEATH_FX_PITCH = degToRad(38);
 const STATE_HZ = 64; // cap upstream state sends (server sim is 128 Hz)
@@ -237,6 +241,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
         this._dead = false;
         this._deathFx = null;
         this.engine.setDeathOverlay(0);
+        this.engine.weapon?.reset(); // fresh magazine each spawn / round
         this.engine.player.spawn({
           pos: sp.pos,
           yaw: sp.yaw,
@@ -307,6 +312,13 @@ export class MultiplayerDuelScenario extends BaseScenario {
   applyShotFired(msg) {
     if (msg.shooterId === this.myId) return;
     this.engine.audio?.playRemoteShot(msg.x, msg.y, msg.z);
+    // Draw a tracer for the opponent's shot from their muzzle to its impact.
+    const vm = this.engine.viewmodel;
+    if (vm && [msg.ox, msg.oy, msg.oz, msg.ex, msg.ey, msg.ez].every(Number.isFinite)) {
+      _wOrigin.set(msg.ox, msg.oy, msg.oz);
+      _wEnd.set(msg.ex, msg.ey, msg.ez);
+      vm.spawnTracer(_wOrigin, _wEnd);
+    }
   }
 
   _die() {
@@ -444,7 +456,8 @@ export class MultiplayerDuelScenario extends BaseScenario {
       { x: o.x, y: o.y, z: o.z },
       { x: d.x, y: d.y, z: d.z },
       claim,
-      this._lastShotAccuracy
+      this._lastShotAccuracy,
+      this._lastImpact // tracer endpoint relayed to the opponent
     );
   }
 

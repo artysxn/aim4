@@ -10,10 +10,19 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
-import { shotSpreadRad, spreadRng, applySpreadToRay } from '../utils/shotAccuracy.js';
+import { spreadRng, applySpreadToDir } from '../utils/shotAccuracy.js';
+import { viewPunchImpulse } from '../weapons/ak47.js';
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0); // crosshair is always screen center
+// Reused firing scratch (no per-shot allocation).
+const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
+const _quat = new THREE.Quaternion();
+const _dir = new THREE.Vector3();
+const _right = new THREE.Vector3();
+const _up = new THREE.Vector3(0, 1, 0);
+const _tmpEnd = new THREE.Vector3();
+const _muzzle = new THREE.Vector3();
 
 // --- Tiny WebAudio blip used for hit feedback (lazily created) -------------
 let _audioCtx = null;
@@ -64,6 +73,9 @@ export class BaseScenario {
 
     this.elapsed = 0; // seconds, accumulates only while running
     this.running = false;
+    // Every scenario fires the AK: full-auto, recoil pattern, ammo + viewmodel.
+    this.usesWeapon = true;
+    this._lastImpact = new THREE.Vector3();
   }
 
   // ---- Identity / derived metrics ----------------------------------------
@@ -86,6 +98,7 @@ export class BaseScenario {
   // ---- Lifecycle ----------------------------------------------------------
   start() {
     this.running = true;
+    this.engine.weapon?.reset(); // fresh magazine at the start of every run
     this.onStart();
   }
   pause() {
@@ -109,32 +122,79 @@ export class BaseScenario {
     this.onUpdate(dt);
   }
 
-  shoot() {
+  /**
+   * Fire one bullet. Driven by the WeaponController, which supplies the
+   * deterministic AK recoil offset (applied to the bullet direction), the random
+   * bloom cone half-angle and the burst shot index. The per-scenario onShoot()
+   * hook still owns hit detection; this method owns aim, spread and the shared
+   * weapon juice (flash, kick, tracer, view-punch).
+   */
+  shoot(recoil = null, bloom = 0, shotIndex = 0) {
     if (!this.running) return;
     this.shotsFired++;
     this.engine.audio?.playLocalShot();
-    _raycaster.setFromCamera(_center, this.camera);
 
-    const player = this.engine.player;
-    if (player?.enabled) {
-      const state = player.getAccuracyState();
-      const seed = (Math.random() * 0xffffffff) >>> 0;
-      const spread = shotSpreadRad(state);
-      const aim = _raycaster.ray.direction.clone();
-      applySpreadToRay(_raycaster.ray, spread, spreadRng(seed));
-      this._lastShotAccuracy = {
-        seed,
-        onGround: state.onGround,
-        speedHoriz: state.speedHoriz,
-        aimDx: aim.x,
-        aimDy: aim.y,
-        aimDz: aim.z
-      };
+    const cam = this.camera;
+    const input = this.engine.player?.input;
+    // Aim from the player's TRUE look (input yaw/pitch), so the visual view-punch
+    // never bends the bullet. Fall back to the live camera if no input exists.
+    if (input) {
+      _euler.set(input.pitch, input.yaw, 0, 'YXZ');
+      _dir.set(0, 0, -1).applyQuaternion(_quat.setFromEuler(_euler));
     } else {
-      this._lastShotAccuracy = null;
+      cam.getWorldDirection(_dir);
+    }
+    _dir.normalize();
+
+    // Deterministic recoil pattern: pitch up around camera-right, yaw drift.
+    if (recoil) {
+      _right.crossVectors(_dir, _up).normalize();
+      _dir.applyQuaternion(_quat.setFromAxisAngle(_right, recoil.pitch));
+      _dir.applyQuaternion(_quat.setFromAxisAngle(_up, -recoil.yaw));
+    }
+    const aimX = _dir.x;
+    const aimY = _dir.y;
+    const aimZ = _dir.z;
+
+    // Random bloom cone on top of the pattern.
+    const seed = (Math.random() * 0xffffffff) >>> 0;
+    if (bloom > 0) {
+      const s = applySpreadToDir({ x: _dir.x, y: _dir.y, z: _dir.z }, bloom, spreadRng(seed));
+      _dir.set(s.x, s.y, s.z).normalize();
     }
 
+    _raycaster.ray.origin.copy(cam.position);
+    _raycaster.ray.direction.copy(_dir);
+    _raycaster.near = 0;
+    _raycaster.far = Infinity;
+
+    const player = this.engine.player;
+    const state = player?.enabled
+      ? player.getAccuracyState()
+      : { onGround: true, speedHoriz: 0 };
+    this._lastShotAccuracy = {
+      seed,
+      onGround: state.onGround,
+      speedHoriz: state.speedHoriz,
+      aimDx: aimX,
+      aimDy: aimY,
+      aimDz: aimZ
+    };
+
+    // Impact point for the tracer: nearest mesh under the scenario root, else far.
+    const hit = _raycaster.intersectObject(this.root, true)[0];
+    if (hit) this._lastImpact.copy(hit.point);
+    else this._lastImpact.copy(cam.position).addScaledVector(_dir, 120);
+
     this.onShoot(_raycaster);
+
+    // Shared weapon juice.
+    const vm = this.engine.viewmodel;
+    if (vm) {
+      vm.fire();
+      vm.spawnTracer(vm.getMuzzlePosition(_muzzle), this._lastImpact);
+      vm.punch(viewPunchImpulse(shotIndex));
+    }
   }
 
   // ---- Target management --------------------------------------------------

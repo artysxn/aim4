@@ -19,7 +19,7 @@ export const RESOLUTIONS = {
 const DEFAULTS = {
   cm360: 40,
   dpi: 800,
-  hFov: 103,
+  hFov: 90,
   resolution: 'native',
   rawInput: true, // request unadjusted (raw) mouse movement under Pointer Lock
   runDuration: 60, // seconds
@@ -29,7 +29,19 @@ const DEFAULTS = {
     length: 10,
     thickness: 2,
     dotPercentage: 35,
-    hitmarker: true // brief X flash on hit
+    hitmarker: true, // brief X flash on hit
+    dynamicGap: false // gap grows with movement-based shot spread (airborne/fast = wider)
+  },
+  viewmodel: {
+    hand: 'right', // 'right' | 'left'
+    fov: 68, // viewmodel field of view (approx; lower = bigger/closer)
+    offsetX: 0.16, // metres right of centre (flipped for left hand)
+    offsetY: -0.15, // metres below the eye
+    offsetZ: 0.5, // metres forward
+    bob: true // weapon bob while moving
+  },
+  weapon: {
+    aimpunch: true // view-punch camera kick when firing (toggle for those who dislike it)
   },
   gridshot: {
     targetSize: 0.55,

@@ -34,17 +34,20 @@ export class InputManager {
     this.keys = new Set(); // currently-held movement keys (only while locked)
     this.jumpQueued = false; // consumed once per press by PlayerController
     this.spawnGraceRemaining = 0; // keyboard locked briefly after spawn
+    this.fireHeld = false; // LMB held — drives full-auto in weapon scenarios
 
     // Decoupled callbacks — managers/UI subscribe, InputManager knows nothing
     // about game or UI state.
     this.onLockChange = null; // (locked: boolean) => void
-    this.onShoot = null; // () => void
+    this.onShoot = null; // () => void — single click (non-weapon scenarios)
+    this.onReload = null; // () => void — R pressed
     this.onUnlockedClick = null; // () => void — canvas clicked while not locked
 
     document.addEventListener('pointerlockchange', () => this._handleLockChange());
     document.addEventListener('pointerlockerror', () => this._handleLockChange());
     document.addEventListener('mousemove', (e) => this._onMouseMove(e));
     document.addEventListener('mousedown', (e) => this._onMouseDown(e));
+    document.addEventListener('mouseup', (e) => this._onMouseUp(e));
     document.addEventListener('keydown', (e) => this._onKey(e, true));
     document.addEventListener('keyup', (e) => this._onKey(e, false));
   }
@@ -130,6 +133,7 @@ export class InputManager {
     if (!this.locked) {
       this.keys.clear(); // never leave a key "stuck" after Esc
       this.jumpQueued = false;
+      this.fireHeld = false; // never leave the trigger "stuck" after Esc
     }
     if (this.onLockChange) this.onLockChange(this.locked);
   }
@@ -140,6 +144,12 @@ export class InputManager {
       if (!this.locked) return;
       e.preventDefault();
       if (!grace && down) this.jumpQueued = true;
+      return;
+    }
+    if (e.code === 'KeyR') {
+      if (!this.locked) return;
+      e.preventDefault();
+      if (down && this.onReload) this.onReload();
       return;
     }
     if (!MOVE_CODES.has(e.code)) return;
@@ -172,6 +182,12 @@ export class InputManager {
       if (this.onUnlockedClick) this.onUnlockedClick();
       return;
     }
+    this.fireHeld = true;
     if (this.onShoot) this.onShoot();
+  }
+
+  _onMouseUp(e) {
+    if (e.button !== 0) return;
+    this.fireHeld = false;
   }
 }

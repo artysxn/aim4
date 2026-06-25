@@ -1,4 +1,6 @@
 import { RESOLUTIONS } from '../core/SettingsManager.js';
+import { shotSpreadRad } from '../utils/shotAccuracy.js';
+import { degToRad } from '../utils/MathUtils.js';
 
 // ---------------------------------------------------------------------------
 // Crosshair.js
@@ -16,6 +18,7 @@ export class Crosshair {
     this.visible = false;
     this._hitFlashUntil = 0;
     this._trackProgress = 0;
+    this._dynGapPx = 0; // extra gap (px) from movement spread when dynamicGap is on
 
     window.addEventListener('resize', () => this.draw());
     settings.onChange(() => {
@@ -35,6 +38,37 @@ export class Crosshair {
   setTrackProgress(p) {
     this._trackProgress = Math.max(0, Math.min(1, p));
     if (this.visible) this.draw();
+  }
+
+  /**
+   * Per-frame hook (from the game loop). When the dynamic-gap option is on, the
+   * inner gap grows to show the live movement-based bullet-spread cone: zero at
+   * or below crouch speed, widening as you move faster, and very wide airborne.
+   * Redraws only when the pixel gap actually changes, so it stays cheap.
+   */
+  frame(engine) {
+    if (!this.visible || !this.settings.data.crosshair.dynamicGap) {
+      if (this._dynGapPx !== 0) {
+        this._dynGapPx = 0;
+        this.draw();
+      }
+      return;
+    }
+    const player = engine.player;
+    const state = player && player.enabled
+      ? player.getAccuracyState()
+      : { onGround: true, speedHoriz: 0 };
+    const spread = shotSpreadRad(state); // cone half-angle (radians)
+    // Project the spread half-angle to screen pixels: the gap then equals the
+    // radius of the bullet-spread cone at the crosshair.
+    const h = window.innerHeight;
+    const focalPx = (h / 2) / Math.tan(degToRad(engine.camera.fov) / 2);
+    const cap = Math.round(h * 0.45);
+    const px = Math.min(cap, Math.round(spread * focalPx));
+    if (px !== this._dynGapPx) {
+      this._dynGapPx = px;
+      this.draw();
+    }
   }
 
   /** Flash a brief hitmarker. */
@@ -86,18 +120,28 @@ export class Crosshair {
     const scale = (res && res.size) ? h / res.size[1] : 1;
     this._paint(ctx, Math.round(w / 2), Math.round(h / 2), {
       scale,
+      dynGap: this._dynGapPx,
       trackProgress: this._trackProgress,
       hitFlash: this.settings.data.crosshair.hitmarker !== false &&
         performance.now() < this._hitFlashUntil
     });
   }
 
-  _paint(ctx, cx, cy, { scale, trackProgress, hitFlash }) {
+  _paint(ctx, cx, cy, { scale, trackProgress, hitFlash, dynGap = 0 }) {
     const { color, innerGap: rawGap, length: rawLen, thickness: rawThick, dotPercentage } =
       this.settings.data.crosshair;
-    const innerGap = rawGap * scale;
+    const innerGap = rawGap * scale + dynGap;
     const length = rawLen * scale;
     const thickness = Math.max(1, rawThick * scale);
+
+    // An even-thickness line straddles the pixel boundary cleanly at the exact
+    // centre; an odd-thickness line drawn there blurs across two pixels. So for
+    // odd thickness, anchor the crosshair on the top-left of the centre four
+    // pixels (half a pixel up-left) so every line falls on whole pixels.
+    if (Math.round(thickness) % 2 === 1) {
+      cx -= 0.5;
+      cy -= 0.5;
+    }
 
     ctx.strokeStyle = color;
     ctx.fillStyle = color;

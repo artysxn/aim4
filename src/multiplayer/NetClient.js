@@ -329,7 +329,7 @@ export class NetClient {
   sendState(s) {
     this._send({ t: C2S.STATE, ...s });
   }
-  sendShot(o, d, claim, accuracy) {
+  sendShot(o, d, claim, accuracy, end = null) {
     const msg = {
       t: C2S.SHOOT,
       ox: o.x, oy: o.y, oz: o.z,
@@ -338,6 +338,11 @@ export class NetClient {
       victimId: claim?.victimId,
       zone: claim?.zone
     };
+    if (end) {
+      msg.ex = end.x;
+      msg.ey = end.y;
+      msg.ez = end.z;
+    }
     if (accuracy) {
       msg.aimDx = accuracy.aimDx;
       msg.aimDy = accuracy.aimDy;

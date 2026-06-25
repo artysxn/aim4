@@ -179,10 +179,31 @@ h2 {
   font-size: var(--font-display-base);
   margin-bottom: 6px;
 }
-.pause-title {
+.pause-panel {
+  position: relative;
+}
+h2.pause-title {
   line-height: 1;
   text-transform: uppercase;
   margin-bottom: 16px;
+  font-size: calc(var(--font-display-title-size) * 1.5);
+}
+.pause-gear {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  padding: 6px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 0;
+  pointer-events: auto;
+  transition: color 0.12s, transform 0.2s ease;
+}
+.pause-gear:hover {
+  color: var(--text);
+  transform: rotate(45deg);
 }
 .pause-actions {
   flex-direction: column;
@@ -190,6 +211,12 @@ h2 {
 }
 .pause-actions .btn {
   width: 100%;
+}
+
+/* Custom games heading — uppercase + 20% larger than other screen titles. */
+h2.custom-games-title {
+  text-transform: uppercase;
+  font-size: calc(var(--font-display-title-size) * 1.2);
 }
 h4 {
   font-size: 13px;
@@ -201,6 +228,7 @@ h4 {
 .logo {
   font-size: 138px;
   line-height: 1;
+  margin-top: -20px;
   margin-bottom: 8px;
 }
 .logo span {
@@ -350,6 +378,120 @@ h4 {
   justify-content: center;
   margin-top: 18px;
   flex-wrap: wrap;
+}
+
+/* ---- Main menu mode layout --------------------------------------------- */
+.menu-modes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 16px;
+  margin: 8px 0 16px;
+}
+.menu-group-sp {
+  flex: 2 1 320px;
+  min-width: 0;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+}
+.menu-group-label {
+  text-align: left;
+  margin-bottom: 12px;
+}
+.menu-group-sp .cards {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin: 0;
+  flex: 1;
+}
+
+.mode-tile {
+  flex: 1 1 160px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 22px 16px;
+  background: var(--chip-bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  text-align: center;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 0.15s ease;
+}
+.mode-tile:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.mode-tile-mm {
+  background: var(--accent-dim);
+}
+.mode-tile-mm:hover {
+  background: rgba(245, 37, 37, 0.26);
+}
+.mode-tile-icon {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  display: block;
+  color: var(--accent);
+}
+.mode-tile-title {
+  font-size: 16px;
+  font-weight: 500;
+}
+.mode-tile-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.menu-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  align-items: center;
+  margin-top: 6px;
+}
+.menu-secondary .menu-auth {
+  margin: 0;
+  padding: 0;
+  border-top: none;
+  display: inline-flex;
+}
+
+/* ---- Ammo counter (weapon scenarios) ----------------------------------- */
+.hud-ammo {
+  position: absolute;
+  right: 28px;
+  bottom: 24px;
+  z-index: 3;
+  display: none;
+  align-items: baseline;
+  gap: 4px;
+  font-family: var(--font-display);
+  color: var(--text);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+.hud-ammo.active {
+  display: flex;
+}
+.hud-ammo-mag {
+  font-size: 46px;
+  line-height: 1;
+}
+#hud-ammo-sep {
+  font-size: 24px;
+  color: var(--muted);
+}
+.hud-ammo-size {
+  font-size: 24px;
+  color: var(--muted);
+}
+.hud-ammo.reloading .hud-ammo-mag {
+  color: var(--accent);
 }
 
 /* ---- Settings ----------------------------------------------------------- */

@@ -148,7 +148,7 @@ export class UIOverlay {
         'background:#7a1020;color:#fff;font:13px/1.4 monospace;padding:10px 44px 10px 14px;' +
         'white-space:pre-wrap;word-break:break-word;box-shadow:0 4px 20px rgba(0,0,0,.5);';
       const close = document.createElement('button');
-      close.textContent = '✕';
+      close.textContent = 'X';
       close.style.cssText =
         'position:absolute;top:8px;right:10px;background:none;border:none;color:#fff;font-size:16px;cursor:pointer;';
       close.onclick = () => el.remove();
@@ -158,7 +158,7 @@ export class UIOverlay {
       this.root.appendChild(el);
     }
     const msg = (err && (err.stack || err.message)) || String(err);
-    this._errMsg.textContent = '⚠ Runtime error (game still rendering):\n' + msg;
+    this._errMsg.textContent = 'Runtime error (game still rendering):\n' + msg;
   }
 
   _settingsSections(resOptions) {
@@ -199,7 +199,26 @@ export class UIOverlay {
           ${rf('set-xh-len', 'Length', 0, 30, 1)}
           ${rf('set-xh-thick', 'Thickness', 1, 8, 1)}
             ${rf('set-xh-dot', 'Center dot (%)', 0, 100, 5)}
-            <label class="field-check"><input type="checkbox" id="set-xh-hitmarker" /> Hitmarker</label>`
+            <label class="field-check"><input type="checkbox" id="set-xh-hitmarker" /> Hitmarker</label>
+            <label class="field-check"><input type="checkbox" id="set-xh-dyn" /> Dynamic gap (movement spread)</label>`
+      },
+      {
+        id: 'viewmodel',
+        label: 'Viewmodel',
+        body: `
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Hand</span></div>
+            <select id="set-vm-hand">
+              <option value="right">Right</option>
+              <option value="left">Left</option>
+            </select>
+          </div>
+          ${rf('set-vm-fov', 'Viewmodel FOV', 50, 90, 1)}
+          ${rf('set-vm-ox', 'Offset X (right)', -0.5, 0.5, 0.01)}
+          ${rf('set-vm-oy', 'Offset Y (up)', -0.5, 0.5, 0.01)}
+          ${rf('set-vm-oz', 'Offset Z (forward)', 0.2, 1.0, 0.01)}
+          <label class="field-check"><input type="checkbox" id="set-vm-bob" /> Weapon bob while moving</label>
+          <label class="field-check"><input type="checkbox" id="set-vm-aimpunch" /> Aimpunch (view-punch recoil)</label>`
       },
       {
         id: 'colors',
@@ -351,6 +370,13 @@ export class UIOverlay {
       </div>
     </div>
 
+    <!-- AMMO COUNTER (bottom-right, weapon scenarios) -->
+    <div id="hud-ammo" class="hud-ammo">
+      <span id="hud-ammo-mag" class="hud-ammo-mag">30</span>
+      <span id="hud-ammo-sep">/</span>
+      <span id="hud-ammo-size">30</span>
+    </div>
+
     <!-- MULTIPLAYER LIVE SCOREBOARD -->
     <div id="mp-scoreboard" class="mp-scoreboard"></div>
 
@@ -370,40 +396,48 @@ export class UIOverlay {
     <div class="screen menu" data-screen="menu">
       <div class="panel wide">
         <h1 class="logo text-big">AIM4<span>.io</span></h1>
-        <div class="cards">
-          ${Object.keys(SCENARIOS)
-            .map(
-              (key) => `
-            <div class="card" data-scenario="${key}">
-              <div class="card-icon">
-                <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="28" height="28" />
-              </div>
-              <h3 class="card-title">${SCENARIO_META[key].title}</h3>
-              <button type="button" class="btn-play" data-play="${key}" aria-label="Play ${SCENARIO_META[key].title}">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
-              </button>
-            </div>`
-            )
-            .join('')}
-        </div>
-        <div class="menu-actions">
-          <button class="btn primary btn-with-icon" data-goto="mm">
-            <img src="${MATCHMAKING_ICON}" alt="" class="btn-icon" width="20" height="20" aria-hidden="true" />
-            Matchmaking
-          </button>
-          <button class="btn" data-goto="mp">Custom games</button>
-          <button class="btn" data-goto="settings">⚙ Settings</button>
-          <button class="btn" data-goto="leaderboard">🏆 Leaderboards</button>
-        </div>
-        <div class="menu-auth" id="menu-auth">
-          <p class="menu-auth-hint" id="menu-auth-hint">Sign in to sync settings and appear on leaderboards.</p>
-          <div class="menu-auth-actions" id="menu-auth-guest">
-            <button type="button" class="btn" id="menu-login-btn">Log in</button>
-            <button type="button" class="btn primary" id="menu-signup-btn">Sign up</button>
+        <div class="menu-modes">
+          <div class="menu-group menu-group-sp">
+            <h4 class="menu-group-label">Singleplayer</h4>
+            <div class="cards">
+              ${Object.keys(SCENARIOS)
+                .map(
+                  (key) => `
+                <div class="card" data-scenario="${key}">
+                  <div class="card-icon">
+                    <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="28" height="28" />
+                  </div>
+                  <h3 class="card-title">${SCENARIO_META[key].title}</h3>
+                  <button type="button" class="btn-play" data-play="${key}" aria-label="Play ${SCENARIO_META[key].title}">
+                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                  </button>
+                </div>`
+                )
+                .join('')}
+            </div>
           </div>
-          <div class="menu-auth-actions hidden" id="menu-auth-user">
-            <span class="menu-auth-username" id="menu-auth-username"></span>
-            <button type="button" class="btn" id="menu-logout-btn">Log out</button>
+          <button type="button" class="mode-tile mode-tile-mm" id="menu-mm-tile">
+            <img src="${MATCHMAKING_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
+            <span class="mode-tile-title">Matchmaking</span>
+            <span class="mode-tile-sub" id="menu-mm-userline">Ranked 1v1 duels</span>
+          </button>
+          <button type="button" class="mode-tile mode-tile-custom" data-goto="mp">
+            <svg class="mode-tile-icon" viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="currentColor" d="M12 2 4 6v6c0 5 3.4 7.7 8 10 4.6-2.3 8-5 8-10V6l-8-4Zm0 4.5 4 2v3.5c0 3.2-2 5.1-4 6.2-2-1.1-4-3-4-6.2V8.5l4-2Z"/></svg>
+            <span class="mode-tile-title">Custom games</span>
+            <span class="mode-tile-sub">Create or join a lobby</span>
+          </button>
+        </div>
+        <div class="menu-secondary">
+          <button class="btn btn-sm" data-goto="leaderboard">Leaderboards</button>
+          <button class="btn btn-sm" data-goto="settings">Settings</button>
+          <div class="menu-auth" id="menu-auth">
+            <div class="menu-auth-actions" id="menu-auth-guest">
+              <button type="button" class="btn btn-sm" id="menu-login-btn">Log in</button>
+              <button type="button" class="btn btn-sm primary" id="menu-signup-btn">Sign up</button>
+            </div>
+            <div class="menu-auth-actions hidden" id="menu-auth-user">
+              <button type="button" class="btn btn-sm" id="menu-logout-btn">Log out</button>
+            </div>
           </div>
         </div>
       </div>
@@ -487,31 +521,17 @@ export class UIOverlay {
 
     <!-- PAUSE -->
     <div class="screen pause" data-screen="paused">
-      <div class="panel">
+      <div class="panel pause-panel">
+        <button type="button" class="pause-gear" id="pause-settings-btn" aria-label="Settings">
+          <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+            <path fill="currentColor" d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66z"/>
+          </svg>
+        </button>
         <h2 class="text-big pause-title">Paused</h2>
         <div class="menu-actions pause-actions">
           <button type="button" class="btn primary" data-resume>Resume</button>
-          <button type="button" class="btn" id="pause-settings-btn">Settings</button>
           <button type="button" class="btn" id="pause-leave-lobby-btn" hidden>Leave to lobby</button>
           <button type="button" class="btn" data-quit>Quit to menu</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- MATCHMAKING -->
-    <div class="screen mm" data-screen="mm">
-      <div class="panel">
-        <h2 class="text-big mm-title">
-          <img src="${MATCHMAKING_ICON}" alt="" class="screen-title-icon" width="32" height="32" aria-hidden="true" />
-          Matchmaking
-        </h2>
-        <p class="mm-elo-line">Your ELO: <span id="mm-elo">1000</span></p>
-        <p class="readout" id="mm-status"></p>
-        <p class="hint">Ranked duels are first to ${MM_SCORE_TARGET}. Play any singleplayer mode while you wait — you'll be pulled in when a match is found.</p>
-        <div class="menu-actions mm-actions">
-          <button type="button" class="btn primary" id="mm-queue-btn">Find match</button>
-          <button type="button" class="btn" id="mm-leave-queue-btn" hidden>Leave queue</button>
-          <button type="button" class="btn" data-goto="menu">Back</button>
         </div>
       </div>
     </div>
@@ -519,7 +539,7 @@ export class UIOverlay {
     <!-- MULTIPLAYER HOME (create / join) -->
     <div class="screen mp" data-screen="mp">
       <div class="panel wide">
-        <h2 class="text-big">Custom games</h2>
+        <h2 class="text-big custom-games-title">Custom games</h2>
         <div class="field field-plain">
           <div class="field-top"><span class="field-label">Display name</span></div>
           <input type="text" id="mp-name" class="config-code-input" maxlength="24" placeholder="Your name" spellcheck="false" autocomplete="off" />
@@ -636,6 +656,9 @@ export class UIOverlay {
     this.hudCritChip = this.root.querySelector('#hud-crit-chip');
     this.mmQueueChip = this.root.querySelector('#mm-queue-chip');
     this.mmQueueText = this.root.querySelector('#mm-queue-text');
+    this.hudAmmo = this.root.querySelector('#hud-ammo');
+    this.hudAmmoMag = this.root.querySelector('#hud-ammo-mag');
+    this.hudAmmoSize = this.root.querySelector('#hud-ammo-size');
   }
 
   // -------------------------------------------------------------------------
@@ -651,7 +674,6 @@ export class UIOverlay {
         if (t.dataset.goto === 'settings') this._returnAfterSettings = this.state;
         this.showScreen(t.dataset.goto);
         if (t.dataset.goto === 'mp') this.mp.openBrowser();
-        if (t.dataset.goto === 'mm') this._renderMatchmaking();
         if (t.dataset.goto === 'auth') this._openAuth('login');
       } else if (t.hasAttribute('data-resume')) this.resume();
       else if (t.hasAttribute('data-quit')) this.quit();
@@ -765,6 +787,27 @@ export class UIOverlay {
       s.save();
       this.crosshair.drawPreview(e.target.checked);
     });
+    $('#set-xh-dyn').addEventListener('change', (e) => {
+      s.data.crosshair.dynamicGap = e.target.checked;
+      s.save();
+    });
+
+    $('#set-vm-hand').addEventListener('change', (e) => {
+      s.data.viewmodel.hand = e.target.value === 'left' ? 'left' : 'right';
+      s.save();
+    });
+    this._bindRange('set-vm-fov', (v) => (s.data.viewmodel.fov = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-vm-ox', (v) => (s.data.viewmodel.offsetX = v));
+    this._bindRange('set-vm-oy', (v) => (s.data.viewmodel.offsetY = v));
+    this._bindRange('set-vm-oz', (v) => (s.data.viewmodel.offsetZ = v));
+    $('#set-vm-bob').addEventListener('change', (e) => {
+      s.data.viewmodel.bob = e.target.checked;
+      s.save();
+    });
+    $('#set-vm-aimpunch').addEventListener('change', (e) => {
+      s.data.weapon.aimpunch = e.target.checked;
+      s.save();
+    });
 
     this._bindRange('set-grid-size', (v) => (s.data.gridshot.targetSize = v));
     $('#set-grid-mode').addEventListener('change', (e) => {
@@ -867,12 +910,20 @@ export class UIOverlay {
 
   refreshAccountBar() {
     const section = this.root.querySelector('#menu-auth');
-    const hint = this.root.querySelector('#menu-auth-hint');
     const guest = this.root.querySelector('#menu-auth-guest');
     const userRow = this.root.querySelector('#menu-auth-user');
-    const usernameEl = this.root.querySelector('#menu-auth-username');
-    if (!section) return;
+    const mmLine = this.root.querySelector('#menu-mm-userline');
 
+    // Matchmaking tile subline reflects sign-in / ELO regardless of auth config.
+    if (mmLine) {
+      if (this.auth?.isLoggedIn) {
+        mmLine.textContent = `${this._accountLabel()} · ${this.auth.elo} ELO`;
+      } else {
+        mmLine.textContent = this.auth?.isConfigured ? 'Sign in for ranked' : 'Ranked 1v1 duels';
+      }
+    }
+
+    if (!section) return;
     if (!this.auth?.isConfigured) {
       section.classList.add('hidden');
       return;
@@ -882,14 +933,9 @@ export class UIOverlay {
     if (this.auth.isLoggedIn) {
       guest?.classList.add('hidden');
       userRow?.classList.remove('hidden');
-      if (hint) hint.classList.add('hidden');
-      if (usernameEl) {
-        usernameEl.textContent = `${this._accountLabel()} · ${this.auth.elo} ELO`;
-      }
     } else {
       guest?.classList.remove('hidden');
       userRow?.classList.add('hidden');
-      if (hint) hint.classList.remove('hidden');
     }
   }
 
@@ -1058,9 +1104,13 @@ export class UIOverlay {
     $('#mp-lobby-private').addEventListener('change', (e) => this.mp.setConfig({ isPublic: !e.target.checked }));
 
     $('#mp-res-rematch').addEventListener('click', () => {
-      if (this.mp.lobby) this.showScreen('mp-lobby');
-      else this.showScreen('mm');
-      if (!this.mp.lobby) this._renderMatchmaking();
+      if (this.mp.lobby) {
+        this.showScreen('mp-lobby');
+        return;
+      }
+      // Matchmade match (no persistent lobby): re-enter the ranked queue.
+      this.showScreen('menu');
+      this._startMatchmakingQueue();
     });
     $('#mp-res-leave').addEventListener('click', () => {
       this.mp.leave();
@@ -1201,55 +1251,9 @@ export class UIOverlay {
     this.input.requestLock();
   }
 
-  /** Ranked queue status from server. */
+  /** Ranked queue status from server — surfaced via the floating queue chip. */
   onQueueStatus(msg) {
     this._updateQueueChip(msg);
-    this._renderMatchmakingControls(msg);
-  }
-
-  _renderMatchmaking() {
-    const eloEl = this.root.querySelector('#mm-elo');
-    const status = this.root.querySelector('#mm-status');
-    const queueBtn = this.root.querySelector('#mm-queue-btn');
-    if (eloEl) eloEl.textContent = String(this.auth?.elo ?? 1000);
-    if (status) {
-      if (!this.auth?.isConfigured) {
-        status.textContent = 'Ranked matchmaking requires account sign-in (Supabase not configured on this deploy).';
-        status.classList.add('is-error');
-      } else if (!this.auth?.isLoggedIn) {
-        status.textContent = 'Sign in to play ranked matchmaking.';
-        status.classList.add('is-error');
-      } else {
-        status.textContent = '';
-        status.classList.remove('is-error');
-      }
-    }
-    if (queueBtn) {
-      queueBtn.disabled = !this.auth?.isConfigured || !this.auth?.isLoggedIn;
-    }
-    this._renderMatchmakingControls({
-      inQueue: this.mp?.inQueue,
-      queueSize: 0,
-      elo: this.auth?.elo
-    });
-  }
-
-  _renderMatchmakingControls(msg) {
-    const queueBtn = this.root.querySelector('#mm-queue-btn');
-    const leaveBtn = this.root.querySelector('#mm-leave-queue-btn');
-    const status = this.root.querySelector('#mm-status');
-    const inQueue = !!msg?.inQueue;
-    queueBtn?.toggleAttribute('hidden', inQueue);
-    leaveBtn?.toggleAttribute('hidden', !inQueue);
-    if (queueBtn && !inQueue) {
-      queueBtn.disabled = !this.auth?.isConfigured || !this.auth?.isLoggedIn;
-    }
-    if (inQueue && status && this.auth?.isLoggedIn) {
-      const n = msg.queueSize ?? 1;
-      const range = Number.isFinite(msg.searchRange) ? ` · ±${msg.searchRange} ELO` : '';
-      status.textContent = `In queue (${n} player${n === 1 ? '' : 's'}) — ${msg.elo ?? this.auth.elo} ELO${range}`;
-      status.classList.remove('is-error');
-    }
   }
 
   mmStatus(msg, ok = true) {
@@ -1273,39 +1277,46 @@ export class UIOverlay {
 
   _bindMatchmaking() {
     const $ = (id) => this.root.querySelector(id);
-    $('#mm-queue-btn')?.addEventListener('click', async () => {
-      if (!this.auth?.isConfigured) {
-        this.mmStatus('Accounts are not configured on this deployment.', false);
-        return;
-      }
-      if (!this.auth?.isLoggedIn) {
-        this.mmStatus('Sign in to use matchmaking.', false);
-        return;
-      }
-      this.mmStatus('Connecting…', true);
-      try {
-        await this.auth.refreshElo();
-      } catch (e) {
-        this.mmStatus(e.message || 'Could not refresh ELO.', false);
-        return;
-      }
-      this._renderMatchmaking();
-      const ok = await this.mp.enterQueue({
-        name: this._defaultName(),
-        userId: this.auth.user.id,
-        elo: this.auth.elo
-      });
-      if (!ok) return;
-      this.mmStatus('Searching for opponent…', true);
-    });
-    $('#mm-leave-queue-btn')?.addEventListener('click', () => {
-      this.mp.leaveQueue();
-      this.mmStatus('Left queue.', true);
-    });
+    $('#menu-mm-tile')?.addEventListener('click', () => this._onMatchmakingClick());
     $('#mm-queue-cancel')?.addEventListener('click', () => {
       this.mp.leaveQueue();
       this.mmStatus('Left queue.', true);
     });
+  }
+
+  /** Main-menu Matchmaking tile: sign in if needed, otherwise enter the ranked queue. */
+  async _onMatchmakingClick() {
+    if (!this.auth?.isConfigured) {
+      this._updateQueueChip({ inQueue: false });
+      window.alert('Ranked matchmaking is not configured on this deployment.');
+      return;
+    }
+    if (!this.auth?.isLoggedIn) {
+      this._openAuth('login');
+      return;
+    }
+    if (this.mp?.inQueue) {
+      this.mp.leaveQueue();
+      return;
+    }
+    await this._startMatchmakingQueue();
+  }
+
+  /** Refresh ELO then join the ranked queue. The queue chip surfaces progress. */
+  async _startMatchmakingQueue() {
+    try {
+      await this.auth.refreshElo();
+    } catch (e) {
+      window.alert(e.message || 'Could not refresh ELO.');
+      return false;
+    }
+    const ok = await this.mp.enterQueue({
+      name: this._defaultName(),
+      userId: this.auth.user.id,
+      elo: this.auth.elo
+    });
+    if (ok) this._updateQueueChip({ inQueue: true, queueSize: 1, elo: this.auth.elo });
+    return ok;
   }
 
   addMpChatMessage(msg) {
@@ -1696,7 +1707,16 @@ export class UIOverlay {
     this._setRange('set-xh-thick', s.crosshair.thickness);
     this._setRange('set-xh-dot', s.crosshair.dotPercentage);
     $('#set-xh-hitmarker').checked = s.crosshair.hitmarker !== false;
+    $('#set-xh-dyn').checked = !!s.crosshair.dynamicGap;
     this.crosshair.drawPreview();
+
+    $('#set-vm-hand').value = s.viewmodel?.hand === 'left' ? 'left' : 'right';
+    this._setRange('set-vm-fov', s.viewmodel?.fov ?? 68);
+    this._setRange('set-vm-ox', s.viewmodel?.offsetX ?? 0.16);
+    this._setRange('set-vm-oy', s.viewmodel?.offsetY ?? -0.15);
+    this._setRange('set-vm-oz', s.viewmodel?.offsetZ ?? 0.5);
+    $('#set-vm-bob').checked = s.viewmodel?.bob !== false;
+    $('#set-vm-aimpunch').checked = s.weapon?.aimpunch !== false;
 
     this._setRange('set-grid-size', s.gridshot.targetSize);
     $('#set-grid-mode').value = s.gridshot.mode || 'clicking';
@@ -1852,7 +1872,25 @@ export class UIOverlay {
       this.hudCrit.textContent = Math.round(sc.critRatio * 100) + '%';
     }
     if (this._mpTabBoardHeld) this._renderMpTabScoreboard();
+    this._updateAmmo(sc);
     this._updateThreats(sc);
+  }
+
+  /** Ammo counter (bottom-right) — only for weapon scenarios. */
+  _updateAmmo(sc) {
+    if (!this.hudAmmo) return;
+    const weapon = this.engine.weapon;
+    const show = this.state === 'playing' && sc?.usesWeapon && !!weapon;
+    this.hudAmmo.classList.toggle('active', !!show);
+    if (!show) return;
+    if (weapon.reloading) {
+      this.hudAmmo.classList.add('reloading');
+      this.hudAmmoMag.textContent = '·';
+    } else {
+      this.hudAmmo.classList.remove('reloading');
+      this.hudAmmoMag.textContent = String(weapon.ammo);
+    }
+    this.hudAmmoSize.textContent = String(weapon.magSize);
   }
 
   _updateThreats(sc) {
