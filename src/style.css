@@ -294,6 +294,15 @@ h4 {
   object-fit: contain;
   display: block;
 }
+.card-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.card-actions .btn {
+  min-width: 96px;
+}
 
 .btn-with-icon {
   display: inline-flex;

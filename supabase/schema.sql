@@ -35,7 +35,7 @@ create table if not exists public.profiles (
 create table if not exists public.scores (
   id bigint generated always as identity primary key,
   user_id uuid not null references auth.users on delete cascade,
-  scenario text not null,
+  scenario text not null, -- gridshot | pasu | spidershot | survival | arena | duels | range | …
   config_key text not null,
   score integer not null,
   accuracy real,

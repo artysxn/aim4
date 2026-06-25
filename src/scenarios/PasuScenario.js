@@ -36,6 +36,7 @@ export class PasuScenario extends BaseScenario {
     this.boundsScaleY = this.config.boundsScaleY ?? p.boundsScaleY ?? 1;
     this.angleOffset = this.config.angleOffset ?? p.angleOffset ?? 360;
     this.infiniteAmmo = this.config.infiniteAmmo ?? p.infiniteAmmo !== false;
+    this.weaponBloom = false;
 
     this.wallDistance = 16;
     this.boundsW = BASE_BOUNDS_W * this.boundsScaleX;

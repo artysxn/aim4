@@ -51,13 +51,14 @@ export function beep(freq = 700, dur = 0.05, type = 'square', gain = 0.05) {
 }
 
 export class BaseScenario {
-  constructor({ engine, settings, config = {}, crosshair = null }) {
+  constructor({ engine, settings, config = {}, crosshair = null, requestFinish = null }) {
     this.engine = engine;
     this.scene = engine.scene;
     this.camera = engine.camera;
     this.settings = settings;
     this.config = config;
     this.crosshair = crosshair;
+    this._requestFinish = requestFinish;
 
     this.root = new THREE.Group();
     this.scene.add(this.root);
@@ -78,6 +79,7 @@ export class BaseScenario {
     this.usesWeapon = true;
     this.weaponId = 'rifle';
     this.infiniteAmmo = false;
+    this.weaponBloom = true; // random spread cone (movement / consecutive shots)
     this._lastImpact = new THREE.Vector3();
   }
 

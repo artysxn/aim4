@@ -69,6 +69,8 @@ export class WeaponController {
 
   /** Live bloom cone half-angle (rad) for crosshair / UI — matches the next shot. */
   getBloomRad() {
+    const sc = this._active();
+    if (sc?.weaponBloom === false) return 0;
     const player = this.engine.player;
     const state = player
       ? player.getAccuracyState()
@@ -169,7 +171,10 @@ export class WeaponController {
 
     const offset = this.spec.patternOffset(idx);
     const level = this.spec.automatic ? this._sustainLevel : idx;
-    const bloom = this.spec.bloomRad(state, level, recentlyLanded);
+    const bloom =
+      sc.weaponBloom === false
+        ? 0
+        : this.spec.bloomRad(state, level, recentlyLanded);
     const punch = this.spec.viewPunchImpulse(idx);
 
     if (this.spec.automatic) {

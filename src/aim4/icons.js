@@ -1,6 +1,8 @@
 // AIM4 menu / scenario icons (Material Symbols SVGs in this folder)
 import gridshot from './calendar_view_month_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
 import pasu from './automation_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
+import spidershot from './hive_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
+import survival from './cycle_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
 import arena from './switch_access_2_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
 import duels from './swords_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
 import range from './arrow_range_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
@@ -12,6 +14,8 @@ import globe from './globe_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
 export const SCENARIO_ICONS = {
   gridshot,
   pasu,
+  spidershot,
+  survival,
   arena,
   duels,
   range

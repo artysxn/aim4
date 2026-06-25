@@ -36,6 +36,7 @@ export class GridshotScenario extends BaseScenario {
     this.boundsScaleX = this.config.boundsScaleX ?? g.boundsScaleX ?? 1;
     this.boundsScaleY = this.config.boundsScaleY ?? g.boundsScaleY ?? 1;
     this.infiniteAmmo = this.config.infiniteAmmo ?? g.infiniteAmmo !== false;
+    this.weaponBloom = false;
 
     this.wallDistance = 16;
     this.boundsW = BASE_BOUNDS_W * this.boundsScaleX;

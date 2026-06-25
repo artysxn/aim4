@@ -27,10 +27,13 @@ import { getMap } from '../multiplayer/maps.js';
 import { formatServerRegion } from '../multiplayer/regionLabels.js';
 import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, CUSTOM_GAMES_ICON } from '../aim4/icons.js';
 import { isKpmScenario } from '../scenarios/kpmScenarios.js';
+import { SurvivalScenario } from '../scenarios/SurvivalScenario.js';
 
 const SCENARIO_META = {
   gridshot: { title: 'Gridshot' },
   pasu: { title: 'Pasu' },
+  spidershot: { title: 'Spidershot' },
+  survival: { title: 'Survival', dualPlay: true },
   arena: { title: 'Crossfire' },
   duels: { title: 'Duels' },
   range: { title: 'Range' }
@@ -88,6 +91,7 @@ export class UIOverlay {
     this.root = document.getElementById('ui-root');
     this.state = 'menu';
     this.currentScenario = 'gridshot';
+    this.scenarioConfig = {};
     this._authMode = 'login';
     this._lbCache = {};
     this._returnAfterSettings = null;
@@ -238,6 +242,7 @@ export class UIOverlay {
         label: 'Gridshot',
         body: `
           ${rf('set-grid-size', 'Target size', 0.25, 1.2, 0.05)}
+          ${rf('set-grid-count', 'Target count', 1, 6, 1)}
           <div class="field field-plain">
             <div class="field-top"><span class="field-label">Mode</span></div>
             <select id="set-grid-mode">
@@ -266,6 +271,7 @@ export class UIOverlay {
         label: 'Pasu',
         body: `
           ${rf('set-pasu-size', 'Target size', 0.15, 0.9, 0.05)}
+          ${rf('set-pasu-count', 'Target count', 1, 6, 1)}
           <div class="field field-plain">
             <div class="field-top"><span class="field-label">Mode</span></div>
             <select id="set-pasu-mode">
@@ -288,6 +294,37 @@ export class UIOverlay {
           <label class="field-check"><input type="checkbox" id="set-pasu-tl" /> Per-target time limit</label>
           ${rf('set-pasu-age', 'Max target age (ms)', 400, 3000, 100)}
           <label class="field-check"><input type="checkbox" id="set-pasu-infinite-ammo" /> Infinite ammo</label>`
+      },
+      {
+        id: 'spidershot',
+        label: 'Spidershot',
+        body: `
+          ${rf('set-spider-size', 'Target size', 0.25, 0.9, 0.05)}
+          ${rf('set-spider-ttk', 'Time to kill (ms)', 400, 4000, 50)}
+          ${rf('set-spider-max-dist', 'Max distance (m)', 2, 12, 0.5)}
+          ${rf('set-spider-min-dist', 'Min distance (m)', 0.5, 6, 0.25)}
+          ${rf('set-spider-height', 'Height spread', 0.25, 2, 0.05)}
+          ${rf('set-spider-angle', 'Angle spread (°)', 0, 45, 1)}
+          ${rf('set-spider-streak', 'Streak chance (%)', 0, 100, 5)}
+          ${rf('set-spider-streak-min', 'Streak length min', 2, 6, 1)}
+          ${rf('set-spider-streak-max', 'Streak length max', 2, 8, 1)}
+          ${rf('set-spider-double', 'Double spawn chance (%)', 0, 100, 5)}
+          <label class="field-check"><input type="checkbox" id="set-spider-drift" /> Horizontal drift</label>
+          ${rf('set-spider-drift-speed', 'Max drift speed (m/s)', 0.25, 4, 0.25)}
+          <label class="field-check"><input type="checkbox" id="set-spider-random-size" /> Random target size</label>
+          ${rf('set-spider-size-min', 'Random size min', 0.2, 0.8, 0.05)}
+          ${rf('set-spider-size-max', 'Random size max', 0.2, 1.0, 0.05)}
+          <label class="field-check"><input type="checkbox" id="set-spider-infinite-ammo" /> Infinite ammo</label>`
+      },
+      {
+        id: 'survival',
+        label: 'Survival',
+        body: `
+          <p class="readout">Practice settings below. Competitive uses fixed rules: 0.75&nbsp;s spawn, 2&nbsp;s despawn, no missed shots, no other changes.</p>
+          ${rf('set-surv-spawn', 'Spawn interval (ms)', 300, 3000, 50)}
+          ${rf('set-surv-despawn', 'Despawn time (ms)', 500, 5000, 50)}
+          ${rf('set-surv-max-size', 'Max target size', 0.25, 1.0, 0.05)}
+          ${rf('set-surv-strikes', 'Misses allowed (Practice)', 0, 10, 1)}`
       },
       {
         id: 'arena',
@@ -478,18 +515,25 @@ export class UIOverlay {
         <h2 class="text-big">Training</h2>
         <div class="cards">
           ${Object.keys(SCENARIOS)
-            .map(
-              (key) => `
+            .map((key) => {
+              const meta = SCENARIO_META[key];
+              const playBtns = meta.dualPlay
+                ? `<div class="card-actions">
+              <button type="button" class="btn btn-sm card-play-practice" data-play="${key}" data-variant="practice">Practice</button>
+              <button type="button" class="btn btn-sm primary card-play-competitive" data-play="${key}" data-variant="competitive">Competitive</button>
+            </div>`
+                : `<button type="button" class="btn-play" data-play="${key}" aria-label="Play ${meta.title}">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+              </button>`;
+              return `
             <div class="card" data-scenario="${key}">
               <div class="card-icon">
                 <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="28" height="28" />
               </div>
-              <h3 class="card-title">${SCENARIO_META[key].title}</h3>
-              <button type="button" class="btn-play" data-play="${key}" aria-label="Play ${SCENARIO_META[key].title}">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
-              </button>
-            </div>`
-            )
+              <h3 class="card-title">${meta.title}</h3>
+              ${playBtns}
+            </div>`;
+            })
             .join('')}
         </div>
         <div class="menu-actions">
@@ -727,7 +771,10 @@ export class UIOverlay {
     this.root.addEventListener('click', (e) => {
       const t = e.target.closest('[data-play],[data-goto],[data-resume],[data-quit],[data-restart],[data-reset],[data-reset-colors],[data-lb]');
       if (!t) return;
-      if (t.dataset.play) this.play(t.dataset.play);
+      if (t.dataset.play) {
+        const variant = t.dataset.variant;
+        this.play(t.dataset.play, variant ? { variant } : {});
+      }
       else if (t.dataset.goto) {
         if (t.dataset.goto === 'leaderboard') this._renderLeaderboard(this._activeLbTab());
         if (t.dataset.goto === 'settings') this._returnAfterSettings = this.state;
@@ -736,7 +783,7 @@ export class UIOverlay {
         if (t.dataset.goto === 'auth') this._openAuth('login');
       } else if (t.hasAttribute('data-resume')) this.resume();
       else if (t.hasAttribute('data-quit')) this.quit();
-      else if (t.hasAttribute('data-restart')) this.play(this.currentScenario);
+      else if (t.hasAttribute('data-restart')) this.play(this.currentScenario, this.scenarioConfig);
       else if (t.hasAttribute('data-reset')) {
         this.settings.reset();
         this._populateSettings();
@@ -869,6 +916,7 @@ export class UIOverlay {
     });
 
     this._bindRange('set-grid-size', (v) => (s.data.gridshot.targetSize = v));
+    this._bindRange('set-grid-count', (v) => (s.data.gridshot.targetCount = v), { parse: (v) => parseInt(v, 10) });
     $('#set-grid-mode').addEventListener('change', (e) => {
       s.data.gridshot.mode = e.target.value;
       s.save();
@@ -896,6 +944,7 @@ export class UIOverlay {
     });
 
     this._bindRange('set-pasu-size', (v) => (s.data.pasu.targetSize = v));
+    this._bindRange('set-pasu-count', (v) => (s.data.pasu.targetCount = v), { parse: (v) => parseInt(v, 10) });
     $('#set-pasu-mode').addEventListener('change', (e) => {
       s.data.pasu.mode = e.target.value;
       s.save();
@@ -918,6 +967,37 @@ export class UIOverlay {
       s.data.pasu.infiniteAmmo = e.target.checked;
       s.save();
     });
+
+    this._bindRange('set-spider-size', (v) => (s.data.spidershot.targetSize = v));
+    this._bindRange('set-spider-ttk', (v) => (s.data.spidershot.timeToKill = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-spider-max-dist', (v) => (s.data.spidershot.maxDistance = v));
+    this._bindRange('set-spider-min-dist', (v) => (s.data.spidershot.minDistance = v));
+    this._bindRange('set-spider-height', (v) => (s.data.spidershot.heightSpread = v));
+    this._bindRange('set-spider-angle', (v) => (s.data.spidershot.angleSpread = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-spider-streak', (v) => (s.data.spidershot.streakChance = v / 100));
+    this._bindRange('set-spider-streak-min', (v) => (s.data.spidershot.streakLengthMin = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-spider-streak-max', (v) => (s.data.spidershot.streakLengthMax = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-spider-double', (v) => (s.data.spidershot.doubleSpawnChance = v / 100));
+    $('#set-spider-drift').addEventListener('change', (e) => {
+      s.data.spidershot.horizontalDrift = e.target.checked;
+      s.save();
+    });
+    this._bindRange('set-spider-drift-speed', (v) => (s.data.spidershot.driftSpeedMax = v));
+    $('#set-spider-random-size').addEventListener('change', (e) => {
+      s.data.spidershot.randomSize = e.target.checked;
+      s.save();
+    });
+    this._bindRange('set-spider-size-min', (v) => (s.data.spidershot.randomSizeMin = v));
+    this._bindRange('set-spider-size-max', (v) => (s.data.spidershot.randomSizeMax = v));
+    $('#set-spider-infinite-ammo')?.addEventListener('change', (e) => {
+      s.data.spidershot.infiniteAmmo = e.target.checked;
+      s.save();
+    });
+
+    this._bindRange('set-surv-spawn', (v) => (s.data.survival.spawnInterval = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-surv-despawn', (v) => (s.data.survival.despawnTime = v), { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-surv-max-size', (v) => (s.data.survival.maxSize = v));
+    this._bindRange('set-surv-strikes', (v) => (s.data.survival.missesAllowed = v), { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-arena-cross', (v) => (s.data.arena.crossDuration = v), { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-arena-peek', (v) => (s.data.arena.peekHold = v), { parse: (v) => parseInt(v, 10) });
@@ -1832,6 +1912,7 @@ export class UIOverlay {
     $('#set-vm-aimpunch').checked = s.weapon?.aimpunch !== false;
 
     this._setRange('set-grid-size', s.gridshot.targetSize);
+    this._setRange('set-grid-count', s.gridshot.targetCount ?? 3);
     $('#set-grid-mode').value = s.gridshot.mode || 'clicking';
     this._setRange('set-grid-track-time', s.gridshot.trackTime ?? 0.4);
     $('#set-grid-track-resolve').value = s.gridshot.trackResolve || 'click';
@@ -1844,6 +1925,7 @@ export class UIOverlay {
     $('#set-grid-infinite-ammo').checked = s.gridshot.infiniteAmmo !== false;
 
     this._setRange('set-pasu-size', s.pasu?.targetSize ?? 0.38);
+    this._setRange('set-pasu-count', s.pasu?.targetCount ?? 3);
     $('#set-pasu-mode').value = s.pasu?.mode || 'clicking';
     this._setRange('set-pasu-track-time', s.pasu?.trackTime ?? 0.4);
     $('#set-pasu-track-resolve').value = s.pasu?.trackResolve || 'click';
@@ -1854,6 +1936,28 @@ export class UIOverlay {
     $('#set-pasu-tl').checked = !!s.pasu?.enableTimeLimit;
     this._setRange('set-pasu-age', s.pasu?.maxTargetAge ?? 1200);
     $('#set-pasu-infinite-ammo').checked = s.pasu?.infiniteAmmo !== false;
+
+    this._setRange('set-spider-size', s.spidershot?.targetSize ?? 0.45);
+    this._setRange('set-spider-ttk', s.spidershot?.timeToKill ?? 1500);
+    this._setRange('set-spider-max-dist', s.spidershot?.maxDistance ?? 8);
+    this._setRange('set-spider-min-dist', s.spidershot?.minDistance ?? 1.2);
+    this._setRange('set-spider-height', s.spidershot?.heightSpread ?? 1);
+    this._setRange('set-spider-angle', s.spidershot?.angleSpread ?? 25);
+    this._setRange('set-spider-streak', Math.round((s.spidershot?.streakChance ?? 0.15) * 100));
+    this._setRange('set-spider-streak-min', s.spidershot?.streakLengthMin ?? 2);
+    this._setRange('set-spider-streak-max', s.spidershot?.streakLengthMax ?? 4);
+    this._setRange('set-spider-double', Math.round((s.spidershot?.doubleSpawnChance ?? 0.08) * 100));
+    $('#set-spider-drift').checked = !!s.spidershot?.horizontalDrift;
+    this._setRange('set-spider-drift-speed', s.spidershot?.driftSpeedMax ?? 1.5);
+    $('#set-spider-random-size').checked = !!s.spidershot?.randomSize;
+    this._setRange('set-spider-size-min', s.spidershot?.randomSizeMin ?? 0.32);
+    this._setRange('set-spider-size-max', s.spidershot?.randomSizeMax ?? 0.52);
+    $('#set-spider-infinite-ammo').checked = s.spidershot?.infiniteAmmo !== false;
+
+    this._setRange('set-surv-spawn', s.survival?.spawnInterval ?? 1000);
+    this._setRange('set-surv-despawn', s.survival?.despawnTime ?? 2000);
+    this._setRange('set-surv-max-size', s.survival?.maxSize ?? 0.55);
+    this._setRange('set-surv-strikes', s.survival?.missesAllowed ?? 3);
 
     this._setRange('set-arena-cross', s.arena.crossDuration);
     this._setRange('set-arena-peek', s.arena.peekHold);
@@ -1911,11 +2015,13 @@ export class UIOverlay {
     if (name === 'menu') this.refreshAccountBar();
   }
 
-  play(name) {
+  play(name, config = {}) {
     this.currentScenario = name;
-    this.sceneManager.load(name);
-    // CRIT chip is meaningful for every mode with head-shots (all but KPM modes).
-    this.hudCritChip.style.display = isKpmScenario(name) ? 'none' : '';
+    this.scenarioConfig = config;
+    this.sceneManager.load(name, config);
+    const noCrit =
+      isKpmScenario(name) || name === 'spidershot' || name === 'survival';
+    this.hudCritChip.style.display = noCrit ? 'none' : '';
     this.showScreen('playing');
     this.state = 'await-start';
     this.input.requestLock();
@@ -1990,6 +2096,11 @@ export class UIOverlay {
   async _onFinish(results) {
     this.state = 'results';
     this.input.exitLock();
+    const title = this.root.querySelector('#res-title');
+    if (title) {
+      title.textContent =
+        results.scenario === 'survival' ? 'Game Over' : 'Run Complete';
+    }
     this.showScreen('results');
     await this._saveAndRenderResults(results);
   }
@@ -2015,6 +2126,8 @@ export class UIOverlay {
     if (this.hud.classList.contains('active') && sc) {
       if (isKpmScenario(sc.name)) {
         this.hudTime.textContent = sc.modeSeconds.toFixed(1);
+      } else if (sc.showElapsedTime) {
+        this.hudTime.textContent = sc.elapsed.toFixed(1);
       } else {
         this.hudTime.textContent = this.sceneManager.timeRemaining.toFixed(1);
       }
@@ -2104,6 +2217,9 @@ export class UIOverlay {
   }
 
   _configKeyFor(scenario) {
+    if (scenario === 'survival') {
+      return SurvivalScenario.configKeyFor(this.settings, 'competitive');
+    }
     return SCENARIOS[scenario].configKeyFor(this.settings);
   }
 
@@ -2232,7 +2348,9 @@ export class UIOverlay {
       } else {
         const kpmHint = isKpmScenario(scenario)
           ? 'Ranked by time in mode, then KPM · '
-          : 'Best score per verified account · ';
+          : scenario === 'survival'
+            ? 'Competitive Survival · best score per run · '
+            : 'Best score per verified account · ';
         subtitle.textContent = this.auth?.isLoggedIn
           ? `${kpmHint}signed in as ${this._accountLabel()}`
           : `${kpmHint}sign in to submit scores`;
@@ -2248,7 +2366,7 @@ export class UIOverlay {
     this.root.querySelector('#res-lb').innerHTML =
       `<p class="center lb-hint">${this.auth?.isLoggedIn ? 'Saving score…' : 'Loading leaderboard…'}</p>`;
 
-    if (this.auth?.isLoggedIn) {
+    if (this.auth?.isLoggedIn && results.leaderboardEligible !== false) {
       try {
         await this.auth.ensureProfileReady();
       } catch (e) {
@@ -2263,11 +2381,13 @@ export class UIOverlay {
             ? ''
             : `Score not saved: ${res.reason}`;
       }
+    } else if (results.leaderboardEligible === false) {
+      submitNote = 'Practice runs are not saved to leaderboards';
     } else if (supabaseConfigured()) {
       submitNote = 'Sign in to save to leaderboards';
     }
 
-    const showCrit = !isKpmScenario(results.scenario);
+    const showCrit = !isKpmScenario(results.scenario) && results.scenario !== 'survival';
     const stat = (label, val) =>
       `<div class="stat"><span class="stat-value">${val}</span><label>${label}</label></div>`;
     const kpmStats =
@@ -2285,7 +2405,10 @@ export class UIOverlay {
     this.root.querySelector('#res-stats').innerHTML =
       isKpmScenario(results.scenario) ? kpmStats : defaultStats;
 
-    const { list, error } = await this._fetchLeaderboard(results.scenario, results.configKey);
+    const { list, error } = await this._fetchLeaderboard(
+      results.scenario,
+      results.leaderboardEligible !== false ? results.configKey : this._configKeyFor(results.scenario)
+    );
     const lbHtml = this._leaderboardRowsHtml(
       list,
       results.scenario,

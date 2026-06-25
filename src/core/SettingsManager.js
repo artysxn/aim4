@@ -72,6 +72,31 @@ const DEFAULTS = {
     angleOffset: 360,
     infiniteAmmo: true
   },
+  spidershot: {
+    targetSize: 0.45,
+    timeToKill: 1500, // ms per sideward target
+    maxDistance: 8.0, // metres from centre at the wall
+    minDistance: 1.2,
+    heightSpread: 1.0, // vertical spawn multiplier
+    angleSpread: 25, // degrees above/below horizontal
+    streakChance: 0.15, // 0–1 chance to chain extra targets after a kill
+    streakLengthMin: 2,
+    streakLengthMax: 4,
+    doubleSpawnChance: 0.08, // 0–1 chance for two active targets
+    horizontalDrift: false,
+    driftSpeedMax: 1.5,
+    randomSize: false,
+    randomSizeMin: 0.32,
+    randomSizeMax: 0.52,
+    infiniteAmmo: true
+  },
+  survival: {
+    spawnInterval: 1000, // ms between spawns (Practice)
+    despawnTime: 2000, // ms before a dot explodes (Practice)
+    maxSize: 0.55,
+    startSize: 0.12,
+    missesAllowed: 3 // missed shots before game over (Practice only)
+  },
   arena: {
     crossDuration: 700, // ms for the bot to cross a gap (exposure window)
     peekHold: 450, // ms the bot holds an open peek before crossing

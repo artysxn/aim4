@@ -7,6 +7,8 @@
 
 import { GridshotScenario } from '../scenarios/GridshotScenario.js';
 import { PasuScenario } from '../scenarios/PasuScenario.js';
+import { SpidershotScenario } from '../scenarios/SpidershotScenario.js';
+import { SurvivalScenario } from '../scenarios/SurvivalScenario.js';
 import { ArenaScenario } from '../scenarios/ArenaScenario.js';
 import { DuelsScenario } from '../scenarios/DuelsScenario.js';
 import { RangeScenario } from '../scenarios/RangeScenario.js';
@@ -16,6 +18,8 @@ import { MultiplayerDuelScenario } from '../scenarios/MultiplayerDuelScenario.js
 export const SCENARIOS = {
   gridshot: GridshotScenario,
   pasu: PasuScenario,
+  spidershot: SpidershotScenario,
+  survival: SurvivalScenario,
   arena: ArenaScenario,
   duels: DuelsScenario,
   range: RangeScenario
@@ -59,7 +63,8 @@ export class SceneManager {
       engine: this.engine,
       settings: this.settings,
       config,
-      crosshair: this.crosshair
+      crosshair: this.crosshair,
+      requestFinish: () => this.finishRun()
     });
     // A scenario may opt out of the fixed run timer (e.g. multiplayer "first to X").
     this.duration = this.current.runDuration ?? this.settings.data.runDuration;
@@ -81,6 +86,14 @@ export class SceneManager {
       this.current.dispose();
       this.current = null;
     }
+  }
+
+  /** End the active run early (e.g. Survival game-over). */
+  finishRun() {
+    if (!this.current?.running || this.finished) return;
+    this.finished = true;
+    this.current.pause();
+    if (this.onFinish) this.onFinish(this.current.results());
   }
 
   update(dt) {

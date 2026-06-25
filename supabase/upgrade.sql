@@ -397,3 +397,12 @@ $$;
 
 grant execute on function public.get_leaderboard(text, text, int) to anon, authenticated;
 grant execute on function public.get_leaderboard_top(text, text, int) to anon, authenticated;
+
+-- ---- Spidershot mode ---------------------------------------------------------
+-- Uses the default score-based leaderboard path (best kills per account).
+-- config_key format: ttk{timeToKillMs}_md{maxDistance*10}_d{runDurationSeconds}
+-- No RPC changes required; scores.scenario = 'spidershot' is stored like arena/range.
+
+-- ---- Survival mode (Competitive) ---------------------------------------------
+-- Competitive leaderboard: scenario = 'survival', config_key = 'competitive'.
+-- Ranked by best score (points/kills) per account. Practice runs are client-only.
