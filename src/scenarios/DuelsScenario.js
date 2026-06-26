@@ -28,10 +28,12 @@ import { Target } from '../components/Target.js';
 import { randRange, randInt, clamp, lerp, degToRad } from '../utils/MathUtils.js';
 import { SourceMover1D, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
-import { markBulletDecalSurface } from '../utils/bulletImpact.js';
+import { markBulletDecalSurface, worldImpactNormal } from '../utils/bulletImpact.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
+import { movementHitScale, isPointVisible } from '../utils/spawnVisibility.js';
+import { SHOT_INTERVAL } from '../weapons/ak47.js';
 import {
   getDuelsArenaPool,
   resolveDuelsArenaChoice,
@@ -45,9 +47,15 @@ const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET; // local head-centre height (feet 
 
 const _headPos = new THREE.Vector3();
 const _eyePos = new THREE.Vector3();
+const _aimPos = new THREE.Vector3();
+const _tracerEnd = new THREE.Vector3();
+const _impactNormal = new THREE.Vector3();
+const _fwd = new THREE.Vector3();
 const _losDir = new THREE.Vector3();
 const _losRay = new THREE.Raycaster();
 const MAX_PITCH = degToRad(89);
+const PLAYER_HP = 2;
+const BACKSHOT_FIRE_DELAY = 1.0;
 
 // Each arena: where the player spawns + how far they may roam, where the enemy
 // lives, and the boxes (all of which occlude). `ecHalf` is the half-width of the
@@ -315,6 +323,10 @@ export class DuelsScenario extends BaseScenario {
 
     const preset = this.competitive ? competitivePresetFor('duels') : null;
     this._ttk = this.config.ttk ?? preset?.ttk ?? d.ttk ?? 0.5;
+    this._botHeadHitBase = preset?.botHeadHit ?? 0.08;
+    this._botBodyHitBase = preset?.botBodyHit ?? 0.40;
+    this._botHitRamp = preset?.botHitRamp ?? 0.01;
+    this._playerHp = PLAYER_HP;
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 60)
       : this.settings.data.runDuration;
@@ -456,6 +468,7 @@ export class DuelsScenario extends BaseScenario {
     this.addTarget(target);
     const mover = new SourceMover1D();
     mover.reset(0);
+    this._playerHp = PLAYER_HP;
     this.enemy = {
       target,
       mover,
@@ -471,8 +484,18 @@ export class DuelsScenario extends BaseScenario {
       hasLos: false,
       wasLos: false,
       exposedTimer: -1,
-      countedMiss: false
+      countedMiss: false,
+      fireTimer: randRange(0, SHOT_INTERVAL),
+      sneakFireDelay: 0,
+      sneakTargetKey: null,
+      headHit: this._botHeadHitBase,
+      bodyHit: this._botBodyHitBase
     };
+    if (this.competitive) {
+      const ramp = this.kills * this._botHitRamp;
+      this.enemy.headHit = this._botHeadHitBase + ramp;
+      this.enemy.bodyHit = this._botBodyHitBase + ramp;
+    }
     this._placeEnemy(0);
   }
 
@@ -503,6 +526,72 @@ export class DuelsScenario extends BaseScenario {
     _losRay.far = dist;
     const hits = _losRay.intersectObjects(this.coverMeshes, false);
     return hits.length === 0 || hits[0].distance >= dist - 0.04;
+  }
+
+  _playerSeesBot(e) {
+    const head = e.target.headMesh;
+    if (!head || !this.engine.player?.enabled) return false;
+    head.getWorldPosition(_headPos);
+    const cam = this.camera;
+    cam.getWorldDirection(_fwd);
+    return isPointVisible(
+      [cam.position.x, cam.position.y, cam.position.z],
+      [_fwd.x, _fwd.y, _fwd.z],
+      [_headPos.x, _headPos.y, _headPos.z],
+      this.settings.data.hFov,
+      this._colliderBoxes(this.arena)
+    );
+  }
+
+  _tracerImpact(from, tx, ty, tz) {
+    const dist = from.distanceTo(_aimPos.set(tx, ty, tz));
+    if (dist < 1e-4) {
+      return { point: _tracerEnd.copy(_aimPos), normal: null, decal: false };
+    }
+    _losDir.copy(_aimPos).sub(from).multiplyScalar(1 / dist);
+    _losRay.set(from, _losDir);
+    _losRay.far = dist;
+    const hits = _losRay.intersectObjects(this.coverMeshes, false);
+    if (hits.length && hits[0].distance < dist - 0.04) {
+      const h = hits[0];
+      return {
+        point: _tracerEnd.copy(h.point),
+        normal: worldImpactNormal(h, _impactNormal),
+        decal: true
+      };
+    }
+    return { point: _tracerEnd.copy(_aimPos), normal: null, decal: false };
+  }
+
+  _duelBotFire(e) {
+    const head = e.target.headMesh;
+    if (!head || !this.engine.player?.enabled) return;
+    head.getWorldPosition(_headPos);
+    this.camera.getWorldPosition(_eyePos);
+
+    this.engine.audio?.playRemoteShot(_headPos.x, _headPos.y, _headPos.z);
+    const impact = this._tracerImpact(_headPos, _eyePos.x, _eyePos.y, _eyePos.z);
+    const vm = this.engine.viewmodel;
+    vm?.spawnTracer(_headPos, impact.point);
+    vm?.spawnBulletImpact(impact.point, impact.normal, { decal: impact.decal });
+
+    const p = this.engine.player;
+    const speed = p?.enabled ? Math.hypot(p.vel.x, p.vel.z) : 0;
+    const hitScale = movementHitScale(speed, RUN_SPEED);
+    const headHit = e.headHit * hitScale;
+    const bodyHit = e.bodyHit * hitScale;
+    const roll = Math.random();
+    const zone = roll < headHit ? 'head' : roll < headHit + bodyHit ? 'body' : null;
+    if (!zone) return;
+    if (zone === 'head') this._onPlayerDeath(true);
+    else this._damagePlayer();
+  }
+
+  _damagePlayer() {
+    if (!this.engine.player?.enabled) return;
+    this._playerHp -= 1;
+    beep(520, 0.04, 'square', 0.08);
+    if (this._playerHp <= 0) this._onPlayerDeath(false);
   }
 
   _beginPeek() {
@@ -585,6 +674,7 @@ export class DuelsScenario extends BaseScenario {
 
   // ---- Round flow --------------------------------------------------------
   onStart() {
+    this._playerHp = PLAYER_HP;
     const a = this.arena;
     this.engine.player.spawn({
       pos: a.player.pos,
@@ -664,16 +754,39 @@ export class DuelsScenario extends BaseScenario {
     this._placeEnemy(e.mover.s);
 
     const hasLos = this._botHeadHasLos(e);
-
-    // TTK starts only once the bot's head can actually see the player.
-    if (hasLos && !e.wasLos) e.exposedTimer = this._ttk;
-    if (!hasLos) e.exposedTimer = -1;
-    e.wasLos = hasLos;
     e.hasLos = hasLos;
 
-    if (hasLos && e.exposedTimer > 0) {
-      e.exposedTimer -= dt;
-      if (e.exposedTimer <= 0) this._onPlayerDeath();
+    if (this.competitive) {
+      if (hasLos && this.engine.player?.enabled) {
+        const playerSeesBot = this._playerSeesBot(e);
+        if (playerSeesBot) {
+          e.sneakFireDelay = 0;
+          e.sneakTargetKey = 'player';
+        } else if (e.sneakTargetKey !== 'player') {
+          e.sneakTargetKey = 'player';
+          e.sneakFireDelay = BACKSHOT_FIRE_DELAY;
+        } else {
+          e.sneakFireDelay = Math.max(0, e.sneakFireDelay - dt);
+        }
+        const mayFire = playerSeesBot || e.sneakFireDelay <= 0;
+        e.fireTimer -= dt;
+        if (mayFire && e.fireTimer <= 0) {
+          e.fireTimer = SHOT_INTERVAL;
+          this._duelBotFire(e);
+        }
+      } else {
+        e.sneakFireDelay = 0;
+        e.sneakTargetKey = null;
+      }
+    } else {
+      // Practice: legacy TTK once the bot's head can see the player.
+      if (hasLos && !e.wasLos) e.exposedTimer = this._ttk;
+      if (!hasLos) e.exposedTimer = -1;
+      e.wasLos = hasLos;
+      if (hasLos && e.exposedTimer > 0) {
+        e.exposedTimer -= dt;
+        if (e.exposedTimer <= 0) this._onPlayerDeath(false);
+      }
     }
 
     this._updateBotFootsteps(e, dt);
@@ -696,7 +809,7 @@ export class DuelsScenario extends BaseScenario {
     audio.updateRemotePlayer(0, r, dt);
   }
 
-  _onPlayerDeath() {
+  _onPlayerDeath(_headshot = false) {
     const e = this.enemy;
     this.misses++;
     beep(180, 0.1, 'sawtooth', 0.2);

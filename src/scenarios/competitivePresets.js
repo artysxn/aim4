@@ -46,7 +46,10 @@ export const COMPETITIVE_PRESETS = {
   },
   duels: {
     runDuration: 60,
-    ttk: 0.3
+    ttk: 0.3,
+    botHeadHit: 0.08,
+    botBodyHit: 0.40,
+    botHitRamp: 0.01
   },
   range: {
     runDuration: 30,
