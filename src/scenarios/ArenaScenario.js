@@ -22,6 +22,7 @@ import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
 import { randRange, randInt, lerp, degToRad } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
+import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { startMissFlash, updateMissFlash } from './missFlash.js';
@@ -89,7 +90,9 @@ export class ArenaScenario extends BaseScenario {
   }
 
   tracerRaycastExtras() {
-    return this.columns;
+    const extras = this.columns.slice();
+    if (this.wall) extras.unshift(this.wall);
+    return extras;
   }
 
   // ---- Environment --------------------------------------------------------
@@ -108,6 +111,8 @@ export class ArenaScenario extends BaseScenario {
       new THREE.MeshStandardMaterial({ color: c.cover, side: THREE.BackSide, roughness: 0.9 })
     );
     wall.position.y = 3.5;
+    markBulletDecalSurface(wall);
+    this.wall = wall;
     this.root.add(wall);
 
     const grid = new THREE.GridHelper(36, 36, gridCenter, gridEdge);
@@ -120,6 +125,7 @@ export class ArenaScenario extends BaseScenario {
       this.colAngle.push(angle);
       const col = new THREE.Mesh(new THREE.CylinderGeometry(this.colRadius, this.colRadius, COL_H, 20), colMat);
       col.position.set(this.ringR * Math.sin(angle), COL_H / 2, -this.ringR * Math.cos(angle));
+      markBulletDecalSurface(col);
       this.root.add(col);
       this.columns.push(col);
     }

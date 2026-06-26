@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { spreadRng, applySpreadToDir } from '../utils/shotAccuracy.js';
 import { viewPunchImpulse } from '../weapons/ak47.js';
 import { isLeaderboardEligible } from './rankedScenarios.js';
+import { isBulletDecalSurface, worldImpactNormal } from '../utils/bulletImpact.js';
 
 const _raycaster = new THREE.Raycaster();
 // Reused firing scratch (no per-shot allocation).
@@ -83,6 +84,7 @@ export class BaseScenario {
     this.viewmodelRecoil = true; // gun kick + view-punch on fire (per-mode override)
     this._initVariant();
     this._lastImpact = new THREE.Vector3();
+    this._lastImpactNormal = new THREE.Vector3();
   }
 
   /** Practice vs Competitive — set from config.variant at load time. */
@@ -221,7 +223,11 @@ export class BaseScenario {
         vm.syncMuzzleForShot(motion);
         vm.getMuzzlePosition(_tracerStart);
         vm.spawnTracer(_tracerStart, this._lastImpact);
-        if (impactHit) vm.spawnImpactSparks(this._lastImpact);
+        if (impactHit) {
+          vm.spawnBulletImpact(this._lastImpact, this._lastImpactNormal, {
+            decal: isBulletDecalSurface(impactHit.object)
+          });
+        }
       }
       if (vmRecoil) {
         const p = punch || viewPunchImpulse(shotIndex);
@@ -263,6 +269,7 @@ export class BaseScenario {
     const hit = this.raycastTargets(_raycaster, this.tracerRaycastExtras());
     if (hit) {
       this._lastImpact.copy(hit.point);
+      worldImpactNormal(hit, this._lastImpactNormal);
       return hit;
     }
     this._lastImpact
@@ -302,6 +309,7 @@ export class BaseScenario {
   }
 
   dispose() {
+    this.engine.viewmodel?.clearBulletDecals();
     for (const t of this.targets) t.dispose();
     this.targets.length = 0;
     this.scene.remove(this.root);

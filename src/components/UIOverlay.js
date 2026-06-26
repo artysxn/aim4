@@ -42,6 +42,22 @@ const SCENARIO_META = {
   deathmatch: { title: 'Deathmatch', dualPlay: true }
 };
 
+/** Scenarios with practice-only tuning (gear on training card). */
+const SCENARIO_SETTING_IDS = new Set([
+  'gridshot',
+  'microflicks',
+  'pasu',
+  'spidershot',
+  'survival',
+  'arena',
+  'duels',
+  'deathmatch',
+  'range',
+  'tracking'
+]);
+
+const GEAR_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66z"/></svg>`;
+
 const _v = new THREE.Vector3();
 
 /** Slider paired with a number box; stored value is not clamped to the slider range. */
@@ -82,6 +98,10 @@ function settingsPanel(id, body, active) {
   return `<div class="settings-panel${active ? ' active' : ''}" data-settings-cat="${id}">${body}</div>`;
 }
 
+function scenarioSettingsPanel(id, body) {
+  return `<div class="scenario-settings-panel" data-scenario-settings-panel="${id}">${body}</div>`;
+}
+
 export class UIOverlay {
   constructor({ engine, input, settings, crosshair, sceneManager, auth }) {
     this.engine = engine;
@@ -98,6 +118,8 @@ export class UIOverlay {
     this._authMode = 'login';
     this._lbCache = {};
     this._returnAfterSettings = null;
+    this._returnAfterScenarioSettings = null;
+    this._activeScenarioSettings = null;
     this._suppressLockPause = false;
     this._mpTabStats = {};
     this._mpTabBoardHeld = false;
@@ -170,7 +192,7 @@ export class UIOverlay {
     this._errMsg.textContent = 'Runtime error (game still rendering):\n' + msg;
   }
 
-  _settingsSections(resOptions) {
+  _globalSettingsSections(resOptions) {
     return [
       {
         id: 'mouse',
@@ -240,6 +262,31 @@ export class UIOverlay {
           ${colorRow('set-col-target', 'Gridshot target')}
           <button type="button" class="btn btn-block" data-reset-colors>Reset colors</button>`
       },
+      {
+        id: 'share',
+        label: 'Share',
+        body: `
+          <div class="field field-plain">
+            <div class="field-top">
+              <span class="field-label">Settings code</span>
+            </div>
+            <input type="text" id="set-config-code" class="config-code-input" placeholder="AIM4-XXXX-YYYY-ZZZZ-000000" spellcheck="false" autocomplete="off" />
+          </div>
+          <div class="config-actions">
+            <button type="button" class="btn" id="btn-config-import">Import</button>
+            <button type="button" class="btn primary" id="btn-config-export">Export</button>
+          </div>
+          <div class="config-export-box" id="config-export-box" hidden>
+            <code class="config-export-code" id="config-export-code"></code>
+            <button type="button" class="btn btn-block" id="btn-config-copy">Copy to clipboard</button>
+          </div>
+          <p class="readout" id="config-status"></p>`
+      }
+    ];
+  }
+
+  _scenarioSettingsSections() {
+    return [
       {
         id: 'gridshot',
         label: 'Gridshot',
@@ -438,26 +485,6 @@ export class UIOverlay {
           <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
           ${rf('set-tracking-width', 'Bot width', 0.5, 2.0, 0.05)}
           ${rf('set-tracking-speed', 'Bot speed', 0.25, 2.0, 0.05)}`
-      },
-      {
-        id: 'share',
-        label: 'Share',
-        body: `
-          <div class="field field-plain">
-            <div class="field-top">
-              <span class="field-label">Settings code</span>
-            </div>
-            <input type="text" id="set-config-code" class="config-code-input" placeholder="AIM4-XXXX-YYYY-ZZZZ-000000" spellcheck="false" autocomplete="off" />
-          </div>
-          <div class="config-actions">
-            <button type="button" class="btn" id="btn-config-import">Import</button>
-            <button type="button" class="btn primary" id="btn-config-export">Export</button>
-          </div>
-          <div class="config-export-box" id="config-export-box" hidden>
-            <code class="config-export-code" id="config-export-code"></code>
-            <button type="button" class="btn btn-block" id="btn-config-copy">Copy to clipboard</button>
-          </div>
-          <p class="readout" id="config-status"></p>`
       }
     ];
   }
@@ -469,7 +496,8 @@ export class UIOverlay {
     const resOptions = Object.entries(RESOLUTIONS)
       .map(([k, v]) => `<option value="${k}">${v.label}</option>`)
       .join('');
-    const settingsSections = this._settingsSections(resOptions);
+    const globalSettingsSections = this._globalSettingsSections(resOptions);
+    const scenarioSettingsSections = this._scenarioSettingsSections();
 
     return `
     <!-- THREAT CHEVRONS (Arena) -->
@@ -578,6 +606,7 @@ export class UIOverlay {
               return `
             <div class="card" data-scenario="${key}">
               <div class="card-body">
+                ${SCENARIO_SETTING_IDS.has(key) ? `<button type="button" class="card-gear" data-scenario-settings-open="${key}" aria-label="${meta.title} settings">${GEAR_ICON}</button>` : ''}
                 <div class="card-icon">
                   <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="28" height="28" />
                 </div>
@@ -604,7 +633,7 @@ export class UIOverlay {
             </svg>
           </div>
           <nav class="settings-nav">
-            ${settingsSections.map((s, i) => settingsTab(s.id, s.label, i === 0)).join('')}
+            ${globalSettingsSections.map((s, i) => settingsTab(s.id, s.label, i === 0)).join('')}
           </nav>
           <div class="settings-bar-actions">
             <span class="settings-unsaved-hint muted" id="settings-unsaved-hint" hidden>Unsaved changes</span>
@@ -615,7 +644,31 @@ export class UIOverlay {
           </div>
         </header>
         <div class="settings-drawer">
-          ${settingsSections.map((s, i) => settingsPanel(s.id, s.body, i === 0)).join('')}
+          ${globalSettingsSections.map((s, i) => settingsPanel(s.id, s.body, i === 0)).join('')}
+        </div>
+      </div>
+    </div>
+
+    <!-- PER-MODE SETTINGS (gear on training cards) -->
+    <div class="screen scenario-settings" data-screen="scenario-settings">
+      <div class="panel wide scenario-settings-layout">
+        <header class="scenario-settings-bar">
+          <div class="scenario-settings-heading">
+            <img id="scenario-settings-icon" src="" alt="" class="aim4-icon" width="28" height="28" />
+            <h2 class="text-big" id="scenario-settings-title">Mode settings</h2>
+          </div>
+          <div class="scenario-settings-bar-actions">
+            <span class="settings-unsaved-hint muted" id="scenario-settings-unsaved-hint" hidden>Unsaved changes</span>
+            <button type="button" class="btn" id="scenario-settings-undo-btn" disabled>Undo</button>
+            <button type="button" class="btn primary" id="scenario-settings-confirm-btn">Confirm</button>
+            <button type="button" class="btn" id="scenario-settings-done-btn">Done</button>
+          </div>
+        </header>
+        <div class="scenario-settings-drawer">
+          ${scenarioSettingsSections.map((s) => scenarioSettingsPanel(s.id, s.body)).join('')}
+        </div>
+        <div class="menu-actions scenario-settings-back">
+          <button type="button" class="btn primary" id="scenario-settings-back-btn">Back to Training</button>
         </div>
       </div>
     </div>
@@ -864,8 +917,16 @@ export class UIOverlay {
       card.addEventListener('mouseenter', () => (this.currentScenario = card.dataset.scenario));
     });
 
+    this.root.querySelectorAll('[data-scenario-settings-open]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._openScenarioSettings(btn.dataset.scenarioSettingsOpen);
+      });
+    });
+
     this._bindSettings();
     this._bindSettingsTabs();
+    this._bindScenarioSettings();
     this._bindPauseMenu();
     this._bindConfigShare();
   }
@@ -918,6 +979,14 @@ export class UIOverlay {
     const hint = this.root.querySelector('#settings-unsaved-hint');
     if (undoBtn) undoBtn.disabled = !this.settings.canUndoDraft();
     if (hint) hint.hidden = !this.settings.hasDraftChanges();
+    this._updateScenarioSettingsBar();
+  }
+
+  _updateScenarioSettingsBar() {
+    const undoBtn = this.root.querySelector('#scenario-settings-undo-btn');
+    const hint = this.root.querySelector('#scenario-settings-unsaved-hint');
+    if (undoBtn) undoBtn.disabled = !this.settings.canUndoDraft();
+    if (hint) hint.hidden = !this.settings.hasDraftChanges();
   }
 
   _openSettings() {
@@ -925,6 +994,54 @@ export class UIOverlay {
     this._populateSettings();
     this.crosshair.drawPreview();
     this._updateSettingsBar();
+  }
+
+  _openScenarioSettings(scenarioId) {
+    if (!SCENARIO_SETTING_IDS.has(scenarioId)) return;
+    this.settings.openDraft();
+    this._activeScenarioSettings = scenarioId;
+    this._populateSettings();
+    this._showScenarioSettingsPanel(scenarioId);
+    this._updateScenarioSettingsBar();
+    this._returnAfterScenarioSettings = 'training';
+    this.showScreen('scenario-settings');
+  }
+
+  _showScenarioSettingsPanel(scenarioId) {
+    const title = SCENARIO_META[scenarioId]?.title ?? 'Mode';
+    const icon = SCENARIO_ICONS[scenarioId];
+    const titleEl = this.root.querySelector('#scenario-settings-title');
+    const iconEl = this.root.querySelector('#scenario-settings-icon');
+    if (titleEl) titleEl.textContent = `${title} settings`;
+    if (iconEl && icon) iconEl.src = icon;
+    this.root.querySelectorAll('.scenario-settings-panel').forEach((panel) => {
+      panel.classList.toggle('active', panel.dataset.scenarioSettingsPanel === scenarioId);
+    });
+  }
+
+  _closeScenarioSettings() {
+    this.settings.discardDraft();
+    this._activeScenarioSettings = null;
+    this._updateScenarioSettingsBar();
+    const ret = this._returnAfterScenarioSettings ?? 'training';
+    this._returnAfterScenarioSettings = null;
+    this.showScreen(ret);
+  }
+
+  _bindScenarioSettings() {
+    const $ = (id) => this.root.querySelector(id);
+    $('#scenario-settings-confirm-btn')?.addEventListener('click', () => {
+      this.settings.confirmDraft();
+      this._updateSettingsBar();
+    });
+    $('#scenario-settings-undo-btn')?.addEventListener('click', () => {
+      if (this.settings.undoDraft()) {
+        this._populateSettings();
+        this._updateSettingsBar();
+      }
+    });
+    $('#scenario-settings-done-btn')?.addEventListener('click', () => this._closeScenarioSettings());
+    $('#scenario-settings-back-btn')?.addEventListener('click', () => this._closeScenarioSettings());
   }
 
   _bindSettings() {

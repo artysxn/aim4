@@ -16,6 +16,7 @@ import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
 import { clamp, degToRad, lerp } from '../utils/MathUtils.js';
 import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
+import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { getMap, mapExtent } from '../multiplayer/maps.js';
 import {
   BODY_R,
@@ -151,6 +152,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.size[0], b.size[1], b.size[2]), mat);
       mesh.position.set(b.pos[0], b.pos[1], b.pos[2]);
       if (b.rotationY) mesh.rotation.y = b.rotationY;
+      markBulletDecalSurface(mesh);
       add(mesh);
       this.coverMeshes.push(mesh);
     }
@@ -353,7 +355,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
       else _wOrigin.set(msg.ox, msg.oy, msg.oz);
       _wEnd.set(msg.ex, msg.ey, msg.ez);
       vm.spawnTracer(_wOrigin, _wEnd);
-      vm.spawnImpactSparks(_wEnd);
+      vm.spawnBulletImpact(_wEnd, null, { decal: false });
     }
   }
 

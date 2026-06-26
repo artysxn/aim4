@@ -23,6 +23,7 @@ import { Target } from '../components/Target.js';
 import { randRange, randInt, clamp, lerp, degToRad } from '../utils/MathUtils.js';
 import { SourceMover1D, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
+import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 
@@ -259,6 +260,7 @@ export class DuelsScenario extends BaseScenario {
       const mat = b.role === 'enemy' ? enemyBoxMat : boxMat;
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.size[0], b.size[1], b.size[2]), mat);
       mesh.position.set(b.pos[0], b.pos[1], b.pos[2]);
+      markBulletDecalSurface(mesh);
       add(mesh);
       this.coverMeshes.push(mesh);
     }

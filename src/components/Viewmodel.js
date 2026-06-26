@@ -20,6 +20,9 @@ const TRACER_LIFE = 0.09; // seconds — quick, just a firing indicator
 const SPARK_POOL = 20;
 const SPARK_LIFE = 0.24;
 const SPARKS_PER_HIT = 12;
+const DECAL_POOL = 96;
+const DECAL_RADIUS = 0.052;
+const _decalAxis = new THREE.Vector3(0, 0, 1);
 const FLASH_LIFE = 0.045; // seconds — brief, non-distracting
 const MAX_PITCH = (89 * Math.PI) / 180;
 
@@ -38,6 +41,7 @@ export class Viewmodel {
     this._buildModels();
     this._buildTracers();
     this._buildImpactSparks();
+    this._buildBulletDecals();
 
     // Live animation state.
     this._bobPhase = 0;
@@ -60,6 +64,8 @@ export class Viewmodel {
     this._pos = new THREE.Vector3();
     this._muzzle = new THREE.Vector3();
     this._worldUp = new THREE.Vector3(0, 1, 0);
+    this._decalNormal = new THREE.Vector3();
+    this._decalQuat = new THREE.Quaternion();
 
     this.setWeapon(getWeapon());
   }
@@ -167,6 +173,32 @@ export class Viewmodel {
       this._impacts.push({ group, parts, t: 0 });
     }
     this._impactIdx = 0;
+  }
+
+  _buildBulletDecals() {
+    this._decalGeom = new THREE.CircleGeometry(DECAL_RADIUS, 10);
+    this._decals = [];
+    for (let i = 0; i < DECAL_POOL; i++) {
+      const mesh = new THREE.Mesh(
+        this._decalGeom,
+        new THREE.MeshBasicMaterial({
+          color: 0x0c0c0c,
+          transparent: true,
+          opacity: 0.88,
+          depthWrite: true,
+          side: THREE.DoubleSide,
+          polygonOffset: true,
+          polygonOffsetFactor: -4,
+          polygonOffsetUnits: -4
+        })
+      );
+      mesh.visible = false;
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 1;
+      this.engine.scene.add(mesh);
+      this._decals.push(mesh);
+    }
+    this._decalIdx = 0;
   }
 
   // ---- Public API ----------------------------------------------------------
@@ -277,6 +309,12 @@ export class Viewmodel {
     tr.line.visible = true;
   }
 
+  /** Sparks on any hit; optional bullet-hole decal on cover/walls. */
+  spawnBulletImpact(point, normal, { decal = false } = {}) {
+    this.spawnImpactSparks(point);
+    if (decal && normal) this._spawnBulletHole(point, normal);
+  }
+
   /** Brief spark burst at a bullet impact (world space). */
   spawnImpactSparks(point) {
     const fx = this._impacts[this._impactIdx];
@@ -296,6 +334,23 @@ export class Viewmodel {
       p.material.opacity = 1;
       p.rotation.z = Math.random() * Math.PI;
     }
+  }
+
+  _spawnBulletHole(point, normal) {
+    const mesh = this._decals[this._decalIdx];
+    this._decalIdx = (this._decalIdx + 1) % this._decals.length;
+
+    const n = this._decalNormal.copy(normal).normalize();
+    mesh.position.copy(point).addScaledVector(n, 0.004);
+    this._decalQuat.setFromUnitVectors(_decalAxis, n);
+    mesh.quaternion.copy(this._decalQuat);
+    mesh.rotateZ(Math.random() * Math.PI * 2);
+    mesh.visible = true;
+  }
+
+  clearBulletDecals() {
+    for (const mesh of this._decals) mesh.visible = false;
+    this._decalIdx = 0;
   }
 
   /** Recompute gun + muzzle world positions (call after fire() for tracers). */

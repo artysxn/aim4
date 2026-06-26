@@ -18,6 +18,7 @@ import { Target } from '../components/Target.js';
 import { randRange, randInt, clamp, lerp, degToRad } from '../utils/MathUtils.js';
 import { SourceMover1D, RUN_SPEED } from '../utils/SourceMovement.js';
 import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
+import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 
@@ -85,6 +86,10 @@ export class RangeScenario extends BaseScenario {
   }
   configKey() {
     return RangeScenario.configKeyFor(this.settings, this.variant);
+  }
+
+  tracerRaycastExtras() {
+    return this._coverMeshes;
   }
 
   // ---- Environment --------------------------------------------------------
@@ -155,6 +160,7 @@ export class RangeScenario extends BaseScenario {
       applyCoverGridRepeat(mat, width, height);
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), mat);
       mesh.position.set(x, height / 2, z);
+      markBulletDecalSurface(mesh);
       this.root.add(mesh);
       this._coverMeshes.push(mesh);
     }

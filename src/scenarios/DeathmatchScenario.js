@@ -17,12 +17,14 @@ import { randRange, clamp, lerp, degToRad } from '../utils/MathUtils.js';
 import { srcFriction, srcAccelerate, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
 import { resolveBoxCollisions, groundHeightAt } from '../utils/BoxCollision.js';
 import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
+import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { SHOT_INTERVAL } from '../weapons/ak47.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEATHMATCH_MAP, deathmatchExtent } from './deathmatchMap.js';
 import { eyeOffset, SPAWN_GRACE } from '../multiplayer/constants.js';
 import { pickSpawnPreferHidden, movementHitScale, isPointVisible } from '../utils/spawnVisibility.js';
+import { worldImpactNormal } from '../utils/bulletImpact.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
@@ -58,6 +60,7 @@ const _aimPos = new THREE.Vector3();
 const _losDir = new THREE.Vector3();
 const _losRay = new THREE.Raycaster();
 const _tracerEnd = new THREE.Vector3();
+const _impactNormal = new THREE.Vector3();
 
 export class DeathmatchScenario extends BaseScenario {
   constructor(opts) {
@@ -75,7 +78,7 @@ export class DeathmatchScenario extends BaseScenario {
     this._headHit = preset?.botHeadHit ?? this.config.botHeadHit ?? d.botHeadHit ?? 0.05;
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 60)
-      : this.settings.data.runDuration;
+      : Infinity;
 
     this.map = DEATHMATCH_MAP;
     this.colliders = this.map.boxes;
@@ -101,7 +104,7 @@ export class DeathmatchScenario extends BaseScenario {
   static configKeyFor(settings, variant = 'practice') {
     if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
     const d = settings.data.deathmatch;
-    return `n${d.botCount}_spd${d.botSpeed}_bh${d.botBodyHit}_hh${d.botHeadHit}_d${settings.data.runDuration}`;
+    return `n${d.botCount}_spd${d.botSpeed}_bh${d.botBodyHit}_hh${d.botHeadHit}`;
   }
   configKey() {
     return DeathmatchScenario.configKeyFor(this.settings, this.variant);
@@ -176,6 +179,7 @@ export class DeathmatchScenario extends BaseScenario {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.size[0], b.size[1], b.size[2]), mat);
       mesh.position.set(b.pos[0], b.pos[1], b.pos[2]);
       if (b.rotationY) mesh.rotation.y = b.rotationY;
+      markBulletDecalSurface(mesh);
       add(mesh);
       this.coverMeshes.push(mesh);
     }
@@ -395,15 +399,22 @@ export class DeathmatchScenario extends BaseScenario {
 
   _tracerImpact(from, tx, ty, tz) {
     const dist = from.distanceTo(_aimPos.set(tx, ty, tz));
-    if (dist < 1e-4) return _tracerEnd.copy(_aimPos);
+    if (dist < 1e-4) {
+      return { point: _tracerEnd.copy(_aimPos), normal: null, decal: false };
+    }
     _losDir.copy(_aimPos).sub(from).multiplyScalar(1 / dist);
     _losRay.set(from, _losDir);
     _losRay.far = dist;
     const hits = _losRay.intersectObjects(this.coverMeshes, false);
     if (hits.length && hits[0].distance < dist - 0.04) {
-      return _tracerEnd.copy(hits[0].point);
+      const h = hits[0];
+      return {
+        point: _tracerEnd.copy(h.point),
+        normal: worldImpactNormal(h, _impactNormal),
+        decal: true
+      };
     }
-    return _tracerEnd.copy(_aimPos);
+    return { point: _tracerEnd.copy(_aimPos), normal: null, decal: false };
   }
 
   _targetHitScale(target, maxSpeed) {
@@ -425,9 +436,10 @@ export class DeathmatchScenario extends BaseScenario {
     head.getWorldPosition(_headPos);
 
     this.engine.audio?.playRemoteShot(_headPos.x, _headPos.y, _headPos.z);
-    const end = this._tracerImpact(_headPos, target.x, target.y, target.z);
-    this.engine.viewmodel?.spawnTracer(_headPos, end);
-    this.engine.viewmodel?.spawnImpactSparks(end);
+    const impact = this._tracerImpact(_headPos, target.x, target.y, target.z);
+    const vm = this.engine.viewmodel;
+    vm?.spawnTracer(_headPos, impact.point);
+    vm?.spawnBulletImpact(impact.point, impact.normal, { decal: impact.decal });
 
     const max = RUN_SPEED * this.botSpeedMul;
     const hitScale = this._targetHitScale(target, max);
