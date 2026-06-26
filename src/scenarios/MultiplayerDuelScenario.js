@@ -344,10 +344,13 @@ export class MultiplayerDuelScenario extends BaseScenario {
   applyShotFired(msg) {
     if (this.isTracking || msg.shooterId === this.myId) return;
     this.engine.audio?.playRemoteShot(msg.x, msg.y, msg.z);
-    // Draw a tracer for the opponent's shot from their muzzle to its impact.
     const vm = this.engine.viewmodel;
-    if (vm && [msg.ox, msg.oy, msg.oz, msg.ex, msg.ey, msg.ez].every(Number.isFinite)) {
-      _wOrigin.set(msg.ox, msg.oy, msg.oz);
+    const hasEnd = [msg.ex, msg.ey, msg.ez].every(Number.isFinite);
+    const hasMuzzle = [msg.mx, msg.my, msg.mz].every(Number.isFinite);
+    const hasOrigin = [msg.ox, msg.oy, msg.oz].every(Number.isFinite);
+    if (vm && hasEnd && (hasMuzzle || hasOrigin)) {
+      if (hasMuzzle) _wOrigin.set(msg.mx, msg.my, msg.mz);
+      else _wOrigin.set(msg.ox, msg.oy, msg.oz);
       _wEnd.set(msg.ex, msg.ey, msg.ez);
       vm.spawnTracer(_wOrigin, _wEnd);
     }
@@ -486,12 +489,23 @@ export class MultiplayerDuelScenario extends BaseScenario {
 
     const o = raycaster.ray.origin;
     const d = raycaster.ray.direction;
+    let muzzle = null;
+    const vm = this.engine.viewmodel;
+    if (vm) {
+      const p = this.engine.player;
+      const motion = p?.enabled
+        ? { onGround: p.onGround, speedHoriz: Math.hypot(p.vel.x, p.vel.z) }
+        : {};
+      vm.syncMuzzleForShot(motion);
+      muzzle = vm.getMuzzlePosition(_wOrigin);
+    }
     this.net?.sendShot(
       { x: o.x, y: o.y, z: o.z },
       { x: d.x, y: d.y, z: d.z },
       claim,
       this._lastShotAccuracy,
-      this._lastImpact // tracer endpoint relayed to the opponent
+      this._lastImpact,
+      muzzle ? { x: muzzle.x, y: muzzle.y, z: muzzle.z } : null
     );
   }
 

@@ -47,6 +47,9 @@ const PLAYER_RESPAWN_DELAY = 0.9;
 const BOT_RESPAWN_DELAY = 0.5;
 
 const PLAYER_HP = 2;
+const PLAYER_BOARD_ID = 'player';
+const KILL_FEED_MAX = 6;
+const KILL_FEED_TTL_MS = 9000;
 
 const _headPos = new THREE.Vector3();
 const _aimPos = new THREE.Vector3();
@@ -82,6 +85,9 @@ export class DeathmatchScenario extends BaseScenario {
     this._playerHp = PLAYER_HP;
     this._respawnTimer = null;
     this._deathFx = null;
+    this._board = new Map();
+    this._killFeed = [];
+    this._lastAttackerBotId = null;
 
     this._buildEnvironment();
   }
@@ -101,6 +107,44 @@ export class DeathmatchScenario extends BaseScenario {
 
   tracerRaycastExtras() {
     return this.coverMeshes;
+  }
+
+  getScoreboardRows() {
+    return [...this._board.values()].sort(
+      (a, b) => b.kills - a.kills || a.deaths - b.deaths || a.name.localeCompare(b.name)
+    );
+  }
+
+  getKillFeedEntries() {
+    const now = performance.now();
+    return this._killFeed
+      .filter((e) => now - e.at < KILL_FEED_TTL_MS)
+      .map((e) => ({
+        killer: this._board.get(e.killerId)?.name ?? '?',
+        victim: this._board.get(e.victimId)?.name ?? '?',
+        headshot: e.headshot
+      }));
+  }
+
+  _ensureBoardEntry(id, name) {
+    if (!this._board.has(id)) {
+      this._board.set(id, { id, name, kills: 0, deaths: 0, isPlayer: id === PLAYER_BOARD_ID });
+    }
+    return this._board.get(id);
+  }
+
+  _pushKillFeed(killerId, victimId, { headshot = false } = {}) {
+    this._killFeed.unshift({ killerId, victimId, headshot, at: performance.now() });
+    if (this._killFeed.length > KILL_FEED_MAX) this._killFeed.length = KILL_FEED_MAX;
+  }
+
+  _recordKill(killerId, victimId, { headshot = false } = {}) {
+    if (!this._board.has(killerId) || !this._board.has(victimId)) return;
+    const killer = this._board.get(killerId);
+    const victim = this._board.get(victimId);
+    killer.kills++;
+    victim.deaths++;
+    this._pushKillFeed(killerId, victimId, { headshot });
   }
 
   // ---- Environment --------------------------------------------------------
@@ -197,12 +241,15 @@ export class DeathmatchScenario extends BaseScenario {
     return t;
   }
 
-  _spawnBot(avoid = []) {
+  _spawnBot(avoid = [], slotIndex = 0) {
     const target = this._buildBot();
     this.addTarget(target);
     const sp = this._pickSpawn(avoid);
+    const boardKey = `bot-${slotIndex}`;
+    this._ensureBoardEntry(boardKey, `Bot ${slotIndex + 1}`);
     const bot = {
       id: this._botSeq++,
+      boardKey,
       target,
       pos: { x: sp.pos[0], z: sp.pos[2] },
       vel: { x: 0, z: 0 },
@@ -300,10 +347,11 @@ export class DeathmatchScenario extends BaseScenario {
     if (!zone) return;
 
     if (target.type === 'player') {
-      if (zone === 'head') this._onPlayerDeath();
+      this._lastAttackerBotId = bot.id;
+      if (zone === 'head') this._onPlayerDeath(true);
       else this._damagePlayer();
     } else {
-      this._botHitBot(target.bot, zone);
+      this._botHitBot(bot, target.bot, zone);
     }
   }
 
@@ -311,16 +359,16 @@ export class DeathmatchScenario extends BaseScenario {
     if (this._dead) return;
     this._playerHp -= 1;
     beep(520, 0.04, 'square', 0.08);
-    if (this._playerHp <= 0) this._onPlayerDeath();
+    if (this._playerHp <= 0) this._onPlayerDeath(false);
   }
 
-  _botHitBot(victim, zone) {
+  _botHitBot(attacker, victim, zone) {
     if (victim.target.state === 'dying') return;
     if (zone === 'head') {
-      this._killBot(victim, false);
+      this._killBot(victim, false, attacker, true);
     } else {
       victim.hp -= 1;
-      if (victim.hp <= 0) this._killBot(victim, false);
+      if (victim.hp <= 0) this._killBot(victim, false, attacker, false);
     }
   }
 
@@ -387,7 +435,11 @@ export class DeathmatchScenario extends BaseScenario {
 
   // ---- Round flow ---------------------------------------------------------
   onStart() {
-    this._playerHp = PLAYER_HP;
+    this._board.clear();
+    this._killFeed = [];
+    this._lastAttackerBotId = null;
+    this._ensureBoardEntry(PLAYER_BOARD_ID, 'You');
+
     const spawn = this._pickSpawn();
     this.engine.player.spawn({
       pos: spawn.pos,
@@ -398,9 +450,10 @@ export class DeathmatchScenario extends BaseScenario {
 
     const avoid = [spawn.pos];
     for (let i = 0; i < this.botCount; i++) {
-      const bot = this._spawnBot(avoid);
+      const bot = this._spawnBot(avoid, i);
       avoid.push([bot.pos.x, bot.footY, bot.pos.z]);
     }
+    this._playerHp = PLAYER_HP;
   }
 
   onUpdate(dt) {
@@ -527,10 +580,17 @@ export class DeathmatchScenario extends BaseScenario {
   }
 
   // ---- Player death / respawn --------------------------------------------
-  _onPlayerDeath() {
+  _onPlayerDeath(headshot = false) {
     if (this._dead) return;
     this._dead = true;
     this.deaths = (this.deaths || 0) + 1;
+    if (this._lastAttackerBotId != null) {
+      const attacker = this.bots.find((b) => b.id === this._lastAttackerBotId);
+      if (attacker) {
+        this._recordKill(attacker.boardKey, PLAYER_BOARD_ID, { headshot });
+      }
+    }
+    this._lastAttackerBotId = null;
     beep(180, 0.1, 'sawtooth', 0.2);
 
     if (this.engine.player) this.engine.player.enabled = false;
@@ -599,6 +659,7 @@ export class DeathmatchScenario extends BaseScenario {
       this.kills++;
       this.score += obj.userData.points;
       beep(1000, 0.05, 'square', 0.05);
+      this._recordKill(PLAYER_BOARD_ID, bot.boardKey, { headshot: true });
       this._killBot(bot);
     } else {
       this.hits++;
@@ -607,6 +668,7 @@ export class DeathmatchScenario extends BaseScenario {
       beep(520, 0.04, 'square', 0.04);
       if (bot.hp <= 0) {
         this.kills++;
+        this._recordKill(PLAYER_BOARD_ID, bot.boardKey, { headshot: false });
         this._killBot(bot);
       } else {
         const mat = obj.material;
@@ -622,12 +684,19 @@ export class DeathmatchScenario extends BaseScenario {
     }
   }
 
-  _killBot(bot, fromPlayer = true) {
+  _killBot(bot, fromPlayer = true, killerBot = null, headshot = false) {
+    if (!fromPlayer && killerBot) {
+      this._recordKill(killerBot.boardKey, bot.boardKey, { headshot });
+    }
     bot.target.startDying(0x35e06a);
     this.bots = this.bots.filter((b) => b !== bot);
+    const slotIndex = parseInt(String(bot.boardKey).replace('bot-', ''), 10) || 0;
     setTimeout(() => {
       if (this.running && !this._disposed) {
-        this._spawnBot([this._playerPos(), ...this.bots.map((b) => [b.pos.x, b.footY, b.pos.z])]);
+        this._spawnBot(
+          [this._playerPos(), ...this.bots.map((b) => [b.pos.x, b.footY, b.pos.z])],
+          slotIndex
+        );
       }
     }, BOT_RESPAWN_DELAY * 1000);
   }

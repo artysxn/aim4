@@ -1252,6 +1252,69 @@ input[type='checkbox'] {
   line-height: 1.5;
 }
 
+/* Deathmatch kill feed (top-right). */
+.dm-killfeed {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 40;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 200px;
+  max-width: min(340px, calc(100vw - 28px));
+  pointer-events: none;
+  text-align: right;
+}
+.dm-killfeed.active {
+  display: flex;
+}
+.dm-kf-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 5px 10px;
+  background: rgba(8, 8, 8, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+  line-height: 1.2;
+}
+.dm-kf-hs {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: var(--accent);
+}
+.dm-kf-killer {
+  color: var(--text);
+  font-weight: 500;
+}
+.dm-kf-sep {
+  color: var(--muted);
+  font-size: 11px;
+}
+.dm-kf-victim {
+  color: var(--muted);
+}
+
+.mp-tab-board-title {
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.mp-tab-table-ffa .mp-tab-rank {
+  width: 28px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.mp-tab-table-ffa tr.me .mp-tab-name,
+.mp-tab-table-ffa tr.me .mp-tab-val {
+  color: var(--accent);
+}
+
 /* In-match chat — passive overlay; only captures input while typing. */
 .mp-chat {
   position: fixed;

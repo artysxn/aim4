@@ -206,19 +206,25 @@ export class BaseScenario {
     // Tracer endpoint = crosshair-ray hit on targets/cover (exact screen centre).
     this._tracerImpactPoint();
 
+    const vm = this.engine.viewmodel;
+    const vmRecoil = this.viewmodelRecoil !== false;
+    const motion = player?.enabled
+      ? { onGround: player.onGround, speedHoriz: Math.hypot(player.vel.x, player.vel.z) }
+      : {};
+
+    if (vm && this.showViewmodel !== false) {
+      vm.fire({ recoil: vmRecoil });
+    }
+
     this.onShoot(_raycaster);
 
-    // Shared weapon juice (optional — tracking duels omit gun + tracers).
-    const vm = this.engine.viewmodel;
     if (vm && this.showViewmodel !== false) {
-      const recoil = this.viewmodelRecoil !== false;
-      vm.fire({ recoil });
       if (this.weaponTracers !== false) {
-        // Start at the camera so the beam runs through the crosshair, not from the offset muzzle.
-        _tracerStart.copy(cam.position);
+        vm.syncMuzzleForShot(motion);
+        vm.getMuzzlePosition(_tracerStart);
         vm.spawnTracer(_tracerStart, this._lastImpact);
       }
-      if (recoil) {
+      if (vmRecoil) {
         const p = punch || viewPunchImpulse(shotIndex);
         vm.punch(p.pitch, p.yaw);
       }

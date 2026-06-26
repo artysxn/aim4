@@ -31,7 +31,7 @@ export const S2C = {
   ERROR: 'error', // { msg }
   MATCH_START: 'matchStart', // { mapId, target, spawns, scores, stats, gameMode?, matchEndsAt?, duration?, weapon?, ... }
   SNAPSHOT: 'snap', // { players:[...], st, matchEndsAt? }
-  SHOT_FIRED: 'shotFired', // { shooterId, x, y, z, ox,oy,oz, ex?,ey?,ez? } (origin + impact for tracers)
+  SHOT_FIRED: 'shotFired', // { shooterId, x,y,z, ox,oy,oz, mx?,my?,mz?, ex?,ey?,ez? }
   HIT: 'hit', // { shooterId, victimId, zone, scores?, stats?, points? }
   KILL: 'kill', // { shooterId, victimId, scores, mapId?, spawns?, stats? }
   RESPAWN: 'respawn', // { spawns }

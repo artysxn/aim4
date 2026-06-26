@@ -77,6 +77,16 @@ export class MultiplayerController {
       this._scenario()?.applyKill(msg);
       this.ui.updateMpScore(msg.scores, this.lobby, msg.mapId);
       if (msg.stats) this.ui.updateMpTabScoreboard(msg.stats);
+      if (this.lobby?.gameMode === 'deathmatch') {
+        const killer = this.lobby.players.find((p) => p.id === msg.shooterId);
+        const victim = this.lobby.players.find((p) => p.id === msg.victimId);
+        if (killer && victim) {
+          this.ui.pushKillFeed({
+            killer: killer.id === this.myId ? 'You' : killer.name,
+            victim: victim.id === this.myId ? 'You' : victim.name
+          });
+        }
+      }
     };
     net.onRespawn = (msg) => this._scenario()?.applyRespawn(msg);
     net.onChat = (msg) => this.ui.addMpChatMessage(msg);

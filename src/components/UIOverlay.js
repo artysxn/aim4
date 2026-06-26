@@ -503,6 +503,9 @@ export class UIOverlay {
     <!-- MULTIPLAYER LIVE SCOREBOARD -->
     <div id="mp-scoreboard" class="mp-scoreboard"></div>
 
+    <!-- DEATHMATCH KILL FEED -->
+    <div id="dm-killfeed" class="dm-killfeed"></div>
+
     <!-- MULTIPLAYER CHAT (Enter / Y to open · Tab to return to game) -->
     <div id="mp-chat" class="mp-chat">
       <div id="mp-chat-log" class="mp-chat-log"></div>
@@ -797,6 +800,8 @@ export class UIOverlay {
     this.hud = this.root.querySelector('#hud');
     this.threatsEl = this.root.querySelector('#threats');
     this.mpScoreboard = this.root.querySelector('#mp-scoreboard');
+    this.dmKillfeed = this.root.querySelector('#dm-killfeed');
+    this._mpKillFeed = [];
     this.mpChat = this.root.querySelector('#mp-chat');
     this.mpChatLog = this.root.querySelector('#mp-chat-log');
     this.mpChatInput = this.root.querySelector('#mp-chat-input');
@@ -1685,6 +1690,75 @@ export class UIOverlay {
     return this.state === 'playing' && !!this.sceneManager.current?.isMultiplayer;
   }
 
+  _isDeathmatchRun() {
+    const sc = this.sceneManager.current;
+    if (!sc || this.state !== 'playing') return false;
+    if (sc.name === 'deathmatch') return true;
+    return sc.isMultiplayer && sc.getGameMode?.() === 'deathmatch';
+  }
+
+  /** Push a line to the deathmatch kill feed (multiplayer kills). */
+  pushKillFeed({ killer, victim, headshot = false }) {
+    this._mpKillFeed.unshift({ killer, victim, headshot, at: performance.now() });
+    if (this._mpKillFeed.length > 6) this._mpKillFeed.length = 6;
+    this._renderKillFeed();
+  }
+
+  _killFeedEntries() {
+    const now = performance.now();
+    const ttl = 9000;
+    const sc = this.sceneManager.current;
+    const sp = sc?.name === 'deathmatch' && sc.getKillFeedEntries
+      ? sc.getKillFeedEntries()
+      : [];
+    const mp = this._mpKillFeed
+      .filter((e) => now - e.at < ttl)
+      .map(({ killer, victim, headshot }) => ({ killer, victim, headshot }));
+    return [...sp, ...mp].slice(0, 6);
+  }
+
+  _renderKillFeed() {
+    if (!this.dmKillfeed) return;
+    const entries = this._killFeedEntries();
+    if (!entries.length) {
+      this.dmKillfeed.innerHTML = '';
+      return;
+    }
+    this.dmKillfeed.innerHTML = entries
+      .map(({ killer, victim, headshot }) => {
+        const hs = headshot ? '<span class="dm-kf-hs">HS</span>' : '';
+        return `<div class="dm-kf-row">${hs}<span class="dm-kf-killer">${this._esc(killer)}</span><span class="dm-kf-sep">▸</span><span class="dm-kf-victim">${this._esc(victim)}</span></div>`;
+      })
+      .join('');
+  }
+
+  _updateDmLiveScoreboard(sc) {
+    if (!this.mpScoreboard) return;
+    const rows = sc.getScoreboardRows?.() || [];
+    const time = this._formatHudTime(sc);
+    const body = rows
+      .map((r) =>
+        `<div class="mp-sb-row${r.isPlayer ? ' me' : ''}"><span class="mp-sb-name">${this._esc(r.name)}</span><span class="mp-sb-score">${r.kills} / ${r.deaths}</span></div>`
+      )
+      .join('');
+    this.mpScoreboard.innerHTML = `<div class="mp-sb-goal">Deathmatch · ${time}</div>${body}`;
+  }
+
+  _renderDmTabScoreboard({ title, rows, footer = '' }) {
+    const statRow = (r, i) =>
+      `<tr class="${r.isPlayer || r.me ? 'me' : ''}"><td class="mp-tab-rank">${i + 1}</td><td class="mp-tab-name">${this._esc(r.name)}</td><td class="mp-tab-val">${r.kills ?? 0}</td><td class="mp-tab-val">${r.deaths ?? 0}</td></tr>`;
+    this.mpTabScoreboard.innerHTML = `
+      <div class="mp-tab-board">
+        <div class="mp-tab-board-head">${this._tabFpsHtml()}</div>
+        <div class="mp-tab-board-title">${this._esc(title)}</div>
+        <table class="mp-tab-table mp-tab-table-ffa">
+          <thead><tr><th></th><th>Player</th><th>K</th><th>D</th></tr></thead>
+          <tbody>${rows.map((r, i) => statRow(r, i)).join('')}</tbody>
+        </table>
+        ${footer ? `<div class="mp-tab-net">${footer}</div>` : ''}
+      </div>`;
+  }
+
   /** Hold-Tab stats overlay during any active run (SP or MP). */
   _canHoldTabOverlay() {
     return this.state === 'playing' && !!this.sceneManager.current
@@ -1810,6 +1884,13 @@ export class UIOverlay {
   }
 
   _renderSpTabScoreboard(sc) {
+    if (sc.name === 'deathmatch' && sc.getScoreboardRows) {
+      this._renderDmTabScoreboard({
+        title: 'Deathmatch',
+        rows: sc.getScoreboardRows().map((r) => ({ ...r, me: r.isPlayer }))
+      });
+      return;
+    }
     const title = SCENARIO_META[this.currentScenario]?.title ?? 'Run';
     const statRow = (label, val) =>
       `<tr><td class="mp-tab-label">${label}</td><td class="mp-tab-val">${val}</td></tr>`;
@@ -1848,6 +1929,25 @@ export class UIOverlay {
 
     const stats = this._mpTabStats;
     const lobby = this.mp?.lobby;
+    if (this._mpGameMode === 'deathmatch') {
+      const players = [...(lobby?.players || [])];
+      const scores = this.sceneManager.current?.getScores?.() || {};
+      const rows = players
+        .map((p) => ({
+          name: p.id === this.mp.myId ? `${p.name} (you)` : p.name,
+          kills: scores[p.id] ?? 0,
+          deaths: stats[p.id]?.deaths ?? 0,
+          me: p.id === this.mp.myId
+        }))
+        .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+      this._renderDmTabScoreboard({
+        title: this._mpGoalLabel({ target: this._mpTarget, gameMode: 'deathmatch' }),
+        rows,
+        footer: this._mpNetFooter()
+      });
+      return;
+    }
+
     const players = [...(lobby?.players || [])].sort((a, b) => {
       if (a.id === this.mp.myId) return -1;
       if (b.id === this.mp.myId) return 1;
@@ -1928,6 +2028,28 @@ export class UIOverlay {
     if (mapId) this._mpMapId = mapId;
     const players = (lobby && lobby.players) || [];
     const targetVal = this._mpTarget ?? 0;
+
+    if (this._mpGameMode === 'deathmatch') {
+      const stats = this._mpTabStats || {};
+      const sorted = [...players].sort(
+        (a, b) => (scores[b.id] || 0) - (scores[a.id] || 0)
+      );
+      const goal = this._mpGoalLabel({ target: targetVal, gameMode: 'deathmatch' });
+      const mapLabel = this._mpMapId ? getMap(this._mpMapId).label : '';
+      const goalLine = mapLabel ? `${goal} · ${mapLabel}` : goal;
+      const rows = sorted
+        .map((p) => {
+          const me = p.id === this.mp.myId ? ' me' : '';
+          const k = scores[p.id] || 0;
+          const d = stats[p.id]?.deaths ?? 0;
+          return `<div class="mp-sb-row${me}"><span class="mp-sb-name">${this._esc(p.name)}</span><span class="mp-sb-score">${k} / ${d}</span></div>`;
+        })
+        .join('');
+      const net = this._mpNetFooter();
+      this.mpScoreboard.innerHTML = `<div class="mp-sb-goal">${goalLine}</div>${rows}${net ? `<div class="mp-sb-net">${net}</div>` : ''}`;
+      return;
+    }
+
     const goal = this._mpGameMode === 'tracking'
       ? `Tracking · ${this._mpTrackingRemainingSec().toFixed(1)}s · head 3 · body 2`
       : this._mpGoalLabel({ target: targetVal, gameMode: this._mpGameMode });
@@ -2178,9 +2300,15 @@ export class UIOverlay {
     const inRun = name === 'playing';
     const sc = this.sceneManager.current;
     const isMp = inRun && sc && sc.isMultiplayer;
-    // In multiplayer the live scoreboard replaces the singleplayer stat chips.
-    this.hud.classList.toggle('active', inRun && !isMp);
-    if (this.mpScoreboard) this.mpScoreboard.classList.toggle('active', !!isMp);
+    const isDm = inRun && this._isDeathmatchRun();
+    // Deathmatch uses the live scoreboard + kill feed instead of the stat chips.
+    this.hud.classList.toggle('active', inRun && !isMp && !isDm);
+    if (this.mpScoreboard) this.mpScoreboard.classList.toggle('active', isMp || isDm);
+    if (this.dmKillfeed) this.dmKillfeed.classList.toggle('active', isDm);
+    if (!isDm) {
+      this._mpKillFeed = [];
+      if (this.dmKillfeed) this.dmKillfeed.innerHTML = '';
+    }
     if (this.mpChat) {
       this.mpChat.classList.toggle('active', !!isMp);
       if (!isMp) this._closeMpChatTyping(false);
@@ -2325,6 +2453,19 @@ export class UIOverlay {
     }
 
     const sc = this.sceneManager.current;
+    const isDm = this._isDeathmatchRun();
+    if (this.mpScoreboard) {
+      this.mpScoreboard.classList.toggle('active', this._isMpPlaying() || isDm);
+    }
+    if (this.dmKillfeed) {
+      this.dmKillfeed.classList.toggle('active', isDm);
+    }
+    if (this.hud) {
+      this.hud.classList.toggle(
+        'active',
+        this.state === 'playing' && sc && !sc.isMultiplayer && !isDm
+      );
+    }
     // Multiplayer: when unlocked mid-match (not paused), prompt click-to-aim.
     if (
       this._isMpPlaying() &&
@@ -2349,6 +2490,10 @@ export class UIOverlay {
     if (this._mpTabBoardHeld) this._renderMpTabScoreboard();
     this._updateAmmo(sc);
     this._updateThreats(sc);
+    if (this._isDeathmatchRun()) {
+      if (sc?.name === 'deathmatch') this._updateDmLiveScoreboard(sc);
+      this._renderKillFeed();
+    }
   }
 
   /** Ammo counter (bottom-right) — only for weapon scenarios. */

@@ -502,6 +502,11 @@ export class MultiplayerServer {
       fired.ey = msg.ey;
       fired.ez = msg.ez;
     }
+    if ([msg.mx, msg.my, msg.mz].every(Number.isFinite)) {
+      fired.mx = msg.mx;
+      fired.my = msg.my;
+      fired.mz = msg.mz;
+    }
     this._broadcast(lobby, fired);
   }
 

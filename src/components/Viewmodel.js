@@ -238,49 +238,46 @@ export class Viewmodel {
     tr.line.visible = true;
   }
 
-  // ---- Per-frame -----------------------------------------------------------
-  update(dt, motion = {}) {
-    this._updateTracers(dt);
-    this._applyPunch(dt);
+  /** Recompute gun + muzzle world positions (call after fire() for tracers). */
+  syncMuzzleForShot(motion = {}) {
+    if (!this.group.visible) {
+      this._muzzle.copy(this.camera.position);
+      return;
+    }
+    this._applyTransform(motion);
+  }
+
+  _applyTransform(motion = {}) {
     if (!this.group.visible) return;
 
     const cfg = this.settings.data.viewmodel || {};
     const cam = this.camera;
 
-    // Camera basis in world space.
     cam.getWorldDirection(this._fwd).normalize();
     this._right.crossVectors(this._fwd, this._worldUp).normalize();
     this._up.crossVectors(this._right, this._fwd).normalize();
 
-    // viewmodel FOV → approximate by scaling the model (lower fov = bigger/closer).
     const vmFov = cfg.fov ?? 68;
     const scale = THREE.MathUtils.clamp(75 / vmFov, 0.6, 1.7);
     this.group.scale.setScalar(scale);
 
-    // Handedness flips the lateral offset.
     const hand = cfg.hand === 'left' ? -1 : 1;
     const ox = (cfg.offsetX ?? 0.16) * hand;
     const oy = cfg.offsetY ?? -0.15;
-    const oz = cfg.offsetZ ?? 0.5; // forward distance
+    const oz = cfg.offsetZ ?? 0.5;
 
-    // Weapon bob while moving on the ground.
     let bobX = 0;
     let bobY = 0;
     if (cfg.bob !== false && motion.onGround && (motion.speedHoriz || 0) > 0.5) {
-      this._bobPhase += dt * (4 + (motion.speedHoriz || 0) * 0.8);
       const amt = Math.min(0.025, 0.006 + (motion.speedHoriz || 0) * 0.0025);
       bobX = Math.cos(this._bobPhase) * amt;
       bobY = Math.abs(Math.sin(this._bobPhase)) * amt;
-    } else {
-      this._bobPhase = 0;
     }
 
-    // Recoil kick: gun slides back (+toward camera) and up briefly, springs back.
     const kickMul = this._viewPunchStrength;
     const kickBack = this._kick * 0.06 * kickMul;
     const kickUp = this._kick * 0.02 * kickMul;
 
-    // Reload: dip down, pull in, barrel tilt — peaks mid-reload.
     let reloadDown = 0;
     let reloadBack = 0;
     let reloadTilt = 0;
@@ -293,20 +290,30 @@ export class Viewmodel {
       reloadTilt = 0.34 * mag * wave;
     }
 
-    // Compose world position from the camera basis.
     this._pos.copy(cam.position)
       .addScaledVector(this._right, ox + bobX)
       .addScaledVector(this._up, oy + bobY + kickUp + reloadDown)
       .addScaledVector(this._fwd, oz - kickBack - reloadBack);
     this.group.position.copy(this._pos);
     this.group.quaternion.copy(cam.quaternion);
-    // A touch of barrel rise as it kicks; reload tilts the barrel down mid-swap.
     this.group.rotateX(-this._kick * 0.05 * kickMul + reloadTilt);
 
-    // Muzzle tip in world space (per-weapon barrel-tip offset).
     this._muzzle.copy(this._pos)
       .addScaledVector(this._fwd, this._muzzleFwd * scale)
       .addScaledVector(this._up, this._muzzleUp * scale);
+  }
+
+  // ---- Per-frame -----------------------------------------------------------
+  update(dt, motion = {}) {
+    this._updateTracers(dt);
+    this._applyPunch(dt);
+    const cfg = this.settings.data.viewmodel || {};
+    if (cfg.bob !== false && motion.onGround && (motion.speedHoriz || 0) > 0.5) {
+      this._bobPhase += dt * (4 + (motion.speedHoriz || 0) * 0.8);
+    } else {
+      this._bobPhase = 0;
+    }
+    this._applyTransform(motion);
 
     // Decay kick + flash.
     this._kick = Math.max(0, this._kick - dt / 0.07);
