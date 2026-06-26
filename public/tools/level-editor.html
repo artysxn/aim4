@@ -589,21 +589,22 @@ function applyBoxScaleGrid(mesh) {
   mesh.scale.z = Math.max(min, snapToGrid(mesh.scale.z, scaleSnapVal));
 }
 
+function localDragOffset(vec) {
+  return vec.clone().applyQuaternion(transform.worldQuaternionStart.clone().invert());
+}
+
 function beginScaleDrag() {
   const obj = primary();
   if (!obj || obj.userData.kind !== 'box' || selected.length !== 1 || transform.mode !== 'scale') return null;
   const ax = transform.axis || '';
   if (!ax || /XY|XYZ|E/.test(ax)) return null;
   const axis = ax.includes('X') ? 'x' : ax.includes('Y') ? 'y' : ax.includes('Z') ? 'z' : null;
-  if (!axis) return null;
-  let fixMax = false;
-  if (transform.pointStart) {
-    const localPt = obj.worldToLocal(transform.pointStart.clone());
-    fixMax = localPt[axis] < 0;
-  }
+  if (!axis || !transform.pointStart) return null;
+  // pointStart is a world-space offset from the object center (not a world position).
+  const localPt = localDragOffset(transform.pointStart);
   return {
     axis,
-    fixMax,
+    fixMax: localPt[axis] < 0,
     pos: obj.position.clone(),
     scale: obj.scale.clone(),
     quat: obj.quaternion.clone()
@@ -688,6 +689,13 @@ function syncTransformSnap() {
 }
 
 syncTransformSnap();
+transform.addEventListener('mouseDown', () => {
+  if (transform.mode !== 'scale') return;
+  const obj = primary();
+  if (!obj || obj.userData.kind !== 'box' || selected.length !== 1) return;
+  transform.setScaleSnap(null);
+  scaleDragStart = beginScaleDrag();
+});
 transform.addEventListener('dragging-changed', (e) => {
   orbit.enabled = !e.value;
   if (e.value) {
@@ -697,13 +705,8 @@ transform.addEventListener('dragging-changed', (e) => {
         pivotPos: selectionPivot.position.clone(),
         items: selected.map((obj) => ({ obj, pos: obj.position.clone() }))
       };
-      scaleDragStart = null;
     } else {
       pivotDragStart = null;
-      scaleDragStart = null; // lazy-init on first objectChange when axis is known
-      if (primary()?.userData.kind === 'box' && transform.mode === 'scale') {
-        transform.setScaleSnap(null);
-      }
     }
   } else if (beforeDrag) {
     pushUndoState(beforeDrag);
