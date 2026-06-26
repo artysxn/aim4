@@ -67,7 +67,8 @@ export const COMPETITIVE_PRESETS = {
     runDuration: 60,
     botCount: 6,
     botSpeed: 1.0,
-    ttk: 0.6
+    botBodyHit: 0.3,
+    botHeadHit: 0.1
   },
   spidershot: {
     runDuration: 30,

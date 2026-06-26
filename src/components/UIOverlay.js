@@ -390,7 +390,8 @@ export class UIOverlay {
           <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
           ${rf('set-dm-bots', 'Bots', 1, 6, 1)}
           ${rf('set-dm-speed', 'Bot speed', 0.25, 2.0, 0.05)}
-          ${rf('set-dm-ttk', 'Time to kill (s)', 0.2, 2.0, 0.05)}`
+          ${rf('set-dm-body', 'Bot body hit %', 5, 50, 1)}
+          ${rf('set-dm-head', 'Bot head hit %', 1, 20, 1)}`
       },
       {
         id: 'range',
@@ -1080,7 +1081,8 @@ export class UIOverlay {
 
     this._bindRange('set-dm-bots', (v, d) => { d.deathmatch.botCount = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-dm-speed', (v, d) => { d.deathmatch.botSpeed = v; });
-    this._bindRange('set-dm-ttk', (v, d) => { d.deathmatch.ttk = v; });
+    this._bindRange('set-dm-body', (v, d) => { d.deathmatch.botBodyHit = v / 100; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-dm-head', (v, d) => { d.deathmatch.botHeadHit = v / 100; }, { parse: (v) => parseInt(v, 10) });
 
     const col = (id, key) =>
       $(id).addEventListener('input', (e) => {
@@ -2140,7 +2142,8 @@ export class UIOverlay {
 
     this._setRange('set-dm-bots', s.deathmatch?.botCount ?? 4);
     this._setRange('set-dm-speed', s.deathmatch?.botSpeed ?? 1);
-    this._setRange('set-dm-ttk', s.deathmatch?.ttk ?? 0.7);
+    this._setRange('set-dm-body', Math.round((s.deathmatch?.botBodyHit ?? 0.2) * 100));
+    this._setRange('set-dm-head', Math.round((s.deathmatch?.botHeadHit ?? 0.05) * 100));
 
     $('#set-col-bg').value = s.colors.bg;
     $('#set-col-floor').value = s.colors.floor;

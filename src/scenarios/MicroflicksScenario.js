@@ -68,11 +68,27 @@ export class MicroflicksScenario extends StarsScenario {
     return randRange(this.targetSize * NEAR_SPREAD_MIN, this.targetSize * NEAR_SPREAD_MAX);
   }
 
-  _clampToWall(pos) {
+  /** Spawn box inset — shared by random spawns and near-kill clamping. */
+  _spawnExtents() {
     const halfW = this.boundsW / 2 - this.targetSize - 0.05;
     const halfH = this.boundsH / 2;
     const yMin = Math.max(this.targetSize + 0.25, this.centerY - halfH);
     const yMax = this.centerY + halfH;
+    return { halfW, yMin, yMax };
+  }
+
+  /** Random spawn within the canvas (not the full Stars gray wall). */
+  _randomPos() {
+    const { halfW, yMin, yMax } = this._spawnExtents();
+    return new THREE.Vector3(
+      randRange(-halfW, halfW),
+      randRange(yMin, yMax),
+      -this.wallDistance + this.targetSize + 0.05
+    );
+  }
+
+  _clampToWall(pos) {
+    const { halfW, yMin, yMax } = this._spawnExtents();
     pos.x = clamp(pos.x, -halfW, halfW);
     pos.y = clamp(pos.y, yMin, yMax);
     pos.z = -this.wallDistance + this.targetSize + 0.05;

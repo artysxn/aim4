@@ -1,18 +1,12 @@
 // ---------------------------------------------------------------------------
 // DeathmatchScenario.js  ("Deathmatch")
 //
-// A free-for-all on a full-size, hand-built arena (deathmatch.json). You spawn
-// somewhere on the map and N bots hunt you down: they path toward your position,
-// jiggle-peek around cover when they have an angle, walk the level looking for
-// you, and "shoot" with the same line-of-sight time-to-kill model the Duels bot
-// uses — once a bot's head can see your eyes for `ttk` seconds, you die and
-// respawn. Drop them first.
+// Free-for-all on the deathmatch arena. Bots path toward enemies, jiggle-peek,
+// and fire rifle bursts when they have line-of-sight — at you and at each other.
+// Each bullet rolls independently for a hit (practice: 20% body / 5% head;
+// competitive: 30% body / 10% head). Head = instant kill · Body = 2 shots.
 //
-// Bots move with the shared Source movement model (the same friction +
-// acceleration the player uses) and collide against the rotated cover boxes via
-// the OBB BoxCollision path. Head = instant kill (crit) · Body = 2 shots.
-//
-//   Practice: bot count / speed / time-to-kill are tunable.
+//   Practice: bot count / speed / hit odds are tunable.
 //   Competitive: fixed rules, 60 s, ranked by kills.
 // ---------------------------------------------------------------------------
 
@@ -22,10 +16,12 @@ import { Target } from '../components/Target.js';
 import { randRange, clamp, lerp, degToRad } from '../utils/MathUtils.js';
 import { srcFriction, srcAccelerate, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
 import { resolveBoxCollisions, groundHeightAt } from '../utils/BoxCollision.js';
-import { gridLineColors } from '../utils/ColorUtils.js';
+import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
+import { SHOT_INTERVAL } from '../weapons/ak47.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEATHMATCH_MAP, deathmatchExtent } from './deathmatchMap.js';
+import { eyeOffset } from '../multiplayer/constants.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
@@ -50,10 +46,13 @@ const MAX_PITCH = degToRad(89);
 const PLAYER_RESPAWN_DELAY = 0.9;
 const BOT_RESPAWN_DELAY = 0.5;
 
+const PLAYER_HP = 2;
+
 const _headPos = new THREE.Vector3();
-const _eyePos = new THREE.Vector3();
+const _aimPos = new THREE.Vector3();
 const _losDir = new THREE.Vector3();
 const _losRay = new THREE.Raycaster();
+const _tracerEnd = new THREE.Vector3();
 
 export class DeathmatchScenario extends BaseScenario {
   constructor(opts) {
@@ -67,7 +66,8 @@ export class DeathmatchScenario extends BaseScenario {
       6
     );
     this.botSpeedMul = preset?.botSpeed ?? this.config.botSpeed ?? d.botSpeed ?? 1.0;
-    this._ttk = preset?.ttk ?? this.config.ttk ?? d.ttk ?? 0.7;
+    this._bodyHit = preset?.botBodyHit ?? this.config.botBodyHit ?? d.botBodyHit ?? 0.2;
+    this._headHit = preset?.botHeadHit ?? this.config.botHeadHit ?? d.botHeadHit ?? 0.05;
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 60)
       : this.settings.data.runDuration;
@@ -79,6 +79,7 @@ export class DeathmatchScenario extends BaseScenario {
     this.bots = [];
     this._botSeq = 0;
     this._dead = false;
+    this._playerHp = PLAYER_HP;
     this._respawnTimer = null;
     this._deathFx = null;
 
@@ -92,7 +93,7 @@ export class DeathmatchScenario extends BaseScenario {
   static configKeyFor(settings, variant = 'practice') {
     if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
     const d = settings.data.deathmatch;
-    return `n${d.botCount}_spd${d.botSpeed}_ttk${d.ttk}_d${settings.data.runDuration}`;
+    return `n${d.botCount}_spd${d.botSpeed}_bh${d.botBodyHit}_hh${d.botHeadHit}_d${settings.data.runDuration}`;
   }
   configKey() {
     return DeathmatchScenario.configKeyFor(this.settings, this.variant);
@@ -121,9 +122,12 @@ export class DeathmatchScenario extends BaseScenario {
     grid.position.y = 0.002;
     add(grid);
 
-    const boxMat = new THREE.MeshStandardMaterial({ color: c.cover, roughness: 0.85, metalness: 0.05 });
+    const boxMat = createCoverGridMaterial(c.cover, c.floor);
     for (const b of this.map.boxes) {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.size[0], b.size[1], b.size[2]), boxMat);
+      const mat = boxMat.clone();
+      mat.map = mat.map.clone();
+      applyCoverGridRepeat(mat, b.size[0], b.size[1]);
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.size[0], b.size[1], b.size[2]), mat);
       mesh.position.set(b.pos[0], b.pos[1], b.pos[2]);
       if (b.rotationY) mesh.rotation.y = b.rotationY;
       add(mesh);
@@ -214,26 +218,110 @@ export class DeathmatchScenario extends BaseScenario {
       stuckAccum: 0,
       stuckBias: 0,
       stuckDir: 1,
-      wasLos: false,
-      exposedTimer: -1
+      fireTimer: randRange(0, SHOT_INTERVAL)
     };
     this.bots.push(bot);
     target.object.position.set(bot.pos.x, bot.footY, bot.pos.z);
     return bot;
   }
 
-  _botHeadHasLos(bot) {
+  /** Line-of-sight from a bot's head to a world point (cover occludes). */
+  _botHasLosTo(bot, tx, ty, tz) {
     const head = bot.target.headMesh;
     if (!head) return false;
     head.getWorldPosition(_headPos);
-    this.camera.getWorldPosition(_eyePos);
-    const dist = _headPos.distanceTo(_eyePos);
+    const dist = _headPos.distanceTo(_aimPos.set(tx, ty, tz));
     if (dist < 1e-4) return true;
-    _losDir.copy(_eyePos).sub(_headPos).multiplyScalar(1 / dist);
+    _losDir.copy(_aimPos).sub(_headPos).multiplyScalar(1 / dist);
     _losRay.set(_headPos, _losDir);
     _losRay.far = dist;
     const hits = _losRay.intersectObjects(this.coverMeshes, false);
     return hits.length === 0 || hits[0].distance >= dist - 0.04;
+  }
+
+  _botEyePos(b) {
+    const c = b.crouch || 0;
+    return b.footY + eyeOffset(c);
+  }
+
+  /** Closest shootable target in range with LOS (player or another bot). */
+  _pickShootTarget(bot) {
+    const px = this.camera.position.x;
+    const py = this.camera.position.y;
+    const pz = this.camera.position.z;
+    let best = null;
+    let bestDist = ENGAGE_RANGE;
+
+    if (!this._dead && this._botHasLosTo(bot, px, py, pz)) {
+      const d = Math.hypot(px - bot.pos.x, pz - bot.pos.z);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { type: 'player', x: px, y: py, z: pz, dist: d };
+      }
+    }
+
+    for (const other of this.bots) {
+      if (other === bot || other.target.state === 'dying') continue;
+      const ey = this._botEyePos(other);
+      if (!this._botHasLosTo(bot, other.pos.x, ey, other.pos.z)) continue;
+      const d = Math.hypot(other.pos.x - bot.pos.x, other.pos.z - bot.pos.z);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { type: 'bot', bot: other, x: other.pos.x, y: ey, z: other.pos.z, dist: d };
+      }
+    }
+    return best;
+  }
+
+  _tracerImpact(from, tx, ty, tz) {
+    const dist = from.distanceTo(_aimPos.set(tx, ty, tz));
+    if (dist < 1e-4) return _tracerEnd.copy(_aimPos);
+    _losDir.copy(_aimPos).sub(from).multiplyScalar(1 / dist);
+    _losRay.set(from, _losDir);
+    _losRay.far = dist;
+    const hits = _losRay.intersectObjects(this.coverMeshes, false);
+    if (hits.length && hits[0].distance < dist - 0.04) {
+      return _tracerEnd.copy(hits[0].point);
+    }
+    return _tracerEnd.copy(_aimPos);
+  }
+
+  _botFire(bot, target) {
+    const head = bot.target.headMesh;
+    if (!head) return;
+    head.getWorldPosition(_headPos);
+
+    this.engine.audio?.playRemoteShot(_headPos.x, _headPos.y, _headPos.z);
+    const end = this._tracerImpact(_headPos, target.x, target.y, target.z);
+    this.engine.viewmodel?.spawnTracer(_headPos, end);
+
+    const roll = Math.random();
+    const zone = roll < this._headHit ? 'head' : roll < this._headHit + this._bodyHit ? 'body' : null;
+    if (!zone) return;
+
+    if (target.type === 'player') {
+      if (zone === 'head') this._onPlayerDeath();
+      else this._damagePlayer();
+    } else {
+      this._botHitBot(target.bot, zone);
+    }
+  }
+
+  _damagePlayer() {
+    if (this._dead) return;
+    this._playerHp -= 1;
+    beep(520, 0.04, 'square', 0.08);
+    if (this._playerHp <= 0) this._onPlayerDeath();
+  }
+
+  _botHitBot(victim, zone) {
+    if (victim.target.state === 'dying') return;
+    if (zone === 'head') {
+      this._killBot(victim, false);
+    } else {
+      victim.hp -= 1;
+      if (victim.hp <= 0) this._killBot(victim, false);
+    }
   }
 
   /** Advance one bot with a (possibly unnormalized) wish direction. */
@@ -299,6 +387,7 @@ export class DeathmatchScenario extends BaseScenario {
 
   // ---- Round flow ---------------------------------------------------------
   onStart() {
+    this._playerHp = PLAYER_HP;
     const spawn = this._pickSpawn();
     this.engine.player.spawn({
       pos: spawn.pos,
@@ -325,19 +414,21 @@ export class DeathmatchScenario extends BaseScenario {
       const prevX = bot.pos.x;
       const prevZ = bot.pos.z;
 
-      const dx = px - bot.pos.x;
-      const dz = pz - bot.pos.z;
+      const shootTarget = this._pickShootTarget(bot);
+      const hasLos = !!shootTarget;
+      const tx = shootTarget?.x ?? px;
+      const tz = shootTarget?.z ?? pz;
+      const dx = tx - bot.pos.x;
+      const dz = tz - bot.pos.z;
       const dist = Math.hypot(dx, dz) || 1e-4;
       const dirX = dx / dist;
       const dirZ = dz / dist;
 
-      const hasLos = this._botHeadHasLos(bot);
       let wishX = 0;
       let wishZ = 0;
       let engaged = false;
 
       if (hasLos && dist < ENGAGE_RANGE) {
-        // Jiggle-peek: strafe across the angle, keeping a fighting distance.
         engaged = true;
         bot.strafeTimer -= dt;
         if (bot.strafeTimer <= 0) {
@@ -352,8 +443,13 @@ export class DeathmatchScenario extends BaseScenario {
         wishX += dirX * rangeErr * 0.85;
         wishZ += dirZ * rangeErr * 0.85;
         bot.goal = null;
+
+        bot.fireTimer -= dt;
+        if (bot.fireTimer <= 0) {
+          bot.fireTimer = SHOT_INTERVAL;
+          this._botFire(bot, shootTarget);
+        }
       } else {
-        // Blind / far: path toward the player (re-pick a goal periodically).
         bot.repathTimer -= dt;
         if (!bot.goal || bot.repathTimer <= 0) {
           this._pickWanderGoal(bot);
@@ -365,7 +461,6 @@ export class DeathmatchScenario extends BaseScenario {
         gx /= glen;
         gz /= glen;
         if (bot.stuckBias > 0) {
-          // Side-step around an obstacle we've been grinding against.
           const baseX = gx;
           const baseZ = gz;
           gx = baseX - baseZ * bot.stuckDir * 1.3;
@@ -374,12 +469,11 @@ export class DeathmatchScenario extends BaseScenario {
         }
         wishX = gx;
         wishZ = gz;
-        if (glen < 1.0) bot.goal = null; // reached the goal — re-pick next tick
+        if (glen < 1.0) bot.goal = null;
       }
 
       this._moveBot(bot, wishX, wishZ, max, dt);
 
-      // Stuck detection while traveling (not while deliberately strafing).
       if (!engaged) {
         const moved = Math.hypot(bot.pos.x - prevX, bot.pos.z - prevZ);
         if (moved < max * dt * 0.3) {
@@ -395,7 +489,6 @@ export class DeathmatchScenario extends BaseScenario {
         }
       }
 
-      // Crouch tap (mostly meaningful while holding an angle).
       bot.crouchTimer -= dt;
       if (bot.crouchWant && bot.crouchTimer <= 0) {
         bot.crouchWant = 0;
@@ -411,18 +504,8 @@ export class DeathmatchScenario extends BaseScenario {
       }
 
       bot.target.object.position.set(bot.pos.x, bot.footY, bot.pos.z);
-      bot.target.object.lookAt(px, bot.footY + 1.0, pz);
-
-      // Time-to-kill pressure: continuous LOS for `ttk` seconds kills the player.
-      if (!this._dead) {
-        if (hasLos && !bot.wasLos) bot.exposedTimer = this._ttk;
-        if (!hasLos) bot.exposedTimer = -1;
-        bot.wasLos = hasLos;
-        if (hasLos && bot.exposedTimer > 0) {
-          bot.exposedTimer -= dt;
-          if (bot.exposedTimer <= 0) this._onPlayerDeath();
-        }
-      }
+      const lookY = shootTarget?.y ?? bot.footY + 1.0;
+      bot.target.object.lookAt(tx, lookY, tz);
 
       this._updateBotFootsteps(bot, dt);
     }
@@ -459,16 +542,13 @@ export class DeathmatchScenario extends BaseScenario {
       flick: DEATH_FX_PITCH
     };
     this._respawnTimer = PLAYER_RESPAWN_DELAY;
-    for (const bot of this.bots) {
-      bot.exposedTimer = -1;
-      bot.wasLos = false;
-    }
   }
 
   _respawnPlayer() {
     const botPts = this.bots.map((b) => [b.pos.x, b.footY, b.pos.z]);
     const spawn = this._pickSpawn(botPts);
     this.engine.weapon?.reset();
+    this._playerHp = PLAYER_HP;
     this.engine.player.spawn({
       pos: spawn.pos,
       yaw: this._yawToward(spawn.pos, [0, 0, 0]),
@@ -542,7 +622,7 @@ export class DeathmatchScenario extends BaseScenario {
     }
   }
 
-  _killBot(bot) {
+  _killBot(bot, fromPlayer = true) {
     bot.target.startDying(0x35e06a);
     this.bots = this.bots.filter((b) => b !== bot);
     setTimeout(() => {
@@ -578,7 +658,10 @@ export class DeathmatchScenario extends BaseScenario {
       this.root.remove(obj);
       obj.geometry?.dispose();
       if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
-      else obj.material?.dispose?.();
+      else {
+        obj.material?.map?.dispose();
+        obj.material?.dispose?.();
+      }
     }
     this._envObjects = [];
     this.coverMeshes = [];

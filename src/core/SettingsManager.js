@@ -121,7 +121,8 @@ const DEFAULTS = {
   deathmatch: {
     botCount: 4, // bots hunting the player at once (1..6)
     botSpeed: 1.0, // multiplier on default run speed (215 u/s)
-    ttk: 0.7 // seconds of bot line-of-sight before you die; lower = harder
+    botBodyHit: 0.2, // per-bullet body hit chance vs player/bots
+    botHeadHit: 0.05 // per-bullet head hit chance (checked before body)
   },
   colors: {
     bg:        '#0a0a0a', // scene background + fog
