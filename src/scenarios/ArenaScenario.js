@@ -237,8 +237,10 @@ export class ArenaScenario extends BaseScenario {
   }
 
   _penalizeMissShot() {
-    this.kills = Math.max(0, this.kills - 1);
-    this.score = Math.max(0, this.score - 1);
+    if (!this.competitive) {
+      this.kills = Math.max(0, this.kills - 1);
+      this.score = Math.max(0, this.score - 1);
+    }
     if (!this.competitiveMissPenalty || this.phase === 'cooldown') return;
     this.misses++;
     if (this.circle) {

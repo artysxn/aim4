@@ -1,8 +1,9 @@
 // ---------------------------------------------------------------------------
 // SurvivalScenario.js
-// Dots spawn and grow until shot or they explode. Miss a shot (or run out of
-// strikes in Practice) and the run ends. Competitive uses fixed rules and
-// counts toward leaderboards; Practice is configurable and offline-only.
+// Dots spawn and grow until shot or they explode. Every 8 hits shave 0.01 s off the
+// spawn delay (down to a floor). Miss a shot (or run out of strikes in Practice)
+// and the run ends. Competitive uses fixed rules and counts toward leaderboards;
+// Practice is configurable and offline-only.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
@@ -14,6 +15,9 @@ import { EYE_HEIGHT } from '../core/Engine.js';
 
 const BASE_BOUNDS_W = 12;
 const BASE_BOUNDS_H = 6;
+const HIT_SPAWN_REDUCE = 0.01; // seconds removed from spawn delay per ramp step
+const HITS_PER_SPAWN_REDUCE = 8;
+const SPAWN_INTERVAL_FLOOR = 0.08;
 
 /** Fixed Competitive Survival rules — not user-configurable. */
 export const SURVIVAL_COMPETITIVE = {
@@ -55,6 +59,7 @@ export class SurvivalScenario extends BaseScenario {
     this.wallZ = -this.wallDistance;
 
     this._spawnTimer = 0;
+    this._currentSpawnInterval = this.spawnInterval;
     this._missShots = 0;
     this._gameOverReason = null;
     this._ended = false;
@@ -187,6 +192,12 @@ export class SurvivalScenario extends BaseScenario {
     this.hits++;
     this.kills++;
     this.score += 1;
+    if (this.hits % HITS_PER_SPAWN_REDUCE === 0) {
+      this._currentSpawnInterval = Math.max(
+        SPAWN_INTERVAL_FLOOR,
+        this._currentSpawnInterval - HIT_SPAWN_REDUCE
+      );
+    }
     target.startDying(0x35e06a);
     beep(820, 0.04, 'square', 0.05);
     this.crosshair?.hit();
@@ -194,6 +205,7 @@ export class SurvivalScenario extends BaseScenario {
 
   onStart() {
     this._spawnTimer = 0;
+    this._currentSpawnInterval = this.spawnInterval;
     this._spawnDot();
   }
 
@@ -201,8 +213,8 @@ export class SurvivalScenario extends BaseScenario {
     if (this._ended) return;
 
     this._spawnTimer += dt;
-    while (this._spawnTimer >= this.spawnInterval) {
-      this._spawnTimer -= this.spawnInterval;
+    while (this._spawnTimer >= this._currentSpawnInterval) {
+      this._spawnTimer -= this._currentSpawnInterval;
       this._spawnDot();
     }
 
