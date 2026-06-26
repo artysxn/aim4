@@ -121,6 +121,7 @@ export class BaseScenario {
   start() {
     this.running = true;
     this.engine.weapon?.reset(); // fresh magazine at the start of every run
+    this.engine.viewmodel?.clearBulletDecals();
     this.onStart();
   }
   pause() {

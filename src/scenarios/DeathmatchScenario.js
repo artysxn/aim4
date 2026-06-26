@@ -45,7 +45,7 @@ const CROUCH_RATE = 10;
 const BACKSHOT_FIRE_DELAY = 1.0; // s — bot waits before firing when target isn't looking
 
 const DEATH_FX_DUR = 0.55;
-const DEATH_FX_PITCH = degToRad(38);
+const DEATH_FX_PITCH = degToRad(38) * 0.25;
 const MAX_PITCH = degToRad(89);
 const PLAYER_RESPAWN_DELAY = 0.9;
 const BOT_RESPAWN_DELAY = 0.5;

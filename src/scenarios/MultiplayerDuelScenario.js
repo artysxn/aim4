@@ -83,6 +83,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
 
     this._deathFx = null;
     this._dead = false;
+    this._pendingSpawns = null;
     this._stateSendAccum = 0;
 
     this._buildEnvironment();
@@ -260,14 +261,17 @@ export class MultiplayerDuelScenario extends BaseScenario {
   }
 
   // ---- Spawns / lifecycle -------------------------------------------------
-  setSpawns(spawns) {
+  setSpawns(spawns, { skipLocal = false } = {}) {
+    if (!this.isDeathmatch) this.engine.viewmodel?.clearBulletDecals();
     this._snapHistory = [];
     this._serverTimeOffset = null;
     for (const [idStr, sp] of Object.entries(spawns)) {
       const id = Number(idStr);
       if (id === this.myId) {
+        if (skipLocal) continue;
         this._dead = false;
         this._deathFx = null;
+        this._pendingSpawns = null;
         this.engine.setDeathOverlay(0);
         this.engine.weapon?.reset(); // fresh magazine each spawn / round
         this.engine.player.spawn({
@@ -335,8 +339,16 @@ export class MultiplayerDuelScenario extends BaseScenario {
       beep(1000, 0.05, 'square', 0.06);
       this.kills++;
     }
-    if (msg.spawns) this.setSpawns(msg.spawns);
-    else if (msg.victimId === this.myId) this._die();
+    const iAmVictim = msg.victimId === this.myId;
+    if (iAmVictim) this._die();
+    if (msg.spawns) {
+      if (iAmVictim) {
+        this._pendingSpawns = msg.spawns;
+        this.setSpawns(msg.spawns, { skipLocal: true });
+      } else {
+        this.setSpawns(msg.spawns);
+      }
+    }
   }
 
   applyRespawn(msg) {
@@ -457,6 +469,11 @@ export class MultiplayerDuelScenario extends BaseScenario {
     if (fx.t >= DEATH_FX_DUR) {
       this._deathFx = null;
       this.engine.setDeathOverlay(0);
+      if (this._pendingSpawns) {
+        const spawns = this._pendingSpawns;
+        this._pendingSpawns = null;
+        this.setSpawns(spawns);
+      }
     }
   }
 

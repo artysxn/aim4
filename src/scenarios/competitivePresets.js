@@ -14,7 +14,7 @@ export const COMPETITIVE_PRESETS = {
   stars: {
     runDuration: 30,
     targetSize: 0.1,
-    targetCount: 200,
+    targetCount: 120, // 40% fewer than practice default (200)
     boundsScaleX: 2,
     viewmodelRecoil: false
   },
@@ -50,10 +50,11 @@ export const COMPETITIVE_PRESETS = {
   },
   range: {
     runDuration: 30,
+    arc: 360,
     enemyCount: 8,
     radius: 15,
     coverEnabled: true,
-    coverCount: 5,
+    coverCount: 4,
     coverDistance: 4,
     coverThickness: 1.5,
     coverHeight: 3
@@ -61,7 +62,9 @@ export const COMPETITIVE_PRESETS = {
   tracking: {
     runDuration: 30,
     botWidth: 1.0,
-    botSpeed: 1.0
+    botSpeed: 1.0,
+    botCrouchTap: true,
+    strafeRate: 1.0
   },
   deathmatch: {
     runDuration: 60,
@@ -73,8 +76,8 @@ export const COMPETITIVE_PRESETS = {
   spidershot: {
     runDuration: 30,
     timeToKill: 450,
-    targetSize: 0.35,
-    maxDistance: 7,
+    targetSize: 0.23,
+    maxDistance: 5.6,
     minDistance: 1,
     heightSpread: 1,
     angleSpread: 25,
@@ -83,8 +86,8 @@ export const COMPETITIVE_PRESETS = {
     streakLengthMax: 2,
     doubleSpawnChance: 0.07,
     randomSize: true,
-    randomSizeMin: 0.2,
-    randomSizeMax: 0.35,
+    randomSizeMin: 0.13,
+    randomSizeMax: 0.23,
     infiniteAmmo: true,
     viewmodelRecoil: false
   }

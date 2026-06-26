@@ -80,9 +80,9 @@ const DEFAULTS = {
     viewmodelRecoil: false
   },
   spidershot: {
-    targetSize: 0.45,
+    targetSize: 0.30,
     timeToKill: 1500, // ms per sideward target
-    maxDistance: 8.0, // metres from centre at the wall
+    maxDistance: 6.4, // metres from centre at the wall (was 8.0)
     minDistance: 1.2,
     heightSpread: 1.0, // vertical spawn multiplier
     angleSpread: 25, // degrees above/below horizontal
@@ -93,8 +93,8 @@ const DEFAULTS = {
     horizontalDrift: false,
     driftSpeedMax: 1.5,
     randomSize: false,
-    randomSizeMin: 0.32,
-    randomSizeMax: 0.52,
+    randomSizeMin: 0.21,
+    randomSizeMax: 0.35,
     infiniteAmmo: true,
     viewmodelRecoil: false
   },
@@ -140,16 +140,20 @@ const DEFAULTS = {
     botCrouchTap: true, // false = bots stay standing
     infiniteAmmo: true,
     coverEnabled: false,
-    coverCount: 2,
+    coverCount: 4,
     coverDistance: 4, // metres from player centre
     coverThickness: 1.2, // box depth (m)
     coverHeight: 3.0 // box height (m)
   },
   tracking: {
     botWidth: 1.0, // uniform scale on bot body/head radius (0.5–2.0)
-    botSpeed: 1.0 // multiplier on default run speed (215 u/s)
+    botSpeed: 1.0, // multiplier on tracking strafe cap (210 u/s)
+    botCrouchTap: true,
+    strafeRate: 1.0 // direction-change frequency (1 = default ADAD)
   },
   stars: {
+    targetSize: 0.1,
+    targetCount: 200,
     boundsScaleX: 2.0,
     boundsScaleY: 1.0
   },

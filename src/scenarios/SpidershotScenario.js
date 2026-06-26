@@ -80,14 +80,45 @@ export class SpidershotScenario extends BaseScenario {
     return SpidershotScenario.configKeyFor(this.settings, this.variant);
   }
 
+  _maxSpawnSize() {
+    if (this.randomSize) return Math.max(this.randomSizeMax, this.targetSize);
+    return this.targetSize;
+  }
+
+  /** Axis-aligned spawn region (centre + sideward, after clamp). */
+  _spawnExtents(size = this._maxSpawnSize()) {
+    const halfX = this.boundsW / 2 - size - 0.05;
+    const halfH = this.boundsH / 2;
+    const yMinBound = Math.max(size + 0.25, this.centerY - halfH);
+    const yMaxBound = this.centerY + halfH;
+
+    const maxD = Math.max(this.minDistance, this.maxDistance);
+    const angleRad = degToRad(this.angleSpread);
+    const polarHalfY = maxD * Math.sin(angleRad);
+
+    const minX = -Math.min(maxD, halfX);
+    const maxX = Math.min(maxD, halfX);
+    let minY = Math.max(yMinBound, this.centerY - polarHalfY);
+    let maxY = Math.min(yMaxBound, this.centerY + polarHalfY);
+    minY = Math.min(minY, this.centerY - size);
+    maxY = Math.max(maxY, this.centerY + size);
+
+    return { minX, maxX, minY, maxY };
+  }
+
   _buildEnvironment() {
     const c = this.settings.data.colors;
     const [gridCenter, gridEdge] = gridLineColors(c.floor);
+    const size = this._maxSpawnSize();
+    const { minX, maxX, minY, maxY } = this._spawnExtents(size);
+    const margin = size + 0.12;
+    const wallW = maxX - minX + margin * 2;
+    const wallH = maxY - minY + margin * 2;
     const wall = new THREE.Mesh(
-      new THREE.PlaneGeometry(this.boundsW + 8, this.boundsH + 8),
+      new THREE.PlaneGeometry(wallW, wallH),
       new THREE.MeshStandardMaterial({ color: c.cover, roughness: 0.95, metalness: 0 })
     );
-    wall.position.set(0, this.centerY, this.wallZ);
+    wall.position.set((minX + maxX) / 2, (minY + maxY) / 2, this.wallZ);
     this.root.add(wall);
 
     const floor = new THREE.Mesh(

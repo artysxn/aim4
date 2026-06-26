@@ -45,7 +45,7 @@ export class RangeScenario extends BaseScenario {
     super(opts);
     const preset = this.competitive ? competitivePresetFor('range') : null;
     const r = this.settings.data.range;
-    this.arcDeg = this.config.arc ?? r.arc;
+    this.arcDeg = preset?.arc ?? this.config.arc ?? r.arc;
     this.enemyCount = preset?.enemyCount ?? this.config.enemyCount ?? r.enemyCount;
     this.radius = preset?.radius ?? this.config.radius ?? r.radius;
     this.botStrafe = this.config.botStrafe ?? r.botStrafe !== false;

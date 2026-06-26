@@ -45,6 +45,7 @@ const SCENARIO_META = {
 /** Scenarios with practice-only tuning (gear on training card). */
 const SCENARIO_SETTING_IDS = new Set([
   'gridshot',
+  'stars',
   'microflicks',
   'pasu',
   'spidershot',
@@ -319,6 +320,14 @@ export class UIOverlay {
           <label class="field-check"><input type="checkbox" id="set-grid-vm-recoil" /> Viewmodel recoil</label>`
       },
       {
+        id: 'stars',
+        label: 'Stars',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-stars-size', 'Dot size', 0.05, 0.5, 0.01)}
+          ${rf('set-stars-count', 'Dot count', 1, 400, 1)}`
+      },
+      {
         id: 'microflicks',
         label: 'Microflicks',
         body: `
@@ -484,7 +493,9 @@ export class UIOverlay {
         body: `
           <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
           ${rf('set-tracking-width', 'Bot width', 0.5, 2.0, 0.05)}
-          ${rf('set-tracking-speed', 'Bot speed', 0.25, 2.0, 0.05)}`
+          ${rf('set-tracking-speed', 'Bot speed', 0.25, 2.0, 0.05)}
+          <label class="field-check"><input type="checkbox" id="set-tracking-crouch" /> Tap crouch</label>
+          ${rf('set-tracking-strafe', 'Strafe rate', 0.25, 3.0, 0.05)}`
       }
     ];
   }
@@ -1128,6 +1139,9 @@ export class UIOverlay {
       draft((d) => { d.gridshot.viewmodelRecoil = e.target.checked; });
     });
 
+    this._bindRange('set-stars-size', (v, d) => { d.stars.targetSize = v; });
+    this._bindRange('set-stars-count', (v, d) => { d.stars.targetCount = v; }, { parse: (v) => parseInt(v, 10) });
+
     this._bindRange('set-mf-size', (v, d) => { d.microflicks.targetSize = v; });
     this._bindRange('set-mf-count', (v, d) => { d.microflicks.targetCount = v; }, { parse: (v) => parseInt(v, 10) });
     $('#set-mf-float')?.addEventListener('change', (e) => {
@@ -1240,6 +1254,10 @@ export class UIOverlay {
     this._bindRange('set-range-cover-height', (v, d) => { d.range.coverHeight = v; });
     this._bindRange('set-tracking-width', (v, d) => { d.tracking.botWidth = v; });
     this._bindRange('set-tracking-speed', (v, d) => { d.tracking.botSpeed = v; });
+    $('#set-tracking-crouch')?.addEventListener('change', (e) => {
+      draft((d) => { d.tracking.botCrouchTap = e.target.checked; });
+    });
+    this._bindRange('set-tracking-strafe', (v, d) => { d.tracking.strafeRate = v; });
   }
 
   _bindPauseMenu() {
@@ -2325,6 +2343,10 @@ export class UIOverlay {
     $('#set-grid-infinite-ammo').checked = s.gridshot.infiniteAmmo !== false;
     $('#set-grid-vm-recoil').checked = s.gridshot.viewmodelRecoil === true;
 
+    const st = s.stars ?? {};
+    this._setRange('set-stars-size', st.targetSize ?? 0.1);
+    this._setRange('set-stars-count', st.targetCount ?? 200);
+
     const mf = s.microflicks ?? {};
     this._setRange('set-mf-size', mf.targetSize ?? 0.1);
     this._setRange('set-mf-count', mf.targetCount ?? 2);
@@ -2346,9 +2368,9 @@ export class UIOverlay {
     this._setRange('set-pasu-age', s.pasu?.maxTargetAge ?? 1200);
     $('#set-pasu-infinite-ammo').checked = s.pasu?.infiniteAmmo !== false;
 
-    this._setRange('set-spider-size', s.spidershot?.targetSize ?? 0.45);
+    this._setRange('set-spider-size', s.spidershot?.targetSize ?? 0.30);
     this._setRange('set-spider-ttk', s.spidershot?.timeToKill ?? 1500);
-    this._setRange('set-spider-max-dist', s.spidershot?.maxDistance ?? 8);
+    this._setRange('set-spider-max-dist', s.spidershot?.maxDistance ?? 6.4);
     this._setRange('set-spider-min-dist', s.spidershot?.minDistance ?? 1.2);
     this._setRange('set-spider-height', s.spidershot?.heightSpread ?? 1);
     this._setRange('set-spider-angle', s.spidershot?.angleSpread ?? 25);
@@ -2359,8 +2381,8 @@ export class UIOverlay {
     $('#set-spider-drift').checked = !!s.spidershot?.horizontalDrift;
     this._setRange('set-spider-drift-speed', s.spidershot?.driftSpeedMax ?? 1.5);
     $('#set-spider-random-size').checked = !!s.spidershot?.randomSize;
-    this._setRange('set-spider-size-min', s.spidershot?.randomSizeMin ?? 0.32);
-    this._setRange('set-spider-size-max', s.spidershot?.randomSizeMax ?? 0.52);
+    this._setRange('set-spider-size-min', s.spidershot?.randomSizeMin ?? 0.21);
+    this._setRange('set-spider-size-max', s.spidershot?.randomSizeMax ?? 0.35);
     $('#set-spider-infinite-ammo').checked = s.spidershot?.infiniteAmmo !== false;
     $('#set-spider-vm-recoil').checked = s.spidershot?.viewmodelRecoil === true;
 
@@ -2398,12 +2420,14 @@ export class UIOverlay {
     $('#set-range-bot-crouch').value = s.range.botCrouchTap !== false ? 'tap' : 'off';
     $('#set-range-infinite-ammo').checked = s.range.infiniteAmmo !== false;
     $('#set-range-cover').checked = !!s.range.coverEnabled;
-    this._setRange('set-range-cover-count', s.range.coverCount ?? 2);
+    this._setRange('set-range-cover-count', s.range.coverCount ?? 4);
     this._setRange('set-range-cover-dist', s.range.coverDistance ?? 4);
     this._setRange('set-range-cover-thick', s.range.coverThickness ?? 1.2);
     this._setRange('set-range-cover-height', s.range.coverHeight ?? 3);
     this._setRange('set-tracking-width', s.tracking?.botWidth ?? 1);
     this._setRange('set-tracking-speed', s.tracking?.botSpeed ?? 1);
+    $('#set-tracking-crouch').checked = s.tracking?.botCrouchTap !== false;
+    this._setRange('set-tracking-strafe', s.tracking?.strafeRate ?? 1);
   }
 
   // -------------------------------------------------------------------------

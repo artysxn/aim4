@@ -174,7 +174,7 @@ const HOLD_MAX = 1.4;
 const CROUCH_RATE = 9;
 const DUELS_MOVE_HALF = 10; // 20 m × 20 m player roam box
 const DEATH_FX_DUR = 0.55;
-const DEATH_FX_PITCH = degToRad(38); // upward view flick on death (radians)
+const DEATH_FX_PITCH = degToRad(38) * 0.25; // upward view flick on death (radians)
 
 export class DuelsScenario extends BaseScenario {
   constructor(opts) {
@@ -267,6 +267,7 @@ export class DuelsScenario extends BaseScenario {
   }
 
   _switchArena() {
+    this.engine.viewmodel?.clearBulletDecals();
     let newIdx;
     do { newIdx = randInt(0, ARENAS.length - 1); } while (newIdx === this.arenaIndex && ARENAS.length > 1);
     this.arenaIndex = newIdx;

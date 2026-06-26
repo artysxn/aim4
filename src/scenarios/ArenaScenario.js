@@ -170,6 +170,7 @@ export class ArenaScenario extends BaseScenario {
   }
 
   _spawnCircle() {
+    this.engine.viewmodel?.clearBulletDecals();
     this.gap = randInt(0, this.colCount - 2); // gap is between column gap and gap+1
     const ang = this.colAngle[this.gap] + this.halfStep;
     const circle = new Target();

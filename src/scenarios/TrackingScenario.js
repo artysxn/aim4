@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
 import { randRange, randInt, clamp, lerp } from '../utils/MathUtils.js';
-import { SourceMover1D, RUN_SPEED } from '../utils/SourceMovement.js';
+import { SourceMover1D, UNIT } from '../utils/SourceMovement.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
@@ -39,6 +39,7 @@ const CROUCH_RATE = 13;
 
 const HEAD_PTS = 3;
 const BODY_PTS = 2;
+const TRACKING_RUN_SPEED = 210 * UNIT; // max lateral strafe (u/s → m/s)
 
 export class TrackingScenario extends BaseScenario {
   constructor(opts) {
@@ -48,6 +49,8 @@ export class TrackingScenario extends BaseScenario {
 
     this.botWidth = preset?.botWidth ?? this.config.botWidth ?? t.botWidth ?? 1;
     this.botSpeedMul = preset?.botSpeed ?? this.config.botSpeed ?? t.botSpeed ?? 1;
+    this.botCrouchTap = preset?.botCrouchTap ?? t.botCrouchTap !== false;
+    this.strafeRate = preset?.strafeRate ?? t.strafeRate ?? 1;
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 30)
       : Infinity;
@@ -133,6 +136,11 @@ export class TrackingScenario extends BaseScenario {
     return t;
   }
 
+  _strafeRange(min, max) {
+    const r = Math.max(0.05, this.strafeRate);
+    return randRange(min / r, max / r);
+  }
+
   _spawnBot() {
     const target = this._buildBot();
     this.addTarget(target);
@@ -144,10 +152,10 @@ export class TrackingScenario extends BaseScenario {
       crouch: 0,
       crouchWant: 0,
       wishDir: Math.random() < 0.5 ? -1 : 1,
-      reverseTimer: randRange(BURST_MIN, BURST_MAX),
+      reverseTimer: this._strafeRange(BURST_MIN, BURST_MAX),
       crouchTimer: randRange(CROUCH_GAP_MIN, CROUCH_GAP_MAX),
       burstRemaining: randInt(5, 10),
-      burstStartTimer: randRange(0.4, 1.2)
+      burstStartTimer: this._strafeRange(0.4, 1.2)
     };
     this._placeBot(this.bot);
   }
@@ -170,13 +178,13 @@ export class TrackingScenario extends BaseScenario {
     const bot = this.bot;
     if (!bot || bot.target.state === 'dying') return;
 
-    const max = RUN_SPEED * this.botSpeedMul;
+    const max = TRACKING_RUN_SPEED * this.botSpeedMul;
     const cam = this.camera;
 
     bot.burstStartTimer -= dt;
     if (bot.burstStartTimer <= 0 && bot.burstRemaining === 0) {
       bot.burstRemaining = randInt(5, 11);
-      bot.burstStartTimer = randRange(BURST_GAP_MIN, BURST_GAP_MAX);
+      bot.burstStartTimer = this._strafeRange(BURST_GAP_MIN, BURST_GAP_MAX);
     }
 
     bot.reverseTimer -= dt;
@@ -184,9 +192,9 @@ export class TrackingScenario extends BaseScenario {
       bot.wishDir = -bot.wishDir;
       if (bot.burstRemaining > 0) {
         bot.burstRemaining--;
-        bot.reverseTimer = randRange(BURST_MIN, BURST_MAX);
+        bot.reverseTimer = this._strafeRange(BURST_MIN, BURST_MAX);
       } else {
-        bot.reverseTimer = randRange(REVERSE_MIN, REVERSE_MAX);
+        bot.reverseTimer = this._strafeRange(REVERSE_MIN, REVERSE_MAX);
       }
     }
 
@@ -200,16 +208,22 @@ export class TrackingScenario extends BaseScenario {
     }
     this._placeBot(bot);
 
-    bot.crouchTimer -= dt;
-    if (bot.crouchWant && bot.crouchTimer <= 0) {
+    if (this.botCrouchTap) {
+      bot.crouchTimer -= dt;
+      if (bot.crouchWant && bot.crouchTimer <= 0) {
+        bot.crouchWant = 0;
+        bot.crouchTimer = randRange(CROUCH_GAP_MIN, CROUCH_GAP_MAX);
+      } else if (!bot.crouchWant && bot.crouchTimer <= 0) {
+        bot.crouchWant = 1;
+        bot.crouchTimer = randRange(CROUCH_HOLD_MIN, CROUCH_HOLD_MAX);
+      }
+
+      bot.crouch = clamp(bot.crouch + (bot.crouchWant - bot.crouch) * Math.min(1, CROUCH_RATE * dt), 0, 1);
+    } else {
+      bot.crouch = 0;
       bot.crouchWant = 0;
-      bot.crouchTimer = randRange(CROUCH_GAP_MIN, CROUCH_GAP_MAX);
-    } else if (!bot.crouchWant && bot.crouchTimer <= 0) {
-      bot.crouchWant = 1;
-      bot.crouchTimer = randRange(CROUCH_HOLD_MIN, CROUCH_HOLD_MAX);
     }
 
-    bot.crouch = clamp(bot.crouch + (bot.crouchWant - bot.crouch) * Math.min(1, CROUCH_RATE * dt), 0, 1);
     if (bot.target.rig) bot.target.rig.scale.y = lerp(1, 0.55, bot.crouch);
     if (bot.target.headMesh) {
       bot.target.headMesh.position.y = BODY_H * lerp(1, 0.55, bot.crouch) + HEAD_R * this.botWidth + HEAD_OFFSET;

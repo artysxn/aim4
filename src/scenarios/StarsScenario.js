@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // StarsScenario.js
-// Gridshot-style clicking drill: 200 tiny dots on the wall; each kill respawns one.
+// Gridshot-style clicking drill: tiny dots on the wall; each kill respawns one.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
@@ -12,6 +12,7 @@ import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 
 const TARGET_SIZE = 0.1;
 const TARGET_COUNT = 200;
+
 const DEFAULT_BOUNDS_SCALE_X = 2;
 
 export class StarsScenario extends GridshotScenario {
@@ -29,8 +30,8 @@ export class StarsScenario extends GridshotScenario {
 
     const presetAfter = this.competitive ? competitivePresetFor('stars') : null;
 
-    this.targetSize = presetAfter?.targetSize ?? TARGET_SIZE;
-    this.targetCount = presetAfter?.targetCount ?? TARGET_COUNT;
+    this.targetSize = presetAfter?.targetSize ?? s.targetSize ?? TARGET_SIZE;
+    this.targetCount = presetAfter?.targetCount ?? s.targetCount ?? TARGET_COUNT;
     this.mode = 'clicking';
     this.floatEnabled = false;
     this.enableTimeLimit = false;
@@ -48,7 +49,8 @@ export class StarsScenario extends GridshotScenario {
 
   static configKeyFor(settings, variant = 'practice') {
     if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
-    return `d${settings.data.runDuration}`;
+    const st = settings.data.stars ?? {};
+    return `s${st.targetSize ?? TARGET_SIZE}_n${st.targetCount ?? TARGET_COUNT}_d${settings.data.runDuration}`;
   }
 
   configKey() {
