@@ -13,7 +13,8 @@ export const RANKED_SCENARIOS = new Set([
   'arena',
   'duels',
   'range',
-  'tracking'
+  'tracking',
+  'deathmatch'
 ]);
 
 /** Ranked by total kills in the best timed run. */
@@ -25,7 +26,8 @@ export const KILL_LEADERBOARD_SCENARIOS = new Set([
   'spidershot',
   'arena',
   'duels',
-  'range'
+  'range',
+  'deathmatch'
 ]);
 
 /** Ranked by highest score in the best timed run. */

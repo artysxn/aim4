@@ -154,10 +154,10 @@ export class MultiplayerController {
   }
 
   // ---- User actions -------------------------------------------------------
-  async create({ name, target, isPublic, weapon }) {
+  async create({ name, target, isPublic, weapon, mode }) {
     if (!(await this._ensureConnected())) return;
     this.browsing = false;
-    this.net.createLobby({ name, target, isPublic, weapon });
+    this.net.createLobby({ name, target, isPublic, weapon, mode });
   }
 
   async join({ name, code }) {
@@ -236,12 +236,16 @@ export class MultiplayerController {
     this.inMatch = true;
     this.inQueue = false;
     this.browsing = false;
-    const isTracking = msg.gameMode === 'tracking';
-    const weapon = isTracking
+    const mode = msg.gameMode === 'tracking'
       ? 'tracking'
-      : msg.isMatchmade
-        ? 'rifle'
-        : this.settings.data.weapon?.customWeapon || 'rifle';
+      : msg.gameMode === 'deathmatch'
+        ? 'deathmatch'
+        : 'duel';
+    const isTracking = mode === 'tracking';
+    // Gun feel is a client preference; coerce to a real weapon for non-tracking.
+    const cw = this.settings.data.weapon?.customWeapon;
+    const gun = cw === 'pistol' ? 'pistol' : 'rifle';
+    const weapon = isTracking ? 'tracking' : msg.isMatchmade ? 'rifle' : gun;
     this.sceneManager.load('mpduel', {
       net: this.net,
       myId: this.myId,
@@ -252,7 +256,7 @@ export class MultiplayerController {
       stats: msg.stats,
       players,
       weapon,
-      gameMode: isTracking ? 'tracking' : 'duel',
+      gameMode: mode,
       matchEndsAt: msg.matchEndsAt,
       duration: msg.duration,
       isMatchmade: !!msg.isMatchmade

@@ -10,6 +10,23 @@ import { BODY_R, BODY_H, HEAD_R, crouchScale, headCenterY } from '../src/multipl
 
 const EPS = 1e-6;
 
+/**
+ * Ray vs box with optional Y rotation. For a rotated box we transform the ray
+ * into the box's local (axis-aligned) frame, then run the AABB test — matching
+ * the client's OBB collision/raycast on the same geometry.
+ */
+function rayBox(o, d, box) {
+  const ry = box.rotationY || 0;
+  if (!ry) return rayAABB(o, d, box.pos, box.size);
+  const c = Math.cos(-ry);
+  const s = Math.sin(-ry);
+  const dx = o[0] - box.pos[0];
+  const dz = o[2] - box.pos[2];
+  const lo = [dx * c - dz * s, o[1] - box.pos[1], dx * s + dz * c];
+  const ld = [d[0] * c - d[2] * s, d[1], d[0] * s + d[2] * c];
+  return rayAABB(lo, ld, [0, 0, 0], box.size);
+}
+
 /** Ray vs axis-aligned box (centre `pos`, full `size`). Returns entry t or Infinity. */
 function rayAABB(o, d, pos, size) {
   let tmin = -Infinity;
@@ -106,7 +123,7 @@ export function resolveShot(origin, dir, target, boxes) {
 
   // Occlusion: any cover box hit closer than the target part blocks the shot.
   for (const box of boxes) {
-    const tb = rayAABB(origin, dir, box.pos, box.size);
+    const tb = rayBox(origin, dir, box);
     if (tb < tHit - 0.02) return null;
   }
   return { zone, t: tHit };

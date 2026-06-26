@@ -9,6 +9,7 @@ import arena from './switch_access_2_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?
 import duels from './swords_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
 import range from './arrow_range_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
 import tracking from './swap_vert_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
+import deathmatch from './swords_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
 import exercise from './exercise_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
 import crown from './crown_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
 import globe from './globe_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
@@ -24,7 +25,8 @@ export const SCENARIO_ICONS = {
   arena,
   duels,
   range,
-  tracking
+  tracking,
+  deathmatch
 };
 
 export const MATCHMAKING_ICON = crown;

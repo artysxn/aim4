@@ -203,10 +203,10 @@ security definer
 set search_path = public
 as $$
 begin
-  -- Kill-ranked: gridshot, stars, microflicks, pasu, spidershot, arena, duels, range
+  -- Kill-ranked: gridshot, stars, microflicks, pasu, spidershot, arena, duels, range, deathmatch
   -- Score-ranked: survival, tracking (else branch)
   if p_scenario in (
-    'gridshot', 'stars', 'microflicks', 'pasu', 'spidershot', 'arena', 'duels', 'range'
+    'gridshot', 'stars', 'microflicks', 'pasu', 'spidershot', 'arena', 'duels', 'range', 'deathmatch'
   ) then
     return query
     select distinct on (s.user_id)
@@ -273,7 +273,7 @@ set search_path = public
 as $$
 begin
   if p_scenario in (
-    'gridshot', 'stars', 'microflicks', 'pasu', 'spidershot', 'arena', 'duels', 'range'
+    'gridshot', 'stars', 'microflicks', 'pasu', 'spidershot', 'arena', 'duels', 'range', 'deathmatch'
   ) then
     return query
     select

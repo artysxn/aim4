@@ -21,9 +21,20 @@ import {
   TRACKING_DURATION,
   TRACKING_HEAD_PTS,
   TRACKING_BODY_PTS,
-  TRACKING_MAP_ID
+  TRACKING_MAP_ID,
+  DEATHMATCH_MAP_ID,
+  DEATHMATCH_DURATION,
+  maxPlayersForMode
 } from '../src/multiplayer/constants.js';
-import { getMap, spawnFor, pickRandomMap, spawnPair } from '../src/multiplayer/maps.js';
+import {
+  getMap,
+  spawnFor,
+  pickRandomMap,
+  spawnPair,
+  ffaSpawns,
+  ffaRespawn,
+  yawToward
+} from '../src/multiplayer/maps.js';
 import { resolveShot } from './hitscan.js';
 import { pushTransformHistory, sampleTransformAt, lagRewindMs } from './lagComp.js';
 import {
@@ -35,6 +46,7 @@ import { MatchmakingQueue, createRankedLobby } from './matchmaking.js';
 
 const VALID_TARGETS = new Set([0, 13, 30, 60, 100]);
 const VALID_WEAPONS = new Set(['rifle', 'pistol', 'tracking']);
+const VALID_MODES = new Set(['duel', 'tracking', 'deathmatch']);
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous 0/O/1/I
 
 // Health model: a body shot does 1, so you survive three body hits and die on
@@ -44,6 +56,7 @@ const BODY_DMG = 1;
 const HEAD_DMG = MAX_HP;
 
 function lobbyGameMode(lobby) {
+  if (lobby.mode && VALID_MODES.has(lobby.mode)) return lobby.mode;
   return lobby.weapon === 'tracking' ? 'tracking' : 'duel';
 }
 
@@ -53,6 +66,15 @@ function freshStats() {
 
 function isTrackingLobby(lobby) {
   return lobbyGameMode(lobby) === 'tracking';
+}
+
+function isDeathmatchLobby(lobby) {
+  return lobbyGameMode(lobby) === 'deathmatch';
+}
+
+/** Player cap for this lobby's mode (duel/tracking = 2, deathmatch = FFA). */
+function lobbyMaxPlayers(lobby) {
+  return maxPlayersForMode(lobbyGameMode(lobby));
 }
 
 let nextPlayerId = 1;
@@ -170,6 +192,11 @@ export class MultiplayerServer {
 
     const target = VALID_TARGETS.has(msg.target) ? msg.target : 13;
     const weapon = VALID_WEAPONS.has(msg.weapon) ? msg.weapon : 'rifle';
+    const mode = VALID_MODES.has(msg.mode)
+      ? msg.mode
+      : weapon === 'tracking'
+        ? 'tracking'
+        : 'duel';
     const lobby = {
       code,
       hostId: player.id,
@@ -177,6 +204,7 @@ export class MultiplayerServer {
       mapId: null, // chosen when the match starts / each round
       target,
       weapon,
+      mode,
       isPublic: msg.isPublic !== false, // default public
       started: false,
       scores: {},
@@ -197,13 +225,14 @@ export class MultiplayerServer {
     const lobby = this.lobbies.get(code);
     if (!lobby) return this._send(player, { t: S2C.ERROR, msg: 'Lobby not found.' });
     if (lobby.started) return this._send(player, { t: S2C.ERROR, msg: 'Match already in progress.' });
-    if (lobby.players.length >= MAX_PLAYERS) return this._send(player, { t: S2C.ERROR, msg: 'Lobby is full.' });
+    if (lobby.players.length >= lobbyMaxPlayers(lobby)) return this._send(player, { t: S2C.ERROR, msg: 'Lobby is full.' });
 
     if (msg.name) player.name = String(msg.name).slice(0, 24);
     this.browsers.delete(player);
     lobby.players.push(player);
     player.lobby = lobby;
-    player.side = 'B';
+    // Sides only matter for paired 1v1 maps; FFA deathmatch ignores them.
+    player.side = isDeathmatchLobby(lobby) ? null : 'B';
     player.ready = false;
     this._broadcastLobby(lobby);
     this._pushLobbyList(); // lobby is now full -> drops out of the browser
@@ -277,6 +306,13 @@ export class MultiplayerServer {
     if (VALID_TARGETS.has(msg.target)) lobby.target = msg.target;
     if (typeof msg.isPublic === 'boolean') lobby.isPublic = msg.isPublic;
     if (VALID_WEAPONS.has(msg.weapon)) lobby.weapon = msg.weapon;
+    if (VALID_MODES.has(msg.mode) && lobby.players.length <= maxPlayersForMode(msg.mode)) {
+      lobby.mode = msg.mode;
+      // Re-tag sides so FFA toggles on/off cleanly.
+      lobby.players.forEach((p, i) => {
+        p.side = isDeathmatchLobby(lobby) ? null : i === 0 ? 'A' : 'B';
+      });
+    }
     this._broadcastLobby(lobby);
     this._pushLobbyList();
   }
@@ -299,8 +335,17 @@ export class MultiplayerServer {
   _beginMatch(lobby) {
     lobby.started = true;
     const tracking = isTrackingLobby(lobby);
-    lobby.mapId = tracking ? TRACKING_MAP_ID : pickRandomMap(lobby.mapId).id;
-    lobby.matchEndsAt = tracking ? Date.now() + TRACKING_DURATION * 1000 : null;
+    const deathmatch = isDeathmatchLobby(lobby);
+    lobby.mapId = tracking
+      ? TRACKING_MAP_ID
+      : deathmatch
+        ? DEATHMATCH_MAP_ID
+        : pickRandomMap(lobby.mapId).id;
+    lobby.matchEndsAt = tracking
+      ? Date.now() + TRACKING_DURATION * 1000
+      : deathmatch && DEATHMATCH_DURATION > 0
+        ? Date.now() + DEATHMATCH_DURATION * 1000
+        : null;
     lobby.scores = {};
     for (const p of lobby.players) {
       lobby.scores[p.id] = 0;
@@ -326,6 +371,9 @@ export class MultiplayerServer {
       };
       if (tracking) {
         startMsg.duration = TRACKING_DURATION;
+        startMsg.matchEndsAt = lobby.matchEndsAt;
+      }
+      if (deathmatch && lobby.matchEndsAt) {
         startMsg.matchEndsAt = lobby.matchEndsAt;
       }
       if (lobby.isMatchmade && opp) {
@@ -360,11 +408,16 @@ export class MultiplayerServer {
   /** Assign + reset spawns for everyone; returns { playerId: {pos,yaw,side} }. */
   _spawnAll(lobby) {
     const map = getMap(lobby.mapId);
-    const pair = spawnPair(map);
     const spawns = {};
-    for (const p of lobby.players) {
-      const sp = pair[p.side] || spawnFor(map, p.side);
-      p.transform = { x: sp.pos[0], y: sp.pos[1] + STAND_EYE, z: sp.pos[2], yaw: sp.yaw, pitch: 0, crouch: 0 };
+    const deathmatch = isDeathmatchLobby(lobby);
+    const ffa = deathmatch ? ffaSpawns(map, lobby.players.length) : null;
+    const pair = deathmatch ? null : spawnPair(map);
+    lobby.players.forEach((p, i) => {
+      const sp = deathmatch
+        ? ffa[i]
+        : pair[p.side] || spawnFor(map, p.side);
+      const yaw = deathmatch ? yawToward(sp.pos, [0, 0, 0]) : sp.yaw;
+      p.transform = { x: sp.pos[0], y: sp.pos[1] + STAND_EYE, z: sp.pos[2], yaw, pitch: 0, crouch: 0 };
       p.hp = MAX_HP;
       p.dead = false;
       p.respawnAt = 0;
@@ -372,8 +425,8 @@ export class MultiplayerServer {
       p.history = [];
       p.roundStartAt = Date.now();
       pushTransformHistory(p);
-      spawns[p.id] = { pos: sp.pos, yaw: sp.yaw, side: p.side };
-    }
+      spawns[p.id] = { pos: sp.pos, yaw, side: p.side };
+    });
     return spawns;
   }
 
@@ -463,8 +516,13 @@ export class MultiplayerServer {
         this._endTrackingMatch(lobby);
         continue;
       }
+      if (isDeathmatchLobby(lobby) && lobby.matchEndsAt && now >= lobby.matchEndsAt) {
+        this._endDeathmatchMatch(lobby);
+        continue;
+      }
       this._resolveShots(lobby);
-      if (!isTrackingLobby(lobby)) this._resolveRespawns(lobby, now);
+      if (isDeathmatchLobby(lobby)) this._resolveDeathmatchRespawns(lobby, now);
+      else if (!isTrackingLobby(lobby)) this._resolveRespawns(lobby, now);
       for (const p of lobby.players) pushTransformHistory(p, now);
       if (this._simTick % SNAPSHOT_EVERY === 0) {
         this._broadcastSnapshot(lobby, now);
@@ -568,6 +626,64 @@ export class MultiplayerServer {
     this._pushLobbyList();
   }
 
+  /** FFA respawns: each dead player returns after the delay, away from the living. */
+  _resolveDeathmatchRespawns(lobby, now) {
+    const map = getMap(lobby.mapId);
+    const spawns = {};
+    let any = false;
+    for (const p of lobby.players) {
+      if (!p.dead || now < p.respawnAt) continue;
+      const others = lobby.players
+        .filter((x) => x !== p && !x.dead)
+        .map((x) => [x.transform.x, 0, x.transform.z]);
+      const sp = ffaRespawn(map, others);
+      const yaw = yawToward(sp.pos, [0, 0, 0]);
+      p.transform = { x: sp.pos[0], y: sp.pos[1] + STAND_EYE, z: sp.pos[2], yaw, pitch: 0, crouch: 0 };
+      p.hp = MAX_HP;
+      p.dead = false;
+      p.respawnAt = 0;
+      p.roundStartAt = now;
+      p.history = [];
+      pushTransformHistory(p, now);
+      spawns[p.id] = { pos: sp.pos, yaw, side: p.side };
+      any = true;
+    }
+    if (any) this._broadcast(lobby, { t: S2C.RESPAWN, spawns });
+  }
+
+  /** End a FFA deathmatch — highest score wins (frag target hit or time up). */
+  _endDeathmatchMatch(lobby, winnerId = null) {
+    if (!lobby.started) return;
+    lobby.started = false;
+    lobby.matchEndsAt = null;
+
+    if (winnerId == null) {
+      let best = -Infinity;
+      let tied = false;
+      for (const p of lobby.players) {
+        const s = lobby.scores[p.id] || 0;
+        if (s > best) {
+          best = s;
+          winnerId = p.id;
+          tied = false;
+        } else if (s === best) {
+          tied = true;
+        }
+      }
+      if (tied) winnerId = null;
+    }
+
+    this._broadcast(lobby, {
+      t: S2C.MATCH_END,
+      winnerId,
+      scores: { ...lobby.scores },
+      gameMode: 'deathmatch'
+    });
+    for (const p of lobby.players) p.ready = false;
+    this._broadcastLobby(lobby);
+    this._pushLobbyList();
+  }
+
   _registerHit(lobby, shooter, victim, zone) {
     if (!shooter.stats) shooter.stats = freshStats();
     shooter.stats.hits++;
@@ -589,6 +705,23 @@ export class MultiplayerServer {
 
     const score = lobby.scores[shooter.id];
     const win = lobby.target > 0 && score >= lobby.target;
+
+    // ---- Free-for-all: only the victim dies + respawns; the arena is fixed. ----
+    if (isDeathmatchLobby(lobby)) {
+      victim.dead = true;
+      victim.hp = 0;
+      victim.respawnAt = Date.now() + RESPAWN_DELAY * 1000;
+      const stats = this._buildStats(lobby);
+      this._broadcast(lobby, {
+        t: S2C.KILL,
+        shooterId: shooter.id,
+        victimId: victim.id,
+        scores: { ...lobby.scores },
+        stats
+      });
+      if (win) this._endDeathmatchMatch(lobby, shooter.id);
+      return;
+    }
 
     // New arena every round — winner or loser, including the match-ending kill.
     lobby.mapId = pickRandomMap(lobby.mapId).id;
@@ -714,6 +847,7 @@ export class MultiplayerServer {
       target: lobby.target,
       weapon: lobby.weapon || 'rifle',
       gameMode: lobbyGameMode(lobby),
+      maxPlayers: lobbyMaxPlayers(lobby),
       isPublic: lobby.isPublic,
       started: lobby.started,
       isMatchmade: !!lobby.isMatchmade,
@@ -731,17 +865,17 @@ export class MultiplayerServer {
   _publicLobbies() {
     const out = [];
     for (const lobby of this.lobbies.values()) {
-      if (!lobby.isPublic || lobby.started || lobby.players.length >= MAX_PLAYERS) continue;
+      if (!lobby.isPublic || lobby.started || lobby.players.length >= lobbyMaxPlayers(lobby)) continue;
       const host = lobby.players.find((p) => p.id === lobby.hostId) || lobby.players[0];
       out.push({
         code: lobby.code,
         host: host ? host.name : 'Host',
-        map: isTrackingLobby(lobby) ? 'Tracking' : 'Random maps',
+        map: isTrackingLobby(lobby) ? 'Tracking' : isDeathmatchLobby(lobby) ? 'Deathmatch' : 'Random maps',
         target: lobby.target,
         weapon: lobby.weapon || 'rifle',
         gameMode: lobbyGameMode(lobby),
         players: lobby.players.length,
-        max: MAX_PLAYERS
+        max: lobbyMaxPlayers(lobby)
       });
     }
     return out;

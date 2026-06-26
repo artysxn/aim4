@@ -118,6 +118,11 @@ const DEFAULTS = {
     arena: 0, // 0 = random each run, 1..10 = a fixed arena
     ttk: 0.5  // seconds to kill enemy once exposed; lower = harder
   },
+  deathmatch: {
+    botCount: 4, // bots hunting the player at once (1..6)
+    botSpeed: 1.0, // multiplier on default run speed (215 u/s)
+    ttk: 0.7 // seconds of bot line-of-sight before you die; lower = harder
+  },
   colors: {
     bg:        '#0a0a0a', // scene background + fog
     floor:     '#101010', // floor surface

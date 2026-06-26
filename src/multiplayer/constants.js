@@ -60,3 +60,15 @@ export const TRACKING_MAP_ID = 'tracking-arena';
 export const RESPAWN_DELAY = 1.4; // seconds between death and respawn
 export const SPAWN_GRACE = 0.5; // seconds after spawn where keyboard movement is locked
 export const MAX_PLAYERS = 2; // a duel is 1v1
+
+// ---- Free-for-all Deathmatch ---------------------------------------------
+export const DEATHMATCH_MAP_ID = 'deathmatch';
+export const DEATHMATCH_MAX_PLAYERS = 6; // humans + bots share this cap
+export const DEATHMATCH_DURATION = 0; // 0 = no time limit (frag-target only)
+export const DEATHMATCH_FRAG_TARGET = 30; // first to N kills wins (custom games)
+export const DEATHMATCH_MAX_BOTS = 6; // optional bot fill (added in a later pass)
+
+/** Per-mode player cap. Deathmatch is FFA up to DEATHMATCH_MAX_PLAYERS. */
+export function maxPlayersForMode(mode) {
+  return mode === 'deathmatch' ? DEATHMATCH_MAX_PLAYERS : MAX_PLAYERS;
+}

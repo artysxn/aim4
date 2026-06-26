@@ -15,6 +15,7 @@ import { ArenaScenario } from '../scenarios/ArenaScenario.js';
 import { DuelsScenario } from '../scenarios/DuelsScenario.js';
 import { RangeScenario } from '../scenarios/RangeScenario.js';
 import { TrackingScenario } from '../scenarios/TrackingScenario.js';
+import { DeathmatchScenario } from '../scenarios/DeathmatchScenario.js';
 import { MultiplayerDuelScenario } from '../scenarios/MultiplayerDuelScenario.js';
 
 // Singleplayer scenarios — these are the ones shown as menu cards + leaderboards.
@@ -28,7 +29,8 @@ export const SCENARIOS = {
   arena: ArenaScenario,
   duels: DuelsScenario,
   range: RangeScenario,
-  tracking: TrackingScenario
+  tracking: TrackingScenario,
+  deathmatch: DeathmatchScenario
 };
 
 // Scenarios launched outside the card grid (e.g. multiplayer).

@@ -299,8 +299,8 @@ export class NetClient {
   }
 
   // ---- Commands -----------------------------------------------------------
-  createLobby({ name, target, isPublic, weapon }) {
-    this._send({ t: C2S.CREATE, name, target, isPublic, weapon });
+  createLobby({ name, target, isPublic, weapon, mode }) {
+    this._send({ t: C2S.CREATE, name, target, isPublic, weapon, mode });
   }
   requestList() {
     this._send({ t: C2S.LIST });
@@ -320,8 +320,8 @@ export class NetClient {
   setReady(ready) {
     this._send({ t: C2S.READY, ready });
   }
-  setConfig({ target, isPublic, weapon }) {
-    this._send({ t: C2S.CONFIG, target, isPublic, weapon });
+  setConfig({ target, isPublic, weapon, mode }) {
+    this._send({ t: C2S.CONFIG, target, isPublic, weapon, mode });
   }
   startMatch() {
     this._send({ t: C2S.START });

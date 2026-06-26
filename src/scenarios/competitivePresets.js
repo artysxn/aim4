@@ -63,6 +63,12 @@ export const COMPETITIVE_PRESETS = {
     botWidth: 1.0,
     botSpeed: 1.0
   },
+  deathmatch: {
+    runDuration: 60,
+    botCount: 6,
+    botSpeed: 1.0,
+    ttk: 0.6
+  },
   spidershot: {
     runDuration: 30,
     timeToKill: 450,

@@ -7,12 +7,32 @@
 import { BODY_R, crouchScale, BODY_H } from '../multiplayer/constants.js';
 
 /**
+ * Project a world (x, z) offset from a box centre into the box's local frame,
+ * undoing its Y rotation. Boxes without `rotationY` pass straight through.
+ * Writes into `out` ({lx, lz}) to avoid allocation.
+ */
+function toBoxLocal(dx, dz, ry, out) {
+  if (!ry) {
+    out.lx = dx;
+    out.lz = dz;
+    return out;
+  }
+  const c = Math.cos(-ry);
+  const s = Math.sin(-ry);
+  out.lx = dx * c - dz * s;
+  out.lz = dx * s + dz * c;
+  return out;
+}
+
+const _local = { lx: 0, lz: 0 };
+
+/**
  * Highest walkable surface at (x, z): floor plus box tops the feet can reach.
  * Ignores elevated surfaces far above `footY` so players don't snap onto cover roofs.
  *
  * @param {number} x
  * @param {number} z
- * @param {{ pos: number[], size: number[] }[] | null} boxes
+ * @param {{ pos: number[], size: number[], rotationY?: number }[] | null} boxes
  * @param {number} footY — current feet height (used for step-up tolerance)
  * @param {number} [floorY=0]
  */
@@ -26,7 +46,8 @@ export function groundHeightAt(x, z, boxes, footY, floorY = 0) {
     const top = box.pos[1] + box.size[1] / 2;
     const hw = box.size[0] / 2;
     const hd = box.size[2] / 2;
-    if (Math.abs(x - box.pos[0]) > hw || Math.abs(z - box.pos[2]) > hd) continue;
+    const l = toBoxLocal(x - box.pos[0], z - box.pos[2], box.rotationY || 0, _local);
+    if (Math.abs(l.lx) > hw || Math.abs(l.lz) > hd) continue;
     if (top <= footY + stepUp && top > best) best = top;
   }
   return best;
@@ -58,23 +79,46 @@ export function resolveBoxCollisions(pos, vel, footY, crouch, boxes, radius = BO
 
     const hw = box.size[0] / 2 + radius;
     const hd = box.size[2] / 2 + radius;
-    const bx = box.pos[0];
-    const bz = box.pos[2];
+    const ry = box.rotationY || 0;
 
-    const dx = pos.x - bx;
-    const dz = pos.z - bz;
+    // Work in the box's local (axis-aligned) frame so rotated walls push out
+    // along their true faces, then rotate the push-out back into world space.
+    const l = toBoxLocal(pos.x - box.pos[0], pos.z - box.pos[2], ry, _local);
+    const lx = l.lx;
+    const lz = l.lz;
 
-    if (Math.abs(dx) >= hw || Math.abs(dz) >= hd) continue;
+    if (Math.abs(lx) >= hw || Math.abs(lz) >= hd) continue;
 
-    const ox = hw - Math.abs(dx);
-    const oz = hd - Math.abs(dz);
+    const ox = hw - Math.abs(lx);
+    const oz = hd - Math.abs(lz);
 
-    if (ox < oz) {
-      pos.x += dx > 0 ? ox : -ox;
-      if ((dx > 0 && vel.x < 0) || (dx < 0 && vel.x > 0)) vel.x = 0;
-    } else {
-      pos.z += dz > 0 ? oz : -oz;
-      if ((dz > 0 && vel.z < 0) || (dz < 0 && vel.z > 0)) vel.z = 0;
+    let plx = 0;
+    let plz = 0;
+    if (ox < oz) plx = lx > 0 ? ox : -ox;
+    else plz = lz > 0 ? oz : -oz;
+
+    // Rotate the local push-out (plx, plz) back to world (+ry).
+    let wx = plx;
+    let wz = plz;
+    if (ry) {
+      const c = Math.cos(ry);
+      const s = Math.sin(ry);
+      wx = plx * c - plz * s;
+      wz = plx * s + plz * c;
+    }
+    pos.x += wx;
+    pos.z += wz;
+
+    // Kill the velocity component heading into the contact normal.
+    const nlen = Math.hypot(wx, wz);
+    if (nlen > 1e-6) {
+      const nx = wx / nlen;
+      const nz = wz / nlen;
+      const vn = vel.x * nx + vel.z * nz;
+      if (vn < 0) {
+        vel.x -= vn * nx;
+        vel.z -= vn * nz;
+      }
     }
   }
 }

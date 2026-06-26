@@ -38,7 +38,8 @@ const SCENARIO_META = {
   arena: { title: 'Crossfire', dualPlay: true },
   duels: { title: 'Duels', dualPlay: true },
   range: { title: 'Range', dualPlay: true },
-  tracking: { title: 'Tracking', dualPlay: true }
+  tracking: { title: 'Tracking', dualPlay: true },
+  deathmatch: { title: 'Deathmatch', dualPlay: true }
 };
 
 const _v = new THREE.Vector3();
@@ -383,6 +384,15 @@ export class UIOverlay {
           ${rf('set-duels-ttk', 'Time to kill (s)', 0.2, 2.0, 0.1)}`
       },
       {
+        id: 'deathmatch',
+        label: 'Deathmatch',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-dm-bots', 'Bots', 1, 6, 1)}
+          ${rf('set-dm-speed', 'Bot speed', 0.25, 2.0, 0.05)}
+          ${rf('set-dm-ttk', 'Time to kill (s)', 0.2, 2.0, 0.05)}`
+      },
+      {
         id: 'range',
         label: 'Range',
         body: `
@@ -699,7 +709,7 @@ export class UIOverlay {
             </div>
             <div class="field field-plain">
               <div class="field-top"><span class="field-label">Mode</span></div>
-              <select id="mp-create-weapon"><option value="rifle">Rifle</option><option value="pistol">Pistol</option><option value="tracking">Tracking</option></select>
+              <select id="mp-create-weapon"><option value="rifle">Rifle</option><option value="pistol">Pistol</option><option value="tracking">Tracking</option><option value="deathmatch">Deathmatch</option></select>
             </div>
             <label class="field-check"><input type="checkbox" id="mp-create-private" /> Private</label>
             <button type="button" class="btn primary btn-block" id="mp-create-btn">Create lobby</button>
@@ -737,7 +747,7 @@ export class UIOverlay {
             </div>
             <div class="field field-plain">
               <div class="field-top"><span class="field-label">Mode</span></div>
-              <select id="mp-lobby-weapon"><option value="rifle">Rifle</option><option value="pistol">Pistol</option><option value="tracking">Tracking</option></select>
+              <select id="mp-lobby-weapon"><option value="rifle">Rifle</option><option value="pistol">Pistol</option><option value="tracking">Tracking</option><option value="deathmatch">Deathmatch</option></select>
             </div>
             <label class="field-check"><input type="checkbox" id="mp-lobby-private" /> Private</label>
           </div>
@@ -1068,6 +1078,10 @@ export class UIOverlay {
     });
     this._bindRange('set-duels-ttk', (v, d) => { d.duels.ttk = v; });
 
+    this._bindRange('set-dm-bots', (v, d) => { d.deathmatch.botCount = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-dm-speed', (v, d) => { d.deathmatch.botSpeed = v; });
+    this._bindRange('set-dm-ttk', (v, d) => { d.deathmatch.ttk = v; });
+
     const col = (id, key) =>
       $(id).addEventListener('input', (e) => {
         draft((d) => { d.colors[key] = e.target.value; });
@@ -1298,10 +1312,11 @@ export class UIOverlay {
 
     this._mpName = name; // reused by auto-join
 
-    // Weapon pick is per-player (client-side feel), shared between the create
-    // form and the lobby selector and persisted to settings.
+    // The "Mode" selector mixes gun-feel (rifle/pistol) with game mode
+    // (tracking/deathmatch). The chosen value is per-player and persisted; on the
+    // wire it is split into { mode, weapon }.
     const applyWeapon = (v) => {
-      const val = v === 'pistol' ? 'pistol' : v === 'tracking' ? 'tracking' : 'rifle';
+      const val = ['pistol', 'tracking', 'deathmatch'].includes(v) ? v : 'rifle';
       this.settings.data.weapon.customWeapon = val;
       this.settings.save();
       const a = $('#mp-create-weapon');
@@ -1316,7 +1331,7 @@ export class UIOverlay {
       applyWeapon(e.target.value);
       const lobby = this.mp?.lobby;
       if (lobby && lobby.hostId === this.mp.myId) {
-        this.mp.setConfig({ weapon: e.target.value });
+        this.mp.setConfig(this._mpSelToConfig(e.target.value));
       }
     });
 
@@ -1325,7 +1340,7 @@ export class UIOverlay {
         name: name(),
         target: parseInt($('#mp-create-target').value, 10),
         isPublic: !$('#mp-create-private').checked,
-        weapon: $('#mp-create-weapon').value
+        ...this._mpSelToConfig($('#mp-create-weapon').value)
       });
     });
 
@@ -1394,8 +1409,23 @@ export class UIOverlay {
     return lobby.players.find((p) => p.id === this.mp.myId) || null;
   }
 
-  _syncMpModeFields(weapon) {
-    const tracking = weapon === 'tracking';
+  /** Split the "Mode" selector value into the wire fields { mode, weapon }. */
+  _mpSelToConfig(v) {
+    if (v === 'tracking') return { mode: 'tracking', weapon: 'tracking' };
+    if (v === 'deathmatch') return { mode: 'deathmatch', weapon: 'rifle' };
+    return { mode: 'duel', weapon: v === 'pistol' ? 'pistol' : 'rifle' };
+  }
+
+  /** Selector value to display for a lobby (mode wins over raw weapon). */
+  _mpSelForLobby(lobby) {
+    if (lobby?.gameMode === 'tracking') return 'tracking';
+    if (lobby?.gameMode === 'deathmatch') return 'deathmatch';
+    return lobby?.weapon || 'rifle';
+  }
+
+  _syncMpModeFields(sel) {
+    // Tracking has no win condition; duel & deathmatch are first-to-N.
+    const tracking = sel === 'tracking';
     const toggle = (id) => {
       const field = this.root.querySelector(id)?.closest('.field');
       if (field) field.classList.toggle('hidden', tracking);
@@ -1523,12 +1553,12 @@ export class UIOverlay {
 
     $('#mp-lobby-target').value = String(lobby.target);
     const lobbyWeapon = $('#mp-lobby-weapon');
-    const weapon = lobby.weapon || 'rifle';
+    const sel = this._mpSelForLobby(lobby);
     if (lobbyWeapon) {
-      lobbyWeapon.value = weapon;
+      lobbyWeapon.value = sel;
       lobbyWeapon.disabled = !isHost;
     }
-    this._syncMpModeFields(weapon);
+    this._syncMpModeFields(sel);
     $('#mp-lobby-private').checked = lobby.isPublic === false;
     $('#mp-lobby-target').disabled = !isHost;
     $('#mp-lobby-private').disabled = !isHost;
@@ -1541,7 +1571,7 @@ export class UIOverlay {
     readyBtn.classList.toggle('primary', !(me && me.ready));
 
     const startBtn = $('#mp-start-btn');
-    const canStart = isHost && lobby.players.length === 2 && lobby.players.every((p) => p.ready || p.id === lobby.hostId);
+    const canStart = isHost && lobby.players.length >= 2 && lobby.players.every((p) => p.ready || p.id === lobby.hostId);
     startBtn.style.display = isHost ? '' : 'none';
     startBtn.disabled = !canStart;
   }
@@ -1549,7 +1579,7 @@ export class UIOverlay {
   beginMpMatch(msg, players) {
     this._mpPlayers = players;
     this._mpTarget = msg.target;
-    this._mpGameMode = msg.gameMode === 'tracking' ? 'tracking' : 'duel';
+    this._mpGameMode = msg.gameMode || 'duel';
     this._mpMatchEndsAt = msg.matchEndsAt ?? null;
     this._mpTabStats = msg.stats || {};
     this._mpMapId = msg.mapId;
@@ -2107,6 +2137,10 @@ export class UIOverlay {
 
     $('#set-duels-arena').value = String(s.duels.arena);
     this._setRange('set-duels-ttk', s.duels.ttk);
+
+    this._setRange('set-dm-bots', s.deathmatch?.botCount ?? 4);
+    this._setRange('set-dm-speed', s.deathmatch?.botSpeed ?? 1);
+    this._setRange('set-dm-ttk', s.deathmatch?.ttk ?? 0.7);
 
     $('#set-col-bg').value = s.colors.bg;
     $('#set-col-floor').value = s.colors.floor;

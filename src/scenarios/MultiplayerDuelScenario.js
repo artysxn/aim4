@@ -54,6 +54,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
     this.runDuration = Infinity; // never auto-finishes on the run timer
     this.isMultiplayer = true;
     this.isTracking = this.config.gameMode === 'tracking';
+    this.isDeathmatch = this.config.gameMode === 'deathmatch';
     // Custom games pick the weapon; ranked matchmaking always uses the rifle.
     this.weaponId = this.isTracking
       ? 'tracking'
@@ -149,6 +150,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
       applyCoverGridRepeat(mat, b.size[0], b.size[1]);
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.size[0], b.size[1], b.size[2]), mat);
       mesh.position.set(b.pos[0], b.pos[1], b.pos[2]);
+      if (b.rotationY) mesh.rotation.y = b.rotationY;
       add(mesh);
       this.coverMeshes.push(mesh);
     }
@@ -505,7 +507,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
   }
 
   getGameMode() {
-    return this.isTracking ? 'tracking' : 'duel';
+    return this.isTracking ? 'tracking' : this.isDeathmatch ? 'deathmatch' : 'duel';
   }
 
   getMatchEndsAt() {

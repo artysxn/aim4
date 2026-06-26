@@ -5,6 +5,8 @@
 // Movement is limited only by cover collision — no invisible outer bounds.
 // ---------------------------------------------------------------------------
 
+import { DEATHMATCH_MAP_DATA } from './deathmatchMapData.js';
+
 const FULL_H = 6.0;
 const PEEK_H = 2.4;
 
@@ -195,15 +197,81 @@ function finalizeMap(t) {
 
 export const DUEL_MAPS = [finalizeMap(TRACKING_ARENA), ...MAP_TEMPLATES.map(finalizeMap)];
 
+/**
+ * Free-for-all Deathmatch arena. Unlike duel maps, boxes KEEP their `rotationY`
+ * (rendering + OBB collision + OBB server occlusion all honour it) and all
+ * spawns live on team "A" — the shared FFA spawn pool.
+ */
+export const DEATHMATCH_MAP = {
+  id: DEATHMATCH_MAP_DATA.id,
+  label: DEATHMATCH_MAP_DATA.label,
+  bounds: { ...DEATHMATCH_MAP_DATA.bounds },
+  spawns: { A: DEATHMATCH_MAP_DATA.spawns.A.map((s) => ({ pos: [...s.pos] })) },
+  boxes: DEATHMATCH_MAP_DATA.boxes.map((b) => ({
+    pos: [...b.pos],
+    size: [...b.size],
+    rotationY: b.rotationY || 0
+  }))
+};
+
+const ALL_MAPS = [...DUEL_MAPS, DEATHMATCH_MAP];
+
 export const DEFAULT_MAP_ID = 'tight-poke';
 
-/** Duel rotation — excludes the tracking-only empty arena. */
+/** Duel rotation — excludes the tracking-only empty arena and the FFA map. */
 export function duelMapPool() {
   return DUEL_MAPS.filter((m) => m.id !== 'tracking-arena');
 }
 
 export function getMap(id) {
-  return DUEL_MAPS.find((m) => m.id === id) || DUEL_MAPS[0];
+  return ALL_MAPS.find((m) => m.id === id) || DUEL_MAPS[0];
+}
+
+/**
+ * Distinct spawn points for a free-for-all: greedily picks the spawn farthest
+ * from everyone already placed so players don't telefrag on match start.
+ */
+export function ffaSpawns(map, count) {
+  const pool = teamSpawnList(map, 'A');
+  const chosen = [];
+  const used = new Set();
+  for (let n = 0; n < count; n++) {
+    let bestIdx = -1;
+    let bestGap = -Infinity;
+    for (let i = 0; i < pool.length; i++) {
+      if (used.has(i)) continue;
+      let gap = Infinity;
+      for (const c of chosen) {
+        gap = Math.min(gap, Math.hypot(pool[i].pos[0] - c.pos[0], pool[i].pos[2] - c.pos[2]));
+      }
+      if (chosen.length === 0) gap = Math.random(); // first pick: random seed
+      if (gap > bestGap) {
+        bestGap = gap;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx < 0) bestIdx = Math.floor(Math.random() * pool.length); // pool exhausted → reuse
+    used.add(bestIdx);
+    chosen.push({ pos: [...pool[bestIdx].pos] });
+  }
+  return chosen;
+}
+
+/** A single FFA spawn far from the given avoid points (for respawns). */
+export function ffaRespawn(map, avoid = []) {
+  const pool = teamSpawnList(map, 'A');
+  let best = pool[0];
+  let bestGap = -Infinity;
+  for (const sp of pool) {
+    let gap = Infinity;
+    for (const a of avoid) gap = Math.min(gap, Math.hypot(sp.pos[0] - a[0], sp.pos[2] - a[2]));
+    if (!avoid.length) gap = Math.random();
+    if (gap > bestGap) {
+      bestGap = gap;
+      best = sp;
+    }
+  }
+  return { pos: [...best.pos] };
 }
 
 /** Pick a random map different from `currentId` when possible. */
