@@ -6,23 +6,29 @@
 // ---------------------------------------------------------------------------
 
 import { GridshotScenario } from '../scenarios/GridshotScenario.js';
+import { StarsScenario } from '../scenarios/StarsScenario.js';
+import { MicroflicksScenario } from '../scenarios/MicroflicksScenario.js';
 import { PasuScenario } from '../scenarios/PasuScenario.js';
 import { SpidershotScenario } from '../scenarios/SpidershotScenario.js';
 import { SurvivalScenario } from '../scenarios/SurvivalScenario.js';
 import { ArenaScenario } from '../scenarios/ArenaScenario.js';
 import { DuelsScenario } from '../scenarios/DuelsScenario.js';
 import { RangeScenario } from '../scenarios/RangeScenario.js';
+import { TrackingScenario } from '../scenarios/TrackingScenario.js';
 import { MultiplayerDuelScenario } from '../scenarios/MultiplayerDuelScenario.js';
 
 // Singleplayer scenarios — these are the ones shown as menu cards + leaderboards.
 export const SCENARIOS = {
   gridshot: GridshotScenario,
+  stars: StarsScenario,
+  microflicks: MicroflicksScenario,
   pasu: PasuScenario,
   spidershot: SpidershotScenario,
   survival: SurvivalScenario,
   arena: ArenaScenario,
   duels: DuelsScenario,
-  range: RangeScenario
+  range: RangeScenario,
+  tracking: TrackingScenario
 };
 
 // Scenarios launched outside the card grid (e.g. multiplayer).

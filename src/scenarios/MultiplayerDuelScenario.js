@@ -53,8 +53,22 @@ export class MultiplayerDuelScenario extends BaseScenario {
 
     this.runDuration = Infinity; // never auto-finishes on the run timer
     this.isMultiplayer = true;
+    this.isTracking = this.config.gameMode === 'tracking';
     // Custom games pick the weapon; ranked matchmaking always uses the rifle.
-    this.weaponId = this.config.weapon === 'pistol' ? 'pistol' : 'rifle';
+    this.weaponId = this.isTracking
+      ? 'tracking'
+      : this.config.weapon === 'pistol'
+        ? 'pistol'
+        : 'rifle';
+
+    if (this.isTracking) {
+      this.infiniteAmmo = true;
+      this.weaponBloom = false;
+      this.viewmodelRecoil = false;
+      this.showViewmodel = false;
+      this.weaponTracers = false;
+      this.matchEndsAt = this.config.matchEndsAt ?? null;
+    }
 
     this.scores = this.config.scores || {};
     this.mpStats = this.config.stats || {};
@@ -281,6 +295,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
   applySnapshot(msg) {
     const st = msg.st || Date.now();
     this._updateServerTimeOffset(st);
+    if (msg.matchEndsAt) this.matchEndsAt = msg.matchEndsAt;
 
     const frame = { st, players: new Map() };
     for (const p of msg.players) {
@@ -299,11 +314,16 @@ export class MultiplayerDuelScenario extends BaseScenario {
   }
 
   applyHit(msg) {
-    // Hitmarker + local hits count are handled at fire time from the client raycast.
-    if (msg.shooterId === this.myId) return;
+    if (msg.scores) this.scores = msg.scores;
+    if (msg.stats) this.mpStats = msg.stats;
+    if (this.isTracking && msg.shooterId === this.myId) {
+      if (msg.zone === 'head') this.headshots++;
+      this.crosshair?.hit();
+    }
   }
 
   applyKill(msg) {
+    if (this.isTracking) return;
     this.scores = msg.scores || this.scores;
     if (msg.stats) this.mpStats = msg.stats;
     if (msg.mapId) this.setMap(msg.mapId, { force: true });
@@ -320,7 +340,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
   }
 
   applyShotFired(msg) {
-    if (msg.shooterId === this.myId) return;
+    if (this.isTracking || msg.shooterId === this.myId) return;
     this.engine.audio?.playRemoteShot(msg.x, msg.y, msg.z);
     // Draw a tracer for the opponent's shot from their muzzle to its impact.
     const vm = this.engine.viewmodel;
@@ -434,7 +454,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
 
   // ---- Shooting -----------------------------------------------------------
   onShoot(raycaster) {
-    if (this._dead) return;
+    if (this._dead && !this.isTracking) return;
 
     const colliders = [];
     for (const r of this.remotes.values()) {
@@ -455,8 +475,10 @@ export class MultiplayerDuelScenario extends BaseScenario {
         }
       }
       if (claim) {
-        this.hits++;
-        this.crosshair?.hit();
+        if (!this.isTracking) {
+          this.hits++;
+          this.crosshair?.hit();
+        }
       }
     }
 
@@ -479,7 +501,19 @@ export class MultiplayerDuelScenario extends BaseScenario {
     return this.mpStats;
   }
   getTarget() {
-    return this.target;
+    return this.isTracking ? 0 : this.target;
+  }
+
+  getGameMode() {
+    return this.isTracking ? 'tracking' : 'duel';
+  }
+
+  getMatchEndsAt() {
+    return this.matchEndsAt;
+  }
+
+  setMatchEndsAt(ms) {
+    if (Number.isFinite(ms)) this.matchEndsAt = ms;
   }
 
   getThreats() {

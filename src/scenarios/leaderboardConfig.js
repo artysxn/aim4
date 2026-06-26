@@ -5,23 +5,31 @@ export const COMPETITIVE_CONFIG_KEY = 'competitive';
 /** Competitive runs submit to cloud leaderboards (Practice does not). */
 export const RANKED_SCENARIOS = new Set([
   'gridshot',
+  'stars',
+  'microflicks',
   'pasu',
   'spidershot',
   'survival',
   'arena',
   'duels',
-  'range'
+  'range',
+  'tracking'
 ]);
 
 /** Ranked by total kills in the best timed run. */
 export const KILL_LEADERBOARD_SCENARIOS = new Set([
   'gridshot',
+  'stars',
+  'microflicks',
   'pasu',
   'spidershot',
   'arena',
   'duels',
   'range'
 ]);
+
+/** Ranked by highest score in the best timed run. */
+export const SCORE_LEADERBOARD_SCENARIOS = new Set(['survival', 'tracking']);
 
 export function isRankedScenario(scenario) {
   return RANKED_SCENARIOS.has(scenario);
@@ -33,6 +41,10 @@ export function isLeaderboardEligible(scenario, variant) {
 
 export function isKillLeaderboardScenario(scenario) {
   return KILL_LEADERBOARD_SCENARIOS.has(scenario);
+}
+
+export function isScoreLeaderboardScenario(scenario) {
+  return SCORE_LEADERBOARD_SCENARIOS.has(scenario);
 }
 
 export function configKeyForVariant(variant) {

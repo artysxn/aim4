@@ -22,7 +22,7 @@ import {
 } from '../lib/cloudScores.js';
 import { supabaseConfigured } from '../lib/supabase.js';
 import { MultiplayerController } from '../multiplayer/MultiplayerController.js';
-import { SCORE_TARGETS, MM_SCORE_TARGET } from '../multiplayer/constants.js';
+import { SCORE_TARGETS, MM_SCORE_TARGET, TRACKING_DURATION } from '../multiplayer/constants.js';
 import { getMap } from '../multiplayer/maps.js';
 import { formatServerRegion } from '../multiplayer/regionLabels.js';
 import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, CUSTOM_GAMES_ICON } from '../aim4/icons.js';
@@ -30,12 +30,15 @@ import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 
 const SCENARIO_META = {
   gridshot: { title: 'Gridshot', dualPlay: true },
+  stars: { title: 'Stars', dualPlay: true },
+  microflicks: { title: 'Microflicks', dualPlay: true },
   pasu: { title: 'Pasu', dualPlay: true },
   spidershot: { title: 'Spidershot', dualPlay: true },
   survival: { title: 'Survival', dualPlay: true },
   arena: { title: 'Crossfire', dualPlay: true },
   duels: { title: 'Duels', dualPlay: true },
-  range: { title: 'Range', dualPlay: true }
+  range: { title: 'Range', dualPlay: true },
+  tracking: { title: 'Tracking', dualPlay: true }
 };
 
 const _v = new THREE.Vector3();
@@ -267,6 +270,18 @@ export class UIOverlay {
           <label class="field-check"><input type="checkbox" id="set-grid-vm-recoil" /> Viewmodel recoil</label>`
       },
       {
+        id: 'microflicks',
+        label: 'Microflicks',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-mf-size', 'Dot size', 0.05, 0.5, 0.01)}
+          ${rf('set-mf-count', 'Dots at a time', 1, 8, 1)}
+          <label class="field-check"><input type="checkbox" id="set-mf-float" /> Horizontal drift</label>
+          ${rf('set-mf-float-speed', 'Max drift speed (m/s)', 0.5, 8, 0.5)}
+          ${rf('set-mf-bounds-y', 'Vertical spawn scale', 0.25, 2, 0.05)}
+          ${rf('set-mf-bounds-x', 'Horizontal spawn scale', 0.25, 2, 0.05)}`
+      },
+      {
         id: 'pasu',
         label: 'Pasu',
         body: `
@@ -403,6 +418,14 @@ export class UIOverlay {
           ${rf('set-range-cover-dist', 'Cover distance (m)', 2, 15, 0.5)}
           ${rf('set-range-cover-thick', 'Cover thickness (m)', 0.4, 3, 0.1)}
           ${rf('set-range-cover-height', 'Cover height (m)', 1, 6, 0.2)}`
+      },
+      {
+        id: 'tracking',
+        label: 'Tracking',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-tracking-width', 'Bot width', 0.5, 2.0, 0.05)}
+          ${rf('set-tracking-speed', 'Bot speed', 0.25, 2.0, 0.05)}`
       },
       {
         id: 'share',
@@ -670,8 +693,8 @@ export class UIOverlay {
               <select id="mp-create-target">${this._targetOptions()}</select>
             </div>
             <div class="field field-plain">
-              <div class="field-top"><span class="field-label">Weapon</span></div>
-              <select id="mp-create-weapon"><option value="rifle">Rifle</option><option value="pistol">Pistol</option></select>
+              <div class="field-top"><span class="field-label">Mode</span></div>
+              <select id="mp-create-weapon"><option value="rifle">Rifle</option><option value="pistol">Pistol</option><option value="tracking">Tracking</option></select>
             </div>
             <label class="field-check"><input type="checkbox" id="mp-create-private" /> Private</label>
             <button type="button" class="btn primary btn-block" id="mp-create-btn">Create lobby</button>
@@ -708,8 +731,8 @@ export class UIOverlay {
               <select id="mp-lobby-target">${this._targetOptions()}</select>
             </div>
             <div class="field field-plain">
-              <div class="field-top"><span class="field-label">Weapon</span></div>
-              <select id="mp-lobby-weapon"><option value="rifle">Rifle</option><option value="pistol">Pistol</option></select>
+              <div class="field-top"><span class="field-label">Mode</span></div>
+              <select id="mp-lobby-weapon"><option value="rifle">Rifle</option><option value="pistol">Pistol</option><option value="tracking">Tracking</option></select>
             </div>
             <label class="field-check"><input type="checkbox" id="mp-lobby-private" /> Private</label>
           </div>
@@ -965,6 +988,15 @@ export class UIOverlay {
       draft((d) => { d.gridshot.viewmodelRecoil = e.target.checked; });
     });
 
+    this._bindRange('set-mf-size', (v, d) => { d.microflicks.targetSize = v; });
+    this._bindRange('set-mf-count', (v, d) => { d.microflicks.targetCount = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-mf-float')?.addEventListener('change', (e) => {
+      draft((d) => { d.microflicks.floatEnabled = e.target.checked; });
+    });
+    this._bindRange('set-mf-float-speed', (v, d) => { d.microflicks.floatSpeedMax = v; });
+    this._bindRange('set-mf-bounds-y', (v, d) => { d.microflicks.boundsScaleY = v; });
+    this._bindRange('set-mf-bounds-x', (v, d) => { d.microflicks.boundsScaleX = v; });
+
     this._bindRange('set-pasu-size', (v, d) => { d.pasu.targetSize = v; });
     this._bindRange('set-pasu-count', (v, d) => { d.pasu.targetCount = v; }, { parse: (v) => parseInt(v, 10) });
     $('#set-pasu-mode').addEventListener('change', (e) => {
@@ -1061,6 +1093,8 @@ export class UIOverlay {
     this._bindRange('set-range-cover-dist', (v, d) => { d.range.coverDistance = v; });
     this._bindRange('set-range-cover-thick', (v, d) => { d.range.coverThickness = v; });
     this._bindRange('set-range-cover-height', (v, d) => { d.range.coverHeight = v; });
+    this._bindRange('set-tracking-width', (v, d) => { d.tracking.botWidth = v; });
+    this._bindRange('set-tracking-speed', (v, d) => { d.tracking.botSpeed = v; });
   }
 
   _bindPauseMenu() {
@@ -1259,23 +1293,31 @@ export class UIOverlay {
     // Weapon pick is per-player (client-side feel), shared between the create
     // form and the lobby selector and persisted to settings.
     const applyWeapon = (v) => {
-      const val = v === 'pistol' ? 'pistol' : 'rifle';
+      const val = v === 'pistol' ? 'pistol' : v === 'tracking' ? 'tracking' : 'rifle';
       this.settings.data.weapon.customWeapon = val;
       this.settings.save();
       const a = $('#mp-create-weapon');
       const b = $('#mp-lobby-weapon');
       if (a) a.value = val;
       if (b) b.value = val;
+      this._syncMpModeFields(val);
     };
     applyWeapon(this.settings.data.weapon?.customWeapon || 'rifle');
     $('#mp-create-weapon')?.addEventListener('change', (e) => applyWeapon(e.target.value));
-    $('#mp-lobby-weapon')?.addEventListener('change', (e) => applyWeapon(e.target.value));
+    $('#mp-lobby-weapon')?.addEventListener('change', (e) => {
+      applyWeapon(e.target.value);
+      const lobby = this.mp?.lobby;
+      if (lobby && lobby.hostId === this.mp.myId) {
+        this.mp.setConfig({ weapon: e.target.value });
+      }
+    });
 
     $('#mp-create-btn').addEventListener('click', () => {
       this.mp.create({
         name: name(),
         target: parseInt($('#mp-create-target').value, 10),
-        isPublic: !$('#mp-create-private').checked
+        isPublic: !$('#mp-create-private').checked,
+        weapon: $('#mp-create-weapon').value
       });
     });
 
@@ -1344,6 +1386,42 @@ export class UIOverlay {
     return lobby.players.find((p) => p.id === this.mp.myId) || null;
   }
 
+  _syncMpModeFields(weapon) {
+    const tracking = weapon === 'tracking';
+    const toggle = (id) => {
+      const field = this.root.querySelector(id)?.closest('.field');
+      if (field) field.classList.toggle('hidden', tracking);
+    };
+    toggle('#mp-create-target');
+    toggle('#mp-lobby-target');
+  }
+
+  _mpGoalLabel(lobbyOrMsg) {
+    if (lobbyOrMsg?.gameMode === 'tracking' || lobbyOrMsg?.weapon === 'tracking') {
+      return `${TRACKING_DURATION}s Tracking`;
+    }
+    const target = lobbyOrMsg?.target ?? 0;
+    return target > 0 ? `First to ${target}` : 'Endless';
+  }
+
+  /** Remaining seconds in a tracking duel (server-synchronised). */
+  _mpTrackingRemainingSec() {
+    const endsAt = this._mpMatchEndsAt;
+    if (!endsAt) return TRACKING_DURATION;
+    const sc = this.sceneManager.current;
+    const offset = sc?._serverTimeOffset ?? 0;
+    const serverNow = performance.now() + offset;
+    return Math.max(0, (endsAt - serverNow) / 1000);
+  }
+
+  setMpMatchEndsAt(ms) {
+    if (Number.isFinite(ms)) {
+      this._mpMatchEndsAt = ms;
+      const sc = this.sceneManager.current;
+      sc?.setMatchEndsAt?.(ms);
+    }
+  }
+
   mpStatus(msg, ok = true) {
     const elHome = this.root.querySelector('#mp-status');
     const elLobby = this.root.querySelector('#mp-lobby-status');
@@ -1374,7 +1452,7 @@ export class UIOverlay {
     }
     el.innerHTML = lobbies
       .map((l) => {
-        const goal = l.target > 0 ? `First to ${l.target}` : 'Endless';
+        const goal = this._mpGoalLabel(l);
         return `<div class="mp-lobby-item">
           <div class="mp-lobby-info">
             <span class="mp-lobby-host">${this._esc(l.host)}</span>
@@ -1437,7 +1515,12 @@ export class UIOverlay {
 
     $('#mp-lobby-target').value = String(lobby.target);
     const lobbyWeapon = $('#mp-lobby-weapon');
-    if (lobbyWeapon) lobbyWeapon.value = this.settings.data.weapon?.customWeapon || 'rifle';
+    const weapon = lobby.weapon || 'rifle';
+    if (lobbyWeapon) {
+      lobbyWeapon.value = weapon;
+      lobbyWeapon.disabled = !isHost;
+    }
+    this._syncMpModeFields(weapon);
     $('#mp-lobby-private').checked = lobby.isPublic === false;
     $('#mp-lobby-target').disabled = !isHost;
     $('#mp-lobby-private').disabled = !isHost;
@@ -1458,6 +1541,8 @@ export class UIOverlay {
   beginMpMatch(msg, players) {
     this._mpPlayers = players;
     this._mpTarget = msg.target;
+    this._mpGameMode = msg.gameMode === 'tracking' ? 'tracking' : 'duel';
+    this._mpMatchEndsAt = msg.matchEndsAt ?? null;
     this._mpTabStats = msg.stats || {};
     this._mpMapId = msg.mapId;
     this._resetMpChat();
@@ -1749,7 +1834,9 @@ export class UIOverlay {
         })
         .join('')}</tr>`;
 
-    const goal = this._mpTarget > 0 ? `First to ${this._mpTarget}` : 'Endless';
+    const goal = this._mpGameMode === 'tracking'
+      ? `${TRACKING_DURATION}s Tracking · head 3 · body 2`
+      : this._mpGoalLabel({ target: this._mpTarget, gameMode: this._mpGameMode });
     const net = this._mpNetFooter();
     this.mpTabScoreboard.innerHTML = `
       <div class="mp-tab-board">
@@ -1762,12 +1849,12 @@ export class UIOverlay {
           <thead><tr><th></th>${cols}</tr></thead>
           <tbody>
             ${row('Score', (s) => s.score ?? 0)}
-            ${row('Kills', (s) => s.kills ?? 0)}
-            ${row('Deaths', (s) => s.deaths ?? 0)}
+            ${this._mpGameMode === 'tracking' ? '' : `${row('Kills', (s) => s.kills ?? 0)}
+            ${row('Deaths', (s) => s.deaths ?? 0)}`}
             ${row('Accuracy', (s) => Math.round((s.accuracy ?? 0) * 100) + '%')}
             ${row('Shots', (s) => s.shots ?? 0)}
             ${row('Hits', (s) => s.hits ?? 0)}
-            ${row('Avg TTK', (s) => (s.avgTtk != null ? `${s.avgTtk.toFixed(2)}s` : '—'))}
+            ${this._mpGameMode === 'tracking' ? '' : row('Avg TTK', (s) => (s.avgTtk != null ? `${s.avgTtk.toFixed(2)}s` : '—'))}
           </tbody>
         </table>
         ${net ? `<div class="mp-tab-net">${net}</div>` : ''}
@@ -1801,8 +1888,10 @@ export class UIOverlay {
     if (mapId) this._mpMapId = mapId;
     const players = (lobby && lobby.players) || [];
     const targetVal = this._mpTarget ?? 0;
-    const mapLabel = this._mpMapId ? getMap(this._mpMapId).label : '';
-    const goal = targetVal > 0 ? `First to ${targetVal}` : 'Endless';
+    const goal = this._mpGameMode === 'tracking'
+      ? `Tracking · ${this._mpTrackingRemainingSec().toFixed(1)}s · head 3 · body 2`
+      : this._mpGoalLabel({ target: targetVal, gameMode: this._mpGameMode });
+    const mapLabel = this._mpGameMode === 'tracking' ? 'Empty arena' : (this._mpMapId ? getMap(this._mpMapId).label : '');
     const goalLine = mapLabel ? `${goal} · ${mapLabel}` : goal;
     const rows = players
       .map((p) => {
@@ -1822,7 +1911,12 @@ export class UIOverlay {
     this._updateQueueChip({ inQueue: false });
     this.input.exitLock();
     const won = msg.winnerId === myId;
-    const title = msg.aborted ? 'MATCH ABORTED' : won ? 'VICTORY' : 'DEFEAT';
+    const isTracking = msg.gameMode === 'tracking';
+    let title;
+    if (msg.aborted) title = 'MATCH ABORTED';
+    else if (isTracking && msg.winnerId == null) title = 'DRAW';
+    else if (won) title = 'VICTORY';
+    else title = 'DEFEAT';
     this.root.querySelector('#mp-res-title').textContent = title;
     const players = (lobby && lobby.players) || [];
     const stat = (label, val) =>
@@ -1952,6 +2046,14 @@ export class UIOverlay {
     $('#set-grid-infinite-ammo').checked = s.gridshot.infiniteAmmo !== false;
     $('#set-grid-vm-recoil').checked = s.gridshot.viewmodelRecoil === true;
 
+    const mf = s.microflicks ?? {};
+    this._setRange('set-mf-size', mf.targetSize ?? 0.1);
+    this._setRange('set-mf-count', mf.targetCount ?? 2);
+    $('#set-mf-float').checked = !!mf.floatEnabled;
+    this._setRange('set-mf-float-speed', mf.floatSpeedMax ?? 2);
+    this._setRange('set-mf-bounds-y', mf.boundsScaleY ?? 1);
+    this._setRange('set-mf-bounds-x', mf.boundsScaleX ?? 1);
+
     this._setRange('set-pasu-size', s.pasu?.targetSize ?? 0.38);
     this._setRange('set-pasu-count', s.pasu?.targetCount ?? 3);
     $('#set-pasu-mode').value = s.pasu?.mode || 'clicking';
@@ -2016,6 +2118,8 @@ export class UIOverlay {
     this._setRange('set-range-cover-dist', s.range.coverDistance ?? 4);
     this._setRange('set-range-cover-thick', s.range.coverThickness ?? 1.2);
     this._setRange('set-range-cover-height', s.range.coverHeight ?? 3);
+    this._setRange('set-tracking-width', s.tracking?.botWidth ?? 1);
+    this._setRange('set-tracking-speed', s.tracking?.botSpeed ?? 1);
   }
 
   // -------------------------------------------------------------------------
@@ -2148,7 +2252,7 @@ export class UIOverlay {
   _updateAmmo(sc) {
     if (!this.hudAmmo) return;
     const weapon = this.engine.weapon;
-    const show = this.state === 'playing' && sc?.usesWeapon && !!weapon;
+    const show = this.state === 'playing' && sc?.usesWeapon && !!weapon && sc.showViewmodel !== false;
     this.hudAmmo.classList.toggle('active', !!show);
     if (!show) return;
     if (sc.infiniteAmmo) {
@@ -2362,9 +2466,11 @@ export class UIOverlay {
       } else {
         const lbHint = isKillLeaderboardScenario(scenario)
           ? 'Ranked by kills in best run · '
-          : scenario === 'survival'
-            ? 'Competitive Survival · highest score before failure · '
-            : 'Best score per verified account · ';
+          : scenario === 'tracking'
+            ? 'Competitive Tracking · highest points in 30s · '
+            : scenario === 'survival'
+              ? 'Competitive Survival · highest score before failure · '
+              : 'Best score per verified account · ';
         subtitle.textContent = this.auth?.isLoggedIn
           ? `${lbHint}signed in as ${this._accountLabel()}`
           : `${lbHint}sign in to submit scores`;
@@ -2413,6 +2519,12 @@ export class UIOverlay {
       stat('Accuracy', Math.round(results.accuracy * 100) + '%') +
       stat('Hits / Shots', `${results.hits}/${results.shots}`) +
       stat('Misses', results.misses);
+    const trackingStats =
+      stat('Score', results.score.toLocaleString()) +
+      stat('Time', this._formatTimePlayed(results.timePlayed)) +
+      stat('Accuracy', Math.round(results.accuracy * 100) + '%') +
+      stat('Hits / Shots', `${results.hits}/${results.shots}`) +
+      stat('Headshot %', Math.round(results.critRatio * 100) + '%');
     const defaultStats =
       stat('Score', results.score.toLocaleString()) +
       stat('Accuracy', Math.round(results.accuracy * 100) + '%') +
@@ -2421,7 +2533,11 @@ export class UIOverlay {
       (showCrit ? stat('Crit ratio', Math.round(results.critRatio * 100) + '%') : '') +
       stat('Misses', results.misses);
     this.root.querySelector('#res-stats').innerHTML =
-      isKillLeaderboardScenario(results.scenario) ? killStats : defaultStats;
+      isKillLeaderboardScenario(results.scenario)
+        ? killStats
+        : results.scenario === 'tracking'
+          ? trackingStats
+          : defaultStats;
 
     const { list, error } = await this._fetchLeaderboard(
       results.scenario,

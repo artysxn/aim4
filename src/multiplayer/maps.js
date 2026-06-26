@@ -17,6 +17,15 @@ function spawnWall(x, z, w, d) {
   return b(x, FULL_H / 2, z, w, FULL_H, d);
 }
 
+/** Open floor — no cover. Used for the custom tracking duel mode. */
+const TRACKING_ARENA = {
+  id: 'tracking-arena',
+  label: 'Tracking Arena',
+  bounds: { minX: -14, maxX: 14, minZ: -14, maxZ: 14 },
+  spawns: { A: { pos: [0, 0, 10] }, B: { pos: [0, 0, -10] } },
+  boxes: []
+};
+
 const MAP_TEMPLATES = [
   {
     id: 'tight-poke',
@@ -184,9 +193,14 @@ function finalizeMap(t) {
   };
 }
 
-export const DUEL_MAPS = MAP_TEMPLATES.map(finalizeMap);
+export const DUEL_MAPS = [finalizeMap(TRACKING_ARENA), ...MAP_TEMPLATES.map(finalizeMap)];
 
-export const DEFAULT_MAP_ID = DUEL_MAPS[0].id;
+export const DEFAULT_MAP_ID = 'tight-poke';
+
+/** Duel rotation — excludes the tracking-only empty arena. */
+export function duelMapPool() {
+  return DUEL_MAPS.filter((m) => m.id !== 'tracking-arena');
+}
 
 export function getMap(id) {
   return DUEL_MAPS.find((m) => m.id === id) || DUEL_MAPS[0];
@@ -194,9 +208,10 @@ export function getMap(id) {
 
 /** Pick a random map different from `currentId` when possible. */
 export function pickRandomMap(currentId) {
-  const others = currentId ? DUEL_MAPS.filter((m) => m.id !== currentId) : DUEL_MAPS;
-  const pool = others.length ? others : DUEL_MAPS;
-  return pool[Math.floor(Math.random() * pool.length)];
+  const pool = duelMapPool();
+  const others = currentId ? pool.filter((m) => m.id !== currentId) : pool;
+  const pick = others.length ? others : pool;
+  return pick[Math.floor(Math.random() * pick.length)];
 }
 
 /**

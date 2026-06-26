@@ -246,7 +246,7 @@
       <button id="btn-resnap-all" type="button" style="width:100%;margin-top:8px" title="Snap every box and spawn to the move + scale grids">
         Re-snap all to grid
       </button>
-      <div class="hint">Click to select. <b>Shift-click</b> to add/remove. Scale (E) grows one side only. <b>R</b> / <b>Shift+R</b> rotate boxes 90°.</div>
+      <div class="hint">Click to select. <b>Shift-click</b> to add/remove. Scale freely; snaps to the nearest grid step on release. <b>R</b> / <b>Shift+R</b> rotate 90°.</div>
     </div>
 
     <!-- Selected -->
@@ -582,11 +582,17 @@ function snapToGrid(v, step) {
   return Math.round(v / step) * step;
 }
 
+/** Nearest scale-grid step; never below one grid unit (or 0.01 if grid off). */
+function snapScaleToGrid(v) {
+  if (!scaleSnapVal) return Math.max(0.01, v);
+  const snapped = snapToGrid(v, scaleSnapVal);
+  return Math.max(scaleSnapVal, snapped);
+}
+
 function applyBoxScaleGrid(mesh) {
-  const min = scaleSnapVal;
-  mesh.scale.x = Math.max(min, snapToGrid(mesh.scale.x, scaleSnapVal));
-  mesh.scale.y = Math.max(min, snapToGrid(mesh.scale.y, scaleSnapVal));
-  mesh.scale.z = Math.max(min, snapToGrid(mesh.scale.z, scaleSnapVal));
+  mesh.scale.x = snapScaleToGrid(mesh.scale.x);
+  mesh.scale.y = snapScaleToGrid(mesh.scale.y);
+  mesh.scale.z = snapScaleToGrid(mesh.scale.z);
 }
 
 function localDragOffset(vec) {
@@ -597,16 +603,19 @@ function beginScaleDrag() {
   const obj = primary();
   if (!obj || obj.userData.kind !== 'box' || selected.length !== 1 || transform.mode !== 'scale') return null;
   const ax = transform.axis || '';
-  // Only pure single-axis arrows (X / Y / Z) do one-sided scaling — not the
-  // planar (XY/YZ/XZ) or uniform (XYZ) handles.
-  if (!/^[XYZ]$/.test(ax)) return null;
-  const axis = ax === 'X' ? 'x' : ax === 'Y' ? 'y' : 'z';
-  if (!transform.pointStart) return null;
-  // pointStart is a world-space offset from the object center (not a world position).
-  const localPt = localDragOffset(transform.pointStart);
+  if (!ax || ax === 'E') return null;
+  const isSingleAxis = /^[XYZ]$/.test(ax);
+  let axis = null;
+  let fixMax = false;
+  if (isSingleAxis && transform.pointStart) {
+    axis = ax === 'X' ? 'x' : ax === 'Y' ? 'y' : 'z';
+    const localPt = localDragOffset(transform.pointStart);
+    fixMax = localPt[axis] < 0;
+  }
   return {
     axis,
-    fixMax: localPt[axis] < 0,
+    axisName: ax,
+    fixMax,
     pos: obj.position.clone(),
     scale: obj.scale.clone(),
     quat: obj.quaternion.clone()
@@ -641,10 +650,16 @@ function applyOneSidedScale(obj, start) {
   applyScaleAndAnchor(obj, start, obj.scale[start.axis]);
 }
 
-// On release: snap the dragged axis to the grid once, keeping the fixed face.
+// On release: snap affected axes to the nearest grid step (once).
 function endScaleDrag(obj, start) {
-  const snapped = Math.max(scaleSnapVal, snapToGrid(obj.scale[start.axis], scaleSnapVal));
-  applyScaleAndAnchor(obj, start, snapped);
+  if (start.axis) {
+    applyScaleAndAnchor(obj, start, snapScaleToGrid(obj.scale[start.axis]));
+  } else {
+    const ax = start.axisName;
+    if (ax.includes('X')) obj.scale.x = snapScaleToGrid(obj.scale.x);
+    if (ax.includes('Y')) obj.scale.y = snapScaleToGrid(obj.scale.y);
+    if (ax.includes('Z')) obj.scale.z = snapScaleToGrid(obj.scale.z);
+  }
   obj.material.color.copy(heightColor(obj.scale.y));
   syncProps();
   updateBounds();
@@ -701,7 +716,9 @@ function resnapAll() {
 
 function syncTransformSnap() {
   transform.setTranslationSnap(moveSnapVal || null);
-  transform.setScaleSnap(scaleSnapVal);
+  // Scale is always free while dragging; we snap on release, not via the gizmo.
+  if (transform.mode !== 'scale') transform.setScaleSnap(scaleSnapVal);
+  else transform.setScaleSnap(null);
 }
 
 syncTransformSnap();
@@ -1053,16 +1070,15 @@ function onGizmoChange() {
   if (!obj) return;
   if (obj.userData.kind === 'box' && transform.mode === 'scale' && transform.dragging && selected.length === 1) {
     if (!scaleDragStart) scaleDragStart = beginScaleDrag();
-    if (scaleDragStart) {
+    if (scaleDragStart?.axis) {
       applyOneSidedScale(obj, scaleDragStart);
-      obj.material.color.copy(heightColor(obj.scale.y));
-      syncProps();
-      updateBounds();
-      return;
     }
+    obj.material.color.copy(heightColor(obj.scale.y));
+    syncProps();
+    updateBounds();
+    return;
   }
-  if (obj.userData.kind === 'box') {
-    applyBoxScaleGrid(obj);
+  if (obj.userData.kind === 'box' && transform.mode !== 'scale') {
     obj.material.color.copy(heightColor(obj.scale.y));
   }
   syncProps();
@@ -1084,8 +1100,13 @@ function bindBoxProp(id, apply) {
     const v = parseFloat(el(id).value);
     if (!Number.isFinite(v)) return;
     apply(obj, v);
-    applyBoxScaleGrid(obj);
     obj.material.color.copy(heightColor(obj.scale.y));
+    updateBounds();
+  });
+  el(id).addEventListener('change', () => {
+    const obj = primary();
+    if (!obj || obj.userData.kind !== 'box' || selected.length !== 1) return;
+    if (id === 'p-w' || id === 'p-h' || id === 'p-d') applyBoxScaleGrid(obj);
     syncProps();
     updateBounds();
   });
@@ -1262,6 +1283,7 @@ function currentMode() {
 function setMode(mode) {
   if (selected.length > 1 && mode === 'scale') mode = 'translate';
   transform.setMode(mode);
+  syncTransformSnap();
   document.querySelectorAll('[data-mode]').forEach((b2) => b2.classList.toggle('active', b2.dataset.mode === mode));
 }
 function toggleMode() {
@@ -1279,13 +1301,6 @@ el('snap-move').addEventListener('change', (e) => {
 el('snap-scale').addEventListener('change', (e) => {
   scaleSnapVal = parseFloat(e.target.value) || 0.5;
   syncTransformSnap();
-  const obj = primary();
-  if (obj?.userData.kind === 'box' && selected.length === 1) {
-    applyBoxScaleGrid(obj);
-    obj.material.color.copy(heightColor(obj.scale.y));
-    syncProps();
-    updateBounds();
-  }
 });
 el('btn-resnap-all').addEventListener('click', resnapAll);
 

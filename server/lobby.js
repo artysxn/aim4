@@ -17,7 +17,11 @@ import {
   STAND_EYE,
   eyeOffset,
   SPAWN_GRACE,
-  SNAPSHOT_EVERY
+  SNAPSHOT_EVERY,
+  TRACKING_DURATION,
+  TRACKING_HEAD_PTS,
+  TRACKING_BODY_PTS,
+  TRACKING_MAP_ID
 } from '../src/multiplayer/constants.js';
 import { getMap, spawnFor, pickRandomMap, spawnPair } from '../src/multiplayer/maps.js';
 import { resolveShot } from './hitscan.js';
@@ -30,6 +34,7 @@ import { resolveShotDirection } from '../src/utils/shotAccuracy.js';
 import { MatchmakingQueue, createRankedLobby } from './matchmaking.js';
 
 const VALID_TARGETS = new Set([0, 13, 30, 60, 100]);
+const VALID_WEAPONS = new Set(['rifle', 'pistol', 'tracking']);
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous 0/O/1/I
 
 // Health model: a body shot does 1, so you survive three body hits and die on
@@ -38,8 +43,16 @@ const MAX_HP = 4;
 const BODY_DMG = 1;
 const HEAD_DMG = MAX_HP;
 
+function lobbyGameMode(lobby) {
+  return lobby.weapon === 'tracking' ? 'tracking' : 'duel';
+}
+
 function freshStats() {
   return { deaths: 0, shots: 0, hits: 0, ttkSum: 0, ttkCount: 0 };
+}
+
+function isTrackingLobby(lobby) {
+  return lobbyGameMode(lobby) === 'tracking';
 }
 
 let nextPlayerId = 1;
@@ -156,15 +169,18 @@ export class MultiplayerServer {
     while (this.lobbies.has(code)) code = randomCode();
 
     const target = VALID_TARGETS.has(msg.target) ? msg.target : 13;
+    const weapon = VALID_WEAPONS.has(msg.weapon) ? msg.weapon : 'rifle';
     const lobby = {
       code,
       hostId: player.id,
       players: [player],
-      mapId: null, // chosen randomly when the match starts / each round
+      mapId: null, // chosen when the match starts / each round
       target,
+      weapon,
       isPublic: msg.isPublic !== false, // default public
       started: false,
-      scores: {}
+      scores: {},
+      matchEndsAt: null
     };
     this.lobbies.set(code, lobby);
     player.lobby = lobby;
@@ -229,6 +245,7 @@ export class MultiplayerServer {
     if (!lobby || !lobby.started) return;
 
     lobby.started = false;
+    lobby.matchEndsAt = null;
     for (const p of lobby.players) {
       p.ready = false;
       p.dead = false;
@@ -259,6 +276,7 @@ export class MultiplayerServer {
     if (!lobby || lobby.hostId !== player.id || lobby.started) return;
     if (VALID_TARGETS.has(msg.target)) lobby.target = msg.target;
     if (typeof msg.isPublic === 'boolean') lobby.isPublic = msg.isPublic;
+    if (VALID_WEAPONS.has(msg.weapon)) lobby.weapon = msg.weapon;
     this._broadcastLobby(lobby);
     this._pushLobbyList();
   }
@@ -280,7 +298,9 @@ export class MultiplayerServer {
   /** Start a ranked or custom lobby match (shared setup). */
   _beginMatch(lobby) {
     lobby.started = true;
-    lobby.mapId = pickRandomMap(lobby.mapId).id;
+    const tracking = isTrackingLobby(lobby);
+    lobby.mapId = tracking ? TRACKING_MAP_ID : pickRandomMap(lobby.mapId).id;
+    lobby.matchEndsAt = tracking ? Date.now() + TRACKING_DURATION * 1000 : null;
     lobby.scores = {};
     for (const p of lobby.players) {
       lobby.scores[p.id] = 0;
@@ -297,11 +317,17 @@ export class MultiplayerServer {
         t: S2C.MATCH_START,
         mapId: lobby.mapId,
         target: lobby.target,
+        weapon: lobby.weapon,
+        gameMode: lobbyGameMode(lobby),
         spawns,
         scores: lobby.scores,
         stats,
         isMatchmade: !!lobby.isMatchmade
       };
+      if (tracking) {
+        startMsg.duration = TRACKING_DURATION;
+        startMsg.matchEndsAt = lobby.matchEndsAt;
+      }
       if (lobby.isMatchmade && opp) {
         startMsg.opponentName = opp.name;
         startMsg.opponentElo = lobby.mmElos?.[opp.id];
@@ -394,7 +420,10 @@ export class MultiplayerServer {
       speedHoriz: Number.isFinite(msg.speedHoriz) ? Math.max(0, msg.speedHoriz) : 0
     };
     const seed = Number.isFinite(msg.spreadSeed) ? msg.spreadSeed >>> 0 : 0;
-    const resolved = resolveShotDirection(aim, accState, seed);
+    const tracking = isTrackingLobby(lobby);
+    const resolved = tracking
+      ? { x: aim[0], y: aim[1], z: aim[2] }
+      : resolveShotDirection(aim, accState, seed);
     const d = [resolved.x, resolved.y, resolved.z];
     const rtt = Number.isFinite(msg.rtt) ? Math.max(0, Math.min(800, msg.rtt)) : player.rttMs;
     if (Number.isFinite(msg.rtt)) player.rttMs = rtt;
@@ -430,8 +459,12 @@ export class MultiplayerServer {
     this._simTick++;
     for (const lobby of this.lobbies.values()) {
       if (!lobby.started) continue;
+      if (isTrackingLobby(lobby) && lobby.matchEndsAt && now >= lobby.matchEndsAt) {
+        this._endTrackingMatch(lobby);
+        continue;
+      }
       this._resolveShots(lobby);
-      this._resolveRespawns(lobby, now);
+      if (!isTrackingLobby(lobby)) this._resolveRespawns(lobby, now);
       for (const p of lobby.players) pushTransformHistory(p, now);
       if (this._simTick % SNAPSHOT_EVERY === 0) {
         this._broadcastSnapshot(lobby, now);
@@ -441,18 +474,20 @@ export class MultiplayerServer {
 
   _resolveShots(lobby) {
     const map = getMap(lobby.mapId);
+    const tracking = isTrackingLobby(lobby);
     for (const shooter of lobby.players) {
       if (!shooter.shotQueue.length) continue;
       const shots = shooter.shotQueue;
       shooter.shotQueue = [];
-      if (shooter.dead) continue;
+      if (shooter.dead && !tracking) continue;
 
       for (const shot of shots) {
         // Client-reported hit: if their screen showed a hit, accept it.
         if (shot.victimId != null && shot.zone) {
           const victim = lobby.players.find((p) => p.id === shot.victimId);
-          if (victim && victim !== shooter && !victim.dead) {
-            this._registerHit(lobby, shooter, victim, shot.zone);
+          if (victim && victim !== shooter && (!victim.dead || tracking)) {
+            if (tracking) this._registerTrackingHit(lobby, shooter, victim, shot.zone);
+            else this._registerHit(lobby, shooter, victim, shot.zone);
             continue;
           }
         }
@@ -462,7 +497,7 @@ export class MultiplayerServer {
 
         let best = null;
         for (const victim of lobby.players) {
-          if (victim === shooter || victim.dead) continue;
+          if (victim === shooter || (victim.dead && !tracking)) continue;
 
           for (const t of sampleTimes) {
             const sample = sampleTransformAt(victim, t);
@@ -478,9 +513,59 @@ export class MultiplayerServer {
         }
         if (!best) continue;
 
-        this._registerHit(lobby, shooter, best.victim, best.res.zone);
+        if (tracking) this._registerTrackingHit(lobby, shooter, best.victim, best.res.zone);
+        else this._registerHit(lobby, shooter, best.victim, best.res.zone);
       }
     }
+  }
+
+  _registerTrackingHit(lobby, shooter, victim, zone) {
+    if (!shooter.stats) shooter.stats = freshStats();
+    shooter.stats.hits++;
+    const points = zone === 'head' ? TRACKING_HEAD_PTS : TRACKING_BODY_PTS;
+    lobby.scores[shooter.id] = (lobby.scores[shooter.id] || 0) + points;
+    const stats = this._buildStats(lobby);
+    this._broadcast(lobby, {
+      t: S2C.HIT,
+      shooterId: shooter.id,
+      victimId: victim.id,
+      zone,
+      points,
+      scores: { ...lobby.scores },
+      stats
+    });
+  }
+
+  _endTrackingMatch(lobby) {
+    if (!lobby.started) return;
+    lobby.started = false;
+    lobby.matchEndsAt = null;
+
+    let winnerId = null;
+    let best = -Infinity;
+    let tied = false;
+    for (const p of lobby.players) {
+      const s = lobby.scores[p.id] || 0;
+      if (s > best) {
+        best = s;
+        winnerId = p.id;
+        tied = false;
+      } else if (s === best) {
+        tied = true;
+      }
+    }
+    if (tied) winnerId = null;
+
+    this._broadcast(lobby, {
+      t: S2C.MATCH_END,
+      winnerId,
+      scores: { ...lobby.scores },
+      gameMode: 'tracking',
+      timedOut: true
+    });
+    for (const p of lobby.players) p.ready = false;
+    this._broadcastLobby(lobby);
+    this._pushLobbyList();
   }
 
   _registerHit(lobby, shooter, victim, zone) {
@@ -615,7 +700,9 @@ export class MultiplayerServer {
       crouch: round2(p.transform.crouch),
       dead: p.dead
     }));
-    this._broadcast(lobby, { t: S2C.SNAPSHOT, players, st: now });
+    const snap = { t: S2C.SNAPSHOT, players, st: now };
+    if (isTrackingLobby(lobby) && lobby.matchEndsAt) snap.matchEndsAt = lobby.matchEndsAt;
+    this._broadcast(lobby, snap);
   }
 
   // ---- Send helpers -------------------------------------------------------
@@ -625,6 +712,8 @@ export class MultiplayerServer {
       hostId: lobby.hostId,
       mapId: lobby.mapId,
       target: lobby.target,
+      weapon: lobby.weapon || 'rifle',
+      gameMode: lobbyGameMode(lobby),
       isPublic: lobby.isPublic,
       started: lobby.started,
       isMatchmade: !!lobby.isMatchmade,
@@ -647,8 +736,10 @@ export class MultiplayerServer {
       out.push({
         code: lobby.code,
         host: host ? host.name : 'Host',
-        map: 'Random maps',
+        map: isTrackingLobby(lobby) ? 'Tracking' : 'Random maps',
         target: lobby.target,
+        weapon: lobby.weapon || 'rifle',
+        gameMode: lobbyGameMode(lobby),
         players: lobby.players.length,
         max: MAX_PLAYERS
       });

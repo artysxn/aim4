@@ -35,7 +35,7 @@ create table if not exists public.profiles (
 create table if not exists public.scores (
   id bigint generated always as identity primary key,
   user_id uuid not null references auth.users on delete cascade,
-  scenario text not null, -- gridshot | pasu | spidershot | survival | arena | duels | range | …
+  scenario text not null, -- gridshot | stars | microflicks | tracking | pasu | …
   config_key text not null,
   score integer not null,
   accuracy real,
@@ -203,7 +203,11 @@ security definer
 set search_path = public
 as $$
 begin
-  if p_scenario in ('gridshot', 'pasu', 'spidershot', 'arena', 'duels', 'range') then
+  -- Kill-ranked: gridshot, stars, microflicks, pasu, spidershot, arena, duels, range
+  -- Score-ranked: survival, tracking (else branch)
+  if p_scenario in (
+    'gridshot', 'stars', 'microflicks', 'pasu', 'spidershot', 'arena', 'duels', 'range'
+  ) then
     return query
     select distinct on (s.user_id)
       s.user_id,
@@ -268,7 +272,9 @@ security definer
 set search_path = public
 as $$
 begin
-  if p_scenario in ('gridshot', 'pasu', 'spidershot', 'arena', 'duels', 'range') then
+  if p_scenario in (
+    'gridshot', 'stars', 'microflicks', 'pasu', 'spidershot', 'arena', 'duels', 'range'
+  ) then
     return query
     select
       ranked.user_id,

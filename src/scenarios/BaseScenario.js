@@ -152,7 +152,7 @@ export class BaseScenario {
   shoot(recoil = null, bloom = 0, shotIndex = 0, punch = null) {
     if (!this.running) return;
     this.shotsFired++;
-    this.engine.audio?.playLocalShot();
+    if (this.weaponId !== 'tracking') this.engine.audio?.playLocalShot();
 
     const cam = this.camera;
     const input = this.engine.player?.input;
@@ -206,12 +206,14 @@ export class BaseScenario {
 
     this.onShoot(_raycaster);
 
-    // Shared weapon juice.
+    // Shared weapon juice (optional — tracking duels omit gun + tracers).
     const vm = this.engine.viewmodel;
-    if (vm) {
+    if (vm && this.showViewmodel !== false) {
       const recoil = this.viewmodelRecoil !== false;
       vm.fire({ recoil });
-      vm.spawnTracer(vm.getMuzzlePosition(_muzzle), this._lastImpact);
+      if (this.weaponTracers !== false) {
+        vm.spawnTracer(vm.getMuzzlePosition(_muzzle), this._lastImpact);
+      }
       if (recoil) {
         const p = punch || viewPunchImpulse(shotIndex);
         vm.punch(p.pitch, p.yaw);

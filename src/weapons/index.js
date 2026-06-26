@@ -7,6 +7,7 @@
 
 import * as rifle from './ak47.js';
 import * as pistol from './pistol.js';
+import * as tracking from './tracking.js';
 
 function toSpec(id, label, model, automatic, m) {
   return {
@@ -31,7 +32,8 @@ function toSpec(id, label, model, automatic, m) {
 
 export const WEAPONS = {
   rifle: toSpec('rifle', 'Rifle', 'rifle', true, rifle),
-  pistol: toSpec('pistol', 'Pistol', 'pistol', false, pistol)
+  pistol: toSpec('pistol', 'Pistol', 'pistol', false, pistol),
+  tracking: toSpec('tracking', 'Tracking', 'rifle', true, tracking)
 };
 
 export const DEFAULT_WEAPON = 'rifle';

@@ -59,9 +59,20 @@ export class MultiplayerController {
       this._leaveSingleplayerIfActive();
       this._startMatch(msg);
     };
-    net.onSnapshot = (msg) => this._scenario()?.applySnapshot(msg);
+    net.onSnapshot = (msg) => {
+      this._scenario()?.applySnapshot(msg);
+      if (msg.matchEndsAt) this.ui.setMpMatchEndsAt?.(msg.matchEndsAt);
+    };
     net.onShotFired = (msg) => this._scenario()?.applyShotFired?.(msg);
-    net.onHit = (msg) => this._scenario()?.applyHit(msg);
+    net.onHit = (msg) => {
+      this._scenario()?.applyHit(msg);
+      if (msg.scores) {
+        const sc = this._scenario();
+        if (sc) sc.scores = msg.scores;
+        this.ui.updateMpScore(msg.scores, this.lobby, this.ui._mpMapId);
+        if (msg.stats) this.ui.updateMpTabScoreboard(msg.stats);
+      }
+    };
     net.onKill = (msg) => {
       this._scenario()?.applyKill(msg);
       this.ui.updateMpScore(msg.scores, this.lobby, msg.mapId);
@@ -143,10 +154,10 @@ export class MultiplayerController {
   }
 
   // ---- User actions -------------------------------------------------------
-  async create({ name, target, isPublic }) {
+  async create({ name, target, isPublic, weapon }) {
     if (!(await this._ensureConnected())) return;
     this.browsing = false;
-    this.net.createLobby({ name, target, isPublic });
+    this.net.createLobby({ name, target, isPublic, weapon });
   }
 
   async join({ name, code }) {
@@ -225,10 +236,12 @@ export class MultiplayerController {
     this.inMatch = true;
     this.inQueue = false;
     this.browsing = false;
-    // Ranked matchmaking is always the rifle; custom games use the player's pick.
-    const weapon = msg.isMatchmade
-      ? 'rifle'
-      : this.settings.data.weapon?.customWeapon || 'rifle';
+    const isTracking = msg.gameMode === 'tracking';
+    const weapon = isTracking
+      ? 'tracking'
+      : msg.isMatchmade
+        ? 'rifle'
+        : this.settings.data.weapon?.customWeapon || 'rifle';
     this.sceneManager.load('mpduel', {
       net: this.net,
       myId: this.myId,
@@ -239,6 +252,9 @@ export class MultiplayerController {
       stats: msg.stats,
       players,
       weapon,
+      gameMode: isTracking ? 'tracking' : 'duel',
+      matchEndsAt: msg.matchEndsAt,
+      duration: msg.duration,
       isMatchmade: !!msg.isMatchmade
     });
     this.ui.beginMpMatch(msg, players);
@@ -248,6 +264,7 @@ export class MultiplayerController {
     this.inMatch = false;
     this.input.exitLock();
     this.sceneManager.unload();
+    this.ui._mpMatchEndsAt = null;
     this.ui._resetMpChat?.();
     this.ui._hideMpTabScoreboard?.();
 

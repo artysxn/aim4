@@ -47,7 +47,7 @@ const DEFAULTS = {
   },
   weapon: {
     aimpunch: true, // view-punch camera kick when firing (toggle for those who dislike it)
-    customWeapon: 'rifle' // weapon used in custom games ('rifle' | 'pistol')
+    customWeapon: 'rifle' // custom games: 'rifle' | 'pistol' | 'tracking'
   },
   gridshot: {
     targetSize: 0.55,
@@ -136,6 +136,18 @@ const DEFAULTS = {
     coverDistance: 4, // metres from player centre
     coverThickness: 1.2, // box depth (m)
     coverHeight: 3.0 // box height (m)
+  },
+  tracking: {
+    botWidth: 1.0, // uniform scale on bot body/head radius (0.5–2.0)
+    botSpeed: 1.0 // multiplier on default run speed (215 u/s)
+  },
+  microflicks: {
+    targetSize: 0.1,
+    targetCount: 2,
+    floatEnabled: false,
+    floatSpeedMax: 2.0,
+    boundsScaleX: 1.0,
+    boundsScaleY: 1.0
   }
 };
 

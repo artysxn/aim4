@@ -10,6 +10,17 @@ export const COMPETITIVE_PRESETS = {
     boundsScaleX: 1.2,
     mode: 'clicking'
   },
+  stars: {
+    runDuration: 30,
+    targetSize: 0.1,
+    targetCount: 200
+  },
+  microflicks: {
+    runDuration: 30,
+    targetSize: 0.1,
+    targetCount: 2,
+    randomSpawnChance: 0.1
+  },
   pasu: {
     runDuration: 30,
     targetSize: 0.15,
@@ -19,7 +30,7 @@ export const COMPETITIVE_PRESETS = {
   },
   arena: {
     runDuration: 30,
-    crossDuration: 350,
+    crossDuration: 475,
     peekHold: 475,
     columns: 5,
     columnRadius: 0.75,
@@ -40,6 +51,11 @@ export const COMPETITIVE_PRESETS = {
     coverDistance: 4,
     coverThickness: 1.5,
     coverHeight: 3
+  },
+  tracking: {
+    runDuration: 30,
+    botWidth: 1.0,
+    botSpeed: 1.0
   },
   spidershot: {
     runDuration: 30,

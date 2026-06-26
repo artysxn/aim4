@@ -50,6 +50,13 @@ export const SCORE_TARGETS = [
 /** Ranked matchmaking duels always use this win target. */
 export const MM_SCORE_TARGET = 30;
 
+/** Custom-game tracking duel — empty arena, timed score race. */
+export const TRACKING_DURATION = 30; // seconds
+export const TRACKING_RPM = 600;
+export const TRACKING_HEAD_PTS = 3;
+export const TRACKING_BODY_PTS = 2;
+export const TRACKING_MAP_ID = 'tracking-arena';
+
 export const RESPAWN_DELAY = 1.4; // seconds between death and respawn
 export const SPAWN_GRACE = 0.5; // seconds after spawn where keyboard movement is locked
 export const MAX_PLAYERS = 2; // a duel is 1v1

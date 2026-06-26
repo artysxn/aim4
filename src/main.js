@@ -45,7 +45,7 @@ engine.onUpdate = (dt) => {
   // First-person weapon visuals: the viewmodel follows the camera during any
   // active weapon run (every scenario now uses the AK).
   const sc = sceneManager.current;
-  const inFP = !!(sc?.usesWeapon && sc.running);
+  const inFP = !!(sc?.usesWeapon && sc.running && sc.showViewmodel !== false);
   viewmodel.setVisible(inFP);
   const motion = engine.player?.enabled
     ? {
