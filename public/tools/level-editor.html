@@ -597,9 +597,11 @@ function beginScaleDrag() {
   const obj = primary();
   if (!obj || obj.userData.kind !== 'box' || selected.length !== 1 || transform.mode !== 'scale') return null;
   const ax = transform.axis || '';
-  if (!ax || /XY|XYZ|E/.test(ax)) return null;
-  const axis = ax.includes('X') ? 'x' : ax.includes('Y') ? 'y' : ax.includes('Z') ? 'z' : null;
-  if (!axis || !transform.pointStart) return null;
+  // Only pure single-axis arrows (X / Y / Z) do one-sided scaling — not the
+  // planar (XY/YZ/XZ) or uniform (XYZ) handles.
+  if (!/^[XYZ]$/.test(ax)) return null;
+  const axis = ax === 'X' ? 'x' : ax === 'Y' ? 'y' : 'z';
+  if (!transform.pointStart) return null;
   // pointStart is a world-space offset from the object center (not a world position).
   const localPt = localDragOffset(transform.pointStart);
   return {
@@ -611,27 +613,41 @@ function beginScaleDrag() {
   };
 }
 
-function applyOneSidedScale(obj, start) {
+// Set one axis to `newS` and shift position so the face opposite the dragged
+// handle stays exactly where it was at drag start.
+function applyScaleAndAnchor(obj, start, newS) {
   const i = start.axis;
-  let newS = obj.scale[i];
-  newS = Math.max(scaleSnapVal, snapToGrid(newS, scaleSnapVal));
-  // TC can leak into other axes — restore them from drag-start snapshot.
   obj.scale.copy(start.scale);
-  obj.scale[i] = newS;
+  obj.scale[i] = Math.max(0.01, newS);
 
   const oldHalf = start.scale[i] / 2;
-  const newHalf = newS / 2;
+  const newHalf = obj.scale[i] / 2;
   const outDir = new THREE.Vector3();
   outDir[i] = 1;
   outDir.applyQuaternion(start.quat);
 
   if (start.fixMax) {
     const fixedMax = start.pos.clone().add(outDir.clone().multiplyScalar(oldHalf));
-    obj.position.copy(fixedMax.sub(outDir.multiplyScalar(newHalf)));
+    obj.position.copy(fixedMax.sub(outDir.clone().multiplyScalar(newHalf)));
   } else {
-    const fixedMin = start.pos.clone().sub(outDir.multiplyScalar(oldHalf));
-    obj.position.copy(fixedMin.add(outDir.multiplyScalar(newHalf)));
+    const fixedMin = start.pos.clone().sub(outDir.clone().multiplyScalar(oldHalf));
+    obj.position.copy(fixedMin.add(outDir.clone().multiplyScalar(newHalf)));
   }
+}
+
+// Live drag: follow the cursor smoothly with NO grid snapping (snapping every
+// frame is what made the box appear to grow and shrink at the same time).
+function applyOneSidedScale(obj, start) {
+  applyScaleAndAnchor(obj, start, obj.scale[start.axis]);
+}
+
+// On release: snap the dragged axis to the grid once, keeping the fixed face.
+function endScaleDrag(obj, start) {
+  const snapped = Math.max(scaleSnapVal, snapToGrid(obj.scale[start.axis], scaleSnapVal));
+  applyScaleAndAnchor(obj, start, snapped);
+  obj.material.color.copy(heightColor(obj.scale.y));
+  syncProps();
+  updateBounds();
 }
 
 function rotateSelected(dir) {
@@ -708,9 +724,15 @@ transform.addEventListener('dragging-changed', (e) => {
     } else {
       pivotDragStart = null;
     }
-  } else if (beforeDrag) {
-    pushUndoState(beforeDrag);
-    beforeDrag = null;
+  } else {
+    const obj = primary();
+    if (scaleDragStart && obj && obj.userData.kind === 'box') {
+      endScaleDrag(obj, scaleDragStart);
+    }
+    if (beforeDrag) {
+      pushUndoState(beforeDrag);
+      beforeDrag = null;
+    }
     pivotDragStart = null;
     scaleDragStart = null;
     syncTransformSnap();
