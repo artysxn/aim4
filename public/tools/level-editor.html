@@ -143,9 +143,9 @@
     <div id="legend" class="panelcard">
       <h3>Legend</h3>
       <div><span class="dot" style="background:#f52525"></span><b>Red box</b> = arena bounds</div>
-      <div><span class="dot" style="background:var(--a)"></span>Spawn A</div>
-      <div><span class="dot" style="background:var(--b)"></span>Spawn B</div>
-      <div style="margin-top:4px">Darker box = taller cover</div>
+      <div><span class="dot" style="background:var(--a)"></span>Team A spawns (cyan)</div>
+      <div><span class="dot" style="background:var(--b)"></span>Team B spawns (orange)</div>
+      <div style="margin-top:4px">Multiple spawns per team — game picks one at random</div>
     </div>
     <div id="navhelp" class="panelcard">
       <h3>Navigate (Blender-style)</h3>
@@ -153,6 +153,7 @@
       <div><span class="k">Middle-drag</span> — orbit (yaw / pitch)</div>
       <div><span class="k">Shift + Middle</span> — pan</div>
       <div><span class="k">Right-drag</span> — pan</div>
+      <div><span class="k">Shift-click</span> — add / remove from selection</div>
       <div><span class="k">Wheel</span> — zoom · <span class="k">F</span> — frame</div>
     </div>
   </div>
@@ -194,21 +195,26 @@
         <button id="add-box">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg>Add Box
         </button>
-        <button id="add-spawn">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5 8 12 8 12s8-7 8-12a8 8 0 0 0-8-8z"/></svg>Add Spawn
+      </div>
+      <div class="seg c2" style="margin-top:8px">
+        <button id="add-spawn-a">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5 8 12 8 12s8-7 8-12a8 8 0 0 0-8-8z"/></svg>Add spawn A
+        </button>
+        <button id="add-spawn-b">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5 8 12 8 12s8-7 8-12a8 8 0 0 0-8-8z"/></svg>Add spawn B
         </button>
       </div>
-      <div class="hint">New objects appear at the view center. Spawns are where the two duelists start (A &amp; B are required by the game).</div>
+      <div class="hint">Add multiple spawns per team — the game picks one at random on spawn and respawn. Each team needs at least one spawn.</div>
     </div>
 
     <!-- Transform -->
     <div class="sec">
       <h2>Transform</h2>
       <div class="seg c2">
-        <button data-mode="translate" class="active" title="Move — drag the colored arrows (W / G)">
+        <button data-mode="translate" class="active" title="Move — drag the colored arrows (W)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>Move
         </button>
-        <button data-mode="scale" title="Scale — drag the axis handles to resize X / Y / Z (E / S)">
+        <button id="mode-scale" data-mode="scale" title="Scale — drag the axis handles to resize X / Y / Z (E toggles)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3h-6M21 3v6M21 3l-7 7M3 21h6M3 21v-6M3 21l7-7"/></svg>Scale
         </button>
       </div>
@@ -218,8 +224,8 @@
         <button id="del" class="danger" title="Delete (Del / X)">Delete</button>
       </div>
       <div class="row" style="margin-top:10px">
-        <label class="lbl">Snap (m)</label>
-        <select id="snap" class="grow">
+        <label class="lbl">Move snap</label>
+        <select id="snap-move" class="grow">
           <option value="0">Off</option>
           <option value="0.1">0.1</option>
           <option value="0.25">0.25</option>
@@ -227,7 +233,19 @@
           <option value="1">1.0</option>
         </select>
       </div>
-      <div class="hint">Pick an object, then drag the on-screen gizmo. In <b>Scale</b> mode each axis handle resizes that side only.</div>
+      <div class="row tight">
+        <label class="lbl">Scale grid</label>
+        <select id="snap-scale" class="grow">
+          <option value="0.1">0.1</option>
+          <option value="0.25">0.25</option>
+          <option value="0.5" selected>0.5</option>
+          <option value="1">1.0</option>
+        </select>
+      </div>
+      <button id="btn-resnap-all" type="button" style="width:100%;margin-top:8px" title="Snap every box and spawn to the move + scale grids">
+        Re-snap all to grid
+      </button>
+      <div class="hint">Click to select. <b>Shift-click</b> to add/remove. Scale always snaps to the scale grid.</div>
     </div>
 
     <!-- Selected -->
@@ -250,7 +268,10 @@
         </div>
       </div>
       <div id="prop-spawn" style="display:none">
-        <div class="row tight"><label class="lbl">Name</label><input id="s-name" type="text" class="grow" /></div>
+        <div class="row tight"><label class="lbl">Team</label>
+          <select id="s-team" class="grow"><option value="A">A</option><option value="B">B</option></select>
+        </div>
+        <div class="row tight"><label class="lbl">Label</label><input id="s-name" type="text" class="grow" /></div>
         <div class="grid3" style="margin-top:8px">
           <div class="f"><label>X</label><input id="s-x" type="number" step="0.1" /></div>
           <div class="f"><label>Y</label><input id="s-y" type="number" step="0.1" /></div>
@@ -303,7 +324,7 @@
         <button id="btn-clear" class="danger">Clear boxes</button>
       </div>
       <textarea id="io" spellcheck="false" placeholder="Exported JSON appears here. Paste JSON and click Import to load."></textarea>
-      <div class="hint">Format matches <code>src/multiplayer/maps.js</code>: each box is <code>{ pos:[x,y,z], size:[w,h,d] }</code>.</div>
+      <div class="hint">Format matches <code>src/multiplayer/maps.js</code>. Spawns: <code>A</code> / <code>B</code> are one point each, or an array for random pick — e.g. <code>"A": [{ "pos": [...] }, { "pos": [...] }]</code>.</div>
     </div>
   </div>
 </div>
@@ -461,27 +482,30 @@ scene.add(boxGroup);
 const spawnGroup = new THREE.Group();
 scene.add(spawnGroup);
 
-let selected = null;
-let snapVal = 0.5;
-const spawns = []; // array of spawn meshes
+let selected = [];
+let moveSnapVal = 0.5;
+let scaleSnapVal = 0.5;
+const spawns = [];
+const selectionPivot = new THREE.Object3D();
+scene.add(selectionPivot);
+let pivotDragStart = null;
 
 const SPAWN_COLORS = { A: 0x36c2ff, B: 0xffb13b };
-const SPAWN_CYCLE = [0x57e08a, 0xc77dff, 0xff7d7d, 0x7dd3ff, 0xffe066];
-function colorForLabel(label, idx) {
-  if (SPAWN_COLORS[label] != null) return SPAWN_COLORS[label];
-  return SPAWN_CYCLE[idx % SPAWN_CYCLE.length];
-}
-function nextSpawnLabel() {
-  const used = new Set(spawns.map((s) => s.userData.spawn));
-  for (let i = 0; i < 26; i++) {
-    const l = String.fromCharCode(65 + i);
-    if (!used.has(l)) return l;
-  }
-  return 'S' + spawns.length;
+
+function nextSpawnLabel(team) {
+  const n = spawns.filter((s) => s.userData.team === team).length;
+  return n === 0 ? team : team + (n + 1);
 }
 
-function makeSpawn(label, idx) {
-  const color = colorForLabel(label, idx);
+function applySpawnColor(m) {
+  const color = SPAWN_COLORS[m.userData.team] || SPAWN_COLORS.A;
+  m.material.color.setHex(color);
+  m.material.emissive.setHex(color);
+  m.children.forEach((c) => { if (c.material?.color) c.material.color.setHex(color); });
+}
+
+function makeSpawn(team, label) {
+  const color = SPAWN_COLORS[team] || SPAWN_COLORS.A;
   const m = new THREE.Mesh(
     new THREE.CylinderGeometry(0.35, 0.35, 0.1, 24),
     new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.35, roughness: 0.5 })
@@ -492,14 +516,17 @@ function makeSpawn(label, idx) {
   );
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 0.05;
+  ring.raycast = () => {};
   m.add(ring);
   const pole = new THREE.Mesh(
     new THREE.CylinderGeometry(0.04, 0.04, 1.6, 8),
     new THREE.MeshBasicMaterial({ color })
   );
   pole.position.y = 0.8;
+  pole.raycast = () => {};
   m.add(pole);
   m.userData.kind = 'spawn';
+  m.userData.team = team;
   m.userData.spawn = label;
   spawnGroup.add(m);
   spawns.push(m);
@@ -524,6 +551,7 @@ function addBox(box) {
     new THREE.EdgesGeometry(UNIT_GEO),
     new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 })
   );
+  edges.raycast = () => {};
   mesh.add(edges);
   boxGroup.add(mesh);
   return mesh;
@@ -546,24 +574,149 @@ function clearSpawns() {
 // Transform gizmo
 const transform = new TransformControls(camera, renderer.domElement);
 transform.setSize(1.1);
-transform.setTranslationSnap(snapVal);
-transform.setScaleSnap(snapVal);
+
+function snapToGrid(v, step) {
+  return Math.round(v / step) * step;
+}
+
+function applyBoxScaleGrid(mesh) {
+  const min = scaleSnapVal;
+  mesh.scale.x = Math.max(min, snapToGrid(mesh.scale.x, scaleSnapVal));
+  mesh.scale.y = Math.max(min, snapToGrid(mesh.scale.y, scaleSnapVal));
+  mesh.scale.z = Math.max(min, snapToGrid(mesh.scale.z, scaleSnapVal));
+}
+
+function moveGridStep() {
+  return moveSnapVal || 0.5;
+}
+
+function snapPosition(vec) {
+  const step = moveGridStep();
+  vec.x = snapToGrid(vec.x, step);
+  vec.y = snapToGrid(vec.y, step);
+  vec.z = snapToGrid(vec.z, step);
+}
+
+function resnapAll() {
+  pushUndo();
+  for (const m of boxGroup.children) {
+    applyBoxScaleGrid(m);
+    snapPosition(m.position);
+    m.material.color.copy(heightColor(m.scale.y));
+  }
+  for (const s of spawns) snapPosition(s.position);
+  attachGizmo();
+  syncProps();
+  updateBounds();
+  flash(`Re-snapped to grid (move ${moveGridStep()} m, scale ${scaleSnapVal} m)`);
+}
+
+function syncTransformSnap() {
+  transform.setTranslationSnap(moveSnapVal || null);
+  transform.setScaleSnap(scaleSnapVal);
+}
+
+syncTransformSnap();
 transform.addEventListener('dragging-changed', (e) => {
   orbit.enabled = !e.value;
-  if (e.value) beforeDrag = captureState();
-  else if (beforeDrag) { pushUndoState(beforeDrag); beforeDrag = null; }
+  if (e.value) {
+    beforeDrag = captureState();
+    if (selected.length > 1 && transform.object === selectionPivot) {
+      pivotDragStart = {
+        pivotPos: selectionPivot.position.clone(),
+        items: selected.map((obj) => ({ obj, pos: obj.position.clone() }))
+      };
+    } else {
+      pivotDragStart = null;
+    }
+  } else if (beforeDrag) {
+    pushUndoState(beforeDrag);
+    beforeDrag = null;
+    pivotDragStart = null;
+  }
 });
 transform.addEventListener('objectChange', onGizmoChange);
 const gizmo = transform.getHelper ? transform.getHelper() : transform;
 scene.add(gizmo);
 
-function select(obj) {
-  selected = obj;
-  if (obj) transform.attach(obj);
-  else transform.detach();
-  if (obj && obj.userData.kind === 'spawn') setMode('translate');
+function primary() {
+  return selected.length ? selected[selected.length - 1] : null;
+}
+
+function setHighlight(obj, on) {
+  if (obj.userData.kind === 'box' && obj.material) {
+    obj.material.emissive.setHex(on ? 0xf52525 : 0x000000);
+    obj.material.emissiveIntensity = on ? 0.18 : 0;
+  }
+}
+
+function selectionCenter(out = new THREE.Vector3()) {
+  out.set(0, 0, 0);
+  if (!selected.length) return out;
+  selected.forEach((o) => out.add(o.position));
+  return out.divideScalar(selected.length);
+}
+
+function updateScaleButton() {
+  const scaleBtn = el('mode-scale');
+  if (scaleBtn) scaleBtn.disabled = selected.length > 1;
+}
+
+function clearSelection() {
+  selected.forEach((o) => setHighlight(o, false));
+  selected.length = 0;
+  pivotDragStart = null;
+  transform.detach();
+  updateScaleButton();
   syncProps();
 }
+
+function attachGizmo() {
+  if (!selected.length) {
+    transform.detach();
+    updateScaleButton();
+    return;
+  }
+  if (selected.length === 1) {
+    const obj = selected[0];
+    transform.attach(obj);
+    if (obj.userData.kind === 'spawn') setMode('translate');
+    updateScaleButton();
+    return;
+  }
+  setMode('translate');
+  selectionPivot.position.copy(selectionCenter());
+  transform.attach(selectionPivot);
+  updateScaleButton();
+}
+
+function selectObject(obj, { additive = false } = {}) {
+  if (!obj) {
+    clearSelection();
+    return;
+  }
+  if (additive) {
+    const i = selected.indexOf(obj);
+    if (i >= 0) {
+      setHighlight(obj, false);
+      selected.splice(i, 1);
+    } else {
+      selected.push(obj);
+      setHighlight(obj, true);
+    }
+    attachGizmo();
+    syncProps();
+    return;
+  }
+  clearSelection();
+  selected.push(obj);
+  setHighlight(obj, true);
+  attachGizmo();
+  syncProps();
+}
+
+/** @deprecated alias */
+function select(obj, opts) { selectObject(obj, opts); }
 
 // ---------------------------------------------------------------------------
 // Undo / redo
@@ -582,7 +735,11 @@ function captureState() {
       pos: [m.position.x, m.position.y, m.position.z],
       size: [m.scale.x, m.scale.y, m.scale.z]
     })),
-    spawns: spawns.map((s) => ({ label: s.userData.spawn, pos: [s.position.x, s.position.y, s.position.z] }))
+    spawns: spawns.map((s) => ({
+      team: s.userData.team,
+      label: s.userData.spawn,
+      pos: [s.position.x, s.position.y, s.position.z]
+    }))
   };
 }
 
@@ -590,8 +747,9 @@ function applyState(s) {
   clearBoxes();
   clearSpawns();
   (s.boxes || []).forEach(addBox);
-  (s.spawns || []).forEach((sp, i) => {
-    const m = makeSpawn(sp.label, i);
+  (s.spawns || []).forEach((sp) => {
+    const team = sp.team || (String(sp.label || '').startsWith('B') ? 'B' : 'A');
+    const m = makeSpawn(team, sp.label || nextSpawnLabel(team));
     m.position.set(sp.pos[0], sp.pos[1], sp.pos[2]);
   });
   el('m-id').value = s.id || 'custom-level';
@@ -603,7 +761,7 @@ function applyState(s) {
     setVal('b-minz', s.bounds.minZ); setVal('b-maxz', s.bounds.maxZ);
   }
   toggleBoundsMode();
-  select(null);
+  clearSelection();
   updateBounds();
 }
 
@@ -636,15 +794,41 @@ function updateUndoButtons() {
 // ---------------------------------------------------------------------------
 // Load / build map
 // ---------------------------------------------------------------------------
-function normalizeMap(map) {
-  let spawnList = [];
-  if (Array.isArray(map.spawns)) {
-    spawnList = map.spawns.map((s, i) => ({ label: s.label || String.fromCharCode(65 + i), pos: s.pos || [0, 0, 0] }));
-  } else if (map.spawns && typeof map.spawns === 'object') {
-    spawnList = Object.entries(map.spawns).map(([label, v]) => ({ label, pos: v.pos || [0, 0, 0] }));
-  } else {
-    spawnList = [{ label: 'A', pos: [2, 0, 6] }, { label: 'B', pos: [-2, 0, -6] }];
+function spawnEntriesFromMap(mapSpawns) {
+  const list = [];
+  if (!mapSpawns) {
+    return [
+      { team: 'A', label: 'A', pos: [2, 0, 6] },
+      { team: 'B', label: 'B', pos: [-2, 0, -6] }
+    ];
   }
+  if (Array.isArray(mapSpawns)) {
+    return mapSpawns.map((s, i) => ({
+      team: s.team || (String(s.label || '').startsWith('B') ? 'B' : 'A'),
+      label: s.label || String.fromCharCode(65 + i),
+      pos: s.pos || [0, 0, 0]
+    }));
+  }
+  for (const side of ['A', 'B']) {
+    const val = mapSpawns[side];
+    if (!val) continue;
+    if (Array.isArray(val)) {
+      val.forEach((s, i) => list.push({
+        team: side,
+        label: i === 0 ? side : side + (i + 1),
+        pos: s.pos || [0, 0, 0]
+      }));
+    } else {
+      list.push({ team: side, label: side, pos: val.pos || [0, 0, 0] });
+    }
+  }
+  return list.length ? list : [
+    { team: 'A', label: 'A', pos: [2, 0, 6] },
+    { team: 'B', label: 'B', pos: [-2, 0, -6] }
+  ];
+}
+
+function normalizeMap(map) {
   return {
     id: map.id || 'custom-level',
     label: map.label || 'Custom Level',
@@ -652,7 +836,7 @@ function normalizeMap(map) {
     margin: 3,
     bounds: map.bounds || { minX: -7, maxX: 7, minZ: -8, maxZ: 8 },
     boxes: map.boxes || [],
-    spawns: spawnList
+    spawns: spawnEntriesFromMap(map.spawns)
   };
 }
 
@@ -675,6 +859,8 @@ function frameCamera(bounds) {
 // Picking
 // ---------------------------------------------------------------------------
 const ray = new THREE.Raycaster();
+ray.params.Line.threshold = 0.001;
+ray.params.Points.threshold = 0.001;
 const ptr = new THREE.Vector2();
 let downPos = null;
 
@@ -691,14 +877,13 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   ptr.x = ((e.clientX - r.left) / r.width) * 2 - 1;
   ptr.y = -((e.clientY - r.top) / r.height) * 2 + 1;
   ray.setFromCamera(ptr, camera);
-  const targets = [...boxGroup.children, ...spawns];
-  const hits = ray.intersectObjects(targets, true);
+  // Non-recursive: only the box/spawn root meshes — skip edge lines, rings, and poles.
+  const hits = ray.intersectObjects([...boxGroup.children, ...spawns], false);
   if (hits.length) {
-    let obj = hits[0].object;
-    while (obj && !obj.userData.kind) obj = obj.parent;
-    select(obj || null);
-  } else {
-    select(null);
+    const obj = hits[0].object;
+    selectObject(obj.userData.kind ? obj : null, { additive: e.shiftKey });
+  } else if (!e.shiftKey) {
+    clearSelection();
   }
 });
 
@@ -712,28 +897,52 @@ function num(id, dflt) { const v = parseFloat(el(id).value); return Number.isFin
 
 function syncProps() {
   const empty = el('prop-empty'), boxP = el('prop-box'), spP = el('prop-spawn'), title = el('prop-title');
-  if (!selected) { empty.style.display = ''; boxP.style.display = 'none'; spP.style.display = 'none'; title.textContent = 'Selected'; return; }
+  const n = selected.length;
+  if (!n) {
+    empty.style.display = '';
+    empty.textContent = 'Nothing selected — click an object in the view.';
+    boxP.style.display = 'none'; spP.style.display = 'none';
+    title.textContent = 'Selected';
+    return;
+  }
+  if (n > 1) {
+    empty.style.display = '';
+    empty.textContent = `${n} selected — drag the move gizmo to reposition all together. Shift-click to add/remove.`;
+    boxP.style.display = 'none'; spP.style.display = 'none';
+    title.textContent = `${n} selected`;
+    return;
+  }
+  const obj = selected[0];
   empty.style.display = 'none';
-  if (selected.userData.kind === 'spawn') {
+  if (obj.userData.kind === 'spawn') {
     boxP.style.display = 'none'; spP.style.display = '';
-    title.textContent = 'Spawn ' + selected.userData.spawn;
-    el('s-name').value = selected.userData.spawn;
-    setVal('s-x', selected.position.x); setVal('s-y', selected.position.y); setVal('s-z', selected.position.z);
+    title.textContent = `Spawn ${obj.userData.spawn} (team ${obj.userData.team})`;
+    el('s-team').value = obj.userData.team;
+    el('s-name').value = obj.userData.spawn;
+    setVal('s-x', obj.position.x); setVal('s-y', obj.position.y); setVal('s-z', obj.position.z);
   } else {
     spP.style.display = 'none'; boxP.style.display = '';
     title.textContent = 'Selected Box';
-    setVal('p-x', selected.position.x); setVal('p-y', selected.position.y); setVal('p-z', selected.position.z);
-    setVal('p-w', selected.scale.x); setVal('p-h', selected.scale.y); setVal('p-d', selected.scale.z);
+    setVal('p-x', obj.position.x); setVal('p-y', obj.position.y); setVal('p-z', obj.position.z);
+    setVal('p-w', obj.scale.x); setVal('p-h', obj.scale.y); setVal('p-d', obj.scale.z);
   }
 }
 
 function onGizmoChange() {
-  if (!selected) return;
-  if (selected.userData.kind === 'box') {
-    selected.scale.x = Math.max(0.05, selected.scale.x);
-    selected.scale.y = Math.max(0.05, selected.scale.y);
-    selected.scale.z = Math.max(0.05, selected.scale.z);
-    selected.material.color.copy(heightColor(selected.scale.y));
+  if (selected.length > 1 && transform.object === selectionPivot && pivotDragStart) {
+    const delta = selectionPivot.position.clone().sub(pivotDragStart.pivotPos);
+    pivotDragStart.items.forEach(({ obj, pos }) => {
+      obj.position.copy(pos).add(delta);
+    });
+    syncProps();
+    updateBounds();
+    return;
+  }
+  const obj = primary();
+  if (!obj) return;
+  if (obj.userData.kind === 'box') {
+    applyBoxScaleGrid(obj);
+    obj.material.color.copy(heightColor(obj.scale.y));
   }
   syncProps();
   updateBounds();
@@ -749,32 +958,47 @@ function trackEdit(ids) {
 
 function bindBoxProp(id, apply) {
   el(id).addEventListener('input', () => {
-    if (!selected || selected.userData.kind !== 'box') return;
+    const obj = primary();
+    if (!obj || obj.userData.kind !== 'box' || selected.length !== 1) return;
     const v = parseFloat(el(id).value);
     if (!Number.isFinite(v)) return;
-    apply(selected, v);
-    selected.material.color.copy(heightColor(selected.scale.y));
+    apply(obj, v);
+    applyBoxScaleGrid(obj);
+    obj.material.color.copy(heightColor(obj.scale.y));
+    syncProps();
     updateBounds();
   });
 }
 bindBoxProp('p-x', (m, v) => (m.position.x = v));
 bindBoxProp('p-y', (m, v) => (m.position.y = v));
 bindBoxProp('p-z', (m, v) => (m.position.z = v));
-bindBoxProp('p-w', (m, v) => (m.scale.x = Math.max(0.05, v)));
-bindBoxProp('p-h', (m, v) => (m.scale.y = Math.max(0.05, v)));
-bindBoxProp('p-d', (m, v) => (m.scale.z = Math.max(0.05, v)));
+bindBoxProp('p-w', (m, v) => (m.scale.x = v));
+bindBoxProp('p-h', (m, v) => (m.scale.y = v));
+bindBoxProp('p-d', (m, v) => (m.scale.z = v));
 
 ['s-x', 's-y', 's-z'].forEach((id) => {
   el(id).addEventListener('input', () => {
-    if (!selected || selected.userData.kind !== 'spawn') return;
-    selected.position.set(num('s-x', 0), num('s-y', 0), num('s-z', 0));
+    const obj = primary();
+    if (!obj || obj.userData.kind !== 'spawn' || selected.length !== 1) return;
+    obj.position.set(num('s-x', 0), num('s-y', 0), num('s-z', 0));
     updateBounds();
   });
 });
+el('s-team').addEventListener('focus', () => { beforeEdit = captureState(); });
+el('s-team').addEventListener('change', () => {
+  const obj = primary();
+  if (!obj || obj.userData.kind !== 'spawn' || selected.length !== 1) return;
+  obj.userData.team = el('s-team').value;
+  applySpawnColor(obj);
+  el('prop-title').textContent = `Spawn ${obj.userData.spawn} (team ${obj.userData.team})`;
+  if (beforeEdit) { pushUndoState(beforeEdit); beforeEdit = null; }
+});
+
 el('s-name').addEventListener('input', () => {
-  if (!selected || selected.userData.kind !== 'spawn') return;
-  selected.userData.spawn = el('s-name').value.trim() || selected.userData.spawn;
-  el('prop-title').textContent = 'Spawn ' + selected.userData.spawn;
+  const obj = primary();
+  if (!obj || obj.userData.kind !== 'spawn' || selected.length !== 1) return;
+  obj.userData.spawn = el('s-name').value.trim() || obj.userData.spawn;
+  el('prop-title').textContent = `Spawn ${obj.userData.spawn} (team ${obj.userData.team})`;
 });
 el('s-name').addEventListener('focus', () => { beforeEdit = captureState(); });
 el('s-name').addEventListener('change', () => { if (beforeEdit) { pushUndoState(beforeEdit); beforeEdit = null; } });
@@ -826,7 +1050,10 @@ el('btn-new').addEventListener('click', () => {
   applyState({
     id: 'custom-level', label: 'Custom Level', bMode: 'manual', margin: 3,
     bounds: { minX: -7, maxX: 7, minZ: -8, maxZ: 8 }, boxes: [],
-    spawns: [{ label: 'A', pos: [2, 0, 6] }, { label: 'B', pos: [-2, 0, -6] }]
+    spawns: [
+      { team: 'A', label: 'A', pos: [2, 0, 6] },
+      { team: 'B', label: 'B', pos: [-2, 0, -6] }
+    ]
   });
   frameCamera(computeBounds());
   flash('New empty level');
@@ -838,79 +1065,117 @@ el('add-box').addEventListener('click', () => {
   pushUndo();
   const t = orbit.target;
   const mesh = addBox({ pos: [round2(t.x), 1.2, round2(t.z)], size: [1, 2.4, 1] });
-  select(mesh);
+  selectObject(mesh);
   updateBounds();
 });
-el('add-spawn').addEventListener('click', () => {
+function addSpawnAt(team) {
   pushUndo();
   const t = orbit.target;
-  const m = makeSpawn(nextSpawnLabel(), spawns.length);
+  const m = makeSpawn(team, nextSpawnLabel(team));
   m.position.set(round2(t.x), 0, round2(t.z));
-  select(m);
+  selectObject(m);
   updateBounds();
-});
+}
+el('add-spawn-a').addEventListener('click', () => addSpawnAt('A'));
+el('add-spawn-b').addEventListener('click', () => addSpawnAt('B'));
 el('dup').addEventListener('click', duplicateSelected);
 function duplicateSelected() {
-  if (!selected) return;
+  if (!selected.length) return;
   pushUndo();
-  if (selected.userData.kind === 'box') {
-    const mesh = addBox({
-      pos: [round2(selected.position.x + 1), selected.position.y, round2(selected.position.z + 1)],
-      size: [selected.scale.x, selected.scale.y, selected.scale.z]
-    });
-    select(mesh);
-  } else {
-    const m = makeSpawn(nextSpawnLabel(), spawns.length);
-    m.position.set(round2(selected.position.x + 1), selected.position.y, round2(selected.position.z + 1));
-    select(m);
-  }
+  const copies = [];
+  selected.forEach((obj) => {
+    if (obj.userData.kind === 'box') {
+      copies.push(addBox({
+        pos: [round2(obj.position.x), obj.position.y, round2(obj.position.z)],
+        size: [obj.scale.x, obj.scale.y, obj.scale.z]
+      }));
+    } else {
+      const team = obj.userData.team;
+      const m = makeSpawn(team, nextSpawnLabel(team));
+      m.position.set(round2(obj.position.x), obj.position.y, round2(obj.position.z));
+      copies.push(m);
+    }
+  });
+  clearSelection();
+  copies.forEach((o) => {
+    selected.push(o);
+    setHighlight(o, true);
+  });
+  attachGizmo();
+  syncProps();
   updateBounds();
 }
 el('del').addEventListener('click', deleteSelected);
 function deleteSelected() {
-  if (!selected) return;
+  if (!selected.length) return;
   pushUndo();
   transform.detach();
-  if (selected.userData.kind === 'box') {
-    selected.material.dispose();
-    boxGroup.remove(selected);
-  } else {
-    spawnGroup.remove(selected);
-    const i = spawns.indexOf(selected);
-    if (i >= 0) spawns.splice(i, 1);
-  }
-  selected = null;
-  syncProps(); updateBounds();
+  const toRemove = [...selected];
+  clearSelection();
+  toRemove.forEach((obj) => {
+    if (obj.userData.kind === 'box') {
+      obj.material.dispose();
+      boxGroup.remove(obj);
+    } else {
+      spawnGroup.remove(obj);
+      const i = spawns.indexOf(obj);
+      if (i >= 0) spawns.splice(i, 1);
+    }
+  });
+  syncProps();
+  updateBounds();
 }
 el('snap-floor').addEventListener('click', () => {
-  if (!selected || selected.userData.kind !== 'box') return;
+  const obj = primary();
+  if (!obj || obj.userData.kind !== 'box' || selected.length !== 1) return;
   pushUndo();
-  selected.position.y = selected.scale.y / 2;
-  syncProps(); updateBounds();
+  obj.position.y = obj.scale.y / 2;
+  syncProps();
+  updateBounds();
 });
 
+function currentMode() {
+  return transform.mode === 'scale' ? 'scale' : 'translate';
+}
 function setMode(mode) {
+  if (selected.length > 1 && mode === 'scale') mode = 'translate';
   transform.setMode(mode);
   document.querySelectorAll('[data-mode]').forEach((b2) => b2.classList.toggle('active', b2.dataset.mode === mode));
+}
+function toggleMode() {
+  if (selected.length > 1) { setMode('translate'); return; }
+  setMode(currentMode() === 'scale' ? 'translate' : 'scale');
 }
 document.querySelectorAll('[data-mode]').forEach((btn) => {
   btn.addEventListener('click', () => setMode(btn.dataset.mode));
 });
 
-el('snap').addEventListener('change', (e) => {
-  snapVal = parseFloat(e.target.value) || 0;
-  transform.setTranslationSnap(snapVal || null);
-  transform.setScaleSnap(snapVal || null);
+el('snap-move').addEventListener('change', (e) => {
+  moveSnapVal = parseFloat(e.target.value) || 0;
+  syncTransformSnap();
 });
+el('snap-scale').addEventListener('change', (e) => {
+  scaleSnapVal = parseFloat(e.target.value) || 0.5;
+  syncTransformSnap();
+  const obj = primary();
+  if (obj?.userData.kind === 'box' && selected.length === 1) {
+    applyBoxScaleGrid(obj);
+    obj.material.color.copy(heightColor(obj.scale.y));
+    syncProps();
+    updateBounds();
+  }
+});
+el('btn-resnap-all').addEventListener('click', resnapAll);
 
 document.querySelectorAll('[data-seth]').forEach((btn) => {
   btn.addEventListener('click', () => {
-    if (!selected || selected.userData.kind !== 'box') return;
+    const obj = primary();
+    if (!obj || obj.userData.kind !== 'box' || selected.length !== 1) return;
     pushUndo();
     const h = parseFloat(btn.dataset.seth);
-    selected.scale.y = h;
-    selected.position.y = h / 2;
-    selected.material.color.copy(heightColor(h));
+    obj.scale.y = h;
+    obj.position.y = h / 2;
+    obj.material.color.copy(heightColor(h));
     syncProps(); updateBounds();
   });
 });
@@ -922,12 +1187,12 @@ window.addEventListener('keydown', (e) => {
   if (ctrl && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (ctrl && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); redo(); return; }
   if (ctrl) return;
-  if (e.key === 'w' || e.key === 'W' || e.key === 'g' || e.key === 'G') setMode('translate');
-  if (e.key === 'e' || e.key === 'E' || e.key === 's' || e.key === 'S') setMode('scale');
+  if (e.key === 'w' || e.key === 'W') setMode('translate');
+  if (e.key === 'e' || e.key === 'E') toggleMode();
   if (e.shiftKey && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); duplicateSelected(); }
   if (e.key === 'Delete' || e.key === 'Backspace' || e.key === 'x' || e.key === 'X') deleteSelected();
   if (e.key === 'f' || e.key === 'F') {
-    if (selected) { orbit.target.copy(selected.position); orbit.update(); }
+    if (selected.length) { orbit.target.copy(selectionCenter()); orbit.update(); }
     else frameCamera(computeBounds());
   }
 });
@@ -957,10 +1222,17 @@ function buildExport() {
     pos: [round2(m.position.x), round2(m.position.y), round2(m.position.z)],
     size: [round2(m.scale.x), round2(m.scale.y), round2(m.scale.z)]
   }));
-  const spawnsObj = {};
+  const byTeam = { A: [], B: [] };
   spawns.forEach((s) => {
-    spawnsObj[s.userData.spawn] = { pos: [round2(s.position.x), round2(s.position.y), round2(s.position.z)] };
+    const pt = { pos: [round2(s.position.x), round2(s.position.y), round2(s.position.z)] };
+    (byTeam[s.userData.team] || byTeam.A).push(pt);
   });
+  const spawnsObj = {};
+  for (const side of ['A', 'B']) {
+    const pts = byTeam[side];
+    if (!pts.length) continue;
+    spawnsObj[side] = pts.length === 1 ? pts[0] : pts;
+  }
   return {
     id: el('m-id').value.trim() || 'custom-level',
     label: el('m-label').value.trim() || 'Custom Level',
@@ -999,7 +1271,7 @@ el('btn-import').addEventListener('click', () => {
 el('btn-clear').addEventListener('click', () => {
   if (!confirm('Clear all boxes? Spawns and meta stay.')) return;
   pushUndo();
-  clearBoxes(); select(null); updateBounds();
+  clearBoxes(); clearSelection(); updateBounds();
 });
 
 // ---------------------------------------------------------------------------
@@ -1027,8 +1299,15 @@ window.addEventListener('resize', resize);
 function animate() {
   requestAnimationFrame(animate);
   orbit.update();
-  const what = selected ? (selected.userData.kind === 'spawn' ? 'spawn ' + selected.userData.spawn : 'box') : 'none';
-  hud.innerHTML = `selected <b>${what}</b> &nbsp;|&nbsp; boxes <b>${boxGroup.children.length}</b> &nbsp;|&nbsp; spawns <b>${spawns.length}</b> &nbsp;|&nbsp; snap <b>${snapVal || 'off'}</b>`;
+  const n = selected.length;
+  let what = 'none';
+  if (n > 1) what = `${n} objects`;
+  else if (n === 1) {
+    const o = selected[0];
+    what = o.userData.kind === 'spawn' ? `spawn ${o.userData.spawn} (${o.userData.team})` : 'box';
+  }
+  const teamCounts = `A:${spawns.filter((s) => s.userData.team === 'A').length} B:${spawns.filter((s) => s.userData.team === 'B').length}`;
+  hud.innerHTML = `selected <b>${what}</b> &nbsp;|&nbsp; spawns <b>${teamCounts}</b> &nbsp;|&nbsp; boxes <b>${boxGroup.children.length}</b> &nbsp;|&nbsp; move <b>${moveSnapVal || 'off'}</b> &nbsp;|&nbsp; scale <b>${scaleSnapVal}</b>`;
   renderer.render(scene, camera);
 }
 

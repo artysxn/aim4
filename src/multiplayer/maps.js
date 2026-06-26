@@ -161,14 +161,21 @@ const MAP_TEMPLATES = [
   }
 ];
 
+function finalizeTeamSpawns(entry) {
+  if (Array.isArray(entry)) {
+    return entry.map((s) => ({ pos: [...s.pos] }));
+  }
+  return [{ pos: [...entry.pos] }];
+}
+
 function finalizeMap(t) {
   return {
     id: t.id,
     label: t.label,
     bounds: { ...t.bounds },
     spawns: {
-      A: { pos: [...t.spawns.A.pos] },
-      B: { pos: [...t.spawns.B.pos] }
+      A: finalizeTeamSpawns(t.spawns.A),
+      B: finalizeTeamSpawns(t.spawns.B)
     },
     boxes: t.boxes.map((box) => ({
       pos: [...box.pos],
@@ -202,10 +209,21 @@ export function yawToward(from, to) {
   return Math.atan2(-dx, -dz);
 }
 
-/** Spawn position for one side (yaw computed separately). */
+/** All spawn points for one team (always an array after finalizeMap). */
+export function teamSpawnList(map, side) {
+  const raw = side === 'B' ? map.spawns.B : map.spawns.A;
+  if (!raw) return [{ pos: [0, 0, side === 'A' ? 6 : -6] }];
+  if (Array.isArray(raw)) {
+    return raw.map((s) => ({ pos: [...s.pos] }));
+  }
+  return [{ pos: [...raw.pos] }];
+}
+
+/** One spawn for a side — picked at random when the team has multiple. */
 export function spawnFor(map, side) {
-  const sp = side === 'B' ? map.spawns.B : map.spawns.A;
-  return { pos: [...sp.pos] };
+  const list = teamSpawnList(map, side);
+  const pick = list[Math.floor(Math.random() * list.length)];
+  return { pos: [...pick.pos] };
 }
 
 /** Both spawns with yaw auto-aimed at the opposing player. */
