@@ -131,7 +131,7 @@ export class PlayerController {
     // Horizontal: ground uses friction + full acceleration; air keeps momentum
     // and only allows the clamped Source air-control nudge (no friction).
     if (this.onGround) {
-      srcFriction(this.vel, dt);
+      srcFriction(this.vel, dt, len > 0 ? maxSpeed : 0);
       if (len > 0) srcAccelerate(this.vel, wx, wz, maxSpeed, dt);
     } else if (len > 0) {
       srcAirAccelerate(this.vel, wx, wz, maxSpeed, dt);

@@ -40,15 +40,22 @@ export const AIR_SPEED_CAP = 30 * UNIT; // 0.762 m/s
 /**
  * PM_Friction. Bleeds horizontal speed every tick — strong below sv_stopspeed so
  * the player/bot comes to a crisp halt rather than sliding. Mutates `vel` ({x,z}).
+ *
+ * @param activeWishSpeed  When > 0 and speed is below this cap, skip the
+ *   stopspeed boost so ground friction doesn't erase acceleration from rest
+ *   (notably crouch-walk, where max speed < sv_stopspeed).
  */
-export function srcFriction(vel, dt) {
+export function srcFriction(vel, dt, activeWishSpeed = 0) {
   const speed = Math.hypot(vel.x, vel.z);
   if (speed < 1e-4) {
     vel.x = 0;
     vel.z = 0;
     return;
   }
-  const control = speed < STOP_SPEED ? STOP_SPEED : speed;
+  let control = speed < STOP_SPEED ? STOP_SPEED : speed;
+  if (activeWishSpeed > 0 && speed < activeWishSpeed) {
+    control = speed;
+  }
   const drop = control * FRICTION * dt;
   const newspeed = Math.max(0, speed - drop) / speed;
   vel.x *= newspeed;
@@ -114,7 +121,7 @@ export class SourceMover1D {
 
   /** Advance one tick with a wish direction of -1, 0 or +1. */
   step(dt, wishDir, maxSpeed) {
-    srcFriction(this._v, dt);
+    srcFriction(this._v, dt, wishDir !== 0 ? maxSpeed : 0);
     if (wishDir !== 0) srcAccelerate(this._v, wishDir > 0 ? 1 : -1, 0, maxSpeed, dt);
     this.s += this._v.x * dt;
   }
