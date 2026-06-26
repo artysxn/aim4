@@ -5,7 +5,7 @@
 // the Arena. Holds the screen state machine and coordinates pointer-lock with
 // the run lifecycle. The core game loop never touches UI state.
 //
-// States: menu | settings | leaderboard | auth | await-start | playing | paused
+// States: menu | settings | leaderboard | auth | await-start | countdown | playing | paused
 //         | results
 // ---------------------------------------------------------------------------
 
@@ -102,6 +102,7 @@ export class UIOverlay {
     this._mpTabBoardHeld = false;
     this._aimHintShown = false;
     this._unlockSince = null;
+    this._countdownRemaining = 0;
   }
 
   init() {
@@ -500,6 +501,9 @@ export class UIOverlay {
     <!-- CLICK-TO-AIM PROMPT (multiplayer, when pointer lock is not held) -->
     <div id="mp-aim-hint" class="mp-aim-hint"><span>Click</span></div>
 
+    <!-- COMPETITIVE START COUNTDOWN -->
+    <div id="run-countdown" class="run-countdown" hidden><span id="run-countdown-num">1</span></div>
+
     <!-- HOLD-TAB SCOREBOARD -->
     <div id="mp-tab-scoreboard" class="mp-tab-scoreboard"></div>
 
@@ -664,6 +668,7 @@ export class UIOverlay {
         <h2 class="text-big pause-title">Paused</h2>
         <div class="menu-actions pause-actions">
           <button type="button" class="btn primary" data-resume>Resume</button>
+          <button type="button" class="btn" id="pause-restart-btn" data-restart>Restart</button>
           <button type="button" class="btn" id="pause-leave-lobby-btn" hidden>Leave to lobby</button>
           <button type="button" class="btn" data-quit>Quit to menu</button>
         </div>
@@ -786,6 +791,8 @@ export class UIOverlay {
     this.mpChatInput = this.root.querySelector('#mp-chat-input');
     this.mpTabScoreboard = this.root.querySelector('#mp-tab-scoreboard');
     this.mpAimHint = this.root.querySelector('#mp-aim-hint');
+    this.runCountdown = this.root.querySelector('#run-countdown');
+    this.runCountdownNum = this.root.querySelector('#run-countdown-num');
 
     this.hudTime = this.root.querySelector('#hud-time');
     this.hudScore = this.root.querySelector('#hud-score');
@@ -1134,9 +1141,10 @@ export class UIOverlay {
 
   _updatePauseMenu() {
     const leaveBtn = this.root.querySelector('#pause-leave-lobby-btn');
-    if (!leaveBtn) return;
+    const restartBtn = this.root.querySelector('#pause-restart-btn');
     const inMpMatch = this.mp?.inMatch && !!this.mp?.lobby;
-    leaveBtn.hidden = !inMpMatch;
+    if (leaveBtn) leaveBtn.hidden = !inMpMatch;
+    if (restartBtn) restartBtn.hidden = !!inMpMatch;
   }
 
   // -------------------------------------------------------------------------
@@ -1654,7 +1662,7 @@ export class UIOverlay {
   /** A click on the canvas while unlocked re-acquires pointer lock. */
   _onUnlockedClick() {
     if (this.mpChat?.classList.contains('typing')) return;
-    if (this.state === 'playing' || this.state === 'await-start') {
+    if (this.state === 'playing' || this.state === 'await-start' || this.state === 'countdown') {
       this.input.requestLock();
     }
   }
@@ -2148,7 +2156,40 @@ export class UIOverlay {
     if (name === 'menu') this.refreshAccountBar();
   }
 
+  /** Singleplayer competitive runs wait briefly before the timer starts. */
+  _isCompetitiveRun() {
+    return this.scenarioConfig?.variant === 'competitive';
+  }
+
+  _startCountdown() {
+    this.state = 'countdown';
+    this._countdownRemaining = 1;
+    this._updateCountdownOverlay();
+  }
+
+  _beginRun() {
+    this._countdownRemaining = 0;
+    this._hideCountdownOverlay();
+    this.sceneManager.begin();
+    this.state = 'playing';
+  }
+
+  _updateCountdownOverlay() {
+    if (!this.runCountdown || !this.runCountdownNum) return;
+    const active = this._countdownRemaining > 0;
+    this.runCountdown.hidden = !active;
+    if (active) {
+      this.runCountdownNum.textContent = String(Math.ceil(this._countdownRemaining));
+    }
+  }
+
+  _hideCountdownOverlay() {
+    if (this.runCountdown) this.runCountdown.hidden = true;
+  }
+
   play(name, config = {}) {
+    this._countdownRemaining = 0;
+    this._hideCountdownOverlay();
     this.currentScenario = name;
     this.scenarioConfig = config;
     this.sceneManager.load(name, config);
@@ -2161,12 +2202,21 @@ export class UIOverlay {
 
   resume() {
     if (this.state !== 'paused') return;
+    if (this._countdownRemaining > 0) {
+      this.showScreen('playing');
+      this.state = 'countdown';
+      this._updateCountdownOverlay();
+      this.input.requestLock();
+      return;
+    }
     this.sceneManager.resume();
     this.showScreen('playing');
     this.input.requestLock();
   }
 
   quit() {
+    this._countdownRemaining = 0;
+    this._hideCountdownOverlay();
     this.state = 'menu';
     this._resetMpChat();
     this._hideMpTabScoreboard();
@@ -2189,13 +2239,21 @@ export class UIOverlay {
       this.engine.audio?.resume();
       this._suppressLockPause = false;
       if (this.state === 'await-start') {
-        this.sceneManager.begin();
-        this.showScreen('playing');
+        if (this._isCompetitiveRun()) {
+          this._startCountdown();
+        } else {
+          this._beginRun();
+        }
       }
     } else {
       // Chat input steals pointer lock — keep the match running so remotes keep moving.
       if (this._suppressLockPause) return;
-      if (this.state === 'playing') {
+      if (this.state === 'countdown') {
+        this._closeMpChatTyping(false);
+        this._hideMpTabScoreboard();
+        this._updatePauseMenu();
+        this.showScreen('paused');
+      } else if (this.state === 'playing') {
         this._closeMpChatTyping(false);
         this._hideMpTabScoreboard();
         this.sceneManager.pause();
@@ -2220,7 +2278,15 @@ export class UIOverlay {
   // -------------------------------------------------------------------------
   // Per-frame updates (HUD + threat chevrons)
   // -------------------------------------------------------------------------
-  frame() {
+  frame(dt) {
+    if (this.state === 'countdown') {
+      this._countdownRemaining = Math.max(0, this._countdownRemaining - dt);
+      this._updateCountdownOverlay();
+      if (this._countdownRemaining <= 0) {
+        this._beginRun();
+      }
+    }
+
     const sc = this.sceneManager.current;
     // Multiplayer: when unlocked mid-match (not paused), prompt click-to-aim.
     if (

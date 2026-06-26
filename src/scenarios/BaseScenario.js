@@ -23,7 +23,7 @@ const _quat = new THREE.Quaternion();
 const _dir = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
-const _muzzle = new THREE.Vector3();
+const _tracerStart = new THREE.Vector3();
 const TRACER_MISS_DEPTH = 120;
 
 // --- Tiny WebAudio blip used for hit feedback (lazily created) -------------
@@ -203,8 +203,8 @@ export class BaseScenario {
       aimDz: aimZ
     };
 
-    // Tracer follows the bullet ray (targets + cover), not the nearest floor mesh.
-    this._tracerImpactPoint(_raycaster);
+    // Tracer endpoint = crosshair-ray hit on targets/cover (exact screen centre).
+    this._tracerImpactPoint();
 
     this.onShoot(_raycaster);
 
@@ -214,7 +214,9 @@ export class BaseScenario {
       const recoil = this.viewmodelRecoil !== false;
       vm.fire({ recoil });
       if (this.weaponTracers !== false) {
-        vm.spawnTracer(vm.getMuzzlePosition(_muzzle), this._lastImpact);
+        // Start at the camera so the beam runs through the crosshair, not from the offset muzzle.
+        _tracerStart.copy(cam.position);
+        vm.spawnTracer(_tracerStart, this._lastImpact);
       }
       if (recoil) {
         const p = punch || viewPunchImpulse(shotIndex);
@@ -251,16 +253,20 @@ export class BaseScenario {
     return [];
   }
 
-  /** World point the tracer line ends at — always under the crosshair (screen center). */
-  _tracerImpactPoint(raycaster) {
-    const hit = this.raycastTargets(raycaster, this.tracerRaycastExtras());
-    const depth = hit ? hit.distance : TRACER_MISS_DEPTH;
-    // Keep bullet-ray hit depth (cover / targets) but place the visible endpoint on
-    // the crosshair ray so muzzle→end aligns with screen center, not the offset gun.
+  /** Ray through the crosshair (screen centre) — matches the 2D overlay, not the bullet cone. */
+  _crosshairRaycast() {
+    _crosshairRay.setFromCamera(_center, this.camera);
+    return this.raycastTargets(_crosshairRay, this.tracerRaycastExtras());
+  }
+
+  /** Tracer ends on the crosshair ray at the first target/cover hit (projects to screen centre). */
+  _tracerImpactPoint() {
+    const hit = this._crosshairRaycast();
+    if (hit) return this._lastImpact.copy(hit.point);
     _crosshairRay.setFromCamera(_center, this.camera);
     return this._lastImpact
       .copy(_crosshairRay.ray.origin)
-      .addScaledVector(_crosshairRay.ray.direction, depth);
+      .addScaledVector(_crosshairRay.ray.direction, TRACER_MISS_DEPTH);
   }
 
   raycastTargets(raycaster, extra = []) {

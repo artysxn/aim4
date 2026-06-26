@@ -91,7 +91,7 @@ export class MultiplayerController {
 
   /** Tear down an active singleplayer run when a ranked/custom match starts. */
   _leaveSingleplayerIfActive() {
-    const spStates = new Set(['playing', 'paused', 'await-start', 'results']);
+    const spStates = new Set(['playing', 'paused', 'await-start', 'countdown', 'results']);
     if (!spStates.has(this.ui.state)) return;
     this.input.exitLock();
     this.sceneManager.unload();

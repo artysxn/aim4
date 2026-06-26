@@ -1331,6 +1331,29 @@ input[type='checkbox'] {
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
 }
 
+/* Competitive run start countdown (singleplayer). */
+.run-countdown {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.run-countdown[hidden] {
+  display: none !important;
+}
+.run-countdown span {
+  font-family: var(--font-display);
+  font-size: clamp(4rem, 18vw, 8rem);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text);
+  text-shadow: 0 4px 40px rgba(0, 0, 0, 0.65);
+  opacity: 0.92;
+}
+
 /* Hold-Tab stats overlay during active runs (singleplayer + multiplayer). */
 .mp-tab-scoreboard {
   position: fixed;
