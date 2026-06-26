@@ -3,70 +3,136 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>AIM4 3D Level Editor</title>
+<title>AIM4 Level Editor</title>
 <style>
+  @font-face {
+    font-family: 'Host Grotesk';
+    src: url('../fonts/host_grotesk/HostGrotesk-Regular.ttf') format('truetype');
+    font-weight: 400; font-style: normal; font-display: swap;
+  }
+  @font-face {
+    font-family: 'Host Grotesk';
+    src: url('../fonts/host_grotesk/HostGrotesk-Medium.ttf') format('truetype');
+    font-weight: 500; font-style: normal; font-display: swap;
+  }
+  @font-face {
+    font-family: 'Host Grotesk';
+    src: url('../fonts/host_grotesk/HostGrotesk-SemiBold.ttf') format('truetype');
+    font-weight: 600; font-style: normal; font-display: swap;
+  }
+
   :root {
-    --bg: #0c0d10;
-    --panel: #15171c;
-    --panel-2: #1c1f26;
-    --line: #2a2e38;
-    --text: #e6e8ec;
-    --muted: #8a909c;
+    --bg: #0a0a0a;
+    --panel: #141414;
+    --panel-2: #181818;
+    --line: #262626;
+    --line-2: #333;
+    --text: #ededed;
+    --muted: #9a9a9a;
     --accent: #f52525;
+    --accent-hover: #ff3333;
+    --btn: #141414;
+    --btn-hover: #1e1e1e;
     --a: #36c2ff;
     --b: #ffb13b;
+    --font: 'Host Grotesk', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  * { box-sizing: border-box; margin: 0; padding: 0; border-radius: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text);
+    font-family: var(--font); overflow: hidden; }
   #app { display: flex; height: 100%; }
   #stage { position: relative; flex: 1; min-width: 0; }
   #cv { display: block; width: 100%; height: 100%; }
-  #side { width: 330px; background: var(--panel); border-left: 1px solid var(--line);
+
+  /* ---- Sidebar ---------------------------------------------------------- */
+  #side { width: 340px; background: var(--bg); border-left: 1px solid var(--line);
     display: flex; flex-direction: column; overflow-y: auto; }
-  .sec { padding: 12px 14px; border-bottom: 1px solid var(--line); }
-  .sec h2 { margin: 0 0 10px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
-  .tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-  button { background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
-    border-radius: 6px; padding: 8px 10px; font-size: 13px; cursor: pointer; }
-  button:hover { border-color: #3a4150; }
+  #side::-webkit-scrollbar { width: 10px; }
+  #side::-webkit-scrollbar-thumb { background: #1f1f1f; border: 2px solid var(--bg); }
+
+  .topbar { display: flex; align-items: center; gap: 10px; padding: 14px 16px;
+    border-bottom: 1px solid var(--line); }
+  .topbar .brand { display: flex; flex-direction: column; line-height: 1.15; }
+  .topbar .brand .kicker { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+  .topbar .brand .title { font-size: 17px; font-weight: 600; }
+  .topbar .back { margin-left: auto; color: var(--muted); text-decoration: none;
+    font-size: 12px; font-weight: 500; padding: 6px 10px; border: 1px solid var(--line); background: var(--btn); }
+  .topbar .back:hover { color: var(--text); border-color: var(--line-2); background: var(--btn-hover); }
+
+  .sec { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .sec h2 { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600; margin-bottom: 10px; }
+
+  /* ---- Buttons (match website .btn) ------------------------------------- */
+  button { font-family: var(--font); font-size: 13px; font-weight: 500; color: var(--text);
+    background: var(--btn); border: 1px solid var(--line); padding: 9px 12px; cursor: pointer;
+    transition: background 0.12s, border-color 0.12s, color 0.12s; display: inline-flex;
+    align-items: center; justify-content: center; gap: 7px; white-space: nowrap; }
+  button:hover { background: var(--btn-hover); border-color: var(--line-2); }
+  button:active { background: #0e0e0e; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button:disabled:hover { background: var(--btn); border-color: var(--line); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
   button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button.full { width: 100%; }
-  button.ghost { background: transparent; }
-  .danger:hover { border-color: var(--accent); color: var(--accent); }
-  .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
-  .row label { flex: 0 0 92px; font-size: 12px; color: var(--muted); }
-  .row input[type="text"], .row input[type="number"], .row select {
-    flex: 1; min-width: 0; background: var(--panel-2); border: 1px solid var(--line);
-    color: var(--text); border-radius: 5px; padding: 6px 8px; font-size: 13px; }
-  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-  .grid3 .f label { display: block; font-size: 10px; color: var(--muted); margin-bottom: 3px;
-    text-transform: uppercase; letter-spacing: 0.04em; }
-  .grid3 .f input { width: 100%; background: var(--panel-2); border: 1px solid var(--line);
-    color: var(--text); border-radius: 5px; padding: 6px; font-size: 13px; }
-  .hint { font-size: 11px; color: var(--muted); line-height: 1.5; }
-  .hint kbd { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 10px; }
-  textarea { width: 100%; height: 150px; resize: vertical; background: #0a0b0e; color: #cfe;
-    border: 1px solid var(--line); border-radius: 6px; padding: 8px;
-    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.45; }
-  .pillrow { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-  .pill { font-size: 11px; padding: 5px 8px; }
-  .split { display: flex; gap: 8px; }
-  .split > * { flex: 1; }
+  button.danger:hover { border-color: var(--accent); color: var(--accent); background: var(--btn-hover); }
+  button svg { width: 15px; height: 15px; flex: 0 0 auto; }
+
+  .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+  .row.tight { margin: 6px 0; }
+  .row > .grow { flex: 1; min-width: 0; }
+  .seg { display: grid; gap: 8px; }
+  .seg.c2 { grid-template-columns: 1fr 1fr; }
+  .seg.c3 { grid-template-columns: 1fr 1fr 1fr; }
+  .iconbtn { padding: 9px; }
+
+  label.lbl { flex: 0 0 96px; font-size: 12px; color: var(--muted); }
+  input[type="text"], input[type="number"], select {
+    flex: 1; min-width: 0; width: 100%; background: var(--panel-2); border: 1px solid var(--line);
+    color: var(--text); padding: 8px 9px; font-size: 13px; font-family: var(--font); }
+  input:focus, select:focus { outline: none; border-color: var(--line-2); }
+  select { cursor: pointer; }
+
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .grid3 .f label { display: block; font-size: 10px; color: var(--muted); margin-bottom: 4px;
+    text-transform: uppercase; letter-spacing: 0.05em; }
+
+  .hint { font-size: 11.5px; color: var(--muted); line-height: 1.55; }
+  .hint code { background: var(--panel-2); border: 1px solid var(--line); padding: 1px 5px; font-size: 10.5px; color: #cfd3da; }
+  .hint kbd { background: var(--panel-2); border: 1px solid var(--line); padding: 1px 6px; font-size: 10.5px;
+    font-family: var(--font); color: var(--text); }
+  .note { display: flex; gap: 9px; margin-top: 10px; padding: 10px; background: var(--panel-2); border: 1px solid var(--line);
+    border-left: 2px solid var(--accent); font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+  .note b { color: var(--text); }
+
+  .pillrow { display: flex; gap: 8px; flex-wrap: wrap; }
+  .pill { font-size: 11px; padding: 6px 10px; flex: 1; }
+
+  textarea { width: 100%; height: 150px; resize: vertical; background: #0c0c0c; color: #cfe3ff;
+    border: 1px solid var(--line); padding: 10px; font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 11px; line-height: 1.5; }
+  textarea:focus { outline: none; border-color: var(--line-2); }
+
   .empty { color: var(--muted); font-size: 12px; font-style: italic; }
-  #hud { position: absolute; left: 12px; top: 12px; background: rgba(12,13,16,0.82);
-    border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 12px;
-    color: var(--muted); pointer-events: none; line-height: 1.6; }
-  #hud b { color: var(--text); }
-  .legend { position: absolute; right: 12px; top: 12px; background: rgba(12,13,16,0.82);
-    border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 11px; }
-  .legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 7px; vertical-align: middle; }
+
+  /* ---- Viewport overlays ------------------------------------------------ */
+  #hud { position: absolute; left: 14px; top: 14px; background: rgba(10,10,10,0.82);
+    border: 1px solid var(--line); padding: 8px 12px; font-size: 12px; color: var(--muted);
+    pointer-events: none; line-height: 1.6; }
+  #hud b { color: var(--text); font-weight: 600; }
+  .panelcard { position: absolute; background: rgba(10,10,10,0.86); border: 1px solid var(--line);
+    padding: 10px 13px; font-size: 11.5px; line-height: 1.65; color: var(--muted); }
+  .panelcard h3 { font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
+    margin-bottom: 6px; font-weight: 600; }
+  .panelcard b { color: var(--text); font-weight: 500; }
+  #legend { right: 14px; top: 14px; }
+  #legend .dot { display: inline-block; width: 9px; height: 9px; margin-right: 7px; vertical-align: middle; }
+  #navhelp { right: 14px; bottom: 14px; max-width: 230px; }
+  #navhelp .k { color: var(--text); font-weight: 500; }
   #flash { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
-    background: var(--accent); color: #fff; padding: 8px 16px; border-radius: 8px; font-size: 13px; opacity: 0; }
-  .back-bar { padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel-2); }
-  .back-bar a { color: var(--muted); text-decoration: none; font-size: 13px; }
-  .back-bar a:hover { color: var(--text); }
-  .back-bar .title { display: block; margin-top: 4px; font-size: 15px; font-weight: 600; color: var(--text); }
+    background: var(--accent); color: #fff; padding: 9px 18px; font-size: 13px; font-weight: 500; opacity: 0;
+    pointer-events: none; }
 </style>
 </head>
 <body>
@@ -74,42 +140,86 @@
   <div id="stage">
     <canvas id="cv"></canvas>
     <div id="hud"></div>
-    <div class="legend">
+    <div id="legend" class="panelcard">
+      <h3>Legend</h3>
+      <div><span class="dot" style="background:#f52525"></span><b>Red box</b> = arena bounds</div>
       <div><span class="dot" style="background:var(--a)"></span>Spawn A</div>
       <div><span class="dot" style="background:var(--b)"></span>Spawn B</div>
-      <div style="margin-top:4px;color:var(--muted)">Darker = taller box</div>
+      <div style="margin-top:4px">Darker box = taller cover</div>
+    </div>
+    <div id="navhelp" class="panelcard">
+      <h3>Navigate (Blender-style)</h3>
+      <div><span class="k">Left-click</span> — select</div>
+      <div><span class="k">Middle-drag</span> — orbit (yaw / pitch)</div>
+      <div><span class="k">Shift + Middle</span> — pan</div>
+      <div><span class="k">Right-drag</span> — pan</div>
+      <div><span class="k">Wheel</span> — zoom · <span class="k">F</span> — frame</div>
     </div>
   </div>
 
   <div id="side">
-    <div class="back-bar">
-      <a href="../">← Back to AIM4</a>
-      <span class="title">Level Editor</span>
-    </div>
-    <div class="sec">
-      <h2>Import existing map</h2>
-      <div class="row">
-        <select id="map-select"></select>
-        <button id="map-load" style="flex:0 0 auto">Load</button>
+    <div class="topbar">
+      <div class="brand">
+        <span class="kicker">AIM4</span>
+        <span class="title">Level Editor</span>
       </div>
-      <div class="hint">Loads a real in-game arena from <code>maps.js</code> to edit.</div>
+      <a class="back" href="../">← Back</a>
     </div>
 
+    <!-- File -->
     <div class="sec">
-      <h2>Add &amp; transform</h2>
-      <div class="split">
-        <button id="add-box">+ Add Box</button>
-        <button id="dup">Duplicate</button>
-        <button id="del" class="danger">Delete</button>
+      <h2>File</h2>
+      <div class="seg c3">
+        <button id="btn-new" title="New empty level">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>New
+        </button>
+        <button id="btn-undo" title="Undo (Ctrl+Z)" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-1"/></svg>Undo
+        </button>
+        <button id="btn-redo" title="Redo (Ctrl+Y)" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h1"/></svg>Redo
+        </button>
       </div>
-      <div class="tools" style="margin-top:8px">
-        <button data-mode="translate" class="active">Move (W)</button>
-        <button data-mode="scale">Scale (E)</button>
-        <button id="snap-floor">Drop to floor</button>
+      <div class="row" style="margin-top:10px">
+        <select id="map-select" class="grow"></select>
+        <button id="map-load" title="Load a real in-game arena to edit">Load</button>
       </div>
-      <div class="row" style="margin-top:8px">
-        <label>Snap (m)</label>
-        <select id="snap">
+      <div class="hint">Start from <code>New</code>, or load a real arena from <code>maps.js</code>.</div>
+    </div>
+
+    <!-- Create -->
+    <div class="sec">
+      <h2>Create</h2>
+      <div class="seg c2">
+        <button id="add-box">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg>Add Box
+        </button>
+        <button id="add-spawn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5 8 12 8 12s8-7 8-12a8 8 0 0 0-8-8z"/></svg>Add Spawn
+        </button>
+      </div>
+      <div class="hint">New objects appear at the view center. Spawns are where the two duelists start (A &amp; B are required by the game).</div>
+    </div>
+
+    <!-- Transform -->
+    <div class="sec">
+      <h2>Transform</h2>
+      <div class="seg c2">
+        <button data-mode="translate" class="active" title="Move — drag the colored arrows (W / G)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>Move
+        </button>
+        <button data-mode="scale" title="Scale — drag the axis handles to resize X / Y / Z (E / S)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3h-6M21 3v6M21 3l-7 7M3 21h6M3 21v-6M3 21l7-7"/></svg>Scale
+        </button>
+      </div>
+      <div class="seg c3" style="margin-top:8px">
+        <button id="dup" title="Duplicate (Shift+D)">Duplicate</button>
+        <button id="snap-floor" title="Drop selected box onto the floor">To floor</button>
+        <button id="del" class="danger" title="Delete (Del / X)">Delete</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="lbl">Snap (m)</label>
+        <select id="snap" class="grow">
           <option value="0">Off</option>
           <option value="0.1">0.1</option>
           <option value="0.25">0.25</option>
@@ -117,48 +227,13 @@
           <option value="1">1.0</option>
         </select>
       </div>
-      <div class="hint">
-        Click a box/spawn to select. Drag the gizmo to move or scale.<br />
-        Orbit: left-drag empty space · Pan: right-drag · Zoom: wheel · Delete: <kbd>Del</kbd>
-      </div>
+      <div class="hint">Pick an object, then drag the on-screen gizmo. In <b>Scale</b> mode each axis handle resizes that side only.</div>
     </div>
 
-    <div class="sec">
-      <h2>Level</h2>
-      <div class="row"><label>ID</label><input id="m-id" type="text" value="custom-level" /></div>
-      <div class="row"><label>Label</label><input id="m-label" type="text" value="Custom Level" /></div>
-      <div class="pillrow">
-        <button class="pill" data-seth="2.4">Peek 2.4</button>
-        <button class="pill" data-seth="6">Full 6.0</button>
-        <button class="pill" data-seth="0.85">Low 0.85</button>
-      </div>
-      <div class="hint" style="margin-top:6px">Height presets apply to the selected box.</div>
-    </div>
-
-    <div class="sec">
-      <h2>Bounds</h2>
-      <div class="row">
-        <label>Mode</label>
-        <select id="b-mode">
-          <option value="auto" selected>Auto (fit + margin)</option>
-          <option value="manual">Manual</option>
-        </select>
-      </div>
-      <div id="b-marginrow" class="row"><label>Auto margin</label><input id="b-automargin" type="number" step="0.5" value="3" /></div>
-      <div id="b-manual" style="display:none">
-        <div class="grid3">
-          <div class="f"><label>minX</label><input id="b-minx" type="number" step="0.5" value="-7" /></div>
-          <div class="f"><label>maxX</label><input id="b-maxx" type="number" step="0.5" value="7" /></div>
-          <div class="f"><label></label></div>
-          <div class="f"><label>minZ</label><input id="b-minz" type="number" step="0.5" value="-8" /></div>
-          <div class="f"><label>maxZ</label><input id="b-maxz" type="number" step="0.5" value="8" /></div>
-        </div>
-      </div>
-    </div>
-
+    <!-- Selected -->
     <div class="sec">
       <h2 id="prop-title">Selected</h2>
-      <div class="empty" id="prop-empty">Nothing selected.</div>
+      <div class="empty" id="prop-empty">Nothing selected — click an object in the view.</div>
       <div id="prop-box" style="display:none">
         <div class="grid3">
           <div class="f"><label>X</label><input id="p-x" type="number" step="0.1" /></div>
@@ -168,9 +243,15 @@
           <div class="f"><label>H (y)</label><input id="p-h" type="number" step="0.1" /></div>
           <div class="f"><label>D (z)</label><input id="p-d" type="number" step="0.1" /></div>
         </div>
+        <div class="pillrow" style="margin-top:10px">
+          <button class="pill" data-seth="0.85">Low 0.85</button>
+          <button class="pill" data-seth="2.4">Peek 2.4</button>
+          <button class="pill" data-seth="6">Full 6.0</button>
+        </div>
       </div>
       <div id="prop-spawn" style="display:none">
-        <div class="grid3">
+        <div class="row tight"><label class="lbl">Name</label><input id="s-name" type="text" class="grow" /></div>
+        <div class="grid3" style="margin-top:8px">
           <div class="f"><label>X</label><input id="s-x" type="number" step="0.1" /></div>
           <div class="f"><label>Y</label><input id="s-y" type="number" step="0.1" /></div>
           <div class="f"><label>Z</label><input id="s-z" type="number" step="0.1" /></div>
@@ -178,18 +259,51 @@
       </div>
     </div>
 
+    <!-- Level meta -->
+    <div class="sec">
+      <h2>Level</h2>
+      <div class="row tight"><label class="lbl">ID</label><input id="m-id" type="text" class="grow" value="custom-level" /></div>
+      <div class="row tight"><label class="lbl">Label</label><input id="m-label" type="text" class="grow" value="Custom Level" /></div>
+    </div>
+
+    <!-- Bounds -->
+    <div class="sec">
+      <h2>Bounds — the red box</h2>
+      <div class="row tight">
+        <label class="lbl">Mode</label>
+        <select id="b-mode" class="grow">
+          <option value="auto" selected>Auto (fit + margin)</option>
+          <option value="manual">Manual</option>
+        </select>
+      </div>
+      <div id="b-marginrow" class="row tight"><label class="lbl">Auto margin</label><input id="b-automargin" type="number" step="0.5" value="3" /></div>
+      <div id="b-manual" style="display:none">
+        <div class="grid3">
+          <div class="f"><label>minX</label><input id="b-minx" type="number" step="0.5" value="-7" /></div>
+          <div class="f"><label>maxX</label><input id="b-maxx" type="number" step="0.5" value="7" /></div>
+          <div class="f"><label></label></div>
+          <div class="f"><label>minZ</label><input id="b-minz" type="number" step="0.5" value="-8" /></div>
+          <div class="f"><label>maxZ</label><input id="b-maxz" type="number" step="0.5" value="8" /></div>
+        </div>
+      </div>
+      <div class="note">
+        <span>The <b>red wireframe box</b> is the arena <b>bounds</b> — the outer wall of the playable area. Players and the camera stay inside it. <b>Auto</b> wraps it around your boxes + spawns with a margin; <b>Manual</b> sets exact limits.</span>
+      </div>
+    </div>
+
+    <!-- Export / Import -->
     <div class="sec">
       <h2>Export / Import</h2>
-      <div class="split">
-        <button id="btn-export" class="full">Export JSON</button>
-        <button id="btn-copy" class="full">Copy</button>
+      <div class="seg c2">
+        <button id="btn-export">Export JSON</button>
+        <button id="btn-copy" class="primary">Copy</button>
       </div>
-      <div class="split" style="margin-top:6px">
-        <button id="btn-import" class="full ghost">Import from box</button>
-        <button id="btn-clear" class="full ghost danger">Clear boxes</button>
+      <div class="seg c2" style="margin-top:8px">
+        <button id="btn-import">Import JSON</button>
+        <button id="btn-clear" class="danger">Clear boxes</button>
       </div>
       <textarea id="io" spellcheck="false" placeholder="Exported JSON appears here. Paste JSON and click Import to load."></textarea>
-      <div class="hint">Format matches <code>src/multiplayer/maps.js</code>: each box is <code>{ pos:[x,y,z], size:[w,h,d] }</code>. Paste back into chat to turn it into a real level.</div>
+      <div class="hint">Format matches <code>src/multiplayer/maps.js</code>: each box is <code>{ pos:[x,y,z], size:[w,h,d] }</code>.</div>
     </div>
   </div>
 </div>
@@ -281,7 +395,7 @@ const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio || 1);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0c0d10);
+scene.background = new THREE.Color(0x0a0a0a);
 
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 1000);
 camera.position.set(12, 14, 16);
@@ -289,7 +403,21 @@ camera.position.set(12, 14, 16);
 const orbit = new OrbitControls(camera, renderer.domElement);
 orbit.enableDamping = true;
 orbit.dampingFactor = 0.08;
+orbit.screenSpacePanning = true;
+orbit.zoomToCursor = true;
 orbit.target.set(0, 1, 0);
+
+// Blender-style mouse mapping: left = select (free), middle = orbit, right = pan,
+// wheel = zoom. Holding Shift turns the middle drag into a pan; Ctrl into a dolly.
+const M = THREE.MOUSE;
+orbit.mouseButtons = { LEFT: null, MIDDLE: M.ROTATE, RIGHT: M.PAN };
+function syncMiddle(e) {
+  if (e.shiftKey) orbit.mouseButtons.MIDDLE = M.PAN;
+  else if (e.ctrlKey || e.metaKey) orbit.mouseButtons.MIDDLE = M.DOLLY;
+  else orbit.mouseButtons.MIDDLE = M.ROTATE;
+}
+window.addEventListener('keydown', syncMiddle);
+window.addEventListener('keyup', syncMiddle);
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.55));
 const dir = new THREE.DirectionalLight(0xffffff, 1.1);
@@ -302,26 +430,25 @@ scene.add(dir2);
 // Floor + grid
 const floor = new THREE.Mesh(
   new THREE.PlaneGeometry(200, 200),
-  new THREE.MeshStandardMaterial({ color: 0x111317, roughness: 1, metalness: 0 })
+  new THREE.MeshStandardMaterial({ color: 0x101012, roughness: 1, metalness: 0 })
 );
 floor.rotation.x = -Math.PI / 2;
 floor.position.y = -0.001;
 scene.add(floor);
 
-const grid = new THREE.GridHelper(80, 80, 0x2a2e38, 0x191c22);
+const grid = new THREE.GridHelper(80, 80, 0x262626, 0x161616);
 scene.add(grid);
-const grid5 = new THREE.GridHelper(80, 16, 0x3a4150, 0x3a4150);
+const grid5 = new THREE.GridHelper(80, 16, 0x383838, 0x383838);
 grid5.position.y = 0.002;
 scene.add(grid5);
 
-// Axes (X red, Z blue) for orientation; -Z is "forward" in-game.
 const axes = new THREE.AxesHelper(4);
 scene.add(axes);
 
-// Bounds wireframe
+// Bounds wireframe (the red box)
 const boundsBox = new THREE.LineSegments(
   new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
-  new THREE.LineBasicMaterial({ color: 0xf52525, transparent: true, opacity: 0.55 })
+  new THREE.LineBasicMaterial({ color: 0xf52525, transparent: true, opacity: 0.6 })
 );
 scene.add(boundsBox);
 
@@ -331,12 +458,30 @@ scene.add(boundsBox);
 const UNIT_GEO = new THREE.BoxGeometry(1, 1, 1);
 const boxGroup = new THREE.Group();
 scene.add(boxGroup);
+const spawnGroup = new THREE.Group();
+scene.add(spawnGroup);
 
-let selected = null;          // mesh (box) or spawn marker
+let selected = null;
 let snapVal = 0.5;
+const spawns = []; // array of spawn meshes
 
-// Spawn markers
-function makeSpawn(color) {
+const SPAWN_COLORS = { A: 0x36c2ff, B: 0xffb13b };
+const SPAWN_CYCLE = [0x57e08a, 0xc77dff, 0xff7d7d, 0x7dd3ff, 0xffe066];
+function colorForLabel(label, idx) {
+  if (SPAWN_COLORS[label] != null) return SPAWN_COLORS[label];
+  return SPAWN_CYCLE[idx % SPAWN_CYCLE.length];
+}
+function nextSpawnLabel() {
+  const used = new Set(spawns.map((s) => s.userData.spawn));
+  for (let i = 0; i < 26; i++) {
+    const l = String.fromCharCode(65 + i);
+    if (!used.has(l)) return l;
+  }
+  return 'S' + spawns.length;
+}
+
+function makeSpawn(label, idx) {
+  const color = colorForLabel(label, idx);
   const m = new THREE.Mesh(
     new THREE.CylinderGeometry(0.35, 0.35, 0.1, 24),
     new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.35, roughness: 0.5 })
@@ -355,20 +500,11 @@ function makeSpawn(color) {
   pole.position.y = 0.8;
   m.add(pole);
   m.userData.kind = 'spawn';
-  scene.add(m);
+  m.userData.spawn = label;
+  spawnGroup.add(m);
+  spawns.push(m);
   return m;
 }
-const spawnA = makeSpawn(0x36c2ff); spawnA.userData.spawn = 'A';
-const spawnB = makeSpawn(0xffb13b); spawnB.userData.spawn = 'B';
-
-// Transform gizmo
-const transform = new TransformControls(camera, renderer.domElement);
-transform.setTranslationSnap(snapVal);
-transform.setScaleSnap(snapVal);
-transform.addEventListener('dragging-changed', (e) => { orbit.enabled = !e.value; });
-transform.addEventListener('objectChange', onGizmoChange);
-const gizmo = transform.getHelper ? transform.getHelper() : transform;
-scene.add(gizmo);
 
 function heightColor(h) {
   const t = Math.max(0, Math.min(1, h / 6));
@@ -400,45 +536,136 @@ function clearBoxes() {
     boxGroup.remove(m);
   }
 }
+function clearSpawns() {
+  for (let i = spawnGroup.children.length - 1; i >= 0; i--) {
+    spawnGroup.remove(spawnGroup.children[i]);
+  }
+  spawns.length = 0;
+}
+
+// Transform gizmo
+const transform = new TransformControls(camera, renderer.domElement);
+transform.setSize(1.1);
+transform.setTranslationSnap(snapVal);
+transform.setScaleSnap(snapVal);
+transform.addEventListener('dragging-changed', (e) => {
+  orbit.enabled = !e.value;
+  if (e.value) beforeDrag = captureState();
+  else if (beforeDrag) { pushUndoState(beforeDrag); beforeDrag = null; }
+});
+transform.addEventListener('objectChange', onGizmoChange);
+const gizmo = transform.getHelper ? transform.getHelper() : transform;
+scene.add(gizmo);
 
 function select(obj) {
   selected = obj;
   if (obj) transform.attach(obj);
   else transform.detach();
-  // Spawns: translate only.
-  if (obj && obj.userData.kind === 'spawn') {
-    document.querySelector('[data-mode="translate"]').click();
-  }
+  if (obj && obj.userData.kind === 'spawn') setMode('translate');
   syncProps();
+}
+
+// ---------------------------------------------------------------------------
+// Undo / redo
+// ---------------------------------------------------------------------------
+const undoStack = [];
+const redoStack = [];
+let beforeDrag = null;
+let beforeEdit = null;
+
+function captureState() {
+  return {
+    id: el('m-id').value, label: el('m-label').value,
+    bMode: el('b-mode').value, margin: num('b-automargin', 3),
+    bounds: { minX: num('b-minx', -7), maxX: num('b-maxx', 7), minZ: num('b-minz', -8), maxZ: num('b-maxz', 8) },
+    boxes: boxGroup.children.map((m) => ({
+      pos: [m.position.x, m.position.y, m.position.z],
+      size: [m.scale.x, m.scale.y, m.scale.z]
+    })),
+    spawns: spawns.map((s) => ({ label: s.userData.spawn, pos: [s.position.x, s.position.y, s.position.z] }))
+  };
+}
+
+function applyState(s) {
+  clearBoxes();
+  clearSpawns();
+  (s.boxes || []).forEach(addBox);
+  (s.spawns || []).forEach((sp, i) => {
+    const m = makeSpawn(sp.label, i);
+    m.position.set(sp.pos[0], sp.pos[1], sp.pos[2]);
+  });
+  el('m-id').value = s.id || 'custom-level';
+  el('m-label').value = s.label || 'Custom Level';
+  el('b-mode').value = s.bMode || 'auto';
+  el('b-automargin').value = s.margin ?? 3;
+  if (s.bounds) {
+    setVal('b-minx', s.bounds.minX); setVal('b-maxx', s.bounds.maxX);
+    setVal('b-minz', s.bounds.minZ); setVal('b-maxz', s.bounds.maxZ);
+  }
+  toggleBoundsMode();
+  select(null);
+  updateBounds();
+}
+
+function pushUndoState(state) {
+  undoStack.push(state);
+  if (undoStack.length > 120) undoStack.shift();
+  redoStack.length = 0;
+  updateUndoButtons();
+}
+function pushUndo() { pushUndoState(captureState()); }
+function undo() {
+  if (!undoStack.length) return;
+  redoStack.push(captureState());
+  applyState(undoStack.pop());
+  updateUndoButtons();
+  flash('Undo');
+}
+function redo() {
+  if (!redoStack.length) return;
+  undoStack.push(captureState());
+  applyState(redoStack.pop());
+  updateUndoButtons();
+  flash('Redo');
+}
+function updateUndoButtons() {
+  el('btn-undo').disabled = undoStack.length === 0;
+  el('btn-redo').disabled = redoStack.length === 0;
 }
 
 // ---------------------------------------------------------------------------
 // Load / build map
 // ---------------------------------------------------------------------------
-function loadMap(map) {
-  clearBoxes();
-  (map.boxes || []).forEach(addBox);
-  const a = map.spawns?.A?.pos || [0, 0, 6];
-  const bb = map.spawns?.B?.pos || [0, 0, -6];
-  spawnA.position.set(a[0], a[1], a[2]);
-  spawnB.position.set(bb[0], bb[1], bb[2]);
-  document.getElementById('m-id').value = map.id || 'custom-level';
-  document.getElementById('m-label').value = map.label || 'Custom Level';
-  if (map.bounds) {
-    document.getElementById('b-mode').value = 'manual';
-    toggleBoundsMode();
-    setVal('b-minx', map.bounds.minX); setVal('b-maxx', map.bounds.maxX);
-    setVal('b-minz', map.bounds.minZ); setVal('b-maxz', map.bounds.maxZ);
+function normalizeMap(map) {
+  let spawnList = [];
+  if (Array.isArray(map.spawns)) {
+    spawnList = map.spawns.map((s, i) => ({ label: s.label || String.fromCharCode(65 + i), pos: s.pos || [0, 0, 0] }));
+  } else if (map.spawns && typeof map.spawns === 'object') {
+    spawnList = Object.entries(map.spawns).map(([label, v]) => ({ label, pos: v.pos || [0, 0, 0] }));
+  } else {
+    spawnList = [{ label: 'A', pos: [2, 0, 6] }, { label: 'B', pos: [-2, 0, -6] }];
   }
-  select(null);
-  frameCamera(map.bounds);
+  return {
+    id: map.id || 'custom-level',
+    label: map.label || 'Custom Level',
+    bMode: map.bounds ? 'manual' : 'auto',
+    margin: 3,
+    bounds: map.bounds || { minX: -7, maxX: 7, minZ: -8, maxZ: 8 },
+    boxes: map.boxes || [],
+    spawns: spawnList
+  };
+}
+
+function loadMap(map, { frame = true } = {}) {
+  applyState(normalizeMap(map));
+  if (frame) frameCamera(computeBounds());
 }
 
 function frameCamera(bounds) {
   if (!bounds) return;
   const cx = (bounds.minX + bounds.maxX) / 2;
   const cz = (bounds.minZ + bounds.maxZ) / 2;
-  const ext = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ);
+  const ext = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ, 4);
   orbit.target.set(cx, 1, cz);
   camera.position.set(cx + ext * 0.7, ext * 0.9 + 6, cz + ext * 0.9);
   orbit.update();
@@ -464,7 +691,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   ptr.x = ((e.clientX - r.left) / r.width) * 2 - 1;
   ptr.y = -((e.clientY - r.top) / r.height) * 2 + 1;
   ray.setFromCamera(ptr, camera);
-  const targets = [...boxGroup.children, spawnA, spawnB];
+  const targets = [...boxGroup.children, ...spawns];
   const hits = ray.intersectObjects(targets, true);
   if (hits.length) {
     let obj = hits[0].object;
@@ -478,20 +705,19 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 // ---------------------------------------------------------------------------
 // Property panel
 // ---------------------------------------------------------------------------
+const el = (id) => document.getElementById(id);
 const round2 = (v) => Math.round(v * 1000) / 1000;
-function setVal(id, v) { document.getElementById(id).value = round2(v); }
-function num(id, dflt) { const v = parseFloat(document.getElementById(id).value); return Number.isFinite(v) ? v : dflt; }
+function setVal(id, v) { el(id).value = round2(v); }
+function num(id, dflt) { const v = parseFloat(el(id).value); return Number.isFinite(v) ? v : dflt; }
 
 function syncProps() {
-  const empty = document.getElementById('prop-empty');
-  const boxP = document.getElementById('prop-box');
-  const spP = document.getElementById('prop-spawn');
-  const title = document.getElementById('prop-title');
+  const empty = el('prop-empty'), boxP = el('prop-box'), spP = el('prop-spawn'), title = el('prop-title');
   if (!selected) { empty.style.display = ''; boxP.style.display = 'none'; spP.style.display = 'none'; title.textContent = 'Selected'; return; }
   empty.style.display = 'none';
   if (selected.userData.kind === 'spawn') {
     boxP.style.display = 'none'; spP.style.display = '';
     title.textContent = 'Spawn ' + selected.userData.spawn;
+    el('s-name').value = selected.userData.spawn;
     setVal('s-x', selected.position.x); setVal('s-y', selected.position.y); setVal('s-z', selected.position.z);
   } else {
     spP.style.display = 'none'; boxP.style.display = '';
@@ -504,16 +730,27 @@ function syncProps() {
 function onGizmoChange() {
   if (!selected) return;
   if (selected.userData.kind === 'box') {
+    selected.scale.x = Math.max(0.05, selected.scale.x);
+    selected.scale.y = Math.max(0.05, selected.scale.y);
+    selected.scale.z = Math.max(0.05, selected.scale.z);
     selected.material.color.copy(heightColor(selected.scale.y));
   }
   syncProps();
   updateBounds();
 }
 
+// Numeric inputs: snapshot once when editing begins, commit on change.
+function trackEdit(ids) {
+  ids.forEach((id) => {
+    el(id).addEventListener('focus', () => { beforeEdit = captureState(); });
+    el(id).addEventListener('change', () => { if (beforeEdit) { pushUndoState(beforeEdit); beforeEdit = null; } });
+  });
+}
+
 function bindBoxProp(id, apply) {
-  document.getElementById(id).addEventListener('input', () => {
+  el(id).addEventListener('input', () => {
     if (!selected || selected.userData.kind !== 'box') return;
-    const v = parseFloat(document.getElementById(id).value);
+    const v = parseFloat(el(id).value);
     if (!Number.isFinite(v)) return;
     apply(selected, v);
     selected.material.color.copy(heightColor(selected.scale.y));
@@ -528,18 +765,28 @@ bindBoxProp('p-h', (m, v) => (m.scale.y = Math.max(0.05, v)));
 bindBoxProp('p-d', (m, v) => (m.scale.z = Math.max(0.05, v)));
 
 ['s-x', 's-y', 's-z'].forEach((id) => {
-  document.getElementById(id).addEventListener('input', () => {
+  el(id).addEventListener('input', () => {
     if (!selected || selected.userData.kind !== 'spawn') return;
     selected.position.set(num('s-x', 0), num('s-y', 0), num('s-z', 0));
     updateBounds();
   });
 });
+el('s-name').addEventListener('input', () => {
+  if (!selected || selected.userData.kind !== 'spawn') return;
+  selected.userData.spawn = el('s-name').value.trim() || selected.userData.spawn;
+  el('prop-title').textContent = 'Spawn ' + selected.userData.spawn;
+});
+el('s-name').addEventListener('focus', () => { beforeEdit = captureState(); });
+el('s-name').addEventListener('change', () => { if (beforeEdit) { pushUndoState(beforeEdit); beforeEdit = null; } });
+
+trackEdit(['p-x', 'p-y', 'p-z', 'p-w', 'p-h', 'p-d', 's-x', 's-y', 's-z',
+  'm-id', 'm-label', 'b-automargin', 'b-minx', 'b-maxx', 'b-minz', 'b-maxz']);
 
 // ---------------------------------------------------------------------------
 // Bounds
 // ---------------------------------------------------------------------------
 function computeBounds() {
-  if (document.getElementById('b-mode').value === 'manual') {
+  if (el('b-mode').value === 'manual') {
     return { minX: num('b-minx', -7), maxX: num('b-maxx', 7), minZ: num('b-minz', -8), maxZ: num('b-maxz', 8) };
   }
   const margin = num('b-automargin', 3);
@@ -549,69 +796,108 @@ function computeBounds() {
     consider(m.position.x - m.scale.x / 2, m.position.z - m.scale.z / 2);
     consider(m.position.x + m.scale.x / 2, m.position.z + m.scale.z / 2);
   }
-  consider(spawnA.position.x, spawnA.position.z);
-  consider(spawnB.position.x, spawnB.position.z);
+  for (const s of spawns) consider(s.position.x, s.position.z);
   if (!isFinite(minX)) { minX = -5; maxX = 5; minZ = -5; maxZ = 5; }
   return { minX: round2(minX - margin), maxX: round2(maxX + margin), minZ: round2(minZ - margin), maxZ: round2(maxZ + margin) };
 }
 
 function updateBounds() {
-  const b = computeBounds();
-  const w = Math.max(0.1, b.maxX - b.minX);
-  const d = Math.max(0.1, b.maxZ - b.minZ);
+  const bb = computeBounds();
+  const w = Math.max(0.1, bb.maxX - bb.minX);
+  const d = Math.max(0.1, bb.maxZ - bb.minZ);
   boundsBox.scale.set(w, FULL_H, d);
-  boundsBox.position.set((b.minX + b.maxX) / 2, FULL_H / 2, (b.minZ + b.maxZ) / 2);
+  boundsBox.position.set((bb.minX + bb.maxX) / 2, FULL_H / 2, (bb.minZ + bb.maxZ) / 2);
 }
 
-document.getElementById('b-mode').addEventListener('change', () => { toggleBoundsMode(); updateBounds(); });
+el('b-mode').addEventListener('change', () => { toggleBoundsMode(); updateBounds(); });
 ['b-minx', 'b-maxx', 'b-minz', 'b-maxz', 'b-automargin'].forEach((id) =>
-  document.getElementById(id).addEventListener('input', updateBounds));
+  el(id).addEventListener('input', updateBounds));
 function toggleBoundsMode() {
-  const manual = document.getElementById('b-mode').value === 'manual';
-  document.getElementById('b-manual').style.display = manual ? '' : 'none';
-  document.getElementById('b-marginrow').style.display = manual ? 'none' : '';
+  const manual = el('b-mode').value === 'manual';
+  el('b-manual').style.display = manual ? '' : 'none';
+  el('b-marginrow').style.display = manual ? 'none' : '';
 }
 
 // ---------------------------------------------------------------------------
 // Toolbar actions
 // ---------------------------------------------------------------------------
-document.getElementById('add-box').addEventListener('click', () => {
+el('btn-new').addEventListener('click', () => {
+  pushUndo();
+  applyState({
+    id: 'custom-level', label: 'Custom Level', bMode: 'manual', margin: 3,
+    bounds: { minX: -7, maxX: 7, minZ: -8, maxZ: 8 }, boxes: [],
+    spawns: [{ label: 'A', pos: [2, 0, 6] }, { label: 'B', pos: [-2, 0, -6] }]
+  });
+  frameCamera(computeBounds());
+  flash('New empty level');
+});
+el('btn-undo').addEventListener('click', undo);
+el('btn-redo').addEventListener('click', redo);
+
+el('add-box').addEventListener('click', () => {
+  pushUndo();
   const t = orbit.target;
   const mesh = addBox({ pos: [round2(t.x), 1.2, round2(t.z)], size: [1, 2.4, 1] });
   select(mesh);
   updateBounds();
 });
-document.getElementById('dup').addEventListener('click', () => {
-  if (!selected || selected.userData.kind !== 'box') return;
-  const mesh = addBox({
-    pos: [round2(selected.position.x + 1), selected.position.y, round2(selected.position.z + 1)],
-    size: [selected.scale.x, selected.scale.y, selected.scale.z]
-  });
-  select(mesh); updateBounds();
+el('add-spawn').addEventListener('click', () => {
+  pushUndo();
+  const t = orbit.target;
+  const m = makeSpawn(nextSpawnLabel(), spawns.length);
+  m.position.set(round2(t.x), 0, round2(t.z));
+  select(m);
+  updateBounds();
 });
-document.getElementById('del').addEventListener('click', deleteSelected);
+el('dup').addEventListener('click', duplicateSelected);
+function duplicateSelected() {
+  if (!selected) return;
+  pushUndo();
+  if (selected.userData.kind === 'box') {
+    const mesh = addBox({
+      pos: [round2(selected.position.x + 1), selected.position.y, round2(selected.position.z + 1)],
+      size: [selected.scale.x, selected.scale.y, selected.scale.z]
+    });
+    select(mesh);
+  } else {
+    const m = makeSpawn(nextSpawnLabel(), spawns.length);
+    m.position.set(round2(selected.position.x + 1), selected.position.y, round2(selected.position.z + 1));
+    select(m);
+  }
+  updateBounds();
+}
+el('del').addEventListener('click', deleteSelected);
 function deleteSelected() {
-  if (!selected || selected.userData.kind !== 'box') return;
+  if (!selected) return;
+  pushUndo();
   transform.detach();
-  selected.material.dispose();
-  boxGroup.remove(selected);
+  if (selected.userData.kind === 'box') {
+    selected.material.dispose();
+    boxGroup.remove(selected);
+  } else {
+    spawnGroup.remove(selected);
+    const i = spawns.indexOf(selected);
+    if (i >= 0) spawns.splice(i, 1);
+  }
   selected = null;
   syncProps(); updateBounds();
 }
-document.getElementById('snap-floor').addEventListener('click', () => {
+el('snap-floor').addEventListener('click', () => {
   if (!selected || selected.userData.kind !== 'box') return;
+  pushUndo();
   selected.position.y = selected.scale.y / 2;
-  syncProps();
+  syncProps(); updateBounds();
 });
 
+function setMode(mode) {
+  transform.setMode(mode);
+  document.querySelectorAll('[data-mode]').forEach((b2) => b2.classList.toggle('active', b2.dataset.mode === mode));
+}
 document.querySelectorAll('[data-mode]').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    transform.setMode(btn.dataset.mode);
-    document.querySelectorAll('[data-mode]').forEach((b2) => b2.classList.toggle('active', b2 === btn));
-  });
+  btn.addEventListener('click', () => setMode(btn.dataset.mode));
 });
 
-document.getElementById('snap').addEventListener('change', (e) => {
+el('snap').addEventListener('change', (e) => {
   snapVal = parseFloat(e.target.value) || 0;
   transform.setTranslationSnap(snapVal || null);
   transform.setScaleSnap(snapVal || null);
@@ -620,6 +906,7 @@ document.getElementById('snap').addEventListener('change', (e) => {
 document.querySelectorAll('[data-seth]').forEach((btn) => {
   btn.addEventListener('click', () => {
     if (!selected || selected.userData.kind !== 'box') return;
+    pushUndo();
     const h = parseFloat(btn.dataset.seth);
     selected.scale.y = h;
     selected.position.y = h / 2;
@@ -631,21 +918,31 @@ document.querySelectorAll('[data-seth]').forEach((btn) => {
 window.addEventListener('keydown', (e) => {
   const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
   if (typing) return;
-  if (e.key === 'w' || e.key === 'W') document.querySelector('[data-mode="translate"]').click();
-  if (e.key === 'e' || e.key === 'E') document.querySelector('[data-mode="scale"]').click();
-  if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (ctrl && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if (ctrl && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); redo(); return; }
+  if (ctrl) return;
+  if (e.key === 'w' || e.key === 'W' || e.key === 'g' || e.key === 'G') setMode('translate');
+  if (e.key === 'e' || e.key === 'E' || e.key === 's' || e.key === 'S') setMode('scale');
+  if (e.shiftKey && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); duplicateSelected(); }
+  if (e.key === 'Delete' || e.key === 'Backspace' || e.key === 'x' || e.key === 'X') deleteSelected();
+  if (e.key === 'f' || e.key === 'F') {
+    if (selected) { orbit.target.copy(selected.position); orbit.update(); }
+    else frameCamera(computeBounds());
+  }
 });
 
 // ---------------------------------------------------------------------------
 // Import existing maps dropdown
 // ---------------------------------------------------------------------------
-const sel = document.getElementById('map-select');
+const sel = el('map-select');
 MAP_TEMPLATES.forEach((m, i) => {
   const o = document.createElement('option');
   o.value = String(i); o.textContent = m.label;
   sel.appendChild(o);
 });
-document.getElementById('map-load').addEventListener('click', () => {
+el('map-load').addEventListener('click', () => {
+  pushUndo();
   const m = MAP_TEMPLATES[parseInt(sel.value, 10) || 0];
   loadMap(JSON.parse(JSON.stringify(m)));
   flash('Loaded ' + m.label);
@@ -660,14 +957,15 @@ function buildExport() {
     pos: [round2(m.position.x), round2(m.position.y), round2(m.position.z)],
     size: [round2(m.scale.x), round2(m.scale.y), round2(m.scale.z)]
   }));
+  const spawnsObj = {};
+  spawns.forEach((s) => {
+    spawnsObj[s.userData.spawn] = { pos: [round2(s.position.x), round2(s.position.y), round2(s.position.z)] };
+  });
   return {
-    id: document.getElementById('m-id').value.trim() || 'custom-level',
-    label: document.getElementById('m-label').value.trim() || 'Custom Level',
+    id: el('m-id').value.trim() || 'custom-level',
+    label: el('m-label').value.trim() || 'Custom Level',
     bounds,
-    spawns: {
-      A: { pos: [round2(spawnA.position.x), round2(spawnA.position.y), round2(spawnA.position.z)] },
-      B: { pos: [round2(spawnB.position.x), round2(spawnB.position.y), round2(spawnB.position.z)] }
-    },
+    spawns: spawnsObj,
     boxes,
     vertices: boxGroup.children.map((m) => ({
       footprint: [
@@ -682,23 +980,25 @@ function buildExport() {
   };
 }
 
-document.getElementById('btn-export').addEventListener('click', () => {
-  document.getElementById('io').value = JSON.stringify(buildExport(), null, 2);
+el('btn-export').addEventListener('click', () => {
+  el('io').value = JSON.stringify(buildExport(), null, 2);
+  flash('Exported to text box');
 });
-document.getElementById('btn-copy').addEventListener('click', async () => {
+el('btn-copy').addEventListener('click', async () => {
   const txt = JSON.stringify(buildExport(), null, 2);
-  document.getElementById('io').value = txt;
+  el('io').value = txt;
   try { await navigator.clipboard.writeText(txt); flash('Copied to clipboard'); }
   catch { flash('Select the text and copy manually'); }
 });
-document.getElementById('btn-import').addEventListener('click', () => {
-  const raw = document.getElementById('io').value.trim();
+el('btn-import').addEventListener('click', () => {
+  const raw = el('io').value.trim();
   if (!raw) { flash('Paste JSON into the box first'); return; }
-  try { loadMap(JSON.parse(raw)); flash('Imported'); }
+  try { pushUndo(); loadMap(JSON.parse(raw)); flash('Imported'); }
   catch (err) { flash('Invalid JSON: ' + err.message); }
 });
-document.getElementById('btn-clear').addEventListener('click', () => {
+el('btn-clear').addEventListener('click', () => {
   if (!confirm('Clear all boxes? Spawns and meta stay.')) return;
+  pushUndo();
   clearBoxes(); select(null); updateBounds();
 });
 
@@ -707,12 +1007,14 @@ document.getElementById('btn-clear').addEventListener('click', () => {
 // ---------------------------------------------------------------------------
 let flashTimer = null;
 function flash(msg) {
-  let el = document.getElementById('flash');
-  if (!el) { el = document.createElement('div'); el.id = 'flash'; document.getElementById('stage').appendChild(el); }
-  el.textContent = msg; el.style.opacity = '1'; el.style.transition = 'none';
+  const fl = el('flash') || (() => { const e = document.createElement('div'); e.id = 'flash'; el('stage').appendChild(e); return e; })();
+  fl.textContent = msg; fl.style.opacity = '1'; fl.style.transition = 'none';
   clearTimeout(flashTimer);
-  flashTimer = setTimeout(() => { el.style.transition = 'opacity .4s'; el.style.opacity = '0'; }, 1400);
+  flashTimer = setTimeout(() => { fl.style.transition = 'opacity .4s'; fl.style.opacity = '0'; }, 1400);
 }
+const flashEl = document.createElement('div');
+flashEl.id = 'flash';
+el('stage').appendChild(flashEl);
 
 function resize() {
   const w = cv.clientWidth, h = cv.clientHeight;
@@ -725,16 +1027,15 @@ window.addEventListener('resize', resize);
 function animate() {
   requestAnimationFrame(animate);
   orbit.update();
-  const sel = selected ? (selected.userData.kind === 'spawn' ? 'spawn ' + selected.userData.spawn : 'box') : 'none';
-  hud.innerHTML = `selected <b>${sel}</b> &nbsp; | boxes <b>${boxGroup.children.length}</b> &nbsp; | snap <b>${snapVal || 'off'}</b>`;
+  const what = selected ? (selected.userData.kind === 'spawn' ? 'spawn ' + selected.userData.spawn : 'box') : 'none';
+  hud.innerHTML = `selected <b>${what}</b> &nbsp;|&nbsp; boxes <b>${boxGroup.children.length}</b> &nbsp;|&nbsp; spawns <b>${spawns.length}</b> &nbsp;|&nbsp; snap <b>${snapVal || 'off'}</b>`;
   renderer.render(scene, camera);
 }
 
 // Boot: load the first arena so there's something to edit immediately.
 resize();
 loadMap(JSON.parse(JSON.stringify(MAP_TEMPLATES[0])));
-toggleBoundsMode();
-updateBounds();
+updateUndoButtons();
 animate();
 </script>
 </body>
