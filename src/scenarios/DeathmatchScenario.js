@@ -25,6 +25,11 @@ import { DEATHMATCH_MAP, deathmatchExtent } from './deathmatchMap.js';
 import { eyeOffset, SPAWN_GRACE } from '../multiplayer/constants.js';
 import { pickSpawnPreferHidden, movementHitScale, isPointVisible } from '../utils/spawnVisibility.js';
 import { worldImpactNormal } from '../utils/bulletImpact.js';
+import {
+  DM_DEATH_FX_DUR,
+  DM_DEATH_FX_PITCH,
+  updateDeathFxFrame
+} from './deathFx.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
@@ -44,10 +49,7 @@ const CROUCH_HOLD_MAX = 0.55;
 const CROUCH_RATE = 10;
 const BACKSHOT_FIRE_DELAY = 1.0; // s — bot waits before firing when target isn't looking
 
-const DEATH_FX_DUR = 0.55;
-const DEATH_FX_PITCH = degToRad(38) * 0.25;
 const MAX_PITCH = degToRad(89);
-const PLAYER_RESPAWN_DELAY = 0.9;
 const BOT_RESPAWN_DELAY = 0.5;
 
 const PLAYER_HP = 2;
@@ -88,7 +90,6 @@ export class DeathmatchScenario extends BaseScenario {
     this._botSeq = 0;
     this._dead = false;
     this._playerHp = PLAYER_HP;
-    this._respawnTimer = null;
     this._deathFx = null;
     this._board = new Map();
     this._killFeed = [];
@@ -722,11 +723,10 @@ export class DeathmatchScenario extends BaseScenario {
     const input = this.engine.player?.input;
     this._deathFx = {
       t: 0,
-      duration: DEATH_FX_DUR,
+      duration: DM_DEATH_FX_DUR,
       startPitch: input ? input.pitch : this.engine.camera.rotation.x,
-      flick: DEATH_FX_PITCH
+      flick: DM_DEATH_FX_PITCH
     };
-    this._respawnTimer = PLAYER_RESPAWN_DELAY;
   }
 
   _respawnPlayer() {
@@ -747,23 +747,21 @@ export class DeathmatchScenario extends BaseScenario {
   _updateDeathFx(dt) {
     const fx = this._deathFx;
     if (!fx) return;
-    fx.t += dt;
-    const p = Math.min(1, fx.t / fx.duration);
-    let red;
-    if (p < 0.2) red = p / 0.2;
-    else if (p > 0.5) red = 1 - (p - 0.5) / 0.5;
-    else red = 1;
+    const { red, flick, done } = updateDeathFxFrame(fx, dt, {
+      duration: fx.duration,
+      flickAmount: fx.flick
+    });
     this.engine.setDeathOverlay(red);
 
-    const flick = fx.flick * Math.sin(Math.min(1, p * 1.6) * Math.PI * 0.5);
     const pitch = clamp(fx.startPitch + flick, -MAX_PITCH, MAX_PITCH);
     this.engine.camera.rotation.x = pitch;
     const input = this.engine.player?.input;
     if (input) input.pitch = pitch;
 
-    if (fx.t >= fx.duration) {
+    if (done) {
       this._deathFx = null;
       this.engine.setDeathOverlay(0);
+      if (this._dead) this._respawnPlayer();
     }
   }
 
@@ -832,13 +830,6 @@ export class DeathmatchScenario extends BaseScenario {
     super.update(dt);
     if (!this.running) return;
     this._updateDeathFx(dt);
-    if (this._respawnTimer != null) {
-      this._respawnTimer -= dt;
-      if (this._respawnTimer <= 0) {
-        this._respawnTimer = null;
-        this._respawnPlayer();
-      }
-    }
   }
 
   results() {

@@ -29,6 +29,13 @@ import {
   SPAWN_GRACE,
   SNAPSHOT_RATE
 } from '../multiplayer/constants.js';
+import {
+  DM_DEATH_FX_DUR,
+  DM_DEATH_FX_PITCH,
+  DUEL_DEATH_FX_DUR,
+  DUEL_DEATH_FX_PITCH,
+  updateDeathFxFrame
+} from './deathFx.js';
 
 const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
 const MAX_PITCH = degToRad(89);
@@ -36,8 +43,6 @@ const MAX_PITCH = degToRad(89);
 // Reused scratch for drawing remote-shot tracers (no per-shot allocation).
 const _wOrigin = new THREE.Vector3();
 const _wEnd = new THREE.Vector3();
-const DEATH_FX_DUR = 0.55;
-const DEATH_FX_PITCH = degToRad(38);
 const STATE_HZ = 64; // cap upstream state sends (server sim is 128 Hz)
 // Render ~2 snapshot periods behind server time so we always have a pair to lerp.
 const INTERP_DELAY_MS = (1000 / SNAPSHOT_RATE) * 2;
@@ -352,7 +357,13 @@ export class MultiplayerDuelScenario extends BaseScenario {
   }
 
   applyRespawn(msg) {
-    if (msg.spawns) this.setSpawns(msg.spawns);
+    if (!msg.spawns) return;
+    if (this.isDeathmatch && this._deathFx) {
+      this._pendingSpawns = msg.spawns;
+      this.setSpawns(msg.spawns, { skipLocal: true });
+      return;
+    }
+    this.setSpawns(msg.spawns);
   }
 
   applyShotFired(msg) {
@@ -376,7 +387,12 @@ export class MultiplayerDuelScenario extends BaseScenario {
     this._dead = true;
     this.engine.player.enabled = false;
     beep(180, 0.1, 'sawtooth', 0.2);
-    this._deathFx = { t: 0, startPitch: this.input.pitch };
+    this._deathFx = {
+      t: 0,
+      startPitch: this.input.pitch,
+      duration: this.isDeathmatch ? DM_DEATH_FX_DUR : DUEL_DEATH_FX_DUR,
+      flick: this.isDeathmatch ? DM_DEATH_FX_PITCH : DUEL_DEATH_FX_PITCH
+    };
   }
 
   // ---- Per-frame ----------------------------------------------------------
@@ -453,20 +469,17 @@ export class MultiplayerDuelScenario extends BaseScenario {
   _updateDeathFx(dt) {
     const fx = this._deathFx;
     if (!fx) return;
-    fx.t += dt;
-    const prog = Math.min(1, fx.t / DEATH_FX_DUR);
-    let red;
-    if (prog < 0.2) red = prog / 0.2;
-    else if (prog > 0.5) red = 1 - (prog - 0.5) / 0.5;
-    else red = 1;
+    const { red, flick, done } = updateDeathFxFrame(fx, dt, {
+      duration: fx.duration,
+      flickAmount: fx.flick
+    });
     this.engine.setDeathOverlay(red);
 
-    const flick = DEATH_FX_PITCH * Math.sin(Math.min(1, prog * 1.6) * Math.PI * 0.5);
     const pitch = clamp(fx.startPitch + flick, -MAX_PITCH, MAX_PITCH);
     this.engine.camera.rotation.x = pitch;
     this.input.pitch = pitch;
 
-    if (fx.t >= DEATH_FX_DUR) {
+    if (done) {
       this._deathFx = null;
       this.engine.setDeathOverlay(0);
       if (this._pendingSpawns) {

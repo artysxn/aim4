@@ -57,7 +57,7 @@ export const TRACKING_HEAD_PTS = 3;
 export const TRACKING_BODY_PTS = 2;
 export const TRACKING_MAP_ID = 'tracking-arena';
 
-export const RESPAWN_DELAY = 1.4; // seconds between death and respawn
+export const RESPAWN_DELAY = 0.35; // deathmatch: align with client death FX, then respawn
 /** Seconds after spawn/respawn: no move, no shoot, invulnerable (deathmatch). */
 export const SPAWN_GRACE = 0.5;
 export const MAX_PLAYERS = 2; // a duel is 1v1
