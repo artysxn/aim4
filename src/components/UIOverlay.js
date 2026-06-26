@@ -1,16 +1,13 @@
 // ---------------------------------------------------------------------------
 // UIOverlay.js
 // All HTML/CSS UI layered over the canvas: main menu, settings, leaderboards,
-// in-run HUD, pause + results screens, and the off-screen threat chevrons for
-// the Arena. Holds the screen state machine and coordinates pointer-lock with
+// in-run HUD, pause + results screens. Holds the screen state machine and coordinates pointer-lock with
 // the run lifecycle. The core game loop never touches UI state.
 //
 // States: menu | settings | leaderboard | auth | await-start | countdown | playing | paused
 //         | results
 // ---------------------------------------------------------------------------
 
-import * as THREE from 'three';
-import { degToRad } from '../utils/MathUtils.js';
 import { RESOLUTIONS } from '../core/SettingsManager.js';
 import { SCENARIOS } from '../core/SceneManager.js';
 import * as Storage from '../utils/Storage.js';
@@ -58,8 +55,6 @@ const SCENARIO_SETTING_IDS = new Set([
 ]);
 
 const GEAR_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66z"/></svg>`;
-
-const _v = new THREE.Vector3();
 
 /** Slider paired with a number box; stored value is not clamped to the slider range. */
 function rf(id, label, min, max, step) {
@@ -390,7 +385,11 @@ export class UIOverlay {
           ${rf('set-spider-size-min', 'Random size min', 0.2, 0.8, 0.05)}
           ${rf('set-spider-size-max', 'Random size max', 0.2, 1.0, 0.05)}
           <label class="field-check"><input type="checkbox" id="set-spider-infinite-ammo" /> Infinite ammo</label>
-          <label class="field-check"><input type="checkbox" id="set-spider-vm-recoil" /> Viewmodel recoil</label>`
+          <label class="field-check"><input type="checkbox" id="set-spider-vm-recoil" /> Viewmodel recoil</label>
+          <label class="field-check"><input type="checkbox" id="set-spider-decoys" /> Decoy dots</label>
+          ${rf('set-spider-decoy-chance', 'Decoy chance (% per extra dot)', 0, 100, 5)}
+          ${rf('set-spider-decoy-min', 'Decoy count (min)', 0, 6, 1)}
+          ${rf('set-spider-decoy-max', 'Decoy count (max)', 0, 8, 1)}`
       },
       {
         id: 'survival',
@@ -426,15 +425,20 @@ export class UIOverlay {
             <select id="set-duels-arena">
               <option value="0">Random each run</option>
               <option value="1">1 · Long Lane</option>
-              <option value="2">2 · CQB</option>
-              <option value="3">3 · High Ground</option>
-              <option value="4">4 · The Pit</option>
-              <option value="5">5 · Split</option>
-              <option value="6">6 · Left Corner</option>
-              <option value="7">7 · Right Corner</option>
-              <option value="8">8 · Left Rampart</option>
-              <option value="9">9 · Right Loft</option>
-              <option value="10">10 · Left Bulwark</option>
+              <option value="2">2 · Garage</option>
+              <option value="3">3 · Catwalk</option>
+              <option value="4">4 · Plaza</option>
+              <option value="5">5 · Bunker Yard</option>
+              <option value="6">6 · Overpass</option>
+              <option value="7">7 · Trench</option>
+              <option value="8">8 · Left Corner</option>
+              <option value="9">9 · Right Corner</option>
+              <option value="10">10 · Left Rampart</option>
+              <option value="11">11 · Right Loft</option>
+              <option value="12">12 · Left Bulwark</option>
+              <option value="13">13 · Right Stacks</option>
+              <option value="14">14 · Left Skybox</option>
+              <option value="15">15 · Right Redoubt</option>
             </select>
           </div>
           ${rf('set-duels-ttk', 'Time to kill (s)', 0.2, 2.0, 0.1)}`
@@ -511,9 +515,6 @@ export class UIOverlay {
     const scenarioSettingsSections = this._scenarioSettingsSections();
 
     return `
-    <!-- THREAT CHEVRONS (Arena) -->
-    <div id="threats" class="threats"></div>
-
     <!-- MATCHMAKING QUEUE CHIP (visible while queued + in SP/menu) -->
     <div id="mm-queue-chip" class="mm-queue-chip" hidden>
       <span id="mm-queue-text">Finding ranked match…</span>
@@ -862,7 +863,6 @@ export class UIOverlay {
       this.screens[el.dataset.screen] = el;
     });
     this.hud = this.root.querySelector('#hud');
-    this.threatsEl = this.root.querySelector('#threats');
     this.mpScoreboard = this.root.querySelector('#mp-scoreboard');
     this.dmKillfeed = this.root.querySelector('#dm-killfeed');
     this._mpKillFeed = [];
@@ -1197,6 +1197,12 @@ export class UIOverlay {
     $('#set-spider-vm-recoil')?.addEventListener('change', (e) => {
       draft((d) => { d.spidershot.viewmodelRecoil = e.target.checked; });
     });
+    $('#set-spider-decoys')?.addEventListener('change', (e) => {
+      draft((d) => { d.spidershot.decoyEnabled = e.target.checked; });
+    });
+    this._bindRange('set-spider-decoy-chance', (v, d) => { d.spidershot.decoyChancePer = v / 100; });
+    this._bindRange('set-spider-decoy-min', (v, d) => { d.spidershot.decoyMin = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-spider-decoy-max', (v, d) => { d.spidershot.decoyMax = v; }, { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-surv-spawn', (v, d) => { d.survival.spawnInterval = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-surv-despawn', (v, d) => { d.survival.despawnTime = v; }, { parse: (v) => parseInt(v, 10) });
@@ -2385,6 +2391,10 @@ export class UIOverlay {
     this._setRange('set-spider-size-max', s.spidershot?.randomSizeMax ?? 0.35);
     $('#set-spider-infinite-ammo').checked = s.spidershot?.infiniteAmmo !== false;
     $('#set-spider-vm-recoil').checked = s.spidershot?.viewmodelRecoil === true;
+    $('#set-spider-decoys').checked = s.spidershot?.decoyEnabled !== false;
+    this._setRange('set-spider-decoy-chance', Math.round((s.spidershot?.decoyChancePer ?? 0.1) * 100));
+    this._setRange('set-spider-decoy-min', s.spidershot?.decoyMin ?? 0);
+    this._setRange('set-spider-decoy-max', s.spidershot?.decoyMax ?? 2);
 
     this._setRange('set-surv-spawn', s.survival?.spawnInterval ?? 1000);
     this._setRange('set-surv-despawn', s.survival?.despawnTime ?? 2000);
@@ -2584,7 +2594,7 @@ export class UIOverlay {
   }
 
   // -------------------------------------------------------------------------
-  // Per-frame updates (HUD + threat chevrons)
+  // Per-frame updates (HUD)
   // -------------------------------------------------------------------------
   frame(dt) {
     if (this.state === 'countdown') {
@@ -2632,7 +2642,6 @@ export class UIOverlay {
     }
     if (this._mpTabBoardHeld) this._renderMpTabScoreboard();
     this._updateAmmo(sc);
-    this._updateThreats(sc);
     if (this._isDeathmatchRun()) {
       this._renderKillFeed();
     }
@@ -2659,49 +2668,6 @@ export class UIOverlay {
       this.hudAmmoMag.textContent = String(weapon.ammo);
     }
     this.hudAmmoSize.textContent = String(weapon.magSize);
-  }
-
-  _updateThreats(sc) {
-    if (!sc || this.state !== 'playing' || !sc.isMultiplayer) {
-      if (this.threatsEl.childElementCount) this.threatsEl.innerHTML = '';
-      return;
-    }
-    const threats = sc.getThreats();
-    const cam = this.engine.camera;
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    const cx = w / 2;
-    const cy = h / 2;
-    const R = Math.min(w, h) * 0.24;
-
-    // Reuse chevron elements.
-    while (this.threatsEl.childElementCount < threats.length) {
-      const d = document.createElement('div');
-      d.className = 'chevron';
-      d.textContent = '▲';
-      this.threatsEl.appendChild(d);
-    }
-    while (this.threatsEl.childElementCount > threats.length) {
-      this.threatsEl.lastElementChild.remove();
-    }
-
-    threats.forEach((pos, i) => {
-      const el = this.threatsEl.children[i];
-      _v.copy(pos);
-      cam.worldToLocal(_v); // camera space: +x right, +y up, -z forward
-      const rel = Math.atan2(_v.x, -_v.z); // 0 = dead ahead, + = right
-      // Hide the chevron when the threat is already comfortably on-screen.
-      if (Math.abs(rel) < degToRad(22)) {
-        el.style.display = 'none';
-        return;
-      }
-      el.style.display = 'block';
-      const sx = cx + Math.sin(rel) * R;
-      const sy = cy - Math.cos(rel) * R;
-      el.style.left = sx + 'px';
-      el.style.top = sy + 'px';
-      el.style.transform = `translate(-50%,-50%) rotate(${rel}rad)`;
-    });
   }
 
   // -------------------------------------------------------------------------

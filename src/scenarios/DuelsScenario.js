@@ -1,13 +1,18 @@
 // ---------------------------------------------------------------------------
 // DuelsScenario.js  ("Duels")
 //
-// A 1v1 peek-fight in one of ten hand-built arenas (varying distance, height,
-// cover and peek side). Five symmetric arenas let the bot peek either direction;
-// five asymmetric arenas restrict peeks to one side only (left or right).
+// A 1v1 peek-fight in one of fifteen hand-built arenas (varying distance,
+// height, cover shape and peek side). Seven symmetric arenas let the bot peek
+// either direction; eight asymmetric arenas restrict peeks to one side only
+// (left or right). Cover is built from layered crates, bunkers, ramparts,
+// platforms and low barriers — not bare pillars — so every arena reads and
+// plays differently.
 // You spawn behind your own box and may strafe + crouch within a small box to
 // peek your cover. The enemy hides behind its box and breaks out at CS2 speed —
-// peeking LEFT or RIGHT, WIDE or CLOSE, holding the angle, jiggling (out-in-out),
-// or peeking and retreating. Drop it while it is exposed.
+// peeking LEFT or RIGHT, WIDE or CLOSE, holding the angle, peeking and
+// retreating, or JIGGLE-PEEKING: strafing out only until its head is barely
+// visible, immediately snapping back, then re-deciding which angle to search.
+// Drop it while it is exposed.
 //
 // The bot's lateral movement runs through SourceMover1D, the exact friction +
 // acceleration model the player uses, so its peeks ramp and stop like a real
@@ -42,127 +47,242 @@ const MAX_PITCH = degToRad(89);
 // lives, and the boxes (all of which occlude). `ecHalf` is the half-width of the
 // enemy's main cover along the strafe (X) axis — peek offsets are measured from it.
 // Optional `peekSide`: -1 = left only, +1 = right only; omit for 50/50.
+// ===========================================================================
+//  SYMMETRIC arenas (peekSide omitted) — both flanks of the enemy cover are
+//  open, so the bot may break left OR right. Decorative props are kept either
+//  low (head clears over them), behind the enemy, or well outside peek range so
+//  they never seal a lane.
+// ===========================================================================
 const ARENAS = [
   {
+    // Long flat lane. Mid-tall central wall with a wide backdrop and two
+    // mismatched crate stacks set well back for depth.
     label: 'Long Lane',
-    player: { pos: [0, 0, 11], yaw: 0, half: [1.8, 1.0] },
-    enemy: { x: 0, z: -11, y: 0 },
-    ecHalf: 0.8,
-    boxes: [
-      { pos: [0, 0.7, 10.0], size: [1.8, 1.4, 0.4], role: 'player' },
-      { pos: [0, 3.0, -10.0], size: [1.6, 6.0, 0.45], role: 'enemy' }
-    ]
-  },
-  {
-    label: 'CQB',
-    player: { pos: [0, 0, 3.4], yaw: 0, half: [1.3, 0.8] },
-    enemy: { x: 0, z: -3.4, y: 0 },
-    ecHalf: 0.65,
-    boxes: [
-      { pos: [0, 0.65, 2.6], size: [1.4, 1.3, 0.4], role: 'player' },
-      { pos: [0, 3.0, -2.6], size: [1.3, 6.0, 0.4], role: 'enemy' }
-    ]
-  },
-  {
-    label: 'High Ground',
-    player: { pos: [0, 0, 8], yaw: 0, half: [1.8, 1.0] },
-    enemy: { x: 0, z: -8, y: 1.8 },
+    player: { pos: [0, 0, 12.5], yaw: 0, half: [1.8, 1.0] },
+    enemy: { x: 0, z: -12.5, y: 0 },
     ecHalf: 0.85,
     boxes: [
-      { pos: [0, 0.7, 7.2], size: [1.8, 1.4, 0.4], role: 'player' },
-      { pos: [0, 0.9, -8.0], size: [3.4, 1.8, 3.4], role: 'prop' }, // platform (top 1.8)
-      { pos: [0, 4.8, -6.7], size: [1.7, 6.0, 0.45], role: 'enemy' } // wall on platform
+      { pos: [0, 0.7, 11.5], size: [2.0, 1.4, 0.5], role: 'player' },
+      { pos: [0, 1.5, -11.5], size: [1.7, 3.0, 0.55], role: 'enemy' },
+      { pos: [0, 1.1, -13.4], size: [5.4, 2.2, 0.45], role: 'prop' }, // backdrop wall
+      { pos: [-3.7, 0.55, -11.7], size: [1.1, 1.1, 1.1], role: 'prop' },
+      { pos: [3.7, 0.9, -11.7], size: [1.1, 1.8, 1.1], role: 'prop' }
     ]
   },
   {
-    label: 'The Pit',
-    player: { pos: [0, 1.6, 7], yaw: 0, half: [1.6, 0.9] },
-    enemy: { x: 0, z: -7, y: 0 },
+    // Mid-range crate yard. Cover is a stepped crate stack, flanked by low
+    // pallets the bot's head clears over.
+    label: 'Garage',
+    player: { pos: [0, 0, 8], yaw: 0, half: [1.8, 1.0] },
+    enemy: { x: 0, z: -8, y: 0 },
+    ecHalf: 0.95,
+    boxes: [
+      { pos: [0, 0.6, 7.0], size: [2.0, 1.2, 1.0], role: 'player' },
+      { pos: [0, 1.0, -7.2], size: [1.9, 2.0, 1.1], role: 'enemy' }, // big crate (top 2.0)
+      { pos: [0, 2.3, -7.35], size: [1.1, 0.6, 0.9], role: 'prop' }, // stacked crate (top 2.6)
+      { pos: [-3.7, 0.4, -7.0], size: [1.2, 0.8, 1.4], role: 'prop' }, // low pallet
+      { pos: [3.7, 0.4, -7.0], size: [1.2, 0.8, 1.4], role: 'prop' }
+    ]
+  },
+  {
+    // The enemy holds a low raised catwalk; you fight up onto it. Side rail
+    // blocks are low enough that the elevated head still peeks over them.
+    label: 'Catwalk',
+    player: { pos: [0, 0, 9.5], yaw: 0, half: [1.8, 1.0] },
+    enemy: { x: 0, z: -9.5, y: 0.9 },
     ecHalf: 0.8,
     boxes: [
-      { pos: [0, 0.8, 7.5], size: [4.0, 1.6, 4.0], role: 'prop' }, // player platform (top 1.6)
-      { pos: [0, 3.0, -6.2], size: [1.6, 6.0, 0.45], role: 'enemy' }
+      { pos: [0, 0.7, 8.5], size: [1.8, 1.4, 0.5], role: 'player' },
+      { pos: [0, 0.45, -9.5], size: [4.2, 0.9, 2.2], role: 'prop' }, // platform (top 0.9)
+      { pos: [0, 2.35, -8.9], size: [1.7, 2.9, 0.5], role: 'enemy' }, // wall on platform
+      { pos: [-3.0, 1.4, -9.3], size: [0.45, 1.6, 1.6], role: 'prop' },
+      { pos: [3.0, 1.4, -9.3], size: [0.45, 1.6, 1.6], role: 'prop' }
     ]
   },
   {
-    label: 'Split',
-    player: { pos: [0, 0, 7.5], yaw: 0, half: [2.0, 1.0] },
-    enemy: { x: 0, z: -7.5, y: 0 },
+    // Open plaza: a tall central monument with two low flanking wings. The
+    // wings shape the space without sealing either peek.
+    label: 'Plaza',
+    player: { pos: [0, 0, 8.5], yaw: 0, half: [2.0, 1.0] },
+    enemy: { x: 0, z: -8.5, y: 0 },
     ecHalf: 0.7,
     boxes: [
-      { pos: [0, 0.7, 6.7], size: [2.0, 1.4, 0.4], role: 'player' },
-      { pos: [0, 3.0, -6.7], size: [1.4, 6.0, 0.45], role: 'enemy' },
-      { pos: [-2.4, 3.75, -6.9], size: [0.6, 7.5, 0.6], role: 'prop' },
-      { pos: [2.4, 3.75, -6.9], size: [0.6, 7.5, 0.6], role: 'prop' }
+      { pos: [0, 0.7, 7.5], size: [2.2, 1.4, 0.5], role: 'player' },
+      { pos: [0, 1.45, -7.6], size: [1.4, 2.9, 0.7], role: 'enemy' },
+      { pos: [-2.3, 0.45, -7.6], size: [1.8, 0.9, 0.7], role: 'prop' }, // low wing
+      { pos: [2.3, 0.45, -7.6], size: [1.8, 0.9, 0.7], role: 'prop' }
     ]
   },
-  // ---- Asymmetric (one-sided peek) -----------------------------------------
-  // Corner bunkers / ramparts: a continuous sealed mass on the blocked flank
-  // (prop boxes flush with enemy cover) and a clear open lane on the peek side.
   {
+    // Close-quarters crate pit. A wide crate wall with a taller crate behind
+    // for a backdrop and two mismatched crates pushed out of the lanes.
+    label: 'Bunker Yard',
+    player: { pos: [0, 0, 6], yaw: 0, half: [1.6, 0.9] },
+    enemy: { x: 0, z: -6, y: 0 },
+    ecHalf: 1.0,
+    boxes: [
+      { pos: [0, 0.6, 5.2], size: [2.0, 1.2, 1.0], role: 'player' },
+      { pos: [0, 1.1, -5.4], size: [2.0, 2.2, 1.0], role: 'enemy' },
+      { pos: [0, 1.6, -6.6], size: [1.3, 3.2, 1.0], role: 'prop' }, // taller backdrop crate
+      { pos: [-3.8, 0.55, -5.3], size: [1.1, 1.1, 1.0], role: 'prop' },
+      { pos: [3.8, 0.85, -5.3], size: [1.1, 1.7, 1.0], role: 'prop' }
+    ]
+  },
+  {
+    // The enemy holds high ground on a chest-high overpass; you fight up at it.
+    // Support pillars sit just outside the wide peek on both sides.
+    label: 'Overpass',
+    player: { pos: [0, 0, 10], yaw: 0, half: [1.9, 1.0] },
+    enemy: { x: 0, z: -10, y: 1.8 },
+    ecHalf: 0.85,
+    boxes: [
+      { pos: [0, 0.7, 9.0], size: [1.9, 1.4, 0.5], role: 'player' },
+      { pos: [0, 0.9, -10.0], size: [3.6, 1.8, 3.0], role: 'prop' }, // platform (top 1.8)
+      { pos: [0, 3.3, -9.0], size: [1.8, 3.0, 0.5], role: 'enemy' }, // wall on platform
+      { pos: [-3.3, 1.0, -9.6], size: [0.5, 2.0, 2.4], role: 'prop' },
+      { pos: [3.3, 1.0, -9.6], size: [0.5, 2.0, 2.4], role: 'prop' }
+    ]
+  },
+  {
+    // You hold the high ground this time, looking down into a trench at the
+    // enemy. Crates flank the trench, a back wall caps it.
+    label: 'Trench',
+    player: { pos: [0, 1.6, 7], yaw: 0, half: [1.6, 0.9] },
+    enemy: { x: 0, z: -7, y: 0 },
+    ecHalf: 0.85,
+    boxes: [
+      { pos: [0, 0.8, 7.5], size: [4.0, 1.6, 3.0], role: 'prop' }, // player platform (top 1.6)
+      { pos: [0, 1.5, -6.4], size: [1.8, 3.0, 0.55], role: 'enemy' },
+      { pos: [-3.4, 0.6, -6.4], size: [1.2, 1.2, 1.4], role: 'prop' },
+      { pos: [3.4, 0.6, -6.4], size: [1.2, 1.2, 1.4], role: 'prop' },
+      { pos: [0, 1.0, -7.8], size: [5.0, 2.0, 0.4], role: 'prop' } // back wall
+    ]
+  },
+  // =========================================================================
+  //  ASYMMETRIC arenas (peekSide forced) — one flank is sealed by a continuous
+  //  mass of prop boxes flush with the enemy cover; the other flank is the only
+  //  open lane, so the bot can peek that side only.  -1 = left, +1 = right.
+  // =========================================================================
+  {
+    // Tight corner: enemy tucked against a solid bunker on the right, peeks left.
     label: 'Left Corner',
     peekSide: -1,
-    player: { pos: [1.0, 0, 3.5], yaw: 0, half: [1.5, 0.8] },
-    enemy: { x: 0.3, z: -3.9, y: 0 },
-    ecHalf: 0.425,
+    player: { pos: [1.0, 0, 3.6], yaw: 0, half: [1.5, 0.8] },
+    enemy: { x: 0.3, z: -4.0, y: 0 },
+    ecHalf: 0.45,
     boxes: [
-      { pos: [1.2, 0.65, 2.7], size: [1.4, 1.3, 0.4], role: 'player' },
-      { pos: [-0.05, 3.0, -3.05], size: [0.85, 6.0, 0.48], role: 'enemy' },
-      { pos: [0.5875, 3.0, -3.05], size: [0.425, 6.0, 0.48], role: 'prop' },
-      { pos: [2.0, 3.15, -3.05], size: [2.4, 6.3, 2.6], role: 'prop' }
+      { pos: [1.2, 0.65, 2.8], size: [1.4, 1.3, 0.5], role: 'player' },
+      { pos: [0.0, 1.45, -3.1], size: [0.9, 2.9, 0.5], role: 'enemy' }, // x -0.45..0.45
+      { pos: [0.85, 1.45, -3.1], size: [0.8, 2.9, 0.5], role: 'prop' }, // seal right (0.45..1.25)
+      { pos: [2.1, 1.55, -3.1], size: [1.8, 3.1, 2.2], role: 'prop' } // bunker mass right
     ]
   },
   {
+    // Mirror of Left Corner: bunker on the left, peeks right.
     label: 'Right Corner',
     peekSide: 1,
-    player: { pos: [-1.0, 0, 3.5], yaw: 0, half: [1.5, 0.8] },
-    enemy: { x: -0.3, z: -3.9, y: 0 },
-    ecHalf: 0.425,
+    player: { pos: [-1.0, 0, 3.6], yaw: 0, half: [1.5, 0.8] },
+    enemy: { x: -0.3, z: -4.0, y: 0 },
+    ecHalf: 0.45,
     boxes: [
-      { pos: [-1.2, 0.65, 2.7], size: [1.4, 1.3, 0.4], role: 'player' },
-      { pos: [0.05, 3.0, -3.05], size: [0.85, 6.0, 0.48], role: 'enemy' },
-      { pos: [-0.5875, 3.0, -3.05], size: [0.425, 6.0, 0.48], role: 'prop' },
-      { pos: [-2.0, 3.15, -3.05], size: [2.4, 6.3, 2.6], role: 'prop' }
+      { pos: [-1.2, 0.65, 2.8], size: [1.4, 1.3, 0.5], role: 'player' },
+      { pos: [0.0, 1.45, -3.1], size: [0.9, 2.9, 0.5], role: 'enemy' },
+      { pos: [-0.85, 1.45, -3.1], size: [0.8, 2.9, 0.5], role: 'prop' }, // seal left
+      { pos: [-2.1, 1.55, -3.1], size: [1.8, 3.1, 2.2], role: 'prop' } // bunker mass left
     ]
   },
   {
+    // Rampart with a stepped wall sealing the right and a tall flank wall; the
+    // open left lane has a low crate for texture. Peeks left.
     label: 'Left Rampart',
     peekSide: -1,
-    player: { pos: [1.2, 0, 7.5], yaw: 0, half: [1.8, 1.0] },
-    enemy: { x: 0.5, z: -8.0, y: 0 },
-    ecHalf: 0.5,
+    player: { pos: [1.2, 0, 8], yaw: 0, half: [1.8, 1.0] },
+    enemy: { x: 0.5, z: -8.5, y: 0 },
+    ecHalf: 0.55,
     boxes: [
-      { pos: [1.5, 0.7, 6.8], size: [1.6, 1.4, 0.4], role: 'player' },
-      { pos: [0.3, 3.0, -7.2], size: [1.0, 6.0, 0.5], role: 'enemy' },
-      { pos: [2.0125, 3.0, -7.2], size: [2.425, 6.0, 0.5], role: 'prop' },
-      { pos: [3.5, 3.6, -7.0], size: [0.55, 7.2, 6.0], role: 'prop' }
+      { pos: [1.5, 0.7, 7.2], size: [1.6, 1.4, 0.5], role: 'player' },
+      { pos: [0.3, 1.5, -7.6], size: [1.1, 3.0, 0.55], role: 'enemy' }, // x -0.25..0.85
+      { pos: [1.55, 1.5, -7.6], size: [1.4, 3.0, 0.55], role: 'prop' }, // seal right (0.85..2.25)
+      { pos: [3.0, 1.2, -7.4], size: [0.6, 2.4, 3.0], role: 'prop' }, // tall flank wall right
+      { pos: [-2.6, 0.5, -7.6], size: [1.0, 1.0, 1.0], role: 'prop' } // low crate in open lane
     ]
   },
   {
+    // Enemy lofted on a platform with a bunker sealing the left; peeks right
+    // and down at you from the high ground.
     label: 'Right Loft',
     peekSide: 1,
-    player: { pos: [-0.5, 0, 7.5], yaw: 0, half: [1.8, 1.0] },
-    enemy: { x: -0.15, z: -7.6, y: 1.8 },
-    ecHalf: 0.45,
+    player: { pos: [-0.5, 0, 8], yaw: 0, half: [1.8, 1.0] },
+    enemy: { x: -0.2, z: -8.0, y: 1.8 },
+    ecHalf: 0.5,
     boxes: [
-      { pos: [-0.8, 0.7, 6.8], size: [1.6, 1.4, 0.4], role: 'player' },
-      { pos: [0, 0.9, -8.0], size: [3.0, 1.8, 3.0], role: 'prop' },
-      { pos: [0.15, 4.8, -6.8], size: [0.9, 6.0, 0.45], role: 'enemy' },
-      { pos: [-0.4, 4.8, -6.8], size: [0.2, 6.0, 0.45], role: 'prop' },
-      { pos: [-1.6, 4.8, -6.9], size: [2.2, 6.0, 2.2], role: 'prop' }
+      { pos: [-0.8, 0.7, 7.2], size: [1.6, 1.4, 0.5], role: 'player' },
+      { pos: [0, 0.9, -8.4], size: [3.0, 1.8, 2.8], role: 'prop' }, // platform (top 1.8)
+      { pos: [0.15, 3.25, -7.2], size: [1.0, 2.9, 0.5], role: 'enemy' }, // wall on platform
+      { pos: [-0.7, 3.25, -7.2], size: [0.8, 2.9, 0.5], role: 'prop' }, // seal left
+      { pos: [-1.9, 2.4, -7.4], size: [1.8, 4.2, 2.0], role: 'prop' } // bunker left
     ]
   },
   {
+    // Long-range bulwark: a thick sealed wall and flank on the right, open lane
+    // on the left. Peeks left across distance.
     label: 'Left Bulwark',
     peekSide: -1,
-    player: { pos: [1.5, 0, 10.5], yaw: 0, half: [2.0, 1.0] },
-    enemy: { x: 0.4, z: -11.0, y: 0 },
-    ecHalf: 0.45,
+    player: { pos: [1.5, 0, 11], yaw: 0, half: [2.0, 1.0] },
+    enemy: { x: 0.4, z: -11.5, y: 0 },
+    ecHalf: 0.5,
     boxes: [
-      { pos: [2.0, 0.7, 9.5], size: [1.8, 1.4, 0.4], role: 'player' },
-      { pos: [-0.15, 3.0, -10.0], size: [0.9, 6.0, 0.55], role: 'enemy' },
-      { pos: [2.0, 3.15, -10.0], size: [3.4, 6.3, 0.55], role: 'prop' },
-      { pos: [4.0, 4.2, -9.5], size: [0.6, 8.4, 4.5], role: 'prop' }
+      { pos: [2.0, 0.7, 10.0], size: [1.8, 1.4, 0.5], role: 'player' },
+      { pos: [0.1, 1.5, -10.5], size: [1.0, 3.0, 0.6], role: 'enemy' }, // x -0.4..0.6
+      { pos: [1.6, 1.5, -10.5], size: [2.0, 3.0, 0.6], role: 'prop' }, // seal right (0.6..2.6)
+      { pos: [3.4, 1.6, -10.2], size: [0.6, 3.2, 3.5], role: 'prop' } // long flank wall right
+    ]
+  },
+  {
+    // Crate stack duel: a wall of crates seals the left and rises in a step; the
+    // right lane is open. Peeks right.
+    label: 'Right Stacks',
+    peekSide: 1,
+    player: { pos: [-1.2, 0, 7.5], yaw: 0, half: [1.6, 0.9] },
+    enemy: { x: -0.45, z: -7.5, y: 0 },
+    ecHalf: 0.5,
+    boxes: [
+      { pos: [-1.5, 0.65, 6.7], size: [1.6, 1.3, 0.5], role: 'player' },
+      { pos: [-0.05, 1.2, -7.0], size: [1.0, 2.4, 1.0], role: 'enemy' }, // crate cover (top 2.4)
+      { pos: [-1.05, 1.2, -7.0], size: [1.0, 2.4, 1.0], role: 'prop' }, // seal left crate
+      { pos: [-2.05, 1.9, -7.2], size: [1.2, 1.2, 1.0], role: 'prop' }, // stacked crate (seal upper)
+      { pos: [-2.0, 0.5, -7.0], size: [1.0, 1.0, 1.0], role: 'prop' } // low crate left
+    ]
+  },
+  {
+    // You hold a raised perch; a sealed wall and flank cover the right, the left
+    // lane stays open. Peeks left while you shoot down.
+    label: 'Left Skybox',
+    peekSide: -1,
+    player: { pos: [1.0, 1.6, 7], yaw: 0, half: [1.6, 0.9] },
+    enemy: { x: 0.4, z: -7, y: 0 },
+    ecHalf: 0.55,
+    boxes: [
+      { pos: [1.2, 0.8, 7.6], size: [3.6, 1.6, 2.8], role: 'prop' }, // player platform (top 1.6)
+      { pos: [0.2, 1.5, -6.4], size: [1.1, 3.0, 0.55], role: 'enemy' }, // x -0.35..0.75
+      { pos: [1.55, 1.5, -6.4], size: [1.6, 3.0, 0.55], role: 'prop' }, // seal right (0.75..2.35)
+      { pos: [3.0, 1.6, -6.4], size: [0.6, 3.2, 3.0], role: 'prop' } // flank wall right
+    ]
+  },
+  {
+    // Close redoubt: a deep bunker mass seals the left, a low barrier breaks up
+    // the open right lane. Peeks right.
+    label: 'Right Redoubt',
+    peekSide: 1,
+    player: { pos: [-1.3, 0, 5.5], yaw: 0, half: [1.6, 0.9] },
+    enemy: { x: -0.5, z: -5.8, y: 0 },
+    ecHalf: 0.6,
+    boxes: [
+      { pos: [-1.6, 0.65, 4.7], size: [1.6, 1.3, 0.6], role: 'player' },
+      { pos: [-0.1, 1.3, -5.3], size: [1.2, 2.6, 0.6], role: 'enemy' }, // x -0.7..0.5
+      { pos: [-1.3, 1.3, -5.3], size: [1.2, 2.6, 0.6], role: 'prop' }, // seal left (-1.9..-0.7)
+      { pos: [-2.6, 1.5, -5.1], size: [1.4, 3.0, 2.6], role: 'prop' }, // bunker mass left
+      { pos: [0.0, 0.425, -4.7], size: [2.0, 0.85, 0.6], role: 'prop' } // low front barrier
     ]
   }
 ];
@@ -327,10 +447,11 @@ export class DuelsScenario extends BaseScenario {
       crouch: 0,
       phase: 'idle',
       timer: randRange(REACT_MIN, REACT_MAX),
-      sub: 0,
       side: 1,
       offset: 0,
       jiggleLeft: 0,
+      jpOut: false,
+      jpTarget: 0,
       hasLos: false,
       wasLos: false,
       exposedTimer: -1,
@@ -373,22 +494,39 @@ export class DuelsScenario extends BaseScenario {
     const { close, wide } = this._peekOffsets();
     const forced = this.arena.peekSide;
     e.side = forced != null ? forced : Math.random() < 0.5 ? -1 : 1;
-    const width = Math.random() < 0.5 ? close : wide;
-    e.offset = e.side * width;
     e.countedMiss = false;
 
     const roll = Math.random();
-    if (roll < 0.25) {
-      e.phase = 'jiggle';
-      e.jiggleLeft = randInt(2, 4); // out-in repetitions
-      e.sub = 0;
-    } else if (roll < 0.55) {
+    if (roll < 0.3) {
+      // Jiggle-peek: dart out only until the head is barely visible, snap back
+      // immediately, then re-decide which angle to search. Bait / info-gather.
+      e.phase = 'jigglepeek';
+      e.jiggleLeft = randInt(2, 4); // info-peeks before settling back behind cover
+      e.jpOut = true;
+      e.jpTarget = e.side * wide; // hard cap, only reached if the player is hidden
+      e.offset = e.jpTarget;
+    } else if (roll < 0.6) {
+      e.offset = e.side * (Math.random() < 0.5 ? close : wide);
       e.phase = 'peekreturn'; // out then straight back
     } else {
+      e.offset = e.side * (Math.random() < 0.5 ? close : wide);
       e.phase = 'hold';
       e.timer = randRange(HOLD_MIN, HOLD_MAX);
       e.crouchWant = Math.random() < 0.35 ? 1 : 0; // sometimes crouch on the hold
     }
+  }
+
+  /** After a jiggle-peek snaps back behind cover, pick a fresh angle to search. */
+  _reJiggle() {
+    const e = this.enemy;
+    const { wide } = this._peekOffsets();
+    const forced = this.arena.peekSide;
+    // Symmetric arenas re-roll the side so the bot baits both angles; forced
+    // arenas keep their single open side.
+    e.side = forced != null ? forced : Math.random() < 0.5 ? -1 : 1;
+    e.jpOut = true;
+    e.jpTarget = e.side * wide;
+    e.offset = e.jpTarget;
   }
 
   _retreatDone() {
@@ -451,15 +589,20 @@ export class DuelsScenario extends BaseScenario {
         break;
       }
 
-      case 'jiggle': {
-        // Alternate between the peek offset and just behind cover.
-        const goalOut = e.sub % 2 === 0;
-        const goal = goalOut ? e.offset : 0;
+      case 'jigglepeek': {
+        const goal = e.jpOut ? e.jpTarget : 0;
         const reached = e.mover.seek(dt, goal, max);
-        if (reached) {
-          e.sub++;
+        if (e.jpOut) {
+          // Move the head to its just-advanced position and test it: the instant
+          // the head barely clears cover (gains LOS) — or we hit the wide cap
+          // because the player is hidden — snap the strafe the opposite way.
+          this._placeEnemy(e.mover.s);
+          if (this._botHeadHasLos(e) || reached) e.jpOut = false;
+        } else if (reached) {
+          // Back behind cover: make a new decision on which angle to search.
           e.jiggleLeft--;
-          if (e.jiggleLeft <= 0) e.phase = 'back';
+          if (e.jiggleLeft <= 0) this._retreatDone();
+          else this._reJiggle();
         }
         break;
       }

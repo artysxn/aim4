@@ -89,7 +89,11 @@ export const COMPETITIVE_PRESETS = {
     randomSizeMin: 0.13,
     randomSizeMax: 0.23,
     infiniteAmmo: true,
-    viewmodelRecoil: false
+    viewmodelRecoil: false,
+    decoyEnabled: true,
+    decoyChancePer: 0.1,
+    decoyMin: 1,
+    decoyMax: 2
   }
 };
 

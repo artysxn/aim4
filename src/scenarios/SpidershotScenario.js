@@ -17,6 +17,9 @@ import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 const BASE_BOUNDS_W = 12;
 const BASE_BOUNDS_H = 6;
 const DOUBLE_SPAWN_TTK_MULT = 1.75;
+const EXPIRE_RESET_DELAY = 0.5;
+const DECOY_PENALTY_DELAY = 1.0;
+const DECOY_COLOR = 0x0a0a0a;
 
 export class SpidershotScenario extends BaseScenario {
   constructor(opts) {
@@ -43,6 +46,12 @@ export class SpidershotScenario extends BaseScenario {
     this.weaponBloom = false;
     this.viewmodelRecoil =
       preset?.viewmodelRecoil ?? this.config.viewmodelRecoil ?? s.viewmodelRecoil ?? false;
+    this.decoyEnabled = this.competitive
+      ? (preset?.decoyEnabled ?? true)
+      : (this.config.decoyEnabled ?? s.decoyEnabled ?? true);
+    this.decoyChancePer = preset?.decoyChancePer ?? this.config.decoyChancePer ?? s.decoyChancePer ?? 0.1;
+    this.decoyMin = preset?.decoyMin ?? this.config.decoyMin ?? s.decoyMin ?? 0;
+    this.decoyMax = preset?.decoyMax ?? this.config.decoyMax ?? s.decoyMax ?? 2;
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 30)
       : this.settings.data.runDuration;
@@ -62,6 +71,8 @@ export class SpidershotScenario extends BaseScenario {
     this._streakWavesLeft = 0;
     /** TTK multiplier for the current cycle's timed targets (double spawn → 1.75×). */
     this._cycleTtkMult = 1;
+    /** Seconds before spawning phase 1 after a fail or decoy penalty. */
+    this._phaseDelay = 0;
 
     this._buildEnvironment();
   }
@@ -160,33 +171,38 @@ export class SpidershotScenario extends BaseScenario {
     return this.timeToKill * this._cycleTtkMult;
   }
 
-  _spawnAt(x, y, { center = false, timed = false } = {}) {
+  _spawnAt(x, y, { center = false, timed = false, decoy = false } = {}) {
     const size = this._sizeForSpawn();
     const pos = this._clampPos(x, y, size);
 
     const target = new Target();
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(size, 28, 20),
-      new THREE.MeshStandardMaterial({
-        color: this.settings.data.colors.target,
-        emissive: 0xff2a10,
-        emissiveIntensity: 0.5,
-        roughness: 0.4,
-        metalness: 0.1
-      })
+      new THREE.MeshStandardMaterial(
+        decoy
+          ? { color: DECOY_COLOR, emissive: 0x000000, emissiveIntensity: 0, roughness: 0.85, metalness: 0 }
+          : {
+              color: this.settings.data.colors.target,
+              emissive: 0xff2a10,
+              emissiveIntensity: 0.5,
+              roughness: 0.4,
+              metalness: 0.1
+            }
+      )
     );
     target._mesh = mesh;
-    target.addCollider(mesh, { zone: 'body', points: 1, crit: false });
+    target.addCollider(mesh, { zone: 'body', points: decoy ? 0 : 1, crit: false });
 
     const driftDir = Math.random() < 0.5 ? -1 : 1;
     const driftSpeed =
-      !center && this.horizontalDrift
+      !center && !decoy && this.horizontalDrift
         ? randRange(this.driftSpeedMax * 0.35, this.driftSpeedMax)
         : 0;
 
     target._spider = {
       center,
       timed,
+      decoy,
       ttk: timed ? this._timedTtk() : null,
       size,
       driftDir,
@@ -197,6 +213,36 @@ export class SpidershotScenario extends BaseScenario {
     target.object.position.set(pos.x, pos.y, this.wallZ + size + 0.05);
     this.addTarget(target);
     return target;
+  }
+
+  _randomSidewardPos() {
+    const minD = Math.min(this.minDistance, this.maxDistance);
+    const maxD = Math.max(this.minDistance, this.maxDistance);
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const dist = randRange(minD, maxD);
+    const angle = degToRad(randRange(-this.angleSpread, this.angleSpread));
+    return {
+      x: side * dist * Math.cos(angle),
+      y: this.centerY + dist * Math.sin(angle)
+    };
+  }
+
+  _rollDecoyCount() {
+    let n = this.decoyMin;
+    for (let i = this.decoyMin + 1; i <= this.decoyMax; i++) {
+      if (Math.random() < this.decoyChancePer) n = i;
+      else break;
+    }
+    return n;
+  }
+
+  _spawnDecoys() {
+    if (!this.decoyEnabled) return;
+    const count = this._rollDecoyCount();
+    for (let i = 0; i < count; i++) {
+      const { x, y } = this._randomSidewardPos();
+      this._spawnAt(x, y, { decoy: true });
+    }
   }
 
   _spawnCenter() {
@@ -215,16 +261,11 @@ export class SpidershotScenario extends BaseScenario {
   }
 
   _spawnSideward(count = 1) {
-    const minD = Math.min(this.minDistance, this.maxDistance);
-    const maxD = Math.max(this.minDistance, this.maxDistance);
     for (let i = 0; i < count; i++) {
-      const side = Math.random() < 0.5 ? -1 : 1;
-      const dist = randRange(minD, maxD);
-      const angle = degToRad(randRange(-this.angleSpread, this.angleSpread));
-      const x = side * dist * Math.cos(angle);
-      const y = this.centerY + dist * Math.sin(angle);
+      const { x, y } = this._randomSidewardPos();
       this._spawnAt(x, y, { center: false, timed: true });
     }
+    this._spawnDecoys();
   }
 
   /** Enter phase 2 from centre kill, or repeat phase 2 after a streak. */
@@ -234,8 +275,40 @@ export class SpidershotScenario extends BaseScenario {
     this._spawnSideward(count);
   }
 
+  _instantDespawn(target) {
+    const i = this.targets.indexOf(target);
+    if (i >= 0) this._removeTargetAt(i);
+  }
+
+  _clearAllTargets() {
+    while (this.targets.length) this._removeTargetAt(this.targets.length - 1);
+  }
+
+  _clearDecoys() {
+    for (let i = this.targets.length - 1; i >= 0; i--) {
+      if (this.targets[i]._spider?.decoy) this._removeTargetAt(i);
+    }
+  }
+
+  _activeRealCount() {
+    return this.targets.filter((t) => t.state !== 'dying' && !t._spider?.decoy).length;
+  }
+
+  _schedulePhase1(delay) {
+    this._clearAllTargets();
+    this._resetCycle();
+    this._stage = 1;
+    this._phaseDelay = delay;
+  }
+
   _registerHit(target) {
     if (!target || target.state === 'dying') return;
+
+    if (target._spider?.decoy) {
+      this._onDecoyHit(target);
+      return;
+    }
+
     this.hits++;
     this.kills++;
     this.score += 1;
@@ -249,9 +322,23 @@ export class SpidershotScenario extends BaseScenario {
       return;
     }
 
-    if (this._stage === 2 && this._activeCount() === 0) {
+    if (this._stage === 2 && this._activeRealCount() === 0) {
+      this._clearDecoys();
       this._onPhase2Cleared();
     }
+  }
+
+  _onDecoyHit(target) {
+    this.misses++;
+    this.score = Math.max(0, this.score - 1);
+    this.kills = Math.max(0, this.kills - 1);
+    this._instantDespawn(target);
+    beep(180, 0.12, 'sawtooth', 0.18);
+    this._schedulePhase1(DECOY_PENALTY_DELAY);
+  }
+
+  _onPhase2TimedOut() {
+    this._schedulePhase1(EXPIRE_RESET_DELAY);
   }
 
   /** All phase-2 targets gone — streak extension or back to phase 1. */
@@ -282,7 +369,7 @@ export class SpidershotScenario extends BaseScenario {
     const halfX = this.boundsW / 2 - 0.05;
 
     for (const t of this.targets) {
-      if (t.state === 'dying') continue;
+      if (t.state === 'dying' || t._spider?.decoy) continue;
       const sp = t._spider;
       if (!sp?.driftSpeed) continue;
 
@@ -300,28 +387,34 @@ export class SpidershotScenario extends BaseScenario {
   }
 
   onStart() {
+    this._phaseDelay = 0;
     this._resetCycle();
     this._stage = 1;
     this._spawnCenter();
   }
 
   onUpdate(dt) {
+    if (this._phaseDelay > 0) {
+      this._phaseDelay = Math.max(0, this._phaseDelay - dt);
+      if (this._phaseDelay <= 0) this._spawnCenter();
+      return;
+    }
+
     this._updateDrift(dt);
 
-    let expired = false;
+    let hadTimedExpiry = false;
     for (const t of this.targets) {
-      if (t.state === 'dying') continue;
+      if (t.state === 'dying' || t._spider?.decoy) continue;
       const sp = t._spider;
       if (sp?.timed && sp.ttk != null && t.age >= sp.ttk) {
         this.misses++;
-        t.startDying(0xff2222);
-        expired = true;
+        this._instantDespawn(t);
+        hadTimedExpiry = true;
       }
     }
 
-    if (expired && this._stage === 2 && this._activeCount() === 0) {
-      this._resetCycle();
-      this._spawnCenter();
+    if (hadTimedExpiry && this._stage === 2 && this._activeRealCount() === 0) {
+      this._onPhase2TimedOut();
     }
   }
 

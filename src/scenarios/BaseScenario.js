@@ -23,6 +23,15 @@ const _dir = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _tracerStart = new THREE.Vector3();
+// Near-miss check scratch (module-level to avoid per-shot allocation).
+const _nmCenter = new THREE.Vector3();
+const _nmScale = new THREE.Vector3();
+const _nmToCenter = new THREE.Vector3();
+const _nmHitPoint = new THREE.Vector3();
+
+// Expand sphere hitboxes by 3% radius on near-miss so shots barely outside the
+// rim still register. Only applies to SphereGeometry colliders (dot targets).
+const NEAR_MISS_FACTOR = 1.03;
 const TRACER_MISS_DEPTH = 120;
 
 // --- Tiny WebAudio blip used for hit feedback (lazily created) -------------
@@ -280,14 +289,41 @@ export class BaseScenario {
   }
 
   raycastTargets(raycaster, extra = []) {
-    const objects = this.activeColliders().concat(extra);
+    const colliders = this.activeColliders();
+    const objects = colliders.concat(extra);
     const hits = raycaster.intersectObjects(objects, false);
-    return hits.length ? hits[0] : null;
+    if (hits.length) return hits[0];
+    // Fallback: accept a near-miss on sphere colliders within 3% of their radius.
+    return this._nearMissSphereCheck(raycaster.ray, colliders);
   }
 
-  /** World positions for off-screen threat chevrons (multiplayer duels only). */
-  getThreats() {
-    return [];
+  /** Secondary check: ray closest-approach against SphereGeometry colliders only. */
+  _nearMissSphereCheck(ray, colliders) {
+    let bestDistSq = Infinity;
+    let bestObj = null;
+    let bestT = 0;
+    for (const obj of colliders) {
+      if (!obj.geometry?.parameters?.radius) continue; // sphere only
+      if (obj.userData.target?.state === 'dying') continue;
+      obj.getWorldPosition(_nmCenter);
+      obj.getWorldScale(_nmScale);
+      const r = obj.geometry.parameters.radius * _nmScale.x * NEAR_MISS_FACTOR;
+      // Check sphere is in front of the ray origin.
+      _nmToCenter.subVectors(_nmCenter, ray.origin);
+      const t = _nmToCenter.dot(ray.direction);
+      if (t <= 0) continue;
+      const distSq = ray.distanceSqToPoint(_nmCenter);
+      if (distSq < r * r && distSq < bestDistSq) {
+        bestDistSq = distSq;
+        bestObj = obj;
+        bestT = t;
+      }
+    }
+    if (!bestObj) return null;
+    // Provide a point (closest approach on the ray) so _resolveBulletImpact
+    // can place the tracer endpoint without crashing.
+    _nmHitPoint.copy(ray.origin).addScaledVector(ray.direction, bestT);
+    return { object: bestObj, point: _nmHitPoint };
   }
 
   results() {

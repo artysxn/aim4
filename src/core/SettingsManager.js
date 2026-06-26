@@ -96,7 +96,11 @@ const DEFAULTS = {
     randomSizeMin: 0.21,
     randomSizeMax: 0.35,
     infiniteAmmo: true,
-    viewmodelRecoil: false
+    viewmodelRecoil: false,
+    decoyEnabled: true,
+    decoyChancePer: 0.1,
+    decoyMin: 0,
+    decoyMax: 2
   },
   survival: {
     spawnInterval: 800, // ms between spawns (Practice)
@@ -115,7 +119,7 @@ const DEFAULTS = {
     enemyScale: 1.0 // uniform scale applied to bot body/head dimensions
   },
   duels: {
-    arena: 0, // 0 = random each run, 1..10 = a fixed arena
+    arena: 0, // 0 = random each run, 1..15 = a fixed arena
     ttk: 0.5  // seconds to kill enemy once exposed; lower = harder
   },
   deathmatch: {

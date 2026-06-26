@@ -914,22 +914,6 @@ input[type='checkbox'] {
   color: var(--accent);
 }
 
-/* ---- Threat chevrons (Arena) ------------------------------------------- */
-.threats {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-.chevron {
-  position: absolute;
-  color: #ff4d4d;
-  font-size: 26px;
-  line-height: 1;
-  text-shadow: 0 0 8px rgba(255, 60, 60, 0.9);
-  filter: drop-shadow(0 0 2px #000);
-  display: none;
-}
-
 /* ---- Tables / leaderboards --------------------------------------------- */
 .tabs {
   display: flex;
@@ -955,6 +939,8 @@ input[type='checkbox'] {
 .lb-body {
   margin: 10px 0 4px;
   min-height: 80px;
+  max-height: min(46vh, 360px);
+  overflow-y: auto;
 }
 .lb-table {
   width: 100%;
@@ -970,6 +956,14 @@ input[type='checkbox'] {
   color: var(--muted);
   font-size: 11px;
   text-transform: uppercase;
+}
+/* Keep the column headers pinned while the rows scroll underneath. Use a fully
+   opaque fill (the panel is translucent) so rows don't bleed through. */
+.lb-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #181818;
 }
 .lb-table td.score {
   color: var(--accent);

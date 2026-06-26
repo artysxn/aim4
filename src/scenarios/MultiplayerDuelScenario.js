@@ -566,17 +566,6 @@ export class MultiplayerDuelScenario extends BaseScenario {
     if (Number.isFinite(ms)) this.matchEndsAt = ms;
   }
 
-  getThreats() {
-    const out = [];
-    for (const r of this.remotes.values()) {
-      if (r.dead) continue;
-      const sc = crouchScale(r.cur.crouch);
-      const footY = r.cur.y - lerp(STAND_EYE, CROUCH_EYE, r.cur.crouch);
-      out.push(new THREE.Vector3(r.cur.x, footY + BODY_H * sc * 0.6, r.cur.z));
-    }
-    return out;
-  }
-
   dispose() {
     for (const r of this.remotes.values()) {
       this.root.remove(r.group);
