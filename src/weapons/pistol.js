@@ -31,9 +31,9 @@ export const VIEW_PUNCH_STRENGTH = 1.0;
 
 // ---- Bloom (cone half-angle, radians) -------------------------------------
 const CONSEC_STEP = degToRad(0.4); // added per consecutive shot (capped)
-const MOVE_BLOOM = degToRad(0.9); // extra at full run — much tighter than the rifle's 3°
+const MOVE_BLOOM = degToRad(0.9) * 1.5; // extra at full run — much tighter than the rifle's 3°
 const LAND_BLOOM = degToRad(1.0); // brief penalty right after landing
-const AIR_BLOOM = degToRad(5.0); // airborne: large
+const AIR_BLOOM = degToRad(5.0) * 2.5; // airborne: large
 
 /** The pistol never bends the bullet — no recoil pattern. */
 export function patternOffset() {

@@ -427,6 +427,7 @@ export class DeathmatchScenario extends BaseScenario {
     this.engine.audio?.playRemoteShot(_headPos.x, _headPos.y, _headPos.z);
     const end = this._tracerImpact(_headPos, target.x, target.y, target.z);
     this.engine.viewmodel?.spawnTracer(_headPos, end);
+    this.engine.viewmodel?.spawnImpactSparks(end);
 
     const max = RUN_SPEED * this.botSpeedMul;
     const hitScale = this._targetHitScale(target, max);

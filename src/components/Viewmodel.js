@@ -17,6 +17,9 @@ import { getWeapon } from '../weapons/index.js';
 
 const TRACER_POOL = 24;
 const TRACER_LIFE = 0.09; // seconds — quick, just a firing indicator
+const SPARK_POOL = 20;
+const SPARK_LIFE = 0.24;
+const SPARKS_PER_HIT = 12;
 const FLASH_LIFE = 0.045; // seconds — brief, non-distracting
 const MAX_PITCH = (89 * Math.PI) / 180;
 
@@ -34,6 +37,7 @@ export class Viewmodel {
     this._models = {};
     this._buildModels();
     this._buildTracers();
+    this._buildImpactSparks();
 
     // Live animation state.
     this._bobPhase = 0;
@@ -134,6 +138,37 @@ export class Viewmodel {
     this._tracerIdx = 0;
   }
 
+  _buildImpactSparks() {
+    this._impacts = [];
+    for (let i = 0; i < SPARK_POOL; i++) {
+      const group = new THREE.Group();
+      group.visible = false;
+      group.frustumCulled = false;
+      group.renderOrder = 12;
+      const parts = [];
+      for (let j = 0; j < SPARKS_PER_HIT; j++) {
+        const mat = new THREE.MeshBasicMaterial({
+          color: j % 3 === 0 ? 0xffffff : 0xffcc44,
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide
+        });
+        const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.04, 0.012), mat);
+        mesh.visible = false;
+        mesh.userData.vx = 0;
+        mesh.userData.vy = 0;
+        mesh.userData.vz = 0;
+        group.add(mesh);
+        parts.push(mesh);
+      }
+      this.engine.scene.add(group);
+      this._impacts.push({ group, parts, t: 0 });
+    }
+    this._impactIdx = 0;
+  }
+
   // ---- Public API ----------------------------------------------------------
   /** Switch the visible gun mesh + load its recoil/muzzle tuning. */
   setWeapon(spec) {
@@ -169,6 +204,10 @@ export class Viewmodel {
       for (const tr of this._tracers) {
         tr.t = 0;
         tr.line.visible = false;
+      }
+      for (const fx of this._impacts) {
+        fx.t = 0;
+        fx.group.visible = false;
       }
     }
   }
@@ -236,6 +275,27 @@ export class Viewmodel {
     tr.t = TRACER_LIFE;
     tr.line.material.opacity = 0.9;
     tr.line.visible = true;
+  }
+
+  /** Brief spark burst at a bullet impact (world space). */
+  spawnImpactSparks(point) {
+    const fx = this._impacts[this._impactIdx];
+    this._impactIdx = (this._impactIdx + 1) % this._impacts.length;
+    fx.group.position.copy(point);
+    fx.group.visible = true;
+    fx.t = SPARK_LIFE;
+    for (const p of fx.parts) {
+      p.visible = true;
+      p.position.set(0, 0, 0);
+      const theta = Math.random() * Math.PI * 2;
+      const horiz = 0.35 + Math.random() * 0.85;
+      const spd = 2.2 + Math.random() * 5;
+      p.userData.vx = Math.cos(theta) * horiz * spd;
+      p.userData.vy = (0.35 + Math.random() * 1.1) * spd;
+      p.userData.vz = Math.sin(theta) * horiz * spd;
+      p.material.opacity = 1;
+      p.rotation.z = Math.random() * Math.PI;
+    }
   }
 
   /** Recompute gun + muzzle world positions (call after fire() for tracers). */
@@ -306,6 +366,7 @@ export class Viewmodel {
   // ---- Per-frame -----------------------------------------------------------
   update(dt, motion = {}) {
     this._updateTracers(dt);
+    this._updateImpactSparks(dt);
     this._applyPunch(dt);
     const cfg = this.settings.data.viewmodel || {};
     if (cfg.bob !== false && motion.onGround && (motion.speedHoriz || 0) > 0.5) {
@@ -338,6 +399,28 @@ export class Viewmodel {
         tr.line.material.opacity = 0;
       } else {
         tr.line.material.opacity = 0.9 * (tr.t / TRACER_LIFE);
+      }
+    }
+  }
+
+  _updateImpactSparks(dt) {
+    const cam = this.camera.position;
+    for (const fx of this._impacts) {
+      if (fx.t <= 0) continue;
+      fx.t -= dt;
+      const fade = Math.max(0, fx.t / SPARK_LIFE);
+      if (fx.t <= 0) {
+        fx.group.visible = false;
+        for (const p of fx.parts) p.visible = false;
+        continue;
+      }
+      for (const p of fx.parts) {
+        p.position.x += p.userData.vx * dt;
+        p.position.y += p.userData.vy * dt;
+        p.position.z += p.userData.vz * dt;
+        p.userData.vy -= 14 * dt;
+        p.material.opacity = fade * 0.95;
+        p.lookAt(cam);
       }
     }
   }

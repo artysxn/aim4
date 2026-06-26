@@ -80,9 +80,9 @@ const SPRAY_OVERLAY_BLOOM = degToRad(0.035) * SPRAY_STRENGTH;
 export const SUSTAIN_CAP_SHOTS = 18;
 /** Idle time to recover one sustain step (linear bloom decay toward standing accuracy). */
 export const SUSTAIN_RECOVERY_PER_SHOT = 0.07;
-const MOVE_BLOOM = degToRad(3.0); // extra at full run speed
+const MOVE_BLOOM = degToRad(3.0) * 1.5; // extra at full run speed
 const LAND_BLOOM = degToRad(2.0); // extra for a short window after landing
-const AIR_BLOOM = degToRad(6.0); // airborne: large, low chance to connect
+const AIR_BLOOM = degToRad(6.0) * 2.5; // airborne: large, low chance to connect
 
 /** Gap without a shot before the spray pattern resets (tap cadence at 600 RPM still chains). */
 export const BURST_BREAK_MS = SHOT_INTERVAL * 1000 * 2.5;

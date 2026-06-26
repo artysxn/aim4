@@ -15,8 +15,6 @@ import { viewPunchImpulse } from '../weapons/ak47.js';
 import { isLeaderboardEligible } from './rankedScenarios.js';
 
 const _raycaster = new THREE.Raycaster();
-const _crosshairRay = new THREE.Raycaster();
-const _center = new THREE.Vector2(0, 0); // crosshair is always screen center
 // Reused firing scratch (no per-shot allocation).
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const _quat = new THREE.Quaternion();
@@ -203,8 +201,8 @@ export class BaseScenario {
       aimDz: aimZ
     };
 
-    // Tracer endpoint = crosshair-ray hit on targets/cover (exact screen centre).
-    this._tracerImpactPoint();
+    // Tracer / impact point = first hit along the actual bullet ray (after spread).
+    const impactHit = this._resolveBulletImpact();
 
     const vm = this.engine.viewmodel;
     const vmRecoil = this.viewmodelRecoil !== false;
@@ -223,6 +221,7 @@ export class BaseScenario {
         vm.syncMuzzleForShot(motion);
         vm.getMuzzlePosition(_tracerStart);
         vm.spawnTracer(_tracerStart, this._lastImpact);
+        if (impactHit) vm.spawnImpactSparks(this._lastImpact);
       }
       if (vmRecoil) {
         const p = punch || viewPunchImpulse(shotIndex);
@@ -259,20 +258,17 @@ export class BaseScenario {
     return [];
   }
 
-  /** Ray through the crosshair (screen centre) — matches the 2D overlay, not the bullet cone. */
-  _crosshairRaycast() {
-    _crosshairRay.setFromCamera(_center, this.camera);
-    return this.raycastTargets(_crosshairRay, this.tracerRaycastExtras());
-  }
-
-  /** Tracer ends on the crosshair ray at the first target/cover hit (projects to screen centre). */
-  _tracerImpactPoint() {
-    const hit = this._crosshairRaycast();
-    if (hit) return this._lastImpact.copy(hit.point);
-    _crosshairRay.setFromCamera(_center, this.camera);
-    return this._lastImpact
-      .copy(_crosshairRay.ray.origin)
-      .addScaledVector(_crosshairRay.ray.direction, TRACER_MISS_DEPTH);
+  /** Tracer ends on the bullet ray at the first target/cover hit. */
+  _resolveBulletImpact() {
+    const hit = this.raycastTargets(_raycaster, this.tracerRaycastExtras());
+    if (hit) {
+      this._lastImpact.copy(hit.point);
+      return hit;
+    }
+    this._lastImpact
+      .copy(_raycaster.ray.origin)
+      .addScaledVector(_raycaster.ray.direction, TRACER_MISS_DEPTH);
+    return null;
   }
 
   raycastTargets(raycaster, extra = []) {

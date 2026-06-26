@@ -353,6 +353,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
       else _wOrigin.set(msg.ox, msg.oy, msg.oz);
       _wEnd.set(msg.ex, msg.ey, msg.ez);
       vm.spawnTracer(_wOrigin, _wEnd);
+      vm.spawnImpactSparks(_wEnd);
     }
   }
 

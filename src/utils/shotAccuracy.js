@@ -7,9 +7,9 @@
 import { CROUCH_SPEED, RUN_SPEED } from './SourceMovement.js';
 
 /** Max angular spread (rad) at full run speed on the ground. */
-export const MAX_MOVE_SPREAD = 0.042; // ~2.4°
+export const MAX_MOVE_SPREAD = 0.042 * 1.5; // ~3.6° — 1.5× movement penalty
 /** Spread while airborne — effectively cannot aim. */
-export const AIR_SPREAD = 0.38; // ~22°
+export const AIR_SPREAD = 0.38 * 2.5; // ~55° — 2.5× jump penalty
 
 /** Deterministic PRNG from a 32-bit seed (Mulberry32). */
 export function spreadRng(seed) {
