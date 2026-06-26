@@ -11,21 +11,32 @@ import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 
 const TARGET_SIZE = 0.1;
 const TARGET_COUNT = 200;
+const DEFAULT_BOUNDS_SCALE_X = 2;
 
 export class StarsScenario extends GridshotScenario {
   constructor(opts) {
-    super(opts);
-    const preset = this.competitive ? competitivePresetFor('stars') : null;
+    const variant = opts.config?.variant === 'competitive' ? 'competitive' : 'practice';
+    const preset = variant === 'competitive' ? competitivePresetFor('stars') : null;
+    const s = opts.settings?.data?.stars ?? {};
+    const boundsScaleX =
+      preset?.boundsScaleX ?? opts.config?.boundsScaleX ?? s.boundsScaleX ?? DEFAULT_BOUNDS_SCALE_X;
 
-    this.targetSize = preset?.targetSize ?? TARGET_SIZE;
-    this.targetCount = preset?.targetCount ?? TARGET_COUNT;
+    super({
+      ...opts,
+      config: { ...opts.config, boundsScaleX }
+    });
+
+    const presetAfter = this.competitive ? competitivePresetFor('stars') : null;
+
+    this.targetSize = presetAfter?.targetSize ?? TARGET_SIZE;
+    this.targetCount = presetAfter?.targetCount ?? TARGET_COUNT;
     this.mode = 'clicking';
     this.floatEnabled = false;
     this.enableTimeLimit = false;
     this.infiniteAmmo = true;
     this.weaponBloom = false;
     this.runDuration = this.competitive
-      ? (preset?.runDuration ?? 30)
+      ? (presetAfter?.runDuration ?? 30)
       : this.settings.data.runDuration;
   }
 

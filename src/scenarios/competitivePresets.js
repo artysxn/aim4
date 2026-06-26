@@ -13,13 +13,15 @@ export const COMPETITIVE_PRESETS = {
   stars: {
     runDuration: 30,
     targetSize: 0.1,
-    targetCount: 200
+    targetCount: 200,
+    boundsScaleX: 2
   },
   microflicks: {
     runDuration: 30,
     targetSize: 0.1,
     targetCount: 2,
-    randomSpawnChance: 0.1
+    randomSpawnChance: 0.1,
+    boundsScaleX: 2
   },
   pasu: {
     runDuration: 30,

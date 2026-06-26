@@ -279,7 +279,7 @@ export class UIOverlay {
           <label class="field-check"><input type="checkbox" id="set-mf-float" /> Horizontal drift</label>
           ${rf('set-mf-float-speed', 'Max drift speed (m/s)', 0.5, 8, 0.5)}
           ${rf('set-mf-bounds-y', 'Vertical spawn scale', 0.25, 2, 0.05)}
-          ${rf('set-mf-bounds-x', 'Horizontal spawn scale', 0.25, 2, 0.05)}`
+          ${rf('set-mf-bounds-x', 'Horizontal spawn scale', 0.25, 4, 0.05)}`
       },
       {
         id: 'pasu',
@@ -2052,7 +2052,7 @@ export class UIOverlay {
     $('#set-mf-float').checked = !!mf.floatEnabled;
     this._setRange('set-mf-float-speed', mf.floatSpeedMax ?? 2);
     this._setRange('set-mf-bounds-y', mf.boundsScaleY ?? 1);
-    this._setRange('set-mf-bounds-x', mf.boundsScaleX ?? 1);
+    this._setRange('set-mf-bounds-x', mf.boundsScaleX ?? 2);
 
     this._setRange('set-pasu-size', s.pasu?.targetSize ?? 0.38);
     this._setRange('set-pasu-count', s.pasu?.targetCount ?? 3);

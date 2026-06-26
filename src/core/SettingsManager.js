@@ -141,12 +141,16 @@ const DEFAULTS = {
     botWidth: 1.0, // uniform scale on bot body/head radius (0.5–2.0)
     botSpeed: 1.0 // multiplier on default run speed (215 u/s)
   },
+  stars: {
+    boundsScaleX: 2.0,
+    boundsScaleY: 1.0
+  },
   microflicks: {
     targetSize: 0.1,
     targetCount: 2,
     floatEnabled: false,
     floatSpeedMax: 2.0,
-    boundsScaleX: 1.0,
+    boundsScaleX: 2.0,
     boundsScaleY: 1.0
   }
 };

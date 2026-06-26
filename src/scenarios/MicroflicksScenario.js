@@ -13,20 +13,33 @@ const BASE_BOUNDS_W = 9;
 const BASE_BOUNDS_H = 5;
 const DEFAULT_SIZE = 0.1;
 const DEFAULT_COUNT = 2;
+const DEFAULT_BOUNDS_SCALE_X = 2;
 const RANDOM_SPAWN_CHANCE = 0.1;
+/** Near-respawn offset radii (× target size); was 0.6–1.8, now 2× min / 4× max. */
+const NEAR_SPREAD_MIN = 1.2;
+const NEAR_SPREAD_MAX = 7.2;
 
 export class MicroflicksScenario extends StarsScenario {
   constructor(opts) {
-    super(opts);
-    const preset = this.competitive ? competitivePresetFor('microflicks') : null;
-    const m = this.settings.data.microflicks ?? {};
+    const variant = opts.config?.variant === 'competitive' ? 'competitive' : 'practice';
+    const preset = variant === 'competitive' ? competitivePresetFor('microflicks') : null;
+    const m = opts.settings?.data?.microflicks ?? {};
+    const boundsScaleX =
+      preset?.boundsScaleX ?? opts.config?.boundsScaleX ?? m.boundsScaleX ?? DEFAULT_BOUNDS_SCALE_X;
+    const boundsScaleY =
+      preset?.boundsScaleY ?? opts.config?.boundsScaleY ?? m.boundsScaleY ?? 1;
+
+    super({
+      ...opts,
+      config: { ...opts.config, boundsScaleX, boundsScaleY }
+    });
 
     this.targetSize = preset?.targetSize ?? this.config.targetSize ?? m.targetSize ?? DEFAULT_SIZE;
     this.targetCount = preset?.targetCount ?? this.config.targetCount ?? m.targetCount ?? DEFAULT_COUNT;
     this.floatEnabled = preset?.floatEnabled ?? this.config.floatEnabled ?? m.floatEnabled ?? false;
     this.floatSpeedMax = this.config.floatSpeedMax ?? m.floatSpeedMax ?? 2;
-    this.boundsScaleX = preset?.boundsScaleX ?? this.config.boundsScaleX ?? m.boundsScaleX ?? 1;
-    this.boundsScaleY = preset?.boundsScaleY ?? this.config.boundsScaleY ?? m.boundsScaleY ?? 1;
+    this.boundsScaleX = boundsScaleX;
+    this.boundsScaleY = boundsScaleY;
     this.boundsW = BASE_BOUNDS_W * this.boundsScaleX;
     this.boundsH = BASE_BOUNDS_H * this.boundsScaleY;
     this.randomSpawnChance = preset?.randomSpawnChance ?? RANDOM_SPAWN_CHANCE;
@@ -43,7 +56,7 @@ export class MicroflicksScenario extends StarsScenario {
   static configKeyFor(settings, variant = 'practice') {
     if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
     const m = settings.data.microflicks ?? {};
-    return `s${m.targetSize ?? DEFAULT_SIZE}_n${m.targetCount ?? DEFAULT_COUNT}_x${m.boundsScaleX ?? 1}_y${m.boundsScaleY ?? 1}_f${m.floatEnabled ? 1 : 0}_d${settings.data.runDuration}`;
+    return `s${m.targetSize ?? DEFAULT_SIZE}_n${m.targetCount ?? DEFAULT_COUNT}_x${m.boundsScaleX ?? DEFAULT_BOUNDS_SCALE_X}_y${m.boundsScaleY ?? 1}_f${m.floatEnabled ? 1 : 0}_d${settings.data.runDuration}`;
   }
 
   configKey() {
@@ -51,7 +64,7 @@ export class MicroflicksScenario extends StarsScenario {
   }
 
   _nearSpread() {
-    return randRange(this.targetSize * 0.6, this.targetSize * 1.8);
+    return randRange(this.targetSize * NEAR_SPREAD_MIN, this.targetSize * NEAR_SPREAD_MAX);
   }
 
   _clampToWall(pos) {
