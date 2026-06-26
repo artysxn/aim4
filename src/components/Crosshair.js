@@ -126,9 +126,15 @@ export class Crosshair {
     if (!this.visible) return;
 
     const res = RESOLUTIONS[this.settings.data.resolution];
-    const scale = (res && res.size) ? h / res.size[1] : 1;
+    let scaleX = 1;
+    let scaleY = 1;
+    if (res && res.size) {
+      scaleX = w / res.size[0];
+      scaleY = h / res.size[1];
+    }
     this._paint(ctx, Math.round(w / 2), Math.round(h / 2), {
-      scale,
+      scaleX,
+      scaleY,
       dynGap: this._dynGapPx,
       trackProgress: this._trackProgress,
       hitFlash: this.settings.data.crosshair.hitmarker !== false &&
@@ -136,12 +142,14 @@ export class Crosshair {
     });
   }
 
-  _paint(ctx, cx, cy, { scale, trackProgress, hitFlash, dynGap = 0 }) {
+  _paint(ctx, cx, cy, { scaleX, scaleY, trackProgress, hitFlash, dynGap = 0 }) {
     const { color, innerGap: rawGap, length: rawLen, thickness: rawThick, dotPercentage } =
       this.settings.data.crosshair;
-    const innerGap = rawGap * scale + dynGap;
-    const length = rawLen * scale;
-    const thickness = Math.max(1, rawThick * scale);
+    const innerGapX = rawGap * scaleX + dynGap;
+    const innerGapY = rawGap * scaleY + dynGap;
+    const lengthX = rawLen * scaleX;
+    const lengthY = rawLen * scaleY;
+    const thickness = Math.max(1, rawThick * Math.min(scaleX, scaleY));
 
     // An even-thickness line straddles the pixel boundary cleanly at the exact
     // centre; an odd-thickness line drawn there blurs across two pixels. So for
@@ -158,20 +166,20 @@ export class Crosshair {
     ctx.lineCap = 'butt';
 
     ctx.beginPath();
-    ctx.moveTo(cx, cy - innerGap);
-    ctx.lineTo(cx, cy - innerGap - length);
-    ctx.moveTo(cx, cy + innerGap);
-    ctx.lineTo(cx, cy + innerGap + length);
-    ctx.moveTo(cx - innerGap, cy);
-    ctx.lineTo(cx - innerGap - length, cy);
-    ctx.moveTo(cx + innerGap, cy);
-    ctx.lineTo(cx + innerGap + length, cy);
+    ctx.moveTo(cx, cy - innerGapY);
+    ctx.lineTo(cx, cy - innerGapY - lengthY);
+    ctx.moveTo(cx, cy + innerGapY);
+    ctx.lineTo(cx, cy + innerGapY + lengthY);
+    ctx.moveTo(cx - innerGapX, cy);
+    ctx.lineTo(cx - innerGapX - lengthX, cy);
+    ctx.moveTo(cx + innerGapX, cy);
+    ctx.lineTo(cx + innerGapX + lengthX, cy);
     ctx.stroke();
 
     if (trackProgress > 0) {
-      const barW = 56 * scale;
-      const barH = Math.max(2, 2.5 * scale);
-      const barY = cy + innerGap + length + 10 * scale;
+      const barW = 56 * scaleX;
+      const barH = Math.max(2, 2.5 * scaleY);
+      const barY = cy + innerGapY + lengthY + 10 * scaleY;
       ctx.fillStyle = 'rgba(255,255,255,0.18)';
       ctx.fillRect(cx - barW / 2, barY, barW, barH);
       ctx.fillStyle = color;
@@ -179,7 +187,7 @@ export class Crosshair {
     }
 
     if (dotPercentage > 0) {
-      const r = (dotPercentage / 100) * 5 * scale;
+      const r = (dotPercentage / 100) * 5 * Math.min(scaleX, scaleY);
       ctx.beginPath();
       ctx.arc(cx, cy, Math.max(0.5, r), 0, Math.PI * 2);
       ctx.fill();
@@ -188,17 +196,19 @@ export class Crosshair {
     if (hitFlash) {
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2;
-      const g = innerGap + 3;
-      const l = 7 * scale;
+      const gX = innerGapX + 3;
+      const gY = innerGapY + 3;
+      const lX = 7 * scaleX;
+      const lY = 7 * scaleY;
       ctx.beginPath();
-      ctx.moveTo(cx - g, cy - g);
-      ctx.lineTo(cx - g - l, cy - g - l);
-      ctx.moveTo(cx + g, cy - g);
-      ctx.lineTo(cx + g + l, cy - g - l);
-      ctx.moveTo(cx - g, cy + g);
-      ctx.lineTo(cx - g - l, cy + g + l);
-      ctx.moveTo(cx + g, cy + g);
-      ctx.lineTo(cx + g + l, cy + g + l);
+      ctx.moveTo(cx - gX, cy - gY);
+      ctx.lineTo(cx - gX - lX, cy - gY - lY);
+      ctx.moveTo(cx + gX, cy - gY);
+      ctx.lineTo(cx + gX + lX, cy - gY - lY);
+      ctx.moveTo(cx - gX, cy + gY);
+      ctx.lineTo(cx - gX - lX, cy + gY + lY);
+      ctx.moveTo(cx + gX, cy + gY);
+      ctx.lineTo(cx + gX + lX, cy + gY + lY);
       ctx.stroke();
     }
   }

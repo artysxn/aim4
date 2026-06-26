@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
-import { hFovToVFov, clamp } from '../utils/MathUtils.js';
+import { sourceVFovFromHFov, clamp } from '../utils/MathUtils.js';
 import { RESOLUTIONS } from './SettingsManager.js';
 
 export const EYE_HEIGHT = 1.6;
@@ -57,33 +57,41 @@ _setupLights() {
   }
 
   /**
-   * Configure the backbuffer. For fixed resolutions we render at the exact
-   * pixel size (updateStyle = false) and let CSS stretch the canvas to fill
-   * the viewport — exactly like hardware scaling in competitive shooters.
-   * Horizontal FOV is held constant regardless of the resulting aspect.
+   * Configure the backbuffer. Fixed resolutions render at their exact pixel
+   * size (updateStyle = false) and the canvas is scaled to fill the viewport.
+   * 4:3 stretched modes (1280×960, etc.) stretch horizontally on widescreen
+   * displays — same as CS2 scaling mode "Stretched".
+   *
+   * FOV follows Source / CS2: the slider is horizontal FOV at 4:3; vertical
+   * FOV stays fixed while widescreen gains horizontal coverage.
    */
   applyResolution() {
     const res = RESOLUTIONS[this.settings.data.resolution];
+    const displayW = window.innerWidth;
+    const displayH = window.innerHeight;
     let w, h, pixelRatio;
 
     if (res && res.size) {
       [w, h] = res.size;
       pixelRatio = 1; // exact backbuffer, no DPR multiplication
     } else {
-      w = window.innerWidth;
-      h = window.innerHeight;
+      w = displayW;
+      h = displayH;
       pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
     }
 
     this.renderer.setPixelRatio(pixelRatio);
     this.renderer.setSize(w, h, false); // false => do not write inline CSS size
-    // CSS forces the canvas to fill the viewport (stretch).
-    this.canvas.style.width = '100vw';
-    this.canvas.style.height = '100vh';
+    // Scale the backbuffer to the physical viewport (anisotropic when aspects differ).
+    this.canvas.style.width = `${displayW}px`;
+    this.canvas.style.height = `${displayH}px`;
 
     this.renderAspect = w / h;
+    this.displayAspect = displayW / displayH;
+    this.displayStretch = this.displayAspect / this.renderAspect;
+
     this.camera.aspect = this.renderAspect;
-    this.camera.fov = hFovToVFov(this.settings.data.hFov, this.renderAspect);
+    this.camera.fov = sourceVFovFromHFov(this.settings.data.hFov);
     this.camera.updateProjectionMatrix();
   }
 

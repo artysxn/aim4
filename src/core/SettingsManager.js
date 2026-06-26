@@ -17,8 +17,8 @@ const SETTINGS_VERSION = 2;
 export const RESOLUTIONS = {
   native: { label: 'Native', size: null },
   '1920x1080': { label: '1920 × 1080 (16:9)', size: [1920, 1080] },
-  '1280x960': { label: '1280 × 960 (4:3 stretched)', size: [1280, 960] },
-  '1024x768': { label: '1024 × 768 (4:3 stretched)', size: [1024, 768] },
+  '1280x960': { label: '1280 × 960 (4:3 stretched)', size: [1280, 960], stretched: true },
+  '1024x768': { label: '1024 × 768 (4:3 stretched)', size: [1024, 768], stretched: true },
   '1280x720': { label: '1280 × 720 (16:9)', size: [1280, 720] }
 };
 

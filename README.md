@@ -97,5 +97,10 @@ and applied directly to the camera's `YXZ` Euler angles. Pitch is clamped to
 ### Resolution scaling
 
 Fixed resolutions render at their exact backbuffer size
-(`renderer.setSize(w, h, false)`) while CSS stretches the canvas to fill the
-viewport. Horizontal FOV is held constant across aspect ratios.
+(`renderer.setSize(w, h, false)`) while the canvas is scaled to fill the
+viewport. 4:3 stretched modes stretch horizontally on widescreen monitors,
+matching CS2 scaling mode "Stretched".
+
+The FOV slider follows Source / CS2 semantics: horizontal FOV at 4:3 aspect.
+Vertical FOV stays fixed; native widescreen renders gain horizontal coverage,
+and 4:3 stretched resolutions widen targets on screen without changing angles.

@@ -49,10 +49,12 @@ export function sensitivityFromLegacy(cm360, dpi) {
   return (cm360 * dpi * SENSITIVITY_REF) / LEGACY_SENS_PRODUCT;
 }
 
+/** CS2 / Source: the FOV slider is horizontal FOV at 4:3 aspect ratio. */
+export const FOV_REFERENCE_ASPECT = 4 / 3;
+
 /**
  * Convert a desired *horizontal* FOV into the *vertical* FOV that Three.js'
- * PerspectiveCamera expects, given a render aspect ratio. This keeps the
- * horizontal FOV constant across stretched / non-native aspect ratios.
+ * PerspectiveCamera expects, given a render aspect ratio.
  *
  *   vFov = 2 * atan( tan(hFov / 2) / aspect )
  */
@@ -60,6 +62,15 @@ export function hFovToVFov(hFovDeg, aspect) {
   const h = degToRad(hFovDeg);
   const v = 2 * Math.atan(Math.tan(h / 2) / aspect);
   return radToDeg(v);
+}
+
+/**
+ * Vertical FOV for the saved horizontal FOV setting (Source / CS2 semantics).
+ * Vertical stays fixed; widescreen renders gain horizontal FOV, and 4:3
+ * stretched resolutions stretch horizontally on display without changing angles.
+ */
+export function sourceVFovFromHFov(hFovDeg) {
+  return hFovToVFov(hFovDeg, FOV_REFERENCE_ASPECT);
 }
 
 // Easing curves used by spawn / death animations.
