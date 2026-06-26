@@ -154,6 +154,7 @@
       <div><span class="k">Shift + Middle</span> — pan</div>
       <div><span class="k">Right-drag</span> — pan</div>
       <div><span class="k">Shift-click</span> — add / remove from selection</div>
+      <div><span class="k">E</span> — move / scale · <span class="k">R</span> / <span class="k">Shift+R</span> — rotate 90°</div>
       <div><span class="k">Wheel</span> — zoom · <span class="k">F</span> — frame</div>
     </div>
   </div>
@@ -245,7 +246,7 @@
       <button id="btn-resnap-all" type="button" style="width:100%;margin-top:8px" title="Snap every box and spawn to the move + scale grids">
         Re-snap all to grid
       </button>
-      <div class="hint">Click to select. <b>Shift-click</b> to add/remove. Scale always snaps to the scale grid.</div>
+      <div class="hint">Click to select. <b>Shift-click</b> to add/remove. Scale (E) grows one side only. <b>R</b> / <b>Shift+R</b> rotate boxes 90°.</div>
     </div>
 
     <!-- Selected -->
@@ -489,6 +490,7 @@ const spawns = [];
 const selectionPivot = new THREE.Object3D();
 scene.add(selectionPivot);
 let pivotDragStart = null;
+let scaleDragStart = null;
 
 const SPAWN_COLORS = { A: 0x36c2ff, B: 0xffb13b };
 
@@ -546,6 +548,7 @@ function addBox(box) {
   }));
   mesh.position.set(box.pos[0], box.pos[1], box.pos[2]);
   mesh.scale.set(box.size[0], box.size[1], box.size[2]);
+  if (box.rotationY) mesh.rotation.y = box.rotationY;
   mesh.userData.kind = 'box';
   const edges = new THREE.LineSegments(
     new THREE.EdgesGeometry(UNIT_GEO),
@@ -584,6 +587,60 @@ function applyBoxScaleGrid(mesh) {
   mesh.scale.x = Math.max(min, snapToGrid(mesh.scale.x, scaleSnapVal));
   mesh.scale.y = Math.max(min, snapToGrid(mesh.scale.y, scaleSnapVal));
   mesh.scale.z = Math.max(min, snapToGrid(mesh.scale.z, scaleSnapVal));
+}
+
+function faceWorldPoint(obj, axis, sign) {
+  const v = new THREE.Vector3();
+  v[axis] = sign * obj.scale[axis] / 2;
+  return obj.localToWorld(v);
+}
+
+function beginScaleDrag() {
+  const obj = primary();
+  if (!obj || obj.userData.kind !== 'box' || selected.length !== 1 || transform.mode !== 'scale') return null;
+  const ax = transform.axis || '';
+  if (!ax || /XY|XYZ/.test(ax)) return null;
+  const axis = ax.includes('X') ? 'x' : ax.includes('Y') ? 'y' : ax.includes('Z') ? 'z' : null;
+  if (!axis || !transform.pointStart) return null;
+  const localPt = obj.worldToLocal(transform.pointStart.clone());
+  return {
+    axis,
+    fixMax: localPt[axis] < 0,
+    worldMin: faceWorldPoint(obj, axis, -1).clone(),
+    worldMax: faceWorldPoint(obj, axis, 1).clone()
+  };
+}
+
+function applyOneSidedScale(obj, start) {
+  const i = start.axis;
+  let newS = obj.scale[i];
+  newS = Math.max(scaleSnapVal, snapToGrid(newS, scaleSnapVal));
+  obj.scale[i] = newS;
+  const half = newS / 2;
+  const dir = new THREE.Vector3();
+  dir[i] = 1;
+  dir.applyQuaternion(obj.quaternion);
+  if (start.fixMax) {
+    obj.position.copy(start.worldMax).sub(dir.multiplyScalar(half));
+  } else {
+    obj.position.copy(start.worldMin).add(dir.multiplyScalar(half));
+  }
+}
+
+function rotateSelectedBoxes(dir) {
+  const boxes = selected.filter((o) => o.userData.kind === 'box');
+  if (!boxes.length) return;
+  pushUndo();
+  const step = Math.PI / 2;
+  boxes.forEach((obj) => {
+    obj.rotation.y += dir * step;
+    const q = Math.round(obj.rotation.y / step);
+    obj.rotation.y = q * step;
+  });
+  attachGizmo();
+  syncProps();
+  updateBounds();
+  flash(dir < 0 ? 'Rotated 90° clockwise' : 'Rotated 90° counter-clockwise');
 }
 
 function moveGridStep() {
@@ -626,13 +683,16 @@ transform.addEventListener('dragging-changed', (e) => {
         pivotPos: selectionPivot.position.clone(),
         items: selected.map((obj) => ({ obj, pos: obj.position.clone() }))
       };
+      scaleDragStart = null;
     } else {
       pivotDragStart = null;
+      scaleDragStart = beginScaleDrag();
     }
   } else if (beforeDrag) {
     pushUndoState(beforeDrag);
     beforeDrag = null;
     pivotDragStart = null;
+    scaleDragStart = null;
   }
 });
 transform.addEventListener('objectChange', onGizmoChange);
@@ -666,6 +726,7 @@ function clearSelection() {
   selected.forEach((o) => setHighlight(o, false));
   selected.length = 0;
   pivotDragStart = null;
+  scaleDragStart = null;
   transform.detach();
   updateScaleButton();
   syncProps();
@@ -733,7 +794,8 @@ function captureState() {
     bounds: { minX: num('b-minx', -7), maxX: num('b-maxx', 7), minZ: num('b-minz', -8), maxZ: num('b-maxz', 8) },
     boxes: boxGroup.children.map((m) => ({
       pos: [m.position.x, m.position.y, m.position.z],
-      size: [m.scale.x, m.scale.y, m.scale.z]
+      size: [m.scale.x, m.scale.y, m.scale.z],
+      rotationY: m.rotation.y
     })),
     spawns: spawns.map((s) => ({
       team: s.userData.team,
@@ -746,7 +808,13 @@ function captureState() {
 function applyState(s) {
   clearBoxes();
   clearSpawns();
-  (s.boxes || []).forEach(addBox);
+  (s.boxes || []).forEach((box) => {
+    addBox({
+      pos: box.pos,
+      size: box.size,
+      rotationY: box.rotationY || 0
+    });
+  });
   (s.spawns || []).forEach((sp) => {
     const team = sp.team || (String(sp.label || '').startsWith('B') ? 'B' : 'A');
     const m = makeSpawn(team, sp.label || nextSpawnLabel(team));
@@ -941,7 +1009,11 @@ function onGizmoChange() {
   const obj = primary();
   if (!obj) return;
   if (obj.userData.kind === 'box') {
-    applyBoxScaleGrid(obj);
+    if (transform.mode === 'scale' && scaleDragStart) {
+      applyOneSidedScale(obj, scaleDragStart);
+    } else {
+      applyBoxScaleGrid(obj);
+    }
     obj.material.color.copy(heightColor(obj.scale.y));
   }
   syncProps();
@@ -1087,7 +1159,8 @@ function duplicateSelected() {
     if (obj.userData.kind === 'box') {
       copies.push(addBox({
         pos: [round2(obj.position.x), obj.position.y, round2(obj.position.z)],
-        size: [obj.scale.x, obj.scale.y, obj.scale.z]
+        size: [obj.scale.x, obj.scale.y, obj.scale.z],
+        rotationY: obj.rotation.y
       }));
     } else {
       const team = obj.userData.team;
@@ -1189,6 +1262,7 @@ window.addEventListener('keydown', (e) => {
   if (ctrl) return;
   if (e.key === 'w' || e.key === 'W') setMode('translate');
   if (e.key === 'e' || e.key === 'E') toggleMode();
+  if (e.key === 'r' || e.key === 'R') { e.preventDefault(); rotateSelectedBoxes(e.shiftKey ? 1 : -1); }
   if (e.shiftKey && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); duplicateSelected(); }
   if (e.key === 'Delete' || e.key === 'Backspace' || e.key === 'x' || e.key === 'X') deleteSelected();
   if (e.key === 'f' || e.key === 'F') {
@@ -1218,10 +1292,14 @@ el('map-load').addEventListener('click', () => {
 // ---------------------------------------------------------------------------
 function buildExport() {
   const bounds = computeBounds();
-  const boxes = boxGroup.children.map((m) => ({
-    pos: [round2(m.position.x), round2(m.position.y), round2(m.position.z)],
-    size: [round2(m.scale.x), round2(m.scale.y), round2(m.scale.z)]
-  }));
+  const boxes = boxGroup.children.map((m) => {
+    const entry = {
+      pos: [round2(m.position.x), round2(m.position.y), round2(m.position.z)],
+      size: [round2(m.scale.x), round2(m.scale.y), round2(m.scale.z)]
+    };
+    if (Math.abs(m.rotation.y) > 0.0001) entry.rotationY = round2(m.rotation.y);
+    return entry;
+  });
   const byTeam = { A: [], B: [] };
   spawns.forEach((s) => {
     const pt = { pos: [round2(s.position.x), round2(s.position.y), round2(s.position.z)] };
