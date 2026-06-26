@@ -40,6 +40,8 @@ export class PasuScenario extends BaseScenario {
     this.angleOffset = preset?.angleOffset ?? this.config.angleOffset ?? p.angleOffset ?? 360;
     this.infiniteAmmo = this.config.infiniteAmmo ?? p.infiniteAmmo !== false;
     this.weaponBloom = false;
+    this.viewmodelRecoil =
+      preset?.viewmodelRecoil ?? this.config.viewmodelRecoil ?? p.viewmodelRecoil ?? false;
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 30)
       : this.settings.data.runDuration;

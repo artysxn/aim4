@@ -35,6 +35,7 @@ export class StarsScenario extends GridshotScenario {
     this.enableTimeLimit = false;
     this.infiniteAmmo = true;
     this.weaponBloom = false;
+    this.viewmodelRecoil = false;
     this.runDuration = this.competitive
       ? (presetAfter?.runDuration ?? 30)
       : this.settings.data.runDuration;

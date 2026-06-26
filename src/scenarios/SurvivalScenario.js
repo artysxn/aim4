@@ -30,6 +30,7 @@ export class SurvivalScenario extends BaseScenario {
     this.weaponId = 'pistol';
     this.infiniteAmmo = true;
     this.weaponBloom = false;
+    this.viewmodelRecoil = false;
     this.runDuration = Infinity;
 
     const p = this.settings.data.survival;

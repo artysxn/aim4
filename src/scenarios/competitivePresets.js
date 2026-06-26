@@ -8,27 +8,31 @@ export const COMPETITIVE_PRESETS = {
     targetCount: 5,
     boundsScaleY: 0.8,
     boundsScaleX: 1.2,
-    mode: 'clicking'
+    mode: 'clicking',
+    viewmodelRecoil: false
   },
   stars: {
     runDuration: 30,
     targetSize: 0.1,
     targetCount: 200,
-    boundsScaleX: 2
+    boundsScaleX: 2,
+    viewmodelRecoil: false
   },
   microflicks: {
     runDuration: 30,
     targetSize: 0.1,
     targetCount: 2,
     randomSpawnChance: 0.1,
-    boundsScaleX: 2
+    boundsScaleX: 2,
+    viewmodelRecoil: false
   },
   pasu: {
     runDuration: 30,
     targetSize: 0.15,
     angleOffset: 180,
     targetCount: 4,
-    travelSpeedMax: 3.5
+    travelSpeedMax: 3.5,
+    viewmodelRecoil: false
   },
   arena: {
     runDuration: 30,

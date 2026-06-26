@@ -76,7 +76,8 @@ const DEFAULTS = {
     boundsScaleX: 1.0,
     boundsScaleY: 1.0,
     angleOffset: 360,
-    infiniteAmmo: true
+    infiniteAmmo: true,
+    viewmodelRecoil: false
   },
   spidershot: {
     targetSize: 0.45,
@@ -102,7 +103,8 @@ const DEFAULTS = {
     despawnTime: 1800, // ms before a dot explodes (Practice)
     maxSize: 0.55,
     startSize: 0.12,
-    missesAllowed: 3 // missed shots before game over (Practice only)
+    missesAllowed: 3, // missed shots before game over (Practice only)
+    viewmodelRecoil: false
   },
   arena: {
     crossDuration: 775, // ms for the bot to cross a gap (exposure window)

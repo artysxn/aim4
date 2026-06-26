@@ -15,6 +15,7 @@ import { viewPunchImpulse } from '../weapons/ak47.js';
 import { isLeaderboardEligible } from './rankedScenarios.js';
 
 const _raycaster = new THREE.Raycaster();
+const _crosshairRay = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0); // crosshair is always screen center
 // Reused firing scratch (no per-shot allocation).
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -23,6 +24,7 @@ const _dir = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _muzzle = new THREE.Vector3();
+const TRACER_MISS_DEPTH = 120;
 
 // --- Tiny WebAudio blip used for hit feedback (lazily created) -------------
 let _audioCtx = null;
@@ -202,7 +204,7 @@ export class BaseScenario {
     };
 
     // Tracer follows the bullet ray (targets + cover), not the nearest floor mesh.
-    this._tracerImpactPoint(_raycaster, cam.position, _dir);
+    this._tracerImpactPoint(_raycaster);
 
     this.onShoot(_raycaster);
 
@@ -249,11 +251,16 @@ export class BaseScenario {
     return [];
   }
 
-  /** World point the tracer line should end at — follows the bullet ray, not floor geometry. */
-  _tracerImpactPoint(raycaster, origin, dir) {
+  /** World point the tracer line ends at — always under the crosshair (screen center). */
+  _tracerImpactPoint(raycaster) {
     const hit = this.raycastTargets(raycaster, this.tracerRaycastExtras());
-    if (hit) return this._lastImpact.copy(hit.point);
-    return this._lastImpact.copy(origin).addScaledVector(dir, 120);
+    const depth = hit ? hit.distance : TRACER_MISS_DEPTH;
+    // Keep bullet-ray hit depth (cover / targets) but place the visible endpoint on
+    // the crosshair ray so muzzle→end aligns with screen center, not the offset gun.
+    _crosshairRay.setFromCamera(_center, this.camera);
+    return this._lastImpact
+      .copy(_crosshairRay.ray.origin)
+      .addScaledVector(_crosshairRay.ray.direction, depth);
   }
 
   raycastTargets(raycaster, extra = []) {

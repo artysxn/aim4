@@ -41,7 +41,8 @@ export class SpidershotScenario extends BaseScenario {
     this.randomSizeMax = preset?.randomSizeMax ?? this.config.randomSizeMax ?? s.randomSizeMax;
     this.infiniteAmmo = preset?.infiniteAmmo ?? this.config.infiniteAmmo ?? s.infiniteAmmo !== false;
     this.weaponBloom = false;
-    this.viewmodelRecoil = preset?.viewmodelRecoil ?? this.config.viewmodelRecoil ?? s.viewmodelRecoil !== false;
+    this.viewmodelRecoil =
+      preset?.viewmodelRecoil ?? this.config.viewmodelRecoil ?? s.viewmodelRecoil ?? false;
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 30)
       : this.settings.data.runDuration;

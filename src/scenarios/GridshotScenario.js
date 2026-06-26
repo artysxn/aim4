@@ -40,7 +40,8 @@ export class GridshotScenario extends BaseScenario {
     this.boundsScaleY = preset?.boundsScaleY ?? this.config.boundsScaleY ?? g.boundsScaleY ?? 1;
     this.infiniteAmmo = this.config.infiniteAmmo ?? g.infiniteAmmo !== false;
     this.weaponBloom = false;
-    this.viewmodelRecoil = this.config.viewmodelRecoil ?? g.viewmodelRecoil !== false;
+    this.viewmodelRecoil =
+      preset?.viewmodelRecoil ?? this.config.viewmodelRecoil ?? g.viewmodelRecoil ?? false;
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 30)
       : this.settings.data.runDuration;

@@ -43,6 +43,7 @@ export class MicroflicksScenario extends StarsScenario {
     this.boundsW = BASE_BOUNDS_W * this.boundsScaleX;
     this.boundsH = BASE_BOUNDS_H * this.boundsScaleY;
     this.randomSpawnChance = preset?.randomSpawnChance ?? RANDOM_SPAWN_CHANCE;
+    this.viewmodelRecoil = false;
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 30)
       : this.settings.data.runDuration;
