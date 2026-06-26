@@ -17,7 +17,7 @@ const BASE_BOUNDS_H = 6;
 
 /** Fixed Competitive Survival rules — not user-configurable. */
 export const SURVIVAL_COMPETITIVE = {
-  spawnInterval: 0.3,
+  spawnInterval: 0.42,
   despawnTime: 1.8,
   maxSize: 0.55,
   startSize: 0.12,

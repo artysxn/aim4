@@ -323,7 +323,7 @@ export class UIOverlay {
         id: 'survival',
         label: 'Survival',
         body: `
-          <p class="readout">Practice settings below. Competitive uses fixed rules: 0.3&nbsp;s spawn, 1.8&nbsp;s despawn, no missed shots, no other changes.</p>
+          <p class="readout">Practice settings below. Competitive uses fixed rules: 0.42&nbsp;s spawn, 1.8&nbsp;s despawn, no missed shots, no other changes.</p>
           ${rf('set-surv-spawn', 'Spawn interval (ms)', 300, 3000, 50)}
           ${rf('set-surv-despawn', 'Despawn time (ms)', 500, 5000, 50)}
           ${rf('set-surv-max-size', 'Max target size', 0.25, 1.0, 0.05)}

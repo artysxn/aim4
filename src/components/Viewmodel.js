@@ -2,7 +2,8 @@
 // Viewmodel.js
 // A deliberately simple, blocky first-person gun model plus its juice: a subtle
 // muzzle flash, a small kick-back on fire, optional weapon bob while moving, and
-// pooled yellow bullet tracers. The model is a plain scene object that follows
+// pooled yellow bullet tracers. During reload the viewmodel dips down and tilts
+// in sync with WeaponController.reloadProgress.
 // the camera each frame (the engine camera is not in the scene graph, so we
 // can't parent to it) using the camera's own basis vectors.
 //
@@ -164,6 +165,7 @@ export class Viewmodel {
     if (!v) {
       this._punchPitch = 0;
       this._punchYaw = 0;
+      this._kick = 0;
       for (const tr of this._tracers) {
         tr.t = 0;
         tr.line.visible = false;
@@ -278,15 +280,28 @@ export class Viewmodel {
     const kickBack = this._kick * 0.06 * kickMul;
     const kickUp = this._kick * 0.02 * kickMul;
 
+    // Reload: dip down, pull in, barrel tilt — peaks mid-reload.
+    let reloadDown = 0;
+    let reloadBack = 0;
+    let reloadTilt = 0;
+    const weapon = this.engine.weapon;
+    if (weapon?.reloading) {
+      const wave = Math.sin(weapon.reloadProgress * Math.PI);
+      const mag = weapon.spec?.model === 'pistol' ? 0.85 : 1;
+      reloadDown = -0.13 * mag * wave;
+      reloadBack = 0.08 * mag * wave;
+      reloadTilt = 0.34 * mag * wave;
+    }
+
     // Compose world position from the camera basis.
     this._pos.copy(cam.position)
       .addScaledVector(this._right, ox + bobX)
-      .addScaledVector(this._up, oy + bobY + kickUp)
-      .addScaledVector(this._fwd, oz - kickBack);
+      .addScaledVector(this._up, oy + bobY + kickUp + reloadDown)
+      .addScaledVector(this._fwd, oz - kickBack - reloadBack);
     this.group.position.copy(this._pos);
     this.group.quaternion.copy(cam.quaternion);
-    // A touch of barrel rise as it kicks.
-    this.group.rotateX(-this._kick * 0.05 * kickMul);
+    // A touch of barrel rise as it kicks; reload tilts the barrel down mid-swap.
+    this.group.rotateX(-this._kick * 0.05 * kickMul + reloadTilt);
 
     // Muzzle tip in world space (per-weapon barrel-tip offset).
     this._muzzle.copy(this._pos)

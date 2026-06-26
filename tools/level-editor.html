@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AIM4 3D Level Editor</title>
+<style>
+  :root {
+    --bg: #0c0d10;
+    --panel: #15171c;
+    --panel-2: #1c1f26;
+    --line: #2a2e38;
+    --text: #e6e8ec;
+    --muted: #8a909c;
+    --accent: #f52525;
+    --a: #36c2ff;
+    --b: #ffb13b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  #app { display: flex; height: 100%; }
+  #stage { position: relative; flex: 1; min-width: 0; }
+  #cv { display: block; width: 100%; height: 100%; }
+  #side { width: 330px; background: var(--panel); border-left: 1px solid var(--line);
+    display: flex; flex-direction: column; overflow-y: auto; }
+  .sec { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .sec h2 { margin: 0 0 10px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  button { background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 8px 10px; font-size: 13px; cursor: pointer; }
+  button:hover { border-color: #3a4150; }
+  button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.full { width: 100%; }
+  button.ghost { background: transparent; }
+  .danger:hover { border-color: var(--accent); color: var(--accent); }
+  .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+  .row label { flex: 0 0 92px; font-size: 12px; color: var(--muted); }
+  .row input[type="text"], .row input[type="number"], .row select {
+    flex: 1; min-width: 0; background: var(--panel-2); border: 1px solid var(--line);
+    color: var(--text); border-radius: 5px; padding: 6px 8px; font-size: 13px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .grid3 .f label { display: block; font-size: 10px; color: var(--muted); margin-bottom: 3px;
+    text-transform: uppercase; letter-spacing: 0.04em; }
+  .grid3 .f input { width: 100%; background: var(--panel-2); border: 1px solid var(--line);
+    color: var(--text); border-radius: 5px; padding: 6px; font-size: 13px; }
+  .hint { font-size: 11px; color: var(--muted); line-height: 1.5; }
+  .hint kbd { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 10px; }
+  textarea { width: 100%; height: 150px; resize: vertical; background: #0a0b0e; color: #cfe;
+    border: 1px solid var(--line); border-radius: 6px; padding: 8px;
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.45; }
+  .pillrow { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .pill { font-size: 11px; padding: 5px 8px; }
+  .split { display: flex; gap: 8px; }
+  .split > * { flex: 1; }
+  .empty { color: var(--muted); font-size: 12px; font-style: italic; }
+  #hud { position: absolute; left: 12px; top: 12px; background: rgba(12,13,16,0.82);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 12px;
+    color: var(--muted); pointer-events: none; line-height: 1.6; }
+  #hud b { color: var(--text); }
+  .legend { position: absolute; right: 12px; top: 12px; background: rgba(12,13,16,0.82);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 11px; }
+  .legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  #flash { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+    background: var(--accent); color: #fff; padding: 8px 16px; border-radius: 8px; font-size: 13px; opacity: 0; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="hud"></div>
+    <div class="legend">
+      <div><span class="dot" style="background:var(--a)"></span>Spawn A</div>
+      <div><span class="dot" style="background:var(--b)"></span>Spawn B</div>
+      <div style="margin-top:4px;color:var(--muted)">Darker = taller box</div>
+    </div>
+  </div>
+
+  <div id="side">
+    <div class="sec">
+      <h2>Import existing map</h2>
+      <div class="row">
+        <select id="map-select"></select>
+        <button id="map-load" style="flex:0 0 auto">Load</button>
+      </div>
+      <div class="hint">Loads a real in-game arena from <code>maps.js</code> to edit.</div>
+    </div>
+
+    <div class="sec">
+      <h2>Add &amp; transform</h2>
+      <div class="split">
+        <button id="add-box">+ Add Box</button>
+        <button id="dup">Duplicate</button>
+        <button id="del" class="danger">Delete</button>
+      </div>
+      <div class="tools" style="margin-top:8px">
+        <button data-mode="translate" class="active">Move (W)</button>
+        <button data-mode="scale">Scale (E)</button>
+        <button id="snap-floor">Drop to floor</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label>Snap (m)</label>
+        <select id="snap">
+          <option value="0">Off</option>
+          <option value="0.1">0.1</option>
+          <option value="0.25">0.25</option>
+          <option value="0.5" selected>0.5</option>
+          <option value="1">1.0</option>
+        </select>
+      </div>
+      <div class="hint">
+        Click a box/spawn to select. Drag the gizmo to move or scale.<br />
+        Orbit: left-drag empty space · Pan: right-drag · Zoom: wheel · Delete: <kbd>Del</kbd>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h2>Level</h2>
+      <div class="row"><label>ID</label><input id="m-id" type="text" value="custom-level" /></div>
+      <div class="row"><label>Label</label><input id="m-label" type="text" value="Custom Level" /></div>
+      <div class="pillrow">
+        <button class="pill" data-seth="2.4">Peek 2.4</button>
+        <button class="pill" data-seth="6">Full 6.0</button>
+        <button class="pill" data-seth="0.85">Low 0.85</button>
+      </div>
+      <div class="hint" style="margin-top:6px">Height presets apply to the selected box.</div>
+    </div>
+
+    <div class="sec">
+      <h2>Bounds</h2>
+      <div class="row">
+        <label>Mode</label>
+        <select id="b-mode">
+          <option value="auto" selected>Auto (fit + margin)</option>
+          <option value="manual">Manual</option>
+        </select>
+      </div>
+      <div id="b-marginrow" class="row"><label>Auto margin</label><input id="b-automargin" type="number" step="0.5" value="3" /></div>
+      <div id="b-manual" style="display:none">
+        <div class="grid3">
+          <div class="f"><label>minX</label><input id="b-minx" type="number" step="0.5" value="-7" /></div>
+          <div class="f"><label>maxX</label><input id="b-maxx" type="number" step="0.5" value="7" /></div>
+          <div class="f"><label></label></div>
+          <div class="f"><label>minZ</label><input id="b-minz" type="number" step="0.5" value="-8" /></div>
+          <div class="f"><label>maxZ</label><input id="b-maxz" type="number" step="0.5" value="8" /></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h2 id="prop-title">Selected</h2>
+      <div class="empty" id="prop-empty">Nothing selected.</div>
+      <div id="prop-box" style="display:none">
+        <div class="grid3">
+          <div class="f"><label>X</label><input id="p-x" type="number" step="0.1" /></div>
+          <div class="f"><label>Y</label><input id="p-y" type="number" step="0.1" /></div>
+          <div class="f"><label>Z</label><input id="p-z" type="number" step="0.1" /></div>
+          <div class="f"><label>W (x)</label><input id="p-w" type="number" step="0.1" /></div>
+          <div class="f"><label>H (y)</label><input id="p-h" type="number" step="0.1" /></div>
+          <div class="f"><label>D (z)</label><input id="p-d" type="number" step="0.1" /></div>
+        </div>
+      </div>
+      <div id="prop-spawn" style="display:none">
+        <div class="grid3">
+          <div class="f"><label>X</label><input id="s-x" type="number" step="0.1" /></div>
+          <div class="f"><label>Y</label><input id="s-y" type="number" step="0.1" /></div>
+          <div class="f"><label>Z</label><input id="s-z" type="number" step="0.1" /></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h2>Export / Import</h2>
+      <div class="split">
+        <button id="btn-export" class="full">Export JSON</button>
+        <button id="btn-copy" class="full">Copy</button>
+      </div>
+      <div class="split" style="margin-top:6px">
+        <button id="btn-import" class="full ghost">Import from box</button>
+        <button id="btn-clear" class="full ghost danger">Clear boxes</button>
+      </div>
+      <textarea id="io" spellcheck="false" placeholder="Exported JSON appears here. Paste JSON and click Import to load."></textarea>
+      <div class="hint">Format matches <code>src/multiplayer/maps.js</code>: each box is <code>{ pos:[x,y,z], size:[w,h,d] }</code>. Paste back into chat to turn it into a real level.</div>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+
+// ---------------------------------------------------------------------------
+// In-game map data — mirrored from src/multiplayer/maps.js so existing arenas
+// can be imported and edited 1:1.
+// ---------------------------------------------------------------------------
+const FULL_H = 6.0;
+const PEEK_H = 2.4;
+const b = (x, y, z, w, h, d) => ({ pos: [x, y, z], size: [w, h, d] });
+const spawnWall = (x, z, w, d) => b(x, FULL_H / 2, z, w, FULL_H, d);
+
+const MAP_TEMPLATES = [
+  { id: 'tight-poke', label: 'Tight Poke', bounds: { minX: -5, maxX: 5, minZ: -7, maxZ: 7 },
+    spawns: { A: { pos: [1, 0, 5.5] }, B: { pos: [-1.5, 0, -5.5] } },
+    boxes: [ spawnWall(0.8, 4.2, 2.2, 1.1), spawnWall(-1.2, -4.2, 2.2, 1.1),
+      b(0.5, FULL_H / 2, 0.2, 1.8, FULL_H, 1.2), b(-2.5, PEEK_H / 2, 1.8, 0.9, PEEK_H, 0.5),
+      b(2.2, PEEK_H / 2, -1.2, 0.9, PEEK_H, 0.5) ] },
+  { id: 'offset-avenue', label: 'Offset Avenue', bounds: { minX: -6.5, maxX: 6.5, minZ: -8, maxZ: 8 },
+    spawns: { A: { pos: [2, 0, 6] }, B: { pos: [-3, 0, -6] } },
+    boxes: [ spawnWall(1.2, 4.5, 2.4, 1.2), spawnWall(-2, -4.5, 2.4, 1.2),
+      b(-1.2, FULL_H / 2, 0.8, 1.8, FULL_H, 1.2), b(2.8, PEEK_H / 2, -0.3, 1.4, PEEK_H, 0.5),
+      b(-2.8, PEEK_H / 2, 2.2, 1.1, PEEK_H, 0.5), b(0.8, PEEK_H / 2, -3.2, 1.8, PEEK_H, 0.5) ] },
+  { id: 'split-pillar', label: 'Split Pillar', bounds: { minX: -6, maxX: 6, minZ: -7.5, maxZ: 7.5 },
+    spawns: { A: { pos: [-2.5, 0, 5.8] }, B: { pos: [3.5, 0, -5.8] } },
+    boxes: [ spawnWall(-1.8, 4.4, 2.2, 1.1), spawnWall(2.8, -4.4, 2.2, 1.1),
+      b(2.0, FULL_H / 2, 0.6, 1.4, FULL_H, 1.2), b(-1.4, FULL_H / 2, -0.8, 1.1, FULL_H, 0.9),
+      b(3.5, PEEK_H / 2, 2.5, 0.9, PEEK_H, 0.5), b(-3.2, PEEK_H / 2, -2.8, 1.4, PEEK_H, 0.5) ] },
+  { id: 'den-kitchen', label: 'Den & Kitchen', bounds: { minX: -7, maxX: 7, minZ: -8, maxZ: 8 },
+    spawns: { A: { pos: [0, 0, 6.2] }, B: { pos: [4.5, 0, -5.8] } },
+    boxes: [ spawnWall(0, 4.6, 2.6, 1.2), spawnWall(3.8, -4.4, 2.4, 1.2),
+      b(-4.0, FULL_H / 2, 0.8, 2.4, FULL_H, 2.8), b(-4.0, PEEK_H / 2, -2.0, 1.1, PEEK_H, 0.5),
+      b(1.8, PEEK_H / 2, 1.2, 0.9, PEEK_H, 0.5), b(2.2, PEEK_H / 2, -1.8, 0.9, PEEK_H, 0.5) ] },
+  { id: 'high-ground', label: 'High Ground', bounds: { minX: -6.5, maxX: 6.5, minZ: -8, maxZ: 8 },
+    spawns: { A: { pos: [0, 0, 6] }, B: { pos: [-4, 0.85, -5.5] } },
+    boxes: [ spawnWall(0, 4.5, 2.6, 1.2), spawnWall(-4, -4.2, 2.8, 1.2),
+      b(-4, 0.85 / 2, -5.5, 2.8, 0.85, 2.4), b(2.2, FULL_H / 2, 0, 1.3, FULL_H, 1.1),
+      b(-0.8, PEEK_H / 2, 2.5, 1.5, PEEK_H, 0.5), b(3.5, PEEK_H / 2, -2.2, 0.9, PEEK_H, 0.5) ] },
+  { id: 'crate-yard', label: 'Crate Yard', bounds: { minX: -7, maxX: 7, minZ: -8.5, maxZ: 8.5 },
+    spawns: { A: { pos: [4.5, 0, 6.2] }, B: { pos: [-5, 0, -6.2] } },
+    boxes: [ spawnWall(3.5, 4.6, 2.4, 1.1), spawnWall(-4, -4.6, 2.4, 1.1),
+      b(1.2, PEEK_H / 2, 0.2, 1.1, PEEK_H, 1.0), b(-2.2, PEEK_H / 2, 1.5, 0.9, PEEK_H, 0.8),
+      b(2.8, PEEK_H / 2, -1.8, 0.9, PEEK_H, 0.8), b(-0.8, FULL_H / 2, -0.3, 1.2, FULL_H, 0.9),
+      b(0.0, FULL_H / 2, 3.2, 2.0, FULL_H, 0.5) ] },
+  { id: 'zig-rush', label: 'Zig Rush', bounds: { minX: -7, maxX: 7, minZ: -8.5, maxZ: 8.5 },
+    spawns: { A: { pos: [4, 0, 6.5] }, B: { pos: [-4.5, 0, -6.5] } },
+    boxes: [ spawnWall(3.2, 4.8, 2.4, 1.1), spawnWall(-3.5, -4.8, 2.4, 1.1),
+      b(-2.5, PEEK_H / 2, 2.8, 1.2, PEEK_H, 0.5), b(0.4, PEEK_H / 2, 1.0, 1.2, PEEK_H, 0.5),
+      b(2.8, PEEK_H / 2, -0.5, 1.2, PEEK_H, 0.5), b(-0.8, PEEK_H / 2, -2.2, 1.2, PEEK_H, 0.5),
+      b(-3.8, FULL_H / 2, 0, 0.9, FULL_H, 1.8) ] },
+  { id: 'catwalk', label: 'Catwalk', bounds: { minX: -8, maxX: 8, minZ: -7.5, maxZ: 7.5 },
+    spawns: { A: { pos: [-5.5, 0, 5.5] }, B: { pos: [5.5, 0, -5.5] } },
+    boxes: [ spawnWall(-4.5, 4.2, 2.2, 1.1), spawnWall(4.5, -4.2, 2.2, 1.1),
+      b(5.8, PEEK_H / 2, 0, 0.45, PEEK_H, 5.5), b(-1.8, FULL_H / 2, -0.3, 1.5, FULL_H, 1.1),
+      b(1.2, PEEK_H / 2, 2.8, 1.6, PEEK_H, 0.5), b(-2.8, PEEK_H / 2, -3.0, 1.1, PEEK_H, 0.5) ] },
+  { id: 'pinnacle', label: 'Pinnacle', bounds: { minX: -6.5, maxX: 6.5, minZ: -8, maxZ: 8 },
+    spawns: { A: { pos: [3, 0, 6.2] }, B: { pos: [-1.5, 0, -6.2] } },
+    boxes: [ spawnWall(2.2, 4.6, 2.4, 1.1), spawnWall(-1.2, -4.6, 2.4, 1.1),
+      b(-3.0, FULL_H / 2, 0, 1.6, FULL_H, 1.4), b(1.4, PEEK_H / 2, 2.0, 1.0, PEEK_H, 0.5),
+      b(2.5, PEEK_H / 2, -1.5, 1.2, PEEK_H, 0.5), b(-0.8, PEEK_H / 2, -3.5, 1.8, PEEK_H, 0.5) ] },
+  { id: 'open-flank', label: 'Open Flank', bounds: { minX: -9, maxX: 9, minZ: -9, maxZ: 9 },
+    spawns: { A: { pos: [6, 0, 6.5] }, B: { pos: [-7, 0, -6.5] } },
+    boxes: [ spawnWall(4.8, 4.8, 2.6, 1.2), spawnWall(-5.5, -4.8, 2.6, 1.2),
+      b(-3.5, FULL_H / 2, 1.5, 0.45, FULL_H, 4.5), b(1.8, PEEK_H / 2, -0.8, 1.4, PEEK_H, 0.5),
+      b(-1.2, PEEK_H / 2, -3.2, 1.1, PEEK_H, 0.5), b(4.5, FULL_H / 2, 2.2, 1.0, FULL_H, 0.9) ] }
+];
+
+// ---------------------------------------------------------------------------
+// Three.js scene
+// ---------------------------------------------------------------------------
+const cv = document.getElementById('cv');
+const hud = document.getElementById('hud');
+const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio || 1);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0c0d10);
+
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 1000);
+camera.position.set(12, 14, 16);
+
+const orbit = new OrbitControls(camera, renderer.domElement);
+orbit.enableDamping = true;
+orbit.dampingFactor = 0.08;
+orbit.target.set(0, 1, 0);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const dir = new THREE.DirectionalLight(0xffffff, 1.1);
+dir.position.set(8, 18, 10);
+scene.add(dir);
+const dir2 = new THREE.DirectionalLight(0x88aaff, 0.35);
+dir2.position.set(-10, 8, -8);
+scene.add(dir2);
+
+// Floor + grid
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(200, 200),
+  new THREE.MeshStandardMaterial({ color: 0x111317, roughness: 1, metalness: 0 })
+);
+floor.rotation.x = -Math.PI / 2;
+floor.position.y = -0.001;
+scene.add(floor);
+
+const grid = new THREE.GridHelper(80, 80, 0x2a2e38, 0x191c22);
+scene.add(grid);
+const grid5 = new THREE.GridHelper(80, 16, 0x3a4150, 0x3a4150);
+grid5.position.y = 0.002;
+scene.add(grid5);
+
+// Axes (X red, Z blue) for orientation; -Z is "forward" in-game.
+const axes = new THREE.AxesHelper(4);
+scene.add(axes);
+
+// Bounds wireframe
+const boundsBox = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+  new THREE.LineBasicMaterial({ color: 0xf52525, transparent: true, opacity: 0.55 })
+);
+scene.add(boundsBox);
+
+// ---------------------------------------------------------------------------
+// Editor state
+// ---------------------------------------------------------------------------
+const UNIT_GEO = new THREE.BoxGeometry(1, 1, 1);
+const boxGroup = new THREE.Group();
+scene.add(boxGroup);
+
+let selected = null;          // mesh (box) or spawn marker
+let snapVal = 0.5;
+
+// Spawn markers
+function makeSpawn(color) {
+  const m = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.35, 0.35, 0.1, 24),
+    new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.35, roughness: 0.5 })
+  );
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.5, 0.05, 8, 28),
+    new THREE.MeshBasicMaterial({ color })
+  );
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 0.05;
+  m.add(ring);
+  const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.04, 0.04, 1.6, 8),
+    new THREE.MeshBasicMaterial({ color })
+  );
+  pole.position.y = 0.8;
+  m.add(pole);
+  m.userData.kind = 'spawn';
+  scene.add(m);
+  return m;
+}
+const spawnA = makeSpawn(0x36c2ff); spawnA.userData.spawn = 'A';
+const spawnB = makeSpawn(0xffb13b); spawnB.userData.spawn = 'B';
+
+// Transform gizmo
+const transform = new TransformControls(camera, renderer.domElement);
+transform.setTranslationSnap(snapVal);
+transform.setScaleSnap(snapVal);
+transform.addEventListener('dragging-changed', (e) => { orbit.enabled = !e.value; });
+transform.addEventListener('objectChange', onGizmoChange);
+const gizmo = transform.getHelper ? transform.getHelper() : transform;
+scene.add(gizmo);
+
+function heightColor(h) {
+  const t = Math.max(0, Math.min(1, h / 6));
+  const c = new THREE.Color();
+  c.setHSL(0.58, 0.12, 0.62 - t * 0.34);
+  return c;
+}
+
+function addBox(box) {
+  const mesh = new THREE.Mesh(UNIT_GEO, new THREE.MeshStandardMaterial({
+    color: heightColor(box.size[1]), roughness: 0.85, metalness: 0.0
+  }));
+  mesh.position.set(box.pos[0], box.pos[1], box.pos[2]);
+  mesh.scale.set(box.size[0], box.size[1], box.size[2]);
+  mesh.userData.kind = 'box';
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(UNIT_GEO),
+    new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 })
+  );
+  mesh.add(edges);
+  boxGroup.add(mesh);
+  return mesh;
+}
+
+function clearBoxes() {
+  for (let i = boxGroup.children.length - 1; i >= 0; i--) {
+    const m = boxGroup.children[i];
+    m.material.dispose();
+    boxGroup.remove(m);
+  }
+}
+
+function select(obj) {
+  selected = obj;
+  if (obj) transform.attach(obj);
+  else transform.detach();
+  // Spawns: translate only.
+  if (obj && obj.userData.kind === 'spawn') {
+    document.querySelector('[data-mode="translate"]').click();
+  }
+  syncProps();
+}
+
+// ---------------------------------------------------------------------------
+// Load / build map
+// ---------------------------------------------------------------------------
+function loadMap(map) {
+  clearBoxes();
+  (map.boxes || []).forEach(addBox);
+  const a = map.spawns?.A?.pos || [0, 0, 6];
+  const bb = map.spawns?.B?.pos || [0, 0, -6];
+  spawnA.position.set(a[0], a[1], a[2]);
+  spawnB.position.set(bb[0], bb[1], bb[2]);
+  document.getElementById('m-id').value = map.id || 'custom-level';
+  document.getElementById('m-label').value = map.label || 'Custom Level';
+  if (map.bounds) {
+    document.getElementById('b-mode').value = 'manual';
+    toggleBoundsMode();
+    setVal('b-minx', map.bounds.minX); setVal('b-maxx', map.bounds.maxX);
+    setVal('b-minz', map.bounds.minZ); setVal('b-maxz', map.bounds.maxZ);
+  }
+  select(null);
+  frameCamera(map.bounds);
+}
+
+function frameCamera(bounds) {
+  if (!bounds) return;
+  const cx = (bounds.minX + bounds.maxX) / 2;
+  const cz = (bounds.minZ + bounds.maxZ) / 2;
+  const ext = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ);
+  orbit.target.set(cx, 1, cz);
+  camera.position.set(cx + ext * 0.7, ext * 0.9 + 6, cz + ext * 0.9);
+  orbit.update();
+}
+
+// ---------------------------------------------------------------------------
+// Picking
+// ---------------------------------------------------------------------------
+const ray = new THREE.Raycaster();
+const ptr = new THREE.Vector2();
+let downPos = null;
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  downPos = { x: e.clientX, y: e.clientY };
+});
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (e.button !== 0 || !downPos) return;
+  const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
+  downPos = null;
+  if (moved > 5 || transform.dragging) return;
+  const r = cv.getBoundingClientRect();
+  ptr.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+  ptr.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+  ray.setFromCamera(ptr, camera);
+  const targets = [...boxGroup.children, spawnA, spawnB];
+  const hits = ray.intersectObjects(targets, true);
+  if (hits.length) {
+    let obj = hits[0].object;
+    while (obj && !obj.userData.kind) obj = obj.parent;
+    select(obj || null);
+  } else {
+    select(null);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Property panel
+// ---------------------------------------------------------------------------
+const round2 = (v) => Math.round(v * 1000) / 1000;
+function setVal(id, v) { document.getElementById(id).value = round2(v); }
+function num(id, dflt) { const v = parseFloat(document.getElementById(id).value); return Number.isFinite(v) ? v : dflt; }
+
+function syncProps() {
+  const empty = document.getElementById('prop-empty');
+  const boxP = document.getElementById('prop-box');
+  const spP = document.getElementById('prop-spawn');
+  const title = document.getElementById('prop-title');
+  if (!selected) { empty.style.display = ''; boxP.style.display = 'none'; spP.style.display = 'none'; title.textContent = 'Selected'; return; }
+  empty.style.display = 'none';
+  if (selected.userData.kind === 'spawn') {
+    boxP.style.display = 'none'; spP.style.display = '';
+    title.textContent = 'Spawn ' + selected.userData.spawn;
+    setVal('s-x', selected.position.x); setVal('s-y', selected.position.y); setVal('s-z', selected.position.z);
+  } else {
+    spP.style.display = 'none'; boxP.style.display = '';
+    title.textContent = 'Selected Box';
+    setVal('p-x', selected.position.x); setVal('p-y', selected.position.y); setVal('p-z', selected.position.z);
+    setVal('p-w', selected.scale.x); setVal('p-h', selected.scale.y); setVal('p-d', selected.scale.z);
+  }
+}
+
+function onGizmoChange() {
+  if (!selected) return;
+  if (selected.userData.kind === 'box') {
+    selected.material.color.copy(heightColor(selected.scale.y));
+  }
+  syncProps();
+  updateBounds();
+}
+
+function bindBoxProp(id, apply) {
+  document.getElementById(id).addEventListener('input', () => {
+    if (!selected || selected.userData.kind !== 'box') return;
+    const v = parseFloat(document.getElementById(id).value);
+    if (!Number.isFinite(v)) return;
+    apply(selected, v);
+    selected.material.color.copy(heightColor(selected.scale.y));
+    updateBounds();
+  });
+}
+bindBoxProp('p-x', (m, v) => (m.position.x = v));
+bindBoxProp('p-y', (m, v) => (m.position.y = v));
+bindBoxProp('p-z', (m, v) => (m.position.z = v));
+bindBoxProp('p-w', (m, v) => (m.scale.x = Math.max(0.05, v)));
+bindBoxProp('p-h', (m, v) => (m.scale.y = Math.max(0.05, v)));
+bindBoxProp('p-d', (m, v) => (m.scale.z = Math.max(0.05, v)));
+
+['s-x', 's-y', 's-z'].forEach((id) => {
+  document.getElementById(id).addEventListener('input', () => {
+    if (!selected || selected.userData.kind !== 'spawn') return;
+    selected.position.set(num('s-x', 0), num('s-y', 0), num('s-z', 0));
+    updateBounds();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bounds
+// ---------------------------------------------------------------------------
+function computeBounds() {
+  if (document.getElementById('b-mode').value === 'manual') {
+    return { minX: num('b-minx', -7), maxX: num('b-maxx', 7), minZ: num('b-minz', -8), maxZ: num('b-maxz', 8) };
+  }
+  const margin = num('b-automargin', 3);
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  const consider = (x, z) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); };
+  for (const m of boxGroup.children) {
+    consider(m.position.x - m.scale.x / 2, m.position.z - m.scale.z / 2);
+    consider(m.position.x + m.scale.x / 2, m.position.z + m.scale.z / 2);
+  }
+  consider(spawnA.position.x, spawnA.position.z);
+  consider(spawnB.position.x, spawnB.position.z);
+  if (!isFinite(minX)) { minX = -5; maxX = 5; minZ = -5; maxZ = 5; }
+  return { minX: round2(minX - margin), maxX: round2(maxX + margin), minZ: round2(minZ - margin), maxZ: round2(maxZ + margin) };
+}
+
+function updateBounds() {
+  const b = computeBounds();
+  const w = Math.max(0.1, b.maxX - b.minX);
+  const d = Math.max(0.1, b.maxZ - b.minZ);
+  boundsBox.scale.set(w, FULL_H, d);
+  boundsBox.position.set((b.minX + b.maxX) / 2, FULL_H / 2, (b.minZ + b.maxZ) / 2);
+}
+
+document.getElementById('b-mode').addEventListener('change', () => { toggleBoundsMode(); updateBounds(); });
+['b-minx', 'b-maxx', 'b-minz', 'b-maxz', 'b-automargin'].forEach((id) =>
+  document.getElementById(id).addEventListener('input', updateBounds));
+function toggleBoundsMode() {
+  const manual = document.getElementById('b-mode').value === 'manual';
+  document.getElementById('b-manual').style.display = manual ? '' : 'none';
+  document.getElementById('b-marginrow').style.display = manual ? 'none' : '';
+}
+
+// ---------------------------------------------------------------------------
+// Toolbar actions
+// ---------------------------------------------------------------------------
+document.getElementById('add-box').addEventListener('click', () => {
+  const t = orbit.target;
+  const mesh = addBox({ pos: [round2(t.x), 1.2, round2(t.z)], size: [1, 2.4, 1] });
+  select(mesh);
+  updateBounds();
+});
+document.getElementById('dup').addEventListener('click', () => {
+  if (!selected || selected.userData.kind !== 'box') return;
+  const mesh = addBox({
+    pos: [round2(selected.position.x + 1), selected.position.y, round2(selected.position.z + 1)],
+    size: [selected.scale.x, selected.scale.y, selected.scale.z]
+  });
+  select(mesh); updateBounds();
+});
+document.getElementById('del').addEventListener('click', deleteSelected);
+function deleteSelected() {
+  if (!selected || selected.userData.kind !== 'box') return;
+  transform.detach();
+  selected.material.dispose();
+  boxGroup.remove(selected);
+  selected = null;
+  syncProps(); updateBounds();
+}
+document.getElementById('snap-floor').addEventListener('click', () => {
+  if (!selected || selected.userData.kind !== 'box') return;
+  selected.position.y = selected.scale.y / 2;
+  syncProps();
+});
+
+document.querySelectorAll('[data-mode]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    transform.setMode(btn.dataset.mode);
+    document.querySelectorAll('[data-mode]').forEach((b2) => b2.classList.toggle('active', b2 === btn));
+  });
+});
+
+document.getElementById('snap').addEventListener('change', (e) => {
+  snapVal = parseFloat(e.target.value) || 0;
+  transform.setTranslationSnap(snapVal || null);
+  transform.setScaleSnap(snapVal || null);
+});
+
+document.querySelectorAll('[data-seth]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (!selected || selected.userData.kind !== 'box') return;
+    const h = parseFloat(btn.dataset.seth);
+    selected.scale.y = h;
+    selected.position.y = h / 2;
+    selected.material.color.copy(heightColor(h));
+    syncProps(); updateBounds();
+  });
+});
+
+window.addEventListener('keydown', (e) => {
+  const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+  if (typing) return;
+  if (e.key === 'w' || e.key === 'W') document.querySelector('[data-mode="translate"]').click();
+  if (e.key === 'e' || e.key === 'E') document.querySelector('[data-mode="scale"]').click();
+  if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
+});
+
+// ---------------------------------------------------------------------------
+// Import existing maps dropdown
+// ---------------------------------------------------------------------------
+const sel = document.getElementById('map-select');
+MAP_TEMPLATES.forEach((m, i) => {
+  const o = document.createElement('option');
+  o.value = String(i); o.textContent = m.label;
+  sel.appendChild(o);
+});
+document.getElementById('map-load').addEventListener('click', () => {
+  const m = MAP_TEMPLATES[parseInt(sel.value, 10) || 0];
+  loadMap(JSON.parse(JSON.stringify(m)));
+  flash('Loaded ' + m.label);
+});
+
+// ---------------------------------------------------------------------------
+// Export / Import JSON
+// ---------------------------------------------------------------------------
+function buildExport() {
+  const bounds = computeBounds();
+  const boxes = boxGroup.children.map((m) => ({
+    pos: [round2(m.position.x), round2(m.position.y), round2(m.position.z)],
+    size: [round2(m.scale.x), round2(m.scale.y), round2(m.scale.z)]
+  }));
+  return {
+    id: document.getElementById('m-id').value.trim() || 'custom-level',
+    label: document.getElementById('m-label').value.trim() || 'Custom Level',
+    bounds,
+    spawns: {
+      A: { pos: [round2(spawnA.position.x), round2(spawnA.position.y), round2(spawnA.position.z)] },
+      B: { pos: [round2(spawnB.position.x), round2(spawnB.position.y), round2(spawnB.position.z)] }
+    },
+    boxes,
+    vertices: boxGroup.children.map((m) => ({
+      footprint: [
+        [round2(m.position.x - m.scale.x / 2), round2(m.position.z - m.scale.z / 2)],
+        [round2(m.position.x + m.scale.x / 2), round2(m.position.z - m.scale.z / 2)],
+        [round2(m.position.x + m.scale.x / 2), round2(m.position.z + m.scale.z / 2)],
+        [round2(m.position.x - m.scale.x / 2), round2(m.position.z + m.scale.z / 2)]
+      ],
+      bottomY: round2(m.position.y - m.scale.y / 2),
+      topY: round2(m.position.y + m.scale.y / 2)
+    }))
+  };
+}
+
+document.getElementById('btn-export').addEventListener('click', () => {
+  document.getElementById('io').value = JSON.stringify(buildExport(), null, 2);
+});
+document.getElementById('btn-copy').addEventListener('click', async () => {
+  const txt = JSON.stringify(buildExport(), null, 2);
+  document.getElementById('io').value = txt;
+  try { await navigator.clipboard.writeText(txt); flash('Copied to clipboard'); }
+  catch { flash('Select the text and copy manually'); }
+});
+document.getElementById('btn-import').addEventListener('click', () => {
+  const raw = document.getElementById('io').value.trim();
+  if (!raw) { flash('Paste JSON into the box first'); return; }
+  try { loadMap(JSON.parse(raw)); flash('Imported'); }
+  catch (err) { flash('Invalid JSON: ' + err.message); }
+});
+document.getElementById('btn-clear').addEventListener('click', () => {
+  if (!confirm('Clear all boxes? Spawns and meta stay.')) return;
+  clearBoxes(); select(null); updateBounds();
+});
+
+// ---------------------------------------------------------------------------
+// Flash + loop
+// ---------------------------------------------------------------------------
+let flashTimer = null;
+function flash(msg) {
+  let el = document.getElementById('flash');
+  if (!el) { el = document.createElement('div'); el.id = 'flash'; document.getElementById('stage').appendChild(el); }
+  el.textContent = msg; el.style.opacity = '1'; el.style.transition = 'none';
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { el.style.transition = 'opacity .4s'; el.style.opacity = '0'; }, 1400);
+}
+
+function resize() {
+  const w = cv.clientWidth, h = cv.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+
+function animate() {
+  requestAnimationFrame(animate);
+  orbit.update();
+  const sel = selected ? (selected.userData.kind === 'spawn' ? 'spawn ' + selected.userData.spawn : 'box') : 'none';
+  hud.innerHTML = `selected <b>${sel}</b> &nbsp; | boxes <b>${boxGroup.children.length}</b> &nbsp; | snap <b>${snapVal || 'off'}</b>`;
+  renderer.render(scene, camera);
+}
+
+// Boot: load the first arena so there's something to edit immediately.
+resize();
+loadMap(JSON.parse(JSON.stringify(MAP_TEMPLATES[0])));
+toggleBoundsMode();
+updateBounds();
+animate();
+</script>
+</body>
+</html>
