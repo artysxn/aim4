@@ -35,6 +35,7 @@ import {
   ffaRespawn,
   yawToward
 } from '../src/multiplayer/maps.js';
+import { forwardFromYawPitch } from '../src/utils/spawnVisibility.js';
 import { resolveShot } from './hitscan.js';
 import { pushTransformHistory, sampleTransformAt, lagRewindMs } from './lagComp.js';
 import {
@@ -97,6 +98,25 @@ export class MultiplayerServer {
   }
 
   // ---- Connection lifecycle ----------------------------------------------
+  _isSpawnProtected(player, now = Date.now()) {
+    return now - (player.roundStartAt || 0) < SPAWN_GRACE * 1000;
+  }
+
+  /** Eye positions + look vectors for spawn visibility (excludes respawning player). */
+  _ffaViewers(lobby, excludeId = null) {
+    const viewers = [];
+    for (const p of lobby.players) {
+      if (p.dead || p.id === excludeId || this._isSpawnProtected(p)) continue;
+      const tr = p.transform;
+      viewers.push({
+        eye: [tr.x, tr.y, tr.z],
+        dir: forwardFromYawPitch(tr.yaw, tr.pitch || 0),
+        hFov: 90
+      });
+    }
+    return viewers;
+  }
+
   addConnection(ws) {
     const id = nextPlayerId++;
     const player = {
@@ -549,6 +569,7 @@ export class MultiplayerServer {
         if (shot.victimId != null && shot.zone) {
           const victim = lobby.players.find((p) => p.id === shot.victimId);
           if (victim && victim !== shooter && (!victim.dead || tracking)) {
+            if (!tracking && this._isSpawnProtected(victim)) continue;
             if (tracking) this._registerTrackingHit(lobby, shooter, victim, shot.zone);
             else this._registerHit(lobby, shooter, victim, shot.zone);
             continue;
@@ -561,6 +582,7 @@ export class MultiplayerServer {
         let best = null;
         for (const victim of lobby.players) {
           if (victim === shooter || (victim.dead && !tracking)) continue;
+          if (!tracking && this._isSpawnProtected(victim)) continue;
 
           for (const t of sampleTimes) {
             const sample = sampleTransformAt(victim, t);
@@ -641,7 +663,8 @@ export class MultiplayerServer {
       const others = lobby.players
         .filter((x) => x !== p && !x.dead)
         .map((x) => [x.transform.x, 0, x.transform.z]);
-      const sp = ffaRespawn(map, others);
+      const viewers = this._ffaViewers(lobby, p.id);
+      const sp = ffaRespawn(map, others, viewers);
       const yaw = yawToward(sp.pos, [0, 0, 0]);
       p.transform = { x: sp.pos[0], y: sp.pos[1] + STAND_EYE, z: sp.pos[2], yaw, pitch: 0, crouch: 0 };
       p.hp = MAX_HP;
@@ -690,6 +713,7 @@ export class MultiplayerServer {
   }
 
   _registerHit(lobby, shooter, victim, zone) {
+    if (this._isSpawnProtected(victim)) return;
     if (!shooter.stats) shooter.stats = freshStats();
     shooter.stats.hits++;
     this._broadcast(lobby, { t: S2C.HIT, shooterId: shooter.id, victimId: victim.id, zone });

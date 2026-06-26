@@ -2301,9 +2301,11 @@ export class UIOverlay {
     const sc = this.sceneManager.current;
     const isMp = inRun && sc && sc.isMultiplayer;
     const isDm = inRun && this._isDeathmatchRun();
-    // Deathmatch uses the live scoreboard + kill feed instead of the stat chips.
+    // Deathmatch uses kill feed + hold-Tab board only (no top score strip).
     this.hud.classList.toggle('active', inRun && !isMp && !isDm);
-    if (this.mpScoreboard) this.mpScoreboard.classList.toggle('active', isMp || isDm);
+    if (this.mpScoreboard) {
+      this.mpScoreboard.classList.toggle('active', isMp && !isDm);
+    }
     if (this.dmKillfeed) this.dmKillfeed.classList.toggle('active', isDm);
     if (!isDm) {
       this._mpKillFeed = [];
@@ -2455,7 +2457,7 @@ export class UIOverlay {
     const sc = this.sceneManager.current;
     const isDm = this._isDeathmatchRun();
     if (this.mpScoreboard) {
-      this.mpScoreboard.classList.toggle('active', this._isMpPlaying() || isDm);
+      this.mpScoreboard.classList.toggle('active', this._isMpPlaying() && !isDm);
     }
     if (this.dmKillfeed) {
       this.dmKillfeed.classList.toggle('active', isDm);
@@ -2491,7 +2493,6 @@ export class UIOverlay {
     this._updateAmmo(sc);
     this._updateThreats(sc);
     if (this._isDeathmatchRun()) {
-      if (sc?.name === 'deathmatch') this._updateDmLiveScoreboard(sc);
       this._renderKillFeed();
     }
   }

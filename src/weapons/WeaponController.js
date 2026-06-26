@@ -120,10 +120,14 @@ export class WeaponController {
     }
 
     const canFire = !this.reloading && (this._infiniteAmmo() || this.ammo > 0);
+    const graceBlock =
+      (this.sceneManager.current?.name === 'deathmatch' ||
+        this.sceneManager.current?.isDeathmatch) &&
+      this.input.spawnGraceRemaining > 0;
     const held = this.input.fireHeld;
 
     if (spec.automatic) {
-      const wantFire = held && canFire;
+      const wantFire = held && canFire && !graceBlock;
 
       // Linear bloom recovery while off the trigger (not an instant snap).
       if (!wantFire) {
@@ -152,7 +156,7 @@ export class WeaponController {
       // Semi-auto: exactly one bullet per trigger press (rising edge), capped by
       // the fire rate. Holding the button does nothing until you release + click.
       const rising = held && !this._wasFireHeld;
-      if (rising && canFire && now - this._lastShotAt >= shotIntervalMs) {
+      if (rising && canFire && !graceBlock && now - this._lastShotAt >= shotIntervalMs) {
         if (now - this._lastShotAt > spec.burstBreakMs) this._shotIndex = 0;
         this._lastShotAt = now;
         this._fireOne(sc);

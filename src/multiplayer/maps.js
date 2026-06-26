@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import { DEATHMATCH_MAP_DATA } from './deathmatchMapData.js';
+import { pickSpawnPreferHidden } from '../utils/spawnVisibility.js';
 
 const FULL_H = 6.0;
 const PEEK_H = 2.4;
@@ -257,21 +258,10 @@ export function ffaSpawns(map, count) {
   return chosen;
 }
 
-/** A single FFA spawn far from the given avoid points (for respawns). */
-export function ffaRespawn(map, avoid = []) {
+/** A single FFA spawn far from avoid points; prefers spawns out of active view. */
+export function ffaRespawn(map, avoid = [], viewers = []) {
   const pool = teamSpawnList(map, 'A');
-  let best = pool[0];
-  let bestGap = -Infinity;
-  for (const sp of pool) {
-    let gap = Infinity;
-    for (const a of avoid) gap = Math.min(gap, Math.hypot(sp.pos[0] - a[0], sp.pos[2] - a[2]));
-    if (!avoid.length) gap = Math.random();
-    if (gap > bestGap) {
-      bestGap = gap;
-      best = sp;
-    }
-  }
-  return { pos: [...best.pos] };
+  return pickSpawnPreferHidden(pool, avoid, viewers, map.boxes || []);
 }
 
 /** Pick a random map different from `currentId` when possible. */

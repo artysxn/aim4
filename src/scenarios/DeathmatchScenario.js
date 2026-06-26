@@ -21,7 +21,8 @@ import { SHOT_INTERVAL } from '../weapons/ak47.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEATHMATCH_MAP, deathmatchExtent } from './deathmatchMap.js';
-import { eyeOffset } from '../multiplayer/constants.js';
+import { eyeOffset, SPAWN_GRACE } from '../multiplayer/constants.js';
+import { pickSpawnPreferHidden, movementHitScale, isPointVisible } from '../utils/spawnVisibility.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
@@ -39,6 +40,7 @@ const CROUCH_GAP_MAX = 3.5;
 const CROUCH_HOLD_MIN = 0.2;
 const CROUCH_HOLD_MAX = 0.55;
 const CROUCH_RATE = 10;
+const BACKSHOT_FIRE_DELAY = 1.0; // s — bot waits before firing when target isn't looking
 
 const DEATH_FX_DUR = 0.55;
 const DEATH_FX_PITCH = degToRad(38);
@@ -180,24 +182,46 @@ export class DeathmatchScenario extends BaseScenario {
   }
 
   // ---- Spawns -------------------------------------------------------------
-  /** Pick a spawn maximizing distance from the points in `avoid`. */
-  _pickSpawn(avoid = []) {
-    const spawns = this.map.spawns;
-    let best = spawns[0];
-    let bestGap = -Infinity;
-    for (const sp of spawns) {
-      let gap = Infinity;
-      for (const a of avoid) {
-        const dx = sp.pos[0] - a[0];
-        const dz = sp.pos[2] - a[2];
-        gap = Math.min(gap, Math.hypot(dx, dz));
-      }
-      if (gap > bestGap) {
-        bestGap = gap;
-        best = sp;
-      }
+  _isInPlayerGrace() {
+    return (this.engine.player?.input?.spawnGraceRemaining ?? 0) > 0;
+  }
+
+  /** Living observers whose active view we avoid when placing respawns. */
+  _collectSpawnViewers() {
+    const hFov = this.settings.data.hFov;
+    const views = [];
+    if (!this._dead && !this._isInPlayerGrace()) {
+      const cam = this.camera;
+      const fwd = new THREE.Vector3();
+      cam.getWorldDirection(fwd);
+      views.push({
+        eye: [cam.position.x, cam.position.y, cam.position.z],
+        dir: [fwd.x, fwd.y, fwd.z],
+        hFov
+      });
     }
-    return { pos: [...best.pos] };
+    for (const bot of this.bots) {
+      if (bot.target.state === 'dying' || bot.spawnGrace > 0) continue;
+      const ey = this._botEyePos(bot);
+      const fwd = new THREE.Vector3();
+      bot.target.object.getWorldDirection(fwd);
+      views.push({
+        eye: [bot.pos.x, ey, bot.pos.z],
+        dir: [fwd.x, fwd.y, fwd.z],
+        hFov
+      });
+    }
+    return views;
+  }
+
+  /** Prefer spawns out of everyone's FOV; fall back to farthest from `avoid`. */
+  _pickSpawn(avoid = []) {
+    return pickSpawnPreferHidden(
+      this.map.spawns,
+      avoid,
+      this._collectSpawnViewers(),
+      this.colliders
+    );
   }
 
   _playerPos() {
@@ -265,11 +289,26 @@ export class DeathmatchScenario extends BaseScenario {
       stuckAccum: 0,
       stuckBias: 0,
       stuckDir: 1,
-      fireTimer: randRange(0, SHOT_INTERVAL)
+      fireTimer: randRange(0, SHOT_INTERVAL),
+      spawnGrace: SPAWN_GRACE,
+      sneakFireDelay: 0,
+      sneakTargetKey: null
     };
     this.bots.push(bot);
     target.object.position.set(bot.pos.x, bot.footY, bot.pos.z);
     return bot;
+  }
+
+  /** Line-of-sight between two world points (cover occludes). */
+  _hasLos(fromX, fromY, fromZ, tx, ty, tz) {
+    const dist = Math.hypot(tx - fromX, ty - fromY, tz - fromZ);
+    if (dist < 1e-4) return true;
+    _headPos.set(fromX, fromY, fromZ);
+    _losDir.set(tx - fromX, ty - fromY, tz - fromZ).multiplyScalar(1 / dist);
+    _losRay.set(_headPos, _losDir);
+    _losRay.far = dist;
+    const hits = _losRay.intersectObjects(this.coverMeshes, false);
+    return hits.length === 0 || hits[0].distance >= dist - 0.04;
   }
 
   /** Line-of-sight from a bot's head to a world point (cover occludes). */
@@ -277,13 +316,7 @@ export class DeathmatchScenario extends BaseScenario {
     const head = bot.target.headMesh;
     if (!head) return false;
     head.getWorldPosition(_headPos);
-    const dist = _headPos.distanceTo(_aimPos.set(tx, ty, tz));
-    if (dist < 1e-4) return true;
-    _losDir.copy(_aimPos).sub(_headPos).multiplyScalar(1 / dist);
-    _losRay.set(_headPos, _losDir);
-    _losRay.far = dist;
-    const hits = _losRay.intersectObjects(this.coverMeshes, false);
-    return hits.length === 0 || hits[0].distance >= dist - 0.04;
+    return this._hasLos(_headPos.x, _headPos.y, _headPos.z, tx, ty, tz);
   }
 
   _botEyePos(b) {
@@ -299,7 +332,7 @@ export class DeathmatchScenario extends BaseScenario {
     let best = null;
     let bestDist = ENGAGE_RANGE;
 
-    if (!this._dead && this._botHasLosTo(bot, px, py, pz)) {
+    if (!this._dead && !this._isInPlayerGrace() && this._botHasLosTo(bot, px, py, pz)) {
       const d = Math.hypot(px - bot.pos.x, pz - bot.pos.z);
       if (d < bestDist) {
         bestDist = d;
@@ -308,7 +341,7 @@ export class DeathmatchScenario extends BaseScenario {
     }
 
     for (const other of this.bots) {
-      if (other === bot || other.target.state === 'dying') continue;
+      if (other === bot || other.target.state === 'dying' || other.spawnGrace > 0) continue;
       const ey = this._botEyePos(other);
       if (!this._botHasLosTo(bot, other.pos.x, ey, other.pos.z)) continue;
       const d = Math.hypot(other.pos.x - bot.pos.x, other.pos.z - bot.pos.z);
@@ -318,6 +351,46 @@ export class DeathmatchScenario extends BaseScenario {
       }
     }
     return best;
+  }
+
+  _shootTargetKey(target) {
+    return target.type === 'player' ? 'player' : target.bot.id;
+  }
+
+  /** True when the shoot target's view cone includes this bot (FOV + cover LOS). */
+  _targetSeesBot(attacker, target) {
+    const hFov = this.settings.data.hFov;
+    const head = attacker.target.headMesh;
+    if (!head) return false;
+    head.getWorldPosition(_headPos);
+    const botPoint = [_headPos.x, _headPos.y, _headPos.z];
+    const boxes = this.colliders;
+
+    if (target.type === 'player') {
+      if (this._dead || this._isInPlayerGrace()) return false;
+      const cam = this.camera;
+      const fwd = new THREE.Vector3();
+      cam.getWorldDirection(fwd);
+      return isPointVisible(
+        [cam.position.x, cam.position.y, cam.position.z],
+        [fwd.x, fwd.y, fwd.z],
+        botPoint,
+        hFov,
+        boxes
+      );
+    }
+
+    const other = target.bot;
+    const ey = this._botEyePos(other);
+    const fwd = new THREE.Vector3();
+    other.target.object.getWorldDirection(fwd);
+    return isPointVisible(
+      [other.pos.x, ey, other.pos.z],
+      [fwd.x, fwd.y, fwd.z],
+      botPoint,
+      hFov,
+      boxes
+    );
   }
 
   _tracerImpact(from, tx, ty, tz) {
@@ -333,7 +406,20 @@ export class DeathmatchScenario extends BaseScenario {
     return _tracerEnd.copy(_aimPos);
   }
 
+  _targetHitScale(target, maxSpeed) {
+    if (target.type === 'player') {
+      const p = this.engine.player;
+      const speed = p?.enabled ? Math.hypot(p.vel.x, p.vel.z) : 0;
+      return movementHitScale(speed, maxSpeed);
+    }
+    const speed = Math.hypot(target.bot.vel.x, target.bot.vel.z);
+    return movementHitScale(speed, maxSpeed);
+  }
+
   _botFire(bot, target) {
+    if (bot.spawnGrace > 0) return;
+    if (target.type === 'player' && this._isInPlayerGrace()) return;
+
     const head = bot.target.headMesh;
     if (!head) return;
     head.getWorldPosition(_headPos);
@@ -342,8 +428,12 @@ export class DeathmatchScenario extends BaseScenario {
     const end = this._tracerImpact(_headPos, target.x, target.y, target.z);
     this.engine.viewmodel?.spawnTracer(_headPos, end);
 
+    const max = RUN_SPEED * this.botSpeedMul;
+    const hitScale = this._targetHitScale(target, max);
+    const headHit = this._headHit * hitScale;
+    const bodyHit = this._bodyHit * hitScale;
     const roll = Math.random();
-    const zone = roll < this._headHit ? 'head' : roll < this._headHit + this._bodyHit ? 'body' : null;
+    const zone = roll < headHit ? 'head' : roll < headHit + bodyHit ? 'body' : null;
     if (!zone) return;
 
     if (target.type === 'player') {
@@ -356,7 +446,7 @@ export class DeathmatchScenario extends BaseScenario {
   }
 
   _damagePlayer() {
-    if (this._dead) return;
+    if (this._dead || this._isInPlayerGrace()) return;
     this._playerHp -= 1;
     beep(520, 0.04, 'square', 0.08);
     if (this._playerHp <= 0) this._onPlayerDeath(false);
@@ -445,7 +535,8 @@ export class DeathmatchScenario extends BaseScenario {
       pos: spawn.pos,
       yaw: this._yawToward(spawn.pos, [0, 0, 0]),
       bounds: this.map.bounds,
-      colliders: this.colliders
+      colliders: this.colliders,
+      spawnGrace: SPAWN_GRACE
     });
 
     const avoid = [spawn.pos];
@@ -463,6 +554,12 @@ export class DeathmatchScenario extends BaseScenario {
 
     for (const bot of this.bots) {
       if (bot.target.state === 'dying') continue;
+
+      if (bot.spawnGrace > 0) {
+        bot.spawnGrace -= dt;
+        bot.target.object.position.set(bot.pos.x, bot.footY, bot.pos.z);
+        continue;
+      }
 
       const prevX = bot.pos.x;
       const prevZ = bot.pos.z;
@@ -497,12 +594,27 @@ export class DeathmatchScenario extends BaseScenario {
         wishZ += dirZ * rangeErr * 0.85;
         bot.goal = null;
 
+        const targetKey = this._shootTargetKey(shootTarget);
+        const targetSeesMe = this._targetSeesBot(bot, shootTarget);
+        if (targetSeesMe) {
+          bot.sneakFireDelay = 0;
+          bot.sneakTargetKey = targetKey;
+        } else if (bot.sneakTargetKey !== targetKey) {
+          bot.sneakTargetKey = targetKey;
+          bot.sneakFireDelay = BACKSHOT_FIRE_DELAY;
+        } else {
+          bot.sneakFireDelay = Math.max(0, bot.sneakFireDelay - dt);
+        }
+
+        const mayFire = targetSeesMe || bot.sneakFireDelay <= 0;
         bot.fireTimer -= dt;
-        if (bot.fireTimer <= 0) {
+        if (mayFire && bot.fireTimer <= 0) {
           bot.fireTimer = SHOT_INTERVAL;
           this._botFire(bot, shootTarget);
         }
       } else {
+        bot.sneakFireDelay = 0;
+        bot.sneakTargetKey = null;
         bot.repathTimer -= dt;
         if (!bot.goal || bot.repathTimer <= 0) {
           this._pickWanderGoal(bot);
@@ -613,7 +725,8 @@ export class DeathmatchScenario extends BaseScenario {
       pos: spawn.pos,
       yaw: this._yawToward(spawn.pos, [0, 0, 0]),
       bounds: this.map.bounds,
-      colliders: this.colliders
+      colliders: this.colliders,
+      spawnGrace: SPAWN_GRACE
     });
     this._dead = false;
   }
@@ -643,13 +756,14 @@ export class DeathmatchScenario extends BaseScenario {
 
   // ---- Player shooting bots ----------------------------------------------
   onShoot(raycaster) {
+    if (this._isInPlayerGrace()) return;
     const hit = this.raycastTargets(raycaster, this.coverMeshes);
     if (!hit) return;
     const obj = hit.object;
     const tgt = obj.userData.target;
     if (!tgt) return; // hit cover → blocked
     const bot = this.bots.find((b) => b.target === tgt);
-    if (!bot || bot.target.state === 'dying') return;
+    if (!bot || bot.target.state === 'dying' || bot.spawnGrace > 0) return;
 
     this.crosshair?.hit();
     const zone = obj.userData.zone;

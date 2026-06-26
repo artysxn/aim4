@@ -460,6 +460,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
   // ---- Shooting -----------------------------------------------------------
   onShoot(raycaster) {
     if (this._dead && !this.isTracking) return;
+    if (this.isDeathmatch && this.input.spawnGraceRemaining > 0) return;
 
     const colliders = [];
     for (const r of this.remotes.values()) {
