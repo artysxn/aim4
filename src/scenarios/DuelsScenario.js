@@ -301,8 +301,6 @@ const CROUCH_RATE = 9;
 const DUELS_MOVE_HALF = 10; // 20 m × 20 m player roam box
 const DEATH_FX_DUR = 0.55;
 const DEATH_FX_PITCH = degToRad(38) * 0.25; // upward view flick on death (radians)
-/** Competitive: bot TTK once wide-swinging after the player misses a jiggle peek. */
-const COUNTER_WIDE_TTK = 0.02;
 /** Max aim deviation (degrees) to count a shot as "at the bot" during jiggle. */
 const JIGGLE_ENGAGE_AIM_DEG = 10;
 
@@ -560,22 +558,17 @@ export class DuelsScenario extends BaseScenario {
     return raycaster.ray.direction.dot(_losDir) > Math.cos(degToRad(JIGGLE_ENGAGE_AIM_DEG));
   }
 
-  /** Snap to a wide swing on the current jiggle side and commit to a fast trade. */
+  /** Commit to a wide strafe on the current jiggle side — no teleport, normal TTK. */
   _triggerJiggleCounter() {
     const e = this.enemy;
+    if (e.phase === 'counterwide') return;
     const { wide } = this._peekOffsets();
-    const target = e.side * wide;
     e.phase = 'counterwide';
     e.jpOut = false;
     e.jiggleLeft = 0;
-    e.offset = target;
-    e.mover.reset(target);
-    this._placeEnemy(target);
+    e.offset = e.side * wide;
     e.crouchWant = 0;
     e.countedMiss = true;
-    const hasLos = this._botHeadHasLos(e);
-    e.wasLos = hasLos;
-    e.exposedTimer = hasLos ? COUNTER_WIDE_TTK : -1;
   }
 
   _retreatDone() {
@@ -673,9 +666,7 @@ export class DuelsScenario extends BaseScenario {
     const hasLos = this._botHeadHasLos(e);
 
     // TTK starts only once the bot's head can actually see the player.
-    if (hasLos && !e.wasLos) {
-      e.exposedTimer = e.phase === 'counterwide' ? COUNTER_WIDE_TTK : this._ttk;
-    }
+    if (hasLos && !e.wasLos) e.exposedTimer = this._ttk;
     if (!hasLos) e.exposedTimer = -1;
     e.wasLos = hasLos;
     e.hasLos = hasLos;
