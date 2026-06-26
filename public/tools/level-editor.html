@@ -63,6 +63,10 @@
   .legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
   #flash { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
     background: var(--accent); color: #fff; padding: 8px 16px; border-radius: 8px; font-size: 13px; opacity: 0; }
+  .back-bar { padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel-2); }
+  .back-bar a { color: var(--muted); text-decoration: none; font-size: 13px; }
+  .back-bar a:hover { color: var(--text); }
+  .back-bar .title { display: block; margin-top: 4px; font-size: 15px; font-weight: 600; color: var(--text); }
 </style>
 </head>
 <body>
@@ -78,6 +82,10 @@
   </div>
 
   <div id="side">
+    <div class="back-bar">
+      <a href="../">← Back to AIM4</a>
+      <span class="title">Level Editor</span>
+    </div>
     <div class="sec">
       <h2>Import existing map</h2>
       <div class="row">

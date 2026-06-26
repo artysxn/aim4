@@ -501,6 +501,7 @@ export class UIOverlay {
         </div>
         <div class="menu-secondary">
           <button class="btn btn-sm" data-goto="leaderboard">Leaderboards</button>
+          <a href="tools/level-editor.html" class="btn btn-sm">Level Editor</a>
           <button class="btn btn-sm" data-goto="settings">Settings</button>
           <div class="menu-auth" id="menu-auth">
             <div class="menu-auth-actions" id="menu-auth-guest">
