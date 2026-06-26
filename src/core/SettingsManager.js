@@ -98,6 +98,7 @@ const DEFAULTS = {
     infiniteAmmo: true,
     viewmodelRecoil: false,
     decoyEnabled: true,
+    decoyRoundChance: 1,
     decoyChancePer: 0.1,
     decoyMin: 0,
     decoyMax: 2
@@ -119,7 +120,7 @@ const DEFAULTS = {
     enemyScale: 1.0 // uniform scale applied to bot body/head dimensions
   },
   duels: {
-    arena: 0, // 0 = random each run, 1..15 = a fixed arena
+    arena: 0, // 0 = random each run, 1..N = fixed arena (legacy + MP duel maps)
     ttk: 0.5  // seconds to kill enemy once exposed; lower = harder
   },
   deathmatch: {

@@ -17,7 +17,7 @@ export const SNAPSHOT_EVERY = Math.max(1, Math.round(TICK_RATE / SNAPSHOT_RATE))
 // players render (and are hit-tested) exactly like the singleplayer enemy.
 export const BODY_R = 0.35; // body cylinder radius (m)
 export const BODY_H = 1.3; // standing body height (m)
-export const HEAD_R = 0.27; // head sphere radius (m)
+export const HEAD_R = 0.27 * 0.67; // head sphere radius (m), 33% smaller than legacy 0.27
 export const HEAD_OFFSET = 0.02; // gap between body top and head bottom
 export const STAND_EYE = 1.6; // standing eye height (m)
 export const CROUCH_EYE = 1.15; // ducked eye height (m)

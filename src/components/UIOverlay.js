@@ -23,6 +23,8 @@ import { SCORE_TARGETS, MM_SCORE_TARGET, TRACKING_DURATION } from '../multiplaye
 import { getMap } from '../multiplayer/maps.js';
 import { formatServerRegion } from '../multiplayer/regionLabels.js';
 import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, CUSTOM_GAMES_ICON } from '../aim4/icons.js';
+import { ARENAS } from '../scenarios/DuelsScenario.js';
+import { duelsArenaSelectOptions } from '../scenarios/duelsArenas.js';
 import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 
 const SCENARIO_META = {
@@ -423,22 +425,7 @@ export class UIOverlay {
               <span class="field-label">Arena</span>
             </div>
             <select id="set-duels-arena">
-              <option value="0">Random each run</option>
-              <option value="1">1 · Long Lane</option>
-              <option value="2">2 · Garage</option>
-              <option value="3">3 · Catwalk</option>
-              <option value="4">4 · Plaza</option>
-              <option value="5">5 · Bunker Yard</option>
-              <option value="6">6 · Overpass</option>
-              <option value="7">7 · Trench</option>
-              <option value="8">8 · Left Corner</option>
-              <option value="9">9 · Right Corner</option>
-              <option value="10">10 · Left Rampart</option>
-              <option value="11">11 · Right Loft</option>
-              <option value="12">12 · Left Bulwark</option>
-              <option value="13">13 · Right Stacks</option>
-              <option value="14">14 · Left Skybox</option>
-              <option value="15">15 · Right Redoubt</option>
+              ${duelsArenaSelectOptions(ARENAS)}
             </select>
           </div>
           ${rf('set-duels-ttk', 'Time to kill (s)', 0.2, 2.0, 0.1)}`

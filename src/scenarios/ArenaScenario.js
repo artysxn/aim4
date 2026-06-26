@@ -26,10 +26,10 @@ import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { startMissFlash, updateMissFlash } from './missFlash.js';
+import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
-const HEAD_R = 0.27;
 
 const COL_H = 2.8;
 const CIRCLE_R = 0.45;
@@ -137,7 +137,7 @@ export class ArenaScenario extends BaseScenario {
     const bodyR = BODY_R * s;
     const bodyH = BODY_H * s;
     const headR = HEAD_R * s;
-    const headY = bodyH + headR + 0.02 * s;
+    const headY = bodyH + headR + HEAD_OFFSET * s;
 
     const c = this.settings.data.colors;
     const t = new Target();

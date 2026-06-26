@@ -14,11 +14,10 @@ import { SourceMover1D, UNIT } from '../utils/SourceMovement.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
+import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
-const HEAD_R = 0.27;
-const HEAD_OFFSET = 0.02;
 
 const PLAYER_HALF = 2.5;
 const BOT_DISTANCE = 12;

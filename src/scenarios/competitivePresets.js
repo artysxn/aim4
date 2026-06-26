@@ -91,7 +91,7 @@ export const COMPETITIVE_PRESETS = {
     infiniteAmmo: true,
     viewmodelRecoil: false,
     decoyEnabled: true,
-    decoyChancePer: 0.1,
+    decoyRoundChance: 0.1,
     decoyMin: 1,
     decoyMax: 2
   }

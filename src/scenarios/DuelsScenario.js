@@ -31,11 +31,17 @@ import { gridLineColors } from '../utils/ColorUtils.js';
 import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
+import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
+import {
+  getDuelsArenaPool,
+  resolveDuelsArenaChoice,
+  duelsArenaConfigKey
+} from './duelsArenas.js';
+import { mapExtent } from '../multiplayer/maps.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
-const HEAD_R = 0.27;
-const HEAD_Y = BODY_H + HEAD_R + 0.02; // local head-centre height (feet at 0)
+const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET; // local head-centre height (feet at 0)
 
 const _headPos = new THREE.Vector3();
 const _eyePos = new THREE.Vector3();
@@ -53,7 +59,7 @@ const MAX_PITCH = degToRad(89);
 //  low (head clears over them), behind the enemy, or well outside peek range so
 //  they never seal a lane.
 // ===========================================================================
-const ARENAS = [
+export const ARENAS = [
   {
     // Long flat lane. Mid-tall central wall with a wide backdrop and two
     // mismatched crate stacks set well back for depth.
@@ -295,14 +301,19 @@ const CROUCH_RATE = 9;
 const DUELS_MOVE_HALF = 10; // 20 m × 20 m player roam box
 const DEATH_FX_DUR = 0.55;
 const DEATH_FX_PITCH = degToRad(38) * 0.25; // upward view flick on death (radians)
+/** Competitive: bot TTK once wide-swinging after the player misses a jiggle peek. */
+const COUNTER_WIDE_TTK = 0.02;
+/** Max aim deviation (degrees) to count a shot as "at the bot" during jiggle. */
+const JIGGLE_ENGAGE_AIM_DEG = 10;
 
 export class DuelsScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
     const d = this.settings.data.duels;
     const choice = this.config.arena ?? d.arena;
-    this.arenaIndex = choice >= 1 && choice <= ARENAS.length ? choice - 1 : randInt(0, ARENAS.length - 1);
-    this.arena = ARENAS[this.arenaIndex];
+    const resolved = resolveDuelsArenaChoice(ARENAS, choice);
+    this.arenaIndex = resolved.index;
+    this.arena = resolved.arena;
 
     const preset = this.competitive ? competitivePresetFor('duels') : null;
     this._ttk = this.config.ttk ?? preset?.ttk ?? d.ttk ?? 0.5;
@@ -321,9 +332,7 @@ export class DuelsScenario extends BaseScenario {
 
   static configKeyFor(settings, variant = 'practice') {
     if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
-    const d = settings.data.duels;
-    const a = d.arena >= 1 && d.arena <= ARENAS.length ? d.arena : 'rand';
-    return `arena${a}_d${settings.data.runDuration}`;
+    return duelsArenaConfigKey(ARENAS, settings.data.duels.arena, settings.data.runDuration);
   }
   configKey() {
     return DuelsScenario.configKeyFor(this.settings, this.variant);
@@ -334,6 +343,9 @@ export class DuelsScenario extends BaseScenario {
   }
 
   _playerBounds(a) {
+    if (a.bounds) {
+      return { minX: a.bounds.minX, maxX: a.bounds.maxX, minZ: a.bounds.minZ, maxZ: a.bounds.maxZ };
+    }
     const [px, , pz] = a.player.pos;
     return {
       minX: px - DUELS_MOVE_HALF,
@@ -363,14 +375,19 @@ export class DuelsScenario extends BaseScenario {
     const c = this.settings.data.colors;
     const [gridCenter, gridEdge] = gridLineColors(c.floor);
 
+    const floorSize = this.arena.bounds ? mapExtent({ bounds: this.arena.bounds }) * 2 : 80;
+    const gridDiv = this.arena.bounds
+      ? Math.min(120, Math.max(40, Math.round(mapExtent({ bounds: this.arena.bounds }))))
+      : 80;
+
     const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(80, 80),
+      new THREE.PlaneGeometry(floorSize, floorSize),
       new THREE.MeshStandardMaterial({ color: c.floor, roughness: 1 })
     );
     floor.rotation.x = -Math.PI / 2;
     add(floor);
 
-    const grid = new THREE.GridHelper(80, 80, gridCenter, gridEdge);
+    const grid = new THREE.GridHelper(floorSize, gridDiv, gridCenter, gridEdge);
     grid.position.y = 0.002;
     add(grid);
 
@@ -388,10 +405,11 @@ export class DuelsScenario extends BaseScenario {
 
   _switchArena() {
     this.engine.viewmodel?.clearBulletDecals();
+    const pool = getDuelsArenaPool(ARENAS);
     let newIdx;
-    do { newIdx = randInt(0, ARENAS.length - 1); } while (newIdx === this.arenaIndex && ARENAS.length > 1);
+    do { newIdx = randInt(0, pool.length - 1); } while (newIdx === this.arenaIndex && pool.length > 1);
     this.arenaIndex = newIdx;
-    this.arena = ARENAS[newIdx];
+    this.arena = pool[newIdx];
     this._buildArena();
     const a = this.arena;
     this.engine.player.spawn({
@@ -529,6 +547,37 @@ export class DuelsScenario extends BaseScenario {
     e.offset = e.jpTarget;
   }
 
+  /** Competitive: player fired at the bot during a jiggle peek but didn't connect. */
+  _shotEngagedBot(raycaster) {
+    const e = this.enemy;
+    const head = e?.target?.headMesh;
+    if (!head) return false;
+    head.getWorldPosition(_headPos);
+    _losDir.subVectors(_headPos, raycaster.ray.origin);
+    const dist = _losDir.length();
+    if (dist < 1e-4) return true;
+    _losDir.multiplyScalar(1 / dist);
+    return raycaster.ray.direction.dot(_losDir) > Math.cos(degToRad(JIGGLE_ENGAGE_AIM_DEG));
+  }
+
+  /** Snap to a wide swing on the current jiggle side and commit to a fast trade. */
+  _triggerJiggleCounter() {
+    const e = this.enemy;
+    const { wide } = this._peekOffsets();
+    const target = e.side * wide;
+    e.phase = 'counterwide';
+    e.jpOut = false;
+    e.jiggleLeft = 0;
+    e.offset = target;
+    e.mover.reset(target);
+    this._placeEnemy(target);
+    e.crouchWant = 0;
+    e.countedMiss = true;
+    const hasLos = this._botHeadHasLos(e);
+    e.wasLos = hasLos;
+    e.exposedTimer = hasLos ? COUNTER_WIDE_TTK : -1;
+  }
+
   _retreatDone() {
     const e = this.enemy;
     // A completed peek the player failed to punish counts as a miss (a trade lost).
@@ -562,7 +611,7 @@ export class DuelsScenario extends BaseScenario {
     e.crouch = clamp(e.crouch + (want - e.crouch) * Math.min(1, CROUCH_RATE * dt), 0, 1);
     if (e.target.rig) e.target.rig.scale.y = lerp(1, 0.55, e.crouch);
     if (e.target.headMesh) {
-      e.target.headMesh.position.y = BODY_H * lerp(1, 0.55, e.crouch) + HEAD_R + 0.02;
+      e.target.headMesh.position.y = BODY_H * lerp(1, 0.55, e.crouch) + HEAD_R + HEAD_OFFSET;
     }
 
     if (e.target.state === 'dying') return;
@@ -607,6 +656,11 @@ export class DuelsScenario extends BaseScenario {
         break;
       }
 
+      case 'counterwide': {
+        e.mover.seek(dt, e.offset, max);
+        break;
+      }
+
       case 'back': {
         const reached = e.mover.seek(dt, 0, max);
         if (reached) this._retreatDone();
@@ -619,7 +673,9 @@ export class DuelsScenario extends BaseScenario {
     const hasLos = this._botHeadHasLos(e);
 
     // TTK starts only once the bot's head can actually see the player.
-    if (hasLos && !e.wasLos) e.exposedTimer = this._ttk;
+    if (hasLos && !e.wasLos) {
+      e.exposedTimer = e.phase === 'counterwide' ? COUNTER_WIDE_TTK : this._ttk;
+    }
     if (!hasLos) e.exposedTimer = -1;
     e.wasLos = hasLos;
     e.hasLos = hasLos;
@@ -697,12 +753,23 @@ export class DuelsScenario extends BaseScenario {
 
   onShoot(raycaster) {
     const hit = this.raycastTargets(raycaster, this.coverMeshes);
+    const e = this.enemy;
+
+    if (
+      this.competitive &&
+      e?.phase === 'jigglepeek' &&
+      e.target.state !== 'dying' &&
+      (!hit || hit.object.userData.target !== e.target) &&
+      this._shotEngagedBot(raycaster)
+    ) {
+      this._triggerJiggleCounter();
+    }
+
     if (!hit) return;
     const obj = hit.object;
     const tgt = obj.userData.target;
     if (!tgt) return; // hit a box → blocked
 
-    const e = this.enemy;
     if (!e || tgt !== e.target || e.target.state === 'dying') return;
 
     this.crosshair?.hit();

@@ -49,6 +49,8 @@ export class SpidershotScenario extends BaseScenario {
     this.decoyEnabled = this.competitive
       ? (preset?.decoyEnabled ?? true)
       : (this.config.decoyEnabled ?? s.decoyEnabled ?? true);
+    this.decoyRoundChance =
+      preset?.decoyRoundChance ?? this.config.decoyRoundChance ?? s.decoyRoundChance ?? 1;
     this.decoyChancePer = preset?.decoyChancePer ?? this.config.decoyChancePer ?? s.decoyChancePer ?? 0.1;
     this.decoyMin = preset?.decoyMin ?? this.config.decoyMin ?? s.decoyMin ?? 0;
     this.decoyMax = preset?.decoyMax ?? this.config.decoyMax ?? s.decoyMax ?? 2;
@@ -238,7 +240,11 @@ export class SpidershotScenario extends BaseScenario {
 
   _spawnDecoys() {
     if (!this.decoyEnabled) return;
-    const count = this._rollDecoyCount();
+    if (Math.random() >= this.decoyRoundChance) return;
+    const count = this.competitive
+      ? randInt(this.decoyMin, this.decoyMax)
+      : this._rollDecoyCount();
+    if (count <= 0) return;
     for (let i = 0; i < count; i++) {
       const { x, y } = this._randomSidewardPos();
       this._spawnAt(x, y, { decoy: true });

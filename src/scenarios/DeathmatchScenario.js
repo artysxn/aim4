@@ -22,7 +22,7 @@ import { SHOT_INTERVAL } from '../weapons/ak47.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEATHMATCH_MAP, deathmatchExtent } from './deathmatchMap.js';
-import { eyeOffset, SPAWN_GRACE } from '../multiplayer/constants.js';
+import { eyeOffset, HEAD_R, HEAD_OFFSET, SPAWN_GRACE } from '../multiplayer/constants.js';
 import { pickSpawnPreferHidden, movementHitScale, isPointVisible } from '../utils/spawnVisibility.js';
 import { worldImpactNormal } from '../utils/bulletImpact.js';
 import {
@@ -33,8 +33,7 @@ import {
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
-const HEAD_R = 0.27;
-const HEAD_Y = BODY_H + HEAD_R + 0.02;
+const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
 
 const ENGAGE_RANGE = 22; // m — within this (and with LOS) a bot holds & jiggles
 const DESIRED_RANGE = 9; // m — preferred fighting distance while engaged
@@ -679,7 +678,7 @@ export class DeathmatchScenario extends BaseScenario {
       bot.crouch = clamp(bot.crouch + (bot.crouchWant - bot.crouch) * Math.min(1, CROUCH_RATE * dt), 0, 1);
       if (bot.target.rig) bot.target.rig.scale.y = lerp(1, 0.55, bot.crouch);
       if (bot.target.headMesh) {
-        bot.target.headMesh.position.y = BODY_H * lerp(1, 0.55, bot.crouch) + HEAD_R + 0.02;
+        bot.target.headMesh.position.y = BODY_H * lerp(1, 0.55, bot.crouch) + HEAD_R + HEAD_OFFSET;
       }
 
       bot.target.object.position.set(bot.pos.x, bot.footY, bot.pos.z);

@@ -21,11 +21,11 @@ import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '.
 import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
+import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
-const HEAD_R = 0.27;
-const HEAD_Y = BODY_H + HEAD_R + 0.02;
+const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
 
 const PLAYER_HALF = 2.5; // metres → 5×5 m roam box
 const REVERSE_MIN = 0.6;  // s between normal direction flips
@@ -340,7 +340,7 @@ export class RangeScenario extends BaseScenario {
       bot.crouch = clamp(bot.crouch + (bot.crouchWant - bot.crouch) * Math.min(1, CROUCH_RATE * dt), 0, 1);
       if (bot.target.rig) bot.target.rig.scale.y = lerp(1, 0.55, bot.crouch);
       if (bot.target.headMesh) {
-        bot.target.headMesh.position.y = BODY_H * lerp(1, 0.55, bot.crouch) + HEAD_R + 0.02;
+        bot.target.headMesh.position.y = BODY_H * lerp(1, 0.55, bot.crouch) + HEAD_R + HEAD_OFFSET;
       }
 
       bot.target.object.lookAt(cam.position.x, bot.target.object.position.y + 1.0, cam.position.z);
