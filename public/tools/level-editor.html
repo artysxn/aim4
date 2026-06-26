@@ -589,25 +589,24 @@ function applyBoxScaleGrid(mesh) {
   mesh.scale.z = Math.max(min, snapToGrid(mesh.scale.z, scaleSnapVal));
 }
 
-function faceWorldPoint(obj, axis, sign) {
-  const v = new THREE.Vector3();
-  v[axis] = sign * obj.scale[axis] / 2;
-  return obj.localToWorld(v);
-}
-
 function beginScaleDrag() {
   const obj = primary();
   if (!obj || obj.userData.kind !== 'box' || selected.length !== 1 || transform.mode !== 'scale') return null;
   const ax = transform.axis || '';
-  if (!ax || /XY|XYZ/.test(ax)) return null;
+  if (!ax || /XY|XYZ|E/.test(ax)) return null;
   const axis = ax.includes('X') ? 'x' : ax.includes('Y') ? 'y' : ax.includes('Z') ? 'z' : null;
-  if (!axis || !transform.pointStart) return null;
-  const localPt = obj.worldToLocal(transform.pointStart.clone());
+  if (!axis) return null;
+  let fixMax = false;
+  if (transform.pointStart) {
+    const localPt = obj.worldToLocal(transform.pointStart.clone());
+    fixMax = localPt[axis] < 0;
+  }
   return {
     axis,
-    fixMax: localPt[axis] < 0,
-    worldMin: faceWorldPoint(obj, axis, -1).clone(),
-    worldMax: faceWorldPoint(obj, axis, 1).clone()
+    fixMax,
+    pos: obj.position.clone(),
+    scale: obj.scale.clone(),
+    quat: obj.quaternion.clone()
   };
 }
 
@@ -615,27 +614,42 @@ function applyOneSidedScale(obj, start) {
   const i = start.axis;
   let newS = obj.scale[i];
   newS = Math.max(scaleSnapVal, snapToGrid(newS, scaleSnapVal));
+  // TC can leak into other axes — restore them from drag-start snapshot.
+  obj.scale.copy(start.scale);
   obj.scale[i] = newS;
-  const half = newS / 2;
-  const dir = new THREE.Vector3();
-  dir[i] = 1;
-  dir.applyQuaternion(obj.quaternion);
+
+  const oldHalf = start.scale[i] / 2;
+  const newHalf = newS / 2;
+  const outDir = new THREE.Vector3();
+  outDir[i] = 1;
+  outDir.applyQuaternion(start.quat);
+
   if (start.fixMax) {
-    obj.position.copy(start.worldMax).sub(dir.multiplyScalar(half));
+    const fixedMax = start.pos.clone().add(outDir.clone().multiplyScalar(oldHalf));
+    obj.position.copy(fixedMax.sub(outDir.multiplyScalar(newHalf)));
   } else {
-    obj.position.copy(start.worldMin).add(dir.multiplyScalar(half));
+    const fixedMin = start.pos.clone().sub(outDir.multiplyScalar(oldHalf));
+    obj.position.copy(fixedMin.add(outDir.multiplyScalar(newHalf)));
   }
 }
 
-function rotateSelectedBoxes(dir) {
-  const boxes = selected.filter((o) => o.userData.kind === 'box');
-  if (!boxes.length) return;
+function rotateSelected(dir) {
+  const movables = selected.filter((o) => o.userData.kind === 'box' || o.userData.kind === 'spawn');
+  if (!movables.length) return;
   pushUndo();
-  const step = Math.PI / 2;
-  boxes.forEach((obj) => {
-    obj.rotation.y += dir * step;
-    const q = Math.round(obj.rotation.y / step);
-    obj.rotation.y = q * step;
+  const center = selectionCenter();
+  const angle = dir * Math.PI / 2;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  movables.forEach((obj) => {
+    const dx = obj.position.x - center.x;
+    const dz = obj.position.z - center.z;
+    obj.position.x = center.x + dx * cos - dz * sin;
+    obj.position.z = center.z + dx * sin + dz * cos;
+    if (obj.userData.kind === 'box') {
+      obj.rotation.y += angle;
+      obj.rotation.y = Math.round(obj.rotation.y / (Math.PI / 2)) * (Math.PI / 2);
+    }
   });
   attachGizmo();
   syncProps();
@@ -686,13 +700,17 @@ transform.addEventListener('dragging-changed', (e) => {
       scaleDragStart = null;
     } else {
       pivotDragStart = null;
-      scaleDragStart = beginScaleDrag();
+      scaleDragStart = null; // lazy-init on first objectChange when axis is known
+      if (primary()?.userData.kind === 'box' && transform.mode === 'scale') {
+        transform.setScaleSnap(null);
+      }
     }
   } else if (beforeDrag) {
     pushUndoState(beforeDrag);
     beforeDrag = null;
     pivotDragStart = null;
     scaleDragStart = null;
+    syncTransformSnap();
   }
 });
 transform.addEventListener('objectChange', onGizmoChange);
@@ -1008,12 +1026,18 @@ function onGizmoChange() {
   }
   const obj = primary();
   if (!obj) return;
-  if (obj.userData.kind === 'box') {
-    if (transform.mode === 'scale' && scaleDragStart) {
+  if (obj.userData.kind === 'box' && transform.mode === 'scale' && transform.dragging && selected.length === 1) {
+    if (!scaleDragStart) scaleDragStart = beginScaleDrag();
+    if (scaleDragStart) {
       applyOneSidedScale(obj, scaleDragStart);
-    } else {
-      applyBoxScaleGrid(obj);
+      obj.material.color.copy(heightColor(obj.scale.y));
+      syncProps();
+      updateBounds();
+      return;
     }
+  }
+  if (obj.userData.kind === 'box') {
+    applyBoxScaleGrid(obj);
     obj.material.color.copy(heightColor(obj.scale.y));
   }
   syncProps();
@@ -1262,7 +1286,7 @@ window.addEventListener('keydown', (e) => {
   if (ctrl) return;
   if (e.key === 'w' || e.key === 'W') setMode('translate');
   if (e.key === 'e' || e.key === 'E') toggleMode();
-  if (e.key === 'r' || e.key === 'R') { e.preventDefault(); rotateSelectedBoxes(e.shiftKey ? 1 : -1); }
+  if (e.key === 'r' || e.key === 'R') { e.preventDefault(); rotateSelected(e.shiftKey ? 1 : -1); }
   if (e.shiftKey && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); duplicateSelected(); }
   if (e.key === 'Delete' || e.key === 'Backspace' || e.key === 'x' || e.key === 'X') deleteSelected();
   if (e.key === 'f' || e.key === 'F') {
