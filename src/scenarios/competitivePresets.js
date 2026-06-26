@@ -36,7 +36,7 @@ export const COMPETITIVE_PRESETS = {
   },
   arena: {
     runDuration: 30,
-    crossDuration: 475,
+    crossDuration: 550,
     peekHold: 475,
     columns: 5,
     columnRadius: 0.75,

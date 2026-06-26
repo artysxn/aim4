@@ -4,6 +4,7 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
+import { randRange } from '../utils/MathUtils.js';
 import { Target } from '../components/Target.js';
 import { GridshotScenario } from './GridshotScenario.js';
 import { competitivePresetFor } from './competitivePresets.js';
@@ -76,5 +77,17 @@ export class StarsScenario extends GridshotScenario {
 
   _spawn() {
     this._spawnAt(this._randomPos());
+  }
+
+  /** Use the full gray wall plane (not the eye-centred gridshot spawn box). */
+  _randomPos() {
+    const inset = this.targetSize + 0.05;
+    const halfW = (this.boundsW + 8) / 2 - inset;
+    const halfH = (this.boundsH + 8) / 2 - inset;
+    return new THREE.Vector3(
+      randRange(-halfW, halfW),
+      randRange(this.centerY - halfH, this.centerY + halfH),
+      -this.wallDistance + this.targetSize + 0.05
+    );
   }
 }
