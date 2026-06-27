@@ -49,8 +49,9 @@ export class SpidershotScenario extends BaseScenario {
     this.decoyEnabled = this.competitive
       ? (preset?.decoyEnabled ?? true)
       : (this.config.decoyEnabled ?? s.decoyEnabled ?? true);
-    this.decoyRoundChance =
-      preset?.decoyRoundChance ?? this.config.decoyRoundChance ?? s.decoyRoundChance ?? 1;
+    this.decoyRoundChance = this.competitive
+      ? (preset?.decoyRoundChance ?? 0.1)
+      : (this.config.decoyRoundChance ?? s.decoyRoundChance ?? 1);
     this.decoyChancePer = preset?.decoyChancePer ?? this.config.decoyChancePer ?? s.decoyChancePer ?? 0.1;
     this.decoyMin = preset?.decoyMin ?? this.config.decoyMin ?? s.decoyMin ?? 0;
     this.decoyMax = preset?.decoyMax ?? this.config.decoyMax ?? s.decoyMax ?? 2;
@@ -73,6 +74,10 @@ export class SpidershotScenario extends BaseScenario {
     this._streakWavesLeft = 0;
     /** TTK multiplier for the current cycle's timed targets (double spawn → 1.75×). */
     this._cycleTtkMult = 1;
+    /** Decoys rolled once per cycle when the centre dot is killed (0 = none). */
+    this._cycleDecoyCount = 0;
+    /** Whether decoys for this cycle were already placed in phase 2. */
+    this._cycleDecoysPlaced = false;
     /** Seconds before spawning phase 1 after a fail or decoy penalty. */
     this._phaseDelay = 0;
 
@@ -151,6 +156,8 @@ export class SpidershotScenario extends BaseScenario {
     this._streakAllowed = true;
     this._streakWavesLeft = 0;
     this._cycleTtkMult = 1;
+    this._cycleDecoyCount = 0;
+    this._cycleDecoysPlaced = false;
   }
 
   _sizeForSpawn() {
@@ -238,14 +245,25 @@ export class SpidershotScenario extends BaseScenario {
     return n;
   }
 
-  _spawnDecoys() {
-    if (!this.decoyEnabled) return;
-    if (Math.random() >= this.decoyRoundChance) return;
-    const count = this.competitive
+  /** Roll decoy count once per cycle (centre kill → phase 2). */
+  _rollCycleDecoys() {
+    if (!this.decoyEnabled) {
+      this._cycleDecoyCount = 0;
+      return;
+    }
+    if (Math.random() >= this.decoyRoundChance) {
+      this._cycleDecoyCount = 0;
+      return;
+    }
+    this._cycleDecoyCount = this.competitive
       ? randInt(this.decoyMin, this.decoyMax)
       : this._rollDecoyCount();
-    if (count <= 0) return;
-    for (let i = 0; i < count; i++) {
+  }
+
+  _spawnDecoys() {
+    if (this._cycleDecoyCount <= 0 || this._cycleDecoysPlaced) return;
+    this._cycleDecoysPlaced = true;
+    for (let i = 0; i < this._cycleDecoyCount; i++) {
       const { x, y } = this._randomSidewardPos();
       this._spawnAt(x, y, { decoy: true });
     }
@@ -258,12 +276,14 @@ export class SpidershotScenario extends BaseScenario {
     }
   }
 
-  /** Roll double spawn for this cycle (exclusive with streak). */
+  /** Roll double spawn and decoys for this cycle (exclusive with streak). */
   _rollCycleModifiers() {
     this._cycleDouble = Math.random() < this.doubleSpawnChance;
     this._streakAllowed = !this._cycleDouble;
     this._cycleTtkMult = this._cycleDouble ? DOUBLE_SPAWN_TTK_MULT : 1;
     this._streakWavesLeft = 0;
+    this._cycleDecoysPlaced = false;
+    this._rollCycleDecoys();
   }
 
   _spawnSideward(count = 1) {

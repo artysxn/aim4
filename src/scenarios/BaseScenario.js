@@ -29,9 +29,9 @@ const _nmScale = new THREE.Vector3();
 const _nmToCenter = new THREE.Vector3();
 const _nmHitPoint = new THREE.Vector3();
 
-// Expand sphere hitboxes by 3% radius on near-miss so shots barely outside the
+// Expand sphere hitboxes by 10% radius on near-miss so shots barely outside the
 // rim still register. Only applies to SphereGeometry colliders (dot targets).
-const NEAR_MISS_FACTOR = 1.03;
+const NEAR_MISS_FACTOR = 1.10;
 const TRACER_MISS_DEPTH = 120;
 
 // --- Tiny WebAudio blip used for hit feedback (lazily created) -------------
