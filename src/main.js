@@ -51,10 +51,10 @@ auth.init().then(() => ui.refreshAccountBar());
 engine.onUpdate = (dt) => {
   // Replay playback fully owns the camera + scene; the live scenario is paused.
   if (ui.replaying) {
-    replayPlayer.update(dt);
-    engine.audio?.syncListener(engine.camera);
     const motion = replayPlayer.getMotion();
     engine.viewmodel?.update(dt, motion);
+    replayPlayer.update(dt);
+    engine.audio?.syncListener(engine.camera);
     crosshair.frame(engine);
     return;
   }

@@ -79,6 +79,26 @@ create index if not exists scores_scenario_config_score_idx
 create index if not exists scores_user_id_idx on public.scores (user_id);
 create index if not exists replays_user_idx on public.replays (user_id);
 
+-- Permanent shared replays (immutable copies; linked via ?replay=uuid).
+create table if not exists public.shared_replays (
+  id uuid primary key,
+  user_id uuid not null references auth.users on delete cascade,
+  username text not null,
+  scenario text not null,
+  config_key text not null,
+  variant text not null,
+  score integer,
+  accuracy real,
+  kills integer,
+  duration real,
+  tick_rate integer not null default 128,
+  byte_size integer,
+  replay_file_path text not null unique,
+  settings jsonb not null default '{}',
+  created_at timestamptz default now()
+);
+create index if not exists shared_replays_user_idx on public.shared_replays (user_id);
+
 -- ===========================================================================
 -- Data migrations
 -- ===========================================================================
@@ -216,6 +236,22 @@ create policy "delete own replays" on public.replays
 
 grant select on public.replays to anon, authenticated;
 grant insert, update, delete on public.replays to authenticated;
+
+-- ===========================================================================
+-- Row level security — shared replays (permanent public links)
+-- ===========================================================================
+
+alter table public.shared_replays enable row level security;
+
+drop policy if exists "read shared replays" on public.shared_replays;
+drop policy if exists "insert own shared replays" on public.shared_replays;
+create policy "read shared replays" on public.shared_replays
+  for select to anon, authenticated using (true);
+create policy "insert own shared replays" on public.shared_replays
+  for insert to authenticated with check (auth.uid() = user_id);
+
+grant select on public.shared_replays to anon, authenticated;
+grant insert on public.shared_replays to authenticated;
 
 -- ===========================================================================
 -- Auth trigger — create profile on sign-up
@@ -562,6 +598,10 @@ create policy "replay objects read all" on storage.objects
 create policy "replay objects insert own" on storage.objects
   for insert to authenticated
   with check (bucket_id = 'replays' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists "replay objects insert shared" on storage.objects;
+create policy "replay objects insert shared" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'replays' and (storage.foldername(name))[1] = 'shared');
 create policy "replay objects update own" on storage.objects
   for update to authenticated
   using (bucket_id = 'replays' and (storage.foldername(name))[1] = auth.uid()::text);

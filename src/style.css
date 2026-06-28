@@ -2076,6 +2076,13 @@ input[type='checkbox'] {
   color: #fff;
   border-color: var(--accent);
 }
+.replay-share-status {
+  font-size: 12px;
+  max-width: 160px;
+}
+.replay-share-status.is-error {
+  color: #f07070;
+}
 #replay-exit {
   margin-left: auto;
 }

@@ -245,16 +245,20 @@ export class ReplayRecorder {
    * Record a shot for tracer/impact playback.
    * @param {{origin:THREE.Vector3, end:THREE.Vector3, hit?:boolean, by?:string}} shot
    */
-  recordShot({ origin, end, hit = false, by = 'player' }) {
+  recordShot({ origin, end, hit = false, by = 'player', normal = null }) {
     if (!this.active) return;
-    this.events.push({
+    const ev = {
       t: this._tick,
       type: 'shot',
       by,
       o: [r(origin.x), r(origin.y), r(origin.z)],
       e: [r(end.x), r(end.y), r(end.z)],
       hit: hit ? 1 : 0
-    });
+    };
+    if (normal) {
+      ev.n = [r(normal.x), r(normal.y), r(normal.z)];
+    }
+    this.events.push(ev);
   }
 
   /** Stop and return the raw recording for encodeReplay (or null if too short). */

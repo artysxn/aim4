@@ -26,7 +26,8 @@ import { fetchPublicProfile, fetchPublicSettings } from '../lib/userProfile.js';
 import { supabaseConfigured } from '../lib/supabase.js';
 import { localDecode } from '../lib/replayCodec.js';
 import { REPLAY_SPEEDS } from '../core/ReplayPlayer.js';
-import { saveReplay, listAccountReplays, loadReplayByPath } from '../lib/replayStore.js';
+import { saveReplay, listAccountReplays, loadReplayByPath, createSharedReplay, fetchSharedReplay, isSharedReplayId } from '../lib/replayStore.js';
+import { copyText } from '../utils/ConfigCodes.js';
 import { MultiplayerController } from '../multiplayer/MultiplayerController.js';
 import { SCORE_TARGETS, MM_SCORE_TARGET, TRACKING_DURATION } from '../multiplayer/constants.js';
 import { getMap } from '../multiplayer/maps.js';
@@ -122,6 +123,8 @@ export class UIOverlay {
     this.replaying = false; // engine loop checks this to drive playback
     this._lastReplay = null; // decoded view of the run that just finished
     this._replayReturn = 'menu'; // screen to restore when leaving playback
+    this._replayShareCtx = null; // { sourcePath, userId, username, shareMeta }
+    this._lastReplayShare = null;
 
     this.root = document.getElementById('ui-root');
     this.state = 'menu';
@@ -183,6 +186,7 @@ export class UIOverlay {
       const name = this._mpName ? this._mpName() : this._defaultName();
       this.mp.autoJoinFromUrl(name);
     }
+    this._maybeOpenReplayFromUrl();
   }
 
   /**
@@ -946,6 +950,7 @@ export class UIOverlay {
         <div class="menu-actions">
           <button class="btn primary" data-restart>Play again</button>
           <button class="btn" id="res-watch-replay" hidden>Watch replay</button>
+          <button class="btn" id="res-share-replay" hidden>Share replay</button>
           <button class="btn" data-quit>Menu</button>
         </div>
       </div>
@@ -958,6 +963,8 @@ export class UIOverlay {
         <input type="range" id="replay-scrub" class="replay-scrub" min="0" max="1000" value="0" />
         <span id="replay-time" class="replay-time">0.0 / 0.0s</span>
         <div class="replay-speeds" id="replay-speeds"></div>
+        <button type="button" class="btn btn-sm" id="replay-share-btn" hidden>Share</button>
+        <span id="replay-share-status" class="replay-share-status muted" hidden></span>
         <button type="button" class="btn btn-sm" id="replay-exit">Exit replay</button>
       </div>
     </div>
@@ -1881,13 +1888,14 @@ export class UIOverlay {
     }
 
     const items = [];
+    const canShare = !viewingOther && !!this.auth?.isLoggedIn;
     for (const [scenario, slots] of byScenario) {
       const title = SCENARIO_META[scenario]?.title ?? scenario;
       const last = slots['competitive:last'] || slots['practice:last'];
       const best = slots['competitive:best'];
       const btns = [];
-      if (last) btns.push(this._replayBtnHtml(last, 'Last run', title));
-      if (best) btns.push(this._replayBtnHtml(best, 'Best run', title));
+      if (last) btns.push(this._replayBtnHtml(last, 'Last run', title, canShare));
+      if (best) btns.push(this._replayBtnHtml(best, 'Best run', title, canShare));
       if (btns.length) {
         items.push(
           `<div class="account-replay-row"><span class="account-replay-name">${title}</span><span class="account-replay-btns">${btns.join('')}</span></div>`
@@ -1895,14 +1903,41 @@ export class UIOverlay {
       }
     }
     body.innerHTML = items.join('') || '<p class="center lb-hint">No replays yet.</p>';
+    this._accountReplayRows = rows;
 
     body.querySelectorAll('[data-replay-path]').forEach((b) => {
       b.addEventListener('click', () => this._openAccountReplay(b.dataset.replayPath, b.dataset.replayTitle));
     });
+    body.querySelectorAll('[data-replay-share]').forEach((b) => {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._shareReplayFromButton(b);
+      });
+    });
   }
 
-  _replayBtnHtml(row, label, title) {
-    return `<button type="button" class="btn btn-sm" data-replay-path="${this._esc(row.replay_file_path)}" data-replay-title="${this._esc(`${title} — ${label}`)}">${label}</button>`;
+  _shareMetaFromReplayRow(row) {
+    return {
+      sourcePath: row.replay_file_path,
+      userId: row.user_id,
+      username: this.auth?.displayName,
+      shareMeta: {
+        scenario: row.scenario,
+        config_key: row.config_key,
+        variant: row.variant,
+        score: row.score,
+        accuracy: row.accuracy,
+        kills: row.kills,
+        duration: row.duration,
+        settings: {}
+      }
+    };
+  }
+
+  _replayBtnHtml(row, label, title, canShare = false) {
+    const watch = `<button type="button" class="btn btn-sm" data-replay-path="${this._esc(row.replay_file_path)}" data-replay-title="${this._esc(`${title} — ${label}`)}">${label}</button>`;
+    if (!canShare) return watch;
+    return `${watch}<button type="button" class="btn btn-sm" data-replay-share data-replay-path="${this._esc(row.replay_file_path)}">${label === 'Best run' ? 'Share best' : 'Share'}</button>`;
   }
 
   async _openAccountReplay(path, title) {
@@ -1914,11 +1949,24 @@ export class UIOverlay {
       if (st) st.textContent = 'Could not load that replay.';
       return;
     }
+    const row = this._accountReplayRows?.find((r) => r.replay_file_path === path);
+    if (row && !this._viewingAccount) {
+      this._setReplayShareContext(this._shareMetaFromReplayRow(row));
+    } else {
+      this._setReplayShareContext(null);
+    }
     this._watchReplay(decoded, {
       title: title || 'Replay',
       returnTo: 'account',
       fromOtherPlayer: !!this._viewingAccount
     });
+  }
+
+  _shareReplayFromButton(btn) {
+    const path = btn?.dataset?.replayPath;
+    const row = this._accountReplayRows?.find((r) => r.replay_file_path === path);
+    if (!row) return;
+    this._shareReplay(this._shareMetaFromReplayRow(row), btn);
   }
 
   _setAuthMode(mode) {
@@ -3009,8 +3057,13 @@ export class UIOverlay {
         resolutionWidth: this.settings.data.resolutionWidth,
         resolutionHeight: this.settings.data.resolutionHeight,
         colors: structuredClone(this.settings.data.colors),
-        crosshair: structuredClone(this.settings.data.crosshair)
-      }
+        crosshair: structuredClone(this.settings.data.crosshair),
+        viewmodel: structuredClone(this.settings.data.viewmodel),
+        weapon: { aimpunch: this.settings.data.weapon?.aimpunch }
+      },
+      weaponId: sc.weaponId,
+      viewmodelRecoil: sc.viewmodelRecoil,
+      showViewmodel: sc.showViewmodel
     });
   }
 
@@ -3123,8 +3176,11 @@ export class UIOverlay {
   /** Finalize telemetry: keep it for instant replay + sync to Supabase. */
   async _finalizeRecording(results) {
     const watchBtn = this.root.querySelector('#res-watch-replay');
+    const shareBtn = this.root.querySelector('#res-share-replay');
     if (watchBtn) watchBtn.hidden = true;
+    if (shareBtn) shareBtn.hidden = true;
     this._lastReplay = null;
+    this._lastReplayShare = null;
     if (!this.replayRecorder?.active) return { ok: false, reason: 'no recording' };
 
     const recording = this.replayRecorder.finish();
@@ -3148,6 +3204,15 @@ export class UIOverlay {
     }
 
     const res = await saveReplay(this.auth.user.id, recording, results);
+    if (res.ok && res.lastPath) {
+      this._lastReplayShare = {
+        sourcePath: res.lastPath,
+        userId: this.auth.user.id,
+        username: this.auth.displayName,
+        shareMeta: res.shareMeta
+      };
+      if (shareBtn) shareBtn.hidden = false;
+    }
     if (!res.ok && res.reason && res.reason !== 'offline') {
       console.warn('[ui] replay not saved:', res.reason);
     }
@@ -3169,13 +3234,26 @@ export class UIOverlay {
         (s) => `<button type="button" class="btn btn-sm replay-speed" data-speed="${s}">${s}×</button>`
       ).join('');
       speedWrap.querySelectorAll('[data-speed]').forEach((b) => {
-        b.addEventListener('click', () => this.replayPlayer.setSpeed(Number(b.dataset.speed)));
+        b.addEventListener('click', () => {
+          this.engine.audio?.resume();
+          this.replayPlayer.setSpeed(Number(b.dataset.speed));
+        });
       });
     }
 
-    this.replayPlayPause?.addEventListener('click', () => this.replayPlayer.togglePlay());
+    this.replayPlayPause?.addEventListener('click', () => {
+      this.engine.audio?.resume();
+      this.replayPlayer.togglePlay();
+    });
     this.root.querySelector('#replay-exit')?.addEventListener('click', () => this._exitReplay());
+    this.root.querySelector('#replay-share-btn')?.addEventListener('click', () => {
+      this._shareReplay(this._replayShareCtx, this.root.querySelector('#replay-share-btn'));
+    });
+    this.root.querySelector('#res-share-replay')?.addEventListener('click', () => {
+      this._shareReplay(this._lastReplayShare, this.root.querySelector('#res-share-replay'));
+    });
     this.root.querySelector('#res-watch-replay')?.addEventListener('click', () => {
+      if (this._lastReplayShare) this._setReplayShareContext(this._lastReplayShare);
       const t = SCENARIO_META[this._lastReplay?.scenario]?.title || 'Replay';
       this._watchReplay(this._lastReplay, { title: `${t} — last run`, returnTo: 'results' });
     });
@@ -3194,8 +3272,108 @@ export class UIOverlay {
     });
   }
 
+  _setReplayShareContext(ctx) {
+    this._replayShareCtx = ctx?.sourcePath ? ctx : null;
+    const btn = this.root.querySelector('#replay-share-btn');
+    if (btn) btn.hidden = !this._replayShareCtx;
+    this._setReplayShareStatus('');
+  }
+
+  _setReplayShareStatus(msg, isError = false) {
+    const el = this.root.querySelector('#replay-share-status');
+    if (!el) return;
+    if (!msg) {
+      el.hidden = true;
+      el.textContent = '';
+      el.classList.remove('is-error');
+      return;
+    }
+    el.hidden = false;
+    el.textContent = msg;
+    el.classList.toggle('is-error', isError);
+  }
+
+  async _shareReplay(ctx, triggerBtn = null) {
+    if (!ctx?.sourcePath) return;
+    if (!this.auth?.isLoggedIn) {
+      this._openAuth('login');
+      return;
+    }
+    if (!supabaseConfigured()) {
+      this._setReplayShareStatus('Replays are not configured.', true);
+      return;
+    }
+    if (ctx.userId && ctx.userId !== this.auth.user.id) {
+      this._setReplayShareStatus('Only the player can share this replay.', true);
+      return;
+    }
+    if (triggerBtn) triggerBtn.disabled = true;
+    this._setReplayShareStatus('Creating link…');
+    try {
+      await this.auth.ensureProfileReady();
+      const { url } = await createSharedReplay({
+        userId: this.auth.user.id,
+        username: this.auth.displayName,
+        sourcePath: ctx.sourcePath,
+        shareMeta: ctx.shareMeta
+      });
+      await copyText(url);
+      if (triggerBtn?.id === 'res-share-replay') {
+        const prev = triggerBtn.textContent;
+        triggerBtn.textContent = 'Link copied!';
+        setTimeout(() => { triggerBtn.textContent = prev; }, 2200);
+      } else {
+        this._setReplayShareStatus('Link copied!');
+      }
+    } catch (e) {
+      console.warn('[ui] replay share failed', e);
+      this._setReplayShareStatus(e.message || 'Could not share replay.', true);
+    } finally {
+      if (triggerBtn) triggerBtn.disabled = false;
+    }
+  }
+
+  _clearReplayUrlParam() {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('replay')) return;
+    url.searchParams.delete('replay');
+    window.history.replaceState(null, '', url);
+  }
+
+  async _maybeOpenReplayFromUrl() {
+    const id = new URLSearchParams(window.location.search).get('replay');
+    if (!isSharedReplayId(id)) return;
+    this._clearReplayUrlParam();
+    this.showScreen('menu');
+    const tip = this.root.querySelector('#menu-fullscreen-tip');
+    const loading = document.createElement('p');
+    loading.className = 'center lb-hint';
+    loading.textContent = 'Loading shared replay…';
+    if (tip) tip.insertAdjacentElement('afterend', loading);
+    try {
+      const data = await fetchSharedReplay(id);
+      loading.remove();
+      if (!data?.replay) {
+        this.showError(new Error('Shared replay not found or expired.'));
+        return;
+      }
+      const mode = SCENARIO_META[data.meta.scenario]?.title ?? data.meta.scenario;
+      const variant = data.meta.variant === 'competitive' ? 'Competitive' : 'Training';
+      this._setReplayShareContext(null);
+      this._watchReplay(data.replay, {
+        title: `${data.meta.username} — ${mode} (${variant})`,
+        returnTo: 'menu',
+        fromOtherPlayer: true,
+        sharedSettings: data.meta.settings
+      });
+    } catch (e) {
+      loading.remove();
+      this.showError(e);
+    }
+  }
+
   /** Enter playback for a decoded replay. `returnTo` is the screen to restore. */
-  _watchReplay(decoded, { title = 'Replay', returnTo = 'results', fromOtherPlayer = false } = {}) {
+  _watchReplay(decoded, { title = 'Replay', returnTo = 'results', fromOtherPlayer = false, sharedSettings = null } = {}) {
     if (!decoded || !this.replayPlayer) return;
     this._replayReturn = returnTo;
     this.input.exitLock();
@@ -3209,8 +3387,12 @@ export class UIOverlay {
     this.state = 'replay';
     this.engine.audio?.resume();
     this.replayOverlay?.classList.add('active');
-    if (fromOtherPlayer && this.settings.data.copyConfigOnReplay && decoded.settings) {
-      this.settings.beginReplayView(decoded.settings);
+    if (fromOtherPlayer && this.settings.data.copyConfigOnReplay) {
+      const rs = this.settings.mergeReplaySettings(decoded.settings, sharedSettings);
+      if (Object.keys(rs).length) {
+        this.settings.beginReplayView(rs);
+        this.crosshair.draw();
+      }
     }
     this.crosshair.setVisible(true);
     this.replayPlayer.load(decoded);
@@ -3222,6 +3404,7 @@ export class UIOverlay {
     this.replaying = false;
     this.replayPlayer?.dispose();
     this.replayOverlay?.classList.remove('active');
+    this._setReplayShareContext(null);
     if (this.settings.isReplayView) this.settings.endReplayView();
     this.crosshair.setVisible(false);
     if (this._hiddenSceneRoot) {

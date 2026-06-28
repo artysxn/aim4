@@ -129,6 +129,7 @@ export class Viewmodel {
       transparent: true,
       opacity: 0,
       depthWrite: false,
+      depthTest: false,
       blending: THREE.AdditiveBlending
     });
     for (let i = 0; i < TRACER_POOL; i++) {
@@ -304,6 +305,7 @@ export class Viewmodel {
     pos.setXYZ(0, origin.x, origin.y, origin.z);
     pos.setXYZ(1, end.x, end.y, end.z);
     pos.needsUpdate = true;
+    tr.line.geometry.computeBoundingSphere();
     tr.t = TRACER_LIFE;
     tr.line.material.opacity = 0.9;
     tr.line.visible = true;
@@ -448,9 +450,12 @@ export class Viewmodel {
   }
 
   _updateTracers(dt) {
+    const replay = this.engine.replayPlayer;
+    const dtScale = replay?.active && replay.playing ? replay.speed : 1;
+    const step = dt * dtScale;
     for (const tr of this._tracers) {
       if (tr.t <= 0) continue;
-      tr.t -= dt;
+      tr.t -= step;
       if (tr.t <= 0) {
         tr.line.visible = false;
         tr.line.material.opacity = 0;
@@ -461,10 +466,13 @@ export class Viewmodel {
   }
 
   _updateImpactSparks(dt) {
+    const replay = this.engine.replayPlayer;
+    const dtScale = replay?.active && replay.playing ? replay.speed : 1;
+    const step = dt * dtScale;
     const cam = this.camera.position;
     for (const fx of this._impacts) {
       if (fx.t <= 0) continue;
-      fx.t -= dt;
+      fx.t -= step;
       const fade = Math.max(0, fx.t / SPARK_LIFE);
       if (fx.t <= 0) {
         fx.group.visible = false;
@@ -472,10 +480,10 @@ export class Viewmodel {
         continue;
       }
       for (const p of fx.parts) {
-        p.position.x += p.userData.vx * dt;
-        p.position.y += p.userData.vy * dt;
-        p.position.z += p.userData.vz * dt;
-        p.userData.vy -= 14 * dt;
+        p.position.x += p.userData.vx * step;
+        p.position.y += p.userData.vy * step;
+        p.position.z += p.userData.vz * step;
+        p.userData.vy -= 14 * step;
         p.material.opacity = fade * 0.95;
         p.lookAt(cam);
       }

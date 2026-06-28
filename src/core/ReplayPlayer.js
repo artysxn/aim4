@@ -17,6 +17,7 @@ export const REPLAY_SPEEDS = [0.125, 0.25, 0.5, 1, 2, 4];
 
 const _shotOrigin = new THREE.Vector3();
 const _shotEnd = new THREE.Vector3();
+const _shotNormal = new THREE.Vector3();
 
 function makeGeometry(d) {
   const p = d.params || {};
@@ -79,6 +80,7 @@ export class ReplayPlayer {
     this.time = 0; // seconds into the replay
     this.duration = 0;
     this._lastEventTick = -1;
+    this._sfx = null;
 
     this.onProgress = null; // ({ time, duration, playing, speed }) => void
     this.onEnd = null;
@@ -96,6 +98,7 @@ export class ReplayPlayer {
     this.time = 0;
     this._lastEventTick = -1;
     this._envSegmentIdx = -1;
+    this._sfx = null;
     this.speed = 1;
     this.playing = false;
 
@@ -200,6 +203,7 @@ export class ReplayPlayer {
     this.playing = true;
     // -1 so tick-0 shots/env still fire on the first advancing frame.
     this._lastEventTick = Math.floor(this.time * this.replay.tickRate) - 1;
+    this.engine.audio?.resume();
     this._emitProgress();
   }
 
@@ -209,6 +213,7 @@ export class ReplayPlayer {
   }
 
   togglePlay() {
+    this.engine.audio?.resume();
     this.playing ? this.pause() : this.play();
   }
 
@@ -223,6 +228,7 @@ export class ReplayPlayer {
     this.time = Math.max(0, Math.min(1, frac)) * this.duration;
     this._lastEventTick = Math.floor(this.time * this.replay.tickRate);
     this._clearTracers();
+    this._sfx = null;
     const tickFloat = this.time * this.replay.tickRate;
     this._applyEnvironmentAtTick(Math.floor(tickFloat));
     this._applyTick(tickFloat);
@@ -240,8 +246,9 @@ export class ReplayPlayer {
         if (this.onEnd) this.onEnd();
       }
       const tickFloat = this.time * this.replay.tickRate;
-      this._fireEventsUpTo(tickFloat);
       this._applyTick(tickFloat);
+      this._fireEventsUpTo(tickFloat);
+      this._updateReplayAudio(tickFloat, dt);
       this._emitProgress();
     }
   }
@@ -283,16 +290,81 @@ export class ReplayPlayer {
   _playShot(ev) {
     const vm = this.engine.viewmodel;
     const recoil = this.replay?.viewmodelRecoil !== false;
+
+    // Align the camera to the shot tick so muzzle sync matches the recording.
+    const cam = this.replay.sampleCamera(ev.t);
+    const camera = this.engine.camera;
+    camera.position.set(cam.px, cam.py, cam.pz);
+    camera.rotation.set(cam.pitch, cam.yaw, 0, 'YXZ');
+
+    const flags = decodeInput(cam.input);
+    const moving = flags.W || flags.A || flags.S || flags.D;
+    const motion = {
+      onGround: !flags.jump,
+      speedHoriz: moving ? PLAYER_RUN_SPEED : 0
+    };
+
     if (vm?.group.visible) {
+      vm.syncMuzzleForShot(motion);
       vm.fire({ recoil });
     }
-    if (ev.o && ev.e) {
-      vm?.spawnTracer(
-        _shotOrigin.set(ev.o[0], ev.o[1], ev.o[2]),
-        _shotEnd.set(ev.e[0], ev.e[1], ev.e[2])
-      );
+
+    if (ev.o?.length >= 3 && ev.e?.length >= 3) {
+      _shotOrigin.set(ev.o[0], ev.o[1], ev.o[2]);
+      _shotEnd.set(ev.e[0], ev.e[1], ev.e[2]);
+      if (_shotOrigin.distanceToSquared(_shotEnd) < 1e-8 && vm?.group.visible) {
+        vm.syncMuzzleForShot(motion);
+        vm.getMuzzlePosition(_shotOrigin);
+        _shotEnd.copy(_shotOrigin).add(
+          camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(120)
+        );
+      }
+      vm?.spawnTracer(_shotOrigin, _shotEnd);
+      if (ev.hit && ev.n?.length >= 3) {
+        vm?.spawnBulletImpact(
+          _shotEnd,
+          _shotNormal.set(ev.n[0], ev.n[1], ev.n[2]),
+          { decal: false }
+        );
+      }
     }
-    this.engine.audio?.playLocalShot();
+
+    const audio = this.engine.audio;
+    if (audio) {
+      audio._ensure();
+      audio.playLocalShot();
+    }
+  }
+
+  _updateReplayAudio(tickFloat, dt) {
+    const audio = this.engine.audio;
+    if (!audio || !this.replay) return;
+
+    const cam = this.replay.sampleCamera(tickFloat);
+    const flags = decodeInput(cam.input);
+    const moving = flags.W || flags.A || flags.S || flags.D;
+
+    if (!this._sfx) {
+      this._sfx = { input: cam.input, wasOnGround: true };
+    }
+    const sfx = this._sfx;
+    const prev = decodeInput(sfx.input);
+    const onGround = !flags.jump;
+
+    if (prev.jump !== flags.jump && flags.jump) {
+      audio.playLocalJump();
+    }
+
+    audio.updateLocalFootsteps(dt * this.speed, {
+      onGround: true,
+      crouchAmt: flags.crouch ? 1 : 0,
+      walkHeld: flags.walk,
+      spawnGrace: 0,
+      speedHoriz: moving ? PLAYER_RUN_SPEED : 0
+    });
+
+    sfx.input = cam.input;
+    sfx.wasOnGround = onGround;
   }
 
   _clearTracers() {
@@ -334,6 +406,7 @@ export class ReplayPlayer {
     this.replay = null;
     this.playing = false;
     this.time = 0;
+    this._sfx = null;
     this.engine.camera.position.set(0, EYE_HEIGHT, 0);
     this.engine.camera.rotation.set(0, 0, 0, 'YXZ');
   }

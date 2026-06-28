@@ -351,6 +351,14 @@ export class SettingsManager {
     this._emit();
   }
 
+  /** Merge replay-file settings with optional shared-row metadata (file wins). */
+  mergeReplaySettings(fromReplay, fromMeta) {
+    const patch = {};
+    Object.assign(patch, this._replaySettingsPatch(fromMeta));
+    Object.assign(patch, this._replaySettingsPatch(fromReplay));
+    return patch;
+  }
+
   /** Restore the viewer's settings after replay playback ends. */
   endReplayView() {
     if (!this._replayBackup) return;
@@ -368,6 +376,11 @@ export class SettingsManager {
     if (rs.resolutionHeight != null) patch.resolutionHeight = rs.resolutionHeight;
     if (rs.colors) patch.colors = structuredClone(rs.colors);
     if (rs.crosshair) patch.crosshair = structuredClone(rs.crosshair);
+    if (rs.viewmodel) patch.viewmodel = structuredClone(rs.viewmodel);
+    if (rs.weapon) {
+      patch.weapon = structuredClone(this.data?.weapon || {});
+      if (rs.weapon.aimpunch != null) patch.weapon.aimpunch = rs.weapon.aimpunch;
+    }
     return patch;
   }
 
