@@ -4,14 +4,25 @@
 // ---------------------------------------------------------------------------
 
 import { STAND_EYE } from '../multiplayer/constants.js';
+import { UNIT } from './SourceMovement.js';
 
 const EPS = 1e-6;
+
+/** Full run speed for player movement scaling (210 Source units/s). */
+export const PLAYER_RUN_SPEED = 210 * UNIT;
 
 /** Bot hit odds scale: 1.0 at rest, 0.5 at half max speed, 1/3 at full speed. */
 export function movementHitScale(speed, maxSpeed) {
   if (maxSpeed <= 1e-6) return 1;
   const ratio = Math.min(1, Math.max(0, speed / maxSpeed));
   return 1 / (1 + 2 * ratio);
+}
+
+/** Extra bot reaction delay (s): 50ms at rest → 150ms at full run speed. */
+export function movementReactionDelay(speed, maxSpeed = PLAYER_RUN_SPEED) {
+  if (maxSpeed <= 1e-6) return 0.05;
+  const ratio = Math.min(1, Math.max(0, speed / maxSpeed));
+  return 0.05 + 0.1 * ratio;
 }
 
 /** FPS forward vector from yaw/pitch (matches InputManager / Three.js YXZ). */

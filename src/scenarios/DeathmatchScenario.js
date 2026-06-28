@@ -23,7 +23,7 @@ import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEATHMATCH_MAP, deathmatchExtent } from './deathmatchMap.js';
 import { eyeOffset, HEAD_R, HEAD_OFFSET, SPAWN_GRACE } from '../multiplayer/constants.js';
-import { pickSpawnPreferHidden, movementHitScale, isPointVisible } from '../utils/spawnVisibility.js';
+import { pickSpawnPreferHidden, movementHitScale, movementReactionDelay, isPointVisible } from '../utils/spawnVisibility.js';
 import { worldImpactNormal } from '../utils/bulletImpact.js';
 import {
   DM_DEATH_FX_DUR,
@@ -296,7 +296,9 @@ export class DeathmatchScenario extends BaseScenario {
       fireTimer: randRange(0, SHOT_INTERVAL),
       spawnGrace: SPAWN_GRACE,
       sneakFireDelay: 0,
-      sneakTargetKey: null
+      sneakTargetKey: null,
+      hadPlayerLos: false,
+      playerReactDelay: 0
     };
     this.bots.push(bot);
     target.object.position.set(bot.pos.x, bot.footY, bot.pos.z);
@@ -579,6 +581,7 @@ export class DeathmatchScenario extends BaseScenario {
 
       const shootTarget = this._pickShootTarget(bot);
       const hasLos = !!shootTarget;
+      const engagingPlayer = shootTarget?.type === 'player';
       const tx = shootTarget?.x ?? px;
       const tz = shootTarget?.z ?? pz;
       const dx = tx - bot.pos.x;
@@ -619,7 +622,21 @@ export class DeathmatchScenario extends BaseScenario {
           bot.sneakFireDelay = Math.max(0, bot.sneakFireDelay - dt);
         }
 
-        const mayFire = targetSeesMe || bot.sneakFireDelay <= 0;
+        if (engagingPlayer) {
+          if (!bot.hadPlayerLos) {
+            const p = this.engine.player;
+            const speed = p?.enabled ? Math.hypot(p.vel.x, p.vel.z) : 0;
+            bot.playerReactDelay = movementReactionDelay(speed);
+            bot.hadPlayerLos = true;
+          }
+          bot.playerReactDelay = Math.max(0, bot.playerReactDelay - dt);
+        } else {
+          bot.hadPlayerLos = false;
+          bot.playerReactDelay = 0;
+        }
+
+        const mayFire = (targetSeesMe || bot.sneakFireDelay <= 0)
+          && (!engagingPlayer || bot.playerReactDelay <= 0);
         bot.fireTimer -= dt;
         if (mayFire && bot.fireTimer <= 0) {
           bot.fireTimer = SHOT_INTERVAL;
@@ -628,6 +645,8 @@ export class DeathmatchScenario extends BaseScenario {
       } else {
         bot.sneakFireDelay = 0;
         bot.sneakTargetKey = null;
+        bot.hadPlayerLos = false;
+        bot.playerReactDelay = 0;
         bot.repathTimer -= dt;
         if (!bot.goal || bot.repathTimer <= 0) {
           this._pickWanderGoal(bot);

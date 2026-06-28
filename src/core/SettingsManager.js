@@ -343,6 +343,7 @@ export class SettingsManager {
   }
 
   undoDraft() {
+    if (this._exploreMode) return false;
     if (!this._undoStack.length || !this.draft) return false;
     this.draft = this._undoStack.pop();
     this._emitDraft();
@@ -350,6 +351,7 @@ export class SettingsManager {
   }
 
   resetDraft() {
+    if (this._exploreMode) return;
     if (!this.draft) this.openDraft();
     this.recordUndo();
     this.draft = structuredClone(DEFAULTS);

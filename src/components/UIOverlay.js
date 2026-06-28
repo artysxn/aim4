@@ -11,7 +11,6 @@
 import { RESOLUTIONS, clampResolutionDim } from '../core/SettingsManager.js';
 import { SCENARIOS } from '../core/SceneManager.js';
 import * as Storage from '../utils/Storage.js';
-import { exportConfig, importConfig, copyText, normalizeCode } from '../utils/ConfigCodes.js';
 import {
   fetchLeaderboardWithMeta,
   fetchEloLeaderboardWithMeta,
@@ -176,6 +175,7 @@ export class UIOverlay {
     this.input.onUnlockedClick = () => this._onUnlockedClick();
     this.sceneManager.onFinish = (results) => this._onFinish(results);
     this._bindReplay();
+    this._bindFullscreenTip();
 
     // Shared link: ?lobby=CODE opens multiplayer and auto-joins if there's space.
     if (this.mp.urlLobbyCode()) {
@@ -214,15 +214,10 @@ export class UIOverlay {
   _globalSettingsSections(resOptions) {
     return [
       {
-        id: 'mouse',
-        label: 'Mouse',
-        body: `
-          ${numField('set-sensitivity', 'Sensitivity', '0.001')}`
-      },
-      {
         id: 'display',
         label: 'Game settings',
         body: `
+          ${numField('set-sensitivity', 'Sensitivity', '0.001')}
           ${rf('set-fov', 'Horizontal FOV (°)', 60, 130, 1)}
           <div class="field field-plain">
             <div class="field-top">
@@ -241,14 +236,21 @@ export class UIOverlay {
             </div>
           </div>
           ${numField('set-dur', 'Run duration (s)', '1')}
-          <label class="field-check"><input type="checkbox" id="set-raw" /> Raw input (no OS acceleration)</label>`
+          <label class="field-check"><input type="checkbox" id="set-raw" /> Raw input (no OS acceleration)</label>
+          ${colorRow('set-col-bg', 'Background')}
+          ${colorRow('set-col-floor', 'Floor')}
+          ${colorRow('set-col-ebody', 'Enemy body')}
+          ${colorRow('set-col-ehead', 'Enemy head')}
+          ${colorRow('set-col-cover', 'Cover / columns')}
+          ${colorRow('set-col-target', 'Gridshot target')}
+          <button type="button" class="btn btn-block" data-reset-colors>Reset colors</button>`
       },
       {
         id: 'crosshair',
         label: 'Crosshair',
         body: `
           <div class="xh-preview">
-            <canvas id="xh-preview-canvas" width="180" height="180"></canvas>
+            <canvas id="xh-preview-canvas" width="216" height="216"></canvas>
           </div>
           <div class="color-row">
             <span>Color</span>
@@ -279,38 +281,7 @@ export class UIOverlay {
           <label class="field-check"><input type="checkbox" id="set-vm-bob" /> Weapon bob while moving</label>
           <label class="field-check"><input type="checkbox" id="set-vm-aimpunch" /> Aimpunch (view-punch recoil)</label>`
       },
-      {
-        id: 'colors',
-        label: 'Colors',
-        body: `
-          ${colorRow('set-col-bg', 'Background')}
-          ${colorRow('set-col-floor', 'Floor')}
-          ${colorRow('set-col-ebody', 'Enemy body')}
-          ${colorRow('set-col-ehead', 'Enemy head')}
-          ${colorRow('set-col-cover', 'Cover / columns')}
-          ${colorRow('set-col-target', 'Gridshot target')}
-          <button type="button" class="btn btn-block" data-reset-colors>Reset colors</button>`
-      },
-      {
-        id: 'share',
-        label: 'Share',
-        body: `
-          <div class="field field-plain">
-            <div class="field-top">
-              <span class="field-label">Settings code</span>
-            </div>
-            <input type="text" id="set-config-code" class="config-code-input" placeholder="AIM4-XXXX-YYYY-ZZZZ-000000" spellcheck="false" autocomplete="off" />
-          </div>
-          <div class="config-actions">
-            <button type="button" class="btn" id="btn-config-import">Import</button>
-            <button type="button" class="btn primary" id="btn-config-export">Export</button>
-          </div>
-          <div class="config-export-box" id="config-export-box" hidden>
-            <code class="config-export-code" id="config-export-code"></code>
-            <button type="button" class="btn btn-block" id="btn-config-copy">Copy to clipboard</button>
-          </div>
-          <p class="readout" id="config-status"></p>`
-      }
+
     ];
   }
 
@@ -617,6 +588,13 @@ export class UIOverlay {
           </div>
         </div>
       </div>
+      <section class="menu-fullscreen-tip" id="menu-fullscreen-tip" aria-label="Fullscreen recommendation">
+        <p class="menu-fullscreen-tip-title">Play in fullscreen</p>
+        <p class="menu-fullscreen-tip-text">
+          Press <kbd>F11</kbd> to enter fullscreen. In a normal browser window, shortcuts like
+          <kbd>Ctrl</kbd>+<kbd>W</kbd> can close the tab while you are aiming.
+        </p>
+      </section>
     </div>
 
     <!-- MULTIPLAYER (matchmaking + custom games) -->
@@ -696,11 +674,6 @@ export class UIOverlay {
           </nav>
           <div class="settings-bar-actions">
             <span class="settings-explore-banner muted" id="settings-explore-banner" hidden>Viewing <strong id="settings-explore-name"></strong>'s settings</span>
-            <div class="settings-explore-actions" id="settings-explore-actions" hidden>
-              <button type="button" class="btn" id="settings-copy-code-btn">Copy config code</button>
-              <button type="button" class="btn primary" id="settings-apply-user-btn">Apply to my settings</button>
-              <button type="button" class="btn" id="settings-explore-back-btn">Back</button>
-            </div>
             <div class="settings-edit-actions" id="settings-edit-actions">
             <span class="settings-unsaved-hint muted" id="settings-unsaved-hint" hidden>Unsaved changes</span>
             <button type="button" class="btn" id="settings-undo-btn" disabled>Undo</button>
@@ -1040,10 +1013,12 @@ export class UIOverlay {
       else if (t.hasAttribute('data-quit')) this.quit();
       else if (t.hasAttribute('data-restart')) this.play(this.currentScenario, this.scenarioConfig);
       else if (t.hasAttribute('data-reset')) {
+        if (this._settingsExploreMode || this.settings.isExploreMode) return;
         this.settings.resetDraft();
         this._populateSettings();
         this._updateSettingsBar();
       } else if (t.hasAttribute('data-reset-colors')) {
+        if (this._settingsExploreMode || this.settings.isExploreMode) return;
         this.settings.resetColorsDraft();
         this._populateSettings();
         this._updateSettingsBar();
@@ -1071,7 +1046,6 @@ export class UIOverlay {
     this._bindSettingsTabs();
     this._bindScenarioSettings();
     this._bindPauseMenu();
-    this._bindConfigShare();
   }
 
   _bindSettingsTabs() {
@@ -1118,10 +1092,16 @@ export class UIOverlay {
   }
 
   _updateSettingsBar() {
+    const explore = this._settingsExploreMode || this.settings.isExploreMode;
     const undoBtn = this.root.querySelector('#settings-undo-btn');
+    const resetBtn = this.root.querySelector('[data-reset]');
     const hint = this.root.querySelector('#settings-unsaved-hint');
-    if (undoBtn) undoBtn.disabled = !this.settings.canUndoDraft();
-    if (hint) hint.hidden = !this.settings.hasDraftChanges();
+    if (undoBtn) {
+      undoBtn.disabled = !this.settings.canUndoDraft();
+      undoBtn.hidden = explore;
+    }
+    if (resetBtn) resetBtn.hidden = explore;
+    if (hint) hint.hidden = explore || !this.settings.hasDraftChanges();
     this._updateScenarioSettingsBar();
   }
 
@@ -1441,15 +1421,13 @@ export class UIOverlay {
     this._bindRange('set-tracking-strafe', (v, d) => { d.tracking.strafeRate = v; });
 
     $('#settings-undo-btn')?.addEventListener('click', () => {
+      if (this._settingsExploreMode || this.settings.isExploreMode) return;
       if (s.undoDraft()) {
         this._populateSettings();
         this._updateSettingsBar();
       }
     });
     $('#settings-done-btn')?.addEventListener('click', () => this._closeSettings());
-    $('#settings-explore-back-btn')?.addEventListener('click', () => this._closeSettingsExplore());
-    $('#settings-apply-user-btn')?.addEventListener('click', () => this._applyExploredSettings());
-    $('#settings-copy-code-btn')?.addEventListener('click', () => this._copyExploredSettingsCode());
   }
 
   _bindPauseMenu() {
@@ -1535,52 +1513,10 @@ export class UIOverlay {
     const layout = this.root.querySelector('.settings-layout');
     layout?.classList.toggle('is-explore', on);
     const banner = this.root.querySelector('#settings-explore-banner');
-    const exploreActions = this.root.querySelector('#settings-explore-actions');
-    const editActions = this.root.querySelector('#settings-edit-actions');
     const nameEl = this.root.querySelector('#settings-explore-name');
     if (banner) banner.hidden = !on;
-    if (exploreActions) exploreActions.hidden = !on;
-    if (editActions) editActions.hidden = on;
     if (nameEl && on) nameEl.textContent = this._settingsExploreUser || 'Player';
-  }
-
-  async _applyExploredSettings() {
-    if (!this._settingsExplorePayload) return;
-    try {
-      this.settings.applyPayload(this._settingsExplorePayload);
-      this.settings.save();
-      this._closeSettingsExplore();
-      const st = this.root.querySelector('#account-profile-status-other');
-      if (st) {
-        st.textContent = 'Settings applied to your account.';
-        st.classList.remove('is-error');
-      }
-    } catch (e) {
-      const st = this.root.querySelector('#settings-explore-banner');
-      if (st) {
-        st.textContent = e.message || 'Could not apply settings.';
-        st.classList.add('is-error');
-      }
-    }
-  }
-
-  async _copyExploredSettingsCode() {
-    if (!this._settingsExplorePayload) return;
-    try {
-      const code = await exportConfig(this._settingsExplorePayload);
-      await copyText(code);
-      const banner = this.root.querySelector('#settings-explore-banner');
-      if (banner) {
-        banner.textContent = 'Config code copied.';
-        banner.classList.remove('is-error');
-      }
-    } catch (e) {
-      const banner = this.root.querySelector('#settings-explore-banner');
-      if (banner) {
-        banner.textContent = e.message || 'Copy failed.';
-        banner.classList.add('is-error');
-      }
-    }
+    this._updateSettingsBar();
   }
 
   _updatePauseMenu() {
@@ -2801,63 +2737,6 @@ export class UIOverlay {
     this.showScreen('mp');
   }
 
-  _bindConfigShare() {
-    const $ = (id) => this.root.querySelector(id);
-    const status = $('#config-status');
-    const codeIn = $('#set-config-code');
-    const exportBox = $('#config-export-box');
-    const exportCode = $('#config-export-code');
-
-    const setStatus = (msg, ok = true) => {
-      status.textContent = msg;
-      status.classList.toggle('is-error', !ok);
-    };
-
-    const doImport = async () => {
-      try {
-        setStatus('…');
-        const settings = await importConfig(codeIn.value);
-        this.settings.applyPayload(settings);
-        this._populateSettings();
-        setStatus('OK');
-      } catch (e) {
-        setStatus(e.message || 'Failed', false);
-      }
-    };
-
-    $('#btn-config-import').addEventListener('click', doImport);
-    codeIn.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') doImport();
-    });
-    codeIn.addEventListener('blur', () => {
-      if (codeIn.value.trim()) codeIn.value = normalizeCode(codeIn.value);
-    });
-
-    $('#btn-config-export').addEventListener('click', async () => {
-      try {
-        setStatus('…');
-        const code = await exportConfig(this.settings.getExportPayload());
-        exportCode.textContent = code;
-        exportBox.hidden = false;
-        codeIn.value = code;
-        setStatus('OK');
-      } catch (e) {
-        setStatus(e.message || 'Failed', false);
-      }
-    });
-
-    $('#btn-config-copy').addEventListener('click', async () => {
-      const code = exportCode.textContent;
-      if (!code) return;
-      try {
-        await copyText(code);
-        setStatus('Copied');
-      } catch {
-        setStatus('Failed', false);
-      }
-    });
-  }
-
   _syncResolutionCustomUi() {
     const custom = this.root.querySelector('#set-res-custom');
     const sel = this.root.querySelector('#set-res');
@@ -3034,7 +2913,30 @@ export class UIOverlay {
     // Hide the system cursor only while actively playing — when paused (Esc),
     // the cursor must reappear so the menu is clickable.
     document.body.classList.toggle('in-run', inRun);
-    if (name === 'menu') this.refreshAccountBar();
+    if (name === 'menu') {
+      this.refreshAccountBar();
+      this._updateFullscreenTip();
+    }
+  }
+
+  _isFullscreen() {
+    if (document.fullscreenElement || document.webkitFullscreenElement) return true;
+    const h = screen.availHeight ?? screen.height;
+    const w = screen.availWidth ?? screen.width;
+    return window.innerHeight >= h - 2 && window.innerWidth >= w - 2;
+  }
+
+  _updateFullscreenTip() {
+    const tip = this.root.querySelector('#menu-fullscreen-tip');
+    if (tip) tip.hidden = this._isFullscreen();
+  }
+
+  _bindFullscreenTip() {
+    const update = () => this._updateFullscreenTip();
+    document.addEventListener('fullscreenchange', update);
+    document.addEventListener('webkitfullscreenchange', update);
+    window.addEventListener('resize', update);
+    update();
   }
 
   /** Singleplayer competitive runs wait briefly before the timer starts. */

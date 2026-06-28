@@ -18,6 +18,39 @@ function deriveEcHalf(map, enemyPos) {
   return best ? best.size[0] / 2 : DEFAULT_EC_HALF;
 }
 
+export function flipDuelsArena(arena) {
+  const out = structuredClone(arena);
+  const oldPlayer = out.player;
+  const oldEnemy = out.enemy;
+  const enemyPos = [oldEnemy.x, oldEnemy.y ?? 0, oldEnemy.z];
+
+  out.player = {
+    pos: [...enemyPos],
+    yaw: yawToward(enemyPos, oldPlayer.pos),
+    half: oldPlayer.half ?? null
+  };
+  out.enemy = {
+    x: oldPlayer.pos[0],
+    z: oldPlayer.pos[2],
+    y: oldPlayer.pos[1] ?? 0
+  };
+
+  if (out.boxes) {
+    for (const box of out.boxes) {
+      if (box.role === 'player') box.role = 'enemy';
+      else if (box.role === 'enemy') box.role = 'player';
+    }
+  }
+
+  if (out.peekSide != null) out.peekSide = -out.peekSide;
+  return out;
+}
+
+export function applyDuelsSide(arena, offensive = false) {
+  if (offensive) return flipDuelsArena(arena);
+  return structuredClone(arena);
+}
+
 export function arenaFromMpMap(map) {
   const playerSpawn = spawnFor(map, 'A');
   const enemySpawn = spawnFor(map, 'B');

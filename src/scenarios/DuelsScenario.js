@@ -26,18 +26,20 @@ import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
 import { randRange, randInt, clamp, lerp, degToRad } from '../utils/MathUtils.js';
-import { SourceMover1D, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
+import { SourceMover1D, srcFriction, srcAccelerate, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
+import { resolveBoxCollisions, groundHeightAt } from '../utils/BoxCollision.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { markBulletDecalSurface, worldImpactNormal } from '../utils/bulletImpact.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
-import { movementHitScale, isPointVisible } from '../utils/spawnVisibility.js';
+import { movementHitScale, movementReactionDelay, isPointVisible } from '../utils/spawnVisibility.js';
 import { SHOT_INTERVAL } from '../weapons/ak47.js';
 import {
   getDuelsArenaPool,
   resolveDuelsArenaChoice,
-  duelsArenaConfigKey
+  duelsArenaConfigKey,
+  applyDuelsSide
 } from './duelsArenas.js';
 import { mapExtent } from '../multiplayer/maps.js';
 import { DEATH_OVERLAY_STRENGTH } from './deathFx.js';
@@ -57,6 +59,15 @@ const _losRay = new THREE.Raycaster();
 const MAX_PITCH = degToRad(89);
 const PLAYER_HP = 2;
 const BACKSHOT_FIRE_DELAY = 1.0;
+
+/** Offensive duel bot — deathmatch-style open fight (no peek/jiggle). */
+const OFF_ENGAGE_RANGE = 22;
+const OFF_DESIRED_RANGE = 9;
+const OFF_STRAFE_MIN = 0.18;
+const OFF_STRAFE_MAX = 0.5;
+const OFF_REPATH_MIN = 1.2;
+const OFF_REPATH_MAX = 3.0;
+const OFF_CROUCH_RATE = 10;
 
 // Each arena: where the player spawns + how far they may roam, where the enemy
 // lives, and the boxes (all of which occlude). `ecHalf` is the half-width of the
@@ -320,7 +331,8 @@ export class DuelsScenario extends BaseScenario {
     const choice = this.config.arena ?? d.arena;
     const resolved = resolveDuelsArenaChoice(ARENAS, choice);
     this.arenaIndex = resolved.index;
-    this.arena = resolved.arena;
+    this._baseArena = resolved.arena;
+    this.offensive = false;
 
     const preset = this.competitive ? competitivePresetFor('duels') : null;
     this._ttk = this.config.ttk ?? preset?.ttk ?? d.ttk ?? 0.5;
@@ -334,7 +346,6 @@ export class DuelsScenario extends BaseScenario {
     this._arenaObjects = [];
     this.coverMeshes = [];
     this.enemy = null;
-    this._buildArena();
   }
 
   get name() {
@@ -414,15 +425,12 @@ export class DuelsScenario extends BaseScenario {
     }
   }
 
-  _switchArena() {
-    this.engine.viewmodel?.clearBulletDecals();
-    const pool = getDuelsArenaPool(ARENAS);
-    let newIdx;
-    do { newIdx = randInt(0, pool.length - 1); } while (newIdx === this.arenaIndex && pool.length > 1);
-    this.arenaIndex = newIdx;
-    this.arena = pool[newIdx];
+  _beginDuelRound({ recordEnv = false } = {}) {
+    this.offensive = Math.random() < 0.5;
+    this.arena = applyDuelsSide(this._baseArena, this.offensive);
     this._buildArena();
-    this.engine.replayRecorder?.recordEnvironmentChange();
+    if (recordEnv) this.engine.replayRecorder?.recordEnvironmentChange();
+    this._playerHp = PLAYER_HP;
     const a = this.arena;
     this.engine.player.spawn({
       pos: a.player.pos,
@@ -430,6 +438,16 @@ export class DuelsScenario extends BaseScenario {
       bounds: this._playerBounds(a),
       colliders: this._colliderBoxes(a)
     });
+  }
+
+  _switchArena() {
+    this.engine.viewmodel?.clearBulletDecals();
+    const pool = getDuelsArenaPool(ARENAS);
+    let newIdx;
+    do { newIdx = randInt(0, pool.length - 1); } while (newIdx === this.arenaIndex && pool.length > 1);
+    this.arenaIndex = newIdx;
+    this._baseArena = pool[newIdx];
+    this._beginDuelRound({ recordEnv: true });
   }
 
   // ---- Bot ---------------------------------------------------------------
@@ -466,6 +484,7 @@ export class DuelsScenario extends BaseScenario {
   }
 
   _spawnEnemy() {
+    if (this.offensive) return this._spawnOffensiveEnemy();
     const target = this._buildBot();
     this.addTarget(target);
     const mover = new SourceMover1D();
@@ -490,6 +509,8 @@ export class DuelsScenario extends BaseScenario {
       fireTimer: randRange(0, SHOT_INTERVAL),
       sneakFireDelay: 0,
       sneakTargetKey: null,
+      hadPlayerLos: false,
+      playerReactDelay: 0,
       headHit: this._botHeadHitBase,
       bodyHit: this._botBodyHitBase
     };
@@ -499,6 +520,230 @@ export class DuelsScenario extends BaseScenario {
       this.enemy.bodyHit = this._botBodyHitBase + ramp;
     }
     this._placeEnemy(0);
+  }
+
+  _spawnOffensiveEnemy() {
+    const target = this._buildBot();
+    this.addTarget(target);
+    const a = this.arena;
+    this._playerHp = PLAYER_HP;
+    this.enemy = {
+      target,
+      pos: { x: a.enemy.x, z: a.enemy.z },
+      vel: { x: 0, z: 0 },
+      footY: a.enemy.y ?? 0,
+      hp: 2,
+      crouch: 0,
+      crouchWant: 0,
+      strafeDir: Math.random() < 0.5 ? -1 : 1,
+      strafeTimer: randRange(OFF_STRAFE_MIN, OFF_STRAFE_MAX),
+      goal: null,
+      repathTimer: 0,
+      stuckAccum: 0,
+      stuckBias: 0,
+      stuckDir: 1,
+      fireTimer: randRange(0, SHOT_INTERVAL),
+      sneakFireDelay: 0,
+      sneakTargetKey: null,
+      hadPlayerLos: false,
+      playerReactDelay: 0,
+      headHit: this._botHeadHitBase,
+      bodyHit: this._botBodyHitBase
+    };
+    if (this.competitive) {
+      const ramp = this.kills * this._botHitRamp;
+      this.enemy.headHit = this._botHeadHitBase + ramp;
+      this.enemy.bodyHit = this._botBodyHitBase + ramp;
+    }
+    this._syncOffensiveBotTransform();
+  }
+
+  _offensiveBounds() {
+    const a = this.arena;
+    if (a.bounds) return a.bounds;
+    const cx = (a.player.pos[0] + a.enemy.x) / 2;
+    const cz = (a.player.pos[2] + a.enemy.z) / 2;
+    return {
+      minX: cx - DUELS_MOVE_HALF,
+      maxX: cx + DUELS_MOVE_HALF,
+      minZ: cz - DUELS_MOVE_HALF,
+      maxZ: cz + DUELS_MOVE_HALF
+    };
+  }
+
+  _syncOffensiveBotTransform() {
+    const e = this.enemy;
+    if (!e) return;
+    e.target.object.position.set(e.pos.x, e.footY, e.pos.z);
+  }
+
+  _moveOffensiveBot(e, wishX, wishZ, max, dt) {
+    const len = Math.hypot(wishX, wishZ);
+    if (len > 0) {
+      wishX /= len;
+      wishZ /= len;
+    }
+    srcFriction(e.vel, dt, len > 0 ? max : 0);
+    if (len > 0) srcAccelerate(e.vel, wishX, wishZ, max, dt);
+
+    e.pos.x += e.vel.x * dt;
+    e.pos.z += e.vel.z * dt;
+
+    const b = this._offensiveBounds();
+    e.pos.x = clamp(e.pos.x, b.minX + BODY_R, b.maxX - BODY_R);
+    e.pos.z = clamp(e.pos.z, b.minZ + BODY_R, b.maxZ - BODY_R);
+
+    e.footY = groundHeightAt(e.pos.x, e.pos.z, this._colliderBoxes(this.arena), e.footY, 0);
+    resolveBoxCollisions(e.pos, e.vel, e.footY, e.crouch, this._colliderBoxes(this.arena));
+  }
+
+  _pickOffensiveWanderGoal(e) {
+    const b = this._offensiveBounds();
+    const px = this.camera.position.x;
+    const pz = this.camera.position.z;
+    for (let i = 0; i < 8; i++) {
+      const t = Math.random();
+      const gx = lerp(e.pos.x, px, t) + randRange(-8, 8);
+      const gz = lerp(e.pos.z, pz, t) + randRange(-8, 8);
+      e.goal = {
+        x: clamp(gx, b.minX + BODY_R, b.maxX - BODY_R),
+        z: clamp(gz, b.minZ + BODY_R, b.maxZ - BODY_R)
+      };
+      return;
+    }
+    e.goal = { x: px, z: pz };
+  }
+
+  _rollOffensiveBotCrouch(e) {
+    if (e.crouchWant) {
+      if (Math.random() < 0.66) e.crouchWant = 0;
+    } else if (Math.random() < 0.33) {
+      e.crouchWant = 1;
+    }
+  }
+
+  _updateOffensiveEnemy(dt) {
+    const e = this.enemy;
+    if (!e || e.target.state === 'dying') return;
+
+    const max = RUN_SPEED;
+    const px = this.camera.position.x;
+    const py = this.camera.position.y;
+    const pz = this.camera.position.z;
+    const prevX = e.pos.x;
+    const prevZ = e.pos.z;
+
+    const hasLos = this._botHeadHasLos(e);
+    const dx = px - e.pos.x;
+    const dz = pz - e.pos.z;
+    const dist = Math.hypot(dx, dz) || 1e-4;
+    const dirX = dx / dist;
+    const dirZ = dz / dist;
+
+    let wishX = 0;
+    let wishZ = 0;
+    let engaged = false;
+
+    if (hasLos && dist < OFF_ENGAGE_RANGE && this.engine.player?.enabled) {
+      engaged = true;
+      e.strafeTimer -= dt;
+      if (e.strafeTimer <= 0) {
+        e.strafeDir = -e.strafeDir;
+        e.strafeTimer = randRange(OFF_STRAFE_MIN, OFF_STRAFE_MAX);
+      }
+      const perpX = -dirZ;
+      const perpZ = dirX;
+      wishX = perpX * e.strafeDir;
+      wishZ = perpZ * e.strafeDir;
+      const rangeErr = clamp(dist - OFF_DESIRED_RANGE, -1, 1);
+      wishX += dirX * rangeErr * 0.85;
+      wishZ += dirZ * rangeErr * 0.85;
+      e.goal = null;
+
+      if (!e.hadPlayerLos) {
+        const p = this.engine.player;
+        const speed = p?.enabled ? Math.hypot(p.vel.x, p.vel.z) : 0;
+        e.playerReactDelay = movementReactionDelay(speed);
+        e.hadPlayerLos = true;
+      }
+      e.playerReactDelay = Math.max(0, e.playerReactDelay - dt);
+
+      const playerSeesBot = this._playerSeesBot(e);
+      if (playerSeesBot) {
+        e.sneakFireDelay = 0;
+        e.sneakTargetKey = 'player';
+      } else if (e.sneakTargetKey !== 'player') {
+        e.sneakTargetKey = 'player';
+        e.sneakFireDelay = BACKSHOT_FIRE_DELAY;
+      } else {
+        e.sneakFireDelay = Math.max(0, e.sneakFireDelay - dt);
+      }
+
+      const mayFire = (playerSeesBot || e.sneakFireDelay <= 0) && e.playerReactDelay <= 0;
+      e.fireTimer -= dt;
+      if (mayFire && e.fireTimer <= 0) {
+        e.fireTimer = SHOT_INTERVAL;
+        this._duelBotFire(e);
+        this._rollOffensiveBotCrouch(e);
+      }
+    } else {
+      e.sneakFireDelay = 0;
+      e.sneakTargetKey = null;
+      e.hadPlayerLos = false;
+      e.playerReactDelay = 0;
+      e.repathTimer -= dt;
+      if (!e.goal || e.repathTimer <= 0) {
+        this._pickOffensiveWanderGoal(e);
+        e.repathTimer = randRange(OFF_REPATH_MIN, OFF_REPATH_MAX);
+      }
+      let gx = e.goal.x - e.pos.x;
+      let gz = e.goal.z - e.pos.z;
+      const glen = Math.hypot(gx, gz) || 1e-4;
+      gx /= glen;
+      gz /= glen;
+      if (e.stuckBias > 0) {
+        const baseX = gx;
+        const baseZ = gz;
+        gx = baseX - baseZ * e.stuckDir * 1.3;
+        gz = baseZ + baseX * e.stuckDir * 1.3;
+        e.stuckBias -= dt;
+      }
+      wishX = gx;
+      wishZ = gz;
+      if (glen < 1.0) e.goal = null;
+    }
+
+    this._moveOffensiveBot(e, wishX, wishZ, max, dt);
+
+    if (!engaged) {
+      const moved = Math.hypot(e.pos.x - prevX, e.pos.z - prevZ);
+      if (moved < max * dt * 0.3) {
+        e.stuckAccum += dt;
+        if (e.stuckAccum > 0.3) {
+          e.stuckBias = 0.6;
+          e.stuckDir = Math.random() < 0.5 ? -1 : 1;
+          e.stuckAccum = 0;
+          e.goal = null;
+        }
+      } else {
+        e.stuckAccum = 0;
+      }
+    }
+
+    e.crouch = clamp(
+      e.crouch + (e.crouchWant - e.crouch) * Math.min(1, OFF_CROUCH_RATE * dt),
+      0,
+      1
+    );
+    if (e.target.rig) e.target.rig.scale.y = lerp(1, 0.55, e.crouch);
+    if (e.target.headMesh) {
+      e.target.headMesh.position.y = BODY_H * lerp(1, 0.55, e.crouch) + HEAD_R + HEAD_OFFSET;
+    }
+
+    this._syncOffensiveBotTransform();
+    e.target.object.lookAt(px, py, pz);
+    e.hasLos = hasLos;
+    this._updateBotFootsteps(e, dt);
   }
 
   /** Position the live bot at lateral offset `s` from its home column. */
@@ -676,20 +921,18 @@ export class DuelsScenario extends BaseScenario {
 
   // ---- Round flow --------------------------------------------------------
   onStart() {
-    this._playerHp = PLAYER_HP;
-    const a = this.arena;
-    this.engine.player.spawn({
-      pos: a.player.pos,
-      yaw: a.player.yaw,
-      bounds: this._playerBounds(a),
-      colliders: this._colliderBoxes(a)
-    });
+    this._beginDuelRound();
     this._spawnEnemy();
   }
 
   onUpdate(dt) {
     const e = this.enemy;
     if (!e) return;
+
+    if (this.offensive) {
+      this._updateOffensiveEnemy(dt);
+      return;
+    }
 
     // Crouch animation (rig scales down from the feet).
     const want = e.phase === 'hold' ? e.crouchWant || 0 : 0;
@@ -760,6 +1003,14 @@ export class DuelsScenario extends BaseScenario {
 
     if (this.competitive) {
       if (hasLos && this.engine.player?.enabled) {
+        if (!e.hadPlayerLos) {
+          const p = this.engine.player;
+          const speed = p?.enabled ? Math.hypot(p.vel.x, p.vel.z) : 0;
+          e.playerReactDelay = movementReactionDelay(speed);
+          e.hadPlayerLos = true;
+        }
+        e.playerReactDelay = Math.max(0, e.playerReactDelay - dt);
+
         const playerSeesBot = this._playerSeesBot(e);
         if (playerSeesBot) {
           e.sneakFireDelay = 0;
@@ -770,7 +1021,7 @@ export class DuelsScenario extends BaseScenario {
         } else {
           e.sneakFireDelay = Math.max(0, e.sneakFireDelay - dt);
         }
-        const mayFire = playerSeesBot || e.sneakFireDelay <= 0;
+        const mayFire = (playerSeesBot || e.sneakFireDelay <= 0) && e.playerReactDelay <= 0;
         e.fireTimer -= dt;
         if (mayFire && e.fireTimer <= 0) {
           e.fireTimer = SHOT_INTERVAL;
@@ -779,10 +1030,16 @@ export class DuelsScenario extends BaseScenario {
       } else {
         e.sneakFireDelay = 0;
         e.sneakTargetKey = null;
+        e.hadPlayerLos = false;
+        e.playerReactDelay = 0;
       }
     } else {
       // Practice: legacy TTK once the bot's head can see the player.
-      if (hasLos && !e.wasLos) e.exposedTimer = this._ttk;
+      if (hasLos && !e.wasLos) {
+        const p = this.engine.player;
+        const speed = p?.enabled ? Math.hypot(p.vel.x, p.vel.z) : 0;
+        e.exposedTimer = this._ttk + movementReactionDelay(speed);
+      }
       if (!hasLos) e.exposedTimer = -1;
       e.wasLos = hasLos;
       if (hasLos && e.exposedTimer > 0) {
@@ -862,6 +1119,7 @@ export class DuelsScenario extends BaseScenario {
     const e = this.enemy;
 
     if (
+      !this.offensive &&
       this.competitive &&
       e?.phase === 'jigglepeek' &&
       e.target.state !== 'dying' &&
