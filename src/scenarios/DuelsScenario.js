@@ -40,6 +40,7 @@ import {
   duelsArenaConfigKey
 } from './duelsArenas.js';
 import { mapExtent } from '../multiplayer/maps.js';
+import { DEATH_OVERLAY_STRENGTH } from './deathFx.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
@@ -841,7 +842,7 @@ export class DuelsScenario extends BaseScenario {
     if (p < 0.2) red = p / 0.2;
     else if (p > 0.5) red = 1 - (p - 0.5) / 0.5;
     else red = 1;
-    this.engine.setDeathOverlay(red);
+    this.engine.setDeathOverlay(red * DEATH_OVERLAY_STRENGTH);
 
     // Upward view flick (pitch), not a positional camera lift.
     const flick = fx.flick * Math.sin(Math.min(1, p * 1.6) * Math.PI * 0.5);

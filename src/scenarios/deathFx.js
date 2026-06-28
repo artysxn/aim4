@@ -7,6 +7,8 @@ export const DUEL_DEATH_FX_DUR = 0.55;
 export const DUEL_DEATH_FX_PITCH = degToRad(38);
 /** Seconds to reach full aim punch — front-loaded so the flick feels instant. */
 export const DEATH_FLICK_RISE = 0.1;
+/** Peak red overlay strength on death (fraction of full `.death-fx` opacity). */
+export const DEATH_OVERLAY_STRENGTH = 0.2;
 
 /**
  * Advance one death-FX frame. Returns overlay strength, pitch offset, and whether finished.
@@ -21,5 +23,5 @@ export function updateDeathFxFrame(fx, dt, { duration, flickAmount, flickRise = 
 
   const flickT = Math.min(1, fx.t / flickRise);
   const flick = flickAmount * (1 - (1 - flickT) ** 2);
-  return { red, flick, done: fx.t >= duration };
+  return { red: red * DEATH_OVERLAY_STRENGTH, flick, done: fx.t >= duration };
 }
