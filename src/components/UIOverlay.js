@@ -22,7 +22,7 @@ import {
   formatModeStat,
   formatRankLabel
 } from '../lib/accountStats.js';
-import { countryOptionsHtml, flagEmoji } from '../lib/countries.js';
+import { countryOptionsHtml } from '../lib/countries.js';
 import { supabaseConfigured } from '../lib/supabase.js';
 import { localDecode } from '../lib/replayCodec.js';
 import { REPLAY_SPEEDS } from '../core/ReplayPlayer.js';
@@ -584,7 +584,6 @@ export class UIOverlay {
         </div>
         <div class="menu-secondary">
           <button class="btn btn-sm" data-goto="leaderboard">Leaderboards</button>
-          <a href="tools/level-editor.html" class="btn btn-sm">Level Editor</a>
           <button class="btn btn-sm" data-goto="settings">Settings</button>
           <div class="menu-auth" id="menu-auth">
             <div class="menu-auth-actions" id="menu-auth-guest">
@@ -592,7 +591,6 @@ export class UIOverlay {
               <button type="button" class="btn btn-sm primary" id="menu-signup-btn">Sign up</button>
             </div>
             <div class="menu-auth-actions hidden" id="menu-auth-user">
-              <span class="menu-auth-username" id="menu-auth-name"></span>
               <button type="button" class="btn btn-sm" id="menu-account-btn">My account</button>
               <button type="button" class="btn btn-sm" id="menu-logout-btn">Log out</button>
             </div>
@@ -728,13 +726,6 @@ export class UIOverlay {
     <div class="screen account" data-screen="account">
       <div class="panel wide">
         <h2 class="text-big">My account</h2>
-        <div class="account-head">
-          <span id="account-flag" class="account-flag" aria-hidden="true"></span>
-          <div class="account-head-meta">
-            <div id="account-username-display" class="account-username"></div>
-            <div id="account-elo-line" class="account-elo-line"></div>
-          </div>
-        </div>
 
         <section class="account-section">
           <h4>Profile</h4>
@@ -756,14 +747,12 @@ export class UIOverlay {
             <button type="button" class="btn btn-google btn-block" id="account-link-google">
               Link Google account
             </button>
-            <p class="account-linked-note hidden" id="account-google-linked">Google account linked</p>
           </div>
           <p class="readout" id="account-profile-status"></p>
         </section>
 
         <section class="account-section">
           <h4>Statistics</h4>
-          <p class="account-stats-hint">Competitive leaderboards · rank / total players</p>
           <div id="account-stats" class="account-stats">
             <p class="center lb-hint">Loading…</p>
           </div>
@@ -789,8 +778,7 @@ export class UIOverlay {
         <div class="lb-header" id="lb-tabs">
           <button type="button" class="tab active" id="lb-tab-elo" data-lb="elo">Ranked ELO</button>
           <div class="lb-mode-select-wrap">
-            <label class="lb-mode-label" for="lb-mode-select">Gamemode leaderboard</label>
-            <select id="lb-mode-select" class="config-code-input">
+            <select id="lb-mode-select" class="config-code-input" aria-label="Gamemode leaderboard">
               ${Object.keys(SCENARIOS)
                 .map(
                   (k) =>
@@ -800,7 +788,6 @@ export class UIOverlay {
             </select>
           </div>
         </div>
-        <p class="lb-subtitle" id="lb-subtitle"></p>
         <div id="lb-body" class="lb-body"></div>
         <div class="menu-actions">
           <button class="btn primary" data-goto="menu">Back</button>
@@ -1425,11 +1412,6 @@ export class UIOverlay {
     if (this.auth.isLoggedIn) {
       guest?.classList.add('hidden');
       userRow?.classList.remove('hidden');
-      const nameEl = this.root.querySelector('#menu-auth-name');
-      if (nameEl) {
-        const flag = this.auth.countryCode ? `${flagEmoji(this.auth.countryCode)} ` : '';
-        nameEl.textContent = `${flag}@${this.auth.displayName || 'player'}`;
-      }
     } else {
       guest?.classList.remove('hidden');
       userRow?.classList.add('hidden');
@@ -1520,7 +1502,6 @@ export class UIOverlay {
         setProfileStatus('Username updated.', true);
         this.refreshAccountBar();
         this._syncMpNameFromAccount();
-        this._renderAccountHeader();
       } catch (e) {
         setProfileStatus(e.message || 'Could not update username.', false);
       }
@@ -1533,7 +1514,6 @@ export class UIOverlay {
         await this.auth.updateCountryCode(code || null);
         setProfileStatus('Country flag updated.', true);
         this.refreshAccountBar();
-        this._renderAccountHeader();
       } catch (e) {
         setProfileStatus(e.message || 'Could not update country.', false);
       }
@@ -1566,7 +1546,6 @@ export class UIOverlay {
     if (username) username.value = this.auth.displayName || '';
     const country = $('#account-country');
     if (country) country.innerHTML = countryOptionsHtml(this.auth.countryCode);
-    this._renderAccountHeader();
     this._renderAccountGoogleLink();
     const st = this.root.querySelector('#account-profile-status');
     if (st) {
@@ -1575,29 +1554,15 @@ export class UIOverlay {
     }
   }
 
-  _renderAccountHeader() {
-    const $ = (id) => this.root.querySelector(id);
-    const flagEl = $('#account-flag');
-    const nameEl = $('#account-username-display');
-    const eloEl = $('#account-elo-line');
-    const code = this.auth?.countryCode;
-    if (flagEl) flagEl.textContent = code ? flagEmoji(code) : '🏳';
-    if (nameEl) nameEl.textContent = `@${this.auth?.displayName || 'player'}`;
-    if (eloEl) eloEl.textContent = `${this.auth?.elo ?? 1000} ELO · Ranked matchmaking`;
-  }
-
   _renderAccountGoogleLink() {
     const wrap = this.root.querySelector('#account-google-wrap');
     const btn = this.root.querySelector('#account-link-google');
-    const note = this.root.querySelector('#account-google-linked');
-    if (!wrap || !this.auth?.isConfigured) {
+    if (!wrap || !this.auth?.isConfigured || !this.auth.canLinkGoogle) {
       wrap?.classList.add('hidden');
       return;
     }
     wrap.classList.remove('hidden');
-    const linked = this.auth.hasGoogleLinked;
-    btn?.classList.toggle('hidden', linked);
-    note?.classList.toggle('hidden', !linked);
+    btn?.classList.remove('hidden');
   }
 
   async _loadAccountStats() {
@@ -1606,7 +1571,6 @@ export class UIOverlay {
     body.innerHTML = '<p class="center lb-hint">Loading…</p>';
     try {
       await this.auth.refreshProfile();
-      this._renderAccountHeader();
       this._renderAccountGoogleLink();
       const stats = await fetchAllAccountStats(this.auth.user.id);
       body.innerHTML = this._accountStatsHtml(stats);
@@ -3271,27 +3235,8 @@ export class UIOverlay {
 
   async _renderLeaderboard(scenario) {
     const body = this.root.querySelector('#lb-body');
-    const subtitle = this.root.querySelector('#lb-subtitle');
     if (!body) return;
     body.innerHTML = `<p class="center">…</p>`;
-    if (subtitle) {
-      if (scenario === 'elo') {
-        subtitle.textContent = this.auth?.isLoggedIn
-          ? `All accounts · signed in as ${this._accountLabel()} (${this.auth.elo} ELO)`
-          : 'All accounts · sign in to track your ranked ELO';
-      } else {
-        const lbHint = isKillLeaderboardScenario(scenario)
-          ? 'Ranked by kills in best run · '
-          : scenario === 'tracking'
-            ? 'Competitive Tracking · highest points in 30s · '
-            : scenario === 'survival'
-              ? 'Competitive Survival · highest score before failure · '
-              : 'Best score per verified account · ';
-        subtitle.textContent = this.auth?.isLoggedIn
-          ? `${lbHint}signed in as ${this._accountLabel()}`
-          : `${lbHint}sign in to submit scores`;
-      }
-    }
     const { list, error } = await this._fetchLeaderboard(scenario);
     body.innerHTML = this._leaderboardRowsHtml(list, scenario, this.auth?.user?.id, error);
   }

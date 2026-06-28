@@ -147,6 +147,12 @@ body.in-run.mp-unlocked {
   justify-content: flex-start;
   padding: 0;
 }
+.screen.account.active {
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
 
 .text-big {
   font-family: var(--font-display);
@@ -171,6 +177,12 @@ h2.text-big,
 }
 .panel.wide {
   width: min(880px, 94vw);
+}
+.screen.account .panel.wide {
+  margin: 24px 0;
+  max-height: none;
+  overflow: visible;
+  text-align: left;
 }
 .panel.scroll {
   overflow-y: auto;
@@ -939,7 +951,7 @@ input[type='checkbox'] {
 .lb-header {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   gap: 12px 20px;
   margin-bottom: 4px;
 }

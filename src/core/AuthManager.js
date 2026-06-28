@@ -70,6 +70,11 @@ export class AuthManager {
     return this.linkedProviders.includes('google');
   }
 
+  /** True when this account signed in with email/password and can link Google. */
+  get canLinkGoogle() {
+    return this.isLoggedIn && !this.hasGoogleLinked && this.linkedProviders.includes('email');
+  }
+
   onChange(fn) {
     this._listeners.push(fn);
   }
@@ -284,7 +289,14 @@ export class AuthManager {
       provider: 'google',
       options: { redirectTo: authRedirectUrl() }
     });
-    if (error) throw new Error(error.message || 'Could not link Google.');
+    if (error) {
+      if (/manual linking is disabled/i.test(error.message)) {
+        throw new Error(
+          'Manual linking is off in Supabase. Enable it under Authentication → Settings → “Enable manual linking”, then try again.'
+        );
+      }
+      throw new Error(error.message || 'Could not link Google.');
+    }
   }
 
   async _refreshLinkedProviders() {
