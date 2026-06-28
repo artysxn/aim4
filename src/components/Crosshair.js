@@ -1,4 +1,4 @@
-import { RESOLUTIONS } from '../core/SettingsManager.js';
+import { getResolutionSpec } from '../core/SettingsManager.js';
 import { shotSpreadRad } from '../utils/shotAccuracy.js';
 import { degToRad } from '../utils/MathUtils.js';
 
@@ -125,7 +125,7 @@ export class Crosshair {
     ctx.clearRect(0, 0, w, h);
     if (!this.visible) return;
 
-    const res = RESOLUTIONS[this.settings.data.resolution];
+    const res = getResolutionSpec(this.settings.data);
     let scaleX = 1;
     let scaleY = 1;
     if (res && res.size) {

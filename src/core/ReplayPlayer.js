@@ -12,7 +12,8 @@ import { EYE_HEIGHT } from './Engine.js';
 
 export const REPLAY_SPEEDS = [0.125, 0.25, 0.5, 1, 2, 4];
 
-const TRACER_LIFE = 0.09; // seconds (scaled by timescale so it lingers in slow-mo)
+const _shotOrigin = new THREE.Vector3();
+const _shotEnd = new THREE.Vector3();
 
 function makeGeometry(d) {
   const p = d.params || {};
@@ -23,26 +24,38 @@ function makeGeometry(d) {
       return new THREE.BoxGeometry(p.width ?? 1, p.height ?? 1, p.depth ?? 1);
     case 'Cylinder':
       return new THREE.CylinderGeometry(
-        p.radiusTop ?? 0.5, p.radiusBottom ?? 0.5, p.height ?? 1, p.radialSegments ?? 16
+        p.radiusTop ?? 0.5,
+        p.radiusBottom ?? 0.5,
+        p.height ?? 1,
+        p.radialSegments ?? 16,
+        p.heightSegments ?? 1,
+        p.openEnded ?? false,
+        p.thetaStart ?? 0,
+        p.thetaLength ?? Math.PI * 2
       );
     case 'Plane':
       return new THREE.PlaneGeometry(p.width ?? 1, p.height ?? 1);
+    case 'Circle':
+      return new THREE.CircleGeometry(p.radius ?? 0.5, p.segments ?? 32);
     default:
       return new THREE.BoxGeometry(1, 1, 1);
   }
 }
 
 function makeMesh(d) {
-  const mat = new THREE.MeshStandardMaterial({
+  const matOpts = {
     color: d.color ?? 0xffffff,
     emissive: d.emissive ?? 0x000000,
     emissiveIntensity: d.emissiveIntensity ?? 0,
-    roughness: 0.6,
-    metalness: 0.05,
+    roughness: d.roughness ?? 0.6,
+    metalness: d.metalness ?? 0.05,
     transparent: !!d.transparent,
     opacity: d.opacity ?? 1
-  });
-  const mesh = new THREE.Mesh(makeGeometry(d), mat);
+  };
+  if (d.side === 1) matOpts.side = THREE.BackSide;
+  else if (d.side === 2) matOpts.side = THREE.DoubleSide;
+
+  const mesh = new THREE.Mesh(makeGeometry(d), new THREE.MeshStandardMaterial(matOpts));
   if (d.p) mesh.position.set(d.p[0], d.p[1], d.p[2]);
   if (d.q) mesh.quaternion.set(d.q[0], d.q[1], d.q[2], d.q[3]);
   if (d.s) mesh.scale.set(d.s[0], d.s[1], d.s[2]);
@@ -54,14 +67,15 @@ export class ReplayPlayer {
     this.engine = engine;
     this.replay = null;
     this.root = null;
+    this._envGroup = null;
+    this._envSegmentIdx = -1;
     this.entities = []; // { data, object }
-    this.tracers = [];
 
     this.playing = false;
     this.speed = 1;
     this.time = 0; // seconds into the replay
     this.duration = 0;
-    this._prevTick = -1;
+    this._lastEventTick = -1;
 
     this.onProgress = null; // ({ time, duration, playing, speed }) => void
     this.onEnd = null;
@@ -77,7 +91,8 @@ export class ReplayPlayer {
     this.replay = replay;
     this.duration = replay.durationSec;
     this.time = 0;
-    this._prevTick = -1;
+    this._lastEventTick = -1;
+    this._envSegmentIdx = -1;
     this.speed = 1;
     this.playing = false;
 
@@ -85,19 +100,52 @@ export class ReplayPlayer {
     this.root.name = 'replay-root';
     this.engine.scene.add(this.root);
 
-    this._buildEnvironment(replay);
-    this._buildEntities(replay);
+    this._envGroup = new THREE.Group();
+    this._envGroup.name = 'replay-env';
+    this.root.add(this._envGroup);
 
-    // Hide the live first-person gun; a replay is a free observer of the run.
+    this._buildEntities(replay);
+    this._applyEnvironmentAtTick(0);
+
+    // Hide the live first-person gun; tracers still render via the viewmodel pool.
     this.engine.viewmodel?.setVisible(false);
     this._applyTick(0);
     this._emitProgress();
   }
 
-  _buildEnvironment(replay) {
-    for (const d of replay.environment || []) {
-      this.root.add(makeMesh(d));
+  _setEnvironment(meshDescs) {
+    if (!this._envGroup) return;
+    while (this._envGroup.children.length) {
+      const node = this._envGroup.children[0];
+      this._envGroup.remove(node);
+      if (node.isMesh) {
+        node.geometry?.dispose?.();
+        if (Array.isArray(node.material)) node.material.forEach((m) => m.dispose());
+        else node.material?.dispose?.();
+      }
     }
+    for (const d of meshDescs || []) {
+      this._envGroup.add(makeMesh(d));
+    }
+  }
+
+  /** Pick the map segment active at an integer tick (duels arena swaps). */
+  _applyEnvironmentAtTick(tick) {
+    const segs = this.replay?.environmentSegments;
+    if (!segs?.length) {
+      if (this._envSegmentIdx === 0) return;
+      this._envSegmentIdx = 0;
+      this._setEnvironment(this.replay?.environment || []);
+      return;
+    }
+    let idx = 0;
+    for (let i = 0; i < segs.length; i++) {
+      if (segs[i].start <= tick) idx = i;
+      else break;
+    }
+    if (idx === this._envSegmentIdx) return;
+    this._envSegmentIdx = idx;
+    this._setEnvironment(segs[idx].meshes);
   }
 
   _buildEntities(replay) {
@@ -122,7 +170,8 @@ export class ReplayPlayer {
     if (!this.replay) return;
     if (this.time >= this.duration) this.time = 0; // restart from a finished replay
     this.playing = true;
-    this._prevTick = Math.floor(this.time * this.replay.tickRate);
+    // -1 so tick-0 shots/env still fire on the first advancing frame.
+    this._lastEventTick = Math.floor(this.time * this.replay.tickRate) - 1;
     this._emitProgress();
   }
 
@@ -144,9 +193,11 @@ export class ReplayPlayer {
   seekFraction(frac) {
     if (!this.replay) return;
     this.time = Math.max(0, Math.min(1, frac)) * this.duration;
-    this._prevTick = Math.floor(this.time * this.replay.tickRate); // don't re-fire past shots
+    this._lastEventTick = Math.floor(this.time * this.replay.tickRate);
     this._clearTracers();
-    this._applyTick(this.time * this.replay.tickRate);
+    const tickFloat = this.time * this.replay.tickRate;
+    this._applyEnvironmentAtTick(Math.floor(tickFloat));
+    this._applyTick(tickFloat);
     this._emitProgress();
   }
 
@@ -165,11 +216,13 @@ export class ReplayPlayer {
       this._applyTick(tickFloat);
       this._emitProgress();
     }
-    this._updateTracers(dt * this.speed);
   }
 
   _applyTick(tickFloat) {
     const r = this.replay;
+    const tick = Math.floor(tickFloat);
+    this._applyEnvironmentAtTick(tick);
+
     const cam = r.sampleCamera(tickFloat);
     const camera = this.engine.camera;
     camera.position.set(cam.px, cam.py, cam.pz);
@@ -190,51 +243,30 @@ export class ReplayPlayer {
   _fireEventsUpTo(tickFloat) {
     const r = this.replay;
     const tick = Math.floor(tickFloat);
-    if (tick <= this._prevTick) {
-      this._prevTick = tick;
-      return;
-    }
+    if (tick <= this._lastEventTick) return;
+
     for (const ev of r.events) {
-      if (ev.type === 'shot' && ev.t > this._prevTick && ev.t <= tick) {
-        this._spawnTracer(ev.o, ev.e);
-      }
+      if (ev.t <= this._lastEventTick || ev.t > tick) continue;
+      if (ev.type === 'shot') this._playShot(ev);
     }
-    this._prevTick = tick;
+    this._lastEventTick = tick;
   }
 
-  _spawnTracer(o, e) {
-    const geo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(o[0], o[1], o[2]),
-      new THREE.Vector3(e[0], e[1], e[2])
-    ]);
-    const mat = new THREE.LineBasicMaterial({ color: 0xfff3b0, transparent: true, opacity: 1 });
-    const line = new THREE.Line(geo, mat);
-    this.root.add(line);
-    this.tracers.push({ line, life: TRACER_LIFE });
-  }
-
-  _updateTracers(dt) {
-    for (let i = this.tracers.length - 1; i >= 0; i--) {
-      const t = this.tracers[i];
-      t.life -= Math.abs(dt);
-      if (t.life <= 0) {
-        this._disposeTracer(t);
-        this.tracers.splice(i, 1);
-      } else {
-        t.line.material.opacity = Math.max(0, t.life / TRACER_LIFE);
-      }
+  _playShot(ev) {
+    if (ev.o && ev.e) {
+      this.engine.viewmodel?.spawnTracer(
+        _shotOrigin.set(ev.o[0], ev.o[1], ev.o[2]),
+        _shotEnd.set(ev.e[0], ev.e[1], ev.e[2])
+      );
     }
-  }
-
-  _disposeTracer(t) {
-    this.root.remove(t.line);
-    t.line.geometry.dispose();
-    t.line.material.dispose();
+    this.engine.audio?.playLocalShot();
   }
 
   _clearTracers() {
-    for (const t of this.tracers) this._disposeTracer(t);
-    this.tracers.length = 0;
+    for (const tr of this.engine.viewmodel?._tracers || []) {
+      tr.t = 0;
+      tr.line.visible = false;
+    }
   }
 
   _emitProgress() {
@@ -262,6 +294,8 @@ export class ReplayPlayer {
       this.engine.scene.remove(this.root);
       this.root = null;
     }
+    this._envGroup = null;
+    this._envSegmentIdx = -1;
     this.entities = [];
     this.replay = null;
     this.playing = false;

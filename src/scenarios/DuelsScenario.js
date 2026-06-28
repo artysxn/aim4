@@ -421,6 +421,7 @@ export class DuelsScenario extends BaseScenario {
     this.arenaIndex = newIdx;
     this.arena = pool[newIdx];
     this._buildArena();
+    this.engine.replayRecorder?.recordEnvironmentChange();
     const a = this.arena;
     this.engine.player.spawn({
       pos: a.player.pos,

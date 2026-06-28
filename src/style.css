@@ -383,6 +383,119 @@ h4 {
   border-left: 1px solid rgba(255, 255, 255, 0.12);
 }
 
+/* ---- Training list (mode picker) ---------------------------------------- */
+.screen.training.active {
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 0;
+}
+.training-panel {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 24px calc(env(safe-area-inset-bottom, 0px) + 16px);
+  text-align: left;
+  background: transparent;
+}
+.training-heading {
+  flex-shrink: 0;
+  margin: 0 0 16px;
+  text-align: center;
+}
+.training-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.training-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 14px;
+  background: var(--chip-bg);
+  transition: background 0.12s;
+}
+.training-row:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.training-row-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+}
+.training-row-icon .aim4-icon {
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+.training-row-title {
+  flex-shrink: 0;
+  width: 120px;
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.training-row-tag {
+  flex-shrink: 0;
+  width: 72px;
+  height: 22px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.training-row-spacer {
+  flex: 1;
+  min-width: 12px;
+}
+.training-row-play {
+  flex-shrink: 0;
+  min-width: 96px;
+}
+.training-row-gear {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  margin-left: 4px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: color 0.12s, background 0.12s;
+}
+.training-row-gear:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+.training-row-gear:active {
+  background: rgba(255, 255, 255, 0.04);
+}
+.training-row-gear-spacer {
+  flex-shrink: 0;
+  width: 34px;
+  margin-left: 4px;
+}
+.training-back {
+  flex-shrink: 0;
+  margin-top: 14px;
+}
+
 .btn-with-icon {
   display: inline-flex;
   align-items: center;
@@ -535,7 +648,7 @@ a.btn {
   display: block;
 }
 .mode-tile-icon-mm {
-  color: var(--accent); /* red crown */
+  filter: brightness(0) saturate(100%) invert(36%) sepia(93%) saturate(7462%) hue-rotate(350deg) brightness(98%) contrast(97%);
 }
 .mode-tile-title {
   font-size: 16px;
@@ -553,6 +666,28 @@ a.btn {
   justify-content: center;
   align-items: center;
   margin-top: 6px;
+}
+.menu-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: var(--chip-bg);
+  border: none;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.menu-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.menu-icon-btn img {
+  display: block;
+  opacity: 0.92;
+}
+.menu-modes-sub {
+  margin-top: 0;
 }
 .menu-secondary .menu-auth {
   margin: 0;
@@ -1019,6 +1154,28 @@ input[type='checkbox'] {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.lb-player-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.lb-player-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.lb-table tr.hl .lb-player-link {
+  color: var(--accent);
+}
 .lb-subtitle {
   margin: -6px 0 12px;
   color: var(--muted);
@@ -1212,6 +1369,51 @@ input[type='checkbox'] {
 }
 .account-stats-table tbody tr:last-child td {
   border-bottom: none;
+}
+.account-head-readonly {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+.account-head-readonly .account-flag {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.settings-explore-banner {
+  font-size: 13px;
+  margin-right: 8px;
+  white-space: nowrap;
+}
+.settings-explore-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-layout.is-explore .settings-drawer {
+  pointer-events: none;
+  opacity: 0.88;
+}
+.settings-layout.is-explore .settings-drawer input,
+.settings-layout.is-explore .settings-drawer select,
+.settings-layout.is-explore .settings-drawer button {
+  cursor: default;
+}
+
+.res-custom-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 8px;
+  max-width: 360px;
 }
 
 .hidden {
@@ -1742,7 +1944,6 @@ input[type='checkbox'] {
   z-index: 40;
   display: none;
   flex-direction: column;
-  gap: 10px;
   padding: 16px 22px calc(env(safe-area-inset-bottom, 0px) + 18px);
   background: linear-gradient(to top, rgba(8, 8, 8, 0.88), rgba(8, 8, 8, 0));
   pointer-events: none;
@@ -1753,27 +1954,6 @@ input[type='checkbox'] {
 .replay-overlay > * {
   pointer-events: auto;
 }
-.replay-topbar {
-  position: fixed;
-  top: 16px;
-  left: 22px;
-  right: 22px;
-  z-index: 41;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  pointer-events: none;
-}
-.replay-topbar > * {
-  pointer-events: auto;
-}
-.replay-title {
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  background: var(--chip-bg);
-  padding: 6px 12px;
-  border-radius: 8px;
-}
 .replay-controls {
   display: flex;
   align-items: center;
@@ -1782,6 +1962,7 @@ input[type='checkbox'] {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
   padding: 10px 14px;
+  flex-wrap: wrap;
 }
 .replay-scrub {
   flex: 1;
@@ -1805,6 +1986,9 @@ input[type='checkbox'] {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
+}
+#replay-exit {
+  margin-left: auto;
 }
 
 .account-replays {

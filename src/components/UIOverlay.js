@@ -8,7 +8,7 @@
 //         | results
 // ---------------------------------------------------------------------------
 
-import { RESOLUTIONS } from '../core/SettingsManager.js';
+import { RESOLUTIONS, clampResolutionDim } from '../core/SettingsManager.js';
 import { SCENARIOS } from '../core/SceneManager.js';
 import * as Storage from '../utils/Storage.js';
 import { exportConfig, importConfig, copyText, normalizeCode } from '../utils/ConfigCodes.js';
@@ -22,7 +22,8 @@ import {
   formatModeStat,
   formatRankLabel
 } from '../lib/accountStats.js';
-import { countryOptionsHtml } from '../lib/countries.js';
+import { countryOptionsHtml, flagEmoji } from '../lib/countries.js';
+import { fetchPublicProfile, fetchPublicSettings } from '../lib/userProfile.js';
 import { supabaseConfigured } from '../lib/supabase.js';
 import { localDecode } from '../lib/replayCodec.js';
 import { REPLAY_SPEEDS } from '../core/ReplayPlayer.js';
@@ -31,7 +32,7 @@ import { MultiplayerController } from '../multiplayer/MultiplayerController.js';
 import { SCORE_TARGETS, MM_SCORE_TARGET, TRACKING_DURATION } from '../multiplayer/constants.js';
 import { getMap } from '../multiplayer/maps.js';
 import { formatServerRegion } from '../multiplayer/regionLabels.js';
-import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, CUSTOM_GAMES_ICON } from '../aim4/icons.js';
+import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, CUSTOM_GAMES_ICON, MULTIPLAYER_ICON, LEADERBOARD_ICON, ACCOUNT_ICON, LOGOUT_ICON, SETTINGS_ICON } from '../aim4/icons.js';
 import { ARENAS } from '../scenarios/DuelsScenario.js';
 import { duelsArenaSelectOptions } from '../scenarios/duelsArenas.js';
 import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
@@ -130,6 +131,11 @@ export class UIOverlay {
     this._authMode = 'login';
     this._lbCache = {};
     this._returnAfterSettings = null;
+    this._returnAfterAccount = 'menu';
+    this._viewingAccount = null; // null = own account; else { userId, username, countryCode, elo }
+    this._settingsExploreMode = false;
+    this._settingsExplorePayload = null;
+    this._settingsExploreUser = null;
     this._returnAfterScenarioSettings = null;
     this._activeScenarioSettings = null;
     this._suppressLockPause = false;
@@ -222,7 +228,17 @@ export class UIOverlay {
             <div class="field-top">
               <span class="field-label">Resolution</span>
             </div>
-            <select id="set-res">${resOptions}</select>
+            <select id="set-res">${resOptions}<option value="custom">Custom</option></select>
+          </div>
+          <div id="set-res-custom" class="res-custom-row" hidden>
+            <div class="field field-plain">
+              <div class="field-top"><span class="field-label">Width</span></div>
+              <input type="number" id="set-res-w" class="config-code-input" min="320" max="7680" step="1" inputmode="numeric" />
+            </div>
+            <div class="field field-plain">
+              <div class="field-top"><span class="field-label">Height</span></div>
+              <input type="number" id="set-res-h" class="config-code-input" min="320" max="7680" step="1" inputmode="numeric" />
+            </div>
           </div>
           ${numField('set-dur', 'Run duration (s)', '1')}
           <label class="field-check"><input type="checkbox" id="set-raw" /> Raw input (no OS acceleration)</label>`
@@ -572,8 +588,44 @@ export class UIOverlay {
             <img src="${TRAINING_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">Training</span>
           </button>
+          <button type="button" class="mode-tile mode-tile-multiplayer" data-goto="multiplayer">
+            <img src="${MULTIPLAYER_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
+            <span class="mode-tile-title">Multiplayer</span>
+          </button>
+          <button type="button" class="mode-tile mode-tile-leaderboard" data-goto="leaderboard">
+            <img src="${LEADERBOARD_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
+            <span class="mode-tile-title">Leaderboards</span>
+          </button>
+        </div>
+        <div class="menu-secondary">
+          <button type="button" class="menu-icon-btn" data-goto="settings" aria-label="Settings">
+            <img src="${SETTINGS_ICON}" alt="" width="22" height="22" aria-hidden="true" />
+          </button>
+          <div class="menu-auth" id="menu-auth">
+            <div class="menu-auth-actions" id="menu-auth-guest">
+              <button type="button" class="btn btn-sm" id="menu-login-btn">Log in</button>
+              <button type="button" class="btn btn-sm primary" id="menu-signup-btn">Sign up</button>
+            </div>
+            <div class="menu-auth-actions hidden" id="menu-auth-user">
+              <button type="button" class="menu-icon-btn" id="menu-account-btn" aria-label="My account">
+                <img src="${ACCOUNT_ICON}" alt="" width="22" height="22" aria-hidden="true" />
+              </button>
+              <button type="button" class="menu-icon-btn" id="menu-logout-btn" aria-label="Log out">
+                <img src="${LOGOUT_ICON}" alt="" width="22" height="22" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MULTIPLAYER (matchmaking + custom games) -->
+    <div class="screen multiplayer" data-screen="multiplayer">
+      <div class="panel wide">
+        <h2 class="text-big">Multiplayer</h2>
+        <div class="menu-modes menu-modes-sub">
           <button type="button" class="mode-tile mode-tile-mm" id="menu-mm-tile">
-            <svg class="mode-tile-icon mode-tile-icon-mm" viewBox="0 -960 960 960" width="40" height="40" aria-hidden="true"><path fill="currentColor" d="M233.08-200v-40h493.84v40H233.08Zm-2.31-115.38L172.85-621q-2 .77-4.5.88-2.5.12-4.5.12-18.85 0-31.35-12.79T120-663.85q0-18.91 12.5-32.14 12.5-13.24 31.39-13.24t32.12 13.24q13.22 13.23 13.22 32.14 0 4.17-.35 7.74-.34 3.57-2.34 7.03l128.08 51.39 118.84-161.77q-8.69-5.69-13.77-15.04-5.07-9.34-5.07-20.12 0-18.91 13.22-32.14Q461.06-840 479.95-840q18.9 0 32.17 13.19 13.26 13.19 13.26 32.04 0 11.31-5.07 20.46-5.08 9.16-13.77 14.85l118.84 161.77 128.08-51.39q-1.08-3.19-1.88-7.02-.81-3.82-.81-7.75 0-18.91 12.5-32.14 12.5-13.24 31.39-13.24t32.12 13.24Q840-682.76 840-663.85q0 18.16-13.28 31Q813.44-620 794.47-620q-1.52 0-3.42-.5t-4.16-.5l-57.66 305.62H230.77Zm34.15-40h430.16l49.07-245.47-132.69 52.93L480-727.85 348.54-547.92l-132.69-52.93 49.07 245.47Zm215.08 0Z"/></svg>
+            <img src="${MATCHMAKING_ICON}" alt="" class="mode-tile-icon mode-tile-icon-mm" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">Matchmaking</span>
             <span class="mode-tile-sub" id="menu-mm-userline">Ranked 1v1 duels</span>
           </button>
@@ -582,56 +634,44 @@ export class UIOverlay {
             <span class="mode-tile-title">Custom games</span>
           </button>
         </div>
-        <div class="menu-secondary">
-          <button class="btn btn-sm" data-goto="leaderboard">Leaderboards</button>
-          <button class="btn btn-sm" data-goto="settings">Settings</button>
-          <div class="menu-auth" id="menu-auth">
-            <div class="menu-auth-actions" id="menu-auth-guest">
-              <button type="button" class="btn btn-sm" id="menu-login-btn">Log in</button>
-              <button type="button" class="btn btn-sm primary" id="menu-signup-btn">Sign up</button>
-            </div>
-            <div class="menu-auth-actions hidden" id="menu-auth-user">
-              <button type="button" class="btn btn-sm" id="menu-account-btn">My account</button>
-              <button type="button" class="btn btn-sm" id="menu-logout-btn">Log out</button>
-            </div>
-          </div>
+        <div class="menu-actions">
+          <button class="btn primary" data-goto="menu">Back</button>
         </div>
       </div>
     </div>
 
     <!-- TRAINING (singleplayer mode picker) -->
     <div class="screen training" data-screen="training">
-      <div class="panel wide">
-        <h2 class="text-big">Training</h2>
-        <div class="cards">
+      <div class="panel training-panel">
+        <h2 class="text-big training-heading">Training</h2>
+        <div class="training-list">
           ${Object.keys(SCENARIOS)
             .map((key) => {
               const meta = SCENARIO_META[key];
-              const playIcon =
-                '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>';
-              const footer = meta.dualPlay
-                ? `<div class="card-footer card-footer-split">
-              <button type="button" class="card-play card-play-half" data-play="${key}" data-variant="practice">Practice</button>
-              <button type="button" class="card-play card-play-half" data-play="${key}" data-variant="competitive">Competitive</button>
-            </div>`
-                : `<div class="card-footer">
-              <button type="button" class="card-play" data-play="${key}" aria-label="Play ${meta.title}">${playIcon}</button>
-            </div>`;
+              const hasSettings = SCENARIO_SETTING_IDS.has(key);
+              const playBtns = meta.dualPlay
+                ? `<button type="button" class="btn btn-sm training-row-play" data-play="${key}" data-variant="practice">Training</button>
+              <button type="button" class="btn btn-sm training-row-play" data-play="${key}" data-variant="competitive">Competitive</button>`
+                : `<button type="button" class="btn btn-sm training-row-play" data-play="${key}" aria-label="Play ${meta.title}">Play</button>`;
+              const gearBtn = hasSettings
+                ? `<button type="button" class="training-row-gear" data-scenario-settings-open="${key}" aria-label="${meta.title} settings">${GEAR_ICON}</button>`
+                : `<span class="training-row-gear-spacer" aria-hidden="true"></span>`;
               return `
-            <div class="card" data-scenario="${key}">
-              <div class="card-body">
-                ${SCENARIO_SETTING_IDS.has(key) ? `<button type="button" class="card-gear" data-scenario-settings-open="${key}" aria-label="${meta.title} settings">${GEAR_ICON}</button>` : ''}
-                <div class="card-icon">
-                  <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="28" height="28" />
-                </div>
-                <h3 class="card-title">${meta.title}</h3>
+            <div class="training-row" data-scenario="${key}">
+              <div class="training-row-icon">
+                <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="28" height="28" />
               </div>
-              ${footer}
+              <span class="training-row-title">${meta.title}</span>
+              <span class="training-row-tag" aria-hidden="true"></span>
+              <span class="training-row-tag" aria-hidden="true"></span>
+              <span class="training-row-spacer"></span>
+              ${playBtns}
+              ${gearBtn}
             </div>`;
             })
             .join('')}
         </div>
-        <div class="menu-actions">
+        <div class="menu-actions training-back">
           <button class="btn primary" data-goto="menu">Back</button>
         </div>
       </div>
@@ -650,10 +690,18 @@ export class UIOverlay {
             ${globalSettingsSections.map((s, i) => settingsTab(s.id, s.label, i === 0)).join('')}
           </nav>
           <div class="settings-bar-actions">
+            <span class="settings-explore-banner muted" id="settings-explore-banner" hidden>Viewing <strong id="settings-explore-name"></strong>'s settings</span>
+            <div class="settings-explore-actions" id="settings-explore-actions" hidden>
+              <button type="button" class="btn" id="settings-copy-code-btn">Copy config code</button>
+              <button type="button" class="btn primary" id="settings-apply-user-btn">Apply to my settings</button>
+              <button type="button" class="btn" id="settings-explore-back-btn">Back</button>
+            </div>
+            <div class="settings-edit-actions" id="settings-edit-actions">
             <span class="settings-unsaved-hint muted" id="settings-unsaved-hint" hidden>Unsaved changes</span>
             <button type="button" class="btn" id="settings-undo-btn" disabled>Undo</button>
             <button class="btn" data-reset>Reset all</button>
             <button type="button" class="btn primary" id="settings-done-btn">Done</button>
+            </div>
           </div>
         </header>
         <div class="settings-drawer">
@@ -725,9 +773,9 @@ export class UIOverlay {
     <!-- ACCOUNT -->
     <div class="screen account" data-screen="account">
       <div class="panel wide">
-        <h2 class="text-big">My account</h2>
+        <h2 class="text-big" id="account-title">My account</h2>
 
-        <section class="account-section">
+        <section class="account-section" id="account-profile-own">
           <h4>Profile</h4>
           <div class="field field-plain">
             <div class="field-top"><span class="field-label">Username</span></div>
@@ -751,6 +799,16 @@ export class UIOverlay {
           <p class="readout" id="account-profile-status"></p>
         </section>
 
+        <section class="account-section" id="account-profile-other" hidden>
+          <h4>Profile</h4>
+          <p class="account-head-readonly">
+            <span class="account-flag" id="account-ro-flag"></span>
+            <span class="account-username" id="account-ro-username"></span>
+          </p>
+          <p class="readout muted" id="account-ro-elo"></p>
+          <p class="readout" id="account-profile-status-other"></p>
+        </section>
+
         <section class="account-section">
           <h4>Statistics</h4>
           <div id="account-stats" class="account-stats">
@@ -758,7 +816,7 @@ export class UIOverlay {
           </div>
         </section>
 
-        <section class="account-section">
+        <section class="account-section" id="account-replays-section">
           <h4>Replays</h4>
           <p class="account-stats-hint">Last run per mode · best competitive run</p>
           <div id="account-replays" class="account-replays">
@@ -767,7 +825,8 @@ export class UIOverlay {
         </section>
 
         <div class="menu-actions">
-          <button type="button" class="btn" data-goto="menu">Back</button>
+          <button type="button" class="btn" id="account-view-settings-btn" hidden>Settings</button>
+          <button type="button" class="btn" id="account-back-btn">Back</button>
         </div>
       </div>
     </div>
@@ -917,15 +976,12 @@ export class UIOverlay {
 
     <!-- REPLAY PLAYBACK -->
     <div id="replay-overlay" class="replay-overlay">
-      <div class="replay-topbar">
-        <span id="replay-title" class="replay-title">Replay</span>
-        <button type="button" class="btn btn-sm" id="replay-exit">Exit replay</button>
-      </div>
       <div class="replay-controls">
         <button type="button" class="btn btn-sm replay-playpause" id="replay-playpause">▶</button>
         <input type="range" id="replay-scrub" class="replay-scrub" min="0" max="1000" value="0" />
         <span id="replay-time" class="replay-time">0.0 / 0.0s</span>
         <div class="replay-speeds" id="replay-speeds"></div>
+        <button type="button" class="btn btn-sm" id="replay-exit">Exit replay</button>
       </div>
     </div>
     `;
@@ -975,6 +1031,7 @@ export class UIOverlay {
       }
       else if (t.dataset.goto) {
         if (t.dataset.goto === 'leaderboard') this._openLeaderboard();
+        if (t.dataset.goto === 'multiplayer') this.refreshAccountBar();
         if (t.dataset.goto === 'settings') this._returnAfterSettings = this.state;
         this.showScreen(t.dataset.goto);
         if (t.dataset.goto === 'mp') this.mp.openBrowser();
@@ -998,10 +1055,9 @@ export class UIOverlay {
 
     this._bindLeaderboard();
 
-    // Scenario cards: clicking the card body (not the button) also previews
-    // which leaderboard is active.
-    this.root.querySelectorAll('.card').forEach((card) => {
-      card.addEventListener('mouseenter', () => (this.currentScenario = card.dataset.scenario));
+    // Training rows: hover previews which leaderboard is active.
+    this.root.querySelectorAll('.training-row').forEach((row) => {
+      row.addEventListener('mouseenter', () => (this.currentScenario = row.dataset.scenario));
     });
 
     this.root.querySelectorAll('[data-scenario-settings-open]').forEach((btn) => {
@@ -1077,6 +1133,13 @@ export class UIOverlay {
   }
 
   _openSettings() {
+    if (this.settings.isExploreMode) {
+      this._setSettingsExploreUi(false);
+      this.settings.closeExploreDraft();
+      this._settingsExploreMode = false;
+      this._settingsExplorePayload = null;
+      this._settingsExploreUser = null;
+    }
     this.settings.openDraft();
     this._populateSettings();
     this.crosshair.drawPreview();
@@ -1151,7 +1214,46 @@ export class UIOverlay {
     numOnly('#set-dur', (v, d) => { d.runDuration = v; }, { parse: (v) => parseInt(v, 10) });
 
     $('#set-res').addEventListener('change', (e) => {
-      draft((d) => { d.resolution = e.target.value; });
+      const val = e.target.value;
+      draft((d) => {
+        if (val === 'custom') {
+          d.resolution = 'custom';
+          d.resolutionWidth = clampResolutionDim(d.resolutionWidth, 1920);
+          d.resolutionHeight = clampResolutionDim(d.resolutionHeight, 1080);
+        } else {
+          d.resolution = val;
+          const preset = RESOLUTIONS[val];
+          if (preset?.size) {
+            d.resolutionWidth = preset.size[0];
+            d.resolutionHeight = preset.size[1];
+          }
+        }
+      });
+      this._syncResolutionCustomUi();
+    });
+    numOnly('#set-res-w', (v, d) => {
+      d.resolution = 'custom';
+      d.resolutionWidth = clampResolutionDim(v, 1920);
+      const h = parseInt($('#set-res-h')?.value, 10);
+      d.resolutionHeight = clampResolutionDim(h, d.resolutionHeight ?? 1080);
+    }, {
+      parse: (v) => parseInt(v, 10),
+      after: () => {
+        $('#set-res').value = 'custom';
+        this._syncResolutionCustomUi();
+      }
+    });
+    numOnly('#set-res-h', (v, d) => {
+      d.resolution = 'custom';
+      d.resolutionHeight = clampResolutionDim(v, 1080);
+      const w = parseInt($('#set-res-w')?.value, 10);
+      d.resolutionWidth = clampResolutionDim(w, d.resolutionWidth ?? 1920);
+    }, {
+      parse: (v) => parseInt(v, 10),
+      after: () => {
+        $('#set-res').value = 'custom';
+        this._syncResolutionCustomUi();
+      }
     });
     $('#set-raw').addEventListener('change', (e) => {
       draft((d) => { d.rawInput = e.target.checked; });
@@ -1345,6 +1447,9 @@ export class UIOverlay {
       }
     });
     $('#settings-done-btn')?.addEventListener('click', () => this._closeSettings());
+    $('#settings-explore-back-btn')?.addEventListener('click', () => this._closeSettingsExplore());
+    $('#settings-apply-user-btn')?.addEventListener('click', () => this._applyExploredSettings());
+    $('#settings-copy-code-btn')?.addEventListener('click', () => this._copyExploredSettingsCode());
   }
 
   _bindPauseMenu() {
@@ -1359,6 +1464,10 @@ export class UIOverlay {
   }
 
   _closeSettings() {
+    if (this._settingsExploreMode) {
+      this._closeSettingsExplore();
+      return;
+    }
     this.settings.confirmDraft();
     this._updateSettingsBar();
     const ret = this._returnAfterSettings;
@@ -1368,6 +1477,109 @@ export class UIOverlay {
       if (ret === 'paused') this._updatePauseMenu();
     } else {
       this.showScreen('menu');
+    }
+  }
+
+  _closeSettingsExplore() {
+    this._setSettingsExploreUi(false);
+    this.settings.closeExploreDraft();
+    this._settingsExploreMode = false;
+    this._settingsExplorePayload = null;
+    this._settingsExploreUser = null;
+    const ret = this._returnAfterSettings ?? 'account';
+    this._returnAfterSettings = null;
+    this.showScreen(ret, { skipSettingsOpen: true });
+  }
+
+  async _openUserSettingsExplore() {
+    const acc = this._viewingAccount;
+    if (!acc?.userId) return;
+    const status = this.root.querySelector('#account-profile-status-other');
+    if (status) {
+      status.textContent = 'Loading settings…';
+      status.classList.remove('is-error');
+    }
+    let payload = acc.settings;
+    if (payload === undefined) {
+      try {
+        payload = await fetchPublicSettings(acc.userId);
+        acc.settings = payload;
+      } catch (e) {
+        if (status) {
+          status.textContent = e.message || 'Could not load settings.';
+          status.classList.add('is-error');
+        }
+        return;
+      }
+    }
+    if (!payload) {
+      if (status) {
+        status.textContent = 'This player has not saved cloud settings yet.';
+        status.classList.remove('is-error');
+      }
+      return;
+    }
+    if (status) status.textContent = '';
+    this._settingsExploreMode = true;
+    this._settingsExplorePayload = payload;
+    this._settingsExploreUser = acc.username || 'Player';
+    this._returnAfterSettings = 'account';
+    this.settings.openExploreDraft(payload);
+    this._populateSettings();
+    this.crosshair.drawPreview();
+    this._setSettingsExploreUi(true);
+    this.showScreen('settings', { skipSettingsOpen: true });
+  }
+
+  _setSettingsExploreUi(on) {
+    const layout = this.root.querySelector('.settings-layout');
+    layout?.classList.toggle('is-explore', on);
+    const banner = this.root.querySelector('#settings-explore-banner');
+    const exploreActions = this.root.querySelector('#settings-explore-actions');
+    const editActions = this.root.querySelector('#settings-edit-actions');
+    const nameEl = this.root.querySelector('#settings-explore-name');
+    if (banner) banner.hidden = !on;
+    if (exploreActions) exploreActions.hidden = !on;
+    if (editActions) editActions.hidden = on;
+    if (nameEl && on) nameEl.textContent = this._settingsExploreUser || 'Player';
+  }
+
+  async _applyExploredSettings() {
+    if (!this._settingsExplorePayload) return;
+    try {
+      this.settings.applyPayload(this._settingsExplorePayload);
+      this.settings.save();
+      this._closeSettingsExplore();
+      const st = this.root.querySelector('#account-profile-status-other');
+      if (st) {
+        st.textContent = 'Settings applied to your account.';
+        st.classList.remove('is-error');
+      }
+    } catch (e) {
+      const st = this.root.querySelector('#settings-explore-banner');
+      if (st) {
+        st.textContent = e.message || 'Could not apply settings.';
+        st.classList.add('is-error');
+      }
+    }
+  }
+
+  async _copyExploredSettingsCode() {
+    if (!this._settingsExplorePayload) return;
+    try {
+      const code = await exportConfig(this._settingsExplorePayload);
+      await copyText(code);
+      const banner = this.root.querySelector('#settings-explore-banner');
+      if (banner) {
+        banner.textContent = 'Config code copied.';
+        banner.classList.remove('is-error');
+      }
+    } catch (e) {
+      const banner = this.root.querySelector('#settings-explore-banner');
+      if (banner) {
+        banner.textContent = e.message || 'Copy failed.';
+        banner.classList.add('is-error');
+      }
     }
   }
 
@@ -1429,6 +1641,12 @@ export class UIOverlay {
     $('#menu-login-btn')?.addEventListener('click', () => this._openAuth('login'));
     $('#menu-signup-btn')?.addEventListener('click', () => this._openAuth('register'));
     $('#menu-account-btn')?.addEventListener('click', () => this._openAccount());
+    $('#account-back-btn')?.addEventListener('click', () => {
+      const dest = this._returnAfterAccount || 'menu';
+      if (dest !== 'account') this._viewingAccount = null;
+      this.showScreen(dest, { skipSettingsOpen: true });
+    });
+    $('#account-view-settings-btn')?.addEventListener('click', () => this._openUserSettingsExplore());
     $('#menu-logout-btn')?.addEventListener('click', async () => {
       this.mp?.leaveQueue();
       await this.auth.signOut();
@@ -1529,15 +1747,82 @@ export class UIOverlay {
     });
   }
 
-  _openAccount() {
-    if (!this.auth?.isLoggedIn) {
-      this._openAuth('login');
+  _openAccount(userId = null, username = null) {
+    if (userId && this.auth?.user?.id === userId) userId = null;
+    if (!userId) {
+      if (!this.auth?.isLoggedIn) {
+        this._openAuth('login');
+        return;
+      }
+      this._viewingAccount = null;
+      this._returnAfterAccount = this.state === 'leaderboard' ? 'leaderboard' : 'menu';
+      this.showScreen('account', { skipSettingsOpen: true });
+      this._refreshAccountScreen();
       return;
     }
-    this.showScreen('account');
-    this._populateAccountForm();
-    this._loadAccountStats();
-    this._loadAccountReplays();
+    this._viewingAccount = { userId, username: username || 'Player' };
+    this._returnAfterAccount = 'leaderboard';
+    this.showScreen('account', { skipSettingsOpen: true });
+    this._refreshAccountScreen();
+    this._loadOtherAccount(userId);
+  }
+
+  _refreshAccountScreen() {
+    const isOther = !!this._viewingAccount;
+    const title = this.root.querySelector('#account-title');
+    if (title) title.textContent = isOther ? 'Player account' : 'My account';
+    this.root.querySelector('#account-profile-own')?.toggleAttribute('hidden', isOther);
+    this.root.querySelector('#account-profile-other')?.toggleAttribute('hidden', !isOther);
+    this.root.querySelector('#account-view-settings-btn')?.toggleAttribute('hidden', !isOther);
+    if (!isOther) {
+      this._populateAccountForm();
+      this._loadAccountStats();
+      this._loadAccountReplays();
+    }
+  }
+
+  async _loadOtherAccount(userId) {
+    const roName = this.root.querySelector('#account-ro-username');
+    const roFlag = this.root.querySelector('#account-ro-flag');
+    const roElo = this.root.querySelector('#account-ro-elo');
+    const status = this.root.querySelector('#account-profile-status-other');
+    const statsBody = this.root.querySelector('#account-stats');
+    if (statsBody) statsBody.innerHTML = '<p class="center lb-hint">Loading…</p>';
+    if (status) {
+      status.textContent = '';
+      status.classList.remove('is-error');
+    }
+    try {
+      const profile = await fetchPublicProfile(userId);
+      if (!profile) throw new Error('Player not found.');
+      const name = profile.username || this._viewingAccount?.username || 'Player';
+      this._viewingAccount = {
+        userId,
+        username: name,
+        countryCode: profile.country_code,
+        elo: profile.elo,
+        settings: undefined
+      };
+      if (roName) roName.textContent = name;
+      if (roFlag) {
+        roFlag.textContent = profile.country_code ? flagEmoji(profile.country_code) : '';
+        roFlag.hidden = !profile.country_code;
+      }
+      if (roElo) {
+        roElo.textContent = profile.elo != null ? `${profile.elo} ELO · Ranked matchmaking` : '';
+      }
+      const stats = await fetchAllAccountStats(userId);
+      if (statsBody) statsBody.innerHTML = this._accountStatsHtml(stats);
+      await this._loadAccountReplays(userId);
+    } catch (e) {
+      if (statsBody) {
+        statsBody.innerHTML = `<p class="center lb-hint is-error">${this._esc(e.message || 'Could not load account.')}</p>`;
+      }
+      if (status) {
+        status.textContent = e.message || 'Could not load account.';
+        status.classList.add('is-error');
+      }
+    }
   }
 
   _populateAccountForm() {
@@ -1599,9 +1884,15 @@ export class UIOverlay {
     return `<table class="account-stats-table"><thead><tr><th>Mode</th><th>Rank</th><th>Best</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
   }
 
-  async _loadAccountReplays() {
+  async _loadAccountReplays(userId = null) {
     const body = this.root.querySelector('#account-replays');
-    if (!body || !this.auth?.user) return;
+    const uid = userId ?? this.auth?.user?.id;
+    const viewingOther = !!(userId && userId !== this.auth?.user?.id);
+    if (!body) return;
+    if (!uid) {
+      body.innerHTML = '<p class="center lb-hint">Sign in to save replays.</p>';
+      return;
+    }
     if (!supabaseConfigured()) {
       body.innerHTML = '<p class="center lb-hint">Replays are not configured.</p>';
       return;
@@ -1609,13 +1900,15 @@ export class UIOverlay {
     body.innerHTML = '<p class="center lb-hint">Loading…</p>';
     let rows;
     try {
-      rows = await listAccountReplays(this.auth.user.id);
+      rows = await listAccountReplays(uid);
     } catch (e) {
       body.innerHTML = `<p class="center lb-hint is-error">${e.message || 'Could not load replays.'}</p>`;
       return;
     }
     if (!rows.length) {
-      body.innerHTML = '<p class="center lb-hint">No replays yet — finish a run to record one.</p>';
+      body.innerHTML = viewingOther
+        ? '<p class="center lb-hint">No replays yet.</p>'
+        : '<p class="center lb-hint">No replays yet — finish a run to record one.</p>';
       return;
     }
 
@@ -1660,7 +1953,9 @@ export class UIOverlay {
   async _openAccountReplay(path, title) {
     const decoded = await loadReplayByPath(path);
     if (!decoded) {
-      const st = this.root.querySelector('#account-profile-status');
+      const st = this.root.querySelector(
+        this._viewingAccount ? '#account-profile-status-other' : '#account-profile-status'
+      );
       if (st) st.textContent = 'Could not load that replay.';
       return;
     }
@@ -2571,13 +2866,26 @@ export class UIOverlay {
     });
   }
 
+  _syncResolutionCustomUi() {
+    const custom = this.root.querySelector('#set-res-custom');
+    const sel = this.root.querySelector('#set-res');
+    if (custom && sel) custom.hidden = sel.value !== 'custom';
+  }
+
   _populateSettings() {
     const s = this.settings.activeSettings();
     const $ = (id) => this.root.querySelector(id);
 
     $('#set-sensitivity').value = s.sensitivity;
     this._setRange('set-fov', s.hFov);
-    $('#set-res').value = s.resolution;
+    $('#set-res').value = s.resolution === 'custom' || !RESOLUTIONS[s.resolution]
+      ? (s.resolution === 'custom' ? 'custom' : 'native')
+      : s.resolution;
+    const resW = $('#set-res-w');
+    const resH = $('#set-res-h');
+    if (resW) resW.value = s.resolutionWidth ?? RESOLUTIONS[s.resolution]?.size?.[0] ?? 1920;
+    if (resH) resH.value = s.resolutionHeight ?? RESOLUTIONS[s.resolution]?.size?.[1] ?? 1080;
+    this._syncResolutionCustomUi();
     $('#set-dur').value = s.runDuration;
     $('#set-raw').checked = s.rawInput;
 
@@ -2706,7 +3014,7 @@ export class UIOverlay {
   // -------------------------------------------------------------------------
   // Screen state machine
   // -------------------------------------------------------------------------
-  showScreen(name) {
+  showScreen(name, { skipSettingsOpen = false } = {}) {
     this.state = name;
     for (const key in this.screens) {
       this.screens[key].classList.toggle('active', key === name);
@@ -2730,8 +3038,7 @@ export class UIOverlay {
       if (!isMp) this._closeMpChatTyping(false);
     }
     this.crosshair.setVisible(inRun);
-    if (name === 'settings') this._openSettings();
-    if (name === 'account') this._populateAccountForm();
+    if (name === 'settings' && !skipSettingsOpen && !this._settingsExploreMode) this._openSettings();
     // Hide the system cursor only while actively playing — when paused (Esc),
     // the cursor must reappear so the menu is clickable.
     document.body.classList.toggle('in-run', inRun);
@@ -2957,8 +3264,7 @@ export class UIOverlay {
     // showScreen() resets state + crosshair — apply replay state afterwards.
     this.replaying = true;
     this.state = 'replay';
-    const titleEl = this.root.querySelector('#replay-title');
-    if (titleEl) titleEl.textContent = title;
+    this.engine.audio?.resume();
     this.replayOverlay?.classList.add('active');
     this.crosshair.setVisible(true);
     this.replayPlayer.load(decoded);
@@ -3080,6 +3386,21 @@ export class UIOverlay {
       this._setLeaderboardView(scenario);
       this._renderLeaderboard(scenario);
     });
+    this.root.querySelector('#lb-body')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-lb-user-id]');
+      if (!btn) return;
+      this._openAccount(btn.dataset.lbUserId, btn.dataset.lbUsername);
+    });
+    this.root.querySelector('#res-lb')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-lb-user-id]');
+      if (!btn) return;
+      this._openAccount(btn.dataset.lbUserId, btn.dataset.lbUsername);
+    });
+  }
+
+  _lbPlayerCell(row) {
+    if (!row.user_id) return `<td class="lb-player">${this._esc(row.username)}</td>`;
+    return `<td class="lb-player"><button type="button" class="lb-player-link" data-lb-user-id="${this._esc(row.user_id)}" data-lb-username="${this._esc(row.username)}">${this._esc(row.username)}</button></td>`;
   }
 
   _setLeaderboardView(scenario) {
@@ -3161,7 +3482,7 @@ export class UIOverlay {
               : '—');
           return `<tr${hl}>
           <td>${i + 1}</td>
-          <td class="lb-player">${this._esc(r.username)}</td>
+          ${this._lbPlayerCell(r)}
           <td class="score">${Number(r.elo ?? 1000).toLocaleString()}</td>
           <td>${games}</td>
           <td>${wl}</td>
@@ -3184,7 +3505,7 @@ export class UIOverlay {
           const date = r.achieved_at ? new Date(r.achieved_at).toLocaleDateString() : '—';
           return `<tr${hl}>
           <td>${i + 1}</td>
-          <td class="lb-player">${this._esc(r.username)}</td>
+          ${this._lbPlayerCell(r)}
           <td class="score">${Number(kills).toLocaleString()}</td>
           <td>${Math.round((r.accuracy || 0) * 100)}%</td>
           <td>${this._formatTimePlayed(r.time_played)}</td>
@@ -3206,7 +3527,7 @@ export class UIOverlay {
         const date = r.achieved_at ? new Date(r.achieved_at).toLocaleDateString() : '—';
         return `<tr${hl}>
           <td>${i + 1}</td>
-          <td class="lb-player">${this._esc(r.username)}</td>
+          ${this._lbPlayerCell(r)}
           <td class="score">${Number(r.score).toLocaleString()}</td>
           <td>${Math.round((r.accuracy || 0) * 100)}%</td>
           ${crit}

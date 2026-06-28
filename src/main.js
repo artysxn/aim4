@@ -51,6 +51,9 @@ engine.onUpdate = (dt) => {
   // Replay playback fully owns the camera + scene; the live scenario is paused.
   if (ui.replaying) {
     replayPlayer.update(dt);
+    engine.audio?.syncListener(engine.camera);
+    // Viewmodel tracers are scene-level; keep their fade animation alive during playback.
+    engine.viewmodel?.update(dt);
     crosshair.frame(engine);
     return;
   }

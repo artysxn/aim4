@@ -13,6 +13,11 @@ import deathmatch from './skull_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
 import exercise from './exercise_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
 import crown from './crown_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
 import globe from './globe_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
+import group from './group.svg?url';
+import person from './person.svg?url';
+import trophy from './trophy.svg?url';
+import logout from './logout.svg?url';
+import settings from './settings.svg?url';
 
 /** Scenario card icons keyed by SceneManager scenario id. */
 export const SCENARIO_ICONS = {
@@ -32,3 +37,8 @@ export const SCENARIO_ICONS = {
 export const MATCHMAKING_ICON = crown;
 export const TRAINING_ICON = exercise;
 export const CUSTOM_GAMES_ICON = globe;
+export const MULTIPLAYER_ICON = group;
+export const LEADERBOARD_ICON = trophy;
+export const ACCOUNT_ICON = person;
+export const LOGOUT_ICON = logout;
+export const SETTINGS_ICON = settings;

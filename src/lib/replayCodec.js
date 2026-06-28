@@ -188,6 +188,9 @@ export async function encodeReplay(rec) {
     durationSec: totalTicks / TICK_RATE,
     blueprints: rec.blueprints || {},
     environment: rec.environment || [],
+    environmentSegments: rec.environmentSegments || (
+      rec.environment?.length ? [{ start: 0, meshes: rec.environment }] : []
+    ),
     cam: packCamera(rec.cam),
     entities: (rec.entities || []).map((e) => ({
       id: e.id,
@@ -252,6 +255,9 @@ function buildReplayView(c) {
     settings: c.settings || {},
     blueprints: c.blueprints || {},
     environment: c.environment || [],
+    environmentSegments: c.environmentSegments || (
+      c.environment?.length ? [{ start: 0, meshes: c.environment }] : []
+    ),
     events: c.events || [],
     cam,
     entities,
@@ -286,6 +292,9 @@ export function localDecode(rec) {
     durationSec: rec.cam.length / TICK_RATE,
     blueprints: rec.blueprints || {},
     environment: rec.environment || [],
+    environmentSegments: rec.environmentSegments || (
+      rec.environment?.length ? [{ start: 0, meshes: rec.environment }] : []
+    ),
     cam: packCamera(rec.cam),
     entities: (rec.entities || []).map((e) => ({
       id: e.id,

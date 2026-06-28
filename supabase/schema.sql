@@ -143,14 +143,18 @@ create policy "insert own score" on public.scores
   for insert with check (auth.uid() = user_id);
 
 drop policy if exists "read own settings" on public.user_settings;
+drop policy if exists "read all settings" on public.user_settings;
 drop policy if exists "insert own settings" on public.user_settings;
 drop policy if exists "update own settings" on public.user_settings;
-create policy "read own settings" on public.user_settings
-  for select using (auth.uid() = user_id);
+-- Anyone can read settings (leaderboard → explore / copy); only the owner can write.
+create policy "read all settings" on public.user_settings
+  for select to anon, authenticated using (true);
 create policy "insert own settings" on public.user_settings
   for insert with check (auth.uid() = user_id);
 create policy "update own settings" on public.user_settings
   for update using (auth.uid() = user_id);
+
+grant select on public.user_settings to anon, authenticated;
 
 -- Create profile when auth.users row is inserted (runs before email is confirmed).
 create or replace function public.handle_new_user()
@@ -479,13 +483,14 @@ create index if not exists replays_user_idx on public.replays (user_id);
 
 alter table public.replays enable row level security;
 
--- Owner-only: replays are private to the account that recorded them.
+-- Anyone can read replay metadata (account page / leaderboard); only the owner writes.
 drop policy if exists "read own replays" on public.replays;
+drop policy if exists "read all replays" on public.replays;
 drop policy if exists "insert own replays" on public.replays;
 drop policy if exists "update own replays" on public.replays;
 drop policy if exists "delete own replays" on public.replays;
-create policy "read own replays" on public.replays
-  for select using (auth.uid() = user_id);
+create policy "read all replays" on public.replays
+  for select to anon, authenticated using (true);
 create policy "insert own replays" on public.replays
   for insert with check (auth.uid() = user_id);
 create policy "update own replays" on public.replays
@@ -493,21 +498,23 @@ create policy "update own replays" on public.replays
 create policy "delete own replays" on public.replays
   for delete using (auth.uid() = user_id);
 
-grant select, insert, update, delete on public.replays to authenticated;
+grant select on public.replays to anon, authenticated;
+grant insert, update, delete on public.replays to authenticated;
 
 -- Private Storage bucket for the gzipped telemetry payloads.
 insert into storage.buckets (id, name, public)
 values ('replays', 'replays', false)
 on conflict (id) do nothing;
 
--- Storage RLS: each user may only touch objects under their own {uid}/ prefix.
+-- Storage RLS: anyone can download replay payloads; only the owner may write.
 drop policy if exists "replay objects read own" on storage.objects;
+drop policy if exists "replay objects read all" on storage.objects;
 drop policy if exists "replay objects insert own" on storage.objects;
 drop policy if exists "replay objects update own" on storage.objects;
 drop policy if exists "replay objects delete own" on storage.objects;
-create policy "replay objects read own" on storage.objects
-  for select to authenticated
-  using (bucket_id = 'replays' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "replay objects read all" on storage.objects
+  for select to anon, authenticated
+  using (bucket_id = 'replays');
 create policy "replay objects insert own" on storage.objects
   for insert to authenticated
   with check (bucket_id = 'replays' and (storage.foldername(name))[1] = auth.uid()::text);

@@ -41,6 +41,7 @@ function colorHex(material, key) {
 function describeFromMatrix(node, matrix) {
   matrix.decompose(_p, _q, _s);
   const mat = Array.isArray(node.material) ? node.material[0] : node.material;
+  const side = mat?.side === THREE.BackSide ? 1 : mat?.side === THREE.DoubleSide ? 2 : 0;
   return {
     geo: (node.geometry.type || 'Box').replace('Geometry', ''),
     params: { ...node.geometry.parameters },
@@ -49,6 +50,7 @@ function describeFromMatrix(node, matrix) {
     emissiveIntensity: mat?.emissiveIntensity ?? 0,
     opacity: mat?.opacity ?? 1,
     transparent: !!mat?.transparent,
+    side,
     p: [r(_p.x), r(_p.y), r(_p.z)],
     q: [r(_q.x, 1e5), r(_q.y, 1e5), r(_q.z, 1e5), r(_q.w, 1e5)],
     s: [r(_s.x), r(_s.y), r(_s.z)]
@@ -81,6 +83,7 @@ export class ReplayRecorder {
     this.cam = [];
     this.events = [];
     this.environment = [];
+    this.environmentSegments = []; // { start: tick, meshes } — supports mid-run map swaps (duels)
     this.blueprints = {}; // bpId -> descriptor
     this._bpByHash = new Map(); // dedupe identical visuals
     this._bpSeq = 0;
@@ -117,19 +120,34 @@ export class ReplayRecorder {
     }
   }
 
-  _snapshotEnvironment(scenario) {
+  _collectEnvironmentMeshes(scenario) {
+    const meshes = [];
     const root = scenario?.root;
-    if (!root) return;
+    if (!root) return meshes;
     const targetObjs = new Set((scenario.targets || []).map((t) => t.object));
     root.updateWorldMatrix(true, true);
     const walk = (node) => {
       if (targetObjs.has(node)) return; // never bake live targets into the map
       if (node.isMesh && node.geometry) {
-        this.environment.push(describeFromMatrix(node, node.matrixWorld));
+        meshes.push(describeFromMatrix(node, node.matrixWorld));
       }
       for (const child of node.children) walk(child);
     };
     for (const child of root.children) walk(child);
+    return meshes;
+  }
+
+  _snapshotEnvironment(scenario) {
+    const meshes = this._collectEnvironmentMeshes(scenario);
+    this.environment = meshes;
+    this.environmentSegments = [{ start: 0, meshes }];
+  }
+
+  /** Snapshot the map after a mid-run arena reload (duels round resets). */
+  recordEnvironmentChange() {
+    if (!this.active || !this.scenario) return;
+    const meshes = this._collectEnvironmentMeshes(this.scenario);
+    this.environmentSegments.push({ start: this._tick, meshes });
   }
 
   _blueprintFor(target) {
@@ -231,6 +249,7 @@ export class ReplayRecorder {
       startedAt: this.meta.startedAt,
       blueprints: this.blueprints,
       environment: this.environment,
+      environmentSegments: this.environmentSegments,
       cam: this.cam,
       entities: this._finished.sort((a, b) => a.start - b.start),
       events: this.events

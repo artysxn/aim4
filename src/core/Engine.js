@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 import { sourceVFovFromHFov, clamp } from '../utils/MathUtils.js';
-import { RESOLUTIONS } from './SettingsManager.js';
+import { getResolutionSpec } from './SettingsManager.js';
 
 export const EYE_HEIGHT = 1.6;
 
@@ -66,7 +66,7 @@ _setupLights() {
    * FOV stays fixed while widescreen gains horizontal coverage.
    */
   applyResolution() {
-    const res = RESOLUTIONS[this.settings.data.resolution];
+    const res = getResolutionSpec(this.settings.data);
     const displayW = window.innerWidth;
     const displayH = window.innerHeight;
     let w, h, pixelRatio;

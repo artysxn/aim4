@@ -22,10 +22,40 @@ export const RESOLUTIONS = {
   '1280x720': { label: '1280 × 720 (16:9)', size: [1280, 720] }
 };
 
+const RES_MIN = 320;
+const RES_MAX = 7680;
+
+/** Clamp a custom resolution dimension to sane backbuffer bounds. */
+export function clampResolutionDim(n, fallback) {
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v) || v < RES_MIN) return fallback;
+  return Math.min(v, RES_MAX);
+}
+
+/**
+ * Resolve the active backbuffer size from settings.
+ * @returns {{ size: [number, number] | null, stretched?: boolean }}
+ */
+export function getResolutionSpec(data) {
+  if (!data) return { size: null };
+  const key = data.resolution;
+  if (!key || key === 'native') return { size: null };
+  if (key === 'custom') {
+    const w = clampResolutionDim(data.resolutionWidth, 1920);
+    const h = clampResolutionDim(data.resolutionHeight, 1080);
+    return { size: [w, h] };
+  }
+  const preset = RESOLUTIONS[key];
+  if (preset) return preset;
+  return { size: null };
+}
+
 const DEFAULTS = {
   sensitivity: SENSITIVITY_DEFAULT,
   hFov: 90,
   resolution: 'native',
+  resolutionWidth: 1920,
+  resolutionHeight: 1080,
   rawInput: true, // request unadjusted (raw) mouse movement under Pointer Lock
   runDuration: 60, // seconds
   crosshair: {
@@ -182,6 +212,7 @@ export class SettingsManager {
     this._draftListeners = [];
     this._cloudSaveHandler = null;
     this._cloudSyncPaused = false;
+    this._exploreMode = false;
   }
 
   _load() {
@@ -263,6 +294,7 @@ export class SettingsManager {
   }
 
   openDraft() {
+    if (this._exploreMode) this.closeExploreDraft();
     this.draft = structuredClone(this.data);
     this._undoStack = [];
     this._emitDraft();
@@ -275,13 +307,34 @@ export class SettingsManager {
   }
 
   mutateDraft(fn) {
+    if (this._exploreMode) return;
     if (!this.draft) this.openDraft();
     this.recordUndo();
     fn(this.draft);
     this._emitDraft();
   }
 
+  /** Read-only draft for browsing another user's settings (not persisted). */
+  openExploreDraft(payload) {
+    this.discardDraft();
+    this.draft = this._deepMerge(structuredClone(DEFAULTS), structuredClone(payload || {}));
+    this._normalizeSensitivity(this.draft);
+    this._undoStack = [];
+    this._exploreMode = true;
+    this._emitDraft();
+  }
+
+  closeExploreDraft() {
+    this._exploreMode = false;
+    this.discardDraft();
+  }
+
+  get isExploreMode() {
+    return this._exploreMode;
+  }
+
   confirmDraft() {
+    if (this._exploreMode) return;
     if (!this.draft) return;
     this.data = structuredClone(this.draft);
     this.draft = null;
