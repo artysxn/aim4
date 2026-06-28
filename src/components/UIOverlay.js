@@ -38,17 +38,17 @@ import { duelsArenaSelectOptions } from '../scenarios/duelsArenas.js';
 import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 
 const SCENARIO_META = {
-  gridshot: { title: 'Gridshot', dualPlay: true },
-  stars: { title: 'Stars', dualPlay: true },
-  microflicks: { title: 'Microflicks', dualPlay: true },
-  pasu: { title: 'Pasu', dualPlay: true },
-  spidershot: { title: 'Spidershot', dualPlay: true },
-  survival: { title: 'Survival', dualPlay: true },
-  arena: { title: 'Crossfire', dualPlay: true },
-  duels: { title: 'Duels', dualPlay: true },
-  range: { title: 'Range', dualPlay: true },
-  tracking: { title: 'Tracking', dualPlay: true },
-  deathmatch: { title: 'Deathmatch', dualPlay: true }
+  gridshot: { title: 'Gridshot', dualPlay: true, tags: ['Speed', 'Accuracy'] },
+  stars: { title: 'Stars', dualPlay: true, tags: ['Accuracy'] },
+  microflicks: { title: 'Microflicks', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
+  pasu: { title: 'Pasu', dualPlay: true, tags: ['Accuracy', 'Reactions', 'Control'] },
+  spidershot: { title: 'Spidershot', dualPlay: true, tags: ['Speed', 'Reactions'] },
+  survival: { title: 'Survival', dualPlay: true, tags: ['Speed', 'Control'] },
+  arena: { title: 'Crossfire', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
+  duels: { title: 'Duels', dualPlay: true, tags: ['Movement', 'Reactions'] },
+  range: { title: 'Range', dualPlay: true, tags: ['Movement'] },
+  tracking: { title: 'Tracking', dualPlay: true, tags: [] },
+  deathmatch: { title: 'Deathmatch', dualPlay: true, tags: ['Movement', 'Speed', 'Control'] }
 };
 
 /** Scenarios with practice-only tuning (gear on training card). */
@@ -642,7 +642,7 @@ export class UIOverlay {
 
     <!-- TRAINING (singleplayer mode picker) -->
     <div class="screen training" data-screen="training">
-      <div class="panel training-panel">
+      <div class="panel wide training-panel">
         <h2 class="text-big training-heading">Training</h2>
         <div class="training-list">
           ${Object.keys(SCENARIOS)
@@ -650,23 +650,28 @@ export class UIOverlay {
               const meta = SCENARIO_META[key];
               const hasSettings = SCENARIO_SETTING_IDS.has(key);
               const playBtns = meta.dualPlay
-                ? `<button type="button" class="btn btn-sm training-row-play" data-play="${key}" data-variant="practice">Training</button>
-              <button type="button" class="btn btn-sm training-row-play" data-play="${key}" data-variant="competitive">Competitive</button>`
-                : `<button type="button" class="btn btn-sm training-row-play" data-play="${key}" aria-label="Play ${meta.title}">Play</button>`;
+                ? `<button type="button" class="btn training-row-play" data-play="${key}" data-variant="practice">Training</button>
+              <button type="button" class="btn training-row-play" data-play="${key}" data-variant="competitive">Competitive</button>`
+                : `<button type="button" class="btn training-row-play" data-play="${key}" aria-label="Play ${meta.title}">Play</button>`;
               const gearBtn = hasSettings
                 ? `<button type="button" class="training-row-gear" data-scenario-settings-open="${key}" aria-label="${meta.title} settings">${GEAR_ICON}</button>`
                 : `<span class="training-row-gear-spacer" aria-hidden="true"></span>`;
+              const tagHtml = (meta.tags || [])
+                .map((tag) => `<span class="training-row-tag">${tag}</span>`)
+                .join('');
               return `
             <div class="training-row" data-scenario="${key}">
-              <div class="training-row-icon">
-                <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="28" height="28" />
+              <div class="training-row-main">
+                <div class="training-row-icon">
+                  <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="24" height="24" />
+                </div>
+                <span class="training-row-title">${meta.title}</span>
+                ${tagHtml ? `<div class="training-row-tags">${tagHtml}</div>` : ''}
               </div>
-              <span class="training-row-title">${meta.title}</span>
-              <span class="training-row-tag" aria-hidden="true"></span>
-              <span class="training-row-tag" aria-hidden="true"></span>
-              <span class="training-row-spacer"></span>
-              ${playBtns}
-              ${gearBtn}
+              <div class="training-row-actions">
+                ${playBtns}
+                ${gearBtn}
+              </div>
             </div>`;
             })
             .join('')}
@@ -773,10 +778,7 @@ export class UIOverlay {
     <!-- ACCOUNT -->
     <div class="screen account" data-screen="account">
       <div class="panel wide">
-        <h2 class="text-big" id="account-title">My account</h2>
-
         <section class="account-section" id="account-profile-own">
-          <h4>Profile</h4>
           <div class="field field-plain">
             <div class="field-top"><span class="field-label">Username</span></div>
             <div class="account-inline">
@@ -800,7 +802,6 @@ export class UIOverlay {
         </section>
 
         <section class="account-section" id="account-profile-other" hidden>
-          <h4>Profile</h4>
           <p class="account-head-readonly">
             <span class="account-flag" id="account-ro-flag"></span>
             <span class="account-username" id="account-ro-username"></span>
@@ -818,7 +819,6 @@ export class UIOverlay {
 
         <section class="account-section" id="account-replays-section">
           <h4>Replays</h4>
-          <p class="account-stats-hint">Last run per mode · best competitive run</p>
           <div id="account-replays" class="account-replays">
             <p class="center lb-hint">Loading…</p>
           </div>
@@ -1769,8 +1769,6 @@ export class UIOverlay {
 
   _refreshAccountScreen() {
     const isOther = !!this._viewingAccount;
-    const title = this.root.querySelector('#account-title');
-    if (title) title.textContent = isOther ? 'Player account' : 'My account';
     this.root.querySelector('#account-profile-own')?.toggleAttribute('hidden', isOther);
     this.root.querySelector('#account-profile-other')?.toggleAttribute('hidden', !isOther);
     this.root.querySelector('#account-view-settings-btn')?.toggleAttribute('hidden', !isOther);
@@ -1809,7 +1807,7 @@ export class UIOverlay {
         roFlag.hidden = !profile.country_code;
       }
       if (roElo) {
-        roElo.textContent = profile.elo != null ? `${profile.elo} ELO · Ranked matchmaking` : '';
+        roElo.textContent = profile.elo != null ? `${profile.elo} ELO` : '';
       }
       const stats = await fetchAllAccountStats(userId);
       if (statsBody) statsBody.innerHTML = this._accountStatsHtml(stats);
@@ -1926,7 +1924,7 @@ export class UIOverlay {
       const best = slots['competitive:best'];
       const btns = [];
       if (last) btns.push(this._replayBtnHtml(last, 'Last run', title));
-      if (best) btns.push(this._replayBtnHtml(best, 'Best (ranked)', title));
+      if (best) btns.push(this._replayBtnHtml(best, 'Best run', title));
       if (btns.length) {
         items.push(
           `<div class="account-replay-row"><span class="account-replay-name">${title}</span><span class="account-replay-btns">${btns.join('')}</span></div>`
@@ -1941,13 +1939,7 @@ export class UIOverlay {
   }
 
   _replayBtnHtml(row, label, title) {
-    const score = row.kills != null && isKillLeaderboardScenario(row.scenario)
-      ? `${row.kills} kills`
-      : row.score != null
-        ? `${Math.round(row.score).toLocaleString()} pts`
-        : '';
-    const meta = score ? ` · ${score}` : '';
-    return `<button type="button" class="btn btn-sm" data-replay-path="${this._esc(row.replay_file_path)}" data-replay-title="${this._esc(`${title} — ${label}`)}">${label}${meta}</button>`;
+    return `<button type="button" class="btn btn-sm" data-replay-path="${this._esc(row.replay_file_path)}" data-replay-title="${this._esc(`${title} — ${label}`)}">${label}</button>`;
   }
 
   async _openAccountReplay(path, title) {

@@ -384,30 +384,22 @@ h4 {
 }
 
 /* ---- Training list (mode picker) ---------------------------------------- */
-.screen.training.active {
-  align-items: stretch;
-  justify-content: flex-start;
-  padding: 0;
-}
 .training-panel {
-  width: 100%;
-  max-width: none;
-  height: 100%;
-  max-height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 20px 24px calc(env(safe-area-inset-bottom, 0px) + 16px);
+  max-height: 92vh;
+  padding: 28px 30px;
   text-align: left;
-  background: transparent;
 }
 .training-heading {
   flex-shrink: 0;
-  margin: 0 0 16px;
+  margin: 0 0 14px;
   text-align: center;
 }
 .training-list {
   flex: 1;
   min-height: 0;
+  max-height: min(62vh, 560px);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   display: flex;
@@ -416,80 +408,110 @@ h4 {
 }
 .training-row {
   display: flex;
-  align-items: center;
-  gap: 14px;
+  align-items: stretch;
   width: 100%;
-  min-height: 52px;
-  padding: 8px 14px;
+  min-height: 40px;
   background: var(--chip-bg);
+  overflow: hidden;
   transition: background 0.12s;
 }
 .training-row:hover {
   background: rgba(255, 255, 255, 0.08);
+}
+.training-row-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 0 12px;
 }
 .training-row-icon {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
+  width: 28px;
 }
 .training-row-icon .aim4-icon {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   display: block;
 }
 .training-row-title {
   flex-shrink: 0;
-  width: 120px;
-  font-size: 15px;
+  width: 108px;
+  font-size: 14px;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.training-row-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
 .training-row-tag {
   flex-shrink: 0;
-  width: 72px;
-  height: 22px;
+  padding: 2px 8px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.3;
 }
-.training-row-spacer {
-  flex: 1;
-  min-width: 12px;
+.training-row-actions {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 .training-row-play {
   flex-shrink: 0;
-  min-width: 96px;
+  min-width: 92px;
+  height: auto;
+  align-self: stretch;
+  border-radius: 0;
+  padding: 0 12px;
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+}
+.training-row-play:hover {
+  filter: brightness(1.08);
 }
 .training-row-gear {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  align-self: stretch;
   padding: 0;
-  margin-left: 4px;
   background: transparent;
   border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--muted);
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: 0;
   transition: color 0.12s, background 0.12s;
 }
 .training-row-gear:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
 }
 .training-row-gear:active {
   background: rgba(255, 255, 255, 0.04);
 }
 .training-row-gear-spacer {
   flex-shrink: 0;
-  width: 34px;
-  margin-left: 4px;
+  width: 36px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
 }
 .training-back {
   flex-shrink: 0;
