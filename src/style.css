@@ -936,6 +936,34 @@ input[type='checkbox'] {
   color: #fff;
   background: var(--accent);
 }
+.lb-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 20px;
+  margin-bottom: 4px;
+}
+.lb-header .tab {
+  flex-shrink: 0;
+}
+.lb-mode-select-wrap {
+  flex: 1;
+  min-width: 200px;
+  max-width: 320px;
+  text-align: left;
+}
+.lb-mode-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+#lb-mode-select {
+  width: 100%;
+}
 .lb-body {
   margin: 10px 0 4px;
   min-height: 80px;
@@ -1069,6 +1097,109 @@ input[type='checkbox'] {
 }
 .auth-tabs {
   margin-bottom: 16px;
+}
+.auth-divider {
+  margin: 14px 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+}
+.btn-google {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: #fff;
+  color: #1f1f1f;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.btn-google:hover {
+  background: #f3f3f3;
+}
+.btn-google:active {
+  background: #e8e8e8;
+}
+
+.account-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 22px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--chip-bg);
+}
+.account-flag {
+  font-size: 42px;
+  line-height: 1;
+}
+.account-username {
+  font-size: calc(var(--font-display-title-size) * 0.55);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.account-elo-line {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.account-section {
+  margin-bottom: 24px;
+  text-align: left;
+}
+.account-section h4 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.account-inline {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.account-inline .config-code-input {
+  flex: 1;
+  min-width: 0;
+}
+.account-google-wrap {
+  margin-top: 14px;
+}
+.account-linked-note {
+  margin: 0;
+  color: var(--accent);
+  font-size: 14px;
+}
+.account-stats-hint {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.account-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.account-stats-table th,
+.account-stats-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--chip-bg);
+  text-align: left;
+}
+.account-stats-table th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.account-stats-table td.account-rank {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.account-stats-table tbody tr:last-child td {
+  border-bottom: none;
 }
 
 .hidden {
@@ -1588,4 +1719,102 @@ input[type='checkbox'] {
 .mp-tab-table tbody tr + tr td,
 .mp-tab-table tbody tr + tr th {
   border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* ---------------------------------------------------------------------------
+   Replay playback — overlay control bar + account replay list
+   --------------------------------------------------------------------------- */
+.replay-overlay {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 40;
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 22px calc(env(safe-area-inset-bottom, 0px) + 18px);
+  background: linear-gradient(to top, rgba(8, 8, 8, 0.88), rgba(8, 8, 8, 0));
+  pointer-events: none;
+}
+.replay-overlay.active {
+  display: flex;
+}
+.replay-overlay > * {
+  pointer-events: auto;
+}
+.replay-topbar {
+  position: fixed;
+  top: 16px;
+  left: 22px;
+  right: 22px;
+  z-index: 41;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: none;
+}
+.replay-topbar > * {
+  pointer-events: auto;
+}
+.replay-title {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  background: var(--chip-bg);
+  padding: 6px 12px;
+  border-radius: 8px;
+}
+.replay-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 10px 14px;
+}
+.replay-scrub {
+  flex: 1;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.replay-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.replay-playpause {
+  min-width: 42px;
+}
+.replay-speeds {
+  display: flex;
+  gap: 4px;
+}
+.replay-speed.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.account-replays {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.account-replay-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.account-replay-name {
+  font-weight: 500;
+}
+.account-replay-btns {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }

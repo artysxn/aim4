@@ -16,6 +16,8 @@ import { Crosshair } from './components/Crosshair.js';
 import { Viewmodel } from './components/Viewmodel.js';
 import { WeaponController } from './weapons/WeaponController.js';
 import { SceneManager } from './core/SceneManager.js';
+import { ReplayRecorder } from './core/ReplayRecorder.js';
+import { ReplayPlayer } from './core/ReplayPlayer.js';
 import { UIOverlay } from './components/UIOverlay.js';
 
 const settings = new SettingsManager();
@@ -33,7 +35,12 @@ engine.sceneManager = sceneManager;
 const weapon = new WeaponController({ engine, input, settings, sceneManager, viewmodel });
 engine.weapon = weapon; // scenarios/UI reach it for ammo + reset
 input.onReload = () => weapon.reload();
-const ui = new UIOverlay({ engine, input, settings, crosshair, sceneManager, auth });
+const replayRecorder = new ReplayRecorder(engine, input);
+engine.replayRecorder = replayRecorder; // BaseScenario.shoot records shots through it
+const replayPlayer = new ReplayPlayer(engine);
+const ui = new UIOverlay({
+  engine, input, settings, crosshair, sceneManager, auth, replayRecorder, replayPlayer
+});
 
 ui.init();
 auth.init().then(() => ui.refreshAccountBar());
@@ -41,7 +48,17 @@ auth.init().then(() => ui.refreshAccountBar());
 // One animation loop drives everything: advance the active scenario, then
 // refresh the (cheap) UI read-outs.
 engine.onUpdate = (dt) => {
+  // Replay playback fully owns the camera + scene; the live scenario is paused.
+  if (ui.replaying) {
+    replayPlayer.update(dt);
+    crosshair.frame(engine);
+    return;
+  }
   sceneManager.update(dt);
+  // Sample telemetry at a fixed 128 Hz while a run is actively recording.
+  if (replayRecorder.active && sceneManager.current?.running) {
+    replayRecorder.sample(dt);
+  }
   // First-person weapon visuals: the viewmodel follows the camera during any
   // active weapon run (every scenario now uses the AK).
   const sc = sceneManager.current;

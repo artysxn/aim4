@@ -12,6 +12,11 @@ export function supabaseConfigured() {
   return Boolean(url && anonKey);
 }
 
+/** OAuth redirect target — must be whitelisted in Supabase → Auth → URL configuration. */
+export function authRedirectUrl() {
+  return window.location.origin;
+}
+
 let client = null;
 
 export function getSupabase() {

@@ -17,7 +17,16 @@ import {
   fetchEloLeaderboardWithMeta,
   submitScore
 } from '../lib/cloudScores.js';
+import {
+  fetchAllAccountStats,
+  formatModeStat,
+  formatRankLabel
+} from '../lib/accountStats.js';
+import { countryOptionsHtml, flagEmoji } from '../lib/countries.js';
 import { supabaseConfigured } from '../lib/supabase.js';
+import { localDecode } from '../lib/replayCodec.js';
+import { REPLAY_SPEEDS } from '../core/ReplayPlayer.js';
+import { saveReplay, listAccountReplays, loadReplayByPath } from '../lib/replayStore.js';
 import { MultiplayerController } from '../multiplayer/MultiplayerController.js';
 import { SCORE_TARGETS, MM_SCORE_TARGET, TRACKING_DURATION } from '../multiplayer/constants.js';
 import { getMap } from '../multiplayer/maps.js';
@@ -101,13 +110,18 @@ function scenarioSettingsPanel(id, body) {
 }
 
 export class UIOverlay {
-  constructor({ engine, input, settings, crosshair, sceneManager, auth }) {
+  constructor({ engine, input, settings, crosshair, sceneManager, auth, replayRecorder, replayPlayer }) {
     this.engine = engine;
     this.input = input;
     this.settings = settings;
     this.auth = auth;
     this.crosshair = crosshair;
     this.sceneManager = sceneManager;
+    this.replayRecorder = replayRecorder;
+    this.replayPlayer = replayPlayer;
+    this.replaying = false; // engine loop checks this to drive playback
+    this._lastReplay = null; // decoded view of the run that just finished
+    this._replayReturn = 'menu'; // screen to restore when leaving playback
 
     this.root = document.getElementById('ui-root');
     this.state = 'menu';
@@ -155,6 +169,7 @@ export class UIOverlay {
     this.input.onLockChange = (locked) => this._onLockChange(locked);
     this.input.onUnlockedClick = () => this._onUnlockedClick();
     this.sceneManager.onFinish = (results) => this._onFinish(results);
+    this._bindReplay();
 
     // Shared link: ?lobby=CODE opens multiplayer and auto-joins if there's space.
     if (this.mp.urlLobbyCode()) {
@@ -577,6 +592,8 @@ export class UIOverlay {
               <button type="button" class="btn btn-sm primary" id="menu-signup-btn">Sign up</button>
             </div>
             <div class="menu-auth-actions hidden" id="menu-auth-user">
+              <span class="menu-auth-username" id="menu-auth-name"></span>
+              <button type="button" class="btn btn-sm" id="menu-account-btn">My account</button>
               <button type="button" class="btn btn-sm" id="menu-logout-btn">Log out</button>
             </div>
           </div>
@@ -638,8 +655,7 @@ export class UIOverlay {
             <span class="settings-unsaved-hint muted" id="settings-unsaved-hint" hidden>Unsaved changes</span>
             <button type="button" class="btn" id="settings-undo-btn" disabled>Undo</button>
             <button class="btn" data-reset>Reset all</button>
-            <button type="button" class="btn primary" id="settings-confirm-btn">Confirm</button>
-            <button type="button" class="btn" id="settings-done-btn">Done</button>
+            <button type="button" class="btn primary" id="settings-done-btn">Done</button>
           </div>
         </header>
         <div class="settings-drawer">
@@ -659,8 +675,7 @@ export class UIOverlay {
           <div class="scenario-settings-bar-actions">
             <span class="settings-unsaved-hint muted" id="scenario-settings-unsaved-hint" hidden>Unsaved changes</span>
             <button type="button" class="btn" id="scenario-settings-undo-btn" disabled>Undo</button>
-            <button type="button" class="btn primary" id="scenario-settings-confirm-btn">Confirm</button>
-            <button type="button" class="btn" id="scenario-settings-done-btn">Done</button>
+            <button type="button" class="btn primary" id="scenario-settings-done-btn">Done</button>
           </div>
         </header>
         <div class="scenario-settings-drawer">
@@ -680,6 +695,11 @@ export class UIOverlay {
           <button type="button" class="tab active" data-auth-tab="login">Sign in</button>
           <button type="button" class="tab" data-auth-tab="register">Register</button>
         </div>
+        <button type="button" class="btn btn-google btn-block" id="auth-google">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+          Continue with Google
+        </button>
+        <p class="auth-divider">or</p>
         <div class="field field-plain" id="auth-username-wrap">
           <div class="field-top"><span class="field-label">Username</span></div>
           <input type="text" id="auth-username" class="config-code-input" maxlength="20" spellcheck="false" autocomplete="username" />
@@ -704,18 +724,83 @@ export class UIOverlay {
       </div>
     </div>
 
+    <!-- ACCOUNT -->
+    <div class="screen account" data-screen="account">
+      <div class="panel wide">
+        <h2 class="text-big">My account</h2>
+        <div class="account-head">
+          <span id="account-flag" class="account-flag" aria-hidden="true"></span>
+          <div class="account-head-meta">
+            <div id="account-username-display" class="account-username"></div>
+            <div id="account-elo-line" class="account-elo-line"></div>
+          </div>
+        </div>
+
+        <section class="account-section">
+          <h4>Profile</h4>
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Username</span></div>
+            <div class="account-inline">
+              <input type="text" id="account-username" class="config-code-input" maxlength="20" spellcheck="false" autocomplete="username" />
+              <button type="button" class="btn btn-sm" id="account-username-save">Save</button>
+            </div>
+          </div>
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Country flag</span></div>
+            <div class="account-inline">
+              <select id="account-country" class="config-code-input"></select>
+              <button type="button" class="btn btn-sm" id="account-country-save">Save</button>
+            </div>
+          </div>
+          <div id="account-google-wrap" class="account-google-wrap">
+            <button type="button" class="btn btn-google btn-block" id="account-link-google">
+              Link Google account
+            </button>
+            <p class="account-linked-note hidden" id="account-google-linked">Google account linked</p>
+          </div>
+          <p class="readout" id="account-profile-status"></p>
+        </section>
+
+        <section class="account-section">
+          <h4>Statistics</h4>
+          <p class="account-stats-hint">Competitive leaderboards · rank / total players</p>
+          <div id="account-stats" class="account-stats">
+            <p class="center lb-hint">Loading…</p>
+          </div>
+        </section>
+
+        <section class="account-section">
+          <h4>Replays</h4>
+          <p class="account-stats-hint">Last run per mode · best competitive run</p>
+          <div id="account-replays" class="account-replays">
+            <p class="center lb-hint">Loading…</p>
+          </div>
+        </section>
+
+        <div class="menu-actions">
+          <button type="button" class="btn" data-goto="menu">Back</button>
+        </div>
+      </div>
+    </div>
+
     <!-- LEADERBOARD -->
     <div class="screen leaderboard" data-screen="leaderboard">
       <div class="panel wide">
-        <div class="tabs" id="lb-tabs">
-          <button class="tab active" data-lb="elo">Ranked ELO</button>
-          ${Object.keys(SCENARIOS)
-            .map(
-              (k) =>
-                `<button class="tab" data-lb="${k}">${SCENARIO_META[k].title}</button>`
-            )
-            .join('')}
+        <div class="lb-header" id="lb-tabs">
+          <button type="button" class="tab active" id="lb-tab-elo" data-lb="elo">Ranked ELO</button>
+          <div class="lb-mode-select-wrap">
+            <label class="lb-mode-label" for="lb-mode-select">Gamemode leaderboard</label>
+            <select id="lb-mode-select" class="config-code-input">
+              ${Object.keys(SCENARIOS)
+                .map(
+                  (k) =>
+                    `<option value="${k}">${SCENARIO_META[k].title}</option>`
+                )
+                .join('')}
+            </select>
+          </div>
         </div>
+        <p class="lb-subtitle" id="lb-subtitle"></p>
         <div id="lb-body" class="lb-body"></div>
         <div class="menu-actions">
           <button class="btn primary" data-goto="menu">Back</button>
@@ -837,8 +922,23 @@ export class UIOverlay {
         <div id="res-lb" class="lb-body"></div>
         <div class="menu-actions">
           <button class="btn primary" data-restart>Play again</button>
+          <button class="btn" id="res-watch-replay" hidden>Watch replay</button>
           <button class="btn" data-quit>Menu</button>
         </div>
+      </div>
+    </div>
+
+    <!-- REPLAY PLAYBACK -->
+    <div id="replay-overlay" class="replay-overlay">
+      <div class="replay-topbar">
+        <span id="replay-title" class="replay-title">Replay</span>
+        <button type="button" class="btn btn-sm" id="replay-exit">Exit replay</button>
+      </div>
+      <div class="replay-controls">
+        <button type="button" class="btn btn-sm replay-playpause" id="replay-playpause">▶</button>
+        <input type="range" id="replay-scrub" class="replay-scrub" min="0" max="1000" value="0" />
+        <span id="replay-time" class="replay-time">0.0 / 0.0s</span>
+        <div class="replay-speeds" id="replay-speeds"></div>
       </div>
     </div>
     `;
@@ -887,7 +987,7 @@ export class UIOverlay {
         this.play(t.dataset.play, variant ? { variant } : {});
       }
       else if (t.dataset.goto) {
-        if (t.dataset.goto === 'leaderboard') this._renderLeaderboard(this._activeLbTab());
+        if (t.dataset.goto === 'leaderboard') this._openLeaderboard();
         if (t.dataset.goto === 'settings') this._returnAfterSettings = this.state;
         this.showScreen(t.dataset.goto);
         if (t.dataset.goto === 'mp') this.mp.openBrowser();
@@ -903,11 +1003,13 @@ export class UIOverlay {
         this.settings.resetColorsDraft();
         this._populateSettings();
         this._updateSettingsBar();
-      } else if (t.dataset.lb) {
-        this.root.querySelectorAll('#lb-tabs .tab').forEach((b) => b.classList.toggle('active', b === t));
-        this._renderLeaderboard(t.dataset.lb);
+      } else if (t.dataset.lb === 'elo') {
+        this._setLeaderboardView('elo');
+        this._renderLeaderboard('elo');
       }
     });
+
+    this._bindLeaderboard();
 
     // Scenario cards: clicking the card body (not the button) also previews
     // which leaderboard is active.
@@ -1018,8 +1120,9 @@ export class UIOverlay {
   }
 
   _closeScenarioSettings() {
-    this.settings.discardDraft();
+    this.settings.confirmDraft();
     this._activeScenarioSettings = null;
+    this._updateSettingsBar();
     this._updateScenarioSettingsBar();
     const ret = this._returnAfterScenarioSettings ?? 'training';
     this._returnAfterScenarioSettings = null;
@@ -1028,10 +1131,6 @@ export class UIOverlay {
 
   _bindScenarioSettings() {
     const $ = (id) => this.root.querySelector(id);
-    $('#scenario-settings-confirm-btn')?.addEventListener('click', () => {
-      this.settings.confirmDraft();
-      this._updateSettingsBar();
-    });
     $('#scenario-settings-undo-btn')?.addEventListener('click', () => {
       if (this.settings.undoDraft()) {
         this._populateSettings();
@@ -1251,6 +1350,14 @@ export class UIOverlay {
       draft((d) => { d.tracking.botCrouchTap = e.target.checked; });
     });
     this._bindRange('set-tracking-strafe', (v, d) => { d.tracking.strafeRate = v; });
+
+    $('#settings-undo-btn')?.addEventListener('click', () => {
+      if (s.undoDraft()) {
+        this._populateSettings();
+        this._updateSettingsBar();
+      }
+    });
+    $('#settings-done-btn')?.addEventListener('click', () => this._closeSettings());
   }
 
   _bindPauseMenu() {
@@ -1262,21 +1369,10 @@ export class UIOverlay {
     $('#pause-leave-lobby-btn')?.addEventListener('click', () => {
       this.mp?.returnToLobby();
     });
-    $('#settings-confirm-btn')?.addEventListener('click', () => {
-      this.settings.confirmDraft();
-      this._updateSettingsBar();
-    });
-    $('#settings-undo-btn')?.addEventListener('click', () => {
-      if (this.settings.undoDraft()) {
-        this._populateSettings();
-        this._updateSettingsBar();
-      }
-    });
-    $('#settings-done-btn')?.addEventListener('click', () => this._closeSettings());
   }
 
   _closeSettings() {
-    this.settings.discardDraft();
+    this.settings.confirmDraft();
     this._updateSettingsBar();
     const ret = this._returnAfterSettings;
     this._returnAfterSettings = null;
@@ -1329,6 +1425,11 @@ export class UIOverlay {
     if (this.auth.isLoggedIn) {
       guest?.classList.add('hidden');
       userRow?.classList.remove('hidden');
+      const nameEl = this.root.querySelector('#menu-auth-name');
+      if (nameEl) {
+        const flag = this.auth.countryCode ? `${flagEmoji(this.auth.countryCode)} ` : '';
+        nameEl.textContent = `${flag}@${this.auth.displayName || 'player'}`;
+      }
     } else {
       guest?.classList.remove('hidden');
       userRow?.classList.add('hidden');
@@ -1345,6 +1446,7 @@ export class UIOverlay {
 
     $('#menu-login-btn')?.addEventListener('click', () => this._openAuth('login'));
     $('#menu-signup-btn')?.addEventListener('click', () => this._openAuth('register'));
+    $('#menu-account-btn')?.addEventListener('click', () => this._openAccount());
     $('#menu-logout-btn')?.addEventListener('click', async () => {
       this.mp?.leaveQueue();
       await this.auth.signOut();
@@ -1356,6 +1458,15 @@ export class UIOverlay {
       const tab = e.target.closest('[data-auth-tab]');
       if (!tab) return;
       this._setAuthMode(tab.dataset.authTab);
+    });
+
+    $('#auth-google')?.addEventListener('click', async () => {
+      setStatus('Redirecting to Google…');
+      try {
+        await this.auth.signInWithGoogle();
+      } catch (e) {
+        setStatus(e.message || 'Google sign-in failed.', false);
+      }
     });
 
     $('#auth-submit')?.addEventListener('click', async () => {
@@ -1389,6 +1500,207 @@ export class UIOverlay {
     $('#auth-password')?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') $('#auth-submit')?.click();
     });
+
+    this._bindAccount();
+  }
+
+  _bindAccount() {
+    const $ = (id) => this.root.querySelector(id);
+    const profileStatus = $('#account-profile-status');
+    const setProfileStatus = (msg, ok = true) => {
+      if (!profileStatus) return;
+      profileStatus.textContent = msg || '';
+      profileStatus.classList.toggle('is-error', !ok);
+    };
+
+    $('#account-username-save')?.addEventListener('click', async () => {
+      setProfileStatus('Saving…');
+      try {
+        await this.auth.updateUsername($('#account-username')?.value || '');
+        setProfileStatus('Username updated.', true);
+        this.refreshAccountBar();
+        this._syncMpNameFromAccount();
+        this._renderAccountHeader();
+      } catch (e) {
+        setProfileStatus(e.message || 'Could not update username.', false);
+      }
+    });
+
+    $('#account-country-save')?.addEventListener('click', async () => {
+      setProfileStatus('Saving…');
+      try {
+        const code = $('#account-country')?.value || '';
+        await this.auth.updateCountryCode(code || null);
+        setProfileStatus('Country flag updated.', true);
+        this.refreshAccountBar();
+        this._renderAccountHeader();
+      } catch (e) {
+        setProfileStatus(e.message || 'Could not update country.', false);
+      }
+    });
+
+    $('#account-link-google')?.addEventListener('click', async () => {
+      setProfileStatus('Redirecting to Google…');
+      try {
+        await this.auth.linkGoogle();
+      } catch (e) {
+        setProfileStatus(e.message || 'Could not link Google.', false);
+      }
+    });
+  }
+
+  _openAccount() {
+    if (!this.auth?.isLoggedIn) {
+      this._openAuth('login');
+      return;
+    }
+    this.showScreen('account');
+    this._populateAccountForm();
+    this._loadAccountStats();
+    this._loadAccountReplays();
+  }
+
+  _populateAccountForm() {
+    const $ = (id) => this.root.querySelector(id);
+    const username = $('#account-username');
+    if (username) username.value = this.auth.displayName || '';
+    const country = $('#account-country');
+    if (country) country.innerHTML = countryOptionsHtml(this.auth.countryCode);
+    this._renderAccountHeader();
+    this._renderAccountGoogleLink();
+    const st = this.root.querySelector('#account-profile-status');
+    if (st) {
+      st.textContent = '';
+      st.classList.remove('is-error');
+    }
+  }
+
+  _renderAccountHeader() {
+    const $ = (id) => this.root.querySelector(id);
+    const flagEl = $('#account-flag');
+    const nameEl = $('#account-username-display');
+    const eloEl = $('#account-elo-line');
+    const code = this.auth?.countryCode;
+    if (flagEl) flagEl.textContent = code ? flagEmoji(code) : '🏳';
+    if (nameEl) nameEl.textContent = `@${this.auth?.displayName || 'player'}`;
+    if (eloEl) eloEl.textContent = `${this.auth?.elo ?? 1000} ELO · Ranked matchmaking`;
+  }
+
+  _renderAccountGoogleLink() {
+    const wrap = this.root.querySelector('#account-google-wrap');
+    const btn = this.root.querySelector('#account-link-google');
+    const note = this.root.querySelector('#account-google-linked');
+    if (!wrap || !this.auth?.isConfigured) {
+      wrap?.classList.add('hidden');
+      return;
+    }
+    wrap.classList.remove('hidden');
+    const linked = this.auth.hasGoogleLinked;
+    btn?.classList.toggle('hidden', linked);
+    note?.classList.toggle('hidden', !linked);
+  }
+
+  async _loadAccountStats() {
+    const body = this.root.querySelector('#account-stats');
+    if (!body || !this.auth?.user) return;
+    body.innerHTML = '<p class="center lb-hint">Loading…</p>';
+    try {
+      await this.auth.refreshProfile();
+      this._renderAccountHeader();
+      this._renderAccountGoogleLink();
+      const stats = await fetchAllAccountStats(this.auth.user.id);
+      body.innerHTML = this._accountStatsHtml(stats);
+    } catch (e) {
+      body.innerHTML = `<p class="center lb-hint is-error">${e.message || 'Could not load statistics.'}</p>`;
+    }
+  }
+
+  _accountStatsHtml(stats) {
+    const rows = [];
+    const eloRank = formatRankLabel(stats.elo.rank, stats.elo.total);
+    const eloVal = stats.elo.elo != null ? `${stats.elo.elo} ELO` : '—';
+    rows.push(
+      `<tr><td>Ranked matchmaking</td><td class="account-rank">${eloRank}</td><td>${eloVal}</td></tr>`
+    );
+
+    for (const m of stats.modes) {
+      const title = SCENARIO_META[m.scenario]?.title ?? m.scenario;
+      const rank = formatRankLabel(m.rank, m.total);
+      const stat = formatModeStat(m.scenario, m);
+      rows.push(
+        `<tr><td>${title}</td><td class="account-rank">${rank}</td><td>${stat}</td></tr>`
+      );
+    }
+
+    return `<table class="account-stats-table"><thead><tr><th>Mode</th><th>Rank</th><th>Best</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  }
+
+  async _loadAccountReplays() {
+    const body = this.root.querySelector('#account-replays');
+    if (!body || !this.auth?.user) return;
+    if (!supabaseConfigured()) {
+      body.innerHTML = '<p class="center lb-hint">Replays are not configured.</p>';
+      return;
+    }
+    body.innerHTML = '<p class="center lb-hint">Loading…</p>';
+    let rows;
+    try {
+      rows = await listAccountReplays(this.auth.user.id);
+    } catch (e) {
+      body.innerHTML = `<p class="center lb-hint is-error">${e.message || 'Could not load replays.'}</p>`;
+      return;
+    }
+    if (!rows.length) {
+      body.innerHTML = '<p class="center lb-hint">No replays yet — finish a run to record one.</p>';
+      return;
+    }
+
+    // Group by scenario: show its last run + (competitive) best run.
+    const byScenario = new Map();
+    for (const r of rows) {
+      if (!byScenario.has(r.scenario)) byScenario.set(r.scenario, {});
+      byScenario.get(r.scenario)[`${r.variant}:${r.slot}`] = r;
+    }
+
+    const items = [];
+    for (const [scenario, slots] of byScenario) {
+      const title = SCENARIO_META[scenario]?.title ?? scenario;
+      const last = slots['competitive:last'] || slots['practice:last'];
+      const best = slots['competitive:best'];
+      const btns = [];
+      if (last) btns.push(this._replayBtnHtml(last, 'Last run', title));
+      if (best) btns.push(this._replayBtnHtml(best, 'Best (ranked)', title));
+      if (btns.length) {
+        items.push(
+          `<div class="account-replay-row"><span class="account-replay-name">${title}</span><span class="account-replay-btns">${btns.join('')}</span></div>`
+        );
+      }
+    }
+    body.innerHTML = items.join('') || '<p class="center lb-hint">No replays yet.</p>';
+
+    body.querySelectorAll('[data-replay-path]').forEach((b) => {
+      b.addEventListener('click', () => this._openAccountReplay(b.dataset.replayPath, b.dataset.replayTitle));
+    });
+  }
+
+  _replayBtnHtml(row, label, title) {
+    const score = row.kills != null && isKillLeaderboardScenario(row.scenario)
+      ? `${row.kills} kills`
+      : row.score != null
+        ? `${Math.round(row.score).toLocaleString()} pts`
+        : '';
+    const meta = score ? ` · ${score}` : '';
+    return `<button type="button" class="btn btn-sm" data-replay-path="${this._esc(row.replay_file_path)}" data-replay-title="${this._esc(`${title} — ${label}`)}">${label}${meta}</button>`;
+  }
+
+  async _openAccountReplay(path, title) {
+    const decoded = await loadReplayByPath(path);
+    if (!decoded) {
+      const st = this.root.querySelector('#account-profile-status');
+      if (st) st.textContent = 'Could not load that replay.';
+      return;
+    }
+    this._watchReplay(decoded, { title: title || 'Replay', returnTo: 'account' });
   }
 
   _setAuthMode(mode) {
@@ -2455,6 +2767,7 @@ export class UIOverlay {
     }
     this.crosshair.setVisible(inRun);
     if (name === 'settings') this._openSettings();
+    if (name === 'account') this._populateAccountForm();
     // Hide the system cursor only while actively playing — when paused (Esc),
     // the cursor must reappear so the menu is clickable.
     document.body.classList.toggle('in-run', inRun);
@@ -2476,7 +2789,25 @@ export class UIOverlay {
     this._countdownRemaining = 0;
     this._hideCountdownOverlay();
     this.sceneManager.begin();
+    this._startRecording();
     this.state = 'playing';
+  }
+
+  /** Begin telemetry capture for a singleplayer run (skips multiplayer). */
+  _startRecording() {
+    const sc = this.sceneManager.current;
+    if (!this.replayRecorder || !sc || sc.isMultiplayer) return;
+    this.replayRecorder.begin({
+      scenario: sc,
+      configKey: sc.configKey(),
+      variant: this.scenarioConfig?.variant === 'competitive' ? 'competitive' : 'practice',
+      config: this.scenarioConfig || {},
+      settings: {
+        sensitivity: this.settings.data.sensitivity,
+        hFov: this.settings.data.hFov,
+        colors: this.settings.data.colors
+      }
+    });
   }
 
   _updateCountdownOverlay() {
@@ -2522,6 +2853,7 @@ export class UIOverlay {
   quit() {
     this._countdownRemaining = 0;
     this._hideCountdownOverlay();
+    this.replayRecorder?.cancel(); // abandoned run — discard its recording
     this.state = 'menu';
     this._resetMpChat();
     this._hideMpTabScoreboard();
@@ -2577,7 +2909,124 @@ export class UIOverlay {
         results.scenario === 'survival' ? 'Game Over' : 'Run Complete';
     }
     this.showScreen('results');
+    this._finalizeRecording(results);
     await this._saveAndRenderResults(results);
+  }
+
+  /** Finalize telemetry: keep it for instant replay + sync to Supabase. */
+  _finalizeRecording(results) {
+    const watchBtn = this.root.querySelector('#res-watch-replay');
+    if (watchBtn) watchBtn.hidden = true;
+    this._lastReplay = null;
+    if (!this.replayRecorder?.active) return;
+
+    const recording = this.replayRecorder.finish();
+    if (!recording) return;
+
+    try {
+      this._lastReplay = localDecode(recording);
+      if (watchBtn) watchBtn.hidden = false;
+    } catch (e) {
+      console.warn('[ui] local replay decode failed', e);
+    }
+
+    // Persist (best-effort) without blocking the results screen.
+    if (this.auth?.isLoggedIn && supabaseConfigured()) {
+      saveReplay(this.auth.user.id, recording, results).then((res) => {
+        if (!res.ok && res.reason && res.reason !== 'offline') {
+          console.warn('[ui] replay not saved:', res.reason);
+        }
+      });
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Replay playback
+  // -------------------------------------------------------------------------
+  _bindReplay() {
+    this.replayOverlay = this.root.querySelector('#replay-overlay');
+    this.replayScrub = this.root.querySelector('#replay-scrub');
+    this.replayTime = this.root.querySelector('#replay-time');
+    this.replayPlayPause = this.root.querySelector('#replay-playpause');
+    const speedWrap = this.root.querySelector('#replay-speeds');
+
+    if (speedWrap) {
+      speedWrap.innerHTML = REPLAY_SPEEDS.map(
+        (s) => `<button type="button" class="btn btn-sm replay-speed" data-speed="${s}">${s}×</button>`
+      ).join('');
+      speedWrap.querySelectorAll('[data-speed]').forEach((b) => {
+        b.addEventListener('click', () => this.replayPlayer.setSpeed(Number(b.dataset.speed)));
+      });
+    }
+
+    this.replayPlayPause?.addEventListener('click', () => this.replayPlayer.togglePlay());
+    this.root.querySelector('#replay-exit')?.addEventListener('click', () => this._exitReplay());
+    this.root.querySelector('#res-watch-replay')?.addEventListener('click', () => {
+      const t = SCENARIO_META[this._lastReplay?.scenario]?.title || 'Replay';
+      this._watchReplay(this._lastReplay, { title: `${t} — last run`, returnTo: 'results' });
+    });
+    this.replayScrub?.addEventListener('input', () => {
+      this.replayPlayer.seekFraction(Number(this.replayScrub.value) / 1000);
+    });
+
+    if (this.replayPlayer) {
+      this.replayPlayer.onProgress = (st) => this._updateReplayUI(st);
+      this.replayPlayer.onEnd = () => this._updateReplayUI({ playing: false });
+    }
+
+    // Esc leaves the replay (pointer lock is never engaged during playback).
+    document.addEventListener('keydown', (e) => {
+      if (this.replaying && e.code === 'Escape') this._exitReplay();
+    });
+  }
+
+  /** Enter playback for a decoded replay. `returnTo` is the screen to restore. */
+  _watchReplay(decoded, { title = 'Replay', returnTo = 'results' } = {}) {
+    if (!decoded || !this.replayPlayer) return;
+    this._replayReturn = returnTo;
+    this.input.exitLock();
+    this.sceneManager.pause();
+    // Hide the live (paused) scenario so only the replay ghosts render.
+    this._hiddenSceneRoot = this.sceneManager.current?.root || null;
+    if (this._hiddenSceneRoot) this._hiddenSceneRoot.visible = false;
+    this.showScreen(null); // hide every panel; the canvas + control bar show through
+    // showScreen() resets state + crosshair — apply replay state afterwards.
+    this.replaying = true;
+    this.state = 'replay';
+    const titleEl = this.root.querySelector('#replay-title');
+    if (titleEl) titleEl.textContent = title;
+    this.replayOverlay?.classList.add('active');
+    this.crosshair.setVisible(true);
+    this.replayPlayer.load(decoded);
+    this.replayPlayer.play();
+  }
+
+  _exitReplay() {
+    if (!this.replaying) return;
+    this.replaying = false;
+    this.replayPlayer?.dispose();
+    this.replayOverlay?.classList.remove('active');
+    this.crosshair.setVisible(false);
+    if (this._hiddenSceneRoot) {
+      this._hiddenSceneRoot.visible = true;
+      this._hiddenSceneRoot = null;
+    }
+    this.showScreen(this._replayReturn);
+  }
+
+  _updateReplayUI(st) {
+    if (this.replayPlayPause) this.replayPlayPause.textContent = st.playing ? '❚❚' : '▶';
+    if (st.time != null && st.duration && this.replayTime) {
+      this.replayTime.textContent = `${st.time.toFixed(1)} / ${st.duration.toFixed(1)}s`;
+    }
+    if (st.time != null && st.duration && this.replayScrub && document.activeElement !== this.replayScrub) {
+      this.replayScrub.value = String(Math.round((st.time / st.duration) * 1000));
+    }
+    if (st.speed != null) {
+      this.root.querySelectorAll('#replay-speeds [data-speed]').forEach((b) => {
+        b.classList.toggle('active', Number(b.dataset.speed) === st.speed);
+      });
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -2660,9 +3109,33 @@ export class UIOverlay {
   // -------------------------------------------------------------------------
   // Leaderboards
   // -------------------------------------------------------------------------
-  _activeLbTab() {
-    const active = this.root.querySelector('#lb-tabs .tab.active');
-    return active ? active.dataset.lb : 'elo';
+  _bindLeaderboard() {
+    this.root.querySelector('#lb-mode-select')?.addEventListener('change', (e) => {
+      const scenario = e.target.value;
+      if (!scenario) return;
+      this._setLeaderboardView(scenario);
+      this._renderLeaderboard(scenario);
+    });
+  }
+
+  _setLeaderboardView(scenario) {
+    const eloTab = this.root.querySelector('#lb-tab-elo');
+    const sel = this.root.querySelector('#lb-mode-select');
+    if (scenario === 'elo') {
+      eloTab?.classList.add('active');
+      return;
+    }
+    eloTab?.classList.remove('active');
+    if (sel && SCENARIOS[scenario]) sel.value = scenario;
+  }
+
+  _openLeaderboard() {
+    const fromTraining =
+      this.currentScenario && SCENARIOS[this.currentScenario]
+        ? this.currentScenario
+        : 'elo';
+    this._setLeaderboardView(fromTraining);
+    this._renderLeaderboard(fromTraining);
   }
 
   _configKeyFor(scenario) {

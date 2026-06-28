@@ -8,6 +8,7 @@ alter table public.scores add column if not exists shots integer;
 alter table public.scores add column if not exists time_played real;
 alter table public.scores add column if not exists kpm real;
 alter table public.profiles add column if not exists elo integer not null default 1000;
+alter table public.profiles add column if not exists country_code text;
 
 update public.profiles set elo = 1000 where elo is null;
 
@@ -28,6 +29,7 @@ create table if not exists public.profiles (
   id uuid primary key references auth.users on delete cascade,
   username text unique not null,
   elo integer not null default 1000,
+  country_code text, -- ISO 3166-1 alpha-2 (e.g. US, GB) for account flag
   created_at timestamptz default now()
 );
 
@@ -343,3 +345,175 @@ as $$
 $$;
 
 grant execute on function public.get_elo_leaderboard_top(int) to anon, authenticated;
+
+-- Account page: rank + board size for a user on a scenario leaderboard (1 / N format).
+drop function if exists public.get_scenario_leaderboard_rank(text, text, uuid);
+
+create or replace function public.get_scenario_leaderboard_rank(
+  p_scenario text,
+  p_config_key text,
+  p_user_id uuid
+)
+returns table (
+  rank int,
+  total int,
+  score integer,
+  kills integer,
+  accuracy real,
+  kpm real,
+  time_played real
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_kill_ranked boolean;
+begin
+  v_kill_ranked := p_scenario in (
+    'gridshot', 'stars', 'microflicks', 'pasu', 'spidershot', 'arena', 'duels', 'range', 'deathmatch'
+  );
+
+  return query
+  with board as (
+    select * from public.get_leaderboard(p_scenario, p_config_key, 100000)
+  ),
+  ordered as (
+    select
+      b.user_id,
+      b.score,
+      b.kills,
+      b.accuracy,
+      b.kpm,
+      b.time_played,
+      row_number() over (
+        order by
+          case when v_kill_ranked then coalesce(b.kills, b.score, 0) else b.score end desc,
+          case when v_kill_ranked then coalesce(b.accuracy, 0) else 0 end desc,
+          b.achieved_at asc
+      ) as rn
+    from board b
+  ),
+  totals as (
+    select count(*)::int as cnt from ordered
+  )
+  select
+    o.rn::int,
+    t.cnt,
+    o.score,
+    o.kills,
+    o.accuracy,
+    o.kpm,
+    o.time_played
+  from totals t
+  left join ordered o on o.user_id = p_user_id;
+end;
+$$;
+
+grant execute on function public.get_scenario_leaderboard_rank(text, text, uuid) to anon, authenticated;
+
+-- Account page: global ranked Elo rank + board size.
+drop function if exists public.get_elo_leaderboard_rank(uuid);
+
+create or replace function public.get_elo_leaderboard_rank(p_user_id uuid)
+returns table (
+  rank int,
+  total int,
+  elo integer
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with ordered as (
+    select
+      p.id as user_id,
+      coalesce(p.elo, 1000) as elo,
+      row_number() over (
+        order by coalesce(p.elo, 1000) desc, p.created_at asc
+      ) as rn
+    from public.profiles p
+  ),
+  totals as (
+    select count(*)::int as cnt from ordered
+  )
+  select
+    o.rn::int,
+    t.cnt,
+    o.elo
+  from totals t
+  left join ordered o on o.user_id = p_user_id;
+$$;
+
+grant execute on function public.get_elo_leaderboard_rank(uuid) to anon, authenticated;
+
+-- ===========================================================================
+-- Replays — hybrid storage (Postgres metadata + Storage payload)
+-- ===========================================================================
+-- Telemetry payloads live in the `replays` Storage bucket; this table holds only
+-- the metadata + the path to the payload. We keep at most ONE row per
+-- (account, scenario, variant, slot): `last` is overwritten every run, `best`
+-- only for competitive runs (overwritten when a new best beats it). The unique
+-- index makes the upsert a true overwrite so storage never grows unbounded.
+
+create table if not exists public.replays (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references auth.users on delete cascade,
+  scenario text not null,
+  config_key text not null,
+  variant text not null,                 -- practice | competitive
+  slot text not null,                    -- last | best
+  score integer,
+  accuracy real,
+  kills integer,
+  duration real,
+  tick_rate integer not null default 128,
+  byte_size integer,
+  replay_file_path text not null,        -- path inside the `replays` bucket
+  created_at timestamptz default now(),
+  unique (user_id, scenario, variant, slot)
+);
+create index if not exists replays_user_idx on public.replays (user_id);
+
+alter table public.replays enable row level security;
+
+-- Owner-only: replays are private to the account that recorded them.
+drop policy if exists "read own replays" on public.replays;
+drop policy if exists "insert own replays" on public.replays;
+drop policy if exists "update own replays" on public.replays;
+drop policy if exists "delete own replays" on public.replays;
+create policy "read own replays" on public.replays
+  for select using (auth.uid() = user_id);
+create policy "insert own replays" on public.replays
+  for insert with check (auth.uid() = user_id);
+create policy "update own replays" on public.replays
+  for update using (auth.uid() = user_id);
+create policy "delete own replays" on public.replays
+  for delete using (auth.uid() = user_id);
+
+grant select, insert, update, delete on public.replays to authenticated;
+
+-- Private Storage bucket for the gzipped telemetry payloads.
+insert into storage.buckets (id, name, public)
+values ('replays', 'replays', false)
+on conflict (id) do nothing;
+
+-- Storage RLS: each user may only touch objects under their own {uid}/ prefix.
+drop policy if exists "replay objects read own" on storage.objects;
+drop policy if exists "replay objects insert own" on storage.objects;
+drop policy if exists "replay objects update own" on storage.objects;
+drop policy if exists "replay objects delete own" on storage.objects;
+create policy "replay objects read own" on storage.objects
+  for select to authenticated
+  using (bucket_id = 'replays' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "replay objects insert own" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'replays' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "replay objects update own" on storage.objects
+  for update to authenticated
+  using (bucket_id = 'replays' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "replay objects delete own" on storage.objects
+  for delete to authenticated
+  using (bucket_id = 'replays' and (storage.foldername(name))[1] = auth.uid()::text);

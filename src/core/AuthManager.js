@@ -5,6 +5,7 @@
 import {
   getSupabase,
   supabaseConfigured,
+  authRedirectUrl,
   normalizeEmail,
   validateUsername,
   validateEmail,
@@ -22,6 +23,7 @@ export class AuthManager {
     this._listeners = [];
     this._settingsSaveTimer = null;
     this._settingsSyncPaused = false;
+    this._linkedProviders = [];
   }
 
   get isConfigured() {
@@ -53,6 +55,19 @@ export class AuthManager {
 
   get elo() {
     return clampElo(this.profile?.elo ?? DEFAULT_ELO);
+  }
+
+  get countryCode() {
+    return this.profile?.country_code || null;
+  }
+
+  /** Linked auth providers (e.g. ['email', 'google']). */
+  get linkedProviders() {
+    return this._linkedProviders || [];
+  }
+
+  get hasGoogleLinked() {
+    return this.linkedProviders.includes('google');
   }
 
   onChange(fn) {
@@ -93,6 +108,7 @@ export class AuthManager {
       return;
     }
     await this._ensureProfile(user);
+    await this._refreshLinkedProviders();
     await this._pullSettings();
     this._hookSettingsSync();
     if (this.displayName) {
@@ -105,7 +121,7 @@ export class AuthManager {
     const sb = getSupabase();
     const { data, error } = await sb
       .from('profiles')
-      .select('id, username, elo, created_at')
+      .select('id, username, elo, country_code, created_at')
       .eq('id', user.id)
       .maybeSingle();
     if (error) throw new Error(error.message);
@@ -131,7 +147,7 @@ export class AuthManager {
 
     const { data: refreshed, error: reloadErr } = await sb
       .from('profiles')
-      .select('id, username, elo, created_at')
+      .select('id, username, elo, country_code, created_at')
       .eq('id', user.id)
       .maybeSingle();
     if (reloadErr) throw new Error(reloadErr.message);
@@ -244,12 +260,120 @@ export class AuthManager {
     return this.profile;
   }
 
+  /**
+   * Sign in or sign up with Google (OAuth). Redirects away from the page; on
+   * return the session is restored via detectSessionInUrl in the Supabase client.
+   */
+  async signInWithGoogle() {
+    if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');
+    const sb = getSupabase();
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: authRedirectUrl() }
+    });
+    if (error) throw new Error(error.message || 'Google sign-in failed.');
+  }
+
+  /** Link Google to the current account (redirects away like sign-in). */
+  async linkGoogle() {
+    if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');
+    if (!this.user) throw new Error('Sign in first.');
+    if (this.hasGoogleLinked) return;
+    const sb = getSupabase();
+    const { error } = await sb.auth.linkIdentity({
+      provider: 'google',
+      options: { redirectTo: authRedirectUrl() }
+    });
+    if (error) throw new Error(error.message || 'Could not link Google.');
+  }
+
+  async _refreshLinkedProviders() {
+    if (!this.user) {
+      this._linkedProviders = [];
+      return;
+    }
+    const sb = getSupabase();
+    const { data, error } = await sb.auth.getUser();
+    if (error) {
+      console.warn('[auth] getUser failed', error.message);
+      this._linkedProviders = [];
+      return;
+    }
+    this._linkedProviders = (data.user?.identities || []).map((i) => i.provider);
+  }
+
+  /** Change the public username shown on leaderboards. */
+  async updateUsername(username) {
+    if (!this.user) throw new Error('Sign in first.');
+    const err = validateUsername(username);
+    if (err) throw new Error(err);
+    const normalized = username.trim().toLowerCase();
+    if (normalized === this.profile?.username) return this.profile;
+
+    const sb = getSupabase();
+    const { data: taken } = await sb
+      .from('profiles')
+      .select('id')
+      .eq('username', normalized)
+      .maybeSingle();
+    if (taken && taken.id !== this.user.id) {
+      throw new Error('Username is already taken.');
+    }
+
+    const { error } = await sb
+      .from('profiles')
+      .update({ username: normalized })
+      .eq('id', this.user.id);
+    if (error) throw new Error(error.message);
+
+    if (this.profile) this.profile.username = normalized;
+    Storage.write('mpName', normalized);
+    this._emit();
+    return this.profile;
+  }
+
+  /** Set or clear the account country flag (ISO 3166-1 alpha-2, or null). */
+  async updateCountryCode(code) {
+    if (!this.user) throw new Error('Sign in first.');
+    const normalized = code ? String(code).trim().toUpperCase() : null;
+    if (normalized && !/^[A-Z]{2}$/.test(normalized)) {
+      throw new Error('Pick a valid country.');
+    }
+
+    const sb = getSupabase();
+    const { error } = await sb
+      .from('profiles')
+      .update({ country_code: normalized })
+      .eq('id', this.user.id);
+    if (error) throw new Error(error.message);
+
+    if (this.profile) this.profile.country_code = normalized;
+    this._emit();
+    return this.profile;
+  }
+
+  async refreshProfile() {
+    if (!this.user) return null;
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from('profiles')
+      .select('id, username, elo, country_code, created_at')
+      .eq('id', this.user.id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    this.profile = data;
+    await this._refreshLinkedProviders();
+    this._emit();
+    return this.profile;
+  }
+
   async signOut() {
     if (!this.isConfigured) return;
     this._unhookSettingsSync();
     await getSupabase().auth.signOut();
     this.user = null;
     this.profile = null;
+    this._linkedProviders = [];
     this._emit();
   }
 

@@ -216,6 +216,13 @@ export class BaseScenario {
     // Tracer / impact point = first hit along the actual bullet ray (after spread).
     const impactHit = this._resolveBulletImpact();
 
+    // Record the shot for replay (origin = eye, end = tracer impact point).
+    this.engine.replayRecorder?.recordShot({
+      origin: cam.position,
+      end: this._lastImpact,
+      hit: !!impactHit
+    });
+
     const vm = this.engine.viewmodel;
     const vmRecoil = this.viewmodelRecoil !== false;
     const motion = player?.enabled
