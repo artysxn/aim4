@@ -1,30 +1,14 @@
--- AIM4.io — Supabase schema (run in SQL Editor)
--- Keep "Confirm email" ON under Auth → Providers → Email.
--- Add https://aim4.io and http://localhost:5173 to Auth → URL Configuration redirect URLs.
+-- AIM4.io — Supabase schema (single file; run in SQL Editor)
+-- Safe to re-run on new or existing projects.
+--
+-- Auth setup:
+--   • Keep "Confirm email" ON under Auth → Providers → Email.
+--   • Add https://aim4.io and http://localhost:5173 to Auth → URL Configuration redirect URLs.
 
--- ---- Upgrades (safe to re-run if tables already exist from SETUP.md) ----
-alter table public.scores add column if not exists hits integer;
-alter table public.scores add column if not exists shots integer;
-alter table public.scores add column if not exists time_played real;
-alter table public.scores add column if not exists kpm real;
-alter table public.profiles add column if not exists elo integer not null default 1000;
-alter table public.profiles add column if not exists country_code text;
+-- ===========================================================================
+-- Tables
+-- ===========================================================================
 
-update public.profiles set elo = 1000 where elo is null;
-
-insert into public.profiles (id, username, elo)
-select
-  u.id,
-  coalesce(
-    nullif(lower(trim(u.raw_user_meta_data->>'username')), ''),
-    'player_' || substr(replace(u.id::text, '-', ''), 1, 8)
-  ),
-  1000
-from auth.users u
-where not exists (select 1 from public.profiles p where p.id = u.id)
-on conflict (id) do nothing;
-
--- Profile per auth user (public username shown on leaderboards)
 create table if not exists public.profiles (
   id uuid primary key references auth.users on delete cascade,
   username text unique not null,
@@ -33,7 +17,6 @@ create table if not exists public.profiles (
   created_at timestamptz default now()
 );
 
--- Best-effort per-run scores; leaderboard RPC dedupes to one row per account.
 create table if not exists public.scores (
   id bigint generated always as identity primary key,
   user_id uuid not null references auth.users on delete cascade,
@@ -49,16 +32,70 @@ create table if not exists public.scores (
   kpm real,
   created_at timestamptz default now()
 );
-create index if not exists scores_scenario_config_score_idx
-  on public.scores (scenario, config_key, score desc);
-create index if not exists scores_user_id_idx on public.scores (user_id);
 
--- Cloud-synced game settings (full SettingsManager payload as JSON)
 create table if not exists public.user_settings (
   user_id uuid primary key references auth.users on delete cascade,
   settings jsonb not null default '{}',
   updated_at timestamptz default now()
 );
+
+-- Replay metadata (payloads live in the `replays` Storage bucket).
+-- At most one row per (account, scenario, variant, slot): `last` or `best`.
+create table if not exists public.replays (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references auth.users on delete cascade,
+  scenario text not null,
+  config_key text not null,
+  variant text not null,                 -- practice | competitive
+  slot text not null,                    -- last | best
+  score integer,
+  accuracy real,
+  kills integer,
+  duration real,
+  tick_rate integer not null default 128,
+  byte_size integer,
+  replay_file_path text not null,        -- path inside the `replays` bucket
+  created_at timestamptz default now(),
+  unique (user_id, scenario, variant, slot)
+);
+
+-- ===========================================================================
+-- Column upgrades (existing deployments)
+-- ===========================================================================
+
+alter table public.scores add column if not exists hits integer;
+alter table public.scores add column if not exists shots integer;
+alter table public.scores add column if not exists time_played real;
+alter table public.scores add column if not exists kpm real;
+alter table public.profiles add column if not exists elo integer not null default 1000;
+alter table public.profiles add column if not exists country_code text;
+
+-- ===========================================================================
+-- Indexes
+-- ===========================================================================
+
+create index if not exists scores_scenario_config_score_idx
+  on public.scores (scenario, config_key, score desc);
+create index if not exists scores_user_id_idx on public.scores (user_id);
+create index if not exists replays_user_idx on public.replays (user_id);
+
+-- ===========================================================================
+-- Data migrations
+-- ===========================================================================
+
+update public.profiles set elo = 1000 where elo is null;
+
+insert into public.profiles (id, username, elo)
+select
+  u.id,
+  coalesce(
+    nullif(lower(trim(u.raw_user_meta_data->>'username')), ''),
+    'player_' || substr(replace(u.id::text, '-', ''), 1, 8)
+  ),
+  1000
+from auth.users u
+where not exists (select 1 from public.profiles p where p.id = u.id)
+on conflict (id) do nothing;
 
 -- Migrate saved settings: cm360 + dpi → unified sensitivity (linear scale).
 -- 35 × 1200 CPI → 0.86 (2.58 ÷ 3); default 0.833… (2.5 ÷ 3).
@@ -111,11 +148,14 @@ set
   updated_at = now()
 where coalesce((us.settings->>'settingsVersion')::int, 0) < 2;
 
+-- ===========================================================================
+-- Row level security — profiles, scores, settings
+-- ===========================================================================
+
 alter table public.profiles enable row level security;
 alter table public.scores enable row level security;
 alter table public.user_settings enable row level security;
 
--- Public reads for global leaderboards (anon + logged-in must see ALL users' rows)
 drop policy if exists "read profiles" on public.profiles;
 drop policy if exists "read scores" on public.scores;
 drop policy if exists "read own scores" on public.scores;
@@ -131,7 +171,6 @@ create policy "read scores" on public.scores
 grant select on public.profiles to anon, authenticated;
 grant select on public.scores to anon, authenticated;
 
--- Users write only their own rows
 drop policy if exists "insert own profile" on public.profiles;
 drop policy if exists "update own profile" on public.profiles;
 drop policy if exists "insert own score" on public.scores;
@@ -146,7 +185,6 @@ drop policy if exists "read own settings" on public.user_settings;
 drop policy if exists "read all settings" on public.user_settings;
 drop policy if exists "insert own settings" on public.user_settings;
 drop policy if exists "update own settings" on public.user_settings;
--- Anyone can read settings (leaderboard → explore / copy); only the owner can write.
 create policy "read all settings" on public.user_settings
   for select to anon, authenticated using (true);
 create policy "insert own settings" on public.user_settings
@@ -156,7 +194,33 @@ create policy "update own settings" on public.user_settings
 
 grant select on public.user_settings to anon, authenticated;
 
--- Create profile when auth.users row is inserted (runs before email is confirmed).
+-- ===========================================================================
+-- Row level security — replays
+-- ===========================================================================
+
+alter table public.replays enable row level security;
+
+drop policy if exists "read own replays" on public.replays;
+drop policy if exists "read all replays" on public.replays;
+drop policy if exists "insert own replays" on public.replays;
+drop policy if exists "update own replays" on public.replays;
+drop policy if exists "delete own replays" on public.replays;
+create policy "read all replays" on public.replays
+  for select to anon, authenticated using (true);
+create policy "insert own replays" on public.replays
+  for insert with check (auth.uid() = user_id);
+create policy "update own replays" on public.replays
+  for update using (auth.uid() = user_id);
+create policy "delete own replays" on public.replays
+  for delete using (auth.uid() = user_id);
+
+grant select on public.replays to anon, authenticated;
+grant insert, update, delete on public.replays to authenticated;
+
+-- ===========================================================================
+-- Auth trigger — create profile on sign-up
+-- ===========================================================================
+
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -183,7 +247,10 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
--- Best run per account for a scenario + config (gridshot: time played, then kpm/kills/acc)
+-- ===========================================================================
+-- RPC — leaderboards
+-- ===========================================================================
+
 drop function if exists public.get_leaderboard_top(text, text, int);
 drop function if exists public.get_leaderboard(text, text, int);
 
@@ -209,8 +276,6 @@ security definer
 set search_path = public
 as $$
 begin
-  -- Kill-ranked: gridshot, stars, microflicks, pasu, spidershot, arena, duels, range, deathmatch
-  -- Score-ranked: survival, tracking (else branch)
   if p_scenario in (
     'gridshot', 'stars', 'microflicks', 'pasu', 'spidershot', 'arena', 'duels', 'range', 'deathmatch'
   ) then
@@ -255,7 +320,6 @@ begin
 end;
 $$;
 
--- Wrapper so PostgREST can call it easily
 create or replace function public.get_leaderboard_top(
   p_scenario text,
   p_config_key text,
@@ -323,7 +387,10 @@ $$;
 
 grant execute on function public.get_leaderboard_top(text, text, int) to anon, authenticated;
 
--- Global ranked Elo board (one row per account; default 1000 until first ranked match)
+-- ===========================================================================
+-- RPC — Elo leaderboard
+-- ===========================================================================
+
 drop function if exists public.get_elo_leaderboard_top(int);
 
 create or replace function public.get_elo_leaderboard_top(p_limit int default 50)
@@ -350,7 +417,10 @@ $$;
 
 grant execute on function public.get_elo_leaderboard_top(int) to anon, authenticated;
 
--- Account page: rank + board size for a user on a scenario leaderboard (1 / N format).
+-- ===========================================================================
+-- RPC — account page ranks
+-- ===========================================================================
+
 drop function if exists public.get_scenario_leaderboard_rank(text, text, uuid);
 
 create or replace function public.get_scenario_leaderboard_rank(
@@ -417,7 +487,6 @@ $$;
 
 grant execute on function public.get_scenario_leaderboard_rank(text, text, uuid) to anon, authenticated;
 
--- Account page: global ranked Elo rank + board size.
 drop function if exists public.get_elo_leaderboard_rank(uuid);
 
 create or replace function public.get_elo_leaderboard_rank(p_user_id uuid)
@@ -454,59 +523,34 @@ $$;
 grant execute on function public.get_elo_leaderboard_rank(uuid) to anon, authenticated;
 
 -- ===========================================================================
--- Replays — hybrid storage (Postgres metadata + Storage payload)
+-- RPC — account replays
 -- ===========================================================================
--- Telemetry payloads live in the `replays` Storage bucket; this table holds only
--- the metadata + the path to the payload. We keep at most ONE row per
--- (account, scenario, variant, slot): `last` is overwritten every run, `best`
--- only for competitive runs (overwritten when a new best beats it). The unique
--- index makes the upsert a true overwrite so storage never grows unbounded.
 
-create table if not exists public.replays (
-  id bigint generated always as identity primary key,
-  user_id uuid not null references auth.users on delete cascade,
-  scenario text not null,
-  config_key text not null,
-  variant text not null,                 -- practice | competitive
-  slot text not null,                    -- last | best
-  score integer,
-  accuracy real,
-  kills integer,
-  duration real,
-  tick_rate integer not null default 128,
-  byte_size integer,
-  replay_file_path text not null,        -- path inside the `replays` bucket
-  created_at timestamptz default now(),
-  unique (user_id, scenario, variant, slot)
-);
-create index if not exists replays_user_idx on public.replays (user_id);
+drop function if exists public.get_account_replays(uuid);
 
-alter table public.replays enable row level security;
+create or replace function public.get_account_replays(p_user_id uuid)
+returns setof public.replays
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select *
+  from public.replays
+  where user_id = p_user_id
+  order by scenario, variant, slot;
+$$;
 
--- Anyone can read replay metadata (account page / leaderboard); only the owner writes.
-drop policy if exists "read own replays" on public.replays;
-drop policy if exists "read all replays" on public.replays;
-drop policy if exists "insert own replays" on public.replays;
-drop policy if exists "update own replays" on public.replays;
-drop policy if exists "delete own replays" on public.replays;
-create policy "read all replays" on public.replays
-  for select to anon, authenticated using (true);
-create policy "insert own replays" on public.replays
-  for insert with check (auth.uid() = user_id);
-create policy "update own replays" on public.replays
-  for update using (auth.uid() = user_id);
-create policy "delete own replays" on public.replays
-  for delete using (auth.uid() = user_id);
+grant execute on function public.get_account_replays(uuid) to anon, authenticated;
 
-grant select on public.replays to anon, authenticated;
-grant insert, update, delete on public.replays to authenticated;
+-- ===========================================================================
+-- Storage — replay payloads
+-- ===========================================================================
 
--- Private Storage bucket for the gzipped telemetry payloads.
 insert into storage.buckets (id, name, public)
 values ('replays', 'replays', false)
 on conflict (id) do nothing;
 
--- Storage RLS: anyone can download replay payloads; only the owner may write.
 drop policy if exists "replay objects read own" on storage.objects;
 drop policy if exists "replay objects read all" on storage.objects;
 drop policy if exists "replay objects insert own" on storage.objects;

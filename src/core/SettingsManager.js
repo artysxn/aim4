@@ -57,6 +57,7 @@ const DEFAULTS = {
   resolutionWidth: 1920,
   resolutionHeight: 1080,
   rawInput: true, // request unadjusted (raw) mouse movement under Pointer Lock
+  copyConfigOnReplay: false, // when ON, use the recorded player's resolution/colors/crosshair on their replays
   runDuration: 60, // seconds
   crosshair: {
     color: '#f52525',
@@ -213,6 +214,7 @@ export class SettingsManager {
     this._cloudSaveHandler = null;
     this._cloudSyncPaused = false;
     this._exploreMode = false;
+    this._replayBackup = null;
   }
 
   _load() {
@@ -331,6 +333,42 @@ export class SettingsManager {
 
   get isExploreMode() {
     return this._exploreMode;
+  }
+
+  get isReplayView() {
+    return !!this._replayBackup;
+  }
+
+  /** Temporarily apply a recorded run's display settings while watching a replay. */
+  beginReplayView(replaySettings) {
+    if (this._replayBackup) this.endReplayView();
+    this._replayBackup = structuredClone(this.data);
+    const patch = this._replaySettingsPatch(replaySettings);
+    if (Object.keys(patch).length) {
+      this.data = this._deepMerge(structuredClone(this.data), patch);
+    }
+    if (this.draft) this.discardDraft();
+    this._emit();
+  }
+
+  /** Restore the viewer's settings after replay playback ends. */
+  endReplayView() {
+    if (!this._replayBackup) return;
+    this.data = this._replayBackup;
+    this._replayBackup = null;
+    this._emit();
+  }
+
+  _replaySettingsPatch(rs) {
+    if (!rs || typeof rs !== 'object') return {};
+    const patch = {};
+    if (rs.hFov != null) patch.hFov = rs.hFov;
+    if (rs.resolution != null) patch.resolution = rs.resolution;
+    if (rs.resolutionWidth != null) patch.resolutionWidth = rs.resolutionWidth;
+    if (rs.resolutionHeight != null) patch.resolutionHeight = rs.resolutionHeight;
+    if (rs.colors) patch.colors = structuredClone(rs.colors);
+    if (rs.crosshair) patch.crosshair = structuredClone(rs.crosshair);
+    return patch;
   }
 
   confirmDraft() {

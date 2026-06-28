@@ -40,51 +40,9 @@ Your fixed values (already filled in below):
 - [ ] Auth → **Providers**: enable Email (and Google/GitHub if you want OAuth).
 
 ### A4. Create the schema (SQL Editor → New query → paste → Run)
-- [ ] Run this:
-
-```sql
--- Profile per auth user
-create table public.profiles (
-  id uuid primary key references auth.users on delete cascade,
-  username text unique not null,
-  created_at timestamptz default now()
-);
-
--- Leaderboard entries
-create table public.scores (
-  id bigint generated always as identity primary key,
-  user_id uuid not null references auth.users on delete cascade,
-  scenario text not null,
-  config_key text not null,
-  score integer not null,
-  accuracy real,
-  crit_ratio real,
-  kills integer,
-  created_at timestamptz default now()
-);
-create index on public.scores (scenario, config_key, score desc);
-
-alter table public.profiles enable row level security;
-alter table public.scores enable row level security;
-
--- Anyone can read leaderboards + profiles (global — all users visible)
-drop policy if exists "read profiles" on public.profiles;
-drop policy if exists "read scores" on public.scores;
-create policy "read profiles" on public.profiles
-  for select to anon, authenticated using (true);
-create policy "read scores" on public.scores
-  for select to anon, authenticated using (true);
-grant select on public.profiles to anon, authenticated;
-grant select on public.scores to anon, authenticated;
-
--- A logged-in user can write only their own rows
-create policy "insert own profile" on public.profiles
-  for insert with check (auth.uid() = id);
-create policy "insert own score" on public.scores
-  for insert with check (auth.uid() = user_id);
-```
-
-- [ ] Confirm under Table Editor that `profiles` and `scores` exist with RLS on.
+- [ ] Paste the full contents of [`supabase/schema.sql`](supabase/schema.sql) and run it.
+  Safe to re-run on an existing project (idempotent upgrades).
+- [ ] Confirm under Table Editor that `profiles`, `scores`, `user_settings`, and `replays` exist with RLS on.
 
 ---
 

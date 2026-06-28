@@ -237,6 +237,7 @@ export class UIOverlay {
           </div>
           ${numField('set-dur', 'Run duration (s)', '1')}
           <label class="field-check"><input type="checkbox" id="set-raw" /> Raw input (no OS acceleration)</label>
+          <label class="field-check"><input type="checkbox" id="set-copy-replay-config" /> Copy config when watching replays</label>
           ${colorRow('set-col-bg', 'Background')}
           ${colorRow('set-col-floor', 'Floor')}
           ${colorRow('set-col-ebody', 'Enemy body')}
@@ -1238,6 +1239,9 @@ export class UIOverlay {
     $('#set-raw').addEventListener('change', (e) => {
       draft((d) => { d.rawInput = e.target.checked; });
     });
+    $('#set-copy-replay-config').addEventListener('change', (e) => {
+      draft((d) => { d.copyConfigOnReplay = e.target.checked; });
+    });
 
     $('#set-xh-color').addEventListener('input', (e) => {
       draft((d) => { d.crosshair.color = e.target.value; });
@@ -1887,7 +1891,11 @@ export class UIOverlay {
       if (st) st.textContent = 'Could not load that replay.';
       return;
     }
-    this._watchReplay(decoded, { title: title || 'Replay', returnTo: 'account' });
+    this._watchReplay(decoded, {
+      title: title || 'Replay',
+      returnTo: 'account',
+      fromOtherPlayer: !!this._viewingAccount
+    });
   }
 
   _setAuthMode(mode) {
@@ -2759,6 +2767,7 @@ export class UIOverlay {
     this._syncResolutionCustomUi();
     $('#set-dur').value = s.runDuration;
     $('#set-raw').checked = s.rawInput;
+    $('#set-copy-replay-config').checked = !!s.copyConfigOnReplay;
 
     $('#set-xh-color').value = s.crosshair.color;
     this._setRange('set-xh-gap', s.crosshair.innerGap);
@@ -2917,6 +2926,10 @@ export class UIOverlay {
       this.refreshAccountBar();
       this._updateFullscreenTip();
     }
+    if (name === 'account') {
+      const uid = this._viewingAccount?.userId ?? this.auth?.user?.id;
+      if (uid) this._loadAccountReplays(uid);
+    }
   }
 
   _isFullscreen() {
@@ -2968,9 +2981,12 @@ export class UIOverlay {
       variant: this.scenarioConfig?.variant === 'competitive' ? 'competitive' : 'practice',
       config: this.scenarioConfig || {},
       settings: {
-        sensitivity: this.settings.data.sensitivity,
         hFov: this.settings.data.hFov,
-        colors: this.settings.data.colors
+        resolution: this.settings.data.resolution,
+        resolutionWidth: this.settings.data.resolutionWidth,
+        resolutionHeight: this.settings.data.resolutionHeight,
+        colors: structuredClone(this.settings.data.colors),
+        crosshair: structuredClone(this.settings.data.crosshair)
       }
     });
   }
@@ -3074,19 +3090,22 @@ export class UIOverlay {
         results.scenario === 'survival' ? 'Game Over' : 'Run Complete';
     }
     this.showScreen('results');
-    this._finalizeRecording(results);
-    await this._saveAndRenderResults(results);
+    const replayRes = await this._finalizeRecording(results);
+    await this._saveAndRenderResults(results, replayRes);
+    if (replayRes?.ok) {
+      await this._loadAccountReplays(this.auth?.user?.id);
+    }
   }
 
   /** Finalize telemetry: keep it for instant replay + sync to Supabase. */
-  _finalizeRecording(results) {
+  async _finalizeRecording(results) {
     const watchBtn = this.root.querySelector('#res-watch-replay');
     if (watchBtn) watchBtn.hidden = true;
     this._lastReplay = null;
-    if (!this.replayRecorder?.active) return;
+    if (!this.replayRecorder?.active) return { ok: false, reason: 'no recording' };
 
     const recording = this.replayRecorder.finish();
-    if (!recording) return;
+    if (!recording) return { ok: false, reason: 'no recording' };
 
     try {
       this._lastReplay = localDecode(recording);
@@ -3095,14 +3114,21 @@ export class UIOverlay {
       console.warn('[ui] local replay decode failed', e);
     }
 
-    // Persist (best-effort) without blocking the results screen.
-    if (this.auth?.isLoggedIn && supabaseConfigured()) {
-      saveReplay(this.auth.user.id, recording, results).then((res) => {
-        if (!res.ok && res.reason && res.reason !== 'offline') {
-          console.warn('[ui] replay not saved:', res.reason);
-        }
-      });
+    if (!this.auth?.isLoggedIn || !supabaseConfigured()) {
+      return { ok: false, reason: 'not signed in' };
     }
+
+    try {
+      await this.auth.ensureProfileReady();
+    } catch (e) {
+      console.warn('[ui] profile ensure failed before replay save', e);
+    }
+
+    const res = await saveReplay(this.auth.user.id, recording, results);
+    if (!res.ok && res.reason && res.reason !== 'offline') {
+      console.warn('[ui] replay not saved:', res.reason);
+    }
+    return res;
   }
 
   // -------------------------------------------------------------------------
@@ -3146,7 +3172,7 @@ export class UIOverlay {
   }
 
   /** Enter playback for a decoded replay. `returnTo` is the screen to restore. */
-  _watchReplay(decoded, { title = 'Replay', returnTo = 'results' } = {}) {
+  _watchReplay(decoded, { title = 'Replay', returnTo = 'results', fromOtherPlayer = false } = {}) {
     if (!decoded || !this.replayPlayer) return;
     this._replayReturn = returnTo;
     this.input.exitLock();
@@ -3160,6 +3186,9 @@ export class UIOverlay {
     this.state = 'replay';
     this.engine.audio?.resume();
     this.replayOverlay?.classList.add('active');
+    if (fromOtherPlayer && this.settings.data.copyConfigOnReplay && decoded.settings) {
+      this.settings.beginReplayView(decoded.settings);
+    }
     this.crosshair.setVisible(true);
     this.replayPlayer.load(decoded);
     this.replayPlayer.play();
@@ -3170,6 +3199,7 @@ export class UIOverlay {
     this.replaying = false;
     this.replayPlayer?.dispose();
     this.replayOverlay?.classList.remove('active');
+    if (this.settings.isReplayView) this.settings.endReplayView();
     this.crosshair.setVisible(false);
     if (this._hiddenSceneRoot) {
       this._hiddenSceneRoot.visible = true;
@@ -3456,11 +3486,23 @@ export class UIOverlay {
     body.innerHTML = this._leaderboardRowsHtml(list, scenario, this.auth?.user?.id, error);
   }
 
-  async _saveAndRenderResults(results) {
+  async _saveAndRenderResults(results, replayRes = null) {
     let submitNote = '';
 
     this.root.querySelector('#res-lb').innerHTML =
       `<p class="center lb-hint">${this.auth?.isLoggedIn ? 'Saving score…' : 'Loading leaderboard…'}</p>`;
+
+    if (replayRes?.ok) {
+      submitNote = 'Replay saved to your account.';
+    } else if (replayRes?.reason === 'not signed in') {
+      submitNote = 'Sign in to save replays to your account.';
+    } else if (
+      replayRes?.reason &&
+      replayRes.reason !== 'no recording' &&
+      replayRes.reason !== 'offline'
+    ) {
+      submitNote = `Replay not saved: ${replayRes.reason}`;
+    }
 
     if (this.auth?.isLoggedIn && results.leaderboardEligible !== false) {
       try {
@@ -3472,18 +3514,21 @@ export class UIOverlay {
       if (res.ok) {
         console.info('[leaderboard] score saved', results.scenario, results.configKey);
       } else {
-        submitNote =
+        const scoreNote =
           res.reason === 'offline'
             ? ''
             : `Score not saved: ${res.reason}`;
+        submitNote = submitNote ? `${submitNote} ${scoreNote}` : scoreNote;
       }
     } else if (results.leaderboardEligible === false) {
-      submitNote =
+      const practiceNote =
         results.variant === 'practice'
           ? 'Practice — not saved to leaderboards'
           : 'Competitive — not saved to leaderboards yet';
+      submitNote = submitNote ? `${submitNote} ${practiceNote}` : practiceNote;
     } else if (supabaseConfigured()) {
-      submitNote = 'Sign in to save to leaderboards';
+      const signInNote = 'Sign in to save to leaderboards';
+      submitNote = submitNote ? `${submitNote} ${signInNote}` : signInNote;
     }
 
     const showCrit = !isKillLeaderboardScenario(results.scenario) && results.scenario !== 'survival';

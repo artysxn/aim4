@@ -64,6 +64,19 @@ async function upsertRow(sb, row) {
   return error;
 }
 
+async function verifyReplayRow(sb, uid, scenario, variant, slot, expectedPath) {
+  const { data, error } = await sb
+    .from('replays')
+    .select('replay_file_path')
+    .eq('user_id', uid)
+    .eq('scenario', scenario)
+    .eq('variant', variant)
+    .eq('slot', slot)
+    .maybeSingle();
+  if (error || !data) return false;
+  return data.replay_file_path === expectedPath;
+}
+
 /**
  * Persist a finished run's replay. Always writes the `last` slot for the run's
  * variant; for competitive runs it also writes/overwrites `best` when the run
@@ -99,6 +112,11 @@ export async function saveReplay(userId, recording, results) {
     console.warn('[replayStore] save last failed', err.message);
     return { ok: false, reason: err.message };
   }
+  const lastVerified = await verifyReplayRow(sb, uid, scenario, variant, 'last', lastPath);
+  if (!lastVerified) {
+    console.warn('[replayStore] last replay verify failed');
+    return { ok: false, reason: 'database verify failed' };
+  }
   written.push('last');
 
   // --- best slot (competitive only, when it beats the stored best) ----------
@@ -125,11 +143,15 @@ export async function saveReplay(userId, recording, results) {
         bErr = await upsertRow(sb, summaryRow(uid, recording, results, 'best', bestPath, encoded));
       }
       if (bErr) console.warn('[replayStore] save best failed', bErr.message);
-      else written.push('best');
+      else {
+        const bestVerified = await verifyReplayRow(sb, uid, scenario, variant, 'best', bestPath);
+        if (!bestVerified) console.warn('[replayStore] best replay verify failed');
+        else written.push('best');
+      }
     }
   }
 
-  return { ok: true, slots: written };
+  return { ok: true, slots: written, verified: true };
 }
 
 /** Fetch a replay's metadata row (or null). */
@@ -155,13 +177,19 @@ export async function fetchReplayMeta(userId, scenario, variant, slot) {
 export async function listAccountReplays(userId) {
   if (!supabaseConfigured() || !userId) return [];
   const sb = getSupabase();
+
+  const { data: rpcData, error: rpcError } = await sb.rpc('get_account_replays', {
+    p_user_id: userId
+  });
+  if (!rpcError && Array.isArray(rpcData)) return rpcData;
+
   const { data, error } = await sb
     .from('replays')
     .select('*')
     .eq('user_id', userId);
   if (error) {
     console.warn('[replayStore] list failed', error.message);
-    return [];
+    throw new Error(error.message);
   }
   return data || [];
 }

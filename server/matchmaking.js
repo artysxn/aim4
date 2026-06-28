@@ -6,8 +6,8 @@ import { S2C } from '../src/multiplayer/protocol.js';
 import { DEFAULT_ELO, clampElo } from '../src/multiplayer/elo.js';
 import { MM_SCORE_TARGET } from '../src/multiplayer/constants.js';
 
-/** Starting |ΔElo| allowed when pairing; grows while players wait. */
-const MM_INITIAL_ELO_RANGE = 50;
+/** Starting |ΔElo| allowed when pairing — instant match on enqueue when within this band. */
+const MM_INITIAL_ELO_RANGE = 100;
 /** Extra Elo range per interval (both players must fit within the tighter of their ranges). */
 const MM_ELO_RANGE_STEP = 25;
 const MM_ELO_RANGE_INTERVAL_MS = 10_000;
