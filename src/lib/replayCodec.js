@@ -200,6 +200,9 @@ export async function encodeReplay(rec) {
       bp: e.bp,
       start: e.start,
       len: e.frames.length,
+      // Aim point (head/centre) offset + radius at unit scale, for analytics.
+      aim: e.aim || [0, 0, 0],
+      aimR: e.aimR ?? 0,
       data: packEntity(e.frames)
     })),
     // Shot/FX events are sparse — keep them as small flat tuples.
@@ -243,6 +246,8 @@ function buildReplayView(c) {
     bp: e.bp,
     start: e.start,
     len: e.len,
+    aim: e.aim || [0, 0, 0],
+    aimR: e.aimR ?? 0,
     track: unpackEntity(e.data, e.len)
   }));
 
@@ -276,6 +281,24 @@ function buildReplayView(c) {
       const local = tickFloat - ent.start;
       if (local < 0 || local > ent.len - 1) return null;
       return sampleTrackEntity(ent.track, ent.len, local);
+    },
+    /**
+     * World-space aim point (head for bots, centre for dots) + radius at a
+     * global fractional tick, or null if the entity isn't live. Built from the
+     * tracked visual position plus the constant unit-scale aim offset/radius.
+     */
+    sampleEntityAim(ent, tickFloat) {
+      const s = this.sampleEntity(ent, tickFloat);
+      if (!s) return null;
+      const a = ent.aim || [0, 0, 0];
+      // Fallback radius for legacy replays with no captured aim zone.
+      const r = ent.aimR > 0 ? ent.aimR : 0.4;
+      return {
+        x: s.x + a[0] * s.s,
+        y: s.y + a[1] * s.s,
+        z: s.z + a[2] * s.s,
+        radius: r * s.s
+      };
     }
   };
 }
@@ -310,6 +333,8 @@ export function localDecode(rec) {
       bp: e.bp,
       start: e.start,
       len: e.frames.length,
+      aim: e.aim || [0, 0, 0],
+      aimR: e.aimR ?? 0,
       data: packEntity(e.frames)
     })),
     events: rec.events || []

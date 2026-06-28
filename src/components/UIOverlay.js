@@ -8,6 +8,7 @@
 //         | results
 // ---------------------------------------------------------------------------
 
+import * as THREE from 'three';
 import { RESOLUTIONS, clampResolutionDim } from '../core/SettingsManager.js';
 import { SCENARIOS } from '../core/SceneManager.js';
 import * as Storage from '../utils/Storage.js';
@@ -23,8 +24,10 @@ import {
 } from '../lib/accountStats.js';
 import { countryOptionsHtml, flagEmoji } from '../lib/countries.js';
 import { fetchPublicProfile, fetchPublicSettings } from '../lib/userProfile.js';
+import { logAimRun, fetchAimComparison, AIM_STAT_FILTERS } from '../lib/aimStats.js';
 import { supabaseConfigured } from '../lib/supabase.js';
 import { localDecode } from '../lib/replayCodec.js';
+import { ReplayAnalytics } from '../lib/replayAnalytics.js';
 import { REPLAY_SPEEDS } from '../core/ReplayPlayer.js';
 import { saveReplay, listAccountReplays, loadReplayByPath, createSharedReplay, fetchSharedReplay, isSharedReplayId } from '../lib/replayStore.js';
 import { copyText } from '../utils/ConfigCodes.js';
@@ -179,6 +182,7 @@ export class UIOverlay {
     this.input.onUnlockedClick = () => this._onUnlockedClick();
     this.sceneManager.onFinish = (results) => this._onFinish(results);
     this._bindReplay();
+    this._bindAimStats();
     this._bindFullscreenTip();
 
     // Shared link: ?lobby=CODE opens multiplayer and auto-joins if there's space.
@@ -798,6 +802,16 @@ export class UIOverlay {
           </div>
         </section>
 
+        <section class="account-section" id="account-aim-section">
+          <div class="account-aim-head">
+            <h4>Aim analysis</h4>
+            <select id="account-aim-filter" class="config-code-input account-aim-filter"></select>
+          </div>
+          <div id="account-aim-stats" class="account-aim-stats">
+            <p class="center lb-hint">Loading…</p>
+          </div>
+        </section>
+
         <section class="account-section" id="account-replays-section">
           <h4>Replays</h4>
           <div id="account-replays" class="account-replays">
@@ -957,6 +971,8 @@ export class UIOverlay {
     </div>
 
     <!-- REPLAY PLAYBACK -->
+    <canvas id="replay-analysis-canvas" class="replay-analysis-canvas"></canvas>
+    <div id="replay-stats" class="replay-stats" hidden></div>
     <div id="replay-overlay" class="replay-overlay">
       <div class="replay-controls">
         <button type="button" class="btn btn-sm replay-playpause" id="replay-playpause">▶</button>
@@ -965,6 +981,19 @@ export class UIOverlay {
         <div class="replay-speeds" id="replay-speeds"></div>
         <button type="button" class="btn btn-sm" id="replay-share-btn" hidden>Share</button>
         <span id="replay-share-status" class="replay-share-status muted" hidden></span>
+        <div class="replay-analytics">
+          <button type="button" class="btn btn-sm replay-gear" id="replay-settings-btn" title="Analysis settings" aria-label="Analysis settings">⚙</button>
+          <div id="replay-settings-pop" class="replay-settings-pop" hidden>
+            <h4>Analysis</h4>
+            <label class="field-check"><input type="checkbox" id="ra-optimalPath" /> Optimal path</label>
+            <label class="field-check"><input type="checkbox" id="ra-flicks" /> Flick adjustments</label>
+            <label class="field-check"><input type="checkbox" id="ra-trajectory" /> Trajectory</label>
+            <label class="field-check"><input type="checkbox" id="ra-tension" /> Tension %</label>
+            <label class="field-check"><input type="checkbox" id="ra-clickTiming" /> Click timing</label>
+            <label class="field-check"><input type="checkbox" id="ra-flickSpeed" /> Flick speed</label>
+            <label class="field-check"><input type="checkbox" id="ra-flickAccuracy" /> Flick accuracy</label>
+          </div>
+        </div>
         <button type="button" class="btn btn-sm" id="replay-exit">Exit replay</button>
       </div>
     </div>
@@ -1745,6 +1774,8 @@ export class UIOverlay {
     if (!isOther) {
       this._populateAccountForm();
       this._loadAccountStats();
+      this._aimStatsUserId = this.auth?.user?.id || null;
+      this._loadAimStats();
       this._loadAccountReplays();
     }
   }
@@ -1781,6 +1812,8 @@ export class UIOverlay {
       }
       const stats = await fetchAllAccountStats(userId);
       if (statsBody) statsBody.innerHTML = this._accountStatsHtml(stats);
+      this._aimStatsUserId = userId;
+      this._loadAimStats();
       await this._loadAccountReplays(userId);
     } catch (e) {
       if (statsBody) {
@@ -1852,6 +1885,67 @@ export class UIOverlay {
     return `<table class="account-stats-table"><thead><tr><th>Mode</th><th>Rank</th><th>Best</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
   }
 
+  /** Populate the aim-stats recency filter + reload on change. */
+  _bindAimStats() {
+    this._aimFilterId = this._aimFilterId || 'all';
+    const sel = this.root.querySelector('#account-aim-filter');
+    if (!sel) return;
+    sel.innerHTML = AIM_STAT_FILTERS.map(
+      (f) => `<option value="${f.id}">${this._esc(f.label)}</option>`
+    ).join('');
+    sel.value = this._aimFilterId;
+    sel.addEventListener('change', () => {
+      this._aimFilterId = sel.value;
+      this._loadAimStats();
+    });
+  }
+
+  /** Load the current account's aim analytics + the global baseline. */
+  async _loadAimStats() {
+    const body = this.root.querySelector('#account-aim-stats');
+    if (!body) return;
+    const userId = this._aimStatsUserId;
+    if (!supabaseConfigured() || !userId) {
+      body.innerHTML = '<p class="center lb-hint">Aim analysis is not available.</p>';
+      return;
+    }
+    body.innerHTML = '<p class="center lb-hint">Loading…</p>';
+    try {
+      const { player, global } = await fetchAimComparison(userId, this._aimFilterId || 'all');
+      body.innerHTML = this._aimStatsHtml(player, global);
+    } catch (e) {
+      body.innerHTML = `<p class="center lb-hint is-error">${this._esc(e.message || 'Could not load aim analysis.')}</p>`;
+    }
+  }
+
+  _aimStatsHtml(player, global) {
+    if (!player || !Number(player.games)) {
+      return '<p class="center lb-hint">No competitive runs in this range yet.</p>';
+    }
+    const g = global || {};
+    const num = (v, suffix = '', digits = 0) =>
+      v == null || Number.isNaN(Number(v)) ? '—' : `${Number(v).toFixed(digits)}${suffix}`;
+    const trio = (row) =>
+      `${row.flicks_accurate ?? '—'} / ${row.flicks_over ?? '—'} / ${row.flicks_under ?? '—'}`;
+    const clk = (row) =>
+      `${row.clicks_early ?? '—'} / ${row.clicks_accurate ?? '—'} / ${row.clicks_late ?? '—'}`;
+    const rows = [
+      ['Games', String(player.games), g.games != null ? String(g.games) : '—'],
+      ['Flick speed', num(player.flick_speed_ms, 'ms'), num(g.flick_speed_ms, 'ms')],
+      ['Flick accuracy', num(player.flick_accuracy_pct, '%'), num(g.flick_accuracy_pct, '%')],
+      ['Tension', num(player.tension_pct, '%'), num(g.tension_pct, '%')],
+      ['Flicks ✓/↑/↓', trio(player), trio(g)],
+      ['Clicks early/on/late', clk(player), clk(g)]
+    ];
+    const body = rows
+      .map(
+        ([label, you, glob]) =>
+          `<tr><td>${label}</td><td class="account-rank">${you}</td><td>${glob}</td></tr>`
+      )
+      .join('');
+    return `<table class="account-stats-table"><thead><tr><th>Metric</th><th>You</th><th>Global avg</th></tr></thead><tbody>${body}</tbody></table>`;
+  }
+
   async _loadAccountReplays(userId = null) {
     const body = this.root.querySelector('#account-replays');
     const uid = userId ?? this.auth?.user?.id;
@@ -1888,14 +1982,13 @@ export class UIOverlay {
     }
 
     const items = [];
-    const canShare = !viewingOther && !!this.auth?.isLoggedIn;
     for (const [scenario, slots] of byScenario) {
       const title = SCENARIO_META[scenario]?.title ?? scenario;
       const last = slots['competitive:last'] || slots['practice:last'];
       const best = slots['competitive:best'];
       const btns = [];
-      if (last) btns.push(this._replayBtnHtml(last, 'Last run', title, canShare));
-      if (best) btns.push(this._replayBtnHtml(best, 'Best run', title, canShare));
+      if (last) btns.push(this._replayBtnHtml(last, 'Last run', title));
+      if (best) btns.push(this._replayBtnHtml(best, 'Best run', title));
       if (btns.length) {
         items.push(
           `<div class="account-replay-row"><span class="account-replay-name">${title}</span><span class="account-replay-btns">${btns.join('')}</span></div>`
@@ -1907,12 +2000,6 @@ export class UIOverlay {
 
     body.querySelectorAll('[data-replay-path]').forEach((b) => {
       b.addEventListener('click', () => this._openAccountReplay(b.dataset.replayPath, b.dataset.replayTitle));
-    });
-    body.querySelectorAll('[data-replay-share]').forEach((b) => {
-      b.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._shareReplayFromButton(b);
-      });
     });
   }
 
@@ -1934,10 +2021,8 @@ export class UIOverlay {
     };
   }
 
-  _replayBtnHtml(row, label, title, canShare = false) {
-    const watch = `<button type="button" class="btn btn-sm" data-replay-path="${this._esc(row.replay_file_path)}" data-replay-title="${this._esc(`${title} — ${label}`)}">${label}</button>`;
-    if (!canShare) return watch;
-    return `${watch}<button type="button" class="btn btn-sm" data-replay-share data-replay-path="${this._esc(row.replay_file_path)}">${label === 'Best run' ? 'Share best' : 'Share'}</button>`;
+  _replayBtnHtml(row, label, title) {
+    return `<button type="button" class="btn btn-sm" data-replay-path="${this._esc(row.replay_file_path)}" data-replay-title="${this._esc(`${title} — ${label}`)}">${label}</button>`;
   }
 
   async _openAccountReplay(path, title) {
@@ -1960,13 +2045,6 @@ export class UIOverlay {
       returnTo: 'account',
       fromOtherPlayer: !!this._viewingAccount
     });
-  }
-
-  _shareReplayFromButton(btn) {
-    const path = btn?.dataset?.replayPath;
-    const row = this._accountReplayRows?.find((r) => r.replay_file_path === path);
-    if (!row) return;
-    this._shareReplay(this._shareMetaFromReplayRow(row), btn);
   }
 
   _setAuthMode(mode) {
@@ -3186,11 +3264,14 @@ export class UIOverlay {
     const recording = this.replayRecorder.finish();
     if (!recording) return { ok: false, reason: 'no recording' };
 
+    // Always measure aim analytics for the run (independent of viewer toggles).
+    let analytics = null;
     try {
       this._lastReplay = localDecode(recording);
+      analytics = new ReplayAnalytics(this._lastReplay).aggregate();
       if (watchBtn) watchBtn.hidden = false;
     } catch (e) {
-      console.warn('[ui] local replay decode failed', e);
+      console.warn('[ui] local replay decode/analytics failed', e);
     }
 
     if (!this.auth?.isLoggedIn || !supabaseConfigured()) {
@@ -3203,7 +3284,14 @@ export class UIOverlay {
       console.warn('[ui] profile ensure failed before replay save', e);
     }
 
-    const res = await saveReplay(this.auth.user.id, recording, results);
+    // Log competitive runs to the cross-player aim-stats table (fire-and-forget).
+    if (analytics && recording.variant === 'competitive') {
+      logAimRun(this.auth.user.id, recording, analytics).catch((e) =>
+        console.warn('[ui] aim-run log failed', e)
+      );
+    }
+
+    const res = await saveReplay(this.auth.user.id, recording, results, analytics);
     if (res.ok && res.lastPath) {
       this._lastReplayShare = {
         sourcePath: res.lastPath,
@@ -3263,13 +3351,170 @@ export class UIOverlay {
 
     if (this.replayPlayer) {
       this.replayPlayer.onProgress = (st) => this._updateReplayUI(st);
+      this.replayPlayer.onSample = (sample, camera) => this._renderAnalysis(sample, camera);
       this.replayPlayer.onEnd = () => this._updateReplayUI({ playing: false });
     }
+
+    this._bindReplayAnalytics();
 
     // Esc leaves the replay (pointer lock is never engaged during playback).
     document.addEventListener('keydown', (e) => {
       if (this.replaying && e.code === 'Escape') this._exitReplay();
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Replay analysis overlay (optimal path / flicks / trajectory / tension /
+  // click timing). Toggles gate visuals only — the engine measures everything.
+  // -------------------------------------------------------------------------
+  _bindReplayAnalytics() {
+    this.replayStats = this.root.querySelector('#replay-stats');
+    this.replayAnalysisCanvas = this.root.querySelector('#replay-analysis-canvas');
+    this._analysisCtx = this.replayAnalysisCanvas?.getContext('2d') || null;
+    const pop = this.root.querySelector('#replay-settings-pop');
+    const btn = this.root.querySelector('#replay-settings-btn');
+
+    btn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (pop) pop.hidden = !pop.hidden;
+    });
+    // Click outside closes the popover.
+    document.addEventListener('click', (e) => {
+      if (!pop || pop.hidden) return;
+      if (pop.contains(e.target) || btn?.contains(e.target)) return;
+      pop.hidden = true;
+    });
+
+    const ra = this.settings.data.replayAnalytics || {};
+    for (const key of ['optimalPath', 'flicks', 'trajectory', 'tension', 'clickTiming', 'flickSpeed', 'flickAccuracy']) {
+      const cb = this.root.querySelector(`#ra-${key}`);
+      if (!cb) continue;
+      cb.checked = !!ra[key];
+      cb.addEventListener('change', () => {
+        if (!this.settings.data.replayAnalytics) this.settings.data.replayAnalytics = {};
+        this.settings.data.replayAnalytics[key] = cb.checked;
+        this.settings.save();
+        this._applyAnalyticsVisibility();
+      });
+    }
+  }
+
+  /** Show/hide the overlay canvas + stats panel based on enabled toggles. */
+  _applyAnalyticsVisibility() {
+    const ra = this.settings.data.replayAnalytics || {};
+    const anyLine = ra.optimalPath || ra.trajectory;
+    const anyStat = ra.flicks || ra.tension || ra.clickTiming || ra.flickSpeed || ra.flickAccuracy;
+    if (this.replayAnalysisCanvas) this.replayAnalysisCanvas.hidden = !this.replaying || !anyLine;
+    if (this.replayStats) this.replayStats.hidden = !this.replaying || !anyStat;
+    if (!this.replaying || !anyLine) this._clearAnalysisCanvas();
+  }
+
+  _clearAnalysisCanvas() {
+    const c = this.replayAnalysisCanvas;
+    if (c && this._analysisCtx) this._analysisCtx.clearRect(0, 0, c.width, c.height);
+  }
+
+  /** Draw the per-tick overlay lines + refresh the stats panel. */
+  _renderAnalysis(sample, camera) {
+    if (!this.replaying || !sample) return;
+    const ra = this.settings.data.replayAnalytics || {};
+
+    // --- stats panel ---
+    if (this.replayStats && (ra.flicks || ra.tension || ra.clickTiming || ra.flickSpeed || ra.flickAccuracy)) {
+      const rows = [];
+      if (ra.flicks) {
+        const f = sample.flicks;
+        rows.push(`<div class="rs-row"><span>Flicks</span><span class="rs-good">${f.accurate}✓</span> <span class="rs-over">${f.over}↑</span> <span class="rs-under">${f.under}↓</span></div>`);
+      }
+      if (ra.flickSpeed) {
+        rows.push(`<div class="rs-row"><span>Flick speed</span><span>${sample.flickSpeedMs ? sample.flickSpeedMs.toFixed(0) + 'ms' : '—'}</span></div>`);
+      }
+      if (ra.flickAccuracy) {
+        rows.push(`<div class="rs-row"><span>Flick acc</span><span>${sample.flicksMeasured ? sample.flickAccuracyPct.toFixed(0) + '%' : '—'}</span></div>`);
+      }
+      if (ra.tension) {
+        rows.push(`<div class="rs-row"><span>Tension</span><span>${sample.tensionPct.toFixed(0)}%</span></div>`);
+      }
+      if (ra.clickTiming) {
+        const c = sample.clicks;
+        rows.push(`<div class="rs-row"><span>Clicks</span><span class="rs-over">${c.early} early</span> <span class="rs-good">${c.accurate} on</span> <span class="rs-under">${c.late} late</span></div>`);
+        const earlyAvg = c.early ? (c.earlyMs / c.early).toFixed(0) : 0;
+        const lateAvg = c.late ? (c.lateMs / c.late).toFixed(0) : 0;
+        rows.push(`<div class="rs-row rs-sub"><span>avg</span><span>−${earlyAvg}ms / +${lateAvg}ms</span></div>`);
+      }
+      this.replayStats.innerHTML = rows.join('');
+    }
+
+    // --- overlay lines ---
+    const anyLine = ra.optimalPath || ra.trajectory;
+    if (!anyLine || !this._analysisCtx || !camera) {
+      if (this.replayAnalysisCanvas && !this.replayAnalysisCanvas.hidden) this._clearAnalysisCanvas();
+      return;
+    }
+    const c = this.replayAnalysisCanvas;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    if (c.width !== w || c.height !== h) {
+      c.width = w;
+      c.height = h;
+    }
+    const ctx = this._analysisCtx;
+    ctx.clearRect(0, 0, w, h);
+    const cx = w / 2;
+    const cy = h / 2;
+
+    // Optimal path: green crosshair → nearest target; red actual-motion line.
+    if (ra.optimalPath) {
+      if (sample.target) {
+        const p = this._projectToScreen(sample.target, camera, w, h);
+        if (p) this._drawLine(ctx, cx, cy, p.x, p.y, '#3ddc6b', 2.5);
+      }
+      const md = sample.moveDir;
+      if (md && (Math.abs(md.yaw) > 1e-5 || Math.abs(md.pitch) > 1e-5)) {
+        const a = this._motionScreenDir(md);
+        this._drawLine(ctx, cx, cy, cx + a.x * 140, cy + a.y * 140, '#f54a4a', 2.5);
+      }
+    }
+
+    // Trajectory: short line leading the crosshair's current motion.
+    if (ra.trajectory && sample.moveDir) {
+      const md = sample.moveDir;
+      if (Math.abs(md.yaw) > 1e-5 || Math.abs(md.pitch) > 1e-5) {
+        const a = this._motionScreenDir(md);
+        this._drawLine(ctx, cx, cy, cx + a.x * 90, cy + a.y * 90, '#46c8ff', 2);
+      }
+    }
+  }
+
+  /** Normalize a {yaw,pitch} crosshair delta into a unit screen-space vector. */
+  _motionScreenDir(md) {
+    // +yaw turns right → crosshair sweeps right (+x); +pitch looks up → up (−y).
+    let x = md.yaw;
+    let y = -md.pitch;
+    const m = Math.hypot(x, y) || 1;
+    return { x: x / m, y: y / m };
+  }
+
+  /** Project a world point to pixel coords, or null if behind the camera. */
+  _projectToScreen(p, camera, w, h) {
+    if (!this._projVec) this._projVec = new THREE.Vector3();
+    this._projVec.set(p.x, p.y, p.z);
+    this._projVec.project(camera);
+    if (this._projVec.z > 1) return null; // behind / beyond the far plane
+    return {
+      x: (this._projVec.x * 0.5 + 0.5) * w,
+      y: (-this._projVec.y * 0.5 + 0.5) * h
+    };
+  }
+
+  _drawLine(ctx, x0, y0, x1, y1, color, width) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
   }
 
   _setReplayShareContext(ctx) {
@@ -3397,6 +3642,7 @@ export class UIOverlay {
     this.crosshair.setVisible(true);
     this.replayPlayer.load(decoded);
     this.replayPlayer.play();
+    this._applyAnalyticsVisibility();
   }
 
   _exitReplay() {
@@ -3404,6 +3650,9 @@ export class UIOverlay {
     this.replaying = false;
     this.replayPlayer?.dispose();
     this.replayOverlay?.classList.remove('active');
+    this._applyAnalyticsVisibility();
+    const pop = this.root.querySelector('#replay-settings-pop');
+    if (pop) pop.hidden = true;
     this._setReplayShareContext(null);
     if (this.settings.isReplayView) this.settings.endReplayView();
     this.crosshair.setVisible(false);

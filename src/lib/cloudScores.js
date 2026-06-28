@@ -72,22 +72,34 @@ async function fetchProfiles(sb, userIds) {
   return Object.fromEntries((data || []).map((p) => [p.id, p.username]));
 }
 
-async function selectScores(sb, scenario, configKey, fullSelect, baseSelect) {
-  let data = null;
-  let error = null;
+const PAGE_SIZE = 1000;
 
-  ({ data, error } = await sb
-    .from('scores')
-    .select(fullSelect)
-    .eq('scenario', scenario)
-    .eq('config_key', configKey));
+/**
+ * Read every row matching a scenario+config, paging past PostgREST's default
+ * 1000-row response cap with `.range()`. Without this the per-user "best run"
+ * aggregation silently drops everyone beyond the first 1000 rows.
+ */
+async function selectScoresPaged(sb, scenario, configKey, select) {
+  const all = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await sb
+      .from('scores')
+      .select(select)
+      .eq('scenario', scenario)
+      .eq('config_key', configKey)
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) return { data: all.length ? all : null, error };
+    if (data?.length) all.push(...data);
+    if (!data || data.length < PAGE_SIZE) break;
+  }
+  return { data: all, error: null };
+}
+
+async function selectScores(sb, scenario, configKey, fullSelect, baseSelect) {
+  let { data, error } = await selectScoresPaged(sb, scenario, configKey, fullSelect);
 
   if (error && isMissingColumnError(error)) {
-    ({ data, error } = await sb
-      .from('scores')
-      .select(baseSelect)
-      .eq('scenario', scenario)
-      .eq('config_key', configKey));
+    ({ data, error } = await selectScoresPaged(sb, scenario, configKey, baseSelect));
   }
 
   return { data, error };

@@ -31,7 +31,26 @@ function isBetterRun(scenario, a, b) {
   return (a.score ?? 0) > (b.score ?? 0);
 }
 
-function summaryRow(userId, recording, results, slot, path, encoded) {
+/** Coerce the analytics aggregate into nullable DB columns (or {} when absent). */
+function analyticsColumns(analytics) {
+  if (!analytics || typeof analytics !== 'object') return {};
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+  return {
+    flicks_accurate: num(analytics.flicks_accurate),
+    flicks_over: num(analytics.flicks_over),
+    flicks_under: num(analytics.flicks_under),
+    clicks_early: num(analytics.clicks_early),
+    clicks_accurate: num(analytics.clicks_accurate),
+    clicks_late: num(analytics.clicks_late),
+    click_early_ms: num(analytics.click_early_ms),
+    click_late_ms: num(analytics.click_late_ms),
+    tension_pct: num(analytics.tension_pct),
+    flick_speed_ms: num(analytics.flick_speed_ms),
+    flick_accuracy_pct: num(analytics.flick_accuracy_pct)
+  };
+}
+
+function summaryRow(userId, recording, results, slot, path, encoded, analytics) {
   return {
     user_id: userId,
     scenario: recording.scenario,
@@ -44,7 +63,8 @@ function summaryRow(userId, recording, results, slot, path, encoded) {
     duration: encoded.summary.durationSec,
     tick_rate: 128,
     byte_size: encoded.summary.bytes,
-    replay_file_path: path
+    replay_file_path: path,
+    ...analyticsColumns(analytics)
   };
 }
 
@@ -84,7 +104,7 @@ async function verifyReplayRow(sb, uid, scenario, variant, slot, expectedPath) {
  *
  * @returns {Promise<{ ok:boolean, slots?:string[], reason?:string }>}
  */
-export async function saveReplay(userId, recording, results) {
+export async function saveReplay(userId, recording, results, analytics = null) {
   if (!supabaseConfigured()) return { ok: false, reason: 'offline' };
   if (!userId || !recording) return { ok: false, reason: 'no recording' };
 
@@ -107,7 +127,7 @@ export async function saveReplay(userId, recording, results) {
   // --- last slot (every run) ------------------------------------------------
   const lastPath = pathFor(uid, scenario, variant, 'last');
   let err = await uploadPayload(sb, lastPath, encoded.bytes);
-  if (!err) err = await upsertRow(sb, summaryRow(uid, recording, results, 'last', lastPath, encoded));
+  if (!err) err = await upsertRow(sb, summaryRow(uid, recording, results, 'last', lastPath, encoded, analytics));
   if (err) {
     console.warn('[replayStore] save last failed', err.message);
     return { ok: false, reason: err.message };
@@ -140,7 +160,7 @@ export async function saveReplay(userId, recording, results) {
       const bestPath = pathFor(uid, scenario, variant, 'best');
       let bErr = await uploadPayload(sb, bestPath, encoded.bytes);
       if (!bErr) {
-        bErr = await upsertRow(sb, summaryRow(uid, recording, results, 'best', bestPath, encoded));
+        bErr = await upsertRow(sb, summaryRow(uid, recording, results, 'best', bestPath, encoded, analytics));
       }
       if (bErr) console.warn('[replayStore] save best failed', bErr.message);
       else {
@@ -159,7 +179,8 @@ export async function saveReplay(userId, recording, results) {
     accuracy: Number(results?.accuracy) || 0,
     kills: Math.round(Number(results?.kills) || 0),
     duration: encoded.summary.durationSec,
-    settings: recording.settings || {}
+    settings: recording.settings || {},
+    ...analyticsColumns(analytics)
   } };
 }
 
@@ -326,7 +347,8 @@ export async function createSharedReplay({
     tick_rate: 128,
     byte_size: bytes.length,
     replay_file_path: destPath,
-    settings: meta.settings || {}
+    settings: meta.settings || {},
+    ...analyticsColumns(meta)
   };
 
   const { error: insErr } = await sb.from('shared_replays').insert(row);

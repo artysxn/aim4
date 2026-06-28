@@ -58,6 +58,17 @@ const DEFAULTS = {
   resolutionHeight: 1080,
   rawInput: true, // request unadjusted (raw) mouse movement under Pointer Lock
   copyConfigOnReplay: false, // when ON, use the recorded player's resolution/colors/crosshair on their replays
+  // Replay analysis overlays (viewer-side; gate on-screen visuals only — stats
+  // are always measured & stored regardless of these toggles).
+  replayAnalytics: {
+    optimalPath: false, // green line to nearest target + red actual-motion line
+    flicks: false, // accurate / over / under flick counters
+    trajectory: false, // short line leading the crosshair's current motion
+    tension: false, // jitter-vs-optimal-path percentage
+    clickTiming: false, // early / accurate / late click tallies
+    flickSpeed: false, // avg ms from flick start to first click
+    flickAccuracy: false // avg first-click placement along start→target
+  },
   runDuration: 60, // seconds
   crosshair: {
     color: '#f52525',

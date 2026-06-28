@@ -27,6 +27,8 @@ const _local = new THREE.Matrix4();
 const _p = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _s = new THREE.Vector3();
+const _ac = new THREE.Vector3(); // aim-collider world centre
+const _as = new THREE.Vector3(); // aim-collider world scale
 
 function r(n, p = 1000) {
   return Math.round(n * p) / p;
@@ -210,6 +212,38 @@ export class ReplayRecorder {
     return target.object;
   }
 
+  /**
+   * Pick the "aim point" the analytics layer should target: the head for bots,
+   * the centre for dots. Returns the offset from the tracked visual to that
+   * point AND the aim zone's radius, both normalized to unit entity scale so
+   * playback can reconstruct world values via `point = visualPos + aim*scale`.
+   * @param {object} target  scenario target (has `colliders`, maybe `_mesh`)
+   * @param {THREE.Object3D} visual  the tracked visual mesh (already positioned)
+   * @param {number} entityScale  mean world scale of the visual this tick
+   */
+  _aimFor(target, visual, entityScale) {
+    const cols = target.colliders || [];
+    const aimCol =
+      cols.find((c) => c?.userData?.zone === 'head') ||
+      cols.find((c) => c?.userData?.crit) ||
+      target._mesh ||
+      cols[0] ||
+      visual;
+    const es = entityScale || 1;
+    visual.getWorldPosition(_v); // visual world centre (reused below safely)
+    aimCol.updateWorldMatrix(true, false);
+    aimCol.getWorldPosition(_ac);
+    aimCol.getWorldScale(_as);
+    const geo = aimCol.geometry;
+    if (geo && !geo.boundingSphere) geo.computeBoundingSphere();
+    const colScale = (_as.x + _as.y + _as.z) / 3 || 1;
+    const worldR = (geo?.boundingSphere?.radius ?? 0.3) * colScale;
+    return {
+      aim: [r((_ac.x - _v.x) / es), r((_ac.y - _v.y) / es), r((_ac.z - _v.z) / es)],
+      aimR: r(worldR / es)
+    };
+  }
+
   _captureEntities() {
     const targets = this.scenario?.targets || [];
     const seen = new Set();
@@ -225,12 +259,15 @@ export class ReplayRecorder {
       const visual = this._entityVisual(t);
       visual.getWorldPosition(_v);
       visual.getWorldScale(this._ws);
-      rec.frames.push({
-        x: _v.x,
-        y: _v.y,
-        z: _v.z,
-        s: (this._ws.x + this._ws.y + this._ws.z) / 3
-      });
+      const meanScale = (this._ws.x + this._ws.y + this._ws.z) / 3;
+      rec.frames.push({ x: _v.x, y: _v.y, z: _v.z, s: meanScale });
+      // Aim point (head for bots / centre for dots) is constant in local space —
+      // capture it once from the first frame. (clobbers _v internally; safe now.)
+      if (!rec.aim) {
+        const a = this._aimFor(t, visual, meanScale);
+        rec.aim = a.aim;
+        rec.aimR = a.aimR;
+      }
     }
     // Finalize entities whose target vanished since the last tick.
     for (const [obj, rec] of this._live) {

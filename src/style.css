@@ -2087,6 +2087,116 @@ input[type='checkbox'] {
   margin-left: auto;
 }
 
+/* --- replay analysis overlay --- */
+.replay-analysis-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 38; /* above crosshair-canvas, below the control bar (z 40) */
+  pointer-events: none;
+}
+.replay-analysis-canvas[hidden] {
+  display: none;
+}
+.replay-analytics {
+  position: relative;
+  display: flex;
+}
+.replay-gear {
+  min-width: 38px;
+  font-size: 16px;
+  line-height: 1;
+}
+.replay-settings-pop {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  z-index: 41;
+}
+.replay-settings-pop[hidden] {
+  display: none;
+}
+.replay-settings-pop h4 {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.replay-settings-pop .field-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.replay-stats {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 39;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: rgba(8, 8, 8, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+}
+.replay-stats[hidden] {
+  display: none;
+}
+.replay-stats .rs-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.replay-stats .rs-row > span:first-child {
+  color: var(--muted);
+}
+.replay-stats .rs-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+.replay-stats .rs-good {
+  color: #3ddc6b;
+}
+.replay-stats .rs-over {
+  color: #f5a623;
+}
+.replay-stats .rs-under {
+  color: #46c8ff;
+}
+
+.account-aim-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.account-aim-filter {
+  width: auto;
+  min-width: 150px;
+}
+.account-aim-stats {
+  font-variant-numeric: tabular-nums;
+}
+
 .account-replays {
   display: flex;
   flex-direction: column;

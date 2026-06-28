@@ -70,6 +70,24 @@ alter table public.scores add column if not exists kpm real;
 alter table public.profiles add column if not exists elo integer not null default 1000;
 alter table public.profiles add column if not exists country_code text;
 
+-- Replay aim-analytics aggregates (measured per run; nullable for old rows).
+alter table public.replays add column if not exists flicks_accurate integer;
+alter table public.replays add column if not exists flicks_over integer;
+alter table public.replays add column if not exists flicks_under integer;
+alter table public.replays add column if not exists clicks_early integer;
+alter table public.replays add column if not exists clicks_accurate integer;
+alter table public.replays add column if not exists clicks_late integer;
+alter table public.replays add column if not exists click_early_ms real;
+alter table public.replays add column if not exists click_late_ms real;
+alter table public.replays add column if not exists tension_pct real;
+alter table public.replays add column if not exists flick_speed_ms real;
+alter table public.replays add column if not exists flick_accuracy_pct real;
+
+-- Raise PostgREST's default 1000-row response cap so full-table leaderboard
+-- aggregation (and large account/replay reads) never silently truncates.
+alter role authenticator set pgrst.db_max_rows = '100000';
+notify pgrst, 'reload config';
+
 -- ===========================================================================
 -- Indexes
 -- ===========================================================================
@@ -98,6 +116,106 @@ create table if not exists public.shared_replays (
   created_at timestamptz default now()
 );
 create index if not exists shared_replays_user_idx on public.shared_replays (user_id);
+
+-- Replay aim-analytics aggregates on shared copies (nullable for old rows).
+alter table public.shared_replays add column if not exists flicks_accurate integer;
+alter table public.shared_replays add column if not exists flicks_over integer;
+alter table public.shared_replays add column if not exists flicks_under integer;
+alter table public.shared_replays add column if not exists clicks_early integer;
+alter table public.shared_replays add column if not exists clicks_accurate integer;
+alter table public.shared_replays add column if not exists clicks_late integer;
+alter table public.shared_replays add column if not exists click_early_ms real;
+alter table public.shared_replays add column if not exists click_late_ms real;
+alter table public.shared_replays add column if not exists tension_pct real;
+alter table public.shared_replays add column if not exists flick_speed_ms real;
+alter table public.shared_replays add column if not exists flick_accuracy_pct real;
+
+-- Per-run aim analytics log (one row per COMPETITIVE run, never overwritten) so
+-- flick speed / accuracy / tension can be compared across players and filtered
+-- by recency. Distinct from `replays`, which keeps only last/best slots.
+create table if not exists public.aim_run_stats (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references auth.users on delete cascade,
+  scenario text not null,
+  config_key text,
+  variant text not null default 'competitive',
+  flick_speed_ms real,
+  flick_accuracy_pct real,
+  flicks_measured integer,
+  flicks_accurate integer,
+  flicks_over integer,
+  flicks_under integer,
+  clicks_early integer,
+  clicks_accurate integer,
+  clicks_late integer,
+  click_early_ms real,
+  click_late_ms real,
+  tension_pct real,
+  created_at timestamptz default now()
+);
+create index if not exists aim_run_stats_user_idx on public.aim_run_stats (user_id, created_at desc);
+create index if not exists aim_run_stats_scenario_idx on public.aim_run_stats (scenario, created_at desc);
+
+alter table public.aim_run_stats enable row level security;
+drop policy if exists "read all aim stats" on public.aim_run_stats;
+drop policy if exists "insert own aim stats" on public.aim_run_stats;
+create policy "read all aim stats" on public.aim_run_stats
+  for select using (true);
+create policy "insert own aim stats" on public.aim_run_stats
+  for insert with check (auth.uid() = user_id);
+grant select on public.aim_run_stats to anon, authenticated;
+grant insert on public.aim_run_stats to authenticated;
+
+-- Aggregate aim stats with optional filters:
+--   p_user_id  — null = every player (global baseline), else one account
+--   p_scenario — null = all scenarios
+--   p_last_n   — null = no game cap, else only the most recent N runs
+--   p_since    — null = no time floor, else runs at/after this timestamp
+drop function if exists public.get_aim_stats(uuid, text, int, timestamptz);
+create or replace function public.get_aim_stats(
+  p_user_id uuid default null,
+  p_scenario text default null,
+  p_last_n int default null,
+  p_since timestamptz default null
+)
+returns table (
+  games bigint,
+  flick_speed_ms real,
+  flick_accuracy_pct real,
+  tension_pct real,
+  flicks_accurate bigint,
+  flicks_over bigint,
+  flicks_under bigint,
+  clicks_early bigint,
+  clicks_accurate bigint,
+  clicks_late bigint
+)
+language sql
+stable
+as $$
+  with filtered as (
+    select *
+    from public.aim_run_stats r
+    where (p_user_id is null or r.user_id = p_user_id)
+      and (p_scenario is null or r.scenario = p_scenario)
+      and (p_since is null or r.created_at >= p_since)
+    order by r.created_at desc
+    limit case when p_last_n is null then null else greatest(1, p_last_n) end
+  )
+  select
+    count(*)::bigint as games,
+    avg(flick_speed_ms)::real as flick_speed_ms,
+    avg(flick_accuracy_pct)::real as flick_accuracy_pct,
+    avg(tension_pct)::real as tension_pct,
+    coalesce(sum(flicks_accurate), 0)::bigint as flicks_accurate,
+    coalesce(sum(flicks_over), 0)::bigint as flicks_over,
+    coalesce(sum(flicks_under), 0)::bigint as flicks_under,
+    coalesce(sum(clicks_early), 0)::bigint as clicks_early,
+    coalesce(sum(clicks_accurate), 0)::bigint as clicks_accurate,
+    coalesce(sum(clicks_late), 0)::bigint as clicks_late
+  from filtered;
+$$;
+grant execute on function public.get_aim_stats(uuid, text, int, timestamptz) to anon, authenticated;
 
 -- ===========================================================================
 -- Data migrations

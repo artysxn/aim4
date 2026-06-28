@@ -12,6 +12,7 @@ import { EYE_HEIGHT } from './Engine.js';
 import { decodeInput } from '../lib/replayCodec.js';
 import { getWeapon } from '../weapons/index.js';
 import { PLAYER_RUN_SPEED } from '../utils/spawnVisibility.js';
+import { ReplayAnalytics } from '../lib/replayAnalytics.js';
 
 export const REPLAY_SPEEDS = [0.125, 0.25, 0.5, 1, 2, 4];
 
@@ -82,7 +83,10 @@ export class ReplayPlayer {
     this._lastEventTick = -1;
     this._sfx = null;
 
+    this.analytics = null; // ReplayAnalytics for the loaded replay
+
     this.onProgress = null; // ({ time, duration, playing, speed }) => void
+    this.onSample = null; // (analyticsSample, camera) => void — per-tick analysis
     this.onEnd = null;
   }
 
@@ -110,11 +114,14 @@ export class ReplayPlayer {
     this._envGroup.name = 'replay-env';
     this.root.add(this._envGroup);
 
+    this.analytics = new ReplayAnalytics(replay);
+
     this._buildEntities(replay);
     this._applyEnvironmentAtTick(0);
     this._setupViewmodel(replay);
     this._applyTick(0);
     this._emitProgress();
+    this._emitSample(0);
   }
 
   _setupViewmodel(replay) {
@@ -233,6 +240,7 @@ export class ReplayPlayer {
     this._applyEnvironmentAtTick(Math.floor(tickFloat));
     this._applyTick(tickFloat);
     this._emitProgress();
+    this._emitSample(tickFloat);
   }
 
   // ---- per-frame update (driven by the engine loop) -----------------------
@@ -250,7 +258,15 @@ export class ReplayPlayer {
       this._fireEventsUpTo(tickFloat);
       this._updateReplayAudio(tickFloat, dt);
       this._emitProgress();
+      this._emitSample(tickFloat);
     }
+  }
+
+  /** Run the analysis for the current tick and hand it to the overlay/HUD. */
+  _emitSample(tickFloat) {
+    if (!this.onSample || !this.analytics) return;
+    const sample = this.analytics.sampleTick(tickFloat);
+    this.onSample(sample, this.engine.camera);
   }
 
   _applyTick(tickFloat) {
@@ -403,6 +419,7 @@ export class ReplayPlayer {
     this._envGroup = null;
     this._envSegmentIdx = -1;
     this.entities = [];
+    this.analytics = null;
     this.replay = null;
     this.playing = false;
     this.time = 0;
