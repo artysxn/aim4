@@ -9,6 +9,9 @@
 
 import * as THREE from 'three';
 import { EYE_HEIGHT } from './Engine.js';
+import { decodeInput } from '../lib/replayCodec.js';
+import { getWeapon } from '../weapons/index.js';
+import { PLAYER_RUN_SPEED } from '../utils/spawnVisibility.js';
 
 export const REPLAY_SPEEDS = [0.125, 0.25, 0.5, 1, 2, 4];
 
@@ -106,11 +109,36 @@ export class ReplayPlayer {
 
     this._buildEntities(replay);
     this._applyEnvironmentAtTick(0);
-
-    // Hide the live first-person gun; tracers still render via the viewmodel pool.
-    this.engine.viewmodel?.setVisible(false);
+    this._setupViewmodel(replay);
     this._applyTick(0);
     this._emitProgress();
+  }
+
+  _setupViewmodel(replay) {
+    const vm = this.engine.viewmodel;
+    if (!vm) return;
+    const show = replay.showViewmodel !== false;
+    vm.setVisible(show);
+    if (show) {
+      vm.setWeapon(getWeapon(replay.weaponId));
+      vm._kick = 0;
+      vm._flashT = 0;
+      vm._punchPitch = 0;
+      vm._punchYaw = 0;
+    }
+  }
+
+  /** Movement hint for viewmodel bob during playback (from recorded input). */
+  getMotion() {
+    if (!this.replay) return {};
+    const tickFloat = this.time * this.replay.tickRate;
+    const cam = this.replay.sampleCamera(tickFloat);
+    const flags = decodeInput(cam.input);
+    const moving = flags.W || flags.A || flags.S || flags.D;
+    return {
+      onGround: !flags.jump,
+      speedHoriz: moving ? PLAYER_RUN_SPEED : 0
+    };
   }
 
   _setEnvironment(meshDescs) {
@@ -253,8 +281,13 @@ export class ReplayPlayer {
   }
 
   _playShot(ev) {
+    const vm = this.engine.viewmodel;
+    const recoil = this.replay?.viewmodelRecoil !== false;
+    if (vm?.group.visible) {
+      vm.fire({ recoil });
+    }
     if (ev.o && ev.e) {
-      this.engine.viewmodel?.spawnTracer(
+      vm?.spawnTracer(
         _shotOrigin.set(ev.o[0], ev.o[1], ev.o[2]),
         _shotEnd.set(ev.e[0], ev.e[1], ev.e[2])
       );
@@ -283,6 +316,7 @@ export class ReplayPlayer {
   /** Tear down the replay scene and restore the camera to a neutral pose. */
   dispose() {
     this._clearTracers();
+    this.engine.viewmodel?.setVisible(false);
     if (this.root) {
       this.root.traverse((node) => {
         if (node.isMesh || node.isLine) {

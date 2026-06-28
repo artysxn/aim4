@@ -38,6 +38,7 @@ input.onReload = () => weapon.reload();
 const replayRecorder = new ReplayRecorder(engine, input);
 engine.replayRecorder = replayRecorder; // BaseScenario.shoot records shots through it
 const replayPlayer = new ReplayPlayer(engine);
+engine.replayPlayer = replayPlayer;
 const ui = new UIOverlay({
   engine, input, settings, crosshair, sceneManager, auth, replayRecorder, replayPlayer
 });
@@ -52,18 +53,12 @@ engine.onUpdate = (dt) => {
   if (ui.replaying) {
     replayPlayer.update(dt);
     engine.audio?.syncListener(engine.camera);
-    // Viewmodel tracers are scene-level; keep their fade animation alive during playback.
-    engine.viewmodel?.update(dt);
+    const motion = replayPlayer.getMotion();
+    engine.viewmodel?.update(dt, motion);
     crosshair.frame(engine);
     return;
   }
   sceneManager.update(dt);
-  // Sample telemetry at a fixed 128 Hz while a run is actively recording.
-  if (replayRecorder.active && sceneManager.current?.running) {
-    replayRecorder.sample(dt);
-  }
-  // First-person weapon visuals: the viewmodel follows the camera during any
-  // active weapon run (every scenario now uses the AK).
   const sc = sceneManager.current;
   const inFP = !!(sc?.usesWeapon && sc.running && sc.showViewmodel !== false);
   viewmodel.setVisible(inFP);
@@ -75,6 +70,10 @@ engine.onUpdate = (dt) => {
     : {};
   viewmodel.update(dt, motion);
   weapon.update(dt);
+  // Sample telemetry after the viewmodel so camera punch/kick is captured.
+  if (replayRecorder.active && sceneManager.current?.running) {
+    replayRecorder.sample(dt);
+  }
   if (engine.audio && sceneManager.current?.running) {
     engine.audio.syncListener(engine.camera);
   }

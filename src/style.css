@@ -485,6 +485,38 @@ h4 {
 .training-row-play:hover {
   filter: brightness(1.08);
 }
+.training-row-lb {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  align-self: stretch;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 0;
+  transition: color 0.12s, background 0.12s;
+}
+.training-row-lb .aim4-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+  opacity: 0.72;
+}
+.training-row-lb:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+.training-row-lb:hover .aim4-icon {
+  opacity: 1;
+}
+.training-row-lb:active {
+  background: rgba(255, 255, 255, 0.04);
+}
 .training-row-gear {
   flex-shrink: 0;
   display: inline-flex;

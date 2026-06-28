@@ -46,7 +46,7 @@ const SCENARIO_META = {
   arena: { title: 'Crossfire', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
   duels: { title: 'Duels', dualPlay: true, tags: ['Movement', 'Reactions'] },
   range: { title: 'Range', dualPlay: true, tags: ['Movement'] },
-  tracking: { title: 'Tracking', dualPlay: true, tags: [] },
+  tracking: { title: 'Tracking', dualPlay: true, tags: ['Accuracy'] },
   deathmatch: { title: 'Deathmatch', dualPlay: true, tags: ['Movement', 'Speed', 'Control'] }
 };
 
@@ -136,6 +136,7 @@ export class UIOverlay {
     this._settingsExplorePayload = null;
     this._settingsExploreUser = null;
     this._returnAfterScenarioSettings = null;
+    this._returnAfterLeaderboard = 'menu';
     this._activeScenarioSettings = null;
     this._suppressLockPause = false;
     this._mpTabStats = {};
@@ -632,6 +633,7 @@ export class UIOverlay {
                 ? `<button type="button" class="btn training-row-play" data-play="${key}" data-variant="practice">Training</button>
               <button type="button" class="btn training-row-play" data-play="${key}" data-variant="competitive">Competitive</button>`
                 : `<button type="button" class="btn training-row-play" data-play="${key}" aria-label="Play ${meta.title}">Play</button>`;
+              const lbBtn = `<button type="button" class="training-row-lb" data-training-lb="${key}" aria-label="${meta.title} leaderboard"><img src="${LEADERBOARD_ICON}" alt="" class="aim4-icon" width="16" height="16" /></button>`;
               const gearBtn = hasSettings
                 ? `<button type="button" class="training-row-gear" data-scenario-settings-open="${key}" aria-label="${meta.title} settings">${GEAR_ICON}</button>`
                 : `<span class="training-row-gear-spacer" aria-hidden="true"></span>`;
@@ -649,6 +651,7 @@ export class UIOverlay {
               </div>
               <div class="training-row-actions">
                 ${playBtns}
+                ${lbBtn}
                 ${gearBtn}
               </div>
             </div>`;
@@ -823,7 +826,7 @@ export class UIOverlay {
         </div>
         <div id="lb-body" class="lb-body"></div>
         <div class="menu-actions">
-          <button class="btn primary" data-goto="menu">Back</button>
+          <button type="button" class="btn primary" id="lb-back-btn">Back</button>
         </div>
       </div>
     </div>
@@ -1004,7 +1007,10 @@ export class UIOverlay {
         this.play(t.dataset.play, variant ? { variant } : {});
       }
       else if (t.dataset.goto) {
-        if (t.dataset.goto === 'leaderboard') this._openLeaderboard();
+        if (t.dataset.goto === 'leaderboard') {
+          this._returnAfterLeaderboard = 'menu';
+          this._openLeaderboard();
+        }
         if (t.dataset.goto === 'multiplayer') this.refreshAccountBar();
         if (t.dataset.goto === 'settings') this._returnAfterSettings = this.state;
         this.showScreen(t.dataset.goto);
@@ -1041,6 +1047,23 @@ export class UIOverlay {
         e.stopPropagation();
         this._openScenarioSettings(btn.dataset.scenarioSettingsOpen);
       });
+    });
+
+    this.root.querySelectorAll('[data-training-lb]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._openLeaderboardForScenario(btn.dataset.trainingLb);
+      });
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.code !== 'Escape' || e.repeat) return;
+      if (this.replaying) return;
+      if (this.state !== 'leaderboard') return;
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      e.preventDefault();
+      this._leaveLeaderboard();
     });
 
     this._bindSettings();
@@ -3304,6 +3327,7 @@ export class UIOverlay {
   // Leaderboards
   // -------------------------------------------------------------------------
   _bindLeaderboard() {
+    this.root.querySelector('#lb-back-btn')?.addEventListener('click', () => this._leaveLeaderboard());
     this.root.querySelector('#lb-mode-select')?.addEventListener('change', (e) => {
       const scenario = e.target.value;
       if (!scenario) return;
@@ -3345,6 +3369,21 @@ export class UIOverlay {
         : 'elo';
     this._setLeaderboardView(fromTraining);
     this._renderLeaderboard(fromTraining);
+  }
+
+  _openLeaderboardForScenario(scenario) {
+    if (!SCENARIOS[scenario]) return;
+    this._returnAfterLeaderboard = 'training';
+    this.currentScenario = scenario;
+    this._setLeaderboardView(scenario);
+    this._renderLeaderboard(scenario);
+    this.showScreen('leaderboard');
+  }
+
+  _leaveLeaderboard() {
+    const dest = this._returnAfterLeaderboard || 'menu';
+    this._returnAfterLeaderboard = 'menu';
+    this.showScreen(dest);
   }
 
   _configKeyFor(scenario) {

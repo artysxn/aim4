@@ -92,11 +92,12 @@ export class ReplayRecorder {
     this._finished = []; // entities whose target was removed
     this._acc = 0;
     this._tick = 0;
+    this._ws = new THREE.Vector3();
     this.meta = {};
   }
 
   /** Begin recording. Snapshots the static environment from the scenario root. */
-  begin({ scenario, configKey, variant, config, settings }) {
+  begin({ scenario, configKey, variant, config, settings, weaponId, viewmodelRecoil, showViewmodel }) {
     this._reset();
     this.scenario = scenario;
     this.meta = {
@@ -105,6 +106,9 @@ export class ReplayRecorder {
       variant,
       config: this._plainConfig(config),
       settings,
+      weaponId: weaponId ?? scenario?.weaponId,
+      viewmodelRecoil: viewmodelRecoil ?? scenario?.viewmodelRecoil !== false,
+      showViewmodel: showViewmodel ?? scenario?.showViewmodel !== false,
       startedAt: new Date().toISOString()
     };
     this._snapshotEnvironment(scenario);
@@ -151,7 +155,13 @@ export class ReplayRecorder {
   }
 
   _blueprintFor(target) {
-    const meshes = describeMeshes(target.object, true);
+    const savedObj = target.object.scale.x;
+    const savedMesh = target._mesh?.scale.x ?? 1;
+    target.object.scale.setScalar(1);
+    if (target._mesh) target._mesh.scale.setScalar(1);
+    const meshes = describeMeshes(target.object);
+    target.object.scale.setScalar(savedObj);
+    if (target._mesh) target._mesh.scale.setScalar(savedMesh);
     const hash = JSON.stringify(meshes);
     let id = this._bpByHash.get(hash);
     if (id == null) {
@@ -183,14 +193,21 @@ export class ReplayRecorder {
   _captureTick() {
     const cam = this.engine.camera;
     this.cam.push({
-      pitch: this.input?.pitch ?? cam.rotation.x,
-      yaw: this.input?.yaw ?? cam.rotation.y,
+      pitch: cam.rotation.x,
+      yaw: cam.rotation.y,
       px: cam.position.x,
       py: cam.position.y,
       pz: cam.position.z,
       input: inputBitmask(this.input)
     });
     this._captureEntities();
+  }
+
+  /** Primary visual mesh — scale often lives on _mesh, not the root group. */
+  _entityVisual(target) {
+    if (target._mesh) return target._mesh;
+    if (target.colliders?.length) return target.colliders[0];
+    return target.object;
   }
 
   _captureEntities() {
@@ -204,8 +221,16 @@ export class ReplayRecorder {
         rec = { id: this._entSeq++, bp: this._blueprintFor(t), start: this._tick, frames: [] };
         this._live.set(t.object, rec);
       }
-      t.object.getWorldPosition(_v);
-      rec.frames.push({ x: _v.x, y: _v.y, z: _v.z, s: t.object.scale.x });
+      t.object.updateWorldMatrix(true, true);
+      const visual = this._entityVisual(t);
+      visual.getWorldPosition(_v);
+      visual.getWorldScale(this._ws);
+      rec.frames.push({
+        x: _v.x,
+        y: _v.y,
+        z: _v.z,
+        s: (this._ws.x + this._ws.y + this._ws.z) / 3
+      });
     }
     // Finalize entities whose target vanished since the last tick.
     for (const [obj, rec] of this._live) {
@@ -246,6 +271,9 @@ export class ReplayRecorder {
       variant: this.meta.variant,
       config: this.meta.config,
       settings: this.meta.settings,
+      weaponId: this.meta.weaponId,
+      viewmodelRecoil: this.meta.viewmodelRecoil,
+      showViewmodel: this.meta.showViewmodel,
       startedAt: this.meta.startedAt,
       blueprints: this.blueprints,
       environment: this.environment,

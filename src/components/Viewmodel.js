@@ -422,7 +422,9 @@ export class Viewmodel {
   update(dt, motion = {}) {
     this._updateTracers(dt);
     this._updateImpactSparks(dt);
-    this._applyPunch(dt);
+    if (!this.engine.replayPlayer?.active) {
+      this._applyPunch(dt);
+    }
     const cfg = this.settings.data.viewmodel || {};
     if (cfg.bob !== false && motion.onGround && (motion.speedHoriz || 0) > 0.5) {
       this._bobPhase += dt * (4 + (motion.speedHoriz || 0) * 0.8);
