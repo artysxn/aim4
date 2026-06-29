@@ -129,7 +129,7 @@ export class Viewmodel {
       transparent: true,
       opacity: 0,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
       blending: THREE.AdditiveBlending
     });
     for (let i = 0; i < TRACER_POOL; i++) {

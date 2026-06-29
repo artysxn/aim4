@@ -208,6 +208,8 @@ export class ReplayRecorder {
 
   /** Primary visual mesh — scale often lives on _mesh, not the root group. */
   _entityVisual(target) {
+    // Rigged bots: track the head each tick (crouch moves it relative to the body).
+    if (target.headMesh) return target.headMesh;
     if (target._mesh) return target._mesh;
     if (target.colliders?.length) return target.colliders[0];
     return target.object;
@@ -223,6 +225,19 @@ export class ReplayRecorder {
    * @param {number} entityScale  mean world scale of the visual this tick
    */
   _aimFor(target, visual, entityScale) {
+    // Head mesh is tracked directly — aim point is the sample position.
+    if (target.headMesh && visual === target.headMesh) {
+      const head = target.headMesh;
+      head.updateWorldMatrix(true, false);
+      head.getWorldScale(_as);
+      const geo = head.geometry;
+      if (geo && !geo.boundingSphere) geo.computeBoundingSphere();
+      const colScale = (_as.x + _as.y + _as.z) / 3 || 1;
+      const worldR = (geo?.boundingSphere?.radius ?? 0.22) * colScale;
+      const es = entityScale || 1;
+      return { aim: [0, 0, 0], aimR: r(worldR / es) };
+    }
+
     const cols = target.colliders || [];
     const aimCol =
       cols.find((c) => c?.userData?.zone === 'head') ||

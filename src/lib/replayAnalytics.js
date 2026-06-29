@@ -408,15 +408,17 @@ export class ReplayAnalytics {
   _classifyClick(t) {
     this._measureFlickClick(t);
 
-    if (this._onTargetAt(t)) {
+    // Shots are stamped on the tick boundary before the camera sample that reflects
+    // the click aim, so t+1 is the matching sample for an on-time shot.
+    if (this._onTargetAt(t) || this._onTargetAt(t + 1)) {
       this.clicks.accurate++;
       this._flashEvents.push({ type: 'click', kind: 'accurate', text: 'On target' });
       return;
     }
-    for (let k = 1; k <= 2; k++) {
+    for (let k = 2; k <= 3; k++) {
       if (this._onTargetAt(t + k)) {
         this.clicks.early++;
-        const ms = Math.round(k * MS_PER_TICK);
+        const ms = Math.round((k - 1) * MS_PER_TICK);
         this.clicks.earlyMs += ms;
         this._flashEvents.push({ type: 'click', kind: 'early', text: `${ms} ms under` });
         return;
