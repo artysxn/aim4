@@ -9,13 +9,26 @@ const RAD_TO_DEG = 180 / Math.PI;
 
 const MIN_FLICK_SPEED = 0.01;
 const MIN_MOVE_SPEED = 0.002;
-const FLICK_START_RATIO = 1.5;
+const FLICK_START_RATIO = 1.3;
 const FLICK_END_RATIO = 1 / 3;
 const FLICK_MIN_TICKS = 2;
 const FLICK_MAX_TICKS = 128;
 const BASELINE_EMA = 0.15;
 const MIN_FLICK_ANGLE_DEG = 0.5;
 const PAINTBALL_STEPS = 10; // sub-samples per tick so dots form solid lines
+
+// Direction-change ("redirect") flick detection — catches flicks that keep a
+// constant angular speed (so they never spike above the baseline) but sharply
+// change heading, e.g. steady reposition → 90° snap onto a target.
+const REDIRECT_ANGLE = Math.PI / 4; // ≥45° heading change segments a new flick
+const REDIRECT_MIN_SPEED = MIN_FLICK_SPEED; // ignore sub-deliberate jitter
+const MOTION_EMA = 0.3; // smoothing of the recent heading estimate
+const REDIRECT_COOLDOWN = 4; // ticks before another redirect may fire
+
+// A flick only ends after this many CONSECUTIVE slow ticks. A single-/double-
+// tick input freeze (render stutter → 0 movement) would otherwise look like the
+// flick settling and get mis-classified as an underflick before it lands.
+const END_GRACE_TICKS = 3;
 
 function dirFrom(pitch, yaw) {
   const cp = Math.cos(pitch);
@@ -164,7 +177,8 @@ export class ReplayAnalytics {
     this._flickTrail = [];
     this._flickStartDir = null;
     this._flickRefDist = 10;
-    this._pendingFlick = null;
+    this._motionEMA = null; // smoothed recent heading (unit tangent)
+    this._redirectCooldown = 0;
     this._flickSpeedSumMsPerDeg = 0;
     this._flickSpeedCount = 0;
     this._flickAccSum = 0;
@@ -214,11 +228,16 @@ export class ReplayAnalytics {
     return t != null && tickFloat >= t;
   }
 
-  closestAt(tickFloat) {
+  /**
+   * Closest visible target to the aim ray at `tickFloat`. By default the ray is
+   * the sampled camera; pass `originOverride`/`fwdOverride` to test a recorded
+   * shot's exact aim instead (avoids integer-tick camera-sample phase error).
+   */
+  closestAt(tickFloat, originOverride = null, fwdOverride = null) {
     const r = this.replay;
     const cam = r.sampleCamera(tickFloat);
-    const camPos = [cam.px, cam.py, cam.pz];
-    const fwd = dirFrom(cam.pitch, cam.yaw);
+    const camPos = originOverride || [cam.px, cam.py, cam.pz];
+    const fwd = fwdOverride || dirFrom(cam.pitch, cam.yaw);
     let best = null;
     let bestAng = Infinity;
     for (const ent of r.entities) {
@@ -246,6 +265,20 @@ export class ReplayAnalytics {
 
   _onTargetAt(tickFloat) {
     return this._onTarget(this.closestAt(tickFloat));
+  }
+
+  /** Aim ray (origin + unit dir) for a recorded shot, or null for legacy events. */
+  _shotRay(ev) {
+    if (!ev?.o || !ev?.e) return null;
+    const dir = normalize(sub(ev.e, ev.o));
+    if (len(dir) < 1e-9) return null;
+    return { origin: ev.o, dir };
+  }
+
+  /** On-target test for a recorded shot ray against targets at `tickFloat`. */
+  _onTargetForShot(ray, tickFloat) {
+    if (!ray) return this._onTargetAt(tickFloat);
+    return this._onTarget(this.closestAt(tickFloat, ray.origin, ray.dir));
   }
 
   _recordPathDeviation(dirNow, dirPrev, closest) {
@@ -279,6 +312,7 @@ export class ReplayAnalytics {
     const dirNow = this._camDir(i);
     const dirPrev = this._camDir(i - 1);
     const speed = angleBetween(dirNow, dirPrev);
+    const redirected = this._detectRedirect(dirNow, dirPrev, speed);
     const closest = this.closestAt(i);
     const closestPrev = this.closestAt(i - 1);
     const angles = this._camAngles(i);
@@ -298,27 +332,48 @@ export class ReplayAnalytics {
       }
     }
 
-    this._updateFlick(i, dirNow, dirPrev, speed, closest, closestPrev, angles);
+    this._updateFlick(i, dirNow, dirPrev, speed, closest, closestPrev, angles, redirected);
     this._processShotsUpTo(i);
   }
 
-  _updateFlick(i, dirNow, dirPrev, speed, closest, closestPrev, angles) {
+  /**
+   * True when the aim's heading changes sharply (≥REDIRECT_ANGLE) versus the
+   * smoothed recent heading — a flick that holds speed but turns. Maintains the
+   * heading EMA and a short cooldown so one turn fires once, not every tick.
+   */
+  _detectRedirect(dirNow, dirPrev, speed) {
+    if (this._redirectCooldown > 0) this._redirectCooldown--;
+    if (speed < REDIRECT_MIN_SPEED) return false;
+    const tangent = motionTangent(dirPrev, dirNow);
+    if (!tangent) return false;
+    if (!this._motionEMA) {
+      this._motionEMA = tangent;
+      return false;
+    }
+    const turn = angleBetween(tangent, this._motionEMA);
+    if (turn >= REDIRECT_ANGLE && this._redirectCooldown === 0) {
+      this._motionEMA = tangent; // snap to the new heading so it fires once
+      this._redirectCooldown = REDIRECT_COOLDOWN;
+      return true;
+    }
+    this._motionEMA = normalize([
+      this._motionEMA[0] * (1 - MOTION_EMA) + tangent[0] * MOTION_EMA,
+      this._motionEMA[1] * (1 - MOTION_EMA) + tangent[1] * MOTION_EMA,
+      this._motionEMA[2] * (1 - MOTION_EMA) + tangent[2] * MOTION_EMA
+    ]);
+    return false;
+  }
+
+  _updateFlick(i, dirNow, dirPrev, speed, closest, closestPrev, angles, redirected) {
     if (!this._flick) {
-      const toward =
-        closest && closestPrev && closest.angle < closestPrev.angle;
+      const toward = closest && closestPrev && closest.angle < closestPrev.angle;
       const threshold = Math.max(FLICK_START_RATIO * this._baseline, MIN_FLICK_SPEED);
-      if (closest && toward && speed >= threshold) {
-        const startAngles = this._camAngles(i - 1);
-        this._flick = {
-          startDir: dirPrev,
-          speedSum: speed,
-          speedCount: 1,
-          ticks: 1
-        };
-        this._flickStartDir = dirPrev;
-        this._flickRefDist = closest.dist;
-        this._flickTrail = [startAngles];
-        this._pendingFlick = { startTick: i - 1, startDir: dirPrev };
+      const spikeStart = toward && speed >= threshold;
+      // A heading change is a flick even at constant speed (no baseline spike).
+      const redirectStart = redirected && speed >= REDIRECT_MIN_SPEED;
+      if (closest && (spikeStart || redirectStart)) {
+        if (redirectStart) this._episodeCounted = false; // fresh aim intent
+        this._startFlick(i, dirPrev, closest, speed);
       } else {
         this._baseline += (speed - this._baseline) * BASELINE_EMA;
       }
@@ -326,6 +381,18 @@ export class ReplayAnalytics {
     }
 
     const f = this._flick;
+
+    // Sharp redirect mid-flick = a new flick. Close out the current episode (so
+    // an overshoot-then-correct is segmented, and the overshoot itself counts as
+    // an overflick) and immediately open a fresh one anchored at the turn.
+    if (redirected && f.ticks >= FLICK_MIN_TICKS && closest) {
+      this._classifyFlick(f, dirNow, closest);
+      this._endFlick();
+      this._episodeCounted = false;
+      this._startFlick(i, dirPrev, closest, speed);
+      return;
+    }
+
     f.speedSum += speed;
     f.speedCount++;
     f.ticks++;
@@ -333,86 +400,106 @@ export class ReplayAnalytics {
     if (prev) this._appendFlickTrail(prev, angles);
     else this._flickTrail.push(angles);
 
+    // End only after several CONSECUTIVE slow ticks — a 1–2 tick input freeze
+    // (stutter → 0 movement) must not end the flick early as a false underflick.
     const avg = f.speedSum / f.speedCount;
+    if (speed <= FLICK_END_RATIO * avg) f.endGrace++;
+    else f.endGrace = 0;
+
     const ended =
-      (f.ticks >= FLICK_MIN_TICKS && speed <= FLICK_END_RATIO * avg) ||
+      (f.ticks >= FLICK_MIN_TICKS && f.endGrace >= END_GRACE_TICKS) ||
       f.ticks >= FLICK_MAX_TICKS ||
       !closest;
 
     if (!ended) return;
 
     this._classifyFlick(f, dirNow, closest);
+    this._endFlick();
+  }
+
+  _startFlick(i, dirPrev, closest, speed) {
+    const startAngles = this._camAngles(i - 1);
+    this._flick = {
+      startDir: dirPrev,
+      speedSum: speed,
+      speedCount: 1,
+      ticks: 1,
+      endGrace: 0,
+      startTick: i - 1
+    };
+    this._flickStartDir = dirPrev;
+    this._flickRefDist = closest.dist;
+    this._flickTrail = [startAngles];
+  }
+
+  _endFlick() {
     this._flick = null;
     this._flickTrail = [];
     this._flickStartDir = null;
-    this._pendingFlick = null;
     this._baseline = MIN_FLICK_SPEED;
   }
 
   _classifyFlick(f, dirEnd, closest) {
     if (this._episodeCounted || !closest) return;
+    const targetDir = sub(
+      [closest.aim.x, closest.aim.y, closest.aim.z],
+      closest.camPos
+    );
     let bucket;
     if (this._onTarget(closest)) {
       bucket = 'accurate';
     } else {
-      const targetDir = sub(
-        [closest.aim.x, closest.aim.y, closest.aim.z],
-        closest.camPos
-      );
       const traveled = angleBetween(f.startDir, dirEnd);
       const required = angleBetween(f.startDir, targetDir);
       bucket = traveled > required ? 'over' : 'under';
     }
     this.flicks[bucket]++;
     this._episodeCounted = true;
+    // Measure speed + accuracy per completed flick (decoupled from clicks) so
+    // these metrics always populate when a flick is detected.
+    this._measureFlickQuality(f, dirEnd, targetDir);
     const label =
       bucket === 'accurate' ? 'Accurate flick' : bucket === 'over' ? 'Overflick' : 'Underflick';
     this._flashEvents.push({ type: 'flick', bucket, text: label });
   }
 
+  /** Flick speed (ms per °) + accuracy (% of the start→target gap closed). */
+  _measureFlickQuality(f, dirEnd, targetDir) {
+    const traveledDeg = angleBetween(f.startDir, dirEnd) * RAD_TO_DEG;
+    if (f.ticks > 0 && traveledDeg >= MIN_FLICK_ANGLE_DEG) {
+      const ms = f.ticks * MS_PER_TICK;
+      this._flickSpeedSumMsPerDeg += ms / traveledDeg;
+      this._flickSpeedCount++;
+    }
+    const dStart = angleBetween(f.startDir, targetDir);
+    if (dStart > 1e-6) {
+      const dEnd = angleBetween(dirEnd, targetDir);
+      this._flickAccSum += clamp01(1 - dEnd / dStart) * 100;
+      this._flickAccCount++;
+    }
+  }
+
   _processShotsUpTo(i) {
     while (this._shotIdx < this._shots.length && this._shots[this._shotIdx].t <= i) {
-      this._classifyClick(this._shots[this._shotIdx].t);
+      this._classifyClick(this._shots[this._shotIdx]);
       this._shotIdx++;
     }
   }
 
-  _measureFlickClick(t) {
-    const pf = this._pendingFlick;
-    if (!pf) return;
-    this._pendingFlick = null;
+  _classifyClick(ev) {
+    const t = ev.t | 0;
+    const ray = this._shotRay(ev);
 
-    const dtTicks = t - pf.startTick;
-    const clickDir = this._camDir(t);
-    const angleDeg = angleBetween(pf.startDir, clickDir) * RAD_TO_DEG;
-
-    if (dtTicks > 0 && angleDeg >= MIN_FLICK_ANGLE_DEG) {
-      const ms = dtTicks * MS_PER_TICK;
-      this._flickSpeedSumMsPerDeg += ms / angleDeg;
-      this._flickSpeedCount++;
-    }
-
-    const closest = this.closestAt(t);
-    if (!closest) return;
-    const targetDir = normalize(
-      sub([closest.aim.x, closest.aim.y, closest.aim.z], closest.camPos)
-    );
-    const dStart = angleBetween(pf.startDir, targetDir);
-    const dClick = angleBetween(clickDir, targetDir);
-    if (dStart <= 1e-6) return;
-    const acc = Math.max(0, Math.min(1, 1 - dClick / dStart)) * 100;
-    this._flickAccSum += acc;
-    this._flickAccCount++;
-  }
-
-  _classifyClick(t) {
-    this._measureFlickClick(t);
-
-    if (this._onTargetAt(t)) {
+    // A recorded HIT is ground truth: the crosshair WAS on the target. Re-deriving
+    // it from an integer-tick camera sample drifts ~1 tick and mislabels hits as
+    // "8 ms under". Trust the hit (and the exact shot ray) → accurate.
+    if (ev.hit || this._onTargetForShot(ray, t)) {
       this.clicks.accurate++;
       this._flashEvents.push({ type: 'click', kind: 'accurate', text: 'On target' });
       return;
     }
+    // Miss: was the crosshair sweeping ACROSS the target just before/after? This
+    // is camera-timing (when the aim crossed the dot), so vary the camera here.
     for (let k = 1; k <= 2; k++) {
       if (this._onTargetAt(t + k)) {
         this.clicks.early++;
@@ -442,7 +529,7 @@ export class ReplayAnalytics {
     return 100 * clamp01(0.55 * path + 0.3 * flickStray + 0.15 * traj);
   }
 
-  /** Average ms per degree of angular travel from flick start to first click. */
+  /** Average ms per degree of angular travel over each detected flick. */
   get flickSpeedMsPerDeg() {
     if (!this._flickSpeedCount) return 0;
     return this._flickSpeedSumMsPerDeg / this._flickSpeedCount;
