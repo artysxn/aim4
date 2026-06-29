@@ -1912,39 +1912,49 @@ export class UIOverlay {
     }
     body.innerHTML = '<p class="center lb-hint">Loading…</p>';
     try {
-      const { player, global } = await fetchAimComparison(userId, this._aimFilterId || 'all');
-      body.innerHTML = this._aimStatsHtml(player, global);
+      const { player } = await fetchAimComparison(userId, this._aimFilterId || 'all');
+      body.innerHTML = this._aimStatsHtml(player);
     } catch (e) {
       body.innerHTML = `<p class="center lb-hint is-error">${this._esc(e.message || 'Could not load aim analysis.')}</p>`;
     }
   }
 
-  _aimStatsHtml(player, global) {
+  _aimStatsHtml(player) {
     if (!player || !Number(player.games)) {
       return '<p class="center lb-hint">No competitive runs in this range yet.</p>';
     }
-    const g = global || {};
     const num = (v, suffix = '', digits = 0) =>
       v == null || Number.isNaN(Number(v)) ? '—' : `${Number(v).toFixed(digits)}${suffix}`;
-    const trio = (row) =>
-      `${row.flicks_accurate ?? '—'} / ${row.flicks_over ?? '—'} / ${row.flicks_under ?? '—'}`;
-    const clk = (row) =>
-      `${row.clicks_early ?? '—'} / ${row.clicks_accurate ?? '—'} / ${row.clicks_late ?? '—'}`;
+    const trioPct = (row) => {
+      const a = Number(row.flicks_accurate) || 0;
+      const o = Number(row.flicks_over) || 0;
+      const u = Number(row.flicks_under) || 0;
+      const total = a + o + u;
+      if (!total) return '—';
+      const pct = (n) => `${Math.round((n / total) * 100)}%`;
+      return `${pct(a)} / ${pct(o)} / ${pct(u)}`;
+    };
+    const clkPct = (row) => {
+      const e = Number(row.clicks_early) || 0;
+      const a = Number(row.clicks_accurate) || 0;
+      const l = Number(row.clicks_late) || 0;
+      const total = e + a + l;
+      if (!total) return '—';
+      const pct = (n) => `${Math.round((n / total) * 100)}%`;
+      return `${pct(e)} / ${pct(a)} / ${pct(l)}`;
+    };
     const rows = [
-      ['Games', String(player.games), g.games != null ? String(g.games) : '—'],
-      ['Flick speed', num(player.flick_speed_ms, ' ms/°'), num(g.flick_speed_ms, ' ms/°')],
-      ['Flick accuracy', num(player.flick_accuracy_pct, '%'), num(g.flick_accuracy_pct, '%')],
-      ['Tension', num(player.tension_pct, '%'), num(g.tension_pct, '%')],
-      ['Flicks ✓/↑/↓', trio(player), trio(g)],
-      ['Clicks early/on/late', clk(player), clk(g)]
+      ['Games', String(player.games)],
+      ['Flick speed', num(player.flick_speed_ms, ' ms/°')],
+      ['Flick accuracy', num(player.flick_accuracy_pct, '%')],
+      ['Tension', num(player.tension_pct, '%')],
+      ['Flicks ✓/↑/↓', trioPct(player)],
+      ['Clicks early/on/late', clkPct(player)]
     ];
     const body = rows
-      .map(
-        ([label, you, glob]) =>
-          `<tr><td>${label}</td><td class="account-rank">${you}</td><td>${glob}</td></tr>`
-      )
+      .map(([label, you]) => `<tr><td>${label}</td><td class="account-rank">${you}</td></tr>`)
       .join('');
-    return `<table class="account-stats-table"><thead><tr><th>Metric</th><th>You</th><th>Global avg</th></tr></thead><tbody>${body}</tbody></table>`;
+    return `<table class="account-stats-table"><thead><tr><th>Metric</th><th>You</th></tr></thead><tbody>${body}</tbody></table>`;
   }
 
   async _loadAccountReplays(userId = null) {
