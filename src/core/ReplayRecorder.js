@@ -53,6 +53,7 @@ function describeFromMatrix(node, matrix) {
     opacity: mat?.opacity ?? 1,
     transparent: !!mat?.transparent,
     side,
+    gridCover: !!(mat?.map),
     p: [r(_p.x), r(_p.y), r(_p.z)],
     q: [r(_q.x, 1e5), r(_q.y, 1e5), r(_q.z, 1e5), r(_q.w, 1e5)],
     s: [r(_s.x), r(_s.y), r(_s.z)]
@@ -294,6 +295,26 @@ export class ReplayRecorder {
     };
     if (normal) {
       ev.n = [r(normal.x), r(normal.y), r(normal.z)];
+    }
+    if (hit) {
+      let bestId = null;
+      let bestD = Infinity;
+      for (const rec of this._live.values()) {
+        const frames = rec.frames;
+        const f = frames[frames.length - 1];
+        if (!f || !rec.aim) continue;
+        const s = f.s || 1;
+        const ax = f.x + rec.aim[0] * s;
+        const ay = f.y + rec.aim[1] * s;
+        const az = f.z + rec.aim[2] * s;
+        const rad = (rec.aimR > 0 ? rec.aimR : 0.4) * s * 1.25;
+        const d = Math.hypot(end.x - ax, end.y - ay, end.z - az);
+        if (d <= rad && d < bestD) {
+          bestD = d;
+          bestId = rec.id;
+        }
+      }
+      if (bestId != null) ev.ent = bestId;
     }
     this.events.push(ev);
   }

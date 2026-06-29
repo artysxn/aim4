@@ -128,6 +128,7 @@ export class UIOverlay {
     this._replayReturn = 'menu'; // screen to restore when leaving playback
     this._replayShareCtx = null; // { sourcePath, userId, username, shareMeta }
     this._lastReplayShare = null;
+    this._analysisLabels = [];
 
     this.root = document.getElementById('ui-root');
     this.state = 'menu';
@@ -1931,7 +1932,7 @@ export class UIOverlay {
       `${row.clicks_early ?? '—'} / ${row.clicks_accurate ?? '—'} / ${row.clicks_late ?? '—'}`;
     const rows = [
       ['Games', String(player.games), g.games != null ? String(g.games) : '—'],
-      ['Flick speed', num(player.flick_speed_ms, 'ms'), num(g.flick_speed_ms, 'ms')],
+      ['Flick speed', num(player.flick_speed_ms, ' ms/°'), num(g.flick_speed_ms, ' ms/°')],
       ['Flick accuracy', num(player.flick_accuracy_pct, '%'), num(g.flick_accuracy_pct, '%')],
       ['Tension', num(player.tension_pct, '%'), num(g.tension_pct, '%')],
       ['Flicks ✓/↑/↓', trio(player), trio(g)],
@@ -3356,6 +3357,7 @@ export class UIOverlay {
     }
 
     this._bindReplayAnalytics();
+    this._analysisLabels = [];
 
     // Esc leaves the replay (pointer lock is never engaged during playback).
     document.addEventListener('keydown', (e) => {
@@ -3402,11 +3404,11 @@ export class UIOverlay {
   /** Show/hide the overlay canvas + stats panel based on enabled toggles. */
   _applyAnalyticsVisibility() {
     const ra = this.settings.data.replayAnalytics || {};
-    const anyLine = ra.optimalPath || ra.trajectory;
+    const anyCanvas = ra.optimalPath || ra.trajectory || ra.flicks || ra.clickTiming;
     const anyStat = ra.flicks || ra.tension || ra.clickTiming || ra.flickSpeed || ra.flickAccuracy;
-    if (this.replayAnalysisCanvas) this.replayAnalysisCanvas.hidden = !this.replaying || !anyLine;
+    if (this.replayAnalysisCanvas) this.replayAnalysisCanvas.hidden = !this.replaying || !anyCanvas;
     if (this.replayStats) this.replayStats.hidden = !this.replaying || !anyStat;
-    if (!this.replaying || !anyLine) this._clearAnalysisCanvas();
+    if (!this.replaying || !anyCanvas) this._clearAnalysisCanvas();
   }
 
   _clearAnalysisCanvas() {
@@ -3422,32 +3424,34 @@ export class UIOverlay {
     // --- stats panel ---
     if (this.replayStats && (ra.flicks || ra.tension || ra.clickTiming || ra.flickSpeed || ra.flickAccuracy)) {
       const rows = [];
+      const trio = (over, good, under) =>
+        `<span class="rs-metrics"><span class="rs-over">${over}↑</span><span class="rs-good">${good}✓</span><span class="rs-under">${under}↓</span></span>`;
+
       if (ra.flicks) {
         const f = sample.flicks;
-        rows.push(`<div class="rs-row"><span>Flicks</span><span class="rs-good">${f.accurate}✓</span> <span class="rs-over">${f.over}↑</span> <span class="rs-under">${f.under}↓</span></div>`);
+        rows.push(`<div class="rs-row"><span>Flicks</span>${trio(f.over, f.accurate, f.under)}</div>`);
       }
       if (ra.flickSpeed) {
-        rows.push(`<div class="rs-row"><span>Flick speed</span><span>${sample.flickSpeedMs ? sample.flickSpeedMs.toFixed(0) + 'ms' : '—'}</span></div>`);
+        rows.push(`<div class="rs-row"><span>Flick speed</span><span class="rs-val">${sample.flicksMeasured ? sample.flickSpeedMsPerDeg.toFixed(1) + ' ms/°' : '—'}</span></div>`);
       }
       if (ra.flickAccuracy) {
-        rows.push(`<div class="rs-row"><span>Flick acc</span><span>${sample.flicksMeasured ? sample.flickAccuracyPct.toFixed(0) + '%' : '—'}</span></div>`);
+        rows.push(`<div class="rs-row"><span>Flick acc</span><span class="rs-val">${sample.flicksMeasured ? sample.flickAccuracyPct.toFixed(0) + '%' : '—'}</span></div>`);
       }
       if (ra.tension) {
-        rows.push(`<div class="rs-row"><span>Tension</span><span>${sample.tensionPct.toFixed(0)}%</span></div>`);
+        rows.push(`<div class="rs-row"><span>Tension</span><span class="rs-val">${sample.tensionPct.toFixed(0)}%</span></div>`);
       }
       if (ra.clickTiming) {
         const c = sample.clicks;
-        rows.push(`<div class="rs-row"><span>Clicks</span><span class="rs-over">${c.early} early</span> <span class="rs-good">${c.accurate} on</span> <span class="rs-under">${c.late} late</span></div>`);
-        const earlyAvg = c.early ? (c.earlyMs / c.early).toFixed(0) : 0;
-        const lateAvg = c.late ? (c.lateMs / c.late).toFixed(0) : 0;
-        rows.push(`<div class="rs-row rs-sub"><span>avg</span><span>−${earlyAvg}ms / +${lateAvg}ms</span></div>`);
+        rows.push(`<div class="rs-row"><span>Clicks</span>${trio(c.early, c.accurate, c.late)}</div>`);
+        const clickTotal = c.early + c.accurate + c.late;
+        rows.push(`<div class="rs-row"><span>Click acc</span><span class="rs-val">${clickTotal ? sample.clickAccuracyPct.toFixed(0) + '%' : '—'}</span></div>`);
       }
       this.replayStats.innerHTML = rows.join('');
     }
 
-    // --- overlay lines ---
-    const anyLine = ra.optimalPath || ra.trajectory;
-    if (!anyLine || !this._analysisCtx || !camera) {
+    const raCanvas = this.settings.data.replayAnalytics || {};
+    const anyCanvas = raCanvas.optimalPath || raCanvas.trajectory || raCanvas.flicks || raCanvas.clickTiming;
+    if (!anyCanvas || !this._analysisCtx || !camera) {
       if (this.replayAnalysisCanvas && !this.replayAnalysisCanvas.hidden) this._clearAnalysisCanvas();
       return;
     }
@@ -3462,37 +3466,110 @@ export class UIOverlay {
     ctx.clearRect(0, 0, w, h);
     const cx = w / 2;
     const cy = h / 2;
+    const refDist = sample.flickRefDist || sample.target
+      ? Math.hypot(
+          (sample.target?.x ?? 0) - camera.position.x,
+          (sample.target?.y ?? 0) - camera.position.y,
+          (sample.target?.z ?? 0) - camera.position.z
+        ) || 10
+      : 10;
 
-    // Optimal path: green crosshair → nearest target; red actual-motion line.
-    if (ra.optimalPath) {
+    // Optimal path: green line to target; red paintball trail during flicks.
+    if (raCanvas.optimalPath) {
       if (sample.target) {
         const p = this._projectToScreen(sample.target, camera, w, h);
         if (p) this._drawLine(ctx, cx, cy, p.x, p.y, '#3ddc6b', 2.5);
       }
-      const md = sample.moveDir;
-      if (md && (Math.abs(md.yaw) > 1e-5 || Math.abs(md.pitch) > 1e-5)) {
-        const a = this._motionScreenDir(md);
-        this._drawLine(ctx, cx, cy, cx + a.x * 140, cy + a.y * 140, '#f54a4a', 2.5);
+      if (sample.flickTrail?.length) {
+        for (const pt of sample.flickTrail) {
+          const dir = this._dirFromAngles(pt.pitch, pt.yaw);
+          const off = this._aimDirToScreenOffset(dir, refDist, camera, w, h);
+          if (!off) continue;
+          ctx.beginPath();
+          ctx.arc(cx + off.x, cy + off.y, 1.25, 0, Math.PI * 2);
+          ctx.fillStyle = '#f54a4a';
+          ctx.fill();
+        }
       }
     }
 
-    // Trajectory: short line leading the crosshair's current motion.
-    if (ra.trajectory && sample.moveDir) {
-      const md = sample.moveDir;
-      if (Math.abs(md.yaw) > 1e-5 || Math.abs(md.pitch) > 1e-5) {
-        const a = this._motionScreenDir(md);
-        this._drawLine(ctx, cx, cy, cx + a.x * 90, cy + a.y * 90, '#46c8ff', 2);
+    // Trajectory: flick start → crosshair → extended prediction.
+    if (raCanvas.trajectory && sample.flickActive && sample.flickStartDir) {
+      const startOff = this._aimDirToScreenOffset(sample.flickStartDir, refDist, camera, w, h);
+      if (startOff) {
+        const sx = cx + startOff.x;
+        const sy = cy + startOff.y;
+        this._drawLine(ctx, sx, sy, cx, cy, '#46c8ff', 2);
+        const dx = cx - sx;
+        const dy = cy - sy;
+        const edge = this._extendToScreenEdge(cx, cy, dx, dy, w, h);
+        if (edge) this._drawLine(ctx, cx, cy, edge.x, edge.y, '#46c8ff', 2);
       }
     }
+
+    // Ephemeral flick / click labels beside the crosshair.
+    const now = performance.now();
+    for (const ev of sample.flashEvents || []) {
+      if (ev.type === 'flick' && raCanvas.flicks) {
+        const color = ev.bucket === 'accurate' ? '#3ddc6b' : ev.bucket === 'over' ? '#f5a623' : '#46c8ff';
+        this._analysisLabels.push({ text: ev.text, side: 'right', color, until: now + 1200 });
+      }
+      if (ev.type === 'click' && raCanvas.clickTiming) {
+        const color = ev.kind === 'accurate' ? '#3ddc6b' : ev.kind === 'early' ? '#f5a623' : '#46c8ff';
+        this._analysisLabels.push({ text: ev.text, side: 'left', color, until: now + 1200 });
+      }
+    }
+    this._analysisLabels = this._analysisLabels.filter((l) => l.until > now);
+    ctx.font = '500 14px "Host Grotesk", sans-serif';
+    ctx.textBaseline = 'middle';
+    for (const l of this._analysisLabels) {
+      const fade = Math.min(1, (l.until - now) / 400);
+      ctx.globalAlpha = fade;
+      ctx.fillStyle = l.color;
+      if (l.side === 'right') {
+        ctx.textAlign = 'left';
+        ctx.fillText(l.text, cx + 52, cy - 6);
+      } else {
+        ctx.textAlign = 'right';
+        ctx.fillText(l.text, cx - 52, cy - 6);
+      }
+    }
+    ctx.globalAlpha = 1;
   }
 
-  /** Normalize a {yaw,pitch} crosshair delta into a unit screen-space vector. */
-  _motionScreenDir(md) {
-    // +yaw turns right → crosshair sweeps right (+x); +pitch looks up → up (−y).
-    let x = md.yaw;
-    let y = -md.pitch;
-    const m = Math.hypot(x, y) || 1;
-    return { x: x / m, y: y / m };
+  _dirFromAngles(pitch, yaw) {
+    const cp = Math.cos(pitch);
+    return [-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp];
+  }
+
+  /** Screen offset from center for an aim direction viewed through the current camera. */
+  _aimDirToScreenOffset(dir, refDist, camera, w, h) {
+    if (!this._aimWorldPt) this._aimWorldPt = new THREE.Vector3();
+    this._aimWorldPt.set(dir[0], dir[1], dir[2]).multiplyScalar(refDist).add(camera.position);
+    const p = this._projectToScreen(this._aimWorldPt, camera, w, h);
+    if (!p) return null;
+    return { x: p.x - w / 2, y: p.y - h / 2 };
+  }
+
+  /** Extend a ray from (x0,y0) along (dx,dy) to the screen edge. */
+  _extendToScreenEdge(x0, y0, dx, dy, w, h) {
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) return null;
+    const ux = dx / len;
+    const uy = dy / len;
+    let best = 0;
+    const ts = [];
+    if (Math.abs(ux) > 1e-6) {
+      ts.push((0 - x0) / ux, (w - x0) / ux);
+    }
+    if (Math.abs(uy) > 1e-6) {
+      ts.push((0 - y0) / uy, (h - y0) / uy);
+    }
+    for (const t of ts) {
+      if (t > 0 && t > best) best = t;
+    }
+    if (best <= 0) return null;
+    return { x: x0 + ux * best, y: y0 + uy * best };
   }
 
   /** Project a world point to pixel coords, or null if behind the camera. */
@@ -3648,6 +3725,7 @@ export class UIOverlay {
   _exitReplay() {
     if (!this.replaying) return;
     this.replaying = false;
+    this._analysisLabels = [];
     this.replayPlayer?.dispose();
     this.replayOverlay?.classList.remove('active');
     this._applyAnalyticsVisibility();

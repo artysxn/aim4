@@ -13,6 +13,7 @@ import { decodeInput } from '../lib/replayCodec.js';
 import { getWeapon } from '../weapons/index.js';
 import { PLAYER_RUN_SPEED } from '../utils/spawnVisibility.js';
 import { ReplayAnalytics } from '../lib/replayAnalytics.js';
+import { createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
 
 export const REPLAY_SPEEDS = [0.125, 0.25, 0.5, 1, 2, 4];
 
@@ -47,20 +48,28 @@ function makeGeometry(d) {
   }
 }
 
-function makeMesh(d) {
-  const matOpts = {
-    color: d.color ?? 0xffffff,
-    emissive: d.emissive ?? 0x000000,
-    emissiveIntensity: d.emissiveIntensity ?? 0,
-    roughness: d.roughness ?? 0.6,
-    metalness: d.metalness ?? 0.05,
-    transparent: !!d.transparent,
-    opacity: d.opacity ?? 1
-  };
-  if (d.side === 1) matOpts.side = THREE.BackSide;
-  else if (d.side === 2) matOpts.side = THREE.DoubleSide;
+function makeMesh(d, colors) {
+  const p = d.params || {};
+  let material;
+  if (d.gridCover && colors?.cover && colors?.floor && d.geo === 'Box') {
+    material = createCoverGridMaterial(colors.cover, colors.floor);
+    applyCoverGridRepeat(material, (p.width ?? 1) * (d.s?.[0] ?? 1), (p.height ?? 1) * (d.s?.[1] ?? 1));
+  } else {
+    const matOpts = {
+      color: d.color ?? 0xffffff,
+      emissive: d.emissive ?? 0x000000,
+      emissiveIntensity: d.emissiveIntensity ?? 0,
+      roughness: d.roughness ?? 0.6,
+      metalness: d.metalness ?? 0.05,
+      transparent: !!d.transparent,
+      opacity: d.opacity ?? 1
+    };
+    if (d.side === 1) matOpts.side = THREE.BackSide;
+    else if (d.side === 2) matOpts.side = THREE.DoubleSide;
+    material = new THREE.MeshStandardMaterial(matOpts);
+  }
 
-  const mesh = new THREE.Mesh(makeGeometry(d), new THREE.MeshStandardMaterial(matOpts));
+  const mesh = new THREE.Mesh(makeGeometry(d), material);
   if (d.p) mesh.position.set(d.p[0], d.p[1], d.p[2]);
   if (d.q) mesh.quaternion.set(d.q[0], d.q[1], d.q[2], d.q[3]);
   if (d.s) mesh.scale.set(d.s[0], d.s[1], d.s[2]);
@@ -98,6 +107,7 @@ export class ReplayPlayer {
   load(replay) {
     this.dispose();
     this.replay = replay;
+    this._replayColors = replay.settings?.colors || null;
     this.duration = replay.durationSec;
     this.time = 0;
     this._lastEventTick = -1;
@@ -163,7 +173,7 @@ export class ReplayPlayer {
       }
     }
     for (const d of meshDescs || []) {
-      this._envGroup.add(makeMesh(d));
+      this._envGroup.add(makeMesh(d, this._replayColors));
     }
   }
 

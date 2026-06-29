@@ -66,7 +66,7 @@ const DEFAULTS = {
     trajectory: false, // short line leading the crosshair's current motion
     tension: false, // jitter-vs-optimal-path percentage
     clickTiming: false, // early / accurate / late click tallies
-    flickSpeed: false, // avg ms from flick start to first click
+    flickSpeed: false, // avg ms/° from flick start to first click
     flickAccuracy: false // avg first-click placement along start→target
   },
   runDuration: 60, // seconds

@@ -1,41 +1,21 @@
 // ---------------------------------------------------------------------------
 // lib/replayAnalytics.js — replay aim-analysis engine
-//
-// Pure, deterministic analysis layer for a decoded replay view (the object
-// produced by replayCodec.buildReplayView). Everything is derived from data the
-// replay already contains: the 128 Hz camera track, per-entity position/aim
-// tracks, and shot events. Nothing here touches the DOM or THREE — ReplayPlayer
-// owns rendering and feeds the per-tick results to the HUD/overlay.
-//
-// Two consumers:
-//   • live playback  — `sampleTick(tickFloat)` advances internal state to the
-//     current tick and returns a snapshot (closest target, crosshair motion,
-//     running counters) for the on-screen overlay + stats panel.
-//   • persistence     — `aggregate()` runs the whole track once and returns the
-//     final counters stored alongside the replay in Supabase.
-//
-// Detection model (shared by every metric):
-//   - "crosshair direction" = the camera forward vector from pitch/yaw.
-//   - "closest target"      = the live entity whose AIM POINT (head for bots,
-//     centre for dots — see replayCodec.sampleEntityAim) is at the smallest
-//     ANGULAR distance from the crosshair.
-//   - "on target/head"      = that angular distance < atan(radius / distance).
 // ---------------------------------------------------------------------------
 
+import { lineOfSightClear } from '../utils/spawnVisibility.js';
+
 const MS_PER_TICK = 1000 / 128;
+const RAD_TO_DEG = 180 / Math.PI;
 
-// Flick tuning. Angular speed is radians of crosshair travel per tick (128 Hz).
-const MIN_FLICK_SPEED = 0.01; // ~0.57°/tick (~73°/s) — floor so idle jitter never "flicks"
-const MIN_MOVE_SPEED = 0.002; // below this the crosshair is considered still
-const FLICK_START_RATIO = 1.5; // start: speed ≥ 1.5× the pre-motion baseline
-const FLICK_END_RATIO = 1 / 3; // end:   speed ≤ ⅓ of the flick's average speed
-const FLICK_MIN_TICKS = 2; // a flick must last at least this long before it can end
-const FLICK_MAX_TICKS = 128; // hard stop after 1s so a slow drag can't run forever
-const BASELINE_EMA = 0.15; // how fast the idle-speed baseline tracks recent motion
+const MIN_FLICK_SPEED = 0.01;
+const MIN_MOVE_SPEED = 0.002;
+const FLICK_START_RATIO = 1.5;
+const FLICK_END_RATIO = 1 / 3;
+const FLICK_MIN_TICKS = 2;
+const FLICK_MAX_TICKS = 128;
+const BASELINE_EMA = 0.15;
+const MIN_FLICK_ANGLE_DEG = 0.5;
 
-// --- tiny vector helpers (plain arrays, no allocation churn) ----------------
-
-/** Camera forward vector for a YXZ (yaw,pitch) rotation. Unit length. */
 function dirFrom(pitch, yaw) {
   const cp = Math.cos(pitch);
   return [-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp];
@@ -46,6 +26,13 @@ function sub(a, b) {
 function dot(a, b) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
+function cross(a, b) {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0]
+  ];
+}
 function len(a) {
   return Math.hypot(a[0], a[1], a[2]);
 }
@@ -53,12 +40,61 @@ function normalize(a) {
   const l = len(a) || 1;
   return [a[0] / l, a[1] / l, a[2] / l];
 }
-/** Angle (radians) between two vectors; 0 when either is degenerate. */
 function angleBetween(a, b) {
   const la = len(a);
   const lb = len(b);
   if (la < 1e-9 || lb < 1e-9) return 0;
   return Math.acos(Math.max(-1, Math.min(1, dot(a, b) / (la * lb))));
+}
+function clamp01(v) {
+  return Math.max(0, Math.min(1, v));
+}
+
+function yawFromQuat(q) {
+  if (!q || q.length < 4) return 0;
+  const [x, y, z, w] = q;
+  return Math.atan2(2 * (w * y + x * z), 1 - 2 * (y * y + z * z));
+}
+
+function envMeshesAt(replay, tick) {
+  const segs = replay?.environmentSegments;
+  if (!segs?.length) return replay?.environment || [];
+  let idx = 0;
+  for (let i = 0; i < segs.length; i++) {
+    if (segs[i].start <= tick) idx = i;
+    else break;
+  }
+  return segs[idx]?.meshes || [];
+}
+
+function meshToCoverBox(d) {
+  if (d.geo !== 'Box' && !d.gridCover) return null;
+  const p = d.params || {};
+  const sx = d.s?.[0] ?? 1;
+  const sy = d.s?.[1] ?? 1;
+  const sz = d.s?.[2] ?? 1;
+  return {
+    pos: d.p || [0, 0, 0],
+    size: [(p.width ?? 1) * sx, (p.height ?? 1) * sy, (p.depth ?? 1) * sz],
+    rotationY: yawFromQuat(d.q)
+  };
+}
+
+/** Unit tangent on the view sphere for motion from dirPrev → dirNow. */
+function motionTangent(dirPrev, dirNow) {
+  const axis = cross(dirPrev, dirNow);
+  const axisLen = len(axis);
+  if (axisLen < 1e-9) return null;
+  return normalize(cross(axis, dirNow));
+}
+
+/** Unit tangent at dirNow pointing toward the target. */
+function towardTargetTangent(dirNow, toTarget) {
+  const d = dot(toTarget, dirNow);
+  const proj = sub(toTarget, [dirNow[0] * d, dirNow[1] * d, dirNow[2] * d]);
+  const l = len(proj);
+  if (l < 1e-9) return null;
+  return normalize(proj);
 }
 
 export class ReplayAnalytics {
@@ -67,52 +103,105 @@ export class ReplayAnalytics {
     this.totalTicks = replay?.totalTicks || 0;
     this.tickRate = replay?.tickRate || 128;
 
-    // Episode boundaries (kill / hit / death / miss) gate flick counting to ONE
-    // adjustment each: every shot fired + every moment a tracked target ends.
     this._boundaries = new Set();
     for (const ev of replay?.events || []) {
-      if (ev.type === 'shot') this._boundaries.add(ev.t | 0);
+      if (ev.type === 'shot' && (ev.by === 'player' || ev.by == null) && ev.hit) {
+        this._boundaries.add(ev.t | 0);
+      }
     }
     for (const ent of replay?.entities || []) {
       this._boundaries.add((ent.start + ent.len - 1) | 0);
     }
-    // Player shots, sorted, for click-timing analysis.
+
     this._shots = (replay?.events || [])
       .filter((e) => e.type === 'shot' && (e.by === 'player' || e.by == null))
       .sort((a, b) => a.t - b.t);
 
+    this._deadAt = this._buildDeadAt();
     this.reset();
   }
 
+  _buildDeadAt() {
+    const deadAt = new Map();
+    const r = this.replay;
+    for (const ev of this._shots) {
+      if (!ev.hit) continue;
+      const t = ev.t | 0;
+      if (ev.ent != null) {
+        const prev = deadAt.get(ev.ent);
+        if (prev == null || t < prev) deadAt.set(ev.ent, t);
+        continue;
+      }
+      if (!ev.e) continue;
+      for (const ent of r.entities || []) {
+        const a = r.sampleEntityAim(ent, t);
+        if (!a) continue;
+        const dx = a.x - ev.e[0];
+        const dy = a.y - ev.e[1];
+        const dz = a.z - ev.e[2];
+        if (Math.hypot(dx, dy, dz) <= a.radius * 1.25) {
+          const prev = deadAt.get(ent.id);
+          if (prev == null || t < prev) deadAt.set(ent.id, t);
+        }
+      }
+    }
+    return deadAt;
+  }
+
   reset() {
-    this._cursor = -1; // last integer tick folded into state
-    this._shotIdx = 0; // next unprocessed player shot
+    this._cursor = -1;
+    this._shotIdx = 0;
     this.flicks = { accurate: 0, over: 0, under: 0 };
     this.clicks = { early: 0, accurate: 0, late: 0, earlyMs: 0, lateMs: 0 };
-    this._tensionSum = 0;
-    this._tensionCount = 0;
+    this._pathDevSum = 0;
+    this._pathDevCount = 0;
+    this._trajDevSum = 0;
+    this._trajDevCount = 0;
     this._baseline = MIN_FLICK_SPEED;
     this._episodeCounted = false;
-    this._flick = null; // { startDir, speedSum, speedCount, ticks }
-
-    // Flick speed: ms from flick start to its FIRST click (averaged per flick).
-    // Flick accuracy: where the first click lands along start→target (0 = start,
-    // 100 = on target), averaged per flick.
-    this._pendingFlick = null; // { startTick, startDir } awaiting its first click
-    this._flickSpeedSumMs = 0;
+    this._flick = null;
+    this._flickTrail = [];
+    this._flickStartDir = null;
+    this._flickRefDist = 10;
+    this._pendingFlick = null;
+    this._flickSpeedSumMsPerDeg = 0;
     this._flickSpeedCount = 0;
     this._flickAccSum = 0;
     this._flickAccCount = 0;
+    this._flashEvents = [];
   }
-
-  // ---- random-access sampling helpers -------------------------------------
 
   _camDir(tickFloat) {
     const c = this.replay.sampleCamera(tickFloat);
     return dirFrom(c.pitch, c.yaw);
   }
 
-  /** Closest target (by angular distance) at an interpolated tick, or null. */
+  _camAngles(tickFloat) {
+    const c = this.replay.sampleCamera(tickFloat);
+    return { pitch: c.pitch, yaw: c.yaw };
+  }
+
+  _coverBoxesAt(tick) {
+    const meshes = envMeshesAt(this.replay, Math.floor(tick));
+    const boxes = [];
+    for (const d of meshes) {
+      const box = meshToCoverBox(d);
+      if (box) boxes.push(box);
+    }
+    return boxes;
+  }
+
+  _canSee(camPos, aim, tickFloat) {
+    const boxes = this._coverBoxesAt(tickFloat);
+    if (!boxes.length) return true;
+    return lineOfSightClear(camPos, [aim.x, aim.y, aim.z], boxes);
+  }
+
+  _isEntityDead(ent, tickFloat) {
+    const t = this._deadAt.get(ent.id);
+    return t != null && tickFloat >= t;
+  }
+
   closestAt(tickFloat) {
     const r = this.replay;
     const cam = r.sampleCamera(tickFloat);
@@ -121,8 +210,10 @@ export class ReplayAnalytics {
     let best = null;
     let bestAng = Infinity;
     for (const ent of r.entities) {
+      if (this._isEntityDead(ent, tickFloat)) continue;
       const a = r.sampleEntityAim(ent, tickFloat);
       if (!a) continue;
+      if (!this._canSee(camPos, a, tickFloat)) continue;
       const to = sub([a.x, a.y, a.z], camPos);
       const dist = len(to);
       if (dist < 1e-6) continue;
@@ -135,7 +226,6 @@ export class ReplayAnalytics {
     return best;
   }
 
-  /** True when the crosshair sits on the closest target's aim zone. */
   _onTarget(closest) {
     if (!closest) return false;
     const angularRadius = Math.atan2(closest.aim.radius, closest.dist);
@@ -146,25 +236,32 @@ export class ReplayAnalytics {
     return this._onTarget(this.closestAt(tickFloat));
   }
 
-  // ---- forward state machine ----------------------------------------------
+  _recordPathDeviation(dirNow, dirPrev, closest) {
+    if (!closest) return;
+    const toTarget = normalize(
+      sub([closest.aim.x, closest.aim.y, closest.aim.z], closest.camPos)
+    );
+    const tangent = motionTangent(dirPrev, dirNow);
+    const optimal = towardTargetTangent(dirNow, toTarget);
+    if (!tangent || !optimal) return;
+    this._pathDevSum += angleBetween(tangent, optimal) / Math.PI;
+    this._pathDevCount++;
+  }
 
-  /** Fold every integer tick up to floor(tickFloat) into the running state. */
   _advanceTo(tickFloat) {
     const target = Math.min(this.totalTicks - 1, Math.floor(tickFloat));
     if (target < this._cursor) this._resyncFromStart(target);
     while (this._cursor < target) this._processTick(++this._cursor);
   }
 
-  /** A backward seek invalidates accumulated state — replay from scratch. */
   _resyncFromStart(target) {
     this.reset();
     while (this._cursor < target) this._processTick(++this._cursor);
   }
 
   _processTick(i) {
-    if (i <= 0) return; // need a previous tick for any motion delta
+    if (i <= 0) return;
 
-    // New episode? Re-open flick counting for it.
     if (this._boundaries.has(i)) this._episodeCounted = false;
 
     const dirNow = this._camDir(i);
@@ -172,51 +269,56 @@ export class ReplayAnalytics {
     const speed = angleBetween(dirNow, dirPrev);
     const closest = this.closestAt(i);
     const closestPrev = this.closestAt(i - 1);
+    const angles = this._camAngles(i);
 
-    this._updateTension(i, dirNow, dirPrev, speed, closest);
-    this._updateFlick(i, dirNow, dirPrev, speed, closest, closestPrev);
+    if (closest && speed >= MIN_MOVE_SPEED) {
+      this._recordPathDeviation(dirNow, dirPrev, closest);
+    }
+    if (this._flick && closest && speed >= MIN_MOVE_SPEED) {
+      const toTarget = normalize(
+        sub([closest.aim.x, closest.aim.y, closest.aim.z], closest.camPos)
+      );
+      const tangent = motionTangent(dirPrev, dirNow);
+      const optimal = towardTargetTangent(dirNow, toTarget);
+      if (tangent && optimal) {
+        this._trajDevSum += angleBetween(tangent, optimal) / Math.PI;
+        this._trajDevCount++;
+      }
+    }
+
+    this._updateFlick(i, dirNow, dirPrev, speed, closest, closestPrev, angles);
     this._processShotsUpTo(i);
   }
 
-  _updateTension(i, dirNow, dirPrev, speed, closest) {
-    if (!closest || speed < MIN_MOVE_SPEED) return;
-    const moveVec = sub(dirNow, dirPrev); // where the crosshair actually went
-    const optimalVec = sub(
-      [closest.aim.x, closest.aim.y, closest.aim.z],
-      closest.camPos
-    ); // where it should have gone (straight at the target)
-    const a = angleBetween(moveVec, optimalVec);
-    this._tensionSum += (1 - Math.cos(a)) / 2; // 0 = perfectly on-path, 1 = opposite
-    this._tensionCount++;
-  }
-
-  _updateFlick(i, dirNow, dirPrev, speed, closest, closestPrev) {
+  _updateFlick(i, dirNow, dirPrev, speed, closest, closestPrev, angles) {
     if (!this._flick) {
-      // --- looking for a flick to START ---
       const toward =
         closest && closestPrev && closest.angle < closestPrev.angle;
       const threshold = Math.max(FLICK_START_RATIO * this._baseline, MIN_FLICK_SPEED);
       if (closest && toward && speed >= threshold) {
+        const startAngles = this._camAngles(i - 1);
         this._flick = {
-          startDir: dirPrev, // crosshair position when the flick began
+          startDir: dirPrev,
           speedSum: speed,
           speedCount: 1,
           ticks: 1
         };
-        // Arm flick-speed / flick-accuracy measurement for the next click.
+        this._flickStartDir = dirPrev;
+        this._flickRefDist = closest.dist;
+        this._flickTrail = [startAngles];
         this._pendingFlick = { startTick: i - 1, startDir: dirPrev };
       } else {
-        // idle/tracking — let the baseline follow the ambient speed
         this._baseline += (speed - this._baseline) * BASELINE_EMA;
       }
       return;
     }
 
-    // --- inside a flick ---
     const f = this._flick;
     f.speedSum += speed;
     f.speedCount++;
     f.ticks++;
+    this._flickTrail.push(angles);
+
     const avg = f.speedSum / f.speedCount;
     const ended =
       (f.ticks >= FLICK_MIN_TICKS && speed <= FLICK_END_RATIO * avg) ||
@@ -224,12 +326,15 @@ export class ReplayAnalytics {
       !closest;
 
     if (!ended) return;
+
     this._classifyFlick(f, dirNow, closest);
     this._flick = null;
-    this._baseline = MIN_FLICK_SPEED; // re-seat baseline after the burst
+    this._flickTrail = [];
+    this._flickStartDir = null;
+    this._pendingFlick = null;
+    this._baseline = MIN_FLICK_SPEED;
   }
 
-  /** Bucket a finished flick as accurate / over / under (one per episode). */
   _classifyFlick(f, dirEnd, closest) {
     if (this._episodeCounted || !closest) return;
     let bucket;
@@ -240,15 +345,17 @@ export class ReplayAnalytics {
         [closest.aim.x, closest.aim.y, closest.aim.z],
         closest.camPos
       );
-      const traveled = angleBetween(f.startDir, dirEnd); // how far the crosshair moved
-      const required = angleBetween(f.startDir, targetDir); // how far the target was
+      const traveled = angleBetween(f.startDir, dirEnd);
+      const required = angleBetween(f.startDir, targetDir);
       bucket = traveled > required ? 'over' : 'under';
     }
     this.flicks[bucket]++;
     this._episodeCounted = true;
+    const label =
+      bucket === 'accurate' ? 'Accurate flick' : bucket === 'over' ? 'Overflick' : 'Underflick';
+    this._flashEvents.push({ type: 'flick', bucket, text: label });
   }
 
-  /** Classify every player click whose tick we've now reached. */
   _processShotsUpTo(i) {
     while (this._shotIdx < this._shots.length && this._shots[this._shotIdx].t <= i) {
       this._classifyClick(this._shots[this._shotIdx].t);
@@ -256,20 +363,18 @@ export class ReplayAnalytics {
     }
   }
 
-  /**
-   * If a flick is awaiting its first click, this shot resolves it:
-   *   • flick speed = ms from flick start to this click.
-   *   • flick accuracy = how far start→target the crosshair got at click time
-   *     (0% = still at the start point, 100% = on the target).
-   */
   _measureFlickClick(t) {
     const pf = this._pendingFlick;
     if (!pf) return;
     this._pendingFlick = null;
 
     const dtTicks = t - pf.startTick;
-    if (dtTicks > 0) {
-      this._flickSpeedSumMs += dtTicks * MS_PER_TICK;
+    const clickDir = this._camDir(t);
+    const angleDeg = angleBetween(pf.startDir, clickDir) * RAD_TO_DEG;
+
+    if (dtTicks > 0 && angleDeg >= MIN_FLICK_ANGLE_DEG) {
+      const ms = dtTicks * MS_PER_TICK;
+      this._flickSpeedSumMsPerDeg += ms / angleDeg;
       this._flickSpeedCount++;
     }
 
@@ -278,94 +383,100 @@ export class ReplayAnalytics {
     const targetDir = normalize(
       sub([closest.aim.x, closest.aim.y, closest.aim.z], closest.camPos)
     );
-    const clickDir = this._camDir(t);
-    const dStart = angleBetween(pf.startDir, targetDir); // start → target span
-    const dClick = angleBetween(clickDir, targetDir); // click → target remaining
+    const dStart = angleBetween(pf.startDir, targetDir);
+    const dClick = angleBetween(clickDir, targetDir);
     if (dStart <= 1e-6) return;
     const acc = Math.max(0, Math.min(1, 1 - dClick / dStart)) * 100;
     this._flickAccSum += acc;
     this._flickAccCount++;
   }
 
-  /**
-   * Click timing: compare the crosshair to the closest target a few ticks
-   * around the shot. On target → accurate. Off now but on within 2 ticks →
-   * early (it would have landed). On target recently but off now → late.
-   */
   _classifyClick(t) {
     this._measureFlickClick(t);
+
     if (this._onTargetAt(t)) {
       this.clicks.accurate++;
+      this._flashEvents.push({ type: 'click', kind: 'accurate', text: 'On target' });
       return;
     }
     for (let k = 1; k <= 2; k++) {
       if (this._onTargetAt(t + k)) {
         this.clicks.early++;
-        this.clicks.earlyMs += k * MS_PER_TICK;
+        const ms = Math.round(k * MS_PER_TICK);
+        this.clicks.earlyMs += ms;
+        this._flashEvents.push({ type: 'click', kind: 'early', text: `${ms} ms under` });
         return;
       }
     }
     for (let k = 1; k <= 3; k++) {
       if (this._onTargetAt(t - k)) {
         this.clicks.late++;
-        this.clicks.lateMs += k * MS_PER_TICK;
+        const ms = Math.round(k * MS_PER_TICK);
+        this.clicks.lateMs += ms;
+        this._flashEvents.push({ type: 'click', kind: 'late', text: `${ms} ms over` });
         return;
       }
     }
-    // A click nowhere near a target fits no timing bucket — ignored.
   }
-
-  // ---- public API ----------------------------------------------------------
 
   get tensionPct() {
-    if (!this._tensionCount) return 0;
-    return (this._tensionSum / this._tensionCount) * 100;
+    const path = this._pathDevCount ? this._pathDevSum / this._pathDevCount : 0;
+    const flickTotal = this.flicks.accurate + this.flicks.over + this.flicks.under;
+    const flickStray = flickTotal ? (this.flicks.over + this.flicks.under) / flickTotal : 0;
+    const traj = this._trajDevCount ? this._trajDevSum / this._trajDevCount : 0;
+    if (!this._pathDevCount && !flickTotal && !this._trajDevCount) return 0;
+    return 100 * clamp01(0.55 * path + 0.3 * flickStray + 0.15 * traj);
   }
 
-  /** Average ms from flick start to its first click (0 when none measured). */
-  get flickSpeedMs() {
+  /** Average ms per degree of angular travel from flick start to first click. */
+  get flickSpeedMsPerDeg() {
     if (!this._flickSpeedCount) return 0;
-    return this._flickSpeedSumMs / this._flickSpeedCount;
+    return this._flickSpeedSumMsPerDeg / this._flickSpeedCount;
   }
 
-  /** Average first-click placement along start→target, 0–100% (0 when none). */
   get flickAccuracyPct() {
     if (!this._flickAccCount) return 0;
     return this._flickAccSum / this._flickAccCount;
   }
 
-  /**
-   * Live snapshot for the current (possibly fractional) tick. Advances internal
-   * counters to floor(tickFloat) and returns instantaneous overlay data plus
-   * the running tallies for the stats panel.
-   */
+  get clickAccuracyPct() {
+    const total = this.clicks.early + this.clicks.accurate + this.clicks.late;
+    if (!total) return 0;
+    return (this.clicks.accurate / total) * 100;
+  }
+
   sampleTick(tickFloat) {
     this._advanceTo(tickFloat);
     const closest = this.closestAt(tickFloat);
     const camNow = this.replay.sampleCamera(tickFloat);
     const camPrev = this.replay.sampleCamera(Math.max(0, tickFloat - 1));
+    const flashEvents = this._flashEvents;
+    this._flashEvents = [];
+
     return {
       target: closest
         ? { x: closest.aim.x, y: closest.aim.y, z: closest.aim.z, radius: closest.aim.radius }
         : null,
       onTarget: this._onTarget(closest),
-      // Crosshair angular motion this tick, in screen-friendly deltas.
       moveDir: { yaw: camNow.yaw - camPrev.yaw, pitch: camNow.pitch - camPrev.pitch },
       flickActive: !!this._flick,
+      flickTrail: this._flickTrail.map((a) => ({ pitch: a.pitch, yaw: a.yaw })),
+      flickStartDir: this._flickStartDir,
+      flickRefDist: this._flickRefDist,
       flicks: { ...this.flicks },
       clicks: { ...this.clicks },
       tensionPct: this.tensionPct,
-      flickSpeedMs: this.flickSpeedMs,
+      flickSpeedMsPerDeg: this.flickSpeedMsPerDeg,
       flickAccuracyPct: this.flickAccuracyPct,
-      flicksMeasured: this._flickSpeedCount
+      clickAccuracyPct: this.clickAccuracyPct,
+      flicksMeasured: this._flickSpeedCount,
+      flashEvents
     };
   }
 
-  /** Full-track pass for persistence. Resets, folds every tick, returns totals. */
   aggregate() {
     this.reset();
     if (this.totalTicks > 0) this._advanceTo(this.totalTicks - 1);
-    // Make sure trailing shots after the last processed tick are counted.
     this._processShotsUpTo(this.totalTicks);
     return {
       flicks_accurate: this.flicks.accurate,
@@ -377,7 +488,7 @@ export class ReplayAnalytics {
       click_early_ms: Math.round(this.clicks.earlyMs * 10) / 10,
       click_late_ms: Math.round(this.clicks.lateMs * 10) / 10,
       tension_pct: Math.round(this.tensionPct * 10) / 10,
-      flick_speed_ms: Math.round(this.flickSpeedMs * 10) / 10,
+      flick_speed_ms: Math.round(this.flickSpeedMsPerDeg * 10) / 10,
       flick_accuracy_pct: Math.round(this.flickAccuracyPct * 10) / 10,
       flicks_measured: this._flickSpeedCount
     };
