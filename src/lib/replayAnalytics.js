@@ -15,6 +15,7 @@ const FLICK_MIN_TICKS = 2;
 const FLICK_MAX_TICKS = 128;
 const BASELINE_EMA = 0.15;
 const MIN_FLICK_ANGLE_DEG = 0.5;
+const PAINTBALL_STEPS = 10; // sub-samples per tick so dots form solid lines
 
 function dirFrom(pitch, yaw) {
   const cp = Math.cos(pitch);
@@ -181,6 +182,17 @@ export class ReplayAnalytics {
     return { pitch: c.pitch, yaw: c.yaw };
   }
 
+  /** Interpolate aim angles into the paintball trail (10× per telemetry tick). */
+  _appendFlickTrail(from, to, steps = PAINTBALL_STEPS) {
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps;
+      this._flickTrail.push({
+        pitch: from.pitch + (to.pitch - from.pitch) * t,
+        yaw: from.yaw + (to.yaw - from.yaw) * t
+      });
+    }
+  }
+
   _coverBoxesAt(tick) {
     const meshes = envMeshesAt(this.replay, Math.floor(tick));
     const boxes = [];
@@ -317,7 +329,9 @@ export class ReplayAnalytics {
     f.speedSum += speed;
     f.speedCount++;
     f.ticks++;
-    this._flickTrail.push(angles);
+    const prev = this._flickTrail[this._flickTrail.length - 1];
+    if (prev) this._appendFlickTrail(prev, angles);
+    else this._flickTrail.push(angles);
 
     const avg = f.speedSum / f.speedCount;
     const ended =

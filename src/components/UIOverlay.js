@@ -3481,14 +3481,19 @@ export class UIOverlay {
         if (p) this._drawLine(ctx, cx, cy, p.x, p.y, '#3ddc6b', 2.5);
       }
       if (sample.flickTrail?.length) {
+        let prevPx = null;
         for (const pt of sample.flickTrail) {
           const dir = this._dirFromAngles(pt.pitch, pt.yaw);
           const off = this._aimDirToScreenOffset(dir, refDist, camera, w, h);
           if (!off) continue;
+          const px = cx + off.x;
+          const py = cy + off.y;
+          if (prevPx) this._drawLine(ctx, prevPx.x, prevPx.y, px, py, '#f54a4a', 2.5);
           ctx.beginPath();
-          ctx.arc(cx + off.x, cy + off.y, 1.25, 0, Math.PI * 2);
+          ctx.arc(px, py, 1.25, 0, Math.PI * 2);
           ctx.fillStyle = '#f54a4a';
           ctx.fill();
+          prevPx = { x: px, y: py };
         }
       }
     }
@@ -3512,29 +3517,40 @@ export class UIOverlay {
     for (const ev of sample.flashEvents || []) {
       if (ev.type === 'flick' && raCanvas.flicks) {
         const color = ev.bucket === 'accurate' ? '#3ddc6b' : ev.bucket === 'over' ? '#f5a623' : '#46c8ff';
-        this._analysisLabels.push({ text: ev.text, side: 'right', color, until: now + 1200 });
+        this._pushAnalysisLabel({ text: ev.text, side: 'right', color, until: now + 1200 });
       }
       if (ev.type === 'click' && raCanvas.clickTiming) {
         const color = ev.kind === 'accurate' ? '#3ddc6b' : ev.kind === 'early' ? '#f5a623' : '#46c8ff';
-        this._analysisLabels.push({ text: ev.text, side: 'left', color, until: now + 1200 });
+        this._pushAnalysisLabel({ text: ev.text, side: 'left', color, until: now + 1200 });
       }
     }
     this._analysisLabels = this._analysisLabels.filter((l) => l.until > now);
     ctx.font = '500 14px "Host Grotesk", sans-serif';
     ctx.textBaseline = 'middle';
+    const labelLineH = 18;
     for (const l of this._analysisLabels) {
       const fade = Math.min(1, (l.until - now) / 400);
       ctx.globalAlpha = fade;
       ctx.fillStyle = l.color;
+      const y = cy - 6 - (l.stack || 0) * labelLineH;
       if (l.side === 'right') {
         ctx.textAlign = 'left';
-        ctx.fillText(l.text, cx + 52, cy - 6);
+        ctx.fillText(l.text, cx + 52, y);
       } else {
         ctx.textAlign = 'right';
-        ctx.fillText(l.text, cx - 52, cy - 6);
+        ctx.fillText(l.text, cx - 52, y);
       }
     }
     ctx.globalAlpha = 1;
+  }
+
+  /** Push a label beside the crosshair; older labels on the same side shift up. */
+  _pushAnalysisLabel(label) {
+    for (const l of this._analysisLabels) {
+      if (l.side === label.side) l.stack = (l.stack || 0) + 1;
+    }
+    label.stack = 0;
+    this._analysisLabels.push(label);
   }
 
   _dirFromAngles(pitch, yaw) {
