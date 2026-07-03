@@ -31,6 +31,23 @@ import { ReplayAnalytics } from '../lib/replayAnalytics.js';
 import { REPLAY_SPEEDS } from '../core/ReplayPlayer.js';
 import { saveReplay, listAccountReplays, loadReplayByPath, createSharedReplay, fetchSharedReplay, isSharedReplayId } from '../lib/replayStore.js';
 import { copyText } from '../utils/ConfigCodes.js';
+import {
+  encodeModeConfig,
+  decodeModeConfig
+} from '../utils/ModeConfigCodes.js';
+import {
+  loadPlaylists,
+  savePlaylist,
+  deletePlaylist,
+  createPlaylist,
+  playlistConfigKey,
+  combinePlaylistResults,
+  encodePlaylist,
+  decodePlaylist,
+  isPlaylistCode,
+  PLAYLIST_SCENARIO
+} from '../lib/playlists.js';
+import { resolveModeDuration } from '../core/SettingsManager.js';
 import { MultiplayerController } from '../multiplayer/MultiplayerController.js';
 import { SCORE_TARGETS, MM_SCORE_TARGET, TRACKING_DURATION } from '../multiplayer/constants.js';
 import { getMap } from '../multiplayer/maps.js';
@@ -70,6 +87,9 @@ const SCENARIO_SETTING_IDS = new Set([
 ]);
 
 const GEAR_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66z"/></svg>`;
+
+const PLAYLIST_ICON = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 10h11v2H3zm0-4h11v2H3zm0 8h7v2H3zm13-1v6l5-3z"/></svg>`;
+const TRASH_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6zM19 4h-3.5l-1-1h-5l-1 1H5v2h14z"/></svg>`;
 
 /** Slider paired with a number box; stored value is not clamped to the slider range. */
 function rf(id, label, min, max, step) {
@@ -151,6 +171,11 @@ export class UIOverlay {
     this._aimHintShown = false;
     this._unlockSince = null;
     this._countdownRemaining = 0;
+    // Active playlist run: { playlist, index, results: [] } | null
+    this._playlistRun = null;
+    // Items being assembled in the playlist builder: [{ scenario, config }]
+    this._playlistDraft = [];
+    this._lastPlaylist = null; // most recent playlist run, for "Play again"
   }
 
   init() {
@@ -668,7 +693,49 @@ export class UIOverlay {
             .join('')}
         </div>
         <div class="menu-actions training-back">
+          <button type="button" class="btn btn-with-icon" data-goto="playlists" id="training-playlists-btn">${PLAYLIST_ICON}<span>Playlists</span></button>
           <button class="btn primary" data-goto="menu">Back</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PLAYLISTS (build + run sequences of practice modes) -->
+    <div class="screen playlists" data-screen="playlists">
+      <div class="panel wide playlists-panel">
+        <h2 class="text-big training-heading">Playlists</h2>
+        <div class="playlists-scroll">
+          <div id="playlists-list" class="playlists-list"></div>
+
+          <section class="playlist-builder">
+            <h4>New playlist</h4>
+            <div class="field field-plain">
+              <input type="text" id="playlist-name" class="config-code-input" maxlength="60" placeholder="Playlist name" spellcheck="false" autocomplete="off" />
+            </div>
+            <div class="playlist-add-row">
+              <select id="playlist-add-mode" class="config-code-input">
+                ${Object.keys(SCENARIOS)
+                  .map((k) => `<option value="${k}">${SCENARIO_META[k].title}</option>`)
+                  .join('')}
+              </select>
+              <button type="button" class="btn" id="playlist-add-current">Add mode</button>
+            </div>
+            <div class="playlist-add-row">
+              <input type="text" id="playlist-add-code" class="config-code-input" placeholder="Paste mode code (AIM4M-…)" spellcheck="false" autocomplete="off" />
+              <button type="button" class="btn" id="playlist-add-code-btn">Add code</button>
+            </div>
+            <div id="playlist-draft-items" class="playlist-draft-items"></div>
+            <p class="readout" id="playlist-status"></p>
+            <div class="playlist-builder-actions">
+              <button type="button" class="btn primary" id="playlist-save-btn">Save playlist</button>
+            </div>
+            <div class="playlist-add-row playlist-import-row">
+              <input type="text" id="playlist-import-code" class="config-code-input" placeholder="Import playlist code (AIM4P-…)" spellcheck="false" autocomplete="off" />
+              <button type="button" class="btn" id="playlist-import-btn">Import</button>
+            </div>
+          </section>
+        </div>
+        <div class="menu-actions">
+          <button type="button" class="btn primary" data-goto="training">Back</button>
         </div>
       </div>
     </div>
@@ -717,6 +784,28 @@ export class UIOverlay {
         </header>
         <div class="scenario-settings-drawer">
           ${scenarioSettingsSections.map((s) => scenarioSettingsPanel(s.id, s.body)).join('')}
+          <div class="scenario-settings-footer">
+            <div class="field field-plain">
+              <div class="field-top"><span class="field-label">Run ends on</span></div>
+              <div class="playlist-add-row">
+                <select id="scn-dur-type" class="config-code-input"></select>
+                <input type="number" id="scn-dur-value" class="field-num scn-dur-value" min="1" step="1" />
+                <span id="scn-dur-unit" class="scn-dur-unit muted">sec</span>
+              </div>
+            </div>
+            <div class="config-code-block">
+              <div class="field-top"><span class="field-label">Config code</span></div>
+              <code class="config-export-code" id="scn-code-export">—</code>
+              <div class="config-actions">
+                <button type="button" class="btn" id="scn-code-copy">Copy code</button>
+              </div>
+              <div class="playlist-add-row">
+                <input type="text" id="scn-code-import" class="config-code-input" placeholder="Paste AIM4M-… code" spellcheck="false" autocomplete="off" />
+                <button type="button" class="btn" id="scn-code-import-btn">Import</button>
+              </div>
+              <p class="readout" id="scn-code-status"></p>
+            </div>
+          </div>
         </div>
         <div class="menu-actions scenario-settings-back">
           <button type="button" class="btn primary" id="scenario-settings-back-btn">Back to Training</button>
@@ -831,6 +920,7 @@ export class UIOverlay {
     <div class="screen leaderboard" data-screen="leaderboard">
       <div class="panel wide">
         <div class="lb-header" id="lb-tabs">
+          <span class="lb-playlist-title text-big" id="lb-playlist-title" hidden></span>
           <button type="button" class="tab active" id="lb-tab-elo" data-lb="elo">Ranked ELO</button>
           <div class="lb-mode-select-wrap">
             <select id="lb-mode-select" class="config-code-input" aria-label="Gamemode leaderboard">
@@ -971,6 +1061,21 @@ export class UIOverlay {
       </div>
     </div>
 
+    <!-- PLAYLIST RESULTS (between modes + final combined screen) -->
+    <div class="screen playlist-results" data-screen="playlist-results">
+      <div class="panel wide">
+        <h2 class="text-big" id="pl-res-title">Playlist</h2>
+        <p class="readout muted" id="pl-res-progress"></p>
+        <div id="pl-res-stats" class="res-stats"></div>
+        <div id="pl-res-lb" class="lb-body"></div>
+        <div class="menu-actions">
+          <button type="button" class="btn primary" id="pl-res-continue">Next mode</button>
+          <button type="button" class="btn" id="pl-res-again" hidden>Play again</button>
+          <button type="button" class="btn" id="pl-res-quit">Quit</button>
+        </div>
+      </div>
+    </div>
+
     <!-- REPLAY PLAYBACK -->
     <canvas id="replay-analysis-canvas" class="replay-analysis-canvas"></canvas>
     <div id="replay-stats" class="replay-stats" hidden></div>
@@ -1050,12 +1155,16 @@ export class UIOverlay {
         }
         if (t.dataset.goto === 'multiplayer') this.refreshAccountBar();
         if (t.dataset.goto === 'settings') this._returnAfterSettings = this.state;
+        if (t.dataset.goto === 'playlists') this._renderPlaylists();
         this.showScreen(t.dataset.goto);
         if (t.dataset.goto === 'mp') this.mp.openBrowser();
         if (t.dataset.goto === 'auth') this._openAuth('login');
       } else if (t.hasAttribute('data-resume')) this.resume();
       else if (t.hasAttribute('data-quit')) this.quit();
-      else if (t.hasAttribute('data-restart')) this.play(this.currentScenario, this.scenarioConfig);
+      else if (t.hasAttribute('data-restart')) {
+        if (this._playlistRun) this._playPlaylistItem();
+        else this.play(this.currentScenario, this.scenarioConfig);
+      }
       else if (t.hasAttribute('data-reset')) {
         if (this._settingsExploreMode || this.settings.isExploreMode) return;
         this.settings.resetDraft();
@@ -1106,6 +1215,8 @@ export class UIOverlay {
     this._bindSettings();
     this._bindSettingsTabs();
     this._bindScenarioSettings();
+    this._bindScenarioFooter();
+    this._bindPlaylists();
     this._bindPauseMenu();
   }
 
@@ -1193,6 +1304,7 @@ export class UIOverlay {
     this._activeScenarioSettings = scenarioId;
     this._populateSettings();
     this._showScenarioSettingsPanel(scenarioId);
+    this._populateScenarioFooter(scenarioId);
     this._updateScenarioSettingsBar();
     this._returnAfterScenarioSettings = 'training';
     this.showScreen('scenario-settings');
@@ -1225,11 +1337,144 @@ export class UIOverlay {
     $('#scenario-settings-undo-btn')?.addEventListener('click', () => {
       if (this.settings.undoDraft()) {
         this._populateSettings();
+        if (this._activeScenarioSettings) this._populateScenarioFooter(this._activeScenarioSettings);
         this._updateSettingsBar();
       }
     });
     $('#scenario-settings-done-btn')?.addEventListener('click', () => this._closeScenarioSettings());
     $('#scenario-settings-back-btn')?.addEventListener('click', () => this._closeScenarioSettings());
+  }
+
+  // -------------------------------------------------------------------------
+  // Scenario settings footer — per-mode duration + config code share
+  // -------------------------------------------------------------------------
+
+  /** Fill the duration + config-code controls for the active scenario. */
+  _populateScenarioFooter(scenarioId) {
+    const $ = (id) => this.root.querySelector(id);
+    const data = this.settings.activeSettings()?.[scenarioId] || {};
+    const dur = resolveModeDuration(data, this.settings.activeSettings()?.runDuration);
+    const killable = isKillLeaderboardScenario(scenarioId);
+
+    const typeSel = $('#scn-dur-type');
+    if (typeSel) {
+      const opts = ['<option value="time">Time</option>'];
+      if (killable) opts.push('<option value="kills">Kills</option>');
+      typeSel.innerHTML = opts.join('');
+      typeSel.value = killable && dur.type === 'kills' ? 'kills' : 'time';
+      typeSel.disabled = !killable;
+    }
+    const valInput = $('#scn-dur-value');
+    if (valInput) valInput.value = dur.value;
+    const unit = $('#scn-dur-unit');
+    if (unit) unit.textContent = typeSel?.value === 'kills' ? 'kills' : 'sec';
+
+    const codeEl = $('#scn-code-export');
+    if (codeEl) {
+      try {
+        const mode = this.settings.getModeConfig(scenarioId);
+        codeEl.textContent = encodeModeConfig(mode);
+      } catch {
+        codeEl.textContent = '—';
+      }
+    }
+    const status = $('#scn-code-status');
+    if (status) { status.textContent = ''; status.classList.remove('is-error'); }
+    const importInput = $('#scn-code-import');
+    if (importInput) importInput.value = '';
+  }
+
+  /** Refresh just the live config-code readout (after a settings edit). */
+  _refreshScenarioCode() {
+    const scenarioId = this._activeScenarioSettings;
+    if (!scenarioId) return;
+    const codeEl = this.root.querySelector('#scn-code-export');
+    if (!codeEl) return;
+    try {
+      codeEl.textContent = encodeModeConfig(this.settings.getModeConfig(scenarioId));
+    } catch {
+      codeEl.textContent = '—';
+    }
+  }
+
+  _bindScenarioFooter() {
+    const $ = (id) => this.root.querySelector(id);
+    const setStatus = (msg, isError = false) => {
+      const el = $('#scn-code-status');
+      if (!el) return;
+      el.textContent = msg || '';
+      el.classList.toggle('is-error', !!isError);
+    };
+
+    $('#scn-dur-type')?.addEventListener('change', (e) => {
+      const scenarioId = this._activeScenarioSettings;
+      if (!scenarioId) return;
+      const type = e.target.value === 'kills' ? 'kills' : 'time';
+      this.settings.mutateDraft((d) => {
+        const cur = d[scenarioId]?.duration?.value;
+        const value = Number(cur) > 0 ? Number(cur) : (type === 'kills' ? 100 : 60);
+        d[scenarioId] = d[scenarioId] || {};
+        d[scenarioId].duration = { type, value };
+      });
+      const unit = $('#scn-dur-unit');
+      if (unit) unit.textContent = type === 'kills' ? 'kills' : 'sec';
+      this._refreshScenarioCode();
+      this._updateScenarioSettingsBar();
+    });
+
+    $('#scn-dur-value')?.addEventListener('change', (e) => {
+      const scenarioId = this._activeScenarioSettings;
+      if (!scenarioId) return;
+      const value = Math.max(1, Math.round(parseFloat(e.target.value)));
+      if (!Number.isFinite(value)) return;
+      this.settings.mutateDraft((d) => {
+        const type = d[scenarioId]?.duration?.type === 'kills' ? 'kills' : 'time';
+        d[scenarioId] = d[scenarioId] || {};
+        d[scenarioId].duration = { type, value };
+      });
+      e.target.value = value;
+      this._refreshScenarioCode();
+      this._updateScenarioSettingsBar();
+    });
+
+    $('#scn-code-copy')?.addEventListener('click', async () => {
+      const scenarioId = this._activeScenarioSettings;
+      if (!scenarioId) return;
+      try {
+        const code = encodeModeConfig(this.settings.getModeConfig(scenarioId));
+        const codeEl = $('#scn-code-export');
+        if (codeEl) codeEl.textContent = code;
+        await copyText(code);
+        setStatus('Config code copied to clipboard.');
+      } catch (err) {
+        setStatus(err.message || 'Could not copy code', true);
+      }
+    });
+
+    $('#scn-code-import-btn')?.addEventListener('click', () => {
+      const scenarioId = this._activeScenarioSettings;
+      if (!scenarioId) return;
+      const raw = $('#scn-code-import')?.value;
+      if (!raw || !raw.trim()) { setStatus('Paste a config code first.', true); return; }
+      let decoded;
+      try {
+        decoded = decodeModeConfig(raw);
+      } catch (err) {
+        setStatus(err.message || 'Invalid config code', true);
+        return;
+      }
+      if (decoded.scenario !== scenarioId) {
+        const other = SCENARIO_META[decoded.scenario]?.title || decoded.scenario;
+        const here = SCENARIO_META[scenarioId]?.title || scenarioId;
+        setStatus(`That code is for ${other}, not ${here}.`, true);
+        return;
+      }
+      this.settings.applyModeConfigToDraft(scenarioId, decoded.config);
+      this._populateSettings();
+      this._populateScenarioFooter(scenarioId);
+      this._updateScenarioSettingsBar();
+      setStatus('Config imported — press Done to keep it.');
+    });
   }
 
   _bindSettings() {
@@ -1492,6 +1737,389 @@ export class UIOverlay {
       }
     });
     $('#settings-done-btn')?.addEventListener('click', () => this._closeSettings());
+  }
+
+  // -------------------------------------------------------------------------
+  // Playlists
+  // -------------------------------------------------------------------------
+
+  _setPlaylistStatus(msg, isError = false) {
+    const el = this.root.querySelector('#playlist-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.classList.toggle('is-error', !!isError);
+  }
+
+  /** Short label like "Gridshot · 60s" / "Gridshot · 100 kills". */
+  _modeSummary(item) {
+    const title = SCENARIO_META[item.scenario]?.title || item.scenario;
+    const dur = resolveModeDuration(item.config, 60);
+    const tail = dur.type === 'kills' ? `${dur.value} kills` : `${dur.value}s`;
+    return `${title} · ${tail}`;
+  }
+
+  _bindPlaylists() {
+    const $ = (id) => this.root.querySelector(id);
+
+    $('#playlist-add-current')?.addEventListener('click', () => {
+      const scenario = $('#playlist-add-mode')?.value;
+      if (!scenario || !SCENARIOS[scenario]) return;
+      const { config } = this.settings.getModeConfig(scenario);
+      this._playlistDraft.push({ scenario, config });
+      this._renderPlaylistDraft();
+      this._setPlaylistStatus(`Added ${SCENARIO_META[scenario]?.title || scenario}.`);
+    });
+
+    $('#playlist-add-code-btn')?.addEventListener('click', () => {
+      const raw = $('#playlist-add-code')?.value;
+      if (!raw || !raw.trim()) { this._setPlaylistStatus('Paste a mode code first.', true); return; }
+      let decoded;
+      try {
+        decoded = decodeModeConfig(raw);
+      } catch (err) {
+        this._setPlaylistStatus(err.message || 'Invalid mode code', true);
+        return;
+      }
+      if (!SCENARIOS[decoded.scenario]) {
+        this._setPlaylistStatus('That code is for an unknown mode.', true);
+        return;
+      }
+      this._playlistDraft.push({ scenario: decoded.scenario, config: decoded.config });
+      $('#playlist-add-code').value = '';
+      this._renderPlaylistDraft();
+      this._setPlaylistStatus(`Added ${SCENARIO_META[decoded.scenario]?.title || decoded.scenario} from code.`);
+    });
+
+    $('#playlist-save-btn')?.addEventListener('click', () => {
+      if (!this._playlistDraft.length) {
+        this._setPlaylistStatus('Add at least one mode before saving.', true);
+        return;
+      }
+      const name = $('#playlist-name')?.value?.trim() || 'Untitled playlist';
+      const playlist = createPlaylist(name, this._playlistDraft);
+      savePlaylist(playlist);
+      this._playlistDraft = [];
+      if ($('#playlist-name')) $('#playlist-name').value = '';
+      this._renderPlaylists();
+      this._setPlaylistStatus(`Saved "${playlist.name}".`);
+    });
+
+    $('#playlist-import-btn')?.addEventListener('click', () => {
+      const raw = $('#playlist-import-code')?.value;
+      if (!raw || !raw.trim()) { this._setPlaylistStatus('Paste a playlist code first.', true); return; }
+      let playlist;
+      try {
+        playlist = decodePlaylist(raw);
+      } catch (err) {
+        this._setPlaylistStatus(err.message || 'Invalid playlist code', true);
+        return;
+      }
+      const usable = playlist.items.filter((it) => SCENARIOS[it.scenario]);
+      if (!usable.length) { this._setPlaylistStatus('That playlist has no known modes.', true); return; }
+      playlist.items = usable;
+      savePlaylist(playlist);
+      if ($('#playlist-import-code')) $('#playlist-import-code').value = '';
+      this._renderPlaylists();
+      this._setPlaylistStatus(`Imported "${playlist.name}".`);
+    });
+
+    $('#playlist-draft-items')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-playlist-remove]');
+      if (!btn) return;
+      const idx = parseInt(btn.dataset.playlistRemove, 10);
+      if (Number.isInteger(idx)) {
+        this._playlistDraft.splice(idx, 1);
+        this._renderPlaylistDraft();
+      }
+    });
+
+    $('#playlists-list')?.addEventListener('click', (e) => {
+      const el = e.target.closest('[data-playlist-play],[data-playlist-lb],[data-playlist-share],[data-playlist-del]');
+      if (!el) return;
+      const id =
+        el.dataset.playlistPlay || el.dataset.playlistLb ||
+        el.dataset.playlistShare || el.dataset.playlistDel;
+      const playlist = loadPlaylists().find((p) => p.id === id);
+      if (!playlist) return;
+      if (el.dataset.playlistPlay != null) this._startPlaylist(playlist);
+      else if (el.dataset.playlistLb != null) this._openPlaylistLeaderboard(playlist);
+      else if (el.dataset.playlistShare != null) this._sharePlaylist(playlist);
+      else if (el.dataset.playlistDel != null) {
+        deletePlaylist(id);
+        this._renderPlaylists();
+        this._setPlaylistStatus(`Deleted "${playlist.name}".`);
+      }
+    });
+
+    // Playlist results screen (between modes + final).
+    $('#pl-res-continue')?.addEventListener('click', () => this._playlistContinue());
+    $('#pl-res-again')?.addEventListener('click', () => {
+      if (this._lastPlaylist) this._startPlaylist(this._lastPlaylist);
+    });
+    $('#pl-res-quit')?.addEventListener('click', () => this._quitPlaylist());
+
+    this._renderPlaylistDraft();
+  }
+
+  async _sharePlaylist(playlist) {
+    try {
+      await copyText(encodePlaylist(playlist));
+      this._setPlaylistStatus(`Copied share code for "${playlist.name}".`);
+    } catch (err) {
+      this._setPlaylistStatus(err.message || 'Could not copy code', true);
+    }
+  }
+
+  _renderPlaylists() {
+    const el = this.root.querySelector('#playlists-list');
+    if (el) {
+      const list = loadPlaylists();
+      if (!list.length) {
+        el.innerHTML = '<p class="center lb-hint">No playlists yet — build one below.</p>';
+      } else {
+        el.innerHTML = list.map((p) => {
+          const chain = (p.items || [])
+            .map((it) => SCENARIO_META[it.scenario]?.title || it.scenario)
+            .join(' → ');
+          return `
+          <div class="playlist-row" data-playlist-id="${p.id}">
+            <div class="playlist-row-main">
+              <span class="playlist-row-title">${this._esc(p.name)}</span>
+              <span class="playlist-row-sub">${(p.items || []).length} mode${(p.items || []).length === 1 ? '' : 's'} · ${this._esc(chain)}</span>
+            </div>
+            <div class="playlist-row-actions">
+              <button type="button" class="btn training-row-play" data-playlist-play="${p.id}">Play</button>
+              <button type="button" class="training-row-lb" data-playlist-lb="${p.id}" aria-label="Playlist leaderboard"><img src="${LEADERBOARD_ICON}" alt="" class="aim4-icon" width="16" height="16" /></button>
+              <button type="button" class="training-row-gear" data-playlist-share="${p.id}" aria-label="Copy share code">${PLAYLIST_ICON}</button>
+              <button type="button" class="training-row-gear" data-playlist-del="${p.id}" aria-label="Delete playlist">${TRASH_ICON}</button>
+            </div>
+          </div>`;
+        }).join('');
+      }
+    }
+    this._renderPlaylistDraft();
+    this._setPlaylistStatus('');
+  }
+
+  _renderPlaylistDraft() {
+    const el = this.root.querySelector('#playlist-draft-items');
+    if (!el) return;
+    if (!this._playlistDraft.length) {
+      el.innerHTML = '<p class="lb-hint">No modes added yet.</p>';
+      return;
+    }
+    el.innerHTML = this._playlistDraft.map((it, i) => `
+      <div class="playlist-draft-item">
+        <span class="playlist-draft-idx">${i + 1}</span>
+        <span class="playlist-draft-name">${this._esc(this._modeSummary(it))}</span>
+        <button type="button" class="training-row-gear" data-playlist-remove="${i}" aria-label="Remove">${TRASH_ICON}</button>
+      </div>`).join('');
+  }
+
+  // ---- Playlist run lifecycle ----
+
+  _startPlaylist(playlist) {
+    if (!playlist?.items?.length) {
+      this._setPlaylistStatus('That playlist is empty.', true);
+      return;
+    }
+    this._playlistRun = { playlist, index: 0, results: [] };
+    this._lastPlaylist = playlist;
+    this._playPlaylistItem();
+  }
+
+  /** Load + start the current playlist item with its own settings + duration. */
+  _playPlaylistItem() {
+    const run = this._playlistRun;
+    if (!run) return;
+    const item = run.playlist.items[run.index];
+    if (!item) return;
+    const cfg = item.config || {};
+    // Apply the item's settings only across construction, then restore.
+    this.settings.beginModeOverride(item.scenario, cfg);
+    try {
+      this.play(item.scenario, { duration: cfg.duration });
+    } finally {
+      this.settings.endModeOverride();
+    }
+  }
+
+  _playlistContinue() {
+    const run = this._playlistRun;
+    if (!run) return;
+    run.index += 1;
+    this._playPlaylistItem();
+  }
+
+  _quitPlaylist() {
+    this._playlistRun = null;
+    this.settings.endModeOverride();
+    this.sceneManager.unload();
+    this.input.exitLock();
+    this._renderPlaylists();
+    this.showScreen('playlists');
+  }
+
+  _onPlaylistModeFinish(results) {
+    this.state = 'results';
+    this.input.exitLock();
+    this.replayRecorder?.cancel();
+    const run = this._playlistRun;
+    run.results.push(results);
+    const isLast = run.index >= run.playlist.items.length - 1;
+    if (isLast) {
+      this._finalizePlaylist();
+    } else {
+      this._showPlaylistIntermission(results);
+    }
+  }
+
+  _modeStatHtml(results) {
+    const stat = (label, val) =>
+      `<div class="stat"><span class="stat-value">${val}</span><label>${label}</label></div>`;
+    const isKill = isKillLeaderboardScenario(results.scenario);
+    return (
+      stat(isKill ? 'Kills' : 'Score', isKill ? results.kills : results.score.toLocaleString()) +
+      stat('Accuracy', Math.round(results.accuracy * 100) + '%') +
+      stat('Hits / Shots', `${results.hits}/${results.shots}`) +
+      stat('Time', this._formatTimePlayed(results.timePlayed))
+    );
+  }
+
+  _showPlaylistIntermission(results) {
+    const run = this._playlistRun;
+    const n = run.playlist.items.length;
+    const next = run.playlist.items[run.index + 1];
+    const $ = (id) => this.root.querySelector(id);
+    if ($('#pl-res-title')) $('#pl-res-title').textContent = run.playlist.name;
+    if ($('#pl-res-progress')) {
+      const title = SCENARIO_META[results.scenario]?.title || results.scenario;
+      $('#pl-res-progress').textContent = `${title} done — mode ${run.index + 1} of ${n}`;
+    }
+    if ($('#pl-res-stats')) $('#pl-res-stats').innerHTML = this._modeStatHtml(results);
+    if ($('#pl-res-lb')) $('#pl-res-lb').innerHTML = '';
+    const cont = $('#pl-res-continue');
+    if (cont) {
+      cont.hidden = false;
+      cont.textContent = next
+        ? `Next: ${SCENARIO_META[next.scenario]?.title || next.scenario}`
+        : 'Continue';
+    }
+    if ($('#pl-res-again')) $('#pl-res-again').hidden = true;
+    this.showScreen('playlist-results');
+  }
+
+  async _finalizePlaylist() {
+    const run = this._playlistRun;
+    const playlist = run.playlist;
+    const combined = combinePlaylistResults(playlist, run.results);
+    const $ = (id) => this.root.querySelector(id);
+
+    if ($('#pl-res-title')) $('#pl-res-title').textContent = `${playlist.name} — complete`;
+    if ($('#pl-res-progress')) {
+      $('#pl-res-progress').textContent = `${playlist.items.length} modes · combined score`;
+    }
+    const stat = (label, val) =>
+      `<div class="stat"><span class="stat-value">${val}</span><label>${label}</label></div>`;
+    if ($('#pl-res-stats')) {
+      $('#pl-res-stats').innerHTML =
+        stat('Total score', combined.score.toLocaleString()) +
+        stat('Kills', combined.kills) +
+        stat('Accuracy', Math.round(combined.accuracy * 100) + '%') +
+        stat('Hits / Shots', `${combined.hits}/${combined.shots}`) +
+        stat('Time', this._formatTimePlayed(combined.timePlayed));
+    }
+    if ($('#pl-res-continue')) $('#pl-res-continue').hidden = true;
+    if ($('#pl-res-again')) $('#pl-res-again').hidden = false;
+    if ($('#pl-res-lb')) $('#pl-res-lb').innerHTML = '<p class="center lb-hint">Loading leaderboard…</p>';
+    this.showScreen('playlist-results');
+
+    // This run is done; allow "Play again" to start a fresh one.
+    this._playlistRun = null;
+
+    let note = '';
+    if (this.auth?.isLoggedIn) {
+      try {
+        await this.auth.ensureProfileReady();
+      } catch (e) {
+        console.warn('[ui] profile ensure failed (playlist)', e);
+      }
+      const res = await submitScore(this.auth.user.id, combined);
+      if (!res.ok && res.reason !== 'offline') note = `Score not saved: ${res.reason}`;
+    } else if (supabaseConfigured()) {
+      note = 'Sign in to save to the playlist leaderboard.';
+    }
+
+    const { list, error } = await fetchLeaderboardWithMeta(
+      PLAYLIST_SCENARIO,
+      playlistConfigKey(playlist),
+      10
+    );
+    const board = this._playlistBoardRowsHtml(list, error);
+    if ($('#pl-res-lb')) {
+      $('#pl-res-lb').innerHTML = note ? `<p class="center lb-hint muted">${note}</p>${board}` : board;
+    }
+  }
+
+  // ---- Playlist leaderboard ----
+
+  _setLbPlaylistMode(on, name = '') {
+    const eloTab = this.root.querySelector('#lb-tab-elo');
+    const selWrap = this.root.querySelector('.lb-mode-select-wrap');
+    const title = this.root.querySelector('#lb-playlist-title');
+    if (eloTab) eloTab.hidden = on;
+    if (selWrap) selWrap.hidden = on;
+    if (title) {
+      title.hidden = !on;
+      title.textContent = name || 'Playlist';
+    }
+  }
+
+  _openPlaylistLeaderboard(playlist) {
+    this._returnAfterLeaderboard = 'playlists';
+    this._setLbPlaylistMode(true, playlist.name);
+    this.showScreen('leaderboard');
+    this._renderPlaylistLeaderboard(playlist);
+  }
+
+  async _renderPlaylistLeaderboard(playlist) {
+    const body = this.root.querySelector('#lb-body');
+    if (!body) return;
+    body.innerHTML = '<p class="center">…</p>';
+    const { list, error } = await fetchLeaderboardWithMeta(
+      PLAYLIST_SCENARIO,
+      playlistConfigKey(playlist),
+      10
+    );
+    body.innerHTML = this._playlistBoardRowsHtml(list, error);
+  }
+
+  _playlistBoardRowsHtml(list, error = null) {
+    if (!supabaseConfigured()) {
+      return '<p class="center lb-hint">Account leaderboards are not configured.</p>';
+    }
+    if (error) {
+      return `<p class="center lb-hint lb-error">Could not load leaderboard: ${this._esc(error)}</p>`;
+    }
+    if (!list.length) {
+      return `<p class="center lb-hint">${this.auth?.isLoggedIn
+        ? 'No scores yet — finish this playlist to appear here.'
+        : 'No scores yet — sign in and play to appear here.'}</p>`;
+    }
+    const rows = list.map((r, i) => {
+      const hl = this.auth?.user?.id && r.user_id === this.auth.user.id ? ' class="hl"' : '';
+      const date = r.achieved_at ? new Date(r.achieved_at).toLocaleDateString() : '—';
+      return `<tr${hl}>
+        <td>${i + 1}</td>
+        ${this._lbPlayerCell(r)}
+        <td class="score">${Number(r.score).toLocaleString()}</td>
+        <td>${Math.round((r.accuracy || 0) * 100)}%</td>
+        <td>${date}</td>
+      </tr>`;
+    }).join('');
+    return `<table class="lb-table">
+      <thead><tr><th>#</th><th>Player</th><th>Score</th><th>Acc</th><th>Date</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
   }
 
   _bindPauseMenu() {
@@ -1912,39 +2540,49 @@ export class UIOverlay {
     }
     body.innerHTML = '<p class="center lb-hint">Loading…</p>';
     try {
-      const { player, global } = await fetchAimComparison(userId, this._aimFilterId || 'all');
-      body.innerHTML = this._aimStatsHtml(player, global);
+      const { player } = await fetchAimComparison(userId, this._aimFilterId || 'all');
+      body.innerHTML = this._aimStatsHtml(player);
     } catch (e) {
       body.innerHTML = `<p class="center lb-hint is-error">${this._esc(e.message || 'Could not load aim analysis.')}</p>`;
     }
   }
 
-  _aimStatsHtml(player, global) {
+  _aimStatsHtml(player) {
     if (!player || !Number(player.games)) {
       return '<p class="center lb-hint">No competitive runs in this range yet.</p>';
     }
-    const g = global || {};
     const num = (v, suffix = '', digits = 0) =>
       v == null || Number.isNaN(Number(v)) ? '—' : `${Number(v).toFixed(digits)}${suffix}`;
-    const trio = (row) =>
-      `${row.flicks_accurate ?? '—'} / ${row.flicks_over ?? '—'} / ${row.flicks_under ?? '—'}`;
-    const clk = (row) =>
-      `${row.clicks_early ?? '—'} / ${row.clicks_accurate ?? '—'} / ${row.clicks_late ?? '—'}`;
+    const trioPct = (row) => {
+      const a = Number(row.flicks_accurate) || 0;
+      const o = Number(row.flicks_over) || 0;
+      const u = Number(row.flicks_under) || 0;
+      const total = a + o + u;
+      if (!total) return '—';
+      const pct = (n) => `${Math.round((n / total) * 100)}%`;
+      return `${pct(a)} / ${pct(o)} / ${pct(u)}`;
+    };
+    const clkPct = (row) => {
+      const e = Number(row.clicks_early) || 0;
+      const a = Number(row.clicks_accurate) || 0;
+      const l = Number(row.clicks_late) || 0;
+      const total = e + a + l;
+      if (!total) return '—';
+      const pct = (n) => `${Math.round((n / total) * 100)}%`;
+      return `${pct(e)} / ${pct(a)} / ${pct(l)}`;
+    };
     const rows = [
-      ['Games', String(player.games), g.games != null ? String(g.games) : '—'],
-      ['Flick speed', num(player.flick_speed_ms, ' ms/°'), num(g.flick_speed_ms, ' ms/°')],
-      ['Flick accuracy', num(player.flick_accuracy_pct, '%'), num(g.flick_accuracy_pct, '%')],
-      ['Tension', num(player.tension_pct, '%'), num(g.tension_pct, '%')],
-      ['Flicks ✓/↑/↓', trio(player), trio(g)],
-      ['Clicks early/on/late', clk(player), clk(g)]
+      ['Games', String(player.games)],
+      ['Flick speed', num(player.flick_speed_ms, ' ms/°')],
+      ['Flick accuracy', num(player.flick_accuracy_pct, '%')],
+      ['Tension', num(player.tension_pct, '%')],
+      ['Flicks ✓/↑/↓', trioPct(player)],
+      ['Clicks early/on/late', clkPct(player)]
     ];
     const body = rows
-      .map(
-        ([label, you, glob]) =>
-          `<tr><td>${label}</td><td class="account-rank">${you}</td><td>${glob}</td></tr>`
-      )
+      .map(([label, you]) => `<tr><td>${label}</td><td class="account-rank">${you}</td></tr>`)
       .join('');
-    return `<table class="account-stats-table"><thead><tr><th>Metric</th><th>You</th><th>Global avg</th></tr></thead><tbody>${body}</tbody></table>`;
+    return `<table class="account-stats-table"><thead><tr><th>Metric</th><th>You</th></tr></thead><tbody>${body}</tbody></table>`;
   }
 
   async _loadAccountReplays(userId = null) {
@@ -3121,10 +3759,10 @@ export class UIOverlay {
     this.state = 'playing';
   }
 
-  /** Begin telemetry capture for a singleplayer run (skips multiplayer). */
+  /** Begin telemetry capture for a singleplayer run (skips multiplayer + playlists). */
   _startRecording() {
     const sc = this.sceneManager.current;
-    if (!this.replayRecorder || !sc || sc.isMultiplayer) return;
+    if (!this.replayRecorder || !sc || sc.isMultiplayer || this._playlistRun) return;
     this.replayRecorder.begin({
       scenario: sc,
       configKey: sc.configKey(),
@@ -3190,6 +3828,8 @@ export class UIOverlay {
     this._countdownRemaining = 0;
     this._hideCountdownOverlay();
     this.replayRecorder?.cancel(); // abandoned run — discard its recording
+    this._playlistRun = null; // abandon any in-progress playlist
+    this.settings.endModeOverride();
     this.state = 'menu';
     this._resetMpChat();
     this._hideMpTabScoreboard();
@@ -3237,6 +3877,10 @@ export class UIOverlay {
   }
 
   async _onFinish(results) {
+    if (this._playlistRun) {
+      this._onPlaylistModeFinish(results);
+      return;
+    }
     this.state = 'results';
     this.input.exitLock();
     const title = this.root.querySelector('#res-title');
@@ -3889,6 +4533,7 @@ export class UIOverlay {
   }
 
   _openLeaderboard() {
+    this._setLbPlaylistMode(false);
     const fromTraining =
       this.currentScenario && SCENARIOS[this.currentScenario]
         ? this.currentScenario
@@ -3899,6 +4544,7 @@ export class UIOverlay {
 
   _openLeaderboardForScenario(scenario) {
     if (!SCENARIOS[scenario]) return;
+    this._setLbPlaylistMode(false);
     this._returnAfterLeaderboard = 'training';
     this.currentScenario = scenario;
     this._setLeaderboardView(scenario);
@@ -3909,6 +4555,7 @@ export class UIOverlay {
   _leaveLeaderboard() {
     const dest = this._returnAfterLeaderboard || 'menu';
     this._returnAfterLeaderboard = 'menu';
+    this._setLbPlaylistMode(false);
     this.showScreen(dest);
   }
 

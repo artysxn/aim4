@@ -21,6 +21,10 @@ create table if not exists public.scores (
   id bigint generated always as identity primary key,
   user_id uuid not null references auth.users on delete cascade,
   scenario text not null, -- gridshot | stars | microflicks | tracking | pasu | …
+                          -- 'playlist' rows store a combined score; config_key is
+                          -- a stable hash of the playlist's ordered modes. No
+                          -- schema change needed — the score-ranked RPC branch
+                          -- (below) already handles any non-kill scenario.
   config_key text not null,
   score integer not null,
   accuracy real,

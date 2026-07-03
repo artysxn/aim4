@@ -17,6 +17,8 @@ import { RangeScenario } from '../scenarios/RangeScenario.js';
 import { TrackingScenario } from '../scenarios/TrackingScenario.js';
 import { DeathmatchScenario } from '../scenarios/DeathmatchScenario.js';
 import { MultiplayerDuelScenario } from '../scenarios/MultiplayerDuelScenario.js';
+import { DURATION_MODES, resolveModeDuration } from './SettingsManager.js';
+import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 
 // Singleplayer scenarios — these are the ones shown as menu cards + leaderboards.
 export const SCENARIOS = {
@@ -74,9 +76,39 @@ export class SceneManager {
       crosshair: this.crosshair,
       requestFinish: () => this.finishRun()
     });
-    // A scenario may opt out of the fixed run timer (e.g. multiplayer "first to X").
-    this.duration = this.current.runDuration ?? this.settings.data.runDuration;
+    this._applyDuration(name, config);
     this.finished = false;
+  }
+
+  /**
+   * Resolve the run length. Competitive runs and non-SP scenarios (multiplayer)
+   * keep the scenario's own runDuration. Practice runs of the standard modes use
+   * the per-mode duration (config code first, else settings): time ends on the
+   * clock, kills ends when the kill target is hit (timer disabled, HUD counts up).
+   */
+  _applyDuration(name, config) {
+    const sc = this.current;
+    if (sc.competitive || !DURATION_MODES.includes(name)) {
+      this.duration = sc.runDuration ?? this.settings.data.runDuration;
+      return;
+    }
+    const cd = config?.duration;
+    const dur = (cd && (cd.type === 'time' || cd.type === 'kills') && Number(cd.value) > 0)
+      ? { type: cd.type, value: Number(cd.value) }
+      : resolveModeDuration(this.settings.data?.[name], this.settings.data.runDuration);
+    // A kills target only makes sense where kills accrue; otherwise the run
+    // would never end. Fall back to the clock for non-kill modes.
+    if (dur.type === 'kills' && isKillLeaderboardScenario(name)) {
+      sc.killTarget = Math.max(1, Math.round(dur.value));
+      sc.showElapsedTime = true; // HUD counts elapsed up instead of a remaining clock
+      this.duration = Infinity;
+    } else {
+      // For a demoted kills config the value is a kill count, not seconds —
+      // fall back to the global run duration rather than mis-reading it.
+      const seconds = dur.type === 'time' ? dur.value : (Number(this.settings.data.runDuration) || 60);
+      this.duration = seconds;
+      sc.runDuration = seconds;
+    }
   }
 
   begin() {
@@ -107,10 +139,14 @@ export class SceneManager {
   update(dt) {
     if (!this.current) return;
     this.current.update(dt);
-    if (this.current.running && !this.finished && Number.isFinite(this.duration) && this.current.elapsed >= this.duration) {
-      this.finished = true;
-      this.current.pause();
-      if (this.onFinish) this.onFinish(this.current.results());
+    if (this.current.running && !this.finished) {
+      const timeUp = Number.isFinite(this.duration) && this.current.elapsed >= this.duration;
+      const killsUp = this.current.killTarget > 0 && this.current.kills >= this.current.killTarget;
+      if (timeUp || killsUp) {
+        this.finished = true;
+        this.current.pause();
+        if (this.onFinish) this.onFinish(this.current.results());
+      }
     }
   }
 

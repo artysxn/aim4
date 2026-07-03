@@ -84,6 +84,9 @@ export class BaseScenario {
 
     this.elapsed = 0; // seconds, accumulates only while running
     this.running = false;
+    // > 0 ⇒ run ends when kills reach this target (set by SceneManager for
+    // kills-based practice/playlist runs); 0 ⇒ run ends on the clock instead.
+    this.killTarget = 0;
     // Every scenario fires a weapon (ammo + viewmodel). The id selects the model
     // from the registry; default is the full-auto rifle, overridden per scenario.
     this.usesWeapon = true;

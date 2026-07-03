@@ -214,6 +214,29 @@ const DEFAULTS = {
   }
 };
 
+// Per-mode run length. Absent by default — the global runDuration is the
+// effective length until a mode sets an explicit override here. `time` ends on
+// the clock (seconds); `kills` ends when the kill target is reached. Baked into
+// mode config codes / playlist items so a shared playlist runs identically for
+// everyone (independent of the runner's own global duration).
+export const DURATION_DEFAULT = { type: 'time', value: 60 };
+
+// Modes that expose a practice duration control (and ship in playlists).
+export const DURATION_MODES = [
+  'gridshot', 'stars', 'microflicks', 'pasu', 'spidershot',
+  'survival', 'arena', 'duels', 'range', 'tracking', 'deathmatch'
+];
+
+/** Resolve a usable duration ({ type, value }) from a scenario settings blob. */
+export function resolveModeDuration(modeData, fallbackSeconds = 60) {
+  const d = modeData?.duration;
+  const value = Number(d?.value);
+  if (d && (d.type === 'kills' || d.type === 'time') && Number.isFinite(value) && value > 0) {
+    return { type: d.type, value };
+  }
+  return { type: 'time', value: Number(fallbackSeconds) || 60 };
+}
+
 export class SettingsManager {
   constructor() {
     this.data = this._load();
@@ -226,6 +249,7 @@ export class SettingsManager {
     this._cloudSyncPaused = false;
     this._exploreMode = false;
     this._replayBackup = null;
+    this._modeOverride = null;
   }
 
   _load() {
@@ -458,6 +482,48 @@ export class SettingsManager {
   /** Snapshot of all user settings for export. */
   getExportPayload() {
     return structuredClone(this.activeSettings());
+  }
+
+  /** Snapshot one mode's config for a mode share code, with duration baked in. */
+  getModeConfig(scenario) {
+    const src = this.activeSettings() || {};
+    const config = structuredClone(src[scenario] || {});
+    config.duration = resolveModeDuration(config, src.runDuration);
+    return { scenario, config };
+  }
+
+  /** Merge an imported mode config onto the editing draft for that scenario. */
+  applyModeConfigToDraft(scenario, config) {
+    this.mutateDraft((d) => {
+      d[scenario] = this._deepMerge(d[scenario] || {}, structuredClone(config || {}));
+    });
+  }
+
+  /**
+   * Temporarily merge a mode config onto live data so a scenario constructed
+   * right now reads the playlist's settings instead of the user's. Scenarios
+   * cache their config at construction, so this only needs to span the load()
+   * call — endModeOverride() restores the user's saved settings immediately
+   * after. Never persisted (no save()), so localStorage is untouched.
+   */
+  beginModeOverride(scenario, config) {
+    this.endModeOverride();
+    this._modeOverride = { scenario, data: structuredClone(this.data[scenario]) };
+    this.data[scenario] = this._deepMerge(
+      structuredClone(this.data[scenario] || {}),
+      structuredClone(config || {})
+    );
+  }
+
+  endModeOverride() {
+    if (!this._modeOverride) return;
+    this.data[this._modeOverride.scenario] = this._modeOverride.data;
+    this._modeOverride = null;
+  }
+
+  /** Resolved run length for a standalone practice run of this scenario. */
+  durationForScenario(scenario) {
+    return resolveModeDuration(this.data?.[scenario], this.data?.runDuration);
   }
 
   /** Replace local settings from an imported snapshot. */
