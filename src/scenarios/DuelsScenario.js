@@ -32,6 +32,7 @@ import { gridLineColors } from '../utils/ColorUtils.js';
 import { markBulletDecalSurface, worldImpactNormal } from '../utils/bulletImpact.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
+import { DEFAULTS } from '../core/SettingsManager.js';
 import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 import { movementHitScale, movementReactionDelay, isPointVisible } from '../utils/spawnVisibility.js';
 import { SHOT_INTERVAL } from '../weapons/ak47.js';
@@ -327,7 +328,7 @@ const JIGGLE_ENGAGE_AIM_DEG = 10;
 export class DuelsScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
-    const d = this.settings.data.duels;
+    const d = this.competitive ? DEFAULTS.duels : this.settings.data.duels;
     const choice = this.config.arena ?? d.arena;
     const resolved = resolveDuelsArenaChoice(ARENAS, choice);
     this.arenaIndex = resolved.index;

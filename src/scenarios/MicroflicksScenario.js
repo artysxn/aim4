@@ -8,6 +8,7 @@ import { randRange, clamp } from '../utils/MathUtils.js';
 import { StarsScenario } from './StarsScenario.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
+import { DEFAULTS } from '../core/SettingsManager.js';
 
 const BASE_BOUNDS_W = 9;
 const BASE_BOUNDS_H = 5;
@@ -23,7 +24,7 @@ export class MicroflicksScenario extends StarsScenario {
   constructor(opts) {
     const variant = opts.config?.variant === 'competitive' ? 'competitive' : 'practice';
     const preset = variant === 'competitive' ? competitivePresetFor('microflicks') : null;
-    const m = opts.settings?.data?.microflicks ?? {};
+    const m = variant === 'competitive' ? DEFAULTS.microflicks : (opts.settings?.data?.microflicks ?? {});
     const boundsScaleX =
       preset?.boundsScaleX ?? opts.config?.boundsScaleX ?? m.boundsScaleX ?? DEFAULT_BOUNDS_SCALE_X;
     const boundsScaleY =

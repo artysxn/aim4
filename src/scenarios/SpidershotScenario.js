@@ -13,6 +13,7 @@ import { gridLineColors } from '../utils/ColorUtils.js';
 import { EYE_HEIGHT } from '../core/Engine.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
+import { DEFAULTS } from '../core/SettingsManager.js';
 
 const BASE_BOUNDS_W = 12;
 const BASE_BOUNDS_H = 6;
@@ -26,7 +27,7 @@ export class SpidershotScenario extends BaseScenario {
     super(opts);
     this.weaponId = 'pistol';
     const preset = this.competitive ? competitivePresetFor('spidershot') : null;
-    const s = this.settings.data.spidershot;
+    const s = this.competitive ? DEFAULTS.spidershot : this.settings.data.spidershot;
     this.targetSize = preset?.targetSize ?? this.config.targetSize ?? s.targetSize;
     this.timeToKill = (preset?.timeToKill ?? this.config.timeToKill ?? s.timeToKill) / 1000;
     this.maxDistance = preset?.maxDistance ?? this.config.maxDistance ?? s.maxDistance;

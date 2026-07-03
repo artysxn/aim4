@@ -14,6 +14,7 @@ import { SourceMover1D, UNIT } from '../utils/SourceMovement.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
+import { DEFAULTS } from '../core/SettingsManager.js';
 import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 
 const BODY_R = 0.35;
@@ -44,7 +45,7 @@ export class TrackingScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
     const preset = this.competitive ? competitivePresetFor('tracking') : null;
-    const t = this.settings.data.tracking;
+    const t = this.competitive ? DEFAULTS.tracking : this.settings.data.tracking;
 
     this.botWidth = preset?.botWidth ?? this.config.botWidth ?? t.botWidth ?? 1;
     this.botSpeedMul = preset?.botSpeed ?? this.config.botSpeed ?? t.botSpeed ?? 1;

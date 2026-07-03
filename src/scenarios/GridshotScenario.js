@@ -13,6 +13,7 @@ import { gridLineColors } from '../utils/ColorUtils.js';
 import { EYE_HEIGHT } from '../core/Engine.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
+import { DEFAULTS } from '../core/SettingsManager.js';
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
@@ -26,7 +27,7 @@ export class GridshotScenario extends BaseScenario {
     super(opts);
     this.weaponId = 'pistol'; // Gridshot is a pistol mode
     const preset = this.competitive ? competitivePresetFor('gridshot') : null;
-    const g = this.settings.data.gridshot;
+    const g = this.competitive ? DEFAULTS.gridshot : this.settings.data.gridshot;
     this.targetSize = preset?.targetSize ?? this.config.targetSize ?? g.targetSize;
     this.targetCount = preset?.targetCount ?? this.config.targetCount ?? g.targetCount;
     this.enableTimeLimit = this.config.enableTimeLimit ?? g.enableTimeLimit;

@@ -50,7 +50,7 @@ export function getResolutionSpec(data) {
   return { size: null };
 }
 
-const DEFAULTS = {
+export const DEFAULTS = {
   sensitivity: SENSITIVITY_DEFAULT,
   hFov: 90,
   resolution: 'native',

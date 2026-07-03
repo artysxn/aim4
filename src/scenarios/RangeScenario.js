@@ -21,6 +21,7 @@ import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '.
 import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
+import { DEFAULTS } from '../core/SettingsManager.js';
 import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 
 const BODY_R = 0.35;
@@ -44,7 +45,7 @@ export class RangeScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
     const preset = this.competitive ? competitivePresetFor('range') : null;
-    const r = this.settings.data.range;
+    const r = this.competitive ? DEFAULTS.range : this.settings.data.range;
     this.arcDeg = preset?.arc ?? this.config.arc ?? r.arc;
     this.enemyCount = preset?.enemyCount ?? this.config.enemyCount ?? r.enemyCount;
     this.radius = preset?.radius ?? this.config.radius ?? r.radius;

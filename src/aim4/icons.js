@@ -1,23 +1,23 @@
-// AIM4 menu / scenario icons (Material Symbols SVGs in this folder)
-import gridshot from './calendar_view_month_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import stars from './snowing_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import microflicks from './recenter_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import pasu from './automation_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import spidershot from './hive_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import survival from './cycle_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import arena from './switch_access_2_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import duels from './swords_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import range from './arrow_range_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import tracking from './swap_vert_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import deathmatch from './skull_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import exercise from './exercise_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import crown from './crown_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import globe from './globe_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import group from './group_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import person from './person_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import trophy from './trophy_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import logout from './logout_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
-import settings from './settings_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?url';
+// AIM4 menu / scenario icons — sourced exclusively from src/icons/
+import gridshot    from '../icons/mode_gridshot.svg?url';
+import stars       from '../icons/mode_stars.svg?url';
+import microflicks from '../icons/mode_microflicks.svg?url';
+import pasu        from '../icons/mode_pasu.svg?url';
+import spidershot  from '../icons/mode_spidershot.svg?url';
+import survival    from '../icons/mode_survival.svg?url';
+import arena       from '../icons/mode_crossfire.svg?url';
+import duels       from '../icons/mode_duels.svg?url';
+import range       from '../icons/mode_range.svg?url';
+import tracking    from '../icons/mode_tracking.svg?url';
+import deathmatch  from '../icons/mode_deathmatch.svg?url';
+
+import matchmaking from '../icons/icon_matchmaking.svg?url';
+import training    from '../icons/icon_training.svg?url';
+import customgames from '../icons/icon_customgames.svg?url';
+import multiplayer from '../icons/icon_multiplayer.svg?url';
+import leaderboard from '../icons/icon_leaderboards.svg?url';
+import account     from '../icons/icon_account.svg?url';
+import settings    from '../icons/icon_settings.svg?url';
 
 /** Scenario card icons keyed by SceneManager scenario id. */
 export const SCENARIO_ICONS = {
@@ -34,11 +34,11 @@ export const SCENARIO_ICONS = {
   deathmatch
 };
 
-export const MATCHMAKING_ICON = crown;
-export const TRAINING_ICON = exercise;
-export const CUSTOM_GAMES_ICON = globe;
-export const MULTIPLAYER_ICON = group;
-export const LEADERBOARD_ICON = trophy;
-export const ACCOUNT_ICON = person;
-export const LOGOUT_ICON = logout;
-export const SETTINGS_ICON = settings;
+export const MATCHMAKING_ICON   = matchmaking;
+export const TRAINING_ICON      = training;
+export const CUSTOM_GAMES_ICON  = customgames;
+export const MULTIPLAYER_ICON   = multiplayer;
+export const LEADERBOARD_ICON   = leaderboard;
+export const ACCOUNT_ICON       = account;
+export const LOGOUT_ICON        = account; // no dedicated logout icon in the icon set
+export const SETTINGS_ICON      = settings;

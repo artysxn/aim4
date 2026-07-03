@@ -13,6 +13,7 @@ import { gridLineColors } from '../utils/ColorUtils.js';
 import { EYE_HEIGHT } from '../core/Engine.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
+import { DEFAULTS } from '../core/SettingsManager.js';
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
@@ -26,7 +27,7 @@ export class PasuScenario extends BaseScenario {
     super(opts);
     this.weaponId = 'pistol';
     const preset = this.competitive ? competitivePresetFor('pasu') : null;
-    const p = this.settings.data.pasu;
+    const p = this.competitive ? DEFAULTS.pasu : this.settings.data.pasu;
     this.targetSize = preset?.targetSize ?? this.config.targetSize ?? p.targetSize;
     this.targetCount = preset?.targetCount ?? this.config.targetCount ?? p.targetCount;
     this.enableTimeLimit = this.config.enableTimeLimit ?? p.enableTimeLimit;

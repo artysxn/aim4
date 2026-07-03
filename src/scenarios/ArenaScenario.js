@@ -25,6 +25,7 @@ import { gridLineColors } from '../utils/ColorUtils.js';
 import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
+import { DEFAULTS } from '../core/SettingsManager.js';
 import { startMissFlash, updateMissFlash } from './missFlash.js';
 import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 
@@ -45,7 +46,7 @@ export class ArenaScenario extends BaseScenario {
     super(opts);
     this.weaponId = 'pistol'; // Crossfire is a pistol mode
     const preset = this.competitive ? competitivePresetFor('arena') : null;
-    const a = this.settings.data.arena;
+    const a = this.competitive ? DEFAULTS.arena : this.settings.data.arena;
     this.crossDur = (preset?.crossDuration ?? this.config.crossDuration ?? a.crossDuration) / 1000;
     this.peekHold = (preset?.peekHold ?? this.config.peekHold ?? a.peekHold) / 1000;
     this.colCount = Math.max(2, preset?.columns ?? this.config.columns ?? a.columns);

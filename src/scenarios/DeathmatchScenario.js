@@ -21,6 +21,7 @@ import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { SHOT_INTERVAL } from '../weapons/ak47.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
+import { DEFAULTS } from '../core/SettingsManager.js';
 import { DEATHMATCH_MAP, deathmatchExtent } from './deathmatchMap.js';
 import { eyeOffset, HEAD_R, HEAD_OFFSET, SPAWN_GRACE } from '../multiplayer/constants.js';
 import { pickSpawnPreferHidden, movementHitScale, movementReactionDelay, isPointVisible } from '../utils/spawnVisibility.js';
@@ -66,7 +67,7 @@ const _impactNormal = new THREE.Vector3();
 export class DeathmatchScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
-    const d = this.settings.data.deathmatch;
+    const d = this.competitive ? DEFAULTS.deathmatch : this.settings.data.deathmatch;
     const preset = this.competitive ? competitivePresetFor('deathmatch') : null;
 
     this.botCount = clamp(

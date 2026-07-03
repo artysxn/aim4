@@ -9,6 +9,7 @@ import { Target } from '../components/Target.js';
 import { GridshotScenario } from './GridshotScenario.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
+import { DEFAULTS } from '../core/SettingsManager.js';
 
 const TARGET_SIZE = 0.1;
 const TARGET_COUNT = 200;
@@ -19,7 +20,7 @@ export class StarsScenario extends GridshotScenario {
   constructor(opts) {
     const variant = opts.config?.variant === 'competitive' ? 'competitive' : 'practice';
     const preset = variant === 'competitive' ? competitivePresetFor('stars') : null;
-    const s = opts.settings?.data?.stars ?? {};
+    const s = variant === 'competitive' ? DEFAULTS.stars : (opts.settings?.data?.stars ?? {});
     const boundsScaleX =
       preset?.boundsScaleX ?? opts.config?.boundsScaleX ?? s.boundsScaleX ?? DEFAULT_BOUNDS_SCALE_X;
 
