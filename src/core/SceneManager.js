@@ -17,6 +17,14 @@ import { RangeScenario } from '../scenarios/RangeScenario.js';
 import { TrackingScenario } from '../scenarios/TrackingScenario.js';
 import { DeathmatchScenario } from '../scenarios/DeathmatchScenario.js';
 import { BounceScenario } from '../scenarios/BounceScenario.js';
+import { SequenceScenario } from '../scenarios/SequenceScenario.js';
+import { DoubleScenario } from '../scenarios/DoubleScenario.js';
+import { BallScenario } from '../scenarios/BallScenario.js';
+import { BounceTrackingScenario } from '../scenarios/BounceTrackingScenario.js';
+import { PasuTrackingScenario } from '../scenarios/PasuTrackingScenario.js';
+import { TurnScenario } from '../scenarios/TurnScenario.js';
+import { GalaxyScenario } from '../scenarios/GalaxyScenario.js';
+import { WavesScenario } from '../scenarios/WavesScenario.js';
 import { MultiplayerDuelScenario } from '../scenarios/MultiplayerDuelScenario.js';
 import { DURATION_MODES, resolveModeDuration } from './SettingsManager.js';
 import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
@@ -34,7 +42,15 @@ export const SCENARIOS = {
   duels: DuelsScenario,
   range: RangeScenario,
   tracking: TrackingScenario,
-  deathmatch: DeathmatchScenario
+  deathmatch: DeathmatchScenario,
+  sequence: SequenceScenario,
+  double: DoubleScenario,
+  ball: BallScenario,
+  bouncetracking: BounceTrackingScenario,
+  pasutracking: PasuTrackingScenario,
+  turn: TurnScenario,
+  galaxy: GalaxyScenario,
+  waves: WavesScenario
 };
 
 // Scenarios launched outside the card grid (e.g. multiplayer).

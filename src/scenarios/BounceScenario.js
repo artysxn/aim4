@@ -20,13 +20,17 @@ const ARC_HALF = Math.PI / 4; // 90° field centred on forward
 const GRAVITY = 12; // m/s² — snappier than earth gravity, reads as "bouncy"
 const RADIAL_SPEED_MIN = 0.5; // m/s forward/back drift
 const RADIAL_SPEED_MAX = 1.4;
+// Horizontal direction changes ease over ~1/TURN_EASE s instead of snapping.
+const TURN_EASE = 3.2;
 
 export class BounceScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
     this.weaponId = 'pistol';
-    const preset = this.competitive ? competitivePresetFor('bounce') : null;
-    const b = this.competitive ? DEFAULTS.bounce : this.settings.data.bounce ?? DEFAULTS.bounce;
+    // Keyed by this.name so subclasses (Bounce Tracking) get their own preset,
+    // defaults and settings blob without re-implementing the constructor.
+    const preset = this.competitive ? competitivePresetFor(this.name) : null;
+    const b = (this.competitive ? DEFAULTS[this.name] : this.settings.data[this.name]) ?? DEFAULTS.bounce;
     this.targetSize = preset?.targetSize ?? this.config.targetSize ?? b.targetSize;
     this.targetCount = preset?.targetCount ?? this.config.targetCount ?? b.targetCount;
     // Angular travel speed (deg/s around the player) — constant per ball.
@@ -142,11 +146,16 @@ export class BounceScenario extends BaseScenario {
     target._mesh = mesh;
     target.addCollider(mesh, { zone: 'body', points: 1, crit: false });
 
+    // Spawn in the far 40% of the distance band so fresh balls appear well back.
+    const spawnNear = this.minDistance + (this.maxDistance - this.minDistance) * 0.6;
+    const omega = (this.travelSpeed * Math.PI) / 180;
+    const thetaDir = Math.random() < 0.5 ? -1 : 1;
     target._bounce = {
       theta: randRange(-ARC_HALF * 0.9, ARC_HALF * 0.9),
-      thetaDir: Math.random() < 0.5 ? -1 : 1,
-      omega: (this.travelSpeed * Math.PI) / 180,
-      r: randRange(this.minDistance, this.maxDistance),
+      thetaDir,
+      omega,
+      omegaCur: thetaDir * omega, // eased angular velocity (smooth reversals)
+      r: randRange(spawnNear, this.maxDistance),
       vr: randRange(RADIAL_SPEED_MIN, RADIAL_SPEED_MAX) * (Math.random() < 0.5 ? -1 : 1),
       y: randRange(this.targetSize, this.bounceHeight),
       vy: this._bounceVel() * randRange(-0.5, 0.5)
@@ -161,15 +170,19 @@ export class BounceScenario extends BaseScenario {
       const s = t._bounce;
       if (!s) continue;
 
-      // Left-right: stable angular speed, direction reflects at the arc edges.
-      s.theta += s.thetaDir * s.omega * dt;
-      if (s.theta < -ARC_HALF) {
-        s.theta = -ARC_HALF;
-        s.thetaDir = 1;
-      } else if (s.theta > ARC_HALF) {
-        s.theta = ARC_HALF;
-        s.thetaDir = -1;
-      }
+      // Left-right: the desired direction flips at the arc edges, but the
+      // actual angular velocity eases toward it so reversals read as a smooth
+      // deceleration + turn instead of an instant snap.
+      if (s.theta <= -ARC_HALF && s.thetaDir < 0) s.thetaDir = 1;
+      else if (s.theta >= ARC_HALF && s.thetaDir > 0) s.thetaDir = -1;
+      if (s.omegaCur == null) s.omegaCur = s.thetaDir * s.omega;
+      const omegaTarget = s.thetaDir * s.omega;
+      s.omegaCur += (omegaTarget - s.omegaCur) * Math.min(1, TURN_EASE * dt);
+      s.theta += s.omegaCur * dt;
+      // Never let the eased turn carry a ball meaningfully past the arc.
+      const over = ARC_HALF * 1.08;
+      if (s.theta < -over) s.theta = -over;
+      else if (s.theta > over) s.theta = over;
 
       // Forward/back: slow drift, reflecting between min and max distance.
       s.r += s.vr * dt;

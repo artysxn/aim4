@@ -111,8 +111,8 @@ export const DEFAULTS = {
     targetSize: 0.35,
     targetCount: 4,
     travelSpeed: 35, // deg/s angular travel around the player
-    minDistance: 6, // metres — nearest a ball drifts
-    maxDistance: 12, // metres — furthest a ball drifts
+    minDistance: 10, // metres — nearest a ball drifts
+    maxDistance: 18, // metres — furthest a ball drifts
     bounceHeight: 2.2, // metres — floor-bounce apex
     infiniteAmmo: true,
     viewmodelRecoil: false,
@@ -232,6 +232,67 @@ export const DEFAULTS = {
     boundsScaleX: 2.0,
     boundsScaleY: 1.0,
     missLimit: 0
+  },
+  sequence: {
+    targetSize: 0.25,
+    dotTime: 1500, // ms to shoot each chain dot before it despawns
+    startDistance: 0.8, // m — first follow-up dot's distance from the kill
+    distanceStep: 0.35, // m — added distance per kill in the chain
+    infiniteAmmo: true,
+    viewmodelRecoil: false,
+    missLimit: 0
+  },
+  double: {
+    targetSize: 0.25,
+    canvasSize: 3.0, // m — square canvas edge
+    canvasDistance: 4.0, // m — gap between neighbouring canvases
+    canvasCount: 2,
+    layout: 'flat', // flat = side by side on the wall | around = curved ring
+    infiniteAmmo: true,
+    viewmodelRecoil: false,
+    missLimit: 0
+  },
+  ball: {
+    targetSize: 0.5,
+    travelSpeed: 60, // deg/s — quicker than Bounce
+    minDistance: 8,
+    maxDistance: 16,
+    bounceHeight: 2.5
+  },
+  bouncetracking: {
+    targetSize: 0.45, // slightly bigger than Bounce
+    targetCount: 3, // fewer balls
+    travelSpeed: 28, // slightly slower
+    minDistance: 10,
+    maxDistance: 16,
+    bounceHeight: 2.2,
+    holdTime: 0.5, // s of uninterrupted crosshair time before a ball is clickable
+    infiniteAmmo: true,
+    viewmodelRecoil: false,
+    missLimit: 0
+  },
+  pasutracking: {
+    targetSize: 0.33, // slightly smaller than Pasu
+    targetCount: 3,
+    enableTimeLimit: false,
+    maxTargetAge: 1200,
+    mode: 'tracking',
+    trackTime: 0.5, // s on target before the shot is allowed
+    trackResolve: 'click',
+    travelSpeedMax: 2.0, // slower drift than Pasu
+    boundsScaleX: 1.0,
+    boundsScaleY: 1.0,
+    angleOffset: 360,
+    infiniteAmmo: true,
+    viewmodelRecoil: false,
+    missLimit: 0
+  },
+  turn: {
+    targetSize: 0.15,
+    dotTime: 2000, // ms before an unkilled dot despawns
+    infiniteAmmo: true,
+    viewmodelRecoil: false,
+    missLimit: 0
   }
 };
 
@@ -245,7 +306,8 @@ export const DURATION_DEFAULT = { type: 'time', value: 60 };
 // Modes that expose a practice duration control (and ship in playlists).
 export const DURATION_MODES = [
   'gridshot', 'stars', 'bounce', 'microflicks', 'pasu', 'spidershot',
-  'survival', 'arena', 'duels', 'range', 'tracking', 'deathmatch'
+  'survival', 'arena', 'duels', 'range', 'tracking', 'deathmatch',
+  'sequence', 'double', 'ball', 'bouncetracking', 'pasutracking', 'turn'
 ];
 
 /** Resolve a usable duration ({ type, value }) from a scenario settings blob. */

@@ -36,10 +36,11 @@ export const RATING_LABELS = {
   tracking: 'Tracking'
 };
 
-// Base gamemodes that carry a rating config (not custom/playlist runs).
+// Base gamemodes that carry a rating config (not custom/playlist/challenge runs).
 export const RATED_GAMEMODES = [
   'gridshot', 'stars', 'bounce', 'microflicks', 'pasu', 'spidershot',
-  'survival', 'arena', 'duels', 'range', 'tracking', 'deathmatch'
+  'survival', 'arena', 'duels', 'range', 'tracking', 'deathmatch',
+  'sequence', 'double', 'ball', 'bouncetracking', 'pasutracking', 'turn'
 ];
 
 // Baseline categories that need a config value (Precision is curve-only).
@@ -83,6 +84,35 @@ export function loadBaselines() {
 
 export function saveBaselines(config) {
   return Storage.write(STORAGE_KEY, config);
+}
+
+// ---- Server sync ------------------------------------------------------------
+// Baselines live on the game server (edited via /tools/editvalues.html, stored
+// in server/data/baselines.json). The client pulls them once per session and
+// mirrors them into localStorage, which stays the offline fallback.
+
+// Optional-chained: import.meta.env only exists under Vite (not node --test).
+const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
+let _serverSynced = false;
+
+/**
+ * Fetch the shared baselines from the server and mirror them locally.
+ * Safe to call repeatedly — only the first call per session hits the network.
+ * Resolves regardless of outcome so callers can just `await` it.
+ */
+export async function syncBaselinesFromServer() {
+  if (_serverSynced) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/baselines`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data?.baselines && typeof data.baselines === 'object') {
+      Storage.write(STORAGE_KEY, data.baselines);
+    }
+    _serverSynced = true;
+  } catch {
+    /* offline / server unreachable — keep the local mirror */
+  }
 }
 
 /** Baseline object for one gamemode (falls back to the shared default). */

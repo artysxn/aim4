@@ -26,8 +26,10 @@ export class PasuScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
     this.weaponId = 'pistol';
-    const preset = this.competitive ? competitivePresetFor('pasu') : null;
-    const p = this.competitive ? DEFAULTS.pasu : this.settings.data.pasu;
+    // Keyed by this.name so subclasses (Pasu Tracking) get their own preset,
+    // defaults and settings blob without re-implementing the constructor.
+    const preset = this.competitive ? competitivePresetFor(this.name) : null;
+    const p = (this.competitive ? DEFAULTS[this.name] : this.settings.data[this.name]) ?? DEFAULTS.pasu;
     this.targetSize = preset?.targetSize ?? this.config.targetSize ?? p.targetSize;
     this.targetCount = preset?.targetCount ?? this.config.targetCount ?? p.targetCount;
     this.enableTimeLimit = this.config.enableTimeLimit ?? p.enableTimeLimit;

@@ -30,6 +30,7 @@ import {
   RATING_LABELS,
   RATED_GAMEMODES,
   loadBaselines,
+  syncBaselinesFromServer,
   baselinesForGamemode,
   calculateAim4Ratings,
   telemetryFromAimStats,
@@ -62,7 +63,7 @@ import { MultiplayerController } from '../multiplayer/MultiplayerController.js';
 import { SCORE_TARGETS, MM_SCORE_TARGET, TRACKING_DURATION } from '../multiplayer/constants.js';
 import { getMap } from '../multiplayer/maps.js';
 import { formatServerRegion } from '../multiplayer/regionLabels.js';
-import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, PLAYLISTS_ICON as PLAYLISTS_TILE_ICON, CUSTOM_GAMES_ICON, MULTIPLAYER_ICON, LEADERBOARD_ICON, ACCOUNT_ICON, LOGOUT_ICON, SETTINGS_ICON } from '../aim4/icons.js';
+import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, PLAYLISTS_ICON as PLAYLISTS_TILE_ICON, CUSTOM_GAMES_ICON, MULTIPLAYER_ICON, LEADERBOARD_ICON, ACCOUNT_ICON, LOGOUT_ICON, SETTINGS_ICON, PRECISION_ICON, ALL_MODES_ICON } from '../aim4/icons.js';
 import { ARENAS } from '../scenarios/DuelsScenario.js';
 import { duelsArenaSelectOptions } from '../scenarios/duelsArenas.js';
 import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
@@ -70,16 +71,24 @@ import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 const SCENARIO_META = {
   gridshot: { title: 'Gridshot', dualPlay: true, tags: ['Speed', 'Accuracy'] },
   stars: { title: 'Stars', dualPlay: true, tags: ['Accuracy'] },
-  bounce: { title: 'Bounce', dualPlay: true, tags: ['Speed', 'Reactions'] },
+  bounce: { title: 'Bounce (Clicks)', dualPlay: true, tags: ['Speed', 'Reactions'] },
   microflicks: { title: 'Microflicks', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
-  pasu: { title: 'Pasu', dualPlay: true, tags: ['Accuracy', 'Reactions', 'Control'] },
+  pasu: { title: 'Pasu (Clicks)', dualPlay: true, tags: ['Accuracy', 'Reactions', 'Control'] },
   spidershot: { title: 'Spidershot', dualPlay: true, tags: ['Speed', 'Reactions'] },
   survival: { title: 'Survival', dualPlay: true, tags: ['Speed', 'Control'] },
   arena: { title: 'Crossfire', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
   duels: { title: 'Duels', dualPlay: true, tags: ['Movement', 'Reactions'] },
   range: { title: 'Range', dualPlay: true, tags: ['Movement'] },
-  tracking: { title: 'Tracking', dualPlay: true, tags: ['Accuracy'] },
-  deathmatch: { title: 'Deathmatch', dualPlay: true, tags: ['Movement', 'Speed', 'Control'] }
+  tracking: { title: 'Strafes', dualPlay: true, tags: ['Accuracy'] },
+  deathmatch: { title: 'Deathmatch', dualPlay: true, tags: ['Movement', 'Speed', 'Control'] },
+  sequence: { title: 'Sequence', dualPlay: true, tags: ['Speed', 'Accuracy', 'Reactions'] },
+  double: { title: 'Double', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
+  ball: { title: 'Ball', dualPlay: true, tags: ['Accuracy', 'Control'] },
+  bouncetracking: { title: 'Bounce (Tracking)', dualPlay: true, tags: ['Control', 'Reactions'] },
+  pasutracking: { title: 'Pasu (Tracking)', dualPlay: true, tags: ['Accuracy', 'Control'] },
+  turn: { title: 'Turn', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
+  galaxy: { title: 'Galaxy', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] },
+  waves: { title: 'Waves', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] }
 };
 
 /** Scenarios with practice-only tuning (gear on training card). */
@@ -95,24 +104,38 @@ const SCENARIO_SETTING_IDS = new Set([
   'duels',
   'deathmatch',
   'range',
-  'tracking'
+  'tracking',
+  'sequence',
+  'double',
+  'ball',
+  'bouncetracking',
+  'pasutracking',
+  'turn'
 ]);
 
 // Training sub-menus. A mode may appear in several categories; any registered
-// mode not placed anywhere is appended to General so nothing goes missing.
+// non-challenge mode not placed anywhere is appended to General so nothing
+// goes missing. "all" browses every non-challenge mode; "challenges" houses
+// the hard fixed-rule variants and only ever shows those.
 const TRAINING_CATEGORIES = [
-  { id: 'control', title: 'Control', modes: ['microflicks', 'stars', 'survival', 'pasu', 'arena', 'tracking'] },
-  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'bounce', 'spidershot'] },
-  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks'] },
-  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels'] }
+  { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'survival', 'pasu', 'arena', 'turn'] },
+  { id: 'tracking', title: 'Tracking', modes: ['tracking', 'ball', 'bouncetracking', 'pasutracking'] },
+  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'bounce', 'spidershot', 'sequence'] },
+  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'double'] },
+  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels'] },
+  { id: 'challenges', title: 'Challenges', modes: ['galaxy', 'waves'] },
+  { id: 'all', title: 'All', modes: [] }
 ];
+
+const isChallengeMode = (m) => !!SCENARIO_META[m]?.challenge;
 
 function trainingCategoryModes(id) {
   const cat = TRAINING_CATEGORIES.find((c) => c.id === id);
   if (!cat) return [];
+  if (id === 'all') return Object.keys(SCENARIOS).filter((m) => !isChallengeMode(m));
   if (id !== 'general') return cat.modes.filter((m) => SCENARIOS[m]);
   const placed = new Set(TRAINING_CATEGORIES.flatMap((c) => c.modes));
-  const strays = Object.keys(SCENARIOS).filter((m) => !placed.has(m));
+  const strays = Object.keys(SCENARIOS).filter((m) => !placed.has(m) && !isChallengeMode(m));
   return [...cat.modes.filter((m) => SCENARIOS[m]), ...strays];
 }
 
@@ -208,6 +231,8 @@ export class UIOverlay {
     this._playlistDraft = [];
     // Editor target: null = closed, { id: null } = new, { id, createdAt } = editing
     this._playlistEdit = null;
+    // Index of the playlist item whose settings are open in the mode panel.
+    this._playlistItemEditing = null;
     this._lastPlaylist = null; // most recent playlist run, for "Play again"
   }
 
@@ -574,7 +599,7 @@ export class UIOverlay {
       },
       {
         id: 'tracking',
-        label: 'Tracking',
+        label: 'Strafes',
         body: `
           <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
           ${rf('set-tracking-width', 'Bot width', 0.5, 2.0, 0.05)}
@@ -582,6 +607,79 @@ export class UIOverlay {
           <label class="field-check"><input type="checkbox" id="set-tracking-crouch" /> Tap crouch</label>
           ${rf('set-tracking-strafe', 'Strafe rate', 0.25, 3.0, 0.05)}
           ${rf('set-tracking-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'sequence',
+        label: 'Sequence',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-seq-size', 'Dot size', 0.1, 0.6, 0.05)}
+          ${rf('set-seq-time', 'Time per dot (ms)', 500, 4000, 100)}
+          ${rf('set-seq-start-dist', 'Chain start distance (m)', 0.3, 3, 0.1)}
+          ${rf('set-seq-step', 'Distance step per kill (m)', 0.1, 1.5, 0.05)}
+          <label class="field-check"><input type="checkbox" id="set-seq-infinite-ammo" /> Infinite ammo</label>`
+      },
+      {
+        id: 'double',
+        label: 'Double',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-double-size', 'Dot size', 0.1, 0.6, 0.05)}
+          ${rf('set-double-canvas', 'Canvas size (m)', 1.5, 6, 0.25)}
+          ${rf('set-double-dist', 'Canvas distance (m)', 1, 12, 0.5)}
+          ${rf('set-double-count', 'Canvas count', 2, 6, 1)}
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Layout</span></div>
+            <select id="set-double-layout">
+              <option value="flat">Flat on the wall</option>
+              <option value="around">Around you</option>
+            </select>
+          </div>
+          <label class="field-check"><input type="checkbox" id="set-double-infinite-ammo" /> Infinite ammo</label>
+          ${rf('set-double-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'ball',
+        label: 'Ball',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-ball-size', 'Ball size', 0.2, 1.0, 0.05)}
+          ${rf('set-ball-speed', 'Travel speed (°/s)', 20, 140, 5)}
+          ${rf('set-ball-min-dist', 'Min distance (m)', 4, 14, 0.5)}
+          ${rf('set-ball-max-dist', 'Max distance (m)', 6, 22, 0.5)}
+          ${rf('set-ball-height', 'Bounce height (m)', 0.5, 5, 0.1)}`
+      },
+      {
+        id: 'bouncetracking',
+        label: 'Bounce (Tracking)',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-bt-size', 'Ball size', 0.2, 1.0, 0.05)}
+          ${rf('set-bt-count', 'Ball count', 1, 6, 1)}
+          ${rf('set-bt-speed', 'Travel speed (°/s)', 10, 100, 5)}
+          ${rf('set-bt-hold', 'Hold time (s)', 0.2, 2.0, 0.05)}
+          ${rf('set-bt-height', 'Bounce height (m)', 0.5, 5, 0.1)}
+          ${rf('set-bt-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'pasutracking',
+        label: 'Pasu (Tracking)',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-pt-size', 'Target size', 0.15, 0.9, 0.05)}
+          ${rf('set-pt-count', 'Target count', 1, 6, 1)}
+          ${rf('set-pt-hold', 'Hold time (s)', 0.2, 2.0, 0.05)}
+          ${rf('set-pt-travel-speed', 'Max travel speed (m/s)', 0.5, 8, 0.5)}
+          ${rf('set-pt-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'turn',
+        label: 'Turn',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-turn-size', 'Dot size', 0.05, 0.5, 0.01)}
+          ${rf('set-turn-time', 'Dot lifetime (ms)', 800, 5000, 100)}
+          <label class="field-check"><input type="checkbox" id="set-turn-infinite-ammo" /> Infinite ammo</label>`
       }
     ];
   }
@@ -740,10 +838,18 @@ export class UIOverlay {
         <div class="menu-modes menu-modes-sub training-cat-tiles">
           ${TRAINING_CATEGORIES.map((cat) => {
             const modes = trainingCategoryModes(cat.id);
-            const iconKey = { control: 'tracking', speed: 'gridshot', flicking: 'spidershot', general: 'range' }[cat.id];
+            const catIcons = {
+              precision: PRECISION_ICON,
+              tracking: SCENARIO_ICONS.tracking, // the previous Control-menu icon
+              speed: SCENARIO_ICONS.gridshot,
+              flicking: SCENARIO_ICONS.spidershot,
+              general: SCENARIO_ICONS.range,
+              challenges: SCENARIO_ICONS.waves,
+              all: ALL_MODES_ICON
+            };
             return `
           <button type="button" class="mode-tile" data-training-cat="${cat.id}">
-            <img src="${SCENARIO_ICONS[iconKey]}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
+            <img src="${catIcons[cat.id]}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">${cat.title}</span>
             <span class="mode-tile-sub">${modes.length} mode${modes.length === 1 ? '' : 's'}</span>
           </button>`;
@@ -798,12 +904,13 @@ export class UIOverlay {
             <div class="playlist-add-row">
               <select id="playlist-add-mode" class="config-code-input">
                 ${Object.keys(SCENARIOS)
+                  .filter((k) => !isChallengeMode(k))
                   .map((k) => `<option value="${k}">${SCENARIO_META[k].title}</option>`)
                   .join('')}
               </select>
               <button type="button" class="btn" id="playlist-add-current">Add mode</button>
             </div>
-            <p class="readout muted">“Add mode” snapshots that mode's current Training settings — set them up via the gear on its Training card first, or paste a mode code below.</p>
+            <p class="readout muted">“Add mode” snapshots that mode's current Training settings. Press the gear on any added mode to tune its settings for this playlist only, or paste a mode code below.</p>
             <div class="playlist-add-row">
               <input type="text" id="playlist-add-code" class="config-code-input" placeholder="Paste mode code (AIM4M-…)" spellcheck="false" autocomplete="off" />
               <button type="button" class="btn" id="playlist-add-code-btn">Add code</button>
@@ -1456,6 +1563,27 @@ export class UIOverlay {
     this.showScreen('scenario-settings');
   }
 
+  /**
+   * Edit one playlist item's mode settings with the same per-mode panel the
+   * Training gear opens. The item's config is loaded onto a throwaway settings
+   * draft; on Done the edited config is captured back INTO THE ITEM and the
+   * draft is discarded, so the player's own Training settings never change.
+   */
+  _openPlaylistItemSettings(idx) {
+    const item = this._playlistDraft[idx];
+    if (!item || !SCENARIO_SETTING_IDS.has(item.scenario)) return;
+    this.settings.openDraft();
+    this.settings.applyModeConfigToDraft(item.scenario, item.config);
+    this._playlistItemEditing = idx;
+    this._activeScenarioSettings = item.scenario;
+    this._populateSettings();
+    this._showScenarioSettingsPanel(item.scenario);
+    this._populateScenarioFooter(item.scenario);
+    this._updateScenarioSettingsBar();
+    this._returnAfterScenarioSettings = 'playlist-edit';
+    this.showScreen('scenario-settings');
+  }
+
   _showScenarioSettingsPanel(scenarioId) {
     const title = SCENARIO_META[scenarioId]?.title ?? 'Mode';
     const icon = SCENARIO_ICONS[scenarioId];
@@ -1469,6 +1597,27 @@ export class UIOverlay {
   }
 
   _closeScenarioSettings() {
+    if (this._playlistItemEditing != null) {
+      // Playlist-item edit: capture the edited config into the item, then
+      // throw the draft away so the user's own settings are untouched.
+      const idx = this._playlistItemEditing;
+      const item = this._playlistDraft[idx];
+      if (item) {
+        const { config } = this.settings.getModeConfig(item.scenario);
+        item.config = config;
+      }
+      this.settings.discardDraft();
+      this._playlistItemEditing = null;
+      this._activeScenarioSettings = null;
+      this._updateSettingsBar();
+      this._updateScenarioSettingsBar();
+      const ret = this._returnAfterScenarioSettings ?? 'playlist-edit';
+      this._returnAfterScenarioSettings = null;
+      this._renderPlaylistDraft();
+      if (item) this._setPlaylistEditStatus(`Updated ${SCENARIO_META[item.scenario]?.title || item.scenario} settings for this playlist.`);
+      this.showScreen(ret);
+      return;
+    }
     this.settings.confirmDraft();
     this._activeScenarioSettings = null;
     this._updateSettingsBar();
@@ -1896,6 +2045,51 @@ export class UIOverlay {
     this._bindRange('set-tracking-strafe', (v, d) => { d.tracking.strafeRate = v; });
     this._bindRange('set-tracking-misslimit', (v, d) => { d.tracking.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
+    this._bindRange('set-seq-size', (v, d) => { d.sequence.targetSize = v; });
+    this._bindRange('set-seq-time', (v, d) => { d.sequence.dotTime = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-seq-start-dist', (v, d) => { d.sequence.startDistance = v; });
+    this._bindRange('set-seq-step', (v, d) => { d.sequence.distanceStep = v; });
+    $('#set-seq-infinite-ammo')?.addEventListener('change', (e) => {
+      draft((d) => { d.sequence.infiniteAmmo = e.target.checked; });
+    });
+
+    this._bindRange('set-double-size', (v, d) => { d.double.targetSize = v; });
+    this._bindRange('set-double-canvas', (v, d) => { d.double.canvasSize = v; });
+    this._bindRange('set-double-dist', (v, d) => { d.double.canvasDistance = v; });
+    this._bindRange('set-double-count', (v, d) => { d.double.canvasCount = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-double-layout')?.addEventListener('change', (e) => {
+      draft((d) => { d.double.layout = e.target.value === 'around' ? 'around' : 'flat'; });
+    });
+    $('#set-double-infinite-ammo')?.addEventListener('change', (e) => {
+      draft((d) => { d.double.infiniteAmmo = e.target.checked; });
+    });
+    this._bindRange('set-double-misslimit', (v, d) => { d.double.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    this._bindRange('set-ball-size', (v, d) => { d.ball.targetSize = v; });
+    this._bindRange('set-ball-speed', (v, d) => { d.ball.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-ball-min-dist', (v, d) => { d.ball.minDistance = v; });
+    this._bindRange('set-ball-max-dist', (v, d) => { d.ball.maxDistance = v; });
+    this._bindRange('set-ball-height', (v, d) => { d.ball.bounceHeight = v; });
+
+    this._bindRange('set-bt-size', (v, d) => { d.bouncetracking.targetSize = v; });
+    this._bindRange('set-bt-count', (v, d) => { d.bouncetracking.targetCount = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-bt-speed', (v, d) => { d.bouncetracking.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-bt-hold', (v, d) => { d.bouncetracking.holdTime = v; });
+    this._bindRange('set-bt-height', (v, d) => { d.bouncetracking.bounceHeight = v; });
+    this._bindRange('set-bt-misslimit', (v, d) => { d.bouncetracking.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    this._bindRange('set-pt-size', (v, d) => { d.pasutracking.targetSize = v; });
+    this._bindRange('set-pt-count', (v, d) => { d.pasutracking.targetCount = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-pt-hold', (v, d) => { d.pasutracking.trackTime = v; });
+    this._bindRange('set-pt-travel-speed', (v, d) => { d.pasutracking.travelSpeedMax = v; });
+    this._bindRange('set-pt-misslimit', (v, d) => { d.pasutracking.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    this._bindRange('set-turn-size', (v, d) => { d.turn.targetSize = v; });
+    this._bindRange('set-turn-time', (v, d) => { d.turn.dotTime = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-turn-infinite-ammo')?.addEventListener('change', (e) => {
+      draft((d) => { d.turn.infiniteAmmo = e.target.checked; });
+    });
+
     $('#settings-undo-btn')?.addEventListener('click', () => {
       if (this._settingsExploreMode || this.settings.isExploreMode) return;
       if (s.undoDraft()) {
@@ -2007,9 +2201,14 @@ export class UIOverlay {
     });
 
     $('#playlist-draft-items')?.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-playlist-remove],[data-playlist-up],[data-playlist-down]');
+      const btn = e.target.closest('[data-playlist-settings],[data-playlist-remove],[data-playlist-up],[data-playlist-down]');
       if (!btn) return;
       const items = this._playlistDraft;
+      if (btn.dataset.playlistSettings != null) {
+        const idx = parseInt(btn.dataset.playlistSettings, 10);
+        if (Number.isInteger(idx) && items[idx]) this._openPlaylistItemSettings(idx);
+        return;
+      }
       if (btn.dataset.playlistRemove != null) {
         const idx = parseInt(btn.dataset.playlistRemove, 10);
         if (Number.isInteger(idx)) items.splice(idx, 1);
@@ -2132,14 +2331,20 @@ export class UIOverlay {
       return;
     }
     const last = this._playlistDraft.length - 1;
-    el.innerHTML = this._playlistDraft.map((it, i) => `
+    el.innerHTML = this._playlistDraft.map((it, i) => {
+      const gear = SCENARIO_SETTING_IDS.has(it.scenario)
+        ? `<button type="button" class="training-row-gear" data-playlist-settings="${i}" aria-label="Edit mode settings">${GEAR_ICON}</button>`
+        : '';
+      return `
       <div class="playlist-draft-item">
         <span class="playlist-draft-idx">${i + 1}</span>
         <span class="playlist-draft-name">${this._esc(this._modeSummary(it))}</span>
+        ${gear}
         <button type="button" class="training-row-gear" data-playlist-up="${i}" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
         <button type="button" class="training-row-gear" data-playlist-down="${i}" aria-label="Move down" ${i === last ? 'disabled' : ''}>▼</button>
         <button type="button" class="training-row-gear" data-playlist-remove="${i}" aria-label="Remove">${TRASH_ICON}</button>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   }
 
   // ---- Playlist run lifecycle ----
@@ -2785,7 +2990,7 @@ export class UIOverlay {
    * from the editable /tools/editvalues config.
    */
   async _loadRating() {
-    const canvas = this.root.querySelector('#account-rating-canvas');
+    const canvas = this.root.querySelector('#account-rating-chart');
     const legend = this.root.querySelector('#account-rating-legend');
     if (!canvas) return;
     const userId = this._aimStatsUserId;
@@ -2795,6 +3000,7 @@ export class UIOverlay {
       return;
     }
     if (legend) legend.innerHTML = '<p class="center lb-hint">Loading…</p>';
+    await syncBaselinesFromServer(); // shared server config (no-op offline)
     const config = loadBaselines();
     try {
       let rating;
@@ -2803,19 +3009,30 @@ export class UIOverlay {
           RATED_GAMEMODES.map(async (mode) => {
             const row = await fetchAimStats({ userId, scenario: mode });
             if (!row || !Number(row.games)) return null;
-            return calculateAim4Ratings(
-              telemetryFromAimStats(row),
-              { baselines: baselinesForGamemode(mode, config) }
-            );
+            return {
+              mode,
+              rating: calculateAim4Ratings(
+                telemetryFromAimStats(row),
+                { baselines: baselinesForGamemode(mode, config) }
+              )
+            };
           })
         );
         const usable = perMode.filter(Boolean);
-        if (!usable.length) {
+        // Overall rating gate: a rank in at least 7 gamemodes spanning at
+        // least 3 training categories before the averaged radar unlocks.
+        const rankedModes = new Set(usable.map((u) => u.mode));
+        const categoriesSpanned = TRAINING_CATEGORIES.filter(
+          (c) => c.id !== 'all' && c.id !== 'challenges' && c.modes.some((m) => rankedModes.has(m))
+        ).length;
+        if (rankedModes.size < 7 || categoriesSpanned < 3) {
           this._drawRadar(null);
-          if (legend) legend.innerHTML = '<p class="center lb-hint">No competitive runs yet — play to build a rating.</p>';
+          if (legend) {
+            legend.innerHTML = `<p class="center lb-hint">Overall rating locked — rank in at least 7 gamemodes across 3+ categories to unlock it. You're at ${rankedModes.size}/7 gamemode${rankedModes.size === 1 ? '' : 's'} and ${categoriesSpanned}/3 categories. Per-mode ratings are available in the filter above.</p>`;
+          }
           return;
         }
-        rating = averageRatings(usable);
+        rating = averageRatings(usable.map((u) => u.rating));
       } else {
         const row = await fetchAimStats({ userId, scenario: this._ratingMode });
         if (!row || !Number(row.games)) {
@@ -4063,6 +4280,49 @@ export class UIOverlay {
     $('#set-tracking-crouch').checked = s.tracking?.botCrouchTap !== false;
     this._setRange('set-tracking-strafe', s.tracking?.strafeRate ?? 1);
     this._setRange('set-tracking-misslimit', s.tracking?.missLimit ?? 0);
+
+    const sq = s.sequence ?? {};
+    this._setRange('set-seq-size', sq.targetSize ?? 0.25);
+    this._setRange('set-seq-time', sq.dotTime ?? 1500);
+    this._setRange('set-seq-start-dist', sq.startDistance ?? 0.8);
+    this._setRange('set-seq-step', sq.distanceStep ?? 0.35);
+    $('#set-seq-infinite-ammo').checked = sq.infiniteAmmo !== false;
+
+    const db = s.double ?? {};
+    this._setRange('set-double-size', db.targetSize ?? 0.25);
+    this._setRange('set-double-canvas', db.canvasSize ?? 3);
+    this._setRange('set-double-dist', db.canvasDistance ?? 4);
+    this._setRange('set-double-count', db.canvasCount ?? 2);
+    $('#set-double-layout').value = db.layout === 'around' ? 'around' : 'flat';
+    $('#set-double-infinite-ammo').checked = db.infiniteAmmo !== false;
+    this._setRange('set-double-misslimit', db.missLimit ?? 0);
+
+    const bl = s.ball ?? {};
+    this._setRange('set-ball-size', bl.targetSize ?? 0.5);
+    this._setRange('set-ball-speed', bl.travelSpeed ?? 60);
+    this._setRange('set-ball-min-dist', bl.minDistance ?? 8);
+    this._setRange('set-ball-max-dist', bl.maxDistance ?? 16);
+    this._setRange('set-ball-height', bl.bounceHeight ?? 2.5);
+
+    const bt = s.bouncetracking ?? {};
+    this._setRange('set-bt-size', bt.targetSize ?? 0.45);
+    this._setRange('set-bt-count', bt.targetCount ?? 3);
+    this._setRange('set-bt-speed', bt.travelSpeed ?? 28);
+    this._setRange('set-bt-hold', bt.holdTime ?? 0.5);
+    this._setRange('set-bt-height', bt.bounceHeight ?? 2.2);
+    this._setRange('set-bt-misslimit', bt.missLimit ?? 0);
+
+    const pt = s.pasutracking ?? {};
+    this._setRange('set-pt-size', pt.targetSize ?? 0.33);
+    this._setRange('set-pt-count', pt.targetCount ?? 3);
+    this._setRange('set-pt-hold', pt.trackTime ?? 0.5);
+    this._setRange('set-pt-travel-speed', pt.travelSpeedMax ?? 2.0);
+    this._setRange('set-pt-misslimit', pt.missLimit ?? 0);
+
+    const tn = s.turn ?? {};
+    this._setRange('set-turn-size', tn.targetSize ?? 0.15);
+    this._setRange('set-turn-time', tn.dotTime ?? 2000);
+    $('#set-turn-infinite-ammo').checked = tn.infiniteAmmo !== false;
   }
 
   // -------------------------------------------------------------------------
@@ -4190,7 +4450,7 @@ export class UIOverlay {
     this.currentScenario = name;
     this.scenarioConfig = config;
     this.sceneManager.load(name, config);
-    const noCrit = name === 'spidershot' || name === 'survival';
+    const noCrit = ['spidershot', 'survival', 'sequence', 'double', 'ball', 'turn', 'galaxy', 'waves'].includes(name);
     this.hudCritChip.style.display = noCrit ? 'none' : '';
     this.showScreen('playing');
     this.state = 'await-start';

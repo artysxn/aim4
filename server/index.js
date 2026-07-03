@@ -11,6 +11,7 @@
 import http from 'http';
 import { WebSocketServer } from 'ws';
 import { saveConfig, getConfig } from './store.js';
+import { getBaselines, saveBaselines } from './baselinesStore.js';
 import { isValidCodeFormat, normalizeCode } from './configCodes.js';
 import { MultiplayerServer } from './lobby.js';
 import { tryServeStatic, distExists } from './static.js';
@@ -104,6 +105,29 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       send(res, 200, { code, settings });
+      return;
+    }
+
+    // Aim4 rating baselines — read by the game, written by /tools/editvalues.
+    if (req.method === 'GET' && url.pathname === '/api/baselines') {
+      send(res, 200, { baselines: getBaselines() });
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/baselines') {
+      const raw = await readBody(req);
+      let body;
+      try {
+        body = JSON.parse(raw || '{}');
+      } catch {
+        send(res, 400, { error: 'Invalid JSON body' });
+        return;
+      }
+      try {
+        const saved = saveBaselines(body.baselines ?? body);
+        send(res, 200, { ok: true, baselines: saved });
+      } catch (err) {
+        send(res, 400, { error: err.message || 'Invalid baselines payload' });
+      }
       return;
     }
 

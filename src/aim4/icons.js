@@ -11,6 +11,10 @@ import duels       from '../icons/mode_duels.svg?url';
 import range       from '../icons/mode_range.svg?url';
 import tracking    from '../icons/mode_tracking.svg?url';
 import deathmatch  from '../icons/mode_deathmatch.svg?url';
+import sequence    from '../icons/mode_sequence.svg?url';
+import double_     from '../icons/mode_double.svg?url';
+import ball        from '../icons/icon_ball.svg?url';
+import waves       from '../icons/mode_waves.svg?url';
 
 import matchmaking from '../icons/icon_matchmaking.svg?url';
 import training    from '../icons/icon_training.svg?url';
@@ -20,6 +24,8 @@ import multiplayer from '../icons/icon_multiplayer.svg?url';
 import leaderboard from '../icons/icon_leaderboards.svg?url';
 import account     from '../icons/icon_account.svg?url';
 import settings    from '../icons/icon_settings.svg?url';
+import precision   from '../icons/icon_precision.svg?url';
+import all         from '../icons/icon_all.svg?url';
 
 /** Scenario card icons keyed by SceneManager scenario id. */
 export const SCENARIO_ICONS = {
@@ -34,7 +40,15 @@ export const SCENARIO_ICONS = {
   duels,
   range,
   tracking,
-  deathmatch
+  deathmatch,
+  sequence,
+  double: double_,
+  ball,
+  bouncetracking: bounce, // Bounce (Tracking) shares the Bounce icon
+  pasutracking: pasu,     // Pasu (Tracking) shares the Pasu icon
+  turn: precision,        // no dedicated Turn icon — Precision glyph fits
+  galaxy: stars,          // Galaxy challenge uses the Stars icon (by design)
+  waves
 };
 
 export const MATCHMAKING_ICON   = matchmaking;
@@ -46,3 +60,5 @@ export const LEADERBOARD_ICON   = leaderboard;
 export const ACCOUNT_ICON       = account;
 export const LOGOUT_ICON        = account; // no dedicated logout icon in the icon set
 export const SETTINGS_ICON      = settings;
+export const PRECISION_ICON     = precision;
+export const ALL_MODES_ICON     = all;

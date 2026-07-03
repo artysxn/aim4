@@ -31,8 +31,8 @@ export const COMPETITIVE_PRESETS = {
     targetSize: 0.3,
     targetCount: 4,
     travelSpeed: 45,
-    minDistance: 6,
-    maxDistance: 12,
+    minDistance: 10,
+    maxDistance: 16,
     bounceHeight: 2.2,
     infiniteAmmo: true,
     viewmodelRecoil: false
@@ -108,6 +108,62 @@ export const COMPETITIVE_PRESETS = {
     decoyRoundChance: 0.1,
     decoyMin: 1,
     decoyMax: 2
+  },
+  sequence: {
+    runDuration: 30,
+    targetSize: 0.2, // "dot size 20"
+    dotTime: 1200,
+    startDistance: 0.8,
+    distanceStep: 0.35,
+    infiniteAmmo: true,
+    viewmodelRecoil: false
+  },
+  double: {
+    runDuration: 30,
+    targetSize: 0.25,
+    canvasSize: 2.5,
+    canvasDistance: 5,
+    canvasCount: 2,
+    layout: 'flat',
+    infiniteAmmo: true,
+    viewmodelRecoil: false
+  },
+  ball: {
+    runDuration: 30,
+    targetSize: 0.5,
+    travelSpeed: 60,
+    minDistance: 8,
+    maxDistance: 16,
+    bounceHeight: 2.5
+  },
+  bouncetracking: {
+    runDuration: 30,
+    targetSize: 0.45,
+    targetCount: 3,
+    travelSpeed: 28,
+    minDistance: 10,
+    maxDistance: 16,
+    bounceHeight: 2.2,
+    holdTime: 0.5,
+    infiniteAmmo: true,
+    viewmodelRecoil: false
+  },
+  pasutracking: {
+    runDuration: 30,
+    targetSize: 0.33,
+    targetCount: 3,
+    trackTime: 0.5,
+    travelSpeedMax: 2.0,
+    angleOffset: 360,
+    infiniteAmmo: true,
+    viewmodelRecoil: false
+  },
+  turn: {
+    runDuration: 30,
+    targetSize: 0.15, // "size here is 15"
+    dotTime: 2000,
+    infiniteAmmo: true,
+    viewmodelRecoil: false
   }
 };
 

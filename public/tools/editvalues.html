@@ -34,41 +34,39 @@
   input:focus { outline: none; border-color: #f52525; }
   #status { margin-top: 16px; color: #6fcf6f; min-height: 20px; }
   #status.err { color: #f56b6b; }
-  textarea {
-    width: 100%; max-width: 1100px; height: 160px; margin-top: 14px;
-    background: #111; color: #e3e3e3; border: 1px solid #333; padding: 10px;
-    font: 12px/1.4 monospace;
-  }
   .note { color: #777; font-size: 12px; margin-top: 6px; max-width: 1100px; }
 </style>
 </head>
 <body>
   <h1>Aim4 — Rating Baselines</h1>
-  <p class="sub">Per-gamemode baseline (B = a 1.00 rating). Precision uses a fixed curve and has no baseline. Saved to this browser; used by the Aim4 Rating radar.</p>
+  <p class="sub">Per-gamemode baseline (B = a 1.00 rating). Precision uses a fixed curve and has no baseline. Saved on the server (<code>/api/baselines</code>) and used by everyone's Aim4 Rating radar.</p>
 
   <div class="bar">
-    <button class="primary" id="save">Save</button>
-    <button id="reload">Reload saved</button>
+    <button class="primary" id="save">Save to server</button>
+    <button id="reload">Reload from server</button>
     <button id="reset">Reset to defaults</button>
-    <button id="export">Export JSON</button>
-    <button id="import">Import JSON below</button>
   </div>
 
   <table id="grid"></table>
 
   <div id="status"></div>
-
-  <textarea id="json" spellcheck="false" placeholder="Exported / import JSON appears here"></textarea>
-  <p class="note">To import: paste a config here and press “Import JSON below”, then Save.</p>
+  <p class="note">Changes go live for all players once saved — the game fetches these baselines from the server.</p>
 
 <script>
   const PREFIX = 'aimtrainer:';
-  const KEY = 'aim4Baselines';
-  const GAMEMODES = ['gridshot','stars','bounce','microflicks','pasu','spidershot','survival','arena','duels','range','tracking','deathmatch'];
+  const KEY = 'aim4Baselines'; // localStorage mirror (offline fallback for the game)
+  const API = '/api/baselines';
+  const GAMEMODES = [
+    'gridshot','stars','bounce','microflicks','pasu','spidershot','survival',
+    'arena','duels','range','tracking','deathmatch',
+    'sequence','double','ball','bouncetracking','pasutracking','turn'
+  ];
   const LABELS = {
-    gridshot:'Gridshot', stars:'Stars', bounce:'Bounce', microflicks:'Microflicks',
-    pasu:'Pasu', spidershot:'Spidershot', survival:'Survival', arena:'Crossfire',
-    duels:'Duels', range:'Range', tracking:'Tracking', deathmatch:'Deathmatch'
+    gridshot:'Gridshot', stars:'Stars', bounce:'Bounce (Clicks)', microflicks:'Microflicks',
+    pasu:'Pasu (Clicks)', spidershot:'Spidershot', survival:'Survival', arena:'Crossfire',
+    duels:'Duels', range:'Range', tracking:'Strafes', deathmatch:'Deathmatch',
+    sequence:'Sequence', double:'Double', ball:'Ball',
+    bouncetracking:'Bounce (Tracking)', pasutracking:'Pasu (Tracking)', turn:'Turn'
   };
   const BASELINE_KEYS = ['speed','tracking','flicks_error_percent','adjustments','reaction_time_ms','tension_percent'];
   const KEY_LABELS = {
@@ -82,16 +80,11 @@
     for (const g of GAMEMODES) o[g] = { ...DEFAULT };
     return o;
   }
-  function load() {
-    try {
-      const raw = localStorage.getItem(PREFIX + KEY);
-      const base = defaults();
-      if (raw) {
-        const saved = JSON.parse(raw);
-        for (const g of GAMEMODES) base[g] = { ...base[g], ...(saved[g] || {}) };
-      }
-      return base;
-    } catch (e) { return defaults(); }
+  function mergeOver(base, saved) {
+    if (saved && typeof saved === 'object') {
+      for (const g of GAMEMODES) base[g] = { ...base[g], ...(saved[g] || {}) };
+    }
+    return base;
   }
   function setStatus(msg, err) {
     const el = document.getElementById('status');
@@ -99,7 +92,14 @@
     el.className = err ? 'err' : '';
   }
 
-  let config = load();
+  let config = defaults();
+
+  async function loadFromServer() {
+    const res = await fetch(API);
+    if (!res.ok) throw new Error('Server responded ' + res.status);
+    const data = await res.json();
+    return mergeOver(defaults(), data.baselines);
+  }
 
   function render() {
     const t = document.getElementById('grid');
@@ -123,31 +123,44 @@
     });
   }
 
-  document.getElementById('save').onclick = () => {
+  document.getElementById('save').onclick = async () => {
     try {
-      localStorage.setItem(PREFIX + KEY, JSON.stringify(config));
-      setStatus('Saved. The radar will use these baselines.');
+      const res = await fetch(API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baselines: config })
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Server responded ' + res.status);
+      // Mirror locally so the game keeps working offline with the same values.
+      try { localStorage.setItem(PREFIX + KEY, JSON.stringify(config)); } catch {}
+      setStatus('Saved to the server. All players now rate against these baselines.');
     } catch (e) { setStatus('Save failed: ' + e.message, true); }
   };
-  document.getElementById('reload').onclick = () => { config = load(); render(); setStatus('Reloaded saved values.'); };
-  document.getElementById('reset').onclick = () => { config = defaults(); render(); setStatus('Reset to defaults (not yet saved).'); };
-  document.getElementById('export').onclick = () => {
-    document.getElementById('json').value = JSON.stringify(config, null, 2);
-    setStatus('Exported JSON below.');
-  };
-  document.getElementById('import').onclick = () => {
+  document.getElementById('reload').onclick = async () => {
     try {
-      const parsed = JSON.parse(document.getElementById('json').value);
-      if (!parsed || typeof parsed !== 'object') throw new Error('not an object');
-      const base = defaults();
-      for (const g of GAMEMODES) base[g] = { ...base[g], ...(parsed[g] || {}) };
-      config = base;
+      config = await loadFromServer();
       render();
-      setStatus('Imported into the grid. Press Save to keep it.');
-    } catch (e) { setStatus('Import failed: ' + e.message, true); }
+      setStatus('Reloaded from the server.');
+    } catch (e) { setStatus('Reload failed: ' + e.message, true); }
+  };
+  document.getElementById('reset').onclick = () => {
+    config = defaults();
+    render();
+    setStatus('Reset to defaults (not yet saved).');
   };
 
-  render();
+  (async () => {
+    try {
+      config = await loadFromServer();
+      setStatus('Loaded server baselines.');
+    } catch (e) {
+      // Fall back to the local mirror so the editor still opens offline.
+      try { config = mergeOver(defaults(), JSON.parse(localStorage.getItem(PREFIX + KEY) || 'null')); } catch {}
+      setStatus('Could not reach the server (' + e.message + ') — showing local values.', true);
+    }
+    render();
+  })();
 </script>
 </body>
 </html>

@@ -15,7 +15,13 @@ export const RANKED_SCENARIOS = new Set([
   'duels',
   'range',
   'tracking',
-  'deathmatch'
+  'deathmatch',
+  'sequence',
+  'double',
+  'ball',
+  'bouncetracking',
+  'pasutracking',
+  'turn'
 ]);
 
 /** Ranked by total kills in the best timed run. */
@@ -29,11 +35,16 @@ export const KILL_LEADERBOARD_SCENARIOS = new Set([
   'arena',
   'duels',
   'range',
-  'deathmatch'
+  'deathmatch',
+  'sequence',
+  'double',
+  'bouncetracking',
+  'pasutracking',
+  'turn'
 ]);
 
 /** Ranked by highest score in the best timed run. */
-export const SCORE_LEADERBOARD_SCENARIOS = new Set(['survival', 'tracking']);
+export const SCORE_LEADERBOARD_SCENARIOS = new Set(['survival', 'tracking', 'ball']);
 
 export function isRankedScenario(scenario) {
   return RANKED_SCENARIOS.has(scenario);
