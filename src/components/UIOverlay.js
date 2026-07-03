@@ -965,10 +965,12 @@ export class UIOverlay {
         </section>
 
         <section class="account-section">
-          <h4>Statistics</h4>
-          <div id="account-stats" class="account-stats">
-            <p class="center lb-hint">Loading…</p>
-          </div>
+          <details class="account-placements">
+            <summary>Show placements</summary>
+            <div id="account-stats" class="account-stats">
+              <p class="center lb-hint">Loading…</p>
+            </div>
+          </details>
         </section>
 
         <section class="account-section" id="account-rating-section">
@@ -977,7 +979,7 @@ export class UIOverlay {
             <select id="account-rating-filter" class="config-code-input account-aim-filter"></select>
           </div>
           <div id="account-rating" class="account-rating">
-            <canvas id="account-rating-canvas" class="account-rating-canvas" width="440" height="360"></canvas>
+            <div id="account-rating-chart" class="account-rating-canvas"></div>
             <div id="account-rating-legend" class="account-rating-legend"></div>
           </div>
         </section>
@@ -2841,76 +2843,56 @@ export class UIOverlay {
     return `<table class="account-stats-table"><thead><tr><th>Category</th><th>Rating</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
-  /** Draw a 0–2 radar (1.00 = baseline ring) for the 7 rating categories. */
+  /** Render a vector (SVG) 0–2 radar; points show their exact value on hover. */
   _drawRadar(rating) {
-    const canvas = this.root.querySelector('#account-rating-canvas');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const W = canvas.width;
-    const H = canvas.height;
-    ctx.clearRect(0, 0, W, H);
+    const host = this.root.querySelector('#account-rating-chart');
+    if (!host) return;
+    const W = 440;
+    const H = 360;
     const cx = W / 2;
     const cy = H / 2 + 6;
     const R = Math.min(W, H) / 2 - 46;
     const n = RATING_CATEGORIES.length;
     const MAX = 2;
     const angleAt = (i) => -Math.PI / 2 + (i / n) * Math.PI * 2;
+    const pt = (i, r) => [cx + Math.cos(angleAt(i)) * r, cy + Math.sin(angleAt(i)) * r];
 
-    // Grid rings at 0.5 / 1.0 / 1.5 / 2.0 (1.0 highlighted = baseline).
-    for (const lvl of [0.5, 1, 1.5, 2]) {
-      ctx.beginPath();
-      for (let i = 0; i <= n; i++) {
-        const a = angleAt(i % n);
-        const r = R * (lvl / MAX);
-        const x = cx + Math.cos(a) * r;
-        const y = cy + Math.sin(a) * r;
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = lvl === 1 ? 'rgba(245,37,37,0.55)' : 'rgba(255,255,255,0.14)';
-      ctx.lineWidth = lvl === 1 ? 1.5 : 1;
-      ctx.stroke();
-    }
+    const rings = [0.5, 1, 1.5, 2].map((lvl) => {
+      const d = Array.from({ length: n }, (_, i) => pt(i, R * (lvl / MAX)).map((v) => v.toFixed(1)).join(','))
+        .join(' ');
+      const hi = lvl === 1;
+      return `<polygon points="${d}" fill="none" stroke="${hi ? 'rgba(245,37,37,0.55)' : 'rgba(255,255,255,0.14)'}" stroke-width="${hi ? 1.5 : 1}"/>`;
+    }).join('');
 
-    // Spokes + axis labels.
-    ctx.fillStyle = '#9a9a9a';
-    ctx.font = '11px "Host Grotesk", sans-serif';
+    let spokes = '';
+    let labels = '';
     for (let i = 0; i < n; i++) {
-      const a = angleAt(i);
-      const x = cx + Math.cos(a) * R;
-      const y = cy + Math.sin(a) * R;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.lineTo(x, y);
-      ctx.strokeStyle = 'rgba(255,255,255,0.1)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      const lx = cx + Math.cos(a) * (R + 18);
-      const ly = cy + Math.sin(a) * (R + 16);
-      ctx.textAlign = Math.abs(Math.cos(a)) < 0.3 ? 'center' : (Math.cos(a) > 0 ? 'left' : 'right');
-      ctx.textBaseline = 'middle';
-      ctx.fillText(RATING_LABELS[RATING_CATEGORIES[i]], lx, ly);
+      const [x, y] = pt(i, R);
+      spokes += `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>`;
+      const [lx, ly] = pt(i, R + 16);
+      const c = Math.cos(angleAt(i));
+      const anchor = Math.abs(c) < 0.3 ? 'middle' : (c > 0 ? 'start' : 'end');
+      labels += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" fill="#9a9a9a" font-size="11" font-family="'Host Grotesk',sans-serif" text-anchor="${anchor}" dominant-baseline="middle">${RATING_LABELS[RATING_CATEGORIES[i]]}</text>`;
     }
 
-    if (!rating) return;
-
-    // Rating polygon.
-    ctx.beginPath();
-    for (let i = 0; i <= n; i++) {
-      const idx = i % n;
-      const a = angleAt(idx);
-      const val = Math.max(0, Math.min(MAX, rating[RATING_CATEGORIES[idx]] ?? 0));
-      const r = R * (val / MAX);
-      const x = cx + Math.cos(a) * r;
-      const y = cy + Math.sin(a) * r;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    let poly = '';
+    let dots = '';
+    if (rating) {
+      const pts = RATING_CATEGORIES.map((k, i) => {
+        const val = Math.max(0, Math.min(MAX, rating[k] ?? 0));
+        return pt(i, R * (val / MAX));
+      });
+      poly = `<polygon points="${pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')}" fill="rgba(245,37,37,0.25)" stroke="#f52525" stroke-width="2"/>`;
+      dots = RATING_CATEGORIES.map((k, i) => {
+        const [x, y] = pts[i];
+        const label = `${RATING_LABELS[k]}: ${(rating[k] ?? 0).toFixed(2)}`;
+        return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="#f52525" class="radar-dot"><title>${label}</title></circle>`;
+      }).join('');
     }
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(245,37,37,0.25)';
-    ctx.fill();
-    ctx.strokeStyle = '#f52525';
-    ctx.lineWidth = 2;
-    ctx.stroke();
+
+    host.innerHTML =
+      `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="account-rating-svg">` +
+      rings + spokes + labels + poly + dots + `</svg>`;
   }
 
   /** Load the current account's aim analytics + the global baseline. */

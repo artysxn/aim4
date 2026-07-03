@@ -991,6 +991,15 @@ a.btn {
   flex: 0 0 auto;
   max-width: 100%;
 }
+.account-rating-svg { max-width: 100%; height: auto; }
+.radar-dot { cursor: pointer; transition: r 0.1s; }
+.radar-dot:hover { r: 6; }
+.account-placements > summary {
+  cursor: pointer;
+  font-weight: 500;
+  padding: 4px 0;
+  list-style: revert;
+}
 .account-rating-legend {
   flex: 1 1 180px;
   min-width: 160px;
