@@ -1448,7 +1448,7 @@ export class UIOverlay {
     const playBtns = meta.dualPlay
       ? `<button type="button" class="btn training-row-play" data-play="${key}" data-variant="practice">Training</button>
     <button type="button" class="btn training-row-play" data-play="${key}" data-variant="competitive">Competitive</button>`
-      : `<button type="button" class="btn training-row-play" data-play="${key}" aria-label="Play ${meta.title}">Play</button>`;
+      : `<button type="button" class="btn training-row-play" data-play="${key}"${meta.challenge ? ' data-variant="competitive"' : ''} aria-label="Play ${meta.title}">Play</button>`;
     const lbBtn = `<button type="button" class="training-row-lb" data-training-lb="${key}" aria-label="${meta.title} leaderboard"><img src="${LEADERBOARD_ICON}" alt="" class="aim4-icon" width="16" height="16" /></button>`;
     const gearBtn = hasSettings
       ? `<button type="button" class="training-row-gear" data-scenario-settings-open="${key}" aria-label="${meta.title} settings">${GEAR_ICON}</button>`

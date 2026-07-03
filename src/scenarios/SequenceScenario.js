@@ -95,9 +95,10 @@ export class SequenceScenario extends BaseScenario {
   _clampToBounds(x, y) {
     const halfW = this.boundsW / 2 - this.targetSize;
     const halfH = this.boundsH / 2 - this.targetSize;
+    const yMin = Math.max(this.targetSize + 0.25, this.centerY - halfH);
     return [
       Math.max(-halfW, Math.min(halfW, x)),
-      Math.max(this.centerY - halfH, Math.min(this.centerY + halfH, y))
+      Math.max(yMin, Math.min(this.centerY + halfH, y))
     ];
   }
 

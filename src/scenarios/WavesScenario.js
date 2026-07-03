@@ -95,6 +95,7 @@ export class WavesScenario extends BaseScenario {
     const fromLeft = Math.random() < 0.5;
     const halfW = this.boundsW / 2 - this.targetSize;
     const halfH = this.boundsH / 2 - this.targetSize;
+    const yMin = Math.max(this.targetSize + 0.25, this.centerY - halfH);
     const startX = fromLeft ? -halfW : halfW;
     const dir = fromLeft ? 1 : -1; // left spawns travel right and vice versa
     const n = this._dotCountForRound();
@@ -116,7 +117,7 @@ export class WavesScenario extends BaseScenario {
       target.object.position.set(
         // Slight stagger off the edge so a wave reads as a column, not a stack.
         startX - dir * randRange(0, 0.8),
-        randRange(this.centerY - halfH, this.centerY + halfH),
+        randRange(yMin, this.centerY + halfH),
         -this.wallDistance + this.targetSize + 0.05
       );
       target._wave = { dir, speed: randRange(SPEED_MIN, SPEED_MAX) };

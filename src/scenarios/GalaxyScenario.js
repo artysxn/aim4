@@ -19,7 +19,7 @@ export class GalaxyScenario extends StarsScenario {
       ...opts,
       config: {
         ...opts.config,
-        variant: undefined, // always practice-style; the challenge IS the rules
+        variant: 'competitive', // challenges run competitive by default
         targetSize: GALAXY_DOT_SIZE,
         targetCount: GALAXY_COUNT
       }

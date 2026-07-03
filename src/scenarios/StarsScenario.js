@@ -87,9 +87,10 @@ export class StarsScenario extends GridshotScenario {
     const inset = this.targetSize + 0.05;
     const halfW = (this.boundsW + 8) / 2 - inset;
     const halfH = (this.boundsH + 8) / 2 - inset;
+    const yMin = Math.max(this.targetSize + 0.25, this.centerY - halfH);
     return new THREE.Vector3(
       randRange(-halfW, halfW),
-      randRange(this.centerY - halfH, this.centerY + halfH),
+      randRange(yMin, this.centerY + halfH),
       -this.wallDistance + this.targetSize + 0.05
     );
   }

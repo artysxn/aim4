@@ -93,16 +93,17 @@ export class TurnScenario extends BaseScenario {
   _spawnDot({ near = null, dir = null } = {}) {
     const halfW = this.boundsW / 2 - this.targetSize;
     const halfH = this.boundsH / 2 - this.targetSize;
+    const yMin = Math.max(this.targetSize + 0.25, this.centerY - halfH);
     let x;
     let y;
     if (near) {
       const a = randRange(0, Math.PI * 2);
       const d = randRange(NEAR_MIN, NEAR_MAX);
       x = Math.max(-halfW, Math.min(halfW, near.x + Math.cos(a) * d));
-      y = Math.max(this.centerY - halfH, Math.min(this.centerY + halfH, near.y + Math.sin(a) * d));
+      y = Math.max(yMin, Math.min(this.centerY + halfH, near.y + Math.sin(a) * d));
     } else {
       x = randRange(-halfW, halfW);
-      y = randRange(this.centerY - halfH, this.centerY + halfH);
+      y = randRange(yMin, this.centerY + halfH);
     }
 
     const target = new Target();

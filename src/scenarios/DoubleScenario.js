@@ -80,6 +80,8 @@ export class DoubleScenario extends BaseScenario {
     });
 
     const n = this.canvasCount;
+    // Lift the canvas row so a big canvas never dips below the floor.
+    const centerY = Math.max(EYE_HEIGHT, this.canvasSize / 2 + 0.3);
     for (let i = 0; i < n; i++) {
       const panel = new THREE.Mesh(new THREE.PlaneGeometry(this.canvasSize, this.canvasSize), canvasMat);
       let center;
@@ -88,13 +90,13 @@ export class DoubleScenario extends BaseScenario {
         // with the configured distance so panels never overlap.
         const arcStep = Math.max(0.35, (this.canvasSize + this.canvasDistance) / RING_RADIUS);
         const a = (i - (n - 1) / 2) * arcStep;
-        center = new THREE.Vector3(Math.sin(a) * RING_RADIUS, EYE_HEIGHT, -Math.cos(a) * RING_RADIUS);
+        center = new THREE.Vector3(Math.sin(a) * RING_RADIUS, centerY, -Math.cos(a) * RING_RADIUS);
         panel.position.copy(center);
-        panel.lookAt(0, EYE_HEIGHT, 0);
+        panel.lookAt(0, centerY, 0);
       } else {
         const spacing = this.canvasSize + this.canvasDistance;
         const x = (i - (n - 1) / 2) * spacing;
-        center = new THREE.Vector3(x, EYE_HEIGHT, -WALL_DISTANCE);
+        center = new THREE.Vector3(x, centerY, -WALL_DISTANCE);
         panel.position.copy(center);
       }
       this.root.add(panel);
