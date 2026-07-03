@@ -490,53 +490,17 @@ export class ReplayAnalytics {
     const t = ev.t | 0;
     const ray = this._shotRay(ev);
 
-<<<<<<< HEAD
-    const dtTicks = t - pf.startTick;
-    const clickDir = this._camDir(t);
-    const angleDeg = angleBetween(pf.startDir, clickDir) * RAD_TO_DEG;
-
-    if (dtTicks > 0 && angleDeg >= MIN_FLICK_ANGLE_DEG) {
-      const ms = dtTicks * MS_PER_TICK;
-      this._flickSpeedSumMsPerDeg += ms / angleDeg;
-      this._flickSpeedCount++;
-    }
-
-    const closest = this.closestAt(t);
-    if (!closest) return;
-    const targetDir = normalize(
-      sub([closest.aim.x, closest.aim.y, closest.aim.z], closest.camPos)
-    );
-    const dStart = angleBetween(pf.startDir, targetDir);
-    const dClick = angleBetween(clickDir, targetDir);
-    if (dStart <= 1e-6) return;
-    const acc = Math.max(0, Math.min(1, 1 - dClick / dStart)) * 100;
-    this._flickAccSum += acc;
-    this._flickAccCount++;
-  }
-
-  _classifyClick(t) {
-    this._measureFlickClick(t);
-
-    // Shots are stamped on the tick boundary before the camera sample that reflects
-    // the click aim, so t+1 is the matching sample for an on-time shot.
-    if (this._onTargetAt(t) || this._onTargetAt(t + 1)) {
-=======
     // A recorded HIT is ground truth: the crosshair WAS on the target. Re-deriving
     // it from an integer-tick camera sample drifts ~1 tick and mislabels hits as
     // "8 ms under". Trust the hit (and the exact shot ray) → accurate.
     if (ev.hit || this._onTargetForShot(ray, t)) {
->>>>>>> a2e0728d43d049e424f59967654afcc38d0bf798
       this.clicks.accurate++;
       this._flashEvents.push({ type: 'click', kind: 'accurate', text: 'On target' });
       return;
     }
-<<<<<<< HEAD
-    for (let k = 2; k <= 3; k++) {
-=======
     // Miss: was the crosshair sweeping ACROSS the target just before/after? This
     // is camera-timing (when the aim crossed the dot), so vary the camera here.
     for (let k = 1; k <= 2; k++) {
->>>>>>> a2e0728d43d049e424f59967654afcc38d0bf798
       if (this._onTargetAt(t + k)) {
         this.clicks.early++;
         const ms = Math.round((k - 1) * MS_PER_TICK);
