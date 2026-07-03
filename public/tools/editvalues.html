@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Aim4 — Rating Baselines</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px;
+    background: #0a0a0a; color: #e3e3e3;
+    font: 14px/1.5 "Host Grotesk", system-ui, sans-serif;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.sub { color: #888; margin: 0 0 20px; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  button {
+    background: #1c1c1c; color: #e3e3e3; border: 1px solid #333;
+    padding: 8px 14px; cursor: pointer; font: inherit;
+  }
+  button:hover { background: #262626; }
+  button.primary { background: #f52525; border-color: #f52525; color: #fff; }
+  button.primary:hover { background: #d31f1f; }
+  table { border-collapse: collapse; width: 100%; max-width: 1100px; }
+  th, td { border: 1px solid #262626; padding: 6px 8px; text-align: left; }
+  th { background: #141414; position: sticky; top: 0; font-weight: 500; }
+  td.mode { font-weight: 500; white-space: nowrap; }
+  input[type=number] {
+    width: 92px; background: #111; color: #e3e3e3; border: 1px solid #333;
+    padding: 5px 6px; font: inherit;
+  }
+  input:focus { outline: none; border-color: #f52525; }
+  #status { margin-top: 16px; color: #6fcf6f; min-height: 20px; }
+  #status.err { color: #f56b6b; }
+  textarea {
+    width: 100%; max-width: 1100px; height: 160px; margin-top: 14px;
+    background: #111; color: #e3e3e3; border: 1px solid #333; padding: 10px;
+    font: 12px/1.4 monospace;
+  }
+  .note { color: #777; font-size: 12px; margin-top: 6px; max-width: 1100px; }
+</style>
+</head>
+<body>
+  <h1>Aim4 — Rating Baselines</h1>
+  <p class="sub">Per-gamemode baseline (B = a 1.00 rating). Precision uses a fixed curve and has no baseline. Saved to this browser; used by the Aim4 Rating radar.</p>
+
+  <div class="bar">
+    <button class="primary" id="save">Save</button>
+    <button id="reload">Reload saved</button>
+    <button id="reset">Reset to defaults</button>
+    <button id="export">Export JSON</button>
+    <button id="import">Import JSON below</button>
+  </div>
+
+  <table id="grid"></table>
+
+  <div id="status"></div>
+
+  <textarea id="json" spellcheck="false" placeholder="Exported / import JSON appears here"></textarea>
+  <p class="note">To import: paste a config here and press “Import JSON below”, then Save.</p>
+
+<script>
+  const PREFIX = 'aimtrainer:';
+  const KEY = 'aim4Baselines';
+  const GAMEMODES = ['gridshot','stars','bounce','microflicks','pasu','spidershot','survival','arena','duels','range','tracking','deathmatch'];
+  const LABELS = {
+    gridshot:'Gridshot', stars:'Stars', bounce:'Bounce', microflicks:'Microflicks',
+    pasu:'Pasu', spidershot:'Spidershot', survival:'Survival', arena:'Crossfire',
+    duels:'Duels', range:'Range', tracking:'Tracking', deathmatch:'Deathmatch'
+  };
+  const BASELINE_KEYS = ['speed','tracking','flicks_error_percent','adjustments','reaction_time_ms','tension_percent'];
+  const KEY_LABELS = {
+    speed:'Speed (°/s)', tracking:'Tracking', flicks_error_percent:'Flicks err %',
+    adjustments:'Adjustments', reaction_time_ms:'Reaction ms', tension_percent:'Tension %'
+  };
+  const DEFAULT = { speed:2000.0, tracking:0.45, flicks_error_percent:15.0, adjustments:2.0, reaction_time_ms:200.0, tension_percent:30.0 };
+
+  function defaults() {
+    const o = {};
+    for (const g of GAMEMODES) o[g] = { ...DEFAULT };
+    return o;
+  }
+  function load() {
+    try {
+      const raw = localStorage.getItem(PREFIX + KEY);
+      const base = defaults();
+      if (raw) {
+        const saved = JSON.parse(raw);
+        for (const g of GAMEMODES) base[g] = { ...base[g], ...(saved[g] || {}) };
+      }
+      return base;
+    } catch (e) { return defaults(); }
+  }
+  function setStatus(msg, err) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = err ? 'err' : '';
+  }
+
+  let config = load();
+
+  function render() {
+    const t = document.getElementById('grid');
+    let head = '<tr><th>Gamemode</th>';
+    for (const k of BASELINE_KEYS) head += `<th>${KEY_LABELS[k]}</th>`;
+    head += '</tr>';
+    let rows = '';
+    for (const g of GAMEMODES) {
+      rows += `<tr><td class="mode">${LABELS[g]}</td>`;
+      for (const k of BASELINE_KEYS) {
+        rows += `<td><input type="number" step="any" data-g="${g}" data-k="${k}" value="${config[g][k]}" /></td>`;
+      }
+      rows += '</tr>';
+    }
+    t.innerHTML = head + rows;
+    t.querySelectorAll('input').forEach((inp) => {
+      inp.addEventListener('change', () => {
+        const v = parseFloat(inp.value);
+        if (Number.isFinite(v)) config[inp.dataset.g][inp.dataset.k] = v;
+      });
+    });
+  }
+
+  document.getElementById('save').onclick = () => {
+    try {
+      localStorage.setItem(PREFIX + KEY, JSON.stringify(config));
+      setStatus('Saved. The radar will use these baselines.');
+    } catch (e) { setStatus('Save failed: ' + e.message, true); }
+  };
+  document.getElementById('reload').onclick = () => { config = load(); render(); setStatus('Reloaded saved values.'); };
+  document.getElementById('reset').onclick = () => { config = defaults(); render(); setStatus('Reset to defaults (not yet saved).'); };
+  document.getElementById('export').onclick = () => {
+    document.getElementById('json').value = JSON.stringify(config, null, 2);
+    setStatus('Exported JSON below.');
+  };
+  document.getElementById('import').onclick = () => {
+    try {
+      const parsed = JSON.parse(document.getElementById('json').value);
+      if (!parsed || typeof parsed !== 'object') throw new Error('not an object');
+      const base = defaults();
+      for (const g of GAMEMODES) base[g] = { ...base[g], ...(parsed[g] || {}) };
+      config = base;
+      render();
+      setStatus('Imported into the grid. Press Save to keep it.');
+    } catch (e) { setStatus('Import failed: ' + e.message, true); }
+  };
+
+  render();
+</script>
+</body>
+</html>

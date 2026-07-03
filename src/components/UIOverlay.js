@@ -24,7 +24,17 @@ import {
 } from '../lib/accountStats.js';
 import { countryOptionsHtml, flagEmoji } from '../lib/countries.js';
 import { fetchPublicProfile, fetchPublicSettings } from '../lib/userProfile.js';
-import { logAimRun, fetchAimComparison, AIM_STAT_FILTERS } from '../lib/aimStats.js';
+import { logAimRun, fetchAimComparison, fetchAimStats, AIM_STAT_FILTERS } from '../lib/aimStats.js';
+import {
+  RATING_CATEGORIES,
+  RATING_LABELS,
+  RATED_GAMEMODES,
+  loadBaselines,
+  baselinesForGamemode,
+  calculateAim4Ratings,
+  telemetryFromAimStats,
+  averageRatings
+} from '../lib/aim4Ratings.js';
 import { supabaseConfigured } from '../lib/supabase.js';
 import { localDecode } from '../lib/replayCodec.js';
 import { ReplayAnalytics } from '../lib/replayAnalytics.js';
@@ -958,6 +968,17 @@ export class UIOverlay {
           <h4>Statistics</h4>
           <div id="account-stats" class="account-stats">
             <p class="center lb-hint">Loading…</p>
+          </div>
+        </section>
+
+        <section class="account-section" id="account-rating-section">
+          <div class="account-aim-head">
+            <h4>Aim4 Rating</h4>
+            <select id="account-rating-filter" class="config-code-input account-aim-filter"></select>
+          </div>
+          <div id="account-rating" class="account-rating">
+            <canvas id="account-rating-canvas" class="account-rating-canvas" width="440" height="360"></canvas>
+            <div id="account-rating-legend" class="account-rating-legend"></div>
           </div>
         </section>
 
@@ -2612,6 +2633,7 @@ export class UIOverlay {
       this._loadAccountStats();
       this._aimStatsUserId = this.auth?.user?.id || null;
       this._loadAimStats();
+      this._loadRating();
       this._loadAccountReplays();
     }
   }
@@ -2650,6 +2672,7 @@ export class UIOverlay {
       if (statsBody) statsBody.innerHTML = this._accountStatsHtml(stats);
       this._aimStatsUserId = userId;
       this._loadAimStats();
+      this._loadRating();
       await this._loadAccountReplays(userId);
     } catch (e) {
       if (statsBody) {
@@ -2734,6 +2757,160 @@ export class UIOverlay {
       this._aimFilterId = sel.value;
       this._loadAimStats();
     });
+    this._bindRating();
+  }
+
+  /** Populate the Aim4 Rating mode filter (all-modes average + each mode). */
+  _bindRating() {
+    this._ratingMode = this._ratingMode || 'all';
+    const sel = this.root.querySelector('#account-rating-filter');
+    if (!sel) return;
+    const opts = [`<option value="all">All modes (average)</option>`]
+      .concat(RATED_GAMEMODES.map(
+        (m) => `<option value="${m}">${this._esc(SCENARIO_META[m]?.title || m)}</option>`
+      ));
+    sel.innerHTML = opts.join('');
+    sel.value = this._ratingMode;
+    sel.addEventListener('change', () => {
+      this._ratingMode = sel.value;
+      this._loadRating();
+    });
+  }
+
+  /**
+   * Compute the Aim4 Rating radar for the viewed account. "all" averages the
+   * per-mode ratings; a specific mode shows that mode alone. Baselines come
+   * from the editable /tools/editvalues config.
+   */
+  async _loadRating() {
+    const canvas = this.root.querySelector('#account-rating-canvas');
+    const legend = this.root.querySelector('#account-rating-legend');
+    if (!canvas) return;
+    const userId = this._aimStatsUserId;
+    if (!supabaseConfigured() || !userId) {
+      this._drawRadar(null);
+      if (legend) legend.innerHTML = '<p class="center lb-hint">Aim4 Rating is not available.</p>';
+      return;
+    }
+    if (legend) legend.innerHTML = '<p class="center lb-hint">Loading…</p>';
+    const config = loadBaselines();
+    try {
+      let rating;
+      if (this._ratingMode === 'all') {
+        const perMode = await Promise.all(
+          RATED_GAMEMODES.map(async (mode) => {
+            const row = await fetchAimStats({ userId, scenario: mode });
+            if (!row || !Number(row.games)) return null;
+            return calculateAim4Ratings(
+              telemetryFromAimStats(row),
+              { baselines: baselinesForGamemode(mode, config) }
+            );
+          })
+        );
+        const usable = perMode.filter(Boolean);
+        if (!usable.length) {
+          this._drawRadar(null);
+          if (legend) legend.innerHTML = '<p class="center lb-hint">No competitive runs yet — play to build a rating.</p>';
+          return;
+        }
+        rating = averageRatings(usable);
+      } else {
+        const row = await fetchAimStats({ userId, scenario: this._ratingMode });
+        if (!row || !Number(row.games)) {
+          this._drawRadar(null);
+          if (legend) legend.innerHTML = '<p class="center lb-hint">No competitive runs for this mode yet.</p>';
+          return;
+        }
+        rating = calculateAim4Ratings(
+          telemetryFromAimStats(row),
+          { baselines: baselinesForGamemode(this._ratingMode, config) }
+        );
+      }
+      this._drawRadar(rating);
+      if (legend) legend.innerHTML = this._ratingLegendHtml(rating);
+    } catch (e) {
+      this._drawRadar(null);
+      if (legend) legend.innerHTML = `<p class="center lb-hint is-error">${this._esc(e.message || 'Could not load rating.')}</p>`;
+    }
+  }
+
+  _ratingLegendHtml(rating) {
+    const rows = RATING_CATEGORIES
+      .map((k) => `<tr><td>${RATING_LABELS[k]}</td><td class="account-rank">${(rating[k] ?? 0).toFixed(2)}</td></tr>`)
+      .join('');
+    return `<table class="account-stats-table"><thead><tr><th>Category</th><th>Rating</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  /** Draw a 0–2 radar (1.00 = baseline ring) for the 7 rating categories. */
+  _drawRadar(rating) {
+    const canvas = this.root.querySelector('#account-rating-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const W = canvas.width;
+    const H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    const cx = W / 2;
+    const cy = H / 2 + 6;
+    const R = Math.min(W, H) / 2 - 46;
+    const n = RATING_CATEGORIES.length;
+    const MAX = 2;
+    const angleAt = (i) => -Math.PI / 2 + (i / n) * Math.PI * 2;
+
+    // Grid rings at 0.5 / 1.0 / 1.5 / 2.0 (1.0 highlighted = baseline).
+    for (const lvl of [0.5, 1, 1.5, 2]) {
+      ctx.beginPath();
+      for (let i = 0; i <= n; i++) {
+        const a = angleAt(i % n);
+        const r = R * (lvl / MAX);
+        const x = cx + Math.cos(a) * r;
+        const y = cy + Math.sin(a) * r;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = lvl === 1 ? 'rgba(245,37,37,0.55)' : 'rgba(255,255,255,0.14)';
+      ctx.lineWidth = lvl === 1 ? 1.5 : 1;
+      ctx.stroke();
+    }
+
+    // Spokes + axis labels.
+    ctx.fillStyle = '#9a9a9a';
+    ctx.font = '11px "Host Grotesk", sans-serif';
+    for (let i = 0; i < n; i++) {
+      const a = angleAt(i);
+      const x = cx + Math.cos(a) * R;
+      const y = cy + Math.sin(a) * R;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(x, y);
+      ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      const lx = cx + Math.cos(a) * (R + 18);
+      const ly = cy + Math.sin(a) * (R + 16);
+      ctx.textAlign = Math.abs(Math.cos(a)) < 0.3 ? 'center' : (Math.cos(a) > 0 ? 'left' : 'right');
+      ctx.textBaseline = 'middle';
+      ctx.fillText(RATING_LABELS[RATING_CATEGORIES[i]], lx, ly);
+    }
+
+    if (!rating) return;
+
+    // Rating polygon.
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const idx = i % n;
+      const a = angleAt(idx);
+      const val = Math.max(0, Math.min(MAX, rating[RATING_CATEGORIES[idx]] ?? 0));
+      const r = R * (val / MAX);
+      const x = cx + Math.cos(a) * r;
+      const y = cy + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(245,37,37,0.25)';
+    ctx.fill();
+    ctx.strokeStyle = '#f52525';
+    ctx.lineWidth = 2;
+    ctx.stroke();
   }
 
   /** Load the current account's aim analytics + the global baseline. */

@@ -980,6 +980,22 @@ a.btn {
   overflow-y: auto;
 }
 
+/* --- Aim4 Rating radar --------------------------------------------------- */
+.account-rating {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+}
+.account-rating-canvas {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+.account-rating-legend {
+  flex: 1 1 180px;
+  min-width: 160px;
+}
+
 /* --- Playlists ----------------------------------------------------------- */
 .playlists-panel {
   display: flex;
