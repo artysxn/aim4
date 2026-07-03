@@ -31,8 +31,8 @@ export class StarsScenario extends GridshotScenario {
 
     const presetAfter = this.competitive ? competitivePresetFor('stars') : null;
 
-    this.targetSize = presetAfter?.targetSize ?? s.targetSize ?? TARGET_SIZE;
-    this.targetCount = presetAfter?.targetCount ?? s.targetCount ?? TARGET_COUNT;
+    this.targetSize = presetAfter?.targetSize ?? this.config.targetSize ?? s.targetSize ?? TARGET_SIZE;
+    this.targetCount = presetAfter?.targetCount ?? this.config.targetCount ?? s.targetCount ?? TARGET_COUNT;
     this.mode = 'clicking';
     this.floatEnabled = false;
     this.enableTimeLimit = false;

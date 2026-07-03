@@ -26,6 +26,17 @@ export const COMPETITIVE_PRESETS = {
     boundsScaleX: 2,
     viewmodelRecoil: false
   },
+  bounce: {
+    runDuration: 30,
+    targetSize: 0.3,
+    targetCount: 4,
+    travelSpeed: 45,
+    minDistance: 6,
+    maxDistance: 12,
+    bounceHeight: 2.2,
+    infiniteAmmo: true,
+    viewmodelRecoil: false
+  },
   pasu: {
     runDuration: 30,
     targetSize: 0.15,

@@ -1,6 +1,7 @@
 // AIM4 menu / scenario icons — sourced exclusively from src/icons/
 import gridshot    from '../icons/mode_gridshot.svg?url';
 import stars       from '../icons/mode_stars.svg?url';
+import bounce      from '../icons/mode_bounce.svg?url';
 import microflicks from '../icons/mode_microflicks.svg?url';
 import pasu        from '../icons/mode_pasu.svg?url';
 import spidershot  from '../icons/mode_spidershot.svg?url';
@@ -13,6 +14,7 @@ import deathmatch  from '../icons/mode_deathmatch.svg?url';
 
 import matchmaking from '../icons/icon_matchmaking.svg?url';
 import training    from '../icons/icon_training.svg?url';
+import playlists   from '../icons/icon_playlists.svg?url';
 import customgames from '../icons/icon_customgames.svg?url';
 import multiplayer from '../icons/icon_multiplayer.svg?url';
 import leaderboard from '../icons/icon_leaderboards.svg?url';
@@ -23,6 +25,7 @@ import settings    from '../icons/icon_settings.svg?url';
 export const SCENARIO_ICONS = {
   gridshot,
   stars,
+  bounce,
   microflicks,
   pasu,
   spidershot,
@@ -36,6 +39,7 @@ export const SCENARIO_ICONS = {
 
 export const MATCHMAKING_ICON   = matchmaking;
 export const TRAINING_ICON      = training;
+export const PLAYLISTS_ICON     = playlists;
 export const CUSTOM_GAMES_ICON  = customgames;
 export const MULTIPLAYER_ICON   = multiplayer;
 export const LEADERBOARD_ICON   = leaderboard;

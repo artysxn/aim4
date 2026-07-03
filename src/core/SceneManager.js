@@ -16,6 +16,7 @@ import { DuelsScenario } from '../scenarios/DuelsScenario.js';
 import { RangeScenario } from '../scenarios/RangeScenario.js';
 import { TrackingScenario } from '../scenarios/TrackingScenario.js';
 import { DeathmatchScenario } from '../scenarios/DeathmatchScenario.js';
+import { BounceScenario } from '../scenarios/BounceScenario.js';
 import { MultiplayerDuelScenario } from '../scenarios/MultiplayerDuelScenario.js';
 import { DURATION_MODES, resolveModeDuration } from './SettingsManager.js';
 import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
@@ -24,6 +25,7 @@ import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 export const SCENARIOS = {
   gridshot: GridshotScenario,
   stars: StarsScenario,
+  bounce: BounceScenario,
   microflicks: MicroflicksScenario,
   pasu: PasuScenario,
   spidershot: SpidershotScenario,

@@ -6,6 +6,7 @@ export const COMPETITIVE_CONFIG_KEY = 'competitive';
 export const RANKED_SCENARIOS = new Set([
   'gridshot',
   'stars',
+  'bounce',
   'microflicks',
   'pasu',
   'spidershot',
@@ -21,6 +22,7 @@ export const RANKED_SCENARIOS = new Set([
 export const KILL_LEADERBOARD_SCENARIOS = new Set([
   'gridshot',
   'stars',
+  'bounce',
   'microflicks',
   'pasu',
   'spidershot',

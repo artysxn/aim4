@@ -7,14 +7,18 @@ import { lineOfSightClear } from '../utils/spawnVisibility.js';
 const MS_PER_TICK = 1000 / 128;
 const RAD_TO_DEG = 180 / Math.PI;
 
-const MIN_FLICK_SPEED = 0.01;
+// Floor for flick-start speed (rad/tick). Keep this low: short flicks (e.g.
+// Microflicks, ~1–3° of travel) only reach modest per-tick speeds, and a high
+// floor made them invisible to the detector. ~0.0035 rad/tick ≈ 25°/s @128 tps.
+const MIN_FLICK_SPEED = 0.0035;
 const MIN_MOVE_SPEED = 0.002;
 const FLICK_START_RATIO = 1.3;
 const FLICK_END_RATIO = 1 / 3;
 const FLICK_MIN_TICKS = 2;
 const FLICK_MAX_TICKS = 128;
 const BASELINE_EMA = 0.15;
-const MIN_FLICK_ANGLE_DEG = 0.5;
+// Minimum angular travel for the speed metric — small flicks still count.
+const MIN_FLICK_ANGLE_DEG = 0.1;
 const PAINTBALL_STEPS = 10; // sub-samples per tick so dots form solid lines
 
 // Direction-change ("redirect") flick detection — catches flicks that keep a

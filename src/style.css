@@ -1046,6 +1046,15 @@ a.btn {
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   padding-top: 14px;
 }
+/* Editor screen: the builder is the whole panel, no separator needed. */
+.playlist-builder-edit {
+  border-top: none;
+  padding-top: 0;
+}
+.playlist-draft-item .training-row-gear[disabled] {
+  opacity: 0.3;
+  cursor: default;
+}
 .playlist-builder h4 {
   margin: 0 0 12px;
 }

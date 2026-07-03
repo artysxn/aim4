@@ -52,7 +52,7 @@ import { MultiplayerController } from '../multiplayer/MultiplayerController.js';
 import { SCORE_TARGETS, MM_SCORE_TARGET, TRACKING_DURATION } from '../multiplayer/constants.js';
 import { getMap } from '../multiplayer/maps.js';
 import { formatServerRegion } from '../multiplayer/regionLabels.js';
-import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, CUSTOM_GAMES_ICON, MULTIPLAYER_ICON, LEADERBOARD_ICON, ACCOUNT_ICON, LOGOUT_ICON, SETTINGS_ICON } from '../aim4/icons.js';
+import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, PLAYLISTS_ICON as PLAYLISTS_TILE_ICON, CUSTOM_GAMES_ICON, MULTIPLAYER_ICON, LEADERBOARD_ICON, ACCOUNT_ICON, LOGOUT_ICON, SETTINGS_ICON } from '../aim4/icons.js';
 import { ARENAS } from '../scenarios/DuelsScenario.js';
 import { duelsArenaSelectOptions } from '../scenarios/duelsArenas.js';
 import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
@@ -60,6 +60,7 @@ import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 const SCENARIO_META = {
   gridshot: { title: 'Gridshot', dualPlay: true, tags: ['Speed', 'Accuracy'] },
   stars: { title: 'Stars', dualPlay: true, tags: ['Accuracy'] },
+  bounce: { title: 'Bounce', dualPlay: true, tags: ['Speed', 'Reactions'] },
   microflicks: { title: 'Microflicks', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
   pasu: { title: 'Pasu', dualPlay: true, tags: ['Accuracy', 'Reactions', 'Control'] },
   spidershot: { title: 'Spidershot', dualPlay: true, tags: ['Speed', 'Reactions'] },
@@ -75,6 +76,7 @@ const SCENARIO_META = {
 const SCENARIO_SETTING_IDS = new Set([
   'gridshot',
   'stars',
+  'bounce',
   'microflicks',
   'pasu',
   'spidershot',
@@ -86,10 +88,29 @@ const SCENARIO_SETTING_IDS = new Set([
   'tracking'
 ]);
 
+// Training sub-menus. A mode may appear in several categories; any registered
+// mode not placed anywhere is appended to General so nothing goes missing.
+const TRAINING_CATEGORIES = [
+  { id: 'control', title: 'Control', modes: ['microflicks', 'stars', 'survival', 'pasu', 'arena', 'tracking'] },
+  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'bounce', 'spidershot'] },
+  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks'] },
+  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels'] }
+];
+
+function trainingCategoryModes(id) {
+  const cat = TRAINING_CATEGORIES.find((c) => c.id === id);
+  if (!cat) return [];
+  if (id !== 'general') return cat.modes.filter((m) => SCENARIOS[m]);
+  const placed = new Set(TRAINING_CATEGORIES.flatMap((c) => c.modes));
+  const strays = Object.keys(SCENARIOS).filter((m) => !placed.has(m));
+  return [...cat.modes.filter((m) => SCENARIOS[m]), ...strays];
+}
+
 const GEAR_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66z"/></svg>`;
 
 const PLAYLIST_ICON = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 10h11v2H3zm0-4h11v2H3zm0 8h7v2H3zm13-1v6l5-3z"/></svg>`;
 const TRASH_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6zM19 4h-3.5l-1-1h-5l-1 1H5v2h14z"/></svg>`;
+const PENCIL_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75z"/></svg>`;
 
 /** Slider paired with a number box; stored value is not clamped to the slider range. */
 function rf(id, label, min, max, step) {
@@ -173,8 +194,10 @@ export class UIOverlay {
     this._countdownRemaining = 0;
     // Active playlist run: { playlist, index, results: [] } | null
     this._playlistRun = null;
-    // Items being assembled in the playlist builder: [{ scenario, config }]
+    // Items being assembled in the playlist editor: [{ scenario, config }]
     this._playlistDraft = [];
+    // Editor target: null = closed, { id: null } = new, { id, createdAt } = editing
+    this._playlistEdit = null;
     this._lastPlaylist = null; // most recent playlist run, for "Play again"
   }
 
@@ -352,7 +375,8 @@ export class UIOverlay {
           <label class="field-check"><input type="checkbox" id="set-grid-tl" /> Per-target time limit</label>
           ${rf('set-grid-age', 'Max target age (ms)', 400, 3000, 100)}
           <label class="field-check"><input type="checkbox" id="set-grid-infinite-ammo" /> Infinite ammo</label>
-          <label class="field-check"><input type="checkbox" id="set-grid-vm-recoil" /> Viewmodel recoil</label>`
+          <label class="field-check"><input type="checkbox" id="set-grid-vm-recoil" /> Viewmodel recoil</label>
+          ${rf('set-grid-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
         id: 'stars',
@@ -360,7 +384,22 @@ export class UIOverlay {
         body: `
           <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
           ${rf('set-stars-size', 'Dot size', 0.05, 0.5, 0.01)}
-          ${rf('set-stars-count', 'Dot count', 1, 400, 1)}`
+          ${rf('set-stars-count', 'Dot count', 1, 400, 1)}
+          ${rf('set-stars-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'bounce',
+        label: 'Bounce',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-bounce-size', 'Ball size', 0.15, 0.9, 0.05)}
+          ${rf('set-bounce-count', 'Ball count', 1, 8, 1)}
+          ${rf('set-bounce-speed', 'Travel speed (°/s)', 10, 120, 5)}
+          ${rf('set-bounce-min-dist', 'Min distance (m)', 3, 14, 0.5)}
+          ${rf('set-bounce-max-dist', 'Max distance (m)', 4, 20, 0.5)}
+          ${rf('set-bounce-height', 'Bounce height (m)', 0.5, 5, 0.1)}
+          <label class="field-check"><input type="checkbox" id="set-bounce-infinite-ammo" /> Infinite ammo</label>
+          ${rf('set-bounce-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
         id: 'microflicks',
@@ -372,7 +411,8 @@ export class UIOverlay {
           <label class="field-check"><input type="checkbox" id="set-mf-float" /> Horizontal drift</label>
           ${rf('set-mf-float-speed', 'Max drift speed (m/s)', 0.5, 8, 0.5)}
           ${rf('set-mf-bounds-y', 'Vertical spawn scale', 0.25, 2, 0.05)}
-          ${rf('set-mf-bounds-x', 'Horizontal spawn scale', 0.25, 4, 0.05)}`
+          ${rf('set-mf-bounds-x', 'Horizontal spawn scale', 0.25, 4, 0.05)}
+          ${rf('set-mf-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
         id: 'pasu',
@@ -402,7 +442,8 @@ export class UIOverlay {
           ${rf('set-pasu-angle', 'Angle offset (°)', 15, 360, 15)}
           <label class="field-check"><input type="checkbox" id="set-pasu-tl" /> Per-target time limit</label>
           ${rf('set-pasu-age', 'Max target age (ms)', 400, 3000, 100)}
-          <label class="field-check"><input type="checkbox" id="set-pasu-infinite-ammo" /> Infinite ammo</label>`
+          <label class="field-check"><input type="checkbox" id="set-pasu-infinite-ammo" /> Infinite ammo</label>
+          ${rf('set-pasu-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
         id: 'spidershot',
@@ -429,7 +470,8 @@ export class UIOverlay {
           <label class="field-check"><input type="checkbox" id="set-spider-decoys" /> Decoy dots</label>
           ${rf('set-spider-decoy-chance', 'Decoy chance (% per extra dot)', 0, 100, 5)}
           ${rf('set-spider-decoy-min', 'Decoy count (min)', 0, 6, 1)}
-          ${rf('set-spider-decoy-max', 'Decoy count (max)', 0, 8, 1)}`
+          ${rf('set-spider-decoy-max', 'Decoy count (max)', 0, 8, 1)}
+          ${rf('set-spider-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
         id: 'survival',
@@ -451,7 +493,8 @@ export class UIOverlay {
           ${rf('set-arena-col', 'Columns', 4, 10, 1)}
           ${rf('set-arena-colr', 'Column width (m)', 0.2, 1.2, 0.05)}
           ${rf('set-arena-ring', 'Ring distance (m)', 5, 16, 0.5)}
-          ${rf('set-arena-enemy', 'Enemy size', 0.5, 2.0, 0.1)}`
+          ${rf('set-arena-enemy', 'Enemy size', 0.5, 2.0, 0.1)}
+          ${rf('set-arena-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
         id: 'duels',
@@ -466,7 +509,8 @@ export class UIOverlay {
               ${duelsArenaSelectOptions(ARENAS)}
             </select>
           </div>
-          ${rf('set-duels-ttk', 'Time to kill (s)', 0.2, 2.0, 0.1)}`
+          ${rf('set-duels-ttk', 'Time to kill (s)', 0.2, 2.0, 0.1)}
+          ${rf('set-duels-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
         id: 'deathmatch',
@@ -476,7 +520,8 @@ export class UIOverlay {
           ${rf('set-dm-bots', 'Bots', 1, 6, 1)}
           ${rf('set-dm-speed', 'Bot speed', 0.25, 2.0, 0.05)}
           ${rf('set-dm-body', 'Bot body hit %', 5, 50, 1)}
-          ${rf('set-dm-head', 'Bot head hit %', 1, 20, 1)}`
+          ${rf('set-dm-head', 'Bot head hit %', 1, 20, 1)}
+          ${rf('set-dm-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
         id: 'range',
@@ -514,7 +559,8 @@ export class UIOverlay {
           ${rf('set-range-cover-count', 'Cover amount', 1, 6, 1)}
           ${rf('set-range-cover-dist', 'Cover distance (m)', 2, 15, 0.5)}
           ${rf('set-range-cover-thick', 'Cover thickness (m)', 0.4, 3, 0.1)}
-          ${rf('set-range-cover-height', 'Cover height (m)', 1, 6, 0.2)}`
+          ${rf('set-range-cover-height', 'Cover height (m)', 1, 6, 0.2)}
+          ${rf('set-range-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
         id: 'tracking',
@@ -524,7 +570,8 @@ export class UIOverlay {
           ${rf('set-tracking-width', 'Bot width', 0.5, 2.0, 0.05)}
           ${rf('set-tracking-speed', 'Bot speed', 0.25, 2.0, 0.05)}
           <label class="field-check"><input type="checkbox" id="set-tracking-crouch" /> Tap crouch</label>
-          ${rf('set-tracking-strafe', 'Strafe rate', 0.25, 3.0, 0.05)}`
+          ${rf('set-tracking-strafe', 'Strafe rate', 0.25, 3.0, 0.05)}
+          ${rf('set-tracking-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       }
     ];
   }
@@ -591,9 +638,9 @@ export class UIOverlay {
       <div class="panel wide">
         <h1 class="logo text-big">AIM4<span>.io</span></h1>
         <div class="menu-modes">
-          <button type="button" class="mode-tile mode-tile-training" data-goto="training">
-            <img src="${TRAINING_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
-            <span class="mode-tile-title">Training</span>
+          <button type="button" class="mode-tile mode-tile-training" data-goto="singleplayer">
+            <img src="${ACCOUNT_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
+            <span class="mode-tile-title">Singleplayer</span>
           </button>
           <button type="button" class="mode-tile mode-tile-multiplayer" data-goto="multiplayer">
             <img src="${MULTIPLAYER_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
@@ -654,61 +701,88 @@ export class UIOverlay {
       </div>
     </div>
 
-    <!-- TRAINING (singleplayer mode picker) -->
-    <div class="screen training" data-screen="training">
-      <div class="panel wide training-panel">
-        <h2 class="text-big training-heading">Training</h2>
-        <div class="training-list">
-          ${Object.keys(SCENARIOS)
-            .map((key) => {
-              const meta = SCENARIO_META[key];
-              const hasSettings = SCENARIO_SETTING_IDS.has(key);
-              const playBtns = meta.dualPlay
-                ? `<button type="button" class="btn training-row-play" data-play="${key}" data-variant="practice">Training</button>
-              <button type="button" class="btn training-row-play" data-play="${key}" data-variant="competitive">Competitive</button>`
-                : `<button type="button" class="btn training-row-play" data-play="${key}" aria-label="Play ${meta.title}">Play</button>`;
-              const lbBtn = `<button type="button" class="training-row-lb" data-training-lb="${key}" aria-label="${meta.title} leaderboard"><img src="${LEADERBOARD_ICON}" alt="" class="aim4-icon" width="16" height="16" /></button>`;
-              const gearBtn = hasSettings
-                ? `<button type="button" class="training-row-gear" data-scenario-settings-open="${key}" aria-label="${meta.title} settings">${GEAR_ICON}</button>`
-                : `<span class="training-row-gear-spacer" aria-hidden="true"></span>`;
-              const tagHtml = (meta.tags || [])
-                .map((tag) => `<span class="training-row-tag">${tag}</span>`)
-                .join('');
-              return `
-            <div class="training-row" data-scenario="${key}">
-              <div class="training-row-main">
-                <div class="training-row-icon">
-                  <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="24" height="24" />
-                </div>
-                <span class="training-row-title">${meta.title}</span>
-                ${tagHtml ? `<div class="training-row-tags">${tagHtml}</div>` : ''}
-              </div>
-              <div class="training-row-actions">
-                ${playBtns}
-                ${lbBtn}
-                ${gearBtn}
-              </div>
-            </div>`;
-            })
-            .join('')}
+    <!-- SINGLEPLAYER (playlists + training hub) -->
+    <div class="screen singleplayer" data-screen="singleplayer">
+      <div class="panel wide">
+        <h2 class="text-big">Singleplayer</h2>
+        <div class="menu-modes menu-modes-sub">
+          <button type="button" class="mode-tile" data-goto="playlists">
+            <img src="${PLAYLISTS_TILE_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
+            <span class="mode-tile-title">Playlists</span>
+            <span class="mode-tile-sub">Build &amp; run mode sequences</span>
+          </button>
+          <button type="button" class="mode-tile" data-goto="training-categories">
+            <img src="${TRAINING_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
+            <span class="mode-tile-title">Training</span>
+            <span class="mode-tile-sub">Practice &amp; competitive modes</span>
+          </button>
         </div>
-        <div class="menu-actions training-back">
-          <button type="button" class="btn btn-with-icon" data-goto="playlists" id="training-playlists-btn">${PLAYLIST_ICON}<span>Playlists</span></button>
+        <div class="menu-actions">
           <button class="btn primary" data-goto="menu">Back</button>
         </div>
       </div>
     </div>
 
-    <!-- PLAYLISTS (build + run sequences of practice modes) -->
+    <!-- TRAINING CATEGORIES -->
+    <div class="screen training-categories" data-screen="training-categories">
+      <div class="panel wide">
+        <h2 class="text-big">Training</h2>
+        <div class="menu-modes menu-modes-sub training-cat-tiles">
+          ${TRAINING_CATEGORIES.map((cat) => {
+            const modes = trainingCategoryModes(cat.id);
+            const iconKey = { control: 'tracking', speed: 'gridshot', flicking: 'spidershot', general: 'range' }[cat.id];
+            return `
+          <button type="button" class="mode-tile" data-training-cat="${cat.id}">
+            <img src="${SCENARIO_ICONS[iconKey]}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
+            <span class="mode-tile-title">${cat.title}</span>
+            <span class="mode-tile-sub">${modes.length} mode${modes.length === 1 ? '' : 's'}</span>
+          </button>`;
+          }).join('')}
+        </div>
+        <div class="menu-actions">
+          <button class="btn primary" data-goto="singleplayer">Back</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TRAINING (mode list for the selected category) -->
+    <div class="screen training" data-screen="training">
+      <div class="panel wide training-panel">
+        <h2 class="text-big training-heading" id="training-heading">Training</h2>
+        <div class="training-list" id="training-list"></div>
+        <div class="menu-actions training-back">
+          <button class="btn primary" data-goto="training-categories">Back</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PLAYLISTS (viewer: run / edit / share saved playlists) -->
     <div class="screen playlists" data-screen="playlists">
       <div class="panel wide playlists-panel">
         <h2 class="text-big training-heading">Playlists</h2>
         <div class="playlists-scroll">
           <div id="playlists-list" class="playlists-list"></div>
+          <p class="readout" id="playlist-status"></p>
+          <div class="playlist-add-row playlist-import-row">
+            <input type="text" id="playlist-import-code" class="config-code-input" placeholder="Import playlist code (AIM4P-…)" spellcheck="false" autocomplete="off" />
+            <button type="button" class="btn" id="playlist-import-btn">Import</button>
+          </div>
+        </div>
+        <div class="menu-actions">
+          <button type="button" class="btn" id="playlist-new-btn">New playlist</button>
+          <button type="button" class="btn primary" data-goto="singleplayer">Back</button>
+        </div>
+      </div>
+    </div>
 
-          <section class="playlist-builder">
-            <h4>New playlist</h4>
+    <!-- PLAYLIST EDITOR (create a new playlist or edit an existing one) -->
+    <div class="screen playlist-edit" data-screen="playlist-edit">
+      <div class="panel wide playlists-panel">
+        <h2 class="text-big training-heading" id="playlist-edit-title">New playlist</h2>
+        <div class="playlists-scroll">
+          <section class="playlist-builder playlist-builder-edit">
             <div class="field field-plain">
+              <div class="field-top"><span class="field-label">Name</span></div>
               <input type="text" id="playlist-name" class="config-code-input" maxlength="60" placeholder="Playlist name" spellcheck="false" autocomplete="off" />
             </div>
             <div class="playlist-add-row">
@@ -719,23 +793,18 @@ export class UIOverlay {
               </select>
               <button type="button" class="btn" id="playlist-add-current">Add mode</button>
             </div>
+            <p class="readout muted">“Add mode” snapshots that mode's current Training settings — set them up via the gear on its Training card first, or paste a mode code below.</p>
             <div class="playlist-add-row">
               <input type="text" id="playlist-add-code" class="config-code-input" placeholder="Paste mode code (AIM4M-…)" spellcheck="false" autocomplete="off" />
               <button type="button" class="btn" id="playlist-add-code-btn">Add code</button>
             </div>
             <div id="playlist-draft-items" class="playlist-draft-items"></div>
-            <p class="readout" id="playlist-status"></p>
-            <div class="playlist-builder-actions">
-              <button type="button" class="btn primary" id="playlist-save-btn">Save playlist</button>
-            </div>
-            <div class="playlist-add-row playlist-import-row">
-              <input type="text" id="playlist-import-code" class="config-code-input" placeholder="Import playlist code (AIM4P-…)" spellcheck="false" autocomplete="off" />
-              <button type="button" class="btn" id="playlist-import-btn">Import</button>
-            </div>
+            <p class="readout" id="playlist-edit-status"></p>
           </section>
         </div>
         <div class="menu-actions">
-          <button type="button" class="btn primary" data-goto="training">Back</button>
+          <button type="button" class="btn primary" id="playlist-save-btn">Save playlist</button>
+          <button type="button" class="btn" id="playlist-edit-cancel">Cancel</button>
         </div>
       </div>
     </div>
@@ -1182,24 +1251,35 @@ export class UIOverlay {
     });
 
     this._bindLeaderboard();
+    this._trainingCategory = TRAINING_CATEGORIES[0].id;
 
-    // Training rows: hover previews which leaderboard is active.
-    this.root.querySelectorAll('.training-row').forEach((row) => {
-      row.addEventListener('mouseenter', () => (this.currentScenario = row.dataset.scenario));
-    });
-
-    this.root.querySelectorAll('[data-scenario-settings-open]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._openScenarioSettings(btn.dataset.scenarioSettingsOpen);
+    // Category tiles open the mode list for that category.
+    this.root.querySelectorAll('[data-training-cat]').forEach((tile) => {
+      tile.addEventListener('click', () => {
+        this._trainingCategory = tile.dataset.trainingCat;
+        this.showScreen('training');
       });
     });
 
-    this.root.querySelectorAll('[data-training-lb]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
+    // The training list re-renders per category, so its events are delegated.
+    const trainingList = this.root.querySelector('#training-list');
+    trainingList?.addEventListener('click', (e) => {
+      const gear = e.target.closest('[data-scenario-settings-open]');
+      if (gear) {
         e.stopPropagation();
-        this._openLeaderboardForScenario(btn.dataset.trainingLb);
-      });
+        this._openScenarioSettings(gear.dataset.scenarioSettingsOpen);
+        return;
+      }
+      const lb = e.target.closest('[data-training-lb]');
+      if (lb) {
+        e.stopPropagation();
+        this._openLeaderboardForScenario(lb.dataset.trainingLb);
+      }
+    });
+    // Hovering a row previews which leaderboard is active.
+    trainingList?.addEventListener('mouseover', (e) => {
+      const row = e.target.closest('.training-row');
+      if (row) this.currentScenario = row.dataset.scenario;
     });
 
     document.addEventListener('keydown', (e) => {
@@ -1218,6 +1298,49 @@ export class UIOverlay {
     this._bindScenarioFooter();
     this._bindPlaylists();
     this._bindPauseMenu();
+  }
+
+  /** Render the training rows for the active category into #training-list. */
+  _renderTrainingList() {
+    const list = this.root.querySelector('#training-list');
+    if (!list) return;
+    const cat = TRAINING_CATEGORIES.find((c) => c.id === this._trainingCategory) || TRAINING_CATEGORIES[0];
+    const heading = this.root.querySelector('#training-heading');
+    if (heading) heading.textContent = cat.title;
+    list.innerHTML = trainingCategoryModes(cat.id)
+      .map((key) => this._trainingRowHtml(key))
+      .join('');
+  }
+
+  _trainingRowHtml(key) {
+    const meta = SCENARIO_META[key] || { title: key, tags: [] };
+    const hasSettings = SCENARIO_SETTING_IDS.has(key);
+    const playBtns = meta.dualPlay
+      ? `<button type="button" class="btn training-row-play" data-play="${key}" data-variant="practice">Training</button>
+    <button type="button" class="btn training-row-play" data-play="${key}" data-variant="competitive">Competitive</button>`
+      : `<button type="button" class="btn training-row-play" data-play="${key}" aria-label="Play ${meta.title}">Play</button>`;
+    const lbBtn = `<button type="button" class="training-row-lb" data-training-lb="${key}" aria-label="${meta.title} leaderboard"><img src="${LEADERBOARD_ICON}" alt="" class="aim4-icon" width="16" height="16" /></button>`;
+    const gearBtn = hasSettings
+      ? `<button type="button" class="training-row-gear" data-scenario-settings-open="${key}" aria-label="${meta.title} settings">${GEAR_ICON}</button>`
+      : `<span class="training-row-gear-spacer" aria-hidden="true"></span>`;
+    const tagHtml = (meta.tags || [])
+      .map((tag) => `<span class="training-row-tag">${tag}</span>`)
+      .join('');
+    return `
+  <div class="training-row" data-scenario="${key}">
+    <div class="training-row-main">
+      <div class="training-row-icon">
+        <img src="${SCENARIO_ICONS[key]}" alt="" class="aim4-icon" width="24" height="24" />
+      </div>
+      <span class="training-row-title">${meta.title}</span>
+      ${tagHtml ? `<div class="training-row-tags">${tagHtml}</div>` : ''}
+    </div>
+    <div class="training-row-actions">
+      ${playBtns}
+      ${lbBtn}
+      ${gearBtn}
+    </div>
+  </div>`;
   }
 
   _bindSettingsTabs() {
@@ -1602,9 +1725,22 @@ export class UIOverlay {
     $('#set-grid-vm-recoil')?.addEventListener('change', (e) => {
       draft((d) => { d.gridshot.viewmodelRecoil = e.target.checked; });
     });
+    this._bindRange('set-grid-misslimit', (v, d) => { d.gridshot.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-stars-size', (v, d) => { d.stars.targetSize = v; });
     this._bindRange('set-stars-count', (v, d) => { d.stars.targetCount = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-stars-misslimit', (v, d) => { d.stars.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    this._bindRange('set-bounce-size', (v, d) => { d.bounce.targetSize = v; });
+    this._bindRange('set-bounce-count', (v, d) => { d.bounce.targetCount = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-bounce-speed', (v, d) => { d.bounce.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-bounce-min-dist', (v, d) => { d.bounce.minDistance = v; });
+    this._bindRange('set-bounce-max-dist', (v, d) => { d.bounce.maxDistance = v; });
+    this._bindRange('set-bounce-height', (v, d) => { d.bounce.bounceHeight = v; });
+    $('#set-bounce-infinite-ammo')?.addEventListener('change', (e) => {
+      draft((d) => { d.bounce.infiniteAmmo = e.target.checked; });
+    });
+    this._bindRange('set-bounce-misslimit', (v, d) => { d.bounce.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-mf-size', (v, d) => { d.microflicks.targetSize = v; });
     this._bindRange('set-mf-count', (v, d) => { d.microflicks.targetCount = v; }, { parse: (v) => parseInt(v, 10) });
@@ -1614,6 +1750,7 @@ export class UIOverlay {
     this._bindRange('set-mf-float-speed', (v, d) => { d.microflicks.floatSpeedMax = v; });
     this._bindRange('set-mf-bounds-y', (v, d) => { d.microflicks.boundsScaleY = v; });
     this._bindRange('set-mf-bounds-x', (v, d) => { d.microflicks.boundsScaleX = v; });
+    this._bindRange('set-mf-misslimit', (v, d) => { d.microflicks.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-pasu-size', (v, d) => { d.pasu.targetSize = v; });
     this._bindRange('set-pasu-count', (v, d) => { d.pasu.targetCount = v; }, { parse: (v) => parseInt(v, 10) });
@@ -1635,6 +1772,7 @@ export class UIOverlay {
     $('#set-pasu-infinite-ammo')?.addEventListener('change', (e) => {
       draft((d) => { d.pasu.infiniteAmmo = e.target.checked; });
     });
+    this._bindRange('set-pasu-misslimit', (v, d) => { d.pasu.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-spider-size', (v, d) => { d.spidershot.targetSize = v; });
     this._bindRange('set-spider-ttk', (v, d) => { d.spidershot.timeToKill = v; }, { parse: (v) => parseInt(v, 10) });
@@ -1667,6 +1805,7 @@ export class UIOverlay {
     this._bindRange('set-spider-decoy-chance', (v, d) => { d.spidershot.decoyChancePer = v / 100; });
     this._bindRange('set-spider-decoy-min', (v, d) => { d.spidershot.decoyMin = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-spider-decoy-max', (v, d) => { d.spidershot.decoyMax = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-spider-misslimit', (v, d) => { d.spidershot.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-surv-spawn', (v, d) => { d.survival.spawnInterval = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-surv-despawn', (v, d) => { d.survival.despawnTime = v; }, { parse: (v) => parseInt(v, 10) });
@@ -1679,16 +1818,19 @@ export class UIOverlay {
     this._bindRange('set-arena-colr', (v, d) => { d.arena.columnRadius = v; });
     this._bindRange('set-arena-ring', (v, d) => { d.arena.ringRadius = v; });
     this._bindRange('set-arena-enemy', (v, d) => { d.arena.enemyScale = v; });
+    this._bindRange('set-arena-misslimit', (v, d) => { d.arena.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     $('#set-duels-arena').addEventListener('change', (e) => {
       draft((d) => { d.duels.arena = parseInt(e.target.value, 10); });
     });
     this._bindRange('set-duels-ttk', (v, d) => { d.duels.ttk = v; });
+    this._bindRange('set-duels-misslimit', (v, d) => { d.duels.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-dm-bots', (v, d) => { d.deathmatch.botCount = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-dm-speed', (v, d) => { d.deathmatch.botSpeed = v; });
     this._bindRange('set-dm-body', (v, d) => { d.deathmatch.botBodyHit = v / 100; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-dm-head', (v, d) => { d.deathmatch.botHeadHit = v / 100; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-dm-misslimit', (v, d) => { d.deathmatch.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     const col = (id, key) =>
       $(id).addEventListener('input', (e) => {
@@ -1722,12 +1864,14 @@ export class UIOverlay {
     this._bindRange('set-range-cover-dist', (v, d) => { d.range.coverDistance = v; });
     this._bindRange('set-range-cover-thick', (v, d) => { d.range.coverThickness = v; });
     this._bindRange('set-range-cover-height', (v, d) => { d.range.coverHeight = v; });
+    this._bindRange('set-range-misslimit', (v, d) => { d.range.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-tracking-width', (v, d) => { d.tracking.botWidth = v; });
     this._bindRange('set-tracking-speed', (v, d) => { d.tracking.botSpeed = v; });
     $('#set-tracking-crouch')?.addEventListener('change', (e) => {
       draft((d) => { d.tracking.botCrouchTap = e.target.checked; });
     });
     this._bindRange('set-tracking-strafe', (v, d) => { d.tracking.strafeRate = v; });
+    this._bindRange('set-tracking-misslimit', (v, d) => { d.tracking.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     $('#settings-undo-btn')?.addEventListener('click', () => {
       if (this._settingsExploreMode || this.settings.isExploreMode) return;
@@ -1750,6 +1894,13 @@ export class UIOverlay {
     el.classList.toggle('is-error', !!isError);
   }
 
+  _setPlaylistEditStatus(msg, isError = false) {
+    const el = this.root.querySelector('#playlist-edit-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.classList.toggle('is-error', !!isError);
+  }
+
   /** Short label like "Gridshot · 60s" / "Gridshot · 100 kills". */
   _modeSummary(item) {
     const title = SCENARIO_META[item.scenario]?.title || item.scenario;
@@ -1761,48 +1912,8 @@ export class UIOverlay {
   _bindPlaylists() {
     const $ = (id) => this.root.querySelector(id);
 
-    $('#playlist-add-current')?.addEventListener('click', () => {
-      const scenario = $('#playlist-add-mode')?.value;
-      if (!scenario || !SCENARIOS[scenario]) return;
-      const { config } = this.settings.getModeConfig(scenario);
-      this._playlistDraft.push({ scenario, config });
-      this._renderPlaylistDraft();
-      this._setPlaylistStatus(`Added ${SCENARIO_META[scenario]?.title || scenario}.`);
-    });
-
-    $('#playlist-add-code-btn')?.addEventListener('click', () => {
-      const raw = $('#playlist-add-code')?.value;
-      if (!raw || !raw.trim()) { this._setPlaylistStatus('Paste a mode code first.', true); return; }
-      let decoded;
-      try {
-        decoded = decodeModeConfig(raw);
-      } catch (err) {
-        this._setPlaylistStatus(err.message || 'Invalid mode code', true);
-        return;
-      }
-      if (!SCENARIOS[decoded.scenario]) {
-        this._setPlaylistStatus('That code is for an unknown mode.', true);
-        return;
-      }
-      this._playlistDraft.push({ scenario: decoded.scenario, config: decoded.config });
-      $('#playlist-add-code').value = '';
-      this._renderPlaylistDraft();
-      this._setPlaylistStatus(`Added ${SCENARIO_META[decoded.scenario]?.title || decoded.scenario} from code.`);
-    });
-
-    $('#playlist-save-btn')?.addEventListener('click', () => {
-      if (!this._playlistDraft.length) {
-        this._setPlaylistStatus('Add at least one mode before saving.', true);
-        return;
-      }
-      const name = $('#playlist-name')?.value?.trim() || 'Untitled playlist';
-      const playlist = createPlaylist(name, this._playlistDraft);
-      savePlaylist(playlist);
-      this._playlistDraft = [];
-      if ($('#playlist-name')) $('#playlist-name').value = '';
-      this._renderPlaylists();
-      this._setPlaylistStatus(`Saved "${playlist.name}".`);
-    });
+    // ---- Viewer -----------------------------------------------------------
+    $('#playlist-new-btn')?.addEventListener('click', () => this._openPlaylistEditor(null));
 
     $('#playlist-import-btn')?.addEventListener('click', () => {
       const raw = $('#playlist-import-code')?.value;
@@ -1823,32 +1934,78 @@ export class UIOverlay {
       this._setPlaylistStatus(`Imported "${playlist.name}".`);
     });
 
-    $('#playlist-draft-items')?.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-playlist-remove]');
-      if (!btn) return;
-      const idx = parseInt(btn.dataset.playlistRemove, 10);
-      if (Number.isInteger(idx)) {
-        this._playlistDraft.splice(idx, 1);
-        this._renderPlaylistDraft();
-      }
-    });
-
     $('#playlists-list')?.addEventListener('click', (e) => {
-      const el = e.target.closest('[data-playlist-play],[data-playlist-lb],[data-playlist-share],[data-playlist-del]');
+      const el = e.target.closest('[data-playlist-play],[data-playlist-lb],[data-playlist-share],[data-playlist-edit],[data-playlist-del]');
       if (!el) return;
       const id =
-        el.dataset.playlistPlay || el.dataset.playlistLb ||
-        el.dataset.playlistShare || el.dataset.playlistDel;
+        el.dataset.playlistPlay || el.dataset.playlistLb || el.dataset.playlistShare ||
+        el.dataset.playlistEdit || el.dataset.playlistDel;
       const playlist = loadPlaylists().find((p) => p.id === id);
       if (!playlist) return;
       if (el.dataset.playlistPlay != null) this._startPlaylist(playlist);
       else if (el.dataset.playlistLb != null) this._openPlaylistLeaderboard(playlist);
       else if (el.dataset.playlistShare != null) this._sharePlaylist(playlist);
+      else if (el.dataset.playlistEdit != null) this._openPlaylistEditor(playlist);
       else if (el.dataset.playlistDel != null) {
         deletePlaylist(id);
         this._renderPlaylists();
         this._setPlaylistStatus(`Deleted "${playlist.name}".`);
       }
+    });
+
+    // ---- Editor -----------------------------------------------------------
+    $('#playlist-add-current')?.addEventListener('click', () => {
+      const scenario = $('#playlist-add-mode')?.value;
+      if (!scenario || !SCENARIOS[scenario]) return;
+      const { config } = this.settings.getModeConfig(scenario);
+      this._playlistDraft.push({ scenario, config });
+      this._renderPlaylistDraft();
+      this._setPlaylistEditStatus(`Added ${SCENARIO_META[scenario]?.title || scenario} with its current settings.`);
+    });
+
+    $('#playlist-add-code-btn')?.addEventListener('click', () => {
+      const raw = $('#playlist-add-code')?.value;
+      if (!raw || !raw.trim()) { this._setPlaylistEditStatus('Paste a mode code first.', true); return; }
+      let decoded;
+      try {
+        decoded = decodeModeConfig(raw);
+      } catch (err) {
+        this._setPlaylistEditStatus(err.message || 'Invalid mode code', true);
+        return;
+      }
+      if (!SCENARIOS[decoded.scenario]) {
+        this._setPlaylistEditStatus('That code is for an unknown mode.', true);
+        return;
+      }
+      this._playlistDraft.push({ scenario: decoded.scenario, config: decoded.config });
+      $('#playlist-add-code').value = '';
+      this._renderPlaylistDraft();
+      this._setPlaylistEditStatus(`Added ${SCENARIO_META[decoded.scenario]?.title || decoded.scenario} from code.`);
+    });
+
+    $('#playlist-draft-items')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-playlist-remove],[data-playlist-up],[data-playlist-down]');
+      if (!btn) return;
+      const items = this._playlistDraft;
+      if (btn.dataset.playlistRemove != null) {
+        const idx = parseInt(btn.dataset.playlistRemove, 10);
+        if (Number.isInteger(idx)) items.splice(idx, 1);
+      } else if (btn.dataset.playlistUp != null) {
+        const idx = parseInt(btn.dataset.playlistUp, 10);
+        if (idx > 0) [items[idx - 1], items[idx]] = [items[idx], items[idx - 1]];
+      } else if (btn.dataset.playlistDown != null) {
+        const idx = parseInt(btn.dataset.playlistDown, 10);
+        if (idx >= 0 && idx < items.length - 1) [items[idx + 1], items[idx]] = [items[idx], items[idx + 1]];
+      }
+      this._renderPlaylistDraft();
+    });
+
+    $('#playlist-save-btn')?.addEventListener('click', () => this._savePlaylistEditor());
+    $('#playlist-edit-cancel')?.addEventListener('click', () => {
+      this._playlistEdit = null;
+      this._playlistDraft = [];
+      this._renderPlaylists();
+      this.showScreen('playlists');
     });
 
     // Playlist results screen (between modes + final).
@@ -1857,8 +2014,51 @@ export class UIOverlay {
       if (this._lastPlaylist) this._startPlaylist(this._lastPlaylist);
     });
     $('#pl-res-quit')?.addEventListener('click', () => this._quitPlaylist());
+  }
 
+  /** Open the editor for an existing playlist, or empty for a new one. */
+  _openPlaylistEditor(playlist) {
+    this._playlistEdit = playlist
+      ? { id: playlist.id, createdAt: playlist.createdAt }
+      : { id: null };
+    this._playlistDraft = structuredClone(playlist?.items || []);
+    const title = this.root.querySelector('#playlist-edit-title');
+    if (title) title.textContent = playlist ? `Edit — ${playlist.name}` : 'New playlist';
+    const name = this.root.querySelector('#playlist-name');
+    if (name) name.value = playlist?.name || '';
+    const code = this.root.querySelector('#playlist-add-code');
+    if (code) code.value = '';
+    this._setPlaylistEditStatus('');
     this._renderPlaylistDraft();
+    this.showScreen('playlist-edit');
+  }
+
+  _savePlaylistEditor() {
+    if (!this._playlistDraft.length) {
+      this._setPlaylistEditStatus('Add at least one mode before saving.', true);
+      return;
+    }
+    const name = this.root.querySelector('#playlist-name')?.value?.trim() || 'Untitled playlist';
+    let playlist;
+    if (this._playlistEdit?.id) {
+      // Editing keeps the id so the saved list entry is replaced in place. Note
+      // the leaderboard key is derived from the items, so changing modes moves
+      // the playlist onto a different (matching) shared board.
+      playlist = {
+        id: this._playlistEdit.id,
+        name: name.slice(0, 60),
+        items: structuredClone(this._playlistDraft),
+        createdAt: this._playlistEdit.createdAt ?? Date.now()
+      };
+    } else {
+      playlist = createPlaylist(name, this._playlistDraft);
+    }
+    savePlaylist(playlist);
+    this._playlistEdit = null;
+    this._playlistDraft = [];
+    this._renderPlaylists();
+    this._setPlaylistStatus(`Saved "${playlist.name}".`);
+    this.showScreen('playlists');
   }
 
   async _sharePlaylist(playlist) {
@@ -1875,7 +2075,7 @@ export class UIOverlay {
     if (el) {
       const list = loadPlaylists();
       if (!list.length) {
-        el.innerHTML = '<p class="center lb-hint">No playlists yet — build one below.</p>';
+        el.innerHTML = '<p class="center lb-hint">No playlists yet — press “New playlist” to build one.</p>';
       } else {
         el.innerHTML = list.map((p) => {
           const chain = (p.items || [])
@@ -1890,6 +2090,7 @@ export class UIOverlay {
             <div class="playlist-row-actions">
               <button type="button" class="btn training-row-play" data-playlist-play="${p.id}">Play</button>
               <button type="button" class="training-row-lb" data-playlist-lb="${p.id}" aria-label="Playlist leaderboard"><img src="${LEADERBOARD_ICON}" alt="" class="aim4-icon" width="16" height="16" /></button>
+              <button type="button" class="training-row-gear" data-playlist-edit="${p.id}" aria-label="Edit playlist">${PENCIL_ICON}</button>
               <button type="button" class="training-row-gear" data-playlist-share="${p.id}" aria-label="Copy share code">${PLAYLIST_ICON}</button>
               <button type="button" class="training-row-gear" data-playlist-del="${p.id}" aria-label="Delete playlist">${TRASH_ICON}</button>
             </div>
@@ -1897,7 +2098,6 @@ export class UIOverlay {
         }).join('');
       }
     }
-    this._renderPlaylistDraft();
     this._setPlaylistStatus('');
   }
 
@@ -1908,10 +2108,13 @@ export class UIOverlay {
       el.innerHTML = '<p class="lb-hint">No modes added yet.</p>';
       return;
     }
+    const last = this._playlistDraft.length - 1;
     el.innerHTML = this._playlistDraft.map((it, i) => `
       <div class="playlist-draft-item">
         <span class="playlist-draft-idx">${i + 1}</span>
         <span class="playlist-draft-name">${this._esc(this._modeSummary(it))}</span>
+        <button type="button" class="training-row-gear" data-playlist-up="${i}" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
+        <button type="button" class="training-row-gear" data-playlist-down="${i}" aria-label="Move down" ${i === last ? 'disabled' : ''}>▼</button>
         <button type="button" class="training-row-gear" data-playlist-remove="${i}" aria-label="Remove">${TRASH_ICON}</button>
       </div>`).join('');
   }
@@ -1935,10 +2138,14 @@ export class UIOverlay {
     const item = run.playlist.items[run.index];
     if (!item) return;
     const cfg = item.config || {};
-    // Apply the item's settings only across construction, then restore.
+    // The item's config is passed straight to the scenario (ctors prefer
+    // config over settings) AND temporarily merged onto live settings for the
+    // few reads that bypass config. Restored right after construction.
     this.settings.beginModeOverride(item.scenario, cfg);
     try {
-      this.play(item.scenario, { duration: cfg.duration });
+      const runCfg = structuredClone(cfg);
+      delete runCfg.variant; // playlist items always run as practice
+      this.play(item.scenario, runCfg);
     } finally {
       this.settings.endModeOverride();
     }
@@ -3587,10 +3794,22 @@ export class UIOverlay {
     this._setRange('set-grid-age', s.gridshot.maxTargetAge);
     $('#set-grid-infinite-ammo').checked = s.gridshot.infiniteAmmo !== false;
     $('#set-grid-vm-recoil').checked = s.gridshot.viewmodelRecoil === true;
+    this._setRange('set-grid-misslimit', s.gridshot.missLimit ?? 0);
 
     const st = s.stars ?? {};
     this._setRange('set-stars-size', st.targetSize ?? 0.1);
     this._setRange('set-stars-count', st.targetCount ?? 200);
+    this._setRange('set-stars-misslimit', st.missLimit ?? 0);
+
+    const bn = s.bounce ?? {};
+    this._setRange('set-bounce-size', bn.targetSize ?? 0.35);
+    this._setRange('set-bounce-count', bn.targetCount ?? 4);
+    this._setRange('set-bounce-speed', bn.travelSpeed ?? 35);
+    this._setRange('set-bounce-min-dist', bn.minDistance ?? 6);
+    this._setRange('set-bounce-max-dist', bn.maxDistance ?? 12);
+    this._setRange('set-bounce-height', bn.bounceHeight ?? 2.2);
+    $('#set-bounce-infinite-ammo').checked = bn.infiniteAmmo !== false;
+    this._setRange('set-bounce-misslimit', bn.missLimit ?? 0);
 
     const mf = s.microflicks ?? {};
     this._setRange('set-mf-size', mf.targetSize ?? 0.1);
@@ -3599,6 +3818,7 @@ export class UIOverlay {
     this._setRange('set-mf-float-speed', mf.floatSpeedMax ?? 2);
     this._setRange('set-mf-bounds-y', mf.boundsScaleY ?? 1);
     this._setRange('set-mf-bounds-x', mf.boundsScaleX ?? 2);
+    this._setRange('set-mf-misslimit', mf.missLimit ?? 0);
 
     this._setRange('set-pasu-size', s.pasu?.targetSize ?? 0.38);
     this._setRange('set-pasu-count', s.pasu?.targetCount ?? 3);
@@ -3612,6 +3832,7 @@ export class UIOverlay {
     $('#set-pasu-tl').checked = !!s.pasu?.enableTimeLimit;
     this._setRange('set-pasu-age', s.pasu?.maxTargetAge ?? 1200);
     $('#set-pasu-infinite-ammo').checked = s.pasu?.infiniteAmmo !== false;
+    this._setRange('set-pasu-misslimit', s.pasu?.missLimit ?? 0);
 
     this._setRange('set-spider-size', s.spidershot?.targetSize ?? 0.30);
     this._setRange('set-spider-ttk', s.spidershot?.timeToKill ?? 1500);
@@ -3634,6 +3855,7 @@ export class UIOverlay {
     this._setRange('set-spider-decoy-chance', Math.round((s.spidershot?.decoyChancePer ?? 0.1) * 100));
     this._setRange('set-spider-decoy-min', s.spidershot?.decoyMin ?? 0);
     this._setRange('set-spider-decoy-max', s.spidershot?.decoyMax ?? 2);
+    this._setRange('set-spider-misslimit', s.spidershot?.missLimit ?? 0);
 
     this._setRange('set-surv-spawn', s.survival?.spawnInterval ?? 1000);
     this._setRange('set-surv-despawn', s.survival?.despawnTime ?? 2000);
@@ -3646,14 +3868,17 @@ export class UIOverlay {
     this._setRange('set-arena-colr', s.arena.columnRadius);
     this._setRange('set-arena-ring', s.arena.ringRadius);
     this._setRange('set-arena-enemy', s.arena.enemyScale);
+    this._setRange('set-arena-misslimit', s.arena.missLimit ?? 0);
 
     $('#set-duels-arena').value = String(s.duels.arena);
     this._setRange('set-duels-ttk', s.duels.ttk);
+    this._setRange('set-duels-misslimit', s.duels.missLimit ?? 0);
 
     this._setRange('set-dm-bots', s.deathmatch?.botCount ?? 4);
     this._setRange('set-dm-speed', s.deathmatch?.botSpeed ?? 1);
     this._setRange('set-dm-body', Math.round((s.deathmatch?.botBodyHit ?? 0.2) * 100));
     this._setRange('set-dm-head', Math.round((s.deathmatch?.botHeadHit ?? 0.05) * 100));
+    this._setRange('set-dm-misslimit', s.deathmatch?.missLimit ?? 0);
 
     $('#set-col-bg').value = s.colors.bg;
     $('#set-col-floor').value = s.colors.floor;
@@ -3673,10 +3898,12 @@ export class UIOverlay {
     this._setRange('set-range-cover-dist', s.range.coverDistance ?? 4);
     this._setRange('set-range-cover-thick', s.range.coverThickness ?? 1.2);
     this._setRange('set-range-cover-height', s.range.coverHeight ?? 3);
+    this._setRange('set-range-misslimit', s.range.missLimit ?? 0);
     this._setRange('set-tracking-width', s.tracking?.botWidth ?? 1);
     this._setRange('set-tracking-speed', s.tracking?.botSpeed ?? 1);
     $('#set-tracking-crouch').checked = s.tracking?.botCrouchTap !== false;
     this._setRange('set-tracking-strafe', s.tracking?.strafeRate ?? 1);
+    this._setRange('set-tracking-misslimit', s.tracking?.missLimit ?? 0);
   }
 
   // -------------------------------------------------------------------------
@@ -3710,6 +3937,7 @@ export class UIOverlay {
     // Hide the system cursor only while actively playing — when paused (Esc),
     // the cursor must reappear so the menu is clickable.
     document.body.classList.toggle('in-run', inRun);
+    if (name === 'training') this._renderTrainingList();
     if (name === 'menu') {
       this.refreshAccountBar();
       this._updateFullscreenTip();

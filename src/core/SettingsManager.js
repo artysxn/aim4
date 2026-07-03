@@ -104,7 +104,19 @@ export const DEFAULTS = {
     boundsScaleX: 1.0, // horizontal spawn spread multiplier
     boundsScaleY: 1.0, // vertical spawn spread multiplier (0.5 = tighter)
     infiniteAmmo: true,
-    viewmodelRecoil: false
+    viewmodelRecoil: false,
+    missLimit: 0 // missed shots before the run ends (0 = unlimited)
+  },
+  bounce: {
+    targetSize: 0.35,
+    targetCount: 4,
+    travelSpeed: 35, // deg/s angular travel around the player
+    minDistance: 6, // metres — nearest a ball drifts
+    maxDistance: 12, // metres — furthest a ball drifts
+    bounceHeight: 2.2, // metres — floor-bounce apex
+    infiniteAmmo: true,
+    viewmodelRecoil: false,
+    missLimit: 0
   },
   pasu: {
     targetSize: 0.38,
@@ -119,7 +131,8 @@ export const DEFAULTS = {
     boundsScaleY: 1.0,
     angleOffset: 360,
     infiniteAmmo: true,
-    viewmodelRecoil: false
+    viewmodelRecoil: false,
+    missLimit: 0
   },
   spidershot: {
     targetSize: 0.30,
@@ -143,7 +156,8 @@ export const DEFAULTS = {
     decoyRoundChance: 1,
     decoyChancePer: 0.1,
     decoyMin: 0,
-    decoyMax: 2
+    decoyMax: 2,
+    missLimit: 0
   },
   survival: {
     spawnInterval: 800, // ms between spawns (Practice)
@@ -159,17 +173,20 @@ export const DEFAULTS = {
     columns: 7, // number of columns spread across the 80° arc
     columnRadius: 0.55, // metres, cylinder half-width of each cover column
     ringRadius: 9, // metres from player to column arc
-    enemyScale: 1.0 // uniform scale applied to bot body/head dimensions
+    enemyScale: 1.0, // uniform scale applied to bot body/head dimensions
+    missLimit: 0
   },
   duels: {
     arena: 0, // 0 = random each run, 1..N = fixed arena (legacy + MP duel maps)
-    ttk: 0.5  // seconds to kill enemy once exposed; lower = harder
+    ttk: 0.5,  // seconds to kill enemy once exposed; lower = harder
+    missLimit: 0
   },
   deathmatch: {
     botCount: 4, // bots hunting the player at once (1..6)
     botSpeed: 1.0, // multiplier on default run speed (215 u/s)
     botBodyHit: 0.2, // per-bullet body hit chance vs player/bots
-    botHeadHit: 0.05 // per-bullet head hit chance (checked before body)
+    botHeadHit: 0.05, // per-bullet head hit chance (checked before body)
+    missLimit: 0
   },
   colors: {
     bg:        '#0a0a0a', // scene background + fog
@@ -190,19 +207,22 @@ export const DEFAULTS = {
     coverCount: 4,
     coverDistance: 4, // metres from player centre
     coverThickness: 1.2, // box depth (m)
-    coverHeight: 3.0 // box height (m)
+    coverHeight: 3.0, // box height (m)
+    missLimit: 0
   },
   tracking: {
     botWidth: 1.0, // uniform scale on bot body/head radius (0.5–2.0)
     botSpeed: 1.0, // multiplier on tracking strafe cap (210 u/s)
     botCrouchTap: true,
-    strafeRate: 1.0 // direction-change frequency (1 = default ADAD)
+    strafeRate: 1.0, // direction-change frequency (1 = default ADAD)
+    missLimit: 0
   },
   stars: {
     targetSize: 0.1,
     targetCount: 200,
     boundsScaleX: 2.0,
-    boundsScaleY: 1.0
+    boundsScaleY: 1.0,
+    missLimit: 0
   },
   microflicks: {
     targetSize: 0.1,
@@ -210,7 +230,8 @@ export const DEFAULTS = {
     floatEnabled: false,
     floatSpeedMax: 2.0,
     boundsScaleX: 2.0,
-    boundsScaleY: 1.0
+    boundsScaleY: 1.0,
+    missLimit: 0
   }
 };
 
@@ -223,7 +244,7 @@ export const DURATION_DEFAULT = { type: 'time', value: 60 };
 
 // Modes that expose a practice duration control (and ship in playlists).
 export const DURATION_MODES = [
-  'gridshot', 'stars', 'microflicks', 'pasu', 'spidershot',
+  'gridshot', 'stars', 'bounce', 'microflicks', 'pasu', 'spidershot',
   'survival', 'arena', 'duels', 'range', 'tracking', 'deathmatch'
 ];
 

@@ -95,6 +95,14 @@ export class BaseScenario {
     this.weaponBloom = true; // random spread cone (movement / consecutive shots)
     this.viewmodelRecoil = true; // gun kick + view-punch on fire (per-mode override)
     this._initVariant();
+    // Practice-only miss limit (mirrors Survival's strikes): the run ends once
+    // this many fired shots hit no target. 0 = unlimited. Competitive runs use
+    // fixed rules and ignore it.
+    const modeSettings = settings?.data?.[this.name];
+    this.missLimit = this.competitive
+      ? 0
+      : Math.max(0, Math.round(this.config.missLimit ?? modeSettings?.missLimit ?? 0));
+    this._missedShots = 0;
     this._lastImpact = new THREE.Vector3();
     this._lastImpactNormal = new THREE.Vector3();
   }
@@ -256,6 +264,15 @@ export class BaseScenario {
       hit: !!impactHit,
       normal: impactHit ? this._lastImpactNormal : null
     });
+
+    // A bullet that reached no target (open air or cover) is a missed shot.
+    if (this.missLimit > 0 && !impactHit?.object?.userData?.target) {
+      this._missedShots++;
+      if (this._missedShots >= this.missLimit) {
+        beep(220, 0.12, 'sawtooth', 0.08);
+        this._requestFinish?.();
+      }
+    }
   }
 
   // ---- Target management --------------------------------------------------
