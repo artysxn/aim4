@@ -5434,7 +5434,7 @@ export class UIOverlay {
 
     const ln = s.line ?? {};
     this._setRange('set-line-size', ln.targetSize ?? 0.35);
-    this._setRange('set-line-speed', ln.travelSpeed ?? 180);
+    this._setRange('set-line-speed', ln.travelSpeed ?? 120);
     this._setRange('set-line-misslimit', ln.missLimit ?? 0);
   }
 

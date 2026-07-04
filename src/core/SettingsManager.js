@@ -380,7 +380,7 @@ export const DEFAULTS = {
   },
   line: {
     targetSize: 0.35,
-    travelSpeed: 180, // u/s — horizontal travel along the 180° field
+    travelSpeed: 120, // u/s — horizontal travel along the 180° field
     missLimit: 0
   }
 };

@@ -249,7 +249,7 @@ export const COMPETITIVE_PRESETS = {
   line: {
     runDuration: 30,
     targetSize: 0.35,
-    travelSpeed: 180
+    travelSpeed: 120
   }
 };
 
