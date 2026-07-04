@@ -77,7 +77,10 @@ export const DEFAULTS = {
     thickness: 2,
     dotPercentage: 35,
     hitmarker: true, // brief X flash on hit
-    dynamicGap: false // gap grows with movement + weapon bloom (airborne/fast = wider)
+    dynamicGap: false, // gap grows with movement + weapon bloom (airborne/fast = wider)
+    outline: false,
+    outlineColor: '#000000',
+    outlineOpacity: 1
   },
   viewmodel: {
     hand: 'right', // 'right' | 'left'
@@ -113,7 +116,7 @@ export const DEFAULTS = {
     travelSpeed: 35, // deg/s angular travel around the player
     minDistance: 10, // metres — nearest a ball drifts
     maxDistance: 18, // metres — furthest a ball drifts
-    bounceHeight: 2.2, // metres — floor-bounce apex
+    bounceStrength: 6, // upward jump speed (m/s) on each floor bounce
     infiniteAmmo: true,
     viewmodelRecoil: false,
     missLimit: 0

@@ -37,7 +37,9 @@ export class BounceScenario extends BaseScenario {
     this.travelSpeed = preset?.travelSpeed ?? this.config.travelSpeed ?? b.travelSpeed;
     this.minDistance = preset?.minDistance ?? this.config.minDistance ?? b.minDistance;
     this.maxDistance = preset?.maxDistance ?? this.config.maxDistance ?? b.maxDistance;
-    this.bounceHeight = preset?.bounceHeight ?? this.config.bounceHeight ?? b.bounceHeight;
+    this.bounceStrength = preset?.bounceStrength ?? this.config.bounceStrength ?? b.bounceStrength ?? 6;
+    // Bounce (Tracking) still uses apex height in metres.
+    this.bounceHeight = preset?.bounceHeight ?? this.config.bounceHeight ?? b.bounceHeight ?? null;
     this.infiniteAmmo = this.config.infiniteAmmo ?? b.infiniteAmmo !== false;
     this.weaponBloom = false;
     this.viewmodelRecoil =
@@ -117,9 +119,17 @@ export class BounceScenario extends BaseScenario {
     this.root.add(wall);
   }
 
-  /** Upward velocity that peaks at (roughly) the configured bounce height. */
+  _spawnApexY() {
+    if (this.bounceHeight != null) return this.bounceHeight;
+    return this.bounceStrength * 0.45;
+  }
+
+  /** Upward velocity on each floor bounce (randomised per bounce). */
   _bounceVel() {
-    return Math.sqrt(2 * GRAVITY * this.bounceHeight * randRange(0.75, 1));
+    if (this.bounceHeight != null) {
+      return Math.sqrt(2 * GRAVITY * this.bounceHeight * randRange(0.75, 1));
+    }
+    return this.bounceStrength * randRange(0.9, 1.1);
   }
 
   _applyBallPosition(target) {
@@ -157,7 +167,7 @@ export class BounceScenario extends BaseScenario {
       omegaCur: thetaDir * omega, // eased angular velocity (smooth reversals)
       r: randRange(spawnNear, this.maxDistance),
       vr: randRange(RADIAL_SPEED_MIN, RADIAL_SPEED_MAX) * (Math.random() < 0.5 ? -1 : 1),
-      y: randRange(this.targetSize, this.bounceHeight),
+      y: randRange(this.targetSize, this._spawnApexY()),
       vy: this._bounceVel() * randRange(-0.5, 0.5)
     };
     this._applyBallPosition(target);

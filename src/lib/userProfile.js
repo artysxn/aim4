@@ -10,7 +10,7 @@ export async function fetchPublicProfile(userId) {
   const sb = getSupabase();
   const { data, error } = await sb
     .from('profiles')
-    .select('id, username, elo, country_code, created_at')
+    .select('id, username, elo, country_code, created_at, play_time_sec')
     .eq('id', userId)
     .maybeSingle();
   if (error) throw new Error(error.message);

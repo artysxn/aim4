@@ -33,7 +33,7 @@ export const COMPETITIVE_PRESETS = {
     travelSpeed: 45,
     minDistance: 10,
     maxDistance: 16,
-    bounceHeight: 2.2,
+    bounceStrength: 6,
     infiniteAmmo: true,
     viewmodelRecoil: false
   },
@@ -131,10 +131,10 @@ export const COMPETITIVE_PRESETS = {
   ball: {
     runDuration: 30,
     targetSize: 0.5,
-    travelSpeed: 60,
+    travelSpeed: 80,
     minDistance: 8,
     maxDistance: 16,
-    bounceHeight: 2.5
+    bounceHeight: 8
   },
   bouncetracking: {
     runDuration: 30,
@@ -150,7 +150,7 @@ export const COMPETITIVE_PRESETS = {
   },
   pasutracking: {
     runDuration: 30,
-    targetSize: 0.33,
+    targetSize: 0.11,
     targetCount: 3,
     trackTime: 0.5,
     travelSpeedMax: 2.0,

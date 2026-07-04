@@ -22,6 +22,7 @@ export class BounceTrackingScenario extends BounceScenario {
     super(opts); // resolves preset/defaults/settings via this.name
     const preset = this.competitive ? competitivePresetFor(this.name) : null;
     const b = (this.competitive ? DEFAULTS[this.name] : this.settings.data[this.name]) ?? DEFAULTS.bouncetracking;
+    this.bounceHeight = preset?.bounceHeight ?? this.config.bounceHeight ?? b.bounceHeight ?? 2.2;
     // Crosshair hold (s) required before a ball can be clicked.
     this.holdTime = preset?.holdTime ?? this.config.holdTime ?? b.holdTime ?? 0.5;
   }

@@ -25,6 +25,7 @@ import {
 import { countryOptionsHtml, flagEmoji } from '../lib/countries.js';
 import { fetchPublicProfile, fetchPublicSettings } from '../lib/userProfile.js';
 import { logAimRun, fetchAimComparison, fetchAimStats, AIM_STAT_FILTERS } from '../lib/aimStats.js';
+import { incrementPlayTime, formatPlayTime } from '../lib/playTime.js';
 import {
   RATING_CATEGORIES,
   RATING_LABELS,
@@ -35,6 +36,7 @@ import {
   calculateAim4Ratings,
   telemetryFromAimStats,
   telemetryFromRunAnalytics,
+  buildRatingBreakdown,
   averageRatings
 } from '../lib/aim4Ratings.js';
 import { supabaseConfigured } from '../lib/supabase.js';
@@ -356,7 +358,13 @@ export class UIOverlay {
           ${rf('set-xh-thick', 'Thickness', 1, 8, 1)}
             ${rf('set-xh-dot', 'Center dot (%)', 0, 100, 5)}
             <label class="field-check"><input type="checkbox" id="set-xh-hitmarker" /> Hitmarker</label>
-            <label class="field-check"><input type="checkbox" id="set-xh-dyn" /> Dynamic gap (movement + spray bloom)</label>`
+            <label class="field-check"><input type="checkbox" id="set-xh-dyn" /> Dynamic gap (movement + spray bloom)</label>
+            <label class="field-check"><input type="checkbox" id="set-xh-outline" /> Outline</label>
+            <div class="color-row">
+              <span>Outline color</span>
+              <input type="color" id="set-xh-outline-color" />
+            </div>
+            ${rf('set-xh-outline-opacity', 'Outline opacity', 0, 100, 5)}`
       },
       {
         id: 'viewmodel',
@@ -433,7 +441,7 @@ export class UIOverlay {
           ${rf('set-bounce-speed', 'Travel speed (°/s)', 10, 120, 5)}
           ${rf('set-bounce-min-dist', 'Min distance (m)', 3, 14, 0.5)}
           ${rf('set-bounce-max-dist', 'Max distance (m)', 4, 20, 0.5)}
-          ${rf('set-bounce-height', 'Bounce height (m)', 0.5, 5, 0.1)}
+          ${rf('set-bounce-strength', 'Bounce strength', 1, 15, 0.5)}
           <label class="field-check"><input type="checkbox" id="set-bounce-infinite-ammo" /> Infinite ammo</label>
           ${rf('set-bounce-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
@@ -1061,6 +1069,7 @@ export class UIOverlay {
             </button>
           </div>
           <p class="readout" id="account-profile-status"></p>
+          <p class="readout muted" id="account-play-time"></p>
         </section>
 
         <section class="account-section" id="account-profile-other" hidden>
@@ -1069,6 +1078,7 @@ export class UIOverlay {
             <span class="account-username" id="account-ro-username"></span>
           </p>
           <p class="readout muted" id="account-ro-elo"></p>
+          <p class="readout muted" id="account-ro-play-time"></p>
           <p class="readout" id="account-profile-status-other"></p>
         </section>
 
@@ -1089,6 +1099,7 @@ export class UIOverlay {
           <div id="account-rating" class="account-rating">
             <div id="account-rating-chart" class="account-rating-canvas"></div>
             <div id="account-rating-legend" class="account-rating-legend"></div>
+            <div id="account-rating-tooltip" class="radar-tooltip" hidden></div>
           </div>
         </section>
 
@@ -1256,6 +1267,7 @@ export class UIOverlay {
           <div class="account-rating">
             <div id="res-rating-chart" class="account-rating-canvas"></div>
             <div id="res-rating-legend" class="account-rating-legend"></div>
+            <div id="res-rating-tooltip" class="radar-tooltip" hidden></div>
           </div>
         </section>
         <div id="res-lb" class="lb-body"></div>
@@ -1865,6 +1877,15 @@ export class UIOverlay {
     $('#set-xh-dyn').addEventListener('change', (e) => {
       draft((d) => { d.crosshair.dynamicGap = e.target.checked; });
     });
+    $('#set-xh-outline')?.addEventListener('change', (e) => {
+      draft((d) => { d.crosshair.outline = e.target.checked; });
+    });
+    $('#set-xh-outline-color')?.addEventListener('input', (e) => {
+      draft((d) => { d.crosshair.outlineColor = e.target.value; });
+    });
+    this._bindRange('set-xh-outline-opacity', (v, d) => {
+      d.crosshair.outlineOpacity = v / 100;
+    }, { parse: (v) => parseInt(v, 10) });
 
     $('#set-vm-hand').addEventListener('change', (e) => {
       draft((d) => { d.viewmodel.hand = e.target.value === 'left' ? 'left' : 'right'; });
@@ -1916,7 +1937,7 @@ export class UIOverlay {
     this._bindRange('set-bounce-speed', (v, d) => { d.bounce.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-bounce-min-dist', (v, d) => { d.bounce.minDistance = v; });
     this._bindRange('set-bounce-max-dist', (v, d) => { d.bounce.maxDistance = v; });
-    this._bindRange('set-bounce-height', (v, d) => { d.bounce.bounceHeight = v; });
+    this._bindRange('set-bounce-strength', (v, d) => { d.bounce.bounceStrength = v; });
     $('#set-bounce-infinite-ammo')?.addEventListener('change', (e) => {
       draft((d) => { d.bounce.infiniteAmmo = e.target.checked; });
     });
@@ -2409,6 +2430,11 @@ export class UIOverlay {
     this.replayRecorder?.cancel();
     const run = this._playlistRun;
     run.results.push(results);
+    if (this.auth?.isLoggedIn && results.timePlayed > 0) {
+      incrementPlayTime(this.auth.user.id, results.timePlayed).catch((e) =>
+        console.warn('[ui] play time log failed', e)
+      );
+    }
     const isLast = run.index >= run.playlist.items.length - 1;
     if (isLast) {
       this._finalizePlaylist();
@@ -2850,6 +2876,26 @@ export class UIOverlay {
       this._loadAimStats();
       this._loadRating();
       this._loadAccountReplays();
+      this._loadAccountPlayTime(this.auth?.user?.id);
+    }
+  }
+
+  async _loadAccountPlayTime(userId) {
+    const ownEl = this.root.querySelector('#account-play-time');
+    const otherEl = this.root.querySelector('#account-ro-play-time');
+    const el = this._viewingAccount ? otherEl : ownEl;
+    if (!el) return;
+    if (!userId || !supabaseConfigured()) {
+      el.textContent = '';
+      return;
+    }
+    try {
+      const profile = await fetchPublicProfile(userId);
+      el.textContent = profile
+        ? `Time played: ${formatPlayTime(profile.play_time_sec)}`
+        : '';
+    } catch {
+      el.textContent = '';
     }
   }
 
@@ -2889,6 +2935,7 @@ export class UIOverlay {
       this._loadAimStats();
       this._loadRating();
       await this._loadAccountReplays(userId);
+      this._loadAccountPlayTime(userId);
     } catch (e) {
       if (statsBody) {
         statsBody.innerHTML = `<p class="center lb-hint is-error">${this._esc(e.message || 'Could not load account.')}</p>`;
@@ -3003,7 +3050,7 @@ export class UIOverlay {
     if (!canvas) return;
     const userId = this._aimStatsUserId;
     if (!supabaseConfigured() || !userId) {
-      this._drawRadarChart(canvas, []);
+      this._drawRadarChart(canvas, [], '#account-rating-tooltip');
       if (legend) legend.innerHTML = '<p class="center lb-hint">Aim4 Rating is not available.</p>';
       return;
     }
@@ -3012,6 +3059,7 @@ export class UIOverlay {
     const config = loadBaselines();
     try {
       let rating;
+      let breakdown = null;
       if (this._ratingMode === 'all') {
         const perMode = await Promise.all(
           RATED_GAMEMODES.map(async (mode) => {
@@ -3034,7 +3082,7 @@ export class UIOverlay {
           (c) => c.id !== 'all' && c.id !== 'challenges' && c.modes.some((m) => rankedModes.has(m))
         ).length;
         if (rankedModes.size < 7 || categoriesSpanned < 3) {
-          this._drawRadarChart(canvas, []);
+          this._drawRadarChart(canvas, [], '#account-rating-tooltip');
           if (legend) {
             legend.innerHTML = `<p class="center lb-hint">Overall rating locked — rank in at least 7 gamemodes across 3+ categories to unlock it. You're at ${rankedModes.size}/7 gamemode${rankedModes.size === 1 ? '' : 's'} and ${categoriesSpanned}/3 categories. Per-mode ratings are available in the filter above.</p>`;
           }
@@ -3044,19 +3092,25 @@ export class UIOverlay {
       } else {
         const row = await fetchAimStats({ userId, scenario: this._ratingMode });
         if (!row || !Number(row.games)) {
-          this._drawRadarChart(canvas, []);
+          this._drawRadarChart(canvas, [], '#account-rating-tooltip');
           if (legend) legend.innerHTML = '<p class="center lb-hint">No competitive runs for this mode yet.</p>';
           return;
         }
-        rating = calculateAim4Ratings(
-          telemetryFromAimStats(row),
-          { baselines: baselinesForGamemode(this._ratingMode, config) }
-        );
+        const baselines = baselinesForGamemode(this._ratingMode, config);
+        const telemetry = telemetryFromAimStats(row);
+        rating = calculateAim4Ratings(telemetry, { baselines });
+        breakdown = buildRatingBreakdown(telemetry, { baselines });
       }
-      this._drawRadarChart(canvas, [{ rating, color: '#f52525', fill: 'rgba(245,37,37,0.25)', label: 'Rating' }]);
+      this._drawRadarChart(canvas, [{
+        rating,
+        color: '#f52525',
+        fill: 'rgba(245,37,37,0.25)',
+        label: 'Rating',
+        breakdown
+      }], '#account-rating-tooltip');
       if (legend) legend.innerHTML = this._ratingLegendHtml(rating);
     } catch (e) {
-      this._drawRadarChart(canvas, []);
+      this._drawRadarChart(canvas, [], '#account-rating-tooltip');
       if (legend) legend.innerHTML = `<p class="center lb-hint is-error">${this._esc(e.message || 'Could not load rating.')}</p>`;
     }
   }
@@ -3106,17 +3160,18 @@ export class UIOverlay {
 
     section.hidden = false;
     legend.innerHTML = '<p class="center lb-hint">Loading rating…</p>';
-    this._drawRadarChart(chart, []);
+    this._drawRadarChart(chart, [], '#res-rating-tooltip');
 
     await syncBaselinesFromServer();
     const baselines = baselinesForGamemode(scenario, loadBaselines());
-    const runRating = calculateAim4Ratings(
-      telemetryFromRunAnalytics(analytics),
-      { baselines }
-    );
+    const runTelemetry = telemetryFromRunAnalytics(analytics);
+    const runRating = calculateAim4Ratings(runTelemetry, { baselines });
+    const runBreakdown = buildRatingBreakdown(runTelemetry, { baselines });
 
     let playerRating = null;
+    let playerBreakdown = null;
     let globalRating = null;
+    let globalBreakdown = null;
     if (supabaseConfigured()) {
       try {
         const userId = this.auth?.user?.id || null;
@@ -3125,29 +3180,34 @@ export class UIOverlay {
           fetchAimStats({ scenario })
         ]);
         if (playerRow && Number(playerRow.games)) {
-          playerRating = calculateAim4Ratings(
-            telemetryFromAimStats(playerRow),
-            { baselines }
-          );
+          const t = telemetryFromAimStats(playerRow);
+          playerRating = calculateAim4Ratings(t, { baselines });
+          playerBreakdown = buildRatingBreakdown(t, { baselines });
         }
         if (globalRow && Number(globalRow.games)) {
-          globalRating = calculateAim4Ratings(
-            telemetryFromAimStats(globalRow),
-            { baselines }
-          );
+          const t = telemetryFromAimStats(globalRow);
+          globalRating = calculateAim4Ratings(t, { baselines });
+          globalBreakdown = buildRatingBreakdown(t, { baselines });
         }
       } catch (e) {
         console.warn('[ui] run rating comparison failed', e);
       }
     }
 
-    const series = [{ rating: runRating, color: '#f52525', fill: 'rgba(245,37,37,0.25)', label: 'This run' }];
+    const series = [{
+      rating: runRating,
+      color: '#f52525',
+      fill: 'rgba(245,37,37,0.25)',
+      label: 'This run',
+      breakdown: runBreakdown
+    }];
     if (globalRating) {
       series.unshift({
         rating: globalRating,
         color: '#9a9a9a',
         fill: 'rgba(154,154,154,0.12)',
-        label: 'Global avg'
+        label: 'Global avg',
+        breakdown: globalBreakdown
       });
     }
     if (playerRating) {
@@ -3155,16 +3215,20 @@ export class UIOverlay {
         rating: playerRating,
         color: '#46c8ff',
         fill: 'rgba(70,200,255,0.18)',
-        label: 'Your avg'
+        label: 'Your avg',
+        breakdown: playerBreakdown
       });
     }
-    this._drawRadarChart(chart, series);
+    this._drawRadarChart(chart, series, '#res-rating-tooltip');
     legend.innerHTML = this._ratingCompareLegendHtml(runRating, playerRating, globalRating);
   }
 
   /** Render a vector (SVG) 0–2 radar; optional multiple overlaid series. */
-  _drawRadarChart(host, series = []) {
+  _drawRadarChart(host, series = [], tooltipSel = null) {
     if (!host) return;
+    const tooltip = tooltipSel ? this.root.querySelector(tooltipSel) : null;
+    if (tooltip) tooltip.hidden = true;
+
     const W = 440;
     const H = 360;
     const cx = W / 2;
@@ -3194,6 +3258,8 @@ export class UIOverlay {
     }
 
     let overlays = '';
+    let dotIdx = 0;
+    const dotMeta = [];
     for (const s of series) {
       if (!s?.rating) continue;
       const pts = RATING_CATEGORIES.map((k, i) => {
@@ -3203,14 +3269,44 @@ export class UIOverlay {
       overlays += `<polygon points="${pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')}" fill="${s.fill}" stroke="${s.color}" stroke-width="2"/>`;
       overlays += RATING_CATEGORIES.map((k, i) => {
         const [x, y] = pts[i];
-        const label = `${s.label || 'Rating'} — ${RATING_LABELS[k]}: ${(s.rating[k] ?? 0).toFixed(2)}`;
-        return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="${s.color}" class="radar-dot"><title>${label}</title></circle>`;
+        const id = `rd-${dotIdx++}`;
+        dotMeta.push({ id, series: s, category: k });
+        return (
+          `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="10" fill="transparent" class="radar-hit" data-radar-id="${id}"/>` +
+          `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="${s.color}" class="radar-dot" pointer-events="none"/>`
+        );
       }).join('');
     }
 
     host.innerHTML =
       `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="account-rating-svg">` +
       rings + spokes + labels + overlays + `</svg>`;
+
+    if (!tooltip || !dotMeta.length) return;
+
+    const showTip = (meta, evt) => {
+      const entry = meta.series.breakdown?.[meta.category];
+      if (!entry) return;
+      tooltip.innerHTML =
+        `<strong>${this._esc(meta.series.label)} — ${RATING_LABELS[meta.category]}</strong>` +
+        `<div class="radar-tooltip-rating">Rating: ${entry.rating.toFixed(2)}</div>` +
+        `<div class="radar-tooltip-raw">${this._esc(entry.rawLabel)}</div>` +
+        `<div class="radar-tooltip-formula">${this._esc(entry.formula)}</div>`;
+      tooltip.hidden = false;
+      const rect = host.getBoundingClientRect();
+      const tx = evt.clientX - rect.left + 12;
+      const ty = evt.clientY - rect.top + 12;
+      tooltip.style.left = `${Math.min(tx, W - 220)}px`;
+      tooltip.style.top = `${Math.min(ty, H - 100)}px`;
+    };
+
+    host.querySelectorAll('.radar-hit').forEach((el) => {
+      const meta = dotMeta.find((d) => d.id === el.dataset.radarId);
+      if (!meta) return;
+      el.addEventListener('mouseenter', (e) => showTip(meta, e));
+      el.addEventListener('mousemove', (e) => showTip(meta, e));
+      el.addEventListener('mouseleave', () => { tooltip.hidden = true; });
+    });
   }
 
   /** Load the current account's aim analytics + the global baseline. */
@@ -4248,6 +4344,9 @@ export class UIOverlay {
     this._setRange('set-xh-dot', s.crosshair.dotPercentage);
     $('#set-xh-hitmarker').checked = s.crosshair.hitmarker !== false;
     $('#set-xh-dyn').checked = !!s.crosshair.dynamicGap;
+    $('#set-xh-outline').checked = !!s.crosshair.outline;
+    $('#set-xh-outline-color').value = s.crosshair.outlineColor || '#000000';
+    this._setRange('set-xh-outline-opacity', Math.round((s.crosshair.outlineOpacity ?? 1) * 100));
     this.crosshair.drawPreview();
 
     $('#set-vm-hand').value = s.viewmodel?.hand === 'left' ? 'left' : 'right';
@@ -4284,7 +4383,7 @@ export class UIOverlay {
     this._setRange('set-bounce-speed', bn.travelSpeed ?? 35);
     this._setRange('set-bounce-min-dist', bn.minDistance ?? 6);
     this._setRange('set-bounce-max-dist', bn.maxDistance ?? 12);
-    this._setRange('set-bounce-height', bn.bounceHeight ?? 2.2);
+    this._setRange('set-bounce-strength', bn.bounceStrength ?? bn.bounceHeight ?? 6);
     $('#set-bounce-infinite-ammo').checked = bn.infiniteAmmo !== false;
     this._setRange('set-bounce-misslimit', bn.missLimit ?? 0);
 
@@ -4639,6 +4738,11 @@ export class UIOverlay {
     this.showScreen('results');
     const replayRes = await this._finalizeRecording(results);
     await this._saveAndRenderResults(results, replayRes);
+    if (this.auth?.isLoggedIn && results.timePlayed > 0) {
+      incrementPlayTime(this.auth.user.id, results.timePlayed).catch((e) =>
+        console.warn('[ui] play time log failed', e)
+      );
+    }
     if (replayRes?.ok) {
       await this._loadAccountReplays(this.auth?.user?.id);
     }

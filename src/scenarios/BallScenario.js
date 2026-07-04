@@ -104,7 +104,8 @@ export class BallScenario extends BaseScenario {
   }
 
   _bounceVel() {
-    return Math.sqrt(2 * GRAVITY * this.bounceHeight * randRange(0.8, 1));
+    const mul = this.competitive ? randRange(0.8, 1.2) : randRange(0.8, 1);
+    return Math.sqrt(2 * GRAVITY * this.bounceHeight) * mul;
   }
 
   _applyBallPosition() {

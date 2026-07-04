@@ -73,6 +73,7 @@ alter table public.scores add column if not exists time_played real;
 alter table public.scores add column if not exists kpm real;
 alter table public.profiles add column if not exists elo integer not null default 1000;
 alter table public.profiles add column if not exists country_code text;
+alter table public.profiles add column if not exists play_time_sec real not null default 0;
 
 -- Replay aim-analytics aggregates (measured per run; nullable for old rows).
 alter table public.replays add column if not exists flicks_accurate integer;
@@ -169,6 +170,25 @@ create policy "insert own aim stats" on public.aim_run_stats
   for insert with check (auth.uid() = user_id);
 grant select on public.aim_run_stats to anon, authenticated;
 grant insert on public.aim_run_stats to authenticated;
+
+-- Accumulate total seconds played on a profile (called after each finished run).
+drop function if exists public.increment_play_time(uuid, real);
+create or replace function public.increment_play_time(p_user_id uuid, p_seconds real)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if p_user_id is null or p_seconds is null or p_seconds <= 0 then
+    return;
+  end if;
+  update public.profiles
+  set play_time_sec = coalesce(play_time_sec, 0) + p_seconds
+  where id = p_user_id;
+end;
+$$;
+grant execute on function public.increment_play_time(uuid, real) to authenticated;
 
 -- Aggregate aim stats with optional filters:
 --   p_user_id  — null = every player (global baseline), else one account

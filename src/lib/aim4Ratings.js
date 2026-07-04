@@ -212,6 +212,76 @@ export function telemetryFromRunAnalytics(analytics = {}) {
   return telemetryFromAimStats({ ...analytics, games: 1 });
 }
 
+/**
+ * Per-category rating plus the raw stat and formula used (for radar tooltips).
+ * @returns {Record<string, { rating:number, raw:number, rawLabel:string, formula:string, direction:'higher'|'lower'|'precision' }>}
+ */
+export function buildRatingBreakdown(telemetry = {}, gamemodeConfig = {}) {
+  const B = gamemodeConfig.baselines || gamemodeConfig || {};
+  const rating = calculateAim4Ratings(telemetry, gamemodeConfig);
+  const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
+
+  const precisionRaw = num(telemetry.precision_accuracy_percent);
+  const speedRaw = num(telemetry.speed);
+  const trackingRaw = num(telemetry.tracking);
+  const flicksRaw = num(telemetry.flicks_error_percent);
+  const adjRaw = num(telemetry.adjustments);
+  const reactRaw = num(telemetry.reaction_time_ms);
+  const tensionRaw = num(telemetry.tension_percent);
+
+  return {
+    precision_accuracy_percent: {
+      rating: rating.precision_accuracy_percent,
+      raw: precisionRaw,
+      rawLabel: `${precisionRaw.toFixed(1)}% flick accuracy`,
+      formula: 'Precision curve: 75% = 1.00 rating, 100% = 2.00',
+      direction: 'precision'
+    },
+    speed: {
+      rating: rating.speed,
+      raw: speedRaw,
+      rawLabel: `${speedRaw.toFixed(0)} °/s`,
+      formula: `Rating = speed ÷ baseline (${B.speed} °/s), capped at 2.00`,
+      direction: 'higher'
+    },
+    tracking: {
+      rating: rating.tracking,
+      raw: trackingRaw,
+      rawLabel: `${(trackingRaw * 100).toFixed(1)}% (from flick accuracy)`,
+      formula: `Rating = tracking ÷ baseline (${B.tracking}), capped at 2.00`,
+      direction: 'higher'
+    },
+    flicks_error_percent: {
+      rating: rating.flicks_error_percent,
+      raw: flicksRaw,
+      rawLabel: `${flicksRaw.toFixed(1)}% over/under flicks`,
+      formula: `Rating = 2.00 − (error% ÷ ${B.flicks_error_percent}%), capped at 2.00`,
+      direction: 'lower'
+    },
+    adjustments: {
+      rating: rating.adjustments,
+      raw: adjRaw,
+      rawLabel: `${adjRaw.toFixed(2)} corrective flicks per game`,
+      formula: `Rating = 2.00 − (adjustments ÷ ${B.adjustments}), capped at 2.00`,
+      direction: 'lower'
+    },
+    reaction_time_ms: {
+      rating: rating.reaction_time_ms,
+      raw: reactRaw,
+      rawLabel: `${reactRaw.toFixed(1)} ms avg late-click offset`,
+      formula: `Rating = 2.00 − (reaction ms ÷ ${B.reaction_time_ms} ms), capped at 2.00`,
+      direction: 'lower'
+    },
+    tension_percent: {
+      rating: rating.tension_percent,
+      raw: tensionRaw,
+      rawLabel: `${tensionRaw.toFixed(1)}% path deviation`,
+      formula: `Rating = 2.00 − (tension% ÷ ${B.tension_percent}%), capped at 2.00 — lower tension is better`,
+      direction: 'lower'
+    }
+  };
+}
+
 /** Average a list of rating objects into one (for the "all modes" radar). */
 export function averageRatings(list) {
   const out = {};

@@ -986,6 +986,7 @@ a.btn {
   flex-wrap: wrap;
   align-items: center;
   gap: 18px;
+  position: relative;
 }
 .account-rating-canvas {
   flex: 0 0 auto;
@@ -994,6 +995,36 @@ a.btn {
 .account-rating-svg { max-width: 100%; height: auto; }
 .radar-dot { cursor: pointer; transition: r 0.1s; }
 .radar-dot:hover { r: 6; }
+.radar-hit { cursor: pointer; }
+.radar-tooltip {
+  position: absolute;
+  z-index: 2;
+  max-width: 220px;
+  padding: 10px 12px;
+  background: #141414;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+.radar-tooltip strong {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.radar-tooltip-rating {
+  color: #f52525;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 4px;
+}
+.radar-tooltip-raw {
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.radar-tooltip-formula {
+  color: var(--muted);
+  font-size: 11px;
+}
 .account-placements > summary {
   cursor: pointer;
   font-weight: 500;
