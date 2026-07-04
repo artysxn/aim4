@@ -1005,6 +1005,48 @@ a.btn {
   min-width: 160px;
 }
 
+/* --- Post-run Aim4 Rating (results screen) -------------------------------- */
+.res-rating {
+  margin: 20px 0 8px;
+  padding-top: 18px;
+  border-top: 1px solid var(--chip-bg);
+}
+.res-rating-title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.run-rating-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.run-rating-key-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.run-rating-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.run-rating-swatch-run { background: #f52525; }
+.run-rating-swatch-player { background: #46c8ff; }
+.run-rating-swatch-global { background: #9a9a9a; }
+.run-rating-table th:nth-child(n+2),
+.run-rating-table td:nth-child(n+2) {
+  text-align: right;
+}
+.run-rating-you { color: #f52525; }
+.run-rating-player { color: #46c8ff; }
+.run-rating-global { color: #9a9a9a; }
+
 /* --- Playlists ----------------------------------------------------------- */
 .playlists-panel {
   display: flex;

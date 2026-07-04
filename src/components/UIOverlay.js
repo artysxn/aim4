@@ -34,6 +34,7 @@ import {
   baselinesForGamemode,
   calculateAim4Ratings,
   telemetryFromAimStats,
+  telemetryFromRunAnalytics,
   averageRatings
 } from '../lib/aim4Ratings.js';
 import { supabaseConfigured } from '../lib/supabase.js';
@@ -1250,6 +1251,13 @@ export class UIOverlay {
       <div class="panel wide">
         <h2 class="text-big" id="res-title">Run Complete</h2>
         <div id="res-stats" class="res-stats"></div>
+        <section id="res-rating" class="res-rating" hidden>
+          <h3 class="res-rating-title">Aim4 Rating</h3>
+          <div class="account-rating">
+            <div id="res-rating-chart" class="account-rating-canvas"></div>
+            <div id="res-rating-legend" class="account-rating-legend"></div>
+          </div>
+        </section>
         <div id="res-lb" class="lb-body"></div>
         <div class="menu-actions">
           <button class="btn primary" data-restart>Play again</button>
@@ -2995,7 +3003,7 @@ export class UIOverlay {
     if (!canvas) return;
     const userId = this._aimStatsUserId;
     if (!supabaseConfigured() || !userId) {
-      this._drawRadar(null);
+      this._drawRadarChart(canvas, []);
       if (legend) legend.innerHTML = '<p class="center lb-hint">Aim4 Rating is not available.</p>';
       return;
     }
@@ -3026,7 +3034,7 @@ export class UIOverlay {
           (c) => c.id !== 'all' && c.id !== 'challenges' && c.modes.some((m) => rankedModes.has(m))
         ).length;
         if (rankedModes.size < 7 || categoriesSpanned < 3) {
-          this._drawRadar(null);
+          this._drawRadarChart(canvas, []);
           if (legend) {
             legend.innerHTML = `<p class="center lb-hint">Overall rating locked — rank in at least 7 gamemodes across 3+ categories to unlock it. You're at ${rankedModes.size}/7 gamemode${rankedModes.size === 1 ? '' : 's'} and ${categoriesSpanned}/3 categories. Per-mode ratings are available in the filter above.</p>`;
           }
@@ -3036,7 +3044,7 @@ export class UIOverlay {
       } else {
         const row = await fetchAimStats({ userId, scenario: this._ratingMode });
         if (!row || !Number(row.games)) {
-          this._drawRadar(null);
+          this._drawRadarChart(canvas, []);
           if (legend) legend.innerHTML = '<p class="center lb-hint">No competitive runs for this mode yet.</p>';
           return;
         }
@@ -3045,10 +3053,10 @@ export class UIOverlay {
           { baselines: baselinesForGamemode(this._ratingMode, config) }
         );
       }
-      this._drawRadar(rating);
+      this._drawRadarChart(canvas, [{ rating, color: '#f52525', fill: 'rgba(245,37,37,0.25)', label: 'Rating' }]);
       if (legend) legend.innerHTML = this._ratingLegendHtml(rating);
     } catch (e) {
-      this._drawRadar(null);
+      this._drawRadarChart(canvas, []);
       if (legend) legend.innerHTML = `<p class="center lb-hint is-error">${this._esc(e.message || 'Could not load rating.')}</p>`;
     }
   }
@@ -3060,9 +3068,102 @@ export class UIOverlay {
     return `<table class="account-stats-table"><thead><tr><th>Category</th><th>Rating</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
-  /** Render a vector (SVG) 0–2 radar; points show their exact value on hover. */
-  _drawRadar(rating) {
-    const host = this.root.querySelector('#account-rating-chart');
+  _ratingCompareLegendHtml(runRating, playerRating, globalRating) {
+    const fmt = (r, k) => (r ? (r[k] ?? 0).toFixed(2) : '—');
+    const rows = RATING_CATEGORIES.map(
+      (k) =>
+        `<tr><td>${RATING_LABELS[k]}</td>` +
+        `<td class="account-rank run-rating-you">${fmt(runRating, k)}</td>` +
+        `<td class="account-rank run-rating-player">${fmt(playerRating, k)}</td>` +
+        `<td class="account-rank run-rating-global">${fmt(globalRating, k)}</td></tr>`
+    ).join('');
+    return (
+      `<p class="run-rating-key">` +
+      `<span class="run-rating-key-item"><i class="run-rating-swatch run-rating-swatch-run"></i>This run</span>` +
+      `<span class="run-rating-key-item"><i class="run-rating-swatch run-rating-swatch-player"></i>Your avg</span>` +
+      `<span class="run-rating-key-item"><i class="run-rating-swatch run-rating-swatch-global"></i>Global avg</span>` +
+      `</p>` +
+      `<table class="account-stats-table run-rating-table">` +
+      `<thead><tr><th>Category</th><th>This run</th><th>Your avg</th><th>Global avg</th></tr></thead>` +
+      `<tbody>${rows}</tbody></table>`
+    );
+  }
+
+  /**
+   * Render the post-run Aim4 Rating radar: this run vs your average vs global
+   * average for the same gamemode.
+   */
+  async _renderRunRating(scenario, analytics) {
+    const section = this.root.querySelector('#res-rating');
+    const chart = this.root.querySelector('#res-rating-chart');
+    const legend = this.root.querySelector('#res-rating-legend');
+    if (!section || !chart || !legend) return;
+
+    if (!analytics || !RATED_GAMEMODES.includes(scenario)) {
+      section.hidden = true;
+      return;
+    }
+
+    section.hidden = false;
+    legend.innerHTML = '<p class="center lb-hint">Loading rating…</p>';
+    this._drawRadarChart(chart, []);
+
+    await syncBaselinesFromServer();
+    const baselines = baselinesForGamemode(scenario, loadBaselines());
+    const runRating = calculateAim4Ratings(
+      telemetryFromRunAnalytics(analytics),
+      { baselines }
+    );
+
+    let playerRating = null;
+    let globalRating = null;
+    if (supabaseConfigured()) {
+      try {
+        const userId = this.auth?.user?.id || null;
+        const [playerRow, globalRow] = await Promise.all([
+          userId ? fetchAimStats({ userId, scenario }) : Promise.resolve(null),
+          fetchAimStats({ scenario })
+        ]);
+        if (playerRow && Number(playerRow.games)) {
+          playerRating = calculateAim4Ratings(
+            telemetryFromAimStats(playerRow),
+            { baselines }
+          );
+        }
+        if (globalRow && Number(globalRow.games)) {
+          globalRating = calculateAim4Ratings(
+            telemetryFromAimStats(globalRow),
+            { baselines }
+          );
+        }
+      } catch (e) {
+        console.warn('[ui] run rating comparison failed', e);
+      }
+    }
+
+    const series = [{ rating: runRating, color: '#f52525', fill: 'rgba(245,37,37,0.25)', label: 'This run' }];
+    if (globalRating) {
+      series.unshift({
+        rating: globalRating,
+        color: '#9a9a9a',
+        fill: 'rgba(154,154,154,0.12)',
+        label: 'Global avg'
+      });
+    }
+    if (playerRating) {
+      series.unshift({
+        rating: playerRating,
+        color: '#46c8ff',
+        fill: 'rgba(70,200,255,0.18)',
+        label: 'Your avg'
+      });
+    }
+    this._drawRadarChart(chart, series);
+    legend.innerHTML = this._ratingCompareLegendHtml(runRating, playerRating, globalRating);
+  }
+
+  /** Render a vector (SVG) 0–2 radar; optional multiple overlaid series. */
+  _drawRadarChart(host, series = []) {
     if (!host) return;
     const W = 440;
     const H = 360;
@@ -3092,24 +3193,24 @@ export class UIOverlay {
       labels += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" fill="#9a9a9a" font-size="11" font-family="'Host Grotesk',sans-serif" text-anchor="${anchor}" dominant-baseline="middle">${RATING_LABELS[RATING_CATEGORIES[i]]}</text>`;
     }
 
-    let poly = '';
-    let dots = '';
-    if (rating) {
+    let overlays = '';
+    for (const s of series) {
+      if (!s?.rating) continue;
       const pts = RATING_CATEGORIES.map((k, i) => {
-        const val = Math.max(0, Math.min(MAX, rating[k] ?? 0));
+        const val = Math.max(0, Math.min(MAX, s.rating[k] ?? 0));
         return pt(i, R * (val / MAX));
       });
-      poly = `<polygon points="${pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')}" fill="rgba(245,37,37,0.25)" stroke="#f52525" stroke-width="2"/>`;
-      dots = RATING_CATEGORIES.map((k, i) => {
+      overlays += `<polygon points="${pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')}" fill="${s.fill}" stroke="${s.color}" stroke-width="2"/>`;
+      overlays += RATING_CATEGORIES.map((k, i) => {
         const [x, y] = pts[i];
-        const label = `${RATING_LABELS[k]}: ${(rating[k] ?? 0).toFixed(2)}`;
-        return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="#f52525" class="radar-dot"><title>${label}</title></circle>`;
+        const label = `${s.label || 'Rating'} — ${RATING_LABELS[k]}: ${(s.rating[k] ?? 0).toFixed(2)}`;
+        return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="${s.color}" class="radar-dot"><title>${label}</title></circle>`;
       }).join('');
     }
 
     host.innerHTML =
       `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="account-rating-svg">` +
-      rings + spokes + labels + poly + dots + `</svg>`;
+      rings + spokes + labels + overlays + `</svg>`;
   }
 
   /** Load the current account's aim analytics + the global baseline. */
@@ -4551,10 +4652,10 @@ export class UIOverlay {
     if (shareBtn) shareBtn.hidden = true;
     this._lastReplay = null;
     this._lastReplayShare = null;
-    if (!this.replayRecorder?.active) return { ok: false, reason: 'no recording' };
+    if (!this.replayRecorder?.active) return { ok: false, reason: 'no recording', analytics: null };
 
     const recording = this.replayRecorder.finish();
-    if (!recording) return { ok: false, reason: 'no recording' };
+    if (!recording) return { ok: false, reason: 'no recording', analytics: null };
 
     // Always measure aim analytics for the run (independent of viewer toggles).
     let analytics = null;
@@ -4567,7 +4668,7 @@ export class UIOverlay {
     }
 
     if (!this.auth?.isLoggedIn || !supabaseConfigured()) {
-      return { ok: false, reason: 'not signed in' };
+      return { ok: false, reason: 'not signed in', analytics };
     }
 
     try {
@@ -4596,7 +4697,7 @@ export class UIOverlay {
     if (!res.ok && res.reason && res.reason !== 'offline') {
       console.warn('[ui] replay not saved:', res.reason);
     }
-    return res;
+    return { ...res, analytics };
   }
 
   // -------------------------------------------------------------------------
@@ -5348,6 +5449,9 @@ export class UIOverlay {
   async _saveAndRenderResults(results, replayRes = null) {
     let submitNote = '';
 
+    const ratingSection = this.root.querySelector('#res-rating');
+    if (ratingSection) ratingSection.hidden = true;
+
     this.root.querySelector('#res-lb').innerHTML =
       `<p class="center lb-hint">${this.auth?.isLoggedIn ? 'Saving score…' : 'Loading leaderboard…'}</p>`;
 
@@ -5432,5 +5536,7 @@ export class UIOverlay {
     this.root.querySelector('#res-lb').innerHTML = submitNote
       ? `<p class="center lb-hint muted">${submitNote}</p>${lbHtml}`
       : lbHtml;
+
+    this._renderRunRating(results.scenario, replayRes?.analytics ?? null);
   }
 }

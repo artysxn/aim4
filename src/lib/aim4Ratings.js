@@ -207,6 +207,11 @@ export function telemetryFromAimStats(row = {}) {
   };
 }
 
+/** Map one replay analytics aggregate to the 7 raw telemetry values (games = 1). */
+export function telemetryFromRunAnalytics(analytics = {}) {
+  return telemetryFromAimStats({ ...analytics, games: 1 });
+}
+
 /** Average a list of rating objects into one (for the "all modes" radar). */
 export function averageRatings(list) {
   const out = {};
