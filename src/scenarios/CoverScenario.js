@@ -4,7 +4,8 @@
 // Rifle fight against peeking bots on tiered rows. Three rows of cover boxes
 // stand in front of you — each row further back and 200 u (≈5.1 m) higher than
 // the last. One bot is live at a time: it spawns hidden behind a random box,
-// strafes out (left or right) until it can FULLY see you, waits a random extra
+// strafes out (left or right) until it can FULLY see you (continuing past the
+// default peek offset on outer boxes if needed), waits a random extra
 // 25–200 ms, then opens fire. While shooting it jiggles A/D (random 0.05–0.15 s
 // taps) and has a 20% chance per shot to toggle crouch. Kill it and the next
 // bot starts peeking 0.25–0.75 s later; your HP (4 hits) resets on every kill.
@@ -46,6 +47,7 @@ const JIGGLE_MIN = 0.05; // s — A/D tap window while shooting
 const JIGGLE_MAX = 0.15;
 const CROUCH_TOGGLE_CHANCE = 0.2; // per shot fired
 const CROUCH_RATE = 10;
+const MAX_PEEK_EXTRA = COVER_GAP * 1.5; // extra strafe past default peek if still occluded
 // Per-bullet hit odds against the player (scaled down while you move).
 const BOT_HEAD_HIT = 0.04;
 const BOT_BODY_HIT = 0.2;
@@ -401,17 +403,26 @@ export class CoverScenario extends BaseScenario {
     const max = RUN_SPEED * this.botSpeed;
 
     if (b.phase === 'peeking') {
-      b.mover.seek(dt, b.peekTarget, max);
-      this._placeBot();
-      // The clock only starts once the bot can FULLY see you.
-      if (b.fireDelay == null && this._botFullyVisible(b)) {
-        b.fireDelay = randRange(this.reactMin, this.reactMax);
+      const visible = this._botFullyVisible(b);
+      if (!visible) {
+        // Outer boxes may need to strafe past the default peek offset before
+        // the player has line of sight — keep moving outward until visible.
+        const limit = b.peekTarget + b.side * MAX_PEEK_EXTRA;
+        const canAdvance = b.side > 0 ? b.mover.s < limit : b.mover.s > limit;
+        if (canAdvance) b.mover.step(dt, b.side, max);
+      } else if (Math.abs(b.mover.v) > 0.05) {
+        b.mover.step(dt, -Math.sign(b.mover.v), max);
       }
-      if (b.fireDelay != null) {
+      this._placeBot();
+      if (visible) {
+        if (b.fireDelay == null) {
+          b.peekTarget = b.mover.s;
+          b.fireDelay = randRange(this.reactMin, this.reactMax);
+        }
         b.fireDelay -= dt;
         if (b.fireDelay <= 0) {
           b.phase = 'shooting';
-          b.fireTimer = 0; // first bullet leaves immediately
+          b.fireTimer = 0;
         }
       }
     } else {
