@@ -215,6 +215,9 @@ export class ReplayAnalytics {
     this._flickDegSum = 0; // total degrees travelled inside flicks
     this._flickTickSum = 0; // total ticks spent inside flicks
     this._killShots = 0; // shots that hit a target
+    this._lastKillTick = null; // tick of last kill — measures delay to next flick
+    this._killToFlickSum = 0; // Σ ticks from kill → first flick after
+    this._killToFlickCount = 0;
     this._reactTicks = 0; // remaining ticks of the "reacting" motion state
     this.motionState = 'idle'; // idle | tracking | flicking | reacting
   }
@@ -532,6 +535,11 @@ export class ReplayAnalytics {
   }
 
   _startFlick(i, dirPrev, closest, speed) {
+    if (this._lastKillTick != null) {
+      this._killToFlickSum += Math.max(0, i - this._lastKillTick);
+      this._killToFlickCount++;
+      this._lastKillTick = null;
+    }
     const startAngles = this._camAngles(i - 1);
     this._flick = {
       startDir: dirPrev,
@@ -619,7 +627,9 @@ export class ReplayAnalytics {
       this.clicks.accurate++;
       // Reaction part 2: on-target ticks held before this landed shot.
       this._killShots++;
-      this._holdTickSum += Math.max(0, this._onStreak - 1);
+      this._lastKillTick = t;
+      // Reaction: on-target ticks held before this landed shot (incl. click frame).
+      this._holdTickSum += this._onStreak;
       this._holdCount++;
       // Tracking: on-target fraction of this engagement (first touch → kill).
       if (this._engageStart != null) {
@@ -675,24 +685,46 @@ export class ReplayAnalytics {
     return (100 * this._ticksOnTarget) / this._ticksTotal;
   }
 
+  /** Avg ticks from target direction reversal → crosshair follows (on-target only). */
+  get reactionDirMs() {
+    if (!this._dirDelayCount) return null;
+    return (this._dirDelaySum / this._dirDelayCount) * MS_PER_TICK;
+  }
+
+  /** Avg on-target ticks held before each kill (incl. the click/kill frame). */
+  get reactionHoldMs() {
+    if (!this._holdCount) return null;
+    return (this._holdTickSum / this._holdCount) * MS_PER_TICK;
+  }
+
+  /** Avg ticks from a kill to the next detected flick. */
+  get killToFlickMs() {
+    if (!this._killToFlickCount) return null;
+    return (this._killToFlickSum / this._killToFlickCount) * MS_PER_TICK;
+  }
+
   /**
-   * Reaction (ms): 50/50 blend of (a) delay following a target's direction
-   * change and (b) time held on target before each landed shot. 0 = aimbot.
+   * Reaction (ms): 50/50 blend of direction-change response and hold-before-click.
    * Null when the run produced no reaction samples at all.
    */
   get reactionMs() {
-    const parts = [];
-    if (this._dirDelayCount) parts.push((this._dirDelaySum / this._dirDelayCount) * MS_PER_TICK);
-    if (this._holdCount) parts.push((this._holdTickSum / this._holdCount) * MS_PER_TICK);
-    if (!parts.length) return null;
-    return parts.reduce((a, b) => a + b, 0) / parts.length;
+    const dir = this.reactionDirMs;
+    const hold = this.reactionHoldMs;
+    if (dir != null && hold != null) return (dir + hold) / 2;
+    if (dir != null) return dir;
+    if (hold != null) return hold;
+    return null;
   }
 
-  /** Adjustments: detected flicks per target actually hit (1.0 = one-and-done). */
+  /** Total detected flicks (accurate + over + under). */
+  get flicksTotal() {
+    return this.flicks.accurate + this.flicks.over + this.flicks.under;
+  }
+
+  /** Flicks per target hit — always ≥ 1 when targets were hit. */
   get adjustmentsPerTarget() {
     if (!this._killShots) return null;
-    const flicksTotal = this.flicks.accurate + this.flicks.over + this.flicks.under;
-    return Math.max(1, flicksTotal / this._killShots);
+    return this.flicksTotal / this._killShots;
   }
 
   /** Speed: degrees travelled inside flicks over the time spent flicking (°/s). */
@@ -769,8 +801,18 @@ export class ReplayAnalytics {
       tracking_pct: Math.round(this.trackingPct * 10) / 10,
       on_target_pct: Math.round(this.onTargetPct * 10) / 10,
       reaction_ms: this.reactionMs == null ? null : Math.round(this.reactionMs * 10) / 10,
+      reaction_dir_ms: this.reactionDirMs == null ? null : Math.round(this.reactionDirMs * 10) / 10,
+      reaction_hold_ms: this.reactionHoldMs == null ? null : Math.round(this.reactionHoldMs * 10) / 10,
+      kill_to_flick_ms: this.killToFlickMs == null ? null : Math.round(this.killToFlickMs * 10) / 10,
+      reaction_dir_samples: this._dirDelayCount,
+      reaction_hold_samples: this._holdCount,
+      kill_to_flick_samples: this._killToFlickCount,
       adjustments_per_target:
         this.adjustmentsPerTarget == null ? null : Math.round(this.adjustmentsPerTarget * 100) / 100,
+      flicks_total: this.flicksTotal,
+      targets_hit: this._killShots,
+      flick_deg_total: Math.round(this._flickDegSum * 10) / 10,
+      flick_time_ms: Math.round(this._flickTickSum * MS_PER_TICK * 10) / 10,
       speed_deg_s: Math.round(this.flickSpeedDegS * 10) / 10,
       targets_hit: this._killShots
     };

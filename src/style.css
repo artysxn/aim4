@@ -1012,6 +1012,13 @@ a.btn {
   font-size: 13px;
   margin-bottom: 4px;
 }
+.radar-tooltip-verbose {
+  max-width: 280px;
+}
+.radar-tooltip-line {
+  color: #b8b8b8;
+  margin-top: 3px;
+}
 .radar-tooltip-rating {
   color: #f52525;
   font-variant-numeric: tabular-nums;

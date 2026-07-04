@@ -26,6 +26,22 @@ export function aimFilterById(id) {
   return AIM_STAT_FILTERS.find((f) => f.id === id) || AIM_STAT_FILTERS[0];
 }
 
+/** How many top runs per category to average into the account radar rating. */
+export const AIM_RATING_BEST_FILTERS = [
+  { id: 'best1', label: 'Best 1 per category', n: 1 },
+  { id: 'best2', label: 'Best 2 per category', n: 2 },
+  { id: 'best3', label: 'Best 3 per category', n: 3 }
+];
+
+export function aimRatingBestById(id) {
+  return AIM_RATING_BEST_FILTERS.find((f) => f.id === id) || AIM_RATING_BEST_FILTERS[0];
+}
+
+const AIM_RUN_COLUMNS =
+  'flick_speed_ms,flick_accuracy_pct,flicks_accurate,flicks_over,flicks_under,' +
+  'clicks_early,clicks_accurate,clicks_late,click_early_ms,click_late_ms,' +
+  'tension_pct,tracking_pct,reaction_ms,adjustments_per_target,speed_deg_s,created_at';
+
 /** Modes where you hold fire and score per frame on target (Strafes-style). */
 const HOLD_FIRE_SCENARIOS = new Set(['tracking', 'ball']);
 
@@ -89,6 +105,27 @@ export async function fetchAimStats({ userId = null, scenario = null, lastN = nu
     return null;
   }
   return (Array.isArray(data) ? data[0] : data) || null;
+}
+
+/**
+ * Fetch individual competitive run rows (newest first) for best-N rating math.
+ * @returns {Promise<object[]>}
+ */
+export async function fetchAimRuns({ userId = null, scenario = null, lastN = null, sinceHours = null } = {}) {
+  if (!supabaseConfigured()) return [];
+  const sb = getSupabase();
+  const since = sinceHours ? new Date(Date.now() - sinceHours * 3600 * 1000).toISOString() : null;
+  let q = sb.from('aim_run_stats').select(AIM_RUN_COLUMNS).order('created_at', { ascending: false });
+  if (userId) q = q.eq('user_id', userId);
+  if (scenario) q = q.eq('scenario', scenario);
+  if (since) q = q.gte('created_at', since);
+  if (lastN) q = q.limit(lastN);
+  const { data, error } = await q;
+  if (error) {
+    console.warn('[aimStats] fetch runs failed', error.message);
+    return [];
+  }
+  return data || [];
 }
 
 /**

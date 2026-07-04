@@ -24,7 +24,7 @@ import {
 } from '../lib/accountStats.js';
 import { countryOptionsHtml, flagEmoji } from '../lib/countries.js';
 import { fetchPublicProfile, fetchPublicSettings } from '../lib/userProfile.js';
-import { logAimRun, fetchAimComparison, fetchAimStats, AIM_STAT_FILTERS } from '../lib/aimStats.js';
+import { logAimRun, fetchAimComparison, fetchAimStats, fetchAimRuns, AIM_STAT_FILTERS, AIM_RATING_BEST_FILTERS } from '../lib/aimStats.js';
 import { incrementPlayTime, formatPlayTime } from '../lib/playTime.js';
 import {
   fetchAimRatingLeaderboard,
@@ -43,7 +43,9 @@ import {
   telemetryFromRunAnalytics,
   averageRatingsAcrossModes,
   overallAimScoreFromModes,
-  radarCategoriesForView
+  radarCategoriesForView,
+  buildRatingBreakdown,
+  composeRatingFromBestRuns
 } from '../lib/aim4Ratings.js';
 import { supabaseConfigured } from '../lib/supabase.js';
 import { localDecode } from '../lib/replayCodec.js';
@@ -1096,6 +1098,7 @@ export class UIOverlay {
             <div class="account-rating-controls">
               <select id="account-rating-filter" class="config-code-input account-aim-filter" aria-label="Gamemode"></select>
               <select id="account-rating-time" class="config-code-input account-aim-filter" aria-label="Time range"></select>
+              <select id="account-rating-best" class="config-code-input account-aim-filter" aria-label="Best runs per category"></select>
             </div>
           </div>
           <div class="account-rating-compare">
@@ -3047,6 +3050,7 @@ export class UIOverlay {
   _bindRating() {
     this._ratingMode = this._ratingMode || 'all';
     this._ratingTimeId = this._ratingTimeId || 'all';
+    this._ratingBestId = this._ratingBestId || 'best1';
     this._ratingCompareOverlays = this._ratingCompareOverlays || [];
     this._ratingShowGlobal = !!this._ratingShowGlobal;
 
@@ -3077,6 +3081,19 @@ export class UIOverlay {
       });
     }
 
+    const bestSel = this.root.querySelector('#account-rating-best');
+    if (bestSel) {
+      bestSel.innerHTML = AIM_RATING_BEST_FILTERS.map(
+        (f) => `<option value="${f.id}">${this._esc(f.label)}</option>`
+      ).join('');
+      bestSel.value = this._ratingBestId;
+      bestSel.addEventListener('change', () => {
+        this._ratingBestId = bestSel.value;
+        this._loadRating();
+        this._loadAimSummary(this._aimStatsUserId);
+      });
+    }
+
     this.root.querySelector('#account-rating-global')?.addEventListener('change', (e) => {
       this._ratingShowGlobal = e.target.checked;
       this._loadRating();
@@ -3102,16 +3119,18 @@ export class UIOverlay {
     return { lastN: f.lastN ?? null, sinceHours: f.hours ?? null };
   }
 
+  _ratingBestCount() {
+    const f = AIM_RATING_BEST_FILTERS.find((x) => x.id === this._ratingBestId) || AIM_RATING_BEST_FILTERS[0];
+    return f.n;
+  }
+
   async _fetchModeRating(userId, mode, config) {
-    const row = await fetchAimStats({ userId, scenario: mode, ...this._ratingFetchOpts() });
-    if (!row || !Number(row.games)) return null;
+    const runs = await fetchAimRuns({ userId, scenario: mode, ...this._ratingFetchOpts() });
+    if (!runs.length) return null;
     const baselines = baselinesForGamemode(mode, config);
-    const telemetry = telemetryFromAimStats(row);
-    return {
-      mode,
-      rating: calculateAim4Ratings(telemetry, { baselines }),
-      telemetry
-    };
+    const rating = composeRatingFromBestRuns(runs, { baselines }, this._ratingBestCount());
+    if (!rating) return null;
+    return { mode, rating, games: runs.length };
   }
 
   async _loadAimSummary(userId) {
@@ -3230,35 +3249,41 @@ export class UIOverlay {
       }];
 
       if (this._ratingShowGlobal) {
+        const bestN = this._ratingBestCount();
         if (mode === 'all') {
           const globalModes = await Promise.all(
             RATED_GAMEMODES.map(async (m) => {
-              const row = await fetchAimStats({ scenario: m, ...this._ratingFetchOpts() });
-              if (!row?.games) return null;
-              return {
-                mode: m,
-                rating: calculateAim4Ratings(
-                  telemetryFromAimStats(row),
-                  { baselines: baselinesForGamemode(m, config) }
-                )
-              };
+              const runs = await fetchAimRuns({ scenario: m, ...this._ratingFetchOpts() });
+              if (!runs.length) return null;
+              const rating = composeRatingFromBestRuns(
+                runs,
+                { baselines: baselinesForGamemode(m, config) },
+                bestN
+              );
+              return rating ? { mode: m, rating } : null;
             })
           );
           const gRating = averageRatingsAcrossModes(globalModes.filter(Boolean));
-          series.push({
-            rating: gRating,
-            color: '#9a9a9a',
-            fill: 'rgba(154,154,154,0.12)',
-            label: 'Global avg'
-          });
-        } else {
-          const row = await fetchAimStats({ scenario: mode, ...this._ratingFetchOpts() });
-          if (row?.games) {
+          if (gRating) {
             series.push({
-              rating: calculateAim4Ratings(
-                telemetryFromAimStats(row),
-                { baselines: baselinesForGamemode(mode, config) }
-              ),
+              rating: gRating,
+              color: '#9a9a9a',
+              fill: 'rgba(154,154,154,0.12)',
+              label: 'Global avg'
+            });
+          }
+        } else {
+          const runs = await fetchAimRuns({ scenario: mode, ...this._ratingFetchOpts() });
+          const gRating = runs.length
+            ? composeRatingFromBestRuns(
+              runs,
+              { baselines: baselinesForGamemode(mode, config) },
+              bestN
+            )
+            : null;
+          if (gRating) {
+            series.push({
+              rating: gRating,
               color: '#9a9a9a',
               fill: 'rgba(154,154,154,0.12)',
               label: 'Global avg'
@@ -3386,7 +3411,8 @@ export class UIOverlay {
       rating: runRating,
       color: '#f52525',
       fill: 'rgba(245,37,37,0.25)',
-      label: 'This run'
+      label: 'This run',
+      breakdown: buildRatingBreakdown(runTelemetry, { baselines })
     }];
     if (globalRating) {
       series.unshift({
@@ -3404,12 +3430,12 @@ export class UIOverlay {
         label: 'Your avg'
       });
     }
-    this._drawRadarChart(chart, series, '#res-rating-tooltip', scenario, categories);
+    this._drawRadarChart(chart, series, '#res-rating-tooltip', scenario, categories, true);
     legend.innerHTML = this._ratingCompareLegendHtml(runRating, playerRating, globalRating, scenario);
   }
 
   /** Render a vector (SVG) 0–2 radar; optional multiple overlaid series. */
-  _drawRadarChart(host, series = [], tooltipSel = null, mode = 'all', categories = null) {
+  _drawRadarChart(host, series = [], tooltipSel = null, mode = 'all', categories = null, verboseTooltips = false) {
     if (!host) return;
     const tooltip = tooltipSel ? this.root.querySelector(tooltipSel) : null;
     if (tooltip) tooltip.hidden = true;
@@ -3480,13 +3506,24 @@ export class UIOverlay {
     const showTip = (meta, evt) => {
       const val = meta.series.rating?.[meta.category];
       if (!Number.isFinite(val)) return;
-      tooltip.innerHTML = `${RATING_LABELS[meta.category]}: ${val.toFixed(2)}`;
+      const entry = verboseTooltips ? meta.series.breakdown?.[meta.category] : null;
+      if (entry?.detailLines?.length) {
+        tooltip.classList.add('radar-tooltip-verbose');
+        tooltip.innerHTML =
+          `<strong>${this._esc(RATING_LABELS[meta.category])}: ${entry.rating.toFixed(2)}</strong>` +
+          entry.detailLines.map((l) => `<div class="radar-tooltip-line">${this._esc(l)}</div>`).join('');
+      } else {
+        tooltip.classList.remove('radar-tooltip-verbose');
+        tooltip.innerHTML = `${RATING_LABELS[meta.category]}: ${val.toFixed(2)}`;
+      }
       tooltip.hidden = false;
       const rect = host.getBoundingClientRect();
       const tx = evt.clientX - rect.left + 12;
       const ty = evt.clientY - rect.top + 12;
-      tooltip.style.left = `${Math.min(tx, W - 160)}px`;
-      tooltip.style.top = `${Math.min(ty, H - 48)}px`;
+      const maxW = entry?.detailLines?.length ? 280 : 160;
+      const maxH = entry?.detailLines?.length ? 180 : 48;
+      tooltip.style.left = `${Math.min(tx, W - maxW)}px`;
+      tooltip.style.top = `${Math.min(ty, H - maxH)}px`;
     };
 
     host.querySelectorAll('.radar-hit').forEach((el) => {

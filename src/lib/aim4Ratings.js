@@ -157,15 +157,27 @@ export function precisionScore(A) {
 }
 
 /**
- * Engine 4 — Adjustments per target hit. 1.0 (one motion per kill) = 2.00;
- * the baseline B (default 2.0 adjustments) = 1.00; linear in between.
+ * Engine 4 — Flicks per target hit (lower is better). 1.0 flick/target is ideal
+ * but the rating is capped well below 2.00; baseline B (default 2.0) = 1.00.
  */
-export function adjustmentsScore(adj, baseline) {
-  const a = Number(adj);
-  const b = Number(baseline);
-  if (!Number.isFinite(a) || a <= 0) return 0;
-  if (!Number.isFinite(b) || b <= 1) return 0;
-  return clamp(2 - (a - 1) / (b - 1), 0, 2);
+export function adjustmentsScore(adjPerTarget, baseline = 2.0) {
+  const a = Math.max(1, Number(adjPerTarget) || 1);
+  const b = Math.max(1.01, Number(baseline) || 2.0);
+  const excess = a - 1;
+  const bExcess = b - 1;
+  const raw = 2 * Math.exp(-0.693147 * excess / bExcess);
+  return clamp(raw, 0, 1.78);
+}
+
+/**
+ * Engine 5 — Reaction time (ms). Exponential decay: instant still caps below
+ * 2.00; baseline ms (default 200) = 1.00; double baseline ≈ 0.50.
+ */
+export function reactionScore(ms, baseline = 200) {
+  const m = Math.max(0, Number(ms) || 0);
+  if (m <= 0) return 1.82;
+  const b = Math.max(1, Number(baseline) || 200);
+  return clamp(2 * Math.exp(-0.693147 * m / b), 0, 1.82);
 }
 
 /**
@@ -212,10 +224,10 @@ export function calculateAim4Ratings(telemetry = {}, gamemodeConfig = {}) {
     tracking: round2(higherIsBetter(telemetry.tracking, B.tracking)),
     // How many flicks land on target at all (%).
     flicks_hit_percent: round2(higherIsBetter(telemetry.flicks_hit_percent, B.flicks_hit_percent)),
-    // Motions per target hit — 1.0 is perfectly direct.
+    // Motions per target hit — 1.0 is ideal; brutal exponential curve.
     adjustments: round2(adjustmentsScore(telemetry.adjustments, B.adjustments)),
-    // Direction-change response + hold-before-shot, blended (ms; 0 = aimbot).
-    reaction_time_ms: round2(lowerIsBetter(telemetry.reaction_time_ms, B.reaction_time_ms)),
+    // Direction-change response + hold-before-click, 50/50 blend (ms).
+    reaction_time_ms: round2(reactionScore(telemetry.reaction_time_ms, B.reaction_time_ms)),
     // Path deviation from the direct route to the engaged target (lower wins;
     // 0% → 2.00, the baseline (default 40%) → 1.00).
     tension_percent: round2(lowerIsBetter(telemetry.tension_percent, B.tension_percent))
@@ -272,9 +284,26 @@ export function telemetryFromAimStats(row = {}) {
   };
 }
 
-/** Map one replay analytics aggregate to the 7 raw telemetry values (games = 1). */
+/** Map one replay analytics aggregate to rating telemetry + detail fields. */
 export function telemetryFromRunAnalytics(analytics = {}) {
-  return telemetryFromAimStats({ ...analytics, games: 1 });
+  const t = telemetryFromAimStats({ ...analytics, games: 1 });
+  const pick = (k) => analytics[k];
+  return {
+    ...t,
+    reaction_dir_ms: pick('reaction_dir_ms'),
+    reaction_hold_ms: pick('reaction_hold_ms'),
+    kill_to_flick_ms: pick('kill_to_flick_ms'),
+    reaction_dir_samples: pick('reaction_dir_samples'),
+    reaction_hold_samples: pick('reaction_hold_samples'),
+    kill_to_flick_samples: pick('kill_to_flick_samples'),
+    flicks_total: pick('flicks_total'),
+    targets_hit: pick('targets_hit'),
+    flick_deg_total: pick('flick_deg_total'),
+    flick_time_ms: pick('flick_time_ms'),
+    flicks_accurate: pick('flicks_accurate'),
+    flicks_over: pick('flicks_over'),
+    flicks_under: pick('flicks_under')
+  };
 }
 
 /**
@@ -285,6 +314,7 @@ export function buildRatingBreakdown(telemetry = {}, gamemodeConfig = {}) {
   const B = { ...DEFAULT_BASELINE, ...(gamemodeConfig.baselines || gamemodeConfig || {}) };
   const rating = calculateAim4Ratings(telemetry, gamemodeConfig);
   const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const line = (s) => s;
 
   const precisionRaw = num(telemetry.precision_accuracy_percent);
   const speedRaw = num(telemetry.speed);
@@ -294,57 +324,147 @@ export function buildRatingBreakdown(telemetry = {}, gamemodeConfig = {}) {
   const reactRaw = num(telemetry.reaction_time_ms);
   const tensionRaw = num(telemetry.tension_percent);
 
+  const flicksTotal = telemetry.flicks_total;
+  const targetsHit = telemetry.targets_hit;
+  const flickDeg = telemetry.flick_deg_total;
+  const flickMs = telemetry.flick_time_ms;
+  const dirMs = telemetry.reaction_dir_ms;
+  const holdMs = telemetry.reaction_hold_ms;
+  const ktfMs = telemetry.kill_to_flick_ms;
+
+  const speedLines = [
+    line(`${speedRaw.toFixed(1)} °/s while flicking`),
+    flickDeg != null && flickMs != null && flickMs > 0
+      ? line(`${Number(flickDeg).toFixed(1)}° travelled in ${Number(flickMs).toFixed(0)} ms`)
+      : null,
+    line(`Baseline ${B.speed} °/s → 1.00 rating`)
+  ].filter(Boolean);
+
+  const adjLines = [
+    flicksTotal != null && targetsHit != null
+      ? line(`${flicksTotal} flicks ÷ ${targetsHit} targets = ${adjRaw.toFixed(2)} per hit`)
+      : line(`${adjRaw.toFixed(2)} flicks per target hit`),
+    line('1.00 per target is ideal — rating capped below 2.00'),
+    line(`Baseline ${B.adjustments.toFixed(1)}/target → 1.00 rating`)
+  ];
+
+  const reactLines = [];
+  if (dirMs != null) {
+    reactLines.push(line(
+      `Target turn → aim: ${Number(dirMs).toFixed(1)} ms` +
+      (telemetry.reaction_dir_samples ? ` (${telemetry.reaction_dir_samples}×)` : '')
+    ));
+  }
+  if (holdMs != null) {
+    reactLines.push(line(
+      `On-target before click: ${Number(holdMs).toFixed(1)} ms` +
+      (telemetry.reaction_hold_samples ? ` (${telemetry.reaction_hold_samples}×)` : '')
+    ));
+  }
+  if (ktfMs != null) {
+    reactLines.push(line(
+      `Kill → next flick: ${Number(ktfMs).toFixed(1)} ms` +
+      (telemetry.kill_to_flick_samples ? ` (${telemetry.kill_to_flick_samples}×)` : '')
+    ));
+  }
+  reactLines.push(line(`Combined → ${reactRaw.toFixed(1)} ms (50/50 when both present)`));
+  reactLines.push(line(`Baseline ${B.reaction_time_ms} ms → 1.00 rating`));
+
+  const flicksLines = [
+    line(`${flicksRaw.toFixed(1)}% of flicks land on target`),
+    telemetry.flicks_accurate != null
+      ? line(`${telemetry.flicks_accurate} accurate / ${telemetry.flicks_over ?? 0} over / ${telemetry.flicks_under ?? 0} under`)
+      : null,
+    line(`Baseline ${B.flicks_hit_percent}% → 1.00 rating`)
+  ].filter(Boolean);
+
   return {
     precision_accuracy_percent: {
       rating: rating.precision_accuracy_percent,
       raw: precisionRaw,
       rawLabel: `${precisionRaw.toFixed(1)}% avg closeness per flick`,
-      formula: 'Precision curve: 70% = 1.00 rating, 100% = 2.00',
+      detailLines: [
+        line(`${precisionRaw.toFixed(1)}% of start→target gap closed per flick`),
+        line('70% closeness → 1.00 rating')
+      ],
       direction: 'precision'
     },
     speed: {
       rating: rating.speed,
       raw: speedRaw,
       rawLabel: `${speedRaw.toFixed(0)} °/s while flicking`,
-      formula: `Rating = √(speed ÷ baseline ${B.speed} °/s), capped at 2.00 — forgiving below baseline`,
+      detailLines: speedLines,
       direction: 'higher'
     },
     tracking: {
       rating: rating.tracking,
       raw: trackingRaw,
       rawLabel: `${(trackingRaw * 100).toFixed(1)}% time on target`,
-      formula: `Rating = on-target fraction ÷ baseline (${B.tracking}), capped at 2.00`,
+      detailLines: [
+        line(`${(trackingRaw * 100).toFixed(1)}% of engagement on target`),
+        line(`Baseline ${(B.tracking * 100).toFixed(0)}% → 1.00 rating`)
+      ],
       direction: 'higher'
     },
     flicks_hit_percent: {
       rating: rating.flicks_hit_percent,
       raw: flicksRaw,
       rawLabel: `${flicksRaw.toFixed(1)}% of flicks land on target`,
-      formula: `Rating = hit% ÷ baseline (${B.flicks_hit_percent}%), capped at 2.00`,
+      detailLines: flicksLines,
       direction: 'higher'
     },
     adjustments: {
       rating: rating.adjustments,
       raw: adjRaw,
-      rawLabel: `${adjRaw.toFixed(2)} adjustments per target hit`,
-      formula: `Rating = 2.00 − (adjustments − 1) ÷ (${B.adjustments} − 1); 1.00/target = 2.00`,
+      rawLabel: `${adjRaw.toFixed(2)} flicks per target hit`,
+      detailLines: adjLines,
       direction: 'lower'
     },
     reaction_time_ms: {
       rating: rating.reaction_time_ms,
       raw: reactRaw,
-      rawLabel: `${reactRaw.toFixed(1)} ms (direction-change + hold blend)`,
-      formula: `Rating = 2.00 − (reaction ms ÷ ${B.reaction_time_ms} ms); instant = 2.00`,
+      rawLabel: `${reactRaw.toFixed(1)} ms blended reaction`,
+      detailLines: reactLines,
       direction: 'lower'
     },
     tension_percent: {
       rating: rating.tension_percent,
       raw: tensionRaw,
       rawLabel: `${tensionRaw.toFixed(1)}% path deviation`,
-      formula: `Rating = 2.00 − (deviation% ÷ ${B.tension_percent}%); lower tension is better`,
+      detailLines: [
+        line(`${tensionRaw.toFixed(1)}% deviation from direct path`),
+        line(`Baseline ${B.tension_percent}% → 1.00 rating`)
+      ],
       direction: 'lower'
     }
   };
+}
+
+/**
+ * Build a radar rating from individual runs: for each category, take the top
+ * `bestN` run scores (higher normalized rating = better) and average them.
+ * Axes may come from different games when bestN is 1.
+ */
+export function composeRatingFromBestRuns(runs, gamemodeConfig = {}, bestN = 1) {
+  if (!runs?.length) return null;
+  const perRun = runs.map((row) =>
+    calculateAim4Ratings(telemetryFromAimStats({ ...row, games: 1 }), gamemodeConfig)
+  );
+  const cap = Math.max(1, Math.min(Number(bestN) || 1, runs.length));
+  const out = {};
+  for (const key of RATING_CATEGORIES) {
+    const scores = perRun
+      .map((r) => r[key])
+      .filter((v) => Number.isFinite(v))
+      .sort((a, b) => b - a);
+    if (!scores.length) {
+      out[key] = null;
+      continue;
+    }
+    const top = scores.slice(0, Math.min(cap, scores.length));
+    out[key] = round2(top.reduce((s, v) => s + v, 0) / top.length);
+  }
+  return out;
 }
 
 /** Average a list of rating objects into one (for the "all modes" radar). */
