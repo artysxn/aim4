@@ -23,6 +23,7 @@ import customgames from '../icons/icon_customgames.svg?url';
 import multiplayer from '../icons/icon_multiplayer.svg?url';
 import leaderboard from '../icons/icon_leaderboards.svg?url';
 import account     from '../icons/icon_account.svg?url';
+import logout      from '../icons/icon_logout.svg?url';
 import settings    from '../icons/icon_settings.svg?url';
 import precision   from '../icons/icon_precision.svg?url';
 import all         from '../icons/icon_all.svg?url';
@@ -58,7 +59,7 @@ export const CUSTOM_GAMES_ICON  = customgames;
 export const MULTIPLAYER_ICON   = multiplayer;
 export const LEADERBOARD_ICON   = leaderboard;
 export const ACCOUNT_ICON       = account;
-export const LOGOUT_ICON        = account; // no dedicated logout icon in the icon set
+export const LOGOUT_ICON        = logout;
 export const SETTINGS_ICON      = settings;
 export const PRECISION_ICON     = precision;
 export const ALL_MODES_ICON     = all;

@@ -23,6 +23,8 @@ const FLICK_MAX_TICKS = 128;
 const BASELINE_EMA = 0.15;
 // A flick that lands within this × the target's angular radius is "accurate".
 const ACCURATE_TOL = 1.5;
+// Must close at least this fraction of the start→target angle to count as a flick.
+const FLICK_MIN_TRAVEL_RATIO = 0.5;
 // Ticks the motion classifier reports "reacting" after a sharp heading change.
 const REACT_STATE_TICKS = 10;
 // Minimum angular travel for the speed metric — small flicks still count.
@@ -557,6 +559,10 @@ export class ReplayAnalytics {
       [closest.aim.x, closest.aim.y, closest.aim.z],
       closest.camPos
     );
+    const traveled = angleBetween(f.startDir, dirEnd);
+    const required = angleBetween(f.startDir, targetDir);
+    if (required < 1e-6 || traveled < FLICK_MIN_TRAVEL_RATIO * required) return;
+
     let bucket;
     // Forgiving landing zone: within 1.5× the target's angular radius counts
     // as on target — only clear misses are branded over/under.
@@ -564,8 +570,6 @@ export class ReplayAnalytics {
     if (closest.angle <= angularRadius * ACCURATE_TOL) {
       bucket = 'accurate';
     } else {
-      const traveled = angleBetween(f.startDir, dirEnd);
-      const required = angleBetween(f.startDir, targetDir);
       bucket = traveled > required ? 'over' : 'under';
     }
     this.flicks[bucket]++;
