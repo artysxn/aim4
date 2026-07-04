@@ -27,6 +27,11 @@ import { countryOptionsHtml, flagEmoji } from '../lib/countries.js';
 import { fetchPublicProfile, fetchPublicSettings } from '../lib/userProfile.js';
 import { logAimRun, fetchAimComparison, fetchAimStats, fetchAimRuns, AIM_STAT_FILTERS, AIM_RATING_BEST_FILTERS } from '../lib/aimStats.js';
 import { resetGamemodeStats } from '../lib/gamemodeStats.js';
+import {
+  parseGamemodePath,
+  replaceGamemodePath,
+  clearGamemodePath
+} from '../lib/gamemodeRoutes.js';
 import { incrementPlayTime, formatPlayTime } from '../lib/playTime.js';
 import {
   fetchAimRatingLeaderboard,
@@ -294,7 +299,9 @@ export class UIOverlay {
     this._bindAuth();
     this.auth?.onChange(() => this.refreshAccountBar());
     this._populateSettings();
-    this.showScreen('menu');
+    const hasReplayLink = !!new URLSearchParams(window.location.search).get('replay');
+    const pathRoute = !hasReplayLink ? parseGamemodePath() : null;
+    if (!pathRoute) this.showScreen('menu');
     this.refreshAccountBar();
 
     this.mp = new MultiplayerController({
@@ -327,6 +334,33 @@ export class UIOverlay {
       this.mp.autoJoinFromUrl(name);
     }
     this._maybeOpenReplayFromUrl();
+    this._bindGamemodeRoutes();
+    if (pathRoute && !this.mp.urlLobbyCode() && !hasReplayLink) {
+      this.play(pathRoute.scenario, { variant: pathRoute.variant });
+    }
+  }
+
+  /** Path deep links: /survival, /gridshot/competitive, etc. */
+  _bindGamemodeRoutes() {
+    this._routeFromPopstate = false;
+    window.addEventListener('popstate', () => {
+      if (this.mp?.urlLobbyCode?.()) return;
+      if (new URLSearchParams(window.location.search).get('replay')) return;
+      const route = parseGamemodePath();
+      if (route) {
+        if (this.currentScenario !== route.scenario || this.scenarioConfig?.variant !== route.variant) {
+          this._routeFromPopstate = true;
+          this.play(route.scenario, { variant: route.variant });
+          this._routeFromPopstate = false;
+        }
+        return;
+      }
+      if (this.state === 'playing' || this.state === 'await-start' || this.state === 'countdown' || this.state === 'paused') {
+        this.quit();
+      } else if (this.state !== 'replay') {
+        this.showScreen('menu');
+      }
+    });
   }
 
   /**
@@ -1486,7 +1520,7 @@ export class UIOverlay {
         <input type="range" id="replay-scrub" class="replay-scrub" min="0" max="1000" value="0" />
         <span id="replay-time" class="replay-time">0.0 / 0.0s</span>
         <div class="replay-speeds" id="replay-speeds"></div>
-        <button type="button" class="btn btn-sm" id="replay-share-btn" hidden>Share</button>
+        <button type="button" class="btn btn-sm" id="replay-share-btn">Share</button>
         <span id="replay-share-status" class="replay-share-status muted" hidden></span>
         <div class="replay-analytics">
           <button type="button" class="btn btn-sm replay-gear" id="replay-settings-btn" title="Analysis settings" aria-label="Analysis settings">⚙</button>
@@ -4187,8 +4221,8 @@ export class UIOverlay {
       const last = slots['competitive:last'] || slots['practice:last'];
       const best = slots['competitive:best'];
       const btns = [];
-      if (last) btns.push(this._replayBtnHtml(last, 'Last run', title));
-      if (best) btns.push(this._replayBtnHtml(best, 'Best run', title));
+      if (last) btns.push(this._replayBtnHtml(last, 'Last run', title, { showShare: !viewingOther }));
+      if (best) btns.push(this._replayBtnHtml(best, 'Best run', title, { showShare: !viewingOther }));
       if (btns.length) {
         items.push(
           `<div class="account-replay-row"><span class="account-replay-name">${title}</span><span class="account-replay-btns">${btns.join('')}</span></div>`
@@ -4200,6 +4234,14 @@ export class UIOverlay {
 
     body.querySelectorAll('[data-replay-path]').forEach((b) => {
       b.addEventListener('click', () => this._openAccountReplay(b.dataset.replayPath, b.dataset.replayTitle));
+    });
+    body.querySelectorAll('[data-replay-share]').forEach((b) => {
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const row = this._accountReplayRows?.find((r) => r.replay_file_path === b.dataset.replayShare);
+        if (!row) return;
+        await this._shareReplay(this._shareMetaFromReplayRow(row), b);
+      });
     });
   }
 
@@ -4221,8 +4263,10 @@ export class UIOverlay {
     };
   }
 
-  _replayBtnHtml(row, label, title) {
-    return `<button type="button" class="btn btn-sm" data-replay-path="${this._esc(row.replay_file_path)}" data-replay-title="${this._esc(`${title} — ${label}`)}">${label}</button>`;
+  _replayBtnHtml(row, label, title, { showShare = false } = {}) {
+    const watch = `<button type="button" class="btn btn-sm" data-replay-path="${this._esc(row.replay_file_path)}" data-replay-title="${this._esc(`${title} — ${label}`)}">${label}</button>`;
+    if (!showShare) return watch;
+    return `${watch}<button type="button" class="btn btn-sm" data-replay-share="${this._esc(row.replay_file_path)}">Share</button>`;
   }
 
   async _openAccountReplay(path, title) {
@@ -4235,15 +4279,11 @@ export class UIOverlay {
       return;
     }
     const row = this._accountReplayRows?.find((r) => r.replay_file_path === path);
-    if (row && !this._viewingAccount) {
-      this._setReplayShareContext(this._shareMetaFromReplayRow(row));
-    } else {
-      this._setReplayShareContext(null);
-    }
     this._watchReplay(decoded, {
       title: title || 'Replay',
       returnTo: 'account',
-      fromOtherPlayer: !!this._viewingAccount
+      fromOtherPlayer: !!this._viewingAccount,
+      shareCtx: row && !this._viewingAccount ? this._shareMetaFromReplayRow(row) : null
     });
   }
 
@@ -5511,6 +5551,9 @@ export class UIOverlay {
     this.hudCritChip.style.display = noCrit ? 'none' : '';
     this.showScreen('playing');
     this.state = 'await-start';
+    if (!this._routeFromPopstate) {
+      replaceGamemodePath(name, config.variant || 'practice');
+    }
     this.input.requestLock();
   }
 
@@ -5548,6 +5591,7 @@ export class UIOverlay {
       queueSize: 0,
       elo: this.mp?.queueElo ?? this.auth?.elo
     });
+    clearGamemodePath();
     this.showScreen('menu');
   }
 
@@ -5695,9 +5739,12 @@ export class UIOverlay {
       this._shareReplay(this._lastReplayShare, this.root.querySelector('#res-share-replay'));
     });
     this.root.querySelector('#res-watch-replay')?.addEventListener('click', () => {
-      if (this._lastReplayShare) this._setReplayShareContext(this._lastReplayShare);
       const t = SCENARIO_META[this._lastReplay?.scenario]?.title || 'Replay';
-      this._watchReplay(this._lastReplay, { title: `${t} — last run`, returnTo: 'results' });
+      this._watchReplay(this._lastReplay, {
+        title: `${t} — last run`,
+        returnTo: 'results',
+        shareCtx: this._lastReplayShare
+      });
     });
     this.replayScrub?.addEventListener('input', () => {
       this.replayPlayer.seekFraction(Number(this.replayScrub.value) / 1000);
@@ -5723,6 +5770,9 @@ export class UIOverlay {
     document.addEventListener('keydown', (e) => {
       if (this.replaying && e.code === 'Escape') this._exitReplay();
     });
+
+    this._replayFromOtherPlayer = false;
+    this._updateReplayShareButton();
   }
 
   // -------------------------------------------------------------------------
@@ -5994,9 +6044,16 @@ export class UIOverlay {
 
   _setReplayShareContext(ctx) {
     this._replayShareCtx = ctx?.sourcePath ? ctx : null;
-    const btn = this.root.querySelector('#replay-share-btn');
-    if (btn) btn.hidden = !this._replayShareCtx;
+    this._updateReplayShareButton();
     this._setReplayShareStatus('');
+  }
+
+  _updateReplayShareButton() {
+    const btn = this.root.querySelector('#replay-share-btn');
+    if (!btn) return;
+    const show = this.replaying && !this._replayFromOtherPlayer;
+    btn.hidden = !show;
+    btn.disabled = !this._replayShareCtx?.sourcePath;
   }
 
   _setReplayShareStatus(msg, isError = false) {
@@ -6093,9 +6150,10 @@ export class UIOverlay {
   }
 
   /** Enter playback for a decoded replay. `returnTo` is the screen to restore. */
-  _watchReplay(decoded, { title = 'Replay', returnTo = 'results', fromOtherPlayer = false, sharedSettings = null } = {}) {
+  _watchReplay(decoded, { title = 'Replay', returnTo = 'results', fromOtherPlayer = false, sharedSettings = null, shareCtx = null } = {}) {
     if (!decoded || !this.replayPlayer) return;
     this._replayReturn = returnTo;
+    this._replayFromOtherPlayer = fromOtherPlayer;
     this.input.exitLock();
     this.sceneManager.pause();
     // Hide the live (paused) scenario so only the replay ghosts render.
@@ -6118,11 +6176,19 @@ export class UIOverlay {
     this.replayPlayer.load(decoded);
     this.replayPlayer.play();
     this._applyAnalyticsVisibility();
+    if (fromOtherPlayer) {
+      this._setReplayShareContext(null);
+    } else if (shareCtx?.sourcePath) {
+      this._setReplayShareContext(shareCtx);
+    } else {
+      this._updateReplayShareButton();
+    }
   }
 
   _exitReplay() {
     if (!this.replaying) return;
     this.replaying = false;
+    this._replayFromOtherPlayer = false;
     if (this._replayWheel) window.removeEventListener('wheel', this._replayWheel);
     this._analysisLabels = [];
     this.replayPlayer?.dispose();
