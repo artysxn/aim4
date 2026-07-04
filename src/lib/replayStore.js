@@ -375,3 +375,31 @@ export async function fetchSharedReplay(id) {
   if (!replay) return null;
   return { meta: data, replay };
 }
+
+/** Delete all replay storage files and metadata rows for one scenario. */
+export async function deleteScenarioReplays(userId, scenario) {
+  if (!supabaseConfigured() || !userId || !scenario) {
+    throw new Error('Cannot reset replays while offline.');
+  }
+  const sb = getSupabase();
+
+  const { data: rows, error: listErr } = await sb
+    .from('replays')
+    .select('replay_file_path')
+    .eq('user_id', userId)
+    .eq('scenario', scenario);
+  if (listErr) throw new Error(listErr.message);
+
+  const paths = (rows || []).map((r) => r.replay_file_path).filter(Boolean);
+  if (paths.length) {
+    const { error: stErr } = await sb.storage.from(BUCKET).remove(paths);
+    if (stErr) console.warn('[replayStore] storage remove failed', stErr.message);
+  }
+
+  const { error: delErr } = await sb
+    .from('replays')
+    .delete()
+    .eq('user_id', userId)
+    .eq('scenario', scenario);
+  if (delErr) throw new Error(delErr.message);
+}

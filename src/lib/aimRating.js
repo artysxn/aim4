@@ -8,14 +8,14 @@ import {
   loadBaselines,
   syncBaselinesFromServer,
   baselinesForGamemode,
-  calculateAim4Ratings,
-  telemetryFromAimStats,
-  overallAimScoreFromModes
+  composeRatingFromBestRuns,
+  overallAimScoreFromModes,
+  qualifiesForOverallAimRating
 } from './aim4Ratings.js';
-import { fetchAimStats, aimFilterById } from './aimStats.js';
+import { fetchAimRuns, aimFilterById } from './aimStats.js';
 
-/** Build per-mode ratings and the combined overall score for one player. */
-export async function computeOverallAimRating(userId, filterId = 'all') {
+/** Build per-mode best-1 ratings and the combined overall score for one player. */
+export async function computeOverallAimRating(userId, filterId = 'all', bestN = 1) {
   if (!userId) return null;
   await syncBaselinesFromServer();
   const config = loadBaselines();
@@ -24,25 +24,26 @@ export async function computeOverallAimRating(userId, filterId = 'all') {
 
   const perMode = await Promise.all(
     RATED_GAMEMODES.map(async (mode) => {
-      const row = await fetchAimStats({ userId, scenario: mode, ...opts });
-      if (!row || !Number(row.games)) return null;
-      return {
-        mode,
-        rating: calculateAim4Ratings(
-          telemetryFromAimStats(row),
-          { baselines: baselinesForGamemode(mode, config) }
-        )
-      };
+      const runs = await fetchAimRuns({ userId, scenario: mode, ...opts });
+      if (!runs.length) return null;
+      const rating = composeRatingFromBestRuns(
+        runs,
+        { baselines: baselinesForGamemode(mode, config) },
+        bestN
+      );
+      if (!rating) return null;
+      return { mode, rating };
     })
   );
-  return overallAimScoreFromModes(perMode.filter(Boolean));
+  const usable = perMode.filter(Boolean);
+  if (!qualifiesForOverallAimRating(usable)) return null;
+  return overallAimScoreFromModes(usable);
 }
 
-/** Recompute and persist the signed-in user's overall rating. */
+/** Recompute and persist the signed-in user's overall rating (or clear if unqualified). */
 export async function syncOverallAimRating(userId, filterId = 'all') {
   if (!supabaseConfigured() || !userId) return null;
   const score = await computeOverallAimRating(userId, filterId);
-  if (score == null) return null;
   const sb = getSupabase();
   const { error } = await sb.rpc('update_overall_aim_rating', {
     p_user_id: userId,

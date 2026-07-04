@@ -165,6 +165,7 @@ alter table public.aim_run_stats add column if not exists tracking_pct real;
 alter table public.aim_run_stats add column if not exists reaction_ms real;
 alter table public.aim_run_stats add column if not exists adjustments_per_target real;
 alter table public.aim_run_stats add column if not exists speed_deg_s real;
+alter table public.aim_run_stats add column if not exists run_overall_rating real;
 
 create index if not exists aim_run_stats_user_idx on public.aim_run_stats (user_id, created_at desc);
 create index if not exists aim_run_stats_scenario_idx on public.aim_run_stats (scenario, created_at desc);
@@ -176,8 +177,11 @@ create policy "read all aim stats" on public.aim_run_stats
   for select using (true);
 create policy "insert own aim stats" on public.aim_run_stats
   for insert with check (auth.uid() = user_id);
+drop policy if exists "delete own aim stats" on public.aim_run_stats;
+create policy "delete own aim stats" on public.aim_run_stats
+  for delete using (auth.uid() = user_id);
 grant select on public.aim_run_stats to anon, authenticated;
-grant insert on public.aim_run_stats to authenticated;
+grant insert, delete on public.aim_run_stats to authenticated;
 
 -- Accumulate total seconds played on a profile (called after each finished run).
 drop function if exists public.increment_play_time(uuid, real);
@@ -199,6 +203,7 @@ $$;
 grant execute on function public.increment_play_time(uuid, real) to authenticated;
 
 -- Client-computed combined Aim4 Rating (average across rated gamemodes).
+-- Also mirrored on each aim_run_stats row as run_overall_rating for leaderboard SQL.
 drop function if exists public.update_overall_aim_rating(uuid, real);
 create or replace function public.update_overall_aim_rating(p_user_id uuid, p_rating real)
 returns void
@@ -217,6 +222,33 @@ end;
 $$;
 grant execute on function public.update_overall_aim_rating(uuid, real) to authenticated;
 
+-- Per-user overall scores from logged runs (duels / range / deathmatch excluded).
+-- Requires >= 3 distinct rated gamemodes; best run per mode, then averaged.
+-- Keep OVERALL_AIM_MIN_MODES (3) in sync with src/lib/aim4Ratings.js.
+drop function if exists public.aim_rating_user_scores();
+create or replace function public.aim_rating_user_scores()
+returns table (user_id uuid, overall_aim_rating real, rated_modes bigint)
+language sql
+stable
+as $$
+  with mode_best as (
+    select r.user_id, r.scenario, max(r.run_overall_rating) as best
+    from public.aim_run_stats r
+    where r.scenario not in ('duels', 'range', 'deathmatch')
+      and r.variant = 'competitive'
+      and r.run_overall_rating is not null
+    group by r.user_id, r.scenario
+  )
+  select
+    user_id,
+    avg(best)::real as overall_aim_rating,
+    count(*)::bigint as rated_modes
+  from mode_best
+  group by user_id
+  having count(*) >= 3;
+$$;
+grant execute on function public.aim_rating_user_scores() to anon, authenticated;
+
 drop function if exists public.get_aim_rating_leaderboard(int);
 create or replace function public.get_aim_rating_leaderboard(p_limit int default 500)
 returns table (
@@ -229,15 +261,22 @@ returns table (
 language sql
 stable
 as $$
+  with scored as (
+    select
+      s.user_id,
+      s.overall_aim_rating,
+      rank() over (order by s.overall_aim_rating desc nulls last) as rank
+    from public.aim_rating_user_scores() s
+  )
   select
     p.id as user_id,
     p.username,
     p.country_code,
-    p.overall_aim_rating,
-    rank() over (order by p.overall_aim_rating desc nulls last) as rank
-  from public.profiles p
-  where p.overall_aim_rating is not null
-  order by p.overall_aim_rating desc
+    sc.overall_aim_rating,
+    sc.rank
+  from scored sc
+  join public.profiles p on p.id = sc.user_id
+  order by sc.overall_aim_rating desc
   limit greatest(1, least(coalesce(p_limit, 500), 1000));
 $$;
 grant execute on function public.get_aim_rating_leaderboard(int) to anon, authenticated;
@@ -248,18 +287,17 @@ returns table (rank bigint, total bigint, overall_aim_rating real)
 language sql
 stable
 as $$
-  with ranked as (
+  with scored as (
     select
-      p.id,
-      p.overall_aim_rating,
-      rank() over (order by p.overall_aim_rating desc nulls last) as rnk,
+      s.user_id,
+      s.overall_aim_rating,
+      rank() over (order by s.overall_aim_rating desc nulls last) as rnk,
       count(*) over () as cnt
-    from public.profiles p
-    where p.overall_aim_rating is not null
+    from public.aim_rating_user_scores() s
   )
   select rnk, cnt, overall_aim_rating
-  from ranked
-  where id = p_user_id;
+  from scored
+  where user_id = p_user_id;
 $$;
 grant execute on function public.get_aim_rating_rank(uuid) to anon, authenticated;
 
@@ -423,6 +461,10 @@ create policy "update own profile" on public.profiles
   for update using (auth.uid() = id);
 create policy "insert own score" on public.scores
   for insert with check (auth.uid() = user_id);
+drop policy if exists "delete own scores" on public.scores;
+create policy "delete own scores" on public.scores
+  for delete using (auth.uid() = user_id);
+grant delete on public.scores to authenticated;
 
 drop policy if exists "read own settings" on public.user_settings;
 drop policy if exists "read all settings" on public.user_settings;

@@ -37,11 +37,20 @@ export const RATING_LABELS = {
 };
 
 // Base gamemodes that carry a rating config (not custom/playlist/challenge runs).
+// Duels, Range, and Deathmatch are excluded — no radar or overall rating.
 export const RATED_GAMEMODES = [
   'gridshot', 'stars', 'bounce', 'microflicks', 'pasu', 'spidershot',
-  'survival', 'arena', 'duels', 'range', 'tracking', 'deathmatch',
+  'survival', 'arena', 'tracking',
   'sequence', 'double', 'ball', 'bouncetracking', 'pasutracking', 'turn'
 ];
+
+/** Minimum distinct rated modes with data before a profile earns an overall rating. */
+export const OVERALL_AIM_MIN_MODES = 3;
+
+/** True when the player has enough rated gamemodes for an overall aim score. */
+export function qualifiesForOverallAimRating(perModeList) {
+  return (perModeList?.filter(Boolean).length ?? 0) >= OVERALL_AIM_MIN_MODES;
+}
 
 /** Hold-fire modes use a 6-axis radar (no Flicks category). */
 export const FLICKLESS_RATED_MODES = new Set(['ball', 'tracking']);

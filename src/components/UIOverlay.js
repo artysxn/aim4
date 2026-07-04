@@ -25,6 +25,7 @@ import {
 import { countryOptionsHtml, flagEmoji } from '../lib/countries.js';
 import { fetchPublicProfile, fetchPublicSettings } from '../lib/userProfile.js';
 import { logAimRun, fetchAimComparison, fetchAimStats, fetchAimRuns, AIM_STAT_FILTERS, AIM_RATING_BEST_FILTERS } from '../lib/aimStats.js';
+import { resetGamemodeStats } from '../lib/gamemodeStats.js';
 import { incrementPlayTime, formatPlayTime } from '../lib/playTime.js';
 import {
   fetchAimRatingLeaderboard,
@@ -42,11 +43,13 @@ import {
   telemetryFromAimStats,
   telemetryFromRunAnalytics,
   averageRatingsAcrossModes,
-  overallAimScoreFromModes,
   radarCategoriesForView,
   buildRatingBreakdown,
-  composeRatingFromBestRuns
+  composeRatingFromBestRuns,
+  qualifiesForOverallAimRating,
+  OVERALL_AIM_MIN_MODES
 } from '../lib/aim4Ratings.js';
+import { computeOverallAimRating } from '../lib/aimRating.js';
 import { supabaseConfigured } from '../lib/supabase.js';
 import { localDecode } from '../lib/replayCodec.js';
 import { ReplayAnalytics } from '../lib/replayAnalytics.js';
@@ -1008,6 +1011,12 @@ export class UIOverlay {
               </div>
               <p class="readout" id="scn-code-status"></p>
             </div>
+            <div class="scenario-stats-reset" id="scn-stats-reset-wrap" hidden>
+              <div class="field-top"><span class="field-label">Statistics</span></div>
+              <p class="readout muted scn-stats-reset-hint">Delete all aim analytics, leaderboard scores, and replays for this mode on your account.</p>
+              <button type="button" class="btn btn-danger" id="scn-stats-reset-btn">Reset statistics</button>
+              <p class="readout" id="scn-stats-reset-status"></p>
+            </div>
           </div>
         </div>
         <div class="menu-actions scenario-settings-back">
@@ -1719,6 +1728,16 @@ export class UIOverlay {
     if (status) { status.textContent = ''; status.classList.remove('is-error'); }
     const importInput = $('#scn-code-import');
     if (importInput) importInput.value = '';
+
+    const resetWrap = $('#scn-stats-reset-wrap');
+    const canReset =
+      this.auth?.isLoggedIn && this.auth?.isConfigured && this._playlistItemEditing == null;
+    if (resetWrap) resetWrap.hidden = !canReset;
+    const resetStatus = $('#scn-stats-reset-status');
+    if (resetStatus) {
+      resetStatus.textContent = '';
+      resetStatus.classList.remove('is-error');
+    }
   }
 
   /** Refresh just the live config-code readout (after a settings edit). */
@@ -1731,6 +1750,44 @@ export class UIOverlay {
       codeEl.textContent = encodeModeConfig(this.settings.getModeConfig(scenarioId));
     } catch {
       codeEl.textContent = '—';
+    }
+  }
+
+  async _resetScenarioStats() {
+    const scenarioId = this._activeScenarioSettings;
+    const userId = this.auth?.user?.id;
+    if (!scenarioId || !userId) return;
+
+    const title = SCENARIO_META[scenarioId]?.title || scenarioId;
+    const ok = window.confirm(
+      `Reset all statistics and replays for ${title}?\n\n` +
+        'This permanently deletes your aim analytics, leaderboard scores, and recordings for this mode. ' +
+        'This cannot be undone.'
+    );
+    if (!ok) return;
+
+    const $ = (id) => this.root.querySelector(id);
+    const status = $('#scn-stats-reset-status');
+    const btn = $('#scn-stats-reset-btn');
+    if (status) {
+      status.textContent = 'Resetting…';
+      status.classList.remove('is-error');
+    }
+    if (btn) btn.disabled = true;
+
+    try {
+      await resetGamemodeStats(userId, scenarioId);
+      if (status) status.textContent = 'Statistics reset.';
+      if (this._viewingAccount?.id === userId || !this._viewingAccount) {
+        this._loadAimSummary(userId).catch(() => {});
+      }
+    } catch (e) {
+      if (status) {
+        status.textContent = e?.message || 'Reset failed.';
+        status.classList.add('is-error');
+      }
+    } finally {
+      if (btn) btn.disabled = false;
     }
   }
 
@@ -1787,6 +1844,8 @@ export class UIOverlay {
         setStatus(err.message || 'Could not copy code', true);
       }
     });
+
+    $('#scn-stats-reset-btn')?.addEventListener('click', () => this._resetScenarioStats());
 
     $('#scn-code-import-btn')?.addEventListener('click', () => {
       const scenarioId = this._activeScenarioSettings;
@@ -3147,10 +3206,16 @@ export class UIOverlay {
         RATED_GAMEMODES.map((mode) => this._fetchModeRating(userId, mode, config))
       );
       const usable = perMode.filter(Boolean);
-      const overall = overallAimScoreFromModes(usable);
+      const overall = await computeOverallAimRating(userId, this._ratingTimeId, this._ratingBestCount());
       const rankInfo = await fetchAimRatingRank(userId);
       if (overall == null && !rankInfo?.overallAimRating) {
-        el.textContent = 'No Aim4 Rating yet — finish competitive runs to build your profile.';
+        const need = OVERALL_AIM_MIN_MODES;
+        const have = usable.length;
+        if (have > 0 && have < need) {
+          el.textContent = `Overall aim rating unlocks at ${need} rated modes — you have ${have}.`;
+        } else {
+          el.textContent = 'No Aim4 Rating yet — finish competitive runs to build your profile.';
+        }
         return;
       }
       const score = overall ?? rankInfo?.overallAimRating;
@@ -3230,6 +3295,13 @@ export class UIOverlay {
         }
         rating = averageRatingsAcrossModes(usable);
         categories = radarCategoriesForView('all', rating);
+        if (!qualifiesForOverallAimRating(usable)) {
+          this._drawRadarChart(canvas, [], '#account-rating-tooltip', mode);
+          if (legend) {
+            legend.innerHTML = `<p class="center lb-hint">Overall rating unlocks at ${OVERALL_AIM_MIN_MODES} rated modes — you have ${usable.length}. Per-mode ratings are available in the filter above.</p>`;
+          }
+          return;
+        }
       } else {
         const one = await this._fetchModeRating(userId, mode, config);
         if (!one) {
@@ -5700,7 +5772,7 @@ export class UIOverlay {
           : 'No ranked accounts yet — sign in to track your ELO.')
         : scenario === 'aim-rating'
           ? (this.auth?.isLoggedIn
-            ? 'No aim ratings yet — finish competitive runs to appear here.'
+            ? `No aim ratings yet — rank in at least ${OVERALL_AIM_MIN_MODES} rated modes (Duels, Range, and Deathmatch excluded) to appear here.`
             : 'No aim ratings yet — sign in and play to appear here.')
         : (this.auth?.isLoggedIn
           ? 'No scores for these settings yet — finish a run to appear here.'

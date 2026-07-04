@@ -10,6 +10,15 @@
 
 import { getSupabase, supabaseConfigured } from './supabase.js';
 import { syncOverallAimRating } from './aimRating.js';
+import {
+  RATED_GAMEMODES,
+  loadBaselines,
+  syncBaselinesFromServer,
+  baselinesForGamemode,
+  calculateAim4Ratings,
+  telemetryFromRunAnalytics,
+  overallAimScore
+} from './aim4Ratings.js';
 
 /** Selectable recency filters for the profile aim-stats panel. */
 export const AIM_STAT_FILTERS = [
@@ -40,7 +49,7 @@ export function aimRatingBestById(id) {
 const AIM_RUN_COLUMNS =
   'flick_speed_ms,flick_accuracy_pct,flicks_accurate,flicks_over,flicks_under,' +
   'clicks_early,clicks_accurate,clicks_late,click_early_ms,click_late_ms,' +
-  'tension_pct,tracking_pct,reaction_ms,adjustments_per_target,speed_deg_s,created_at';
+  'tension_pct,tracking_pct,reaction_ms,adjustments_per_target,speed_deg_s,run_overall_rating,created_at';
 
 /** Modes where you hold fire and score per frame on target (Strafes-style). */
 const HOLD_FIRE_SCENARIOS = new Set(['tracking', 'ball']);
@@ -80,6 +89,16 @@ export async function logAimRun(userId, recording, analytics) {
     adjustments_per_target: n(analytics.adjustments_per_target),
     speed_deg_s: n(analytics.speed_deg_s)
   };
+  if (RATED_GAMEMODES.includes(recording.scenario)) {
+    await syncBaselinesFromServer();
+    const baselines = baselinesForGamemode(recording.scenario, loadBaselines());
+    const rating = calculateAim4Ratings(
+      telemetryFromRunAnalytics(analytics),
+      { baselines }
+    );
+    const runScore = overallAimScore(rating, recording.scenario);
+    if (runScore != null) row.run_overall_rating = runScore;
+  }
   const { error } = await sb.from('aim_run_stats').insert(row);
   if (error) console.warn('[aimStats] log failed', error.message);
   else syncOverallAimRating(userId).catch((e) => console.warn('[aimStats] overall sync', e));
