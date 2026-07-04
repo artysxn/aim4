@@ -41,7 +41,7 @@ export const RATING_LABELS = {
 export const RATED_GAMEMODES = [
   'gridshot', 'stars', 'threeshot', 'bounce', 'microflicks', 'pasu', 'spidershot',
   'survival', 'arena', 'cover', 'tracking',
-  'sequence', 'double', 'ball', 'drone', 'bouncetracking', 'pasutracking', 'turn',
+  'sequence', 'sequencespeed', 'sequencetracking', 'double', 'doubletracking', 'ball', 'drone', 'bouncetracking', 'pasutracking', 'turn',
   'box', 'circle'
 ];
 

@@ -91,6 +91,8 @@ export class ReplayPlayer {
     this.duration = 0;
     this._lastEventTick = -1;
     this._sfx = null;
+    this._replayFov = 75;
+    this.zoom = 1; // scroll wheel zoom during playback (1 = default)
 
     this.analytics = null; // ReplayAnalytics for the loaded replay
 
@@ -115,6 +117,8 @@ export class ReplayPlayer {
     this._sfx = null;
     this.speed = 1;
     this.playing = false;
+    this.zoom = 1;
+    this._replayFov = this.engine.camera.fov;
 
     this.root = new THREE.Group();
     this.root.name = 'replay-root';
@@ -239,6 +243,16 @@ export class ReplayPlayer {
     this._emitProgress();
   }
 
+  /** Scroll-wheel zoom during playback (1 = default FOV, higher = zoomed in). */
+  adjustZoom(wheelDeltaY) {
+    const factor = Math.pow(1.12, -wheelDeltaY / 100);
+    this.zoom = Math.max(0.35, Math.min(6, this.zoom * factor));
+    if (this.replay) {
+      const tickFloat = this.time * this.replay.tickRate;
+      this._applyTick(tickFloat);
+    }
+  }
+
   /** Scrub to a fraction [0,1] of the timeline. */
   seekFraction(frac) {
     if (!this.replay) return;
@@ -288,6 +302,8 @@ export class ReplayPlayer {
     const camera = this.engine.camera;
     camera.position.set(cam.px, cam.py, cam.pz);
     camera.rotation.set(cam.pitch, cam.yaw, 0, 'YXZ');
+    camera.fov = this._replayFov / this.zoom;
+    camera.updateProjectionMatrix();
 
     for (const e of this.entities) {
       const s = r.sampleEntity(e.data, tickFloat);
@@ -360,6 +376,8 @@ export class ReplayPlayer {
     const camera = this.engine.camera;
     camera.position.set(cam.px, cam.py, cam.pz);
     camera.rotation.set(cam.pitch, cam.yaw, 0, 'YXZ');
+    camera.fov = this._replayFov / this.zoom;
+    camera.updateProjectionMatrix();
 
     const flags = decodeInput(cam.input);
     const moving = flags.W || flags.A || flags.S || flags.D;
@@ -471,7 +489,10 @@ export class ReplayPlayer {
     this.replay = null;
     this.playing = false;
     this.time = 0;
+    this.zoom = 1;
     this._sfx = null;
+    this.engine.camera.fov = this._replayFov;
+    this.engine.camera.updateProjectionMatrix();
     this.engine.camera.position.set(0, EYE_HEIGHT, 0);
     this.engine.camera.rotation.set(0, 0, 0, 'YXZ');
   }

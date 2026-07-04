@@ -19,6 +19,10 @@ import { DeathmatchScenario } from '../scenarios/DeathmatchScenario.js';
 import { BounceScenario } from '../scenarios/BounceScenario.js';
 import { SequenceScenario } from '../scenarios/SequenceScenario.js';
 import { DoubleScenario } from '../scenarios/DoubleScenario.js';
+import { SequenceSpeedScenario } from '../scenarios/SequenceSpeedScenario.js';
+import { SequenceTrackingScenario } from '../scenarios/SequenceTrackingScenario.js';
+import { DoubleTrackingScenario } from '../scenarios/DoubleTrackingScenario.js';
+import { SequenceUltraScenario } from '../scenarios/SequenceUltraScenario.js';
 import { BallScenario } from '../scenarios/BallScenario.js';
 import { BounceTrackingScenario } from '../scenarios/BounceTrackingScenario.js';
 import { PasuTrackingScenario } from '../scenarios/PasuTrackingScenario.js';
@@ -49,7 +53,10 @@ export const SCENARIOS = {
   tracking: TrackingScenario,
   deathmatch: DeathmatchScenario,
   sequence: SequenceScenario,
+  sequencespeed: SequenceSpeedScenario,
+  sequencetracking: SequenceTrackingScenario,
   double: DoubleScenario,
+  doubletracking: DoubleTrackingScenario,
   ball: BallScenario,
   bouncetracking: BounceTrackingScenario,
   pasutracking: PasuTrackingScenario,
@@ -60,7 +67,8 @@ export const SCENARIOS = {
   cover: CoverScenario,
   drone: DroneScenario,
   galaxy: GalaxyScenario,
-  waves: WavesScenario
+  waves: WavesScenario,
+  sequenceultra: SequenceUltraScenario
 };
 
 // Scenarios launched outside the card grid (e.g. multiplayer).

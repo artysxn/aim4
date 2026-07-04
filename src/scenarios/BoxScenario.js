@@ -3,7 +3,7 @@
 //
 // Tracking drill on a floating canvas: one dot travels the canvas' rectangular
 // perimeter — right, up, left, down, repeating — at a random 100–200 u/s.
-// Hold the crosshair on the dot for the track window (default 2 s) to arm it
+// Hold the crosshair on the dot for the track window (default 1.5 s) to arm it
 // (it turns green), then click to kill. A fresh dot spawns 0.5 s later at a
 // random point on the path with a freshly-rolled speed.
 // ---------------------------------------------------------------------------
@@ -40,8 +40,9 @@ export class BoxScenario extends BaseScenario {
     // Travel speed in Source units/s: each dot rolls speed ± variance.
     this.travelSpeed = preset?.travelSpeed ?? this.config.travelSpeed ?? b.travelSpeed;
     this.speedVariance = preset?.speedVariance ?? this.config.speedVariance ?? b.speedVariance;
-    // Continuous crosshair hold (s) before the dot becomes shootable.
+    // Continuous crosshair hold (s) before the dot becomes shootable (75% of legacy 2 s).
     this.holdTime = preset?.holdTime ?? this.config.holdTime ?? b.holdTime;
+    this.baseTargetSize = this.targetSize;
     this.infiniteAmmo = this.config.infiniteAmmo ?? b.infiniteAmmo !== false;
     this.weaponBloom = false;
     this.viewmodelRecoil = false;
@@ -56,7 +57,7 @@ export class BoxScenario extends BaseScenario {
     this.canvasH = this.sizeY + pad * 2;
     this.centerY = canvasCenterY(this.canvasH);
 
-    this._dot = null; // { target, s, speed (m/s), hold, ready }
+    this._dot = null; // { target, s, speed, size, dir, hold, ready }
     this._respawnLeft = 0;
 
     this._buildEnvironment();
@@ -146,28 +147,36 @@ export class BoxScenario extends BaseScenario {
     return { x: -hw, y: hh - (p - 2 * w - h) };
   }
 
-  /** Advance the dot by `dist` metres along the path. */
+  /** Advance the dot by `dist` metres along the path (dir ±1). */
   _advancePath(dot, dist) {
-    dot.s += dist;
+    dot.s += dist * dot.dir;
   }
 
   _applyDotPosition() {
     const d = this._dot;
     if (!d) return;
     const p = this._pathPos(d.s);
-    d.target.object.position.set(p.x, this.centerY + p.y, -WALL_DISTANCE + this.targetSize + 0.05);
+    d.target.object.position.set(p.x, this.centerY + p.y, -WALL_DISTANCE + d.size + 0.05);
   }
 
   // ---- Dot lifecycle ---------------------------------------------------------
-  _rollSpeed() {
+  _rollDotSize() {
+    return randRange(this.baseTargetSize * 0.5, this.baseTargetSize);
+  }
+
+  _rollSpeed(dotSize) {
     const v = Math.max(0, this.speedVariance);
-    return Math.max(10, this.travelSpeed + randRange(-v, v)) * UNIT; // u/s → m/s
+    const base = Math.max(10, this.travelSpeed + randRange(-v, v)) * UNIT;
+    // Smaller dots travel faster along the path.
+    const sizeRatio = this.baseTargetSize / Math.max(dotSize, 1e-4);
+    return base * sizeRatio;
   }
 
   _spawnDot() {
+    const dotSize = this._rollDotSize();
     const target = new Target();
     const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(this.targetSize, 24, 18),
+      new THREE.SphereGeometry(dotSize, 24, 18),
       new THREE.MeshStandardMaterial({
         color: this.settings.data.colors.target,
         emissive: 0xff2a10,
@@ -182,7 +191,9 @@ export class BoxScenario extends BaseScenario {
     this._dot = {
       target,
       s: randRange(0, this._pathLength()),
-      speed: this._rollSpeed(),
+      speed: this._rollSpeed(dotSize),
+      size: dotSize,
+      dir: Math.random() < 0.5 ? 1 : -1,
       hold: 0,
       ready: false
     };
@@ -241,6 +252,8 @@ export class BoxScenario extends BaseScenario {
         this._setDotReady(true);
       }
     } else if (d.hold > 0 || d.ready) {
+      // Partial track then look away → reverse travel direction.
+      if (d.hold >= this.holdTime * 0.5) d.dir *= -1;
       d.hold = 0;
       if (d.ready) {
         d.ready = false;

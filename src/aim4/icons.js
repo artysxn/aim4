@@ -48,7 +48,10 @@ export const SCENARIO_ICONS = {
   tracking,
   deathmatch,
   sequence,
+  sequencespeed: sequence,
+  sequencetracking: sequence,
   double: double_,
+  doubletracking: double_,
   ball,
   bouncetracking: bounce, // Bounce (Tracking) shares the Bounce icon
   pasutracking: pasu,     // Pasu (Tracking) shares the Pasu icon
@@ -59,7 +62,8 @@ export const SCENARIO_ICONS = {
   cover,
   drone,
   galaxy: stars,          // Galaxy challenge uses the Stars icon (by design)
-  waves
+  waves,
+  sequenceultra: sequence
 };
 
 export const MATCHMAKING_ICON   = matchmaking;

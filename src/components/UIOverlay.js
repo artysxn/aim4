@@ -15,6 +15,7 @@ import * as Storage from '../utils/Storage.js';
 import {
   fetchLeaderboardWithMeta,
   fetchEloLeaderboardWithMeta,
+  fetchUserScoreHistory,
   submitScore
 } from '../lib/cloudScores.js';
 import {
@@ -96,8 +97,11 @@ const SCENARIO_META = {
   range: { title: 'Range', dualPlay: true, tags: ['Movement'] },
   tracking: { title: 'Strafes', dualPlay: true, tags: ['Accuracy'] },
   deathmatch: { title: 'Deathmatch', dualPlay: true, tags: ['Movement', 'Speed', 'Control'] },
-  sequence: { title: 'Sequence', dualPlay: true, tags: ['Speed', 'Accuracy', 'Reactions'] },
-  double: { title: 'Double', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
+  sequence: { title: 'Sequence (Clicks)', dualPlay: true, tags: ['Speed', 'Accuracy', 'Reactions'] },
+  sequencespeed: { title: 'Sequence (Speed)', dualPlay: true, tags: ['Accuracy', 'Speed'] },
+  sequencetracking: { title: 'Sequence (Tracking)', dualPlay: true, tags: ['Control', 'Speed'] },
+  double: { title: 'Double (Clicks)', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
+  doubletracking: { title: 'Double (Tracking)', dualPlay: true, tags: ['Control', 'Speed'] },
   ball: { title: 'Ball', dualPlay: true, tags: ['Accuracy', 'Control'] },
   bouncetracking: { title: 'Bounce (Tracking)', dualPlay: true, tags: ['Control', 'Reactions'] },
   pasutracking: { title: 'Pasu (Tracking)', dualPlay: true, tags: ['Accuracy', 'Control'] },
@@ -108,7 +112,8 @@ const SCENARIO_META = {
   cover: { title: 'Cover', dualPlay: true, tags: ['Reactions', 'Accuracy'] },
   drone: { title: 'Drone', dualPlay: true, tags: ['Accuracy', 'Control'] },
   galaxy: { title: 'Galaxy', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] },
-  waves: { title: 'Waves', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] }
+  waves: { title: 'Waves', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] },
+  sequenceultra: { title: 'Sequence (Ultra)', dualPlay: false, challenge: true, tags: ['Control', 'Reactions', 'Accuracy'] }
 };
 
 /** Scenarios with practice-only tuning (gear on training card). */
@@ -126,7 +131,10 @@ const SCENARIO_SETTING_IDS = new Set([
   'range',
   'tracking',
   'sequence',
+  'sequencespeed',
+  'sequencetracking',
   'double',
+  'doubletracking',
   'ball',
   'bouncetracking',
   'pasutracking',
@@ -143,25 +151,43 @@ const SCENARIO_SETTING_IDS = new Set([
 // goes missing. "all" browses every non-challenge mode; "challenges" houses
 // the hard fixed-rule variants and only ever shows those.
 const TRAINING_CATEGORIES = [
-  { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'threeshot', 'survival', 'pasu', 'arena', 'turn'] },
-  { id: 'tracking', title: 'Tracking', modes: ['tracking', 'ball', 'drone', 'box', 'circle', 'bouncetracking', 'pasutracking'] },
-  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'threeshot', 'bounce', 'spidershot', 'sequence'] },
-  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'double', 'cover'] },
+  { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'threeshot', 'survival', 'pasu', 'arena', 'turn', 'sequencespeed', 'sequencetracking'] },
+  { id: 'tracking', title: 'Tracking', modes: ['tracking', 'ball', 'drone', 'box', 'circle', 'bouncetracking', 'pasutracking', 'doubletracking', 'sequencetracking'] },
+  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'threeshot', 'bounce', 'spidershot', 'sequence', 'sequencespeed'] },
+  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'sequencespeed', 'double', 'doubletracking', 'cover'] },
   { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels', 'cover'] },
-  { id: 'challenges', title: 'Challenges', modes: ['galaxy', 'waves'] },
+  { id: 'challenges', title: 'Challenges', modes: ['galaxy', 'sequenceultra', 'waves'] },
   { id: 'all', title: 'All', modes: [] }
 ];
 
 const isChallengeMode = (m) => !!SCENARIO_META[m]?.challenge;
 
+function scenarioTitle(id) {
+  return (SCENARIO_META[id]?.title || id).toLowerCase();
+}
+
+function sortModesByTitle(modes) {
+  return [...modes].sort((a, b) => scenarioTitle(a).localeCompare(scenarioTitle(b)));
+}
+
+function scenarioOptionsHtml(filter = () => true) {
+  return sortModesByTitle(Object.keys(SCENARIOS).filter(filter))
+    .map((k) => `<option value="${k}">${SCENARIO_META[k].title}</option>`)
+    .join('');
+}
+
 function trainingCategoryModes(id) {
   const cat = TRAINING_CATEGORIES.find((c) => c.id === id);
   if (!cat) return [];
-  if (id === 'all') return Object.keys(SCENARIOS).filter((m) => !isChallengeMode(m));
-  if (id !== 'general') return cat.modes.filter((m) => SCENARIOS[m]);
+  if (id === 'all') {
+    return sortModesByTitle(Object.keys(SCENARIOS).filter((m) => !isChallengeMode(m)));
+  }
+  if (id !== 'general') {
+    return sortModesByTitle(cat.modes.filter((m) => SCENARIOS[m]));
+  }
   const placed = new Set(TRAINING_CATEGORIES.flatMap((c) => c.modes));
   const strays = Object.keys(SCENARIOS).filter((m) => !placed.has(m) && !isChallengeMode(m));
-  return [...cat.modes.filter((m) => SCENARIOS[m]), ...strays];
+  return sortModesByTitle([...cat.modes.filter((m) => SCENARIOS[m]), ...strays]);
 }
 
 const GEAR_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66z"/></svg>`;
@@ -291,6 +317,7 @@ export class UIOverlay {
     this.input.onUnlockedClick = () => this._onUnlockedClick();
     this.sceneManager.onFinish = (results) => this._onFinish(results);
     this._bindReplay();
+    this._bindResultsInfographics();
     this._bindAimStats();
     this._bindFullscreenTip();
 
@@ -641,7 +668,7 @@ export class UIOverlay {
       },
       {
         id: 'sequence',
-        label: 'Sequence',
+        label: 'Sequence (Clicks)',
         body: `
           <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
           ${rf('set-seq-size', 'Dot size', 0.1, 0.6, 0.05)}
@@ -651,8 +678,33 @@ export class UIOverlay {
           <label class="field-check"><input type="checkbox" id="set-seq-infinite-ammo" /> Infinite ammo</label>`
       },
       {
+        id: 'sequencespeed',
+        label: 'Sequence (Speed)',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-ss-start-size', 'Start size', 0.05, 0.35, 0.01)}
+          ${rf('set-ss-max-size', 'Max size', 0.2, 0.8, 0.05)}
+          ${rf('set-ss-grow', 'Grow time (ms)', 500, 4000, 100)}
+          ${rf('set-ss-start-dist', 'Chain start distance (m)', 0.3, 3, 0.1)}
+          ${rf('set-ss-step', 'Distance step per kill (m)', 0.1, 1.5, 0.05)}
+          <label class="field-check"><input type="checkbox" id="set-ss-infinite-ammo" /> Infinite ammo</label>`
+      },
+      {
+        id: 'sequencetracking',
+        label: 'Sequence (Tracking)',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-st-size', 'Dot size', 0.1, 0.6, 0.05)}
+          ${rf('set-st-time', 'Time per dot (ms)', 500, 4000, 100)}
+          ${rf('set-st-hold', 'Hold time (s)', 0.1, 2.0, 0.05)}
+          ${rf('set-st-float', 'Float speed', 0.25, 3.0, 0.05)}
+          ${rf('set-st-start-dist', 'Chain start distance (m)', 0.3, 3, 0.1)}
+          ${rf('set-st-step', 'Distance step per kill (m)', 0.1, 1.5, 0.05)}
+          <label class="field-check"><input type="checkbox" id="set-st-infinite-ammo" /> Infinite ammo</label>`
+      },
+      {
         id: 'double',
-        label: 'Double',
+        label: 'Double (Clicks)',
         body: `
           <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
           ${rf('set-double-size', 'Dot size', 0.1, 0.6, 0.05)}
@@ -668,6 +720,27 @@ export class UIOverlay {
           </div>
           <label class="field-check"><input type="checkbox" id="set-double-infinite-ammo" /> Infinite ammo</label>
           ${rf('set-double-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'doubletracking',
+        label: 'Double (Tracking)',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-dt-size', 'Dot size', 0.1, 0.6, 0.05)}
+          ${rf('set-dt-hold', 'Hold time (s)', 0.1, 2.0, 0.05)}
+          ${rf('set-dt-float', 'Float speed', 0.25, 3.0, 0.05)}
+          ${rf('set-dt-canvas', 'Canvas size (m)', 1.5, 6, 0.25)}
+          ${rf('set-dt-dist', 'Canvas distance (m)', 1, 12, 0.5)}
+          ${rf('set-dt-count', 'Canvas count', 2, 6, 1)}
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Layout</span></div>
+            <select id="set-dt-layout">
+              <option value="flat">Flat on the wall</option>
+              <option value="around">Around you</option>
+            </select>
+          </div>
+          <label class="field-check"><input type="checkbox" id="set-dt-infinite-ammo" /> Infinite ammo</label>
+          ${rf('set-dt-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
         id: 'ball',
@@ -710,6 +783,7 @@ export class UIOverlay {
           <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
           ${rf('set-turn-size', 'Dot size', 0.05, 0.5, 0.01)}
           ${rf('set-turn-time', 'Dot lifetime (ms)', 800, 5000, 100)}
+          <label class="field-check"><input type="checkbox" id="set-turn-despawn-miss" checked /> Despawn dot on miss</label>
           <label class="field-check"><input type="checkbox" id="set-turn-infinite-ammo" /> Infinite ammo</label>`
       },
       {
@@ -765,7 +839,8 @@ export class UIOverlay {
           ${rf('set-cover-react-max', 'Bot reaction max (ms)', 25, 1000, 5)}
           ${rf('set-cover-hp', 'Hits you can take', 1, 10, 1)}
           ${rf('set-cover-bothp', 'Bot body shots to kill', 1, 5, 1)}
-          ${rf('set-cover-misslimit', 'Allowed misses (0 = unlimited)', 0, 50, 1)}`
+          ${rf('set-cover-misslimit', 'Allowed misses (0 = unlimited)', 0, 50, 1)}
+          <label class="field-check"><input type="checkbox" id="set-cover-spawn-hint" /> Highlight spawn box before peek</label>`
       },
       {
         id: 'drone',
@@ -1000,10 +1075,7 @@ export class UIOverlay {
             </div>
             <div class="playlist-add-row">
               <select id="playlist-add-mode" class="config-code-input">
-                ${Object.keys(SCENARIOS)
-                  .filter((k) => !isChallengeMode(k))
-                  .map((k) => `<option value="${k}">${SCENARIO_META[k].title}</option>`)
-                  .join('')}
+                ${scenarioOptionsHtml((k) => !isChallengeMode(k))}
               </select>
               <button type="button" class="btn" id="playlist-add-current">Add mode</button>
             </div>
@@ -1240,12 +1312,7 @@ export class UIOverlay {
           <button type="button" class="tab" id="lb-tab-aim" data-lb="aim-rating">Aim Rating</button>
           <div class="lb-mode-select-wrap">
             <select id="lb-mode-select" class="config-code-input" aria-label="Gamemode leaderboard">
-              ${Object.keys(SCENARIOS)
-                .map(
-                  (k) =>
-                    `<option value="${k}">${SCENARIO_META[k].title}</option>`
-                )
-                .join('')}
+              ${scenarioOptionsHtml()}
             </select>
           </div>
         </div>
@@ -1367,12 +1434,22 @@ export class UIOverlay {
       <div class="panel wide">
         <h2 class="text-big" id="res-title">Run Complete</h2>
         <div id="res-stats" class="res-stats"></div>
-        <section id="res-rating" class="res-rating" hidden>
-          <h3 class="res-rating-title">Aim4 Rating</h3>
-          <div class="account-rating">
-            <div id="res-rating-chart" class="account-rating-canvas"></div>
-            <div id="res-rating-legend" class="account-rating-legend"></div>
-            <div id="res-rating-tooltip" class="radar-tooltip" hidden></div>
+        <section id="res-infographics" class="res-infographics" hidden>
+          <div class="res-info-header">
+            <button type="button" class="res-info-nav" id="res-info-prev" aria-label="Previous infographic">‹</button>
+            <h3 class="res-info-title" id="res-info-title">Aim4 Rating</h3>
+            <button type="button" class="res-info-nav" id="res-info-next" aria-label="Next infographic">›</button>
+          </div>
+          <div id="res-rating-panel" class="res-info-panel">
+            <div class="account-rating">
+              <div id="res-rating-chart" class="account-rating-canvas"></div>
+              <div id="res-rating-legend" class="account-rating-legend"></div>
+              <div id="res-rating-tooltip" class="radar-tooltip" hidden></div>
+            </div>
+          </div>
+          <div id="res-history-panel" class="res-info-panel" hidden>
+            <div id="res-history-chart" class="res-history-canvas"></div>
+            <div id="res-history-legend" class="account-rating-legend"></div>
           </div>
         </section>
         <div id="res-lb" class="lb-body"></div>
@@ -2252,6 +2329,39 @@ export class UIOverlay {
     });
     this._bindRange('set-double-misslimit', (v, d) => { d.double.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
+    this._bindRange('set-ss-start-size', (v, d) => { d.sequencespeed.startSize = v; });
+    this._bindRange('set-ss-max-size', (v, d) => { d.sequencespeed.maxSize = v; });
+    this._bindRange('set-ss-grow', (v, d) => { d.sequencespeed.growTime = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-ss-start-dist', (v, d) => { d.sequencespeed.startDistance = v; });
+    this._bindRange('set-ss-step', (v, d) => { d.sequencespeed.distanceStep = v; });
+    $('#set-ss-infinite-ammo')?.addEventListener('change', (e) => {
+      draft((d) => { d.sequencespeed.infiniteAmmo = e.target.checked; });
+    });
+
+    this._bindRange('set-st-size', (v, d) => { d.sequencetracking.targetSize = v; });
+    this._bindRange('set-st-time', (v, d) => { d.sequencetracking.dotTime = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-st-hold', (v, d) => { d.sequencetracking.holdTime = v; });
+    this._bindRange('set-st-float', (v, d) => { d.sequencetracking.floatSpeed = v; });
+    this._bindRange('set-st-start-dist', (v, d) => { d.sequencetracking.startDistance = v; });
+    this._bindRange('set-st-step', (v, d) => { d.sequencetracking.distanceStep = v; });
+    $('#set-st-infinite-ammo')?.addEventListener('change', (e) => {
+      draft((d) => { d.sequencetracking.infiniteAmmo = e.target.checked; });
+    });
+
+    this._bindRange('set-dt-size', (v, d) => { d.doubletracking.targetSize = v; });
+    this._bindRange('set-dt-hold', (v, d) => { d.doubletracking.holdTime = v; });
+    this._bindRange('set-dt-float', (v, d) => { d.doubletracking.floatSpeed = v; });
+    this._bindRange('set-dt-canvas', (v, d) => { d.doubletracking.canvasSize = v; });
+    this._bindRange('set-dt-dist', (v, d) => { d.doubletracking.canvasDistance = v; });
+    this._bindRange('set-dt-count', (v, d) => { d.doubletracking.canvasCount = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-dt-layout')?.addEventListener('change', (e) => {
+      this.settings.mutateDraft((d) => { d.doubletracking.layout = e.target.value; });
+    });
+    $('#set-dt-infinite-ammo')?.addEventListener('change', (e) => {
+      draft((d) => { d.doubletracking.infiniteAmmo = e.target.checked; });
+    });
+    this._bindRange('set-dt-misslimit', (v, d) => { d.doubletracking.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
     this._bindRange('set-ball-size', (v, d) => { d.ball.targetSize = v; });
     this._bindRange('set-ball-speed', (v, d) => { d.ball.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-ball-min-dist', (v, d) => { d.ball.minDistance = v; });
@@ -2273,6 +2383,9 @@ export class UIOverlay {
 
     this._bindRange('set-turn-size', (v, d) => { d.turn.targetSize = v; });
     this._bindRange('set-turn-time', (v, d) => { d.turn.dotTime = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-turn-despawn-miss')?.addEventListener('change', (e) => {
+      this.settings.mutateDraft((d) => { d.turn.despawnOnMiss = e.target.checked; });
+    });
     $('#set-turn-infinite-ammo')?.addEventListener('change', (e) => {
       draft((d) => { d.turn.infiniteAmmo = e.target.checked; });
     });
@@ -2313,6 +2426,9 @@ export class UIOverlay {
     this._bindRange('set-cover-hp', (v, d) => { d.cover.playerHp = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-cover-bothp', (v, d) => { d.cover.botHp = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-cover-misslimit', (v, d) => { d.cover.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-cover-spawn-hint')?.addEventListener('change', (e) => {
+      this.settings.mutateDraft((d) => { d.cover.spawnHint = e.target.checked; });
+    });
 
     this._bindRange('set-drone-size', (v, d) => { d.drone.targetSize = v; });
     this._bindRange('set-drone-speed', (v, d) => { d.drone.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
@@ -3236,7 +3352,7 @@ export class UIOverlay {
     const modeSel = this.root.querySelector('#account-rating-filter');
     if (modeSel) {
       const opts = [`<option value="all">All modes (average)</option>`]
-        .concat(RATED_GAMEMODES.map(
+        .concat(sortModesByTitle(RATED_GAMEMODES).map(
           (m) => `<option value="${m}">${this._esc(SCENARIO_META[m]?.title || m)}</option>`
         ));
       modeSel.innerHTML = opts.join('');
@@ -3569,17 +3685,17 @@ export class UIOverlay {
    * average for the same gamemode.
    */
   async _renderRunRating(scenario, analytics) {
-    const section = this.root.querySelector('#res-rating');
+    const panel = this.root.querySelector('#res-rating-panel');
     const chart = this.root.querySelector('#res-rating-chart');
     const legend = this.root.querySelector('#res-rating-legend');
-    if (!section || !chart || !legend) return;
+    if (!panel || !chart || !legend) return;
 
     if (!analytics || !RATED_GAMEMODES.includes(scenario)) {
-      section.hidden = true;
+      panel.hidden = true;
       return;
     }
 
-    section.hidden = false;
+    panel.hidden = false;
     legend.innerHTML = '<p class="center lb-hint">Loading rating…</p>';
     this._drawRadarChart(chart, [], '#res-rating-tooltip', scenario);
 
@@ -3642,6 +3758,234 @@ export class UIOverlay {
     }
     this._drawRadarChart(chart, series, '#res-rating-tooltip', scenario, categories, true);
     legend.innerHTML = this._ratingCompareLegendHtml(runRating, playerRating, globalRating, scenario);
+  }
+
+  _bindResultsInfographics() {
+    this._resInfoPanels = [];
+    this._resInfoIdx = 0;
+    this.root.querySelector('#res-info-prev')?.addEventListener('click', () => this._stepResInfographics(-1));
+    this.root.querySelector('#res-info-next')?.addEventListener('click', () => this._stepResInfographics(1));
+  }
+
+  _stepResInfographics(delta) {
+    if (!this._resInfoPanels?.length) return;
+    this._resInfoIdx =
+      (this._resInfoIdx + delta + this._resInfoPanels.length) % this._resInfoPanels.length;
+    this._syncResInfographicsPanel();
+  }
+
+  _syncResInfographicsPanel() {
+    const panels = this._resInfoPanels || [];
+    const cur = panels[this._resInfoIdx];
+    const titleEl = this.root.querySelector('#res-info-title');
+    const prevBtn = this.root.querySelector('#res-info-prev');
+    const nextBtn = this.root.querySelector('#res-info-next');
+    const ratingPanel = this.root.querySelector('#res-rating-panel');
+    const historyPanel = this.root.querySelector('#res-history-panel');
+    const showNav = panels.length > 1;
+    if (prevBtn) prevBtn.hidden = !showNav;
+    if (nextBtn) nextBtn.hidden = !showNav;
+    if (titleEl) {
+      titleEl.textContent = cur === 'history' ? 'Results history' : 'Aim4 Rating';
+    }
+    if (ratingPanel) ratingPanel.hidden = cur !== 'rating';
+    if (historyPanel) historyPanel.hidden = cur !== 'history';
+  }
+
+  async _renderResultsInfographics(results, analytics) {
+    const wrap = this.root.querySelector('#res-infographics');
+    if (!wrap) return;
+
+    this._resInfoPanels = [];
+    const ratingOk = analytics && RATED_GAMEMODES.includes(results.scenario);
+    const historyOk = !!(this.auth?.isLoggedIn && supabaseConfigured());
+
+    if (ratingOk) this._resInfoPanels.push('rating');
+    if (historyOk) this._resInfoPanels.push('history');
+
+    if (!this._resInfoPanels.length) {
+      wrap.hidden = true;
+      return;
+    }
+
+    this._resInfoIdx = 0;
+    wrap.hidden = false;
+
+    if (ratingOk) await this._renderRunRating(results.scenario, analytics);
+    else {
+      const rp = this.root.querySelector('#res-rating-panel');
+      if (rp) rp.hidden = true;
+    }
+
+    if (historyOk) await this._renderResultsHistory(results);
+    else {
+      const hp = this.root.querySelector('#res-history-panel');
+      if (hp) hp.hidden = true;
+    }
+
+    this._syncResInfographicsPanel();
+  }
+
+  async _renderResultsHistory(results) {
+    const panel = this.root.querySelector('#res-history-panel');
+    const chart = this.root.querySelector('#res-history-chart');
+    const legend = this.root.querySelector('#res-history-legend');
+    if (!panel || !chart || !legend) return;
+
+    panel.hidden = false;
+    legend.innerHTML = '<p class="center lb-hint">Loading history…</p>';
+    chart.innerHTML = '';
+
+    const userId = this.auth?.user?.id;
+    if (!userId) {
+      legend.innerHTML = '<p class="center lb-hint">Sign in to see score history.</p>';
+      return;
+    }
+
+    const configKey =
+      results.leaderboardEligible !== false ? results.configKey : this._configKeyFor(results.scenario);
+    let rows = await fetchUserScoreHistory(userId, results.scenario, configKey, 30);
+    if (!rows.length) {
+      legend.innerHTML = '<p class="center lb-hint">No saved runs yet for this mode.</p>';
+      return;
+    }
+
+    const chronological = [...rows].reverse();
+    let peak = -Infinity;
+    const points = chronological.map((row, i) => {
+      const score = Number(row.score) || 0;
+      const isRecord = score > peak;
+      if (isRecord) peak = score;
+      const gamesAgo = chronological.length - 1 - i;
+      return {
+        score,
+        isRecord,
+        isLast: i === chronological.length - 1,
+        label: gamesAgo === 0 ? 'Last' : `${gamesAgo} ago`
+      };
+    });
+
+    this._drawScoreHistoryChart(chart, points);
+    const trend = this._scoreHistoryTrend(points);
+    const trendText =
+      trend == null
+        ? ''
+        : trend > 0.5
+          ? 'Trending up — you\'re improving.'
+          : trend < -0.5
+            ? 'Trending down — scores dipping lately.'
+            : 'Trending flat — holding steady.';
+    legend.innerHTML =
+      `<p class="run-rating-key">` +
+      `<span class="run-rating-key-item"><i class="run-rating-swatch" style="background:#46c8ff"></i>Score</span>` +
+      `<span class="run-rating-key-item"><i class="run-rating-swatch" style="background:#f5a623"></i>Trend</span>` +
+      `<span class="run-rating-key-item"><i class="run-rating-swatch run-rating-swatch-run"></i>New record</span>` +
+      `</p>` +
+      (trendText ? `<p class="center lb-hint muted">${trendText}</p>` : '');
+  }
+
+  /** Simple least-squares slope (score per game index). */
+  _scoreHistoryTrend(points) {
+    const n = points.length;
+    if (n < 2) return null;
+    let sumX = 0;
+    let sumY = 0;
+    let sumXY = 0;
+    let sumXX = 0;
+    for (let i = 0; i < n; i++) {
+      sumX += i;
+      sumY += points[i].score;
+      sumXY += i * points[i].score;
+      sumXX += i * i;
+    }
+    const denom = n * sumXX - sumX * sumX;
+    if (Math.abs(denom) < 1e-9) return 0;
+    return (n * sumXY - sumX * sumY) / denom;
+  }
+
+  _drawScoreHistoryChart(host, points) {
+    if (!host || !points.length) {
+      host.innerHTML = '';
+      return;
+    }
+
+    const W = 440;
+    const H = 220;
+    const padL = 44;
+    const padR = 16;
+    const padT = 16;
+    const padB = 36;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+
+    const scores = points.map((p) => p.score);
+    const minY = Math.min(...scores);
+    const maxY = Math.max(...scores);
+    const yPad = Math.max(1, (maxY - minY) * 0.08 || maxY * 0.05 || 1);
+    const yLo = minY - yPad;
+    const yHi = maxY + yPad;
+    const ySpan = yHi - yLo || 1;
+
+    const xAt = (i) => padL + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW);
+    const yAt = (v) => padT + plotH - ((v - yLo) / ySpan) * plotH;
+
+    const coords = points.map((p, i) => ({ ...p, x: xAt(i), y: yAt(p.score) }));
+
+    const trend = this._scoreHistoryTrend(points);
+    let trendLine = '';
+    if (trend != null && points.length >= 2) {
+      const n = points.length;
+      const meanX = (n - 1) / 2;
+      const meanY = scores.reduce((a, b) => a + b, 0) / n;
+      const intercept = meanY - trend * meanX;
+      const yStart = intercept;
+      const yEnd = intercept + trend * (n - 1);
+      trendLine =
+        `<line x1="${xAt(0).toFixed(1)}" y1="${yAt(yStart).toFixed(1)}" ` +
+        `x2="${xAt(n - 1).toFixed(1)}" y2="${yAt(yEnd).toFixed(1)}" ` +
+        `stroke="#f5a623" stroke-width="2" stroke-dasharray="6 4" opacity="0.85"/>`;
+    }
+
+    const dots = coords
+      .map((p) => {
+        const r = p.isRecord ? 5.5 : 4;
+        const fill = p.isRecord ? '#f52525' : '#46c8ff';
+        const stroke = p.isLast ? '#fff' : 'none';
+        const sw = p.isLast ? 1.5 : 0;
+        return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`;
+      })
+      .join('');
+
+    const poly = coords.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+
+    const yTicks = 4;
+    let yGrid = '';
+    for (let t = 0; t <= yTicks; t++) {
+      const v = yLo + (ySpan * t) / yTicks;
+      const y = yAt(v);
+      yGrid +=
+        `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,0.06)"/>` +
+        `<text x="${padL - 6}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="#8a8a8a" font-size="10">${Math.round(v)}</text>`;
+    }
+
+    const labelIdx = new Set([0, points.length - 1]);
+    if (points.length > 4) labelIdx.add(Math.floor((points.length - 1) / 2));
+    const xLabels = [...labelIdx]
+      .sort((a, b) => a - b)
+      .map((i) => {
+        const p = coords[i];
+        return `<text x="${p.x.toFixed(1)}" y="${H - 8}" text-anchor="middle" fill="#8a8a8a" font-size="10">${this._esc(p.label)}</text>`;
+      })
+      .join('');
+
+    host.innerHTML =
+      `<svg class="res-history-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Score history">` +
+      yGrid +
+      trendLine +
+      `<polyline points="${poly}" fill="none" stroke="#46c8ff" stroke-width="2" opacity="0.45"/>` +
+      dots +
+      xLabels +
+      `</svg>`;
   }
 
   /** Render a vector (SVG) 0–2 radar; optional multiple overlaid series. */
@@ -4925,6 +5269,23 @@ export class UIOverlay {
     this._setRange('set-seq-step', sq.distanceStep ?? 0.35);
     $('#set-seq-infinite-ammo').checked = sq.infiniteAmmo !== false;
 
+    const ss = s.sequencespeed ?? {};
+    this._setRange('set-ss-start-size', ss.startSize ?? 0.12);
+    this._setRange('set-ss-max-size', ss.maxSize ?? 0.55);
+    this._setRange('set-ss-grow', ss.growTime ?? 1500);
+    this._setRange('set-ss-start-dist', ss.startDistance ?? 0.8);
+    this._setRange('set-ss-step', ss.distanceStep ?? 0.35);
+    $('#set-ss-infinite-ammo').checked = ss.infiniteAmmo !== false;
+
+    const sqtr = s.sequencetracking ?? {};
+    this._setRange('set-st-size', sqtr.targetSize ?? 0.2);
+    this._setRange('set-st-time', sqtr.dotTime ?? 1500);
+    this._setRange('set-st-hold', sqtr.holdTime ?? 0.3);
+    this._setRange('set-st-float', sqtr.floatSpeed ?? 1.0);
+    this._setRange('set-st-start-dist', sqtr.startDistance ?? 0.8);
+    this._setRange('set-st-step', sqtr.distanceStep ?? 0.35);
+    $('#set-st-infinite-ammo').checked = sqtr.infiniteAmmo !== false;
+
     const db = s.double ?? {};
     this._setRange('set-double-size', db.targetSize ?? 0.25);
     this._setRange('set-double-canvas', db.canvasSize ?? 3);
@@ -4934,6 +5295,17 @@ export class UIOverlay {
     $('#set-double-infinite-ammo').checked = db.infiniteAmmo !== false;
     this._setRange('set-double-misslimit', db.missLimit ?? 0);
 
+    const dt = s.doubletracking ?? {};
+    this._setRange('set-dt-size', dt.targetSize ?? 0.2);
+    this._setRange('set-dt-hold', dt.holdTime ?? 0.3);
+    this._setRange('set-dt-float', dt.floatSpeed ?? 1.0);
+    this._setRange('set-dt-canvas', dt.canvasSize ?? 3);
+    this._setRange('set-dt-dist', dt.canvasDistance ?? 4);
+    this._setRange('set-dt-count', dt.canvasCount ?? 2);
+    $('#set-dt-layout').value = dt.layout === 'around' ? 'around' : 'flat';
+    $('#set-dt-infinite-ammo').checked = dt.infiniteAmmo !== false;
+    this._setRange('set-dt-misslimit', dt.missLimit ?? 0);
+
     const bl = s.ball ?? {};
     this._setRange('set-ball-size', bl.targetSize ?? 0.5);
     this._setRange('set-ball-speed', bl.travelSpeed ?? 60);
@@ -4942,7 +5314,7 @@ export class UIOverlay {
     this._setRange('set-ball-height', bl.bounceHeight ?? 2.5);
 
     const bt = s.bouncetracking ?? {};
-    this._setRange('set-bt-size', bt.targetSize ?? 0.45);
+    this._setRange('set-bt-size', bt.targetSize ?? 0.225);
     this._setRange('set-bt-count', bt.targetCount ?? 3);
     this._setRange('set-bt-speed', bt.travelSpeed ?? 28);
     this._setRange('set-bt-hold', bt.holdTime ?? 0.5);
@@ -4959,6 +5331,7 @@ export class UIOverlay {
     const tn = s.turn ?? {};
     this._setRange('set-turn-size', tn.targetSize ?? 0.15);
     this._setRange('set-turn-time', tn.dotTime ?? 2000);
+    $('#set-turn-despawn-miss').checked = tn.despawnOnMiss !== false;
     $('#set-turn-infinite-ammo').checked = tn.infiniteAmmo !== false;
 
     const bx = s.box ?? {};
@@ -4967,7 +5340,7 @@ export class UIOverlay {
     this._setRange('set-box-h', bx.sizeY ?? 4);
     this._setRange('set-box-speed', bx.travelSpeed ?? 150);
     this._setRange('set-box-variance', bx.speedVariance ?? 50);
-    this._setRange('set-box-hold', bx.holdTime ?? 2);
+    this._setRange('set-box-hold', bx.holdTime ?? 1.5);
     this._setRange('set-box-misslimit', bx.missLimit ?? 0);
 
     const ci = s.circle ?? {};
@@ -4976,7 +5349,7 @@ export class UIOverlay {
     this._setRange('set-circle-h', ci.sizeY ?? 4);
     this._setRange('set-circle-speed', ci.travelSpeed ?? 150);
     this._setRange('set-circle-variance', ci.speedVariance ?? 50);
-    this._setRange('set-circle-hold', ci.holdTime ?? 2);
+    this._setRange('set-circle-hold', ci.holdTime ?? 1.5);
     this._setRange('set-circle-misslimit', ci.missLimit ?? 0);
 
     const ts = s.threeshot ?? {};
@@ -4999,6 +5372,7 @@ export class UIOverlay {
     this._setRange('set-cover-hp', cv.playerHp ?? 4);
     this._setRange('set-cover-bothp', cv.botHp ?? 2);
     this._setRange('set-cover-misslimit', cv.missLimit ?? 0);
+    $('#set-cover-spawn-hint').checked = !!cv.spawnHint;
 
     const dr = s.drone ?? {};
     this._setRange('set-drone-size', dr.targetSize ?? 0.5);
@@ -5133,7 +5507,7 @@ export class UIOverlay {
     this.currentScenario = name;
     this.scenarioConfig = config;
     this.sceneManager.load(name, config);
-    const noCrit = ['spidershot', 'survival', 'sequence', 'double', 'ball', 'turn', 'box', 'circle', 'threeshot', 'drone', 'galaxy', 'waves'].includes(name);
+    const noCrit = ['spidershot', 'survival', 'sequence', 'sequencespeed', 'sequencetracking', 'sequenceultra', 'double', 'doubletracking', 'ball', 'turn', 'box', 'circle', 'threeshot', 'drone', 'galaxy', 'waves'].includes(name);
     this.hudCritChip.style.display = noCrit ? 'none' : '';
     this.showScreen('playing');
     this.state = 'await-start';
@@ -5328,6 +5702,13 @@ export class UIOverlay {
     this.replayScrub?.addEventListener('input', () => {
       this.replayPlayer.seekFraction(Number(this.replayScrub.value) / 1000);
     });
+
+    this._replayWheel = (e) => {
+      if (!this.replaying) return;
+      e.preventDefault();
+      this.replayPlayer.adjustZoom(e.deltaY);
+    };
+    window.addEventListener('wheel', this._replayWheel, { passive: false });
 
     if (this.replayPlayer) {
       this.replayPlayer.onProgress = (st) => this._updateReplayUI(st);
@@ -5742,6 +6123,7 @@ export class UIOverlay {
   _exitReplay() {
     if (!this.replaying) return;
     this.replaying = false;
+    if (this._replayWheel) window.removeEventListener('wheel', this._replayWheel);
     this._analysisLabels = [];
     this.replayPlayer?.dispose();
     this.replayOverlay?.classList.remove('active');
@@ -6107,8 +6489,8 @@ export class UIOverlay {
   async _saveAndRenderResults(results, replayRes = null) {
     let submitNote = '';
 
-    const ratingSection = this.root.querySelector('#res-rating');
-    if (ratingSection) ratingSection.hidden = true;
+    const infoWrap = this.root.querySelector('#res-infographics');
+    if (infoWrap) infoWrap.hidden = true;
 
     this.root.querySelector('#res-lb').innerHTML =
       `<p class="center lb-hint">${this.auth?.isLoggedIn ? 'Saving score…' : 'Loading leaderboard…'}</p>`;
@@ -6195,6 +6577,6 @@ export class UIOverlay {
       ? `<p class="center lb-hint muted">${submitNote}</p>${lbHtml}`
       : lbHtml;
 
-    this._renderRunRating(results.scenario, replayRes?.analytics ?? null);
+    this._renderResultsInfographics(results, replayRes?.analytics ?? null);
   }
 }

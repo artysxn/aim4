@@ -12,6 +12,9 @@ import { BounceScenario } from './BounceScenario.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
 import { competitivePresetFor } from './competitivePresets.js';
+import { randRange } from '../utils/MathUtils.js';
+
+const GRAVITY = 12;
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
@@ -38,6 +41,16 @@ export class BounceTrackingScenario extends BounceScenario {
 
   configKey() {
     return BounceTrackingScenario.configKeyFor(this.settings, this.variant);
+  }
+
+  /** Bounces are 2–3× the configured apex height. */
+  _bounceVel() {
+    const h = this.bounceHeight * randRange(2, 3);
+    return Math.sqrt(2 * GRAVITY * h * randRange(0.9, 1.1));
+  }
+
+  _spawnApexY() {
+    return this.bounceHeight * randRange(2, 3);
   }
 
   _setBallReady(target, ready) {

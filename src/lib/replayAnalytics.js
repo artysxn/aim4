@@ -7,6 +7,12 @@ import { lineOfSightClear } from '../utils/spawnVisibility.js';
 const MS_PER_TICK = 1000 / 128;
 const RAD_TO_DEG = 180 / Math.PI;
 
+// How far (in ticks) to search around each click for on-target samples.
+// ~16 ticks ≈ 125 ms @ 128 Hz — catches brief on-target windows the old ±3
+// tick scan missed.
+const CLICK_WINDOW_TICKS = 16;
+const CLICK_SUBSTEPS = [0, 0.5]; // half-tick samples between telemetry frames
+
 // Floor for flick-start speed (rad/tick). Keep this low: short flicks (e.g.
 // Microflicks, ~1–3° of travel) only reach modest per-tick speeds, and a high
 // floor made them invisible to the detector. ~0.0035 rad/tick ≈ 25°/s @128 tps.
@@ -630,54 +636,73 @@ export class ReplayAnalytics {
   }
 
   _classifyClick(ev) {
-    const t = ev.t | 0;
+    const t = ev.t;
     const ray = this._shotRay(ev);
+    const timing = this._findClickTiming(t, ray);
 
-    // A recorded HIT is ground truth: the crosshair WAS on the target. Re-deriving
-    // it from an integer-tick camera sample drifts ~1 tick and mislabels hits as
-    // "8 ms under". Trust the hit (and the exact shot ray) → accurate.
-    if (ev.hit || this._onTargetForShot(ray, t)) {
+    if (timing.kind === 'none') return;
+
+    if (ev.hit) this._recordKillClick(t);
+
+    if (timing.kind === 'accurate') {
       this.clicks.accurate++;
-      // Reaction part 2: on-target ticks held before this landed shot.
-      this._killShots++;
-      this._lastKillTick = t;
-      this._adjSinceKill = 0;
-      // Reaction: on-target ticks held before this landed shot (incl. click
-      // frame). The kill tick itself reads "off target" (the entity is already
-      // marked dead), so fall back to the previous tick's streak + the click.
-      this._holdTickSum += this._onStreak > 0 ? this._onStreak : this._prevOnStreak + 1;
-      this._holdCount++;
-      // Tracking: on-target fraction of this engagement (first touch → kill).
-      if (this._engageStart != null) {
-        const span = Math.max(1, t - this._engageStart + 1);
-        this._trackSum += Math.min(1, this._engageOnTicks / span);
-        this._trackCount++;
-      }
-      this._engageStart = null;
-      this._engageOnTicks = 0;
       this._flashEvents.push({ type: 'click', kind: 'accurate', text: 'On target' });
       return;
     }
-    // Miss: was the crosshair sweeping ACROSS the target just before/after? This
-    // is camera-timing (when the aim crossed the dot), so vary the camera here.
-    for (let k = 1; k <= 2; k++) {
-      if (this._onTargetAt(t + k)) {
-        this.clicks.early++;
-        const ms = Math.round((k - 1) * MS_PER_TICK);
-        this.clicks.earlyMs += ms;
-        this._flashEvents.push({ type: 'click', kind: 'early', text: `${ms} ms under` });
-        return;
+    if (timing.kind === 'early') {
+      this.clicks.early++;
+      this.clicks.earlyMs += timing.ms;
+      this._flashEvents.push({ type: 'click', kind: 'early', text: `${timing.ms} ms under` });
+      return;
+    }
+    this.clicks.late++;
+    this.clicks.lateMs += timing.ms;
+    this._flashEvents.push({ type: 'click', kind: 'late', text: `${timing.ms} ms over` });
+  }
+
+  /**
+   * Scan ±CLICK_WINDOW_TICKS around the shot (with half-tick samples) and
+   * classify relative to the click instant. Uses the recorded shot ray when
+   * available so timing matches what was actually fired, not a re-sampled camera.
+   */
+  _findClickTiming(t, ray) {
+    const onAt = [];
+    for (let k = -CLICK_WINDOW_TICKS; k <= CLICK_WINDOW_TICKS; k++) {
+      const steps = k === 0 ? [0] : CLICK_SUBSTEPS;
+      for (const frac of steps) {
+        const tf = t + k + frac;
+        if (tf < 0 || tf >= this.totalTicks) continue;
+        if (this._onTargetForShot(ray, tf)) onAt.push(k + frac);
       }
     }
-    for (let k = 1; k <= 3; k++) {
-      if (this._onTargetAt(t - k)) {
-        this.clicks.late++;
-        const ms = Math.round(k * MS_PER_TICK);
-        this.clicks.lateMs += ms;
-        this._flashEvents.push({ type: 'click', kind: 'late', text: `${ms} ms over` });
-        return;
-      }
+    if (!onAt.length) return { kind: 'none' };
+
+    // On target within ±¼ tick of the click → timed correctly.
+    if (onAt.some((s) => Math.abs(s) <= 0.25)) return { kind: 'accurate' };
+
+    let nearest = onAt[0];
+    for (const s of onAt) {
+      if (Math.abs(s) < Math.abs(nearest)) nearest = s;
     }
+    const ms = Math.max(1, Math.round(Math.abs(nearest) * MS_PER_TICK));
+    if (nearest < 0) return { kind: 'late', ms };
+    return { kind: 'early', ms };
+  }
+
+  /** Kill-shot bookkeeping (reaction / tracking / adjustments). */
+  _recordKillClick(t) {
+    this._killShots++;
+    this._lastKillTick = t;
+    this._adjSinceKill = 0;
+    this._holdTickSum += this._onStreak > 0 ? this._onStreak : this._prevOnStreak + 1;
+    this._holdCount++;
+    if (this._engageStart != null) {
+      const span = Math.max(1, t - this._engageStart + 1);
+      this._trackSum += Math.min(1, this._engageOnTicks / span);
+      this._trackCount++;
+    }
+    this._engageStart = null;
+    this._engageOnTicks = 0;
   }
 
   /**

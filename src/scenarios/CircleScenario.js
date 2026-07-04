@@ -2,7 +2,7 @@
 // CircleScenario.js  ("Circle")
 //
 // Box's sibling: the dot cycles along an ellipse instead of a rectangle. Same
-// rules — random 100–200 u/s per dot, 2 s continuous hold to arm, click to
+// rules — random 100–200 u/s per dot, 1.5 s continuous hold to arm, click to
 // kill, 0.5 s respawn. The canvas is an elliptical board sized exactly to the
 // dot's travel path.
 // ---------------------------------------------------------------------------
@@ -59,6 +59,6 @@ export class CircleScenario extends BoxScenario {
       0.05,
       Math.hypot(rx * Math.sin(dot.s), ry * Math.cos(dot.s))
     );
-    dot.s += dist / local;
+    dot.s += (dist / local) * dot.dir;
   }
 }

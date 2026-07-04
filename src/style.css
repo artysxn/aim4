@@ -1108,6 +1108,59 @@ a.btn {
 .account-dropdown[open] summary::before { transform: rotate(90deg); }
 .account-aim-head-nested { margin-top: 10px; }
 
+/* --- Post-run infographics (results screen) ------------------------------- */
+.res-infographics {
+  margin: 20px 0 8px;
+  padding-top: 18px;
+  border-top: 1px solid var(--chip-bg);
+}
+.res-info-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.res-info-title {
+  margin: 0;
+  min-width: 160px;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.res-info-nav {
+  font-family: var(--font-display);
+  font-size: 22px;
+  line-height: 1;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--text);
+  background: var(--chip-bg);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.res-info-nav:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.res-info-nav[hidden] {
+  display: none;
+}
+.res-info-panel[hidden] {
+  display: none;
+}
+.res-history-canvas {
+  display: flex;
+  justify-content: center;
+  margin: 0 auto 8px;
+}
+.res-history-svg {
+  max-width: 100%;
+  height: auto;
+}
+
 /* --- Post-run Aim4 Rating (results screen) -------------------------------- */
 .res-rating {
   margin: 20px 0 8px;

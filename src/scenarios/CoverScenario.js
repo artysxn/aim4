@@ -16,7 +16,7 @@ import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
 import { randRange, randInt, clamp, lerp } from '../utils/MathUtils.js';
 import { SourceMover1D, RUN_SPEED, UNIT } from '../utils/SourceMovement.js';
-import { gridLineColors } from '../utils/ColorUtils.js';
+import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
 import { markBulletDecalSurface, worldImpactNormal } from '../utils/bulletImpact.js';
 import { movementHitScale } from '../utils/spawnVisibility.js';
 import { SHOT_INTERVAL } from '../weapons/ak47.js';
@@ -33,11 +33,12 @@ const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
 const ROW_RISE = 200 * UNIT; // each row is 200 u (≈5.08 m) above the previous
 const PLAYER_HALF_X = 6;
 const PLAYER_HALF_Z = 4;
-const COVER_W = 1.8;
-const COVER_H = 2.2;
-const COVER_D = 0.8;
-const COVER_GAP = 7; // metres between box centres on a row
+const COVER_W = 2.8;
+const COVER_H = 2.6;
+const COVER_D = 1.4;
+const COVER_GAP = 8; // metres between box centres on a row
 const PLATFORM_D = 6; // row platform depth
+const SPAWN_HINT_LEAD = 0.5; // s before peek — highlight the spawn box
 const NEXT_BOT_DELAY_MIN = 0.25; // s after a kill before the next bot peeks
 const NEXT_BOT_DELAY_MAX = 0.75;
 const DEATH_RESPAWN_DELAY = 0.9; // s after the player dies
@@ -79,6 +80,7 @@ export class CoverScenario extends BaseScenario {
     this.playerHp = Math.max(1, Math.round(preset?.playerHp ?? this.config.playerHp ?? c.playerHp));
     // Body shots to drop a bot (a headshot is always instant).
     this.botHp = Math.max(1, Math.round(preset?.botHp ?? this.config.botHp ?? c.botHp));
+    this.spawnHint = !this.competitive && !!c.spawnHint;
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 60)
       : this.settings.data.runDuration;
@@ -86,9 +88,11 @@ export class CoverScenario extends BaseScenario {
     this._hp = this.playerHp;
     this.bot = null;
     this._nextBotIn = 0;
+    this._nextSpawn = null; // { spot, side } picked while waiting for the next bot
+    this._hintMesh = null;
     this._deathFxT = 0;
     this.coverBoxes = []; // all occluders (cover + platforms)
-    this._spots = []; // { x, z, footY } — one per cover box
+    this._spots = []; // { x, z, behindZ, footY, coverMesh } — one per cover box
     this._buildEnvironment();
   }
 
@@ -135,6 +139,7 @@ export class CoverScenario extends BaseScenario {
     this.root.add(box);
 
     const coverMat = new THREE.MeshStandardMaterial({ color: c.cover, roughness: 0.85, metalness: 0.05 });
+    const gridBoxMat = createCoverGridMaterial(c.cover, c.floor);
     const rowW = (this.coverPerRow - 1) * COVER_GAP + COVER_W + 6;
 
     for (let row = 0; row < this.rowCount; row++) {
@@ -152,7 +157,10 @@ export class CoverScenario extends BaseScenario {
 
       for (let i = 0; i < this.coverPerRow; i++) {
         const x = (i - (this.coverPerRow - 1) / 2) * COVER_GAP;
-        const cover = new THREE.Mesh(new THREE.BoxGeometry(COVER_W, COVER_H, COVER_D), coverMat);
+        const mat = gridBoxMat.clone();
+        mat.map = mat.map.clone();
+        applyCoverGridRepeat(mat, COVER_W, COVER_H);
+        const cover = new THREE.Mesh(new THREE.BoxGeometry(COVER_W, COVER_H, COVER_D), mat);
         // Boxes sit near the platform's FRONT edge (toward the player, +z) so
         // the slab never blocks a peeking bot's downward line of sight.
         const z = rowZ + PLATFORM_D / 2 - COVER_D / 2 - 0.4;
@@ -160,7 +168,9 @@ export class CoverScenario extends BaseScenario {
         markBulletDecalSurface(cover);
         this.root.add(cover);
         this.coverBoxes.push(cover);
-        this._spots.push({ x, z, footY: rowY });
+        // Bot stands flush against the back face (−z), hidden until it strafes out.
+        const behindZ = z - COVER_D / 2 - BODY_R;
+        this._spots.push({ x, z, behindZ, footY: rowY, coverMesh: cover });
       }
     }
   }
@@ -193,7 +203,40 @@ export class CoverScenario extends BaseScenario {
 
     t.rig = bodyRig;
     t.headMesh = head;
+    t.spawnDuration = 0;
+    t.spawnT = 0;
+    t.object.scale.setScalar(1);
     return t;
+  }
+
+  _scheduleNextBot(delay = this._nextBotDelay()) {
+    this._nextBotIn = delay;
+    this._nextSpawn = {
+      spot: this._spots[randInt(0, this._spots.length - 1)],
+      side: Math.random() < 0.5 ? -1 : 1
+    };
+    if (!this.spawnHint || delay > SPAWN_HINT_LEAD) this._clearSpawnHint();
+  }
+
+  _clearSpawnHint() {
+    if (!this._hintMesh) return;
+    const mat = this._hintMesh.material;
+    mat.emissive.setHex(0x000000);
+    mat.emissiveIntensity = 0;
+    this._hintMesh = null;
+  }
+
+  _updateSpawnHint(active) {
+    if (!this.spawnHint || !active) {
+      this._clearSpawnHint();
+      return;
+    }
+    const mesh = this._nextSpawn?.spot?.coverMesh;
+    if (!mesh || mesh === this._hintMesh) return;
+    this._clearSpawnHint();
+    this._hintMesh = mesh;
+    mesh.material.emissive.setHex(0xff2200);
+    mesh.material.emissiveIntensity = 0.55;
   }
 
   _nextBotDelay() {
@@ -201,22 +244,23 @@ export class CoverScenario extends BaseScenario {
   }
 
   _spawnBot() {
-    const spot = this._spots[randInt(0, this._spots.length - 1)];
+    const spot = this._nextSpawn?.spot ?? this._spots[randInt(0, this._spots.length - 1)];
+    const side = this._nextSpawn?.side ?? (Math.random() < 0.5 ? -1 : 1);
+    this._nextSpawn = null;
+    this._clearSpawnHint();
+
     const target = this._buildBot();
     this.addTarget(target);
     const mover = new SourceMover1D();
-    const side = Math.random() < 0.5 ? -1 : 1;
-    // Start hidden on the opposite flank, then strafe out to peek.
-    const hiddenS = -side * (COVER_W / 2 + BODY_R + randRange(0.15, 0.5));
-    mover.reset(hiddenS);
+    // Flush behind the box centre, then strafe left or right to peek.
+    mover.reset(0);
     this.bot = {
       target,
       spot,
       mover,
       hp: this.botHp,
       side,
-      // Strafe out until fully visible, plus a little extra so the whole body clears.
-      peekTarget: side * (COVER_W / 2 + BODY_R + randRange(0.1, 0.6)),
+      peekTarget: side * (COVER_W / 2 + BODY_R + randRange(0.15, 0.55)),
       phase: 'peeking', // peeking | shooting
       fireDelay: null, // set the moment full LOS is gained (25–200 ms)
       fireTimer: 0,
@@ -231,7 +275,7 @@ export class CoverScenario extends BaseScenario {
   _placeBot() {
     const b = this.bot;
     if (!b) return;
-    b.target.object.position.set(b.spot.x + b.mover.s, b.spot.footY, b.spot.z);
+    b.target.object.position.set(b.spot.x + b.mover.s, b.spot.footY, b.spot.behindZ);
     const cam = this.camera;
     b.target.object.lookAt(cam.position.x, b.spot.footY + 1.0, cam.position.z);
   }
@@ -247,7 +291,7 @@ export class CoverScenario extends BaseScenario {
     _headPos.set(
       b.spot.x + b.mover.s,
       b.spot.footY + BODY_H * 0.5 * lerp(1, 0.55, b.crouch),
-      b.spot.z
+      b.spot.behindZ
     );
     return this._segmentClear(_headPos, _eyePos);
   }
@@ -316,14 +360,14 @@ export class CoverScenario extends BaseScenario {
     if (this.bot) this.bot.target.startDying(0xff4d4d);
     this.bot = null;
     this._hp = this.playerHp;
-    this._nextBotIn = DEATH_RESPAWN_DELAY;
+    this._scheduleNextBot(DEATH_RESPAWN_DELAY);
   }
 
   _killBot() {
     if (this.bot) this.bot.target.startDying(0x35e06a);
     this.bot = null;
     this._hp = this.playerHp; // HP resets on every kill
-    this._nextBotIn = this._nextBotDelay();
+    this._scheduleNextBot();
   }
 
   // ---- Round flow -------------------------------------------------------------
@@ -344,10 +388,15 @@ export class CoverScenario extends BaseScenario {
 
     const b = this.bot;
     if (!b || b.target.state === 'dying') {
+      if (this.spawnHint && this._nextSpawn && this._nextBotIn <= SPAWN_HINT_LEAD) {
+        this._updateSpawnHint(true);
+      }
       this._nextBotIn -= dt;
       if (this._nextBotIn <= 0) this._spawnBot();
       return;
     }
+
+    this._updateSpawnHint(false);
 
     const max = RUN_SPEED * this.botSpeed;
 
@@ -444,6 +493,7 @@ export class CoverScenario extends BaseScenario {
 
   dispose() {
     this.engine.setDeathOverlay(0);
+    this._clearSpawnHint();
     this.bot = null;
     super.dispose();
   }

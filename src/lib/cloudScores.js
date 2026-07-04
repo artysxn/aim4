@@ -188,6 +188,25 @@ export async function submitScore(userId, results) {
   return { ok: true };
 }
 
+/** Recent scores for one account + scenario + config (newest first). */
+export async function fetchUserScoreHistory(userId, scenario, configKey, limit = 30) {
+  if (!supabaseConfigured() || !userId) return [];
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('scores')
+    .select('score, created_at')
+    .eq('user_id', userId)
+    .eq('scenario', scenario)
+    .eq('config_key', configKey)
+    .order('created_at', { ascending: false })
+    .limit(Math.max(1, Math.min(limit, 30)));
+  if (error) {
+    console.warn('[cloudScores] score history failed', error.message);
+    return [];
+  }
+  return data || [];
+}
+
 /**
  * Best score per verified account for a scenario/config (not per session).
  * Returns { list, error } — list is empty when unavailable or no rows.

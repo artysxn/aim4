@@ -128,6 +128,39 @@ export const COMPETITIVE_PRESETS = {
     infiniteAmmo: true,
     viewmodelRecoil: false
   },
+  doubletracking: {
+    runDuration: 30,
+    targetSize: 0.2,
+    holdTime: 0.3,
+    floatSpeed: 1.0,
+    canvasSize: 2.5,
+    canvasDistance: 5,
+    canvasCount: 2,
+    layout: 'flat',
+    infiniteAmmo: true,
+    viewmodelRecoil: false
+  },
+  sequencespeed: {
+    runDuration: 30,
+    startSize: 0.12,
+    maxSize: 0.55,
+    growTime: 1200,
+    startDistance: 0.8,
+    distanceStep: 0.35,
+    infiniteAmmo: true,
+    viewmodelRecoil: false
+  },
+  sequencetracking: {
+    runDuration: 30,
+    targetSize: 0.16,
+    holdTime: 0.3,
+    floatSpeed: 1.0,
+    dotTime: 1200,
+    startDistance: 0.8,
+    distanceStep: 0.35,
+    infiniteAmmo: true,
+    viewmodelRecoil: false
+  },
   ball: {
     runDuration: 30,
     targetSize: 0.5,
@@ -138,7 +171,7 @@ export const COMPETITIVE_PRESETS = {
   },
   bouncetracking: {
     runDuration: 30,
-    targetSize: 0.45,
+    targetSize: 0.225,
     targetCount: 3,
     travelSpeed: 28,
     minDistance: 10,
@@ -172,7 +205,7 @@ export const COMPETITIVE_PRESETS = {
     sizeY: 4,
     travelSpeed: 150, // ± variance → the spec's random 100–200 u/s
     speedVariance: 50,
-    holdTime: 2.0,
+    holdTime: 1.5,
     infiniteAmmo: true
   },
   circle: {
@@ -182,7 +215,7 @@ export const COMPETITIVE_PRESETS = {
     sizeY: 4,
     travelSpeed: 150,
     speedVariance: 50,
-    holdTime: 2.0,
+    holdTime: 1.5,
     infiniteAmmo: true
   },
   threeshot: {

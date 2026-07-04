@@ -255,6 +255,39 @@ export const DEFAULTS = {
     viewmodelRecoil: false,
     missLimit: 0
   },
+  doubletracking: {
+    targetSize: 0.2, // 20% smaller than Double (Clicks)
+    holdTime: 0.3,
+    floatSpeed: 1.0,
+    canvasSize: 3.0,
+    canvasDistance: 4.0,
+    canvasCount: 2,
+    layout: 'flat',
+    infiniteAmmo: true,
+    viewmodelRecoil: false,
+    missLimit: 0
+  },
+  sequencespeed: {
+    startSize: 0.12,
+    maxSize: 0.55,
+    growTime: 1500, // ms until the dot pops
+    startDistance: 0.8,
+    distanceStep: 0.35,
+    infiniteAmmo: true,
+    viewmodelRecoil: false,
+    missLimit: 0
+  },
+  sequencetracking: {
+    targetSize: 0.2, // 20% smaller than Sequence (Clicks)
+    holdTime: 0.3,
+    floatSpeed: 1.0,
+    dotTime: 1500,
+    startDistance: 0.8,
+    distanceStep: 0.35,
+    infiniteAmmo: true,
+    viewmodelRecoil: false,
+    missLimit: 0
+  },
   ball: {
     targetSize: 0.5,
     travelSpeed: 60, // deg/s — quicker than Bounce
@@ -263,12 +296,12 @@ export const DEFAULTS = {
     bounceHeight: 2.5
   },
   bouncetracking: {
-    targetSize: 0.45, // slightly bigger than Bounce
+    targetSize: 0.225, // half of legacy Bounce (Tracking) size
     targetCount: 3, // fewer balls
     travelSpeed: 28, // slightly slower
     minDistance: 10,
     maxDistance: 16,
-    bounceHeight: 2.2,
+    bounceHeight: 2.2, // base height — actual bounces are 2–3× this
     holdTime: 0.5, // s of uninterrupted crosshair time before a ball is clickable
     infiniteAmmo: true,
     viewmodelRecoil: false,
@@ -293,6 +326,7 @@ export const DEFAULTS = {
   turn: {
     targetSize: 0.15,
     dotTime: 2000, // ms before an unkilled dot despawns
+    despawnOnMiss: true, // false = missed shots leave the dot alive
     infiniteAmmo: true,
     viewmodelRecoil: false,
     missLimit: 0
@@ -303,7 +337,7 @@ export const DEFAULTS = {
     sizeY: 4, // m — path height
     travelSpeed: 150, // u/s — each dot rolls speed ± variance (default 100–200)
     speedVariance: 50, // u/s
-    holdTime: 2.0, // s of continuous crosshair time before the dot is clickable
+    holdTime: 1.5, // s of continuous crosshair time before the dot is clickable
     infiniteAmmo: true,
     missLimit: 0
   },
@@ -313,7 +347,7 @@ export const DEFAULTS = {
     sizeY: 4, // m — ellipse height
     travelSpeed: 150,
     speedVariance: 50,
-    holdTime: 2.0,
+    holdTime: 1.5,
     infiniteAmmo: true,
     missLimit: 0
   },
@@ -336,7 +370,8 @@ export const DEFAULTS = {
     reactMax: 200,
     playerHp: 4, // hits you can take; resets on every kill
     botHp: 2, // body shots to drop a bot (head is always instant)
-    missLimit: 0
+    missLimit: 0,
+    spawnHint: false // highlight the next spawn box 0.5 s before the bot peeks
   },
   drone: {
     targetSize: 0.5,
@@ -358,7 +393,7 @@ export const DURATION_DEFAULT = { type: 'time', value: 60 };
 export const DURATION_MODES = [
   'gridshot', 'stars', 'threeshot', 'bounce', 'microflicks', 'pasu', 'spidershot',
   'survival', 'arena', 'cover', 'duels', 'range', 'tracking', 'deathmatch',
-  'sequence', 'double', 'ball', 'drone', 'bouncetracking', 'pasutracking', 'turn',
+  'sequence', 'sequencespeed', 'sequencetracking', 'double', 'doubletracking', 'ball', 'drone', 'bouncetracking', 'pasutracking', 'turn',
   'box', 'circle'
 ];
 

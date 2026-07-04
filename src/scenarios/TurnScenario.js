@@ -36,6 +36,7 @@ export class TurnScenario extends BaseScenario {
     this.targetSize = preset?.targetSize ?? this.config.targetSize ?? t.targetSize;
     // Dot lifetime (ms in settings → s here).
     this.dotTime = (preset?.dotTime ?? this.config.dotTime ?? t.dotTime) / 1000;
+    this.despawnOnMiss = preset?.despawnOnMiss ?? this.config.despawnOnMiss ?? t.despawnOnMiss !== false;
     this.infiniteAmmo = this.config.infiniteAmmo ?? t.infiniteAmmo !== false;
     this.weaponBloom = false;
     this.viewmodelRecoil =
@@ -181,14 +182,11 @@ export class TurnScenario extends BaseScenario {
     const hit = this.raycastTargets(raycaster);
     const target = hit?.object?.userData?.target;
     if (!target || target.state === 'dying') {
-      // Miss: the dot vanishes, waits a second, then reappears somewhere new.
       this.misses++;
-      if (this.competitive) {
-        this.kills = Math.max(0, this.kills - 1);
-        this.score = Math.max(0, this.score - 1);
+      if (this.despawnOnMiss) {
+        this._clearDot(0xff2222);
+        this._respawnLeft = MISS_DELAY;
       }
-      this._clearDot(0xff2222);
-      this._respawnLeft = MISS_DELAY;
       return;
     }
 
