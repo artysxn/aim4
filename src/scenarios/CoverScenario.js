@@ -7,7 +7,7 @@
 // strafes out (left or right) until it can FULLY see you, waits a random extra
 // 25–200 ms, then opens fire. While shooting it jiggles A/D (random 0.05–0.15 s
 // taps) and has a 20% chance per shot to toggle crouch. Kill it and the next
-// bot starts peeking 0.25 s later; your HP (4 hits) resets on every kill.
+// bot starts peeking 0.25–0.75 s later; your HP (4 hits) resets on every kill.
 // You can strafe/crouch/jump inside a small movement box.
 // ---------------------------------------------------------------------------
 
@@ -38,7 +38,8 @@ const COVER_H = 2.2;
 const COVER_D = 0.8;
 const COVER_GAP = 7; // metres between box centres on a row
 const PLATFORM_D = 6; // row platform depth
-const NEXT_BOT_DELAY = 0.25; // s after a kill before the next bot peeks
+const NEXT_BOT_DELAY_MIN = 0.25; // s after a kill before the next bot peeks
+const NEXT_BOT_DELAY_MAX = 0.75;
 const DEATH_RESPAWN_DELAY = 0.9; // s after the player dies
 const JIGGLE_MIN = 0.05; // s — A/D tap window while shooting
 const JIGGLE_MAX = 0.15;
@@ -60,6 +61,7 @@ export class CoverScenario extends BaseScenario {
     super(opts);
     // Full-auto rifle with its normal bloom/recoil — this is a gunfight mode.
     this.weaponId = 'rifle';
+    this.infiniteAmmo = true;
     const preset = this.competitive ? competitivePresetFor('cover') : null;
     const c = { ...DEFAULTS.cover, ...((this.competitive ? DEFAULTS.cover : this.settings.data.cover) ?? {}) };
 
@@ -194,13 +196,19 @@ export class CoverScenario extends BaseScenario {
     return t;
   }
 
+  _nextBotDelay() {
+    return randRange(NEXT_BOT_DELAY_MIN, NEXT_BOT_DELAY_MAX);
+  }
+
   _spawnBot() {
     const spot = this._spots[randInt(0, this._spots.length - 1)];
     const target = this._buildBot();
     this.addTarget(target);
     const mover = new SourceMover1D();
-    mover.reset(0);
     const side = Math.random() < 0.5 ? -1 : 1;
+    // Start hidden on the opposite flank, then strafe out to peek.
+    const hiddenS = -side * (COVER_W / 2 + BODY_R + randRange(0.15, 0.5));
+    mover.reset(hiddenS);
     this.bot = {
       target,
       spot,
@@ -315,7 +323,7 @@ export class CoverScenario extends BaseScenario {
     if (this.bot) this.bot.target.startDying(0x35e06a);
     this.bot = null;
     this._hp = this.playerHp; // HP resets on every kill
-    this._nextBotIn = NEXT_BOT_DELAY;
+    this._nextBotIn = this._nextBotDelay();
   }
 
   // ---- Round flow -------------------------------------------------------------

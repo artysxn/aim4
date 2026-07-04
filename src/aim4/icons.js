@@ -19,6 +19,7 @@ import box         from '../icons/mode_box.svg?url';
 import circle      from '../icons/mode_circle.svg?url';
 import threeshot   from '../icons/mode_threeshot.svg?url';
 import cover       from '../icons/mode_cover.svg?url';
+import drone       from '../icons/mode_drone.svg?url';
 
 import matchmaking from '../icons/icon_matchmaking.svg?url';
 import training    from '../icons/icon_training.svg?url';
@@ -56,7 +57,7 @@ export const SCENARIO_ICONS = {
   circle,
   threeshot,
   cover,
-  drone: ball,            // Drone is inverted Ball — shares the Ball icon
+  drone,
   galaxy: stars,          // Galaxy challenge uses the Stars icon (by design)
   waves
 };
