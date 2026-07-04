@@ -3,7 +3,7 @@ import { defineConfig } from 'vite';
 // Minimal Vite config. Three.js is bundled from node_modules so the bare
 // "three" specifier resolves cleanly in dev (HMR) and production builds.
 export default defineConfig({
-  base: './',
+  base: '/',
   server: {
     host: true,
     open: false,

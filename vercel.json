@@ -4,6 +4,7 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
-    { "source": "/tools/editvalues", "destination": "/tools/editvalues.html" }
+    { "source": "/tools/editvalues", "destination": "/tools/editvalues.html" },
+    { "source": "/((?!assets/).*)", "destination": "/index.html" }
   ]
 }
