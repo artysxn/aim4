@@ -25,6 +25,9 @@ export function aimFilterById(id) {
   return AIM_STAT_FILTERS.find((f) => f.id === id) || AIM_STAT_FILTERS[0];
 }
 
+/** Modes where you hold fire and score per frame on target (Strafes-style). */
+const HOLD_FIRE_SCENARIOS = new Set(['tracking', 'ball']);
+
 /**
  * Append a finished competitive run's aim analytics. Fire-and-forget; safe
  * no-op when offline / not signed in / not a competitive run.
@@ -50,7 +53,15 @@ export async function logAimRun(userId, recording, analytics) {
     clicks_late: n(analytics.clicks_late),
     click_early_ms: n(analytics.click_early_ms),
     click_late_ms: n(analytics.click_late_ms),
-    tension_pct: n(analytics.tension_pct)
+    tension_pct: n(analytics.tension_pct),
+    // Hold-fire modes (points per frame on target) rate tracking across the
+    // whole run; everything else rates each engagement (first touch → kill).
+    tracking_pct: n(
+      HOLD_FIRE_SCENARIOS.has(recording.scenario) ? analytics.on_target_pct : analytics.tracking_pct
+    ),
+    reaction_ms: n(analytics.reaction_ms),
+    adjustments_per_target: n(analytics.adjustments_per_target),
+    speed_deg_s: n(analytics.speed_deg_s)
   };
   const { error } = await sb.from('aim_run_stats').insert(row);
   if (error) console.warn('[aimStats] log failed', error.message);

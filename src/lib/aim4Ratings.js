@@ -18,7 +18,7 @@ const STORAGE_KEY = 'aim4Baselines';
 export const RATING_CATEGORIES = [
   'precision_accuracy_percent',
   'speed',
-  'flicks_error_percent',
+  'flicks_hit_percent',
   'adjustments',
   'reaction_time_ms',
   'tension_percent',
@@ -29,7 +29,7 @@ export const RATING_CATEGORIES = [
 export const RATING_LABELS = {
   precision_accuracy_percent: 'Precision',
   speed: 'Speed',
-  flicks_error_percent: 'Flicks',
+  flicks_hit_percent: 'Flicks',
   adjustments: 'Adjustments',
   reaction_time_ms: 'Reaction',
   tension_percent: 'Tension',
@@ -47,7 +47,7 @@ export const RATED_GAMEMODES = [
 export const BASELINE_KEYS = [
   'speed',
   'tracking',
-  'flicks_error_percent',
+  'flicks_hit_percent',
   'adjustments',
   'reaction_time_ms',
   'tension_percent'
@@ -55,12 +55,12 @@ export const BASELINE_KEYS = [
 
 /** Default baseline (B = a 1.00 rating) per category, shared by all modes. */
 const DEFAULT_BASELINE = {
-  speed: 2000.0,
-  tracking: 0.45,
-  flicks_error_percent: 15.0,
-  adjustments: 2.0,
-  reaction_time_ms: 200.0,
-  tension_percent: 30.0
+  speed: 250.0, // °/s of angular travel while flicking
+  tracking: 0.5, // fraction of engagement time spent on target
+  flicks_hit_percent: 50.0, // % of flicks that land on target
+  adjustments: 2.0, // flicks per target hit (1.0 = one-and-done → 2.00)
+  reaction_time_ms: 200.0, // blended direction-change + hold-before-shot delay
+  tension_percent: 40.0 // % deviation from the direct path to the target
 };
 
 /** Full default config: every rated gamemode maps to the default baseline. */
@@ -130,16 +130,31 @@ function round2(v) {
   return Math.round(v * 100) / 100;
 }
 
-/** Engine 1 — Precision curve (custom exponential). A = accuracy % (0–100). */
+/**
+ * Engine 1 — Precision curve. A = average per-flick closeness % (how much of
+ * the start→target gap each adjustment closed). 70% = a 1.00 rating.
+ */
 export function precisionScore(A) {
   const a = Number(A) || 0;
   let s;
-  if (a < 75) {
-    s = a / 75;
+  if (a < 70) {
+    s = a / 70;
   } else {
-    s = 1.0 + Math.pow((a - 75) / 25, 3.2);
+    s = 1.0 + Math.pow((a - 70) / 30, 2.2);
   }
   return clamp(s, 0, 2);
+}
+
+/**
+ * Engine 4 — Adjustments per target hit. 1.0 (one motion per kill) = 2.00;
+ * the baseline B (default 2.0 adjustments) = 1.00; linear in between.
+ */
+export function adjustmentsScore(adj, baseline) {
+  const a = Number(adj);
+  const b = Number(baseline);
+  if (!Number.isFinite(a) || a <= 0) return 0;
+  if (!Number.isFinite(b) || b <= 1) return 0;
+  return clamp(2 - (a - 1) / (b - 1), 0, 2);
 }
 
 /** Engine 2 — Higher is better (speed, tracking). */
@@ -163,14 +178,22 @@ export function lowerIsBetter(raw, baseline) {
  * @param {object} gamemodeConfig { baselines: {...} } or a bare baselines obj
  */
 export function calculateAim4Ratings(telemetry = {}, gamemodeConfig = {}) {
-  const B = gamemodeConfig.baselines || gamemodeConfig || {};
+  const B = { ...DEFAULT_BASELINE, ...(gamemodeConfig.baselines || gamemodeConfig || {}) };
   return {
+    // How close each adjustment lands (70% closeness = 1.00).
     precision_accuracy_percent: round2(precisionScore(telemetry.precision_accuracy_percent)),
+    // Distance travelled while flicking over time spent flicking (°/s).
     speed: round2(higherIsBetter(telemetry.speed, B.speed)),
+    // On-target fraction (per engagement, or whole-run for hold-fire modes).
     tracking: round2(higherIsBetter(telemetry.tracking, B.tracking)),
-    flicks_error_percent: round2(lowerIsBetter(telemetry.flicks_error_percent, B.flicks_error_percent)),
-    adjustments: round2(lowerIsBetter(telemetry.adjustments, B.adjustments)),
+    // How many flicks land on target at all (%).
+    flicks_hit_percent: round2(higherIsBetter(telemetry.flicks_hit_percent, B.flicks_hit_percent)),
+    // Motions per target hit — 1.0 is perfectly direct.
+    adjustments: round2(adjustmentsScore(telemetry.adjustments, B.adjustments)),
+    // Direction-change response + hold-before-shot, blended (ms; 0 = aimbot).
     reaction_time_ms: round2(lowerIsBetter(telemetry.reaction_time_ms, B.reaction_time_ms)),
+    // Path deviation from the direct route to the engaged target (lower wins;
+    // 0% → 2.00, the baseline (default 40%) → 1.00).
     tension_percent: round2(lowerIsBetter(telemetry.tension_percent, B.tension_percent))
   };
 }
@@ -182,27 +205,28 @@ export function calculateAim4Ratings(telemetry = {}, gamemodeConfig = {}) {
  */
 export function telemetryFromAimStats(row = {}) {
   const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const has = (v) => Number.isFinite(Number(v));
   const acc = num(row.flick_accuracy_pct, 0);
   const over = num(row.flicks_over, 0);
   const under = num(row.flicks_under, 0);
   const accurate = num(row.flicks_accurate, 0);
   const totalFlicks = over + under + accurate;
-  const errorPct = totalFlicks > 0 ? ((over + under) / totalFlicks) * 100 : 0;
-  const games = Math.max(1, num(row.games, 1));
+  // Flicks: how many land on target at all.
+  const hitPct = totalFlicks > 0 ? (accurate / totalFlicks) * 100 : 0;
   const msPerDeg = num(row.flick_speed_ms, 0);
-  // Speed as °/s from ms-per-degree (higher = faster).
-  const speed = msPerDeg > 0 ? 1000 / msPerDeg : 0;
-  // Adjustments ≈ average over/under flicks per game (corrective re-flicks).
-  const adjustments = (over + under) / games;
-  // Reaction ≈ average late-click ms (how far behind on-target clicks land).
-  const reaction = num(row.click_late_ms, 0) / games;
   return {
+    // Precision: average per-flick closeness (% of the gap each flick closed).
     precision_accuracy_percent: acc,
-    speed,
-    tracking: acc / 100,
-    flicks_error_percent: errorPct,
-    adjustments,
-    reaction_time_ms: reaction,
+    // Speed: flick travel over flick time; fall back to 1000/ms-per-° for old rows.
+    speed: has(row.speed_deg_s) ? num(row.speed_deg_s) : (msPerDeg > 0 ? 1000 / msPerDeg : 0),
+    // Tracking: on-target fraction (stored as %, engine expects 0–1). Old rows
+    // without the column fall back to a neutral 0.5 (a 1.00 rating).
+    tracking: has(row.tracking_pct) ? num(row.tracking_pct) / 100 : 0.5,
+    flicks_hit_percent: hitPct,
+    // Adjustments: flicks per target hit. Neutral 2.0 for pre-migration rows.
+    adjustments: has(row.adjustments_per_target) ? num(row.adjustments_per_target) : 2.0,
+    // Reaction: blended direction-change + hold delay. Neutral 200 ms fallback.
+    reaction_time_ms: has(row.reaction_ms) ? num(row.reaction_ms) : 200,
     tension_percent: num(row.tension_pct, 0)
   };
 }
@@ -217,14 +241,14 @@ export function telemetryFromRunAnalytics(analytics = {}) {
  * @returns {Record<string, { rating:number, raw:number, rawLabel:string, formula:string, direction:'higher'|'lower'|'precision' }>}
  */
 export function buildRatingBreakdown(telemetry = {}, gamemodeConfig = {}) {
-  const B = gamemodeConfig.baselines || gamemodeConfig || {};
+  const B = { ...DEFAULT_BASELINE, ...(gamemodeConfig.baselines || gamemodeConfig || {}) };
   const rating = calculateAim4Ratings(telemetry, gamemodeConfig);
   const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
   const precisionRaw = num(telemetry.precision_accuracy_percent);
   const speedRaw = num(telemetry.speed);
   const trackingRaw = num(telemetry.tracking);
-  const flicksRaw = num(telemetry.flicks_error_percent);
+  const flicksRaw = num(telemetry.flicks_hit_percent);
   const adjRaw = num(telemetry.adjustments);
   const reactRaw = num(telemetry.reaction_time_ms);
   const tensionRaw = num(telemetry.tension_percent);
@@ -233,50 +257,50 @@ export function buildRatingBreakdown(telemetry = {}, gamemodeConfig = {}) {
     precision_accuracy_percent: {
       rating: rating.precision_accuracy_percent,
       raw: precisionRaw,
-      rawLabel: `${precisionRaw.toFixed(1)}% flick accuracy`,
-      formula: 'Precision curve: 75% = 1.00 rating, 100% = 2.00',
+      rawLabel: `${precisionRaw.toFixed(1)}% avg closeness per flick`,
+      formula: 'Precision curve: 70% = 1.00 rating, 100% = 2.00',
       direction: 'precision'
     },
     speed: {
       rating: rating.speed,
       raw: speedRaw,
-      rawLabel: `${speedRaw.toFixed(0)} °/s`,
+      rawLabel: `${speedRaw.toFixed(0)} °/s while flicking`,
       formula: `Rating = speed ÷ baseline (${B.speed} °/s), capped at 2.00`,
       direction: 'higher'
     },
     tracking: {
       rating: rating.tracking,
       raw: trackingRaw,
-      rawLabel: `${(trackingRaw * 100).toFixed(1)}% (from flick accuracy)`,
-      formula: `Rating = tracking ÷ baseline (${B.tracking}), capped at 2.00`,
+      rawLabel: `${(trackingRaw * 100).toFixed(1)}% time on target`,
+      formula: `Rating = on-target fraction ÷ baseline (${B.tracking}), capped at 2.00`,
       direction: 'higher'
     },
-    flicks_error_percent: {
-      rating: rating.flicks_error_percent,
+    flicks_hit_percent: {
+      rating: rating.flicks_hit_percent,
       raw: flicksRaw,
-      rawLabel: `${flicksRaw.toFixed(1)}% over/under flicks`,
-      formula: `Rating = 2.00 − (error% ÷ ${B.flicks_error_percent}%), capped at 2.00`,
-      direction: 'lower'
+      rawLabel: `${flicksRaw.toFixed(1)}% of flicks land on target`,
+      formula: `Rating = hit% ÷ baseline (${B.flicks_hit_percent}%), capped at 2.00`,
+      direction: 'higher'
     },
     adjustments: {
       rating: rating.adjustments,
       raw: adjRaw,
-      rawLabel: `${adjRaw.toFixed(2)} corrective flicks per game`,
-      formula: `Rating = 2.00 − (adjustments ÷ ${B.adjustments}), capped at 2.00`,
+      rawLabel: `${adjRaw.toFixed(2)} adjustments per target hit`,
+      formula: `Rating = 2.00 − (adjustments − 1) ÷ (${B.adjustments} − 1); 1.00/target = 2.00`,
       direction: 'lower'
     },
     reaction_time_ms: {
       rating: rating.reaction_time_ms,
       raw: reactRaw,
-      rawLabel: `${reactRaw.toFixed(1)} ms avg late-click offset`,
-      formula: `Rating = 2.00 − (reaction ms ÷ ${B.reaction_time_ms} ms), capped at 2.00`,
+      rawLabel: `${reactRaw.toFixed(1)} ms (direction-change + hold blend)`,
+      formula: `Rating = 2.00 − (reaction ms ÷ ${B.reaction_time_ms} ms); instant = 2.00`,
       direction: 'lower'
     },
     tension_percent: {
       rating: rating.tension_percent,
       raw: tensionRaw,
       rawLabel: `${tensionRaw.toFixed(1)}% path deviation`,
-      formula: `Rating = 2.00 − (tension% ÷ ${B.tension_percent}%), capped at 2.00 — lower tension is better`,
+      formula: `Rating = 2.00 − (deviation% ÷ ${B.tension_percent}%); lower tension is better`,
       direction: 'lower'
     }
   };

@@ -158,6 +158,13 @@ create table if not exists public.aim_run_stats (
   tension_pct real,
   created_at timestamptz default now()
 );
+
+-- Reworked radar stats (added later — migrates existing tables in place).
+alter table public.aim_run_stats add column if not exists tracking_pct real;
+alter table public.aim_run_stats add column if not exists reaction_ms real;
+alter table public.aim_run_stats add column if not exists adjustments_per_target real;
+alter table public.aim_run_stats add column if not exists speed_deg_s real;
+
 create index if not exists aim_run_stats_user_idx on public.aim_run_stats (user_id, created_at desc);
 create index if not exists aim_run_stats_scenario_idx on public.aim_run_stats (scenario, created_at desc);
 
@@ -212,7 +219,11 @@ returns table (
   flicks_under bigint,
   clicks_early bigint,
   clicks_accurate bigint,
-  clicks_late bigint
+  clicks_late bigint,
+  tracking_pct real,
+  reaction_ms real,
+  adjustments_per_target real,
+  speed_deg_s real
 )
 language sql
 stable
@@ -236,7 +247,11 @@ as $$
     coalesce(sum(flicks_under), 0)::bigint as flicks_under,
     coalesce(sum(clicks_early), 0)::bigint as clicks_early,
     coalesce(sum(clicks_accurate), 0)::bigint as clicks_accurate,
-    coalesce(sum(clicks_late), 0)::bigint as clicks_late
+    coalesce(sum(clicks_late), 0)::bigint as clicks_late,
+    avg(tracking_pct)::real as tracking_pct,
+    avg(reaction_ms)::real as reaction_ms,
+    avg(adjustments_per_target)::real as adjustments_per_target,
+    avg(speed_deg_s)::real as speed_deg_s
   from filtered;
 $$;
 grant execute on function public.get_aim_stats(uuid, text, int, timestamptz) to anon, authenticated;

@@ -188,6 +188,23 @@ export class ReplayAnalytics {
     this._flickAccSum = 0;
     this._flickAccCount = 0;
     this._flashEvents = [];
+    // --- Reworked radar stats ---
+    this._ticksTotal = 0; // all processed ticks (hold-fire tracking modes)
+    this._ticksOnTarget = 0;
+    this._onStreak = 0; // consecutive on-target ticks right now
+    this._engageStart = null; // first on-target tick of the current engagement
+    this._engageOnTicks = 0;
+    this._trackSum = 0; // Σ on-target fraction per engagement (touch → kill)
+    this._trackCount = 0;
+    this._holdTickSum = 0; // Σ on-target ticks held before each kill shot
+    this._holdCount = 0;
+    this._dirChange = null; // pending target direction-change awaiting response
+    this._dirDelaySum = 0; // Σ ticks from target turn → crosshair follows
+    this._dirDelayCount = 0;
+    this._prevEntVel = new Map(); // ent.id → last-tick velocity vector
+    this._flickDegSum = 0; // total degrees travelled inside flicks
+    this._flickTickSum = 0; // total ticks spent inside flicks
+    this._killShots = 0; // shots that hit a target
   }
 
   _camDir(tickFloat) {
@@ -321,6 +338,22 @@ export class ReplayAnalytics {
     const closestPrev = this.closestAt(i - 1);
     const angles = this._camAngles(i);
 
+    // On-target bookkeeping (tracking / reaction stats).
+    const onTarget = this._onTarget(closest);
+    this._ticksTotal++;
+    if (onTarget) {
+      this._ticksOnTarget++;
+      this._onStreak++;
+      if (this._engageStart == null) {
+        this._engageStart = i;
+        this._engageOnTicks = 0;
+      }
+      this._engageOnTicks++;
+    } else {
+      this._onStreak = 0;
+    }
+    this._trackDirectionChange(i, closest, onTarget, dirNow, dirPrev, speed);
+
     if (closest && speed >= MIN_MOVE_SPEED) {
       this._recordPathDeviation(dirNow, dirPrev, closest);
     }
@@ -338,6 +371,50 @@ export class ReplayAnalytics {
 
     this._updateFlick(i, dirNow, dirPrev, speed, closest, closestPrev, angles, redirected);
     this._processShotsUpTo(i);
+  }
+
+  /**
+   * Reaction part 1: when the tracked target reverses direction while the
+   * crosshair is on it, count the ticks until the crosshair starts moving the
+   * target's new way. Unresolved changes time out at 64 ticks (~500 ms).
+   */
+  _trackDirectionChange(i, closest, onTarget, dirNow, dirPrev, speed) {
+    if (!closest?.ent) {
+      this._dirChange = null;
+      return;
+    }
+    const a = this.replay.sampleEntityAim(closest.ent, i);
+    const ap = this.replay.sampleEntityAim(closest.ent, i - 1);
+    if (a && ap) {
+      const vel = sub([a.x, a.y, a.z], [ap.x, ap.y, ap.z]);
+      const prev = this._prevEntVel.get(closest.ent.id);
+      if (
+        !this._dirChange && onTarget && prev &&
+        len(vel) > 1e-4 && len(prev) > 1e-4 &&
+        dot(normalize(vel), normalize(prev)) < -0.2
+      ) {
+        this._dirChange = { tick: i, entId: closest.ent.id, vel: normalize(vel) };
+      }
+      this._prevEntVel.set(closest.ent.id, vel);
+    }
+    const dc = this._dirChange;
+    if (!dc) return;
+    if (i - dc.tick > 64 || closest.ent.id !== dc.entId) {
+      if (i - dc.tick > 64) {
+        this._dirDelaySum += 64;
+        this._dirDelayCount++;
+      }
+      this._dirChange = null;
+      return;
+    }
+    if (speed >= MIN_MOVE_SPEED) {
+      const tangent = motionTangent(dirPrev, dirNow);
+      if (tangent && dot(tangent, dc.vel) > 0) {
+        this._dirDelaySum += i - dc.tick;
+        this._dirDelayCount++;
+        this._dirChange = null;
+      }
+    }
   }
 
   /**
@@ -474,6 +551,9 @@ export class ReplayAnalytics {
       const ms = f.ticks * MS_PER_TICK;
       this._flickSpeedSumMsPerDeg += ms / traveledDeg;
       this._flickSpeedCount++;
+      // Speed stat: total distance travelled while flicking vs time spent.
+      this._flickDegSum += traveledDeg;
+      this._flickTickSum += f.ticks;
     }
     const dStart = angleBetween(f.startDir, targetDir);
     if (dStart > 1e-6) {
@@ -499,6 +579,18 @@ export class ReplayAnalytics {
     // "8 ms under". Trust the hit (and the exact shot ray) → accurate.
     if (ev.hit || this._onTargetForShot(ray, t)) {
       this.clicks.accurate++;
+      // Reaction part 2: on-target ticks held before this landed shot.
+      this._killShots++;
+      this._holdTickSum += Math.max(0, this._onStreak - 1);
+      this._holdCount++;
+      // Tracking: on-target fraction of this engagement (first touch → kill).
+      if (this._engageStart != null) {
+        const span = Math.max(1, t - this._engageStart + 1);
+        this._trackSum += Math.min(1, this._engageOnTicks / span);
+        this._trackCount++;
+      }
+      this._engageStart = null;
+      this._engageOnTicks = 0;
       this._flashEvents.push({ type: 'click', kind: 'accurate', text: 'On target' });
       return;
     }
@@ -524,13 +616,51 @@ export class ReplayAnalytics {
     }
   }
 
+  /**
+   * Tension = average % deviation of the crosshair's motion from the direct
+   * path to the target it ends up engaging, averaged across the whole run.
+   */
   get tensionPct() {
-    const path = this._pathDevCount ? this._pathDevSum / this._pathDevCount : 0;
-    const flickTotal = this.flicks.accurate + this.flicks.over + this.flicks.under;
-    const flickStray = flickTotal ? (this.flicks.over + this.flicks.under) / flickTotal : 0;
-    const traj = this._trajDevCount ? this._trajDevSum / this._trajDevCount : 0;
-    if (!this._pathDevCount && !flickTotal && !this._trajDevCount) return 0;
-    return 100 * clamp01(0.55 * path + 0.3 * flickStray + 0.15 * traj);
+    if (!this._pathDevCount) return 0;
+    return 100 * clamp01(this._pathDevSum / this._pathDevCount);
+  }
+
+  /** Tracking: avg on-target fraction per engagement (first touch → kill), %. */
+  get trackingPct() {
+    if (!this._trackCount) return 0;
+    return 100 * (this._trackSum / this._trackCount);
+  }
+
+  /** Tracking for hold-fire modes: % of ALL run ticks spent on target. */
+  get onTargetPct() {
+    if (!this._ticksTotal) return 0;
+    return (100 * this._ticksOnTarget) / this._ticksTotal;
+  }
+
+  /**
+   * Reaction (ms): 50/50 blend of (a) delay following a target's direction
+   * change and (b) time held on target before each landed shot. 0 = aimbot.
+   * Null when the run produced no reaction samples at all.
+   */
+  get reactionMs() {
+    const parts = [];
+    if (this._dirDelayCount) parts.push((this._dirDelaySum / this._dirDelayCount) * MS_PER_TICK);
+    if (this._holdCount) parts.push((this._holdTickSum / this._holdCount) * MS_PER_TICK);
+    if (!parts.length) return null;
+    return parts.reduce((a, b) => a + b, 0) / parts.length;
+  }
+
+  /** Adjustments: detected flicks per target actually hit (1.0 = one-and-done). */
+  get adjustmentsPerTarget() {
+    if (!this._killShots) return null;
+    const flicksTotal = this.flicks.accurate + this.flicks.over + this.flicks.under;
+    return Math.max(1, flicksTotal / this._killShots);
+  }
+
+  /** Speed: degrees travelled inside flicks over the time spent flicking (°/s). */
+  get flickSpeedDegS() {
+    if (!this._flickTickSum) return 0;
+    return this._flickDegSum / ((this._flickTickSum * MS_PER_TICK) / 1000);
   }
 
   /** Average ms per degree of angular travel over each detected flick. */
@@ -595,7 +725,15 @@ export class ReplayAnalytics {
       tension_pct: Math.round(this.tensionPct * 10) / 10,
       flick_speed_ms: Math.round(this.flickSpeedMsPerDeg * 10) / 10,
       flick_accuracy_pct: Math.round(this.flickAccuracyPct * 10) / 10,
-      flicks_measured: this._flickSpeedCount
+      flicks_measured: this._flickSpeedCount,
+      // Reworked radar stats
+      tracking_pct: Math.round(this.trackingPct * 10) / 10,
+      on_target_pct: Math.round(this.onTargetPct * 10) / 10,
+      reaction_ms: this.reactionMs == null ? null : Math.round(this.reactionMs * 10) / 10,
+      adjustments_per_target:
+        this.adjustmentsPerTarget == null ? null : Math.round(this.adjustmentsPerTarget * 100) / 100,
+      speed_deg_s: Math.round(this.flickSpeedDegS * 10) / 10,
+      targets_hit: this._killShots
     };
   }
 }

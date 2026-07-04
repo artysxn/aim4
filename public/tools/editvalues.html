@@ -68,12 +68,12 @@
     sequence:'Sequence', double:'Double', ball:'Ball',
     bouncetracking:'Bounce (Tracking)', pasutracking:'Pasu (Tracking)', turn:'Turn'
   };
-  const BASELINE_KEYS = ['speed','tracking','flicks_error_percent','adjustments','reaction_time_ms','tension_percent'];
+  const BASELINE_KEYS = ['speed','tracking','flicks_hit_percent','adjustments','reaction_time_ms','tension_percent'];
   const KEY_LABELS = {
-    speed:'Speed (°/s)', tracking:'Tracking', flicks_error_percent:'Flicks err %',
-    adjustments:'Adjustments', reaction_time_ms:'Reaction ms', tension_percent:'Tension %'
+    speed:'Speed (°/s)', tracking:'Tracking (0–1)', flicks_hit_percent:'Flicks hit %',
+    adjustments:'Adjustments /target', reaction_time_ms:'Reaction ms', tension_percent:'Tension %'
   };
-  const DEFAULT = { speed:2000.0, tracking:0.45, flicks_error_percent:15.0, adjustments:2.0, reaction_time_ms:200.0, tension_percent:30.0 };
+  const DEFAULT = { speed:250.0, tracking:0.5, flicks_hit_percent:50.0, adjustments:2.0, reaction_time_ms:200.0, tension_percent:40.0 };
 
   function defaults() {
     const o = {};

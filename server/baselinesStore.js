@@ -17,7 +17,8 @@ const DATA_FILE = path.join(DATA_DIR, 'baselines.json');
 const BASELINE_KEYS = new Set([
   'speed',
   'tracking',
-  'flicks_error_percent',
+  'flicks_hit_percent',
+  'flicks_error_percent', // legacy key, still accepted from old saves
   'adjustments',
   'reaction_time_ms',
   'tension_percent'

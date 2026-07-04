@@ -7,6 +7,7 @@ import {
   precisionScore,
   higherIsBetter,
   lowerIsBetter,
+  adjustmentsScore,
   calculateAim4Ratings
 } from './aim4Ratings.js';
 
@@ -21,39 +22,48 @@ function approx(name, got, want, tol = 0.01) {
   }
 }
 
-// Precision breakpoints.
-approx('precision 75%', precisionScore(75), 1.0);
-approx('precision 95%', precisionScore(95), 1.49);
+// Precision breakpoints (70% closeness = 1.00).
+approx('precision 70%', precisionScore(70), 1.0);
 approx('precision 100%', precisionScore(100), 2.0);
 approx('precision 0%', precisionScore(0), 0.0);
-approx('precision 37.5% linear', precisionScore(37.5), 0.5);
+approx('precision 35% linear', precisionScore(35), 0.5);
 
-// Higher-is-better clamp + ratio.
-approx('speed at baseline', higherIsBetter(2000, 2000), 1.0);
-approx('speed double clamps', higherIsBetter(6000, 2000), 2.0);
-approx('speed zero', higherIsBetter(0, 2000), 0.0);
+// Higher-is-better clamp + ratio (speed °/s while flicking).
+approx('speed at baseline', higherIsBetter(250, 250), 1.0);
+approx('speed double clamps', higherIsBetter(800, 250), 2.0);
+approx('speed zero', higherIsBetter(0, 250), 0.0);
 
-// Lower-is-better clamp + ratio.
-approx('tension at baseline', lowerIsBetter(30, 30), 1.0);
-approx('tension zero best', lowerIsBetter(0, 30), 2.0);
-approx('tension triple clamps', lowerIsBetter(90, 30), 0.0);
+// Lower-is-better clamp + ratio (tension: 40% deviation = 1.00, 0% = 2.00).
+approx('tension at baseline', lowerIsBetter(40, 40), 1.0);
+approx('tension zero best', lowerIsBetter(0, 40), 2.0);
+approx('tension double clamps', lowerIsBetter(80, 40), 0.0);
 
-// End-to-end routing.
+// Adjustments per target: 1.0 = one-and-done = 2.00; baseline (2.0) = 1.00.
+approx('adjustments perfect', adjustmentsScore(1.0, 2.0), 2.0);
+approx('adjustments elite', adjustmentsScore(1.2, 2.0), 1.8);
+approx('adjustments baseline', adjustmentsScore(2.0, 2.0), 1.0);
+approx('adjustments triple clamps', adjustmentsScore(3.5, 2.0), 0.0);
+
+// End-to-end routing on the new telemetry keys.
 const out = calculateAim4Ratings(
   {
-    precision_accuracy_percent: 95,
-    speed: 2000,
-    tracking: 0.45,
-    flicks_error_percent: 15,
-    adjustments: 2,
-    reaction_time_ms: 200,
-    tension_percent: 30
+    precision_accuracy_percent: 70,
+    speed: 250,
+    tracking: 0.5,
+    flicks_hit_percent: 100,
+    adjustments: 1.0,
+    reaction_time_ms: 0,
+    tension_percent: 0
   },
-  { baselines: { speed: 2000, tracking: 0.45, flicks_error_percent: 15, adjustments: 2, reaction_time_ms: 200, tension_percent: 30 } }
+  { baselines: { speed: 250, tracking: 0.5, flicks_hit_percent: 50, adjustments: 2, reaction_time_ms: 200, tension_percent: 40 } }
 );
-approx('e2e precision', out.precision_accuracy_percent, 1.49);
+approx('e2e precision', out.precision_accuracy_percent, 1.0);
 approx('e2e speed', out.speed, 1.0);
 approx('e2e tracking', out.tracking, 1.0);
-approx('e2e flicks', out.flicks_error_percent, 1.0);
+approx('e2e flicks hit all', out.flicks_hit_percent, 2.0);
+approx('e2e adjustments aimbot', out.adjustments, 2.0);
+approx('e2e reaction aimbot', out.reaction_time_ms, 2.0);
+approx('e2e tension aimbot', out.tension_percent, 2.0);
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');
+if (failures) process.exit(1);
