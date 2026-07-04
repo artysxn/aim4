@@ -23,6 +23,7 @@ import { SequenceSpeedScenario } from '../scenarios/SequenceSpeedScenario.js';
 import { SequenceTrackingScenario } from '../scenarios/SequenceTrackingScenario.js';
 import { DoubleTrackingScenario } from '../scenarios/DoubleTrackingScenario.js';
 import { SequenceUltraScenario } from '../scenarios/SequenceUltraScenario.js';
+import { LineScenario } from '../scenarios/LineScenario.js';
 import { BallScenario } from '../scenarios/BallScenario.js';
 import { BounceTrackingScenario } from '../scenarios/BounceTrackingScenario.js';
 import { PasuTrackingScenario } from '../scenarios/PasuTrackingScenario.js';
@@ -66,6 +67,7 @@ export const SCENARIOS = {
   threeshot: ThreeshotScenario,
   cover: CoverScenario,
   drone: DroneScenario,
+  line: LineScenario,
   galaxy: GalaxyScenario,
   waves: WavesScenario,
   sequenceultra: SequenceUltraScenario

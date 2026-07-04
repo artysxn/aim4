@@ -25,6 +25,7 @@ export const RANKED_SCENARIOS = new Set([
   'doubletracking',
   'ball',
   'drone',
+  'line',
   'bouncetracking',
   'pasutracking',
   'turn',
@@ -59,7 +60,7 @@ export const KILL_LEADERBOARD_SCENARIOS = new Set([
 ]);
 
 /** Ranked by highest score in the best timed run. */
-export const SCORE_LEADERBOARD_SCENARIOS = new Set(['survival', 'tracking', 'ball', 'drone']);
+export const SCORE_LEADERBOARD_SCENARIOS = new Set(['survival', 'tracking', 'ball', 'drone', 'line']);
 
 export function isRankedScenario(scenario) {
   return RANKED_SCENARIOS.has(scenario);

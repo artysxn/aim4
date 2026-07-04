@@ -205,7 +205,6 @@ export const COMPETITIVE_PRESETS = {
     sizeY: 4,
     travelSpeed: 150, // ± variance → the spec's random 100–200 u/s
     speedVariance: 50,
-    holdTime: 1.5,
     infiniteAmmo: true
   },
   circle: {
@@ -215,7 +214,6 @@ export const COMPETITIVE_PRESETS = {
     sizeY: 4,
     travelSpeed: 150,
     speedVariance: 50,
-    holdTime: 1.5,
     infiniteAmmo: true
   },
   threeshot: {
@@ -247,6 +245,11 @@ export const COMPETITIVE_PRESETS = {
     minDistance: 8,
     maxDistance: 16,
     bounceHeight: 8
+  },
+  line: {
+    runDuration: 30,
+    targetSize: 0.35,
+    travelSpeed: 180
   }
 };
 

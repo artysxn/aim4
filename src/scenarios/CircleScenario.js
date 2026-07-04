@@ -2,7 +2,7 @@
 // CircleScenario.js  ("Circle")
 //
 // Box's sibling: the dot cycles along an ellipse instead of a rectangle. Same
-// rules — random 100–200 u/s per dot, 1.5 s continuous hold to arm, click to
+// rules — random speed per dot, 0.15–0.35 s continuous hold (size/speed scaled),
 // kill, 0.5 s respawn. The canvas is an elliptical board sized exactly to the
 // dot's travel path.
 // ---------------------------------------------------------------------------

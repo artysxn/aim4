@@ -3,15 +3,15 @@
 //
 // Tracking drill on a floating canvas: one dot travels the canvas' rectangular
 // perimeter — right, up, left, down, repeating — at a random 100–200 u/s.
-// Hold the crosshair on the dot for the track window (default 1.5 s) to arm it
-// (it turns green), then click to kill. A fresh dot spawns 0.5 s later at a
-// random point on the path with a freshly-rolled speed.
+// Hold the crosshair on the dot for a track window (0.15–0.35 s depending on
+// the dot's rolled size and speed) to arm it (it turns green), then click to kill.
+// A fresh dot spawns 0.5 s later at a random point on the path.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
-import { randRange } from '../utils/MathUtils.js';
+import { randRange, lerp, clamp } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { UNIT } from '../utils/SourceMovement.js';
 import { canvasCenterY } from '../utils/canvasWall.js';
@@ -25,6 +25,9 @@ const READY_COLOR = new THREE.Color(0x35e06a);
 
 const WALL_DISTANCE = 10;
 const RESPAWN_DELAY = 0.5; // s between a kill and the next dot
+const HOLD_TIME_MIN = 0.15; // s — smallest dot + fastest speed
+const HOLD_TIME_MAX = 0.35; // s — largest dot + slowest speed
+const DOT_SIZE_MIN_RATIO = 0.5;
 
 export class BoxScenario extends BaseScenario {
   constructor(opts) {
@@ -40,8 +43,6 @@ export class BoxScenario extends BaseScenario {
     // Travel speed in Source units/s: each dot rolls speed ± variance.
     this.travelSpeed = preset?.travelSpeed ?? this.config.travelSpeed ?? b.travelSpeed;
     this.speedVariance = preset?.speedVariance ?? this.config.speedVariance ?? b.speedVariance;
-    // Continuous crosshair hold (s) before the dot becomes shootable (75% of legacy 2 s).
-    this.holdTime = preset?.holdTime ?? this.config.holdTime ?? b.holdTime;
     this.baseTargetSize = this.targetSize;
     this.infiniteAmmo = this.config.infiniteAmmo ?? b.infiniteAmmo !== false;
     this.weaponBloom = false;
@@ -172,8 +173,27 @@ export class BoxScenario extends BaseScenario {
     return base * sizeRatio;
   }
 
+  /** Track time scales with size and speed: small + fast → 0.15 s, large + slow → 0.35 s. */
+  _holdTimeForDot(dotSize, speed) {
+    const sizeMin = this.baseTargetSize * DOT_SIZE_MIN_RATIO;
+    const sizeMax = this.baseTargetSize;
+    const sizeT = sizeMax > sizeMin ? (dotSize - sizeMin) / (sizeMax - sizeMin) : 1;
+
+    const v = Math.max(0, this.speedVariance);
+    const ratio = this.baseTargetSize / Math.max(dotSize, 1e-4);
+    const speedMin = Math.max(10, this.travelSpeed - v) * UNIT * ratio;
+    const speedMax = Math.max(10, this.travelSpeed + v) * UNIT * ratio;
+    const speedT = speedMax - speedMin > 1e-6
+      ? clamp((speed - speedMin) / (speedMax - speedMin), 0, 1)
+      : 0.5;
+
+    const difficulty = 1 - (sizeT + speedT) / 2;
+    return lerp(HOLD_TIME_MAX, HOLD_TIME_MIN, difficulty);
+  }
+
   _spawnDot() {
     const dotSize = this._rollDotSize();
+    const speed = this._rollSpeed(dotSize);
     const target = new Target();
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(dotSize, 24, 18),
@@ -191,8 +211,9 @@ export class BoxScenario extends BaseScenario {
     this._dot = {
       target,
       s: randRange(0, this._pathLength()),
-      speed: this._rollSpeed(dotSize),
+      speed,
       size: dotSize,
+      holdTime: this._holdTimeForDot(dotSize, speed),
       dir: Math.random() < 0.5 ? 1 : -1,
       hold: 0,
       ready: false
@@ -247,20 +268,20 @@ export class BoxScenario extends BaseScenario {
     const hovered = this._hoveredDot();
     if (hovered === d.target) {
       d.hold += dt;
-      if (d.hold >= this.holdTime && !d.ready) {
+      if (d.hold >= d.holdTime && !d.ready) {
         d.ready = true;
         this._setDotReady(true);
       }
     } else if (d.hold > 0 || d.ready) {
       // Partial track then look away → reverse travel direction.
-      if (d.hold >= this.holdTime * 0.5) d.dir *= -1;
+      if (d.hold >= d.holdTime * 0.5) d.dir *= -1;
       d.hold = 0;
       if (d.ready) {
         d.ready = false;
         this._setDotReady(false);
       }
     }
-    this.crosshair?.setTrackProgress(Math.min(1, d.hold / this.holdTime));
+    this.crosshair?.setTrackProgress(Math.min(1, d.hold / d.holdTime));
   }
 
   onShoot(raycaster) {

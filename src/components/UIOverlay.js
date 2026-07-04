@@ -116,6 +116,7 @@ const SCENARIO_META = {
   threeshot: { title: 'Threeshot', dualPlay: true, tags: ['Speed', 'Accuracy'] },
   cover: { title: 'Cover', dualPlay: true, tags: ['Reactions', 'Accuracy'] },
   drone: { title: 'Drone', dualPlay: true, tags: ['Accuracy', 'Control'] },
+  line: { title: 'Line', dualPlay: true, tags: ['Control', 'Speed'] },
   galaxy: { title: 'Galaxy', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] },
   waves: { title: 'Waves', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] },
   sequenceultra: { title: 'Sequence (Ultra)', dualPlay: false, challenge: true, tags: ['Control', 'Reactions', 'Accuracy'] }
@@ -148,7 +149,8 @@ const SCENARIO_SETTING_IDS = new Set([
   'circle',
   'threeshot',
   'cover',
-  'drone'
+  'drone',
+  'line'
 ]);
 
 // Training sub-menus. A mode may appear in several categories; any registered
@@ -157,8 +159,8 @@ const SCENARIO_SETTING_IDS = new Set([
 // the hard fixed-rule variants and only ever shows those.
 const TRAINING_CATEGORIES = [
   { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'threeshot', 'survival', 'pasu', 'arena', 'turn', 'sequencespeed', 'sequencetracking'] },
-  { id: 'tracking', title: 'Tracking', modes: ['tracking', 'ball', 'drone', 'box', 'circle', 'bouncetracking', 'pasutracking', 'doubletracking', 'sequencetracking'] },
-  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'threeshot', 'bounce', 'spidershot', 'sequence', 'sequencespeed'] },
+  { id: 'tracking', title: 'Tracking', modes: ['tracking', 'ball', 'drone', 'line', 'box', 'circle', 'bouncetracking', 'pasutracking', 'doubletracking', 'sequencetracking'] },
+  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'threeshot', 'bounce', 'spidershot', 'sequence', 'sequencespeed', 'line'] },
   { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'sequencespeed', 'double', 'doubletracking', 'cover'] },
   { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels', 'cover'] },
   { id: 'challenges', title: 'Challenges', modes: ['galaxy', 'sequenceultra', 'waves'] },
@@ -830,7 +832,7 @@ export class UIOverlay {
           ${rf('set-box-h', 'Box size Y (m)', 1, 10, 0.5)}
           ${rf('set-box-speed', 'Speed (u/s)', 50, 400, 5)}
           ${rf('set-box-variance', 'Speed variance (± u/s)', 0, 150, 5)}
-          ${rf('set-box-hold', 'Track duration (s)', 0.2, 5, 0.1)}
+          <p class="readout muted">Track time is 0.15–0.35 s per dot (smaller + faster = shorter).</p>
           ${rf('set-box-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
@@ -843,7 +845,7 @@ export class UIOverlay {
           ${rf('set-circle-h', 'Circle size Y (m)', 1, 10, 0.5)}
           ${rf('set-circle-speed', 'Speed (u/s)', 50, 400, 5)}
           ${rf('set-circle-variance', 'Speed variance (± u/s)', 0, 150, 5)}
-          ${rf('set-circle-hold', 'Track duration (s)', 0.2, 5, 0.1)}
+          <p class="readout muted">Track time is 0.15–0.35 s per dot (smaller + faster = shorter).</p>
           ${rf('set-circle-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
@@ -886,6 +888,15 @@ export class UIOverlay {
           ${rf('set-drone-min-dist', 'Min distance (m)', 4, 14, 0.5)}
           ${rf('set-drone-max-dist', 'Max distance (m)', 6, 22, 0.5)}
           ${rf('set-drone-height', 'Bounce height (m)', 0.5, 10, 0.1)}`
+      },
+      {
+        id: 'line',
+        label: 'Line',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
+          ${rf('set-line-speed', 'Travel speed (u/s)', 50, 400, 5)}
+          ${rf('set-line-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       }
     ];
   }
@@ -2429,7 +2440,6 @@ export class UIOverlay {
     this._bindRange('set-box-h', (v, d) => { d.box.sizeY = v; });
     this._bindRange('set-box-speed', (v, d) => { d.box.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-box-variance', (v, d) => { d.box.speedVariance = v; }, { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-box-hold', (v, d) => { d.box.holdTime = v; });
     this._bindRange('set-box-misslimit', (v, d) => { d.box.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-circle-size', (v, d) => { d.circle.targetSize = v; });
@@ -2437,7 +2447,6 @@ export class UIOverlay {
     this._bindRange('set-circle-h', (v, d) => { d.circle.sizeY = v; });
     this._bindRange('set-circle-speed', (v, d) => { d.circle.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-circle-variance', (v, d) => { d.circle.speedVariance = v; }, { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-circle-hold', (v, d) => { d.circle.holdTime = v; });
     this._bindRange('set-circle-misslimit', (v, d) => { d.circle.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-3s-size', (v, d) => { d.threeshot.targetSize = v; });
@@ -2469,6 +2478,10 @@ export class UIOverlay {
     this._bindRange('set-drone-min-dist', (v, d) => { d.drone.minDistance = v; });
     this._bindRange('set-drone-max-dist', (v, d) => { d.drone.maxDistance = v; });
     this._bindRange('set-drone-height', (v, d) => { d.drone.bounceHeight = v; });
+
+    this._bindRange('set-line-size', (v, d) => { d.line.targetSize = v; });
+    this._bindRange('set-line-speed', (v, d) => { d.line.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-line-misslimit', (v, d) => { d.line.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     $('#settings-undo-btn')?.addEventListener('click', () => {
       if (this._settingsExploreMode || this.settings.isExploreMode) return;
@@ -5380,7 +5393,6 @@ export class UIOverlay {
     this._setRange('set-box-h', bx.sizeY ?? 4);
     this._setRange('set-box-speed', bx.travelSpeed ?? 150);
     this._setRange('set-box-variance', bx.speedVariance ?? 50);
-    this._setRange('set-box-hold', bx.holdTime ?? 1.5);
     this._setRange('set-box-misslimit', bx.missLimit ?? 0);
 
     const ci = s.circle ?? {};
@@ -5389,7 +5401,6 @@ export class UIOverlay {
     this._setRange('set-circle-h', ci.sizeY ?? 4);
     this._setRange('set-circle-speed', ci.travelSpeed ?? 150);
     this._setRange('set-circle-variance', ci.speedVariance ?? 50);
-    this._setRange('set-circle-hold', ci.holdTime ?? 1.5);
     this._setRange('set-circle-misslimit', ci.missLimit ?? 0);
 
     const ts = s.threeshot ?? {};
@@ -5420,6 +5431,11 @@ export class UIOverlay {
     this._setRange('set-drone-min-dist', dr.minDistance ?? 8);
     this._setRange('set-drone-max-dist', dr.maxDistance ?? 16);
     this._setRange('set-drone-height', dr.bounceHeight ?? 2.5);
+
+    const ln = s.line ?? {};
+    this._setRange('set-line-size', ln.targetSize ?? 0.35);
+    this._setRange('set-line-speed', ln.travelSpeed ?? 180);
+    this._setRange('set-line-misslimit', ln.missLimit ?? 0);
   }
 
   // -------------------------------------------------------------------------
@@ -5547,7 +5563,7 @@ export class UIOverlay {
     this.currentScenario = name;
     this.scenarioConfig = config;
     this.sceneManager.load(name, config);
-    const noCrit = ['spidershot', 'survival', 'sequence', 'sequencespeed', 'sequencetracking', 'sequenceultra', 'double', 'doubletracking', 'ball', 'turn', 'box', 'circle', 'threeshot', 'drone', 'galaxy', 'waves'].includes(name);
+    const noCrit = ['spidershot', 'survival', 'sequence', 'sequencespeed', 'sequencetracking', 'sequenceultra', 'double', 'doubletracking', 'ball', 'line', 'turn', 'box', 'circle', 'threeshot', 'drone', 'galaxy', 'waves'].includes(name);
     this.hudCritChip.style.display = noCrit ? 'none' : '';
     this.showScreen('playing');
     this.state = 'await-start';

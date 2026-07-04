@@ -337,7 +337,6 @@ export const DEFAULTS = {
     sizeY: 4, // m — path height
     travelSpeed: 150, // u/s — each dot rolls speed ± variance (default 100–200)
     speedVariance: 50, // u/s
-    holdTime: 1.5, // s of continuous crosshair time before the dot is clickable
     infiniteAmmo: true,
     missLimit: 0
   },
@@ -347,7 +346,6 @@ export const DEFAULTS = {
     sizeY: 4, // m — ellipse height
     travelSpeed: 150,
     speedVariance: 50,
-    holdTime: 1.5,
     infiniteAmmo: true,
     missLimit: 0
   },
@@ -379,6 +377,11 @@ export const DEFAULTS = {
     minDistance: 8,
     maxDistance: 16,
     bounceHeight: 2.5
+  },
+  line: {
+    targetSize: 0.35,
+    travelSpeed: 180, // u/s — horizontal travel along the 180° field
+    missLimit: 0
   }
 };
 
@@ -393,7 +396,7 @@ export const DURATION_DEFAULT = { type: 'time', value: 60 };
 export const DURATION_MODES = [
   'gridshot', 'stars', 'threeshot', 'bounce', 'microflicks', 'pasu', 'spidershot',
   'survival', 'arena', 'cover', 'duels', 'range', 'tracking', 'deathmatch',
-  'sequence', 'sequencespeed', 'sequencetracking', 'double', 'doubletracking', 'ball', 'drone', 'bouncetracking', 'pasutracking', 'turn',
+  'sequence', 'sequencespeed', 'sequencetracking', 'double', 'doubletracking', 'ball', 'drone', 'line', 'bouncetracking', 'pasutracking', 'turn',
   'box', 'circle'
 ];
 
