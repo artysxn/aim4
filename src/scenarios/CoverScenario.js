@@ -82,7 +82,7 @@ export class CoverScenario extends BaseScenario {
     this.playerHp = Math.max(1, Math.round(preset?.playerHp ?? this.config.playerHp ?? c.playerHp));
     // Body shots to drop a bot (a headshot is always instant).
     this.botHp = Math.max(1, Math.round(preset?.botHp ?? this.config.botHp ?? c.botHp));
-    this.spawnHint = !this.competitive && !!c.spawnHint;
+    this.spawnHint = preset?.spawnHint ?? this.config.spawnHint ?? c.spawnHint ?? true;
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 60)
       : this.settings.data.runDuration;

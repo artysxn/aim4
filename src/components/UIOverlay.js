@@ -874,7 +874,7 @@ export class UIOverlay {
           ${rf('set-cover-hp', 'Hits you can take', 1, 10, 1)}
           ${rf('set-cover-bothp', 'Bot body shots to kill', 1, 5, 1)}
           ${rf('set-cover-misslimit', 'Allowed misses (0 = unlimited)', 0, 50, 1)}
-          <label class="field-check"><input type="checkbox" id="set-cover-spawn-hint" /> Highlight spawn box before peek</label>`
+          <label class="field-check"><input type="checkbox" id="set-cover-spawn-hint" checked /> Highlight spawn box before peek</label>`
       },
       {
         id: 'drone',

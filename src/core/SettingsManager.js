@@ -371,7 +371,7 @@ export const DEFAULTS = {
     playerHp: 4, // hits you can take; resets on every kill
     botHp: 2, // body shots to drop a bot (head is always instant)
     missLimit: 0,
-    spawnHint: false // highlight the next spawn box 0.5 s before the bot peeks
+    spawnHint: true // highlight the next spawn box 0.5 s before the bot peeks
   },
   drone: {
     targetSize: 0.5,

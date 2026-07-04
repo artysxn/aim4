@@ -237,7 +237,8 @@ export const COMPETITIVE_PRESETS = {
     reactMin: 25,
     reactMax: 200,
     playerHp: 4,
-    botHp: 2
+    botHp: 2,
+    spawnHint: true
   },
   drone: {
     runDuration: 30,
