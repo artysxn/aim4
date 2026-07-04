@@ -10,13 +10,21 @@ const RAD_TO_DEG = 180 / Math.PI;
 // Floor for flick-start speed (rad/tick). Keep this low: short flicks (e.g.
 // Microflicks, ~1–3° of travel) only reach modest per-tick speeds, and a high
 // floor made them invisible to the detector. ~0.0035 rad/tick ≈ 25°/s @128 tps.
-const MIN_FLICK_SPEED = 0.0035;
+// Forgiving start: any deliberate adjustment toward a target counts as a
+// flick — big fast snaps AND small smooth corrections.
+const MIN_FLICK_SPEED = 0.002; // ≈14°/s @128 tps
 const MIN_MOVE_SPEED = 0.002;
-const FLICK_START_RATIO = 1.3;
-const FLICK_END_RATIO = 1 / 3;
+const FLICK_START_RATIO = 1.15;
+// Harsh end: one clearly-slow tick closes the flick, so post-flick wobble and
+// micro-interruptions don't get folded into the flick and misread as over/under.
+const FLICK_END_RATIO = 0.5;
 const FLICK_MIN_TICKS = 2;
 const FLICK_MAX_TICKS = 128;
 const BASELINE_EMA = 0.15;
+// A flick that lands within this × the target's angular radius is "accurate".
+const ACCURATE_TOL = 1.5;
+// Ticks the motion classifier reports "reacting" after a sharp heading change.
+const REACT_STATE_TICKS = 10;
 // Minimum angular travel for the speed metric — small flicks still count.
 const MIN_FLICK_ANGLE_DEG = 0.1;
 const PAINTBALL_STEPS = 10; // sub-samples per tick so dots form solid lines
@@ -32,7 +40,7 @@ const REDIRECT_COOLDOWN = 4; // ticks before another redirect may fire
 // A flick only ends after this many CONSECUTIVE slow ticks. A single-/double-
 // tick input freeze (render stutter → 0 movement) would otherwise look like the
 // flick settling and get mis-classified as an underflick before it lands.
-const END_GRACE_TICKS = 3;
+const END_GRACE_TICKS = 1;
 
 function dirFrom(pitch, yaw) {
   const cp = Math.cos(pitch);
@@ -205,6 +213,8 @@ export class ReplayAnalytics {
     this._flickDegSum = 0; // total degrees travelled inside flicks
     this._flickTickSum = 0; // total ticks spent inside flicks
     this._killShots = 0; // shots that hit a target
+    this._reactTicks = 0; // remaining ticks of the "reacting" motion state
+    this.motionState = 'idle'; // idle | tracking | flicking | reacting
   }
 
   _camDir(tickFloat) {
@@ -371,6 +381,27 @@ export class ReplayAnalytics {
 
     this._updateFlick(i, dirNow, dirPrev, speed, closest, closestPrev, angles, redirected);
     this._processShotsUpTo(i);
+    this.motionState = this._classifyMotion(onTarget, speed, redirected);
+  }
+
+  /**
+   * Categorise the mouse motion this tick:
+   *   reacting — a drastic direction change was just made (or a tracked target
+   *              turned and the player is responding)
+   *   flicking — inside a detected flick (big fast snap OR small smooth
+   *              adjustment — any adjustment is a flick)
+   *   tracking — on a target making smooth, slow corrections
+   *   idle     — waiting for a target / moving without aim intent
+   */
+  _classifyMotion(onTarget, speed, redirected) {
+    if (redirected || this._dirChange) this._reactTicks = REACT_STATE_TICKS;
+    if (this._reactTicks > 0) {
+      this._reactTicks--;
+      return 'reacting';
+    }
+    if (this._flick) return 'flicking';
+    if (onTarget) return 'tracking';
+    return 'idle';
   }
 
   /**
@@ -527,7 +558,10 @@ export class ReplayAnalytics {
       closest.camPos
     );
     let bucket;
-    if (this._onTarget(closest)) {
+    // Forgiving landing zone: within 1.5× the target's angular radius counts
+    // as on target — only clear misses are branded over/under.
+    const angularRadius = Math.atan2(closest.aim.radius, closest.dist);
+    if (closest.angle <= angularRadius * ACCURATE_TOL) {
       bucket = 'accurate';
     } else {
       const traveled = angleBetween(f.startDir, dirEnd);
@@ -705,6 +739,7 @@ export class ReplayAnalytics {
       flickAccuracyPct: this.flickAccuracyPct,
       clickAccuracyPct: this.clickAccuracyPct,
       flicksMeasured: this._flickSpeedCount,
+      motionState: this.motionState,
       flashEvents
     };
   }

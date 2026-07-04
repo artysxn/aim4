@@ -55,7 +55,7 @@ export const BASELINE_KEYS = [
 
 /** Default baseline (B = a 1.00 rating) per category, shared by all modes. */
 const DEFAULT_BASELINE = {
-  speed: 250.0, // °/s of angular travel while flicking
+  speed: 44.0, // °/s of angular travel while flicking (≈53°/s → ~1.10)
   tracking: 0.5, // fraction of engagement time spent on target
   flicks_hit_percent: 50.0, // % of flicks that land on target
   adjustments: 2.0, // flicks per target hit (1.0 = one-and-done → 2.00)
@@ -157,6 +157,18 @@ export function adjustmentsScore(adj, baseline) {
   return clamp(2 - (a - 1) / (b - 1), 0, 2);
 }
 
+/**
+ * Engine 2b — Forgiving higher-is-better (speed). Square-root curve: being
+ * below the baseline costs far less than a linear ratio would (half the
+ * baseline speed still rates ~0.71), and 4× the baseline caps at 2.00.
+ */
+export function speedScore(raw, baseline) {
+  const b = Number(baseline);
+  if (!Number.isFinite(b) || b <= 0) return 0;
+  const v = Math.max(0, Number(raw) || 0);
+  return clamp(Math.sqrt(v / b), 0, 2);
+}
+
 /** Engine 2 — Higher is better (speed, tracking). */
 export function higherIsBetter(raw, baseline) {
   const b = Number(baseline);
@@ -183,7 +195,8 @@ export function calculateAim4Ratings(telemetry = {}, gamemodeConfig = {}) {
     // How close each adjustment lands (70% closeness = 1.00).
     precision_accuracy_percent: round2(precisionScore(telemetry.precision_accuracy_percent)),
     // Distance travelled while flicking over time spent flicking (°/s).
-    speed: round2(higherIsBetter(telemetry.speed, B.speed)),
+    // Forgiving sqrt curve — see speedScore.
+    speed: round2(speedScore(telemetry.speed, B.speed)),
     // On-target fraction (per engagement, or whole-run for hold-fire modes).
     tracking: round2(higherIsBetter(telemetry.tracking, B.tracking)),
     // How many flicks land on target at all (%).
@@ -265,7 +278,7 @@ export function buildRatingBreakdown(telemetry = {}, gamemodeConfig = {}) {
       rating: rating.speed,
       raw: speedRaw,
       rawLabel: `${speedRaw.toFixed(0)} °/s while flicking`,
-      formula: `Rating = speed ÷ baseline (${B.speed} °/s), capped at 2.00`,
+      formula: `Rating = √(speed ÷ baseline ${B.speed} °/s), capped at 2.00 — forgiving below baseline`,
       direction: 'higher'
     },
     tracking: {

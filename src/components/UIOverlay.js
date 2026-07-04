@@ -4923,6 +4923,16 @@ export class UIOverlay {
       const trio = (over, good, under) =>
         `<span class="rs-metrics"><span class="rs-over">${over}↑</span><span class="rs-good">${good}✓</span><span class="rs-under">${under}↓</span></span>`;
 
+      // Live motion category (idle | tracking | flicking | reacting).
+      const MOTION_UI = {
+        idle: ['Idle', '#8a8a8a'],
+        tracking: ['Tracking', '#35e06a'],
+        flicking: ['Flicking', '#f5a623'],
+        reacting: ['Reacting', '#f52525']
+      };
+      const [motionLabel, motionColor] = MOTION_UI[sample.motionState] || MOTION_UI.idle;
+      rows.push(`<div class="rs-row"><span>Motion</span><span class="rs-val" style="color:${motionColor}">● ${motionLabel}</span></div>`);
+
       if (ra.flicks) {
         const f = sample.flicks;
         rows.push(`<div class="rs-row"><span>Flicks</span>${trio(f.over, f.accurate, f.under)}</div>`);

@@ -8,6 +8,7 @@ import {
   higherIsBetter,
   lowerIsBetter,
   adjustmentsScore,
+  speedScore,
   calculateAim4Ratings
 } from './aim4Ratings.js';
 
@@ -28,10 +29,17 @@ approx('precision 100%', precisionScore(100), 2.0);
 approx('precision 0%', precisionScore(0), 0.0);
 approx('precision 35% linear', precisionScore(35), 0.5);
 
-// Higher-is-better clamp + ratio (speed °/s while flicking).
-approx('speed at baseline', higherIsBetter(250, 250), 1.0);
-approx('speed double clamps', higherIsBetter(800, 250), 2.0);
-approx('speed zero', higherIsBetter(0, 250), 0.0);
+// Higher-is-better clamp + ratio (generic engine: tracking, flicks).
+approx('hib at baseline', higherIsBetter(250, 250), 1.0);
+approx('hib double clamps', higherIsBetter(800, 250), 2.0);
+approx('hib zero', higherIsBetter(0, 250), 0.0);
+
+// Speed: forgiving sqrt curve, default baseline 44 °/s.
+approx('speed at baseline', speedScore(44, 44), 1.0);
+approx('speed 53 ≈ 1.10', speedScore(53, 44), 1.10);
+approx('speed half baseline forgiving', speedScore(22, 44), 0.707);
+approx('speed 4x clamps', speedScore(44 * 4, 44), 2.0);
+approx('speed zero', speedScore(0, 44), 0.0);
 
 // Lower-is-better clamp + ratio (tension: 40% deviation = 1.00, 0% = 2.00).
 approx('tension at baseline', lowerIsBetter(40, 40), 1.0);
