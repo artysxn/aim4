@@ -1,27 +1,23 @@
 // ---------------------------------------------------------------------------
 // SequenceUltraScenario.js  ("Sequence (Ultra)" — challenge)
 //
-// Sequence chain with 25% smaller drifting dots, a 0.3 s crosshair hold, and
-// Survival-style growth (pop breaks the chain). Missed shots break the chain.
-// Fixed rules — no practice/competitive split.
+// Sequence chain with 25% smaller drifting dots, a 0.4 s crosshair hold, and
+// faster float. Any missed shot ends the run. Fixed rules — no practice split.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
 import { SequenceScenario } from './SequenceScenario.js';
 import { beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
-import { randRange, lerp } from '../utils/MathUtils.js';
+import { randRange } from '../utils/MathUtils.js';
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
 const READY_COLOR = new THREE.Color(0x35e06a);
 
 const ULTRA_DOT_SIZE = 0.25 * 0.75; // 25% smaller than Sequence (Clicks)
-const ULTRA_START_SIZE = 0.12 * 0.75;
-const ULTRA_MAX_SIZE = 0.55 * 0.75;
-const ULTRA_GROW_TIME = 1.5; // s
-const ULTRA_HOLD_TIME = 0.3;
-const ULTRA_FLOAT_SPEED = 1.0;
+const ULTRA_HOLD_TIME = 0.4;
+const ULTRA_FLOAT_SPEED = 2.0; // 2× Sequence (Tracking) drift
 
 export class SequenceUltraScenario extends SequenceScenario {
   constructor(opts) {
@@ -35,9 +31,8 @@ export class SequenceUltraScenario extends SequenceScenario {
     this.targetSize = ULTRA_DOT_SIZE;
     this.holdTime = ULTRA_HOLD_TIME;
     this.floatSpeed = ULTRA_FLOAT_SPEED;
-    this.startSize = ULTRA_START_SIZE;
-    this.maxSize = ULTRA_MAX_SIZE;
-    this.growTime = ULTRA_GROW_TIME;
+    this.missLimit = 1;
+    this._ended = false;
   }
 
   get name() {
@@ -50,6 +45,15 @@ export class SequenceUltraScenario extends SequenceScenario {
 
   configKey() {
     return 'challenge';
+  }
+
+  _lose() {
+    if (this._ended || !this.running) return;
+    this._ended = true;
+    const dot = this._activeDot();
+    if (dot) dot.startDying(0xff2222);
+    beep(220, 0.15, 'sawtooth', 0.08);
+    this._requestFinish?.();
   }
 
   _setDotReady(target, ready) {
@@ -73,14 +77,13 @@ export class SequenceUltraScenario extends SequenceScenario {
   }
 
   _spawnDot(pos) {
-    const size = this.startSize;
     const target = new Target();
     const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(size, 24, 18),
+      new THREE.SphereGeometry(this.targetSize, 24, 18),
       new THREE.MeshStandardMaterial({
         color: this.settings.data.colors.target,
         emissive: 0xff2a10,
-        emissiveIntensity: 0.45,
+        emissiveIntensity: 0.5,
         roughness: 0.4,
         metalness: 0.1
       })
@@ -88,7 +91,6 @@ export class SequenceUltraScenario extends SequenceScenario {
     target._mesh = mesh;
     target.addCollider(mesh, { zone: 'body', points: 1, crit: false });
     target.object.position.copy(pos);
-    target._grow = { startSize: size, maxSize: this.maxSize };
     const speed = this.floatSpeed * randRange(0.75, 1.25);
     const angle = randRange(0, Math.PI * 2);
     target._float = {
@@ -104,8 +106,8 @@ export class SequenceUltraScenario extends SequenceScenario {
   _updateFloat(target, dt) {
     const f = target._float;
     if (!f) return;
-    const halfW = this.boundsW / 2 - this.maxSize;
-    const halfH = this.boundsH / 2 - this.maxSize;
+    const halfW = this.boundsW / 2 - this.targetSize;
+    const halfH = this.boundsH / 2 - this.targetSize;
     const pos = target.object.position;
     pos.x += f.vx * dt;
     pos.y += f.vy * dt;
@@ -127,22 +129,9 @@ export class SequenceUltraScenario extends SequenceScenario {
     }
   }
 
-  _updateGrowth() {
-    const ratio = this.maxSize / this.startSize;
-    for (const t of this.targets) {
-      if (t.state === 'dying') continue;
-      const growT = Math.min(1, t.age / this.growTime);
-      const scale = lerp(1, ratio, growT);
-      t._mesh.scale.setScalar(scale);
-      if (growT > 0.85) {
-        const urgency = (growT - 0.85) / 0.15;
-        t._mesh.material.emissive.setRGB(1, 0.15 * (1 - urgency), 0);
-        t._mesh.material.emissiveIntensity = 0.45 + urgency * 0.55;
-      }
-    }
-  }
-
   onUpdate(dt) {
+    if (this._ended) return;
+
     if (this._phase === 'cooldown') {
       this._cooldownLeft -= dt;
       if (this._cooldownLeft <= 0) {
@@ -153,18 +142,8 @@ export class SequenceUltraScenario extends SequenceScenario {
       return;
     }
 
-    this._dotAge += dt;
-    this._updateGrowth();
-
     const dot = this._activeDot();
     if (!dot) {
-      this.crosshair?.setTrackProgress(0);
-      return;
-    }
-
-    if (dot.age >= this.growTime) {
-      this.misses++;
-      this._breakChain();
       this.crosshair?.setTrackProgress(0);
       return;
     }
@@ -189,12 +168,12 @@ export class SequenceUltraScenario extends SequenceScenario {
   }
 
   onShoot(raycaster) {
-    if (this._phase !== 'chain') return;
+    if (this._phase !== 'chain' || this._ended) return;
     const hit = this.raycastTargets(raycaster);
     const target = hit?.object?.userData?.target;
     if (!target || target.state === 'dying') {
       this.misses++;
-      this._breakChain();
+      this._lose();
       return;
     }
     if (!target._float?.ready) return;
