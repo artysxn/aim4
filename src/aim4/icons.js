@@ -15,6 +15,10 @@ import sequence    from '../icons/mode_sequence.svg?url';
 import double_     from '../icons/mode_double.svg?url';
 import ball        from '../icons/icon_ball.svg?url';
 import waves       from '../icons/mode_waves.svg?url';
+import box         from '../icons/mode_box.svg?url';
+import circle      from '../icons/mode_circle.svg?url';
+import threeshot   from '../icons/mode_threeshot.svg?url';
+import cover       from '../icons/mode_cover.svg?url';
 
 import matchmaking from '../icons/icon_matchmaking.svg?url';
 import training    from '../icons/icon_training.svg?url';
@@ -48,6 +52,11 @@ export const SCENARIO_ICONS = {
   bouncetracking: bounce, // Bounce (Tracking) shares the Bounce icon
   pasutracking: pasu,     // Pasu (Tracking) shares the Pasu icon
   turn: precision,        // no dedicated Turn icon — Precision glyph fits
+  box,
+  circle,
+  threeshot,
+  cover,
+  drone: ball,            // Drone is inverted Ball — shares the Ball icon
   galaxy: stars,          // Galaxy challenge uses the Stars icon (by design)
   waves
 };

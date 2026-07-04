@@ -6,12 +6,14 @@ export const COMPETITIVE_CONFIG_KEY = 'competitive';
 export const RANKED_SCENARIOS = new Set([
   'gridshot',
   'stars',
+  'threeshot',
   'bounce',
   'microflicks',
   'pasu',
   'spidershot',
   'survival',
   'arena',
+  'cover',
   'duels',
   'range',
   'tracking',
@@ -19,20 +21,25 @@ export const RANKED_SCENARIOS = new Set([
   'sequence',
   'double',
   'ball',
+  'drone',
   'bouncetracking',
   'pasutracking',
-  'turn'
+  'turn',
+  'box',
+  'circle'
 ]);
 
 /** Ranked by total kills in the best timed run. */
 export const KILL_LEADERBOARD_SCENARIOS = new Set([
   'gridshot',
   'stars',
+  'threeshot',
   'bounce',
   'microflicks',
   'pasu',
   'spidershot',
   'arena',
+  'cover',
   'duels',
   'range',
   'deathmatch',
@@ -40,11 +47,13 @@ export const KILL_LEADERBOARD_SCENARIOS = new Set([
   'double',
   'bouncetracking',
   'pasutracking',
-  'turn'
+  'turn',
+  'box',
+  'circle'
 ]);
 
 /** Ranked by highest score in the best timed run. */
-export const SCORE_LEADERBOARD_SCENARIOS = new Set(['survival', 'tracking', 'ball']);
+export const SCORE_LEADERBOARD_SCENARIOS = new Set(['survival', 'tracking', 'ball', 'drone']);
 
 export function isRankedScenario(scenario) {
   return RANKED_SCENARIOS.has(scenario);

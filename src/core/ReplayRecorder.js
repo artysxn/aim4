@@ -22,6 +22,7 @@ const MAX_SECONDS = 5 * 60; // hard cap so a stuck run can't exhaust memory
 const MAX_TICKS = MAX_SECONDS * TICK_RATE;
 
 const _v = new THREE.Vector3();
+const _root = new THREE.Vector3(); // entity root (feet) world position
 const _inv = new THREE.Matrix4();
 const _local = new THREE.Matrix4();
 const _p = new THREE.Vector3();
@@ -280,6 +281,17 @@ export class ReplayRecorder {
       // Aim point (head for bots / centre for dots) is constant in local space —
       // capture it once from the first frame. (clobbers _v internally; safe now.)
       if (!rec.aim) {
+        // Visual → root offset (unit scale): frames track the visual mesh (the
+        // head/body), but the blueprint's origin is the entity root (its feet).
+        // Playback subtracts this so bots stand on the ground, not float at
+        // their tracked mesh's height.
+        t.object.getWorldPosition(_root);
+        const es = meanScale || 1;
+        rec.vis = [
+          r((_v.x - _root.x) / es),
+          r((_v.y - _root.y) / es),
+          r((_v.z - _root.z) / es)
+        ];
         const a = this._aimFor(t, visual, meanScale);
         rec.aim = a.aim;
         rec.aimR = a.aimR;

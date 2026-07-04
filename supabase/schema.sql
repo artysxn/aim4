@@ -249,6 +249,27 @@ as $$
 $$;
 grant execute on function public.aim_rating_user_scores() to anon, authenticated;
 
+-- The leaderboard reads profiles.overall_aim_rating — the SAME number the
+-- client computes and shows on the account page (pushed live after every
+-- competitive run and account view via update_overall_aim_rating). Combining
+-- both sources with a union keeps legacy players visible: anyone whose synced
+-- profile rating is missing still appears through aim_rating_user_scores()
+-- (per-run stored ratings), so the board never lags behind what a player sees.
+drop function if exists public.aim_rating_combined_scores();
+create or replace function public.aim_rating_combined_scores()
+returns table (user_id uuid, overall_aim_rating real)
+language sql
+stable
+as $$
+  select
+    coalesce(p.id, s.user_id) as user_id,
+    coalesce(p.overall_aim_rating, s.overall_aim_rating) as overall_aim_rating
+  from public.profiles p
+  full outer join public.aim_rating_user_scores() s on s.user_id = p.id
+  where coalesce(p.overall_aim_rating, s.overall_aim_rating) is not null;
+$$;
+grant execute on function public.aim_rating_combined_scores() to anon, authenticated;
+
 drop function if exists public.get_aim_rating_leaderboard(int);
 create or replace function public.get_aim_rating_leaderboard(p_limit int default 500)
 returns table (
@@ -266,7 +287,7 @@ as $$
       s.user_id,
       s.overall_aim_rating,
       rank() over (order by s.overall_aim_rating desc nulls last) as rank
-    from public.aim_rating_user_scores() s
+    from public.aim_rating_combined_scores() s
   )
   select
     p.id as user_id,
@@ -293,7 +314,7 @@ as $$
       s.overall_aim_rating,
       rank() over (order by s.overall_aim_rating desc nulls last) as rnk,
       count(*) over () as cnt
-    from public.aim_rating_user_scores() s
+    from public.aim_rating_combined_scores() s
   )
   select rnk, cnt, overall_aim_rating
   from scored

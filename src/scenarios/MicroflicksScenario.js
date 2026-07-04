@@ -32,7 +32,8 @@ export class MicroflicksScenario extends StarsScenario {
 
     super({
       ...opts,
-      config: { ...opts.config, boundsScaleX, boundsScaleY }
+      // No canvas pad: Microflicks keeps its tight Gridshot-sized board.
+      config: { boundsPad: 0, ...opts.config, boundsScaleX, boundsScaleY }
     });
 
     this.targetSize = preset?.targetSize ?? this.config.targetSize ?? m.targetSize ?? DEFAULT_SIZE;
@@ -71,11 +72,10 @@ export class MicroflicksScenario extends StarsScenario {
 
   /** Spawn box inset — shared by random spawns and near-kill clamping. */
   _spawnExtents() {
-    const halfW = this.boundsW / 2 - this.targetSize - 0.05;
-    const halfH = this.boundsH / 2;
-    const yMin = Math.max(this.targetSize + 0.25, this.centerY - halfH);
-    const yMax = this.centerY + halfH;
-    return { halfW, yMin, yMax };
+    const inset = this.targetSize + 0.05;
+    const halfW = Math.max(0.1, this.boundsW / 2 - inset);
+    const halfH = Math.max(0.1, this.boundsH / 2 - inset);
+    return { halfW, yMin: this.centerY - halfH, yMax: this.centerY + halfH };
   }
 
   /** Random spawn within the canvas (not the full Stars gray wall). */

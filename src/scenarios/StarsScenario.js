@@ -4,7 +4,6 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
-import { randRange } from '../utils/MathUtils.js';
 import { Target } from '../components/Target.js';
 import { GridshotScenario } from './GridshotScenario.js';
 import { competitivePresetFor } from './competitivePresets.js';
@@ -26,7 +25,10 @@ export class StarsScenario extends GridshotScenario {
 
     super({
       ...opts,
-      config: { ...opts.config, boundsScaleX }
+      // Stars plays on a bigger board than Gridshot: pad the canvas so the
+      // (exact-fit) canvas keeps the legacy full-wall play area. Subclasses
+      // (Microflicks / Threeshot) may override the pad via their own config.
+      config: { boundsPad: 8, ...opts.config, boundsScaleX }
     });
 
     const presetAfter = this.competitive ? competitivePresetFor('stars') : null;
@@ -79,19 +81,8 @@ export class StarsScenario extends GridshotScenario {
   }
 
   _spawn() {
+    // Spawn anywhere on the canvas — GridshotScenario._randomPos already covers
+    // the whole (padded) board, centred on the view line.
     this._spawnAt(this._randomPos());
-  }
-
-  /** Use the full gray wall plane (not the eye-centred gridshot spawn box). */
-  _randomPos() {
-    const inset = this.targetSize + 0.05;
-    const halfW = (this.boundsW + 8) / 2 - inset;
-    const halfH = (this.boundsH + 8) / 2 - inset;
-    const yMin = Math.max(this.targetSize + 0.25, this.centerY - halfH);
-    return new THREE.Vector3(
-      randRange(-halfW, halfW),
-      randRange(yMin, this.centerY + halfH),
-      -this.wallDistance + this.targetSize + 0.05
-    );
   }
 }

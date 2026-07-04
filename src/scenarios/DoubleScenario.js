@@ -43,6 +43,9 @@ export class DoubleScenario extends BaseScenario {
     this._canvasIdx = 0;
     this._canvases = []; // { center: Vector3, quat: Quaternion }
     this._buildEnvironment();
+    // Float at the canvas row's centre so panels extend equally up and down
+    // from the base view line.
+    this.engine.camera.position.y = this._centerY;
   }
 
   get name() {
@@ -82,6 +85,7 @@ export class DoubleScenario extends BaseScenario {
     const n = this.canvasCount;
     // Lift the canvas row so a big canvas never dips below the floor.
     const centerY = Math.max(EYE_HEIGHT, this.canvasSize / 2 + 0.3);
+    this._centerY = centerY;
     for (let i = 0; i < n; i++) {
       const panel = new THREE.Mesh(new THREE.PlaneGeometry(this.canvasSize, this.canvasSize), canvasMat);
       let center;

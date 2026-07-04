@@ -26,11 +26,11 @@ function approx(name, got, want, tol = 0.01) {
   }
 }
 
-// Precision breakpoints (70% closeness = 1.00).
-approx('precision 70%', precisionScore(70), 1.0);
+// Precision breakpoints (62.5% closeness = 1.00).
+approx('precision 62.5%', precisionScore(62.5), 1.0);
 approx('precision 100%', precisionScore(100), 2.0);
 approx('precision 0%', precisionScore(0), 0.0);
-approx('precision 35% linear', precisionScore(35), 0.5);
+approx('precision 31.25% linear', precisionScore(31.25), 0.5);
 
 // Higher-is-better clamp + ratio (generic engine: tracking, flicks).
 approx('hib at baseline', higherIsBetter(250, 250), 1.0);
@@ -49,10 +49,11 @@ approx('tension at baseline', lowerIsBetter(40, 40), 1.0);
 approx('tension zero best', lowerIsBetter(0, 40), 2.0);
 approx('tension double clamps', lowerIsBetter(80, 40), 0.0);
 
-// Brutal adjustments: 1 flick/target capped below 2.0; baseline 2.0 = 1.0.
+// Brutal adjustments: 1 flick/target capped below 2.0; baseline = 1.0 rating.
 approx('adjustments perfect capped', adjustmentsScore(1.0, 2.0), 1.78);
 approx('adjustments baseline', adjustmentsScore(2.0, 2.0), 1.0);
 approx('adjustments triple', adjustmentsScore(3.0, 2.0), 0.5);
+approx('adjustments default baseline 1.25', adjustmentsScore(1.25), 1.0);
 
 // Brutal reaction: instant capped below 2.0; baseline 200 ms = 1.0.
 approx('reaction instant capped', reactionScore(0, 200), 1.82);
@@ -62,7 +63,7 @@ approx('reaction double baseline', reactionScore(400, 200), 0.5);
 // End-to-end routing on the new telemetry keys.
 const out = calculateAim4Ratings(
   {
-    precision_accuracy_percent: 70,
+    precision_accuracy_percent: 62.5,
     speed: 250,
     tracking: 0.5,
     flicks_hit_percent: 100,
@@ -98,7 +99,7 @@ const legacyRow = {
 const tel = telemetryFromAimStats(legacyRow);
 approx('telemetry speed fallback from ms/deg', tel.speed, 50);
 approx('telemetry tracking fallback from accuracy', tel.tracking, 0.8);
-approx('telemetry adjustments neutral when 0', tel.adjustments, 2.0);
+approx('telemetry adjustments neutral when 0', tel.adjustments, 1.25);
 approx('telemetry reaction fallback from click late', tel.reaction_time_ms, 50);
 
 // Best-N per category: each axis picks from different runs when bestN = 1.

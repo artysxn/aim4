@@ -10,7 +10,7 @@ import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
 import { randRange } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
-import { EYE_HEIGHT } from '../core/Engine.js';
+import { canvasCenterY } from '../utils/canvasWall.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
@@ -26,8 +26,12 @@ export class GridshotScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
     this.weaponId = 'pistol'; // Gridshot is a pistol mode
-    const preset = this.competitive ? competitivePresetFor('gridshot') : null;
-    const g = this.competitive ? DEFAULTS.gridshot : this.settings.data.gridshot;
+    // Keyed by this.name so subclasses (Stars / Microflicks / Threeshot) get
+    // their own competitive preset + settings blob, layered over the gridshot
+    // defaults for the fields their blobs don't define.
+    const preset = this.competitive ? competitivePresetFor(this.name) : null;
+    const ownBlob = (this.competitive ? DEFAULTS[this.name] : this.settings.data[this.name]) ?? {};
+    const g = { ...DEFAULTS.gridshot, ...ownBlob };
     this.targetSize = preset?.targetSize ?? this.config.targetSize ?? g.targetSize;
     this.targetCount = preset?.targetCount ?? this.config.targetCount ?? g.targetCount;
     this.enableTimeLimit = this.config.enableTimeLimit ?? g.enableTimeLimit;
@@ -48,11 +52,15 @@ export class GridshotScenario extends BaseScenario {
       : this.settings.data.runDuration;
 
     this.wallDistance = 16;
-    this.boundsW = BASE_BOUNDS_W * this.boundsScaleX;
-    this.boundsH = BASE_BOUNDS_H * this.boundsScaleY;
-    this.centerY = EYE_HEIGHT;
+    // Optional extra canvas size (Stars keeps its bigger legacy play area).
+    this.boundsPad = this.config.boundsPad ?? 0;
+    this.boundsW = BASE_BOUNDS_W * this.boundsScaleX + this.boundsPad;
+    this.boundsH = BASE_BOUNDS_H * this.boundsScaleY + this.boundsPad;
+    // Float at the canvas centre: half the board above the view line, half below.
+    this.centerY = canvasCenterY(this.boundsH);
 
     this._buildEnvironment();
+    this.engine.camera.position.y = this.centerY;
   }
 
   get name() {
@@ -101,8 +109,9 @@ export class GridshotScenario extends BaseScenario {
   _buildEnvironment() {
     const c = this.settings.data.colors;
     const [gridCenter, gridEdge] = gridLineColors(c.floor);
+    // The canvas is EXACTLY the dot spawn area — nothing outside it is in play.
     const wall = new THREE.Mesh(
-      new THREE.PlaneGeometry(this.boundsW + 8, this.boundsH + 8),
+      new THREE.PlaneGeometry(this.boundsW, this.boundsH),
       new THREE.MeshStandardMaterial({ color: c.cover, roughness: 0.95, metalness: 0 })
     );
     wall.position.set(0, this.centerY, -this.wallDistance);
@@ -121,12 +130,13 @@ export class GridshotScenario extends BaseScenario {
   }
 
   _randomPos() {
-    const halfH = this.boundsH / 2;
-    const yMin = Math.max(this.targetSize + 0.25, this.centerY - halfH);
-    const yMax = this.centerY + halfH;
+    // Inset by the dot radius so every dot stays fully on the canvas.
+    const inset = this.targetSize + 0.05;
+    const halfW = Math.max(0.1, this.boundsW / 2 - inset);
+    const halfH = Math.max(0.1, this.boundsH / 2 - inset);
     return new THREE.Vector3(
-      randRange(-this.boundsW / 2, this.boundsW / 2),
-      randRange(yMin, yMax),
+      randRange(-halfW, halfW),
+      randRange(this.centerY - halfH, this.centerY + halfH),
       -this.wallDistance + this.targetSize + 0.05
     );
   }

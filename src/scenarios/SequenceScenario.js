@@ -14,7 +14,7 @@ import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
 import { randRange } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
-import { EYE_HEIGHT } from '../core/Engine.js';
+import { canvasCenterY } from '../utils/canvasWall.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
@@ -46,7 +46,8 @@ export class SequenceScenario extends BaseScenario {
     this.wallDistance = 16;
     this.boundsW = BOUNDS_W;
     this.boundsH = BOUNDS_H;
-    this.centerY = EYE_HEIGHT;
+    // Float at the canvas centre: half the board above the view line, half below.
+    this.centerY = canvasCenterY(this.boundsH);
 
     this._phase = 'cooldown';
     this._cooldownLeft = randRange(COOLDOWN_MIN, COOLDOWN_MAX);
@@ -55,6 +56,7 @@ export class SequenceScenario extends BaseScenario {
     this._lastKillPos = null;
 
     this._buildEnvironment();
+    this.engine.camera.position.y = this.centerY;
   }
 
   get name() {
@@ -73,8 +75,9 @@ export class SequenceScenario extends BaseScenario {
   _buildEnvironment() {
     const c = this.settings.data.colors;
     const [gridCenter, gridEdge] = gridLineColors(c.floor);
+    // The canvas is EXACTLY the dot spawn area.
     const wall = new THREE.Mesh(
-      new THREE.PlaneGeometry(this.boundsW + 8, this.boundsH + 8),
+      new THREE.PlaneGeometry(this.boundsW, this.boundsH),
       new THREE.MeshStandardMaterial({ color: c.cover, roughness: 0.95, metalness: 0 })
     );
     wall.position.set(0, this.centerY, -this.wallDistance);
@@ -95,10 +98,9 @@ export class SequenceScenario extends BaseScenario {
   _clampToBounds(x, y) {
     const halfW = this.boundsW / 2 - this.targetSize;
     const halfH = this.boundsH / 2 - this.targetSize;
-    const yMin = Math.max(this.targetSize + 0.25, this.centerY - halfH);
     return [
       Math.max(-halfW, Math.min(halfW, x)),
-      Math.max(yMin, Math.min(this.centerY + halfH, y))
+      Math.max(this.centerY - halfH, Math.min(this.centerY + halfH, y))
     ];
   }
 

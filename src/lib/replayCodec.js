@@ -203,6 +203,8 @@ export async function encodeReplay(rec) {
       // Aim point (head/centre) offset + radius at unit scale, for analytics.
       aim: e.aim || [0, 0, 0],
       aimR: e.aimR ?? 0,
+      // Tracked-visual → root offset at unit scale (playback grounding).
+      vis: e.vis || [0, 0, 0],
       data: packEntity(e.frames)
     })),
     // Shot/FX events are sparse — keep them as small flat tuples.
@@ -248,6 +250,8 @@ function buildReplayView(c) {
     len: e.len,
     aim: e.aim || [0, 0, 0],
     aimR: e.aimR ?? 0,
+    // Legacy replays (no vis) fall back to zero offset — same as before.
+    vis: e.vis || [0, 0, 0],
     track: unpackEntity(e.data, e.len)
   }));
 
@@ -335,6 +339,7 @@ export function localDecode(rec) {
       len: e.frames.length,
       aim: e.aim || [0, 0, 0],
       aimR: e.aimR ?? 0,
+      vis: e.vis || [0, 0, 0],
       data: packEntity(e.frames)
     })),
     events: rec.events || []

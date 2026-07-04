@@ -296,9 +296,47 @@ export class ReplayPlayer {
         continue;
       }
       e.object.visible = true;
-      e.object.position.set(s.x, s.y, s.z);
+      // Frames track the entity's visual mesh (head/body); shift by the
+      // recorded visual→root offset so the blueprint stands where it did live.
+      const vis = e.data.vis || [0, 0, 0];
+      e.object.position.set(
+        s.x - vis[0] * s.s,
+        s.y - vis[1] * s.s,
+        s.z - vis[2] * s.s
+      );
       e.object.scale.setScalar(Math.max(0.0001, s.s));
+      this._applyDeathTint(e, tickFloat);
     }
+  }
+
+  /** Killed targets turn green (like ingame) instead of staying red. */
+  _applyDeathTint(e, tickFloat) {
+    const deadT = this.analytics?.deadAtTick(e.data.id);
+    const dead = deadT != null && tickFloat >= deadT;
+    if (dead === !!e.tinted) return;
+    e.tinted = dead;
+    e.object.traverse((node) => {
+      if (!node.isMesh || !node.material) return;
+      // Clones share template materials — give this entity its own before tinting.
+      if (!node.userData._ownMat) {
+        node.material = node.material.clone();
+        node.userData._ownMat = true;
+        node.userData._origColor = node.material.color?.getHex() ?? null;
+        node.userData._origEmissive = node.material.emissive?.getHex() ?? null;
+        node.userData._origEmissiveIntensity = node.material.emissiveIntensity ?? 0;
+      }
+      if (dead) {
+        node.material.color?.set(0x35e06a);
+        node.material.emissive?.set(0x1a8840);
+        if ('emissiveIntensity' in node.material) node.material.emissiveIntensity = 0.9;
+      } else {
+        if (node.userData._origColor != null) node.material.color?.set(node.userData._origColor);
+        if (node.userData._origEmissive != null) node.material.emissive?.set(node.userData._origEmissive);
+        if ('emissiveIntensity' in node.material) {
+          node.material.emissiveIntensity = node.userData._origEmissiveIntensity;
+        }
+      }
+    });
   }
 
   _fireEventsUpTo(tickFloat) {

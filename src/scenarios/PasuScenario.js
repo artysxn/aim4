@@ -10,7 +10,7 @@ import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
 import { randRange } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
-import { EYE_HEIGHT } from '../core/Engine.js';
+import { canvasCenterY } from '../utils/canvasWall.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
@@ -52,9 +52,11 @@ export class PasuScenario extends BaseScenario {
     this.wallDistance = 16;
     this.boundsW = BASE_BOUNDS_W * this.boundsScaleX;
     this.boundsH = BASE_BOUNDS_H * this.boundsScaleY;
-    this.centerY = EYE_HEIGHT;
+    // Float at the canvas centre: half the board above the view line, half below.
+    this.centerY = canvasCenterY(this.boundsH);
 
     this._buildEnvironment();
+    this.engine.camera.position.y = this.centerY;
   }
 
   get name() {
@@ -100,8 +102,9 @@ export class PasuScenario extends BaseScenario {
   _buildEnvironment() {
     const c = this.settings.data.colors;
     const [gridCenter, gridEdge] = gridLineColors(c.floor);
+    // The canvas is EXACTLY the dot spawn/travel area.
     const wall = new THREE.Mesh(
-      new THREE.PlaneGeometry(this.boundsW + 8, this.boundsH + 8),
+      new THREE.PlaneGeometry(this.boundsW, this.boundsH),
       new THREE.MeshStandardMaterial({ color: c.cover, roughness: 0.95, metalness: 0 })
     );
     wall.position.set(0, this.centerY, -this.wallDistance);
@@ -120,11 +123,10 @@ export class PasuScenario extends BaseScenario {
   }
 
   _bounds() {
-    const halfX = this.boundsW / 2 - this.targetSize - 0.05;
-    const halfH = this.boundsH / 2;
-    const yMin = Math.max(this.targetSize + 0.25, this.centerY - halfH);
-    const yMax = this.centerY + halfH;
-    return { minX: -halfX, maxX: halfX, yMin, yMax };
+    const inset = this.targetSize + 0.05;
+    const halfX = Math.max(0.1, this.boundsW / 2 - inset);
+    const halfH = Math.max(0.1, this.boundsH / 2 - inset);
+    return { minX: -halfX, maxX: halfX, yMin: this.centerY - halfH, yMax: this.centerY + halfH };
   }
 
   _randomPos() {

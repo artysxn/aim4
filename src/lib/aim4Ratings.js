@@ -39,9 +39,10 @@ export const RATING_LABELS = {
 // Base gamemodes that carry a rating config (not custom/playlist/challenge runs).
 // Duels, Range, and Deathmatch are excluded — no radar or overall rating.
 export const RATED_GAMEMODES = [
-  'gridshot', 'stars', 'bounce', 'microflicks', 'pasu', 'spidershot',
-  'survival', 'arena', 'tracking',
-  'sequence', 'double', 'ball', 'bouncetracking', 'pasutracking', 'turn'
+  'gridshot', 'stars', 'threeshot', 'bounce', 'microflicks', 'pasu', 'spidershot',
+  'survival', 'arena', 'cover', 'tracking',
+  'sequence', 'double', 'ball', 'drone', 'bouncetracking', 'pasutracking', 'turn',
+  'box', 'circle'
 ];
 
 /** Minimum distinct rated modes with data before a profile earns an overall rating. */
@@ -53,7 +54,7 @@ export function qualifiesForOverallAimRating(perModeList) {
 }
 
 /** Hold-fire modes use a 6-axis radar (no Flicks category). */
-export const FLICKLESS_RATED_MODES = new Set(['ball', 'tracking']);
+export const FLICKLESS_RATED_MODES = new Set(['ball', 'drone', 'tracking']);
 
 /** Rating axes shown for a gamemode (6 for Ball / Strafes, 7 otherwise). */
 export function ratingCategoriesForMode(mode) {
@@ -75,12 +76,12 @@ export const BASELINE_KEYS = [
 
 /** Default baseline (B = a 1.00 rating) per category, shared by all modes. */
 const DEFAULT_BASELINE = {
-  speed: 44.0, // °/s of angular travel while flicking (≈53°/s → ~1.10)
-  tracking: 0.5, // fraction of engagement time spent on target
-  flicks_hit_percent: 50.0, // % of flicks that land on target
-  adjustments: 2.0, // flicks per target hit (1.0 = one-and-done → 2.00)
+  speed: 39.0, // °/s of angular travel while flicking (39°/s → 1.00)
+  tracking: 0.7, // fraction of engagement time spent on target (70% → 1.00)
+  flicks_hit_percent: 70.0, // % of flicks that land on target (70% → 1.00)
+  adjustments: 1.25, // flicks per target hit (1.25/target → 1.00)
   reaction_time_ms: 200.0, // blended direction-change + hold-before-shot delay
-  tension_percent: 40.0 // % deviation from the direct path to the target
+  tension_percent: 27.5 // % deviation from the direct path to the target (27.5% → 1.00)
 };
 
 /** Full default config: every rated gamemode maps to the default baseline. */
@@ -152,26 +153,27 @@ function round2(v) {
 
 /**
  * Engine 1 — Precision curve. A = average per-flick closeness % (how much of
- * the start→target gap each adjustment closed). 70% = a 1.00 rating.
+ * the start→target gap each adjustment closed). 62.5% = a 1.00 rating.
  */
+const PRECISION_PIVOT = 62.5;
 export function precisionScore(A) {
   const a = Number(A) || 0;
   let s;
-  if (a < 70) {
-    s = a / 70;
+  if (a < PRECISION_PIVOT) {
+    s = a / PRECISION_PIVOT;
   } else {
-    s = 1.0 + Math.pow((a - 70) / 30, 2.2);
+    s = 1.0 + Math.pow((a - PRECISION_PIVOT) / (100 - PRECISION_PIVOT), 2.2);
   }
   return clamp(s, 0, 2);
 }
 
 /**
  * Engine 4 — Flicks per target hit (lower is better). 1.0 flick/target is ideal
- * but the rating is capped well below 2.00; baseline B (default 2.0) = 1.00.
+ * but the rating is capped well below 2.00; baseline B (default 1.25) = 1.00.
  */
-export function adjustmentsScore(adjPerTarget, baseline = 2.0) {
+export function adjustmentsScore(adjPerTarget, baseline = 1.25) {
   const a = Math.max(1, Number(adjPerTarget) || 1);
-  const b = Math.max(1.01, Number(baseline) || 2.0);
+  const b = Math.max(1.01, Number(baseline) || 1.25);
   const excess = a - 1;
   const bExcess = b - 1;
   const raw = 2 * Math.exp(-0.693147 * excess / bExcess);
@@ -224,7 +226,7 @@ export function lowerIsBetter(raw, baseline) {
 export function calculateAim4Ratings(telemetry = {}, gamemodeConfig = {}) {
   const B = { ...DEFAULT_BASELINE, ...(gamemodeConfig.baselines || gamemodeConfig || {}) };
   return {
-    // How close each adjustment lands (70% closeness = 1.00).
+    // How close each adjustment lands (62.5% closeness = 1.00).
     precision_accuracy_percent: round2(precisionScore(telemetry.precision_accuracy_percent)),
     // Distance travelled while flicking over time spent flicking (°/s).
     // Forgiving sqrt curve — see speedScore.
@@ -271,11 +273,11 @@ export function telemetryFromAimStats(row = {}) {
   // Tracking: 0% means no engagement samples — fall back to flick-accuracy proxy.
   const tracking = hasField(row.tracking_pct) && num(row.tracking_pct) > 0
     ? num(row.tracking_pct) / 100
-    : (acc > 0 ? acc / 100 : 0.5);
+    : (acc > 0 ? acc / 100 : 0.7);
 
   const adjustments = hasField(row.adjustments_per_target) && num(row.adjustments_per_target) > 0
     ? num(row.adjustments_per_target)
-    : 2.0;
+    : 1.25;
 
   // Reaction: null = no samples; 0 is a valid instant-reaction reading.
   const reaction_time_ms = hasField(row.reaction_ms)
@@ -394,7 +396,7 @@ export function buildRatingBreakdown(telemetry = {}, gamemodeConfig = {}) {
       rawLabel: `${precisionRaw.toFixed(1)}% avg closeness per flick`,
       detailLines: [
         line(`${precisionRaw.toFixed(1)}% of start→target gap closed per flick`),
-        line('70% closeness → 1.00 rating')
+        line(`${PRECISION_PIVOT}% closeness → 1.00 rating`)
       ],
       direction: 'precision'
     },

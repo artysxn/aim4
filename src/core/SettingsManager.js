@@ -296,6 +296,54 @@ export const DEFAULTS = {
     infiniteAmmo: true,
     viewmodelRecoil: false,
     missLimit: 0
+  },
+  box: {
+    targetSize: 0.3,
+    sizeX: 7, // m — path width (the dot's centre travels this rectangle)
+    sizeY: 4, // m — path height
+    travelSpeed: 150, // u/s — each dot rolls speed ± variance (default 100–200)
+    speedVariance: 50, // u/s
+    holdTime: 2.0, // s of continuous crosshair time before the dot is clickable
+    infiniteAmmo: true,
+    missLimit: 0
+  },
+  circle: {
+    targetSize: 0.3,
+    sizeX: 7, // m — ellipse width
+    sizeY: 4, // m — ellipse height
+    travelSpeed: 150,
+    speedVariance: 50,
+    holdTime: 2.0,
+    infiniteAmmo: true,
+    missLimit: 0
+  },
+  threeshot: {
+    targetSize: 0.075,
+    targetCount: 3,
+    floatEnabled: false,
+    floatSpeedMax: 2.0,
+    boundsScaleX: 2.0,
+    boundsScaleY: 2.0, // twice as tall as Stars
+    missLimit: 0
+  },
+  cover: {
+    rowCount: 3, // rows of cover, each further back + 200 u higher
+    coverPerRow: 3,
+    rowDistance: 16, // m — player to the first row
+    rowSpacing: 10, // m — between rows
+    botSpeed: 1.0, // multiplier on the bot's strafe speed
+    reactMin: 25, // ms after FULL line-of-sight before the bot may shoot
+    reactMax: 200,
+    playerHp: 4, // hits you can take; resets on every kill
+    botHp: 2, // body shots to drop a bot (head is always instant)
+    missLimit: 0
+  },
+  drone: {
+    targetSize: 0.5,
+    travelSpeed: 60, // deg/s — how fast YOU orbit the static target
+    minDistance: 8,
+    maxDistance: 16,
+    bounceHeight: 2.5
   }
 };
 
@@ -308,9 +356,10 @@ export const DURATION_DEFAULT = { type: 'time', value: 60 };
 
 // Modes that expose a practice duration control (and ship in playlists).
 export const DURATION_MODES = [
-  'gridshot', 'stars', 'bounce', 'microflicks', 'pasu', 'spidershot',
-  'survival', 'arena', 'duels', 'range', 'tracking', 'deathmatch',
-  'sequence', 'double', 'ball', 'bouncetracking', 'pasutracking', 'turn'
+  'gridshot', 'stars', 'threeshot', 'bounce', 'microflicks', 'pasu', 'spidershot',
+  'survival', 'arena', 'cover', 'duels', 'range', 'tracking', 'deathmatch',
+  'sequence', 'double', 'ball', 'drone', 'bouncetracking', 'pasutracking', 'turn',
+  'box', 'circle'
 ];
 
 /** Resolve a usable duration ({ type, value }) from a scenario settings blob. */

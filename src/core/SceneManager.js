@@ -23,6 +23,11 @@ import { BallScenario } from '../scenarios/BallScenario.js';
 import { BounceTrackingScenario } from '../scenarios/BounceTrackingScenario.js';
 import { PasuTrackingScenario } from '../scenarios/PasuTrackingScenario.js';
 import { TurnScenario } from '../scenarios/TurnScenario.js';
+import { BoxScenario } from '../scenarios/BoxScenario.js';
+import { CircleScenario } from '../scenarios/CircleScenario.js';
+import { ThreeshotScenario } from '../scenarios/ThreeshotScenario.js';
+import { CoverScenario } from '../scenarios/CoverScenario.js';
+import { DroneScenario } from '../scenarios/DroneScenario.js';
 import { GalaxyScenario } from '../scenarios/GalaxyScenario.js';
 import { WavesScenario } from '../scenarios/WavesScenario.js';
 import { MultiplayerDuelScenario } from '../scenarios/MultiplayerDuelScenario.js';
@@ -49,6 +54,11 @@ export const SCENARIOS = {
   bouncetracking: BounceTrackingScenario,
   pasutracking: PasuTrackingScenario,
   turn: TurnScenario,
+  box: BoxScenario,
+  circle: CircleScenario,
+  threeshot: ThreeshotScenario,
+  cover: CoverScenario,
+  drone: DroneScenario,
   galaxy: GalaxyScenario,
   waves: WavesScenario
 };

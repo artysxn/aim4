@@ -30,10 +30,10 @@ export const COMPETITIVE_PRESETS = {
     runDuration: 30,
     targetSize: 0.3,
     targetCount: 4,
-    travelSpeed: 45,
+    travelSpeed: 25,
     minDistance: 10,
     maxDistance: 16,
-    bounceStrength: 6,
+    bounceHeight: 7, // apex height (m) — replaces the old bounceStrength feel
     infiniteAmmo: true,
     viewmodelRecoil: false
   },
@@ -164,6 +164,55 @@ export const COMPETITIVE_PRESETS = {
     dotTime: 2000,
     infiniteAmmo: true,
     viewmodelRecoil: false
+  },
+  box: {
+    runDuration: 30,
+    targetSize: 0.3,
+    sizeX: 7,
+    sizeY: 4,
+    travelSpeed: 150, // ± variance → the spec's random 100–200 u/s
+    speedVariance: 50,
+    holdTime: 2.0,
+    infiniteAmmo: true
+  },
+  circle: {
+    runDuration: 30,
+    targetSize: 0.3,
+    sizeX: 7,
+    sizeY: 4,
+    travelSpeed: 150,
+    speedVariance: 50,
+    holdTime: 2.0,
+    infiniteAmmo: true
+  },
+  threeshot: {
+    runDuration: 30,
+    targetSize: 0.075,
+    targetCount: 3,
+    boundsScaleX: 2,
+    boundsScaleY: 2,
+    floatEnabled: false,
+    viewmodelRecoil: false
+  },
+  cover: {
+    runDuration: 60,
+    rowCount: 3,
+    coverPerRow: 3,
+    rowDistance: 16,
+    rowSpacing: 10,
+    botSpeed: 1.0,
+    reactMin: 25,
+    reactMax: 200,
+    playerHp: 4,
+    botHp: 2
+  },
+  drone: {
+    runDuration: 30,
+    targetSize: 0.5,
+    travelSpeed: 80,
+    minDistance: 8,
+    maxDistance: 16,
+    bounceHeight: 8
   }
 };
 

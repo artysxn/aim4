@@ -202,6 +202,8 @@ export class ReplayAnalytics {
     this._ticksTotal = 0; // all processed ticks (hold-fire tracking modes)
     this._ticksOnTarget = 0;
     this._onStreak = 0; // consecutive on-target ticks right now
+    this._prevOnStreak = 0; // streak as of the previous tick (pre-kill value)
+    this._adjSinceKill = 0; // flicks counted since the last landed shot
     this._engageStart = null; // first on-target tick of the current engagement
     this._engageOnTicks = 0;
     this._trackSum = 0; // Σ on-target fraction per engagement (touch → kill)
@@ -262,6 +264,12 @@ export class ReplayAnalytics {
   _isEntityDead(ent, tickFloat) {
     const t = this._deadAt.get(ent.id);
     return t != null && tickFloat >= t;
+  }
+
+  /** Tick the entity was killed at (from recorded hits), or null. */
+  deadAtTick(entId) {
+    const t = this._deadAt.get(entId);
+    return t == null ? null : t;
   }
 
   /**
@@ -353,7 +361,11 @@ export class ReplayAnalytics {
     const closestPrev = this.closestAt(i - 1);
     const angles = this._camAngles(i);
 
-    // On-target bookkeeping (tracking / reaction stats).
+    // On-target bookkeeping (tracking / reaction stats). Keep last tick's
+    // streak: a killed entity is excluded from closestAt at its kill tick, so
+    // the streak resets to 0 right before the kill click is processed — the
+    // pre-kill value is the real "on-target before click" hold.
+    this._prevOnStreak = this._onStreak;
     const onTarget = this._onTarget(closest);
     this._ticksTotal++;
     if (onTarget) {
@@ -581,6 +593,7 @@ export class ReplayAnalytics {
       bucket = traveled > required ? 'over' : 'under';
     }
     this.flicks[bucket]++;
+    this._adjSinceKill++;
     this._episodeCounted = true;
     // Measure speed + accuracy per completed flick (decoupled from clicks) so
     // these metrics always populate when a flick is detected.
@@ -628,8 +641,11 @@ export class ReplayAnalytics {
       // Reaction part 2: on-target ticks held before this landed shot.
       this._killShots++;
       this._lastKillTick = t;
-      // Reaction: on-target ticks held before this landed shot (incl. click frame).
-      this._holdTickSum += this._onStreak;
+      this._adjSinceKill = 0;
+      // Reaction: on-target ticks held before this landed shot (incl. click
+      // frame). The kill tick itself reads "off target" (the entity is already
+      // marked dead), so fall back to the previous tick's streak + the click.
+      this._holdTickSum += this._onStreak > 0 ? this._onStreak : this._prevOnStreak + 1;
       this._holdCount++;
       // Tracking: on-target fraction of this engagement (first touch → kill).
       if (this._engageStart != null) {
@@ -770,6 +786,9 @@ export class ReplayAnalytics {
       flickRefDist: this._flickRefDist,
       flicks: { ...this.flicks },
       clicks: { ...this.clicks },
+      adjustmentsTotal: this.flicksTotal,
+      adjustmentsSinceKill: this._adjSinceKill,
+      targetsHit: this._killShots,
       tensionPct: this.tensionPct,
       flickSpeedMsPerDeg: this.flickSpeedMsPerDeg,
       flickAccuracyPct: this.flickAccuracyPct,

@@ -52,7 +52,7 @@ const AIM_RUN_COLUMNS =
   'tension_pct,tracking_pct,reaction_ms,adjustments_per_target,speed_deg_s,run_overall_rating,created_at';
 
 /** Modes where you hold fire and score per frame on target (Strafes-style). */
-const HOLD_FIRE_SCENARIOS = new Set(['tracking', 'ball']);
+const HOLD_FIRE_SCENARIOS = new Set(['tracking', 'ball', 'drone']);
 
 /**
  * Append a finished competitive run's aim analytics. Fire-and-forget; safe

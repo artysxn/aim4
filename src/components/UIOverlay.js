@@ -30,7 +30,8 @@ import { incrementPlayTime, formatPlayTime } from '../lib/playTime.js';
 import {
   fetchAimRatingLeaderboard,
   fetchAimRatingRank,
-  lookupProfileByUsername
+  lookupProfileByUsername,
+  syncOverallAimRating
 } from '../lib/aimRating.js';
 import {
   RATING_CATEGORIES,
@@ -101,6 +102,11 @@ const SCENARIO_META = {
   bouncetracking: { title: 'Bounce (Tracking)', dualPlay: true, tags: ['Control', 'Reactions'] },
   pasutracking: { title: 'Pasu (Tracking)', dualPlay: true, tags: ['Accuracy', 'Control'] },
   turn: { title: 'Turn', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
+  box: { title: 'Box', dualPlay: true, tags: ['Accuracy', 'Control'] },
+  circle: { title: 'Circle', dualPlay: true, tags: ['Accuracy', 'Control'] },
+  threeshot: { title: 'Threeshot', dualPlay: true, tags: ['Speed', 'Accuracy'] },
+  cover: { title: 'Cover', dualPlay: true, tags: ['Reactions', 'Accuracy'] },
+  drone: { title: 'Drone', dualPlay: true, tags: ['Accuracy', 'Control'] },
   galaxy: { title: 'Galaxy', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] },
   waves: { title: 'Waves', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] }
 };
@@ -124,7 +130,12 @@ const SCENARIO_SETTING_IDS = new Set([
   'ball',
   'bouncetracking',
   'pasutracking',
-  'turn'
+  'turn',
+  'box',
+  'circle',
+  'threeshot',
+  'cover',
+  'drone'
 ]);
 
 // Training sub-menus. A mode may appear in several categories; any registered
@@ -132,11 +143,11 @@ const SCENARIO_SETTING_IDS = new Set([
 // goes missing. "all" browses every non-challenge mode; "challenges" houses
 // the hard fixed-rule variants and only ever shows those.
 const TRAINING_CATEGORIES = [
-  { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'survival', 'pasu', 'arena', 'turn'] },
-  { id: 'tracking', title: 'Tracking', modes: ['tracking', 'ball', 'bouncetracking', 'pasutracking'] },
-  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'bounce', 'spidershot', 'sequence'] },
-  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'double'] },
-  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels'] },
+  { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'threeshot', 'survival', 'pasu', 'arena', 'turn'] },
+  { id: 'tracking', title: 'Tracking', modes: ['tracking', 'ball', 'drone', 'box', 'circle', 'bouncetracking', 'pasutracking'] },
+  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'threeshot', 'bounce', 'spidershot', 'sequence'] },
+  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'double', 'cover'] },
+  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels', 'cover'] },
   { id: 'challenges', title: 'Challenges', modes: ['galaxy', 'waves'] },
   { id: 'all', title: 'All', modes: [] }
 ];
@@ -700,6 +711,72 @@ export class UIOverlay {
           ${rf('set-turn-size', 'Dot size', 0.05, 0.5, 0.01)}
           ${rf('set-turn-time', 'Dot lifetime (ms)', 800, 5000, 100)}
           <label class="field-check"><input type="checkbox" id="set-turn-infinite-ammo" /> Infinite ammo</label>`
+      },
+      {
+        id: 'box',
+        label: 'Box',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-box-size', 'Dot size', 0.1, 0.8, 0.05)}
+          ${rf('set-box-w', 'Box size X (m)', 2, 14, 0.5)}
+          ${rf('set-box-h', 'Box size Y (m)', 1, 10, 0.5)}
+          ${rf('set-box-speed', 'Speed (u/s)', 50, 400, 5)}
+          ${rf('set-box-variance', 'Speed variance (± u/s)', 0, 150, 5)}
+          ${rf('set-box-hold', 'Track duration (s)', 0.2, 5, 0.1)}
+          ${rf('set-box-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'circle',
+        label: 'Circle',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-circle-size', 'Dot size', 0.1, 0.8, 0.05)}
+          ${rf('set-circle-w', 'Circle size X (m)', 2, 14, 0.5)}
+          ${rf('set-circle-h', 'Circle size Y (m)', 1, 10, 0.5)}
+          ${rf('set-circle-speed', 'Speed (u/s)', 50, 400, 5)}
+          ${rf('set-circle-variance', 'Speed variance (± u/s)', 0, 150, 5)}
+          ${rf('set-circle-hold', 'Track duration (s)', 0.2, 5, 0.1)}
+          ${rf('set-circle-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'threeshot',
+        label: 'Threeshot',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-3s-size', 'Dot size', 0.05, 0.5, 0.005)}
+          ${rf('set-3s-count', 'Dot count', 1, 10, 1)}
+          <label class="field-check"><input type="checkbox" id="set-3s-float" /> Horizontal drift</label>
+          ${rf('set-3s-float-speed', 'Max drift speed (m/s)', 0.5, 8, 0.5)}
+          ${rf('set-3s-bounds-x', 'Horizontal spawn scale', 0.25, 4, 0.05)}
+          ${rf('set-3s-bounds-y', 'Vertical spawn scale', 0.25, 4, 0.05)}
+          ${rf('set-3s-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'cover',
+        label: 'Cover',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-cover-rows', 'Rows', 1, 3, 1)}
+          ${rf('set-cover-boxes', 'Cover per row', 1, 5, 1)}
+          ${rf('set-cover-dist', 'Row distance (m)', 8, 28, 1)}
+          ${rf('set-cover-spacing', 'Row spacing (m)', 6, 16, 1)}
+          ${rf('set-cover-botspeed', 'Bot movement speed', 0.25, 2, 0.05)}
+          ${rf('set-cover-react-min', 'Bot reaction min (ms)', 0, 500, 5)}
+          ${rf('set-cover-react-max', 'Bot reaction max (ms)', 25, 1000, 5)}
+          ${rf('set-cover-hp', 'Hits you can take', 1, 10, 1)}
+          ${rf('set-cover-bothp', 'Bot body shots to kill', 1, 5, 1)}
+          ${rf('set-cover-misslimit', 'Allowed misses (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'drone',
+        label: 'Drone',
+        body: `
+          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
+          ${rf('set-drone-size', 'Target size', 0.2, 1.0, 0.05)}
+          ${rf('set-drone-speed', 'Travel speed (°/s)', 20, 140, 5)}
+          ${rf('set-drone-min-dist', 'Min distance (m)', 4, 14, 0.5)}
+          ${rf('set-drone-max-dist', 'Max distance (m)', 6, 22, 0.5)}
+          ${rf('set-drone-height', 'Bounce height (m)', 0.5, 10, 0.1)}`
       }
     ];
   }
@@ -2200,6 +2277,49 @@ export class UIOverlay {
       draft((d) => { d.turn.infiniteAmmo = e.target.checked; });
     });
 
+    this._bindRange('set-box-size', (v, d) => { d.box.targetSize = v; });
+    this._bindRange('set-box-w', (v, d) => { d.box.sizeX = v; });
+    this._bindRange('set-box-h', (v, d) => { d.box.sizeY = v; });
+    this._bindRange('set-box-speed', (v, d) => { d.box.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-box-variance', (v, d) => { d.box.speedVariance = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-box-hold', (v, d) => { d.box.holdTime = v; });
+    this._bindRange('set-box-misslimit', (v, d) => { d.box.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    this._bindRange('set-circle-size', (v, d) => { d.circle.targetSize = v; });
+    this._bindRange('set-circle-w', (v, d) => { d.circle.sizeX = v; });
+    this._bindRange('set-circle-h', (v, d) => { d.circle.sizeY = v; });
+    this._bindRange('set-circle-speed', (v, d) => { d.circle.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-circle-variance', (v, d) => { d.circle.speedVariance = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-circle-hold', (v, d) => { d.circle.holdTime = v; });
+    this._bindRange('set-circle-misslimit', (v, d) => { d.circle.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    this._bindRange('set-3s-size', (v, d) => { d.threeshot.targetSize = v; });
+    this._bindRange('set-3s-count', (v, d) => { d.threeshot.targetCount = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-3s-float')?.addEventListener('change', (e) => {
+      draft((d) => { d.threeshot.floatEnabled = e.target.checked; });
+    });
+    this._bindRange('set-3s-float-speed', (v, d) => { d.threeshot.floatSpeedMax = v; });
+    this._bindRange('set-3s-bounds-x', (v, d) => { d.threeshot.boundsScaleX = v; });
+    this._bindRange('set-3s-bounds-y', (v, d) => { d.threeshot.boundsScaleY = v; });
+    this._bindRange('set-3s-misslimit', (v, d) => { d.threeshot.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    this._bindRange('set-cover-rows', (v, d) => { d.cover.rowCount = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cover-boxes', (v, d) => { d.cover.coverPerRow = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cover-dist', (v, d) => { d.cover.rowDistance = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cover-spacing', (v, d) => { d.cover.rowSpacing = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cover-botspeed', (v, d) => { d.cover.botSpeed = v; });
+    this._bindRange('set-cover-react-min', (v, d) => { d.cover.reactMin = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cover-react-max', (v, d) => { d.cover.reactMax = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cover-hp', (v, d) => { d.cover.playerHp = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cover-bothp', (v, d) => { d.cover.botHp = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cover-misslimit', (v, d) => { d.cover.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    this._bindRange('set-drone-size', (v, d) => { d.drone.targetSize = v; });
+    this._bindRange('set-drone-speed', (v, d) => { d.drone.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-drone-min-dist', (v, d) => { d.drone.minDistance = v; });
+    this._bindRange('set-drone-max-dist', (v, d) => { d.drone.maxDistance = v; });
+    this._bindRange('set-drone-height', (v, d) => { d.drone.bounceHeight = v; });
+
     $('#settings-undo-btn')?.addEventListener('click', () => {
       if (this._settingsExploreMode || this.settings.isExploreMode) return;
       if (s.undoDraft()) {
@@ -3207,6 +3327,11 @@ export class UIOverlay {
       );
       const usable = perMode.filter(Boolean);
       const overall = await computeOverallAimRating(userId, this._ratingTimeId, this._ratingBestCount());
+      // Own account: mirror the freshly-computed rating to the profile so the
+      // aim-rating leaderboard reflects it immediately.
+      if (!isOther && this.auth?.user?.id === userId) {
+        await syncOverallAimRating(userId).catch(() => {});
+      }
       const rankInfo = await fetchAimRatingRank(userId);
       if (overall == null && !rankInfo?.overallAimRating) {
         const need = OVERALL_AIM_MIN_MODES;
@@ -3416,14 +3541,25 @@ export class UIOverlay {
         `<td class="account-rank run-rating-player">${fmt(playerRating, k)}</td>` +
         `<td class="account-rank run-rating-global">${fmt(globalRating, k)}</td></tr>`
     ).join('');
+    const runTip = 'Only this run: its telemetry is rated against the current per-mode baselines.';
+    const playerTip =
+      'Your average: ALL of your logged competitive runs of this mode are aggregated ' +
+      '(each stat averaged across runs), then that combined telemetry is rated with the same baselines as this run. ' +
+      'Hover a dot on the chart for the numbers behind each axis.';
+    const globalTip =
+      'Global average: every player’s logged competitive runs of this mode are aggregated the same way ' +
+      '(all runs pooled, each stat averaged), then rated with the same baselines. ' +
+      'Hover a dot on the chart for the numbers behind each axis.';
     return (
       `<p class="run-rating-key">` +
-      `<span class="run-rating-key-item"><i class="run-rating-swatch run-rating-swatch-run"></i>This run</span>` +
-      `<span class="run-rating-key-item"><i class="run-rating-swatch run-rating-swatch-player"></i>Your avg</span>` +
-      `<span class="run-rating-key-item"><i class="run-rating-swatch run-rating-swatch-global"></i>Global avg</span>` +
+      `<span class="run-rating-key-item" title="${this._esc(runTip)}"><i class="run-rating-swatch run-rating-swatch-run"></i>This run</span>` +
+      `<span class="run-rating-key-item" title="${this._esc(playerTip)}"><i class="run-rating-swatch run-rating-swatch-player"></i>Your avg</span>` +
+      `<span class="run-rating-key-item" title="${this._esc(globalTip)}"><i class="run-rating-swatch run-rating-swatch-global"></i>Global avg</span>` +
       `</p>` +
       `<table class="account-stats-table run-rating-table">` +
-      `<thead><tr><th>Category</th><th>This run</th><th>Your avg</th><th>Global avg</th></tr></thead>` +
+      `<thead><tr><th>Category</th><th title="${this._esc(runTip)}">This run</th>` +
+      `<th title="${this._esc(playerTip)}">Your avg</th>` +
+      `<th title="${this._esc(globalTip)}">Global avg</th></tr></thead>` +
       `<tbody>${rows}</tbody></table>`
     );
   }
@@ -3455,6 +3591,8 @@ export class UIOverlay {
 
     let playerRating = null;
     let globalRating = null;
+    let playerBreakdown = null;
+    let globalBreakdown = null;
     if (supabaseConfigured()) {
       try {
         const userId = this.auth?.user?.id || null;
@@ -3463,16 +3601,14 @@ export class UIOverlay {
           fetchAimStats({ scenario })
         ]);
         if (playerRow && Number(playerRow.games)) {
-          playerRating = calculateAim4Ratings(
-            telemetryFromAimStats(playerRow),
-            { baselines }
-          );
+          const t = telemetryFromAimStats(playerRow);
+          playerRating = calculateAim4Ratings(t, { baselines });
+          playerBreakdown = buildRatingBreakdown(t, { baselines });
         }
         if (globalRow && Number(globalRow.games)) {
-          globalRating = calculateAim4Ratings(
-            telemetryFromAimStats(globalRow),
-            { baselines }
-          );
+          const t = telemetryFromAimStats(globalRow);
+          globalRating = calculateAim4Ratings(t, { baselines });
+          globalBreakdown = buildRatingBreakdown(t, { baselines });
         }
       } catch (e) {
         console.warn('[ui] run rating comparison failed', e);
@@ -3491,7 +3627,8 @@ export class UIOverlay {
         rating: globalRating,
         color: '#9a9a9a',
         fill: 'rgba(154,154,154,0.12)',
-        label: 'Global avg'
+        label: 'Global avg',
+        breakdown: globalBreakdown
       });
     }
     if (playerRating) {
@@ -3499,7 +3636,8 @@ export class UIOverlay {
         rating: playerRating,
         color: '#46c8ff',
         fill: 'rgba(70,200,255,0.18)',
-        label: 'Your avg'
+        label: 'Your avg',
+        breakdown: playerBreakdown
       });
     }
     this._drawRadarChart(chart, series, '#res-rating-tooltip', scenario, categories, true);
@@ -3581,8 +3719,9 @@ export class UIOverlay {
       const entry = verboseTooltips ? meta.series.breakdown?.[meta.category] : null;
       if (entry?.detailLines?.length) {
         tooltip.classList.add('radar-tooltip-verbose');
+        const who = meta.series.label ? `${meta.series.label} — ` : '';
         tooltip.innerHTML =
-          `<strong>${this._esc(RATING_LABELS[meta.category])}: ${entry.rating.toFixed(2)}</strong>` +
+          `<strong>${this._esc(who)}${this._esc(RATING_LABELS[meta.category])}: ${entry.rating.toFixed(2)}</strong>` +
           entry.detailLines.map((l) => `<div class="radar-tooltip-line">${this._esc(l)}</div>`).join('');
       } else {
         tooltip.classList.remove('radar-tooltip-verbose');
@@ -4821,6 +4960,52 @@ export class UIOverlay {
     this._setRange('set-turn-size', tn.targetSize ?? 0.15);
     this._setRange('set-turn-time', tn.dotTime ?? 2000);
     $('#set-turn-infinite-ammo').checked = tn.infiniteAmmo !== false;
+
+    const bx = s.box ?? {};
+    this._setRange('set-box-size', bx.targetSize ?? 0.3);
+    this._setRange('set-box-w', bx.sizeX ?? 7);
+    this._setRange('set-box-h', bx.sizeY ?? 4);
+    this._setRange('set-box-speed', bx.travelSpeed ?? 150);
+    this._setRange('set-box-variance', bx.speedVariance ?? 50);
+    this._setRange('set-box-hold', bx.holdTime ?? 2);
+    this._setRange('set-box-misslimit', bx.missLimit ?? 0);
+
+    const ci = s.circle ?? {};
+    this._setRange('set-circle-size', ci.targetSize ?? 0.3);
+    this._setRange('set-circle-w', ci.sizeX ?? 7);
+    this._setRange('set-circle-h', ci.sizeY ?? 4);
+    this._setRange('set-circle-speed', ci.travelSpeed ?? 150);
+    this._setRange('set-circle-variance', ci.speedVariance ?? 50);
+    this._setRange('set-circle-hold', ci.holdTime ?? 2);
+    this._setRange('set-circle-misslimit', ci.missLimit ?? 0);
+
+    const ts = s.threeshot ?? {};
+    this._setRange('set-3s-size', ts.targetSize ?? 0.075);
+    this._setRange('set-3s-count', ts.targetCount ?? 3);
+    $('#set-3s-float').checked = !!ts.floatEnabled;
+    this._setRange('set-3s-float-speed', ts.floatSpeedMax ?? 2);
+    this._setRange('set-3s-bounds-x', ts.boundsScaleX ?? 2);
+    this._setRange('set-3s-bounds-y', ts.boundsScaleY ?? 2);
+    this._setRange('set-3s-misslimit', ts.missLimit ?? 0);
+
+    const cv = s.cover ?? {};
+    this._setRange('set-cover-rows', cv.rowCount ?? 3);
+    this._setRange('set-cover-boxes', cv.coverPerRow ?? 3);
+    this._setRange('set-cover-dist', cv.rowDistance ?? 16);
+    this._setRange('set-cover-spacing', cv.rowSpacing ?? 10);
+    this._setRange('set-cover-botspeed', cv.botSpeed ?? 1);
+    this._setRange('set-cover-react-min', cv.reactMin ?? 25);
+    this._setRange('set-cover-react-max', cv.reactMax ?? 200);
+    this._setRange('set-cover-hp', cv.playerHp ?? 4);
+    this._setRange('set-cover-bothp', cv.botHp ?? 2);
+    this._setRange('set-cover-misslimit', cv.missLimit ?? 0);
+
+    const dr = s.drone ?? {};
+    this._setRange('set-drone-size', dr.targetSize ?? 0.5);
+    this._setRange('set-drone-speed', dr.travelSpeed ?? 60);
+    this._setRange('set-drone-min-dist', dr.minDistance ?? 8);
+    this._setRange('set-drone-max-dist', dr.maxDistance ?? 16);
+    this._setRange('set-drone-height', dr.bounceHeight ?? 2.5);
   }
 
   // -------------------------------------------------------------------------
@@ -4948,7 +5133,7 @@ export class UIOverlay {
     this.currentScenario = name;
     this.scenarioConfig = config;
     this.sceneManager.load(name, config);
-    const noCrit = ['spidershot', 'survival', 'sequence', 'double', 'ball', 'turn', 'galaxy', 'waves'].includes(name);
+    const noCrit = ['spidershot', 'survival', 'sequence', 'double', 'ball', 'turn', 'box', 'circle', 'threeshot', 'drone', 'galaxy', 'waves'].includes(name);
     this.hudCritChip.style.display = noCrit ? 'none' : '';
     this.showScreen('playing');
     this.state = 'await-start';
@@ -5199,9 +5384,10 @@ export class UIOverlay {
   _applyAnalyticsVisibility() {
     const ra = this.settings.data.replayAnalytics || {};
     const anyCanvas = ra.optimalPath || ra.trajectory || ra.flicks || ra.clickTiming;
-    const anyStat = ra.flicks || ra.tension || ra.clickTiming || ra.flickSpeed || ra.flickAccuracy;
     if (this.replayAnalysisCanvas) this.replayAnalysisCanvas.hidden = !this.replaying || !anyCanvas;
-    if (this.replayStats) this.replayStats.hidden = !this.replaying || !anyStat;
+    // The stats panel always shows during playback: it carries the live
+    // on-target indicator + adjustment counters on top of the optional toggles.
+    if (this.replayStats) this.replayStats.hidden = !this.replaying;
     if (!this.replaying || !anyCanvas) this._clearAnalysisCanvas();
   }
 
@@ -5215,8 +5401,8 @@ export class UIOverlay {
     if (!this.replaying || !sample) return;
     const ra = this.settings.data.replayAnalytics || {};
 
-    // --- stats panel ---
-    if (this.replayStats && (ra.flicks || ra.tension || ra.clickTiming || ra.flickSpeed || ra.flickAccuracy)) {
+    // --- stats panel (always visible during playback) ---
+    if (this.replayStats) {
       const rows = [];
       const trio = (over, good, under) =>
         `<span class="rs-metrics"><span class="rs-over">${over}↑</span><span class="rs-good">${good}✓</span><span class="rs-under">${under}↓</span></span>`;
@@ -5230,6 +5416,17 @@ export class UIOverlay {
       };
       const [motionLabel, motionColor] = MOTION_UI[sample.motionState] || MOTION_UI.idle;
       rows.push(`<div class="rs-row"><span>Motion</span><span class="rs-val" style="color:${motionColor}">● ${motionLabel}</span></div>`);
+
+      // Crosshair on-target indicator (live, per tick).
+      rows.push(
+        sample.onTarget
+          ? `<div class="rs-row"><span>Crosshair</span><span class="rs-val" style="color:#35e06a">● On target</span></div>`
+          : `<div class="rs-row"><span>Crosshair</span><span class="rs-val" style="color:#f52525">○ Off target</span></div>`
+      );
+
+      // Adjustment counters: run total + current target (resets on each kill).
+      rows.push(`<div class="rs-row"><span>Adjustments</span><span class="rs-val">${sample.adjustmentsTotal ?? 0} total</span></div>`);
+      rows.push(`<div class="rs-row"><span>This target</span><span class="rs-val">${sample.adjustmentsSinceKill ?? 0}</span></div>`);
 
       if (ra.flicks) {
         const f = sample.flicks;
@@ -5880,6 +6077,11 @@ export class UIOverlay {
     }
     if (scenario === 'aim-rating') {
       try {
+        // Push the viewer's own freshly-computed rating first so the board is
+        // live for them (no-op offline / signed out).
+        if (this.auth?.isLoggedIn) {
+          await syncOverallAimRating(this.auth.user.id).catch(() => {});
+        }
         const list = await fetchAimRatingLeaderboard(50);
         this._lbCache['aim-rating'] = list;
         return { list, error: null, configKey: null };

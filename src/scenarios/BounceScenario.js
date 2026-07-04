@@ -22,6 +22,10 @@ const RADIAL_SPEED_MIN = 0.5; // m/s forward/back drift
 const RADIAL_SPEED_MAX = 1.4;
 // Horizontal direction changes ease over ~1/TURN_EASE s instead of snapping.
 const TURN_EASE = 3.2;
+// Per-ball angular speed spread so the balls never move in lockstep: each ball
+// rolls its own speed at spawn AND re-rolls at every arc-edge reversal.
+const OMEGA_VARIANCE_MIN = 0.75;
+const OMEGA_VARIANCE_MAX = 1.25;
 
 export class BounceScenario extends BaseScenario {
   constructor(opts) {
@@ -119,6 +123,11 @@ export class BounceScenario extends BaseScenario {
     this.root.add(wall);
   }
 
+  /** Per-ball angular speed: the configured speed ±25% so balls stay offset. */
+  _rollOmega() {
+    return ((this.travelSpeed * Math.PI) / 180) * randRange(OMEGA_VARIANCE_MIN, OMEGA_VARIANCE_MAX);
+  }
+
   _spawnApexY() {
     if (this.bounceHeight != null) return this.bounceHeight;
     return this.bounceStrength * 0.45;
@@ -158,7 +167,7 @@ export class BounceScenario extends BaseScenario {
 
     // Spawn in the far 40% of the distance band so fresh balls appear well back.
     const spawnNear = this.minDistance + (this.maxDistance - this.minDistance) * 0.6;
-    const omega = (this.travelSpeed * Math.PI) / 180;
+    const omega = this._rollOmega();
     const thetaDir = Math.random() < 0.5 ? -1 : 1;
     target._bounce = {
       theta: randRange(-ARC_HALF * 0.9, ARC_HALF * 0.9),
@@ -182,9 +191,15 @@ export class BounceScenario extends BaseScenario {
 
       // Left-right: the desired direction flips at the arc edges, but the
       // actual angular velocity eases toward it so reversals read as a smooth
-      // deceleration + turn instead of an instant snap.
-      if (s.theta <= -ARC_HALF && s.thetaDir < 0) s.thetaDir = 1;
-      else if (s.theta >= ARC_HALF && s.thetaDir > 0) s.thetaDir = -1;
+      // deceleration + turn instead of an instant snap. Each reversal re-rolls
+      // the ball's angular speed so the group never synchronises.
+      if (s.theta <= -ARC_HALF && s.thetaDir < 0) {
+        s.thetaDir = 1;
+        s.omega = this._rollOmega();
+      } else if (s.theta >= ARC_HALF && s.thetaDir > 0) {
+        s.thetaDir = -1;
+        s.omega = this._rollOmega();
+      }
       if (s.omegaCur == null) s.omegaCur = s.thetaDir * s.omega;
       const omegaTarget = s.thetaDir * s.omega;
       s.omegaCur += (omegaTarget - s.omegaCur) * Math.min(1, TURN_EASE * dt);
