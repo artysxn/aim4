@@ -229,28 +229,45 @@ export function calculateAim4Ratings(telemetry = {}, gamemodeConfig = {}) {
  */
 export function telemetryFromAimStats(row = {}) {
   const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
-  const has = (v) => Number.isFinite(Number(v));
+  /** Column present in the aggregate row (null/undefined = never logged). */
+  const hasField = (v) => v != null && v !== '' && Number.isFinite(Number(v));
+
   const acc = num(row.flick_accuracy_pct, 0);
   const over = num(row.flicks_over, 0);
   const under = num(row.flicks_under, 0);
   const accurate = num(row.flicks_accurate, 0);
   const totalFlicks = over + under + accurate;
-  // Flicks: how many land on target at all.
   const hitPct = totalFlicks > 0 ? (accurate / totalFlicks) * 100 : 0;
+  const games = Math.max(1, num(row.games, 1));
   const msPerDeg = num(row.flick_speed_ms, 0);
+  const clickLate = num(row.click_late_ms, 0);
+
+  // Speed: speed_deg_s is 0 when no flick timing was captured — fall back to ms/°.
+  const speed = hasField(row.speed_deg_s) && num(row.speed_deg_s) > 0
+    ? num(row.speed_deg_s)
+    : (msPerDeg > 0 ? 1000 / msPerDeg : 0);
+
+  // Tracking: 0% means no engagement samples — fall back to flick-accuracy proxy.
+  const tracking = hasField(row.tracking_pct) && num(row.tracking_pct) > 0
+    ? num(row.tracking_pct) / 100
+    : (acc > 0 ? acc / 100 : 0.5);
+
+  const adjustments = hasField(row.adjustments_per_target) && num(row.adjustments_per_target) > 0
+    ? num(row.adjustments_per_target)
+    : 2.0;
+
+  // Reaction: null = no samples; 0 is a valid instant-reaction reading.
+  const reaction_time_ms = hasField(row.reaction_ms)
+    ? num(row.reaction_ms)
+    : (clickLate > 0 ? clickLate / games : 200);
+
   return {
-    // Precision: average per-flick closeness (% of the gap each flick closed).
     precision_accuracy_percent: acc,
-    // Speed: flick travel over flick time; fall back to 1000/ms-per-° for old rows.
-    speed: has(row.speed_deg_s) ? num(row.speed_deg_s) : (msPerDeg > 0 ? 1000 / msPerDeg : 0),
-    // Tracking: on-target fraction (stored as %, engine expects 0–1). Old rows
-    // without the column fall back to a neutral 0.5 (a 1.00 rating).
-    tracking: has(row.tracking_pct) ? num(row.tracking_pct) / 100 : 0.5,
+    speed,
+    tracking,
     flicks_hit_percent: hitPct,
-    // Adjustments: flicks per target hit. Neutral 2.0 for pre-migration rows.
-    adjustments: has(row.adjustments_per_target) ? num(row.adjustments_per_target) : 2.0,
-    // Reaction: blended direction-change + hold delay. Neutral 200 ms fallback.
-    reaction_time_ms: has(row.reaction_ms) ? num(row.reaction_ms) : 200,
+    adjustments,
+    reaction_time_ms,
     tension_percent: num(row.tension_pct, 0)
   };
 }

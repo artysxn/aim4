@@ -9,7 +9,8 @@ import {
   lowerIsBetter,
   adjustmentsScore,
   speedScore,
-  calculateAim4Ratings
+  calculateAim4Ratings,
+  telemetryFromAimStats
 } from './aim4Ratings.js';
 
 let failures = 0;
@@ -72,6 +73,27 @@ approx('e2e flicks hit all', out.flicks_hit_percent, 2.0);
 approx('e2e adjustments aimbot', out.adjustments, 2.0);
 approx('e2e reaction aimbot', out.reaction_time_ms, 2.0);
 approx('e2e tension aimbot', out.tension_percent, 2.0);
+
+// telemetryFromAimStats fallbacks when reworked columns are 0 / missing.
+const legacyRow = {
+  games: 10,
+  flick_accuracy_pct: 80,
+  flick_speed_ms: 20,
+  flicks_accurate: 80,
+  flicks_over: 10,
+  flicks_under: 10,
+  click_late_ms: 500,
+  tension_pct: 30,
+  speed_deg_s: 0,
+  tracking_pct: 0,
+  adjustments_per_target: 0,
+  reaction_ms: null
+};
+const tel = telemetryFromAimStats(legacyRow);
+approx('telemetry speed fallback from ms/deg', tel.speed, 50);
+approx('telemetry tracking fallback from accuracy', tel.tracking, 0.8);
+approx('telemetry adjustments neutral when 0', tel.adjustments, 2.0);
+approx('telemetry reaction fallback from click late', tel.reaction_time_ms, 50);
 
 console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');
 if (failures) process.exit(1);
