@@ -110,7 +110,7 @@ export class LineScenario extends BaseScenario {
       -this.wallDistance + this.targetSize + 0.05
     );
     this.addTarget(target);
-    const speed = Math.max(5, this.travelSpeed) * UNIT;
+    const speed = Math.max(40, this.travelSpeed) * UNIT;
     this._dot = {
       target,
       dir: Math.random() < 0.5 ? -1 : 1,
