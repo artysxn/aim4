@@ -74,6 +74,7 @@ alter table public.scores add column if not exists kpm real;
 alter table public.profiles add column if not exists elo integer not null default 1000;
 alter table public.profiles add column if not exists country_code text;
 alter table public.profiles add column if not exists play_time_sec real not null default 0;
+alter table public.profiles add column if not exists overall_aim_rating real;
 
 -- Replay aim-analytics aggregates (measured per run; nullable for old rows).
 alter table public.replays add column if not exists flicks_accurate integer;
@@ -196,6 +197,71 @@ begin
 end;
 $$;
 grant execute on function public.increment_play_time(uuid, real) to authenticated;
+
+-- Client-computed combined Aim4 Rating (average across rated gamemodes).
+drop function if exists public.update_overall_aim_rating(uuid, real);
+create or replace function public.update_overall_aim_rating(p_user_id uuid, p_rating real)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if p_user_id is null or auth.uid() is distinct from p_user_id then
+    return;
+  end if;
+  update public.profiles
+  set overall_aim_rating = p_rating
+  where id = p_user_id;
+end;
+$$;
+grant execute on function public.update_overall_aim_rating(uuid, real) to authenticated;
+
+drop function if exists public.get_aim_rating_leaderboard(int);
+create or replace function public.get_aim_rating_leaderboard(p_limit int default 500)
+returns table (
+  user_id uuid,
+  username text,
+  country_code text,
+  overall_aim_rating real,
+  rank bigint
+)
+language sql
+stable
+as $$
+  select
+    p.id as user_id,
+    p.username,
+    p.country_code,
+    p.overall_aim_rating,
+    rank() over (order by p.overall_aim_rating desc nulls last) as rank
+  from public.profiles p
+  where p.overall_aim_rating is not null
+  order by p.overall_aim_rating desc
+  limit greatest(1, least(coalesce(p_limit, 500), 1000));
+$$;
+grant execute on function public.get_aim_rating_leaderboard(int) to anon, authenticated;
+
+drop function if exists public.get_aim_rating_rank(uuid);
+create or replace function public.get_aim_rating_rank(p_user_id uuid)
+returns table (rank bigint, total bigint, overall_aim_rating real)
+language sql
+stable
+as $$
+  with ranked as (
+    select
+      p.id,
+      p.overall_aim_rating,
+      rank() over (order by p.overall_aim_rating desc nulls last) as rnk,
+      count(*) over () as cnt
+    from public.profiles p
+    where p.overall_aim_rating is not null
+  )
+  select rnk, cnt, overall_aim_rating
+  from ranked
+  where id = p_user_id;
+$$;
+grant execute on function public.get_aim_rating_rank(uuid) to anon, authenticated;
 
 -- Aggregate aim stats with optional filters:
 --   p_user_id  — null = every player (global baseline), else one account

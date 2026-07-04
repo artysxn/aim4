@@ -43,6 +43,17 @@ export const RATED_GAMEMODES = [
   'sequence', 'double', 'ball', 'bouncetracking', 'pasutracking', 'turn'
 ];
 
+/** Hold-fire modes use a 6-axis radar (no Flicks category). */
+export const FLICKLESS_RATED_MODES = new Set(['ball', 'tracking']);
+
+/** Rating axes shown for a gamemode (6 for Ball / Strafes, 7 otherwise). */
+export function ratingCategoriesForMode(mode) {
+  if (FLICKLESS_RATED_MODES.has(mode)) {
+    return RATING_CATEGORIES.filter((k) => k !== 'flicks_hit_percent');
+  }
+  return RATING_CATEGORIES;
+}
+
 // Baseline categories that need a config value (Precision is curve-only).
 export const BASELINE_KEYS = [
   'speed',
@@ -327,4 +338,59 @@ export function averageRatings(list) {
     out[key] = vals.length ? round2(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
   }
   return out;
+}
+
+/**
+ * Average per-mode ratings into one radar polygon. Skips modes with no data and
+ * excludes Flicks from Ball / Strafes when averaging that axis.
+ */
+export function averageRatingsAcrossModes(perModeList) {
+  const out = {};
+  for (const key of RATING_CATEGORIES) {
+    const vals = [];
+    for (const { mode, rating } of perModeList) {
+      if (!rating) continue;
+      if (key === 'flicks_hit_percent' && FLICKLESS_RATED_MODES.has(mode)) continue;
+      const v = rating[key];
+      if (Number.isFinite(v)) vals.push(v);
+    }
+    out[key] = vals.length ? round2(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+  }
+  return out;
+}
+
+/** Single-number overall score: mean of the axes that apply to this mode / view. */
+export function overallAimScore(rating, mode = 'all') {
+  if (!rating) return null;
+  let keys;
+  if (mode && mode !== 'all') {
+    keys = ratingCategoriesForMode(mode);
+  } else {
+    keys = RATING_CATEGORIES.filter((k) => {
+      if (k === 'flicks_hit_percent' && !Number.isFinite(rating[k])) return false;
+      return Number.isFinite(rating[k]);
+    });
+  }
+  const vals = keys.map((k) => rating[k]).filter((v) => Number.isFinite(v));
+  return vals.length ? round2(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+}
+
+/**
+ * Combined profile overall: average of each rated mode's overall score (only
+ * modes the player has competitive data for).
+ */
+export function overallAimScoreFromModes(perModeList) {
+  const scores = perModeList
+    .map(({ mode, rating }) => overallAimScore(rating, mode))
+    .filter((v) => Number.isFinite(v));
+  return scores.length ? round2(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+}
+
+/** Categories to draw for a radar view (all-mode avg omits Flicks if no data). */
+export function radarCategoriesForView(mode, rating) {
+  if (mode && mode !== 'all') return ratingCategoriesForMode(mode);
+  const cats = RATING_CATEGORIES.filter(
+    (k) => k !== 'flicks_hit_percent' || Number.isFinite(rating?.[k])
+  );
+  return cats.length ? cats : ratingCategoriesForMode('gridshot');
 }

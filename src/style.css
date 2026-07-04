@@ -1035,6 +1035,45 @@ a.btn {
   flex: 1 1 180px;
   min-width: 160px;
 }
+.account-aim-summary {
+  font-size: 15px;
+  color: #f52525;
+  font-variant-numeric: tabular-nums;
+}
+.account-rating-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.account-rating-compare {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+.account-rating-compare .config-code-input {
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+.account-rating-global-check {
+  font-size: 13px;
+  white-space: nowrap;
+}
+.account-dropdown summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 8px 0;
+  list-style: none;
+}
+.account-dropdown summary::-webkit-details-marker { display: none; }
+.account-dropdown summary::before {
+  content: '▸ ';
+  display: inline-block;
+  transition: transform 0.15s;
+}
+.account-dropdown[open] summary::before { transform: rotate(90deg); }
+.account-aim-head-nested { margin-top: 10px; }
 
 /* --- Post-run Aim4 Rating (results screen) -------------------------------- */
 .res-rating {

@@ -9,6 +9,7 @@
 // ---------------------------------------------------------------------------
 
 import { getSupabase, supabaseConfigured } from './supabase.js';
+import { syncOverallAimRating } from './aimRating.js';
 
 /** Selectable recency filters for the profile aim-stats panel. */
 export const AIM_STAT_FILTERS = [
@@ -65,6 +66,7 @@ export async function logAimRun(userId, recording, analytics) {
   };
   const { error } = await sb.from('aim_run_stats').insert(row);
   if (error) console.warn('[aimStats] log failed', error.message);
+  else syncOverallAimRating(userId).catch((e) => console.warn('[aimStats] overall sync', e));
 }
 
 /**

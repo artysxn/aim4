@@ -27,6 +27,11 @@ import { fetchPublicProfile, fetchPublicSettings } from '../lib/userProfile.js';
 import { logAimRun, fetchAimComparison, fetchAimStats, AIM_STAT_FILTERS } from '../lib/aimStats.js';
 import { incrementPlayTime, formatPlayTime } from '../lib/playTime.js';
 import {
+  fetchAimRatingLeaderboard,
+  fetchAimRatingRank,
+  lookupProfileByUsername
+} from '../lib/aimRating.js';
+import {
   RATING_CATEGORIES,
   RATING_LABELS,
   RATED_GAMEMODES,
@@ -36,8 +41,9 @@ import {
   calculateAim4Ratings,
   telemetryFromAimStats,
   telemetryFromRunAnalytics,
-  buildRatingBreakdown,
-  averageRatings
+  averageRatingsAcrossModes,
+  overallAimScoreFromModes,
+  radarCategoriesForView
 } from '../lib/aim4Ratings.js';
 import { supabaseConfigured } from '../lib/supabase.js';
 import { localDecode } from '../lib/replayCodec.js';
@@ -1070,6 +1076,7 @@ export class UIOverlay {
           </div>
           <p class="readout" id="account-profile-status"></p>
           <p class="readout muted" id="account-play-time"></p>
+          <p class="readout account-aim-summary" id="account-aim-summary"></p>
         </section>
 
         <section class="account-section" id="account-profile-other" hidden>
@@ -1079,22 +1086,23 @@ export class UIOverlay {
           </p>
           <p class="readout muted" id="account-ro-elo"></p>
           <p class="readout muted" id="account-ro-play-time"></p>
+          <p class="readout account-aim-summary" id="account-ro-aim-summary"></p>
           <p class="readout" id="account-profile-status-other"></p>
-        </section>
-
-        <section class="account-section">
-          <details class="account-placements">
-            <summary>Show placements</summary>
-            <div id="account-stats" class="account-stats">
-              <p class="center lb-hint">Loading…</p>
-            </div>
-          </details>
         </section>
 
         <section class="account-section" id="account-rating-section">
           <div class="account-aim-head">
             <h4>Aim4 Rating</h4>
-            <select id="account-rating-filter" class="config-code-input account-aim-filter"></select>
+            <div class="account-rating-controls">
+              <select id="account-rating-filter" class="config-code-input account-aim-filter" aria-label="Gamemode"></select>
+              <select id="account-rating-time" class="config-code-input account-aim-filter" aria-label="Time range"></select>
+            </div>
+          </div>
+          <div class="account-rating-compare">
+            <input type="text" id="account-rating-compare" class="config-code-input" placeholder="Compare player username" spellcheck="false" maxlength="20" />
+            <button type="button" class="btn btn-sm" id="account-rating-compare-btn">Add</button>
+            <label class="field-check account-rating-global-check"><input type="checkbox" id="account-rating-global" /> Global avg</label>
+            <button type="button" class="btn btn-sm" id="account-rating-clear-compare" hidden>Clear</button>
           </div>
           <div id="account-rating" class="account-rating">
             <div id="account-rating-chart" class="account-rating-canvas"></div>
@@ -1103,22 +1111,29 @@ export class UIOverlay {
           </div>
         </section>
 
-        <section class="account-section" id="account-aim-section">
-          <div class="account-aim-head">
-            <h4>Aim analysis</h4>
+        <details class="account-section account-dropdown">
+          <summary>Show placements</summary>
+          <div id="account-stats" class="account-stats">
+            <p class="center lb-hint">Loading…</p>
+          </div>
+        </details>
+
+        <details class="account-section account-dropdown" id="account-aim-section">
+          <summary>Aim analysis</summary>
+          <div class="account-aim-head account-aim-head-nested">
             <select id="account-aim-filter" class="config-code-input account-aim-filter"></select>
           </div>
           <div id="account-aim-stats" class="account-aim-stats">
             <p class="center lb-hint">Loading…</p>
           </div>
-        </section>
+        </details>
 
-        <section class="account-section" id="account-replays-section">
-          <h4>Replays</h4>
+        <details class="account-section account-dropdown" id="account-replays-section">
+          <summary>Replays</summary>
           <div id="account-replays" class="account-replays">
             <p class="center lb-hint">Loading…</p>
           </div>
-        </section>
+        </details>
 
         <div class="menu-actions">
           <button type="button" class="btn" id="account-view-settings-btn" hidden>Settings</button>
@@ -1133,6 +1148,7 @@ export class UIOverlay {
         <div class="lb-header" id="lb-tabs">
           <span class="lb-playlist-title text-big" id="lb-playlist-title" hidden></span>
           <button type="button" class="tab active" id="lb-tab-elo" data-lb="elo">Ranked ELO</button>
+          <button type="button" class="tab" id="lb-tab-aim" data-lb="aim-rating">Aim Rating</button>
           <div class="lb-mode-select-wrap">
             <select id="lb-mode-select" class="config-code-input" aria-label="Gamemode leaderboard">
               ${Object.keys(SCENARIOS)
@@ -1397,6 +1413,9 @@ export class UIOverlay {
       } else if (t.dataset.lb === 'elo') {
         this._setLeaderboardView('elo');
         this._renderLeaderboard('elo');
+      } else if (t.dataset.lb === 'aim-rating') {
+        this._setLeaderboardView('aim-rating');
+        this._renderLeaderboard('aim-rating');
       }
     });
 
@@ -2875,6 +2894,7 @@ export class UIOverlay {
       this._aimStatsUserId = this.auth?.user?.id || null;
       this._loadAimStats();
       this._loadRating();
+      this._loadAimSummary(this.auth?.user?.id);
       this._loadAccountReplays();
       this._loadAccountPlayTime(this.auth?.user?.id);
     }
@@ -2934,6 +2954,7 @@ export class UIOverlay {
       this._aimStatsUserId = userId;
       this._loadAimStats();
       this._loadRating();
+      this._loadAimSummary(userId);
       await this._loadAccountReplays(userId);
       this._loadAccountPlayTime(userId);
     } catch (e) {
@@ -3022,109 +3043,276 @@ export class UIOverlay {
     this._bindRating();
   }
 
-  /** Populate the Aim4 Rating mode filter (all-modes average + each mode). */
+  /** Populate Aim4 Rating filters + comparison controls. */
   _bindRating() {
     this._ratingMode = this._ratingMode || 'all';
-    const sel = this.root.querySelector('#account-rating-filter');
-    if (!sel) return;
-    const opts = [`<option value="all">All modes (average)</option>`]
-      .concat(RATED_GAMEMODES.map(
-        (m) => `<option value="${m}">${this._esc(SCENARIO_META[m]?.title || m)}</option>`
-      ));
-    sel.innerHTML = opts.join('');
-    sel.value = this._ratingMode;
-    sel.addEventListener('change', () => {
-      this._ratingMode = sel.value;
+    this._ratingTimeId = this._ratingTimeId || 'all';
+    this._ratingCompareOverlays = this._ratingCompareOverlays || [];
+    this._ratingShowGlobal = !!this._ratingShowGlobal;
+
+    const modeSel = this.root.querySelector('#account-rating-filter');
+    if (modeSel) {
+      const opts = [`<option value="all">All modes (average)</option>`]
+        .concat(RATED_GAMEMODES.map(
+          (m) => `<option value="${m}">${this._esc(SCENARIO_META[m]?.title || m)}</option>`
+        ));
+      modeSel.innerHTML = opts.join('');
+      modeSel.value = this._ratingMode;
+      modeSel.addEventListener('change', () => {
+        this._ratingMode = modeSel.value;
+        this._loadRating();
+      });
+    }
+
+    const timeSel = this.root.querySelector('#account-rating-time');
+    if (timeSel) {
+      timeSel.innerHTML = AIM_STAT_FILTERS.map(
+        (f) => `<option value="${f.id}">${this._esc(f.label)}</option>`
+      ).join('');
+      timeSel.value = this._ratingTimeId;
+      timeSel.addEventListener('change', () => {
+        this._ratingTimeId = timeSel.value;
+        this._loadRating();
+        this._loadAimSummary(this._aimStatsUserId);
+      });
+    }
+
+    this.root.querySelector('#account-rating-global')?.addEventListener('change', (e) => {
+      this._ratingShowGlobal = e.target.checked;
+      this._loadRating();
+    });
+
+    this.root.querySelector('#account-rating-compare-btn')?.addEventListener('click', () => {
+      this._addRatingCompareOverlay();
+    });
+    this.root.querySelector('#account-rating-compare')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this._addRatingCompareOverlay();
+    });
+    this.root.querySelector('#account-rating-clear-compare')?.addEventListener('click', () => {
+      this._ratingCompareOverlays = [];
+      this._ratingShowGlobal = false;
+      const g = this.root.querySelector('#account-rating-global');
+      if (g) g.checked = false;
       this._loadRating();
     });
   }
 
+  _ratingFetchOpts() {
+    const f = AIM_STAT_FILTERS.find((x) => x.id === this._ratingTimeId) || AIM_STAT_FILTERS[0];
+    return { lastN: f.lastN ?? null, sinceHours: f.hours ?? null };
+  }
+
+  async _fetchModeRating(userId, mode, config) {
+    const row = await fetchAimStats({ userId, scenario: mode, ...this._ratingFetchOpts() });
+    if (!row || !Number(row.games)) return null;
+    const baselines = baselinesForGamemode(mode, config);
+    const telemetry = telemetryFromAimStats(row);
+    return {
+      mode,
+      rating: calculateAim4Ratings(telemetry, { baselines }),
+      telemetry
+    };
+  }
+
+  async _loadAimSummary(userId) {
+    const isOther = !!this._viewingAccount;
+    const el = this.root.querySelector(isOther ? '#account-ro-aim-summary' : '#account-aim-summary');
+    if (!el || !userId || !supabaseConfigured()) {
+      if (el) el.textContent = '';
+      return;
+    }
+    try {
+      await syncBaselinesFromServer();
+      const config = loadBaselines();
+      const perMode = await Promise.all(
+        RATED_GAMEMODES.map((mode) => this._fetchModeRating(userId, mode, config))
+      );
+      const usable = perMode.filter(Boolean);
+      const overall = overallAimScoreFromModes(usable);
+      const rankInfo = await fetchAimRatingRank(userId);
+      if (overall == null && !rankInfo?.overallAimRating) {
+        el.textContent = 'No Aim4 Rating yet — finish competitive runs to build your profile.';
+        return;
+      }
+      const score = overall ?? rankInfo?.overallAimRating;
+      let pct = '';
+      if (rankInfo?.rank && rankInfo?.total) {
+        const top = Math.round((1 - (rankInfo.rank - 1) / rankInfo.total) * 100);
+        pct = ` · Top ${top}% (${rankInfo.rank} / ${rankInfo.total})`;
+      }
+      el.textContent = `Overall aim rating: ${Number(score).toFixed(2)}${pct}`;
+    } catch {
+      el.textContent = '';
+    }
+  }
+
+  async _addRatingCompareOverlay() {
+    const input = this.root.querySelector('#account-rating-compare');
+    const name = input?.value?.trim();
+    if (!name || !supabaseConfigured()) return;
+    try {
+      const profile = await lookupProfileByUsername(name);
+      if (!profile) {
+        input?.classList.add('is-error');
+        return;
+      }
+      input?.classList.remove('is-error');
+      if (this._ratingCompareOverlays.some((o) => o.userId === profile.id)) return;
+      if (profile.id === this._aimStatsUserId) return;
+      this._ratingCompareOverlays.push({
+        userId: profile.id,
+        label: profile.username,
+        color: ['#a78bfa', '#3ddc6b', '#f5a623', '#46c8ff'][
+          this._ratingCompareOverlays.length % 4
+        ],
+        fill: ['rgba(167,139,250,0.15)', 'rgba(61,220,107,0.15)', 'rgba(245,166,35,0.15)', 'rgba(70,200,255,0.15)'][
+          this._ratingCompareOverlays.length % 4
+        ]
+      });
+      if (input) input.value = '';
+      this._loadRating();
+    } catch (e) {
+      console.warn('[ui] compare lookup failed', e);
+    }
+  }
+
   /**
-   * Compute the Aim4 Rating radar for the viewed account. "all" averages the
-   * per-mode ratings; a specific mode shows that mode alone. Baselines come
-   * from the editable /tools/editvalues config.
+   * Compute the Aim4 Rating radar for the viewed account (+ optional overlays).
    */
   async _loadRating() {
     const canvas = this.root.querySelector('#account-rating-chart');
     const legend = this.root.querySelector('#account-rating-legend');
+    const clearBtn = this.root.querySelector('#account-rating-clear-compare');
     if (!canvas) return;
     const userId = this._aimStatsUserId;
     if (!supabaseConfigured() || !userId) {
-      this._drawRadarChart(canvas, [], '#account-rating-tooltip');
+      this._drawRadarChart(canvas, [], '#account-rating-tooltip', 'all');
       if (legend) legend.innerHTML = '<p class="center lb-hint">Aim4 Rating is not available.</p>';
       return;
     }
     if (legend) legend.innerHTML = '<p class="center lb-hint">Loading…</p>';
-    await syncBaselinesFromServer(); // shared server config (no-op offline)
+    await syncBaselinesFromServer();
     const config = loadBaselines();
+    const mode = this._ratingMode || 'all';
+
     try {
       let rating;
-      let breakdown = null;
-      if (this._ratingMode === 'all') {
+      let categories = radarCategoriesForView(mode, null);
+
+      if (mode === 'all') {
         const perMode = await Promise.all(
-          RATED_GAMEMODES.map(async (mode) => {
-            const row = await fetchAimStats({ userId, scenario: mode });
-            if (!row || !Number(row.games)) return null;
-            return {
-              mode,
-              rating: calculateAim4Ratings(
-                telemetryFromAimStats(row),
-                { baselines: baselinesForGamemode(mode, config) }
-              )
-            };
-          })
+          RATED_GAMEMODES.map((m) => this._fetchModeRating(userId, m, config))
         );
         const usable = perMode.filter(Boolean);
-        // Overall rating gate: a rank in at least 7 gamemodes spanning at
-        // least 3 training categories before the averaged radar unlocks.
-        const rankedModes = new Set(usable.map((u) => u.mode));
-        const categoriesSpanned = TRAINING_CATEGORIES.filter(
-          (c) => c.id !== 'all' && c.id !== 'challenges' && c.modes.some((m) => rankedModes.has(m))
-        ).length;
-        if (rankedModes.size < 7 || categoriesSpanned < 3) {
-          this._drawRadarChart(canvas, [], '#account-rating-tooltip');
-          if (legend) {
-            legend.innerHTML = `<p class="center lb-hint">Overall rating locked — rank in at least 7 gamemodes across 3+ categories to unlock it. You're at ${rankedModes.size}/7 gamemode${rankedModes.size === 1 ? '' : 's'} and ${categoriesSpanned}/3 categories. Per-mode ratings are available in the filter above.</p>`;
-          }
+        if (!usable.length) {
+          this._drawRadarChart(canvas, [], '#account-rating-tooltip', mode);
+          if (legend) legend.innerHTML = '<p class="center lb-hint">No competitive runs yet.</p>';
           return;
         }
-        rating = averageRatings(usable.map((u) => u.rating));
+        rating = averageRatingsAcrossModes(usable);
+        categories = radarCategoriesForView('all', rating);
       } else {
-        const row = await fetchAimStats({ userId, scenario: this._ratingMode });
-        if (!row || !Number(row.games)) {
-          this._drawRadarChart(canvas, [], '#account-rating-tooltip');
+        const one = await this._fetchModeRating(userId, mode, config);
+        if (!one) {
+          this._drawRadarChart(canvas, [], '#account-rating-tooltip', mode);
           if (legend) legend.innerHTML = '<p class="center lb-hint">No competitive runs for this mode yet.</p>';
           return;
         }
-        const baselines = baselinesForGamemode(this._ratingMode, config);
-        const telemetry = telemetryFromAimStats(row);
-        rating = calculateAim4Ratings(telemetry, { baselines });
-        breakdown = buildRatingBreakdown(telemetry, { baselines });
+        rating = one.rating;
+        categories = radarCategoriesForView(mode, rating);
       }
-      this._drawRadarChart(canvas, [{
+
+      const series = [{
         rating,
         color: '#f52525',
         fill: 'rgba(245,37,37,0.25)',
-        label: 'Rating',
-        breakdown
-      }], '#account-rating-tooltip');
-      if (legend) legend.innerHTML = this._ratingLegendHtml(rating);
+        label: this._viewingAccount?.username || this.auth?.displayName || 'You'
+      }];
+
+      if (this._ratingShowGlobal) {
+        if (mode === 'all') {
+          const globalModes = await Promise.all(
+            RATED_GAMEMODES.map(async (m) => {
+              const row = await fetchAimStats({ scenario: m, ...this._ratingFetchOpts() });
+              if (!row?.games) return null;
+              return {
+                mode: m,
+                rating: calculateAim4Ratings(
+                  telemetryFromAimStats(row),
+                  { baselines: baselinesForGamemode(m, config) }
+                )
+              };
+            })
+          );
+          const gRating = averageRatingsAcrossModes(globalModes.filter(Boolean));
+          series.push({
+            rating: gRating,
+            color: '#9a9a9a',
+            fill: 'rgba(154,154,154,0.12)',
+            label: 'Global avg'
+          });
+        } else {
+          const row = await fetchAimStats({ scenario: mode, ...this._ratingFetchOpts() });
+          if (row?.games) {
+            series.push({
+              rating: calculateAim4Ratings(
+                telemetryFromAimStats(row),
+                { baselines: baselinesForGamemode(mode, config) }
+              ),
+              color: '#9a9a9a',
+              fill: 'rgba(154,154,154,0.12)',
+              label: 'Global avg'
+            });
+          }
+        }
+      }
+
+      for (const overlay of this._ratingCompareOverlays || []) {
+        let oRating;
+        if (mode === 'all') {
+          const perMode = await Promise.all(
+            RATED_GAMEMODES.map((m) => this._fetchModeRating(overlay.userId, m, config))
+          );
+          oRating = averageRatingsAcrossModes(perMode.filter(Boolean));
+        } else {
+          const one = await this._fetchModeRating(overlay.userId, mode, config);
+          oRating = one?.rating;
+        }
+        if (oRating) {
+          series.push({
+            rating: oRating,
+            color: overlay.color,
+            fill: overlay.fill,
+            label: overlay.label
+          });
+        }
+      }
+
+      if (clearBtn) {
+        clearBtn.hidden = !(this._ratingCompareOverlays?.length || this._ratingShowGlobal);
+      }
+
+      this._drawRadarChart(canvas, series, '#account-rating-tooltip', mode, categories);
+      if (legend) legend.innerHTML = this._ratingLegendHtml(rating, categories);
     } catch (e) {
-      this._drawRadarChart(canvas, [], '#account-rating-tooltip');
+      this._drawRadarChart(canvas, [], '#account-rating-tooltip', mode);
       if (legend) legend.innerHTML = `<p class="center lb-hint is-error">${this._esc(e.message || 'Could not load rating.')}</p>`;
     }
   }
 
-  _ratingLegendHtml(rating) {
-    const rows = RATING_CATEGORIES
+  _ratingLegendHtml(rating, categories = RATING_CATEGORIES) {
+    const rows = categories
+      .filter((k) => Number.isFinite(rating?.[k]))
       .map((k) => `<tr><td>${RATING_LABELS[k]}</td><td class="account-rank">${(rating[k] ?? 0).toFixed(2)}</td></tr>`)
       .join('');
+    if (!rows) return '<p class="center lb-hint">No rating data.</p>';
     return `<table class="account-stats-table"><thead><tr><th>Category</th><th>Rating</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
-  _ratingCompareLegendHtml(runRating, playerRating, globalRating) {
-    const fmt = (r, k) => (r ? (r[k] ?? 0).toFixed(2) : '—');
-    const rows = RATING_CATEGORIES.map(
+  _ratingCompareLegendHtml(runRating, playerRating, globalRating, mode) {
+    const cats = radarCategoriesForView(mode, runRating);
+    const fmt = (r, k) => (r && Number.isFinite(r[k]) ? r[k].toFixed(2) : '—');
+    const rows = cats.map(
       (k) =>
         `<tr><td>${RATING_LABELS[k]}</td>` +
         `<td class="account-rank run-rating-you">${fmt(runRating, k)}</td>` +
@@ -3160,18 +3348,16 @@ export class UIOverlay {
 
     section.hidden = false;
     legend.innerHTML = '<p class="center lb-hint">Loading rating…</p>';
-    this._drawRadarChart(chart, [], '#res-rating-tooltip');
+    this._drawRadarChart(chart, [], '#res-rating-tooltip', scenario);
 
     await syncBaselinesFromServer();
     const baselines = baselinesForGamemode(scenario, loadBaselines());
     const runTelemetry = telemetryFromRunAnalytics(analytics);
     const runRating = calculateAim4Ratings(runTelemetry, { baselines });
-    const runBreakdown = buildRatingBreakdown(runTelemetry, { baselines });
+    const categories = radarCategoriesForView(scenario, runRating);
 
     let playerRating = null;
-    let playerBreakdown = null;
     let globalRating = null;
-    let globalBreakdown = null;
     if (supabaseConfigured()) {
       try {
         const userId = this.auth?.user?.id || null;
@@ -3180,14 +3366,16 @@ export class UIOverlay {
           fetchAimStats({ scenario })
         ]);
         if (playerRow && Number(playerRow.games)) {
-          const t = telemetryFromAimStats(playerRow);
-          playerRating = calculateAim4Ratings(t, { baselines });
-          playerBreakdown = buildRatingBreakdown(t, { baselines });
+          playerRating = calculateAim4Ratings(
+            telemetryFromAimStats(playerRow),
+            { baselines }
+          );
         }
         if (globalRow && Number(globalRow.games)) {
-          const t = telemetryFromAimStats(globalRow);
-          globalRating = calculateAim4Ratings(t, { baselines });
-          globalBreakdown = buildRatingBreakdown(t, { baselines });
+          globalRating = calculateAim4Ratings(
+            telemetryFromAimStats(globalRow),
+            { baselines }
+          );
         }
       } catch (e) {
         console.warn('[ui] run rating comparison failed', e);
@@ -3198,16 +3386,14 @@ export class UIOverlay {
       rating: runRating,
       color: '#f52525',
       fill: 'rgba(245,37,37,0.25)',
-      label: 'This run',
-      breakdown: runBreakdown
+      label: 'This run'
     }];
     if (globalRating) {
       series.unshift({
         rating: globalRating,
         color: '#9a9a9a',
         fill: 'rgba(154,154,154,0.12)',
-        label: 'Global avg',
-        breakdown: globalBreakdown
+        label: 'Global avg'
       });
     }
     if (playerRating) {
@@ -3215,26 +3401,33 @@ export class UIOverlay {
         rating: playerRating,
         color: '#46c8ff',
         fill: 'rgba(70,200,255,0.18)',
-        label: 'Your avg',
-        breakdown: playerBreakdown
+        label: 'Your avg'
       });
     }
-    this._drawRadarChart(chart, series, '#res-rating-tooltip');
-    legend.innerHTML = this._ratingCompareLegendHtml(runRating, playerRating, globalRating);
+    this._drawRadarChart(chart, series, '#res-rating-tooltip', scenario, categories);
+    legend.innerHTML = this._ratingCompareLegendHtml(runRating, playerRating, globalRating, scenario);
   }
 
   /** Render a vector (SVG) 0–2 radar; optional multiple overlaid series. */
-  _drawRadarChart(host, series = [], tooltipSel = null) {
+  _drawRadarChart(host, series = [], tooltipSel = null, mode = 'all', categories = null) {
     if (!host) return;
     const tooltip = tooltipSel ? this.root.querySelector(tooltipSel) : null;
     if (tooltip) tooltip.hidden = true;
+
+    const cats = (categories && categories.length)
+      ? categories
+      : radarCategoriesForView(mode, series.find((s) => s?.rating)?.rating);
+    const n = cats.length;
+    if (!n) {
+      host.innerHTML = '';
+      return;
+    }
 
     const W = 440;
     const H = 360;
     const cx = W / 2;
     const cy = H / 2 + 6;
     const R = Math.min(W, H) / 2 - 46;
-    const n = RATING_CATEGORIES.length;
     const MAX = 2;
     const angleAt = (i) => -Math.PI / 2 + (i / n) * Math.PI * 2;
     const pt = (i, r) => [cx + Math.cos(angleAt(i)) * r, cy + Math.sin(angleAt(i)) * r];
@@ -3254,7 +3447,7 @@ export class UIOverlay {
       const [lx, ly] = pt(i, R + 16);
       const c = Math.cos(angleAt(i));
       const anchor = Math.abs(c) < 0.3 ? 'middle' : (c > 0 ? 'start' : 'end');
-      labels += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" fill="#9a9a9a" font-size="11" font-family="'Host Grotesk',sans-serif" text-anchor="${anchor}" dominant-baseline="middle">${RATING_LABELS[RATING_CATEGORIES[i]]}</text>`;
+      labels += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" fill="#9a9a9a" font-size="11" font-family="'Host Grotesk',sans-serif" text-anchor="${anchor}" dominant-baseline="middle">${RATING_LABELS[cats[i]]}</text>`;
     }
 
     let overlays = '';
@@ -3262,12 +3455,12 @@ export class UIOverlay {
     const dotMeta = [];
     for (const s of series) {
       if (!s?.rating) continue;
-      const pts = RATING_CATEGORIES.map((k, i) => {
+      const pts = cats.map((k, i) => {
         const val = Math.max(0, Math.min(MAX, s.rating[k] ?? 0));
         return pt(i, R * (val / MAX));
       });
       overlays += `<polygon points="${pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')}" fill="${s.fill}" stroke="${s.color}" stroke-width="2"/>`;
-      overlays += RATING_CATEGORIES.map((k, i) => {
+      overlays += cats.map((k, i) => {
         const [x, y] = pts[i];
         const id = `rd-${dotIdx++}`;
         dotMeta.push({ id, series: s, category: k });
@@ -3285,19 +3478,15 @@ export class UIOverlay {
     if (!tooltip || !dotMeta.length) return;
 
     const showTip = (meta, evt) => {
-      const entry = meta.series.breakdown?.[meta.category];
-      if (!entry) return;
-      tooltip.innerHTML =
-        `<strong>${this._esc(meta.series.label)} — ${RATING_LABELS[meta.category]}</strong>` +
-        `<div class="radar-tooltip-rating">Rating: ${entry.rating.toFixed(2)}</div>` +
-        `<div class="radar-tooltip-raw">${this._esc(entry.rawLabel)}</div>` +
-        `<div class="radar-tooltip-formula">${this._esc(entry.formula)}</div>`;
+      const val = meta.series.rating?.[meta.category];
+      if (!Number.isFinite(val)) return;
+      tooltip.innerHTML = `${RATING_LABELS[meta.category]}: ${val.toFixed(2)}`;
       tooltip.hidden = false;
       const rect = host.getBoundingClientRect();
       const tx = evt.clientX - rect.left + 12;
       const ty = evt.clientY - rect.top + 12;
-      tooltip.style.left = `${Math.min(tx, W - 220)}px`;
-      tooltip.style.top = `${Math.min(ty, H - 100)}px`;
+      tooltip.style.left = `${Math.min(tx, W - 160)}px`;
+      tooltip.style.top = `${Math.min(ty, H - 48)}px`;
     };
 
     host.querySelectorAll('.radar-hit').forEach((el) => {
@@ -5385,12 +5574,24 @@ export class UIOverlay {
 
   _setLeaderboardView(scenario) {
     const eloTab = this.root.querySelector('#lb-tab-elo');
+    const aimTab = this.root.querySelector('#lb-tab-aim');
+    const selWrap = this.root.querySelector('.lb-mode-select-wrap');
     const sel = this.root.querySelector('#lb-mode-select');
     if (scenario === 'elo') {
       eloTab?.classList.add('active');
+      aimTab?.classList.remove('active');
+      selWrap?.removeAttribute('hidden');
+      return;
+    }
+    if (scenario === 'aim-rating') {
+      eloTab?.classList.remove('active');
+      aimTab?.classList.add('active');
+      selWrap?.setAttribute('hidden', '');
       return;
     }
     eloTab?.classList.remove('active');
+    aimTab?.classList.remove('active');
+    selWrap?.removeAttribute('hidden');
     if (sel && SCENARIOS[scenario]) sel.value = scenario;
   }
 
@@ -5460,10 +5661,33 @@ export class UIOverlay {
         ? (this.auth?.isLoggedIn
           ? 'No ranked accounts yet — sign in and play matchmaking to appear here.'
           : 'No ranked accounts yet — sign in to track your ELO.')
+        : scenario === 'aim-rating'
+          ? (this.auth?.isLoggedIn
+            ? 'No aim ratings yet — finish competitive runs to appear here.'
+            : 'No aim ratings yet — sign in and play to appear here.')
         : (this.auth?.isLoggedIn
           ? 'No scores for these settings yet — finish a run to appear here.'
           : 'No scores yet — sign in and play to appear here.');
       return `<p class="center lb-hint">${hint}</p>`;
+    }
+
+    if (scenario === 'aim-rating') {
+      const rows = list
+        .map((r, i) => {
+          const hl = highlightUserId && r.user_id === highlightUserId ? ' class="hl"' : '';
+          const rating = r.overall_aim_rating != null
+            ? Number(r.overall_aim_rating).toFixed(2)
+            : '—';
+          return `<tr${hl}>
+          <td>${i + 1}</td>
+          ${this._lbPlayerCell(r)}
+          <td class="score">${rating}</td>
+        </tr>`;
+        })
+        .join('');
+      return `<table class="lb-table">
+      <thead><tr><th>#</th><th>Player</th><th>Aim Rating</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
     }
 
     if (scenario === 'elo') {
@@ -5544,6 +5768,15 @@ export class UIOverlay {
       const { list, error } = await fetchEloLeaderboardWithMeta(50);
       this._lbCache.elo = list;
       return { list, error, configKey: null };
+    }
+    if (scenario === 'aim-rating') {
+      try {
+        const list = await fetchAimRatingLeaderboard(50);
+        this._lbCache['aim-rating'] = list;
+        return { list, error: null, configKey: null };
+      } catch (e) {
+        return { list: [], error: e.message || 'Failed to load aim rating leaderboard.', configKey: null };
+      }
     }
     const key = configKeyOverride ?? this._configKeyFor(scenario);
     const cacheKey = `${scenario}:${key}`;
