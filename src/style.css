@@ -35,6 +35,10 @@
   --surface: rgba(255, 255, 255, 0.04);
   --surface-hover: rgba(255, 255, 255, 0.08);
   --surface-down: rgba(255, 255, 255, 0.02);
+  /* Opaque equivalents for tiles on blurred menu screens (rgba can fail to composite). */
+  --surface-solid: #19191c;
+  --surface-hover-solid: #232327;
+  --surface-icon-solid: #0f0f11;
   --border: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.16);
   --accent: #f52525;
@@ -161,6 +165,8 @@ body {
 .btn-play,
 .tab,
 .settings-tab,
+.mode-tile,
+.menu-icon-btn,
 input,
 select,
 label {
@@ -237,6 +243,7 @@ h2.text-big,
   flex-direction: column;
   overflow: hidden;
   text-align: center;
+  isolation: isolate;
 }
 .panel.menu-panel:not(.menu-panel-main) {
   height: var(--menu-panel-height);
@@ -845,7 +852,7 @@ a.btn {
   justify-content: center;
   gap: 10px;
   padding: 26px 16px 22px;
-  background: var(--surface);
+  background-color: var(--surface-solid);
   color: var(--text);
   font-family: var(--font-body);
   text-align: center;
@@ -855,10 +862,10 @@ a.btn {
   border-radius: var(--radius-sm);
   appearance: none;
   -webkit-appearance: none;
-  transition: background 0.15s ease, transform 0.15s ease;
+  transition: background-color 0.15s ease, transform 0.15s ease;
 }
 .mode-tile:hover {
-  background: var(--surface-hover);
+  background-color: var(--surface-hover-solid);
   transform: translateY(-2px);
 }
 .mode-tile:active {
@@ -876,12 +883,12 @@ a.btn {
   padding: 13px;
   object-fit: contain;
   display: block;
-  background: rgba(0, 0, 0, 0.35);
+  background-color: var(--surface-icon-solid);
   border: none;
   border-radius: var(--radius-sm);
 }
 .mode-tile-mm .mode-tile-icon {
-  background: rgba(0, 0, 0, 0.3);
+  background-color: rgba(0, 0, 0, 0.3);
 }
 .mode-tile-icon-mm {
   filter: brightness(0) saturate(100%) invert(36%) sepia(93%) saturate(7462%) hue-rotate(350deg) brightness(98%) contrast(97%);
@@ -910,14 +917,14 @@ a.btn {
   width: 42px;
   height: 42px;
   padding: 0;
-  background: var(--surface);
+  background-color: var(--surface-solid);
   border: none;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background-color 0.15s ease;
 }
 .menu-icon-btn:hover {
-  background: var(--surface-hover);
+  background-color: var(--surface-hover-solid);
 }
 .menu-icon-btn img {
   display: block;
