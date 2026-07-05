@@ -1056,7 +1056,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     <div class="screen training-categories" data-screen="training-categories">
       <div class="panel wide menu-panel">
         <h2 class="text-big">Training</h2>
-        <div class="menu-panel-body menu-panel-scroll">
+        <div class="menu-panel-body">
         <div class="menu-modes menu-modes-sub training-cat-tiles">
           ${TRAINING_CATEGORIES.map((cat) => {
             const modes = trainingCategoryModes(cat.id);

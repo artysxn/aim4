@@ -797,6 +797,29 @@ a.btn {
   gap: 16px;
   margin: 8px 0 16px;
 }
+.menu-panel .menu-modes {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+}
+.menu-panel-body:has(> .menu-modes) {
+  flex: 1;
+  min-height: 0;
+}
+.menu-panel-main .menu-panel-body-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.menu-panel-main .menu-modes {
+  margin-bottom: 8px;
+}
+.menu-panel-main .menu-modes .mode-tile-icon {
+  width: clamp(56px, 30%, 80px);
+  height: clamp(56px, 30%, 80px);
+  padding: clamp(10px, 12%, 14px);
+}
 .menu-group-sp {
   flex: 2 1 320px;
   min-width: 0;
@@ -906,26 +929,37 @@ a.btn {
 .training-cat-tiles {
   flex-wrap: nowrap;
   gap: 10px;
-  margin: 8px 0 0;
+  margin: 0;
+  align-items: stretch;
 }
 .training-cat-tiles .mode-tile {
   flex: 1 1 0;
   min-width: 0;
-  padding: 14px 6px 12px;
-  gap: 6px;
+  min-height: 0;
+  padding: 12px 6px;
+  gap: clamp(4px, 1.5vh, 10px);
 }
 .training-cat-tiles .mode-tile-icon {
-  width: 44px;
-  height: 44px;
-  padding: 9px;
+  width: clamp(40px, 38%, 72px);
+  height: clamp(40px, 38%, 72px);
+  padding: clamp(8px, 10%, 13px);
+  flex-shrink: 0;
 }
 .training-cat-tiles .mode-tile-title {
-  font-size: 13px;
+  font-size: clamp(12px, 1.6vh, 15px);
   line-height: 1.2;
 }
 .training-cat-tiles .mode-tile-sub {
-  font-size: 11px;
+  font-size: clamp(10px, 1.35vh, 12px);
   line-height: 1.2;
+}
+.menu-panel:not(.menu-panel-main) .menu-modes-sub:not(.training-cat-tiles) .mode-tile {
+  min-height: 0;
+  padding-block: clamp(18px, 4vh, 32px);
+}
+.menu-panel:not(.menu-panel-main) .menu-modes-sub:not(.training-cat-tiles) .mode-tile-icon {
+  width: clamp(52px, 28%, 72px);
+  height: clamp(52px, 28%, 72px);
 }
 .menu-secondary .menu-auth {
   margin: 0;
