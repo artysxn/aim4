@@ -1,6 +1,7 @@
 // ---------------------------------------------------------------------------
-// doorsShotFeedback.js — practice shot feedback for Doors (AWP):
-// red bot snapshot at fire time (x-ray on the door plane) + yellow hit marker.
+// doorsShotFeedback.js — practice shot feedback for Doors (AWP).
+// Drawn in a dedicated overlay scene (second render pass) so it always shows
+// through cover. Bot X/Y come from the shot tick; Z is pinned on the door plane.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
@@ -9,43 +10,50 @@ import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 const BODY_R = 0.35;
 const BODY_H = 1.3;
 const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
-const RENDER_ORDER = 2000;
-const HIT_RADIUS = 0.14;
-/** Player-side plane in front of door geometry — ghosts draw here for x-ray feedback. */
-const FEEDBACK_PLANE_Z = -2.85;
+const HIT_RADIUS = 0.18;
+/** Open lane between spawn platform and door volumes (player at z ≈ -20, doors ≈ -1.25). */
+const FEEDBACK_PLANE_Z = -5.5;
 
+const _worldPos = new THREE.Vector3();
 const _camPos = new THREE.Vector3();
 
-function glowMat(color) {
+function solidMat(color, opacity = 1) {
   return new THREE.MeshBasicMaterial({
     color,
-    transparent: true,
-    opacity: 1,
-    depthTest: false,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    toneMapped: false
+    transparent: opacity < 1,
+    opacity,
+    depthTest: true,
+    depthWrite: true,
+    fog: false
   });
 }
 
 function makeBotSnapshotGroup() {
   const g = new THREE.Group();
-  g.renderOrder = RENDER_ORDER;
+  g.frustumCulled = false;
 
   const body = new THREE.Mesh(
-    new THREE.CylinderGeometry(BODY_R, BODY_R, BODY_H, 16),
-    glowMat(0xff2200)
+    new THREE.CylinderGeometry(BODY_R, BODY_R, BODY_H, 18),
+    solidMat(0xff1a1a)
   );
   body.position.y = BODY_H / 2;
-  body.renderOrder = RENDER_ORDER;
+  body.frustumCulled = false;
   g.add(body);
 
+  const bodyWire = new THREE.Mesh(
+    new THREE.CylinderGeometry(BODY_R * 1.12, BODY_R * 1.12, BODY_H * 1.04, 18),
+    solidMat(0xff6666, 0.45)
+  );
+  bodyWire.position.y = BODY_H / 2;
+  bodyWire.frustumCulled = false;
+  g.add(bodyWire);
+
   const head = new THREE.Mesh(
-    new THREE.SphereGeometry(HEAD_R, 18, 14),
-    glowMat(0xff5533)
+    new THREE.SphereGeometry(HEAD_R, 20, 16),
+    solidMat(0xff4444)
   );
   head.position.y = HEAD_Y;
-  head.renderOrder = RENDER_ORDER + 1;
+  head.frustumCulled = false;
   g.add(head);
 
   return g;
@@ -53,30 +61,26 @@ function makeBotSnapshotGroup() {
 
 function makeHitMarker() {
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(HIT_RADIUS * 0.55, HIT_RADIUS, 28),
-    glowMat(0xffd400)
+    new THREE.RingGeometry(HIT_RADIUS * 0.5, HIT_RADIUS, 32),
+    solidMat(0xffd400)
   );
-  ring.renderOrder = RENDER_ORDER + 2;
+  ring.frustumCulled = false;
   return ring;
 }
 
 /** @returns {{ root: THREE.Group, items: object[] }} */
-export function createDoorsShotFeedback(scene) {
+export function createDoorsShotFeedback(overlayScene) {
   const fxRoot = new THREE.Group();
   fxRoot.name = 'doors-shot-feedback';
-  fxRoot.renderOrder = RENDER_ORDER;
-  scene.add(fxRoot);
+  overlayScene.add(fxRoot);
   return { root: fxRoot, items: [] };
 }
 
 export function spawnBotSnapshot(fx, botObject, duration) {
+  botObject.getWorldPosition(_worldPos);
   const snap = makeBotSnapshotGroup();
-  snap.position.set(
-    botObject.position.x,
-    botObject.position.y,
-    FEEDBACK_PLANE_Z
-  );
-  snap.quaternion.copy(botObject.rotation);
+  snap.position.set(_worldPos.x, _worldPos.y, FEEDBACK_PLANE_Z);
+  snap.rotation.set(0, botObject.rotation.y, 0);
   fx.root.add(snap);
   fx.items.push({ kind: 'snap', obj: snap, t: 0, duration });
 }

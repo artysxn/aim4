@@ -37,6 +37,8 @@ export class Engine {
     this.deathFxEl = document.getElementById('death-fx');
     this._running = false;
     this.fps = 0;
+    /** Optional (renderer, camera) => void — drawn after the main scene pass. */
+    this.afterRender = null;
 
     this._setupLights();
     this.applyResolution();
@@ -151,6 +153,7 @@ _setupLights() {
         this.lastError = e;
       }
       this.renderer.render(this.scene, this.camera);
+      if (this.afterRender) this.afterRender(this.renderer, this.camera);
     };
     loop();
   }

@@ -81,7 +81,15 @@ export class DoorsAwpScenario extends BaseScenario {
     this.phase = 'arming';
     this.timer = 0;
     this.bot = null;
-    this._shotFx = createDoorsShotFeedback(this.engine.scene);
+    this._overlayScene = new THREE.Scene();
+    this._shotFx = createDoorsShotFeedback(this._overlayScene);
+    this._boundOverlayRender = (renderer, camera) => {
+      const prev = renderer.autoClear;
+      renderer.autoClear = false;
+      renderer.clearDepth();
+      renderer.render(this._overlayScene, camera);
+      renderer.autoClear = prev;
+    };
 
     this._buildEnvironment();
   }
@@ -291,6 +299,7 @@ export class DoorsAwpScenario extends BaseScenario {
   }
 
   onStart() {
+    this.engine.afterRender = this._boundOverlayRender;
     this._respawnPlayer();
     this._scheduleNextRound();
   }
@@ -343,8 +352,12 @@ export class DoorsAwpScenario extends BaseScenario {
   }
 
   dispose() {
+    if (this.engine.afterRender === this._boundOverlayRender) {
+      this.engine.afterRender = null;
+    }
     disposeDoorsShotFeedback(this._shotFx);
     this._shotFx = null;
+    this._overlayScene = null;
     super.dispose();
   }
 }
