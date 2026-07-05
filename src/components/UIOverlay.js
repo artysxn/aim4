@@ -84,7 +84,7 @@ import { MultiplayerController } from '../multiplayer/MultiplayerController.js';
 import { SCORE_TARGETS, MM_SCORE_TARGET, TRACKING_DURATION } from '../multiplayer/constants.js';
 import { getMap } from '../multiplayer/maps.js';
 import { formatServerRegion } from '../multiplayer/regionLabels.js';
-import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, PLAYLISTS_ICON as PLAYLISTS_TILE_ICON, CUSTOM_GAMES_ICON, MULTIPLAYER_ICON, LEADERBOARD_ICON, ACCOUNT_ICON, LOGOUT_ICON, SETTINGS_ICON, PRECISION_ICON, ALL_MODES_ICON } from '../aim4/icons.js';
+import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, PLAYLISTS_ICON as PLAYLISTS_TILE_ICON, CUSTOM_GAMES_ICON, MULTIPLAYER_ICON, LEADERBOARD_ICON, ACCOUNT_ICON, LOGOUT_ICON, SETTINGS_ICON, PRECISION_ICON, ALL_MODES_ICON, SNIPING_ICON } from '../aim4/icons.js';
 import { ARENAS } from '../scenarios/DuelsScenario.js';
 import { duelsArenaSelectOptions } from '../scenarios/duelsArenas.js';
 import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
@@ -115,17 +115,18 @@ const SCENARIO_META = {
   box: { title: 'Box', dualPlay: true, tags: ['Accuracy', 'Control'] },
   circle: { title: 'Circle', dualPlay: true, tags: ['Accuracy', 'Control'] },
   threeshot: { title: 'Threeshot', dualPlay: true, tags: ['Speed', 'Accuracy'] },
-  cover: { title: 'Cover', dualPlay: true, tags: ['Reactions', 'Accuracy'] },
+  cover: { title: 'Cover (Rifle)', dualPlay: true, tags: ['Reactions', 'Accuracy'] },
+  coverawp: { title: 'Cover (AWP)', dualPlay: true, tags: ['Reactions', 'Accuracy'] },
   drone: { title: 'Drone', dualPlay: true, tags: ['Accuracy', 'Control'] },
   line: { title: 'Line', dualPlay: true, tags: ['Control', 'Speed'] },
   galaxy: { title: 'Galaxy', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] },
   waves: { title: 'Waves', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] },
   sequenceultra: { title: 'Sequence (Ultra)', dualPlay: false, challenge: true, tags: ['Control', 'Reactions', 'Accuracy'] },
-  sniperpeeks: { title: 'Sniper (Peeks)', dualPlay: true, tags: ['Movement', 'Speed', 'Reactions'] },
-  sniperholds: { title: 'Sniper (Holds)', dualPlay: true, tags: ['Accuracy', 'Control'] },
-  sniperquickscopes: { title: 'Sniper (Quickscopes)', dualPlay: true, tags: ['Reactions', 'Control'] },
-  sniperflicks: { title: 'Sniper (Flicks)', dualPlay: true, tags: ['Reactions', 'Accuracy'] },
-  snipertracking: { title: 'Sniper (Tracking)', dualPlay: true, tags: ['Control'] }
+  sniperholds: { title: 'Duels (AWP)', dualPlay: true, tags: ['Accuracy', 'Control'] },
+  sniperquickscopes: { title: 'Pit (AWP)', dualPlay: true, tags: ['Reactions', 'Control'] },
+  pitrifle: { title: 'Pit (Rifle)', dualPlay: true, tags: ['Reactions', 'Control'] },
+  sniperflicks: { title: 'Flicks (AWP)', dualPlay: true, tags: ['Reactions', 'Accuracy'] },
+  snipertracking: { title: 'Tracking (AWP)', dualPlay: true, tags: ['Control'] }
 };
 
 /** Scenarios with practice-only tuning (gear on training card). */
@@ -156,11 +157,12 @@ const SCENARIO_SETTING_IDS = new Set([
   'circle',
   'threeshot',
   'cover',
+  'coverawp',
   'drone',
   'line',
-  'sniperpeeks',
   'sniperholds',
   'sniperquickscopes',
+  'pitrifle',
   'sniperflicks',
   'snipertracking'
 ]);
@@ -170,11 +172,12 @@ const SCENARIO_SETTING_IDS = new Set([
 // goes missing. "all" browses every non-challenge mode; "challenges" houses
 // the hard fixed-rule variants and only ever shows those.
 const TRAINING_CATEGORIES = [
-  { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'threeshot', 'survival', 'pasu', 'arena', 'snipercrossfire', 'turn', 'sequencespeed', 'sequencetracking', 'sniperpeeks', 'sniperholds'] },
+  { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'threeshot', 'survival', 'pasu', 'arena', 'snipercrossfire', 'turn', 'sequencespeed', 'sequencetracking', 'sniperholds'] },
   { id: 'tracking', title: 'Tracking', modes: ['tracking', 'ball', 'drone', 'line', 'box', 'circle', 'bouncetracking', 'pasutracking', 'doubletracking', 'sequencetracking', 'snipertracking'] },
-  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'threeshot', 'bounce', 'spidershot', 'sequence', 'sequencespeed', 'line', 'sniperquickscopes'] },
-  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'sequencespeed', 'double', 'doubletracking', 'cover', 'sniperflicks', 'snipercrossfire'] },
-  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels', 'cover', 'sniperpeeks', 'sniperholds', 'sniperquickscopes', 'sniperflicks', 'snipertracking', 'snipercrossfire'] },
+  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'threeshot', 'bounce', 'spidershot', 'sequence', 'sequencespeed', 'line', 'sniperquickscopes', 'pitrifle'] },
+  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'sequencespeed', 'double', 'doubletracking', 'cover', 'coverawp', 'sniperflicks', 'snipercrossfire'] },
+  { id: 'sniping', title: 'Sniping', modes: ['sniperquickscopes', 'coverawp', 'sniperholds', 'sniperflicks', 'snipertracking', 'snipercrossfire'] },
+  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels', 'cover', 'coverawp', 'sniperholds', 'sniperquickscopes', 'pitrifle', 'sniperflicks', 'snipertracking', 'snipercrossfire'] },
   { id: 'challenges', title: 'Challenges', modes: ['galaxy', 'sequenceultra', 'waves'] },
   { id: 'all', title: 'All', modes: [] }
 ];
@@ -922,7 +925,7 @@ ${rf('set-3s-size', 'Dot size', 0.05, 0.5, 0.005)}
       },
       {
         id: 'cover',
-        label: 'Cover',
+        label: 'Cover (Rifle)',
         body: `
 ${rf('set-cover-rows', 'Rows', 1, 3, 1)}
           ${rf('set-cover-boxes', 'Cover per row', 1, 5, 1)}
@@ -935,6 +938,21 @@ ${rf('set-cover-rows', 'Rows', 1, 3, 1)}
           ${rf('set-cover-bothp', 'Bot body shots to kill', 1, 5, 1)}
           ${rf('set-cover-misslimit', 'Allowed misses (0 = unlimited)', 0, 50, 1)}
           <label class="field-check"><input type="checkbox" id="set-cover-spawn-hint" checked /> Highlight spawn box before peek</label>`
+      },
+      {
+        id: 'coverawp',
+        label: 'Cover (AWP)',
+        body: `
+${rf('set-cvawp-rows', 'Rows', 1, 3, 1)}
+          ${rf('set-cvawp-boxes', 'Cover per row', 1, 5, 1)}
+          ${rf('set-cvawp-dist', 'Row distance (m)', 8, 28, 1)}
+          ${rf('set-cvawp-spacing', 'Row spacing (m)', 6, 16, 1)}
+          ${rf('set-cvawp-botspeed', 'Bot movement speed', 0.25, 2, 0.05)}
+          ${rf('set-cvawp-react-min', 'Bot reaction min (ms)', 0, 500, 5)}
+          ${rf('set-cvawp-react-max', 'Bot reaction max (ms)', 25, 1000, 5)}
+          ${rf('set-cvawp-hp', 'Hits you can take', 1, 10, 1)}
+          ${rf('set-cvawp-misslimit', 'Allowed misses (0 = unlimited)', 0, 50, 1)}
+          <label class="field-check"><input type="checkbox" id="set-cvawp-spawn-hint" checked /> Highlight spawn box before peek</label>`
       },
       {
         id: 'drone',
@@ -955,23 +973,8 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
           ${rf('set-line-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
-        id: 'sniperpeeks',
-        label: 'Sniper (Peeks)',
-        body: `
-${botDifficultyField('set-snpeeks-bot-difficulty')}
-<div class="field field-plain">
-            <div class="field-top">
-              <span class="field-label">Arena</span>
-            </div>
-            <select id="set-snpeeks-arena">
-              ${duelsArenaSelectOptions(ARENAS)}
-            </select>
-          </div>
-          ${rf('set-snpeeks-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
-      },
-      {
         id: 'sniperholds',
-        label: 'Sniper (Holds)',
+        label: 'Duels (AWP)',
         body: `
 ${botDifficultyField('set-snholds-bot-difficulty')}
 <div class="field field-plain">
@@ -987,7 +990,7 @@ ${botDifficultyField('set-snholds-bot-difficulty')}
       },
       {
         id: 'sniperquickscopes',
-        label: 'Sniper (Quickscopes)',
+        label: 'Pit (AWP)',
         body: `
 ${rf('set-snqs-rings', 'Rings', 1, 3, 1)}
           ${rf('set-snqs-boxes', 'Boxes per ring', 4, 12, 1)}
@@ -1001,8 +1004,23 @@ ${rf('set-snqs-rings', 'Rings', 1, 3, 1)}
           <label class="field-check"><input type="checkbox" id="set-snqs-spawn-hint" checked /> Highlight spawn box before peek</label>`
       },
       {
+        id: 'pitrifle',
+        label: 'Pit (Rifle)',
+        body: `
+${rf('set-pit-rings', 'Rings', 1, 3, 1)}
+          ${rf('set-pit-boxes', 'Boxes per ring', 4, 12, 1)}
+          ${rf('set-pit-dist', 'First ring distance (m)', 8, 24, 1)}
+          ${rf('set-pit-spacing', 'Ring spacing (m)', 5, 14, 1)}
+          ${rf('set-pit-botspeed', 'Bot movement speed', 0.25, 2, 0.05)}
+          ${rf('set-pit-react-min', 'Bot reaction min (ms)', 0, 500, 5)}
+          ${rf('set-pit-react-max', 'Bot reaction max (ms)', 25, 1000, 5)}
+          ${rf('set-pit-hp', 'Hits you can take', 1, 10, 1)}
+          ${rf('set-pit-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}
+          <label class="field-check"><input type="checkbox" id="set-pit-spawn-hint" checked /> Highlight spawn box before peek</label>`
+      },
+      {
         id: 'sniperflicks',
-        label: 'Sniper (Flicks)',
+        label: 'Flicks (AWP)',
         body: `
 ${rf('set-snfl-radius-x', 'Spawn radius X', 0.25, 1.2, 0.05)}
           ${rf('set-snfl-radius-y', 'Spawn radius Y', 0.25, 1.3, 0.05)}
@@ -1014,7 +1032,7 @@ ${rf('set-snfl-radius-x', 'Spawn radius X', 0.25, 1.2, 0.05)}
       },
       {
         id: 'snipertracking',
-        label: 'Sniper (Tracking)',
+        label: 'Tracking (AWP)',
         body: `
 ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
           ${rf('set-sntr-speed', 'Bot speed', 0.25, 2.0, 0.05)}
@@ -1202,6 +1220,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
               tracking: SCENARIO_ICONS.tracking, // the previous Control-menu icon
               speed: SCENARIO_ICONS.gridshot,
               flicking: SCENARIO_ICONS.spidershot,
+              sniping: SNIPING_ICON,
               general: SCENARIO_ICONS.range,
               challenges: SCENARIO_ICONS.waves,
               all: ALL_MODES_ICON
@@ -2575,16 +2594,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._bindRange('set-tracking-strafe', (v, d) => { d.tracking.strafeRate = v; });
     this._bindRange('set-tracking-misslimit', (v, d) => { d.tracking.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
-    // Sniper (Peeks)
-    $('#set-snpeeks-bot-difficulty')?.addEventListener('change', (e) => {
-      draft((d) => { d.sniperpeeks.botDifficulty = e.target.value; });
-    });
-    $('#set-snpeeks-arena')?.addEventListener('change', (e) => {
-      draft((d) => { d.sniperpeeks.arena = parseInt(e.target.value, 10); });
-    });
-    this._bindRange('set-snpeeks-misslimit', (v, d) => { d.sniperpeeks.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
-
-    // Sniper (Holds)
+    // Duels (AWP)
     $('#set-snholds-bot-difficulty')?.addEventListener('change', (e) => {
       draft((d) => { d.sniperholds.botDifficulty = e.target.value; });
     });
@@ -2594,7 +2604,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._bindRange('set-snholds-ttk', (v, d) => { d.sniperholds.ttk = v; });
     this._bindRange('set-snholds-misslimit', (v, d) => { d.sniperholds.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
-    // Sniper (Quickscopes)
+    // Pit (AWP)
     this._bindRange('set-snqs-rings', (v, d) => { d.sniperquickscopes.rowCount = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-snqs-boxes', (v, d) => { d.sniperquickscopes.coverPerRow = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-snqs-dist', (v, d) => { d.sniperquickscopes.rowDistance = v; });
@@ -2608,7 +2618,21 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
       draft((d) => { d.sniperquickscopes.spawnHint = e.target.checked; });
     });
 
-    // Sniper (Flicks)
+    // Pit (Rifle)
+    this._bindRange('set-pit-rings', (v, d) => { d.pitrifle.rowCount = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-pit-boxes', (v, d) => { d.pitrifle.coverPerRow = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-pit-dist', (v, d) => { d.pitrifle.rowDistance = v; });
+    this._bindRange('set-pit-spacing', (v, d) => { d.pitrifle.rowSpacing = v; });
+    this._bindRange('set-pit-botspeed', (v, d) => { d.pitrifle.botSpeed = v; });
+    this._bindRange('set-pit-react-min', (v, d) => { d.pitrifle.reactMin = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-pit-react-max', (v, d) => { d.pitrifle.reactMax = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-pit-hp', (v, d) => { d.pitrifle.playerHp = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-pit-misslimit', (v, d) => { d.pitrifle.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-pit-spawn-hint')?.addEventListener('change', (e) => {
+      draft((d) => { d.pitrifle.spawnHint = e.target.checked; });
+    });
+
+    // Flicks (AWP)
     this._bindRange('set-snfl-radius-x', (v, d) => { d.sniperflicks.spawnScaleX = v; });
     this._bindRange('set-snfl-radius-y', (v, d) => { d.sniperflicks.spawnScaleY = v; });
     this._bindRange('set-snfl-size', (v, d) => { d.sniperflicks.botScale = v; });
@@ -2619,7 +2643,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     });
     this._bindRange('set-snfl-misslimit', (v, d) => { d.sniperflicks.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
-    // Sniper (Tracking)
+    // Tracking (AWP)
     this._bindRange('set-sntr-width', (v, d) => { d.snipertracking.botWidth = v; });
     this._bindRange('set-sntr-speed', (v, d) => { d.snipertracking.botSpeed = v; });
     this._bindRange('set-sntr-hold', (v, d) => { d.snipertracking.holdTime = v; });
@@ -2748,6 +2772,19 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._bindRange('set-cover-misslimit', (v, d) => { d.cover.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
     $('#set-cover-spawn-hint')?.addEventListener('change', (e) => {
       this.settings.mutateDraft((d) => { d.cover.spawnHint = e.target.checked; });
+    });
+
+    this._bindRange('set-cvawp-rows', (v, d) => { d.coverawp.rowCount = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cvawp-boxes', (v, d) => { d.coverawp.coverPerRow = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cvawp-dist', (v, d) => { d.coverawp.rowDistance = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cvawp-spacing', (v, d) => { d.coverawp.rowSpacing = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cvawp-botspeed', (v, d) => { d.coverawp.botSpeed = v; });
+    this._bindRange('set-cvawp-react-min', (v, d) => { d.coverawp.reactMin = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cvawp-react-max', (v, d) => { d.coverawp.reactMax = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cvawp-hp', (v, d) => { d.coverawp.playerHp = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-cvawp-misslimit', (v, d) => { d.coverawp.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-cvawp-spawn-hint')?.addEventListener('change', (e) => {
+      this.settings.mutateDraft((d) => { d.coverawp.spawnHint = e.target.checked; });
     });
 
     this._bindRange('set-drone-size', (v, d) => { d.drone.targetSize = v; });
@@ -5600,13 +5637,6 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._setRange('set-tracking-strafe', s.tracking?.strafeRate ?? 1);
     this._setRange('set-tracking-misslimit', s.tracking?.missLimit ?? 0);
 
-    const snp = s.sniperpeeks ?? {};
-    const snpd = this.root.querySelector('#set-snpeeks-bot-difficulty');
-    if (snpd) snpd.value = snp.botDifficulty ?? 'hard';
-    const snpa = this.root.querySelector('#set-snpeeks-arena');
-    if (snpa) snpa.value = String(snp.arena ?? 0);
-    this._setRange('set-snpeeks-misslimit', snp.missLimit ?? 0);
-
     const snh = s.sniperholds ?? {};
     const snhd = this.root.querySelector('#set-snholds-bot-difficulty');
     if (snhd) snhd.value = snh.botDifficulty ?? 'hard';
@@ -5627,6 +5657,19 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._setRange('set-snqs-misslimit', snq.missLimit ?? 0);
     const snqh = this.root.querySelector('#set-snqs-spawn-hint');
     if (snqh) snqh.checked = snq.spawnHint !== false;
+
+    const pit = s.pitrifle ?? {};
+    this._setRange('set-pit-rings', pit.rowCount ?? 3);
+    this._setRange('set-pit-boxes', pit.coverPerRow ?? 8);
+    this._setRange('set-pit-dist', pit.rowDistance ?? 14);
+    this._setRange('set-pit-spacing', pit.rowSpacing ?? 8);
+    this._setRange('set-pit-botspeed', pit.botSpeed ?? 1);
+    this._setRange('set-pit-react-min', pit.reactMin ?? 25);
+    this._setRange('set-pit-react-max', pit.reactMax ?? 200);
+    this._setRange('set-pit-hp', pit.playerHp ?? 4);
+    this._setRange('set-pit-misslimit', pit.missLimit ?? 0);
+    const pith = this.root.querySelector('#set-pit-spawn-hint');
+    if (pith) pith.checked = pit.spawnHint !== false;
 
     const snf = s.sniperflicks ?? {};
     this._setRange('set-snfl-radius-x', snf.spawnScaleX ?? 1);
@@ -5758,6 +5801,19 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._setRange('set-cover-bothp', cv.botHp ?? 2);
     this._setRange('set-cover-misslimit', cv.missLimit ?? 0);
     $('#set-cover-spawn-hint').checked = !!cv.spawnHint;
+
+    const cva = s.coverawp ?? {};
+    this._setRange('set-cvawp-rows', cva.rowCount ?? 3);
+    this._setRange('set-cvawp-boxes', cva.coverPerRow ?? 3);
+    this._setRange('set-cvawp-dist', cva.rowDistance ?? 16);
+    this._setRange('set-cvawp-spacing', cva.rowSpacing ?? 10);
+    this._setRange('set-cvawp-botspeed', cva.botSpeed ?? 1);
+    this._setRange('set-cvawp-react-min', cva.reactMin ?? 25);
+    this._setRange('set-cvawp-react-max', cva.reactMax ?? 200);
+    this._setRange('set-cvawp-hp', cva.playerHp ?? 4);
+    this._setRange('set-cvawp-misslimit', cva.missLimit ?? 0);
+    const cvah = this.root.querySelector('#set-cvawp-spawn-hint');
+    if (cvah) cvah.checked = cva.spawnHint !== false;
 
     const dr = s.drone ?? {};
     this._setRange('set-drone-size', dr.targetSize ?? 0.5);

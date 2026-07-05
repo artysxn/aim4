@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// SniperQuickscopesScenario.js  ("Sniper (Quickscopes)")
+// SniperQuickscopesScenario.js  ("Pit (AWP)")
 //
 // Cover, bent into a circle: you stand in a circular pit and the three cover
 // rows become three concentric RINGS of boxes around you — each ring further
@@ -41,6 +41,7 @@ export class SniperQuickscopesScenario extends CoverScenario {
   constructor(opts) {
     super(opts);
     this.weaponId = 'sniper';
+    this.postKillSpawnExtra = 0.7;
   }
 
   get name() {
@@ -167,7 +168,7 @@ export class SniperQuickscopesScenario extends CoverScenario {
   }
 
   /** Spawn boxes are picked from those in the player's current line of sight. */
-  _scheduleNextBot(delay = randRange(0.25, 0.75)) {
+  _scheduleNextBot(delay = this._nextBotDelay()) {
     this._nextBotIn = delay;
     this._nextSpawn = {
       spot: this._pickSpotInView(),

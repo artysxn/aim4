@@ -399,19 +399,38 @@ export const DEFAULTS = {
     travelSpeed: 180, // u/s — horizontal travel along the 180° field
     missLimit: 0
   },
-  sniperpeeks: {
-    arena: 0, // 0 = random each run, 1..N = fixed arena
-    botDifficulty: 'hard',
-    ttk: 0.5,
-    botHp: 1, // the sniper one-shots the bot
-    missLimit: 0
-  },
   sniperholds: {
     arena: 0,
     botDifficulty: 'hard',
     ttk: 0.5,
     botHp: 1,
     missLimit: 0
+  },
+  pitrifle: {
+    rowCount: 3,
+    coverPerRow: 8,
+    rowDistance: 14,
+    rowSpacing: 8,
+    botSpeed: 1.0,
+    reactMin: 25,
+    reactMax: 200,
+    playerHp: 4,
+    botHp: 1,
+    missLimit: 0,
+    spawnHint: true
+  },
+  coverawp: {
+    rowCount: 3,
+    coverPerRow: 3,
+    rowDistance: 16,
+    rowSpacing: 10,
+    botSpeed: 1.0,
+    reactMin: 25,
+    reactMax: 200,
+    playerHp: 4,
+    botHp: 1,
+    missLimit: 0,
+    spawnHint: true
   },
   sniperquickscopes: {
     rowCount: 3, // rings around the pit
@@ -460,7 +479,7 @@ export const DURATION_MODES = [
   'survival', 'arena', 'snipercrossfire', 'cover', 'duels', 'range', 'tracking', 'deathmatch',
   'sequence', 'sequencespeed', 'sequencetracking', 'double', 'doubletracking', 'ball', 'drone', 'line', 'bouncetracking', 'pasutracking', 'turn',
   'box', 'circle',
-  'sniperpeeks', 'sniperholds', 'sniperquickscopes', 'sniperflicks', 'snipertracking'
+  'sniperholds', 'sniperquickscopes', 'pitrifle', 'coverawp', 'sniperflicks', 'snipertracking'
 ];
 
 /** Resolve a usable duration ({ type, value }) from a scenario settings blob. */

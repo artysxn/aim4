@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// SniperTrackingScenario.js  ("Sniper (Tracking)")
+// SniperTrackingScenario.js  ("Tracking (AWP)")
 //
 // Strafes-style tracking, but through the sniper scope. You spawn scoped in
 // (zoom 1) and may move. One bot strafes ADAD in front of you with improved

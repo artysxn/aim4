@@ -261,14 +261,6 @@ export const COMPETITIVE_PRESETS = {
     targetSize: 0.35,
     travelSpeed: 180
   },
-  sniperpeeks: {
-    runDuration: 60,
-    ttk: 0.3,
-    botHp: 1,
-    botHeadHit: 0.08,
-    botBodyHit: 0.40,
-    botHitRamp: 0.01
-  },
   sniperholds: {
     runDuration: 60,
     ttk: 0.3,
@@ -276,6 +268,32 @@ export const COMPETITIVE_PRESETS = {
     botHeadHit: 0.08,
     botBodyHit: 0.40,
     botHitRamp: 0.01
+  },
+  pitrifle: {
+    runDuration: 60,
+    rowCount: 3,
+    coverPerRow: 8,
+    rowDistance: 14,
+    rowSpacing: 8,
+    botSpeed: 1.0,
+    reactMin: 25,
+    reactMax: 200,
+    playerHp: 4,
+    botHp: 1,
+    spawnHint: true
+  },
+  coverawp: {
+    runDuration: 60,
+    rowCount: 3,
+    coverPerRow: 3,
+    rowDistance: 16,
+    rowSpacing: 10,
+    botSpeed: 1.0,
+    reactMin: 25,
+    reactMax: 200,
+    playerHp: 4,
+    botHp: 1,
+    spawnHint: true
   },
   sniperquickscopes: {
     runDuration: 60,

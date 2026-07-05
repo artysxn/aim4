@@ -32,9 +32,10 @@ export const RANKED_SCENARIOS = new Set([
   'turn',
   'box',
   'circle',
-  'sniperpeeks',
   'sniperholds',
   'sniperquickscopes',
+  'pitrifle',
+  'coverawp',
   'sniperflicks',
   'snipertracking'
 ]);
@@ -64,9 +65,10 @@ export const KILL_LEADERBOARD_SCENARIOS = new Set([
   'turn',
   'box',
   'circle',
-  'sniperpeeks',
   'sniperholds',
   'sniperquickscopes',
+  'pitrifle',
+  'coverawp',
   'sniperflicks',
   'snipertracking'
 ]);

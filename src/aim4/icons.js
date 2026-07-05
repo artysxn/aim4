@@ -21,7 +21,6 @@ import threeshot   from '../icons/mode_threeshot.svg?url';
 import cover       from '../icons/mode_cover.svg?url';
 import drone       from '../icons/mode_drone.svg?url';
 import line        from '../icons/mode_line.svg?url';
-import sniperpeeks from '../icons/mode_sniperpeeks.svg?url';
 import sniperholds from '../icons/mode_sniperholds.svg?url';
 import sniperquickscopes from '../icons/mode_sniperquickscopes.svg?url';
 import sniperflicks from '../icons/mode_sniperflicks.svg?url';
@@ -71,9 +70,10 @@ export const SCENARIO_ICONS = {
   galaxy: stars,          // Galaxy challenge uses the Stars icon (by design)
   waves,
   sequenceultra: sequence,
-  sniperpeeks,
   sniperholds,
   sniperquickscopes,
+  pitrifle: sniperquickscopes,
+  coverawp: cover,
   sniperflicks,
   snipertracking: sniperflicks // no dedicated icon — shares the Flicks scope glyph
 };
@@ -89,3 +89,4 @@ export const LOGOUT_ICON        = logout;
 export const SETTINGS_ICON      = settings;
 export const PRECISION_ICON     = precision;
 export const ALL_MODES_ICON     = all;
+export const SNIPING_ICON       = sniperholds;

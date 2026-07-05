@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// CoverScenario.js  ("Cover")
+// CoverScenario.js  ("Cover (Rifle)")
 //
 // Rifle fight against peeking bots on tiered rows. Three rows of cover boxes
 // stand in front of you — each row further back and 200 u (≈5.1 m) higher than
@@ -88,6 +88,7 @@ export class CoverScenario extends BaseScenario {
     // Body shots to drop a bot (a headshot is always instant).
     this.botHp = Math.max(1, Math.round(preset?.botHp ?? this.config.botHp ?? c.botHp));
     this.spawnHint = preset?.spawnHint ?? this.config.spawnHint ?? c.spawnHint ?? true;
+    this.postKillSpawnExtra = preset?.postKillSpawnExtra ?? this.config.postKillSpawnExtra ?? c.postKillSpawnExtra ?? 0;
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 60)
       : this.settings.data.runDuration;
@@ -247,7 +248,7 @@ export class CoverScenario extends BaseScenario {
   }
 
   _nextBotDelay() {
-    return randRange(NEXT_BOT_DELAY_MIN, NEXT_BOT_DELAY_MAX);
+    return randRange(NEXT_BOT_DELAY_MIN, NEXT_BOT_DELAY_MAX) + (this.postKillSpawnExtra ?? 0);
   }
 
   _spawnBot() {

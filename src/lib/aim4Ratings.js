@@ -40,7 +40,7 @@ export const RATING_LABELS = {
 // Duels, Range, and Deathmatch are excluded — no radar or overall rating.
 export const RATED_GAMEMODES = [
   'gridshot', 'stars', 'threeshot', 'bounce', 'microflicks', 'pasu', 'spidershot',
-  'survival', 'arena', 'snipercrossfire', 'cover', 'tracking',
+  'survival', 'arena', 'snipercrossfire', 'cover', 'coverawp', 'tracking',
   'sequence', 'sequencespeed', 'sequencetracking', 'double', 'doubletracking', 'ball', 'drone', 'line', 'bouncetracking', 'pasutracking', 'turn',
   'box', 'circle'
 ];

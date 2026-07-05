@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// SniperFlicksScenario.js  ("Sniper (Flicks)")
+// SniperFlicksScenario.js  ("Flicks (AWP)")
 //
 // Pure scoped flicking: you spawn already scoped in (zoom 1) with the
 // crosshair dead-centre on a distant canvas. One bot floats on the canvas,
