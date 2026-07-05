@@ -6,15 +6,15 @@
 //   1. ready    — a circle spawns in a gap; hold crosshair on it 0.5 s to arm.
 //   2. arming   — after a random 0.33–2.0 s delay, a bot breaks from either
 //                 pillar of that gap.
-//   3. moving   — the bot crosses the gap at 230 u/s (70% straight cross,
-//                 30% peek on the Clicks variant).
+//   3. moving   — the bot crosses the gap at 250 u/s (70% straight cross,
+//                 30% peek-jiggle on the Clicks variant).
 //   4. cooldown — brief pause after a kill / escape, then a new circle spawns.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
-import { randRange, randInt, lerp, degToRad } from '../utils/MathUtils.js';
+import { randRange, randInt, degToRad } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { UNIT } from '../utils/SourceMovement.js';
@@ -31,16 +31,19 @@ const COL_H = 2.8;
 const CIRCLE_R = 0.45;
 
 const ARC_SPAN = degToRad(80);
-const PEEK_OUT_DUR = 0.255;
-const PEEK_HOLD = 0.525; // s — fixed peek hold before crossing (Clicks variant)
 const MIN_DELAY = 0.33;
 const MAX_DELAY = 2.0;
 const PEEK_CHANCE = 0.3;
 const ARM_HOLD_TIME = 0.5; // s crosshair hold on the red circle to arm
-const CROSS_SPEED = 230 * UNIT; // fixed bot cross speed
+const CROSS_SPEED = 250 * UNIT; // fixed bot cross / peek-jiggle speed
+const PLAYER_CIRCLE_R = 1.5; // m — small movement zone at the centre
 
 const _raycaster = new THREE.Raycaster();
 const _center = new THREE.Vector2(0, 0);
+const _losRay = new THREE.Raycaster();
+const _botPos = new THREE.Vector3();
+const _eyePos = new THREE.Vector3();
+const _losDir = new THREE.Vector3();
 
 export class ArenaScenario extends BaseScenario {
   constructor(opts) {
@@ -65,11 +68,11 @@ export class ArenaScenario extends BaseScenario {
 
     this.phase = 'ready';
     this.timer = 0;
-    this.moveT = 0;
     this.gap = 0;
     this.spawnCol = 0;
     this.crossSign = 1;
-    this.crossDur = 1;
+    this.botOff = 0;
+    this.peekSub = 'out'; // peek plan: out until LOS, then cross
     this.botR = this.ringR + 1;
     this.plan = 'cross';
     this.circle = null;
@@ -168,9 +171,44 @@ export class ArenaScenario extends BaseScenario {
   }
 
   _setBotOffset(off) {
+    this.botOff = off;
     const ang = this.colAngle[this.spawnCol] + off;
     this.bot.object.position.set(this.botR * Math.sin(ang), 0, -this.botR * Math.cos(ang));
     this.bot.object.lookAt(0, 0, 0);
+  }
+
+  /** True when the bot's head has a clear line of sight to the player's eye. */
+  _botSeesPlayer() {
+    const b = this.bot;
+    if (!b || b.state === 'dying') return false;
+    const s = this.enemyScale;
+    const ang = this.colAngle[this.spawnCol] + this.botOff;
+    _botPos.set(
+      this.botR * Math.sin(ang),
+      BODY_H * s + HEAD_R * s,
+      -this.botR * Math.cos(ang)
+    );
+    this.camera.getWorldPosition(_eyePos);
+    const dist = _botPos.distanceTo(_eyePos);
+    if (dist < 1e-4) return true;
+    _losDir.copy(_eyePos).sub(_botPos).multiplyScalar(1 / dist);
+    _losRay.set(_botPos, _losDir);
+    _losRay.far = dist;
+    const hits = _losRay.intersectObjects(this.columns, false);
+    return hits.length === 0 || hits[0].distance >= dist - 0.05;
+  }
+
+  _stepBotOff(target, dt) {
+    const angVel = CROSS_SPEED / this.botR;
+    const delta = target - this.botOff;
+    if (Math.abs(delta) < 1e-6) return true;
+    const step = Math.sign(delta) * angVel * dt;
+    if (Math.abs(step) >= Math.abs(delta)) {
+      this.botOff = target;
+      return true;
+    }
+    this.botOff += step;
+    return false;
   }
 
   _hoveredCircle() {
@@ -199,6 +237,11 @@ export class ArenaScenario extends BaseScenario {
   }
 
   onStart() {
+    this.engine.player.spawn({
+      pos: [0, 0, 0],
+      yaw: 0,
+      bounds: { circleRadius: PLAYER_CIRCLE_R }
+    });
     this._spawnCircle();
   }
 
@@ -225,9 +268,9 @@ export class ArenaScenario extends BaseScenario {
     this.spawnCol = Math.random() < 0.5 ? this.gap : this.gap + 1;
     this.crossSign = this.spawnCol === this.gap ? 1 : -1;
     this.botR = this.ringR + randRange(this.botDistMin, this.botDistMax);
-    this.crossDur = (this.botR * this.step) / CROSS_SPEED;
     this.plan = this._allowPeek() && Math.random() < PEEK_CHANCE ? 'peek' : 'cross';
-    this.moveT = 0;
+    this.botOff = 0;
+    this.peekSub = 'out';
     this.bot = this._buildBot();
     this.addTarget(this.bot);
     this._setBotOffset(0);
@@ -235,33 +278,27 @@ export class ArenaScenario extends BaseScenario {
 
   _startMove() {
     this.phase = 'moving';
-    this.moveT = 0;
+    this.botOff = 0;
+    this.peekSub = 'out';
   }
 
   _advanceBot(dt) {
-    this.moveT += dt;
     const targetOff = this.crossSign * this.step;
-    let off;
     let done = false;
 
     if (this.plan === 'cross') {
-      const t = this.moveT / this.crossDur;
-      off = lerp(0, targetOff, Math.min(1, t));
-      if (t >= 1) done = true;
+      done = this._stepBotOff(targetOff, dt);
     } else {
       const peekOff = -this.crossSign * this.halfStep;
-      if (this.moveT < PEEK_OUT_DUR) {
-        off = lerp(0, peekOff, this.moveT / PEEK_OUT_DUR);
-      } else if (this.moveT < PEEK_OUT_DUR + PEEK_HOLD) {
-        off = peekOff;
+      if (this.peekSub === 'out') {
+        this._stepBotOff(peekOff, dt);
+        if (this._botSeesPlayer()) this.peekSub = 'cross';
       } else {
-        const ct = (this.moveT - PEEK_OUT_DUR - PEEK_HOLD) / this.crossDur;
-        off = lerp(peekOff, targetOff, Math.min(1, ct));
-        if (ct >= 1) done = true;
+        done = this._stepBotOff(targetOff, dt);
       }
     }
 
-    this._setBotOffset(off);
+    this._setBotOffset(this.botOff);
     if (done) this._botEscaped();
   }
 

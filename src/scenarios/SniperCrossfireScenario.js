@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
-// SniperCrossfireScenario.js  ("Crossfire (Sniping)")
+// SniperCrossfireScenario.js  ("Crossfire (AWP)")
 //
 // Crossfire with the AWP: hold the red circle to arm, bots always cross (no
-// peek), spawn from either pillar at 230 u/s, one-shot kills in transit.
+// peek), spawn from either pillar at 250 u/s, one-shot kills in transit.
 // ---------------------------------------------------------------------------
 
 import { ArenaScenario } from './ArenaScenario.js';

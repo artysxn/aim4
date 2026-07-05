@@ -75,7 +75,8 @@ export const SCENARIO_ICONS = {
   pitrifle: sniperquickscopes,
   coverawp: cover,
   sniperflicks,
-  snipertracking: sniperflicks // no dedicated icon — shares the Flicks scope glyph
+  snipertracking: sniperflicks, // no dedicated icon — shares the Flicks scope glyph
+  doorsawp: cover
 };
 
 export const MATCHMAKING_ICON   = matchmaking;

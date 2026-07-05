@@ -51,7 +51,7 @@ export const COMPETITIVE_PRESETS = {
     botDistMax: 1.0,
     columns: 5,
     columnRadius: 0.75,
-    ringRadius: 13.5,
+    ringRadius: 11,
     infiniteAmmo: true,
     competitiveMissPenalty: true
   },
@@ -61,7 +61,7 @@ export const COMPETITIVE_PRESETS = {
     botDistMax: 1.0,
     columns: 5,
     columnRadius: 0.75,
-    ringRadius: 13.5,
+    ringRadius: 11,
     infiniteAmmo: true,
     competitiveMissPenalty: true
   },
@@ -326,6 +326,10 @@ export const COMPETITIVE_PRESETS = {
     respawnDelay: 1.0,
     minDistance: 10,
     maxDistance: 16
+  },
+  doorsawp: {
+    runDuration: 60,
+    botSpeed: 1.0
   }
 };
 

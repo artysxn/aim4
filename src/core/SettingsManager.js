@@ -178,7 +178,7 @@ export const DEFAULTS = {
   arena: {
     columns: 7, // number of columns spread across the 80° arc
     columnRadius: 0.55, // metres, cylinder half-width of each cover column
-    ringRadius: 9, // metres from player to column arc
+    ringRadius: 7, // metres from player to column arc
     botDistMin: 0.5, // m beyond ringRadius — min bot spawn distance from pillar
     botDistMax: 1.5, // m beyond ringRadius — max bot spawn distance from pillar
     enemyScale: 1.0, // uniform scale applied to bot body/head dimensions
@@ -187,7 +187,7 @@ export const DEFAULTS = {
   snipercrossfire: {
     columns: 7,
     columnRadius: 0.55,
-    ringRadius: 9,
+    ringRadius: 7,
     botDistMin: 0.5,
     botDistMax: 1.5,
     enemyScale: 1.0,
@@ -219,6 +219,7 @@ export const DEFAULTS = {
     arc: 180, // degrees the bots are spread across: 90 | 180 | 360
     enemyCount: 5, // bots kept alive at once
     radius: 12, // metres from player centre to the bot ring
+    weapon: 'rifle', // rifle | sniper (AWP)
     botStrafe: true, // false = bots stand still on the arc
     botCrouchTap: true, // false = bots stay standing
     infiniteAmmo: true,
@@ -463,6 +464,10 @@ export const DEFAULTS = {
     minDistance: 10, // m — random-ish spawn distance range
     maxDistance: 16,
     missLimit: 0
+  },
+  doorsawp: {
+    botSpeed: 1.0, // cross-speed multiplier
+    missLimit: 0
   }
 };
 
@@ -479,7 +484,7 @@ export const DURATION_MODES = [
   'survival', 'arena', 'snipercrossfire', 'cover', 'duels', 'range', 'tracking', 'deathmatch',
   'sequence', 'sequencespeed', 'sequencetracking', 'double', 'doubletracking', 'ball', 'drone', 'line', 'bouncetracking', 'pasutracking', 'turn',
   'box', 'circle',
-  'sniperholds', 'sniperquickscopes', 'pitrifle', 'coverawp', 'sniperflicks', 'snipertracking'
+  'sniperholds', 'sniperquickscopes', 'pitrifle', 'coverawp', 'sniperflicks', 'snipertracking', 'doorsawp'
 ];
 
 /** Resolve a usable duration ({ type, value }) from a scenario settings blob. */

@@ -46,6 +46,8 @@ export class RangeScenario extends BaseScenario {
     super(opts);
     const preset = this.competitive ? competitivePresetFor('range') : null;
     const r = this.competitive ? DEFAULTS.range : this.settings.data.range;
+    const weapon = this.competitive ? 'rifle' : (this.config.weapon ?? r.weapon ?? 'rifle');
+    this._applyWeapon(weapon);
     this.arcDeg = preset?.arc ?? this.config.arc ?? r.arc;
     this.enemyCount = preset?.enemyCount ?? this.config.enemyCount ?? r.enemyCount;
     this.radius = preset?.radius ?? this.config.radius ?? r.radius;
@@ -77,13 +79,27 @@ export class RangeScenario extends BaseScenario {
     return 'range';
   }
 
+  _applyWeapon(weapon) {
+    if (weapon === 'sniper') {
+      this.weaponId = 'sniper';
+      this.weaponBloom = true;
+      this.viewmodelRecoil = true;
+      this.showViewmodel = true;
+      this.weaponTracers = true;
+      this._sniperOneShot = true;
+    } else {
+      this.weaponId = 'rifle';
+      this._sniperOneShot = false;
+    }
+  }
+
   static configKeyFor(settings, variant = 'practice') {
     if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
     const r = settings.data.range;
     const cover = r.coverEnabled
       ? `_c${r.coverCount}_d${r.coverDistance}_t${r.coverThickness}_h${r.coverHeight}`
       : '';
-    return `arc${r.arc}_n${r.enemyCount}_r${r.radius}${cover}_d${settings.data.runDuration}`;
+    return `arc${r.arc}_n${r.enemyCount}_r${r.radius}_w${r.weapon || 'rifle'}${cover}_d${settings.data.runDuration}`;
   }
   configKey() {
     return RangeScenario.configKeyFor(this.settings, this.variant);
@@ -360,9 +376,9 @@ export class RangeScenario extends BaseScenario {
     if (!bot) return;
     const zone = obj.userData.zone;
 
-    if (zone === 'head') {
+    if (zone === 'head' || this._sniperOneShot) {
       this.hits++;
-      this.headshots++;
+      if (zone === 'head') this.headshots++;
       this.kills++;
       this.score += obj.userData.points;
       beep(1000, 0.05, 'square', 0.05);

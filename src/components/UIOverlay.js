@@ -98,7 +98,7 @@ const SCENARIO_META = {
   spidershot: { title: 'Spidershot', dualPlay: true, tags: ['Speed', 'Reactions'] },
   survival: { title: 'Survival', dualPlay: true, tags: ['Speed', 'Control'] },
   arena: { title: 'Crossfire (Clicks)', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
-  snipercrossfire: { title: 'Crossfire (Sniping)', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
+  snipercrossfire: { title: 'Crossfire (AWP)', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
   duels: { title: 'Duels', dualPlay: true, tags: ['Movement', 'Reactions'] },
   range: { title: 'Range', dualPlay: true, tags: ['Movement'] },
   tracking: { title: 'Strafes', dualPlay: true, tags: ['Accuracy'] },
@@ -126,7 +126,8 @@ const SCENARIO_META = {
   sniperquickscopes: { title: 'Pit (AWP)', dualPlay: true, tags: ['Reactions', 'Control'] },
   pitrifle: { title: 'Pit (Rifle)', dualPlay: true, tags: ['Reactions', 'Control'] },
   sniperflicks: { title: 'Flicks (AWP)', dualPlay: true, tags: ['Reactions', 'Accuracy'] },
-  snipertracking: { title: 'Tracking (AWP)', dualPlay: true, tags: ['Control'] }
+  snipertracking: { title: 'Tracking (AWP)', dualPlay: true, tags: ['Control'] },
+  doorsawp: { title: 'Doors (AWP)', dualPlay: true, tags: ['Speed', 'Reactions'] }
 };
 
 /** Scenarios with practice-only tuning (gear on training card). */
@@ -164,7 +165,8 @@ const SCENARIO_SETTING_IDS = new Set([
   'sniperquickscopes',
   'pitrifle',
   'sniperflicks',
-  'snipertracking'
+  'snipertracking',
+  'doorsawp'
 ]);
 
 // Training sub-menus. A mode may appear in several categories; any registered
@@ -174,10 +176,10 @@ const SCENARIO_SETTING_IDS = new Set([
 const TRAINING_CATEGORIES = [
   { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'threeshot', 'survival', 'pasu', 'arena', 'snipercrossfire', 'turn', 'sequencespeed', 'sequencetracking', 'sniperholds'] },
   { id: 'tracking', title: 'Tracking', modes: ['tracking', 'ball', 'drone', 'line', 'box', 'circle', 'bouncetracking', 'pasutracking', 'doubletracking', 'sequencetracking', 'snipertracking'] },
-  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'threeshot', 'bounce', 'spidershot', 'sequence', 'sequencespeed', 'line', 'sniperquickscopes', 'pitrifle'] },
+  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'threeshot', 'bounce', 'spidershot', 'sequence', 'sequencespeed', 'line', 'sniperquickscopes', 'pitrifle', 'doorsawp'] },
   { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'sequencespeed', 'double', 'doubletracking', 'cover', 'coverawp', 'sniperflicks', 'snipercrossfire'] },
-  { id: 'sniping', title: 'Sniping', modes: ['sniperquickscopes', 'coverawp', 'sniperholds', 'sniperflicks', 'snipertracking', 'snipercrossfire'] },
-  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels', 'cover', 'coverawp', 'sniperholds', 'sniperquickscopes', 'pitrifle', 'sniperflicks', 'snipertracking', 'snipercrossfire'] },
+  { id: 'sniping', title: 'Sniping', modes: ['sniperquickscopes', 'coverawp', 'sniperholds', 'sniperflicks', 'snipertracking', 'snipercrossfire', 'doorsawp'] },
+  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels', 'cover', 'coverawp', 'sniperholds', 'sniperquickscopes', 'pitrifle', 'sniperflicks', 'snipertracking', 'snipercrossfire', 'doorsawp'] },
   { id: 'challenges', title: 'Challenges', modes: ['galaxy', 'sequenceultra', 'waves'] },
   { id: 'all', title: 'All', modes: [] }
 ];
@@ -693,7 +695,7 @@ ${rf('set-arena-botdist-min', 'Bot distance min (m)', 0, 5, 0.1)}
       },
       {
         id: 'snipercrossfire',
-        label: 'Crossfire (Sniping)',
+        label: 'Crossfire (AWP)',
         body: `
 ${rf('set-snxf-botdist-min', 'Bot distance min (m)', 0, 5, 0.1)}
           ${rf('set-snxf-botdist-max', 'Bot distance max (m)', 0, 5, 0.1)}
@@ -735,6 +737,15 @@ ${rf('set-dm-bots', 'Bots', 1, 6, 1)}
         label: 'Range',
         body: `
 <div class="field field-plain">
+            <div class="field-top">
+              <span class="field-label">Weapon</span>
+            </div>
+            <select id="set-range-weapon" class="config-code-input">
+              <option value="rifle">Rifle</option>
+              <option value="sniper">AWP</option>
+            </select>
+          </div>
+          <div class="field field-plain">
             <div class="field-top">
               <span class="field-label">Arc</span>
             </div>
@@ -1048,6 +1059,13 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
             </select>
           </div>
           ${rf('set-sntr-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'doorsawp',
+        label: 'Doors (AWP)',
+        body: `
+${rf('set-doors-speed', 'Bot cross speed', 0.5, 2.0, 0.05)}
+          ${rf('set-doors-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       }
     ];
   }
@@ -1244,6 +1262,9 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     <div class="screen training" data-screen="training">
       <div class="panel wide menu-panel training-panel">
         <h2 class="text-big training-heading" id="training-heading">Training</h2>
+        <div class="training-search-wrap hidden" id="training-search-wrap">
+          <input type="search" id="training-search" class="config-code-input training-search-input" placeholder="Search by name or tag…" spellcheck="false" autocomplete="off" aria-label="Search gamemodes" />
+        </div>
         <div class="menu-panel-body menu-panel-scroll training-list-wrap">
         <div class="training-list" id="training-list"></div>
         </div>
@@ -1799,13 +1820,21 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
 
     this._bindLeaderboard();
     this._trainingCategory = TRAINING_CATEGORIES[0].id;
+    this._trainingSearchQuery = '';
 
     // Category tiles open the mode list for that category.
     this.root.querySelectorAll('[data-training-cat]').forEach((tile) => {
       tile.addEventListener('click', () => {
         this._trainingCategory = tile.dataset.trainingCat;
+        if (this._trainingCategory !== 'all') this._trainingSearchQuery = '';
         this.showScreen('training');
       });
+    });
+
+    const trainingSearch = this.root.querySelector('#training-search');
+    trainingSearch?.addEventListener('input', (e) => {
+      this._trainingSearchQuery = e.target.value;
+      this._renderTrainingList();
     });
 
     // The training list re-renders per category, so its events are delegated.
@@ -1854,9 +1883,30 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     const cat = TRAINING_CATEGORIES.find((c) => c.id === this._trainingCategory) || TRAINING_CATEGORIES[0];
     const heading = this.root.querySelector('#training-heading');
     if (heading) heading.textContent = cat.title;
-    list.innerHTML = trainingCategoryModes(cat.id)
-      .map((key) => this._trainingRowHtml(key))
-      .join('');
+
+    const searchWrap = this.root.querySelector('#training-search-wrap');
+    const searchInput = this.root.querySelector('#training-search');
+    const showSearch = cat.id === 'all';
+    searchWrap?.classList.toggle('hidden', !showSearch);
+    if (searchInput) {
+      if (!showSearch) searchInput.value = '';
+      else if (searchInput.value !== this._trainingSearchQuery) searchInput.value = this._trainingSearchQuery;
+    }
+
+    const modes = trainingCategoryModes(cat.id).filter((key) => this._trainingSearchMatch(key));
+    if (modes.length === 0) {
+      list.innerHTML = '<p class="readout training-search-empty">No gamemodes match your search.</p>';
+      return;
+    }
+    list.innerHTML = modes.map((key) => this._trainingRowHtml(key)).join('');
+  }
+
+  _trainingSearchMatch(key) {
+    const q = this._trainingSearchQuery.trim().toLowerCase();
+    if (!q) return true;
+    const meta = SCENARIO_META[key] || { title: key, tags: [] };
+    if (meta.title.toLowerCase().includes(q)) return true;
+    return (meta.tags || []).some((tag) => tag.toLowerCase().includes(q));
   }
 
   _trainingRowHtml(key) {
@@ -2567,6 +2617,9 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     $('#set-range-arc').addEventListener('change', (e) => {
       draft((d) => { d.range.arc = parseInt(e.target.value, 10); });
     });
+    $('#set-range-weapon')?.addEventListener('change', (e) => {
+      draft((d) => { d.range.weapon = e.target.value; });
+    });
     this._bindRange('set-range-count', (v, d) => { d.range.enemyCount = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-range-rad', (v, d) => { d.range.radius = v; }, { parse: (v) => parseInt(v, 10) });
     $('#set-range-bot-move')?.addEventListener('change', (e) => {
@@ -2654,6 +2707,10 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
       draft((d) => { d.snipertracking.botCrouchTap = e.target.value !== 'off'; });
     });
     this._bindRange('set-sntr-misslimit', (v, d) => { d.snipertracking.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    // Doors (AWP)
+    this._bindRange('set-doors-speed', (v, d) => { d.doorsawp.botSpeed = v; });
+    this._bindRange('set-doors-misslimit', (v, d) => { d.doorsawp.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-seq-size', (v, d) => { d.sequence.targetSize = v; });
     this._bindRange('set-seq-time', (v, d) => { d.sequence.dotTime = v; }, { parse: (v) => parseInt(v, 10) });
@@ -5596,7 +5653,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._setRange('set-snxf-botdist-max', snxf.botDistMax ?? 1.5);
     this._setRange('set-snxf-col', snxf.columns ?? 7);
     this._setRange('set-snxf-colr', snxf.columnRadius ?? 0.55);
-    this._setRange('set-snxf-ring', snxf.ringRadius ?? 9);
+    this._setRange('set-snxf-ring', snxf.ringRadius ?? 7);
     this._setRange('set-snxf-enemy', snxf.enemyScale ?? 1.0);
     this._setRange('set-snxf-misslimit', snxf.missLimit ?? 0);
 
@@ -5620,6 +5677,8 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     $('#set-col-target').value = s.colors.target;
 
     $('#set-range-arc').value = String(s.range.arc);
+    const rangeWeapon = this.root.querySelector('#set-range-weapon');
+    if (rangeWeapon) rangeWeapon.value = s.range.weapon === 'sniper' ? 'sniper' : 'rifle';
     this._setRange('set-range-count', s.range.enemyCount);
     this._setRange('set-range-rad', s.range.radius);
     $('#set-range-bot-move').value = s.range.botStrafe !== false ? 'strafe' : 'static';
@@ -5691,6 +5750,10 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     const sntc = this.root.querySelector('#set-sntr-bot-crouch');
     if (sntc) sntc.value = snt.botCrouchTap !== false ? 'tap' : 'off';
     this._setRange('set-sntr-misslimit', snt.missLimit ?? 0);
+
+    const doors = s.doorsawp ?? {};
+    this._setRange('set-doors-speed', doors.botSpeed ?? 1);
+    this._setRange('set-doors-misslimit', doors.missLimit ?? 0);
 
     const sq = s.sequence ?? {};
     this._setRange('set-seq-size', sq.targetSize ?? 0.25);

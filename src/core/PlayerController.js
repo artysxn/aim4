@@ -190,19 +190,38 @@ export class PlayerController {
     // Confine to the scenario box; kill the velocity component on contact.
     const b = this.bounds;
     if (b) {
-      if (this.pos.x < b.minX) {
-        this.pos.x = b.minX;
-        if (this.vel.x < 0) this.vel.x = 0;
-      } else if (this.pos.x > b.maxX) {
-        this.pos.x = b.maxX;
-        if (this.vel.x > 0) this.vel.x = 0;
+      if (b.minX != null) {
+        if (this.pos.x < b.minX) {
+          this.pos.x = b.minX;
+          if (this.vel.x < 0) this.vel.x = 0;
+        } else if (this.pos.x > b.maxX) {
+          this.pos.x = b.maxX;
+          if (this.vel.x > 0) this.vel.x = 0;
+        }
       }
-      if (this.pos.z < b.minZ) {
-        this.pos.z = b.minZ;
-        if (this.vel.z < 0) this.vel.z = 0;
-      } else if (this.pos.z > b.maxZ) {
-        this.pos.z = b.maxZ;
-        if (this.vel.z > 0) this.vel.z = 0;
+      if (b.minZ != null) {
+        if (this.pos.z < b.minZ) {
+          this.pos.z = b.minZ;
+          if (this.vel.z < 0) this.vel.z = 0;
+        } else if (this.pos.z > b.maxZ) {
+          this.pos.z = b.maxZ;
+          if (this.vel.z > 0) this.vel.z = 0;
+        }
+      }
+      if (b.circleRadius != null) {
+        const dist = Math.hypot(this.pos.x, this.pos.z);
+        const r = b.circleRadius;
+        if (dist > r) {
+          const nx = this.pos.x / dist;
+          const nz = this.pos.z / dist;
+          this.pos.x = nx * r;
+          this.pos.z = nz * r;
+          const vn = this.vel.x * nx + this.vel.z * nz;
+          if (vn > 0) {
+            this.vel.x -= vn * nx;
+            this.vel.z -= vn * nz;
+          }
+        }
       }
     }
 

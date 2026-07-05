@@ -30,6 +30,10 @@ import { DEFAULTS } from '../core/SettingsManager.js';
 
 const PIT_HALF = 2.5; // player movement box inside the pit
 const PLATFORM_D = 4; // radial depth of each pedestal slab
+// Tangent width must cover default peek + MAX_PEEK_EXTRA strafe (CoverScenario).
+const PIT_PEEK_EXTRA = 12; // COVER_GAP (8 m) × 1.5 — same cap as flat Cover rows
+const PIT_PLATFORM_W =
+  COVER_W + 2 * (COVER_W / 2 + BODY_R + 0.55 + PIT_PEEK_EXTRA) + 2;
 const SPAWN_HINT_LEAD = 0.5; // s before the peek — the spawn box glows red
 const VIEW_PICK_DEG = 42; // spawn boxes must be within this half-angle of the view
 
@@ -102,7 +106,7 @@ export class SniperQuickscopesScenario extends CoverScenario {
         // Raised boxes stand on their own pedestal slab (wide enough for peeks).
         if (ringY > 0) {
           const slab = new THREE.Mesh(
-            new THREE.BoxGeometry(COVER_W + 5, ringY, PLATFORM_D),
+            new THREE.BoxGeometry(PIT_PLATFORM_W, ringY, PLATFORM_D),
             coverMat
           );
           slab.position.set(x, ringY / 2, z);

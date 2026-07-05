@@ -43,6 +43,7 @@ import { PitRifleScenario } from '../scenarios/PitRifleScenario.js';
 import { SniperCoverScenario } from '../scenarios/SniperCoverScenario.js';
 import { SniperFlicksScenario } from '../scenarios/SniperFlicksScenario.js';
 import { SniperTrackingScenario } from '../scenarios/SniperTrackingScenario.js';
+import { DoorsAwpScenario } from '../scenarios/DoorsAwpScenario.js';
 import { DURATION_MODES, resolveModeDuration } from './SettingsManager.js';
 import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 
@@ -84,7 +85,8 @@ export const SCENARIOS = {
   pitrifle: PitRifleScenario,
   coverawp: SniperCoverScenario,
   sniperflicks: SniperFlicksScenario,
-  snipertracking: SniperTrackingScenario
+  snipertracking: SniperTrackingScenario,
+  doorsawp: DoorsAwpScenario
 };
 
 // Scenarios launched outside the card grid (e.g. multiplayer).

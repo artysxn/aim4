@@ -18,7 +18,7 @@ import { Target } from '../components/Target.js';
 import { randRange, clamp, degToRad } from '../utils/MathUtils.js';
 import { SourceMover1D } from '../utils/SourceMovement.js';
 import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
-import { canvasCenterY } from '../utils/canvasWall.js';
+import { canvasCenterY, CANVAS_FLOOR_CLEARANCE } from '../utils/canvasWall.js';
 import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
@@ -42,6 +42,10 @@ const HIT_RESET_DELAY = 0.25;
 const MISS_RESET_DELAY = 0.75;
 const STRAFE_HALF = 1.6; // m — ping-pong range for moving bots
 const STRAFE_SPEED = 2.6; // m/s
+const SPAWN_ATTEMPTS = 48;
+const VIEW_NDC_MARGIN = 0.9;
+
+const _headPos = new THREE.Vector3();
 
 export class SniperFlicksScenario extends BaseScenario {
   constructor(opts) {
@@ -118,6 +122,43 @@ export class SniperFlicksScenario extends BaseScenario {
     this._canvasWall.position.set(0, this.centerY, -wallZ);
     markBulletDecalSurface(this._canvasWall);
     this.root.add(this._canvasWall);
+    this._wallHalfW = wallW / 2;
+    this._wallHalfH = wallH / 2;
+    this._wallZ = wallZ;
+  }
+
+  _botHeight() {
+    return (BODY_H + HEAD_R * 2 + HEAD_OFFSET) * this.botScale;
+  }
+
+  /** Bot must sit on the canvas in front of the player, above the floor, in view. */
+  _isValidBotPlacement(cx, feetY, z) {
+    if (feetY < CANVAS_FLOOR_CLEARANCE) return false;
+    if (z >= -2) return false;
+    if (z <= this._wallZ) return false;
+
+    const margin = 0.35 * this.botScale;
+    const headY = feetY + HEAD_Y * this.botScale;
+    if (Math.abs(cx) > this._wallHalfW - margin) return false;
+    if (headY > this.centerY + this._wallHalfH - margin) return false;
+
+    _headPos.set(cx, headY, z);
+    this.camera.updateMatrixWorld(true);
+    _headPos.project(this.camera);
+    if (_headPos.z > 1) return false;
+    if (Math.abs(_headPos.x) > VIEW_NDC_MARGIN || Math.abs(_headPos.y) > VIEW_NDC_MARGIN) return false;
+    return true;
+  }
+
+  _maxStrafeX(feetY, z) {
+    let lo = 0;
+    let hi = this._wallHalfW;
+    for (let i = 0; i < 12; i++) {
+      const mid = (lo + hi) * 0.5;
+      if (this._isValidBotPlacement(mid, feetY, z)) lo = mid;
+      else hi = mid;
+    }
+    return Math.max(0, lo - 0.2 * this.botScale);
   }
 
   tracerRaycastExtras() {
@@ -145,31 +186,62 @@ export class SniperFlicksScenario extends BaseScenario {
   }
 
   _spawnBot() {
-    const dist = randRange(this.minDistance, this.maxDistance);
-    const alongX = Math.random() < 0.5;
-    const sign = Math.random() < 0.5 ? -1 : 1;
+    const halfH = this._botHeight() * 0.5;
+    const minFeetY = CANVAS_FLOOR_CLEARANCE;
+    const maxFeetY = this.centerY + this._wallHalfH - halfH - 0.2 * this.botScale;
 
-    const maxX = clamp(BASE_ANG_X * this.spawnScaleX, MIN_ANG, MAX_ANG_X);
-    const maxY = clamp(BASE_ANG_Y * this.spawnScaleY, MIN_ANG, MAX_ANG_Y);
-    const ang = degToRad(alongX ? randRange(MIN_ANG, maxX) : randRange(MIN_ANG, maxY));
-    const off = Math.tan(ang) * dist * sign;
+    for (let attempt = 0; attempt < SPAWN_ATTEMPTS; attempt++) {
+      const dist = randRange(this.minDistance, this.maxDistance);
+      const alongX = Math.random() < 0.5;
+      const sign = Math.random() < 0.5 ? -1 : 1;
 
-    const botCenterOff = (BODY_H + HEAD_R * 2) * this.botScale * 0.5;
-    const cx = alongX ? off : 0;
-    const spawnY = this.centerY + (alongX ? 0 : off);
+      const maxX = clamp(BASE_ANG_X * this.spawnScaleX, MIN_ANG, MAX_ANG_X);
+      const maxY = clamp(BASE_ANG_Y * this.spawnScaleY, MIN_ANG, MAX_ANG_Y);
+      const ang = degToRad(alongX ? randRange(MIN_ANG, maxX) : randRange(MIN_ANG, maxY));
+      const off = Math.tan(ang) * dist * sign;
+
+      const cx = alongX ? off : 0;
+      let feetY = this.centerY + (alongX ? 0 : off) - halfH;
+      feetY = clamp(feetY, minFeetY, maxFeetY);
+      const z = -dist;
+
+      if (!this._isValidBotPlacement(cx, feetY, z)) continue;
+
+      const target = this._buildBot();
+      target.object.scale.setScalar(this.botScale);
+      target.object.position.set(cx, feetY, z);
+      this.addTarget(target);
+
+      const mover = new SourceMover1D();
+      mover.reset(0);
+      this.bot = {
+        target,
+        mover,
+        baseX: cx,
+        feetY,
+        z,
+        strafeHalf: Math.min(STRAFE_HALF, this._maxStrafeX(feetY, z)),
+        dir: Math.random() < 0.5 ? -1 : 1,
+        reverseTimer: randRange(0.3, 0.8)
+      };
+      return;
+    }
 
     const target = this._buildBot();
     target.object.scale.setScalar(this.botScale);
-    target.object.position.set(cx, spawnY - botCenterOff, -dist);
+    const feetY = clamp(this.centerY - halfH, minFeetY, maxFeetY);
+    target.object.position.set(0, feetY, -this.minDistance);
     this.addTarget(target);
-
     const mover = new SourceMover1D();
     mover.reset(0);
     this.bot = {
       target,
       mover,
-      baseX: cx,
-      dir: Math.random() < 0.5 ? -1 : 1,
+      baseX: 0,
+      feetY,
+      z: -this.minDistance,
+      strafeHalf: Math.min(STRAFE_HALF, this._maxStrafeX(feetY, -this.minDistance)),
+      dir: 1,
       reverseTimer: randRange(0.3, 0.8)
     };
   }
@@ -216,10 +288,17 @@ export class SniperFlicksScenario extends BaseScenario {
         b.dir = -b.dir;
         b.reverseTimer = randRange(0.3, 0.8);
       }
+      const half = b.strafeHalf ?? STRAFE_HALF;
       b.mover.step(dt, b.dir, STRAFE_SPEED);
-      if (b.mover.s <= -STRAFE_HALF) { b.mover.s = -STRAFE_HALF; b.dir = 1; }
-      else if (b.mover.s >= STRAFE_HALF) { b.mover.s = STRAFE_HALF; b.dir = -1; }
-      b.target.object.position.x = b.baseX + b.mover.s;
+      if (b.mover.s <= -half) { b.mover.s = -half; b.dir = 1; }
+      else if (b.mover.s >= half) { b.mover.s = half; b.dir = -1; }
+      const x = b.baseX + b.mover.s;
+      if (this._isValidBotPlacement(x, b.feetY, b.z)) {
+        b.target.object.position.x = x;
+      } else {
+        b.dir = -b.dir;
+        b.mover.s = clamp(b.mover.s, -half, half);
+      }
     }
   }
 

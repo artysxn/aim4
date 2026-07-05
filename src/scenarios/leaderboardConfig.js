@@ -37,7 +37,8 @@ export const RANKED_SCENARIOS = new Set([
   'pitrifle',
   'coverawp',
   'sniperflicks',
-  'snipertracking'
+  'snipertracking',
+  'doorsawp'
 ]);
 
 /** Ranked by total kills in the best timed run. */
@@ -70,7 +71,8 @@ export const KILL_LEADERBOARD_SCENARIOS = new Set([
   'pitrifle',
   'coverawp',
   'sniperflicks',
-  'snipertracking'
+  'snipertracking',
+  'doorsawp'
 ]);
 
 /** Ranked by highest score in the best timed run. */
