@@ -54,7 +54,7 @@ export class Crosshair {
   }
 
   frame(engine) {
-    if (!this.visible || !this.settings.data.crosshair.dynamicGap) {
+    if (!this.visible || !this.settings.activeSettings().crosshair.dynamicGap) {
       if (this._dynGapPx !== 0) {
         this._dynGapPx = 0;
         this.draw();
@@ -87,7 +87,7 @@ export class Crosshair {
   }
 
   hit() {
-    if (this.settings.data.crosshair.hitmarker === false) return;
+    if (this.settings.activeSettings().crosshair.hitmarker === false) return;
     this._hitFlashUntil = performance.now() + 120;
     this.draw();
     clearTimeout(this._hitTimer);
@@ -131,7 +131,7 @@ export class Crosshair {
     ctx.clearRect(0, 0, w, h);
     if (!this.visible) return;
 
-    const res = getResolutionSpec(this.settings.data);
+    const res = getResolutionSpec(this.settings.activeSettings());
     let scaleX = 1;
     let scaleY = 1;
     if (res && res.size) {
@@ -143,13 +143,13 @@ export class Crosshair {
       scaleY,
       dynGap: this._dynGapPx,
       trackProgress: this._trackProgress,
-      hitFlash: this.settings.data.crosshair.hitmarker !== false &&
+      hitFlash: this.settings.activeSettings().crosshair.hitmarker !== false &&
         performance.now() < this._hitFlashUntil
     });
   }
 
   _paint(ctx, cx, cy, { scaleX, scaleY, scale, trackProgress, hitFlash, dynGap = 0, crosshair } = {}) {
-    const xh = crosshair ?? this.settings.data.crosshair;
+    const xh = crosshair ?? this.settings.activeSettings().crosshair;
     const { color, innerGap: rawGap, length: rawLen, thickness: rawThick, dotPercentage } = xh;
     if (scale != null) {
       scaleX = scale;

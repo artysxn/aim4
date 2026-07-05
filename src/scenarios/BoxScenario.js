@@ -3,8 +3,8 @@
 //
 // Tracking drill on a floating canvas: one dot travels the canvas' rectangular
 // perimeter — right, up, left, down, repeating — at a random 100–200 u/s.
-// Hold the crosshair on the dot for a track window (0.15–0.35 s depending on
-// the dot's rolled size and speed) to arm it (it turns green), then click to kill.
+// Hold the crosshair on the dot for a track window (0.15–0.35 s — smaller or
+// faster dots need less time; larger or slower need more) to arm it (green), then click to kill.
 // A fresh dot spawns 0.5 s later at a random point on the path.
 // ---------------------------------------------------------------------------
 
@@ -168,26 +168,26 @@ export class BoxScenario extends BaseScenario {
   _rollSpeed(dotSize) {
     const v = Math.max(0, this.speedVariance);
     const base = Math.max(10, this.travelSpeed + randRange(-v, v)) * UNIT;
-    // Smaller dots travel faster along the path.
-    const sizeRatio = this.baseTargetSize / Math.max(dotSize, 1e-4);
+    // Smaller dots travel slower along the path.
+    const sizeRatio = dotSize / Math.max(this.baseTargetSize, 1e-4);
     return base * sizeRatio;
   }
 
-  /** Track time scales with size and speed: small + fast → 0.15 s, large + slow → 0.35 s. */
+  /** Track time: smaller or faster dots need less hold time; larger or slower need more. */
   _holdTimeForDot(dotSize, speed) {
     const sizeMin = this.baseTargetSize * DOT_SIZE_MIN_RATIO;
     const sizeMax = this.baseTargetSize;
     const sizeT = sizeMax > sizeMin ? (dotSize - sizeMin) / (sizeMax - sizeMin) : 1;
 
     const v = Math.max(0, this.speedVariance);
-    const ratio = this.baseTargetSize / Math.max(dotSize, 1e-4);
-    const speedMin = Math.max(10, this.travelSpeed - v) * UNIT * ratio;
-    const speedMax = Math.max(10, this.travelSpeed + v) * UNIT * ratio;
+    const sizeRatio = dotSize / Math.max(this.baseTargetSize, 1e-4);
+    const speedMin = Math.max(10, this.travelSpeed - v) * UNIT * sizeRatio;
+    const speedMax = Math.max(10, this.travelSpeed + v) * UNIT * sizeRatio;
     const speedT = speedMax - speedMin > 1e-6
       ? clamp((speed - speedMin) / (speedMax - speedMin), 0, 1)
       : 0.5;
 
-    const difficulty = 1 - (sizeT + speedT) / 2;
+    const difficulty = (speedT + (1 - sizeT)) / 2;
     return lerp(HOLD_TIME_MAX, HOLD_TIME_MIN, difficulty);
   }
 

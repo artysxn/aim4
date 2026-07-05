@@ -66,7 +66,8 @@ _setupLights() {
    * FOV stays fixed while widescreen gains horizontal coverage.
    */
   applyResolution() {
-    const res = getResolutionSpec(this.settings.data);
+    const s = this.settings.activeSettings();
+    const res = getResolutionSpec(s);
     const displayW = window.innerWidth;
     const displayH = window.innerHeight;
     let w, h, pixelRatio;
@@ -91,12 +92,12 @@ _setupLights() {
     this.displayStretch = this.displayAspect / this.renderAspect;
 
     this.camera.aspect = this.renderAspect;
-    this.camera.fov = sourceVFovFromHFov(this.settings.data.hFov);
+    this.camera.fov = sourceVFovFromHFov(s.hFov);
     this.camera.updateProjectionMatrix();
   }
 
   applyColors() {
-    const bg = this.settings.data.colors.bg;
+    const bg = this.settings.activeSettings().colors.bg;
     this.renderer.setClearColor(bg, 1);
     this.scene.fog.color.set(bg);
   }

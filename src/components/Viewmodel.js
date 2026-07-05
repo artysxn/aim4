@@ -257,7 +257,7 @@ export class Viewmodel {
    * changes where bullets go.
    */
   punch(pitchRad, yawRad = 0) {
-    if (this.settings.data.weapon?.aimpunch === false) return;
+    if (this.settings.activeSettings().weapon?.aimpunch === false) return;
     this._punchPitch += pitchRad;
     this._punchYaw += yawRad;
   }
@@ -367,7 +367,7 @@ export class Viewmodel {
   _applyTransform(motion = {}) {
     if (!this.group.visible) return;
 
-    const cfg = this.settings.data.viewmodel || {};
+    const cfg = this.settings.activeSettings().viewmodel || {};
     const cam = this.camera;
 
     cam.getWorldDirection(this._fwd).normalize();
@@ -427,7 +427,7 @@ export class Viewmodel {
     if (!this.engine.replayPlayer?.active) {
       this._applyPunch(dt);
     }
-    const cfg = this.settings.data.viewmodel || {};
+    const cfg = this.settings.activeSettings().viewmodel || {};
     if (cfg.bob !== false && motion.onGround && (motion.speedHoriz || 0) > 0.5) {
       this._bobPhase += dt * (4 + (motion.speedHoriz || 0) * 0.8);
     } else {

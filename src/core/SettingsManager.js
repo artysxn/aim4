@@ -423,7 +423,7 @@ export class SettingsManager {
     this._cloudSaveHandler = null;
     this._cloudSyncPaused = false;
     this._exploreMode = false;
-    this._replayBackup = null;
+    this._replayViewPatch = null;
     this._modeOverride = null;
   }
 
@@ -502,7 +502,9 @@ export class SettingsManager {
 
   /** Settings visible in the UI — draft while editing, otherwise persisted data. */
   activeSettings() {
-    return this.draft ?? this.data;
+    const base = this.draft ?? this.data;
+    if (!this._replayViewPatch) return base;
+    return this._deepMerge(structuredClone(base), structuredClone(this._replayViewPatch));
   }
 
   openDraft() {
@@ -546,17 +548,15 @@ export class SettingsManager {
   }
 
   get isReplayView() {
-    return !!this._replayBackup;
+    return !!this._replayViewPatch;
   }
 
-  /** Temporarily apply a recorded run's display settings while watching a replay. */
+  /** Temporarily overlay a recorded run's display settings while watching a replay. */
   beginReplayView(replaySettings) {
-    if (this._replayBackup) this.endReplayView();
-    this._replayBackup = structuredClone(this.data);
+    this.endReplayView();
     const patch = this._replaySettingsPatch(replaySettings);
-    if (Object.keys(patch).length) {
-      this.data = this._deepMerge(structuredClone(this.data), patch);
-    }
+    if (!Object.keys(patch).length) return;
+    this._replayViewPatch = patch;
     if (this.draft) this.discardDraft();
     this._emit();
   }
@@ -569,11 +569,10 @@ export class SettingsManager {
     return patch;
   }
 
-  /** Restore the viewer's settings after replay playback ends. */
+  /** Drop replay overlay and restore the viewer's normal settings. */
   endReplayView() {
-    if (!this._replayBackup) return;
-    this.data = this._replayBackup;
-    this._replayBackup = null;
+    if (!this._replayViewPatch) return;
+    this._replayViewPatch = null;
     this._emit();
   }
 
@@ -712,6 +711,7 @@ export class SettingsManager {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       throw new Error('Invalid settings data');
     }
+    this.endReplayView();
     this.data = this._deepMerge(structuredClone(DEFAULTS), payload);
     this._normalizeSensitivity(this.data);
     if (this.draft) {

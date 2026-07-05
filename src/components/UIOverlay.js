@@ -167,6 +167,27 @@ const TRAINING_CATEGORIES = [
   { id: 'all', title: 'All', modes: [] }
 ];
 
+/** Navigation screens that show the footer credit below the menu panel. */
+const MENU_CREDIT_SCREENS = new Set([
+  'menu',
+  'multiplayer',
+  'singleplayer',
+  'training-categories',
+  'training',
+  'playlists',
+  'playlist-edit',
+  'settings',
+  'scenario-settings',
+  'auth',
+  'account',
+  'leaderboard',
+  'mp',
+  'mp-lobby',
+  'mp-results',
+  'results',
+  'playlist-results'
+]);
+
 const isChallengeMode = (m) => !!SCENARIO_META[m]?.challenge;
 
 function scenarioTitle(id) {
@@ -1181,7 +1202,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
         <header class="scenario-settings-bar">
           <h2 class="text-big scenario-settings-title" id="scenario-settings-title">Mode settings</h2>
         </header>
-        <div class="scenario-settings-drawer menu-panel-body">
+        <div class="scenario-settings-drawer menu-panel-body menu-panel-scroll">
           ${scenarioSettingsSections.map((s) => scenarioSettingsPanel(s.id, s.body)).join('')}
           <div class="scenario-settings-footer">
             <div class="field field-plain">
@@ -1254,7 +1275,8 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
 
     <!-- ACCOUNT -->
     <div class="screen account" data-screen="account">
-      <div class="panel wide">
+      <div class="panel wide menu-panel account-panel">
+        <div class="menu-panel-body menu-panel-scroll">
         <section class="account-section" id="account-profile-own">
           <div class="field field-plain">
             <div class="field-top"><span class="field-label">Username</span></div>
@@ -1337,6 +1359,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
           </div>
         </details>
 
+        </div>
         <div class="menu-actions">
           <button type="button" class="btn" id="account-view-settings-btn" hidden>Settings</button>
           <button type="button" class="btn" id="account-back-btn">Back</button>
@@ -1386,8 +1409,9 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
 
     <!-- MULTIPLAYER HOME (create / join) -->
     <div class="screen mp" data-screen="mp">
-      <div class="panel wide">
+      <div class="panel wide menu-panel">
         <h2 class="text-big custom-games-title">Custom games</h2>
+        <div class="menu-panel-body menu-panel-scroll">
         <div class="field field-plain">
           <div class="field-top"><span class="field-label">Display name</span></div>
           <input type="text" id="mp-name" class="config-code-input" maxlength="24" placeholder="Your name" spellcheck="false" autocomplete="off" />
@@ -1423,6 +1447,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
           </div>
         </div>
         <p class="readout" id="mp-status"></p>
+        </div>
         <div class="menu-actions">
           <button class="btn" id="mp-back-btn">Back</button>
         </div>
@@ -1431,8 +1456,9 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
 
     <!-- MULTIPLAYER LOBBY -->
     <div class="screen mp-lobby" data-screen="mp-lobby">
-      <div class="panel wide">
+      <div class="panel wide menu-panel">
         <h2 class="text-big">Lobby <span id="mp-lobby-code" class="mp-code"></span></h2>
+        <div class="menu-panel-body menu-panel-scroll">
         <div id="mp-players" class="mp-players"></div>
         <div class="mp-invite" id="mp-invite">
           <code class="config-export-code" id="mp-invite-url"></code>
@@ -1457,6 +1483,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
           </div>
         </div>
         <p class="readout" id="mp-lobby-status"></p>
+        </div>
       </div>
     </div>
 
@@ -1474,8 +1501,9 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
 
     <!-- RESULTS -->
     <div class="screen results" data-screen="results">
-      <div class="panel wide">
+      <div class="panel wide menu-panel">
         <h2 class="text-big" id="res-title">Run Complete</h2>
+        <div class="menu-panel-body menu-panel-scroll">
         <div id="res-stats" class="res-stats"></div>
         <section id="res-infographics" class="res-infographics" hidden>
           <div class="res-info-header">
@@ -1496,6 +1524,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
           </div>
         </section>
         <div id="res-lb" class="lb-body"></div>
+        </div>
         <div class="menu-actions">
           <button class="btn primary" data-restart>Play again</button>
           <button class="btn" id="res-watch-replay" hidden>Watch replay</button>
@@ -1507,11 +1536,13 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
 
     <!-- PLAYLIST RESULTS (between modes + final combined screen) -->
     <div class="screen playlist-results" data-screen="playlist-results">
-      <div class="panel wide">
+      <div class="panel wide menu-panel">
         <h2 class="text-big" id="pl-res-title">Playlist</h2>
+        <div class="menu-panel-body menu-panel-scroll">
         <p class="readout muted" id="pl-res-progress"></p>
         <div id="pl-res-stats" class="res-stats"></div>
         <div id="pl-res-lb" class="lb-body"></div>
+        </div>
         <div class="menu-actions">
           <button type="button" class="btn primary" id="pl-res-continue">Next mode</button>
           <button type="button" class="btn" id="pl-res-again" hidden>Play again</button>
@@ -1547,6 +1578,8 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
         <button type="button" class="btn btn-sm" id="replay-exit">Exit replay</button>
       </div>
     </div>
+
+    <a href="https://x.com/artys4n" class="menu-credit" id="menu-credit" target="_blank" rel="noopener noreferrer" hidden>by @artys4n</a>
     `;
   }
 
@@ -1566,6 +1599,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     this.mpAimHint = this.root.querySelector('#mp-aim-hint');
     this.runCountdown = this.root.querySelector('#run-countdown');
     this.runCountdownNum = this.root.querySelector('#run-countdown-num');
+    this.menuCredit = this.root.querySelector('#menu-credit');
 
     this.hudTime = this.root.querySelector('#hud-time');
     this.hudScore = this.root.querySelector('#hud-score');
@@ -2960,17 +2994,17 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     }
     const rows = list.map((r, i) => {
       const hl = this.auth?.user?.id && r.user_id === this.auth.user.id ? ' class="hl"' : '';
-      const date = r.achieved_at ? new Date(r.achieved_at).toLocaleDateString() : '—';
+      const date = this._formatLbRunWhen(r.achieved_at);
       return `<tr${hl}>
         <td>${i + 1}</td>
         ${this._lbPlayerCell(r)}
         <td class="score">${Number(r.score).toLocaleString()}</td>
         <td>${Math.round((r.accuracy || 0) * 100)}%</td>
-        <td>${date}</td>
+        <td class="lb-when">${date}</td>
       </tr>`;
     }).join('');
     return `<table class="lb-table">
-      <thead><tr><th>#</th><th>Player</th><th>Score</th><th>Acc</th><th>Date</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>Score</th><th>Acc</th><th>When</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
   }
 
@@ -4253,8 +4287,8 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
       const last = slots['competitive:last'] || slots['practice:last'];
       const best = slots['competitive:best'];
       const btns = [];
-      if (last) btns.push(this._replayBtnHtml(last, 'Last run', title, { showShare: !viewingOther }));
-      if (best) btns.push(this._replayBtnHtml(best, 'Best run', title, { showShare: !viewingOther }));
+      if (last) btns.push(this._replayBtnHtml(last, 'Last run', title, { showShare: true }));
+      if (best) btns.push(this._replayBtnHtml(best, 'Best run', title, { showShare: true }));
       if (btns.length) {
         items.push(
           `<div class="account-replay-row"><span class="account-replay-name">${title}</span><span class="account-replay-btns">${btns.join('')}</span></div>`
@@ -4278,10 +4312,13 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
   }
 
   _shareMetaFromReplayRow(row) {
+    const username = row.user_id === this.auth?.user?.id
+      ? (this.auth?.displayName || 'Player')
+      : (this._viewingAccount?.username || 'Player');
     return {
       sourcePath: row.replay_file_path,
       userId: row.user_id,
-      username: this.auth?.displayName,
+      username,
       shareMeta: {
         scenario: row.scenario,
         config_key: row.config_key,
@@ -4315,7 +4352,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
       title: title || 'Replay',
       returnTo: 'account',
       fromOtherPlayer: !!this._viewingAccount,
-      shareCtx: row && !this._viewingAccount ? this._shareMetaFromReplayRow(row) : null
+      shareCtx: row ? this._shareMetaFromReplayRow(row) : null
     });
   }
 
@@ -5500,6 +5537,9 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
       const uid = this._viewingAccount?.userId ?? this.auth?.user?.id;
       if (uid) this._loadAccountReplays(uid);
     }
+    if (this.menuCredit) {
+      this.menuCredit.hidden = !name || !MENU_CREDIT_SCREENS.has(name);
+    }
   }
 
   _isFullscreen() {
@@ -6096,8 +6136,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
   _updateReplayShareButton() {
     const btn = this.root.querySelector('#replay-share-btn');
     if (!btn) return;
-    const show = this.replaying && !this._replayFromOtherPlayer;
-    btn.hidden = !show;
+    btn.hidden = !this.replaying;
     btn.disabled = !this._replayShareCtx?.sourcePath;
   }
 
@@ -6125,17 +6164,13 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
       this._setReplayShareStatus('Replays are not configured.', true);
       return;
     }
-    if (ctx.userId && ctx.userId !== this.auth.user.id) {
-      this._setReplayShareStatus('Only the player can share this replay.', true);
-      return;
-    }
     if (triggerBtn) triggerBtn.disabled = true;
     this._setReplayShareStatus('Creating link…');
     try {
       await this.auth.ensureProfileReady();
       const { url } = await createSharedReplay({
         userId: this.auth.user.id,
-        username: this.auth.displayName,
+        username: ctx.username || this.auth.displayName,
         sourcePath: ctx.sourcePath,
         shareMeta: ctx.shareMeta
       });
@@ -6210,7 +6245,6 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     this.state = 'replay';
     this.engine.audio?.resume();
     this.replayOverlay?.classList.add('active');
-    const baselineVFov = this.engine.camera.fov;
     if (fromOtherPlayer && this.settings.data.copyConfigOnReplay) {
       const rs = this.settings.mergeReplaySettings(decoded.settings, sharedSettings);
       if (Object.keys(rs).length) {
@@ -6218,13 +6252,12 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
         this.crosshair.draw();
       }
     }
+    const baselineVFov = this.engine.camera.fov;
     this.crosshair.setVisible(true);
     this.replayPlayer.load(decoded, { baselineVFov });
     this.replayPlayer.play();
     this._applyAnalyticsVisibility();
-    if (fromOtherPlayer) {
-      this._setReplayShareContext(null);
-    } else if (shareCtx?.sourcePath) {
+    if (shareCtx?.sourcePath) {
       this._setReplayShareContext(shareCtx);
     } else {
       this._updateReplayShareButton();
@@ -6243,7 +6276,12 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     const pop = this.root.querySelector('#replay-settings-pop');
     if (pop) pop.hidden = true;
     this._setReplayShareContext(null);
-    if (this.settings.isReplayView) this.settings.endReplayView();
+    if (this.settings.isReplayView) {
+      this.settings.endReplayView();
+      this.engine.applyResolution();
+      this.engine.applyColors();
+      this.crosshair.draw();
+    }
     this.crosshair.setVisible(false);
     if (this._hiddenSceneRoot) {
       this._hiddenSceneRoot.visible = true;
@@ -6449,6 +6487,24 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     return `${seconds.toFixed(1)}s`;
   }
 
+  /** Leaderboard run timestamp: `12.34 CEST, 29.06.2026` in the viewer's local timezone. */
+  _formatLbRunWhen(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    const parts = new Intl.DateTimeFormat(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour12: false,
+      timeZoneName: 'short'
+    }).formatToParts(d);
+    const get = (type) => parts.find((p) => p.type === type)?.value ?? '';
+    return `${get('hour')}.${get('minute')} ${get('timeZoneName')}, ${get('day')}.${get('month')}.${get('year')}`;
+  }
+
   _leaderboardRowsHtml(list, scenario, highlightUserId = null, fetchError = null) {
     if (!supabaseConfigured()) {
       return `<p class="center lb-hint">Account leaderboards are not configured.</p>`;
@@ -6524,19 +6580,19 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
         .map((r, i) => {
           const hl = highlightUserId && r.user_id === highlightUserId ? ' class="hl"' : '';
           const kills = r.kills ?? r.score ?? 0;
-          const date = r.achieved_at ? new Date(r.achieved_at).toLocaleDateString() : '—';
+          const date = this._formatLbRunWhen(r.achieved_at);
           return `<tr${hl}>
           <td>${i + 1}</td>
           ${this._lbPlayerCell(r)}
           <td class="score">${Number(kills).toLocaleString()}</td>
           <td>${Math.round((r.accuracy || 0) * 100)}%</td>
           <td>${this._formatTimePlayed(r.time_played)}</td>
-          <td>${date}</td>
+          <td class="lb-when">${date}</td>
         </tr>`;
         })
         .join('');
       return `<table class="lb-table">
-      <thead><tr><th>#</th><th>Player</th><th>Kills</th><th>Acc</th><th>Time</th><th>Date</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>Kills</th><th>Acc</th><th>Time</th><th>When</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
     }
 
@@ -6546,7 +6602,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
         const crit = scenario !== 'survival'
           ? `<td>${Math.round((r.crit_ratio || 0) * 100)}%</td>`
           : '<td>—</td>';
-        const date = r.achieved_at ? new Date(r.achieved_at).toLocaleDateString() : '—';
+        const date = this._formatLbRunWhen(r.achieved_at);
         return `<tr${hl}>
           <td>${i + 1}</td>
           ${this._lbPlayerCell(r)}
@@ -6554,12 +6610,12 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
           <td>${Math.round((r.accuracy || 0) * 100)}%</td>
           ${crit}
           <td>${r.kills ?? '—'}</td>
-          <td>${date}</td>
+          <td class="lb-when">${date}</td>
         </tr>`;
       })
       .join('');
     return `<table class="lb-table">
-      <thead><tr><th>#</th><th>Player</th><th>Score</th><th>Acc</th><th>Crit</th><th>Kills</th><th>Date</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>Score</th><th>Acc</th><th>Crit</th><th>Kills</th><th>When</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
   }
 
