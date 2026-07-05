@@ -2,11 +2,10 @@
 // SniperFlicksScenario.js  ("Flicks (AWP)")
 //
 // Pure scoped flicking: you spawn already scoped in (zoom 1) with the
-// crosshair dead-centre on a distant canvas. One bot floats on the canvas,
-// offset from centre along the X OR Y axis, somewhere between far and very
-// far away — always inside the zoom-1 scope FOV so a single scope-in can see
-// it. Hit it → 0.25 s later the arena resets (crosshair recentred, new bot).
-// Miss → the bot despawns and the reset takes 0.75 s instead.
+// crosshair dead-centre on a distant canvas. One bot floats on the canvas at
+// a random offset in X, Y, and depth (Z) within the zoom-1 scope FOV. Hit it →
+// 0.25 s later the arena resets (crosshair recentred, new bot). Miss → the bot
+// despawns and the reset takes 0.75 s instead.
 //
 // Practice tuning: spawn radius (X and Y), bot size, distance range, and an
 // optional horizontal strafe. Competitive uses static bots and fixed rules.
@@ -135,12 +134,13 @@ export class SniperFlicksScenario extends BaseScenario {
   _isValidBotPlacement(cx, feetY, z) {
     if (feetY < CANVAS_FLOOR_CLEARANCE) return false;
     if (z >= -2) return false;
-    if (z <= this._wallZ) return false;
+    if (z <= -this._wallZ) return false;
 
     const margin = 0.35 * this.botScale;
     const headY = feetY + HEAD_Y * this.botScale;
     if (Math.abs(cx) > this._wallHalfW - margin) return false;
     if (headY > this.centerY + this._wallHalfH - margin) return false;
+    if (headY < this.centerY - this._wallHalfH + margin) return false;
 
     _headPos.set(cx, headY, z);
     this.camera.updateMatrixWorld(true);
@@ -192,18 +192,16 @@ export class SniperFlicksScenario extends BaseScenario {
 
     for (let attempt = 0; attempt < SPAWN_ATTEMPTS; attempt++) {
       const dist = randRange(this.minDistance, this.maxDistance);
-      const alongX = Math.random() < 0.5;
-      const sign = Math.random() < 0.5 ? -1 : 1;
+      const z = -dist;
 
       const maxX = clamp(BASE_ANG_X * this.spawnScaleX, MIN_ANG, MAX_ANG_X);
       const maxY = clamp(BASE_ANG_Y * this.spawnScaleY, MIN_ANG, MAX_ANG_Y);
-      const ang = degToRad(alongX ? randRange(MIN_ANG, maxX) : randRange(MIN_ANG, maxY));
-      const off = Math.tan(ang) * dist * sign;
+      const angX = degToRad(randRange(MIN_ANG, maxX)) * (Math.random() < 0.5 ? -1 : 1);
+      const angY = degToRad(randRange(MIN_ANG, maxY)) * (Math.random() < 0.5 ? -1 : 1);
 
-      const cx = alongX ? off : 0;
-      let feetY = this.centerY + (alongX ? 0 : off) - halfH;
+      const cx = Math.tan(angX) * dist;
+      let feetY = this.centerY + Math.tan(angY) * dist - halfH;
       feetY = clamp(feetY, minFeetY, maxFeetY);
-      const z = -dist;
 
       if (!this._isValidBotPlacement(cx, feetY, z)) continue;
 
@@ -227,20 +225,25 @@ export class SniperFlicksScenario extends BaseScenario {
       return;
     }
 
+    // Last resort: offset spawn (validation should succeed after the z fix).
     const target = this._buildBot();
     target.object.scale.setScalar(this.botScale);
+    const dist = randRange(this.minDistance, this.maxDistance);
+    const maxX = clamp(BASE_ANG_X * this.spawnScaleX, MIN_ANG, MAX_ANG_X);
+    const angX = degToRad(randRange(MIN_ANG, maxX)) * (Math.random() < 0.5 ? -1 : 1);
+    const cx = Math.tan(angX) * dist;
     const feetY = clamp(this.centerY - halfH, minFeetY, maxFeetY);
-    target.object.position.set(0, feetY, -this.minDistance);
+    target.object.position.set(cx, feetY, -dist);
     this.addTarget(target);
     const mover = new SourceMover1D();
     mover.reset(0);
     this.bot = {
       target,
       mover,
-      baseX: 0,
+      baseX: cx,
       feetY,
-      z: -this.minDistance,
-      strafeHalf: Math.min(STRAFE_HALF, this._maxStrafeX(feetY, -this.minDistance)),
+      z: -dist,
+      strafeHalf: Math.min(STRAFE_HALF, this._maxStrafeX(feetY, -dist)),
       dir: 1,
       reverseTimer: randRange(0.3, 0.8)
     };
