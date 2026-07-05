@@ -958,17 +958,6 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     <div class="screen menu" data-screen="menu">
       <div class="panel wide menu-panel menu-panel-main" id="menu-main-panel">
         <div class="menu-panel-body menu-panel-body-main">
-          <div class="menu-fullscreen-tip-shell" id="menu-fullscreen-tip-shell">
-            <section class="menu-fullscreen-tip" id="menu-fullscreen-tip" aria-label="Fullscreen recommendation">
-              <button type="button" class="menu-fullscreen-tip-close" id="menu-fullscreen-tip-close" aria-label="Dismiss notice">&times;</button>
-              <p class="menu-fullscreen-tip-title">Important:</p>
-              <ol class="menu-fullscreen-tip-list">
-                <li>Press <kbd>F11</kbd> to enter fullscreen. In a normal browser window, shortcuts like <kbd>Ctrl</kbd>+<kbd>W</kbd> can close the tab while you are playing.</li>
-                <li>It is highly recommended to use Google Chrome. Different browsers handle mouse input in 3D environments differently. For example, using Firefox may cause issues with steadiness.</li>
-                <li>For best performance, enable GPU acceleration in your browser.</li>
-              </ol>
-            </section>
-          </div>
         <h1 class="logo text-big">AIM4<span>.io</span></h1>
         <div class="menu-modes">
           <button type="button" class="mode-tile mode-tile-training" data-goto="singleplayer">
@@ -1003,6 +992,17 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
             </div>
           </div>
         </div>
+          <div class="menu-fullscreen-tip-shell" id="menu-fullscreen-tip-shell">
+            <section class="menu-fullscreen-tip" id="menu-fullscreen-tip" aria-label="Fullscreen recommendation">
+              <button type="button" class="menu-fullscreen-tip-close" id="menu-fullscreen-tip-close" aria-label="Dismiss notice">&times;</button>
+              <p class="menu-fullscreen-tip-title">Important:</p>
+              <ol class="menu-fullscreen-tip-list">
+                <li>Press <kbd>F11</kbd> to enter fullscreen. In a normal browser window, shortcuts like <kbd>Ctrl</kbd>+<kbd>W</kbd> can close the tab while you are playing.</li>
+                <li>It is highly recommended to use Google Chrome. Different browsers handle mouse input in 3D environments differently. For example, using Firefox may cause issues with steadiness.</li>
+                <li>For best performance, enable GPU acceleration in your browser.</li>
+              </ol>
+            </section>
+          </div>
         </div>
       </div>
     </div>
@@ -1357,7 +1357,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
             </select>
           </div>
         </div>
-        <div class="menu-panel-body lb-body-wrap">
+        <div class="menu-panel-body menu-panel-scroll lb-body-wrap">
         <div id="lb-body" class="lb-body"></div>
         </div>
         <div class="menu-actions">
