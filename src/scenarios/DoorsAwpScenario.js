@@ -2,8 +2,8 @@
 // DoorsAwpScenario.js  ("Doors (AWP)")
 //
 // Fixed split-pillar layout (doors.json). You spawn on Team B with the AWP;
-// a bot breaks from one of ten Team-A lanes and crosses the doors to the far
-// side. Shoot them through the walls — any hit counts. If they make it across,
+// a bot breaks from a lane on one flank and crosses the doors to the far side.
+// Shoot them through the walls — any hit counts. If they make it across,
 // the round is lost.
 // ---------------------------------------------------------------------------
 
@@ -22,6 +22,13 @@ import { DEFAULTS } from '../core/SettingsManager.js';
 import { DOORS_MAP } from '../maps/doorsMapData.js';
 import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 import { startMissFlash, updateMissFlash } from './missFlash.js';
+import {
+  createDoorsShotFeedback,
+  spawnBotSnapshot,
+  spawnHitMarker,
+  updateDoorsShotFeedback,
+  disposeDoorsShotFeedback
+} from './doorsShotFeedback.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
@@ -57,6 +64,12 @@ export class DoorsAwpScenario extends BaseScenario {
       ...((this.competitive ? {} : this.settings.data.doorsawp) ?? {})
     };
     this.botSpeedMul = preset?.botSpeed ?? this.config.botSpeed ?? s.botSpeed ?? 1;
+    const crossFrom = this.competitive
+      ? 'rightToLeft'
+      : (this.config.crossFrom ?? s.crossFrom ?? 'rightToLeft');
+    this.crossFrom = crossFrom === 'leftToRight' ? 'leftToRight' : 'rightToLeft';
+    this._shotFeedbackEnabled = !this.competitive && (s.shotFeedback !== false);
+    this._shotFeedbackDur = clamp(s.shotFeedbackDur ?? 0.5, 0.1, 3);
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 60)
       : this.settings.data.runDuration;
@@ -70,6 +83,7 @@ export class DoorsAwpScenario extends BaseScenario {
     this.timer = 0;
     this.bot = null;
     this._missFlash = null;
+    this._shotFx = createDoorsShotFeedback(this.root);
 
     this._buildEnvironment();
   }
@@ -81,7 +95,7 @@ export class DoorsAwpScenario extends BaseScenario {
   static configKeyFor(settings, variant = 'practice') {
     if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
     const c = settings.data.doorsawp ?? DEFAULTS.doorsawp;
-    return `spd${c.botSpeed}_d${settings.data.runDuration}`;
+    return `spd${c.botSpeed}_x${c.crossFrom || 'rightToLeft'}_d${settings.data.runDuration}`;
   }
 
   configKey() {
@@ -157,15 +171,18 @@ export class DoorsAwpScenario extends BaseScenario {
     return t;
   }
 
+  _spawnPool() {
+    const wantX = this.crossFrom === 'rightToLeft' ? -5 : 5;
+    return this.map.spawns.A.filter((s) => s.pos[0] === wantX);
+  }
+
   _pickSpawn() {
-    const spawns = this.map.spawns.A;
-    const idx = randInt(0, spawns.length - 1);
-    const pos = spawns[idx].pos;
+    const pool = this._spawnPool();
+    const pos = pool[randInt(0, pool.length - 1)].pos;
     const startX = pos[0];
     const startZ = pos[2];
-    // x = -5 lanes are on the player's right; x = 5 lanes are on the left.
-    const crossDir = startX < 0 ? 1 : -1;
-    const targetX = startX < 0 ? 5 : -5;
+    const crossDir = this.crossFrom === 'rightToLeft' ? 1 : -1;
+    const targetX = this.crossFrom === 'rightToLeft' ? 5 : -5;
     const jump = Math.random() < JUMP_CHANCE;
     return { startX, startZ, crossDir, targetX, jump };
   }
@@ -284,6 +301,7 @@ export class DoorsAwpScenario extends BaseScenario {
     if (this._missFlash && updateMissFlash(this.engine, this._missFlash, dt)) {
       this._missFlash = null;
     }
+    if (this._shotFx) updateDoorsShotFeedback(this._shotFx, this.camera, dt);
     switch (this.phase) {
       case 'arming':
         this.timer -= dt;
@@ -300,9 +318,16 @@ export class DoorsAwpScenario extends BaseScenario {
     const b = this.bot;
     if (!b || b.target.state === 'dying') return;
 
+    if (this._shotFeedbackEnabled) {
+      spawnBotSnapshot(this._shotFx, b.target.object, this._shotFeedbackDur);
+    }
+
     const hit = this._raycastBot(raycaster);
     const tgt = hit?.object?.userData?.target;
     if (tgt === b.target) {
+      if (this._shotFeedbackEnabled) {
+        spawnHitMarker(this._shotFx, hit.point, this._shotFeedbackDur);
+      }
       this.crosshair?.hit();
       this.hits++;
       this.kills++;
@@ -325,6 +350,8 @@ export class DoorsAwpScenario extends BaseScenario {
 
   dispose() {
     if (this._missFlash) this.engine.setDeathOverlay(0);
+    disposeDoorsShotFeedback(this._shotFx);
+    this._shotFx = null;
     super.dispose();
   }
 }

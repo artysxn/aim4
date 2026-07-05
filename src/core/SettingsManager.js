@@ -467,6 +467,9 @@ export const DEFAULTS = {
   },
   doorsawp: {
     botSpeed: 1.0, // cross-speed multiplier
+    crossFrom: 'rightToLeft', // rightToLeft | leftToRight — spawn flank + cross direction
+    shotFeedback: true, // practice: red bot snapshot + yellow hit marker
+    shotFeedbackDur: 0.5, // seconds both markers stay visible
     missLimit: 0
   }
 };

@@ -329,7 +329,8 @@ export const COMPETITIVE_PRESETS = {
   },
   doorsawp: {
     runDuration: 60,
-    botSpeed: 1.0
+    botSpeed: 1.0,
+    crossFrom: 'rightToLeft'
   }
 };
 

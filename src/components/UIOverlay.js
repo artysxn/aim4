@@ -1064,7 +1064,16 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
         id: 'doorsawp',
         label: 'Doors (AWP)',
         body: `
-${rf('set-doors-speed', 'Bot cross speed', 0.5, 2.0, 0.05)}
+<div class="field field-plain">
+            <div class="field-top"><span class="field-label">Cross direction</span></div>
+            <select id="set-doors-cross" class="config-code-input">
+              <option value="rightToLeft">Right → left</option>
+              <option value="leftToRight">Left → right</option>
+            </select>
+          </div>
+          ${rf('set-doors-speed', 'Bot cross speed', 0.5, 2.0, 0.05)}
+          <label class="field-check"><input type="checkbox" id="set-doors-feedback" /> Shot feedback (practice)</label>
+          ${rf('set-doors-feedback-dur', 'Feedback duration (s)', 0.2, 2.0, 0.1)}
           ${rf('set-doors-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       }
     ];
@@ -2709,7 +2718,14 @@ ${rf('set-doors-speed', 'Bot cross speed', 0.5, 2.0, 0.05)}
     this._bindRange('set-sntr-misslimit', (v, d) => { d.snipertracking.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     // Doors (AWP)
+    $('#set-doors-cross')?.addEventListener('change', (e) => {
+      draft((d) => { d.doorsawp.crossFrom = e.target.value; });
+    });
     this._bindRange('set-doors-speed', (v, d) => { d.doorsawp.botSpeed = v; });
+    $('#set-doors-feedback')?.addEventListener('change', (e) => {
+      draft((d) => { d.doorsawp.shotFeedback = e.target.checked; });
+    });
+    this._bindRange('set-doors-feedback-dur', (v, d) => { d.doorsawp.shotFeedbackDur = v; });
     this._bindRange('set-doors-misslimit', (v, d) => { d.doorsawp.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-seq-size', (v, d) => { d.sequence.targetSize = v; });
@@ -5752,7 +5768,12 @@ ${rf('set-doors-speed', 'Bot cross speed', 0.5, 2.0, 0.05)}
     this._setRange('set-sntr-misslimit', snt.missLimit ?? 0);
 
     const doors = s.doorsawp ?? {};
+    const doorsCross = this.root.querySelector('#set-doors-cross');
+    if (doorsCross) doorsCross.value = doors.crossFrom === 'leftToRight' ? 'leftToRight' : 'rightToLeft';
+    const doorsFb = this.root.querySelector('#set-doors-feedback');
+    if (doorsFb) doorsFb.checked = doors.shotFeedback !== false;
     this._setRange('set-doors-speed', doors.botSpeed ?? 1);
+    this._setRange('set-doors-feedback-dur', doors.shotFeedbackDur ?? 0.5);
     this._setRange('set-doors-misslimit', doors.missLimit ?? 0);
 
     const sq = s.sequence ?? {};
