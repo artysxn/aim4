@@ -181,11 +181,13 @@ export const DEFAULTS = {
   },
   duels: {
     arena: 0, // 0 = random each run, 1..N = fixed arena (legacy + MP duel maps)
+    botDifficulty: 'hard', // training only — hard | medium | easy
     ttk: 0.5,  // seconds to kill enemy once exposed; lower = harder
     missLimit: 0
   },
   deathmatch: {
     botCount: 4, // bots hunting the player at once (1..6)
+    botDifficulty: 'hard', // training only — hard | medium | easy
     botSpeed: 1.0, // multiplier on default run speed (215 u/s)
     botBodyHit: 0.2, // per-bullet body hit chance vs player/bots
     botHeadHit: 0.05, // per-bullet head hit chance (checked before body)
@@ -590,6 +592,12 @@ export class SettingsManager {
       if (rs.weapon.aimpunch != null) patch.weapon.aimpunch = rs.weapon.aimpunch;
     }
     return patch;
+  }
+
+  commitDraftLive() {
+    if (this._exploreMode || !this.draft) return;
+    this.data = structuredClone(this.draft);
+    this._emit();
   }
 
   confirmDraft() {

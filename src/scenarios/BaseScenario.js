@@ -14,6 +14,7 @@ import { spreadRng, applySpreadToDir } from '../utils/shotAccuracy.js';
 import { viewPunchImpulse } from '../weapons/ak47.js';
 import { isLeaderboardEligible } from './rankedScenarios.js';
 import { isBulletDecalSurface, worldImpactNormal } from '../utils/bulletImpact.js';
+import { DEFAULTS } from '../core/SettingsManager.js';
 
 const _raycaster = new THREE.Raycaster();
 // Reused firing scratch (no per-shot allocation).
@@ -149,6 +150,25 @@ export class BaseScenario {
   }
   resume() {
     this.running = true;
+  }
+
+  /** Apply practice setting changes while a run is paused (live gear edits). */
+  applyLiveSettings() {
+    if (this.competitive || this.isMultiplayer) return;
+    const g = { ...(DEFAULTS[this.name] || {}), ...(this.settings.data[this.name] || {}) };
+    if ('infiniteAmmo' in g) this.infiniteAmmo = g.infiniteAmmo !== false;
+    if ('viewmodelRecoil' in g) this.viewmodelRecoil = !!g.viewmodelRecoil;
+    if ('missLimit' in g) {
+      this.missLimit = Math.max(0, Math.round(g.missLimit ?? 0));
+    }
+    const col = this.settings.data.colors?.target;
+    if (col) {
+      for (const t of this.targets) {
+        for (const mesh of t.colliders || []) {
+          if (mesh.material?.color) mesh.material.color.set(col);
+        }
+      }
+    }
   }
 
   update(dt) {

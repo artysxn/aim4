@@ -86,6 +86,7 @@ export class SceneManager {
     this.crosshair = crosshair;
 
     this.current = null;
+    this._runConfig = null;
     this.duration = settings.data.runDuration;
     this.finished = false;
     this.onFinish = null; // (results) => void
@@ -115,7 +116,16 @@ export class SceneManager {
       requestFinish: () => this.finishRun()
     });
     this._applyDuration(name, config);
+    this._runConfig = config;
     this.finished = false;
+  }
+
+  /** Re-read practice mode settings mid-run (training gear while paused). */
+  applyLiveScenarioSettings() {
+    const sc = this.current;
+    if (!sc || sc.competitive || sc.isMultiplayer) return;
+    sc.applyLiveSettings?.();
+    this._applyDuration(sc.name, this._runConfig || {});
   }
 
   /**

@@ -106,7 +106,7 @@ export class ReplayPlayer {
   }
 
   /** Load a decoded replay, rebuild the scene, and pause at t=0. */
-  load(replay) {
+  load(replay, { baselineVFov } = {}) {
     this.dispose();
     this.replay = replay;
     this._replayColors = replay.settings?.colors || null;
@@ -118,7 +118,8 @@ export class ReplayPlayer {
     this.speed = 1;
     this.playing = false;
     this.zoom = 1;
-    this._replayFov = this.engine.camera.fov;
+    // Viewer default FOV — zoom 1 = this value; zoom in narrows, zoom out stops here.
+    this._replayFov = baselineVFov ?? this.engine.camera.fov;
 
     this.root = new THREE.Group();
     this.root.name = 'replay-root';
@@ -246,7 +247,8 @@ export class ReplayPlayer {
   /** Scroll-wheel zoom during playback (1 = default FOV, higher = zoomed in). */
   adjustZoom(wheelDeltaY) {
     const factor = Math.pow(1.12, -wheelDeltaY / 100);
-    this.zoom = Math.max(0.35, Math.min(6, this.zoom * factor));
+    // Cannot zoom out past the viewer's default FOV (zoom 1); no cap on zoom-in.
+    this.zoom = Math.max(1, this.zoom * factor);
     if (this.replay) {
       const tickFloat = this.time * this.replay.tickRate;
       this._applyTick(tickFloat);

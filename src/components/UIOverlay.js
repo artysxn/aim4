@@ -215,6 +215,18 @@ function rf(id, label, min, max, step) {
     </div>`;
 }
 
+function botDifficultyField(id) {
+  return `
+    <div class="field field-plain">
+      <div class="field-top"><span class="field-label">Bot difficulty</span></div>
+      <select id="${id}">
+        <option value="hard">Hard</option>
+        <option value="medium">Medium</option>
+        <option value="easy">Easy</option>
+      </select>
+    </div>`;
+}
+
 function numField(id, label, step) {
   return `
     <div class="field field-plain">
@@ -275,6 +287,7 @@ export class UIOverlay {
     this._settingsExplorePayload = null;
     this._settingsExploreUser = null;
     this._returnAfterScenarioSettings = null;
+    this._scenarioSettingsLive = false;
     this._returnAfterLeaderboard = 'menu';
     this._activeScenarioSettings = null;
     this._suppressLockPause = false;
@@ -329,6 +342,9 @@ export class UIOverlay {
     this._bindResultsInfographics();
     this._bindAimStats();
     this._bindFullscreenTip();
+    this.settings.onDraftChange(() => {
+      if (this._scenarioSettingsLive) this._applyScenarioSettingsLive();
+    });
 
     // Shared link: ?lobby=CODE opens multiplayer and auto-joins if there's space.
     if (this.mp.urlLobbyCode()) {
@@ -479,8 +495,7 @@ export class UIOverlay {
         id: 'gridshot',
         label: 'Gridshot',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-grid-size', 'Target size', 0.25, 1.2, 0.05)}
+${rf('set-grid-size', 'Target size', 0.25, 1.2, 0.05)}
           ${rf('set-grid-count', 'Target count', 1, 6, 1)}
           <div class="field field-plain">
             <div class="field-top"><span class="field-label">Mode</span></div>
@@ -511,8 +526,7 @@ export class UIOverlay {
         id: 'stars',
         label: 'Stars',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-stars-size', 'Dot size', 0.05, 0.5, 0.01)}
+${rf('set-stars-size', 'Dot size', 0.05, 0.5, 0.01)}
           ${rf('set-stars-count', 'Dot count', 1, 400, 1)}
           ${rf('set-stars-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
@@ -520,8 +534,7 @@ export class UIOverlay {
         id: 'bounce',
         label: 'Bounce',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-bounce-size', 'Ball size', 0.15, 0.9, 0.05)}
+${rf('set-bounce-size', 'Ball size', 0.15, 0.9, 0.05)}
           ${rf('set-bounce-count', 'Ball count', 1, 8, 1)}
           ${rf('set-bounce-speed', 'Travel speed (°/s)', 10, 120, 5)}
           ${rf('set-bounce-min-dist', 'Min distance (m)', 3, 14, 0.5)}
@@ -534,8 +547,7 @@ export class UIOverlay {
         id: 'microflicks',
         label: 'Microflicks',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-mf-size', 'Dot size', 0.05, 0.5, 0.01)}
+${rf('set-mf-size', 'Dot size', 0.05, 0.5, 0.01)}
           ${rf('set-mf-count', 'Dots at a time', 1, 8, 1)}
           <label class="field-check"><input type="checkbox" id="set-mf-float" /> Horizontal drift</label>
           ${rf('set-mf-float-speed', 'Max drift speed (m/s)', 0.5, 8, 0.5)}
@@ -547,8 +559,7 @@ export class UIOverlay {
         id: 'pasu',
         label: 'Pasu',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-pasu-size', 'Target size', 0.15, 0.9, 0.05)}
+${rf('set-pasu-size', 'Target size', 0.15, 0.9, 0.05)}
           ${rf('set-pasu-count', 'Target count', 1, 6, 1)}
           <div class="field field-plain">
             <div class="field-top"><span class="field-label">Mode</span></div>
@@ -578,8 +589,7 @@ export class UIOverlay {
         id: 'spidershot',
         label: 'Spidershot',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-spider-size', 'Target size', 0.25, 0.9, 0.05)}
+${rf('set-spider-size', 'Target size', 0.25, 0.9, 0.05)}
           ${rf('set-spider-ttk', 'Time to kill (ms)', 400, 4000, 50)}
           ${rf('set-spider-max-dist', 'Max distance (m)', 2, 12, 0.5)}
           ${rf('set-spider-min-dist', 'Min distance (m)', 0.5, 6, 0.25)}
@@ -606,8 +616,7 @@ export class UIOverlay {
         id: 'survival',
         label: 'Survival',
         body: `
-          <p class="readout">Practice settings below. Competitive uses fixed rules: 0.42&nbsp;s spawn, 1.8&nbsp;s despawn, no missed shots, no other changes.</p>
-          ${rf('set-surv-spawn', 'Spawn interval (ms)', 300, 3000, 50)}
+${rf('set-surv-spawn', 'Spawn interval (ms)', 300, 3000, 50)}
           ${rf('set-surv-despawn', 'Despawn time (ms)', 500, 5000, 50)}
           ${rf('set-surv-max-size', 'Max target size', 0.25, 1.0, 0.05)}
           ${rf('set-surv-strikes', 'Misses allowed (Practice)', 0, 10, 1)}`
@@ -616,8 +625,7 @@ export class UIOverlay {
         id: 'arena',
         label: 'Crossfire',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-arena-cross', 'Cross speed (ms)', 350, 1500, 50)}
+${rf('set-arena-cross', 'Cross speed (ms)', 350, 1500, 50)}
           ${rf('set-arena-peek', 'Peek hold (ms)', 150, 1000, 50)}
           ${rf('set-arena-col', 'Columns', 4, 10, 1)}
           ${rf('set-arena-colr', 'Column width (m)', 0.2, 1.2, 0.05)}
@@ -629,8 +637,8 @@ export class UIOverlay {
         id: 'duels',
         label: 'Duels',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          <div class="field field-plain">
+${botDifficultyField('set-duels-bot-difficulty')}
+<div class="field field-plain">
             <div class="field-top">
               <span class="field-label">Arena</span>
             </div>
@@ -645,8 +653,8 @@ export class UIOverlay {
         id: 'deathmatch',
         label: 'Deathmatch',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-dm-bots', 'Bots', 1, 6, 1)}
+${botDifficultyField('set-dm-bot-difficulty')}
+${rf('set-dm-bots', 'Bots', 1, 6, 1)}
           ${rf('set-dm-speed', 'Bot speed', 0.25, 2.0, 0.05)}
           ${rf('set-dm-body', 'Bot body hit %', 5, 50, 1)}
           ${rf('set-dm-head', 'Bot head hit %', 1, 20, 1)}
@@ -656,8 +664,7 @@ export class UIOverlay {
         id: 'range',
         label: 'Range',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          <div class="field field-plain">
+<div class="field field-plain">
             <div class="field-top">
               <span class="field-label">Arc</span>
             </div>
@@ -695,8 +702,7 @@ export class UIOverlay {
         id: 'tracking',
         label: 'Strafes',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-tracking-width', 'Bot width', 0.5, 2.0, 0.05)}
+${rf('set-tracking-width', 'Bot width', 0.5, 2.0, 0.05)}
           ${rf('set-tracking-speed', 'Bot speed', 0.25, 2.0, 0.05)}
           <label class="field-check"><input type="checkbox" id="set-tracking-crouch" /> Tap crouch</label>
           ${rf('set-tracking-strafe', 'Strafe rate', 0.25, 3.0, 0.05)}
@@ -706,8 +712,7 @@ export class UIOverlay {
         id: 'sequence',
         label: 'Sequence (Clicks)',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-seq-size', 'Dot size', 0.1, 0.6, 0.05)}
+${rf('set-seq-size', 'Dot size', 0.1, 0.6, 0.05)}
           ${rf('set-seq-time', 'Time per dot (ms)', 500, 4000, 100)}
           ${rf('set-seq-start-dist', 'Chain start distance (m)', 0.3, 3, 0.1)}
           ${rf('set-seq-step', 'Distance step per kill (m)', 0.1, 1.5, 0.05)}
@@ -717,8 +722,7 @@ export class UIOverlay {
         id: 'sequencespeed',
         label: 'Sequence (Speed)',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-ss-start-size', 'Start size', 0.05, 0.35, 0.01)}
+${rf('set-ss-start-size', 'Start size', 0.05, 0.35, 0.01)}
           ${rf('set-ss-max-size', 'Max size', 0.2, 0.8, 0.05)}
           ${rf('set-ss-grow', 'Grow time (ms)', 500, 4000, 100)}
           ${rf('set-ss-start-dist', 'Chain start distance (m)', 0.3, 3, 0.1)}
@@ -729,8 +733,7 @@ export class UIOverlay {
         id: 'sequencetracking',
         label: 'Sequence (Tracking)',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-st-size', 'Dot size', 0.1, 0.6, 0.05)}
+${rf('set-st-size', 'Dot size', 0.1, 0.6, 0.05)}
           ${rf('set-st-time', 'Time per dot (ms)', 500, 4000, 100)}
           ${rf('set-st-hold', 'Hold time (s)', 0.1, 2.0, 0.05)}
           ${rf('set-st-float', 'Float speed', 0.25, 3.0, 0.05)}
@@ -742,8 +745,7 @@ export class UIOverlay {
         id: 'double',
         label: 'Double (Clicks)',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-double-size', 'Dot size', 0.1, 0.6, 0.05)}
+${rf('set-double-size', 'Dot size', 0.1, 0.6, 0.05)}
           ${rf('set-double-canvas', 'Canvas size (m)', 1.5, 6, 0.25)}
           ${rf('set-double-dist', 'Canvas distance (m)', 1, 12, 0.5)}
           ${rf('set-double-count', 'Canvas count', 2, 6, 1)}
@@ -761,8 +763,7 @@ export class UIOverlay {
         id: 'doubletracking',
         label: 'Double (Tracking)',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-dt-size', 'Dot size', 0.1, 0.6, 0.05)}
+${rf('set-dt-size', 'Dot size', 0.1, 0.6, 0.05)}
           ${rf('set-dt-hold', 'Hold time (s)', 0.1, 2.0, 0.05)}
           ${rf('set-dt-float', 'Float speed', 0.25, 3.0, 0.05)}
           ${rf('set-dt-canvas', 'Canvas size (m)', 1.5, 6, 0.25)}
@@ -782,8 +783,7 @@ export class UIOverlay {
         id: 'ball',
         label: 'Ball',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-ball-size', 'Ball size', 0.2, 1.0, 0.05)}
+${rf('set-ball-size', 'Ball size', 0.2, 1.0, 0.05)}
           ${rf('set-ball-speed', 'Travel speed (°/s)', 20, 140, 5)}
           ${rf('set-ball-min-dist', 'Min distance (m)', 4, 14, 0.5)}
           ${rf('set-ball-max-dist', 'Max distance (m)', 6, 22, 0.5)}
@@ -793,8 +793,7 @@ export class UIOverlay {
         id: 'bouncetracking',
         label: 'Bounce (Tracking)',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-bt-size', 'Ball size', 0.2, 1.0, 0.05)}
+${rf('set-bt-size', 'Ball size', 0.2, 1.0, 0.05)}
           ${rf('set-bt-count', 'Ball count', 1, 6, 1)}
           ${rf('set-bt-speed', 'Travel speed (°/s)', 10, 100, 5)}
           ${rf('set-bt-hold', 'Hold time (s)', 0.2, 2.0, 0.05)}
@@ -805,8 +804,7 @@ export class UIOverlay {
         id: 'pasutracking',
         label: 'Pasu (Tracking)',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-pt-size', 'Target size', 0.15, 0.9, 0.05)}
+${rf('set-pt-size', 'Target size', 0.15, 0.9, 0.05)}
           ${rf('set-pt-count', 'Target count', 1, 6, 1)}
           ${rf('set-pt-hold', 'Hold time (s)', 0.2, 2.0, 0.05)}
           ${rf('set-pt-travel-speed', 'Max travel speed (m/s)', 0.5, 8, 0.5)}
@@ -816,8 +814,7 @@ export class UIOverlay {
         id: 'turn',
         label: 'Turn',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-turn-size', 'Dot size', 0.05, 0.5, 0.01)}
+${rf('set-turn-size', 'Dot size', 0.05, 0.5, 0.01)}
           ${rf('set-turn-time', 'Dot lifetime (ms)', 800, 5000, 100)}
           <label class="field-check"><input type="checkbox" id="set-turn-despawn-miss" checked /> Despawn dot on miss</label>
           <label class="field-check"><input type="checkbox" id="set-turn-infinite-ammo" /> Infinite ammo</label>`
@@ -826,34 +823,29 @@ export class UIOverlay {
         id: 'box',
         label: 'Box',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-box-size', 'Dot size', 0.1, 0.8, 0.05)}
+${rf('set-box-size', 'Dot size', 0.1, 0.8, 0.05)}
           ${rf('set-box-w', 'Box size X (m)', 2, 14, 0.5)}
           ${rf('set-box-h', 'Box size Y (m)', 1, 10, 0.5)}
           ${rf('set-box-speed', 'Speed (u/s)', 50, 400, 5)}
           ${rf('set-box-variance', 'Speed variance (± u/s)', 0, 150, 5)}
-          <p class="readout muted">Track time is 0.15–0.35 s per dot (smaller + faster = shorter).</p>
-          ${rf('set-box-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+${rf('set-box-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
         id: 'circle',
         label: 'Circle',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-circle-size', 'Dot size', 0.1, 0.8, 0.05)}
+${rf('set-circle-size', 'Dot size', 0.1, 0.8, 0.05)}
           ${rf('set-circle-w', 'Circle size X (m)', 2, 14, 0.5)}
           ${rf('set-circle-h', 'Circle size Y (m)', 1, 10, 0.5)}
           ${rf('set-circle-speed', 'Speed (u/s)', 50, 400, 5)}
           ${rf('set-circle-variance', 'Speed variance (± u/s)', 0, 150, 5)}
-          <p class="readout muted">Track time is 0.15–0.35 s per dot (smaller + faster = shorter).</p>
-          ${rf('set-circle-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+${rf('set-circle-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
         id: 'threeshot',
         label: 'Threeshot',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-3s-size', 'Dot size', 0.05, 0.5, 0.005)}
+${rf('set-3s-size', 'Dot size', 0.05, 0.5, 0.005)}
           ${rf('set-3s-count', 'Dot count', 1, 10, 1)}
           <label class="field-check"><input type="checkbox" id="set-3s-float" /> Horizontal drift</label>
           ${rf('set-3s-float-speed', 'Max drift speed (m/s)', 0.5, 8, 0.5)}
@@ -865,8 +857,7 @@ export class UIOverlay {
         id: 'cover',
         label: 'Cover',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-cover-rows', 'Rows', 1, 3, 1)}
+${rf('set-cover-rows', 'Rows', 1, 3, 1)}
           ${rf('set-cover-boxes', 'Cover per row', 1, 5, 1)}
           ${rf('set-cover-dist', 'Row distance (m)', 8, 28, 1)}
           ${rf('set-cover-spacing', 'Row spacing (m)', 6, 16, 1)}
@@ -882,8 +873,7 @@ export class UIOverlay {
         id: 'drone',
         label: 'Drone',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-drone-size', 'Target size', 0.2, 1.0, 0.05)}
+${rf('set-drone-size', 'Target size', 0.2, 1.0, 0.05)}
           ${rf('set-drone-speed', 'Travel speed (°/s)', 20, 140, 5)}
           ${rf('set-drone-min-dist', 'Min distance (m)', 4, 14, 0.5)}
           ${rf('set-drone-max-dist', 'Max distance (m)', 6, 22, 0.5)}
@@ -893,8 +883,7 @@ export class UIOverlay {
         id: 'line',
         label: 'Line',
         body: `
-          <p class="readout">Competitive uses fixed rules; edits here affect Practice only.</p>
-          ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
+${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
           ${rf('set-line-speed', 'Travel speed (u/s)', 50, 400, 5)}
           ${rf('set-line-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       }
@@ -960,7 +949,8 @@ export class UIOverlay {
 
     <!-- MAIN MENU -->
     <div class="screen menu" data-screen="menu">
-      <div class="panel wide">
+      <div class="panel wide menu-panel">
+        <div class="menu-panel-body">
         <h1 class="logo text-big">AIM4<span>.io</span></h1>
         <div class="menu-modes">
           <button type="button" class="mode-tile mode-tile-training" data-goto="singleplayer">
@@ -995,30 +985,33 @@ export class UIOverlay {
             </div>
           </div>
         </div>
+        </div>
       </div>
       <section class="menu-fullscreen-tip" id="menu-fullscreen-tip" aria-label="Fullscreen recommendation">
-        <p class="menu-fullscreen-tip-title">Play in fullscreen</p>
-        <p class="menu-fullscreen-tip-text">
-          Press <kbd>F11</kbd> to enter fullscreen. In a normal browser window, shortcuts like
-          <kbd>Ctrl</kbd>+<kbd>W</kbd> can close the tab while you are aiming.
-        </p>
+        <p class="menu-fullscreen-tip-title">Important:</p>
+        <ol class="menu-fullscreen-tip-list">
+          <li>Press <kbd>F11</kbd> to enter fullscreen. In a normal browser window, shortcuts like <kbd>Ctrl</kbd>+<kbd>W</kbd> can close the tab while you are playing.</li>
+          <li>It is highly recommended to use Google Chrome. Different browsers handle mouse input in 3D environments differently. For example, using Firefox may cause issues with steadiness.</li>
+          <li>For best performance, enable GPU acceleration in your browser.</li>
+        </ol>
       </section>
     </div>
 
     <!-- MULTIPLAYER (matchmaking + custom games) -->
     <div class="screen multiplayer" data-screen="multiplayer">
-      <div class="panel wide">
+      <div class="panel wide menu-panel">
         <h2 class="text-big">Multiplayer</h2>
+        <div class="menu-panel-body">
         <div class="menu-modes menu-modes-sub">
           <button type="button" class="mode-tile mode-tile-mm" id="menu-mm-tile">
             <img src="${MATCHMAKING_ICON}" alt="" class="mode-tile-icon mode-tile-icon-mm" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">Matchmaking</span>
-            <span class="mode-tile-sub" id="menu-mm-userline">Ranked 1v1 duels</span>
           </button>
           <button type="button" class="mode-tile mode-tile-custom" data-goto="mp">
             <img src="${CUSTOM_GAMES_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">Custom games</span>
           </button>
+        </div>
         </div>
         <div class="menu-actions">
           <button class="btn primary" data-goto="menu">Back</button>
@@ -1028,19 +1021,19 @@ export class UIOverlay {
 
     <!-- SINGLEPLAYER (playlists + training hub) -->
     <div class="screen singleplayer" data-screen="singleplayer">
-      <div class="panel wide">
+      <div class="panel wide menu-panel">
         <h2 class="text-big">Singleplayer</h2>
+        <div class="menu-panel-body">
         <div class="menu-modes menu-modes-sub">
           <button type="button" class="mode-tile" data-goto="playlists">
             <img src="${PLAYLISTS_TILE_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">Playlists</span>
-            <span class="mode-tile-sub">Build &amp; run mode sequences</span>
           </button>
           <button type="button" class="mode-tile" data-goto="training-categories">
             <img src="${TRAINING_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">Training</span>
-            <span class="mode-tile-sub">Practice &amp; competitive modes</span>
           </button>
+        </div>
         </div>
         <div class="menu-actions">
           <button class="btn primary" data-goto="menu">Back</button>
@@ -1050,8 +1043,9 @@ export class UIOverlay {
 
     <!-- TRAINING CATEGORIES -->
     <div class="screen training-categories" data-screen="training-categories">
-      <div class="panel wide">
+      <div class="panel wide menu-panel">
         <h2 class="text-big">Training</h2>
+        <div class="menu-panel-body">
         <div class="menu-modes menu-modes-sub training-cat-tiles">
           ${TRAINING_CATEGORIES.map((cat) => {
             const modes = trainingCategoryModes(cat.id);
@@ -1068,9 +1062,9 @@ export class UIOverlay {
           <button type="button" class="mode-tile" data-training-cat="${cat.id}">
             <img src="${catIcons[cat.id]}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">${cat.title}</span>
-            <span class="mode-tile-sub">${modes.length} mode${modes.length === 1 ? '' : 's'}</span>
           </button>`;
           }).join('')}
+        </div>
         </div>
         <div class="menu-actions">
           <button class="btn primary" data-goto="singleplayer">Back</button>
@@ -1080,9 +1074,11 @@ export class UIOverlay {
 
     <!-- TRAINING (mode list for the selected category) -->
     <div class="screen training" data-screen="training">
-      <div class="panel wide training-panel">
+      <div class="panel wide menu-panel training-panel">
         <h2 class="text-big training-heading" id="training-heading">Training</h2>
+        <div class="menu-panel-body training-list-wrap">
         <div class="training-list" id="training-list"></div>
+        </div>
         <div class="menu-actions training-back">
           <button class="btn primary" data-goto="training-categories">Back</button>
         </div>
@@ -1091,9 +1087,9 @@ export class UIOverlay {
 
     <!-- PLAYLISTS (viewer: run / edit / share saved playlists) -->
     <div class="screen playlists" data-screen="playlists">
-      <div class="panel wide playlists-panel">
+      <div class="panel wide menu-panel playlists-panel">
         <h2 class="text-big training-heading">Playlists</h2>
-        <div class="playlists-scroll">
+        <div class="menu-panel-body playlists-scroll">
           <div id="playlists-list" class="playlists-list"></div>
           <p class="readout" id="playlist-status"></p>
           <div class="playlist-add-row playlist-import-row">
@@ -1110,9 +1106,9 @@ export class UIOverlay {
 
     <!-- PLAYLIST EDITOR (create a new playlist or edit an existing one) -->
     <div class="screen playlist-edit" data-screen="playlist-edit">
-      <div class="panel wide playlists-panel">
+      <div class="panel wide menu-panel playlists-panel">
         <h2 class="text-big training-heading" id="playlist-edit-title">New playlist</h2>
-        <div class="playlists-scroll">
+        <div class="menu-panel-body playlists-scroll">
           <section class="playlist-builder playlist-builder-edit">
             <div class="field field-plain">
               <div class="field-top"><span class="field-label">Name</span></div>
@@ -1124,7 +1120,6 @@ export class UIOverlay {
               </select>
               <button type="button" class="btn" id="playlist-add-current">Add mode</button>
             </div>
-            <p class="readout muted">“Add mode” snapshots that mode's current Training settings. Press the gear on any added mode to tune its settings for this playlist only, or paste a mode code below.</p>
             <div class="playlist-add-row">
               <input type="text" id="playlist-add-code" class="config-code-input" placeholder="Paste mode code (AIM4M-…)" spellcheck="false" autocomplete="off" />
               <button type="button" class="btn" id="playlist-add-code-btn">Add code</button>
@@ -1170,19 +1165,11 @@ export class UIOverlay {
 
     <!-- PER-MODE SETTINGS (gear on training cards) -->
     <div class="screen scenario-settings" data-screen="scenario-settings">
-      <div class="panel wide scenario-settings-layout">
+      <div class="panel wide menu-panel scenario-settings-layout">
         <header class="scenario-settings-bar">
-          <div class="scenario-settings-heading">
-            <img id="scenario-settings-icon" src="" alt="" class="aim4-icon" width="28" height="28" />
-            <h2 class="text-big" id="scenario-settings-title">Mode settings</h2>
-          </div>
-          <div class="scenario-settings-bar-actions">
-            <span class="settings-unsaved-hint muted" id="scenario-settings-unsaved-hint" hidden>Unsaved changes</span>
-            <button type="button" class="btn" id="scenario-settings-undo-btn" disabled>Undo</button>
-            <button type="button" class="btn primary" id="scenario-settings-done-btn">Done</button>
-          </div>
+          <h2 class="text-big scenario-settings-title" id="scenario-settings-title">Mode settings</h2>
         </header>
-        <div class="scenario-settings-drawer">
+        <div class="scenario-settings-drawer menu-panel-body">
           ${scenarioSettingsSections.map((s) => scenarioSettingsPanel(s.id, s.body)).join('')}
           <div class="scenario-settings-footer">
             <div class="field field-plain">
@@ -1205,16 +1192,13 @@ export class UIOverlay {
               </div>
               <p class="readout" id="scn-code-status"></p>
             </div>
-            <div class="scenario-stats-reset" id="scn-stats-reset-wrap" hidden>
-              <div class="field-top"><span class="field-label">Statistics</span></div>
-              <p class="readout muted scn-stats-reset-hint">Delete all aim analytics, leaderboard scores, and replays for this mode on your account.</p>
-              <button type="button" class="btn btn-danger" id="scn-stats-reset-btn">Reset statistics</button>
-              <p class="readout" id="scn-stats-reset-status"></p>
-            </div>
           </div>
         </div>
-        <div class="menu-actions scenario-settings-back">
-          <button type="button" class="btn primary" id="scenario-settings-back-btn">Back to Training</button>
+        <div class="menu-actions scenario-settings-actions">
+          <button type="button" class="btn" id="scenario-settings-undo-btn" disabled>Undo</button>
+          <span class="scenario-settings-actions-spacer" aria-hidden="true"></span>
+          <button type="button" class="btn btn-danger" id="scn-stats-reset-btn" hidden>Reset statistics</button>
+          <button type="button" class="btn primary" id="scenario-settings-back-btn">Back</button>
         </div>
       </div>
     </div>
@@ -1350,7 +1334,7 @@ export class UIOverlay {
 
     <!-- LEADERBOARD -->
     <div class="screen leaderboard" data-screen="leaderboard">
-      <div class="panel wide">
+      <div class="panel wide menu-panel">
         <div class="lb-header" id="lb-tabs">
           <span class="lb-playlist-title text-big" id="lb-playlist-title" hidden></span>
           <button type="button" class="tab active" id="lb-tab-elo" data-lb="elo">Ranked ELO</button>
@@ -1361,7 +1345,9 @@ export class UIOverlay {
             </select>
           </div>
         </div>
+        <div class="menu-panel-body lb-body-wrap">
         <div id="lb-body" class="lb-body"></div>
+        </div>
         <div class="menu-actions">
           <button type="button" class="btn primary" id="lb-back-btn">Back</button>
         </div>
@@ -1782,9 +1768,31 @@ export class UIOverlay {
 
   _updateScenarioSettingsBar() {
     const undoBtn = this.root.querySelector('#scenario-settings-undo-btn');
-    const hint = this.root.querySelector('#scenario-settings-unsaved-hint');
     if (undoBtn) undoBtn.disabled = !this.settings.canUndoDraft();
-    if (hint) hint.hidden = !this.settings.hasDraftChanges();
+  }
+
+  _applyScenarioSettingsLive() {
+    this.settings.commitDraftLive();
+    this.settings.save();
+    this.sceneManager.applyLiveScenarioSettings();
+    if (this._activeScenarioSettings) {
+      this._populateScenarioFooter(this._activeScenarioSettings);
+    }
+  }
+
+  _canOpenInRunScenarioSettings() {
+    const sc = this.sceneManager.current;
+    if (!sc || sc.isMultiplayer || sc.competitive) return null;
+    const id = sc.name;
+    return SCENARIO_SETTING_IDS.has(id) ? id : null;
+  }
+
+  _updateScenarioSettingsBackLabel() {
+    const back = this.root.querySelector('#scenario-settings-back-btn');
+    if (!back) return;
+    if (this._returnAfterScenarioSettings === 'paused') back.textContent = 'Back to game';
+    else if (this._returnAfterScenarioSettings === 'playlist-edit') back.textContent = 'Back to playlist';
+    else back.textContent = 'Back to Training';
   }
 
   _openSettings() {
@@ -1801,15 +1809,17 @@ export class UIOverlay {
     this._updateSettingsBar();
   }
 
-  _openScenarioSettings(scenarioId) {
+  _openScenarioSettings(scenarioId, { live = false, returnTo = 'training' } = {}) {
     if (!SCENARIO_SETTING_IDS.has(scenarioId)) return;
+    this._scenarioSettingsLive = !!live;
     this.settings.openDraft();
     this._activeScenarioSettings = scenarioId;
     this._populateSettings();
     this._showScenarioSettingsPanel(scenarioId);
     this._populateScenarioFooter(scenarioId);
     this._updateScenarioSettingsBar();
-    this._returnAfterScenarioSettings = 'training';
+    this._returnAfterScenarioSettings = returnTo;
+    this._updateScenarioSettingsBackLabel();
     this.showScreen('scenario-settings');
   }
 
@@ -1831,16 +1841,15 @@ export class UIOverlay {
     this._populateScenarioFooter(item.scenario);
     this._updateScenarioSettingsBar();
     this._returnAfterScenarioSettings = 'playlist-edit';
+    this._scenarioSettingsLive = false;
+    this._updateScenarioSettingsBackLabel();
     this.showScreen('scenario-settings');
   }
 
   _showScenarioSettingsPanel(scenarioId) {
     const title = SCENARIO_META[scenarioId]?.title ?? 'Mode';
-    const icon = SCENARIO_ICONS[scenarioId];
     const titleEl = this.root.querySelector('#scenario-settings-title');
-    const iconEl = this.root.querySelector('#scenario-settings-icon');
     if (titleEl) titleEl.textContent = `${title} settings`;
-    if (iconEl && icon) iconEl.src = icon;
     this.root.querySelectorAll('.scenario-settings-panel').forEach((panel) => {
       panel.classList.toggle('active', panel.dataset.scenarioSettingsPanel === scenarioId);
     });
@@ -1868,7 +1877,14 @@ export class UIOverlay {
       this.showScreen(ret);
       return;
     }
-    this.settings.confirmDraft();
+    if (this._scenarioSettingsLive) {
+      this.settings.commitDraftLive();
+      this.settings.save();
+      this.settings.discardDraft();
+      this._scenarioSettingsLive = false;
+    } else {
+      this.settings.confirmDraft();
+    }
     this._activeScenarioSettings = null;
     this._updateSettingsBar();
     this._updateScenarioSettingsBar();
@@ -1884,9 +1900,9 @@ export class UIOverlay {
         this._populateSettings();
         if (this._activeScenarioSettings) this._populateScenarioFooter(this._activeScenarioSettings);
         this._updateSettingsBar();
+        if (this._scenarioSettingsLive) this._applyScenarioSettingsLive();
       }
     });
-    $('#scenario-settings-done-btn')?.addEventListener('click', () => this._closeScenarioSettings());
     $('#scenario-settings-back-btn')?.addEventListener('click', () => this._closeScenarioSettings());
   }
 
@@ -1928,15 +1944,10 @@ export class UIOverlay {
     const importInput = $('#scn-code-import');
     if (importInput) importInput.value = '';
 
-    const resetWrap = $('#scn-stats-reset-wrap');
+    const resetBtn = $('#scn-stats-reset-btn');
     const canReset =
       this.auth?.isLoggedIn && this.auth?.isConfigured && this._playlistItemEditing == null;
-    if (resetWrap) resetWrap.hidden = !canReset;
-    const resetStatus = $('#scn-stats-reset-status');
-    if (resetStatus) {
-      resetStatus.textContent = '';
-      resetStatus.classList.remove('is-error');
-    }
+    if (resetBtn) resetBtn.hidden = !canReset;
   }
 
   /** Refresh just the live config-code readout (after a settings edit). */
@@ -1965,26 +1976,16 @@ export class UIOverlay {
     );
     if (!ok) return;
 
-    const $ = (id) => this.root.querySelector(id);
-    const status = $('#scn-stats-reset-status');
-    const btn = $('#scn-stats-reset-btn');
-    if (status) {
-      status.textContent = 'Resetting…';
-      status.classList.remove('is-error');
-    }
+    const btn = this.root.querySelector('#scn-stats-reset-btn');
     if (btn) btn.disabled = true;
 
     try {
       await resetGamemodeStats(userId, scenarioId);
-      if (status) status.textContent = 'Statistics reset.';
       if (this._viewingAccount?.id === userId || !this._viewingAccount) {
         this._loadAimSummary(userId).catch(() => {});
       }
     } catch (e) {
-      if (status) {
-        status.textContent = e?.message || 'Reset failed.';
-        status.classList.add('is-error');
-      }
+      window.alert(e?.message || 'Reset failed.');
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -2068,7 +2069,7 @@ export class UIOverlay {
       this._populateSettings();
       this._populateScenarioFooter(scenarioId);
       this._updateScenarioSettingsBar();
-      setStatus('Config imported — press Done to keep it.');
+      setStatus('Config imported.');
     });
   }
 
@@ -2304,10 +2305,16 @@ export class UIOverlay {
     $('#set-duels-arena').addEventListener('change', (e) => {
       draft((d) => { d.duels.arena = parseInt(e.target.value, 10); });
     });
+    $('#set-duels-bot-difficulty')?.addEventListener('change', (e) => {
+      draft((d) => { d.duels.botDifficulty = e.target.value; });
+    });
     this._bindRange('set-duels-ttk', (v, d) => { d.duels.ttk = v; });
     this._bindRange('set-duels-misslimit', (v, d) => { d.duels.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-dm-bots', (v, d) => { d.deathmatch.botCount = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-dm-bot-difficulty')?.addEventListener('change', (e) => {
+      draft((d) => { d.deathmatch.botDifficulty = e.target.value; });
+    });
     this._bindRange('set-dm-speed', (v, d) => { d.deathmatch.botSpeed = v; });
     this._bindRange('set-dm-body', (v, d) => { d.deathmatch.botBodyHit = v / 100; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-dm-head', (v, d) => { d.deathmatch.botHeadHit = v / 100; }, { parse: (v) => parseInt(v, 10) });
@@ -2958,6 +2965,11 @@ export class UIOverlay {
   _bindPauseMenu() {
     const $ = (id) => this.root.querySelector(id);
     $('#pause-settings-btn')?.addEventListener('click', () => {
+      const scenarioId = this._canOpenInRunScenarioSettings();
+      if (scenarioId) {
+        this._openScenarioSettings(scenarioId, { live: true, returnTo: 'paused' });
+        return;
+      }
       this._returnAfterSettings = 'paused';
       this.showScreen('settings');
     });
@@ -3047,9 +3059,15 @@ export class UIOverlay {
   _updatePauseMenu() {
     const leaveBtn = this.root.querySelector('#pause-leave-lobby-btn');
     const restartBtn = this.root.querySelector('#pause-restart-btn');
+    const gearBtn = this.root.querySelector('#pause-settings-btn');
     const inMpMatch = this.mp?.inMatch && !!this.mp?.lobby;
     if (leaveBtn) leaveBtn.hidden = !inMpMatch;
     if (restartBtn) restartBtn.hidden = !!inMpMatch;
+    if (gearBtn) {
+      const modeId = this._canOpenInRunScenarioSettings();
+      gearBtn.hidden = !this.sceneManager.current;
+      gearBtn.setAttribute('aria-label', modeId ? 'Mode settings' : 'Settings');
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -3064,17 +3082,6 @@ export class UIOverlay {
     const section = this.root.querySelector('#menu-auth');
     const guest = this.root.querySelector('#menu-auth-guest');
     const userRow = this.root.querySelector('#menu-auth-user');
-    const mmLine = this.root.querySelector('#menu-mm-userline');
-
-    // Matchmaking tile subline reflects sign-in / ELO regardless of auth config.
-    if (mmLine) {
-      if (this.auth?.isLoggedIn) {
-        mmLine.textContent = `${this._accountLabel()} · ${this.auth.elo} ELO`;
-      } else {
-        mmLine.textContent = this.auth?.isConfigured ? 'Sign in for ranked' : 'Ranked 1v1 duels';
-      }
-    }
-
     if (!section) return;
     if (!this.auth?.isConfigured) {
       section.classList.add('hidden');
@@ -5281,10 +5288,12 @@ export class UIOverlay {
     this._setRange('set-arena-misslimit', s.arena.missLimit ?? 0);
 
     $('#set-duels-arena').value = String(s.duels.arena);
+    $('#set-duels-bot-difficulty').value = s.duels.botDifficulty ?? 'hard';
     this._setRange('set-duels-ttk', s.duels.ttk);
     this._setRange('set-duels-misslimit', s.duels.missLimit ?? 0);
 
     this._setRange('set-dm-bots', s.deathmatch?.botCount ?? 4);
+    $('#set-dm-bot-difficulty').value = s.deathmatch?.botDifficulty ?? 'hard';
     this._setRange('set-dm-speed', s.deathmatch?.botSpeed ?? 1);
     this._setRange('set-dm-body', Math.round((s.deathmatch?.botBodyHit ?? 0.2) * 100));
     this._setRange('set-dm-head', Math.round((s.deathmatch?.botHeadHit ?? 0.05) * 100));
@@ -5470,6 +5479,7 @@ export class UIOverlay {
     // the cursor must reappear so the menu is clickable.
     document.body.classList.toggle('in-run', inRun);
     if (name === 'training') this._renderTrainingList();
+    if (name === 'paused') this._updatePauseMenu();
     if (name === 'menu') {
       this.refreshAccountBar();
       this._updateFullscreenTip();
@@ -6181,6 +6191,7 @@ export class UIOverlay {
     this.state = 'replay';
     this.engine.audio?.resume();
     this.replayOverlay?.classList.add('active');
+    const baselineVFov = this.engine.camera.fov;
     if (fromOtherPlayer && this.settings.data.copyConfigOnReplay) {
       const rs = this.settings.mergeReplaySettings(decoded.settings, sharedSettings);
       if (Object.keys(rs).length) {
@@ -6189,7 +6200,7 @@ export class UIOverlay {
       }
     }
     this.crosshair.setVisible(true);
-    this.replayPlayer.load(decoded);
+    this.replayPlayer.load(decoded, { baselineVFov });
     this.replayPlayer.play();
     this._applyAnalyticsVisibility();
     if (fromOtherPlayer) {

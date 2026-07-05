@@ -31,6 +31,7 @@ import {
   DM_DEATH_FX_PITCH,
   updateDeathFxFrame
 } from './deathFx.js';
+import { botDifficultyMultipliers } from './botDifficulty.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
@@ -76,8 +77,9 @@ export class DeathmatchScenario extends BaseScenario {
       6
     );
     this.botSpeedMul = preset?.botSpeed ?? this.config.botSpeed ?? d.botSpeed ?? 1.0;
-    this._bodyHit = preset?.botBodyHit ?? this.config.botBodyHit ?? d.botBodyHit ?? 0.2;
-    this._headHit = preset?.botHeadHit ?? this.config.botHeadHit ?? d.botHeadHit ?? 0.05;
+    this._bodyHitBase = preset?.botBodyHit ?? this.config.botBodyHit ?? d.botBodyHit ?? 0.2;
+    this._headHitBase = preset?.botHeadHit ?? this.config.botHeadHit ?? d.botHeadHit ?? 0.05;
+    this._applyBotDifficulty();
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 60)
       : Infinity;
@@ -100,6 +102,39 @@ export class DeathmatchScenario extends BaseScenario {
 
   get name() {
     return 'deathmatch';
+  }
+
+  _applyBotDifficulty() {
+    if (this.competitive) {
+      this._reactionMul = 1;
+      this._bodyHit = this._bodyHitBase;
+      this._headHit = this._headHitBase;
+      return;
+    }
+    const mul = botDifficultyMultipliers(this.settings.data.deathmatch?.botDifficulty);
+    this._reactionMul = mul.reaction;
+    this._bodyHit = this._bodyHitBase * mul.hit;
+    this._headHit = this._headHitBase * mul.hit;
+  }
+
+  _botReactionDelay(speed) {
+    return this.competitive
+      ? movementReactionDelay(speed)
+      : movementReactionDelay(speed) * this._reactionMul;
+  }
+
+  _reactSeconds(seconds) {
+    return this.competitive ? seconds : seconds * this._reactionMul;
+  }
+
+  applyLiveSettings() {
+    super.applyLiveSettings();
+    if (this.competitive) return;
+    const d = { ...DEFAULTS.deathmatch, ...(this.settings.data.deathmatch || {}) };
+    this._bodyHitBase = d.botBodyHit ?? 0.2;
+    this._headHitBase = d.botHeadHit ?? 0.05;
+    this.botSpeedMul = d.botSpeed ?? 1.0;
+    this._applyBotDifficulty();
   }
 
   static configKeyFor(settings, variant = 'practice') {
@@ -618,7 +653,7 @@ export class DeathmatchScenario extends BaseScenario {
           bot.sneakTargetKey = targetKey;
         } else if (bot.sneakTargetKey !== targetKey) {
           bot.sneakTargetKey = targetKey;
-          bot.sneakFireDelay = BACKSHOT_FIRE_DELAY;
+          bot.sneakFireDelay = this._reactSeconds(BACKSHOT_FIRE_DELAY);
         } else {
           bot.sneakFireDelay = Math.max(0, bot.sneakFireDelay - dt);
         }
@@ -627,7 +662,7 @@ export class DeathmatchScenario extends BaseScenario {
           if (!bot.hadPlayerLos) {
             const p = this.engine.player;
             const speed = p?.enabled ? Math.hypot(p.vel.x, p.vel.z) : 0;
-            bot.playerReactDelay = movementReactionDelay(speed);
+            bot.playerReactDelay = this._botReactionDelay(speed);
             bot.hadPlayerLos = true;
           }
           bot.playerReactDelay = Math.max(0, bot.playerReactDelay - dt);

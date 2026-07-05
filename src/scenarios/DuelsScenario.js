@@ -44,6 +44,7 @@ import {
 } from './duelsArenas.js';
 import { mapExtent } from '../multiplayer/maps.js';
 import { DEATH_OVERLAY_STRENGTH } from './deathFx.js';
+import { botDifficultyMultipliers } from './botDifficulty.js';
 
 const BODY_R = 0.35;
 const BODY_H = 1.3;
@@ -340,6 +341,7 @@ export class DuelsScenario extends BaseScenario {
     this._botHeadHitBase = preset?.botHeadHit ?? 0.08;
     this._botBodyHitBase = preset?.botBodyHit ?? 0.40;
     this._botHitRamp = preset?.botHitRamp ?? 0.01;
+    this._applyBotDifficulty();
     this._playerHp = PLAYER_HP;
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 60)
@@ -363,6 +365,50 @@ export class DuelsScenario extends BaseScenario {
 
   tracerRaycastExtras() {
     return this.coverMeshes;
+  }
+
+  _applyBotDifficulty() {
+    if (this.competitive) {
+      this._reactionMul = 1;
+      this._hitMul = 1;
+      return;
+    }
+    const mul = botDifficultyMultipliers(this.settings.data.duels?.botDifficulty);
+    this._reactionMul = mul.reaction;
+    this._hitMul = mul.hit;
+  }
+
+  _enemyHitRates() {
+    const ramp = this.competitive ? this.kills * this._botHitRamp : 0;
+    return {
+      headHit: (this._botHeadHitBase + ramp) * this._hitMul,
+      bodyHit: (this._botBodyHitBase + ramp) * this._hitMul
+    };
+  }
+
+  _reactSeconds(seconds) {
+    return this.competitive ? seconds : seconds * this._reactionMul;
+  }
+
+  _reactRange(min, max) {
+    return this._reactSeconds(randRange(min, max));
+  }
+
+  _botReactionDelay(speed) {
+    return this._reactSeconds(movementReactionDelay(speed));
+  }
+
+  applyLiveSettings() {
+    super.applyLiveSettings();
+    if (this.competitive) return;
+    const d = { ...DEFAULTS.duels, ...(this.settings.data.duels || {}) };
+    this._ttk = d.ttk ?? 0.5;
+    this._applyBotDifficulty();
+    if (this.enemy) {
+      const rates = this._enemyHitRates();
+      this.enemy.headHit = rates.headHit;
+      this.enemy.bodyHit = rates.bodyHit;
+    }
   }
 
   _playerBounds(a) {
@@ -491,13 +537,14 @@ export class DuelsScenario extends BaseScenario {
     const mover = new SourceMover1D();
     mover.reset(0);
     this._playerHp = PLAYER_HP;
+    const hitRates = this._enemyHitRates();
     this.enemy = {
       target,
       mover,
       hp: 2,
       crouch: 0,
       phase: 'idle',
-      timer: randRange(REACT_MIN, REACT_MAX),
+      timer: this._reactRange(REACT_MIN, REACT_MAX),
       side: 1,
       offset: 0,
       jiggleLeft: 0,
@@ -512,14 +559,9 @@ export class DuelsScenario extends BaseScenario {
       sneakTargetKey: null,
       hadPlayerLos: false,
       playerReactDelay: 0,
-      headHit: this._botHeadHitBase,
-      bodyHit: this._botBodyHitBase
+      headHit: hitRates.headHit,
+      bodyHit: hitRates.bodyHit
     };
-    if (this.competitive) {
-      const ramp = this.kills * this._botHitRamp;
-      this.enemy.headHit = this._botHeadHitBase + ramp;
-      this.enemy.bodyHit = this._botBodyHitBase + ramp;
-    }
     this._placeEnemy(0);
   }
 
@@ -528,6 +570,7 @@ export class DuelsScenario extends BaseScenario {
     this.addTarget(target);
     const a = this.arena;
     this._playerHp = PLAYER_HP;
+    const hitRates = this._enemyHitRates();
     this.enemy = {
       target,
       pos: { x: a.enemy.x, z: a.enemy.z },
@@ -548,14 +591,9 @@ export class DuelsScenario extends BaseScenario {
       sneakTargetKey: null,
       hadPlayerLos: false,
       playerReactDelay: 0,
-      headHit: this._botHeadHitBase,
-      bodyHit: this._botBodyHitBase
+      headHit: hitRates.headHit,
+      bodyHit: hitRates.bodyHit
     };
-    if (this.competitive) {
-      const ramp = this.kills * this._botHitRamp;
-      this.enemy.headHit = this._botHeadHitBase + ramp;
-      this.enemy.bodyHit = this._botBodyHitBase + ramp;
-    }
     this._syncOffensiveBotTransform();
   }
 
@@ -664,7 +702,7 @@ export class DuelsScenario extends BaseScenario {
       if (!e.hadPlayerLos) {
         const p = this.engine.player;
         const speed = p?.enabled ? Math.hypot(p.vel.x, p.vel.z) : 0;
-        e.playerReactDelay = movementReactionDelay(speed);
+        e.playerReactDelay = this._botReactionDelay(speed);
         e.hadPlayerLos = true;
       }
       e.playerReactDelay = Math.max(0, e.playerReactDelay - dt);
@@ -675,7 +713,7 @@ export class DuelsScenario extends BaseScenario {
         e.sneakTargetKey = 'player';
       } else if (e.sneakTargetKey !== 'player') {
         e.sneakTargetKey = 'player';
-        e.sneakFireDelay = BACKSHOT_FIRE_DELAY;
+        e.sneakFireDelay = this._reactSeconds(BACKSHOT_FIRE_DELAY);
       } else {
         e.sneakFireDelay = Math.max(0, e.sneakFireDelay - dt);
       }
@@ -864,7 +902,7 @@ export class DuelsScenario extends BaseScenario {
     } else {
       e.offset = e.side * (Math.random() < 0.5 ? close : wide);
       e.phase = 'hold';
-      e.timer = randRange(HOLD_MIN, HOLD_MAX);
+      e.timer = this._reactRange(HOLD_MIN, HOLD_MAX);
       e.crouchWant = Math.random() < 0.35 ? 1 : 0; // sometimes crouch on the hold
     }
   }
@@ -916,7 +954,7 @@ export class DuelsScenario extends BaseScenario {
       e.countedMiss = true;
     }
     e.phase = 'idle';
-    e.timer = randRange(REACT_MIN, REACT_MAX);
+    e.timer = this._reactRange(REACT_MIN, REACT_MAX);
     e.crouchWant = 0;
   }
 
@@ -1007,7 +1045,7 @@ export class DuelsScenario extends BaseScenario {
         if (!e.hadPlayerLos) {
           const p = this.engine.player;
           const speed = p?.enabled ? Math.hypot(p.vel.x, p.vel.z) : 0;
-          e.playerReactDelay = movementReactionDelay(speed);
+          e.playerReactDelay = this._botReactionDelay(speed);
           e.hadPlayerLos = true;
         }
         e.playerReactDelay = Math.max(0, e.playerReactDelay - dt);
@@ -1018,7 +1056,7 @@ export class DuelsScenario extends BaseScenario {
           e.sneakTargetKey = 'player';
         } else if (e.sneakTargetKey !== 'player') {
           e.sneakTargetKey = 'player';
-          e.sneakFireDelay = BACKSHOT_FIRE_DELAY;
+          e.sneakFireDelay = this._reactSeconds(BACKSHOT_FIRE_DELAY);
         } else {
           e.sneakFireDelay = Math.max(0, e.sneakFireDelay - dt);
         }
@@ -1039,7 +1077,7 @@ export class DuelsScenario extends BaseScenario {
       if (hasLos && !e.wasLos) {
         const p = this.engine.player;
         const speed = p?.enabled ? Math.hypot(p.vel.x, p.vel.z) : 0;
-        e.exposedTimer = this._ttk + movementReactionDelay(speed);
+        e.exposedTimer = this._reactSeconds(this._ttk + movementReactionDelay(speed));
       }
       if (!hasLos) e.exposedTimer = -1;
       e.wasLos = hasLos;
