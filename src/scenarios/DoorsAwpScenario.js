@@ -21,7 +21,6 @@ import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
 import { DOORS_MAP } from '../maps/doorsMapData.js';
 import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
-import { startMissFlash, updateMissFlash } from './missFlash.js';
 import {
   createDoorsShotFeedback,
   spawnBotSnapshot,
@@ -35,7 +34,7 @@ const BODY_H = 1.3;
 const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
 
 const BOT_CROSS_SPEED = 250 * UNIT;
-const JUMP_CHANCE = 0.33;
+const JUMP_CHANCE = 0; // bots run only — no jump crosses
 const JUMP_PEAK_Y = 1.9; // peak arc height (m) — half of the original 3.8 m
 const CROSS_MARGIN = 0.45;
 const ARM_MIN = 0.5;
@@ -82,8 +81,7 @@ export class DoorsAwpScenario extends BaseScenario {
     this.phase = 'arming';
     this.timer = 0;
     this.bot = null;
-    this._missFlash = null;
-    this._shotFx = createDoorsShotFeedback(this.root);
+    this._shotFx = createDoorsShotFeedback(this.engine.scene);
 
     this._buildEnvironment();
   }
@@ -298,9 +296,6 @@ export class DoorsAwpScenario extends BaseScenario {
   }
 
   onUpdate(dt) {
-    if (this._missFlash && updateMissFlash(this.engine, this._missFlash, dt)) {
-      this._missFlash = null;
-    }
     if (this._shotFx) updateDoorsShotFeedback(this._shotFx, this.camera, dt);
     switch (this.phase) {
       case 'arming':
@@ -340,7 +335,6 @@ export class DoorsAwpScenario extends BaseScenario {
 
     this.misses++;
     beep(240, 0.07, 'sawtooth', 0.05);
-    this._missFlash = startMissFlash();
   }
 
   results() {
@@ -349,7 +343,6 @@ export class DoorsAwpScenario extends BaseScenario {
   }
 
   dispose() {
-    if (this._missFlash) this.engine.setDeathOverlay(0);
     disposeDoorsShotFeedback(this._shotFx);
     this._shotFx = null;
     super.dispose();
