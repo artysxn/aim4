@@ -7,6 +7,7 @@
 // the round is lost.
 // ---------------------------------------------------------------------------
 
+import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
 import { randInt, clamp, lerp } from '../utils/MathUtils.js';
