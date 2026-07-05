@@ -331,7 +331,7 @@ export class BaseScenario {
 
   /** Tracer ends on the bullet ray at the first target/cover hit. */
   _resolveBulletImpact() {
-    const hit = this.raycastTargets(_shotRaycaster(), this.tracerRaycastExtras());
+    const hit = this.raycastTargets(this._shotRaycaster(), this.tracerRaycastExtras());
     if (hit) {
       this._lastImpact.copy(hit.point);
       worldImpactNormal(hit, this._lastImpactNormal);
