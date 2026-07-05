@@ -233,12 +233,36 @@ h2.text-big,
 }
 .panel.menu-panel {
   width: var(--menu-panel-width);
-  height: var(--menu-panel-height);
-  max-height: var(--menu-panel-height);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   text-align: center;
+}
+.panel.menu-panel:not(.menu-panel-main) {
+  height: var(--menu-panel-height);
+  max-height: var(--menu-panel-height);
+}
+.panel.menu-panel-main {
+  height: auto;
+  min-height: var(--menu-panel-height);
+  max-height: 92vh;
+  transition: min-height 0.4s ease, height 0.4s ease;
+}
+.menu-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.menu-panel-body-main {
+  flex: initial;
+  min-height: auto;
+}
+.menu-panel-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+  text-align: left;
 }
 .menu-panel > h1.text-big,
 .menu-panel > h2.text-big {
@@ -843,6 +867,10 @@ a.btn {
   font-size: 16px;
   font-weight: 500;
 }
+.mode-tile-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
 
 .menu-secondary {
   display: flex;
@@ -884,19 +912,50 @@ a.btn {
 
 .screen.menu.active {
   flex-direction: column;
-  gap: 20px;
 }
 
+.menu-fullscreen-tip-shell {
+  max-height: 280px;
+  overflow: hidden;
+  margin-bottom: 14px;
+  transition:
+    max-height 0.4s ease,
+    margin-bottom 0.4s ease,
+    opacity 0.3s ease;
+}
+.menu-fullscreen-tip-shell.is-collapsed {
+  max-height: 0;
+  margin-bottom: 0;
+  opacity: 0;
+  pointer-events: none;
+}
 .menu-fullscreen-tip {
-  width: min(880px, 94vw);
-  padding: 14px 18px;
+  position: relative;
+  padding: 14px 36px 14px 18px;
   text-align: left;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 80px), rgba(12, 12, 13, 0.7);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 80px), rgba(0, 0, 0, 0.22);
   border: none;
   border-radius: var(--radius-sm);
 }
-.menu-fullscreen-tip[hidden] {
-  display: none !important;
+.menu-fullscreen-tip-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.menu-fullscreen-tip-close:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
 }
 .menu-fullscreen-tip-title {
   margin: 0 0 8px;
@@ -1335,6 +1394,9 @@ a.btn {
 }
 .playlists-scroll {
   padding-right: 2px;
+}
+.training-list-wrap.menu-panel-scroll {
+  text-align: left;
 }
 .playlists-list {
   display: flex;

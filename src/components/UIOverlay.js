@@ -197,6 +197,10 @@ function trainingCategoryModes(id) {
   return sortModesByTitle([...cat.modes.filter((m) => SCENARIOS[m]), ...strays]);
 }
 
+function modeCountLabel(n) {
+  return `${n} mode${n === 1 ? '' : 's'}`;
+}
+
 const GEAR_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66z"/></svg>`;
 
 const PLAYLIST_ICON = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 10h11v2H3zm0-4h11v2H3zm0 8h7v2H3zm13-1v6l5-3z"/></svg>`;
@@ -296,6 +300,7 @@ export class UIOverlay {
     this._aimHintShown = false;
     this._unlockSince = null;
     this._countdownRemaining = 0;
+    this._menuTipDismissed = false;
     // Active playlist run: { playlist, index, results: [] } | null
     this._playlistRun = null;
     // Items being assembled in the playlist editor: [{ scenario, config }]
@@ -341,7 +346,9 @@ export class UIOverlay {
     this._bindReplay();
     this._bindResultsInfographics();
     this._bindAimStats();
+    this._menuTipDismissed = !!Storage.read('menuTipDismissed', false);
     this._bindFullscreenTip();
+    this._updateFullscreenTip();
     this.settings.onDraftChange(() => {
       if (this._scenarioSettingsLive) this._applyScenarioSettingsLive();
     });
@@ -949,8 +956,19 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
 
     <!-- MAIN MENU -->
     <div class="screen menu" data-screen="menu">
-      <div class="panel wide menu-panel">
-        <div class="menu-panel-body">
+      <div class="panel wide menu-panel menu-panel-main" id="menu-main-panel">
+        <div class="menu-panel-body menu-panel-body-main">
+          <div class="menu-fullscreen-tip-shell" id="menu-fullscreen-tip-shell">
+            <section class="menu-fullscreen-tip" id="menu-fullscreen-tip" aria-label="Fullscreen recommendation">
+              <button type="button" class="menu-fullscreen-tip-close" id="menu-fullscreen-tip-close" aria-label="Dismiss notice">&times;</button>
+              <p class="menu-fullscreen-tip-title">Important:</p>
+              <ol class="menu-fullscreen-tip-list">
+                <li>Press <kbd>F11</kbd> to enter fullscreen. In a normal browser window, shortcuts like <kbd>Ctrl</kbd>+<kbd>W</kbd> can close the tab while you are playing.</li>
+                <li>It is highly recommended to use Google Chrome. Different browsers handle mouse input in 3D environments differently. For example, using Firefox may cause issues with steadiness.</li>
+                <li>For best performance, enable GPU acceleration in your browser.</li>
+              </ol>
+            </section>
+          </div>
         <h1 class="logo text-big">AIM4<span>.io</span></h1>
         <div class="menu-modes">
           <button type="button" class="mode-tile mode-tile-training" data-goto="singleplayer">
@@ -987,14 +1005,6 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
         </div>
         </div>
       </div>
-      <section class="menu-fullscreen-tip" id="menu-fullscreen-tip" aria-label="Fullscreen recommendation">
-        <p class="menu-fullscreen-tip-title">Important:</p>
-        <ol class="menu-fullscreen-tip-list">
-          <li>Press <kbd>F11</kbd> to enter fullscreen. In a normal browser window, shortcuts like <kbd>Ctrl</kbd>+<kbd>W</kbd> can close the tab while you are playing.</li>
-          <li>It is highly recommended to use Google Chrome. Different browsers handle mouse input in 3D environments differently. For example, using Firefox may cause issues with steadiness.</li>
-          <li>For best performance, enable GPU acceleration in your browser.</li>
-        </ol>
-      </section>
     </div>
 
     <!-- MULTIPLAYER (matchmaking + custom games) -->
@@ -1032,6 +1042,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
           <button type="button" class="mode-tile" data-goto="training-categories">
             <img src="${TRAINING_ICON}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">Training</span>
+            <span class="mode-tile-sub">${modeCountLabel(trainingCategoryModes('all').length)}</span>
           </button>
         </div>
         </div>
@@ -1045,7 +1056,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     <div class="screen training-categories" data-screen="training-categories">
       <div class="panel wide menu-panel">
         <h2 class="text-big">Training</h2>
-        <div class="menu-panel-body">
+        <div class="menu-panel-body menu-panel-scroll">
         <div class="menu-modes menu-modes-sub training-cat-tiles">
           ${TRAINING_CATEGORIES.map((cat) => {
             const modes = trainingCategoryModes(cat.id);
@@ -1062,6 +1073,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
           <button type="button" class="mode-tile" data-training-cat="${cat.id}">
             <img src="${catIcons[cat.id]}" alt="" class="mode-tile-icon" width="40" height="40" aria-hidden="true" />
             <span class="mode-tile-title">${cat.title}</span>
+            <span class="mode-tile-sub">${modeCountLabel(modes.length)}</span>
           </button>`;
           }).join('')}
         </div>
@@ -1076,7 +1088,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     <div class="screen training" data-screen="training">
       <div class="panel wide menu-panel training-panel">
         <h2 class="text-big training-heading" id="training-heading">Training</h2>
-        <div class="menu-panel-body training-list-wrap">
+        <div class="menu-panel-body menu-panel-scroll training-list-wrap">
         <div class="training-list" id="training-list"></div>
         </div>
         <div class="menu-actions training-back">
@@ -1089,7 +1101,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     <div class="screen playlists" data-screen="playlists">
       <div class="panel wide menu-panel playlists-panel">
         <h2 class="text-big training-heading">Playlists</h2>
-        <div class="menu-panel-body playlists-scroll">
+        <div class="menu-panel-body menu-panel-scroll playlists-scroll">
           <div id="playlists-list" class="playlists-list"></div>
           <p class="readout" id="playlist-status"></p>
           <div class="playlist-add-row playlist-import-row">
@@ -1108,7 +1120,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     <div class="screen playlist-edit" data-screen="playlist-edit">
       <div class="panel wide menu-panel playlists-panel">
         <h2 class="text-big training-heading" id="playlist-edit-title">New playlist</h2>
-        <div class="menu-panel-body playlists-scroll">
+        <div class="menu-panel-body menu-panel-scroll playlists-scroll">
           <section class="playlist-builder playlist-builder-edit">
             <div class="field field-plain">
               <div class="field-top"><span class="field-label">Name</span></div>
@@ -5498,16 +5510,23 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
   }
 
   _updateFullscreenTip() {
-    const tip = this.root.querySelector('#menu-fullscreen-tip');
-    if (tip) tip.hidden = this._isFullscreen();
+    const shell = this.root.querySelector('#menu-fullscreen-tip-shell');
+    if (!shell) return;
+    const collapsed = this._menuTipDismissed || this._isFullscreen();
+    shell.classList.toggle('is-collapsed', collapsed);
+    shell.setAttribute('aria-hidden', collapsed ? 'true' : 'false');
   }
 
   _bindFullscreenTip() {
     const update = () => this._updateFullscreenTip();
+    this.root.querySelector('#menu-fullscreen-tip-close')?.addEventListener('click', () => {
+      this._menuTipDismissed = true;
+      Storage.write('menuTipDismissed', true);
+      this._updateFullscreenTip();
+    });
     document.addEventListener('fullscreenchange', update);
     document.addEventListener('webkitfullscreenchange', update);
     window.addEventListener('resize', update);
-    update();
   }
 
   /** Singleplayer competitive runs wait briefly before the timer starts. */
@@ -6148,11 +6167,11 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     if (!isSharedReplayId(id)) return;
     this._clearReplayUrlParam();
     this.showScreen('menu');
-    const tip = this.root.querySelector('#menu-fullscreen-tip');
+    const menuBody = this.root.querySelector('.menu-panel-body-main');
     const loading = document.createElement('p');
     loading.className = 'center lb-hint';
     loading.textContent = 'Loading shared replay…';
-    if (tip) tip.insertAdjacentElement('afterend', loading);
+    if (menuBody) menuBody.appendChild(loading);
     try {
       const data = await fetchSharedReplay(id);
       loading.remove();
