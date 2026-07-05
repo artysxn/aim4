@@ -120,6 +120,27 @@ export class Viewmodel {
     pistol.add(pistolFlash);
     this.group.add(pistol);
     this._models.pistol = { group: pistol, flash: pistolFlash, fwd: 0.34, up: 0.02 };
+
+    // Sniper (AWP-like): long receiver + barrel, big scope tube on top with
+    // lens caps, magazine, grip and a full stock. Hidden entirely while scoped.
+    const sniper = new THREE.Group();
+    this._box(sniper, 0.10, 0.11, 0.72, 0x1c3524, 0, 0, -0.16); // receiver / body
+    this._box(sniper, 0.045, 0.045, 0.62, 0x24262a, 0, 0.02, -0.72); // long barrel
+    this._box(sniper, 0.05, 0.03, 0.10, 0x1a1c1f, 0, 0.045, -1.00); // muzzle brake
+    // Scope: main tube + objective/ocular bells + mounts.
+    this._box(sniper, 0.055, 0.055, 0.34, 0x121316, 0, 0.115, -0.16); // scope tube
+    this._box(sniper, 0.07, 0.07, 0.06, 0x0d0e10, 0, 0.115, -0.35); // objective bell
+    this._box(sniper, 0.068, 0.068, 0.05, 0x0d0e10, 0, 0.115, 0.02); // ocular bell
+    this._box(sniper, 0.03, 0.05, 0.04, 0x1a1c1f, 0, 0.07, -0.24); // front mount
+    this._box(sniper, 0.03, 0.05, 0.04, 0x1a1c1f, 0, 0.07, -0.06); // rear mount
+    this._box(sniper, 0.08, 0.18, 0.09, 0x23272b, 0, -0.15, -0.16); // magazine
+    this._box(sniper, 0.07, 0.15, 0.09, 0x1f2830, 0, -0.12, 0.06); // grip
+    this._box(sniper, 0.065, 0.11, 0.26, 0x1c3524, 0, -0.03, 0.24); // stock
+    this._box(sniper, 0.02, 0.10, 0.05, 0x24262a, 0.065, 0.02, -0.02); // bolt handle
+    const sniperFlash = this._makeFlash(0, 0.02, -1.06);
+    sniper.add(sniperFlash);
+    this.group.add(sniper);
+    this._models.sniper = { group: sniper, flash: sniperFlash, fwd: 1.06, up: 0.02 };
   }
 
   _buildTracers() {

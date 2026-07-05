@@ -61,7 +61,7 @@ export class BounceTrackingScenario extends BounceScenario {
       mesh.material.emissive.set(0x1a8840);
     } else {
       mesh.material.color.set(this.settings.data.colors.target);
-      mesh.material.emissive.set(0xff2a10);
+      mesh.material.emissive.set(this.settings.data.colors.target);
     }
   }
 

@@ -30,7 +30,12 @@ export const RANKED_SCENARIOS = new Set([
   'pasutracking',
   'turn',
   'box',
-  'circle'
+  'circle',
+  'sniperpeeks',
+  'sniperholds',
+  'sniperquickscopes',
+  'sniperflicks',
+  'snipertracking'
 ]);
 
 /** Ranked by total kills in the best timed run. */
@@ -56,7 +61,12 @@ export const KILL_LEADERBOARD_SCENARIOS = new Set([
   'pasutracking',
   'turn',
   'box',
-  'circle'
+  'circle',
+  'sniperpeeks',
+  'sniperholds',
+  'sniperquickscopes',
+  'sniperflicks',
+  'snipertracking'
 ]);
 
 /** Ranked by highest score in the best timed run. */

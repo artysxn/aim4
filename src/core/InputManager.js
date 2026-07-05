@@ -35,6 +35,9 @@ export class InputManager {
     this.jumpQueued = false; // consumed once per press by PlayerController
     this.spawnGraceRemaining = 0; // keyboard locked briefly after spawn
     this.fireHeld = false; // LMB held — drives full-auto in weapon scenarios
+    this.altHeld = false; // RMB held — cycles sniper zoom while held
+    this.lookScale = 1; // scoped sensitivity multiplier (WeaponController)
+    this.scopeLevel = 0; // live zoom level, recorded into the replay bitmask
 
     // Decoupled callbacks — managers/UI subscribe, InputManager knows nothing
     // about game or UI state.
@@ -42,6 +45,8 @@ export class InputManager {
     this.onShoot = null; // () => void — single click (non-weapon scenarios)
     this.onReload = null; // () => void — R pressed
     this.onUnlockedClick = null; // () => void — canvas clicked while not locked
+    this.onAltFire = null; // () => void — RMB pressed (sniper zoom cycle)
+    this.onUnscope = null; // () => void — unscope bind pressed (default 3 / Q)
 
     document.addEventListener('pointerlockchange', () => this._handleLockChange());
     document.addEventListener('pointerlockerror', () => this._handleLockChange());
@@ -50,6 +55,10 @@ export class InputManager {
     document.addEventListener('mouseup', (e) => this._onMouseUp(e));
     document.addEventListener('keydown', (e) => this._onKey(e, true));
     document.addEventListener('keyup', (e) => this._onKey(e, false));
+    // RMB is a game button while locked — never show the context menu mid-run.
+    document.addEventListener('contextmenu', (e) => {
+      if (this.locked) e.preventDefault();
+    });
   }
 
   /** WASD intent as forward/right axes in [-1, 1]. */
@@ -134,6 +143,7 @@ export class InputManager {
       this.keys.clear(); // never leave a key "stuck" after Esc
       this.jumpQueued = false;
       this.fireHeld = false; // never leave the trigger "stuck" after Esc
+      this.altHeld = false;
     }
     if (this.onLockChange) this.onLockChange(this.locked);
   }
@@ -152,6 +162,18 @@ export class InputManager {
       if (down && this.onReload) this.onReload();
       return;
     }
+    // Sniper unscope binds (rebindable in Settings → Weapon).
+    const sn = this.settings.data.sniper;
+    if (e.code === sn?.unscopeKey1 || e.code === sn?.unscopeKey2) {
+      if (!this.locked) return;
+      e.preventDefault();
+      if (down && this.onUnscope) this.onUnscope();
+      if (MOVE_CODES.has(e.code)) {
+        if (down) this.keys.add(e.code);
+        else this.keys.delete(e.code);
+      }
+      return;
+    }
     if (!MOVE_CODES.has(e.code)) return;
     if (!this.locked) {
       this.keys.delete(e.code);
@@ -166,7 +188,7 @@ export class InputManager {
 
   _onMouseMove(e) {
     if (!this.locked) return;
-    const rpc = this.settings.radiansPerCount;
+    const rpc = this.settings.radiansPerCount * (this.lookScale || 1);
     this.yaw -= e.movementX * rpc;
     this.pitch -= e.movementY * rpc;
     this.pitch = clamp(this.pitch, -MAX_PITCH, MAX_PITCH);
@@ -175,6 +197,13 @@ export class InputManager {
   }
 
   _onMouseDown(e) {
+    if (e.button === 2) {
+      if (!this.locked) return;
+      e.preventDefault();
+      this.altHeld = true;
+      if (this.onAltFire) this.onAltFire();
+      return;
+    }
     if (e.button !== 0) return;
     if (!this.locked) {
       // Use the click gesture to (re)acquire pointer lock — clicking back into
@@ -187,6 +216,10 @@ export class InputManager {
   }
 
   _onMouseUp(e) {
+    if (e.button === 2) {
+      this.altHeld = false;
+      return;
+    }
     if (e.button !== 0) return;
     this.fireHeld = false;
   }

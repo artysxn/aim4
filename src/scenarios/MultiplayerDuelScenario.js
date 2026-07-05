@@ -174,7 +174,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
 
     const body = new THREE.Mesh(
       new THREE.CylinderGeometry(BODY_R, BODY_R, BODY_H, 18),
-      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: 0x661222, emissiveIntensity: 0.4, roughness: 0.5 })
+      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: c.enemyBody, emissiveIntensity: 0.4, roughness: 0.5 })
     );
     body.position.y = BODY_H / 2;
     body.userData.zone = 'body';
@@ -182,7 +182,7 @@ export class MultiplayerDuelScenario extends BaseScenario {
 
     const head = new THREE.Mesh(
       new THREE.SphereGeometry(HEAD_R, 22, 16),
-      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: 0xff7b00, emissiveIntensity: 0.5, roughness: 0.4 })
+      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: c.enemyHead, emissiveIntensity: 0.5, roughness: 0.4 })
     );
     head.position.y = HEAD_Y;
     head.userData.zone = 'head';

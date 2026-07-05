@@ -67,7 +67,7 @@ export class StarsScenario extends GridshotScenario {
       new THREE.SphereGeometry(this.targetSize, 10, 8),
       new THREE.MeshStandardMaterial({
         color: this.settings.data.colors.target,
-        emissive: 0xff2a10,
+        emissive: this.settings.data.colors.target,
         emissiveIntensity: 0.55,
         roughness: 0.4,
         metalness: 0.1

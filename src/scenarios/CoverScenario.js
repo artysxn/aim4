@@ -27,16 +27,16 @@ import { DEFAULTS } from '../core/SettingsManager.js';
 import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 import { DEATH_OVERLAY_STRENGTH } from './deathFx.js';
 
-const BODY_R = 0.35;
-const BODY_H = 1.3;
+export const BODY_R = 0.35;
+export const BODY_H = 1.3;
 const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
 
-const ROW_RISE = 200 * UNIT; // each row is 200 u (≈5.08 m) above the previous
+export const ROW_RISE = 200 * UNIT; // each row is 200 u (≈5.08 m) above the previous
 const PLAYER_HALF_X = 6;
 const PLAYER_HALF_Z = 4;
-const COVER_W = 2.8;
-const COVER_H = 2.6;
-const COVER_D = 1.4;
+export const COVER_W = 2.8;
+export const COVER_H = 2.6;
+export const COVER_D = 1.4;
 const COVER_GAP = 8; // metres between box centres on a row
 const PLATFORM_D = 6; // row platform depth
 const SPAWN_HINT_LEAD = 0.5; // s before peek — highlight the spawn box
@@ -65,11 +65,16 @@ export class CoverScenario extends BaseScenario {
     // Full-auto rifle with its normal bloom/recoil — this is a gunfight mode.
     this.weaponId = 'rifle';
     this.infiniteAmmo = true;
-    const preset = this.competitive ? competitivePresetFor('cover') : null;
-    const c = { ...DEFAULTS.cover, ...((this.competitive ? DEFAULTS.cover : this.settings.data.cover) ?? {}) };
+    // Settings are keyed by the concrete mode name (Sniper Quickscopes subclasses this).
+    const modeDefaults = DEFAULTS[this.name] ?? DEFAULTS.cover;
+    const preset = this.competitive ? competitivePresetFor(this.name) : null;
+    const c = {
+      ...modeDefaults,
+      ...((this.competitive ? modeDefaults : (this.settings.data[this.name] ?? this.settings.data.cover)) ?? {})
+    };
 
     this.rowCount = clamp(Math.round(preset?.rowCount ?? this.config.rowCount ?? c.rowCount), 1, 3);
-    this.coverPerRow = clamp(Math.round(preset?.coverPerRow ?? this.config.coverPerRow ?? c.coverPerRow), 1, 5);
+    this.coverPerRow = clamp(Math.round(preset?.coverPerRow ?? this.config.coverPerRow ?? c.coverPerRow), 1, 12);
     this.rowDistance = preset?.rowDistance ?? this.config.rowDistance ?? c.rowDistance;
     this.rowSpacing = preset?.rowSpacing ?? this.config.rowSpacing ?? c.rowSpacing;
     this.botSpeed = preset?.botSpeed ?? this.config.botSpeed ?? c.botSpeed;
@@ -186,7 +191,7 @@ export class CoverScenario extends BaseScenario {
     const c = this.settings.data.colors;
     const body = new THREE.Mesh(
       new THREE.CylinderGeometry(BODY_R, BODY_R, BODY_H, 18),
-      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: 0x404040, emissiveIntensity: 0.4, roughness: 0.5 })
+      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: c.enemyBody, emissiveIntensity: 0.4, roughness: 0.5 })
     );
     body.position.y = BODY_H / 2;
     body.userData.target = t;
@@ -198,7 +203,7 @@ export class CoverScenario extends BaseScenario {
 
     const head = new THREE.Mesh(
       new THREE.SphereGeometry(HEAD_R, 22, 16),
-      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: 0xff7b00, emissiveIntensity: 0.5, roughness: 0.4 })
+      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: c.enemyHead, emissiveIntensity: 0.5, roughness: 0.4 })
     );
     head.position.y = HEAD_Y;
     t.addCollider(head, { zone: 'head', points: 100, crit: true });

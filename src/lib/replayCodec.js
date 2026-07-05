@@ -25,6 +25,8 @@ export const TICK_DT = 1 / TICK_RATE;
 export const REPLAY_VERSION = 1;
 
 // Movement keys → one integer per tick (powers of two; never store booleans).
+// SCOPE1/SCOPE2 encode the sniper zoom level (0 = unscoped) — replays predating
+// them never set the high bits, so decoding stays backward compatible.
 export const INPUT_BITS = Object.freeze({
   W: 1,
   A: 2,
@@ -32,7 +34,9 @@ export const INPUT_BITS = Object.freeze({
   D: 8,
   JUMP: 16,
   CROUCH: 32,
-  WALK: 64
+  WALK: 64,
+  SCOPE1: 128,
+  SCOPE2: 256
 });
 
 // Quantization: floats → integers so deltas compress as small ints under gzip.
@@ -100,7 +104,7 @@ function unpackCamera(flat, totalTicks) {
   const px = new Float64Array(totalTicks);
   const py = new Float64Array(totalTicks);
   const pz = new Float64Array(totalTicks);
-  const input = new Uint8Array(totalTicks);
+  const input = new Uint16Array(totalTicks);
   let qPitch = 0, qYaw = 0, qX = 0, qY = 0, qZ = 0;
   for (let i = 0; i < totalTicks; i++) {
     const o = i * 6;
@@ -115,7 +119,7 @@ function unpackCamera(flat, totalTicks) {
     px[i] = qX / POS_Q;
     py[i] = qY / POS_Q;
     pz[i] = qZ / POS_Q;
-    input[i] = flat[o + 5] & 0xff;
+    input[i] = flat[o + 5] & 0xffff;
   }
   return { pitch, yaw, px, py, pz, input };
 }
@@ -393,6 +397,8 @@ export function inputBitmask(input) {
   if (input.jumpQueued) m |= INPUT_BITS.JUMP;
   if (input.crouchHeld) m |= INPUT_BITS.CROUCH;
   if (input.walkHeld) m |= INPUT_BITS.WALK;
+  if (input.scopeLevel === 1) m |= INPUT_BITS.SCOPE1;
+  else if (input.scopeLevel >= 2) m |= INPUT_BITS.SCOPE2;
   return m;
 }
 
@@ -405,6 +411,7 @@ export function decodeInput(mask) {
     D: !!(mask & INPUT_BITS.D),
     jump: !!(mask & INPUT_BITS.JUMP),
     crouch: !!(mask & INPUT_BITS.CROUCH),
-    walk: !!(mask & INPUT_BITS.WALK)
+    walk: !!(mask & INPUT_BITS.WALK),
+    scope: mask & INPUT_BITS.SCOPE2 ? 2 : mask & INPUT_BITS.SCOPE1 ? 1 : 0
   };
 }

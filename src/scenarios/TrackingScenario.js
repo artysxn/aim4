@@ -44,8 +44,11 @@ const TRACKING_RUN_SPEED = 210 * UNIT; // max lateral strafe (u/s → m/s)
 export class TrackingScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
-    const preset = this.competitive ? competitivePresetFor('tracking') : null;
-    const t = this.competitive ? DEFAULTS.tracking : this.settings.data.tracking;
+    // Settings are keyed by the concrete mode name (Sniper Tracking subclasses this).
+    const preset = this.competitive ? competitivePresetFor(this.name) : null;
+    const t = (this.competitive
+      ? (DEFAULTS[this.name] ?? DEFAULTS.tracking)
+      : (this.settings.data[this.name] ?? this.settings.data.tracking)) || DEFAULTS.tracking;
 
     this.botWidth = preset?.botWidth ?? this.config.botWidth ?? t.botWidth ?? 1;
     this.botSpeedMul = preset?.botSpeed ?? this.config.botSpeed ?? t.botSpeed ?? 1;
@@ -115,7 +118,7 @@ export class TrackingScenario extends BaseScenario {
     const c = this.settings.data.colors;
     const body = new THREE.Mesh(
       new THREE.CylinderGeometry(bodyR, bodyR, BODY_H, 18),
-      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: 0x404040, emissiveIntensity: 0.4, roughness: 0.5 })
+      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: c.enemyBody, emissiveIntensity: 0.4, roughness: 0.5 })
     );
     body.position.y = BODY_H / 2;
     body.userData.target = t;
@@ -125,7 +128,7 @@ export class TrackingScenario extends BaseScenario {
 
     const head = new THREE.Mesh(
       new THREE.SphereGeometry(headR, 22, 16),
-      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: 0xff7b00, emissiveIntensity: 0.5, roughness: 0.4 })
+      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: c.enemyHead, emissiveIntensity: 0.5, roughness: 0.4 })
     );
     head.position.y = headY;
     t.addCollider(head, { zone: 'head', points: HEAD_PTS, crit: false });

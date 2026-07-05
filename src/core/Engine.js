@@ -15,6 +15,7 @@ export class Engine {
   constructor(settings) {
     this.settings = settings;
     this.canvas = document.getElementById('game-canvas');
+    this.zoomHFov = null; // scoped weapon override for the FOV setting (null = hipfire)
 
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
@@ -92,8 +93,16 @@ _setupLights() {
     this.displayStretch = this.displayAspect / this.renderAspect;
 
     this.camera.aspect = this.renderAspect;
-    this.camera.fov = sourceVFovFromHFov(s.hFov);
+    this.camera.fov = sourceVFovFromHFov(this.zoomHFov ?? s.hFov);
     this.camera.updateProjectionMatrix();
+  }
+
+  /** Scope zoom: override the horizontal FOV (null restores the user setting). */
+  setZoomFov(hFov) {
+    const next = hFov ?? null;
+    if (this.zoomHFov === next) return;
+    this.zoomHFov = next;
+    this.applyResolution();
   }
 
   applyColors() {

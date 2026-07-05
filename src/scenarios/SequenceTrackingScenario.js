@@ -51,7 +51,7 @@ export class SequenceTrackingScenario extends SequenceScenario {
       mesh.material.emissive.set(0x1a8840);
     } else {
       mesh.material.color.set(this.settings.data.colors.target);
-      mesh.material.emissive.set(0xff2a10);
+      mesh.material.emissive.set(this.settings.data.colors.target);
     }
   }
 
@@ -69,7 +69,7 @@ export class SequenceTrackingScenario extends SequenceScenario {
       new THREE.SphereGeometry(this.targetSize, 24, 18),
       new THREE.MeshStandardMaterial({
         color: this.settings.data.colors.target,
-        emissive: 0xff2a10,
+        emissive: this.settings.data.colors.target,
         emissiveIntensity: 0.5,
         roughness: 0.4,
         metalness: 0.1

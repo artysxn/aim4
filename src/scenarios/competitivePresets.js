@@ -250,6 +250,54 @@ export const COMPETITIVE_PRESETS = {
     runDuration: 30,
     targetSize: 0.35,
     travelSpeed: 180
+  },
+  sniperpeeks: {
+    runDuration: 60,
+    ttk: 0.3,
+    botHp: 1,
+    botHeadHit: 0.08,
+    botBodyHit: 0.40,
+    botHitRamp: 0.01
+  },
+  sniperholds: {
+    runDuration: 60,
+    ttk: 0.3,
+    botHp: 1,
+    botHeadHit: 0.08,
+    botBodyHit: 0.40,
+    botHitRamp: 0.01
+  },
+  sniperquickscopes: {
+    runDuration: 60,
+    rowCount: 3,
+    coverPerRow: 8,
+    rowDistance: 14,
+    rowSpacing: 8,
+    botSpeed: 1.0,
+    reactMin: 25,
+    reactMax: 200,
+    playerHp: 4,
+    botHp: 1,
+    spawnHint: true
+  },
+  sniperflicks: {
+    runDuration: 60,
+    spawnScaleX: 1.0,
+    spawnScaleY: 1.0,
+    botScale: 1.0,
+    minDistance: 35,
+    maxDistance: 75,
+    botsMove: false // competitive uses static bots
+  },
+  snipertracking: {
+    runDuration: 60,
+    botWidth: 1.0,
+    botSpeed: 1.0,
+    botCrouchTap: true,
+    holdTime: 0.5,
+    respawnDelay: 1.0,
+    minDistance: 10,
+    maxDistance: 16
   }
 };
 

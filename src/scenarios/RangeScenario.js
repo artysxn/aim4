@@ -178,7 +178,7 @@ export class RangeScenario extends BaseScenario {
     const c = this.settings.data.colors;
     const body = new THREE.Mesh(
       new THREE.CylinderGeometry(BODY_R, BODY_R, BODY_H, 18),
-      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: 0x404040, emissiveIntensity: 0.4, roughness: 0.5 })
+      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: c.enemyBody, emissiveIntensity: 0.4, roughness: 0.5 })
     );
     body.position.y = BODY_H / 2;
     body.userData.target = t;
@@ -190,7 +190,7 @@ export class RangeScenario extends BaseScenario {
 
     const head = new THREE.Mesh(
       new THREE.SphereGeometry(HEAD_R, 22, 16),
-      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: 0xff7b00, emissiveIntensity: 0.5, roughness: 0.4 })
+      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: c.enemyHead, emissiveIntensity: 0.5, roughness: 0.4 })
     );
     head.position.y = HEAD_Y;
     t.addCollider(head, { zone: 'head', points: 100, crit: true });

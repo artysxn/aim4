@@ -47,7 +47,7 @@ export class SequenceSpeedScenario extends SequenceScenario {
       new THREE.SphereGeometry(size, 24, 18),
       new THREE.MeshStandardMaterial({
         color: this.settings.data.colors.target,
-        emissive: 0xff2a10,
+        emissive: this.settings.data.colors.target,
         emissiveIntensity: 0.45,
         roughness: 0.4,
         metalness: 0.1

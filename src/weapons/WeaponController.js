@@ -42,6 +42,79 @@ export class WeaponController {
     this._wasAirborne = false;
     this._landedUntil = 0;
     this._lastShotAt = 0; // wall-clock of the last bullet — enforces the fire-rate cap
+
+    // Scope state (sniper): zoom level, hold-to-cycle and post-shot rescope timers.
+    this.scopeLevel = 0;
+    this._scopeChangedAt = 0;
+    this._rescopeAt = 0; // wall-clock to re-scope after a shot (0 = none pending)
+    this._rescopeLevel = 0;
+    this._lastZoomCycleAt = 0;
+    this._applyScope();
+    // Scenarios may spawn the player already scoped in (Sniper Flicks/Tracking).
+    const startScoped = this.sceneManager?.current?.startScoped;
+    if (this.spec.zoom && startScoped > 0) this.setScope(startScoped);
+  }
+
+  // ---- Scope (sniper) -------------------------------------------------------
+  /** Set the zoom level (0 = unscoped) and push FOV/sens/speed side effects. */
+  setScope(level) {
+    const z = this.spec?.zoom;
+    if (!z) return;
+    level = Math.max(0, Math.min(z.fovs.length, Math.round(level)));
+    if (level === this.scopeLevel) return;
+    this.scopeLevel = level;
+    this._scopeChangedAt = performance.now();
+    this._applyScope();
+  }
+
+  /** Right-click: step unscoped → zoom 1 → zoom 2 → unscoped. */
+  cycleScope() {
+    const z = this.spec?.zoom;
+    if (!z || !this._active()) return;
+    this._rescopeAt = 0; // manual zoom overrides a pending post-shot rescope
+    this._lastZoomCycleAt = performance.now();
+    this.setScope((this.scopeLevel + 1) % (z.fovs.length + 1));
+  }
+
+  /** Instant unscope ("3" / "Q" by default — rebindable in settings). */
+  unscope() {
+    if (!this.spec?.zoom) return;
+    this._rescopeAt = 0;
+    this.setScope(0);
+  }
+
+  _applyScope() {
+    const z = this.spec?.zoom;
+    const hFov = z && this.scopeLevel > 0 ? z.fovs[this.scopeLevel - 1] : null;
+    this.engine.setZoomFov?.(hFov);
+    // CS zoomed sensitivity (zoom_sensitivity_ratio 1): look speed scales with
+    // the linear FOV ratio — 2.25× slower at 40°, 9× slower at 10° (90° hip).
+    const hip = Number(this.settings.activeSettings()?.hFov) || 90;
+    this.input.lookScale = hFov ? hFov / hip : 1;
+    this.input.scopeLevel = this.scopeLevel; // recorded into the replay bitmask
+  }
+
+  /** Movement cap the PlayerController should honour (null = no override). */
+  get moveSpeedCap() {
+    const z = this.spec?.zoom;
+    if (!z || !this._active()) return null;
+    return this.scopeLevel > 0 ? z.scopedSpeed : (z.runSpeed ?? null);
+  }
+
+  /** 0..1 accuracy settle since the last scope-in (1 = fully settled). */
+  scopeSettle(now = performance.now()) {
+    const z = this.spec?.zoom;
+    if (!z || this.scopeLevel === 0) return 1;
+    const settleMs = (z.settleTime ?? 0.35) * 1000;
+    return Math.max(0, Math.min(1, (now - this._scopeChangedAt) / settleMs));
+  }
+
+  /** Augment a movement-accuracy state blob with the live scope fields. */
+  _withScopeState(state, now = performance.now()) {
+    if (!this.spec?.zoom) return state;
+    state.scopeLevel = this.scopeLevel;
+    state.scopeSettle = this.scopeSettle(now);
+    return state;
   }
 
   /** Player pressed R (or the mag ran dry). */
@@ -51,6 +124,8 @@ export class WeaponController {
     this.reloading = true;
     this._reloadEndsAt = performance.now() + this.spec.reloadTime * 1000;
     this._firing = false;
+    // Reloading a scoped weapon drops the scope (CS behaviour).
+    if (this.spec.zoom) this.unscope();
   }
 
   get reloadProgress() {
@@ -76,6 +151,7 @@ export class WeaponController {
       ? player.getAccuracyState()
       : { onGround: true, speedHoriz: 0 };
     const now = performance.now();
+    this._withScopeState(state, now);
     const recentlyLanded = now < this._landedUntil;
     return this.spec.bloomRad(state, this._effectiveLevel(now), recentlyLanded);
   }
@@ -94,6 +170,8 @@ export class WeaponController {
     if (!sc) {
       this._firing = false;
       this._wasFireHeld = this.input.fireHeld; // never bank a stale rising edge
+      // Drop the scope when the run is gone entirely (keep it across a pause).
+      if (this.scopeLevel > 0 && !this.sceneManager.current) this.unscope();
       return;
     }
 
@@ -117,6 +195,18 @@ export class WeaponController {
       this.ammo = this.magSize;
       this._shotIndex = 0;
       this._sustainLevel = 0;
+    }
+
+    // Scope: holding right-click keeps cycling zoom levels; a pending post-shot
+    // rescope fires when the bolt closes.
+    if (spec.zoom) {
+      if (this._rescopeAt && now >= this._rescopeAt) {
+        this._rescopeAt = 0;
+        if (!this.reloading) this.setScope(this._rescopeLevel);
+      }
+      if (this.input.altHeld && now - this._lastZoomCycleAt >= spec.zoom.cycleMs) {
+        this.cycleScope();
+      }
     }
 
     const canFire = !this.reloading && (this._infiniteAmmo() || this.ammo > 0);
@@ -171,6 +261,7 @@ export class WeaponController {
     const idx = this._shotIndex;
     const player = this.engine.player;
     const state = player ? player.getAccuracyState() : { onGround: true, speedHoriz: 0 };
+    this._withScopeState(state);
     const recentlyLanded = performance.now() < this._landedUntil;
 
     const offset = this.spec.patternOffset(idx);
@@ -186,6 +277,14 @@ export class WeaponController {
     }
 
     sc.shoot(offset, bloom, idx, punch); // flash, kick, tracer + view-punch live in shoot()
+
+    // Bolt cycle: a scoped shot drops the scope while the next round chambers,
+    // then re-scopes to the same level automatically (CS AWP behaviour).
+    if (this.spec.zoom && this.scopeLevel > 0) {
+      this._rescopeLevel = this.scopeLevel;
+      this._rescopeAt = performance.now() + this.spec.zoom.rescopeMs;
+      this.setScope(0);
+    }
 
     if (!sc.infiniteAmmo) this.ammo--;
     this._shotIndex++;

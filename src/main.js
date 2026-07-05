@@ -35,6 +35,8 @@ engine.sceneManager = sceneManager;
 const weapon = new WeaponController({ engine, input, settings, sceneManager, viewmodel });
 engine.weapon = weapon; // scenarios/UI reach it for ammo + reset
 input.onReload = () => weapon.reload();
+input.onAltFire = () => weapon.cycleScope();
+input.onUnscope = () => weapon.unscope();
 const replayRecorder = new ReplayRecorder(engine, input);
 engine.replayRecorder = replayRecorder; // BaseScenario.shoot records shots through it
 const replayPlayer = new ReplayPlayer(engine);
@@ -61,7 +63,8 @@ engine.onUpdate = (dt) => {
   sceneManager.update(dt);
   const sc = sceneManager.current;
   const inFP = !!(sc?.usesWeapon && sc.running && sc.showViewmodel !== false);
-  viewmodel.setVisible(inFP);
+  // The gun model is hidden while looking through the scope (CS behaviour).
+  viewmodel.setVisible(inFP && weapon.scopeLevel === 0);
   const motion = engine.player?.enabled
     ? {
         onGround: engine.player.onGround,

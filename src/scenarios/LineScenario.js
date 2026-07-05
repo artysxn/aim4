@@ -96,7 +96,7 @@ export class LineScenario extends BaseScenario {
       new THREE.SphereGeometry(this.targetSize, 24, 18),
       new THREE.MeshStandardMaterial({
         color: this.settings.data.colors.target,
-        emissive: 0xff2a10,
+        emissive: this.settings.data.colors.target,
         emissiveIntensity: 0.5,
         roughness: 0.4,
         metalness: 0.1

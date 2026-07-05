@@ -119,7 +119,12 @@ const SCENARIO_META = {
   line: { title: 'Line', dualPlay: true, tags: ['Control', 'Speed'] },
   galaxy: { title: 'Galaxy', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] },
   waves: { title: 'Waves', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] },
-  sequenceultra: { title: 'Sequence (Ultra)', dualPlay: false, challenge: true, tags: ['Control', 'Reactions', 'Accuracy'] }
+  sequenceultra: { title: 'Sequence (Ultra)', dualPlay: false, challenge: true, tags: ['Control', 'Reactions', 'Accuracy'] },
+  sniperpeeks: { title: 'Sniper (Peeks)', dualPlay: true, tags: ['Movement', 'Speed', 'Reactions'] },
+  sniperholds: { title: 'Sniper (Holds)', dualPlay: true, tags: ['Accuracy', 'Control'] },
+  sniperquickscopes: { title: 'Sniper (Quickscopes)', dualPlay: true, tags: ['Reactions', 'Control'] },
+  sniperflicks: { title: 'Sniper (Flicks)', dualPlay: true, tags: ['Reactions', 'Accuracy'] },
+  snipertracking: { title: 'Sniper (Tracking)', dualPlay: true, tags: ['Control'] }
 };
 
 /** Scenarios with practice-only tuning (gear on training card). */
@@ -150,7 +155,12 @@ const SCENARIO_SETTING_IDS = new Set([
   'threeshot',
   'cover',
   'drone',
-  'line'
+  'line',
+  'sniperpeeks',
+  'sniperholds',
+  'sniperquickscopes',
+  'sniperflicks',
+  'snipertracking'
 ]);
 
 // Training sub-menus. A mode may appear in several categories; any registered
@@ -158,11 +168,11 @@ const SCENARIO_SETTING_IDS = new Set([
 // goes missing. "all" browses every non-challenge mode; "challenges" houses
 // the hard fixed-rule variants and only ever shows those.
 const TRAINING_CATEGORIES = [
-  { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'threeshot', 'survival', 'pasu', 'arena', 'turn', 'sequencespeed', 'sequencetracking'] },
-  { id: 'tracking', title: 'Tracking', modes: ['tracking', 'ball', 'drone', 'line', 'box', 'circle', 'bouncetracking', 'pasutracking', 'doubletracking', 'sequencetracking'] },
-  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'threeshot', 'bounce', 'spidershot', 'sequence', 'sequencespeed', 'line'] },
-  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'sequencespeed', 'double', 'doubletracking', 'cover'] },
-  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels', 'cover'] },
+  { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'threeshot', 'survival', 'pasu', 'arena', 'turn', 'sequencespeed', 'sequencetracking', 'sniperpeeks', 'sniperholds'] },
+  { id: 'tracking', title: 'Tracking', modes: ['tracking', 'ball', 'drone', 'line', 'box', 'circle', 'bouncetracking', 'pasutracking', 'doubletracking', 'sequencetracking', 'snipertracking'] },
+  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'threeshot', 'bounce', 'spidershot', 'sequence', 'sequencespeed', 'line', 'sniperquickscopes'] },
+  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'sequencespeed', 'double', 'doubletracking', 'cover', 'sniperflicks'] },
+  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels', 'cover', 'sniperpeeks', 'sniperholds', 'sniperquickscopes', 'sniperflicks', 'snipertracking'] },
   { id: 'challenges', title: 'Challenges', modes: ['galaxy', 'sequenceultra', 'waves'] },
   { id: 'all', title: 'All', modes: [] }
 ];
@@ -512,6 +522,21 @@ export class UIOverlay {
           ${rf('set-vm-oz', 'Offset Z (forward)', 0.2, 1.0, 0.01)}
           <label class="field-check"><input type="checkbox" id="set-vm-bob" /> Weapon bob while moving</label>
           <label class="field-check"><input type="checkbox" id="set-vm-aimpunch" /> Aimpunch (view-punch recoil)</label>`
+      },
+      {
+        id: 'sniperscope',
+        label: 'Sniper scope',
+        body: `
+          ${rf('set-sniper-thick', 'Scope line thickness', 1, 8, 1)}
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Unscope bind 1</span></div>
+            <button type="button" class="btn btn-block" id="set-sniper-bind1"></button>
+          </div>
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Unscope bind 2</span></div>
+            <button type="button" class="btn btn-block" id="set-sniper-bind2"></button>
+          </div>
+          <p class="muted">Right-click cycles the scope. Either bind unscopes instantly.</p>`
       },
 
     ];
@@ -914,6 +939,83 @@ ${rf('set-drone-size', 'Target size', 0.2, 1.0, 0.05)}
 ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
           ${rf('set-line-speed', 'Travel speed (u/s)', 50, 400, 5)}
           ${rf('set-line-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'sniperpeeks',
+        label: 'Sniper (Peeks)',
+        body: `
+${botDifficultyField('set-snpeeks-bot-difficulty')}
+<div class="field field-plain">
+            <div class="field-top">
+              <span class="field-label">Arena</span>
+            </div>
+            <select id="set-snpeeks-arena">
+              ${duelsArenaSelectOptions(ARENAS)}
+            </select>
+          </div>
+          ${rf('set-snpeeks-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'sniperholds',
+        label: 'Sniper (Holds)',
+        body: `
+${botDifficultyField('set-snholds-bot-difficulty')}
+<div class="field field-plain">
+            <div class="field-top">
+              <span class="field-label">Arena</span>
+            </div>
+            <select id="set-snholds-arena">
+              ${duelsArenaSelectOptions(ARENAS)}
+            </select>
+          </div>
+          ${rf('set-snholds-ttk', 'Time to kill (s)', 0.2, 2.0, 0.1)}
+          ${rf('set-snholds-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'sniperquickscopes',
+        label: 'Sniper (Quickscopes)',
+        body: `
+${rf('set-snqs-rings', 'Rings', 1, 3, 1)}
+          ${rf('set-snqs-boxes', 'Boxes per ring', 4, 12, 1)}
+          ${rf('set-snqs-dist', 'First ring distance (m)', 8, 24, 1)}
+          ${rf('set-snqs-spacing', 'Ring spacing (m)', 5, 14, 1)}
+          ${rf('set-snqs-botspeed', 'Bot movement speed', 0.25, 2, 0.05)}
+          ${rf('set-snqs-react-min', 'Bot reaction min (ms)', 0, 500, 5)}
+          ${rf('set-snqs-react-max', 'Bot reaction max (ms)', 25, 1000, 5)}
+          ${rf('set-snqs-hp', 'Hits you can take', 1, 10, 1)}
+          ${rf('set-snqs-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}
+          <label class="field-check"><input type="checkbox" id="set-snqs-spawn-hint" checked /> Highlight spawn box before peek</label>`
+      },
+      {
+        id: 'sniperflicks',
+        label: 'Sniper (Flicks)',
+        body: `
+${rf('set-snfl-radius-x', 'Spawn radius X', 0.25, 1.2, 0.05)}
+          ${rf('set-snfl-radius-y', 'Spawn radius Y', 0.25, 1.3, 0.05)}
+          ${rf('set-snfl-size', 'Bot size', 0.5, 2.0, 0.05)}
+          ${rf('set-snfl-min-dist', 'Min distance (m)', 20, 70, 1)}
+          ${rf('set-snfl-max-dist', 'Max distance (m)', 30, 120, 1)}
+          <label class="field-check"><input type="checkbox" id="set-snfl-move" /> Bots strafe horizontally</label>
+          ${rf('set-snfl-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'snipertracking',
+        label: 'Sniper (Tracking)',
+        body: `
+${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
+          ${rf('set-sntr-speed', 'Bot speed', 0.25, 2.0, 0.05)}
+          ${rf('set-sntr-hold', 'Hold time before shot (s)', 0.1, 2.0, 0.05)}
+          ${rf('set-sntr-respawn', 'Respawn delay (s)', 0.25, 3.0, 0.25)}
+          ${rf('set-sntr-min-dist', 'Min distance (m)', 6, 20, 1)}
+          ${rf('set-sntr-max-dist', 'Max distance (m)', 8, 30, 1)}
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Bot crouch</span></div>
+            <select id="set-sntr-bot-crouch">
+              <option value="tap">Tap crouch</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+          ${rf('set-sntr-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       }
     ];
   }
@@ -1798,6 +1900,48 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     if (slider) slider.value = Math.min(+slider.max, Math.max(+slider.min, value));
   }
 
+  /** Human label for a KeyboardEvent.code ("Digit3" → "3", "KeyQ" → "Q"). */
+  _keyCodeLabel(code) {
+    if (!code) return '—';
+    if (code.startsWith('Key')) return code.slice(3);
+    if (code.startsWith('Digit')) return code.slice(5);
+    return code;
+  }
+
+  _syncKeyCaptureLabel(id, code) {
+    const btn = this.root.querySelector(`#${id}`);
+    if (btn && !btn.dataset.capturing) btn.textContent = this._keyCodeLabel(code);
+  }
+
+  /**
+   * Bind button: click arms capture, the next key press becomes the bind
+   * (Escape cancels). `apply(code, draft)` writes it onto the settings draft.
+   */
+  _bindKeyCapture(id, apply) {
+    const btn = this.root.querySelector(`#${id}`);
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      if (btn.dataset.capturing) return;
+      const prev = btn.textContent;
+      btn.dataset.capturing = '1';
+      btn.textContent = 'Press a key…';
+      const onKey = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        document.removeEventListener('keydown', onKey, true);
+        delete btn.dataset.capturing;
+        if (e.code === 'Escape') {
+          btn.textContent = prev;
+          return;
+        }
+        this.settings.mutateDraft((d) => apply(e.code, d));
+        btn.textContent = this._keyCodeLabel(e.code);
+        this._updateSettingsBar();
+      };
+      document.addEventListener('keydown', onKey, true);
+    });
+  }
+
   _updateSettingsBar() {
     const explore = this._settingsExploreMode || this.settings.isExploreMode;
     const undoBtn = this.root.querySelector('#settings-undo-btn');
@@ -2228,6 +2372,10 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
       draft((d) => { d.weapon.aimpunch = e.target.checked; });
     });
 
+    this._bindRange('set-sniper-thick', (v, d) => { d.sniper.lineThickness = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindKeyCapture('set-sniper-bind1', (code, d) => { d.sniper.unscopeKey1 = code; });
+    this._bindKeyCapture('set-sniper-bind2', (code, d) => { d.sniper.unscopeKey2 = code; });
+
     this._bindRange('set-grid-size', (v, d) => { d.gridshot.targetSize = v; });
     this._bindRange('set-grid-count', (v, d) => { d.gridshot.targetCount = v; }, { parse: (v) => parseInt(v, 10) });
     $('#set-grid-mode').addEventListener('change', (e) => {
@@ -2406,6 +2554,62 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     });
     this._bindRange('set-tracking-strafe', (v, d) => { d.tracking.strafeRate = v; });
     this._bindRange('set-tracking-misslimit', (v, d) => { d.tracking.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    // Sniper (Peeks)
+    $('#set-snpeeks-bot-difficulty')?.addEventListener('change', (e) => {
+      draft((d) => { d.sniperpeeks.botDifficulty = e.target.value; });
+    });
+    $('#set-snpeeks-arena')?.addEventListener('change', (e) => {
+      draft((d) => { d.sniperpeeks.arena = parseInt(e.target.value, 10); });
+    });
+    this._bindRange('set-snpeeks-misslimit', (v, d) => { d.sniperpeeks.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    // Sniper (Holds)
+    $('#set-snholds-bot-difficulty')?.addEventListener('change', (e) => {
+      draft((d) => { d.sniperholds.botDifficulty = e.target.value; });
+    });
+    $('#set-snholds-arena')?.addEventListener('change', (e) => {
+      draft((d) => { d.sniperholds.arena = parseInt(e.target.value, 10); });
+    });
+    this._bindRange('set-snholds-ttk', (v, d) => { d.sniperholds.ttk = v; });
+    this._bindRange('set-snholds-misslimit', (v, d) => { d.sniperholds.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    // Sniper (Quickscopes)
+    this._bindRange('set-snqs-rings', (v, d) => { d.sniperquickscopes.rowCount = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-snqs-boxes', (v, d) => { d.sniperquickscopes.coverPerRow = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-snqs-dist', (v, d) => { d.sniperquickscopes.rowDistance = v; });
+    this._bindRange('set-snqs-spacing', (v, d) => { d.sniperquickscopes.rowSpacing = v; });
+    this._bindRange('set-snqs-botspeed', (v, d) => { d.sniperquickscopes.botSpeed = v; });
+    this._bindRange('set-snqs-react-min', (v, d) => { d.sniperquickscopes.reactMin = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-snqs-react-max', (v, d) => { d.sniperquickscopes.reactMax = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-snqs-hp', (v, d) => { d.sniperquickscopes.playerHp = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-snqs-misslimit', (v, d) => { d.sniperquickscopes.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-snqs-spawn-hint')?.addEventListener('change', (e) => {
+      draft((d) => { d.sniperquickscopes.spawnHint = e.target.checked; });
+    });
+
+    // Sniper (Flicks)
+    this._bindRange('set-snfl-radius-x', (v, d) => { d.sniperflicks.spawnScaleX = v; });
+    this._bindRange('set-snfl-radius-y', (v, d) => { d.sniperflicks.spawnScaleY = v; });
+    this._bindRange('set-snfl-size', (v, d) => { d.sniperflicks.botScale = v; });
+    this._bindRange('set-snfl-min-dist', (v, d) => { d.sniperflicks.minDistance = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-snfl-max-dist', (v, d) => { d.sniperflicks.maxDistance = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-snfl-move')?.addEventListener('change', (e) => {
+      draft((d) => { d.sniperflicks.botsMove = e.target.checked; });
+    });
+    this._bindRange('set-snfl-misslimit', (v, d) => { d.sniperflicks.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    // Sniper (Tracking)
+    this._bindRange('set-sntr-width', (v, d) => { d.snipertracking.botWidth = v; });
+    this._bindRange('set-sntr-speed', (v, d) => { d.snipertracking.botSpeed = v; });
+    this._bindRange('set-sntr-hold', (v, d) => { d.snipertracking.holdTime = v; });
+    this._bindRange('set-sntr-respawn', (v, d) => { d.snipertracking.respawnDelay = v; });
+    this._bindRange('set-sntr-min-dist', (v, d) => { d.snipertracking.minDistance = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-sntr-max-dist', (v, d) => { d.snipertracking.maxDistance = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-sntr-bot-crouch')?.addEventListener('change', (e) => {
+      draft((d) => { d.snipertracking.botCrouchTap = e.target.value !== 'off'; });
+    });
+    this._bindRange('set-sntr-misslimit', (v, d) => { d.snipertracking.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-seq-size', (v, d) => { d.sequence.targetSize = v; });
     this._bindRange('set-seq-time', (v, d) => { d.sequence.dotTime = v; }, { parse: (v) => parseInt(v, 10) });
@@ -4287,8 +4491,8 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
       const last = slots['competitive:last'] || slots['practice:last'];
       const best = slots['competitive:best'];
       const btns = [];
-      if (last) btns.push(this._replayBtnHtml(last, 'Last run', title, { showShare: true }));
-      if (best) btns.push(this._replayBtnHtml(best, 'Best run', title, { showShare: true }));
+      if (last) btns.push(this._replayBtnHtml(last, 'Last run', title));
+      if (best) btns.push(this._replayBtnHtml(best, 'Best run', title));
       if (btns.length) {
         items.push(
           `<div class="account-replay-row"><span class="account-replay-name">${title}</span><span class="account-replay-btns">${btns.join('')}</span></div>`
@@ -4300,14 +4504,6 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
 
     body.querySelectorAll('[data-replay-path]').forEach((b) => {
       b.addEventListener('click', () => this._openAccountReplay(b.dataset.replayPath, b.dataset.replayTitle));
-    });
-    body.querySelectorAll('[data-replay-share]').forEach((b) => {
-      b.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const row = this._accountReplayRows?.find((r) => r.replay_file_path === b.dataset.replayShare);
-        if (!row) return;
-        await this._shareReplay(this._shareMetaFromReplayRow(row), b);
-      });
     });
   }
 
@@ -4332,10 +4528,8 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     };
   }
 
-  _replayBtnHtml(row, label, title, { showShare = false } = {}) {
-    const watch = `<button type="button" class="btn btn-sm" data-replay-path="${this._esc(row.replay_file_path)}" data-replay-title="${this._esc(`${title} — ${label}`)}">${label}</button>`;
-    if (!showShare) return watch;
-    return `${watch}<button type="button" class="btn btn-sm" data-replay-share="${this._esc(row.replay_file_path)}">Share</button>`;
+  _replayBtnHtml(row, label, title) {
+    return `<button type="button" class="btn btn-sm" data-replay-path="${this._esc(row.replay_file_path)}" data-replay-title="${this._esc(`${title} — ${label}`)}">${label}</button>`;
   }
 
   async _openAccountReplay(path, title) {
@@ -5247,6 +5441,10 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     $('#set-vm-bob').checked = s.viewmodel?.bob !== false;
     $('#set-vm-aimpunch').checked = s.weapon?.aimpunch !== false;
 
+    this._setRange('set-sniper-thick', s.sniper?.lineThickness ?? 2);
+    this._syncKeyCaptureLabel('set-sniper-bind1', s.sniper?.unscopeKey1 ?? 'Digit3');
+    this._syncKeyCaptureLabel('set-sniper-bind2', s.sniper?.unscopeKey2 ?? 'KeyQ');
+
     this._setRange('set-grid-size', s.gridshot.targetSize);
     this._setRange('set-grid-count', s.gridshot.targetCount ?? 3);
     $('#set-grid-mode').value = s.gridshot.mode || 'clicking';
@@ -5372,6 +5570,55 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
     $('#set-tracking-crouch').checked = s.tracking?.botCrouchTap !== false;
     this._setRange('set-tracking-strafe', s.tracking?.strafeRate ?? 1);
     this._setRange('set-tracking-misslimit', s.tracking?.missLimit ?? 0);
+
+    const snp = s.sniperpeeks ?? {};
+    const snpd = this.root.querySelector('#set-snpeeks-bot-difficulty');
+    if (snpd) snpd.value = snp.botDifficulty ?? 'hard';
+    const snpa = this.root.querySelector('#set-snpeeks-arena');
+    if (snpa) snpa.value = String(snp.arena ?? 0);
+    this._setRange('set-snpeeks-misslimit', snp.missLimit ?? 0);
+
+    const snh = s.sniperholds ?? {};
+    const snhd = this.root.querySelector('#set-snholds-bot-difficulty');
+    if (snhd) snhd.value = snh.botDifficulty ?? 'hard';
+    const snha = this.root.querySelector('#set-snholds-arena');
+    if (snha) snha.value = String(snh.arena ?? 0);
+    this._setRange('set-snholds-ttk', snh.ttk ?? 0.5);
+    this._setRange('set-snholds-misslimit', snh.missLimit ?? 0);
+
+    const snq = s.sniperquickscopes ?? {};
+    this._setRange('set-snqs-rings', snq.rowCount ?? 3);
+    this._setRange('set-snqs-boxes', snq.coverPerRow ?? 8);
+    this._setRange('set-snqs-dist', snq.rowDistance ?? 14);
+    this._setRange('set-snqs-spacing', snq.rowSpacing ?? 8);
+    this._setRange('set-snqs-botspeed', snq.botSpeed ?? 1);
+    this._setRange('set-snqs-react-min', snq.reactMin ?? 25);
+    this._setRange('set-snqs-react-max', snq.reactMax ?? 200);
+    this._setRange('set-snqs-hp', snq.playerHp ?? 4);
+    this._setRange('set-snqs-misslimit', snq.missLimit ?? 0);
+    const snqh = this.root.querySelector('#set-snqs-spawn-hint');
+    if (snqh) snqh.checked = snq.spawnHint !== false;
+
+    const snf = s.sniperflicks ?? {};
+    this._setRange('set-snfl-radius-x', snf.spawnScaleX ?? 1);
+    this._setRange('set-snfl-radius-y', snf.spawnScaleY ?? 1);
+    this._setRange('set-snfl-size', snf.botScale ?? 1);
+    this._setRange('set-snfl-min-dist', snf.minDistance ?? 35);
+    this._setRange('set-snfl-max-dist', snf.maxDistance ?? 75);
+    const snfm = this.root.querySelector('#set-snfl-move');
+    if (snfm) snfm.checked = !!snf.botsMove;
+    this._setRange('set-snfl-misslimit', snf.missLimit ?? 0);
+
+    const snt = s.snipertracking ?? {};
+    this._setRange('set-sntr-width', snt.botWidth ?? 1);
+    this._setRange('set-sntr-speed', snt.botSpeed ?? 1);
+    this._setRange('set-sntr-hold', snt.holdTime ?? 0.5);
+    this._setRange('set-sntr-respawn', snt.respawnDelay ?? 1);
+    this._setRange('set-sntr-min-dist', snt.minDistance ?? 10);
+    this._setRange('set-sntr-max-dist', snt.maxDistance ?? 16);
+    const sntc = this.root.querySelector('#set-sntr-bot-crouch');
+    if (sntc) sntc.value = snt.botCrouchTap !== false ? 'tap' : 'off';
+    this._setRange('set-sntr-misslimit', snt.missLimit ?? 0);
 
     const sq = s.sequence ?? {};
     this._setRange('set-seq-size', sq.targetSize ?? 0.25);

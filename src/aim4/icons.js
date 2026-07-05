@@ -21,6 +21,10 @@ import threeshot   from '../icons/mode_threeshot.svg?url';
 import cover       from '../icons/mode_cover.svg?url';
 import drone       from '../icons/mode_drone.svg?url';
 import line        from '../icons/mode_line.svg?url';
+import sniperpeeks from '../icons/mode_sniperpeeks.svg?url';
+import sniperholds from '../icons/mode_sniperholds.svg?url';
+import sniperquickscopes from '../icons/mode_sniperquickscopes.svg?url';
+import sniperflicks from '../icons/mode_sniperflicks.svg?url';
 
 import matchmaking from '../icons/icon_matchmaking.svg?url';
 import training    from '../icons/icon_training.svg?url';
@@ -65,7 +69,12 @@ export const SCENARIO_ICONS = {
   line,
   galaxy: stars,          // Galaxy challenge uses the Stars icon (by design)
   waves,
-  sequenceultra: sequence
+  sequenceultra: sequence,
+  sniperpeeks,
+  sniperholds,
+  sniperquickscopes,
+  sniperflicks,
+  snipertracking: sniperflicks // no dedicated icon — shares the Flicks scope glyph
 };
 
 export const MATCHMAKING_ICON   = matchmaking;

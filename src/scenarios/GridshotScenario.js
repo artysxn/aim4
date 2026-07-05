@@ -160,7 +160,7 @@ export class GridshotScenario extends BaseScenario {
       mesh.material.emissive.set(0x1a8840);
     } else {
       mesh.material.color.set(base);
-      mesh.material.emissive.set(0xff2a10);
+      mesh.material.emissive.set(this.settings.data.colors.target);
     }
   }
 
@@ -209,7 +209,7 @@ export class GridshotScenario extends BaseScenario {
       new THREE.SphereGeometry(this.targetSize, 28, 20),
       new THREE.MeshStandardMaterial({
         color: this.settings.data.colors.target,
-        emissive: 0xff2a10,
+        emissive: this.settings.data.colors.target,
         emissiveIntensity: 0.5,
         roughness: 0.4,
         metalness: 0.1

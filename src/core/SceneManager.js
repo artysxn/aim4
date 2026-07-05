@@ -36,6 +36,10 @@ import { DroneScenario } from '../scenarios/DroneScenario.js';
 import { GalaxyScenario } from '../scenarios/GalaxyScenario.js';
 import { WavesScenario } from '../scenarios/WavesScenario.js';
 import { MultiplayerDuelScenario } from '../scenarios/MultiplayerDuelScenario.js';
+import { SniperPeeksScenario, SniperHoldsScenario } from '../scenarios/SniperDuelsScenario.js';
+import { SniperQuickscopesScenario } from '../scenarios/SniperQuickscopesScenario.js';
+import { SniperFlicksScenario } from '../scenarios/SniperFlicksScenario.js';
+import { SniperTrackingScenario } from '../scenarios/SniperTrackingScenario.js';
 import { DURATION_MODES, resolveModeDuration } from './SettingsManager.js';
 import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 
@@ -70,7 +74,12 @@ export const SCENARIOS = {
   line: LineScenario,
   galaxy: GalaxyScenario,
   waves: WavesScenario,
-  sequenceultra: SequenceUltraScenario
+  sequenceultra: SequenceUltraScenario,
+  sniperpeeks: SniperPeeksScenario,
+  sniperholds: SniperHoldsScenario,
+  sniperquickscopes: SniperQuickscopesScenario,
+  sniperflicks: SniperFlicksScenario,
+  snipertracking: SniperTrackingScenario
 };
 
 // Scenarios launched outside the card grid (e.g. multiplayer).

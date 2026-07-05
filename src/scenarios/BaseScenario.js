@@ -166,6 +166,7 @@ export class BaseScenario {
       for (const t of this.targets) {
         for (const mesh of t.colliders || []) {
           if (mesh.material?.color) mesh.material.color.set(col);
+          if (mesh.material?.emissive) mesh.material.emissive.set(col);
         }
       }
     }

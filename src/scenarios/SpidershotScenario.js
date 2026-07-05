@@ -193,7 +193,7 @@ export class SpidershotScenario extends BaseScenario {
           ? { color: DECOY_COLOR, emissive: 0x000000, emissiveIntensity: 0, roughness: 0.85, metalness: 0 }
           : {
               color: this.settings.data.colors.target,
-              emissive: 0xff2a10,
+              emissive: this.settings.data.colors.target,
               emissiveIntensity: 0.5,
               roughness: 0.4,
               metalness: 0.1

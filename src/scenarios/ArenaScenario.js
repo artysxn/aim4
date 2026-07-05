@@ -144,14 +144,14 @@ export class ArenaScenario extends BaseScenario {
     const t = new Target();
     const body = new THREE.Mesh(
       new THREE.CylinderGeometry(bodyR, bodyR, bodyH, 18),
-      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: 0x404040, emissiveIntensity: 0.4, roughness: 0.5 })
+      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: c.enemyBody, emissiveIntensity: 0.4, roughness: 0.5 })
     );
     body.position.y = bodyH / 2;
     t.addCollider(body, { zone: 'body', points: 35, crit: false });
 
     const head = new THREE.Mesh(
       new THREE.SphereGeometry(headR, 22, 16),
-      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: 0xff7b00, emissiveIntensity: 0.5, roughness: 0.4 })
+      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: c.enemyHead, emissiveIntensity: 0.5, roughness: 0.4 })
     );
     head.position.y = headY;
     t.addCollider(head, { zone: 'head', points: 100, crit: true });

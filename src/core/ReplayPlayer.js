@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { EYE_HEIGHT } from './Engine.js';
 import { decodeInput } from '../lib/replayCodec.js';
+import { sourceVFovFromHFov } from '../utils/MathUtils.js';
 import { getWeapon } from '../weapons/index.js';
 import { PLAYER_RUN_SPEED } from '../utils/spawnVisibility.js';
 import { ReplayAnalytics } from '../lib/replayAnalytics.js';
@@ -93,6 +94,8 @@ export class ReplayPlayer {
     this._sfx = null;
     this._replayFov = 75;
     this.zoom = 1; // scroll wheel zoom during playback (1 = default)
+    this.scopeLevel = 0; // recorded sniper zoom at the current tick (drives overlay)
+    this.scopeBlur = 0; // approximate hairline blur for the overlay
 
     this.analytics = null; // ReplayAnalytics for the loaded replay
 
@@ -304,7 +307,20 @@ export class ReplayPlayer {
     const camera = this.engine.camera;
     camera.position.set(cam.px, cam.py, cam.pz);
     camera.rotation.set(cam.pitch, cam.yaw, 0, 'YXZ');
-    camera.fov = this._replayFov / this.zoom;
+
+    // Recorded sniper scope: reproduce the zoomed FOV, the scope overlay and
+    // the hidden viewmodel exactly as the recorded player saw them.
+    const flags = decodeInput(cam.input);
+    const zoomSpec = getWeapon(r.weaponId)?.zoom;
+    const scope = zoomSpec ? Math.min(flags.scope || 0, zoomSpec.fovs.length) : 0;
+    this.scopeLevel = scope;
+    const moving = flags.W || flags.A || flags.S || flags.D;
+    this.scopeBlur = scope > 0 && moving ? 5 : 0;
+    const vm = this.engine.viewmodel;
+    if (vm && r.showViewmodel !== false) vm.setVisible(scope === 0);
+
+    const baseFov = scope > 0 ? sourceVFovFromHFov(zoomSpec.fovs[scope - 1]) : this._replayFov;
+    camera.fov = baseFov / this.zoom;
     camera.updateProjectionMatrix();
 
     for (const e of this.entities) {
@@ -374,12 +390,11 @@ export class ReplayPlayer {
     const recoil = this.replay?.viewmodelRecoil !== false;
 
     // Align the camera to the shot tick so muzzle sync matches the recording.
+    // (FOV is owned by _applyTick — it already accounts for scope zoom.)
     const cam = this.replay.sampleCamera(ev.t);
     const camera = this.engine.camera;
     camera.position.set(cam.px, cam.py, cam.pz);
     camera.rotation.set(cam.pitch, cam.yaw, 0, 'YXZ');
-    camera.fov = this._replayFov / this.zoom;
-    camera.updateProjectionMatrix();
 
     const flags = decodeInput(cam.input);
     const moving = flags.W || flags.A || flags.S || flags.D;
@@ -492,6 +507,8 @@ export class ReplayPlayer {
     this.playing = false;
     this.time = 0;
     this.zoom = 1;
+    this.scopeLevel = 0;
+    this.scopeBlur = 0;
     this._sfx = null;
     this.engine.camera.fov = this._replayFov;
     this.engine.camera.updateProjectionMatrix();

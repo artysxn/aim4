@@ -329,18 +329,27 @@ const JIGGLE_ENGAGE_AIM_DEG = 10;
 export class DuelsScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
-    const d = this.competitive ? DEFAULTS.duels : this.settings.data.duels;
+    // Settings are keyed by the concrete mode name so sniper variants
+    // (Sniper Peeks / Holds) carry their own tuning blob.
+    const d = (this.competitive
+      ? (DEFAULTS[this.name] ?? DEFAULTS.duels)
+      : (this.settings.data[this.name] ?? this.settings.data.duels)) || DEFAULTS.duels;
     const choice = this.config.arena ?? d.arena;
     const resolved = resolveDuelsArenaChoice(ARENAS, choice);
     this.arenaIndex = resolved.index;
     this._baseArena = resolved.arena;
     this.offensive = false;
+    // Subclasses pin the round type: 'offensive' (bot in the open, you peek) or
+    // 'defensive' (you hold, the bot peeks). null = random 50/50 per round.
+    this.duelMode = null;
 
-    const preset = this.competitive ? competitivePresetFor('duels') : null;
+    const preset = this.competitive ? competitivePresetFor(this.name) : null;
     this._ttk = this.config.ttk ?? preset?.ttk ?? d.ttk ?? 0.5;
     this._botHeadHitBase = preset?.botHeadHit ?? 0.08;
     this._botBodyHitBase = preset?.botBodyHit ?? 0.40;
     this._botHitRamp = preset?.botHitRamp ?? 0.01;
+    // Body shots the PLAYER needs to drop the bot (sniper modes use 1).
+    this._botHp = Math.max(1, Math.round(preset?.botHp ?? this.config.botHp ?? d.botHp ?? 2));
     this._applyBotDifficulty();
     this._playerHp = PLAYER_HP;
     this.runDuration = this.competitive
@@ -373,7 +382,8 @@ export class DuelsScenario extends BaseScenario {
       this._hitMul = 1;
       return;
     }
-    const mul = botDifficultyMultipliers(this.settings.data.duels?.botDifficulty);
+    const d = this.settings.data[this.name] ?? this.settings.data.duels;
+    const mul = botDifficultyMultipliers(d?.botDifficulty);
     this._reactionMul = mul.reaction;
     this._hitMul = mul.hit;
   }
@@ -401,7 +411,10 @@ export class DuelsScenario extends BaseScenario {
   applyLiveSettings() {
     super.applyLiveSettings();
     if (this.competitive) return;
-    const d = { ...DEFAULTS.duels, ...(this.settings.data.duels || {}) };
+    const d = {
+      ...(DEFAULTS[this.name] ?? DEFAULTS.duels),
+      ...((this.settings.data[this.name] ?? this.settings.data.duels) || {})
+    };
     this._ttk = d.ttk ?? 0.5;
     this._applyBotDifficulty();
     if (this.enemy) {
@@ -473,7 +486,11 @@ export class DuelsScenario extends BaseScenario {
   }
 
   _beginDuelRound({ recordEnv = false } = {}) {
-    this.offensive = Math.random() < 0.5;
+    this.offensive = this.duelMode === 'offensive'
+      ? true
+      : this.duelMode === 'defensive'
+        ? false
+        : Math.random() < 0.5;
     this.arena = applyDuelsSide(this._baseArena, this.offensive);
     this._buildArena();
     if (recordEnv) this.engine.replayRecorder?.recordEnvironmentChange();
@@ -508,7 +525,7 @@ export class DuelsScenario extends BaseScenario {
     const c = this.settings.data.colors;
     const body = new THREE.Mesh(
       new THREE.CylinderGeometry(BODY_R, BODY_R, BODY_H, 18),
-      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: 0x661222, emissiveIntensity: 0.4, roughness: 0.5 })
+      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: c.enemyBody, emissiveIntensity: 0.4, roughness: 0.5 })
     );
     body.position.y = BODY_H / 2;
     body.userData.target = t;
@@ -520,7 +537,7 @@ export class DuelsScenario extends BaseScenario {
 
     const head = new THREE.Mesh(
       new THREE.SphereGeometry(HEAD_R, 22, 16),
-      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: 0xff7b00, emissiveIntensity: 0.5, roughness: 0.4 })
+      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: c.enemyHead, emissiveIntensity: 0.5, roughness: 0.4 })
     );
     head.position.y = HEAD_Y;
     t.addCollider(head, { zone: 'head', points: 100, crit: true });
@@ -541,7 +558,7 @@ export class DuelsScenario extends BaseScenario {
     this.enemy = {
       target,
       mover,
-      hp: 2,
+      hp: this._botHp,
       crouch: 0,
       phase: 'idle',
       timer: this._reactRange(REACT_MIN, REACT_MAX),
@@ -576,7 +593,7 @@ export class DuelsScenario extends BaseScenario {
       pos: { x: a.enemy.x, z: a.enemy.z },
       vel: { x: 0, z: 0 },
       footY: a.enemy.y ?? 0,
-      hp: 2,
+      hp: this._botHp,
       crouch: 0,
       crouchWant: 0,
       strafeDir: Math.random() < 0.5 ? -1 : 1,

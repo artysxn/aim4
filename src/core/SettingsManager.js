@@ -92,7 +92,12 @@ export const DEFAULTS = {
   },
   weapon: {
     aimpunch: true, // view-punch camera kick when firing (toggle for those who dislike it)
-    customWeapon: 'rifle' // custom games: 'rifle' | 'pistol' | 'tracking'
+    customWeapon: 'rifle' // custom games: 'rifle' | 'pistol' | 'tracking' | 'sniper'
+  },
+  sniper: {
+    lineThickness: 2, // px — scope hairline thickness
+    unscopeKey1: 'Digit3', // instant-unscope binds (rebindable)
+    unscopeKey2: 'KeyQ'
   },
   gridshot: {
     targetSize: 0.55,
@@ -384,6 +389,52 @@ export const DEFAULTS = {
     targetSize: 0.35,
     travelSpeed: 180, // u/s — horizontal travel along the 180° field
     missLimit: 0
+  },
+  sniperpeeks: {
+    arena: 0, // 0 = random each run, 1..N = fixed arena
+    botDifficulty: 'hard',
+    ttk: 0.5,
+    botHp: 1, // the sniper one-shots the bot
+    missLimit: 0
+  },
+  sniperholds: {
+    arena: 0,
+    botDifficulty: 'hard',
+    ttk: 0.5,
+    botHp: 1,
+    missLimit: 0
+  },
+  sniperquickscopes: {
+    rowCount: 3, // rings around the pit
+    coverPerRow: 8, // boxes per ring
+    rowDistance: 14, // m — pit centre to the first ring
+    rowSpacing: 8, // m — between rings
+    botSpeed: 1.0,
+    reactMin: 25, // ms after full line-of-sight before the bot may shoot
+    reactMax: 200,
+    playerHp: 4,
+    botHp: 1,
+    missLimit: 0,
+    spawnHint: true // the spawn box turns red before the bot peeks
+  },
+  sniperflicks: {
+    spawnScaleX: 1.0, // horizontal spawn radius multiplier
+    spawnScaleY: 1.0, // vertical spawn radius multiplier
+    botScale: 1.0, // bot size multiplier
+    minDistance: 35, // m — bots spawn between far…
+    maxDistance: 75, // …and very far away
+    botsMove: false, // practice option: bots strafe horizontally
+    missLimit: 0
+  },
+  snipertracking: {
+    botWidth: 1.0,
+    botSpeed: 1.0,
+    botCrouchTap: true,
+    holdTime: 0.5, // s of uninterrupted crosshair time before a shot may kill
+    respawnDelay: 1.0, // s after a kill before the next bot spawns
+    minDistance: 10, // m — random-ish spawn distance range
+    maxDistance: 16,
+    missLimit: 0
   }
 };
 
@@ -399,7 +450,8 @@ export const DURATION_MODES = [
   'gridshot', 'stars', 'threeshot', 'bounce', 'microflicks', 'pasu', 'spidershot',
   'survival', 'arena', 'cover', 'duels', 'range', 'tracking', 'deathmatch',
   'sequence', 'sequencespeed', 'sequencetracking', 'double', 'doubletracking', 'ball', 'drone', 'line', 'bouncetracking', 'pasutracking', 'turn',
-  'box', 'circle'
+  'box', 'circle',
+  'sniperpeeks', 'sniperholds', 'sniperquickscopes', 'sniperflicks', 'snipertracking'
 ];
 
 /** Resolve a usable duration ({ type, value }) from a scenario settings blob. */

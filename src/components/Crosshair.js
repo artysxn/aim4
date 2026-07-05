@@ -32,6 +32,8 @@ export class Crosshair {
     this._hitFlashUntil = 0;
     this._trackProgress = 0;
     this._dynGapPx = 0;
+    this._scopeLevel = 0; // sniper: >0 replaces the crosshair with the scope overlay
+    this._scopeBlur = 0; // px of hairline blur (inaccurate: just-scoped / moving)
 
     window.addEventListener('resize', () => this.draw());
     settings.onChange(() => {
@@ -53,7 +55,35 @@ export class Crosshair {
     if (this.visible) this.draw();
   }
 
+  /** Live scope state: from the weapon during a run, from the replay when watching. */
+  _scopeState(engine) {
+    const rp = engine.replayPlayer;
+    if (rp?.active) return { level: rp.scopeLevel || 0, blur: rp.scopeBlur || 0 };
+    const weapon = engine.weapon;
+    const sc = engine.sceneManager?.current;
+    if (weapon?.scopeLevel > 0 && sc?.usesWeapon && !sc._dead) {
+      // Map the live bloom cone to hairline blur so "inaccurate" is visible:
+      // freshly scoped or moving above the accuracy threshold ⇒ blurry lines.
+      const bloomDeg = (weapon.getBloomRad() * 180) / Math.PI;
+      const blur = Math.max(0, Math.min(10, (bloomDeg - 0.05) * 3.2));
+      return { level: weapon.scopeLevel, blur };
+    }
+    return { level: 0, blur: 0 };
+  }
+
   frame(engine) {
+    if (this.visible) {
+      const scope = this._scopeState(engine);
+      if (
+        scope.level !== this._scopeLevel ||
+        Math.abs(scope.blur - this._scopeBlur) > 0.25
+      ) {
+        this._scopeLevel = scope.level;
+        this._scopeBlur = scope.blur;
+        this.draw();
+      }
+      if (this._scopeLevel > 0) return; // dynamic gap is hipfire-only
+    }
     if (!this.visible || !this.settings.activeSettings().crosshair.dynamicGap) {
       if (this._dynGapPx !== 0) {
         this._dynGapPx = 0;
@@ -131,6 +161,12 @@ export class Crosshair {
     ctx.clearRect(0, 0, w, h);
     if (!this.visible) return;
 
+    // Scoped: the crosshair is hidden — draw the scope overlay instead.
+    if (this._scopeLevel > 0) {
+      this._paintScope(ctx, w, h);
+      return;
+    }
+
     const res = getResolutionSpec(this.settings.activeSettings());
     let scaleX = 1;
     let scaleY = 1;
@@ -146,6 +182,52 @@ export class Crosshair {
       hitFlash: this.settings.activeSettings().crosshair.hitmarker !== false &&
         performance.now() < this._hitFlashUntil
     });
+  }
+
+  /** CS-style scope: black vignette circle + full hairlines that blur when inaccurate. */
+  _paintScope(ctx, w, h) {
+    const s = this.settings.activeSettings();
+    const th = Math.max(1, Number(s.sniper?.lineThickness) || 2);
+    const cx = w / 2;
+    const cy = h / 2;
+    const R = Math.min(w, h) * 0.485;
+    const blur = this._scopeBlur || 0;
+
+    // Hairlines first (clipped to the lens), blurred while inaccurate.
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.clip();
+    if (blur > 0.25) ctx.filter = `blur(${blur.toFixed(1)}px)`;
+    ctx.fillStyle = 'rgba(0,0,0,0.94)';
+    ctx.fillRect(cx - th / 2, cy - R, th, R * 2);
+    ctx.fillRect(cx - R, cy - th / 2, R * 2, th);
+    ctx.restore();
+
+    // Black vignette outside the lens circle.
+    ctx.beginPath();
+    ctx.rect(0, 0, w, h);
+    ctx.arc(cx, cy, R, 0, Math.PI * 2, true);
+    ctx.fillStyle = 'rgba(0,0,0,0.97)';
+    ctx.fill();
+
+    // Soft rim so the lens edge reads as glass.
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.lineWidth = Math.max(2, R * 0.012);
+    ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+    ctx.stroke();
+
+    // Hold-to-shoot progress (Sniper Tracking) under the centre.
+    if (this._trackProgress > 0) {
+      const barW = 64;
+      const barH = 3;
+      const barY = cy + 26;
+      ctx.fillStyle = 'rgba(255,255,255,0.18)';
+      ctx.fillRect(cx - barW / 2, barY, barW, barH);
+      ctx.fillStyle = this.settings.activeSettings().crosshair.color || '#f52525';
+      ctx.fillRect(cx - barW / 2, barY, barW * this._trackProgress, barH);
+    }
   }
 
   _paint(ctx, cx, cy, { scaleX, scaleY, scale, trackProgress, hitFlash, dynGap = 0, crosshair } = {}) {
