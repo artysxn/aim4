@@ -2,7 +2,7 @@
 // DoorsAwpScenario.js  ("Doors (AWP)")
 //
 // Fixed split-pillar layout (doors.json). You spawn on Team B with the AWP;
-// a bot breaks from one of six Team-A lanes and crosses the doors to the far
+// a bot breaks from one of ten Team-A lanes and crosses the doors to the far
 // side. Shoot them through the walls — any hit counts. If they make it across,
 // the round is lost.
 // ---------------------------------------------------------------------------
@@ -29,7 +29,7 @@ const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
 
 const BOT_CROSS_SPEED = 250 * UNIT;
 const JUMP_CHANCE = 0.33;
-const JUMP_PEAK_Y = 3.8;
+const JUMP_PEAK_Y = 1.9; // peak arc height (m) — half of the original 3.8 m
 const CROSS_MARGIN = 0.45;
 const ARM_MIN = 0.5;
 const ARM_MAX = 1.0;
