@@ -48,6 +48,7 @@ export const SCENARIO_ICONS = {
   spidershot,
   survival,
   arena,
+  snipercrossfire: arena,
   duels,
   range,
   tracking,

@@ -12,6 +12,7 @@ import { PasuScenario } from '../scenarios/PasuScenario.js';
 import { SpidershotScenario } from '../scenarios/SpidershotScenario.js';
 import { SurvivalScenario } from '../scenarios/SurvivalScenario.js';
 import { ArenaScenario } from '../scenarios/ArenaScenario.js';
+import { SniperCrossfireScenario } from '../scenarios/SniperCrossfireScenario.js';
 import { DuelsScenario } from '../scenarios/DuelsScenario.js';
 import { RangeScenario } from '../scenarios/RangeScenario.js';
 import { TrackingScenario } from '../scenarios/TrackingScenario.js';
@@ -53,6 +54,7 @@ export const SCENARIOS = {
   spidershot: SpidershotScenario,
   survival: SurvivalScenario,
   arena: ArenaScenario,
+  snipercrossfire: SniperCrossfireScenario,
   duels: DuelsScenario,
   range: RangeScenario,
   tracking: TrackingScenario,

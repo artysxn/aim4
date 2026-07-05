@@ -111,11 +111,21 @@ export class PlayerController {
     // Crouch: ease the duck amount toward held state; lower speed + view height.
     const wantCrouch = this.input.crouchHeld ? 1 : 0;
     this.crouchAmt = clamp(this.crouchAmt + (wantCrouch - this.crouchAmt) * Math.min(1, DUCK_RATE * dt), 0, 1);
-    // Weapon speed cap: the sniper runs at 200 u/s unscoped and 100 u/s scoped.
-    const weaponCap = this.engine.weapon?.moveSpeedCap;
-    const runCap = weaponCap != null ? Math.min(RUN_SPEED, weaponCap) : RUN_SPEED;
-    const standCap = this.input.walkHeld ? Math.min(WALK_SPEED, runCap) : runCap;
-    const maxSpeed = lerp(standCap, Math.min(CROUCH_SPEED, runCap), this.crouchAmt);
+    // Weapon speed cap: sniper uses scoped shift/crouch caps via getMoveSpeedCap.
+    const weapon = this.engine.weapon;
+    const scopedCap = weapon?.getMoveSpeedCap?.({
+      walkHeld: this.input.walkHeld,
+      crouchAmt: this.crouchAmt
+    });
+    let maxSpeed;
+    if (scopedCap != null) {
+      maxSpeed = scopedCap;
+    } else {
+      const weaponCap = weapon?.moveSpeedCap;
+      const runCap = weaponCap != null ? Math.min(RUN_SPEED, weaponCap) : RUN_SPEED;
+      const standCap = this.input.walkHeld ? Math.min(WALK_SPEED, runCap) : runCap;
+      maxSpeed = lerp(standCap, Math.min(CROUCH_SPEED, runCap), this.crouchAmt);
+    }
 
     // Build the wish direction in world space from WASD + current yaw.
     const { f, r } = this.input.moveAxis();

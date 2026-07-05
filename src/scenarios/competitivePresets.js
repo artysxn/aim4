@@ -47,8 +47,18 @@ export const COMPETITIVE_PRESETS = {
   },
   arena: {
     runDuration: 30,
-    crossDuration: 550,
-    peekHold: 475,
+    botDistMin: 1.0,
+    botDistMax: 1.0,
+    columns: 5,
+    columnRadius: 0.75,
+    ringRadius: 13.5,
+    infiniteAmmo: true,
+    competitiveMissPenalty: true
+  },
+  snipercrossfire: {
+    runDuration: 30,
+    botDistMin: 1.0,
+    botDistMax: 1.0,
     columns: 5,
     columnRadius: 0.75,
     ringRadius: 13.5,
@@ -203,7 +213,7 @@ export const COMPETITIVE_PRESETS = {
     targetSize: 0.3,
     sizeX: 7,
     sizeY: 4,
-    travelSpeed: 150, // ± variance → the spec's random 100–200 u/s
+    travelSpeed: 187.5, // ± variance → the spec's random 100–200 u/s (+25% competitive base)
     speedVariance: 50,
     infiniteAmmo: true
   },
@@ -212,7 +222,7 @@ export const COMPETITIVE_PRESETS = {
     targetSize: 0.3,
     sizeX: 7,
     sizeY: 4,
-    travelSpeed: 150,
+    travelSpeed: 187.5,
     speedVariance: 50,
     infiniteAmmo: true
   },
@@ -294,7 +304,7 @@ export const COMPETITIVE_PRESETS = {
     botWidth: 1.0,
     botSpeed: 1.0,
     botCrouchTap: true,
-    holdTime: 0.5,
+    holdTime: 0,
     respawnDelay: 1.0,
     minDistance: 10,
     maxDistance: 16

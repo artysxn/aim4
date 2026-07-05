@@ -112,12 +112,15 @@ export class SniperTrackingScenario extends TrackingScenario {
     bot.target.object.position.set(bot.mover.s, 0, -(bot.dist ?? 12));
   }
 
-  /** Continuous time-on-target gate: 0.5 s in a row before a shot may kill. */
+  /** Continuous time-on-target gate before a shot may kill (skipped when holdTime is 0). */
   _updateHoldGate(dt) {
     const bot = this.bot;
-    if (!bot || bot.target.state === 'dying') {
-      this._onTargetT = 0;
-      this.crosshair?.setTrackProgress(0);
+    if (!bot || bot.target.state === 'dying' || this.holdTime <= 0) {
+      if (this.holdTime <= 0) this.crosshair?.setTrackProgress(0);
+      else {
+        this._onTargetT = 0;
+        this.crosshair?.setTrackProgress(0);
+      }
       return;
     }
     const cam = this.camera;
@@ -200,7 +203,7 @@ export class SniperTrackingScenario extends TrackingScenario {
     const tgt = hit?.object?.userData?.target;
     if (tgt !== bot.target) return; // plain miss — the bot keeps strafing
 
-    if (this._onTargetT < this.holdTime) {
+    if (this.holdTime > 0 && this._onTargetT < this.holdTime) {
       // On target, but not tracked long enough — the shot is not allowed yet.
       beep(240, 0.06, 'sawtooth', 0.05);
       return;

@@ -12,6 +12,7 @@
 // ---------------------------------------------------------------------------
 
 import { getWeapon } from './index.js';
+import { lerp } from '../utils/MathUtils.js';
 
 const LAND_WINDOW = 0.15; // seconds after landing where shots are penalised
 
@@ -47,8 +48,10 @@ export class WeaponController {
     this.scopeLevel = 0;
     this._scopeChangedAt = 0;
     this._rescopeAt = 0; // wall-clock to re-scope after a shot (0 = none pending)
+    this._rescopeStartedAt = 0;
     this._rescopeLevel = 0;
     this._lastZoomCycleAt = 0;
+    this._lastScopeInAt = 0;
     this._applyScope();
     // Scenarios may spawn the player already scoped in (Sniper Flicks/Tracking).
     const startScoped = this.sceneManager?.current?.startScoped;
@@ -56,14 +59,34 @@ export class WeaponController {
   }
 
   // ---- Scope (sniper) -------------------------------------------------------
+  /** True while the post-shot bolt cycle is running (manual scope-in blocked). */
+  isBoltCycling(now = performance.now()) {
+    return this._rescopeAt > 0 && now < this._rescopeAt;
+  }
+
+  /** 0..1 progress through the bolt cycle (0 when idle). */
+  boltCycleProgress(now = performance.now()) {
+    if (!this.isBoltCycling(now)) return 0;
+    const total = this.spec?.zoom?.rescopeMs ?? 1250;
+    const start = this._rescopeStartedAt || (this._rescopeAt - total);
+    return Math.max(0, Math.min(1, (now - start) / total));
+  }
+
   /** Set the zoom level (0 = unscoped) and push FOV/sens/speed side effects. */
   setScope(level) {
     const z = this.spec?.zoom;
     if (!z) return;
+    if (level > 0 && this.isBoltCycling()) return;
     level = Math.max(0, Math.min(z.fovs.length, Math.round(level)));
     if (level === this.scopeLevel) return;
+    const wasScoped = this.scopeLevel > 0;
     this.scopeLevel = level;
-    this._scopeChangedAt = performance.now();
+    // Settle penalty only on fresh scope-in (0→scoped), not 1→2 zoom.
+    if (level > 0 && !wasScoped) {
+      this._scopeChangedAt = performance.now();
+    } else if (level === 0) {
+      this._scopeChangedAt = 0;
+    }
     this._applyScope();
   }
 
@@ -71,15 +94,21 @@ export class WeaponController {
   cycleScope() {
     const z = this.spec?.zoom;
     if (!z || !this._active()) return;
-    this._rescopeAt = 0; // manual zoom overrides a pending post-shot rescope
-    this._lastZoomCycleAt = performance.now();
-    this.setScope((this.scopeLevel + 1) % (z.fovs.length + 1));
+    const now = performance.now();
+    const minMs = z.minScopeInMs ?? z.cycleMs ?? 350;
+    if (now - this._lastZoomCycleAt < minMs) return;
+    const next = (this.scopeLevel + 1) % (z.fovs.length + 1);
+    if (next > 0 && this.isBoltCycling(now)) return;
+    this._lastZoomCycleAt = now;
+    if (next > 0 && this.scopeLevel === 0) this._lastScopeInAt = now;
+    this.setScope(next);
   }
 
   /** Instant unscope ("3" / "Q" by default — rebindable in settings). */
   unscope() {
     if (!this.spec?.zoom) return;
     this._rescopeAt = 0;
+    this._rescopeStartedAt = 0;
     this.setScope(0);
   }
 
@@ -99,6 +128,20 @@ export class WeaponController {
     const z = this.spec?.zoom;
     if (!z || !this._active()) return null;
     return this.scopeLevel > 0 ? z.scopedSpeed : (z.runSpeed ?? null);
+  }
+
+  /**
+   * Full movement cap including scoped shift-walk / crouch (null = use moveSpeedCap
+   * + default walk/crouch blending in PlayerController).
+   */
+  getMoveSpeedCap({ walkHeld = false, crouchAmt = 0 } = {}) {
+    const z = this.spec?.zoom;
+    if (!z || !this._active() || this.scopeLevel === 0) return null;
+    const stand = z.scopedSpeed;
+    const walk = z.scopedWalkSpeed ?? stand;
+    const crouch = z.scopedCrouchSpeed ?? stand;
+    const standCap = walkHeld ? walk : stand;
+    return lerp(standCap, crouch, crouchAmt);
   }
 
   /** 0..1 accuracy settle since the last scope-in (1 = fully settled). */
@@ -202,9 +245,14 @@ export class WeaponController {
     if (spec.zoom) {
       if (this._rescopeAt && now >= this._rescopeAt) {
         this._rescopeAt = 0;
+        this._rescopeStartedAt = 0;
         if (!this.reloading) this.setScope(this._rescopeLevel);
       }
-      if (this.input.altHeld && now - this._lastZoomCycleAt >= spec.zoom.cycleMs) {
+      if (
+        this.input.altHeld &&
+        !this.isBoltCycling(now) &&
+        now - this._lastZoomCycleAt >= (spec.zoom.minScopeInMs ?? spec.zoom.cycleMs)
+      ) {
         this.cycleScope();
       }
     }
@@ -282,7 +330,9 @@ export class WeaponController {
     // then re-scopes to the same level automatically (CS AWP behaviour).
     if (this.spec.zoom && this.scopeLevel > 0) {
       this._rescopeLevel = this.scopeLevel;
-      this._rescopeAt = performance.now() + this.spec.zoom.rescopeMs;
+      const t0 = performance.now();
+      this._rescopeStartedAt = t0;
+      this._rescopeAt = t0 + this.spec.zoom.rescopeMs;
       this.setScope(0);
     }
 

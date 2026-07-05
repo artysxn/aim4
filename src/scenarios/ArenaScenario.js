@@ -1,20 +1,14 @@
 // ---------------------------------------------------------------------------
-// ArenaScenario.js  ("Crossfire" — an 80° column range)
+// ArenaScenario.js  ("Crossfire (Clicks)" — an 80° column range)
 //
 // A row of columns is spread across an 80° arc in front of the player. The
 // round loop:
-//   1. ready    — a circle spawns in a gap; the player must hit it to arm.
-//   2. arming   — after a random 0.33–2.0 s delay, a bot breaks from the column
-//                 on the LEFT of that gap.
-//   3. moving   — the bot executes one of two plans:
-//                   • 70% CROSS — run straight across the gap to the next column
-//                     (exposed in the gap; flick and kill it in transit).
-//                   • 30% PEEK  — step OUT to the left (open peek + hold), then
-//                     cross to the right to reach new cover (exposes twice).
+//   1. ready    — a circle spawns in a gap; hold crosshair on it 0.5 s to arm.
+//   2. arming   — after a random 0.33–2.0 s delay, a bot breaks from either
+//                 pillar of that gap.
+//   3. moving   — the bot crosses the gap at 230 u/s (70% straight cross,
+//                 30% peek on the Clicks variant).
 //   4. cooldown — brief pause after a kill / escape, then a new circle spawns.
-//
-// Head = instant kill (crit), body = chip damage (two shots). Columns block
-// raycasts, so a bot behind cover can't be hit.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
@@ -23,6 +17,7 @@ import { Target } from '../components/Target.js';
 import { randRange, randInt, lerp, degToRad } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { markBulletDecalSurface } from '../utils/bulletImpact.js';
+import { UNIT } from '../utils/SourceMovement.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
@@ -36,40 +31,50 @@ const COL_H = 2.8;
 const CIRCLE_R = 0.45;
 
 const ARC_SPAN = degToRad(80);
-const PEEK_OUT_DUR = 0.255; // s, quick step-out for an open peek (+75 ms)
-const MIN_DELAY = 0.33; // s, bot reaction-delay window
+const PEEK_OUT_DUR = 0.255;
+const PEEK_HOLD = 0.525; // s — fixed peek hold before crossing (Clicks variant)
+const MIN_DELAY = 0.33;
 const MAX_DELAY = 2.0;
 const PEEK_CHANCE = 0.3;
+const ARM_HOLD_TIME = 0.5; // s crosshair hold on the red circle to arm
+const CROSS_SPEED = 230 * UNIT; // fixed bot cross speed
+
+const _raycaster = new THREE.Raycaster();
+const _center = new THREE.Vector2(0, 0);
 
 export class ArenaScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
-    this.weaponId = 'pistol'; // Crossfire is a pistol mode
-    const preset = this.competitive ? competitivePresetFor('arena') : null;
-    const a = this.competitive ? DEFAULTS.arena : this.settings.data.arena;
-    this.crossDur = (preset?.crossDuration ?? this.config.crossDuration ?? a.crossDuration) / 1000;
-    this.peekHold = (preset?.peekHold ?? this.config.peekHold ?? a.peekHold) / 1000;
+    this.weaponId = 'pistol';
+    const preset = this.competitive ? competitivePresetFor(this.name) : null;
+    const a = (this.competitive ? DEFAULTS[this.name] : this.settings.data[this.name]) ?? DEFAULTS[this.name] ?? DEFAULTS.arena;
     this.colCount = Math.max(2, preset?.columns ?? this.config.columns ?? a.columns);
     this.colRadius = preset?.columnRadius ?? this.config.columnRadius ?? a.columnRadius;
     this.ringR = preset?.ringRadius ?? this.config.ringRadius ?? a.ringRadius;
+    this.botDistMin = preset?.botDistMin ?? this.config.botDistMin ?? a.botDistMin ?? 0.5;
+    this.botDistMax = preset?.botDistMax ?? this.config.botDistMax ?? a.botDistMax ?? 1.5;
     this.infiniteAmmo = preset?.infiniteAmmo ?? this.config.infiniteAmmo ?? a.infiniteAmmo ?? false;
     this.competitiveMissPenalty = !!preset?.competitiveMissPenalty;
-    this.botR = this.ringR + 1;
     this.enemyScale = this.config.enemyScale ?? a.enemyScale;
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 30)
       : this.settings.data.runDuration;
 
-    this.step = ARC_SPAN / (this.colCount - 1); // angular gap between columns
+    this.step = ARC_SPAN / (this.colCount - 1);
     this.halfStep = this.step / 2;
 
     this.phase = 'ready';
     this.timer = 0;
     this.moveT = 0;
-    this.gap = 0; // index of the LEFT column of the active gap
+    this.gap = 0;
+    this.spawnCol = 0;
+    this.crossSign = 1;
+    this.crossDur = 1;
+    this.botR = this.ringR + 1;
     this.plan = 'cross';
     this.circle = null;
     this.bot = null;
+    this._circleHold = 0;
     this._missFlash = null;
 
     this.colAngle = [];
@@ -81,11 +86,17 @@ export class ArenaScenario extends BaseScenario {
     return 'arena';
   }
 
+  /** Clicks variant may peek; sniper subclass forces cross-only. */
+  _allowPeek() {
+    return true;
+  }
+
   static configKeyFor(settings, variant = 'practice') {
     if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
     const a = settings.data.arena;
-    return `cross${a.crossDuration}_col${a.columns}_cr${a.columnRadius}_r${a.ringRadius}_es${a.enemyScale}_d${settings.data.runDuration}`;
+    return `col${a.columns}_cr${a.columnRadius}_r${a.ringRadius}_bd${a.botDistMin}-${a.botDistMax}_es${a.enemyScale}_d${settings.data.runDuration}`;
   }
+
   configKey() {
     return ArenaScenario.configKeyFor(this.settings, this.variant);
   }
@@ -96,7 +107,6 @@ export class ArenaScenario extends BaseScenario {
     return extras;
   }
 
-  // ---- Environment --------------------------------------------------------
   _buildEnvironment() {
     const c = this.settings.data.colors;
     const [gridCenter, gridEdge] = gridLineColors(c.floor);
@@ -132,7 +142,6 @@ export class ArenaScenario extends BaseScenario {
     }
   }
 
-  // ---- Builders -----------------------------------------------------------
   _buildBot() {
     const s = this.enemyScale;
     const bodyR = BODY_R * s;
@@ -158,21 +167,44 @@ export class ArenaScenario extends BaseScenario {
     return t;
   }
 
-  /** Position the bot on its arc at an angular offset from the active column. */
   _setBotOffset(off) {
-    const ang = this.colAngle[this.gap] + off;
+    const ang = this.colAngle[this.spawnCol] + off;
     this.bot.object.position.set(this.botR * Math.sin(ang), 0, -this.botR * Math.cos(ang));
     this.bot.object.lookAt(0, 0, 0);
   }
 
-  // ---- Round flow ---------------------------------------------------------
+  _hoveredCircle() {
+    if (!this.circle || this.circle.state === 'dying') return false;
+    _raycaster.setFromCamera(_center, this.camera);
+    const hits = _raycaster.intersectObjects(this.circle.getColliders(), false);
+    return hits.length > 0;
+  }
+
+  _updateCircleHold(dt) {
+    if (this._hoveredCircle()) {
+      this._circleHold += dt;
+      this.crosshair?.setTrackProgress(Math.min(1, this._circleHold / ARM_HOLD_TIME));
+      if (this._circleHold >= ARM_HOLD_TIME) {
+        beep(660, 0.04, 'square', 0.05);
+        this.circle.startDying(0x35e06a);
+        this.circle = null;
+        this._circleHold = 0;
+        this.crosshair?.setTrackProgress(0);
+        this._arm();
+      }
+    } else {
+      this._circleHold = 0;
+      this.crosshair?.setTrackProgress(0);
+    }
+  }
+
   onStart() {
     this._spawnCircle();
   }
 
   _spawnCircle() {
     this.engine.viewmodel?.clearBulletDecals();
-    this.gap = randInt(0, this.colCount - 2); // gap is between column gap and gap+1
+    this.gap = randInt(0, this.colCount - 2);
     const ang = this.colAngle[this.gap] + this.halfStep;
     const circle = new Target();
     const mesh = new THREE.Mesh(
@@ -183,15 +215,19 @@ export class ArenaScenario extends BaseScenario {
     circle.object.position.set(this.ringR * Math.sin(ang), 1.4, -this.ringR * Math.cos(ang));
     this.addTarget(circle);
     this.circle = circle;
+    this._circleHold = 0;
     this.phase = 'ready';
   }
 
   _arm() {
     this.phase = 'arming';
     this.timer = randRange(MIN_DELAY, MAX_DELAY);
-    this.plan = Math.random() < PEEK_CHANCE ? 'peek' : 'cross';
+    this.spawnCol = Math.random() < 0.5 ? this.gap : this.gap + 1;
+    this.crossSign = this.spawnCol === this.gap ? 1 : -1;
+    this.botR = this.ringR + randRange(this.botDistMin, this.botDistMax);
+    this.crossDur = (this.botR * this.step) / CROSS_SPEED;
+    this.plan = this._allowPeek() && Math.random() < PEEK_CHANCE ? 'peek' : 'cross';
     this.moveT = 0;
-    // Spawn the bot hidden directly behind the left column of the gap.
     this.bot = this._buildBot();
     this.addTarget(this.bot);
     this._setBotOffset(0);
@@ -204,24 +240,23 @@ export class ArenaScenario extends BaseScenario {
 
   _advanceBot(dt) {
     this.moveT += dt;
-    const step = this.step;
+    const targetOff = this.crossSign * this.step;
     let off;
     let done = false;
 
     if (this.plan === 'cross') {
       const t = this.moveT / this.crossDur;
-      off = lerp(0, step, Math.min(1, t));
+      off = lerp(0, targetOff, Math.min(1, t));
       if (t >= 1) done = true;
     } else {
-      // PEEK: step out left -> hold -> cross right to the next column.
-      const peekOff = -this.halfStep;
+      const peekOff = -this.crossSign * this.halfStep;
       if (this.moveT < PEEK_OUT_DUR) {
         off = lerp(0, peekOff, this.moveT / PEEK_OUT_DUR);
-      } else if (this.moveT < PEEK_OUT_DUR + this.peekHold) {
+      } else if (this.moveT < PEEK_OUT_DUR + PEEK_HOLD) {
         off = peekOff;
       } else {
-        const ct = (this.moveT - PEEK_OUT_DUR - this.peekHold) / this.crossDur;
-        off = lerp(peekOff, step, Math.min(1, ct));
+        const ct = (this.moveT - PEEK_OUT_DUR - PEEK_HOLD) / this.crossDur;
+        off = lerp(peekOff, targetOff, Math.min(1, ct));
         if (ct >= 1) done = true;
       }
     }
@@ -253,6 +288,8 @@ export class ArenaScenario extends BaseScenario {
       this.bot.startDying(0xff2222);
       this.bot = null;
     }
+    this._circleHold = 0;
+    this.crosshair?.setTrackProgress(0);
     this.phase = 'cooldown';
     this.timer = 0.25;
     this._missFlash = startMissFlash();
@@ -274,6 +311,9 @@ export class ArenaScenario extends BaseScenario {
       this._missFlash = null;
     }
     switch (this.phase) {
+      case 'ready':
+        this._updateCircleHold(dt);
+        break;
       case 'arming':
         this.timer -= dt;
         if (this.timer <= 0) this._startMove();
@@ -285,12 +325,11 @@ export class ArenaScenario extends BaseScenario {
         this.timer -= dt;
         if (this.timer <= 0) this._spawnCircle();
         break;
-      // 'ready' — the circle simply waits to be hit.
     }
   }
 
   onShoot(raycaster) {
-    const colMeshes = this.columns; // cover blocks shots
+    const colMeshes = this.columns;
     const hit = this.raycastTargets(raycaster, colMeshes);
     if (!hit) {
       this._penalizeMissShot();
@@ -303,19 +342,8 @@ export class ArenaScenario extends BaseScenario {
       return;
     }
 
-    // Circle: arms the round.
-    if (tgt === this.circle && this.phase === 'ready') {
-      this.hits++;
-      this.score += obj.userData.points;
-      this.crosshair?.hit();
-      beep(660, 0.04, 'square', 0.05);
-      tgt.startDying(0x35e06a);
-      this.circle = null;
-      this._arm();
-      return;
-    }
+    if (tgt === this.circle && this.phase === 'ready') return;
 
-    // Bot: only damageable while it is breaking cover.
     if (tgt === this.bot && this.phase === 'moving' && tgt.state !== 'dying') {
       const zone = obj.userData.zone;
       this.crosshair?.hit();

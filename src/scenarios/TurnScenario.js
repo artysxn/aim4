@@ -4,7 +4,7 @@
 // One dot strafes across the wall at a random 150–230 u/s, left or right.
 // Killing it spawns the next dot close by moving the OPPOSITE way. A dot that
 // survives 2 s despawns (chain miss); a missed shot removes the dot, waits a
-// second, then respawns it somewhere new in a fresh random direction.
+// second, then respawns it on the horizontal canvas centre (random height).
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
@@ -53,6 +53,7 @@ export class TurnScenario extends BaseScenario {
 
     this._dot = null; // { target, dir, speed, age }
     this._respawnLeft = 0;
+    this._respawnCenterX = false; // after a missed shot, next dot spawns on canvas centre X
 
     this._buildEnvironment();
     this.engine.camera.position.y = this.centerY;
@@ -94,7 +95,7 @@ export class TurnScenario extends BaseScenario {
     this.root.add(grid);
   }
 
-  _spawnDot({ near = null, dir = null } = {}) {
+  _spawnDot({ near = null, dir = null, centerX = false } = {}) {
     const halfW = this.boundsW / 2 - this.targetSize;
     const halfH = this.boundsH / 2 - this.targetSize;
     const yMin = this.centerY - halfH;
@@ -106,6 +107,9 @@ export class TurnScenario extends BaseScenario {
       const d = randRange(NEAR_MIN, NEAR_MAX);
       x = Math.max(-halfW, Math.min(halfW, near.x + Math.cos(a) * d));
       y = Math.max(yMin, Math.min(yMax, near.y + Math.sin(a) * d));
+    } else if (centerX) {
+      x = 0;
+      y = randRange(yMin, yMax);
     } else {
       x = randRange(-halfW, halfW);
       y = randRange(yMin, yMax);
@@ -149,7 +153,11 @@ export class TurnScenario extends BaseScenario {
   onUpdate(dt) {
     if (!this._dot) {
       this._respawnLeft -= dt;
-      if (this._respawnLeft <= 0) this._spawnDot(); // fresh spot, fresh direction
+      if (this._respawnLeft <= 0) {
+        const centerX = this._respawnCenterX;
+        this._respawnCenterX = false;
+        this._spawnDot({ centerX });
+      }
       return;
     }
 
@@ -185,6 +193,7 @@ export class TurnScenario extends BaseScenario {
       this.misses++;
       if (this.despawnOnMiss) {
         this._clearDot(0xff2222);
+        this._respawnCenterX = true;
         this._respawnLeft = MISS_DELAY;
       }
       return;

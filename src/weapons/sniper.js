@@ -5,7 +5,8 @@
 // (hFOV 40 → 10), and CS's default zoomed sensitivity (zoom_sensitivity_ratio
 // 1.0 ⇒ scoped look speed scales with the linear FOV ratio, i.e. 2.25× slower
 // at zoom 1 and 9× slower at zoom 2 on a 90° hipfire FOV). Movement is capped
-// at 100 u/s while scoped and 200 u/s unscoped. Firing while scoped unscopes
+// at 100 u/s scoped, 52 u/s scoped+shift, 32 u/s scoped+crouch, and 200 u/s
+// unscoped. Firing while scoped unscopes
 // for the bolt cycle, then re-scopes to the same level. There is a short
 // "settle" window right after scoping in during which shots are not perfectly
 // accurate — the scope hairlines blur to indicate it, exactly like moving does.
@@ -36,8 +37,11 @@ export const VIEW_PUNCH_STRENGTH = 1.0;
 export const ZOOM = {
   fovs: [40, 10], // horizontal FOV per zoom level (CS AWP: 40°, 10°)
   scopedSpeed: 100 * UNIT, // movement cap while scoped (100 u/s)
+  scopedWalkSpeed: 52 * UNIT, // shift-held while scoped (52 u/s)
+  scopedCrouchSpeed: 32 * UNIT, // crouched while scoped (32 u/s)
   runSpeed: 200 * UNIT, // AWP unscoped max speed (200 u/s)
   cycleMs: 350, // held right-click: ms between zoom steps
+  minScopeInMs: 350, // minimum ms between any scope-in / zoom step
   rescopeMs: 1250, // unscoped after the shot; re-scope when the bolt closes
   settleTime: 0.35 // s after a scope-in before full accuracy
 };

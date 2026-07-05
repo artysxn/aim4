@@ -17,7 +17,8 @@ import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
 import { randRange, clamp, degToRad } from '../utils/MathUtils.js';
 import { SourceMover1D } from '../utils/SourceMovement.js';
-import { gridLineColors } from '../utils/ColorUtils.js';
+import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
+import { canvasCenterY } from '../utils/canvasWall.js';
 import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
@@ -70,6 +71,7 @@ export class SniperFlicksScenario extends BaseScenario {
     this.bot = null;
     this._resetIn = null;
     this._buildEnvironment();
+    this.engine.camera.position.y = this.centerY;
   }
 
   get name() {
@@ -103,14 +105,17 @@ export class SniperFlicksScenario extends BaseScenario {
 
     // The canvas: a backdrop wall behind the deepest spawn, sized to cover the
     // whole zoom-1 spawn cone so every bot reads as "floating on the canvas".
-    const wallZ = this.maxDistance + 6;
+    const wallZ = (this.maxDistance + 6) * 0.8;
     const wallW = Math.tan(degToRad(MAX_ANG_X)) * wallZ * 2 + 10;
     const wallH = Math.tan(degToRad(MAX_ANG_Y)) * wallZ * 2 + EYE_HEIGHT + 6;
+    this.centerY = canvasCenterY(wallH);
+    const gridMat = createCoverGridMaterial(c.cover, c.floor);
+    applyCoverGridRepeat(gridMat, wallW, wallH);
     this._canvasWall = new THREE.Mesh(
       new THREE.BoxGeometry(wallW, wallH, 0.5),
-      new THREE.MeshStandardMaterial({ color: c.cover, roughness: 0.95, metalness: 0 })
+      gridMat
     );
-    this._canvasWall.position.set(0, wallH / 2, -wallZ);
+    this._canvasWall.position.set(0, this.centerY, -wallZ);
     markBulletDecalSurface(this._canvasWall);
     this.root.add(this._canvasWall);
   }
@@ -149,15 +154,13 @@ export class SniperFlicksScenario extends BaseScenario {
     const ang = degToRad(alongX ? randRange(MIN_ANG, maxX) : randRange(MIN_ANG, maxY));
     const off = Math.tan(ang) * dist * sign;
 
-    // The bot's centre of mass sits exactly on the spawn point, so it "floats"
-    // on the canvas for Y-axis spawns instead of standing on the floor.
-    const centerY = (BODY_H + HEAD_R * 2) * this.botScale * 0.5;
+    const botCenterOff = (BODY_H + HEAD_R * 2) * this.botScale * 0.5;
     const cx = alongX ? off : 0;
-    const cy = EYE_HEIGHT + (alongX ? 0 : off);
+    const spawnY = this.centerY + (alongX ? 0 : off);
 
     const target = this._buildBot();
     target.object.scale.setScalar(this.botScale);
-    target.object.position.set(cx, Math.max(0.1, cy - centerY), -dist);
+    target.object.position.set(cx, spawnY - botCenterOff, -dist);
     this.addTarget(target);
 
     const mover = new SourceMover1D();

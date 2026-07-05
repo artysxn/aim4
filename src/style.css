@@ -2283,6 +2283,13 @@ input[type='checkbox'] {
 }
 
 /* ---- Results ------------------------------------------------------------ */
+.screen.results .panel.menu-panel:not(.menu-panel-main),
+.screen.playlist-results .panel.menu-panel:not(.menu-panel-main),
+.screen.mp-results .panel.menu-panel:not(.menu-panel-main) {
+  height: calc(var(--menu-panel-height) + 300px);
+  max-height: calc(var(--menu-panel-height) + 300px);
+}
+
 .results #res-title,
 .mp-results #mp-res-title {
   font-size: calc(var(--font-display-title-size) * 1.35);
@@ -2293,20 +2300,22 @@ input[type='checkbox'] {
 
 .res-stats {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: center;
-  gap: 10px;
-  max-width: 680px;
-  margin: 20px auto;
+  align-items: stretch;
+  gap: 8px;
+  max-width: min(920px, 100%);
+  margin: 150px auto;
+  padding: 0 8px;
 }
 .stat {
-  flex: 1 1 108px;
+  flex: 1 1 0;
   min-width: 0;
-  max-width: 132px;
+  max-width: none;
   background: var(--surface);
   border: none;
   border-radius: var(--radius-sm);
-  padding: 14px 10px 12px;
+  padding: 12px 6px 10px;
   text-align: center;
 }
 .stat span,
@@ -2314,7 +2323,7 @@ input[type='checkbox'] {
   display: block;
   font-family: var(--font-display);
   font-weight: 500;
-  font-size: clamp(22px, 3.6vw, 32px);
+  font-size: clamp(18px, 2.6vw, 26px);
   line-height: 1.05;
   text-transform: uppercase;
   color: var(--accent);
@@ -2325,11 +2334,11 @@ input[type='checkbox'] {
 }
 .stat label {
   display: block;
-  font-size: 11px;
+  font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
   color: var(--muted);
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 /* ---- Multiplayer -------------------------------------------------------- */

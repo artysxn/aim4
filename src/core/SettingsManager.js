@@ -78,7 +78,7 @@ export const DEFAULTS = {
     dotPercentage: 35,
     hitmarker: true, // brief X flash on hit
     dynamicGap: false, // gap grows with movement + weapon bloom (airborne/fast = wider)
-    outline: false,
+    outlineThickness: 0, // 0 = off; 0.5 = 1px drop shadow (+1,+1); 1+ = px padding all around
     outlineColor: '#000000',
     outlineOpacity: 1
   },
@@ -176,12 +176,21 @@ export const DEFAULTS = {
     viewmodelRecoil: false
   },
   arena: {
-    crossDuration: 775, // ms for the bot to cross a gap (exposure window)
-    peekHold: 525, // ms the bot holds an open peek before crossing
     columns: 7, // number of columns spread across the 80° arc
     columnRadius: 0.55, // metres, cylinder half-width of each cover column
     ringRadius: 9, // metres from player to column arc
+    botDistMin: 0.5, // m beyond ringRadius — min bot spawn distance from pillar
+    botDistMax: 1.5, // m beyond ringRadius — max bot spawn distance from pillar
     enemyScale: 1.0, // uniform scale applied to bot body/head dimensions
+    missLimit: 0
+  },
+  snipercrossfire: {
+    columns: 7,
+    columnRadius: 0.55,
+    ringRadius: 9,
+    botDistMin: 0.5,
+    botDistMax: 1.5,
+    enemyScale: 1.0,
     missLimit: 0
   },
   duels: {
@@ -430,7 +439,7 @@ export const DEFAULTS = {
     botWidth: 1.0,
     botSpeed: 1.0,
     botCrouchTap: true,
-    holdTime: 0.5, // s of uninterrupted crosshair time before a shot may kill
+    holdTime: 0, // s of uninterrupted crosshair time before a shot may kill (0 = instant)
     respawnDelay: 1.0, // s after a kill before the next bot spawns
     minDistance: 10, // m — random-ish spawn distance range
     maxDistance: 16,
@@ -448,7 +457,7 @@ export const DURATION_DEFAULT = { type: 'time', value: 60 };
 // Modes that expose a practice duration control (and ship in playlists).
 export const DURATION_MODES = [
   'gridshot', 'stars', 'threeshot', 'bounce', 'microflicks', 'pasu', 'spidershot',
-  'survival', 'arena', 'cover', 'duels', 'range', 'tracking', 'deathmatch',
+  'survival', 'arena', 'snipercrossfire', 'cover', 'duels', 'range', 'tracking', 'deathmatch',
   'sequence', 'sequencespeed', 'sequencetracking', 'double', 'doubletracking', 'ball', 'drone', 'line', 'bouncetracking', 'pasutracking', 'turn',
   'box', 'circle',
   'sniperpeeks', 'sniperholds', 'sniperquickscopes', 'sniperflicks', 'snipertracking'
@@ -483,7 +492,18 @@ export class SettingsManager {
     const saved = Storage.read('settings', {});
     const merged = this._deepMerge(structuredClone(DEFAULTS), saved);
     this._normalizeSensitivity(merged);
+    this._normalizeCrosshair(merged);
     return merged;
+  }
+
+  /** Migrate legacy crosshair.outline boolean → outlineThickness. */
+  _normalizeCrosshair(data) {
+    const xh = data.crosshair;
+    if (!xh) return;
+    if (xh.outlineThickness == null) {
+      xh.outlineThickness = xh.outline ? 1 : 0;
+    }
+    delete xh.outline;
   }
 
   /** Migrate legacy cm/360 + DPI and pre-v2 sensitivity scale (÷3). */

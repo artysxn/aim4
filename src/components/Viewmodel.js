@@ -136,11 +136,13 @@ export class Viewmodel {
     this._box(sniper, 0.08, 0.18, 0.09, 0x23272b, 0, -0.15, -0.16); // magazine
     this._box(sniper, 0.07, 0.15, 0.09, 0x1f2830, 0, -0.12, 0.06); // grip
     this._box(sniper, 0.065, 0.11, 0.26, 0x1c3524, 0, -0.03, 0.24); // stock
-    this._box(sniper, 0.02, 0.10, 0.05, 0x24262a, 0.065, 0.02, -0.02); // bolt handle
+    const boltHandle = this._box(sniper, 0.02, 0.10, 0.05, 0x24262a, 0.065, 0.02, -0.02); // bolt handle
+    boltHandle.userData.baseX = boltHandle.position.x;
+    boltHandle.userData.baseZ = boltHandle.position.z;
     const sniperFlash = this._makeFlash(0, 0.02, -1.06);
     sniper.add(sniperFlash);
     this.group.add(sniper);
-    this._models.sniper = { group: sniper, flash: sniperFlash, fwd: 1.06, up: 0.02 };
+    this._models.sniper = { group: sniper, flash: sniperFlash, fwd: 1.06, up: 0.02, boltHandle };
   }
 
   _buildTracers() {
@@ -428,13 +430,36 @@ export class Viewmodel {
       reloadTilt = 0.34 * mag * wave;
     }
 
+    let boltDown = 0;
+    let boltBack = 0;
+    let boltTilt = 0;
+    const chamber = weapon?.boltCycleProgress?.() ?? 0;
+    if (chamber > 0 && weapon?.spec?.model === 'sniper') {
+      const wave = Math.sin(chamber * Math.PI);
+      boltDown = -0.06 * wave;
+      boltBack = 0.05 * wave;
+      boltTilt = 0.18 * wave;
+      const sniper = this._models.sniper;
+      const bolt = sniper?.boltHandle;
+      if (bolt) {
+        bolt.position.x = bolt.userData.baseX + 0.04 * wave;
+        bolt.position.z = bolt.userData.baseZ - 0.06 * wave;
+      }
+    } else {
+      const bolt = this._models.sniper?.boltHandle;
+      if (bolt) {
+        bolt.position.x = bolt.userData.baseX;
+        bolt.position.z = bolt.userData.baseZ;
+      }
+    }
+
     this._pos.copy(cam.position)
       .addScaledVector(this._right, ox + bobX)
-      .addScaledVector(this._up, oy + bobY + kickUp + reloadDown)
-      .addScaledVector(this._fwd, oz - kickBack - reloadBack);
+      .addScaledVector(this._up, oy + bobY + kickUp + reloadDown + boltDown)
+      .addScaledVector(this._fwd, oz - kickBack - reloadBack - boltBack);
     this.group.position.copy(this._pos);
     this.group.quaternion.copy(cam.quaternion);
-    this.group.rotateX(-this._kick * 0.05 * kickMul + reloadTilt);
+    this.group.rotateX(-this._kick * 0.05 * kickMul + reloadTilt + boltTilt);
 
     this._muzzle.copy(this._pos)
       .addScaledVector(this._fwd, this._muzzleFwd * scale)

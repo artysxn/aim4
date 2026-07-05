@@ -23,6 +23,13 @@ function outlineRgba(xh) {
   return `rgba(${r},${g},${b},${a})`;
 }
 
+function outlineThickness(xh) {
+  let t = Number(xh?.outlineThickness);
+  if (!Number.isFinite(t) && xh?.outline) t = 1;
+  if (!Number.isFinite(t)) t = 0;
+  return Math.max(0, t);
+}
+
 export class Crosshair {
   constructor(settings) {
     this.settings = settings;
@@ -161,19 +168,27 @@ export class Crosshair {
     ctx.clearRect(0, 0, w, h);
     if (!this.visible) return;
 
-    // Scoped: the crosshair is hidden — draw the scope overlay instead.
-    if (this._scopeLevel > 0) {
-      this._paintScope(ctx, w, h);
-      return;
-    }
-
     const res = getResolutionSpec(this.settings.activeSettings());
     let scaleX = 1;
     let scaleY = 1;
+    let lw = w;
+    let lh = h;
     if (res && res.size) {
       scaleX = w / res.size[0];
       scaleY = h / res.size[1];
+      lw = res.size[0];
+      lh = res.size[1];
     }
+
+    // Scoped: the crosshair is hidden — draw the scope overlay instead.
+    if (this._scopeLevel > 0) {
+      ctx.save();
+      ctx.scale(scaleX, scaleY);
+      this._paintScope(ctx, lw, lh, Math.min(scaleX, scaleY));
+      ctx.restore();
+      return;
+    }
+
     this._paint(ctx, Math.round(w / 2), Math.round(h / 2), {
       scaleX,
       scaleY,
@@ -185,9 +200,9 @@ export class Crosshair {
   }
 
   /** CS-style scope: black vignette circle + full hairlines that blur when inaccurate. */
-  _paintScope(ctx, w, h) {
+  _paintScope(ctx, w, h, lineScale = 1) {
     const s = this.settings.activeSettings();
-    const th = Math.max(1, Number(s.sniper?.lineThickness) || 2);
+    const th = Math.max(1, Number(s.sniper?.lineThickness) || 2) * lineScale;
     const cx = w / 2;
     const cy = h / 2;
     const R = Math.min(w, h) * 0.485;
@@ -242,7 +257,7 @@ export class Crosshair {
     const lengthX = rawLen * scaleX;
     const lengthY = rawLen * scaleY;
     const thickness = Math.max(1, rawThick * Math.min(scaleX, scaleY));
-    const outlinePad = xh.outline ? Math.max(1, thickness * 0.35) : 0;
+    const outline = outlineThickness(xh);
 
     if (Math.round(thickness) % 2 === 1) {
       cx -= 0.5;
@@ -263,18 +278,30 @@ export class Crosshair {
       ctx.lineTo(cx + innerGapX + lengthX, cy);
     };
 
-    if (xh.outline) {
-      ctx.strokeStyle = outlineRgba(xh);
-      ctx.lineWidth = thickness + outlinePad * 2;
-      armPath();
-      ctx.stroke();
-    }
-
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
     ctx.lineWidth = thickness;
     armPath();
     ctx.stroke();
+
+    if (outline > 0) {
+      const outlineColor = outlineRgba(xh);
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-over';
+      if (outline === 0.5) {
+        ctx.translate(1, 1);
+        ctx.strokeStyle = outlineColor;
+        ctx.lineWidth = Math.max(1, thickness);
+        armPath();
+        ctx.stroke();
+      } else {
+        ctx.strokeStyle = outlineColor;
+        ctx.lineWidth = thickness + outline * 2;
+        armPath();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
 
     if (trackProgress > 0) {
       const barW = 56 * scaleX;
@@ -289,16 +316,28 @@ export class Crosshair {
     if (dotPercentage > 0) {
       const r = (dotPercentage / 100) * 5 * Math.min(scaleX, scaleY);
       const dotR = Math.max(0.5, r);
-      if (xh.outline) {
-        ctx.beginPath();
-        ctx.arc(cx, cy, dotR + outlinePad, 0, Math.PI * 2);
-        ctx.fillStyle = outlineRgba(xh);
-        ctx.fill();
-      }
       ctx.beginPath();
       ctx.arc(cx, cy, dotR, 0, Math.PI * 2);
       ctx.fillStyle = color;
       ctx.fill();
+      if (outline > 0) {
+        const outlineColor = outlineRgba(xh);
+        ctx.save();
+        ctx.globalCompositeOperation = 'destination-over';
+        if (outline === 0.5) {
+          ctx.translate(1, 1);
+          ctx.beginPath();
+          ctx.arc(cx, cy, dotR, 0, Math.PI * 2);
+          ctx.fillStyle = outlineColor;
+          ctx.fill();
+        } else {
+          ctx.beginPath();
+          ctx.arc(cx, cy, dotR + outline, 0, Math.PI * 2);
+          ctx.fillStyle = outlineColor;
+          ctx.fill();
+        }
+        ctx.restore();
+      }
     }
 
     if (hitFlash) {

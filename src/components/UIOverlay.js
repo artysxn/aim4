@@ -97,7 +97,8 @@ const SCENARIO_META = {
   pasu: { title: 'Pasu (Clicks)', dualPlay: true, tags: ['Accuracy', 'Reactions', 'Control'] },
   spidershot: { title: 'Spidershot', dualPlay: true, tags: ['Speed', 'Reactions'] },
   survival: { title: 'Survival', dualPlay: true, tags: ['Speed', 'Control'] },
-  arena: { title: 'Crossfire', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
+  arena: { title: 'Crossfire (Clicks)', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
+  snipercrossfire: { title: 'Crossfire (Sniping)', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
   duels: { title: 'Duels', dualPlay: true, tags: ['Movement', 'Reactions'] },
   range: { title: 'Range', dualPlay: true, tags: ['Movement'] },
   tracking: { title: 'Strafes', dualPlay: true, tags: ['Accuracy'] },
@@ -137,6 +138,7 @@ const SCENARIO_SETTING_IDS = new Set([
   'spidershot',
   'survival',
   'arena',
+  'snipercrossfire',
   'duels',
   'deathmatch',
   'range',
@@ -168,11 +170,11 @@ const SCENARIO_SETTING_IDS = new Set([
 // goes missing. "all" browses every non-challenge mode; "challenges" houses
 // the hard fixed-rule variants and only ever shows those.
 const TRAINING_CATEGORIES = [
-  { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'threeshot', 'survival', 'pasu', 'arena', 'turn', 'sequencespeed', 'sequencetracking', 'sniperpeeks', 'sniperholds'] },
+  { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'threeshot', 'survival', 'pasu', 'arena', 'snipercrossfire', 'turn', 'sequencespeed', 'sequencetracking', 'sniperpeeks', 'sniperholds'] },
   { id: 'tracking', title: 'Tracking', modes: ['tracking', 'ball', 'drone', 'line', 'box', 'circle', 'bouncetracking', 'pasutracking', 'doubletracking', 'sequencetracking', 'snipertracking'] },
   { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'threeshot', 'bounce', 'spidershot', 'sequence', 'sequencespeed', 'line', 'sniperquickscopes'] },
-  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'sequencespeed', 'double', 'doubletracking', 'cover', 'sniperflicks'] },
-  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels', 'cover', 'sniperpeeks', 'sniperholds', 'sniperquickscopes', 'sniperflicks', 'snipertracking'] },
+  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'sequencespeed', 'double', 'doubletracking', 'cover', 'sniperflicks', 'snipercrossfire'] },
+  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels', 'cover', 'sniperpeeks', 'sniperholds', 'sniperquickscopes', 'sniperflicks', 'snipertracking', 'snipercrossfire'] },
   { id: 'challenges', title: 'Challenges', modes: ['galaxy', 'sequenceultra', 'waves'] },
   { id: 'all', title: 'All', modes: [] }
 ];
@@ -498,7 +500,7 @@ export class UIOverlay {
             ${rf('set-xh-dot', 'Center dot (%)', 0, 100, 5)}
             <label class="field-check"><input type="checkbox" id="set-xh-hitmarker" /> Hitmarker</label>
             <label class="field-check"><input type="checkbox" id="set-xh-dyn" /> Dynamic gap (movement + spray bloom)</label>
-            <label class="field-check"><input type="checkbox" id="set-xh-outline" /> Outline</label>
+            ${rf('set-xh-outline-thick', 'Outline thickness', 0, 4, 0.5)}
             <div class="color-row">
               <span>Outline color</span>
               <input type="color" id="set-xh-outline-color" />
@@ -676,15 +678,27 @@ ${rf('set-surv-spawn', 'Spawn interval (ms)', 300, 3000, 50)}
       },
       {
         id: 'arena',
-        label: 'Crossfire',
+        label: 'Crossfire (Clicks)',
         body: `
-${rf('set-arena-cross', 'Cross speed (ms)', 350, 1500, 50)}
-          ${rf('set-arena-peek', 'Peek hold (ms)', 150, 1000, 50)}
+${rf('set-arena-botdist-min', 'Bot distance min (m)', 0, 5, 0.1)}
+          ${rf('set-arena-botdist-max', 'Bot distance max (m)', 0, 5, 0.1)}
           ${rf('set-arena-col', 'Columns', 4, 10, 1)}
           ${rf('set-arena-colr', 'Column width (m)', 0.2, 1.2, 0.05)}
           ${rf('set-arena-ring', 'Ring distance (m)', 5, 16, 0.5)}
           ${rf('set-arena-enemy', 'Enemy size', 0.5, 2.0, 0.1)}
           ${rf('set-arena-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'snipercrossfire',
+        label: 'Crossfire (Sniping)',
+        body: `
+${rf('set-snxf-botdist-min', 'Bot distance min (m)', 0, 5, 0.1)}
+          ${rf('set-snxf-botdist-max', 'Bot distance max (m)', 0, 5, 0.1)}
+          ${rf('set-snxf-col', 'Columns', 4, 10, 1)}
+          ${rf('set-snxf-colr', 'Column width (m)', 0.2, 1.2, 0.05)}
+          ${rf('set-snxf-ring', 'Ring distance (m)', 5, 16, 0.5)}
+          ${rf('set-snxf-enemy', 'Enemy size', 0.5, 2.0, 0.1)}
+          ${rf('set-snxf-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
         id: 'duels',
@@ -1004,7 +1018,7 @@ ${rf('set-snfl-radius-x', 'Spawn radius X', 0.25, 1.2, 0.05)}
         body: `
 ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
           ${rf('set-sntr-speed', 'Bot speed', 0.25, 2.0, 0.05)}
-          ${rf('set-sntr-hold', 'Hold time before shot (s)', 0.1, 2.0, 0.05)}
+          ${rf('set-sntr-hold', 'Hold time before shot (s)', 0, 2.0, 0.05)}
           ${rf('set-sntr-respawn', 'Respawn delay (s)', 0.25, 3.0, 0.25)}
           ${rf('set-sntr-min-dist', 'Min distance (m)', 6, 20, 1)}
           ${rf('set-sntr-max-dist', 'Max distance (m)', 8, 30, 1)}
@@ -2348,9 +2362,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     $('#set-xh-dyn').addEventListener('change', (e) => {
       draft((d) => { d.crosshair.dynamicGap = e.target.checked; });
     });
-    $('#set-xh-outline')?.addEventListener('change', (e) => {
-      draft((d) => { d.crosshair.outline = e.target.checked; });
-    });
+    this._bindRange('set-xh-outline-thick', (v, d) => { d.crosshair.outlineThickness = v; });
     $('#set-xh-outline-color')?.addEventListener('input', (e) => {
       draft((d) => { d.crosshair.outlineColor = e.target.value; });
     });
@@ -2488,13 +2500,21 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._bindRange('set-surv-max-size', (v, d) => { d.survival.maxSize = v; });
     this._bindRange('set-surv-strikes', (v, d) => { d.survival.missesAllowed = v; }, { parse: (v) => parseInt(v, 10) });
 
-    this._bindRange('set-arena-cross', (v, d) => { d.arena.crossDuration = v; }, { parse: (v) => parseInt(v, 10) });
-    this._bindRange('set-arena-peek', (v, d) => { d.arena.peekHold = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-arena-botdist-min', (v, d) => { d.arena.botDistMin = v; });
+    this._bindRange('set-arena-botdist-max', (v, d) => { d.arena.botDistMax = v; });
     this._bindRange('set-arena-col', (v, d) => { d.arena.columns = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-arena-colr', (v, d) => { d.arena.columnRadius = v; });
     this._bindRange('set-arena-ring', (v, d) => { d.arena.ringRadius = v; });
     this._bindRange('set-arena-enemy', (v, d) => { d.arena.enemyScale = v; });
     this._bindRange('set-arena-misslimit', (v, d) => { d.arena.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    this._bindRange('set-snxf-botdist-min', (v, d) => { d.snipercrossfire.botDistMin = v; });
+    this._bindRange('set-snxf-botdist-max', (v, d) => { d.snipercrossfire.botDistMax = v; });
+    this._bindRange('set-snxf-col', (v, d) => { d.snipercrossfire.columns = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-snxf-colr', (v, d) => { d.snipercrossfire.columnRadius = v; });
+    this._bindRange('set-snxf-ring', (v, d) => { d.snipercrossfire.ringRadius = v; });
+    this._bindRange('set-snxf-enemy', (v, d) => { d.snipercrossfire.enemyScale = v; });
+    this._bindRange('set-snxf-misslimit', (v, d) => { d.snipercrossfire.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     $('#set-duels-arena').addEventListener('change', (e) => {
       draft((d) => { d.duels.arena = parseInt(e.target.value, 10); });
@@ -5428,7 +5448,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._setRange('set-xh-dot', s.crosshair.dotPercentage);
     $('#set-xh-hitmarker').checked = s.crosshair.hitmarker !== false;
     $('#set-xh-dyn').checked = !!s.crosshair.dynamicGap;
-    $('#set-xh-outline').checked = !!s.crosshair.outline;
+    this._setRange('set-xh-outline-thick', s.crosshair.outlineThickness ?? (s.crosshair.outline ? 1 : 0));
     $('#set-xh-outline-color').value = s.crosshair.outlineColor || '#000000';
     this._setRange('set-xh-outline-opacity', Math.round((s.crosshair.outlineOpacity ?? 1) * 100));
     this.crosshair.drawPreview();
@@ -5526,13 +5546,22 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._setRange('set-surv-max-size', s.survival?.maxSize ?? 0.55);
     this._setRange('set-surv-strikes', s.survival?.missesAllowed ?? 3);
 
-    this._setRange('set-arena-cross', s.arena.crossDuration);
-    this._setRange('set-arena-peek', s.arena.peekHold);
+    this._setRange('set-arena-botdist-min', s.arena.botDistMin ?? 0.5);
+    this._setRange('set-arena-botdist-max', s.arena.botDistMax ?? 1.5);
     this._setRange('set-arena-col', s.arena.columns);
     this._setRange('set-arena-colr', s.arena.columnRadius);
     this._setRange('set-arena-ring', s.arena.ringRadius);
     this._setRange('set-arena-enemy', s.arena.enemyScale);
     this._setRange('set-arena-misslimit', s.arena.missLimit ?? 0);
+
+    const snxf = s.snipercrossfire ?? {};
+    this._setRange('set-snxf-botdist-min', snxf.botDistMin ?? 0.5);
+    this._setRange('set-snxf-botdist-max', snxf.botDistMax ?? 1.5);
+    this._setRange('set-snxf-col', snxf.columns ?? 7);
+    this._setRange('set-snxf-colr', snxf.columnRadius ?? 0.55);
+    this._setRange('set-snxf-ring', snxf.ringRadius ?? 9);
+    this._setRange('set-snxf-enemy', snxf.enemyScale ?? 1.0);
+    this._setRange('set-snxf-misslimit', snxf.missLimit ?? 0);
 
     $('#set-duels-arena').value = String(s.duels.arena);
     $('#set-duels-bot-difficulty').value = s.duels.botDifficulty ?? 'hard';
