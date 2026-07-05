@@ -68,7 +68,10 @@ export function buildMapMeshes(map, { coverColor, floorColor, root, onMesh }) {
     colliderBoxes.push({ pos: b.pos, size: b.size, rotationY: b.rotationY || 0 });
   }
 
-  for (const v of map.vertices || []) {
+  // Level-editor exports duplicate every box as a vertex footprint — skip
+  // vertices when boxes are present so geometry is not doubled/mirrored.
+  const vertexList = (map.boxes || []).length ? [] : (map.vertices || []);
+  for (const v of vertexList) {
     const mat = boxMat.clone();
     mat.map = mat.map.clone();
     const mesh = buildVertexMesh(v, mat);

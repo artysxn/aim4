@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
-import { randInt, clamp, lerp } from '../utils/MathUtils.js';
+import { randRange, randInt, clamp, lerp } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { buildMapMeshes } from '../utils/buildMapMeshes.js';
 import { worldImpactNormal } from '../utils/bulletImpact.js';
@@ -31,9 +31,15 @@ const BOT_CROSS_SPEED = 250 * UNIT;
 const JUMP_CHANCE = 0.33;
 const JUMP_PEAK_Y = 3.8;
 const CROSS_MARGIN = 0.45;
-const ROUND_COOLDOWN = 0.35;
+const ARM_MIN = 0.5;
+const ARM_MAX = 1.0;
 const PLAYER_YAW = Math.PI; // Team B faces the doors (+Z)
 const TRACER_MISS_DEPTH = 120;
+
+/** Y rotation so the bot stands upright and faces along ±X. */
+function botFacingY(crossDir) {
+  return crossDir > 0 ? -Math.PI / 2 : Math.PI / 2;
+}
 
 export class DoorsAwpScenario extends BaseScenario {
   constructor(opts) {
@@ -60,7 +66,7 @@ export class DoorsAwpScenario extends BaseScenario {
     this.colliderBoxes = [];
     this._arenaObjects = [];
 
-    this.phase = 'cooldown';
+    this.phase = 'arming';
     this.timer = 0;
     this.bot = null;
     this._missFlash = null;
@@ -121,6 +127,17 @@ export class DoorsAwpScenario extends BaseScenario {
     return { minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ };
   }
 
+  _respawnPlayer() {
+    const sp = this.map.spawns.B.pos;
+    this.engine.player.spawn({
+      pos: sp,
+      yaw: PLAYER_YAW,
+      bounds: this._playerBounds(),
+      colliders: this.colliderBoxes
+    });
+    this.engine.weapon?.reset();
+  }
+
   _buildBot() {
     const t = new Target();
     const col = this.settings.data.colors;
@@ -153,11 +170,24 @@ export class DoorsAwpScenario extends BaseScenario {
     return { startX, startZ, crossDir, targetX, jump };
   }
 
-  _beginRound() {
+  _placeBot(b) {
+    b.target.object.position.set(b.x, b.y, b.startZ);
+    b.target.object.rotation.set(0, botFacingY(b.crossDir), 0);
+  }
+
+  _clearBot(fadeColor) {
+    if (this.bot?.target && this.bot.target.state !== 'dying') {
+      this.bot.target.startDying(fadeColor);
+    }
+    this.bot = null;
+  }
+
+  /** Spawn a fresh bot at a lane and hold before it crosses. */
+  _scheduleNextRound() {
+    this._clearBot(0xff2222);
+
     const spawn = this._pickSpawn();
     const target = this._buildBot();
-    target.object.position.set(spawn.startX, 0, spawn.startZ);
-    target.object.lookAt(spawn.targetX, BODY_H / 2, spawn.startZ);
     this.addTarget(target);
 
     this.bot = {
@@ -167,22 +197,30 @@ export class DoorsAwpScenario extends BaseScenario {
       y: 0,
       progress: 0
     };
+    this._placeBot(this.bot);
+    this.phase = 'arming';
+    this.timer = randRange(ARM_MIN, ARM_MAX);
+  }
+
+  _startBotMove() {
+    if (!this.bot) return;
+    this.bot.progress = 0;
+    this.bot.x = this.bot.startX;
+    this.bot.y = 0;
+    this._placeBot(this.bot);
     this.phase = 'moving';
   }
 
   _botEscaped() {
     this.misses++;
-    if (this.bot?.target) this.bot.target.startDying(0xff2222);
-    this.bot = null;
-    this.phase = 'cooldown';
-    this.timer = ROUND_COOLDOWN;
+    this._respawnPlayer();
+    this._scheduleNextRound();
   }
 
   _killBot() {
-    if (this.bot?.target) this.bot.target.startDying(0x35e06a);
-    this.bot = null;
-    this.phase = 'cooldown';
-    this.timer = ROUND_COOLDOWN;
+    this._clearBot(0x35e06a);
+    this._respawnPlayer();
+    this._scheduleNextRound();
   }
 
   /** Wallbang: targets are tested before cover so shots register through walls. */
@@ -219,34 +257,27 @@ export class DoorsAwpScenario extends BaseScenario {
     const speed = BOT_CROSS_SPEED * this.botSpeedMul;
     const totalDist = Math.abs(b.targetX - b.startX);
     const step = (speed * dt) / totalDist;
-    b.progress = clamp(b.progress + step, 0, 1.001);
-    b.x = lerp(b.startX, b.targetX, b.progress);
+    const nextProgress = clamp(b.progress + step, 0, 1);
+    b.progress = nextProgress;
+    b.x = lerp(b.startX, b.targetX, nextProgress);
 
     if (b.jump) {
-      b.y = 4 * JUMP_PEAK_Y * b.progress * (1 - b.progress);
+      b.y = 4 * JUMP_PEAK_Y * nextProgress * (1 - nextProgress);
     } else {
       b.y = 0;
     }
 
-    b.target.object.position.set(b.x, b.y, b.startZ);
-    b.target.object.lookAt(b.x + b.crossDir, b.y + BODY_H / 2, b.startZ);
+    this._placeBot(b);
 
     const crossed = b.crossDir > 0
       ? b.x >= b.targetX - CROSS_MARGIN
       : b.x <= b.targetX + CROSS_MARGIN;
-    if (crossed || b.progress >= 1) this._botEscaped();
+    if (crossed) this._botEscaped();
   }
 
   onStart() {
-    const sp = this.map.spawns.B.pos;
-    this.engine.player.spawn({
-      pos: sp,
-      yaw: PLAYER_YAW,
-      bounds: this._playerBounds(),
-      colliders: this.colliderBoxes
-    });
-    this.phase = 'cooldown';
-    this.timer = 0.15;
+    this._respawnPlayer();
+    this._scheduleNextRound();
   }
 
   onUpdate(dt) {
@@ -254,12 +285,12 @@ export class DoorsAwpScenario extends BaseScenario {
       this._missFlash = null;
     }
     switch (this.phase) {
+      case 'arming':
+        this.timer -= dt;
+        if (this.timer <= 0) this._startBotMove();
+        break;
       case 'moving':
         this._advanceBot(dt);
-        break;
-      case 'cooldown':
-        this.timer -= dt;
-        if (this.timer <= 0) this._beginRound();
         break;
     }
   }
