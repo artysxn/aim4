@@ -18,7 +18,7 @@ import { UNIT } from '../utils/SourceMovement.js';
 import { mapExtent } from '../multiplayer/maps.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
-import { DEFAULTS } from '../core/SettingsManager.js';
+import { DEFAULTS, resolveModeDuration } from '../core/SettingsManager.js';
 import { DOORS_MAP } from '../maps/doorsMapData.js';
 import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 import {
@@ -37,8 +37,8 @@ const BOT_CROSS_SPEED = 250 * UNIT;
 const JUMP_CHANCE = 0; // bots run only — no jump crosses
 const JUMP_PEAK_Y = 1.9; // peak arc height (m) — half of the original 3.8 m
 const CROSS_MARGIN = 0.45;
-const ARM_MIN = 0.5;
-const ARM_MAX = 1.0;
+const ARM_MIN = 0.75;
+const ARM_MAX = 3;
 const PLAYER_YAW = Math.PI; // Team B faces the doors (+Z)
 const TRACER_MISS_DEPTH = 120;
 
@@ -71,7 +71,7 @@ export class DoorsAwpScenario extends BaseScenario {
     this._shotFeedbackDur = clamp(s.shotFeedbackDur ?? 0.5, 0.1, 3);
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 60)
-      : this.settings.data.runDuration;
+      : resolveModeDuration(s, this.settings.data.runDuration).value;
 
     this.map = DOORS_MAP;
     this.coverMeshes = [];
@@ -101,7 +101,7 @@ export class DoorsAwpScenario extends BaseScenario {
   static configKeyFor(settings, variant = 'practice') {
     if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
     const c = settings.data.doorsawp ?? DEFAULTS.doorsawp;
-    return `spd${c.botSpeed}_x${c.crossFrom || 'rightToLeft'}_d${settings.data.runDuration}`;
+    return `spd${c.botSpeed}_x${c.crossFrom || 'rightToLeft'}_d${resolveModeDuration(c, settings.data.runDuration).value}`;
   }
 
   configKey() {

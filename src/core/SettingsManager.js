@@ -470,6 +470,7 @@ export const DEFAULTS = {
     crossFrom: 'rightToLeft', // rightToLeft | leftToRight — spawn flank + cross direction
     shotFeedback: true, // practice: red bot snapshot + yellow hit marker
     shotFeedbackDur: 0.5, // seconds both markers stay visible
+    duration: { type: 'time', value: 60 },
     missLimit: 0
   }
 };
