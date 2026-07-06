@@ -52,6 +52,9 @@ const MAX_PEEK_EXTRA = COVER_GAP * 1.5; // extra strafe past default peek if sti
 const BOT_HEAD_HIT = 0.04;
 const BOT_BODY_HIT = 0.2;
 
+/** AWP cover/pit modes that can penalize missing a visible bot. */
+const AWP_LOS_MISS_MODES = new Set(['coverawp', 'sniperquickscopes']);
+
 const _headPos = new THREE.Vector3();
 const _eyePos = new THREE.Vector3();
 const _losDir = new THREE.Vector3();
@@ -89,6 +92,7 @@ export class CoverScenario extends BaseScenario {
     this.botHp = Math.max(1, Math.round(preset?.botHp ?? this.config.botHp ?? c.botHp));
     this.spawnHint = preset?.spawnHint ?? this.config.spawnHint ?? c.spawnHint ?? true;
     this.postKillSpawnExtra = preset?.postKillSpawnExtra ?? this.config.postKillSpawnExtra ?? c.postKillSpawnExtra ?? 0;
+    this._readLosMissPenalty(c);
     this.runDuration = this.competitive
       ? (preset?.runDuration ?? 60)
       : this.settings.data.runDuration;
@@ -121,6 +125,42 @@ export class CoverScenario extends BaseScenario {
   tracerRaycastExtras() {
     return this.coverBoxes;
   }
+
+  _readLosMissPenalty(c) {
+    if (!AWP_LOS_MISS_MODES.has(this.name)) {
+      this.losMissPenalty = false;
+      return;
+    }
+    this.losMissPenalty = this.competitive ? true : c.losMissPenalty !== false;
+  }
+
+  applyLiveSettings() {
+    super.applyLiveSettings();
+    if (!AWP_LOS_MISS_MODES.has(this.name) || this.competitive) return;
+    const c = { ...(DEFAULTS[this.name] ?? {}), ...(this.settings.data[this.name] ?? {}) };
+    this.losMissPenalty = c.losMissPenalty !== false;
+  }
+
+  /** Bot is exposed enough that a miss should count against the player. */
+  _botVisibleForLosPenalty(b) {
+    return !!b && b.target.state !== 'dying' && this._botFullyVisible(b);
+  }
+
+  _punishLosMiss() {
+    this.misses++;
+    this.kills = Math.max(0, this.kills - 1);
+    this.score = Math.max(0, this.score - 1);
+    beep(240, 0.08, 'sawtooth', 0.06);
+    if (this.bot) this.bot.target.startDying(0xff4d4d);
+    this.bot = null;
+    this._scheduleNextBot();
+  }
+
+  _tryLosMissPenalty(b, hitBot) {
+    if (!this.losMissPenalty || hitBot || !this._botVisibleForLosPenalty(b)) return;
+    this._punishLosMiss();
+  }
+
 
   // ---- Environment ---------------------------------------------------------
   _buildEnvironment() {
@@ -465,42 +505,47 @@ export class CoverScenario extends BaseScenario {
 
   onShoot(raycaster) {
     const hit = this.raycastTargets(raycaster, this.coverBoxes);
-    if (!hit) return;
-    const obj = hit.object;
-    const tgt = obj.userData.target;
-    if (!tgt) return; // cover blocked the shot
     const b = this.bot;
-    if (!b || tgt !== b.target || tgt.state === 'dying') return;
+    let hitBot = false;
 
-    this.crosshair?.hit();
-    const zone = obj.userData.zone;
-    if (zone === 'head') {
-      this.hits++;
-      this.headshots++;
-      this.kills++;
-      this.score += obj.userData.points;
-      beep(1000, 0.05, 'square', 0.05);
-      this._killBot();
-    } else {
-      this.hits++;
-      this.score += obj.userData.points;
-      b.hp -= 1;
-      beep(520, 0.04, 'square', 0.04);
-      if (b.hp <= 0) {
-        this.kills++;
-        this._killBot();
-      } else {
-        const mat = obj.material;
-        mat.emissiveIntensity = 1.0;
-        setTimeout(() => {
-          try {
-            mat.emissiveIntensity = 0.4;
-          } catch {
-            /* disposed */
+    if (hit) {
+      const obj = hit.object;
+      const tgt = obj.userData.target;
+      if (tgt && b && tgt === b.target && tgt.state !== 'dying') {
+        hitBot = true;
+        this.crosshair?.hit();
+        const zone = obj.userData.zone;
+        if (zone === 'head') {
+          this.hits++;
+          this.headshots++;
+          this.kills++;
+          this.score += obj.userData.points;
+          beep(1000, 0.05, 'square', 0.05);
+          this._killBot();
+        } else {
+          this.hits++;
+          this.score += obj.userData.points;
+          b.hp -= 1;
+          beep(520, 0.04, 'square', 0.04);
+          if (b.hp <= 0) {
+            this.kills++;
+            this._killBot();
+          } else {
+            const mat = obj.material;
+            mat.emissiveIntensity = 1.0;
+            setTimeout(() => {
+              try {
+                mat.emissiveIntensity = 0.4;
+              } catch {
+                /* disposed */
+              }
+            }, 80);
           }
-        }, 80);
+        }
       }
     }
+
+    this._tryLosMissPenalty(b, hitBot);
   }
 
   results() {

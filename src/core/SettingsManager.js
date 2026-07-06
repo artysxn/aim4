@@ -431,7 +431,8 @@ export const DEFAULTS = {
     playerHp: 4,
     botHp: 1,
     missLimit: 0,
-    spawnHint: true
+    spawnHint: true,
+    losMissPenalty: true // miss on a visible bot: −1 kill, bot despawns
   },
   sniperquickscopes: {
     rowCount: 3, // rings around the pit
@@ -444,7 +445,8 @@ export const DEFAULTS = {
     playerHp: 4,
     botHp: 1,
     missLimit: 0,
-    spawnHint: true // the spawn box turns red before the bot peeks
+    spawnHint: true,
+    losMissPenalty: true
   },
   sniperflicks: {
     spawnScaleX: 1.0, // horizontal spawn radius multiplier

@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { getSupabase, supabaseConfigured } from './supabase.js';
-import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
+import { isKillLeaderboardScenario, isLowerScoreLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 
 function isMissingColumnError(error) {
   const msg = error?.message || '';
@@ -35,7 +35,15 @@ function compareDefault(a, b) {
   return new Date(a.achieved_at).getTime() - new Date(b.achieved_at).getTime();
 }
 
+function compareLowerScore(a, b) {
+  const sa = a.score ?? Infinity;
+  const sb = b.score ?? Infinity;
+  if (sa !== sb) return sa - sb;
+  return new Date(a.achieved_at).getTime() - new Date(b.achieved_at).getTime();
+}
+
 function compareRows(scenario, a, b) {
+  if (isLowerScoreLeaderboardScenario(scenario)) return compareLowerScore(a, b);
   return isKillLeaderboardScenario(scenario)
     ? compareKillLeaderboard(a, b)
     : compareDefault(a, b);

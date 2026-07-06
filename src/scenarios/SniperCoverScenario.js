@@ -23,7 +23,7 @@ export class SniperCoverScenario extends CoverScenario {
   static configKeyFor(settings, variant = 'practice') {
     if (variant === 'competitive') return COMPETITIVE_CONFIG_KEY;
     const c = settings.data.coverawp ?? DEFAULTS.coverawp;
-    return `r${c.rowCount}_b${c.coverPerRow}_d${settings.data.runDuration}`;
+    return `r${c.rowCount}_b${c.coverPerRow}_l${c.losMissPenalty !== false ? 1 : 0}_d${settings.data.runDuration}`;
   }
 
   configKey() {

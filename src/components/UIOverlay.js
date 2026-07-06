@@ -87,7 +87,7 @@ import { formatServerRegion } from '../multiplayer/regionLabels.js';
 import { SCENARIO_ICONS, MATCHMAKING_ICON, TRAINING_ICON, PLAYLISTS_ICON as PLAYLISTS_TILE_ICON, CUSTOM_GAMES_ICON, MULTIPLAYER_ICON, LEADERBOARD_ICON, ACCOUNT_ICON, LOGOUT_ICON, SETTINGS_ICON, PRECISION_ICON, ALL_MODES_ICON, SNIPING_ICON } from '../aim4/icons.js';
 import { ARENAS } from '../scenarios/DuelsScenario.js';
 import { duelsArenaSelectOptions } from '../scenarios/duelsArenas.js';
-import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
+import { isKillLeaderboardScenario, isLowerScoreLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 
 const SCENARIO_META = {
   gridshot: { title: 'Gridshot', dualPlay: true, tags: ['Speed', 'Accuracy'] },
@@ -964,6 +964,7 @@ ${rf('set-cvawp-rows', 'Rows', 1, 3, 1)}
           ${rf('set-cvawp-react-max', 'Bot reaction max (ms)', 25, 1000, 5)}
           ${rf('set-cvawp-hp', 'Hits you can take', 1, 10, 1)}
           ${rf('set-cvawp-misslimit', 'Allowed misses (0 = unlimited)', 0, 50, 1)}
+          <label class="field-check"><input type="checkbox" id="set-cvawp-los-miss" checked /> Penalize visible misses (−1 kill)</label>
           <label class="field-check"><input type="checkbox" id="set-cvawp-spawn-hint" checked /> Highlight spawn box before peek</label>`
       },
       {
@@ -1013,6 +1014,7 @@ ${rf('set-snqs-rings', 'Rings', 1, 3, 1)}
           ${rf('set-snqs-react-max', 'Bot reaction max (ms)', 25, 1000, 5)}
           ${rf('set-snqs-hp', 'Hits you can take', 1, 10, 1)}
           ${rf('set-snqs-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}
+          <label class="field-check"><input type="checkbox" id="set-snqs-los-miss" checked /> Penalize visible misses (−1 kill)</label>
           <label class="field-check"><input type="checkbox" id="set-snqs-spawn-hint" checked /> Highlight spawn box before peek</label>`
       },
       {
@@ -2677,6 +2679,9 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._bindRange('set-snqs-react-max', (v, d) => { d.sniperquickscopes.reactMax = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-snqs-hp', (v, d) => { d.sniperquickscopes.playerHp = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-snqs-misslimit', (v, d) => { d.sniperquickscopes.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-snqs-los-miss')?.addEventListener('change', (e) => {
+      draft((d) => { d.sniperquickscopes.losMissPenalty = e.target.checked; });
+    });
     $('#set-snqs-spawn-hint')?.addEventListener('change', (e) => {
       draft((d) => { d.sniperquickscopes.spawnHint = e.target.checked; });
     });
@@ -2857,8 +2862,11 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._bindRange('set-cvawp-react-max', (v, d) => { d.coverawp.reactMax = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-cvawp-hp', (v, d) => { d.coverawp.playerHp = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-cvawp-misslimit', (v, d) => { d.coverawp.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+    $('#set-cvawp-los-miss')?.addEventListener('change', (e) => {
+      draft((d) => { d.coverawp.losMissPenalty = e.target.checked; });
+    });
     $('#set-cvawp-spawn-hint')?.addEventListener('change', (e) => {
-      this.settings.mutateDraft((d) => { d.coverawp.spawnHint = e.target.checked; });
+      draft((d) => { d.coverawp.spawnHint = e.target.checked; });
     });
 
     this._bindRange('set-drone-size', (v, d) => { d.drone.targetSize = v; });
@@ -5734,6 +5742,8 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._setRange('set-snqs-react-max', snq.reactMax ?? 200);
     this._setRange('set-snqs-hp', snq.playerHp ?? 4);
     this._setRange('set-snqs-misslimit', snq.missLimit ?? 0);
+    const snql = this.root.querySelector('#set-snqs-los-miss');
+    if (snql) snql.checked = snq.losMissPenalty !== false;
     const snqh = this.root.querySelector('#set-snqs-spawn-hint');
     if (snqh) snqh.checked = snq.spawnHint !== false;
 
@@ -5900,6 +5910,8 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._setRange('set-cvawp-react-max', cva.reactMax ?? 200);
     this._setRange('set-cvawp-hp', cva.playerHp ?? 4);
     this._setRange('set-cvawp-misslimit', cva.missLimit ?? 0);
+    const cval = this.root.querySelector('#set-cvawp-los-miss');
+    if (cval) cval.checked = cva.losMissPenalty !== false;
     const cvah = this.root.querySelector('#set-cvawp-spawn-hint');
     if (cvah) cvah.checked = cva.spawnHint !== false;
 
@@ -7023,6 +7035,26 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
         .join('');
       return `<table class="lb-table">
       <thead><tr><th>#</th><th>Player</th><th>Kills</th><th>Acc</th><th>Time</th><th>When</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+    }
+
+    if (scenario === 'reactiontime') {
+      const rows = list
+        .map((r, i) => {
+          const hl = highlightUserId && r.user_id === highlightUserId ? ' class="hl"' : '';
+          const ms = r.score ?? 0;
+          const date = this._formatLbRunWhen(r.achieved_at);
+          return `<tr${hl}>
+          <td>${i + 1}</td>
+          ${this._lbPlayerCell(r)}
+          <td class="score">${Number(ms).toLocaleString()} ms</td>
+          <td>${Math.round((r.accuracy || 0) * 100)}%</td>
+          <td class="lb-when">${date}</td>
+        </tr>`;
+        })
+        .join('');
+      return `<table class="lb-table">
+      <thead><tr><th>#</th><th>Player</th><th>Avg</th><th>Acc</th><th>When</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
     }
 

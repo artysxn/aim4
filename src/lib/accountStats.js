@@ -7,6 +7,7 @@ import {
   RANKED_SCENARIOS,
   COMPETITIVE_CONFIG_KEY,
   isKillLeaderboardScenario,
+  isLowerScoreLeaderboardScenario,
   isScoreLeaderboardScenario
 } from '../scenarios/leaderboardConfig.js';
 import { fetchLeaderboardWithMeta, fetchEloLeaderboardWithMeta } from './cloudScores.js';
@@ -120,6 +121,9 @@ export function formatModeStat(scenario, row) {
     const acc =
       row.accuracy != null ? ` · ${Math.round(row.accuracy * 100)}% acc` : '';
     return `${Math.round(kills).toLocaleString()} kills${acc}`;
+  }
+  if (isLowerScoreLeaderboardScenario(scenario)) {
+    return row.score != null ? `${Math.round(row.score)} ms` : '—';
   }
   return row.score != null ? String(row.score) : '—';
 }
