@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { RESOLUTIONS, clampResolutionDim } from '../core/SettingsManager.js';
 import { SCENARIOS } from '../core/SceneManager.js';
 import * as Storage from '../utils/Storage.js';
+import { bindLabel } from '../utils/inputBinds.js';
 import {
   fetchLeaderboardWithMeta,
   fetchEloLeaderboardWithMeta,
@@ -529,7 +530,12 @@ export class UIOverlay {
           ${rf('set-vm-oy', 'Offset Y (up)', -0.5, 0.5, 0.01)}
           ${rf('set-vm-oz', 'Offset Z (forward)', 0.2, 1.0, 0.01)}
           <label class="field-check"><input type="checkbox" id="set-vm-bob" /> Weapon bob while moving</label>
-          <label class="field-check"><input type="checkbox" id="set-vm-aimpunch" /> Aimpunch (view-punch recoil)</label>`
+          <label class="field-check"><input type="checkbox" id="set-vm-aimpunch" /> Aimpunch (view-punch recoil)</label>
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Shoot</span></div>
+            <button type="button" class="btn btn-block" id="set-shoot-bind"></button>
+          </div>
+          <p class="muted">Rebind left click to another mouse button or key. Right click stays scope on AWP unless you bind shoot to it.</p>`
       },
       {
         id: 'sniperscope',
@@ -2004,8 +2010,12 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
   }
 
   _syncKeyCaptureLabel(id, code) {
+    this._syncInputCaptureLabel(id, code);
+  }
+
+  _syncInputCaptureLabel(id, code) {
     const btn = this.root.querySelector(`#${id}`);
-    if (btn && !btn.dataset.capturing) btn.textContent = this._keyCodeLabel(code);
+    if (btn && !btn.dataset.capturing) btn.textContent = bindLabel(code);
   }
 
   /**
@@ -2013,27 +2023,49 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
    * (Escape cancels). `apply(code, draft)` writes it onto the settings draft.
    */
   _bindKeyCapture(id, apply) {
+    this._bindInputCapture(id, apply);
+  }
+
+  /**
+   * Bind button: click arms capture; next key press or mouse button becomes the
+   * bind (Escape cancels). Codes: KeyboardEvent.code or Mouse0|Mouse1|Mouse2.
+   */
+  _bindInputCapture(id, apply) {
     const btn = this.root.querySelector(`#${id}`);
     if (!btn) return;
     btn.addEventListener('click', () => {
       if (btn.dataset.capturing) return;
       const prev = btn.textContent;
       btn.dataset.capturing = '1';
-      btn.textContent = 'Press a key…';
-      const onKey = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
+      btn.textContent = 'Press a key or click…';
+      const finish = (code) => {
         document.removeEventListener('keydown', onKey, true);
+        document.removeEventListener('mousedown', onMouse, true);
         delete btn.dataset.capturing;
-        if (e.code === 'Escape') {
+        if (!code) {
           btn.textContent = prev;
           return;
         }
-        this.settings.mutateDraft((d) => apply(e.code, d));
-        btn.textContent = this._keyCodeLabel(e.code);
+        this.settings.mutateDraft((d) => apply(code, d));
+        btn.textContent = bindLabel(code);
         this._updateSettingsBar();
       };
+      const onKey = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.code === 'Escape') {
+          finish(null);
+          return;
+        }
+        finish(e.code);
+      };
+      const onMouse = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        finish(`Mouse${e.button}`);
+      };
       document.addEventListener('keydown', onKey, true);
+      document.addEventListener('mousedown', onMouse, true);
     });
   }
 
@@ -2464,6 +2496,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     $('#set-vm-aimpunch').addEventListener('change', (e) => {
       draft((d) => { d.weapon.aimpunch = e.target.checked; });
     });
+    this._bindInputCapture('set-shoot-bind', (code, d) => { d.weapon.shootBind = code; });
 
     this._bindRange('set-sniper-thick', (v, d) => { d.sniper.lineThickness = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindKeyCapture('set-sniper-bind1', (code, d) => { d.sniper.unscopeKey1 = code; });
@@ -5582,6 +5615,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._setRange('set-vm-oz', s.viewmodel?.offsetZ ?? 0.5);
     $('#set-vm-bob').checked = s.viewmodel?.bob !== false;
     $('#set-vm-aimpunch').checked = s.weapon?.aimpunch !== false;
+    this._syncInputCaptureLabel('set-shoot-bind', s.weapon?.shootBind ?? 'Mouse0');
 
     this._setRange('set-sniper-thick', s.sniper?.lineThickness ?? 2);
     this._syncKeyCaptureLabel('set-sniper-bind1', s.sniper?.unscopeKey1 ?? 'Digit3');

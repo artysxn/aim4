@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import { clamp, degToRad } from '../utils/MathUtils.js';
+import { getShootBind, isKeyboardBind, matchesMouseBind } from '../utils/inputBinds.js';
 
 const MAX_PITCH = degToRad(89);
 
@@ -34,7 +35,7 @@ export class InputManager {
     this.keys = new Set(); // currently-held movement keys (only while locked)
     this.jumpQueued = false; // consumed once per press by PlayerController
     this.spawnGraceRemaining = 0; // keyboard locked briefly after spawn
-    this.fireHeld = false; // LMB held — drives full-auto in weapon scenarios
+    this.fireHeld = false; // shoot bind held — drives full-auto in weapon scenarios
     this.altHeld = false; // RMB held — cycles sniper zoom while held
     this.lookScale = 1; // scoped sensitivity multiplier (WeaponController)
     this.scopeLevel = 0; // live zoom level, recorded into the replay bitmask
@@ -105,7 +106,7 @@ export class InputManager {
     const useRaw = this.settings.data.rawInput;
     let res;
     try {
-      // Prefer raw, unaccelerated mouse movement when enabled + supported.
+      // Prefer raw, unadjusted mouse movement when enabled + supported.
       res = useRaw ? el.requestPointerLock({ unadjustedMovement: true }) : el.requestPointerLock();
     } catch (e) {
       return; // older browsers throw synchronously on the options form
@@ -137,6 +138,26 @@ export class InputManager {
     this.pitch = this.camera.rotation.x;
   }
 
+  _shootBind() {
+    return getShootBind(this.settings);
+  }
+
+  _isShootKey(code) {
+    const bind = this._shootBind();
+    return isKeyboardBind(bind) && bind === code;
+  }
+
+  _beginFire() {
+    if (!this.locked) return;
+    const rising = !this.fireHeld;
+    this.fireHeld = true;
+    if (rising && this.onShoot) this.onShoot();
+  }
+
+  _endFire() {
+    this.fireHeld = false;
+  }
+
   _handleLockChange() {
     this.locked = document.pointerLockElement === this.engine.canvas;
     if (!this.locked) {
@@ -150,6 +171,13 @@ export class InputManager {
 
   _onKey(e, down) {
     const grace = this.spawnGraceRemaining > 0;
+    if (this._isShootKey(e.code)) {
+      if (!this.locked) return;
+      e.preventDefault();
+      if (down) this._beginFire();
+      else this._endFire();
+      return;
+    }
     if (e.code === 'Space') {
       if (!this.locked) return;
       e.preventDefault();
@@ -197,6 +225,16 @@ export class InputManager {
   }
 
   _onMouseDown(e) {
+    if (matchesMouseBind(this._shootBind(), e.button)) {
+      if (!this.locked) {
+        // Left click still re-acquires pointer lock even when shoot is rebound.
+        if (e.button === 0 && this.onUnlockedClick) this.onUnlockedClick();
+        return;
+      }
+      e.preventDefault();
+      this._beginFire();
+      return;
+    }
     if (e.button === 2) {
       if (!this.locked) return;
       e.preventDefault();
@@ -204,23 +242,18 @@ export class InputManager {
       if (this.onAltFire) this.onAltFire();
       return;
     }
-    if (e.button !== 0) return;
-    if (!this.locked) {
-      // Use the click gesture to (re)acquire pointer lock — clicking back into
-      // the game after tabbing/clicking out, or after a start while unfocused.
+    if (e.button === 0 && !this.locked) {
       if (this.onUnlockedClick) this.onUnlockedClick();
-      return;
     }
-    this.fireHeld = true;
-    if (this.onShoot) this.onShoot();
   }
 
   _onMouseUp(e) {
-    if (e.button === 2) {
-      this.altHeld = false;
+    if (matchesMouseBind(this._shootBind(), e.button)) {
+      this._endFire();
       return;
     }
-    if (e.button !== 0) return;
-    this.fireHeld = false;
+    if (e.button === 2) {
+      this.altHeld = false;
+    }
   }
 }

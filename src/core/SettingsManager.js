@@ -92,7 +92,8 @@ export const DEFAULTS = {
   },
   weapon: {
     aimpunch: true, // view-punch camera kick when firing (toggle for those who dislike it)
-    customWeapon: 'rifle' // custom games: 'rifle' | 'pistol' | 'tracking' | 'sniper'
+    customWeapon: 'rifle', // custom games: 'rifle' | 'pistol' | 'tracking' | 'sniper'
+    shootBind: 'Mouse0' // Mouse0|Mouse1|Mouse2 or a KeyboardEvent.code
   },
   sniper: {
     lineThickness: 2, // px — scope hairline thickness
