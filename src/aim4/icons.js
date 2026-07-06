@@ -25,6 +25,7 @@ import sniperholds from '../icons/mode_sniperholds.svg?url';
 import sniperquickscopes from '../icons/mode_sniperquickscopes.svg?url';
 import sniperflicks from '../icons/mode_sniperflicks.svg?url';
 import doors from '../icons/mode_doors.svg?url';
+import reactiontime from '../icons/mode_reactiontime.svg?url';
 
 import matchmaking from '../icons/icon_matchmaking.svg?url';
 import training    from '../icons/icon_training.svg?url';
@@ -71,6 +72,7 @@ export const SCENARIO_ICONS = {
   galaxy: stars,          // Galaxy challenge uses the Stars icon (by design)
   waves,
   sequenceultra: sequence,
+  reactiontime,
   sniperholds,
   sniperquickscopes,
   pitrifle: sniperquickscopes,

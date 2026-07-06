@@ -36,6 +36,7 @@ import { CoverScenario } from '../scenarios/CoverScenario.js';
 import { DroneScenario } from '../scenarios/DroneScenario.js';
 import { GalaxyScenario } from '../scenarios/GalaxyScenario.js';
 import { WavesScenario } from '../scenarios/WavesScenario.js';
+import { ReactionTimeScenario } from '../scenarios/ReactionTimeScenario.js';
 import { MultiplayerDuelScenario } from '../scenarios/MultiplayerDuelScenario.js';
 import { SniperHoldsScenario } from '../scenarios/SniperDuelsScenario.js';
 import { SniperQuickscopesScenario } from '../scenarios/SniperQuickscopesScenario.js';
@@ -80,6 +81,7 @@ export const SCENARIOS = {
   galaxy: GalaxyScenario,
   waves: WavesScenario,
   sequenceultra: SequenceUltraScenario,
+  reactiontime: ReactionTimeScenario,
   sniperholds: SniperHoldsScenario,
   sniperquickscopes: SniperQuickscopesScenario,
   pitrifle: PitRifleScenario,

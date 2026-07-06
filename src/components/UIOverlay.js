@@ -122,6 +122,7 @@ const SCENARIO_META = {
   galaxy: { title: 'Galaxy', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] },
   waves: { title: 'Waves', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] },
   sequenceultra: { title: 'Sequence (Ultra)', dualPlay: false, challenge: true, tags: ['Control', 'Reactions', 'Accuracy'] },
+  reactiontime: { title: 'Reaction time', dualPlay: false, challenge: true, tags: ['Speed', 'Reactions'] },
   sniperholds: { title: 'Duels (AWP)', dualPlay: true, tags: ['Accuracy', 'Control'] },
   sniperquickscopes: { title: 'Pit (AWP)', dualPlay: true, tags: ['Reactions', 'Control'] },
   pitrifle: { title: 'Pit (Rifle)', dualPlay: true, tags: ['Reactions', 'Control'] },
@@ -180,7 +181,7 @@ const TRAINING_CATEGORIES = [
   { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'sequencespeed', 'double', 'doubletracking', 'cover', 'coverawp', 'sniperflicks', 'snipercrossfire'] },
   { id: 'sniping', title: 'Sniping', modes: ['sniperquickscopes', 'coverawp', 'sniperholds', 'sniperflicks', 'snipertracking', 'snipercrossfire', 'doorsawp'] },
   { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels', 'cover', 'coverawp', 'sniperholds', 'sniperquickscopes', 'pitrifle', 'sniperflicks', 'snipertracking', 'snipercrossfire', 'doorsawp'] },
-  { id: 'challenges', title: 'Challenges', modes: ['galaxy', 'sequenceultra', 'waves'] },
+  { id: 'challenges', title: 'Challenges', modes: ['galaxy', 'sequenceultra', 'waves', 'reactiontime'] },
   { id: 'all', title: 'All', modes: [] }
 ];
 
@@ -3198,8 +3199,11 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     const stat = (label, val) =>
       `<div class="stat"><span class="stat-value">${val}</span><label>${label}</label></div>`;
     const isKill = isKillLeaderboardScenario(results.scenario);
+    const scoreVal = results.scenario === 'reactiontime'
+      ? `${results.score} ms`
+      : (isKill ? results.kills : results.score.toLocaleString());
     return (
-      stat(isKill ? 'Kills' : 'Score', isKill ? results.kills : results.score.toLocaleString()) +
+      stat(isKill ? 'Kills' : 'Score', scoreVal) +
       stat('Accuracy', Math.round(results.accuracy * 100) + '%') +
       stat('Hits / Shots', `${results.hits}/${results.shots}`) +
       stat('Time', this._formatTimePlayed(results.timePlayed))
@@ -5313,7 +5317,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
       `<tr><td class="mp-tab-label">${label}</td><td class="mp-tab-val">${val}</td></tr>`;
     const rows = [
       statRow('Time', this._formatHudTime(sc)),
-      statRow('Score', Math.round(this._hudScoreValue(sc)).toLocaleString()),
+      statRow('Score', this._formatHudScore(sc)),
       statRow('Accuracy', `${Math.round(sc.accuracy * 100)}%`),
       statRow('KPS', sc.kps.toFixed(1)),
       statRow('Hits', `${sc.hits}/${sc.shotsFired}`),
@@ -6048,7 +6052,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this.currentScenario = name;
     this.scenarioConfig = config;
     this.sceneManager.load(name, config);
-    const noCrit = ['spidershot', 'survival', 'sequence', 'sequencespeed', 'sequencetracking', 'sequenceultra', 'double', 'doubletracking', 'ball', 'line', 'turn', 'box', 'circle', 'threeshot', 'drone', 'galaxy', 'waves'].includes(name);
+    const noCrit = ['spidershot', 'survival', 'sequence', 'sequencespeed', 'sequencetracking', 'sequenceultra', 'double', 'doubletracking', 'ball', 'line', 'turn', 'box', 'circle', 'threeshot', 'drone', 'galaxy', 'waves', 'reactiontime'].includes(name);
     this.hudCritChip.style.display = noCrit ? 'none' : '';
     this.showScreen('playing');
     this.state = 'await-start';
@@ -6762,7 +6766,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     }
     if (this.hud.classList.contains('active') && sc) {
       this.hudTime.textContent = this._formatHudTime(sc);
-      this.hudScore.textContent = Math.round(this._hudScoreValue(sc)).toLocaleString();
+      this.hudScore.textContent = this._formatHudScore(sc);
       this.hudAcc.textContent = Math.round(sc.accuracy * 100) + '%';
       this.hudKps.textContent = sc.kps.toFixed(1);
       this.hudHits.textContent = `${sc.hits}/${sc.shotsFired}`;
@@ -6883,7 +6887,17 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
   }
 
   _hudScoreValue(sc) {
+    if (sc.name === 'reactiontime') return sc.score;
     return isKillLeaderboardScenario(sc.name) ? sc.kills : sc.score;
+  }
+
+  _formatHudScore(sc) {
+    if (sc.name === 'reactiontime') {
+      const n = sc._validAttempts ?? 0;
+      if (!n) return '—';
+      return `${Math.round(sc.score)} ms`;
+    }
+    return Math.round(this._hudScoreValue(sc)).toLocaleString();
   }
 
   _formatHudTime(sc) {
@@ -7140,12 +7154,18 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
       stat('Hits / Shots', `${results.hits}/${results.shots}`) +
       (showCrit ? stat('Crit ratio', Math.round(results.critRatio * 100) + '%') : '') +
       stat('Misses', results.misses);
+    const reactionStats =
+      stat('Average', `${results.score} ms`) +
+      (results.reactionTimes || []).map((ms, i) => stat(`Attempt ${i + 1}`, `${Math.round(ms)} ms`)).join('') +
+      stat('Time', this._formatTimePlayed(results.timePlayed));
     this.root.querySelector('#res-stats').innerHTML =
       isKillLeaderboardScenario(results.scenario)
         ? killStats
         : results.scenario === 'tracking'
           ? trackingStats
-          : defaultStats;
+          : results.scenario === 'reactiontime'
+            ? reactionStats
+            : defaultStats;
 
     const { list, error } = await this._fetchLeaderboard(
       results.scenario,
