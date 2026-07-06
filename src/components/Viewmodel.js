@@ -47,10 +47,6 @@ export class Viewmodel {
     this._bobPhase = 0;
     this._kick = 0; // 0..1 recoil kick amount, decays each frame
     this._flashT = 0;
-    this._slashT = 0;
-    this._slashHeavy = false;
-    this._inspectT = 0;
-    this._inspectDur = 0;
     this._punchPitch = 0; // view-punch (aimpunch) offset, springs back to 0
     this._punchYaw = 0;
 
@@ -147,18 +143,6 @@ export class Viewmodel {
     sniper.add(sniperFlash);
     this.group.add(sniper);
     this._models.sniper = { group: sniper, flash: sniperFlash, fwd: 1.06, up: 0.02, boltHandle };
-
-    // Knife: blade + handle + guard (CS-style flip knife silhouette).
-    const knife = new THREE.Group();
-    this._box(knife, 0.03, 0.14, 0.22, 0x8a9098, 0, -0.02, -0.12); // blade
-    this._box(knife, 0.025, 0.04, 0.08, 0x6a7078, 0, -0.01, 0.02); // tip taper
-    this._box(knife, 0.05, 0.03, 0.04, 0x1a1c1f, 0, -0.08, 0.06); // guard
-    this._box(knife, 0.04, 0.11, 0.07, 0x1f1510, 0, -0.14, 0.08); // handle
-    this._box(knife, 0.035, 0.04, 0.05, 0x2a2018, 0, -0.20, 0.09); // pommel
-    const knifeFlash = this._makeFlash(0, -0.02, -0.22);
-    knife.add(knifeFlash);
-    this.group.add(knife);
-    this._models.knife = { group: knife, flash: knifeFlash, fwd: 0.22, up: -0.02 };
   }
 
   _buildTracers() {
@@ -288,19 +272,6 @@ export class Viewmodel {
   fire({ recoil = true } = {}) {
     if (recoil) this._kick = 1;
     this._flashT = FLASH_LIFE;
-  }
-
-  /** Knife slash swing (quick or heavy). */
-  slash(type = 'quick') {
-    this._slashT = type === 'heavy' ? 0.42 : 0.28;
-    this._slashHeavy = type === 'heavy';
-    this._kick = type === 'heavy' ? 0.55 : 0.35;
-  }
-
-  /** Start a knife inspect spin. */
-  beginInspect(ms = 2500) {
-    this._inspectDur = ms / 1000;
-    this._inspectT = this._inspectDur;
   }
 
   /**
@@ -482,43 +453,13 @@ export class Viewmodel {
       }
     }
 
-    let deployDown = 0;
-    let deployBack = 0;
-    let deployTilt = 0;
-    const deploy = weapon?.deployProgress?.() ?? 1;
-    if (deploy < 1) {
-      const t = 1 - deploy;
-      deployDown = -0.22 * t;
-      deployBack = 0.14 * t;
-      deployTilt = 0.45 * t;
-    }
-
-    let slashFwd = 0;
-    let slashTilt = 0;
-    if (this._slashT > 0) {
-      const dur = this._slashHeavy ? 0.42 : 0.28;
-      const p = 1 - this._slashT / dur;
-      const wave = Math.sin(p * Math.PI);
-      slashFwd = wave * (this._slashHeavy ? 0.14 : 0.09);
-      slashTilt = wave * (this._slashHeavy ? -0.55 : -0.38);
-    }
-
-    let inspectYaw = 0;
-    let inspectTilt = 0;
-    if (this._inspectT > 0 && weapon?.spec?.model === 'knife') {
-      const p = 1 - this._inspectT / this._inspectDur;
-      inspectYaw = Math.sin(p * Math.PI * 2) * 0.9;
-      inspectTilt = Math.sin(p * Math.PI) * 0.35;
-    }
-
     this._pos.copy(cam.position)
       .addScaledVector(this._right, ox + bobX)
-      .addScaledVector(this._up, oy + bobY + kickUp + reloadDown + boltDown + deployDown)
-      .addScaledVector(this._fwd, oz - kickBack - reloadBack - boltBack - deployBack + slashFwd);
+      .addScaledVector(this._up, oy + bobY + kickUp + reloadDown + boltDown)
+      .addScaledVector(this._fwd, oz - kickBack - reloadBack - boltBack);
     this.group.position.copy(this._pos);
     this.group.quaternion.copy(cam.quaternion);
-    this.group.rotateX(-this._kick * 0.05 * kickMul + reloadTilt + boltTilt + deployTilt + slashTilt + inspectTilt);
-    if (inspectYaw !== 0) this.group.rotateY(inspectYaw);
+    this.group.rotateX(-this._kick * 0.05 * kickMul + reloadTilt + boltTilt);
 
     this._muzzle.copy(this._pos)
       .addScaledVector(this._fwd, this._muzzleFwd * scale)
@@ -540,10 +481,8 @@ export class Viewmodel {
     }
     this._applyTransform(motion);
 
-    // Decay kick + flash + knife anims.
+    // Decay kick + flash.
     this._kick = Math.max(0, this._kick - dt / 0.07);
-    if (this._slashT > 0) this._slashT = Math.max(0, this._slashT - dt);
-    if (this._inspectT > 0) this._inspectT = Math.max(0, this._inspectT - dt);
     if (this._flash) {
       if (this._flashT > 0) {
         this._flashT = Math.max(0, this._flashT - dt);

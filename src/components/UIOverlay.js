@@ -544,7 +544,7 @@ export class UIOverlay {
             <div class="field-top"><span class="field-label">Unscope bind 2</span></div>
             <button type="button" class="btn btn-block" id="set-sniper-bind2"></button>
           </div>
-          <p class="muted">Right-click cycles the scope. In sniping modes with movement, <strong>1</strong> = AWP, <strong>3</strong> = knife, <strong>Q</strong> toggles. Otherwise these binds unscope instantly.</p>`
+          <p class="muted">Right-click cycles the scope. Either bind unscopes instantly.</p>`
       },
 
     ];

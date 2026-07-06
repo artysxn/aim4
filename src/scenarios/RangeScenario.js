@@ -82,7 +82,6 @@ export class RangeScenario extends BaseScenario {
   _applyWeapon(weapon) {
     if (weapon === 'sniper') {
       this.weaponId = 'sniper';
-      this.allowWeaponSwap = true;
       this.weaponBloom = true;
       this.viewmodelRecoil = true;
       this.showViewmodel = true;
@@ -90,7 +89,6 @@ export class RangeScenario extends BaseScenario {
       this._sniperOneShot = true;
     } else {
       this.weaponId = 'rifle';
-      this.allowWeaponSwap = false;
       this._sniperOneShot = false;
     }
   }

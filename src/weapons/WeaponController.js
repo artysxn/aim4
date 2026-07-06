@@ -28,119 +28,43 @@ export class WeaponController {
   }
 
   reset() {
-    const sc = this.sceneManager?.current;
-    this._loadoutEnabled = !!sc?.allowWeaponSwap;
-    this._loadoutSlot = 'sniper';
+    // Pick up the active scenario's weapon (defaults to rifle outside a run).
+    this.spec = getWeapon(this.sceneManager?.current?.weaponId);
+    this.viewmodel?.setWeapon(this.spec);
 
-    const initialId = this._loadoutEnabled
-      ? 'sniper'
-      : (sc?.weaponId || 'rifle');
-    const startDeploy = getWeapon(initialId).deployMs > 0;
-    this._equip(initialId, { deploy: startDeploy });
-
+    this.magSize = this.spec.magSize;
+    this.ammo = this.magSize;
     this.reloading = false;
     this._reloadEndsAt = 0;
-    this._shotIndex = 0;
-    this._sustainLevel = 0;
+    this._shotIndex = 0; // consecutive-shot counter (drives bloom/punch + pattern)
+    this._sustainLevel = 0; // automatic-only: decaying sustained-spray level
     this._firing = false;
     this._wasFireHeld = false;
-    this._wasAltHeld = false;
     this._wasAirborne = false;
     this._landedUntil = 0;
-    this._lastShotAt = 0;
-    this._attackType = 'quick';
+    this._lastShotAt = 0; // wall-clock of the last bullet — enforces the fire-rate cap
 
+    // Scope state (sniper): zoom level, hold-to-cycle and post-shot rescope timers.
     this.scopeLevel = 0;
-    this.scopeVisualLevel = 0;
     this._scopeChangedAt = 0;
-    this._rescopeAt = 0;
+    this._rescopeAt = 0; // wall-clock to re-scope after a shot (0 = none pending)
     this._rescopeStartedAt = 0;
     this._rescopeLevel = 0;
     this._lastZoomCycleAt = 0;
     this._lastScopeInAt = 0;
-    this._inspectEndsAt = 0;
     this._applyScope();
-
-    const startScoped = sc?.startScoped;
+    // Scenarios may spawn the player already scoped in (Sniper Flicks/Tracking).
+    const startScoped = this.sceneManager?.current?.startScoped;
     if (this.spec.zoom && startScoped > 0) this.setScope(startScoped);
   }
 
-  // ---- Loadout (sniping modes) -----------------------------------------------
-  switchToSlot(slot) {
-    if (!this._loadoutEnabled) return;
-    const id = slot === 3 || slot === 'knife' ? 'knife' : 'sniper';
-    if (this.spec.id === id) return;
-    this._equip(id, { deploy: true });
-  }
-
-  toggleLoadout() {
-    if (!this._loadoutEnabled) return;
-    this.switchToSlot(this.spec.id === 'knife' ? 'sniper' : 'knife');
-  }
-
-  inspect() {
-    if (!this.spec.melee || !this._active()) return;
-    if (this.isDeploying()) return;
-    const ms = this.spec.inspectMs ?? 2500;
-    this._inspectEndsAt = performance.now() + ms;
-    this.viewmodel?.beginInspect?.(ms);
-  }
-
-  isInspecting(now = performance.now()) {
-    return now < this._inspectEndsAt;
-  }
-
-  inspectProgress(now = performance.now()) {
-    if (!this.isInspecting(now)) return 0;
-    const ms = this.spec.inspectMs ?? 2500;
-    const left = this._inspectEndsAt - now;
-    return 1 - left / ms;
-  }
-
-  _equip(id, { deploy = false } = {}) {
-    this.spec = getWeapon(id);
-    this._loadoutSlot = id === 'knife' ? 'knife' : 'sniper';
-    this.viewmodel?.setWeapon(this.spec);
-    this.magSize = this.spec.magSize;
-    this.ammo = this.spec.magSize;
-    this.reloading = false;
-    this._shotIndex = 0;
-    this._sustainLevel = 0;
-    this._inspectEndsAt = 0;
-
-    if (this.spec.zoom && this.scopeLevel > 0) {
-      this._rescopeAt = 0;
-      this._rescopeStartedAt = 0;
-      this.scopeLevel = 0;
-      this.scopeVisualLevel = 0;
-      this._scopeChangedAt = 0;
-    }
-
-    if (deploy && this.spec.deployMs > 0) {
-      this._deployEndsAt = performance.now() + this.spec.deployMs;
-      this._deployStartedAt = performance.now();
-    } else {
-      this._deployEndsAt = 0;
-      this._deployStartedAt = 0;
-    }
-    this._applyScope();
-  }
-
-  isDeploying(now = performance.now()) {
-    return this._deployEndsAt > 0 && now < this._deployEndsAt;
-  }
-
-  deployProgress(now = performance.now()) {
-    if (!this.isDeploying(now)) return 1;
-    const total = this.spec?.deployMs || 1;
-    return Math.max(0, Math.min(1, (now - this._deployStartedAt) / total));
-  }
-
   // ---- Scope (sniper) -------------------------------------------------------
+  /** True while the post-shot bolt cycle is running (manual scope-in blocked). */
   isBoltCycling(now = performance.now()) {
     return this._rescopeAt > 0 && now < this._rescopeAt;
   }
 
+  /** 0..1 progress through the bolt cycle (0 when idle). */
   boltCycleProgress(now = performance.now()) {
     if (!this.isBoltCycling(now)) return 0;
     const total = this.spec?.zoom?.rescopeMs ?? 1250;
@@ -148,6 +72,7 @@ export class WeaponController {
     return Math.max(0, Math.min(1, (now - start) / total));
   }
 
+  /** Set the zoom level (0 = unscoped) and push FOV/sens/speed side effects. */
   setScope(level) {
     const z = this.spec?.zoom;
     if (!z) return;
@@ -156,6 +81,7 @@ export class WeaponController {
     if (level === this.scopeLevel) return;
     const wasScoped = this.scopeLevel > 0;
     this.scopeLevel = level;
+    // Settle penalty only on fresh scope-in (0→scoped), not 1→2 zoom.
     if (level > 0 && !wasScoped) {
       this._scopeChangedAt = performance.now();
     } else if (level === 0) {
@@ -164,6 +90,7 @@ export class WeaponController {
     this._applyScope();
   }
 
+  /** Right-click: step unscoped → zoom 1 → zoom 2 → unscoped. */
   cycleScope() {
     const z = this.spec?.zoom;
     if (!z || !this._active()) return;
@@ -177,37 +104,36 @@ export class WeaponController {
     this.setScope(next);
   }
 
+  /** Instant unscope ("3" / "Q" by default — rebindable in settings). */
   unscope() {
     if (!this.spec?.zoom) return;
-    this._rescopeAt =  0;
+    this._rescopeAt = 0;
     this._rescopeStartedAt = 0;
     this.setScope(0);
   }
 
-  _applyScope(now = performance.now()) {
+  _applyScope() {
     const z = this.spec?.zoom;
-    let visualLevel = this.scopeLevel;
-    if (z && visualLevel > 0) {
-      const settling = this._scopeChangedAt > 0 && this.scopeSettle(now) < 1;
-      if (settling || this.isDeploying(now)) visualLevel = 0;
-    }
-    this.scopeVisualLevel = visualLevel;
-
-    const hFov = z && visualLevel > 0 ? z.fovs[visualLevel - 1] : null;
+    const hFov = z && this.scopeLevel > 0 ? z.fovs[this.scopeLevel - 1] : null;
     this.engine.setZoomFov?.(hFov);
+    // CS zoomed sensitivity (zoom_sensitivity_ratio 1): look speed scales with
+    // the linear FOV ratio — 2.25× slower at 40°, 9× slower at 10° (90° hip).
     const hip = Number(this.settings.activeSettings()?.hFov) || 90;
     this.input.lookScale = hFov ? hFov / hip : 1;
-    this.input.scopeLevel = this.scopeLevel;
+    this.input.scopeLevel = this.scopeLevel; // recorded into the replay bitmask
   }
 
+  /** Movement cap the PlayerController should honour (null = no override). */
   get moveSpeedCap() {
-    if (!this._active()) return null;
-    if (this.spec.runSpeed != null) return this.spec.runSpeed;
     const z = this.spec?.zoom;
-    if (!z) return null;
+    if (!z || !this._active()) return null;
     return this.scopeLevel > 0 ? z.scopedSpeed : (z.runSpeed ?? null);
   }
 
+  /**
+   * Full movement cap including scoped shift-walk / crouch (null = use moveSpeedCap
+   * + default walk/crouch blending in PlayerController).
+   */
   getMoveSpeedCap({ walkHeld = false, crouchAmt = 0 } = {}) {
     const z = this.spec?.zoom;
     if (!z || !this._active() || this.scopeLevel === 0) return null;
@@ -218,6 +144,7 @@ export class WeaponController {
     return lerp(standCap, crouch, crouchAmt);
   }
 
+  /** 0..1 accuracy settle since the last scope-in (1 = fully settled). */
   scopeSettle(now = performance.now()) {
     const z = this.spec?.zoom;
     if (!z || this.scopeLevel === 0) return 1;
@@ -225,26 +152,22 @@ export class WeaponController {
     return Math.max(0, Math.min(1, (now - this._scopeChangedAt) / settleMs));
   }
 
-  isScopeReady(now = performance.now()) {
-    if (!this.spec?.zoom || this.scopeLevel === 0) return true;
-    if (this.isDeploying(now)) return false;
-    if (this._scopeChangedAt > 0 && this.scopeSettle(now) < 1) return false;
-    return true;
-  }
-
+  /** Augment a movement-accuracy state blob with the live scope fields. */
   _withScopeState(state, now = performance.now()) {
     if (!this.spec?.zoom) return state;
-    state.scopeLevel = this.scopeVisualLevel;
+    state.scopeLevel = this.scopeLevel;
     state.scopeSettle = this.scopeSettle(now);
     return state;
   }
 
+  /** Player pressed R (or the mag ran dry). */
   reload() {
-    if (this.spec.melee || this._infiniteAmmo()) return;
+    if (this._infiniteAmmo()) return;
     if (this.reloading || this.ammo >= this.magSize) return;
     this.reloading = true;
     this._reloadEndsAt = performance.now() + this.spec.reloadTime * 1000;
     this._firing = false;
+    // Reloading a scoped weapon drops the scope (CS behaviour).
     if (this.spec.zoom) this.unscope();
   }
 
@@ -254,12 +177,15 @@ export class WeaponController {
     return 1 - Math.max(0, Math.min(1, left));
   }
 
+  /** Effective recoil/bloom level for the NEXT shot (used by the crosshair). */
   _effectiveLevel(now) {
     if (this.spec.automatic) return this._sustainLevel;
+    // Semi-auto: consecutive count, reset after a pause.
     if (now - this._lastShotAt > this.spec.burstBreakMs) return 0;
     return this._shotIndex;
   }
 
+  /** Live bloom cone half-angle (rad) for crosshair / UI — matches the next shot. */
   getBloomRad() {
     const sc = this._active();
     if (sc?.weaponBloom === false) return 0;
@@ -279,40 +205,34 @@ export class WeaponController {
   }
 
   _infiniteAmmo() {
-    return !!this._active()?.infiniteAmmo || !!this.spec.melee;
-  }
-
-  _canAttack(now) {
-    if (this.isDeploying(now) || this.isInspecting(now)) return false;
-    if (!this.reloading && (this._infiniteAmmo() || this.ammo > 0)) {
-      if (this.spec.zoom && this.scopeLevel > 0 && !this.isScopeReady(now)) return false;
-      return true;
-    }
-    return false;
+    return !!this._active()?.infiniteAmmo;
   }
 
   update(dt) {
     const sc = this._active();
     if (!sc) {
       this._firing = false;
-      this._wasFireHeld = this.input.fireHeld;
-      this._wasAltHeld = this.input.altHeld;
+      this._wasFireHeld = this.input.fireHeld; // never bank a stale rising edge
+      // Drop the scope when the run is gone entirely (keep it across a pause).
       if (this.scopeLevel > 0 && !this.sceneManager.current) this.unscope();
       return;
     }
 
-    if (!sc.allowWeaponSwap && sc.weaponId && sc.weaponId !== this.spec.id) this.reset();
+    // Defensive: if the active scenario uses a different weapon than we set up
+    // for, re-initialise (also swaps the viewmodel mesh).
+    if (sc.weaponId && sc.weaponId !== this.spec.id) this.reset();
 
     const now = performance.now();
     const spec = this.spec;
     const shotIntervalMs = spec.shotInterval * 1000;
-    const heavyIntervalMs = (spec.heavyShotInterval ?? spec.shotInterval * 2) * 1000;
 
+    // Track landing so a just-landed shot is penalised.
     const player = this.engine.player;
     const onGround = player ? player.onGround : true;
     if (this._wasAirborne && onGround) this._landedUntil = now + LAND_WINDOW * 1000;
     this._wasAirborne = !onGround;
 
+    // Reload completion.
     if (this.reloading && now >= this._reloadEndsAt) {
       this.reloading = false;
       this.ammo = this.magSize;
@@ -320,6 +240,8 @@ export class WeaponController {
       this._sustainLevel = 0;
     }
 
+    // Scope: holding right-click keeps cycling zoom levels; a pending post-shot
+    // rescope fires when the bolt closes.
     if (spec.zoom) {
       if (this._rescopeAt && now >= this._rescopeAt) {
         this._rescopeAt = 0;
@@ -333,35 +255,19 @@ export class WeaponController {
       ) {
         this.cycleScope();
       }
-      // Commit deferred scope zoom once settle / deploy completes.
-      if (this.scopeLevel > 0) this._applyScope(now);
     }
 
-    const canFire = this._canAttack(now);
+    const canFire = !this.reloading && (this._infiniteAmmo() || this.ammo > 0);
     const graceBlock =
       (this.sceneManager.current?.name === 'deathmatch' ||
         this.sceneManager.current?.isDeathmatch) &&
       this.input.spawnGraceRemaining > 0;
     const held = this.input.fireHeld;
-    const altHeld = this.input.altHeld;
 
-    if (spec.melee) {
-      const fireRising = held && !this._wasFireHeld;
-      const altRising = altHeld && !this._wasAltHeld;
-      if (fireRising && canFire && !graceBlock && now - this._lastShotAt >= shotIntervalMs) {
-        if (now - this._lastShotAt > spec.burstBreakMs) this._shotIndex = 0;
-        this._attackType = 'quick';
-        this._lastShotAt = now;
-        this._fireOne(sc);
-      } else if (altRising && canFire && !graceBlock && now - this._lastShotAt >= heavyIntervalMs) {
-        if (now - this._lastShotAt > spec.burstBreakMs) this._shotIndex = 0;
-        this._attackType = 'heavy';
-        this._lastShotAt = now;
-        this._fireOne(sc);
-      }
-    } else if (spec.automatic) {
+    if (spec.automatic) {
       const wantFire = held && canFire && !graceBlock;
 
+      // Linear bloom recovery while off the trigger (not an instant snap).
       if (!wantFire) {
         this._firing = false;
         if (this._sustainLevel > 0) {
@@ -374,6 +280,7 @@ export class WeaponController {
 
       if (wantFire) {
         const sinceLast = this._lastShotAt > 0 ? now - this._lastShotAt : Infinity;
+        // Long pause breaks the burst; tapping at weapon RPM keeps walking the pattern.
         if (sinceLast > spec.burstBreakMs) this._shotIndex = 0;
         if (sinceLast > shotIntervalMs * 2) this._lastShotAt = now - shotIntervalMs;
         this._firing = true;
@@ -384,6 +291,8 @@ export class WeaponController {
         }
       }
     } else {
+      // Semi-auto: exactly one bullet per trigger press (rising edge), capped by
+      // the fire rate. Holding the button does nothing until you release + click.
       const rising = held && !this._wasFireHeld;
       if (rising && canFire && !graceBlock && now - this._lastShotAt >= shotIntervalMs) {
         if (now - this._lastShotAt > spec.burstBreakMs) this._shotIndex = 0;
@@ -393,7 +302,6 @@ export class WeaponController {
     }
 
     this._wasFireHeld = held;
-    this._wasAltHeld = altHeld;
     if (this.ammo === 0 && !this.reloading && !this._infiniteAmmo()) this.reload();
   }
 
@@ -416,12 +324,10 @@ export class WeaponController {
       this._sustainLevel = Math.min(this.spec.sustainCap, this._sustainLevel + 1);
     }
 
-    if (this.spec.melee) {
-      this.viewmodel?.slash?.(this._attackType);
-    }
+    sc.shoot(offset, bloom, idx, punch); // flash, kick, tracer + view-punch live in shoot()
 
-    sc.shoot(offset, bloom, idx, punch);
-
+    // Bolt cycle: a scoped shot drops the scope while the next round chambers,
+    // then re-scopes to the same level automatically (CS AWP behaviour).
     if (this.spec.zoom && this.scopeLevel > 0) {
       this._rescopeLevel = this.scopeLevel;
       const t0 = performance.now();
@@ -430,7 +336,7 @@ export class WeaponController {
       this.setScope(0);
     }
 
-    if (!sc.infiniteAmmo && !this.spec.melee) this.ammo--;
+    if (!sc.infiniteAmmo) this.ammo--;
     this._shotIndex++;
   }
 }

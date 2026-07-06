@@ -35,27 +35,8 @@ engine.sceneManager = sceneManager;
 const weapon = new WeaponController({ engine, input, settings, sceneManager, viewmodel });
 engine.weapon = weapon; // scenarios/UI reach it for ammo + reset
 input.onReload = () => weapon.reload();
-input.onAltFire = () => {
-  if (weapon.spec?.melee) return;
-  weapon.cycleScope();
-};
+input.onAltFire = () => weapon.cycleScope();
 input.onUnscope = () => weapon.unscope();
-input.onInspect = () => weapon.inspect();
-input.onWeaponSlot1 = () => {
-  if (!sceneManager.current?.allowWeaponSwap) return false;
-  weapon.switchToSlot('sniper');
-  return true;
-};
-input.onWeaponSlot3 = () => {
-  if (!sceneManager.current?.allowWeaponSwap) return false;
-  weapon.switchToSlot('knife');
-  return true;
-};
-input.onWeaponToggle = () => {
-  if (!sceneManager.current?.allowWeaponSwap) return false;
-  weapon.toggleLoadout();
-  return true;
-};
 const replayRecorder = new ReplayRecorder(engine, input);
 engine.replayRecorder = replayRecorder; // BaseScenario.shoot records shots through it
 const replayPlayer = new ReplayPlayer(engine);
@@ -83,7 +64,7 @@ engine.onUpdate = (dt) => {
   const sc = sceneManager.current;
   const inFP = !!(sc?.usesWeapon && sc.running && sc.showViewmodel !== false);
   // The gun model is hidden while looking through the scope (CS behaviour).
-  viewmodel.setVisible(inFP && (weapon.scopeVisualLevel === 0 || weapon.spec?.melee));
+  viewmodel.setVisible(inFP && weapon.scopeLevel === 0);
   const motion = engine.player?.enabled
     ? {
         onGround: engine.player.onGround,

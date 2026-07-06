@@ -45,7 +45,6 @@ export class SniperQuickscopesScenario extends CoverScenario {
   constructor(opts) {
     super(opts);
     this.weaponId = 'sniper';
-    this.allowWeaponSwap = true;
     this.postKillSpawnExtra = 0.7;
   }
 

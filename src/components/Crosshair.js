@@ -68,12 +68,12 @@ export class Crosshair {
     if (rp?.active) return { level: rp.scopeLevel || 0, blur: rp.scopeBlur || 0 };
     const weapon = engine.weapon;
     const sc = engine.sceneManager?.current;
-    if (weapon?.scopeVisualLevel > 0 && sc?.usesWeapon && !sc._dead) {
+    if (weapon?.scopeLevel > 0 && sc?.usesWeapon && !sc._dead) {
       // Map the live bloom cone to hairline blur so "inaccurate" is visible:
       // freshly scoped or moving above the accuracy threshold ⇒ blurry lines.
       const bloomDeg = (weapon.getBloomRad() * 180) / Math.PI;
       const blur = Math.max(0, Math.min(10, (bloomDeg - 0.05) * 3.2));
-      return { level: weapon.scopeVisualLevel, blur };
+      return { level: weapon.scopeLevel, blur };
     }
     return { level: 0, blur: 0 };
   }

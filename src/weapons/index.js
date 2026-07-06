@@ -9,7 +9,6 @@ import * as rifle from './ak47.js';
 import * as pistol from './pistol.js';
 import * as tracking from './tracking.js';
 import * as sniper from './sniper.js';
-import * as knife from './knife.js';
 
 function toSpec(id, label, model, automatic, m) {
   return {
@@ -18,12 +17,6 @@ function toSpec(id, label, model, automatic, m) {
     model, // which viewmodel mesh to show
     automatic, // true = hold to fire (rifle); false = one click, one bullet (pistol)
     zoom: m.ZOOM || null, // scope tuning (sniper) — null for unscoped weapons
-    melee: !!m.MELEE,
-    meleeRange: m.MELEE_RANGE ?? 0,
-    runSpeed: m.RUN_SPEED ?? null,
-    heavyShotInterval: m.HEAVY_SHOT_INTERVAL ?? null,
-    deployMs: m.DEPLOY_MS ?? 0,
-    inspectMs: m.INSPECT_MS ?? 2500,
     magSize: m.MAG_SIZE,
     reloadTime: m.RELOAD_TIME,
     shotInterval: m.SHOT_INTERVAL,
@@ -43,8 +36,7 @@ export const WEAPONS = {
   rifle: toSpec('rifle', 'Rifle', 'rifle', true, rifle),
   pistol: toSpec('pistol', 'Pistol', 'pistol', false, pistol),
   tracking: toSpec('tracking', 'Tracking', 'rifle', true, tracking),
-  sniper: toSpec('sniper', 'Sniper', 'sniper', false, sniper),
-  knife: toSpec('knife', 'Knife', 'knife', false, knife)
+  sniper: toSpec('sniper', 'Sniper', 'sniper', false, sniper)
 };
 
 export const DEFAULT_WEAPON = 'rifle';
