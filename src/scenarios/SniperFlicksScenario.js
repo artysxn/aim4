@@ -77,6 +77,23 @@ export class SniperFlicksScenario extends BaseScenario {
     this.engine.camera.position.y = this.centerY;
   }
 
+  /** Re-read practice sliders (training gear / in-run pause settings). */
+  _applyPracticeTuning() {
+    if (this.competitive) return;
+    const s = { ...DEFAULTS.sniperflicks, ...(this.settings.data.sniperflicks ?? {}) };
+    this.spawnScaleX = s.spawnScaleX ?? 1;
+    this.spawnScaleY = s.spawnScaleY ?? 1;
+    this.botScale = s.botScale ?? 1;
+    this.minDistance = s.minDistance ?? 35;
+    this.maxDistance = Math.max(this.minDistance, s.maxDistance ?? 75);
+    this.botsMove = !!s.botsMove;
+  }
+
+  applyLiveSettings() {
+    super.applyLiveSettings();
+    this._applyPracticeTuning();
+  }
+
   get name() {
     return 'sniperflicks';
   }
@@ -186,6 +203,7 @@ export class SniperFlicksScenario extends BaseScenario {
   }
 
   _spawnBot() {
+    this._applyPracticeTuning();
     const halfH = this._botHeight() * 0.5;
     const minFeetY = CANVAS_FLOOR_CLEARANCE;
     const maxFeetY = this.centerY + this._wallHalfH - halfH - 0.2 * this.botScale;

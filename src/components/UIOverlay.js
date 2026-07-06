@@ -1033,8 +1033,8 @@ ${rf('set-pit-rings', 'Rings', 1, 3, 1)}
         id: 'sniperflicks',
         label: 'Flicks (AWP)',
         body: `
-${rf('set-snfl-radius-x', 'Spawn radius X', 0.25, 1.2, 0.05)}
-          ${rf('set-snfl-radius-y', 'Spawn radius Y', 0.25, 1.3, 0.05)}
+${rf('set-snfl-radius-x', 'Horizontal spawn scale', 0.25, 2, 0.05)}
+          ${rf('set-snfl-radius-y', 'Vertical spawn scale', 0.25, 2, 0.05)}
           ${rf('set-snfl-size', 'Bot size', 0.5, 2.0, 0.05)}
           ${rf('set-snfl-min-dist', 'Min distance (m)', 20, 70, 1)}
           ${rf('set-snfl-max-dist', 'Max distance (m)', 30, 120, 1)}
