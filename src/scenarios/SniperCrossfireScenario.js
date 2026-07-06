@@ -14,6 +14,7 @@ export class SniperCrossfireScenario extends ArenaScenario {
   constructor(opts) {
     super(opts);
     this.weaponId = 'sniper';
+    this.allowWeaponSwap = true;
     this.startScoped = 1;
     this.weaponBloom = true;
     this.viewmodelRecoil = true;

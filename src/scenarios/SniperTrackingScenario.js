@@ -8,7 +8,8 @@
 //
 // You must keep your crosshair on the bot for 0.5 s IN A ROW before a shot is
 // allowed to kill it (a progress bar under the scope hairlines fills up).
-// Land the shot → a new bot spawns 1 s later at a random-ish distance.
+// Land the shot → a new bot spawns 1 s later at a random-ish distance (rarely
+// up to 2.5× farther: 30% @ 1.5×, 20% @ 2×, 10% @ 2.5×).
 // Track, control, shoot.
 // ---------------------------------------------------------------------------
 
@@ -38,6 +39,13 @@ const CROUCH_GAP_MAX = 1.8;
 const CROUCH_HOLD_MIN = 0.16;
 const CROUCH_HOLD_MAX = 0.38;
 const CROUCH_RATE = 13;
+
+// Rare deep spawns: multiplier on the rolled min–max distance.
+const DIST_MULT_TIERS = [
+  { mult: 1.5, chance: 0.30 },
+  { mult: 2.0, chance: 0.20 },
+  { mult: 2.5, chance: 0.10 }
+];
 
 const _ray = new THREE.Raycaster();
 const _dir = new THREE.Vector3();
@@ -88,6 +96,18 @@ export class SniperTrackingScenario extends TrackingScenario {
     return SniperTrackingScenario.configKeyFor(this.settings, this.variant);
   }
 
+  /** Base distance in [min, max], then rarely 1.5× / 2× / 2.5× farther. */
+  _rollSpawnDistance() {
+    const base = randRange(this.minDistance, this.maxDistance);
+    const roll = Math.random();
+    let acc = 0;
+    for (const tier of DIST_MULT_TIERS) {
+      acc += tier.chance;
+      if (roll < acc) return base * tier.mult;
+    }
+    return base;
+  }
+
   _spawnBot() {
     const target = this._buildBot();
     this.addTarget(target);
@@ -102,7 +122,7 @@ export class SniperTrackingScenario extends TrackingScenario {
       reverseTimer: randRange(REVERSE_MIN, REVERSE_MAX),
       commitRoll: 1, // s until the next 20% commit roll
       crouchTimer: randRange(CROUCH_GAP_MIN, CROUCH_GAP_MAX),
-      dist: randRange(this.minDistance, this.maxDistance)
+      dist: this._rollSpawnDistance()
     };
     this._onTargetT = 0;
     this._placeBot(this.bot);

@@ -51,6 +51,7 @@ export class DoorsAwpScenario extends BaseScenario {
   constructor(opts) {
     super(opts);
     this.weaponId = 'sniper';
+    this.allowWeaponSwap = true;
     this.infiniteAmmo = true;
     this.weaponBloom = true;
     this.viewmodelRecoil = true;

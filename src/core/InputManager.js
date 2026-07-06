@@ -47,6 +47,10 @@ export class InputManager {
     this.onUnlockedClick = null; // () => void — canvas clicked while not locked
     this.onAltFire = null; // () => void — RMB pressed (sniper zoom cycle)
     this.onUnscope = null; // () => void — unscope bind pressed (default 3 / Q)
+    this.onInspect = null; // () => void — F pressed (knife inspect)
+    this.onWeaponSlot1 = null; // () => void — 1 pressed (AWP in sniping modes)
+    this.onWeaponSlot3 = null; // () => void — 3 pressed (knife in sniping modes)
+    this.onWeaponToggle = null; // () => void — Q pressed (toggle knife/AWP)
 
     document.addEventListener('pointerlockchange', () => this._handleLockChange());
     document.addEventListener('pointerlockerror', () => this._handleLockChange());
@@ -162,7 +166,30 @@ export class InputManager {
       if (down && this.onReload) this.onReload();
       return;
     }
-    // Sniper unscope binds (rebindable in Settings → Weapon).
+    if (e.code === 'KeyF') {
+      if (!this.locked) return;
+      e.preventDefault();
+      if (down && this.onInspect) this.onInspect();
+      return;
+    }
+    if (down) {
+      if (e.code === 'Digit1' && this.onWeaponSlot1) {
+        if (!this.locked) return;
+        e.preventDefault();
+        if (this.onWeaponSlot1()) return;
+      }
+      if (e.code === 'Digit3' && this.onWeaponSlot3) {
+        if (!this.locked) return;
+        e.preventDefault();
+        if (this.onWeaponSlot3()) return;
+      }
+      if (e.code === 'KeyQ' && this.onWeaponToggle) {
+        if (!this.locked) return;
+        e.preventDefault();
+        if (this.onWeaponToggle()) return;
+      }
+    }
+    // Sniper unscope binds (rebindable in Settings → Weapon) — non-loadout modes only.
     const sn = this.settings.data.sniper;
     if (e.code === sn?.unscopeKey1 || e.code === sn?.unscopeKey2) {
       if (!this.locked) return;

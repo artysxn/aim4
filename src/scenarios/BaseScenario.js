@@ -92,6 +92,7 @@ export class BaseScenario {
     // from the registry; default is the full-auto rifle, overridden per scenario.
     this.usesWeapon = true;
     this.weaponId = 'rifle';
+    this.allowWeaponSwap = false; // sniping movement modes: 1=AWP, 3=knife, Q=toggle
     this.infiniteAmmo = false;
     this.weaponBloom = true; // random spread cone (movement / consecutive shots)
     this.viewmodelRecoil = true; // gun kick + view-punch on fire (per-mode override)
@@ -196,7 +197,8 @@ export class BaseScenario {
   shoot(recoil = null, bloom = 0, shotIndex = 0, punch = null) {
     if (!this.running) return;
     this.shotsFired++;
-    if (this.weaponId !== 'tracking') this.engine.audio?.playLocalShot();
+    const activeWeapon = this.engine.weapon?.spec;
+    if (this.weaponId !== 'tracking' && !activeWeapon?.melee) this.engine.audio?.playLocalShot();
 
     const cam = this.camera;
     const input = this.engine.player?.input;
@@ -230,7 +232,8 @@ export class BaseScenario {
     _raycaster.ray.origin.copy(cam.position);
     _raycaster.ray.direction.copy(_dir);
     _raycaster.near = 0;
-    _raycaster.far = Infinity;
+    const meleeRange = this.engine.weapon?.spec?.meleeRange;
+    _raycaster.far = meleeRange > 0 ? meleeRange : Infinity;
 
     const player = this.engine.player;
     const state = player?.enabled
@@ -255,7 +258,7 @@ export class BaseScenario {
       : {};
 
     if (vm && this.showViewmodel !== false) {
-      vm.fire({ recoil: vmRecoil });
+      if (!activeWeapon?.melee) vm.fire({ recoil: vmRecoil });
     }
 
     this.onShoot(_raycaster);

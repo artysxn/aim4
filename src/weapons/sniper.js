@@ -20,6 +20,7 @@ import { UNIT } from '../utils/SourceMovement.js';
 
 export const MAG_SIZE = 10;
 export const RELOAD_TIME = 3.7; // seconds — CS AWP
+export const DEPLOY_MS = 800; // pullout before first shot
 // Bolt cycle: minimum spacing between shots (41 RPM).
 export const SHOT_INTERVAL = 1.463;
 // Consecutive-shot bookkeeping is meaningless for a bolt gun; keep the counter

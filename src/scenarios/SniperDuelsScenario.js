@@ -13,6 +13,7 @@ class SniperDuelsBase extends DuelsScenario {
   constructor(opts) {
     super(opts);
     this.weaponId = 'sniper';
+    this.allowWeaponSwap = true;
   }
 }
 
