@@ -432,7 +432,7 @@ export const DEFAULTS = {
     botHp: 1,
     missLimit: 0,
     spawnHint: true,
-    losMissPenalty: true // miss on a visible bot: −1 kill, bot despawns
+    losMissPenalty: true // visible miss: bot despawns, next peek scheduled
   },
   sniperquickscopes: {
     rowCount: 3, // rings around the pit

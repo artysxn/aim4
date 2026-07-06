@@ -207,31 +207,30 @@ export class Crosshair {
     const cy = h / 2;
     const R = Math.min(w, h) * 0.485;
     const blur = this._scopeBlur || 0;
+    const rimW = Math.max(2, R * 0.012);
 
-    // Hairlines first (clipped to the lens), blurred while inaccurate.
+    // Hairlines + lens ring (clipped to the circle), blurred while inaccurate.
     ctx.save();
     ctx.beginPath();
     ctx.arc(cx, cy, R, 0, Math.PI * 2);
     ctx.clip();
     if (blur > 0.25) ctx.filter = `blur(${blur.toFixed(1)}px)`;
-    ctx.fillStyle = 'rgba(0,0,0,0.94)';
+    ctx.fillStyle = '#000000';
     ctx.fillRect(cx - th / 2, cy - R, th, R * 2);
     ctx.fillRect(cx - R, cy - th / 2, R * 2, th);
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.lineWidth = rimW;
+    ctx.strokeStyle = '#000000';
+    ctx.stroke();
     ctx.restore();
 
     // Black vignette outside the lens circle.
     ctx.beginPath();
     ctx.rect(0, 0, w, h);
     ctx.arc(cx, cy, R, 0, Math.PI * 2, true);
-    ctx.fillStyle = 'rgba(0,0,0,0.97)';
+    ctx.fillStyle = '#000000';
     ctx.fill();
-
-    // Soft rim so the lens edge reads as glass.
-    ctx.beginPath();
-    ctx.arc(cx, cy, R, 0, Math.PI * 2);
-    ctx.lineWidth = Math.max(2, R * 0.012);
-    ctx.strokeStyle = 'rgba(0,0,0,0.9)';
-    ctx.stroke();
 
     // Hold-to-shoot progress (Sniper Tracking) under the centre.
     if (this._trackProgress > 0) {

@@ -147,9 +147,6 @@ export class CoverScenario extends BaseScenario {
   }
 
   _punishLosMiss() {
-    this.misses++;
-    this.kills = Math.max(0, this.kills - 1);
-    this.score = Math.max(0, this.score - 1);
     beep(240, 0.08, 'sawtooth', 0.06);
     if (this.bot) this.bot.target.startDying(0xff4d4d);
     this.bot = null;

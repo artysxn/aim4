@@ -964,7 +964,7 @@ ${rf('set-cvawp-rows', 'Rows', 1, 3, 1)}
           ${rf('set-cvawp-react-max', 'Bot reaction max (ms)', 25, 1000, 5)}
           ${rf('set-cvawp-hp', 'Hits you can take', 1, 10, 1)}
           ${rf('set-cvawp-misslimit', 'Allowed misses (0 = unlimited)', 0, 50, 1)}
-          <label class="field-check"><input type="checkbox" id="set-cvawp-los-miss" checked /> Penalize visible misses (−1 kill)</label>
+          <label class="field-check"><input type="checkbox" id="set-cvawp-los-miss" checked /> Despawn bot on visible miss</label>
           <label class="field-check"><input type="checkbox" id="set-cvawp-spawn-hint" checked /> Highlight spawn box before peek</label>`
       },
       {
@@ -1014,7 +1014,7 @@ ${rf('set-snqs-rings', 'Rings', 1, 3, 1)}
           ${rf('set-snqs-react-max', 'Bot reaction max (ms)', 25, 1000, 5)}
           ${rf('set-snqs-hp', 'Hits you can take', 1, 10, 1)}
           ${rf('set-snqs-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}
-          <label class="field-check"><input type="checkbox" id="set-snqs-los-miss" checked /> Penalize visible misses (−1 kill)</label>
+          <label class="field-check"><input type="checkbox" id="set-snqs-los-miss" checked /> Despawn bot on visible miss</label>
           <label class="field-check"><input type="checkbox" id="set-snqs-spawn-hint" checked /> Highlight spawn box before peek</label>`
       },
       {
