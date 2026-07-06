@@ -6887,15 +6887,15 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
   }
 
   _hudScoreValue(sc) {
-    if (sc.name === 'reactiontime') return sc.score;
+    if (sc.name === 'reactiontime') return sc.reactionHudMs ?? 0;
     return isKillLeaderboardScenario(sc.name) ? sc.kills : sc.score;
   }
 
   _formatHudScore(sc) {
     if (sc.name === 'reactiontime') {
-      const n = sc._validAttempts ?? 0;
-      if (!n) return '—';
-      return `${Math.round(sc.score)} ms`;
+      const ms = sc.reactionHudMs;
+      if (ms == null) return '—';
+      return `${ms} ms`;
     }
     return Math.round(this._hudScoreValue(sc)).toLocaleString();
   }

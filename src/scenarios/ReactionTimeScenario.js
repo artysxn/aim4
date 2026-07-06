@@ -12,18 +12,20 @@ import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
 import { randRange } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
-import { EYE_HEIGHT } from '../core/Engine.js';
+import { canvasCenterY } from '../utils/canvasWall.js';
 
 const BOUNDS_W = 12;
 const BOUNDS_H = 6;
 const WALL_DISTANCE = 16;
 const DOT_SIZE = 0.55;
-const READY_DOT_SIZE = 0.22;
+const READY_DOT_SIZE = 0.38;
 const WAIT_MIN = 2;
 const WAIT_MAX = 6;
 const ATTEMPTS = 3;
 const READY_COLOR = new THREE.Color(0x35e06a);
 const READY_DOT_COLOR = 0xff3b3b;
+const FALSE_FLASH_DUR = 0.22;
+const FALSE_FLASH_PEAK = 0.09;
 
 export class ReactionTimeScenario extends BaseScenario {
   constructor(opts) {
@@ -40,7 +42,7 @@ export class ReactionTimeScenario extends BaseScenario {
     this.wallDistance = WALL_DISTANCE;
     this.boundsW = BOUNDS_W;
     this.boundsH = BOUNDS_H;
-    this.centerY = EYE_HEIGHT;
+    this.centerY = canvasCenterY(BOUNDS_H);
 
     this._phase = 'waiting'; // waiting | go | ready
     this._delayLeft = 0;
@@ -49,9 +51,13 @@ export class ReactionTimeScenario extends BaseScenario {
     this._times = [];
     this._mainDot = null;
     this._readyDot = null;
-    this._labels = [];
+    this._bigLabel = null;
+    this._progressSlots = [];
+    this._flashT = 0;
 
     this._buildEnvironment();
+    this._buildProgressUI();
+    this.engine.camera.position.y = this.centerY;
   }
 
   get name() {
@@ -62,12 +68,25 @@ export class ReactionTimeScenario extends BaseScenario {
     return true;
   }
 
+  /** HUD: latest attempt ms until all three are done, then average. */
+  get reactionHudMs() {
+    if (!this._times.length) return null;
+    if (this._validAttempts >= ATTEMPTS) {
+      return Math.round(this._times.reduce((a, b) => a + b, 0) / this._times.length);
+    }
+    return Math.round(this._times[this._times.length - 1]);
+  }
+
   static configKeyFor() {
     return 'challenge';
   }
 
   configKey() {
     return 'challenge';
+  }
+
+  _wallZ() {
+    return -this.wallDistance + 0.08;
   }
 
   _buildEnvironment() {
@@ -92,14 +111,35 @@ export class ReactionTimeScenario extends BaseScenario {
     this.root.add(grid);
   }
 
+  _buildProgressUI() {
+    const y = this.centerY + this.boundsH / 2 - 0.55;
+    const z = this._wallZ();
+    const xs = [-1.5, 0, 1.5];
+    for (let i = 0; i < ATTEMPTS; i++) {
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.16, 0.24, 40),
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.4,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        })
+      );
+      ring.position.set(xs[i], y, z);
+      this.root.add(ring);
+      this._progressSlots.push({ ring, fill: null, label: null, x: xs[i], y });
+    }
+  }
+
   _dotPos() {
     return new THREE.Vector3(0, this.centerY, -this.wallDistance + DOT_SIZE + 0.05);
   }
 
   _readyPos() {
-    const halfH = this.boundsH / 2 - READY_DOT_SIZE;
+    const halfH = this.boundsH / 2 - READY_DOT_SIZE - 0.15;
     const y = this.centerY - halfH;
-    return new THREE.Vector3(0, y, -this.wallDistance + READY_DOT_SIZE + 0.05);
+    return new THREE.Vector3(0, y, -this.wallDistance + READY_DOT_SIZE + 0.12);
   }
 
   _spawnMainDot() {
@@ -128,15 +168,16 @@ export class ReactionTimeScenario extends BaseScenario {
     this._clearReadyDot();
     const target = new Target();
     const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(READY_DOT_SIZE, 20, 16),
+      new THREE.SphereGeometry(READY_DOT_SIZE, 24, 18),
       new THREE.MeshStandardMaterial({
         color: READY_DOT_COLOR,
-        emissive: 0x991111,
-        emissiveIntensity: 0.45,
-        roughness: 0.4,
-        metalness: 0.1
+        emissive: 0xcc2222,
+        emissiveIntensity: 0.85,
+        roughness: 0.35,
+        metalness: 0.05
       })
     );
+    mesh.renderOrder = 2;
     target._mesh = mesh;
     target.addCollider(mesh, { zone: 'body', points: 1, crit: false });
     target.object.position.copy(this._readyPos());
@@ -176,17 +217,16 @@ export class ReactionTimeScenario extends BaseScenario {
     this._readyDot = null;
   }
 
-  _makeMsLabel(ms, pos) {
+  _makeTextSprite(text, { fontSize = 48, bold = true, color = '#ffffff' } = {}) {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
-    const text = `${Math.round(ms)} ms`;
-    const fontSize = 72;
-    ctx.font = `700 ${fontSize}px system-ui, sans-serif`;
-    const pad = 28;
+    const weight = bold ? '700' : '500';
+    ctx.font = `${weight} ${fontSize}px system-ui, sans-serif`;
+    const pad = Math.round(fontSize * 0.35);
     canvas.width = Math.ceil(ctx.measureText(text).width) + pad * 2;
     canvas.height = fontSize + pad;
-    ctx.font = `700 ${fontSize}px system-ui, sans-serif`;
-    ctx.fillStyle = '#ffffff';
+    ctx.font = `${weight} ${fontSize}px system-ui, sans-serif`;
+    ctx.fillStyle = color;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(text, canvas.width / 2, canvas.height / 2);
@@ -200,12 +240,51 @@ export class ReactionTimeScenario extends BaseScenario {
     });
     const sprite = new THREE.Sprite(mat);
     const aspect = canvas.width / canvas.height;
-    const h = 0.75;
+    const h = fontSize / 96;
     sprite.scale.set(h * aspect, h, 1);
-    sprite.position.set(pos.x, pos.y + DOT_SIZE + 0.55, pos.z - 0.02);
+    return { sprite, tex, canvas };
+  }
+
+  _setBigLabel(ms) {
+    this._disposeBigLabel();
+    const pos = this._dotPos();
+    const { sprite, tex, canvas } = this._makeTextSprite(`${Math.round(ms)} ms`, { fontSize: 88 });
+    sprite.position.set(pos.x, pos.y + DOT_SIZE + 0.65, pos.z - 0.02);
     sprite.renderOrder = 0;
     this.root.add(sprite);
-    this._labels.push({ sprite, tex, canvas });
+    this._bigLabel = { sprite, tex, canvas };
+  }
+
+  _disposeBigLabel() {
+    if (!this._bigLabel) return;
+    this._bigLabel.tex?.dispose();
+    this._bigLabel.sprite?.material?.dispose();
+    this.root.remove(this._bigLabel.sprite);
+    this._bigLabel = null;
+  }
+
+  _fillProgressSlot(index, ms) {
+    const slot = this._progressSlots[index];
+    if (!slot || slot.fill) return;
+    const z = this._wallZ();
+    const fill = new THREE.Mesh(
+      new THREE.CircleGeometry(0.2, 40),
+      new THREE.MeshBasicMaterial({
+        color: READY_COLOR,
+        transparent: true,
+        opacity: 0.95,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      })
+    );
+    fill.position.set(slot.x, slot.y, z + 0.01);
+    this.root.add(fill);
+    slot.fill = fill;
+
+    const { sprite, tex, canvas } = this._makeTextSprite(`${Math.round(ms)} ms`, { fontSize: 30 });
+    sprite.position.set(slot.x, slot.y - 0.44, z - 0.01);
+    this.root.add(sprite);
+    slot.label = { sprite, tex, canvas };
   }
 
   _startAttempt() {
@@ -217,11 +296,13 @@ export class ReactionTimeScenario extends BaseScenario {
   _falseStart() {
     this._delayLeft = randRange(WAIT_MIN, WAIT_MAX);
     this._setMainGreen(false);
-    beep(220, 0.06, 'sawtooth', 0.04);
+    beep(160, 0.14, 'sawtooth', 0.09);
+    this._flashT = FALSE_FLASH_DUR;
   }
 
   _recordValidHit() {
     const ms = performance.now() - this._goAt;
+    const idx = this._validAttempts;
     this._times.push(ms);
     this._validAttempts++;
     this.hits++;
@@ -229,18 +310,19 @@ export class ReactionTimeScenario extends BaseScenario {
     this.crosshair?.hit();
     beep(820, 0.04, 'square', 0.05);
 
-    const pos = this._mainDot.object.position.clone();
-    this._makeMsLabel(ms, pos);
+    this._fillProgressSlot(idx, ms);
     this._clearMainDot(0x35e06a);
 
-    const avg = Math.round(this._times.reduce((a, b) => a + b, 0) / this._times.length);
-    this.score = avg;
-
     if (this._validAttempts >= ATTEMPTS) {
+      const avg = Math.round(this._times.reduce((a, b) => a + b, 0) / this._times.length);
+      this.score = avg;
+      this._setBigLabel(avg);
       this._requestFinish?.();
       return;
     }
 
+    this.score = Math.round(ms);
+    this._setBigLabel(ms);
     this._phase = 'ready';
     this._spawnReadyDot();
   }
@@ -250,6 +332,13 @@ export class ReactionTimeScenario extends BaseScenario {
   }
 
   onUpdate(dt) {
+    if (this._flashT > 0) {
+      this._flashT = Math.max(0, this._flashT - dt);
+      const p = this._flashT / FALSE_FLASH_DUR;
+      this.engine.setDeathOverlay(FALSE_FLASH_PEAK * p);
+      if (this._flashT <= 0) this.engine.setDeathOverlay(0);
+    }
+
     if (this._phase !== 'waiting') return;
     this._delayLeft -= dt;
     if (this._delayLeft <= 0) {
@@ -297,12 +386,20 @@ export class ReactionTimeScenario extends BaseScenario {
   }
 
   dispose() {
-    for (const l of this._labels) {
-      l.tex?.dispose();
-      l.sprite?.material?.dispose();
-      this.root.remove(l.sprite);
+    this.engine.setDeathOverlay(0);
+    this._disposeBigLabel();
+    for (const slot of this._progressSlots) {
+      slot.ring?.geometry?.dispose();
+      slot.ring?.material?.dispose();
+      this.root.remove(slot.ring);
+      slot.fill?.geometry?.dispose();
+      slot.fill?.material?.dispose();
+      if (slot.fill) this.root.remove(slot.fill);
+      slot.label?.tex?.dispose();
+      slot.label?.sprite?.material?.dispose();
+      if (slot.label) this.root.remove(slot.label.sprite);
     }
-    this._labels.length = 0;
+    this._progressSlots.length = 0;
     super.dispose();
   }
 }
