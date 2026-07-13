@@ -83,6 +83,7 @@ export function applyTargetGlow(mesh, { enabled, color, config } = {}) {
     mat.emissive.copy(core);
     mat.emissiveIntensity = glow.coreIntensity;
   }
+  mat.toneMapped = false;
 }
 
 export function restoreTargetEmissive(mesh) {

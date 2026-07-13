@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // targetBloomPass.js — UnrealBloom on mesh-masked passes (dot targets only).
 // Base scene renders normally; bloom pass blacks out non-masked meshes, render
-// masked meshes bright, blooms, then additively composites the bloom halo only.
+// masked meshes bright, blooms, then additively composites over the scene.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
@@ -21,13 +21,16 @@ void main() {
 }
 `;
 
-// Gamma-compress bloom to soften flat midtones (less color "stagnation").
 const ADDITIVE_FRAG = /* glsl */`
 uniform sampler2D tBloom;
 uniform float uGain;
 uniform float uGamma;
+uniform float uCompositeThresh;
 void main() {
   vec3 b = texture2D(tBloom, vUv).rgb;
+  float lum = max(max(b.r, b.g), b.b);
+  // Drop mask-pass black background; keep bloomed target energy.
+  b *= smoothstep(uCompositeThresh, uCompositeThresh + 0.06, lum);
   b = pow(max(b, vec3(0.0)), vec3(uGamma)) * uGain;
   gl_FragColor = vec4(b, 1.0);
 }
@@ -60,7 +63,8 @@ export class TargetBloomPass {
       uniforms: {
         tBloom: { value: null },
         uGain: { value: this._glowConfig.compositeGain },
-        uGamma: { value: this._glowConfig.bloomGamma }
+        uGamma: { value: this._glowConfig.bloomGamma },
+        uCompositeThresh: { value: this._glowConfig.compositeThreshold }
       },
       vertexShader: ADDITIVE_VERT,
       fragmentShader: ADDITIVE_FRAG,
@@ -104,10 +108,15 @@ export class TargetBloomPass {
     if (bloomPass) {
       bloomPass.strength = c.bloomStrength;
       bloomPass.radius = c.bloomRadius;
+      bloomPass.threshold = 0;
+      if (bloomPass.highPassUniforms?.luminosityThreshold) {
+        bloomPass.highPassUniforms.luminosityThreshold.value = 0;
+      }
     }
     if (this._blendMat) {
       this._blendMat.uniforms.uGain.value = c.compositeGain;
       this._blendMat.uniforms.uGamma.value = c.bloomGamma;
+      this._blendMat.uniforms.uCompositeThresh.value = c.compositeThreshold;
     }
   }
 
@@ -128,6 +137,9 @@ export class TargetBloomPass {
     if (this._targetBloom) {
       this._ensureComposer();
       this._applyBloomParams();
+      const size = new THREE.Vector2();
+      this._renderer.getSize(size);
+      this.setSize(size.x, size.y);
     }
   }
 
@@ -175,9 +187,9 @@ export class TargetBloomPass {
     this._swapped.length = 0;
   }
 
-  /** Bloom-only mip composite (halo without re-adding the bright core disk). */
+  /** Final bloomed mask pass (targets + halos on black). */
   _bloomTexture() {
-    return this._targetComposer.bloomPass.renderTargetsHorizontal[0].texture;
+    return this._targetComposer.readBuffer.texture;
   }
 
   _compositeBloom() {
@@ -185,6 +197,7 @@ export class TargetBloomPass {
     this._blendMat.uniforms.tBloom.value = this._bloomTexture();
     this._blendMat.uniforms.uGain.value = this._glowConfig.compositeGain;
     this._blendMat.uniforms.uGamma.value = this._glowConfig.bloomGamma;
+    this._blendMat.uniforms.uCompositeThresh.value = this._glowConfig.compositeThreshold;
     const prevRT = this._renderer.getRenderTarget();
     const prevAutoClear = this._renderer.autoClear;
     this._renderer.setRenderTarget(null);

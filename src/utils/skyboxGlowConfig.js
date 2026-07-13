@@ -3,10 +3,11 @@
 // ---------------------------------------------------------------------------
 
 export const SKYBOX_GLOW_DEFAULTS = {
-  strength: 1.4, // additive glow intensity
-  radius: 0.055, // cubemap sample spread for the blur
-  threshold: 0.18, // luminance where glow begins
-  thresholdSoft: 0.55 // luminance where glow reaches full strength
+  strength: 4,
+  radius: 3,
+  threshold: 0,
+  thresholdSoft: 0.29,
+  verticalFill: 1 // 0 = horizon only, 1 = full sky dome
 };
 
 export function resolveSkyboxGlowConfig(cfg) {

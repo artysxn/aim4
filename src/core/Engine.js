@@ -118,6 +118,7 @@ _setupLights() {
       targetBloom: s.targetGlow === true,
       glowConfig: s.targetGlowConfig
     });
+    this.sceneManager?.applyLiveScenarioSettings?.();
   }
 
   /** @deprecated Use applyPostProcessing */

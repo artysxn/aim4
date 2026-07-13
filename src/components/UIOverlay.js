@@ -530,12 +530,14 @@ export class UIOverlay {
             ${rf('set-skybox-bright', 'Brightness (%)', 0, 200, 5)}
             ${rf('set-skybox-contrast', 'Contrast (%)', 0, 200, 5)}
             ${rf('set-skybox-opacity', 'Opacity (%)', 0, 100, 5)}
+            ${rf('set-skybox-height', 'Height offset (m)', -150, 150, 1)}
             <label class="field-check"><input type="checkbox" id="set-skybox-postfx" checked /> Skybox bloom effects</label>
             <div id="set-skybox-postfx-fields" hidden>
-              ${rf('set-sky-glow-strength', 'Glow strength', 0, 4, 0.05)}
-              ${rf('set-sky-glow-radius', 'Glow radius', 0.01, 0.2, 0.005)}
+              ${rf('set-sky-glow-strength', 'Glow strength', 0, 6, 0.05)}
+              ${rf('set-sky-glow-radius', 'Glow radius', 0, 5, 0.05)}
               ${rf('set-sky-glow-thresh', 'Bright threshold', 0, 0.9, 0.02)}
               ${rf('set-sky-glow-thresh-soft', 'Threshold softness', 0.05, 1, 0.02)}
+              ${rf('set-sky-glow-vert-fill', 'Vertical fill', 0, 1, 0.02)}
             </div>
           </div>
           ${colorRow('set-col-floor', 'Floor')}
@@ -550,6 +552,7 @@ export class UIOverlay {
             ${rf('set-glow-lift', 'Mask brightness', 0.5, 8, 0.1)}
             ${rf('set-glow-gain', 'Halo intensity', 0, 2, 0.02)}
             ${rf('set-glow-gamma', 'Falloff curve', 0.8, 3, 0.05)}
+            ${rf('set-glow-comp-thresh', 'Composite floor', 0, 0.2, 0.002)}
             ${rf('set-glow-core-white', 'Core whiteness', 0, 1, 0.02)}
             ${rf('set-glow-core-int', 'Core emissive', 0.5, 4, 0.05)}
           </div>
@@ -2955,6 +2958,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       $(id).addEventListener('input', (e) => {
         draft((d) => { d.colors[key] = e.target.value; });
         if (key === 'bg') this._applySkyboxSettings();
+        else if (key === 'target') this._applyGlowSettings();
       });
     col('#set-col-bg', 'bg');
     col('#set-col-floor', 'floor');
@@ -2994,6 +2998,10 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       parse: (v) => parseInt(v, 10),
       after: () => this._applySkyboxSettings()
     });
+    this._bindRange('set-skybox-height', (v, d) => { d.skyboxHeightOffset = v; }, {
+      parse: (v) => parseInt(v, 10),
+      after: () => this._applySkyboxSettings()
+    });
     $('#set-skybox-postfx')?.addEventListener('change', (e) => {
       draft((d) => { d.skyboxPostFx = e.target.checked; });
       this._syncSkyboxPostFxFields();
@@ -3012,6 +3020,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       after: () => this._applySkyboxSettings()
     });
     this._bindRange('set-sky-glow-thresh-soft', patchSkyGlow((v) => ({ thresholdSoft: v })), {
+      after: () => this._applySkyboxSettings()
+    });
+    this._bindRange('set-sky-glow-vert-fill', patchSkyGlow((v) => ({ verticalFill: v })), {
       after: () => this._applySkyboxSettings()
     });
     $('#set-target-glow')?.addEventListener('change', (e) => {
@@ -3035,6 +3046,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       after: () => this._applyGlowSettings()
     });
     this._bindRange('set-glow-gamma', patchGlow((v) => ({ bloomGamma: v })), {
+      after: () => this._applyGlowSettings()
+    });
+    this._bindRange('set-glow-comp-thresh', patchGlow((v) => ({ compositeThreshold: v })), {
       after: () => this._applyGlowSettings()
     });
     this._bindRange('set-glow-core-white', patchGlow((v) => ({ coreWhiteness: v })), {
@@ -6192,6 +6206,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._setRange('set-skybox-bright', s.skyboxBrightness ?? 100);
     this._setRange('set-skybox-contrast', s.skyboxContrast ?? 100);
     this._setRange('set-skybox-opacity', s.skyboxOpacity ?? 100);
+    this._setRange('set-skybox-height', s.skyboxHeightOffset ?? 0);
     const skyPostFx = this.root.querySelector('#set-skybox-postfx');
     if (skyPostFx) skyPostFx.checked = s.skyboxPostFx !== false;
     const sgc = resolveSkyboxGlowConfig(s.skyboxGlowConfig);
@@ -6199,6 +6214,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._setRange('set-sky-glow-radius', sgc.radius);
     this._setRange('set-sky-glow-thresh', sgc.threshold);
     this._setRange('set-sky-glow-thresh-soft', sgc.thresholdSoft);
+    this._setRange('set-sky-glow-vert-fill', sgc.verticalFill);
     this._syncSkyboxPostFxFields();
     this._syncSkyboxFields();
     $('#set-col-floor').value = s.colors.floor;
@@ -6213,6 +6229,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._setRange('set-glow-lift', gc.bloomLift);
     this._setRange('set-glow-gain', gc.compositeGain);
     this._setRange('set-glow-gamma', gc.bloomGamma);
+    this._setRange('set-glow-comp-thresh', gc.compositeThreshold);
     this._setRange('set-glow-core-white', gc.coreWhiteness);
     this._setRange('set-glow-core-int', gc.coreIntensity);
     this._syncGlowConfigFields();

@@ -32,6 +32,7 @@ uniform float uGlowStrength;
 uniform float uGlowRadius;
 uniform float uGlowThreshLo;
 uniform float uGlowThreshHi;
+uniform float uGlowVerticalFill;
 varying vec3 vWorldDir;
 
 vec3 rgb2hsv(vec3 c) {
@@ -71,19 +72,28 @@ vec3 extractGlow(vec3 col) {
 
 vec3 blurSkyGlow(vec3 dir) {
   float s = uGlowRadius;
+  float vy = s * (0.35 + uGlowVerticalFill * 2.65);
   vec3 sum = extractGlow(sampleSky(dir));
   float w = 1.0;
+
   sum += extractGlow(sampleSky(normalize(dir + vec3(s, 0.0, 0.0))));
   sum += extractGlow(sampleSky(normalize(dir + vec3(-s, 0.0, 0.0))));
-  sum += extractGlow(sampleSky(normalize(dir + vec3(0.0, s, 0.0))));
-  sum += extractGlow(sampleSky(normalize(dir + vec3(0.0, -s, 0.0))));
   sum += extractGlow(sampleSky(normalize(dir + vec3(0.0, 0.0, s))));
   sum += extractGlow(sampleSky(normalize(dir + vec3(0.0, 0.0, -s))));
-  sum += extractGlow(sampleSky(normalize(dir + vec3(s, s, 0.0))));
-  sum += extractGlow(sampleSky(normalize(dir + vec3(-s, s, 0.0))));
-  sum += extractGlow(sampleSky(normalize(dir + vec3(s, -s, 0.0))));
-  sum += extractGlow(sampleSky(normalize(dir + vec3(-s, -s, 0.0))));
-  w += 9.0;
+  w += 4.0;
+
+  sum += extractGlow(sampleSky(normalize(dir + vec3(0.0, vy, 0.0)))) * (1.0 + uGlowVerticalFill * 2.0);
+  sum += extractGlow(sampleSky(normalize(dir + vec3(0.0, -vy, 0.0)))) * (1.0 + uGlowVerticalFill * 2.0);
+  sum += extractGlow(sampleSky(normalize(dir + vec3(0.0, vy * 0.5, 0.0)))) * (1.0 + uGlowVerticalFill);
+  sum += extractGlow(sampleSky(normalize(dir + vec3(0.0, -vy * 0.5, 0.0)))) * (1.0 + uGlowVerticalFill);
+  w += 2.0 + uGlowVerticalFill * 6.0;
+
+  sum += extractGlow(sampleSky(normalize(dir + vec3(s, s * 0.25, 0.0))));
+  sum += extractGlow(sampleSky(normalize(dir + vec3(-s, s * 0.25, 0.0))));
+  sum += extractGlow(sampleSky(normalize(dir + vec3(s, -s * 0.25, 0.0))));
+  sum += extractGlow(sampleSky(normalize(dir + vec3(-s, -s * 0.25, 0.0))));
+  w += 4.0;
+
   return sum / w;
 }
 
@@ -93,7 +103,10 @@ void main() {
 
   if (uGlowStrength > 0.0) {
     vec3 glow = blurSkyGlow(dir);
-    col += glow * uGlowStrength;
+    float elev = abs(dir.y);
+    float horizonBias = 1.0 - smoothstep(0.02, 0.38, elev);
+    float vertMul = mix(horizonBias, 1.0, uGlowVerticalFill);
+    col += glow * uGlowStrength * vertMul;
     col = clamp(col, 0.0, 1.0);
   }
 
@@ -115,6 +128,7 @@ export class SkyboxManager {
     this._loadToken = 0;
     this._activeId = null;
     this._enabled = false;
+    this._heightOffset = 0;
   }
 
   _ensureMesh() {
@@ -130,9 +144,10 @@ export class SkyboxManager {
         uBrightness: { value: 1 },
         uContrast: { value: 1 },
         uGlowStrength: { value: 0 },
-        uGlowRadius: { value: 0.055 },
-        uGlowThreshLo: { value: 0.18 },
-        uGlowThreshHi: { value: 0.55 }
+        uGlowRadius: { value: 3 },
+        uGlowThreshLo: { value: 0 },
+        uGlowThreshHi: { value: 0.29 },
+        uGlowVerticalFill: { value: 1 }
       },
       vertexShader: SKY_VERTEX,
       fragmentShader: SKY_FRAGMENT,
@@ -159,6 +174,7 @@ export class SkyboxManager {
     u.uSaturation.value = clamp((s.skyboxSaturation ?? 100) / 100, 0, 3);
     u.uBrightness.value = clamp((s.skyboxBrightness ?? 100) / 100, 0, 3);
     u.uContrast.value = clamp((s.skyboxContrast ?? 100) / 100, 0, 3);
+    this._heightOffset = s.skyboxHeightOffset ?? 0;
 
     const gc = resolveSkyboxGlowConfig(s.skyboxGlowConfig);
     const postFx = s.skyboxPostFx !== false;
@@ -166,7 +182,8 @@ export class SkyboxManager {
     u.uGlowStrength.value = enabled ? gc.strength : 0;
     u.uGlowRadius.value = gc.radius;
     u.uGlowThreshLo.value = gc.threshold;
-    u.uGlowThreshHi.value = Math.max(gc.threshold + 0.01, gc.thresholdSoft);
+    u.uGlowThreshHi.value = Math.max(gc.threshold + 0.001, gc.thresholdSoft);
+    u.uGlowVerticalFill.value = clamp01(gc.verticalFill);
   }
 
   _loadTexture(entry) {
@@ -233,6 +250,7 @@ export class SkyboxManager {
   update(camera) {
     if (!this._mesh?.visible || !camera) return;
     this._mesh.position.copy(camera.position);
+    this._mesh.position.y += this._heightOffset;
   }
 
   dispose() {

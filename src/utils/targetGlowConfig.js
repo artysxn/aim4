@@ -3,11 +3,12 @@
 // ---------------------------------------------------------------------------
 
 export const TARGET_GLOW_DEFAULTS = {
-  bloomStrength: 0.68,
-  bloomRadius: 0.28,
-  bloomLift: 2.1,
-  compositeGain: 0.82,
-  bloomGamma: 1.45,
+  bloomStrength: 1.2,
+  bloomRadius: 0.45,
+  bloomLift: 2.5,
+  compositeGain: 1.15,
+  bloomGamma: 1.15,
+  compositeThreshold: 0.008,
   coreWhiteness: 0.82,
   coreIntensity: 1.35
 };
