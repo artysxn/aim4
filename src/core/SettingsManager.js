@@ -88,6 +88,7 @@ export const DEFAULTS = {
   skyboxBrightness: 100, // %
   skyboxContrast: 100, // %
   skyboxOpacity: 100, // % — blends with colors.bg when below 100
+  skyboxPostFx: true, // bloom post-processing on the skybox mesh
   crosshair: {
     color: '#f52525',
     innerGap: 6,

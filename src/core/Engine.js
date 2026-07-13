@@ -48,14 +48,14 @@ export class Engine {
     this._skybox = new SkyboxManager(this.scene);
     this.applyResolution();
     this.applyColors();
-    this.applyTargetBloom();
+    this.applyPostProcessing();
     this.applySkybox();
 
     window.addEventListener('resize', () => this.applyResolution());
     settings.onChange(() => {
       this.applyResolution();
       this.applyColors();
-      this.applyTargetBloom();
+      this.applyPostProcessing();
       this.applySkybox();
     });
   }
@@ -112,8 +112,17 @@ _setupLights() {
     this._bloom?.setSize(w, h);
   }
 
+  applyPostProcessing() {
+    const s = this.settings.activeSettings();
+    this._bloom?.setOptions({
+      targetBloom: s.targetGlow === true,
+      skyBloom: s.customSkybox === true && s.skyboxPostFx !== false
+    });
+  }
+
+  /** @deprecated Use applyPostProcessing */
   applyTargetBloom() {
-    this._bloom?.setEnabled(this.settings.activeSettings().targetGlow === true);
+    this.applyPostProcessing();
   }
 
   applySkybox() {
@@ -137,7 +146,10 @@ _setupLights() {
     const bg = s.colors.bg;
     this.renderer.setClearColor(bg, 1);
     this.scene.fog.color.set(bg);
-    if (this._skybox) this._skybox.syncUniforms(s);
+    if (this._skybox) {
+      this._skybox.syncUniforms(s);
+      this._skybox.syncPostFxLayer(s);
+    }
   }
 
   resetCamera() {

@@ -5,6 +5,7 @@
 
 import * as THREE from 'three';
 import { skyboxById } from './skyboxCatalog.js';
+import { SKY_BLOOM_LAYER } from '../utils/bloomLayers.js';
 
 const SKY_RADIUS = 420;
 
@@ -117,6 +118,17 @@ export class SkyboxManager {
     u.uContrast.value = clamp((s.skyboxContrast ?? 100) / 100, 0, 3);
   }
 
+  _syncPostFxLayer(settings) {
+    this.syncPostFxLayer(settings);
+  }
+
+  syncPostFxLayer(settings) {
+    if (!this._mesh) return;
+    const postFx = settings?.customSkybox === true && settings?.skyboxPostFx !== false;
+    if (postFx) this._mesh.layers.enable(SKY_BLOOM_LAYER);
+    else this._mesh.layers.disable(SKY_BLOOM_LAYER);
+  }
+
   _loadTexture(entry) {
     if (this._cache.has(entry.id)) {
       return Promise.resolve(this._cache.get(entry.id));
@@ -141,7 +153,10 @@ export class SkyboxManager {
     this._enabled = enabled;
 
     if (!enabled) {
-      if (this._mesh) this._mesh.visible = false;
+      if (this._mesh) {
+        this._mesh.visible = false;
+        this._mesh.layers.disable(SKY_BLOOM_LAYER);
+      }
       return;
     }
 
@@ -153,6 +168,7 @@ export class SkyboxManager {
     }
 
     this.syncUniforms(s);
+    this._syncPostFxLayer(s);
     this._mesh.visible = true;
 
     if (this._activeId === entry.id && this._material.uniforms.tCube.value) return;

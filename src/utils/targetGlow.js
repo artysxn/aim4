@@ -1,10 +1,9 @@
 // ---------------------------------------------------------------------------
-// targetGlow.js — emissive boost on dot targets; bloom is applied in-camera.
+// targetGlow.js — mark dot-target meshes for selective bloom (any target color).
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
-
-const GLOW_EMISSIVE = 3.4;
+import { BLOOM_LAYER } from './bloomLayers.js';
 
 const _colorA = new THREE.Color();
 const _colorB = new THREE.Color();
@@ -23,12 +22,14 @@ export function isDotTargetMesh(mesh, targetColor) {
 
 export function removeTargetGlow(mesh) {
   mesh.userData._glowEnabled = false;
+  mesh.userData._glowStrength = 1;
+  mesh.layers.disable(BLOOM_LAYER);
   restoreTargetEmissive(mesh);
   if (mesh.material) mesh.material.toneMapped = true;
 }
 
 /**
- * Boost emissive on a dot target mesh so the bloom pass picks it up.
+ * Register a dot target mesh for the bloom pass (works with dark target colors).
  * @param {THREE.Mesh} mesh
  * @param {{ enabled: boolean, color: string | number }} opts
  */
@@ -39,20 +40,24 @@ export function applyTargetGlow(mesh, { enabled, color }) {
   }
 
   const mat = mesh.material;
-  if (!mat?.emissive) return;
+  if (!mat) return;
 
-  if (mat.userData._baseEmissiveIntensity == null) {
+  if (mat.userData._baseEmissiveIntensity == null && mat.emissive) {
     mat.userData._baseEmissiveIntensity = mat.emissiveIntensity ?? 0.5;
   }
-  if (mat.userData._baseEmissiveColor == null) {
+  if (mat.userData._baseEmissiveColor == null && mat.emissive) {
     mat.userData._baseEmissiveColor = mat.emissive.getHex();
   }
 
   mesh.userData._glowEnabled = true;
-  mesh.userData._glowEmissiveIntensity = GLOW_EMISSIVE;
-  mat.toneMapped = false;
-  mat.emissive.set(color);
-  mat.emissiveIntensity = GLOW_EMISSIVE;
+  mesh.userData._glowColor = new THREE.Color(color).getHex();
+  mesh.userData._glowStrength = mesh.userData._glowStrength ?? 1;
+  mesh.layers.enable(BLOOM_LAYER);
+
+  if (mat.emissive) {
+    mat.emissive.set(color);
+    mat.emissiveIntensity = mat.userData._baseEmissiveIntensity ?? 0.5;
+  }
 }
 
 export function restoreTargetEmissive(mesh) {
@@ -61,24 +66,20 @@ export function restoreTargetEmissive(mesh) {
   if (mat.userData._baseEmissiveIntensity != null) {
     mat.emissiveIntensity = mat.userData._baseEmissiveIntensity;
   }
-  if (mat.userData._baseEmissiveColor != null) {
+  if (mat.userData._baseEmissiveColor != null && mat.emissive) {
     mat.emissive.set(mat.userData._baseEmissiveColor);
   }
 }
 
 /** Set glow strength multiplier (used during target death fade). */
 export function setTargetGlowOpacity(mesh, alpha) {
-  if (!mesh.userData._glowEnabled || !mesh.material) return;
-  const base = mesh.userData._glowEmissiveIntensity ?? GLOW_EMISSIVE;
-  const a = Math.max(0, Math.min(1, alpha));
-  mesh.material.emissiveIntensity = base * a;
+  if (!mesh.userData._glowEnabled) return;
+  mesh.userData._glowStrength = Math.max(0, Math.min(1, alpha));
 }
 
 export function primeTargetGlowOpacity(mesh) {
-  if (!mesh.userData._glowEnabled || !mesh.material) return;
-  if (mesh.userData._glowEmissiveIntensity == null) {
-    mesh.userData._glowEmissiveIntensity = mesh.material.emissiveIntensity;
-  }
+  if (!mesh.userData._glowEnabled) return;
+  if (mesh.userData._glowStrength == null) mesh.userData._glowStrength = 1;
 }
 
 export function refreshScenarioTargetGlow(scenario) {

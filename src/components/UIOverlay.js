@@ -525,6 +525,7 @@ export class UIOverlay {
             ${rf('set-skybox-bright', 'Brightness (%)', 0, 200, 5)}
             ${rf('set-skybox-contrast', 'Contrast (%)', 0, 200, 5)}
             ${rf('set-skybox-opacity', 'Opacity (%)', 0, 100, 5)}
+            <label class="field-check"><input type="checkbox" id="set-skybox-postfx" checked /> Skybox post-processing effects</label>
           </div>
           ${colorRow('set-col-floor', 'Floor')}
           ${colorRow('set-col-ebody', 'Enemy body')}
@@ -1931,6 +1932,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
   _applySkyboxSettings() {
     this.engine.applySkybox?.();
+    this.engine.applyPostProcessing?.();
   }
 
   _syncPaceBarCompactFields() {
@@ -2876,9 +2878,13 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       parse: (v) => parseInt(v, 10),
       after: () => this._applySkyboxSettings()
     });
+    $('#set-skybox-postfx')?.addEventListener('change', (e) => {
+      draft((d) => { d.skyboxPostFx = e.target.checked; });
+      this._applySkyboxSettings();
+    });
     $('#set-target-glow')?.addEventListener('change', (e) => {
       draft((d) => { d.targetGlow = e.target.checked; });
-      this.engine.applyTargetBloom?.();
+      this.engine.applyPostProcessing?.();
       this.sceneManager.applyLiveScenarioSettings?.();
     });
 
@@ -6028,6 +6034,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._setRange('set-skybox-bright', s.skyboxBrightness ?? 100);
     this._setRange('set-skybox-contrast', s.skyboxContrast ?? 100);
     this._setRange('set-skybox-opacity', s.skyboxOpacity ?? 100);
+    const skyPostFx = this.root.querySelector('#set-skybox-postfx');
+    if (skyPostFx) skyPostFx.checked = s.skyboxPostFx !== false;
     this._syncSkyboxFields();
     $('#set-col-floor').value = s.colors.floor;
     $('#set-col-ebody').value = s.colors.enemyBody;
