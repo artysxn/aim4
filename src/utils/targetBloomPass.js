@@ -189,7 +189,8 @@ export class TargetBloomPass {
 
   /** Final bloomed mask pass (targets + halos on black). */
   _bloomTexture() {
-    return this._targetComposer.readBuffer.texture;
+    // RenderPass (no swap) → readBuffer; UnrealBloomPass (swap) → final in writeBuffer.
+    return this._targetComposer.writeBuffer.texture;
   }
 
   _compositeBloom() {

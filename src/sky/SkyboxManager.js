@@ -33,7 +33,14 @@ uniform float uGlowRadius;
 uniform float uGlowThreshLo;
 uniform float uGlowThreshHi;
 uniform float uGlowVerticalFill;
+uniform float uPitchOffset;
 varying vec3 vWorldDir;
+
+vec3 pitchDir(vec3 dir) {
+  float c = cos(uPitchOffset);
+  float s = sin(uPitchOffset);
+  return vec3(dir.x, dir.y * c - dir.z * s, dir.y * s + dir.z * c);
+}
 
 vec3 rgb2hsv(vec3 c) {
   vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
@@ -98,7 +105,7 @@ vec3 blurSkyGlow(vec3 dir) {
 }
 
 void main() {
-  vec3 dir = normalize(vWorldDir);
+  vec3 dir = pitchDir(normalize(vWorldDir));
   vec3 col = sampleSky(dir);
 
   if (uGlowStrength > 0.0) {
@@ -128,7 +135,6 @@ export class SkyboxManager {
     this._loadToken = 0;
     this._activeId = null;
     this._enabled = false;
-    this._heightOffset = 0;
   }
 
   _ensureMesh() {
@@ -147,7 +153,8 @@ export class SkyboxManager {
         uGlowRadius: { value: 3 },
         uGlowThreshLo: { value: 0 },
         uGlowThreshHi: { value: 0.29 },
-        uGlowVerticalFill: { value: 1 }
+        uGlowVerticalFill: { value: 1 },
+        uPitchOffset: { value: 0 }
       },
       vertexShader: SKY_VERTEX,
       fragmentShader: SKY_FRAGMENT,
@@ -174,7 +181,7 @@ export class SkyboxManager {
     u.uSaturation.value = clamp((s.skyboxSaturation ?? 100) / 100, 0, 3);
     u.uBrightness.value = clamp((s.skyboxBrightness ?? 100) / 100, 0, 3);
     u.uContrast.value = clamp((s.skyboxContrast ?? 100) / 100, 0, 3);
-    this._heightOffset = s.skyboxHeightOffset ?? 0;
+    u.uPitchOffset.value = (s.skyboxHeightOffset ?? 0) * (Math.PI / SKY_RADIUS);
 
     const gc = resolveSkyboxGlowConfig(s.skyboxGlowConfig);
     const postFx = s.skyboxPostFx !== false;
@@ -250,7 +257,6 @@ export class SkyboxManager {
   update(camera) {
     if (!this._mesh?.visible || !camera) return;
     this._mesh.position.copy(camera.position);
-    this._mesh.position.y += this._heightOffset;
   }
 
   dispose() {
