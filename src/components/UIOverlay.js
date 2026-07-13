@@ -347,6 +347,7 @@ export class UIOverlay {
     this._settingsExploreUser = null;
     this._returnAfterScenarioSettings = null;
     this._scenarioSettingsLive = false;
+    this._settingsLive = false;
     this._returnAfterLeaderboard = 'menu';
     this._activeScenarioSettings = null;
     this._suppressLockPause = false;
@@ -406,6 +407,7 @@ export class UIOverlay {
     this._updateFullscreenTip();
     this.settings.onDraftChange(() => {
       if (this._scenarioSettingsLive) this._applyScenarioSettingsLive();
+      else if (this._settingsLive) this._applySettingsLive();
     });
 
     // Shared link: ?lobby=CODE opens multiplayer and auto-joins if there's space.
@@ -1481,6 +1483,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
             <span class="settings-explore-banner muted" id="settings-explore-banner" hidden>Viewing <strong id="settings-explore-name"></strong>'s settings</span>
             <div class="settings-edit-actions" id="settings-edit-actions">
             <span class="settings-unsaved-hint muted" id="settings-unsaved-hint" hidden>Unsaved changes</span>
+            <button type="button" class="btn" id="settings-inrun-mode-btn" hidden>Mode settings</button>
             <button type="button" class="btn" id="settings-undo-btn" disabled>Undo</button>
             <button class="btn" data-reset>Reset all</button>
             <button type="button" class="btn primary" id="settings-done-btn">Done</button>
@@ -1498,6 +1501,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       <div class="panel wide menu-panel scenario-settings-layout">
         <header class="scenario-settings-bar">
           <h2 class="text-big scenario-settings-title" id="scenario-settings-title">Mode settings</h2>
+          <button type="button" class="btn" id="scenario-settings-game-btn" hidden>Game settings</button>
         </header>
         <div class="scenario-settings-drawer menu-panel-body menu-panel-scroll">
           ${scenarioSettingsSections.map((s) => scenarioSettingsPanel(s.id, s.body)).join('')}
@@ -1697,6 +1701,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         <h2 class="text-big pause-title">Paused</h2>
         <div class="menu-actions pause-actions">
           <button type="button" class="btn primary" data-resume>Resume</button>
+          <button type="button" class="btn" id="pause-game-settings-btn">Game settings</button>
+          <button type="button" class="btn" id="pause-mode-settings-btn" hidden>Mode settings</button>
           <button type="button" class="btn" id="pause-restart-btn" data-restart>Restart</button>
           <button type="button" class="btn" id="pause-leave-lobby-btn" hidden>Leave to lobby</button>
           <button type="button" class="btn" data-quit>Quit to menu</button>
@@ -2233,6 +2239,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     if (resetBtn) resetBtn.hidden = explore;
     if (hint) hint.hidden = explore || !this.settings.hasDraftChanges();
     this._updateScenarioSettingsBar();
+    this._updateInRunSettingsNav();
   }
 
   _updateScenarioSettingsBar() {
@@ -2249,11 +2256,30 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     }
   }
 
+  _applySettingsLive() {
+    this.settings.commitDraftLive();
+    this.settings.save();
+    this.sceneManager.applyLiveScenarioSettings();
+    this.paceBar?.applySettings(this.settings);
+    this.crosshair.drawPreview();
+  }
+
   _canOpenInRunScenarioSettings() {
     const sc = this.sceneManager.current;
     if (!sc || sc.isMultiplayer || sc.competitive) return null;
     const id = sc.name;
     return SCENARIO_SETTING_IDS.has(id) ? id : null;
+  }
+
+  _updateInRunSettingsNav() {
+    const modeId = this._canOpenInRunScenarioSettings();
+    const inRun = this._returnAfterSettings === 'paused' || this._returnAfterScenarioSettings === 'paused';
+    const modeBtn = this.root.querySelector('#settings-inrun-mode-btn');
+    const gameBtn = this.root.querySelector('#scenario-settings-game-btn');
+    const doneBtn = this.root.querySelector('#settings-done-btn');
+    if (modeBtn) modeBtn.hidden = !(inRun && this._settingsLive && modeId);
+    if (gameBtn) gameBtn.hidden = !(inRun && this._scenarioSettingsLive);
+    if (doneBtn) doneBtn.textContent = this._settingsLive && inRun ? 'Back to game' : 'Done';
   }
 
   _updateScenarioSettingsBackLabel() {
@@ -2264,7 +2290,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     else back.textContent = 'Back to Training';
   }
 
-  _openSettings() {
+  _openSettings({ fresh = true } = {}) {
     if (this.settings.isExploreMode) {
       this._setSettingsExploreUi(false);
       this.settings.closeExploreDraft();
@@ -2272,16 +2298,34 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       this._settingsExplorePayload = null;
       this._settingsExploreUser = null;
     }
-    this.settings.openDraft();
+    if (fresh) this.settings.openDraft();
     this._populateSettings();
     this.crosshair.drawPreview();
     this._updateSettingsBar();
+    this._updateInRunSettingsNav();
   }
 
-  _openScenarioSettings(scenarioId, { live = false, returnTo = 'training' } = {}) {
+  _openInRunGameSettings({ fresh = true } = {}) {
+    this._settingsLive = true;
+    this._scenarioSettingsLive = false;
+    this._activeScenarioSettings = null;
+    this._returnAfterSettings = 'paused';
+    this._openSettings({ fresh });
+    this.showScreen('settings');
+  }
+
+  _openInRunModeSettings() {
+    const scenarioId = this._canOpenInRunScenarioSettings();
+    if (!scenarioId) return;
+    this._settingsLive = false;
+    this._openScenarioSettings(scenarioId, { live: true, returnTo: 'paused', fresh: !this.settings.draft });
+  }
+
+  _openScenarioSettings(scenarioId, { live = false, returnTo = 'training', fresh = true } = {}) {
     if (!SCENARIO_SETTING_IDS.has(scenarioId)) return;
     this._scenarioSettingsLive = !!live;
-    this.settings.openDraft();
+    if (live) this._settingsLive = false;
+    if (fresh) this.settings.openDraft();
     this._activeScenarioSettings = scenarioId;
     this._populateSettings();
     this._showScenarioSettingsPanel(scenarioId);
@@ -2289,6 +2333,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._updateScenarioSettingsBar();
     this._returnAfterScenarioSettings = returnTo;
     this._updateScenarioSettingsBackLabel();
+    this._updateInRunSettingsNav();
     this.showScreen('scenario-settings');
   }
 
@@ -2357,6 +2402,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._activeScenarioSettings = null;
     this._updateSettingsBar();
     this._updateScenarioSettingsBar();
+    this._updateInRunSettingsNav();
     const ret = this._returnAfterScenarioSettings ?? 'training';
     this._returnAfterScenarioSettings = null;
     this.showScreen(ret);
@@ -2373,6 +2419,11 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       }
     });
     $('#scenario-settings-back-btn')?.addEventListener('click', () => this._closeScenarioSettings());
+    $('#scenario-settings-game-btn')?.addEventListener('click', () => {
+      this._scenarioSettingsLive = false;
+      this._activeScenarioSettings = null;
+      this._openInRunGameSettings({ fresh: false });
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -3189,8 +3240,10 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       if (s.undoDraft()) {
         this._populateSettings();
         this._updateSettingsBar();
+        if (this._settingsLive) this._applySettingsLive();
       }
     });
+    $('#settings-inrun-mode-btn')?.addEventListener('click', () => this._openInRunModeSettings());
     $('#settings-done-btn')?.addEventListener('click', () => this._closeSettings());
   }
 
@@ -3661,15 +3714,10 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
   _bindPauseMenu() {
     const $ = (id) => this.root.querySelector(id);
-    $('#pause-settings-btn')?.addEventListener('click', () => {
-      const scenarioId = this._canOpenInRunScenarioSettings();
-      if (scenarioId) {
-        this._openScenarioSettings(scenarioId, { live: true, returnTo: 'paused' });
-        return;
-      }
-      this._returnAfterSettings = 'paused';
-      this.showScreen('settings');
-    });
+    const openGame = () => this._openInRunGameSettings();
+    $('#pause-settings-btn')?.addEventListener('click', openGame);
+    $('#pause-game-settings-btn')?.addEventListener('click', openGame);
+    $('#pause-mode-settings-btn')?.addEventListener('click', () => this._openInRunModeSettings());
     $('#pause-leave-lobby-btn')?.addEventListener('click', () => {
       this.mp?.returnToLobby();
     });
@@ -3680,8 +3728,16 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       this._closeSettingsExplore();
       return;
     }
-    this.settings.confirmDraft();
+    if (this._settingsLive) {
+      this.settings.commitDraftLive();
+      this.settings.save();
+      this.settings.discardDraft();
+      this._settingsLive = false;
+    } else {
+      this.settings.confirmDraft();
+    }
     this._updateSettingsBar();
+    this._updateInRunSettingsNav();
     const ret = this._returnAfterSettings;
     this._returnAfterSettings = null;
     if (ret) {
@@ -3757,14 +3813,19 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     const leaveBtn = this.root.querySelector('#pause-leave-lobby-btn');
     const restartBtn = this.root.querySelector('#pause-restart-btn');
     const gearBtn = this.root.querySelector('#pause-settings-btn');
+    const gameBtn = this.root.querySelector('#pause-game-settings-btn');
+    const modeBtn = this.root.querySelector('#pause-mode-settings-btn');
     const inMpMatch = this.mp?.inMatch && !!this.mp?.lobby;
+    const modeId = this._canOpenInRunScenarioSettings();
     if (leaveBtn) leaveBtn.hidden = !inMpMatch;
     if (restartBtn) restartBtn.hidden = !!inMpMatch;
+    const inRun = !!this.sceneManager.current;
     if (gearBtn) {
-      const modeId = this._canOpenInRunScenarioSettings();
-      gearBtn.hidden = !this.sceneManager.current;
-      gearBtn.setAttribute('aria-label', modeId ? 'Mode settings' : 'Settings');
+      gearBtn.hidden = !inRun;
+      gearBtn.setAttribute('aria-label', 'Game settings');
     }
+    if (gameBtn) gameBtn.hidden = !inRun;
+    if (modeBtn) modeBtn.hidden = !modeId;
   }
 
   // -------------------------------------------------------------------------

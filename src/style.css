@@ -1227,15 +1227,23 @@ a.btn {
 }
 .scenario-settings-bar {
   flex-shrink: 0;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 12px;
+  min-height: 40px;
 }
 .scenario-settings-title {
   margin: 0;
   text-align: center;
   width: 100%;
+}
+#scenario-settings-game-btn {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 .scenario-settings-drawer {
   flex: 1;
