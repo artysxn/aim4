@@ -86,7 +86,7 @@ export class TargetBloomPass {
   }
 
   _isBloomMesh(obj) {
-    return obj.isMesh && obj.layers.test(BLOOM_LAYER);
+    return obj.isMesh && obj.layers.isEnabled(BLOOM_LAYER);
   }
 
   _bloomMaterialFor(mesh) {
@@ -129,7 +129,8 @@ export class TargetBloomPass {
   }
 
   _bloomTexture() {
-    return this._targetComposer.bloomPass.renderTargetsHorizontal[0].texture;
+    // readBuffer holds the masked bloom image after UnrealBloomPass (full resolution).
+    return this._targetComposer.readBuffer.texture;
   }
 
   _compositeBloom() {

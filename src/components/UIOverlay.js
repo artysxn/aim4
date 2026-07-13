@@ -1938,7 +1938,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
   _applySkyboxSettings() {
     this.engine.applySkybox?.();
+    this.engine.applyColors?.();
     this.engine.applyPostProcessing?.();
+    this.sceneManager.current?.applyLiveSettings?.();
   }
 
   _syncPaceBarCompactFields() {
@@ -2935,8 +2937,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     });
     $('#set-target-glow')?.addEventListener('change', (e) => {
       draft((d) => { d.targetGlow = e.target.checked; });
-      this.engine.applyPostProcessing?.();
-      this.sceneManager.applyLiveScenarioSettings?.();
+      this._applySkyboxSettings();
     });
 
     $('#set-range-arc').addEventListener('change', (e) => {

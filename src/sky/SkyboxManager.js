@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { skyboxById } from './skyboxCatalog.js';
 
 const SKY_RADIUS = 420;
-const SKY_GLOW_STRENGTH = 0.35;
+const SKY_GLOW_STRENGTH = 0.55;
 
 const SKY_VERTEX = /* glsl */`
 varying vec3 vWorldDir;
@@ -56,15 +56,28 @@ vec3 gradeSky(vec3 texLin) {
   return clamp(col, 0.0, 1.0);
 }
 
+vec3 sampleSky(vec3 dir) {
+  return gradeSky(pow(texture(tCube, dir).rgb, vec3(2.2)));
+}
+
+vec3 skyBlur(vec3 dir) {
+  float s = 0.018;
+  vec3 blur = sampleSky(dir);
+  blur += sampleSky(normalize(dir + vec3(s, 0.0, 0.0)));
+  blur += sampleSky(normalize(dir + vec3(-s, 0.0, 0.0)));
+  blur += sampleSky(normalize(dir + vec3(0.0, s, 0.0)));
+  blur += sampleSky(normalize(dir + vec3(0.0, -s, 0.0)));
+  return blur * 0.2;
+}
+
 void main() {
   vec3 dir = normalize(vWorldDir);
-  vec3 sharp = gradeSky(pow(texture(tCube, dir).rgb, vec3(2.2)));
+  vec3 col = sampleSky(dir);
 
-  vec3 col = sharp;
   if (uGlow > 0.0) {
-    vec3 blur = gradeSky(pow(textureLod(tCube, dir, 4.0).rgb, vec3(2.2)));
+    vec3 blur = skyBlur(dir);
     float lum = dot(blur, vec3(0.2126, 0.7152, 0.0722));
-    float bright = smoothstep(0.42, 0.82, lum);
+    float bright = smoothstep(0.28, 0.72, lum);
     col += blur * bright * uGlow;
   }
 
@@ -127,8 +140,8 @@ export class SkyboxManager {
     u.uSaturation.value = clamp((s.skyboxSaturation ?? 100) / 100, 0, 3);
     u.uBrightness.value = clamp((s.skyboxBrightness ?? 100) / 100, 0, 3);
     u.uContrast.value = clamp((s.skyboxContrast ?? 100) / 100, 0, 3);
-    const glowOn = s.customSkybox === true && s.skyboxPostFx !== false;
-    u.uGlow.value = glowOn ? SKY_GLOW_STRENGTH : 0;
+    const postFx = s.skyboxPostFx !== false;
+    u.uGlow.value = s.customSkybox === true && postFx ? SKY_GLOW_STRENGTH : 0;
   }
 
   _loadTexture(entry) {
