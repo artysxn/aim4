@@ -28,7 +28,10 @@ export class PeekswitchScenario extends PeekswitchBaseScenario {
     this.weaponId = 'pistol';
     this.usesWeapon = false;
     const preset = this.competitive ? competitivePresetFor(this.name) : null;
-    const s = (this.competitive ? DEFAULTS[this.name] : this.settings.data[this.name]) ?? DEFAULTS.peekswitch;
+    const s = {
+      ...DEFAULTS.peekswitch,
+      ...(this.competitive ? {} : (this.settings.data[this.name] || {}))
+    };
     this.targetSize = preset?.targetSize ?? this.config.targetSize ?? s.targetSize;
     this.sizeVariance = clamp(preset?.sizeVariance ?? this.config.sizeVariance ?? s.sizeVariance ?? 0.35, 0, 0.75);
     this.movement = preset?.movement ?? this.config.movement ?? s.movement ?? 'none';
@@ -54,6 +57,23 @@ export class PeekswitchScenario extends PeekswitchBaseScenario {
 
   configKey() {
     return PeekswitchScenario.configKeyFor(this.settings, this.variant);
+  }
+
+  applyLiveSettings() {
+    super.applyLiveSettings();
+    if (this.competitive) return;
+    const g = { ...DEFAULTS.peekswitch, ...(this.settings.data[this.name] || {}) };
+    this.targetSize = g.targetSize ?? this.targetSize;
+    this.sizeVariance = clamp(g.sizeVariance ?? this.sizeVariance, 0, 0.75);
+    this.movement = g.movement ?? 'none';
+    this.travelSpeed = g.travelSpeed ?? this.travelSpeed;
+    this.bounceStrength = g.bounceStrength ?? this.bounceStrength;
+    if ('infiniteAmmo' in g) this.infiniteAmmo = g.infiniteAmmo !== false;
+    if ('viewmodelRecoil' in g) this.viewmodelRecoil = !!g.viewmodelRecoil;
+    for (const t of this.targets) {
+      if (t.state === 'dying') continue;
+      this._initMovement(t, t._dotSize ?? this.targetSize);
+    }
   }
 
   _rollTargetSize() {

@@ -18,6 +18,8 @@ import { DEFAULTS } from '../core/SettingsManager.js';
 const SIZE_MIN_RATIO = 0.55;
 const SPEED_MIN_MUL = 0.78;
 const SPEED_MAX_MUL = 1.22;
+const SPEED_SLOW_MIN = 0.5; // per-dot: up to 50% slower
+const SPEED_SLOW_MAX = 0.7; // per-dot: at least 30% slower
 const BOB_AMP = 0.32;
 const BOB_SPEED_MIN = 0.9;
 const BOB_SPEED_MAX = 1.6;
@@ -146,7 +148,8 @@ export class LoopsScenario extends BaseScenario {
   _omegaForSize(size) {
     const { min, max } = this._sizeRange();
     const t = max > min ? (size - min) / (max - min) : 1;
-    const deg = this.travelSpeed * lerp(SPEED_MIN_MUL, SPEED_MAX_MUL, t);
+    const slowMul = randRange(SPEED_SLOW_MIN, SPEED_SLOW_MAX);
+    const deg = this.travelSpeed * lerp(SPEED_MIN_MUL, SPEED_MAX_MUL, t) * slowMul;
     const rad = (deg * Math.PI) / 180;
     return rad * (Math.random() < 0.5 ? -1 : 1);
   }

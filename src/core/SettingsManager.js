@@ -71,7 +71,23 @@ export const DEFAULTS = {
   },
   runDuration: 60, // seconds
   paceBar: true, // KovaaK's-style PB pacing strip during timed runs
-  targetGlow: false, // soft halo on dot targets (colors.target)
+  paceBarStyle: 'expanded', // expanded | compact
+  paceBarCompactWidth: 200,
+  paceBarCompactHeight: 30,
+  paceBarColors: {
+    track: '#08080a',
+    ahead: '#35e06a',
+    behind: '#f52525',
+    neutral: '#6a6a6a'
+  },
+  targetGlow: false, // emissive bloom on dot targets (colors.target)
+  customSkybox: false, // replace fog backdrop with a cubemap sky (all levels)
+  skyboxId: '', // catalog id under src/sky (filled on first load)
+  skyboxHue: 0, // degrees
+  skyboxSaturation: 100, // %
+  skyboxBrightness: 100, // %
+  skyboxContrast: 100, // %
+  skyboxOpacity: 100, // % — blends with colors.bg when below 100
   crosshair: {
     color: '#f52525',
     innerGap: 6,

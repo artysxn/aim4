@@ -9,7 +9,8 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
-import { RESOLUTIONS, clampResolutionDim } from '../core/SettingsManager.js';
+import { RESOLUTIONS, clampResolutionDim, DEFAULTS } from '../core/SettingsManager.js';
+import { SKYBOX_CATALOG, defaultSkyboxId } from '../sky/skyboxCatalog.js';
 import { SCENARIOS } from '../core/SceneManager.js';
 import * as Storage from '../utils/Storage.js';
 import { bindLabel } from '../utils/inputBinds.js';
@@ -496,14 +497,41 @@ export class UIOverlay {
           ${numField('set-dur', 'Run duration (s)', '1')}
           <label class="field-check"><input type="checkbox" id="set-raw" /> Raw input (no OS acceleration)</label>
           <label class="field-check"><input type="checkbox" id="set-pace-bar" /> High score pace bar</label>
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Pace bar style</span></div>
+            <select id="set-pace-bar-style">
+              <option value="expanded">Expanded</option>
+              <option value="compact">Compact</option>
+            </select>
+          </div>
+          <div id="set-pace-bar-compact-size" hidden>
+            ${rf('set-pace-bar-width', 'Compact width (px)', 80, 600, 10)}
+            ${rf('set-pace-bar-height', 'Compact height (px)', 8, 80, 2)}
+          </div>
+          ${colorRow('set-pace-bar-track', 'Pace bar track')}
+          ${colorRow('set-pace-bar-ahead', 'Ahead of PB')}
+          ${colorRow('set-pace-bar-behind', 'Behind PB')}
+          ${colorRow('set-pace-bar-neutral', 'Neutral / no PB')}
           <label class="field-check"><input type="checkbox" id="set-copy-replay-config" /> Copy config when watching replays</label>
           ${colorRow('set-col-bg', 'Background')}
+          <label class="field-check"><input type="checkbox" id="set-custom-skybox" /> Custom skybox</label>
+          <div id="set-skybox-fields" hidden>
+            <div class="field field-plain">
+              <div class="field-top"><span class="field-label">Skybox</span></div>
+              <select id="set-skybox-id"></select>
+            </div>
+            ${rf('set-skybox-hue', 'Hue (°)', -180, 180, 5)}
+            ${rf('set-skybox-sat', 'Saturation (%)', 0, 200, 5)}
+            ${rf('set-skybox-bright', 'Brightness (%)', 0, 200, 5)}
+            ${rf('set-skybox-contrast', 'Contrast (%)', 0, 200, 5)}
+            ${rf('set-skybox-opacity', 'Opacity (%)', 0, 100, 5)}
+          </div>
           ${colorRow('set-col-floor', 'Floor')}
           ${colorRow('set-col-ebody', 'Enemy body')}
           ${colorRow('set-col-ehead', 'Enemy head')}
           ${colorRow('set-col-cover', 'Cover / columns')}
           ${colorRow('set-col-target', 'Gridshot target')}
-          <label class="field-check"><input type="checkbox" id="set-target-glow" /> Target glow</label>
+          <label class="field-check"><input type="checkbox" id="set-target-glow" /> Target glow (bloom)</label>
           <button type="button" class="btn btn-block" data-reset-colors>Reset colors</button>`
       },
       {
@@ -1189,20 +1217,25 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       <button type="button" class="btn btn-sm" id="mm-queue-cancel">Leave queue</button>
     </div>
 
-    <!-- HIGH SCORE PACE BAR -->
-    <div id="pace-bar" class="pace-bar" aria-hidden="true">
-      <div id="pace-bar-fill" class="pace-bar-fill neutral"></div>
+    <!-- HIGH SCORE PACE BAR (expanded slot; compact slot lives under the HUD) -->
+    <div id="pace-bar-slot-expanded" class="pace-bar-slot-expanded">
+      <div id="pace-bar" class="pace-bar pace-bar--expanded" aria-hidden="true">
+        <div id="pace-bar-fill" class="pace-bar-fill neutral"></div>
+      </div>
     </div>
 
     <!-- HUD -->
     <div id="hud" class="hud">
-      <div class="hud-row">
-        <div class="chip"><span class="chip-label">TIME</span><span id="hud-time" class="chip-val">60.0</span></div>
-        <div class="chip big"><span class="chip-label">SCORE</span><span id="hud-score" class="chip-val">0</span></div>
-        <div class="chip"><span class="chip-label">ACC</span><span id="hud-acc" class="chip-val">100%</span></div>
-        <div class="chip"><span class="chip-label">KPS</span><span id="hud-kps" class="chip-val">0.0</span></div>
-        <div class="chip"><span class="chip-label">HITS</span><span id="hud-hits" class="chip-val">0/0</span></div>
-        <div class="chip" id="hud-crit-chip"><span class="chip-label">CRIT</span><span id="hud-crit" class="chip-val">0%</span></div>
+      <div class="hud-stack">
+        <div class="hud-row">
+          <div class="chip"><span class="chip-label">TIME</span><span id="hud-time" class="chip-val">60.0</span></div>
+          <div class="chip big"><span class="chip-label">SCORE</span><span id="hud-score" class="chip-val">0</span></div>
+          <div class="chip"><span class="chip-label">ACC</span><span id="hud-acc" class="chip-val">100%</span></div>
+          <div class="chip"><span class="chip-label">KPS</span><span id="hud-kps" class="chip-val">0.0</span></div>
+          <div class="chip"><span class="chip-label">HITS</span><span id="hud-hits" class="chip-val">0/0</span></div>
+          <div class="chip" id="hud-crit-chip"><span class="chip-label">CRIT</span><span id="hud-crit" class="chip-val">0%</span></div>
+        </div>
+        <div id="pace-bar-slot-compact" class="pace-bar-slot-compact"></div>
       </div>
     </div>
 
@@ -1877,6 +1910,33 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this.hudAmmoMag = this.root.querySelector('#hud-ammo-mag');
     this.hudAmmoSize = this.root.querySelector('#hud-ammo-size');
     this.paceBar = new PaceBar(this.root);
+    this.paceBar.applySettings(this.settings);
+  }
+
+  _syncSkyboxFields() {
+    const s = this.settings.activeSettings();
+    const wrap = this.root.querySelector('#set-skybox-fields');
+    if (wrap) wrap.hidden = !s.customSkybox;
+  }
+
+  _populateSkyboxSelect() {
+    const sel = this.root.querySelector('#set-skybox-id');
+    if (!sel) return;
+    const current = this.settings.activeSettings().skyboxId || defaultSkyboxId();
+    sel.innerHTML = SKYBOX_CATALOG.map(
+      (e) => `<option value="${e.id}">${e.label}</option>`
+    ).join('');
+    if (current) sel.value = current;
+  }
+
+  _applySkyboxSettings() {
+    this.engine.applySkybox?.();
+  }
+
+  _syncPaceBarCompactFields() {
+    const s = this.settings.activeSettings();
+    const wrap = this.root.querySelector('#set-pace-bar-compact-size');
+    if (wrap) wrap.hidden = s.paceBarStyle !== 'compact';
   }
 
   // -------------------------------------------------------------------------
@@ -2550,6 +2610,31 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     $('#set-pace-bar')?.addEventListener('change', (e) => {
       draft((d) => { d.paceBar = e.target.checked; });
     });
+    $('#set-pace-bar-style')?.addEventListener('change', (e) => {
+      draft((d) => { d.paceBarStyle = e.target.value; });
+      this._syncPaceBarCompactFields();
+      this.paceBar?.applySettings(this.settings);
+    });
+    this._bindRange('set-pace-bar-width', (v, d) => { d.paceBarCompactWidth = v; }, {
+      parse: (v) => parseInt(v, 10),
+      after: () => this.paceBar?.applySettings(this.settings)
+    });
+    this._bindRange('set-pace-bar-height', (v, d) => { d.paceBarCompactHeight = v; }, {
+      parse: (v) => parseInt(v, 10),
+      after: () => this.paceBar?.applySettings(this.settings)
+    });
+    const paceColor = (id, key) => {
+      $(id)?.addEventListener('input', (e) => {
+        draft((d) => {
+          d.paceBarColors = { ...(d.paceBarColors || {}), [key]: e.target.value };
+        });
+        this.paceBar?.applySettings(this.settings);
+      });
+    };
+    paceColor('#set-pace-bar-track', 'track');
+    paceColor('#set-pace-bar-ahead', 'ahead');
+    paceColor('#set-pace-bar-behind', 'behind');
+    paceColor('#set-pace-bar-neutral', 'neutral');
     $('#set-copy-replay-config').addEventListener('change', (e) => {
       draft((d) => { d.copyConfigOnReplay = e.target.checked; });
     });
@@ -2751,6 +2836,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     const col = (id, key) =>
       $(id).addEventListener('input', (e) => {
         draft((d) => { d.colors[key] = e.target.value; });
+        if (key === 'bg') this._applySkyboxSettings();
       });
     col('#set-col-bg', 'bg');
     col('#set-col-floor', 'floor');
@@ -2758,8 +2844,42 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     col('#set-col-ehead', 'enemyHead');
     col('#set-col-cover', 'cover');
     col('#set-col-target', 'target');
+    $('#set-custom-skybox')?.addEventListener('change', (e) => {
+      draft((d) => {
+        d.customSkybox = e.target.checked;
+        if (d.customSkybox && !d.skyboxId) d.skyboxId = defaultSkyboxId();
+      });
+      this._syncSkyboxFields();
+      this._applySkyboxSettings();
+    });
+    $('#set-skybox-id')?.addEventListener('change', (e) => {
+      draft((d) => { d.skyboxId = e.target.value; });
+      this._applySkyboxSettings();
+    });
+    this._bindRange('set-skybox-hue', (v, d) => { d.skyboxHue = v; }, {
+      parse: (v) => parseInt(v, 10),
+      after: () => this._applySkyboxSettings()
+    });
+    this._bindRange('set-skybox-sat', (v, d) => { d.skyboxSaturation = v; }, {
+      parse: (v) => parseInt(v, 10),
+      after: () => this._applySkyboxSettings()
+    });
+    this._bindRange('set-skybox-bright', (v, d) => { d.skyboxBrightness = v; }, {
+      parse: (v) => parseInt(v, 10),
+      after: () => this._applySkyboxSettings()
+    });
+    this._bindRange('set-skybox-contrast', (v, d) => { d.skyboxContrast = v; }, {
+      parse: (v) => parseInt(v, 10),
+      after: () => this._applySkyboxSettings()
+    });
+    this._bindRange('set-skybox-opacity', (v, d) => { d.skyboxOpacity = v; }, {
+      parse: (v) => parseInt(v, 10),
+      after: () => this._applySkyboxSettings()
+    });
     $('#set-target-glow')?.addEventListener('change', (e) => {
       draft((d) => { d.targetGlow = e.target.checked; });
+      this.engine.applyTargetBloom?.();
+      this.sceneManager.applyLiveScenarioSettings?.();
     });
 
     $('#set-range-arc').addEventListener('change', (e) => {
@@ -2884,6 +3004,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._bindRange('set-peekswitch-variance', (v, d) => { d.peekswitch.sizeVariance = v; });
     $('#set-peekswitch-movement')?.addEventListener('change', (e) => {
       draft((d) => { d.peekswitch.movement = e.target.value; });
+      if (this._scenarioSettingsLive) this._applyScenarioSettingsLive();
     });
     this._bindRange('set-peekswitch-speed', (v, d) => { d.peekswitch.travelSpeed = v; });
     this._bindRange('set-peekswitch-bounce', (v, d) => { d.peekswitch.bounceStrength = v; });
@@ -5740,6 +5861,21 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     $('#set-dur').value = s.runDuration;
     $('#set-raw').checked = s.rawInput;
     $('#set-pace-bar').checked = s.paceBar !== false;
+    const paceStyle = this.root.querySelector('#set-pace-bar-style');
+    if (paceStyle) paceStyle.value = s.paceBarStyle === 'compact' ? 'compact' : 'expanded';
+    this._setRange('set-pace-bar-width', s.paceBarCompactWidth ?? 200);
+    this._setRange('set-pace-bar-height', s.paceBarCompactHeight ?? 30);
+    const paceColors = { ...DEFAULTS.paceBarColors, ...(s.paceBarColors || {}) };
+    const paceTrack = this.root.querySelector('#set-pace-bar-track');
+    if (paceTrack) paceTrack.value = paceColors.track;
+    const paceAhead = this.root.querySelector('#set-pace-bar-ahead');
+    if (paceAhead) paceAhead.value = paceColors.ahead;
+    const paceBehind = this.root.querySelector('#set-pace-bar-behind');
+    if (paceBehind) paceBehind.value = paceColors.behind;
+    const paceNeutral = this.root.querySelector('#set-pace-bar-neutral');
+    if (paceNeutral) paceNeutral.value = paceColors.neutral;
+    this._syncPaceBarCompactFields();
+    this.paceBar?.applySettings(this.settings);
     $('#set-copy-replay-config').checked = !!s.copyConfigOnReplay;
 
     $('#set-xh-color').value = s.crosshair.color;
@@ -5885,6 +6021,14 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._setRange('set-dm-misslimit', s.deathmatch?.missLimit ?? 0);
 
     $('#set-col-bg').value = s.colors.bg;
+    $('#set-custom-skybox').checked = !!s.customSkybox;
+    this._populateSkyboxSelect();
+    this._setRange('set-skybox-hue', s.skyboxHue ?? 0);
+    this._setRange('set-skybox-sat', s.skyboxSaturation ?? 100);
+    this._setRange('set-skybox-bright', s.skyboxBrightness ?? 100);
+    this._setRange('set-skybox-contrast', s.skyboxContrast ?? 100);
+    this._setRange('set-skybox-opacity', s.skyboxOpacity ?? 100);
+    this._syncSkyboxFields();
     $('#set-col-floor').value = s.colors.floor;
     $('#set-col-ebody').value = s.colors.enemyBody;
     $('#set-col-ehead').value = s.colors.enemyHead;
@@ -6307,6 +6451,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   play(name, config = {}) {
     this._countdownRemaining = 0;
     this._hideCountdownOverlay();
+    if (this.settings.draft) this.settings.confirmDraft();
     this.currentScenario = name;
     this.scenarioConfig = config;
     this.sceneManager.load(name, config);

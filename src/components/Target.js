@@ -90,13 +90,6 @@ export class Target {
 
   dispose() {
     for (const m of this.colliders) {
-      const group = m.userData._targetGlowGroup;
-      if (group) {
-        for (const child of group.children) {
-          child.geometry?.dispose();
-          child.material?.dispose();
-        }
-      }
       m.geometry?.dispose();
       m.material?.dispose();
     }

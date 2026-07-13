@@ -8,6 +8,9 @@
 import * as THREE from 'three';
 import { sourceVFovFromHFov, clamp } from '../utils/MathUtils.js';
 import { getResolutionSpec } from './SettingsManager.js';
+import { TargetBloomPass } from '../utils/targetBloomPass.js';
+import { SkyboxManager } from '../sky/SkyboxManager.js';
+import { defaultSkyboxId } from '../sky/skyboxCatalog.js';
 
 export const EYE_HEIGHT = 1.6;
 
@@ -41,11 +44,20 @@ export class Engine {
     this.afterRender = null;
 
     this._setupLights();
+    this._bloom = new TargetBloomPass(this.renderer, this.scene, this.camera);
+    this._skybox = new SkyboxManager(this.scene);
     this.applyResolution();
     this.applyColors();
+    this.applyTargetBloom();
+    this.applySkybox();
 
     window.addEventListener('resize', () => this.applyResolution());
-    settings.onChange(() => { this.applyResolution(); this.applyColors(); });
+    settings.onChange(() => {
+      this.applyResolution();
+      this.applyColors();
+      this.applyTargetBloom();
+      this.applySkybox();
+    });
   }
 
 _setupLights() {
@@ -97,6 +109,19 @@ _setupLights() {
     this.camera.aspect = this.renderAspect;
     this.camera.fov = sourceVFovFromHFov(this.zoomHFov ?? s.hFov);
     this.camera.updateProjectionMatrix();
+    this._bloom?.setSize(w, h);
+  }
+
+  applyTargetBloom() {
+    this._bloom?.setEnabled(this.settings.activeSettings().targetGlow === true);
+  }
+
+  applySkybox() {
+    const s = this.settings.activeSettings();
+    this._skybox?.apply({
+      ...s,
+      skyboxId: s.skyboxId || defaultSkyboxId()
+    });
   }
 
   /** Scope zoom: override the horizontal FOV (null restores the user setting). */
@@ -108,9 +133,11 @@ _setupLights() {
   }
 
   applyColors() {
-    const bg = this.settings.activeSettings().colors.bg;
+    const s = this.settings.activeSettings();
+    const bg = s.colors.bg;
     this.renderer.setClearColor(bg, 1);
     this.scene.fog.color.set(bg);
+    if (this._skybox) this._skybox.syncUniforms(s);
   }
 
   resetCamera() {
@@ -157,7 +184,8 @@ _setupLights() {
         }
         this.lastError = e;
       }
-      this.renderer.render(this.scene, this.camera);
+      this._skybox?.update(this.camera);
+      this._bloom.render();
       if (this.afterRender) this.afterRender(this.renderer, this.camera);
     };
     loop();

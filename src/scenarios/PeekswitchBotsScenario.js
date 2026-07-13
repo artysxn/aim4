@@ -118,8 +118,10 @@ export class PeekswitchBotsScenario extends PeekswitchBaseScenario {
 
   _buildBot() {
     const t = new Target();
-    const c = this.settings.data.colors;
     const bodyRig = new THREE.Group();
+    t.object.add(bodyRig);
+
+    const c = this.settings.data.colors;
     const body = new THREE.Mesh(
       new THREE.CylinderGeometry(BODY_R, BODY_R, BODY_H, 18),
       new THREE.MeshStandardMaterial({
@@ -131,9 +133,12 @@ export class PeekswitchBotsScenario extends PeekswitchBaseScenario {
     );
     body.position.y = BODY_H / 2;
     markBulletDecalSurface(body);
+    body.userData.target = t;
+    body.userData.zone = 'body';
+    body.userData.points = 50;
+    body.userData.crit = false;
+    t.colliders.push(body);
     bodyRig.add(body);
-    t.addCollider(body, { zone: 'body', points: 50, crit: false });
-    t.add(bodyRig);
 
     const head = new THREE.Mesh(
       new THREE.SphereGeometry(HEAD_R, 22, 16),
@@ -146,6 +151,7 @@ export class PeekswitchBotsScenario extends PeekswitchBaseScenario {
     );
     head.position.y = HEAD_Y;
     t.addCollider(head, { zone: 'head', points: 100, crit: true });
+
     t.rig = bodyRig;
     t.headMesh = head;
     return t;

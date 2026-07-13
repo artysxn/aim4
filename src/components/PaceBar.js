@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
-// PaceBar.js — KovaaK's-style personal-best pacing strip at the top of the HUD.
+// PaceBar.js — KovaaK's-style personal-best pacing strip on the HUD.
 // ---------------------------------------------------------------------------
 
+import { DEFAULTS } from '../core/SettingsManager.js';
 import {
   getPracticeBest,
   isAheadOfPace,
@@ -12,12 +13,15 @@ export class PaceBar {
   constructor(root) {
     this.el = root.querySelector('#pace-bar');
     this.fill = root.querySelector('#pace-bar-fill');
+    this.expandedSlot = root.querySelector('#pace-bar-slot-expanded');
+    this.compactSlot = root.querySelector('#pace-bar-slot-compact');
     this._pb = null;
     this._totalTime = 0;
     this._scenario = null;
     this._locked = false;
     this._lockedFill = 0;
     this._lockedAhead = null;
+    this._style = 'expanded';
   }
 
   reset() {
@@ -28,6 +32,32 @@ export class PaceBar {
     this._lockedFill = 0;
     this._lockedAhead = null;
     this.hide();
+  }
+
+  applySettings(settings) {
+    const s = settings?.activeSettings?.() ?? settings ?? {};
+    const defaults = DEFAULTS.paceBarColors;
+    const colors = { ...defaults, ...(s.paceBarColors || {}) };
+    const style = s.paceBarStyle === 'compact' ? 'compact' : 'expanded';
+    this._style = style;
+
+    if (this.el) {
+      const slot = style === 'compact' ? this.compactSlot : this.expandedSlot;
+      if (slot && this.el.parentElement !== slot) slot.appendChild(this.el);
+      this.el.classList.toggle('pace-bar--expanded', style === 'expanded');
+      this.el.classList.toggle('pace-bar--compact', style === 'compact');
+      this.el.style.setProperty('--pace-bar-track', colors.track);
+      this.el.style.setProperty('--pace-bar-ahead', colors.ahead);
+      this.el.style.setProperty('--pace-bar-behind', colors.behind);
+      this.el.style.setProperty('--pace-bar-neutral', colors.neutral);
+      if (style === 'compact') {
+        this.el.style.width = `${Math.round(s.paceBarCompactWidth ?? 200)}px`;
+        this.el.style.height = `${Math.round(s.paceBarCompactHeight ?? 30)}px`;
+      } else {
+        this.el.style.width = '';
+        this.el.style.height = '';
+      }
+    }
   }
 
   begin(scenario, configKey, totalTime) {

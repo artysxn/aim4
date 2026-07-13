@@ -1,15 +1,10 @@
 // ---------------------------------------------------------------------------
-// targetGlow.js — soft additive halo around dot targets (settings.colors.target).
-// Uses layered additive shells instead of full-scene bloom for a lightweight glow.
+// targetGlow.js — emissive boost on dot targets; bloom is applied in-camera.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
 
-const GLOW_SHELLS = [
-  { scale: 1.38, opacity: 0.42 },
-  { scale: 1.92, opacity: 0.2 },
-  { scale: 2.55, opacity: 0.085 }
-];
+const GLOW_EMISSIVE = 3.4;
 
 const _colorA = new THREE.Color();
 const _colorB = new THREE.Color();
@@ -27,80 +22,62 @@ export function isDotTargetMesh(mesh, targetColor) {
 }
 
 export function removeTargetGlow(mesh) {
-  const group = mesh.userData._targetGlowGroup;
-  if (!group) return;
-  mesh.remove(group);
-  for (const child of group.children) {
-    child.geometry?.dispose();
-    child.material?.dispose();
-  }
-  delete mesh.userData._targetGlowGroup;
+  mesh.userData._glowEnabled = false;
+  restoreTargetEmissive(mesh);
+  if (mesh.material) mesh.material.toneMapped = true;
 }
 
 /**
- * Attach or remove a soft colored halo on a dot target mesh.
+ * Boost emissive on a dot target mesh so the bloom pass picks it up.
  * @param {THREE.Mesh} mesh
  * @param {{ enabled: boolean, color: string | number }} opts
  */
 export function applyTargetGlow(mesh, { enabled, color }) {
-  removeTargetGlow(mesh);
-  if (!enabled || !isDotTargetMesh(mesh, color)) return;
-
-  const radius = mesh.geometry.parameters.radius;
-  const group = new THREE.Group();
-  group.name = 'targetGlow';
-
-  for (const shell of GLOW_SHELLS) {
-    const geo = new THREE.SphereGeometry(radius * shell.scale, 22, 16);
-    const mat = new THREE.MeshBasicMaterial({
-      color,
-      transparent: true,
-      opacity: shell.opacity,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      toneMapped: false
-    });
-    const halo = new THREE.Mesh(geo, mat);
-    halo.renderOrder = (mesh.renderOrder || 0) - 1;
-    group.add(halo);
+  if (!enabled || !isDotTargetMesh(mesh, color)) {
+    removeTargetGlow(mesh);
+    return;
   }
 
-  mesh.add(group);
-  mesh.userData._targetGlowGroup = group;
+  const mat = mesh.material;
+  if (!mat?.emissive) return;
 
-  if (mesh.material?.emissive) {
-    if (mesh.userData._baseEmissiveIntensity == null) {
-      mesh.userData._baseEmissiveIntensity = mesh.material.emissiveIntensity ?? 0.5;
-    }
-    mesh.material.emissive.set(color);
-    mesh.material.emissiveIntensity = Math.max(mesh.userData._baseEmissiveIntensity, 0.85);
+  if (mat.userData._baseEmissiveIntensity == null) {
+    mat.userData._baseEmissiveIntensity = mat.emissiveIntensity ?? 0.5;
   }
+  if (mat.userData._baseEmissiveColor == null) {
+    mat.userData._baseEmissiveColor = mat.emissive.getHex();
+  }
+
+  mesh.userData._glowEnabled = true;
+  mesh.userData._glowEmissiveIntensity = GLOW_EMISSIVE;
+  mat.toneMapped = false;
+  mat.emissive.set(color);
+  mat.emissiveIntensity = GLOW_EMISSIVE;
 }
 
 export function restoreTargetEmissive(mesh) {
-  if (mesh.material && mesh.userData._baseEmissiveIntensity != null) {
-    mesh.material.emissiveIntensity = mesh.userData._baseEmissiveIntensity;
+  const mat = mesh.material;
+  if (!mat) return;
+  if (mat.userData._baseEmissiveIntensity != null) {
+    mat.emissiveIntensity = mat.userData._baseEmissiveIntensity;
+  }
+  if (mat.userData._baseEmissiveColor != null) {
+    mat.emissive.set(mat.userData._baseEmissiveColor);
   }
 }
 
-/** Set halo opacity multiplier (used during target death fade). */
+/** Set glow strength multiplier (used during target death fade). */
 export function setTargetGlowOpacity(mesh, alpha) {
-  const group = mesh.userData._targetGlowGroup;
-  if (!group) return;
+  if (!mesh.userData._glowEnabled || !mesh.material) return;
+  const base = mesh.userData._glowEmissiveIntensity ?? GLOW_EMISSIVE;
   const a = Math.max(0, Math.min(1, alpha));
-  for (const child of group.children) {
-    const base = child.userData._glowBaseOpacity;
-    if (base != null && child.material) child.material.opacity = base * a;
-  }
+  mesh.material.emissiveIntensity = base * a;
 }
 
 export function primeTargetGlowOpacity(mesh) {
-  const group = mesh.userData._targetGlowGroup;
-  if (!group) return;
-  for (const child of group.children) {
-    if (child.material && child.userData._glowBaseOpacity == null) {
-      child.userData._glowBaseOpacity = child.material.opacity;
-    }
+  if (!mesh.userData._glowEnabled || !mesh.material) return;
+  if (mesh.userData._glowEmissiveIntensity == null) {
+    mesh.userData._glowEmissiveIntensity = mesh.material.emissiveIntensity;
   }
 }
 
