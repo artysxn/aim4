@@ -5,6 +5,19 @@
 import * as THREE from 'three';
 import { BLOOM_LAYER } from './bloomLayers.js';
 
+const _tmp = new THREE.Color();
+
+/** Saturated halo color used by the bloom pass. */
+export function glowHaloColor(color) {
+  return _tmp.set(color).getHex();
+}
+
+/** Bright emissive core (lightsaber blade) — mostly white with a hint of the target hue. */
+export function glowCoreColor(color, out = new THREE.Color()) {
+  out.set(color);
+  return out.lerp(new THREE.Color(0xffffff), 0.82);
+}
+
 /** True for gridshot-style dot spheres (not bot bodies / heads). */
 export function isBloomTargetMesh(mesh) {
   if (!mesh?.isMesh) return false;
@@ -25,7 +38,11 @@ export function removeTargetGlow(mesh) {
   mesh.userData._glowStrength = 1;
   mesh.layers.disable(BLOOM_LAYER);
   restoreTargetEmissive(mesh);
-  if (mesh.material) mesh.material.toneMapped = true;
+  const mat = mesh.material;
+  if (mat?.color && mat.userData._baseColor != null) {
+    mat.color.set(mat.userData._baseColor);
+  }
+  if (mat) mat.toneMapped = true;
 }
 
 /**
@@ -42,6 +59,9 @@ export function applyTargetGlow(mesh, { enabled, color }) {
   const mat = mesh.material;
   if (!mat) return;
 
+  if (mat.userData._baseColor == null && mat.color) {
+    mat.userData._baseColor = mat.color.getHex();
+  }
   if (mat.userData._baseEmissiveIntensity == null && mat.emissive) {
     mat.userData._baseEmissiveIntensity = mat.emissiveIntensity ?? 0.5;
   }
@@ -50,13 +70,15 @@ export function applyTargetGlow(mesh, { enabled, color }) {
   }
 
   mesh.userData._glowEnabled = true;
-  mesh.userData._glowColor = new THREE.Color(color).getHex();
+  mesh.userData._glowColor = glowHaloColor(color);
   mesh.userData._glowStrength = mesh.userData._glowStrength ?? 1;
   mesh.layers.enable(BLOOM_LAYER);
 
+  const core = glowCoreColor(color);
+  if (mat.color) mat.color.copy(core);
   if (mat.emissive) {
-    mat.emissive.set(color);
-    mat.emissiveIntensity = mat.userData._baseEmissiveIntensity ?? 0.5;
+    mat.emissive.copy(core);
+    mat.emissiveIntensity = 1.35;
   }
 }
 

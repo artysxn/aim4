@@ -1,21 +1,39 @@
 // ---------------------------------------------------------------------------
 // targetBloomPass.js — UnrealBloom on mesh-masked passes (dot targets only).
-// Base scene renders normally; bloom pass blacks out non-masked meshes, renders
+// Base scene renders normally; bloom pass blacks out non-masked meshes, render
 // masked meshes bright, blooms, then additively composites the bloom halo only.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
-import { UniformsUtils } from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { CopyShader } from 'three/examples/jsm/shaders/CopyShader.js';
 import { BLOOM_LAYER } from './bloomLayers.js';
 
-const TARGET_STRENGTH = 1.15;
-const TARGET_RADIUS = 0.45;
-const BLOOM_LIFT = 4.5;
+const TARGET_STRENGTH = 0.68;
+const TARGET_RADIUS = 0.28;
+const BLOOM_LIFT = 2.1;
+const BLOOM_COMPOSITE_GAIN = 0.82;
 const BLACK_CLEAR = new THREE.Color(0x000000);
+
+const ADDITIVE_VERT = /* glsl */`
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position.xy, 0.0, 1.0);
+}
+`;
+
+// Gamma-compress bloom to soften flat midtones (less color "stagnation").
+const ADDITIVE_FRAG = /* glsl */`
+uniform sampler2D tBloom;
+uniform float uGain;
+void main() {
+  vec3 b = texture2D(tBloom, vUv).rgb;
+  b = pow(max(b, vec3(0.0)), vec3(1.45)) * uGain;
+  gl_FragColor = vec4(b, 1.0);
+}
+`;
 
 export class TargetBloomPass {
   constructor(renderer, scene, camera) {
@@ -40,9 +58,12 @@ export class TargetBloomPass {
     if (this._blendScene) return;
     const geo = new THREE.PlaneGeometry(2, 2);
     this._blendMat = new THREE.ShaderMaterial({
-      uniforms: UniformsUtils.clone(CopyShader.uniforms),
-      vertexShader: CopyShader.vertexShader,
-      fragmentShader: CopyShader.fragmentShader,
+      uniforms: {
+        tBloom: { value: null },
+        uGain: { value: BLOOM_COMPOSITE_GAIN }
+      },
+      vertexShader: ADDITIVE_VERT,
+      fragmentShader: ADDITIVE_FRAG,
       depthTest: false,
       depthWrite: false,
       transparent: true,
@@ -128,14 +149,15 @@ export class TargetBloomPass {
     this._swapped.length = 0;
   }
 
+  /** Bloom-only mip composite (halo without re-adding the bright core disk). */
   _bloomTexture() {
-    // readBuffer holds the masked bloom image after UnrealBloomPass (full resolution).
-    return this._targetComposer.readBuffer.texture;
+    return this._targetComposer.bloomPass.renderTargetsHorizontal[0].texture;
   }
 
   _compositeBloom() {
     this._ensureBlendPass();
-    this._blendMat.uniforms.tDiffuse.value = this._bloomTexture();
+    this._blendMat.uniforms.tBloom.value = this._bloomTexture();
+    this._blendMat.uniforms.uGain.value = BLOOM_COMPOSITE_GAIN;
     const prevRT = this._renderer.getRenderTarget();
     const prevAutoClear = this._renderer.autoClear;
     this._renderer.setRenderTarget(null);

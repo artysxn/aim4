@@ -169,10 +169,12 @@ export class BaseScenario {
     if (col) {
       for (const t of this.targets) {
         for (const mesh of t.colliders || []) {
-          if (mesh.material?.color) mesh.material.color.set(col);
-          if (mesh.material?.emissive) mesh.material.emissive.set(col);
           applyTargetGlow(mesh, { enabled: glow, color: col });
-          if (!glow) restoreTargetEmissive(mesh);
+          if (!glow) {
+            if (mesh.material?.color) mesh.material.color.set(col);
+            if (mesh.material?.emissive) mesh.material.emissive.set(col);
+            restoreTargetEmissive(mesh);
+          }
         }
       }
     }
