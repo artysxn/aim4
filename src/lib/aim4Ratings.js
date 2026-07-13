@@ -40,8 +40,8 @@ export const RATING_LABELS = {
 // Duels, Range, and Deathmatch are excluded — no radar or overall rating.
 export const RATED_GAMEMODES = [
   'gridshot', 'stars', 'threeshot', 'bounce', 'microflicks', 'pasu', 'spidershot',
-  'survival', 'arena', 'snipercrossfire', 'cover', 'coverawp', 'tracking',
-  'sequence', 'sequencespeed', 'sequencetracking', 'double', 'doubletracking', 'ball', 'drone', 'line', 'bouncetracking', 'pasutracking', 'turn',
+  'survival', 'arena', 'snipercrossfire', 'cover', 'coverawp', 'tracking', 'rapidtrack',
+  'sequence', 'sequencespeed', 'sequencetracking', 'double', 'doubletracking', 'ball', 'drone', 'line', 'loops', 'loopstracking', 'expand', 'peekswitch', 'bouncetracking', 'pasutracking', 'turn',
   'box', 'circle'
 ];
 
@@ -54,7 +54,7 @@ export function qualifiesForOverallAimRating(perModeList) {
 }
 
 /** Hold-fire modes use a 6-axis radar (no Flicks category). */
-export const FLICKLESS_RATED_MODES = new Set(['ball', 'drone', 'tracking', 'line']);
+export const FLICKLESS_RATED_MODES = new Set(['ball', 'drone', 'tracking', 'rapidtrack', 'line', 'loopstracking']);
 
 /** Rating axes shown for a gamemode (6 for Ball / Strafes, 7 otherwise). */
 export function ratingCategoriesForMode(mode) {

@@ -55,6 +55,7 @@ export function buildMapMeshes(map, { coverColor, floorColor, root, onMesh }) {
   const boxMat = createCoverGridMaterial(coverColor, floorColor);
 
   for (const b of map.boxes || []) {
+    if (b.role === 'clip' || b.role === 'spawn') continue;
     const mat = boxMat.clone();
     mat.map = mat.map.clone();
     applyCoverGridRepeat(mat, b.size[0], b.size[1]);
@@ -65,6 +66,11 @@ export function buildMapMeshes(map, { coverColor, floorColor, root, onMesh }) {
     root.add(mesh);
     onMesh?.(mesh);
     coverMeshes.push(mesh);
+    colliderBoxes.push({ pos: b.pos, size: b.size, rotationY: b.rotationY || 0 });
+  }
+
+  // Invisible movement blockers — bullets and line-of-sight pass through.
+  for (const b of map.clipBarriers || []) {
     colliderBoxes.push({ pos: b.pos, size: b.size, rotationY: b.rotationY || 0 });
   }
 

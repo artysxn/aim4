@@ -1869,6 +1869,36 @@ input[type='checkbox'] {
   color: var(--accent);
 }
 
+.pace-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: rgba(8, 8, 10, 0.45);
+  pointer-events: none;
+  z-index: 24;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.pace-bar.active {
+  opacity: 1;
+}
+.pace-bar-fill {
+  height: 100%;
+  width: 0;
+  transition: width 0.05s linear, background-color 0.08s linear;
+}
+.pace-bar-fill.neutral {
+  background: #6a6a6a;
+}
+.pace-bar-fill.ahead {
+  background: #35e06a;
+}
+.pace-bar-fill.behind {
+  background: #f52525;
+}
+
 /* ---- HUD ---------------------------------------------------------------- */
 .hud {
   position: absolute;

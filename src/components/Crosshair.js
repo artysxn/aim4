@@ -54,7 +54,20 @@ export class Crosshair {
   setVisible(v) {
     this.visible = v;
     this.canvas.style.display = v ? 'block' : 'none';
-    if (v) this.draw();
+    if (!v) this.resetRunState();
+    else this.draw();
+  }
+
+  /** Clear tracking hold progress and wipe the overlay canvas. */
+  resetRunState() {
+    this._trackProgress = 0;
+    const dpr = window.devicePixelRatio || 1;
+    const w = this.canvas.width / dpr;
+    const h = this.canvas.height / dpr;
+    if (w > 0 && h > 0) {
+      this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.ctx.clearRect(0, 0, w, h);
+    }
   }
 
   setTrackProgress(p) {

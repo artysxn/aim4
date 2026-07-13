@@ -25,6 +25,9 @@ import { SequenceTrackingScenario } from '../scenarios/SequenceTrackingScenario.
 import { DoubleTrackingScenario } from '../scenarios/DoubleTrackingScenario.js';
 import { SequenceUltraScenario } from '../scenarios/SequenceUltraScenario.js';
 import { LineScenario } from '../scenarios/LineScenario.js';
+import { LoopsScenario } from '../scenarios/LoopsScenario.js';
+import { LoopsTrackingScenario } from '../scenarios/LoopsTrackingScenario.js';
+import { ExpandScenario } from '../scenarios/ExpandScenario.js';
 import { BallScenario } from '../scenarios/BallScenario.js';
 import { BounceTrackingScenario } from '../scenarios/BounceTrackingScenario.js';
 import { PasuTrackingScenario } from '../scenarios/PasuTrackingScenario.js';
@@ -44,7 +47,10 @@ import { PitRifleScenario } from '../scenarios/PitRifleScenario.js';
 import { SniperCoverScenario } from '../scenarios/SniperCoverScenario.js';
 import { SniperFlicksScenario } from '../scenarios/SniperFlicksScenario.js';
 import { SniperTrackingScenario } from '../scenarios/SniperTrackingScenario.js';
+import { RapidtrackScenario } from '../scenarios/RapidtrackScenario.js';
 import { DoorsAwpScenario } from '../scenarios/DoorsAwpScenario.js';
+import { PeekswitchScenario } from '../scenarios/PeekswitchScenario.js';
+import { PeekswitchBotsScenario } from '../scenarios/PeekswitchBotsScenario.js';
 import { DURATION_MODES, resolveModeDuration } from './SettingsManager.js';
 import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 
@@ -78,6 +84,9 @@ export const SCENARIOS = {
   cover: CoverScenario,
   drone: DroneScenario,
   line: LineScenario,
+  loops: LoopsScenario,
+  loopstracking: LoopsTrackingScenario,
+  expand: ExpandScenario,
   galaxy: GalaxyScenario,
   waves: WavesScenario,
   sequenceultra: SequenceUltraScenario,
@@ -88,7 +97,10 @@ export const SCENARIOS = {
   coverawp: SniperCoverScenario,
   sniperflicks: SniperFlicksScenario,
   snipertracking: SniperTrackingScenario,
-  doorsawp: DoorsAwpScenario
+  rapidtrack: RapidtrackScenario,
+  doorsawp: DoorsAwpScenario,
+  peekswitch: PeekswitchScenario,
+  peekswitchbots: PeekswitchBotsScenario
 };
 
 // Scenarios launched outside the card grid (e.g. multiplayer).
@@ -192,6 +204,8 @@ export class SceneManager {
       this.current.dispose();
       this.current = null;
     }
+    this.engine.clearRunEffects();
+    this.crosshair.resetRunState();
   }
 
   /** End the active run early (e.g. Survival game-over). */
@@ -199,6 +213,8 @@ export class SceneManager {
     if (!this.current?.running || this.finished) return;
     this.finished = true;
     this.current.pause();
+    this.engine.clearRunEffects();
+    this.crosshair.resetRunState();
     if (this.onFinish) this.onFinish(this.current.results());
   }
 
@@ -211,6 +227,8 @@ export class SceneManager {
       if (timeUp || killsUp) {
         this.finished = true;
         this.current.pause();
+        this.engine.clearRunEffects();
+        this.crosshair.resetRunState();
         if (this.onFinish) this.onFinish(this.current.results());
       }
     }

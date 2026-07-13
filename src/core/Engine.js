@@ -127,6 +127,11 @@ _setupLights() {
     this.deathFxEl.style.opacity = String(a);
   }
 
+  /** Reset transient in-run visuals (death tint). */
+  clearRunEffects() {
+    this.setDeathOverlay(0);
+  }
+
   start() {
     if (this._running) return;
     this._running = true;

@@ -33,6 +33,8 @@ import {
   replaceGamemodePath,
   clearGamemodePath
 } from '../lib/gamemodeRoutes.js';
+import { updatePracticeBest, paceMetric } from '../lib/practiceBest.js';
+import { PaceBar } from './PaceBar.js';
 import { incrementPlayTime, formatPlayTime } from '../lib/playTime.js';
 import {
   fetchAimRatingLeaderboard,
@@ -98,11 +100,13 @@ const SCENARIO_META = {
   pasu: { title: 'Pasu (Clicks)', dualPlay: true, tags: ['Accuracy', 'Reactions', 'Control'] },
   spidershot: { title: 'Spidershot', dualPlay: true, tags: ['Speed', 'Reactions'] },
   survival: { title: 'Survival', dualPlay: true, tags: ['Speed', 'Control'] },
+  expand: { title: 'Expand', dualPlay: true, tags: ['Reactions', 'Accuracy'] },
   arena: { title: 'Crossfire (Clicks)', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
   snipercrossfire: { title: 'Crossfire (AWP)', dualPlay: true, tags: ['Accuracy', 'Reactions'] },
   duels: { title: 'Duels', dualPlay: true, tags: ['Movement', 'Reactions'] },
   range: { title: 'Range', dualPlay: true, tags: ['Movement'] },
   tracking: { title: 'Strafes', dualPlay: true, tags: ['Accuracy'] },
+  rapidtrack: { title: 'Rapidtrack', dualPlay: true, tags: ['Movement', 'Control', 'Reactions'] },
   deathmatch: { title: 'Deathmatch', dualPlay: true, tags: ['Movement', 'Speed', 'Control'] },
   sequence: { title: 'Sequence (Clicks)', dualPlay: true, tags: ['Speed', 'Accuracy', 'Reactions'] },
   sequencespeed: { title: 'Sequence (Speed)', dualPlay: true, tags: ['Accuracy', 'Speed'] },
@@ -120,6 +124,8 @@ const SCENARIO_META = {
   coverawp: { title: 'Cover (AWP)', dualPlay: true, tags: ['Reactions', 'Accuracy'] },
   drone: { title: 'Drone', dualPlay: true, tags: ['Accuracy', 'Control'] },
   line: { title: 'Line', dualPlay: true, tags: ['Control', 'Speed'] },
+  loops: { title: 'Loops (Static)', dualPlay: true, tags: ['Speed', 'Control'] },
+  loopstracking: { title: 'Loops (Tracking)', dualPlay: true, tags: ['Control', 'Accuracy'] },
   galaxy: { title: 'Galaxy', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] },
   waves: { title: 'Waves', dualPlay: false, challenge: true, tags: ['Control', 'Speed', 'Accuracy'] },
   sequenceultra: { title: 'Sequence (Ultra)', dualPlay: false, challenge: true, tags: ['Control', 'Reactions', 'Accuracy'] },
@@ -129,7 +135,9 @@ const SCENARIO_META = {
   pitrifle: { title: 'Pit (Rifle)', dualPlay: true, tags: ['Reactions', 'Control'] },
   sniperflicks: { title: 'Flicks (AWP)', dualPlay: true, tags: ['Reactions', 'Accuracy'] },
   snipertracking: { title: 'Tracking (AWP)', dualPlay: true, tags: ['Control'] },
-  doorsawp: { title: 'Doors (AWP)', dualPlay: true, tags: ['Speed', 'Reactions'] }
+  doorsawp: { title: 'Doors (AWP)', dualPlay: true, tags: ['Speed', 'Reactions'] },
+  peekswitch: { title: 'Peekswitch (Static)', dualPlay: true, tags: ['Movement', 'Speed', 'Reactions'] },
+  peekswitchbots: { title: 'Peekswitch (Bots)', dualPlay: true, tags: ['Movement', 'Speed', 'Reactions'] }
 };
 
 /** Scenarios with practice-only tuning (gear on training card). */
@@ -141,12 +149,14 @@ const SCENARIO_SETTING_IDS = new Set([
   'pasu',
   'spidershot',
   'survival',
+  'expand',
   'arena',
   'snipercrossfire',
   'duels',
   'deathmatch',
   'range',
   'tracking',
+  'rapidtrack',
   'sequence',
   'sequencespeed',
   'sequencetracking',
@@ -163,12 +173,16 @@ const SCENARIO_SETTING_IDS = new Set([
   'coverawp',
   'drone',
   'line',
+  'loops',
+  'loopstracking',
   'sniperholds',
   'sniperquickscopes',
   'pitrifle',
   'sniperflicks',
   'snipertracking',
-  'doorsawp'
+  'doorsawp',
+  'peekswitch',
+  'peekswitchbots'
 ]);
 
 // Training sub-menus. A mode may appear in several categories; any registered
@@ -176,12 +190,12 @@ const SCENARIO_SETTING_IDS = new Set([
 // goes missing. "all" browses every non-challenge mode; "challenges" houses
 // the hard fixed-rule variants and only ever shows those.
 const TRAINING_CATEGORIES = [
-  { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'threeshot', 'survival', 'pasu', 'arena', 'snipercrossfire', 'turn', 'sequencespeed', 'sequencetracking', 'sniperholds'] },
-  { id: 'tracking', title: 'Tracking', modes: ['tracking', 'ball', 'drone', 'line', 'box', 'circle', 'bouncetracking', 'pasutracking', 'doubletracking', 'sequencetracking', 'snipertracking'] },
-  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'threeshot', 'bounce', 'spidershot', 'sequence', 'sequencespeed', 'line', 'sniperquickscopes', 'pitrifle', 'doorsawp'] },
-  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'sequencespeed', 'double', 'doubletracking', 'cover', 'coverawp', 'sniperflicks', 'snipercrossfire'] },
+  { id: 'precision', title: 'Precision', modes: ['microflicks', 'stars', 'threeshot', 'survival', 'expand', 'pasu', 'arena', 'snipercrossfire', 'turn', 'sequencespeed', 'sequencetracking', 'sniperholds', 'peekswitch', 'peekswitchbots'] },
+  { id: 'tracking', title: 'Tracking', modes: ['tracking', 'rapidtrack', 'ball', 'drone', 'line', 'loops', 'loopstracking', 'box', 'circle', 'bouncetracking', 'pasutracking', 'doubletracking', 'sequencetracking', 'snipertracking'] },
+  { id: 'speed', title: 'Speed', modes: ['gridshot', 'stars', 'threeshot', 'bounce', 'spidershot', 'sequence', 'sequencespeed', 'line', 'loops', 'sniperquickscopes', 'pitrifle', 'doorsawp'] },
+  { id: 'flicking', title: 'Flicking', modes: ['spidershot', 'microflicks', 'sequence', 'sequencespeed', 'double', 'doubletracking', 'cover', 'coverawp', 'sniperflicks', 'snipercrossfire', 'expand'] },
   { id: 'sniping', title: 'Sniping', modes: ['sniperquickscopes', 'coverawp', 'sniperholds', 'sniperflicks', 'snipertracking', 'snipercrossfire', 'doorsawp'] },
-  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels', 'cover', 'coverawp', 'sniperholds', 'sniperquickscopes', 'pitrifle', 'sniperflicks', 'snipertracking', 'snipercrossfire', 'doorsawp'] },
+  { id: 'general', title: 'General', modes: ['deathmatch', 'range', 'duels', 'cover', 'coverawp', 'sniperholds', 'sniperquickscopes', 'pitrifle', 'sniperflicks', 'snipertracking', 'snipercrossfire', 'doorsawp', 'peekswitch', 'peekswitchbots', 'rapidtrack'] },
   { id: 'challenges', title: 'Challenges', modes: ['galaxy', 'sequenceultra', 'waves', 'reactiontime'] },
   { id: 'all', title: 'All', modes: [] }
 ];
@@ -481,6 +495,7 @@ export class UIOverlay {
           </div>
           ${numField('set-dur', 'Run duration (s)', '1')}
           <label class="field-check"><input type="checkbox" id="set-raw" /> Raw input (no OS acceleration)</label>
+          <label class="field-check"><input type="checkbox" id="set-pace-bar" /> High score pace bar</label>
           <label class="field-check"><input type="checkbox" id="set-copy-replay-config" /> Copy config when watching replays</label>
           ${colorRow('set-col-bg', 'Background')}
           ${colorRow('set-col-floor', 'Floor')}
@@ -488,6 +503,7 @@ export class UIOverlay {
           ${colorRow('set-col-ehead', 'Enemy head')}
           ${colorRow('set-col-cover', 'Cover / columns')}
           ${colorRow('set-col-target', 'Gridshot target')}
+          <label class="field-check"><input type="checkbox" id="set-target-glow" /> Target glow</label>
           <button type="button" class="btn btn-block" data-reset-colors>Reset colors</button>`
       },
       {
@@ -689,6 +705,15 @@ ${rf('set-surv-spawn', 'Spawn interval (ms)', 300, 3000, 50)}
           ${rf('set-surv-strikes', 'Misses allowed (Practice)', 0, 10, 1)}`
       },
       {
+        id: 'expand',
+        label: 'Expand',
+        body: `
+${rf('set-expand-spawn', 'Spawn interval (ms)', 200, 2000, 50)}
+          ${rf('set-expand-size', 'Start size', 0.04, 0.2, 0.01)}
+          ${rf('set-expand-speed', 'Travel speed (m/s)', 4, 16, 0.5)}
+          <label class="field-check"><input type="checkbox" id="set-expand-nomiss" checked /> No-miss (one miss or pass ends run)</label>`
+      },
+      {
         id: 'arena',
         label: 'Crossfire (Clicks)',
         body: `
@@ -795,6 +820,17 @@ ${rf('set-tracking-width', 'Bot width', 0.5, 2.0, 0.05)}
           <label class="field-check"><input type="checkbox" id="set-tracking-crouch" /> Tap crouch</label>
           ${rf('set-tracking-strafe', 'Strafe rate', 0.25, 3.0, 0.05)}
           ${rf('set-tracking-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'rapidtrack',
+        label: 'Rapidtrack',
+        body: `
+${rf('set-rapidtrack-width', 'Bot width', 0.5, 2.0, 0.05)}
+          ${rf('set-rapidtrack-speed', 'Bot speed', 0.25, 2.0, 0.05)}
+          ${rf('set-rapidtrack-dist', 'Bot distance (m)', 3.5, 10, 0.5)}
+          <label class="field-check"><input type="checkbox" id="set-rapidtrack-crouch" /> Tap crouch</label>
+          ${rf('set-rapidtrack-strafe', 'Strafe rate', 0.25, 3.0, 0.05)}
+          ${rf('set-rapidtrack-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
         id: 'sequence',
@@ -992,6 +1028,27 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
           ${rf('set-line-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
+        id: 'loops',
+        label: 'Loops (Static)',
+        body: `
+${rf('set-loops-size', 'Dot size', 0.15, 0.6, 0.05)}
+          ${rf('set-loops-speed', 'Orbit speed (°/s)', 20, 120, 5)}
+          ${rf('set-loops-min-dist', 'Min distance (m)', 5, 14, 0.5)}
+          ${rf('set-loops-max-dist', 'Max distance (m)', 8, 22, 0.5)}
+          ${rf('set-loops-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'loopstracking',
+        label: 'Loops (Tracking)',
+        body: `
+${rf('set-looptr-size', 'Dot size', 0.15, 0.6, 0.05)}
+          ${rf('set-looptr-speed', 'Orbit speed (°/s)', 20, 120, 5)}
+          ${rf('set-looptr-min-dist', 'Min distance (m)', 5, 14, 0.5)}
+          ${rf('set-looptr-max-dist', 'Max distance (m)', 8, 22, 0.5)}
+          ${rf('set-looptr-hold', 'Hold time (s)', 0.25, 2.5, 0.05)}
+          ${rf('set-looptr-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
         id: 'sniperholds',
         label: 'Duels (AWP)',
         body: `
@@ -1084,6 +1141,33 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
           <label class="field-check"><input type="checkbox" id="set-doors-feedback" /> Shot feedback (practice)</label>
           ${rf('set-doors-feedback-dur', 'Feedback duration (s)', 0.2, 2.0, 0.1)}
           ${rf('set-doors-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'peekswitch',
+        label: 'Peekswitch (Static)',
+        body: `
+${rf('set-peekswitch-size', 'Dot size', 0.08, 0.45, 0.02)}
+          ${rf('set-peekswitch-variance', 'Size variance', 0, 0.75, 0.05)}
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Movement</span></div>
+            <select id="set-peekswitch-movement">
+              <option value="none">Static</option>
+              <option value="pasu">Pasu drift</option>
+              <option value="bounce">Bounce</option>
+            </select>
+          </div>
+          ${rf('set-peekswitch-speed', 'Travel speed', 0.5, 6, 0.25)}
+          ${rf('set-peekswitch-bounce', 'Bounce strength', 2, 12, 0.5)}
+          <label class="field-check"><input type="checkbox" id="set-peekswitch-infinite-ammo" /> Infinite ammo</label>
+          ${rf('set-peekswitch-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
+      },
+      {
+        id: 'peekswitchbots',
+        label: 'Peekswitch (Bots)',
+        body: `
+${botDifficultyField('set-peekswitchbots-bot-difficulty')}
+          ${rf('set-peekswitchbots-hp', 'Bot body HP', 1, 4, 1)}
+          ${rf('set-peekswitchbots-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       }
     ];
   }
@@ -1103,6 +1187,11 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     <div id="mm-queue-chip" class="mm-queue-chip" hidden>
       <span id="mm-queue-text">Finding ranked match…</span>
       <button type="button" class="btn btn-sm" id="mm-queue-cancel">Leave queue</button>
+    </div>
+
+    <!-- HIGH SCORE PACE BAR -->
+    <div id="pace-bar" class="pace-bar" aria-hidden="true">
+      <div id="pace-bar-fill" class="pace-bar-fill neutral"></div>
     </div>
 
     <!-- HUD -->
@@ -1787,6 +1876,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this.hudAmmo = this.root.querySelector('#hud-ammo');
     this.hudAmmoMag = this.root.querySelector('#hud-ammo-mag');
     this.hudAmmoSize = this.root.querySelector('#hud-ammo-size');
+    this.paceBar = new PaceBar(this.root);
   }
 
   // -------------------------------------------------------------------------
@@ -2457,6 +2547,9 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     $('#set-raw').addEventListener('change', (e) => {
       draft((d) => { d.rawInput = e.target.checked; });
     });
+    $('#set-pace-bar')?.addEventListener('change', (e) => {
+      draft((d) => { d.paceBar = e.target.checked; });
+    });
     $('#set-copy-replay-config').addEventListener('change', (e) => {
       draft((d) => { d.copyConfigOnReplay = e.target.checked; });
     });
@@ -2614,6 +2707,13 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._bindRange('set-surv-max-size', (v, d) => { d.survival.maxSize = v; });
     this._bindRange('set-surv-strikes', (v, d) => { d.survival.missesAllowed = v; }, { parse: (v) => parseInt(v, 10) });
 
+    this._bindRange('set-expand-spawn', (v, d) => { d.expand.spawnInterval = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-expand-size', (v, d) => { d.expand.startSize = v; });
+    this._bindRange('set-expand-speed', (v, d) => { d.expand.moveSpeed = v; });
+    $('#set-expand-nomiss')?.addEventListener('change', (e) => {
+      draft((d) => { d.expand.noMiss = e.target.checked; });
+    });
+
     this._bindRange('set-arena-botdist-min', (v, d) => { d.arena.botDistMin = v; });
     this._bindRange('set-arena-botdist-max', (v, d) => { d.arena.botDistMax = v; });
     this._bindRange('set-arena-col', (v, d) => { d.arena.columns = v; }, { parse: (v) => parseInt(v, 10) });
@@ -2658,6 +2758,9 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     col('#set-col-ehead', 'enemyHead');
     col('#set-col-cover', 'cover');
     col('#set-col-target', 'target');
+    $('#set-target-glow')?.addEventListener('change', (e) => {
+      draft((d) => { d.targetGlow = e.target.checked; });
+    });
 
     $('#set-range-arc').addEventListener('change', (e) => {
       draft((d) => { d.range.arc = parseInt(e.target.value, 10); });
@@ -2691,6 +2794,15 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     });
     this._bindRange('set-tracking-strafe', (v, d) => { d.tracking.strafeRate = v; });
     this._bindRange('set-tracking-misslimit', (v, d) => { d.tracking.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    this._bindRange('set-rapidtrack-width', (v, d) => { d.rapidtrack.botWidth = v; });
+    this._bindRange('set-rapidtrack-speed', (v, d) => { d.rapidtrack.botSpeed = v; });
+    this._bindRange('set-rapidtrack-dist', (v, d) => { d.rapidtrack.botDistance = v; });
+    $('#set-rapidtrack-crouch')?.addEventListener('change', (e) => {
+      draft((d) => { d.rapidtrack.botCrouchTap = e.target.checked; });
+    });
+    this._bindRange('set-rapidtrack-strafe', (v, d) => { d.rapidtrack.strafeRate = v; });
+    this._bindRange('set-rapidtrack-misslimit', (v, d) => { d.rapidtrack.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     // Duels (AWP)
     $('#set-snholds-bot-difficulty')?.addEventListener('change', (e) => {
@@ -2766,6 +2878,26 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     });
     this._bindRange('set-doors-feedback-dur', (v, d) => { d.doorsawp.shotFeedbackDur = v; });
     this._bindRange('set-doors-misslimit', (v, d) => { d.doorsawp.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    // Peekswitch (Static)
+    this._bindRange('set-peekswitch-size', (v, d) => { d.peekswitch.targetSize = v; });
+    this._bindRange('set-peekswitch-variance', (v, d) => { d.peekswitch.sizeVariance = v; });
+    $('#set-peekswitch-movement')?.addEventListener('change', (e) => {
+      draft((d) => { d.peekswitch.movement = e.target.value; });
+    });
+    this._bindRange('set-peekswitch-speed', (v, d) => { d.peekswitch.travelSpeed = v; });
+    this._bindRange('set-peekswitch-bounce', (v, d) => { d.peekswitch.bounceStrength = v; });
+    $('#set-peekswitch-infinite-ammo')?.addEventListener('change', (e) => {
+      draft((d) => { d.peekswitch.infiniteAmmo = e.target.checked; });
+    });
+    this._bindRange('set-peekswitch-misslimit', (v, d) => { d.peekswitch.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    // Peekswitch (Bots)
+    $('#set-peekswitchbots-bot-difficulty')?.addEventListener('change', (e) => {
+      draft((d) => { d.peekswitchbots.botDifficulty = e.target.value; });
+    });
+    this._bindRange('set-peekswitchbots-hp', (v, d) => { d.peekswitchbots.botHp = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-peekswitchbots-misslimit', (v, d) => { d.peekswitchbots.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     this._bindRange('set-seq-size', (v, d) => { d.sequence.targetSize = v; });
     this._bindRange('set-seq-time', (v, d) => { d.sequence.dotTime = v; }, { parse: (v) => parseInt(v, 10) });
@@ -2911,6 +3043,19 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._bindRange('set-line-size', (v, d) => { d.line.targetSize = v; });
     this._bindRange('set-line-speed', (v, d) => { d.line.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
     this._bindRange('set-line-misslimit', (v, d) => { d.line.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    this._bindRange('set-loops-size', (v, d) => { d.loops.targetSize = v; });
+    this._bindRange('set-loops-speed', (v, d) => { d.loops.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-loops-min-dist', (v, d) => { d.loops.minDistance = v; });
+    this._bindRange('set-loops-max-dist', (v, d) => { d.loops.maxDistance = v; });
+    this._bindRange('set-loops-misslimit', (v, d) => { d.loops.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    this._bindRange('set-looptr-size', (v, d) => { d.loopstracking.targetSize = v; });
+    this._bindRange('set-looptr-speed', (v, d) => { d.loopstracking.travelSpeed = v; }, { parse: (v) => parseInt(v, 10) });
+    this._bindRange('set-looptr-min-dist', (v, d) => { d.loopstracking.minDistance = v; });
+    this._bindRange('set-looptr-max-dist', (v, d) => { d.loopstracking.maxDistance = v; });
+    this._bindRange('set-looptr-hold', (v, d) => { d.loopstracking.holdTime = v; });
+    this._bindRange('set-looptr-misslimit', (v, d) => { d.loopstracking.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
 
     $('#settings-undo-btn')?.addEventListener('click', () => {
       if (this._settingsExploreMode || this.settings.isExploreMode) return;
@@ -5594,6 +5739,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._syncResolutionCustomUi();
     $('#set-dur').value = s.runDuration;
     $('#set-raw').checked = s.rawInput;
+    $('#set-pace-bar').checked = s.paceBar !== false;
     $('#set-copy-replay-config').checked = !!s.copyConfigOnReplay;
 
     $('#set-xh-color').value = s.crosshair.color;
@@ -5702,6 +5848,13 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._setRange('set-surv-max-size', s.survival?.maxSize ?? 0.55);
     this._setRange('set-surv-strikes', s.survival?.missesAllowed ?? 3);
 
+    const ex = s.expand ?? {};
+    this._setRange('set-expand-spawn', ex.spawnInterval ?? 400);
+    this._setRange('set-expand-size', ex.startSize ?? 0.08);
+    this._setRange('set-expand-speed', ex.moveSpeed ?? 8.5);
+    const exnm = this.root.querySelector('#set-expand-nomiss');
+    if (exnm) exnm.checked = ex.noMiss !== false;
+
     this._setRange('set-arena-botdist-min', s.arena.botDistMin ?? 0.5);
     this._setRange('set-arena-botdist-max', s.arena.botDistMax ?? 1.5);
     this._setRange('set-arena-col', s.arena.columns);
@@ -5737,6 +5890,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     $('#set-col-ehead').value = s.colors.enemyHead;
     $('#set-col-cover').value = s.colors.cover;
     $('#set-col-target').value = s.colors.target;
+    $('#set-target-glow').checked = !!s.targetGlow;
 
     $('#set-range-arc').value = String(s.range.arc);
     const rangeWeapon = this.root.querySelector('#set-range-weapon');
@@ -5757,6 +5911,14 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     $('#set-tracking-crouch').checked = s.tracking?.botCrouchTap !== false;
     this._setRange('set-tracking-strafe', s.tracking?.strafeRate ?? 1);
     this._setRange('set-tracking-misslimit', s.tracking?.missLimit ?? 0);
+
+    const rt = s.rapidtrack ?? {};
+    this._setRange('set-rapidtrack-width', rt.botWidth ?? 1);
+    this._setRange('set-rapidtrack-speed', rt.botSpeed ?? 1);
+    this._setRange('set-rapidtrack-dist', rt.botDistance ?? 6);
+    $('#set-rapidtrack-crouch').checked = rt.botCrouchTap !== false;
+    this._setRange('set-rapidtrack-strafe', rt.strafeRate ?? 1);
+    this._setRange('set-rapidtrack-misslimit', rt.missLimit ?? 0);
 
     const snh = s.sniperholds ?? {};
     const snhd = this.root.querySelector('#set-snholds-bot-difficulty');
@@ -5823,6 +5985,23 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._setRange('set-doors-speed', doors.botSpeed ?? 1);
     this._setRange('set-doors-feedback-dur', doors.shotFeedbackDur ?? 0.5);
     this._setRange('set-doors-misslimit', doors.missLimit ?? 0);
+
+    const pk = s.peekswitch ?? {};
+    this._setRange('set-peekswitch-size', pk.targetSize ?? 0.22);
+    this._setRange('set-peekswitch-variance', pk.sizeVariance ?? 0.35);
+    const pkMove = this.root.querySelector('#set-peekswitch-movement');
+    if (pkMove) pkMove.value = pk.movement ?? 'none';
+    this._setRange('set-peekswitch-speed', pk.travelSpeed ?? 2.5);
+    this._setRange('set-peekswitch-bounce', pk.bounceStrength ?? 6);
+    const pkAmmo = this.root.querySelector('#set-peekswitch-infinite-ammo');
+    if (pkAmmo) pkAmmo.checked = pk.infiniteAmmo !== false;
+    this._setRange('set-peekswitch-misslimit', pk.missLimit ?? 0);
+
+    const pkb = s.peekswitchbots ?? {};
+    const pkbDiff = this.root.querySelector('#set-peekswitchbots-bot-difficulty');
+    if (pkbDiff) pkbDiff.value = pkb.botDifficulty ?? 'hard';
+    this._setRange('set-peekswitchbots-hp', pkb.botHp ?? 2);
+    this._setRange('set-peekswitchbots-misslimit', pkb.missLimit ?? 0);
 
     const sq = s.sequence ?? {};
     this._setRange('set-seq-size', sq.targetSize ?? 0.25);
@@ -5960,6 +6139,21 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this._setRange('set-line-size', ln.targetSize ?? 0.35);
     this._setRange('set-line-speed', ln.travelSpeed ?? 180);
     this._setRange('set-line-misslimit', ln.missLimit ?? 0);
+
+    const lp = s.loops ?? {};
+    this._setRange('set-loops-size', lp.targetSize ?? 0.3);
+    this._setRange('set-loops-speed', lp.travelSpeed ?? 50);
+    this._setRange('set-loops-min-dist', lp.minDistance ?? 8);
+    this._setRange('set-loops-max-dist', lp.maxDistance ?? 16);
+    this._setRange('set-loops-misslimit', lp.missLimit ?? 0);
+
+    const lpt = s.loopstracking ?? {};
+    this._setRange('set-looptr-size', lpt.targetSize ?? 0.3);
+    this._setRange('set-looptr-speed', lpt.travelSpeed ?? 50);
+    this._setRange('set-looptr-min-dist', lpt.minDistance ?? 8);
+    this._setRange('set-looptr-max-dist', lpt.maxDistance ?? 16);
+    this._setRange('set-looptr-hold', lpt.holdTime ?? 1);
+    this._setRange('set-looptr-misslimit', lpt.missLimit ?? 0);
   }
 
   // -------------------------------------------------------------------------
@@ -5989,6 +6183,11 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
       if (!isMp) this._closeMpChatTyping(false);
     }
     this.crosshair.setVisible(inRun);
+    if (!inRun) {
+      this.engine.clearRunEffects();
+      this.crosshair.resetRunState();
+      this.paceBar?.reset();
+    }
     if (name === 'settings' && !skipSettingsOpen && !this._settingsExploreMode) this._openSettings();
     // Hide the system cursor only while actively playing — when paused (Esc),
     // the cursor must reappear so the menu is clickable.
@@ -6049,9 +6248,22 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
   _beginRun() {
     this._countdownRemaining = 0;
     this._hideCountdownOverlay();
+    const sc = this.sceneManager.current;
+    this.paceBar?.begin(sc?.name, sc?.configKey(), this._paceTotalTime());
     this.sceneManager.begin();
     this._startRecording();
     this.state = 'playing';
+  }
+
+  _paceTotalTime() {
+    const sm = this.sceneManager;
+    const sc = sm.current;
+    if (!sc || sc.isMultiplayer) return null;
+    if (sc.killTarget > 0) {
+      return Number(this.settings.data.runDuration) || 60;
+    }
+    const d = sm.duration;
+    return Number.isFinite(d) && d > 0 ? d : null;
   }
 
   /** Begin telemetry capture for a singleplayer run (skips multiplayer + playlists). */
@@ -6098,7 +6310,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this.currentScenario = name;
     this.scenarioConfig = config;
     this.sceneManager.load(name, config);
-    const noCrit = ['spidershot', 'survival', 'sequence', 'sequencespeed', 'sequencetracking', 'sequenceultra', 'double', 'doubletracking', 'ball', 'line', 'turn', 'box', 'circle', 'threeshot', 'drone', 'galaxy', 'waves', 'reactiontime'].includes(name);
+    const noCrit = ['spidershot', 'survival', 'expand', 'sequence', 'sequencespeed', 'sequencetracking', 'sequenceultra', 'double', 'doubletracking', 'peekswitch', 'ball', 'line', 'loops', 'loopstracking', 'turn', 'box', 'circle', 'threeshot', 'drone', 'galaxy', 'waves', 'reactiontime'].includes(name);
     this.hudCritChip.style.display = noCrit ? 'none' : '';
     this.showScreen('playing');
     this.state = 'await-start';
@@ -6128,7 +6340,6 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this.replayRecorder?.cancel(); // abandoned run — discard its recording
     this._playlistRun = null; // abandon any in-progress playlist
     this.settings.endModeOverride();
-    this.state = 'menu';
     this._resetMpChat();
     this._hideMpTabScoreboard();
     this.input.exitLock();
@@ -6143,6 +6354,9 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
       elo: this.mp?.queueElo ?? this.auth?.elo
     });
     clearGamemodePath();
+    this.engine.clearRunEffects();
+    this.crosshair.resetRunState();
+    this.paceBar?.reset();
     this.showScreen('menu');
   }
 
@@ -6180,12 +6394,15 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
       this._onPlaylistModeFinish(results);
       return;
     }
+    updatePracticeBest(results);
+    this.engine.clearRunEffects();
+    this.crosshair.resetRunState();
     this.state = 'results';
     this.input.exitLock();
     const title = this.root.querySelector('#res-title');
     if (title) {
       title.textContent =
-        results.scenario === 'survival' ? 'Game Over' : 'Run Complete';
+        results.scenario === 'survival' || results.scenario === 'expand' ? 'Game Over' : 'Run Complete';
     }
     this.showScreen('results');
     const replayRes = await this._finalizeRecording(results);
@@ -6748,6 +6965,9 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
       this.engine.applyColors();
       this.crosshair.draw();
     }
+    this.engine.clearRunEffects();
+    this.crosshair.resetRunState();
+    this.paceBar?.reset();
     this.crosshair.setVisible(false);
     if (this._hiddenSceneRoot) {
       this._hiddenSceneRoot.visible = true;
@@ -6823,6 +7043,29 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     if (this._isDeathmatchRun()) {
       this._renderKillFeed();
     }
+    this._updatePaceBar(sc);
+  }
+
+  _updatePaceBar(sc) {
+    if (!this.paceBar) return;
+    const active = this.state === 'playing' && sc && !sc.isMultiplayer && !this._isDeathmatchRun();
+    if (!active) {
+      this.paceBar.hide();
+      return;
+    }
+    const total = this._paceTotalTime();
+    const enabled = this.settings.data.paceBar !== false;
+    if (this.sceneManager.finished) {
+      this.paceBar.lock(sc.elapsed, paceMetric(sc.name, sc));
+      return;
+    }
+    this.paceBar.update({
+      enabled,
+      scenario: sc.name,
+      elapsed: sc.elapsed,
+      scoreSource: sc,
+      totalTime: total
+    });
   }
 
   /** Ammo counter (bottom-right) — only for weapon scenarios. */
@@ -7095,7 +7338,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     const rows = list
       .map((r, i) => {
         const hl = highlightUserId && r.user_id === highlightUserId ? ' class="hl"' : '';
-        const crit = scenario !== 'survival'
+        const crit = scenario !== 'survival' && scenario !== 'expand'
           ? `<td>${Math.round((r.crit_ratio || 0) * 100)}%</td>`
           : '<td>—</td>';
         const date = this._formatLbRunWhen(r.achieved_at);
@@ -7198,7 +7441,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
       submitNote = submitNote ? `${submitNote} ${signInNote}` : signInNote;
     }
 
-    const showCrit = !isKillLeaderboardScenario(results.scenario) && results.scenario !== 'survival';
+    const showCrit = !isKillLeaderboardScenario(results.scenario) && results.scenario !== 'survival' && results.scenario !== 'expand';
     const stat = (label, val) =>
       `<div class="stat"><span class="stat-value">${val}</span><label>${label}</label></div>`;
     const killStats =
@@ -7227,7 +7470,7 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
     this.root.querySelector('#res-stats').innerHTML =
       isKillLeaderboardScenario(results.scenario)
         ? killStats
-        : results.scenario === 'tracking'
+        : results.scenario === 'tracking' || results.scenario === 'rapidtrack'
           ? trackingStats
           : results.scenario === 'reactiontime'
             ? reactionStats

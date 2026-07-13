@@ -90,6 +90,14 @@ export const COMPETITIVE_PRESETS = {
     botCrouchTap: true,
     strafeRate: 1.0
   },
+  rapidtrack: {
+    runDuration: 30,
+    botWidth: 1.0,
+    botSpeed: 1.0,
+    botCrouchTap: true,
+    strafeRate: 1.0,
+    botDistance: 6.0
+  },
   deathmatch: {
     runDuration: 60,
     botCount: 6,
@@ -261,6 +269,21 @@ export const COMPETITIVE_PRESETS = {
     targetSize: 0.35,
     travelSpeed: 180
   },
+  loops: {
+    runDuration: 30,
+    targetSize: 0.3,
+    travelSpeed: 50,
+    minDistance: 8,
+    maxDistance: 16
+  },
+  loopstracking: {
+    runDuration: 30,
+    targetSize: 0.3,
+    travelSpeed: 50,
+    minDistance: 8,
+    maxDistance: 16,
+    holdTime: 1.0
+  },
   sniperholds: {
     runDuration: 60,
     ttk: 0.3,
@@ -331,6 +354,23 @@ export const COMPETITIVE_PRESETS = {
     runDuration: 60,
     botSpeed: 1.0,
     crossFrom: 'rightToLeft'
+  },
+  peekswitch: {
+    runDuration: 30,
+    targetSize: 0.22,
+    sizeVariance: 0.25,
+    movement: 'none',
+    travelSpeed: 2.5,
+    bounceStrength: 6,
+    infiniteAmmo: true,
+    viewmodelRecoil: false
+  },
+  peekswitchbots: {
+    runDuration: 60,
+    botHp: 2,
+    botHeadHit: 0.08,
+    botBodyHit: 0.40,
+    botHitRamp: 0.01
   }
 };
 

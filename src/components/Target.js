@@ -10,6 +10,7 @@
 
 import * as THREE from 'three';
 import { easeOutBack } from '../utils/MathUtils.js';
+import { primeTargetGlowOpacity, setTargetGlowOpacity } from '../utils/targetGlow.js';
 
 export class Target {
   constructor() {
@@ -60,6 +61,7 @@ export class Target {
         if (m.material.emissive) m.material.emissive.copy(this._fadeColor);
         if ('emissiveIntensity' in m.material) m.material.emissiveIntensity = 0.9;
       }
+      primeTargetGlowOpacity(m);
     }
   }
 
@@ -80,6 +82,7 @@ export class Target {
       this.object.scale.setScalar(1 + t * 0.6);
       for (const m of this.colliders) {
         if (m.material) m.material.opacity = 1 - t;
+        setTargetGlowOpacity(m, 1 - t);
       }
       if (t >= 1) this.alive = false;
     }
@@ -87,6 +90,13 @@ export class Target {
 
   dispose() {
     for (const m of this.colliders) {
+      const group = m.userData._targetGlowGroup;
+      if (group) {
+        for (const child of group.children) {
+          child.geometry?.dispose();
+          child.material?.dispose();
+        }
+      }
       m.geometry?.dispose();
       m.material?.dispose();
     }

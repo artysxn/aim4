@@ -21,6 +21,7 @@ export const RANKED_SCENARIOS = new Set([
   'pasu',
   'spidershot',
   'survival',
+  'expand',
   'arena',
   'snipercrossfire',
   'cover',
@@ -36,6 +37,8 @@ export const RANKED_SCENARIOS = new Set([
   'ball',
   'drone',
   'line',
+  'loops',
+  'loopstracking',
   'bouncetracking',
   'pasutracking',
   'turn',
@@ -47,7 +50,10 @@ export const RANKED_SCENARIOS = new Set([
   'coverawp',
   'sniperflicks',
   'snipertracking',
-  'doorsawp'
+  'doorsawp',
+  'peekswitch',
+  'peekswitchbots',
+  'rapidtrack'
 ]);
 
 /** Ranked by total kills in the best timed run. */
@@ -75,6 +81,8 @@ export const KILL_LEADERBOARD_SCENARIOS = new Set([
   'turn',
   'box',
   'circle',
+  'loops',
+  'loopstracking',
   'sniperholds',
   'sniperquickscopes',
   'pitrifle',
@@ -82,13 +90,15 @@ export const KILL_LEADERBOARD_SCENARIOS = new Set([
   'sniperflicks',
   'snipertracking',
   'doorsawp',
+  'peekswitch',
+  'peekswitchbots',
   'galaxy',
   'waves',
   'sequenceultra'
 ]);
 
 /** Ranked by highest score in the best timed run. */
-export const SCORE_LEADERBOARD_SCENARIOS = new Set(['survival', 'tracking', 'ball', 'drone', 'line']);
+export const SCORE_LEADERBOARD_SCENARIOS = new Set(['survival', 'expand', 'tracking', 'rapidtrack', 'ball', 'drone', 'line']);
 
 /** Ranked by lowest score in the best run (reaction time avg ms). */
 export const LOWER_SCORE_LEADERBOARD_SCENARIOS = new Set(['reactiontime']);

@@ -70,6 +70,8 @@ export const DEFAULTS = {
     flickAccuracy: false // avg first-click placement along start→target
   },
   runDuration: 60, // seconds
+  paceBar: true, // KovaaK's-style PB pacing strip during timed runs
+  targetGlow: false, // soft halo on dot targets (colors.target)
   crosshair: {
     color: '#f52525',
     innerGap: 6,
@@ -176,6 +178,12 @@ export const DEFAULTS = {
     missesAllowed: 3, // missed shots before game over (Practice only)
     viewmodelRecoil: false
   },
+  expand: {
+    spawnInterval: 400, // ms between spawns (Practice)
+    startSize: 0.08,
+    moveSpeed: 8.5, // m/s toward the player
+    noMiss: true // one missed shot or passed target ends the run
+  },
   arena: {
     columns: 7, // number of columns spread across the 80° arc
     columnRadius: 0.55, // metres, cylinder half-width of each cover column
@@ -236,6 +244,14 @@ export const DEFAULTS = {
     botSpeed: 1.0, // multiplier on tracking strafe cap (210 u/s)
     botCrouchTap: true,
     strafeRate: 1.0, // direction-change frequency (1 = default ADAD)
+    missLimit: 0
+  },
+  rapidtrack: {
+    botWidth: 1.0,
+    botSpeed: 1.0,
+    botCrouchTap: true,
+    strafeRate: 1.0,
+    botDistance: 6.0, // metres — arc radius around the player
     missLimit: 0
   },
   stars: {
@@ -401,6 +417,21 @@ export const DEFAULTS = {
     travelSpeed: 180, // u/s — horizontal travel along the 180° field
     missLimit: 0
   },
+  loops: {
+    targetSize: 0.3,
+    travelSpeed: 50, // °/s base orbit speed (scaled by dot size)
+    minDistance: 8,
+    maxDistance: 16,
+    missLimit: 0
+  },
+  loopstracking: {
+    targetSize: 0.3,
+    travelSpeed: 50,
+    minDistance: 8,
+    maxDistance: 16,
+    holdTime: 1.0,
+    missLimit: 0
+  },
   sniperholds: {
     arena: 0,
     botDifficulty: 'hard',
@@ -475,6 +506,21 @@ export const DEFAULTS = {
     shotFeedbackDur: 0.5, // seconds both markers stay visible
     duration: { type: 'time', value: 60 },
     missLimit: 0
+  },
+  peekswitch: {
+    targetSize: 0.22,
+    sizeVariance: 0.35, // random spread around targetSize (0–0.75)
+    movement: 'none', // none | pasu | bounce
+    travelSpeed: 2.5,
+    bounceStrength: 6,
+    infiniteAmmo: true,
+    viewmodelRecoil: false,
+    missLimit: 0
+  },
+  peekswitchbots: {
+    botDifficulty: 'hard',
+    botHp: 2,
+    missLimit: 0
   }
 };
 
@@ -489,9 +535,11 @@ export const DURATION_DEFAULT = { type: 'time', value: 60 };
 export const DURATION_MODES = [
   'gridshot', 'stars', 'threeshot', 'bounce', 'microflicks', 'pasu', 'spidershot',
   'survival', 'arena', 'snipercrossfire', 'cover', 'duels', 'range', 'tracking', 'deathmatch',
-  'sequence', 'sequencespeed', 'sequencetracking', 'double', 'doubletracking', 'ball', 'drone', 'line', 'bouncetracking', 'pasutracking', 'turn',
+  'sequence', 'sequencespeed', 'sequencetracking', 'double', 'doubletracking', 'ball', 'drone', 'line', 'loops', 'loopstracking', 'bouncetracking', 'pasutracking', 'turn',
   'box', 'circle',
-  'sniperholds', 'sniperquickscopes', 'pitrifle', 'coverawp', 'sniperflicks', 'snipertracking', 'doorsawp'
+  'sniperholds', 'sniperquickscopes', 'pitrifle', 'coverawp', 'sniperflicks', 'snipertracking', 'doorsawp',
+  'peekswitch', 'peekswitchbots',
+  'rapidtrack'
 ];
 
 /** Resolve a usable duration ({ type, value }) from a scenario settings blob. */
