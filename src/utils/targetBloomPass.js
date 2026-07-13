@@ -26,6 +26,7 @@ uniform sampler2D tBloom;
 uniform float uGain;
 uniform float uGamma;
 uniform float uCompositeThresh;
+varying vec2 vUv;
 void main() {
   vec3 b = texture2D(tBloom, vUv).rgb;
   float lum = max(max(b.r, b.g), b.b);
