@@ -1219,6 +1219,51 @@ a.btn {
   display: block;
 }
 
+/* --- Graphics panel: subsection headers + Advanced dropdowns -------------- */
+.settings-subhead {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 24px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.settings-panel .settings-subhead:first-child {
+  margin-top: 0;
+}
+.settings-advanced {
+  margin: 4px 0 10px;
+}
+.settings-advanced summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  padding: 8px 0;
+  list-style: none;
+  color: var(--muted);
+  transition: color 0.15s ease;
+}
+.settings-advanced summary:hover {
+  color: var(--accent);
+}
+.settings-advanced summary::-webkit-details-marker {
+  display: none;
+}
+.settings-advanced summary::before {
+  content: '▸ ';
+  display: inline-block;
+  transition: transform 0.15s;
+}
+.settings-advanced[open] summary::before {
+  transform: rotate(90deg);
+}
+.settings-advanced-body {
+  padding-left: 14px;
+  border-left: 2px solid rgba(255, 255, 255, 0.08);
+}
+
 #settings-mode-config-host {
   width: 100%;
   max-width: 576px;

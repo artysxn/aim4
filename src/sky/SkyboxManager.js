@@ -33,22 +33,19 @@ uniform float uGlowRadius;
 uniform float uGlowThreshLo;
 uniform float uGlowThreshHi;
 uniform float uGlowVerticalFill;
-uniform float uElevOffset;
+uniform float uHeightOffset;
 varying vec3 vWorldDir;
 
-// Shift cubemap elevation only — horizon stays level, sky moves up/down on screen.
-vec3 shiftElev(vec3 dir) {
-  dir = normalize(dir);
-  float xzLen = length(dir.xz);
-  float elev = atan(dir.y, xzLen);
-  elev += uElevOffset;
-  float cosE = cos(elev);
-  float sinE = sin(elev);
-  if (xzLen > 1e-5) {
-    vec2 xzNorm = dir.xz / xzLen;
-    return vec3(xzNorm.x * cosE, sinE, xzNorm.y * cosE);
-  }
-  return vec3(0.0, sinE, 0.0);
+const float SKY_R = ${SKY_RADIUS}.0;
+
+// Pure vertical translation of the sky sphere (no rotation/tilt): intersect the
+// view ray with a sphere of radius SKY_R centered at (0, uHeightOffset, 0) and
+// sample the cubemap from that sphere's center.
+vec3 shiftHeight(vec3 dir) {
+  float h = uHeightOffset;
+  float b = dir.y * h;
+  float t = b + sqrt(max(b * b - h * h + SKY_R * SKY_R, 0.0));
+  return normalize(dir * t - vec3(0.0, h, 0.0));
 }
 
 vec3 rgb2hsv(vec3 c) {
@@ -114,7 +111,7 @@ vec3 blurSkyGlow(vec3 dir) {
 }
 
 void main() {
-  vec3 dir = shiftElev(normalize(vWorldDir));
+  vec3 dir = shiftHeight(normalize(vWorldDir));
   vec3 col = sampleSky(dir);
 
   if (uGlowStrength > 0.0) {
@@ -163,7 +160,7 @@ export class SkyboxManager {
         uGlowThreshLo: { value: 0 },
         uGlowThreshHi: { value: 0.29 },
         uGlowVerticalFill: { value: 1 },
-        uElevOffset: { value: 0 }
+        uHeightOffset: { value: 0 }
       },
       vertexShader: SKY_VERTEX,
       fragmentShader: SKY_FRAGMENT,
@@ -190,7 +187,7 @@ export class SkyboxManager {
     u.uSaturation.value = clamp((s.skyboxSaturation ?? 100) / 100, 0, 3);
     u.uBrightness.value = clamp((s.skyboxBrightness ?? 100) / 100, 0, 3);
     u.uContrast.value = clamp((s.skyboxContrast ?? 100) / 100, 0, 3);
-    u.uElevOffset.value = (s.skyboxHeightOffset ?? 0) * (Math.PI / SKY_RADIUS);
+    u.uHeightOffset.value = clamp(s.skyboxHeightOffset ?? 0, -SKY_RADIUS * 0.95, SKY_RADIUS * 0.95);
 
     const gc = resolveSkyboxGlowConfig(s.skyboxGlowConfig);
     const postFx = s.skyboxPostFx !== false;

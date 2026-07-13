@@ -517,8 +517,21 @@ export class UIOverlay {
           ${colorRow('set-pace-bar-ahead', 'Ahead of PB')}
           ${colorRow('set-pace-bar-behind', 'Behind PB')}
           ${colorRow('set-pace-bar-neutral', 'Neutral / no PB')}
-          <label class="field-check"><input type="checkbox" id="set-copy-replay-config" /> Copy config when watching replays</label>
+          <label class="field-check"><input type="checkbox" id="set-copy-replay-config" /> Copy config when watching replays</label>`
+      },
+      {
+        id: 'graphics',
+        label: 'Graphics',
+        body: `
+          <div class="settings-subhead">Colors</div>
           ${colorRow('set-col-bg', 'Background')}
+          ${colorRow('set-col-floor', 'Floor')}
+          ${colorRow('set-col-ebody', 'Enemy body')}
+          ${colorRow('set-col-ehead', 'Enemy head')}
+          ${colorRow('set-col-cover', 'Cover / columns')}
+          ${colorRow('set-col-target', 'Gridshot target')}
+          <button type="button" class="btn btn-block" data-reset-colors>Reset colors</button>
+          <div class="settings-subhead">Skybox</div>
           <label class="field-check"><input type="checkbox" id="set-custom-skybox" /> Custom skybox</label>
           <div id="set-skybox-fields" hidden>
             <div class="field field-plain">
@@ -533,30 +546,35 @@ export class UIOverlay {
             ${rf('set-skybox-height', 'Height offset (m)', -150, 150, 1)}
             <label class="field-check"><input type="checkbox" id="set-skybox-postfx" checked /> Skybox bloom effects</label>
             <div id="set-skybox-postfx-fields" hidden>
-              ${rf('set-sky-glow-strength', 'Glow strength', 0, 6, 0.05)}
-              ${rf('set-sky-glow-radius', 'Glow radius', 0, 5, 0.05)}
-              ${rf('set-sky-glow-thresh', 'Bright threshold', 0, 0.9, 0.02)}
-              ${rf('set-sky-glow-thresh-soft', 'Threshold softness', 0.05, 1, 0.02)}
-              ${rf('set-sky-glow-vert-fill', 'Vertical fill', 0, 1, 0.02)}
+              <details class="settings-advanced">
+                <summary>Advanced</summary>
+                <div class="settings-advanced-body">
+                  ${rf('set-sky-glow-strength', 'Glow strength', 0, 6, 0.05)}
+                  ${rf('set-sky-glow-radius', 'Glow radius', 0, 5, 0.05)}
+                  ${rf('set-sky-glow-thresh', 'Bright threshold', 0, 0.9, 0.02)}
+                  ${rf('set-sky-glow-thresh-soft', 'Threshold softness', 0.05, 1, 0.02)}
+                  ${rf('set-sky-glow-vert-fill', 'Vertical fill', 0, 1, 0.02)}
+                </div>
+              </details>
             </div>
           </div>
-          ${colorRow('set-col-floor', 'Floor')}
-          ${colorRow('set-col-ebody', 'Enemy body')}
-          ${colorRow('set-col-ehead', 'Enemy head')}
-          ${colorRow('set-col-cover', 'Cover / columns')}
-          ${colorRow('set-col-target', 'Gridshot target')}
+          <div class="settings-subhead">Target bloom</div>
           <label class="field-check"><input type="checkbox" id="set-target-glow" /> Target glow (bloom)</label>
           <div id="set-glow-config-fields" hidden>
-            ${rf('set-glow-strength', 'Bloom strength', 0, 3, 0.02)}
-            ${rf('set-glow-radius', 'Bloom radius', 0, 1, 0.02)}
-            ${rf('set-glow-lift', 'Mask brightness', 0.5, 8, 0.1)}
-            ${rf('set-glow-gain', 'Halo intensity', 0, 2, 0.02)}
-            ${rf('set-glow-gamma', 'Falloff curve', 0.8, 3, 0.05)}
-            ${rf('set-glow-comp-thresh', 'Composite floor', 0, 0.2, 0.002)}
-            ${rf('set-glow-core-white', 'Core whiteness', 0, 1, 0.02)}
-            ${rf('set-glow-core-int', 'Core emissive', 0.5, 4, 0.05)}
-          </div>
-          <button type="button" class="btn btn-block" data-reset-colors>Reset colors</button>`
+            <details class="settings-advanced">
+              <summary>Advanced</summary>
+              <div class="settings-advanced-body">
+                ${rf('set-glow-strength', 'Bloom strength', 0, 3, 0.02)}
+                ${rf('set-glow-radius', 'Bloom radius', 0, 1, 0.02)}
+                ${rf('set-glow-lift', 'Mask brightness', 0.5, 8, 0.1)}
+                ${rf('set-glow-gain', 'Halo intensity', 0, 2, 0.02)}
+                ${rf('set-glow-gamma', 'Falloff curve', 0.8, 3, 0.05)}
+                ${rf('set-glow-comp-thresh', 'Composite floor', 0, 0.2, 0.002)}
+                ${rf('set-glow-core-white', 'Core whiteness', 0, 1, 0.02)}
+                ${rf('set-glow-core-int', 'Core emissive', 0.5, 4, 0.05)}
+              </div>
+            </details>
+          </div>`
       },
       {
         id: 'crosshair',
