@@ -1219,6 +1219,15 @@ a.btn {
   display: block;
 }
 
+#settings-mode-config-host {
+  width: 100%;
+  max-width: 576px;
+  margin: 0 auto;
+}
+#settings-mode-config-host .scenario-settings-drawer {
+  padding: 0;
+}
+
 .scenario-settings-layout {
   display: flex;
   flex-direction: column;
@@ -1238,12 +1247,6 @@ a.btn {
   margin: 0;
   text-align: center;
   width: 100%;
-}
-#scenario-settings-game-btn {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
 }
 .scenario-settings-drawer {
   flex: 1;

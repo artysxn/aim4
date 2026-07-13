@@ -10,6 +10,8 @@
 
 import * as THREE from 'three';
 import { RESOLUTIONS, clampResolutionDim, DEFAULTS } from '../core/SettingsManager.js';
+import { resolveTargetGlowConfig } from '../utils/targetGlowConfig.js';
+import { resolveSkyboxGlowConfig } from '../utils/skyboxGlowConfig.js';
 import { SKYBOX_CATALOG, defaultSkyboxId } from '../sky/skyboxCatalog.js';
 import { SCENARIOS } from '../core/SceneManager.js';
 import * as Storage from '../utils/Storage.js';
@@ -351,6 +353,7 @@ export class UIOverlay {
     this._returnAfterLeaderboard = 'menu';
     this._activeScenarioSettings = null;
     this._suppressLockPause = false;
+    this._resumeLockTimer = null;
     this._mpTabStats = {};
     this._mpTabBoardHeld = false;
     this._aimHintShown = false;
@@ -527,7 +530,13 @@ export class UIOverlay {
             ${rf('set-skybox-bright', 'Brightness (%)', 0, 200, 5)}
             ${rf('set-skybox-contrast', 'Contrast (%)', 0, 200, 5)}
             ${rf('set-skybox-opacity', 'Opacity (%)', 0, 100, 5)}
-            <label class="field-check"><input type="checkbox" id="set-skybox-postfx" checked /> Skybox post-processing effects</label>
+            <label class="field-check"><input type="checkbox" id="set-skybox-postfx" checked /> Skybox bloom effects</label>
+            <div id="set-skybox-postfx-fields" hidden>
+              ${rf('set-sky-glow-strength', 'Glow strength', 0, 4, 0.05)}
+              ${rf('set-sky-glow-radius', 'Glow radius', 0.01, 0.2, 0.005)}
+              ${rf('set-sky-glow-thresh', 'Bright threshold', 0, 0.9, 0.02)}
+              ${rf('set-sky-glow-thresh-soft', 'Threshold softness', 0.05, 1, 0.02)}
+            </div>
           </div>
           ${colorRow('set-col-floor', 'Floor')}
           ${colorRow('set-col-ebody', 'Enemy body')}
@@ -535,6 +544,15 @@ export class UIOverlay {
           ${colorRow('set-col-cover', 'Cover / columns')}
           ${colorRow('set-col-target', 'Gridshot target')}
           <label class="field-check"><input type="checkbox" id="set-target-glow" /> Target glow (bloom)</label>
+          <div id="set-glow-config-fields" hidden>
+            ${rf('set-glow-strength', 'Bloom strength', 0, 3, 0.02)}
+            ${rf('set-glow-radius', 'Bloom radius', 0, 1, 0.02)}
+            ${rf('set-glow-lift', 'Mask brightness', 0.5, 8, 0.1)}
+            ${rf('set-glow-gain', 'Halo intensity', 0, 2, 0.02)}
+            ${rf('set-glow-gamma', 'Falloff curve', 0.8, 3, 0.05)}
+            ${rf('set-glow-core-white', 'Core whiteness', 0, 1, 0.02)}
+            ${rf('set-glow-core-int', 'Core emissive', 0.5, 4, 0.05)}
+          </div>
           <button type="button" class="btn btn-block" data-reset-colors>Reset colors</button>`
       },
       {
@@ -1478,12 +1496,12 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
           </div>
           <nav class="settings-nav">
             ${globalSettingsSections.map((s, i) => settingsTab(s.id, s.label, i === 0)).join('')}
+            <button type="button" class="settings-tab" data-settings-cat="mode-config" id="settings-mode-config-tab" hidden>Mode configuration</button>
           </nav>
           <div class="settings-bar-actions">
             <span class="settings-explore-banner muted" id="settings-explore-banner" hidden>Viewing <strong id="settings-explore-name"></strong>'s settings</span>
             <div class="settings-edit-actions" id="settings-edit-actions">
             <span class="settings-unsaved-hint muted" id="settings-unsaved-hint" hidden>Unsaved changes</span>
-            <button type="button" class="btn" id="settings-inrun-mode-btn" hidden>Mode settings</button>
             <button type="button" class="btn" id="settings-undo-btn" disabled>Undo</button>
             <button class="btn" data-reset>Reset all</button>
             <button type="button" class="btn primary" id="settings-done-btn">Done</button>
@@ -1492,6 +1510,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         </header>
         <div class="settings-drawer">
           ${globalSettingsSections.map((s, i) => settingsPanel(s.id, s.body, i === 0)).join('')}
+          <div class="settings-panel" data-settings-cat="mode-config" id="settings-mode-config-panel">
+            <div id="settings-mode-config-host"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -1501,9 +1522,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       <div class="panel wide menu-panel scenario-settings-layout">
         <header class="scenario-settings-bar">
           <h2 class="text-big scenario-settings-title" id="scenario-settings-title">Mode settings</h2>
-          <button type="button" class="btn" id="scenario-settings-game-btn" hidden>Game settings</button>
         </header>
-        <div class="scenario-settings-drawer menu-panel-body menu-panel-scroll">
+        <div id="scenario-settings-drawer-host" class="scenario-settings-drawer menu-panel-body menu-panel-scroll">
+          <div id="scenario-settings-drawer">
           ${scenarioSettingsSections.map((s) => scenarioSettingsPanel(s.id, s.body)).join('')}
           <div class="scenario-settings-footer">
             <div class="field field-plain">
@@ -1526,6 +1547,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
               </div>
               <p class="readout" id="scn-code-status"></p>
             </div>
+          </div>
           </div>
         </div>
         <div class="menu-actions scenario-settings-actions">
@@ -1701,8 +1723,6 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         <h2 class="text-big pause-title">Paused</h2>
         <div class="menu-actions pause-actions">
           <button type="button" class="btn primary" data-resume>Resume</button>
-          <button type="button" class="btn" id="pause-game-settings-btn">Game settings</button>
-          <button type="button" class="btn" id="pause-mode-settings-btn" hidden>Mode settings</button>
           <button type="button" class="btn" id="pause-restart-btn" data-restart>Restart</button>
           <button type="button" class="btn" id="pause-leave-lobby-btn" hidden>Leave to lobby</button>
           <button type="button" class="btn" data-quit>Quit to menu</button>
@@ -1924,6 +1944,13 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     const s = this.settings.activeSettings();
     const wrap = this.root.querySelector('#set-skybox-fields');
     if (wrap) wrap.hidden = !s.customSkybox;
+    this._syncSkyboxPostFxFields();
+  }
+
+  _syncSkyboxPostFxFields() {
+    const s = this.settings.activeSettings();
+    const wrap = this.root.querySelector('#set-skybox-postfx-fields');
+    if (wrap) wrap.hidden = !s.customSkybox || s.skyboxPostFx === false;
   }
 
   _populateSkyboxSelect() {
@@ -1941,6 +1968,17 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this.engine.applyColors?.();
     this.engine.applyPostProcessing?.();
     this.sceneManager.current?.applyLiveSettings?.();
+  }
+
+  _applyGlowSettings() {
+    this.engine.applyPostProcessing?.();
+    this.sceneManager.current?.applyLiveSettings?.();
+  }
+
+  _syncGlowConfigFields() {
+    const s = this.settings.activeSettings();
+    const wrap = this.root.querySelector('#set-glow-config-fields');
+    if (wrap) wrap.hidden = !s.targetGlow;
   }
 
   _syncPaceBarCompactFields() {
@@ -2126,9 +2164,32 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         const cat = tab.dataset.settingsCat;
         tabs.forEach((t) => t.classList.toggle('active', t === tab));
         panels.forEach((p) => p.classList.toggle('active', p.dataset.settingsCat === cat));
+        if (cat === 'mode-config') {
+          this._mountScenarioDrawer('settings');
+          const modeId = this._activeScenarioSettings || this._canOpenInRunScenarioSettings();
+          if (modeId) {
+            this._activeScenarioSettings = modeId;
+            this._showScenarioSettingsPanel(modeId);
+            this._populateScenarioFooter(modeId);
+          }
+        } else if (this.state === 'settings') {
+          this._mountScenarioDrawer('scenario-settings');
+        }
         if (cat === 'crosshair') this.crosshair.drawPreview();
       });
     });
+  }
+
+  _scenarioDrawerEl() {
+    return this.root.querySelector('#scenario-settings-drawer');
+  }
+
+  _mountScenarioDrawer(target) {
+    const drawer = this._scenarioDrawerEl();
+    const host = target === 'settings'
+      ? this.root.querySelector('#settings-mode-config-host')
+      : this.root.querySelector('#scenario-settings-drawer-host');
+    if (drawer && host && drawer.parentElement !== host) host.appendChild(drawer);
   }
 
   _bindRange(id, apply, { parse = parseFloat, after } = {}) {
@@ -2275,13 +2336,19 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
   _updateInRunSettingsNav() {
     const modeId = this._canOpenInRunScenarioSettings();
-    const inRun = this._returnAfterSettings === 'paused' || this._returnAfterScenarioSettings === 'paused';
-    const modeBtn = this.root.querySelector('#settings-inrun-mode-btn');
-    const gameBtn = this.root.querySelector('#scenario-settings-game-btn');
+    const inRun = this._returnAfterSettings === 'paused';
+    const modeTab = this.root.querySelector('#settings-mode-config-tab');
     const doneBtn = this.root.querySelector('#settings-done-btn');
-    if (modeBtn) modeBtn.hidden = !(inRun && this._settingsLive && modeId);
-    if (gameBtn) gameBtn.hidden = !(inRun && this._scenarioSettingsLive);
-    if (doneBtn) doneBtn.textContent = this._settingsLive && inRun ? 'Back to game' : 'Done';
+    if (modeTab) {
+      const show = inRun && this._settingsLive && modeId;
+      modeTab.hidden = !show;
+      if (show) {
+        const title = SCENARIO_META[modeId]?.title ?? 'Mode';
+        modeTab.textContent = `${title} Configuration`;
+        if (!this._activeScenarioSettings) this._activeScenarioSettings = modeId;
+      }
+    }
+    if (doneBtn) doneBtn.textContent = inRun && this._settingsLive ? 'Back to game' : 'Done';
   }
 
   _updateScenarioSettingsBackLabel() {
@@ -2309,18 +2376,18 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
   _openInRunGameSettings({ fresh = true } = {}) {
     this._settingsLive = true;
-    this._scenarioSettingsLive = false;
-    this._activeScenarioSettings = null;
     this._returnAfterSettings = 'paused';
+    const modeId = this._canOpenInRunScenarioSettings();
+    if (modeId) {
+      this._activeScenarioSettings = modeId;
+      this._showScenarioSettingsPanel(modeId);
+      this._populateScenarioFooter(modeId);
+    } else {
+      this._activeScenarioSettings = null;
+    }
+    this._mountScenarioDrawer('scenario-settings');
     this._openSettings({ fresh });
     this.showScreen('settings');
-  }
-
-  _openInRunModeSettings() {
-    const scenarioId = this._canOpenInRunScenarioSettings();
-    if (!scenarioId) return;
-    this._settingsLive = false;
-    this._openScenarioSettings(scenarioId, { live: true, returnTo: 'paused', fresh: !this.settings.draft });
   }
 
   _openScenarioSettings(scenarioId, { live = false, returnTo = 'training', fresh = true } = {}) {
@@ -2333,6 +2400,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._showScenarioSettingsPanel(scenarioId);
     this._populateScenarioFooter(scenarioId);
     this._updateScenarioSettingsBar();
+    this._mountScenarioDrawer('scenario-settings');
     this._returnAfterScenarioSettings = returnTo;
     this._updateScenarioSettingsBackLabel();
     this._updateInRunSettingsNav();
@@ -2421,11 +2489,6 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       }
     });
     $('#scenario-settings-back-btn')?.addEventListener('click', () => this._closeScenarioSettings());
-    $('#scenario-settings-game-btn')?.addEventListener('click', () => {
-      this._scenarioSettingsLive = false;
-      this._activeScenarioSettings = null;
-      this._openInRunGameSettings({ fresh: false });
-    });
   }
 
   // -------------------------------------------------------------------------
@@ -2933,11 +2996,52 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     });
     $('#set-skybox-postfx')?.addEventListener('change', (e) => {
       draft((d) => { d.skyboxPostFx = e.target.checked; });
+      this._syncSkyboxPostFxFields();
       this._applySkyboxSettings();
+    });
+    const patchSkyGlow = (patch) => (v, d) => {
+      d.skyboxGlowConfig = { ...resolveSkyboxGlowConfig(d.skyboxGlowConfig), ...patch(v) };
+    };
+    this._bindRange('set-sky-glow-strength', patchSkyGlow((v) => ({ strength: v })), {
+      after: () => this._applySkyboxSettings()
+    });
+    this._bindRange('set-sky-glow-radius', patchSkyGlow((v) => ({ radius: v })), {
+      after: () => this._applySkyboxSettings()
+    });
+    this._bindRange('set-sky-glow-thresh', patchSkyGlow((v) => ({ threshold: v })), {
+      after: () => this._applySkyboxSettings()
+    });
+    this._bindRange('set-sky-glow-thresh-soft', patchSkyGlow((v) => ({ thresholdSoft: v })), {
+      after: () => this._applySkyboxSettings()
     });
     $('#set-target-glow')?.addEventListener('change', (e) => {
       draft((d) => { d.targetGlow = e.target.checked; });
-      this._applySkyboxSettings();
+      this._syncGlowConfigFields();
+      this._applyGlowSettings();
+    });
+    const patchGlow = (patch) => (v, d) => {
+      d.targetGlowConfig = { ...resolveTargetGlowConfig(d.targetGlowConfig), ...patch(v) };
+    };
+    this._bindRange('set-glow-strength', patchGlow((v) => ({ bloomStrength: v })), {
+      after: () => this._applyGlowSettings()
+    });
+    this._bindRange('set-glow-radius', patchGlow((v) => ({ bloomRadius: v })), {
+      after: () => this._applyGlowSettings()
+    });
+    this._bindRange('set-glow-lift', patchGlow((v) => ({ bloomLift: v })), {
+      after: () => this._applyGlowSettings()
+    });
+    this._bindRange('set-glow-gain', patchGlow((v) => ({ compositeGain: v })), {
+      after: () => this._applyGlowSettings()
+    });
+    this._bindRange('set-glow-gamma', patchGlow((v) => ({ bloomGamma: v })), {
+      after: () => this._applyGlowSettings()
+    });
+    this._bindRange('set-glow-core-white', patchGlow((v) => ({ coreWhiteness: v })), {
+      after: () => this._applyGlowSettings()
+    });
+    this._bindRange('set-glow-core-int', patchGlow((v) => ({ coreIntensity: v })), {
+      after: () => this._applyGlowSettings()
     });
 
     $('#set-range-arc').addEventListener('change', (e) => {
@@ -3244,7 +3348,6 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         if (this._settingsLive) this._applySettingsLive();
       }
     });
-    $('#settings-inrun-mode-btn')?.addEventListener('click', () => this._openInRunModeSettings());
     $('#settings-done-btn')?.addEventListener('click', () => this._closeSettings());
   }
 
@@ -3715,10 +3818,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
   _bindPauseMenu() {
     const $ = (id) => this.root.querySelector(id);
-    const openGame = () => this._openInRunGameSettings();
-    $('#pause-settings-btn')?.addEventListener('click', openGame);
-    $('#pause-game-settings-btn')?.addEventListener('click', openGame);
-    $('#pause-mode-settings-btn')?.addEventListener('click', () => this._openInRunModeSettings());
+    $('#pause-settings-btn')?.addEventListener('click', () => this._openInRunGameSettings());
     $('#pause-leave-lobby-btn')?.addEventListener('click', () => {
       this.mp?.returnToLobby();
     });
@@ -3739,6 +3839,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     }
     this._updateSettingsBar();
     this._updateInRunSettingsNav();
+    this._mountScenarioDrawer('scenario-settings');
     const ret = this._returnAfterSettings;
     this._returnAfterSettings = null;
     if (ret) {
@@ -3814,19 +3915,14 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     const leaveBtn = this.root.querySelector('#pause-leave-lobby-btn');
     const restartBtn = this.root.querySelector('#pause-restart-btn');
     const gearBtn = this.root.querySelector('#pause-settings-btn');
-    const gameBtn = this.root.querySelector('#pause-game-settings-btn');
-    const modeBtn = this.root.querySelector('#pause-mode-settings-btn');
     const inMpMatch = this.mp?.inMatch && !!this.mp?.lobby;
-    const modeId = this._canOpenInRunScenarioSettings();
     if (leaveBtn) leaveBtn.hidden = !inMpMatch;
     if (restartBtn) restartBtn.hidden = !!inMpMatch;
     const inRun = !!this.sceneManager.current;
     if (gearBtn) {
       gearBtn.hidden = !inRun;
-      gearBtn.setAttribute('aria-label', 'Game settings');
+      gearBtn.setAttribute('aria-label', 'Settings');
     }
-    if (gameBtn) gameBtn.hidden = !inRun;
-    if (modeBtn) modeBtn.hidden = !modeId;
   }
 
   // -------------------------------------------------------------------------
@@ -6098,6 +6194,12 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._setRange('set-skybox-opacity', s.skyboxOpacity ?? 100);
     const skyPostFx = this.root.querySelector('#set-skybox-postfx');
     if (skyPostFx) skyPostFx.checked = s.skyboxPostFx !== false;
+    const sgc = resolveSkyboxGlowConfig(s.skyboxGlowConfig);
+    this._setRange('set-sky-glow-strength', sgc.strength);
+    this._setRange('set-sky-glow-radius', sgc.radius);
+    this._setRange('set-sky-glow-thresh', sgc.threshold);
+    this._setRange('set-sky-glow-thresh-soft', sgc.thresholdSoft);
+    this._syncSkyboxPostFxFields();
     this._syncSkyboxFields();
     $('#set-col-floor').value = s.colors.floor;
     $('#set-col-ebody').value = s.colors.enemyBody;
@@ -6105,6 +6207,15 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     $('#set-col-cover').value = s.colors.cover;
     $('#set-col-target').value = s.colors.target;
     $('#set-target-glow').checked = !!s.targetGlow;
+    const gc = resolveTargetGlowConfig(s.targetGlowConfig);
+    this._setRange('set-glow-strength', gc.bloomStrength);
+    this._setRange('set-glow-radius', gc.bloomRadius);
+    this._setRange('set-glow-lift', gc.bloomLift);
+    this._setRange('set-glow-gain', gc.compositeGain);
+    this._setRange('set-glow-gamma', gc.bloomGamma);
+    this._setRange('set-glow-core-white', gc.coreWhiteness);
+    this._setRange('set-glow-core-int', gc.coreIntensity);
+    this._syncGlowConfigFields();
 
     $('#set-range-arc').value = String(s.range.arc);
     const rangeWeapon = this.root.querySelector('#set-range-weapon');
@@ -6537,6 +6648,12 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
   resume() {
     if (this.state !== 'paused') return;
+    this._suppressLockPause = true;
+    clearTimeout(this._resumeLockTimer);
+    this._resumeLockTimer = setTimeout(() => {
+      this._resumeLockTimer = null;
+      this._suppressLockPause = false;
+    }, 750);
     if (this._countdownRemaining > 0) {
       this.showScreen('playing');
       this.state = 'countdown';
@@ -6577,8 +6694,12 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
   _onLockChange(locked) {
     if (locked) {
-      this.engine.audio?.resume();
+      if (this._resumeLockTimer) {
+        clearTimeout(this._resumeLockTimer);
+        this._resumeLockTimer = null;
+      }
       this._suppressLockPause = false;
+      this.engine.audio?.resume();
       if (this.state === 'await-start') {
         if (this._isCompetitiveRun()) {
           this._startCountdown();

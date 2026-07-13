@@ -114,7 +114,10 @@ _setupLights() {
 
   applyPostProcessing() {
     const s = this.settings.activeSettings();
-    this._bloom?.setOptions({ targetBloom: s.targetGlow === true });
+    this._bloom?.setOptions({
+      targetBloom: s.targetGlow === true,
+      glowConfig: s.targetGlowConfig
+    });
   }
 
   /** @deprecated Use applyPostProcessing */

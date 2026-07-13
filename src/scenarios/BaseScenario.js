@@ -166,10 +166,11 @@ export class BaseScenario {
     }
     const col = s.colors?.target;
     const glow = s.targetGlow === true;
+    const glowConfig = s.targetGlowConfig;
     if (col) {
       for (const t of this.targets) {
         for (const mesh of t.colliders || []) {
-          applyTargetGlow(mesh, { enabled: glow, color: col });
+          applyTargetGlow(mesh, { enabled: glow, color: col, config: glowConfig });
           if (!glow) {
             if (mesh.material?.color) mesh.material.color.set(col);
             if (mesh.material?.emissive) mesh.material.emissive.set(col);
@@ -311,9 +312,10 @@ export class BaseScenario {
     const s = this.settings.activeSettings?.() ?? this.settings.data;
     const glow = s.targetGlow === true;
     const color = s.colors?.target;
+    const glowConfig = s.targetGlowConfig;
     if (glow && color) {
       for (const mesh of target.colliders || []) {
-        applyTargetGlow(mesh, { enabled: true, color });
+        applyTargetGlow(mesh, { enabled: true, color, config: glowConfig });
       }
     }
   }

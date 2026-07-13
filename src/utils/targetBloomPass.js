@@ -9,11 +9,8 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { BLOOM_LAYER } from './bloomLayers.js';
+import { resolveTargetGlowConfig } from './targetGlowConfig.js';
 
-const TARGET_STRENGTH = 0.68;
-const TARGET_RADIUS = 0.28;
-const BLOOM_LIFT = 2.1;
-const BLOOM_COMPOSITE_GAIN = 0.82;
 const BLACK_CLEAR = new THREE.Color(0x000000);
 
 const ADDITIVE_VERT = /* glsl */`
@@ -28,9 +25,10 @@ void main() {
 const ADDITIVE_FRAG = /* glsl */`
 uniform sampler2D tBloom;
 uniform float uGain;
+uniform float uGamma;
 void main() {
   vec3 b = texture2D(tBloom, vUv).rgb;
-  b = pow(max(b, vec3(0.0)), vec3(1.45)) * uGain;
+  b = pow(max(b, vec3(0.0)), vec3(uGamma)) * uGain;
   gl_FragColor = vec4(b, 1.0);
 }
 `;
@@ -41,6 +39,7 @@ export class TargetBloomPass {
     this._scene = scene;
     this._camera = camera;
     this._targetBloom = false;
+    this._glowConfig = resolveTargetGlowConfig();
     this._targetComposer = null;
     this._blendScene = null;
     this._blendCamera = null;
@@ -60,7 +59,8 @@ export class TargetBloomPass {
     this._blendMat = new THREE.ShaderMaterial({
       uniforms: {
         tBloom: { value: null },
-        uGain: { value: BLOOM_COMPOSITE_GAIN }
+        uGain: { value: this._glowConfig.compositeGain },
+        uGamma: { value: this._glowConfig.bloomGamma }
       },
       vertexShader: ADDITIVE_VERT,
       fragmentShader: ADDITIVE_FRAG,
@@ -82,7 +82,12 @@ export class TargetBloomPass {
     composer.addPass(new RenderPass(this._scene, this._camera, null, BLACK_CLEAR, 1));
     const size = new THREE.Vector2();
     this._renderer.getSize(size);
-    const bloomPass = new UnrealBloomPass(size, TARGET_STRENGTH, TARGET_RADIUS, 0);
+    const bloomPass = new UnrealBloomPass(
+      size,
+      this._glowConfig.bloomStrength,
+      this._glowConfig.bloomRadius,
+      0
+    );
     composer.addPass(bloomPass);
     composer.setPixelRatio(this._renderer.getPixelRatio());
     composer.bloomPass = bloomPass;
@@ -93,6 +98,19 @@ export class TargetBloomPass {
     if (!this._targetComposer) this._targetComposer = this._makeComposer();
   }
 
+  _applyBloomParams() {
+    const c = this._glowConfig;
+    const bloomPass = this._targetComposer?.bloomPass;
+    if (bloomPass) {
+      bloomPass.strength = c.bloomStrength;
+      bloomPass.radius = c.bloomRadius;
+    }
+    if (this._blendMat) {
+      this._blendMat.uniforms.uGain.value = c.compositeGain;
+      this._blendMat.uniforms.uGamma.value = c.bloomGamma;
+    }
+  }
+
   setSize(width, height) {
     if (!this._targetComposer) return;
     const pr = this._renderer.getPixelRatio();
@@ -101,9 +119,16 @@ export class TargetBloomPass {
     this._targetComposer.bloomPass?.setSize(width * pr, height * pr);
   }
 
-  setOptions({ targetBloom = false } = {}) {
+  setOptions({ targetBloom = false, glowConfig } = {}) {
+    const next = resolveTargetGlowConfig(glowConfig ?? this._glowConfig);
+    const changed = JSON.stringify(next) !== JSON.stringify(this._glowConfig);
     this._targetBloom = !!targetBloom;
-    if (this._targetBloom) this._ensureComposer();
+    this._glowConfig = next;
+    if (changed) this._bloomMats.clear();
+    if (this._targetBloom) {
+      this._ensureComposer();
+      this._applyBloomParams();
+    }
   }
 
   _isBloomMesh(obj) {
@@ -113,10 +138,11 @@ export class TargetBloomPass {
   _bloomMaterialFor(mesh) {
     const hex = mesh.userData._glowColor ?? mesh.material?.color?.getHex?.() ?? 0xffffff;
     const strength = mesh.userData._glowStrength ?? 1;
-    const key = `${hex}_${strength.toFixed(3)}`;
+    const lift = this._glowConfig.bloomLift;
+    const key = `${hex}_${strength.toFixed(3)}_${lift.toFixed(3)}`;
     if (!this._bloomMats.has(key)) {
       const c = new THREE.Color(hex);
-      c.multiplyScalar(BLOOM_LIFT * strength);
+      c.multiplyScalar(lift * strength);
       this._bloomMats.set(
         key,
         new THREE.MeshBasicMaterial({ color: c, toneMapped: false, fog: false })
@@ -157,7 +183,8 @@ export class TargetBloomPass {
   _compositeBloom() {
     this._ensureBlendPass();
     this._blendMat.uniforms.tBloom.value = this._bloomTexture();
-    this._blendMat.uniforms.uGain.value = BLOOM_COMPOSITE_GAIN;
+    this._blendMat.uniforms.uGain.value = this._glowConfig.compositeGain;
+    this._blendMat.uniforms.uGamma.value = this._glowConfig.bloomGamma;
     const prevRT = this._renderer.getRenderTarget();
     const prevAutoClear = this._renderer.autoClear;
     this._renderer.setRenderTarget(null);

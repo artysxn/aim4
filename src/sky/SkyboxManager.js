@@ -1,14 +1,14 @@
 // ---------------------------------------------------------------------------
 // SkyboxManager.js — optional cubemap sky with hue/sat/brightness/contrast/opacity.
 // Blends toward colors.bg when opacity < 1 so the background color still shows.
-// Optional in-shader glow (skyboxPostFx) — contained to sky pixels only.
+// Optional in-shader glow (skyboxPostFx) — bright-region extract + blur + add.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
 import { skyboxById } from './skyboxCatalog.js';
+import { resolveSkyboxGlowConfig } from '../utils/skyboxGlowConfig.js';
 
 const SKY_RADIUS = 420;
-const SKY_GLOW_STRENGTH = 0.55;
 
 const SKY_VERTEX = /* glsl */`
 varying vec3 vWorldDir;
@@ -28,7 +28,10 @@ uniform float uHue;
 uniform float uSaturation;
 uniform float uBrightness;
 uniform float uContrast;
-uniform float uGlow;
+uniform float uGlowStrength;
+uniform float uGlowRadius;
+uniform float uGlowThreshLo;
+uniform float uGlowThreshHi;
 varying vec3 vWorldDir;
 
 vec3 rgb2hsv(vec3 c) {
@@ -60,25 +63,38 @@ vec3 sampleSky(vec3 dir) {
   return gradeSky(pow(texture(tCube, dir).rgb, vec3(2.2)));
 }
 
-vec3 skyBlur(vec3 dir) {
-  float s = 0.018;
-  vec3 blur = sampleSky(dir);
-  blur += sampleSky(normalize(dir + vec3(s, 0.0, 0.0)));
-  blur += sampleSky(normalize(dir + vec3(-s, 0.0, 0.0)));
-  blur += sampleSky(normalize(dir + vec3(0.0, s, 0.0)));
-  blur += sampleSky(normalize(dir + vec3(0.0, -s, 0.0)));
-  return blur * 0.2;
+vec3 extractGlow(vec3 col) {
+  float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  float mask = smoothstep(uGlowThreshLo, uGlowThreshHi, lum);
+  return col * mask;
+}
+
+vec3 blurSkyGlow(vec3 dir) {
+  float s = uGlowRadius;
+  vec3 sum = extractGlow(sampleSky(dir));
+  float w = 1.0;
+  sum += extractGlow(sampleSky(normalize(dir + vec3(s, 0.0, 0.0))));
+  sum += extractGlow(sampleSky(normalize(dir + vec3(-s, 0.0, 0.0))));
+  sum += extractGlow(sampleSky(normalize(dir + vec3(0.0, s, 0.0))));
+  sum += extractGlow(sampleSky(normalize(dir + vec3(0.0, -s, 0.0))));
+  sum += extractGlow(sampleSky(normalize(dir + vec3(0.0, 0.0, s))));
+  sum += extractGlow(sampleSky(normalize(dir + vec3(0.0, 0.0, -s))));
+  sum += extractGlow(sampleSky(normalize(dir + vec3(s, s, 0.0))));
+  sum += extractGlow(sampleSky(normalize(dir + vec3(-s, s, 0.0))));
+  sum += extractGlow(sampleSky(normalize(dir + vec3(s, -s, 0.0))));
+  sum += extractGlow(sampleSky(normalize(dir + vec3(-s, -s, 0.0))));
+  w += 9.0;
+  return sum / w;
 }
 
 void main() {
   vec3 dir = normalize(vWorldDir);
   vec3 col = sampleSky(dir);
 
-  if (uGlow > 0.0) {
-    vec3 blur = skyBlur(dir);
-    float lum = dot(blur, vec3(0.2126, 0.7152, 0.0722));
-    float bright = smoothstep(0.28, 0.72, lum);
-    col += blur * bright * uGlow;
+  if (uGlowStrength > 0.0) {
+    vec3 glow = blurSkyGlow(dir);
+    col += glow * uGlowStrength;
+    col = clamp(col, 0.0, 1.0);
   }
 
   vec3 bg = pow(uBgColor, vec3(2.2));
@@ -113,7 +129,10 @@ export class SkyboxManager {
         uSaturation: { value: 1 },
         uBrightness: { value: 1 },
         uContrast: { value: 1 },
-        uGlow: { value: 0 }
+        uGlowStrength: { value: 0 },
+        uGlowRadius: { value: 0.055 },
+        uGlowThreshLo: { value: 0.18 },
+        uGlowThreshHi: { value: 0.55 }
       },
       vertexShader: SKY_VERTEX,
       fragmentShader: SKY_FRAGMENT,
@@ -140,8 +159,14 @@ export class SkyboxManager {
     u.uSaturation.value = clamp((s.skyboxSaturation ?? 100) / 100, 0, 3);
     u.uBrightness.value = clamp((s.skyboxBrightness ?? 100) / 100, 0, 3);
     u.uContrast.value = clamp((s.skyboxContrast ?? 100) / 100, 0, 3);
+
+    const gc = resolveSkyboxGlowConfig(s.skyboxGlowConfig);
     const postFx = s.skyboxPostFx !== false;
-    u.uGlow.value = s.customSkybox === true && postFx ? SKY_GLOW_STRENGTH : 0;
+    const enabled = s.customSkybox === true && postFx;
+    u.uGlowStrength.value = enabled ? gc.strength : 0;
+    u.uGlowRadius.value = gc.radius;
+    u.uGlowThreshLo.value = gc.threshold;
+    u.uGlowThreshHi.value = Math.max(gc.threshold + 0.01, gc.thresholdSoft);
   }
 
   _loadTexture(entry) {

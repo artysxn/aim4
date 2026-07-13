@@ -81,6 +81,15 @@ export const DEFAULTS = {
     neutral: '#6a6a6a'
   },
   targetGlow: false, // emissive bloom on dot targets (colors.target)
+  targetGlowConfig: {
+    bloomStrength: 0.68, // UnrealBloomPass strength
+    bloomRadius: 0.28, // bloom spread (0–1)
+    bloomLift: 2.1, // mask-pass brightness multiplier
+    compositeGain: 0.82, // additive halo intensity on screen
+    bloomGamma: 1.45, // compresses flat midtones (higher = tighter falloff)
+    coreWhiteness: 0.82, // lerp toward white for the visible sphere (0–1)
+    coreIntensity: 1.35 // emissive intensity on the sphere
+  },
   customSkybox: false, // replace fog backdrop with a cubemap sky (all levels)
   skyboxId: '', // catalog id under src/sky (filled on first load)
   skyboxHue: 0, // degrees
@@ -88,7 +97,13 @@ export const DEFAULTS = {
   skyboxBrightness: 100, // %
   skyboxContrast: 100, // %
   skyboxOpacity: 100, // % — blends with colors.bg when below 100
-  skyboxPostFx: true, // bloom post-processing on the skybox mesh
+  skyboxPostFx: true, // in-shader bloom on the skybox mesh
+  skyboxGlowConfig: {
+    strength: 1.4, // additive glow intensity
+    radius: 0.055, // cubemap sample spread for the blur
+    threshold: 0.18, // luminance where glow begins
+    thresholdSoft: 0.55 // luminance where glow reaches full strength
+  },
   crosshair: {
     color: '#f52525',
     innerGap: 6,
