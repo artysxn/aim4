@@ -1,23 +1,27 @@
 // ---------------------------------------------------------------------------
-// targetGlow.js — mark dot-target meshes for selective bloom (any target color).
+// targetGlow.js — mark target collider meshes for selective bloom (any color).
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
 import { BLOOM_LAYER } from './bloomLayers.js';
 
-const _colorA = new THREE.Color();
-const _colorB = new THREE.Color();
+/** True for hittable target colliders explicitly allowed to glow. */
+export function isBloomTargetMesh(mesh) {
+  if (!mesh?.isMesh) return false;
+  if (!mesh.userData.target) return false;
+  if (mesh.userData.targetGlow === false) return false;
+  return true;
+}
 
-/** True for gridshot-style dot spheres (not bot heads / decoys / special markers). */
+/** @deprecated Use isBloomTargetMesh */
 export function isDotTargetMesh(mesh, targetColor) {
+  if (!isBloomTargetMesh(mesh)) return false;
   if (!(mesh.geometry instanceof THREE.SphereGeometry)) return false;
   if (mesh.userData.zone === 'head') return false;
-  if (mesh.userData.targetGlow === false) return false;
-  const mat = mesh.material;
-  if (!mat?.color) return false;
-  _colorA.copy(mat.color);
-  _colorB.set(targetColor);
-  return _colorA.equals(_colorB);
+  if (!mesh.material?.color || !targetColor) return false;
+  const a = new THREE.Color(mesh.material.color);
+  const b = new THREE.Color(targetColor);
+  return a.equals(b);
 }
 
 export function removeTargetGlow(mesh) {
@@ -29,12 +33,12 @@ export function removeTargetGlow(mesh) {
 }
 
 /**
- * Register a dot target mesh for the bloom pass (works with dark target colors).
+ * Register a target collider mesh for the bloom pass (works with dark target colors).
  * @param {THREE.Mesh} mesh
  * @param {{ enabled: boolean, color: string | number }} opts
  */
 export function applyTargetGlow(mesh, { enabled, color }) {
-  if (!enabled || !isDotTargetMesh(mesh, color)) {
+  if (!enabled || !isBloomTargetMesh(mesh)) {
     removeTargetGlow(mesh);
     return;
   }
@@ -83,8 +87,9 @@ export function primeTargetGlowOpacity(mesh) {
 }
 
 export function refreshScenarioTargetGlow(scenario) {
-  const enabled = scenario.settings.data.targetGlow === true;
-  const color = scenario.settings.data.colors?.target;
+  const s = scenario.settings.activeSettings?.() ?? scenario.settings.data;
+  const enabled = s.targetGlow === true;
+  const color = s.colors?.target;
   if (!color) return;
   for (const t of scenario.targets || []) {
     for (const mesh of t.colliders || []) {

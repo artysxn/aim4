@@ -119,7 +119,7 @@ export class LoopsScenario extends BaseScenario {
     floor.rotation.x = -Math.PI / 2;
     this.root.add(floor);
 
-    const grid = new THREE.GridHelper(ARENA_R * 2, 48, gridCenter, gridEdge);
+    const grid = new THREE.PolarGridHelper(ARENA_R, 24, 12, 64, gridCenter, gridEdge);
     grid.position.y = 0.002;
     this.root.add(grid);
 

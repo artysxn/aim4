@@ -15,7 +15,7 @@ import { viewPunchImpulse } from '../weapons/ak47.js';
 import { isLeaderboardEligible } from './rankedScenarios.js';
 import { isBulletDecalSurface, worldImpactNormal } from '../utils/bulletImpact.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
-import { applyTargetGlow, restoreTargetEmissive } from '../utils/targetGlow.js';
+import { applyTargetGlow, refreshScenarioTargetGlow, restoreTargetEmissive } from '../utils/targetGlow.js';
 
 const _raycaster = new THREE.Raycaster();
 // Reused firing scratch (no per-shot allocation).
@@ -145,6 +145,7 @@ export class BaseScenario {
     this.engine.weapon?.reset(); // fresh magazine at the start of every run
     this.engine.viewmodel?.clearBulletDecals();
     this.onStart();
+    refreshScenarioTargetGlow(this);
   }
   pause() {
     this.running = false;
@@ -156,14 +157,15 @@ export class BaseScenario {
   /** Apply practice setting changes while a run is paused (live gear edits). */
   applyLiveSettings() {
     if (this.competitive || this.isMultiplayer) return;
-    const g = { ...(DEFAULTS[this.name] || {}), ...(this.settings.data[this.name] || {}) };
+    const s = this.settings.activeSettings?.() ?? this.settings.data;
+    const g = { ...(DEFAULTS[this.name] || {}), ...(s[this.name] || {}) };
     if ('infiniteAmmo' in g) this.infiniteAmmo = g.infiniteAmmo !== false;
     if ('viewmodelRecoil' in g) this.viewmodelRecoil = !!g.viewmodelRecoil;
     if ('missLimit' in g) {
       this.missLimit = Math.max(0, Math.round(g.missLimit ?? 0));
     }
-    const col = this.settings.data.colors?.target;
-    const glow = this.settings.data.targetGlow === true;
+    const col = s.colors?.target;
+    const glow = s.targetGlow === true;
     if (col) {
       for (const t of this.targets) {
         for (const mesh of t.colliders || []) {
@@ -304,8 +306,9 @@ export class BaseScenario {
   addTarget(target) {
     this.targets.push(target);
     this.root.add(target.object);
-    const glow = this.settings.data.targetGlow === true;
-    const color = this.settings.data.colors?.target;
+    const s = this.settings.activeSettings?.() ?? this.settings.data;
+    const glow = s.targetGlow === true;
+    const color = s.colors?.target;
     if (glow && color) {
       for (const mesh of target.colliders || []) {
         applyTargetGlow(mesh, { enabled: true, color });

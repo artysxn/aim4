@@ -67,23 +67,28 @@ export class RapidtrackScenario extends TrackingScenario {
   _buildArena() {
     const c = this.settings.data.colors;
     const [gridCenter, gridEdge] = gridLineColors(c.floor);
+    const radius = ARENA_HALF + 1;
+
     const floor = new THREE.Mesh(
-      new THREE.CircleGeometry(ARENA_HALF + 1, 48),
+      new THREE.CircleGeometry(radius, 64),
       new THREE.MeshStandardMaterial({ color: c.floor, roughness: 1 })
     );
     floor.rotation.x = -Math.PI / 2;
     this.root.add(floor);
 
-    const grid = new THREE.GridHelper((ARENA_HALF + 1) * 2, 44, gridCenter, gridEdge);
+    const grid = new THREE.PolarGridHelper(radius, 24, 12, 64, gridCenter, gridEdge);
     grid.position.y = 0.002;
     this.root.add(grid);
 
-    const box = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(ARENA_HALF * 2, 0.02, ARENA_HALF * 2)),
-      new THREE.LineBasicMaterial({ color: gridCenter })
+    const ringPts = Array.from({ length: 65 }, (_, i) => {
+      const a = (i / 64) * Math.PI * 2;
+      return new THREE.Vector3(Math.sin(a) * ARENA_HALF, 0.03, -Math.cos(a) * ARENA_HALF);
+    });
+    const ring = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(ringPts),
+      new THREE.LineBasicMaterial({ color: gridCenter, transparent: true, opacity: 0.45 })
     );
-    box.position.y = 0.03;
-    this.root.add(box);
+    this.root.add(ring);
   }
 
   _spawnBot() {

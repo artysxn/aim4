@@ -93,7 +93,7 @@ export class TrackingScenario extends BaseScenario {
     floor.rotation.x = -Math.PI / 2;
     this.root.add(floor);
 
-    const grid = new THREE.GridHelper(40, 40, gridCenter, gridEdge);
+    const grid = new THREE.PolarGridHelper(22, 24, 12, 64, gridCenter, gridEdge);
     grid.position.y = 0.002;
     this.root.add(grid);
 

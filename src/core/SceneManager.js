@@ -53,6 +53,7 @@ import { PeekswitchScenario } from '../scenarios/PeekswitchScenario.js';
 import { PeekswitchBotsScenario } from '../scenarios/PeekswitchBotsScenario.js';
 import { DURATION_MODES, resolveModeDuration } from './SettingsManager.js';
 import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
+import { refreshScenarioTargetGlow } from '../utils/targetGlow.js';
 
 // Singleplayer scenarios — these are the ones shown as menu cards + leaderboards.
 export const SCENARIOS = {
@@ -155,6 +156,7 @@ export class SceneManager {
     const sc = this.current;
     if (!sc || sc.competitive || sc.isMultiplayer) return;
     sc.applyLiveSettings?.();
+    refreshScenarioTargetGlow(sc);
     this._applyDuration(sc.name, this._runConfig || {});
   }
 
