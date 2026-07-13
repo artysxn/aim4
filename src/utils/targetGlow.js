@@ -1,27 +1,23 @@
 // ---------------------------------------------------------------------------
-// targetGlow.js — mark target collider meshes for selective bloom (any color).
+// targetGlow.js — mark dot-target meshes for selective bloom (any target color).
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
 import { BLOOM_LAYER } from './bloomLayers.js';
 
-/** True for hittable target colliders explicitly allowed to glow. */
+/** True for gridshot-style dot spheres (not bot bodies / heads). */
 export function isBloomTargetMesh(mesh) {
   if (!mesh?.isMesh) return false;
   if (!mesh.userData.target) return false;
   if (mesh.userData.targetGlow === false) return false;
+  if (!(mesh.geometry instanceof THREE.SphereGeometry)) return false;
+  if (mesh.userData.zone === 'head') return false;
   return true;
 }
 
 /** @deprecated Use isBloomTargetMesh */
 export function isDotTargetMesh(mesh, targetColor) {
-  if (!isBloomTargetMesh(mesh)) return false;
-  if (!(mesh.geometry instanceof THREE.SphereGeometry)) return false;
-  if (mesh.userData.zone === 'head') return false;
-  if (!mesh.material?.color || !targetColor) return false;
-  const a = new THREE.Color(mesh.material.color);
-  const b = new THREE.Color(targetColor);
-  return a.equals(b);
+  return isBloomTargetMesh(mesh);
 }
 
 export function removeTargetGlow(mesh) {
@@ -33,7 +29,7 @@ export function removeTargetGlow(mesh) {
 }
 
 /**
- * Register a target collider mesh for the bloom pass (works with dark target colors).
+ * Register a dot target mesh for the bloom pass (works with dark target colors).
  * @param {THREE.Mesh} mesh
  * @param {{ enabled: boolean, color: string | number }} opts
  */

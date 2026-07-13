@@ -1,13 +1,14 @@
 // ---------------------------------------------------------------------------
 // SkyboxManager.js — optional cubemap sky with hue/sat/brightness/contrast/opacity.
 // Blends toward colors.bg when opacity < 1 so the background color still shows.
+// Optional in-shader glow (skyboxPostFx) — contained to sky pixels only.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
 import { skyboxById } from './skyboxCatalog.js';
-import { SKY_BLOOM_LAYER } from '../utils/bloomLayers.js';
 
 const SKY_RADIUS = 420;
+const SKY_GLOW_STRENGTH = 0.35;
 
 const SKY_VERTEX = /* glsl */`
 varying vec3 vWorldDir;
@@ -27,6 +28,7 @@ uniform float uHue;
 uniform float uSaturation;
 uniform float uBrightness;
 uniform float uContrast;
+uniform float uGlow;
 varying vec3 vWorldDir;
 
 vec3 rgb2hsv(vec3 c) {
@@ -44,19 +46,27 @@ vec3 hsv2rgb(vec3 c) {
   return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
 }
 
-void main() {
-  vec3 dir = normalize(vWorldDir);
-  vec3 tex = texture(tCube, dir).rgb;
-  tex = pow(tex, vec3(2.2));
-
-  vec3 hsv = rgb2hsv(clamp(tex, 0.0, 1.0));
+vec3 gradeSky(vec3 texLin) {
+  vec3 hsv = rgb2hsv(clamp(texLin, 0.0, 1.0));
   hsv.x = fract(hsv.x + uHue);
   hsv.y = clamp(hsv.y * uSaturation, 0.0, 1.0);
   vec3 col = hsv2rgb(hsv);
-
   col = (col - 0.5) * uContrast + 0.5;
   col *= uBrightness;
-  col = clamp(col, 0.0, 1.0);
+  return clamp(col, 0.0, 1.0);
+}
+
+void main() {
+  vec3 dir = normalize(vWorldDir);
+  vec3 sharp = gradeSky(pow(texture(tCube, dir).rgb, vec3(2.2)));
+
+  vec3 col = sharp;
+  if (uGlow > 0.0) {
+    vec3 blur = gradeSky(pow(textureLod(tCube, dir, 4.0).rgb, vec3(2.2)));
+    float lum = dot(blur, vec3(0.2126, 0.7152, 0.0722));
+    float bright = smoothstep(0.42, 0.82, lum);
+    col += blur * bright * uGlow;
+  }
 
   vec3 bg = pow(uBgColor, vec3(2.2));
   col = mix(bg, col, uOpacity);
@@ -89,7 +99,8 @@ export class SkyboxManager {
         uHue: { value: 0 },
         uSaturation: { value: 1 },
         uBrightness: { value: 1 },
-        uContrast: { value: 1 }
+        uContrast: { value: 1 },
+        uGlow: { value: 0 }
       },
       vertexShader: SKY_VERTEX,
       fragmentShader: SKY_FRAGMENT,
@@ -116,28 +127,26 @@ export class SkyboxManager {
     u.uSaturation.value = clamp((s.skyboxSaturation ?? 100) / 100, 0, 3);
     u.uBrightness.value = clamp((s.skyboxBrightness ?? 100) / 100, 0, 3);
     u.uContrast.value = clamp((s.skyboxContrast ?? 100) / 100, 0, 3);
-  }
-
-  _syncPostFxLayer(settings) {
-    this.syncPostFxLayer(settings);
-  }
-
-  syncPostFxLayer(settings) {
-    if (!this._mesh) return;
-    const postFx = settings?.customSkybox === true && settings?.skyboxPostFx !== false;
-    if (postFx) this._mesh.layers.enable(SKY_BLOOM_LAYER);
-    else this._mesh.layers.disable(SKY_BLOOM_LAYER);
+    const glowOn = s.customSkybox === true && s.skyboxPostFx !== false;
+    u.uGlow.value = glowOn ? SKY_GLOW_STRENGTH : 0;
   }
 
   _loadTexture(entry) {
     if (this._cache.has(entry.id)) {
-      return Promise.resolve(this._cache.get(entry.id));
+      const tex = this._cache.get(entry.id);
+      tex.generateMipmaps = true;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      return Promise.resolve(tex);
     }
     return new Promise((resolve, reject) => {
       this._loader.load(
         entry.urls,
         (tex) => {
           tex.colorSpace = THREE.SRGBColorSpace;
+          tex.generateMipmaps = true;
+          tex.minFilter = THREE.LinearMipmapLinearFilter;
+          tex.magFilter = THREE.LinearFilter;
           this._cache.set(entry.id, tex);
           resolve(tex);
         },
@@ -153,10 +162,7 @@ export class SkyboxManager {
     this._enabled = enabled;
 
     if (!enabled) {
-      if (this._mesh) {
-        this._mesh.visible = false;
-        this._mesh.layers.disable(SKY_BLOOM_LAYER);
-      }
+      if (this._mesh) this._mesh.visible = false;
       return;
     }
 
@@ -168,7 +174,6 @@ export class SkyboxManager {
     }
 
     this.syncUniforms(s);
-    this._syncPostFxLayer(s);
     this._mesh.visible = true;
 
     if (this._activeId === entry.id && this._material.uniforms.tCube.value) return;

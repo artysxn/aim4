@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
-// targetBloomPass.js — UnrealBloom on mesh-masked passes (not scene luminance).
-// Base scene renders normally; bloom passes black out non-masked meshes, render
-// masked meshes bright, bloom, then additively composite the bloom halo only.
+// targetBloomPass.js — UnrealBloom on mesh-masked passes (dot targets only).
+// Base scene renders normally; bloom pass blacks out non-masked meshes, renders
+// masked meshes bright, blooms, then additively composites the bloom halo only.
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
@@ -10,13 +10,12 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { CopyShader } from 'three/examples/jsm/shaders/CopyShader.js';
-import { BLOOM_LAYER, SKY_BLOOM_LAYER } from './bloomLayers.js';
+import { BLOOM_LAYER } from './bloomLayers.js';
 
 const TARGET_STRENGTH = 1.15;
 const TARGET_RADIUS = 0.45;
-const SKY_STRENGTH = 0.85;
-const SKY_RADIUS = 0.5;
 const BLOOM_LIFT = 4.5;
+const BLACK_CLEAR = new THREE.Color(0x000000);
 
 export class TargetBloomPass {
   constructor(renderer, scene, camera) {
@@ -24,13 +23,15 @@ export class TargetBloomPass {
     this._scene = scene;
     this._camera = camera;
     this._targetBloom = false;
-    this._skyBloom = false;
     this._targetComposer = null;
-    this._skyComposer = null;
     this._blendScene = null;
     this._blendCamera = null;
     this._blendMat = null;
-    this._darkMat = new THREE.MeshBasicMaterial({ color: 0x000000, toneMapped: false });
+    this._darkMat = new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      toneMapped: false,
+      fog: false
+    });
     this._bloomMats = new Map();
     this._swapped = [];
   }
@@ -54,47 +55,38 @@ export class TargetBloomPass {
     this._blendCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   }
 
-  _makeComposer(strength, radius) {
+  _makeComposer() {
     const composer = new EffectComposer(this._renderer);
     composer.renderToScreen = false;
-    composer.addPass(new RenderPass(this._scene, this._camera));
+    composer.addPass(new RenderPass(this._scene, this._camera, null, BLACK_CLEAR, 1));
     const size = new THREE.Vector2();
     this._renderer.getSize(size);
-    const bloomPass = new UnrealBloomPass(size, strength, radius, 0);
+    const bloomPass = new UnrealBloomPass(size, TARGET_STRENGTH, TARGET_RADIUS, 0);
     composer.addPass(bloomPass);
     composer.setPixelRatio(this._renderer.getPixelRatio());
     composer.bloomPass = bloomPass;
     return composer;
   }
 
-  _ensureComposer(which) {
-    if (which === 'target' && !this._targetComposer) {
-      this._targetComposer = this._makeComposer(TARGET_STRENGTH, TARGET_RADIUS);
-    }
-    if (which === 'sky' && !this._skyComposer) {
-      this._skyComposer = this._makeComposer(SKY_STRENGTH, SKY_RADIUS);
-    }
+  _ensureComposer() {
+    if (!this._targetComposer) this._targetComposer = this._makeComposer();
   }
 
   setSize(width, height) {
+    if (!this._targetComposer) return;
     const pr = this._renderer.getPixelRatio();
-    for (const composer of [this._targetComposer, this._skyComposer]) {
-      if (!composer) continue;
-      composer.setSize(width, height);
-      composer.setPixelRatio(pr);
-      composer.bloomPass?.setSize(width * pr, height * pr);
-    }
+    this._targetComposer.setSize(width, height);
+    this._targetComposer.setPixelRatio(pr);
+    this._targetComposer.bloomPass?.setSize(width * pr, height * pr);
   }
 
-  setOptions({ targetBloom = false, skyBloom = false } = {}) {
+  setOptions({ targetBloom = false } = {}) {
     this._targetBloom = !!targetBloom;
-    this._skyBloom = !!skyBloom;
-    if (this._targetBloom) this._ensureComposer('target');
-    if (this._skyBloom) this._ensureComposer('sky');
+    if (this._targetBloom) this._ensureComposer();
   }
 
-  _isBloomMesh(obj, layer) {
-    return obj.isMesh && obj.layers.test(layer);
+  _isBloomMesh(obj) {
+    return obj.isMesh && obj.layers.test(BLOOM_LAYER);
   }
 
   _bloomMaterialFor(mesh) {
@@ -106,39 +98,43 @@ export class TargetBloomPass {
       c.multiplyScalar(BLOOM_LIFT * strength);
       this._bloomMats.set(
         key,
-        new THREE.MeshBasicMaterial({ color: c, toneMapped: false })
+        new THREE.MeshBasicMaterial({ color: c, toneMapped: false, fog: false })
       );
     }
     return this._bloomMats.get(key);
   }
 
-  _maskScene(layer, keepBloomMaterial = false) {
+  _maskScene() {
     this._swapped.length = 0;
     this._scene.traverse((obj) => {
-      if (!obj.isMesh) return;
-      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-      this._swapped.push({ obj, mat: obj.material });
-      if (this._isBloomMesh(obj, layer)) {
-        if (!keepBloomMaterial) obj.material = this._bloomMaterialFor(obj);
-      } else {
-        obj.material = this._darkMat;
+      if (obj.isLine || obj.isLineSegments || obj.isPoints || obj.isSprite) {
+        this._swapped.push({ obj, vis: obj.visible, kind: 'vis' });
+        obj.visible = false;
+        return;
       }
+      if (!obj.isMesh) return;
+      this._swapped.push({ obj, mat: obj.material, kind: 'mat' });
+      obj.material = this._isBloomMesh(obj)
+        ? this._bloomMaterialFor(obj)
+        : this._darkMat;
     });
   }
 
   _restoreScene() {
-    for (const { obj, mat } of this._swapped) obj.material = mat;
+    for (const item of this._swapped) {
+      if (item.kind === 'vis') item.obj.visible = item.vis;
+      else item.obj.material = item.mat;
+    }
     this._swapped.length = 0;
   }
 
-  /** Bloom-only mip composite from UnrealBloomPass (not the masked scene buffer). */
-  _bloomTexture(composer) {
-    return composer.bloomPass.renderTargetsHorizontal[0].texture;
+  _bloomTexture() {
+    return this._targetComposer.bloomPass.renderTargetsHorizontal[0].texture;
   }
 
-  _compositeBloom(composer) {
+  _compositeBloom() {
     this._ensureBlendPass();
-    this._blendMat.uniforms.tDiffuse.value = this._bloomTexture(composer);
+    this._blendMat.uniforms.tDiffuse.value = this._bloomTexture();
     const prevRT = this._renderer.getRenderTarget();
     const prevAutoClear = this._renderer.autoClear;
     this._renderer.setRenderTarget(null);
@@ -148,21 +144,18 @@ export class TargetBloomPass {
     this._renderer.setRenderTarget(prevRT);
   }
 
-  _renderMaskedBloom(layer, composer, keepBloomMaterial = false) {
-    this._maskScene(layer, keepBloomMaterial);
-    composer.render();
+  _renderTargetBloom() {
+    this._maskScene();
+    const prevFog = this._scene.fog;
+    this._scene.fog = null;
+    this._targetComposer.render();
+    this._scene.fog = prevFog;
     this._restoreScene();
-    this._compositeBloom(composer);
+    this._compositeBloom();
   }
 
   render() {
     this._renderer.render(this._scene, this._camera);
-
-    if (this._targetBloom && this._targetComposer) {
-      this._renderMaskedBloom(BLOOM_LAYER, this._targetComposer, false);
-    }
-    if (this._skyBloom && this._skyComposer) {
-      this._renderMaskedBloom(SKY_BLOOM_LAYER, this._skyComposer, true);
-    }
+    if (this._targetBloom && this._targetComposer) this._renderTargetBloom();
   }
 }

@@ -114,10 +114,7 @@ _setupLights() {
 
   applyPostProcessing() {
     const s = this.settings.activeSettings();
-    this._bloom?.setOptions({
-      targetBloom: s.targetGlow === true,
-      skyBloom: s.customSkybox === true && s.skyboxPostFx !== false
-    });
+    this._bloom?.setOptions({ targetBloom: s.targetGlow === true });
   }
 
   /** @deprecated Use applyPostProcessing */
@@ -146,10 +143,7 @@ _setupLights() {
     const bg = s.colors.bg;
     this.renderer.setClearColor(bg, 1);
     this.scene.fog.color.set(bg);
-    if (this._skybox) {
-      this._skybox.syncUniforms(s);
-      this._skybox.syncPostFxLayer(s);
-    }
+    if (this._skybox) this._skybox.syncUniforms(s);
   }
 
   resetCamera() {
