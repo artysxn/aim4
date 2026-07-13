@@ -33,13 +33,22 @@ uniform float uGlowRadius;
 uniform float uGlowThreshLo;
 uniform float uGlowThreshHi;
 uniform float uGlowVerticalFill;
-uniform float uPitchOffset;
+uniform float uElevOffset;
 varying vec3 vWorldDir;
 
-vec3 pitchDir(vec3 dir) {
-  float c = cos(uPitchOffset);
-  float s = sin(uPitchOffset);
-  return vec3(dir.x, dir.y * c - dir.z * s, dir.y * s + dir.z * c);
+// Shift cubemap elevation only — horizon stays level, sky moves up/down on screen.
+vec3 shiftElev(vec3 dir) {
+  dir = normalize(dir);
+  float xzLen = length(dir.xz);
+  float elev = atan(dir.y, xzLen);
+  elev += uElevOffset;
+  float cosE = cos(elev);
+  float sinE = sin(elev);
+  if (xzLen > 1e-5) {
+    vec2 xzNorm = dir.xz / xzLen;
+    return vec3(xzNorm.x * cosE, sinE, xzNorm.y * cosE);
+  }
+  return vec3(0.0, sinE, 0.0);
 }
 
 vec3 rgb2hsv(vec3 c) {
@@ -105,7 +114,7 @@ vec3 blurSkyGlow(vec3 dir) {
 }
 
 void main() {
-  vec3 dir = pitchDir(normalize(vWorldDir));
+  vec3 dir = shiftElev(normalize(vWorldDir));
   vec3 col = sampleSky(dir);
 
   if (uGlowStrength > 0.0) {
@@ -154,7 +163,7 @@ export class SkyboxManager {
         uGlowThreshLo: { value: 0 },
         uGlowThreshHi: { value: 0.29 },
         uGlowVerticalFill: { value: 1 },
-        uPitchOffset: { value: 0 }
+        uElevOffset: { value: 0 }
       },
       vertexShader: SKY_VERTEX,
       fragmentShader: SKY_FRAGMENT,
@@ -181,7 +190,7 @@ export class SkyboxManager {
     u.uSaturation.value = clamp((s.skyboxSaturation ?? 100) / 100, 0, 3);
     u.uBrightness.value = clamp((s.skyboxBrightness ?? 100) / 100, 0, 3);
     u.uContrast.value = clamp((s.skyboxContrast ?? 100) / 100, 0, 3);
-    u.uPitchOffset.value = (s.skyboxHeightOffset ?? 0) * (Math.PI / SKY_RADIUS);
+    u.uElevOffset.value = (s.skyboxHeightOffset ?? 0) * (Math.PI / SKY_RADIUS);
 
     const gc = resolveSkyboxGlowConfig(s.skyboxGlowConfig);
     const postFx = s.skyboxPostFx !== false;
