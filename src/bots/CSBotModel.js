@@ -235,7 +235,7 @@ export class CSBotModel {
 
   /** Tapered bridge between two limb anchors — visual only, not a hitbox. */
   _buildJointBridge(upperNode, upperLocal, lowerNode, lowerLocal, rTop, rBot) {
-    const geo = new THREE.CylinderGeometry(rTop * this._w, rBot * this._w, 1, 8, 1);
+    const geo = new THREE.CylinderGeometry(rBot * this._w, rTop * this._w, 1, 8, 1);
     geo.translate(0, 0.5, 0); // local +Y spans 0 → 1 for stretch scaling
     const mesh = new THREE.Mesh(geo, this._bodyMat);
     upperNode.parent.add(mesh);
@@ -268,7 +268,7 @@ export class CSBotModel {
 
       j.mesh.visible = true;
       _jointDir.subVectors(_jointB, _jointA);
-      j.mesh.position.copy(_jointA).addScaledVector(_jointDir, 0.5);
+      j.mesh.position.copy(_jointA);
       _jointDir.normalize();
       j.mesh.quaternion.setFromUnitVectors(_yUp, _jointDir);
       j.mesh.scale.set(1, dist, 1);
