@@ -207,6 +207,10 @@ export class CSBotModel {
     this._speed = 0;
     this._leanX = 0;
     this._leanZ = 0;
+    // ---- Eased anim state ----
+    this._crouchEased = 0;
+    this._moveDirX = 0;
+    this._moveDirZ = 1;
   }
 
   // ---- Build ---------------------------------------------------------------
@@ -428,7 +432,10 @@ export class CSBotModel {
   update(dt, { crouch = this._crouch } = {}) {
     if (dt <= 0) return;
     this._crouch = THREE.MathUtils.clamp(crouch, 0, 1);
-    const c = this._crouch;
+
+    // Smooth crouch transition (~10 units/s).
+    this._crouchEased += (this._crouch - this._crouchEased) * Math.min(1, 10 * dt);
+    const c = this._crouchEased;
 
     // Measure world velocity + eye yaw from wherever the scenario put us.
     this.root.getWorldPosition(_wp);
@@ -495,8 +502,6 @@ export class CSBotModel {
     this.lower.rotation.set(this._leanX, -dYaw, this._leanZ); // YXZ — lean + foot desync
 
     // ---- Aim matrix: pitch smoothing + spine distribution ----
-    // Torso carries ~44% of the pitch (rifle rides the chest), neck + head the
-    // rest — keeps the head near its standing height across the pitch range.
     this._pitch += (this._pitchTarget - this._pitch) * Math.min(1, PITCH_RATE * dt);
     const p = this._pitch;
     const twist = dYaw / 3; // spine untwists the desync back toward eye yaw
@@ -510,24 +515,27 @@ export class CSBotModel {
     const sr = THREE.MathUtils.clamp(speed / RUN_SPEED, 0, 1.3);
     const moving = speed > 0.1;
     if (moving) {
-      // Amplitude and cadence both scale with √(speed ratio), so the planted
-      // foot's ground speed (amp × rate) matches actual velocity — no skating.
       const k = Math.sqrt(sr);
       this._amp += (STRIDE_HALF_RUN * k - this._amp) * Math.min(1, 10 * dt);
       this._lift = LIFT_RUN * Math.max(0.35, k);
       this._phase += CYCLE_RATE_RUN * k * dt;
-      // Stride direction in the foot-yaw local frame (8-way blend equivalent).
+
       const cosF = Math.cos(this._footYaw);
       const sinF = Math.sin(this._footYaw);
       const lx = vx * cosF - vz * sinF;
       const lz = vx * sinF + vz * cosF;
       const inv = 1 / (Math.hypot(lx, lz) || 1e-6);
-      this._dirX = lx * inv;
-      this._dirZ = lz * inv;
+
+      // Smooth direction changes (prevents leg snapping on A/D spam).
+      this._moveDirX += (lx * inv - this._moveDirX) * Math.min(1, 12 * dt);
+      this._moveDirZ += (lz * inv - this._moveDirZ) * Math.min(1, 12 * dt);
+
+      const smoothedInv = 1 / (Math.hypot(this._moveDirX, this._moveDirZ) || 1e-6);
+      this._dirX = this._moveDirX * smoothedInv;
+      this._dirZ = this._moveDirZ * smoothedInv;
     } else {
       this._amp += (0 - this._amp) * Math.min(1, 8 * dt);
       this._lift = 0;
-      // Settle the phase at the nearest footfall so the feet come to rest.
       const rest = Math.round(this._phase / Math.PI) * Math.PI;
       this._phase += (rest - this._phase) * Math.min(1, 10 * dt);
     }
@@ -536,19 +544,36 @@ export class CSBotModel {
     const pelvisY = HIP_Y - CROUCH_DROP * c + BOB_RUN * sr * Math.sin(2 * this._phase);
     this.pelvis.position.y = pelvisY;
 
-    // ---- Legs: two-bone IK to the gait foot targets (pelvis-local) ----
+    // ---- Legs: asymmetric IK gait (60% planted / 40% swing) ----
     for (const leg of this.legs) {
-      const sway = this._amp * Math.sin(this._phase + leg.phaseOff);
-      const lift = this._lift * Math.max(0, Math.cos(this._phase + leg.phaseOff));
+      let localPhase = (this._phase + leg.phaseOff) % (Math.PI * 2);
+      if (localPhase < 0) localPhase += Math.PI * 2;
+      const normPhase = localPhase / (Math.PI * 2);
+
+      let swayOut = 0;
+      let liftOut = 0;
+
+      if (normPhase < 0.6) {
+        // Ground phase: foot moves linearly backward relative to the body.
+        swayOut = 1.0 - (normPhase / 0.6) * 2.0;
+        liftOut = 0;
+      } else {
+        // Air phase: foot swings forward in a parabolic arc.
+        const airPhase = (normPhase - 0.6) / 0.4;
+        swayOut = -1.0 + airPhase * 2.0;
+        liftOut = Math.sin(airPhase * Math.PI);
+      }
+
+      const sway = this._amp * swayOut;
+      const lift = this._lift * liftOut;
+
       _legTarget.set(
         leg.s * FOOT_HALF + this._dirX * sway,
         ANKLE_H + lift - pelvisY,
         this._dirZ * sway
       );
-      _legPole.set(0, 0, 1); // knees always bend forward (relative to foot yaw)
+      _legPole.set(0, 0, 1);
       solveTwoBone(leg.thigh, leg.knee, THIGH_LEN, CALF_LEN, _legTarget, _legPole);
-      // Keep the foot level with the ground (undo the leg chain's rotation),
-      // with a touch of toe-drop while the foot is lifted.
       _footQ.multiplyQuaternions(leg.thigh.quaternion, leg.knee.quaternion).invert();
       if (lift > 0.001) {
         _toeQ.setFromAxisAngle(_xAxis, 0.35 * (lift / LIFT_RUN));
