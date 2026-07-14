@@ -245,11 +245,11 @@ export class CSBotModel {
   }
 
   _capBottomY(centerY, seg, r) {
-    return centerY - seg / 2 - r;
+    return centerY - seg / 2;
   }
 
   _capTopY(centerY, seg, r) {
-    return centerY + seg / 2 + r;
+    return centerY + seg / 2;
   }
 
   _updateJointBridges() {
@@ -316,7 +316,7 @@ export class CSBotModel {
       const thighBot = this._capBottomY(-THIGH_LEN / 2, THIGH_CAP_SEG, THIGH_CAP_R);
       const kneeTop = this._capTopY(KNEE_CAP_Y, KNEE_CAP_SEG, KNEE_CAP_R);
       const kneeBot = this._capBottomY(KNEE_CAP_Y, KNEE_CAP_SEG, KNEE_CAP_R);
-      const footTop = new THREE.Vector3(0, FOOT_CAP_Y + FOOT_CAP_R * 0.35, FOOT_CAP_Z - FOOT_CAP_SEG / 2 - FOOT_CAP_R);
+      const footTop = new THREE.Vector3(0, FOOT_CAP_Y + FOOT_CAP_R * 0.35, FOOT_CAP_Z - FOOT_CAP_SEG / 2);
       this._buildJointBridge(
         thigh,
         new THREE.Vector3(0, thighBot, 0),
