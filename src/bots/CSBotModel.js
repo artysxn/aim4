@@ -256,11 +256,16 @@ export class CSBotModel {
     for (const j of this._dynamicJoints) {
       j.upperNode.localToWorld(_jointA.copy(j.upperLocal));
       j.lowerNode.localToWorld(_jointB.copy(j.lowerLocal));
+
+      j.mesh.parent.worldToLocal(_jointA);
+      j.mesh.parent.worldToLocal(_jointB);
+
       const dist = _jointA.distanceTo(_jointB);
       if (dist < 1e-4) {
         j.mesh.visible = false;
         continue;
       }
+
       j.mesh.visible = true;
       _jointDir.subVectors(_jointB, _jointA);
       j.mesh.position.copy(_jointA).addScaledVector(_jointDir, 0.5);
