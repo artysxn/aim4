@@ -63,13 +63,13 @@ const ADJUST_YAW_RATE = 9; // 1/s while replanting the feet
 const MOVE_EPS = 0.15; // m/s — "velocity > 0.1" threshold, scaled to metres
 
 // ---- Gait tuning ----
-const STRIDE_HALF_RUN = 0.30; // m half-stride at full run speed
-const CYCLE_RATE_RUN = 18.2; // rad/s phase rate at full run (≈2.9 steps/s)
-const LIFT_RUN = 0.10; // m foot lift at full run
+const STRIDE_HALF_RUN = 0.48; // m half-stride at full run speed (wider steps)
+const CYCLE_RATE_RUN = 11.5; // rad/s phase rate at full run (slower cadence)
+const LIFT_RUN = 0.12; // m foot lift at full run
 const BOB_RUN = 0.015; // m pelvis bob at full run
 const PITCH_RATE = 18; // 1/s aim-pitch smoothing
 const LEAN_RATE = 12; // 1/s travel-lean smoothing
-const MAX_LEAN = THREE.MathUtils.degToRad(3); // subtle directional lean cap
+const MAX_LEAN = THREE.MathUtils.degToRad(8); // travel lean cap (upper + lower body)
 const LEAN_SENS = MAX_LEAN / RUN_SPEED; // maps run speed → max lean
 
 // Capsule dims (mirror _buildSkeleton) — anchor math for joint bridges.
@@ -317,6 +317,15 @@ export class CSBotModel {
       const foot = this._node(knee, 0, -CALF_LEN, 0);
       this._cap(foot, FOOT_CAP_R, FOOT_CAP_SEG, { y: FOOT_CAP_Y, z: FOOT_CAP_Z, axis: 'z', hitgroup: `${side}_leg` });
 
+      this._buildJointBridge(
+        this.pelvis,
+        new THREE.Vector3(s * HIP_HALF * 0.8, -0.05, 0),
+        thigh,
+        new THREE.Vector3(0, 0, 0),
+        0.11,
+        THIGH_CAP_R
+      );
+
       const thighBot = this._capBottomY(-THIGH_LEN / 2, THIGH_CAP_SEG, THIGH_CAP_R);
       const kneeTop = this._capTopY(KNEE_CAP_Y, KNEE_CAP_SEG, KNEE_CAP_R);
       const kneeBot = this._capBottomY(KNEE_CAP_Y, KNEE_CAP_SEG, KNEE_CAP_R);
@@ -349,6 +358,15 @@ export class CSBotModel {
       this._cap(shoulder, 0.056, UPPER_ARM - 0.112, { y: -UPPER_ARM / 2, hitgroup: `${side}_arm` });
       const elbow = this._node(shoulder, 0, -UPPER_ARM, 0);
       this._cap(elbow, FORE_CAP_R, FORE_CAP_SEG, { y: FORE_CAP_Y, hitgroup: `${side}_arm` }); // forearm + hand
+
+      this._buildJointBridge(
+        this.chest,
+        new THREE.Vector3(s * SHOULDER_X * 0.75, SHOULDER_UP * 0.9, 0),
+        shoulder,
+        new THREE.Vector3(0, 0, 0),
+        0.08,
+        SHOULDER_CAP_R
+      );
 
       const shoulderBot = this._capBottomY(-UPPER_ARM / 2, SHOULDER_CAP_SEG, SHOULDER_CAP_R);
       const foreTop = this._capTopY(FORE_CAP_Y, FORE_CAP_SEG, FORE_CAP_R);
@@ -501,13 +519,17 @@ export class CSBotModel {
     dYaw = wrapPI(eyeYaw - this._footYaw);
     this.lower.rotation.set(this._leanX, -dYaw, this._leanZ); // YXZ — lean + foot desync
 
-    // ---- Aim matrix: pitch smoothing + spine distribution ----
+    // ---- Aim matrix: pitch smoothing + spine distribution + travel lean ----
     this._pitch += (this._pitchTarget - this._pitch) * Math.min(1, PITCH_RATE * dt);
     const p = this._pitch;
     const twist = dYaw / 3; // spine untwists the desync back toward eye yaw
-    this.spine0.rotation.set(-p * 0.08 + 0.14 * c, twist, 0);
-    this.spine1.rotation.set(-p * 0.14 + 0.16 * c, twist, 0);
-    this.chest.rotation.set(-p * 0.22 + 0.1 * c, twist, 0);
+
+    const leanPitch = this._leanX; // forward/backward tilt
+    const leanRoll = this._leanZ; // left/right tilt
+
+    this.spine0.rotation.set(-p * 0.08 + 0.14 * c + leanPitch * 0.3, twist, leanRoll * 0.3);
+    this.spine1.rotation.set(-p * 0.14 + 0.16 * c + leanPitch * 0.3, twist, leanRoll * 0.3);
+    this.chest.rotation.set(-p * 0.22 + 0.1 * c + leanPitch * 0.4, twist, leanRoll * 0.4);
     this.neck.rotation.set(-p * 0.28 - 0.28 * c, 0, 0);
     this.head.rotation.set(-p * 0.28, 0, 0);
 
