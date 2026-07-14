@@ -1941,6 +1941,7 @@ input[type='checkbox'] {
   display: block;
 }
 .pace-bar {
+  position: relative;
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.12s ease;
@@ -1964,6 +1965,8 @@ input[type='checkbox'] {
   box-shadow: 0 1px 8px rgba(0, 0, 0, 0.35);
 }
 .pace-bar-fill {
+  position: relative;
+  z-index: 1;
   height: 100%;
   width: 0;
   transition: width 0.05s linear, background-color 0.08s linear;
@@ -1976,6 +1979,25 @@ input[type='checkbox'] {
 }
 .pace-bar-fill.behind {
   background: var(--pace-bar-behind);
+}
+.pace-bar-marker {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 2px;
+  height: calc(100% + 4px);
+  transform: translate(-50%, -50%);
+  background: #fff;
+  opacity: 0;
+  z-index: 2;
+  pointer-events: none;
+  transition: left 0.05s linear, opacity 0.08s linear;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.65);
+}
+.pace-bar--compact .pace-bar-marker {
+  height: calc(100% - 4px);
+  width: 2px;
+  border-radius: 1px;
 }
 
 /* ---- HUD ---------------------------------------------------------------- */

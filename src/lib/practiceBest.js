@@ -64,6 +64,16 @@ export function updatePracticeBest(results) {
   return row;
 }
 
+/** Map live metric to [0,1] on the PB scale (0 = none, 1 = PB or better). */
+export function scoreFraction(scenario, currentMetric, pbScore) {
+  if (!Number.isFinite(pbScore) || pbScore <= 0 || !Number.isFinite(currentMetric)) return null;
+  if (isLowerScoreLeaderboardScenario(scenario)) {
+    if (currentMetric <= 0) return null;
+    return Math.max(0, Math.min(1, pbScore / currentMetric));
+  }
+  return Math.max(0, Math.min(1, currentMetric / pbScore));
+}
+
 /** True when the live metric is on pace to tie/beat the PB at this timestamp. */
 export function isAheadOfPace(scenario, currentMetric, pbScore, currentTime, totalTime) {
   if (!Number.isFinite(pbScore) || pbScore <= 0 || !Number.isFinite(totalTime) || totalTime <= 0) {

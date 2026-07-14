@@ -17,6 +17,8 @@
 
 import * as THREE from 'three';
 import { TICK_RATE, TICK_DT, inputBitmask } from '../lib/replayCodec.js';
+import { isBloomTargetMesh } from '../utils/targetGlow.js';
+import { CSBotModel } from '../bots/CSBotModel.js';
 
 const MAX_SECONDS = 5 * 60; // hard cap so a stuck run can't exhaust memory
 const MAX_TICKS = MAX_SECONDS * TICK_RATE;
@@ -30,6 +32,8 @@ const _q = new THREE.Quaternion();
 const _s = new THREE.Vector3();
 const _ac = new THREE.Vector3(); // aim-collider world centre
 const _as = new THREE.Vector3(); // aim-collider world scale
+const _yawQ = new THREE.Quaternion();
+const _yawEuler = new THREE.Euler();
 
 function r(n, p = 1000) {
   return Math.round(n * p) / p;
@@ -55,6 +59,8 @@ function describeFromMatrix(node, matrix) {
     transparent: !!mat?.transparent,
     side,
     gridCover: !!(mat?.map),
+    zone: node.userData?.zone,
+    bloomDot: isBloomTargetMesh(node) ? true : undefined,
     p: [r(_p.x), r(_p.y), r(_p.z)],
     q: [r(_q.x, 1e5), r(_q.y, 1e5), r(_q.z, 1e5), r(_q.w, 1e5)],
     s: [r(_s.x), r(_s.y), r(_s.z)]
@@ -159,6 +165,7 @@ export class ReplayRecorder {
   }
 
   _blueprintFor(target) {
+    if (target?.model instanceof CSBotModel) return null;
     const savedObj = target.object.scale.x;
     const savedMesh = target._mesh?.scale.x ?? 1;
     target.object.scale.setScalar(1);
@@ -174,6 +181,54 @@ export class ReplayRecorder {
       this.blueprints[id] = meshes;
     }
     return id;
+  }
+
+  _isCSBot(target) {
+    return target?.model instanceof CSBotModel;
+  }
+
+  _botParamsFrom(target) {
+    const m = target.model;
+    return {
+      bodyColor: m._bodyMat.color.getHex(),
+      headColor: m._headMat.color.getHex(),
+      widthScale: m._w,
+      scale: m.root.scale.x,
+      rifle: !!m.rifle
+    };
+  }
+
+  _botYaw(model) {
+    model.root.getWorldQuaternion(_yawQ);
+    _yawEuler.setFromQuaternion(_yawQ, 'YXZ');
+    return _yawEuler.y;
+  }
+
+  _captureCSBotFrame(t, rec) {
+    t.object.updateWorldMatrix(true, true);
+    t.object.getWorldPosition(_root);
+    t.object.getWorldScale(this._ws);
+    const meanScale = (this._ws.x + this._ws.y + this._ws.z) / 3;
+    const yaw = this._botYaw(t.model);
+    const pitch = t.model._pitchTarget ?? 0;
+    const crouch = t.model._crouch ?? 0;
+    rec.frames.push({
+      x: _root.x,
+      y: _root.y,
+      z: _root.z,
+      s: meanScale,
+      yaw,
+      pitch,
+      crouch
+    });
+    if (!rec.aim) {
+      rec.vis = [0, 0, 0];
+      t.model.headMesh.getWorldPosition(_v);
+      const es = meanScale || 1;
+      const a = this._aimFor(t, t.model.headMesh, meanScale);
+      rec.aim = a.aim;
+      rec.aimR = a.aimR;
+    }
   }
 
   /**
@@ -269,8 +324,20 @@ export class ReplayRecorder {
       seen.add(t.object);
       let rec = this._live.get(t.object);
       if (!rec) {
-        rec = { id: this._entSeq++, bp: this._blueprintFor(t), start: this._tick, frames: [] };
+        const isBot = this._isCSBot(t);
+        rec = {
+          id: this._entSeq++,
+          bp: isBot ? null : this._blueprintFor(t),
+          kind: isBot ? 'csbot' : undefined,
+          botParams: isBot ? this._botParamsFrom(t) : undefined,
+          start: this._tick,
+          frames: []
+        };
         this._live.set(t.object, rec);
+      }
+      if (rec.kind === 'csbot') {
+        this._captureCSBotFrame(t, rec);
+        continue;
       }
       t.object.updateWorldMatrix(true, true);
       const visual = this._entityVisual(t);

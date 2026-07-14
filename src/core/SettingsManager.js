@@ -11,8 +11,7 @@ import {
   radiansPerCountFromSensitivity,
   sensitivityFromLegacy
 } from '../utils/MathUtils.js';
-import { resolveTargetGlowConfig } from '../utils/targetGlowConfig.js';
-import { resolveSkyboxGlowConfig } from '../utils/skyboxGlowConfig.js';
+import { normalizeGraphicsConfig, replayBloomSettingsFrom } from '../utils/graphicsConfig.js';
 
 const SETTINGS_VERSION = 2;
 
@@ -252,6 +251,9 @@ export const DEFAULTS = {
     botBodyHit: 0.2, // per-bullet body hit chance vs player/bots
     botHeadHit: 0.05, // per-bullet head hit chance (checked before body)
     missLimit: 0
+  },
+  bots: {
+    classicModel: false // training only — static cylinder/sphere instead of CSBotModel
   },
   colors: {
     bg:        '#0a0a0a', // scene background + fog
@@ -778,6 +780,16 @@ export class SettingsManager {
       patch.weapon = structuredClone(this.data?.weapon || {});
       if (rs.weapon.aimpunch != null) patch.weapon.aimpunch = rs.weapon.aimpunch;
     }
+    if (
+      'targetGlow' in rs ||
+      'targetGlowConfig' in rs ||
+      'customSkybox' in rs ||
+      'skyboxPostFx' in rs ||
+      'skyboxGlowConfig' in rs ||
+      'skyboxId' in rs
+    ) {
+      Object.assign(patch, replayBloomSettingsFrom(rs, this.data));
+    }
     return patch;
   }
 
@@ -869,41 +881,26 @@ export class SettingsManager {
 
   /** Snapshot graphics-menu settings for share codes. */
   getGraphicsConfig() {
-    const src = this.activeSettings() || {};
-    return {
-      colors: structuredClone(src.colors ?? DEFAULTS.colors),
-      targetGlow: src.targetGlow === true,
-      targetGlowConfig: structuredClone(resolveTargetGlowConfig(src.targetGlowConfig)),
-      customSkybox: src.customSkybox === true,
-      skyboxId: src.skyboxId ?? DEFAULTS.skyboxId,
-      skyboxHue: Number(src.skyboxHue) || 0,
-      skyboxSaturation: Number(src.skyboxSaturation ?? 100),
-      skyboxBrightness: Number(src.skyboxBrightness ?? 100),
-      skyboxContrast: Number(src.skyboxContrast ?? 100),
-      skyboxOpacity: Number(src.skyboxOpacity ?? 100),
-      skyboxHeightOffset: Number(src.skyboxHeightOffset) || 0,
-      skyboxPostFx: src.skyboxPostFx !== false,
-      skyboxGlowConfig: structuredClone(resolveSkyboxGlowConfig(src.skyboxGlowConfig))
-    };
+    return normalizeGraphicsConfig(this.activeSettings() || {}, DEFAULTS);
   }
 
   /** Replace graphics-menu fields on the draft from an imported code. */
   applyGraphicsConfigToDraft(config) {
-    const c = config && typeof config === 'object' ? config : {};
+    const c = normalizeGraphicsConfig(config, DEFAULTS);
     this.mutateDraft((d) => {
-      d.colors = structuredClone(c.colors ?? DEFAULTS.colors);
-      d.targetGlow = c.targetGlow === true;
-      d.targetGlowConfig = structuredClone(resolveTargetGlowConfig(c.targetGlowConfig));
-      d.customSkybox = c.customSkybox === true;
-      d.skyboxId = typeof c.skyboxId === 'string' ? c.skyboxId : DEFAULTS.skyboxId;
-      d.skyboxHue = Number(c.skyboxHue) || 0;
-      d.skyboxSaturation = Number(c.skyboxSaturation ?? 100);
-      d.skyboxBrightness = Number(c.skyboxBrightness ?? 100);
-      d.skyboxContrast = Number(c.skyboxContrast ?? 100);
-      d.skyboxOpacity = Number(c.skyboxOpacity ?? 100);
-      d.skyboxHeightOffset = Number(c.skyboxHeightOffset) || 0;
-      d.skyboxPostFx = c.skyboxPostFx !== false;
-      d.skyboxGlowConfig = structuredClone(resolveSkyboxGlowConfig(c.skyboxGlowConfig));
+      d.colors = c.colors;
+      d.targetGlow = c.targetGlow;
+      d.targetGlowConfig = c.targetGlowConfig;
+      d.customSkybox = c.customSkybox;
+      d.skyboxId = c.skyboxId;
+      d.skyboxHue = c.skyboxHue;
+      d.skyboxSaturation = c.skyboxSaturation;
+      d.skyboxBrightness = c.skyboxBrightness;
+      d.skyboxContrast = c.skyboxContrast;
+      d.skyboxOpacity = c.skyboxOpacity;
+      d.skyboxHeightOffset = c.skyboxHeightOffset;
+      d.skyboxPostFx = c.skyboxPostFx;
+      d.skyboxGlowConfig = c.skyboxGlowConfig;
     });
   }
 

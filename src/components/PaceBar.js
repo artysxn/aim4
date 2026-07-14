@@ -1,18 +1,22 @@
 // ---------------------------------------------------------------------------
 // PaceBar.js — KovaaK's-style personal-best pacing strip on the HUD.
+// Colored fill = elapsed time + ahead/behind PB pace; white marker = live score
+// as a fraction of personal best (0 = left, 1 = PB at right).
 // ---------------------------------------------------------------------------
 
 import { DEFAULTS } from '../core/SettingsManager.js';
 import {
   getPracticeBest,
   isAheadOfPace,
-  paceMetric
+  paceMetric,
+  scoreFraction
 } from '../lib/practiceBest.js';
 
 export class PaceBar {
   constructor(root) {
     this.el = root.querySelector('#pace-bar');
     this.fill = root.querySelector('#pace-bar-fill');
+    this.marker = root.querySelector('#pace-bar-marker');
     this.expandedSlot = root.querySelector('#pace-bar-slot-expanded');
     this.compactSlot = root.querySelector('#pace-bar-slot-compact');
     this._pb = null;
@@ -21,6 +25,7 @@ export class PaceBar {
     this._locked = false;
     this._lockedFill = 0;
     this._lockedAhead = null;
+    this._lockedMetric = 0;
     this._style = 'expanded';
   }
 
@@ -31,6 +36,7 @@ export class PaceBar {
     this._locked = false;
     this._lockedFill = 0;
     this._lockedAhead = null;
+    this._lockedMetric = 0;
     this.hide();
   }
 
@@ -67,6 +73,7 @@ export class PaceBar {
     this._locked = false;
     this._lockedFill = 0;
     this._lockedAhead = null;
+    this._lockedMetric = 0;
     this.hide();
   }
 
@@ -74,6 +81,7 @@ export class PaceBar {
     if (this._locked || !this._scenario || !this._totalTime) return;
     this._locked = true;
     this._lockedFill = Math.max(0, Math.min(1, currentTime / this._totalTime));
+    this._lockedMetric = currentMetric;
     this._lockedAhead = isAheadOfPace(
       this._scenario,
       currentMetric,
@@ -81,7 +89,7 @@ export class PaceBar {
       currentTime,
       this._totalTime
     );
-    this._apply(this._lockedFill, this._lockedAhead);
+    this._apply(this._lockedFill, this._lockedAhead, currentMetric);
     this.el?.classList.add('active');
   }
 
@@ -90,6 +98,10 @@ export class PaceBar {
     if (this.fill) {
       this.fill.style.width = '0%';
       this.fill.classList.remove('ahead', 'behind', 'neutral');
+    }
+    if (this.marker) {
+      this.marker.style.left = '0%';
+      this.marker.style.opacity = '0';
     }
   }
 
@@ -104,7 +116,7 @@ export class PaceBar {
     }
 
     if (this._locked) {
-      this._apply(this._lockedFill, this._lockedAhead);
+      this._apply(this._lockedFill, this._lockedAhead, this._lockedMetric);
       this.el.classList.add('active');
       return;
     }
@@ -114,20 +126,30 @@ export class PaceBar {
     const metric = paceMetric(scenario, scoreSource);
     const pb = this._pb?.score ?? 0;
     const ahead = isAheadOfPace(scenario, metric, pb, t, totalTime);
-    this._apply(fill, ahead);
+    this._apply(fill, ahead, metric);
     this.el.classList.add('active');
   }
 
-  _apply(fill, ahead) {
-    if (!this.fill) return;
-    this.fill.style.width = `${(fill * 100).toFixed(2)}%`;
-    this.fill.classList.remove('ahead', 'behind', 'neutral');
-    if (ahead === null || !(this._pb?.score > 0)) {
-      this.fill.classList.add('neutral');
-    } else if (ahead) {
-      this.fill.classList.add('ahead');
-    } else {
-      this.fill.classList.add('behind');
+  _apply(fill, ahead, metric) {
+    if (this.fill) {
+      this.fill.style.width = `${(fill * 100).toFixed(2)}%`;
+      this.fill.classList.remove('ahead', 'behind', 'neutral');
+      if (ahead === null || !(this._pb?.score > 0)) {
+        this.fill.classList.add('neutral');
+      } else if (ahead) {
+        this.fill.classList.add('ahead');
+      } else {
+        this.fill.classList.add('behind');
+      }
     }
+
+    if (!this.marker) return;
+    const frac = scoreFraction(this._scenario, metric, this._pb?.score ?? 0);
+    if (frac == null) {
+      this.marker.style.opacity = '0';
+      return;
+    }
+    this.marker.style.left = `${(frac * 100).toFixed(2)}%`;
+    this.marker.style.opacity = '1';
   }
 }

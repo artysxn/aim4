@@ -1,12 +1,14 @@
 // ---------------------------------------------------------------------------
 // GraphicsConfigCodes.js — self-contained share codes for the Graphics menu.
 //
-// Embeds colors, target bloom, and skybox settings inline (works offline).
+// Embeds colors, target bloom, skybox tuning, and glow sub-configs inline (works offline).
 // Format:  AIM4G-<base64url(JSON)>   where JSON = { v, g: graphicsConfig }
 // ---------------------------------------------------------------------------
 
+import { normalizeGraphicsConfig } from './graphicsConfig.js';
+
 export const GRAPHICS_CODE_PREFIX = 'AIM4G-';
-const VERSION = 1;
+const VERSION = 2;
 
 /** UTF-8 safe base64url (browser btoa/atob only handle latin1). */
 function b64urlEncode(str) {
@@ -34,7 +36,7 @@ export function encodeGraphicsConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new Error('Graphics config is missing');
   }
-  const payload = { v: VERSION, g: config };
+  const payload = { v: VERSION, g: normalizeGraphicsConfig(config) };
   return GRAPHICS_CODE_PREFIX + b64urlEncode(JSON.stringify(payload));
 }
 
@@ -58,5 +60,5 @@ export function decodeGraphicsConfig(raw) {
     ? parsed.g
     : null;
   if (!config) throw new Error('Graphics code is missing settings');
-  return { config };
+  return { config: normalizeGraphicsConfig(config), version: parsed.v ?? 1 };
 }

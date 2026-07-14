@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { RESOLUTIONS, clampResolutionDim, DEFAULTS } from '../core/SettingsManager.js';
 import { resolveTargetGlowConfig } from '../utils/targetGlowConfig.js';
 import { resolveSkyboxGlowConfig } from '../utils/skyboxGlowConfig.js';
+import { normalizeGraphicsConfig, replayBloomSettingsFrom } from '../utils/graphicsConfig.js';
 import { SKYBOX_CATALOG, defaultSkyboxId } from '../sky/skyboxCatalog.js';
 import { SCENARIOS } from '../core/SceneManager.js';
 import * as Storage from '../utils/Storage.js';
@@ -192,6 +193,26 @@ const SCENARIO_SETTING_IDS = new Set([
   'peekswitchbots'
 ]);
 
+/** Bot gamemodes — show the classic (static) bot model toggle in training gear. */
+const BOT_SCENARIO_IDS = new Set([
+  'arena',
+  'snipercrossfire',
+  'duels',
+  'deathmatch',
+  'range',
+  'tracking',
+  'rapidtrack',
+  'cover',
+  'coverawp',
+  'sniperholds',
+  'sniperflicks',
+  'snipertracking',
+  'sniperquickscopes',
+  'pitrifle',
+  'doorsawp',
+  'peekswitchbots'
+]);
+
 // Training sub-menus. A mode may appear in several categories; any registered
 // non-challenge mode not placed anywhere is appended to General so nothing
 // goes missing. "all" browses every non-challenge mode; "challenges" houses
@@ -290,6 +311,10 @@ function botDifficultyField(id) {
         <option value="easy">Easy</option>
       </select>
     </div>`;
+}
+
+function classicBotModelField() {
+  return `<label class="field-check"><input type="checkbox" class="set-bots-classic-model" /> Classic bot model (static cylinder + sphere, training only)</label>`;
 }
 
 function numField(id, label, step) {
@@ -659,7 +684,7 @@ export class UIOverlay {
   }
 
   _scenarioSettingsSections() {
-    return [
+    const sections = [
       {
         id: 'gridshot',
         label: 'Gridshot',
@@ -1256,6 +1281,12 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
           ${rf('set-peekswitchbots-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       }
     ];
+    const classicField = classicBotModelField();
+    return sections.map((section) =>
+      BOT_SCENARIO_IDS.has(section.id)
+        ? { ...section, body: `${classicField}\n${section.body}` }
+        : section
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -1279,6 +1310,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     <div id="pace-bar-slot-expanded" class="pace-bar-slot-expanded">
       <div id="pace-bar" class="pace-bar pace-bar--expanded" aria-hidden="true">
         <div id="pace-bar-fill" class="pace-bar-fill neutral"></div>
+        <div id="pace-bar-marker" class="pace-bar-marker"></div>
       </div>
     </div>
 
@@ -3037,6 +3069,18 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._bindRange('set-snxf-ring', (v, d) => { d.snipercrossfire.ringRadius = v; });
     this._bindRange('set-snxf-enemy', (v, d) => { d.snipercrossfire.enemyScale = v; });
     this._bindRange('set-snxf-misslimit', (v, d) => { d.snipercrossfire.missLimit = v; }, { parse: (v) => parseInt(v, 10) });
+
+    this.root.querySelector('#scenario-settings-drawer')?.addEventListener('change', (e) => {
+      if (!e.target.classList?.contains('set-bots-classic-model')) return;
+      const checked = e.target.checked;
+      draft((d) => {
+        if (!d.bots) d.bots = { classicModel: false };
+        d.bots.classicModel = checked;
+      });
+      this.root.querySelectorAll('.set-bots-classic-model').forEach((el) => {
+        el.checked = checked;
+      });
+    });
 
     $('#set-duels-arena').addEventListener('change', (e) => {
       draft((d) => { d.duels.arena = parseInt(e.target.value, 10); });
@@ -6300,6 +6344,11 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._setRange('set-dm-head', Math.round((s.deathmatch?.botHeadHit ?? 0.05) * 100));
     this._setRange('set-dm-misslimit', s.deathmatch?.missLimit ?? 0);
 
+    const classicBot = s.bots?.classicModel === true;
+    this.root.querySelectorAll('.set-bots-classic-model').forEach((el) => {
+      el.checked = classicBot;
+    });
+
     $('#set-col-bg').value = s.colors.bg;
     $('#set-custom-skybox').checked = !!s.customSkybox;
     this._populateSkyboxSelect();
@@ -6735,7 +6784,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         colors: structuredClone(this.settings.data.colors),
         crosshair: structuredClone(this.settings.data.crosshair),
         viewmodel: structuredClone(this.settings.data.viewmodel),
-        weapon: { aimpunch: this.settings.data.weapon?.aimpunch }
+        weapon: { aimpunch: this.settings.data.weapon?.aimpunch },
+        ...replayBloomSettingsFrom(this.settings.data)
       },
       weaponId: sc.weaponId,
       viewmodelRecoil: sc.viewmodelRecoil,
@@ -7397,6 +7447,18 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         this.settings.beginReplayView(rs);
         this.crosshair.draw();
       }
+    } else {
+      // Own replays: still honor recorded bloom/skybox when present in the file.
+      const rs = decoded.settings;
+      if (
+        rs &&
+        ('targetGlow' in rs ||
+          'targetGlowConfig' in rs ||
+          'skyboxPostFx' in rs ||
+          'skyboxGlowConfig' in rs)
+      ) {
+        this.settings.beginReplayView(this.settings.mergeReplaySettings(rs, null));
+      }
     }
     const baselineVFov = this.engine.camera.fov;
     this.crosshair.setVisible(true);
@@ -7426,6 +7488,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       this.settings.endReplayView();
       this.engine.applyResolution();
       this.engine.applyColors();
+      this.engine.applyPostProcessing?.();
+      this.engine.applySkybox?.();
       this.crosshair.draw();
     }
     this.engine.clearRunEffects();

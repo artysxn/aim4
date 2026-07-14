@@ -13,7 +13,7 @@
 
 import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
-import { buildCSBotTarget } from '../bots/buildBotTarget.js';
+import { buildBotTargetFromSettings } from '../bots/buildBotTarget.js';
 import { MODEL_HEIGHT, HEAD_CENTER_STAND } from '../bots/CSBotModel.js';
 import { randRange, clamp, degToRad } from '../utils/MathUtils.js';
 import { SourceMover1D } from '../utils/SourceMovement.js';
@@ -181,7 +181,7 @@ export class SniperFlicksScenario extends BaseScenario {
   }
 
   _buildBot() {
-    return buildCSBotTarget({
+    return buildBotTargetFromSettings(this.settings, this.variant, {
       colors: this.settings.data.colors,
       bodyPoints: 50,
       headPoints: 100

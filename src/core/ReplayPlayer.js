@@ -15,6 +15,8 @@ import { getWeapon } from '../weapons/index.js';
 import { PLAYER_RUN_SPEED } from '../utils/spawnVisibility.js';
 import { ReplayAnalytics } from '../lib/replayAnalytics.js';
 import { createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
+import { applyTargetGlow } from '../utils/targetGlow.js';
+import { CSBotModel } from '../bots/CSBotModel.js';
 
 export const REPLAY_SPEEDS = [0.125, 0.25, 0.5, 1, 2, 4];
 
@@ -44,6 +46,13 @@ function makeGeometry(d) {
       return new THREE.PlaneGeometry(p.width ?? 1, p.height ?? 1);
     case 'Circle':
       return new THREE.CircleGeometry(p.radius ?? 0.5, p.segments ?? 32);
+    case 'Capsule':
+      return new THREE.CapsuleGeometry(
+        p.radius ?? 0.5,
+        p.length ?? 1,
+        p.capSegments ?? 4,
+        p.radialSegments ?? 8
+      );
     default:
       return new THREE.BoxGeometry(1, 1, 1);
   }
@@ -74,6 +83,8 @@ function makeMesh(d, colors) {
   if (d.p) mesh.position.set(d.p[0], d.p[1], d.p[2]);
   if (d.q) mesh.quaternion.set(d.q[0], d.q[1], d.q[2], d.q[3]);
   if (d.s) mesh.scale.set(d.s[0], d.s[1], d.s[2]);
+  if (d.zone) mesh.userData.zone = d.zone;
+  if (d.bloomDot) mesh.userData.target = { alive: true };
   return mesh;
 }
 
@@ -137,6 +148,8 @@ export class ReplayPlayer {
     this._buildEntities(replay);
     this._applyEnvironmentAtTick(0);
     this._setupViewmodel(replay);
+    this._applyReplayVisualFx();
+    this._resetEntityAnimClock();
     this._applyTick(0);
     this._emitProgress();
     this._emitSample(0);
@@ -213,12 +226,37 @@ export class ReplayPlayer {
       templates[id] = g;
     }
     for (const ent of replay.entities) {
-      const tmpl = templates[ent.bp];
-      const object = tmpl ? tmpl.clone(true) : new THREE.Group();
+      let object;
+      let model = null;
+      if (ent.kind === 'csbot' && ent.botParams) {
+        model = new CSBotModel(ent.botParams);
+        object = new THREE.Group();
+        object.add(model.root);
+      } else {
+        const tmpl = templates[ent.bp];
+        object = tmpl ? tmpl.clone(true) : new THREE.Group();
+      }
       object.visible = false;
       this.root.add(object);
-      this.entities.push({ data: ent, object });
+      this.entities.push({ data: ent, object, model, _lastAnimTick: null });
     }
+  }
+
+  /** Apply target bloom + skybox post-FX using the active settings overlay. */
+  _applyReplayVisualFx() {
+    const s = this.engine.settings.activeSettings();
+    const color = s.colors?.target ?? this._replayColors?.target ?? 0xff5544;
+    const enabled = s.targetGlow === true;
+    const config = s.targetGlowConfig;
+    for (const { object } of this.entities) {
+      object.traverse((obj) => {
+        if (!obj.isMesh) return;
+        applyTargetGlow(obj, { enabled, color, config });
+      });
+    }
+    this.engine.applyPostProcessing?.();
+    this.engine.applySkybox?.();
+    this.engine.applyColors?.();
   }
 
   // ---- transport controls -------------------------------------------------
@@ -267,6 +305,7 @@ export class ReplayPlayer {
     this._sfx = null;
     const tickFloat = this.time * this.replay.tickRate;
     this._applyEnvironmentAtTick(Math.floor(tickFloat));
+    this._resetEntityAnimClock();
     this._applyTick(tickFloat);
     this._emitProgress();
     this._emitSample(tickFloat);
@@ -330,6 +369,21 @@ export class ReplayPlayer {
         continue;
       }
       e.object.visible = true;
+      if (e.model) {
+        e.object.position.set(s.x, s.y, s.z);
+        e.object.scale.setScalar(Math.max(0.0001, s.s));
+        e.model.setYaw(s.yaw ?? 0);
+        e.model.setPitch(s.pitch ?? 0);
+        const localTick = tickFloat - e.data.start;
+        const prev = e._lastAnimTick;
+        let animDt = 0;
+        if (prev == null) animDt = 1 / r.tickRate;
+        else animDt = Math.max(0, (localTick - prev) / r.tickRate);
+        e._lastAnimTick = localTick;
+        if (animDt > 0) e.model.update(animDt, { crouch: s.crouch ?? 0 });
+        this._applyDeathTint(e, tickFloat);
+        continue;
+      }
       // Frames track the entity's visual mesh (head/body); shift by the
       // recorded visual→root offset so the blueprint stands where it did live.
       const vis = e.data.vis || [0, 0, 0];
@@ -341,6 +395,10 @@ export class ReplayPlayer {
       e.object.scale.setScalar(Math.max(0.0001, s.s));
       this._applyDeathTint(e, tickFloat);
     }
+  }
+
+  _resetEntityAnimClock() {
+    for (const e of this.entities) e._lastAnimTick = null;
   }
 
   /** Killed targets turn green (like ingame) instead of staying red. */

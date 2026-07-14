@@ -14,7 +14,7 @@
 import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
-import { buildCSBotTarget } from '../bots/buildBotTarget.js';
+import { buildBotTargetFromSettings } from '../bots/buildBotTarget.js';
 import { randRange, randInt, degToRad } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { markBulletDecalSurface } from '../utils/bulletImpact.js';
@@ -143,7 +143,7 @@ export class ArenaScenario extends BaseScenario {
   }
 
   _buildBot() {
-    return buildCSBotTarget({
+    return buildBotTargetFromSettings(this.settings, this.variant, {
       colors: this.settings.data.colors,
       bodyPoints: 35,
       headPoints: 100,

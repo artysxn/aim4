@@ -24,7 +24,7 @@
 
 import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
-import { buildCSBotTarget } from '../bots/buildBotTarget.js';
+import { buildBotTargetFromSettings } from '../bots/buildBotTarget.js';
 import { randRange, randInt, clamp, lerp, degToRad } from '../utils/MathUtils.js';
 import { SourceMover1D, srcFriction, srcAccelerate, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
 import { resolveBoxCollisions, groundHeightAt } from '../utils/BoxCollision.js';
@@ -513,7 +513,7 @@ export class DuelsScenario extends BaseScenario {
 
   // ---- Bot ---------------------------------------------------------------
   _buildBot() {
-    return buildCSBotTarget({
+    return buildBotTargetFromSettings(this.settings, this.variant, {
       colors: this.settings.data.colors,
       bodyPoints: 35,
       headPoints: 100

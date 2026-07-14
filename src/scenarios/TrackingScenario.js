@@ -8,7 +8,7 @@
 
 import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
-import { buildCSBotTarget } from '../bots/buildBotTarget.js';
+import { buildBotTargetFromSettings } from '../bots/buildBotTarget.js';
 import { randRange, randInt, clamp, lerp } from '../utils/MathUtils.js';
 import { SourceMover1D, UNIT } from '../utils/SourceMovement.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
@@ -102,7 +102,7 @@ export class TrackingScenario extends BaseScenario {
   }
 
   _buildBot() {
-    return buildCSBotTarget({
+    return buildBotTargetFromSettings(this.settings, this.variant, {
       colors: this.settings.data.colors,
       bodyPoints: BODY_PTS,
       headPoints: HEAD_PTS,

@@ -20,9 +20,11 @@
 // the replay reconstructs the *whole* scenario, not just a floating viewpoint.
 // ---------------------------------------------------------------------------
 
+import { HEAD_CENTER_STAND, HEAD_CENTER_CROUCH } from '../bots/CSBotModel.js';
+
 export const TICK_RATE = 128; // ticks per second
 export const TICK_DT = 1 / TICK_RATE;
-export const REPLAY_VERSION = 1;
+export const REPLAY_VERSION = 2;
 
 // Movement keys → one integer per tick (powers of two; never store booleans).
 // SCOPE1/SCOPE2 encode the sniper zoom level (0 = unscoped) — replays predating
@@ -126,46 +128,109 @@ function unpackCamera(flat, totalTicks) {
 
 // --- entity track (per-entity transform stream over its own lifetime) -------
 
-/** Pack one entity's [x, y, z, scale] stream (keyframe every TICK_RATE locally). */
-function packEntity(frames) {
-  const out = new Array(frames.length * 4);
-  let pX = 0, pY = 0, pZ = 0, pS = 0;
+const CROUCH_Q = 1000;
+
+const ENTITY4_KEYS = ['x', 'y', 'z', 's'];
+const ENTITY4_Q = { x: POS_Q, y: POS_Q, z: POS_Q, s: SCALE_Q };
+
+/** CSBot root pose + aim + crouch (re-simulated at playback via CSBotModel.update). */
+const ENTITY7_KEYS = ['x', 'y', 'z', 's', 'yaw', 'pitch', 'crouch'];
+const ENTITY7_Q = {
+  x: POS_Q,
+  y: POS_Q,
+  z: POS_Q,
+  s: SCALE_Q,
+  yaw: ANGLE_Q,
+  pitch: ANGLE_Q,
+  crouch: CROUCH_Q
+};
+
+function packEntityChannels(frames, keys, quant) {
+  const n = keys.length;
+  const out = new Array(frames.length * n);
+  const prev = new Array(n).fill(0);
   for (let i = 0; i < frames.length; i++) {
     const f = frames[i];
-    const qX = Math.round(f.x * POS_Q);
-    const qY = Math.round(f.y * POS_Q);
-    const qZ = Math.round(f.z * POS_Q);
-    const qS = Math.round(f.s * SCALE_Q);
     const key = i % TICK_RATE === 0;
-    const o = i * 4;
-    out[o] = key ? qX : qX - pX;
-    out[o + 1] = key ? qY : qY - pY;
-    out[o + 2] = key ? qZ : qZ - pZ;
-    out[o + 3] = key ? qS : qS - pS;
-    pX = qX; pY = qY; pZ = qZ; pS = qS;
+    for (let c = 0; c < n; c++) {
+      const k = keys[c];
+      const qv = Math.round((f[k] ?? 0) * quant[k]);
+      const o = i * n + c;
+      out[o] = key ? qv : qv - prev[c];
+      prev[c] = qv;
+    }
   }
   return out;
 }
 
-function unpackEntity(flat, len) {
-  const x = new Float64Array(len);
-  const y = new Float64Array(len);
-  const z = new Float64Array(len);
-  const s = new Float64Array(len);
-  let qX = 0, qY = 0, qZ = 0, qS = 0;
+function unpackEntityChannels(flat, len, keys, quant) {
+  const n = keys.length;
+  const arrays = {};
+  for (const k of keys) arrays[k] = new Float64Array(len);
+  const cur = new Array(n).fill(0);
   for (let i = 0; i < len; i++) {
-    const o = i * 4;
     const key = i % TICK_RATE === 0;
-    qX = key ? flat[o] : qX + flat[o];
-    qY = key ? flat[o + 1] : qY + flat[o + 1];
-    qZ = key ? flat[o + 2] : qZ + flat[o + 2];
-    qS = key ? flat[o + 3] : qS + flat[o + 3];
-    x[i] = qX / POS_Q;
-    y[i] = qY / POS_Q;
-    z[i] = qZ / POS_Q;
-    s[i] = qS / SCALE_Q;
+    for (let c = 0; c < n; c++) {
+      const o = i * n + c;
+      cur[c] = key ? flat[o] : cur[c] + flat[o];
+      arrays[keys[c]][i] = cur[c] / quant[keys[c]];
+    }
   }
-  return { x, y, z, s };
+  return arrays;
+}
+
+/** Pack one entity's [x, y, z, scale] stream (keyframe every TICK_RATE locally). */
+function packEntity(frames) {
+  return packEntityChannels(frames, ENTITY4_KEYS, ENTITY4_Q);
+}
+
+function packEntityCSBot(frames) {
+  return packEntityChannels(frames, ENTITY7_KEYS, ENTITY7_Q);
+}
+
+function unpackEntity(flat, len) {
+  return unpackEntityChannels(flat, len, ENTITY4_KEYS, ENTITY4_Q);
+}
+
+function unpackEntityCSBot(flat, len) {
+  return unpackEntityChannels(flat, len, ENTITY7_KEYS, ENTITY7_Q);
+}
+
+function encodeEntityRecord(e) {
+  const base = {
+    id: e.id,
+    bp: e.bp ?? undefined,
+    start: e.start,
+    len: e.frames.length,
+    aim: e.aim || [0, 0, 0],
+    aimR: e.aimR ?? 0,
+    vis: e.vis || [0, 0, 0]
+  };
+  if (e.kind === 'csbot') {
+    base.kind = 'csbot';
+    base.botParams = e.botParams;
+    base.data = packEntityCSBot(e.frames);
+  } else {
+    base.data = packEntity(e.frames);
+  }
+  return base;
+}
+
+function decodeEntityRecord(e) {
+  return {
+    id: e.id,
+    bp: e.bp,
+    kind: e.kind,
+    botParams: e.botParams,
+    start: e.start,
+    len: e.len,
+    aim: e.aim || [0, 0, 0],
+    aimR: e.aimR ?? 0,
+    vis: e.vis || [0, 0, 0],
+    track: e.kind === 'csbot'
+      ? unpackEntityCSBot(e.data, e.len)
+      : unpackEntity(e.data, e.len)
+  };
 }
 
 // --- public API -------------------------------------------------------------
@@ -199,18 +264,7 @@ export async function encodeReplay(rec) {
       rec.environment?.length ? [{ start: 0, meshes: rec.environment }] : []
     ),
     cam: packCamera(rec.cam),
-    entities: (rec.entities || []).map((e) => ({
-      id: e.id,
-      bp: e.bp,
-      start: e.start,
-      len: e.frames.length,
-      // Aim point (head/centre) offset + radius at unit scale, for analytics.
-      aim: e.aim || [0, 0, 0],
-      aimR: e.aimR ?? 0,
-      // Tracked-visual → root offset at unit scale (playback grounding).
-      vis: e.vis || [0, 0, 0],
-      data: packEntity(e.frames)
-    })),
+    entities: (rec.entities || []).map(encodeEntityRecord),
     // Shot/FX events are sparse — keep them as small flat tuples.
     events: rec.events || []
   };
@@ -247,17 +301,7 @@ export async function decodeReplay(bytes) {
 function buildReplayView(c) {
   const totalTicks = c.totalTicks ?? Math.floor((c.cam?.length || 0) / 6);
   const cam = unpackCamera(c.cam || [], totalTicks);
-  const entities = (c.entities || []).map((e) => ({
-    id: e.id,
-    bp: e.bp,
-    start: e.start,
-    len: e.len,
-    aim: e.aim || [0, 0, 0],
-    aimR: e.aimR ?? 0,
-    // Legacy replays (no vis) fall back to zero offset — same as before.
-    vis: e.vis || [0, 0, 0],
-    track: unpackEntity(e.data, e.len)
-  }));
+  const entities = (c.entities || []).map(decodeEntityRecord);
 
   return {
     version: c.v,
@@ -298,6 +342,14 @@ function buildReplayView(c) {
     sampleEntityAim(ent, tickFloat) {
       const s = this.sampleEntity(ent, tickFloat);
       if (!s) return null;
+      if (ent.kind === 'csbot') {
+        const crouch = s.crouch ?? 0;
+        const headY =
+          s.y +
+          (HEAD_CENTER_STAND + (HEAD_CENTER_CROUCH - HEAD_CENTER_STAND) * crouch) * s.s;
+        const rad = ent.aimR > 0 ? ent.aimR : 0.105;
+        return { x: s.x, y: headY, z: s.z, radius: rad * s.s };
+      }
       const a = ent.aim || [0, 0, 0];
       // Fallback radius for legacy replays with no captured aim zone.
       const r = ent.aimR > 0 ? ent.aimR : 0.4;
@@ -336,16 +388,7 @@ export function localDecode(rec) {
       rec.environment?.length ? [{ start: 0, meshes: rec.environment }] : []
     ),
     cam: packCamera(rec.cam),
-    entities: (rec.entities || []).map((e) => ({
-      id: e.id,
-      bp: e.bp,
-      start: e.start,
-      len: e.frames.length,
-      aim: e.aim || [0, 0, 0],
-      aimR: e.aimR ?? 0,
-      vis: e.vis || [0, 0, 0],
-      data: packEntity(e.frames)
-    })),
+    entities: (rec.entities || []).map(encodeEntityRecord),
     events: rec.events || []
   });
 }
@@ -375,12 +418,18 @@ function sampleTrackEntity(tr, len, localFloat) {
   const i0 = Math.floor(clamped);
   const i1 = Math.min(len - 1, i0 + 1);
   const t = clamped - i0;
-  return {
+  const out = {
     x: lerp(tr.x[i0], tr.x[i1], t),
     y: lerp(tr.y[i0], tr.y[i1], t),
     z: lerp(tr.z[i0], tr.z[i1], t),
     s: lerp(tr.s[i0], tr.s[i1], t)
   };
+  if (tr.yaw) {
+    out.yaw = lerp(tr.yaw[i0], tr.yaw[i1], t);
+    out.pitch = lerp(tr.pitch[i0], tr.pitch[i1], t);
+    out.crouch = lerp(tr.crouch[i0], tr.crouch[i1], t);
+  }
+  return out;
 }
 
 // --- input bitmask helpers (shared by recorder + player) --------------------
