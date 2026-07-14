@@ -68,8 +68,28 @@ const CYCLE_RATE_RUN = 18.2; // rad/s phase rate at full run (≈2.9 steps/s)
 const LIFT_RUN = 0.10; // m foot lift at full run
 const BOB_RUN = 0.015; // m pelvis bob at full run
 const PITCH_RATE = 18; // 1/s aim-pitch smoothing
+const LEAN_RATE = 12; // 1/s travel-lean smoothing
+const MAX_LEAN = THREE.MathUtils.degToRad(3); // subtle directional lean cap
+const LEAN_SENS = MAX_LEAN / RUN_SPEED; // maps run speed → max lean
+
+// Capsule dims (mirror _buildSkeleton) — anchor math for joint bridges.
+const THIGH_CAP_R = 0.088;
+const THIGH_CAP_SEG = THIGH_LEN - 0.176;
+const KNEE_CAP_R = 0.062;
+const KNEE_CAP_SEG = 0.30;
+const KNEE_CAP_Y = -0.215;
+const FOOT_CAP_R = 0.048;
+const FOOT_CAP_SEG = 0.15;
+const FOOT_CAP_Y = -0.015;
+const FOOT_CAP_Z = 0.06;
+const SHOULDER_CAP_R = 0.056;
+const SHOULDER_CAP_SEG = UPPER_ARM - 0.112;
+const FORE_CAP_R = 0.048;
+const FORE_CAP_SEG = 0.2;
+const FORE_CAP_Y = -0.16;
 
 const NEG_Y = new THREE.Vector3(0, -1, 0);
+const _yUp = new THREE.Vector3(0, 1, 0);
 
 // Scratch objects (module-level, reused every call — no per-frame allocation).
 const _wp = new THREE.Vector3();
@@ -86,6 +106,9 @@ const _legPole = new THREE.Vector3();
 const _footQ = new THREE.Quaternion();
 const _toeQ = new THREE.Quaternion();
 const _xAxis = new THREE.Vector3(1, 0, 0);
+const _jointA = new THREE.Vector3();
+const _jointB = new THREE.Vector3();
+const _jointDir = new THREE.Vector3();
 
 function wrapPI(a) {
   while (a > Math.PI) a -= Math.PI * 2;
@@ -160,6 +183,7 @@ export class CSBotModel {
 
     this.colliders = [];
     this.visualMeshes = [];
+    this._dynamicJoints = [];
 
     this._buildSkeleton();
     if (scale !== 1) this.root.scale.setScalar(scale);
@@ -181,6 +205,8 @@ export class CSBotModel {
     this._prev = new THREE.Vector3();
     this._hasPrev = false;
     this._speed = 0;
+    this._leanX = 0;
+    this._leanZ = 0;
   }
 
   // ---- Build ---------------------------------------------------------------
@@ -207,13 +233,50 @@ export class CSBotModel {
     return mesh;
   }
 
+  /** Tapered bridge between two limb anchors — visual only, not a hitbox. */
+  _buildJointBridge(upperNode, upperLocal, lowerNode, lowerLocal, rTop, rBot) {
+    const geo = new THREE.CylinderGeometry(rTop * this._w, rBot * this._w, 1, 8, 1);
+    geo.translate(0, 0.5, 0); // local +Y spans 0 → 1 for stretch scaling
+    const mesh = new THREE.Mesh(geo, this._bodyMat);
+    upperNode.parent.add(mesh);
+    this._dynamicJoints.push({ mesh, upperNode, upperLocal, lowerNode, lowerLocal });
+    this.visualMeshes.push(mesh);
+    return mesh;
+  }
+
+  _capBottomY(centerY, seg, r) {
+    return centerY - seg / 2 - r;
+  }
+
+  _capTopY(centerY, seg, r) {
+    return centerY + seg / 2 + r;
+  }
+
+  _updateJointBridges() {
+    for (const j of this._dynamicJoints) {
+      j.upperNode.localToWorld(_jointA.copy(j.upperLocal));
+      j.lowerNode.localToWorld(_jointB.copy(j.lowerLocal));
+      const dist = _jointA.distanceTo(_jointB);
+      if (dist < 1e-4) {
+        j.mesh.visible = false;
+        continue;
+      }
+      j.mesh.visible = true;
+      _jointDir.subVectors(_jointB, _jointA);
+      j.mesh.position.copy(_jointA).addScaledVector(_jointDir, 0.5);
+      _jointDir.normalize();
+      j.mesh.quaternion.setFromUnitVectors(_yUp, _jointDir);
+      j.mesh.scale.set(1, dist, 1);
+    }
+  }
+
   _buildSkeleton() {
     this.root = new THREE.Group(); // rotation.y = eye yaw (set by scenario / aimAt)
     this.lower = this._node(this.root, 0, 0, 0); // rotation.y = footYaw − eyeYaw
 
     // Pelvis + torso chain (torso counter-rotates back toward eye yaw).
     this.pelvis = this._node(this.lower, 0, HIP_Y, 0);
-    this._cap(this.pelvis, 0.145, 0.14, { y: -0.01, axis: 'x', hitgroup: 'pelvis' });
+    this._cap(this.pelvis, 0.115, 0.11, { y: -0.01, axis: 'x', hitgroup: 'pelvis' });
 
     this.spine0 = this._node(this.pelvis, 0, SPINE0_UP, 0);
     this._cap(this.spine0, 0.14, 0.07, { y: 0.05, z: 0.005, hitgroup: 'stomach' });
@@ -243,7 +306,29 @@ export class CSBotModel {
       const knee = this._node(thigh, 0, -THIGH_LEN, 0);
       this._cap(knee, 0.062, 0.30, { y: -0.215, hitgroup: `${side}_leg` });
       const foot = this._node(knee, 0, -CALF_LEN, 0);
-      this._cap(foot, 0.048, 0.15, { y: -0.015, z: 0.06, axis: 'z', hitgroup: `${side}_leg` });
+      this._cap(foot, FOOT_CAP_R, FOOT_CAP_SEG, { y: FOOT_CAP_Y, z: FOOT_CAP_Z, axis: 'z', hitgroup: `${side}_leg` });
+
+      const thighBot = this._capBottomY(-THIGH_LEN / 2, THIGH_CAP_SEG, THIGH_CAP_R);
+      const kneeTop = this._capTopY(KNEE_CAP_Y, KNEE_CAP_SEG, KNEE_CAP_R);
+      const kneeBot = this._capBottomY(KNEE_CAP_Y, KNEE_CAP_SEG, KNEE_CAP_R);
+      const footTop = new THREE.Vector3(0, FOOT_CAP_Y + FOOT_CAP_R * 0.35, FOOT_CAP_Z - FOOT_CAP_SEG / 2 - FOOT_CAP_R);
+      this._buildJointBridge(
+        thigh,
+        new THREE.Vector3(0, thighBot, 0),
+        knee,
+        new THREE.Vector3(0, kneeTop, 0),
+        THIGH_CAP_R,
+        KNEE_CAP_R
+      );
+      this._buildJointBridge(
+        knee,
+        new THREE.Vector3(0, kneeBot, 0),
+        foot,
+        footTop,
+        KNEE_CAP_R,
+        FOOT_CAP_R
+      );
+
       this.legs.push({ s, thigh, knee, foot, phaseOff: s < 0 ? Math.PI : 0 });
     }
 
@@ -254,7 +339,28 @@ export class CSBotModel {
       const shoulder = this._node(this.chest, s * SHOULDER_X, SHOULDER_UP, 0);
       this._cap(shoulder, 0.056, UPPER_ARM - 0.112, { y: -UPPER_ARM / 2, hitgroup: `${side}_arm` });
       const elbow = this._node(shoulder, 0, -UPPER_ARM, 0);
-      this._cap(elbow, 0.048, 0.2, { y: -0.16, hitgroup: `${side}_arm` }); // forearm + hand
+      this._cap(elbow, FORE_CAP_R, FORE_CAP_SEG, { y: FORE_CAP_Y, hitgroup: `${side}_arm` }); // forearm + hand
+
+      const shoulderBot = this._capBottomY(-UPPER_ARM / 2, SHOULDER_CAP_SEG, SHOULDER_CAP_R);
+      const foreTop = this._capTopY(FORE_CAP_Y, FORE_CAP_SEG, FORE_CAP_R);
+      const foreBot = this._capBottomY(FORE_CAP_Y, FORE_CAP_SEG, FORE_CAP_R);
+      this._buildJointBridge(
+        shoulder,
+        new THREE.Vector3(0, shoulderBot, 0),
+        elbow,
+        new THREE.Vector3(0, foreTop, 0),
+        SHOULDER_CAP_R,
+        FORE_CAP_R
+      );
+      this._buildJointBridge(
+        elbow,
+        new THREE.Vector3(0, foreTop, 0),
+        elbow,
+        new THREE.Vector3(0, foreBot, 0),
+        FORE_CAP_R,
+        FORE_CAP_R * 0.82
+      );
+
       this.arms.push({ s, shoulder, elbow });
     }
   }
@@ -338,10 +444,23 @@ export class CSBotModel {
       this._footYaw = eyeYaw;
       this._phase = 0;
       this._amp = 0;
+      this._leanX = 0;
+      this._leanZ = 0;
       this._hasPrev = true;
     }
     const speed = Math.hypot(vx, vz);
     this._speed = speed;
+
+    // ---- Directional lean (1–3° into travel direction) ----
+    const cosE = Math.cos(eyeYaw);
+    const sinE = Math.sin(eyeYaw);
+    const localX = vx * cosE - vz * sinE; // strafe right +
+    const localZ = vx * sinE + vz * cosE; // forward +
+    const targetLeanZ = THREE.MathUtils.clamp(localX * LEAN_SENS, -MAX_LEAN, MAX_LEAN);
+    const targetLeanX = THREE.MathUtils.clamp(-localZ * LEAN_SENS, -MAX_LEAN, MAX_LEAN);
+    const leanK = Math.min(1, LEAN_RATE * dt);
+    this._leanX += (targetLeanX - this._leanX) * leanK;
+    this._leanZ += (targetLeanZ - this._leanZ) * leanK;
 
     // ---- Lower-body yaw ----
     let dYaw = wrapPI(eyeYaw - this._footYaw);
@@ -368,7 +487,7 @@ export class CSBotModel {
       }
     }
     dYaw = wrapPI(eyeYaw - this._footYaw);
-    this.lower.rotation.y = -dYaw; // legs lag behind the eyes by the desync
+    this.lower.rotation.set(this._leanX, -dYaw, this._leanZ); // YXZ — lean + foot desync
 
     // ---- Aim matrix: pitch smoothing + spine distribution ----
     // Torso carries ~44% of the pitch (rifle rides the chest), neck + head the
@@ -432,6 +551,8 @@ export class CSBotModel {
       }
       leg.foot.quaternion.copy(_footQ);
     }
+
+    this._updateJointBridges();
   }
 
   dispose() {
