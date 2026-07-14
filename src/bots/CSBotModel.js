@@ -69,7 +69,7 @@ const LIFT_RUN = 0.12; // m foot lift at full run
 const BOB_RUN = 0.015; // m pelvis bob at full run
 const PITCH_RATE = 18; // 1/s aim-pitch smoothing
 const LEAN_RATE = 12; // 1/s travel-lean smoothing
-const MAX_LEAN = THREE.MathUtils.degToRad(8); // travel lean cap (upper + lower body)
+const MAX_LEAN = THREE.MathUtils.degToRad(8); // travel lean cap (lower body only)
 const LEAN_SENS = MAX_LEAN / RUN_SPEED; // maps run speed → max lean
 
 // Capsule dims (mirror _buildSkeleton) — anchor math for joint bridges.
@@ -501,17 +501,13 @@ export class CSBotModel {
     dYaw = wrapPI(eyeYaw - this._footYaw);
     this.lower.rotation.set(this._leanX, -dYaw, this._leanZ); // YXZ — lean + foot desync
 
-    // ---- Aim matrix: pitch smoothing + spine distribution + travel lean ----
+    // ---- Aim matrix: pitch smoothing + spine distribution ----
     this._pitch += (this._pitchTarget - this._pitch) * Math.min(1, PITCH_RATE * dt);
     const p = this._pitch;
     const twist = dYaw / 3; // spine untwists the desync back toward eye yaw
-
-    const leanPitch = this._leanX; // forward/backward tilt
-    const leanRoll = this._leanZ; // left/right tilt
-
-    this.spine0.rotation.set(-p * 0.08 + 0.14 * c + leanPitch * 0.3, twist, leanRoll * 0.3);
-    this.spine1.rotation.set(-p * 0.14 + 0.16 * c + leanPitch * 0.3, twist, leanRoll * 0.3);
-    this.chest.rotation.set(-p * 0.22 + 0.1 * c + leanPitch * 0.4, twist, leanRoll * 0.4);
+    this.spine0.rotation.set(-p * 0.08 + 0.14 * c, twist, 0);
+    this.spine1.rotation.set(-p * 0.14 + 0.16 * c, twist, 0);
+    this.chest.rotation.set(-p * 0.22 + 0.1 * c, twist, 0);
     this.neck.rotation.set(-p * 0.28 - 0.28 * c, 0, 0);
     this.head.rotation.set(-p * 0.28, 0, 0);
 
