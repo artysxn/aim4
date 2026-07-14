@@ -8,17 +8,13 @@
 
 import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
-import { Target } from '../components/Target.js';
+import { buildCSBotTarget } from '../bots/buildBotTarget.js';
 import { randRange, randInt, clamp, lerp } from '../utils/MathUtils.js';
 import { SourceMover1D, UNIT } from '../utils/SourceMovement.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
-import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
-
-const BODY_R = 0.35;
-const BODY_H = 1.3;
 
 const PLAYER_HALF = 2.5;
 const BOT_DISTANCE = 12;
@@ -106,37 +102,13 @@ export class TrackingScenario extends BaseScenario {
   }
 
   _buildBot() {
-    const t = new Target();
-    const bodyRig = new THREE.Group();
-    t.object.add(bodyRig);
-
-    const w = this.botWidth;
-    const bodyR = BODY_R * w;
-    const headR = HEAD_R * w;
-    const headY = BODY_H + headR + HEAD_OFFSET;
-
-    const c = this.settings.data.colors;
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(bodyR, bodyR, BODY_H, 18),
-      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: c.enemyBody, emissiveIntensity: 0.4, roughness: 0.5 })
-    );
-    body.position.y = BODY_H / 2;
-    body.userData.target = t;
-    body.userData.zone = 'body';
-    t.colliders.push(body);
-    bodyRig.add(body);
-
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(headR, 22, 16),
-      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: c.enemyHead, emissiveIntensity: 0.5, roughness: 0.4 })
-    );
-    head.position.y = headY;
-    t.addCollider(head, { zone: 'head', points: HEAD_PTS, crit: false });
-
-    t.rig = bodyRig;
-    t.headMesh = head;
-    t._headYStand = headY;
-    return t;
+    return buildCSBotTarget({
+      colors: this.settings.data.colors,
+      bodyPoints: BODY_PTS,
+      headPoints: HEAD_PTS,
+      headCrit: false,
+      widthScale: this.botWidth
+    });
   }
 
   _strafeRange(min, max) {
@@ -227,12 +199,8 @@ export class TrackingScenario extends BaseScenario {
       bot.crouchWant = 0;
     }
 
-    if (bot.target.rig) bot.target.rig.scale.y = lerp(1, 0.55, bot.crouch);
-    if (bot.target.headMesh) {
-      bot.target.headMesh.position.y = BODY_H * lerp(1, 0.55, bot.crouch) + HEAD_R * this.botWidth + HEAD_OFFSET;
-    }
-
-    bot.target.object.lookAt(cam.position.x, bot.target.object.position.y + 1.0, cam.position.z);
+    bot.target.model.aimAt(cam.position.x, cam.position.y, cam.position.z);
+    bot.target.model.update(dt, { crouch: bot.crouch });
   }
 
   onShoot(raycaster) {

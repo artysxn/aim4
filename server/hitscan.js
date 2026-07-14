@@ -6,7 +6,7 @@
 // BEFORE it is blocked by any cover box (occlusion check).
 // ---------------------------------------------------------------------------
 
-import { BODY_R, BODY_H, HEAD_R, crouchScale, headCenterY } from '../src/multiplayer/constants.js';
+import { BODY_R, HEAD_R, bodyTopY, headCenterY } from '../src/multiplayer/constants.js';
 
 const EPS = 1e-6;
 
@@ -101,9 +101,8 @@ function rayCylinder(o, d, cx, cz, baseY, r, h) {
  */
 export function resolveShot(origin, dir, target, boxes) {
   const crouch = target.crouch || 0;
-  const sc = crouchScale(crouch);
   const footY = Number.isFinite(target.footY) ? target.footY : 0;
-  const bodyH = BODY_H * sc;
+  const bodyH = bodyTopY(crouch);
   const hCenter = footY + headCenterY(crouch);
 
   const tBody = rayCylinder(origin, dir, target.x, target.z, footY, BODY_R, bodyH);

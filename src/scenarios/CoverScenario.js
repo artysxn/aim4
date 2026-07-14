@@ -14,7 +14,7 @@
 
 import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
-import { Target } from '../components/Target.js';
+import { buildCSBotTarget } from '../bots/buildBotTarget.js';
 import { randRange, randInt, clamp, lerp } from '../utils/MathUtils.js';
 import { SourceMover1D, RUN_SPEED, UNIT } from '../utils/SourceMovement.js';
 import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
@@ -24,12 +24,10 @@ import { SHOT_INTERVAL } from '../weapons/ak47.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
-import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 import { DEATH_OVERLAY_STRENGTH } from './deathFx.js';
 
 export const BODY_R = 0.35;
 export const BODY_H = 1.3;
-const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
 
 export const ROW_RISE = 200 * UNIT; // each row is 200 u (≈5.08 m) above the previous
 const PLAYER_HALF_X = 6;
@@ -222,36 +220,12 @@ export class CoverScenario extends BaseScenario {
 
   // ---- Bot -------------------------------------------------------------------
   _buildBot() {
-    const t = new Target();
-    const bodyRig = new THREE.Group();
-    t.object.add(bodyRig);
-
-    const c = this.settings.data.colors;
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(BODY_R, BODY_R, BODY_H, 18),
-      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: c.enemyBody, emissiveIntensity: 0.4, roughness: 0.5 })
-    );
-    body.position.y = BODY_H / 2;
-    body.userData.target = t;
-    body.userData.zone = 'body';
-    body.userData.points = 35;
-    body.userData.crit = false;
-    t.colliders.push(body);
-    bodyRig.add(body);
-
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(HEAD_R, 22, 16),
-      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: c.enemyHead, emissiveIntensity: 0.5, roughness: 0.4 })
-    );
-    head.position.y = HEAD_Y;
-    t.addCollider(head, { zone: 'head', points: 100, crit: true });
-
-    t.rig = bodyRig;
-    t.headMesh = head;
-    t.spawnDuration = 0;
-    t.spawnT = 0;
-    t.object.scale.setScalar(1);
-    return t;
+    return buildCSBotTarget({
+      colors: this.settings.data.colors,
+      bodyPoints: 35,
+      headPoints: 100,
+      instant: true
+    });
   }
 
   _scheduleNextBot(delay = this._nextBotDelay()) {
@@ -322,7 +296,7 @@ export class CoverScenario extends BaseScenario {
     if (!b) return;
     b.target.object.position.set(b.spot.x + b.mover.s, b.spot.footY, b.spot.behindZ);
     const cam = this.camera;
-    b.target.object.lookAt(cam.position.x, b.spot.footY + 1.0, cam.position.z);
+    b.target.model.aimAt(cam.position.x, cam.position.y, cam.position.z);
   }
 
   /** Full visibility: BOTH the bot's head and body centre see the player's eye. */
@@ -492,12 +466,9 @@ export class CoverScenario extends BaseScenario {
       }
     }
 
-    // Crouch animation (rig squashes; the head rides down with it).
+    // Crouch + skeletal pose (gait follows the 1-D strafe automatically).
     b.crouch = clamp(b.crouch + (b.crouchWant - b.crouch) * Math.min(1, CROUCH_RATE * dt), 0, 1);
-    if (b.target.rig) b.target.rig.scale.y = lerp(1, 0.55, b.crouch);
-    if (b.target.headMesh) {
-      b.target.headMesh.position.y = BODY_H * lerp(1, 0.55, b.crouch) + HEAD_R + HEAD_OFFSET;
-    }
+    b.target.model.update(dt, { crouch: b.crouch });
   }
 
   onShoot(raycaster) {

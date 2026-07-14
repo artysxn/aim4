@@ -20,9 +20,6 @@ import { SourceMover1D, UNIT } from '../utils/SourceMovement.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
-import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
-
-const BODY_H = 1.3;
 const STRAFE_HALF = 4.5;
 const RUN_SPEED_1D = 210 * UNIT;
 
@@ -186,11 +183,8 @@ export class SniperTrackingScenario extends TrackingScenario {
       bot.crouch = clamp(bot.crouch + (bot.crouchWant - bot.crouch) * Math.min(1, CROUCH_RATE * dt), 0, 1);
     }
 
-    if (bot.target.rig) bot.target.rig.scale.y = lerp(1, 0.55, bot.crouch);
-    if (bot.target.headMesh) {
-      bot.target.headMesh.position.y = BODY_H * lerp(1, 0.55, bot.crouch) + HEAD_R * this.botWidth + HEAD_OFFSET;
-    }
-    bot.target.object.lookAt(cam.position.x, bot.target.object.position.y + 1.0, cam.position.z);
+    bot.target.model.aimAt(cam.position.x, cam.position.y, cam.position.z);
+    bot.target.model.update(dt, { crouch: bot.crouch });
 
     this._updateHoldGate(dt);
   }

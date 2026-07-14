@@ -8,7 +8,7 @@
 
 import * as THREE from 'three';
 import { beep } from './BaseScenario.js';
-import { Target } from '../components/Target.js';
+import { buildCSBotTarget } from '../bots/buildBotTarget.js';
 import { randRange, clamp, lerp, degToRad } from '../utils/MathUtils.js';
 import { srcFriction, srcAccelerate, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
 import { resolveBoxCollisions, groundHeightAt } from '../utils/BoxCollision.js';
@@ -18,7 +18,7 @@ import { SHOT_INTERVAL } from '../weapons/ak47.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
-import { HEAD_R, HEAD_OFFSET, BODY_R, BODY_H } from '../multiplayer/constants.js';
+import { BODY_R } from '../multiplayer/constants.js';
 import { DEATH_OVERLAY_STRENGTH } from './deathFx.js';
 import { botDifficultyMultipliers } from './botDifficulty.js';
 import {
@@ -27,7 +27,6 @@ import {
   spawnZoneAabb
 } from './peekswitchCommon.js';
 
-const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
 const PLAYER_HP = 2;
 const OFF_ENGAGE_RANGE = 22;
 const OFF_DESIRED_RANGE = 9;
@@ -117,44 +116,12 @@ export class PeekswitchBotsScenario extends PeekswitchBaseScenario {
   }
 
   _buildBot() {
-    const t = new Target();
-    const bodyRig = new THREE.Group();
-    t.object.add(bodyRig);
-
-    const c = this.settings.data.colors;
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(BODY_R, BODY_R, BODY_H, 18),
-      new THREE.MeshStandardMaterial({
-        color: c.enemyBody,
-        emissive: c.enemyBody,
-        emissiveIntensity: 0.4,
-        roughness: 0.5
-      })
-    );
-    body.position.y = BODY_H / 2;
-    markBulletDecalSurface(body);
-    body.userData.target = t;
-    body.userData.zone = 'body';
-    body.userData.points = 50;
-    body.userData.crit = false;
-    t.colliders.push(body);
-    bodyRig.add(body);
-
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(HEAD_R, 22, 16),
-      new THREE.MeshStandardMaterial({
-        color: c.enemyHead,
-        emissive: c.enemyHead,
-        emissiveIntensity: 0.5,
-        roughness: 0.4
-      })
-    );
-    head.position.y = HEAD_Y;
-    t.addCollider(head, { zone: 'head', points: 100, crit: true });
-
-    t.rig = bodyRig;
-    t.headMesh = head;
-    return t;
+    return buildCSBotTarget({
+      colors: this.settings.data.colors,
+      bodyPoints: 50,
+      headPoints: 100,
+      markDecal: markBulletDecalSurface
+    });
   }
 
   _spawnEnemy() {
@@ -468,13 +435,10 @@ export class PeekswitchBotsScenario extends PeekswitchBaseScenario {
       0,
       1
     );
-    if (e.target.rig) e.target.rig.scale.y = lerp(1, 0.55, e.crouch);
-    if (e.target.headMesh) {
-      e.target.headMesh.position.y = BODY_H * lerp(1, 0.55, e.crouch) + HEAD_R + HEAD_OFFSET;
-    }
 
     this._syncBotTransform();
-    e.target.object.lookAt(px, py, pz);
+    e.target.model.aimAt(px, py, pz);
+    e.target.model.update(dt, { crouch: e.crouch });
     this._updateBotFootsteps(e, dt);
   }
 

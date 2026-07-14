@@ -13,17 +13,24 @@ export const TICK_MS = 1000 / TICK_RATE; // 7.8125 ms
 export const SNAPSHOT_RATE = 32;
 export const SNAPSHOT_EVERY = Math.max(1, Math.round(TICK_RATE / SNAPSHOT_RATE));
 
-// Player avatar dimensions — identical to the Duels enemy bot model so remote
-// players render (and are hit-tested) exactly like the singleplayer enemy.
-export const BODY_R = 0.35; // body cylinder radius (m)
-export const BODY_H = 1.3; // standing body height (m)
-export const HEAD_R = 0.27 * 0.67; // head sphere radius (m), 33% smaller than legacy 0.27
-export const HEAD_OFFSET = 0.02; // gap between body top and head bottom
+// Player collision / movement dimensions (unchanged — movement feel is frozen).
+export const BODY_R = 0.35; // movement collision radius + MP body hit cylinder (m)
+export const BODY_H = 1.3; // body top used by movement collision (crouch-under checks)
+export const HEAD_OFFSET = 0.02; // legacy gap constant (kept for old callers)
 export const STAND_EYE = 1.6; // standing eye height (m)
 export const CROUCH_EYE = 1.15; // ducked eye height (m)
-export const CROUCH_SCALE = 0.55; // body/head vertical squash when fully ducked
+export const CROUCH_SCALE = 0.55; // movement-collision vertical squash when fully ducked
 
-/** Vertical squash factor for a given crouch amount (0..1). */
+// CS-true bot hit model (matches src/bots/CSBotModel.js — the skeletal bot).
+// Standing head centre ≈ 65 u, crouched ≈ 48 u; the MP server validates hits
+// against a sphere/cylinder wrapping the visible skeletal model.
+export const HEAD_CENTER_STAND = 1.655; // head capsule centre, standing (m)
+export const HEAD_CENTER_CROUCH = 1.21; // head capsule centre, fully ducked (m)
+export const HEAD_R = 0.13; // analytic head sphere wrapping the head capsule
+export const BODY_TOP_STAND = 1.47; // shoulder line — top of the MP body hit cylinder
+export const BODY_TOP_CROUCH = 1.02;
+
+/** Vertical squash factor for a given crouch amount (0..1) — movement collision. */
 export function crouchScale(crouch) {
   return 1 + (CROUCH_SCALE - 1) * crouch;
 }
@@ -33,9 +40,14 @@ export function eyeOffset(crouch) {
   return STAND_EYE + (CROUCH_EYE - STAND_EYE) * crouch;
 }
 
-/** Head-centre height above the feet for a given crouch amount. */
+/** Head-capsule centre height above the feet for a given crouch amount. */
 export function headCenterY(crouch) {
-  return BODY_H * crouchScale(crouch) + HEAD_R + HEAD_OFFSET;
+  return HEAD_CENTER_STAND + (HEAD_CENTER_CROUCH - HEAD_CENTER_STAND) * crouch;
+}
+
+/** Top of the MP body hit cylinder above the feet for a given crouch amount. */
+export function bodyTopY(crouch) {
+  return BODY_TOP_STAND + (BODY_TOP_CROUCH - BODY_TOP_STAND) * crouch;
 }
 
 // "First to X" win targets offered in custom-game lobbies. 0 == endless.

@@ -24,7 +24,7 @@
 
 import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
-import { Target } from '../components/Target.js';
+import { buildCSBotTarget } from '../bots/buildBotTarget.js';
 import { randRange, randInt, clamp, lerp, degToRad } from '../utils/MathUtils.js';
 import { SourceMover1D, srcFriction, srcAccelerate, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
 import { resolveBoxCollisions, groundHeightAt } from '../utils/BoxCollision.js';
@@ -33,7 +33,6 @@ import { markBulletDecalSurface, worldImpactNormal } from '../utils/bulletImpact
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
-import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 import { movementHitScale, movementReactionDelay, isPointVisible } from '../utils/spawnVisibility.js';
 import { SHOT_INTERVAL } from '../weapons/ak47.js';
 import {
@@ -46,9 +45,7 @@ import { mapExtent } from '../multiplayer/maps.js';
 import { DEATH_OVERLAY_STRENGTH } from './deathFx.js';
 import { botDifficultyMultipliers } from './botDifficulty.js';
 
-const BODY_R = 0.35;
-const BODY_H = 1.3;
-const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET; // local head-centre height (feet at 0)
+const BODY_R = 0.35; // movement / peek-offset radius (matches player hull)
 
 const _headPos = new THREE.Vector3();
 const _eyePos = new THREE.Vector3();
@@ -516,35 +513,11 @@ export class DuelsScenario extends BaseScenario {
 
   // ---- Bot ---------------------------------------------------------------
   _buildBot() {
-    const t = new Target();
-
-    // bodyRig squishes on crouch; head is a sibling (not inside it) so it keeps its shape.
-    const bodyRig = new THREE.Group();
-    t.object.add(bodyRig);
-
-    const c = this.settings.data.colors;
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(BODY_R, BODY_R, BODY_H, 18),
-      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: c.enemyBody, emissiveIntensity: 0.4, roughness: 0.5 })
-    );
-    body.position.y = BODY_H / 2;
-    body.userData.target = t;
-    body.userData.zone = 'body';
-    body.userData.points = 35;
-    body.userData.crit = false;
-    t.colliders.push(body);
-    bodyRig.add(body);
-
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(HEAD_R, 22, 16),
-      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: c.enemyHead, emissiveIntensity: 0.5, roughness: 0.4 })
-    );
-    head.position.y = HEAD_Y;
-    t.addCollider(head, { zone: 'head', points: 100, crit: true });
-
-    t.rig = bodyRig;
-    t.headMesh = head;
-    return t;
+    return buildCSBotTarget({
+      colors: this.settings.data.colors,
+      bodyPoints: 35,
+      headPoints: 100
+    });
   }
 
   _spawnEnemy() {
@@ -791,13 +764,10 @@ export class DuelsScenario extends BaseScenario {
       0,
       1
     );
-    if (e.target.rig) e.target.rig.scale.y = lerp(1, 0.55, e.crouch);
-    if (e.target.headMesh) {
-      e.target.headMesh.position.y = BODY_H * lerp(1, 0.55, e.crouch) + HEAD_R + HEAD_OFFSET;
-    }
 
     this._syncOffensiveBotTransform();
-    e.target.object.lookAt(px, py, pz);
+    e.target.model.aimAt(px, py, pz);
+    e.target.model.update(dt, { crouch: e.crouch });
     e.hasLos = hasLos;
     this._updateBotFootsteps(e, dt);
   }
@@ -990,13 +960,9 @@ export class DuelsScenario extends BaseScenario {
       return;
     }
 
-    // Crouch animation (rig scales down from the feet).
+    // Crouch amount (the skeletal model folds its knees in model.update below).
     const want = e.phase === 'hold' ? e.crouchWant || 0 : 0;
     e.crouch = clamp(e.crouch + (want - e.crouch) * Math.min(1, CROUCH_RATE * dt), 0, 1);
-    if (e.target.rig) e.target.rig.scale.y = lerp(1, 0.55, e.crouch);
-    if (e.target.headMesh) {
-      e.target.headMesh.position.y = BODY_H * lerp(1, 0.55, e.crouch) + HEAD_R + HEAD_OFFSET;
-    }
 
     if (e.target.state === 'dying') return;
     const max = RUN_SPEED;
@@ -1053,6 +1019,9 @@ export class DuelsScenario extends BaseScenario {
     }
 
     this._placeEnemy(e.mover.s);
+    const cam = this.camera;
+    e.target.model.aimAt(cam.position.x, cam.position.y, cam.position.z);
+    e.target.model.update(dt, { crouch: e.crouch });
 
     const hasLos = this._botHeadHasLos(e);
     e.hasLos = hasLos;

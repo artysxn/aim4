@@ -9,7 +9,7 @@
 
 import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
-import { Target } from '../components/Target.js';
+import { buildCSBotTarget } from '../bots/buildBotTarget.js';
 import { randRange, randInt, clamp, lerp } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { buildMapMeshes } from '../utils/buildMapMeshes.js';
@@ -20,7 +20,6 @@ import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS, resolveModeDuration } from '../core/SettingsManager.js';
 import { DOORS_MAP } from '../maps/doorsMapData.js';
-import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 import {
   createDoorsShotFeedback,
   spawnBotSnapshot,
@@ -28,10 +27,6 @@ import {
   updateDoorsShotFeedback,
   disposeDoorsShotFeedback
 } from './doorsShotFeedback.js';
-
-const BODY_R = 0.35;
-const BODY_H = 1.3;
-const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
 
 const BOT_CROSS_SPEED = 250 * UNIT;
 const JUMP_CHANCE = 0; // bots run only — no jump crosses
@@ -159,22 +154,11 @@ export class DoorsAwpScenario extends BaseScenario {
   }
 
   _buildBot() {
-    const t = new Target();
-    const col = this.settings.data.colors;
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(BODY_R, BODY_R, BODY_H, 18),
-      new THREE.MeshStandardMaterial({ color: col.enemyBody, emissive: col.enemyBody, emissiveIntensity: 0.4, roughness: 0.5 })
-    );
-    body.position.y = BODY_H / 2;
-    t.addCollider(body, { zone: 'body', points: 50, crit: false });
-
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(HEAD_R, 22, 16),
-      new THREE.MeshStandardMaterial({ color: col.enemyHead, emissive: col.enemyHead, emissiveIntensity: 0.5, roughness: 0.4 })
-    );
-    head.position.y = HEAD_Y;
-    t.addCollider(head, { zone: 'head', points: 100, crit: true });
-    return t;
+    return buildCSBotTarget({
+      colors: this.settings.data.colors,
+      bodyPoints: 50,
+      headPoints: 100
+    });
   }
 
   _spawnPool() {
@@ -314,6 +298,9 @@ export class DoorsAwpScenario extends BaseScenario {
       case 'moving':
         this._advanceBot(dt);
         break;
+    }
+    if (this.bot && this.bot.target.state !== 'dying') {
+      this.bot.target.model.update(dt);
     }
   }
 

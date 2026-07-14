@@ -5,11 +5,11 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
-import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
+import { HEAD_R, HEAD_CENTER_STAND, BODY_TOP_STAND } from '../multiplayer/constants.js';
 
 const BODY_R = 0.35;
-const BODY_H = 1.3;
-const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
+const BODY_H = BODY_TOP_STAND; // silhouette matches the skeletal bot's shoulder line
+const HEAD_Y = HEAD_CENTER_STAND;
 const HIT_RADIUS = 0.18;
 /** Open lane between spawn platform and door volumes (player at z ≈ -20, doors ≈ -1.25). */
 const FEEDBACK_PLANE_Z = -5.5;

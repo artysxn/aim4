@@ -153,7 +153,7 @@ export class SniperQuickscopesScenario extends CoverScenario {
       s.bz + s.tz * b.mover.s
     );
     const cam = this.camera;
-    b.target.object.lookAt(cam.position.x, s.footY + 1.0, cam.position.z);
+    b.target.model.aimAt(cam.position.x, cam.position.y, cam.position.z);
   }
 
   _botFullyVisible(b) {

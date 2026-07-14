@@ -20,15 +20,15 @@ import { markBulletDecalSurface } from '../utils/bulletImpact.js';
 import { getMap, mapExtent } from '../multiplayer/maps.js';
 import {
   BODY_R,
-  BODY_H,
   HEAD_R,
-  HEAD_OFFSET,
-  crouchScale,
+  bodyTopY,
+  headCenterY,
   STAND_EYE,
   CROUCH_EYE,
   SPAWN_GRACE,
   SNAPSHOT_RATE
 } from '../multiplayer/constants.js';
+import { CSBotModel } from '../bots/CSBotModel.js';
 import {
   DM_DEATH_FX_DUR,
   DM_DEATH_FX_PITCH,
@@ -37,7 +37,6 @@ import {
   updateDeathFxFrame
 } from './deathFx.js';
 
-const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
 const MAX_PITCH = degToRad(89);
 
 // Reused scratch for drawing remote-shot tracers (no per-shot allocation).
@@ -164,32 +163,35 @@ export class MultiplayerDuelScenario extends BaseScenario {
     }
   }
 
-  /** Build a remote-player avatar (identical to the Duels enemy bot model). */
+  /** Build a remote-player avatar (the same skeletal bot as singleplayer). */
   _makeAvatar() {
     const c = this.settings.data.colors;
     const group = new THREE.Group();
 
-    const rig = new THREE.Group();
-    group.add(rig);
+    const model = new CSBotModel({ bodyColor: c.enemyBody, headColor: c.enemyHead });
+    group.add(model.root);
 
+    // Invisible hit proxies mirroring the server's analytic validation shapes
+    // (cylinder + sphere in server/hitscan.js) so client claims and server
+    // verdicts always agree. The skeletal model is display-only here.
     const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(BODY_R, BODY_R, BODY_H, 18),
-      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: c.enemyBody, emissiveIntensity: 0.4, roughness: 0.5 })
+      new THREE.CylinderGeometry(BODY_R, BODY_R, 1, 12),
+      new THREE.MeshBasicMaterial()
     );
-    body.position.y = BODY_H / 2;
+    body.visible = false;
     body.userData.zone = 'body';
-    rig.add(body);
+    group.add(body);
 
     const head = new THREE.Mesh(
-      new THREE.SphereGeometry(HEAD_R, 22, 16),
-      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: c.enemyHead, emissiveIntensity: 0.5, roughness: 0.4 })
+      new THREE.SphereGeometry(HEAD_R, 12, 10),
+      new THREE.MeshBasicMaterial()
     );
-    head.position.y = HEAD_Y;
+    head.visible = false;
     head.userData.zone = 'head';
     group.add(head);
 
     this.root.add(group);
-    return { group, rig, body, head, colliders: [body, head] };
+    return { group, model, body, head, colliders: [body, head] };
   }
 
   _ensureRemote(id) {
@@ -454,13 +456,17 @@ export class MultiplayerDuelScenario extends BaseScenario {
       r.dead = state.dead;
 
       r.group.visible = !r.dead;
-      const sc = crouchScale(r.cur.crouch);
       const eyeOff = lerp(STAND_EYE, CROUCH_EYE, r.cur.crouch);
       const footY = r.cur.y - eyeOff;
       r.group.position.set(r.cur.x, footY, r.cur.z);
-      r.group.rotation.y = r.cur.yaw;
-      r.rig.scale.y = sc;
-      r.head.position.y = BODY_H * sc + HEAD_R + HEAD_OFFSET;
+      // Hit proxies track the server's analytic shapes exactly.
+      const bodyH = bodyTopY(r.cur.crouch);
+      r.body.scale.y = bodyH;
+      r.body.position.y = bodyH / 2;
+      r.head.position.y = headCenterY(r.cur.crouch);
+      // Camera yaw faces -Z; the model's forward is +Z, hence the +π.
+      r.model.setYaw(r.cur.yaw + Math.PI);
+      r.model.update(_dt, { crouch: r.cur.crouch });
 
       this.engine.audio?.updateRemotePlayer(id, r, _dt);
     }

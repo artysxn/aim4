@@ -14,6 +14,7 @@
 import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
 import { Target } from '../components/Target.js';
+import { buildCSBotTarget } from '../bots/buildBotTarget.js';
 import { randRange, randInt, degToRad } from '../utils/MathUtils.js';
 import { gridLineColors } from '../utils/ColorUtils.js';
 import { markBulletDecalSurface } from '../utils/bulletImpact.js';
@@ -22,10 +23,6 @@ import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
 import { startMissFlash, updateMissFlash } from './missFlash.js';
-import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
-
-const BODY_R = 0.35;
-const BODY_H = 1.3;
 
 const COL_H = 2.8;
 const CIRCLE_R = 0.45;
@@ -146,28 +143,12 @@ export class ArenaScenario extends BaseScenario {
   }
 
   _buildBot() {
-    const s = this.enemyScale;
-    const bodyR = BODY_R * s;
-    const bodyH = BODY_H * s;
-    const headR = HEAD_R * s;
-    const headY = bodyH + headR + HEAD_OFFSET * s;
-
-    const c = this.settings.data.colors;
-    const t = new Target();
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(bodyR, bodyR, bodyH, 18),
-      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: c.enemyBody, emissiveIntensity: 0.4, roughness: 0.5 })
-    );
-    body.position.y = bodyH / 2;
-    t.addCollider(body, { zone: 'body', points: 35, crit: false });
-
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(headR, 22, 16),
-      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: c.enemyHead, emissiveIntensity: 0.5, roughness: 0.4 })
-    );
-    head.position.y = headY;
-    t.addCollider(head, { zone: 'head', points: 100, crit: true });
-    return t;
+    return buildCSBotTarget({
+      colors: this.settings.data.colors,
+      bodyPoints: 35,
+      headPoints: 100,
+      scale: this.enemyScale
+    });
   }
 
   _setBotOffset(off) {
@@ -181,13 +162,7 @@ export class ArenaScenario extends BaseScenario {
   _botSeesPlayer() {
     const b = this.bot;
     if (!b || b.state === 'dying') return false;
-    const s = this.enemyScale;
-    const ang = this.colAngle[this.spawnCol] + this.botOff;
-    _botPos.set(
-      this.botR * Math.sin(ang),
-      BODY_H * s + HEAD_R * s,
-      -this.botR * Math.cos(ang)
-    );
+    b.headMesh.getWorldPosition(_botPos);
     this.camera.getWorldPosition(_eyePos);
     const dist = _botPos.distanceTo(_eyePos);
     if (dist < 1e-4) return true;
@@ -363,6 +338,7 @@ export class ArenaScenario extends BaseScenario {
         if (this.timer <= 0) this._spawnCircle();
         break;
     }
+    if (this.bot && this.bot.state !== 'dying') this.bot.model.update(dt);
   }
 
   onShoot(raycaster) {

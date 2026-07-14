@@ -74,6 +74,10 @@ import {
   decodeModeConfig
 } from '../utils/ModeConfigCodes.js';
 import {
+  encodeGraphicsConfig,
+  decodeGraphicsConfig
+} from '../utils/GraphicsConfigCodes.js';
+import {
   loadPlaylists,
   savePlaylist,
   deletePlaylist,
@@ -574,6 +578,18 @@ export class UIOverlay {
                 ${rf('set-glow-core-int', 'Core emissive', 0.5, 4, 0.05)}
               </div>
             </details>
+          </div>
+          <div class="config-code-block">
+            <div class="field-top"><span class="field-label">Graphics code</span></div>
+            <code class="config-export-code" id="gfx-code-export">—</code>
+            <div class="config-actions">
+              <button type="button" class="btn" id="gfx-code-copy">Copy code</button>
+            </div>
+            <div class="playlist-add-row">
+              <input type="text" id="gfx-code-import" class="config-code-input" placeholder="Paste AIM4G-… code" spellcheck="false" autocomplete="off" />
+              <button type="button" class="btn" id="gfx-code-import-btn">Import</button>
+            </div>
+            <p class="readout" id="gfx-code-status"></p>
           </div>`
       },
       {
@@ -2106,6 +2122,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     });
 
     this._bindSettings();
+    this._bindGraphicsCode();
     this._bindSettingsTabs();
     this._bindScenarioSettings();
     this._bindScenarioFooter();
@@ -2324,6 +2341,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     if (hint) hint.hidden = explore || !this.settings.hasDraftChanges();
     this._updateScenarioSettingsBar();
     this._updateInRunSettingsNav();
+    this._refreshGraphicsCode();
   }
 
   _updateScenarioSettingsBar() {
@@ -2595,6 +2613,72 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     } finally {
       if (btn) btn.disabled = false;
     }
+  }
+
+  /** Refresh the live graphics config-code readout. */
+  _refreshGraphicsCode() {
+    const codeEl = this.root.querySelector('#gfx-code-export');
+    if (!codeEl) return;
+    try {
+      codeEl.textContent = encodeGraphicsConfig(this.settings.getGraphicsConfig());
+    } catch {
+      codeEl.textContent = '—';
+    }
+  }
+
+  _applyGraphicsImportPreview() {
+    this._syncSkyboxFields();
+    this._syncGlowConfigFields();
+    this._applySkyboxSettings();
+    this._applyGlowSettings();
+    this.engine.applyColors?.();
+    this.sceneManager.applyLiveScenarioSettings?.();
+  }
+
+  _bindGraphicsCode() {
+    const $ = (id) => this.root.querySelector(id);
+    const setStatus = (msg, isError = false) => {
+      const el = $('#gfx-code-status');
+      if (!el) return;
+      el.textContent = msg || '';
+      el.classList.toggle('is-error', !!isError);
+    };
+
+    $('#gfx-code-copy')?.addEventListener('click', async () => {
+      try {
+        const code = encodeGraphicsConfig(this.settings.getGraphicsConfig());
+        const codeEl = $('#gfx-code-export');
+        if (codeEl) codeEl.textContent = code;
+        await copyText(code);
+        setStatus('Graphics code copied to clipboard.');
+      } catch (err) {
+        setStatus(err.message || 'Could not copy code', true);
+      }
+    });
+
+    $('#gfx-code-import-btn')?.addEventListener('click', () => {
+      const raw = $('#gfx-code-import')?.value;
+      if (!raw || !raw.trim()) {
+        setStatus('Paste a graphics code first.', true);
+        return;
+      }
+      let decoded;
+      try {
+        decoded = decodeGraphicsConfig(raw);
+      } catch (err) {
+        setStatus(err.message || 'Invalid graphics code', true);
+        return;
+      }
+      const validSkyboxIds = new Set(SKYBOX_CATALOG.map((e) => e.id));
+      if (decoded.config.skyboxId && !validSkyboxIds.has(decoded.config.skyboxId)) {
+        decoded.config.skyboxId = defaultSkyboxId();
+      }
+      this.settings.applyGraphicsConfigToDraft(decoded.config);
+      this._populateSettings();
+      this._applyGraphicsImportPreview();
+      this._updateSettingsBar();
+      setStatus('Graphics imported.');
+    });
   }
 
   _bindScenarioFooter() {
@@ -6251,6 +6335,14 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._setRange('set-glow-core-white', gc.coreWhiteness);
     this._setRange('set-glow-core-int', gc.coreIntensity);
     this._syncGlowConfigFields();
+    this._refreshGraphicsCode();
+    const gfxImport = this.root.querySelector('#gfx-code-import');
+    if (gfxImport) gfxImport.value = '';
+    const gfxStatus = this.root.querySelector('#gfx-code-status');
+    if (gfxStatus) {
+      gfxStatus.textContent = '';
+      gfxStatus.classList.remove('is-error');
+    }
 
     $('#set-range-arc').value = String(s.range.arc);
     const rangeWeapon = this.root.querySelector('#set-range-weapon');

@@ -11,6 +11,8 @@ import {
   radiansPerCountFromSensitivity,
   sensitivityFromLegacy
 } from '../utils/MathUtils.js';
+import { resolveTargetGlowConfig } from '../utils/targetGlowConfig.js';
+import { resolveSkyboxGlowConfig } from '../utils/skyboxGlowConfig.js';
 
 const SETTINGS_VERSION = 2;
 
@@ -862,6 +864,46 @@ export class SettingsManager {
   applyModeConfigToDraft(scenario, config) {
     this.mutateDraft((d) => {
       d[scenario] = this._deepMerge(d[scenario] || {}, structuredClone(config || {}));
+    });
+  }
+
+  /** Snapshot graphics-menu settings for share codes. */
+  getGraphicsConfig() {
+    const src = this.activeSettings() || {};
+    return {
+      colors: structuredClone(src.colors ?? DEFAULTS.colors),
+      targetGlow: src.targetGlow === true,
+      targetGlowConfig: structuredClone(resolveTargetGlowConfig(src.targetGlowConfig)),
+      customSkybox: src.customSkybox === true,
+      skyboxId: src.skyboxId ?? DEFAULTS.skyboxId,
+      skyboxHue: Number(src.skyboxHue) || 0,
+      skyboxSaturation: Number(src.skyboxSaturation ?? 100),
+      skyboxBrightness: Number(src.skyboxBrightness ?? 100),
+      skyboxContrast: Number(src.skyboxContrast ?? 100),
+      skyboxOpacity: Number(src.skyboxOpacity ?? 100),
+      skyboxHeightOffset: Number(src.skyboxHeightOffset) || 0,
+      skyboxPostFx: src.skyboxPostFx !== false,
+      skyboxGlowConfig: structuredClone(resolveSkyboxGlowConfig(src.skyboxGlowConfig))
+    };
+  }
+
+  /** Replace graphics-menu fields on the draft from an imported code. */
+  applyGraphicsConfigToDraft(config) {
+    const c = config && typeof config === 'object' ? config : {};
+    this.mutateDraft((d) => {
+      d.colors = structuredClone(c.colors ?? DEFAULTS.colors);
+      d.targetGlow = c.targetGlow === true;
+      d.targetGlowConfig = structuredClone(resolveTargetGlowConfig(c.targetGlowConfig));
+      d.customSkybox = c.customSkybox === true;
+      d.skyboxId = typeof c.skyboxId === 'string' ? c.skyboxId : DEFAULTS.skyboxId;
+      d.skyboxHue = Number(c.skyboxHue) || 0;
+      d.skyboxSaturation = Number(c.skyboxSaturation ?? 100);
+      d.skyboxBrightness = Number(c.skyboxBrightness ?? 100);
+      d.skyboxContrast = Number(c.skyboxContrast ?? 100);
+      d.skyboxOpacity = Number(c.skyboxOpacity ?? 100);
+      d.skyboxHeightOffset = Number(c.skyboxHeightOffset) || 0;
+      d.skyboxPostFx = c.skyboxPostFx !== false;
+      d.skyboxGlowConfig = structuredClone(resolveSkyboxGlowConfig(c.skyboxGlowConfig));
     });
   }
 

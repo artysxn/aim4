@@ -17,6 +17,7 @@ export class Target {
     this.object = new THREE.Group();
     this.object.scale.setScalar(0.001); // grows in via spawn animation
     this.colliders = []; // THREE.Mesh[] tagged in userData
+    this.visuals = []; // non-hittable meshes (e.g. a carried rifle) that fade with the target
 
     this.age = 0; // seconds alive (used by time-limit logic)
     this.alive = true; // false once death animation completes -> removed
@@ -55,7 +56,7 @@ export class Target {
     this.state = 'dying';
     this.dyingT = 0;
     if (fadeColor != null) this._fadeColor.set(fadeColor);
-    for (const m of this.colliders) {
+    for (const m of this.colliders.concat(this.visuals)) {
       if (m.material) {
         m.material.transparent = true;
         if (m.material.emissive) m.material.emissive.copy(this._fadeColor);
@@ -80,7 +81,7 @@ export class Target {
       this.dyingT += dt;
       const t = Math.min(1, this.dyingT / this.dyingDuration);
       this.object.scale.setScalar(1 + t * 0.6);
-      for (const m of this.colliders) {
+      for (const m of this.colliders.concat(this.visuals)) {
         if (m.material) m.material.opacity = 1 - t;
         setTargetGlowOpacity(m, 1 - t);
       }
@@ -89,10 +90,11 @@ export class Target {
   }
 
   dispose() {
-    for (const m of this.colliders) {
+    for (const m of this.colliders.concat(this.visuals)) {
       m.geometry?.dispose();
       m.material?.dispose();
     }
     this.colliders.length = 0;
+    this.visuals.length = 0;
   }
 }

@@ -15,9 +15,7 @@ import { gridLineColors } from '../utils/ColorUtils.js';
 import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
-import { HEAD_R, HEAD_OFFSET, BODY_R } from '../multiplayer/constants.js';
-
-const BODY_H = 1.3;
+import { BODY_R } from '../multiplayer/constants.js';
 const ARENA_HALF = 11;
 const DEFAULT_BOT_DISTANCE = 6;
 const TRACKING_RUN_SPEED = 210 * UNIT;
@@ -127,15 +125,10 @@ export class RapidtrackScenario extends TrackingScenario {
     bot.target.object.position.set(bot.pos.x, 0, bot.pos.z);
   }
 
-  /** Yaw-only facing — keeps the rig upright (no lookAt pitch tilt). */
+  /** Face the player's eye — root yaw + aim-matrix pitch, body stays upright. */
   _facePlayer(bot) {
-    const px = this.camera.position.x;
-    const pz = this.camera.position.z;
-    const dx = px - bot.pos.x;
-    const dz = pz - bot.pos.z;
-    if (Math.hypot(dx, dz) > 1e-4) {
-      bot.target.object.rotation.set(0, Math.atan2(dx, -dz), 0);
-    }
+    const cam = this.camera;
+    bot.target.model.aimAt(cam.position.x, cam.position.y, cam.position.z);
   }
 
   _moveBot(bot, wishX, wishZ, max, dt) {
@@ -230,11 +223,7 @@ export class RapidtrackScenario extends TrackingScenario {
       bot.crouchWant = 0;
     }
 
-    if (bot.target.rig) bot.target.rig.scale.y = lerp(1, 0.55, bot.crouch);
-    if (bot.target.headMesh) {
-      bot.target.headMesh.position.y = BODY_H * lerp(1, 0.55, bot.crouch) + HEAD_R * this.botWidth + HEAD_OFFSET;
-    }
-
     this._facePlayer(bot);
+    bot.target.model.update(dt, { crouch: bot.crouch });
   }
 }

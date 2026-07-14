@@ -145,6 +145,9 @@
       <div><span class="dot" style="background:#f52525"></span><b>Red box</b> = arena bounds</div>
       <div><span class="dot" style="background:var(--a)"></span>Team A spawns (cyan)</div>
       <div><span class="dot" style="background:var(--b)"></span>Team B spawns (orange)</div>
+      <div><span class="dot" style="background:#36e0ff"></span>Clip brush — blocks movement, shots pass</div>
+      <div><span class="dot" style="background:#35e06a"></span>Target spawn zone</div>
+      <div><span class="dot" style="background:#c26bff"></span>Bot spawn zone</div>
       <div style="margin-top:4px">Multiple spawns per team — game picks one at random</div>
     </div>
     <div id="navhelp" class="panelcard">
@@ -154,7 +157,8 @@
       <div><span class="k">Shift + Middle</span> — pan</div>
       <div><span class="k">Right-drag</span> — pan</div>
       <div><span class="k">Shift-click</span> — add / remove from selection</div>
-      <div><span class="k">E</span> — move / scale · <span class="k">R</span> / <span class="k">Shift+R</span> — rotate 90°</div>
+      <div><span class="k">E</span> — move / scale · <span class="k">R</span> / <span class="k">Shift+R</span> — rotate 45° / 90°</div>
+      <div><span class="k">[</span> / <span class="k">]</span> — tilt slope ±45° on X</div>
       <div><span class="k">Wheel</span> — zoom · <span class="k">F</span> — frame</div>
     </div>
   </div>
@@ -195,6 +199,22 @@
       <div class="seg c2">
         <button id="add-box">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg>Add Box
+        </button>
+        <button id="add-slope" title="Cover box tilted 45° on X (ramp)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="m6 16 6-12 6 12"/></svg>Add Slope
+        </button>
+      </div>
+      <div class="seg c2" style="margin-top:8px">
+        <button id="add-clip" title="Invisible movement blocker — shots pass through">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1" stroke-dasharray="4 3"/><path d="M8 12h8"/></svg>Add Clip
+        </button>
+        <button id="add-zone-target" title="Volume where targets can spawn (Peekswitch-style)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>Target Zone
+        </button>
+      </div>
+      <div class="seg c2" style="margin-top:8px">
+        <button id="add-zone-bot" title="Volume where bots spawn on the ground">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="m4.93 4.93 2.83 2.83"/><path d="M2 12h4"/><path d="m4.93 19.07 2.83-2.83"/><path d="M12 18v4"/><path d="m19.07 19.07-2.83-2.83"/><path d="M18 12h4"/><path d="m19.07 4.93-2.83 2.83"/><circle cx="12" cy="12" r="4"/></svg>Bot Zone
         </button>
       </div>
       <div class="seg c2" style="margin-top:8px">
@@ -246,7 +266,7 @@
       <button id="btn-resnap-all" type="button" style="width:100%;margin-top:8px" title="Snap every box and spawn to the move + scale grids">
         Re-snap all to grid
       </button>
-      <div class="hint">Click to select. <b>Shift-click</b> to add/remove. Scale freely; snaps to the nearest grid step on release. <b>R</b> / <b>Shift+R</b> rotate 90°.</div>
+      <div class="hint">Click to select. <b>Shift-click</b> to add/remove. Scale freely; snaps to the nearest grid step on release. <b>R</b> 45° · <b>Shift+R</b> 90° · <b>[</b> / <b>]</b> slope tilt.</div>
     </div>
 
     <!-- Selected -->
@@ -266,6 +286,43 @@
           <button class="pill" data-seth="0.85">Low 0.85</button>
           <button class="pill" data-seth="2.4">Peek 2.4</button>
           <button class="pill" data-seth="6">Full 6.0</button>
+        </div>
+        <div class="grid3" style="margin-top:10px">
+          <div class="f"><label>Rot X°</label><input id="p-rx" type="number" step="45" /></div>
+          <div class="f"><label>Rot Y°</label><input id="p-ry" type="number" step="45" /></div>
+          <div class="f"><label>Rot Z°</label><input id="p-rz" type="number" step="45" /></div>
+        </div>
+      </div>
+      <div id="prop-clip" style="display:none">
+        <div class="grid3">
+          <div class="f"><label>X</label><input id="c-x" type="number" step="0.1" /></div>
+          <div class="f"><label>Y</label><input id="c-y" type="number" step="0.1" /></div>
+          <div class="f"><label>Z</label><input id="c-z" type="number" step="0.1" /></div>
+          <div class="f"><label>W (x)</label><input id="c-w" type="number" step="0.1" /></div>
+          <div class="f"><label>H (y)</label><input id="c-h" type="number" step="0.1" /></div>
+          <div class="f"><label>D (z)</label><input id="c-d" type="number" step="0.1" /></div>
+        </div>
+        <div class="grid3" style="margin-top:10px">
+          <div class="f"><label>Rot X°</label><input id="c-rx" type="number" step="45" /></div>
+          <div class="f"><label>Rot Y°</label><input id="c-ry" type="number" step="45" /></div>
+          <div class="f"><label>Rot Z°</label><input id="c-rz" type="number" step="45" /></div>
+        </div>
+      </div>
+      <div id="prop-zone" style="display:none">
+        <div class="row tight"><label class="lbl">Zone ID</label><input id="z-id" type="text" class="grow" /></div>
+        <div class="row tight"><label class="lbl">Purpose</label>
+          <select id="z-purpose" class="grow"><option value="target">Target</option><option value="bot">Bot</option></select>
+        </div>
+        <div class="grid3" style="margin-top:8px">
+          <div class="f"><label>X</label><input id="z-x" type="number" step="0.1" /></div>
+          <div class="f"><label>Y</label><input id="z-y" type="number" step="0.1" /></div>
+          <div class="f"><label>Z</label><input id="z-z" type="number" step="0.1" /></div>
+          <div class="f"><label>W (x)</label><input id="z-w" type="number" step="0.1" /></div>
+          <div class="f"><label>H (y)</label><input id="z-h" type="number" step="0.1" /></div>
+          <div class="f"><label>D (z)</label><input id="z-d" type="number" step="0.1" /></div>
+        </div>
+        <div class="grid3" style="margin-top:10px">
+          <div class="f"><label>Rot Y°</label><input id="z-ry" type="number" step="45" /></div>
         </div>
       </div>
       <div id="prop-spawn" style="display:none">
@@ -325,7 +382,7 @@
         <button id="btn-clear" class="danger">Clear boxes</button>
       </div>
       <textarea id="io" spellcheck="false" placeholder="Exported JSON appears here. Paste JSON and click Import to load."></textarea>
-      <div class="hint">Format matches <code>src/multiplayer/maps.js</code>. Spawns: <code>A</code> / <code>B</code> are one point each, or an array for random pick — e.g. <code>"A": [{ "pos": [...] }, { "pos": [...] }]</code>.</div>
+      <div class="hint">Format matches in-game maps. Includes <code>boxes</code>, <code>clipBarriers</code>, and <code>spawnZones</code>. Spawns: <code>A</code> / <code>B</code> are one point each, or an array for random pick.</div>
     </div>
   </div>
 </div>
@@ -480,8 +537,19 @@ scene.add(boundsBox);
 const UNIT_GEO = new THREE.BoxGeometry(1, 1, 1);
 const boxGroup = new THREE.Group();
 scene.add(boxGroup);
+const clipGroup = new THREE.Group();
+scene.add(clipGroup);
+const zoneGroup = new THREE.Group();
+scene.add(zoneGroup);
 const spawnGroup = new THREE.Group();
 scene.add(spawnGroup);
+
+const DEG = Math.PI / 180;
+const SNAP_45 = Math.PI / 4;
+const SNAP_90 = Math.PI / 2;
+const CLIP_COLOR = 0x36e0ff;
+const ZONE_COLORS = { target: 0x35e06a, bot: 0xc26bff };
+const round2 = (v) => Math.round(v * 1000) / 1000;
 
 let selected = [];
 let moveSnapVal = 0.5;
@@ -542,30 +610,112 @@ function heightColor(h) {
   return c;
 }
 
-function addBox(box) {
-  const mesh = new THREE.Mesh(UNIT_GEO, new THREE.MeshStandardMaterial({
-    color: heightColor(box.size[1]), roughness: 0.85, metalness: 0.0
-  }));
+function applyVolumeTransform(mesh, box) {
   mesh.position.set(box.pos[0], box.pos[1], box.pos[2]);
   mesh.scale.set(box.size[0], box.size[1], box.size[2]);
-  if (box.rotationY) mesh.rotation.y = box.rotationY;
-  mesh.userData.kind = 'box';
+  mesh.rotation.set(box.rotationX || 0, box.rotationY || 0, box.rotationZ || 0);
+}
+
+function volumeFromMesh(mesh) {
+  const entry = {
+    pos: [round2(mesh.position.x), round2(mesh.position.y), round2(mesh.position.z)],
+    size: [round2(mesh.scale.x), round2(mesh.scale.y), round2(mesh.scale.z)]
+  };
+  if (Math.abs(mesh.rotation.x) > 0.0001) entry.rotationX = round2(mesh.rotation.x);
+  if (Math.abs(mesh.rotation.y) > 0.0001) entry.rotationY = round2(mesh.rotation.y);
+  if (Math.abs(mesh.rotation.z) > 0.0001) entry.rotationZ = round2(mesh.rotation.z);
+  return entry;
+}
+
+function nextZoneId(purpose) {
+  const prefix = purpose === 'bot' ? 'bot' : 'target';
+  const n = [...zoneGroup.children].filter((z) => z.userData.purpose === purpose).length;
+  return n === 0 ? prefix : `${prefix}${n + 1}`;
+}
+
+function addVolume(box, kind, extra = {}) {
+  let mat;
+  let group;
+  let edgeColor;
+  if (kind === 'box') {
+    mat = new THREE.MeshStandardMaterial({
+      color: heightColor(box.size[1]), roughness: 0.85, metalness: 0.0
+    });
+    group = boxGroup;
+    edgeColor = 0x000000;
+  } else if (kind === 'clip') {
+    mat = new THREE.MeshBasicMaterial({
+      color: CLIP_COLOR, transparent: true, opacity: 0.22, depthWrite: false
+    });
+    group = clipGroup;
+    edgeColor = CLIP_COLOR;
+  } else {
+    const purpose = extra.purpose || 'target';
+    const color = ZONE_COLORS[purpose] || ZONE_COLORS.target;
+    mat = new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: 0.18, depthWrite: false
+    });
+    group = zoneGroup;
+    edgeColor = color;
+  }
+  const mesh = new THREE.Mesh(UNIT_GEO, mat);
+  applyVolumeTransform(mesh, box);
+  mesh.userData.kind = kind;
+  if (kind === 'spawnZone') {
+    mesh.userData.purpose = extra.purpose || 'target';
+    mesh.userData.zoneId = extra.id || nextZoneId(mesh.userData.purpose);
+  }
   const edges = new THREE.LineSegments(
     new THREE.EdgesGeometry(UNIT_GEO),
-    new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 })
+    new THREE.LineBasicMaterial({
+      color: edgeColor, transparent: true, opacity: kind === 'box' ? 0.35 : 0.9
+    })
   );
   edges.raycast = () => {};
   mesh.add(edges);
-  boxGroup.add(mesh);
+  group.add(mesh);
   return mesh;
 }
 
-function clearBoxes() {
-  for (let i = boxGroup.children.length - 1; i >= 0; i--) {
-    const m = boxGroup.children[i];
-    m.material.dispose();
-    boxGroup.remove(m);
+function addBox(box) {
+  return addVolume(box, 'box');
+}
+
+function addClip(box) {
+  return addVolume(box, 'clip');
+}
+
+function addSpawnZone(box, purpose = 'target', id = null) {
+  return addVolume(box, 'spawnZone', { purpose, id });
+}
+
+function addSlope(box) {
+  const b = {
+    pos: box.pos,
+    size: box.size,
+    rotationX: box.rotationX ?? -SNAP_45,
+    rotationY: box.rotationY || 0,
+    rotationZ: box.rotationZ || 0
+  };
+  return addVolume(b, 'box');
+}
+
+function clearGroup(group, disposeMat = true) {
+  for (let i = group.children.length - 1; i >= 0; i--) {
+    const m = group.children[i];
+    if (disposeMat && m.material?.dispose) m.material.dispose();
+    group.remove(m);
   }
+}
+
+function clearBoxes() {
+  clearGroup(boxGroup);
+}
+function clearClips() {
+  clearGroup(clipGroup);
+}
+function clearZones() {
+  clearGroup(zoneGroup);
 }
 function clearSpawns() {
   for (let i = spawnGroup.children.length - 1; i >= 0; i--) {
@@ -589,6 +739,11 @@ function snapScaleToGrid(v) {
   return Math.max(scaleSnapVal, snapped);
 }
 
+function isScalableVolume(obj) {
+  const k = obj?.userData?.kind;
+  return k === 'box' || k === 'clip' || k === 'spawnZone';
+}
+
 function applyBoxScaleGrid(mesh) {
   mesh.scale.x = snapScaleToGrid(mesh.scale.x);
   mesh.scale.y = snapScaleToGrid(mesh.scale.y);
@@ -601,7 +756,7 @@ function localDragOffset(vec) {
 
 function beginScaleDrag() {
   const obj = primary();
-  if (!obj || obj.userData.kind !== 'box' || selected.length !== 1 || transform.mode !== 'scale') return null;
+  if (!obj || !isScalableVolume(obj) || selected.length !== 1 || transform.mode !== 'scale') return null;
   const ax = transform.axis || '';
   if (!ax || ax === 'E') return null;
   const isSingleAxis = /^[XYZ]$/.test(ax);
@@ -660,17 +815,19 @@ function endScaleDrag(obj, start) {
     if (ax.includes('Y')) obj.scale.y = snapScaleToGrid(obj.scale.y);
     if (ax.includes('Z')) obj.scale.z = snapScaleToGrid(obj.scale.z);
   }
-  obj.material.color.copy(heightColor(obj.scale.y));
+  if (obj.userData.kind === 'box') obj.material.color.copy(heightColor(obj.scale.y));
   syncProps();
   updateBounds();
 }
 
-function rotateSelected(dir) {
-  const movables = selected.filter((o) => o.userData.kind === 'box' || o.userData.kind === 'spawn');
+function rotateSelected(dir, step = SNAP_45) {
+  const movables = selected.filter((o) =>
+    o.userData.kind === 'box' || o.userData.kind === 'clip' || o.userData.kind === 'spawnZone' || o.userData.kind === 'spawn'
+  );
   if (!movables.length) return;
   pushUndo();
   const center = selectionCenter();
-  const angle = dir * Math.PI / 2;
+  const angle = dir * step;
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
   movables.forEach((obj) => {
@@ -678,15 +835,30 @@ function rotateSelected(dir) {
     const dz = obj.position.z - center.z;
     obj.position.x = center.x + dx * cos - dz * sin;
     obj.position.z = center.z + dx * sin + dz * cos;
-    if (obj.userData.kind === 'box') {
+    if (obj.userData.kind === 'box' || obj.userData.kind === 'clip' || obj.userData.kind === 'spawnZone') {
       obj.rotation.y += angle;
-      obj.rotation.y = Math.round(obj.rotation.y / (Math.PI / 2)) * (Math.PI / 2);
+      obj.rotation.y = Math.round(obj.rotation.y / step) * step;
     }
   });
   attachGizmo();
   syncProps();
   updateBounds();
-  flash(dir < 0 ? 'Rotated 90° clockwise' : 'Rotated 90° counter-clockwise');
+  const deg = Math.round((step * 180) / Math.PI);
+  flash(dir < 0 ? `Rotated ${deg}° clockwise` : `Rotated ${deg}° counter-clockwise`);
+}
+
+function tiltSelected(dir) {
+  const tiltables = selected.filter((o) => o.userData.kind === 'box' || o.userData.kind === 'clip');
+  if (!tiltables.length) return;
+  pushUndo();
+  tiltables.forEach((obj) => {
+    obj.rotation.x += dir * SNAP_45;
+    obj.rotation.x = Math.round(obj.rotation.x / SNAP_45) * SNAP_45;
+    if (obj.userData.kind === 'box') obj.material.color.copy(heightColor(obj.scale.y));
+  });
+  syncProps();
+  updateBounds();
+  flash(dir > 0 ? 'Tilted +45° on X' : 'Tilted −45° on X');
 }
 
 function moveGridStep() {
@@ -707,6 +879,14 @@ function resnapAll() {
     snapPosition(m.position);
     m.material.color.copy(heightColor(m.scale.y));
   }
+  for (const m of clipGroup.children) {
+    applyBoxScaleGrid(m);
+    snapPosition(m.position);
+  }
+  for (const m of zoneGroup.children) {
+    applyBoxScaleGrid(m);
+    snapPosition(m.position);
+  }
   for (const s of spawns) snapPosition(s.position);
   attachGizmo();
   syncProps();
@@ -725,7 +905,7 @@ syncTransformSnap();
 transform.addEventListener('mouseDown', () => {
   if (transform.mode !== 'scale') return;
   const obj = primary();
-  if (!obj || obj.userData.kind !== 'box' || selected.length !== 1) return;
+  if (!obj || !isScalableVolume(obj) || selected.length !== 1) return;
   transform.setScaleSnap(null);
   scaleDragStart = beginScaleDrag();
 });
@@ -743,7 +923,7 @@ transform.addEventListener('dragging-changed', (e) => {
     }
   } else {
     const obj = primary();
-    if (scaleDragStart && obj && obj.userData.kind === 'box') {
+    if (scaleDragStart && obj && isScalableVolume(obj)) {
       endScaleDrag(obj, scaleDragStart);
     }
     if (beforeDrag) {
@@ -767,6 +947,10 @@ function setHighlight(obj, on) {
   if (obj.userData.kind === 'box' && obj.material) {
     obj.material.emissive.setHex(on ? 0xf52525 : 0x000000);
     obj.material.emissiveIntensity = on ? 0.18 : 0;
+  } else if ((obj.userData.kind === 'clip' || obj.userData.kind === 'spawnZone') && obj.material) {
+    obj.material.opacity = on ? 0.42 : (obj.userData.kind === 'clip' ? 0.22 : 0.18);
+    const edges = obj.children[0];
+    if (edges?.material) edges.material.opacity = on ? 1 : 0.9;
   }
 }
 
@@ -779,7 +963,9 @@ function selectionCenter(out = new THREE.Vector3()) {
 
 function updateScaleButton() {
   const scaleBtn = el('mode-scale');
-  if (scaleBtn) scaleBtn.disabled = selected.length > 1;
+  const obj = primary();
+  const scalable = obj && (obj.userData.kind === 'box' || obj.userData.kind === 'clip' || obj.userData.kind === 'spawnZone');
+  if (scaleBtn) scaleBtn.disabled = selected.length > 1 || !scalable;
 }
 
 function clearSelection() {
@@ -802,6 +988,7 @@ function attachGizmo() {
     const obj = selected[0];
     transform.attach(obj);
     if (obj.userData.kind === 'spawn') setMode('translate');
+    else if (obj.userData.kind === 'spawnZone') setMode('translate');
     updateScaleButton();
     return;
   }
@@ -852,10 +1039,12 @@ function captureState() {
     id: el('m-id').value, label: el('m-label').value,
     bMode: el('b-mode').value, margin: num('b-automargin', 3),
     bounds: { minX: num('b-minx', -7), maxX: num('b-maxx', 7), minZ: num('b-minz', -8), maxZ: num('b-maxz', 8) },
-    boxes: boxGroup.children.map((m) => ({
-      pos: [m.position.x, m.position.y, m.position.z],
-      size: [m.scale.x, m.scale.y, m.scale.z],
-      rotationY: m.rotation.y
+    boxes: boxGroup.children.map(volumeFromMesh),
+    clips: clipGroup.children.map(volumeFromMesh),
+    zones: zoneGroup.children.map((m) => ({
+      ...volumeFromMesh(m),
+      id: m.userData.zoneId,
+      purpose: m.userData.purpose
     })),
     spawns: spawns.map((s) => ({
       team: s.userData.team,
@@ -867,14 +1056,28 @@ function captureState() {
 
 function applyState(s) {
   clearBoxes();
+  clearClips();
+  clearZones();
   clearSpawns();
-  (s.boxes || []).forEach((box) => {
-    addBox({
-      pos: box.pos,
-      size: box.size,
-      rotationY: box.rotationY || 0
-    });
-  });
+  (s.boxes || []).forEach((box) => addBox({
+    pos: box.pos,
+    size: box.size,
+    rotationX: box.rotationX || 0,
+    rotationY: box.rotationY || 0,
+    rotationZ: box.rotationZ || 0
+  }));
+  (s.clips || []).forEach((box) => addClip({
+    pos: box.pos,
+    size: box.size,
+    rotationX: box.rotationX || 0,
+    rotationY: box.rotationY || 0,
+    rotationZ: box.rotationZ || 0
+  }));
+  (s.zones || []).forEach((z) => addSpawnZone({
+    pos: z.pos,
+    size: z.size,
+    rotationY: z.rotationY || 0
+  }, z.purpose || 'target', z.id));
   (s.spawns || []).forEach((sp) => {
     const team = sp.team || (String(sp.label || '').startsWith('B') ? 'B' : 'A');
     const m = makeSpawn(team, sp.label || nextSpawnLabel(team));
@@ -957,6 +1160,13 @@ function spawnEntriesFromMap(mapSpawns) {
 }
 
 function normalizeMap(map) {
+  const zones = Object.entries(map.spawnZones || {}).map(([id, z]) => ({
+    id,
+    pos: z.pos,
+    size: z.size,
+    rotationY: z.rotationY || 0,
+    purpose: z.purpose || (String(id).toLowerCase().startsWith('bot') ? 'bot' : 'target')
+  }));
   return {
     id: map.id || 'custom-level',
     label: map.label || 'Custom Level',
@@ -964,6 +1174,8 @@ function normalizeMap(map) {
     margin: 3,
     bounds: map.bounds || { minX: -7, maxX: 7, minZ: -8, maxZ: 8 },
     boxes: map.boxes || [],
+    clips: map.clipBarriers || [],
+    zones,
     spawns: spawnEntriesFromMap(map.spawns)
   };
 }
@@ -1006,7 +1218,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   ptr.y = -((e.clientY - r.top) / r.height) * 2 + 1;
   ray.setFromCamera(ptr, camera);
   // Non-recursive: only the box/spawn root meshes — skip edge lines, rings, and poles.
-  const hits = ray.intersectObjects([...boxGroup.children, ...spawns], false);
+  const hits = ray.intersectObjects([...boxGroup.children, ...clipGroup.children, ...zoneGroup.children, ...spawns], false);
   if (hits.length) {
     const obj = hits[0].object;
     selectObject(obj.userData.kind ? obj : null, { additive: e.shiftKey });
@@ -1019,40 +1231,72 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 // Property panel
 // ---------------------------------------------------------------------------
 const el = (id) => document.getElementById(id);
-const round2 = (v) => Math.round(v * 1000) / 1000;
+const rad = (d) => d * DEG;
+const deg = (r) => round2(r / DEG);
 function setVal(id, v) { el(id).value = round2(v); }
 function num(id, dflt) { const v = parseFloat(el(id).value); return Number.isFinite(v) ? v : dflt; }
 
+function hidePropPanels() {
+  el('prop-box').style.display = 'none';
+  el('prop-clip').style.display = 'none';
+  el('prop-zone').style.display = 'none';
+  el('prop-spawn').style.display = 'none';
+}
+
+function updateZonePurpose(mesh, purpose) {
+  mesh.userData.purpose = purpose;
+  const color = ZONE_COLORS[purpose] || ZONE_COLORS.target;
+  mesh.material.color.setHex(color);
+  const edges = mesh.children[0];
+  if (edges?.material) edges.material.color.setHex(color);
+}
+
 function syncProps() {
-  const empty = el('prop-empty'), boxP = el('prop-box'), spP = el('prop-spawn'), title = el('prop-title');
+  const empty = el('prop-empty'), title = el('prop-title');
   const n = selected.length;
   if (!n) {
     empty.style.display = '';
     empty.textContent = 'Nothing selected — click an object in the view.';
-    boxP.style.display = 'none'; spP.style.display = 'none';
+    hidePropPanels();
     title.textContent = 'Selected';
     return;
   }
   if (n > 1) {
     empty.style.display = '';
     empty.textContent = `${n} selected — drag the move gizmo to reposition all together. Shift-click to add/remove.`;
-    boxP.style.display = 'none'; spP.style.display = 'none';
+    hidePropPanels();
     title.textContent = `${n} selected`;
     return;
   }
   const obj = selected[0];
   empty.style.display = 'none';
+  hidePropPanels();
   if (obj.userData.kind === 'spawn') {
-    boxP.style.display = 'none'; spP.style.display = '';
+    el('prop-spawn').style.display = '';
     title.textContent = `Spawn ${obj.userData.spawn} (team ${obj.userData.team})`;
     el('s-team').value = obj.userData.team;
     el('s-name').value = obj.userData.spawn;
     setVal('s-x', obj.position.x); setVal('s-y', obj.position.y); setVal('s-z', obj.position.z);
+  } else if (obj.userData.kind === 'clip') {
+    el('prop-clip').style.display = '';
+    title.textContent = 'Clip brush (movement only)';
+    setVal('c-x', obj.position.x); setVal('c-y', obj.position.y); setVal('c-z', obj.position.z);
+    setVal('c-w', obj.scale.x); setVal('c-h', obj.scale.y); setVal('c-d', obj.scale.z);
+    setVal('c-rx', deg(obj.rotation.x)); setVal('c-ry', deg(obj.rotation.y)); setVal('c-rz', deg(obj.rotation.z));
+  } else if (obj.userData.kind === 'spawnZone') {
+    el('prop-zone').style.display = '';
+    title.textContent = `Spawn zone (${obj.userData.purpose})`;
+    el('z-id').value = obj.userData.zoneId;
+    el('z-purpose').value = obj.userData.purpose;
+    setVal('z-x', obj.position.x); setVal('z-y', obj.position.y); setVal('z-z', obj.position.z);
+    setVal('z-w', obj.scale.x); setVal('z-h', obj.scale.y); setVal('z-d', obj.scale.z);
+    setVal('z-ry', deg(obj.rotation.y));
   } else {
-    spP.style.display = 'none'; boxP.style.display = '';
-    title.textContent = 'Selected Box';
+    el('prop-box').style.display = '';
+    title.textContent = Math.abs(obj.rotation.x) > 0.01 ? 'Selected Box (slope)' : 'Selected Box';
     setVal('p-x', obj.position.x); setVal('p-y', obj.position.y); setVal('p-z', obj.position.z);
     setVal('p-w', obj.scale.x); setVal('p-h', obj.scale.y); setVal('p-d', obj.scale.z);
+    setVal('p-rx', deg(obj.rotation.x)); setVal('p-ry', deg(obj.rotation.y)); setVal('p-rz', deg(obj.rotation.z));
   }
 }
 
@@ -1068,12 +1312,12 @@ function onGizmoChange() {
   }
   const obj = primary();
   if (!obj) return;
-  if (obj.userData.kind === 'box' && transform.mode === 'scale' && transform.dragging && selected.length === 1) {
+  if (isScalableVolume(obj) && transform.mode === 'scale' && transform.dragging && selected.length === 1) {
     if (!scaleDragStart) scaleDragStart = beginScaleDrag();
     if (scaleDragStart?.axis) {
       applyOneSidedScale(obj, scaleDragStart);
     }
-    obj.material.color.copy(heightColor(obj.scale.y));
+    if (obj.userData.kind === 'box') obj.material.color.copy(heightColor(obj.scale.y));
     syncProps();
     updateBounds();
     return;
@@ -1093,30 +1337,69 @@ function trackEdit(ids) {
   });
 }
 
-function bindBoxProp(id, apply) {
+function bindVolumeProp(id, kind, apply, scaleIds = []) {
   el(id).addEventListener('input', () => {
     const obj = primary();
-    if (!obj || obj.userData.kind !== 'box' || selected.length !== 1) return;
+    if (!obj || obj.userData.kind !== kind || selected.length !== 1) return;
     const v = parseFloat(el(id).value);
     if (!Number.isFinite(v)) return;
     apply(obj, v);
-    obj.material.color.copy(heightColor(obj.scale.y));
+    if (kind === 'box') obj.material.color.copy(heightColor(obj.scale.y));
     updateBounds();
   });
   el(id).addEventListener('change', () => {
     const obj = primary();
-    if (!obj || obj.userData.kind !== 'box' || selected.length !== 1) return;
-    if (id === 'p-w' || id === 'p-h' || id === 'p-d') applyBoxScaleGrid(obj);
+    if (!obj || obj.userData.kind !== kind || selected.length !== 1) return;
+    if (scaleIds.includes(id)) applyBoxScaleGrid(obj);
     syncProps();
     updateBounds();
   });
 }
-bindBoxProp('p-x', (m, v) => (m.position.x = v));
-bindBoxProp('p-y', (m, v) => (m.position.y = v));
-bindBoxProp('p-z', (m, v) => (m.position.z = v));
-bindBoxProp('p-w', (m, v) => (m.scale.x = v));
-bindBoxProp('p-h', (m, v) => (m.scale.y = v));
-bindBoxProp('p-d', (m, v) => (m.scale.z = v));
+
+bindVolumeProp('p-x', 'box', (m, v) => (m.position.x = v));
+bindVolumeProp('p-y', 'box', (m, v) => (m.position.y = v));
+bindVolumeProp('p-z', 'box', (m, v) => (m.position.z = v));
+bindVolumeProp('p-w', 'box', (m, v) => (m.scale.x = v), ['p-w', 'p-h', 'p-d']);
+bindVolumeProp('p-h', 'box', (m, v) => (m.scale.y = v), ['p-w', 'p-h', 'p-d']);
+bindVolumeProp('p-d', 'box', (m, v) => (m.scale.z = v), ['p-w', 'p-h', 'p-d']);
+bindVolumeProp('p-rx', 'box', (m, v) => (m.rotation.x = rad(v)));
+bindVolumeProp('p-ry', 'box', (m, v) => (m.rotation.y = rad(v)));
+bindVolumeProp('p-rz', 'box', (m, v) => (m.rotation.z = rad(v)));
+
+bindVolumeProp('c-x', 'clip', (m, v) => (m.position.x = v));
+bindVolumeProp('c-y', 'clip', (m, v) => (m.position.y = v));
+bindVolumeProp('c-z', 'clip', (m, v) => (m.position.z = v));
+bindVolumeProp('c-w', 'clip', (m, v) => (m.scale.x = v), ['c-w', 'c-h', 'c-d']);
+bindVolumeProp('c-h', 'clip', (m, v) => (m.scale.y = v), ['c-w', 'c-h', 'c-d']);
+bindVolumeProp('c-d', 'clip', (m, v) => (m.scale.z = v), ['c-w', 'c-h', 'c-d']);
+bindVolumeProp('c-rx', 'clip', (m, v) => (m.rotation.x = rad(v)));
+bindVolumeProp('c-ry', 'clip', (m, v) => (m.rotation.y = rad(v)));
+bindVolumeProp('c-rz', 'clip', (m, v) => (m.rotation.z = rad(v)));
+
+bindVolumeProp('z-x', 'spawnZone', (m, v) => (m.position.x = v));
+bindVolumeProp('z-y', 'spawnZone', (m, v) => (m.position.y = v));
+bindVolumeProp('z-z', 'spawnZone', (m, v) => (m.position.z = v));
+bindVolumeProp('z-w', 'spawnZone', (m, v) => (m.scale.x = v), ['z-w', 'z-h', 'z-d']);
+bindVolumeProp('z-h', 'spawnZone', (m, v) => (m.scale.y = v), ['z-w', 'z-h', 'z-d']);
+bindVolumeProp('z-d', 'spawnZone', (m, v) => (m.scale.z = v), ['z-w', 'z-h', 'z-d']);
+bindVolumeProp('z-ry', 'spawnZone', (m, v) => (m.rotation.y = rad(v)));
+
+el('z-id').addEventListener('focus', () => { beforeEdit = captureState(); });
+el('z-id').addEventListener('change', () => {
+  const obj = primary();
+  if (!obj || obj.userData.kind !== 'spawnZone' || selected.length !== 1) return;
+  obj.userData.zoneId = el('z-id').value.trim() || obj.userData.zoneId;
+  if (beforeEdit) { pushUndoState(beforeEdit); beforeEdit = null; }
+  syncProps();
+});
+el('z-purpose').addEventListener('focus', () => { beforeEdit = captureState(); });
+el('z-purpose').addEventListener('change', () => {
+  const obj = primary();
+  if (!obj || obj.userData.kind !== 'spawnZone' || selected.length !== 1) return;
+  updateZonePurpose(obj, el('z-purpose').value);
+  if (beforeEdit) { pushUndoState(beforeEdit); beforeEdit = null; }
+  syncProps();
+});
 
 ['s-x', 's-y', 's-z'].forEach((id) => {
   el(id).addEventListener('input', () => {
@@ -1145,8 +1428,10 @@ el('s-name').addEventListener('input', () => {
 el('s-name').addEventListener('focus', () => { beforeEdit = captureState(); });
 el('s-name').addEventListener('change', () => { if (beforeEdit) { pushUndoState(beforeEdit); beforeEdit = null; } });
 
-trackEdit(['p-x', 'p-y', 'p-z', 'p-w', 'p-h', 'p-d', 's-x', 's-y', 's-z',
-  'm-id', 'm-label', 'b-automargin', 'b-minx', 'b-maxx', 'b-minz', 'b-maxz']);
+trackEdit(['p-x', 'p-y', 'p-z', 'p-w', 'p-h', 'p-d', 'p-rx', 'p-ry', 'p-rz',
+  'c-x', 'c-y', 'c-z', 'c-w', 'c-h', 'c-d', 'c-rx', 'c-ry', 'c-rz',
+  'z-x', 'z-y', 'z-z', 'z-w', 'z-h', 'z-d', 'z-ry', 'z-id', 'z-purpose',
+  's-x', 's-y', 's-z', 'm-id', 'm-label', 'b-automargin', 'b-minx', 'b-maxx', 'b-minz', 'b-maxz']);
 
 // ---------------------------------------------------------------------------
 // Bounds
@@ -1158,10 +1443,13 @@ function computeBounds() {
   const margin = num('b-automargin', 3);
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   const consider = (x, z) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); };
-  for (const m of boxGroup.children) {
+  const considerBox = (m) => {
     consider(m.position.x - m.scale.x / 2, m.position.z - m.scale.z / 2);
     consider(m.position.x + m.scale.x / 2, m.position.z + m.scale.z / 2);
-  }
+  };
+  for (const m of boxGroup.children) considerBox(m);
+  for (const m of clipGroup.children) considerBox(m);
+  for (const m of zoneGroup.children) considerBox(m);
   for (const s of spawns) consider(s.position.x, s.position.z);
   if (!isFinite(minX)) { minX = -5; maxX = 5; minZ = -5; maxZ = 5; }
   return { minX: round2(minX - margin), maxX: round2(maxX + margin), minZ: round2(minZ - margin), maxZ: round2(maxZ + margin) };
@@ -1210,6 +1498,34 @@ el('add-box').addEventListener('click', () => {
   selectObject(mesh);
   updateBounds();
 });
+el('add-slope').addEventListener('click', () => {
+  pushUndo();
+  const t = orbit.target;
+  const mesh = addSlope({ pos: [round2(t.x), 0.25, round2(t.z)], size: [2, 0.5, 4] });
+  selectObject(mesh);
+  updateBounds();
+});
+el('add-clip').addEventListener('click', () => {
+  pushUndo();
+  const t = orbit.target;
+  const mesh = addClip({ pos: [round2(t.x), 1.2, round2(t.z)], size: [3, 2.4, 1] });
+  selectObject(mesh);
+  updateBounds();
+});
+el('add-zone-target').addEventListener('click', () => {
+  pushUndo();
+  const t = orbit.target;
+  const mesh = addSpawnZone({ pos: [round2(t.x), 1, round2(t.z)], size: [2, 2, 7] }, 'target');
+  selectObject(mesh);
+  updateBounds();
+});
+el('add-zone-bot').addEventListener('click', () => {
+  pushUndo();
+  const t = orbit.target;
+  const mesh = addSpawnZone({ pos: [round2(t.x), 0.5, round2(t.z)], size: [4, 1, 4] }, 'bot');
+  selectObject(mesh);
+  updateBounds();
+});
 function addSpawnAt(team) {
   pushUndo();
   const t = orbit.target;
@@ -1227,11 +1543,13 @@ function duplicateSelected() {
   const copies = [];
   selected.forEach((obj) => {
     if (obj.userData.kind === 'box') {
-      copies.push(addBox({
-        pos: [round2(obj.position.x), obj.position.y, round2(obj.position.z)],
-        size: [obj.scale.x, obj.scale.y, obj.scale.z],
-        rotationY: obj.rotation.y
-      }));
+      const vol = volumeFromMesh(obj);
+      copies.push(addBox(vol));
+    } else if (obj.userData.kind === 'clip') {
+      copies.push(addClip(volumeFromMesh(obj)));
+    } else if (obj.userData.kind === 'spawnZone') {
+      const vol = volumeFromMesh(obj);
+      copies.push(addSpawnZone(vol, obj.userData.purpose, nextZoneId(obj.userData.purpose)));
     } else {
       const team = obj.userData.team;
       const m = makeSpawn(team, nextSpawnLabel(team));
@@ -1259,6 +1577,12 @@ function deleteSelected() {
     if (obj.userData.kind === 'box') {
       obj.material.dispose();
       boxGroup.remove(obj);
+    } else if (obj.userData.kind === 'clip') {
+      obj.material.dispose();
+      clipGroup.remove(obj);
+    } else if (obj.userData.kind === 'spawnZone') {
+      obj.material.dispose();
+      zoneGroup.remove(obj);
     } else {
       spawnGroup.remove(obj);
       const i = spawns.indexOf(obj);
@@ -1270,7 +1594,7 @@ function deleteSelected() {
 }
 el('snap-floor').addEventListener('click', () => {
   const obj = primary();
-  if (!obj || obj.userData.kind !== 'box' || selected.length !== 1) return;
+  if (!obj || !isScalableVolume(obj) || selected.length !== 1) return;
   pushUndo();
   obj.position.y = obj.scale.y / 2;
   syncProps();
@@ -1326,7 +1650,12 @@ window.addEventListener('keydown', (e) => {
   if (ctrl) return;
   if (e.key === 'w' || e.key === 'W') setMode('translate');
   if (e.key === 'e' || e.key === 'E') toggleMode();
-  if (e.key === 'r' || e.key === 'R') { e.preventDefault(); rotateSelected(e.shiftKey ? 1 : -1); }
+  if (e.key === 'r' || e.key === 'R') {
+    e.preventDefault();
+    rotateSelected(e.shiftKey ? 1 : -1, e.shiftKey ? SNAP_90 : SNAP_45);
+  }
+  if (e.key === '[') { e.preventDefault(); tiltSelected(-1); }
+  if (e.key === ']') { e.preventDefault(); tiltSelected(1); }
   if (e.shiftKey && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); duplicateSelected(); }
   if (e.key === 'Delete' || e.key === 'Backspace' || e.key === 'x' || e.key === 'X') deleteSelected();
   if (e.key === 'f' || e.key === 'F') {
@@ -1356,13 +1685,13 @@ el('map-load').addEventListener('click', () => {
 // ---------------------------------------------------------------------------
 function buildExport() {
   const bounds = computeBounds();
-  const boxes = boxGroup.children.map((m) => {
-    const entry = {
-      pos: [round2(m.position.x), round2(m.position.y), round2(m.position.z)],
-      size: [round2(m.scale.x), round2(m.scale.y), round2(m.scale.z)]
-    };
-    if (Math.abs(m.rotation.y) > 0.0001) entry.rotationY = round2(m.rotation.y);
-    return entry;
+  const boxes = boxGroup.children.map(volumeFromMesh);
+  const clipBarriers = clipGroup.children.map(volumeFromMesh);
+  const spawnZones = {};
+  zoneGroup.children.forEach((m) => {
+    const entry = volumeFromMesh(m);
+    if (m.userData.purpose === 'bot') entry.purpose = 'bot';
+    spawnZones[m.userData.zoneId] = entry;
   });
   const byTeam = { A: [], B: [] };
   spawns.forEach((s) => {
@@ -1375,7 +1704,7 @@ function buildExport() {
     if (!pts.length) continue;
     spawnsObj[side] = pts.length === 1 ? pts[0] : pts;
   }
-  return {
+  const out = {
     id: el('m-id').value.trim() || 'custom-level',
     label: el('m-label').value.trim() || 'Custom Level',
     bounds,
@@ -1392,6 +1721,9 @@ function buildExport() {
       topY: round2(m.position.y + m.scale.y / 2)
     }))
   };
+  if (clipBarriers.length) out.clipBarriers = clipBarriers;
+  if (Object.keys(spawnZones).length) out.spawnZones = spawnZones;
+  return out;
 }
 
 el('btn-export').addEventListener('click', () => {
@@ -1411,9 +1743,13 @@ el('btn-import').addEventListener('click', () => {
   catch (err) { flash('Invalid JSON: ' + err.message); }
 });
 el('btn-clear').addEventListener('click', () => {
-  if (!confirm('Clear all boxes? Spawns and meta stay.')) return;
+  if (!confirm('Clear all boxes, clips, and zones? Spawns and meta stay.')) return;
   pushUndo();
-  clearBoxes(); clearSelection(); updateBounds();
+  clearBoxes();
+  clearClips();
+  clearZones();
+  clearSelection();
+  updateBounds();
 });
 
 // ---------------------------------------------------------------------------
@@ -1446,10 +1782,13 @@ function animate() {
   if (n > 1) what = `${n} objects`;
   else if (n === 1) {
     const o = selected[0];
-    what = o.userData.kind === 'spawn' ? `spawn ${o.userData.spawn} (${o.userData.team})` : 'box';
+    if (o.userData.kind === 'spawn') what = `spawn ${o.userData.spawn} (${o.userData.team})`;
+    else if (o.userData.kind === 'clip') what = 'clip';
+    else if (o.userData.kind === 'spawnZone') what = `zone ${o.userData.zoneId}`;
+    else what = 'box';
   }
   const teamCounts = `A:${spawns.filter((s) => s.userData.team === 'A').length} B:${spawns.filter((s) => s.userData.team === 'B').length}`;
-  hud.innerHTML = `selected <b>${what}</b> &nbsp;|&nbsp; spawns <b>${teamCounts}</b> &nbsp;|&nbsp; boxes <b>${boxGroup.children.length}</b> &nbsp;|&nbsp; move <b>${moveSnapVal || 'off'}</b> &nbsp;|&nbsp; scale <b>${scaleSnapVal}</b>`;
+  hud.innerHTML = `selected <b>${what}</b> &nbsp;|&nbsp; spawns <b>${teamCounts}</b> &nbsp;|&nbsp; boxes <b>${boxGroup.children.length}</b> &nbsp;|&nbsp; clips <b>${clipGroup.children.length}</b> &nbsp;|&nbsp; zones <b>${zoneGroup.children.length}</b> &nbsp;|&nbsp; move <b>${moveSnapVal || 'off'}</b> &nbsp;|&nbsp; scale <b>${scaleSnapVal}</b>`;
   renderer.render(scene, camera);
 }
 

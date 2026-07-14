@@ -13,7 +13,8 @@
 
 import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
-import { Target } from '../components/Target.js';
+import { buildCSBotTarget } from '../bots/buildBotTarget.js';
+import { MODEL_HEIGHT, HEAD_CENTER_STAND } from '../bots/CSBotModel.js';
 import { randRange, clamp, degToRad } from '../utils/MathUtils.js';
 import { SourceMover1D } from '../utils/SourceMovement.js';
 import { gridLineColors, createCoverGridMaterial, applyCoverGridRepeat } from '../utils/ColorUtils.js';
@@ -23,11 +24,8 @@ import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
 import { EYE_HEIGHT } from '../core/Engine.js';
-import { HEAD_R, HEAD_OFFSET } from '../multiplayer/constants.js';
 
-const BODY_R = 0.35;
-const BODY_H = 1.3;
-const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
+const HEAD_Y = HEAD_CENTER_STAND;
 
 // Zoom-1 scope (hFOV 40° at 4:3) half-angles with a safety margin, so every
 // spawn is guaranteed visible after a single scope-in.
@@ -144,7 +142,7 @@ export class SniperFlicksScenario extends BaseScenario {
   }
 
   _botHeight() {
-    return (BODY_H + HEAD_R * 2 + HEAD_OFFSET) * this.botScale;
+    return MODEL_HEIGHT * this.botScale;
   }
 
   /** Bot must sit on the canvas in front of the player, above the floor, in view. */
@@ -183,23 +181,11 @@ export class SniperFlicksScenario extends BaseScenario {
   }
 
   _buildBot() {
-    const t = new Target();
-    const c = this.settings.data.colors;
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(BODY_R, BODY_R, BODY_H, 18),
-      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: c.enemyBody, emissiveIntensity: 0.4, roughness: 0.5 })
-    );
-    body.position.y = BODY_H / 2;
-    t.addCollider(body, { zone: 'body', points: 50, crit: false });
-
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(HEAD_R, 22, 16),
-      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: c.enemyHead, emissiveIntensity: 0.5, roughness: 0.4 })
-    );
-    head.position.y = HEAD_Y;
-    t.addCollider(head, { zone: 'head', points: 100, crit: true });
-    t.headMesh = head;
-    return t;
+    return buildCSBotTarget({
+      colors: this.settings.data.colors,
+      bodyPoints: 50,
+      headPoints: 100
+    });
   }
 
   _spawnBot() {
@@ -321,6 +307,9 @@ export class SniperFlicksScenario extends BaseScenario {
         b.mover.s = clamp(b.mover.s, -half, half);
       }
     }
+    const cam = this.camera;
+    b.target.model.aimAt(cam.position.x, cam.position.y, cam.position.z);
+    b.target.model.update(dt);
   }
 
   onShoot(raycaster) {

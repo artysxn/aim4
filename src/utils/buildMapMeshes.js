@@ -61,17 +61,31 @@ export function buildMapMeshes(map, { coverColor, floorColor, root, onMesh }) {
     applyCoverGridRepeat(mat, b.size[0], b.size[1]);
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.size[0], b.size[1], b.size[2]), mat);
     mesh.position.set(b.pos[0], b.pos[1], b.pos[2]);
+    if (b.rotationX) mesh.rotation.x = b.rotationX;
     if (b.rotationY) mesh.rotation.y = b.rotationY;
+    if (b.rotationZ) mesh.rotation.z = b.rotationZ;
     markBulletDecalSurface(mesh);
     root.add(mesh);
     onMesh?.(mesh);
     coverMeshes.push(mesh);
-    colliderBoxes.push({ pos: b.pos, size: b.size, rotationY: b.rotationY || 0 });
+    colliderBoxes.push({
+      pos: b.pos,
+      size: b.size,
+      rotationY: b.rotationY || 0,
+      rotationX: b.rotationX || 0,
+      rotationZ: b.rotationZ || 0
+    });
   }
 
   // Invisible movement blockers — bullets and line-of-sight pass through.
   for (const b of map.clipBarriers || []) {
-    colliderBoxes.push({ pos: b.pos, size: b.size, rotationY: b.rotationY || 0 });
+    colliderBoxes.push({
+      pos: b.pos,
+      size: b.size,
+      rotationY: b.rotationY || 0,
+      rotationX: b.rotationX || 0,
+      rotationZ: b.rotationZ || 0
+    });
   }
 
   // Level-editor exports duplicate every box as a vertex footprint — skip

@@ -12,7 +12,7 @@
 
 import * as THREE from 'three';
 import { BaseScenario, beep } from './BaseScenario.js';
-import { Target } from '../components/Target.js';
+import { buildCSBotTarget } from '../bots/buildBotTarget.js';
 import { randRange, clamp, lerp, degToRad } from '../utils/MathUtils.js';
 import { srcFriction, srcAccelerate, RUN_SPEED, STAND_EYE } from '../utils/SourceMovement.js';
 import { resolveBoxCollisions, groundHeightAt } from '../utils/BoxCollision.js';
@@ -23,7 +23,7 @@ import { competitivePresetFor } from './competitivePresets.js';
 import { COMPETITIVE_CONFIG_KEY } from './leaderboardConfig.js';
 import { DEFAULTS } from '../core/SettingsManager.js';
 import { DEATHMATCH_MAP, deathmatchExtent } from './deathmatchMap.js';
-import { eyeOffset, HEAD_R, HEAD_OFFSET, SPAWN_GRACE } from '../multiplayer/constants.js';
+import { eyeOffset, SPAWN_GRACE } from '../multiplayer/constants.js';
 import { pickSpawnPreferHidden, movementHitScale, movementReactionDelay, isPointVisible } from '../utils/spawnVisibility.js';
 import { worldImpactNormal } from '../utils/bulletImpact.js';
 import {
@@ -33,9 +33,7 @@ import {
 } from './deathFx.js';
 import { botDifficultyMultipliers } from './botDifficulty.js';
 
-const BODY_R = 0.35;
-const BODY_H = 1.3;
-const HEAD_Y = BODY_H + HEAD_R + HEAD_OFFSET;
+const BODY_R = 0.35; // movement collision radius (matches player hull)
 
 const ENGAGE_RANGE = 22; // m — within this (and with LOS) a bot holds & jiggles
 const DESIRED_RANGE = 9; // m — preferred fighting distance while engaged
@@ -276,33 +274,11 @@ export class DeathmatchScenario extends BaseScenario {
 
   // ---- Bots ---------------------------------------------------------------
   _buildBot() {
-    const t = new Target();
-    const bodyRig = new THREE.Group();
-    t.object.add(bodyRig);
-
-    const c = this.settings.data.colors;
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(BODY_R, BODY_R, BODY_H, 18),
-      new THREE.MeshStandardMaterial({ color: c.enemyBody, emissive: c.enemyBody, emissiveIntensity: 0.4, roughness: 0.5 })
-    );
-    body.position.y = BODY_H / 2;
-    body.userData.target = t;
-    body.userData.zone = 'body';
-    body.userData.points = 35;
-    body.userData.crit = false;
-    t.colliders.push(body);
-    bodyRig.add(body);
-
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(HEAD_R, 22, 16),
-      new THREE.MeshStandardMaterial({ color: c.enemyHead, emissive: c.enemyHead, emissiveIntensity: 0.5, roughness: 0.4 })
-    );
-    head.position.y = HEAD_Y;
-    t.addCollider(head, { zone: 'head', points: 100, crit: true });
-
-    t.rig = bodyRig;
-    t.headMesh = head;
-    return t;
+    return buildCSBotTarget({
+      colors: this.settings.data.colors,
+      bodyPoints: 35,
+      headPoints: 100
+    });
   }
 
   _spawnBot(avoid = [], slotIndex = 0) {
@@ -425,7 +401,7 @@ export class DeathmatchScenario extends BaseScenario {
     const other = target.bot;
     const ey = this._botEyePos(other);
     const fwd = new THREE.Vector3();
-    other.target.object.getWorldDirection(fwd);
+    other.target.model.root.getWorldDirection(fwd);
     return isPointVisible(
       [other.pos.x, ey, other.pos.z],
       [fwd.x, fwd.y, fwd.z],
@@ -609,6 +585,7 @@ export class DeathmatchScenario extends BaseScenario {
       if (bot.spawnGrace > 0) {
         bot.spawnGrace -= dt;
         bot.target.object.position.set(bot.pos.x, bot.footY, bot.pos.z);
+        bot.target.model.update(dt, { crouch: bot.crouch });
         continue;
       }
 
@@ -731,14 +708,11 @@ export class DeathmatchScenario extends BaseScenario {
         bot.crouchTimer = randRange(CROUCH_HOLD_MIN, CROUCH_HOLD_MAX);
       }
       bot.crouch = clamp(bot.crouch + (bot.crouchWant - bot.crouch) * Math.min(1, CROUCH_RATE * dt), 0, 1);
-      if (bot.target.rig) bot.target.rig.scale.y = lerp(1, 0.55, bot.crouch);
-      if (bot.target.headMesh) {
-        bot.target.headMesh.position.y = BODY_H * lerp(1, 0.55, bot.crouch) + HEAD_R + HEAD_OFFSET;
-      }
 
       bot.target.object.position.set(bot.pos.x, bot.footY, bot.pos.z);
       const lookY = shootTarget?.y ?? bot.footY + 1.0;
-      bot.target.object.lookAt(tx, lookY, tz);
+      bot.target.model.aimAt(tx, lookY, tz);
+      bot.target.model.update(dt, { crouch: bot.crouch });
 
       this._updateBotFootsteps(bot, dt);
     }
