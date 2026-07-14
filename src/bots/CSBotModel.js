@@ -105,7 +105,6 @@ const _legTarget = new THREE.Vector3();
 const _legPole = new THREE.Vector3();
 const _footQ = new THREE.Quaternion();
 const _toeQ = new THREE.Quaternion();
-const _toePointQ = new THREE.Quaternion();
 const _xAxis = new THREE.Vector3(1, 0, 0);
 const _jointA = new THREE.Vector3();
 const _jointB = new THREE.Vector3();
@@ -318,15 +317,6 @@ export class CSBotModel {
       const foot = this._node(knee, 0, -CALF_LEN, 0);
       this._cap(foot, FOOT_CAP_R, FOOT_CAP_SEG, { y: FOOT_CAP_Y, z: FOOT_CAP_Z, axis: 'z', hitgroup: `${side}_leg` });
 
-      this._buildJointBridge(
-        this.pelvis,
-        new THREE.Vector3(s * 0.06, 0.0, 0),
-        thigh,
-        new THREE.Vector3(0, 0.02, 0),
-        0.095,
-        THIGH_CAP_R
-      );
-
       const thighBot = this._capBottomY(-THIGH_LEN / 2, THIGH_CAP_SEG, THIGH_CAP_R);
       const kneeTop = this._capTopY(KNEE_CAP_Y, KNEE_CAP_SEG, KNEE_CAP_R);
       const kneeBot = this._capBottomY(KNEE_CAP_Y, KNEE_CAP_SEG, KNEE_CAP_R);
@@ -359,15 +349,6 @@ export class CSBotModel {
       this._cap(shoulder, 0.056, UPPER_ARM - 0.112, { y: -UPPER_ARM / 2, hitgroup: `${side}_arm` });
       const elbow = this._node(shoulder, 0, -UPPER_ARM, 0);
       this._cap(elbow, FORE_CAP_R, FORE_CAP_SEG, { y: FORE_CAP_Y, hitgroup: `${side}_arm` }); // forearm + hand
-
-      this._buildJointBridge(
-        this.chest,
-        new THREE.Vector3(s * 0.12, 0.12, 0),
-        shoulder,
-        new THREE.Vector3(0, 0.02, 0),
-        0.07,
-        SHOULDER_CAP_R
-      );
 
       const shoulderBot = this._capBottomY(-UPPER_ARM / 2, SHOULDER_CAP_SEG, SHOULDER_CAP_R);
       const foreTop = this._capTopY(FORE_CAP_Y, FORE_CAP_SEG, FORE_CAP_R);
@@ -482,12 +463,12 @@ export class CSBotModel {
     const speed = Math.hypot(vx, vz);
     this._speed = speed;
 
-    // ---- Directional lean (lower body only) ----
+    // ---- Directional lean (1–3° into travel direction) ----
     const cosE = Math.cos(eyeYaw);
     const sinE = Math.sin(eyeYaw);
     const localX = vx * cosE - vz * sinE; // strafe right +
     const localZ = vx * sinE + vz * cosE; // forward +
-    const targetLeanZ = THREE.MathUtils.clamp(localX * LEAN_SENS, -MAX_LEAN, MAX_LEAN) * 0.7;
+    const targetLeanZ = THREE.MathUtils.clamp(localX * LEAN_SENS, -MAX_LEAN, MAX_LEAN);
     const targetLeanX = THREE.MathUtils.clamp(-localZ * LEAN_SENS, -MAX_LEAN, MAX_LEAN);
     const leanK = Math.min(1, LEAN_RATE * dt);
     this._leanX += (targetLeanX - this._leanX) * leanK;
@@ -500,6 +481,7 @@ export class CSBotModel {
       this._lbyRealignIn = LBY_STOP_DELAY;
       this._adjusting = false;
     } else {
+      // Standing: LBY realigns 0.22 s after stopping, then every 1.1 s.
       this._lbyRealignIn -= dt;
       if (this._lbyRealignIn <= 0) this._adjusting = true;
       if (this._adjusting) {
@@ -509,6 +491,7 @@ export class CSBotModel {
           this._lbyRealignIn = LBY_REPEAT;
         }
       } else if (Math.abs(dYaw) > MAX_FOOT_DESYNC) {
+        // Eyes twisted past the limit — feet get dragged to the clamp edge.
         const clamped = eyeYaw - Math.sign(dYaw) * MAX_FOOT_DESYNC;
         this._footYaw = wrapPI(
           this._footYaw + wrapPI(clamped - this._footYaw) * Math.min(1, ADJUST_YAW_RATE * dt)
@@ -516,15 +499,19 @@ export class CSBotModel {
       }
     }
     dYaw = wrapPI(eyeYaw - this._footYaw);
-    this.lower.rotation.set(this._leanX, -dYaw, this._leanZ); // lean applies only to lower body
+    this.lower.rotation.set(this._leanX, -dYaw, this._leanZ); // YXZ — lean + foot desync
 
-    // ---- Aim matrix: pitch smoothing + spine distribution ----
+    // ---- Aim matrix: pitch smoothing + spine distribution + travel lean ----
     this._pitch += (this._pitchTarget - this._pitch) * Math.min(1, PITCH_RATE * dt);
     const p = this._pitch;
-    const twist = dYaw / 3;
-    this.spine0.rotation.set(-p * 0.08 + 0.14 * c, twist, 0);
-    this.spine1.rotation.set(-p * 0.14 + 0.16 * c, twist, 0);
-    this.chest.rotation.set(-p * 0.22 + 0.1 * c, twist, 0);
+    const twist = dYaw / 3; // spine untwists the desync back toward eye yaw
+
+    const leanPitch = this._leanX; // forward/backward tilt
+    const leanRoll = this._leanZ; // left/right tilt
+
+    this.spine0.rotation.set(-p * 0.08 + 0.14 * c + leanPitch * 0.3, twist, leanRoll * 0.3);
+    this.spine1.rotation.set(-p * 0.14 + 0.16 * c + leanPitch * 0.3, twist, leanRoll * 0.3);
+    this.chest.rotation.set(-p * 0.22 + 0.1 * c + leanPitch * 0.4, twist, leanRoll * 0.4);
     this.neck.rotation.set(-p * 0.28 - 0.28 * c, 0, 0);
     this.head.rotation.set(-p * 0.28, 0, 0);
 
@@ -533,7 +520,7 @@ export class CSBotModel {
     const moving = speed > 0.1;
     if (moving) {
       const k = Math.sqrt(sr);
-      this._amp += (STRIDE_HALF_RUN * k - this._amp) * Math.min(1, 25 * dt);
+      this._amp += (STRIDE_HALF_RUN * k - this._amp) * Math.min(1, 10 * dt);
       this._lift = LIFT_RUN * Math.max(0.35, k);
       this._phase += CYCLE_RATE_RUN * k * dt;
 
@@ -543,8 +530,9 @@ export class CSBotModel {
       const lz = vx * sinF + vz * cosF;
       const inv = 1 / (Math.hypot(lx, lz) || 1e-6);
 
-      this._moveDirX += (lx * inv - this._moveDirX) * Math.min(1, 25 * dt);
-      this._moveDirZ += (lz * inv - this._moveDirZ) * Math.min(1, 25 * dt);
+      // Smooth direction changes (prevents leg snapping on A/D spam).
+      this._moveDirX += (lx * inv - this._moveDirX) * Math.min(1, 12 * dt);
+      this._moveDirZ += (lz * inv - this._moveDirZ) * Math.min(1, 12 * dt);
 
       const smoothedInv = 1 / (Math.hypot(this._moveDirX, this._moveDirZ) || 1e-6);
       this._dirX = this._moveDirX * smoothedInv;
@@ -583,23 +571,14 @@ export class CSBotModel {
       const sway = this._amp * swayOut;
       const lift = this._lift * liftOut;
 
-      const dynamicStanceWidth = FOOT_HALF + this._amp * 0.65;
-
       _legTarget.set(
-        leg.s * dynamicStanceWidth + this._dirX * sway,
+        leg.s * FOOT_HALF + this._dirX * sway,
         ANKLE_H + lift - pelvisY,
         this._dirZ * sway
       );
       _legPole.set(0, 0, 1);
       solveTwoBone(leg.thigh, leg.knee, THIGH_LEN, CALF_LEN, _legTarget, _legPole);
       _footQ.multiplyQuaternions(leg.thigh.quaternion, leg.knee.quaternion).invert();
-
-      if (this._amp > 0.01) {
-        const moveYaw = Math.atan2(this._dirX, this._dirZ);
-        _toePointQ.setFromAxisAngle(_yUp, moveYaw * 0.4);
-        _footQ.multiply(_toePointQ);
-      }
-
       if (lift > 0.001) {
         _toeQ.setFromAxisAngle(_xAxis, 0.35 * (lift / LIFT_RUN));
         _footQ.multiply(_toeQ);
