@@ -9,19 +9,34 @@
 //
 //   · Aim matrix    — eye pitch/yaw distributed procedurally over the spine,
 //                     neck and head (upper body decoupled from locomotion).
-//   · Lower-body yaw — feet track the eyes while moving; on stop they stay
-//                     planted for 0.22 s, then realign (and every 1.1 s after),
-//                     clamped to ±58° of desync, like the CS:GO LBY mechanic.
-//   · Locomotion    — procedural 8-way gait built from the actual measured
-//                     velocity: stride direction follows the movement vector
-//                     relative to foot yaw (so strafing side-runs emerge), and
-//                     cadence scales with speed / max speed so feet don't skate.
+//   · Lower-body yaw — feet chase the eyes at CS:GO rates (30–50°/s moving,
+//                     100°/s standing replant) inside an aim-matrix width that
+//                     narrows with speed; on stop they stay planted for 0.22 s,
+//                     then realign (and every 1.1 s after) — the LBY mechanic.
+//   · Locomotion    — CS:GO move-yaw gait: the stride heading chases the
+//                     measured travel direction (snapping on move-start like
+//                     the eight-way start cycles), locomotion weight normalises
+//                     to the stance's top speed (walk / crouch-walk), cadence
+//                     is tied to ground speed over stride so feet don't skate,
+//                     and rapid stop/starts damp the gait via a stutter-step
+//                     counter instead of pumping it.
+//   · Lean          — the lower body leans into the travel direction while the
+//                     spine counter-rotates, so the torso (and the aim) stays
+//                     upright and only the legs/hips telegraph the movement.
+//   · Combat stance — staggered feet at rest (support foot forward, weapon foot
+//                     back, knees slightly bent — a shooting stance), and while
+//                     strafing the lead-side leg plants wider toward the travel
+//                     direction than the trailing leg.
+//   · Jump / land   — airborne state (passed by the scenario via onGround, or
+//                     inferred from root vertical motion) tucks the legs and
+//                     fades the gait; landings dip into a brief crouch scaled
+//                     by hang time / fall height (CS:GO duck-additional).
 //   · Crouch        — pose blend (pelvis drop + knee fold + hunch) driven by
 //                     the same 0..1 crouch amount the movement code already uses.
 //
 // The model measures its own world velocity from its root position, and reads
 // eye yaw from its root rotation, so scenarios only position/rotate the bot
-// (exactly like they already do) and call update(dt, { crouch }).
+// (exactly like they already do) and call update(dt, { crouch, onGround }).
 //
 // Hitboxes: every capsule mesh is tagged with userData.zone ('head' | 'body')
 // and userData.hitgroup (chest / stomach / pelvis / arms / legs) matching the
@@ -29,7 +44,7 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from 'three';
-import { RUN_SPEED } from '../utils/SourceMovement.js';
+import { RUN_SPEED, WALK_SPEED, CROUCH_SPEED } from '../utils/SourceMovement.js';
 import { buildGunModel } from '../weapons/gunModels.js';
 
 // ---- Proportions (m). 1 Source unit = 0.0254 m; CS player hull = 72 u. ----
@@ -57,20 +72,47 @@ const CROUCH_DROP = 0.445; // pelvis drop at full crouch → head lands at HEAD_
 // ---- Lower-body yaw (LBY) — CS:GO timings from public community research ----
 const LBY_STOP_DELAY = 0.22; // s after stopping before feet realign to eyes
 const LBY_REPEAT = 1.1; // s between realigns while standing still
-const MAX_FOOT_DESYNC = THREE.MathUtils.degToRad(58);
-const MOVE_YAW_RATE = 10; // 1/s exponential chase while moving
-const ADJUST_YAW_RATE = 9; // 1/s while replanting the feet
+const MAX_FOOT_DESYNC = THREE.MathUtils.degToRad(58); // aim-matrix yaw extent
+const FOOT_CHASE_WALK = THREE.MathUtils.degToRad(30); // °/s feet chase eyes at a walk
+const FOOT_CHASE_RUN = THREE.MathUtils.degToRad(50); // °/s at a full run
+const FOOT_CHASE_IDLE = THREE.MathUtils.degToRad(100); // °/s during a standing replant
+const AIM_NARROW_WALK = 0.8; // aim-matrix width narrows as speed rises…
+const AIM_NARROW_RUN = 0.5;
+const AIM_NARROW_CROUCH = 0.5; // …and while crouch-walking
 const MOVE_EPS = 0.15; // m/s — "velocity > 0.1" threshold, scaled to metres
 
 // ---- Gait tuning ----
-const STRIDE_HALF_RUN = 0.48; // m half-stride at full run speed (wider steps)
-const CYCLE_RATE_RUN = 11.5; // rad/s phase rate at full run (slower cadence)
+const STRIDE_HALF_RUN = 0.48; // m half-stride at a full run (wider steps)
+const STRIDE_HALF_WALK = 0.34; // m half-stride at walk speeds
+const STRIDE_HALF_CROUCH = 0.26; // m half-stride while crouch-walking
 const LIFT_RUN = 0.12; // m foot lift at full run
 const BOB_RUN = 0.015; // m pelvis bob at full run
 const PITCH_RATE = 18; // 1/s aim-pitch smoothing
-const LEAN_RATE = 12; // 1/s travel-lean smoothing
-const MAX_LEAN = THREE.MathUtils.degToRad(8); // travel lean cap (lower body only)
-const LEAN_SENS = MAX_LEAN / RUN_SPEED; // maps run speed → max lean
+const GAIT_DIR_BIAS = 0.18; // move-yaw chase ratio = Bias(weight, 0.18) + 0.1
+const ALIGN_DAMP_BIAS = 0.2; // gait fade when travel disagrees with its heading
+const STUTTER_WINDOW = 0.25; // s — a stop/start inside this window is a stutter-step
+const WALK_RUN_RATE = 2.0; // 1/s walk↔run gait transition
+
+// ---- Velocity / lean smoothing ----
+const VEL_APPROACH = 50; // m/s² anim-velocity chase (smooths wall-stops)
+const LEAN_RATE = 12; // 1/s lean smoothing
+const MAX_LEAN = THREE.MathUtils.degToRad(8); // travel-lean cap (lower body only)
+
+// ---- Combat stance (staggered shooting pose) ----
+const STANCE_DROP = 0.045; // m pelvis drop at rest — keeps the knees slightly bent
+const STAGGER_FWD = 0.11; // m the left (support) foot leads…
+const STAGGER_BACK = 0.13; // m …and the right (weapon) foot trails
+const STANCE_WIDE = 0.03; // m extra half-width of the planted base
+const STRAFE_WIDE_LEAD = 0.1; // m lead leg widens toward the travel side
+const STRAFE_WIDE_TRAIL = 0.05; // m trail leg tucks under the body
+
+// ---- Air / landing ----
+const AIR_APPROACH_STAND = 8; // 1/s fuzzy on-ground blend (16 when crouched)
+const AIR_APPROACH_CROUCH = 16;
+const AIR_VY_TAKEOFF = 2.5; // m/s upward — infer airborne (a jump starts at ~7.7)
+const AIR_TUCK_Y = 0.33; // m feet pull up to this height above the root while airborne
+const LAND_DIP_MAX = 0.55; // cap on the landing crouch dip
+const LAND_DIP_DECAY = 2; // 1/s dip recovery after landing
 
 // Capsule dims (mirror _buildSkeleton) — anchor math for joint bridges.
 const THIGH_CAP_R = 0.088;
@@ -114,6 +156,28 @@ function wrapPI(a) {
   while (a > Math.PI) a -= Math.PI * 2;
   while (a < -Math.PI) a += Math.PI * 2;
   return a;
+}
+
+/** Linear chase toward `target` by at most `maxDelta` (Source Approach()). */
+function approach(target, cur, maxDelta) {
+  if (cur < target) return Math.min(cur + maxDelta, target);
+  return Math.max(cur - maxDelta, target);
+}
+
+/** approach() over the shortest angular path. */
+function approachAngle(target, cur, maxDelta) {
+  return wrapPI(cur + THREE.MathUtils.clamp(wrapPI(target - cur), -maxDelta, maxDelta));
+}
+
+/** Source Bias(): remaps x∈0..1 so the curve passes through `b` at x = 0.5. */
+function bias(x, b) {
+  return Math.pow(x, Math.log(b) / Math.log(0.5));
+}
+
+/** Source RemapValClamped(). */
+function remapClamp(x, inA, inB, outA, outB) {
+  const t = THREE.MathUtils.clamp((x - inA) / (inB - inA), 0, 1);
+  return outA + (outB - outA) * t;
 }
 
 /**
@@ -197,20 +261,36 @@ export class CSBotModel {
     this._phase = 0;
     this._amp = 0;
     this._lift = 0;
-    this._dirX = 0; // gait direction in foot-yaw local frame
-    this._dirZ = 1;
     this._pitch = 0;
     this._pitchTarget = 0;
     this._crouch = 0;
+    this._crouchEased = 0;
     this._prev = new THREE.Vector3();
     this._hasPrev = false;
     this._speed = 0;
+    // Smoothed anim velocity + last nonzero heading (CS:GO m_vecVelocity).
+    this._velX = 0;
+    this._velZ = 0;
+    this._velDirX = 0;
+    this._velDirZ = 1;
+    // Gait heading relative to foot yaw (CS:GO move_yaw) + locomotion weight.
+    this._moveYaw = 0;
+    this._moveYawIdeal = 0;
+    this._moveWeight = 0;
+    this._walkRun = 0; // walk↔run gait transition 0..1
+    this._stutter = 0; // 0..100 — recent stop/start jiggle
+    this._durMoving = 0;
+    this._durStill = 0;
+    // Lower-body travel lean.
     this._leanX = 0;
     this._leanZ = 0;
-    // ---- Eased anim state ----
-    this._crouchEased = 0;
-    this._moveDirX = 0;
-    this._moveDirZ = 1;
+    // Air / landing (CS:GO in-air smooth value + landing duck dip).
+    this._onGround = true;
+    this._airSmooth = 1;
+    this._airTime = 0;
+    this._groundY = 0;
+    this._apexY = 0;
+    this._duckAdd = 0;
   }
 
   // ---- Build ---------------------------------------------------------------
@@ -429,13 +509,16 @@ export class CSBotModel {
   }
 
   // ---- Per-frame -----------------------------------------------------------
-  update(dt, { crouch = this._crouch } = {}) {
+  /**
+   * @param {number} dt
+   * @param {object} opts
+   * @param {number} [opts.crouch]    0..1 crouch amount
+   * @param {boolean} [opts.onGround] pass when the scenario knows (jump arcs);
+   *   omitted → inferred from the root's vertical motion.
+   */
+  update(dt, { crouch = this._crouch, onGround } = {}) {
     if (dt <= 0) return;
     this._crouch = THREE.MathUtils.clamp(crouch, 0, 1);
-
-    // Smooth crouch transition (~10 units/s).
-    this._crouchEased += (this._crouch - this._crouchEased) * Math.min(1, 10 * dt);
-    const c = this._crouchEased;
 
     // Measure world velocity + eye yaw from wherever the scenario put us.
     this.root.getWorldPosition(_wp);
@@ -443,96 +526,257 @@ export class CSBotModel {
     const eyeYaw = Math.atan2(_fwd.x, _fwd.z);
 
     let vx = 0;
+    let vy = 0;
     let vz = 0;
     if (this._hasPrev) {
       vx = (_wp.x - this._prev.x) / dt;
+      vy = (_wp.y - this._prev.y) / dt;
       vz = (_wp.z - this._prev.z) / dt;
     }
     this._prev.copy(_wp);
     if (!this._hasPrev || Math.hypot(vx, vz) > RUN_SPEED * 2.2) {
       // First frame or teleport (spawn/respawn): plant everything.
       vx = 0;
+      vy = 0;
       vz = 0;
       this._footYaw = eyeYaw;
       this._phase = 0;
       this._amp = 0;
+      this._velX = 0;
+      this._velZ = 0;
+      this._moveYaw = 0;
+      this._moveYawIdeal = 0;
+      this._moveWeight = 0;
+      this._walkRun = 0;
+      this._stutter = 0;
+      this._durMoving = 0;
+      this._durStill = 0;
       this._leanX = 0;
       this._leanZ = 0;
+      this._onGround = true;
+      this._airSmooth = 1;
+      this._airTime = 0;
+      this._groundY = _wp.y;
+      this._duckAdd = 0;
       this._hasPrev = true;
     }
-    const speed = Math.hypot(vx, vz);
-    this._speed = speed;
 
-    // ---- Directional lean (1–3° into travel direction) ----
-    const cosE = Math.cos(eyeYaw);
-    const sinE = Math.sin(eyeYaw);
-    const localX = vx * cosE - vz * sinE; // strafe right +
-    const localZ = vx * sinE + vz * cosE; // forward +
-    const targetLeanZ = THREE.MathUtils.clamp(localX * LEAN_SENS, -MAX_LEAN, MAX_LEAN);
-    const targetLeanX = THREE.MathUtils.clamp(-localZ * LEAN_SENS, -MAX_LEAN, MAX_LEAN);
-    const leanK = Math.min(1, LEAN_RATE * dt);
-    this._leanX += (targetLeanX - this._leanX) * leanK;
-    this._leanZ += (targetLeanZ - this._leanZ) * leanK;
+    // ---- Ground state: explicit from the scenario, else inferred from y ----
+    const wasOnGround = this._onGround;
+    if (onGround !== undefined) {
+      this._onGround = !!onGround;
+      if (this._onGround) this._groundY = _wp.y;
+    } else if (this._onGround) {
+      if (vy > AIR_VY_TAKEOFF && _wp.y > this._groundY + 0.08) {
+        this._onGround = false;
+      } else {
+        this._groundY += (_wp.y - this._groundY) * Math.min(1, 10 * dt);
+      }
+    } else if ((_wp.y <= this._groundY + 0.04 && vy <= 0.5) || this._airTime > 2) {
+      this._onGround = true; // came back down (or the inference gave up)
+      this._groundY = _wp.y;
+    }
+
+    if (!this._onGround) {
+      if (wasOnGround) this._apexY = _wp.y;
+      this._airTime += dt;
+      if (_wp.y > this._apexY) this._apexY = _wp.y;
+      this._duckAdd = approach(0, this._duckAdd, dt * LAND_DIP_DECAY);
+    } else {
+      if (!wasOnGround) {
+        // Landed: dip into a partial crouch scaled by hang time / fall height.
+        const fallFrac = bias(remapClamp(this._apexY - _wp.y, 0.3, 1.8, 0, 1), 0.4);
+        const airFrac = THREE.MathUtils.clamp(bias(Math.min(this._airTime, 1), 0.3), 0.1, 1);
+        this._duckAdd = Math.min(LAND_DIP_MAX, Math.max(airFrac, fallFrac));
+      } else {
+        this._duckAdd = approach(0, this._duckAdd, dt * LAND_DIP_DECAY);
+      }
+      this._airTime = 0;
+    }
+
+    // Fuzzy on-ground value: →1 on the ground, →0 in the air (jump/land fades).
+    this._airSmooth = THREE.MathUtils.clamp(
+      approach(
+        this._onGround ? 1 : 0,
+        this._airSmooth,
+        dt * THREE.MathUtils.lerp(this._crouchEased, AIR_APPROACH_STAND, AIR_APPROACH_CROUCH)
+      ),
+      0,
+      1
+    );
+
+    // Smooth crouch transition (~10 units/s); the landing dip rides the same channel.
+    const crouchTarget = THREE.MathUtils.clamp(this._crouch + this._duckAdd, 0, 1);
+    this._crouchEased += (crouchTarget - this._crouchEased) * Math.min(1, 10 * dt);
+    const c = this._crouchEased;
+
+    // ---- Velocity: chase the measured value so wall-stops / frame jitter
+    // don't snap the pose (CS:GO smooths its anim velocity the same way).
+    this._velX = approach(vx, this._velX, dt * VEL_APPROACH);
+    this._velZ = approach(vz, this._velZ, dt * VEL_APPROACH);
+    const speed = Math.hypot(this._velX, this._velZ);
+    this._speed = speed;
+    if (speed > 1e-4) {
+      this._velDirX = this._velX / speed;
+      this._velDirZ = this._velZ / speed;
+    }
+
+    const walkFrac = THREE.MathUtils.clamp(speed / WALK_SPEED, 0, 1);
+    const crouchFrac = THREE.MathUtils.clamp(speed / CROUCH_SPEED, 0, 1);
+    // Speed relative to the current stance's top speed (run ↔ crouch-walk).
+    const stanceFrac = THREE.MathUtils.clamp(
+      speed / THREE.MathUtils.lerp(c, RUN_SPEED, CROUCH_SPEED),
+      0,
+      1
+    );
+    const moving = speed > MOVE_EPS;
+
+    // Stutter-step: quick stop/starts (A/D jiggle) should damp the gait
+    // instead of pumping it — mirrors CS:GO's stutter counter.
+    let startedMoving = false;
+    if (moving) {
+      startedMoving = this._durMoving <= 0;
+      if (startedMoving && this._durStill > 0 && this._durStill < STUTTER_WINDOW) {
+        this._stutter = Math.min(100, this._stutter + 30);
+      }
+      this._durStill = 0;
+      this._durMoving += dt;
+    } else {
+      if (this._durMoving > 0 && this._durMoving < STUTTER_WINDOW) {
+        this._stutter = Math.min(100, this._stutter + 30);
+      }
+      this._durMoving = 0;
+      this._durStill += dt;
+    }
+    this._stutter = approach(0, this._stutter, dt * 40);
+
+    // Walk ↔ run gait transition (blends stride length + cadence).
+    this._walkRun = approach(speed > WALK_SPEED ? 1 : 0, this._walkRun, dt * WALK_RUN_RATE);
 
     // ---- Lower-body yaw ----
     let dYaw = wrapPI(eyeYaw - this._footYaw);
-    if (speed > MOVE_EPS) {
-      this._footYaw = wrapPI(this._footYaw + dYaw * Math.min(1, MOVE_YAW_RATE * dt));
+
+    // The allowed eye↔feet desync narrows as speed rises (and crouch-walking),
+    // and the clamp is hard — spinning while running drags the feet around.
+    let narrow = THREE.MathUtils.lerp(
+      walkFrac,
+      1,
+      THREE.MathUtils.lerp(this._walkRun, AIM_NARROW_WALK, AIM_NARROW_RUN)
+    );
+    if (c > 0) narrow = THREE.MathUtils.lerp(c * crouchFrac, narrow, AIM_NARROW_CROUCH);
+    const yawLimit = MAX_FOOT_DESYNC * narrow;
+    if (dYaw > yawLimit) this._footYaw = wrapPI(eyeYaw - yawLimit);
+    else if (dYaw < -yawLimit) this._footYaw = wrapPI(eyeYaw + yawLimit);
+
+    if (moving && this._onGround) {
+      // Feet chase the eyes at 30–50°/s (faster at a run) while moving.
+      this._footYaw = approachAngle(
+        eyeYaw,
+        this._footYaw,
+        dt * THREE.MathUtils.lerp(this._walkRun, FOOT_CHASE_WALK, FOOT_CHASE_RUN)
+      );
       this._lbyRealignIn = LBY_STOP_DELAY;
       this._adjusting = false;
-    } else {
+    } else if (this._onGround) {
       // Standing: LBY realigns 0.22 s after stopping, then every 1.1 s.
       this._lbyRealignIn -= dt;
       if (this._lbyRealignIn <= 0) this._adjusting = true;
       if (this._adjusting) {
-        this._footYaw = wrapPI(this._footYaw + dYaw * Math.min(1, ADJUST_YAW_RATE * dt));
+        this._footYaw = approachAngle(eyeYaw, this._footYaw, dt * FOOT_CHASE_IDLE);
         if (Math.abs(wrapPI(eyeYaw - this._footYaw)) < 0.03) {
           this._adjusting = false;
           this._lbyRealignIn = LBY_REPEAT;
         }
-      } else if (Math.abs(dYaw) > MAX_FOOT_DESYNC) {
-        // Eyes twisted past the limit — feet get dragged to the clamp edge.
-        const clamped = eyeYaw - Math.sign(dYaw) * MAX_FOOT_DESYNC;
-        this._footYaw = wrapPI(
-          this._footYaw + wrapPI(clamped - this._footYaw) * Math.min(1, ADJUST_YAW_RATE * dt)
-        );
       }
     }
     dYaw = wrapPI(eyeYaw - this._footYaw);
+
+    const cosF = Math.cos(this._footYaw);
+    const sinF = Math.sin(this._footYaw);
+
+    // ---- Lean the lower body into the travel direction. Only the hips/legs
+    // tilt — the spine counter-rotates below so the torso stays upright.
+    let targetLeanX = 0;
+    let targetLeanZ = 0;
+    if (moving) {
+      const leanW = MAX_LEAN * stanceFrac * this._airSmooth;
+      const velFwd = this._velDirX * sinF + this._velDirZ * cosF;
+      const velRight = this._velDirX * cosF - this._velDirZ * sinF;
+      targetLeanX = leanW * velFwd; // pitch into forward travel
+      targetLeanZ = -leanW * velRight; // roll into sideways travel
+    }
+    const leanK = Math.min(1, LEAN_RATE * dt);
+    this._leanX += (targetLeanX - this._leanX) * leanK;
+    this._leanZ += (targetLeanZ - this._leanZ) * leanK;
+
     this.lower.rotation.set(this._leanX, -dYaw, this._leanZ); // YXZ — lean + foot desync
 
     // ---- Aim matrix: pitch smoothing + spine distribution ----
     this._pitch += (this._pitchTarget - this._pitch) * Math.min(1, PITCH_RATE * dt);
     const p = this._pitch;
     const twist = dYaw / 3; // spine untwists the desync back toward eye yaw
-    this.spine0.rotation.set(-p * 0.08 + 0.14 * c, twist, 0);
-    this.spine1.rotation.set(-p * 0.14 + 0.16 * c, twist, 0);
-    this.chest.rotation.set(-p * 0.22 + 0.1 * c, twist, 0);
+    const unleanX = -this._leanX / 3; // spine also untilts the travel lean so
+    const unleanZ = -this._leanZ / 3; // the upper body stays world-upright
+    this.spine0.rotation.set(-p * 0.08 + 0.14 * c + unleanX, twist, unleanZ);
+    this.spine1.rotation.set(-p * 0.14 + 0.16 * c + unleanX, twist, unleanZ);
+    this.chest.rotation.set(-p * 0.22 + 0.1 * c + unleanX, twist, unleanZ);
     this.neck.rotation.set(-p * 0.28 - 0.28 * c, 0, 0);
     this.head.rotation.set(-p * 0.28, 0, 0);
 
-    // ---- Gait ----
-    const sr = THREE.MathUtils.clamp(speed / RUN_SPEED, 0, 1.3);
-    const moving = speed > 0.1;
+    // ---- Locomotion: gait heading (move yaw) + locomotion weight ----
+    if (moving && this._onGround) {
+      // Ideal gait heading = travel direction in the foot-yaw frame.
+      this._moveYawIdeal = Math.atan2(
+        this._velDirX * cosF - this._velDirZ * sinF,
+        this._velDirX * sinF + this._velDirZ * cosF
+      );
+    }
+    if (startedMoving && this._moveWeight <= 0.01) {
+      // From rest: snap the gait heading and lead with that side's foot
+      // (CS:GO picks an eight-way start cycle the same way).
+      this._moveYaw = this._moveYawIdeal;
+      this._phase = (this._moveYaw >= 0 ? 1.2 : 0.2) * Math.PI;
+    } else {
+      // Chase harder the stronger the gait is blended in (ratio per 64 Hz tick).
+      const ratio = bias(this._moveWeight, GAIT_DIR_BIAS) + 0.1;
+      this._moveYaw = wrapPI(
+        this._moveYaw + wrapPI(this._moveYawIdeal - this._moveYaw) * Math.min(1, ratio * 64 * dt)
+      );
+    }
+
+    // Locomotion weight reaches 1 by walk speed standing / crouch speed ducked;
+    // it rises instantly and decays faster the more stutter-stepping.
+    const targetW = THREE.MathUtils.lerp(c, walkFrac, crouchFrac);
+    if (this._moveWeight <= targetW) {
+      this._moveWeight = targetW;
+    } else {
+      this._moveWeight = approach(
+        targetW,
+        this._moveWeight,
+        dt * remapClamp(this._stutter, 0, 100, 2, 20)
+      );
+    }
+    // Fade the gait while the true travel direction disagrees with its heading,
+    // while airborne, and briefly after a landing.
+    const alignDamp = bias(
+      Math.abs(Math.cos(wrapPI(this._moveYawIdeal - this._moveYaw))),
+      ALIGN_DAMP_BIAS
+    );
+    const landDamp = Math.max(1 - this._duckAdd, 0.55);
+    const gaitW = this._moveWeight * alignDamp * this._airSmooth * landDamp;
+
+    // ---- Gait: stride from stance, cadence matched to ground speed ----
+    const strideHalf = THREE.MathUtils.lerp(
+      c,
+      THREE.MathUtils.lerp(this._walkRun, STRIDE_HALF_WALK, STRIDE_HALF_RUN),
+      STRIDE_HALF_CROUCH
+    );
     if (moving) {
-      const k = Math.sqrt(sr);
-      this._amp += (STRIDE_HALF_RUN * k - this._amp) * Math.min(1, 10 * dt);
-      this._lift = LIFT_RUN * Math.max(0.35, k);
-      this._phase += CYCLE_RATE_RUN * k * dt;
-
-      const cosF = Math.cos(this._footYaw);
-      const sinF = Math.sin(this._footYaw);
-      const lx = vx * cosF - vz * sinF;
-      const lz = vx * sinF + vz * cosF;
-      const inv = 1 / (Math.hypot(lx, lz) || 1e-6);
-
-      // Smooth direction changes (prevents leg snapping on A/D spam).
-      this._moveDirX += (lx * inv - this._moveDirX) * Math.min(1, 12 * dt);
-      this._moveDirZ += (lz * inv - this._moveDirZ) * Math.min(1, 12 * dt);
-
-      const smoothedInv = 1 / (Math.hypot(this._moveDirX, this._moveDirZ) || 1e-6);
-      this._dirX = this._moveDirX * smoothedInv;
-      this._dirZ = this._moveDirZ * smoothedInv;
+      this._amp += (strideHalf * gaitW - this._amp) * Math.min(1, 10 * dt);
+      this._lift =
+        LIFT_RUN * Math.max(0.35, Math.sqrt(stanceFrac)) * THREE.MathUtils.lerp(c, 1, 0.55);
+      // Cadence tied to actual ground speed over the stride, so feet don't skate.
+      this._phase += (speed / Math.max(strideHalf, 0.15)) * dt;
     } else {
       this._amp += (0 - this._amp) * Math.min(1, 8 * dt);
       this._lift = 0;
@@ -540,11 +784,23 @@ export class CSBotModel {
       this._phase += (rest - this._phase) * Math.min(1, 10 * dt);
     }
 
-    // ---- Pelvis height: crouch drop + run bob ----
-    const pelvisY = HIP_Y - CROUCH_DROP * c + BOB_RUN * sr * Math.sin(2 * this._phase);
+    // ---- Pelvis height: stance knee-bend → crouch drop, plus run bob ----
+    const pelvisY =
+      HIP_Y -
+      THREE.MathUtils.lerp(c, STANCE_DROP, CROUCH_DROP) +
+      BOB_RUN * stanceFrac * this._airSmooth * Math.sin(2 * this._phase);
     this.pelvis.position.y = pelvisY;
 
     // ---- Legs: asymmetric IK gait (60% planted / 40% swing) ----
+    const dirX = Math.sin(this._moveYaw);
+    const dirZ = Math.cos(this._moveYaw);
+    const airPose = 1 - this._airSmooth;
+    // Combat stance: staggered feet at rest (support foot leads, weapon foot
+    // trails), and while strafing the lead-side leg plants wider toward the
+    // travel direction than the trailing leg.
+    const stagger = 1 - 0.75 * gaitW;
+    const strafeShift = dirX * gaitW;
+    const dirXSign = Math.sign(dirX);
     for (const leg of this.legs) {
       let localPhase = (this._phase + leg.phaseOff) % (Math.PI * 2);
       if (localPhase < 0) localPhase += Math.PI * 2;
@@ -567,11 +823,20 @@ export class CSBotModel {
       const sway = this._amp * swayOut;
       const lift = this._lift * liftOut;
 
+      const lead = leg.s * dirXSign >= 0;
       _legTarget.set(
-        leg.s * FOOT_HALF + this._dirX * sway,
+        leg.s * (FOOT_HALF + STANCE_WIDE * stagger) +
+          dirX * sway +
+          strafeShift * (lead ? STRAFE_WIDE_LEAD : STRAFE_WIDE_TRAIL),
         ANKLE_H + lift - pelvisY,
-        this._dirZ * sway
+        dirZ * sway + (leg.s < 0 ? STAGGER_FWD : -STAGGER_BACK) * stagger
       );
+      if (airPose > 0.001) {
+        // Airborne: tuck the feet up under the pelvis, lead knee forward.
+        _legTarget.x = THREE.MathUtils.lerp(_legTarget.x, leg.s * FOOT_HALF, airPose);
+        _legTarget.y = THREE.MathUtils.lerp(_legTarget.y, AIR_TUCK_Y - pelvisY, airPose);
+        _legTarget.z = THREE.MathUtils.lerp(_legTarget.z, leg.s > 0 ? 0.1 : -0.06, airPose);
+      }
       _legPole.set(0, 0, 1);
       solveTwoBone(leg.thigh, leg.knee, THIGH_LEN, CALF_LEN, _legTarget, _legPole);
       _footQ.multiplyQuaternions(leg.thigh.quaternion, leg.knee.quaternion).invert();
