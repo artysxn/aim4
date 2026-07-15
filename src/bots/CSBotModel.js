@@ -98,13 +98,16 @@ const VEL_APPROACH = 50; // m/s² anim-velocity chase (smooths wall-stops)
 const LEAN_RATE = 12; // 1/s lean smoothing
 const MAX_LEAN = THREE.MathUtils.degToRad(8); // travel-lean cap (lower body only)
 
-// ---- Combat stance (staggered shooting pose) ----
-const STANCE_DROP = 0.045; // m pelvis drop at rest — keeps the knees slightly bent
-const STAGGER_FWD = 0.11; // m the left (support) foot leads…
-const STAGGER_BACK = 0.13; // m …and the right (weapon) foot trails
-const STANCE_WIDE = 0.03; // m extra half-width of the planted base
+// ---- Combat stance (staggered military shooting pose) ----
+const STANCE_DROP = 0.09; // m pelvis drop at rest — knees clearly bent
+const STANCE_YAW = THREE.MathUtils.degToRad(25); // hips blade weapon-side back
+const STAGGER_FWD = 0.19; // m the left (support) foot leads…
+const STAGGER_BACK = 0.21; // m …and the right (weapon) foot trails
+const STANCE_WIDE = 0.07; // m extra half-width of the planted base
+const STANCE_HUNCH = 0.05; // rad fwd pitch per spine node (neck keeps head level)
 const STRAFE_WIDE_LEAD = 0.1; // m lead leg widens toward the travel side
 const STRAFE_WIDE_TRAIL = 0.05; // m trail leg tucks under the body
+const CADENCE_SCALE = 0.5; // halve the step rate — longer, calmer strides
 
 // ---- Air / landing ----
 const AIR_APPROACH_STAND = 8; // 1/s fuzzy on-ground blend (16 when crouched)
@@ -539,7 +542,7 @@ export class CSBotModel {
       vx = 0;
       vy = 0;
       vz = 0;
-      this._footYaw = eyeYaw;
+      this._footYaw = wrapPI(eyeYaw + STANCE_YAW);
       this._phase = 0;
       this._amp = 0;
       this._velX = 0;
@@ -668,10 +671,13 @@ export class CSBotModel {
     if (dYaw > yawLimit) this._footYaw = wrapPI(eyeYaw - yawLimit);
     else if (dYaw < -yawLimit) this._footYaw = wrapPI(eyeYaw + yawLimit);
 
+    // The feet rest bladed: weapon-side hips pulled back off the aim direction,
+    // so the legs read diagonal while the untwisted torso stays on target.
+    const restYaw = wrapPI(eyeYaw + STANCE_YAW);
     if (moving && this._onGround) {
-      // Feet chase the eyes at 30–50°/s (faster at a run) while moving.
+      // Feet chase the (bladed) rest yaw at 30–50°/s (faster at a run).
       this._footYaw = approachAngle(
-        eyeYaw,
+        restYaw,
         this._footYaw,
         dt * THREE.MathUtils.lerp(this._walkRun, FOOT_CHASE_WALK, FOOT_CHASE_RUN)
       );
@@ -682,8 +688,8 @@ export class CSBotModel {
       this._lbyRealignIn -= dt;
       if (this._lbyRealignIn <= 0) this._adjusting = true;
       if (this._adjusting) {
-        this._footYaw = approachAngle(eyeYaw, this._footYaw, dt * FOOT_CHASE_IDLE);
-        if (Math.abs(wrapPI(eyeYaw - this._footYaw)) < 0.03) {
+        this._footYaw = approachAngle(restYaw, this._footYaw, dt * FOOT_CHASE_IDLE);
+        if (Math.abs(wrapPI(restYaw - this._footYaw)) < 0.03) {
           this._adjusting = false;
           this._lbyRealignIn = LBY_REPEAT;
         }
@@ -717,10 +723,10 @@ export class CSBotModel {
     const twist = dYaw / 3; // spine untwists the desync back toward eye yaw
     const unleanX = -this._leanX / 3; // spine also untilts the travel lean so
     const unleanZ = -this._leanZ / 3; // the upper body stays world-upright
-    this.spine0.rotation.set(-p * 0.08 + 0.14 * c + unleanX, twist, unleanZ);
-    this.spine1.rotation.set(-p * 0.14 + 0.16 * c + unleanX, twist, unleanZ);
+    this.spine0.rotation.set(-p * 0.08 + 0.14 * c + STANCE_HUNCH + unleanX, twist, unleanZ);
+    this.spine1.rotation.set(-p * 0.14 + 0.16 * c + STANCE_HUNCH + unleanX, twist, unleanZ);
     this.chest.rotation.set(-p * 0.22 + 0.1 * c + unleanX, twist, unleanZ);
-    this.neck.rotation.set(-p * 0.28 - 0.28 * c, 0, 0);
+    this.neck.rotation.set(-p * 0.28 - 0.28 * c - 2 * STANCE_HUNCH, 0, 0);
     this.head.rotation.set(-p * 0.28, 0, 0);
 
     // ---- Locomotion: gait heading (move yaw) + locomotion weight ----
@@ -775,8 +781,9 @@ export class CSBotModel {
       this._amp += (strideHalf * gaitW - this._amp) * Math.min(1, 10 * dt);
       this._lift =
         LIFT_RUN * Math.max(0.35, Math.sqrt(stanceFrac)) * THREE.MathUtils.lerp(c, 1, 0.55);
-      // Cadence tied to actual ground speed over the stride, so feet don't skate.
-      this._phase += (speed / Math.max(strideHalf, 0.15)) * dt;
+      // Cadence tied to ground speed over the stride, halved for longer,
+      // calmer strides (fewer steps per distance covered).
+      this._phase += CADENCE_SCALE * (speed / Math.max(strideHalf, 0.15)) * dt;
     } else {
       this._amp += (0 - this._amp) * Math.min(1, 8 * dt);
       this._lift = 0;
