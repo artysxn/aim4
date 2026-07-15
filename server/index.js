@@ -14,6 +14,7 @@ import { saveConfig, getConfig } from './store.js';
 import { getBaselines, saveBaselines } from './baselinesStore.js';
 import { isValidCodeFormat, normalizeCode } from './configCodes.js';
 import { MultiplayerServer } from './lobby.js';
+import { FootballServer } from './football.js';
 import { tryServeStatic, distExists } from './static.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
 
@@ -163,8 +164,28 @@ const server = http.createServer(async (req, res) => {
 });
 
 const mp = new MultiplayerServer();
-const wss = new WebSocketServer({ server, path: '/ws' });
+const football = new FootballServer();
+const wss = new WebSocketServer({ noServer: true });
+const footballWss = new WebSocketServer({ noServer: true });
 wss.on('connection', (ws) => mp.addConnection(ws));
+footballWss.on('connection', (ws) => football.addConnection(ws));
+
+// Route WS upgrades by path: /ws → duels, /football → the easter-egg pitch.
+server.on('upgrade', (req, socket, head) => {
+  let pathname = '/';
+  try {
+    pathname = new URL(req.url || '/', 'http://localhost').pathname;
+  } catch {
+    /* fall through to destroy */
+  }
+  if (pathname === '/ws') {
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+  } else if (pathname === '/football') {
+    footballWss.handleUpgrade(req, socket, head, (ws) => footballWss.emit('connection', ws, req));
+  } else {
+    socket.destroy();
+  }
+});
 
 if (SERVE_STATIC && !distExists()) {
   console.error('');

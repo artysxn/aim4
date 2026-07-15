@@ -19,6 +19,12 @@ export default defineConfig({
         target: 'ws://127.0.0.1:3784',
         ws: true,
         changeOrigin: true
+      },
+      // Easter-egg 2D football (public/tools/football.html).
+      '/football': {
+        target: 'ws://127.0.0.1:3784',
+        ws: true,
+        changeOrigin: true
       }
     }
   },
