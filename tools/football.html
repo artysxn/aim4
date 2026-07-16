@@ -294,6 +294,8 @@
   const STAMINA_MAX = 10;
   const STAMINA_REGEN = 0.8;
   const WINDED_RECOVER = 2;
+  const SHOOT_STAMINA_MAX = 100;
+  const SHOOT_STAMINA_REGEN = 18;
   const BALL_FRICTION = 0.85;
   const KICK_MIN = 8, KICK_MAX = 58;
   const KICK_RANGE = PLAYER_R + BALL_R + 2.0;
@@ -394,7 +396,7 @@
   let lastKicks = [];
   let ballTrail = [];
   let inGame = false;
-  let pred = null; // local client prediction { x, y, vx, vy, stamina, winded, sprinting }
+  let pred = null; // local client prediction { x, y, vx, vy, stamina, shoot, winded, sprinting }
   let lastFrameT = 0;
   let pendingJoin = null; // { code } while the password modal is open
 
@@ -749,13 +751,14 @@
     return v < a ? a : v > b ? b : v;
   }
 
-  function resetPred(sx, sy, stamina, winded, sprinting) {
+  function resetPred(sx, sy, stamina, winded, sprinting, shoot) {
     pred = {
       x: sx,
       y: sy,
       vx: 0,
       vy: 0,
       stamina: stamina ?? STAMINA_MAX,
+      shoot: shoot ?? SHOOT_STAMINA_MAX,
       winded: !!winded,
       sprinting: !!sprinting
     };
@@ -772,12 +775,12 @@
       return;
     }
     if (!pred) {
-      resetPred(me.x, me.y, me.s, me.w, me.r);
+      resetPred(me.x, me.y, me.s, me.w, me.r, me.ss);
       return;
     }
     const err = Math.hypot(pred.x - me.x, pred.y - me.y);
     if (err > 4) {
-      resetPred(me.x, me.y, me.s, me.w, me.r);
+      resetPred(me.x, me.y, me.s, me.w, me.r, me.ss);
       return;
     }
     // Soft correction — keep predicted motion responsive without rubber-banding.
@@ -785,6 +788,7 @@
     pred.x += (me.x - pred.x) * k;
     pred.y += (me.y - pred.y) * k;
     pred.stamina = me.s;
+    pred.shoot = me.ss ?? pred.shoot;
     pred.winded = !!me.w;
     pred.sprinting = !!me.r;
   }
@@ -807,6 +811,7 @@
       pred.stamina = Math.min(STAMINA_MAX, pred.stamina + STAMINA_REGEN * dt);
       if (pred.winded && pred.stamina >= WINDED_RECOVER) pred.winded = false;
     }
+    pred.shoot = Math.min(SHOOT_STAMINA_MAX, pred.shoot + SHOOT_STAMINA_REGEN * dt);
     const speed = sprinting ? SPRINT_SPEED : BASE_SPEED;
     const k = Math.min(1, MOVE_ACCEL * dt);
     pred.vx += (wx * speed - pred.vx) * k;
@@ -878,6 +883,7 @@
           x: pred.x,
           y: pred.y,
           s: pred.stamina,
+          ss: pred.shoot,
           r: pred.sprinting ? 1 : 0,
           w: pred.winded ? 1 : 0
         }
@@ -1028,14 +1034,25 @@
     }
 
     if (me) {
-      const bw = 220, bh = 10;
+      const bw = 220, bh = 8, gap = 6;
       const bx = (innerWidth - bw) / 2;
-      const by = innerHeight - 28;
+      const bySprint = innerHeight - 36;
+      const byShoot = bySprint + bh + gap;
+
+      // Sprint stamina (green)
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
-      ctx.fillRect(bx - 2, by - 2, bw + 4, bh + 4);
-      const f = Math.max(0, Math.min(1, me.s / STAMINA_MAX));
+      ctx.fillRect(bx - 2, bySprint - 2, bw + 4, bh + 4);
+      const sf = Math.max(0, Math.min(1, me.s / STAMINA_MAX));
       ctx.fillStyle = me.w ? '#e6a23c' : (keys.sp ? '#6fe3a1' : '#37b26c');
-      ctx.fillRect(bx, by, bw * f, bh);
+      ctx.fillRect(bx, bySprint, bw * sf, bh);
+
+      // Shoot stamina (amber)
+      const shoot = me.ss ?? SHOOT_STAMINA_MAX;
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(bx - 2, byShoot - 2, bw + 4, bh + 4);
+      const shf = Math.max(0, Math.min(1, shoot / SHOOT_STAMINA_MAX));
+      ctx.fillStyle = shf < 0.2 ? '#c45c2a' : '#f0b429';
+      ctx.fillRect(bx, byShoot, bw * shf, bh);
     }
   }
 

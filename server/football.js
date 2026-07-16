@@ -1,9 +1,10 @@
 // ---------------------------------------------------------------------------
 // server/football.js
 // Easter-egg 2D football (soccer). The standalone page /tools/football.html
-// connects here over WS at /football. Fully server-authoritative: a 30 Hz sim
-// of players + ball, code-joined lobbies with host-controlled team assignment
-// (the host drags players between teams), first to 5 goals wins.
+// connects here over WS at /football. Fully server-authoritative: a 60 Hz sim
+// of players + ball with impulse collisions, code-joined lobbies with
+// host-controlled team assignment (the host drags players between teams),
+// first to 5 goals wins.
 //
 // Wire protocol (JSON messages with a `t` field, mirroring the duel server):
 //   C2S: create{name,pass?,isPublic?} join{code,name,pass?} leave team{team}
@@ -38,6 +39,13 @@ const STAMINA_MAX = 10; // seconds of continuous sprint
 const STAMINA_REGEN = 0.8; // per second while not sprinting
 const WINDED_RECOVER = 2; // stamina needed to un-wind after running dry
 
+// Shooting stamina — separate from sprint. Each kick drains this pool.
+const SHOOT_STAMINA_MAX = 100;
+const SHOOT_STAMINA_REGEN = 18; // per second
+const SHOOT_COST_MIN = 16; // weak tap
+const SHOOT_COST_MAX = 38; // full-power shot
+const SHOOT_MIN_TO_FIRE = 12; // need at least this much to shoot
+
 // Ball. Exponential friction means a kick at speed v rolls v/BALL_FRICTION
 // units before stopping — so kick speed = dist(ball→aim) * BALL_FRICTION makes
 // the ball come to rest at the shooter's cursor ("mouse distance = shot").
@@ -47,9 +55,14 @@ const KICK_COOLDOWN_MS = 280;
 const KICK_MIN = 8;
 const KICK_MAX = 58;
 const BOUNCE = 0.7; // wall/post restitution
-const DRIBBLE_PUSH = 1.2; // outward carry multiplier
-const DRIBBLE_BLEND = 10; // 1/s — how fast ball velocity chases the dribble target
 const KICK_BLEND = 0.78; // keep this fraction of new kick vs existing ball vel
+
+// Collision masses / restitution (impulse response).
+const PLAYER_MASS = 1;
+const BALL_MASS = 0.22;
+const PLAYER_RESTITUTION = 0.28; // bodies don't bounce much
+const BALL_RESTITUTION = 0.62; // lively ball bounce off players
+const COLLISION_FRICTION = 0.08; // tangent damping on contact
 
 const GOALS_TO_WIN = 5;
 const ROOM_CAP = 12;
@@ -90,6 +103,65 @@ function cleanPass(raw) {
     .slice(0, 24);
 }
 
+/**
+ * Circle–circle impulse collision. Separates overlap by inverse mass, then
+ * applies normal impulse (+ light tangent friction). Mutates a/b in place.
+ */
+function collideCircles(a, b, ra, rb, ma, mb, restitution) {
+  let dx = b.x - a.x;
+  let dy = b.y - a.y;
+  let d = Math.hypot(dx, dy);
+  const min = ra + rb;
+  if (d >= min) return false;
+  if (d < 1e-5) {
+    dx = 1;
+    dy = 0;
+    d = 1;
+  }
+  const nx = dx / d;
+  const ny = dy / d;
+  const invA = 1 / ma;
+  const invB = 1 / mb;
+  const invSum = invA + invB;
+
+  // Positional correction (prevent sink-in).
+  const overlap = min - d;
+  const corr = (overlap / invSum) * 0.9;
+  a.x -= nx * corr * invA;
+  a.y -= ny * corr * invA;
+  b.x += nx * corr * invB;
+  b.y += ny * corr * invB;
+
+  // Relative velocity along the contact normal.
+  const rvx = (b.vx ?? 0) - (a.vx ?? 0);
+  const rvy = (b.vy ?? 0) - (a.vy ?? 0);
+  const velN = rvx * nx + rvy * ny;
+  if (velN < 0) {
+    const j = -(1 + restitution) * velN / invSum;
+    a.vx = (a.vx ?? 0) - j * nx * invA;
+    a.vy = (a.vy ?? 0) - j * ny * invA;
+    b.vx = (b.vx ?? 0) + j * nx * invB;
+    b.vy = (b.vy ?? 0) + j * ny * invB;
+
+    // Tangential friction (kills sliding along the contact).
+    const tx = -ny;
+    const ty = nx;
+    const velT = rvx * tx + rvy * ty;
+    const jtMax = Math.abs(j) * COLLISION_FRICTION;
+    const jt = clamp(-velT / invSum, -jtMax, jtMax);
+    a.vx -= jt * tx * invA;
+    a.vy -= jt * ty * invA;
+    b.vx += jt * tx * invB;
+    b.vy += jt * ty * invB;
+  }
+  return true;
+}
+
+function clampPlayer(q) {
+  q.x = clamp(q.x, PLAYER_R, FIELD_W - PLAYER_R);
+  q.y = clamp(q.y, PLAYER_R, FIELD_H - PLAYER_R);
+}
+
 export class FootballServer {
   constructor() {
     this.players = new Map(); // id -> player
@@ -114,6 +186,7 @@ export class FootballServer {
       vx: 0,
       vy: 0,
       stamina: STAMINA_MAX,
+      shootStamina: SHOOT_STAMINA_MAX,
       winded: false,
       kickAt: 0,
       input: { u: false, d: false, l: false, r: false, sp: false, k: false, ax: 0, ay: 0 }
@@ -339,6 +412,9 @@ export class FootballServer {
         q.y = FIELD_H / 2 + (i - (n - 1) / 2) * gap;
         q.vx = 0;
         q.vy = 0;
+        q.stamina = STAMINA_MAX;
+        q.shootStamina = SHOOT_STAMINA_MAX;
+        q.winded = false;
       });
     };
     place(room.players.filter((q) => q.team === 'red'), 30);
@@ -386,7 +462,7 @@ export class FootballServer {
     const fielded = room.players.filter((q) => q.team !== 'spec');
     const ball = room.ball;
 
-    // Players: sprint stamina + velocity chase + integration.
+    // Players: sprint stamina + shoot stamina regen + velocity chase + integration.
     for (const q of fielded) {
       const i = q.input;
       let wx = (i.r ? 1 : 0) - (i.l ? 1 : 0);
@@ -406,40 +482,44 @@ export class FootballServer {
         q.stamina = Math.min(STAMINA_MAX, q.stamina + STAMINA_REGEN * dt);
         if (q.winded && q.stamina >= WINDED_RECOVER) q.winded = false;
       }
+      q.shootStamina = Math.min(
+        SHOOT_STAMINA_MAX,
+        (q.shootStamina ?? SHOOT_STAMINA_MAX) + SHOOT_STAMINA_REGEN * dt
+      );
 
       const speed = sprinting ? SPRINT_SPEED : BASE_SPEED;
       const k = Math.min(1, MOVE_ACCEL * dt);
       q.vx += (wx * speed - q.vx) * k;
       q.vy += (wy * speed - q.vy) * k;
-      q.x = clamp(q.x + q.vx * dt, PLAYER_R, FIELD_W - PLAYER_R);
-      q.y = clamp(q.y + q.vy * dt, PLAYER_R, FIELD_H - PLAYER_R);
+      q.x += q.vx * dt;
+      q.y += q.vy * dt;
+      clampPlayer(q);
       q.sprinting = sprinting;
     }
 
-    // Player-player separation.
-    for (let a = 0; a < fielded.length; a++) {
-      for (let b = a + 1; b < fielded.length; b++) {
-        const A = fielded[a];
-        const B = fielded[b];
-        const dx = B.x - A.x;
-        const dy = B.y - A.y;
-        const d = Math.hypot(dx, dy);
-        const min = PLAYER_R * 2;
-        if (d > 0 && d < min) {
-          const push = (min - d) / 2;
-          const nx = dx / d;
-          const ny = dy / d;
-          A.x = clamp(A.x - nx * push, PLAYER_R, FIELD_W - PLAYER_R);
-          A.y = clamp(A.y - ny * push, PLAYER_R, FIELD_H - PLAYER_R);
-          B.x = clamp(B.x + nx * push, PLAYER_R, FIELD_W - PLAYER_R);
-          B.y = clamp(B.y + ny * push, PLAYER_R, FIELD_H - PLAYER_R);
+    // Player–player impulse collisions (iterate for stacks of bodies).
+    for (let iter = 0; iter < 3; iter++) {
+      for (let a = 0; a < fielded.length; a++) {
+        for (let b = a + 1; b < fielded.length; b++) {
+          collideCircles(
+            fielded[a],
+            fielded[b],
+            PLAYER_R,
+            PLAYER_R,
+            PLAYER_MASS,
+            PLAYER_MASS,
+            PLAYER_RESTITUTION
+          );
+          clampPlayer(fielded[a]);
+          clampPlayer(fielded[b]);
         }
       }
     }
 
-    // Kicks — hold space; fires whenever the ball is in reach and off cooldown.
+    // Kicks — hold space; needs shoot stamina + cooldown + ball in range.
     for (const q of fielded) {
       if (!q.input.k || now < q.kickAt) continue;
+      if ((q.shootStamina ?? 0) < SHOOT_MIN_TO_FIRE) continue;
       const dx = ball.x - q.x;
       const dy = ball.y - q.y;
       if (Math.hypot(dx, dy) > KICK_RANGE) continue;
@@ -447,15 +527,18 @@ export class FootballServer {
       let ay = q.input.ay - ball.y;
       let dist = Math.hypot(ax, ay);
       if (dist < 0.5) {
-        // Cursor on top of the ball: tap it along the player→ball line.
         ax = dx;
         ay = dy;
         dist = Math.hypot(ax, ay) || 1;
       }
       const power = clamp(dist * BALL_FRICTION, KICK_MIN, KICK_MAX);
+      const powerT = (power - KICK_MIN) / (KICK_MAX - KICK_MIN || 1);
+      const cost = SHOOT_COST_MIN + (SHOOT_COST_MAX - SHOOT_COST_MIN) * powerT;
+      if (q.shootStamina < cost * 0.55) continue; // too drained for this power
+      q.shootStamina = Math.max(0, q.shootStamina - cost);
+
       const kvx = (ax / dist) * power;
       const kvy = (ay / dist) * power;
-      // Blend into existing velocity so the ball doesn't snap direction mid-flight.
       ball.vx = ball.vx * (1 - KICK_BLEND) + kvx * KICK_BLEND;
       ball.vy = ball.vy * (1 - KICK_BLEND) + kvy * KICK_BLEND;
       ball.lastKickId = q.id;
@@ -465,34 +548,11 @@ export class FootballServer {
         id: q.id,
         x: ball.x,
         y: ball.y,
-        p: (power - KICK_MIN) / (KICK_MAX - KICK_MIN)
+        p: powerT
       });
     }
 
-    // Dribble: overlapping the ball pushes it out. Only the outward component
-    // of player velocity is applied — never rolls the ball backwards behind you.
-    for (const q of fielded) {
-      const dx = ball.x - q.x;
-      const dy = ball.y - q.y;
-      const d = Math.hypot(dx, dy);
-      const min = PLAYER_R + BALL_R;
-      if (d > 0 && d < min) {
-        const nx = dx / d;
-        const ny = dy / d;
-        ball.x = q.x + nx * min;
-        ball.y = q.y + ny * min;
-        const toward = q.vx * nx + q.vy * ny; // speed into the ball (player → ball)
-        if (toward > 0.35) {
-          const targetVx = nx * (toward * DRIBBLE_PUSH + 1.5);
-          const targetVy = ny * (toward * DRIBBLE_PUSH + 1.5);
-          const a = Math.min(1, DRIBBLE_BLEND * dt);
-          ball.vx += (targetVx - ball.vx) * a;
-          ball.vy += (targetVy - ball.vy) * a;
-        }
-      }
-    }
-
-    // Ball physics + goals.
+    // Ball integration, then player–ball body collisions (physics carry/bounce).
     ball.x += ball.vx * dt;
     ball.y += ball.vy * dt;
     const decay = Math.exp(-BALL_FRICTION * dt);
@@ -501,6 +561,25 @@ export class FootballServer {
     if (Math.hypot(ball.vx, ball.vy) < 0.05) {
       ball.vx = 0;
       ball.vy = 0;
+    }
+
+    for (let iter = 0; iter < 2; iter++) {
+      for (const q of fielded) {
+        if (
+          collideCircles(
+            q,
+            ball,
+            PLAYER_R,
+            BALL_R,
+            PLAYER_MASS,
+            BALL_MASS,
+            BALL_RESTITUTION
+          )
+        ) {
+          clampPlayer(q);
+          ball.lastKickId = q.id;
+        }
+      }
     }
 
     if (ball.y < BALL_R) {
@@ -514,7 +593,7 @@ export class FootballServer {
     const inMouth = ball.y > GOAL_TOP + BALL_R * 0.5 && ball.y < GOAL_BOT - BALL_R * 0.5;
     if (ball.x < BALL_R) {
       if (inMouth) {
-        if (ball.x < -0.5) this._goal(room, 'blue', now); // blue scores on the left goal
+        if (ball.x < -0.5) this._goal(room, 'blue', now);
       } else {
         ball.x = BALL_R;
         ball.vx = Math.abs(ball.vx) * BOUNCE;
@@ -527,7 +606,6 @@ export class FootballServer {
         ball.vx = -Math.abs(ball.vx) * BOUNCE;
       }
     }
-    // Keep the ball inside the net box while it crosses the line.
     ball.x = clamp(ball.x, -GOAL_DEPTH + BALL_R, FIELD_W + GOAL_DEPTH - BALL_R);
   }
 
@@ -562,6 +640,7 @@ export class FootballServer {
         x: Math.round(q.x * 100) / 100,
         y: Math.round(q.y * 100) / 100,
         s: Math.round(q.stamina * 10) / 10,
+        ss: Math.round((q.shootStamina ?? SHOOT_STAMINA_MAX) * 10) / 10,
         r: q.sprinting ? 1 : 0,
         w: q.winded ? 1 : 0
       });
