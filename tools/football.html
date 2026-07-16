@@ -286,10 +286,10 @@
   // ---- Constants mirrored from server/football.js (keep in sync) ----------
   const FIELD_W = 100;
   const FIELD_H = 62;
-  const PLAYER_R = 1.12;
+  const PLAYER_R = 1.232;
   const BALL_R = 1.2;
-  const BASE_SPEED = 10.5;
-  const SPRINT_SPEED = 18.85;
+  const BASE_SPEED = 11.55;
+  const SPRINT_SPEED = 20.735;
   const MOVE_ACCEL = 12;
   const STAMINA_MAX = 8;
   const STAMINA_REGEN = 0.8;
@@ -305,6 +305,8 @@
   const CHARGE_TIME = 0.9;
   const CHARGE_SLOW_MAX = 0.55;
   const CHARGE_POWER_BONUS = 0.5;
+  const POST_R = 0.7;
+  const CORNER_R = 0.55;
   // Remote players / ball: render slightly behind latest snap for smoothness.
   // Local player uses client-side prediction (no delay).
   const REMOTE_INTERP_MS = 50;
@@ -396,7 +398,7 @@
   let myId = null;
   let lobby = null;
   let roster = new Map();
-  let field = { w: 100, h: 62, gt: 23, gb: 39, gd: 3 };
+  let field = { w: 100, h: 62, gt: 21.4, gb: 40.6, gd: 3 };
   let goalsToWin = 5;
   let snaps = [];
   let lastKicks = [];
@@ -696,6 +698,7 @@
   const keys = { u: false, d: false, l: false, r: false, sp: false, k: false };
   let mouse = { x: 0, y: 0 };
   let mouseKick = false;
+  let mouseStop = false;
 
   const KEYMAP = {
     KeyW: 'u', ArrowUp: 'u',
@@ -714,7 +717,7 @@
     send({
       t: 'input',
       u: keys.u, d: keys.d, l: keys.l, r: keys.r,
-      sp: keys.sp, k: kickHeld(),
+      sp: keys.sp, k: kickHeld(), st: mouseStop,
       ax: aim.x, ay: aim.y
     });
   }
@@ -739,31 +742,46 @@
   window.addEventListener('blur', () => {
     for (const k in keys) keys[k] = false;
     mouseKick = false;
+    mouseStop = false;
     sendInput();
   });
   window.addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
   window.addEventListener('mousedown', (e) => {
-    if (!inGame || e.button !== 0) return;
+    if (!inGame) return;
     mouse.x = e.clientX;
     mouse.y = e.clientY;
-    if (!mouseKick) {
-      mouseKick = true;
-      sendInput();
+    if (e.button === 0) {
+      if (!mouseKick) {
+        mouseKick = true;
+        sendInput();
+      }
+      e.preventDefault();
+    } else if (e.button === 2) {
+      if (!mouseStop) {
+        mouseStop = true;
+        sendInput();
+      }
+      e.preventDefault();
     }
-    e.preventDefault();
   });
   window.addEventListener('mouseup', (e) => {
-    if (e.button !== 0) return;
-    if (mouseKick) {
+    if (e.button === 0 && mouseKick) {
       mouseKick = false;
       sendInput();
+    } else if (e.button === 2 && mouseStop) {
+      mouseStop = false;
+      sendInput();
     }
+  });
+  window.addEventListener('contextmenu', (e) => {
+    if (inGame) e.preventDefault();
   });
   // Release charge if the pointer leaves the window while held.
   window.addEventListener('mouseleave', () => {
-    if (!mouseKick) return;
-    mouseKick = false;
-    sendInput();
+    let changed = false;
+    if (mouseKick) { mouseKick = false; changed = true; }
+    if (mouseStop) { mouseStop = false; changed = true; }
+    if (changed) sendInput();
   });
 
   setInterval(sendInput, 16);
@@ -947,20 +965,20 @@
   }
 
   // ---- Rendering ------------------------------------------------------------------
-  /** Radial shoot-ready / charge ring around a player. */
+  /** Radial shoot-ready / charge ring drawn inside the player disc. */
   function drawShootRing(q, isLocal) {
     const ready = Math.max(0, Math.min(1, q.cd ?? 1));
     const charge = Math.max(0, Math.min(1, q.ch ?? 0));
     const cx = px(q.x);
     const cy = py(q.y);
-    const r = (PLAYER_R + 0.55) * sc;
-    const lw = isLocal ? 3.5 : 2.5;
+    const r = PLAYER_R * sc * 0.62;
+    const lw = isLocal ? 3 : 2.25;
     const start = -Math.PI / 2;
 
     // Dim full track
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
     ctx.lineWidth = lw + 1;
     ctx.stroke();
 
@@ -970,7 +988,7 @@
       const rr = Math.round(70 + (90 - 70) * t);
       const gg = Math.round(90 + (230 - 90) * t);
       const bb = Math.round(110 + (160 - 110) * t);
-      const a = 0.35 + 0.55 * t;
+      const a = 0.45 + 0.5 * t;
       ctx.beginPath();
       ctx.arc(cx, cy, r, start, start + Math.PI * 2 * t);
       ctx.strokeStyle = `rgba(${rr},${gg},${bb},${a})`;
@@ -984,9 +1002,9 @@
     if (charge > 0.02) {
       ctx.beginPath();
       ctx.arc(cx, cy, r, start, start + Math.PI * 2 * charge);
-      const a = 0.55 + 0.4 * charge;
+      const a = 0.6 + 0.35 * charge;
       ctx.strokeStyle = `rgba(255,${Math.round(200 - charge * 80)},60,${a})`;
-      ctx.lineWidth = lw + (isLocal ? 1 : 0);
+      ctx.lineWidth = lw + (isLocal ? 0.5 : 0);
       ctx.lineCap = 'round';
       ctx.stroke();
       ctx.lineCap = 'butt';
@@ -1039,7 +1057,6 @@
     for (const [id, q] of st.players) {
       const info = roster.get(id);
       const color = TEAM_COLOR[info?.team] || '#888';
-      drawShootRing(q, id === myId);
       ctx.beginPath();
       ctx.ellipse(px(q.x), py(q.y) + PLAYER_R * sc * 0.45, PLAYER_R * sc * 0.95, PLAYER_R * sc * 0.5, 0, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(0,0,0,0.25)';
@@ -1048,6 +1065,9 @@
       ctx.arc(px(q.x), py(q.y), PLAYER_R * sc, 0, Math.PI * 2);
       ctx.fillStyle = color;
       ctx.fill();
+      drawShootRing(q, id === myId);
+      ctx.beginPath();
+      ctx.arc(px(q.x), py(q.y), PLAYER_R * sc, 0, Math.PI * 2);
       ctx.lineWidth = id === myId ? 3 : 1.5;
       ctx.strokeStyle = id === myId ? '#ffffff' : 'rgba(0,0,0,0.35)';
       ctx.stroke();
@@ -1152,6 +1172,27 @@
         ctx.lineTo(px(gx + field.gd), py(yy));
         ctx.stroke();
       }
+      // Goal posts as pillars
+      const postX = side === 0 ? 0 : w;
+      for (const yy of [field.gt, field.gb]) {
+        ctx.beginPath();
+        ctx.arc(px(postX), py(yy), POST_R * sc, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(220,220,230,0.92)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    }
+    // Field corner pillars
+    for (const [cx, cy] of [[0, 0], [w, 0], [0, h], [w, h]]) {
+      ctx.beginPath();
+      ctx.arc(px(cx), py(cy), CORNER_R * sc, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(200,200,210,0.75)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+      ctx.lineWidth = 1.25;
+      ctx.stroke();
     }
   }
 

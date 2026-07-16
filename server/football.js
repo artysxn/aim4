@@ -9,7 +9,7 @@
 // Wire protocol (JSON messages with a `t` field, mirroring the duel server):
 //   C2S: create{name,pass?,isPublic?} join{code,name,pass?} leave team{team}
 //        setTeam{id,team} config{pass?,isPublic?} start stop list unlist
-//        input{u,d,l,r,sp,k,ax,ay} ping{ct}
+//        input{u,d,l,r,sp,k,st,ax,ay} ping{ct}
 //   S2C: welcome{id} lobby{code,hostId,inMatch,isPublic,hasPass,players}
 //        error{msg,code?} lobbyList{lobbies}
 //        start{field,score,goalsToWin,players} state{ph,kt,sc,ball,pl}
@@ -23,17 +23,18 @@ const TICK_MS = 1000 / TICK_HZ;
 // Field, in abstract units. x grows right, y grows down (matches canvas).
 export const FIELD_W = 100;
 export const FIELD_H = 62;
-export const GOAL_TOP = (FIELD_H - 16) / 2; // goal mouth: y 23..39
-export const GOAL_BOT = GOAL_TOP + 16;
+const GOAL_H = 19.2; // was 16 (+20% taller)
+export const GOAL_TOP = (FIELD_H - GOAL_H) / 2;
+export const GOAL_BOT = GOAL_TOP + GOAL_H;
 export const GOAL_DEPTH = 3; // net box behind each goal line
 
-const PLAYER_R = 1.12; // was 1.4 (−20%)
-const BALL_R = 1.2; // was 1.0 (+20%)
+const PLAYER_R = 1.232; // +10% from 1.12
+const BALL_R = 1.2;
 
 // Movement. Hold shift to sprint — stamina pool drains while sprinting
 // and regenerates while not; running dry "winds" you until partially recovered.
-const BASE_SPEED = 10.5;
-const SPRINT_SPEED = 18.85; // was 14.5 (+30%)
+const BASE_SPEED = 11.55; // +10%
+const SPRINT_SPEED = 20.735; // +10%
 const MOVE_ACCEL = 12; // 1/s — slower, smoother ramp
 const STAMINA_MAX = 8; // was 10 (−20%)
 const STAMINA_REGEN = 0.8; // per second while not sprinting
@@ -53,7 +54,9 @@ const KICK_COOLDOWN_MS = 420;
 const KICK_POWER_SCALE = 0.775; // was 1.55 (−50%)
 const KICK_MIN = 3.5; // was 7 (−50%)
 const KICK_MAX = 46; // was 92 (−50%)
-const BOUNCE = 0.7; // wall/post restitution
+const BOUNCE = 0.88; // pillar-like restitution on posts / field edges
+const POST_R = 0.7; // goal-post pillars
+const CORNER_R = 0.55; // field-corner pillars
 const KICK_BLEND = 0.9; // strong commit to shot direction/power
 const CHARGE_TIME = 0.9; // seconds of hold → full charge
 const CHARGE_SLOW_MAX = 0.55; // up to 55% slower while fully charged
@@ -109,6 +112,44 @@ function cleanName(raw, id) {
 
 function clamp(v, a, b) {
   return v < a ? a : v > b ? b : v;
+}
+
+/** Bounce the ball off a static circular pillar (goal post / field corner). */
+function bounceBallOffPillar(ball, cx, cy, r) {
+  let dx = ball.x - cx;
+  let dy = ball.y - cy;
+  let d = Math.hypot(dx, dy);
+  const min = r + BALL_R + CONTACT_SKIN;
+  if (d >= min) return false;
+  if (d < 1e-6) {
+    dx = 1;
+    dy = 0;
+    d = 1;
+  }
+  const nx = dx / d;
+  const ny = dy / d;
+  const pen = min - d;
+  ball.x += nx * pen;
+  ball.y += ny * pen;
+  const vn = ball.vx * nx + ball.vy * ny;
+  if (vn < 0) {
+    ball.vx -= (1 + BOUNCE) * vn * nx;
+    ball.vy -= (1 + BOUNCE) * vn * ny;
+  }
+  return true;
+}
+
+function resolveBallPillars(ball) {
+  // Goal posts (bars) — four mouth corners.
+  bounceBallOffPillar(ball, 0, GOAL_TOP, POST_R);
+  bounceBallOffPillar(ball, 0, GOAL_BOT, POST_R);
+  bounceBallOffPillar(ball, FIELD_W, GOAL_TOP, POST_R);
+  bounceBallOffPillar(ball, FIELD_W, GOAL_BOT, POST_R);
+  // Field corner pillars.
+  bounceBallOffPillar(ball, 0, 0, CORNER_R);
+  bounceBallOffPillar(ball, FIELD_W, 0, CORNER_R);
+  bounceBallOffPillar(ball, 0, FIELD_H, CORNER_R);
+  bounceBallOffPillar(ball, FIELD_W, FIELD_H, CORNER_R);
 }
 
 function wishDir(q) {
@@ -384,7 +425,8 @@ export class FootballServer {
       kickAt: 0,
       charge: 0,
       prevK: false,
-      input: { u: false, d: false, l: false, r: false, sp: false, k: false, ax: 0, ay: 0 }
+      prevSt: false,
+      input: { u: false, d: false, l: false, r: false, sp: false, k: false, st: false, ax: 0, ay: 0 }
     };
     this.players.set(id, player);
     this._send(player, { t: 'welcome', id });
@@ -541,6 +583,7 @@ export class FootballServer {
         i.r = !!msg.r;
         i.sp = !!msg.sp;
         i.k = !!msg.k;
+        i.st = !!msg.st;
         i.ax = clamp(num(msg.ax), -20, FIELD_W + 20);
         i.ay = clamp(num(msg.ay), -20, FIELD_H + 20);
         break;
@@ -612,6 +655,7 @@ export class FootballServer {
         q.winded = false;
         q.charge = 0;
         q.prevK = false;
+        q.prevSt = false;
         q.kickAt = 0;
       });
     };
@@ -809,31 +853,48 @@ export class FootballServer {
       applyDribble(q, ball, dt);
     }
 
-    if (ball.y < BALL_R) {
-      ball.y = BALL_R;
-      ball.vy = Math.abs(ball.vy) * BOUNCE;
-    } else if (ball.y > FIELD_H - BALL_R) {
-      ball.y = FIELD_H - BALL_R;
-      ball.vy = -Math.abs(ball.vy) * BOUNCE;
+    // Right-click trap: fully kill ball momentum while in kick range (press edge).
+    for (const q of fielded) {
+      const stDown = !!q.input.st;
+      const stPressed = stDown && !q.prevSt;
+      q.prevSt = stDown;
+      if (!stPressed) continue;
+      if (Math.hypot(ball.x - q.x, ball.y - q.y) > KICK_RANGE) continue;
+      ball.vx = 0;
+      ball.vy = 0;
+      ball.lastKickId = q.id;
     }
 
-    const inMouth = ball.y > GOAL_TOP + BALL_R * 0.5 && ball.y < GOAL_BOT - BALL_R * 0.5;
+    // Pillar bounces: goal posts + field corners, then flat edges.
+    for (let i = 0; i < 3; i++) resolveBallPillars(ball);
+
+    if (ball.y < BALL_R) {
+      ball.y = BALL_R;
+      if (ball.vy < 0) ball.vy = -ball.vy * BOUNCE;
+    } else if (ball.y > FIELD_H - BALL_R) {
+      ball.y = FIELD_H - BALL_R;
+      if (ball.vy > 0) ball.vy = -ball.vy * BOUNCE;
+    }
+
+    // Mouth is between the post centers; posts themselves bounce as pillars above.
+    const inMouth = ball.y > GOAL_TOP + POST_R * 0.35 && ball.y < GOAL_BOT - POST_R * 0.35;
     if (ball.x < BALL_R) {
       if (inMouth) {
         if (ball.x < -0.5) this._goal(room, 'blue', now);
       } else {
         ball.x = BALL_R;
-        ball.vx = Math.abs(ball.vx) * BOUNCE;
+        if (ball.vx < 0) ball.vx = -ball.vx * BOUNCE;
       }
     } else if (ball.x > FIELD_W - BALL_R) {
       if (inMouth) {
         if (ball.x > FIELD_W + 0.5) this._goal(room, 'red', now);
       } else {
         ball.x = FIELD_W - BALL_R;
-        ball.vx = -Math.abs(ball.vx) * BOUNCE;
+        if (ball.vx > 0) ball.vx = -ball.vx * BOUNCE;
       }
     }
     ball.x = clamp(ball.x, -GOAL_DEPTH + BALL_R, FIELD_W + GOAL_DEPTH - BALL_R);
+    resolveBallPillars(ball);
 
     // Final hard depenetration — guarantees no residual clipping after walls.
     resolveOverlaps(fielded, ball);
