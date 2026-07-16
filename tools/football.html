@@ -318,15 +318,17 @@
   const BASE_SPEED = 10.973;
   const SPRINT_SPEED = 19.698;
   const MOVE_ACCEL = 12;
-  const STAMINA_MAX = 6.4;
+  const STAMINA_MAX = 4.48;
   const STAMINA_REGEN = 0.8;
+  const STAMINA_STILL_MULT = 1.3;
   const WINDED_RECOVER = 1.28;
-  const SHOOT_STAMINA_MAX = 80;
-  const SHOOT_STAMINA_REGEN = 18;
+  const SHOOT_STAMINA_MAX = 56;
+  const SHOOT_STAMINA_REGEN = 9;
   const BALL_FRICTION = 0.72;
-  const KICK_POWER_SCALE = 1.0;
+  const KICK_POWER_SCALE = 0.925;
   const SHOT_MIN_DIST = 14;
-  const KICK_MIN = SHOT_MIN_DIST * BALL_FRICTION, KICK_MAX = 58;
+  const KICK_MIN = SHOT_MIN_DIST * BALL_FRICTION, KICK_MAX = 53.5;
+  const BALL_MAX_SPEED = 72;
   const KICK_RANGE = PLAYER_R + BALL_R + 2.0;
   const KICK_COOLDOWN_MS = 420;
   const SHOOT_MIN_TO_FIRE = 10;
@@ -334,6 +336,8 @@
   const CHARGE_SLOW_MAX = 0.55;
   const CHARGE_POWER_BONUS = 0.35;
   const CHARGE_BASE_POWER = 44;
+  const TAP_CHARGE = 0.15 / CHARGE_TIME; // barely shot → fixed short pass
+  const TAP_SHOT_SPEED = 52; // ≈ 2× a full-speed sprinting dribble
   const POST_R = 0.7;
   const CORNER_R = 0.55;
   // Remote players / ball: render slightly behind the latest snap and
@@ -948,8 +952,9 @@
     cv.width = Math.floor(innerWidth * dpr);
     cv.height = Math.floor(innerHeight * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    // Keep the pitch small on screen so cursor can travel far off-field for power.
-    const margin = 0.2;
+    // Fill most of the screen — a slim border remains, still enough to put the
+    // cursor off-pitch for an automatic full-distance shot.
+    const margin = 0.06;
     const usableW = innerWidth * (1 - margin * 2);
     const usableH = innerHeight * (1 - margin * 2);
     sc = Math.min(
@@ -1046,7 +1051,10 @@
       pred.stamina = Math.max(0, pred.stamina - dt);
       if (pred.stamina <= 0) pred.winded = true;
     } else {
-      pred.stamina = Math.min(STAMINA_MAX, pred.stamina + STAMINA_REGEN * dt);
+      // Standing perfectly still (no input, not sliding) recharges faster.
+      const still = len === 0 && Math.hypot(pred.vx, pred.vy) < 0.5;
+      const regen = STAMINA_REGEN * (still ? STAMINA_STILL_MULT : 1);
+      pred.stamina = Math.min(STAMINA_MAX, pred.stamina + regen * dt);
       if (pred.winded && pred.stamina >= WINDED_RECOVER) pred.winded = false;
     }
     pred.shoot = Math.min(SHOOT_STAMINA_MAX, pred.shoot + SHOOT_STAMINA_REGEN * dt);
@@ -1326,9 +1334,10 @@
       const charge = me.ch || 0;
       const chargeFloor = charge * charge * CHARGE_BASE_POWER;
       const chargeMul = 1 + charge * CHARGE_POWER_BONUS;
-      const powerCap = KICK_MAX * (1 + CHARGE_POWER_BONUS) + CHARGE_BASE_POWER * 0.15;
-      const raw = (aimPower + chargeFloor) * chargeMul;
-      const power = Math.min(1, Math.max(0, (raw - KICK_MIN) / (powerCap - KICK_MIN)));
+      // While barely holding, the release would be a fixed tap pass.
+      const isTap = kickHeld() && charge < TAP_CHARGE;
+      const raw = isTap ? TAP_SHOT_SPEED : (aimPower + chargeFloor) * chargeMul;
+      const power = Math.min(1, Math.max(0, (raw - KICK_MIN) / (BALL_MAX_SPEED - KICK_MIN)));
       const inReach = Math.hypot(st.ball.x - me.x, st.ball.y - me.y) <= KICK_RANGE;
       ctx.setLineDash([6, 6]);
       ctx.beginPath();

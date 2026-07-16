@@ -37,13 +37,14 @@ const BALL_R = 1.02; // −15% from 1.2
 const BASE_SPEED = 10.973; // −5% from 11.55
 const SPRINT_SPEED = 19.698; // −5% from 20.735
 const MOVE_ACCEL = 12; // 1/s — slower, smoother ramp
-const STAMINA_MAX = 6.4; // −20% from 8
+const STAMINA_MAX = 4.48; // −30% from 6.4 — meant for short bursts of movement
 const STAMINA_REGEN = 0.8; // per second while not sprinting
+const STAMINA_STILL_MULT = 1.3; // standing perfectly still recharges 30% faster
 const WINDED_RECOVER = 1.28; // stamina needed to un-wind after running dry
 
 // Shooting stamina — separate from sprint. Each kick drains this pool.
-const SHOOT_STAMINA_MAX = 80; // was 100 (−20%)
-const SHOOT_STAMINA_REGEN = 18; // per second
+const SHOOT_STAMINA_MAX = 56; // was 80 (−30%)
+const SHOOT_STAMINA_REGEN = 9; // per second — was 18 (−50%)
 const SHOOT_COST_MIN = 14; // weak tap
 const SHOOT_COST_MAX = 58; // full-power / charged shot (steep curve)
 const SHOOT_MIN_TO_FIRE = 10; // need at least this much to shoot
@@ -54,10 +55,12 @@ const SHOOT_MIN_TO_FIRE = 10; // need at least this much to shoot
 const BALL_FRICTION = 0.72; // 1/s — longer rolls so powered shots carry
 const KICK_RANGE = PLAYER_R + BALL_R + 2.0;
 const KICK_COOLDOWN_MS = 420;
-const KICK_POWER_SCALE = 1.0; // aim distance → power
+const KICK_POWER_SCALE = 0.925; // aim distance → power (−7.5%)
 const SHOT_MIN_DIST = 14; // minimum roll even with the cursor on the ball
 const KICK_MIN = SHOT_MIN_DIST * BALL_FRICTION; // ≈ 10.1
-const KICK_MAX = 58; // aim-power cap (~80 units of roll); off-pitch aim = this
+const KICK_MAX = 53.5; // aim-power cap (~74 units of roll); off-pitch aim = this
+const BALL_MAX_SPEED = 72; // hard ceiling on ball speed, charged shots included
+const KICK_PUSH_SPEED = 5; // very light shove on other players in kick range
 const BOUNCE = 0.88; // pillar-like restitution on posts / field edges
 const POST_R = 0.7; // goal-post pillars
 const CORNER_R = 0.55; // field-corner pillars
@@ -66,7 +69,6 @@ const CHARGE_TIME = 0.9; // seconds of hold → full charge
 const CHARGE_SLOW_MAX = 0.55; // up to 55% slower while fully charged
 const CHARGE_POWER_BONUS = 0.35; // extra scale on top of aim+charge floor
 const CHARGE_BASE_POWER = 44; // full charge adds this much power even at point-blank aim
-const CHARGE_MIN_FIRE = 0.04; // tiny tap still counts as a shot
 
 // Auto-volley: holding shoot when an opponent's shot comes at you → release.
 const INCOMING_SHOT_SPEED = 10;
@@ -83,6 +85,13 @@ const DRIBBLE_SPRINT_CARRY = 1.32; // sprinting bounces the ball further out
 const DRIBBLE_EASE = 12; // 1/s — quick response to direction changes
 const DRIBBLE_MOVE_WEIGHT = 0.72; // movement direction vs cursor
 const DRIBBLE_AIM_WEIGHT = 0.28;
+
+// Barely shooting (held < TAP_HOLD_S before release) is a fixed short pass:
+// the cursor sets direction only — power ignores cursor distance entirely and
+// is always ~2× the ball speed of a full-sprint dribble.
+const TAP_HOLD_S = 0.15;
+const TAP_CHARGE = TAP_HOLD_S / CHARGE_TIME;
+const TAP_SHOT_SPEED = 2 * SPRINT_SPEED * DRIBBLE_SPRINT_CARRY; // ≈ 52 u/s
 
 // Collision masses / restitution (impulse response).
 const PLAYER_MASS = 1;
@@ -200,7 +209,7 @@ function isIncomingShot(q, ball, now) {
  * Apply a charged kick from player → ball. Returns powerT (0–1) or null if failed.
  */
 function applyKick(q, ball, charge, now) {
-  if (charge < CHARGE_MIN_FIRE) return null;
+  const tap = charge < TAP_CHARGE; // barely shot — fixed short pass
   if (now < q.kickAt) return null;
   if ((q.shootStamina ?? 0) < SHOOT_MIN_TO_FIRE) return null;
 
@@ -228,11 +237,13 @@ function applyKick(q, ball, charge, now) {
   const chargeFloor = charge * charge * CHARGE_BASE_POWER;
   const aimPower = offPitch ? KICK_MAX : Math.min(dist * KICK_POWER_SCALE, KICK_MAX);
   const chargeMul = 1 + charge * CHARGE_POWER_BONUS;
-  const powerCap = KICK_MAX * (1 + CHARGE_POWER_BONUS) + CHARGE_BASE_POWER * 0.15;
-  const power = clamp((aimPower + chargeFloor) * chargeMul, KICK_MIN, powerCap);
-  const powerT = clamp((power - KICK_MIN) / (powerCap - KICK_MIN || 1), 0, 1);
+  const power = tap
+    ? TAP_SHOT_SPEED
+    : clamp((aimPower + chargeFloor) * chargeMul, KICK_MIN, BALL_MAX_SPEED);
+  const powerT = clamp((power - KICK_MIN) / (BALL_MAX_SPEED - KICK_MIN || 1), 0, 1);
   // Steep cost curve: hard/charged shots burn much more shoot stamina.
-  const costT = powerT * powerT;
+  // Taps always cost the cheap-flick minimum despite their fixed speed.
+  const costT = tap ? 0 : powerT * powerT;
   const cost = SHOOT_COST_MIN + (SHOOT_COST_MAX - SHOOT_COST_MIN) * costT;
   if (q.shootStamina < cost * 0.55) return null;
   q.shootStamina = Math.max(0, q.shootStamina - cost);
@@ -775,7 +786,10 @@ export class FootballServer {
         q.stamina = Math.max(0, q.stamina - dt);
         if (q.stamina <= 0) q.winded = true;
       } else {
-        q.stamina = Math.min(STAMINA_MAX, q.stamina + STAMINA_REGEN * dt);
+        // Standing perfectly still (no input, not sliding) recharges faster.
+        const still = len === 0 && Math.hypot(q.vx, q.vy) < 0.5;
+        const regen = STAMINA_REGEN * (still ? STAMINA_STILL_MULT : 1);
+        q.stamina = Math.min(STAMINA_MAX, q.stamina + regen * dt);
         if (q.winded && q.stamina >= WINDED_RECOVER) q.winded = false;
       }
       q.shootStamina = Math.min(
@@ -813,6 +827,18 @@ export class FootballServer {
       const powerT = applyKick(q, ball, charge, now);
       if (powerT == null) return false;
       kickedThisTick.add(q.id);
+      // The kick also shoves other players in range — very slightly, scaled
+      // by proximity and shot power (input easing bleeds it off quickly).
+      for (const w of fielded) {
+        if (w === q) continue;
+        const wdx = w.x - q.x;
+        const wdy = w.y - q.y;
+        const wd = Math.hypot(wdx, wdy);
+        if (wd > KICK_RANGE || wd < 1e-4) continue;
+        const f = KICK_PUSH_SPEED * (1 - wd / KICK_RANGE) * (0.6 + 0.4 * powerT);
+        w.vx += (wdx / wd) * f;
+        w.vy += (wdy / wd) * f;
+      }
       // A shot taken from someone's feet overrides their held trap — the ball
       // flies, and they must release and re-press to trap again.
       for (const w of fielded) {
@@ -836,10 +862,9 @@ export class FootballServer {
       const autoVolley = holding && isIncomingShot(q, ball, now);
       if (!q._kReleased && !autoVolley) continue;
 
-      let charge = q.charge || 0;
+      const charge = q.charge || 0;
       q.charge = 0;
-      // Holding into an incoming shot always fires at least a light return.
-      if (autoVolley && charge < CHARGE_MIN_FIRE) charge = CHARGE_MIN_FIRE;
+      // An uncharged release (or auto-volley) fires as a tap-speed return.
       tryPlayerKick(q, charge);
     }
 
@@ -871,6 +896,14 @@ export class FootballServer {
       }
     };
     applyTraps();
+
+    // Hard ceiling on ball speed no matter how kicks and impulses stack up.
+    const ballSpd = Math.hypot(ball.vx, ball.vy);
+    if (ballSpd > BALL_MAX_SPEED) {
+      const f = BALL_MAX_SPEED / ballSpd;
+      ball.vx *= f;
+      ball.vy *= f;
+    }
 
     // Integrate + collide in slices small enough that a full-power shot can't
     // pass through (or end a frame inside) a body between collision checks.
@@ -975,9 +1008,8 @@ export class FootballServer {
       if (kickedThisTick.has(q.id)) continue;
       if (!q.input.k) continue;
       if (!isIncomingShot(q, ball, now)) continue;
-      let charge = q.charge || 0;
+      const charge = q.charge || 0;
       q.charge = 0;
-      if (charge < CHARGE_MIN_FIRE) charge = CHARGE_MIN_FIRE;
       tryPlayerKick(q, charge);
     }
 
