@@ -157,8 +157,15 @@
     padding: 8px 14px; cursor: pointer;
   }
   .invite:hover { background: var(--surface-hover); color: var(--text); }
-  .hostCfg { display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
+  .hostCfg { display: flex; align-items: center; gap: 12px; padding: 12px 16px; flex-wrap: wrap; }
   .hostCfg input { width: 260px; }
+  .hostCfg input[type="number"] { width: 58px; padding: 8px 6px 8px 10px; }
+  .hostCfg select {
+    font: inherit; font-size: 13px; color: var(--text);
+    background: #17171a; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 9px 10px; outline: none;
+  }
+  .rules { font-size: 12px; color: var(--muted); }
   .teams { display: flex; gap: 14px; width: min(900px, 94vw); margin-top: 6px; }
   .col {
     flex: 1; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
@@ -273,9 +280,21 @@
   <div class="lobbyHead">
     <div><span class="lobbyLabel">LOBBY</span><span class="code" id="codeLabel">----</span></div>
     <div class="invite" id="inviteLine" title="Click to copy the invite link">&hellip;</div>
+    <div class="rules" id="rulesLine"></div>
   </div>
   <div class="panel hostCfg hidden" id="hostCfg">
     <label class="check"><input type="checkbox" id="cfgPublic"> Public</label>
+    <label class="check">First to
+      <input id="cfgGoals" type="number" min="1" max="99" value="5"> goals</label>
+    <select id="cfgTime">
+      <option value="0">No time limit</option>
+      <option value="2">2 min</option>
+      <option value="5">5 min</option>
+      <option value="10">10 min</option>
+      <option value="15">15 min</option>
+      <option value="20">20 min</option>
+      <option value="30">30 min</option>
+    </select>
     <input id="cfgPass" maxlength="24" placeholder="Set password (blank = none)" autocomplete="off">
     <button id="cfgApply" class="btn">Apply password</button>
   </div>
@@ -380,6 +399,9 @@
   const hostCfg = $('hostCfg');
   const cfgPublic = $('cfgPublic');
   const cfgPass = $('cfgPass');
+  const cfgGoals = $('cfgGoals');
+  const cfgTime = $('cfgTime');
+  const rulesLine = $('rulesLine');
   const lobbyListEl = $('lobbyList');
   const passModal = $('passModal');
   const passMsg = $('passMsg');
@@ -593,7 +615,8 @@
           `<span style="color:${TEAM_COLOR.blue}">${msg.score.blue}</span>`;
         $('endSub').textContent = msg.aborted
           ? 'Match stopped by host — returning to lobby…'
-          : w ? `${w.toUpperCase()} wins! Returning to lobby…` : 'Returning to lobby…';
+          : w ? `${w.toUpperCase()} wins! Returning to lobby…`
+          : 'Full time — draw! Returning to lobby…';
         endOverlay.classList.remove('hidden');
         updateSpecJoin();
         clearTimeout(endTimer);
@@ -719,8 +742,10 @@
     b.onclick = () => send({ t: 'team', team: b.dataset.selfjoin });
   });
 
-  // Host lobby settings: checkbox applies instantly; password via Apply.
+  // Host lobby settings: checkbox/selects apply instantly; password via Apply.
   cfgPublic.onchange = () => { if (isHost()) send({ t: 'config', isPublic: cfgPublic.checked }); };
+  cfgGoals.onchange = () => { if (isHost()) send({ t: 'config', goals: Number(cfgGoals.value) || 5 }); };
+  cfgTime.onchange = () => { if (isHost()) send({ t: 'config', timeMin: Number(cfgTime.value) || 0 }); };
   $('cfgApply').onclick = () => {
     if (!isHost()) return;
     send({ t: 'config', pass: cfgPass.value });
@@ -739,11 +764,15 @@
     if (!lobby) return;
     codeLabel.textContent = lobby.code;
     inviteLine.textContent = inviteUrl(lobby.code);
+    rulesLine.textContent =
+      `First to ${lobby.goals ?? 5} · ${lobby.timeMin ? `${lobby.timeMin} min` : 'no time limit'}`;
     lobbyMsg.textContent = '';
     startBtn.classList.toggle('hidden', !isHost());
     hostCfg.classList.toggle('hidden', !isHost());
     if (isHost()) {
       cfgPublic.checked = lobby.isPublic !== false;
+      if (document.activeElement !== cfgGoals) cfgGoals.value = lobby.goals ?? 5;
+      cfgTime.value = String(lobby.timeMin ?? 0);
       syncCfgPlaceholder();
     }
     document.querySelectorAll('.col').forEach((col) => {
@@ -1205,6 +1234,7 @@
       ph: b.s.ph,
       kt: b.s.kt,
       sc: b.s.sc,
+      tl: b.s.tl,
       ball: { x: bx + bvx * ahead, y: by + bvy * ahead },
       players
     };
@@ -1504,6 +1534,17 @@
     ctx.fillText('–', innerWidth / 2, 34);
     ctx.fillStyle = TEAM_COLOR.blue;
     ctx.fillText(String(st.sc.blue), innerWidth / 2 + 44, 34);
+
+    // Match clock (timed games only).
+    if (typeof st.tl === 'number' && st.tl >= 0) {
+      const secs = Math.ceil(st.tl / 1000);
+      ctx.font = '600 15px Host Grotesk, Segoe UI, sans-serif';
+      ctx.fillStyle = st.tl < 30000 ? '#ff5544' : 'rgba(255,255,255,0.75)';
+      ctx.fillText(
+        `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`,
+        innerWidth / 2, 56
+      );
+    }
 
     if (st.ph === 'kickoff') {
       ctx.font = '600 40px Host Grotesk, Segoe UI, sans-serif';

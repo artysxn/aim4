@@ -61,7 +61,8 @@ const KICK_MIN = SHOT_MIN_DIST * BALL_FRICTION; // ≈ 10.1
 const KICK_MAX = 53.5; // aim-power cap (~74 units of roll); off-pitch aim = this
 const BALL_MAX_SPEED = 72; // hard ceiling on ball speed, charged shots included
 const KICK_PUSH_SPEED = 5; // very light shove on other players in kick range
-const BODY_KICK_PUSH = 8; // charged kick released into an enemy (no ball) boots them back
+const BODY_KICK_PUSH = 8; // kick released into an enemy (no ball) boots them along the aim
+const BODY_KICK_TRAP_LOCK_MS = 800; // body-kicked players can't trap for this long
 const BOUNCE = 0.88; // pillar-like restitution on posts / field edges
 const POST_R = 0.7; // goal-post pillars
 const CORNER_R = 0.55; // field-corner pillars
@@ -543,6 +544,7 @@ export class FootballServer {
       prevK: false,
       trapBroken: false,
       trapHeld: false,
+      trapLockUntil: 0,
       input: { u: false, d: false, l: false, r: false, sp: false, k: false, st: false, ax: 0, ay: 0 }
     };
     this.players.set(id, player);
@@ -584,6 +586,9 @@ export class FootballServer {
           inMatch: false,
           pass: cleanPass(msg.pass), // '' = open lobby
           isPublic: msg.isPublic !== false,
+          goalsToWin: GOALS_TO_WIN,
+          timeLimitMs: 0, // 0 = no time limit
+          playedMs: 0,
           score: { red: 0, blue: 0 },
           ball: { x: FIELD_W / 2, y: FIELD_H / 2, vx: 0, vy: 0, lastKickId: 0, shotBy: 0, shotAt: 0 },
           phase: 'play',
@@ -642,6 +647,13 @@ export class FootballServer {
         if (!room || room.inMatch || room.hostId !== p.id) return;
         if ('pass' in msg) room.pass = cleanPass(msg.pass);
         if ('isPublic' in msg) room.isPublic = msg.isPublic !== false;
+        if ('goals' in msg) {
+          room.goalsToWin = clamp(Math.round(num(msg.goals, GOALS_TO_WIN)), 1, 99);
+        }
+        if ('timeMin' in msg) {
+          // 0 = no time limit.
+          room.timeLimitMs = clamp(Math.round(num(msg.timeMin)), 0, 120) * 60000;
+        }
         this._broadcastLobby(room);
         this._broadcastLobbyList();
         break;
@@ -675,6 +687,7 @@ export class FootballServer {
           p.prevK = false;
           p.trapBroken = false;
           p.trapHeld = false;
+          p.trapLockUntil = 0;
           p.kickAt = 0;
           this._broadcastLobby(room);
           return;
@@ -754,6 +767,7 @@ export class FootballServer {
   _startMatch(room) {
     room.inMatch = true;
     room.score = { red: 0, blue: 0 };
+    room.playedMs = 0;
     this._resetPositions(room);
     room.phase = 'kickoff';
     room.phaseUntil = this._simNow + KICKOFF_MS;
@@ -766,7 +780,7 @@ export class FootballServer {
       t: 'start',
       field: { w: FIELD_W, h: FIELD_H, gt: GOAL_TOP, gb: GOAL_BOT, gd: GOAL_DEPTH },
       score: room.score,
-      goalsToWin: GOALS_TO_WIN,
+      goalsToWin: room.goalsToWin,
       players: room.players.map((q) => ({ id: q.id, name: q.name, team: q.team }))
     };
   }
@@ -794,6 +808,7 @@ export class FootballServer {
         q.prevK = false;
         q.trapBroken = false;
         q.trapHeld = false;
+        q.trapLockUntil = 0;
         q.kickAt = 0;
       });
     };
@@ -854,8 +869,8 @@ export class FootballServer {
           // Match point: end here, on the sim clock — never reset into a
           // kickoff after the winning goal.
           const winner =
-            room.score.red >= GOALS_TO_WIN ? 'red'
-            : room.score.blue >= GOALS_TO_WIN ? 'blue' : null;
+            room.score.red >= room.goalsToWin ? 'red'
+            : room.score.blue >= room.goalsToWin ? 'blue' : null;
           if (winner) {
             this._endMatch(room, winner);
             return;
@@ -874,6 +889,20 @@ export class FootballServer {
         room.ball.vy *= 0.86;
       }
       return;
+    }
+
+    // Timed match: the clock only runs during live play (kickoff freezes and
+    // goal pauses don't consume match time). Leader at full time wins; a tie
+    // ends as a draw.
+    if (room.timeLimitMs) {
+      room.playedMs += dt * 1000;
+      if (room.playedMs >= room.timeLimitMs) {
+        const winner =
+          room.score.red > room.score.blue ? 'red'
+          : room.score.blue > room.score.red ? 'blue' : null;
+        this._endMatch(room, winner);
+        return;
+      }
     }
 
     const fielded = room.players.filter((q) => q.team !== 'spec');
@@ -977,8 +1006,14 @@ export class FootballServer {
       q.charge = 0;
       // An uncharged release (or auto-volley) fires as a tap-speed return.
       if (tryPlayerKick(q, charge)) continue;
-      // A charged swing that misses the ball still boots enemies in range back.
-      if (q._kReleased && charge >= TAP_CHARGE) {
+      // A swing that misses the ball still boots enemies in kick range along
+      // the shot direction and locks their trap briefly — a tackle that can
+      // knock a dribbler off the ball.
+      if (q._kReleased && now >= q.kickAt) {
+        // Push along the aim direction; fall back to away-from-kicker.
+        const ax = q.input.ax - q.x;
+        const ay = q.input.ay - q.y;
+        const aLen = Math.hypot(ax, ay);
         let hit = false;
         for (const w of fielded) {
           if (w.team === q.team) continue;
@@ -987,8 +1022,11 @@ export class FootballServer {
           const wd = Math.hypot(wdx, wdy);
           if (wd > KICK_RANGE || wd < 1e-4) continue;
           const f = BODY_KICK_PUSH * (0.5 + 0.5 * charge);
-          w.vx += (wdx / wd) * f;
-          w.vy += (wdy / wd) * f;
+          const nx = aLen > 0.5 ? ax / aLen : wdx / wd;
+          const ny = aLen > 0.5 ? ay / aLen : wdy / wd;
+          w.vx += nx * f;
+          w.vy += ny * f;
+          w.trapLockUntil = now + BODY_KICK_TRAP_LOCK_MS;
           hit = true;
         }
         if (hit) q.kickAt = now + KICK_COOLDOWN_MS;
@@ -1013,7 +1051,7 @@ export class FootballServer {
         q.trapHeld = false;
         continue;
       }
-      if (q.trapBroken || kickedThisTick.has(q.id)) {
+      if (q.trapBroken || now < (q.trapLockUntil || 0) || kickedThisTick.has(q.id)) {
         q.trapHeld = false;
         continue;
       }
@@ -1203,6 +1241,7 @@ export class FootballServer {
       ph: room.phase,
       kt: room.phase === 'play' ? 0 : Math.max(0, room.phaseUntil - now),
       sc: room.score,
+      tl: room.timeLimitMs ? Math.max(0, Math.round(room.timeLimitMs - room.playedMs)) : -1,
       ball: {
         x: Math.round(room.ball.x * 100) / 100,
         y: Math.round(room.ball.y * 100) / 100,
@@ -1221,6 +1260,8 @@ export class FootballServer {
       inMatch: room.inMatch,
       isPublic: room.isPublic,
       hasPass: !!room.pass,
+      goals: room.goalsToWin,
+      timeMin: room.timeLimitMs / 60000,
       players: room.players.map((q) => ({ id: q.id, name: q.name, team: q.team }))
     });
   }
