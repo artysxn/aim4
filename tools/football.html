@@ -202,7 +202,6 @@
 <!-- ===================== MENU ===================== -->
 <div id="menu" class="view">
   <div class="title">AIM4<span class="io">.io</span> <span class="sub">FOOTBALL</span></div>
-  <div class="tagline">easter egg &mdash; 2D multiplayer football</div>
   <div class="conn" id="connStatus">connecting&hellip;</div>
   <div class="menuPanels">
     <section class="panel createPanel">
@@ -266,12 +265,6 @@
       <button class="btn" data-selfjoin="blue">Join blue</button>
     </div>
   </div>
-  <div class="controlsHint">
-    <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp;·&nbsp; mouse aims &nbsp;·&nbsp;
-    hold <kbd>SPACE</kbd> to shoot — the ball rolls to your cursor, so mouse distance = shot power &nbsp;·&nbsp;
-    hold <kbd>SHIFT</kbd> to sprint (10&nbsp;s stamina) &nbsp;·&nbsp; first to 5 goals
-    <br><span id="hostHint"></span>
-  </div>
   <div class="lobbyFoot">
     <button id="startBtn" class="btn primary">Start match</button>
     <button id="leaveBtn" class="btn danger">Leave</button>
@@ -295,9 +288,9 @@
   const BALL_R = 1.0;
   const BALL_FRICTION = 0.9;
   const KICK_MIN = 8, KICK_MAX = 55;
-  const KICK_RANGE = PLAYER_R + BALL_R + 1.2;
+  const KICK_RANGE = PLAYER_R + BALL_R + 2.0;
   const STAMINA_MAX = 10;
-  const INTERP_MS = 120;
+  const INTERP_MS = 45;
 
   const TEAM_COLOR = { red: '#ff5544', blue: '#4da3ff' };
 
@@ -314,7 +307,6 @@
   const codeLabel = $('codeLabel');
   const inviteLine = $('inviteLine');
   const startBtn = $('startBtn');
-  const hostHint = $('hostHint');
   const hostCfg = $('hostCfg');
   const cfgPublic = $('cfgPublic');
   const cfgPass = $('cfgPass');
@@ -629,10 +621,6 @@
       cfgPublic.checked = lobby.isPublic !== false;
       syncCfgPlaceholder();
     }
-    hostHint.textContent = isHost()
-      ? 'You are the host — drag players between columns to set teams.'
-      : 'Pick a team below. The host can also drag you to a team.';
-
     document.querySelectorAll('.col').forEach((col) => {
       const list = col.querySelector('.list');
       list.innerHTML = '';
@@ -687,25 +675,33 @@
     Space: 'k',
     ShiftLeft: 'sp', ShiftRight: 'sp'
   };
+  function sendInput() {
+    if (!inGame || !ws || ws.readyState !== 1) return;
+    const aim = screenToField(mouse.x, mouse.y);
+    send({ t: 'input', u: keys.u, d: keys.d, l: keys.l, r: keys.r, sp: keys.sp, k: keys.k, ax: aim.x, ay: aim.y });
+  }
+
   window.addEventListener('keydown', (e) => {
     const k = KEYMAP[e.code];
     if (!k || !inGame) return;
-    keys[k] = true;
+    if (!keys[k]) {
+      keys[k] = true;
+      sendInput();
+    }
     e.preventDefault();
   });
   window.addEventListener('keyup', (e) => {
     const k = KEYMAP[e.code];
     if (!k) return;
-    keys[k] = false;
+    if (keys[k]) {
+      keys[k] = false;
+      sendInput();
+    }
   });
-  window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+  window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; sendInput(); });
   window.addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
 
-  setInterval(() => {
-    if (!inGame || !ws || ws.readyState !== 1) return;
-    const aim = screenToField(mouse.x, mouse.y);
-    send({ t: 'input', u: keys.u, d: keys.d, l: keys.l, r: keys.r, sp: keys.sp, k: keys.k, ax: aim.x, ay: aim.y });
-  }, 33);
+  setInterval(sendInput, 16);
 
   // ---- View transform ----------------------------------------------------------
   let sc = 1, ox = 0, oy = 0;
@@ -904,9 +900,6 @@
     ctx.fillText('–', innerWidth / 2, 34);
     ctx.fillStyle = TEAM_COLOR.blue;
     ctx.fillText(String(st.sc.blue), innerWidth / 2 + 44, 34);
-    ctx.font = '500 11px Host Grotesk, Segoe UI, sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.fillText(`first to ${goalsToWin}`, innerWidth / 2, 50);
 
     if (st.ph === 'kickoff') {
       ctx.font = '600 40px Host Grotesk, Segoe UI, sans-serif';
@@ -917,19 +910,12 @@
     if (me) {
       const bw = 220, bh = 10;
       const bx = (innerWidth - bw) / 2;
-      const by = innerHeight - 34;
+      const by = innerHeight - 28;
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
       ctx.fillRect(bx - 2, by - 2, bw + 4, bh + 4);
       const f = Math.max(0, Math.min(1, me.s / STAMINA_MAX));
       ctx.fillStyle = me.w ? '#e6a23c' : (keys.sp ? '#6fe3a1' : '#37b26c');
       ctx.fillRect(bx, by, bw * f, bh);
-      ctx.font = '500 10px Host Grotesk, Segoe UI, sans-serif';
-      ctx.fillStyle = 'rgba(255,255,255,0.6)';
-      ctx.fillText(me.w ? 'WINDED — recover to sprint' : 'SPRINT STAMINA (hold SHIFT)', innerWidth / 2, by - 6);
-    } else if (roster.get(myId)?.team === 'spec' || !roster.get(myId)) {
-      ctx.font = '500 12px Host Grotesk, Segoe UI, sans-serif';
-      ctx.fillStyle = 'rgba(255,255,255,0.5)';
-      ctx.fillText('spectating', innerWidth / 2, innerHeight - 24);
     }
   }
 

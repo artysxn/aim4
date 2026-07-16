@@ -31,9 +31,9 @@ const BALL_R = 1.0;
 
 // Movement. Hold shift to sprint — a 10 s stamina pool drains while sprinting
 // and regenerates while not; running dry "winds" you until partially recovered.
-const BASE_SPEED = 13;
-const SPRINT_SPEED = 19;
-const MOVE_ACCEL = 10; // 1/s exponential velocity chase
+const BASE_SPEED = 17;
+const SPRINT_SPEED = 24;
+const MOVE_ACCEL = 36; // 1/s exponential velocity chase (snappy WASD)
 const STAMINA_MAX = 10; // seconds of continuous sprint
 const STAMINA_REGEN = 0.8; // per second while not sprinting
 const WINDED_RECOVER = 2; // stamina needed to un-wind after running dry
@@ -42,12 +42,12 @@ const WINDED_RECOVER = 2; // stamina needed to un-wind after running dry
 // units before stopping — so kick speed = dist(ball→aim) * BALL_FRICTION makes
 // the ball come to rest at the shooter's cursor ("mouse distance = shot").
 const BALL_FRICTION = 0.9; // 1/s exp decay
-const KICK_RANGE = PLAYER_R + BALL_R + 1.2;
+const KICK_RANGE = PLAYER_R + BALL_R + 2.0;
 const KICK_COOLDOWN_MS = 350;
 const KICK_MIN = 8;
 const KICK_MAX = 55;
 const BOUNCE = 0.7; // wall/post restitution
-const DRIBBLE_PUSH = 1.15; // ball inherits this × player velocity on touch
+const DRIBBLE_PUSH = 1.15; // ball inherits this × outward speed on touch
 
 const GOALS_TO_WIN = 5;
 const ROOM_CAP = 12;
@@ -464,7 +464,8 @@ export class FootballServer {
       });
     }
 
-    // Dribble: overlapping the ball pushes it out and rolls it ahead of you.
+    // Dribble: overlapping the ball pushes it out. Only the outward component
+    // of player velocity is applied — never rolls the ball backwards behind you.
     for (const q of fielded) {
       const dx = ball.x - q.x;
       const dy = ball.y - q.y;
@@ -475,10 +476,10 @@ export class FootballServer {
         const ny = dy / d;
         ball.x = q.x + nx * min;
         ball.y = q.y + ny * min;
-        const carry = Math.hypot(q.vx, q.vy);
-        if (carry > Math.hypot(ball.vx, ball.vy) * 0.8) {
-          ball.vx = q.vx * DRIBBLE_PUSH + nx * 2;
-          ball.vy = q.vy * DRIBBLE_PUSH + ny * 2;
+        const toward = q.vx * nx + q.vy * ny; // speed into the ball (player → ball)
+        if (toward > 0.4 && toward > Math.hypot(ball.vx, ball.vy) * 0.55) {
+          ball.vx = nx * (toward * DRIBBLE_PUSH + 2);
+          ball.vy = ny * (toward * DRIBBLE_PUSH + 2);
         }
       }
     }
