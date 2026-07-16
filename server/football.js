@@ -61,6 +61,7 @@ const KICK_MIN = SHOT_MIN_DIST * BALL_FRICTION; // ≈ 10.1
 const KICK_MAX = 53.5; // aim-power cap (~74 units of roll); off-pitch aim = this
 const BALL_MAX_SPEED = 72; // hard ceiling on ball speed, charged shots included
 const KICK_PUSH_SPEED = 5; // very light shove on other players in kick range
+const BODY_KICK_PUSH = 8; // charged kick released into an enemy (no ball) boots them back
 const BOUNCE = 0.88; // pillar-like restitution on posts / field edges
 const POST_R = 0.7; // goal-post pillars
 const CORNER_R = 0.55; // field-corner pillars
@@ -114,6 +115,8 @@ const MAX_SUBSTEPS = 6;
 const TRAP_BREAK_SLACK = 0.5;
 // While trapping and moving, the ball eases toward a follow point at the feet.
 const TRAP_FOLLOW_GAP = 0.15; // clearance beyond player+ball radii
+const TRAP_KEEP_RANGE = KICK_RANGE + 2.5; // once trapped, longer leash so the ball chases you
+const TRAP_MOVE_MULT = 0.95; // −5% move speed (walk and sprint) while holding trap
 const TRAP_POS_EASE = 14; // 1/s — smooth radius / stick-to-player
 const TRAP_ANG_EASE = 10; // 1/s — orbit toward crosshair direction
 const TRAP_VEL_EASE = 16; // 1/s — match player velocity
@@ -270,8 +273,8 @@ function applyKick(q, ball, charge, now) {
  * Hold-to-trap follow: keep the ball on a ring around the player and ease
  * its angle toward the crosshair so it orbits smoothly as you aim.
  */
-function applyTrapFollow(q, ball, dt) {
-  if (Math.hypot(ball.x - q.x, ball.y - q.y) > KICK_RANGE) return false;
+function applyTrapFollow(q, ball, dt, range = KICK_RANGE) {
+  if (Math.hypot(ball.x - q.x, ball.y - q.y) > range) return false;
 
   const hold = PLAYER_R + BALL_R + TRAP_FOLLOW_GAP;
 
@@ -539,6 +542,7 @@ export class FootballServer {
       charge: 0,
       prevK: false,
       trapBroken: false,
+      trapHeld: false,
       input: { u: false, d: false, l: false, r: false, sp: false, k: false, st: false, ax: 0, ay: 0 }
     };
     this.players.set(id, player);
@@ -652,10 +656,29 @@ export class FootballServer {
         break;
       }
       case 'team': {
-        // Self-selection, lobby only.
+        // Self-selection. Mid-match, only spectators may hop onto a team
+        // (no red↔blue swaps while a game is live).
         const room = p.room;
-        if (!room || room.inMatch) return;
-        if (!TEAMS.has(msg.team)) return;
+        if (!room || !TEAMS.has(msg.team)) return;
+        if (room.inMatch) {
+          if (p.team !== 'spec' || msg.team === 'spec') return;
+          p.team = msg.team;
+          // Spawn in front of your own goal, at rest and fully recovered.
+          p.x = msg.team === 'red' ? 15 : FIELD_W - 15;
+          p.y = FIELD_H / 2;
+          p.vx = 0;
+          p.vy = 0;
+          p.stamina = STAMINA_MAX;
+          p.shootStamina = SHOOT_STAMINA_MAX;
+          p.winded = false;
+          p.charge = 0;
+          p.prevK = false;
+          p.trapBroken = false;
+          p.trapHeld = false;
+          p.kickAt = 0;
+          this._broadcastLobby(room);
+          return;
+        }
         p.team = msg.team;
         this._broadcastLobby(room);
         break;
@@ -770,6 +793,7 @@ export class FootballServer {
         q.charge = 0;
         q.prevK = false;
         q.trapBroken = false;
+        q.trapHeld = false;
         q.kickAt = 0;
       });
     };
@@ -806,7 +830,15 @@ export class FootballServer {
       this._simNow += TICK_MS;
       this._tickNo++;
       for (const room of this.rooms.values()) {
-        if (room.inMatch) this._sim(room, dt, this._simNow);
+        if (!room.inMatch) continue;
+        // A physics exception in one room must never kill the process (and
+        // every other lobby with it) — abort just that match.
+        try {
+          this._sim(room, dt, this._simNow);
+        } catch (err) {
+          console.error('[football] sim error', err);
+          this._endMatch(room, null, true);
+        }
       }
     }
     for (const room of this.rooms.values()) {
@@ -819,6 +851,15 @@ export class FootballServer {
     if (room.phase !== 'play') {
       if (now >= room.phaseUntil) {
         if (room.phase === 'goal') {
+          // Match point: end here, on the sim clock — never reset into a
+          // kickoff after the winning goal.
+          const winner =
+            room.score.red >= GOALS_TO_WIN ? 'red'
+            : room.score.blue >= GOALS_TO_WIN ? 'blue' : null;
+          if (winner) {
+            this._endMatch(room, winner);
+            return;
+          }
           this._resetPositions(room);
           room.phase = 'kickoff';
           room.phaseUntil = now + KICKOFF_MS;
@@ -883,6 +924,7 @@ export class FootballServer {
       if (kDown && (q.charge || 0) > 0) {
         speed *= 1 - q.charge * CHARGE_SLOW_MAX;
       }
+      if (i.st) speed *= TRAP_MOVE_MULT;
       const k = Math.min(1, MOVE_ACCEL * dt);
       q.vx += (wx * speed - q.vx) * k;
       q.vy += (wy * speed - q.vy) * k;
@@ -934,7 +976,23 @@ export class FootballServer {
       const charge = q.charge || 0;
       q.charge = 0;
       // An uncharged release (or auto-volley) fires as a tap-speed return.
-      tryPlayerKick(q, charge);
+      if (tryPlayerKick(q, charge)) continue;
+      // A charged swing that misses the ball still boots enemies in range back.
+      if (q._kReleased && charge >= TAP_CHARGE) {
+        let hit = false;
+        for (const w of fielded) {
+          if (w.team === q.team) continue;
+          const wdx = w.x - q.x;
+          const wdy = w.y - q.y;
+          const wd = Math.hypot(wdx, wdy);
+          if (wd > KICK_RANGE || wd < 1e-4) continue;
+          const f = BODY_KICK_PUSH * (0.5 + 0.5 * charge);
+          w.vx += (wdx / wd) * f;
+          w.vy += (wdy / wd) * f;
+          hit = true;
+        }
+        if (hit) q.kickAt = now + KICK_COOLDOWN_MS;
+      }
     }
 
     // Soft dribble nudge (movement-biased toward cursor) when touching without a shot.
@@ -952,23 +1010,30 @@ export class FootballServer {
     for (const q of fielded) {
       if (!q.input.st) {
         q.trapBroken = false;
+        q.trapHeld = false;
         continue;
       }
-      if (q.trapBroken || kickedThisTick.has(q.id)) continue;
+      if (q.trapBroken || kickedThisTick.has(q.id)) {
+        q.trapHeld = false;
+        continue;
+      }
       trappers.push(q);
     }
     const applyTraps = (stepDt) => {
-      // Closest trapper wins if several overlap the ball.
+      // Closest trapper wins if several overlap the ball. Engaging needs the
+      // ball in kick range; once held, a longer leash keeps it following you.
       let best = null;
       let bestD = Infinity;
       for (const q of trappers) {
         const d = Math.hypot(ball.x - q.x, ball.y - q.y);
-        if (d <= KICK_RANGE && d < bestD) {
+        const reach = q.trapHeld ? TRAP_KEEP_RANGE : KICK_RANGE;
+        if (d <= reach && d < bestD) {
           best = q;
           bestD = d;
         }
       }
-      if (best) applyTrapFollow(best, ball, stepDt);
+      for (const q of trappers) q.trapHeld = q === best;
+      if (best) applyTrapFollow(best, ball, stepDt, TRAP_KEEP_RANGE);
     };
     applyTraps(dt);
 
@@ -1107,12 +1172,7 @@ export class FootballServer {
       og,
       score: room.score
     });
-    if (room.score[team] >= GOALS_TO_WIN) {
-      // Let the celebration pause play out client-side, then end.
-      setTimeout(() => {
-        if (room.inMatch && this.rooms.get(room.code) === room) this._endMatch(room, team);
-      }, GOAL_PAUSE_MS);
-    }
+    // On match point, _sim ends the match when the goal pause elapses.
   }
 
   // ---- Messaging ------------------------------------------------------------

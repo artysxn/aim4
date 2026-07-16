@@ -204,6 +204,11 @@
   }
   #endOverlay .big { font-size: 52px; font-weight: 600; }
   #endOverlay .sub { color: var(--muted); }
+  #gameBar { position: absolute; top: 12px; left: 12px; display: flex; gap: 8px; z-index: 5; }
+  #specJoin { display: flex; gap: 8px; }
+  #specJoin.hidden { display: none; }
+  #joinRedBtn { color: #ff5544; }
+  #joinBlueBtn { color: #4da3ff; }
 </style>
 </head>
 <body>
@@ -302,6 +307,13 @@
 <!-- ===================== GAME ===================== -->
 <div id="game" class="view hidden">
   <canvas id="cv"></canvas>
+  <div id="gameBar">
+    <button id="gameLeaveBtn" class="btn">Leave</button>
+    <span id="specJoin" class="hidden">
+      <button id="joinRedBtn" class="btn">Join Red</button>
+      <button id="joinBlueBtn" class="btn">Join Blue</button>
+    </span>
+  </div>
   <div id="banner" class="hidden"></div>
   <div id="endOverlay" class="hidden">
     <div class="big" id="endScore"></div>
@@ -338,6 +350,7 @@
   const CHARGE_BASE_POWER = 44;
   const TAP_CHARGE = 0.2 / CHARGE_TIME; // barely shot → min-threshold pass
   const TAP_SHOT_SPEED = KICK_MIN;
+  const TRAP_MOVE_MULT = 0.95;
   const POST_R = 0.7;
   const CORNER_R = 0.55;
   // Remote players / ball: render slightly behind the latest snap and
@@ -445,6 +458,7 @@
   let pred = null; // local client prediction { x, y, vx, vy, stamina, shoot, winded, sprinting }
   let lastFrameT = 0;
   let pendingJoin = null; // { code } while the password modal is open
+  let endTimer = 0; // end-overlay timeout; nonzero while the end screen shows
 
   function connect() {
     connStatus.textContent = 'connecting…';
@@ -510,7 +524,10 @@
         lobby = msg;
         roster = new Map(msg.players.map((p) => [p.id, p]));
         setLobbyParam(msg.code);
-        if (!inGame) { show('lobby'); renderLobby(); }
+        // The 'lobby' broadcast right after 'end' must not yank the view
+        // while the end screen is still playing out.
+        if (!inGame && !endTimer) { show('lobby'); renderLobby(); }
+        updateSpecJoin();
         break;
       case 'start':
         field = msg.field;
@@ -523,12 +540,15 @@
         lastFrameT = 0;
         lastSnapRt = 0;
         inGame = true;
+        clearTimeout(endTimer);
+        endTimer = 0;
         endOverlay.classList.add('hidden');
         banner.classList.add('hidden');
         bindsModal.classList.add('hidden');
         cancelCapture();
         show('game');
         resize();
+        updateSpecJoin();
         break;
       case 'state': {
         const rt = performance.now();
@@ -575,9 +595,14 @@
           ? 'Match stopped by host — returning to lobby…'
           : w ? `${w.toUpperCase()} wins! Returning to lobby…` : 'Returning to lobby…';
         endOverlay.classList.remove('hidden');
-        setTimeout(() => {
+        updateSpecJoin();
+        clearTimeout(endTimer);
+        endTimer = setTimeout(() => {
+          endTimer = 0;
           endOverlay.classList.add('hidden');
-          if (lobby) { show('lobby'); renderLobby(); }
+          // A rematch may already be live, or we may have left — only then
+          // is it safe to switch back to the lobby view.
+          if (lobby && !inGame) { show('lobby'); renderLobby(); }
         }, 3000);
         break;
       }
@@ -665,12 +690,30 @@
     );
   };
 
-  $('leaveBtn').onclick = () => {
+  function leaveGame() {
     send({ t: 'leave' });
     lobby = null;
+    inGame = false;
+    pred = null;
+    snaps = [];
+    clearTimeout(endTimer);
+    endTimer = 0;
+    endOverlay.classList.add('hidden');
+    releaseAll();
     setLobbyParam(null);
     show('menu');
-  };
+  }
+  $('leaveBtn').onclick = leaveGame;
+  $('gameLeaveBtn').onclick = leaveGame;
+
+  // Spectators can hop onto a team while a match is live.
+  const specJoin = $('specJoin');
+  $('joinRedBtn').onclick = () => send({ t: 'team', team: 'red' });
+  $('joinBlueBtn').onclick = () => send({ t: 'team', team: 'blue' });
+  function updateSpecJoin() {
+    const team = roster.get(myId)?.team || 'spec';
+    specJoin.classList.toggle('hidden', !inGame || team !== 'spec');
+  }
   startBtn.onclick = () => send({ t: 'start' });
   document.querySelectorAll('[data-selfjoin]').forEach((b) => {
     b.onclick = () => send({ t: 'team', team: b.dataset.selfjoin });
@@ -831,6 +874,8 @@
     mouse.x = e.clientX;
     mouse.y = e.clientY;
     if (!inGame || !codeBound(code)) return;
+    // Let clicks on the in-game bar (Leave / Join team) land as clicks.
+    if (e.target instanceof Element && e.target.closest('#gameBar')) return;
     pressCode(code);
     e.preventDefault();
   });
@@ -1083,6 +1128,7 @@
     if (kDown && (pred.charge || 0) > 0) {
       speed *= 1 - pred.charge * CHARGE_SLOW_MAX;
     }
+    if (act.st) speed *= TRAP_MOVE_MULT;
     const k = Math.min(1, MOVE_ACCEL * dt);
     pred.vx += (wx * speed - pred.vx) * k;
     pred.vy += (wy * speed - pred.vy) * k;
