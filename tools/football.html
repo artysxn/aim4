@@ -695,6 +695,7 @@
   // ---- Game input -----------------------------------------------------------------
   const keys = { u: false, d: false, l: false, r: false, sp: false, k: false };
   let mouse = { x: 0, y: 0 };
+  let mouseKick = false;
 
   const KEYMAP = {
     KeyW: 'u', ArrowUp: 'u',
@@ -704,10 +705,18 @@
     Space: 'k',
     ShiftLeft: 'sp', ShiftRight: 'sp'
   };
+  function kickHeld() {
+    return keys.k || mouseKick;
+  }
   function sendInput() {
     if (!inGame || !ws || ws.readyState !== 1) return;
     const aim = screenToField(mouse.x, mouse.y);
-    send({ t: 'input', u: keys.u, d: keys.d, l: keys.l, r: keys.r, sp: keys.sp, k: keys.k, ax: aim.x, ay: aim.y });
+    send({
+      t: 'input',
+      u: keys.u, d: keys.d, l: keys.l, r: keys.r,
+      sp: keys.sp, k: kickHeld(),
+      ax: aim.x, ay: aim.y
+    });
   }
 
   window.addEventListener('keydown', (e) => {
@@ -727,8 +736,35 @@
       sendInput();
     }
   });
-  window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; sendInput(); });
+  window.addEventListener('blur', () => {
+    for (const k in keys) keys[k] = false;
+    mouseKick = false;
+    sendInput();
+  });
   window.addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
+  window.addEventListener('mousedown', (e) => {
+    if (!inGame || e.button !== 0) return;
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+    if (!mouseKick) {
+      mouseKick = true;
+      sendInput();
+    }
+    e.preventDefault();
+  });
+  window.addEventListener('mouseup', (e) => {
+    if (e.button !== 0) return;
+    if (mouseKick) {
+      mouseKick = false;
+      sendInput();
+    }
+  });
+  // Release charge if the pointer leaves the window while held.
+  window.addEventListener('mouseleave', () => {
+    if (!mouseKick) return;
+    mouseKick = false;
+    sendInput();
+  });
 
   setInterval(sendInput, 16);
 
@@ -814,7 +850,7 @@
       }
     }
     // Prefer local charge while holding for snappy ring feedback.
-    if (!keys.k && typeof me.ch === 'number') pred.charge = me.ch;
+    if (!kickHeld() && typeof me.ch === 'number') pred.charge = me.ch;
   }
 
   function stepPred(dt) {
@@ -845,7 +881,7 @@
       pred.kickReadyAt = 0;
     }
 
-    const kDown = !!keys.k;
+    const kDown = kickHeld();
     const canCharge = kDown && (pred.cd ?? 1) >= 0.99 && pred.shoot >= SHOOT_MIN_TO_FIRE;
     if (canCharge) {
       pred.charge = Math.min(1, (pred.charge || 0) + dt / CHARGE_TIME);
@@ -944,7 +980,7 @@
       ctx.lineCap = 'butt';
     }
 
-    // Charge overlay: amber arc grows while holding Space
+    // Charge overlay: amber arc grows while holding Space / LMB
     if (charge > 0.02) {
       ctx.beginPath();
       ctx.arc(cx, cy, r, start, start + Math.PI * 2 * charge);
