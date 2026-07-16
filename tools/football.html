@@ -5,78 +5,165 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AIM4 Football</title>
 <style>
+  /* Design tokens mirrored from src/style.css so the page reads as AIM4.io. */
+  @font-face {
+    font-family: 'Host Grotesk';
+    src: url('/fonts/host_grotesk/HostGrotesk-Regular.ttf') format('truetype');
+    font-weight: 400; font-style: normal; font-display: swap;
+  }
+  @font-face {
+    font-family: 'Host Grotesk';
+    src: url('/fonts/host_grotesk/HostGrotesk-Medium.ttf') format('truetype');
+    font-weight: 500; font-style: normal; font-display: swap;
+  }
+  @font-face {
+    font-family: 'Host Grotesk';
+    src: url('/fonts/host_grotesk/HostGrotesk-SemiBold.ttf') format('truetype');
+    font-weight: 600; font-style: normal; font-display: swap;
+  }
   :root {
-    --bg: #0f0f10;
-    --panel: #1a1a1c;
-    --panel2: #232326;
+    --bg: #0a0a0a;
+    --panel: rgba(18, 18, 20, 0.94);
+    --surface: rgba(255, 255, 255, 0.04);
+    --surface-hover: rgba(255, 255, 255, 0.08);
+    --border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --accent: #f52525;
+    --accent-down: #d41f1f;
     --text: #f2f2f2;
-    --dim: #9a9aa0;
-    --accent: #e63946;
+    --muted: #9c9ca2;
+    --radius: 12px;
+    --radius-sm: 8px;
     --red: #ff5544;
     --blue: #4da3ff;
     --green: #37b26c;
+    --font-body: 'Host Grotesk', 'Segoe UI', system-ui, sans-serif;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
   body {
     background: var(--bg);
     color: var(--text);
-    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-family: var(--font-body);
     overflow: hidden;
     user-select: none;
   }
   .view { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; }
   .hidden { display: none !important; }
 
-  h1 { font-size: 44px; letter-spacing: 1px; }
-  h1 span { color: var(--accent); }
-  .tag { color: var(--dim); font-size: 13px; margin-top: -10px; }
+  .title { font-size: 52px; font-weight: 600; letter-spacing: 0.5px; }
+  .title .io { color: var(--accent); }
+  .title .sub { font-weight: 400; color: var(--muted); }
+  .tagline { color: var(--muted); font-size: 13px; margin-top: -12px; }
+  .conn { font-size: 12px; min-height: 16px; color: var(--muted); }
+  .conn.bad { color: var(--accent); }
+  .msg { color: var(--accent); font-size: 13px; min-height: 18px; }
 
-  input, button {
-    font: inherit;
+  input {
+    font: inherit; font-size: 14px;
     color: var(--text);
-    border-radius: 8px;
-    border: 1px solid #333;
-    background: var(--panel);
-    padding: 10px 16px;
+    background: #17171a;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
     outline: none;
+    width: 100%;
   }
-  input { width: 240px; text-align: center; }
-  input:focus { border-color: #555; }
-  button { cursor: pointer; background: var(--panel2); border: 1px solid #3a3a3e; }
-  button:hover { background: #2c2c30; }
-  button.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; }
-  button.primary:hover { filter: brightness(1.1); }
-  button:disabled { opacity: 0.4; cursor: default; }
-  .row { display: flex; gap: 8px; }
-  .row input { width: 120px; text-transform: uppercase; }
-  #menuMsg, #lobbyMsg { color: var(--accent); font-size: 13px; min-height: 18px; }
+  input:focus { border-color: var(--border-strong); }
+  input::placeholder { color: #5c5c62; }
+  label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
+  label.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; }
+  label.check input { width: auto; accent-color: var(--accent); }
+
+  .btn {
+    font-family: var(--font-body);
+    font-size: 14px; font-weight: 500;
+    color: var(--text);
+    background: #17171a;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 10px 20px;
+    cursor: pointer;
+    transition: background 0.15s ease, transform 0.06s ease;
+  }
+  .btn:hover { background: #212125; }
+  .btn:active { background: #101012; transform: translateY(1px); }
+  .btn.primary { background: linear-gradient(180deg, #ff3434, #e01d1d); color: #fff; }
+  .btn.primary:hover { background: linear-gradient(180deg, #ff4a4a, #ef2424); }
+  .btn.primary:active { background: var(--accent-down); }
+  .btn.danger { color: #ffb4b4; background: rgba(255, 60, 60, 0.12); }
+  .btn.danger:hover { background: rgba(255, 60, 60, 0.22); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+  }
+  .panel h2 {
+    font-size: 13px; font-weight: 600; letter-spacing: 2px; color: var(--muted);
+    padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--border);
+  }
+
+  /* ---- Menu ---- */
+  .menuPanels { display: flex; gap: 16px; width: min(880px, 94vw); align-items: stretch; }
+  .createPanel { flex: 0 0 300px; display: flex; flex-direction: column; gap: 12px; }
+  .createPanel .btn { margin-top: auto; }
+  .browsePanel { flex: 1; display: flex; flex-direction: column; gap: 10px; min-height: 340px; }
+  .lobbyList { flex: 1; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; max-height: 300px; }
+  .lobbyList .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 30px 0; }
+  .lobbyItem {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+    transition: background 0.15s ease;
+  }
+  .lobbyItem:hover { background: var(--surface-hover); }
+  .lobbyItem .info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .lobbyItem .host { font-size: 15px; }
+  .lobbyItem .meta { font-size: 12px; color: var(--muted); }
+  .lobbyItem .btn { padding: 6px 16px; }
+  .joinRow { display: flex; gap: 8px; }
+  .joinRow input { width: 110px; text-align: center; text-transform: uppercase; letter-spacing: 3px; }
+  .backLink { color: var(--muted); font-size: 12px; text-decoration: none; margin-top: 6px; }
+  .backLink:hover { color: var(--text); }
+
+  /* ---- Password modal ---- */
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 20; }
+  .modalPanel { width: 320px; display: flex; flex-direction: column; gap: 12px; }
+  .modalPanel .row { display: flex; gap: 8px; justify-content: flex-end; }
 
   /* ---- Lobby ---- */
-  #lobby { justify-content: flex-start; padding: 40px 20px; }
-  .codeLine { display: flex; align-items: baseline; gap: 12px; }
-  .codeLine .code {
-    font-size: 40px; font-weight: 700; letter-spacing: 8px; color: var(--text);
-    background: var(--panel); border: 1px solid #333; border-radius: 10px; padding: 4px 10px 4px 18px;
-    cursor: pointer;
+  #lobby { justify-content: flex-start; padding: 42px 20px 24px; overflow-y: auto; }
+  .lobbyHead { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .lobbyLabel { font-size: 12px; letter-spacing: 3px; color: var(--muted); margin-right: 12px; }
+  .code {
+    font-size: 38px; font-weight: 600; letter-spacing: 8px;
   }
-  .codeLine .code:hover { border-color: #666; }
-  .hint { color: var(--dim); font-size: 12px; }
-
-  .teams { display: flex; gap: 14px; width: min(900px, 94vw); flex: 0 1 auto; margin-top: 10px; }
+  .invite {
+    font-size: 12px; color: var(--muted);
+    background: var(--surface); border-radius: var(--radius-sm);
+    padding: 8px 14px; cursor: pointer;
+  }
+  .invite:hover { background: var(--surface-hover); color: var(--text); }
+  .hostCfg { display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
+  .hostCfg input { width: 260px; }
+  .teams { display: flex; gap: 14px; width: min(900px, 94vw); margin-top: 6px; }
   .col {
-    flex: 1; background: var(--panel); border: 1px solid #2c2c30; border-radius: 12px;
-    padding: 12px; min-height: 300px; display: flex; flex-direction: column; gap: 8px;
+    flex: 1; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px; min-height: 280px; display: flex; flex-direction: column; gap: 8px;
     transition: border-color 0.1s, background 0.1s;
   }
-  .col h2 { font-size: 14px; letter-spacing: 2px; text-align: center; padding-bottom: 6px; border-bottom: 1px solid #2c2c30; }
+  .col h2 { font-size: 13px; letter-spacing: 2px; text-align: center; padding-bottom: 8px; border-bottom: 1px solid var(--border); font-weight: 600; }
   .col[data-team="red"] h2 { color: var(--red); }
   .col[data-team="blue"] h2 { color: var(--blue); }
-  .col[data-team="spec"] h2 { color: var(--dim); }
-  .col.dropOk { border-color: var(--green); background: #1d241f; }
+  .col[data-team="spec"] h2 { color: var(--muted); }
+  .col.dropOk { border-color: var(--green); background: rgba(55, 178, 108, 0.06); }
   .col .list { flex: 1; display: flex; flex-direction: column; gap: 6px; }
   .chip {
-    background: var(--panel2); border: 1px solid #3a3a3e; border-radius: 8px;
+    background: var(--surface); border: 1px solid transparent; border-radius: var(--radius-sm);
     padding: 8px 10px; font-size: 14px; display: flex; align-items: center; gap: 8px;
   }
   .chip.draggable { cursor: grab; }
@@ -85,12 +172,12 @@
   .chip[data-team="red"] .dot { background: var(--red); }
   .chip[data-team="blue"] .dot { background: var(--blue); }
   .chip .crown { margin-left: auto; font-size: 12px; }
-  .chip.me { border-color: #5a5a60; }
-  .col > button { font-size: 12px; padding: 7px; }
-  .lobbyFoot { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
-  .controlsHint { color: var(--dim); font-size: 12px; text-align: center; max-width: 640px; line-height: 1.7; }
+  .chip.me { border-color: var(--border-strong); }
+  .col > .btn { font-size: 12px; padding: 7px; }
+  .lobbyFoot { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+  .controlsHint { color: var(--muted); font-size: 12px; text-align: center; max-width: 660px; line-height: 1.8; margin-top: 8px; }
   kbd {
-    background: var(--panel2); border: 1px solid #3f3f44; border-bottom-width: 2px;
+    background: #17171a; border: 1px solid var(--border-strong); border-bottom-width: 2px;
     border-radius: 4px; padding: 1px 6px; font-family: inherit; font-size: 11px; color: var(--text);
   }
 
@@ -99,53 +186,84 @@
   #cv { position: absolute; inset: 0; width: 100%; height: 100%; }
   #banner {
     position: absolute; top: 18%; left: 0; right: 0; text-align: center;
-    font-size: 56px; font-weight: 800; letter-spacing: 3px;
+    font-size: 56px; font-weight: 600; letter-spacing: 3px;
     text-shadow: 0 4px 24px rgba(0,0,0,0.7); pointer-events: none;
   }
   #endOverlay {
     position: absolute; inset: 0; background: rgba(10,10,12,0.82);
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
   }
-  #endOverlay .big { font-size: 52px; font-weight: 800; }
-  #endOverlay .sub { color: var(--dim); }
+  #endOverlay .big { font-size: 52px; font-weight: 600; }
+  #endOverlay .sub { color: var(--muted); }
 </style>
 </head>
 <body>
 
 <!-- ===================== MENU ===================== -->
 <div id="menu" class="view">
-  <h1>AIM4 <span>FOOTBALL</span></h1>
-  <div class="tag">easter egg &mdash; 2D multiplayer football</div>
-  <input id="nameInput" maxlength="16" placeholder="Your name" autocomplete="off">
-  <button id="createBtn" class="primary">Create lobby</button>
-  <div class="row">
-    <input id="codeInput" maxlength="4" placeholder="CODE" autocomplete="off">
-    <button id="joinBtn">Join</button>
+  <div class="title">AIM4<span class="io">.io</span> <span class="sub">FOOTBALL</span></div>
+  <div class="tagline">easter egg &mdash; 2D multiplayer football</div>
+  <div class="conn" id="connStatus">connecting&hellip;</div>
+  <div class="menuPanels">
+    <section class="panel createPanel">
+      <h2>CREATE LOBBY</h2>
+      <label class="field">NAME<input id="nameInput" maxlength="16" placeholder="Your name" autocomplete="off"></label>
+      <label class="field">PASSWORD<input id="passInput" maxlength="24" placeholder="optional" autocomplete="off"></label>
+      <label class="check"><input type="checkbox" id="publicInput" checked> Show in public lobbies</label>
+      <button id="createBtn" class="btn primary">Create lobby</button>
+    </section>
+    <section class="panel browsePanel">
+      <h2>PUBLIC LOBBIES</h2>
+      <div id="lobbyList" class="lobbyList"><div class="empty">&hellip;</div></div>
+      <div class="joinRow">
+        <input id="codeInput" maxlength="4" placeholder="CODE" autocomplete="off">
+        <button id="joinBtn" class="btn">Join by code</button>
+      </div>
+    </section>
   </div>
-  <div id="menuMsg"></div>
+  <div id="menuMsg" class="msg"></div>
+  <a class="backLink" href="/">&larr; back to AIM4.io</a>
+</div>
+
+<!-- ===================== PASSWORD MODAL ===================== -->
+<div id="passModal" class="modal hidden">
+  <div class="panel modalPanel">
+    <h2>PASSWORD REQUIRED</h2>
+    <div class="msg" id="passMsg"></div>
+    <input id="passJoinInput" type="password" maxlength="24" placeholder="Lobby password" autocomplete="off">
+    <div class="row">
+      <button id="passCancelBtn" class="btn">Cancel</button>
+      <button id="passJoinBtn" class="btn primary">Join</button>
+    </div>
+  </div>
 </div>
 
 <!-- ===================== LOBBY ===================== -->
 <div id="lobby" class="view hidden">
-  <div class="codeLine">
-    <div class="code" id="codeLabel" title="Click to copy invite link">----</div>
+  <div class="lobbyHead">
+    <div><span class="lobbyLabel">LOBBY</span><span class="code" id="codeLabel">----</span></div>
+    <div class="invite" id="inviteLine" title="Click to copy the invite link">&hellip;</div>
   </div>
-  <div class="hint" id="copyHint">click the code to copy an invite link</div>
+  <div class="panel hostCfg hidden" id="hostCfg">
+    <label class="check"><input type="checkbox" id="cfgPublic"> Public</label>
+    <input id="cfgPass" maxlength="24" placeholder="Set password (blank = none)" autocomplete="off">
+    <button id="cfgApply" class="btn">Apply password</button>
+  </div>
   <div class="teams">
     <div class="col" data-team="red">
       <h2>RED</h2>
       <div class="list"></div>
-      <button data-selfjoin="red">Join red</button>
+      <button class="btn" data-selfjoin="red">Join red</button>
     </div>
     <div class="col" data-team="spec">
       <h2>SPECTATORS</h2>
       <div class="list"></div>
-      <button data-selfjoin="spec">Spectate</button>
+      <button class="btn" data-selfjoin="spec">Spectate</button>
     </div>
     <div class="col" data-team="blue">
       <h2>BLUE</h2>
       <div class="list"></div>
-      <button data-selfjoin="blue">Join blue</button>
+      <button class="btn" data-selfjoin="blue">Join blue</button>
     </div>
   </div>
   <div class="controlsHint">
@@ -155,10 +273,10 @@
     <br><span id="hostHint"></span>
   </div>
   <div class="lobbyFoot">
-    <button id="startBtn" class="primary">Start match</button>
-    <button id="leaveBtn">Leave</button>
+    <button id="startBtn" class="btn primary">Start match</button>
+    <button id="leaveBtn" class="btn danger">Leave</button>
   </div>
-  <div id="lobbyMsg"></div>
+  <div id="lobbyMsg" class="msg"></div>
 </div>
 
 <!-- ===================== GAME ===================== -->
@@ -171,10 +289,7 @@
   </div>
 </div>
 
-<script>
-(() => {
-  'use strict';
-
+<script type="module">
   // ---- Constants mirrored from server/football.js (keep in sync) ----------
   const PLAYER_R = 1.4;
   const BALL_R = 1.0;
@@ -190,13 +305,23 @@
   const $ = (id) => document.getElementById(id);
   const views = { menu: $('menu'), lobby: $('lobby'), game: $('game') };
   const nameInput = $('nameInput');
+  const passInput = $('passInput');
+  const publicInput = $('publicInput');
   const codeInput = $('codeInput');
+  const connStatus = $('connStatus');
   const menuMsg = $('menuMsg');
   const lobbyMsg = $('lobbyMsg');
   const codeLabel = $('codeLabel');
-  const copyHint = $('copyHint');
+  const inviteLine = $('inviteLine');
   const startBtn = $('startBtn');
   const hostHint = $('hostHint');
+  const hostCfg = $('hostCfg');
+  const cfgPublic = $('cfgPublic');
+  const cfgPass = $('cfgPass');
+  const lobbyListEl = $('lobbyList');
+  const passModal = $('passModal');
+  const passMsg = $('passMsg');
+  const passJoinInput = $('passJoinInput');
   const banner = $('banner');
   const endOverlay = $('endOverlay');
   const cv = $('cv');
@@ -206,39 +331,99 @@
 
   function show(name) {
     for (const k in views) views[k].classList.toggle('hidden', k !== name);
+    if (name === 'menu' && ws && ws.readyState === 1) send({ t: 'list' });
   }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  }
+
+  // ---- Server resolution (same precedence as the main client's NetClient):
+  // ?server= override → VITE_API_URL (baked at build, the hosted backend) →
+  // same origin (LAN/host mode, or Vite's dev proxy).
+  function resolveApiUrl() {
+    const raw = import.meta.env.VITE_API_URL;
+    if (!raw) return null;
+    return raw.startsWith('http') ? raw : `https://${raw}`;
+  }
+  function wsUrl() {
+    const q = new URLSearchParams(location.search).get('server');
+    if (q) {
+      const host = q.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      return `${proto}://${host}/football`;
+    }
+    const api = resolveApiUrl();
+    if (api) {
+      try {
+        const u = new URL(api);
+        return `${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}/football`;
+      } catch { /* fall through */ }
+    }
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${proto}://${location.host}/football`;
+  }
+
+  // ---- URL ↔ lobby (invite links use ?lobby=CODE like the main game) --------
+  function setLobbyParam(code) {
+    const url = new URL(location.href);
+    if (code) url.searchParams.set('lobby', code);
+    else url.searchParams.delete('lobby');
+    url.searchParams.delete('join'); // legacy param
+    history.replaceState(null, '', url);
+    document.title = code ? `AIM4 Football — ${code}` : 'AIM4 Football';
+  }
+  function inviteUrl(code) {
+    return `${location.origin}${location.pathname}?lobby=${code}`;
+  }
+  const bootParams = new URLSearchParams(location.search);
+  let autoJoinCode = (bootParams.get('lobby') || bootParams.get('join') || '')
+    .toUpperCase().slice(0, 4);
 
   // ---- Networking -------------------------------------------------------------
   let ws = null;
   let myId = null;
-  let lobby = null; // last lobby message
-  let roster = new Map(); // id -> {name, team} during a match
+  let lobby = null;
+  let roster = new Map();
   let field = { w: 100, h: 62, gt: 23, gb: 39, gd: 3 };
   let goalsToWin = 5;
-  let snaps = []; // interpolation buffer [{rt, s}]
-  let lastKicks = []; // kick flashes [{x,y,p,rt}]
+  let snaps = [];
+  let lastKicks = [];
   let ballTrail = [];
   let inGame = false;
+  let pendingJoin = null; // { code } while the password modal is open
 
-  function wsUrl() {
-    const q = new URLSearchParams(location.search).get('server');
-    const host = q ? q.replace(/^https?:\/\//, '').replace(/\/$/, '') : location.host;
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    return `${proto}://${host}/football`;
-  }
-
-  function connect(onOpen) {
-    if (ws && ws.readyState <= 1) { onOpen(); return; }
-    menuMsg.textContent = 'Connecting…';
+  function connect() {
+    connStatus.textContent = 'connecting…';
+    connStatus.classList.remove('bad');
     ws = new WebSocket(wsUrl());
-    ws.onopen = () => { menuMsg.textContent = ''; onOpen(); };
+    ws.onopen = () => {
+      connStatus.textContent = '';
+      send({ t: 'list' });
+      if (autoJoinCode) {
+        if (myName(false)) {
+          joinLobby(autoJoinCode);
+        } else {
+          codeInput.value = autoJoinCode;
+          menuMsg.textContent = `Enter your name, then join ${autoJoinCode}`;
+          nameInput.focus();
+        }
+        autoJoinCode = '';
+      }
+    };
     ws.onclose = () => {
       ws = null;
       myId = null;
       lobby = null;
       inGame = false;
+      setLobbyParam(null);
       show('menu');
-      menuMsg.textContent = 'Disconnected from server (is the backend running? try npm run dev:mp)';
+      renderLobbyList(null);
+      connStatus.textContent = 'server offline — retrying…';
+      connStatus.classList.add('bad');
+      setTimeout(connect, 3000);
     };
     ws.onmessage = (ev) => {
       let msg;
@@ -257,11 +442,23 @@
         myId = msg.id;
         break;
       case 'error':
-        (views.menu.classList.contains('hidden') ? lobbyMsg : menuMsg).textContent = msg.msg;
+        if (msg.code === 'pass') {
+          pendingJoin = { code: msg.joinCode };
+          passMsg.textContent = msg.msg === 'Wrong password' ? 'Wrong password — try again' : '';
+          passModal.classList.remove('hidden');
+          passJoinInput.value = '';
+          passJoinInput.focus();
+        } else {
+          (views.menu.classList.contains('hidden') ? lobbyMsg : menuMsg).textContent = msg.msg;
+        }
+        break;
+      case 'lobbyList':
+        renderLobbyList(msg.lobbies);
         break;
       case 'lobby':
         lobby = msg;
         roster = new Map(msg.players.map((p) => [p.id, p]));
+        setLobbyParam(msg.code);
         if (!inGame) { show('lobby'); renderLobby(); }
         break;
       case 'start':
@@ -288,7 +485,7 @@
         const who = msg.byName ? (msg.og ? `${msg.byName} (own goal!)` : msg.byName) : '';
         banner.innerHTML =
           `<span style="color:${TEAM_COLOR[msg.team]}">GOAL!</span>` +
-          (who ? `<div style="font-size:22px;font-weight:600;margin-top:6px">${escapeHtml(who)}</div>` : '');
+          (who ? `<div style="font-size:22px;font-weight:500;margin-top:6px">${escapeHtml(who)}</div>` : '');
         banner.classList.remove('hidden');
         setTimeout(() => banner.classList.add('hidden'), 2000);
         break;
@@ -313,53 +510,125 @@
     }
   }
 
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, (c) => (
-      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-    ));
-  }
-
   // ---- Menu actions -------------------------------------------------------------
-  function myName() {
+  function myName(required = true) {
     const n = nameInput.value.trim().slice(0, 16);
     if (n) localStorage.setItem('aim4-football-name', n);
-    return n || 'Player';
+    else if (required) {
+      menuMsg.textContent = 'Enter a name first';
+      nameInput.focus();
+    }
+    return n;
   }
-  $('createBtn').onclick = () => connect(() => send({ t: 'create', name: myName() }));
+
+  function joinLobby(code, pass) {
+    const name = myName();
+    if (!name) return;
+    menuMsg.textContent = '';
+    send({ t: 'join', code, name, pass });
+  }
+
+  $('createBtn').onclick = () => {
+    const name = myName();
+    if (!name) return;
+    menuMsg.textContent = '';
+    send({ t: 'create', name, pass: passInput.value, isPublic: publicInput.checked });
+  };
   $('joinBtn').onclick = () => {
     const code = codeInput.value.trim().toUpperCase();
     if (code.length !== 4) { menuMsg.textContent = 'Enter a 4-letter code'; return; }
-    connect(() => send({ t: 'join', code, name: myName() }));
+    joinLobby(code);
   };
   codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('joinBtn').click(); });
 
-  // Invite links: football.html?join=CODE
-  const joinCode = new URLSearchParams(location.search).get('join');
-  if (joinCode) codeInput.value = joinCode.toUpperCase().slice(0, 4);
+  // Password modal.
+  $('passJoinBtn').onclick = () => {
+    if (!pendingJoin) return;
+    joinLobby(pendingJoin.code, passJoinInput.value);
+    passModal.classList.add('hidden');
+  };
+  $('passCancelBtn').onclick = () => {
+    pendingJoin = null;
+    passModal.classList.add('hidden');
+  };
+  passJoinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('passJoinBtn').click(); });
+
+  function renderLobbyList(lobbies) {
+    if (lobbies === null) {
+      lobbyListEl.innerHTML = '<div class="empty">&hellip;</div>';
+      return;
+    }
+    if (!lobbies.length) {
+      lobbyListEl.innerHTML = '<div class="empty">No public lobbies right now — create one!</div>';
+      return;
+    }
+    lobbyListEl.innerHTML = lobbies
+      .map((l) => `<div class="lobbyItem">
+        <div class="info">
+          <span class="host">${escapeHtml(l.host)}${l.locked ? ' &#128274;' : ''}</span>
+          <span class="meta">${l.players}/${l.max} players &middot; ${l.inMatch ? 'match in progress' : 'in lobby'}</span>
+        </div>
+        <button class="btn primary" data-join-code="${l.code}">Join</button>
+      </div>`)
+      .join('');
+    lobbyListEl.querySelectorAll('[data-join-code]').forEach((b) => {
+      b.onclick = () => joinLobby(b.dataset.joinCode);
+    });
+  }
 
   // ---- Lobby --------------------------------------------------------------------
   const isHost = () => lobby && lobby.hostId === myId;
 
-  codeLabel.onclick = () => {
+  inviteLine.onclick = () => {
     if (!lobby) return;
-    const url = `${location.origin}${location.pathname}?join=${lobby.code}`;
+    const url = inviteUrl(lobby.code);
     navigator.clipboard?.writeText(url).then(
-      () => { copyHint.textContent = 'invite link copied!'; setTimeout(() => (copyHint.textContent = 'click the code to copy an invite link'), 1600); },
-      () => { copyHint.textContent = url; }
+      () => {
+        inviteLine.textContent = 'invite link copied!';
+        setTimeout(() => { if (lobby) inviteLine.textContent = inviteUrl(lobby.code); }, 1600);
+      },
+      () => {}
     );
   };
 
-  $('leaveBtn').onclick = () => { send({ t: 'leave' }); lobby = null; show('menu'); };
+  $('leaveBtn').onclick = () => {
+    send({ t: 'leave' });
+    lobby = null;
+    setLobbyParam(null);
+    show('menu');
+  };
   startBtn.onclick = () => send({ t: 'start' });
   document.querySelectorAll('[data-selfjoin]').forEach((b) => {
     b.onclick = () => send({ t: 'team', team: b.dataset.selfjoin });
   });
 
+  // Host lobby settings: checkbox applies instantly; password via Apply.
+  cfgPublic.onchange = () => { if (isHost()) send({ t: 'config', isPublic: cfgPublic.checked }); };
+  $('cfgApply').onclick = () => {
+    if (!isHost()) return;
+    send({ t: 'config', pass: cfgPass.value });
+    cfgPass.value = '';
+    cfgPass.placeholder = 'saved';
+    setTimeout(() => syncCfgPlaceholder(), 1200);
+  };
+  function syncCfgPlaceholder() {
+    if (!lobby) return;
+    cfgPass.placeholder = lobby.hasPass
+      ? 'password set — type to replace, apply blank to remove'
+      : 'Set password (blank = none)';
+  }
+
   function renderLobby() {
     if (!lobby) return;
     codeLabel.textContent = lobby.code;
+    inviteLine.textContent = inviteUrl(lobby.code);
     lobbyMsg.textContent = '';
     startBtn.classList.toggle('hidden', !isHost());
+    hostCfg.classList.toggle('hidden', !isHost());
+    if (isHost()) {
+      cfgPublic.checked = lobby.isPublic !== false;
+      syncCfgPlaceholder();
+    }
     hostHint.textContent = isHost()
       ? 'You are the host — drag players between columns to set teams.'
       : 'Pick a team below. The host can also drag you to a team.';
@@ -392,7 +661,6 @@
     });
   }
 
-  // Drop targets: the three team columns.
   document.querySelectorAll('.col').forEach((col) => {
     col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('dropOk'); });
     col.addEventListener('dragleave', () => col.classList.remove('dropOk'));
@@ -433,7 +701,6 @@
   window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
   window.addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
 
-  // Send inputs at ~30 Hz while in a match.
   setInterval(() => {
     if (!inGame || !ws || ws.readyState !== 1) return;
     const aim = screenToField(mouse.x, mouse.y);
@@ -499,11 +766,9 @@
     drawPitch();
     if (!st) return;
 
-    // Ball trail.
     ballTrail.push({ x: st.ball.x, y: st.ball.y });
     if (ballTrail.length > 9) ballTrail.shift();
 
-    // Kick flashes.
     const now = performance.now();
     lastKicks = lastKicks.filter((k) => now - k.rt < 300);
     for (const k of lastKicks) {
@@ -515,17 +780,14 @@
       ctx.stroke();
     }
 
-    // Players.
     const me = st.players.get(myId);
     for (const [id, q] of st.players) {
       const info = roster.get(id);
       const color = TEAM_COLOR[info?.team] || '#888';
-      // shadow
       ctx.beginPath();
       ctx.ellipse(px(q.x), py(q.y) + PLAYER_R * sc * 0.45, PLAYER_R * sc * 0.95, PLAYER_R * sc * 0.5, 0, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(0,0,0,0.25)';
       ctx.fill();
-      // body
       ctx.beginPath();
       ctx.arc(px(q.x), py(q.y), PLAYER_R * sc, 0, Math.PI * 2);
       ctx.fillStyle = color;
@@ -533,7 +795,6 @@
       ctx.lineWidth = id === myId ? 3 : 1.5;
       ctx.strokeStyle = id === myId ? '#ffffff' : 'rgba(0,0,0,0.35)';
       ctx.stroke();
-      // sprint ring
       if (q.r) {
         ctx.beginPath();
         ctx.arc(px(q.x), py(q.y), (PLAYER_R + 0.45) * sc, 0, Math.PI * 2);
@@ -541,14 +802,12 @@
         ctx.lineWidth = 1.5;
         ctx.stroke();
       }
-      // name
-      ctx.font = `600 ${Math.max(11, sc * 1.1)}px Segoe UI, sans-serif`;
+      ctx.font = `500 ${Math.max(11, sc * 1.1)}px Host Grotesk, Segoe UI, sans-serif`;
       ctx.textAlign = 'center';
       ctx.fillStyle = id === myId ? '#fff' : 'rgba(255,255,255,0.8)';
       ctx.fillText(info?.name || '?', px(q.x), py(q.y) - (PLAYER_R + 1.1) * sc);
     }
 
-    // Aim indicator (self, field players only).
     if (me) {
       const aim = screenToField(mouse.x, mouse.y);
       const dx = aim.x - st.ball.x;
@@ -570,7 +829,6 @@
       ctx.stroke();
     }
 
-    // Ball (drawn over players).
     for (let i = 0; i < ballTrail.length - 1; i++) {
       const t = ballTrail[i];
       ctx.beginPath();
@@ -595,7 +853,6 @@
 
   function drawPitch() {
     const w = field.w, h = field.h;
-    // grass + mowing stripes
     ctx.fillStyle = '#17351f';
     ctx.fillRect(px(-field.gd) - 6, py(0) - 6, (w + field.gd * 2) * sc + 12, h * sc + 12);
     for (let i = 0; i < 10; i++) {
@@ -605,7 +862,6 @@
     }
     ctx.strokeStyle = 'rgba(255,255,255,0.75)';
     ctx.lineWidth = 2;
-    // boundary + halfway + centre circle
     ctx.strokeRect(px(0), py(0), w * sc, h * sc);
     ctx.beginPath();
     ctx.moveTo(px(w / 2), py(0));
@@ -618,11 +874,9 @@
     ctx.arc(px(w / 2), py(h / 2), 2.5, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,0.75)';
     ctx.fill();
-    // penalty boxes
     const boxH = 30, boxW = 14;
     ctx.strokeRect(px(0), py((h - boxH) / 2), boxW * sc, boxH * sc);
     ctx.strokeRect(px(w - boxW), py((h - boxH) / 2), boxW * sc, boxH * sc);
-    // goals (net boxes outside the lines)
     for (const side of [0, 1]) {
       const gx = side === 0 ? -field.gd : w;
       ctx.fillStyle = 'rgba(255,255,255,0.06)';
@@ -630,7 +884,6 @@
       ctx.strokeStyle = side === 0 ? TEAM_COLOR.red : TEAM_COLOR.blue;
       ctx.lineWidth = 3;
       ctx.strokeRect(px(gx), py(field.gt), field.gd * sc, (field.gb - field.gt) * sc);
-      // net cross-hatch
       ctx.strokeStyle = 'rgba(255,255,255,0.12)';
       ctx.lineWidth = 1;
       for (let yy = field.gt + 2; yy < field.gb; yy += 2) {
@@ -643,27 +896,24 @@
   }
 
   function drawHud(st, me) {
-    // Score bar.
     ctx.textAlign = 'center';
-    ctx.font = '800 26px Segoe UI, sans-serif';
+    ctx.font = '600 26px Host Grotesk, Segoe UI, sans-serif';
     ctx.fillStyle = TEAM_COLOR.red;
     ctx.fillText(String(st.sc.red), innerWidth / 2 - 44, 34);
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.fillText('–', innerWidth / 2, 34);
     ctx.fillStyle = TEAM_COLOR.blue;
     ctx.fillText(String(st.sc.blue), innerWidth / 2 + 44, 34);
-    ctx.font = '600 11px Segoe UI, sans-serif';
+    ctx.font = '500 11px Host Grotesk, Segoe UI, sans-serif';
     ctx.fillStyle = 'rgba(255,255,255,0.45)';
     ctx.fillText(`first to ${goalsToWin}`, innerWidth / 2, 50);
 
-    // Kickoff countdown.
     if (st.ph === 'kickoff') {
-      ctx.font = '800 40px Segoe UI, sans-serif';
+      ctx.font = '600 40px Host Grotesk, Segoe UI, sans-serif';
       ctx.fillStyle = 'rgba(255,255,255,0.9)';
       ctx.fillText(st.kt > 500 ? String(Math.ceil(st.kt / 1000)) : 'GO!', innerWidth / 2, innerHeight / 2 - 60);
     }
 
-    // Stamina bar (self only).
     if (me) {
       const bw = 220, bh = 10;
       const bx = (innerWidth - bw) / 2;
@@ -673,11 +923,11 @@
       const f = Math.max(0, Math.min(1, me.s / STAMINA_MAX));
       ctx.fillStyle = me.w ? '#e6a23c' : (keys.sp ? '#6fe3a1' : '#37b26c');
       ctx.fillRect(bx, by, bw * f, bh);
-      ctx.font = '600 10px Segoe UI, sans-serif';
+      ctx.font = '500 10px Host Grotesk, Segoe UI, sans-serif';
       ctx.fillStyle = 'rgba(255,255,255,0.6)';
       ctx.fillText(me.w ? 'WINDED — recover to sprint' : 'SPRINT STAMINA (hold SHIFT)', innerWidth / 2, by - 6);
     } else if (roster.get(myId)?.team === 'spec' || !roster.get(myId)) {
-      ctx.font = '600 12px Segoe UI, sans-serif';
+      ctx.font = '500 12px Host Grotesk, Segoe UI, sans-serif';
       ctx.fillStyle = 'rgba(255,255,255,0.5)';
       ctx.fillText('spectating', innerWidth / 2, innerHeight - 24);
     }
@@ -685,7 +935,7 @@
 
   resize();
   requestAnimationFrame(draw);
-})();
+  connect();
 </script>
 </body>
 </html>

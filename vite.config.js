@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { fileURLToPath } from 'node:url';
 
 // Minimal Vite config. Three.js is bundled from node_modules so the bare
 // "three" specifier resolves cleanly in dev (HMR) and production builds.
@@ -30,7 +31,15 @@ export default defineConfig({
   },
   build: {
     target: 'es2020',
-    sourcemap: false
+    sourcemap: false,
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        // Easter-egg football — built as its own page so it reads VITE_API_URL
+        // (the hosted backend) exactly like the main client's NetClient.
+        football: fileURLToPath(new URL('./tools/football.html', import.meta.url))
+      }
+    }
   },
   appType: 'spa'
 });

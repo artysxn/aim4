@@ -6,9 +6,11 @@
 // (the host drags players between teams), first to 5 goals wins.
 //
 // Wire protocol (JSON messages with a `t` field, mirroring the duel server):
-//   C2S: create{name} join{code,name} leave team{team} setTeam{id,team}
-//        start stop input{u,d,l,r,sp,k,ax,ay} ping{ct}
-//   S2C: welcome{id} lobby{code,hostId,inMatch,players} error{msg}
+//   C2S: create{name,pass?,isPublic?} join{code,name,pass?} leave team{team}
+//        setTeam{id,team} config{pass?,isPublic?} start stop list unlist
+//        input{u,d,l,r,sp,k,ax,ay} ping{ct}
+//   S2C: welcome{id} lobby{code,hostId,inMatch,isPublic,hasPass,players}
+//        error{msg,code?} lobbyList{lobbies}
 //        start{field,score,goalsToWin,players} state{ph,kt,sc,ball,pl}
 //        kick{id,x,y,p} goal{team,byName,og,score} end{score,winner,aborted}
 //        pong{ct,st}
@@ -79,10 +81,18 @@ function num(v, fallback = 0) {
   return Number.isFinite(v) ? v : fallback;
 }
 
+function cleanPass(raw) {
+  return String(raw ?? '')
+    .replace(/[^\x20-\x7E]/g, '')
+    .trim()
+    .slice(0, 24);
+}
+
 export class FootballServer {
   constructor() {
     this.players = new Map(); // id -> player
     this.rooms = new Map(); // code -> room
+    this.browsers = new Set(); // players watching the public lobby list
     this._timer = setInterval(() => this._tick(), TICK_MS);
     this._lastTick = Date.now();
   }
@@ -125,6 +135,7 @@ export class FootballServer {
     });
     ws.on('close', () => {
       this._leave(player);
+      this.browsers.delete(player);
       this.players.delete(id);
     });
     ws.on('error', () => {});
@@ -142,6 +153,8 @@ export class FootballServer {
           hostId: p.id,
           players: [p],
           inMatch: false,
+          pass: cleanPass(msg.pass), // '' = open lobby
+          isPublic: msg.isPublic !== false,
           score: { red: 0, blue: 0 },
           ball: { x: FIELD_W / 2, y: FIELD_H / 2, vx: 0, vy: 0, lastKickId: 0 },
           phase: 'play',
@@ -150,7 +163,9 @@ export class FootballServer {
         this.rooms.set(code, room);
         p.room = room;
         p.team = 'spec';
+        this.browsers.delete(p);
         this._broadcastLobby(room);
+        this._broadcastLobbyList();
         break;
       }
       case 'join': {
@@ -165,17 +180,50 @@ export class FootballServer {
           this._send(p, { t: 'error', msg: 'Lobby is full' });
           return;
         }
+        if (room.pass) {
+          const given = cleanPass(msg.pass);
+          if (given !== room.pass) {
+            this._send(p, {
+              t: 'error',
+              code: 'pass',
+              joinCode: code,
+              msg: given ? 'Wrong password' : 'Password required'
+            });
+            return;
+          }
+        }
         p.name = cleanName(msg.name, p.id);
         p.team = 'spec';
         p.room = room;
         room.players.push(p);
+        this.browsers.delete(p);
         this._broadcastLobby(room);
+        this._broadcastLobbyList();
         // Joining mid-match: drop straight into the game view as a spectator.
         if (room.inMatch) this._send(p, this._startPayload(room));
         break;
       }
       case 'leave': {
         this._leave(p);
+        break;
+      }
+      case 'config': {
+        // Host-only lobby settings: password + public listing.
+        const room = p.room;
+        if (!room || room.inMatch || room.hostId !== p.id) return;
+        if ('pass' in msg) room.pass = cleanPass(msg.pass);
+        if ('isPublic' in msg) room.isPublic = msg.isPublic !== false;
+        this._broadcastLobby(room);
+        this._broadcastLobbyList();
+        break;
+      }
+      case 'list': {
+        this.browsers.add(p);
+        this._send(p, this._lobbyListPayload());
+        break;
+      }
+      case 'unlist': {
+        this.browsers.delete(p);
         break;
       }
       case 'team': {
@@ -244,10 +292,12 @@ export class FootballServer {
     if (idx !== -1) room.players.splice(idx, 1);
     if (room.players.length === 0) {
       this.rooms.delete(room.code);
+      this._broadcastLobbyList();
       return;
     }
     if (room.hostId === p.id) room.hostId = room.players[0].id;
     this._broadcastLobby(room);
+    this._broadcastLobbyList();
   }
 
   // ---- Match flow ----------------------------------------------------------
@@ -258,6 +308,7 @@ export class FootballServer {
     room.phase = 'kickoff';
     room.phaseUntil = Date.now() + KICKOFF_MS;
     this._broadcast(room, this._startPayload(room));
+    this._broadcastLobbyList();
   }
 
   _startPayload(room) {
@@ -274,6 +325,7 @@ export class FootballServer {
     room.inMatch = false;
     this._broadcast(room, { t: 'end', score: room.score, winner, aborted });
     this._broadcastLobby(room);
+    this._broadcastLobbyList();
   }
 
   _resetPositions(room) {
@@ -524,8 +576,35 @@ export class FootballServer {
       code: room.code,
       hostId: room.hostId,
       inMatch: room.inMatch,
+      isPublic: room.isPublic,
+      hasPass: !!room.pass,
       players: room.players.map((q) => ({ id: q.id, name: q.name, team: q.team }))
     });
+  }
+
+  _lobbyListPayload() {
+    const lobbies = [];
+    for (const room of this.rooms.values()) {
+      if (!room.isPublic) continue;
+      const host = this.players.get(room.hostId);
+      lobbies.push({
+        code: room.code,
+        host: host ? host.name : '?',
+        players: room.players.length,
+        max: ROOM_CAP,
+        inMatch: room.inMatch,
+        locked: !!room.pass
+      });
+    }
+    return { t: 'lobbyList', lobbies };
+  }
+
+  _broadcastLobbyList() {
+    if (!this.browsers.size) return;
+    const json = JSON.stringify(this._lobbyListPayload());
+    for (const q of this.browsers) {
+      if (q.ws.readyState === 1) q.ws.send(json);
+    }
   }
 
   _broadcast(room, obj) {
