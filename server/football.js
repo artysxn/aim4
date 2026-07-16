@@ -87,11 +87,11 @@ const DRIBBLE_MOVE_WEIGHT = 0.72; // movement direction vs cursor
 const DRIBBLE_AIM_WEIGHT = 0.28;
 
 // Barely shooting (held < TAP_HOLD_S before release) is a fixed short pass:
-// the cursor sets direction only — power ignores cursor distance entirely and
-// is always ~2× the ball speed of a full-sprint dribble.
-const TAP_HOLD_S = 0.15;
+// the cursor sets direction only — power ignores cursor distance and is the
+// minimum shot threshold (about half the previous tap speed).
+const TAP_HOLD_S = 0.2;
 const TAP_CHARGE = TAP_HOLD_S / CHARGE_TIME;
-const TAP_SHOT_SPEED = 2 * SPRINT_SPEED * DRIBBLE_SPRINT_CARRY; // ≈ 52 u/s
+const TAP_SHOT_SPEED = KICK_MIN;
 
 // Collision masses / restitution (impulse response).
 const PLAYER_MASS = 1;
