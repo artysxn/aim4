@@ -1,8 +1,9 @@
 // ---------------------------------------------------------------------------
 // server/football.js
 // Easter-egg 2D football (soccer). The standalone page /tools/football.html
-// connects here over WS at /football. Fully server-authoritative: a 128 Hz sim
-// of players + ball with impulse collisions, code-joined lobbies with
+// connects here over WS at /football. Fully server-authoritative: a fixed-step
+// 128 Hz sim (late timers catch up, so skipped ticks never stretch physics)
+// of players + ball with substepped impulse collisions, code-joined lobbies with
 // host-controlled team assignment (the host drags players between teams),
 // first to 5 goals wins.
 //
@@ -48,12 +49,15 @@ const SHOOT_COST_MAX = 58; // full-power / charged shot (steep curve)
 const SHOOT_MIN_TO_FIRE = 10; // need at least this much to shoot
 
 // Ball. Shot power scales with aim distance (mouse distance = shot power).
+// Aiming off the pitch is an automatic full-distance shot, and every shot
+// rolls at least SHOT_MIN_DIST (exp-friction ball travel ≈ v0 / friction).
 const BALL_FRICTION = 0.72; // 1/s — longer rolls so powered shots carry
 const KICK_RANGE = PLAYER_R + BALL_R + 2.0;
 const KICK_COOLDOWN_MS = 420;
-const KICK_POWER_SCALE = 0.775; // was 1.55 (−50%)
-const KICK_MIN = 3.5; // was 7 (−50%)
-const KICK_MAX = 46; // was 92 (−50%)
+const KICK_POWER_SCALE = 1.0; // aim distance → power
+const SHOT_MIN_DIST = 14; // minimum roll even with the cursor on the ball
+const KICK_MIN = SHOT_MIN_DIST * BALL_FRICTION; // ≈ 10.1
+const KICK_MAX = 58; // aim-power cap (~80 units of roll); off-pitch aim = this
 const BOUNCE = 0.88; // pillar-like restitution on posts / field edges
 const POST_R = 0.7; // goal-post pillars
 const CORNER_R = 0.55; // field-corner pillars
@@ -69,11 +73,14 @@ const INCOMING_SHOT_SPEED = 10;
 const INCOMING_SHOT_DOT = 0.2; // ball velocity aligned toward player
 const INCOMING_SHOT_MS = 2800;
 
-// Soft dribble when touching the ball without shooting.
+// Soft dribble when touching the ball without shooting. Carry speed tracks
+// the player's actual speed, so sprint-dribbles knock the ball further ahead.
 const DRIBBLE_TOUCH_SLACK = 0.2;
-const DRIBBLE_MAX_BALL_SPEED = 22; // don't steer hard shots
-const DRIBBLE_STRENGTH = 9; // target carry speed (units/s)
-const DRIBBLE_EASE = 7; // 1/s — how quickly ball velocity eases toward nudge
+const DRIBBLE_MAX_BALL_SPEED = 28; // don't steer hard shots
+const DRIBBLE_STRENGTH = 9; // minimum carry speed (units/s)
+const DRIBBLE_CARRY = 1.15; // ball target speed = player speed × this
+const DRIBBLE_SPRINT_CARRY = 1.32; // sprinting bounces the ball further out
+const DRIBBLE_EASE = 12; // 1/s — quick response to direction changes
 const DRIBBLE_MOVE_WEIGHT = 0.72; // movement direction vs cursor
 const DRIBBLE_AIM_WEIGHT = 0.28;
 
@@ -84,8 +91,18 @@ const PLAYER_RESTITUTION = 0.22; // bodies don't bounce much
 const BALL_RESTITUTION = 0.58; // lively ball bounce off players
 const COLLISION_FRICTION = 0.1; // tangent damping on contact
 const CONTACT_SKIN = 0.05; // forced gap so bodies never share volume
-const COLLIDE_ITERS = 8;
+const COLLIDE_ITERS = 3; // impulse iterations per substep
 const SEPARATE_ITERS = 10;
+// Fixed timestep + movement substeps (haxball-style aggressive scanning):
+// the sim always advances in exact 1/TICK_HZ steps — a late timer runs several
+// catch-up steps instead of one big stretched one — and within a step bodies
+// move in slices small enough that a full-power shot can never pass through
+// (or end a frame inside) a player between collision checks.
+const MAX_CATCHUP_TICKS = 16; // >125ms behind → drop time instead of spiraling
+const SUBSTEP_TRAVEL = 0.4; // max combined ball+player travel per slice
+const MAX_SUBSTEPS = 6;
+// A shot taken from a trapper's feet breaks their held trap (re-press to trap).
+const TRAP_BREAK_SLACK = 0.5;
 
 const GOALS_TO_WIN = 5;
 const ROOM_CAP = 12;
@@ -191,7 +208,8 @@ function applyKick(q, ball, charge, now) {
   const dy = ball.y - q.y;
   if (Math.hypot(dx, dy) > KICK_RANGE) return null;
 
-  // Direction: ball → cursor. Power: player → cursor (aim off-pitch / screen edge = harder shot).
+  // Direction: ball → cursor. Power: player → cursor distance, capped at
+  // KICK_MAX — and aiming anywhere off the pitch is always a full-distance shot.
   let ax = q.input.ax - ball.x;
   let ay = q.input.ay - ball.y;
   let dirLen = Math.hypot(ax, ay);
@@ -200,12 +218,15 @@ function applyKick(q, ball, charge, now) {
     ay = dy;
     dirLen = Math.hypot(ax, ay) || 1;
   }
+  const offPitch =
+    q.input.ax <= 0 || q.input.ax >= FIELD_W ||
+    q.input.ay <= 0 || q.input.ay >= FIELD_H;
   const aimDist = Math.hypot(q.input.ax - q.x, q.input.ay - q.y);
   const dist = Math.max(aimDist, dirLen * 0.35);
 
   // Charge carries most of the power; aim distance still adds reach on top.
   const chargeFloor = charge * charge * CHARGE_BASE_POWER;
-  const aimPower = dist * KICK_POWER_SCALE;
+  const aimPower = offPitch ? KICK_MAX : Math.min(dist * KICK_POWER_SCALE, KICK_MAX);
   const chargeMul = 1 + charge * CHARGE_POWER_BONUS;
   const powerCap = KICK_MAX * (1 + CHARGE_POWER_BONUS) + CHARGE_BASE_POWER * 0.15;
   const power = clamp((aimPower + chargeFloor) * chargeMul, KICK_MIN, powerCap);
@@ -240,16 +261,15 @@ function applyDribble(q, ball, dt) {
   if (ballSpd > DRIBBLE_MAX_BALL_SPEED) return;
 
   const { wx, wy, len } = wishDir(q);
+  const spd = Math.hypot(q.vx, q.vy);
   let mx = q.vx;
   let my = q.vy;
-  let mLen = Math.hypot(mx, my);
-  if (mLen < 0.4 && len > 0) {
+  if (spd < 0.4 && len > 0) {
     mx = wx;
     my = wy;
-    mLen = 1;
-  } else if (mLen >= 0.4) {
-    mx /= mLen;
-    my /= mLen;
+  } else if (spd >= 0.4) {
+    mx /= spd;
+    my /= spd;
   } else {
     // Standing still — light push along contact normal away from feet is enough via physics.
     return;
@@ -272,7 +292,10 @@ function applyDribble(q, ball, dt) {
   nx /= nLen;
   ny /= nLen;
 
-  const target = DRIBBLE_STRENGTH * (0.55 + 0.45 * Math.min(1, mLen / (SPRINT_SPEED || 1)));
+  // Carry speed tracks actual player speed so the ball never lags under your
+  // feet mid-run; sprinting knocks it slightly further ahead each touch.
+  const carry = q.sprinting ? DRIBBLE_SPRINT_CARRY : DRIBBLE_CARRY;
+  const target = Math.max(DRIBBLE_STRENGTH, spd * carry);
   const ease = 1 - Math.exp(-DRIBBLE_EASE * dt);
   ball.vx += (nx * target - ball.vx) * ease;
   ball.vy += (ny * target - ball.vy) * ease;
@@ -410,6 +433,9 @@ export class FootballServer {
     this.browsers = new Set(); // players watching the public lobby list
     this._timer = setInterval(() => this._tick(), TICK_MS);
     this._lastTick = Date.now();
+    this._acc = 0; // fixed-timestep accumulator (seconds)
+    this._simNow = Date.now(); // sim clock (ms) — advances in exact TICK_MS steps
+    this._tickNo = 0;
   }
 
   // ---- Connection lifecycle ----------------------------------------------
@@ -432,7 +458,7 @@ export class FootballServer {
       kickAt: 0,
       charge: 0,
       prevK: false,
-      prevSt: false,
+      trapBroken: false,
       input: { u: false, d: false, l: false, r: false, sp: false, k: false, st: false, ax: 0, ay: 0 }
     };
     this.players.set(id, player);
@@ -627,7 +653,7 @@ export class FootballServer {
     room.score = { red: 0, blue: 0 };
     this._resetPositions(room);
     room.phase = 'kickoff';
-    room.phaseUntil = Date.now() + KICKOFF_MS;
+    room.phaseUntil = this._simNow + KICKOFF_MS;
     this._broadcast(room, this._startPayload(room));
     this._broadcastLobbyList();
   }
@@ -663,7 +689,7 @@ export class FootballServer {
         q.winded = false;
         q.charge = 0;
         q.prevK = false;
-        q.prevSt = false;
+        q.trapBroken = false;
         q.kickAt = 0;
       });
     };
@@ -679,14 +705,32 @@ export class FootballServer {
   }
 
   // ---- Simulation -----------------------------------------------------------
+  // Fixed timestep: a late timer runs several exact-size catch-up steps rather
+  // than one big stretched step, so physics stays identical when ticks skip.
+  // The client sees the (larger) gap between snapshots and interpolates it.
   _tick() {
     const now = Date.now();
-    const dt = clamp((now - this._lastTick) / 1000, 0.001, 0.1);
+    const elapsed = (now - this._lastTick) / 1000;
     this._lastTick = now;
+    if (elapsed <= 0) return;
+    this._acc += elapsed;
+    let steps = Math.floor(this._acc * TICK_HZ);
+    if (steps <= 0) return;
+    this._acc -= steps / TICK_HZ;
+    if (steps > MAX_CATCHUP_TICKS) {
+      steps = MAX_CATCHUP_TICKS;
+      this._acc = 0;
+    }
+    const dt = 1 / TICK_HZ;
+    for (let s = 0; s < steps; s++) {
+      this._simNow += TICK_MS;
+      this._tickNo++;
+      for (const room of this.rooms.values()) {
+        if (room.inMatch) this._sim(room, dt, this._simNow);
+      }
+    }
     for (const room of this.rooms.values()) {
-      if (!room.inMatch) continue;
-      this._sim(room, dt, now);
-      this._broadcastState(room, now);
+      if (room.inMatch) this._broadcastState(room, this._simNow);
     }
   }
 
@@ -759,31 +803,9 @@ export class FootballServer {
       const k = Math.min(1, MOVE_ACCEL * dt);
       q.vx += (wx * speed - q.vx) * k;
       q.vy += (wy * speed - q.vy) * k;
-      q.x += q.vx * dt;
-      q.y += q.vy * dt;
-      clampPlayer(q);
       q.sprinting = sprinting;
+      // Positions advance in the substepped integrate+collide loop below.
     }
-
-    // Player–player impulse collisions.
-    for (let iter = 0; iter < COLLIDE_ITERS; iter++) {
-      for (let a = 0; a < fielded.length; a++) {
-        for (let b = a + 1; b < fielded.length; b++) {
-          collideCircles(
-            fielded[a],
-            fielded[b],
-            PLAYER_R,
-            PLAYER_R,
-            PLAYER_MASS,
-            PLAYER_MASS,
-            PLAYER_RESTITUTION
-          );
-          clampPlayer(fielded[a]);
-          clampPlayer(fielded[b]);
-        }
-      }
-    }
-    resolveOverlaps(fielded);
 
     // Shots: release after charge, or auto-volley an incoming opponent shot while holding.
     const kickedThisTick = new Set();
@@ -791,6 +813,14 @@ export class FootballServer {
       const powerT = applyKick(q, ball, charge, now);
       if (powerT == null) return false;
       kickedThisTick.add(q.id);
+      // A shot taken from someone's feet overrides their held trap — the ball
+      // flies, and they must release and re-press to trap again.
+      for (const w of fielded) {
+        if (!w.input.st || w.trapBroken) continue;
+        if (w === q || Math.hypot(ball.x - w.x, ball.y - w.y) <= KICK_RANGE + TRAP_BREAK_SLACK) {
+          w.trapBroken = true;
+        }
+      }
       this._broadcast(room, {
         t: 'kick',
         id: q.id,
@@ -813,34 +843,131 @@ export class FootballServer {
       tryPlayerKick(q, charge);
     }
 
-    // Ball integration, then player–ball body collisions (physics carry/bounce).
-    ball.x += ball.vx * dt;
-    ball.y += ball.vy * dt;
-    const decay = Math.exp(-BALL_FRICTION * dt);
-    ball.vx *= decay;
-    ball.vy *= decay;
+    // Soft dribble nudge (movement-biased toward cursor) when touching without a shot.
+    for (const q of fielded) {
+      if (kickedThisTick.has(q.id)) continue;
+      if (q.input.k && (q.charge || 0) > 0) continue; // charging — don't also dribble-steer
+      applyDribble(q, ball, dt);
+    }
+
+    // Hold-to-trap: while the button is held, the ball is stopped dead every
+    // tick it's in reach — until a shot from your feet breaks the hold (then
+    // you must release and press again to trap).
+    const trappers = [];
+    for (const q of fielded) {
+      if (!q.input.st) {
+        q.trapBroken = false;
+        continue;
+      }
+      if (q.trapBroken || kickedThisTick.has(q.id)) continue;
+      trappers.push(q);
+    }
+    const applyTraps = () => {
+      for (const q of trappers) {
+        if (Math.hypot(ball.x - q.x, ball.y - q.y) > KICK_RANGE) continue;
+        ball.vx = 0;
+        ball.vy = 0;
+        ball.lastKickId = q.id;
+      }
+    };
+    applyTraps();
+
+    // Integrate + collide in slices small enough that a full-power shot can't
+    // pass through (or end a frame inside) a body between collision checks.
+    let maxPlayerSpd = 0;
+    for (const q of fielded) {
+      maxPlayerSpd = Math.max(maxPlayerSpd, Math.hypot(q.vx, q.vy));
+    }
+    const travel = (Math.hypot(ball.vx, ball.vy) + maxPlayerSpd) * dt;
+    const nSub = clamp(Math.ceil(travel / SUBSTEP_TRAVEL), 1, MAX_SUBSTEPS);
+    const h = dt / nSub;
+    const decay = Math.exp(-BALL_FRICTION * h);
+
+    for (let s = 0; s < nSub; s++) {
+      for (const q of fielded) {
+        q.x += q.vx * h;
+        q.y += q.vy * h;
+        clampPlayer(q);
+      }
+      ball.x += ball.vx * h;
+      ball.y += ball.vy * h;
+      ball.vx *= decay;
+      ball.vy *= decay;
+
+      for (let iter = 0; iter < COLLIDE_ITERS; iter++) {
+        for (let a = 0; a < fielded.length; a++) {
+          for (let b = a + 1; b < fielded.length; b++) {
+            collideCircles(
+              fielded[a],
+              fielded[b],
+              PLAYER_R,
+              PLAYER_R,
+              PLAYER_MASS,
+              PLAYER_MASS,
+              PLAYER_RESTITUTION
+            );
+            clampPlayer(fielded[a]);
+            clampPlayer(fielded[b]);
+          }
+        }
+        for (const q of fielded) {
+          if (
+            collideCircles(
+              q,
+              ball,
+              PLAYER_R,
+              BALL_R,
+              PLAYER_MASS,
+              BALL_MASS,
+              BALL_RESTITUTION
+            )
+          ) {
+            clampPlayer(q);
+            ball.lastKickId = q.id;
+          }
+        }
+      }
+
+      applyTraps(); // a held trap swallows momentum the moment the ball arrives
+
+      // Pillar bounces: goal posts + field corners, then flat edges.
+      resolveBallPillars(ball);
+
+      if (ball.y < BALL_R) {
+        ball.y = BALL_R;
+        if (ball.vy < 0) ball.vy = -ball.vy * BOUNCE;
+      } else if (ball.y > FIELD_H - BALL_R) {
+        ball.y = FIELD_H - BALL_R;
+        if (ball.vy > 0) ball.vy = -ball.vy * BOUNCE;
+      }
+
+      // Mouth is between the post centers; posts themselves bounce as pillars above.
+      const inMouth = ball.y > GOAL_TOP + POST_R * 0.35 && ball.y < GOAL_BOT - POST_R * 0.35;
+      if (ball.x < BALL_R) {
+        if (inMouth) {
+          if (ball.x < -0.5) this._goal(room, 'blue', now);
+        } else {
+          ball.x = BALL_R;
+          if (ball.vx < 0) ball.vx = -ball.vx * BOUNCE;
+        }
+      } else if (ball.x > FIELD_W - BALL_R) {
+        if (inMouth) {
+          if (ball.x > FIELD_W + 0.5) this._goal(room, 'red', now);
+        } else {
+          ball.x = FIELD_W - BALL_R;
+          if (ball.vx > 0) ball.vx = -ball.vx * BOUNCE;
+        }
+      }
+      ball.x = clamp(ball.x, -GOAL_DEPTH + BALL_R, FIELD_W + GOAL_DEPTH - BALL_R);
+      resolveBallPillars(ball);
+
+      resolveOverlaps(fielded, ball);
+      if (room.phase !== 'play') return; // goal scored — celebration takes over
+    }
+
     if (Math.hypot(ball.vx, ball.vy) < 0.05) {
       ball.vx = 0;
       ball.vy = 0;
-    }
-
-    for (let iter = 0; iter < COLLIDE_ITERS; iter++) {
-      for (const q of fielded) {
-        if (
-          collideCircles(
-            q,
-            ball,
-            PLAYER_R,
-            BALL_R,
-            PLAYER_MASS,
-            BALL_MASS,
-            BALL_RESTITUTION
-          )
-        ) {
-          clampPlayer(q);
-          ball.lastKickId = q.id;
-        }
-      }
     }
 
     // Contact auto-volley: shot arrives while you're holding → release into a return.
@@ -854,57 +981,7 @@ export class FootballServer {
       tryPlayerKick(q, charge);
     }
 
-    // Soft dribble nudge (movement-biased toward cursor) when touching without a shot.
-    for (const q of fielded) {
-      if (kickedThisTick.has(q.id)) continue;
-      if (q.input.k && (q.charge || 0) > 0) continue; // charging — don't also dribble-steer
-      applyDribble(q, ball, dt);
-    }
-
-    // Right-click trap: fully kill ball momentum while in kick range (press edge).
-    for (const q of fielded) {
-      const stDown = !!q.input.st;
-      const stPressed = stDown && !q.prevSt;
-      q.prevSt = stDown;
-      if (!stPressed) continue;
-      if (Math.hypot(ball.x - q.x, ball.y - q.y) > KICK_RANGE) continue;
-      ball.vx = 0;
-      ball.vy = 0;
-      ball.lastKickId = q.id;
-    }
-
-    // Pillar bounces: goal posts + field corners, then flat edges.
-    for (let i = 0; i < 3; i++) resolveBallPillars(ball);
-
-    if (ball.y < BALL_R) {
-      ball.y = BALL_R;
-      if (ball.vy < 0) ball.vy = -ball.vy * BOUNCE;
-    } else if (ball.y > FIELD_H - BALL_R) {
-      ball.y = FIELD_H - BALL_R;
-      if (ball.vy > 0) ball.vy = -ball.vy * BOUNCE;
-    }
-
-    // Mouth is between the post centers; posts themselves bounce as pillars above.
-    const inMouth = ball.y > GOAL_TOP + POST_R * 0.35 && ball.y < GOAL_BOT - POST_R * 0.35;
-    if (ball.x < BALL_R) {
-      if (inMouth) {
-        if (ball.x < -0.5) this._goal(room, 'blue', now);
-      } else {
-        ball.x = BALL_R;
-        if (ball.vx < 0) ball.vx = -ball.vx * BOUNCE;
-      }
-    } else if (ball.x > FIELD_W - BALL_R) {
-      if (inMouth) {
-        if (ball.x > FIELD_W + 0.5) this._goal(room, 'red', now);
-      } else {
-        ball.x = FIELD_W - BALL_R;
-        if (ball.vx > 0) ball.vx = -ball.vx * BOUNCE;
-      }
-    }
-    ball.x = clamp(ball.x, -GOAL_DEPTH + BALL_R, FIELD_W + GOAL_DEPTH - BALL_R);
-    resolveBallPillars(ball);
-
-    // Final hard depenetration — guarantees no residual clipping after walls.
+    // Final hard depenetration — a broadcast frame never contains overlap.
     resolveOverlaps(fielded, ball);
     for (const q of fielded) clampPlayer(q);
     resolveOverlaps(fielded, ball);
@@ -955,6 +1032,7 @@ export class FootballServer {
     }
     this._broadcast(room, {
       t: 'state',
+      tk: this._tickNo, // gaps here = skipped/caught-up ticks; client interpolates
       ph: room.phase,
       kt: room.phase === 'play' ? 0 : Math.max(0, room.phaseUntil - now),
       sc: room.score,

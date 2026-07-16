@@ -135,6 +135,15 @@
   .modalPanel { width: 320px; display: flex; flex-direction: column; gap: 12px; }
   .modalPanel .row { display: flex; gap: 8px; justify-content: flex-end; }
 
+  /* ---- Keybinds modal ---- */
+  .bindsPanel { width: 440px; }
+  .bindRows { display: flex; flex-direction: column; gap: 6px; }
+  .bindRow { display: flex; align-items: center; gap: 8px; }
+  .bindRow .lbl { flex: 1; font-size: 13px; }
+  .bindBtn { min-width: 104px; padding: 7px 10px; font-size: 12px; }
+  .bindBtn.listening { outline: 1px solid var(--accent); color: var(--accent); }
+  .bindHint { color: var(--muted); font-size: 11px; line-height: 1.6; }
+
   /* ---- Lobby ---- */
   #lobby { justify-content: flex-start; padding: 42px 20px 24px; overflow-y: auto; }
   .lobbyHead { display: flex; flex-direction: column; align-items: center; gap: 6px; }
@@ -221,6 +230,7 @@
     </section>
   </div>
   <div id="menuMsg" class="msg"></div>
+  <button id="bindsBtn" class="btn">Keybinds</button>
   <a class="backLink" href="/">&larr; back to AIM4.io</a>
 </div>
 
@@ -233,6 +243,22 @@
     <div class="row">
       <button id="passCancelBtn" class="btn">Cancel</button>
       <button id="passJoinBtn" class="btn primary">Join</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== KEYBINDS MODAL ===================== -->
+<div id="bindsModal" class="modal hidden">
+  <div class="panel modalPanel bindsPanel">
+    <h2>KEYBINDS</h2>
+    <div id="bindRows" class="bindRows"></div>
+    <div class="bindHint">
+      Click a slot, then press a key or mouse button (press mouse buttons over the
+      dark backdrop, not the panel). <kbd>Esc</kbd> cancels &middot; <kbd>Backspace</kbd> clears the slot.
+    </div>
+    <div class="row">
+      <button id="bindsResetBtn" class="btn">Reset defaults</button>
+      <button id="bindsCloseBtn" class="btn primary">Done</button>
     </div>
   </div>
 </div>
@@ -267,6 +293,7 @@
   </div>
   <div class="lobbyFoot">
     <button id="startBtn" class="btn primary">Start match</button>
+    <button id="bindsBtnLobby" class="btn">Keybinds</button>
     <button id="leaveBtn" class="btn danger">Leave</button>
   </div>
   <div id="lobbyMsg" class="msg"></div>
@@ -297,8 +324,9 @@
   const SHOOT_STAMINA_MAX = 80;
   const SHOOT_STAMINA_REGEN = 18;
   const BALL_FRICTION = 0.72;
-  const KICK_POWER_SCALE = 0.775;
-  const KICK_MIN = 3.5, KICK_MAX = 46;
+  const KICK_POWER_SCALE = 1.0;
+  const SHOT_MIN_DIST = 14;
+  const KICK_MIN = SHOT_MIN_DIST * BALL_FRICTION, KICK_MAX = 58;
   const KICK_RANGE = PLAYER_R + BALL_R + 2.0;
   const KICK_COOLDOWN_MS = 420;
   const SHOOT_MIN_TO_FIRE = 10;
@@ -308,9 +336,14 @@
   const CHARGE_BASE_POWER = 44;
   const POST_R = 0.7;
   const CORNER_R = 0.55;
-  // Remote players / ball: render slightly behind latest snap for smoothness.
-  // Local player uses client-side prediction (no delay).
-  const REMOTE_INTERP_MS = 50;
+  // Remote players / ball: render slightly behind the latest snap and
+  // interpolate between snapshots. Local player uses prediction (no delay).
+  // The delay adapts to how (ir)regularly server ticks actually arrive, so
+  // skipped or late ticks are bridged by interpolation instead of snapping.
+  let interpDelay = 60;
+  let snapGapEma = 16;
+  let snapJitterEma = 8;
+  let lastSnapRt = 0;
 
   const TEAM_COLOR = { red: '#ff5544', blue: '#4da3ff' };
 
@@ -484,17 +517,30 @@
         lastKicks = [];
         pred = null;
         lastFrameT = 0;
+        lastSnapRt = 0;
         inGame = true;
         endOverlay.classList.add('hidden');
         banner.classList.add('hidden');
+        bindsModal.classList.add('hidden');
+        cancelCapture();
         show('game');
         resize();
         break;
-      case 'state':
-        snaps.push({ rt: performance.now(), s: msg });
-        if (snaps.length > 20) snaps.shift();
+      case 'state': {
+        const rt = performance.now();
+        if (lastSnapRt) {
+          const gap = Math.min(300, rt - lastSnapRt);
+          snapGapEma += (gap - snapGapEma) * 0.08;
+          snapJitterEma += (Math.abs(gap - snapGapEma) - snapJitterEma) * 0.08;
+        }
+        lastSnapRt = rt;
+        const target = clamp(snapGapEma * 1.5 + snapJitterEma * 2.5 + 12, 40, 250);
+        interpDelay += (target - interpDelay) * 0.05;
+        snaps.push({ rt, s: msg });
+        while (snaps.length > 64 || (snaps.length > 2 && rt - snaps[0].rt > 500)) snaps.shift();
         reconcilePred(msg);
         break;
+      }
       case 'kick':
         lastKicks.push({ x: msg.x, y: msg.y, p: msg.p, rt: performance.now() });
         if (pred && msg.id === myId) {
@@ -695,101 +741,204 @@
     });
   });
 
-  // ---- Game input -----------------------------------------------------------------
-  const keys = { u: false, d: false, l: false, r: false, sp: false, k: false, st: false };
-  let mouse = { x: 0, y: 0 };
-  let mouseKick = false;
-  let mouseStop = false;
-
-  const KEYMAP = {
-    KeyW: 'u', ArrowUp: 'u',
-    KeyS: 'd', ArrowDown: 'd',
-    KeyA: 'l', ArrowLeft: 'l',
-    KeyD: 'r', ArrowRight: 'r',
-    Space: 'k',
-    KeyF: 'st',
-    ShiftLeft: 'sp', ShiftRight: 'sp'
+  // ---- Game input: rebindable actions --------------------------------------
+  // Any keyboard key or mouse button can drive any action; binds persist in
+  // localStorage. All actions are held-state (the server treats shoot as a
+  // charge-hold and stop/trap as a continuous hold).
+  const ACTION_DEFS = [
+    { a: 'u', label: 'Move up' },
+    { a: 'd', label: 'Move down' },
+    { a: 'l', label: 'Move left' },
+    { a: 'r', label: 'Move right' },
+    { a: 'sp', label: 'Sprint' },
+    { a: 'k', label: 'Shoot (hold to charge)' },
+    { a: 'st', label: 'Stop / trap (hold)' }
+  ];
+  const DEFAULT_BINDS = {
+    u: ['KeyW', 'ArrowUp'],
+    d: ['KeyS', 'ArrowDown'],
+    l: ['KeyA', 'ArrowLeft'],
+    r: ['KeyD', 'ArrowRight'],
+    sp: ['ShiftLeft', 'ShiftRight'],
+    k: ['Space', 'Mouse0'],
+    st: ['KeyF', 'Mouse2']
   };
-  function kickHeld() {
-    return keys.k || mouseKick;
+  const BINDS_KEY = 'aim4-football-binds';
+
+  function loadBinds() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(BINDS_KEY)); } catch { /* ignore */ }
+    const out = {};
+    for (const { a } of ACTION_DEFS) {
+      const v = saved && Array.isArray(saved[a]) ? saved[a] : DEFAULT_BINDS[a];
+      out[a] = [0, 1].map((s) => (typeof v[s] === 'string' ? v[s] : null));
+    }
+    return out;
   }
-  function stopHeld() {
-    return keys.st || mouseStop;
+  let binds = loadBinds();
+  function saveBinds() { localStorage.setItem(BINDS_KEY, JSON.stringify(binds)); }
+
+  const pressed = new Set(); // currently-down key/button codes
+  const act = { u: false, d: false, l: false, r: false, sp: false, k: false, st: false };
+  let mouse = { x: 0, y: 0 };
+
+  function codeBound(code) {
+    for (const a in binds) if (binds[a].includes(code)) return true;
+    return false;
+  }
+  function refreshActions() {
+    let changed = false;
+    for (const a in act) {
+      const held = binds[a].some((c) => c && pressed.has(c));
+      if (act[a] !== held) { act[a] = held; changed = true; }
+    }
+    if (changed) sendInput();
+  }
+  function pressCode(code) { if (!pressed.has(code)) { pressed.add(code); refreshActions(); } }
+  function releaseCode(code) { if (pressed.delete(code)) refreshActions(); }
+  function releaseAll() { if (pressed.size) { pressed.clear(); refreshActions(); } }
+
+  function kickHeld() {
+    return act.k;
   }
   function sendInput() {
     if (!inGame || !ws || ws.readyState !== 1) return;
     const aim = screenToField(mouse.x, mouse.y);
     send({
       t: 'input',
-      u: keys.u, d: keys.d, l: keys.l, r: keys.r,
-      sp: keys.sp, k: kickHeld(), st: stopHeld(),
+      u: act.u, d: act.d, l: act.l, r: act.r,
+      sp: act.sp, k: act.k, st: act.st,
       ax: aim.x, ay: aim.y
     });
   }
 
   window.addEventListener('keydown', (e) => {
-    const k = KEYMAP[e.code];
-    if (!k || !inGame) return;
-    if (!keys[k]) {
-      keys[k] = true;
-      sendInput();
-    }
+    if (captureBind(e, e.code)) return;
+    if (!inGame || !codeBound(e.code)) return;
+    pressCode(e.code);
     e.preventDefault();
   });
-  window.addEventListener('keyup', (e) => {
-    const k = KEYMAP[e.code];
-    if (!k) return;
-    if (keys[k]) {
-      keys[k] = false;
-      sendInput();
-    }
-  });
-  window.addEventListener('blur', () => {
-    for (const k in keys) keys[k] = false;
-    mouseKick = false;
-    mouseStop = false;
-    sendInput();
-  });
+  window.addEventListener('keyup', (e) => releaseCode(e.code));
+  window.addEventListener('blur', releaseAll);
   window.addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
   window.addEventListener('mousedown', (e) => {
-    if (!inGame) return;
+    const code = `Mouse${e.button}`;
+    if (captureBind(e, code)) return;
     mouse.x = e.clientX;
     mouse.y = e.clientY;
-    if (e.button === 0) {
-      if (!mouseKick) {
-        mouseKick = true;
-        sendInput();
-      }
-      e.preventDefault();
-    } else if (e.button === 2) {
-      if (!mouseStop) {
-        mouseStop = true;
-        sendInput();
-      }
-      e.preventDefault();
-    }
+    if (!inGame || !codeBound(code)) return;
+    pressCode(code);
+    e.preventDefault();
   });
-  window.addEventListener('mouseup', (e) => {
-    if (e.button === 0 && mouseKick) {
-      mouseKick = false;
-      sendInput();
-    } else if (e.button === 2 && mouseStop) {
-      mouseStop = false;
-      sendInput();
-    }
-  });
+  window.addEventListener('mouseup', (e) => releaseCode(`Mouse${e.button}`));
   window.addEventListener('contextmenu', (e) => {
-    if (inGame) e.preventDefault();
+    if (inGame || bindCapture) e.preventDefault();
   }, true);
-  // Release charge if the pointer leaves the window while held.
+  // Release mouse-held binds if the pointer leaves the window.
   window.addEventListener('mouseleave', () => {
-    let changed = false;
-    if (mouseKick) { mouseKick = false; changed = true; }
-    if (mouseStop) { mouseStop = false; changed = true; }
-    if (changed) sendInput();
+    for (const code of [...pressed]) if (code.startsWith('Mouse')) releaseCode(code);
   });
 
   setInterval(sendInput, 16);
+
+  // ---- Keybind settings -------------------------------------------------------
+  const bindsModal = $('bindsModal');
+  const bindRows = $('bindRows');
+  let bindCapture = null; // { a, slot } while a slot waits for a key/button
+
+  function bindLabel(code) {
+    if (!code) return '—';
+    const mouseNames = { Mouse0: 'LMB', Mouse1: 'MMB', Mouse2: 'RMB', Mouse3: 'Mouse 4', Mouse4: 'Mouse 5' };
+    if (mouseNames[code]) return mouseNames[code];
+    if (code.startsWith('Mouse')) return code;
+    return code
+      .replace(/^Key/, '')
+      .replace(/^Digit/, '')
+      .replace(/^Numpad/, 'Num ')
+      .replace('ArrowUp', '↑').replace('ArrowDown', '↓')
+      .replace('ArrowLeft', '←').replace('ArrowRight', '→')
+      .replace('ShiftLeft', 'L-Shift').replace('ShiftRight', 'R-Shift')
+      .replace('ControlLeft', 'L-Ctrl').replace('ControlRight', 'R-Ctrl')
+      .replace('AltLeft', 'L-Alt').replace('AltRight', 'R-Alt');
+  }
+
+  function renderBinds() {
+    bindRows.innerHTML = '';
+    for (const { a, label } of ACTION_DEFS) {
+      const row = document.createElement('div');
+      row.className = 'bindRow';
+      const lbl = document.createElement('span');
+      lbl.className = 'lbl';
+      lbl.textContent = label;
+      row.appendChild(lbl);
+      for (const slot of [0, 1]) {
+        const btn = document.createElement('button');
+        btn.className = 'btn bindBtn';
+        btn.textContent = bindLabel(binds[a][slot]);
+        btn.onclick = () => {
+          cancelCapture();
+          bindCapture = { a, slot };
+          btn.textContent = 'press key…';
+          btn.classList.add('listening');
+        };
+        row.appendChild(btn);
+      }
+      bindRows.appendChild(row);
+    }
+  }
+
+  function cancelCapture() {
+    if (!bindCapture) return;
+    bindCapture = null;
+    renderBinds();
+  }
+
+  /** Consume a key/button press while a bind slot is listening. */
+  function captureBind(e, code) {
+    if (!bindCapture) return false;
+    // Let clicks inside the panel land (switch slots, Done, Reset) — mouse
+    // buttons are bindable by pressing them over the backdrop instead.
+    if (code.startsWith('Mouse') && e.target instanceof Element && e.target.closest('.bindsPanel')) {
+      return false;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    const { a, slot } = bindCapture;
+    bindCapture = null;
+    if (code === 'Escape') {
+      // cancelled — just re-render
+    } else if (code === 'Backspace' || code === 'Delete') {
+      binds[a][slot] = null;
+      saveBinds();
+    } else {
+      // One code drives one action: clear it from any other slot first.
+      for (const k in binds) {
+        for (let s = 0; s < 2; s++) if (binds[k][s] === code) binds[k][s] = null;
+      }
+      binds[a][slot] = code;
+      saveBinds();
+    }
+    releaseAll();
+    renderBinds();
+    return true;
+  }
+
+  function openBinds() {
+    renderBinds();
+    bindsModal.classList.remove('hidden');
+  }
+  $('bindsBtn').onclick = openBinds;
+  $('bindsBtnLobby').onclick = openBinds;
+  $('bindsCloseBtn').onclick = () => {
+    cancelCapture();
+    bindsModal.classList.add('hidden');
+  };
+  $('bindsResetBtn').onclick = () => {
+    binds = JSON.parse(JSON.stringify(DEFAULT_BINDS));
+    saveBinds();
+    bindCapture = null;
+    renderBinds();
+  };
 
   // ---- View transform ----------------------------------------------------------
   let sc = 1, ox = 0, oy = 0;
@@ -884,14 +1033,14 @@
 
   function stepPred(dt) {
     if (!pred || !inGame || dt <= 0) return;
-    let wx = (keys.r ? 1 : 0) - (keys.l ? 1 : 0);
-    let wy = (keys.d ? 1 : 0) - (keys.u ? 1 : 0);
+    let wx = (act.r ? 1 : 0) - (act.l ? 1 : 0);
+    let wy = (act.d ? 1 : 0) - (act.u ? 1 : 0);
     const len = Math.hypot(wx, wy);
     if (len > 0) {
       wx /= len;
       wy /= len;
     }
-    const wantsSprint = keys.sp && len > 0;
+    const wantsSprint = act.sp && len > 0;
     const sprinting = wantsSprint && !pred.winded && pred.stamina > 0;
     if (sprinting) {
       pred.stamina = Math.max(0, pred.stamina - dt);
@@ -932,11 +1081,43 @@
     pred.x = clamp(pred.x + pred.vx * dt, PLAYER_R, FIELD_W - PLAYER_R);
     pred.y = clamp(pred.y + pred.vy * dt, PLAYER_R, FIELD_H - PLAYER_R);
     pred.sprinting = sprinting;
+
+    // Keep the predicted avatar outside other bodies so no frame ever renders
+    // us inside someone (the server resolves authoritatively; this only mirrors
+    // the separation it will apply anyway).
+    const last = snaps[snaps.length - 1];
+    if (last && last.s.ph === 'play') {
+      for (const q of last.s.pl) {
+        if (q.i === myId) continue;
+        pushPredOut(q.x, q.y, PLAYER_R * 2, 0.8, true);
+      }
+      pushPredOut(last.s.ball.x, last.s.ball.y, PLAYER_R + BALL_R, 0.5, false);
+    }
+  }
+
+  function pushPredOut(cx, cy, minDist, strength, killVel) {
+    let dx = pred.x - cx;
+    let dy = pred.y - cy;
+    let d = Math.hypot(dx, dy);
+    if (d >= minDist) return;
+    if (d < 1e-4) { dx = 1; dy = 0; d = 1; }
+    const nx = dx / d;
+    const ny = dy / d;
+    const push = (minDist - d) * strength;
+    pred.x = clamp(pred.x + nx * push, PLAYER_R, FIELD_W - PLAYER_R);
+    pred.y = clamp(pred.y + ny * push, PLAYER_R, FIELD_H - PLAYER_R);
+    if (killVel) {
+      const vn = pred.vx * nx + pred.vy * ny;
+      if (vn < 0) {
+        pred.vx -= vn * nx;
+        pred.vy -= vn * ny;
+      }
+    }
   }
 
   function sampleState(now) {
     if (!snaps.length) return null;
-    const rt = now - REMOTE_INTERP_MS;
+    const rt = now - interpDelay;
     let a = snaps[0], b = snaps[0];
     for (let i = 0; i < snaps.length; i++) {
       if (snaps[i].rt <= rt) a = snaps[i];
@@ -973,6 +1154,41 @@
       ball: { x: bx + bvx * ahead, y: by + bvy * ahead },
       players
     };
+  }
+
+  // Purely cosmetic: interpolation between two (non-overlapping) snapshots can
+  // still momentarily cross bodies — nudge the rendered copies apart so no
+  // frame ever shows discs inside each other. The ball is never moved.
+  function visualSeparate(st) {
+    const list = [...st.players.values()];
+    for (let iter = 0; iter < 2; iter++) {
+      for (let i = 0; i < list.length; i++) {
+        const a = list[i];
+        for (let j = i + 1; j < list.length; j++) {
+          const b = list[j];
+          let dx = b.x - a.x;
+          let dy = b.y - a.y;
+          let d = Math.hypot(dx, dy);
+          const min = PLAYER_R * 2;
+          if (d >= min) continue;
+          if (d < 1e-4) { dx = 1; dy = 0; d = 1; }
+          const push = (min - d) / 2;
+          a.x -= (dx / d) * push;
+          a.y -= (dy / d) * push;
+          b.x += (dx / d) * push;
+          b.y += (dy / d) * push;
+        }
+        let dx = a.x - st.ball.x;
+        let dy = a.y - st.ball.y;
+        let d = Math.hypot(dx, dy);
+        const min = PLAYER_R + BALL_R;
+        if (d < min) {
+          if (d < 1e-4) { dx = 1; dy = 0; d = 1; }
+          a.x += (dx / d) * (min - d);
+          a.y += (dy / d) * (min - d);
+        }
+      }
+    }
   }
 
   // ---- Rendering ------------------------------------------------------------------
@@ -1051,6 +1267,7 @@
         }
       : serverMe || null;
     if (me) st.players.set(myId, me);
+    visualSeparate(st);
 
     ballTrail.push({ x: st.ball.x, y: st.ball.y });
     if (ballTrail.length > 12) ballTrail.shift();
@@ -1099,12 +1316,18 @@
       const aim = screenToField(mouse.x, mouse.y);
       const dirX = aim.x - st.ball.x;
       const dirY = aim.y - st.ball.y;
+      const dirLen = Math.hypot(dirX, dirY);
       const aimDist = Math.hypot(aim.x - me.x, aim.y - me.y);
+      // Mirror of the server's shot power: aim off the pitch = full distance.
+      const offPitch = aim.x <= 0 || aim.x >= FIELD_W || aim.y <= 0 || aim.y >= FIELD_H;
+      const aimPower = offPitch
+        ? KICK_MAX
+        : Math.min(Math.max(aimDist, dirLen * 0.35) * KICK_POWER_SCALE, KICK_MAX);
       const charge = me.ch || 0;
       const chargeFloor = charge * charge * CHARGE_BASE_POWER;
       const chargeMul = 1 + charge * CHARGE_POWER_BONUS;
       const powerCap = KICK_MAX * (1 + CHARGE_POWER_BONUS) + CHARGE_BASE_POWER * 0.15;
-      const raw = (aimDist * KICK_POWER_SCALE + chargeFloor) * chargeMul;
+      const raw = (aimPower + chargeFloor) * chargeMul;
       const power = Math.min(1, Math.max(0, (raw - KICK_MIN) / (powerCap - KICK_MIN)));
       const inReach = Math.hypot(st.ball.x - me.x, st.ball.y - me.y) <= KICK_RANGE;
       ctx.setLineDash([6, 6]);
@@ -1119,8 +1342,8 @@
       ctx.arc(px(aim.x), py(aim.y), 5 + power * 4, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(255,255,255,0.5)';
       ctx.stroke();
-      if (inReach && Math.hypot(dirX, dirY) > 0.5) {
-        const n = Math.hypot(dirX, dirY);
+      if (inReach && dirLen > 0.5) {
+        const n = dirLen;
         ctx.beginPath();
         ctx.moveTo(px(st.ball.x), py(st.ball.y));
         ctx.lineTo(px(st.ball.x + (dirX / n) * 4), py(st.ball.y + (dirY / n) * 4));
@@ -1243,7 +1466,7 @@
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
       ctx.fillRect(bx - 2, bySprint - 2, bw + 4, bh + 4);
       const sf = Math.max(0, Math.min(1, me.s / STAMINA_MAX));
-      ctx.fillStyle = me.w ? '#e6a23c' : (keys.sp ? '#6fe3a1' : '#37b26c');
+      ctx.fillStyle = me.w ? '#e6a23c' : (act.sp ? '#6fe3a1' : '#37b26c');
       ctx.fillRect(bx, bySprint, bw * sf, bh);
 
       // Shoot stamina (amber)
