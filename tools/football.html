@@ -695,7 +695,7 @@
   });
 
   // ---- Game input -----------------------------------------------------------------
-  const keys = { u: false, d: false, l: false, r: false, sp: false, k: false };
+  const keys = { u: false, d: false, l: false, r: false, sp: false, k: false, st: false };
   let mouse = { x: 0, y: 0 };
   let mouseKick = false;
   let mouseStop = false;
@@ -706,10 +706,14 @@
     KeyA: 'l', ArrowLeft: 'l',
     KeyD: 'r', ArrowRight: 'r',
     Space: 'k',
+    KeyF: 'st',
     ShiftLeft: 'sp', ShiftRight: 'sp'
   };
   function kickHeld() {
     return keys.k || mouseKick;
+  }
+  function stopHeld() {
+    return keys.st || mouseStop;
   }
   function sendInput() {
     if (!inGame || !ws || ws.readyState !== 1) return;
@@ -717,7 +721,7 @@
     send({
       t: 'input',
       u: keys.u, d: keys.d, l: keys.l, r: keys.r,
-      sp: keys.sp, k: kickHeld(), st: mouseStop,
+      sp: keys.sp, k: kickHeld(), st: stopHeld(),
       ax: aim.x, ay: aim.y
     });
   }
@@ -775,7 +779,7 @@
   });
   window.addEventListener('contextmenu', (e) => {
     if (inGame) e.preventDefault();
-  });
+  }, true);
   // Release charge if the pointer leaves the window while held.
   window.addEventListener('mouseleave', () => {
     let changed = false;
