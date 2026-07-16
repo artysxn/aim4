@@ -112,6 +112,11 @@ const SUBSTEP_TRAVEL = 0.4; // max combined ball+player travel per slice
 const MAX_SUBSTEPS = 6;
 // A shot taken from a trapper's feet breaks their held trap (re-press to trap).
 const TRAP_BREAK_SLACK = 0.5;
+// While trapping and moving, the ball eases toward a follow point at the feet.
+const TRAP_FOLLOW_GAP = 0.15; // clearance beyond player+ball radii
+const TRAP_POS_EASE = 14; // 1/s — smooth radius / stick-to-player
+const TRAP_ANG_EASE = 10; // 1/s — orbit toward crosshair direction
+const TRAP_VEL_EASE = 16; // 1/s — match player velocity
 
 const GOALS_TO_WIN = 5;
 const ROOM_CAP = 12;
@@ -259,6 +264,70 @@ function applyKick(q, ball, charge, now) {
   q.kickAt = now + KICK_COOLDOWN_MS;
   q.charge = 0;
   return powerT;
+}
+
+/**
+ * Hold-to-trap follow: keep the ball on a ring around the player and ease
+ * its angle toward the crosshair so it orbits smoothly as you aim.
+ */
+function applyTrapFollow(q, ball, dt) {
+  if (Math.hypot(ball.x - q.x, ball.y - q.y) > KICK_RANGE) return false;
+
+  const hold = PLAYER_R + BALL_R + TRAP_FOLLOW_GAP;
+
+  // Prefer crosshair direction; fall back to movement / current offset.
+  let ax = q.input.ax - q.x;
+  let ay = q.input.ay - q.y;
+  let aLen = Math.hypot(ax, ay);
+  if (aLen < 0.5) {
+    const spd = Math.hypot(q.vx, q.vy);
+    if (spd > 0.35) {
+      ax = q.vx;
+      ay = q.vy;
+      aLen = spd;
+    } else {
+      const { wx, wy, len } = wishDir(q);
+      if (len > 0) {
+        ax = wx;
+        ay = wy;
+        aLen = 1;
+      } else {
+        ax = ball.x - q.x;
+        ay = ball.y - q.y;
+        aLen = Math.hypot(ax, ay) || 1;
+      }
+    }
+  }
+  const targetAng = Math.atan2(ay, ax);
+
+  let curAng = Math.atan2(ball.y - q.y, ball.x - q.x);
+  let dAng = targetAng - curAng;
+  while (dAng > Math.PI) dAng -= Math.PI * 2;
+  while (dAng < -Math.PI) dAng += Math.PI * 2;
+  const ak = 1 - Math.exp(-TRAP_ANG_EASE * dt);
+  curAng += dAng * ak;
+
+  const curR = Math.hypot(ball.x - q.x, ball.y - q.y);
+  const rk = 1 - Math.exp(-TRAP_POS_EASE * dt);
+  const r = curR + (hold - curR) * rk;
+
+  const targetX = q.x + Math.cos(curAng) * r;
+  const targetY = q.y + Math.sin(curAng) * r;
+  // Stick tightly to the orbit point so the ball rides with the player.
+  const pk = 1 - Math.exp(-TRAP_POS_EASE * dt);
+  ball.x += (targetX - ball.x) * pk;
+  ball.y += (targetY - ball.y) * pk;
+
+  const vk = 1 - Math.exp(-TRAP_VEL_EASE * dt);
+  ball.vx += (q.vx - ball.vx) * vk;
+  ball.vy += (q.vy - ball.vy) * vk;
+  if (Math.hypot(ball.vx - q.vx, ball.vy - q.vy) < 0.08) {
+    ball.vx = q.vx;
+    ball.vy = q.vy;
+  }
+
+  ball.lastKickId = q.id;
+  return true;
 }
 
 /** Soft carry: ease ball velocity toward move-biased aim while touching. */
@@ -871,13 +940,14 @@ export class FootballServer {
     // Soft dribble nudge (movement-biased toward cursor) when touching without a shot.
     for (const q of fielded) {
       if (kickedThisTick.has(q.id)) continue;
+      if (q.input.st && !q.trapBroken) continue; // trap follow owns the ball
       if (q.input.k && (q.charge || 0) > 0) continue; // charging — don't also dribble-steer
       applyDribble(q, ball, dt);
     }
 
-    // Hold-to-trap: while the button is held, the ball is stopped dead every
-    // tick it's in reach — until a shot from your feet breaks the hold (then
-    // you must release and press again to trap).
+    // Hold-to-trap: while the button is held and the ball is in reach, ease it
+    // along with the player (smooth follow). A shot from your feet breaks the
+    // hold until you release and press again.
     const trappers = [];
     for (const q of fielded) {
       if (!q.input.st) {
@@ -887,15 +957,20 @@ export class FootballServer {
       if (q.trapBroken || kickedThisTick.has(q.id)) continue;
       trappers.push(q);
     }
-    const applyTraps = () => {
+    const applyTraps = (stepDt) => {
+      // Closest trapper wins if several overlap the ball.
+      let best = null;
+      let bestD = Infinity;
       for (const q of trappers) {
-        if (Math.hypot(ball.x - q.x, ball.y - q.y) > KICK_RANGE) continue;
-        ball.vx = 0;
-        ball.vy = 0;
-        ball.lastKickId = q.id;
+        const d = Math.hypot(ball.x - q.x, ball.y - q.y);
+        if (d <= KICK_RANGE && d < bestD) {
+          best = q;
+          bestD = d;
+        }
       }
+      if (best) applyTrapFollow(best, ball, stepDt);
     };
-    applyTraps();
+    applyTraps(dt);
 
     // Hard ceiling on ball speed no matter how kicks and impulses stack up.
     const ballSpd = Math.hypot(ball.vx, ball.vy);
@@ -961,7 +1036,7 @@ export class FootballServer {
         }
       }
 
-      applyTraps(); // a held trap swallows momentum the moment the ball arrives
+      applyTraps(h); // held trap follows / swallows the ball as it arrives
 
       // Pillar bounces: goal posts + field corners, then flat edges.
       resolveBallPillars(ball);
