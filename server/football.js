@@ -21,12 +21,12 @@ const TICK_HZ = 128;
 const TICK_MS = 1000 / TICK_HZ;
 
 // Field, in abstract units. x grows right, y grows down (matches canvas).
-export const FIELD_W = 100;
-export const FIELD_H = 62;
-const GOAL_H = 19.2; // was 16 (+20% taller)
+export const FIELD_W = 72;
+export const FIELD_H = 45;
+const GOAL_H = 14.4; // ~20% taller than old 16×0.72 scale
 export const GOAL_TOP = (FIELD_H - GOAL_H) / 2;
 export const GOAL_BOT = GOAL_TOP + GOAL_H;
-export const GOAL_DEPTH = 3; // net box behind each goal line
+export const GOAL_DEPTH = 2.5; // net box behind each goal line
 
 const PLAYER_R = 1.232; // +10% from 1.12
 const BALL_R = 1.2;
@@ -60,7 +60,8 @@ const CORNER_R = 0.55; // field-corner pillars
 const KICK_BLEND = 0.9; // strong commit to shot direction/power
 const CHARGE_TIME = 0.9; // seconds of hold → full charge
 const CHARGE_SLOW_MAX = 0.55; // up to 55% slower while fully charged
-const CHARGE_POWER_BONUS = 0.5; // +50% shot power at full charge
+const CHARGE_POWER_BONUS = 0.35; // extra scale on top of aim+charge floor
+const CHARGE_BASE_POWER = 44; // full charge adds this much power even at point-blank aim
 const CHARGE_MIN_FIRE = 0.04; // tiny tap still counts as a shot
 
 // Auto-volley: holding shoot when an opponent's shot comes at you → release.
@@ -190,18 +191,24 @@ function applyKick(q, ball, charge, now) {
   const dy = ball.y - q.y;
   if (Math.hypot(dx, dy) > KICK_RANGE) return null;
 
+  // Direction: ball → cursor. Power: player → cursor (aim off-pitch / screen edge = harder shot).
   let ax = q.input.ax - ball.x;
   let ay = q.input.ay - ball.y;
-  let dist = Math.hypot(ax, ay);
-  if (dist < 0.5) {
+  let dirLen = Math.hypot(ax, ay);
+  if (dirLen < 0.5) {
     ax = dx;
     ay = dy;
-    dist = Math.hypot(ax, ay) || 1;
+    dirLen = Math.hypot(ax, ay) || 1;
   }
+  const aimDist = Math.hypot(q.input.ax - q.x, q.input.ay - q.y);
+  const dist = Math.max(aimDist, dirLen * 0.35);
 
+  // Charge carries most of the power; aim distance still adds reach on top.
+  const chargeFloor = charge * charge * CHARGE_BASE_POWER;
+  const aimPower = dist * KICK_POWER_SCALE;
   const chargeMul = 1 + charge * CHARGE_POWER_BONUS;
-  const power = clamp(dist * KICK_POWER_SCALE * chargeMul, KICK_MIN, KICK_MAX * chargeMul);
-  const powerCap = KICK_MAX * (1 + CHARGE_POWER_BONUS);
+  const powerCap = KICK_MAX * (1 + CHARGE_POWER_BONUS) + CHARGE_BASE_POWER * 0.15;
+  const power = clamp((aimPower + chargeFloor) * chargeMul, KICK_MIN, powerCap);
   const powerT = clamp((power - KICK_MIN) / (powerCap - KICK_MIN || 1), 0, 1);
   // Steep cost curve: hard/charged shots burn much more shoot stamina.
   const costT = powerT * powerT;
@@ -210,8 +217,8 @@ function applyKick(q, ball, charge, now) {
   q.shootStamina = Math.max(0, q.shootStamina - cost);
 
   const blend = KICK_BLEND + (1 - KICK_BLEND) * powerT * 0.5;
-  const kvx = (ax / dist) * power;
-  const kvy = (ay / dist) * power;
+  const kvx = (ax / dirLen) * power;
+  const kvy = (ay / dirLen) * power;
   ball.vx = ball.vx * (1 - blend) + kvx * blend;
   ball.vy = ball.vy * (1 - blend) + kvy * blend;
   ball.lastKickId = q.id;
@@ -584,8 +591,9 @@ export class FootballServer {
         i.sp = !!msg.sp;
         i.k = !!msg.k;
         i.st = !!msg.st;
-        i.ax = clamp(num(msg.ax), -20, FIELD_W + 20);
-        i.ay = clamp(num(msg.ay), -20, FIELD_H + 20);
+        // Allow aiming well outside the pitch so screen-edge aims build power.
+        i.ax = clamp(num(msg.ax), -FIELD_W * 2, FIELD_W * 3);
+        i.ay = clamp(num(msg.ay), -FIELD_H * 2, FIELD_H * 3);
         break;
       }
       case 'ping': {
@@ -659,8 +667,8 @@ export class FootballServer {
         q.kickAt = 0;
       });
     };
-    place(room.players.filter((q) => q.team === 'red'), 30);
-    place(room.players.filter((q) => q.team === 'blue'), FIELD_W - 30);
+    place(room.players.filter((q) => q.team === 'red'), FIELD_W * 0.28);
+    place(room.players.filter((q) => q.team === 'blue'), FIELD_W * 0.72);
     room.ball.x = FIELD_W / 2;
     room.ball.y = FIELD_H / 2;
     room.ball.vx = 0;

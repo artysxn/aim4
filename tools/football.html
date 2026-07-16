@@ -284,8 +284,8 @@
 
 <script type="module">
   // ---- Constants mirrored from server/football.js (keep in sync) ----------
-  const FIELD_W = 100;
-  const FIELD_H = 62;
+  const FIELD_W = 72;
+  const FIELD_H = 45;
   const PLAYER_R = 1.232;
   const BALL_R = 1.2;
   const BASE_SPEED = 11.55;
@@ -304,7 +304,8 @@
   const SHOOT_MIN_TO_FIRE = 10;
   const CHARGE_TIME = 0.9;
   const CHARGE_SLOW_MAX = 0.55;
-  const CHARGE_POWER_BONUS = 0.5;
+  const CHARGE_POWER_BONUS = 0.35;
+  const CHARGE_BASE_POWER = 44;
   const POST_R = 0.7;
   const CORNER_R = 0.55;
   // Remote players / ball: render slightly behind latest snap for smoothness.
@@ -398,7 +399,7 @@
   let myId = null;
   let lobby = null;
   let roster = new Map();
-  let field = { w: 100, h: 62, gt: 21.4, gb: 40.6, gd: 3 };
+  let field = { w: 72, h: 45, gt: 15.3, gb: 29.7, gd: 2.5 };
   let goalsToWin = 5;
   let snaps = [];
   let lastKicks = [];
@@ -798,10 +799,16 @@
     cv.width = Math.floor(innerWidth * dpr);
     cv.height = Math.floor(innerHeight * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const pad = 10;
-    sc = Math.min(innerWidth / (field.w + field.gd * 2 + pad), innerHeight / (field.h + pad + 8));
+    // Keep the pitch small on screen so cursor can travel far off-field for power.
+    const margin = 0.2;
+    const usableW = innerWidth * (1 - margin * 2);
+    const usableH = innerHeight * (1 - margin * 2);
+    sc = Math.min(
+      usableW / (field.w + field.gd * 2),
+      usableH / field.h
+    );
     ox = (innerWidth - field.w * sc) / 2;
-    oy = (innerHeight - field.h * sc) / 2 + 8;
+    oy = (innerHeight - field.h * sc) / 2;
   }
   window.addEventListener('resize', resize);
 
@@ -1090,13 +1097,14 @@
 
     if (me) {
       const aim = screenToField(mouse.x, mouse.y);
-      const dx = aim.x - st.ball.x;
-      const dy = aim.y - st.ball.y;
-      const dist = Math.hypot(dx, dy);
+      const dirX = aim.x - st.ball.x;
+      const dirY = aim.y - st.ball.y;
+      const aimDist = Math.hypot(aim.x - me.x, aim.y - me.y);
       const charge = me.ch || 0;
+      const chargeFloor = charge * charge * CHARGE_BASE_POWER;
       const chargeMul = 1 + charge * CHARGE_POWER_BONUS;
-      const powerCap = KICK_MAX * (1 + CHARGE_POWER_BONUS);
-      const raw = dist * KICK_POWER_SCALE * chargeMul;
+      const powerCap = KICK_MAX * (1 + CHARGE_POWER_BONUS) + CHARGE_BASE_POWER * 0.15;
+      const raw = (aimDist * KICK_POWER_SCALE + chargeFloor) * chargeMul;
       const power = Math.min(1, Math.max(0, (raw - KICK_MIN) / (powerCap - KICK_MIN)));
       const inReach = Math.hypot(st.ball.x - me.x, st.ball.y - me.y) <= KICK_RANGE;
       ctx.setLineDash([6, 6]);
@@ -1108,9 +1116,18 @@
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.beginPath();
-      ctx.arc(px(aim.x), py(aim.y), 5 + charge * 4, 0, Math.PI * 2);
+      ctx.arc(px(aim.x), py(aim.y), 5 + power * 4, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(255,255,255,0.5)';
       ctx.stroke();
+      if (inReach && Math.hypot(dirX, dirY) > 0.5) {
+        const n = Math.hypot(dirX, dirY);
+        ctx.beginPath();
+        ctx.moveTo(px(st.ball.x), py(st.ball.y));
+        ctx.lineTo(px(st.ball.x + (dirX / n) * 4), py(st.ball.y + (dirY / n) * 4));
+        ctx.strokeStyle = `rgba(255,${Math.round(230 - power * 170)},80,0.35)`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
     }
 
     for (let i = 0; i < ballTrail.length - 1; i++) {
@@ -1152,13 +1169,13 @@
     ctx.lineTo(px(w / 2), py(h));
     ctx.stroke();
     ctx.beginPath();
-    ctx.arc(px(w / 2), py(h / 2), 9 * sc, 0, Math.PI * 2);
+    ctx.arc(px(w / 2), py(h / 2), Math.min(9, field.w * 0.12) * sc, 0, Math.PI * 2);
     ctx.stroke();
     ctx.beginPath();
     ctx.arc(px(w / 2), py(h / 2), 2.5, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,0.75)';
     ctx.fill();
-    const boxH = 30, boxW = 14;
+    const boxH = field.h * 0.48, boxW = field.w * 0.14;
     ctx.strokeRect(px(0), py((h - boxH) / 2), boxW * sc, boxH * sc);
     ctx.strokeRect(px(w - boxW), py((h - boxH) / 2), boxW * sc, boxH * sc);
     for (const side of [0, 1]) {
