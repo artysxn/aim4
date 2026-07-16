@@ -16,7 +16,7 @@
 //        pong{ct,st}
 // ---------------------------------------------------------------------------
 
-const TICK_HZ = 30;
+const TICK_HZ = 60;
 const TICK_MS = 1000 / TICK_HZ;
 
 // Field, in abstract units. x grows right, y grows down (matches canvas).
@@ -33,7 +33,7 @@ const BALL_R = 1.0;
 // and regenerates while not; running dry "winds" you until partially recovered.
 const BASE_SPEED = 17;
 const SPRINT_SPEED = 24;
-const MOVE_ACCEL = 36; // 1/s exponential velocity chase (snappy WASD)
+const MOVE_ACCEL = 22; // 1/s — smooth ramp; client prediction makes it feel instant
 const STAMINA_MAX = 10; // seconds of continuous sprint
 const STAMINA_REGEN = 0.8; // per second while not sprinting
 const WINDED_RECOVER = 2; // stamina needed to un-wind after running dry
@@ -41,13 +41,15 @@ const WINDED_RECOVER = 2; // stamina needed to un-wind after running dry
 // Ball. Exponential friction means a kick at speed v rolls v/BALL_FRICTION
 // units before stopping — so kick speed = dist(ball→aim) * BALL_FRICTION makes
 // the ball come to rest at the shooter's cursor ("mouse distance = shot").
-const BALL_FRICTION = 0.9; // 1/s exp decay
+const BALL_FRICTION = 0.85; // 1/s exp decay (slightly longer rolls)
 const KICK_RANGE = PLAYER_R + BALL_R + 2.0;
-const KICK_COOLDOWN_MS = 350;
+const KICK_COOLDOWN_MS = 280;
 const KICK_MIN = 8;
-const KICK_MAX = 55;
+const KICK_MAX = 58;
 const BOUNCE = 0.7; // wall/post restitution
-const DRIBBLE_PUSH = 1.15; // ball inherits this × outward speed on touch
+const DRIBBLE_PUSH = 1.2; // outward carry multiplier
+const DRIBBLE_BLEND = 10; // 1/s — how fast ball velocity chases the dribble target
+const KICK_BLEND = 0.78; // keep this fraction of new kick vs existing ball vel
 
 const GOALS_TO_WIN = 5;
 const ROOM_CAP = 12;
@@ -451,8 +453,11 @@ export class FootballServer {
         dist = Math.hypot(ax, ay) || 1;
       }
       const power = clamp(dist * BALL_FRICTION, KICK_MIN, KICK_MAX);
-      ball.vx = (ax / dist) * power;
-      ball.vy = (ay / dist) * power;
+      const kvx = (ax / dist) * power;
+      const kvy = (ay / dist) * power;
+      // Blend into existing velocity so the ball doesn't snap direction mid-flight.
+      ball.vx = ball.vx * (1 - KICK_BLEND) + kvx * KICK_BLEND;
+      ball.vy = ball.vy * (1 - KICK_BLEND) + kvy * KICK_BLEND;
       ball.lastKickId = q.id;
       q.kickAt = now + KICK_COOLDOWN_MS;
       this._broadcast(room, {
@@ -477,9 +482,12 @@ export class FootballServer {
         ball.x = q.x + nx * min;
         ball.y = q.y + ny * min;
         const toward = q.vx * nx + q.vy * ny; // speed into the ball (player → ball)
-        if (toward > 0.4 && toward > Math.hypot(ball.vx, ball.vy) * 0.55) {
-          ball.vx = nx * (toward * DRIBBLE_PUSH + 2);
-          ball.vy = ny * (toward * DRIBBLE_PUSH + 2);
+        if (toward > 0.35) {
+          const targetVx = nx * (toward * DRIBBLE_PUSH + 1.5);
+          const targetVy = ny * (toward * DRIBBLE_PUSH + 1.5);
+          const a = Math.min(1, DRIBBLE_BLEND * dt);
+          ball.vx += (targetVx - ball.vx) * a;
+          ball.vy += (targetVy - ball.vy) * a;
         }
       }
     }
@@ -565,7 +573,9 @@ export class FootballServer {
       sc: room.score,
       ball: {
         x: Math.round(room.ball.x * 100) / 100,
-        y: Math.round(room.ball.y * 100) / 100
+        y: Math.round(room.ball.y * 100) / 100,
+        vx: Math.round(room.ball.vx * 100) / 100,
+        vy: Math.round(room.ball.vy * 100) / 100
       },
       pl
     });

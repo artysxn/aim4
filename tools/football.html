@@ -284,13 +284,22 @@
 
 <script type="module">
   // ---- Constants mirrored from server/football.js (keep in sync) ----------
+  const FIELD_W = 100;
+  const FIELD_H = 62;
   const PLAYER_R = 1.4;
   const BALL_R = 1.0;
-  const BALL_FRICTION = 0.9;
-  const KICK_MIN = 8, KICK_MAX = 55;
-  const KICK_RANGE = PLAYER_R + BALL_R + 2.0;
+  const BASE_SPEED = 17;
+  const SPRINT_SPEED = 24;
+  const MOVE_ACCEL = 22;
   const STAMINA_MAX = 10;
-  const INTERP_MS = 45;
+  const STAMINA_REGEN = 0.8;
+  const WINDED_RECOVER = 2;
+  const BALL_FRICTION = 0.85;
+  const KICK_MIN = 8, KICK_MAX = 58;
+  const KICK_RANGE = PLAYER_R + BALL_R + 2.0;
+  // Remote players / ball: render slightly behind latest snap for smoothness.
+  // Local player uses client-side prediction (no delay).
+  const REMOTE_INTERP_MS = 70;
 
   const TEAM_COLOR = { red: '#ff5544', blue: '#4da3ff' };
 
@@ -385,6 +394,8 @@
   let lastKicks = [];
   let ballTrail = [];
   let inGame = false;
+  let pred = null; // local client prediction { x, y, vx, vy, stamina, winded, sprinting }
+  let lastFrameT = 0;
   let pendingJoin = null; // { code } while the password modal is open
 
   function connect() {
@@ -460,6 +471,8 @@
         snaps = [];
         ballTrail = [];
         lastKicks = [];
+        pred = null;
+        lastFrameT = 0;
         inGame = true;
         endOverlay.classList.add('hidden');
         banner.classList.add('hidden');
@@ -468,7 +481,8 @@
         break;
       case 'state':
         snaps.push({ rt: performance.now(), s: msg });
-        if (snaps.length > 12) snaps.shift();
+        if (snaps.length > 20) snaps.shift();
+        reconcilePred(msg);
         break;
       case 'kick':
         lastKicks.push({ x: msg.x, y: msg.y, p: msg.p, rt: performance.now() });
@@ -484,6 +498,8 @@
       }
       case 'end': {
         inGame = false;
+        pred = null;
+        lastFrameT = 0;
         const w = msg.winner;
         $('endScore').innerHTML =
           `<span style="color:${TEAM_COLOR.red}">${msg.score.red}</span>` +
@@ -724,10 +740,85 @@
     return { x: (mx - ox) / sc, y: (my - oy) / sc };
   }
 
-  // ---- Interpolated state --------------------------------------------------------
-  function sampleState() {
+  // ---- Local prediction (instant WASD) + remote interpolation ----------------
+  // Lag came from drawing the local player from delayed server snapshots.
+  // We simulate our own avatar every frame with the same movement constants;
+  // remote players + ball still interpolate/extrapolate from the server stream.
+
+  function clamp(v, a, b) {
+    return v < a ? a : v > b ? b : v;
+  }
+
+  function resetPred(sx, sy, stamina, winded, sprinting) {
+    pred = {
+      x: sx,
+      y: sy,
+      vx: 0,
+      vy: 0,
+      stamina: stamina ?? STAMINA_MAX,
+      winded: !!winded,
+      sprinting: !!sprinting
+    };
+  }
+
+  function reconcilePred(msg) {
+    if (!myId || msg.ph !== 'play') {
+      if (msg.ph !== 'play') pred = null;
+      return;
+    }
+    const me = msg.pl.find((p) => p.i === myId);
+    if (!me) {
+      pred = null;
+      return;
+    }
+    if (!pred) {
+      resetPred(me.x, me.y, me.s, me.w, me.r);
+      return;
+    }
+    const err = Math.hypot(pred.x - me.x, pred.y - me.y);
+    if (err > 4) {
+      resetPred(me.x, me.y, me.s, me.w, me.r);
+      return;
+    }
+    // Soft correction — keep predicted motion responsive without rubber-banding.
+    const k = err > 1.2 ? 0.35 : 0.12;
+    pred.x += (me.x - pred.x) * k;
+    pred.y += (me.y - pred.y) * k;
+    pred.stamina = me.s;
+    pred.winded = !!me.w;
+    pred.sprinting = !!me.r;
+  }
+
+  function stepPred(dt) {
+    if (!pred || !inGame || dt <= 0) return;
+    let wx = (keys.r ? 1 : 0) - (keys.l ? 1 : 0);
+    let wy = (keys.d ? 1 : 0) - (keys.u ? 1 : 0);
+    const len = Math.hypot(wx, wy);
+    if (len > 0) {
+      wx /= len;
+      wy /= len;
+    }
+    const wantsSprint = keys.sp && len > 0;
+    const sprinting = wantsSprint && !pred.winded && pred.stamina > 0;
+    if (sprinting) {
+      pred.stamina = Math.max(0, pred.stamina - dt);
+      if (pred.stamina <= 0) pred.winded = true;
+    } else {
+      pred.stamina = Math.min(STAMINA_MAX, pred.stamina + STAMINA_REGEN * dt);
+      if (pred.winded && pred.stamina >= WINDED_RECOVER) pred.winded = false;
+    }
+    const speed = sprinting ? SPRINT_SPEED : BASE_SPEED;
+    const k = Math.min(1, MOVE_ACCEL * dt);
+    pred.vx += (wx * speed - pred.vx) * k;
+    pred.vy += (wy * speed - pred.vy) * k;
+    pred.x = clamp(pred.x + pred.vx * dt, PLAYER_R, FIELD_W - PLAYER_R);
+    pred.y = clamp(pred.y + pred.vy * dt, PLAYER_R, FIELD_H - PLAYER_R);
+    pred.sprinting = sprinting;
+  }
+
+  function sampleState(now) {
     if (!snaps.length) return null;
-    const rt = performance.now() - INTERP_MS;
+    const rt = now - REMOTE_INTERP_MS;
     let a = snaps[0], b = snaps[0];
     for (let i = 0; i < snaps.length; i++) {
       if (snaps[i].rt <= rt) a = snaps[i];
@@ -742,13 +833,26 @@
     for (const q of b.s.pl) players.set(q.i, { ...q });
     for (const q of a.s.pl) {
       const cur = players.get(q.i);
-      if (cur) { cur.x = lerp(q.x, cur.x); cur.y = lerp(q.y, cur.y); }
+      if (cur) {
+        // Local player is overwritten by prediction during play; still lerp
+        // for kickoff/goal freezes when prediction is off.
+        cur.x = lerp(q.x, cur.x);
+        cur.y = lerp(q.y, cur.y);
+      }
     }
+
+    // Ball: interpolate between snaps, then extrapolate a hair with velocity.
+    const bx = lerp(a.s.ball.x, b.s.ball.x);
+    const by = lerp(a.s.ball.y, b.s.ball.y);
+    const bvx = lerp(a.s.ball.vx ?? 0, b.s.ball.vx ?? 0);
+    const bvy = lerp(a.s.ball.vy ?? 0, b.s.ball.vy ?? 0);
+    const ahead = Math.max(0, Math.min(0.05, (now - b.rt) / 1000));
+
     return {
       ph: b.s.ph,
       kt: b.s.kt,
       sc: b.s.sc,
-      ball: { x: lerp(a.s.ball.x, b.s.ball.x), y: lerp(a.s.ball.y, b.s.ball.y) },
+      ball: { x: bx + bvx * ahead, y: by + bvy * ahead },
       players
     };
   }
@@ -757,15 +861,32 @@
   function draw() {
     requestAnimationFrame(draw);
     if (!inGame) return;
-    const st = sampleState();
+    const now = performance.now();
+    const dt = lastFrameT ? Math.min(0.05, (now - lastFrameT) / 1000) : 0.016;
+    lastFrameT = now;
+    if (pred) stepPred(dt);
+
+    const st = sampleState(now);
     ctx.clearRect(0, 0, innerWidth, innerHeight);
     drawPitch();
     if (!st) return;
 
-    ballTrail.push({ x: st.ball.x, y: st.ball.y });
-    if (ballTrail.length > 9) ballTrail.shift();
+    // Overlay predicted local player into the render set.
+    const me = pred && st.ph === 'play'
+      ? {
+          i: myId,
+          x: pred.x,
+          y: pred.y,
+          s: pred.stamina,
+          r: pred.sprinting ? 1 : 0,
+          w: pred.winded ? 1 : 0
+        }
+      : st.players.get(myId) || null;
+    if (me) st.players.set(myId, me);
 
-    const now = performance.now();
+    ballTrail.push({ x: st.ball.x, y: st.ball.y });
+    if (ballTrail.length > 12) ballTrail.shift();
+
     lastKicks = lastKicks.filter((k) => now - k.rt < 300);
     for (const k of lastKicks) {
       const f = 1 - (now - k.rt) / 300;
@@ -776,7 +897,6 @@
       ctx.stroke();
     }
 
-    const me = st.players.get(myId);
     for (const [id, q] of st.players) {
       const info = roster.get(id);
       const color = TEAM_COLOR[info?.team] || '#888';
