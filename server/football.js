@@ -27,38 +27,51 @@ export const GOAL_TOP = (FIELD_H - 16) / 2; // goal mouth: y 23..39
 export const GOAL_BOT = GOAL_TOP + 16;
 export const GOAL_DEPTH = 3; // net box behind each goal line
 
-const PLAYER_R = 1.4;
-const BALL_R = 1.0;
+const PLAYER_R = 1.12; // was 1.4 (−20%)
+const BALL_R = 1.2; // was 1.0 (+20%)
 
-// Movement. Hold shift to sprint — a 10 s stamina pool drains while sprinting
+// Movement. Hold shift to sprint — stamina pool drains while sprinting
 // and regenerates while not; running dry "winds" you until partially recovered.
 const BASE_SPEED = 10.5;
-const SPRINT_SPEED = 14.5;
+const SPRINT_SPEED = 18.85; // was 14.5 (+30%)
 const MOVE_ACCEL = 12; // 1/s — slower, smoother ramp
-const STAMINA_MAX = 10; // seconds of continuous sprint
+const STAMINA_MAX = 8; // was 10 (−20%)
 const STAMINA_REGEN = 0.8; // per second while not sprinting
-const WINDED_RECOVER = 2; // stamina needed to un-wind after running dry
+const WINDED_RECOVER = 1.6; // stamina needed to un-wind after running dry
 
 // Shooting stamina — separate from sprint. Each kick drains this pool.
-const SHOOT_STAMINA_MAX = 100;
+const SHOOT_STAMINA_MAX = 80; // was 100 (−20%)
 const SHOOT_STAMINA_REGEN = 18; // per second
-const SHOOT_COST_MIN = 16; // weak tap
-const SHOOT_COST_MAX = 38; // full-power shot
-const SHOOT_MIN_TO_FIRE = 12; // need at least this much to shoot
+const SHOOT_COST_MIN = 14; // weak tap
+const SHOOT_COST_MAX = 58; // full-power / charged shot (steep curve)
+const SHOOT_MIN_TO_FIRE = 10; // need at least this much to shoot
 
 // Ball. Shot power scales with aim distance (mouse distance = shot power).
 const BALL_FRICTION = 0.72; // 1/s — longer rolls so powered shots carry
 const KICK_RANGE = PLAYER_R + BALL_R + 2.0;
 const KICK_COOLDOWN_MS = 420;
-const KICK_POWER_SCALE = 1.55; // shot speed ≈ aimDist × this
-const KICK_MIN = 7;
-const KICK_MAX = 92; // long-range shots hit this ceiling
+const KICK_POWER_SCALE = 0.775; // was 1.55 (−50%)
+const KICK_MIN = 3.5; // was 7 (−50%)
+const KICK_MAX = 46; // was 92 (−50%)
 const BOUNCE = 0.7; // wall/post restitution
 const KICK_BLEND = 0.9; // strong commit to shot direction/power
 const CHARGE_TIME = 0.9; // seconds of hold → full charge
 const CHARGE_SLOW_MAX = 0.55; // up to 55% slower while fully charged
 const CHARGE_POWER_BONUS = 0.5; // +50% shot power at full charge
 const CHARGE_MIN_FIRE = 0.04; // tiny tap still counts as a shot
+
+// Auto-volley: holding shoot when an opponent's shot comes at you → release.
+const INCOMING_SHOT_SPEED = 10;
+const INCOMING_SHOT_DOT = 0.2; // ball velocity aligned toward player
+const INCOMING_SHOT_MS = 2800;
+
+// Soft dribble when touching the ball without shooting.
+const DRIBBLE_TOUCH_SLACK = 0.2;
+const DRIBBLE_MAX_BALL_SPEED = 22; // don't steer hard shots
+const DRIBBLE_STRENGTH = 9; // target carry speed (units/s)
+const DRIBBLE_EASE = 7; // 1/s — how quickly ball velocity eases toward nudge
+const DRIBBLE_MOVE_WEIGHT = 0.72; // movement direction vs cursor
+const DRIBBLE_AIM_WEIGHT = 0.28;
 
 // Collision masses / restitution (impulse response).
 const PLAYER_MASS = 1;
@@ -96,6 +109,125 @@ function cleanName(raw, id) {
 
 function clamp(v, a, b) {
   return v < a ? a : v > b ? b : v;
+}
+
+function wishDir(q) {
+  const i = q.input;
+  let wx = (i.r ? 1 : 0) - (i.l ? 1 : 0);
+  let wy = (i.d ? 1 : 0) - (i.u ? 1 : 0);
+  const len = Math.hypot(wx, wy);
+  if (len > 0) {
+    wx /= len;
+    wy /= len;
+  }
+  return { wx, wy, len };
+}
+
+/** True when another player's recent shot is flying toward this player. */
+function isIncomingShot(q, ball, now) {
+  if (!ball.shotBy || ball.shotBy === q.id) return false;
+  if (now - (ball.shotAt || 0) > INCOMING_SHOT_MS) return false;
+  const dx = q.x - ball.x;
+  const dy = q.y - ball.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist > KICK_RANGE || dist < 1e-4) return false;
+  const spd = Math.hypot(ball.vx, ball.vy);
+  if (spd < INCOMING_SHOT_SPEED) return false;
+  const approach = (ball.vx * dx + ball.vy * dy) / (spd * dist);
+  return approach >= INCOMING_SHOT_DOT;
+}
+
+/**
+ * Apply a charged kick from player → ball. Returns powerT (0–1) or null if failed.
+ */
+function applyKick(q, ball, charge, now) {
+  if (charge < CHARGE_MIN_FIRE) return null;
+  if (now < q.kickAt) return null;
+  if ((q.shootStamina ?? 0) < SHOOT_MIN_TO_FIRE) return null;
+
+  const dx = ball.x - q.x;
+  const dy = ball.y - q.y;
+  if (Math.hypot(dx, dy) > KICK_RANGE) return null;
+
+  let ax = q.input.ax - ball.x;
+  let ay = q.input.ay - ball.y;
+  let dist = Math.hypot(ax, ay);
+  if (dist < 0.5) {
+    ax = dx;
+    ay = dy;
+    dist = Math.hypot(ax, ay) || 1;
+  }
+
+  const chargeMul = 1 + charge * CHARGE_POWER_BONUS;
+  const power = clamp(dist * KICK_POWER_SCALE * chargeMul, KICK_MIN, KICK_MAX * chargeMul);
+  const powerCap = KICK_MAX * (1 + CHARGE_POWER_BONUS);
+  const powerT = clamp((power - KICK_MIN) / (powerCap - KICK_MIN || 1), 0, 1);
+  // Steep cost curve: hard/charged shots burn much more shoot stamina.
+  const costT = powerT * powerT;
+  const cost = SHOOT_COST_MIN + (SHOOT_COST_MAX - SHOOT_COST_MIN) * costT;
+  if (q.shootStamina < cost * 0.55) return null;
+  q.shootStamina = Math.max(0, q.shootStamina - cost);
+
+  const blend = KICK_BLEND + (1 - KICK_BLEND) * powerT * 0.5;
+  const kvx = (ax / dist) * power;
+  const kvy = (ay / dist) * power;
+  ball.vx = ball.vx * (1 - blend) + kvx * blend;
+  ball.vy = ball.vy * (1 - blend) + kvy * blend;
+  ball.lastKickId = q.id;
+  ball.shotBy = q.id;
+  ball.shotAt = now;
+  q.kickAt = now + KICK_COOLDOWN_MS;
+  q.charge = 0;
+  return powerT;
+}
+
+/** Soft carry: ease ball velocity toward move-biased aim while touching. */
+function applyDribble(q, ball, dt) {
+  const dx = ball.x - q.x;
+  const dy = ball.y - q.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist > PLAYER_R + BALL_R + DRIBBLE_TOUCH_SLACK) return;
+
+  const ballSpd = Math.hypot(ball.vx, ball.vy);
+  if (ballSpd > DRIBBLE_MAX_BALL_SPEED) return;
+
+  const { wx, wy, len } = wishDir(q);
+  let mx = q.vx;
+  let my = q.vy;
+  let mLen = Math.hypot(mx, my);
+  if (mLen < 0.4 && len > 0) {
+    mx = wx;
+    my = wy;
+    mLen = 1;
+  } else if (mLen >= 0.4) {
+    mx /= mLen;
+    my /= mLen;
+  } else {
+    // Standing still — light push along contact normal away from feet is enough via physics.
+    return;
+  }
+
+  let ax = q.input.ax - ball.x;
+  let ay = q.input.ay - ball.y;
+  let aLen = Math.hypot(ax, ay);
+  if (aLen > 0.5) {
+    ax /= aLen;
+    ay /= aLen;
+  } else {
+    ax = mx;
+    ay = my;
+  }
+
+  let nx = mx * DRIBBLE_MOVE_WEIGHT + ax * DRIBBLE_AIM_WEIGHT;
+  let ny = my * DRIBBLE_MOVE_WEIGHT + ay * DRIBBLE_AIM_WEIGHT;
+  const nLen = Math.hypot(nx, ny) || 1;
+  nx /= nLen;
+  ny /= nLen;
+
+  const target = DRIBBLE_STRENGTH * (0.55 + 0.45 * Math.min(1, mLen / (SPRINT_SPEED || 1)));
+  const ease = 1 - Math.exp(-DRIBBLE_EASE * dt);
+  ball.vx += (nx * target - ball.vx) * ease;
+  ball.vy += (ny * target - ball.vy) * ease;
 }
 
 function num(v, fallback = 0) {
@@ -294,7 +426,7 @@ export class FootballServer {
           pass: cleanPass(msg.pass), // '' = open lobby
           isPublic: msg.isPublic !== false,
           score: { red: 0, blue: 0 },
-          ball: { x: FIELD_W / 2, y: FIELD_H / 2, vx: 0, vy: 0, lastKickId: 0 },
+          ball: { x: FIELD_W / 2, y: FIELD_H / 2, vx: 0, vy: 0, lastKickId: 0, shotBy: 0, shotAt: 0 },
           phase: 'play',
           phaseUntil: 0
         };
@@ -490,6 +622,8 @@ export class FootballServer {
     room.ball.vx = 0;
     room.ball.vy = 0;
     room.ball.lastKickId = 0;
+    room.ball.shotBy = 0;
+    room.ball.shotAt = 0;
   }
 
   // ---- Simulation -----------------------------------------------------------
@@ -599,43 +733,12 @@ export class FootballServer {
     }
     resolveOverlaps(fielded);
 
-    // Shots fire on SPACE release after charging (aim distance + charge → power).
-    for (const q of fielded) {
-      if (!q._kReleased) continue;
-      const charge = q.charge || 0;
-      q.charge = 0;
-      if (charge < CHARGE_MIN_FIRE) continue;
-      if (now < q.kickAt) continue;
-      if ((q.shootStamina ?? 0) < SHOOT_MIN_TO_FIRE) continue;
-
-      const dx = ball.x - q.x;
-      const dy = ball.y - q.y;
-      if (Math.hypot(dx, dy) > KICK_RANGE) continue;
-
-      let ax = q.input.ax - ball.x;
-      let ay = q.input.ay - ball.y;
-      let dist = Math.hypot(ax, ay);
-      if (dist < 0.5) {
-        ax = dx;
-        ay = dy;
-        dist = Math.hypot(ax, ay) || 1;
-      }
-
-      const chargeMul = 1 + charge * CHARGE_POWER_BONUS;
-      const power = clamp(dist * KICK_POWER_SCALE * chargeMul, KICK_MIN, KICK_MAX * chargeMul);
-      const powerCap = KICK_MAX * (1 + CHARGE_POWER_BONUS);
-      const powerT = clamp((power - KICK_MIN) / (powerCap - KICK_MIN || 1), 0, 1);
-      const cost = SHOOT_COST_MIN + (SHOOT_COST_MAX - SHOOT_COST_MIN) * powerT;
-      if (q.shootStamina < cost * 0.55) continue;
-      q.shootStamina = Math.max(0, q.shootStamina - cost);
-
-      const blend = KICK_BLEND + (1 - KICK_BLEND) * powerT * 0.5;
-      const kvx = (ax / dist) * power;
-      const kvy = (ay / dist) * power;
-      ball.vx = ball.vx * (1 - blend) + kvx * blend;
-      ball.vy = ball.vy * (1 - blend) + kvy * blend;
-      ball.lastKickId = q.id;
-      q.kickAt = now + KICK_COOLDOWN_MS;
+    // Shots: release after charge, or auto-volley an incoming opponent shot while holding.
+    const kickedThisTick = new Set();
+    const tryPlayerKick = (q, charge) => {
+      const powerT = applyKick(q, ball, charge, now);
+      if (powerT == null) return false;
+      kickedThisTick.add(q.id);
       this._broadcast(room, {
         t: 'kick',
         id: q.id,
@@ -643,6 +746,19 @@ export class FootballServer {
         y: ball.y,
         p: powerT
       });
+      return true;
+    };
+
+    for (const q of fielded) {
+      const holding = !!q.input.k;
+      const autoVolley = holding && isIncomingShot(q, ball, now);
+      if (!q._kReleased && !autoVolley) continue;
+
+      let charge = q.charge || 0;
+      q.charge = 0;
+      // Holding into an incoming shot always fires at least a light return.
+      if (autoVolley && charge < CHARGE_MIN_FIRE) charge = CHARGE_MIN_FIRE;
+      tryPlayerKick(q, charge);
     }
 
     // Ball integration, then player–ball body collisions (physics carry/bounce).
@@ -673,6 +789,24 @@ export class FootballServer {
           ball.lastKickId = q.id;
         }
       }
+    }
+
+    // Contact auto-volley: shot arrives while you're holding → release into a return.
+    for (const q of fielded) {
+      if (kickedThisTick.has(q.id)) continue;
+      if (!q.input.k) continue;
+      if (!isIncomingShot(q, ball, now)) continue;
+      let charge = q.charge || 0;
+      q.charge = 0;
+      if (charge < CHARGE_MIN_FIRE) charge = CHARGE_MIN_FIRE;
+      tryPlayerKick(q, charge);
+    }
+
+    // Soft dribble nudge (movement-biased toward cursor) when touching without a shot.
+    for (const q of fielded) {
+      if (kickedThisTick.has(q.id)) continue;
+      if (q.input.k && (q.charge || 0) > 0) continue; // charging — don't also dribble-steer
+      applyDribble(q, ball, dt);
     }
 
     if (ball.y < BALL_R) {
