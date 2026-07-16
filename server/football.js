@@ -21,24 +21,24 @@ const TICK_HZ = 128;
 const TICK_MS = 1000 / TICK_HZ;
 
 // Field, in abstract units. x grows right, y grows down (matches canvas).
-export const FIELD_W = 72;
-export const FIELD_H = 45;
-const GOAL_H = 14.4; // ~20% taller than old 16×0.72 scale
+export const FIELD_W = 100;
+export const FIELD_H = 62;
+const GOAL_H = 19.2; // +20% taller than original 16
 export const GOAL_TOP = (FIELD_H - GOAL_H) / 2;
 export const GOAL_BOT = GOAL_TOP + GOAL_H;
-export const GOAL_DEPTH = 2.5; // net box behind each goal line
+export const GOAL_DEPTH = 3; // net box behind each goal line
 
-const PLAYER_R = 1.232; // +10% from 1.12
-const BALL_R = 1.2;
+const PLAYER_R = 1.047; // −15% from 1.232
+const BALL_R = 1.02; // −15% from 1.2
 
 // Movement. Hold shift to sprint — stamina pool drains while sprinting
 // and regenerates while not; running dry "winds" you until partially recovered.
-const BASE_SPEED = 11.55; // +10%
-const SPRINT_SPEED = 20.735; // +10%
+const BASE_SPEED = 10.973; // −5% from 11.55
+const SPRINT_SPEED = 19.698; // −5% from 20.735
 const MOVE_ACCEL = 12; // 1/s — slower, smoother ramp
-const STAMINA_MAX = 8; // was 10 (−20%)
+const STAMINA_MAX = 6.4; // −20% from 8
 const STAMINA_REGEN = 0.8; // per second while not sprinting
-const WINDED_RECOVER = 1.6; // stamina needed to un-wind after running dry
+const WINDED_RECOVER = 1.28; // stamina needed to un-wind after running dry
 
 // Shooting stamina — separate from sprint. Each kick drains this pool.
 const SHOOT_STAMINA_MAX = 80; // was 100 (−20%)
@@ -667,8 +667,8 @@ export class FootballServer {
         q.kickAt = 0;
       });
     };
-    place(room.players.filter((q) => q.team === 'red'), FIELD_W * 0.28);
-    place(room.players.filter((q) => q.team === 'blue'), FIELD_W * 0.72);
+    place(room.players.filter((q) => q.team === 'red'), 30);
+    place(room.players.filter((q) => q.team === 'blue'), FIELD_W - 30);
     room.ball.x = FIELD_W / 2;
     room.ball.y = FIELD_H / 2;
     room.ball.vx = 0;

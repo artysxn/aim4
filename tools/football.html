@@ -284,16 +284,16 @@
 
 <script type="module">
   // ---- Constants mirrored from server/football.js (keep in sync) ----------
-  const FIELD_W = 72;
-  const FIELD_H = 45;
-  const PLAYER_R = 1.232;
-  const BALL_R = 1.2;
-  const BASE_SPEED = 11.55;
-  const SPRINT_SPEED = 20.735;
+  const FIELD_W = 100;
+  const FIELD_H = 62;
+  const PLAYER_R = 1.047;
+  const BALL_R = 1.02;
+  const BASE_SPEED = 10.973;
+  const SPRINT_SPEED = 19.698;
   const MOVE_ACCEL = 12;
-  const STAMINA_MAX = 8;
+  const STAMINA_MAX = 6.4;
   const STAMINA_REGEN = 0.8;
-  const WINDED_RECOVER = 1.6;
+  const WINDED_RECOVER = 1.28;
   const SHOOT_STAMINA_MAX = 80;
   const SHOOT_STAMINA_REGEN = 18;
   const BALL_FRICTION = 0.72;
@@ -399,7 +399,7 @@
   let myId = null;
   let lobby = null;
   let roster = new Map();
-  let field = { w: 72, h: 45, gt: 15.3, gb: 29.7, gd: 2.5 };
+  let field = { w: 100, h: 62, gt: 21.4, gb: 40.6, gd: 3 };
   let goalsToWin = 5;
   let snaps = [];
   let lastKicks = [];
