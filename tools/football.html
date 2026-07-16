@@ -288,20 +288,26 @@
   const FIELD_H = 62;
   const PLAYER_R = 1.4;
   const BALL_R = 1.0;
-  const BASE_SPEED = 17;
-  const SPRINT_SPEED = 24;
-  const MOVE_ACCEL = 22;
+  const BASE_SPEED = 10.5;
+  const SPRINT_SPEED = 14.5;
+  const MOVE_ACCEL = 12;
   const STAMINA_MAX = 10;
   const STAMINA_REGEN = 0.8;
   const WINDED_RECOVER = 2;
   const SHOOT_STAMINA_MAX = 100;
   const SHOOT_STAMINA_REGEN = 18;
-  const BALL_FRICTION = 0.85;
-  const KICK_MIN = 8, KICK_MAX = 58;
+  const BALL_FRICTION = 0.72;
+  const KICK_POWER_SCALE = 1.55;
+  const KICK_MIN = 7, KICK_MAX = 92;
   const KICK_RANGE = PLAYER_R + BALL_R + 2.0;
+  const KICK_COOLDOWN_MS = 420;
+  const SHOOT_MIN_TO_FIRE = 12;
+  const CHARGE_TIME = 0.9;
+  const CHARGE_SLOW_MAX = 0.55;
+  const CHARGE_POWER_BONUS = 0.5;
   // Remote players / ball: render slightly behind latest snap for smoothness.
   // Local player uses client-side prediction (no delay).
-  const REMOTE_INTERP_MS = 70;
+  const REMOTE_INTERP_MS = 50;
 
   const TEAM_COLOR = { red: '#ff5544', blue: '#4da3ff' };
 
@@ -488,6 +494,11 @@
         break;
       case 'kick':
         lastKicks.push({ x: msg.x, y: msg.y, p: msg.p, rt: performance.now() });
+        if (pred && msg.id === myId) {
+          pred.kickReadyAt = performance.now() + KICK_COOLDOWN_MS;
+          pred.cd = 0;
+          pred.charge = 0;
+        }
         break;
       case 'goal': {
         const who = msg.byName ? (msg.og ? `${msg.byName} (own goal!)` : msg.byName) : '';
@@ -751,7 +762,7 @@
     return v < a ? a : v > b ? b : v;
   }
 
-  function resetPred(sx, sy, stamina, winded, sprinting, shoot) {
+  function resetPred(sx, sy, stamina, winded, sprinting, shoot, cd, ch) {
     pred = {
       x: sx,
       y: sy,
@@ -760,7 +771,11 @@
       stamina: stamina ?? STAMINA_MAX,
       shoot: shoot ?? SHOOT_STAMINA_MAX,
       winded: !!winded,
-      sprinting: !!sprinting
+      sprinting: !!sprinting,
+      charge: ch ?? 0,
+      cd: cd ?? 1,
+      kickReadyAt: 0,
+      prevK: false
     };
   }
 
@@ -775,12 +790,12 @@
       return;
     }
     if (!pred) {
-      resetPred(me.x, me.y, me.s, me.w, me.r, me.ss);
+      resetPred(me.x, me.y, me.s, me.w, me.r, me.ss, me.cd, me.ch);
       return;
     }
     const err = Math.hypot(pred.x - me.x, pred.y - me.y);
     if (err > 4) {
-      resetPred(me.x, me.y, me.s, me.w, me.r, me.ss);
+      resetPred(me.x, me.y, me.s, me.w, me.r, me.ss, me.cd, me.ch);
       return;
     }
     // Soft correction — keep predicted motion responsive without rubber-banding.
@@ -791,6 +806,15 @@
     pred.shoot = me.ss ?? pred.shoot;
     pred.winded = !!me.w;
     pred.sprinting = !!me.r;
+    if (typeof me.cd === 'number') {
+      // Keep local cooldown animation until it finishes; then trust the server.
+      if (!pred.kickReadyAt || performance.now() >= pred.kickReadyAt) {
+        pred.cd = me.cd;
+        pred.kickReadyAt = 0;
+      }
+    }
+    // Prefer local charge while holding for snappy ring feedback.
+    if (!keys.k && typeof me.ch === 'number') pred.charge = me.ch;
   }
 
   function stepPred(dt) {
@@ -812,7 +836,31 @@
       if (pred.winded && pred.stamina >= WINDED_RECOVER) pred.winded = false;
     }
     pred.shoot = Math.min(SHOOT_STAMINA_MAX, pred.shoot + SHOOT_STAMINA_REGEN * dt);
-    const speed = sprinting ? SPRINT_SPEED : BASE_SPEED;
+
+    const now = performance.now();
+    if (pred.kickReadyAt && now < pred.kickReadyAt) {
+      pred.cd = 1 - (pred.kickReadyAt - now) / KICK_COOLDOWN_MS;
+    } else if (pred.kickReadyAt && now >= pred.kickReadyAt) {
+      pred.cd = 1;
+      pred.kickReadyAt = 0;
+    }
+
+    const kDown = !!keys.k;
+    const canCharge = kDown && (pred.cd ?? 1) >= 0.99 && pred.shoot >= SHOOT_MIN_TO_FIRE;
+    if (canCharge) {
+      pred.charge = Math.min(1, (pred.charge || 0) + dt / CHARGE_TIME);
+    } else if (kDown) {
+      pred.charge = 0;
+    }
+    if (pred.prevK && !kDown) {
+      pred.charge = 0;
+    }
+    pred.prevK = kDown;
+
+    let speed = sprinting ? SPRINT_SPEED : BASE_SPEED;
+    if (kDown && (pred.charge || 0) > 0) {
+      speed *= 1 - pred.charge * CHARGE_SLOW_MAX;
+    }
     const k = Math.min(1, MOVE_ACCEL * dt);
     pred.vx += (wx * speed - pred.vx) * k;
     pred.vy += (wy * speed - pred.vy) * k;
@@ -863,6 +911,52 @@
   }
 
   // ---- Rendering ------------------------------------------------------------------
+  /** Radial shoot-ready / charge ring around a player. */
+  function drawShootRing(q, isLocal) {
+    const ready = Math.max(0, Math.min(1, q.cd ?? 1));
+    const charge = Math.max(0, Math.min(1, q.ch ?? 0));
+    const cx = px(q.x);
+    const cy = py(q.y);
+    const r = (PLAYER_R + 0.55) * sc;
+    const lw = isLocal ? 3.5 : 2.5;
+    const start = -Math.PI / 2;
+
+    // Dim full track
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = lw + 1;
+    ctx.stroke();
+
+    // Ready sweep: cool slate → mint as it fills after a shot
+    if (ready > 0.005) {
+      const t = ready;
+      const rr = Math.round(70 + (90 - 70) * t);
+      const gg = Math.round(90 + (230 - 90) * t);
+      const bb = Math.round(110 + (160 - 110) * t);
+      const a = 0.35 + 0.55 * t;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, start, start + Math.PI * 2 * t);
+      ctx.strokeStyle = `rgba(${rr},${gg},${bb},${a})`;
+      ctx.lineWidth = lw;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+    }
+
+    // Charge overlay: amber arc grows while holding Space
+    if (charge > 0.02) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, start, start + Math.PI * 2 * charge);
+      const a = 0.55 + 0.4 * charge;
+      ctx.strokeStyle = `rgba(255,${Math.round(200 - charge * 80)},60,${a})`;
+      ctx.lineWidth = lw + (isLocal ? 1 : 0);
+      ctx.lineCap = 'round';
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+    }
+  }
+
   function draw() {
     requestAnimationFrame(draw);
     if (!inGame) return;
@@ -877,6 +971,7 @@
     if (!st) return;
 
     // Overlay predicted local player into the render set.
+    const serverMe = st.players.get(myId);
     const me = pred && st.ph === 'play'
       ? {
           i: myId,
@@ -885,9 +980,11 @@
           s: pred.stamina,
           ss: pred.shoot,
           r: pred.sprinting ? 1 : 0,
-          w: pred.winded ? 1 : 0
+          w: pred.winded ? 1 : 0,
+          cd: pred.cd ?? serverMe?.cd ?? 1,
+          ch: pred.charge ?? 0
         }
-      : st.players.get(myId) || null;
+      : serverMe || null;
     if (me) st.players.set(myId, me);
 
     ballTrail.push({ x: st.ball.x, y: st.ball.y });
@@ -906,6 +1003,7 @@
     for (const [id, q] of st.players) {
       const info = roster.get(id);
       const color = TEAM_COLOR[info?.team] || '#888';
+      drawShootRing(q, id === myId);
       ctx.beginPath();
       ctx.ellipse(px(q.x), py(q.y) + PLAYER_R * sc * 0.45, PLAYER_R * sc * 0.95, PLAYER_R * sc * 0.5, 0, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(0,0,0,0.25)';
@@ -935,18 +1033,22 @@
       const dx = aim.x - st.ball.x;
       const dy = aim.y - st.ball.y;
       const dist = Math.hypot(dx, dy);
-      const power = Math.min(1, Math.max(0, (dist * BALL_FRICTION - KICK_MIN) / (KICK_MAX - KICK_MIN)));
+      const charge = me.ch || 0;
+      const chargeMul = 1 + charge * CHARGE_POWER_BONUS;
+      const powerCap = KICK_MAX * (1 + CHARGE_POWER_BONUS);
+      const raw = dist * KICK_POWER_SCALE * chargeMul;
+      const power = Math.min(1, Math.max(0, (raw - KICK_MIN) / (powerCap - KICK_MIN)));
       const inReach = Math.hypot(st.ball.x - me.x, st.ball.y - me.y) <= KICK_RANGE;
       ctx.setLineDash([6, 6]);
       ctx.beginPath();
       ctx.moveTo(px(me.x), py(me.y));
       ctx.lineTo(px(aim.x), py(aim.y));
       ctx.strokeStyle = inReach ? `rgba(255,${Math.round(230 - power * 170)},80,0.55)` : 'rgba(255,255,255,0.18)';
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 1.5 + charge * 1.5;
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.beginPath();
-      ctx.arc(px(aim.x), py(aim.y), 5, 0, Math.PI * 2);
+      ctx.arc(px(aim.x), py(aim.y), 5 + charge * 4, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(255,255,255,0.5)';
       ctx.stroke();
     }

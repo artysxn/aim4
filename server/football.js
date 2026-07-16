@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // server/football.js
 // Easter-egg 2D football (soccer). The standalone page /tools/football.html
-// connects here over WS at /football. Fully server-authoritative: a 60 Hz sim
+// connects here over WS at /football. Fully server-authoritative: a 128 Hz sim
 // of players + ball with impulse collisions, code-joined lobbies with
 // host-controlled team assignment (the host drags players between teams),
 // first to 5 goals wins.
@@ -17,7 +17,7 @@
 //        pong{ct,st}
 // ---------------------------------------------------------------------------
 
-const TICK_HZ = 60;
+const TICK_HZ = 128;
 const TICK_MS = 1000 / TICK_HZ;
 
 // Field, in abstract units. x grows right, y grows down (matches canvas).
@@ -32,9 +32,9 @@ const BALL_R = 1.0;
 
 // Movement. Hold shift to sprint — a 10 s stamina pool drains while sprinting
 // and regenerates while not; running dry "winds" you until partially recovered.
-const BASE_SPEED = 17;
-const SPRINT_SPEED = 24;
-const MOVE_ACCEL = 22; // 1/s — smooth ramp; client prediction makes it feel instant
+const BASE_SPEED = 10.5;
+const SPRINT_SPEED = 14.5;
+const MOVE_ACCEL = 12; // 1/s — slower, smoother ramp
 const STAMINA_MAX = 10; // seconds of continuous sprint
 const STAMINA_REGEN = 0.8; // per second while not sprinting
 const WINDED_RECOVER = 2; // stamina needed to un-wind after running dry
@@ -46,23 +46,29 @@ const SHOOT_COST_MIN = 16; // weak tap
 const SHOOT_COST_MAX = 38; // full-power shot
 const SHOOT_MIN_TO_FIRE = 12; // need at least this much to shoot
 
-// Ball. Exponential friction means a kick at speed v rolls v/BALL_FRICTION
-// units before stopping — so kick speed = dist(ball→aim) * BALL_FRICTION makes
-// the ball come to rest at the shooter's cursor ("mouse distance = shot").
-const BALL_FRICTION = 0.85; // 1/s exp decay (slightly longer rolls)
+// Ball. Shot power scales with aim distance (mouse distance = shot power).
+const BALL_FRICTION = 0.72; // 1/s — longer rolls so powered shots carry
 const KICK_RANGE = PLAYER_R + BALL_R + 2.0;
-const KICK_COOLDOWN_MS = 280;
-const KICK_MIN = 8;
-const KICK_MAX = 58;
+const KICK_COOLDOWN_MS = 420;
+const KICK_POWER_SCALE = 1.55; // shot speed ≈ aimDist × this
+const KICK_MIN = 7;
+const KICK_MAX = 92; // long-range shots hit this ceiling
 const BOUNCE = 0.7; // wall/post restitution
-const KICK_BLEND = 0.78; // keep this fraction of new kick vs existing ball vel
+const KICK_BLEND = 0.9; // strong commit to shot direction/power
+const CHARGE_TIME = 0.9; // seconds of hold → full charge
+const CHARGE_SLOW_MAX = 0.55; // up to 55% slower while fully charged
+const CHARGE_POWER_BONUS = 0.5; // +50% shot power at full charge
+const CHARGE_MIN_FIRE = 0.04; // tiny tap still counts as a shot
 
 // Collision masses / restitution (impulse response).
 const PLAYER_MASS = 1;
 const BALL_MASS = 0.22;
-const PLAYER_RESTITUTION = 0.28; // bodies don't bounce much
-const BALL_RESTITUTION = 0.62; // lively ball bounce off players
-const COLLISION_FRICTION = 0.08; // tangent damping on contact
+const PLAYER_RESTITUTION = 0.22; // bodies don't bounce much
+const BALL_RESTITUTION = 0.58; // lively ball bounce off players
+const COLLISION_FRICTION = 0.1; // tangent damping on contact
+const CONTACT_SKIN = 0.05; // forced gap so bodies never share volume
+const COLLIDE_ITERS = 8;
+const SEPARATE_ITERS = 10;
 
 const GOALS_TO_WIN = 5;
 const ROOM_CAP = 12;
@@ -104,16 +110,16 @@ function cleanPass(raw) {
 }
 
 /**
- * Circle–circle impulse collision. Separates overlap by inverse mass, then
- * applies normal impulse (+ light tangent friction). Mutates a/b in place.
+ * Fully separate two circles so they never share volume (plus CONTACT_SKIN gap).
+ * Returns true if a correction was applied.
  */
-function collideCircles(a, b, ra, rb, ma, mb, restitution) {
+function separateCircles(a, b, ra, rb, ma, mb) {
   let dx = b.x - a.x;
   let dy = b.y - a.y;
   let d = Math.hypot(dx, dy);
-  const min = ra + rb;
+  const min = ra + rb + CONTACT_SKIN;
   if (d >= min) return false;
-  if (d < 1e-5) {
+  if (d < 1e-6) {
     dx = 1;
     dy = 0;
     d = 1;
@@ -123,16 +129,31 @@ function collideCircles(a, b, ra, rb, ma, mb, restitution) {
   const invA = 1 / ma;
   const invB = 1 / mb;
   const invSum = invA + invB;
-
-  // Positional correction (prevent sink-in).
   const overlap = min - d;
-  const corr = (overlap / invSum) * 0.9;
+  // Full correction — never leave residual penetration.
+  const corr = overlap / invSum;
   a.x -= nx * corr * invA;
   a.y -= ny * corr * invA;
   b.x += nx * corr * invB;
   b.y += ny * corr * invB;
+  return true;
+}
 
-  // Relative velocity along the contact normal.
+/**
+ * Circle–circle impulse collision: hard separate, then normal impulse + friction.
+ */
+function collideCircles(a, b, ra, rb, ma, mb, restitution) {
+  if (!separateCircles(a, b, ra, rb, ma, mb)) return false;
+
+  let dx = b.x - a.x;
+  let dy = b.y - a.y;
+  let d = Math.hypot(dx, dy) || 1;
+  const nx = dx / d;
+  const ny = dy / d;
+  const invA = 1 / ma;
+  const invB = 1 / mb;
+  const invSum = invA + invB;
+
   const rvx = (b.vx ?? 0) - (a.vx ?? 0);
   const rvy = (b.vy ?? 0) - (a.vy ?? 0);
   const velN = rvx * nx + rvy * ny;
@@ -143,7 +164,6 @@ function collideCircles(a, b, ra, rb, ma, mb, restitution) {
     b.vx = (b.vx ?? 0) + j * nx * invB;
     b.vy = (b.vy ?? 0) + j * ny * invB;
 
-    // Tangential friction (kills sliding along the contact).
     const tx = -ny;
     const ty = nx;
     const velT = rvx * tx + rvy * ty;
@@ -160,6 +180,47 @@ function collideCircles(a, b, ra, rb, ma, mb, restitution) {
 function clampPlayer(q) {
   q.x = clamp(q.x, PLAYER_R, FIELD_W - PLAYER_R);
   q.y = clamp(q.y, PLAYER_R, FIELD_H - PLAYER_R);
+}
+
+/** Exhaustive positional depenetration for players (+ optional ball). */
+function resolveOverlaps(fielded, ball = null) {
+  for (let iter = 0; iter < SEPARATE_ITERS; iter++) {
+    let moved = false;
+    for (let a = 0; a < fielded.length; a++) {
+      for (let b = a + 1; b < fielded.length; b++) {
+        if (
+          separateCircles(
+            fielded[a],
+            fielded[b],
+            PLAYER_R,
+            PLAYER_R,
+            PLAYER_MASS,
+            PLAYER_MASS
+          )
+        ) {
+          moved = true;
+          clampPlayer(fielded[a]);
+          clampPlayer(fielded[b]);
+        }
+      }
+      if (ball) {
+        if (
+          separateCircles(
+            fielded[a],
+            ball,
+            PLAYER_R,
+            BALL_R,
+            PLAYER_MASS,
+            BALL_MASS
+          )
+        ) {
+          moved = true;
+          clampPlayer(fielded[a]);
+        }
+      }
+    }
+    if (!moved) break;
+  }
 }
 
 export class FootballServer {
@@ -189,6 +250,8 @@ export class FootballServer {
       shootStamina: SHOOT_STAMINA_MAX,
       winded: false,
       kickAt: 0,
+      charge: 0,
+      prevK: false,
       input: { u: false, d: false, l: false, r: false, sp: false, k: false, ax: 0, ay: 0 }
     };
     this.players.set(id, player);
@@ -415,6 +478,9 @@ export class FootballServer {
         q.stamina = STAMINA_MAX;
         q.shootStamina = SHOOT_STAMINA_MAX;
         q.winded = false;
+        q.charge = 0;
+        q.prevK = false;
+        q.kickAt = 0;
       });
     };
     place(room.players.filter((q) => q.team === 'red'), 30);
@@ -462,7 +528,7 @@ export class FootballServer {
     const fielded = room.players.filter((q) => q.team !== 'spec');
     const ball = room.ball;
 
-    // Players: sprint stamina + shoot stamina regen + velocity chase + integration.
+    // Players: stamina, space-hold charge, slowed movement while charging.
     for (const q of fielded) {
       const i = q.input;
       let wx = (i.r ? 1 : 0) - (i.l ? 1 : 0);
@@ -487,7 +553,23 @@ export class FootballServer {
         (q.shootStamina ?? SHOOT_STAMINA_MAX) + SHOOT_STAMINA_REGEN * dt
       );
 
-      const speed = sprinting ? SPRINT_SPEED : BASE_SPEED;
+      const kDown = !!i.k;
+      const canCharge =
+        kDown && now >= q.kickAt && (q.shootStamina ?? 0) >= SHOOT_MIN_TO_FIRE;
+      if (canCharge) {
+        q.charge = Math.min(1, (q.charge || 0) + dt / CHARGE_TIME);
+      } else if (kDown) {
+        // Holding but on cooldown / no stamina — don't build charge
+        q.charge = 0;
+      }
+      // On release, charge is consumed (or cleared) in the kick pass below.
+      q._kReleased = q.prevK && !kDown;
+      q.prevK = kDown;
+
+      let speed = sprinting ? SPRINT_SPEED : BASE_SPEED;
+      if (kDown && (q.charge || 0) > 0) {
+        speed *= 1 - q.charge * CHARGE_SLOW_MAX;
+      }
       const k = Math.min(1, MOVE_ACCEL * dt);
       q.vx += (wx * speed - q.vx) * k;
       q.vy += (wy * speed - q.vy) * k;
@@ -497,8 +579,8 @@ export class FootballServer {
       q.sprinting = sprinting;
     }
 
-    // Player–player impulse collisions (iterate for stacks of bodies).
-    for (let iter = 0; iter < 3; iter++) {
+    // Player–player impulse collisions.
+    for (let iter = 0; iter < COLLIDE_ITERS; iter++) {
       for (let a = 0; a < fielded.length; a++) {
         for (let b = a + 1; b < fielded.length; b++) {
           collideCircles(
@@ -515,14 +597,21 @@ export class FootballServer {
         }
       }
     }
+    resolveOverlaps(fielded);
 
-    // Kicks — hold space; needs shoot stamina + cooldown + ball in range.
+    // Shots fire on SPACE release after charging (aim distance + charge → power).
     for (const q of fielded) {
-      if (!q.input.k || now < q.kickAt) continue;
+      if (!q._kReleased) continue;
+      const charge = q.charge || 0;
+      q.charge = 0;
+      if (charge < CHARGE_MIN_FIRE) continue;
+      if (now < q.kickAt) continue;
       if ((q.shootStamina ?? 0) < SHOOT_MIN_TO_FIRE) continue;
+
       const dx = ball.x - q.x;
       const dy = ball.y - q.y;
       if (Math.hypot(dx, dy) > KICK_RANGE) continue;
+
       let ax = q.input.ax - ball.x;
       let ay = q.input.ay - ball.y;
       let dist = Math.hypot(ax, ay);
@@ -531,16 +620,20 @@ export class FootballServer {
         ay = dy;
         dist = Math.hypot(ax, ay) || 1;
       }
-      const power = clamp(dist * BALL_FRICTION, KICK_MIN, KICK_MAX);
-      const powerT = (power - KICK_MIN) / (KICK_MAX - KICK_MIN || 1);
+
+      const chargeMul = 1 + charge * CHARGE_POWER_BONUS;
+      const power = clamp(dist * KICK_POWER_SCALE * chargeMul, KICK_MIN, KICK_MAX * chargeMul);
+      const powerCap = KICK_MAX * (1 + CHARGE_POWER_BONUS);
+      const powerT = clamp((power - KICK_MIN) / (powerCap - KICK_MIN || 1), 0, 1);
       const cost = SHOOT_COST_MIN + (SHOOT_COST_MAX - SHOOT_COST_MIN) * powerT;
-      if (q.shootStamina < cost * 0.55) continue; // too drained for this power
+      if (q.shootStamina < cost * 0.55) continue;
       q.shootStamina = Math.max(0, q.shootStamina - cost);
 
+      const blend = KICK_BLEND + (1 - KICK_BLEND) * powerT * 0.5;
       const kvx = (ax / dist) * power;
       const kvy = (ay / dist) * power;
-      ball.vx = ball.vx * (1 - KICK_BLEND) + kvx * KICK_BLEND;
-      ball.vy = ball.vy * (1 - KICK_BLEND) + kvy * KICK_BLEND;
+      ball.vx = ball.vx * (1 - blend) + kvx * blend;
+      ball.vy = ball.vy * (1 - blend) + kvy * blend;
       ball.lastKickId = q.id;
       q.kickAt = now + KICK_COOLDOWN_MS;
       this._broadcast(room, {
@@ -563,7 +656,7 @@ export class FootballServer {
       ball.vy = 0;
     }
 
-    for (let iter = 0; iter < 2; iter++) {
+    for (let iter = 0; iter < COLLIDE_ITERS; iter++) {
       for (const q of fielded) {
         if (
           collideCircles(
@@ -607,6 +700,11 @@ export class FootballServer {
       }
     }
     ball.x = clamp(ball.x, -GOAL_DEPTH + BALL_R, FIELD_W + GOAL_DEPTH - BALL_R);
+
+    // Final hard depenetration — guarantees no residual clipping after walls.
+    resolveOverlaps(fielded, ball);
+    for (const q of fielded) clampPlayer(q);
+    resolveOverlaps(fielded, ball);
   }
 
   _goal(room, team, now) {
@@ -635,6 +733,11 @@ export class FootballServer {
     const pl = [];
     for (const q of room.players) {
       if (q.team === 'spec') continue;
+      const cdLeft = Math.max(0, (q.kickAt || 0) - now);
+      const ready = 1 - Math.min(1, cdLeft / KICK_COOLDOWN_MS);
+      // Shoot stamina also gates firing — blend into the ready ring.
+      const staminaReady = Math.min(1, (q.shootStamina ?? SHOOT_STAMINA_MAX) / SHOOT_MIN_TO_FIRE);
+      const cd = Math.min(ready, staminaReady >= 1 ? 1 : staminaReady * 0.85);
       pl.push({
         i: q.id,
         x: Math.round(q.x * 100) / 100,
@@ -642,7 +745,9 @@ export class FootballServer {
         s: Math.round(q.stamina * 10) / 10,
         ss: Math.round((q.shootStamina ?? SHOOT_STAMINA_MAX) * 10) / 10,
         r: q.sprinting ? 1 : 0,
-        w: q.winded ? 1 : 0
+        w: q.winded ? 1 : 0,
+        cd: Math.round(cd * 100) / 100,
+        ch: Math.round((q.charge || 0) * 100) / 100
       });
     }
     this._broadcast(room, {
