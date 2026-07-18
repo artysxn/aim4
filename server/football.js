@@ -10,13 +10,15 @@
 // Wire protocol (JSON messages with a `t` field, mirroring the duel server):
 //   C2S: create{name,pass?,isPublic?} join{code,name,pass?} leave team{team}
 //        setTeam{id,team} config{pass?,isPublic?} start stop list unlist
-//        input{u,d,l,r,sp,sl,k,st,cl,cr,ax,ay} pass ping{ct}
+//        input{u,d,l,r,sp,sl,k,st,ax,ay} pass{x,y} ping{ct}
 //   S2C: welcome{id} lobby{code,hostId,inMatch,isPublic,hasPass,players}
 //        error{msg,code?} lobbyList{lobbies}
 //        start{field,score,goalsToWin,players} state{ph,kt,sc,ball,pl}
-//        kick{id,x,y,p} goal{team,byName,og,score} end{score,winner,aborted}
-//        pong{ct,st}
-//   (state pl entries carry sd=sliding and pq=pass-requested flags.)
+//        kick{id,x,y,p} mark{id,x,y} goal{team,byName,og,score}
+//        end{score,winner,aborted} pong{ct,st}
+//   (state pl entries carry sd=sliding and pq=pass-requested flags. pass{x,y}
+//   on your own player requests a pass; anywhere else drops a map ping that
+//   clients show to the sender's teammates as a mark.)
 // ---------------------------------------------------------------------------
 
 const TICK_HZ = 128;
@@ -38,11 +40,17 @@ const BALL_R = 1.02; // −15% from 1.2
 const BASE_SPEED = 12.07; // +10% from 10.973
 const SPRINT_SPEED = 17.728; // −10% from 19.698
 const MOVE_ACCEL = 12; // 1/s — slower, smoother ramp
-const STAMINA_MAX = 4.48; // −30% from 6.4 — meant for short bursts of movement
+const STAMINA_MAX = 6.72; // 1.5× the old 4.48 pool
 const STAMINA_REGEN = 0.8; // per second while not sprinting
 const STAMINA_REGEN_DELAY_MS = 1000; // regen starts this long after the last sprint/slide
-const STAMINA_STILL_MULT = 1.3; // standing perfectly still recharges 30% faster
+const STAMINA_STILL_MULT = 1.5; // standing perfectly still recharges 50% faster
 const STAMINA_MOVE_MULT = 0.8; // regen while moving is 20% slower
+// Overcharge: after 3s without sprinting/sliding, stamina keeps filling past
+// max — at half the usual rate — into a +25% blue reserve.
+const STAMINA_OVERCHARGE_MULT = 1.25;
+const STAMINA_OVERCHARGE_MAX = STAMINA_MAX * STAMINA_OVERCHARGE_MULT;
+const STAMINA_OVERCHARGE_DELAY_MS = 3000;
+const STAMINA_OVERCHARGE_RATE = 0.5; // × the regular regen rate
 const WINDED_RECOVER = 1.28; // stamina needed to un-wind after running dry
 
 // Slide (press slide key while sprinting): an instant stamina chunk buys a
@@ -51,8 +59,12 @@ const WINDED_RECOVER = 1.28; // stamina needed to un-wind after running dry
 const SLIDE_STAMINA_COST = 1.4; // instant, on top of normal sprint drain
 const SLIDE_BOOST = 1.2; // starting speed = sprint × this
 const SLIDE_DECEL = 9; // units/s² down toward BASE_SPEED, then the slide ends
+const SLIDE_TURN_RATE = 1.2; // rad/s — perpendicular input only curves the slide
 const SLIDE_TACKLE_SLACK = 0.5; // body-contact allowance for dislodging the ball
 const SLIDE_KNOCK_SPEED = 16; // minimum speed of the dislodged ball
+const TACKLE_PLAYER_KNOCK = 9; // shove applied to a player you slide into
+const TACKLE_SLOW_MS = 500; // tackled players are slowed briefly
+const TACKLE_SLOW_MULT = 0.5; // × movement speed while slowed
 
 // Shooting stamina — separate from sprint. Each kick drains this pool.
 const SHOOT_STAMINA_MAX = 56; // was 80 (−30%)
@@ -76,7 +88,7 @@ const KICK_PUSH_SPEED = 5; // very light shove on other players in kick range
 const BODY_KICK_PUSH = 8; // kick released into an enemy (no ball) boots them along the aim
 const BODY_KICK_TRAP_LOCK_MS = 800; // body-kicked players can't trap for this long
 const BOUNCE = 0.88; // pillar-like restitution on goal posts / corners
-const WALL_BOUNCE = 0.7; // flat walls eat 30% of the ball's momentum
+const WALL_BOUNCE = 0.49; // flat walls eat about half the ball's momentum
 const POST_R = 0.7; // goal-post pillars
 const CORNER_R = 0.55; // field-corner pillars
 const KICK_BLEND = 0.9; // strong commit to shot direction/power
@@ -108,21 +120,26 @@ const TAP_HOLD_S = 0.2;
 const TAP_CHARGE = TAP_HOLD_S / CHARGE_TIME;
 const TAP_SHOT_SPEED = KICK_MIN * 1.3;
 
-// Request pass (Q): flags you to teammates for a short window. A teammate who
-// releases a shot with the cursor roughly on you gets an assisted pass — the
-// ball takes the max speed for medium/long balls, a gentler pace up close.
+// Q is contextual: on your own player it requests a pass — flags you to
+// teammates for a short window, and a teammate who releases a shot with the
+// cursor roughly on you gets an assisted pass (max speed for medium/long
+// balls, a gentler pace up close). Anywhere else on the map it drops a ping
+// only your teammates see, e.g. to call where you want the ball played.
 const PASS_REQUEST_MS = 2500;
 const PASS_AIM_RADIUS = 8; // cursor within this of a requester = assisted pass
+const PASS_SELF_RADIUS = 3; // Q within this of yourself = pass request, else ping
+const MARK_COOLDOWN_MS = 400; // per-player map-ping rate limit
 const PASS_SHORT_DIST = 20;
 const PASS_SHORT_SPEED = 26; // medium pace for short passes
 // Assisted passes always cost the cheap-flick minimum — speed is auto-picked,
 // so the steep power-cost curve shouldn't punish teamplay.
 const PASS_COST = SHOOT_COST_MIN;
 
-// Curve shots: holding the curve-left/right key when a shot is released puts
-// sideways spin on the ball. The spin bends the early flight and decays with
-// air resistance so the ball straightens out.
+// Curve shots: tapping a movement direction perpendicular to the shot at the
+// moment of release puts sideways spin on the ball toward that side. The spin
+// bends the early flight and decays with air resistance so it straightens out.
 const CURVE_RATE = 0.55; // lateral accel = shot speed × this (units/s²)
+const CURVE_MIN_LATERAL = 0.35; // perpendicular input component needed to curve
 const SPIN_DECAY = 1.6; // 1/s — how fast the bend straightens out
 
 // Collision masses / restitution (impulse response).
@@ -319,11 +336,21 @@ function applyKick(q, ball, charge, now, fielded) {
   const kvy = (ay / dirLen) * power;
   ball.vx = ball.vx * (1 - blend) + kvx * blend;
   ball.vy = ball.vy * (1 - blend) + kvy * blend;
-  // Curve keys put sideways spin on the shot (both held cancel out); assisted
-  // passes fly straight so they actually arrive at the receiver's feet.
-  const cl = !!q.input.cl;
-  const cr = !!q.input.cr;
-  ball.spin = passTo || cl === cr ? 0 : power * CURVE_RATE * (cl ? -1 : 1);
+  // Curve: movement input perpendicular to the shot at release bends the
+  // ball toward that side (assisted passes fly straight so they arrive).
+  let spin = 0;
+  if (!passTo) {
+    const { wx, wy, len: wLen } = wishDir(q);
+    if (wLen > 0) {
+      const nx = ax / dirLen;
+      const ny = ay / dirLen;
+      const lat = wy * nx - wx * ny; // wish · right-perp of the shot direction
+      if (Math.abs(lat) > CURVE_MIN_LATERAL) {
+        spin = power * CURVE_RATE * clamp(lat, -1, 1);
+      }
+    }
+  }
+  ball.spin = spin;
   ball.lastKickId = q.id;
   ball.shotBy = q.id;
   ball.shotAt = now;
@@ -616,8 +643,10 @@ export class FootballServer {
       slideDY: 0,
       prevSl: false,
       lastSprintMs: 0,
+      lastMarkMs: 0,
       passUntil: 0,
-      input: { u: false, d: false, l: false, r: false, sp: false, sl: false, k: false, st: false, cl: false, cr: false, ax: 0, ay: 0 }
+      slowUntil: 0,
+      input: { u: false, d: false, l: false, r: false, sp: false, sl: false, k: false, st: false, ax: 0, ay: 0 }
     };
     this.players.set(id, player);
     this._send(player, { t: 'welcome', id });
@@ -765,6 +794,7 @@ export class FootballServer {
           p.prevSl = false;
           p.lastSprintMs = 0;
           p.passUntil = 0;
+          p.slowUntil = 0;
           p.kickAt = 0;
           this._broadcastLobby(room);
           return;
@@ -811,19 +841,30 @@ export class FootballServer {
         i.sl = !!msg.sl;
         i.k = !!msg.k;
         i.st = !!msg.st;
-        i.cl = !!msg.cl;
-        i.cr = !!msg.cr;
         // Allow aiming well outside the pitch so screen-edge aims build power.
         i.ax = clamp(num(msg.ax), -FIELD_W * 2, FIELD_W * 3);
         i.ay = clamp(num(msg.ay), -FIELD_H * 2, FIELD_H * 3);
         break;
       }
       case 'pass': {
-        // Q — ask teammates for the ball. Shows as a yellow flash on their
-        // screens and arms the assisted-pass aim window for a short while.
+        // Q is contextual: cursor on yourself → pass request; elsewhere → map ping.
         const room = p.room;
         if (!room || !room.inMatch || p.team === 'spec') return;
-        p.passUntil = this._simNow + PASS_REQUEST_MS;
+        const ax = clamp(num(msg.x, p.x), -FIELD_W, FIELD_W * 2);
+        const ay = clamp(num(msg.y, p.y), -FIELD_H, FIELD_H * 2);
+        const onSelf = Math.hypot(ax - p.x, ay - p.y) <= PASS_SELF_RADIUS;
+        if (onSelf) {
+          p.passUntil = this._simNow + PASS_REQUEST_MS;
+          break;
+        }
+        if (this._simNow - (p.lastMarkMs || 0) < MARK_COOLDOWN_MS) break;
+        p.lastMarkMs = this._simNow;
+        this._broadcastTeam(room, p.team, {
+          t: 'mark',
+          id: p.id,
+          x: Math.round(ax * 100) / 100,
+          y: Math.round(ay * 100) / 100
+        });
         break;
       }
       case 'ping': {
@@ -902,6 +943,7 @@ export class FootballServer {
         q.prevSl = false;
         q.lastSprintMs = 0;
         q.passUntil = 0;
+        q.slowUntil = 0;
         q.kickAt = 0;
       });
     };
@@ -1047,10 +1089,18 @@ export class FootballServer {
         if (q.stamina <= 0) q.winded = true;
       } else if (!q.sliding && now - q.lastSprintMs >= STAMINA_REGEN_DELAY_MS) {
         // Regen kicks in a beat after the last sprint/slide. Standing
-        // perfectly still recharges faster; moving recharges slower.
+        // perfectly still recharges 50% faster; then after 3s idle, stamina
+        // can overcharge (+25%) at half the normal regen rate.
         const still = len === 0 && Math.hypot(q.vx, q.vy) < 0.5;
         const regen = STAMINA_REGEN * (still ? STAMINA_STILL_MULT : STAMINA_MOVE_MULT);
-        q.stamina = Math.min(STAMINA_MAX, q.stamina + regen * dt);
+        if (q.stamina < STAMINA_MAX) {
+          q.stamina = Math.min(STAMINA_MAX, q.stamina + regen * dt);
+        } else if (now - q.lastSprintMs >= STAMINA_OVERCHARGE_DELAY_MS) {
+          q.stamina = Math.min(
+            STAMINA_OVERCHARGE_MAX,
+            q.stamina + regen * STAMINA_OVERCHARGE_RATE * dt
+          );
+        }
         if (q.winded && q.stamina >= WINDED_RECOVER) q.winded = false;
       }
       q.shootStamina = Math.min(
@@ -1072,8 +1122,20 @@ export class FootballServer {
       q.prevK = kDown;
 
       if (q.sliding) {
-        // Committed slide: locked direction, boosted speed easing down to a
-        // walk, at which point normal control returns.
+        // Committed slide: starts in the travel direction; perpendicular
+        // input only gently curves the path while sliding.
+        if (len > 0) {
+          const lat = wy * q.slideDX - wx * q.slideDY; // wish · right-perp
+          if (Math.abs(lat) > 0.01) {
+            const turn = clamp(lat, -1, 1) * SLIDE_TURN_RATE * dt;
+            const cosT = Math.cos(turn);
+            const sinT = Math.sin(turn);
+            const ndx = q.slideDX * cosT - q.slideDY * sinT;
+            const ndy = q.slideDX * sinT + q.slideDY * cosT;
+            q.slideDX = ndx;
+            q.slideDY = ndy;
+          }
+        }
         q.slideSpeed = Math.max(BASE_SPEED, q.slideSpeed - SLIDE_DECEL * dt);
         q.vx = q.slideDX * q.slideSpeed;
         q.vy = q.slideDY * q.slideSpeed;
@@ -1085,6 +1147,7 @@ export class FootballServer {
           speed *= 1 - q.charge * CHARGE_SLOW_MAX;
         }
         if (i.st) speed *= TRAP_MOVE_MULT;
+        if ((q.slowUntil || 0) > now) speed *= TACKLE_SLOW_MULT;
         const k = Math.min(1, MOVE_ACCEL * dt);
         q.vx += (wx * speed - q.vx) * k;
         q.vy += (wy * speed - q.vy) * k;
@@ -1331,22 +1394,35 @@ export class FootballServer {
       if (room.phase !== 'play') return; // goal scored — celebration takes over
     }
 
-    // Slide tackle: body contact with whoever has the ball at their feet
-    // knocks it loose along the slide direction and locks their trap briefly.
+    // Slide tackle: body contact knocks the opponent away and slows them;
+    // if they have the ball at their feet it also gets dislodged.
     for (const q of fielded) {
       if (!q.sliding) continue;
       for (const w of fielded) {
         if (w === q) continue;
         const bodyDist = Math.hypot(w.x - q.x, w.y - q.y);
         if (bodyDist > PLAYER_R * 2 + CONTACT_SKIN + SLIDE_TACKLE_SLACK) continue;
-        if (Math.hypot(ball.x - w.x, ball.y - w.y) > KICK_RANGE) continue;
-        const knock = Math.max(SLIDE_KNOCK_SPEED, q.slideSpeed);
-        ball.vx = q.slideDX * knock;
-        ball.vy = q.slideDY * knock;
-        ball.spin = 0;
-        ball.lastKickId = q.id;
-        w.trapBroken = true;
-        w.trapLockUntil = now + BODY_KICK_TRAP_LOCK_MS;
+
+        // Visible shove along the slide direction + brief slow.
+        const nx = bodyDist > 1e-4 ? (w.x - q.x) / bodyDist : q.slideDX;
+        const ny = bodyDist > 1e-4 ? (w.y - q.y) / bodyDist : q.slideDY;
+        const shoveX = q.slideDX * 0.65 + nx * 0.35;
+        const shoveY = q.slideDY * 0.65 + ny * 0.35;
+        const sLen = Math.hypot(shoveX, shoveY) || 1;
+        w.vx += (shoveX / sLen) * TACKLE_PLAYER_KNOCK;
+        w.vy += (shoveY / sLen) * TACKLE_PLAYER_KNOCK;
+        w.slowUntil = Math.max(w.slowUntil || 0, now + TACKLE_SLOW_MS);
+        w.sliding = false;
+
+        if (Math.hypot(ball.x - w.x, ball.y - w.y) <= KICK_RANGE) {
+          const knock = Math.max(SLIDE_KNOCK_SPEED, q.slideSpeed);
+          ball.vx = q.slideDX * knock;
+          ball.vy = q.slideDY * knock;
+          ball.spin = 0;
+          ball.lastKickId = q.id;
+          w.trapBroken = true;
+          w.trapLockUntil = now + BODY_KICK_TRAP_LOCK_MS;
+        }
       }
     }
 
@@ -1470,6 +1546,15 @@ export class FootballServer {
   _broadcast(room, obj) {
     const json = JSON.stringify(obj);
     for (const q of room.players) {
+      if (q.ws.readyState === 1) q.ws.send(json);
+    }
+  }
+
+  _broadcastTeam(room, team, obj) {
+    if (!team || team === 'spec') return;
+    const json = JSON.stringify(obj);
+    for (const q of room.players) {
+      if (q.team !== team) continue;
       if (q.ws.readyState === 1) q.ws.send(json);
     }
   }

@@ -561,15 +561,21 @@
   const BASE_SPEED = 12.07;
   const SPRINT_SPEED = 17.728;
   const MOVE_ACCEL = 12;
-  const STAMINA_MAX = 4.48;
+  const STAMINA_MAX = 6.72;
   const STAMINA_REGEN = 0.8;
   const STAMINA_REGEN_DELAY_MS = 1000;
-  const STAMINA_STILL_MULT = 1.3;
+  const STAMINA_STILL_MULT = 1.5;
   const STAMINA_MOVE_MULT = 0.8;
+  const STAMINA_OVERCHARGE_MULT = 1.25;
+  const STAMINA_OVERCHARGE_MAX = STAMINA_MAX * STAMINA_OVERCHARGE_MULT;
+  const STAMINA_OVERCHARGE_DELAY_MS = 3000;
+  const STAMINA_OVERCHARGE_RATE = 0.5;
   const WINDED_RECOVER = 1.28;
   const SLIDE_STAMINA_COST = 1.4;
   const SLIDE_BOOST = 1.2;
   const SLIDE_DECEL = 9;
+  const SLIDE_TURN_RATE = 1.2; // rad/s — perpendicular input only curves the slide
+  const TACKLE_SLOW_MULT = 0.5;
   const SHOOT_STAMINA_MAX = 56;
   const SHOOT_STAMINA_REGEN = 9;
   const BALL_FRICTION = 0.72;
@@ -587,6 +593,8 @@
   const TAP_CHARGE = 0.2 / CHARGE_TIME; // barely shot → min-threshold pass
   const TAP_SHOT_SPEED = KICK_MIN * 1.3;
   const PASS_AIM_RADIUS = 8; // cursor near a pass-requesting teammate = assisted pass
+  const PASS_SELF_RADIUS = 3; // Q on yourself = pass request, else map ping
+  const MARK_TTL_MS = 2500;
   const TRAP_MOVE_MULT = 0.95;
   const POST_R = 0.7;
   const CORNER_R = 0.55;
@@ -693,6 +701,7 @@
   let goalsToWin = 5;
   let snaps = [];
   let lastKicks = [];
+  let marks = []; // teammate map pings { x, y, id, rt }
   let ballTrail = [];
   let inGame = false;
   let pred = null; // local client prediction { x, y, vx, vy, stamina, shoot, winded, sprinting }
@@ -776,6 +785,8 @@
         snaps = [];
         ballTrail = [];
         lastKicks = [];
+        marks = [];
+        myPassFlashUntil = 0;
         pred = null;
         lastFrameT = 0;
         lastSnapRt = 0;
@@ -811,6 +822,12 @@
           pred.kickReadyAt = performance.now() + KICK_COOLDOWN_MS;
           pred.cd = 0;
           pred.charge = 0;
+        }
+        break;
+      case 'mark':
+        // Avoid duplicating the local optimistic ping.
+        if (msg.id !== myId) {
+          marks.push({ x: msg.x, y: msg.y, id: msg.id, rt: performance.now() });
         }
         break;
       case 'goal': {
@@ -1051,9 +1068,7 @@
     { a: 'sl', label: 'Slide (press while sprinting)' },
     { a: 'k', label: 'Shoot (hold to charge)' },
     { a: 'st', label: 'Stop / trap (hold)' },
-    { a: 'rp', label: 'Request pass' },
-    { a: 'cl', label: 'Curve shot left (hold)' },
-    { a: 'cr', label: 'Curve shot right (hold)' }
+    { a: 'rp', label: 'Pass request / ping (Q)' }
   ];
   const DEFAULT_BINDS = {
     u: ['KeyW', 'ArrowUp'],
@@ -1064,9 +1079,7 @@
     sl: ['Space', null],
     k: ['Mouse0', null],
     st: ['KeyF', 'Mouse2'],
-    rp: ['KeyQ', null],
-    cl: ['Digit1', null],
-    cr: ['Digit2', null]
+    rp: ['KeyQ', null]
   };
   // v2: Space moved from shoot to the new slide action.
   const BINDS_KEY = 'aim4-football-binds-v2';
@@ -1085,7 +1098,8 @@
   function saveBinds() { localStorage.setItem(BINDS_KEY, JSON.stringify(binds)); }
 
   const pressed = new Set(); // currently-down key/button codes
-  const act = { u: false, d: false, l: false, r: false, sp: false, sl: false, k: false, st: false, rp: false, cl: false, cr: false };
+  let myPassFlashUntil = 0; // local echo of your own pass request
+  const act = { u: false, d: false, l: false, r: false, sp: false, sl: false, k: false, st: false, rp: false };
   let mouse = { x: 0, y: 0 };
 
   function codeBound(code) {
@@ -1097,8 +1111,24 @@
     for (const a in act) {
       const held = binds[a].some((c) => c && pressed.has(c));
       if (act[a] !== held) {
-        // Request pass is momentary — fire on the press edge.
-        if (a === 'rp' && held && inGame) send({ t: 'pass' });
+        // Q: on yourself → pass request; elsewhere → map ping for teammates.
+        if (a === 'rp' && held && inGame) {
+          const aim = screenToField(mouse.x, mouse.y);
+          const mePos = pred || (() => {
+            const snap = snaps[snaps.length - 1];
+            return snap?.s?.pl?.find((p) => p.i === myId) || null;
+          })();
+          const mx = mePos?.x ?? aim.x;
+          const my = mePos?.y ?? aim.y;
+          const onSelf = Math.hypot(aim.x - mx, aim.y - my) <= PASS_SELF_RADIUS;
+          if (onSelf) {
+            send({ t: 'pass', x: aim.x, y: aim.y });
+            myPassFlashUntil = performance.now() + 2500;
+          } else {
+            send({ t: 'pass', x: aim.x, y: aim.y });
+            marks.push({ x: aim.x, y: aim.y, id: myId, rt: performance.now() });
+          }
+        }
         act[a] = held;
         changed = true;
       }
@@ -1119,7 +1149,6 @@
       t: 'input',
       u: act.u, d: act.d, l: act.l, r: act.r,
       sp: act.sp, sl: act.sl, k: act.k, st: act.st,
-      cl: act.cl, cr: act.cr,
       ax: aim.x, ay: aim.y
     });
   }
@@ -1194,8 +1223,8 @@
       `<li>${keys('sl')} <span>Slide — press while sprinting, knocks the ball loose</span></li>`,
       `<li>${keys('k')} <span>Shoot — hold to charge, tap for a short pass</span></li>`,
       `<li>${keys('st')} <span>Trap — hold to keep the ball at your feet</span></li>`,
-      `<li>${keys('rp')} <span>Request pass — teammates see you flash yellow</span></li>`,
-      `<li>${keys('cl', 'cr')} <span>Curve a shot left / right — hold while shooting</span></li>`
+      `<li>${keys('rp')} <span>Pass request on yourself — ping a spot for a run</span></li>`,
+      `<li><span>Curve a shot — tap a move key perpendicular to the shot as you release</span></li>`
     ].join('');
   }
 
@@ -1333,6 +1362,7 @@
       slideSpeed: 0,
       slideDX: 0,
       slideDY: 0,
+      slideStartT: 0,
       prevSl: false,
       lastSprintT: 0
     };
@@ -1365,6 +1395,24 @@
     pred.shoot = me.ss ?? pred.shoot;
     pred.winded = !!me.w;
     pred.sprinting = !!me.r;
+    // Slide state follows the server (its stamina gate is authoritative), so
+    // a mismatch never leaves the local avatar steering freely mid-slide.
+    // A just-started local slide gets a beat to be confirmed before ending.
+    const srvSliding = !!me.sd;
+    if (srvSliding && !pred.sliding) {
+      const spd = Math.hypot(pred.vx, pred.vy);
+      pred.sliding = true;
+      if (spd > 1) {
+        pred.slideDX = pred.vx / spd;
+        pred.slideDY = pred.vy / spd;
+      }
+      pred.slideSpeed = Math.max(spd, BASE_SPEED + 2);
+      if (!pred.slideStartT) pred.slideStartT = performance.now();
+    } else if (!srvSliding && pred.sliding &&
+               performance.now() - (pred.slideStartT || 0) > 300) {
+      pred.sliding = false;
+      pred.slideStartT = 0;
+    }
     if (typeof me.cd === 'number') {
       // Keep local cooldown animation until it finishes; then trust the server.
       if (!pred.kickReadyAt || performance.now() >= pred.kickReadyAt) {
@@ -1407,6 +1455,7 @@
         pred.slideDX = dx;
         pred.slideDY = dy;
         pred.slideSpeed = SPRINT_SPEED * SLIDE_BOOST;
+        pred.slideStartT = now;
         pred.stamina = Math.max(0, pred.stamina - SLIDE_STAMINA_COST);
         if (pred.stamina <= 0) pred.winded = true;
       }
@@ -1418,11 +1467,16 @@
       pred.stamina = Math.max(0, pred.stamina - dt);
       if (pred.stamina <= 0) pred.winded = true;
     } else if (!pred.sliding && now - (pred.lastSprintT || 0) >= STAMINA_REGEN_DELAY_MS) {
-      // Regen starts a beat after the last sprint/slide; standing perfectly
-      // still recharges faster, moving recharges slower.
       const still = len === 0 && Math.hypot(pred.vx, pred.vy) < 0.5;
       const regen = STAMINA_REGEN * (still ? STAMINA_STILL_MULT : STAMINA_MOVE_MULT);
-      pred.stamina = Math.min(STAMINA_MAX, pred.stamina + regen * dt);
+      if (pred.stamina < STAMINA_MAX) {
+        pred.stamina = Math.min(STAMINA_MAX, pred.stamina + regen * dt);
+      } else if (now - (pred.lastSprintT || 0) >= STAMINA_OVERCHARGE_DELAY_MS) {
+        pred.stamina = Math.min(
+          STAMINA_OVERCHARGE_MAX,
+          pred.stamina + regen * STAMINA_OVERCHARGE_RATE * dt
+        );
+      }
       if (pred.winded && pred.stamina >= WINDED_RECOVER) pred.winded = false;
     }
     pred.shoot = Math.min(SHOOT_STAMINA_MAX, pred.shoot + SHOOT_STAMINA_REGEN * dt);
@@ -1447,11 +1501,27 @@
     pred.prevK = kDown;
 
     if (pred.sliding) {
-      // Committed slide: locked direction, boosted speed easing to a walk.
+      // Committed slide: direction locked in — perpendicular input only
+      // curves it gently — with boosted speed easing down to a walk.
+      if (len > 0) {
+        const lat = wy * pred.slideDX - wx * pred.slideDY; // wish · right-perp
+        if (Math.abs(lat) > 0.01) {
+          const turn = clamp(lat, -1, 1) * SLIDE_TURN_RATE * dt;
+          const cosT = Math.cos(turn);
+          const sinT = Math.sin(turn);
+          const ndx = pred.slideDX * cosT - pred.slideDY * sinT;
+          const ndy = pred.slideDX * sinT + pred.slideDY * cosT;
+          pred.slideDX = ndx;
+          pred.slideDY = ndy;
+        }
+      }
       pred.slideSpeed = Math.max(BASE_SPEED, pred.slideSpeed - SLIDE_DECEL * dt);
       pred.vx = pred.slideDX * pred.slideSpeed;
       pred.vy = pred.slideDY * pred.slideSpeed;
-      if (pred.slideSpeed <= BASE_SPEED) pred.sliding = false;
+      if (pred.slideSpeed <= BASE_SPEED) {
+        pred.sliding = false;
+        pred.slideStartT = 0;
+      }
       pred.sprinting = false;
     } else {
       let speed = sprinting ? SPRINT_SPEED : BASE_SPEED;
@@ -1652,7 +1722,7 @@
           r: pred.sprinting ? 1 : 0,
           w: pred.winded ? 1 : 0,
           sd: pred.sliding ? 1 : 0,
-          pq: serverMe?.pq || 0,
+          pq: serverMe?.pq || (performance.now() < myPassFlashUntil ? 1 : 0),
           mvx: pred.vx,
           mvy: pred.vy,
           cd: pred.cd ?? serverMe?.cd ?? 1,
@@ -1672,6 +1742,38 @@
       ctx.arc(px(k.x), py(k.y), (BALL_R + 2.5 * (1 - f)) * sc, 0, Math.PI * 2);
       ctx.strokeStyle = `rgba(255,255,255,${0.5 * f})`;
       ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    // Teammate map pings (run / pass-to spots).
+    marks = marks.filter((m) => now - m.rt < MARK_TTL_MS);
+    for (const m of marks) {
+      const age = (now - m.rt) / MARK_TTL_MS;
+      const a = 1 - age;
+      const pulse = 0.55 + 0.45 * Math.sin(now * 0.012);
+      const r0 = (1.2 + age * 3.5) * sc;
+      ctx.beginPath();
+      ctx.arc(px(m.x), py(m.y), r0, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(90,190,255,${0.75 * a * pulse})`;
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(px(m.x), py(m.y), Math.max(2, 4 * (1 - age)), 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(120,210,255,${0.85 * a})`;
+      ctx.fill();
+      // Crosshair tick marks
+      const tick = 8 + age * 6;
+      ctx.strokeStyle = `rgba(180,230,255,${0.65 * a})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(px(m.x) - tick, py(m.y));
+      ctx.lineTo(px(m.x) - tick * 0.35, py(m.y));
+      ctx.moveTo(px(m.x) + tick * 0.35, py(m.y));
+      ctx.lineTo(px(m.x) + tick, py(m.y));
+      ctx.moveTo(px(m.x), py(m.y) - tick);
+      ctx.lineTo(px(m.x), py(m.y) - tick * 0.35);
+      ctx.moveTo(px(m.x), py(m.y) + tick * 0.35);
+      ctx.lineTo(px(m.x), py(m.y) + tick);
       ctx.stroke();
     }
 
@@ -1916,12 +2018,19 @@
       const bySprint = innerHeight - 36;
       const byShoot = bySprint + bh + gap;
 
-      // Sprint stamina (green)
+      // Sprint stamina (green) + overcharge (blue overlay)
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
       ctx.fillRect(bx - 2, bySprint - 2, bw + 4, bh + 4);
-      const sf = Math.max(0, Math.min(1, me.s / STAMINA_MAX));
+      const sprint = me.s ?? 0;
+      const sf = Math.max(0, Math.min(1, sprint / STAMINA_MAX));
       ctx.fillStyle = me.w ? '#e6a23c' : (act.sp ? '#6fe3a1' : '#37b26c');
       ctx.fillRect(bx, bySprint, bw * sf, bh);
+      const oc = Math.max(0, sprint - STAMINA_MAX);
+      if (oc > 0) {
+        const ocf = Math.min(1, oc / (STAMINA_OVERCHARGE_MAX - STAMINA_MAX));
+        ctx.fillStyle = `rgba(70,160,255,${0.45 + 0.35 * ocf})`;
+        ctx.fillRect(bx, bySprint, bw * ocf, bh);
+      }
 
       // Shoot stamina (amber)
       const shoot = me.ss ?? SHOOT_STAMINA_MAX;
