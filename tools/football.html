@@ -593,7 +593,7 @@
   const TAP_CHARGE = 0.2 / CHARGE_TIME; // barely shot → min-threshold pass
   const TAP_SHOT_SPEED = KICK_MIN * 1.3;
   const PASS_AIM_RADIUS = 8; // cursor near a pass-requesting teammate = assisted pass
-  const PASS_SELF_RADIUS = 3; // Q on yourself = pass request, else map ping
+  const PASS_SELF_RADIUS = 3.5; // Q on yourself = pass request, else map ping
   const MARK_TTL_MS = 2500;
   const TRAP_MOVE_MULT = 0.95;
   const POST_R = 0.7;
@@ -702,6 +702,13 @@
   let snaps = [];
   let lastKicks = [];
   let marks = []; // teammate map pings { x, y, id, rt }
+  function upsertMark(x, y, id) {
+    marks = marks.filter((m) => m.id !== id);
+    marks.push({ x, y, id, rt: performance.now() });
+  }
+  function clearMark(id) {
+    marks = marks.filter((m) => m.id !== id);
+  }
   let ballTrail = [];
   let inGame = false;
   let pred = null; // local client prediction { x, y, vx, vy, stamina, shoot, winded, sprinting }
@@ -825,9 +832,10 @@
         }
         break;
       case 'mark':
-        // Avoid duplicating the local optimistic ping.
-        if (msg.id !== myId) {
-          marks.push({ x: msg.x, y: msg.y, id: msg.id, rt: performance.now() });
+        if (msg.clear) {
+          clearMark(msg.id);
+        } else {
+          upsertMark(msg.x, msg.y, msg.id);
         }
         break;
       case 'goal': {
@@ -1111,7 +1119,7 @@
     for (const a in act) {
       const held = binds[a].some((c) => c && pressed.has(c));
       if (act[a] !== held) {
-        // Q: on yourself → pass request; elsewhere → map ping for teammates.
+        // Q: on yourself → pass request only; elsewhere → map ping only.
         if (a === 'rp' && held && inGame) {
           const aim = screenToField(mouse.x, mouse.y);
           const mePos = pred || (() => {
@@ -1122,11 +1130,13 @@
           const my = mePos?.y ?? aim.y;
           const onSelf = Math.hypot(aim.x - mx, aim.y - my) <= PASS_SELF_RADIUS;
           if (onSelf) {
-            send({ t: 'pass', x: aim.x, y: aim.y });
+            send({ t: 'pass', kind: 'request' });
             myPassFlashUntil = performance.now() + 2500;
+            clearMark(myId);
           } else {
-            send({ t: 'pass', x: aim.x, y: aim.y });
-            marks.push({ x: aim.x, y: aim.y, id: myId, rt: performance.now() });
+            send({ t: 'pass', kind: 'mark', x: aim.x, y: aim.y });
+            myPassFlashUntil = 0;
+            upsertMark(aim.x, aim.y, myId);
           }
         }
         act[a] = held;

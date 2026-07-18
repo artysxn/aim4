@@ -127,8 +127,8 @@ const TAP_SHOT_SPEED = KICK_MIN * 1.3;
 // only your teammates see, e.g. to call where you want the ball played.
 const PASS_REQUEST_MS = 2500;
 const PASS_AIM_RADIUS = 8; // cursor within this of a requester = assisted pass
-const PASS_SELF_RADIUS = 3; // Q within this of yourself = pass request, else ping
-const MARK_COOLDOWN_MS = 400; // per-player map-ping rate limit
+const PASS_SELF_RADIUS = 3.5; // Q within this of yourself = pass request, else ping
+const MARK_COOLDOWN_MS = 0; // spam allowed — each ping replaces the previous
 const PASS_SHORT_DIST = 20;
 const PASS_SHORT_SPEED = 26; // medium pace for short passes
 // Assisted passes always cost the cheap-flick minimum — speed is auto-picked,
@@ -847,17 +847,25 @@ export class FootballServer {
         break;
       }
       case 'pass': {
-        // Q is contextual: cursor on yourself → pass request; elsewhere → map ping.
+        // Client decides intent: kind 'request' = pass ask, 'mark' = map ping.
+        // Mutual exclusion — never both at once. Marks may be spammed; each
+        // new ping from a player replaces their previous one client-side.
         const room = p.room;
         if (!room || !room.inMatch || p.team === 'spec') return;
-        const ax = clamp(num(msg.x, p.x), -FIELD_W, FIELD_W * 2);
-        const ay = clamp(num(msg.y, p.y), -FIELD_H, FIELD_H * 2);
-        const onSelf = Math.hypot(ax - p.x, ay - p.y) <= PASS_SELF_RADIUS;
-        if (onSelf) {
+        const kind = msg.kind === 'mark' || msg.kind === 'request'
+          ? msg.kind
+          : (Math.hypot(num(msg.x, p.x) - p.x, num(msg.y, p.y) - p.y) <= PASS_SELF_RADIUS
+            ? 'request'
+            : 'mark');
+        if (kind === 'request') {
           p.passUntil = this._simNow + PASS_REQUEST_MS;
+          // Clear any lingering map ping so teammates only see the pass ask.
+          this._broadcastTeam(room, p.team, { t: 'mark', id: p.id, clear: 1 });
           break;
         }
-        if (this._simNow - (p.lastMarkMs || 0) < MARK_COOLDOWN_MS) break;
+        const ax = clamp(num(msg.x, p.x), -FIELD_W, FIELD_W * 2);
+        const ay = clamp(num(msg.y, p.y), -FIELD_H, FIELD_H * 2);
+        p.passUntil = 0; // ping cancels an active pass request
         p.lastMarkMs = this._simNow;
         this._broadcastTeam(room, p.team, {
           t: 'mark',
