@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AIM4 Football</title>
 <style>
-  /* Design tokens mirrored from src/style.css so the page reads as AIM4.io. */
+  /* Ported from src/style.css so the page reads as AIM4.io. Keep tokens,
+     buttons, fields, mp-* lobby pieces and kbd chips in sync with the app. */
   @font-face {
     font-family: 'Host Grotesk';
     src: url('/fonts/host_grotesk/HostGrotesk-Regular.ttf') format('truetype');
@@ -30,16 +31,32 @@
     --border-strong: rgba(255, 255, 255, 0.16);
     --accent: #f52525;
     --accent-down: #d41f1f;
+    --accent-dim: rgba(245, 37, 37, 0.14);
     --text: #f2f2f2;
     --muted: #9c9ca2;
     --radius: 12px;
     --radius-sm: 8px;
+    --radius-xs: 5px;
     --red: #ff5544;
     --blue: #4da3ff;
     --green: #37b26c;
     --font-body: 'Host Grotesk', 'Segoe UI', system-ui, sans-serif;
+    --menu-panel-width: min(1180px, 94vw);
+    --menu-panel-height: 520px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+  }
+  *::-webkit-scrollbar { width: 10px; height: 10px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
   html, body { height: 100%; }
   body {
     background: var(--bg);
@@ -48,33 +65,56 @@
     overflow: hidden;
     user-select: none;
   }
-  .view { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; }
   .hidden { display: none !important; }
 
-  .title { font-size: 52px; font-weight: 600; letter-spacing: 0.5px; }
-  .title .io { color: var(--accent); }
-  .title .sub { font-weight: 400; color: var(--muted); }
-  .tagline { color: var(--muted); font-size: 13px; margin-top: -12px; }
-  .conn { font-size: 12px; min-height: 16px; color: var(--muted); }
-  .conn.bad { color: var(--accent); }
-  .msg { color: var(--accent); font-size: 13px; min-height: 18px; }
-
-  input {
-    font: inherit; font-size: 14px;
-    color: var(--text);
-    background: #17171a;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 10px 14px;
-    outline: none;
-    width: 100%;
+  /* Menu screens share the app's backdrop: red glow up top, vignette below. */
+  .screen {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+    background:
+      radial-gradient(ellipse 80% 55% at 50% 22%, rgba(245, 37, 37, 0.07), transparent 60%),
+      radial-gradient(ellipse 90% 70% at 50% 110%, rgba(0, 0, 0, 0.55), transparent 60%),
+      var(--bg);
   }
-  input:focus { border-color: var(--border-strong); }
-  input::placeholder { color: #5c5c62; }
-  label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
-  label.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; }
-  label.check input { width: auto; accent-color: var(--accent); }
+  #game.screen { padding: 0; background: #0c1210; }
 
+  .text-big { font-weight: 500; letter-spacing: 0; }
+  h2.text-big { font-size: 46.8px; line-height: 1; }
+  h2.screen-title { text-transform: uppercase; font-size: 56px; }
+  h4 {
+    font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+
+  .panel {
+    width: min(460px, 94vw);
+    max-height: 92vh;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 120px), var(--panel);
+    border-radius: var(--radius);
+    padding: 28px 30px;
+    text-align: center;
+  }
+  .panel.wide { width: var(--menu-panel-width); }
+  .menu-panel {
+    display: flex; flex-direction: column;
+    min-height: var(--menu-panel-height);
+  }
+  .menu-panel > h2.text-big { flex-shrink: 0; margin-bottom: 12px; }
+  .menu-panel-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .menu-panel-scroll {
+    overflow-y: auto; overflow-x: hidden;
+    padding-right: 2px;
+    text-align: left;
+  }
+  .menu-actions {
+    display: flex; gap: 12px; justify-content: center;
+    margin-top: 18px; flex-wrap: wrap; flex-shrink: 0;
+  }
+
+  /* ---- Buttons ---- */
   .btn {
     font-family: var(--font-body);
     font-size: 14px; font-weight: 500;
@@ -86,119 +126,248 @@
     cursor: pointer;
     transition: background 0.15s ease, transform 0.06s ease;
   }
+  a.btn { text-decoration: none; display: inline-block; }
   .btn:hover { background: #212125; }
   .btn:active { background: #101012; transform: translateY(1px); }
   .btn.primary { background: linear-gradient(180deg, #ff3434, #e01d1d); color: #fff; }
   .btn.primary:hover { background: linear-gradient(180deg, #ff4a4a, #ef2424); }
   .btn.primary:active { background: var(--accent-down); }
-  .btn.danger { color: #ffb4b4; background: rgba(255, 60, 60, 0.12); }
-  .btn.danger:hover { background: rgba(255, 60, 60, 0.22); }
+  .btn-danger { color: #ffb4b4; background: rgba(255, 60, 60, 0.12); }
+  .btn-danger:hover { background: rgba(255, 60, 60, 0.22); }
+  .btn-danger:active { background: rgba(255, 60, 60, 0.08); }
   .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+  .btn.btn-sm { padding: 6px 12px; font-size: 12px; }
+  .btn-block { width: 100%; margin-top: 8px; }
 
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 18px;
+  /* ---- Fields ---- */
+  .field { margin-bottom: 17px; }
+  .field:last-child { margin-bottom: 0; }
+  .field-top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-bottom: 6px;
   }
-  .panel h2 {
-    font-size: 13px; font-weight: 600; letter-spacing: 2px; color: var(--muted);
-    padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--border);
+  .field-label { flex: 1; min-width: 0; font-size: 15px; color: var(--muted); text-align: left; }
+  .field-check {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 15px; color: var(--text);
+    margin-bottom: 17px; cursor: pointer;
+  }
+  .text-input {
+    width: 100%;
+    padding: 10px 12px;
+    background: rgba(0, 0, 0, 0.35);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 14px;
+    border: none;
+    border-radius: var(--radius-sm);
+    outline: none;
+  }
+  .text-input:hover { background: rgba(0, 0, 0, 0.42); }
+  .text-input::placeholder { color: #5c5c62; }
+  .code-input { text-transform: uppercase; letter-spacing: 3px; }
+  .field-num {
+    width: 91px;
+    padding: 6px 10px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    background: rgba(0, 0, 0, 0.35);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 15px;
+    border: none;
+    border-radius: var(--radius-xs);
+    outline: none;
+    flex: 0 0 auto;
+  }
+  .field-num:hover { background: rgba(0, 0, 0, 0.42); }
+  select {
+    width: 100%;
+    padding: 10px 34px 10px 12px;
+    background-color: rgba(0, 0, 0, 0.35);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 15px;
+    border: none;
+    border-radius: var(--radius-sm);
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%239c9ca2' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 13px center;
+    cursor: pointer;
+  }
+  select:hover { background-color: rgba(0, 0, 0, 0.42); }
+  select option { background: #141416; color: var(--text); }
+  input[type='checkbox'] {
+    width: 18px; height: 18px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    flex-shrink: 0;
   }
 
-  /* ---- Menu ---- */
-  .menuPanels { display: flex; gap: 16px; width: min(880px, 94vw); align-items: stretch; }
-  .createPanel { flex: 0 0 300px; display: flex; flex-direction: column; gap: 12px; }
-  .createPanel .btn { margin-top: auto; }
-  .browsePanel { flex: 1; display: flex; flex-direction: column; gap: 10px; min-height: 340px; }
-  .lobbyList { flex: 1; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; max-height: 300px; }
-  .lobbyList .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 30px 0; }
-  .lobbyItem {
+  .readout { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; min-height: 18px; }
+  .readout.is-error { color: #ff6b7a; }
+
+  /* ---- Lobby browser ---- */
+  .mp-browser { margin-top: 2px; }
+  .mp-browser-head { display: flex; align-items: center; justify-content: space-between; }
+  .mp-browser-head h4 { margin: 0; }
+  .mp-lobby-list {
+    margin-top: 10px;
+    display: flex; flex-direction: column; gap: 6px;
+    max-height: 220px; overflow-y: auto;
+  }
+  .mp-lobby-empty {
+    color: var(--muted); font-style: italic;
+    padding: 14px; text-align: center;
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+  }
+  .mp-lobby-item {
     display: flex; align-items: center; gap: 12px;
     padding: 10px 14px;
     background: var(--surface);
     border-radius: var(--radius-sm);
     transition: background 0.15s ease;
   }
-  .lobbyItem:hover { background: var(--surface-hover); }
-  .lobbyItem .info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  .lobbyItem .host { font-size: 15px; }
-  .lobbyItem .meta { font-size: 12px; color: var(--muted); }
-  .lobbyItem .btn { padding: 6px 16px; }
-  .joinRow { display: flex; gap: 8px; }
-  .joinRow input { width: 110px; text-align: center; text-transform: uppercase; letter-spacing: 3px; }
-  .backLink { color: var(--muted); font-size: 12px; text-decoration: none; margin-top: 6px; }
-  .backLink:hover { color: var(--text); }
+  .mp-lobby-item:hover { background: var(--surface-hover); }
+  .mp-lobby-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .mp-lobby-host { font-size: 15px; color: var(--text); display: flex; align-items: center; gap: 8px; }
+  .mp-lobby-meta { font-size: 12px; color: var(--muted); }
+  .mp-lobby-item .btn { padding: 6px 16px; }
 
-  /* ---- Password modal ---- */
-  .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 20; }
-  .modalPanel { width: 320px; display: flex; flex-direction: column; gap: 12px; }
-  .modalPanel .row { display: flex; gap: 8px; justify-content: flex-end; }
+  /* ---- Columns ---- */
+  .mp-cols { display: flex; gap: 18px; margin-top: 14px; flex-wrap: wrap; }
+  .mp-col {
+    flex: 1 1 240px;
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+    padding: 16px;
+    text-align: left;
+  }
+  .mp-col h4 { color: var(--text); margin: 0 0 10px; }
 
-  /* ---- Keybinds modal ---- */
-  .bindsPanel { width: 440px; }
+  .mp-code { color: var(--accent); font-variant-numeric: tabular-nums; letter-spacing: 3px; }
+
+  .mp-invite {
+    margin-bottom: 4px;
+    padding: 12px;
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+  }
+  .config-export-code {
+    display: block;
+    margin-bottom: 8px;
+    padding: 8px 10px;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: var(--radius-xs);
+    font-family: var(--font-body);
+    font-size: 12px;
+    color: var(--muted);
+    word-break: break-all;
+    user-select: text;
+    text-align: left;
+  }
+  .mp-invite .btn-block { margin-top: 0; }
+
+  /* ---- Team columns ---- */
+  .mp-teams { display: flex; gap: 18px; margin-top: 14px; flex-wrap: wrap; }
+  .mp-team {
+    flex: 1 1 220px;
+    display: flex; flex-direction: column; gap: 6px;
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+    padding: 16px;
+    min-height: 240px;
+    text-align: left;
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+  }
+  .mp-team h4 { margin: 0 0 4px; }
+  .mp-team[data-team='red'] h4 { color: var(--red); }
+  .mp-team[data-team='blue'] h4 { color: var(--blue); }
+  .mp-team[data-team='spec'] h4 { color: var(--muted); }
+  .mp-team.dropOk {
+    background: rgba(55, 178, 108, 0.08);
+    box-shadow: inset 0 0 0 1px var(--green);
+  }
+  .mp-team-list { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+  .mp-team > .btn { margin-top: auto; }
+
+  .mp-player {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px;
+    background: rgba(0, 0, 0, 0.28);
+    border-radius: var(--radius-sm);
+    font-size: 15px;
+  }
+  .mp-player.me { box-shadow: inset 0 0 0 1px var(--border-strong); }
+  .mp-player.draggable { cursor: grab; }
+  .mp-player.dragging { opacity: 0.4; }
+  .mp-dot { width: 10px; height: 10px; border-radius: 50%; background: #666; flex: none; }
+  .mp-player[data-team='red'] .mp-dot { background: var(--red); }
+  .mp-player[data-team='blue'] .mp-dot { background: var(--blue); }
+  .mp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mp-tag {
+    font-size: 11px; letter-spacing: 1px;
+    padding: 3px 9px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 999px;
+    color: var(--muted);
+    text-transform: uppercase;
+    flex: none;
+  }
+  .mp-tag.host { background: var(--accent-dim); color: var(--accent); }
+
+  /* ---- Controls tip (mirrors the main menu's notice box) ---- */
+  .controls-tip {
+    margin-top: 14px;
+    padding: 14px 18px;
+    text-align: left;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 80px), rgba(0, 0, 0, 0.22);
+    border-radius: var(--radius-sm);
+  }
+  .controls-tip-title { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--text); }
+  .controls-tip-list {
+    list-style: none;
+    font-size: 13px; line-height: 1.6; color: var(--muted);
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 6px 24px;
+  }
+  .controls-tip-list li { display: flex; align-items: baseline; gap: 8px; }
+  .controls-tip-list li .keys { display: inline-flex; gap: 3px; flex: none; }
+  kbd {
+    display: inline-block;
+    padding: 1px 7px;
+    font-family: var(--font-body);
+    font-size: 12px;
+    color: var(--text);
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: var(--radius-xs);
+  }
+
+  /* ---- Modals ---- */
+  .modal {
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 20;
+  }
+  .modal .panel { text-align: left; }
+  .modal .menu-actions { justify-content: flex-end; }
+  .modalPanel { width: 340px; }
+  .modalPanel h4 { margin-bottom: 14px; }
+  .bindsPanel { width: 460px; }
   .bindRows { display: flex; flex-direction: column; gap: 6px; }
   .bindRow { display: flex; align-items: center; gap: 8px; }
   .bindRow .lbl { flex: 1; font-size: 13px; }
   .bindBtn { min-width: 104px; padding: 7px 10px; font-size: 12px; }
-  .bindBtn.listening { outline: 1px solid var(--accent); color: var(--accent); }
-  .bindHint { color: var(--muted); font-size: 11px; line-height: 1.6; }
-
-  /* ---- Lobby ---- */
-  #lobby { justify-content: flex-start; padding: 42px 20px 24px; overflow-y: auto; }
-  .lobbyHead { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-  .lobbyLabel { font-size: 12px; letter-spacing: 3px; color: var(--muted); margin-right: 12px; }
-  .code {
-    font-size: 38px; font-weight: 600; letter-spacing: 8px;
-  }
-  .invite {
-    font-size: 12px; color: var(--muted);
-    background: var(--surface); border-radius: var(--radius-sm);
-    padding: 8px 14px; cursor: pointer;
-  }
-  .invite:hover { background: var(--surface-hover); color: var(--text); }
-  .hostCfg { display: flex; align-items: center; gap: 12px; padding: 12px 16px; flex-wrap: wrap; }
-  .hostCfg input { width: 260px; }
-  .hostCfg input[type="number"] { width: 58px; padding: 8px 6px 8px 10px; }
-  .hostCfg select {
-    font: inherit; font-size: 13px; color: var(--text);
-    background: #17171a; border: 1px solid var(--border);
-    border-radius: var(--radius-sm); padding: 9px 10px; outline: none;
-  }
-  .rules { font-size: 12px; color: var(--muted); }
-  .teams { display: flex; gap: 14px; width: min(900px, 94vw); margin-top: 6px; }
-  .col {
-    flex: 1; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 12px; min-height: 280px; display: flex; flex-direction: column; gap: 8px;
-    transition: border-color 0.1s, background 0.1s;
-  }
-  .col h2 { font-size: 13px; letter-spacing: 2px; text-align: center; padding-bottom: 8px; border-bottom: 1px solid var(--border); font-weight: 600; }
-  .col[data-team="red"] h2 { color: var(--red); }
-  .col[data-team="blue"] h2 { color: var(--blue); }
-  .col[data-team="spec"] h2 { color: var(--muted); }
-  .col.dropOk { border-color: var(--green); background: rgba(55, 178, 108, 0.06); }
-  .col .list { flex: 1; display: flex; flex-direction: column; gap: 6px; }
-  .chip {
-    background: var(--surface); border: 1px solid transparent; border-radius: var(--radius-sm);
-    padding: 8px 10px; font-size: 14px; display: flex; align-items: center; gap: 8px;
-  }
-  .chip.draggable { cursor: grab; }
-  .chip.dragging { opacity: 0.4; }
-  .chip .dot { width: 10px; height: 10px; border-radius: 50%; background: #666; flex: none; }
-  .chip[data-team="red"] .dot { background: var(--red); }
-  .chip[data-team="blue"] .dot { background: var(--blue); }
-  .chip .crown { margin-left: auto; font-size: 12px; }
-  .chip.me { border-color: var(--border-strong); }
-  .col > .btn { font-size: 12px; padding: 7px; }
-  .lobbyFoot { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
-  .controlsHint { color: var(--muted); font-size: 12px; text-align: center; max-width: 660px; line-height: 1.8; margin-top: 8px; }
-  kbd {
-    background: #17171a; border: 1px solid var(--border-strong); border-bottom-width: 2px;
-    border-radius: 4px; padding: 1px 6px; font-family: inherit; font-size: 11px; color: var(--text);
-  }
+  .bindBtn.listening { box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
 
   /* ---- Game ---- */
-  #game { background: #0c1210; }
   #cv { position: absolute; inset: 0; width: 100%; height: 100%; }
   #banner {
     position: absolute; top: 18%; left: 0; right: 0; text-align: center;
@@ -209,52 +378,71 @@
     position: absolute; inset: 0; background: rgba(10,10,12,0.82);
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
   }
-  #endOverlay .big { font-size: 52px; font-weight: 600; }
+  #endOverlay .big { font-size: 52px; font-weight: 500; }
   #endOverlay .sub { color: var(--muted); }
   #gameBar { position: absolute; top: 12px; left: 12px; display: flex; gap: 8px; z-index: 5; }
   #specJoin { display: flex; gap: 8px; }
   #specJoin.hidden { display: none; }
-  #joinRedBtn { color: #ff5544; }
-  #joinBlueBtn { color: #4da3ff; }
+  #joinRedBtn { color: var(--red); }
+  #joinBlueBtn { color: var(--blue); }
 </style>
 </head>
 <body>
 
 <!-- ===================== MENU ===================== -->
-<div id="menu" class="view">
-  <div class="title">AIM4<span class="io">.io</span> <span class="sub">FOOTBALL</span></div>
-  <div class="conn" id="connStatus">connecting&hellip;</div>
-  <div class="menuPanels">
-    <section class="panel createPanel">
-      <h2>CREATE LOBBY</h2>
-      <label class="field">NAME<input id="nameInput" maxlength="16" placeholder="Your name" autocomplete="off"></label>
-      <label class="field">PASSWORD<input id="passInput" maxlength="24" placeholder="optional" autocomplete="off"></label>
-      <label class="check"><input type="checkbox" id="publicInput" checked> Show in public lobbies</label>
-      <button id="createBtn" class="btn primary">Create lobby</button>
-    </section>
-    <section class="panel browsePanel">
-      <h2>PUBLIC LOBBIES</h2>
-      <div id="lobbyList" class="lobbyList"><div class="empty">&hellip;</div></div>
-      <div class="joinRow">
-        <input id="codeInput" maxlength="4" placeholder="CODE" autocomplete="off">
-        <button id="joinBtn" class="btn">Join by code</button>
+<div id="menu" class="screen">
+  <div class="panel wide menu-panel">
+    <h2 class="text-big screen-title">Football</h2>
+    <div class="menu-panel-body menu-panel-scroll">
+      <div class="field field-plain">
+        <div class="field-top"><span class="field-label">Display name</span></div>
+        <input type="text" id="nameInput" class="text-input" maxlength="16" placeholder="Your name" spellcheck="false" autocomplete="off" />
       </div>
-    </section>
+      <div class="mp-browser">
+        <div class="mp-browser-head">
+          <h4>Public lobbies</h4>
+          <button type="button" class="btn btn-sm" id="refreshBtn">Refresh</button>
+        </div>
+        <div id="lobbyList" class="mp-lobby-list"></div>
+      </div>
+      <div class="mp-cols">
+        <div class="mp-col">
+          <h4>Create a lobby</h4>
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Password</span></div>
+            <input type="text" id="passInput" class="text-input" maxlength="24" placeholder="Optional" spellcheck="false" autocomplete="off" />
+          </div>
+          <label class="field-check"><input type="checkbox" id="privateInput" /> Private</label>
+          <button type="button" class="btn primary btn-block" id="createBtn">Create lobby</button>
+        </div>
+        <div class="mp-col">
+          <h4>Join by code</h4>
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Lobby code</span></div>
+            <input type="text" id="codeInput" class="text-input code-input" maxlength="4" placeholder="ABCD" spellcheck="false" autocomplete="off" />
+          </div>
+          <button type="button" class="btn btn-block" id="joinBtn">Join lobby</button>
+        </div>
+      </div>
+      <p class="readout" id="connStatus">Connecting&hellip;</p>
+      <p class="readout is-error" id="menuMsg"></p>
+    </div>
+    <div class="menu-actions">
+      <button type="button" class="btn" id="bindsBtn">Keybinds</button>
+      <a class="btn" href="/">Back to AIM4.io</a>
+    </div>
   </div>
-  <div id="menuMsg" class="msg"></div>
-  <button id="bindsBtn" class="btn">Keybinds</button>
-  <a class="backLink" href="/">&larr; back to AIM4.io</a>
 </div>
 
 <!-- ===================== PASSWORD MODAL ===================== -->
 <div id="passModal" class="modal hidden">
   <div class="panel modalPanel">
-    <h2>PASSWORD REQUIRED</h2>
-    <div class="msg" id="passMsg"></div>
-    <input id="passJoinInput" type="password" maxlength="24" placeholder="Lobby password" autocomplete="off">
-    <div class="row">
-      <button id="passCancelBtn" class="btn">Cancel</button>
-      <button id="passJoinBtn" class="btn primary">Join</button>
+    <h4>Password required</h4>
+    <input id="passJoinInput" class="text-input" type="password" maxlength="24" placeholder="Lobby password" autocomplete="off" />
+    <p class="readout is-error" id="passMsg"></p>
+    <div class="menu-actions">
+      <button type="button" class="btn" id="passCancelBtn">Cancel</button>
+      <button type="button" class="btn primary" id="passJoinBtn">Join</button>
     </div>
   </div>
 </div>
@@ -262,69 +450,93 @@
 <!-- ===================== KEYBINDS MODAL ===================== -->
 <div id="bindsModal" class="modal hidden">
   <div class="panel modalPanel bindsPanel">
-    <h2>KEYBINDS</h2>
+    <h4>Keybinds</h4>
     <div id="bindRows" class="bindRows"></div>
-    <div class="bindHint">
+    <p class="readout">
       Click a slot, then press a key or mouse button (press mouse buttons over the
       dark backdrop, not the panel). <kbd>Esc</kbd> cancels &middot; <kbd>Backspace</kbd> clears the slot.
-    </div>
-    <div class="row">
-      <button id="bindsResetBtn" class="btn">Reset defaults</button>
-      <button id="bindsCloseBtn" class="btn primary">Done</button>
+    </p>
+    <div class="menu-actions">
+      <button type="button" class="btn" id="bindsResetBtn">Reset defaults</button>
+      <button type="button" class="btn primary" id="bindsCloseBtn">Done</button>
     </div>
   </div>
 </div>
 
 <!-- ===================== LOBBY ===================== -->
-<div id="lobby" class="view hidden">
-  <div class="lobbyHead">
-    <div><span class="lobbyLabel">LOBBY</span><span class="code" id="codeLabel">----</span></div>
-    <div class="invite" id="inviteLine" title="Click to copy the invite link">&hellip;</div>
-    <div class="rules" id="rulesLine"></div>
-  </div>
-  <div class="panel hostCfg hidden" id="hostCfg">
-    <label class="check"><input type="checkbox" id="cfgPublic"> Public</label>
-    <label class="check">First to
-      <input id="cfgGoals" type="number" min="1" max="99" value="5"> goals</label>
-    <select id="cfgTime">
-      <option value="0">No time limit</option>
-      <option value="2">2 min</option>
-      <option value="5">5 min</option>
-      <option value="10">10 min</option>
-      <option value="15">15 min</option>
-      <option value="20">20 min</option>
-      <option value="30">30 min</option>
-    </select>
-    <input id="cfgPass" maxlength="24" placeholder="Set password (blank = none)" autocomplete="off">
-    <button id="cfgApply" class="btn">Apply password</button>
-  </div>
-  <div class="teams">
-    <div class="col" data-team="red">
-      <h2>RED</h2>
-      <div class="list"></div>
-      <button class="btn" data-selfjoin="red">Join red</button>
+<div id="lobby" class="screen hidden">
+  <div class="panel wide menu-panel">
+    <h2 class="text-big">Lobby <span class="mp-code" id="codeLabel">----</span></h2>
+    <div class="menu-panel-body menu-panel-scroll">
+      <div class="mp-invite">
+        <code class="config-export-code" id="inviteUrl"></code>
+        <button type="button" class="btn btn-block" id="inviteCopy">Copy invite link</button>
+      </div>
+      <p class="readout" id="rulesLine"></p>
+      <div class="mp-teams">
+        <div class="mp-team" data-team="red">
+          <h4>Red</h4>
+          <div class="mp-team-list"></div>
+          <button type="button" class="btn btn-sm" data-selfjoin="red">Join red</button>
+        </div>
+        <div class="mp-team" data-team="spec">
+          <h4>Spectators</h4>
+          <div class="mp-team-list"></div>
+          <button type="button" class="btn btn-sm" data-selfjoin="spec">Spectate</button>
+        </div>
+        <div class="mp-team" data-team="blue">
+          <h4>Blue</h4>
+          <div class="mp-team-list"></div>
+          <button type="button" class="btn btn-sm" data-selfjoin="blue">Join blue</button>
+        </div>
+      </div>
+      <div class="mp-cols hidden" id="hostCfg">
+        <div class="mp-col">
+          <h4>Match settings</h4>
+          <div class="field field-plain">
+            <div class="field-top">
+              <span class="field-label">First to (goals)</span>
+              <input id="cfgGoals" class="field-num" type="number" min="1" max="99" value="5" />
+            </div>
+          </div>
+          <div class="field field-plain">
+            <div class="field-top"><span class="field-label">Time limit</span></div>
+            <select id="cfgTime">
+              <option value="0">No time limit</option>
+              <option value="2">2 min</option>
+              <option value="5">5 min</option>
+              <option value="10">10 min</option>
+              <option value="15">15 min</option>
+              <option value="20">20 min</option>
+              <option value="30">30 min</option>
+            </select>
+          </div>
+          <label class="field-check"><input type="checkbox" id="cfgPrivate" /> Private</label>
+        </div>
+        <div class="mp-col">
+          <h4>Password</h4>
+          <div class="field field-plain">
+            <input id="cfgPass" class="text-input" maxlength="24" placeholder="Blank = none" spellcheck="false" autocomplete="off" />
+          </div>
+          <button type="button" class="btn btn-block" id="cfgApply">Apply password</button>
+        </div>
+      </div>
+      <section class="controls-tip">
+        <p class="controls-tip-title">Controls</p>
+        <ul class="controls-tip-list" id="controlsList"></ul>
+      </section>
+      <p class="readout is-error" id="lobbyMsg"></p>
     </div>
-    <div class="col" data-team="spec">
-      <h2>SPECTATORS</h2>
-      <div class="list"></div>
-      <button class="btn" data-selfjoin="spec">Spectate</button>
-    </div>
-    <div class="col" data-team="blue">
-      <h2>BLUE</h2>
-      <div class="list"></div>
-      <button class="btn" data-selfjoin="blue">Join blue</button>
+    <div class="menu-actions">
+      <button type="button" class="btn primary" id="startBtn">Start match</button>
+      <button type="button" class="btn" id="bindsBtnLobby">Keybinds</button>
+      <button type="button" class="btn btn-danger" id="leaveBtn">Leave lobby</button>
     </div>
   </div>
-  <div class="lobbyFoot">
-    <button id="startBtn" class="btn primary">Start match</button>
-    <button id="bindsBtnLobby" class="btn">Keybinds</button>
-    <button id="leaveBtn" class="btn danger">Leave</button>
-  </div>
-  <div id="lobbyMsg" class="msg"></div>
 </div>
 
 <!-- ===================== GAME ===================== -->
-<div id="game" class="view hidden">
+<div id="game" class="screen hidden">
   <canvas id="cv"></canvas>
   <div id="gameBar">
     <button id="gameLeaveBtn" class="btn">Leave</button>
@@ -346,13 +558,18 @@
   const FIELD_H = 62;
   const PLAYER_R = 1.047;
   const BALL_R = 1.02;
-  const BASE_SPEED = 10.973;
-  const SPRINT_SPEED = 19.698;
+  const BASE_SPEED = 12.07;
+  const SPRINT_SPEED = 17.728;
   const MOVE_ACCEL = 12;
   const STAMINA_MAX = 4.48;
   const STAMINA_REGEN = 0.8;
+  const STAMINA_REGEN_DELAY_MS = 1000;
   const STAMINA_STILL_MULT = 1.3;
+  const STAMINA_MOVE_MULT = 0.8;
   const WINDED_RECOVER = 1.28;
+  const SLIDE_STAMINA_COST = 1.4;
+  const SLIDE_BOOST = 1.2;
+  const SLIDE_DECEL = 9;
   const SHOOT_STAMINA_MAX = 56;
   const SHOOT_STAMINA_REGEN = 9;
   const BALL_FRICTION = 0.72;
@@ -368,7 +585,8 @@
   const CHARGE_POWER_BONUS = 0.35;
   const CHARGE_BASE_POWER = 44;
   const TAP_CHARGE = 0.2 / CHARGE_TIME; // barely shot → min-threshold pass
-  const TAP_SHOT_SPEED = KICK_MIN;
+  const TAP_SHOT_SPEED = KICK_MIN * 1.3;
+  const PASS_AIM_RADIUS = 8; // cursor near a pass-requesting teammate = assisted pass
   const TRAP_MOVE_MULT = 0.95;
   const POST_R = 0.7;
   const CORNER_R = 0.55;
@@ -388,16 +606,16 @@
   const views = { menu: $('menu'), lobby: $('lobby'), game: $('game') };
   const nameInput = $('nameInput');
   const passInput = $('passInput');
-  const publicInput = $('publicInput');
+  const privateInput = $('privateInput');
   const codeInput = $('codeInput');
   const connStatus = $('connStatus');
   const menuMsg = $('menuMsg');
   const lobbyMsg = $('lobbyMsg');
   const codeLabel = $('codeLabel');
-  const inviteLine = $('inviteLine');
+  const inviteUrlEl = $('inviteUrl');
   const startBtn = $('startBtn');
   const hostCfg = $('hostCfg');
-  const cfgPublic = $('cfgPublic');
+  const cfgPrivate = $('cfgPrivate');
   const cfgPass = $('cfgPass');
   const cfgGoals = $('cfgGoals');
   const cfgTime = $('cfgTime');
@@ -483,8 +701,8 @@
   let endTimer = 0; // end-overlay timeout; nonzero while the end screen shows
 
   function connect() {
-    connStatus.textContent = 'connecting…';
-    connStatus.classList.remove('bad');
+    connStatus.textContent = 'Connecting…';
+    connStatus.classList.remove('is-error');
     ws = new WebSocket(wsUrl());
     ws.onopen = () => {
       connStatus.textContent = '';
@@ -508,8 +726,8 @@
       setLobbyParam(null);
       show('menu');
       renderLobbyList(null);
-      connStatus.textContent = 'server offline — retrying…';
-      connStatus.classList.add('bad');
+      connStatus.textContent = 'Server offline — retrying…';
+      connStatus.classList.add('is-error');
       setTimeout(connect, 3000);
     };
     ws.onmessage = (ev) => {
@@ -654,7 +872,7 @@
     const name = myName();
     if (!name) return;
     menuMsg.textContent = '';
-    send({ t: 'create', name, pass: passInput.value, isPublic: publicInput.checked });
+    send({ t: 'create', name, pass: passInput.value, isPublic: !privateInput.checked });
   };
   $('joinBtn').onclick = () => {
     const code = codeInput.value.trim().toUpperCase();
@@ -662,6 +880,7 @@
     joinLobby(code);
   };
   codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('joinBtn').click(); });
+  $('refreshBtn').onclick = () => send({ t: 'list' });
 
   // Password modal.
   $('passJoinBtn').onclick = () => {
@@ -677,20 +896,20 @@
 
   function renderLobbyList(lobbies) {
     if (lobbies === null) {
-      lobbyListEl.innerHTML = '<div class="empty">&hellip;</div>';
+      lobbyListEl.innerHTML = '<div class="mp-lobby-empty">&hellip;</div>';
       return;
     }
     if (!lobbies.length) {
-      lobbyListEl.innerHTML = '<div class="empty">No public lobbies right now — create one!</div>';
+      lobbyListEl.innerHTML = '<div class="mp-lobby-empty">No public lobbies right now — create one!</div>';
       return;
     }
     lobbyListEl.innerHTML = lobbies
-      .map((l) => `<div class="lobbyItem">
-        <div class="info">
-          <span class="host">${escapeHtml(l.host)}${l.locked ? ' &#128274;' : ''}</span>
-          <span class="meta">${l.players}/${l.max} players &middot; ${l.inMatch ? 'match in progress' : 'in lobby'}</span>
+      .map((l) => `<div class="mp-lobby-item">
+        <div class="mp-lobby-info">
+          <span class="mp-lobby-host">${escapeHtml(l.host)}${l.locked ? '<span class="mp-tag">Password</span>' : ''}</span>
+          <span class="mp-lobby-meta">${l.players}/${l.max} players &middot; ${l.inMatch ? 'Match in progress' : 'In lobby'}</span>
         </div>
-        <button class="btn primary" data-join-code="${l.code}">Join</button>
+        <button type="button" class="btn primary" data-join-code="${l.code}">Join</button>
       </div>`)
       .join('');
     lobbyListEl.querySelectorAll('[data-join-code]').forEach((b) => {
@@ -701,13 +920,13 @@
   // ---- Lobby --------------------------------------------------------------------
   const isHost = () => lobby && lobby.hostId === myId;
 
-  inviteLine.onclick = () => {
+  $('inviteCopy').onclick = () => {
     if (!lobby) return;
-    const url = inviteUrl(lobby.code);
-    navigator.clipboard?.writeText(url).then(
+    navigator.clipboard?.writeText(inviteUrl(lobby.code)).then(
       () => {
-        inviteLine.textContent = 'invite link copied!';
-        setTimeout(() => { if (lobby) inviteLine.textContent = inviteUrl(lobby.code); }, 1600);
+        const b = $('inviteCopy');
+        b.textContent = 'Copied!';
+        setTimeout(() => { b.textContent = 'Copy invite link'; }, 1600);
       },
       () => {}
     );
@@ -743,45 +962,46 @@
   });
 
   // Host lobby settings: checkbox/selects apply instantly; password via Apply.
-  cfgPublic.onchange = () => { if (isHost()) send({ t: 'config', isPublic: cfgPublic.checked }); };
+  cfgPrivate.onchange = () => { if (isHost()) send({ t: 'config', isPublic: !cfgPrivate.checked }); };
   cfgGoals.onchange = () => { if (isHost()) send({ t: 'config', goals: Number(cfgGoals.value) || 5 }); };
   cfgTime.onchange = () => { if (isHost()) send({ t: 'config', timeMin: Number(cfgTime.value) || 0 }); };
   $('cfgApply').onclick = () => {
     if (!isHost()) return;
     send({ t: 'config', pass: cfgPass.value });
     cfgPass.value = '';
-    cfgPass.placeholder = 'saved';
+    cfgPass.placeholder = 'Saved';
     setTimeout(() => syncCfgPlaceholder(), 1200);
   };
   function syncCfgPlaceholder() {
     if (!lobby) return;
     cfgPass.placeholder = lobby.hasPass
-      ? 'password set — type to replace, apply blank to remove'
-      : 'Set password (blank = none)';
+      ? 'Password set — type to replace, apply blank to remove'
+      : 'Blank = none';
   }
 
   function renderLobby() {
     if (!lobby) return;
     codeLabel.textContent = lobby.code;
-    inviteLine.textContent = inviteUrl(lobby.code);
+    inviteUrlEl.textContent = inviteUrl(lobby.code);
     rulesLine.textContent =
-      `First to ${lobby.goals ?? 5} · ${lobby.timeMin ? `${lobby.timeMin} min` : 'no time limit'}`;
+      `First to ${lobby.goals ?? 5} goals · ${lobby.timeMin ? `${lobby.timeMin} min` : 'no time limit'} · drag players between columns`;
     lobbyMsg.textContent = '';
     startBtn.classList.toggle('hidden', !isHost());
     hostCfg.classList.toggle('hidden', !isHost());
     if (isHost()) {
-      cfgPublic.checked = lobby.isPublic !== false;
+      cfgPrivate.checked = lobby.isPublic === false;
       if (document.activeElement !== cfgGoals) cfgGoals.value = lobby.goals ?? 5;
       cfgTime.value = String(lobby.timeMin ?? 0);
       syncCfgPlaceholder();
     }
-    document.querySelectorAll('.col').forEach((col) => {
-      const list = col.querySelector('.list');
+    renderControlsHint();
+    document.querySelectorAll('.mp-team').forEach((col) => {
+      const list = col.querySelector('.mp-team-list');
       list.innerHTML = '';
       for (const p of lobby.players) {
         if (p.team !== col.dataset.team) continue;
         const chip = document.createElement('div');
-        chip.className = 'chip';
+        chip.className = 'mp-player';
         chip.dataset.team = p.team;
         if (p.id === myId) chip.classList.add('me');
         const canDrag = isHost() || p.id === myId;
@@ -796,14 +1016,15 @@
           chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
         }
         chip.innerHTML =
-          `<span class="dot"></span>${escapeHtml(p.name)}${p.id === myId ? ' (you)' : ''}` +
-          (p.id === lobby.hostId ? '<span class="crown" title="Host">&#128081;</span>' : '');
+          `<span class="mp-dot"></span><span class="mp-name">${escapeHtml(p.name)}</span>` +
+          (p.id === lobby.hostId ? '<span class="mp-tag host">Host</span>' : '') +
+          (p.id === myId ? '<span class="mp-tag">You</span>' : '');
         list.appendChild(chip);
       }
     });
   }
 
-  document.querySelectorAll('.col').forEach((col) => {
+  document.querySelectorAll('.mp-team').forEach((col) => {
     col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('dropOk'); });
     col.addEventListener('dragleave', () => col.classList.remove('dropOk'));
     col.addEventListener('drop', (e) => {
@@ -827,8 +1048,12 @@
     { a: 'l', label: 'Move left' },
     { a: 'r', label: 'Move right' },
     { a: 'sp', label: 'Sprint' },
+    { a: 'sl', label: 'Slide (press while sprinting)' },
     { a: 'k', label: 'Shoot (hold to charge)' },
-    { a: 'st', label: 'Stop / trap (hold)' }
+    { a: 'st', label: 'Stop / trap (hold)' },
+    { a: 'rp', label: 'Request pass' },
+    { a: 'cl', label: 'Curve shot left (hold)' },
+    { a: 'cr', label: 'Curve shot right (hold)' }
   ];
   const DEFAULT_BINDS = {
     u: ['KeyW', 'ArrowUp'],
@@ -836,10 +1061,15 @@
     l: ['KeyA', 'ArrowLeft'],
     r: ['KeyD', 'ArrowRight'],
     sp: ['ShiftLeft', 'ShiftRight'],
-    k: ['Space', 'Mouse0'],
-    st: ['KeyF', 'Mouse2']
+    sl: ['Space', null],
+    k: ['Mouse0', null],
+    st: ['KeyF', 'Mouse2'],
+    rp: ['KeyQ', null],
+    cl: ['Digit1', null],
+    cr: ['Digit2', null]
   };
-  const BINDS_KEY = 'aim4-football-binds';
+  // v2: Space moved from shoot to the new slide action.
+  const BINDS_KEY = 'aim4-football-binds-v2';
 
   function loadBinds() {
     let saved = null;
@@ -855,7 +1085,7 @@
   function saveBinds() { localStorage.setItem(BINDS_KEY, JSON.stringify(binds)); }
 
   const pressed = new Set(); // currently-down key/button codes
-  const act = { u: false, d: false, l: false, r: false, sp: false, k: false, st: false };
+  const act = { u: false, d: false, l: false, r: false, sp: false, sl: false, k: false, st: false, rp: false, cl: false, cr: false };
   let mouse = { x: 0, y: 0 };
 
   function codeBound(code) {
@@ -866,7 +1096,12 @@
     let changed = false;
     for (const a in act) {
       const held = binds[a].some((c) => c && pressed.has(c));
-      if (act[a] !== held) { act[a] = held; changed = true; }
+      if (act[a] !== held) {
+        // Request pass is momentary — fire on the press edge.
+        if (a === 'rp' && held && inGame) send({ t: 'pass' });
+        act[a] = held;
+        changed = true;
+      }
     }
     if (changed) sendInput();
   }
@@ -883,7 +1118,8 @@
     send({
       t: 'input',
       u: act.u, d: act.d, l: act.l, r: act.r,
-      sp: act.sp, k: act.k, st: act.st,
+      sp: act.sp, sl: act.sl, k: act.k, st: act.st,
+      cl: act.cl, cr: act.cr,
       ax: aim.x, ay: aim.y
     });
   }
@@ -940,8 +1176,32 @@
       .replace('AltLeft', 'L-Alt').replace('AltRight', 'R-Alt');
   }
 
+  /** Lobby controls box — rebuilt from the live binds so rebinds show up. */
+  function renderControlsHint() {
+    const el = $('controlsList');
+    if (!el) return;
+    const keys = (...actions) => {
+      const out = [];
+      for (const a of actions) {
+        const c = binds[a] && binds[a].find(Boolean);
+        out.push(`<kbd>${c ? bindLabel(c) : '—'}</kbd>`);
+      }
+      return `<span class="keys">${out.join('')}</span>`;
+    };
+    el.innerHTML = [
+      `<li>${keys('u', 'l', 'd', 'r')} <span>Move</span></li>`,
+      `<li>${keys('sp')} <span>Sprint — drains stamina</span></li>`,
+      `<li>${keys('sl')} <span>Slide — press while sprinting, knocks the ball loose</span></li>`,
+      `<li>${keys('k')} <span>Shoot — hold to charge, tap for a short pass</span></li>`,
+      `<li>${keys('st')} <span>Trap — hold to keep the ball at your feet</span></li>`,
+      `<li>${keys('rp')} <span>Request pass — teammates see you flash yellow</span></li>`,
+      `<li>${keys('cl', 'cr')} <span>Curve a shot left / right — hold while shooting</span></li>`
+    ].join('');
+  }
+
   function renderBinds() {
     bindRows.innerHTML = '';
+    renderControlsHint();
     for (const { a, label } of ACTION_DEFS) {
       const row = document.createElement('div');
       row.className = 'bindRow';
@@ -1068,7 +1328,13 @@
       charge: ch ?? 0,
       cd: cd ?? 1,
       kickReadyAt: 0,
-      prevK: false
+      prevK: false,
+      sliding: false,
+      slideSpeed: 0,
+      slideDX: 0,
+      slideDY: 0,
+      prevSl: false,
+      lastSprintT: 0
     };
   }
 
@@ -1112,6 +1378,7 @@
 
   function stepPred(dt) {
     if (!pred || !inGame || dt <= 0) return;
+    const now = performance.now();
     let wx = (act.r ? 1 : 0) - (act.l ? 1 : 0);
     let wy = (act.d ? 1 : 0) - (act.u ? 1 : 0);
     const len = Math.hypot(wx, wy);
@@ -1120,20 +1387,46 @@
       wy /= len;
     }
     const wantsSprint = act.sp && len > 0;
-    const sprinting = wantsSprint && !pred.winded && pred.stamina > 0;
-    if (sprinting) {
+    const sprinting = !pred.sliding && wantsSprint && !pred.winded && pred.stamina > 0;
+
+    // Slide: mirror of the server — fresh press mid-sprint, instant cost.
+    const slDown = act.sl;
+    if (slDown && !pred.prevSl && sprinting && pred.stamina >= SLIDE_STAMINA_COST) {
+      const spd = Math.hypot(pred.vx, pred.vy);
+      let dx = pred.vx;
+      let dy = pred.vy;
+      if (spd > 1) {
+        dx /= spd;
+        dy /= spd;
+      } else {
+        dx = wx;
+        dy = wy;
+      }
+      if (dx || dy) {
+        pred.sliding = true;
+        pred.slideDX = dx;
+        pred.slideDY = dy;
+        pred.slideSpeed = SPRINT_SPEED * SLIDE_BOOST;
+        pred.stamina = Math.max(0, pred.stamina - SLIDE_STAMINA_COST);
+        if (pred.stamina <= 0) pred.winded = true;
+      }
+    }
+    pred.prevSl = slDown;
+
+    if (sprinting || pred.sliding) pred.lastSprintT = now;
+    if (sprinting && !pred.sliding) {
       pred.stamina = Math.max(0, pred.stamina - dt);
       if (pred.stamina <= 0) pred.winded = true;
-    } else {
-      // Standing perfectly still (no input, not sliding) recharges faster.
+    } else if (!pred.sliding && now - (pred.lastSprintT || 0) >= STAMINA_REGEN_DELAY_MS) {
+      // Regen starts a beat after the last sprint/slide; standing perfectly
+      // still recharges faster, moving recharges slower.
       const still = len === 0 && Math.hypot(pred.vx, pred.vy) < 0.5;
-      const regen = STAMINA_REGEN * (still ? STAMINA_STILL_MULT : 1);
+      const regen = STAMINA_REGEN * (still ? STAMINA_STILL_MULT : STAMINA_MOVE_MULT);
       pred.stamina = Math.min(STAMINA_MAX, pred.stamina + regen * dt);
       if (pred.winded && pred.stamina >= WINDED_RECOVER) pred.winded = false;
     }
     pred.shoot = Math.min(SHOOT_STAMINA_MAX, pred.shoot + SHOOT_STAMINA_REGEN * dt);
 
-    const now = performance.now();
     if (pred.kickReadyAt && now < pred.kickReadyAt) {
       pred.cd = 1 - (pred.kickReadyAt - now) / KICK_COOLDOWN_MS;
     } else if (pred.kickReadyAt && now >= pred.kickReadyAt) {
@@ -1153,17 +1446,26 @@
     }
     pred.prevK = kDown;
 
-    let speed = sprinting ? SPRINT_SPEED : BASE_SPEED;
-    if (kDown && (pred.charge || 0) > 0) {
-      speed *= 1 - pred.charge * CHARGE_SLOW_MAX;
+    if (pred.sliding) {
+      // Committed slide: locked direction, boosted speed easing to a walk.
+      pred.slideSpeed = Math.max(BASE_SPEED, pred.slideSpeed - SLIDE_DECEL * dt);
+      pred.vx = pred.slideDX * pred.slideSpeed;
+      pred.vy = pred.slideDY * pred.slideSpeed;
+      if (pred.slideSpeed <= BASE_SPEED) pred.sliding = false;
+      pred.sprinting = false;
+    } else {
+      let speed = sprinting ? SPRINT_SPEED : BASE_SPEED;
+      if (kDown && (pred.charge || 0) > 0) {
+        speed *= 1 - pred.charge * CHARGE_SLOW_MAX;
+      }
+      if (act.st) speed *= TRAP_MOVE_MULT;
+      const k = Math.min(1, MOVE_ACCEL * dt);
+      pred.vx += (wx * speed - pred.vx) * k;
+      pred.vy += (wy * speed - pred.vy) * k;
+      pred.sprinting = sprinting;
     }
-    if (act.st) speed *= TRAP_MOVE_MULT;
-    const k = Math.min(1, MOVE_ACCEL * dt);
-    pred.vx += (wx * speed - pred.vx) * k;
-    pred.vy += (wy * speed - pred.vy) * k;
     pred.x = clamp(pred.x + pred.vx * dt, PLAYER_R, FIELD_W - PLAYER_R);
     pred.y = clamp(pred.y + pred.vy * dt, PLAYER_R, FIELD_H - PLAYER_R);
-    pred.sprinting = sprinting;
 
     // Keep the predicted avatar outside other bodies so no frame ever renders
     // us inside someone (the server resolves authoritatively; this only mirrors
@@ -1216,6 +1518,9 @@
     for (const q of a.s.pl) {
       const cur = players.get(q.i);
       if (cur) {
+        // Motion direction across the snap pair (for slide trails).
+        cur.mvx = cur.x - q.x;
+        cur.mvy = cur.y - q.y;
         // Local player is overwritten by prediction during play; still lerp
         // for kickoff/goal freezes when prediction is off.
         cur.x = lerp(q.x, cur.x);
@@ -1346,6 +1651,10 @@
           ss: pred.shoot,
           r: pred.sprinting ? 1 : 0,
           w: pred.winded ? 1 : 0,
+          sd: pred.sliding ? 1 : 0,
+          pq: serverMe?.pq || 0,
+          mvx: pred.vx,
+          mvy: pred.vy,
           cd: pred.cd ?? serverMe?.cd ?? 1,
           ch: pred.charge ?? 0
         }
@@ -1366,9 +1675,24 @@
       ctx.stroke();
     }
 
+    const myTeam = roster.get(myId)?.team;
     for (const [id, q] of st.players) {
       const info = roster.get(id);
       const color = TEAM_COLOR[info?.team] || '#888';
+      // Slide: short fading trail behind the motion direction.
+      if (q.sd) {
+        const ml = Math.hypot(q.mvx || 0, q.mvy || 0);
+        if (ml > 0.01) {
+          const ux = q.mvx / ml;
+          const uy = q.mvy / ml;
+          for (let g = 1; g <= 3; g++) {
+            ctx.beginPath();
+            ctx.arc(px(q.x - ux * g * 0.9), py(q.y - uy * g * 0.9), PLAYER_R * sc * (1 - g * 0.18), 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255,255,255,${0.14 - g * 0.035})`;
+            ctx.fill();
+          }
+        }
+      }
       ctx.beginPath();
       ctx.ellipse(px(q.x), py(q.y) + PLAYER_R * sc * 0.45, PLAYER_R * sc * 0.95, PLAYER_R * sc * 0.5, 0, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(0,0,0,0.25)';
@@ -1388,6 +1712,15 @@
         ctx.arc(px(q.x), py(q.y), (PLAYER_R + 0.45) * sc, 0, Math.PI * 2);
         ctx.strokeStyle = 'rgba(255,255,255,0.35)';
         ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+      // Pass request: a soft yellow pulse — only your own teammates see it.
+      if (q.pq && info?.team === myTeam && (myTeam === 'red' || myTeam === 'blue')) {
+        const pulse = 0.5 + 0.5 * Math.sin(now / 130);
+        ctx.beginPath();
+        ctx.arc(px(q.x), py(q.y), (PLAYER_R + 0.5 + 0.3 * pulse) * sc, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255,214,64,${0.3 + 0.4 * pulse})`;
+        ctx.lineWidth = 2.5;
         ctx.stroke();
       }
       ctx.font = `500 ${Math.max(11, sc * 1.1)}px Host Grotesk, Segoe UI, sans-serif`;
@@ -1415,18 +1748,43 @@
       const raw = isTap ? TAP_SHOT_SPEED : (aimPower + chargeFloor) * chargeMul;
       const power = Math.min(1, Math.max(0, (raw - KICK_MIN) / (BALL_MAX_SPEED - KICK_MIN)));
       const inReach = Math.hypot(st.ball.x - me.x, st.ball.y - me.y) <= KICK_RANGE;
+      // Assisted-pass hint: the cursor sits on a teammate who asked for it.
+      let passTarget = null;
+      if (myTeam === 'red' || myTeam === 'blue') {
+        let bestD = Infinity;
+        for (const [pid, q2] of st.players) {
+          if (pid === myId || !q2.pq) continue;
+          if (roster.get(pid)?.team !== myTeam) continue;
+          const d2 = Math.hypot(aim.x - q2.x, aim.y - q2.y);
+          if (d2 <= PASS_AIM_RADIUS && d2 < bestD) {
+            bestD = d2;
+            passTarget = q2;
+          }
+        }
+      }
       ctx.setLineDash([6, 6]);
       ctx.beginPath();
       ctx.moveTo(px(me.x), py(me.y));
       ctx.lineTo(px(aim.x), py(aim.y));
-      ctx.strokeStyle = inReach ? `rgba(255,${Math.round(230 - power * 170)},80,0.55)` : 'rgba(255,255,255,0.18)';
+      ctx.strokeStyle = !inReach
+        ? 'rgba(255,255,255,0.18)'
+        : passTarget
+          ? 'rgba(255,214,64,0.65)'
+          : `rgba(255,${Math.round(230 - power * 170)},80,0.55)`;
       ctx.lineWidth = 1.5 + charge * 1.5;
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.beginPath();
       ctx.arc(px(aim.x), py(aim.y), 5 + power * 4, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.strokeStyle = passTarget && inReach ? 'rgba(255,214,64,0.8)' : 'rgba(255,255,255,0.5)';
       ctx.stroke();
+      if (passTarget && inReach) {
+        ctx.beginPath();
+        ctx.arc(px(passTarget.x), py(passTarget.y), (PLAYER_R + 1.0) * sc, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,214,64,0.45)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
       if (inReach && dirLen > 0.5) {
         const n = dirLen;
         ctx.beginPath();

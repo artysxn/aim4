@@ -10,12 +10,13 @@
 // Wire protocol (JSON messages with a `t` field, mirroring the duel server):
 //   C2S: create{name,pass?,isPublic?} join{code,name,pass?} leave team{team}
 //        setTeam{id,team} config{pass?,isPublic?} start stop list unlist
-//        input{u,d,l,r,sp,k,st,ax,ay} ping{ct}
+//        input{u,d,l,r,sp,sl,k,st,cl,cr,ax,ay} pass ping{ct}
 //   S2C: welcome{id} lobby{code,hostId,inMatch,isPublic,hasPass,players}
 //        error{msg,code?} lobbyList{lobbies}
 //        start{field,score,goalsToWin,players} state{ph,kt,sc,ball,pl}
 //        kick{id,x,y,p} goal{team,byName,og,score} end{score,winner,aborted}
 //        pong{ct,st}
+//   (state pl entries carry sd=sliding and pq=pass-requested flags.)
 // ---------------------------------------------------------------------------
 
 const TICK_HZ = 128;
@@ -34,13 +35,24 @@ const BALL_R = 1.02; // −15% from 1.2
 
 // Movement. Hold shift to sprint — stamina pool drains while sprinting
 // and regenerates while not; running dry "winds" you until partially recovered.
-const BASE_SPEED = 10.973; // −5% from 11.55
-const SPRINT_SPEED = 19.698; // −5% from 20.735
+const BASE_SPEED = 12.07; // +10% from 10.973
+const SPRINT_SPEED = 17.728; // −10% from 19.698
 const MOVE_ACCEL = 12; // 1/s — slower, smoother ramp
 const STAMINA_MAX = 4.48; // −30% from 6.4 — meant for short bursts of movement
 const STAMINA_REGEN = 0.8; // per second while not sprinting
+const STAMINA_REGEN_DELAY_MS = 1000; // regen starts this long after the last sprint/slide
 const STAMINA_STILL_MULT = 1.3; // standing perfectly still recharges 30% faster
+const STAMINA_MOVE_MULT = 0.8; // regen while moving is 20% slower
 const WINDED_RECOVER = 1.28; // stamina needed to un-wind after running dry
+
+// Slide (press slide key while sprinting): an instant stamina chunk buys a
+// burst 20% over sprint speed that bleeds down to walking speed. You can't
+// keep the ball while sliding, and sliding into whoever has it knocks it loose.
+const SLIDE_STAMINA_COST = 1.4; // instant, on top of normal sprint drain
+const SLIDE_BOOST = 1.2; // starting speed = sprint × this
+const SLIDE_DECEL = 9; // units/s² down toward BASE_SPEED, then the slide ends
+const SLIDE_TACKLE_SLACK = 0.5; // body-contact allowance for dislodging the ball
+const SLIDE_KNOCK_SPEED = 16; // minimum speed of the dislodged ball
 
 // Shooting stamina — separate from sprint. Each kick drains this pool.
 const SHOOT_STAMINA_MAX = 56; // was 80 (−30%)
@@ -63,7 +75,8 @@ const BALL_MAX_SPEED = 72; // hard ceiling on ball speed, charged shots included
 const KICK_PUSH_SPEED = 5; // very light shove on other players in kick range
 const BODY_KICK_PUSH = 8; // kick released into an enemy (no ball) boots them along the aim
 const BODY_KICK_TRAP_LOCK_MS = 800; // body-kicked players can't trap for this long
-const BOUNCE = 0.88; // pillar-like restitution on posts / field edges
+const BOUNCE = 0.88; // pillar-like restitution on goal posts / corners
+const WALL_BOUNCE = 0.7; // flat walls eat 30% of the ball's momentum
 const POST_R = 0.7; // goal-post pillars
 const CORNER_R = 0.55; // field-corner pillars
 const KICK_BLEND = 0.9; // strong commit to shot direction/power
@@ -90,10 +103,27 @@ const DRIBBLE_AIM_WEIGHT = 0.28;
 
 // Barely shooting (held < TAP_HOLD_S before release) is a fixed short pass:
 // the cursor sets direction only — power ignores cursor distance and is the
-// minimum shot threshold (about half the previous tap speed).
+// minimum shot threshold plus 30% so quick flicks actually clear a defender.
 const TAP_HOLD_S = 0.2;
 const TAP_CHARGE = TAP_HOLD_S / CHARGE_TIME;
-const TAP_SHOT_SPEED = KICK_MIN;
+const TAP_SHOT_SPEED = KICK_MIN * 1.3;
+
+// Request pass (Q): flags you to teammates for a short window. A teammate who
+// releases a shot with the cursor roughly on you gets an assisted pass — the
+// ball takes the max speed for medium/long balls, a gentler pace up close.
+const PASS_REQUEST_MS = 2500;
+const PASS_AIM_RADIUS = 8; // cursor within this of a requester = assisted pass
+const PASS_SHORT_DIST = 20;
+const PASS_SHORT_SPEED = 26; // medium pace for short passes
+// Assisted passes always cost the cheap-flick minimum — speed is auto-picked,
+// so the steep power-cost curve shouldn't punish teamplay.
+const PASS_COST = SHOOT_COST_MIN;
+
+// Curve shots: holding the curve-left/right key when a shot is released puts
+// sideways spin on the ball. The spin bends the early flight and decays with
+// air resistance so the ball straightens out.
+const CURVE_RATE = 0.55; // lateral accel = shot speed × this (units/s²)
+const SPIN_DECAY = 1.6; // 1/s — how fast the bend straightens out
 
 // Collision masses / restitution (impulse response).
 const PLAYER_MASS = 1;
@@ -217,7 +247,7 @@ function isIncomingShot(q, ball, now) {
 /**
  * Apply a charged kick from player → ball. Returns powerT (0–1) or null if failed.
  */
-function applyKick(q, ball, charge, now) {
+function applyKick(q, ball, charge, now, fielded) {
   const tap = charge < TAP_CHARGE; // barely shot — fixed short pass
   if (now < q.kickAt) return null;
   if ((q.shootStamina ?? 0) < SHOOT_MIN_TO_FIRE) return null;
@@ -225,6 +255,19 @@ function applyKick(q, ball, charge, now) {
   const dx = ball.x - q.x;
   const dy = ball.y - q.y;
   if (Math.hypot(dx, dy) > KICK_RANGE) return null;
+
+  // Assisted pass: the cursor is roughly on a teammate who requested one.
+  let passTo = null;
+  let passToD = Infinity;
+  for (const w of fielded) {
+    if (w === q || w.team !== q.team) continue;
+    if ((w.passUntil || 0) <= now) continue;
+    const d = Math.hypot(q.input.ax - w.x, q.input.ay - w.y);
+    if (d <= PASS_AIM_RADIUS && d < passToD) {
+      passTo = w;
+      passToD = d;
+    }
+  }
 
   // Direction: ball → cursor. Power: player → cursor distance, capped at
   // KICK_MAX — and aiming anywhere off the pitch is always a full-distance shot.
@@ -246,14 +289,28 @@ function applyKick(q, ball, charge, now) {
   const chargeFloor = charge * charge * CHARGE_BASE_POWER;
   const aimPower = offPitch ? KICK_MAX : Math.min(dist * KICK_POWER_SCALE, KICK_MAX);
   const chargeMul = 1 + charge * CHARGE_POWER_BONUS;
-  const power = tap
+  let power = tap
     ? TAP_SHOT_SPEED
     : clamp((aimPower + chargeFloor) * chargeMul, KICK_MIN, BALL_MAX_SPEED);
+  let cost;
+  if (passTo) {
+    // The pass overrides aim/charge power: lead the receiver slightly, max
+    // speed for medium/long balls, a medium pace for short ones.
+    const passDist = Math.hypot(passTo.x - ball.x, passTo.y - ball.y);
+    power = passDist <= PASS_SHORT_DIST ? PASS_SHORT_SPEED : BALL_MAX_SPEED;
+    const lead = Math.min(0.5, (passDist / power) * 0.5);
+    ax = passTo.x + passTo.vx * lead - ball.x;
+    ay = passTo.y + passTo.vy * lead - ball.y;
+    dirLen = Math.hypot(ax, ay) || 1;
+    cost = PASS_COST;
+  }
   const powerT = clamp((power - KICK_MIN) / (BALL_MAX_SPEED - KICK_MIN || 1), 0, 1);
-  // Steep cost curve: hard/charged shots burn much more shoot stamina.
-  // Taps always cost the cheap-flick minimum despite their fixed speed.
-  const costT = tap ? 0 : powerT * powerT;
-  const cost = SHOOT_COST_MIN + (SHOOT_COST_MAX - SHOOT_COST_MIN) * costT;
+  if (cost == null) {
+    // Steep cost curve: hard/charged shots burn much more shoot stamina.
+    // Taps always cost the cheap-flick minimum despite their fixed speed.
+    const costT = tap ? 0 : powerT * powerT;
+    cost = SHOOT_COST_MIN + (SHOOT_COST_MAX - SHOOT_COST_MIN) * costT;
+  }
   if (q.shootStamina < cost * 0.55) return null;
   q.shootStamina = Math.max(0, q.shootStamina - cost);
 
@@ -262,9 +319,15 @@ function applyKick(q, ball, charge, now) {
   const kvy = (ay / dirLen) * power;
   ball.vx = ball.vx * (1 - blend) + kvx * blend;
   ball.vy = ball.vy * (1 - blend) + kvy * blend;
+  // Curve keys put sideways spin on the shot (both held cancel out); assisted
+  // passes fly straight so they actually arrive at the receiver's feet.
+  const cl = !!q.input.cl;
+  const cr = !!q.input.cr;
+  ball.spin = passTo || cl === cr ? 0 : power * CURVE_RATE * (cl ? -1 : 1);
   ball.lastKickId = q.id;
   ball.shotBy = q.id;
   ball.shotAt = now;
+  if (passTo) passTo.passUntil = 0; // delivered — stop the flash
   q.kickAt = now + KICK_COOLDOWN_MS;
   q.charge = 0;
   return powerT;
@@ -330,6 +393,7 @@ function applyTrapFollow(q, ball, dt, range = KICK_RANGE) {
     ball.vy = q.vy;
   }
 
+  ball.spin = 0; // controlled ball carries no leftover curve
   ball.lastKickId = q.id;
   return true;
 }
@@ -383,6 +447,7 @@ function applyDribble(q, ball, dt) {
   const ease = 1 - Math.exp(-DRIBBLE_EASE * dt);
   ball.vx += (nx * target - ball.vx) * ease;
   ball.vy += (ny * target - ball.vy) * ease;
+  ball.spin = 0;
 }
 
 function num(v, fallback = 0) {
@@ -545,7 +610,14 @@ export class FootballServer {
       trapBroken: false,
       trapHeld: false,
       trapLockUntil: 0,
-      input: { u: false, d: false, l: false, r: false, sp: false, k: false, st: false, ax: 0, ay: 0 }
+      sliding: false,
+      slideSpeed: 0,
+      slideDX: 0,
+      slideDY: 0,
+      prevSl: false,
+      lastSprintMs: 0,
+      passUntil: 0,
+      input: { u: false, d: false, l: false, r: false, sp: false, sl: false, k: false, st: false, cl: false, cr: false, ax: 0, ay: 0 }
     };
     this.players.set(id, player);
     this._send(player, { t: 'welcome', id });
@@ -590,7 +662,7 @@ export class FootballServer {
           timeLimitMs: 0, // 0 = no time limit
           playedMs: 0,
           score: { red: 0, blue: 0 },
-          ball: { x: FIELD_W / 2, y: FIELD_H / 2, vx: 0, vy: 0, lastKickId: 0, shotBy: 0, shotAt: 0 },
+          ball: { x: FIELD_W / 2, y: FIELD_H / 2, vx: 0, vy: 0, spin: 0, lastKickId: 0, shotBy: 0, shotAt: 0 },
           phase: 'play',
           phaseUntil: 0
         };
@@ -688,6 +760,11 @@ export class FootballServer {
           p.trapBroken = false;
           p.trapHeld = false;
           p.trapLockUntil = 0;
+          p.sliding = false;
+          p.slideSpeed = 0;
+          p.prevSl = false;
+          p.lastSprintMs = 0;
+          p.passUntil = 0;
           p.kickAt = 0;
           this._broadcastLobby(room);
           return;
@@ -731,11 +808,22 @@ export class FootballServer {
         i.l = !!msg.l;
         i.r = !!msg.r;
         i.sp = !!msg.sp;
+        i.sl = !!msg.sl;
         i.k = !!msg.k;
         i.st = !!msg.st;
+        i.cl = !!msg.cl;
+        i.cr = !!msg.cr;
         // Allow aiming well outside the pitch so screen-edge aims build power.
         i.ax = clamp(num(msg.ax), -FIELD_W * 2, FIELD_W * 3);
         i.ay = clamp(num(msg.ay), -FIELD_H * 2, FIELD_H * 3);
+        break;
+      }
+      case 'pass': {
+        // Q — ask teammates for the ball. Shows as a yellow flash on their
+        // screens and arms the assisted-pass aim window for a short while.
+        const room = p.room;
+        if (!room || !room.inMatch || p.team === 'spec') return;
+        p.passUntil = this._simNow + PASS_REQUEST_MS;
         break;
       }
       case 'ping': {
@@ -809,6 +897,11 @@ export class FootballServer {
         q.trapBroken = false;
         q.trapHeld = false;
         q.trapLockUntil = 0;
+        q.sliding = false;
+        q.slideSpeed = 0;
+        q.prevSl = false;
+        q.lastSprintMs = 0;
+        q.passUntil = 0;
         q.kickAt = 0;
       });
     };
@@ -818,6 +911,7 @@ export class FootballServer {
     room.ball.y = FIELD_H / 2;
     room.ball.vx = 0;
     room.ball.vy = 0;
+    room.ball.spin = 0;
     room.ball.lastKickId = 0;
     room.ball.shotBy = 0;
     room.ball.shotAt = 0;
@@ -920,14 +1014,42 @@ export class FootballServer {
       }
 
       const wantsSprint = i.sp && len > 0;
-      const sprinting = wantsSprint && !q.winded && q.stamina > 0;
-      if (sprinting) {
+      const sprinting = !q.sliding && wantsSprint && !q.winded && q.stamina > 0;
+
+      // Slide: a fresh press of the slide key mid-sprint. Costs a stamina
+      // chunk up front and locks the direction in until it bleeds off.
+      const slDown = !!i.sl;
+      if (slDown && !q.prevSl && sprinting && q.stamina >= SLIDE_STAMINA_COST) {
+        const spd = Math.hypot(q.vx, q.vy);
+        let dx = q.vx;
+        let dy = q.vy;
+        if (spd > 1) {
+          dx /= spd;
+          dy /= spd;
+        } else {
+          dx = wx;
+          dy = wy;
+        }
+        if (dx || dy) {
+          q.sliding = true;
+          q.slideDX = dx;
+          q.slideDY = dy;
+          q.slideSpeed = SPRINT_SPEED * SLIDE_BOOST;
+          q.stamina = Math.max(0, q.stamina - SLIDE_STAMINA_COST);
+          if (q.stamina <= 0) q.winded = true;
+        }
+      }
+      q.prevSl = slDown;
+
+      if (sprinting || q.sliding) q.lastSprintMs = now;
+      if (sprinting && !q.sliding) {
         q.stamina = Math.max(0, q.stamina - dt);
         if (q.stamina <= 0) q.winded = true;
-      } else {
-        // Standing perfectly still (no input, not sliding) recharges faster.
+      } else if (!q.sliding && now - q.lastSprintMs >= STAMINA_REGEN_DELAY_MS) {
+        // Regen kicks in a beat after the last sprint/slide. Standing
+        // perfectly still recharges faster; moving recharges slower.
         const still = len === 0 && Math.hypot(q.vx, q.vy) < 0.5;
-        const regen = STAMINA_REGEN * (still ? STAMINA_STILL_MULT : 1);
+        const regen = STAMINA_REGEN * (still ? STAMINA_STILL_MULT : STAMINA_MOVE_MULT);
         q.stamina = Math.min(STAMINA_MAX, q.stamina + regen * dt);
         if (q.winded && q.stamina >= WINDED_RECOVER) q.winded = false;
       }
@@ -949,22 +1071,32 @@ export class FootballServer {
       q._kReleased = q.prevK && !kDown;
       q.prevK = kDown;
 
-      let speed = sprinting ? SPRINT_SPEED : BASE_SPEED;
-      if (kDown && (q.charge || 0) > 0) {
-        speed *= 1 - q.charge * CHARGE_SLOW_MAX;
+      if (q.sliding) {
+        // Committed slide: locked direction, boosted speed easing down to a
+        // walk, at which point normal control returns.
+        q.slideSpeed = Math.max(BASE_SPEED, q.slideSpeed - SLIDE_DECEL * dt);
+        q.vx = q.slideDX * q.slideSpeed;
+        q.vy = q.slideDY * q.slideSpeed;
+        if (q.slideSpeed <= BASE_SPEED) q.sliding = false;
+        q.sprinting = false;
+      } else {
+        let speed = sprinting ? SPRINT_SPEED : BASE_SPEED;
+        if (kDown && (q.charge || 0) > 0) {
+          speed *= 1 - q.charge * CHARGE_SLOW_MAX;
+        }
+        if (i.st) speed *= TRAP_MOVE_MULT;
+        const k = Math.min(1, MOVE_ACCEL * dt);
+        q.vx += (wx * speed - q.vx) * k;
+        q.vy += (wy * speed - q.vy) * k;
+        q.sprinting = sprinting;
       }
-      if (i.st) speed *= TRAP_MOVE_MULT;
-      const k = Math.min(1, MOVE_ACCEL * dt);
-      q.vx += (wx * speed - q.vx) * k;
-      q.vy += (wy * speed - q.vy) * k;
-      q.sprinting = sprinting;
       // Positions advance in the substepped integrate+collide loop below.
     }
 
     // Shots: release after charge, or auto-volley an incoming opponent shot while holding.
     const kickedThisTick = new Set();
     const tryPlayerKick = (q, charge) => {
-      const powerT = applyKick(q, ball, charge, now);
+      const powerT = applyKick(q, ball, charge, now, fielded);
       if (powerT == null) return false;
       kickedThisTick.add(q.id);
       // The kick also shoves other players in range — very slightly, scaled
@@ -1036,6 +1168,7 @@ export class FootballServer {
     // Soft dribble nudge (movement-biased toward cursor) when touching without a shot.
     for (const q of fielded) {
       if (kickedThisTick.has(q.id)) continue;
+      if (q.sliding) continue; // no carrying the ball through a slide
       if (q.input.st && !q.trapBroken) continue; // trap follow owns the ball
       if (q.input.k && (q.charge || 0) > 0) continue; // charging — don't also dribble-steer
       applyDribble(q, ball, dt);
@@ -1048,6 +1181,11 @@ export class FootballServer {
     for (const q of fielded) {
       if (!q.input.st) {
         q.trapBroken = false;
+        q.trapHeld = false;
+        continue;
+      }
+      if (q.sliding) {
+        // Can't hold the ball while sliding — a held trap just lets go.
         q.trapHeld = false;
         continue;
       }
@@ -1105,6 +1243,22 @@ export class FootballServer {
       ball.vx *= decay;
       ball.vy *= decay;
 
+      // Curve: spin bends the flight sideways early on, then air resistance
+      // bleeds it off and the ball straightens out.
+      if (ball.spin) {
+        const spd = Math.hypot(ball.vx, ball.vy);
+        if (spd > 1) {
+          const pxn = -ball.vy / spd; // positive spin bends right of travel
+          const pyn = ball.vx / spd;
+          ball.vx += pxn * ball.spin * h;
+          ball.vy += pyn * ball.spin * h;
+          ball.spin *= Math.exp(-SPIN_DECAY * h);
+          if (Math.abs(ball.spin) < 0.5) ball.spin = 0;
+        } else {
+          ball.spin = 0;
+        }
+      }
+
       for (let iter = 0; iter < COLLIDE_ITERS; iter++) {
         for (let a = 0; a < fielded.length; a++) {
           for (let b = a + 1; b < fielded.length; b++) {
@@ -1134,6 +1288,7 @@ export class FootballServer {
             )
           ) {
             clampPlayer(q);
+            ball.spin = 0; // a body touch takes the curve off the ball
             ball.lastKickId = q.id;
           }
         }
@@ -1146,10 +1301,10 @@ export class FootballServer {
 
       if (ball.y < BALL_R) {
         ball.y = BALL_R;
-        if (ball.vy < 0) ball.vy = -ball.vy * BOUNCE;
+        if (ball.vy < 0) ball.vy = -ball.vy * WALL_BOUNCE;
       } else if (ball.y > FIELD_H - BALL_R) {
         ball.y = FIELD_H - BALL_R;
-        if (ball.vy > 0) ball.vy = -ball.vy * BOUNCE;
+        if (ball.vy > 0) ball.vy = -ball.vy * WALL_BOUNCE;
       }
 
       // Mouth is between the post centers; posts themselves bounce as pillars above.
@@ -1159,14 +1314,14 @@ export class FootballServer {
           if (ball.x < -0.5) this._goal(room, 'blue', now);
         } else {
           ball.x = BALL_R;
-          if (ball.vx < 0) ball.vx = -ball.vx * BOUNCE;
+          if (ball.vx < 0) ball.vx = -ball.vx * WALL_BOUNCE;
         }
       } else if (ball.x > FIELD_W - BALL_R) {
         if (inMouth) {
           if (ball.x > FIELD_W + 0.5) this._goal(room, 'red', now);
         } else {
           ball.x = FIELD_W - BALL_R;
-          if (ball.vx > 0) ball.vx = -ball.vx * BOUNCE;
+          if (ball.vx > 0) ball.vx = -ball.vx * WALL_BOUNCE;
         }
       }
       ball.x = clamp(ball.x, -GOAL_DEPTH + BALL_R, FIELD_W + GOAL_DEPTH - BALL_R);
@@ -1174,6 +1329,25 @@ export class FootballServer {
 
       resolveOverlaps(fielded, ball);
       if (room.phase !== 'play') return; // goal scored — celebration takes over
+    }
+
+    // Slide tackle: body contact with whoever has the ball at their feet
+    // knocks it loose along the slide direction and locks their trap briefly.
+    for (const q of fielded) {
+      if (!q.sliding) continue;
+      for (const w of fielded) {
+        if (w === q) continue;
+        const bodyDist = Math.hypot(w.x - q.x, w.y - q.y);
+        if (bodyDist > PLAYER_R * 2 + CONTACT_SKIN + SLIDE_TACKLE_SLACK) continue;
+        if (Math.hypot(ball.x - w.x, ball.y - w.y) > KICK_RANGE) continue;
+        const knock = Math.max(SLIDE_KNOCK_SPEED, q.slideSpeed);
+        ball.vx = q.slideDX * knock;
+        ball.vy = q.slideDY * knock;
+        ball.spin = 0;
+        ball.lastKickId = q.id;
+        w.trapBroken = true;
+        w.trapLockUntil = now + BODY_KICK_TRAP_LOCK_MS;
+      }
     }
 
     if (Math.hypot(ball.vx, ball.vy) < 0.05) {
@@ -1231,6 +1405,8 @@ export class FootballServer {
         ss: Math.round((q.shootStamina ?? SHOOT_STAMINA_MAX) * 10) / 10,
         r: q.sprinting ? 1 : 0,
         w: q.winded ? 1 : 0,
+        sd: q.sliding ? 1 : 0,
+        pq: (q.passUntil || 0) > now ? 1 : 0,
         cd: Math.round(cd * 100) / 100,
         ch: Math.round((q.charge || 0) * 100) / 100
       });
