@@ -3,7 +3,10 @@
 import { SCENARIOS } from '../core/SceneManager.js';
 
 /** Segments that must never be treated as scenario ids. */
-const RESERVED = new Set(['api', 'ws', 'assets', 'src', 'dist']);
+const RESERVED = new Set(['api', 'ws', 'assets', 'src', 'dist', 'train', 'tools', 'football']);
+
+/** The trainer's own root path — the site landing page owns "/". */
+export const TRAINER_PATH = '/train';
 
 /**
  * Parse the pathname into { scenario, variant } or null.
@@ -32,7 +35,7 @@ export function parseGamemodePath(pathname = window.location.pathname) {
 
 /** Build the canonical URL path for a running gamemode. */
 export function gamemodePath(scenario, variant = 'practice') {
-  if (!SCENARIOS[scenario]) return '/';
+  if (!SCENARIOS[scenario]) return TRAINER_PATH;
   if (variant === 'competitive') return `/${scenario}/competitive`;
   return `/${scenario}`;
 }
@@ -46,10 +49,10 @@ export function replaceGamemodePath(scenario, variant = 'practice') {
   window.history.replaceState({ gamemode: scenario, variant }, '', url);
 }
 
-/** Reset to site root while keeping unrelated query params (lobby, etc.). */
+/** Reset to the trainer root while keeping unrelated query params (lobby, etc.). */
 export function clearGamemodePath() {
   const url = new URL(window.location.href);
-  if (url.pathname === '/' || url.pathname === '') return;
-  url.pathname = '/';
+  if (url.pathname === TRAINER_PATH) return;
+  url.pathname = TRAINER_PATH;
   window.history.replaceState(null, '', url);
 }

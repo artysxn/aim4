@@ -33,15 +33,24 @@ export function distExists() {
   return fs.existsSync(path.join(DIST_DIR, 'index.html'));
 }
 
+// Extension-less page aliases — mirrors the vercel.json rewrites.
+const PAGE_ALIASES = {
+  '/train': '/train.html',
+  '/tools/editvalues': '/tools/editvalues.html',
+  '/tools/level-editor': '/tools/level-editor.html'
+};
+
 /**
  * Try to serve a file from dist/. Returns true if handled.
- * SPA fallback: unknown paths → index.html.
+ * SPA fallback: "/" and "/tools" → index.html (landing), every other unknown
+ * path (gamemode deep links, /train) → train.html (the trainer SPA).
  */
 export function tryServeStatic(req, res, url) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
 
   let rel = decodeURIComponent(url.pathname);
   if (rel === '/') rel = '/index.html';
+  if (PAGE_ALIASES[rel]) rel = PAGE_ALIASES[rel];
 
   const filePath = path.normalize(path.join(DIST_DIR, rel));
   if (!filePath.startsWith(DIST_DIR)) {
@@ -52,7 +61,9 @@ export function tryServeStatic(req, res, url) {
 
   let target = filePath;
   if (!fs.existsSync(target) || fs.statSync(target).isDirectory()) {
-    target = path.join(DIST_DIR, 'index.html');
+    const fallback = rel === '/index.html' || rel === '/tools' ? 'index.html' : 'train.html';
+    target = path.join(DIST_DIR, fallback);
+    if (!fs.existsSync(target)) target = path.join(DIST_DIR, 'index.html');
     if (!fs.existsSync(target)) return false;
   }
 

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>AIM4.io — Trainer</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- 3D WebGL viewport -->
+      <canvas id="game-canvas"></canvas>
+      <!-- 2D crosshair overlay, perfectly centered over the viewport -->
+      <canvas id="crosshair-canvas"></canvas>
+      <div id="death-fx" class="death-fx" aria-hidden="true"></div>
+      <!-- HTML/CSS UI layer (menus, HUD, leaderboards) -->
+      <div id="ui-root"></div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
