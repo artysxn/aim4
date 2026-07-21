@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta name="robots" content="noindex, nofollow" />
-<title>Aim4 — Rating Baselines</title>
+<title>Aim4: Rating Baselines</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -38,7 +38,7 @@
 </style>
 </head>
 <body>
-  <h1>Aim4 — Rating Baselines</h1>
+  <h1>Aim4: Rating Baselines</h1>
   <p class="sub">Per-gamemode baseline (B = a 1.00 rating). Precision uses a fixed curve and has no baseline. Saved on the server (<code>/api/baselines</code>) and used by everyone's Aim4 Rating radar.</p>
 
   <div class="bar">
@@ -50,7 +50,7 @@
   <table id="grid"></table>
 
   <div id="status"></div>
-  <p class="note">Changes go live for all players once saved — the game fetches these baselines from the server.</p>
+  <p class="note">Changes go live for all players once saved. The game fetches these baselines from the server.</p>
 
 <script>
   const PREFIX = 'aimtrainer:';
@@ -157,7 +157,7 @@
     } catch (e) {
       // Fall back to the local mirror so the editor still opens offline.
       try { config = mergeOver(defaults(), JSON.parse(localStorage.getItem(PREFIX + KEY) || 'null')); } catch {}
-      setStatus('Could not reach the server (' + e.message + ') — showing local values.', true);
+      setStatus('Could not reach the server (' + e.message + '), showing local values.', true);
     }
     render();
   })();

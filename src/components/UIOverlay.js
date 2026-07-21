@@ -239,7 +239,6 @@ const MENU_CREDIT_SCREENS = new Set([
   'playlist-edit',
   'settings',
   'scenario-settings',
-  'auth',
   'account',
   'leaderboard',
   'mp',
@@ -368,7 +367,6 @@ export class UIOverlay {
     this.state = 'menu';
     this.currentScenario = 'gridshot';
     this.scenarioConfig = {};
-    this._authMode = 'login';
     this._lbCache = {};
     this._returnAfterSettings = null;
     this._returnAfterAccount = 'menu';
@@ -1382,8 +1380,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
           </button>
           <div class="menu-auth" id="menu-auth">
             <div class="menu-auth-actions" id="menu-auth-guest">
-              <button type="button" class="btn btn-sm" id="menu-login-btn">Log in</button>
-              <button type="button" class="btn btn-sm primary" id="menu-signup-btn">Sign up</button>
+              <button type="button" class="btn btn-sm" id="menu-login-btn">Sign in</button>
             </div>
             <div class="menu-auth-actions hidden" id="menu-auth-user">
               <button type="button" class="menu-icon-btn" id="menu-account-btn" aria-label="My account">
@@ -1624,43 +1621,6 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
           <span class="scenario-settings-actions-spacer" aria-hidden="true"></span>
           <button type="button" class="btn btn-danger" id="scn-stats-reset-btn" hidden>Reset statistics</button>
           <button type="button" class="btn primary" id="scenario-settings-back-btn">Back</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- AUTH -->
-    <div class="screen auth" data-screen="auth">
-      <div class="panel">
-        <h2 class="text-big" id="auth-title">Sign in</h2>
-        <div class="tabs auth-tabs" id="auth-tabs">
-          <button type="button" class="tab active" data-auth-tab="login">Sign in</button>
-          <button type="button" class="tab" data-auth-tab="register">Register</button>
-        </div>
-        <button type="button" class="btn btn-google btn-block" id="auth-google">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-          Continue with Google
-        </button>
-        <p class="auth-divider">or</p>
-        <div class="field field-plain" id="auth-username-wrap">
-          <div class="field-top"><span class="field-label">Username</span></div>
-          <input type="text" id="auth-username" class="config-code-input" maxlength="20" spellcheck="false" autocomplete="username" />
-        </div>
-        <div class="field field-plain">
-          <div class="field-top"><span class="field-label">Email</span></div>
-          <input type="email" id="auth-email" class="config-code-input" maxlength="120" spellcheck="false" autocomplete="email" />
-        </div>
-        <div class="field field-plain">
-          <div class="field-top"><span class="field-label">Password</span></div>
-          <input type="password" id="auth-password" class="config-code-input" autocomplete="current-password" />
-        </div>
-        <div class="field field-plain" id="auth-confirm-wrap" hidden>
-          <div class="field-top"><span class="field-label">Confirm password</span></div>
-          <input type="password" id="auth-password2" class="config-code-input" autocomplete="new-password" />
-        </div>
-        <p class="readout" id="auth-status"></p>
-        <div class="menu-actions">
-          <button type="button" class="btn primary" id="auth-submit">Sign in</button>
-          <button type="button" class="btn" data-goto="menu">Back</button>
         </div>
       </div>
     </div>
@@ -2077,7 +2037,6 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         if (t.dataset.goto === 'playlists') this._renderPlaylists();
         this.showScreen(t.dataset.goto);
         if (t.dataset.goto === 'mp') this.mp.openBrowser();
-        if (t.dataset.goto === 'auth') this._openAuth('login');
       } else if (t.hasAttribute('data-resume')) this.resume();
       else if (t.hasAttribute('data-quit')) this.quit();
       else if (t.hasAttribute('data-restart')) {
@@ -4115,14 +4074,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
   _bindAuth() {
     const $ = (id) => this.root.querySelector(id);
-    const status = $('#auth-status');
-    const setStatus = (msg, ok = true) => {
-      status.textContent = msg || '';
-      status.classList.toggle('is-error', !ok);
-    };
-
-    $('#menu-login-btn')?.addEventListener('click', () => this._openAuth('login'));
-    $('#menu-signup-btn')?.addEventListener('click', () => this._openAuth('register'));
+    $('#menu-login-btn')?.addEventListener('click', () => this._openAuth());
     $('#menu-account-btn')?.addEventListener('click', () => this._openAccount());
     $('#account-back-btn')?.addEventListener('click', () => {
       const dest = this._returnAfterAccount || 'menu';
@@ -4135,53 +4087,6 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       await this.auth.signOut();
       this.refreshAccountBar();
       this._updateQueueChip({ inQueue: false });
-    });
-
-    $('#auth-tabs')?.addEventListener('click', (e) => {
-      const tab = e.target.closest('[data-auth-tab]');
-      if (!tab) return;
-      this._setAuthMode(tab.dataset.authTab);
-    });
-
-    $('#auth-google')?.addEventListener('click', async () => {
-      setStatus('Redirecting to Google…');
-      try {
-        await this.auth.signInWithGoogle();
-      } catch (e) {
-        setStatus(e.message || 'Google sign-in failed.', false);
-      }
-    });
-
-    $('#auth-submit')?.addEventListener('click', async () => {
-      const username = $('#auth-username')?.value?.trim();
-      const email = $('#auth-email')?.value?.trim();
-      const password = $('#auth-password')?.value || '';
-      const password2 = $('#auth-password2')?.value || '';
-      setStatus('…');
-      try {
-        if (this._authMode === 'register') {
-          if (password !== password2) throw new Error('Passwords do not match.');
-          const result = await this.auth.signUp({ username, email, password });
-          if (result.pendingConfirmation) {
-            setStatus(`Check ${result.email} for a confirmation link, then sign in.`, true);
-            this._setAuthMode('login');
-            return;
-          }
-          setStatus('Account created!', true);
-        } else {
-          await this.auth.signIn({ email, password });
-          setStatus('', true);
-        }
-        this.refreshAccountBar();
-        this._syncMpNameFromAccount();
-        this.showScreen('menu');
-      } catch (e) {
-        setStatus(e.message || 'Authentication failed.', false);
-      }
-    });
-
-    $('#auth-password')?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') $('#auth-submit')?.click();
     });
 
     this._bindAccount();
@@ -4234,7 +4139,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     if (userId && this.auth?.user?.id === userId) userId = null;
     if (!userId) {
       if (!this.auth?.isLoggedIn) {
-        this._openAuth('login');
+        this._openAuth();
         return;
       }
       this._viewingAccount = null;
@@ -5315,28 +5220,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     });
   }
 
-  _setAuthMode(mode) {
-    this._authMode = mode === 'register' ? 'register' : 'login';
-    const isReg = this._authMode === 'register';
-    this.root.querySelector('#auth-title').textContent = isReg ? 'Create account' : 'Sign in';
-    this.root.querySelector('#auth-submit').textContent = isReg ? 'Register' : 'Sign in';
-    this.root.querySelector('#auth-username-wrap').hidden = !isReg;
-    this.root.querySelector('#auth-confirm-wrap').hidden = !isReg;
-    this.root.querySelector('#auth-password').autocomplete = isReg ? 'new-password' : 'current-password';
-    this.root.querySelector('#auth-email').autocomplete = 'email';
-    this.root.querySelectorAll('#auth-tabs .tab').forEach((t) => {
-      t.classList.toggle('active', t.dataset.authTab === this._authMode);
-    });
-    const st = this.root.querySelector('#auth-status');
-    if (st) {
-      st.textContent = '';
-      st.classList.remove('is-error');
-    }
-  }
-
-  _openAuth(mode = 'login') {
-    this._setAuthMode(mode);
-    this.showScreen('auth');
+  /** Sign-in itself lives on the main site (aim4.io), not inside the trainer. */
+  _openAuth() {
+    window.location.href = '/';
   }
 
   _syncMpNameFromAccount() {
@@ -5696,7 +5582,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       return;
     }
     if (!this.auth?.isLoggedIn) {
-      this._openAuth('login');
+      this._openAuth();
       return;
     }
     if (this.mp?.inQueue) {
@@ -7353,7 +7239,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   async _shareReplay(ctx, triggerBtn = null) {
     if (!ctx?.sourcePath) return;
     if (!this.auth?.isLoggedIn) {
-      this._openAuth('login');
+      this._openAuth();
       return;
     }
     if (!supabaseConfigured()) {

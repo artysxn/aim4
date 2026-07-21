@@ -147,6 +147,11 @@
     gap: 12px; margin-bottom: 6px;
   }
   .field-label { flex: 1; min-width: 0; font-size: 15px; color: var(--muted); text-align: left; }
+  .account-state { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .account-state a { color: var(--red); text-decoration: none; }
+  .account-state a:hover { text-decoration: underline; }
+  .account-state button { color: var(--red); background: none; border: none; padding: 0; font: inherit; cursor: pointer; }
+  .account-state button:hover { text-decoration: underline; }
   .field-check {
     display: flex; align-items: center; gap: 10px;
     font-size: 15px; color: var(--text);
@@ -395,7 +400,10 @@
     <h2 class="text-big screen-title">Football</h2>
     <div class="menu-panel-body menu-panel-scroll">
       <div class="field field-plain">
-        <div class="field-top"><span class="field-label">Display name</span></div>
+        <div class="field-top">
+          <span class="field-label">Display name</span>
+          <span class="account-state" id="footballAccountState"></span>
+        </div>
         <input type="text" id="nameInput" class="text-input" maxlength="16" placeholder="Your name" spellcheck="false" autocomplete="off" />
       </div>
       <div class="mp-browser">
@@ -553,6 +561,9 @@
 </div>
 
 <script type="module">
+  import { AuthManager } from '/src/core/AuthManager.js';
+  import { SettingsManager } from '/src/core/SettingsManager.js';
+
   // ---- Constants mirrored from server/football.js (keep in sync) ----------
   const FIELD_W = 100;
   const FIELD_H = 62;
@@ -639,6 +650,33 @@
 
   nameInput.value = localStorage.getItem('aim4-football-name') || '';
 
+  // ---- Account (shared AIM4 sign-in, same session as the trainer and the
+  // main site). Signed-in players use their account username; guests can
+  // still type a display name below. Sign-in itself only happens on the
+  // main site (/), this page just reads the session and links out to it.
+  const settings = new SettingsManager();
+  const auth = new AuthManager(settings);
+  const accountState = $('footballAccountState');
+  function syncAccountUI() {
+    if (!auth.isConfigured) {
+      accountState.innerHTML = '';
+      return;
+    }
+    if (auth.isLoggedIn && auth.displayName) {
+      nameInput.value = auth.displayName;
+      nameInput.disabled = true;
+      accountState.innerHTML = `Signed in as <strong>@${escapeHtml(auth.displayName)}</strong> · <button type="button" id="footballSignOut">Log out</button>`;
+      $('footballSignOut')?.addEventListener('click', () => auth.signOut());
+    } else {
+      nameInput.disabled = false;
+      nameInput.value = localStorage.getItem('aim4-football-name') || '';
+      accountState.innerHTML = `<a href="/">Sign in</a>`;
+    }
+  }
+  auth.onChange(syncAccountUI);
+  syncAccountUI();
+  auth.init();
+
   function show(name) {
     for (const k in views) views[k].classList.toggle('hidden', k !== name);
     if (name === 'menu' && ws && ws.readyState === 1) send({ t: 'list' });
@@ -683,7 +721,7 @@
     else url.searchParams.delete('lobby');
     url.searchParams.delete('join'); // legacy param
     history.replaceState(null, '', url);
-    document.title = code ? `AIM4 Football — ${code}` : 'AIM4 Football';
+    document.title = code ? `AIM4 Football - ${code}` : 'AIM4 Football';
   }
   function inviteUrl(code) {
     return `${location.origin}${location.pathname}?lobby=${code}`;
@@ -742,7 +780,7 @@
       setLobbyParam(null);
       show('menu');
       renderLobbyList(null);
-      connStatus.textContent = 'Server offline — retrying…';
+      connStatus.textContent = 'Server offline, retrying…';
       connStatus.classList.add('is-error');
       setTimeout(connect, 3000);
     };
@@ -765,7 +803,7 @@
       case 'error':
         if (msg.code === 'pass') {
           pendingJoin = { code: msg.joinCode };
-          passMsg.textContent = msg.msg === 'Wrong password' ? 'Wrong password — try again' : '';
+          passMsg.textContent = msg.msg === 'Wrong password' ? 'Wrong password, try again' : '';
           passModal.classList.remove('hidden');
           passJoinInput.value = '';
           passJoinInput.focus();
@@ -854,12 +892,12 @@
         const w = msg.winner;
         $('endScore').innerHTML =
           `<span style="color:${TEAM_COLOR.red}">${msg.score.red}</span>` +
-          ` &mdash; ` +
+          ` - ` +
           `<span style="color:${TEAM_COLOR.blue}">${msg.score.blue}</span>`;
         $('endSub').textContent = msg.aborted
-          ? 'Match stopped by host — returning to lobby…'
+          ? 'Match stopped by host, returning to lobby…'
           : w ? `${w.toUpperCase()} wins! Returning to lobby…`
-          : 'Full time — draw! Returning to lobby…';
+          : 'Full time, draw! Returning to lobby…';
         endOverlay.classList.remove('hidden');
         updateSpecJoin();
         clearTimeout(endTimer);
@@ -877,6 +915,7 @@
 
   // ---- Menu actions -------------------------------------------------------------
   function myName(required = true) {
+    if (auth.isLoggedIn && auth.displayName) return auth.displayName;
     const n = nameInput.value.trim().slice(0, 16);
     if (n) localStorage.setItem('aim4-football-name', n);
     else if (required) {
@@ -925,7 +964,7 @@
       return;
     }
     if (!lobbies.length) {
-      lobbyListEl.innerHTML = '<div class="mp-lobby-empty">No public lobbies right now — create one!</div>';
+      lobbyListEl.innerHTML = '<div class="mp-lobby-empty">No public lobbies right now, create one!</div>';
       return;
     }
     lobbyListEl.innerHTML = lobbies
@@ -1000,7 +1039,7 @@
   function syncCfgPlaceholder() {
     if (!lobby) return;
     cfgPass.placeholder = lobby.hasPass
-      ? 'Password set — type to replace, apply blank to remove'
+      ? 'Password set, type to replace, apply blank to remove'
       : 'Blank = none';
   }
 
@@ -1200,7 +1239,7 @@
   let bindCapture = null; // { a, slot } while a slot waits for a key/button
 
   function bindLabel(code) {
-    if (!code) return '—';
+    if (!code) return '-';
     const mouseNames = { Mouse0: 'LMB', Mouse1: 'MMB', Mouse2: 'RMB', Mouse3: 'Mouse 4', Mouse4: 'Mouse 5' };
     if (mouseNames[code]) return mouseNames[code];
     if (code.startsWith('Mouse')) return code;
@@ -1223,18 +1262,18 @@
       const out = [];
       for (const a of actions) {
         const c = binds[a] && binds[a].find(Boolean);
-        out.push(`<kbd>${c ? bindLabel(c) : '—'}</kbd>`);
+        out.push(`<kbd>${c ? bindLabel(c) : '-'}</kbd>`);
       }
       return `<span class="keys">${out.join('')}</span>`;
     };
     el.innerHTML = [
       `<li>${keys('u', 'l', 'd', 'r')} <span>Move</span></li>`,
-      `<li>${keys('sp')} <span>Sprint — drains stamina</span></li>`,
-      `<li>${keys('sl')} <span>Slide — press while sprinting, knocks the ball loose</span></li>`,
-      `<li>${keys('k')} <span>Shoot — hold to charge, tap for a short pass</span></li>`,
-      `<li>${keys('st')} <span>Trap — hold to keep the ball at your feet</span></li>`,
-      `<li>${keys('rp')} <span>Pass request on yourself — ping a spot for a run</span></li>`,
-      `<li><span>Curve a shot — tap a move key perpendicular to the shot as you release</span></li>`
+      `<li>${keys('sp')} <span>Sprint, drains stamina</span></li>`,
+      `<li>${keys('sl')} <span>Slide, press while sprinting, knocks the ball loose</span></li>`,
+      `<li>${keys('k')} <span>Shoot, hold to charge, tap for a short pass</span></li>`,
+      `<li>${keys('st')} <span>Trap, hold to keep the ball at your feet</span></li>`,
+      `<li>${keys('rp')} <span>Pass request on yourself, ping a spot for a run</span></li>`,
+      `<li><span>Curve a shot, tap a move key perpendicular to the shot as you release</span></li>`
     ].join('');
   }
 

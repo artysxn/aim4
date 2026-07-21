@@ -5,24 +5,25 @@
 // view router. The trainer itself lives at /train (train.html).
 // ---------------------------------------------------------------------------
 
-// site.css is linked from the HTML entries directly (no JS import — Vite
+// site.css is linked from the HTML entries directly (no JS import: Vite
 // treats a dual link+import reference as two different modules in dev).
 import trainingIcon from '../icons/webmode_training.svg?raw';
 import footballIcon from '../icons/webmode_football.svg?raw';
 import toolsIcon from '../icons/webmode_tools.svg?raw';
 import accountIcon from '../icons/icon_account.svg?raw';
 import baselinesIcon from '../aim4/calendar_view_month_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?raw';
+import { SettingsManager } from '../core/SettingsManager.js';
+import { AuthManager } from '../core/AuthManager.js';
 
-// ---- Legacy / auth redirects ----------------------------------------------
-// The game used to live at "/". Lobby invites (?lobby=), replay shares
-// (?replay=) and Supabase auth callbacks (?code= / #access_token=) must keep
-// resolving into the trainer, which now owns /train.
+// ---- Legacy redirects -------------------------------------------------------
+// The game used to live at "/". Lobby invites (?lobby=) and replay shares
+// (?replay=) must keep resolving into the trainer, which now owns /train.
+// Auth callbacks (?code= / #access_token=) are NOT redirected: sign-in lives
+// on this page now, so its own AuthManager below consumes them in place.
 {
   const params = new URLSearchParams(window.location.search);
   const hash = window.location.hash || '';
-  const isAuthCallback =
-    params.has('code') || /access_token=|refresh_token=|error_description=/.test(hash);
-  if (params.has('lobby') || params.has('replay') || params.has('server') || isAuthCallback) {
+  if (params.has('lobby') || params.has('replay') || params.has('server')) {
     window.location.replace('/train' + window.location.search + hash);
   }
 }
@@ -55,7 +56,7 @@ function setCollapsed(collapsed, persist = true) {
     try {
       localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0');
     } catch {
-      /* storage unavailable — session-only */
+      /* storage unavailable, session-only */
     }
   }
 }
@@ -97,7 +98,7 @@ function setView(name, push = false) {
     }
   });
   document.getElementById('page-title').textContent = VIEWS[view].title;
-  document.title = view === 'home' ? 'AIM4.io' : `AIM4.io — ${VIEWS[view].title}`;
+  document.title = view === 'home' ? 'AIM4.io' : `AIM4.io - ${VIEWS[view].title}`;
   if (push && window.location.pathname !== VIEWS[view].path) {
     window.history.pushState({ view }, '', VIEWS[view].path);
   }
@@ -114,3 +115,122 @@ document.querySelectorAll('[data-nav]').forEach((el) => {
 window.addEventListener('popstate', () => setView(viewFromPath(), false));
 
 setView(viewFromPath(), false);
+
+// ---- Account (sign in / register) -------------------------------------------
+// Sign-in lives here, on the main site, and nowhere else: the trainer and
+// football both read this same Supabase session (persisted in localStorage)
+// instead of offering their own login forms.
+const settings = new SettingsManager();
+const auth = new AuthManager(settings);
+
+const authModal = document.getElementById('auth-modal');
+const sideAccountBtn = document.getElementById('side-account-btn');
+const sideAccountName = document.getElementById('side-account-name');
+const sideAccountHint = document.getElementById('side-account-hint');
+let authMode = 'login';
+
+function setAuthStatus(msg, ok = true) {
+  const status = document.getElementById('auth-status');
+  status.textContent = msg || '';
+  status.classList.toggle('is-error', !ok);
+}
+
+function setAuthMode(mode) {
+  authMode = mode === 'register' ? 'register' : 'login';
+  const isReg = authMode === 'register';
+  document.getElementById('auth-title').textContent = isReg ? 'Create account' : 'Sign in';
+  document.getElementById('auth-submit').textContent = isReg ? 'Register' : 'Sign in';
+  document.getElementById('auth-username-wrap').hidden = !isReg;
+  document.getElementById('auth-confirm-wrap').hidden = !isReg;
+  document.getElementById('auth-password').autocomplete = isReg ? 'new-password' : 'current-password';
+  document.querySelectorAll('#auth-tabs .auth-tab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.authTab === authMode);
+  });
+  setAuthStatus('');
+}
+
+function openAuth(mode = 'login') {
+  setAuthMode(mode);
+  authModal.hidden = false;
+}
+
+function closeAuth() {
+  authModal.hidden = true;
+}
+
+document.getElementById('auth-modal-backdrop').addEventListener('click', closeAuth);
+document.getElementById('auth-close').addEventListener('click', closeAuth);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !authModal.hidden) closeAuth();
+});
+
+document.getElementById('auth-tabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('[data-auth-tab]');
+  if (!tab) return;
+  setAuthMode(tab.dataset.authTab);
+});
+
+document.getElementById('auth-google').addEventListener('click', async () => {
+  setAuthStatus('Redirecting to Google…');
+  try {
+    await auth.signInWithGoogle();
+  } catch (e) {
+    setAuthStatus(e.message || 'Google sign-in failed.', false);
+  }
+});
+
+document.getElementById('auth-submit').addEventListener('click', async () => {
+  const username = document.getElementById('auth-username').value.trim();
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value || '';
+  const password2 = document.getElementById('auth-password2').value || '';
+  setAuthStatus('…');
+  try {
+    if (authMode === 'register') {
+      if (password !== password2) throw new Error('Passwords do not match.');
+      const result = await auth.signUp({ username, email, password });
+      if (result.pendingConfirmation) {
+        setAuthStatus(`Check ${result.email} for a confirmation link, then sign in.`, true);
+        setAuthMode('login');
+        return;
+      }
+      setAuthStatus('Account created!', true);
+    } else {
+      await auth.signIn({ email, password });
+      setAuthStatus('', true);
+    }
+    closeAuth();
+  } catch (e) {
+    setAuthStatus(e.message || 'Authentication failed.', false);
+  }
+});
+
+document.getElementById('auth-password').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('auth-submit').click();
+});
+
+function syncAccountRow() {
+  if (!auth.isConfigured) {
+    sideAccountBtn.hidden = true;
+    return;
+  }
+  if (auth.isLoggedIn) {
+    sideAccountName.textContent = auth.displayName ? `@${auth.displayName}` : 'Signed in';
+    sideAccountHint.textContent = 'Log out';
+  } else {
+    sideAccountName.textContent = 'Guest';
+    sideAccountHint.textContent = 'Sign in';
+  }
+}
+
+sideAccountBtn.addEventListener('click', () => {
+  if (auth.isLoggedIn) {
+    auth.signOut();
+  } else {
+    openAuth('login');
+  }
+});
+
+auth.onChange(syncAccountRow);
+syncAccountRow();
+auth.init();

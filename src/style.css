@@ -2282,16 +2282,6 @@ input[type='checkbox'] {
   color: var(--accent);
   margin-right: 4px;
 }
-.auth-tabs {
-  margin-bottom: 16px;
-}
-.auth-divider {
-  margin: 14px 0;
-  text-align: center;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1;
-}
 .btn-google {
   display: inline-flex;
   align-items: center;

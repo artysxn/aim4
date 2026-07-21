@@ -145,21 +145,21 @@
       <div><span class="dot" style="background:#f52525"></span><b>Red box</b> = arena bounds</div>
       <div><span class="dot" style="background:var(--a)"></span>Team A spawns (cyan)</div>
       <div><span class="dot" style="background:var(--b)"></span>Team B spawns (orange)</div>
-      <div><span class="dot" style="background:#36e0ff"></span>Clip brush — blocks movement, shots pass</div>
+      <div><span class="dot" style="background:#36e0ff"></span>Clip brush: blocks movement, shots pass</div>
       <div><span class="dot" style="background:#35e06a"></span>Target spawn zone</div>
       <div><span class="dot" style="background:#c26bff"></span>Bot spawn zone</div>
-      <div style="margin-top:4px">Multiple spawns per team — game picks one at random</div>
+      <div style="margin-top:4px">Multiple spawns per team, game picks one at random</div>
     </div>
     <div id="navhelp" class="panelcard">
       <h3>Navigate (Blender-style)</h3>
-      <div><span class="k">Left-click</span> — select</div>
-      <div><span class="k">Middle-drag</span> — orbit (yaw / pitch)</div>
-      <div><span class="k">Shift + Middle</span> — pan</div>
-      <div><span class="k">Right-drag</span> — pan</div>
-      <div><span class="k">Shift-click</span> — add / remove from selection</div>
-      <div><span class="k">E</span> — move / scale · <span class="k">R</span> / <span class="k">Shift+R</span> — rotate 45° / 90°</div>
-      <div><span class="k">[</span> / <span class="k">]</span> — tilt slope ±45° on X</div>
-      <div><span class="k">Wheel</span> — zoom · <span class="k">F</span> — frame</div>
+      <div><span class="k">Left-click</span>: select</div>
+      <div><span class="k">Middle-drag</span>: orbit (yaw / pitch)</div>
+      <div><span class="k">Shift + Middle</span>: pan</div>
+      <div><span class="k">Right-drag</span>: pan</div>
+      <div><span class="k">Shift-click</span>: add / remove from selection</div>
+      <div><span class="k">E</span>: move / scale · <span class="k">R</span> / <span class="k">Shift+R</span>: rotate 45° / 90°</div>
+      <div><span class="k">[</span> / <span class="k">]</span>: tilt slope ±45° on X</div>
+      <div><span class="k">Wheel</span>: zoom · <span class="k">F</span>: frame</div>
     </div>
   </div>
 
@@ -205,7 +205,7 @@
         </button>
       </div>
       <div class="seg c2" style="margin-top:8px">
-        <button id="add-clip" title="Invisible movement blocker — shots pass through">
+        <button id="add-clip" title="Invisible movement blocker, shots pass through">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1" stroke-dasharray="4 3"/><path d="M8 12h8"/></svg>Add Clip
         </button>
         <button id="add-zone-target" title="Volume where targets can spawn (Peekswitch-style)">
@@ -225,17 +225,17 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5 8 12 8 12s8-7 8-12a8 8 0 0 0-8-8z"/></svg>Add spawn B
         </button>
       </div>
-      <div class="hint">Add multiple spawns per team — the game picks one at random on spawn and respawn. Each team needs at least one spawn.</div>
+      <div class="hint">Add multiple spawns per team, the game picks one at random on spawn and respawn. Each team needs at least one spawn.</div>
     </div>
 
     <!-- Transform -->
     <div class="sec">
       <h2>Transform</h2>
       <div class="seg c2">
-        <button data-mode="translate" class="active" title="Move — drag the colored arrows (W)">
+        <button data-mode="translate" class="active" title="Move: drag the colored arrows (W)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>Move
         </button>
-        <button id="mode-scale" data-mode="scale" title="Scale — drag the axis handles to resize X / Y / Z (E toggles)">
+        <button id="mode-scale" data-mode="scale" title="Scale: drag the axis handles to resize X / Y / Z (E toggles)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3h-6M21 3v6M21 3l-7 7M3 21h6M3 21v-6M3 21l7-7"/></svg>Scale
         </button>
       </div>
@@ -272,7 +272,7 @@
     <!-- Selected -->
     <div class="sec">
       <h2 id="prop-title">Selected</h2>
-      <div class="empty" id="prop-empty">Nothing selected — click an object in the view.</div>
+      <div class="empty" id="prop-empty">Nothing selected, click an object in the view.</div>
       <div id="prop-box" style="display:none">
         <div class="grid3">
           <div class="f"><label>X</label><input id="p-x" type="number" step="0.1" /></div>
@@ -347,7 +347,7 @@
 
     <!-- Bounds -->
     <div class="sec">
-      <h2>Bounds — the red box</h2>
+      <h2>Bounds: the red box</h2>
       <div class="row tight">
         <label class="lbl">Mode</label>
         <select id="b-mode" class="grow">
@@ -366,7 +366,7 @@
         </div>
       </div>
       <div class="note">
-        <span>The <b>red wireframe box</b> is the arena <b>bounds</b> — the outer wall of the playable area. Players and the camera stay inside it. <b>Auto</b> wraps it around your boxes + spawns with a margin; <b>Manual</b> sets exact limits.</span>
+        <span>The <b>red wireframe box</b> is the arena <b>bounds</b>: the outer wall of the playable area. Players and the camera stay inside it. <b>Auto</b> wraps it around your boxes + spawns with a margin; <b>Manual</b> sets exact limits.</span>
       </div>
     </div>
 
@@ -1256,14 +1256,14 @@ function syncProps() {
   const n = selected.length;
   if (!n) {
     empty.style.display = '';
-    empty.textContent = 'Nothing selected — click an object in the view.';
+    empty.textContent = 'Nothing selected, click an object in the view.';
     hidePropPanels();
     title.textContent = 'Selected';
     return;
   }
   if (n > 1) {
     empty.style.display = '';
-    empty.textContent = `${n} selected — drag the move gizmo to reposition all together. Shift-click to add/remove.`;
+    empty.textContent = `${n} selected, drag the move gizmo to reposition all together. Shift-click to add/remove.`;
     hidePropPanels();
     title.textContent = `${n} selected`;
     return;
