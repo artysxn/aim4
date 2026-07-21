@@ -19,13 +19,17 @@
         </div>
 
         <nav class="side-nav">
-          <a class="side-link" href="/train">
+          <a class="side-link" href="/training" data-nav="training">
             <span class="side-icon" data-icon="training"></span>
             <span class="side-label">Training</span>
           </a>
-          <a class="side-link" href="/tools/football.html">
+          <a class="side-link" href="/football" data-nav="football">
             <span class="side-icon" data-icon="football"></span>
             <span class="side-label">Football</span>
+          </a>
+          <a class="side-link" href="/leaderboards" data-nav="leaderboards">
+            <span class="side-icon" data-icon="leaderboards"></span>
+            <span class="side-label">Leaderboards</span>
           </a>
           <a class="side-link" href="/tools" data-nav="tools">
             <span class="side-icon" data-icon="tools"></span>
@@ -58,6 +62,7 @@
           <h1 class="page-title" id="page-title">Home</h1>
           <div class="page-actions">
             <a class="btn primary" href="/train" data-for-view="home">Start Training</a>
+            <a class="btn primary" href="/train" data-for-view="training" hidden>Open Trainer</a>
             <a class="btn primary" href="/tools/level-editor.html" data-for-view="tools" hidden>Open Level Editor</a>
           </div>
         </header>
@@ -69,7 +74,7 @@
               <h2 class="hero-logo">AIM<span>4</span></h2>
               <div class="hero-actions">
                 <a class="btn primary btn-lg" href="/train">Start Training</a>
-                <a class="btn btn-lg" href="/tools/football.html">Play Football</a>
+                <a class="btn btn-lg" href="/football" data-nav="football">Play Football</a>
               </div>
               <div class="hero-chips">
                 <span class="chip">30+ scenarios</span>
@@ -81,19 +86,88 @@
             <div class="explore">
               <h3 class="explore-title">Explore AIM4.io</h3>
               <div class="site-cards">
-                <a class="site-card" href="/train">
+                <a class="site-card" href="/training" data-nav="training">
                   <span class="card-icon" data-icon="training"></span>
                   <span class="card-title">Training</span>
                 </a>
-                <a class="site-card" href="/tools/football.html">
+                <a class="site-card" href="/football" data-nav="football">
                   <span class="card-icon" data-icon="football"></span>
                   <span class="card-title">Football</span>
+                </a>
+                <a class="site-card" href="/leaderboards" data-nav="leaderboards">
+                  <span class="card-icon" data-icon="leaderboards"></span>
+                  <span class="card-title">Leaderboards</span>
                 </a>
                 <a class="site-card" href="/tools" data-nav="tools">
                   <span class="card-icon" data-icon="tools"></span>
                   <span class="card-title">Tools</span>
                 </a>
               </div>
+            </div>
+          </section>
+
+          <!-- Training --------------------------------------------------- -->
+          <section class="view" data-view="training">
+            <div class="view-pad">
+              <div class="training-cats" id="training-cats"></div>
+              <div class="training-search" id="training-search-wrap" hidden>
+                <input type="search" id="training-search" placeholder="Search by name or tag" spellcheck="false" autocomplete="off" aria-label="Search gamemodes" />
+              </div>
+              <div class="training-list" id="training-list"></div>
+            </div>
+          </section>
+
+          <!-- Leaderboards ------------------------------------------------ -->
+          <section class="view" data-view="leaderboards">
+            <div class="view-pad">
+              <div class="lb-head" id="lb-tabs">
+                <button type="button" class="seg-tab active" data-lb="elo">Ranked ELO</button>
+                <button type="button" class="seg-tab" data-lb="aim-rating">Aim Rating</button>
+                <select id="lb-mode-select" class="site-select" aria-label="Gamemode leaderboard"></select>
+              </div>
+              <div id="lb-body" class="lb-body"></div>
+            </div>
+          </section>
+
+          <!-- Football ---------------------------------------------------- -->
+          <section class="view" data-view="football">
+            <div class="view-pad view-pad-narrow">
+              <div class="fb-field">
+                <div class="fb-field-top">
+                  <span class="fb-label">Display name</span>
+                  <span class="fb-account" id="fb-account-state"></span>
+                </div>
+                <input type="text" id="fb-name" class="site-input" maxlength="16" placeholder="Your name" spellcheck="false" autocomplete="off" />
+              </div>
+
+              <div class="fb-browser">
+                <div class="fb-browser-head">
+                  <h4>Public lobbies</h4>
+                  <button type="button" class="btn btn-sm" id="fb-refresh">Refresh</button>
+                </div>
+                <div id="fb-lobby-list" class="fb-lobby-list"></div>
+              </div>
+
+              <div class="fb-cols">
+                <div class="fb-col">
+                  <h4>Create a lobby</h4>
+                  <div class="fb-field">
+                    <div class="fb-field-top"><span class="fb-label">Password</span></div>
+                    <input type="text" id="fb-create-pass" class="site-input" maxlength="24" placeholder="Optional" spellcheck="false" autocomplete="off" />
+                  </div>
+                  <label class="fb-check"><input type="checkbox" id="fb-create-private" /> Private</label>
+                  <button type="button" class="btn primary btn-block" id="fb-create-btn">Create lobby</button>
+                </div>
+                <div class="fb-col">
+                  <h4>Join by code</h4>
+                  <div class="fb-field">
+                    <div class="fb-field-top"><span class="fb-label">Lobby code</span></div>
+                    <input type="text" id="fb-join-code" class="site-input fb-code" maxlength="4" placeholder="ABCD" spellcheck="false" autocomplete="off" />
+                  </div>
+                  <button type="button" class="btn primary btn-block" id="fb-join-btn">Join lobby</button>
+                </div>
+              </div>
+              <p class="fb-status" id="fb-status"></p>
             </div>
           </section>
 
@@ -104,10 +178,6 @@
                 <a class="site-card" href="/tools/level-editor.html">
                   <span class="card-icon" data-icon="tools"></span>
                   <span class="card-title">Level Editor</span>
-                </a>
-                <a class="site-card" href="/tools/editvalues.html">
-                  <span class="card-icon" data-icon="baselines"></span>
-                  <span class="card-title">Rating Baselines <span class="tag">Admin</span></span>
                 </a>
               </div>
             </div>
@@ -124,14 +194,13 @@
             <div class="foot-col">
               <h4>Game</h4>
               <a href="/train">Trainer</a>
-              <a href="/gridshot">Gridshot</a>
-              <a href="/deathmatch">Deathmatch</a>
-              <a href="/tools/football.html">Football</a>
+              <a href="/training" data-nav="training">Gamemodes</a>
+              <a href="/leaderboards" data-nav="leaderboards">Leaderboards</a>
+              <a href="/football" data-nav="football">Football</a>
             </div>
             <div class="foot-col">
               <h4>Tools</h4>
               <a href="/tools/level-editor.html">Level Editor</a>
-              <a href="/tools/editvalues.html">Rating Baselines</a>
             </div>
             <div class="foot-col">
               <h4>Community</h4>

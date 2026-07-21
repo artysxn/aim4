@@ -7,6 +7,9 @@
     { "source": "/tools/editvalues", "destination": "/tools/editvalues.html" },
     { "source": "/tools/level-editor", "destination": "/tools/level-editor.html" },
     { "source": "/tools", "destination": "/index.html" },
+    { "source": "/training", "destination": "/index.html" },
+    { "source": "/leaderboards", "destination": "/index.html" },
+    { "source": "/football", "destination": "/index.html" },
     { "source": "/((?!assets/|tools/|fonts/).*)", "destination": "/train.html" }
   ]
 }

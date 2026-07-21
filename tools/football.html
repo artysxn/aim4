@@ -720,6 +720,10 @@
     if (code) url.searchParams.set('lobby', code);
     else url.searchParams.delete('lobby');
     url.searchParams.delete('join'); // legacy param
+    // One-shot create params from the site's football menu.
+    url.searchParams.delete('create');
+    url.searchParams.delete('pass');
+    url.searchParams.delete('private');
     history.replaceState(null, '', url);
     document.title = code ? `AIM4 Football - ${code}` : 'AIM4 Football';
   }
@@ -729,6 +733,17 @@
   const bootParams = new URLSearchParams(location.search);
   let autoJoinCode = (bootParams.get('lobby') || bootParams.get('join') || '')
     .toUpperCase().slice(0, 4);
+  // ?create=1 comes from the site's football menu: create a lobby on connect.
+  // The password (if any) rides in sessionStorage so it never hits the URL.
+  let autoCreate = null;
+  if (bootParams.get('create') === '1') {
+    let pass = '';
+    try {
+      pass = sessionStorage.getItem('aim4-football-pass') || '';
+      sessionStorage.removeItem('aim4-football-pass');
+    } catch { /* storage unavailable */ }
+    autoCreate = { pass, isPublic: bootParams.get('private') !== '1' };
+  }
 
   // ---- Networking -------------------------------------------------------------
   let ws = null;
@@ -770,6 +785,17 @@
           nameInput.focus();
         }
         autoJoinCode = '';
+      } else if (autoCreate) {
+        const name = myName(false);
+        if (name) {
+          send({ t: 'create', name, pass: autoCreate.pass, isPublic: autoCreate.isPublic });
+        } else {
+          passInput.value = autoCreate.pass;
+          privateInput.checked = !autoCreate.isPublic;
+          menuMsg.textContent = 'Enter your name, then create your lobby';
+          nameInput.focus();
+        }
+        autoCreate = null;
       }
     };
     ws.onclose = () => {

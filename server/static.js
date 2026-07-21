@@ -40,10 +40,13 @@ const PAGE_ALIASES = {
   '/tools/level-editor': '/tools/level-editor.html'
 };
 
+// Paths owned by the site shell (index.html): its menu views live here.
+const SITE_VIEW_PATHS = new Set(['/tools', '/training', '/leaderboards', '/football']);
+
 /**
  * Try to serve a file from dist/. Returns true if handled.
- * SPA fallback: "/" and "/tools" → index.html (landing), every other unknown
- * path (gamemode deep links, /train) → train.html (the trainer SPA).
+ * SPA fallback: "/" and the site view paths → index.html (site shell), every
+ * other unknown path (gamemode deep links, /train) → train.html (the trainer).
  */
 export function tryServeStatic(req, res, url) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
@@ -61,7 +64,7 @@ export function tryServeStatic(req, res, url) {
 
   let target = filePath;
   if (!fs.existsSync(target) || fs.statSync(target).isDirectory()) {
-    const fallback = rel === '/index.html' || rel === '/tools' ? 'index.html' : 'train.html';
+    const fallback = rel === '/index.html' || SITE_VIEW_PATHS.has(rel) ? 'index.html' : 'train.html';
     target = path.join(DIST_DIR, fallback);
     if (!fs.existsSync(target)) target = path.join(DIST_DIR, 'index.html');
     if (!fs.existsSync(target)) return false;

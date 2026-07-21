@@ -1,8 +1,9 @@
 // ---------------------------------------------------------------------------
 // site.js
-// Behavior for the aim4.io site shell (landing + tools hub): legacy-link
-// redirects into the trainer, collapsible sidebar, and the tiny Home/Tools
-// view router. The trainer itself lives at /train (train.html).
+// Behavior for the aim4.io site shell: legacy-link redirects into the trainer,
+// collapsible sidebar, account (sign in / register), and the view router for
+// the site menus (Home, Training, Leaderboards, Football, Tools). The trainer
+// itself lives at /train (train.html); gamemode deep links launch it directly.
 // ---------------------------------------------------------------------------
 
 // site.css is linked from the HTML entries directly (no JS import: Vite
@@ -11,21 +12,30 @@ import trainingIcon from '../icons/webmode_training.svg?raw';
 import footballIcon from '../icons/webmode_football.svg?raw';
 import toolsIcon from '../icons/webmode_tools.svg?raw';
 import accountIcon from '../icons/icon_account.svg?raw';
-import baselinesIcon from '../aim4/calendar_view_month_24dp_E3E3E3_FILL0_wght200_GRAD0_opsz24.svg?raw';
+import leaderboardsIcon from '../icons/icon_leaderboards.svg?raw';
 import { SettingsManager } from '../core/SettingsManager.js';
 import { AuthManager } from '../core/AuthManager.js';
+import { initTrainingView } from './trainingView.js';
+import { initLeaderboardsView } from './leaderboardsView.js';
+import { initFootballView } from './footballView.js';
 
 // ---- Legacy redirects -------------------------------------------------------
 // The game used to live at "/". Lobby invites (?lobby=) and replay shares
 // (?replay=) must keep resolving into the trainer, which now owns /train.
 // Auth callbacks (?code= / #access_token=) are NOT redirected: sign-in lives
-// on this page now, so its own AuthManager below consumes them in place.
+// on this page, so its own AuthManager below consumes them in place.
 {
   const params = new URLSearchParams(window.location.search);
   const hash = window.location.hash || '';
   if (params.has('lobby') || params.has('replay') || params.has('server')) {
     window.location.replace('/train' + window.location.search + hash);
   }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
 }
 
 // ---- Icons -----------------------------------------------------------------
@@ -35,7 +45,7 @@ const ICONS = {
   football: footballIcon,
   tools: toolsIcon,
   account: accountIcon,
-  baselines: baselinesIcon
+  leaderboards: leaderboardsIcon
 };
 
 document.querySelectorAll('[data-icon]').forEach((el) => {
@@ -73,48 +83,6 @@ setCollapsed(initialCollapsed, false);
 collapseBtn.addEventListener('click', () => {
   setCollapsed(shell.dataset.collapsed !== 'true');
 });
-
-// ---- Home / Tools view router ----------------------------------------------
-const VIEWS = {
-  home: { title: 'Home', path: '/' },
-  tools: { title: 'Tools', path: '/tools' }
-};
-
-function viewFromPath(pathname = window.location.pathname) {
-  return pathname.replace(/\/+$/, '') === '/tools' ? 'tools' : 'home';
-}
-
-function setView(name, push = false) {
-  const view = VIEWS[name] ? name : 'home';
-  document.querySelectorAll('.view').forEach((el) => {
-    el.classList.toggle('active', el.dataset.view === view);
-  });
-  document.querySelectorAll('.page-actions [data-for-view]').forEach((el) => {
-    el.hidden = el.dataset.forView !== view;
-  });
-  document.querySelectorAll('[data-nav]').forEach((el) => {
-    if (el.classList.contains('side-link')) {
-      el.classList.toggle('active', el.dataset.nav === view);
-    }
-  });
-  document.getElementById('page-title').textContent = VIEWS[view].title;
-  document.title = view === 'home' ? 'AIM4.io' : `AIM4.io - ${VIEWS[view].title}`;
-  if (push && window.location.pathname !== VIEWS[view].path) {
-    window.history.pushState({ view }, '', VIEWS[view].path);
-  }
-  window.scrollTo({ top: 0 });
-}
-
-document.querySelectorAll('[data-nav]').forEach((el) => {
-  el.addEventListener('click', (e) => {
-    e.preventDefault();
-    setView(el.dataset.nav, true);
-  });
-});
-
-window.addEventListener('popstate', () => setView(viewFromPath(), false));
-
-setView(viewFromPath(), false);
 
 // ---- Account (sign in / register) -------------------------------------------
 // Sign-in lives here, on the main site, and nowhere else: the trainer and
@@ -234,3 +202,73 @@ sideAccountBtn.addEventListener('click', () => {
 auth.onChange(syncAccountRow);
 syncAccountRow();
 auth.init();
+
+// ---- View router ------------------------------------------------------------
+const VIEWS = {
+  home: { title: 'Home', path: '/' },
+  training: { title: 'Training', path: '/training' },
+  leaderboards: { title: 'Leaderboards', path: '/leaderboards' },
+  football: { title: 'Football', path: '/football' },
+  tools: { title: 'Tools', path: '/tools' }
+};
+
+const PATH_TO_VIEW = Object.fromEntries(
+  Object.entries(VIEWS).map(([name, v]) => [v.path, name])
+);
+
+function viewFromPath(pathname = window.location.pathname) {
+  const clean = pathname.replace(/\/+$/, '') || '/';
+  return PATH_TO_VIEW[clean] || 'home';
+}
+
+let activeView = null;
+const viewControllers = {};
+
+function setView(name, push = false, params = null) {
+  const view = VIEWS[name] ? name : 'home';
+  document.querySelectorAll('.view').forEach((el) => {
+    el.classList.toggle('active', el.dataset.view === view);
+  });
+  document.querySelectorAll('.page-actions [data-for-view]').forEach((el) => {
+    el.hidden = el.dataset.forView !== view;
+  });
+  document.querySelectorAll('[data-nav]').forEach((el) => {
+    if (el.classList.contains('side-link')) {
+      el.classList.toggle('active', el.dataset.nav === view);
+    }
+  });
+  document.getElementById('page-title').textContent = VIEWS[view].title;
+  document.title = view === 'home' ? 'AIM4.io' : `AIM4.io - ${VIEWS[view].title}`;
+  if (push) {
+    const search = params ? `?${new URLSearchParams(params)}` : '';
+    const target = VIEWS[view].path + search;
+    if (window.location.pathname + window.location.search !== target) {
+      window.history.pushState({ view }, '', target);
+    }
+  }
+  if (activeView && activeView !== view) {
+    viewControllers[activeView]?.onHide?.();
+  }
+  activeView = view;
+  viewControllers[view]?.onShow?.(params || Object.fromEntries(new URLSearchParams(window.location.search)));
+  window.scrollTo({ top: 0 });
+}
+
+function openLeaderboards(mode) {
+  setView('leaderboards', true, mode ? { mode } : null);
+}
+
+viewControllers.training = initTrainingView({ escapeHtml, openLeaderboards });
+viewControllers.leaderboards = initLeaderboardsView({ auth, escapeHtml });
+viewControllers.football = initFootballView({ auth, escapeHtml });
+
+document.querySelectorAll('[data-nav]').forEach((el) => {
+  el.addEventListener('click', (e) => {
+    e.preventDefault();
+    setView(el.dataset.nav, true);
+  });
+});
+
+window.addEventListener('popstate', () => setView(viewFromPath(), false));
+
+setView(viewFromPath(), false);

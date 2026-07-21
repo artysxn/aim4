@@ -3,7 +3,7 @@
 import { SCENARIOS } from '../core/SceneManager.js';
 
 /** Segments that must never be treated as scenario ids. */
-const RESERVED = new Set(['api', 'ws', 'assets', 'src', 'dist', 'train', 'tools', 'football']);
+const RESERVED = new Set(['api', 'ws', 'assets', 'src', 'dist', 'train', 'training', 'tools', 'football', 'leaderboards']);
 
 /** The trainer's own root path — the site landing page owns "/". */
 export const TRAINER_PATH = '/train';

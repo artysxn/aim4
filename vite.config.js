@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 
-// Paths the game-route fallback must never touch: backend proxies, tool pages,
-// the site landing ("/" and "/tools") and Vite internals/assets.
-const GAME_FALLBACK_SKIP = /^\/(api|ws|football|tools|assets|fonts|src|public|node_modules|@)(\/|$)/;
+// Paths the game-route fallback must never touch: backend proxies, the site
+// shell's own views (/tools, /training, /leaderboards, /football), tool pages
+// and Vite internals/assets.
+const GAME_FALLBACK_SKIP = /^\/(api|ws|football|training|leaderboards|tools|assets|fonts|src|public|node_modules|@)(\/|$)/;
 
 // Dev-server twin of the vercel.json rewrites: the landing owns "/" and
 // "/tools", every other extension-less path (e.g. /train, /gridshot,
@@ -54,11 +55,15 @@ export default defineConfig({
         ws: true,
         changeOrigin: true
       },
-      // Easter-egg 2D football (public/tools/football.html).
+      // Football WebSocket. Plain page loads of /football are the site shell's
+      // football menu, so only WS upgrades go to the backend.
       '/football': {
         target: 'ws://127.0.0.1:3784',
         ws: true,
-        changeOrigin: true
+        changeOrigin: true,
+        bypass(req) {
+          if (!req.headers.upgrade) return '/index.html';
+        }
       }
     }
   },
