@@ -1,6 +1,6 @@
-# AIM4 multiplayer backend — Node.js (HTTP config API + /ws WebSocket).
-# Replaces the static-site image fly launch auto-detected; this project is a
-# Node server, not a static host (the client is served separately on Vercel).
+# AIM4 backend — Node.js (HTTP API + /ws WebSocket + replay parsing).
+# This project is a Node server, not a static host: the client is built and
+# served separately, so nothing here serves dist/ unless AIM4_SERVE_STATIC=1.
 FROM node:20-alpine
 
 WORKDIR /app
@@ -16,6 +16,8 @@ RUN npm ci --omit=dev
 COPY server ./server
 COPY src/multiplayer ./src/multiplayer
 COPY src/utils/shotAccuracy.js src/utils/SourceMovement.js ./src/utils/
+# Replay round naming and the binary tick layout are shared with the browser.
+COPY src/replays/shared ./src/replays/shared
 
 ENV NODE_ENV=production
 EXPOSE 8080

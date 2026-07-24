@@ -8,7 +8,6 @@ dist
 index.html
 vite.config.js
 vercel.json
-fly.toml
 Dockerfile
 .dockerignore
 server/data

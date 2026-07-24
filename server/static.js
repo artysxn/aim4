@@ -41,7 +41,7 @@ const PAGE_ALIASES = {
 };
 
 // Paths owned by the site shell (index.html): its menu views live here.
-const SITE_VIEW_PATHS = new Set(['/tools', '/training', '/leaderboards', '/football']);
+const SITE_VIEW_PATHS = new Set(['/tools', '/training', '/leaderboards', '/football', '/replays']);
 
 /**
  * Try to serve a file from dist/. Returns true if handled.

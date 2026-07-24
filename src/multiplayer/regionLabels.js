@@ -1,5 +1,7 @@
 // ---------------------------------------------------------------------------
-// regionLabels.js — human-readable Fly.io / server region codes for the HUD.
+// regionLabels.js — human-readable server region codes for the HUD.
+// Codes follow the IATA airport convention most hosts use; unknown codes fall
+// back to the raw value, so a new host needs no change here.
 // ---------------------------------------------------------------------------
 
 export const REGION_LABELS = {

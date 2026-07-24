@@ -11,6 +11,7 @@
 import trainingIcon from '../icons/webmode_training.svg?raw';
 import footballIcon from '../icons/webmode_football.svg?raw';
 import toolsIcon from '../icons/webmode_tools.svg?raw';
+import replaysIcon from '../icons/webmode_replays.svg?raw';
 import accountIcon from '../icons/icon_account.svg?raw';
 import leaderboardsIcon from '../icons/icon_leaderboards.svg?raw';
 import { SettingsManager } from '../core/SettingsManager.js';
@@ -18,6 +19,7 @@ import { AuthManager } from '../core/AuthManager.js';
 import { initTrainingView } from './trainingView.js';
 import { initLeaderboardsView } from './leaderboardsView.js';
 import { initFootballView } from './footballView.js';
+import { initReplaysView } from './replaysView.js';
 
 // ---- Legacy redirects -------------------------------------------------------
 // The game used to live at "/". Lobby invites (?lobby=) and replay shares
@@ -44,6 +46,7 @@ const ICONS = {
   training: trainingIcon,
   football: footballIcon,
   tools: toolsIcon,
+  replays: replaysIcon,
   account: accountIcon,
   leaderboards: leaderboardsIcon
 };
@@ -207,6 +210,7 @@ auth.init();
 const VIEWS = {
   home: { title: 'Home', path: '/' },
   training: { title: 'Training', path: '/training' },
+  replays: { title: 'Replays', path: '/replays' },
   leaderboards: { title: 'Leaderboards', path: '/leaderboards' },
   football: { title: 'Football', path: '/football' },
   tools: { title: 'Tools', path: '/tools' }
@@ -261,6 +265,7 @@ function openLeaderboards(mode) {
 viewControllers.training = initTrainingView({ escapeHtml, openLeaderboards });
 viewControllers.leaderboards = initLeaderboardsView({ auth, escapeHtml });
 viewControllers.football = initFootballView({ auth, escapeHtml });
+viewControllers.replays = initReplaysView({ auth, escapeHtml });
 
 document.querySelectorAll('[data-nav]').forEach((el) => {
   el.addEventListener('click', (e) => {

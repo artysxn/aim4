@@ -6,6 +6,7 @@
     <meta name="description" content="AIM4.io: browser-based FPS aim training. 30+ scenarios, competitive ratings, multiplayer duels and replays." />
     <title>AIM4.io</title>
     <link rel="stylesheet" href="/src/site/site.css" />
+    <link rel="stylesheet" href="/src/replays/replays.css" />
   </head>
   <body class="site">
     <div class="site-shell" id="site-shell">
@@ -26,6 +27,10 @@
           <a class="side-link" href="/football" data-nav="football">
             <span class="side-icon" data-icon="football"></span>
             <span class="side-label">Football</span>
+          </a>
+          <a class="side-link" href="/replays" data-nav="replays">
+            <span class="side-icon" data-icon="replays"></span>
+            <span class="side-label">Replays</span>
           </a>
           <a class="side-link" href="/leaderboards" data-nav="leaderboards">
             <span class="side-icon" data-icon="leaderboards"></span>
@@ -94,6 +99,10 @@
                   <span class="card-icon" data-icon="football"></span>
                   <span class="card-title">Football</span>
                 </a>
+                <a class="site-card" href="/replays" data-nav="replays">
+                  <span class="card-icon" data-icon="replays"></span>
+                  <span class="card-title">Replays</span>
+                </a>
                 <a class="site-card" href="/leaderboards" data-nav="leaderboards">
                   <span class="card-icon" data-icon="leaderboards"></span>
                   <span class="card-title">Leaderboards</span>
@@ -114,6 +123,31 @@
                 <input type="search" id="training-search" placeholder="Search by name or tag" spellcheck="false" autocomplete="off" aria-label="Search gamemodes" />
               </div>
               <div class="training-list" id="training-list"></div>
+            </div>
+          </section>
+
+          <!-- Replays ----------------------------------------------------- -->
+          <section class="view" data-view="replays">
+            <div class="view-pad">
+              <p class="rp-parser-warn" id="rp-parser" hidden></p>
+              <div class="rp-top">
+                <div class="rp-upload">
+                  <button type="button" class="rp-drop" id="rp-drop">
+                    <svg viewBox="0 -960 960 960" width="26" height="26"><path d="M440-320v-326L336-542l-56-58 200-200 200 200-56 58-104-104v326h-80ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/></svg>
+                    <span>Drop a .dem file, or click to browse</span>
+                  </button>
+                  <input type="file" id="rp-file" accept=".dem" hidden />
+                  <p class="rp-status" id="rp-status"></p>
+                </div>
+                <div class="rp-quota" id="rp-quota"></div>
+              </div>
+
+              <div class="rp-list" id="rp-list"></div>
+
+              <div class="rp-browser">
+                <aside class="rp-filters" id="rp-filters"></aside>
+                <div class="rp-result" id="rp-result"></div>
+              </div>
             </div>
           </section>
 
@@ -196,6 +230,7 @@
               <a href="/train">Trainer</a>
               <a href="/training" data-nav="training">Gamemodes</a>
               <a href="/leaderboards" data-nav="leaderboards">Leaderboards</a>
+              <a href="/replays" data-nav="replays">Replays</a>
               <a href="/football" data-nav="football">Football</a>
             </div>
             <div class="foot-col">

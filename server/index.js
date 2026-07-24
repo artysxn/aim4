@@ -16,10 +16,11 @@ import { isValidCodeFormat, normalizeCode } from './configCodes.js';
 import { MultiplayerServer } from './lobby.js';
 import { FootballServer } from './football.js';
 import { tryServeStatic, distExists } from './static.js';
+import { handleReplayRequest } from './replays/routes.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
 
-// PORT (no prefix) is the convention most PaaS inject (Fly.io, Render, etc.);
-// AIM4_API_PORT still wins so existing local/host scripts are unaffected.
+// PORT (no prefix) is the convention most hosts inject; AIM4_API_PORT still
+// wins so existing local/host scripts are unaffected.
 const PORT = Number(process.env.AIM4_API_PORT || process.env.PORT || 3784);
 const HOST = process.env.AIM4_HOST || '127.0.0.1';
 const SERVE_STATIC =
@@ -79,6 +80,13 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
   try {
+    // Replays own their transport: a .dem upload streams to disk and a tick
+    // buffer comes back as binary, so this runs ahead of the JSON body reader
+    // and its 64 KB cap.
+    if (url.pathname.startsWith('/api/replays') && (await handleReplayRequest(req, res, url))) {
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/configs') {
       const raw = await readBody(req);
       let body;
@@ -137,8 +145,8 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         ws: '/ws',
         publicHost,
-        region: process.env.FLY_REGION || null,
-        machineId: process.env.FLY_MACHINE_ID || null
+        region: process.env.AIM4_REGION || null,
+        machineId: process.env.AIM4_INSTANCE_ID || null
       });
       return;
     }
@@ -146,8 +154,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/health') {
       send(res, 200, {
         ok: true,
-        region: process.env.FLY_REGION || null,
-        machineId: process.env.FLY_MACHINE_ID || null
+        region: process.env.AIM4_REGION || null,
+        machineId: process.env.AIM4_INSTANCE_ID || null
       });
       return;
     }

@@ -83,6 +83,41 @@ src/
     └── Storage.js           # localStorage + leaderboard helpers
 ```
 
+### Replays (CS2 demo analysis)
+
+`/replays` on the site. Upload a `.dem`, the backend parses it into rounds,
+and the viewer plays them back on the map overview.
+
+```
+src/replays/
+├── shared/               # pure data, imported by BOTH browser and backend
+│   ├── roundId.js        # the round naming scheme (build / parse / validate)
+│   ├── roundFilter.js    # query engine over round NAMES, never contents
+│   └── tickFormat.js     # binary per-tick layout, written once read twice
+├── api.js                # /api/replays/* client
+├── tickStore.js          # two-pass loading + the sampler the renderer reads
+└── viewer/
+    ├── viewerApp.js      # full-screen overlay, mode switch, store lifetime
+    ├── timelineViewer.js # one round at a time, whole game on one timeline
+    ├── macroViewer.js    # every selected round at once, in a grid
+    ├── radarRenderer.js  # map, droplets, view cones, utility, bomb
+    ├── mapCalibration.js # world coords -> radar pixels, per map
+    ├── roundClock.js     # freeze / live / planted / over
+    └── playback.js       # transport + round sequencing
+
+server/
+├── demoparser/           # SWAPPABLE. See its README before changing parsers.
+└── replays/              # storage, quota, parse queue, HTTP routes
+```
+
+Every round is stored under a name that encodes its teams, players, map,
+round number, winner and both economies, so filtering a whole library is a
+directory listing plus a regex. Nothing opens a round file to decide whether
+it matches.
+
+Parsing runs in a worker thread: it is a long synchronous call into a native
+module, and the same process serves the 128-tick multiplayer loop.
+
 ### Sensitivity math
 
 ```
