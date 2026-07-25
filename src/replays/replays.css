@@ -2301,12 +2301,8 @@ body.rv-open {
   font-size: 10px;
 }
 
-/* ---- Upload / Playlists / Statistics subpages ---------------------------- */
-
-.rp-subpage {
-  width: 100%;
-  max-width: none;
-}
+/* ---- Upload / Playlists / Statistics ------------------------------------- */
+/* Width comes from .view-pad (1100px) — same as Upload, Statistics, Replays. */
 
 .rp-playlists-title {
   margin: 0 0 14px;
