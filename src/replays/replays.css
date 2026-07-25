@@ -718,6 +718,32 @@
   background: var(--surface);
 }
 
+.rp-demo-rounds-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 4px 8px;
+}
+
+.rp-select-demo-rounds {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent, #5b9fd4);
+  font: 600 12px var(--font-body);
+  cursor: pointer;
+}
+
+.rp-select-demo-rounds:hover {
+  text-decoration: underline;
+}
+
+.rp-demo-rounds-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .rp-demo-rounds[hidden] {
   display: none;
 }

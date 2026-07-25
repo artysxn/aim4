@@ -41,13 +41,19 @@ export function openViewer({
   title = '',
   escapeHtml,
   focusTeam = '',
+  focusTeamIds = [],
   focusName = '',
   onClose
 }) {
   const store = new TickStore();
   if (mode === 'macro') mode = 'analyzer';
 
-  const canAnalyze = analyzerEligible(rounds, focusTeam);
+  let focusIds = focusTeamIds?.length
+    ? [...focusTeamIds]
+    : focusTeam
+      ? [focusTeam]
+      : inferFocusTeamIds(rounds);
+  const canAnalyze = analyzerEligible(rounds, focusIds);
 
   const overlay = document.createElement('div');
   overlay.className = 'rv-overlay';
@@ -94,7 +100,8 @@ export function openViewer({
       store,
       rounds,
       escapeHtml,
-      focusTeam,
+      focusTeam: focusIds[0] || focusTeam,
+      focusTeamIds: focusIds,
       focusName,
       onRound: syncUrl
     });
@@ -139,18 +146,31 @@ export function openViewer({
   return { close };
 }
 
-/** Same map + at least one team shared by every round (optionally pinned). */
-export function analyzerEligible(rounds, focusTeam = '') {
-  if (!rounds?.length) return false;
-  const maps = new Set(rounds.map((r) => r.map).filter(Boolean));
-  if (maps.size !== 1) return false;
+/** Team ids shared by every round. Empty when the set is ambiguous (both sides). */
+export function inferFocusTeamIds(rounds) {
+  if (!rounds?.length) return [];
   let common = null;
   for (const r of rounds) {
     const ids = new Set([r.team1, r.team2].filter(Boolean));
+    if (!ids.size) continue;
     if (!common) common = ids;
     else common = new Set([...common].filter((id) => ids.has(id)));
   }
-  if (!common?.size) return false;
-  if (focusTeam) return common.has(focusTeam);
-  return common.size >= 1;
+  if (!common?.size) return [];
+  // A match always shares both teams — only treat a single leftover id as focus.
+  if (common.size === 1) return [...common];
+  return [];
+}
+
+/** Same map + a focus team present in every round. */
+export function analyzerEligible(rounds, focusTeamIds = []) {
+  if (!rounds?.length) return false;
+  const maps = new Set(rounds.map((r) => r.map).filter(Boolean));
+  if (maps.size !== 1) return false;
+  const focus = (Array.isArray(focusTeamIds) ? focusTeamIds : focusTeamIds ? [focusTeamIds] : []).filter(
+    Boolean
+  );
+  const ids = focus.length ? focus : inferFocusTeamIds(rounds);
+  if (!ids.length) return false;
+  return rounds.every((r) => ids.some((id) => r.team1 === id || r.team2 === id));
 }

@@ -31,6 +31,7 @@ function ECONOMY_CODES_SAFE() {
  * @param {object[]} opts.rounds
  * @param {(s: string) => string} opts.escapeHtml
  * @param {string} [opts.focusTeam]  short id of the team being analyzed
+ * @param {string[]} [opts.focusTeamIds] aliases for the focus team (cluster)
  * @param {string} [opts.focusName]  display name for the focus team
  */
 export function createAnalyzerViewer({
@@ -38,6 +39,7 @@ export function createAnalyzerViewer({
   rounds,
   escapeHtml,
   focusTeam = '',
+  focusTeamIds = [],
   focusName: focusNameOpt = ''
 }) {
   const el = document.createElement('div');
@@ -101,7 +103,10 @@ export function createAnalyzerViewer({
 
   let destroyed = false;
   let speedIndex = 2;
-  let focusId = focusTeam || '';
+  const focusIds = new Set(
+    (focusTeamIds?.length ? focusTeamIds : focusTeam ? [focusTeam] : []).filter(Boolean)
+  );
+  let focusId = focusTeam || [...focusIds][0] || '';
   let focusName = focusNameOpt || 'Team';
 
   /** @type {'T'|'CT'} */
@@ -132,68 +137,108 @@ export function createAnalyzerViewer({
     return value.id || '';
   }
 
+  function isFocusId(id) {
+    return Boolean(id && (id === focusId || focusIds.has(id)));
+  }
+
+  /** List-round ids win: filename tokens are what the library filtered on. */
+  function rosterIds(L) {
+    const meta = L.meta || {};
+    return {
+      t1: L.round?.team1 || shortTeamId(meta.team1) || '',
+      t2: L.round?.team2 || shortTeamId(meta.team2) || ''
+    };
+  }
+
   function teamIndex(meta, listRound) {
-    if (!focusId || !meta) return 0;
-    const t1 = shortTeamId(meta.team1) || listRound?.team1 || '';
-    const t2 = shortTeamId(meta.team2) || listRound?.team2 || '';
-    if (t1 === focusId) return 1;
-    if (t2 === focusId) return 2;
+    if ((!focusId && !focusIds.size) || !meta) return 0;
+    const t1 = listRound?.team1 || shortTeamId(meta.team1) || '';
+    const t2 = listRound?.team2 || shortTeamId(meta.team2) || '';
+    if (isFocusId(t1)) return 1;
+    if (isFocusId(t2)) return 2;
     return 0;
   }
 
-  function sideOfFocus(L) {
-    const meta = L.meta;
-    if (!meta) return '';
-    const idx = teamIndex(meta, L.round);
-    if (idx === 1) return meta.team1Side || '';
-    if (idx === 2) return meta.team2Side || '';
+  function sideForIndex(meta, idx) {
+    if (idx === 1 && (meta.team1Side === 'T' || meta.team1Side === 'CT')) return meta.team1Side;
+    if (idx === 2 && (meta.team2Side === 'T' || meta.team2Side === 'CT')) return meta.team2Side;
+    if (idx === 1 && (meta.team2Side === 'T' || meta.team2Side === 'CT')) {
+      return meta.team2Side === 'T' ? 'CT' : 'T';
+    }
+    if (idx === 2 && (meta.team1Side === 'T' || meta.team1Side === 'CT')) {
+      return meta.team1Side === 'T' ? 'CT' : 'T';
+    }
+    const round = Number(meta.round) || Number(meta.roundNum) || 1;
+    const team1IsT = round <= 12;
+    if (idx === 1) return team1IsT ? 'T' : 'CT';
+    if (idx === 2) return team1IsT ? 'CT' : 'T';
     return '';
   }
 
+  function sideOfFocus(L) {
+    if (!L.meta) return '';
+    const idx = teamIndex(L.meta, L.round);
+    if (!idx) return '';
+    return sideForIndex(L.meta, idx);
+  }
+
   function econOfFocus(L) {
-    const meta = L.meta;
-    if (!meta) return null;
-    const idx = teamIndex(meta, L.round);
-    if (idx === 1) return meta.econ1;
-    if (idx === 2) return meta.econ2;
+    if (!L.meta) return null;
+    const idx = teamIndex(L.meta, L.round);
+    if (idx === 1) return L.meta.econ1;
+    if (idx === 2) return L.meta.econ2;
     return null;
   }
 
   function focusDisplayName(meta, idx) {
     if (idx === 1) {
-      return (typeof meta.team1 === 'object' ? meta.team1?.name : null) || focusId;
+      return (typeof meta.team1 === 'object' ? meta.team1?.name : null) || focusNameOpt || focusId;
     }
     if (idx === 2) {
-      return (typeof meta.team2 === 'object' ? meta.team2?.name : null) || focusId;
+      return (typeof meta.team2 === 'object' ? meta.team2?.name : null) || focusNameOpt || focusId;
     }
-    return focusId;
+    return focusNameOpt || focusId;
   }
 
+  /** Make sure we always have a focus team id before filtering sides. */
   function resolveFocusFromMeta() {
-    if (focusId) {
-      if (!focusNameOpt) {
-        const sample = layers.find((L) => L.meta && teamIndex(L.meta, L.round));
-        if (sample?.meta) {
-          const idx = teamIndex(sample.meta, sample.round);
-          focusName = focusDisplayName(sample.meta, idx);
-        }
-      }
-      return;
-    }
-    let common = null;
+    // Expand aliases from every list round that already matches focus.
     for (const L of layers) {
-      if (!L.meta) continue;
-      const ids = new Set(
-        [shortTeamId(L.meta.team1), shortTeamId(L.meta.team2), L.round.team1, L.round.team2].filter(
-          Boolean
-        )
-      );
-      if (!common) common = ids;
-      else common = new Set([...common].filter((id) => ids.has(id)));
+      const { t1, t2 } = rosterIds(L);
+      if (isFocusId(t1)) focusIds.add(t1);
+      if (isFocusId(t2)) focusIds.add(t2);
     }
-    if (common?.size === 1) {
-      focusId = [...common][0];
-      resolveFocusFromMeta();
+    if (!focusId && focusIds.size) focusId = [...focusIds][0];
+
+    if (!focusId && !focusIds.size) {
+      let common = null;
+      for (const L of layers) {
+        const { t1, t2 } = rosterIds(L);
+        const ids = new Set([t1, t2].filter(Boolean));
+        if (!ids.size) continue;
+        if (!common) common = ids;
+        else common = new Set([...common].filter((id) => ids.has(id)));
+      }
+      if (common?.size === 1) {
+        focusId = [...common][0];
+        focusIds.add(focusId);
+      } else if (common?.size > 1) {
+        // Two teams in every round — pick team1 of the first round so the
+        // view is not empty when opened without a library team pin.
+        focusId = layers[0]?.round?.team1 || [...common][0];
+        focusIds.add(focusId);
+      }
+    }
+
+    if (!focusNameOpt) {
+      const sample = layers.find((L) => L.meta && teamIndex(L.meta, L.round));
+      if (sample?.meta) {
+        focusName = focusDisplayName(sample.meta, teamIndex(sample.meta, sample.round));
+      } else if (focusId) {
+        focusName = focusId;
+      }
+    } else {
+      focusName = focusNameOpt;
     }
   }
 
@@ -329,6 +374,22 @@ export function createAnalyzerViewer({
       renderer.render({ tick: 0, tickRate: 64, states: [], players: [], events: {}, clear: true });
       return;
     }
+    if (!visible.length) {
+      renderer.render({
+        tick: 0,
+        tickRate: mapMeta.tickRate || 64,
+        states: [],
+        players: [],
+        events: {},
+        clear: true,
+        drawMap: true,
+        hideBomb: true,
+        hideTracers: true,
+        hideDeaths: true
+      });
+      clockEl.textContent = '—';
+      return;
+    }
 
     let loaded = 0;
     let refTiming = null;
@@ -429,20 +490,33 @@ export function createAnalyzerViewer({
     );
     if (destroyed) return;
 
-    // Prefer list short ids when meta embeds objects.
+    // Always pin roster short-ids from the filename — display names in meta
+    // may have been renamed and no longer hash to the same token.
     for (const L of layers) {
       if (!L.meta) continue;
-      if (typeof L.meta.team1 !== 'string' && L.round.team1) L.meta.team1 = L.round.team1;
-      if (typeof L.meta.team2 !== 'string' && L.round.team2) L.meta.team2 = L.round.team2;
-      if (typeof L.meta.team1 === 'object' && L.meta.team1?.id) L.meta.team1 = L.meta.team1.id;
-      if (typeof L.meta.team2 === 'object' && L.meta.team2?.id) L.meta.team2 = L.meta.team2.id;
+      if (L.round.team1) L.meta.team1 = L.round.team1;
+      if (L.round.team2) L.meta.team2 = L.round.team2;
+      if (L.round.round != null && L.meta.round == null) L.meta.round = L.round.round;
+      if (L.round.econ1 != null && L.meta.econ1 == null) L.meta.econ1 = L.round.econ1;
+      if (L.round.econ2 != null && L.meta.econ2 == null) L.meta.econ2 = L.round.econ2;
     }
 
     resolveFocusFromMeta();
+
+    const matched = layers.filter((L) => L.meta && teamIndex(L.meta, L.round));
+    if (!matched.length) {
+      teamEl.textContent = focusName || focusId || 'Team';
+      panelEl.hidden = false;
+      panelEl.innerHTML = `<p class="rv-az-empty">Could not match the focus team to these rounds. Close and open Analyzer from the library with one team selected.</p>`;
+      draw(0);
+      return;
+    }
+
     // Default side to whichever has more rounds for this team.
     const tN = layers.filter((L) => L.meta && sideOfFocus(L) === 'T').length;
     const ctN = layers.filter((L) => L.meta && sideOfFocus(L) === 'CT').length;
     sideFilter = tN >= ctN ? 'T' : 'CT';
+    if (!tN && !ctN) sideFilter = 'T';
 
     resetPlayersForSide();
     renderFilters();

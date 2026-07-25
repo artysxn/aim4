@@ -68,7 +68,8 @@ export function initReplaysView({ escapeHtml }) {
   /** @type {Set<string>} selected round files */
   let selectedFiles = new Set();
   /** @type {Set<string>} collapsed demo ids */
-  let collapsedDemos = new Set();
+  /** Demo ids the user has expanded; everything else stays closed. */
+  let expandedDemos = new Set();
   let pollTimer = 0;
   let visible = false;
   let viewerModule = null;
@@ -1034,7 +1035,7 @@ export function initReplaysView({ escapeHtml }) {
   function demoGroupHeadHtml(g) {
     const d = g.demo;
     const sample = g.rounds[0];
-    const open = !collapsedDemos.has(g.demoId);
+    const open = expandedDemos.has(g.demoId);
     const t1 = teamName(d, 1, sample?.team1);
     const t2 = teamName(d, 2, sample?.team2);
     const when = formatWhen(d?.uploadedAt || d?.parsedAt);
@@ -1115,33 +1116,47 @@ export function initReplaysView({ escapeHtml }) {
       </div>`
         : '';
 
-    resultEl.innerHTML = `
-      ${head}
-      <div class="rp-demo-groups rp-list">
-        ${sortedDemos
-          .map((d) => {
-            const status = d.status || 'ready';
-            if (status !== 'ready') return demoRow(d);
-            const demoRounds = roundsForDemo(d);
-            const g = { demoId: d.id, demo: d, rounds: demoRounds };
-            const open = !collapsedDemos.has(d.id);
-            return `
+    const demoBlocks = sortedDemos
+      .map((d) => {
+        const status = d.status || 'ready';
+        if (status !== 'ready') return demoRow(d);
+        const demoRounds = roundsForDemo(d);
+        // No matching rounds for the current filters → omit the demo entirely.
+        if (!demoRounds.length) return '';
+        const g = { demoId: d.id, demo: d, rounds: demoRounds };
+        const open = expandedDemos.has(d.id);
+        const allSelected =
+          demoRounds.length > 0 && demoRounds.every((r) => selectedFiles.has(r.file));
+        return `
           <section class="rp-demo-group${open ? ' open' : ''}" data-demo="${escapeHtml(d.id)}">
             ${demoGroupHeadHtml(g)}
             <div class="rp-demo-rounds" ${open ? '' : 'hidden'}>
-              ${
-                demoRounds.length
-                  ? demoRounds.map((r) => roundRowHtml(r, d)).join('')
-                  : `<p class="rp-demo-empty">${
-                      hasActiveFilters()
-                        ? 'No rounds match these filters.'
-                        : 'No rounds in this replay.'
-                    }</p>`
-              }
+              <div class="rp-demo-rounds-tools">
+                <button type="button" class="rp-select-demo-rounds" data-select-demo="${escapeHtml(
+                  d.id
+                )}">${allSelected ? 'Deselect all' : 'Select all'}</button>
+                <span class="rp-demo-rounds-meta">${demoRounds.length} round${
+                  demoRounds.length === 1 ? '' : 's'
+                }</span>
+              </div>
+              ${demoRounds.map((r) => roundRowHtml(r, d)).join('')}
             </div>
           </section>`;
-          })
-          .join('')}
+      })
+      .filter(Boolean)
+      .join('');
+
+    resultEl.innerHTML = `
+      ${head}
+      <div class="rp-demo-groups rp-list">
+        ${
+          demoBlocks ||
+          `<p class="view-empty">${
+            hasActiveFilters()
+              ? 'No demos match these filters.'
+              : 'No replays yet. Upload a package (or a .dem).'
+          }</p>`
+        }
       </div>`;
 
     resultEl.querySelector('#rp-load-rounds')?.addEventListener('click', () => {
@@ -1157,42 +1172,104 @@ export function initReplaysView({ escapeHtml }) {
       const clusterName = teamClustersByKey.get(gate.clusterKey)?.name || '';
       launchViewer(ordered, 'analyzer', title, {
         focusTeam: gate.focusTeam,
+        focusTeamIds: gate.focusTeamIds,
         focusName: clusterName
       });
     });
   }
 
   /**
-   * Analyzer needs: ≥1 selected round, one map, and exactly one Team filter
-   * whose short-ids appear in every selected round.
+   * Analyzer needs: ≥1 selected round, one map, and one focus team present in
+   * every round. Prefer the Team filter when set; otherwise infer a single
+   * shared team from the selection. Cluster aliases all count as that team.
    */
   function analyzerGate(picked) {
     if (!picked.length) return { ok: false, reason: 'Select at least one round' };
-    if (filters.teams.size !== 1) {
-      return { ok: false, reason: 'Filter exactly one team first' };
-    }
-    const clusterKey = [...filters.teams][0];
-    const shortIds = expandClusterKeys([clusterKey]);
-    if (!shortIds.length) return { ok: false, reason: 'Unknown team' };
     const maps = new Set(picked.map((r) => r.map).filter(Boolean));
     if (maps.size !== 1) return { ok: false, reason: 'All rounds must share one map' };
-    const focusTeam = shortIds.find((id) =>
-      picked.every((r) => r.team1 === id || r.team2 === id)
-    );
-    if (!focusTeam) {
+
+    /** @type {string[]} */
+    let shortIds = [];
+    /** @type {string} */
+    let clusterKey = '';
+
+    if (filters.teams.size === 1) {
+      clusterKey = [...filters.teams][0];
+      shortIds = expandClusterKeys([clusterKey]);
+    } else if (filters.teams.size > 1) {
+      return { ok: false, reason: 'Filter exactly one team (or clear Team and select one side)' };
+    } else {
+      // Infer teams shared by every selected round.
+      let common = null;
+      for (const r of picked) {
+        const ids = new Set([r.team1, r.team2].filter(Boolean));
+        if (!common) common = ids;
+        else common = new Set([...common].filter((id) => ids.has(id)));
+      }
+      shortIds = [...(common || [])];
+      if (shortIds.length > 1) {
+        // Prefer a cluster that covers all aliases if one exists.
+        const cover = teamClusters.find(
+          (c) =>
+            shortIds.every((id) => c.shortIds.includes(id)) &&
+            picked.every((r) => c.shortIds.includes(r.team1) || c.shortIds.includes(r.team2))
+        );
+        if (cover) {
+          clusterKey = cover.key;
+          shortIds = cover.shortIds;
+        } else {
+          return { ok: false, reason: 'Pick one team in the Team filter' };
+        }
+      } else if (shortIds.length === 1) {
+        const cover = teamClusters.find((c) => c.shortIds.includes(shortIds[0]));
+        clusterKey = cover?.key || shortIds[0];
+        if (cover) shortIds = cover.shortIds;
+      }
+    }
+
+    if (!shortIds.length) return { ok: false, reason: 'No shared team across selected rounds' };
+
+    const inFocus = (r) => shortIds.some((id) => r.team1 === id || r.team2 === id);
+    if (!picked.every(inFocus)) {
       return { ok: false, reason: 'Selected team must be in every round' };
     }
-    return { ok: true, focusTeam, clusterKey };
+
+    // Prefer the short-id that appears most often in the selection.
+    const counts = new Map(shortIds.map((id) => [id, 0]));
+    for (const r of picked) {
+      for (const id of shortIds) {
+        if (r.team1 === id || r.team2 === id) counts.set(id, (counts.get(id) || 0) + 1);
+      }
+    }
+    const focusTeam = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    return { ok: true, focusTeam, focusTeamIds: shortIds, clusterKey };
   }
 
   resultEl?.addEventListener('click', async (e) => {
     if (await handleDemoAction(e.target)) return;
 
+    const selectDemo = e.target.closest('[data-select-demo]');
+    if (selectDemo) {
+      e.preventDefault();
+      e.stopPropagation();
+      const demoId = selectDemo.dataset.selectDemo;
+      const demo = demos.find((d) => d.id === demoId);
+      if (!demo) return;
+      const files = (demo.rounds || [])
+        .map((r) => r.file)
+        .filter((f) => f && rounds.some((r) => r.file === f));
+      const allOn = files.length > 0 && files.every((f) => selectedFiles.has(f));
+      if (allOn) for (const f of files) selectedFiles.delete(f);
+      else for (const f of files) selectedFiles.add(f);
+      renderResults();
+      return;
+    }
+
     const toggle = e.target.closest('[data-toggle-demo]');
     if (toggle && !e.target.closest('.rp-row-actions, button, a')) {
       const id = toggle.dataset.toggleDemo;
-      if (collapsedDemos.has(id)) collapsedDemos.delete(id);
-      else collapsedDemos.add(id);
+      if (expandedDemos.has(id)) expandedDemos.delete(id);
+      else expandedDemos.add(id);
       renderResults();
       return;
     }
@@ -1211,8 +1288,8 @@ export function initReplaysView({ escapeHtml }) {
     if (!toggle || e.target.closest('.rp-row-actions, button, a')) return;
     e.preventDefault();
     const id = toggle.dataset.toggleDemo;
-    if (collapsedDemos.has(id)) collapsedDemos.delete(id);
-    else collapsedDemos.add(id);
+    if (expandedDemos.has(id)) expandedDemos.delete(id);
+    else expandedDemos.add(id);
     renderResults();
   });
 
@@ -1247,6 +1324,7 @@ export function initReplaysView({ escapeHtml }) {
       title,
       escapeHtml,
       focusTeam: focus.focusTeam || '',
+      focusTeamIds: focus.focusTeamIds || [],
       focusName: focus.focusName || ''
     });
   }
