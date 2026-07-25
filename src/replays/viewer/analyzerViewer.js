@@ -714,8 +714,13 @@ export function createAnalyzerViewer({
   /**
    * Draw one full round. When `alpha` < 1, composite via offscreen so utility
    * and labels dim together. Kill marks are drawn separately at full opacity.
+   * Hover focus uses default T/CT colors; multi-round ghosts keep analyzer swatches.
    */
-  function renderFullRound(L, tick, { highlightId = '', alpha = 1, names = true } = {}) {
+  function renderFullRound(
+    L,
+    tick,
+    { highlightId = '', alpha = 1, names = true, customColors = true } = {}
+  ) {
     const track = store.track(L.round.file);
     if (!track) return false;
     freezeKillPositions(L);
@@ -729,7 +734,7 @@ export function createAnalyzerViewer({
       events: L.meta.events || {},
       weapons: L.meta.weapons || [],
       teamSides: { 1: L.meta.team1Side, 2: L.meta.team2Side },
-      playerColors,
+      playerColors: customColors ? playerColors : undefined,
       highlight: highlightId || undefined,
       compact: false,
       clear: false,
@@ -930,7 +935,8 @@ export function createAnalyzerViewer({
           renderFullRound(L, tick, {
             highlightId: menuHoverFile ? '' : hoverHit?.playerId || '',
             alpha: 1,
-            names: true
+            names: true,
+            customColors: false
           });
         } else {
           if (!refTiming) {
@@ -969,7 +975,12 @@ export function createAnalyzerViewer({
         const tick = tickForLayer(L, pos);
         refTiming = L.timing;
         refTick = tick;
-        renderFullRound(L, tick, { highlightId: hoverHit.playerId, alpha: 1, names: true });
+        renderFullRound(L, tick, {
+          highlightId: hoverHit.playerId,
+          alpha: 1,
+          names: true,
+          customColors: false
+        });
       } else {
         for (const row of overlay) {
           if (!refTiming) {
