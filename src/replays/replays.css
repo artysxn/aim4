@@ -1766,19 +1766,19 @@ body.rv-open {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 0;
-}
-
-.rv-analyzer.has-selection .rv-analyzer-stage {
   grid-template-columns: 220px minmax(0, 1fr) 240px;
+  gap: 0;
 }
 
 .rv-analyzer-panel {
   display: flex;
   flex-direction: column;
   gap: 0;
+  width: 220px;
+  min-width: 220px;
+  max-width: 220px;
   padding: 14px 12px;
+  overflow-x: hidden;
   overflow-y: auto;
   border-right: 1px solid var(--border);
   background: rgba(0, 0, 0, 0.25);
@@ -1953,11 +1953,20 @@ body.rv-open {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-width: 0;
+  width: 240px;
+  min-width: 240px;
+  max-width: 240px;
   padding: 12px 12px 14px;
   overflow: hidden;
   border-left: 1px solid var(--border);
   background: rgba(0, 0, 0, 0.25);
+}
+
+.rv-az-sel-empty {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .rv-az-sel-head {

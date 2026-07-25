@@ -1450,11 +1450,26 @@ export function initReplaysView({ escapeHtml }) {
   /** /replays?round=<name> opens straight into that round. */
   async function openSharedRound(file) {
     if (!file) return;
+    return openSharedRounds([file]);
+  }
+
+  /** /replays?rounds=a,b,c opens those rounds in Timeline. */
+  async function openSharedRounds(files) {
+    const list = [...new Set((files || []).map((f) => String(f || '').trim()).filter(Boolean))];
+    if (!list.length) return;
     try {
-      const meta = await fetchRoundMeta(file);
-      if (!meta) throw new Error('That round is not in this library.');
-      const title = `${meta.team1?.name || 'Team 1'} vs ${meta.team2?.name || 'Team 2'}`;
-      launchViewer([{ ...meta, file }], 'timeline', title);
+      const rounds = [];
+      for (const file of list) {
+        const meta = await fetchRoundMeta(file);
+        if (!meta) continue;
+        rounds.push({ ...meta, file });
+      }
+      if (!rounds.length) throw new Error('Those rounds are not in this library.');
+      const title =
+        rounds.length === 1
+          ? `${rounds[0].team1?.name || 'Team 1'} vs ${rounds[0].team2?.name || 'Team 2'}`
+          : `${rounds.length} rounds`;
+      launchViewer(rounds, 'timeline', title);
     } catch (err) {
       setStatus(`Could not open that round. ${err.message}`, true);
     }
@@ -1522,9 +1537,27 @@ export function initReplaysView({ escapeHtml }) {
       }
       // Only on the first arrival: a viewer close rewrites the URL back to
       // /replays, and re-entering the view must not reopen what was closed.
-      if (page === 'library' && params.round && params.round !== openedRound) {
-        openedRound = params.round;
-        openSharedRound(params.round);
+      if (page === 'library') {
+        if (params.rounds) {
+          const key = `rounds:${params.rounds}`;
+          if (key !== openedRound) {
+            openedRound = key;
+            const files = String(params.rounds)
+              .split(',')
+              .map((s) => {
+                try {
+                  return decodeURIComponent(s.trim());
+                } catch {
+                  return s.trim();
+                }
+              })
+              .filter(Boolean);
+            openSharedRounds(files);
+          }
+        } else if (params.round && params.round !== openedRound) {
+          openedRound = params.round;
+          openSharedRound(params.round);
+        }
       }
     },
     onHide() {

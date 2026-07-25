@@ -47,17 +47,12 @@ export function openViewer({
   const store = new TickStore();
   if (mode === 'macro') mode = 'analyzer';
 
-  /** Full set opened from the library (Analyzer always uses this). */
-  const allRounds = rounds;
-  /** Rounds currently loaded in Timeline (may shrink via Analyzer "Replay all"). */
-  let timelineRounds = rounds;
-
   let focusIds = focusTeamIds?.length
     ? [...focusTeamIds]
     : focusTeam
       ? [focusTeam]
-      : inferFocusTeamIds(allRounds);
-  const canAnalyze = analyzerEligible(allRounds, focusIds);
+      : inferFocusTeamIds(rounds);
+  const canAnalyze = analyzerEligible(rounds, focusIds);
 
   const overlay = document.createElement('div');
   overlay.className = 'rv-overlay';
@@ -85,28 +80,22 @@ export function openViewer({
   let current = null;
   let activeMode = null;
 
-  function setMode(next, { force = false } = {}) {
+  function setMode(next) {
     if (next === 'macro') next = 'analyzer';
     if (next === 'analyzer' && !canAnalyze) return;
-    if (!force && next === activeMode) return;
+    if (next === activeMode) return;
     activeMode = next;
     current?.destroy();
     bodyEl.innerHTML = '';
-    const list = next === 'analyzer' ? allRounds : timelineRounds;
     const factory = next === 'analyzer' ? createAnalyzerViewer : createTimelineViewer;
     current = factory({
       store,
-      rounds: list,
+      rounds,
       escapeHtml,
       focusTeam: focusIds[0] || focusTeam,
       focusTeamIds: focusIds,
       focusName,
-      onRound: syncUrl,
-      onLoadTimeline: (subset) => {
-        if (!subset?.length) return;
-        timelineRounds = subset;
-        setMode('timeline', { force: true });
-      }
+      onRound: syncUrl
     });
     if (next === 'analyzer') syncUrl(null);
     bodyEl.appendChild(current.el);

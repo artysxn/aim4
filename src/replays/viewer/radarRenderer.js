@@ -431,7 +431,8 @@ export class RadarRenderer {
         ctx.fill();
       };
 
-      dot(hasBomb ? BOMB_CARRIER_COLOR : colors.base);
+      // Analyzer (and any custom palette) keeps the assigned color even on bomb.
+      dot(hasBomb && !override ? BOMB_CARRIER_COLOR : colors.base);
       if (damageFlash > 0) dot(`rgba(255, 48, 48, ${0.75 * damageFlash})`);
       if (blind > 0) dot(`rgba(255, 255, 255, ${0.25 + 0.65 * blind})`);
 

@@ -37,7 +37,6 @@ function ECONOMY_CODES_SAFE() {
  * @param {string} [opts.focusTeam]  short id of the team being analyzed
  * @param {string[]} [opts.focusTeamIds] aliases for the focus team (cluster)
  * @param {string} [opts.focusName]  display name for the focus team
- * @param {(rounds: object[]) => void} [opts.onLoadTimeline]
  */
 export function createAnalyzerViewer({
   store,
@@ -45,8 +44,7 @@ export function createAnalyzerViewer({
   escapeHtml,
   focusTeam = '',
   focusTeamIds = [],
-  focusName: focusNameOpt = '',
-  onLoadTimeline
+  focusName: focusNameOpt = ''
 }) {
   const el = document.createElement('div');
   el.className = 'rv-analyzer';
@@ -62,14 +60,15 @@ export function createAnalyzerViewer({
         <div class="rv-az-marquee" id="rv-az-marquee" hidden></div>
         <div class="rv-az-tip" id="rv-az-tip" hidden></div>
       </div>
-      <aside class="rv-analyzer-selected" id="rv-az-selected" hidden>
+      <aside class="rv-analyzer-selected" id="rv-az-selected">
         <div class="rv-az-sel-head">
           <h3>Selected rounds</h3>
           <button type="button" class="rv-az-invert" id="rv-az-invert" title="Invert selection">Invert</button>
         </div>
         <div class="rv-az-sel-cols"><span>Opponent</span><span>Rnd</span></div>
         <ul class="rv-az-sel-list" id="rv-az-sel-list"></ul>
-        <p class="rv-az-sel-summary" id="rv-az-sel-summary"></p>
+        <p class="rv-az-sel-empty" id="rv-az-sel-empty">Drag on the map to select rounds.</p>
+        <p class="rv-az-sel-summary" id="rv-az-sel-summary" hidden></p>
         <button type="button" class="rv-az-replay" id="rv-az-replay" disabled>
           <svg viewBox="0 -960 960 960" width="16" height="16"><path d="M320-200v-560l440 280-440 280Z"/></svg>
           Replay all
@@ -104,8 +103,8 @@ export function createAnalyzerViewer({
   const canvas = el.querySelector('#rv-az-canvas');
   const marqueeEl = el.querySelector('#rv-az-marquee');
   const tipEl = el.querySelector('#rv-az-tip');
-  const selectedEl = el.querySelector('#rv-az-selected');
   const selListEl = el.querySelector('#rv-az-sel-list');
+  const selEmptyEl = el.querySelector('#rv-az-sel-empty');
   const selSummaryEl = el.querySelector('#rv-az-sel-summary');
   const invertBtn = el.querySelector('#rv-az-invert');
   const replayBtn = el.querySelector('#rv-az-replay');
@@ -288,12 +287,12 @@ export function createAnalyzerViewer({
     }
   }
 
-  function rankedPlayersForSide() {
+  /** Stable palette for every focus-team player (both sides). Assigned once. */
+  function assignStablePlayerColors() {
     /** @type {Map<string, {id:string,name:string,count:number}>} */
     const byId = new Map();
     for (const L of layers) {
       if (!L.meta) continue;
-      if (sideOfFocus(L) !== sideFilter) continue;
       const idx = teamIndex(L.meta, L.round);
       if (!idx) continue;
       for (const p of L.meta.players || []) {
@@ -313,7 +312,25 @@ export function createAnalyzerViewer({
         playerColors[p.id] = RESERVE_COLORS[r % RESERVE_COLORS.length];
       }
     });
-    return ranked;
+  }
+
+  function rankedPlayersForSide() {
+    /** @type {Map<string, {id:string,name:string,count:number}>} */
+    const byId = new Map();
+    for (const L of layers) {
+      if (!L.meta) continue;
+      if (sideOfFocus(L) !== sideFilter) continue;
+      const idx = teamIndex(L.meta, L.round);
+      if (!idx) continue;
+      for (const p of L.meta.players || []) {
+        if (p.team !== idx) continue;
+        const cur = byId.get(p.id) || { id: p.id, name: p.name || p.id, count: 0 };
+        cur.count += 1;
+        if (p.name) cur.name = p.name;
+        byId.set(p.id, cur);
+      }
+    }
+    return [...byId.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   }
 
   function resetPlayersForSide() {
@@ -494,6 +511,7 @@ export function createAnalyzerViewer({
       events: L.meta.events || {},
       weapons: L.meta.weapons || [],
       teamSides: { 1: L.meta.team1Side, 2: L.meta.team2Side },
+      playerColors,
       highlight: highlightId || undefined,
       compact: false,
       clear: false,
@@ -646,21 +664,33 @@ export function createAnalyzerViewer({
 
   function openRoundTab(file) {
     if (!file) return;
-    const url = `/replays?round=${encodeURIComponent(file)}`;
-    window.open(url, '_blank', 'noopener');
+    window.open(`/replays?round=${encodeURIComponent(file)}`, '_blank', 'noopener');
+  }
+
+  /** Open one or more rounds in Timeline in a new browser tab. */
+  function openRoundsInTimeline(files) {
+    const list = [...new Set(files.filter(Boolean))];
+    if (!list.length) return;
+    if (list.length === 1) {
+      openRoundTab(list[0]);
+      return;
+    }
+    const q = list.map(encodeURIComponent).join(',');
+    window.open(`/replays?rounds=${q}`, '_blank', 'noopener');
   }
 
   function renderSelectedPanel() {
     const items = selectedFiles.map((f) => layerByFile(f)).filter(Boolean);
-    selectedEl.hidden = !items.length;
     if (!items.length) {
       selListEl.innerHTML = '';
+      selEmptyEl.hidden = false;
+      selSummaryEl.hidden = true;
       selSummaryEl.textContent = '';
       replayBtn.disabled = true;
-      el.classList.remove('has-selection');
       return;
     }
-    el.classList.add('has-selection');
+    selEmptyEl.hidden = true;
+    selSummaryEl.hidden = false;
     const total = Math.max(1, visibleLayers().length || layers.length);
     selListEl.innerHTML = items
       .map((L) => {
@@ -934,10 +964,7 @@ export function createAnalyzerViewer({
   });
 
   invertBtn.addEventListener('click', () => invertSelection());
-  replayBtn.addEventListener('click', () => {
-    const list = selectedFiles.map((f) => layerByFile(f)?.round).filter(Boolean);
-    if (list.length) onLoadTimeline?.(list);
-  });
+  replayBtn.addEventListener('click', () => openRoundsInTimeline(selectedFiles));
 
   async function loadMeta() {
     await Promise.all(
@@ -984,8 +1011,10 @@ export function createAnalyzerViewer({
     sideFilter = tN >= ctN ? 'T' : 'CT';
     if (!tN && !ctN) sideFilter = 'T';
 
+    assignStablePlayerColors();
     resetPlayersForSide();
     renderFilters();
+    renderSelectedPanel();
     playback.setDuration(longestLive());
     playback.seek(0);
     draw(0);
