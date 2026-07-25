@@ -2,6 +2,7 @@
 // replays/routes.js
 // /api/replays/* — the demo library and the round collector.
 //
+//   GET    /api/replays/diag                     public crash / memory diagnostic
 //   GET    /api/replays/status                   parser + quota
 //   GET    /api/replays/demos                    library listing
 //   POST   /api/replays/demos                    upload (raw .dem body)
@@ -180,20 +181,11 @@ export async function handleReplayRequest(req, res, url) {
     return true;
   }
 
-  // Every route below reads or writes one account's private library, so the
-  // caller is resolved once, here, and nothing downstream sees a raw header.
-  const auth = await identify(req);
-  if (!auth.ok) {
-    json(res, auth.status || 401, { error: auth.error || 'Not authorized.' });
-    return true;
-  }
-  const user = auth.user;
-
   // ---- diagnostics --------------------------------------------------------
-  // Deliberately readable without a token: when a parse dies the container may
-  // have restarted and there is no session to speak of, and this is the one
-  // page that explains why. It exposes no library contents, only how far the
-  // last parse got and what memory the server has.
+  // Ahead of the auth gate on purpose: when a parse takes the container down
+  // there is no session to speak of, and this is the one page that explains
+  // why. It exposes no library contents, only how far the last parse got and
+  // what memory the server has.
   if (req.method === 'GET' && p === '/api/replays/diag') {
     json(res, 200, {
       ok: true,
@@ -205,6 +197,15 @@ export async function handleReplayRequest(req, res, url) {
     });
     return true;
   }
+
+  // Every route below reads or writes one account's private library, so the
+  // caller is resolved once, here, and nothing downstream sees a raw header.
+  const auth = await identify(req);
+  if (!auth.ok) {
+    json(res, auth.status || 401, { error: auth.error || 'Not authorized.' });
+    return true;
+  }
+  const user = auth.user;
 
   // ---- status -------------------------------------------------------------
   if (req.method === 'GET' && p === '/api/replays/status') {
