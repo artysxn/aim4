@@ -10,7 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import path from 'node:path';
-import { Worker } from 'node:worker_threads';
+import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readRecord, writeRecord, demoFilePath, discardSourceFile } from './demoStore.js';
 
@@ -21,15 +21,15 @@ const WORKER = path.join(__dirname, 'parseWorker.js');
 const KEEP_SOURCE = process.env.AIM4_REPLAY_KEEP_DEM !== '0';
 
 /**
- * Heap ceiling for the parse worker, in MB.
+ * Heap ceiling for the parse process, in MB, passed as --max-old-space-size.
  *
- * This is a blast radius control, not a tuning knob. Without it a worker that
- * runs out of memory takes the whole process down with it, which means one
- * oversized demo also kills every live multiplayer match. With it, the worker
- * dies alone, the job reports a real error, and the server keeps serving.
- * Leave headroom: this must fit inside the host's RAM next to everything else.
+ * This is a blast radius control, not a tuning knob. It bounds V8's heap so a
+ * runaway parse hits a catchable JavaScript error before the kernel notices.
+ * It does NOT bound the native parser's own allocations, which is exactly why
+ * the parse runs as a separate process: if the kernel does step in, it kills
+ * that process and the HTTP server keeps running.
  */
-const WORKER_HEAP_MB = Number(process.env.AIM4_PARSE_HEAP_MB || 1536);
+const WORKER_HEAP_MB = Number(process.env.AIM4_PARSE_HEAP_MB || 1024);
 
 /** Give up on a parse that has made no progress for this long. */
 const STALL_MS = Number(process.env.AIM4_PARSE_STALL_MS || 15 * 60 * 1000);
@@ -91,21 +91,22 @@ function pump() {
   job.startedAt = Date.now();
 
   const file = demoFilePath(job.user, job.demoId);
-  const worker = new Worker(WORKER, {
-    workerData: {
-      user: job.user,
-      demoId: job.demoId,
-      file,
-      meta: {
-        filename: job.filename,
-        sizeBytes: job.sizeBytes,
-        uploadedAt: job.queuedAt
-      }
-    },
-    resourceLimits: {
-      maxOldGenerationSizeMb: WORKER_HEAP_MB,
-      maxYoungGenerationSizeMb: 64
+  const payload = JSON.stringify({
+    user: job.user,
+    demoId: job.demoId,
+    file,
+    meta: {
+      filename: job.filename,
+      sizeBytes: job.sizeBytes,
+      uploadedAt: job.queuedAt
     }
+  });
+
+  const worker = fork(WORKER, [payload], {
+    execArgv: [`--max-old-space-size=${WORKER_HEAP_MB}`],
+    // The child's own stdio is forwarded so a native crash still reaches the
+    // container log rather than vanishing.
+    stdio: ['ignore', 'inherit', 'inherit', 'ipc']
   });
 
   // A parse that stops reporting progress is hung. Killing it frees the queue
@@ -115,7 +116,7 @@ function pump() {
   const touch = () => {
     if (stallTimer) clearTimeout(stallTimer);
     stallTimer = setTimeout(() => {
-      worker.terminate().catch(() => {});
+      worker.kill('SIGKILL');
       const message = `Parsing stalled with no progress for ${Math.round(STALL_MS / 60000)} minutes.`;
       markFailed(job, message).catch(() => {});
       finish({ state: 'error', stage: 'error', error: message });
@@ -124,11 +125,11 @@ function pump() {
   };
 
   const finish = async (patch) => {
-    if (job.finishedAt) return; // terminate() and exit can both land here
+    if (job.finishedAt) return; // kill() and exit can both land here
     if (stallTimer) clearTimeout(stallTimer);
     Object.assign(job, patch, { finishedAt: Date.now() });
     running = null;
-    worker.terminate().catch(() => {});
+    if (!worker.killed) worker.kill('SIGKILL');
     pump();
   };
 
@@ -154,25 +155,28 @@ function pump() {
   });
 
   worker.on('error', async (err) => {
-    // An out-of-memory worker is the common failure on a small host, and the
-    // raw V8 message does not say what to do about it.
-    const oom = err?.code === 'ERR_WORKER_OUT_OF_MEMORY';
-    const message = oom
-      ? `Parsing ran out of memory (worker limit ${WORKER_HEAP_MB} MB). Raise ` +
-        'AIM4_PARSE_HEAP_MB if the host has spare RAM, or lower ' +
-        'AIM4_PARSE_BATCH_TICKS to hold fewer ticks at once.'
-      : err?.message || String(err);
+    const message = err?.message || String(err);
     console.error(`[replays] parse failed for ${job.filename}:`, message);
     await markFailed(job, message);
     await finish({ state: 'error', stage: 'error', error: message });
   });
 
-  worker.on('exit', (code) => {
-    if (running === job && code !== 0) {
-      const message = `Parser worker exited with code ${code}`;
-      markFailed(job, message).catch(() => {});
-      finish({ state: 'error', stage: 'error', error: message });
-    }
+  worker.on('exit', (code, signal) => {
+    if (running !== job) return;
+    if (code === 0) return;
+
+    // SIGKILL with no exit code is the kernel's out-of-memory killer. The
+    // process gets no chance to report anything, so name it here rather than
+    // leaving a bare signal number for someone to decode.
+    const killed = signal === 'SIGKILL' || signal === 'SIGABRT';
+    const message = killed
+      ? `The parser was killed by the system, which almost always means the ` +
+        `host ran out of memory. The demo is likely too large for this server ` +
+        `(heap limit ${WORKER_HEAP_MB} MB). Check /api/replays/diag for how far it got.`
+      : `Parser exited with code ${code}${signal ? ` (${signal})` : ''}`;
+    console.error(`[replays] ${message}`);
+    markFailed(job, message).catch(() => {});
+    finish({ state: 'error', stage: 'error', error: message });
   });
 }
 

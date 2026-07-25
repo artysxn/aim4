@@ -16,8 +16,13 @@
 // never be buffered in memory or pass through the JSON body reader.
 // ---------------------------------------------------------------------------
 
+import os from 'node:os';
+import fsSync from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { parserStatus } from '../demoparser/index.js';
 import {
+  ROOT,
   MAX_BYTES,
   MAX_DEMOS,
   checkQuota,
@@ -95,6 +100,44 @@ function queryFromUrl(url) {
   };
 }
 
+/**
+ * The breadcrumb the parse process writes as it works. If it was killed
+ * outright this is the only record of how far it got, and crucially it says
+ * how much memory was in use at that point.
+ */
+async function readParseTrace() {
+  try {
+    const raw = await readFile(path.join(ROOT, '.parse-trace.json'), 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function memorySnapshot() {
+  const mem = process.memoryUsage();
+  const snap = {
+    serverRssMb: Math.round(mem.rss / 1024 / 1024),
+    heapLimitMb: Number(process.env.AIM4_PARSE_HEAP_MB || 1024),
+    batchTicks: Number(process.env.AIM4_PARSE_BATCH_TICKS || 200000)
+  };
+  // Inside a container the cgroup limit is what actually matters, and it is
+  // usually smaller than what os.totalmem() reports.
+  try {
+    const v2 = fsSync.readFileSync('/sys/fs/cgroup/memory.max', 'utf8').trim();
+    snap.containerLimitMb = v2 === 'max' ? 'unlimited' : Math.round(Number(v2) / 1024 / 1024);
+    snap.containerUsedMb = Math.round(
+      Number(fsSync.readFileSync('/sys/fs/cgroup/memory.current', 'utf8').trim()) / 1024 / 1024
+    );
+  } catch {
+    /* not cgroup v2, or not in a container */
+  }
+  snap.hostTotalMb = Math.round(os.totalmem() / 1024 / 1024);
+  snap.hostFreeMb = Math.round(os.freemem() / 1024 / 1024);
+  snap.cpus = os.cpus().length;
+  return snap;
+}
+
 /** Merge the stored record with live job progress. */
 function withJob(user, record) {
   const job = jobStatus(user, record.id);
@@ -145,6 +188,23 @@ export async function handleReplayRequest(req, res, url) {
     return true;
   }
   const user = auth.user;
+
+  // ---- diagnostics --------------------------------------------------------
+  // Deliberately readable without a token: when a parse dies the container may
+  // have restarted and there is no session to speak of, and this is the one
+  // page that explains why. It exposes no library contents, only how far the
+  // last parse got and what memory the server has.
+  if (req.method === 'GET' && p === '/api/replays/diag') {
+    json(res, 200, {
+      ok: true,
+      parser: parserStatus(),
+      auth: authStatus(),
+      lastParse: await readParseTrace(),
+      memory: memorySnapshot(),
+      uptimeSeconds: Math.round(process.uptime())
+    });
+    return true;
+  }
 
   // ---- status -------------------------------------------------------------
   if (req.method === 'GET' && p === '/api/replays/status') {
