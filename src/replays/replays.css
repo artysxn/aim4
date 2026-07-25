@@ -1896,6 +1896,20 @@ body.rv-open {
   font-size: 12px;
 }
 
+.rv-az-hint {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.rv-az-smooth {
+  width: 100%;
+  accent-color: var(--accent, #5b9fd4);
+  cursor: pointer;
+}
+
 .rv-az-players {
   display: flex;
   flex-direction: column;
@@ -2387,9 +2401,7 @@ body.rv-open {
 }
 
 .st-table {
-  /* Pack columns to content — width:100% was stretching a huge gap after Player. */
-  width: max-content;
-  max-width: 100%;
+  width: 100%;
   border-collapse: collapse;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
@@ -2398,7 +2410,7 @@ body.rv-open {
 .st-table th {
   position: sticky;
   top: 0;
-  padding: 8px 8px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--muted);
@@ -2426,15 +2438,10 @@ body.rv-open {
 }
 
 .st-table td {
-  padding: 7px 8px;
+  padding: 7px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   text-align: right;
   white-space: nowrap;
-}
-
-.st-table th.left,
-.st-table td.name {
-  padding-right: 14px;
 }
 
 .st-table tbody tr:hover {
@@ -2458,35 +2465,34 @@ body.rv-open {
 }
 
 .st-table.compact {
-  width: max-content;
   font-size: 12px;
 }
 
 .st-table.compact th,
 .st-table.compact td {
-  padding: 4px 6px;
+  padding: 5px 8px;
 }
 
-.st-table.compact th.left,
-.st-table.compact td.name {
-  padding-right: 12px;
-}
-
-/* Single-match Statistics page: two team boards like the live scoreboard. */
+/* Single-match Statistics page: two full-width team tables. */
 .st-match-boards {
   display: grid;
   grid-template-rows: auto auto;
-  gap: 18px;
+  gap: 22px;
 }
 
 .st-board {
   min-width: 0;
+  width: 100%;
   overflow-x: auto;
+}
+
+.st-board .st-table {
+  width: 100%;
 }
 
 .st-board-name {
   margin: 0 0 8px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -2524,13 +2530,18 @@ body.rv-open {
 
 .rv-scoreboard {
   position: absolute;
-  inset: 12px 12px 96px;
+  left: 50%;
+  top: calc(50% - 36px);
   z-index: 12;
   display: flex;
   flex-direction: column;
+  width: min(920px, calc(100% - 40px));
+  max-height: min(720px, calc(100% - 120px));
+  transform: translate(-50%, -50%);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  background: rgba(10, 12, 15, 0.96);
+  background: rgba(10, 12, 15, 0.97);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
@@ -2544,36 +2555,37 @@ body.rv-open {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 14px;
+  flex-shrink: 0;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--border);
   color: var(--text);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }
 
 .rv-scoreboard-body {
   display: grid;
-  grid-template-rows: auto auto;
-  gap: 12px;
-  padding: 12px 14px 14px;
-  overflow: auto;
-  align-content: start;
+  grid-template-rows: 1fr 1fr;
+  gap: 18px;
+  flex: 1;
+  min-height: 0;
+  padding: 16px 18px 18px;
+  overflow-y: auto;
 }
 
 .rv-board {
   min-width: 0;
-  width: max-content;
-  max-width: 100%;
+  width: 100%;
   overflow-x: auto;
 }
 
 .rv-board .st-table {
-  width: max-content;
+  width: 100%;
 }
 
 .rv-board-name {
-  margin: 0 0 6px;
-  font-size: 12px;
+  margin: 0 0 8px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;

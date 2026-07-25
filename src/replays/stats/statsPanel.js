@@ -218,8 +218,7 @@ export function createStatsPanel({ escapeHtml }) {
           columns: PLAYER_COLUMNS,
           escapeHtml,
           sortKey: opts.sortKey,
-          sortDir: opts.sortDir,
-          compact: true
+          sortDir: opts.sortDir
         })}
       </div>`;
     };

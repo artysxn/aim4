@@ -931,8 +931,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
           columns: PLAYER_COLUMNS,
           escapeHtml,
           sortKey: 'rating',
-          sortDir: 'desc',
-          compact: true
+          sortDir: 'desc'
         })}
       </div>`;
     };

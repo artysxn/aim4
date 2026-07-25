@@ -9,6 +9,7 @@
 import { fetchRoundMeta } from '../api.js';
 import { ECONOMIES, economyLabel } from '../shared/roundId.js';
 import { iconImgHtml, isGrenade } from './equipmentIcons.js';
+import { RADAR_SIZE, worldToRadar } from './mapCalibration.js';
 import { RadarRenderer, grenadeWorldPos } from './radarRenderer.js';
 import { Playback } from './playback.js';
 import { clockAt, timingFor } from './roundClock.js';
@@ -19,6 +20,10 @@ const MAX_ZOOM = 5;
 const DRAG_THRESHOLD = 5;
 /** Selected rounds at rest — fully drawn, then blitted dim. */
 const SELECTION_GHOST_ALPHA = 0.3;
+/** Heatmap accumulation resolution (radar space). */
+const HEAT_RES = 512;
+/** Sample player position about this often (seconds). */
+const HEAT_SAMPLE_SECONDS = 0.35;
 
 /** Most-played players on the focus team. */
 const PRIMARY_COLORS = ['#e8913c', '#5ad17a', '#5b9fd4', '#a855f7', '#e8b84a'];
@@ -138,12 +143,38 @@ export function createAnalyzerViewer({
   let sideFilter = 'T';
   /** @type {Set<number>} */
   let buyFilter = new Set(BUY_OPTIONS);
+  /** Situation chips: empty = any. Values: '5v4' | '4v4' | '4v5'. */
+  /** @type {Set<string>} */
+  let situationFilter = new Set();
+  /** Result chips: empty = any. Values: 'won' | 'lost'. */
+  /** @type {Set<string>} */
+  let resultFilter = new Set();
+  /** When true, only rounds where the bomb was planted. */
+  let afterplantOnly = false;
+  /** @type {'regular'|'heatmap'} */
+  let viewMode = 'regular';
+  /** Heatmap blur radius in radar pixels (tuned by slider). */
+  let heatmapSmooth = 18;
   /** @type {Set<string>} */
   let enabledPlayers = new Set();
   /** @type {Record<string, string>} */
   let playerColors = {};
   /** @type {{smoke:boolean,molotov:boolean,flash:boolean,he:boolean}} */
   let utilityVisible = { smoke: true, molotov: true, flash: true, he: true };
+
+  /** Offscreen heat accumulation + colorized layer. */
+  const heatAcc = document.createElement('canvas');
+  heatAcc.width = HEAT_RES;
+  heatAcc.height = HEAT_RES;
+  const heatAccCtx = heatAcc.getContext('2d', { willReadFrequently: true });
+  const heatColor = document.createElement('canvas');
+  heatColor.width = HEAT_RES;
+  heatColor.height = HEAT_RES;
+  const heatColorCtx = heatColor.getContext('2d');
+  /** @type {Map<string, HTMLCanvasElement>} mapCode -> alpha mask of radar playable area */
+  const radarMaskByMap = new Map();
+  /** @type {{ key: string, canvas: HTMLCanvasElement } | null} */
+  let heatLayerCache = null;
 
   /** Hit targets from the last overlay draw (screen CSS px relative to map). */
   /** @type {Array<{kind:'player'|'grenade', file:string, layer:object, playerId:string, name:string, roundNum:number, sx:number, sy:number, r:number}>} */
@@ -232,6 +263,78 @@ export function createAnalyzerViewer({
     if (idx === 1) return L.meta.econ1;
     if (idx === 2) return L.meta.econ2;
     return null;
+  }
+
+  /** Focus team won / lost this round (`''` if unknown). */
+  function resultOfFocus(L) {
+    if (!L.meta?.winner) return '';
+    const idx = teamIndex(L.meta, L.round);
+    if (!idx) return '';
+    return L.meta.winner === idx ? 'won' : 'lost';
+  }
+
+  function isAfterplant(L) {
+    if (!L.meta) return false;
+    if (L.meta.plantTick != null && Number.isFinite(L.meta.plantTick)) return true;
+    return (L.meta.events?.bomb || []).some((b) => b.type === 'planted');
+  }
+
+  /**
+   * Opening man-advantage for the focus team over the next 3 seconds:
+   * - `5v4` — opening kill, advantage held for 3s
+   * - `4v5` — opening death, disadvantage held for 3s
+   * - `4v4` — opening created 5v4/4v5 but equalized (or flipped) within 3s
+   * - `''` — no cross-team opening duel
+   */
+  function situationOfFocus(L) {
+    if (!L.meta) return '';
+    const idx = teamIndex(L.meta, L.round);
+    if (!idx) return '';
+    const players = L.meta.players || [];
+    const teamOf = new Map(players.map((p) => [p.id, p.team]));
+    const kills = [...(L.meta.events?.kills || [])].sort(
+      (a, b) => (a.tick || 0) - (b.tick || 0)
+    );
+    let opening = null;
+    for (const k of kills) {
+      const at = teamOf.get(k.attacker);
+      const vt = teamOf.get(k.victim);
+      if (!at || !vt || at === vt) continue;
+      opening = k;
+      break;
+    }
+    if (!opening) return '';
+
+    const focusGotKill = teamOf.get(opening.attacker) === idx;
+    const focusGotDeath = teamOf.get(opening.victim) === idx;
+    if (!focusGotKill && !focusGotDeath) return '';
+
+    let focusAlive = players.filter((p) => p.team === idx).length || 5;
+    let oppAlive = players.filter((p) => p.team && p.team !== idx).length || 5;
+    if (focusGotKill) oppAlive = Math.max(0, oppAlive - 1);
+    else focusAlive = Math.max(0, focusAlive - 1);
+
+    const tickRate = L.timing?.tickRate || L.meta.tickRate || 64;
+    const windowEnd = opening.tick + 3 * tickRate;
+
+    const equalized = () => {
+      if (focusGotKill) return focusAlive <= oppAlive;
+      return focusAlive >= oppAlive;
+    };
+
+    for (const k of kills) {
+      if (k.tick <= opening.tick) continue;
+      if (k.tick > windowEnd) break;
+      const vt = teamOf.get(k.victim);
+      if (!vt) continue;
+      if (vt === idx) focusAlive = Math.max(0, focusAlive - 1);
+      else oppAlive = Math.max(0, oppAlive - 1);
+      if (equalized()) return '4v4';
+    }
+
+    if (focusGotKill && focusAlive > oppAlive) return '5v4';
+    if (focusGotDeath && focusAlive < oppAlive) return '4v5';
+    return '4v4';
   }
 
   function focusDisplayName(meta, idx) {
@@ -478,12 +581,35 @@ export function createAnalyzerViewer({
     return 'all';
   }
 
+  /** Heatmap mode always inspects exactly one player. */
+  function ensureHeatmapPlayer(ranked = rankedPlayersForSide()) {
+    if (viewMode !== 'heatmap') return;
+    const kept = [...enabledPlayers].filter((id) => ranked.some((p) => p.id === id));
+    if (kept.length === 1) {
+      enabledPlayers = new Set(kept);
+      return;
+    }
+    const pick = kept[0] || ranked[0]?.id;
+    enabledPlayers = pick ? new Set([pick]) : new Set();
+  }
+
+  function heatmapPlayerId() {
+    if (enabledPlayers.size !== 1) return '';
+    return [...enabledPlayers][0];
+  }
+
   function renderFilters() {
     const ranked = rankedPlayersForSide();
     enabledPlayers = new Set([...enabledPlayers].filter((id) => ranked.some((p) => p.id === id)));
-    if (!enabledPlayers.size) enabledPlayers = new Set(ranked.map((p) => p.id));
+    if (viewMode === 'heatmap') ensureHeatmapPlayer(ranked);
+    else if (!enabledPlayers.size) enabledPlayers = new Set(ranked.map((p) => p.id));
     const tCount = layers.filter((L) => L.meta && sideOfFocus(L) === 'T').length;
     const ctCount = layers.filter((L) => L.meta && sideOfFocus(L) === 'CT').length;
+    const sideLayers = layers.filter((L) => L.meta && sideOfFocus(L) === sideFilter);
+    const sitCount = (key) => sideLayers.filter((L) => situationOfFocus(L) === key).length;
+    const wonCount = sideLayers.filter((L) => resultOfFocus(L) === 'won').length;
+    const lostCount = sideLayers.filter((L) => resultOfFocus(L) === 'lost').length;
+    const plantCount = sideLayers.filter((L) => isAfterplant(L)).length;
     teamEl.textContent = focusName || focusId || 'Team';
 
     const teamSwitcher =
@@ -513,8 +639,24 @@ export function createAnalyzerViewer({
       { key: 'he', weapon: 'hegrenade', title: 'HE' }
     ];
 
+    const sitBtn = (key, label) =>
+      `<button type="button" class="rv-az-seg-btn${
+        situationFilter.has(key) ? ' active' : ''
+      }" data-situation="${key}" title="${label}">${label} <small>${sitCount(key)}</small></button>`;
+
     panelEl.hidden = false;
     panelEl.innerHTML = `
+      <div class="rv-az-group">
+        <h4>View</h4>
+        <div class="rv-az-seg" role="group" aria-label="Analyzer view">
+          <button type="button" class="rv-az-seg-btn${
+            viewMode === 'regular' ? ' active' : ''
+          }" data-view="regular">Regular</button>
+          <button type="button" class="rv-az-seg-btn${
+            viewMode === 'heatmap' ? ' active' : ''
+          }" data-view="heatmap">Heatmap</button>
+        </div>
+      </div>
       ${teamSwitcher}
       <div class="rv-az-group">
         <h4>Side</h4>
@@ -536,7 +678,34 @@ export function createAnalyzerViewer({
         </select>
       </div>
       <div class="rv-az-group">
-        <h4>Players</h4>
+        <h4>Situation</h4>
+        <div class="rv-az-seg rv-az-multi" role="group" aria-label="Opening situation">
+          ${sitBtn('5v4', '5v4')}
+          ${sitBtn('4v4', '4v4')}
+          ${sitBtn('4v5', '4v5')}
+        </div>
+      </div>
+      <div class="rv-az-group">
+        <h4>Result</h4>
+        <div class="rv-az-seg rv-az-multi" role="group" aria-label="Round result">
+          <button type="button" class="rv-az-seg-btn${
+            resultFilter.has('won') ? ' active' : ''
+          }" data-result="won">Won <small>${wonCount}</small></button>
+          <button type="button" class="rv-az-seg-btn${
+            resultFilter.has('lost') ? ' active' : ''
+          }" data-result="lost">Lost <small>${lostCount}</small></button>
+        </div>
+      </div>
+      <div class="rv-az-group">
+        <h4>Bomb</h4>
+        <div class="rv-az-seg rv-az-multi" role="group" aria-label="Afterplant">
+          <button type="button" class="rv-az-seg-btn${
+            afterplantOnly ? ' active' : ''
+          }" data-afterplant="1">Afterplant <small>${plantCount}</small></button>
+        </div>
+      </div>
+      <div class="rv-az-group">
+        <h4>Players${viewMode === 'heatmap' ? ' <span class="rv-az-hint">(pick one)</span>' : ''}</h4>
         <div class="rv-az-players">
           ${
             ranked.length
@@ -557,7 +726,13 @@ export function createAnalyzerViewer({
           }
         </div>
       </div>
-      <div class="rv-az-group">
+      ${
+        viewMode === 'heatmap'
+          ? `<div class="rv-az-group">
+        <h4>Smoothing <span class="rv-az-hint" id="rv-az-smooth-val">${heatmapSmooth}</span></h4>
+        <input type="range" class="rv-az-smooth" id="rv-az-smooth" min="6" max="48" step="1" value="${heatmapSmooth}" aria-label="Heatmap smoothing" />
+      </div>`
+          : `<div class="rv-az-group">
         <h4>Utility</h4>
         <div class="rv-az-util-bar" role="group" aria-label="Utility">
           ${utilIcons
@@ -571,7 +746,18 @@ export function createAnalyzerViewer({
             )
             .join('')}
         </div>
-      </div>`;
+      </div>`
+      }`;
+  }
+
+  function pruneSelectionToVisible() {
+    if (!selectedFiles.length) return;
+    const ok = new Set(visibleLayers().map((L) => L.round.file));
+    const next = selectedFiles.filter((f) => ok.has(f));
+    if (next.length !== selectedFiles.length) {
+      selectedFiles = next;
+      renderSelectedPanel();
+    }
   }
 
   function visibleLayers() {
@@ -580,6 +766,15 @@ export function createAnalyzerViewer({
       if (sideOfFocus(L) !== sideFilter) return false;
       const econ = econOfFocus(L);
       if (econ == null || !buyFilter.has(econ)) return false;
+      if (situationFilter.size) {
+        const sit = situationOfFocus(L);
+        if (!sit || !situationFilter.has(sit)) return false;
+      }
+      if (resultFilter.size) {
+        const res = resultOfFocus(L);
+        if (!res || !resultFilter.has(res)) return false;
+      }
+      if (afterplantOnly && !isAfterplant(L)) return false;
       return true;
     });
   }
@@ -871,6 +1066,190 @@ export function createAnalyzerViewer({
     });
   }
 
+  /** White mask of playable radar pixels (drops black/transparent padding). */
+  function radarPlayableMask(mapCode, img) {
+    let mask = radarMaskByMap.get(mapCode);
+    if (mask) return mask;
+    const w = img.naturalWidth || img.width || RADAR_SIZE;
+    const h = img.naturalHeight || img.height || RADAR_SIZE;
+    mask = document.createElement('canvas');
+    mask.width = w;
+    mask.height = h;
+    const ctx = mask.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const lum = d[i] + d[i + 1] + d[i + 2];
+      const on = d[i + 3] > 20 && lum > 36;
+      d[i] = d[i + 1] = d[i + 2] = 255;
+      d[i + 3] = on ? 255 : 0;
+    }
+    ctx.putImageData(imgData, 0, 0);
+    radarMaskByMap.set(mapCode, mask);
+    return mask;
+  }
+
+  function heatColorAt(t) {
+    const x = Math.max(0, Math.min(1, t));
+    if (x < 0.3) {
+      const u = x / 0.3;
+      return [40 + 80 * u, 0 + 20 * u, 90 + 120 * u];
+    }
+    if (x < 0.55) {
+      const u = (x - 0.3) / 0.25;
+      return [120 + 100 * u, 20 + 40 * u, 210 - 40 * u];
+    }
+    if (x < 0.8) {
+      const u = (x - 0.55) / 0.25;
+      return [220 + 35 * u, 60 + 120 * u, 170 - 150 * u];
+    }
+    const u = (x - 0.8) / 0.2;
+    return [255, 180 + 75 * u, 20 * (1 - u)];
+  }
+
+  /**
+   * Radar-space samples for the heatmap player across visible rounds, up to
+   * the current scrub position in each round.
+   */
+  function collectHeatRadarPoints(pos) {
+    const playerId = heatmapPlayerId();
+    if (!playerId) return [];
+    const mapCode = renderer.mapCode;
+    const pts = [];
+    const state = {};
+    const radar = { x: 0, y: 0 };
+
+    for (const L of visibleLayers()) {
+      const track = store.track(L.round.file);
+      if (!track || !L.meta) continue;
+      const player = (L.meta.players || []).find((p) => p.id === playerId);
+      if (!player) continue;
+      const endTick = tickForLayer(L, pos);
+      const startTick = L.timing.freezeEndTick;
+      if (endTick < startTick) continue;
+      const step = Math.max(
+        track.stride || 1,
+        Math.round((L.timing.tickRate || 64) * HEAT_SAMPLE_SECONDS)
+      );
+      const events = L.meta.events || {};
+      for (let tick = startTick; tick <= endTick; tick += step) {
+        if (playerDeadAt(events, playerId, tick)) break;
+        track.sample(player.slot, tick, state);
+        if (!state.alive || !Number.isFinite(state.x) || !Number.isFinite(state.y)) continue;
+        worldToRadar(mapCode, state.x, state.y, radar);
+        if (radar.x < -8 || radar.y < -8 || radar.x > RADAR_SIZE + 8 || radar.y > RADAR_SIZE + 8) {
+          continue;
+        }
+        pts.push(radar.x, radar.y);
+      }
+    }
+    return pts;
+  }
+
+  /** Build (or reuse) a HEAT_RES colorized heat layer clipped to the radar mask. */
+  function buildHeatLayer(pos) {
+    const playerId = heatmapPlayerId();
+    const visible = visibleLayers();
+    const files = visible.map((L) => L.round.file).join('\0');
+    const posKey = Math.round(pos * 8);
+    const key = [
+      renderer.mapCode,
+      playerId,
+      files,
+      posKey,
+      heatmapSmooth,
+      visible.length
+    ].join('|');
+    if (heatLayerCache?.key === key) return heatLayerCache.canvas;
+
+    const pts = collectHeatRadarPoints(pos);
+    heatAccCtx.clearRect(0, 0, HEAT_RES, HEAT_RES);
+    heatAccCtx.globalCompositeOperation = 'lighter';
+    const scale = HEAT_RES / RADAR_SIZE;
+    const radius = Math.max(4, heatmapSmooth * scale);
+    const alpha = pts.length > 8000 ? 0.035 : pts.length > 3000 ? 0.05 : 0.07;
+
+    for (let i = 0; i < pts.length; i += 2) {
+      const x = pts[i] * scale;
+      const y = pts[i + 1] * scale;
+      const g = heatAccCtx.createRadialGradient(x, y, 0, x, y, radius);
+      g.addColorStop(0, `rgba(255,255,255,${alpha})`);
+      g.addColorStop(0.55, `rgba(255,255,255,${alpha * 0.35})`);
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      heatAccCtx.fillStyle = g;
+      heatAccCtx.beginPath();
+      heatAccCtx.arc(x, y, radius, 0, Math.PI * 2);
+      heatAccCtx.fill();
+    }
+    heatAccCtx.globalCompositeOperation = 'source-over';
+
+    const src = heatAccCtx.getImageData(0, 0, HEAT_RES, HEAT_RES);
+    const out = heatColorCtx.createImageData(HEAT_RES, HEAT_RES);
+    const s = src.data;
+    const d = out.data;
+    let maxV = 1;
+    for (let i = 0; i < s.length; i += 4) if (s[i] > maxV) maxV = s[i];
+    for (let i = 0; i < s.length; i += 4) {
+      const v = s[i];
+      if (v < 2) {
+        d[i + 3] = 0;
+        continue;
+      }
+      const t = Math.min(1, v / maxV);
+      const [r, g, b] = heatColorAt(t);
+      d[i] = Math.round(r);
+      d[i + 1] = Math.round(g);
+      d[i + 2] = Math.round(b);
+      d[i + 3] = Math.min(230, Math.round(40 + t * 200));
+    }
+    heatColorCtx.putImageData(out, 0, 0);
+
+    // Clip to playable radar pixels (not letterbox / black padding).
+    if (renderer.image && renderer.mapCode) {
+      const mask = radarPlayableMask(renderer.mapCode, renderer.image);
+      heatColorCtx.globalCompositeOperation = 'destination-in';
+      heatColorCtx.drawImage(mask, 0, 0, HEAT_RES, HEAT_RES);
+      heatColorCtx.globalCompositeOperation = 'source-over';
+    }
+
+    // Snapshot into a cache canvas (heatColor is reused next build).
+    const snap = document.createElement('canvas');
+    snap.width = HEAT_RES;
+    snap.height = HEAT_RES;
+    snap.getContext('2d').drawImage(heatColor, 0, 0);
+    heatLayerCache = { key, canvas: snap };
+    return snap;
+  }
+
+  function paintHeatmap(pos) {
+    const playerId = heatmapPlayerId();
+    renderer.paintMapBase({ mapAlpha: 1 });
+    if (!playerId) {
+      clockEl.textContent = 'Pick one player';
+      return;
+    }
+    if (!renderer.image) return;
+    const layer = buildHeatLayer(pos);
+    const { w, h } = renderer.resize();
+    const t = renderer.viewTransform(w, h);
+    const ctx = renderer.ctx;
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.globalAlpha = 0.92;
+    ctx.drawImage(layer, t.ox, t.oy, RADAR_SIZE * t.scale, RADAR_SIZE * t.scale);
+    ctx.restore();
+
+    // Clock from first visible round at scrub position.
+    const first = visibleLayers()[0];
+    if (first) {
+      const tick = tickForLayer(first, pos);
+      clockEl.textContent = clockAt(first.timing, tick).label;
+    } else {
+      clockEl.textContent = '—';
+    }
+  }
+
   function draw(pos) {
     const visible = visibleLayers();
     countEl.textContent = `${visible.length} / ${layers.length} rounds`;
@@ -880,6 +1259,19 @@ export function createAnalyzerViewer({
     if (!mapMeta) {
       renderer.paintMapBase({ mapAlpha: 1 });
       hideTip();
+      return;
+    }
+
+    if (viewMode === 'heatmap') {
+      hideTip();
+      hoverHit = null;
+      paintHeatmap(pos);
+      const pct = playback.duration ? (pos / playback.duration) * 100 : 0;
+      fillEl.style.width = `${pct}%`;
+      handleEl.style.left = `${pct}%`;
+      const totalLoaded = layers.filter((L) => store.track(L.round.file)).length;
+      loadEl.textContent =
+        totalLoaded === layers.length ? '' : `${totalLoaded}/${layers.length} loaded`;
       return;
     }
 
@@ -1451,19 +1843,71 @@ export function createAnalyzerViewer({
       finishFocusSetup();
       return;
     }
+    const viewBtn = e.target.closest('[data-view]');
+    if (viewBtn) {
+      const next = viewBtn.dataset.view === 'heatmap' ? 'heatmap' : 'regular';
+      if (next === viewMode) return;
+      viewMode = next;
+      heatLayerCache = null;
+      if (viewMode === 'heatmap') ensureHeatmapPlayer();
+      hideTip();
+      hoverHit = null;
+      renderFilters();
+      draw(playback.position);
+      return;
+    }
     const sideBtn = e.target.closest('[data-side]');
     if (sideBtn) {
       sideFilter = sideBtn.dataset.side === 'CT' ? 'CT' : 'T';
       resetPlayersForSide();
+      heatLayerCache = null;
       renderFilters();
+      pruneSelectionToVisible();
+      draw(playback.position);
+      return;
+    }
+    const sitBtn = e.target.closest('[data-situation]');
+    if (sitBtn) {
+      const key = sitBtn.dataset.situation;
+      if (situationFilter.has(key)) situationFilter.delete(key);
+      else situationFilter.add(key);
+      heatLayerCache = null;
+      renderFilters();
+      pruneSelectionToVisible();
+      draw(playback.position);
+      return;
+    }
+    const resultBtn = e.target.closest('[data-result]');
+    if (resultBtn) {
+      const key = resultBtn.dataset.result;
+      if (resultFilter.has(key)) resultFilter.delete(key);
+      else resultFilter.add(key);
+      heatLayerCache = null;
+      renderFilters();
+      pruneSelectionToVisible();
+      draw(playback.position);
+      return;
+    }
+    const plantBtn = e.target.closest('[data-afterplant]');
+    if (plantBtn) {
+      afterplantOnly = !afterplantOnly;
+      heatLayerCache = null;
+      renderFilters();
+      pruneSelectionToVisible();
       draw(playback.position);
       return;
     }
     const playerBtn = e.target.closest('[data-player]');
     if (playerBtn) {
       const id = playerBtn.dataset.player;
-      if (enabledPlayers.has(id)) enabledPlayers.delete(id);
-      else enabledPlayers.add(id);
+      if (viewMode === 'heatmap') {
+        enabledPlayers = new Set([id]);
+      } else if (enabledPlayers.has(id)) {
+        enabledPlayers.delete(id);
+      } else {
+        enabledPlayers.add(id);
+      }
+      heatLayerCache = null;
       renderFilters();
       draw(playback.position);
       return;
@@ -1479,10 +1923,33 @@ export function createAnalyzerViewer({
 
   panelEl.addEventListener('change', (e) => {
     const buy = e.target.closest('#rv-az-buy');
-    if (!buy) return;
-    const v = buy.value;
-    if (v === 'all') buyFilter = new Set(BUY_OPTIONS);
-    else buyFilter = new Set([Number(v)]);
+    if (buy) {
+      const v = buy.value;
+      if (v === 'all') buyFilter = new Set(BUY_OPTIONS);
+      else buyFilter = new Set([Number(v)]);
+      heatLayerCache = null;
+      renderFilters();
+      pruneSelectionToVisible();
+      draw(playback.position);
+      return;
+    }
+    const smooth = e.target.closest('#rv-az-smooth');
+    if (smooth) {
+      heatmapSmooth = Number(smooth.value) || 18;
+      heatLayerCache = null;
+      const hint = panelEl.querySelector('#rv-az-smooth-val');
+      if (hint) hint.textContent = String(heatmapSmooth);
+      draw(playback.position);
+    }
+  });
+
+  panelEl.addEventListener('input', (e) => {
+    const smooth = e.target.closest('#rv-az-smooth');
+    if (!smooth) return;
+    heatmapSmooth = Number(smooth.value) || 18;
+    heatLayerCache = null;
+    const hint = panelEl.querySelector('#rv-az-smooth-val');
+    if (hint) hint.textContent = String(heatmapSmooth);
     draw(playback.position);
   });
 
@@ -1546,7 +2013,10 @@ export function createAnalyzerViewer({
   window.addEventListener('resize', onResize);
 
   const offStore = store.onChange((event) => {
-    if (event.type === 'macro-progress' || event.type === 'full') draw(playback.position);
+    if (event.type === 'macro-progress' || event.type === 'full') {
+      heatLayerCache = null;
+      draw(playback.position);
+    }
   });
 
   (async () => {
