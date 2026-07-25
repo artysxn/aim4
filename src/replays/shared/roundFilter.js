@@ -56,9 +56,20 @@ export function matchesQuery(meta, query = {}) {
   const teams = asSet(query.teams);
   if (teams && !teams.has(meta.team1) && !teams.has(meta.team2)) return false;
 
-  if (query.wonBy) {
+  // wonBy may be one id or several (merged team aliases).
+  const wonBy = asSet(
+    Array.isArray(query.wonBy)
+      ? query.wonBy
+      : query.wonBy
+        ? String(query.wonBy)
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : null
+  );
+  if (wonBy) {
     const winner = meta.winner === 1 ? meta.team1 : meta.team2;
-    if (winner !== query.wonBy) return false;
+    if (!wonBy.has(winner)) return false;
   }
 
   const economies = asSet(query.economies);

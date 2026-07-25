@@ -89,7 +89,13 @@ const ICON_FILES = new Set([
   'xm1014'
 ]);
 
+/**
+ * demoparser2's WEAPINDICIES returns display names ("AK-47", "Desert Eagle",
+ * "Karambit", …). Older paths use weapon_* stems. Everything must land on an
+ * ICON_FILES / GUN_PRIORITY key or inventoryAt falls through to knife/pistol.
+ */
 const ALIASES = {
+  // Pistols
   weapon_hkp2000: 'hkp2000',
   hkp2000: 'hkp2000',
   p2000: 'hkp2000',
@@ -102,13 +108,36 @@ const ALIASES = {
   weapon_glock: 'glock',
   glock_18: 'glock',
   glock18: 'glock',
-  // Rifles: demoparser / inventory strings vary (AK-47, ak_47, weapon_ak47…).
-  // Unrecognized names fall through inventoryAt to the sidearm — the glock/usp bug.
+  weapon_deagle: 'deagle',
+  desert_eagle: 'deagle',
+  deserteagle: 'deagle',
+  weapon_revolver: 'revolver',
+  r8_revolver: 'revolver',
+  r8revolver: 'revolver',
+  weapon_cz75a: 'cz75a',
+  cz75: 'cz75a',
+  cz75_auto: 'cz75a',
+  cz75auto: 'cz75a',
+  weapon_fiveseven: 'fiveseven',
+  five_seven: 'fiveseven',
+  fiveseven: 'fiveseven',
+  weapon_tec9: 'tec9',
+  tec_9: 'tec9',
+  weapon_elite: 'elite',
+  dual_berettas: 'elite',
+  dualberettas: 'elite',
+  weapon_p250: 'p250',
+  weapon_taser: 'taser',
+  zeus: 'taser',
+  zeus_x27: 'taser',
+  zeusx27: 'taser',
+
+  // Rifles / snipers
   weapon_ak47: 'ak47',
   ak_47: 'ak47',
   ak47: 'ak47',
   weapon_m4a1: 'm4a1',
-  m4a4: 'm4a1', // CS item index name for the unsilenced M4
+  m4a4: 'm4a1',
   m4_a4: 'm4a1',
   weapon_m4a1_silencer: 'm4a1_silencer',
   m4a1_s: 'm4a1_silencer',
@@ -121,12 +150,17 @@ const ALIASES = {
   weapon_galilar: 'galilar',
   galil: 'galilar',
   galil_ar: 'galilar',
+  galilar: 'galilar',
   weapon_famas: 'famas',
   weapon_awp: 'awp',
   weapon_ssg08: 'ssg08',
   ssg_08: 'ssg08',
+  ssg08: 'ssg08',
   weapon_scar20: 'scar20',
+  scar_20: 'scar20',
   weapon_g3sg1: 'g3sg1',
+
+  // SMGs / heavy
   weapon_mac10: 'mac10',
   mac_10: 'mac10',
   weapon_mp9: 'mp9',
@@ -137,44 +171,76 @@ const ALIASES = {
   ump_45: 'ump45',
   weapon_p90: 'p90',
   weapon_bizon: 'bizon',
+  pp_bizon: 'bizon',
+  ppbizon: 'bizon',
   weapon_nova: 'nova',
   weapon_xm1014: 'xm1014',
   weapon_mag7: 'mag7',
+  mag_7: 'mag7',
   weapon_sawedoff: 'sawedoff',
+  sawed_off: 'sawedoff',
+  sawedoff: 'sawedoff',
   weapon_m249: 'm249',
   weapon_negev: 'negev',
-  weapon_deagle: 'deagle',
-  weapon_revolver: 'revolver',
-  r8revolver: 'revolver',
-  weapon_cz75a: 'cz75a',
-  cz75: 'cz75a',
-  weapon_fiveseven: 'fiveseven',
-  five_seven: 'fiveseven',
-  weapon_tec9: 'tec9',
-  tec_9: 'tec9',
-  weapon_elite: 'elite',
-  weapon_p250: 'p250',
-  weapon_taser: 'taser',
-  zeus: 'taser',
+
+  // Utility / gear
   item_defuser: 'defuser',
   defuser: 'defuser',
+  defuse_kit: 'defuser',
   item_cutters: 'defuser',
   item_kevlar: 'kevlar',
+  kevlar_vest: 'kevlar',
+  kevlar_helmet: 'assaultsuit',
   item_assaultsuit: 'assaultsuit',
   item_heavyassaultsuit: 'heavy_armor',
+  heavy_assault_suit: 'heavy_armor',
   weapon_c4: 'c4',
   c4: 'c4',
+  c4_explosive: 'c4',
+  inferno: 'molotov',
+  firebomb: 'molotov',
+
+  // Knives (display names from WEAPINDICIES → knife stem)
   weapon_knife: 'knife',
   weapon_knife_t: 'knife_t',
+  knife_t: 'knife_t',
   weapon_bayonet: 'bayonet',
-  inferno: 'molotov',
-  firebomb: 'molotov'
+  bayonet: 'bayonet',
+  classic_knife: 'knife_css',
+  flip_knife: 'knife_flip',
+  gut_knife: 'knife_gut',
+  karambit: 'knife_karambit',
+  m9_bayonet: 'knife_m9_bayonet',
+  huntsman_knife: 'knife_tactical',
+  falchion_knife: 'knife_falchion',
+  bowie_knife: 'knife_survival_bowie',
+  butterfly_knife: 'knife_butterfly',
+  shadow_daggers: 'knife_push',
+  paracord_knife: 'knife_cord',
+  survival_knife: 'knife_canis',
+  ursus_knife: 'knife_ursus',
+  navaja_knife: 'knife_gypsy_jackknife',
+  nomad_knife: 'knife_outdoor',
+  stiletto_knife: 'knife_stiletto',
+  talon_knife: 'knife_widowmaker',
+  skeleton_knife: 'knife_skeleton',
+  kukri_knife: 'knife_kukri'
 };
+
+/** Knife stems / display tokens that are not `knife*` prefixes. */
+const KNIFE_NAMES = new Set([
+  'bayonet',
+  'karambit',
+  'melee',
+  'knife',
+  'knife_t',
+  ...Object.values(ALIASES).filter((v) => v === 'knife' || v.startsWith('knife') || v === 'bayonet')
+]);
 
 const GRENADES = ['flashbang', 'smokegrenade', 'hegrenade', 'molotov', 'incgrenade', 'decoy'];
 
 /**
- * demoparser2 spellings vary ("Smoke Grenade", "weapon_smokegrenade", …).
+ * demoparser2 spellings vary ("Smoke Grenade", "High Explosive Grenade", …).
  * Collapse them to the dictionary keys we draw / icon against.
  */
 export function normalizeGrenadeType(name) {
@@ -189,7 +255,16 @@ export function normalizeGrenadeType(name) {
   if (raw.includes('molotov') || raw.includes('firebomb')) return 'molotov';
   if (raw.includes('incen')) return 'incgrenade';
   if (raw.includes('decoy')) return 'decoy';
-  if (raw === 'he' || raw.includes('hegrenade') || raw.includes('frag')) return 'hegrenade';
+  // "High Explosive Grenade" → highexplosivegrenade (no "hegrenade" substring).
+  if (
+    raw === 'he' ||
+    raw.includes('hegrenade') ||
+    raw.includes('frag') ||
+    raw.includes('highexplosive') ||
+    raw === 'explosivegrenade'
+  ) {
+    return 'hegrenade';
+  }
   if (GRENADES.includes(raw)) return raw;
   return raw;
 }
@@ -240,9 +315,12 @@ export function bareWeapon(name) {
     .toLowerCase()
     .replace(/^weapon_/, '')
     .replace(/^item_/, '')
-    // "AK-47" / "M4A1-S" → ak47 / m4a1s (hyphens are not part of icon stems).
+    // "AK-47" / "M4A1-S" / "Five-SeveN" → ak47 / m4a1s / fiveseven
     .replace(/-/g, '')
+    .replace(/&/g, '')
     .replace(/\s+/g, '_');
+  // Collapse "pp__bizon" style leftovers from stripping punctuation.
+  s = s.replace(/_+/g, '_').replace(/^_|_$/g, '');
   if (ALIASES[s]) s = ALIASES[s];
   if (ALIASES[`weapon_${s}`]) s = ALIASES[`weapon_${s}`];
   // Underscored digits from older spellings: ak_47 → ak47 (keep m4a1_silencer).
@@ -254,6 +332,11 @@ export function bareWeapon(name) {
   if (s === 'p2000' || s === 'hk_p2000') s = 'hkp2000';
   if (s === 'm4a4') s = 'm4a1';
   if (s === 'm4a1s' || s === 'm4a1_s') s = 'm4a1_silencer';
+  // "Flip Knife" / "Ursus Knife" → already aliased; leftover "*_knife" → knife.
+  if (s.endsWith('_knife') || s.endsWith('knife')) {
+    if (ALIASES[s]) s = ALIASES[s];
+    else if (!s.startsWith('knife')) s = ALIASES[s] || 'knife';
+  }
   return s;
 }
 
@@ -262,11 +345,13 @@ export function iconKey(name) {
   const bare = bareWeapon(name);
   if (!bare || bare === 'none') return '';
   if (ICON_FILES.has(bare)) return bare;
-  if (bare.startsWith('knife')) return ICON_FILES.has(bare) ? bare : 'knife';
+  if (isKnife(bare)) return ICON_FILES.has(bare) ? bare : 'knife';
   // Last-chance pistol / common renames.
   if (bare.includes('usp')) return 'usp_silencer';
   if (bare.includes('glock')) return 'glock';
   if (bare.includes('p2000') || bare.includes('hkp2000')) return 'hkp2000';
+  if (bare.includes('deagle') || bare.includes('desert')) return 'deagle';
+  if (bare.includes('bizon')) return 'bizon';
   return '';
 }
 
@@ -276,19 +361,36 @@ export function iconSrc(name) {
 }
 
 export function isGrenade(name) {
-  const n = normalizeGrenadeType(name) || bareWeapon(name);
+  const n = normalizeGrenadeType(name);
   return GRENADES.includes(n);
 }
 
 export function isKnife(name) {
   const b = bareWeapon(name);
-  return b === 'knife' || b.startsWith('knife') || b === 'bayonet' || b === 'melee';
+  if (!b) return false;
+  if (b === 'knife' || b.startsWith('knife') || b === 'bayonet' || b === 'melee') return true;
+  if (KNIFE_NAMES.has(b)) return true;
+  // Raw display leftovers before aliasing: "karambit", "flip_knife".
+  const raw = String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '')
+    .replace(/\s+/g, '_');
+  return (
+    raw.endsWith('_knife') ||
+    raw.endsWith('knife') ||
+    raw === 'karambit' ||
+    raw === 'bayonet' ||
+    raw === 'shadow_daggers'
+  );
 }
 
 export function isGun(name) {
   const b = bareWeapon(name);
-  if (!b || b === 'none' || b === 'c4' || isGrenade(b) || isKnife(b)) return false;
-  if (b === 'defuser' || b === 'kevlar' || b === 'armor' || b === 'helmet') return false;
+  if (!b || b === 'none' || b === 'c4' || isGrenade(name) || isKnife(name)) return false;
+  if (b === 'defuser' || b === 'kevlar' || b === 'armor' || b === 'helmet' || b === 'assaultsuit') {
+    return false;
+  }
   return GUN_PRIORITY.includes(b) || ICON_FILES.has(b);
 }
 
@@ -329,12 +431,15 @@ export function inventoryAt({ loadout, grenades, playerId, tick, state, activeWe
 
   const guns = items.filter(isGun);
   let primary = '';
+  // Prefer the live held weapon. Only fall back to freezetime loadout when the
+  // active name is missing/unrecognized (demoparser display-name gaps used to
+  // make rifles look like knives here).
   if (active && isGun(active)) primary = active;
+  else if (active && isKnife(active)) primary = active;
   else if (guns.length) {
     guns.sort((a, b) => gunRank(a) - gunRank(b));
     primary = guns[0];
-  } else if (active && isKnife(active)) primary = active;
-  else {
+  } else {
     const knife = items.find(isKnife);
     if (knife) primary = knife;
   }

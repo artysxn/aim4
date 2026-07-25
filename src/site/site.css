@@ -327,6 +327,21 @@ a {
   gap: 8px;
 }
 
+.rp-text-btn {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: 500 13px var(--font-body);
+  cursor: pointer;
+}
+
+.rp-text-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+
 .page-head {
   position: sticky;
   top: 0;

@@ -156,7 +156,7 @@ export async function findRounds(query = {}, limit = 2000) {
   put('teams', query.teams);
   put('players', query.players);
   put('playerMode', query.playerMode);
-  put('wonBy', query.wonBy);
+  put('wonBy', Array.isArray(query.wonBy) ? query.wonBy : query.wonBy);
   put('economies', query.economies);
   put('teamEconomies', query.teamEconomies);
   put('teamEconomyOf', query.teamEconomyOf);

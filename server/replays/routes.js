@@ -118,7 +118,10 @@ function queryFromUrl(url) {
     teams: csv(url, 'teams'),
     players: csv(url, 'players'),
     playerMode: url.searchParams.get('playerMode') || 'all',
-    wonBy: url.searchParams.get('wonBy') || undefined,
+    // One team id, or several comma-separated aliases for a merged team.
+    wonBy: csv(url, 'wonBy').length
+      ? csv(url, 'wonBy')
+      : url.searchParams.get('wonBy') || undefined,
     economies: nums(url, 'economies'),
     teamEconomies: nums(url, 'teamEconomies'),
     teamEconomyOf: url.searchParams.get('teamEconomyOf') || undefined,

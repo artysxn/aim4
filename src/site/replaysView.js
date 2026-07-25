@@ -41,6 +41,16 @@ export function initReplaysView({ escapeHtml }) {
   const filtersEl = document.getElementById('rp-filters');
   const resultEl = document.getElementById('rp-result');
   const parserEl = document.getElementById('rp-parser');
+  const headActions = document.getElementById('rp-head-actions');
+  const uploadBtn = document.getElementById('rp-upload-btn');
+  const playlistsBtn = document.getElementById('rp-playlists-btn');
+  const libraryEl = document.getElementById('rp-library');
+  const uploadPageEl = document.getElementById('rp-upload-page');
+  const playlistsPageEl = document.getElementById('rp-playlists-page');
+  const playlistsBody = document.getElementById('rp-pl-body');
+  const playlistsBack = document.getElementById('rp-playlists-back');
+  const uploadBack = document.getElementById('rp-upload-back');
+  const pageTitleEl = document.getElementById('page-title');
 
   let demos = [];
   let rounds = [];
@@ -57,6 +67,15 @@ export function initReplaysView({ escapeHtml }) {
   let viewerModule = null;
   /** Round name already opened from the URL, so it opens once per link. */
   let openedRound = '';
+  /** @type {'library' | 'upload' | 'playlists'} */
+  let subpage = 'library';
+  let teamSearch = '';
+  let playerSearch = '';
+  /** @type {{ key: string, name: string, shortIds: string[] }[]} */
+  let teamClusters = [];
+  /** @type {Map<string, { key: string, name: string, shortIds: string[] }>} */
+  let teamClustersByKey = new Map();
+  let playlistLists = [];
 
   const filters = {
     maps: new Set(),
@@ -69,6 +88,7 @@ export function initReplaysView({ escapeHtml }) {
   };
 
   function setStatus(msg, isError = false) {
+    if (!statusEl) return;
     statusEl.textContent = msg || '';
     statusEl.classList.toggle('is-error', isError);
   }
@@ -76,7 +96,7 @@ export function initReplaysView({ escapeHtml }) {
   // ---- quota + parser -----------------------------------------------------
 
   function renderQuota(usage) {
-    if (!usage) return;
+    if (!usage || !quotaEl) return;
     const pctDemos = (usage.demos / usage.maxDemos) * 100;
     const pctBytes = (usage.bytes / usage.maxBytes) * 100;
     quotaEl.innerHTML = `
@@ -93,7 +113,7 @@ export function initReplaysView({ escapeHtml }) {
   }
 
   function renderParser(parser) {
-    if (!parser) return;
+    if (!parser || !parserEl) return;
     // Local .aim4replay import always works; warn only that raw .dem upload
     // cannot be parsed on this host.
     parserEl.hidden = parser.available;
@@ -104,7 +124,7 @@ export function initReplaysView({ escapeHtml }) {
     }
   }
 
-  // ---- demo list ----------------------------------------------------------
+  // ---- demo list helpers --------------------------------------------------
 
   function initials(name) {
     const s = String(name || '?').trim();
@@ -121,13 +141,64 @@ export function initReplaysView({ escapeHtml }) {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
+  function matchBlockHtml(t1, t2, score) {
+    return `
+      <div class="rp-row-match">
+        <div class="rp-side home">
+          <span class="rp-crest">${escapeHtml(initials(t1))}</span>
+          <span class="rp-side-name">${escapeHtml(t1)}</span>
+        </div>
+        <div class="rp-score">${escapeHtml(score)}</div>
+        <div class="rp-side away">
+          <span class="rp-crest">${escapeHtml(initials(t2))}</span>
+          <span class="rp-side-name">${escapeHtml(t2)}</span>
+        </div>
+      </div>`;
+  }
+
+  function demoScoreText(d) {
+    const status = d?.status || 'ready';
+    if (d?.score && status === 'ready') return `${d.score.team1} - ${d.score.team2}`;
+    if (status === 'ready') return '0 - 0';
+    return '…';
+  }
+
+  function deleteIconHtml() {
+    return `<svg viewBox="0 -960 960 960" width="16" height="16" fill="currentColor"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>`;
+  }
+
+  function demoActionsHtml(d) {
+    const status = d.status || 'ready';
+    const id = escapeHtml(d.id);
+    return `
+      <div class="rp-row-actions">
+        ${status === 'ready' ? `<button type="button" class="rp-btn-replay" data-open="${id}">▶ Replay</button>` : ''}
+        ${status === 'error' ? `<button type="button" class="btn btn-sm" data-retry="${id}">Retry</button>` : ''}
+        ${
+          status === 'ready'
+            ? `<button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>`
+            : ''
+        }
+        <button type="button" class="rp-btn-icon danger" data-delete="${id}" title="Delete">
+          ${deleteIconHtml()}
+        </button>
+      </div>`;
+  }
+
+  function demoMapsHtml(d) {
+    const status = d.status || 'ready';
+    const mapName = d.mapName || (d.map ? MAPS[d.map]?.name : '') || '';
+    return `
+      <div class="rp-maps">
+        ${mapName ? `<span class="rp-map-pill">${escapeHtml(mapName)}</span>` : ''}
+        ${status === 'ready' && d.roundCount ? `<span class="rp-map-pill">${d.roundCount} rounds</span>` : ''}
+      </div>`;
+  }
+
   function demoRow(d) {
     const status = d.status || 'ready';
     const t1 = d.team1?.name || 'Team 1';
     const t2 = d.team2?.name || 'Team 2';
-    const score =
-      d.score && status === 'ready' ? `${d.score.team1} - ${d.score.team2}` : status === 'ready' ? '—' : '';
-    const mapName = d.mapName || (d.map ? MAPS[d.map]?.name : '') || '';
 
     let state = '';
     if (status === 'parsing') {
@@ -150,41 +221,9 @@ export function initReplaysView({ escapeHtml }) {
     return `
       <div class="rp-row ${status}" data-id="${escapeHtml(d.id)}">
         <div class="rp-row-when">${escapeHtml(formatWhen(d.uploadedAt || d.parsedAt))}</div>
-        <div class="rp-row-match">
-          <div class="rp-side home">
-            <span class="rp-crest">${escapeHtml(initials(t1))}</span>
-            <span class="rp-side-name">${escapeHtml(t1)}</span>
-          </div>
-          <div class="rp-score">${escapeHtml(score || (status === 'ready' ? '0 - 0' : '…'))}</div>
-          <div class="rp-side away">
-            <span class="rp-crest">${escapeHtml(initials(t2))}</span>
-            <span class="rp-side-name">${escapeHtml(t2)}</span>
-          </div>
-        </div>
-        <div class="rp-row-actions">
-          ${
-            status === 'ready'
-              ? `<button type="button" class="rp-btn-replay" data-open="${escapeHtml(d.id)}">▶ Replay</button>`
-              : ''
-          }
-          ${
-            status === 'error'
-              ? `<button type="button" class="btn btn-sm" data-retry="${escapeHtml(d.id)}">Retry</button>`
-              : ''
-          }
-          ${
-            status === 'ready'
-              ? `<button type="button" class="rp-btn-icon" data-rename="${escapeHtml(d.id)}" title="Rename teams">Aa</button>`
-              : ''
-          }
-          <button type="button" class="rp-btn-icon danger" data-delete="${escapeHtml(d.id)}" title="Delete">
-            <svg viewBox="0 -960 960 960" width="16" height="16" fill="currentColor"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>
-          </button>
-        </div>
-        <div class="rp-maps">
-          ${mapName ? `<span class="rp-map-pill">${escapeHtml(mapName)}</span>` : ''}
-          ${status === 'ready' && d.roundCount ? `<span class="rp-map-pill">${d.roundCount} rounds</span>` : ''}
-        </div>
+        ${matchBlockHtml(t1, t2, demoScoreText(d))}
+        ${demoActionsHtml(d)}
+        ${demoMapsHtml(d)}
         ${
           state
             ? `<div class="rp-row-state">${escapeHtml(state)}${
@@ -196,16 +235,17 @@ export function initReplaysView({ escapeHtml }) {
   }
 
   function renderDemos() {
+    if (!listEl) return;
     listEl.innerHTML = demos.length
       ? demos.map(demoRow).join('')
       : `<p class="view-empty">No replays yet. Upload a ${PACKAGE_EXT} package (or a .dem).</p>`;
   }
 
-  listEl.addEventListener('click', async (e) => {
-    const open = e.target.closest('[data-open]');
-    const del = e.target.closest('[data-delete]');
-    const retry = e.target.closest('[data-retry]');
-    const rename = e.target.closest('[data-rename]');
+  async function handleDemoAction(target) {
+    const open = target.closest('[data-open]');
+    const del = target.closest('[data-delete]');
+    const retry = target.closest('[data-retry]');
+    const rename = target.closest('[data-rename]');
 
     if (open) {
       const demo = demos.find((d) => d.id === open.dataset.open);
@@ -217,24 +257,25 @@ export function initReplaysView({ escapeHtml }) {
         }));
         launchViewer(list, 'timeline', `${demo.team1?.name || 'Team 1'} vs ${demo.team2?.name || 'Team 2'}`);
       }
-      return;
+      return true;
     }
     if (rename) {
       const demo = demos.find((d) => d.id === rename.dataset.rename);
       if (demo) await promptTeamNames(demo);
-      return;
+      return true;
     }
     if (retry) {
       await reparseDemo(retry.dataset.retry).catch((err) => setStatus(err.message, true));
       refresh();
-      return;
+      return true;
     }
     if (del) {
       const demo = demos.find((d) => d.id === del.dataset.delete);
-      const label = demo?.team1 && demo?.team2
-        ? `${demo.team1.name} vs ${demo.team2.name}`
-        : demo?.filename || 'this replay';
-      if (!window.confirm(`Delete ${label} and every round parsed from it?`)) return;
+      const label =
+        demo?.team1 && demo?.team2
+          ? `${demo.team1.name} vs ${demo.team2.name}`
+          : demo?.filename || 'this replay';
+      if (!window.confirm(`Delete ${label} and every round parsed from it?`)) return true;
       try {
         const res = await deleteDemo(del.dataset.delete);
         renderQuota(res.usage);
@@ -243,7 +284,13 @@ export function initReplaysView({ escapeHtml }) {
         setStatus(err.message, true);
       }
       refresh();
+      return true;
     }
+    return false;
+  }
+
+  listEl?.addEventListener('click', async (e) => {
+    await handleDemoAction(e.target);
   });
 
   // ---- team naming --------------------------------------------------------
@@ -310,18 +357,14 @@ export function initReplaysView({ escapeHtml }) {
       return;
     }
     setStatus(`Uploading ${name}…`);
-    dropEl.classList.add('busy');
+    dropEl?.classList.add('busy');
     try {
       const upload = isPackage ? uploadImport : uploadDemo;
       const res = await upload(file, (pct) => {
         setStatus(`Uploading ${name}: ${pct}%`);
       });
       renderQuota(res.usage);
-      setStatus(
-        isPackage
-          ? 'Import complete. Rounds are ready.'
-          : 'Upload complete. Parsing started.'
-      );
+      setStatus(isPackage ? 'Import complete. Rounds are ready.' : 'Upload complete. Parsing started.');
       await refresh();
       if (isPackage && res.demo) {
         await promptTeamNames(res.demo);
@@ -329,13 +372,13 @@ export function initReplaysView({ escapeHtml }) {
     } catch (err) {
       setStatus(err.message, true);
     } finally {
-      dropEl.classList.remove('busy');
-      uploadInput.value = '';
+      dropEl?.classList.remove('busy');
+      if (uploadInput) uploadInput.value = '';
     }
   }
 
   uploadInput?.addEventListener('change', () => startUpload(uploadInput.files?.[0]));
-  dropEl?.addEventListener('click', () => uploadInput.click());
+  dropEl?.addEventListener('click', () => uploadInput?.click());
   dropEl?.addEventListener('dragover', (e) => {
     e.preventDefault();
     dropEl.classList.add('over');
@@ -347,26 +390,137 @@ export function initReplaysView({ escapeHtml }) {
     startUpload(e.dataTransfer?.files?.[0]);
   });
 
-  // ---- filters ------------------------------------------------------------
+  // ---- team clustering ----------------------------------------------------
 
-  function knownTeams() {
-    const out = new Map();
-    for (const d of demos) {
-      if (d.team1) out.set(d.team1.id, d.team1.name);
-      if (d.team2) out.set(d.team2.id, d.team2.name);
+  function clusterTeams(demoList) {
+    /** @type {{ shortId: string, name: string, players: Set<string> }[]} */
+    const appearances = [];
+    for (const d of demoList) {
+      for (const side of [1, 2]) {
+        const team = side === 1 ? d.team1 : d.team2;
+        if (!team?.id) continue;
+        const players = new Set();
+        for (const p of d.players || []) {
+          if (Number(p.team) !== side) continue;
+          const key = p.steamId || p.id;
+          if (key) players.add(String(key));
+        }
+        appearances.push({
+          shortId: String(team.id),
+          name: String(team.name || ''),
+          players
+        });
+      }
     }
-    return [...out.entries()];
+    if (!appearances.length) return [];
+
+    const parent = appearances.map((_, i) => i);
+    const find = (i) => {
+      while (parent[i] !== i) {
+        parent[i] = parent[parent[i]];
+        i = parent[i];
+      }
+      return i;
+    };
+    const union = (a, b) => {
+      const ra = find(a);
+      const rb = find(b);
+      if (ra !== rb) parent[rb] = ra;
+    };
+
+    const byNormName = new Map();
+    for (let i = 0; i < appearances.length; i++) {
+      const norm = appearances[i].name.trim().toLowerCase();
+      if (!norm) continue;
+      if (byNormName.has(norm)) union(byNormName.get(norm), i);
+      else byNormName.set(norm, i);
+    }
+
+    for (let i = 0; i < appearances.length; i++) {
+      for (let j = i + 1; j < appearances.length; j++) {
+        if (find(i) === find(j)) continue;
+        const a = appearances[i].players;
+        const b = appearances[j].players;
+        if (a.size < 3 || b.size < 3) continue;
+        let shared = 0;
+        for (const p of a) {
+          if (b.has(p)) {
+            shared++;
+            if (shared >= 3) {
+              union(i, j);
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    const groups = new Map();
+    for (let i = 0; i < appearances.length; i++) {
+      const root = find(i);
+      let g = groups.get(root);
+      if (!g) {
+        g = { shortIds: new Set(), nameCounts: new Map() };
+        groups.set(root, g);
+      }
+      g.shortIds.add(appearances[i].shortId);
+      const name = appearances[i].name.trim();
+      if (name) g.nameCounts.set(name, (g.nameCounts.get(name) || 0) + 1);
+    }
+
+    const clusters = [];
+    for (const g of groups.values()) {
+      const shortIds = [...g.shortIds].sort();
+      let bestName = shortIds[0];
+      let bestCount = -1;
+      for (const [name, count] of g.nameCounts) {
+        if (count > bestCount || (count === bestCount && name.localeCompare(bestName) < 0)) {
+          bestName = name;
+          bestCount = count;
+        }
+      }
+      clusters.push({
+        key: shortIds.join('|'),
+        name: bestName || shortIds[0],
+        shortIds
+      });
+    }
+    clusters.sort((a, b) => a.name.localeCompare(b.name));
+    return clusters;
+  }
+
+  function rebuildTeamClusters() {
+    teamClusters = clusterTeams(demos);
+    teamClustersByKey = new Map(teamClusters.map((c) => [c.key, c]));
+    for (const key of [...filters.teams]) {
+      if (!teamClustersByKey.has(key)) filters.teams.delete(key);
+    }
+    if (filters.wonBy && !teamClustersByKey.has(filters.wonBy)) filters.wonBy = '';
   }
 
   function knownPlayers() {
     const out = new Map();
     for (const d of demos) {
-      for (const p of d.players || []) out.set(p.id, p.name);
+      for (const p of d.players || []) {
+        if (p.id) out.set(p.id, p.name || p.id);
+      }
     }
-    return [...out.entries()];
+    return [...out.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1])));
+  }
+
+  function applyChipSearch(group, query) {
+    if (!filtersEl) return;
+    const needle = String(query || '')
+      .trim()
+      .toLowerCase();
+    filtersEl.querySelectorAll(`[data-group="${group}"]`).forEach((chip) => {
+      const label = (chip.textContent || '').toLowerCase();
+      chip.hidden = Boolean(needle) && !label.includes(needle);
+    });
   }
 
   function renderFilters() {
+    if (!filtersEl) return;
     const chip = (group, value, label, active) =>
       `<button type="button" class="rp-chip${active ? ' active' : ''}" data-group="${group}" data-value="${escapeHtml(
         String(value)
@@ -378,14 +532,14 @@ export function initReplaysView({ escapeHtml }) {
     const econChips = Object.entries(ECONOMIES)
       .map(([code, e]) => chip('economies', code, e.label, filters.economies.has(Number(code))))
       .join('');
-    const teamChips = knownTeams()
-      .map(([id, nameStr]) => chip('teams', id, nameStr, filters.teams.has(id)))
+    const teamChips = teamClusters
+      .map((c) => chip('teams', c.key, c.name, filters.teams.has(c.key)))
       .join('');
     const playerChips = knownPlayers()
       .map(([id, nameStr]) => chip('players', id, nameStr, filters.players.has(id)))
       .join('');
-    const winnerChips = knownTeams()
-      .map(([id, nameStr]) => chip('wonBy', id, nameStr, filters.wonBy === id))
+    const winnerChips = teamClusters
+      .map((c) => chip('wonBy', c.key, c.name, filters.wonBy === c.key))
       .join('');
 
     filtersEl.innerHTML = `
@@ -397,9 +551,33 @@ export function initReplaysView({ escapeHtml }) {
         <h4>Economy</h4>
         <div class="rp-chips">${econChips}</div>
       </div>
-      ${teamChips ? `<div class="rp-filter-group"><h4>Team</h4><div class="rp-chips">${teamChips}</div></div>` : ''}
-      ${winnerChips ? `<div class="rp-filter-group"><h4>Round won by</h4><div class="rp-chips">${winnerChips}</div></div>` : ''}
-      ${playerChips ? `<div class="rp-filter-group"><h4>Players on the server</h4><div class="rp-chips">${playerChips}</div></div>` : ''}
+      ${
+        teamChips
+          ? `<div class="rp-filter-group">
+              <h4>Team</h4>
+              <input type="search" class="site-input rp-filter-search" id="rp-team-search"
+                placeholder="Search teams" spellcheck="false" autocomplete="off"
+                value="${escapeHtml(teamSearch)}" aria-label="Search teams" />
+              <div class="rp-chips" id="rp-team-chips">${teamChips}</div>
+            </div>`
+          : ''
+      }
+      ${
+        winnerChips
+          ? `<div class="rp-filter-group"><h4>Round won by</h4><div class="rp-chips">${winnerChips}</div></div>`
+          : ''
+      }
+      ${
+        playerChips
+          ? `<div class="rp-filter-group">
+              <h4>Players on the server</h4>
+              <input type="search" class="site-input rp-filter-search" id="rp-player-search"
+                placeholder="Search players" spellcheck="false" autocomplete="off"
+                value="${escapeHtml(playerSearch)}" aria-label="Search players" />
+              <div class="rp-chips" id="rp-player-chips">${playerChips}</div>
+            </div>`
+          : ''
+      }
       <div class="rp-filter-group">
         <h4>Round number</h4>
         <div class="rp-range">
@@ -409,6 +587,10 @@ export function initReplaysView({ escapeHtml }) {
         </div>
       </div>
       <button type="button" class="btn btn-sm" id="rp-clear">Clear filters</button>`;
+
+    applyChipSearch('teams', teamSearch);
+    applyChipSearch('wonBy', teamSearch);
+    applyChipSearch('players', playerSearch);
 
     filtersEl.querySelector('#rp-round-min')?.addEventListener('change', (e) => {
       filters.roundMin = Number(e.target.value) || 1;
@@ -426,15 +608,32 @@ export function initReplaysView({ escapeHtml }) {
       filters.wonBy = '';
       filters.roundMin = 1;
       filters.roundMax = 99;
+      teamSearch = '';
+      playerSearch = '';
       renderFilters();
       runQuery();
     });
   }
 
-  filtersEl.addEventListener('click', (e) => {
-    const chip = e.target.closest('[data-group]');
-    if (!chip) return;
-    const { group, value } = chip.dataset;
+  filtersEl?.addEventListener('input', (e) => {
+    const teamInput = e.target.closest('#rp-team-search');
+    if (teamInput) {
+      teamSearch = teamInput.value;
+      applyChipSearch('teams', teamSearch);
+      applyChipSearch('wonBy', teamSearch);
+      return;
+    }
+    const playerInput = e.target.closest('#rp-player-search');
+    if (playerInput) {
+      playerSearch = playerInput.value;
+      applyChipSearch('players', playerSearch);
+    }
+  });
+
+  filtersEl?.addEventListener('click', (e) => {
+    const chipEl = e.target.closest('[data-group]');
+    if (!chipEl) return;
+    const { group, value } = chipEl.dataset;
     if (group === 'wonBy') {
       filters.wonBy = filters.wonBy === value ? '' : value;
     } else {
@@ -449,13 +648,26 @@ export function initReplaysView({ escapeHtml }) {
 
   // ---- query + results ----------------------------------------------------
 
+  function expandClusterKeys(keys) {
+    const out = new Set();
+    for (const key of keys) {
+      const cluster = teamClustersByKey.get(key);
+      if (cluster) for (const id of cluster.shortIds) out.add(id);
+      else out.add(key);
+    }
+    return [...out];
+  }
+
   function currentQuery() {
+    const wonBy = filters.wonBy
+      ? teamClustersByKey.get(filters.wonBy)?.shortIds || [filters.wonBy]
+      : undefined;
     return {
       maps: [...filters.maps],
       economies: [...filters.economies],
-      teams: [...filters.teams],
+      teams: expandClusterKeys(filters.teams),
       players: [...filters.players],
-      wonBy: filters.wonBy || undefined,
+      wonBy,
       roundMin: filters.roundMin,
       roundMax: filters.roundMax
     };
@@ -474,8 +686,8 @@ export function initReplaysView({ escapeHtml }) {
         for (const f of pl.rounds || []) bookmarkedFiles.add(f);
       }
       // Drop selections that filters removed from the current result set.
-      const visible = new Set(rounds.map((r) => r.file));
-      selectedFiles = new Set([...selectedFiles].filter((f) => visible.has(f)));
+      const visibleFiles = new Set(rounds.map((r) => r.file));
+      selectedFiles = new Set([...selectedFiles].filter((f) => visibleFiles.has(f)));
       renderResults();
     } catch (err) {
       setStatus(err.message, true);
@@ -489,18 +701,6 @@ export function initReplaysView({ escapeHtml }) {
   function teamName(demo, team, shortId) {
     if (team === 1) return demo?.team1?.name || shortId || 'Team 1';
     return demo?.team2?.name || shortId || 'Team 2';
-  }
-
-  function gameTitle(demo, sample) {
-    const t1 = teamName(demo, 1, sample?.team1);
-    const t2 = teamName(demo, 2, sample?.team2);
-    const map = MAPS[demo?.map || sample?.map]?.name || demo?.mapName || sample?.map || '';
-    const score =
-      demo?.score && demo.status === 'ready' ? `${demo.score.team1}–${demo.score.team2}` : '';
-    const bits = [`${t1} vs ${t2}`];
-    if (map) bits.push(map);
-    if (score) bits.push(score);
-    return bits.join(' · ');
   }
 
   function groupRoundsByDemo(list) {
@@ -560,7 +760,50 @@ export function initReplaysView({ escapeHtml }) {
       </button>`;
   }
 
+  function demoGroupHeadHtml(g) {
+    const d = g.demo;
+    const sample = g.rounds[0];
+    const open = !collapsedDemos.has(g.demoId);
+    const t1 = teamName(d, 1, sample?.team1);
+    const t2 = teamName(d, 2, sample?.team2);
+    const when = formatWhen(d?.uploadedAt || d?.parsedAt);
+    const mapName =
+      d?.mapName || (d?.map ? MAPS[d.map]?.name : '') || MAPS[sample?.map]?.name || sample?.map || '';
+    const score = d ? demoScoreText(d) : '…';
+    const id = escapeHtml(g.demoId);
+    const selectedInGroup = g.rounds.filter((r) => selectedFiles.has(r.file)).length;
+    const roundPill = `${g.rounds.length} round${g.rounds.length === 1 ? '' : 's'}${
+      selectedInGroup ? ` · ${selectedInGroup} selected` : ''
+    }`;
+
+    return `
+      <div class="rp-row rp-demo-head" data-toggle-demo="${id}" role="button" tabindex="0"
+        aria-expanded="${open ? 'true' : 'false'}">
+        <div class="rp-row-when">
+          <span class="rp-demo-chevron" aria-hidden="true"></span>
+          <span>${escapeHtml(when)}</span>
+        </div>
+        ${matchBlockHtml(t1, t2, score)}
+        <div class="rp-row-actions">
+          <button type="button" class="rp-btn-replay" data-open="${id}">▶ Replay</button>
+          ${
+            d
+              ? `<button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>`
+              : ''
+          }
+          <button type="button" class="rp-btn-icon danger" data-delete="${id}" title="Delete">
+            ${deleteIconHtml()}
+          </button>
+        </div>
+        <div class="rp-maps">
+          ${mapName ? `<span class="rp-map-pill">${escapeHtml(mapName)}</span>` : ''}
+          <span class="rp-map-pill">${escapeHtml(roundPill)}</span>
+        </div>
+      </div>`;
+  }
+
   function renderResults() {
+    if (!resultEl) return;
     if (!rounds.length) {
       resultEl.innerHTML = '<p class="view-empty">No rounds match these filters.</p>';
       return;
@@ -589,18 +832,9 @@ export function initReplaysView({ escapeHtml }) {
         ${groups
           .map((g) => {
             const open = !collapsedDemos.has(g.demoId);
-            const title = gameTitle(g.demo, g.rounds[0]);
-            const selectedInGroup = g.rounds.filter((r) => selectedFiles.has(r.file)).length;
             return `
           <section class="rp-demo-group${open ? ' open' : ''}" data-demo="${escapeHtml(g.demoId)}">
-            <button type="button" class="rp-demo-head" data-toggle-demo="${escapeHtml(g.demoId)}"
-              aria-expanded="${open ? 'true' : 'false'}">
-              <span class="rp-demo-chevron" aria-hidden="true"></span>
-              <span class="rp-demo-title">${escapeHtml(title)}</span>
-              <span class="rp-demo-count">${g.rounds.length} round${g.rounds.length === 1 ? '' : 's'}${
-                selectedInGroup ? ` · ${selectedInGroup} selected` : ''
-              }</span>
-            </button>
+            ${demoGroupHeadHtml(g)}
             <div class="rp-demo-rounds" ${open ? '' : 'hidden'}>
               ${g.rounds.map((r) => roundRowHtml(r, g.demo)).join('')}
             </div>
@@ -616,20 +850,34 @@ export function initReplaysView({ escapeHtml }) {
     });
   }
 
-  resultEl.addEventListener('click', (e) => {
+  resultEl?.addEventListener('click', async (e) => {
+    if (await handleDemoAction(e.target)) return;
+
     const toggle = e.target.closest('[data-toggle-demo]');
-    if (toggle) {
+    if (toggle && !e.target.closest('.rp-row-actions, button, a')) {
       const id = toggle.dataset.toggleDemo;
       if (collapsedDemos.has(id)) collapsedDemos.delete(id);
       else collapsedDemos.add(id);
       renderResults();
       return;
     }
+
     const row = e.target.closest('.rp-round-row[data-file]');
     if (!row) return;
     const file = row.dataset.file;
     if (selectedFiles.has(file)) selectedFiles.delete(file);
     else selectedFiles.add(file);
+    renderResults();
+  });
+
+  resultEl?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const toggle = e.target.closest('[data-toggle-demo]');
+    if (!toggle || e.target.closest('.rp-row-actions, button, a')) return;
+    e.preventDefault();
+    const id = toggle.dataset.toggleDemo;
+    if (collapsedDemos.has(id)) collapsedDemos.delete(id);
+    else collapsedDemos.add(id);
     renderResults();
   });
 
@@ -656,16 +904,6 @@ export function initReplaysView({ escapeHtml }) {
   }
 
   // ---- playlists page -----------------------------------------------------
-
-  const playlistsBtn = document.getElementById('rp-playlists-btn');
-  const libraryEl = document.getElementById('rp-library');
-  const playlistsPageEl = document.getElementById('rp-playlists-page');
-  const playlistsBody = document.getElementById('rp-pl-body');
-  const playlistsBack = document.getElementById('rp-playlists-back');
-  const pageTitleEl = document.getElementById('page-title');
-
-  let onPlaylistsPage = false;
-  let playlistLists = [];
 
   /**
    * A playlist stores round names only, so it is turned back into rounds by
@@ -704,7 +942,7 @@ export function initReplaysView({ escapeHtml }) {
               <td class="rp-pl-actions">
                 <button type="button" class="rp-btn-replay" data-play="${escapeHtml(p.id)}">▶ Replay</button>
                 <button type="button" class="rp-btn-icon danger" data-drop="${escapeHtml(p.id)}" title="Delete playlist">
-                  <svg viewBox="0 -960 960 960" width="16" height="16" fill="currentColor"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>
+                  ${deleteIconHtml()}
                 </button>
               </td>
             </tr>`
@@ -725,22 +963,33 @@ export function initReplaysView({ escapeHtml }) {
     }
   }
 
-  function setPlaylistsPage(on, { push = false } = {}) {
-    onPlaylistsPage = on;
-    if (libraryEl) libraryEl.hidden = on;
-    if (playlistsPageEl) playlistsPageEl.hidden = !on;
-    if (playlistsBtn) playlistsBtn.hidden = on || !visible;
-    if (pageTitleEl) pageTitleEl.textContent = on ? 'Playlists' : 'Replays';
-    document.title = on ? 'AIM4.io - Playlists' : 'AIM4.io - Replays';
-    const path = on ? '/replays/playlists' : '/replays';
+  function setSubpage(name, { push = false } = {}) {
+    const next = name === 'upload' || name === 'playlists' ? name : 'library';
+    subpage = next;
+    if (libraryEl) libraryEl.hidden = next !== 'library';
+    if (uploadPageEl) uploadPageEl.hidden = next !== 'upload';
+    if (playlistsPageEl) playlistsPageEl.hidden = next !== 'playlists';
+    if (headActions) headActions.hidden = !visible;
+    if (pageTitleEl) pageTitleEl.textContent = 'Replays';
+    document.title = 'AIM4.io - Replays';
+
+    const path = next === 'upload' ? '/replays/upload' : next === 'playlists' ? '/replays/playlists' : '/replays';
     if (push && window.location.pathname.replace(/\/+$/, '') !== path) {
-      window.history.pushState({ view: 'replays', playlists: on }, '', path);
+      window.history.pushState({ view: 'replays' }, '', path);
     }
-    if (on) loadPlaylistsPage();
+
+    if (next === 'playlists') {
+      stopPolling();
+      loadPlaylistsPage();
+    } else if (visible) {
+      startPolling();
+    }
   }
 
-  playlistsBtn?.addEventListener('click', () => setPlaylistsPage(true, { push: true }));
-  playlistsBack?.addEventListener('click', () => setPlaylistsPage(false, { push: true }));
+  uploadBtn?.addEventListener('click', () => setSubpage('upload', { push: true }));
+  uploadBack?.addEventListener('click', () => setSubpage('library', { push: true }));
+  playlistsBtn?.addEventListener('click', () => setSubpage('playlists', { push: true }));
+  playlistsBack?.addEventListener('click', () => setSubpage('library', { push: true }));
 
   playlistsBody?.addEventListener('click', async (e) => {
     const play = e.target.closest('[data-play]');
@@ -794,19 +1043,22 @@ export function initReplaysView({ escapeHtml }) {
       renderParser(status.parser);
       renderQuota(list.usage || status.usage);
       demos = list.demos || [];
+      rebuildTeamClusters();
       renderDemos();
       renderFilters();
       await runQuery();
     } catch (err) {
       setLocked(false);
-      listEl.innerHTML = `<p class="view-empty">Could not reach the replay service. ${escapeHtml(
-        err.message
-      )}</p>`;
+      if (listEl) {
+        listEl.innerHTML = `<p class="view-empty">Could not reach the replay service. ${escapeHtml(
+          err.message
+        )}</p>`;
+      }
     }
   }
 
   function setLocked(locked) {
-    dropEl.hidden = locked;
+    if (dropEl) dropEl.hidden = locked;
     if (locked) setStatus('');
   }
 
@@ -814,7 +1066,7 @@ export function initReplaysView({ escapeHtml }) {
     stopPolling();
     // Only poll while something is actually mid-parse.
     pollTimer = window.setInterval(() => {
-      if (!visible) return;
+      if (!visible || subpage === 'playlists') return;
       if (demos.some((d) => d.status === 'parsing')) refresh();
     }, POLL_MS);
   }
@@ -827,13 +1079,16 @@ export function initReplaysView({ escapeHtml }) {
   return {
     onShow(params = {}) {
       visible = true;
+      const path = window.location.pathname.replace(/\/+$/, '');
+      const wantUpload =
+        params.upload === '1' || params.upload === true || path === '/replays/upload';
       const wantPlaylists =
         params.playlists === '1' ||
         params.playlists === true ||
-        window.location.pathname.replace(/\/+$/, '') === '/replays/playlists';
-      setPlaylistsPage(wantPlaylists, { push: false });
-      if (!wantPlaylists) {
-        if (playlistsBtn) playlistsBtn.hidden = false;
+        path === '/replays/playlists';
+      const page = wantUpload ? 'upload' : wantPlaylists ? 'playlists' : 'library';
+      setSubpage(page, { push: false });
+      if (page !== 'playlists') {
         refresh();
         startPolling();
       } else {
@@ -841,14 +1096,14 @@ export function initReplaysView({ escapeHtml }) {
       }
       // Only on the first arrival: a viewer close rewrites the URL back to
       // /replays, and re-entering the view must not reopen what was closed.
-      if (!wantPlaylists && params.round && params.round !== openedRound) {
+      if (page === 'library' && params.round && params.round !== openedRound) {
         openedRound = params.round;
         openSharedRound(params.round);
       }
     },
     onHide() {
       visible = false;
-      if (playlistsBtn) playlistsBtn.hidden = true;
+      if (headActions) headActions.hidden = true;
       stopPolling();
     }
   };
