@@ -1036,7 +1036,8 @@ body.rv-open {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 270px 1fr 270px;
+  /* Side columns grow with roster/inventory instead of clipping with an h-scroll. */
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
   /* minmax(0, 1fr), not auto: an auto row is sized by its content, and the
      canvas' own backing-store size is content. That fed the canvas' height
      back into the row height every frame and the map grew off the bottom of
@@ -1484,8 +1485,11 @@ body.rv-open {
   flex-direction: column;
   justify-content: center;
   gap: 8px;
-  min-width: 0;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 260px;
   max-height: 100%;
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
@@ -1635,9 +1639,12 @@ body.rv-open {
 .rv-player-inv {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 6px;
   margin-top: 5px;
   min-height: 20px;
+  width: max-content;
+  min-width: 100%;
 }
 
 .rv-inv-armor {
@@ -2424,8 +2431,8 @@ body.rv-open {
 /* ---- Narrow screens ----------------------------------------------------- */
 
 @media (max-width: 1100px) {
-  .rv-stage {
-    grid-template-columns: 220px 1fr 220px;
+  .rv-team {
+    min-width: 220px;
   }
 }
 
@@ -2447,7 +2454,9 @@ body.rv-open {
   .rv-team {
     flex-direction: row;
     gap: 10px;
-    overflow-x: auto;
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
   }
 
   .rv-team-2 {
