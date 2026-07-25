@@ -275,7 +275,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     markActiveRound();
     renderer._prevHealth?.fill?.(-1);
     renderer._damageTick?.fill?.(-1);
-    renderer._prevFlash?.fill?.(0);
 
     // Instant chrome from the summary; ticks + meta load for this round only.
     activeMeta = fallbackMeta(rounds[index]);
@@ -590,7 +589,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
       states,
       players: track ? activeMeta.players || [] : [],
       events: track ? activeMeta.events || {} : { kills: [], shots: [], grenades: [], bomb: [] },
-      weapons: activeMeta.weapons || []
+      weapons: activeMeta.weapons || [],
+      teamSides: { 1: activeMeta.team1Side, 2: activeMeta.team2Side }
     });
 
     const clock = clockAt(timing, tick);

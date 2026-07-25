@@ -120,6 +120,7 @@ export function createMacroViewer({ store, rounds, escapeHtml }) {
         players: tile.meta.players || [],
         events: tile.meta.events || {},
         weapons: tile.meta.weapons || [],
+        teamSides: { 1: tile.meta.team1Side, 2: tile.meta.team2Side },
         compact: true
       });
 

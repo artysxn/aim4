@@ -40,8 +40,10 @@ const BOMB_CARRIER_COLOR = '#e2532b';
 
 const SMOKE_SECONDS = 18;
 const FIRE_SECONDS = 7;
-const FLASH_SECONDS = 1.6;
+const FLASH_SECONDS = 0.8;
 const HE_SECONDS = 0.85;
+/** Area utility holds full strength, then clears in this long. */
+const UTIL_FADE_SECONDS = 0.8;
 const DECOY_SECONDS = 15;
 /** How long a thrown grenade's trajectory lingers after it goes off. */
 const TRAIL_FADE_SECONDS = 1.4;
@@ -96,8 +98,6 @@ export class RadarRenderer {
     this._prevHealth = new Array(10).fill(-1);
     /** Demo tick when each slot last took damage (for 5-tick red fade). */
     this._damageTick = new Array(10).fill(-1);
-    /** Previous flash remaining, to detect a new blind. */
-    this._prevFlash = new Array(10).fill(0);
     /** Optional redraw hook when an equipment SVG finishes loading. */
     this.onIconLoad = null;
     /** Scratch canvas for tinting white equipment SVGs. */
@@ -114,7 +114,6 @@ export class RadarRenderer {
     }
     this._prevHealth.fill(-1);
     this._damageTick.fill(-1);
-    this._prevFlash.fill(0);
   }
 
   /** Match the backing store to the element's CSS size. */
@@ -197,9 +196,10 @@ export class RadarRenderer {
   // ---- players -------------------------------------------------------------
 
   drawPlayers(ctx, t, frame, compact) {
-    const { states, players, highlight, weapons = [], tick = 0 } = frame;
+    const { states, players, highlight, weapons = [], tick = 0, tickRate = 64 } = frame;
     const r = (compact ? 3.6 : 7.5) * this.dpr;
     const bombCarrier = bombCarrierAt(frame.events, tick);
+    const pops = flashPops(frame.events);
 
     for (const p of players) {
       const s = states[p.slot];
@@ -210,7 +210,6 @@ export class RadarRenderer {
 
       if (!s.alive) {
         this._prevHealth[p.slot] = 0;
-        this._prevFlash[p.slot] = 0;
         continue;
       }
 
@@ -221,11 +220,7 @@ export class RadarRenderer {
       const damageAge = this._damageTick[p.slot] < 0 ? 99 : tick - this._damageTick[p.slot];
       const damageFlash = damageAge >= 0 && damageAge < 5 ? 1 - damageAge / 5 : 0;
 
-      const prevFlash = this._prevFlash[p.slot] || 0;
-      this._prevFlash[p.slot] = s.flash || 0;
-      // Peak white on the tick blindness jumps up; otherwise track remaining blind.
-      const flashAmt = Math.max(0, s.flash || 0);
-      const flashPeak = flashAmt > prevFlash + 0.05 ? 1 : Math.min(1, flashAmt / 2.5);
+      const blind = blindnessAt(pops, s, tick, tickRate);
 
       const lower = isLowerLevel(this.mapCode, s.z);
       ctx.save();
@@ -277,13 +272,22 @@ export class RadarRenderer {
 
       dot(hasBomb ? BOMB_CARRIER_COLOR : colors.base);
       if (damageFlash > 0) dot(`rgba(255, 48, 48, ${0.75 * damageFlash})`);
-      if (flashPeak > 0.02) dot(`rgba(255, 255, 255, ${0.8 * flashPeak})`);
+      if (blind > 0) dot(`rgba(255, 255, 255, ${0.25 + 0.65 * blind})`);
 
       ctx.restore();
 
       // Labels / held util in screen space (not rotated with the droplet).
       ctx.save();
       ctx.globalAlpha = lower ? 0.45 : 1;
+      // Blind: the dot washes out and a white halo sits around the marker for
+      // as long as the flash has left to run.
+      if (blind > 0) {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, r + (compact ? 2 : 4.5) * this.dpr, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255, 255, 255, ${0.35 + 0.55 * blind})`;
+        ctx.lineWidth = (compact ? 1 : 1.8) * this.dpr;
+        ctx.stroke();
+      }
       if (s.flags & FLAG_DEFUSING && !compact) {
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, r + 6 * this.dpr, 0, Math.PI * 2);
@@ -480,11 +484,16 @@ export class RadarRenderer {
 
     const scale = this.mapScale() || 5;
     const worldR = (units) => (units / scale) * t.scale;
+    // Which side a thrower was on, from the round's fixed roster-to-side map
+    // rather than from their tick record. A player's live side byte goes blank
+    // once they are dead, which used to repaint their smoke or molotov neutral
+    // halfway through burning. The tick record is only a fallback for callers
+    // that do not pass the map.
+    const teamSides = frame.teamSides || {};
     const sideOf = (playerId) => {
       const p = players.find((x) => x.id === playerId);
       if (!p) return '';
-      const st = states[p.slot];
-      return st?.side || '';
+      return teamSides[p.team] || states[p.slot]?.side || '';
     };
 
     // Everything on screen right now, resolved once.
@@ -623,28 +632,35 @@ export class RadarRenderer {
     ctx.restore();
   }
 
-  /** Flashbang pop: a hot core that snaps out, then a ring that keeps going. */
+  /**
+   * Flashbang pop: a hot core at full size almost immediately, then a ring
+   * that races outward and is gone. Both use an ease-out on the radius and a
+   * squared falloff on alpha, so the whole thing reads as a snap rather than a
+   * bloom.
+   */
   drawFlashPop(ctx, pt, age) {
     const life = Math.min(1, age / FLASH_SECONDS);
-    const burst = Math.max(0, 1 - age / 0.45);
+    const ease = 1 - (1 - life) * (1 - life) * (1 - life);
+    const burst = Math.max(0, 1 - age / 0.18);
 
     ctx.save();
     if (burst > 0) {
-      const r = (6 + (1 - burst) * 18) * this.dpr;
+      const r = (10 + (1 - burst) * 16) * this.dpr;
       const grad = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, r);
-      grad.addColorStop(0, `rgba(255, 255, 255, ${0.95 * burst})`);
-      grad.addColorStop(0.55, `rgba(255, 252, 226, ${0.6 * burst})`);
+      grad.addColorStop(0, `rgba(255, 255, 255, ${burst})`);
+      grad.addColorStop(0.5, `rgba(255, 252, 226, ${0.75 * burst})`);
       grad.addColorStop(1, 'rgba(255, 250, 210, 0)');
       ctx.fillStyle = grad;
       ctx.beginPath();
       ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
       ctx.fill();
     }
-    ctx.globalAlpha = 0.85 * (1 - life);
+    const out = 1 - life;
+    ctx.globalAlpha = 0.9 * out * out;
     ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = Math.max(1.2 * this.dpr, (2.6 - 1.6 * life) * this.dpr);
+    ctx.lineWidth = Math.max(1 * this.dpr, (3.2 - 2.4 * ease) * this.dpr);
     ctx.beginPath();
-    ctx.arc(pt.x, pt.y, (6 + life * 34) * this.dpr, 0, Math.PI * 2);
+    ctx.arc(pt.x, pt.y, (5 + ease * 30) * this.dpr, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
   }
@@ -699,7 +715,7 @@ export class RadarRenderer {
    * Nearby HE detonations punch a hole for 1s, then the smoke fades back.
    */
   drawSmoke(ctx, t, pt, age, radius, heHoles, worldAt, compact) {
-    const fade = age > SMOKE_SECONDS - 2 ? (SMOKE_SECONDS - age) / 2 : 1;
+    const fade = utilFade(age, SMOKE_SECONDS);
     const left = Math.max(0, Math.ceil(SMOKE_SECONDS - age));
     const progress = 1 - age / SMOKE_SECONDS;
 
@@ -716,6 +732,12 @@ export class RadarRenderer {
     }
 
     ctx.save();
+    // Clip to the smoke disc so evenodd holes can't paint outside it.
+    // (Without this, the HE circle's exterior is filled as an odd region.)
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+    ctx.clip();
+
     ctx.globalAlpha = 0.55 * fade;
     ctx.beginPath();
     ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
@@ -725,11 +747,13 @@ export class RadarRenderer {
     }
     ctx.fillStyle = 'rgba(160, 168, 180, 0.92)';
     ctx.fill('evenodd');
+    ctx.restore();
 
-    // Orange progress ring (remaining life).
+    // Orange progress ring (remaining life) — drawn unclipped.
+    ctx.save();
     ctx.globalAlpha = 0.95 * fade;
     ctx.strokeStyle = '#e8913c';
-    ctx.lineWidth = Math.max(1.5, 2 * this.dpr);
+    ctx.lineWidth = Math.max(0.75, 1 * this.dpr);
     ctx.beginPath();
     ctx.arc(pt.x, pt.y, radius, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
     ctx.stroke();
@@ -745,15 +769,20 @@ export class RadarRenderer {
     ctx.restore();
   }
 
-  /** Molotov / incendiary AOE (pic 4): red disc, team border, flame + timer. */
+  /**
+   * Molotov / incendiary AOE, built like the smoke disc: red fill, a ring that
+   * unwinds with the time left, and a bright countdown. The flame icon sits
+   * above the number so the two do not sit on top of each other.
+   */
   drawFire(ctx, pt, age, radius, side, compact) {
     const left = Math.max(0, Math.ceil(FIRE_SECONDS - age));
+    const progress = Math.max(0, 1 - age / FIRE_SECONDS);
     const border =
       side === 'T' ? SIDE_COLORS.T.base : side === 'CT' ? SIDE_COLORS.CT.base : '#e2622a';
-    const fade = 1 - age / FIRE_SECONDS;
+    const fade = utilFade(age, FIRE_SECONDS);
 
     ctx.save();
-    ctx.globalAlpha = 0.38 * fade;
+    ctx.globalAlpha = 0.4 * fade;
     ctx.fillStyle = '#e24e2c';
     ctx.beginPath();
     ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
@@ -761,38 +790,37 @@ export class RadarRenderer {
 
     ctx.globalAlpha = 0.95 * fade;
     ctx.strokeStyle = border;
-    ctx.lineWidth = Math.max(1.5, 2 * this.dpr);
+    ctx.lineWidth = Math.max(0.75, 1 * this.dpr);
     ctx.beginPath();
-    ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+    ctx.arc(pt.x, pt.y, radius, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
     ctx.stroke();
 
     if (!compact) {
       const img = loadEquipmentIcon(side === 'CT' ? 'incgrenade' : 'molotov', () =>
         this.onIconLoad?.()
       );
-      const iconR = Math.min(14 * this.dpr, radius * 0.35);
+      const iconR = Math.min(11 * this.dpr, radius * 0.3);
+      const iconY = pt.y - radius * 0.3;
+      ctx.globalAlpha = 0.95 * fade;
       if (img?.complete && img.naturalWidth > 0) {
-        const scale = Math.min((iconR * 1.6) / img.naturalWidth, (iconR * 1.6) / img.naturalHeight);
+        const scale = Math.min((iconR * 1.7) / img.naturalWidth, (iconR * 1.7) / img.naturalHeight);
         const iw = img.naturalWidth * scale;
         const ih = img.naturalHeight * scale;
-        ctx.globalAlpha = 0.95 * fade;
-        ctx.drawImage(img, pt.x - iw / 2, pt.y - ih / 2 - 2 * this.dpr, iw, ih);
+        ctx.drawImage(img, pt.x - iw / 2, iconY - ih / 2, iw, ih);
       } else {
         // Fallback flame blob.
-        ctx.globalAlpha = 0.95 * fade;
         ctx.fillStyle = '#ff6a2a';
         ctx.beginPath();
-        ctx.moveTo(pt.x, pt.y - iconR);
-        ctx.quadraticCurveTo(pt.x + iconR, pt.y, pt.x, pt.y + iconR * 0.7);
-        ctx.quadraticCurveTo(pt.x - iconR, pt.y, pt.x, pt.y - iconR);
+        ctx.moveTo(pt.x, iconY - iconR);
+        ctx.quadraticCurveTo(pt.x + iconR, iconY, pt.x, iconY + iconR * 0.7);
+        ctx.quadraticCurveTo(pt.x - iconR, iconY, pt.x, iconY - iconR);
         ctx.fill();
       }
-      ctx.globalAlpha = 0.95 * fade;
-      ctx.fillStyle = '#1a0c08';
-      ctx.font = `700 ${Math.max(10, Math.round(iconR * 0.95))}px "Host Grotesk", system-ui, sans-serif`;
+      ctx.fillStyle = 'rgba(255, 236, 224, 0.95)';
+      ctx.font = `600 ${Math.max(11, Math.round(radius * 0.28))}px "Host Grotesk", system-ui, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(String(left), pt.x, pt.y + 1 * this.dpr);
+      ctx.fillText(String(left), pt.x, pt.y + radius * 0.26);
     }
     ctx.restore();
   }
@@ -861,6 +889,39 @@ function bombCarrierAt(events, tick) {
   return latest?.type === 'pickup' ? latest.player || '' : '';
 }
 
+function flashPops(events) {
+  const out = [];
+  for (const g of events?.grenades || []) {
+    if (normalizeGrenadeType(g.type) !== 'flashbang') continue;
+    const det = Number(g.detonateTick ?? g.throwTick);
+    if (Number.isFinite(det)) out.push(det);
+  }
+  return out;
+}
+
+/**
+ * How blind a player is right now, 1 (just flashed) to 0 (clear).
+ *
+ * `flash_duration` is the *total* length of the blind, fixed at the moment the
+ * flash goes off — it does not count down. So the remaining time is that total
+ * minus however long ago the flash actually popped, which is the most recent
+ * flashbang detonation that is still inside the player's window. Deriving it
+ * from the tick rather than from the previous frame is what makes it survive
+ * scrubbing and jumping between rounds.
+ */
+function blindnessAt(pops, state, tick, tickRate) {
+  const total = Math.max(0, state?.flash || 0);
+  if (total <= 0 || !pops.length) return 0;
+  const window = total * tickRate;
+  let popped = -1;
+  for (const det of pops) {
+    if (det > tick || tick - det >= window) continue;
+    if (det > popped) popped = det;
+  }
+  if (popped < 0) return 0;
+  return Math.max(0, Math.min(1, 1 - (tick - popped) / window));
+}
+
 /** Droplet path in local space: tip at `tip` (negative Y), round body toward `bot`. */
 function pathDroplet(ctx, tip, bot, halfW) {
   const mid = (tip + bot) * 0.35;
@@ -871,6 +932,17 @@ function pathDroplet(ctx, tip, bot, halfW) {
   ctx.quadraticCurveTo(-halfW * 0.75, bot, -halfW * 0.92, bot * 0.35);
   ctx.bezierCurveTo(-halfW, mid, -halfW * 0.55, tip + (bot - tip) * 0.28, 0, tip);
   ctx.closePath();
+}
+
+/**
+ * Full strength for the whole life of a smoke or a fire, then out in
+ * UTIL_FADE_SECONDS. Area utility is either up or it is not; dimming it from
+ * the moment it lands made a burning molotov look half spent.
+ */
+function utilFade(age, life) {
+  const left = life - age;
+  if (left >= UTIL_FADE_SECONDS) return 1;
+  return Math.max(0, left / UTIL_FADE_SECONDS);
 }
 
 /** 1 while the HE hole is fully open, then eases to 0 as smoke returns. */
