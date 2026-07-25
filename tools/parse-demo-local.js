@@ -20,9 +20,12 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { parseDemo, parserStatus } from '../server/demoparser/index.js';
+import { materializeDemo } from '../server/replays/materialize.js';
+import { newDemoId } from '../server/replays/demoStore.js';
+import { encodeReplayPackage, PACKAGE_EXT } from '../src/replays/shared/replayPackage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, '..');
 
 async function main() {
   const args = process.argv.slice(2);
@@ -44,7 +47,6 @@ async function main() {
   }
   if (!demos.length) fail('Pass at least one .dem file.');
 
-  const { parseDemo, parserStatus } = await import(path.join(ROOT, 'server/demoparser/index.js'));
   const status = parserStatus();
   if (!status.available) {
     fail(
@@ -52,12 +54,6 @@ async function main() {
         `From the repo root run:\n  npm install @laihoe/demoparser2`
     );
   }
-
-  const { materializeDemo } = await import(path.join(ROOT, 'server/replays/materialize.js'));
-  const { encodeReplayPackage, PACKAGE_EXT } = await import(
-    path.join(ROOT, 'src/replays/shared/replayPackage.js')
-  );
-  const { newDemoId } = await import(path.join(ROOT, 'server/replays/demoStore.js'));
 
   if (outDir) await fsp.mkdir(outDir, { recursive: true });
 
