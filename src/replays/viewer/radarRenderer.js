@@ -150,6 +150,24 @@ export class RadarRenderer {
     };
   }
 
+  /**
+   * A pointer position -> radar pixels, the inverse of the view transform.
+   * Annotation is stored in that space, so this is where a mouse event becomes
+   * a point on the map rather than a point on the screen.
+   */
+  radarFromClient(clientX, clientY, out = {}) {
+    const rect = this.canvas.getBoundingClientRect();
+    const { w, h } = this.resize();
+    const t = this.viewTransform(w, h);
+    const cx = rect.width ? ((clientX - rect.left) / rect.width) * w : 0;
+    const cy = rect.height ? ((clientY - rect.top) / rect.height) * h : 0;
+    out.x = (cx - t.ox) / t.scale;
+    out.y = (cy - t.oy) / t.scale;
+    /** CSS pixels per radar pixel, so hit tests can be sized in screen terms. */
+    out.scale = t.scale / this.dpr;
+    return out;
+  }
+
   project(t, worldX, worldY, out = this._pt) {
     worldToRadar(this.mapCode, worldX, worldY, out);
     out.x = out.x * t.scale + t.ox;
@@ -191,6 +209,55 @@ export class RadarRenderer {
     this.drawTracers(ctx, t, frame, compact);
     this.drawDeaths(ctx, t, frame, compact);
     this.drawPlayers(ctx, t, frame, compact);
+    if (frame.drawings?.length) this.drawStrokes(ctx, t, frame.drawings);
+  }
+
+  /**
+   * Hand-drawn annotation, on top of everything. Points arrive in radar space
+   * and are projected here, which is what makes the drawing move with the map
+   * when the view is zoomed or panned. Width stays in screen pixels: a line
+   * that thickened with the zoom would swallow the map it is pointing at.
+   */
+  drawStrokes(ctx, t, strokes) {
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (const stroke of strokes) {
+      const pts = stroke?.pts;
+      if (!pts?.length) continue;
+      const w = (stroke.width || 2.6) * this.dpr;
+      const x0 = pts[0].x * t.scale + t.ox;
+      const y0 = pts[0].y * t.scale + t.oy;
+
+      if (pts.length === 1) {
+        ctx.fillStyle = stroke.color;
+        ctx.beginPath();
+        ctx.arc(x0, y0, w / 2, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
+
+      const path = () => {
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        for (let i = 1; i < pts.length; i++) {
+          ctx.lineTo(pts[i].x * t.scale + t.ox, pts[i].y * t.scale + t.oy);
+        }
+      };
+      // Dark backing so a pale pen still reads over a pale part of the radar.
+      ctx.globalAlpha = 0.45;
+      ctx.strokeStyle = 'rgba(6, 8, 11, 0.9)';
+      ctx.lineWidth = w + 2 * this.dpr;
+      path();
+      ctx.stroke();
+
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = stroke.color;
+      ctx.lineWidth = w;
+      path();
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   // ---- players -------------------------------------------------------------

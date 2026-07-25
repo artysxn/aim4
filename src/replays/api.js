@@ -201,6 +201,58 @@ export async function fetchRoundMeta(file) {
   return body.round;
 }
 
+/** Longest note a round will keep; the server truncates to the same length. */
+export const NOTE_MAX = 800;
+
+/**
+ * Save (or clear, with an empty string) a round's note. The note belongs to
+ * the round, not to whoever wrote it, so everyone who can open the round sees
+ * it and it survives the browser it was typed in.
+ */
+export async function saveRoundNote(file, note) {
+  return asJson(
+    await fetch(`${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}/note`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ note: String(note ?? '').slice(0, NOTE_MAX) })
+    })
+  );
+}
+
+export async function fetchPlaylists() {
+  const body = await asJson(
+    await fetch(`${API_BASE}/api/replays/playlists`, { headers: await headers() })
+  );
+  return body.playlists || [];
+}
+
+/**
+ * Create a playlist (no id) or replace one (with an id). Returns the full
+ * list back, so the caller never has to merge state by hand.
+ *
+ * @param {{id?: string, name?: string, rounds?: string[]}} playlist
+ */
+export async function savePlaylist(playlist) {
+  const body = await asJson(
+    await fetch(`${API_BASE}/api/replays/playlists`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(playlist)
+    })
+  );
+  return body.playlists || [];
+}
+
+export async function deletePlaylist(id) {
+  const body = await asJson(
+    await fetch(`${API_BASE}/api/replays/playlists/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: await headers()
+    })
+  );
+  return body.playlists || [];
+}
+
 /**
  * Fetch a round's ticks. `stride` 100 is the timeline's coarse first pass;
  * stride 1 is the full-detail pass.

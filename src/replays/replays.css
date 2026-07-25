@@ -670,15 +670,19 @@ body.rv-open {
 
 /* Bottom chrome sits on a higher z-layer over the stage so the map is not
    cropped by a separate flex row — tools stay at the bottom of the screen. */
+/* Two rows, two columns: round strip / transport on the left, the tool menus
+   stacked on the right. The right column is sized by the always-present tools
+   menu, so opening the drawing tools above it does not shift the round strip. */
 .rv-chrome {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
   z-index: 8;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 12px;
   padding: 10px 16px 12px;
   border-top: 1px solid var(--border);
   background: linear-gradient(180deg, rgba(12, 14, 17, 0.72), rgba(12, 14, 17, 0.96) 40%);
@@ -691,6 +695,17 @@ body.rv-open {
   pointer-events: auto;
 }
 
+/* Explicit cells: the drawing menu is display:none most of the time, and auto
+   placement would pull the transport up into the hole it leaves. */
+.rv-chrome > .rv-rounds {
+  grid-area: 1 / 1;
+}
+
+.rv-chrome > .rv-transport {
+  grid-area: 2 / 1;
+  min-width: 0;
+}
+
 .rv-rounds {
   display: flex;
   justify-content: center;
@@ -699,6 +714,217 @@ body.rv-open {
   row-gap: 6px;
   overflow-x: auto;
   padding: 0 8px;
+}
+
+/* ---- Viewer tool menus --------------------------------------------------- */
+
+.rv-tools {
+  grid-area: 2 / 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(16, 19, 24, 0.92);
+}
+
+.rv-tools-draw {
+  grid-area: 1 / 2;
+  justify-self: end;
+}
+
+.rv-tools[hidden] {
+  display: none;
+}
+
+.rv-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.rv-tool svg {
+  width: 19px;
+  height: 19px;
+}
+
+.rv-tool:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.rv-tool.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.rv-tool.has-note {
+  color: var(--accent);
+}
+
+.rv-tool.open {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+}
+
+.rv-tool-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: var(--border);
+}
+
+.rv-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  cursor: pointer;
+}
+
+.rv-swatch span {
+  display: block;
+  width: 15px;
+  height: 15px;
+  border: 1px solid rgba(0, 0, 0, 0.55);
+  border-radius: 50%;
+  background: var(--swatch);
+}
+
+.rv-swatch:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.rv-swatch.active span {
+  box-shadow: 0 0 0 2px var(--rv-stage), 0 0 0 4px var(--swatch);
+}
+
+/* ---- Viewer popovers (note, playlists) ----------------------------------- */
+
+.rv-popover {
+  position: absolute;
+  right: 16px;
+  bottom: calc(100% - 4px);
+  z-index: 9;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(14, 17, 21, 0.97);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.rv-popover[hidden] {
+  display: none;
+}
+
+.rv-popover textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.rv-popover-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rv-popover-foot .site-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.rv-note-count {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rv-popover-msg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rv-popover-empty {
+  margin: 0;
+  padding: 6px 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rv-playlist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.rv-playlist-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rv-playlist-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.rv-playlist-check {
+  width: 12px;
+  color: var(--accent);
+}
+
+.rv-playlist-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rv-playlist-count {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .rv-map {
@@ -715,6 +941,14 @@ body.rv-open {
 
 .rv-map.panning {
   cursor: grabbing;
+}
+
+.rv-map.drawing {
+  cursor: crosshair;
+}
+
+.rv-map.erasing {
+  cursor: cell;
 }
 
 /* Absolute, so the canvas element never contributes its intrinsic size to the
@@ -1253,6 +1487,76 @@ body.rv-open {
   background: rgba(10, 12, 15, 0.85);
   color: var(--muted);
   font-size: 10px;
+}
+
+/* ---- Playlists dialog ---------------------------------------------------- */
+
+.rp-playlist-card {
+  width: min(760px, calc(100vw - 40px));
+  max-height: min(70vh, 620px);
+  display: flex;
+  flex-direction: column;
+  padding: 18px 20px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-solid, #19191c);
+}
+
+.rp-playlist-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.rp-playlist-head h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.rp-playlist-body {
+  overflow-y: auto;
+}
+
+.rp-playlist-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.rp-playlist-table th {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.rp-playlist-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rp-pl-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.rp-pl-when,
+.rp-pl-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rp-pl-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 /* ---- Narrow screens ----------------------------------------------------- */

@@ -399,6 +399,124 @@ export async function readRoundTicks(user, file, stride = 1) {
   return sliceStride(buf, step, header);
 }
 
+// ---- Notes ------------------------------------------------------------------
+
+export const NOTE_MAX = 800;
+
+/**
+ * A round's note lives in the round's own JSON, not in a side table. It is
+ * read on every round load already, it travels with the round when a demo is
+ * deleted, and it is a property of the round rather than of whoever wrote it —
+ * everyone who can open the round sees the same note.
+ */
+export async function writeRoundNote(user, file, note) {
+  const stem = sanitizeStem(file);
+  const p = path.join(roundsDir(user), `${stem}.json`);
+  let meta;
+  try {
+    meta = JSON.parse(await fsp.readFile(p, 'utf8'));
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+  const text = String(note ?? '').slice(0, NOTE_MAX).trim();
+  if (text) {
+    meta.note = text;
+    meta.noteUpdatedAt = Date.now();
+  } else {
+    delete meta.note;
+    delete meta.noteUpdatedAt;
+  }
+  await fsp.writeFile(p, JSON.stringify(meta));
+  return { note: text, noteUpdatedAt: meta.noteUpdatedAt || null };
+}
+
+// ---- Playlists --------------------------------------------------------------
+
+export const MAX_PLAYLISTS = 100;
+export const MAX_PLAYLIST_ROUNDS = 400;
+
+const playlistsPath = (user) => path.join(userDir(user), 'playlists.json');
+
+/**
+ * Playlists hold round *names*, nothing else. A name is the whole key — the
+ * client turns a list of them back into round summaries with one collector
+ * call, so a playlist can never go stale against a renamed team and rounds
+ * that have since been deleted simply drop out.
+ */
+export async function readPlaylists(user) {
+  try {
+    const raw = JSON.parse(await fsp.readFile(playlistsPath(user), 'utf8'));
+    return Array.isArray(raw) ? raw : [];
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    return [];
+  }
+}
+
+async function savePlaylists(user, list) {
+  await fsp.mkdir(userDir(user), { recursive: true });
+  await fsp.writeFile(playlistsPath(user), JSON.stringify(list, null, 2));
+  return list;
+}
+
+function cleanPlaylistName(name) {
+  return String(name || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+}
+
+function cleanRoundNames(rounds) {
+  const out = [];
+  const seen = new Set();
+  for (const r of Array.isArray(rounds) ? rounds : []) {
+    const s = String(r || '').replace(/\.[a-z0-9]+$/i, '');
+    if (!/^[A-Za-z0-9_~-]+$/.test(s) || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+    if (out.length >= MAX_PLAYLIST_ROUNDS) break;
+  }
+  return out;
+}
+
+/** Create or update one playlist. Returns the whole list. */
+export async function upsertPlaylist(user, patch = {}) {
+  const list = await readPlaylists(user);
+  const id = String(patch.id || '').replace(/[^A-Za-z0-9_-]/g, '');
+  const existing = id ? list.find((p) => p.id === id) : null;
+
+  if (!existing && list.length >= MAX_PLAYLISTS) {
+    const err = new Error(`You can keep ${MAX_PLAYLISTS} playlists. Delete one first.`);
+    err.status = 409;
+    throw err;
+  }
+
+  const name = cleanPlaylistName(patch.name) || existing?.name || 'Untitled playlist';
+  const rounds = patch.rounds === undefined ? existing?.rounds || [] : cleanRoundNames(patch.rounds);
+
+  if (existing) {
+    existing.name = name;
+    existing.rounds = rounds;
+    existing.updatedAt = Date.now();
+  } else {
+    list.push({
+      id: crypto.randomBytes(6).toString('hex'),
+      name,
+      rounds,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+  }
+  list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return savePlaylists(user, list);
+}
+
+export async function removePlaylist(user, id) {
+  const key = String(id || '').replace(/[^A-Za-z0-9_-]/g, '');
+  const list = await readPlaylists(user);
+  const next = list.filter((p) => p.id !== key);
+  if (next.length === list.length) return null;
+  return savePlaylists(user, next);
+}
+
 /** Remove a demo and every round parsed from it. */
 export async function deleteDemo(user, id) {
   const demoId = sanitizeId(id);
@@ -409,6 +527,17 @@ export async function deleteDemo(user, id) {
   for (const f of await listFiles(dir)) {
     if (f.includes(`~${demoId}.`)) await fsp.rm(path.join(dir, f), { force: true });
   }
+  // Playlists would otherwise keep counting rounds that no longer exist.
+  const lists = await readPlaylists(user);
+  let touched = false;
+  for (const pl of lists) {
+    const kept = (pl.rounds || []).filter((r) => !r.endsWith(`~${demoId}`));
+    if (kept.length !== (pl.rounds || []).length) {
+      pl.rounds = kept;
+      touched = true;
+    }
+  }
+  if (touched) await savePlaylists(user, lists);
   return record;
 }
 

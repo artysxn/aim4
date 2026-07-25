@@ -14,6 +14,23 @@ import { createTimelineViewer } from './timelineViewer.js';
 import { createMacroViewer } from './macroViewer.js';
 import { MAPS } from '../shared/roundId.js';
 
+/**
+ * Point the address bar at the round on screen so it can be copied and sent.
+ * replaceState, not pushState: scrubbing through twenty rounds must not bury
+ * the page the viewer was opened from under twenty history entries.
+ */
+function syncUrl(round) {
+  const target = round?.file
+    ? `/replays?round=${encodeURIComponent(round.file)}`
+    : '/replays';
+  if (window.location.pathname + window.location.search === target) return;
+  try {
+    window.history.replaceState(window.history.state, '', target);
+  } catch {
+    /* a sandboxed frame; the viewer still works, the link just is not shareable */
+  }
+}
+
 export function openViewer({ rounds, mode = 'timeline', title = '', escapeHtml, onClose }) {
   const store = new TickStore();
 
@@ -54,7 +71,8 @@ export function openViewer({ rounds, mode = 'timeline', title = '', escapeHtml, 
     current?.destroy();
     bodyEl.innerHTML = '';
     const factory = next === 'macro' ? createMacroViewer : createTimelineViewer;
-    current = factory({ store, rounds, escapeHtml });
+    current = factory({ store, rounds, escapeHtml, onRound: syncUrl });
+    if (next === 'macro') syncUrl(null);
     bodyEl.appendChild(current.el);
     overlay.querySelectorAll('.rv-mode').forEach((b) => {
       b.classList.toggle('active', b.dataset.mode === next);
@@ -78,6 +96,7 @@ export function openViewer({ rounds, mode = 'timeline', title = '', escapeHtml, 
     document.removeEventListener('keydown', onKey);
     overlay.remove();
     document.body.classList.remove('rv-open');
+    syncUrl(null);
     onClose?.();
   }
 

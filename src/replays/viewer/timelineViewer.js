@@ -6,21 +6,36 @@
 // rounds stay in memory until the viewer closes.
 // ---------------------------------------------------------------------------
 
-import { fetchRoundMeta } from '../api.js';
+import {
+  NOTE_MAX,
+  fetchPlaylists,
+  fetchRoundMeta,
+  saveRoundNote,
+  savePlaylist
+} from '../api.js';
 import { RadarRenderer, SIDE_COLORS } from './radarRenderer.js';
 import { Playback, RoundSequence } from './playback.js';
 import { clockAt, formatClock, timingFor } from './roundClock.js';
 import { economyLabel, winningSide } from '../shared/roundId.js';
 import { iconImgHtml, inventoryAt } from './equipmentIcons.js';
+import { DRAW_COLORS, DrawingLayer } from './drawing.js';
 import helmetSvg from '../../icons/helmet.svg?url';
 import kevlarSvg from '../../icons/kevlar.svg?url';
 import nokevlarSvg from '../../icons/nokevlar.svg?url';
+import pencilIcon from '../../icons/demos_drawing.svg?raw';
+import eraseIcon from '../../icons/demos_erase.svg?raw';
+import commentsIcon from '../../icons/demos_comments.svg?raw';
+import bookmarkAddIcon from '../../icons/demos_bookmarks_add.svg?raw';
+import bookmarkAddedIcon from '../../icons/demos_bookmarks_added.svg?raw';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 5;
 
-export function createTimelineViewer({ store, rounds, escapeHtml }) {
+/** The shipped SVGs are a fixed light grey; let CSS drive the colour instead. */
+const icon = (raw) => String(raw).replace(/fill="#[0-9a-fA-F]{3,8}"/g, 'fill="currentColor"');
+
+export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
   const el = document.createElement('div');
   el.className = 'rv-timeline';
   el.innerHTML = `
@@ -35,6 +50,14 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     </div>
     <div class="rv-chrome">
       <div class="rv-rounds" id="rv-rounds"></div>
+      <div class="rv-tools rv-tools-draw" id="rv-draw-tools" hidden>
+        <button type="button" class="rv-tool" id="rv-erase" title="Eraser: drag over a line to remove it">${icon(eraseIcon)}</button>
+        <span class="rv-tool-sep"></span>
+        ${DRAW_COLORS.map(
+          (c) => `<button type="button" class="rv-swatch" data-color="${c.value}" title="${c.label}"
+            style="--swatch:${c.value}"><span></span></button>`
+        ).join('')}
+      </div>
       <div class="rv-transport">
         <button type="button" class="rv-speed" id="rv-speed">x1</button>
         <button type="button" class="rv-play" id="rv-play" aria-label="Play">
@@ -49,6 +72,28 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
           <div class="rv-scrub-handle" id="rv-scrub-handle"></div>
         </div>
         <span class="rv-time" id="rv-time">00:00</span>
+      </div>
+      <div class="rv-tools" id="rv-tools">
+        <button type="button" class="rv-tool" id="rv-draw" title="Draw (right click always draws)">${icon(pencilIcon)}</button>
+        <button type="button" class="rv-tool" id="rv-note" title="Round note">${icon(commentsIcon)}</button>
+        <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
+      </div>
+      <div class="rv-popover" id="rv-note-panel" hidden>
+        <textarea id="rv-note-text" maxlength="${NOTE_MAX}" rows="5"
+          placeholder="What happens in this round?"></textarea>
+        <div class="rv-popover-foot">
+          <span class="rv-note-count" id="rv-note-count">0 / ${NOTE_MAX}</span>
+          <span class="rv-popover-msg" id="rv-note-msg"></span>
+          <button type="button" class="btn btn-sm primary" id="rv-note-save">Save</button>
+        </div>
+      </div>
+      <div class="rv-popover" id="rv-playlist-panel" hidden>
+        <div class="rv-playlist-list" id="rv-playlist-list"></div>
+        <div class="rv-popover-foot">
+          <input type="text" id="rv-playlist-new" class="site-input" maxlength="60" placeholder="New playlist" />
+          <button type="button" class="btn btn-sm primary" id="rv-playlist-add">Create</button>
+        </div>
+        <span class="rv-popover-msg" id="rv-playlist-msg"></span>
       </div>
     </div>`;
 
@@ -69,8 +114,28 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
   const team2El = el.querySelector('.rv-team-2');
   const chromeEl = el.querySelector('.rv-chrome');
 
+  const drawToolsEl = el.querySelector('#rv-draw-tools');
+  const toolsEl = el.querySelector('#rv-tools');
+  const drawBtn = el.querySelector('#rv-draw');
+  const eraseBtn = el.querySelector('#rv-erase');
+  const noteBtn = el.querySelector('#rv-note');
+  const notePanel = el.querySelector('#rv-note-panel');
+  const noteText = el.querySelector('#rv-note-text');
+  const noteCount = el.querySelector('#rv-note-count');
+  const noteMsg = el.querySelector('#rv-note-msg');
+  const bookmarkBtn = el.querySelector('#rv-bookmark');
+  const playlistPanel = el.querySelector('#rv-playlist-panel');
+  const playlistListEl = el.querySelector('#rv-playlist-list');
+  const playlistNewEl = el.querySelector('#rv-playlist-new');
+  const playlistMsg = el.querySelector('#rv-playlist-msg');
+
   const renderer = new RadarRenderer(canvas);
   renderer.onIconLoad = () => {
+    if (!destroyed) draw();
+  };
+
+  const drawing = new DrawingLayer();
+  drawing.onChange = () => {
     if (!destroyed) draw();
   };
   const metaCache = new Map();
@@ -273,6 +338,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
 
     activeIndex = index;
     markActiveRound();
+    drawing.setRound(files[index]);
+    onRound?.(rounds[index]);
+    syncBookmark();
     renderer._prevHealth?.fill?.(-1);
     renderer._damageTick?.fill?.(-1);
 
@@ -280,6 +348,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     activeMeta = fallbackMeta(rounds[index]);
     renderScoreboards();
     renderActiveMarks();
+    syncNotePanel(true);
     if (seek) playback.seek(liveOffsetOf(index), { emit: false });
     syncLoading();
     clearPlayerStates();
@@ -318,6 +387,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
       else markActiveRound();
       renderScoreboards();
       renderActiveMarks();
+      syncNotePanel();
     }
 
     if (seek) playback.seek(liveOffsetOf(index), { emit: false });
@@ -488,8 +558,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
   }
 
   function syncPanCursor() {
-    const canPan = renderer.zoom > MIN_ZOOM;
+    const canPan = renderer.zoom > MIN_ZOOM && !drawing.enabled;
     mapEl.classList.toggle('can-pan', canPan);
+    mapEl.classList.toggle('drawing', drawing.enabled && !drawing.erasing);
+    mapEl.classList.toggle('erasing', drawing.enabled && drawing.erasing);
   }
 
   mapEl.addEventListener(
@@ -502,17 +574,55 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     { passive: false }
   );
 
+  // ---- drawing / pan ------------------------------------------------------
+
   let panning = false;
   let panBtn = -1;
   let lastX = 0;
   let lastY = 0;
+  /** Pointer id currently laying down (or rubbing out) ink, or -1. */
+  let inkPointer = -1;
+
+  function setDrawMode(on) {
+    drawing.enabled = on;
+    if (!on) {
+      drawing.erasing = false;
+      eraseBtn.classList.remove('active');
+    }
+    drawBtn.classList.toggle('active', on);
+    drawToolsEl.hidden = !on;
+    syncPanCursor();
+  }
+
+  function setColor(value) {
+    drawing.color = value;
+    drawToolsEl.querySelectorAll('.rv-swatch').forEach((b) => {
+      b.classList.toggle('active', b.dataset.color === value);
+    });
+  }
+
+  const radarAt = (e) => renderer.radarFromClient(e.clientX, e.clientY);
+
+  function startInk(e) {
+    inkPointer = e.pointerId;
+    mapEl.setPointerCapture(e.pointerId);
+    const pt = radarAt(e);
+    if (drawing.erasing) drawing.eraseAt(pt, pt.scale);
+    else drawing.begin(pt);
+    e.preventDefault();
+  }
 
   mapEl.addEventListener('pointerdown', (e) => {
-    if (e.target !== canvas && !canvas.contains(e.target) && e.target !== mapEl) {
-      // Allow pan only from the map surface / canvas, not the clock label.
-      if (e.target.closest?.('.rv-clock, .rv-loading')) return;
-    }
     if (e.target.closest?.('.rv-clock, .rv-loading')) return;
+    closePopovers();
+
+    // Right click always draws, whatever mode the toolbar is in. Left click
+    // only draws while drawing mode is on, so it stays a pan otherwise.
+    if (e.button === 2 || (e.button === 0 && drawing.enabled)) {
+      startInk(e);
+      return;
+    }
+
     const isPanBtn = e.button === 0 || e.button === 1;
     if (!isPanBtn || renderer.zoom <= MIN_ZOOM) return;
     panning = true;
@@ -523,7 +633,14 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     mapEl.setPointerCapture(e.pointerId);
     e.preventDefault();
   });
+
   mapEl.addEventListener('pointermove', (e) => {
+    if (inkPointer === e.pointerId) {
+      const pt = radarAt(e);
+      if (drawing.erasing) drawing.eraseAt(pt, pt.scale);
+      else drawing.extend(pt, pt.scale);
+      return;
+    }
     if (!panning) return;
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
@@ -533,7 +650,22 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     renderer.panY += dy;
     draw();
   });
+
+  const endStroke = (e) => {
+    if (inkPointer !== e.pointerId) return false;
+    inkPointer = -1;
+    if (e.type === 'pointercancel') drawing.cancel();
+    else drawing.end();
+    try {
+      mapEl.releasePointerCapture(e.pointerId);
+    } catch {
+      /* already released */
+    }
+    return true;
+  };
+
   const endPan = (e) => {
+    if (endStroke(e)) return;
     if (!panning) return;
     if (e.button !== undefined && e.button !== panBtn && e.type === 'pointerup') return;
     panning = false;
@@ -551,8 +683,181 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     // Stop middle-click autofocus / autoscroll.
     if (e.button === 1) e.preventDefault();
   });
-  mapEl.addEventListener('contextmenu', (e) => {
-    if (renderer.zoom > MIN_ZOOM) e.preventDefault();
+  // Always swallowed: right-drag is the draw gesture at every zoom level.
+  mapEl.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  drawBtn.addEventListener('click', () => setDrawMode(!drawing.enabled));
+  eraseBtn.addEventListener('click', () => {
+    drawing.erasing = !drawing.erasing;
+    eraseBtn.classList.toggle('active', drawing.erasing);
+    syncPanCursor();
+  });
+  drawToolsEl.addEventListener('click', (e) => {
+    const swatch = e.target.closest('[data-color]');
+    if (!swatch) return;
+    // Picking a pen is also the way out of erasing.
+    drawing.erasing = false;
+    eraseBtn.classList.remove('active');
+    setColor(swatch.dataset.color);
+    syncPanCursor();
+  });
+  setColor(DRAW_COLORS[0].value);
+
+  // ---- notes --------------------------------------------------------------
+
+  function closePopovers(except = null) {
+    if (notePanel !== except) notePanel.hidden = true;
+    if (playlistPanel !== except) playlistPanel.hidden = true;
+    noteBtn.classList.toggle('active', !notePanel.hidden);
+    bookmarkBtn.classList.toggle('open', !playlistPanel.hidden);
+  }
+
+  function syncNoteCount() {
+    noteCount.textContent = `${noteText.value.length} / ${NOTE_MAX}`;
+  }
+
+  /**
+   * Show whatever note the round arrived with. Skipped while the box has focus
+   * so a late meta load cannot overwrite what is being typed — except on a
+   * round change, where keeping the old text would save it to the wrong round.
+   */
+  function syncNotePanel(force = false) {
+    if (!force && document.activeElement === noteText) return;
+    noteText.value = activeMeta?.note || '';
+    noteMsg.textContent = '';
+    syncNoteCount();
+    noteBtn.classList.toggle('has-note', Boolean(activeMeta?.note));
+  }
+
+  noteText.addEventListener('input', syncNoteCount);
+  noteBtn.addEventListener('click', () => {
+    const open = notePanel.hidden;
+    closePopovers(open ? notePanel : null);
+    notePanel.hidden = !open;
+    noteBtn.classList.toggle('active', open);
+    if (open) {
+      syncNotePanel();
+      noteText.focus();
+    }
+  });
+  el.querySelector('#rv-note-save').addEventListener('click', async () => {
+    const file = files[activeIndex];
+    if (!file) return;
+    noteMsg.textContent = 'Saving…';
+    try {
+      const res = await saveRoundNote(file, noteText.value);
+      if (activeMeta) activeMeta.note = res.note;
+      // The cached meta is what a later round switch reads back.
+      const cached = await metaCache.get(file);
+      if (cached) cached.note = res.note;
+      noteMsg.textContent = res.note ? 'Saved.' : 'Note cleared.';
+      noteBtn.classList.toggle('has-note', Boolean(res.note));
+    } catch (err) {
+      noteMsg.textContent = err.message || 'Could not save.';
+    }
+  });
+
+  // ---- playlists ----------------------------------------------------------
+
+  let playlists = null;
+
+  function inPlaylists(file) {
+    if (!playlists || !file) return [];
+    return playlists.filter((p) => (p.rounds || []).includes(file));
+  }
+
+  function syncBookmark() {
+    const on = inPlaylists(files[activeIndex]).length > 0;
+    bookmarkBtn.innerHTML = icon(on ? bookmarkAddedIcon : bookmarkAddIcon);
+    bookmarkBtn.classList.toggle('has-note', on);
+    bookmarkBtn.title = on ? 'In a playlist' : 'Save to a playlist';
+  }
+
+  function renderPlaylists() {
+    const file = files[activeIndex];
+    if (!playlists) {
+      playlistListEl.innerHTML = '<p class="rv-popover-empty">Loading…</p>';
+      return;
+    }
+    if (!playlists.length) {
+      playlistListEl.innerHTML = '<p class="rv-popover-empty">No playlists yet.</p>';
+      return;
+    }
+    playlistListEl.innerHTML = playlists
+      .map((p) => {
+        const has = (p.rounds || []).includes(file);
+        return `<button type="button" class="rv-playlist-item${has ? ' on' : ''}" data-playlist="${escapeHtml(p.id)}">
+          <span class="rv-playlist-check">${has ? '✓' : ''}</span>
+          <span class="rv-playlist-name">${escapeHtml(p.name)}</span>
+          <span class="rv-playlist-count">${(p.rounds || []).length}</span>
+        </button>`;
+      })
+      .join('');
+  }
+
+  async function loadPlaylists() {
+    try {
+      playlists = await fetchPlaylists();
+    } catch {
+      playlists = [];
+    }
+    if (destroyed) return;
+    renderPlaylists();
+    syncBookmark();
+  }
+
+  async function togglePlaylist(id) {
+    const file = files[activeIndex];
+    const target = playlists?.find((p) => p.id === id);
+    if (!file || !target) return;
+    const has = (target.rounds || []).includes(file);
+    const next = has
+      ? (target.rounds || []).filter((r) => r !== file)
+      : [...(target.rounds || []), file];
+    playlistMsg.textContent = '';
+    try {
+      playlists = await savePlaylist({ id, rounds: next });
+      renderPlaylists();
+      syncBookmark();
+    } catch (err) {
+      playlistMsg.textContent = err.message || 'Could not save.';
+    }
+  }
+
+  playlistListEl.addEventListener('click', (e) => {
+    const item = e.target.closest('[data-playlist]');
+    if (item) togglePlaylist(item.dataset.playlist);
+  });
+
+  async function createPlaylist() {
+    const name = playlistNewEl.value.trim();
+    const file = files[activeIndex];
+    if (!name || !file) return;
+    playlistMsg.textContent = '';
+    try {
+      playlists = await savePlaylist({ name, rounds: [file] });
+      playlistNewEl.value = '';
+      renderPlaylists();
+      syncBookmark();
+    } catch (err) {
+      playlistMsg.textContent = err.message || 'Could not create the playlist.';
+    }
+  }
+
+  el.querySelector('#rv-playlist-add').addEventListener('click', createPlaylist);
+  playlistNewEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') createPlaylist();
+  });
+
+  bookmarkBtn.addEventListener('click', () => {
+    const open = playlistPanel.hidden;
+    closePopovers(open ? playlistPanel : null);
+    playlistPanel.hidden = !open;
+    bookmarkBtn.classList.toggle('open', open);
+    if (open) {
+      renderPlaylists();
+      if (!playlists) loadPlaylists();
+    }
   });
 
   // ---- frame --------------------------------------------------------------
@@ -590,7 +895,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
       players: track ? activeMeta.players || [] : [],
       events: track ? activeMeta.events || {} : { kills: [], shots: [], grenades: [], bomb: [] },
       weapons: activeMeta.weapons || [],
-      teamSides: { 1: activeMeta.team1Side, 2: activeMeta.team2Side }
+      teamSides: { 1: activeMeta.team1Side, 2: activeMeta.team2Side },
+      drawings: drawing.visible()
     });
 
     const clock = clockAt(timing, tick);
@@ -692,6 +998,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
   (async () => {
     // buildSequence → selectRound(0) already full-loads round 1 only.
     syncChromeInset();
+    loadPlaylists();
     await buildSequence();
   })();
 

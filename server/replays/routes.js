@@ -27,19 +27,24 @@ import {
   ROOT,
   MAX_BYTES,
   MAX_DEMOS,
+  NOTE_MAX,
   checkQuota,
   deleteDemo,
   findRounds,
   listDemos,
   newDemoId,
+  readPlaylists,
   readRecord,
   readRoundMeta,
   readRoundTicks,
+  removePlaylist,
   renameDemoTeams,
   saveTempUpload,
   saveUpload,
+  upsertPlaylist,
   usage,
-  writeRecord
+  writeRecord,
+  writeRoundNote
 } from './demoStore.js';
 import { allJobs, enqueueParse, jobStatus } from './jobs.js';
 import { authStatus, identify } from './auth.js';
@@ -73,6 +78,22 @@ function binary(res, buffer) {
     ...CORS
   });
   res.end(buf);
+}
+
+/** Small JSON bodies only (notes, playlists, team names). Uploads never come here. */
+async function readJson(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 64 * 1024) throw new Error('Body too large.');
+    chunks.push(chunk);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+  } catch {
+    throw new Error('Invalid JSON body.');
+  }
 }
 
 function csv(url, key) {
@@ -387,6 +408,40 @@ export async function handleReplayRequest(req, res, url) {
     return true;
   }
 
+  // ---- playlists ----------------------------------------------------------
+  if (p === '/api/replays/playlists') {
+    if (req.method === 'GET') {
+      json(res, 200, { playlists: await readPlaylists(user) });
+      return true;
+    }
+    if (req.method === 'POST') {
+      let body;
+      try {
+        body = await readJson(req);
+      } catch (err) {
+        json(res, 400, { error: err.message });
+        return true;
+      }
+      try {
+        json(res, 200, { playlists: await upsertPlaylist(user, body) });
+      } catch (err) {
+        json(res, err.status || 400, { error: err.message || 'Could not save the playlist.' });
+      }
+      return true;
+    }
+  }
+
+  const playlistMatch = p.match(/^\/api\/replays\/playlists\/([A-Za-z0-9_-]+)$/);
+  if (req.method === 'DELETE' && playlistMatch) {
+    const list = await removePlaylist(user, playlistMatch[1]);
+    if (!list) {
+      json(res, 404, { error: 'Playlist not found.' });
+      return true;
+    }
+    json(res, 200, { playlists: list });
+    return true;
+  }
+
   // ---- rounds -------------------------------------------------------------
   if (req.method === 'GET' && p === '/api/replays/rounds') {
     const limit = Number(url.searchParams.get('limit') || 2000);
@@ -410,6 +465,30 @@ export async function handleReplayRequest(req, res, url) {
       return true;
     }
     binary(res, buf);
+    return true;
+  }
+
+  const noteMatch = p.match(/^\/api\/replays\/rounds\/([A-Za-z0-9_~-]+)\/note$/);
+  if (req.method === 'POST' && noteMatch) {
+    let body;
+    try {
+      body = await readJson(req);
+    } catch (err) {
+      json(res, 400, { error: err.message });
+      return true;
+    }
+    let saved;
+    try {
+      saved = await writeRoundNote(user, noteMatch[1], body.note);
+    } catch (err) {
+      json(res, 400, { error: err.message || 'Bad round name.' });
+      return true;
+    }
+    if (!saved) {
+      json(res, 404, { error: 'Round not found.' });
+      return true;
+    }
+    json(res, 200, { ...saved, maxLength: NOTE_MAX });
     return true;
   }
 

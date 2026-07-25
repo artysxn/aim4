@@ -9,7 +9,10 @@
 
 import {
   deleteDemo,
+  deletePlaylist,
   fetchDemos,
+  fetchPlaylists,
+  fetchRoundMeta,
   fetchStatus,
   findRounds,
   renameDemoTeams,
@@ -41,6 +44,8 @@ export function initReplaysView({ auth, escapeHtml }) {
   let pollTimer = 0;
   let visible = false;
   let viewerModule = null;
+  /** Round name already opened from the URL, so it opens once per link. */
+  let openedRound = '';
 
   const filters = {
     maps: new Set(),
@@ -550,6 +555,134 @@ export function initReplaysView({ auth, escapeHtml }) {
     viewerModule.openViewer({ rounds: list, mode, title, escapeHtml });
   }
 
+  // ---- playlists ----------------------------------------------------------
+
+  const playlistsBtn = document.getElementById('rp-playlists-btn');
+
+  /**
+   * A playlist stores round names only, so it is turned back into rounds by
+   * matching against one collector call. Rounds that have since been deleted
+   * simply do not come back, which is why a playlist can never point at a
+   * round that no longer plays.
+   */
+  async function roundsForPlaylist(playlist) {
+    const wanted = playlist.rounds || [];
+    if (!wanted.length) return [];
+    const res = await findRounds({}, 5000);
+    const byFile = new Map((res.rounds || []).map((r) => [r.file, r]));
+    return wanted.map((f) => byFile.get(f)).filter(Boolean);
+  }
+
+  function playlistDialog() {
+    const overlay = document.createElement('div');
+    overlay.className = 'rp-name-dialog rp-playlist-dialog';
+    overlay.innerHTML = `
+      <div class="rp-playlist-card" role="dialog" aria-label="Playlists">
+        <div class="rp-playlist-head">
+          <h3>Playlists</h3>
+          <button type="button" class="rp-btn-icon" data-close aria-label="Close">✕</button>
+        </div>
+        <div class="rp-playlist-body" id="rp-pl-body"><p class="view-empty">Loading…</p></div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const body = overlay.querySelector('#rp-pl-body');
+
+    const close = () => overlay.remove();
+    overlay.querySelector('[data-close]').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
+    let lists = [];
+
+    function render() {
+      if (!lists.length) {
+        body.innerHTML =
+          '<p class="view-empty">No playlists yet. Open a round and use the bookmark button to start one.</p>';
+        return;
+      }
+      body.innerHTML = `
+        <table class="rp-playlist-table">
+          <thead>
+            <tr><th>Playlist</th><th>Last modified</th><th>Rounds</th><th></th></tr>
+          </thead>
+          <tbody>
+            ${lists
+              .map(
+                (p) => `
+              <tr data-id="${escapeHtml(p.id)}">
+                <td class="rp-pl-name">${escapeHtml(p.name)}</td>
+                <td class="rp-pl-when">${escapeHtml(formatWhen(p.updatedAt || p.createdAt))}</td>
+                <td class="rp-pl-count">${(p.rounds || []).length}</td>
+                <td class="rp-pl-actions">
+                  <button type="button" class="rp-btn-replay" data-play="${escapeHtml(p.id)}">▶ Replay</button>
+                  <button type="button" class="rp-btn-icon danger" data-drop="${escapeHtml(p.id)}" title="Delete playlist">
+                    <svg viewBox="0 -960 960 960" width="16" height="16" fill="currentColor"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>
+                  </button>
+                </td>
+              </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>`;
+    }
+
+    body.addEventListener('click', async (e) => {
+      const play = e.target.closest('[data-play]');
+      const drop = e.target.closest('[data-drop]');
+      if (play) {
+        const pl = lists.find((p) => p.id === play.dataset.play);
+        if (!pl) return;
+        play.disabled = true;
+        const list = await roundsForPlaylist(pl).catch(() => []);
+        play.disabled = false;
+        if (!list.length) {
+          setStatus('That playlist has no rounds left to play.', true);
+          return;
+        }
+        close();
+        launchViewer(list, 'timeline', pl.name);
+        return;
+      }
+      if (drop) {
+        const pl = lists.find((p) => p.id === drop.dataset.drop);
+        if (!pl || !window.confirm(`Delete the playlist "${pl.name}"?`)) return;
+        try {
+          lists = await deletePlaylist(pl.id);
+          render();
+        } catch (err) {
+          setStatus(err.message, true);
+        }
+      }
+    });
+
+    fetchPlaylists()
+      .then((res) => {
+        lists = res;
+        render();
+      })
+      .catch((err) => {
+        body.innerHTML = `<p class="view-empty">${escapeHtml(err.message)}</p>`;
+      });
+  }
+
+  playlistsBtn?.addEventListener('click', playlistDialog);
+
+  // ---- deep links ---------------------------------------------------------
+
+  /** /replays?round=<name> opens straight into that round. */
+  async function openSharedRound(file) {
+    if (!file) return;
+    try {
+      const meta = await fetchRoundMeta(file);
+      if (!meta) throw new Error('That round is not in this library.');
+      const title = `${meta.team1?.name || 'Team 1'} vs ${meta.team2?.name || 'Team 2'}`;
+      launchViewer([{ ...meta, file }], 'timeline', title);
+    } catch (err) {
+      setStatus(`Could not open that round. ${err.message}`, true);
+    }
+  }
+
   // ---- polling ------------------------------------------------------------
 
   async function refresh() {
@@ -599,13 +732,21 @@ export function initReplaysView({ auth, escapeHtml }) {
   }
 
   return {
-    onShow() {
+    onShow(params = {}) {
       visible = true;
+      if (playlistsBtn) playlistsBtn.hidden = false;
       refresh();
       startPolling();
+      // Only on the first arrival: a viewer close rewrites the URL back to
+      // /replays, and re-entering the view must not reopen what was closed.
+      if (params.round && params.round !== openedRound) {
+        openedRound = params.round;
+        openSharedRound(params.round);
+      }
     },
     onHide() {
       visible = false;
+      if (playlistsBtn) playlistsBtn.hidden = true;
       stopPolling();
     }
   };

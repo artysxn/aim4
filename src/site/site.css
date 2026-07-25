@@ -321,6 +321,12 @@ a {
 }
 
 /* Per-page top section: title left, actions right. */
+.page-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .page-head {
   position: sticky;
   top: 0;
