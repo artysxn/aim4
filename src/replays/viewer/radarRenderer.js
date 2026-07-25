@@ -133,10 +133,8 @@ export class RadarRenderer {
     /** Cached opaque map (Analyzer: paint once, overlay rounds on top). */
     this._mapLayer = null;
     this._mapLayerKey = '';
-    /** Frozen world positions for kill markers: `${tick}:${victimId}` -> {x,y}. */
+    /** Frozen world positions for kill markers: `scope:tick:victimId` -> {x,y}. */
     this._killPos = new Map();
-    /** Events object last used for kill positions (clear cache on round change). */
-    this._killEventsRef = null;
   }
 
   async setMap(mapCode) {
@@ -327,6 +325,15 @@ export class RadarRenderer {
 
     const compact = Boolean(frame.compact);
     this._frameAlpha = Number.isFinite(frame.alpha) ? frame.alpha : 1;
+
+    // Analyzer kill-mark pass: only X/O, always full opacity, never ghosted.
+    if (frame.marksOnly) {
+      this._frameAlpha = 1;
+      this.drawDeaths(ctx, t, frame, compact);
+      this._frameAlpha = 1;
+      return;
+    }
+
     this.drawUtility(ctx, t, frame, compact);
     if (!frame.hideBomb) this.drawBomb(ctx, t, frame, compact);
     if (!frame.hideTracers) this.drawTracers(ctx, t, frame, compact);
@@ -625,16 +632,12 @@ export class RadarRenderer {
   drawDeaths(ctx, t, frame, compact) {
     const { events, tick, states, players } = frame;
     if (!events?.kills?.length || !players?.length) return;
-    if (this._killEventsRef !== events) {
-      this._killPos.clear();
-      this._killEventsRef = events;
-    }
     // Full roster for positions / sides; `players` is who we credit marks to.
     const roster = frame.allPlayers?.length ? frame.allPlayers : players;
     const byId = new Map(roster.map((p) => [p.id, p]));
     const allow = new Set(players.map((p) => p.id));
     const size = (compact ? 3.5 : 5) * this.dpr;
-    const fa = this._frameAlpha ?? 1;
+    const scope = frame.marksKey || '';
 
     for (const k of events.kills) {
       if (k.tick > tick) continue;
@@ -642,7 +645,7 @@ export class RadarRenderer {
       const showCircle = allow.has(k.victim);
       if (!showX && !showCircle) continue;
 
-      const pt = this.killWorldPoint(k, states, byId, t);
+      const pt = this.killWorldPoint(k, states, byId, t, scope);
       if (!pt) continue;
 
       const victimSide = killVictimSide(k, states, byId);
@@ -651,11 +654,12 @@ export class RadarRenderer {
           ? SIDE_COLORS[victimSide].base
           : '#c8ccd4';
 
+      // Full opacity always — never ghosted / never timed fade.
       if (showX) {
         ctx.save();
-        ctx.globalAlpha = 0.85 * fa;
+        ctx.globalAlpha = 0.95;
         ctx.strokeStyle = markColor;
-        ctx.lineWidth = Math.max(1, 1.6 * this.dpr);
+        ctx.lineWidth = Math.max(1.2, 1.8 * this.dpr);
         ctx.beginPath();
         ctx.moveTo(pt.x - size, pt.y - size);
         ctx.lineTo(pt.x + size, pt.y + size);
@@ -667,29 +671,41 @@ export class RadarRenderer {
 
       if (showCircle) {
         ctx.save();
-        ctx.globalAlpha = 0.22 * fa;
+        ctx.globalAlpha = 0.45;
         ctx.strokeStyle = markColor;
-        ctx.lineWidth = Math.max(1, 1.4 * this.dpr);
+        ctx.lineWidth = Math.max(1, 1.5 * this.dpr);
         ctx.beginPath();
-        ctx.arc(pt.x, pt.y, size * 1.05, 0, Math.PI * 2);
+        ctx.arc(pt.x, pt.y, size * 1.15, 0, Math.PI * 2);
         ctx.stroke();
         ctx.restore();
       }
     }
   }
 
-  /** Project a kill to canvas pixels; freeze the first seen world pos. */
-  killWorldPoint(k, states, byId, t) {
-    const key = `${k.tick}:${k.victim}`;
+  /**
+   * Project a kill to canvas pixels. Prefers a position frozen at the death
+   * tick (`k._wx/_wy`); otherwise freezes the first observed world pos.
+   * `scope` separates Analyzer rounds that share one renderer cache.
+   */
+  killWorldPoint(k, states, byId, t, scope = '') {
+    const key = `${scope}:${k.tick}:${k.victim}`;
     let world = this._killPos.get(key);
     if (!world) {
-      const victim = byId.get(k.victim);
-      const s = victim ? states[victim.slot] : null;
-      if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) {
-        world = { x: s.x, y: s.y };
-        this._killPos.set(key, world);
-      } else if (Number.isFinite(k.x) && Number.isFinite(k.y)) {
-        world = { x: k.x, y: k.y };
+      if (Number.isFinite(k._wx) && Number.isFinite(k._wy)) {
+        world = { x: k._wx, y: k._wy };
+      } else {
+        const victim = byId.get(k.victim);
+        const s = victim ? states[victim.slot] : null;
+        if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) {
+          world = { x: s.x, y: s.y };
+        } else if (Number.isFinite(k.x) && Number.isFinite(k.y)) {
+          world = { x: k.x, y: k.y };
+        }
+      }
+      if (world) {
+        // Persist on the event so later frames / ghost alpha never lose it.
+        k._wx = world.x;
+        k._wy = world.y;
         this._killPos.set(key, world);
       }
     }

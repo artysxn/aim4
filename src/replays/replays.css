@@ -2042,7 +2042,7 @@ body.rv-open {
 .rv-az-tip {
   position: absolute;
   z-index: 4;
-  display: flex;
+  display: none;
   flex-direction: column;
   gap: 2px;
   padding: 5px 8px;
@@ -2054,6 +2054,14 @@ body.rv-open {
   line-height: 1.25;
   pointer-events: none;
   white-space: nowrap;
+}
+
+.rv-az-tip.is-on:not([hidden]) {
+  display: flex;
+}
+
+.rv-az-tip[hidden] {
+  display: none !important;
 }
 
 .rv-az-tip strong {
@@ -2093,14 +2101,17 @@ body.rv-open {
   gap: 8px;
   align-items: center;
   padding: 7px 6px;
+  border: 1px solid transparent;
   border-radius: 4px;
   color: var(--text);
   font-size: 13px;
   cursor: pointer;
 }
 
-.rv-az-sel-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+.rv-az-sel-item:hover,
+.rv-az-sel-item.is-focus {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
 }
 
 .rv-az-sel-team {

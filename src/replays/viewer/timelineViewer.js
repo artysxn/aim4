@@ -891,6 +891,22 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
     draw(loc);
   }
 
+  function freezeKillPositions(meta, track) {
+    const kills = meta?.events?.kills;
+    if (!track || !kills?.length) return;
+    const tmp = [];
+    for (const k of kills) {
+      if (Number.isFinite(k._wx) && Number.isFinite(k._wy)) continue;
+      track.sampleAll(k.tick, tmp);
+      const victim = (meta.players || []).find((p) => p.id === k.victim);
+      const s = victim ? tmp[victim.slot] : null;
+      if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) {
+        k._wx = s.x;
+        k._wy = s.y;
+      }
+    }
+  }
+
   function draw(loc = null) {
     if (!activeMeta) return;
     const at = loc || sequence.locate(playback.position);
@@ -899,18 +915,23 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
     const tick = at.tick;
 
     const track = store.track(files[activeIndex]);
-    if (track) track.sampleAll(tick, states);
-    else clearPlayerStates();
+    if (track) {
+      freezeKillPositions(activeMeta, track);
+      track.sampleAll(tick, states);
+    } else clearPlayerStates();
 
     renderer.render({
       tick,
       tickRate: timing.tickRate,
       states,
       players: track ? activeMeta.players || [] : [],
+      allPlayers: track ? activeMeta.players || [] : [],
       events: track ? activeMeta.events || {} : { kills: [], shots: [], grenades: [], bomb: [] },
       weapons: activeMeta.weapons || [],
       teamSides: { 1: activeMeta.team1Side, 2: activeMeta.team2Side },
-      drawings: drawing.visible()
+      drawings: drawing.visible(),
+      marksKey: files[activeIndex] || '',
+      hideDeaths: false
     });
 
     const clock = clockAt(timing, tick);
