@@ -11,7 +11,8 @@
 // Usage:
 //   node tools/parse-demo-local.js match.dem
 //   node tools/parse-demo-local.js a.dem b.dem -o out/
-//   tools\parse-demo.bat match.dem
+//   tools\parse-demo.bat              (drag-and-drop GUI)
+//   tools\parse-demo.bat match.dem    (CLI)
 // ---------------------------------------------------------------------------
 
 import fs from 'node:fs';
@@ -139,8 +140,9 @@ function printHelp() {
   console.log(`Parse CS2 demos locally into AIM4 replay packages.
 
 Usage:
+  tools\\parse-demo.bat                      drag-and-drop GUI (Windows)
+  tools\\parse-demo.bat --cli <demo.dem>     command line
   node tools/parse-demo-local.js <demo.dem> [more.dem ...] [-o outDir]
-  tools\\parse-demo.bat <demo.dem>
 
 Requires (once, from the repo root):
   npm install

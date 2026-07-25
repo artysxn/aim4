@@ -104,7 +104,7 @@ export function initReplaysView({ auth, escapeHtml }) {
     if (!parser.available) {
       parserEl.textContent =
         `Server-side .dem parsing is offline (${parser.name}). ` +
-        `Parse demos on your PC with tools\\parse-demo.bat, then upload the ${PACKAGE_EXT} package.`;
+        `Run tools\\parse-demo.bat on your PC (drag-and-drop GUI), then upload the ${PACKAGE_EXT} package.`;
     }
   }
 

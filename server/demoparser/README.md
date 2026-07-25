@@ -47,11 +47,13 @@ uploading an `.aim4replay` package:
 
 ```bash
 npm install @laihoe/demoparser2
+# Drag-and-drop GUI (Windows):
+tools\parse-demo.bat
+# Or CLI:
 npm run parse-demo -- path\to\match.dem
-# or: tools\parse-demo.bat path\to\match.dem
 ```
 
-That writes `match.aim4replay` next to the demo. Upload the package on the
+That writes `match.aim4replay` next to each demo. Upload the package on the
 Replays page (`POST /api/replays/import`). Round filenames inside the package
 are built with the same `buildRoundId` / ingest path the server uses.
 
