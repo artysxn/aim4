@@ -50,7 +50,7 @@ function formatRunWhen(iso) {
   return `${get('hour')}.${get('minute')} ${get('timeZoneName')}, ${get('day')}.${get('month')}.${get('year')}`;
 }
 
-export function initLeaderboardsView({ auth, escapeHtml }) {
+export function initLeaderboardsView({ auth, escapeHtml, openProfile }) {
   const body = document.getElementById('lb-body');
   const tabs = document.getElementById('lb-tabs');
   const modeSelect = document.getElementById('lb-mode-select');
@@ -62,7 +62,11 @@ export function initLeaderboardsView({ auth, escapeHtml }) {
     .map((k) => `<option value="${k}">${escapeHtml(SCENARIO_META[k].title)}</option>`)
     .join('');
 
-  const playerCell = (r) => `<td class="lb-player">${escapeHtml(r.username || 'player')}</td>`;
+  const playerCell = (r) => {
+    const name = escapeHtml(r.username || 'player');
+    if (!r.user_id || !openProfile) return `<td class="lb-player">${name}</td>`;
+    return `<td class="lb-player"><button type="button" class="lb-player-link" data-lb-user-id="${escapeHtml(r.user_id)}" data-lb-username="${name}">${name}</button></td>`;
+  };
 
   function rowsHtml(list, scenario, error) {
     if (!supabaseConfigured()) {
@@ -201,6 +205,12 @@ export function initLeaderboardsView({ auth, escapeHtml }) {
       board = modeSelect.value;
       render();
     }
+  });
+
+  body.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-lb-user-id]');
+    if (!btn || !openProfile) return;
+    openProfile(btn.dataset.lbUserId, btn.dataset.lbUsername || 'Player');
   });
 
   return {

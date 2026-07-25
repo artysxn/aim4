@@ -20,6 +20,7 @@ import { initTrainingView } from './trainingView.js';
 import { initLeaderboardsView } from './leaderboardsView.js';
 import { initFootballView } from './footballView.js';
 import { initReplaysView } from './replaysView.js';
+import { initProfileModal } from './profileModal.js';
 
 // ---- Legacy redirects -------------------------------------------------------
 // The game used to live at "/". Lobby invites (?lobby=) and replay shares
@@ -279,8 +280,10 @@ function openLeaderboards(mode) {
   setView('leaderboards', true, mode ? { mode } : null);
 }
 
+const { openProfile } = initProfileModal({ escapeHtml });
+
 viewControllers.training = initTrainingView({ escapeHtml, openLeaderboards });
-viewControllers.leaderboards = initLeaderboardsView({ auth, escapeHtml });
+viewControllers.leaderboards = initLeaderboardsView({ auth, escapeHtml, openProfile });
 viewControllers.football = initFootballView({ auth, escapeHtml });
 viewControllers.replays = initReplaysView({ auth, escapeHtml });
 

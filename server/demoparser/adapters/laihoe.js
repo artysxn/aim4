@@ -269,15 +269,34 @@ function rosterFromRows(reader) {
       seen.set(steam, {
         steamId: steam,
         name: r.name || `Player ${seen.size + 1}`,
-        teamNum: num(r.team_num)
+        teamNum: num(r.team_num),
+        health: num(r.health)
       });
     }
   }
   const all = [...seen.values()];
-  const sideA = all.filter((p) => p.teamNum === 2); // T at the start
-  const sideB = all.filter((p) => p.teamNum === 3); // CT at the start
-  const group1 = sideA.length === 5 ? sideA : all.slice(0, 5);
-  const group2 = sideB.length === 5 ? sideB : all.slice(5, 10);
+
+  // A coach or a benched player sits on a team in the tick rows without ever
+  // holding a pawn, so a side can come back with six or seven names. They have
+  // no health at freezetime, which is what separates them from the five who
+  // are actually playing. Taking a blind slice instead (the old fallback) put
+  // the same player in both groups and left the rest of the match unowned.
+  const pickSide = (teamNum) => {
+    const side = all.filter((p) => p.teamNum === teamNum);
+    if (side.length <= 5) return side;
+    const alive = side.filter((p) => p.health > 0);
+    return (alive.length >= 5 ? alive : side).slice(0, 5);
+  };
+  const group1 = pickSide(2); // T at the start
+  const group2 = pickSide(3); // CT at the start
+
+  // Demos that do not label sides at this tick still get ten distinct names.
+  if (group1.length < 5 || group2.length < 5) {
+    const taken = new Set([...group1, ...group2].map((p) => p.steamId));
+    const rest = all.filter((p) => !taken.has(p.steamId));
+    while (group1.length < 5 && rest.length) group1.push(rest.shift());
+    while (group2.length < 5 && rest.length) group2.push(rest.shift());
+  }
 
   const players = [];
   group1.forEach((p, i) => players.push({ ...p, team: 1, slot: i }));
@@ -475,41 +494,285 @@ function packBatch(reader, batch, roster, tickRate) {
   return packs;
 }
 
+// ---- grenades -------------------------------------------------------------
+//
+// Two sources are needed and neither is enough alone:
+//
+//   parseGrenades(file, null, false)
+//     One row per live PROJECTILE per tick — the flight path. Rows carry
+//     `grenade_entity_id`, `grenade_type` (the entity class, e.g.
+//     "CSmokeGrenadeProjectile"), `steamid` (thrower), `name` (the THROWER's
+//     display name, not the grenade) and x/y/z. The third argument drops the
+//     grenades sitting in players' inventories, which are ~90% of the rows and
+//     report the carrier's position, not a trajectory.
+//
+//   the *_detonate events
+//     The exact tick and world point the thing went off, keyed by the same
+//     entity id. Needed because a projectile entity usually outlives its
+//     detonation: a smoke projectile keeps reporting its resting position for
+//     the whole 18 seconds it is smoking, and an HE projectile lingers for
+//     seconds after the blast.
+//
+// Entity ids are recycled within a match, so samples are also split into
+// separate flights wherever there is a gap in the tick stream.
+
+/** Detonation events, and the grenade type each one belongs to. */
+const DETONATION_EVENTS = [
+  ['smokegrenade_detonate', 'smokegrenade'],
+  ['hegrenade_detonate', 'hegrenade'],
+  ['flashbang_detonate', 'flashbang'],
+  ['decoy_started', 'decoy'],
+  // The inferno is its own entity, so this one rarely pairs by id; molotovs
+  // fall back to their last projectile sample, which is the point of impact.
+  ['inferno_startburn', 'molotov']
+];
+
+const GRENADE_TYPES = new Set([
+  'flashbang',
+  'smokegrenade',
+  'hegrenade',
+  'molotov',
+  'incgrenade',
+  'decoy'
+]);
+
+/** A break longer than this in one entity's samples means a recycled id. */
+const FLIGHT_GAP_TICKS = 16;
+
+/** World units are ~0.2 radar pixels; one decimal is well under a pixel. */
+const round1 = (v) => Math.round(v * 10) / 10;
+
 /**
- * Group grenade trajectory samples into per-grenade flight paths, sliced to a
- * round. demoparser reports one row per grenade per tick while it is in the
- * air, keyed by entity id.
+ * Path simplification tolerance, world units. One radar pixel is ~5 units, so
+ * six is under a pixel of error at any sane zoom.
  */
-function grenadesForRound(allGrenades, round, idOf) {
+const PATH_EPSILON = 6;
+
+/** demoparser projectile rows -> one entry per thrown grenade. */
+export function buildFlights(rows) {
   const byEntity = new Map();
-  for (const g of allGrenades) {
-    const tick = num(g.tick);
-    if (tick < round.startTick || tick > round.officialEndTick) continue;
-    const key = `${g.entity_id ?? 'x'}:${sid(g.thrower_steamid)}`;
-    if (!byEntity.has(key)) byEntity.set(key, []);
-    byEntity.get(key).push(g);
+  for (const r of rows || []) {
+    const id = r.grenade_entity_id ?? r.entity_id;
+    if (id === undefined || id === null) continue;
+    if (!byEntity.has(id)) byEntity.set(id, []);
+    byEntity.get(id).push(r);
   }
-  const out = [];
-  for (const samples of byEntity.values()) {
+
+  const flights = [];
+  for (const [id, samples] of byEntity) {
     samples.sort((a, b) => num(a.tick) - num(b.tick));
-    const first = samples[0];
-    const last = samples[samples.length - 1];
-    const xyz = (s) => ({
-      x: num(s.X ?? s.x),
-      y: num(s.Y ?? s.y),
-      z: num(s.Z ?? s.z)
-    });
+    let run = [];
+    const flush = () => {
+      if (run.length) flights.push(flightFrom(id, run));
+      run = [];
+    };
+    for (const s of samples) {
+      if (run.length && num(s.tick) - num(run[run.length - 1].tick) > FLIGHT_GAP_TICKS) flush();
+      run.push(s);
+    }
+    flush();
+  }
+  flights.sort((a, b) => a.throwTick - b.throwTick);
+  return flights;
+}
+
+function flightFrom(entityId, samples) {
+  const first = samples[0];
+  return {
+    entityId,
+    type: normalizeGrenadeType(first.grenade_type ?? first.name),
+    steamId: sid(first.steamid ?? first.thrower_steamid),
+    throwTick: num(first.tick),
+    endTick: num(samples[samples.length - 1].tick),
+    path: samples.map((s) => ({
+      tick: num(s.tick),
+      x: num(s.x ?? s.X),
+      y: num(s.y ?? s.Y),
+      z: num(s.z ?? s.Z)
+    }))
+  };
+}
+
+/** Detonations keyed by projectile entity id, and by type for the fallback. */
+function detonationsFrom(byName) {
+  const byEntity = new Map();
+  const byType = new Map();
+  for (const [evName, type] of DETONATION_EVENTS) {
+    for (const e of byName.get(evName) || []) {
+      const det = {
+        type,
+        tick: num(e.tick),
+        steamId: sid(e.user_steamid),
+        x: num(e.x ?? e.user_X),
+        y: num(e.y ?? e.user_Y),
+        z: num(e.z ?? e.user_Z)
+      };
+      const id = e.entityid ?? e.entity_id;
+      if (id !== undefined && id !== null) {
+        if (!byEntity.has(id)) byEntity.set(id, []);
+        byEntity.get(id).push(det);
+      }
+      if (!byType.has(type)) byType.set(type, []);
+      byType.get(type).push(det);
+    }
+  }
+  for (const list of byEntity.values()) list.sort((a, b) => a.tick - b.tick);
+  for (const list of byType.values()) list.sort((a, b) => a.tick - b.tick);
+  return { byEntity, byType };
+}
+
+/** The detonation belonging to a flight: same entity, same type, in its window. */
+function detonationFor(flight, byEntity) {
+  for (const det of byEntity.get(flight.entityId) || []) {
+    if (det.type !== flight.type) continue;
+    if (det.tick < flight.throwTick - 4 || det.tick > flight.endTick + 4) continue;
+    return det;
+  }
+  return null;
+}
+
+/**
+ * A flight plus its detonation, in the shape the viewer draws. The path is
+ * cut at the detonation so a smoke does not appear to fly for 18 seconds, and
+ * simplified so a round's worth of trajectories stays a few kilobytes.
+ */
+function grenadeEventFrom(flight, det, idOf, sideOf) {
+  const detonateTick = det ? det.tick : flight.endTick;
+  const path = simplifyPath(
+    flight.path.filter((p) => p.tick <= detonateTick),
+    PATH_EPSILON
+  );
+  const last = path[path.length - 1];
+  const at = det ? { x: round1(det.x), y: round1(det.y), z: round1(det.z) } : last || null;
+  // The detonation point is authoritative; make sure the line reaches it.
+  if (at && last && Math.hypot(at.x - last.x, at.y - last.y) > PATH_EPSILON) {
+    path.push({ tick: detonateTick, ...at });
+  }
+  const side = sideOf(flight.steamId);
+  return {
+    type: flight.type === 'molotov' && side === 'CT' ? 'incgrenade' : flight.type,
+    player: idOf(flight.steamId),
+    throwTick: flight.throwTick,
+    detonateTick,
+    from: path[0] || null,
+    at,
+    path
+  };
+}
+
+/**
+ * Throws rebuilt from events alone, for demos that carry no projectile rows.
+ * A grenade weapon_fire is paired with the first unclaimed detonation of the
+ * same type from the same player inside that grenade's fuse window. Without
+ * projectile samples the path is a straight line, so a nade that bounced off a
+ * wall draws through it.
+ */
+function flightsFromFire(byName, dets, tickRate) {
+  // Seconds a throw may stay unaccounted for before its detonation is assumed
+  // to belong to someone else. Flashes and HEs run a fixed fuse from the
+  // throw; smokes, decoys and fire pop on landing, and a lofted smoke can be
+  // in the air for the better part of ten seconds.
+  const fuse = {
+    flashbang: 3,
+    hegrenade: 3,
+    smokegrenade: 12,
+    decoy: 12,
+    molotov: 8,
+    incgrenade: 8
+  };
+  const claimed = new Set();
+  const out = [];
+
+  for (const e of byName.get('weapon_fire') || []) {
+    const type = normalizeGrenadeType(e.weapon);
+    if (!GRENADE_TYPES.has(type)) continue;
+    const fireTick = num(e.tick);
+    const steamId = sid(e.user_steamid);
+    // Molotovs and incendiaries both burn as "molotov" in the event stream.
+    const detType = type === 'incgrenade' ? 'molotov' : type;
+    const window = (fuse[type] || 3) * tickRate;
+
+    let hit = null;
+    for (const det of dets.byType.get(detType) || []) {
+      if (det.tick < fireTick || det.tick > fireTick + window) continue;
+      if (det.steamId && steamId && det.steamId !== steamId) continue;
+      const key = `${detType}:${det.tick}:${det.x}`;
+      if (claimed.has(key)) continue;
+      claimed.add(key);
+      hit = det;
+      break;
+    }
+    if (!hit) continue;
+
+    const from = {
+      tick: fireTick,
+      x: round1(num(e.user_X ?? e.X)),
+      y: round1(num(e.user_Y ?? e.Y)),
+      z: round1(num(e.user_Z ?? e.Z))
+    };
     out.push({
-      type: normalizeGrenadeType(first.name),
-      player: idOf(sid(first.thrower_steamid ?? first.thrower_steamid64)),
-      throwTick: num(first.tick),
-      detonateTick: num(last.tick),
-      from: xyz(first),
-      at: xyz(last),
-      path: samples.map((s) => ({ tick: num(s.tick), ...xyz(s) }))
+      entityId: -1,
+      type,
+      steamId,
+      throwTick: fireTick,
+      endTick: hit.tick,
+      path: [from, { tick: hit.tick, x: round1(hit.x), y: round1(hit.y), z: round1(hit.z) }]
     });
   }
   return out;
+}
+
+/**
+ * Ramer-Douglas-Peucker, but the error measured is how far the *viewer* would
+ * be from the truth, not perpendicular distance to a line.
+ *
+ * The viewer walks a path by tick, so a dropped sample costs the distance
+ * between where the grenade really was and where interpolating between the
+ * two kept samples puts it at that moment. That metric keeps two things plain
+ * perpendicular RDP throws away: the deceleration of a lofted throw (the
+ * ground track is a straight line, but the grenade does not cover it at a
+ * constant rate) and a bounce that comes straight back down its own track (the
+ * corner sits exactly on the line, so its perpendicular distance is zero).
+ *
+ * A 7-second lofted smoke is ~460 samples and simplifies to a handful.
+ */
+export function simplifyPath(points, epsilon) {
+  if (!points || points.length <= 2) return (points || []).map(roundPoint);
+  const keep = new Uint8Array(points.length);
+  keep[0] = 1;
+  keep[points.length - 1] = 1;
+
+  const stack = [[0, points.length - 1]];
+  while (stack.length) {
+    const [lo, hi] = stack.pop();
+    if (hi - lo < 2) continue;
+    const a = points[lo];
+    const b = points[hi];
+    const span = b.tick - a.tick;
+    let worst = -1;
+    let worstAt = -1;
+    for (let i = lo + 1; i < hi; i++) {
+      const p = points[i];
+      const f = span > 0 ? (p.tick - a.tick) / span : 0;
+      const d = Math.hypot(p.x - (a.x + (b.x - a.x) * f), p.y - (a.y + (b.y - a.y) * f));
+      if (d > worst) {
+        worst = d;
+        worstAt = i;
+      }
+    }
+    if (worst > epsilon) {
+      keep[worstAt] = 1;
+      stack.push([lo, worstAt], [worstAt, hi]);
+    }
+  }
+
+  const out = [];
+  for (let i = 0; i < points.length; i++) if (keep[i]) out.push(roundPoint(points[i]));
+  return out;
+}
+
+function roundPoint(p) {
+  return { tick: p.tick, x: round1(p.x), y: round1(p.y), z: round1(p.z) };
 }
 
 /** Match viewer dictionary keys regardless of demoparser spelling. */
@@ -593,7 +856,12 @@ export async function parseDemo(file, opts = {}) {
     'player_hurt',
     'bomb_planted',
     'bomb_defused',
-    'bomb_exploded'
+    'bomb_exploded',
+    // Who is carrying the C4. The per-tick flag only fires while the bomb is
+    // the active weapon, so these are what the viewer actually marks with.
+    'bomb_dropped',
+    'bomb_pickup',
+    ...DETONATION_EVENTS.map(([name]) => name)
   ]);
   const byName = eventsByName(all);
 
@@ -621,12 +889,17 @@ export async function parseDemo(file, opts = {}) {
   const team1Name = teamNameFor(team1Players, 'Team 1');
   const team2Name = teamNameFor(team2Players, 'Team 2');
 
-  let grenades = [];
+  progress({ stage: 'grenades' });
+  const detonations = detonationsFrom(byName);
+  let flights = [];
   try {
-    grenades = p.parseGrenades(file) || [];
+    // `false` = projectiles only. Carried grenades report the holder's
+    // position for the whole match and are ~90% of the rows.
+    flights = buildFlights(p.parseGrenades(file, null, false) || []);
   } catch {
-    grenades = [];
+    flights = [];
   }
+  if (!flights.length) flights = flightsFromFire(byName, detonations, tickRate);
 
   const inSpan = (e, span) => {
     const t = num(e.tick);
@@ -665,6 +938,18 @@ export async function parseDemo(file, opts = {}) {
     const team1Side =
       sideFromBuys(1, buyTick, roster, buys) || (span.round > roundsPerHalf ? 'CT' : 'T');
     const team2Side = team1Side === 'T' ? 'CT' : 'T';
+    // Molotov and incendiary share one projectile class; the thrower's side
+    // is what separates them.
+    const sideOfSteam = (steam) =>
+      bySteam.get(steam)?.team === 2 ? team2Side : team1Side;
+
+    const grenades = [];
+    for (const flight of flights) {
+      if (flight.throwTick < span.startTick || flight.throwTick > span.officialEndTick) continue;
+      grenades.push(
+        grenadeEventFrom(flight, detonationFor(flight, detonations.byEntity), idOf, sideOfSteam)
+      );
+    }
 
     const kills = (byName.get('player_death') || [])
       .filter((e) => inSpan(e, span))
@@ -698,7 +983,9 @@ export async function parseDemo(file, opts = {}) {
     for (const [evName, type] of [
       ['bomb_planted', 'planted'],
       ['bomb_defused', 'defused'],
-      ['bomb_exploded', 'exploded']
+      ['bomb_exploded', 'exploded'],
+      ['bomb_dropped', 'dropped'],
+      ['bomb_pickup', 'pickup']
     ]) {
       for (const e of byName.get(evName) || []) {
         if (!inSpan(e, span)) continue;
@@ -713,6 +1000,8 @@ export async function parseDemo(file, opts = {}) {
         });
       }
     }
+    // Read as a chain (pickup -> dropped -> pickup -> planted), so order matters.
+    bomb.sort((a, b) => a.tick - b.tick);
     const plantTick = bomb.find((b) => b.type === 'planted')?.tick ?? null;
 
     let winnerSide =
@@ -787,7 +1076,7 @@ export async function parseDemo(file, opts = {}) {
       events: {
         kills,
         shots,
-        grenades: grenadesForRound(grenades, span, idOf),
+        grenades,
         bomb
       },
       stats

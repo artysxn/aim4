@@ -657,7 +657,32 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
   }
   window.addEventListener('keydown', onKey);
 
-  const onResize = () => draw();
+  // The round strip + transport float over the bottom of the stage, so the map
+  // fits itself above them. The strip wraps to two rows on narrow windows, so
+  // the inset is measured rather than assumed.
+  function syncChromeInset() {
+    const chromeH = chromeEl.offsetHeight;
+    const stageH = el.querySelector('.rv-stage')?.clientHeight || 0;
+    const overlap = Math.max(0, Math.min(chromeH - 12, stageH * 0.35));
+    if (renderer.viewInset.bottom !== overlap) {
+      renderer.viewInset.bottom = overlap;
+      return true;
+    }
+    return false;
+  }
+
+  const chromeObserver =
+    typeof ResizeObserver === 'function'
+      ? new ResizeObserver(() => {
+          if (syncChromeInset() && !destroyed) draw();
+        })
+      : null;
+  chromeObserver?.observe(chromeEl);
+
+  const onResize = () => {
+    syncChromeInset();
+    draw();
+  };
   window.addEventListener('resize', onResize);
 
   const offStore = store.onChange((event) => {
@@ -666,6 +691,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
 
   (async () => {
     // buildSequence → selectRound(0) already full-loads round 1 only.
+    syncChromeInset();
     await buildSequence();
   })();
 
@@ -675,6 +701,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
       destroyed = true;
       playback.destroy();
       offStore();
+      chromeObserver?.disconnect();
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('resize', onResize);
     }

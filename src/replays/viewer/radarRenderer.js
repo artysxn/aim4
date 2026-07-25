@@ -35,10 +35,16 @@ export function colorsForState(state, rosterTeam) {
   return TEAM_COLORS[rosterTeam] || TEAM_COLORS[1];
 }
 
+/** The T holding the C4 wears this instead of the side color. */
+const BOMB_CARRIER_COLOR = '#e2532b';
+
 const SMOKE_SECONDS = 18;
 const FIRE_SECONDS = 7;
-const FLASH_SECONDS = 2.4;
+const FLASH_SECONDS = 1.6;
 const HE_SECONDS = 0.85;
+const DECOY_SECONDS = 15;
+/** How long a thrown grenade's trajectory lingers after it goes off. */
+const TRAIL_FADE_SECONDS = 1.4;
 /** HE punch-through: hole stays open, then smoke fades back in. */
 const HE_SMOKE_MASK_HOLD = 1;
 const HE_SMOKE_MASK_FADE = 2.5;
@@ -79,6 +85,8 @@ export class RadarRenderer {
     this.zoom = 1;
     this.panX = 0;
     this.panY = 0;
+    /** CSS-pixel margins the fitted map keeps clear of (chrome overlays). */
+    this.viewInset = { top: 0, right: 0, bottom: 0, left: 0 };
     this.showNames = true;
     this.showWeapons = true;
     this.showTrails = false;
@@ -123,16 +131,23 @@ export class RadarRenderer {
   }
 
   /**
-   * Radar pixels -> canvas pixels. Default (zoom=1) fits the full square map
-   * centered in the panel (letterbox), never cropping edges.
+   * Radar pixels -> canvas pixels. Default (zoom=1) fits the whole square map
+   * inside the panel minus `viewInset` (letterbox), never cropping edges. The
+   * inset is how the timeline keeps the map clear of the transport bar, which
+   * floats over the bottom of the stage.
    */
   viewTransform(w, h) {
-    const fit = Math.min(w, h) / RADAR_SIZE;
-    const scale = fit * this.zoom;
+    const top = (this.viewInset.top || 0) * this.dpr;
+    const right = (this.viewInset.right || 0) * this.dpr;
+    const bottom = (this.viewInset.bottom || 0) * this.dpr;
+    const left = (this.viewInset.left || 0) * this.dpr;
+    const boxW = Math.max(1, w - left - right);
+    const boxH = Math.max(1, h - top - bottom);
+    const scale = (Math.min(boxW, boxH) / RADAR_SIZE) * this.zoom;
     return {
       scale,
-      ox: (w - RADAR_SIZE * scale) / 2 + this.panX * this.dpr,
-      oy: (h - RADAR_SIZE * scale) / 2 + this.panY * this.dpr
+      ox: left + (boxW - RADAR_SIZE * scale) / 2 + this.panX * this.dpr,
+      oy: top + (boxH - RADAR_SIZE * scale) / 2 + this.panY * this.dpr
     };
   }
 
@@ -184,6 +199,7 @@ export class RadarRenderer {
   drawPlayers(ctx, t, frame, compact) {
     const { states, players, highlight, weapons = [], tick = 0 } = frame;
     const r = (compact ? 3.6 : 7.5) * this.dpr;
+    const bombCarrier = bombCarrierAt(frame.events, tick);
 
     for (const p of players) {
       const s = states[p.slot];
@@ -224,45 +240,44 @@ export class RadarRenderer {
       const bot = r * 1.05;
       const halfW = r * 0.95;
       const hp = Math.max(0, Math.min(100, s.health)) / 100;
+      const hasBomb = bombCarrier === p.id || (s.flags & FLAG_HAS_BOMB) !== 0;
 
-      // Solid team droplet — HP lives in the name pill above.
+      // The marker is a white droplet with a solid dot in the middle: the
+      // point shows facing, the dot carries the side color. Canvas shadow
+      // offsets ignore the current transform, so the shadow keeps falling
+      // straight down however the player is turned.
+      if (!compact) {
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+        ctx.shadowBlur = 3 * this.dpr;
+        ctx.shadowOffsetY = 2 * this.dpr;
+      }
       pathDroplet(ctx, tip, bot, halfW);
-      ctx.fillStyle = colors.base;
+      ctx.fillStyle = '#ffffff';
       ctx.fill();
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
 
-      if (damageFlash > 0) {
+      if (highlight === p.id) {
         pathDroplet(ctx, tip, bot, halfW);
-        ctx.fillStyle = `rgba(255, 48, 48, ${0.55 * damageFlash})`;
-        ctx.fill();
+        ctx.lineWidth = Math.max(1, 1.5 * this.dpr);
+        ctx.strokeStyle = '#ffd66b';
+        ctx.stroke();
       }
 
-      if (flashPeak > 0.02) {
-        pathDroplet(ctx, tip, bot, halfW);
-        ctx.fillStyle = `rgba(255, 255, 255, ${0.75 * flashPeak})`;
-        ctx.fill();
-      }
-
-      pathDroplet(ctx, tip, bot, halfW);
-      ctx.lineWidth = Math.max(1, 1.5 * this.dpr);
-      ctx.strokeStyle = highlight === p.id ? '#ffffff' : '#0b0d10';
-      ctx.stroke();
-
-      // Inner ring (reads like the 2D viewers' concentric droplet).
-      ctx.beginPath();
-      ctx.arc(0, bot * 0.05, r * 0.38, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(0, bot * 0.05, r * 0.22, 0, Math.PI * 2);
-      ctx.fillStyle = colors.base;
-      ctx.fill();
-
-      if (s.flags & FLAG_HAS_BOMB) {
+      // Inset far enough that the white reads as a rim on every side.
+      const dotR = r * 0.72;
+      const dotY = bot * 0.1;
+      const dot = (fill) => {
         ctx.beginPath();
-        ctx.arc(halfW * 0.55, tip + r * 0.35, r * 0.28, 0, Math.PI * 2);
-        ctx.fillStyle = '#f2d024';
+        ctx.arc(0, dotY, dotR, 0, Math.PI * 2);
+        ctx.fillStyle = fill;
         ctx.fill();
-      }
+      };
+
+      dot(hasBomb ? BOMB_CARRIER_COLOR : colors.base);
+      if (damageFlash > 0) dot(`rgba(255, 48, 48, ${0.75 * damageFlash})`);
+      if (flashPeak > 0.02) dot(`rgba(255, 255, 255, ${0.8 * flashPeak})`);
 
       ctx.restore();
 
@@ -326,16 +341,20 @@ export class RadarRenderer {
             const bx = pt.x - pillW / 2;
             const by = pillBy;
 
+            // The whole pill is the side color and the missing HP is that same
+            // color darkened, rather than a near-black gap. The name is dark,
+            // so a black remainder made half of it unreadable.
             roundPill(ctx, bx, by, pillW, pillH, radius);
-            ctx.fillStyle = 'rgba(8,10,13,0.88)';
+            ctx.fillStyle = colors.base;
             ctx.fill();
 
-            if (hp > 0) {
+            if (hp < 1) {
               ctx.save();
               roundPill(ctx, bx, by, pillW, pillH, radius);
               ctx.clip();
-              ctx.fillStyle = colors.base;
-              ctx.fillRect(bx, by, Math.max(this.dpr, pillW * hp), pillH);
+              ctx.fillStyle = 'rgba(10, 12, 15, 0.34)';
+              const lost = bx + pillW * hp;
+              ctx.fillRect(lost, by, bx + pillW - lost, pillH);
               ctx.restore();
             }
 
@@ -450,6 +469,11 @@ export class RadarRenderer {
 
   // ---- utility -------------------------------------------------------------
 
+  /**
+   * Utility is drawn in layers rather than one grenade at a time: area effects
+   * (smoke, fire) are big translucent discs and have to sit under the
+   * trajectories, which in turn sit under the grenades still in the air.
+   */
   drawUtility(ctx, t, frame, compact) {
     const { events, tick, tickRate, players = [], states = [] } = frame;
     if (!events?.grenades?.length) return;
@@ -463,66 +487,69 @@ export class RadarRenderer {
       return st?.side || '';
     };
 
-    // Active HE detonations that can punch holes in smokes.
-    const heHoles = [];
+    // Everything on screen right now, resolved once.
+    const live = [];
     for (const g of events.grenades) {
+      // Rounds parsed before grenades were read correctly carry entries whose
+      // type is a player name and whose positions are all zero. Drop anything
+      // that is not a grenade rather than drawing junk at the map origin.
+      if (!isGrenade(g.type)) continue;
+      const throwTick = Number(g.throwTick);
+      if (!Number.isFinite(throwTick) || tick < throwTick) continue;
+      const det = Number(g.detonateTick ?? throwTick);
       const type = normalizeGrenadeType(g.type);
-      if (type !== 'hegrenade' || !g.at) continue;
-      const det = Number(g.detonateTick ?? g.throwTick);
-      if (!Number.isFinite(det) || tick < det) continue;
       const age = (tick - det) / tickRate;
-      const strength = heSmokeMaskStrength(age);
+      // The icon hands over to the detonation on the exact tick it goes off.
+      live.push({ g, type, throwTick, det, age, flying: tick < det, side: sideOf(g.player) });
+    }
+    if (!live.length) return;
+
+    // Active HE detonations punch holes in any smoke they overlap.
+    const heHoles = [];
+    for (const it of live) {
+      if (it.type !== 'hegrenade' || it.flying || !it.g.at) continue;
+      const strength = heSmokeMaskStrength(it.age);
       if (strength <= 0) continue;
       heHoles.push({
-        x: g.at.x,
-        y: g.at.y,
-        age,
+        x: it.g.at.x,
+        y: it.g.at.y,
         strength,
         clearR: HE_SMOKE_CLEAR_UNITS * (0.55 + 0.45 * strength)
       });
     }
 
-    for (const g of events.grenades) {
-      const type = normalizeGrenadeType(g.type);
-      const throwTick = Number(g.throwTick);
-      const det = Number(g.detonateTick ?? g.throwTick);
-      if (!Number.isFinite(throwTick)) continue;
-
-      // In flight (inclusive end so single-sample throws still render).
-      if (tick >= throwTick && tick <= det) {
-        const pos = grenadePosAt(g, tick);
-        if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
-          const pt = this.project(t, pos.x, pos.y, { x: 0, y: 0 });
-          this.drawFlyingGrenade(ctx, pt, type, sideOf(g.player), compact);
-        }
-        // Instant nades still get their detonation VFX below on the same tick.
-        if (tick < det) continue;
-      }
-
-      if (tick < det || !g.at) continue;
-      const age = (tick - det) / tickRate;
+    // ---- layer 1: area effects
+    for (const { g, type, age, flying, side } of live) {
+      if (flying || !g.at) continue;
       const pt = this.project(t, g.at.x, g.at.y, { x: 0, y: 0 });
-
       if (type === 'smokegrenade') {
         if (age > SMOKE_SECONDS) continue;
         this.drawSmoke(ctx, t, pt, age, worldR(SMOKE_RADIUS_UNITS), heHoles, g.at, compact);
       } else if (type === 'molotov' || type === 'incgrenade') {
         if (age > FIRE_SECONDS) continue;
-        this.drawFire(ctx, pt, age, worldR(FIRE_RADIUS_UNITS), sideOf(g.player), compact);
-      } else if (type === 'flashbang') {
+        this.drawFire(ctx, pt, age, worldR(FIRE_RADIUS_UNITS), side, compact);
+      }
+    }
+
+    // ---- layer 2: trajectories
+    if (!compact) {
+      for (const it of live) {
+        if (it.age > TRAIL_FADE_SECONDS) continue;
+        this.drawTrajectory(ctx, t, it, tick);
+      }
+    }
+
+    // ---- layer 3: detonation bursts
+    for (const { g, type, age, flying } of live) {
+      if (flying || !g.at) continue;
+      const pt = this.project(t, g.at.x, g.at.y, { x: 0, y: 0 });
+      if (type === 'flashbang') {
         if (age > FLASH_SECONDS) continue;
-        ctx.save();
-        ctx.globalAlpha = 0.85 * (1 - age / FLASH_SECONDS);
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2 * this.dpr;
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, (6 + age * 28) * this.dpr, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.restore();
+        this.drawFlashPop(ctx, pt, age);
       } else if (type === 'hegrenade') {
         if (age > HE_SECONDS) continue;
-        ctx.save();
         const boom = 1 - age / HE_SECONDS;
+        ctx.save();
         ctx.globalAlpha = 0.9 * boom;
         ctx.strokeStyle = '#7dff6a';
         ctx.lineWidth = (2.2 + boom * 1.5) * this.dpr;
@@ -536,16 +563,114 @@ export class RadarRenderer {
         ctx.fill();
         ctx.restore();
       } else if (type === 'decoy') {
-        if (age > 15) continue;
-        ctx.save();
-        ctx.globalAlpha = 0.7;
-        ctx.fillStyle = '#e8c84a';
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, 3.5 * this.dpr, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
+        if (age > DECOY_SECONDS) continue;
+        this.drawDecoy(ctx, pt, age, compact);
       }
     }
+
+    // ---- layer 4: grenades still in the air
+    for (const { g, type, flying, side } of live) {
+      if (!flying) continue;
+      const pos = grenadePosAt(g, tick);
+      if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) continue;
+      const pt = this.project(t, pos.x, pos.y, { x: 0, y: 0 });
+      this.drawFlyingGrenade(ctx, pt, type, side, compact);
+    }
+  }
+
+  /**
+   * The flight path, drawn as far as the grenade has actually travelled and
+   * held for a moment after it lands. Recorded trajectories bounce off walls;
+   * a grenade rebuilt from throw + detonation alone is a straight line, which
+   * is the best that can be said about it.
+   */
+  drawTrajectory(ctx, t, { g, side, det, age }, tick) {
+    const pts = trailPoints(g, Math.min(tick, det));
+    if (pts.length < 2) return;
+
+    const fade = age <= 0 ? 1 : Math.max(0, 1 - age / TRAIL_FADE_SECONDS);
+    const colors = side === 'T' ? SIDE_COLORS.T : side === 'CT' ? SIDE_COLORS.CT : null;
+    const tint = colors ? colors.bright : '#d8dce4';
+
+    const path = () => {
+      ctx.beginPath();
+      const p0 = this.project(t, pts[0].x, pts[0].y, { x: 0, y: 0 });
+      ctx.moveTo(p0.x, p0.y);
+      for (let i = 1; i < pts.length; i++) {
+        const p = this.project(t, pts[i].x, pts[i].y, { x: 0, y: 0 });
+        ctx.lineTo(p.x, p.y);
+      }
+    };
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    // Dark underlay so the dashes read over pale parts of the radar.
+    ctx.globalAlpha = 0.5 * fade;
+    ctx.setLineDash([]);
+    ctx.strokeStyle = 'rgba(6, 8, 11, 0.9)';
+    ctx.lineWidth = 3.4 * this.dpr;
+    path();
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.9 * fade;
+    ctx.strokeStyle = tint;
+    ctx.lineWidth = 1.7 * this.dpr;
+    ctx.setLineDash([5 * this.dpr, 4 * this.dpr]);
+    path();
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  /** Flashbang pop: a hot core that snaps out, then a ring that keeps going. */
+  drawFlashPop(ctx, pt, age) {
+    const life = Math.min(1, age / FLASH_SECONDS);
+    const burst = Math.max(0, 1 - age / 0.45);
+
+    ctx.save();
+    if (burst > 0) {
+      const r = (6 + (1 - burst) * 18) * this.dpr;
+      const grad = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, r);
+      grad.addColorStop(0, `rgba(255, 255, 255, ${0.95 * burst})`);
+      grad.addColorStop(0.55, `rgba(255, 252, 226, ${0.6 * burst})`);
+      grad.addColorStop(1, 'rgba(255, 250, 210, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 0.85 * (1 - life);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = Math.max(1.2 * this.dpr, (2.6 - 1.6 * life) * this.dpr);
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, (6 + life * 34) * this.dpr, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** Decoy: a dashed ring that ticks down, so it is not mistaken for a smoke. */
+  drawDecoy(ctx, pt, age, compact) {
+    const left = Math.max(0, Math.ceil(DECOY_SECONDS - age));
+    const fade = age > DECOY_SECONDS - 2 ? (DECOY_SECONDS - age) / 2 : 1;
+    const r = (compact ? 5 : 11) * this.dpr;
+    ctx.save();
+    ctx.globalAlpha = 0.85 * fade;
+    ctx.strokeStyle = '#e8c84a';
+    ctx.lineWidth = 1.6 * this.dpr;
+    ctx.setLineDash([3 * this.dpr, 3 * this.dpr]);
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (!compact) {
+      ctx.fillStyle = '#e8c84a';
+      ctx.font = `600 ${9 * this.dpr}px "Host Grotesk", system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(left), pt.x, pt.y);
+    }
+    ctx.restore();
   }
 
   drawFlyingGrenade(ctx, pt, type, side, compact) {
@@ -718,6 +843,24 @@ function roundPill(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
+/**
+ * Which player is holding the C4 at this tick, by player id.
+ *
+ * The per-tick bomb flag is inferred from the active weapon, so it only fires
+ * in the second a player actually pulls the bomb out. The pickup/drop chain is
+ * the real answer. Rounds parsed before those events were stored have no
+ * chain, and fall back to the flag at the call site.
+ */
+function bombCarrierAt(events, tick) {
+  let latest = null;
+  for (const b of events?.bomb || []) {
+    if (b.tick > tick) continue;
+    if (b.type !== 'pickup' && b.type !== 'dropped' && b.type !== 'planted') continue;
+    if (!latest || b.tick >= latest.tick) latest = b;
+  }
+  return latest?.type === 'pickup' ? latest.player || '' : '';
+}
+
 /** Droplet path in local space: tip at `tip` (negative Y), round body toward `bot`. */
 function pathDroplet(ctx, tip, bot, halfW) {
   const mid = (tip + bot) * 0.35;
@@ -754,6 +897,30 @@ function pointAt(path, tick) {
     }
   }
   return path[path.length - 1];
+}
+
+/**
+ * The part of a flight that has already happened, ending at exactly where the
+ * grenade is now so the line grows out of the thrower rather than popping in
+ * whole. Falls back to throw -> landing when the parse carried no samples.
+ */
+function trailPoints(g, tick) {
+  const path = g.path;
+  if (path?.length) {
+    const out = [];
+    for (const p of path) {
+      if (p.tick > tick) break;
+      out.push(p);
+    }
+    const head = pointAt(path, tick);
+    const last = out[out.length - 1];
+    if (head && (!last || last.x !== head.x || last.y !== head.y)) out.push(head);
+    return out;
+  }
+  const from = g.from;
+  const at = grenadePosAt(g, tick);
+  if (!from || !at) return [];
+  return [from, at];
 }
 
 function grenadePosAt(g, tick) {

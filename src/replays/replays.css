@@ -657,6 +657,11 @@ body.rv-open {
   min-height: 0;
   display: grid;
   grid-template-columns: 270px 1fr 270px;
+  /* minmax(0, 1fr), not auto: an auto row is sized by its content, and the
+     canvas' own backing-store size is content. That fed the canvas' height
+     back into the row height every frame and the map grew off the bottom of
+     the screen. Pinning the row to the container breaks the loop. */
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
   /* Chrome overlays the bottom; keep only a small inset so the map can fill. */
   padding: 12px;
@@ -699,7 +704,8 @@ body.rv-open {
 .rv-map {
   position: relative;
   min-width: 0;
-  display: flex;
+  min-height: 0;
+  overflow: hidden;
   touch-action: none;
 }
 
@@ -711,7 +717,12 @@ body.rv-open {
   cursor: grabbing;
 }
 
+/* Absolute, so the canvas element never contributes its intrinsic size to the
+   layout that decides how big it should be. */
 .rv-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
   width: 100%;
   height: 100%;
   border-radius: var(--radius-sm);
@@ -1264,7 +1275,7 @@ body.rv-open {
 
   .rv-stage {
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .rv-team {
