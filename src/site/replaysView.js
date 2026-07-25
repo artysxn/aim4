@@ -79,12 +79,13 @@ export function initReplaysView({ escapeHtml }) {
 
   const filters = {
     maps: new Set(),
-    economies: new Set(),
     teams: new Set(),
     players: new Set(),
     wonBy: '',
-    roundMin: 1,
-    roundMax: 99
+    /** @type {number|null} */
+    econA: null,
+    /** @type {number|null} */
+    econB: null
   };
 
   function setStatus(msg, isError = false) {
@@ -347,37 +348,83 @@ export function initReplaysView({ escapeHtml }) {
 
   // ---- upload -------------------------------------------------------------
 
-  async function startUpload(file) {
-    if (!file) return;
-    const name = file.name || '';
-    const isPackage = name.toLowerCase().endsWith(PACKAGE_EXT);
-    const isDem = /\.dem$/i.test(name);
-    if (!isPackage && !isDem) {
-      setStatus(`Upload a ${PACKAGE_EXT} package (preferred) or a .dem file.`, true);
+  function pickUploadFiles(fileList) {
+    const files = [...(fileList || [])];
+    const ok = [];
+    const skipped = [];
+    for (const file of files) {
+      const name = file.name || '';
+      const isPackage = name.toLowerCase().endsWith(PACKAGE_EXT);
+      const isDem = /\.dem$/i.test(name);
+      if (isPackage || isDem) ok.push(file);
+      else skipped.push(name || 'unnamed');
+    }
+    return { ok, skipped };
+  }
+
+  async function startUpload(fileList) {
+    const { ok, skipped } = pickUploadFiles(fileList);
+    if (!ok.length) {
+      setStatus(`Upload ${PACKAGE_EXT} packages (preferred) or .dem files.`, true);
       return;
     }
-    setStatus(`Uploading ${name}…`);
+    if (skipped.length) {
+      setStatus(`Skipped ${skipped.length} unsupported file${skipped.length === 1 ? '' : 's'}.`, true);
+    }
+
     dropEl?.classList.add('busy');
+    let imported = 0;
+    let demUploads = 0;
+    const namingQueue = [];
     try {
-      const upload = isPackage ? uploadImport : uploadDemo;
-      const res = await upload(file, (pct) => {
-        setStatus(`Uploading ${name}: ${pct}%`);
-      });
-      renderQuota(res.usage);
-      setStatus(isPackage ? 'Import complete. Rounds are ready.' : 'Upload complete. Parsing started.');
+      for (let i = 0; i < ok.length; i++) {
+        const file = ok[i];
+        const name = file.name || `file ${i + 1}`;
+        const isPackage = name.toLowerCase().endsWith(PACKAGE_EXT);
+        const upload = isPackage ? uploadImport : uploadDemo;
+        const label = ok.length > 1 ? `(${i + 1}/${ok.length}) ` : '';
+        setStatus(`Uploading ${label}${name}…`);
+        const res = await upload(file, (pct) => {
+          setStatus(`Uploading ${label}${name}: ${pct}%`);
+        });
+        renderQuota(res.usage);
+        if (isPackage) {
+          imported++;
+          if (res.demo) namingQueue.push(res.demo);
+        } else {
+          demUploads++;
+        }
+      }
+
+      const parts = [];
+      if (imported) {
+        parts.push(
+          imported === 1 ? '1 package imported.' : `${imported} packages imported.`
+        );
+      }
+      if (demUploads) {
+        parts.push(
+          demUploads === 1
+            ? '1 .dem uploaded; parsing started.'
+            : `${demUploads} .dem files uploaded; parsing started.`
+        );
+      }
+      setStatus(parts.join(' ') || 'Upload complete.');
       await refresh();
-      if (isPackage && res.demo) {
-        await promptTeamNames(res.demo);
+
+      for (const demo of namingQueue) {
+        await promptTeamNames(demo);
       }
     } catch (err) {
       setStatus(err.message, true);
+      await refresh();
     } finally {
       dropEl?.classList.remove('busy');
       if (uploadInput) uploadInput.value = '';
     }
   }
 
-  uploadInput?.addEventListener('change', () => startUpload(uploadInput.files?.[0]));
+  uploadInput?.addEventListener('change', () => startUpload(uploadInput.files));
   dropEl?.addEventListener('click', () => uploadInput?.click());
   dropEl?.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -387,7 +434,7 @@ export function initReplaysView({ escapeHtml }) {
   dropEl?.addEventListener('drop', (e) => {
     e.preventDefault();
     dropEl.classList.remove('over');
-    startUpload(e.dataTransfer?.files?.[0]);
+    startUpload(e.dataTransfer?.files);
   });
 
   // ---- team clustering ----------------------------------------------------
@@ -508,15 +555,50 @@ export function initReplaysView({ escapeHtml }) {
     return [...out.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1])));
   }
 
-  function applyChipSearch(group, query) {
-    if (!filtersEl) return;
+  function econSelectHtml(id, selected) {
+    const opts = [
+      `<option value=""${selected == null ? ' selected' : ''}>Any</option>`,
+      ...Object.entries(ECONOMIES).map(
+        ([code, e]) =>
+          `<option value="${code}"${selected === Number(code) ? ' selected' : ''}>${escapeHtml(
+            e.label
+          )}</option>`
+      )
+    ];
+    return `<select id="${id}" class="site-input rp-econ-select" aria-label="${
+      id === 'rp-econ-a' ? 'Team 1 economy' : 'Team 2 economy'
+    }">${opts.join('')}</select>`;
+  }
+
+  function selectedChipsHtml(group, items) {
+    if (!items.length) return '';
+    return `<div class="rp-chips rp-selected-chips">${items
+      .map(
+        ([value, label]) =>
+          `<button type="button" class="rp-chip active" data-group="${group}" data-value="${escapeHtml(
+            String(value)
+          )}" title="Remove">${escapeHtml(label)}</button>`
+      )
+      .join('')}</div>`;
+  }
+
+  function typeaheadMenuHtml(group, options, query) {
     const needle = String(query || '')
       .trim()
       .toLowerCase();
-    filtersEl.querySelectorAll(`[data-group="${group}"]`).forEach((chip) => {
-      const label = (chip.textContent || '').toLowerCase();
-      chip.hidden = Boolean(needle) && !label.includes(needle);
-    });
+    if (!needle) return '';
+    const hits = options.filter(([, label]) => String(label).toLowerCase().includes(needle));
+    if (!hits.length) {
+      return `<div class="rp-typeahead-menu"><p class="rp-typeahead-empty">No matches</p></div>`;
+    }
+    return `<div class="rp-typeahead-menu">${hits
+      .map(
+        ([value, label]) =>
+          `<button type="button" class="rp-typeahead-option" data-group="${group}" data-value="${escapeHtml(
+            String(value)
+          )}">${escapeHtml(label)}</button>`
+      )
+      .join('')}</div>`;
   }
 
   function renderFilters() {
@@ -529,15 +611,18 @@ export function initReplaysView({ escapeHtml }) {
     const mapChips = Object.entries(MAPS)
       .map(([code, m]) => chip('maps', code, m.name, filters.maps.has(code)))
       .join('');
-    const econChips = Object.entries(ECONOMIES)
-      .map(([code, e]) => chip('economies', code, e.label, filters.economies.has(Number(code))))
-      .join('');
-    const teamChips = teamClusters
-      .map((c) => chip('teams', c.key, c.name, filters.teams.has(c.key)))
-      .join('');
-    const playerChips = knownPlayers()
-      .map(([id, nameStr]) => chip('players', id, nameStr, filters.players.has(id)))
-      .join('');
+
+    const teamOptions = teamClusters
+      .filter((c) => !filters.teams.has(c.key))
+      .map((c) => [c.key, c.name]);
+    const selectedTeams = teamClusters
+      .filter((c) => filters.teams.has(c.key))
+      .map((c) => [c.key, c.name]);
+
+    const playerEntries = knownPlayers();
+    const playerOptions = playerEntries.filter(([id]) => !filters.players.has(id));
+    const selectedPlayers = playerEntries.filter(([id]) => filters.players.has(id));
+
     const winnerChips = teamClusters
       .map((c) => chip('wonBy', c.key, c.name, filters.wonBy === c.key))
       .join('');
@@ -549,16 +634,28 @@ export function initReplaysView({ escapeHtml }) {
       </div>
       <div class="rp-filter-group">
         <h4>Economy</h4>
-        <div class="rp-chips">${econChips}</div>
+        <div class="rp-econ-pair">
+          <label class="rp-econ-side">
+            <span>Team 1</span>
+            ${econSelectHtml('rp-econ-a', filters.econA)}
+          </label>
+          <label class="rp-econ-side">
+            <span>Team 2</span>
+            ${econSelectHtml('rp-econ-b', filters.econB)}
+          </label>
+        </div>
       </div>
       ${
-        teamChips
+        teamClusters.length
           ? `<div class="rp-filter-group">
               <h4>Team</h4>
-              <input type="search" class="site-input rp-filter-search" id="rp-team-search"
-                placeholder="Search teams" spellcheck="false" autocomplete="off"
-                value="${escapeHtml(teamSearch)}" aria-label="Search teams" />
-              <div class="rp-chips" id="rp-team-chips">${teamChips}</div>
+              <div class="rp-typeahead" id="rp-team-typeahead">
+                <input type="search" class="site-input rp-filter-search" id="rp-team-search"
+                  placeholder="Search teams" spellcheck="false" autocomplete="off"
+                  value="${escapeHtml(teamSearch)}" aria-label="Search teams" />
+                ${typeaheadMenuHtml('teams', teamOptions, teamSearch)}
+              </div>
+              ${selectedChipsHtml('teams', selectedTeams)}
             </div>`
           : ''
       }
@@ -568,46 +665,38 @@ export function initReplaysView({ escapeHtml }) {
           : ''
       }
       ${
-        playerChips
+        playerEntries.length
           ? `<div class="rp-filter-group">
               <h4>Players on the server</h4>
-              <input type="search" class="site-input rp-filter-search" id="rp-player-search"
-                placeholder="Search players" spellcheck="false" autocomplete="off"
-                value="${escapeHtml(playerSearch)}" aria-label="Search players" />
-              <div class="rp-chips" id="rp-player-chips">${playerChips}</div>
+              <div class="rp-typeahead" id="rp-player-typeahead">
+                <input type="search" class="site-input rp-filter-search" id="rp-player-search"
+                  placeholder="Search players" spellcheck="false" autocomplete="off"
+                  value="${escapeHtml(playerSearch)}" aria-label="Search players" />
+                ${typeaheadMenuHtml('players', playerOptions, playerSearch)}
+              </div>
+              ${selectedChipsHtml('players', selectedPlayers)}
             </div>`
           : ''
       }
-      <div class="rp-filter-group">
-        <h4>Round number</h4>
-        <div class="rp-range">
-          <input type="number" id="rp-round-min" class="site-input" min="1" max="99" value="${filters.roundMin}" />
-          <span>to</span>
-          <input type="number" id="rp-round-max" class="site-input" min="1" max="99" value="${filters.roundMax}" />
-        </div>
-      </div>
       <button type="button" class="btn btn-sm" id="rp-clear">Clear filters</button>`;
 
-    applyChipSearch('teams', teamSearch);
-    applyChipSearch('wonBy', teamSearch);
-    applyChipSearch('players', playerSearch);
+    const bindEcon = (id, key) => {
+      filtersEl.querySelector(`#${id}`)?.addEventListener('change', (e) => {
+        const raw = e.target.value;
+        filters[key] = raw === '' ? null : Number(raw);
+        runQuery();
+      });
+    };
+    bindEcon('rp-econ-a', 'econA');
+    bindEcon('rp-econ-b', 'econB');
 
-    filtersEl.querySelector('#rp-round-min')?.addEventListener('change', (e) => {
-      filters.roundMin = Number(e.target.value) || 1;
-      runQuery();
-    });
-    filtersEl.querySelector('#rp-round-max')?.addEventListener('change', (e) => {
-      filters.roundMax = Number(e.target.value) || 99;
-      runQuery();
-    });
     filtersEl.querySelector('#rp-clear')?.addEventListener('click', () => {
       filters.maps.clear();
-      filters.economies.clear();
       filters.teams.clear();
       filters.players.clear();
       filters.wonBy = '';
-      filters.roundMin = 1;
-      filters.roundMax = 99;
+      filters.econA = null;
+      filters.econB = null;
       teamSearch = '';
       playerSearch = '';
       renderFilters();
@@ -615,18 +704,36 @@ export function initReplaysView({ escapeHtml }) {
     });
   }
 
+  function refreshTypeaheadMenu(kind) {
+    if (!filtersEl) return;
+    if (kind === 'teams') {
+      const wrap = filtersEl.querySelector('#rp-team-typeahead');
+      if (!wrap) return;
+      wrap.querySelector('.rp-typeahead-menu')?.remove();
+      const options = teamClusters
+        .filter((c) => !filters.teams.has(c.key))
+        .map((c) => [c.key, c.name]);
+      wrap.insertAdjacentHTML('beforeend', typeaheadMenuHtml('teams', options, teamSearch));
+      return;
+    }
+    const wrap = filtersEl.querySelector('#rp-player-typeahead');
+    if (!wrap) return;
+    wrap.querySelector('.rp-typeahead-menu')?.remove();
+    const options = knownPlayers().filter(([id]) => !filters.players.has(id));
+    wrap.insertAdjacentHTML('beforeend', typeaheadMenuHtml('players', options, playerSearch));
+  }
+
   filtersEl?.addEventListener('input', (e) => {
     const teamInput = e.target.closest('#rp-team-search');
     if (teamInput) {
       teamSearch = teamInput.value;
-      applyChipSearch('teams', teamSearch);
-      applyChipSearch('wonBy', teamSearch);
+      refreshTypeaheadMenu('teams');
       return;
     }
     const playerInput = e.target.closest('#rp-player-search');
     if (playerInput) {
       playerSearch = playerInput.value;
-      applyChipSearch('players', playerSearch);
+      refreshTypeaheadMenu('players');
     }
   });
 
@@ -636,11 +743,12 @@ export function initReplaysView({ escapeHtml }) {
     const { group, value } = chipEl.dataset;
     if (group === 'wonBy') {
       filters.wonBy = filters.wonBy === value ? '' : value;
-    } else {
+    } else if (group === 'teams' || group === 'players' || group === 'maps') {
       const set = filters[group];
-      const v = group === 'economies' ? Number(value) : value;
-      if (set.has(v)) set.delete(v);
-      else set.add(v);
+      if (set.has(value)) set.delete(value);
+      else set.add(value);
+      if (group === 'teams') teamSearch = '';
+      if (group === 'players') playerSearch = '';
     }
     renderFilters();
     runQuery();
@@ -664,12 +772,11 @@ export function initReplaysView({ escapeHtml }) {
       : undefined;
     return {
       maps: [...filters.maps],
-      economies: [...filters.economies],
       teams: expandClusterKeys(filters.teams),
       players: [...filters.players],
       wonBy,
-      roundMin: filters.roundMin,
-      roundMax: filters.roundMax
+      econA: filters.econA,
+      econB: filters.econB
     };
   }
 
@@ -884,7 +991,11 @@ export function initReplaysView({ escapeHtml }) {
   function queryTitle(list = rounds) {
     const parts = [];
     if (filters.maps.size) parts.push([...filters.maps].map((c) => MAPS[c]?.name || c).join(', '));
-    if (filters.economies.size) parts.push([...filters.economies].map(economyLabel).join(', '));
+    if (filters.econA != null || filters.econB != null) {
+      const a = filters.econA != null ? economyLabel(filters.econA) : 'Any';
+      const b = filters.econB != null ? economyLabel(filters.econB) : 'Any';
+      parts.push(`${a} / ${b}`);
+    }
     if (list?.length && list.length <= 3) {
       parts.push(list.map((r) => `R${r.round}`).join(', '));
     } else if (selectedFiles.size) {

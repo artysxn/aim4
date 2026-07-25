@@ -602,7 +602,7 @@ export class RadarRenderer {
       const pt = this.project(t, g.at.x, g.at.y, { x: 0, y: 0 });
       if (type === 'smokegrenade') {
         if (age > SMOKE_SECONDS) continue;
-        this.drawSmoke(ctx, t, pt, age, worldR(SMOKE_RADIUS_UNITS), heHoles, g.at, compact);
+        this.drawSmoke(ctx, t, pt, age, worldR(SMOKE_RADIUS_UNITS), heHoles, g.at, side, compact);
       } else if (type === 'molotov' || type === 'incgrenade') {
         if (age > FIRE_SECONDS) continue;
         this.drawFire(ctx, pt, age, worldR(FIRE_RADIUS_UNITS), side, compact);
@@ -761,32 +761,40 @@ export class RadarRenderer {
   drawFlyingGrenade(ctx, pt, type, side, compact) {
     const img = loadEquipmentIcon(type, () => this.onIconLoad?.());
     const size = (compact ? 9 : 14) * this.dpr;
-    const tint = side === 'T' ? SIDE_COLORS.T.base : side === 'CT' ? SIDE_COLORS.CT.base : '#e6e8ec';
+    const colors = side === 'T' ? SIDE_COLORS.T : side === 'CT' ? SIDE_COLORS.CT : null;
+    const tint = colors?.base || '#e6e8ec';
+    const outline = colors?.bright || '#000000';
     ctx.save();
     if (img?.complete && img.naturalWidth > 0) {
       const scale = Math.min(size / img.naturalWidth, size / img.naturalHeight);
       const iw = img.naturalWidth * scale;
       const ih = img.naturalHeight * scale;
       const px = this.dpr;
-      this.drawTintedIcon(ctx, img, pt.x - iw / 2 + px, pt.y - ih / 2 + px, iw, ih, '#000000');
+      // Side-colored rim so CT util reads blue and T util yellow in flight.
+      this.drawTintedIcon(ctx, img, pt.x - iw / 2 + px, pt.y - ih / 2 + px, iw, ih, outline);
       this.drawTintedIcon(ctx, img, pt.x - iw / 2, pt.y - ih / 2, iw, ih, tint);
     } else {
       ctx.fillStyle = tint;
       ctx.beginPath();
       ctx.arc(pt.x, pt.y, size * 0.35, 0, Math.PI * 2);
       ctx.fill();
+      ctx.strokeStyle = outline;
+      ctx.lineWidth = Math.max(1, 1.25 * this.dpr);
+      ctx.stroke();
     }
     ctx.restore();
   }
 
   /**
-   * Smoke disc (pic 3): grey fill, orange remaining-time ring, countdown.
+   * Smoke disc: grey fill, side-colored remaining-time ring, countdown.
    * Nearby HE detonations punch a hole for 1s, then the smoke fades back.
    */
-  drawSmoke(ctx, t, pt, age, radius, heHoles, worldAt, compact) {
+  drawSmoke(ctx, t, pt, age, radius, heHoles, worldAt, side, compact) {
     const fade = smokeFade(age);
     const left = Math.max(0, Math.ceil(SMOKE_SECONDS - age));
     const progress = 1 - age / SMOKE_SECONDS;
+    const border =
+      side === 'T' ? SIDE_COLORS.T.base : side === 'CT' ? SIDE_COLORS.CT.base : '#a0a8b4';
 
     // Holes that overlap this smoke (world space).
     const holes = [];
@@ -818,10 +826,10 @@ export class RadarRenderer {
     ctx.fill('evenodd');
     ctx.restore();
 
-    // Orange progress ring (remaining life) — drawn unclipped.
+    // Side-colored progress ring (remaining life) — drawn unclipped.
     ctx.save();
     ctx.globalAlpha = 0.95 * fade;
-    ctx.strokeStyle = '#e8913c';
+    ctx.strokeStyle = border;
     ctx.lineWidth = Math.max(0.75, 1 * this.dpr);
     ctx.beginPath();
     ctx.arc(pt.x, pt.y, radius, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);

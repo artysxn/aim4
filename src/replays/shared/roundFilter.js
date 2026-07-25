@@ -17,12 +17,24 @@ import { parseRoundId } from './roundId.js';
  * @property {'all'|'any'} [playerMode='all']
  * @property {string} [wonBy]         team id that must have won
  * @property {number[]} [economies]   econ buckets, matched on either side
+ * @property {number} [econA]         one side of an unordered economy pair
+ * @property {number} [econB]         other side of an unordered economy pair
  * @property {number[]} [teamEconomies] econ buckets for `teamEconomyOf` only
  * @property {string} [teamEconomyOf] team id the `teamEconomies` filter applies to
  * @property {number} [roundMin=1]
  * @property {number} [roundMax=99]
  * @property {string} [search]        free text over the raw name
  */
+
+/** True when (e1,e2) matches (a,b) in either order. Missing sides are wildcards. */
+function matchesEconPair(e1, e2, a, b) {
+  const hasA = Number.isFinite(a);
+  const hasB = Number.isFinite(b);
+  if (!hasA && !hasB) return true;
+  if (hasA && hasB) return (e1 === a && e2 === b) || (e1 === b && e2 === a);
+  const only = hasA ? a : b;
+  return e1 === only || e2 === only;
+}
 
 const asSet = (v) => (v && v.length ? new Set(v) : null);
 
@@ -74,6 +86,16 @@ export function matchesQuery(meta, query = {}) {
 
   const economies = asSet(query.economies);
   if (economies && !economies.has(meta.econ1) && !economies.has(meta.econ2)) return false;
+
+  // Unordered pair: "full buy vs eco" matches either seating of the two teams.
+  const asEcon = (v) => {
+    if (v === undefined || v === null || v === '') return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  if (!matchesEconPair(meta.econ1, meta.econ2, asEcon(query.econA), asEcon(query.econB))) {
+    return false;
+  }
 
   // Economy of one specific team, rather than "either side".
   if (query.teamEconomyOf && query.teamEconomies?.length) {

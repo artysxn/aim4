@@ -129,6 +129,7 @@
           <section class="view" data-view="replays">
             <div class="view-pad" id="rp-library">
               <p class="rp-parser-warn" id="rp-parser" hidden></p>
+              <div class="rp-list" id="rp-list"></div>
               <div class="rp-browser">
                 <aside class="rp-filters" id="rp-filters"></aside>
                 <div class="rp-result" id="rp-result"></div>
@@ -144,14 +145,13 @@
                 <div class="rp-upload">
                   <button type="button" class="rp-drop" id="rp-drop">
                     <svg viewBox="0 -960 960 960" width="26" height="26"><path d="M440-320v-326L336-542l-56-58 200-200 200 200-56 58-104-104v326h-80ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/></svg>
-                    <span>Drop a .aim4replay package (or .dem), or click to browse</span>
+                    <span>Drop .aim4replay packages (or .dem files), or click to browse</span>
                   </button>
-                  <input type="file" id="rp-file" accept=".aim4replay,.dem" hidden />
+                  <input type="file" id="rp-file" accept=".aim4replay,.dem" multiple hidden />
                   <p class="rp-status" id="rp-status"></p>
                 </div>
                 <div class="rp-quota" id="rp-quota"></div>
               </div>
-              <div class="rp-list" id="rp-list"></div>
             </div>
 
             <div class="view-pad rp-playlists-page" id="rp-playlists-page" hidden>

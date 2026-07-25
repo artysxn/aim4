@@ -123,6 +123,8 @@ function queryFromUrl(url) {
       ? csv(url, 'wonBy')
       : url.searchParams.get('wonBy') || undefined,
     economies: nums(url, 'economies'),
+    econA: url.searchParams.has('econA') ? Number(url.searchParams.get('econA')) : undefined,
+    econB: url.searchParams.has('econB') ? Number(url.searchParams.get('econB')) : undefined,
     teamEconomies: nums(url, 'teamEconomies'),
     teamEconomyOf: url.searchParams.get('teamEconomyOf') || undefined,
     roundMin: url.searchParams.has('roundMin') ? Number(url.searchParams.get('roundMin')) : undefined,

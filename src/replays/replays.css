@@ -428,8 +428,74 @@
 
 .rp-filter-search {
   width: 100%;
-  margin-bottom: 8px;
+  margin-bottom: 0;
   font-size: 12px;
+}
+
+.rp-econ-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.rp-econ-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.rp-econ-select {
+  width: 100%;
+  font-size: 12px;
+}
+
+.rp-typeahead {
+  position: relative;
+}
+
+.rp-typeahead-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 5;
+  max-height: 180px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover, #161a20);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.rp-typeahead-option {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: 500 12px var(--font-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.rp-typeahead-option:hover {
+  background: var(--accent-dim);
+}
+
+.rp-typeahead-empty {
+  margin: 0;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rp-selected-chips {
+  margin-top: 8px;
 }
 
 .rp-chips {
