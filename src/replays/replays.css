@@ -2790,3 +2790,186 @@ body.rv-open {
 .rv-board-name.team2 {
   color: var(--rv-team2);
 }
+
+/* ---- Coach --------------------------------------------------------------- */
+
+.rv-team-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.rv-team-col > .rv-team {
+  flex: 1;
+  min-height: 0;
+}
+
+.rv-wingraph {
+  flex: 0 0 auto;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(12, 14, 18, 0.9);
+}
+
+.rv-wingraph[hidden] {
+  display: none;
+}
+
+.rv-wingraph-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.rv-wingraph-label {
+  color: var(--rv-team1);
+}
+
+.rv-wingraph-label.right {
+  color: var(--rv-team2);
+}
+
+.rv-wingraph-canvas {
+  display: block;
+  width: 100%;
+  height: 96px;
+}
+
+/* A rotated square, so a coach mark reads apart from the round dots. */
+.rv-mark.coach {
+  width: 9px;
+  height: 9px;
+  border-radius: 1px;
+  background: #3ee87a;
+  box-shadow: 0 0 6px rgba(62, 232, 122, 0.6);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.rv-mark.coach.marked-ok {
+  background: #9be8b6;
+}
+
+.rv-mark.coach.marked-x {
+  background: #6c7a72;
+  box-shadow: none;
+}
+
+.rv-note-coach {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(62, 232, 122, 0.35);
+  border-radius: var(--radius-xs);
+  background: rgba(62, 232, 122, 0.08);
+}
+
+.rv-note-coach[hidden] {
+  display: none;
+}
+
+.rv-note-diamond {
+  width: 9px;
+  height: 9px;
+  border-radius: 1px;
+  background: #3ee87a;
+  transform: rotate(45deg);
+}
+
+.rv-note-coach-label {
+  flex: 1;
+  color: #3ee87a;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.rv-note-mark {
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.rv-note-mark:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.rv-note-mark[data-mark='ok'].active {
+  border-color: #3ee87a;
+  background: rgba(62, 232, 122, 0.18);
+  color: #3ee87a;
+}
+
+.rv-note-mark[data-mark='x'].active {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--accent-hover);
+}
+
+/* Note and coach marks are the only ones worth clicking. */
+.rv-mark.note,
+.rv-mark.coach {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.rv-winline {
+  position: absolute;
+  top: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: rgba(10, 12, 15, 0.92);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rv-winline[hidden] {
+  display: none;
+}
+
+.rv-winline-team.t1 {
+  color: var(--rv-team1);
+}
+
+.rv-winline-team.t2 {
+  color: var(--rv-team2);
+}
+
+.rv-winline-bar {
+  position: relative;
+  width: 90px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--rv-team2);
+  overflow: hidden;
+}
+
+.rv-winline-bar span {
+  display: block;
+  height: 100%;
+  background: var(--rv-team1);
+}

@@ -423,10 +423,15 @@ export function normalizeRoundNotes(meta) {
       const text = String(raw.text ?? '').slice(0, NOTE_MAX).trim();
       if (!text) continue;
       const tick = Number(raw.tick);
+      // `kind` separates what the coach wrote from what a person wrote, and
+      // `mark` is the reader's verdict on a coach note. Both round-trip so a
+      // reviewed note stays reviewed.
       out.push({
         id: String(raw.id || '').slice(0, 32) || `n${out.length}`,
         tick: Number.isFinite(tick) ? Math.max(0, Math.round(tick)) : 0,
         text,
+        kind: raw.kind === 'coach' ? 'coach' : 'user',
+        mark: raw.mark === 'ok' || raw.mark === 'x' ? raw.mark : '',
         updatedAt: Number(raw.updatedAt) || 0
       });
     }

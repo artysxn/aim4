@@ -196,6 +196,8 @@ export async function saveRoundNotes(file, notes) {
     id: String(n?.id || ''),
     tick: Number(n?.tick) || 0,
     text: String(n?.text ?? '').slice(0, NOTE_MAX),
+    kind: n?.kind === 'coach' ? 'coach' : 'user',
+    mark: n?.mark === 'ok' || n?.mark === 'x' ? n.mark : '',
     updatedAt: Number(n?.updatedAt) || Date.now()
   }));
   return asJson(
