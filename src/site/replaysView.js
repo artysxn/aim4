@@ -1092,7 +1092,13 @@ export function initReplaysView({ escapeHtml }) {
       .map(([code, n]) => `<span class="rp-tag">${escapeHtml(MAPS[code]?.name || code)} ${n}</span>`)
       .join('');
     const selCount = selectedFiles.size;
+    const picked = rounds.filter((r) => selectedFiles.has(r.file));
+    const analyze = analyzerGate(picked);
     const loadLabel = selCount ? `Load rounds (${selCount})` : 'Load rounds';
+    const analyzeLabel = selCount ? `Analyzer (${selCount})` : 'Analyzer';
+    const analyzeTitle = analyze.ok
+      ? 'Open Analyzer overlay'
+      : analyze.reason || 'Select rounds from one map with one team filtered';
     const head =
       rounds.length || selCount
         ? `<div class="rp-result-head">
@@ -1102,6 +1108,9 @@ export function initReplaysView({ escapeHtml }) {
           <button type="button" class="btn btn-sm primary" id="rp-load-rounds" ${
             selCount ? '' : 'disabled'
           }>${loadLabel}</button>
+          <button type="button" class="btn btn-sm rp-btn-analyzer" id="rp-analyzer" ${
+            analyze.ok ? '' : 'disabled'
+          } title="${escapeHtml(analyzeTitle)}">${analyzeLabel}</button>
         </div>
       </div>`
         : '';
@@ -1136,10 +1145,44 @@ export function initReplaysView({ escapeHtml }) {
       </div>`;
 
     resultEl.querySelector('#rp-load-rounds')?.addEventListener('click', () => {
-      const picked = rounds.filter((r) => selectedFiles.has(r.file));
       const ordered = groupRoundsByDemo(picked).flatMap((g) => g.rounds);
       launchViewer(ordered, 'timeline', queryTitle(ordered));
     });
+    resultEl.querySelector('#rp-analyzer')?.addEventListener('click', () => {
+      const gate = analyzerGate(picked);
+      if (!gate.ok) return;
+      const ordered = groupRoundsByDemo(picked).flatMap((g) => g.rounds);
+      const cluster = teamClustersByKey.get(gate.clusterKey);
+      const title = `${cluster?.name || 'Team'} · ${MAPS[ordered[0]?.map]?.name || ordered[0]?.map || 'Map'}`;
+      const clusterName = teamClustersByKey.get(gate.clusterKey)?.name || '';
+      launchViewer(ordered, 'analyzer', title, {
+        focusTeam: gate.focusTeam,
+        focusName: clusterName
+      });
+    });
+  }
+
+  /**
+   * Analyzer needs: ≥1 selected round, one map, and exactly one Team filter
+   * whose short-ids appear in every selected round.
+   */
+  function analyzerGate(picked) {
+    if (!picked.length) return { ok: false, reason: 'Select at least one round' };
+    if (filters.teams.size !== 1) {
+      return { ok: false, reason: 'Filter exactly one team first' };
+    }
+    const clusterKey = [...filters.teams][0];
+    const shortIds = expandClusterKeys([clusterKey]);
+    if (!shortIds.length) return { ok: false, reason: 'Unknown team' };
+    const maps = new Set(picked.map((r) => r.map).filter(Boolean));
+    if (maps.size !== 1) return { ok: false, reason: 'All rounds must share one map' };
+    const focusTeam = shortIds.find((id) =>
+      picked.every((r) => r.team1 === id || r.team2 === id)
+    );
+    if (!focusTeam) {
+      return { ok: false, reason: 'Selected team must be in every round' };
+    }
+    return { ok: true, focusTeam, clusterKey };
   }
 
   resultEl?.addEventListener('click', async (e) => {
@@ -1190,13 +1233,22 @@ export function initReplaysView({ escapeHtml }) {
   }
 
   /** The viewer is a heavy module: it loads the first time one is opened. */
-  async function launchViewer(list, mode, title) {
+  async function launchViewer(list, mode, title, opts = {}) {
     if (!list.length) return;
     setStatus('');
     if (!viewerModule) {
       viewerModule = await import('../replays/viewer/viewerApp.js');
     }
-    viewerModule.openViewer({ rounds: list, mode, title, escapeHtml });
+    const focus =
+      typeof opts === 'string' ? { focusTeam: opts } : opts && typeof opts === 'object' ? opts : {};
+    viewerModule.openViewer({
+      rounds: list,
+      mode,
+      title,
+      escapeHtml,
+      focusTeam: focus.focusTeam || '',
+      focusName: focus.focusName || ''
+    });
   }
 
   // ---- playlists page -----------------------------------------------------

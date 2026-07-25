@@ -118,12 +118,22 @@ export class RadarRenderer {
     this._damageTick.fill(-1);
   }
 
-  /** Match the backing store to the element's CSS size. */
-  resize() {
+  /**
+   * Match the backing store to the element's CSS size.
+   * Pass `{ w, h }` for an offscreen canvas that has no layout box.
+   */
+  resize(forced) {
     const { canvas } = this;
-    const rect = canvas.getBoundingClientRect();
-    const w = Math.max(1, Math.round(rect.width * this.dpr));
-    const h = Math.max(1, Math.round(rect.height * this.dpr));
+    let w;
+    let h;
+    if (forced?.w && forced?.h) {
+      w = Math.max(1, Math.round(forced.w));
+      h = Math.max(1, Math.round(forced.h));
+    } else {
+      const rect = canvas.getBoundingClientRect();
+      w = Math.max(1, Math.round(rect.width * this.dpr));
+      h = Math.max(1, Math.round(rect.height * this.dpr));
+    }
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
@@ -187,17 +197,27 @@ export class RadarRenderer {
    * @param {string[]} [frame.weapons]  weapon dictionary for the round
    * @param {string} [frame.highlight]
    * @param {boolean} [frame.compact]
+   * @param {boolean} [frame.clear=true]  when false, stack onto the current frame (Analyzer)
+   * @param {boolean} [frame.drawMap=true]
+   * @param {number}  [frame.alpha]       multiply layer opacity
+   * @param {Record<string,string>} [frame.playerColors] player id -> hex color
+   * @param {Record<string,boolean>} [frame.utilityVisible] grenade type -> shown
    */
   render(frame) {
-    const { w, h } = this.resize();
+    const { w, h } = this.resize(
+      frame.pixelSize ? { w: frame.pixelSize.w, h: frame.pixelSize.h } : undefined
+    );
     const ctx = this.ctx;
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#0b0d10';
-    ctx.fillRect(0, 0, w, h);
+    const clear = frame.clear !== false;
+    if (clear) {
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = '#0b0d10';
+      ctx.fillRect(0, 0, w, h);
+    }
 
     const t = this.viewTransform(w, h);
 
-    if (this.image) {
+    if (frame.drawMap !== false && this.image) {
       ctx.save();
       ctx.imageSmoothingEnabled = true;
       ctx.globalAlpha = 0.85;
@@ -206,12 +226,14 @@ export class RadarRenderer {
     }
 
     const compact = Boolean(frame.compact);
+    this._frameAlpha = Number.isFinite(frame.alpha) ? frame.alpha : 1;
     this.drawUtility(ctx, t, frame, compact);
-    this.drawBomb(ctx, t, frame, compact);
-    this.drawTracers(ctx, t, frame, compact);
-    this.drawDeaths(ctx, t, frame, compact);
+    if (!frame.hideBomb) this.drawBomb(ctx, t, frame, compact);
+    if (!frame.hideTracers) this.drawTracers(ctx, t, frame, compact);
+    if (!frame.hideDeaths) this.drawDeaths(ctx, t, frame, compact);
     this.drawPlayers(ctx, t, frame, compact);
     if (frame.drawings?.length) this.drawStrokes(ctx, t, frame.drawings);
+    this._frameAlpha = 1;
   }
 
   /**
@@ -269,11 +291,15 @@ export class RadarRenderer {
     const r = (compact ? 3.6 : 7.5) * this.dpr;
     const bombCarrier = bombCarrierAt(frame.events, tick);
     const pops = flashPops(frame.events);
+    const custom = frame.playerColors || null;
 
     for (const p of players) {
       const s = states[p.slot];
       if (!s) continue;
-      const colors = colorsForState(s, p.team);
+      const override = custom?.[p.id];
+      const colors = override
+        ? { base: override, bright: override, dim: override }
+        : colorsForState(s, p.team);
       const pt = this.project(t, s.x, s.y);
       if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
 
@@ -293,7 +319,7 @@ export class RadarRenderer {
 
       const lower = isLowerLevel(this.mapCode, s.z);
       ctx.save();
-      ctx.globalAlpha = lower ? 0.45 : 1;
+      ctx.globalAlpha = (lower ? 0.45 : 1) * (this._frameAlpha ?? 1);
 
       // Tip points in facing direction. Local tip is "up"; rotate so up = yaw.
       const yaw = (-s.yaw * Math.PI) / 180;
@@ -347,7 +373,7 @@ export class RadarRenderer {
 
       // Labels / held util in screen space (not rotated with the droplet).
       ctx.save();
-      ctx.globalAlpha = lower ? 0.45 : 1;
+      ctx.globalAlpha = (lower ? 0.45 : 1) * (this._frameAlpha ?? 1);
       // Blind: the dot washes out and a white halo sits around the marker for
       // as long as the flash has left to run.
       if (blind > 0) {
@@ -576,6 +602,22 @@ export class RadarRenderer {
       if (!Number.isFinite(throwTick) || tick < throwTick) continue;
       const det = Number(g.detonateTick ?? throwTick);
       const type = normalizeGrenadeType(g.type);
+      const utilVis = frame.utilityVisible;
+      if (utilVis) {
+        const key =
+          type === 'smokegrenade'
+            ? 'smoke'
+            : type === 'molotov' || type === 'incgrenade'
+              ? 'molotov'
+              : type === 'flashbang'
+                ? 'flash'
+                : type === 'hegrenade'
+                  ? 'he'
+                  : type === 'decoy'
+                    ? 'decoy'
+                    : '';
+        if (key && utilVis[key] === false) continue;
+      }
       const age = (tick - det) / tickRate;
       // The icon hands over to the detonation on the exact tick it goes off.
       live.push({ g, type, throwTick, det, age, flying: tick < det, side: sideOf(g.player) });
