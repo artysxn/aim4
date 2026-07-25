@@ -1,0 +1,343 @@
+// ---------------------------------------------------------------------------
+// replays/shared/statsMath.js
+// Turns per-round stat rows into the player and team tables.
+//
+// Pure functions over a compact row format, with no I/O, so the same code runs
+// on the server (aggregating a whole library out of the cached index) and in
+// the browser (re-aggregating one demo as the viewer scrubs through it).
+//
+// A row is one round. Everything a table needs is on it, which is what keeps
+// the stats page off the round files: the index is built once per demo and
+// every question after that is answered by summing numbers already in memory.
+// ---------------------------------------------------------------------------
+
+/** Per-player, per-round counters, in the order the index packs them. */
+export const P = {
+  KILLS: 0,
+  DEATHS: 1,
+  ASSISTS: 2,
+  DAMAGE: 3,
+  SHOTS: 4,
+  HITS: 5,
+  HEADSHOTS: 6,
+  AWP_SHOTS: 7,
+  AWP_HITS: 8,
+  KAST: 9
+};
+export const PLAYER_SLOTS = 10;
+
+/** HLTV 2.0, as published. KAST is the percentage, not the fraction. */
+export function ratingOf({ kast, kpr, dpr, impact, adr }) {
+  return 0.0073 * kast + 0.3591 * kpr - 0.5329 * dpr + 0.2372 * impact + 0.0032 * adr + 0.1587;
+}
+
+export function impactOf({ kpr, apr }) {
+  return 2.13 * kpr + 0.42 * apr - 0.41;
+}
+
+const div = (a, b) => (b > 0 ? a / b : 0);
+
+// ---------------------------------------------------------------------------
+// Filtering
+// ---------------------------------------------------------------------------
+
+/**
+ * @typedef {object} StatsFilter
+ * @property {string[]} [maps]      map codes
+ * @property {string[]} [files]     round names; when set, nothing else is considered
+ * @property {'T'|'CT'|''} [side]   the side the subject played
+ * @property {number|null} [econ]   the subject's buy bucket
+ * @property {number|null} [oppEcon} the other team's buy bucket
+ */
+
+/**
+ * Does a round pass, from the point of view of one team (1 or 2)?
+ * Side and economy are relative to that team, so the same round can pass for
+ * the T side and fail for the CT side.
+ */
+export function rowPasses(row, filter = {}, team = 0) {
+  if (filter.files?.length && !filter.files.includes(row.f)) return false;
+  if (filter.maps?.length && !filter.maps.includes(row.m)) return false;
+  if (!team) return true;
+  const side = team === 1 ? row.s1 : row.s2;
+  if (filter.side && side !== filter.side) return false;
+  const own = team === 1 ? row.e1 : row.e2;
+  const opp = team === 1 ? row.e2 : row.e1;
+  if (filter.econ !== null && filter.econ !== undefined && own !== filter.econ) return false;
+  if (filter.oppEcon !== null && filter.oppEcon !== undefined && opp !== filter.oppEcon) return false;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Players
+// ---------------------------------------------------------------------------
+
+function emptyBucket() {
+  return { rounds: 0, kills: 0, deaths: 0, assists: 0, damage: 0, kast: 0 };
+}
+
+function addBucket(b, line) {
+  b.rounds++;
+  b.kills += line[P.KILLS];
+  b.deaths += line[P.DEATHS];
+  b.assists += line[P.ASSISTS];
+  b.damage += line[P.DAMAGE];
+  b.kast += line[P.KAST] ? 1 : 0;
+}
+
+/** Rating and its inputs for one bucket of rounds. */
+export function bucketRating(b) {
+  if (!b.rounds) return { rounds: 0, rating: 0, kast: 0, kpr: 0, dpr: 0, apr: 0, impact: 0, adr: 0 };
+  const kpr = div(b.kills, b.rounds);
+  const dpr = div(b.deaths, b.rounds);
+  const apr = div(b.assists, b.rounds);
+  const kast = div(b.kast, b.rounds) * 100;
+  const adr = div(b.damage, b.rounds);
+  const impact = impactOf({ kpr, apr });
+  return { rounds: b.rounds, rating: ratingOf({ kast, kpr, dpr, impact, adr }), kast, kpr, dpr, apr, impact, adr };
+}
+
+/**
+ * One table row per player, pooled across demos.
+ *
+ * `players` is keyed `demoId:playerId`, not by player id alone: the same
+ * person is team 1 in one demo and team 2 in the next, and their side, their
+ * opponent's buy and whether they won all hang off that.
+ *
+ * @param {Array} rows          per-round rows
+ * @param {Map<string, {name: string, team: number}>} players
+ * @param {StatsFilter} filter
+ */
+export function aggregatePlayers(rows, players, filter = {}) {
+  /** @type {Map<string, any>} */
+  const acc = new Map();
+
+  const seat = (id, name) => {
+    let s = acc.get(id);
+    if (!s) {
+      s = {
+        id,
+        name: name || id,
+        all: emptyBucket(),
+        T: emptyBucket(),
+        CT: emptyBucket(),
+        won: emptyBucket(),
+        lost: emptyBucket(),
+        shots: 0,
+        hits: 0,
+        headshots: 0,
+        awpShots: 0,
+        awpHits: 0,
+        openKills: 0,
+        openDeaths: 0
+      };
+      acc.set(id, s);
+    }
+    return s;
+  };
+
+  for (const row of rows) {
+    for (const id of Object.keys(row.p)) {
+      const who = players.get(`${row.d}:${id}`);
+      const team = who?.team;
+      if (!team) continue;
+      if (!rowPasses(row, filter, team)) continue;
+      const line = row.p[id];
+      const s = seat(id, who.name);
+      const side = team === 1 ? row.s1 : row.s2;
+      addBucket(s.all, line);
+      if (side === 'T' || side === 'CT') addBucket(s[side], line);
+      addBucket(row.w === team ? s.won : s.lost, line);
+      s.shots += line[P.SHOTS];
+      s.hits += line[P.HITS];
+      s.headshots += line[P.HEADSHOTS];
+      s.awpShots += line[P.AWP_SHOTS];
+      s.awpHits += line[P.AWP_HITS];
+      if (row.ok === id) s.openKills++;
+      if (row.od === id) s.openDeaths++;
+    }
+  }
+
+  const out = [];
+  for (const s of acc.values()) {
+    if (!s.all.rounds) continue;
+    const all = bucketRating(s.all);
+    out.push({
+      id: s.id,
+      name: s.name,
+      rounds: all.rounds,
+      kills: s.all.kills,
+      deaths: s.all.deaths,
+      assists: s.all.assists,
+      damage: s.all.damage,
+      kd: s.all.deaths ? s.all.kills / s.all.deaths : s.all.kills,
+      adr: all.adr,
+      adrWon: div(s.won.damage, s.won.rounds),
+      adrLost: div(s.lost.damage, s.lost.rounds),
+      shots: s.shots,
+      hits: s.hits,
+      headshots: s.headshots,
+      accuracy: div(s.hits, s.shots) * 100,
+      awpShots: s.awpShots,
+      awpHits: s.awpHits,
+      awpAccuracy: div(s.awpHits, s.awpShots) * 100,
+      kast: all.kast,
+      impact: all.impact,
+      rating: all.rating,
+      ratingT: bucketRating(s.T).rating,
+      ratingCT: bucketRating(s.CT).rating,
+      ratingWon: bucketRating(s.won).rating,
+      ratingLost: bucketRating(s.lost).rating,
+      openKills: s.openKills,
+      openDeaths: s.openDeaths,
+      opkd: s.openDeaths ? s.openKills / s.openDeaths : s.openKills
+    });
+  }
+  out.sort((a, b) => b.rating - a.rating);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Teams
+// ---------------------------------------------------------------------------
+
+/**
+ * One table row per team. A team is keyed by its short id, so the same roster
+ * appearing in ten demos is one row.
+ *
+ * @param {Array} rows
+ * @param {Map<string, {name: string, team: number, demoId: string}>} players
+ * @param {Map<string, {t1: string, t2: string, names: object, winner: number}>} demos
+ * @param {StatsFilter} filter
+ */
+export function aggregateTeams(rows, players, demos, filter = {}) {
+  const acc = new Map();
+
+  const seat = (key, name) => {
+    let s = acc.get(key);
+    if (!s) {
+      s = {
+        key,
+        name,
+        rounds: 0,
+        won: 0,
+        openKills: 0,
+        openDeaths: 0,
+        openKillWon: 0,
+        openDeathWon: 0,
+        demoIds: new Set(),
+        playerIds: new Set()
+      };
+      acc.set(key, s);
+    }
+    return s;
+  };
+
+  for (const row of rows) {
+    const demo = demos.get(row.d);
+    if (!demo) continue;
+    for (const team of [1, 2]) {
+      const key = team === 1 ? demo.t1 : demo.t2;
+      if (!key) continue;
+      if (!rowPasses(row, filter, team)) continue;
+      const s = seat(key, team === 1 ? demo.name1 : demo.name2);
+      s.rounds++;
+      s.demoIds.add(row.d);
+      if (row.w === team) s.won++;
+
+      const okTeam = row.ok ? players.get(`${row.d}:${row.ok}`)?.team : 0;
+      const odTeam = row.od ? players.get(`${row.d}:${row.od}`)?.team : 0;
+      if (okTeam === team) {
+        s.openKills++;
+        if (row.w === team) s.openKillWon++;
+      }
+      if (odTeam === team) {
+        s.openDeaths++;
+        if (row.w === team) s.openDeathWon++;
+      }
+      for (const id of Object.keys(row.p)) {
+        if (players.get(`${row.d}:${id}`)?.team === team) s.playerIds.add(id);
+      }
+    }
+  }
+
+  // Player ratings under the same filter, so the team average and its hover
+  // breakdown agree with the players table.
+  const playerRows = aggregatePlayers(rows, players, filter);
+  const byPlayer = new Map(playerRows.map((p) => [p.id, p]));
+
+  const out = [];
+  for (const s of acc.values()) {
+    if (!s.rounds) continue;
+
+    // Map record is a property of the whole demo, not of the filtered rounds:
+    // a map is won or lost once, however few of its rounds survive a filter.
+    let mapWins = 0;
+    let mapLosses = 0;
+    for (const demoId of s.demoIds) {
+      const demo = demos.get(demoId);
+      if (!demo?.winner) continue;
+      const asTeam = demo.t1 === s.key ? 1 : demo.t2 === s.key ? 2 : 0;
+      if (!asTeam) continue;
+      if (demo.winner === asTeam) mapWins++;
+      else mapLosses++;
+    }
+
+    const members = [...s.playerIds]
+      .map((id) => byPlayer.get(id))
+      .filter(Boolean)
+      .sort((a, b) => b.rating - a.rating);
+    const avgRating = members.length
+      ? members.reduce((sum, m) => sum + m.rating, 0) / members.length
+      : 0;
+
+    out.push({
+      key: s.key,
+      name: s.name || s.key,
+      rounds: s.rounds,
+      roundsWon: s.won,
+      roundsLost: s.rounds - s.won,
+      roundWinrate: div(s.won, s.rounds) * 100,
+      avgRating,
+      members: members.map((m) => ({ id: m.id, name: m.name, rating: m.rating })),
+      mapWins,
+      mapLosses,
+      maps: mapWins + mapLosses,
+      mapWinrate: div(mapWins, mapWins + mapLosses) * 100,
+      roundDiff: s.won - (s.rounds - s.won),
+      openKills: s.openKills,
+      openDeaths: s.openDeaths,
+      opkRate: div(s.openKills, s.openKills + s.openDeaths) * 100,
+      conv5v4: div(s.openKillWon, s.openKills) * 100,
+      conv5v4Won: s.openKillWon,
+      conv5v4Lost: s.openKills - s.openKillWon,
+      conv4v5: div(s.openDeathWon, s.openDeaths) * 100,
+      conv4v5Won: s.openDeathWon,
+      conv4v5Lost: s.openDeaths - s.openDeathWon
+    });
+  }
+  out.sort((a, b) => b.avgRating - a.avgRating);
+  return out;
+}
+
+/** Rebuild the lookup maps a payload needs, on either side of the wire. */
+export function indexMaps(payload) {
+  const players = new Map();
+  const demos = new Map();
+  for (const d of payload.demos || []) {
+    demos.set(d.id, d);
+    for (const p of d.players || []) {
+      players.set(`${d.id}:${p.id}`, { name: p.name, team: p.team });
+    }
+  }
+  return { players, demos };
+}
+
+/** Every row across a payload's demos, flattened. */
+export function allRows(payload) {
+  const out = [];
+  for (const d of payload.demos || []) {
+    for (const r of d.rounds || []) out.push(r);
+  }
+  return out;
+}

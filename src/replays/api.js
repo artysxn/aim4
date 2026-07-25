@@ -199,6 +199,20 @@ export async function saveRoundNote(file, note) {
   );
 }
 
+/**
+ * The stats database: a compact per-round index, not finished tables.
+ *
+ * Filtering and aggregation happen in the browser against this payload, so the
+ * stats page re-sorts and re-filters with no request, and the viewer's live
+ * scoreboard can re-count rounds 1..N every time the round changes.
+ *
+ * @param {string[]} [demoIds] limit to these demos; omit for the whole library
+ */
+export async function fetchStats(demoIds = null) {
+  const q = demoIds?.length ? `?demos=${encodeURIComponent(demoIds.join(','))}` : '';
+  return asJson(await fetch(`${API_BASE}/api/replays/stats${q}`, { headers: await headers() }));
+}
+
 export async function fetchPlaylists() {
   const body = await asJson(
     await fetch(`${API_BASE}/api/replays/playlists`, { headers: await headers() })

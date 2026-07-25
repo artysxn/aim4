@@ -189,6 +189,19 @@ function readEvents(file, names) {
   }
 }
 
+/** Everything that is not utility, a knife or the bomb counts as a gun. */
+const NOT_A_GUN =
+  /grenade|molotov|incgrenade|firebomb|inferno|decoy|flash|knife|bayonet|karambit|c4|world|taser|zeus/i;
+
+export function isGunName(weapon) {
+  const w = String(weapon || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^weapon_/, '');
+  if (!w) return false;
+  return !NOT_A_GUN.test(w);
+}
+
 const sid = (v) => (v === null || v === undefined ? '' : String(v));
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
@@ -1021,17 +1034,29 @@ export async function parseDemo(file, opts = {}) {
     const winner = winnerSide === team1Side ? 1 : 2;
 
     // Per-player round stats.
+    // Accuracy needs shots and hits counted over the same population, so both
+    // sides drop utility and knives: a thrown flashbang is a weapon_fire and an
+    // inferno tick is a player_hurt, and neither is a shot anybody aimed.
+    const hurts = (byName.get('player_hurt') || []).filter((e) => inSpan(e, span));
     const stats = {};
     for (const pl of roster) {
       const snap = buys.get(`${buyTick}:${pl.steamId}`) || {};
+      const myHurts = hurts.filter((e) => idOf(sid(e.attacker_steamid)) === pl.id);
+      const gunHurts = myHurts.filter((e) => isGunName(e.weapon));
+      const myShots = shots.filter((s) => s.player === pl.id);
+      const gunShots = myShots.filter((s) => isGunName(s.weapon));
       stats[pl.id] = {
         kills: kills.filter((k) => k.attacker === pl.id).length,
         deaths: kills.filter((k) => k.victim === pl.id).length,
         assists: kills.filter((k) => k.assister === pl.id).length,
-        damage: (byName.get('player_hurt') || [])
-          .filter((e) => inSpan(e, span) && idOf(sid(e.attacker_steamid)) === pl.id)
-          .reduce((sum, e) => sum + num(e.dmg_health), 0),
-        shots: shots.filter((s) => s.player === pl.id).length,
+        damage: myHurts.reduce((sum, e) => sum + num(e.dmg_health), 0),
+        shots: myShots.length,
+        gunShots: gunShots.length,
+        hits: gunHurts.length,
+        headshots: gunHurts.filter((e) => String(e.hitgroup) === 'head' || num(e.hitgroup) === 1)
+          .length,
+        awpShots: myShots.filter((s) => s.weapon === 'awp').length,
+        awpHits: gunHurts.filter((e) => String(e.weapon || '') === 'awp').length,
         money: snap.money || 0,
         equipValue: snap.equipValue || 0,
         loadout: snap.loadout || []

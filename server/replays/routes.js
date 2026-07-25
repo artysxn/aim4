@@ -44,13 +44,18 @@ import {
   saveUpload,
   upsertPlaylist,
   usage,
+  userDir,
   writeRecord,
   writeRoundNote
 } from './demoStore.js';
+import { forgetDemoIndex, statsPayload } from './statsIndex.js';
 import { allJobs, enqueueParse, jobStatus } from './jobs.js';
 import { authStatus, identify } from './auth.js';
 import { importReplayPackage } from './importPackage.js';
 import { PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
+
+/** What the stats index needs from storage, without importing it back. */
+const statsIo = { userDir, readRoundMeta };
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -366,6 +371,7 @@ export async function handleReplayRequest(req, res, url) {
     }
     if (req.method === 'DELETE') {
       const removed = await deleteDemo(user, id);
+      await forgetDemoIndex(statsIo, user, id);
       if (!removed) {
         json(res, 404, { error: 'Replay not found.' });
         return true;
@@ -412,6 +418,18 @@ export async function handleReplayRequest(req, res, url) {
       sizeBytes: record.sizeBytes
     });
     json(res, 202, { job: { state: job.state, stage: job.stage } });
+    return true;
+  }
+
+  // ---- stats --------------------------------------------------------------
+  // Returns the compact per-round index, not finished tables: the client
+  // re-filters and re-aggregates it locally, so changing a filter (or scrubbing
+  // the viewer's live scoreboard round by round) costs no request at all.
+  if (req.method === 'GET' && p === '/api/replays/stats') {
+    const only = csv(url, 'demos');
+    const records = (await listDemos(user)).filter((r) => (r.status || 'ready') === 'ready');
+    const payload = await statsPayload(statsIo, user, records, only);
+    json(res, 200, payload);
     return true;
   }
 

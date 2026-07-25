@@ -31,6 +31,7 @@ import {
 import { collectRounds, matchesQuery, splitStoredName } from '../replays/shared/roundFilter.js';
 import { PACKAGE_EXT } from '../replays/shared/replayPackage.js';
 import { formatBytes } from '../replays/tickStore.js';
+import { createStatsPanel } from '../replays/stats/statsPanel.js';
 import commentsIcon from '../icons/demos_comments.svg?raw';
 import bookmarkIcon from '../icons/demos_bookmarks_added.svg?raw';
 
@@ -56,6 +57,10 @@ export function initReplaysView({ escapeHtml }) {
   const playlistsPageEl = document.getElementById('rp-playlists-page');
   const playlistsBody = document.getElementById('rp-pl-body');
   const playlistsBack = document.getElementById('rp-playlists-back');
+  const statsBtn = document.getElementById('rp-stats-btn');
+  const statsPageEl = document.getElementById('rp-stats-page');
+  const statsBodyEl = document.getElementById('rp-stats-body');
+  const statsBack = document.getElementById('rp-stats-back');
   const uploadBack = document.getElementById('rp-upload-back');
   const pageTitleEl = document.getElementById('page-title');
 
@@ -75,8 +80,12 @@ export function initReplaysView({ escapeHtml }) {
   let viewerModule = null;
   /** Round name already opened from the URL, so it opens once per link. */
   let openedRound = '';
-  /** @type {'library' | 'upload' | 'playlists'} */
+  /** @type {'library' | 'upload' | 'playlists' | 'stats'} */
   let subpage = 'library';
+  /** Built on first use; the payload it holds is reused across scopes. */
+  let statsPanel = null;
+  /** @type {{demos?: string[], files?: string[], title?: string}} */
+  let statsScope = {};
   let teamSearch = '';
   let playerSearch = '';
   let mapMenuOpen = false;
@@ -179,6 +188,10 @@ export function initReplaysView({ escapeHtml }) {
     return `<svg viewBox="0 -960 960 960" width="16" height="16" fill="currentColor"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>`;
   }
 
+  function statsIconHtml() {
+    return `<svg viewBox="0 -960 960 960" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M640-160v-280h120v280H640Zm-220 0v-640h120v640H420Zm-220 0v-440h120v440H200Z"/></svg>`;
+  }
+
   function playIconHtml() {
     return `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7L8 5z"/></svg>`;
   }
@@ -275,6 +288,7 @@ export function initReplaysView({ escapeHtml }) {
     const del = target.closest('[data-delete]');
     const retry = target.closest('[data-retry]');
     const rename = target.closest('[data-rename]');
+    const demoStats = target.closest('[data-demo-stats]');
 
     if (open) {
       const demo = demos.find((d) => d.id === open.dataset.open);
@@ -284,7 +298,24 @@ export function initReplaysView({ escapeHtml }) {
           map: demo.map,
           tickRate: r.tickRate || demo.tickRate
         }));
-        launchViewer(list, 'timeline', `${demo.team1?.name || 'Team 1'} vs ${demo.team2?.name || 'Team 2'}`);
+        // statsDemoId is what turns on the viewer's live scoreboard: it only
+        // means anything when the whole match is loaded, in order.
+        launchViewer(
+          list,
+          'timeline',
+          `${demo.team1?.name || 'Team 1'} vs ${demo.team2?.name || 'Team 2'}`,
+          { statsDemoId: demo.id }
+        );
+      }
+      return true;
+    }
+    if (demoStats) {
+      const demo = demos.find((d) => d.id === demoStats.dataset.demoStats);
+      if (demo) {
+        showStats({
+          demos: [demo.id],
+          title: `${demo.team1?.name || 'Team 1'} vs ${demo.team2?.name || 'Team 2'}`
+        });
       }
       return true;
     }
@@ -1053,7 +1084,8 @@ export function initReplaysView({ escapeHtml }) {
         <div class="rp-row-actions">
           ${
             d
-              ? `<button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>`
+              ? `<button type="button" class="rp-btn-icon" data-demo-stats="${id}" title="Statistics for this match">${statsIconHtml()}</button>
+                 <button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>`
               : ''
           }
           <button type="button" class="rp-btn-icon danger" data-delete="${id}" title="Delete">
@@ -1108,6 +1140,9 @@ export function initReplaysView({ escapeHtml }) {
         <span class="rp-result-count">${rounds.length} round${rounds.length === 1 ? '' : 's'} match</span>
         <span class="rp-result-tags">${tags}</span>
         <div class="rp-result-actions">
+          <button type="button" class="btn btn-sm" id="rp-stats-selected" title="${escapeHtml(
+            selCount ? `Statistics for the ${selCount} selected round${selCount === 1 ? '' : 's'}` : 'Statistics for every round that matches these filters'
+          )}">Statistics${selCount ? ` (${selCount})` : ''}</button>
           <button type="button" class="btn btn-sm primary" id="rp-load-rounds" ${
             selCount ? '' : 'disabled'
           }>${loadLabel}</button>
@@ -1161,6 +1196,17 @@ export function initReplaysView({ escapeHtml }) {
         }
       </div>`;
 
+    resultEl.querySelector('#rp-stats-selected')?.addEventListener('click', () => {
+      // Selected rounds when there are any, otherwise whatever the filters left.
+      const list = picked.length ? picked : rounds;
+      const files = list.map((r) => r.file);
+      const demoIds = [...new Set(list.map((r) => r.demoId || splitStoredName(r.file)?.demoId).filter(Boolean))];
+      showStats({
+        files,
+        demos: demoIds.length ? demoIds : null,
+        title: `${files.length} round${files.length === 1 ? '' : 's'}`
+      });
+    });
     resultEl.querySelector('#rp-load-rounds')?.addEventListener('click', () => {
       const ordered = groupRoundsByDemo(picked).flatMap((g) => g.rounds);
       launchViewer(ordered, 'timeline', queryTitle(ordered));
@@ -1363,7 +1409,8 @@ export function initReplaysView({ escapeHtml }) {
       focusTeam: focus.focusTeam || '',
       focusTeamIds: focus.focusTeamIds || [],
       focusName: focus.focusName || '',
-      teamOptions: focus.teamOptions || []
+      teamOptions: focus.teamOptions || [],
+      statsDemoId: focus.statsDemoId || ''
     });
   }
 
@@ -1428,16 +1475,25 @@ export function initReplaysView({ escapeHtml }) {
   }
 
   function setSubpage(name, { push = false } = {}) {
-    const next = name === 'upload' || name === 'playlists' ? name : 'library';
+    const next =
+      name === 'upload' || name === 'playlists' || name === 'stats' ? name : 'library';
     subpage = next;
     if (libraryEl) libraryEl.hidden = next !== 'library';
     if (uploadPageEl) uploadPageEl.hidden = next !== 'upload';
     if (playlistsPageEl) playlistsPageEl.hidden = next !== 'playlists';
+    if (statsPageEl) statsPageEl.hidden = next !== 'stats';
     if (headActions) headActions.hidden = !visible;
     if (pageTitleEl) pageTitleEl.textContent = 'Replays';
     document.title = 'AIM4.io - Replays';
 
-    const path = next === 'upload' ? '/replays/upload' : next === 'playlists' ? '/replays/playlists' : '/replays';
+    const path =
+      next === 'upload'
+        ? '/replays/upload'
+        : next === 'playlists'
+          ? '/replays/playlists'
+          : next === 'stats'
+            ? '/replays/stats'
+            : '/replays';
     if (push && window.location.pathname.replace(/\/+$/, '') !== path) {
       window.history.pushState({ view: 'replays' }, '', path);
     }
@@ -1445,6 +1501,9 @@ export function initReplaysView({ escapeHtml }) {
     if (next === 'playlists') {
       stopPolling();
       loadPlaylistsPage();
+    } else if (next === 'stats') {
+      stopPolling();
+      openStatsPage(statsScope);
     } else if (visible) {
       startPolling();
     }
@@ -1454,6 +1513,8 @@ export function initReplaysView({ escapeHtml }) {
   uploadBack?.addEventListener('click', () => setSubpage('library', { push: true }));
   playlistsBtn?.addEventListener('click', () => setSubpage('playlists', { push: true }));
   playlistsBack?.addEventListener('click', () => setSubpage('library', { push: true }));
+  statsBtn?.addEventListener('click', () => showStats({}));
+  statsBack?.addEventListener('click', () => setSubpage('library', { push: true }));
 
   playlistsBody?.addEventListener('click', async (e) => {
     const play = e.target.closest('[data-play]');
@@ -1482,6 +1543,26 @@ export function initReplaysView({ escapeHtml }) {
       }
     }
   });
+
+  // ---- statistics ---------------------------------------------------------
+
+  /** Mount the panel on first use and point it at a scope. */
+  function openStatsPage(scope) {
+    if (!statsBodyEl) return;
+    if (!statsPanel) {
+      statsPanel = createStatsPanel({ escapeHtml });
+      statsBodyEl.appendChild(statsPanel.el);
+    }
+    statsPanel.load(scope);
+  }
+
+  /**
+   * @param {{demos?: string[], files?: string[], title?: string}} scope
+   */
+  function showStats(scope) {
+    statsScope = scope || {};
+    setSubpage('stats', { push: true });
+  }
 
   // ---- deep links ---------------------------------------------------------
 
@@ -1565,13 +1646,20 @@ export function initReplaysView({ escapeHtml }) {
         params.playlists === '1' ||
         params.playlists === true ||
         path === '/replays/playlists';
-      const page = wantUpload ? 'upload' : wantPlaylists ? 'playlists' : 'library';
+      const wantStats = params.stats === '1' || params.stats === true || path === '/replays/stats';
+      const page = wantUpload
+        ? 'upload'
+        : wantPlaylists
+          ? 'playlists'
+          : wantStats
+            ? 'stats'
+            : 'library';
       setSubpage(page, { push: false });
-      if (page !== 'playlists') {
+      if (page === 'playlists' || page === 'stats') {
+        stopPolling();
+      } else {
         refresh();
         startPolling();
-      } else {
-        stopPolling();
       }
       // Only on the first arrival: a viewer close rewrites the URL back to
       // /replays, and re-entering the view must not reopen what was closed.

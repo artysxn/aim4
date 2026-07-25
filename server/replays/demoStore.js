@@ -44,7 +44,7 @@ export function userKey(raw) {
   return safe || 'local';
 }
 
-const userDir = (user) => path.join(ROOT, userKey(user));
+export const userDir = (user) => path.join(ROOT, userKey(user));
 const demosDir = (user) => path.join(userDir(user), 'demos');
 const roundsDir = (user) => path.join(userDir(user), 'rounds');
 

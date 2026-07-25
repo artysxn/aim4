@@ -13,6 +13,9 @@ import {
   saveRoundNote,
   savePlaylist
 } from '../api.js';
+import { fetchStats } from '../api.js';
+import { aggregatePlayers, allRows, indexMaps } from '../shared/statsMath.js';
+import { PLAYER_COLUMNS, attachTips, statsTableHtml } from '../stats/statsTables.js';
 import { RadarRenderer, SIDE_COLORS } from './radarRenderer.js';
 import { Playback, RoundSequence } from './playback.js';
 import { clockAt, formatClock, timingFor } from './roundClock.js';
@@ -32,10 +35,14 @@ const SPEEDS = [0.25, 0.5, 1, 2, 4];
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 5;
 
+const statsIconSvg =
+  '<svg viewBox="0 -960 960 960" width="19" height="19" fill="currentColor" aria-hidden="true">' +
+  '<path d="M640-160v-280h120v280H640Zm-220 0v-640h120v640H420Zm-220 0v-440h120v440H200Z"/></svg>';
+
 /** The shipped SVGs are a fixed light grey; let CSS drive the colour instead. */
 const icon = (raw) => String(raw).replace(/fill="#[0-9a-fA-F]{3,8}"/g, 'fill="currentColor"');
 
-export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
+export function createTimelineViewer({ store, rounds, escapeHtml, onRound, statsDemoId = '' }) {
   const el = document.createElement('div');
   el.className = 'rv-timeline';
   el.innerHTML = `
@@ -57,6 +64,13 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
         <button type="button" class="btn btn-sm primary" id="rv-note-save">Save</button>
       </div>
     </aside>
+    <div class="rv-scoreboard" id="rv-scoreboard" hidden>
+      <div class="rv-scoreboard-head">
+        <span id="rv-scoreboard-title">Match stats</span>
+        <button type="button" class="rp-btn-icon" id="rv-scoreboard-close" aria-label="Close">✕</button>
+      </div>
+      <div class="rv-scoreboard-body" id="rv-scoreboard-body"></div>
+    </div>
     <div class="rv-chrome">
       <div class="rv-rounds" id="rv-rounds"></div>
       <div class="rv-transport">
@@ -84,6 +98,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
           ).join('')}
         </div>
         <div class="rv-tools" id="rv-tools">
+          <button type="button" class="rv-tool" id="rv-stats" title="Match stats up to this round" ${
+            statsDemoId ? '' : 'hidden'
+          }>${statsIconSvg}</button>
           <button type="button" class="rv-tool" id="rv-draw" title="Draw (right click always draws)">${icon(pencilIcon)}</button>
           <button type="button" class="rv-tool" id="rv-note" title="Round note">${icon(commentsIcon)}</button>
           <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
@@ -342,6 +359,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
     markActiveRound();
     drawing.setRound(files[index]);
     onRound?.(rounds[index]);
+    if (!boardEl.hidden) renderScoreboard();
     syncBookmark();
     renderer._prevHealth?.fill?.(-1);
     renderer._damageTick?.fill?.(-1);
@@ -874,6 +892,76 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
     }
   });
 
+  // ---- live scoreboard ----------------------------------------------------
+  //
+  // Everything up to the round on screen, as two boards. The index is fetched
+  // once for this demo and re-aggregated locally on every open, so stepping
+  // from round 14 to round 20 costs no request.
+
+  const statsBtn = el.querySelector('#rv-stats');
+  const boardEl = el.querySelector('#rv-scoreboard');
+  const boardBody = el.querySelector('#rv-scoreboard-body');
+  const boardTitle = el.querySelector('#rv-scoreboard-title');
+  let statsPayload = null;
+  let statsPending = null;
+  const detachBoardTips = attachTips(boardEl);
+
+  function renderScoreboard() {
+    if (!statsPayload) {
+      boardBody.innerHTML = '<p class="view-empty">Loading…</p>';
+      return;
+    }
+    const demo = statsPayload.demos?.[0];
+    if (!demo) {
+      boardBody.innerHTML = '<p class="view-empty">No stats for this match yet.</p>';
+      return;
+    }
+    const upTo = rounds[activeIndex]?.round ?? 0;
+    const rows = allRows(statsPayload).filter((r) => r.n <= upTo);
+    const { players } = indexMaps(statsPayload);
+    const all = aggregatePlayers(rows, players, {});
+    const teamOf = new Map(demo.players.map((p) => [p.id, p.team]));
+
+    boardTitle.textContent = `Rounds 1-${upTo}`;
+    const board = (team, name) => {
+      const list = all.filter((p) => teamOf.get(p.id) === team);
+      return `<div class="rv-board">
+        <h4 class="rv-board-name team${team}">${escapeHtml(name)}</h4>
+        ${statsTableHtml(list, {
+          columns: PLAYER_COLUMNS,
+          escapeHtml,
+          sortKey: 'rating',
+          sortDir: 'desc',
+          compact: true
+        })}
+      </div>`;
+    };
+    boardBody.innerHTML = board(1, demo.name1) + board(2, demo.name2);
+  }
+
+  function toggleScoreboard(force = null) {
+    const open = force === null ? boardEl.hidden : force;
+    boardEl.hidden = !open;
+    statsBtn?.classList.toggle('active', open);
+    if (!open) return;
+    renderScoreboard();
+    if (statsPayload || statsPending) return;
+    statsPending = fetchStats([statsDemoId])
+      .then((res) => {
+        statsPayload = res;
+        if (!destroyed && !boardEl.hidden) renderScoreboard();
+      })
+      .catch(() => {
+        if (!destroyed) boardBody.innerHTML = '<p class="view-empty">Could not load stats.</p>';
+      })
+      .finally(() => {
+        statsPending = null;
+      });
+  }
+
+  statsBtn?.addEventListener('click', () => toggleScoreboard());
+  el.querySelector('#rv-scoreboard-close').addEventListener('click', () => toggleScoreboard(false));
+
   // ---- frame --------------------------------------------------------------
 
   function onPosition(pos) {
@@ -1119,6 +1207,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
     destroy() {
       destroyed = true;
       playback.destroy();
+      detachBoardTips();
       offStore();
       chromeObserver?.disconnect();
       window.removeEventListener('keydown', onKey);

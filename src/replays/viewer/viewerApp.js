@@ -44,6 +44,7 @@ export function openViewer({
   focusTeamIds = [],
   focusName = '',
   teamOptions = [],
+  statsDemoId = '',
   onClose
 }) {
   const store = new TickStore();
@@ -99,6 +100,7 @@ export function openViewer({
       focusTeamIds: focusIds,
       focusName,
       teamOptions,
+      statsDemoId,
       onRound: syncUrl
     });
     if (next === 'analyzer') syncUrl(null);
