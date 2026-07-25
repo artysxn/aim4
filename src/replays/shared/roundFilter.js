@@ -15,7 +15,10 @@ import { parseRoundId } from './roundId.js';
  * @property {string[]} [teams]       team ids, matches either side
  * @property {string[]} [players]     player ids, all must appear (see playerMode)
  * @property {'all'|'any'} [playerMode='all']
- * @property {string} [wonBy]         team id that must have won
+ * @property {string|string[]} [wonBy] team id(s) that must have won (legacy)
+ * @property {'selected'|'opponent'} [wonByMode]
+ *   Relative to `teams`: winner is a selected team, or the other side.
+ *   When both sides of a round are in `teams`, either mode matches.
  * @property {number[]} [economies]   econ buckets, matched on either side
  * @property {number} [econA]         one side of an unordered economy pair
  * @property {number} [econB]         other side of an unordered economy pair
@@ -68,7 +71,24 @@ export function matchesQuery(meta, query = {}) {
   const teams = asSet(query.teams);
   if (teams && !teams.has(meta.team1) && !teams.has(meta.team2)) return false;
 
-  // wonBy may be one id or several (merged team aliases).
+  const winner = meta.winner === 1 ? meta.team1 : meta.team2;
+
+  // Relative winner: "selected team" vs "opponent", keyed off the teams filter.
+  // If both sides are selected (e.g. Vitality vs G2), either choice matches —
+  // one selected side always wins and the other always loses.
+  if (
+    (query.wonByMode === 'selected' || query.wonByMode === 'opponent') &&
+    teams
+  ) {
+    const t1 = teams.has(meta.team1);
+    const t2 = teams.has(meta.team2);
+    if (!(t1 && t2)) {
+      if (query.wonByMode === 'selected' && !teams.has(winner)) return false;
+      if (query.wonByMode === 'opponent' && teams.has(winner)) return false;
+    }
+  }
+
+  // Legacy: wonBy may be one id or several (merged team aliases).
   const wonBy = asSet(
     Array.isArray(query.wonBy)
       ? query.wonBy
@@ -79,10 +99,7 @@ export function matchesQuery(meta, query = {}) {
             .filter(Boolean)
         : null
   );
-  if (wonBy) {
-    const winner = meta.winner === 1 ? meta.team1 : meta.team2;
-    if (!wonBy.has(winner)) return false;
-  }
+  if (wonBy && !wonBy.has(winner)) return false;
 
   const economies = asSet(query.economies);
   if (economies && !economies.has(meta.econ1) && !economies.has(meta.econ2)) return false;

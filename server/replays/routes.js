@@ -119,9 +119,15 @@ function queryFromUrl(url) {
     players: csv(url, 'players'),
     playerMode: url.searchParams.get('playerMode') || 'all',
     // One team id, or several comma-separated aliases for a merged team.
-    wonBy: csv(url, 'wonBy').length
-      ? csv(url, 'wonBy')
-      : url.searchParams.get('wonBy') || undefined,
+    wonBy: (() => {
+      const many = csv(url, 'wonBy');
+      if (many?.length) return many;
+      return url.searchParams.get('wonBy') || undefined;
+    })(),
+    wonByMode: (() => {
+      const mode = url.searchParams.get('wonByMode');
+      return mode === 'selected' || mode === 'opponent' ? mode : undefined;
+    })(),
     economies: nums(url, 'economies'),
     econA: url.searchParams.has('econA') ? Number(url.searchParams.get('econA')) : undefined,
     econB: url.searchParams.has('econB') ? Number(url.searchParams.get('econB')) : undefined,

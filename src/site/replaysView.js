@@ -36,7 +36,6 @@ export function initReplaysView({ escapeHtml }) {
   const uploadInput = document.getElementById('rp-file');
   const dropEl = document.getElementById('rp-drop');
   const quotaEl = document.getElementById('rp-quota');
-  const listEl = document.getElementById('rp-list');
   const statusEl = document.getElementById('rp-status');
   const filtersEl = document.getElementById('rp-filters');
   const resultEl = document.getElementById('rp-result');
@@ -71,6 +70,7 @@ export function initReplaysView({ escapeHtml }) {
   let subpage = 'library';
   let teamSearch = '';
   let playerSearch = '';
+  let mapMenuOpen = false;
   /** @type {{ key: string, name: string, shortIds: string[] }[]} */
   let teamClusters = [];
   /** @type {Map<string, { key: string, name: string, shortIds: string[] }>} */
@@ -81,7 +81,8 @@ export function initReplaysView({ escapeHtml }) {
     maps: new Set(),
     teams: new Set(),
     players: new Set(),
-    wonBy: '',
+    /** @type {''|'selected'|'opponent'} */
+    wonByMode: '',
     /** @type {number|null} */
     econA: null,
     /** @type {number|null} */
@@ -236,10 +237,8 @@ export function initReplaysView({ escapeHtml }) {
   }
 
   function renderDemos() {
-    if (!listEl) return;
-    listEl.innerHTML = demos.length
-      ? demos.map(demoRow).join('')
-      : `<p class="view-empty">No replays yet. Upload a ${PACKAGE_EXT} package (or a .dem).</p>`;
+    // Demos live in the results column (expandable groups + parsing rows).
+    renderResults();
   }
 
   async function handleDemoAction(target) {
@@ -289,10 +288,6 @@ export function initReplaysView({ escapeHtml }) {
     }
     return false;
   }
-
-  listEl?.addEventListener('click', async (e) => {
-    await handleDemoAction(e.target);
-  });
 
   // ---- team naming --------------------------------------------------------
 
@@ -542,7 +537,7 @@ export function initReplaysView({ escapeHtml }) {
     for (const key of [...filters.teams]) {
       if (!teamClustersByKey.has(key)) filters.teams.delete(key);
     }
-    if (filters.wonBy && !teamClustersByKey.has(filters.wonBy)) filters.wonBy = '';
+    if (!filters.teams.size) filters.wonByMode = '';
   }
 
   function knownPlayers() {
@@ -601,16 +596,55 @@ export function initReplaysView({ escapeHtml }) {
       .join('')}</div>`;
   }
 
+  function mapToggleLabel() {
+    const n = filters.maps.size;
+    if (!n) return 'Any map';
+    if (n === 1) {
+      const code = [...filters.maps][0];
+      return MAPS[code]?.name || code;
+    }
+    return `${n} maps`;
+  }
+
+  function mapMenuHtml() {
+    const items = Object.entries(MAPS)
+      .map(
+        ([code, m]) => `
+      <label class="rp-check-option">
+        <input type="checkbox" data-map="${escapeHtml(code)}" ${
+          filters.maps.has(code) ? 'checked' : ''
+        } />
+        <span>${escapeHtml(m.name)}</span>
+      </label>`
+      )
+      .join('');
+    return `
+      <div class="rp-multi${mapMenuOpen ? ' open' : ''}" id="rp-map-multi">
+        <button type="button" class="site-input rp-multi-toggle" id="rp-map-toggle"
+          aria-expanded="${mapMenuOpen ? 'true' : 'false'}">${escapeHtml(mapToggleLabel())}</button>
+        <div class="rp-multi-menu" ${mapMenuOpen ? '' : 'hidden'}>${items}</div>
+      </div>`;
+  }
+
+  function wonBySelectHtml() {
+    const hasTeams = filters.teams.size > 0;
+    const mode = filters.wonByMode;
+    return `
+      <select id="rp-won-by" class="site-input rp-econ-select" ${hasTeams ? '' : 'disabled'}
+        aria-label="Round won by">
+        <option value=""${mode === '' ? ' selected' : ''}>Any</option>
+        <option value="selected"${mode === 'selected' ? ' selected' : ''}>Selected team</option>
+        <option value="opponent"${mode === 'opponent' ? ' selected' : ''}>Opponent</option>
+      </select>
+      ${
+        hasTeams
+          ? ''
+          : `<p class="rp-filter-hint">Select a team first</p>`
+      }`;
+  }
+
   function renderFilters() {
     if (!filtersEl) return;
-    const chip = (group, value, label, active) =>
-      `<button type="button" class="rp-chip${active ? ' active' : ''}" data-group="${group}" data-value="${escapeHtml(
-        String(value)
-      )}">${escapeHtml(label)}</button>`;
-
-    const mapChips = Object.entries(MAPS)
-      .map(([code, m]) => chip('maps', code, m.name, filters.maps.has(code)))
-      .join('');
 
     const teamOptions = teamClusters
       .filter((c) => !filters.teams.has(c.key))
@@ -622,15 +656,13 @@ export function initReplaysView({ escapeHtml }) {
     const playerEntries = knownPlayers();
     const playerOptions = playerEntries.filter(([id]) => !filters.players.has(id));
     const selectedPlayers = playerEntries.filter(([id]) => filters.players.has(id));
-
-    const winnerChips = teamClusters
-      .map((c) => chip('wonBy', c.key, c.name, filters.wonBy === c.key))
-      .join('');
+    const teamMenuOpen = Boolean(teamSearch.trim());
+    const playerMenuOpen = Boolean(playerSearch.trim());
 
     filtersEl.innerHTML = `
-      <div class="rp-filter-group">
+      <div class="rp-filter-group${mapMenuOpen ? ' menu-open' : ''}">
         <h4>Map</h4>
-        <div class="rp-chips">${mapChips}</div>
+        ${mapMenuHtml()}
       </div>
       <div class="rp-filter-group">
         <h4>Economy</h4>
@@ -647,7 +679,7 @@ export function initReplaysView({ escapeHtml }) {
       </div>
       ${
         teamClusters.length
-          ? `<div class="rp-filter-group">
+          ? `<div class="rp-filter-group${teamMenuOpen ? ' menu-open' : ''}">
               <h4>Team</h4>
               <div class="rp-typeahead" id="rp-team-typeahead">
                 <input type="search" class="site-input rp-filter-search" id="rp-team-search"
@@ -660,13 +692,16 @@ export function initReplaysView({ escapeHtml }) {
           : ''
       }
       ${
-        winnerChips
-          ? `<div class="rp-filter-group"><h4>Round won by</h4><div class="rp-chips">${winnerChips}</div></div>`
+        teamClusters.length
+          ? `<div class="rp-filter-group">
+              <h4>Round won by</h4>
+              ${wonBySelectHtml()}
+            </div>`
           : ''
       }
       ${
         playerEntries.length
-          ? `<div class="rp-filter-group">
+          ? `<div class="rp-filter-group${playerMenuOpen ? ' menu-open' : ''}">
               <h4>Players on the server</h4>
               <div class="rp-typeahead" id="rp-player-typeahead">
                 <input type="search" class="site-input rp-filter-search" id="rp-player-search"
@@ -690,15 +725,34 @@ export function initReplaysView({ escapeHtml }) {
     bindEcon('rp-econ-a', 'econA');
     bindEcon('rp-econ-b', 'econB');
 
+    filtersEl.querySelector('#rp-won-by')?.addEventListener('change', (e) => {
+      const v = e.target.value;
+      filters.wonByMode = v === 'selected' || v === 'opponent' ? v : '';
+      runQuery();
+    });
+
+    filtersEl.querySelector('#rp-map-toggle')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      mapMenuOpen = !mapMenuOpen;
+      const multi = filtersEl.querySelector('#rp-map-multi');
+      multi?.classList.toggle('open', mapMenuOpen);
+      const menu = multi?.querySelector('.rp-multi-menu');
+      if (menu) menu.hidden = !mapMenuOpen;
+      multi?.querySelector('#rp-map-toggle')?.setAttribute('aria-expanded', mapMenuOpen ? 'true' : 'false');
+      multi?.closest('.rp-filter-group')?.classList.toggle('menu-open', mapMenuOpen);
+    });
+
     filtersEl.querySelector('#rp-clear')?.addEventListener('click', () => {
       filters.maps.clear();
       filters.teams.clear();
       filters.players.clear();
-      filters.wonBy = '';
+      filters.wonByMode = '';
       filters.econA = null;
       filters.econB = null;
       teamSearch = '';
       playerSearch = '';
+      mapMenuOpen = false;
       renderFilters();
       runQuery();
     });
@@ -707,6 +761,7 @@ export function initReplaysView({ escapeHtml }) {
   function refreshTypeaheadMenu(kind) {
     if (!filtersEl) return;
     if (kind === 'teams') {
+      const group = filtersEl.querySelector('#rp-team-typeahead')?.closest('.rp-filter-group');
       const wrap = filtersEl.querySelector('#rp-team-typeahead');
       if (!wrap) return;
       wrap.querySelector('.rp-typeahead-menu')?.remove();
@@ -714,13 +769,16 @@ export function initReplaysView({ escapeHtml }) {
         .filter((c) => !filters.teams.has(c.key))
         .map((c) => [c.key, c.name]);
       wrap.insertAdjacentHTML('beforeend', typeaheadMenuHtml('teams', options, teamSearch));
+      group?.classList.toggle('menu-open', Boolean(teamSearch.trim()));
       return;
     }
+    const group = filtersEl.querySelector('#rp-player-typeahead')?.closest('.rp-filter-group');
     const wrap = filtersEl.querySelector('#rp-player-typeahead');
     if (!wrap) return;
     wrap.querySelector('.rp-typeahead-menu')?.remove();
     const options = knownPlayers().filter(([id]) => !filters.players.has(id));
     wrap.insertAdjacentHTML('beforeend', typeaheadMenuHtml('players', options, playerSearch));
+    group?.classList.toggle('menu-open', Boolean(playerSearch.trim()));
   }
 
   filtersEl?.addEventListener('input', (e) => {
@@ -737,21 +795,46 @@ export function initReplaysView({ escapeHtml }) {
     }
   });
 
+  filtersEl?.addEventListener('change', (e) => {
+    const mapBox = e.target.closest('[data-map]');
+    if (!mapBox) return;
+    const code = mapBox.dataset.map;
+    if (mapBox.checked) filters.maps.add(code);
+    else filters.maps.delete(code);
+    const toggle = filtersEl.querySelector('#rp-map-toggle');
+    if (toggle) toggle.textContent = mapToggleLabel();
+    runQuery();
+  });
+
   filtersEl?.addEventListener('click', (e) => {
     const chipEl = e.target.closest('[data-group]');
     if (!chipEl) return;
     const { group, value } = chipEl.dataset;
-    if (group === 'wonBy') {
-      filters.wonBy = filters.wonBy === value ? '' : value;
-    } else if (group === 'teams' || group === 'players' || group === 'maps') {
+    if (group === 'teams' || group === 'players') {
       const set = filters[group];
       if (set.has(value)) set.delete(value);
       else set.add(value);
-      if (group === 'teams') teamSearch = '';
+      if (group === 'teams') {
+        teamSearch = '';
+        if (!filters.teams.size) filters.wonByMode = '';
+      }
       if (group === 'players') playerSearch = '';
+      renderFilters();
+      runQuery();
     }
-    renderFilters();
-    runQuery();
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!mapMenuOpen) return;
+    if (e.target.closest?.('#rp-map-multi')) return;
+    mapMenuOpen = false;
+    const multi = filtersEl?.querySelector('#rp-map-multi');
+    if (!multi) return;
+    multi.classList.remove('open');
+    const menu = multi.querySelector('.rp-multi-menu');
+    if (menu) menu.hidden = true;
+    multi.querySelector('#rp-map-toggle')?.setAttribute('aria-expanded', 'false');
+    multi.closest('.rp-filter-group')?.classList.remove('menu-open');
   });
 
   // ---- query + results ----------------------------------------------------
@@ -767,14 +850,12 @@ export function initReplaysView({ escapeHtml }) {
   }
 
   function currentQuery() {
-    const wonBy = filters.wonBy
-      ? teamClustersByKey.get(filters.wonBy)?.shortIds || [filters.wonBy]
-      : undefined;
+    const teams = expandClusterKeys(filters.teams);
     return {
       maps: [...filters.maps],
-      teams: expandClusterKeys(filters.teams),
+      teams,
       players: [...filters.players],
-      wonBy,
+      wonByMode: teams.length && filters.wonByMode ? filters.wonByMode : undefined,
       econA: filters.econA,
       econB: filters.econB
     };
@@ -879,9 +960,14 @@ export function initReplaysView({ escapeHtml }) {
     const score = d ? demoScoreText(d) : '…';
     const id = escapeHtml(g.demoId);
     const selectedInGroup = g.rounds.filter((r) => selectedFiles.has(r.file)).length;
-    const roundPill = `${g.rounds.length} round${g.rounds.length === 1 ? '' : 's'}${
-      selectedInGroup ? ` · ${selectedInGroup} selected` : ''
-    }`;
+    const totalRounds = d?.roundCount || g.rounds.length;
+    const roundPill = g.rounds.length
+      ? `${g.rounds.length} round${g.rounds.length === 1 ? '' : 's'}${
+          selectedInGroup ? ` · ${selectedInGroup} selected` : ''
+        }`
+      : totalRounds
+        ? `${totalRounds} rounds`
+        : '0 rounds';
 
     return `
       <div class="rp-row rp-demo-head" data-toggle-demo="${id}" role="button" tabindex="0"
@@ -911,12 +997,19 @@ export function initReplaysView({ escapeHtml }) {
 
   function renderResults() {
     if (!resultEl) return;
-    if (!rounds.length) {
-      resultEl.innerHTML = '<p class="view-empty">No rounds match these filters.</p>';
+    if (!demos.length) {
+      resultEl.innerHTML = `<p class="view-empty">No replays yet. Upload a ${PACKAGE_EXT} package (or a .dem).</p>`;
       return;
     }
 
-    const groups = groupRoundsByDemo(rounds);
+    const matched = groupRoundsByDemo(rounds);
+    const roundsByDemo = new Map(matched.map((g) => [g.demoId, g.rounds]));
+    const sortedDemos = [...demos].sort((a, b) => {
+      const ta = a.uploadedAt || a.parsedAt || 0;
+      const tb = b.uploadedAt || b.parsedAt || 0;
+      return tb - ta;
+    });
+
     const byMap = {};
     for (const r of rounds) byMap[r.map] = (byMap[r.map] || 0) + 1;
     const tags = Object.entries(byMap)
@@ -924,26 +1017,38 @@ export function initReplaysView({ escapeHtml }) {
       .join('');
     const selCount = selectedFiles.size;
     const loadLabel = selCount ? `Load rounds (${selCount})` : 'Load rounds';
-
-    resultEl.innerHTML = `
-      <div class="rp-result-head">
-        <span class="rp-result-count">${rounds.length} round${rounds.length === 1 ? '' : 's'}</span>
+    const head =
+      rounds.length || selCount
+        ? `<div class="rp-result-head">
+        <span class="rp-result-count">${rounds.length} round${rounds.length === 1 ? '' : 's'} match</span>
         <span class="rp-result-tags">${tags}</span>
         <div class="rp-result-actions">
           <button type="button" class="btn btn-sm primary" id="rp-load-rounds" ${
             selCount ? '' : 'disabled'
           }>${loadLabel}</button>
         </div>
-      </div>
-      <div class="rp-demo-groups">
-        ${groups
-          .map((g) => {
-            const open = !collapsedDemos.has(g.demoId);
+      </div>`
+        : '';
+
+    resultEl.innerHTML = `
+      ${head}
+      <div class="rp-demo-groups rp-list">
+        ${sortedDemos
+          .map((d) => {
+            const status = d.status || 'ready';
+            if (status !== 'ready') return demoRow(d);
+            const demoRounds = roundsByDemo.get(d.id) || [];
+            const g = { demoId: d.id, demo: d, rounds: demoRounds };
+            const open = !collapsedDemos.has(d.id);
             return `
-          <section class="rp-demo-group${open ? ' open' : ''}" data-demo="${escapeHtml(g.demoId)}">
+          <section class="rp-demo-group${open ? ' open' : ''}" data-demo="${escapeHtml(d.id)}">
             ${demoGroupHeadHtml(g)}
             <div class="rp-demo-rounds" ${open ? '' : 'hidden'}>
-              ${g.rounds.map((r) => roundRowHtml(r, g.demo)).join('')}
+              ${
+                demoRounds.length
+                  ? demoRounds.map((r) => roundRowHtml(r, d)).join('')
+                  : `<p class="rp-demo-empty">No rounds match these filters.</p>`
+              }
             </div>
           </section>`;
           })
@@ -1160,8 +1265,8 @@ export function initReplaysView({ escapeHtml }) {
       await runQuery();
     } catch (err) {
       setLocked(false);
-      if (listEl) {
-        listEl.innerHTML = `<p class="view-empty">Could not reach the replay service. ${escapeHtml(
+      if (resultEl) {
+        resultEl.innerHTML = `<p class="view-empty">Could not reach the replay service. ${escapeHtml(
           err.message
         )}</p>`;
       }
