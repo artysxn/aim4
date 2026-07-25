@@ -3,42 +3,20 @@
 // Client for /api/replays/*. Talks to the same backend as the trainer
 // (VITE_API_URL in production, same origin in dev through the Vite proxy).
 //
-// When signed in, requests carry the Supabase access token and the backend
-// keys the library by the verified account id. Signed-out visitors still work:
-// the backend falls back to X-Aim4-User / "local".
+// The demo library is shared for every visitor. Auth headers are unused; the
+// helpers below stay so older call sites keep compiling.
 // ---------------------------------------------------------------------------
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 
-let accountId = '';
-let tokenProvider = null;
+/** @deprecated Library is shared; account id is ignored. */
+export function setAccount(_id) {}
 
-/** Called by the view whenever auth state changes. */
-export function setAccount(id) {
-  accountId = id || '';
-}
-
-/**
- * Register a function returning the current Supabase access token. It is
- * called per request rather than cached, so a token refreshed mid-session is
- * picked up without the page reloading.
- *
- * @param {() => Promise<string|null>} provider
- */
-export function setTokenProvider(provider) {
-  tokenProvider = provider;
-}
+/** @deprecated Library is shared; tokens are not sent. */
+export function setTokenProvider(_provider) {}
 
 async function headers(extra = {}) {
-  const h = { ...extra };
-  if (accountId) h['X-Aim4-User'] = accountId;
-  try {
-    const token = await tokenProvider?.();
-    if (token) h.Authorization = `Bearer ${token}`;
-  } catch {
-    /* not signed in, or Supabase unreachable; the backend decides */
-  }
-  return h;
+  return { ...extra };
 }
 
 async function asJson(res) {

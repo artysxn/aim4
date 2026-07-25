@@ -17,19 +17,16 @@ import {
   findRounds,
   renameDemoTeams,
   reparseDemo,
-  setAccount,
-  setTokenProvider,
   uploadDemo,
   uploadImport
 } from '../replays/api.js';
-import { getSupabase } from '../lib/supabase.js';
 import { ECONOMIES, MAPS, economyLabel } from '../replays/shared/roundId.js';
 import { PACKAGE_EXT } from '../replays/shared/replayPackage.js';
 import { formatBytes } from '../replays/tickStore.js';
 
 const POLL_MS = 1500;
 
-export function initReplaysView({ auth, escapeHtml }) {
+export function initReplaysView({ escapeHtml }) {
   const uploadInput = document.getElementById('rp-file');
   const dropEl = document.getElementById('rp-drop');
   const quotaEl = document.getElementById('rp-quota');
@@ -62,27 +59,6 @@ export function initReplaysView({ auth, escapeHtml }) {
     statusEl.classList.toggle('is-error', isError);
   }
 
-  // ---- account ------------------------------------------------------------
-
-  function syncAccount() {
-    setAccount(auth?.user?.id || '');
-  }
-
-  // The backend verifies this token and takes the account id from it, so the
-  // library a request reaches is decided by the session, not by the client.
-  setTokenProvider(async () => {
-    const sb = getSupabase();
-    if (!sb) return null;
-    const { data } = await sb.auth.getSession();
-    return data?.session?.access_token || null;
-  });
-
-  auth?.onChange?.(() => {
-    syncAccount();
-    if (visible) refresh();
-  });
-  syncAccount();
-
   // ---- quota + parser -----------------------------------------------------
 
   function renderQuota(usage) {
@@ -91,12 +67,12 @@ export function initReplaysView({ auth, escapeHtml }) {
     const pctBytes = (usage.bytes / usage.maxBytes) * 100;
     quotaEl.innerHTML = `
       <div class="rp-quota-row">
-        <span class="rp-quota-label">Replays</span>
+        <span class="rp-quota-label">Demos (shared)</span>
         <span class="rp-quota-value">${usage.demos} / ${usage.maxDemos}</span>
       </div>
       <div class="rp-meter"><span style="width:${Math.min(100, pctDemos)}%"></span></div>
       <div class="rp-quota-row">
-        <span class="rp-quota-label">Storage</span>
+        <span class="rp-quota-label">Storage (shared)</span>
         <span class="rp-quota-value">${formatBytes(usage.bytes)} / ${formatBytes(usage.maxBytes)}</span>
       </div>
       <div class="rp-meter"><span style="width:${Math.min(100, pctBytes)}%"></span></div>`;
@@ -696,14 +672,6 @@ export function initReplaysView({ auth, escapeHtml }) {
       renderFilters();
       await runQuery();
     } catch (err) {
-      if (err.status === 401) {
-        setLocked(true);
-        listEl.innerHTML = `<p class="view-empty">${escapeHtml(err.message)}</p>`;
-        filtersEl.innerHTML = '';
-        resultEl.innerHTML = '';
-        quotaEl.innerHTML = '';
-        return;
-      }
       setLocked(false);
       listEl.innerHTML = `<p class="view-empty">Could not reach the replay service. ${escapeHtml(
         err.message
@@ -711,7 +679,6 @@ export function initReplaysView({ auth, escapeHtml }) {
     }
   }
 
-  /** Hide the upload dropzone when the API refuses the session (auth required). */
   function setLocked(locked) {
     dropEl.hidden = locked;
     if (locked) setStatus('');

@@ -224,13 +224,8 @@ export async function handleReplayRequest(req, res, url) {
     return true;
   }
 
-  // Every route below reads or writes one account's private library, so the
-  // caller is resolved once, here, and nothing downstream sees a raw header.
+  // Shared public library — identify always succeeds (no sign-in gate).
   const auth = await identify(req);
-  if (!auth.ok) {
-    json(res, auth.status || 401, { error: auth.error || 'Not authorized.' });
-    return true;
-  }
   const user = auth.user;
 
   // ---- status -------------------------------------------------------------

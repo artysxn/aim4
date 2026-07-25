@@ -30,15 +30,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const ROOT = process.env.AIM4_REPLAY_DIR || path.join(__dirname, '..', 'data', 'replays');
 
-/** Library limits, per account. */
+/** Shared library caps for the whole server (all visitors share one pool). */
 export const MAX_DEMOS = Number(process.env.AIM4_REPLAY_MAX_DEMOS || 50);
 export const MAX_BYTES = Number(process.env.AIM4_REPLAY_MAX_BYTES || 20 * 1024 ** 3); // 20 GB
 
 /**
- * Account key. Supabase user ids are unguessable UUIDs and the client sends
- * one with every request; there is no server-side JWT check here because this
- * backend has no Supabase credentials (the same is true of every other route
- * it serves). Treat a library as private-by-obscurity, not as authenticated.
+ * Sanitize a library folder name under ROOT. The public library uses a fixed
+ * key from auth.js (default "local"); this just keeps paths safe.
  */
 export function userKey(raw) {
   const s = String(raw || '').trim();
@@ -238,11 +236,19 @@ export async function usage(user) {
 export async function checkQuota(user, incoming = 0) {
   const u = await usage(user);
   if (u.demos >= MAX_DEMOS) {
-    return { ok: false, error: `Library is full (${MAX_DEMOS} replays). Delete one to upload more.`, usage: u };
+    return {
+      ok: false,
+      error: `Shared library is full (${MAX_DEMOS} demos). Delete one to upload more.`,
+      usage: u
+    };
   }
   if (incoming > 0 && u.bytes + incoming > MAX_BYTES) {
     const gb = (MAX_BYTES / 1024 ** 3).toFixed(0);
-    return { ok: false, error: `Not enough space. The library holds ${gb} GB total.`, usage: u };
+    return {
+      ok: false,
+      error: `Not enough shared storage. The server holds ${gb} GB total.`,
+      usage: u
+    };
   }
   return { ok: true, usage: u };
 }

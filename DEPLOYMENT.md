@@ -76,8 +76,8 @@ What the host has to provide:
 - **Enough RAM and CPU to parse.** Demo parsing runs in a worker thread and is
   the heaviest thing the process does. Budget ~2 GB RAM and a real (not
   fractional) core, or parses will be killed mid-run on large demos.
-- **Room for the library.** The default quota is 50 demos / 20 GB per account.
-  Size the disk for that, or lower `AIM4_REPLAY_MAX_BYTES`.
+- **Room for the library.** The default quota is 50 demos / 20 GB shared across
+  all visitors. Size the disk for that, or lower `AIM4_REPLAY_MAX_BYTES`.
 
 Do **not** set `AIM4_SERVE_STATIC` in a split deploy — the client is served by
 the static host.
@@ -118,11 +118,11 @@ The client derives everything from that one origin: REST calls hit
 - **Persistence.** Config share-codes (`server/store.js`) and the replay library
   (`server/replays/`) both live under `server/data/`. That path must be a mounted
   volume in production.
-- **Replays need Supabase configured on the backend.** Set `SUPABASE_URL` (or
-  `SUPABASE_JWT_SECRET` on legacy projects) so the backend can verify access
-  tokens. Without it, libraries fall back to a plain `X-Aim4-User` header and
-  anyone who knows an account id can read that library. The server logs a
-  warning the first time it happens.
+- **The replay library is shared and public.** Every visitor uses the same
+  on-disk library (default folder `local` under `AIM4_REPLAY_DIR`). No sign-in
+  is required. If demos were previously stored under a per-account UUID folder,
+  set `AIM4_REPLAY_LIBRARY=<that-folder-name>` so the public library points at
+  the existing data.
 - **The demo parser is an optional dependency.** `@laihoe/demoparser2` is a native
   module; if the host cannot install it, the site still runs and the Replays page
   reports parsing as offline. See [`server/demoparser/README.md`](server/demoparser/README.md).
