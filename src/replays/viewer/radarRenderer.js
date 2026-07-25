@@ -1203,3 +1203,8 @@ function grenadePosAt(g, tick) {
   }
   return from || at || null;
 }
+
+/** World XYZ of a grenade at `tick` (Analyzer hit-testing / box select). */
+export function grenadeWorldPos(g, tick) {
+  return grenadePosAt(g, tick);
+}
