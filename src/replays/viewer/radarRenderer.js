@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // replays/viewer/radarRenderer.js
 // Draws one moment of a round onto a canvas: the map overview, a droplet per
-// player with its view cone, live utility, the bomb, and recent gunfire.
+// player (tip = facing, fill = health), live utility, the bomb, and gunfire.
 //
 // The renderer is stateless about time. It is handed already-interpolated
 // player states for a tick and draws them, so the same code serves the
@@ -59,9 +59,12 @@ export class RadarRenderer {
     this.panX = 0;
     this.panY = 0;
     this.showNames = true;
+    this.showWeapons = true;
     this.showTrails = false;
     this.dpr = Math.min(2, window.devicePixelRatio || 1);
     this._pt = { x: 0, y: 0 };
+    /** @type {number[]} previous health per slot, for damage flash */
+    this._prevHealth = new Array(10).fill(-1);
   }
 
   async setMap(mapCode) {
@@ -72,6 +75,7 @@ export class RadarRenderer {
     } catch {
       this.image = null;
     }
+    this._prevHealth.fill(-1);
   }
 
   /** Match the backing store to the element's CSS size. */
@@ -107,13 +111,14 @@ export class RadarRenderer {
 
   /**
    * @param {object} frame
-   * @param {number} frame.tick           current demo tick
+   * @param {number} frame.tick
    * @param {number} frame.tickRate
-   * @param {Array}  frame.states         10 interpolated player states
-   * @param {Array}  frame.players        roster (id, name, team, slot)
-   * @param {object} frame.events         round events
-   * @param {string} [frame.highlight]    player id to emphasize
-   * @param {boolean} [frame.compact]     macro tiles: smaller marks, no names
+   * @param {Array}  frame.states
+   * @param {Array}  frame.players
+   * @param {object} frame.events
+   * @param {string[]} [frame.weapons]  weapon dictionary for the round
+   * @param {string} [frame.highlight]
+   * @param {boolean} [frame.compact]
    */
   render(frame) {
     const { w, h } = this.resize();
@@ -143,8 +148,8 @@ export class RadarRenderer {
   // ---- players -------------------------------------------------------------
 
   drawPlayers(ctx, t, frame, compact) {
-    const { states, players, tick, highlight } = frame;
-    const r = (compact ? 3.4 : 7) * this.dpr;
+    const { states, players, highlight, weapons = [] } = frame;
+    const r = (compact ? 3.6 : 7.5) * this.dpr;
 
     for (const p of players) {
       const s = states[p.slot];
@@ -153,83 +158,118 @@ export class RadarRenderer {
       const pt = this.project(t, s.x, s.y);
       if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
 
-      if (!s.alive) continue; // death marks are drawn separately, and fade
+      if (!s.alive) {
+        this._prevHealth[p.slot] = 0;
+        continue;
+      }
+
+      const prev = this._prevHealth[p.slot];
+      const takingDamage = prev >= 0 && s.health < prev;
+      this._prevHealth[p.slot] = s.health;
 
       const lower = isLowerLevel(this.mapCode, s.z);
       ctx.save();
       ctx.globalAlpha = lower ? 0.45 : 1;
 
-      // View cone. Drawn under the droplet so it reads as direction, not size.
-      if (!compact) {
-        const spread = (s.flags & FLAG_SCOPED ? 12 : 42) * (Math.PI / 180);
-        const len = r * (s.flags & FLAG_SCOPED ? 9 : 5);
-        const a = (-s.yaw * Math.PI) / 180; // world yaw is CCW, canvas Y is down
-        ctx.beginPath();
-        ctx.moveTo(pt.x, pt.y);
-        ctx.arc(pt.x, pt.y, len, a - spread / 2, a + spread / 2);
-        ctx.closePath();
-        const grad = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, len);
-        grad.addColorStop(0, `${colors.base}66`);
-        grad.addColorStop(1, `${colors.base}00`);
-        ctx.fillStyle = grad;
+      // Tip points in facing direction. Local tip is "up"; rotate so up = yaw.
+      const yaw = (-s.yaw * Math.PI) / 180;
+      ctx.translate(pt.x, pt.y);
+      ctx.rotate(yaw + Math.PI / 2);
+
+      const tip = -r * 1.55;
+      const bot = r * 1.05;
+      const halfW = r * 0.95;
+
+      // Empty shell (unfilled HP shows as hollow from the top).
+      pathDroplet(ctx, tip, bot, halfW);
+      ctx.fillStyle = 'rgba(10, 12, 15, 0.92)';
+      ctx.fill();
+
+      // HP fill grows from the bottom; 1 HP ≈ tip only, 99 HP ≈ almost full.
+      const hp = Math.max(0, Math.min(100, s.health)) / 100;
+      const height = bot - tip;
+      const fillTop = tip + (1 - hp) * height;
+      ctx.save();
+      pathDroplet(ctx, tip, bot, halfW);
+      ctx.clip();
+      ctx.fillStyle = colors.base;
+      ctx.fillRect(-halfW - 1, fillTop, halfW * 2 + 2, bot - fillTop + 2);
+      ctx.restore();
+
+      if (takingDamage) {
+        pathDroplet(ctx, tip, bot, halfW);
+        ctx.fillStyle = 'rgba(255, 40, 40, 0.10)';
         ctx.fill();
       }
 
-      // Droplet.
-      ctx.beginPath();
-      ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = colors.base;
-      ctx.fill();
+      pathDroplet(ctx, tip, bot, halfW);
       ctx.lineWidth = Math.max(1, 1.5 * this.dpr);
       ctx.strokeStyle = highlight === p.id ? '#ffffff' : '#0b0d10';
       ctx.stroke();
 
-      // Health ring: the arc shrinks as the player is worn down.
-      if (!compact && s.health > 0 && s.health < 100) {
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, r + 2.5 * this.dpr, -Math.PI / 2, -Math.PI / 2 + (s.health / 100) * Math.PI * 2);
-        ctx.strokeStyle = colors.bright;
-        ctx.lineWidth = 2 * this.dpr;
-        ctx.stroke();
-      }
-
-      if (s.flash > 0.4 && !compact) {
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, r + 4 * this.dpr, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(255,255,255,${Math.min(0.8, s.flash / 3)})`;
-        ctx.lineWidth = 2 * this.dpr;
-        ctx.stroke();
-      }
-
       if (s.flags & FLAG_HAS_BOMB) {
         ctx.beginPath();
-        ctx.arc(pt.x, pt.y, r * 0.42, 0, Math.PI * 2);
+        ctx.arc(0, bot * 0.15, r * 0.32, 0, Math.PI * 2);
         ctx.fillStyle = '#f2d024';
         ctx.fill();
       }
-      if (s.flags & FLAG_DEFUSING) {
+
+      ctx.restore();
+
+      // Labels in screen space (not rotated with the droplet).
+      ctx.save();
+      ctx.globalAlpha = lower ? 0.45 : 1;
+      if (s.flags & FLAG_DEFUSING && !compact) {
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, r + 6 * this.dpr, 0, Math.PI * 2);
         ctx.strokeStyle = '#5ad17a';
         ctx.lineWidth = 2 * this.dpr;
         ctx.stroke();
       }
+      if (s.flash > 0.4 && !compact) {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, r + 5 * this.dpr, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255,255,255,${Math.min(0.8, s.flash / 3)})`;
+        ctx.lineWidth = 2 * this.dpr;
+        ctx.stroke();
+      }
+      if (s.flags & FLAG_SCOPED && !compact) {
+        // subtle ring so scope still reads without a view cone
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, r + 3 * this.dpr, 0, Math.PI * 2);
+        ctx.strokeStyle = `${colors.bright}88`;
+        ctx.lineWidth = 1.2 * this.dpr;
+        ctx.stroke();
+      }
 
-      if (this.showNames && !compact) {
-        const label = p.name || p.id;
-        ctx.font = `${11 * this.dpr}px "Host Grotesk", system-ui, sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'bottom';
-        const y = pt.y - r - 4 * this.dpr;
-        const wTxt = ctx.measureText(label).width;
-        ctx.fillStyle = 'rgba(8,10,13,0.75)';
-        ctx.fillRect(pt.x - wTxt / 2 - 3 * this.dpr, y - 12 * this.dpr, wTxt + 6 * this.dpr, 14 * this.dpr);
-        ctx.fillStyle = colors.bright;
-        ctx.fillText(label, pt.x, y);
+      if (!compact && (this.showNames || this.showWeapons)) {
+        const name = this.showNames ? p.name || p.id : '';
+        const rawW = this.showWeapons ? weapons[s.weapon] || '' : '';
+        const weapon = rawW ? prettyWeapon(rawW) : '';
+        const lines = [name, weapon].filter(Boolean);
+        if (lines.length) {
+          ctx.font = `${10 * this.dpr}px "Host Grotesk", system-ui, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          const lineH = 12 * this.dpr;
+          const padX = 3 * this.dpr;
+          const padY = 2 * this.dpr;
+          let maxW = 0;
+          for (const line of lines) maxW = Math.max(maxW, ctx.measureText(line).width);
+          const boxW = maxW + padX * 2;
+          const boxH = lines.length * lineH + padY * 2;
+          const bx = pt.x - boxW / 2;
+          const by = pt.y + r * 1.35;
+          ctx.fillStyle = 'rgba(8,10,13,0.78)';
+          ctx.fillRect(bx, by, boxW, boxH);
+          lines.forEach((line, i) => {
+            ctx.fillStyle = i === 0 && name ? colors.bright : 'rgba(220,224,230,0.85)';
+            ctx.fillText(line, pt.x, by + padY + i * lineH);
+          });
+        }
       }
       ctx.restore();
     }
-    void tick;
   }
 
   // ---- deaths --------------------------------------------------------------
@@ -244,7 +284,6 @@ export class RadarRenderer {
       if (k.tick > tick || tick - k.tick > window) continue;
       const slot = bySlot.get(k.victim);
       if (slot === undefined) continue;
-      // The victim's last position is wherever the tick data froze them.
       const s = states[slot];
       if (!s) continue;
       const pt = this.project(t, s.x, s.y);
@@ -296,7 +335,6 @@ export class RadarRenderer {
     for (const g of events.grenades) {
       const det = g.detonateTick ?? g.throwTick;
 
-      // In flight: a small dot along the recorded trajectory.
       if (tick >= g.throwTick && tick < det) {
         const pos = pointAt(g.path, tick) || g.from;
         if (pos) {
@@ -322,7 +360,7 @@ export class RadarRenderer {
           continue;
         }
         const fade = age > SMOKE_SECONDS - 2 ? (SMOKE_SECONDS - age) / 2 : 1;
-        const radius = 144 / (this.mapScale() || 5) * t.scale;
+        const radius = (144 / (this.mapScale() || 5)) * t.scale;
         ctx.globalAlpha = 0.5 * fade;
         ctx.fillStyle = '#c9ced8';
         ctx.beginPath();
@@ -333,7 +371,7 @@ export class RadarRenderer {
           ctx.restore();
           continue;
         }
-        const radius = 130 / (this.mapScale() || 5) * t.scale;
+        const radius = (130 / (this.mapScale() || 5)) * t.scale;
         ctx.globalAlpha = 0.45 * (1 - age / FIRE_SECONDS);
         ctx.fillStyle = '#e2622a';
         ctx.beginPath();
@@ -367,8 +405,6 @@ export class RadarRenderer {
   }
 
   mapScale() {
-    // World units per radar pixel for the active map, used to size smoke and
-    // fire in real world radius rather than a fixed pixel blob.
     return CALIBRATION[this.mapCode]?.scale ?? 5;
   }
 
@@ -387,7 +423,6 @@ export class RadarRenderer {
     ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
     ctx.fill();
     if (!defused) {
-      // Pulse so a planted bomb is findable at a glance on a busy map.
       const pulse = 0.5 + 0.5 * Math.sin(tick / 6);
       ctx.globalAlpha = 0.35 + 0.35 * pulse;
       ctx.strokeStyle = '#f2d024';
@@ -398,6 +433,24 @@ export class RadarRenderer {
     }
     ctx.restore();
   }
+}
+
+/** Droplet path in local space: tip at `tip` (negative Y), round body toward `bot`. */
+function pathDroplet(ctx, tip, bot, halfW) {
+  const mid = (tip + bot) * 0.35;
+  ctx.beginPath();
+  ctx.moveTo(0, tip);
+  ctx.bezierCurveTo(halfW * 0.55, tip + (bot - tip) * 0.28, halfW, mid, halfW * 0.92, bot * 0.35);
+  ctx.quadraticCurveTo(halfW * 0.75, bot, 0, bot);
+  ctx.quadraticCurveTo(-halfW * 0.75, bot, -halfW * 0.92, bot * 0.35);
+  ctx.bezierCurveTo(-halfW, mid, -halfW * 0.55, tip + (bot - tip) * 0.28, 0, tip);
+  ctx.closePath();
+}
+
+function prettyWeapon(name) {
+  return String(name || '')
+    .replace(/^weapon_/, '')
+    .replace(/_/g, ' ');
 }
 
 /** Position along a recorded grenade path at a tick. */

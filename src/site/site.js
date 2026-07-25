@@ -253,9 +253,6 @@ function setView(name, push = false, params = null) {
   document.querySelectorAll('.view').forEach((el) => {
     el.classList.toggle('active', el.dataset.view === view);
   });
-  document.querySelectorAll('.page-actions [data-for-view]').forEach((el) => {
-    el.hidden = el.dataset.forView !== view;
-  });
   document.querySelectorAll('[data-nav]').forEach((el) => {
     if (el.classList.contains('side-link')) {
       el.classList.toggle('active', el.dataset.nav === view);

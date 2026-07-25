@@ -77,6 +77,17 @@ export async function reparseDemo(id) {
   );
 }
 
+/** Set display names for both teams after import (ids / round files stay put). */
+export async function renameDemoTeams(id, team1, team2) {
+  return asJson(
+    await fetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/teams`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ team1, team2 })
+    })
+  );
+}
+
 /**
  * Upload a .dem. XMLHttpRequest rather than fetch: a demo is hundreds of
  * megabytes and upload progress is the only honest thing to show while it

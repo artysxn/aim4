@@ -119,6 +119,7 @@ export function createMacroViewer({ store, rounds, escapeHtml }) {
         states: tile.states,
         players: tile.meta.players || [],
         events: tile.meta.events || {},
+        weapons: tile.meta.weapons || [],
         compact: true
       });
 

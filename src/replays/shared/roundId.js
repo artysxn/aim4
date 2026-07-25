@@ -198,6 +198,20 @@ export function economyLabel(code) {
   return ECONOMIES[code]?.label ?? String(code);
 }
 
+/**
+ * Which side won a round for UI coloring (T / CT).
+ * Matches the parser's half split: team 1 starts T for rounds 1-12, CT after.
+ *
+ * @param {{ winner: 1|2, round: number }} r
+ * @returns {'T'|'CT'}
+ */
+export function winningSide(r) {
+  const round = Number(r?.round) || 1;
+  const team1IsT = round <= 12;
+  if (r?.winner === 1) return team1IsT ? 'T' : 'CT';
+  return team1IsT ? 'CT' : 'T';
+}
+
 export function radarImage(mapCode) {
   const m = MAPS[mapCode];
   return m ? `/maps/radar/${m.file}.png` : null;

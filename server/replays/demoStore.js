@@ -138,6 +138,38 @@ export async function writeRecord(user, record) {
 }
 
 /**
+ * Update display names for both teams on a demo and its round JSON files.
+ * Short ids (and therefore round filenames) stay the same.
+ */
+export async function renameDemoTeams(user, id, team1Name, team2Name) {
+  const demoId = sanitizeId(id);
+  const record = await readRecord(user, demoId);
+  if (!record) return null;
+
+  const n1 = String(team1Name || '').trim().slice(0, 48) || record.team1?.name || 'Team 1';
+  const n2 = String(team2Name || '').trim().slice(0, 48) || record.team2?.name || 'Team 2';
+  record.team1 = { ...(record.team1 || {}), name: n1, id: record.team1?.id };
+  record.team2 = { ...(record.team2 || {}), name: n2, id: record.team2?.id };
+
+  const dir = roundsDir(user);
+  for (const r of record.rounds || []) {
+    if (!r?.file) continue;
+    const p = path.join(dir, `${sanitizeStem(r.file)}.json`);
+    try {
+      const meta = JSON.parse(await fsp.readFile(p, 'utf8'));
+      if (meta.team1) meta.team1 = { ...meta.team1, name: n1 };
+      if (meta.team2) meta.team2 = { ...meta.team2, name: n2 };
+      await fsp.writeFile(p, JSON.stringify(meta));
+    } catch {
+      /* round file missing; skip */
+    }
+  }
+
+  await writeRecord(user, record);
+  return record;
+}
+
+/**
  * Persist a fully materialized demo (manifest + round files) without
  * re-deriving round ids. Used by server ingest and by import of local packages.
  *

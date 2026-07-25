@@ -35,6 +35,7 @@ import {
   readRecord,
   readRoundMeta,
   readRoundTicks,
+  renameDemoTeams,
   saveTempUpload,
   saveUpload,
   usage,
@@ -344,6 +345,27 @@ export async function handleReplayRequest(req, res, url) {
       json(res, 200, { ok: true, usage: await usage(user) });
       return true;
     }
+  }
+
+  const teamsMatch = p.match(/^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/teams$/);
+  if (req.method === 'POST' && teamsMatch) {
+    const id = teamsMatch[1];
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    let body = {};
+    try {
+      body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+    } catch {
+      json(res, 400, { error: 'Invalid JSON body.' });
+      return true;
+    }
+    const record = await renameDemoTeams(user, id, body.team1, body.team2);
+    if (!record) {
+      json(res, 404, { error: 'Replay not found.' });
+      return true;
+    }
+    json(res, 200, { demo: withJob(user, record), usage: await usage(user) });
+    return true;
   }
 
   const parseMatch = p.match(/^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/parse$/);

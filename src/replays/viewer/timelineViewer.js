@@ -1,13 +1,11 @@
 // ---------------------------------------------------------------------------
 // replays/viewer/timelineViewer.js
-// One round on screen at a time, with the whole selection stitched into a
-// single timeline: pressing play at round 1 plays the game through.
+// One round on screen at a time. Each selected round has its own scrub
+// timeline above the radar; play advances through rounds in order.
 //
 // Loading follows the two-pass rule. The coarse pass (every 100th tick of
-// every round) runs as soon as the viewer opens, so the scrub bar is live
-// immediately and any round can be previewed. The full pass then fills in the
-// round being watched first, and rounds already filled stay in memory until
-// the viewer closes.
+// every round) runs as soon as the viewer opens, so scrub bars are live
+// immediately. The full pass then fills in the round being watched first.
 // ---------------------------------------------------------------------------
 
 import { fetchRoundMeta } from '../api.js';
@@ -15,7 +13,7 @@ import { COARSE_STRIDE } from '../tickStore.js';
 import { RadarRenderer, TEAM_COLORS } from './radarRenderer.js';
 import { Playback, RoundSequence } from './playback.js';
 import { clockAt, formatClock, phaseMarkers, timingFor } from './roundClock.js';
-import { economyLabel } from '../shared/roundId.js';
+import { economyLabel, winningSide } from '../shared/roundId.js';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 
@@ -23,6 +21,16 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
   const el = document.createElement('div');
   el.className = 'rv-timeline';
   el.innerHTML = `
+    <div class="rv-chrome">
+      <div class="rv-transport">
+        <button type="button" class="rv-speed" id="rv-speed">x1</button>
+        <button type="button" class="rv-play" id="rv-play" aria-label="Play">
+          <svg viewBox="0 -960 960 960" width="18" height="18"><path d="M320-200v-560l440 280-440 280Z"/></svg>
+        </button>
+        <span class="rv-time" id="rv-time">00:00</span>
+      </div>
+      <div class="rv-round-timelines" id="rv-round-timelines"></div>
+    </div>
     <div class="rv-stage">
       <aside class="rv-team rv-team-1" data-team="1"></aside>
       <div class="rv-map">
@@ -31,29 +39,12 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
         <div class="rv-loading" id="rv-loading"></div>
       </div>
       <aside class="rv-team rv-team-2" data-team="2"></aside>
-    </div>
-    <div class="rv-rounds" id="rv-rounds"></div>
-    <div class="rv-transport">
-      <button type="button" class="rv-speed" id="rv-speed">x1</button>
-      <button type="button" class="rv-play" id="rv-play" aria-label="Play">
-        <svg viewBox="0 -960 960 960" width="18" height="18"><path d="M320-200v-560l440 280-440 280Z"/></svg>
-      </button>
-      <div class="rv-scrub" id="rv-scrub">
-        <div class="rv-scrub-track"><div class="rv-scrub-fill" id="rv-scrub-fill"></div></div>
-        <div class="rv-scrub-marks" id="rv-scrub-marks"></div>
-        <div class="rv-scrub-handle" id="rv-scrub-handle"></div>
-      </div>
-      <span class="rv-time" id="rv-time">00:00</span>
     </div>`;
 
   const canvas = el.querySelector('#rv-canvas');
   const clockEl = el.querySelector('#rv-clock');
   const loadingEl = el.querySelector('#rv-loading');
-  const roundsEl = el.querySelector('#rv-rounds');
-  const scrubEl = el.querySelector('#rv-scrub');
-  const fillEl = el.querySelector('#rv-scrub-fill');
-  const marksEl = el.querySelector('#rv-scrub-marks');
-  const handleEl = el.querySelector('#rv-scrub-handle');
+  const timelinesEl = el.querySelector('#rv-round-timelines');
   const timeEl = el.querySelector('#rv-time');
   const playBtn = el.querySelector('#rv-play');
   const speedBtn = el.querySelector('#rv-speed');
@@ -73,8 +64,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
 
   const playback = new Playback((pos) => onPosition(pos));
 
-  // ---- metadata -----------------------------------------------------------
-
   async function metaFor(file) {
     if (metaCache.has(file)) return metaCache.get(file);
     const p = fetchRoundMeta(file).catch(() => null);
@@ -82,11 +71,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     return p;
   }
 
-  /**
-   * Round records carry the phase ticks the clock needs. They are fetched up
-   * front for every selected round because the sequence needs each round's
-   * duration before a continuous timeline can exist at all.
-   */
   async function buildSequence() {
     const metas = await Promise.all(files.map(metaFor));
     if (destroyed) return;
@@ -95,13 +79,11 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     });
     sequence = new RoundSequence(metas.map((m, i) => m || fallbackMeta(rounds[i])));
     playback.setDuration(sequence.duration);
-    renderRoundStrip();
+    renderRoundTimelines();
     await selectRound(0, { seek: true });
   }
 
   function fallbackMeta(round) {
-    // A round whose metadata failed to load still gets a slot on the timeline
-    // at the nominal length, rather than collapsing the sequence.
     const tickRate = 64;
     return {
       ...round,
@@ -115,32 +97,90 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     };
   }
 
-  // ---- rounds strip -------------------------------------------------------
+  // ---- per-round timelines (above the map) --------------------------------
 
-  function renderRoundStrip() {
-    roundsEl.innerHTML = rounds
+  function renderRoundTimelines() {
+    timelinesEl.innerHTML = rounds
       .map((r, i) => {
-        const won = r.winner === 1 ? 'w1' : 'w2';
-        return `<button type="button" class="rv-round ${won}" data-index="${i}" title="${escapeHtml(
-          `Round ${r.round} · ${economyLabel(r.econ1)} vs ${economyLabel(r.econ2)}`
-        )}">${String(r.round).padStart(2, '0')}</button>`;
+        const side = winningSide(r);
+        const sideClass = side === 'T' ? 'wt' : 'wct';
+        return `
+        <div class="rv-round-row ${sideClass}" data-index="${i}">
+          <button type="button" class="rv-round ${sideClass}" data-index="${i}" title="${escapeHtml(
+            `Round ${r.round} · ${side} win · ${economyLabel(r.econ1)} vs ${economyLabel(r.econ2)}`
+          )}">${String(r.round).padStart(2, '0')}</button>
+          <div class="rv-scrub" data-scrub="${i}">
+            <div class="rv-scrub-track"><div class="rv-scrub-fill" data-fill="${i}"></div></div>
+            <div class="rv-scrub-marks" data-marks="${i}"></div>
+            <div class="rv-scrub-handle" data-handle="${i}"></div>
+          </div>
+          <span class="rv-round-clock" data-clock="${i}">0:00</span>
+        </div>`;
       })
       .join('');
     markActiveRound();
+    renderAllMarks();
   }
 
   function markActiveRound() {
-    roundsEl.querySelectorAll('.rv-round').forEach((b) => {
-      b.classList.toggle('active', Number(b.dataset.index) === activeIndex);
+    timelinesEl.querySelectorAll('.rv-round-row').forEach((row) => {
+      row.classList.toggle('active', Number(row.dataset.index) === activeIndex);
     });
   }
 
-  roundsEl.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-index]');
+  function renderAllMarks() {
+    if (!sequence.length) return;
+    for (let i = 0; i < sequence.length; i++) {
+      const marksEl = timelinesEl.querySelector(`[data-marks="${i}"]`);
+      if (!marksEl) continue;
+      const item = sequence.at(i);
+      const parts = [];
+      for (const m of phaseMarkers(item.timing)) {
+        if (m.key !== 'plant') continue;
+        parts.push(
+          `<span class="rv-mark plant" style="left:${m.at * 100}%" title="Bomb planted"></span>`
+        );
+      }
+      marksEl.innerHTML = parts.join('');
+    }
+  }
+
+  timelinesEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-index]');
     if (!btn) return;
     const index = Number(btn.dataset.index);
     playback.seek(sequence.offsetOf(index));
     selectRound(index, { seek: false });
+  });
+
+  // Scrub within one round's own timeline.
+  let scrubbingIndex = -1;
+  const seekRoundFromEvent = (index, e) => {
+    const scrub = timelinesEl.querySelector(`[data-scrub="${index}"]`);
+    if (!scrub) return;
+    const item = sequence.at(index);
+    if (!item) return;
+    const rect = scrub.getBoundingClientRect();
+    const f = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    playback.seek(sequence.offsetOf(index) + f * item.seconds);
+    if (index !== activeIndex) selectRound(index, { seek: false });
+  };
+
+  timelinesEl.addEventListener('pointerdown', (e) => {
+    const scrub = e.target.closest('[data-scrub]');
+    if (!scrub) return;
+    scrubbingIndex = Number(scrub.dataset.scrub);
+    scrub.setPointerCapture(e.pointerId);
+    seekRoundFromEvent(scrubbingIndex, e);
+  });
+  timelinesEl.addEventListener('pointermove', (e) => {
+    if (scrubbingIndex >= 0) seekRoundFromEvent(scrubbingIndex, e);
+  });
+  timelinesEl.addEventListener('pointerup', (e) => {
+    if (scrubbingIndex < 0) return;
+    const scrub = timelinesEl.querySelector(`[data-scrub="${scrubbingIndex}"]`);
+    scrub?.releasePointerCapture?.(e.pointerId);
+    scrubbingIndex = -1;
   });
 
   // ---- round selection ----------------------------------------------------
@@ -149,6 +189,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     if (index === activeIndex || index < 0 || index >= files.length) return;
     activeIndex = index;
     markActiveRound();
+    renderer._prevHealth?.fill?.(-1);
 
     const file = files[index];
     activeMeta = (await metaFor(file)) || fallbackMeta(rounds[index]);
@@ -159,8 +200,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
 
     if (seek) playback.seek(sequence.offsetOf(index), { emit: false });
 
-    // Pass two for the round now on screen. Playback continues on coarse data
-    // until it lands, so selecting a round never blocks.
     store.loadFull(file);
     draw();
   }
@@ -177,7 +216,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
   }
 
   function countWins() {
-    // Score as of the round on screen, which is what a viewer expects to see.
     let team1 = 0;
     let team2 = 0;
     for (let i = 0; i < activeIndex; i++) {
@@ -211,7 +249,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
       <div class="rv-players">${rows}</div>`;
   }
 
-  /** Per-frame scoreboard updates: health bar, weapon, alive state. */
   function syncScoreboard() {
     if (!activeMeta) return;
     const weapons = activeMeta.weapons || [];
@@ -231,7 +268,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
         const w = weapons[s.weapon] || '';
         if (gear.dataset.weapon !== w) {
           gear.dataset.weapon = w;
-          gear.textContent = s.alive ? w.replace(/_/g, ' ') : '';
+          gear.textContent = s.alive ? w.replace(/^weapon_/, '').replace(/_/g, ' ') : '';
         }
       }
     }
@@ -250,8 +287,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
   function draw(loc = null) {
     if (!activeMeta) return;
     const at = loc || sequence.locate(playback.position);
-    // Rolling into the next round swaps activeMeta asynchronously. Skip the
-    // frame rather than drawing this round's players at another round's time.
     if (at.index !== activeIndex) return;
     const timing = timingFor(activeMeta);
     const tick = at.tick;
@@ -264,7 +299,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
       tickRate: timing.tickRate,
       states,
       players: activeMeta.players || [],
-      events: activeMeta.events || {}
+      events: activeMeta.events || {},
+      weapons: activeMeta.weapons || []
     });
 
     const clock = clockAt(timing, tick);
@@ -272,12 +308,32 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     clockEl.dataset.phase = clock.phase;
     timeEl.textContent = formatClock(playback.position);
 
-    const pct = playback.duration ? (playback.position / playback.duration) * 100 : 0;
-    fillEl.style.width = `${pct}%`;
-    handleEl.style.left = `${pct}%`;
-
+    syncRoundScrubs(at);
     syncScoreboard();
     syncLoading(track);
+  }
+
+  function syncRoundScrubs(at) {
+    for (let i = 0; i < sequence.length; i++) {
+      const item = sequence.at(i);
+      const fill = timelinesEl.querySelector(`[data-fill="${i}"]`);
+      const handle = timelinesEl.querySelector(`[data-handle="${i}"]`);
+      const clock = timelinesEl.querySelector(`[data-clock="${i}"]`);
+      if (!item || !fill) continue;
+
+      let pct = 0;
+      let localSec = 0;
+      if (i < at.index) {
+        pct = 100;
+        localSec = item.seconds;
+      } else if (i === at.index) {
+        localSec = at.local;
+        pct = item.seconds ? (at.local / item.seconds) * 100 : 0;
+      }
+      fill.style.width = `${pct}%`;
+      if (handle) handle.style.left = `${pct}%`;
+      if (clock) clock.textContent = formatClock(localSec);
+    }
   }
 
   function syncLoading(track) {
@@ -290,25 +346,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     loadingEl.textContent = track
       ? `Preview at 1/${COARSE_STRIDE} detail, loading full round…`
       : 'Loading round…';
-  }
-
-  function renderMarks() {
-    if (!sequence.length) return;
-    const parts = [];
-    for (let i = 0; i < sequence.length; i++) {
-      const item = sequence.at(i);
-      const base = sequence.offsetOf(i);
-      for (const m of phaseMarkers(item.timing)) {
-        if (m.key !== 'plant') continue;
-        const at = ((base + m.at * item.seconds) / sequence.duration) * 100;
-        parts.push(`<span class="rv-mark plant" style="left:${at}%" title="Bomb planted"></span>`);
-      }
-      if (i > 0) {
-        const at = (base / sequence.duration) * 100;
-        parts.push(`<span class="rv-mark round" style="left:${at}%"></span>`);
-      }
-    }
-    marksEl.innerHTML = parts.join('');
   }
 
   // ---- transport ----------------------------------------------------------
@@ -332,25 +369,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     speedBtn.textContent = `x${SPEEDS[speedIndex]}`;
   });
 
-  let scrubbing = false;
-  const seekFromEvent = (e) => {
-    const rect = scrubEl.getBoundingClientRect();
-    const f = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    playback.seek(f * playback.duration);
-  };
-  scrubEl.addEventListener('pointerdown', (e) => {
-    scrubbing = true;
-    scrubEl.setPointerCapture(e.pointerId);
-    seekFromEvent(e);
-  });
-  scrubEl.addEventListener('pointermove', (e) => {
-    if (scrubbing) seekFromEvent(e);
-  });
-  scrubEl.addEventListener('pointerup', (e) => {
-    scrubbing = false;
-    scrubEl.releasePointerCapture(e.pointerId);
-  });
-
   function onKey(e) {
     if (e.target.matches('input, textarea, select')) return;
     if (e.code === 'Space') {
@@ -369,18 +387,14 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
   window.addEventListener('resize', onResize);
 
   const offStore = store.onChange((event) => {
-    if (event.type === 'coarse-done') renderMarks();
+    if (event.type === 'coarse-done') renderAllMarks();
     if (event.type === 'full' && event.file === files[activeIndex]) draw();
   });
-
-  // ---- boot ---------------------------------------------------------------
 
   (async () => {
     await buildSequence();
     if (destroyed) return;
-    renderMarks();
-    // Pass one over the whole selection, then pass two starting where the
-    // viewer is looking.
+    renderAllMarks();
     await store.coarsePass(files, COARSE_STRIDE);
     if (destroyed) return;
     draw();

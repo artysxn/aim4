@@ -12,6 +12,7 @@ import {
   fetchDemos,
   fetchStatus,
   findRounds,
+  renameDemoTeams,
   reparseDemo,
   setAccount,
   setTokenProvider,
@@ -110,13 +111,27 @@ export function initReplaysView({ auth, escapeHtml }) {
 
   // ---- demo list ----------------------------------------------------------
 
+  function initials(name) {
+    const s = String(name || '?').trim();
+    const parts = s.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return s.slice(0, 2).toUpperCase() || '?';
+  }
+
+  function formatWhen(ts) {
+    if (!ts) return '-';
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return '-';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
   function demoRow(d) {
     const status = d.status || 'ready';
-    const teams =
-      d.team1 && d.team2
-        ? `${escapeHtml(d.team1.name)} vs ${escapeHtml(d.team2.name)}`
-        : escapeHtml(d.filename || d.id);
-    const score = d.score ? `${d.score.team1} : ${d.score.team2}` : '';
+    const t1 = d.team1?.name || 'Team 1';
+    const t2 = d.team2?.name || 'Team 2';
+    const score =
+      d.score && status === 'ready' ? `${d.score.team1} - ${d.score.team2}` : status === 'ready' ? '—' : '';
     const mapName = d.mapName || (d.map ? MAPS[d.map]?.name : '') || '';
 
     let state = '';
@@ -130,8 +145,6 @@ export function initReplaysView({ auth, escapeHtml }) {
             : 'Parsing';
     } else if (status === 'error') {
       state = d.error || 'Parsing failed';
-    } else {
-      state = `${d.roundCount || 0} rounds`;
     }
 
     const pct =
@@ -141,21 +154,49 @@ export function initReplaysView({ auth, escapeHtml }) {
 
     return `
       <div class="rp-row ${status}" data-id="${escapeHtml(d.id)}">
-        <div class="rp-row-main">
-          <span class="rp-row-teams">${teams}</span>
-          <span class="rp-row-meta">
-            ${mapName ? `<span class="rp-tag">${escapeHtml(mapName)}</span>` : ''}
-            ${score ? `<span class="rp-tag">${escapeHtml(score)}</span>` : ''}
-            <span class="rp-tag">${formatBytes(d.sizeBytes || 0)}</span>
-          </span>
-          <span class="rp-row-state">${escapeHtml(state)}</span>
-          ${status === 'parsing' ? `<span class="rp-progress"><span style="width:${pct}%"></span></span>` : ''}
+        <div class="rp-row-when">${escapeHtml(formatWhen(d.uploadedAt || d.parsedAt))}</div>
+        <div class="rp-row-match">
+          <div class="rp-side home">
+            <span class="rp-crest">${escapeHtml(initials(t1))}</span>
+            <span class="rp-side-name">${escapeHtml(t1)}</span>
+          </div>
+          <div class="rp-score">${escapeHtml(score || (status === 'ready' ? '0 - 0' : '…'))}</div>
+          <div class="rp-side away">
+            <span class="rp-crest">${escapeHtml(initials(t2))}</span>
+            <span class="rp-side-name">${escapeHtml(t2)}</span>
+          </div>
         </div>
         <div class="rp-row-actions">
-          ${status === 'ready' ? `<button type="button" class="btn btn-sm" data-open="${escapeHtml(d.id)}">Open</button>` : ''}
-          ${status === 'error' ? `<button type="button" class="btn btn-sm" data-retry="${escapeHtml(d.id)}">Retry</button>` : ''}
-          <button type="button" class="btn btn-sm" data-delete="${escapeHtml(d.id)}">Delete</button>
+          ${
+            status === 'ready'
+              ? `<button type="button" class="rp-btn-replay" data-open="${escapeHtml(d.id)}">▶ Replay</button>`
+              : ''
+          }
+          ${
+            status === 'error'
+              ? `<button type="button" class="btn btn-sm" data-retry="${escapeHtml(d.id)}">Retry</button>`
+              : ''
+          }
+          ${
+            status === 'ready'
+              ? `<button type="button" class="rp-btn-icon" data-rename="${escapeHtml(d.id)}" title="Rename teams">Aa</button>`
+              : ''
+          }
+          <button type="button" class="rp-btn-icon danger" data-delete="${escapeHtml(d.id)}" title="Delete">
+            <svg viewBox="0 -960 960 960" width="16" height="16" fill="currentColor"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>
+          </button>
         </div>
+        <div class="rp-maps">
+          ${mapName ? `<span class="rp-map-pill">${escapeHtml(mapName)}</span>` : ''}
+          ${status === 'ready' && d.roundCount ? `<span class="rp-map-pill">${d.roundCount} rounds</span>` : ''}
+        </div>
+        ${
+          state
+            ? `<div class="rp-row-state">${escapeHtml(state)}${
+                status === 'parsing' ? `<span class="rp-progress"><span style="width:${pct}%"></span></span>` : ''
+              }</div>`
+            : ''
+        }
       </div>`;
   }
 
@@ -169,14 +210,19 @@ export function initReplaysView({ auth, escapeHtml }) {
     const open = e.target.closest('[data-open]');
     const del = e.target.closest('[data-delete]');
     const retry = e.target.closest('[data-retry]');
+    const rename = e.target.closest('[data-rename]');
 
     if (open) {
       const demo = demos.find((d) => d.id === open.dataset.open);
       if (demo) {
-        // A single match: its own rounds, in order, on the timeline.
         const list = (demo.rounds || []).map((r) => ({ ...r, map: demo.map }));
         launchViewer(list, 'timeline', `${demo.team1?.name || 'Team 1'} vs ${demo.team2?.name || 'Team 2'}`);
       }
+      return;
+    }
+    if (rename) {
+      const demo = demos.find((d) => d.id === rename.dataset.rename);
+      if (demo) await promptTeamNames(demo);
       return;
     }
     if (retry) {
@@ -186,7 +232,9 @@ export function initReplaysView({ auth, escapeHtml }) {
     }
     if (del) {
       const demo = demos.find((d) => d.id === del.dataset.delete);
-      const label = demo?.filename || 'this replay';
+      const label = demo?.team1 && demo?.team2
+        ? `${demo.team1.name} vs ${demo.team2.name}`
+        : demo?.filename || 'this replay';
       if (!window.confirm(`Delete ${label} and every round parsed from it?`)) return;
       try {
         const res = await deleteDemo(del.dataset.delete);
@@ -198,6 +246,58 @@ export function initReplaysView({ auth, escapeHtml }) {
       refresh();
     }
   });
+
+  // ---- team naming --------------------------------------------------------
+
+  function promptTeamNames(demo) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'rp-name-dialog';
+      overlay.innerHTML = `
+        <div class="rp-name-card" role="dialog" aria-label="Name teams">
+          <h3>Name the teams</h3>
+          <p>These names show up in the match list and the viewer. Round ids stay the same.</p>
+          <div class="rp-name-fields">
+            <label>Team 1
+              <input type="text" id="rp-name-t1" maxlength="48" value="${escapeHtml(demo.team1?.name || '')}" />
+            </label>
+            <label>Team 2
+              <input type="text" id="rp-name-t2" maxlength="48" value="${escapeHtml(demo.team2?.name || '')}" />
+            </label>
+          </div>
+          <div class="rp-name-actions">
+            <button type="button" class="btn btn-sm" data-skip>Skip</button>
+            <button type="button" class="btn btn-sm primary" data-save>Save</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const t1 = overlay.querySelector('#rp-name-t1');
+      const t2 = overlay.querySelector('#rp-name-t2');
+      t1.focus();
+      t1.select();
+
+      const close = () => {
+        overlay.remove();
+        resolve();
+      };
+
+      overlay.querySelector('[data-skip]').addEventListener('click', close);
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) close();
+      });
+      overlay.querySelector('[data-save]').addEventListener('click', async () => {
+        try {
+          const res = await renameDemoTeams(demo.id, t1.value, t2.value);
+          renderQuota(res.usage);
+          setStatus('Team names saved.');
+          await refresh();
+        } catch (err) {
+          setStatus(err.message, true);
+        }
+        close();
+      });
+    });
+  }
 
   // ---- upload -------------------------------------------------------------
 
@@ -223,7 +323,10 @@ export function initReplaysView({ auth, escapeHtml }) {
           ? 'Import complete. Rounds are ready.'
           : 'Upload complete. Parsing started.'
       );
-      refresh();
+      await refresh();
+      if (isPackage && res.demo) {
+        await promptTeamNames(res.demo);
+      }
     } catch (err) {
       setStatus(err.message, true);
     } finally {
@@ -396,14 +499,17 @@ export function initReplaysView({ auth, escapeHtml }) {
         ${rounds
           .slice(0, 200)
           .map(
-            (r) => `
-          <button type="button" class="rp-round-chip ${r.winner === 1 ? 'w1' : 'w2'}" data-file="${escapeHtml(r.file)}"
+            (r) => {
+              const side = r.winner === 1 ? 'w1' : 'w2';
+              return `
+          <button type="button" class="rp-round-chip ${side}" data-file="${escapeHtml(r.file)}"
             title="${escapeHtml(
               `${MAPS[r.map]?.name || r.map} round ${r.round}: ${economyLabel(r.econ1)} vs ${economyLabel(r.econ2)}`
             )}">
             <span class="rp-chip-map">${escapeHtml(r.map)}</span>
             <span class="rp-chip-round">${String(r.round).padStart(2, '0')}</span>
-          </button>`
+          </button>`;
+            }
           )
           .join('')}
       </div>
