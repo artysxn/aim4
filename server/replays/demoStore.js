@@ -137,6 +137,34 @@ export async function writeRecord(user, record) {
   return record;
 }
 
+/**
+ * Persist a fully materialized demo (manifest + round files) without
+ * re-deriving round ids. Used by server ingest and by import of local packages.
+ *
+ * @param {string} user
+ * @param {object} record
+ * @param {Map<string, Uint8Array>|Iterable<[string, Uint8Array]>} files
+ */
+export async function writeMaterialized(user, record, files) {
+  await ensureDirs(user);
+  const demoId = sanitizeId(record.id);
+  const dir = roundsDir(user);
+  for (const [name, data] of files) {
+    const n = String(name).replace(/\\/g, '/');
+    if (n === 'manifest.json') continue;
+    if (!n.startsWith('rounds/') || n.includes('..')) {
+      throw new Error(`Unexpected package entry: ${name}`);
+    }
+    const base = path.basename(n);
+    if (!base.endsWith(`~${demoId}.json`) && !base.endsWith(`~${demoId}.bin`)) {
+      throw new Error(`Round file does not match demo id: ${base}`);
+    }
+    await fsp.writeFile(path.join(dir, base), Buffer.from(data));
+  }
+  await writeRecord(user, { ...record, id: demoId });
+  return record;
+}
+
 export async function listDemos(user) {
   const files = await listFiles(demosDir(user));
   const records = [];
@@ -216,6 +244,40 @@ export function saveUpload(user, id, req, allowedBytes) {
     out.on('error', abort);
     out.on('finish', () => {
       if (!failed) resolve(written);
+    });
+    req.pipe(out);
+  });
+}
+
+/**
+ * Stream a request body to a temp file under the replay root (used for
+ * .aim4replay import before the package is decoded into round files).
+ */
+export function saveTempUpload(req, allowedBytes, prefix = 'import') {
+  return new Promise((resolve, reject) => {
+    fs.mkdirSync(ROOT, { recursive: true });
+    const target = path.join(ROOT, `.${prefix}-${crypto.randomBytes(8).toString('hex')}.tmp`);
+    const out = fs.createWriteStream(target);
+    let written = 0;
+    let failed = null;
+
+    const abort = (err) => {
+      if (failed) return;
+      failed = err;
+      req.destroy();
+      out.destroy();
+      fs.promises.rm(target, { force: true }).catch(() => {});
+      reject(err);
+    };
+
+    req.on('data', (chunk) => {
+      written += chunk.length;
+      if (written > allowedBytes) abort(new Error('Upload exceeds the available space.'));
+    });
+    req.on('error', abort);
+    out.on('error', abort);
+    out.on('finish', () => {
+      if (!failed) resolve({ path: target, sizeBytes: written });
     });
     req.pipe(out);
   });

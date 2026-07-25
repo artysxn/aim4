@@ -6,6 +6,7 @@
 //   GET    /api/replays/status                   parser + quota
 //   GET    /api/replays/demos                    library listing
 //   POST   /api/replays/demos                    upload (raw .dem body)
+//   POST   /api/replays/import                   upload a local .aim4replay package
 //   GET    /api/replays/demos/:id                one demo + parse progress
 //   POST   /api/replays/demos/:id/parse          re-run a failed parse
 //   DELETE /api/replays/demos/:id                remove demo + its rounds
@@ -13,13 +14,13 @@
 //   GET    /api/replays/rounds/:file             round meta + events
 //   GET    /api/replays/rounds/:file/ticks       tick buffer, ?stride=N
 //
-// Uploads stream straight to disk: a demo is hundreds of megabytes and must
-// never be buffered in memory or pass through the JSON body reader.
+// Uploads stream straight to disk: a demo / package is hundreds of megabytes
+// and must never be buffered in memory or pass through the JSON body reader.
 // ---------------------------------------------------------------------------
 
 import os from 'node:os';
 import fsSync from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { parserStatus } from '../demoparser/index.js';
 import {
@@ -34,12 +35,15 @@ import {
   readRecord,
   readRoundMeta,
   readRoundTicks,
+  saveTempUpload,
   saveUpload,
   usage,
   writeRecord
 } from './demoStore.js';
 import { allJobs, enqueueParse, jobStatus } from './jobs.js';
 import { authStatus, identify } from './auth.js';
+import { importReplayPackage } from './importPackage.js';
+import { PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -278,6 +282,44 @@ export async function handleReplayRequest(req, res, url) {
     await writeRecord(user, record);
     enqueueParse({ user, demoId, filename, sizeBytes });
     json(res, 201, { demo: withJob(user, record), usage: await usage(user) });
+    return true;
+  }
+
+  // Prefer this path in production: parse on the user's PC, upload only the
+  // already-named rounds. No demoparser process runs on the server.
+  if (req.method === 'POST' && p === '/api/replays/import') {
+    const filename = String(req.headers['x-aim4-filename'] || `match${PACKAGE_EXT}`).slice(0, 160);
+    if (!filename.toLowerCase().endsWith(PACKAGE_EXT)) {
+      json(res, 400, { error: `Only ${PACKAGE_EXT} packages can be imported.` });
+      return true;
+    }
+    const declared = Number(req.headers['content-length'] || 0);
+    const gate = await checkQuota(user, declared);
+    if (!gate.ok) {
+      json(res, 413, { error: gate.error, usage: gate.usage });
+      return true;
+    }
+
+    let tmp = null;
+    try {
+      const saved = await saveTempUpload(req, gate.usage.bytesLeft, 'import');
+      tmp = saved.path;
+      if (!saved.sizeBytes) {
+        json(res, 400, { error: 'Empty upload.' });
+        return true;
+      }
+      const buf = await readFile(tmp);
+      const record = await importReplayPackage(user, buf, {
+        filename,
+        uploadedAt: Date.now()
+      });
+      json(res, 201, { demo: withJob(user, record), usage: await usage(user) });
+    } catch (err) {
+      const status = err.status || 400;
+      json(res, status, { error: err.message || 'Import failed.', usage: err.usage });
+    } finally {
+      if (tmp) await rm(tmp, { force: true }).catch(() => {});
+    }
     return true;
   }
 

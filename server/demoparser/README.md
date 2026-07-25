@@ -40,6 +40,21 @@ without it (the library UI reports parsing as unavailable):
 npm install @laihoe/demoparser2
 ```
 
+## Local parse (recommended for production)
+
+Server-side `.dem` parsing is heavy. Prefer parsing on the user's PC and
+uploading an `.aim4replay` package:
+
+```bash
+npm install @laihoe/demoparser2
+npm run parse-demo -- path\to\match.dem
+# or: tools\parse-demo.bat path\to\match.dem
+```
+
+That writes `match.aim4replay` next to the demo. Upload the package on the
+Replays page (`POST /api/replays/import`). Round filenames inside the package
+are built with the same `buildRoundId` / ingest path the server uses.
+
 ## Upgrading the parser
 
 1. `npm install @laihoe/demoparser2@latest`

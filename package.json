@@ -13,7 +13,8 @@
     "server": "node server/index.js",
     "host": "node server/run-host.js",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "parse-demo": "node tools/parse-demo-local.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",

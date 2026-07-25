@@ -15,10 +15,12 @@ import {
   reparseDemo,
   setAccount,
   setTokenProvider,
-  uploadDemo
+  uploadDemo,
+  uploadImport
 } from '../replays/api.js';
 import { getSupabase } from '../lib/supabase.js';
 import { ECONOMIES, MAPS, economyLabel } from '../replays/shared/roundId.js';
+import { PACKAGE_EXT } from '../replays/shared/replayPackage.js';
 import { formatBytes } from '../replays/tickStore.js';
 
 const POLL_MS = 1500;
@@ -96,9 +98,13 @@ export function initReplaysView({ auth, escapeHtml }) {
 
   function renderParser(parser) {
     if (!parser) return;
+    // Local .aim4replay import always works; warn only that raw .dem upload
+    // cannot be parsed on this host.
     parserEl.hidden = parser.available;
     if (!parser.available) {
-      parserEl.textContent = `Parsing is offline: the backend has no demo parser installed (${parser.name}).`;
+      parserEl.textContent =
+        `Server-side .dem parsing is offline (${parser.name}). ` +
+        `Parse demos on your PC with tools\\parse-demo.bat, then upload the ${PACKAGE_EXT} package.`;
     }
   }
 
@@ -156,7 +162,7 @@ export function initReplaysView({ auth, escapeHtml }) {
   function renderDemos() {
     listEl.innerHTML = demos.length
       ? demos.map(demoRow).join('')
-      : '<p class="view-empty">No replays yet. Upload a .dem to get started.</p>';
+      : `<p class="view-empty">No replays yet. Upload a ${PACKAGE_EXT} package (or a .dem).</p>`;
   }
 
   listEl.addEventListener('click', async (e) => {
@@ -197,18 +203,26 @@ export function initReplaysView({ auth, escapeHtml }) {
 
   async function startUpload(file) {
     if (!file) return;
-    if (!/\.dem$/i.test(file.name)) {
-      setStatus('Only .dem files can be uploaded.', true);
+    const name = file.name || '';
+    const isPackage = name.toLowerCase().endsWith(PACKAGE_EXT);
+    const isDem = /\.dem$/i.test(name);
+    if (!isPackage && !isDem) {
+      setStatus(`Upload a ${PACKAGE_EXT} package (preferred) or a .dem file.`, true);
       return;
     }
-    setStatus(`Uploading ${file.name}…`);
+    setStatus(`Uploading ${name}…`);
     dropEl.classList.add('busy');
     try {
-      const res = await uploadDemo(file, (pct) => {
-        setStatus(`Uploading ${file.name}: ${pct}%`);
+      const upload = isPackage ? uploadImport : uploadDemo;
+      const res = await upload(file, (pct) => {
+        setStatus(`Uploading ${name}: ${pct}%`);
       });
       renderQuota(res.usage);
-      setStatus('Upload complete. Parsing started.');
+      setStatus(
+        isPackage
+          ? 'Import complete. Rounds are ready.'
+          : 'Upload complete. Parsing started.'
+      );
       refresh();
     } catch (err) {
       setStatus(err.message, true);

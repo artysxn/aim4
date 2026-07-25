@@ -85,48 +85,71 @@ export async function reparseDemo(id) {
  * @param {File} file
  * @param {(pct: number, loaded: number, total: number) => void} [onProgress]
  */
-export async function uploadDemo(file, onProgress) {
+function uploadBinary(url, file, onProgress) {
   // Resolved before the request opens: XHR headers must be set before send,
   // and a stale token here would fail the upload after the whole file moved.
-  const auth = await headers();
+  return headers().then(
+    (auth) =>
+      new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+        xhr.setRequestHeader('X-Aim4-Filename', file.name);
+        for (const [k, v] of Object.entries(auth)) xhr.setRequestHeader(k, v);
 
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${API_BASE}/api/replays/demos`);
-    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-    xhr.setRequestHeader('X-Aim4-Filename', file.name);
-    for (const [k, v] of Object.entries(auth)) xhr.setRequestHeader(k, v);
+        xhr.upload.addEventListener('progress', (e) => {
+          if (e.lengthComputable && onProgress) {
+            onProgress(Math.round((e.loaded / e.total) * 100), e.loaded, e.total);
+          }
+        });
+        xhr.addEventListener('load', () => {
+          let body = {};
+          try {
+            body = JSON.parse(xhr.responseText || '{}');
+          } catch {
+            /* server sent something that is not JSON */
+          }
+          if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+          else reject(new Error(body.error || `Upload failed (${xhr.status})`));
+        });
+        // The browser gives no detail here on purpose: a blocked CORS preflight, a
+        // proxy body-size limit and a dead backend all surface as the same opaque
+        // event. Name the likely causes rather than guessing one.
+        xhr.addEventListener('error', () =>
+          reject(
+            new Error(
+              'Upload could not reach the backend. Check that it is running, that ' +
+                'CORS allows this origin, and that any reverse proxy in front of it ' +
+                'accepts large request bodies.'
+            )
+          )
+        );
+        xhr.addEventListener('abort', () => reject(new Error('Upload cancelled.')));
+        xhr.send(file);
+      })
+  );
+}
 
-    xhr.upload.addEventListener('progress', (e) => {
-      if (e.lengthComputable && onProgress) {
-        onProgress(Math.round((e.loaded / e.total) * 100), e.loaded, e.total);
-      }
-    });
-    xhr.addEventListener('load', () => {
-      let body = {};
-      try {
-        body = JSON.parse(xhr.responseText || '{}');
-      } catch {
-        /* server sent something that is not JSON */
-      }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
-      else reject(new Error(body.error || `Upload failed (${xhr.status})`));
-    });
-    // The browser gives no detail here on purpose: a blocked CORS preflight, a
-    // proxy body-size limit and a dead backend all surface as the same opaque
-    // event. Name the likely causes rather than guessing one.
-    xhr.addEventListener('error', () =>
-      reject(
-        new Error(
-          'Upload could not reach the backend. Check that it is running, that ' +
-            'CORS allows this origin, and that any reverse proxy in front of it ' +
-            'accepts large request bodies.'
-        )
-      )
-    );
-    xhr.addEventListener('abort', () => reject(new Error('Upload cancelled.')));
-    xhr.send(file);
-  });
+/**
+ * Upload a .dem for server-side parsing. Prefer uploadImport for production:
+ * parse locally and upload the .aim4replay package instead.
+ *
+ * @param {File} file
+ * @param {(pct: number, loaded: number, total: number) => void} [onProgress]
+ */
+export async function uploadDemo(file, onProgress) {
+  return uploadBinary(`${API_BASE}/api/replays/demos`, file, onProgress);
+}
+
+/**
+ * Upload a locally-parsed .aim4replay package. Rounds land ready immediately;
+ * no demoparser runs on the server.
+ *
+ * @param {File} file
+ * @param {(pct: number, loaded: number, total: number) => void} [onProgress]
+ */
+export async function uploadImport(file, onProgress) {
+  return uploadBinary(`${API_BASE}/api/replays/import`, file, onProgress);
 }
 
 /**
