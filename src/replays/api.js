@@ -112,7 +112,18 @@ export async function uploadDemo(file, onProgress) {
       if (xhr.status >= 200 && xhr.status < 300) resolve(body);
       else reject(new Error(body.error || `Upload failed (${xhr.status})`));
     });
-    xhr.addEventListener('error', () => reject(new Error('Upload failed. Is the backend running?')));
+    // The browser gives no detail here on purpose: a blocked CORS preflight, a
+    // proxy body-size limit and a dead backend all surface as the same opaque
+    // event. Name the likely causes rather than guessing one.
+    xhr.addEventListener('error', () =>
+      reject(
+        new Error(
+          'Upload could not reach the backend. Check that it is running, that ' +
+            'CORS allows this origin, and that any reverse proxy in front of it ' +
+            'accepts large request bodies.'
+        )
+      )
+    );
     xhr.addEventListener('abort', () => reject(new Error('Upload cancelled.')));
     xhr.send(file);
   });

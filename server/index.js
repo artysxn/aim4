@@ -72,18 +72,20 @@ function readBody(req) {
 const server = http.createServer(async (req, res) => {
   setSecurityHeaders(res);
 
-  if (req.method === 'OPTIONS') {
-    send(res, 204, {});
-    return;
-  }
-
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
   try {
     // Replays own their transport: a .dem upload streams to disk and a tick
     // buffer comes back as binary, so this runs ahead of the JSON body reader
-    // and its 64 KB cap.
+    // and its 64 KB cap. It must also run ahead of the generic OPTIONS reply
+    // below, which allows neither Authorization nor the upload's own headers —
+    // answering a replay preflight there makes the browser refuse the upload.
     if (url.pathname.startsWith('/api/replays') && (await handleReplayRequest(req, res, url))) {
+      return;
+    }
+
+    if (req.method === 'OPTIONS') {
+      send(res, 204, {});
       return;
     }
 
@@ -201,6 +203,13 @@ if (SERVE_STATIC && !distExists()) {
   console.error('');
   process.exit(1);
 }
+
+// A demo upload is hundreds of megabytes and can legitimately spend many
+// minutes on the wire. Node's default 5 minute requestTimeout would destroy
+// the socket mid-transfer, which a browser reports as a generic network error
+// rather than as a timeout. headersTimeout stays short: only the body is slow.
+server.requestTimeout = Number(process.env.AIM4_REQUEST_TIMEOUT_MS || 30 * 60 * 1000);
+server.headersTimeout = 65_000;
 
 server.listen(PORT, HOST, async () => {
   if (SERVE_STATIC) {
