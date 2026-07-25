@@ -670,9 +670,9 @@ body.rv-open {
 
 /* Bottom chrome sits on a higher z-layer over the stage so the map is not
    cropped by a separate flex row — tools stay at the bottom of the screen. */
-/* Two rows, two columns: round strip / transport on the left, the tool menus
-   stacked on the right. The right column is sized by the always-present tools
-   menu, so opening the drawing tools above it does not shift the round strip. */
+/* Two rows: round strip + transport on the left; tool buttons anchored on the
+   right. Drawing palette is absolutely positioned above the tools so toggling
+   it never changes grid row heights. */
 .rv-chrome {
   position: absolute;
   left: 0;
@@ -681,7 +681,8 @@ body.rv-open {
   z-index: 8;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  grid-template-rows: auto auto;
+  align-items: end;
   gap: 6px 12px;
   padding: 10px 16px 12px;
   border-top: 1px solid var(--border);
@@ -695,8 +696,6 @@ body.rv-open {
   pointer-events: auto;
 }
 
-/* Explicit cells: the drawing menu is display:none most of the time, and auto
-   placement would pull the transport up into the hole it leaves. */
 .rv-chrome > .rv-rounds {
   grid-area: 1 / 1;
 }
@@ -704,6 +703,10 @@ body.rv-open {
 .rv-chrome > .rv-transport {
   grid-area: 2 / 1;
   min-width: 0;
+}
+
+.rv-chrome > .rv-tools-anchor {
+  grid-area: 2 / 2;
 }
 
 .rv-rounds {
@@ -718,8 +721,12 @@ body.rv-open {
 
 /* ---- Viewer tool menus --------------------------------------------------- */
 
+.rv-tools-anchor {
+  position: relative;
+  justify-self: end;
+}
+
 .rv-tools {
-  grid-area: 2 / 2;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -729,13 +736,52 @@ body.rv-open {
   background: rgba(16, 19, 24, 0.92);
 }
 
+/* Float above the tool cluster — out of document flow, no layout shift. */
 .rv-tools-draw {
-  grid-area: 1 / 2;
-  justify-self: end;
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 2;
 }
 
 .rv-tools[hidden] {
   display: none;
+}
+
+/* Notes sit in the right gutter above chrome + drawing palette. */
+.rv-note-dock {
+  position: absolute;
+  right: 16px;
+  bottom: 120px;
+  z-index: 9;
+  width: min(300px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(14, 17, 21, 0.97);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+
+.rv-note-dock[hidden] {
+  display: none;
+}
+
+.rv-note-dock textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 110px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .rv-tool {
@@ -813,12 +859,12 @@ body.rv-open {
   box-shadow: 0 0 0 2px var(--rv-stage), 0 0 0 4px var(--swatch);
 }
 
-/* ---- Viewer popovers (note, playlists) ----------------------------------- */
+/* ---- Viewer popovers (playlists bookmark) -------------------------------- */
 
 .rv-popover {
   position: absolute;
   right: 16px;
-  bottom: calc(100% - 4px);
+  bottom: calc(100% + 6px);
   z-index: 9;
   width: 300px;
   display: flex;
@@ -833,19 +879,6 @@ body.rv-open {
 
 .rv-popover[hidden] {
   display: none;
-}
-
-.rv-popover textarea {
-  width: 100%;
-  resize: vertical;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: rgba(0, 0, 0, 0.35);
-  color: var(--text);
-  font-family: var(--font-body);
-  font-size: 13px;
-  line-height: 1.45;
 }
 
 .rv-popover-foot {
@@ -1075,9 +1108,19 @@ body.rv-open {
 }
 
 .rv-player {
-  padding: 0;
+  padding: 4px 6px;
+  margin: 0 -6px;
+  border-radius: var(--radius-xs);
   background: transparent;
-  transition: opacity 0.2s var(--ease-smooth);
+  transition: opacity 0.2s var(--ease-smooth), background 0.15s var(--ease-smooth);
+}
+
+.rv-player:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.rv-player.copied {
+  background: rgba(90, 209, 122, 0.22);
 }
 
 .rv-player.dead {
@@ -1489,30 +1532,35 @@ body.rv-open {
   font-size: 10px;
 }
 
-/* ---- Playlists dialog ---------------------------------------------------- */
+/* ---- Playlists page ------------------------------------------------------ */
 
-.rp-playlist-card {
-  width: min(760px, calc(100vw - 40px));
-  max-height: min(70vh, 620px);
-  display: flex;
-  flex-direction: column;
-  padding: 18px 20px 20px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface-solid, #19191c);
+.rp-playlists-page {
+  max-width: 920px;
 }
 
-.rp-playlist-head {
-  display: flex;
+.rp-back {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 6px;
+  margin-bottom: 16px;
+  padding: 6px 10px 6px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
 }
 
-.rp-playlist-head h3 {
-  margin: 0;
-  font-size: 17px;
+.rp-back:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+
+.rp-playlists-title {
+  margin: 0 0 14px;
+  font-size: 20px;
 }
 
 .rp-playlist-body {

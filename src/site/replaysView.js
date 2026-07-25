@@ -531,9 +531,17 @@ export function initReplaysView({ escapeHtml }) {
     viewerModule.openViewer({ rounds: list, mode, title, escapeHtml });
   }
 
-  // ---- playlists ----------------------------------------------------------
+  // ---- playlists page -----------------------------------------------------
 
   const playlistsBtn = document.getElementById('rp-playlists-btn');
+  const libraryEl = document.getElementById('rp-library');
+  const playlistsPageEl = document.getElementById('rp-playlists-page');
+  const playlistsBody = document.getElementById('rp-pl-body');
+  const playlistsBack = document.getElementById('rp-playlists-back');
+  const pageTitleEl = document.getElementById('page-title');
+
+  let onPlaylistsPage = false;
+  let playlistLists = [];
 
   /**
    * A playlist stores round names only, so it is turned back into rounds by
@@ -549,100 +557,94 @@ export function initReplaysView({ escapeHtml }) {
     return wanted.map((f) => byFile.get(f)).filter(Boolean);
   }
 
-  function playlistDialog() {
-    const overlay = document.createElement('div');
-    overlay.className = 'rp-name-dialog rp-playlist-dialog';
-    overlay.innerHTML = `
-      <div class="rp-playlist-card" role="dialog" aria-label="Playlists">
-        <div class="rp-playlist-head">
-          <h3>Playlists</h3>
-          <button type="button" class="rp-btn-icon" data-close aria-label="Close">✕</button>
-        </div>
-        <div class="rp-playlist-body" id="rp-pl-body"><p class="view-empty">Loading…</p></div>
-      </div>`;
-    document.body.appendChild(overlay);
-    const body = overlay.querySelector('#rp-pl-body');
-
-    const close = () => overlay.remove();
-    overlay.querySelector('[data-close]').addEventListener('click', close);
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) close();
-    });
-
-    let lists = [];
-
-    function render() {
-      if (!lists.length) {
-        body.innerHTML =
-          '<p class="view-empty">No playlists yet. Open a round and use the bookmark button to start one.</p>';
-        return;
-      }
-      body.innerHTML = `
-        <table class="rp-playlist-table">
-          <thead>
-            <tr><th>Playlist</th><th>Last modified</th><th>Rounds</th><th></th></tr>
-          </thead>
-          <tbody>
-            ${lists
-              .map(
-                (p) => `
-              <tr data-id="${escapeHtml(p.id)}">
-                <td class="rp-pl-name">${escapeHtml(p.name)}</td>
-                <td class="rp-pl-when">${escapeHtml(formatWhen(p.updatedAt || p.createdAt))}</td>
-                <td class="rp-pl-count">${(p.rounds || []).length}</td>
-                <td class="rp-pl-actions">
-                  <button type="button" class="rp-btn-replay" data-play="${escapeHtml(p.id)}">▶ Replay</button>
-                  <button type="button" class="rp-btn-icon danger" data-drop="${escapeHtml(p.id)}" title="Delete playlist">
-                    <svg viewBox="0 -960 960 960" width="16" height="16" fill="currentColor"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>
-                  </button>
-                </td>
-              </tr>`
-              )
-              .join('')}
-          </tbody>
-        </table>`;
+  function renderPlaylistsPage() {
+    if (!playlistsBody) return;
+    if (!playlistLists.length) {
+      playlistsBody.innerHTML =
+        '<p class="view-empty">No playlists yet. Open a round and use the bookmark button to start one.</p>';
+      return;
     }
-
-    body.addEventListener('click', async (e) => {
-      const play = e.target.closest('[data-play]');
-      const drop = e.target.closest('[data-drop]');
-      if (play) {
-        const pl = lists.find((p) => p.id === play.dataset.play);
-        if (!pl) return;
-        play.disabled = true;
-        const list = await roundsForPlaylist(pl).catch(() => []);
-        play.disabled = false;
-        if (!list.length) {
-          setStatus('That playlist has no rounds left to play.', true);
-          return;
-        }
-        close();
-        launchViewer(list, 'timeline', pl.name);
-        return;
-      }
-      if (drop) {
-        const pl = lists.find((p) => p.id === drop.dataset.drop);
-        if (!pl || !window.confirm(`Delete the playlist "${pl.name}"?`)) return;
-        try {
-          lists = await deletePlaylist(pl.id);
-          render();
-        } catch (err) {
-          setStatus(err.message, true);
-        }
-      }
-    });
-
-    fetchPlaylists()
-      .then((res) => {
-        lists = res;
-        render();
-      })
-      .catch((err) => {
-        body.innerHTML = `<p class="view-empty">${escapeHtml(err.message)}</p>`;
-      });
+    playlistsBody.innerHTML = `
+      <table class="rp-playlist-table">
+        <thead>
+          <tr><th>Playlist</th><th>Last modified</th><th>Rounds</th><th></th></tr>
+        </thead>
+        <tbody>
+          ${playlistLists
+            .map(
+              (p) => `
+            <tr data-id="${escapeHtml(p.id)}">
+              <td class="rp-pl-name">${escapeHtml(p.name)}</td>
+              <td class="rp-pl-when">${escapeHtml(formatWhen(p.updatedAt || p.createdAt))}</td>
+              <td class="rp-pl-count">${(p.rounds || []).length}</td>
+              <td class="rp-pl-actions">
+                <button type="button" class="rp-btn-replay" data-play="${escapeHtml(p.id)}">▶ Replay</button>
+                <button type="button" class="rp-btn-icon danger" data-drop="${escapeHtml(p.id)}" title="Delete playlist">
+                  <svg viewBox="0 -960 960 960" width="16" height="16" fill="currentColor"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>
+                </button>
+              </td>
+            </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>`;
   }
 
-  playlistsBtn?.addEventListener('click', playlistDialog);
+  async function loadPlaylistsPage() {
+    if (!playlistsBody) return;
+    playlistsBody.innerHTML = '<p class="view-empty">Loading…</p>';
+    try {
+      playlistLists = await fetchPlaylists();
+      renderPlaylistsPage();
+    } catch (err) {
+      playlistsBody.innerHTML = `<p class="view-empty">${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  function setPlaylistsPage(on, { push = false } = {}) {
+    onPlaylistsPage = on;
+    if (libraryEl) libraryEl.hidden = on;
+    if (playlistsPageEl) playlistsPageEl.hidden = !on;
+    if (playlistsBtn) playlistsBtn.hidden = on || !visible;
+    if (pageTitleEl) pageTitleEl.textContent = on ? 'Playlists' : 'Replays';
+    document.title = on ? 'AIM4.io - Playlists' : 'AIM4.io - Replays';
+    const path = on ? '/replays/playlists' : '/replays';
+    if (push && window.location.pathname.replace(/\/+$/, '') !== path) {
+      window.history.pushState({ view: 'replays', playlists: on }, '', path);
+    }
+    if (on) loadPlaylistsPage();
+  }
+
+  playlistsBtn?.addEventListener('click', () => setPlaylistsPage(true, { push: true }));
+  playlistsBack?.addEventListener('click', () => setPlaylistsPage(false, { push: true }));
+
+  playlistsBody?.addEventListener('click', async (e) => {
+    const play = e.target.closest('[data-play]');
+    const drop = e.target.closest('[data-drop]');
+    if (play) {
+      const pl = playlistLists.find((p) => p.id === play.dataset.play);
+      if (!pl) return;
+      play.disabled = true;
+      const list = await roundsForPlaylist(pl).catch(() => []);
+      play.disabled = false;
+      if (!list.length) {
+        setStatus('That playlist has no rounds left to play.', true);
+        return;
+      }
+      launchViewer(list, 'timeline', pl.name);
+      return;
+    }
+    if (drop) {
+      const pl = playlistLists.find((p) => p.id === drop.dataset.drop);
+      if (!pl || !window.confirm(`Delete the playlist "${pl.name}"?`)) return;
+      try {
+        playlistLists = await deletePlaylist(pl.id);
+        renderPlaylistsPage();
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    }
+  });
 
   // ---- deep links ---------------------------------------------------------
 
@@ -701,12 +703,21 @@ export function initReplaysView({ escapeHtml }) {
   return {
     onShow(params = {}) {
       visible = true;
-      if (playlistsBtn) playlistsBtn.hidden = false;
-      refresh();
-      startPolling();
+      const wantPlaylists =
+        params.playlists === '1' ||
+        params.playlists === true ||
+        window.location.pathname.replace(/\/+$/, '') === '/replays/playlists';
+      setPlaylistsPage(wantPlaylists, { push: false });
+      if (!wantPlaylists) {
+        if (playlistsBtn) playlistsBtn.hidden = false;
+        refresh();
+        startPolling();
+      } else {
+        stopPolling();
+      }
       // Only on the first arrival: a viewer close rewrites the URL back to
       // /replays, and re-entering the view must not reopen what was closed.
-      if (params.round && params.round !== openedRound) {
+      if (!wantPlaylists && params.round && params.round !== openedRound) {
         openedRound = params.round;
         openSharedRound(params.round);
       }

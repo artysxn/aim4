@@ -243,7 +243,15 @@ const PATH_TO_VIEW = Object.fromEntries(
 
 function viewFromPath(pathname = window.location.pathname) {
   const clean = pathname.replace(/\/+$/, '') || '/';
+  if (clean === '/replays/playlists') return 'replays';
   return PATH_TO_VIEW[clean] || 'home';
+}
+
+function paramsFromPath(pathname = window.location.pathname) {
+  const clean = pathname.replace(/\/+$/, '') || '/';
+  const fromSearch = Object.fromEntries(new URLSearchParams(window.location.search));
+  if (clean === '/replays/playlists') return { ...fromSearch, playlists: '1' };
+  return fromSearch;
 }
 
 let activeView = null;
@@ -262,8 +270,14 @@ function setView(name, push = false, params = null) {
   document.getElementById('page-title').textContent = VIEWS[view].title;
   document.title = view === 'home' ? 'AIM4.io' : `AIM4.io - ${VIEWS[view].title}`;
   if (push) {
-    const search = params ? `?${new URLSearchParams(params)}` : '';
-    const target = VIEWS[view].path + search;
+    const pathParams = { ...(params || {}) };
+    const onPlaylists = pathParams.playlists === '1' || pathParams.playlists === true;
+    delete pathParams.playlists;
+    const search = Object.keys(pathParams).length
+      ? `?${new URLSearchParams(pathParams)}`
+      : '';
+    const base = onPlaylists ? '/replays/playlists' : VIEWS[view].path;
+    const target = base + search;
     if (window.location.pathname + window.location.search !== target) {
       window.history.pushState({ view }, '', target);
     }
@@ -272,7 +286,7 @@ function setView(name, push = false, params = null) {
     viewControllers[activeView]?.onHide?.();
   }
   activeView = view;
-  viewControllers[view]?.onShow?.(params || Object.fromEntries(new URLSearchParams(window.location.search)));
+  viewControllers[view]?.onShow?.(params || paramsFromPath());
   window.scrollTo({ top: 0 });
 }
 
@@ -294,6 +308,8 @@ document.querySelectorAll('[data-nav]').forEach((el) => {
   });
 });
 
-window.addEventListener('popstate', () => setView(viewFromPath(), false));
+window.addEventListener('popstate', () =>
+  setView(viewFromPath(), false, paramsFromPath())
+);
 
-setView(viewFromPath(), false);
+setView(viewFromPath(), false, paramsFromPath());

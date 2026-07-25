@@ -102,10 +102,60 @@ const ALIASES = {
   weapon_glock: 'glock',
   glock_18: 'glock',
   glock18: 'glock',
-  weapon_m4a1_silencer: 'm4a1_silencer',
+  // Rifles: demoparser / inventory strings vary (AK-47, ak_47, weapon_ak47…).
+  // Unrecognized names fall through inventoryAt to the sidearm — the glock/usp bug.
+  weapon_ak47: 'ak47',
+  ak_47: 'ak47',
+  ak47: 'ak47',
   weapon_m4a1: 'm4a1',
+  m4a4: 'm4a1', // CS item index name for the unsilenced M4
+  m4_a4: 'm4a1',
+  weapon_m4a1_silencer: 'm4a1_silencer',
+  m4a1_s: 'm4a1_silencer',
+  m4a1s: 'm4a1_silencer',
+  m4a1silencer: 'm4a1_silencer',
+  weapon_aug: 'aug',
+  weapon_sg556: 'sg556',
+  sg553: 'sg556',
+  sg_553: 'sg556',
+  weapon_galilar: 'galilar',
+  galil: 'galilar',
+  galil_ar: 'galilar',
+  weapon_famas: 'famas',
+  weapon_awp: 'awp',
+  weapon_ssg08: 'ssg08',
+  ssg_08: 'ssg08',
+  weapon_scar20: 'scar20',
+  weapon_g3sg1: 'g3sg1',
+  weapon_mac10: 'mac10',
+  mac_10: 'mac10',
+  weapon_mp9: 'mp9',
+  weapon_mp7: 'mp7',
+  weapon_mp5sd: 'mp5sd',
+  mp5_sd: 'mp5sd',
+  weapon_ump45: 'ump45',
+  ump_45: 'ump45',
+  weapon_p90: 'p90',
+  weapon_bizon: 'bizon',
+  weapon_nova: 'nova',
+  weapon_xm1014: 'xm1014',
+  weapon_mag7: 'mag7',
+  weapon_sawedoff: 'sawedoff',
+  weapon_m249: 'm249',
+  weapon_negev: 'negev',
+  weapon_deagle: 'deagle',
   weapon_revolver: 'revolver',
+  r8revolver: 'revolver',
   weapon_cz75a: 'cz75a',
+  cz75: 'cz75a',
+  weapon_fiveseven: 'fiveseven',
+  five_seven: 'fiveseven',
+  weapon_tec9: 'tec9',
+  tec_9: 'tec9',
+  weapon_elite: 'elite',
+  weapon_p250: 'p250',
+  weapon_taser: 'taser',
+  zeus: 'taser',
   item_defuser: 'defuser',
   defuser: 'defuser',
   item_cutters: 'defuser',
@@ -190,14 +240,20 @@ export function bareWeapon(name) {
     .toLowerCase()
     .replace(/^weapon_/, '')
     .replace(/^item_/, '')
-    .replace(/-/g, '_')
+    // "AK-47" / "M4A1-S" → ak47 / m4a1s (hyphens are not part of icon stems).
+    .replace(/-/g, '')
     .replace(/\s+/g, '_');
   if (ALIASES[s]) s = ALIASES[s];
   if (ALIASES[`weapon_${s}`]) s = ALIASES[`weapon_${s}`];
+  // Underscored digits from older spellings: ak_47 → ak47 (keep m4a1_silencer).
+  s = s.replace(/([a-z])_+(\d)/g, '$1$2');
+  if (ALIASES[s]) s = ALIASES[s];
   // demoparser display names: "Glock-18", "USP-S", "P2000"
   if (s.startsWith('glock')) s = 'glock';
   if (s === 'usp_s' || s === 'usps' || s === 'usp') s = 'usp_silencer';
   if (s === 'p2000' || s === 'hk_p2000') s = 'hkp2000';
+  if (s === 'm4a4') s = 'm4a1';
+  if (s === 'm4a1s' || s === 'm4a1_s') s = 'm4a1_silencer';
   return s;
 }
 

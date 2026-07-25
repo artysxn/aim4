@@ -48,16 +48,17 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
       </div>
       <aside class="rv-team rv-team-2" data-team="2"></aside>
     </div>
+    <aside class="rv-note-dock" id="rv-note-panel" hidden>
+      <textarea id="rv-note-text" maxlength="${NOTE_MAX}" rows="6"
+        placeholder="What happens in this round?"></textarea>
+      <div class="rv-popover-foot">
+        <span class="rv-note-count" id="rv-note-count">0 / ${NOTE_MAX}</span>
+        <span class="rv-popover-msg" id="rv-note-msg"></span>
+        <button type="button" class="btn btn-sm primary" id="rv-note-save">Save</button>
+      </div>
+    </aside>
     <div class="rv-chrome">
       <div class="rv-rounds" id="rv-rounds"></div>
-      <div class="rv-tools rv-tools-draw" id="rv-draw-tools" hidden>
-        <button type="button" class="rv-tool" id="rv-erase" title="Eraser: drag over a line to remove it">${icon(eraseIcon)}</button>
-        <span class="rv-tool-sep"></span>
-        ${DRAW_COLORS.map(
-          (c) => `<button type="button" class="rv-swatch" data-color="${c.value}" title="${c.label}"
-            style="--swatch:${c.value}"><span></span></button>`
-        ).join('')}
-      </div>
       <div class="rv-transport">
         <button type="button" class="rv-speed" id="rv-speed">x1</button>
         <button type="button" class="rv-play" id="rv-play" aria-label="Play">
@@ -73,18 +74,19 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
         </div>
         <span class="rv-time" id="rv-time">00:00</span>
       </div>
-      <div class="rv-tools" id="rv-tools">
-        <button type="button" class="rv-tool" id="rv-draw" title="Draw (right click always draws)">${icon(pencilIcon)}</button>
-        <button type="button" class="rv-tool" id="rv-note" title="Round note">${icon(commentsIcon)}</button>
-        <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
-      </div>
-      <div class="rv-popover" id="rv-note-panel" hidden>
-        <textarea id="rv-note-text" maxlength="${NOTE_MAX}" rows="5"
-          placeholder="What happens in this round?"></textarea>
-        <div class="rv-popover-foot">
-          <span class="rv-note-count" id="rv-note-count">0 / ${NOTE_MAX}</span>
-          <span class="rv-popover-msg" id="rv-note-msg"></span>
-          <button type="button" class="btn btn-sm primary" id="rv-note-save">Save</button>
+      <div class="rv-tools-anchor">
+        <div class="rv-tools rv-tools-draw" id="rv-draw-tools" hidden>
+          <button type="button" class="rv-tool" id="rv-erase" title="Eraser: drag over a line to remove it">${icon(eraseIcon)}</button>
+          <span class="rv-tool-sep"></span>
+          ${DRAW_COLORS.map(
+            (c) => `<button type="button" class="rv-swatch" data-color="${c.value}" title="${c.label}"
+              style="--swatch:${c.value}"><span></span></button>`
+          ).join('')}
+        </div>
+        <div class="rv-tools" id="rv-tools">
+          <button type="button" class="rv-tool" id="rv-draw" title="Draw (right click always draws)">${icon(pencilIcon)}</button>
+          <button type="button" class="rv-tool" id="rv-note" title="Round note">${icon(commentsIcon)}</button>
+          <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
         </div>
       </div>
       <div class="rv-popover" id="rv-playlist-panel" hidden>
@@ -349,6 +351,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
     renderScoreboards();
     renderActiveMarks();
     syncNotePanel(true);
+    notePanel.hidden = true;
+    noteBtn.classList.remove('active');
     if (seek) playback.seek(liveOffsetOf(index), { emit: false });
     syncLoading();
     clearPlayerStates();
@@ -387,7 +391,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
       else markActiveRound();
       renderScoreboards();
       renderActiveMarks();
-      syncNotePanel();
+      syncNotePanel(true);
+      autoOpenNotesIfPresent();
     }
 
     if (seek) playback.seek(liveOffsetOf(index), { emit: false });
@@ -729,9 +734,15 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
     noteBtn.classList.toggle('has-note', Boolean(activeMeta?.note));
   }
 
-  noteText.addEventListener('input', syncNoteCount);
-  noteBtn.addEventListener('click', () => {
-    const open = notePanel.hidden;
+  /** Open the note dock when this round has a saved note; otherwise leave it. */
+  function autoOpenNotesIfPresent() {
+    if (!activeMeta?.note) return;
+    closePopovers(notePanel);
+    notePanel.hidden = false;
+    noteBtn.classList.add('active');
+  }
+
+  function setNoteOpen(open) {
     closePopovers(open ? notePanel : null);
     notePanel.hidden = !open;
     noteBtn.classList.toggle('active', open);
@@ -739,7 +750,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
       syncNotePanel();
       noteText.focus();
     }
-  });
+  }
+
+  noteText.addEventListener('input', syncNoteCount);
+  noteBtn.addEventListener('click', () => setNoteOpen(notePanel.hidden));
   el.querySelector('#rv-note-save').addEventListener('click', async () => {
     const file = files[activeIndex];
     if (!file) return;
@@ -949,16 +963,93 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound }) {
     speedBtn.textContent = `x${SPEEDS[speedIndex]}`;
   });
 
+  /** Slot currently under the pointer in a side panel, or -1. */
+  let hoverSlot = -1;
+
+  team1El.addEventListener('pointerover', (e) => {
+    const row = e.target.closest('.rv-player[data-slot]');
+    if (row) hoverSlot = Number(row.dataset.slot);
+  });
+  team1El.addEventListener('pointerout', (e) => {
+    if (!e.relatedTarget || !team1El.contains(e.relatedTarget)) hoverSlot = -1;
+  });
+  team2El.addEventListener('pointerover', (e) => {
+    const row = e.target.closest('.rv-player[data-slot]');
+    if (row) hoverSlot = Number(row.dataset.slot);
+  });
+  team2El.addEventListener('pointerout', (e) => {
+    if (!e.relatedTarget || !team2El.contains(e.relatedTarget)) hoverSlot = -1;
+  });
+
+  function fmtCoord(n) {
+    return (Math.round(n * 1e6) / 1e6).toFixed(6);
+  }
+
+  /** getpos-style string: setpos x y z; setang pitch yaw 0 */
+  function setposForSlot(slot) {
+    const s = states[slot];
+    if (!s || !Number.isFinite(s.x)) return '';
+    return `setpos ${fmtCoord(s.x)} ${fmtCoord(s.y)} ${fmtCoord(s.z)}; setang ${fmtCoord(s.pitch)} ${fmtCoord(s.yaw)} 0`;
+  }
+
+  async function copySetpos(slot) {
+    const cmd = setposForSlot(slot);
+    if (!cmd) return;
+    try {
+      await navigator.clipboard.writeText(cmd);
+      flashPlayerCopied(slot);
+    } catch {
+      // Fallback for non-secure contexts.
+      window.prompt('Copy setpos:', cmd);
+    }
+  }
+
+  function flashPlayerCopied(slot) {
+    const row = el.querySelector(`.rv-player[data-slot="${slot}"]`);
+    if (!row) return;
+    row.classList.add('copied');
+    window.setTimeout(() => row.classList.remove('copied'), 700);
+  }
+
   function onKey(e) {
     if (e.target.matches('input, textarea, select')) return;
-    if (e.code === 'Space') {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+
+    if (e.code === 'Space' || key === ' ') {
       e.preventDefault();
       playback.toggle();
       syncPlayButton();
-    } else if (e.code === 'ArrowLeft') {
+      return;
+    }
+    if (e.code === 'ArrowLeft') {
       playback.nudge(e.shiftKey ? -10 : -2);
-    } else if (e.code === 'ArrowRight') {
+      return;
+    }
+    if (e.code === 'ArrowRight') {
       playback.nudge(e.shiftKey ? 10 : 2);
+      return;
+    }
+    if (key === 'e') {
+      e.preventDefault();
+      drawing.clear();
+      draw();
+      return;
+    }
+    if (key === 'j') {
+      e.preventDefault();
+      if (activeIndex > 0) selectRound(activeIndex - 1, { seek: true });
+      return;
+    }
+    if (key === 'k') {
+      e.preventDefault();
+      if (activeIndex < files.length - 1) selectRound(activeIndex + 1, { seek: true });
+      return;
+    }
+    if (key === 's') {
+      if (hoverSlot < 0) return;
+      e.preventDefault();
+      copySetpos(hoverSlot);
     }
   }
   window.addEventListener('keydown', onKey);

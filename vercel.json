@@ -10,6 +10,7 @@
     { "source": "/training", "destination": "/index.html" },
     { "source": "/leaderboards", "destination": "/index.html" },
     { "source": "/replays", "destination": "/index.html" },
+    { "source": "/replays/playlists", "destination": "/index.html" },
     { "source": "/football", "destination": "/index.html" },
     { "source": "/((?!assets/|tools/|fonts/|maps/).*)", "destination": "/train.html" }
   ]

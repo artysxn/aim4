@@ -31,6 +31,7 @@ import {
 } from '../../../src/replays/shared/tickFormat.js';
 import { SCHEMA_VERSION } from '../schema.js';
 import { classifyEconomy, isPistolRoundNumber } from '../economy.js';
+import { bareWeapon } from '../../../src/replays/viewer/equipmentIcons.js';
 
 const require = createRequire(import.meta.url);
 
@@ -437,7 +438,8 @@ function packBatch(reader, batch, roster, tickRate) {
   });
 
   const weaponId = (pack, raw) => {
-    const w = raw ? String(raw).replace(/^weapon_/, '') : 'none';
+    // Stem the same way as viewer icons so "AK-47" / ak_47 / weapon_ak47 match.
+    const w = bareWeapon(raw) || 'none';
     let i = pack.weaponIndex.get(w);
     if (i === undefined) {
       i = pack.weapons.length;

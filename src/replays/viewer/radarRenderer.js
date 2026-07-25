@@ -38,11 +38,13 @@ export function colorsForState(state, rosterTeam) {
 /** The T holding the C4 wears this instead of the side color. */
 const BOMB_CARRIER_COLOR = '#e2532b';
 
-const SMOKE_SECONDS = 18;
+const SMOKE_SECONDS = 22;
+/** Smoke stays full strength until this age, then fades out by SMOKE_SECONDS. */
+const SMOKE_FADE_START = 20;
 const FIRE_SECONDS = 7;
 const FLASH_SECONDS = 0.8;
 const HE_SECONDS = 0.85;
-/** Area utility holds full strength, then clears in this long. */
+/** Area utility (molotov) holds full strength, then clears in this long. */
 const UTIL_FADE_SECONDS = 0.8;
 const DECOY_SECONDS = 15;
 /** How long a thrown grenade's trajectory lingers after it goes off. */
@@ -782,7 +784,7 @@ export class RadarRenderer {
    * Nearby HE detonations punch a hole for 1s, then the smoke fades back.
    */
   drawSmoke(ctx, t, pt, age, radius, heHoles, worldAt, compact) {
-    const fade = utilFade(age, SMOKE_SECONDS);
+    const fade = smokeFade(age);
     const left = Math.max(0, Math.ceil(SMOKE_SECONDS - age));
     const progress = 1 - age / SMOKE_SECONDS;
 
@@ -1002,14 +1004,20 @@ function pathDroplet(ctx, tip, bot, halfW) {
 }
 
 /**
- * Full strength for the whole life of a smoke or a fire, then out in
- * UTIL_FADE_SECONDS. Area utility is either up or it is not; dimming it from
- * the moment it lands made a burning molotov look half spent.
+ * Full strength for the whole life of a fire, then out in UTIL_FADE_SECONDS.
+ * Dimming from the moment it lands made a burning molotov look half spent.
  */
 function utilFade(age, life) {
   const left = life - age;
   if (left >= UTIL_FADE_SECONDS) return 1;
   return Math.max(0, left / UTIL_FADE_SECONDS);
+}
+
+/** Smoke: opaque until SMOKE_FADE_START, then linear out by SMOKE_SECONDS. */
+function smokeFade(age) {
+  if (age >= SMOKE_SECONDS) return 0;
+  if (age <= SMOKE_FADE_START) return 1;
+  return (SMOKE_SECONDS - age) / (SMOKE_SECONDS - SMOKE_FADE_START);
 }
 
 /** 1 while the HE hole is fully open, then eases to 0 as smoke returns. */
