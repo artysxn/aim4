@@ -35,6 +35,32 @@ export function colorsForState(state, rosterTeam) {
   return TEAM_COLORS[rosterTeam] || TEAM_COLORS[1];
 }
 
+/** First kill tick for each victim at or before `tick`. */
+function deathTickByPlayer(events, tick) {
+  /** @type {Map<string, number>} */
+  const out = new Map();
+  for (const k of events?.kills || []) {
+    if (!k?.victim || k.tick > tick) continue;
+    const prev = out.get(k.victim);
+    if (prev == null || k.tick < prev) out.set(k.victim, k.tick);
+  }
+  return out;
+}
+
+function killVictimSide(k, states, byId) {
+  const victim = byId.get(k.victim);
+  const s = victim ? states[victim.slot] : null;
+  if (s?.side === 'T' || s?.side === 'CT') return s.side;
+  if (victim?.team === 1 || victim?.team === 2) {
+    // Fallback: roster team is not T/CT, opposite of attacker side if known.
+  }
+  const attacker = k.attacker ? byId.get(k.attacker) : null;
+  const as = attacker ? states[attacker.slot] : null;
+  if (as?.side === 'T') return 'CT';
+  if (as?.side === 'CT') return 'T';
+  return '';
+}
+
 /** The T holding the C4 wears this instead of the side color. */
 const BOMB_CARRIER_COLOR = '#e2532b';
 
@@ -57,7 +83,7 @@ const HE_SMOKE_CLEAR_UNITS = 130;
 const SMOKE_RADIUS_UNITS = 144;
 const FIRE_RADIUS_UNITS = 120;
 const TRACER_SECONDS = 0.25;
-const DEATH_MARK_SECONDS = 6;
+/** Kill X / death circle stay for the rest of the round (no timed fade). */
 
 const imageCache = new Map();
 
@@ -107,12 +133,17 @@ export class RadarRenderer {
     /** Cached opaque map (Analyzer: paint once, overlay rounds on top). */
     this._mapLayer = null;
     this._mapLayerKey = '';
+    /** Frozen world positions for kill markers: `${tick}:${victimId}` -> {x,y}. */
+    this._killPos = new Map();
+    /** Events object last used for kill positions (clear cache on round change). */
+    this._killEventsRef = null;
   }
 
   async setMap(mapCode) {
     if (this.mapCode === mapCode && this.image) return;
     this.mapCode = mapCode;
     this._mapLayerKey = '';
+    this._killPos.clear();
     try {
       this.image = await loadRadar(mapCode);
     } catch {
@@ -361,21 +392,23 @@ export class RadarRenderer {
     const bombCarrier = bombCarrierAt(frame.events, tick);
     const pops = flashPops(frame.events);
     const custom = frame.playerColors || null;
+    const deadAt = deathTickByPlayer(frame.events, tick);
 
     for (const p of players) {
       const s = states[p.slot];
       if (!s) continue;
+      // Once killed in the round, never draw a living droplet again (bad ticks
+      // sometimes flip alive back on after death).
+      if (deadAt.has(p.id) || !s.alive) {
+        this._prevHealth[p.slot] = 0;
+        continue;
+      }
       const override = custom?.[p.id];
       const colors = override
         ? { base: override, bright: override, dim: override }
         : colorsForState(s, p.team);
       const pt = this.project(t, s.x, s.y);
       if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
-
-      if (!s.alive) {
-        this._prevHealth[p.slot] = 0;
-        continue;
-      }
 
       const prev = this._prevHealth[p.slot];
       if (prev >= 0 && s.health < prev) this._damageTick[p.slot] = tick;
@@ -582,35 +615,88 @@ export class RadarRenderer {
     ctx.drawImage(c, x, y, w, h);
   }
 
-  // ---- deaths --------------------------------------------------------------
+  // ---- kills / deaths ------------------------------------------------------
 
+  /**
+   * Persistent markers for the rest of the round:
+   * - X for each kill gotten by a drawn player (victim side color)
+   * - Faint circle for each death of a drawn player
+   */
   drawDeaths(ctx, t, frame, compact) {
-    const { events, tick, tickRate, states, players } = frame;
-    if (!events?.kills) return;
-    const window = DEATH_MARK_SECONDS * tickRate;
-    const bySlot = new Map(players.map((p) => [p.id, p.slot]));
+    const { events, tick, states, players } = frame;
+    if (!events?.kills?.length || !players?.length) return;
+    if (this._killEventsRef !== events) {
+      this._killPos.clear();
+      this._killEventsRef = events;
+    }
+    // Full roster for positions / sides; `players` is who we credit marks to.
+    const roster = frame.allPlayers?.length ? frame.allPlayers : players;
+    const byId = new Map(roster.map((p) => [p.id, p]));
+    const allow = new Set(players.map((p) => p.id));
+    const size = (compact ? 3.5 : 5) * this.dpr;
+    const fa = this._frameAlpha ?? 1;
 
     for (const k of events.kills) {
-      if (k.tick > tick || tick - k.tick > window) continue;
-      const slot = bySlot.get(k.victim);
-      if (slot === undefined) continue;
-      const s = states[slot];
-      if (!s) continue;
-      const pt = this.project(t, s.x, s.y);
-      const age = (tick - k.tick) / window;
-      const size = (compact ? 3 : 5) * this.dpr;
-      ctx.save();
-      ctx.globalAlpha = 0.7 * (1 - age) * (this._frameAlpha ?? 1);
-      ctx.strokeStyle = '#c8ccd4';
-      ctx.lineWidth = Math.max(1, 1.6 * this.dpr);
-      ctx.beginPath();
-      ctx.moveTo(pt.x - size, pt.y - size);
-      ctx.lineTo(pt.x + size, pt.y + size);
-      ctx.moveTo(pt.x + size, pt.y - size);
-      ctx.lineTo(pt.x - size, pt.y + size);
-      ctx.stroke();
-      ctx.restore();
+      if (k.tick > tick) continue;
+      const showX = Boolean(k.attacker && allow.has(k.attacker));
+      const showCircle = allow.has(k.victim);
+      if (!showX && !showCircle) continue;
+
+      const pt = this.killWorldPoint(k, states, byId, t);
+      if (!pt) continue;
+
+      const victimSide = killVictimSide(k, states, byId);
+      const markColor =
+        victimSide === 'T' || victimSide === 'CT'
+          ? SIDE_COLORS[victimSide].base
+          : '#c8ccd4';
+
+      if (showX) {
+        ctx.save();
+        ctx.globalAlpha = 0.85 * fa;
+        ctx.strokeStyle = markColor;
+        ctx.lineWidth = Math.max(1, 1.6 * this.dpr);
+        ctx.beginPath();
+        ctx.moveTo(pt.x - size, pt.y - size);
+        ctx.lineTo(pt.x + size, pt.y + size);
+        ctx.moveTo(pt.x + size, pt.y - size);
+        ctx.lineTo(pt.x - size, pt.y + size);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      if (showCircle) {
+        ctx.save();
+        ctx.globalAlpha = 0.22 * fa;
+        ctx.strokeStyle = markColor;
+        ctx.lineWidth = Math.max(1, 1.4 * this.dpr);
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, size * 1.05, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
     }
+  }
+
+  /** Project a kill to canvas pixels; freeze the first seen world pos. */
+  killWorldPoint(k, states, byId, t) {
+    const key = `${k.tick}:${k.victim}`;
+    let world = this._killPos.get(key);
+    if (!world) {
+      const victim = byId.get(k.victim);
+      const s = victim ? states[victim.slot] : null;
+      if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) {
+        world = { x: s.x, y: s.y };
+        this._killPos.set(key, world);
+      } else if (Number.isFinite(k.x) && Number.isFinite(k.y)) {
+        world = { x: k.x, y: k.y };
+        this._killPos.set(key, world);
+      }
+    }
+    if (!world) return null;
+    const pt = this.project(t, world.x, world.y, { x: 0, y: 0 });
+    if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return null;
+    return pt;
   }
 
   // ---- shots ---------------------------------------------------------------

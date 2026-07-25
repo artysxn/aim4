@@ -150,6 +150,10 @@ export function createAnalyzerViewer({
   let hitTargets = [];
   /** @type {typeof hitTargets[0] | null} */
   let hoverHit = null;
+  /** Round file hovered in the right-hand selection list (same focus as canvas). */
+  let menuHoverFile = '';
+  /** Last pointer position over the map (client coords), for tip revalidation. */
+  let lastMapPointer = null;
   /** Selected round files (order = selection order). */
   /** @type {string[]} */
   let selectedFiles = [];
@@ -620,11 +624,16 @@ export function createAnalyzerViewer({
     };
   }
 
-  function pushPlayerHits(L, players, states, t) {
+  function playerDeadAt(events, playerId, tick) {
+    return (events?.kills || []).some((k) => k.victim === playerId && k.tick <= tick);
+  }
+
+  function pushPlayerHits(L, players, states, t, tick) {
     const hitR = 12;
+    const events = L.meta?.events || {};
     for (const p of players) {
       const s = states[p.slot];
-      if (!s?.alive) continue;
+      if (!s?.alive || playerDeadAt(events, p.id, tick)) continue;
       const pt = renderer.project(t, s.x, s.y, { x: 0, y: 0 });
       if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
       const css = cssFromCanvas(pt);
@@ -690,6 +699,7 @@ export function createAnalyzerViewer({
       tickRate: L.timing.tickRate,
       states: L.states,
       players: L.meta.players || [],
+      allPlayers: L.meta.players || [],
       events: L.meta.events || {},
       weapons: L.meta.weapons || [],
       teamSides: { 1: L.meta.team1Side, 2: L.meta.team2Side },
@@ -734,6 +744,26 @@ export function createAnalyzerViewer({
     tipEl.hidden = true;
   }
 
+  /** Drop canvas hover tip if the pointer is no longer on a hit target. */
+  function revalidateCanvasHover() {
+    if (menuHoverFile || selecting || panning || dragArmed) {
+      tipEl.hidden = true;
+      if (menuHoverFile) hoverHit = null;
+      return;
+    }
+    if (!lastMapPointer) {
+      if (hoverHit) clearHover();
+      return;
+    }
+    const hit = hitAt(lastMapPointer.x, lastMapPointer.y);
+    if (!hit) {
+      if (hoverHit) clearHover();
+      else tipEl.hidden = true;
+      return;
+    }
+    hoverHit = hit;
+  }
+
   function clearSelection() {
     if (!selectedFiles.length) return;
     selectedFiles = [];
@@ -742,18 +772,21 @@ export function createAnalyzerViewer({
     draw(playback.position);
   }
 
-  function renderOverlayRound(L, tick) {
+  function sampleOverlayHits(L, tick) {
     const track = store.track(L.round.file);
-    if (!track) return;
+    if (!track) return null;
     track.sampleAll(tick, L.states);
     const players = filterPlayers(L);
-    if (!players.length) return;
+    if (!players.length) return null;
     const events = filterEvents(L.meta, players);
     const { w, h } = renderer.resize();
     const t = renderer.viewTransform(w, h);
-    pushPlayerHits(L, players, L.states, t);
+    pushPlayerHits(L, players, L.states, t, tick);
     pushGrenadeHits(L, players, events, tick, t);
+    return { players, events };
+  }
 
+  function paintOverlayRound(L, tick, players, events) {
     renderer.showNames = false;
     renderer.showWeapons = false;
     renderer.render({
@@ -761,6 +794,7 @@ export function createAnalyzerViewer({
       tickRate: L.timing.tickRate,
       states: L.states,
       players,
+      allPlayers: L.meta.players || players,
       events,
       weapons: L.meta.weapons || [],
       teamSides: { 1: L.meta.team1Side, 2: L.meta.team2Side },
@@ -797,23 +831,29 @@ export function createAnalyzerViewer({
     let refTick = 0;
 
     if (selectedLayers.length) {
-      // Selection: ghosts at rest; hover focuses one round (others hidden).
-      const focusFile = hoverHit?.file || '';
       for (const L of selectedLayers) {
         const tick = tickForLayer(L, pos);
         const track = store.track(L.round.file);
         if (track) track.sampleAll(tick, L.states);
         const { w, h } = renderer.resize();
         const t = renderer.viewTransform(w, h);
-        pushPlayerHits(L, L.meta.players || [], L.states, t);
+        pushPlayerHits(L, L.meta.players || [], L.states, t, tick);
         pushGrenadeHits(L, L.meta.players || [], L.meta.events || {}, tick, t);
-
+      }
+      if (!menuHoverFile) revalidateCanvasHover();
+      else {
+        hoverHit = null;
+        tipEl.hidden = true;
+      }
+      const focusFile = menuHoverFile || hoverHit?.file || '';
+      for (const L of selectedLayers) {
+        const tick = tickForLayer(L, pos);
         if (focusFile) {
           if (L.round.file !== focusFile) continue;
           refTiming = L.timing;
           refTick = tick;
           renderFullRound(L, tick, {
-            highlightId: hoverHit?.playerId || '',
+            highlightId: menuHoverFile ? '' : hoverHit?.playerId || '',
             alpha: 1
           });
         } else {
@@ -824,33 +864,30 @@ export function createAnalyzerViewer({
           renderFullRound(L, tick, { alpha: SELECTION_GHOST_ALPHA });
         }
       }
-    } else if (hoverHit?.layer?.meta) {
-      const L = hoverHit.layer;
-      const tick = tickForLayer(L, pos);
-      refTiming = L.timing;
-      refTick = tick;
-      renderFullRound(L, tick, { highlightId: hoverHit.playerId, alpha: 1 });
-      // Hits from the filtered overlay set so leaving a droplet clears hover.
-      for (const V of visible) {
-        const track = store.track(V.round.file);
-        if (!track) continue;
-        const vt = tickForLayer(V, pos);
-        track.sampleAll(vt, V.states);
-        const players = filterPlayers(V);
-        if (!players.length) continue;
-        const { w, h } = renderer.resize();
-        const t = renderer.viewTransform(w, h);
-        pushPlayerHits(V, players, V.states, t);
-        pushGrenadeHits(V, players, filterEvents(V.meta, players), vt, t);
-      }
     } else if (visible.length) {
+      /** @type {Array<{L:object,tick:number,players:object[],events:object}>} */
+      const overlay = [];
       for (const L of visible) {
         const tick = tickForLayer(L, pos);
-        if (!refTiming) {
-          refTiming = L.timing;
-          refTick = tick;
+        const sampled = sampleOverlayHits(L, tick);
+        if (!sampled) continue;
+        overlay.push({ L, tick, ...sampled });
+      }
+      revalidateCanvasHover();
+      if (hoverHit?.layer?.meta) {
+        const L = hoverHit.layer;
+        const tick = tickForLayer(L, pos);
+        refTiming = L.timing;
+        refTick = tick;
+        renderFullRound(L, tick, { highlightId: hoverHit.playerId, alpha: 1 });
+      } else {
+        for (const row of overlay) {
+          if (!refTiming) {
+            refTiming = row.L.timing;
+            refTick = row.tick;
+          }
+          paintOverlayRound(row.L, row.tick, row.players, row.events);
         }
-        renderOverlayRound(L, tick);
       }
     }
 
@@ -886,7 +923,13 @@ export function createAnalyzerViewer({
   }
 
   function updateTip() {
-    if (!hoverHit || selecting || panning || dragArmed) {
+    if (!hoverHit || menuHoverFile || selecting || panning || dragArmed || !lastMapPointer) {
+      tipEl.hidden = true;
+      return;
+    }
+    // Pointer must still be on this hit — kills sticky tips after leave.
+    const live = hitAt(lastMapPointer.x, lastMapPointer.y);
+    if (!live || live.file !== hoverHit.file || live.playerId !== hoverHit.playerId) {
       tipEl.hidden = true;
       return;
     }
@@ -1087,6 +1130,8 @@ export function createAnalyzerViewer({
   });
 
   mapEl.addEventListener('pointermove', (e) => {
+    lastMapPointer = { x: e.clientX, y: e.clientY };
+
     if (panning) {
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
@@ -1103,6 +1148,7 @@ export function createAnalyzerViewer({
       if (!selecting && dist >= DRAG_THRESHOLD) {
         selecting = true;
         clearHover();
+        tipEl.hidden = true;
         mapEl.classList.add('selecting');
       }
       if (selecting) {
@@ -1112,17 +1158,21 @@ export function createAnalyzerViewer({
       return;
     }
 
+    if (menuHoverFile) {
+      tipEl.hidden = true;
+      return;
+    }
+
     const hit = hitAt(e.clientX, e.clientY);
     const prevFile = hoverHit?.file || '';
     const prevPlayer = hoverHit?.playerId || '';
     const nextFile = hit?.file || '';
     const nextPlayer = hit?.playerId || '';
     if (!hit) {
+      tipEl.hidden = true;
       if (hoverHit) {
         clearHover();
         draw(playback.position);
-      } else {
-        tipEl.hidden = true;
       }
       return;
     }
@@ -1176,12 +1226,33 @@ export function createAnalyzerViewer({
   mapEl.addEventListener('pointerup', endPointer);
   mapEl.addEventListener('pointercancel', endPointer);
   mapEl.addEventListener('pointerleave', () => {
+    lastMapPointer = null;
+    tipEl.hidden = true;
     if (dragArmed || selecting || panning) return;
     if (hoverHit) {
       clearHover();
       draw(playback.position);
-    } else {
-      tipEl.hidden = true;
+    }
+  });
+
+  selListEl.addEventListener('pointerover', (e) => {
+    const row = e.target.closest('[data-file]');
+    if (!row) return;
+    const file = row.dataset.file || '';
+    if (!file || file === menuHoverFile) return;
+    menuHoverFile = file;
+    clearHover();
+    tipEl.hidden = true;
+    draw(playback.position);
+  });
+  selListEl.addEventListener('pointerout', (e) => {
+    const row = e.target.closest('[data-file]');
+    if (!row) return;
+    const next = e.relatedTarget?.closest?.('[data-file]');
+    if (next && next.dataset.file === row.dataset.file) return;
+    if (menuHoverFile === row.dataset.file) {
+      menuHoverFile = '';
+      draw(playback.position);
     }
   });
   mapEl.addEventListener('auxclick', (e) => {
@@ -1342,8 +1413,10 @@ export function createAnalyzerViewer({
       clearSelection();
       return true;
     }
-    if (hoverHit) {
+    if (hoverHit || menuHoverFile) {
+      menuHoverFile = '';
       clearHover();
+      tipEl.hidden = true;
       draw(playback.position);
       return true;
     }
