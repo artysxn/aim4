@@ -496,7 +496,7 @@
 .rp-econ-side {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   color: var(--muted);
   font-size: 11px;
 }
@@ -512,34 +512,61 @@
   font-size: 12px;
 }
 
-.rp-awp-check,
-.st-awp-check,
-.rv-az-awp-check {
+/* Compact AWP toggle — chip under buy select / beside stats filters */
+.rp-awp-toggle {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 2px;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
+  justify-content: center;
+  gap: 0;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--muted);
+  font: 600 11px var(--font-body);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   cursor: pointer;
   user-select: none;
+  transition:
+    border-color 0.12s var(--ease-smooth),
+    background 0.12s var(--ease-smooth),
+    color 0.12s var(--ease-smooth);
 }
 
-.rp-awp-check input,
-.st-awp-check input,
-.rv-az-awp-check input {
+.rp-awp-toggle:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.rp-awp-toggle.active,
+.rp-awp-toggle:has(input:checked) {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--text);
+}
+
+.rp-awp-toggle input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   margin: 0;
-  accent-color: var(--accent, #5b9fd4);
+  opacity: 0;
+  cursor: pointer;
 }
 
-.st-awp-check {
-  margin-top: 0;
+.st-filter-group .rp-awp-toggle {
+  width: auto;
+  min-width: 52px;
+  min-height: 30px;
+  padding: 5px 10px;
 }
 
-.rv-az-awp-check {
+.rv-az-group .rp-awp-toggle {
   margin-top: 6px;
 }
 
@@ -2274,30 +2301,11 @@ body.rv-open {
   font-size: 10px;
 }
 
-/* ---- Playlists page ------------------------------------------------------ */
+/* ---- Upload / Playlists / Statistics subpages ---------------------------- */
 
-.rp-playlists-page {
-  max-width: 920px;
-}
-
-.rp-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 16px;
-  padding: 6px 10px 6px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.rp-back:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text);
+.rp-subpage {
+  width: 100%;
+  max-width: none;
 }
 
 .rp-playlists-title {
@@ -2410,13 +2418,23 @@ body.rv-open {
 .st-filters {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 10px 18px;
+  flex-wrap: nowrap;
+  gap: 10px 16px;
   padding: 12px 14px;
   margin-bottom: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+  overflow-x: auto;
+}
+
+.st-map-select {
+  min-width: 120px;
+}
+
+.st-filter-clear {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .st-filter-group {
@@ -2532,6 +2550,16 @@ body.rv-open {
 
 .st-board .st-table {
   width: 100%;
+  /* Same column template on both teams — auto layout sized each table from
+     its own names, so short-name sides looked more spaced out. */
+  table-layout: fixed;
+}
+
+.st-board .st-table th:first-child,
+.st-board .st-table td.name {
+  width: 26%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .st-board-name {
@@ -2625,6 +2653,14 @@ body.rv-open {
 
 .rv-board .st-table {
   width: 100%;
+  table-layout: fixed;
+}
+
+.rv-board .st-table th:first-child,
+.rv-board .st-table td.name {
+  width: 26%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .rv-board-name {

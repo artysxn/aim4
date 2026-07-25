@@ -74,23 +74,28 @@ export function createStatsPanel({ escapeHtml }) {
   }
 
   function hasAwpCheck(id, checked) {
-    return `<label class="st-awp-check">
-      <input type="checkbox" data-awp="${id}" ${checked ? 'checked' : ''} />
-      <span>Has AWP</span>
+    return `<label class="rp-awp-toggle${checked ? ' active' : ''}" title="Has AWP">
+      <input type="checkbox" data-awp="${id}" ${checked ? 'checked' : ''} aria-label="Has AWP" />
+      <span>AWP</span>
     </label>`;
   }
 
-  function renderFilters() {
+  function mapSelectHtml() {
     const maps = mapsInPayload();
-    const mapChips = maps
+    const selected = filter.maps[0] || '';
+    const opts = maps
       .map(
         (code) =>
-          `<button type="button" class="rp-chip${
-            filter.maps.includes(code) ? ' active' : ''
-          }" data-map="${escapeHtml(code)}">${escapeHtml(MAPS[code]?.name || code)}</button>`
+          `<option value="${escapeHtml(code)}"${code === selected ? ' selected' : ''}>${escapeHtml(
+            MAPS[code]?.name || code
+          )}</option>`
       )
       .join('');
+    return `<select class="site-select st-map-select" data-filter="maps" aria-label="Map">
+      <option value=""${!selected ? ' selected' : ''}>Any map</option>${opts}</select>`;
+  }
 
+  function renderFilters() {
     const sideBtn = (value, label) =>
       `<button type="button" class="rp-chip${
         filter.side === value ? ' active' : ''
@@ -99,7 +104,7 @@ export function createStatsPanel({ escapeHtml }) {
     filtersEl.innerHTML = `
       <div class="st-filter-group">
         <span class="st-filter-label">Map</span>
-        <div class="rp-chips">${mapChips || '<span class="st-none">—</span>'}</div>
+        ${mapSelectHtml()}
       </div>
       <div class="st-filter-group">
         <span class="st-filter-label">Side</span>
@@ -115,20 +120,11 @@ export function createStatsPanel({ escapeHtml }) {
         ${econSelect('oppEcon', filter.oppEcon)}
         ${hasAwpCheck('oppHasAwp', filter.oppHasAwp)}
       </div>
-      <button type="button" class="btn btn-sm" data-clear>Clear</button>`;
+      <button type="button" class="btn btn-sm st-filter-clear" data-clear>Clear</button>`;
   }
 
   filtersEl.addEventListener('click', (e) => {
-    const map = e.target.closest('[data-map]');
     const side = e.target.closest('[data-side]');
-    if (map) {
-      const code = map.dataset.map;
-      filter.maps = filter.maps.includes(code)
-        ? filter.maps.filter((m) => m !== code)
-        : [...filter.maps, code];
-      render();
-      return;
-    }
     if (side) {
       filter.side = filter.side === side.dataset.side ? '' : side.dataset.side;
       render();
@@ -149,11 +145,17 @@ export function createStatsPanel({ escapeHtml }) {
     const awp = e.target.closest('[data-awp]');
     if (awp) {
       filter[awp.dataset.awp] = Boolean(awp.checked);
+      awp.closest('.rp-awp-toggle')?.classList.toggle('active', awp.checked);
       render();
       return;
     }
     const sel = e.target.closest('[data-filter]');
     if (!sel) return;
+    if (sel.dataset.filter === 'maps') {
+      filter.maps = sel.value ? [sel.value] : [];
+      render();
+      return;
+    }
     const value = sel.value === '' ? null : Number(sel.value);
     filter[sel.dataset.filter] = value;
     render();

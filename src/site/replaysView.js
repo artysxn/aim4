@@ -52,16 +52,14 @@ export function initReplaysView({ escapeHtml }) {
   const headActions = document.getElementById('rp-head-actions');
   const uploadBtn = document.getElementById('rp-upload-btn');
   const playlistsBtn = document.getElementById('rp-playlists-btn');
+  const statsBtn = document.getElementById('rp-stats-btn');
+  const libraryBtn = document.getElementById('rp-library-btn');
   const libraryEl = document.getElementById('rp-library');
   const uploadPageEl = document.getElementById('rp-upload-page');
   const playlistsPageEl = document.getElementById('rp-playlists-page');
   const playlistsBody = document.getElementById('rp-pl-body');
-  const playlistsBack = document.getElementById('rp-playlists-back');
-  const statsBtn = document.getElementById('rp-stats-btn');
   const statsPageEl = document.getElementById('rp-stats-page');
   const statsBodyEl = document.getElementById('rp-stats-body');
-  const statsBack = document.getElementById('rp-stats-back');
-  const uploadBack = document.getElementById('rp-upload-back');
   const pageTitleEl = document.getElementById('page-title');
 
   let demos = [];
@@ -628,9 +626,9 @@ export function initReplaysView({ escapeHtml }) {
   }
 
   function hasAwpCheckHtml(id, checked) {
-    return `<label class="rp-awp-check">
-      <input type="checkbox" id="${id}" ${checked ? 'checked' : ''} />
-      <span>Has AWP</span>
+    return `<label class="rp-awp-toggle${checked ? ' active' : ''}" title="Has AWP">
+      <input type="checkbox" id="${id}" ${checked ? 'checked' : ''} aria-label="Has AWP" />
+      <span>AWP</span>
     </label>`;
   }
 
@@ -794,6 +792,7 @@ export function initReplaysView({ escapeHtml }) {
     const bindAwp = (id, key) => {
       filtersEl.querySelector(`#${id}`)?.addEventListener('change', (e) => {
         filters[key] = Boolean(e.target.checked);
+        e.target.closest('.rp-awp-toggle')?.classList.toggle('active', e.target.checked);
         runQuery();
       });
     };
@@ -1521,6 +1520,19 @@ export function initReplaysView({ escapeHtml }) {
     }
   }
 
+  function syncHeadNav(next) {
+    const active = next === 'library' ? 'library' : next;
+    const map = [
+      [uploadBtn, 'upload'],
+      [playlistsBtn, 'playlists'],
+      [statsBtn, 'stats'],
+      [libraryBtn, 'library']
+    ];
+    for (const [btn, key] of map) {
+      btn?.classList.toggle('active', key === active);
+    }
+  }
+
   function setSubpage(name, { push = false } = {}) {
     const next =
       name === 'upload' || name === 'playlists' || name === 'stats' ? name : 'library';
@@ -1532,6 +1544,7 @@ export function initReplaysView({ escapeHtml }) {
     if (headActions) headActions.hidden = !visible;
     if (pageTitleEl) pageTitleEl.textContent = 'Replays';
     document.title = 'AIM4.io - Replays';
+    syncHeadNav(next);
 
     const path =
       next === 'upload'
@@ -1557,11 +1570,9 @@ export function initReplaysView({ escapeHtml }) {
   }
 
   uploadBtn?.addEventListener('click', () => setSubpage('upload', { push: true }));
-  uploadBack?.addEventListener('click', () => setSubpage('library', { push: true }));
   playlistsBtn?.addEventListener('click', () => setSubpage('playlists', { push: true }));
-  playlistsBack?.addEventListener('click', () => setSubpage('library', { push: true }));
   statsBtn?.addEventListener('click', () => showStats({}));
-  statsBack?.addEventListener('click', () => setSubpage('library', { push: true }));
+  libraryBtn?.addEventListener('click', () => setSubpage('library', { push: true }));
 
   playlistsBody?.addEventListener('click', async (e) => {
     const play = e.target.closest('[data-play]');

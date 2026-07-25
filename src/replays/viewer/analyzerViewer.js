@@ -22,8 +22,8 @@ const DRAG_THRESHOLD = 5;
 const SELECTION_GHOST_ALPHA = 0.3;
 /** Heatmap accumulation resolution (radar space). */
 const HEAT_RES = 512;
-/** Sample player position about this often (seconds). */
-const HEAT_SAMPLE_SECONDS = 0.35;
+/** Soft kernel radius in radar pixels before the blur pass. */
+const HEAT_STAMP_R = 14;
 
 /** Most-played players on the focus team. */
 const PRIMARY_COLORS = ['#e8913c', '#5ad17a', '#5b9fd4', '#a855f7', '#e8b84a'];
@@ -155,7 +155,7 @@ export function createAnalyzerViewer({
   let afterplantOnly = false;
   /** @type {'regular'|'heatmap'} */
   let viewMode = 'regular';
-  /** Heatmap blur radius in radar pixels (tuned by slider). */
+  /** Heatmap blur strength (slider); mapped to canvas Gaussian blur. */
   let heatmapSmooth = 18;
   /** @type {Set<string>} */
   let enabledPlayers = new Set();
@@ -164,11 +164,15 @@ export function createAnalyzerViewer({
   /** @type {{smoke:boolean,molotov:boolean,flash:boolean,he:boolean}} */
   let utilityVisible = { smoke: true, molotov: true, flash: true, he: true };
 
-  /** Offscreen heat accumulation + colorized layer. */
+  /** Offscreen heat accumulation → blur → colorized layer. */
   const heatAcc = document.createElement('canvas');
   heatAcc.width = HEAT_RES;
   heatAcc.height = HEAT_RES;
-  const heatAccCtx = heatAcc.getContext('2d', { willReadFrequently: true });
+  const heatAccCtx = heatAcc.getContext('2d');
+  const heatBlur = document.createElement('canvas');
+  heatBlur.width = HEAT_RES;
+  heatBlur.height = HEAT_RES;
+  const heatBlurCtx = heatBlur.getContext('2d', { willReadFrequently: true });
   const heatColor = document.createElement('canvas');
   heatColor.width = HEAT_RES;
   heatColor.height = HEAT_RES;
@@ -678,9 +682,9 @@ export function createAnalyzerViewer({
               }>${escapeHtml(economyLabel(code))}</option>`
           ).join('')}
         </select>
-        <label class="rv-az-awp-check">
-          <input type="checkbox" id="rv-az-awp" ${hasAwpFilter ? 'checked' : ''} />
-          <span>Has AWP</span>
+        <label class="rp-awp-toggle${hasAwpFilter ? ' active' : ''}" title="Has AWP">
+          <input type="checkbox" id="rv-az-awp" ${hasAwpFilter ? 'checked' : ''} aria-label="Has AWP" />
+          <span>AWP</span>
         </label>
       </div>
       <div class="rv-az-group">
@@ -735,8 +739,8 @@ export function createAnalyzerViewer({
       ${
         viewMode === 'heatmap'
           ? `<div class="rv-az-group">
-        <h4>Smoothing <span class="rv-az-hint" id="rv-az-smooth-val">${heatmapSmooth}</span></h4>
-        <input type="range" class="rv-az-smooth" id="rv-az-smooth" min="6" max="48" step="1" value="${heatmapSmooth}" aria-label="Heatmap smoothing" />
+        <h4>Blur <span class="rv-az-hint" id="rv-az-smooth-val">${heatmapSmooth}</span></h4>
+        <input type="range" class="rv-az-smooth" id="rv-az-smooth" min="6" max="48" step="1" value="${heatmapSmooth}" aria-label="Heatmap blur" />
       </div>`
           : `<div class="rv-az-group">
         <h4>Utility</h4>
@@ -1097,27 +1101,28 @@ export function createAnalyzerViewer({
     return mask;
   }
 
+  /** Classic cool→hot ramp for density 0..1. */
   function heatColorAt(t) {
     const x = Math.max(0, Math.min(1, t));
-    if (x < 0.3) {
-      const u = x / 0.3;
-      return [40 + 80 * u, 0 + 20 * u, 90 + 120 * u];
+    if (x < 0.25) {
+      const u = x / 0.25;
+      return [20 + 40 * u, 40 + 120 * u, 160 + 70 * u];
     }
-    if (x < 0.55) {
-      const u = (x - 0.3) / 0.25;
-      return [120 + 100 * u, 20 + 40 * u, 210 - 40 * u];
+    if (x < 0.5) {
+      const u = (x - 0.25) / 0.25;
+      return [60 + 20 * u, 160 + 70 * u, 230 - 150 * u];
     }
-    if (x < 0.8) {
-      const u = (x - 0.55) / 0.25;
-      return [220 + 35 * u, 60 + 120 * u, 170 - 150 * u];
+    if (x < 0.75) {
+      const u = (x - 0.5) / 0.25;
+      return [80 + 175 * u, 230 - 40 * u, 80 - 60 * u];
     }
-    const u = (x - 0.8) / 0.2;
-    return [255, 180 + 75 * u, 20 * (1 - u)];
+    const u = (x - 0.75) / 0.25;
+    return [255, 190 - 120 * u, 20 * (1 - u)];
   }
 
   /**
-   * Radar-space samples for the heatmap player across visible rounds, up to
-   * the current scrub position in each round.
+   * One radar point per visible round: the chosen player's position at the
+   * current scrub tick (not a trail of earlier ticks).
    */
   function collectHeatRadarPoints(pos) {
     const playerId = heatmapPlayerId();
@@ -1132,83 +1137,96 @@ export function createAnalyzerViewer({
       if (!track || !L.meta) continue;
       const player = (L.meta.players || []).find((p) => p.id === playerId);
       if (!player) continue;
-      const endTick = tickForLayer(L, pos);
-      const startTick = L.timing.freezeEndTick;
-      if (endTick < startTick) continue;
-      const step = Math.max(
-        track.stride || 1,
-        Math.round((L.timing.tickRate || 64) * HEAT_SAMPLE_SECONDS)
-      );
+      const tick = tickForLayer(L, pos);
+      if (tick < L.timing.freezeEndTick) continue;
       const events = L.meta.events || {};
-      for (let tick = startTick; tick <= endTick; tick += step) {
-        if (playerDeadAt(events, playerId, tick)) break;
-        track.sample(player.slot, tick, state);
-        if (!state.alive || !Number.isFinite(state.x) || !Number.isFinite(state.y)) continue;
-        worldToRadar(mapCode, state.x, state.y, radar);
-        if (radar.x < -8 || radar.y < -8 || radar.x > RADAR_SIZE + 8 || radar.y > RADAR_SIZE + 8) {
-          continue;
-        }
-        pts.push(radar.x, radar.y);
+      if (playerDeadAt(events, playerId, tick)) continue;
+      track.sample(player.slot, tick, state);
+      if (!state.alive || !Number.isFinite(state.x) || !Number.isFinite(state.y)) continue;
+      worldToRadar(mapCode, state.x, state.y, radar);
+      if (radar.x < -8 || radar.y < -8 || radar.x > RADAR_SIZE + 8 || radar.y > RADAR_SIZE + 8) {
+        continue;
       }
+      pts.push(radar.x, radar.y);
     }
     return pts;
   }
 
-  /** Build (or reuse) a HEAT_RES colorized heat layer clipped to the radar mask. */
+  /**
+   * Density field of current-tick positions across rounds → blur (smoothing)
+   * → colorized heatmap, clipped to the radar mask.
+   */
   function buildHeatLayer(pos) {
     const playerId = heatmapPlayerId();
     const visible = visibleLayers();
     const files = visible.map((L) => L.round.file).join('\0');
+    // ~8 Hz cache while scrubbing; rebuild is cheap (one stamp per round).
     const posKey = Math.round(pos * 8);
-    const key = [
-      renderer.mapCode,
-      playerId,
-      files,
-      posKey,
-      heatmapSmooth,
-      visible.length
-    ].join('|');
+    const key = [renderer.mapCode, playerId, files, posKey, heatmapSmooth, visible.length].join(
+      '|'
+    );
     if (heatLayerCache?.key === key) return heatLayerCache.canvas;
 
     const pts = collectHeatRadarPoints(pos);
     heatAccCtx.clearRect(0, 0, HEAT_RES, HEAT_RES);
-    heatAccCtx.globalCompositeOperation = 'lighter';
-    const scale = HEAT_RES / RADAR_SIZE;
-    const radius = Math.max(4, heatmapSmooth * scale);
-    const alpha = pts.length > 8000 ? 0.035 : pts.length > 3000 ? 0.05 : 0.07;
+    heatColorCtx.clearRect(0, 0, HEAT_RES, HEAT_RES);
 
+    if (!pts.length) {
+      const empty = document.createElement('canvas');
+      empty.width = HEAT_RES;
+      empty.height = HEAT_RES;
+      heatLayerCache = { key, canvas: empty };
+      return empty;
+    }
+
+    const scale = HEAT_RES / RADAR_SIZE;
+    const stampR = HEAT_STAMP_R * scale;
+    // Blur slider → Gaussian radius in heat-canvas pixels (HEAT_RES is half radar).
+    const blurPx = Math.max(4, heatmapSmooth * scale * 1.4);
+    const alpha = Math.min(0.9, 0.4 + 0.5 / Math.sqrt(Math.max(1, pts.length / 2)));
+
+    heatAccCtx.globalCompositeOperation = 'lighter';
     for (let i = 0; i < pts.length; i += 2) {
       const x = pts[i] * scale;
       const y = pts[i + 1] * scale;
-      const g = heatAccCtx.createRadialGradient(x, y, 0, x, y, radius);
+      const g = heatAccCtx.createRadialGradient(x, y, 0, x, y, stampR);
       g.addColorStop(0, `rgba(255,255,255,${alpha})`);
-      g.addColorStop(0.55, `rgba(255,255,255,${alpha * 0.35})`);
+      g.addColorStop(0.45, `rgba(255,255,255,${alpha * 0.45})`);
       g.addColorStop(1, 'rgba(255,255,255,0)');
       heatAccCtx.fillStyle = g;
       heatAccCtx.beginPath();
-      heatAccCtx.arc(x, y, radius, 0, Math.PI * 2);
+      heatAccCtx.arc(x, y, stampR, 0, Math.PI * 2);
       heatAccCtx.fill();
     }
     heatAccCtx.globalCompositeOperation = 'source-over';
 
-    const src = heatAccCtx.getImageData(0, 0, HEAT_RES, HEAT_RES);
+    // Blur the intensity field so overlapping stamps fuse into a smooth gradient.
+    heatBlurCtx.clearRect(0, 0, HEAT_RES, HEAT_RES);
+    heatBlurCtx.filter = `blur(${blurPx}px)`;
+    heatBlurCtx.drawImage(heatAcc, 0, 0);
+    heatBlurCtx.filter = 'none';
+
+    const src = heatBlurCtx.getImageData(0, 0, HEAT_RES, HEAT_RES);
     const out = heatColorCtx.createImageData(HEAT_RES, HEAT_RES);
     const s = src.data;
     const d = out.data;
     let maxV = 1;
     for (let i = 0; i < s.length; i += 4) if (s[i] > maxV) maxV = s[i];
+    const floor = maxV * 0.04;
     for (let i = 0; i < s.length; i += 4) {
       const v = s[i];
-      if (v < 2) {
+      if (v < floor) {
         d[i + 3] = 0;
         continue;
       }
-      const t = Math.min(1, v / maxV);
-      const [r, g, b] = heatColorAt(t);
+      const t = Math.min(1, (v - floor) / (maxV - floor));
+      // Ease so mid densities stay readable after blur.
+      const e = t * t * (3 - 2 * t);
+      const [r, g, b] = heatColorAt(e);
       d[i] = Math.round(r);
       d[i + 1] = Math.round(g);
       d[i + 2] = Math.round(b);
-      d[i + 3] = Math.min(230, Math.round(40 + t * 200));
+      d[i + 3] = Math.min(220, Math.round(30 + e * 190));
     }
     heatColorCtx.putImageData(out, 0, 0);
 
@@ -1220,7 +1238,6 @@ export function createAnalyzerViewer({
       heatColorCtx.globalCompositeOperation = 'source-over';
     }
 
-    // Snapshot into a cache canvas (heatColor is reused next build).
     const snap = document.createElement('canvas');
     snap.width = HEAT_RES;
     snap.height = HEAT_RES;

@@ -342,6 +342,11 @@ a {
   color: var(--text);
 }
 
+.rp-text-btn.active {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
 .page-head {
   position: sticky;
   top: 0;
