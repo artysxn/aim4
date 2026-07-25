@@ -944,13 +944,6 @@ body.rv-open {
   color: var(--text);
 }
 
-.rv-mem {
-  min-width: 62px;
-  color: var(--muted);
-  font-size: 11px;
-  text-align: right;
-}
-
 .rv-body {
   flex: 1;
   min-height: 0;
@@ -1916,19 +1909,6 @@ body.rv-open {
   font-size: 14px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  pointer-events: none;
-}
-
-.rv-analyzer-hint {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  margin: 0;
-  max-width: 200px;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
-  text-align: right;
   pointer-events: none;
 }
 

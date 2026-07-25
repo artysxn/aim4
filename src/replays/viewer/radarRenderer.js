@@ -104,11 +104,15 @@ export class RadarRenderer {
     this.onIconLoad = null;
     /** Scratch canvas for tinting white equipment SVGs. */
     this._tintCanvas = null;
+    /** Cached opaque map (Analyzer: paint once, overlay rounds on top). */
+    this._mapLayer = null;
+    this._mapLayerKey = '';
   }
 
   async setMap(mapCode) {
     if (this.mapCode === mapCode && this.image) return;
     this.mapCode = mapCode;
+    this._mapLayerKey = '';
     try {
       this.image = await loadRadar(mapCode);
     } catch {
@@ -116,6 +120,67 @@ export class RadarRenderer {
     }
     this._prevHealth.fill(-1);
     this._damageTick.fill(-1);
+  }
+
+  /** Drop the cached map so the next paintMapBase rebuilds it. */
+  invalidateMapCache() {
+    this._mapLayerKey = '';
+  }
+
+  /**
+   * Build (or reuse) a full-size canvas with background + opaque radar only.
+   * Analyzer blits this once per frame instead of re-scaling the map image.
+   */
+  ensureMapLayer(w, h, mapAlpha = 1) {
+    const key = [
+      this.mapCode || '',
+      w,
+      h,
+      this.zoom,
+      this.panX,
+      this.panY,
+      this.viewInset.top,
+      this.viewInset.right,
+      this.viewInset.bottom,
+      this.viewInset.left,
+      mapAlpha
+    ].join('|');
+    if (this._mapLayer && this._mapLayerKey === key) return this._mapLayer;
+
+    if (!this._mapLayer) this._mapLayer = document.createElement('canvas');
+    const layer = this._mapLayer;
+    if (layer.width !== w || layer.height !== h) {
+      layer.width = w;
+      layer.height = h;
+    }
+    const lctx = layer.getContext('2d');
+    lctx.clearRect(0, 0, w, h);
+    lctx.fillStyle = '#0b0d10';
+    lctx.fillRect(0, 0, w, h);
+    if (this.image) {
+      const t = this.viewTransform(w, h);
+      lctx.save();
+      lctx.imageSmoothingEnabled = true;
+      lctx.globalAlpha = Number.isFinite(mapAlpha) ? mapAlpha : 1;
+      lctx.drawImage(this.image, t.ox, t.oy, RADAR_SIZE * t.scale, RADAR_SIZE * t.scale);
+      lctx.restore();
+    }
+    this._mapLayerKey = key;
+    return layer;
+  }
+
+  /**
+   * Clear the visible canvas and blit the cached map (no entities).
+   * @returns {{ w: number, h: number }}
+   */
+  paintMapBase({ mapAlpha = 1, pixelSize } = {}) {
+    const { w, h } = this.resize(pixelSize);
+    const layer = this.ensureMapLayer(w, h, mapAlpha);
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.globalAlpha = 1;
+    this.ctx.clearRect(0, 0, w, h);
+    this.ctx.drawImage(layer, 0, 0);
+    return { w, h };
   }
 
   /**
@@ -199,7 +264,8 @@ export class RadarRenderer {
    * @param {boolean} [frame.compact]
    * @param {boolean} [frame.clear=true]  when false, stack onto the current frame (Analyzer)
    * @param {boolean} [frame.drawMap=true]
-   * @param {number}  [frame.alpha]       multiply layer opacity
+   * @param {number}  [frame.mapAlpha=0.85]  radar image opacity (1 = fully opaque)
+   * @param {number}  [frame.alpha]       multiply drawable opacity
    * @param {Record<string,string>} [frame.playerColors] player id -> hex color
    * @param {Record<string,boolean>} [frame.utilityVisible] grenade type -> shown
    */
@@ -220,7 +286,7 @@ export class RadarRenderer {
     if (frame.drawMap !== false && this.image) {
       ctx.save();
       ctx.imageSmoothingEnabled = true;
-      ctx.globalAlpha = 0.85;
+      ctx.globalAlpha = Number.isFinite(frame.mapAlpha) ? frame.mapAlpha : 0.85;
       ctx.drawImage(this.image, t.ox, t.oy, RADAR_SIZE * t.scale, RADAR_SIZE * t.scale);
       ctx.restore();
     }
@@ -547,15 +613,15 @@ export class RadarRenderer {
 
   drawTracers(ctx, t, frame, compact) {
     const { events, tick, tickRate } = frame;
-    if (!events?.shots || compact) return;
+    if (!events?.shots) return;
     const window = TRACER_SECONDS * tickRate;
+    const len = (compact ? 36 : 60) * this.dpr;
     ctx.save();
-    ctx.lineWidth = Math.max(1, 1.2 * this.dpr);
+    ctx.lineWidth = Math.max(1, (compact ? 0.9 : 1.2) * this.dpr);
     for (const shot of events.shots) {
       if (shot.tick > tick || tick - shot.tick > window) continue;
       const from = this.project(t, shot.x, shot.y, { x: 0, y: 0 });
       const a = (-shot.yaw * Math.PI) / 180;
-      const len = 60 * this.dpr;
       ctx.globalAlpha = 0.5 * (1 - (tick - shot.tick) / window);
       ctx.strokeStyle = '#fff3c4';
       ctx.beginPath();

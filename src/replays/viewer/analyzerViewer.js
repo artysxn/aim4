@@ -53,7 +53,6 @@ export function createAnalyzerViewer({
       <div class="rv-analyzer-map">
         <canvas id="rv-az-canvas"></canvas>
         <div class="rv-analyzer-clock" id="rv-az-clock">1:55</div>
-        <p class="rv-analyzer-hint">Space play/pause · scrub the timeline · L upper/lower</p>
       </div>
     </div>
     <div class="rv-analyzer-bar">
@@ -84,13 +83,6 @@ export function createAnalyzerViewer({
   const renderer = new RadarRenderer(canvas);
   renderer.showNames = false;
   renderer.showWeapons = false;
-  // Offscreen layer so per-round alpha composites correctly (canvas globalAlpha
-  // is replaced, not multiplied, inside the renderer).
-  const layerCanvas = document.createElement('canvas');
-  const layerRenderer = new RadarRenderer(layerCanvas);
-  layerRenderer.showNames = false;
-  layerRenderer.showWeapons = false;
-  layerRenderer.onIconLoad = () => draw(playback.position);
   renderer.onIconLoad = () => draw(playback.position);
 
   /** @type {Array<{round: object, meta: object|null, timing: object, states: Array}>} */
@@ -361,64 +353,36 @@ export function createAnalyzerViewer({
       if (!isGrenade(g.type)) return false;
       return true;
     });
-    return { ...events, grenades, kills: [], shots: [] };
+    const kills = (events.kills || []).filter(
+      (k) => allow.has(k.victim) || allow.has(k.attacker)
+    );
+    const shots = (events.shots || []).filter((s) => allow.has(s.player));
+    return { ...events, grenades, kills, shots };
   }
 
   function draw(pos) {
     const visible = visibleLayers();
     countEl.textContent = `${visible.length} / ${layers.length} rounds`;
 
-    // Base map once.
     const mapMeta = layers.find((L) => L.meta)?.meta;
     if (!mapMeta) {
-      renderer.render({ tick: 0, tickRate: 64, states: [], players: [], events: {}, clear: true });
+      renderer.paintMapBase({ mapAlpha: 1 });
       return;
     }
+
+    // ONE cached map blit, then only per-round entities on top.
+    renderer.paintMapBase({ mapAlpha: 1 });
+
     if (!visible.length) {
-      renderer.render({
-        tick: 0,
-        tickRate: mapMeta.tickRate || 64,
-        states: [],
-        players: [],
-        events: {},
-        clear: true,
-        drawMap: true,
-        hideBomb: true,
-        hideTracers: true,
-        hideDeaths: true
-      });
       clockEl.textContent = '—';
       return;
     }
 
-    let loaded = 0;
     let refTiming = null;
     let refTick = 0;
 
-    renderer.render({
-      tick: 0,
-      tickRate: mapMeta.tickRate || 64,
-      states: [],
-      players: [],
-      events: {},
-      clear: true,
-      drawMap: true,
-      hideBomb: true,
-      hideTracers: true,
-      hideDeaths: true
-    });
-
-    const alpha = Math.max(0.35, Math.min(0.85, 1.1 / Math.sqrt(Math.max(1, visible.length))));
-    const { w, h } = renderer.resize();
-    if (layerCanvas.width !== w || layerCanvas.height !== h) {
-      layerCanvas.width = w;
-      layerCanvas.height = h;
-    }
-    const mainCtx = canvas.getContext('2d');
-
     for (const L of visible) {
       const track = store.track(L.round.file);
-      if (track) loaded++;
       const tick = Math.min(
         L.timing.freezeEndTick + pos * L.timing.tickRate,
         L.timing.officialEndTick
@@ -433,7 +397,7 @@ export function createAnalyzerViewer({
       const players = filterPlayers(L);
       if (!players.length) continue;
 
-      layerRenderer.render({
+      renderer.render({
         tick,
         tickRate: L.timing.tickRate,
         states: L.states,
@@ -444,17 +408,12 @@ export function createAnalyzerViewer({
         playerColors,
         utilityVisible,
         compact: true,
-        clear: true,
+        clear: false,
         drawMap: false,
         hideBomb: true,
-        hideTracers: true,
-        hideDeaths: true,
-        pixelSize: { w, h }
+        hideTracers: false,
+        hideDeaths: false
       });
-      mainCtx.save();
-      mainCtx.globalAlpha = alpha;
-      mainCtx.drawImage(layerCanvas, 0, 0);
-      mainCtx.restore();
     }
 
     if (refTiming) clockEl.textContent = clockAt(refTiming, refTick).label;
@@ -481,11 +440,7 @@ export function createAnalyzerViewer({
           meta.team1Id = meta.team1.id;
         }
         L.timing = timingFor(meta);
-        if (i === 0) {
-      const map = meta.map || rounds[i].map;
-      await renderer.setMap(map);
-      await layerRenderer.setMap(map);
-    }
+        if (i === 0) await renderer.setMap(meta.map || rounds[i].map);
       })
     );
     if (destroyed) return;

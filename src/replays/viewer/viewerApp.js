@@ -4,10 +4,9 @@
 // store's lifetime.
 // ---------------------------------------------------------------------------
 
-import { TickStore, formatBytes } from '../tickStore.js';
+import { TickStore } from '../tickStore.js';
 import { createTimelineViewer } from './timelineViewer.js';
 import { createAnalyzerViewer } from './analyzerViewer.js';
-import { MAPS } from '../shared/roundId.js';
 
 /**
  * Point the address bar at the round on screen so it can be copied and sent.
@@ -61,11 +60,10 @@ export function openViewer({
     <header class="rv-top">
       <button type="button" class="rv-back" id="rv-back">
         <svg viewBox="0 -960 960 960" width="18" height="18"><path d="M400-80 0-480l400-400 71 71-329 329 329 329-71 71Z"/></svg>
-        Library
+        Back
       </button>
       <div class="rv-title">
-        <strong id="rv-title-main"></strong>
-        <span id="rv-title-sub"></span>
+        <strong id="rv-title-main">Analyzer</strong>
       </div>
       <div class="rv-modes">
         <button type="button" class="rv-mode" data-mode="timeline">Timeline</button>
@@ -73,17 +71,11 @@ export function openViewer({
           canAnalyze ? '' : 'disabled title="Same map and one shared team required"'
         }>Analyzer</button>
       </div>
-      <span class="rv-mem" id="rv-mem"></span>
     </header>
     <div class="rv-body" id="rv-body"></div>`;
 
   const bodyEl = overlay.querySelector('#rv-body');
-  const memEl = overlay.querySelector('#rv-mem');
-  const mapCodes = [...new Set(rounds.map((r) => r.map))];
-  overlay.querySelector('#rv-title-main').textContent = title || 'Selection';
-  overlay.querySelector('#rv-title-sub').textContent = `${rounds.length} round${
-    rounds.length === 1 ? '' : 's'
-  } · ${mapCodes.map((c) => MAPS[c]?.name || c).join(', ')}`;
+  const titleEl = overlay.querySelector('#rv-title-main');
 
   let current = null;
   let activeMode = null;
@@ -107,6 +99,7 @@ export function openViewer({
     });
     if (next === 'analyzer') syncUrl(null);
     bodyEl.appendChild(current.el);
+    titleEl.textContent = next === 'analyzer' ? 'Analyzer' : 'Timeline';
     overlay.querySelectorAll('.rv-mode').forEach((b) => {
       b.classList.toggle('active', b.dataset.mode === next);
     });
@@ -117,12 +110,7 @@ export function openViewer({
     if (btn && !btn.disabled) setMode(btn.dataset.mode);
   });
 
-  const offStore = store.onChange(() => {
-    memEl.textContent = formatBytes(store.bytes);
-  });
-
   function close() {
-    offStore();
     current?.destroy();
     store.clear();
     document.removeEventListener('keydown', onKey);
