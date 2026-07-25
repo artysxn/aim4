@@ -223,3 +223,9 @@ export function radarImage(mapCode) {
   const m = MAPS[mapCode];
   return m ? `/maps/radar/${m.file}.png` : null;
 }
+
+/** Compact map glyph for library rows (from MurkyYT/cs2-map-icons). */
+export function mapIcon(mapCode) {
+  const m = MAPS[mapCode];
+  return m ? `/maps/icons/${m.file}.png` : null;
+}

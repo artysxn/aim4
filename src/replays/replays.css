@@ -133,7 +133,7 @@
 
 .rp-row {
   display: grid;
-  grid-template-columns: 132px minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px 20px;
   padding: 14px 12px;
@@ -149,7 +149,7 @@
     gap: 10px 12px;
   }
 
-  .rp-row-when {
+  .rp-row-meta {
     grid-column: 1 / -1;
   }
 
@@ -157,9 +157,9 @@
     grid-column: 1 / -1;
   }
 
-  .rp-maps {
+  .rp-row-actions {
     grid-column: 1 / -1;
-    justify-content: flex-start;
+    justify-content: flex-end;
   }
 }
 
@@ -171,11 +171,33 @@
   border-bottom-color: var(--accent-border);
 }
 
+.rp-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .rp-row-when {
   color: var(--muted);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.rp-map-icon {
+  display: block;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.rp-map-fallback {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .rp-row-match {
@@ -184,6 +206,8 @@
   align-items: center;
   gap: 14px;
   min-width: 0;
+  justify-self: center;
+  width: min(100%, 420px);
 }
 
 .rp-side {
@@ -244,6 +268,24 @@
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  justify-self: end;
+}
+
+.rp-btn-play {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: #c43c3c;
+  color: #fff;
+  cursor: pointer;
+}
+
+.rp-btn-play:hover {
+  filter: brightness(1.1);
 }
 
 .rp-btn-replay {
@@ -284,21 +326,6 @@
 .rp-btn-icon.danger:hover {
   background: var(--accent-dim);
   color: var(--accent-hover);
-}
-
-.rp-maps {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.rp-map-pill {
-  padding: 3px 8px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.06);
-  font-weight: 500;
 }
 
 .rp-row-state {
@@ -663,26 +690,7 @@
 
 .rp-demo-group.open > .rp-row.rp-demo-head {
   border-bottom-color: transparent;
-}
-
-.rp-demo-head .rp-row-when {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.rp-demo-chevron {
-  width: 0;
-  height: 0;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-top: 6px solid var(--muted);
-  transition: transform 0.15s var(--ease-smooth);
-  flex-shrink: 0;
-}
-
-.rp-demo-group.open .rp-demo-chevron {
-  transform: rotate(180deg);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .rp-demo-rounds {

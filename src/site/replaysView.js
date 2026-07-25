@@ -20,7 +20,15 @@ import {
   uploadDemo,
   uploadImport
 } from '../replays/api.js';
-import { ECONOMIES, MAPS, economyLabel, winningSide } from '../replays/shared/roundId.js';
+import {
+  ECONOMIES,
+  MAPS,
+  economyLabel,
+  mapIcon,
+  parseRoundId,
+  winningSide
+} from '../replays/shared/roundId.js';
+import { collectRounds, matchesQuery, splitStoredName } from '../replays/shared/roundFilter.js';
 import { PACKAGE_EXT } from '../replays/shared/replayPackage.js';
 import { formatBytes } from '../replays/tickStore.js';
 import commentsIcon from '../icons/demos_comments.svg?raw';
@@ -140,7 +148,8 @@ export function initReplaysView({ escapeHtml }) {
     const d = new Date(ts);
     if (Number.isNaN(d.getTime())) return '-';
     const pad = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const yy = String(d.getFullYear()).slice(-2);
+    return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${yy}`;
   }
 
   function matchBlockHtml(t1, t2, score) {
@@ -169,12 +178,36 @@ export function initReplaysView({ escapeHtml }) {
     return `<svg viewBox="0 -960 960 960" width="16" height="16" fill="currentColor"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>`;
   }
 
+  function playIconHtml() {
+    return `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7L8 5z"/></svg>`;
+  }
+
+  function mapIconHtml(mapCode, mapName) {
+    const src = mapIcon(mapCode);
+    if (!src) {
+      return mapName
+        ? `<span class="rp-map-fallback" title="${escapeHtml(mapName)}">${escapeHtml(mapName)}</span>`
+        : '';
+    }
+    const label = mapName || MAPS[mapCode]?.name || mapCode || 'Map';
+    return `<img class="rp-map-icon" src="${escapeHtml(src)}" alt="${escapeHtml(
+      label
+    )}" title="${escapeHtml(label)}" width="28" height="28" loading="lazy" />`;
+  }
+
+  function rowMetaHtml(when, mapCode, mapName) {
+    return `
+      <div class="rp-row-meta">
+        <span class="rp-row-when">${escapeHtml(when)}</span>
+        ${mapIconHtml(mapCode, mapName)}
+      </div>`;
+  }
+
   function demoActionsHtml(d) {
     const status = d.status || 'ready';
     const id = escapeHtml(d.id);
     return `
       <div class="rp-row-actions">
-        ${status === 'ready' ? `<button type="button" class="rp-btn-replay" data-open="${id}">▶ Replay</button>` : ''}
         ${status === 'error' ? `<button type="button" class="btn btn-sm" data-retry="${id}">Retry</button>` : ''}
         ${
           status === 'ready'
@@ -184,16 +217,11 @@ export function initReplaysView({ escapeHtml }) {
         <button type="button" class="rp-btn-icon danger" data-delete="${id}" title="Delete">
           ${deleteIconHtml()}
         </button>
-      </div>`;
-  }
-
-  function demoMapsHtml(d) {
-    const status = d.status || 'ready';
-    const mapName = d.mapName || (d.map ? MAPS[d.map]?.name : '') || '';
-    return `
-      <div class="rp-maps">
-        ${mapName ? `<span class="rp-map-pill">${escapeHtml(mapName)}</span>` : ''}
-        ${status === 'ready' && d.roundCount ? `<span class="rp-map-pill">${d.roundCount} rounds</span>` : ''}
+        ${
+          status === 'ready'
+            ? `<button type="button" class="rp-btn-play" data-open="${id}" title="Replay">${playIconHtml()}</button>`
+            : ''
+        }
       </div>`;
   }
 
@@ -201,6 +229,7 @@ export function initReplaysView({ escapeHtml }) {
     const status = d.status || 'ready';
     const t1 = d.team1?.name || 'Team 1';
     const t2 = d.team2?.name || 'Team 2';
+    const mapName = d.mapName || (d.map ? MAPS[d.map]?.name : '') || '';
 
     let state = '';
     if (status === 'parsing') {
@@ -222,10 +251,9 @@ export function initReplaysView({ escapeHtml }) {
 
     return `
       <div class="rp-row ${status}" data-id="${escapeHtml(d.id)}">
-        <div class="rp-row-when">${escapeHtml(formatWhen(d.uploadedAt || d.parsedAt))}</div>
+        ${rowMetaHtml(formatWhen(d.uploadedAt || d.parsedAt), d.map, mapName)}
         ${matchBlockHtml(t1, t2, demoScoreText(d))}
         ${demoActionsHtml(d)}
-        ${demoMapsHtml(d)}
         ${
           state
             ? `<div class="rp-row-state">${escapeHtml(state)}${
@@ -631,16 +659,11 @@ export function initReplaysView({ escapeHtml }) {
     const mode = filters.wonByMode;
     return `
       <select id="rp-won-by" class="site-input rp-econ-select" ${hasTeams ? '' : 'disabled'}
-        aria-label="Round won by">
+        aria-label="Round won by" title="${hasTeams ? '' : 'Select a team first'}">
         <option value=""${mode === '' ? ' selected' : ''}>Any</option>
         <option value="selected"${mode === 'selected' ? ' selected' : ''}>Selected team</option>
         <option value="opponent"${mode === 'opponent' ? ' selected' : ''}>Opponent</option>
-      </select>
-      ${
-        hasTeams
-          ? ''
-          : `<p class="rp-filter-hint">Select a team first</p>`
-      }`;
+      </select>`;
   }
 
   function renderFilters() {
@@ -856,19 +879,79 @@ export function initReplaysView({ escapeHtml }) {
       teams,
       players: [...filters.players],
       wonByMode: teams.length && filters.wonByMode ? filters.wonByMode : undefined,
-      econA: filters.econA,
-      econB: filters.econB
+      econA: Number.isFinite(filters.econA) ? filters.econA : undefined,
+      econB: Number.isFinite(filters.econB) ? filters.econB : undefined
     };
+  }
+
+  function hasActiveFilters() {
+    return Boolean(
+      filters.maps.size ||
+        filters.teams.size ||
+        filters.players.size ||
+        filters.wonByMode ||
+        Number.isFinite(filters.econA) ||
+        Number.isFinite(filters.econB)
+    );
+  }
+
+  /**
+   * Filter rounds from demo records. Empty query ⇒ every round. demoId is taken
+   * from the parent demo so rows never orphan when the "~id" suffix is missing.
+   */
+  function filterLibraryRounds(query) {
+    const out = [];
+    for (const d of demos) {
+      for (const r of d.rounds || []) {
+        const file = r.file || (r.id && d.id ? `${r.id}~${d.id}` : '');
+        if (!file && !r.id) continue;
+        const stem = file ? splitStoredName(file).stem : r.id;
+        const parsed = parseRoundId(stem) || parseRoundId(r.id);
+        const meta = parsed || {
+          id: r.id || stem,
+          team1: d.team1?.id,
+          team2: d.team2?.id,
+          winner: r.winner,
+          econ1: r.econ1,
+          econ2: r.econ2,
+          map: d.map,
+          round: r.round,
+          players: []
+        };
+        if (!matchesQuery(meta, query)) continue;
+        out.push({ ...meta, demoId: d.id, file: file || meta.id });
+      }
+    }
+    return out;
   }
 
   let queryToken = 0;
   async function runQuery() {
     const token = ++queryToken;
+    const query = currentQuery();
+    // Filter against the demo index immediately so an empty filter always
+    // shows every round, even if the rounds API is slow or empty.
+    rounds = filterLibraryRounds(query);
+    renderResults();
+
     try {
-      const [res, playlists] = await Promise.all([findRounds(currentQuery()), fetchPlaylists().catch(() => [])]);
+      const [res, playlists] = await Promise.all([
+        findRounds(query).catch(() => null),
+        fetchPlaylists().catch(() => [])
+      ]);
       if (token !== queryToken) return;
-      rounds = res.rounds || [];
-      notedFiles = new Set(res.noted || []);
+      const fromApi = res?.rounds || [];
+      // Prefer the larger set: directory listing can include rounds a stale
+      // demo record omitted; the demo index covers the common import path.
+      if (fromApi.length > rounds.length) {
+        rounds = fromApi;
+      } else if (!rounds.length && fromApi.length) {
+        rounds = fromApi;
+      } else if (!rounds.length) {
+        const names = demos.flatMap((d) => (d.rounds || []).map((r) => r.file).filter(Boolean));
+        rounds = collectRounds(names, query);
+      }
+      notedFiles = new Set(res?.noted || []);
       bookmarkedFiles = new Set();
       for (const pl of playlists || []) {
         for (const f of pl.rounds || []) bookmarkedFiles.add(f);
@@ -955,30 +1038,18 @@ export function initReplaysView({ escapeHtml }) {
     const t1 = teamName(d, 1, sample?.team1);
     const t2 = teamName(d, 2, sample?.team2);
     const when = formatWhen(d?.uploadedAt || d?.parsedAt);
+    const mapCode = d?.map || sample?.map || '';
     const mapName =
-      d?.mapName || (d?.map ? MAPS[d.map]?.name : '') || MAPS[sample?.map]?.name || sample?.map || '';
+      d?.mapName || (mapCode ? MAPS[mapCode]?.name : '') || mapCode || '';
     const score = d ? demoScoreText(d) : '…';
     const id = escapeHtml(g.demoId);
-    const selectedInGroup = g.rounds.filter((r) => selectedFiles.has(r.file)).length;
-    const totalRounds = d?.roundCount || g.rounds.length;
-    const roundPill = g.rounds.length
-      ? `${g.rounds.length} round${g.rounds.length === 1 ? '' : 's'}${
-          selectedInGroup ? ` · ${selectedInGroup} selected` : ''
-        }`
-      : totalRounds
-        ? `${totalRounds} rounds`
-        : '0 rounds';
 
     return `
       <div class="rp-row rp-demo-head" data-toggle-demo="${id}" role="button" tabindex="0"
         aria-expanded="${open ? 'true' : 'false'}">
-        <div class="rp-row-when">
-          <span class="rp-demo-chevron" aria-hidden="true"></span>
-          <span>${escapeHtml(when)}</span>
-        </div>
+        ${rowMetaHtml(when, mapCode, mapName)}
         ${matchBlockHtml(t1, t2, score)}
         <div class="rp-row-actions">
-          <button type="button" class="rp-btn-replay" data-open="${id}">▶ Replay</button>
           ${
             d
               ? `<button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>`
@@ -987,10 +1058,7 @@ export function initReplaysView({ escapeHtml }) {
           <button type="button" class="rp-btn-icon danger" data-delete="${id}" title="Delete">
             ${deleteIconHtml()}
           </button>
-        </div>
-        <div class="rp-maps">
-          ${mapName ? `<span class="rp-map-pill">${escapeHtml(mapName)}</span>` : ''}
-          <span class="rp-map-pill">${escapeHtml(roundPill)}</span>
+          <button type="button" class="rp-btn-play" data-open="${id}" title="Replay">${playIconHtml()}</button>
         </div>
       </div>`;
   }
@@ -1002,13 +1070,21 @@ export function initReplaysView({ escapeHtml }) {
       return;
     }
 
-    const matched = groupRoundsByDemo(rounds);
-    const roundsByDemo = new Map(matched.map((g) => [g.demoId, g.rounds]));
+    const roundsByFile = new Map(rounds.map((r) => [r.file, r]));
     const sortedDemos = [...demos].sort((a, b) => {
       const ta = a.uploadedAt || a.parsedAt || 0;
       const tb = b.uploadedAt || b.parsedAt || 0;
       return tb - ta;
     });
+
+    /** Prefer the demo record's own file list so rounds never orphan by demoId. */
+    function roundsForDemo(d) {
+      const files = (d.rounds || []).map((r) => r.file).filter(Boolean);
+      if (files.length) {
+        return files.map((f) => roundsByFile.get(f)).filter(Boolean);
+      }
+      return rounds.filter((r) => r.demoId === d.id || r.file?.endsWith(`~${d.id}`));
+    }
 
     const byMap = {};
     for (const r of rounds) byMap[r.map] = (byMap[r.map] || 0) + 1;
@@ -1037,7 +1113,7 @@ export function initReplaysView({ escapeHtml }) {
           .map((d) => {
             const status = d.status || 'ready';
             if (status !== 'ready') return demoRow(d);
-            const demoRounds = roundsByDemo.get(d.id) || [];
+            const demoRounds = roundsForDemo(d);
             const g = { demoId: d.id, demo: d, rounds: demoRounds };
             const open = !collapsedDemos.has(d.id);
             return `
@@ -1047,7 +1123,11 @@ export function initReplaysView({ escapeHtml }) {
               ${
                 demoRounds.length
                   ? demoRounds.map((r) => roundRowHtml(r, d)).join('')
-                  : `<p class="rp-demo-empty">No rounds match these filters.</p>`
+                  : `<p class="rp-demo-empty">${
+                      hasActiveFilters()
+                        ? 'No rounds match these filters.'
+                        : 'No rounds in this replay.'
+                    }</p>`
               }
             </div>
           </section>`;

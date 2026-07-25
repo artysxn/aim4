@@ -1,0 +1,2 @@
+Map icons from https://github.com/MurkyYT/cs2-map-icons (images/)
+Resized for the AIM4 replays library UI.
