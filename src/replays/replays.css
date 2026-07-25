@@ -1091,12 +1091,16 @@ body.rv-open {
 
 .rv-rounds {
   display: flex;
-  justify-content: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  justify-content: safe center;
+  align-items: center;
   gap: 0;
-  row-gap: 6px;
+  min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
-  padding: 0 8px;
+  overflow-y: hidden;
+  padding: 0 8px 4px;
+  scrollbar-gutter: stable;
 }
 
 /* ---- Viewer tool menus --------------------------------------------------- */

@@ -244,12 +244,16 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   }
 
   function markActiveRound() {
+    let activeBtn = null;
     roundsEl.querySelectorAll('.rv-round').forEach((b) => {
-      b.classList.toggle('active', Number(b.dataset.index) === activeIndex);
+      const on = Number(b.dataset.index) === activeIndex;
+      b.classList.toggle('active', on);
+      if (on) activeBtn = b;
     });
     const side = activeIndex >= 0 ? winningSide(rounds[activeIndex]) : null;
     chromeEl.classList.toggle('wt', side === 'T');
     chromeEl.classList.toggle('wct', side === 'CT');
+    activeBtn?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
   }
 
   roundsEl.addEventListener('click', (e) => {
