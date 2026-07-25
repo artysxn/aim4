@@ -73,9 +73,15 @@ export function version() {
   }
 }
 
-// Everything worth having per tick. Older parser builds reject unknown props,
-// so a failed sweep retries with CORE_PROPS only (see readTicks).
-const FULL_PROPS = [
+// Per-tick props.
+//
+// `inventory` is deliberately NOT here. It returns an array per player per
+// tick, so a full match asks for over a million small arrays and that single
+// prop dominates everything else a parse allocates. The loadout only matters
+// once per round, so it is fetched separately at the freezetime ticks below.
+// Same reasoning for `balance` and `current_equip_value`: both are buy-time
+// facts, not per-tick ones.
+const TICK_PROPS = [
   'X',
   'Y',
   'Z',
@@ -86,17 +92,16 @@ const FULL_PROPS = [
   'active_weapon_name',
   'is_alive',
   'team_num',
-  'balance',
-  'current_equip_value',
   'flash_duration',
   'is_scoped',
   'is_ducking',
   'has_helmet',
   'is_defusing',
-  'in_air',
-  'inventory'
+  'in_air'
 ];
 
+// Older parser builds reject unknown props, so a rejected sweep retries with
+// just these, which have existed for as long as the binding has.
 const CORE_PROPS = [
   'X',
   'Y',
@@ -110,21 +115,63 @@ const CORE_PROPS = [
   'team_num'
 ];
 
+/** Read once per round, at freezetime end: what each player bought. */
+const BUY_PROPS = ['inventory', 'balance', 'current_equip_value', 'team_num'];
+
 let propMode = null; // 'full' | 'core', decided on the first sweep of a demo
 
-function readTicks(file, ticks) {
+/**
+ * Uniform reader over whichever shape parseTicks returns.
+ *
+ * structOfArrays gives back one array per prop instead of one object per row,
+ * which drops the per-object overhead across a million-plus rows. Not every
+ * build honors the flag, so this normalizes both shapes to an indexed reader
+ * and the callers never learn which one they got.
+ */
+function readTicks(file, props, ticks, { structOfArrays = true } = {}) {
   const p = parser();
+  let raw;
   if (propMode !== 'core') {
     try {
-      const rows = p.parseTicks(file, FULL_PROPS, ticks);
+      raw = p.parseTicks(file, props, ticks, null, structOfArrays);
       propMode = 'full';
-      return rows;
     } catch (err) {
       if (propMode === 'full') throw err;
       propMode = 'core';
     }
   }
-  return p.parseTicks(file, CORE_PROPS, ticks);
+  if (raw === undefined) {
+    raw = p.parseTicks(file, CORE_PROPS, ticks, null, structOfArrays);
+  }
+  return tickReader(raw);
+}
+
+export function tickReader(raw) {
+  // Array of row objects: the classic shape.
+  if (Array.isArray(raw)) {
+    return { length: raw.length, at: (i) => raw[i] };
+  }
+  // Struct of arrays: { X: [...], Y: [...], tick: [...], ... }
+  const cols = {};
+  let length = 0;
+  for (const [key, value] of Object.entries(raw || {})) {
+    if (Array.isArray(value)) {
+      cols[key] = value;
+      if (value.length > length) length = value.length;
+    }
+  }
+  const keys = Object.keys(cols);
+  // One reused view object rather than a fresh one per row: callers consume
+  // each row immediately, and allocating a million short-lived objects here
+  // would undo the point of asking for columns.
+  const view = {};
+  return {
+    length,
+    at(i) {
+      for (const k of keys) view[k] = cols[k][i];
+      return view;
+    }
+  };
 }
 
 function readEvents(file, names) {
@@ -163,9 +210,10 @@ function eventsByName(all) {
  * every parseTicks call re-reads the whole demo, so a "cheap" one-tick lookup
  * would cost a full extra pass over hundreds of megabytes.
  */
-function rosterFromRows(rows) {
+function rosterFromRows(reader) {
   const seen = new Map();
-  for (const r of rows) {
+  for (let i = 0; i < reader.length; i++) {
+    const r = reader.at(i);
     const steam = sid(r.steamid);
     if (!steam || steam === '0') continue;
     if (!seen.has(steam)) {
@@ -218,10 +266,14 @@ function inventoryOf(row) {
 // Rounds are parsed in GROUPS, not one at a time. Every parseTicks call reads
 // and decodes the whole demo file, so asking for one round at a time costs
 // O(rounds x file size): on a 24 round, 300 MB demo that is over 7 GB of
-// redundant work, which is what made a parse crawl and then exhaust the heap.
-// Bigger batches mean fewer passes but more rows resident at once. This is the
-// knob to turn when a host is tight on either time or memory.
-const BATCH_TICKS = Number(process.env.AIM4_PARSE_BATCH_TICKS || 24000);
+// redundant decoding.
+//
+// The default is high enough that a normal match is a single pass. Now that
+// `inventory` is out of the per-tick props, the rows themselves are cheap and
+// the dominant cost is re-decoding the file, so FEWER passes is both faster
+// and lighter. Lower this only if a very long match runs out of memory; it
+// trades memory for repeated decoding, not the other way around.
+const BATCH_TICKS = Number(process.env.AIM4_PARSE_BATCH_TICKS || 200000);
 
 /**
  * Group consecutive rounds so each group spans at most `maxTicks`.
@@ -256,7 +308,34 @@ function readBatchRows(file, batch) {
   const to = batch[batch.length - 1].officialEndTick;
   const wanted = [];
   for (let t = from; t <= to; t++) wanted.push(t);
-  return readTicks(file, wanted);
+  return readTicks(file, TICK_PROPS, wanted);
+}
+
+/**
+ * What each side bought, read at one tick per round rather than every tick.
+ * This is the only call that asks for `inventory`, and it asks for roughly
+ * twenty ticks instead of a hundred thousand.
+ */
+function readBuys(file, spans) {
+  const ticks = spans.map((s) => s.freezeEndTick || s.startTick);
+  const buys = new Map(); // `${tick}:${steamid}` -> snapshot
+  let reader;
+  try {
+    reader = readTicks(file, BUY_PROPS, ticks, { structOfArrays: false });
+  } catch {
+    return buys; // economy falls back to its defaults rather than failing the parse
+  }
+  for (let i = 0; i < reader.length; i++) {
+    const r = reader.at(i);
+    const steam = sid(r.steamid);
+    if (!steam) continue;
+    buys.set(`${num(r.tick)}:${steam}`, {
+      money: num(r.balance),
+      equipValue: num(r.current_equip_value),
+      loadout: inventoryOf(r)
+    });
+  }
+  return buys;
 }
 
 /**
@@ -264,7 +343,7 @@ function readBatchRows(file, batch) {
  * pass. Each pack carries the freezetime money/equipment the economy
  * classifier needs alongside its tick buffer.
  */
-function packBatch(rows, batch, roster, tickRate) {
+function packBatch(reader, batch, roster, tickRate) {
   const slotOf = new Map(roster.map((p) => [p.steamId, p.slot]));
 
   const packs = batch.map((span) => {
@@ -284,8 +363,7 @@ function packBatch(rows, batch, roster, tickRate) {
       view,
       tickCount,
       weapons: ['none'],
-      weaponIndex: new Map([['none', 0]]),
-      freezeSnapshot: new Map()
+      weaponIndex: new Map([['none', 0]])
     };
   });
 
@@ -305,7 +383,8 @@ function packBatch(rows, batch, roster, tickRate) {
 
   const state = {};
 
-  for (const r of rows) {
+  for (let i = 0; i < reader.length; i++) {
+    const r = reader.at(i);
     const steam = sid(r.steamid);
     const slot = slotOf.get(steam);
     if (slot === undefined) continue;
@@ -325,7 +404,7 @@ function packBatch(rows, batch, roster, tickRate) {
     const row = tick - pack.span.startTick;
     if (row < 0 || row >= pack.tickCount) continue;
 
-    const inv = inventoryOf(r);
+    const weaponName = r.active_weapon_name;
     state.x = num(r.X);
     state.y = num(r.Y);
     state.z = num(r.Z);
@@ -333,21 +412,12 @@ function packBatch(rows, batch, roster, tickRate) {
     state.pitch = num(r.pitch);
     state.health = num(r.health);
     state.armor = num(r.armor_value);
-    state.weapon = weaponId(pack, r.active_weapon_name);
-    state.flags = flagsFor(r, inv.some((w) => String(w).includes('c4')));
+    state.weapon = weaponId(pack, weaponName);
+    // Without per-tick inventory, the bomb carrier is inferred from what the
+    // player is holding. It only affects the droplet marker.
+    state.flags = flagsFor(r, String(weaponName || '').includes('c4'));
     state.flash = num(r.flash_duration);
     writeRecord(pack.view, row, slot, state);
-
-    if (
-      tick === pack.span.freezeEndTick ||
-      (!pack.freezeSnapshot.has(steam) && tick >= pack.span.freezeEndTick)
-    ) {
-      pack.freezeSnapshot.set(steam, {
-        money: num(r.balance),
-        equipValue: num(r.current_equip_value),
-        loadout: inv
-      });
-    }
   }
 
   return packs;
@@ -467,7 +537,9 @@ export async function parseDemo(file, opts = {}) {
   if (!spans.length) throw new Error('No completed rounds found in this demo.');
 
   const roster = rosterFromRows(
-    readTicks(file, [spans[0].freezeEndTick || spans[0].startTick || 1])
+    readTicks(file, CORE_PROPS, [spans[0].freezeEndTick || spans[0].startTick || 1], {
+      structOfArrays: false
+    })
   );
   if (roster.length < 10) {
     throw new Error(`Expected 10 players, found ${roster.length}. Is this a competitive demo?`);
@@ -496,6 +568,10 @@ export async function parseDemo(file, opts = {}) {
   // be mapped back to a team through the halftime swap.
   const roundsPerHalf = 12;
 
+  // Buys first: one cheap call covering every round's freezetime tick.
+  progress({ stage: 'buys' });
+  const buys = readBuys(file, spans);
+
   const batches = batchSpans(spans, BATCH_TICKS);
   const rounds = [];
   let packedCount = 0;
@@ -503,15 +579,16 @@ export async function parseDemo(file, opts = {}) {
   for (const batch of batches) {
     progress({ stage: 'round', round: packedCount + 1, total: spans.length });
 
-    let rows = readBatchRows(file, batch);
-    const packs = packBatch(rows, batch, roster, tickRate);
+    let reader = readBatchRows(file, batch);
+    const packs = packBatch(reader, batch, roster, tickRate);
     // Drop the batch's rows before building records: they are by far the
     // largest thing alive, and the records below allocate again.
-    rows = null;
+    reader = null;
 
     for (const pack of packs) {
     const span = pack.span;
-    const { buffer, weapons, freezeSnapshot } = pack;
+    const { buffer, weapons } = pack;
+    const buyTick = span.freezeEndTick || span.startTick;
 
     // team 1 starts on T (team_num 2) and swaps at the half.
     const swapped = span.round > roundsPerHalf;
@@ -570,7 +647,7 @@ export async function parseDemo(file, opts = {}) {
     // Per-player round stats.
     const stats = {};
     for (const pl of roster) {
-      const snap = freezeSnapshot.get(pl.steamId) || {};
+      const snap = buys.get(`${buyTick}:${pl.steamId}`) || {};
       stats[pl.id] = {
         kills: kills.filter((k) => k.attacker === pl.id).length,
         deaths: kills.filter((k) => k.victim === pl.id).length,

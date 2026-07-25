@@ -206,6 +206,26 @@ auth.onChange(syncAccountRow);
 syncAccountRow();
 auth.init();
 
+// ---- Clear auth tokens out of the address bar --------------------------------
+// The OAuth redirect returns with #access_token=...&refresh_token=... in the
+// URL. Supabase reads it, but it then sits in the address bar, in the tab
+// title's history entry, and in the text of any browser console error that
+// echoes location.href — which is a live credential in plain sight. Remove it
+// once the session has been picked up.
+function stripAuthFragment() {
+  const hash = window.location.hash || '';
+  if (!/(access_token|refresh_token|provider_token)=/.test(hash)) return;
+  window.history.replaceState(null, '', window.location.pathname + window.location.search);
+}
+
+// Only after sign-in lands, so clearing the fragment can never cost the login.
+auth.onChange(() => {
+  if (auth.isLoggedIn) stripAuthFragment();
+});
+// And unconditionally a moment later, in case the sign-in failed: a token that
+// did not work is still a token worth not leaving on screen.
+setTimeout(stripAuthFragment, 4000);
+
 // ---- View router ------------------------------------------------------------
 const VIEWS = {
   home: { title: 'Home', path: '/' },
