@@ -711,7 +711,7 @@ export function initReplaysView({ auth, escapeHtml }) {
     }
   }
 
-  /** A signed-out visitor has no library, so uploading is not offered. */
+  /** Hide the upload dropzone when the API refuses the session (auth required). */
   function setLocked(locked) {
     dropEl.hidden = locked;
     if (locked) setStatus('');

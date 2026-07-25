@@ -3,10 +3,9 @@
 // Client for /api/replays/*. Talks to the same backend as the trainer
 // (VITE_API_URL in production, same origin in dev through the Vite proxy).
 //
-// A library is private, so requests carry the Supabase access token and the
-// backend takes the account id from the verified token. The id header is only
-// a local-dev convenience for a backend with no Supabase configured; a real
-// backend ignores it.
+// When signed in, requests carry the Supabase access token and the backend
+// keys the library by the verified account id. Signed-out visitors still work:
+// the backend falls back to X-Aim4-User / "local".
 // ---------------------------------------------------------------------------
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');

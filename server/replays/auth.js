@@ -2,18 +2,16 @@
 // replays/auth.js
 // Who owns the library on the other end of a request.
 //
-// A replay library is private, so unlike the rest of this backend (share codes
-// and leaderboards, which are public by design) the caller has to prove who
-// they are. The client sends its Supabase access token; this verifies the
-// signature locally and takes the account id from the verified `sub` claim.
-// A user id sent in a plain header is never trusted when auth is configured.
+// Replays are open to anyone: signed-out visitors share the "local" library
+// (or whatever X-Aim4-User names). When a Supabase access token is present it
+// is verified and the account id comes from the `sub` claim, so each signed-in
+// user gets their own library. Set AIM4_REPLAY_REQUIRE_AUTH=1 to restore the
+// old sign-in gate.
 //
 // Configuration, in precedence order:
 //   SUPABASE_JWT_SECRET   legacy projects: shared HS256 secret
 //   SUPABASE_URL          modern projects: asymmetric keys via the JWKS endpoint
-//   neither               local dev; falls back to the X-Aim4-User header and
-//                         logs a warning once, so this can never be the quiet
-//                         default in production
+//   neither               header / "local" only (no JWT verification)
 // ---------------------------------------------------------------------------
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
@@ -25,8 +23,8 @@ const JWKS_URL =
   process.env.SUPABASE_JWKS_URL ||
   (SUPABASE_URL ? `${SUPABASE_URL}/auth/v1/.well-known/jwks.json` : '');
 
-/** Set to '0' to allow the header fallback even with Supabase configured. */
-const REQUIRE_AUTH = process.env.AIM4_REPLAY_REQUIRE_AUTH !== '0';
+/** Opt in to require a valid session; default is open (anyone can use replays). */
+const REQUIRE_AUTH = process.env.AIM4_REPLAY_REQUIRE_AUTH === '1';
 
 export const authConfigured = Boolean(JWT_SECRET || JWKS_URL);
 
@@ -43,6 +41,10 @@ function bearer(req) {
   const raw = req.headers.authorization || '';
   const m = /^Bearer\s+(.+)$/i.exec(raw.trim());
   return m ? m[1] : '';
+}
+
+function guestUser(req) {
+  return userKey(req.headers['x-aim4-user']);
 }
 
 /**
@@ -62,12 +64,14 @@ export async function identify(req) {
           'Set one before exposing this backend.'
       );
     }
-    return { ok: true, user: userKey(req.headers['x-aim4-user']) };
+    return { ok: true, user: guestUser(req) };
   }
 
   if (!token) {
-    if (!REQUIRE_AUTH) return { ok: true, user: userKey(req.headers['x-aim4-user']) };
-    return { ok: false, user: null, status: 401, error: 'Sign in to use replays.' };
+    if (REQUIRE_AUTH) {
+      return { ok: false, user: null, status: 401, error: 'Sign in to use replays.' };
+    }
+    return { ok: true, user: guestUser(req) };
   }
 
   try {
@@ -85,6 +89,11 @@ export async function identify(req) {
     // Expired is by far the most common case and is worth saying plainly, so
     // the client knows to refresh rather than to re-authenticate.
     const expired = /exp/i.test(err?.code || '') || /expired/i.test(err?.message || '');
+    if (!REQUIRE_AUTH) {
+      // Bad/expired token: still let them use the guest library rather than
+      // locking the whole page behind a reload.
+      return { ok: true, user: guestUser(req) };
+    }
     return {
       ok: false,
       user: null,
