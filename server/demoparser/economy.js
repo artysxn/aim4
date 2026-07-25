@@ -75,14 +75,15 @@ function isUtility(b) {
  * @param {number} side.equipValue    team equipment value at freezetime end
  * @param {number} side.money         team cash still banked at freezetime end
  * @param {string[][]} side.loadouts  each player's inventory
- * @param {boolean} side.isPistolRound  first round of either half
+ * @param {boolean} side.isPistolRound  regulation pistol (r1 / post-halftime only)
  * @returns {number} 0-5
  */
 export function classifyEconomy(side) {
   const { equipValue = 0, money = 0, loadouts = [], isPistolRound = false } = side;
 
-  // A pistol round is a fact about the round, not about the buy: it outranks
+  // Regulation pistols are a fact about the round, not the buy: they outrank
   // every value-based bucket even when a side saved into an armor-heavy buy.
+  // Overtime openers are not forced here — see isPistolRoundNumber.
   if (isPistolRound) return 0;
 
   if (hasAwp(loadouts) && equipValue >= THRESHOLDS.force) return 5;
@@ -96,17 +97,14 @@ export function classifyEconomy(side) {
 }
 
 /**
- * Which rounds start a half. CS2 competitive is MR12 (halftime after 12), but
- * older demos are MR15, and overtime restarts the cycle every 6 rounds.
+ * Regulation pistol rounds only: round 1 and the first round after halftime.
+ *
+ * Overtime half-openers (25, 28, … in MR12) are not pistols for buy tagging —
+ * CS2 OT starts each half with $10k, so those rounds are classified from
+ * equipment value like any other buy round.
  */
 export function isPistolRoundNumber(round, roundsPerHalf = 12) {
   if (round === 1) return true;
   if (round === roundsPerHalf + 1) return true;
-  const regulation = roundsPerHalf * 2;
-  if (round > regulation) {
-    // Overtime: 3 rounds per half, so a pistol every 3rd round of each OT.
-    const ot = round - regulation - 1;
-    return ot % 3 === 0;
-  }
   return false;
 }

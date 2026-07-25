@@ -1042,6 +1042,7 @@ body.rv-open {
      back into the row height every frame and the map grew off the bottom of
      the screen. Pinning the row to the container breaks the loop. */
   grid-template-rows: minmax(0, 1fr);
+  align-items: center;
   gap: 12px;
   /* Chrome overlays the bottom; keep only a small inset so the map can fill. */
   padding: 12px;
@@ -1346,10 +1347,71 @@ body.rv-open {
 
 .rv-map {
   position: relative;
+  align-self: stretch;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   touch-action: none;
+}
+
+/* Top-right kill feed — newest kills on top. */
+.rv-killfeed {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  max-width: min(340px, 48%);
+  pointer-events: none;
+}
+
+.rv-killfeed-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-xs);
+  background: rgba(10, 12, 15, 0.88);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.rv-killfeed-name.team1 {
+  color: var(--rv-team1);
+}
+
+.rv-killfeed-name.team2 {
+  color: var(--rv-team2);
+}
+
+.rv-killfeed-weapon {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rv-killfeed-gun {
+  display: block;
+  height: 16px;
+  width: auto;
+  max-width: 72px;
+  object-fit: contain;
+  filter: brightness(0) invert(1);
+  opacity: 0.92;
+}
+
+.rv-killfeed-hs {
+  color: #f0c040;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
 }
 
 .rv-map.can-pan {
@@ -1415,13 +1477,15 @@ body.rv-open {
   font-size: 11px;
 }
 
-/* ---- Scoreboards -------------------------------------------------------- */
+/* ---- Scoreboards (middle-left / middle-right) --------------------------- */
 
 .rv-team {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 8px;
   min-width: 0;
+  max-height: 100%;
   overflow-y: auto;
 }
 

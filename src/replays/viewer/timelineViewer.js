@@ -50,6 +50,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       <aside class="rv-team rv-team-1" data-team="1"></aside>
       <div class="rv-map">
         <div class="rv-clock" id="rv-clock">00:00</div>
+        <div class="rv-killfeed" id="rv-killfeed" aria-live="polite"></div>
         <canvas class="rv-canvas" id="rv-canvas"></canvas>
         <div class="rv-loading" id="rv-loading"></div>
       </div>
@@ -119,6 +120,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const canvas = el.querySelector('#rv-canvas');
   const mapEl = el.querySelector('.rv-map');
   const clockEl = el.querySelector('#rv-clock');
+  const killfeedEl = el.querySelector('#rv-killfeed');
   const loadingEl = el.querySelector('#rv-loading');
   const roundsEl = el.querySelector('#rv-rounds');
   const scrubEl = el.querySelector('#rv-scrub');
@@ -165,6 +167,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   let activeMeta = null;
   let speedIndex = 2;
   let destroyed = false;
+  /** Last rendered kill-feed signature (skip DOM work when unchanged). */
+  let killFeedKey = '';
   const states = [];
 
   const playback = new Playback((pos) => onPosition(pos));
@@ -367,6 +371,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     syncBookmark();
     renderer._prevHealth?.fill?.(-1);
     renderer._damageTick?.fill?.(-1);
+    killFeedKey = '';
+    if (killfeedEl) killfeedEl.innerHTML = '';
 
     // Instant chrome from the summary; ticks + meta load for this round only.
     activeMeta = fallbackMeta(rounds[index]);
@@ -509,6 +515,55 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const util = (inv.util || []).map((u) => iconImgHtml(u, 'rv-inv-icon rv-inv-nade')).join('');
     parts.push(`<span class="rv-inv-util">${util}</span>`);
     return parts.join('');
+  }
+
+  // ---- kill feed ----------------------------------------------------------
+
+  const KILLFEED_MAX = 6;
+
+  function playerRecord(id) {
+    if (!id || !activeMeta?.players) return null;
+    return activeMeta.players.find((p) => p.id === id) || null;
+  }
+
+  function killfeedNameClass(player) {
+    if (!player) return '';
+    return player.team === 2 ? 'team2' : 'team1';
+  }
+
+  function killRowHtml(k) {
+    const attacker = playerRecord(k.attacker);
+    const victim = playerRecord(k.victim);
+    const attackerName = attacker?.name || k.attacker || '';
+    const victimName = victim?.name || k.victim || '?';
+    const gun = iconImgHtml(k.weapon || 'knife', 'rv-killfeed-gun');
+    const hs = k.headshot
+      ? '<span class="rv-killfeed-hs" title="Headshot">HS</span>'
+      : '';
+    const left = attackerName
+      ? `<span class="rv-killfeed-name ${killfeedNameClass(attacker)}">${escapeHtml(
+          attackerName
+        )}</span>`
+      : '';
+    return `<div class="rv-killfeed-row">
+      ${left}
+      <span class="rv-killfeed-weapon">${gun}${hs}</span>
+      <span class="rv-killfeed-name ${killfeedNameClass(victim)}">${escapeHtml(victimName)}</span>
+    </div>`;
+  }
+
+  function syncKillFeed(tick = 0) {
+    if (!killfeedEl || !activeMeta) return;
+    const all = activeMeta.events?.kills || [];
+    const happened = [];
+    for (const k of all) {
+      if (k.tick <= tick) happened.push(k);
+    }
+    const recent = happened.slice(-KILLFEED_MAX).reverse();
+    const key = recent.map((k) => `${k.tick}:${k.attacker}:${k.victim}:${k.weapon}`).join('|');
+    if (key === killFeedKey) return;
+    killFeedKey = key;
+    killfeedEl.innerHTML = recent.map((k) => killRowHtml(k)).join('');
   }
 
   function syncScoreboard(tick = 0) {
@@ -1083,6 +1138,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     handleEl.style.left = `${pct}%`;
 
     syncScoreboard(tick);
+    syncKillFeed(tick);
     syncLoading();
   }
 
