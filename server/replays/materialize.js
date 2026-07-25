@@ -63,6 +63,7 @@ export function materializeDemo(demo, demoId, meta = {}, onProgress = () => {}) 
       team2Side: r.team2Side || null,
       econ1: r.econ1,
       econ2: r.econ2,
+      tickRate: demo.tickRate,
       startTick: r.startTick,
       freezeEndTick: r.freezeEndTick,
       plantTick: r.plantTick,

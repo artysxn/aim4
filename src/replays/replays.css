@@ -687,8 +687,12 @@ body.rv-open {
 
 .rv-rounds {
   display: flex;
-  gap: 3px;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0;
+  row-gap: 6px;
   overflow-x: auto;
+  padding: 0 8px;
 }
 
 .rv-map {
@@ -885,6 +889,7 @@ body.rv-open {
 .rv-round {
   flex: 0 0 auto;
   min-width: 34px;
+  margin-left: 3px;
   padding: 5px 0;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -894,6 +899,10 @@ body.rv-open {
   font: 500 12px var(--font-body);
   font-variant-numeric: tabular-nums;
   cursor: pointer;
+}
+
+.rv-round:first-child {
+  margin-left: 0;
 }
 
 .rv-round.wt {

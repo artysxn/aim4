@@ -81,37 +81,52 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     return p;
   }
 
+  /**
+   * Spacing multiplier for the gap *after* round number `n` (before n+1).
+   * Half: 12→13 ×2. OT start: 24→25 ×4. Then every 3 OT rounds: ×2 / ×4.
+   */
+  function gapAfterRound(n) {
+    const r = Number(n) || 0;
+    if (r === 12) return 2;
+    if (r === 24) return 4;
+    if (r > 24) {
+      const k = r - 24;
+      if (k % 6 === 3) return 2;
+      if (k % 6 === 0) return 4;
+    }
+    return 1;
+  }
+
+  const ROUND_GAP_PX = 3;
+
+  /** Global timeline seconds at the end of freezetime for a round index. */
+  function liveOffsetOf(index) {
+    const item = sequence.at(index);
+    if (!item) return sequence.offsetOf(index);
+    const { timing } = item;
+    const freezeSecs = Math.max(0, (timing.freezeEndTick - timing.startTick) / timing.tickRate);
+    return sequence.offsetOf(index) + freezeSecs;
+  }
+
   async function buildSequence() {
-    const metas = await Promise.all(files.map(metaFor));
-    if (destroyed) return;
-    metas.forEach((m, i) => {
-      if (m) metaCache.set(files[i], Promise.resolve(m));
-    });
-    sequence = new RoundSequence(metas.map((m, i) => m || fallbackMeta(rounds[i])));
+    // Boot from the demo summary only — no N-round meta waterfall.
+    sequence = new RoundSequence(rounds.map((r) => fallbackMeta(r)));
     playback.setDuration(sequence.duration);
-    // Prefer sides from round JSON (source of truth) over the demo summary.
-    metas.forEach((m, i) => {
-      if (!m || !rounds[i]) return;
-      if (m.winnerSide) rounds[i].winnerSide = m.winnerSide;
-      if (m.team1Side) rounds[i].team1Side = m.team1Side;
-      if (m.team2Side) rounds[i].team2Side = m.team2Side;
-      if (m.winner === 1 || m.winner === 2) rounds[i].winner = m.winner;
-    });
     renderRoundStrip();
     await selectRound(0, { seek: true });
   }
 
   function fallbackMeta(round) {
-    const tickRate = 64;
+    const tickRate = round.tickRate || 64;
     return {
       ...round,
       tickRate,
-      startTick: 0,
-      freezeEndTick: 3 * tickRate,
-      endTick: 118 * tickRate,
-      officialEndTick: 125 * tickRate,
-      players: [],
-      events: { kills: [], shots: [], grenades: [], bomb: [] }
+      startTick: round.startTick ?? 0,
+      freezeEndTick: round.freezeEndTick ?? (round.startTick ?? 0) + 3 * tickRate,
+      endTick: round.endTick ?? (round.freezeEndTick ?? 0) + 115 * tickRate,
+      officialEndTick: round.officialEndTick ?? (round.endTick ?? 0) + 5 * tickRate,
+      players: round.players || [],
+      events: round.events || { kills: [], shots: [], grenades: [], bomb: [] }
     };
   }
 
@@ -122,7 +137,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
       .map((r, i) => {
         const side = winningSide(r);
         const sideClass = side === 'T' ? 'wt' : 'wct';
-        return `<button type="button" class="rv-round ${sideClass}" data-index="${i}" title="${escapeHtml(
+        const gap =
+          i === 0 ? 0 : gapAfterRound(rounds[i - 1].round) * ROUND_GAP_PX;
+        const margin = gap ? ` style="margin-left:${gap}px"` : '';
+        return `<button type="button" class="rv-round ${sideClass}" data-index="${i}"${margin} title="${escapeHtml(
           `Round ${r.round} · ${side} win · ${economyLabel(r.econ1)} vs ${economyLabel(r.econ2)}`
         )}">${String(r.round).padStart(2, '0')}</button>`;
       })
@@ -142,9 +160,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
   roundsEl.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-index]');
     if (!btn) return;
-    const index = Number(btn.dataset.index);
-    playback.seek(sequence.offsetOf(index));
-    selectRound(index, { seek: false });
+    selectRound(Number(btn.dataset.index), { seek: true });
   });
 
   // ---- active round's scrubber --------------------------------------------
@@ -188,28 +204,67 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
 
   // ---- round selection ----------------------------------------------------
 
-  async function selectRound(index, { seek = false } = {}) {
-    if (index === activeIndex || index < 0 || index >= files.length) return;
+  async function selectRound(index, { seek = true } = {}) {
+    if (index < 0 || index >= files.length) return;
+    if (index === activeIndex && store.get(files[index])?.isFull) {
+      if (seek) playback.seek(liveOffsetOf(index));
+      return;
+    }
+
     activeIndex = index;
     markActiveRound();
     renderer._prevHealth?.fill?.(-1);
 
-    const file = files[index];
-    activeMeta = (await metaFor(file)) || fallbackMeta(rounds[index]);
-    if (destroyed) return;
-
-    await renderer.setMap(activeMeta.map || rounds[index].map);
+    // Instant chrome from the summary; ticks + meta load for this round only.
+    activeMeta = fallbackMeta(rounds[index]);
     renderScoreboards();
     renderActiveMarks();
-
-    if (seek) playback.seek(sequence.offsetOf(index), { emit: false });
-
-    // Full ticks for this round only. Already-loaded rounds stay cached.
+    if (seek) playback.seek(liveOffsetOf(index), { emit: false });
     syncLoading();
+    clearPlayerStates();
     draw();
-    await store.loadFull(file);
+
+    const file = files[index];
+    const mapCode = rounds[index].map || activeMeta.map;
+    const [meta] = await Promise.all([
+      metaFor(file),
+      store.loadFull(file),
+      mapCode ? renderer.setMap(mapCode) : Promise.resolve()
+    ]);
     if (destroyed || activeIndex !== index) return;
+
+    if (meta) {
+      activeMeta = meta;
+      const sideChanged =
+        (meta.winnerSide && meta.winnerSide !== rounds[index].winnerSide) ||
+        (meta.team1Side && meta.team1Side !== rounds[index].team1Side);
+      if (meta.winnerSide) rounds[index].winnerSide = meta.winnerSide;
+      if (meta.team1Side) rounds[index].team1Side = meta.team1Side;
+      if (meta.team2Side) rounds[index].team2Side = meta.team2Side;
+      if (meta.winner === 1 || meta.winner === 2) rounds[index].winner = meta.winner;
+      // Patch this round's timing into the sequence without refetching others.
+      if (meta.freezeEndTick != null || meta.tickRate) {
+        const pos = playback.position;
+        const list = rounds.map((r, i) => {
+          if (i === index) return { ...fallbackMeta(r), ...meta };
+          return sequence.at(i)?.round || fallbackMeta(r);
+        });
+        sequence = new RoundSequence(list);
+        playback.setDuration(sequence.duration);
+        playback.seek(Math.min(pos, playback.duration), { emit: false });
+      }
+      if (sideChanged) renderRoundStrip();
+      else markActiveRound();
+      renderScoreboards();
+      renderActiveMarks();
+    }
+
+    if (seek) playback.seek(liveOffsetOf(index), { emit: false });
     draw();
+  }
+
+  function clearPlayerStates() {
+    for (let i = 0; i < 10; i++) states[i] = null;
   }
 
   // ---- scoreboards --------------------------------------------------------
@@ -402,9 +457,16 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
   // ---- frame --------------------------------------------------------------
 
   function onPosition(pos) {
-    const loc = sequence.locate(pos);
+    let loc = sequence.locate(pos);
+    const live = liveOffsetOf(loc.index);
+    // Entering a round (or playing through freezetime) jumps to live.
+    if (playback.playing && pos < live) {
+      playback.seek(live, { emit: false });
+      loc = sequence.locate(live);
+    }
     if (loc.index !== activeIndex) {
       selectRound(loc.index, { seek: false });
+      return;
     }
     draw(loc);
   }
@@ -418,13 +480,14 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
 
     const track = store.track(files[activeIndex]);
     if (track) track.sampleAll(tick, states);
+    else clearPlayerStates();
 
     renderer.render({
       tick,
       tickRate: timing.tickRate,
       states,
-      players: activeMeta.players || [],
-      events: activeMeta.events || {},
+      players: track ? activeMeta.players || [] : [],
+      events: track ? activeMeta.events || {} : { kills: [], shots: [], grenades: [], bomb: [] },
       weapons: activeMeta.weapons || []
     });
 
@@ -456,6 +519,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
   // ---- transport ----------------------------------------------------------
 
   playBtn.addEventListener('click', () => {
+    const live = liveOffsetOf(activeIndex);
+    if (!playback.playing && playback.position < live) {
+      playback.seek(live, { emit: false });
+    }
     playback.toggle();
     syncPlayButton();
   });

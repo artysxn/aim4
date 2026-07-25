@@ -215,7 +215,11 @@ export function initReplaysView({ auth, escapeHtml }) {
     if (open) {
       const demo = demos.find((d) => d.id === open.dataset.open);
       if (demo) {
-        const list = (demo.rounds || []).map((r) => ({ ...r, map: demo.map }));
+        const list = (demo.rounds || []).map((r) => ({
+          ...r,
+          map: demo.map,
+          tickRate: r.tickRate || demo.tickRate
+        }));
         launchViewer(list, 'timeline', `${demo.team1?.name || 'Team 1'} vs ${demo.team2?.name || 'Team 2'}`);
       }
       return;
