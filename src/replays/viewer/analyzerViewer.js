@@ -8,7 +8,7 @@
 
 import { fetchRoundMeta } from '../api.js';
 import { ECONOMIES, economyLabel } from '../shared/roundId.js';
-import { isGrenade } from './equipmentIcons.js';
+import { iconImgHtml, isGrenade } from './equipmentIcons.js';
 import { RadarRenderer, grenadeWorldPos } from './radarRenderer.js';
 import { Playback } from './playback.js';
 import { clockAt, timingFor } from './roundClock.js';
@@ -17,6 +17,8 @@ const SPEEDS = [0.25, 0.5, 1, 2, 4];
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 5;
 const DRAG_THRESHOLD = 5;
+/** Selected rounds at rest — fully drawn, then blitted dim. */
+const SELECTION_GHOST_ALPHA = 0.3;
 
 /** Most-played players on the focus team. */
 const PRIMARY_COLORS = ['#e8913c', '#5ad17a', '#5b9fd4', '#a855f7', '#e8b84a'];
@@ -37,6 +39,7 @@ function ECONOMY_CODES_SAFE() {
  * @param {string} [opts.focusTeam]  short id of the team being analyzed
  * @param {string[]} [opts.focusTeamIds] aliases for the focus team (cluster)
  * @param {string} [opts.focusName]  display name for the focus team
+ * @param {Array<{key?:string,focusTeam:string,focusTeamIds:string[],name:string}>} [opts.teamOptions]
  */
 export function createAnalyzerViewer({
   store,
@@ -44,7 +47,8 @@ export function createAnalyzerViewer({
   escapeHtml,
   focusTeam = '',
   focusTeamIds = [],
-  focusName: focusNameOpt = ''
+  focusName: focusNameOpt = '',
+  teamOptions: teamOptionsOpt = []
 }) {
   const el = document.createElement('div');
   el.className = 'rv-analyzer';
@@ -61,19 +65,12 @@ export function createAnalyzerViewer({
         <div class="rv-az-tip" id="rv-az-tip" hidden></div>
       </div>
       <aside class="rv-analyzer-selected" id="rv-az-selected">
-        <div class="rv-az-sel-head">
-          <h3>Selected rounds</h3>
-          <button type="button" class="rv-az-invert" id="rv-az-invert" title="Invert selection">Invert</button>
-        </div>
-        <div class="rv-az-sel-cols"><span>Opponent</span><span>Rnd</span></div>
         <ul class="rv-az-sel-list" id="rv-az-sel-list"></ul>
-        <p class="rv-az-sel-empty" id="rv-az-sel-empty">Drag on the map to select rounds.</p>
         <p class="rv-az-sel-summary" id="rv-az-sel-summary" hidden></p>
         <button type="button" class="rv-az-replay" id="rv-az-replay" disabled>
           <svg viewBox="0 -960 960 960" width="16" height="16"><path d="M320-200v-560l440 280-440 280Z"/></svg>
           Replay all
         </button>
-        <p class="rv-az-sel-hint">Alt + click to remove · click opens round</p>
       </aside>
     </div>
     <div class="rv-analyzer-bar">
@@ -104,15 +101,20 @@ export function createAnalyzerViewer({
   const marqueeEl = el.querySelector('#rv-az-marquee');
   const tipEl = el.querySelector('#rv-az-tip');
   const selListEl = el.querySelector('#rv-az-sel-list');
-  const selEmptyEl = el.querySelector('#rv-az-sel-empty');
   const selSummaryEl = el.querySelector('#rv-az-sel-summary');
-  const invertBtn = el.querySelector('#rv-az-invert');
   const replayBtn = el.querySelector('#rv-az-replay');
 
   const renderer = new RadarRenderer(canvas);
   renderer.showNames = false;
   renderer.showWeapons = false;
   renderer.onIconLoad = () => draw(playback.position);
+
+  // Offscreen round compositor for selection ghost / focus blits.
+  const ghostCanvas = document.createElement('canvas');
+  const ghostRenderer = new RadarRenderer(ghostCanvas);
+  ghostRenderer.showNames = true;
+  ghostRenderer.showWeapons = true;
+  ghostRenderer.onIconLoad = () => draw(playback.position);
 
   /** @type {Array<{round: object, meta: object|null, timing: object, states: Array}>} */
   const layers = rounds.map((round) => ({
@@ -128,7 +130,9 @@ export function createAnalyzerViewer({
     (focusTeamIds?.length ? focusTeamIds : focusTeam ? [focusTeam] : []).filter(Boolean)
   );
   let focusId = focusTeam || [...focusIds][0] || '';
-  let focusName = focusNameOpt || 'Team';
+  let focusName = focusNameOpt || '';
+  /** @type {Array<{key:string,focusTeam:string,focusTeamIds:string[],name:string}>} */
+  let teamOptions = normalizeTeamOptions(teamOptionsOpt);
 
   /** @type {'T'|'CT'} */
   let sideFilter = 'T';
@@ -248,8 +252,71 @@ export function createAnalyzerViewer({
     return Number(L.round?.round ?? L.meta?.round ?? L.meta?.roundNum ?? 0) || 0;
   }
 
-  /** Make sure we always have a focus team id before filtering sides. */
+  function normalizeTeamOptions(list) {
+    if (!Array.isArray(list) || !list.length) return [];
+    return list
+      .map((o) => ({
+        key: o.key || o.focusTeam || '',
+        focusTeam: o.focusTeam || (o.focusTeamIds && o.focusTeamIds[0]) || '',
+        focusTeamIds: [...(o.focusTeamIds || []).filter(Boolean)],
+        name: o.name || o.focusTeam || ''
+      }))
+      .filter((o) => o.focusTeam || o.focusTeamIds.length);
+  }
+
+  /** Common short-ids across all rounds (list-round ids preferred). */
+  function commonShortIds() {
+    let common = null;
+    for (const L of layers) {
+      const { t1, t2 } = rosterIds(L);
+      const ids = new Set([t1, t2].filter(Boolean));
+      if (!ids.size) continue;
+      if (!common) common = ids;
+      else common = new Set([...common].filter((id) => ids.has(id)));
+    }
+    return [...(common || [])];
+  }
+
+  function nameForShortId(id) {
+    for (const L of layers) {
+      if (!L.meta) continue;
+      const { t1, t2 } = rosterIds(L);
+      if (t1 === id) return teamDisplayName(L.meta.team1, id);
+      if (t2 === id) return teamDisplayName(L.meta.team2, id);
+    }
+    return id;
+  }
+
+  /** Fill teamOptions from rounds when the library did not pass any. */
+  function ensureTeamOptions() {
+    if (teamOptions.length) return;
+    const common = commonShortIds();
+    teamOptions = common.map((id) => ({
+      key: id,
+      focusTeam: id,
+      focusTeamIds: [id],
+      name: nameForShortId(id)
+    }));
+  }
+
+  function applyFocusOption(opt) {
+    focusIds.clear();
+    for (const id of opt.focusTeamIds?.length ? opt.focusTeamIds : [opt.focusTeam]) {
+      if (id) focusIds.add(id);
+    }
+    focusId = opt.focusTeam || [...focusIds][0] || '';
+    focusName = opt.name || focusId;
+    for (const L of layers) {
+      const { t1, t2 } = rosterIds(L);
+      if (isFocusId(t1)) focusIds.add(t1);
+      if (isFocusId(t2)) focusIds.add(t2);
+    }
+  }
+
+  /** Resolve focus when unambiguous; leave empty when the user must pick. */
   function resolveFocusFromMeta() {
+    ensureTeamOptions();
+
     for (const L of layers) {
       const { t1, t2 } = rosterIds(L);
       if (isFocusId(t1)) focusIds.add(t1);
@@ -258,33 +325,95 @@ export function createAnalyzerViewer({
     if (!focusId && focusIds.size) focusId = [...focusIds][0];
 
     if (!focusId && !focusIds.size) {
-      let common = null;
-      for (const L of layers) {
-        const { t1, t2 } = rosterIds(L);
-        const ids = new Set([t1, t2].filter(Boolean));
-        if (!ids.size) continue;
-        if (!common) common = ids;
-        else common = new Set([...common].filter((id) => ids.has(id)));
-      }
-      if (common?.size === 1) {
-        focusId = [...common][0];
-        focusIds.add(focusId);
-      } else if (common?.size > 1) {
-        focusId = layers[0]?.round?.team1 || [...common][0];
-        focusIds.add(focusId);
+      if (teamOptions.length === 1) applyFocusOption(teamOptions[0]);
+      else {
+        const common = commonShortIds();
+        if (common.length === 1) {
+          applyFocusOption({
+            key: common[0],
+            focusTeam: common[0],
+            focusTeamIds: [common[0]],
+            name: nameForShortId(common[0])
+          });
+        }
       }
     }
 
-    if (!focusNameOpt) {
-      const sample = layers.find((L) => L.meta && teamIndex(L.meta, L.round));
-      if (sample?.meta) {
-        focusName = focusDisplayName(sample.meta, teamIndex(sample.meta, sample.round));
-      } else if (focusId) {
-        focusName = focusId;
+    if (focusId && !focusName) {
+      const opt = teamOptions.find(
+        (o) => o.focusTeam === focusId || o.focusTeamIds.includes(focusId)
+      );
+      if (opt) focusName = opt.name;
+      else {
+        const sample = layers.find((L) => L.meta && teamIndex(L.meta, L.round));
+        if (sample?.meta) {
+          focusName = focusDisplayName(sample.meta, teamIndex(sample.meta, sample.round));
+        } else {
+          focusName = focusId;
+        }
       }
-    } else {
-      focusName = focusNameOpt;
     }
+  }
+
+  function needsTeamPick() {
+    return !focusId;
+  }
+
+  function renderTeamPicker() {
+    teamEl.textContent = 'Select team';
+    panelEl.hidden = false;
+    ensureTeamOptions();
+    const opts = teamOptions.length
+      ? teamOptions
+      : commonShortIds().map((id) => ({
+          key: id,
+          focusTeam: id,
+          focusTeamIds: [id],
+          name: nameForShortId(id)
+        }));
+    if (!opts.length) {
+      panelEl.innerHTML = `<p class="rv-az-empty">No shared team across these rounds.</p>`;
+      return;
+    }
+    panelEl.innerHTML = `
+      <div class="rv-az-group">
+        <h4>Team</h4>
+        <p class="rv-az-pick-hint">These rounds share more than one team. Choose which side to analyze.</p>
+        <div class="rv-az-seg rv-az-teams">
+          ${opts
+            .map(
+              (o) => `
+            <button type="button" class="rv-az-seg-btn rv-az-team-pick" data-team-key="${escapeHtml(
+              o.key || o.focusTeam
+            )}">${escapeHtml(o.name || o.focusTeam)}</button>`
+            )
+            .join('')}
+        </div>
+      </div>`;
+  }
+
+  function finishFocusSetup() {
+    const matched = layers.filter((L) => L.meta && teamIndex(L.meta, L.round));
+    if (!matched.length) {
+      teamEl.textContent = focusName || focusId || 'Team';
+      panelEl.hidden = false;
+      panelEl.innerHTML = `<p class="rv-az-empty">Could not match that team to these rounds.</p>`;
+      draw(0);
+      return;
+    }
+
+    const tN = layers.filter((L) => L.meta && sideOfFocus(L) === 'T').length;
+    const ctN = layers.filter((L) => L.meta && sideOfFocus(L) === 'CT').length;
+    sideFilter = tN >= ctN ? 'T' : 'CT';
+    if (!tN && !ctN) sideFilter = 'T';
+
+    assignStablePlayerColors();
+    resetPlayersForSide();
+    renderFilters();
+    renderSelectedPanel();
+    playback.setDuration(longestLive());
+    playback.seek(0);
+    draw(0);
   }
 
   /** Stable palette for every focus-team player (both sides). Assigned once. */
@@ -339,6 +468,12 @@ export function createAnalyzerViewer({
     return ranked;
   }
 
+  function buySelectValue() {
+    if (buyFilter.size === BUY_OPTIONS.length) return 'all';
+    if (buyFilter.size === 1) return String([...buyFilter][0]);
+    return 'all';
+  }
+
   function renderFilters() {
     const ranked = rankedPlayersForSide();
     enabledPlayers = new Set([...enabledPlayers].filter((id) => ranked.some((p) => p.id === id)));
@@ -347,25 +482,54 @@ export function createAnalyzerViewer({
     const ctCount = layers.filter((L) => L.meta && sideOfFocus(L) === 'CT').length;
     teamEl.textContent = focusName || focusId || 'Team';
 
+    const teamSwitcher =
+      teamOptions.length > 1
+        ? `<div class="rv-az-group">
+        <h4>Team</h4>
+        <div class="rv-az-seg rv-az-teams">
+          ${teamOptions
+            .map((o) => {
+              const active =
+                o.focusTeam === focusId || o.focusTeamIds.some((id) => focusIds.has(id));
+              return `<button type="button" class="rv-az-seg-btn rv-az-team-pick${
+                active ? ' active' : ''
+              }" data-team-key="${escapeHtml(o.key || o.focusTeam)}">${escapeHtml(
+                o.name || o.focusTeam
+              )}</button>`;
+            })
+            .join('')}
+        </div>
+      </div>`
+        : '';
+
+    const utilIcons = [
+      { key: 'smoke', weapon: 'smokegrenade', title: 'Smokes' },
+      { key: 'molotov', weapon: 'molotov', title: 'Molotovs' },
+      { key: 'flash', weapon: 'flashbang', title: 'Flashes' },
+      { key: 'he', weapon: 'hegrenade', title: 'HE' }
+    ];
+
     panelEl.hidden = false;
     panelEl.innerHTML = `
+      ${teamSwitcher}
       <div class="rv-az-group">
         <h4>Side</h4>
-        <div class="rv-az-chips">
-          <button type="button" class="rv-az-chip${sideFilter === 'T' ? ' active' : ''}" data-side="T">T <small>${tCount}</small></button>
-          <button type="button" class="rv-az-chip${sideFilter === 'CT' ? ' active' : ''}" data-side="CT">CT <small>${ctCount}</small></button>
+        <div class="rv-az-seg rv-az-sides">
+          <button type="button" class="rv-az-seg-btn${sideFilter === 'T' ? ' active' : ''}" data-side="T">T <small>${tCount}</small></button>
+          <button type="button" class="rv-az-seg-btn${sideFilter === 'CT' ? ' active' : ''}" data-side="CT">CT <small>${ctCount}</small></button>
         </div>
       </div>
       <div class="rv-az-group">
         <h4>Buy</h4>
-        <div class="rv-az-chips rv-az-buys">
+        <select class="site-input rv-az-buy-select" id="rv-az-buy" aria-label="Buy type">
+          <option value="all"${buySelectValue() === 'all' ? ' selected' : ''}>All buys</option>
           ${BUY_OPTIONS.map(
-            (code) => `
-            <button type="button" class="rv-az-chip${buyFilter.has(code) ? ' active' : ''}" data-buy="${code}">
-              ${escapeHtml(economyLabel(code))}
-            </button>`
+            (code) =>
+              `<option value="${code}"${
+                buySelectValue() === String(code) ? ' selected' : ''
+              }>${escapeHtml(economyLabel(code))}</option>`
           ).join('')}
-        </div>
+        </select>
       </div>
       <div class="rv-az-group">
         <h4>Players</h4>
@@ -373,17 +537,17 @@ export function createAnalyzerViewer({
           ${
             ranked.length
               ? ranked
-                  .map(
-                    (p) => `
-            <label class="rv-az-player">
-              <input type="checkbox" data-player="${escapeHtml(p.id)}" ${
-                enabledPlayers.has(p.id) ? 'checked' : ''
-              } />
+                  .map((p) => {
+                    const on = enabledPlayers.has(p.id);
+                    return `
+            <button type="button" class="rv-az-player${on ? ' selected' : ''}" data-player="${escapeHtml(
+              p.id
+            )}" aria-pressed="${on ? 'true' : 'false'}">
               <span class="rv-az-swatch" style="background:${playerColors[p.id]}"></span>
               <span class="rv-az-pname">${escapeHtml(p.name)}</span>
               <small>${p.count}</small>
-            </label>`
-                  )
+            </button>`;
+                  })
                   .join('')
               : `<p class="rv-az-empty">No players on ${sideFilter} for this team.</p>`
           }
@@ -391,11 +555,17 @@ export function createAnalyzerViewer({
       </div>
       <div class="rv-az-group">
         <h4>Utility</h4>
-        <div class="rv-az-chips">
-          <button type="button" class="rv-az-chip${utilityVisible.smoke ? ' active' : ''}" data-util="smoke" title="Smokes">Smoke</button>
-          <button type="button" class="rv-az-chip${utilityVisible.molotov ? ' active' : ''}" data-util="molotov" title="Molotovs">Molly</button>
-          <button type="button" class="rv-az-chip${utilityVisible.flash ? ' active' : ''}" data-util="flash" title="Flashes">Flash</button>
-          <button type="button" class="rv-az-chip${utilityVisible.he ? ' active' : ''}" data-util="he" title="HE">HE</button>
+        <div class="rv-az-util-bar" role="group" aria-label="Utility">
+          ${utilIcons
+            .map(
+              (u) => `
+            <button type="button" class="rv-az-util-btn${
+              utilityVisible[u.key] ? ' active' : ''
+            }" data-util="${u.key}" title="${u.title}" aria-pressed="${
+                utilityVisible[u.key] ? 'true' : 'false'
+              }">${iconImgHtml(u.weapon, 'rv-az-util-icon')}</button>`
+            )
+            .join('')}
         </div>
       </div>`;
   }
@@ -497,13 +667,25 @@ export function createAnalyzerViewer({
     }
   }
 
-  function renderFullRound(L, tick, highlightId = '') {
+  function syncGhostView() {
+    ghostRenderer.mapCode = renderer.mapCode;
+    ghostRenderer.image = renderer.image;
+    ghostRenderer.zoom = renderer.zoom;
+    ghostRenderer.panX = renderer.panX;
+    ghostRenderer.panY = renderer.panY;
+    ghostRenderer.viewInset = { ...renderer.viewInset };
+    ghostRenderer.dpr = renderer.dpr;
+  }
+
+  /**
+   * Draw one full round. When `alpha` < 1, composite via offscreen so utility
+   * and labels dim together (canvas globalAlpha is replaced inside the renderer).
+   */
+  function renderFullRound(L, tick, { highlightId = '', alpha = 1, target = renderer } = {}) {
     const track = store.track(L.round.file);
     if (!track) return false;
     track.sampleAll(tick, L.states);
-    renderer.showNames = true;
-    renderer.showWeapons = true;
-    renderer.render({
+    const frame = {
       tick,
       tickRate: L.timing.tickRate,
       states: L.states,
@@ -516,8 +698,48 @@ export function createAnalyzerViewer({
       compact: false,
       clear: false,
       drawMap: false
+    };
+
+    if (alpha >= 0.99 && target === renderer) {
+      renderer.showNames = true;
+      renderer.showWeapons = true;
+      renderer.render(frame);
+      return true;
+    }
+
+    const { w, h } = renderer.resize();
+    syncGhostView();
+    if (ghostCanvas.width !== w || ghostCanvas.height !== h) {
+      ghostCanvas.width = w;
+      ghostCanvas.height = h;
+    }
+    ghostRenderer.showNames = true;
+    ghostRenderer.showWeapons = true;
+    ghostRenderer.render({
+      ...frame,
+      clear: true,
+      clearStyle: 'transparent',
+      pixelSize: { w, h }
     });
+    const ctx = renderer.ctx;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+    ctx.drawImage(ghostCanvas, 0, 0);
+    ctx.restore();
     return true;
+  }
+
+  function clearHover() {
+    hoverHit = null;
+    tipEl.hidden = true;
+  }
+
+  function clearSelection() {
+    if (!selectedFiles.length) return;
+    selectedFiles = [];
+    clearHover();
+    renderSelectedPanel();
+    draw(playback.position);
   }
 
   function renderOverlayRound(L, tick) {
@@ -575,26 +797,40 @@ export function createAnalyzerViewer({
     let refTick = 0;
 
     if (selectedLayers.length) {
-      // Selection mode: every selected round at full Timeline fidelity.
+      // Selection: ghosts at rest; hover focuses one round (others hidden).
+      const focusFile = hoverHit?.file || '';
       for (const L of selectedLayers) {
         const tick = tickForLayer(L, pos);
-        if (!refTiming) {
-          refTiming = L.timing;
-          refTick = tick;
-        }
-        renderFullRound(L, tick);
+        const track = store.track(L.round.file);
+        if (track) track.sampleAll(tick, L.states);
         const { w, h } = renderer.resize();
         const t = renderer.viewTransform(w, h);
         pushPlayerHits(L, L.meta.players || [], L.states, t);
         pushGrenadeHits(L, L.meta.players || [], L.meta.events || {}, tick, t);
+
+        if (focusFile) {
+          if (L.round.file !== focusFile) continue;
+          refTiming = L.timing;
+          refTick = tick;
+          renderFullRound(L, tick, {
+            highlightId: hoverHit?.playerId || '',
+            alpha: 1
+          });
+        } else {
+          if (!refTiming) {
+            refTiming = L.timing;
+            refTick = tick;
+          }
+          renderFullRound(L, tick, { alpha: SELECTION_GHOST_ALPHA });
+        }
       }
     } else if (hoverHit?.layer?.meta) {
       const L = hoverHit.layer;
       const tick = tickForLayer(L, pos);
       refTiming = L.timing;
       refTick = tick;
-      renderFullRound(L, tick, hoverHit.playerId);
-      // Rebuild hits from the filtered overlay set so hover stays sticky.
+      renderFullRound(L, tick, { highlightId: hoverHit.playerId, alpha: 1 });
+      // Hits from the filtered overlay set so leaving a droplet clears hover.
       for (const V of visible) {
         const track = store.track(V.round.file);
         if (!track) continue;
@@ -650,7 +886,7 @@ export function createAnalyzerViewer({
   }
 
   function updateTip() {
-    if (!hoverHit || selecting || panning) {
+    if (!hoverHit || selecting || panning || dragArmed) {
       tipEl.hidden = true;
       return;
     }
@@ -683,13 +919,11 @@ export function createAnalyzerViewer({
     const items = selectedFiles.map((f) => layerByFile(f)).filter(Boolean);
     if (!items.length) {
       selListEl.innerHTML = '';
-      selEmptyEl.hidden = false;
       selSummaryEl.hidden = true;
       selSummaryEl.textContent = '';
       replayBtn.disabled = true;
       return;
     }
-    selEmptyEl.hidden = true;
     selSummaryEl.hidden = false;
     const total = Math.max(1, visibleLayers().length || layers.length);
     selListEl.innerHTML = items
@@ -722,14 +956,6 @@ export function createAnalyzerViewer({
 
   function removeSelected(file) {
     selectedFiles = selectedFiles.filter((f) => f !== file);
-    renderSelectedPanel();
-    draw(playback.position);
-  }
-
-  function invertSelection() {
-    const vis = new Set(visibleLayers().map((L) => L.round.file));
-    const cur = new Set(selectedFiles);
-    selectedFiles = [...vis].filter((f) => !cur.has(f));
     renderSelectedPanel();
     draw(playback.position);
   }
@@ -876,8 +1102,7 @@ export function createAnalyzerViewer({
       const dist = Math.hypot(e.clientX - startClientX, e.clientY - startClientY);
       if (!selecting && dist >= DRAG_THRESHOLD) {
         selecting = true;
-        hoverHit = null;
-        tipEl.hidden = true;
+        clearHover();
         mapEl.classList.add('selecting');
       }
       if (selecting) {
@@ -888,10 +1113,21 @@ export function createAnalyzerViewer({
     }
 
     const hit = hitAt(e.clientX, e.clientY);
-    const prevFile = hoverHit?.file;
-    const prevPlayer = hoverHit?.playerId;
+    const prevFile = hoverHit?.file || '';
+    const prevPlayer = hoverHit?.playerId || '';
+    const nextFile = hit?.file || '';
+    const nextPlayer = hit?.playerId || '';
+    if (!hit) {
+      if (hoverHit) {
+        clearHover();
+        draw(playback.position);
+      } else {
+        tipEl.hidden = true;
+      }
+      return;
+    }
     hoverHit = hit;
-    if (hit?.file !== prevFile || hit?.playerId !== prevPlayer) {
+    if (nextFile !== prevFile || nextPlayer !== prevPlayer) {
       draw(playback.position);
     } else {
       updateTip();
@@ -927,12 +1163,14 @@ export function createAnalyzerViewer({
       hideMarquee();
       selecting = false;
       if (files.length) addSelected(files);
+      else clearSelection();
       return;
     }
 
     hideMarquee();
     const hit = hitAt(e.clientX, e.clientY);
     if (hit) openRoundTab(hit.file);
+    else clearSelection();
   }
 
   mapEl.addEventListener('pointerup', endPointer);
@@ -940,8 +1178,10 @@ export function createAnalyzerViewer({
   mapEl.addEventListener('pointerleave', () => {
     if (dragArmed || selecting || panning) return;
     if (hoverHit) {
-      hoverHit = null;
+      clearHover();
       draw(playback.position);
+    } else {
+      tipEl.hidden = true;
     }
   });
   mapEl.addEventListener('auxclick', (e) => {
@@ -963,7 +1203,6 @@ export function createAnalyzerViewer({
     openRoundTab(file);
   });
 
-  invertBtn.addEventListener('click', () => invertSelection());
   replayBtn.addEventListener('click', () => openRoundsInTimeline(selectedFiles));
 
   async function loadMeta() {
@@ -997,30 +1236,30 @@ export function createAnalyzerViewer({
 
     resolveFocusFromMeta();
 
-    const matched = layers.filter((L) => L.meta && teamIndex(L.meta, L.round));
-    if (!matched.length) {
-      teamEl.textContent = focusName || focusId || 'Team';
-      panelEl.hidden = false;
-      panelEl.innerHTML = `<p class="rv-az-empty">Could not match the focus team to these rounds. Close and open Analyzer from the library with one team selected.</p>`;
+    if (needsTeamPick()) {
+      renderTeamPicker();
+      renderSelectedPanel();
+      playback.setDuration(longestLive());
       draw(0);
       return;
     }
 
-    const tN = layers.filter((L) => L.meta && sideOfFocus(L) === 'T').length;
-    const ctN = layers.filter((L) => L.meta && sideOfFocus(L) === 'CT').length;
-    sideFilter = tN >= ctN ? 'T' : 'CT';
-    if (!tN && !ctN) sideFilter = 'T';
-
-    assignStablePlayerColors();
-    resetPlayersForSide();
-    renderFilters();
-    renderSelectedPanel();
-    playback.setDuration(longestLive());
-    playback.seek(0);
-    draw(0);
+    finishFocusSetup();
   }
 
   panelEl.addEventListener('click', (e) => {
+    const teamBtn = e.target.closest('[data-team-key]');
+    if (teamBtn) {
+      ensureTeamOptions();
+      const key = teamBtn.dataset.teamKey;
+      const opt =
+        teamOptions.find((o) => (o.key || o.focusTeam) === key) ||
+        teamOptions.find((o) => o.focusTeamIds.includes(key));
+      if (!opt) return;
+      applyFocusOption(opt);
+      finishFocusSetup();
+      return;
+    }
     const sideBtn = e.target.closest('[data-side]');
     if (sideBtn) {
       sideFilter = sideBtn.dataset.side === 'CT' ? 'CT' : 'T';
@@ -1029,12 +1268,11 @@ export function createAnalyzerViewer({
       draw(playback.position);
       return;
     }
-    const buyBtn = e.target.closest('[data-buy]');
-    if (buyBtn) {
-      const code = Number(buyBtn.dataset.buy);
-      if (buyFilter.has(code)) buyFilter.delete(code);
-      else buyFilter.add(code);
-      if (!buyFilter.size) buyFilter = new Set(BUY_OPTIONS);
+    const playerBtn = e.target.closest('[data-player]');
+    if (playerBtn) {
+      const id = playerBtn.dataset.player;
+      if (enabledPlayers.has(id)) enabledPlayers.delete(id);
+      else enabledPlayers.add(id);
       renderFilters();
       draw(playback.position);
       return;
@@ -1049,11 +1287,11 @@ export function createAnalyzerViewer({
   });
 
   panelEl.addEventListener('change', (e) => {
-    const box = e.target.closest('[data-player]');
-    if (!box) return;
-    const id = box.dataset.player;
-    if (box.checked) enabledPlayers.add(id);
-    else enabledPlayers.delete(id);
+    const buy = e.target.closest('#rv-az-buy');
+    if (!buy) return;
+    const v = buy.value;
+    if (v === 'all') buyFilter = new Set(BUY_OPTIONS);
+    else buyFilter = new Set([Number(v)]);
     draw(playback.position);
   });
 
@@ -1100,12 +1338,16 @@ export function createAnalyzerViewer({
   document.addEventListener('keydown', onKey);
 
   function handleEscape() {
-    if (!selectedFiles.length) return false;
-    selectedFiles = [];
-    hoverHit = null;
-    renderSelectedPanel();
-    draw(playback.position);
-    return true;
+    if (selectedFiles.length) {
+      clearSelection();
+      return true;
+    }
+    if (hoverHit) {
+      clearHover();
+      draw(playback.position);
+      return true;
+    }
+    return false;
   }
 
   const onResize = () => draw(playback.position);

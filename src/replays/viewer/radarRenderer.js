@@ -277,8 +277,11 @@ export class RadarRenderer {
     const clear = frame.clear !== false;
     if (clear) {
       ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = '#0b0d10';
-      ctx.fillRect(0, 0, w, h);
+      // Analyzer ghost layers need a transparent clear so they can be blitted.
+      if (frame.clearStyle !== 'transparent') {
+        ctx.fillStyle = '#0b0d10';
+        ctx.fillRect(0, 0, w, h);
+      }
     }
 
     const t = this.viewTransform(w, h);
@@ -597,7 +600,7 @@ export class RadarRenderer {
       const age = (tick - k.tick) / window;
       const size = (compact ? 3 : 5) * this.dpr;
       ctx.save();
-      ctx.globalAlpha = 0.7 * (1 - age);
+      ctx.globalAlpha = 0.7 * (1 - age) * (this._frameAlpha ?? 1);
       ctx.strokeStyle = '#c8ccd4';
       ctx.lineWidth = Math.max(1, 1.6 * this.dpr);
       ctx.beginPath();
@@ -623,7 +626,7 @@ export class RadarRenderer {
       if (shot.tick > tick || tick - shot.tick > window) continue;
       const from = this.project(t, shot.x, shot.y, { x: 0, y: 0 });
       const a = (-shot.yaw * Math.PI) / 180;
-      ctx.globalAlpha = 0.5 * (1 - (tick - shot.tick) / window);
+      ctx.globalAlpha = 0.5 * (1 - (tick - shot.tick) / window) * (this._frameAlpha ?? 1);
       ctx.strokeStyle = '#fff3c4';
       ctx.beginPath();
       ctx.moveTo(from.x, from.y);

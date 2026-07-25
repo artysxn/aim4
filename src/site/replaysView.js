@@ -1098,8 +1098,10 @@ export function initReplaysView({ escapeHtml }) {
     const loadLabel = selCount ? `Load rounds (${selCount})` : 'Load rounds';
     const analyzeLabel = selCount ? `Analyzer (${selCount})` : 'Analyzer';
     const analyzeTitle = analyze.ok
-      ? 'Open Analyzer overlay'
-      : analyze.reason || 'Select rounds from one map with one team filtered';
+      ? analyze.needsTeamPick
+        ? 'Open Analyzer (pick a team inside)'
+        : 'Open Analyzer overlay'
+      : analyze.reason || 'Select rounds from one map that share a team';
     const head =
       rounds.length || selCount
         ? `<div class="rp-result-head">
@@ -1167,82 +1169,117 @@ export function initReplaysView({ escapeHtml }) {
       const gate = analyzerGate(picked);
       if (!gate.ok) return;
       const ordered = groupRoundsByDemo(picked).flatMap((g) => g.rounds);
-      const cluster = teamClustersByKey.get(gate.clusterKey);
-      const title = `${cluster?.name || 'Team'} · ${MAPS[ordered[0]?.map]?.name || ordered[0]?.map || 'Map'}`;
-      const clusterName = teamClustersByKey.get(gate.clusterKey)?.name || '';
+      const mapName = MAPS[ordered[0]?.map]?.name || ordered[0]?.map || 'Map';
+      const title = gate.focusName ? `${gate.focusName} · ${mapName}` : mapName;
       launchViewer(ordered, 'analyzer', title, {
         focusTeam: gate.focusTeam,
         focusTeamIds: gate.focusTeamIds,
-        focusName: clusterName
+        focusName: gate.focusName || '',
+        teamOptions: gate.teamOptions || []
       });
     });
   }
 
+  /** Team short-ids present in every selected round. */
+  function commonTeamIds(picked) {
+    let common = null;
+    for (const r of picked) {
+      const ids = new Set([r.team1, r.team2].filter(Boolean));
+      if (!ids.size) continue;
+      if (!common) common = ids;
+      else common = new Set([...common].filter((id) => ids.has(id)));
+    }
+    return [...(common || [])];
+  }
+
   /**
-   * Analyzer needs: ≥1 selected round, one map, and one focus team present in
-   * every round. Prefer the Team filter when set; otherwise infer a single
-   * shared team from the selection. Cluster aliases all count as that team.
+   * Build pickable focus options from short-ids (cluster-aware, deduped).
+   * @param {string[]} shortIds
+   */
+  function teamOptionsFromIds(shortIds) {
+    /** @type {Map<string, {key:string, focusTeam:string, focusTeamIds:string[], name:string}>} */
+    const byKey = new Map();
+    for (const id of shortIds) {
+      const cover = teamClusters.find((c) => c.shortIds.includes(id));
+      const key = cover?.key || id;
+      if (byKey.has(key)) continue;
+      byKey.set(key, {
+        key,
+        focusTeam: id,
+        focusTeamIds: cover?.shortIds ? [...cover.shortIds] : [id],
+        name: cover?.name || id
+      });
+    }
+    return [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Analyzer needs: ≥1 selected round, one map, and at least one team shared
+   * by every round. Prefer the Team filter when set; otherwise open Analyzer
+   * and let the user pick when more than one shared team exists.
    */
   function analyzerGate(picked) {
     if (!picked.length) return { ok: false, reason: 'Select at least one round' };
     const maps = new Set(picked.map((r) => r.map).filter(Boolean));
     if (maps.size !== 1) return { ok: false, reason: 'All rounds must share one map' };
 
-    /** @type {string[]} */
-    let shortIds = [];
-    /** @type {string} */
-    let clusterKey = '';
-
     if (filters.teams.size === 1) {
-      clusterKey = [...filters.teams][0];
-      shortIds = expandClusterKeys([clusterKey]);
-    } else if (filters.teams.size > 1) {
-      return { ok: false, reason: 'Filter exactly one team (or clear Team and select one side)' };
-    } else {
-      // Infer teams shared by every selected round.
-      let common = null;
+      const clusterKey = [...filters.teams][0];
+      const shortIds = expandClusterKeys([clusterKey]);
+      if (!shortIds.length) return { ok: false, reason: 'No shared team across selected rounds' };
+      const inFocus = (r) => shortIds.some((id) => r.team1 === id || r.team2 === id);
+      if (!picked.every(inFocus)) {
+        return { ok: false, reason: 'Selected team must be in every round' };
+      }
+      const counts = new Map(shortIds.map((id) => [id, 0]));
       for (const r of picked) {
-        const ids = new Set([r.team1, r.team2].filter(Boolean));
-        if (!common) common = ids;
-        else common = new Set([...common].filter((id) => ids.has(id)));
-      }
-      shortIds = [...(common || [])];
-      if (shortIds.length > 1) {
-        // Prefer a cluster that covers all aliases if one exists.
-        const cover = teamClusters.find(
-          (c) =>
-            shortIds.every((id) => c.shortIds.includes(id)) &&
-            picked.every((r) => c.shortIds.includes(r.team1) || c.shortIds.includes(r.team2))
-        );
-        if (cover) {
-          clusterKey = cover.key;
-          shortIds = cover.shortIds;
-        } else {
-          return { ok: false, reason: 'Pick one team in the Team filter' };
+        for (const id of shortIds) {
+          if (r.team1 === id || r.team2 === id) counts.set(id, (counts.get(id) || 0) + 1);
         }
-      } else if (shortIds.length === 1) {
-        const cover = teamClusters.find((c) => c.shortIds.includes(shortIds[0]));
-        clusterKey = cover?.key || shortIds[0];
-        if (cover) shortIds = cover.shortIds;
       }
+      const focusTeam = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      return {
+        ok: true,
+        focusTeam,
+        focusTeamIds: shortIds,
+        clusterKey,
+        focusName: teamClustersByKey.get(clusterKey)?.name || '',
+        teamOptions: [],
+        needsTeamPick: false
+      };
     }
 
-    if (!shortIds.length) return { ok: false, reason: 'No shared team across selected rounds' };
-
-    const inFocus = (r) => shortIds.some((id) => r.team1 === id || r.team2 === id);
-    if (!picked.every(inFocus)) {
-      return { ok: false, reason: 'Selected team must be in every round' };
+    if (filters.teams.size > 1) {
+      return { ok: false, reason: 'Filter exactly one team (or clear Team)' };
     }
 
-    // Prefer the short-id that appears most often in the selection.
-    const counts = new Map(shortIds.map((id) => [id, 0]));
-    for (const r of picked) {
-      for (const id of shortIds) {
-        if (r.team1 === id || r.team2 === id) counts.set(id, (counts.get(id) || 0) + 1);
-      }
+    const common = commonTeamIds(picked);
+    if (!common.length) return { ok: false, reason: 'No shared team across selected rounds' };
+
+    const teamOptions = teamOptionsFromIds(common);
+    if (teamOptions.length === 1) {
+      const only = teamOptions[0];
+      return {
+        ok: true,
+        focusTeam: only.focusTeam,
+        focusTeamIds: only.focusTeamIds,
+        clusterKey: only.key,
+        focusName: only.name,
+        teamOptions: [],
+        needsTeamPick: false
+      };
     }
-    const focusTeam = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
-    return { ok: true, focusTeam, focusTeamIds: shortIds, clusterKey };
+
+    // Multiple shared teams (typical match) — Analyzer will ask which one.
+    return {
+      ok: true,
+      focusTeam: '',
+      focusTeamIds: [],
+      clusterKey: '',
+      focusName: '',
+      teamOptions,
+      needsTeamPick: true
+    };
   }
 
   resultEl?.addEventListener('click', async (e) => {
@@ -1325,7 +1362,8 @@ export function initReplaysView({ escapeHtml }) {
       escapeHtml,
       focusTeam: focus.focusTeam || '',
       focusTeamIds: focus.focusTeamIds || [],
-      focusName: focus.focusName || ''
+      focusName: focus.focusName || '',
+      teamOptions: focus.teamOptions || []
     });
   }
 

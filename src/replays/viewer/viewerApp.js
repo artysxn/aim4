@@ -32,6 +32,7 @@ function syncUrl(round) {
  * @param {string} [opts.title]
  * @param {(s: string) => string} opts.escapeHtml
  * @param {string} [opts.focusTeam] short id for Analyzer
+ * @param {Array<{key?:string,focusTeam:string,focusTeamIds:string[],name:string}>} [opts.teamOptions]
  * @param {() => void} [opts.onClose]
  */
 export function openViewer({
@@ -42,6 +43,7 @@ export function openViewer({
   focusTeam = '',
   focusTeamIds = [],
   focusName = '',
+  teamOptions = [],
   onClose
 }) {
   const store = new TickStore();
@@ -51,7 +53,8 @@ export function openViewer({
     ? [...focusTeamIds]
     : focusTeam
       ? [focusTeam]
-      : inferFocusTeamIds(rounds);
+      : [];
+  // Same map + at least one team shared by every round (team can be picked in Analyzer).
   const canAnalyze = analyzerEligible(rounds, focusIds);
 
   const overlay = document.createElement('div');
@@ -68,7 +71,7 @@ export function openViewer({
       <div class="rv-modes">
         <button type="button" class="rv-mode" data-mode="timeline">Timeline</button>
         <button type="button" class="rv-mode" data-mode="analyzer" ${
-          canAnalyze ? '' : 'disabled title="Same map and one shared team required"'
+          canAnalyze ? '' : 'disabled title="Same map and at least one shared team required"'
         }>Analyzer</button>
       </div>
     </header>
@@ -95,6 +98,7 @@ export function openViewer({
       focusTeam: focusIds[0] || focusTeam,
       focusTeamIds: focusIds,
       focusName,
+      teamOptions,
       onRound: syncUrl
     });
     if (next === 'analyzer') syncUrl(null);
@@ -137,8 +141,8 @@ export function openViewer({
   return { close };
 }
 
-/** Team ids shared by every round. Empty when the set is ambiguous (both sides). */
-export function inferFocusTeamIds(rounds) {
+/** Team ids shared by every round (may be 1 or 2 in a typical match). */
+export function commonTeamIds(rounds) {
   if (!rounds?.length) return [];
   let common = null;
   for (const r of rounds) {
@@ -147,13 +151,19 @@ export function inferFocusTeamIds(rounds) {
     if (!common) common = ids;
     else common = new Set([...common].filter((id) => ids.has(id)));
   }
-  if (!common?.size) return [];
-  // A match always shares both teams — only treat a single leftover id as focus.
-  if (common.size === 1) return [...common];
-  return [];
+  return [...(common || [])];
 }
 
-/** Same map + a focus team present in every round. */
+/** @deprecated Prefer commonTeamIds; returns a single id only when unambiguous. */
+export function inferFocusTeamIds(rounds) {
+  const common = commonTeamIds(rounds);
+  return common.length === 1 ? common : [];
+}
+
+/**
+ * Analyzer is available when every round shares one map and at least one team.
+ * Focus team may be chosen later inside Analyzer when multiple teams are shared.
+ */
 export function analyzerEligible(rounds, focusTeamIds = []) {
   if (!rounds?.length) return false;
   const maps = new Set(rounds.map((r) => r.map).filter(Boolean));
@@ -161,7 +171,8 @@ export function analyzerEligible(rounds, focusTeamIds = []) {
   const focus = (Array.isArray(focusTeamIds) ? focusTeamIds : focusTeamIds ? [focusTeamIds] : []).filter(
     Boolean
   );
-  const ids = focus.length ? focus : inferFocusTeamIds(rounds);
-  if (!ids.length) return false;
-  return rounds.every((r) => ids.some((id) => r.team1 === id || r.team2 === id));
+  if (focus.length) {
+    return rounds.every((r) => focus.some((id) => r.team1 === id || r.team2 === id));
+  }
+  return commonTeamIds(rounds).length >= 1;
 }

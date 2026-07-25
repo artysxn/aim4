@@ -1806,6 +1806,17 @@ body.rv-open {
   text-transform: uppercase;
 }
 
+.rv-az-pick-hint {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.rv-az-teams .rv-az-chip {
+  border-radius: 4px;
+}
+
 .rv-az-chips {
   display: flex;
   flex-wrap: wrap;
@@ -1838,30 +1849,84 @@ body.rv-open {
   color: var(--text);
 }
 
-.rv-az-buys .rv-az-chip {
-  border-radius: 4px;
+.rv-az-seg {
+  display: flex;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.rv-az-seg-btn {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 6px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font: 600 13px var(--font-body);
+  cursor: pointer;
+}
+
+.rv-az-seg-btn:last-child {
+  border-right: 0;
+}
+
+.rv-az-seg-btn small {
+  margin-left: 4px;
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+.rv-az-seg-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.rv-az-seg-btn.active {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.rv-az-buy-select {
+  width: 100%;
+  font-size: 12px;
 }
 
 .rv-az-players {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .rv-az-player {
   display: grid;
-  grid-template-columns: auto auto 1fr auto;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 8px;
-  padding: 4px 2px;
-  color: var(--text);
-  font-size: 13px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--muted);
+  font: 500 13px var(--font-body);
+  text-align: left;
   cursor: pointer;
 }
 
-.rv-az-player input {
-  margin: 0;
-  accent-color: var(--accent);
+.rv-az-player:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.rv-az-player.selected {
+  color: var(--text);
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
 }
 
 .rv-az-swatch {
@@ -1880,6 +1945,57 @@ body.rv-open {
 .rv-az-player small {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+.rv-az-player.selected small {
+  color: inherit;
+  opacity: 0.75;
+}
+
+.rv-az-util-bar {
+  display: flex;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.rv-az-util-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.45;
+}
+
+.rv-az-util-btn:last-child {
+  border-right: 0;
+}
+
+.rv-az-util-btn:hover {
+  opacity: 0.75;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.rv-az-util-btn.active {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.rv-az-util-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  filter: brightness(0) invert(0.92);
+  pointer-events: none;
 }
 
 .rv-az-empty {
@@ -1962,52 +2078,6 @@ body.rv-open {
   background: rgba(0, 0, 0, 0.25);
 }
 
-.rv-az-sel-empty {
-  margin: 12px 0 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.rv-az-sel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.rv-az-sel-head h3 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.rv-az-invert {
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--muted);
-  font: 500 11px var(--font-body);
-  cursor: pointer;
-}
-
-.rv-az-invert:hover {
-  color: var(--text);
-  border-color: var(--border-strong);
-}
-
-.rv-az-sel-cols {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
 .rv-az-sel-list {
   flex: 1;
   min-height: 0;
@@ -2072,13 +2142,6 @@ body.rv-open {
 
 .rv-az-replay svg {
   fill: currentColor;
-}
-
-.rv-az-sel-hint {
-  margin: 0;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.35;
 }
 
 .rv-analyzer-clock {
