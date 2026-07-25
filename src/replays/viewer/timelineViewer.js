@@ -346,6 +346,16 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         `<span class="rv-mark kill" style="left:${at(k.tick) * 100}%;background:${color}" title="Kill"></span>`
       );
     }
+    const noteList = roundNotes.length ? roundNotes : notesFromMeta(activeMeta);
+    for (const n of noteList) {
+      if (n.tick == null) continue;
+      const label = noteClockLabel(n.tick);
+      parts.push(
+        `<span class="rv-mark note" style="left:${at(n.tick) * 100}%" title="Note · ${escapeHtml(
+          label
+        )}"></span>`
+      );
+    }
     marksEl.innerHTML = parts.join('');
   }
 
@@ -393,8 +403,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     // Instant chrome from the summary; ticks + meta load for this round only.
     activeMeta = fallbackMeta(rounds[index]);
     renderScoreboards();
-    renderActiveMarks();
     loadNotesFromMeta(true);
+    renderActiveMarks();
     notePanel.hidden = true;
     noteBtn.classList.remove('active');
     if (seek) playback.seek(liveOffsetOf(index), { emit: false });
@@ -434,8 +444,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       if (sideChanged) renderRoundStrip();
       else markActiveRound();
       renderScoreboards();
-      renderActiveMarks();
       loadNotesFromMeta(true);
+      renderActiveMarks();
       autoOpenNotesIfPresent();
     }
 
@@ -904,6 +914,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     noteIndex = roundNotes.length ? 0 : -1;
     noteMsg.textContent = '';
     renderNoteDock();
+    renderActiveMarks();
   }
 
   function seekToNoteTick(tick) {
@@ -957,6 +968,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     noteMsg.textContent = '';
     setNoteOpen(true);
     renderNoteDock({ forceText: true });
+    renderActiveMarks();
     noteText.focus();
   }
 
@@ -998,6 +1010,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         renderNoteDock();
       }
       syncNoteHasBadge();
+      renderActiveMarks();
     } catch (err) {
       noteMsg.textContent = err.message || 'Could not save.';
     }
@@ -1028,11 +1041,13 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       noteMsg.textContent = 'Deleted. Save to confirm.';
       renderNoteDock();
       syncNoteHasBadge();
+      renderActiveMarks();
       return;
     }
     noteIndex = Math.min(noteIndex, roundNotes.length - 1);
     noteMsg.textContent = 'Deleted. Save to confirm.';
     renderNoteDock();
+    renderActiveMarks();
   });
   el.querySelector('#rv-note-save').addEventListener('click', () => persistNotes());
 

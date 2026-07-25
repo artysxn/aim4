@@ -1906,6 +1906,14 @@ body.rv-open {
   height: 12px;
 }
 
+.rv-mark.note {
+  width: 7px;
+  height: 7px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
 .rv-mark.round {
   background: rgba(255, 255, 255, 0.28);
 }
