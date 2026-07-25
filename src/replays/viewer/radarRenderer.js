@@ -16,10 +16,22 @@ import {
   FLAG_SCOPED
 } from '../shared/tickFormat.js';
 
+/** Roster team colors (fallback when a tick has no side byte). */
 export const TEAM_COLORS = {
   1: { base: '#38a3e8', bright: '#7cc7f5', dim: '#1d5b82' },
   2: { base: '#e8913c', bright: '#f5bb7c', dim: '#8a5420' }
 };
+
+/** Live T / CT colors — preferred when the tick buffer carries side. */
+export const SIDE_COLORS = {
+  T: { base: '#e8b84a', bright: '#f5d27a', dim: '#8a6a20' },
+  CT: { base: '#5b9fd4', bright: '#8fc4ef', dim: '#2a5578' }
+};
+
+export function colorsForState(state, rosterTeam) {
+  if (state?.side === 'T' || state?.side === 'CT') return SIDE_COLORS[state.side];
+  return TEAM_COLORS[rosterTeam] || TEAM_COLORS[1];
+}
 
 const SMOKE_SECONDS = 18;
 const FIRE_SECONDS = 7;
@@ -154,7 +166,7 @@ export class RadarRenderer {
     for (const p of players) {
       const s = states[p.slot];
       if (!s) continue;
-      const colors = TEAM_COLORS[p.team] || TEAM_COLORS[1];
+      const colors = colorsForState(s, p.team);
       const pt = this.project(t, s.x, s.y);
       if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
 

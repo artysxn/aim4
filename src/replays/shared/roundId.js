@@ -200,12 +200,19 @@ export function economyLabel(code) {
 
 /**
  * Which side won a round for UI coloring (T / CT).
- * Matches the parser's half split: team 1 starts T for rounds 1-12, CT after.
+ * Prefers `winnerSide` written by the parser from round_end + per-round
+ * team_num. Falls back to team1Side + winner, then the classic half split.
  *
- * @param {{ winner: 1|2, round: number }} r
+ * @param {{ winner?: 1|2, round?: number, winnerSide?: string, team1Side?: string }} r
  * @returns {'T'|'CT'}
  */
 export function winningSide(r) {
+  if (r?.winnerSide === 'T' || r?.winnerSide === 'CT') return r.winnerSide;
+  if (r?.team1Side === 'T' || r?.team1Side === 'CT') {
+    if (r.winner === 1) return r.team1Side;
+    return r.team1Side === 'T' ? 'CT' : 'T';
+  }
+  // Legacy packages with no side fields.
   const round = Number(r?.round) || 1;
   const team1IsT = round <= 12;
   if (r?.winner === 1) return team1IsT ? 'T' : 'CT';

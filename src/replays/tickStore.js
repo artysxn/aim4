@@ -2,17 +2,15 @@
 // replays/tickStore.js
 // Loading strategy for round tick data, and the sampler the renderer reads.
 //
-// Timeline mode loads in two passes:
-//   1. Coarse. Every 100th tick of round 1, then round 2, and so on to the end
-//      of the selection. Each round is ~1% of its full size, so the whole
-//      match becomes scrubbable in the time one round would take to download.
-//   2. Full. Starting at the round being watched, every tick of that round.
-//      A round that has been loaded in full stays loaded while the selection
-//      is open; nothing is evicted until the viewer closes or a different set
-//      of rounds is opened.
+// Timeline mode loads one round at a time, at full detail:
+//   - Opening the viewer loads the first selected round fully.
+//   - Clicking another round loads that round fully (if not already cached).
+//   - Loaded rounds stay in memory until the viewer closes or a different
+//     selection is opened.
 //
-// Macro mode skips the coarse pass: it needs every tick of every selected
-// round, so it loads them at full detail, one round at a time, in order.
+// Macro mode still needs every selected round: it loads them at full detail,
+// one round at a time, in order. A coarse (stride-100) fetch helper remains
+// available for other UIs that want a cheap preview.
 // ---------------------------------------------------------------------------
 
 import { fetchRoundTicks } from './api.js';

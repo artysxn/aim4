@@ -22,6 +22,9 @@ export const SCHEMA_VERSION = 1;
  * @typedef {object} NormalizedRound
  * @property {number} round             1-99, order in the match
  * @property {1|2} winner
+ * @property {'T'|'CT'} winnerSide      side that won (from round_end + team_num)
+ * @property {'T'|'CT'} team1Side       side roster team 1 played this round
+ * @property {'T'|'CT'} team2Side       side roster team 2 played this round
  * @property {number} econ1             0-5 economy bucket, team 1
  * @property {number} econ2             0-5 economy bucket, team 2
  * @property {number} startTick         first tick of freezetime

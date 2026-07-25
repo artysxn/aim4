@@ -19,7 +19,7 @@
 //  12  weapon uint8   index into the round's weapon dictionary
 //  13  flags  uint8   see FLAG_*
 //  14  flash  uint8   remaining flash blind, 20ths of a second, capped
-//  15  --     uint8   reserved
+//  15  side   uint8   0 unknown, 2 = T, 3 = CT (engine team_num)
 //
 // A 110 second round at 64 tick is ~7000 ticks -> 1.1 MB for all ten players;
 // the same round at stride 100 is ~11 KB, which is why the coarse pass over a
@@ -40,6 +40,11 @@ export const POS_SCALE = 4;
 export const ANGLE_SCALE = 100;
 /** Flash time is stored in 20ths of a second, saturating at 255 (12.75 s). */
 export const FLASH_SCALE = 20;
+
+/** Per-tick side from engine team_num (same codes CS uses). */
+export const SIDE_UNKNOWN = 0;
+export const SIDE_T = 2;
+export const SIDE_CT = 3;
 
 export const FLAG_ALIVE = 1 << 0;
 export const FLAG_DUCKING = 1 << 1;
@@ -127,6 +132,7 @@ export function writeRecord(view, row, slot, state) {
   view.setUint8(o + 12, clampU8(state.weapon));
   view.setUint8(o + 13, clampU8(state.flags));
   view.setUint8(o + 14, clampU8((state.flash || 0) * FLASH_SCALE));
+  view.setUint8(o + 15, encodeSide(state.side ?? state.teamNum));
 }
 
 /**
@@ -145,8 +151,23 @@ export function readRecord(view, row, slot, out = {}) {
   out.weapon = view.getUint8(o + 12);
   out.flags = view.getUint8(o + 13);
   out.flash = view.getUint8(o + 14) / FLASH_SCALE;
+  out.teamNum = view.getUint8(o + 15);
+  out.side = decodeSide(out.teamNum);
   out.alive = (out.flags & FLAG_ALIVE) !== 0;
   return out;
+}
+
+/** Accept 'T'/'CT', 2/3, or already-encoded side bytes. */
+export function encodeSide(side) {
+  if (side === 'T' || side === SIDE_T || side === 2) return SIDE_T;
+  if (side === 'CT' || side === SIDE_CT || side === 3) return SIDE_CT;
+  return SIDE_UNKNOWN;
+}
+
+export function decodeSide(code) {
+  if (code === SIDE_T) return 'T';
+  if (code === SIDE_CT) return 'CT';
+  return '';
 }
 
 export function wrapAngle(deg) {

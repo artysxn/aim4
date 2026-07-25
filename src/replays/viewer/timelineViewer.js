@@ -1,36 +1,25 @@
 // ---------------------------------------------------------------------------
 // replays/viewer/timelineViewer.js
-// One round on screen at a time. Each selected round has its own scrub
-// timeline above the radar; play advances through rounds in order.
-//
-// Loading follows the two-pass rule. The coarse pass (every 100th tick of
-// every round) runs as soon as the viewer opens, so scrub bars are live
-// immediately. The full pass then fills in the round being watched first.
+// One round on screen at a time. Round chips + a single scrub timeline sit
+// over the bottom of the stage (higher z). Full tick data is loaded for the
+// active round only; switching rounds loads that round's data next. Cached
+// rounds stay in memory until the viewer closes.
 // ---------------------------------------------------------------------------
 
 import { fetchRoundMeta } from '../api.js';
-import { COARSE_STRIDE } from '../tickStore.js';
-import { RadarRenderer, TEAM_COLORS } from './radarRenderer.js';
+import { RadarRenderer, SIDE_COLORS, TEAM_COLORS } from './radarRenderer.js';
 import { Playback, RoundSequence } from './playback.js';
 import { clockAt, formatClock, phaseMarkers, timingFor } from './roundClock.js';
 import { economyLabel, winningSide } from '../shared/roundId.js';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 5;
 
 export function createTimelineViewer({ store, rounds, escapeHtml }) {
   const el = document.createElement('div');
   el.className = 'rv-timeline';
   el.innerHTML = `
-    <div class="rv-chrome">
-      <div class="rv-transport">
-        <button type="button" class="rv-speed" id="rv-speed">x1</button>
-        <button type="button" class="rv-play" id="rv-play" aria-label="Play">
-          <svg viewBox="0 -960 960 960" width="18" height="18"><path d="M320-200v-560l440 280-440 280Z"/></svg>
-        </button>
-        <span class="rv-time" id="rv-time">00:00</span>
-      </div>
-      <div class="rv-round-timelines" id="rv-round-timelines"></div>
-    </div>
     <div class="rv-stage">
       <aside class="rv-team rv-team-1" data-team="1"></aside>
       <div class="rv-map">
@@ -39,17 +28,38 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
         <div class="rv-loading" id="rv-loading"></div>
       </div>
       <aside class="rv-team rv-team-2" data-team="2"></aside>
+    </div>
+    <div class="rv-chrome">
+      <div class="rv-rounds" id="rv-rounds"></div>
+      <div class="rv-transport">
+        <button type="button" class="rv-speed" id="rv-speed">x1</button>
+        <button type="button" class="rv-play" id="rv-play" aria-label="Play">
+          <svg viewBox="0 -960 960 960" width="18" height="18"><path d="M320-200v-560l440 280-440 280Z"/></svg>
+        </button>
+        <div class="rv-scrub" id="rv-scrub">
+          <div class="rv-scrub-track"><div class="rv-scrub-fill" id="rv-scrub-fill"></div></div>
+          <div class="rv-scrub-marks" id="rv-scrub-marks"></div>
+          <div class="rv-scrub-handle" id="rv-scrub-handle"></div>
+        </div>
+        <span class="rv-time" id="rv-time">00:00</span>
+      </div>
     </div>`;
 
   const canvas = el.querySelector('#rv-canvas');
+  const mapEl = el.querySelector('.rv-map');
   const clockEl = el.querySelector('#rv-clock');
   const loadingEl = el.querySelector('#rv-loading');
-  const timelinesEl = el.querySelector('#rv-round-timelines');
+  const roundsEl = el.querySelector('#rv-rounds');
+  const scrubEl = el.querySelector('#rv-scrub');
+  const fillEl = el.querySelector('#rv-scrub-fill');
+  const marksEl = el.querySelector('#rv-scrub-marks');
+  const handleEl = el.querySelector('#rv-scrub-handle');
   const timeEl = el.querySelector('#rv-time');
   const playBtn = el.querySelector('#rv-play');
   const speedBtn = el.querySelector('#rv-speed');
   const team1El = el.querySelector('.rv-team-1');
   const team2El = el.querySelector('.rv-team-2');
+  const chromeEl = el.querySelector('.rv-chrome');
 
   const renderer = new RadarRenderer(canvas);
   const metaCache = new Map();
@@ -79,7 +89,15 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     });
     sequence = new RoundSequence(metas.map((m, i) => m || fallbackMeta(rounds[i])));
     playback.setDuration(sequence.duration);
-    renderRoundTimelines();
+    // Prefer sides from round JSON (source of truth) over the demo summary.
+    metas.forEach((m, i) => {
+      if (!m || !rounds[i]) return;
+      if (m.winnerSide) rounds[i].winnerSide = m.winnerSide;
+      if (m.team1Side) rounds[i].team1Side = m.team1Side;
+      if (m.team2Side) rounds[i].team2Side = m.team2Side;
+      if (m.winner === 1 || m.winner === 2) rounds[i].winner = m.winner;
+    });
+    renderRoundStrip();
     await selectRound(0, { seek: true });
   }
 
@@ -97,90 +115,75 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     };
   }
 
-  // ---- per-round timelines (above the map) --------------------------------
+  // ---- round chips --------------------------------------------------------
 
-  function renderRoundTimelines() {
-    timelinesEl.innerHTML = rounds
+  function renderRoundStrip() {
+    roundsEl.innerHTML = rounds
       .map((r, i) => {
         const side = winningSide(r);
         const sideClass = side === 'T' ? 'wt' : 'wct';
-        return `
-        <div class="rv-round-row ${sideClass}" data-index="${i}">
-          <button type="button" class="rv-round ${sideClass}" data-index="${i}" title="${escapeHtml(
-            `Round ${r.round} · ${side} win · ${economyLabel(r.econ1)} vs ${economyLabel(r.econ2)}`
-          )}">${String(r.round).padStart(2, '0')}</button>
-          <div class="rv-scrub" data-scrub="${i}">
-            <div class="rv-scrub-track"><div class="rv-scrub-fill" data-fill="${i}"></div></div>
-            <div class="rv-scrub-marks" data-marks="${i}"></div>
-            <div class="rv-scrub-handle" data-handle="${i}"></div>
-          </div>
-          <span class="rv-round-clock" data-clock="${i}">0:00</span>
-        </div>`;
+        return `<button type="button" class="rv-round ${sideClass}" data-index="${i}" title="${escapeHtml(
+          `Round ${r.round} · ${side} win · ${economyLabel(r.econ1)} vs ${economyLabel(r.econ2)}`
+        )}">${String(r.round).padStart(2, '0')}</button>`;
       })
       .join('');
     markActiveRound();
-    renderAllMarks();
   }
 
   function markActiveRound() {
-    timelinesEl.querySelectorAll('.rv-round-row').forEach((row) => {
-      row.classList.toggle('active', Number(row.dataset.index) === activeIndex);
+    roundsEl.querySelectorAll('.rv-round').forEach((b) => {
+      b.classList.toggle('active', Number(b.dataset.index) === activeIndex);
     });
+    const side = activeIndex >= 0 ? winningSide(rounds[activeIndex]) : null;
+    chromeEl.classList.toggle('wt', side === 'T');
+    chromeEl.classList.toggle('wct', side === 'CT');
   }
 
-  function renderAllMarks() {
-    if (!sequence.length) return;
-    for (let i = 0; i < sequence.length; i++) {
-      const marksEl = timelinesEl.querySelector(`[data-marks="${i}"]`);
-      if (!marksEl) continue;
-      const item = sequence.at(i);
-      const parts = [];
-      for (const m of phaseMarkers(item.timing)) {
-        if (m.key !== 'plant') continue;
-        parts.push(
-          `<span class="rv-mark plant" style="left:${m.at * 100}%" title="Bomb planted"></span>`
-        );
-      }
-      marksEl.innerHTML = parts.join('');
-    }
-  }
-
-  timelinesEl.addEventListener('click', (e) => {
-    const btn = e.target.closest('button[data-index]');
+  roundsEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-index]');
     if (!btn) return;
     const index = Number(btn.dataset.index);
     playback.seek(sequence.offsetOf(index));
     selectRound(index, { seek: false });
   });
 
-  // Scrub within one round's own timeline.
-  let scrubbingIndex = -1;
-  const seekRoundFromEvent = (index, e) => {
-    const scrub = timelinesEl.querySelector(`[data-scrub="${index}"]`);
-    if (!scrub) return;
-    const item = sequence.at(index);
-    if (!item) return;
-    const rect = scrub.getBoundingClientRect();
-    const f = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    playback.seek(sequence.offsetOf(index) + f * item.seconds);
-    if (index !== activeIndex) selectRound(index, { seek: false });
-  };
+  // ---- active round's scrubber --------------------------------------------
 
-  timelinesEl.addEventListener('pointerdown', (e) => {
-    const scrub = e.target.closest('[data-scrub]');
-    if (!scrub) return;
-    scrubbingIndex = Number(scrub.dataset.scrub);
-    scrub.setPointerCapture(e.pointerId);
-    seekRoundFromEvent(scrubbingIndex, e);
+  function renderActiveMarks() {
+    if (activeIndex < 0 || !sequence.at(activeIndex)) {
+      marksEl.innerHTML = '';
+      return;
+    }
+    const item = sequence.at(activeIndex);
+    const parts = [];
+    for (const m of phaseMarkers(item.timing)) {
+      if (m.key !== 'plant') continue;
+      parts.push(
+        `<span class="rv-mark plant" style="left:${m.at * 100}%" title="Bomb planted"></span>`
+      );
+    }
+    marksEl.innerHTML = parts.join('');
+  }
+
+  let scrubbing = false;
+  const seekFromEvent = (e) => {
+    const item = sequence.at(activeIndex);
+    if (!item) return;
+    const rect = scrubEl.getBoundingClientRect();
+    const f = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    playback.seek(sequence.offsetOf(activeIndex) + f * item.seconds);
+  };
+  scrubEl.addEventListener('pointerdown', (e) => {
+    scrubbing = true;
+    scrubEl.setPointerCapture(e.pointerId);
+    seekFromEvent(e);
   });
-  timelinesEl.addEventListener('pointermove', (e) => {
-    if (scrubbingIndex >= 0) seekRoundFromEvent(scrubbingIndex, e);
+  scrubEl.addEventListener('pointermove', (e) => {
+    if (scrubbing) seekFromEvent(e);
   });
-  timelinesEl.addEventListener('pointerup', (e) => {
-    if (scrubbingIndex < 0) return;
-    const scrub = timelinesEl.querySelector(`[data-scrub="${scrubbingIndex}"]`);
-    scrub?.releasePointerCapture?.(e.pointerId);
-    scrubbingIndex = -1;
+  scrubEl.addEventListener('pointerup', (e) => {
+    scrubbing = false;
+    scrubEl.releasePointerCapture(e.pointerId);
   });
 
   // ---- round selection ----------------------------------------------------
@@ -197,10 +200,15 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
 
     await renderer.setMap(activeMeta.map || rounds[index].map);
     renderScoreboards();
+    renderActiveMarks();
 
     if (seek) playback.seek(sequence.offsetOf(index), { emit: false });
 
-    store.loadFull(file);
+    // Full ticks for this round only. Already-loaded rounds stay cached.
+    syncLoading();
+    draw();
+    await store.loadFull(file);
+    if (destroyed || activeIndex !== index) return;
     draw();
   }
 
@@ -211,8 +219,16 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     const t1 = activeMeta.team1 || { name: 'Team 1' };
     const t2 = activeMeta.team2 || { name: 'Team 2' };
     const wins = countWins();
-    team1El.innerHTML = teamHtml(1, t1, wins.team1);
-    team2El.innerHTML = teamHtml(2, t2, wins.team2);
+    // Panels follow live sides when known (T left / CT right like most 2D viewers).
+    const s1 = activeMeta.team1Side;
+    const s2 = activeMeta.team2Side;
+    if (s1 === 'CT' && s2 === 'T') {
+      team1El.innerHTML = teamHtml(2, t2, wins.team2, 'T');
+      team2El.innerHTML = teamHtml(1, t1, wins.team1, 'CT');
+    } else {
+      team1El.innerHTML = teamHtml(1, t1, wins.team1, s1 || 'T');
+      team2El.innerHTML = teamHtml(2, t2, wins.team2, s2 || 'CT');
+    }
   }
 
   function countWins() {
@@ -225,13 +241,13 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     return { team1, team2 };
   }
 
-  function teamHtml(team, info, score) {
+  function teamHtml(team, info, score, side) {
     const players = (activeMeta.players || []).filter((p) => p.team === team);
     const rows = players
       .map((p) => {
         const st = activeMeta.stats?.[p.id] || {};
         return `
-        <div class="rv-player" data-slot="${p.slot}">
+        <div class="rv-player" data-slot="${p.slot}" data-side="${escapeHtml(side || '')}">
           <div class="rv-player-row">
             <span class="rv-player-name">${escapeHtml(p.name || p.id)}</span>
             <span class="rv-player-money">$${st.money ?? 0}</span>
@@ -241,8 +257,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
         </div>`;
       })
       .join('');
+    const sideClass = side === 'T' ? 'side-t' : side === 'CT' ? 'side-ct' : '';
     return `
-      <div class="rv-team-head">
+      <div class="rv-team-head ${sideClass}">
+        <span class="rv-team-side">${escapeHtml(side || '')}</span>
         <span class="rv-team-name">${escapeHtml(info.name || `Team ${team}`)}</span>
         <span class="rv-team-score">${score}</span>
       </div>
@@ -261,7 +279,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
       const hp = root.querySelector('.rv-player-hp');
       if (hp) {
         hp.style.width = `${Math.max(0, Math.min(100, s.health))}%`;
-        hp.style.background = TEAM_COLORS[p.team]?.base || '#888';
+        const side = s.side || root.dataset.side;
+        hp.style.background =
+          (side && SIDE_COLORS[side]?.base) || TEAM_COLORS[p.team]?.base || '#888';
       }
       const gear = root.querySelector('.rv-player-gear');
       if (gear) {
@@ -273,6 +293,111 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
       }
     }
   }
+
+  // ---- zoom / pan ---------------------------------------------------------
+
+  function setZoom(next, anchorX, anchorY) {
+    const prev = renderer.zoom;
+    const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, next));
+    if (z === prev) {
+      if (z <= MIN_ZOOM) {
+        renderer.panX = 0;
+        renderer.panY = 0;
+      }
+      return;
+    }
+
+    if (z <= MIN_ZOOM) {
+      renderer.zoom = MIN_ZOOM;
+      renderer.panX = 0;
+      renderer.panY = 0;
+    } else if (Number.isFinite(anchorX) && Number.isFinite(anchorY)) {
+      // Keep the world point under the cursor stable while zooming.
+      const rect = canvas.getBoundingClientRect();
+      const { w, h } = renderer.resize();
+      const t0 = renderer.viewTransform(w, h);
+      const cx = ((anchorX - rect.left) / rect.width) * w;
+      const cy = ((anchorY - rect.top) / rect.height) * h;
+      const worldX = (cx - t0.ox) / t0.scale;
+      const worldY = (cy - t0.oy) / t0.scale;
+      renderer.zoom = z;
+      const t1 = renderer.viewTransform(w, h);
+      renderer.panX += (cx - (worldX * t1.scale + t1.ox)) / renderer.dpr;
+      renderer.panY += (cy - (worldY * t1.scale + t1.oy)) / renderer.dpr;
+    } else {
+      renderer.zoom = z;
+    }
+    syncPanCursor();
+    draw();
+  }
+
+  function syncPanCursor() {
+    const canPan = renderer.zoom > MIN_ZOOM;
+    mapEl.classList.toggle('can-pan', canPan);
+  }
+
+  mapEl.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      setZoom(renderer.zoom * factor, e.clientX, e.clientY);
+    },
+    { passive: false }
+  );
+
+  let panning = false;
+  let panBtn = -1;
+  let lastX = 0;
+  let lastY = 0;
+
+  mapEl.addEventListener('pointerdown', (e) => {
+    if (e.target !== canvas && !canvas.contains(e.target) && e.target !== mapEl) {
+      // Allow pan only from the map surface / canvas, not the clock label.
+      if (e.target.closest?.('.rv-clock, .rv-loading')) return;
+    }
+    if (e.target.closest?.('.rv-clock, .rv-loading')) return;
+    const isPanBtn = e.button === 0 || e.button === 1;
+    if (!isPanBtn || renderer.zoom <= MIN_ZOOM) return;
+    panning = true;
+    panBtn = e.button;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    mapEl.classList.add('panning');
+    mapEl.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  mapEl.addEventListener('pointermove', (e) => {
+    if (!panning) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    renderer.panX += dx;
+    renderer.panY += dy;
+    draw();
+  });
+  const endPan = (e) => {
+    if (!panning) return;
+    if (e.button !== undefined && e.button !== panBtn && e.type === 'pointerup') return;
+    panning = false;
+    panBtn = -1;
+    mapEl.classList.remove('panning');
+    try {
+      mapEl.releasePointerCapture(e.pointerId);
+    } catch {
+      /* already released */
+    }
+  };
+  mapEl.addEventListener('pointerup', endPan);
+  mapEl.addEventListener('pointercancel', endPan);
+  mapEl.addEventListener('auxclick', (e) => {
+    // Stop middle-click autofocus / autoscroll.
+    if (e.button === 1) e.preventDefault();
+  });
+  mapEl.addEventListener('contextmenu', (e) => {
+    if (renderer.zoom > MIN_ZOOM) e.preventDefault();
+  });
 
   // ---- frame --------------------------------------------------------------
 
@@ -306,46 +431,26 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     const clock = clockAt(timing, tick);
     clockEl.textContent = clock.label;
     clockEl.dataset.phase = clock.phase;
-    timeEl.textContent = formatClock(playback.position);
 
-    syncRoundScrubs(at);
+    const item = sequence.at(activeIndex);
+    const local = at.local;
+    timeEl.textContent = formatClock(local);
+    const pct = item?.seconds ? (local / item.seconds) * 100 : 0;
+    fillEl.style.width = `${pct}%`;
+    handleEl.style.left = `${pct}%`;
+
     syncScoreboard();
-    syncLoading(track);
+    syncLoading();
   }
 
-  function syncRoundScrubs(at) {
-    for (let i = 0; i < sequence.length; i++) {
-      const item = sequence.at(i);
-      const fill = timelinesEl.querySelector(`[data-fill="${i}"]`);
-      const handle = timelinesEl.querySelector(`[data-handle="${i}"]`);
-      const clock = timelinesEl.querySelector(`[data-clock="${i}"]`);
-      if (!item || !fill) continue;
-
-      let pct = 0;
-      let localSec = 0;
-      if (i < at.index) {
-        pct = 100;
-        localSec = item.seconds;
-      } else if (i === at.index) {
-        localSec = at.local;
-        pct = item.seconds ? (at.local / item.seconds) * 100 : 0;
-      }
-      fill.style.width = `${pct}%`;
-      if (handle) handle.style.left = `${pct}%`;
-      if (clock) clock.textContent = formatClock(localSec);
-    }
-  }
-
-  function syncLoading(track) {
+  function syncLoading() {
     const entry = store.get(files[activeIndex]);
     if (entry?.isFull) {
       loadingEl.hidden = true;
       return;
     }
     loadingEl.hidden = false;
-    loadingEl.textContent = track
-      ? `Preview at 1/${COARSE_STRIDE} detail, loading full round…`
-      : 'Loading round…';
+    loadingEl.textContent = 'Loading round…';
   }
 
   // ---- transport ----------------------------------------------------------
@@ -387,18 +492,12 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
   window.addEventListener('resize', onResize);
 
   const offStore = store.onChange((event) => {
-    if (event.type === 'coarse-done') renderAllMarks();
     if (event.type === 'full' && event.file === files[activeIndex]) draw();
   });
 
   (async () => {
+    // buildSequence → selectRound(0) already full-loads round 1 only.
     await buildSequence();
-    if (destroyed) return;
-    renderAllMarks();
-    await store.coarsePass(files, COARSE_STRIDE);
-    if (destroyed) return;
-    draw();
-    store.fullPass(files, Math.max(0, activeIndex));
   })();
 
   return {

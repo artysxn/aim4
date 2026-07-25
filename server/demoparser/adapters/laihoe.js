@@ -191,6 +191,55 @@ function readEvents(file, names) {
 const sid = (v) => (v === null || v === undefined ? '' : String(v));
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
+/** Coerce numbers that demoparser sometimes hands back as numeric strings. */
+const numish = (v) => {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
+  return 0;
+};
+
+/**
+ * Map round_end.winner (and friends) onto T / CT.
+ * Demoparser may return 2/3, "2"/"3", or "T"/"CT".
+ */
+function sideFromWinnerField(raw) {
+  if (raw === 2 || raw === '2') return 'T';
+  if (raw === 3 || raw === '3') return 'CT';
+  const s = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (!s) return null;
+  if (s === 't' || s === 'terrorist' || s === 'terrorists') return 'T';
+  if (s === 'ct' || s === 'counterterrorist' || s === 'counter-terrorist' || s.includes('counter')) {
+    return 'CT';
+  }
+  return null;
+}
+
+/** CS2 round_end.reason → winning side when the winner field is unusable. */
+function sideFromWinReason(reason) {
+  const r = numish(reason);
+  // Common Source 2 / CS2 win reasons.
+  if (r === 1 /* TargetBombed */ || r === 9 /* CTsEliminated */) return 'T';
+  if (r === 7 /* BombDefused */ || r === 8 /* TerroristsEliminated */) return 'CT';
+  return null;
+}
+
+/** Majority team_num (2=T, 3=CT) for one roster side at a buy tick. */
+function sideFromBuys(rosterTeam, buyTick, roster, buys) {
+  let t = 0;
+  let ct = 0;
+  for (const pl of roster) {
+    if (pl.team !== rosterTeam) continue;
+    const snap = buys.get(`${buyTick}:${pl.steamId}`);
+    const n = snap?.teamNum;
+    if (n === 2) t++;
+    else if (n === 3) ct++;
+  }
+  if (t === 0 && ct === 0) return null;
+  return t >= ct ? 'T' : 'CT';
+}
+
 function eventsByName(all) {
   const out = new Map();
   for (const e of all || []) {
@@ -332,7 +381,8 @@ function readBuys(file, spans) {
     buys.set(`${num(r.tick)}:${steam}`, {
       money: num(r.balance),
       equipValue: num(r.current_equip_value),
-      loadout: inventoryOf(r)
+      loadout: inventoryOf(r),
+      teamNum: numish(r.team_num)
     });
   }
   return buys;
@@ -417,6 +467,8 @@ function packBatch(reader, batch, roster, tickRate) {
     // player is holding. It only affects the droplet marker.
     state.flags = flagsFor(r, String(weaponName || '').includes('c4'));
     state.flash = num(r.flash_duration);
+    // Engine team_num each tick (2=T, 3=CT) — same source sparkoo/demoinfocs uses.
+    state.teamNum = numish(r.team_num);
     writeRecord(pack.view, row, slot, state);
   }
 
@@ -480,8 +532,8 @@ function buildRoundSpans(byName, lastTick) {
       freezeEndTick,
       endTick,
       officialEndTick,
-      winnerTeamNum: num(end.winner),
-      reason: num(end.reason)
+      winnerRaw: end.winner,
+      reason: end.reason
     });
   }
   return spans;
@@ -590,10 +642,12 @@ export async function parseDemo(file, opts = {}) {
     const { buffer, weapons } = pack;
     const buyTick = span.freezeEndTick || span.startTick;
 
-    // team 1 starts on T (team_num 2) and swaps at the half.
-    const swapped = span.round > roundsPerHalf;
-    const team1Side = swapped ? 3 : 2;
-    const winner = span.winnerTeamNum === team1Side ? 1 : 2;
+    // Sides come from this round's freezetime team_num, not a half heuristic.
+    // round_end.winner is often "T"/"CT" (or 2/3); never trust a bare num() of it.
+    // Sides for this round from freezetime team_num (not a half heuristic).
+    const team1Side =
+      sideFromBuys(1, buyTick, roster, buys) || (span.round > roundsPerHalf ? 'CT' : 'T');
+    const team2Side = team1Side === 'T' ? 'CT' : 'T';
 
     const kills = (byName.get('player_death') || [])
       .filter((e) => inSpan(e, span))
@@ -644,6 +698,20 @@ export async function parseDemo(file, opts = {}) {
     }
     const plantTick = bomb.find((b) => b.type === 'planted')?.tick ?? null;
 
+    let winnerSide =
+      sideFromWinnerField(span.winnerRaw) || sideFromWinReason(span.reason);
+    if (!winnerSide) {
+      const wNum = numish(span.winnerRaw);
+      if (wNum === 2) winnerSide = 'T';
+      else if (wNum === 3) winnerSide = 'CT';
+    }
+    if (!winnerSide) {
+      if (bomb.some((b) => b.type === 'exploded')) winnerSide = 'T';
+      else if (bomb.some((b) => b.type === 'defused')) winnerSide = 'CT';
+    }
+    if (!winnerSide) winnerSide = team1Side === 'T' ? 'CT' : 'T'; // last resort: avoid painting every round T
+    const winner = winnerSide === team1Side ? 1 : 2;
+
     // Per-player round stats.
     const stats = {};
     for (const pl of roster) {
@@ -680,6 +748,9 @@ export async function parseDemo(file, opts = {}) {
     rounds.push({
       round: span.round,
       winner,
+      winnerSide,
+      team1Side,
+      team2Side,
       econ1: econFor(1),
       econ2: econFor(2),
       startTick: span.startTick,

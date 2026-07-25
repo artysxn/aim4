@@ -644,49 +644,12 @@ body.rv-open {
 /* ---- Timeline mode ------------------------------------------------------ */
 
 .rv-timeline {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
   min-width: 0;
   min-height: 0;
-}
-
-.rv-chrome {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px 8px;
-  border-bottom: 1px solid var(--border);
-  background: rgba(12, 14, 17, 0.95);
-  max-height: 42%;
-  overflow: auto;
-}
-
-.rv-round-timelines {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.rv-round-row {
-  display: grid;
-  grid-template-columns: 40px 1fr 48px;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 0;
-  opacity: 0.72;
-}
-
-.rv-round-row.active {
-  opacity: 1;
-}
-
-.rv-round-clock {
-  color: var(--muted);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
 }
 
 .rv-stage {
@@ -695,14 +658,52 @@ body.rv-open {
   display: grid;
   grid-template-columns: 250px 1fr 250px;
   gap: 12px;
-  padding: 12px;
+  padding: 12px 12px 96px;
   overflow: hidden;
+}
+
+/* Bottom chrome sits on a higher z-layer over the stage so the map is not
+   cropped by a separate flex row — tools stay at the bottom of the screen. */
+.rv-chrome {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(12, 14, 17, 0.72), rgba(12, 14, 17, 0.96) 40%);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.rv-chrome > * {
+  pointer-events: auto;
+}
+
+.rv-rounds {
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
 }
 
 .rv-map {
   position: relative;
   min-width: 0;
   display: flex;
+  touch-action: none;
+}
+
+.rv-map.can-pan {
+  cursor: grab;
+}
+
+.rv-map.panning {
+  cursor: grabbing;
 }
 
 .rv-canvas {
@@ -761,6 +762,7 @@ body.rv-open {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
 }
@@ -784,6 +786,36 @@ body.rv-open {
 
 .rv-team-2 .rv-team-name {
   color: var(--rv-team2);
+}
+
+.rv-team-side {
+  flex: 0 0 auto;
+  min-width: 22px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.rv-team-head.side-t .rv-team-side,
+.rv-team-head.side-t .rv-team-name {
+  color: var(--rv-t);
+}
+
+.rv-team-head.side-ct .rv-team-side,
+.rv-team-head.side-ct .rv-team-name {
+  color: var(--rv-ct);
+}
+
+.rv-team-head.side-t .rv-team-side {
+  background: color-mix(in srgb, var(--rv-t) 22%, transparent);
+}
+
+.rv-team-head.side-ct .rv-team-side {
+  background: color-mix(in srgb, var(--rv-ct) 22%, transparent);
 }
 
 .rv-players {
@@ -872,11 +904,11 @@ body.rv-open {
   border-bottom-color: var(--rv-ct);
 }
 
-.rv-round-row.wt .rv-scrub-fill {
+.rv-chrome.wt .rv-scrub-fill {
   background: var(--rv-t);
 }
 
-.rv-round-row.wct .rv-scrub-fill {
+.rv-chrome.wct .rv-scrub-fill {
   background: var(--rv-ct);
 }
 
@@ -885,7 +917,7 @@ body.rv-open {
   color: var(--text);
 }
 
-.rv-round-row.active .rv-round {
+.rv-round.active {
   background: var(--surface-hover-solid);
   color: var(--text);
 }
@@ -897,7 +929,7 @@ body.rv-open {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 4px 4px 6px;
+  padding: 4px 0 0;
   background: transparent;
 }
 

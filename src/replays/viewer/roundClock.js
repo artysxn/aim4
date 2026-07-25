@@ -6,6 +6,7 @@
 //   freeze    buy time before the round goes live; the clock sits at 1:55
 //   live      1:55 counting down to the bomb never being planted
 //   planted   the countdown is replaced by the 40 second bomb timer
+//             (ceil whole seconds so 39.999 -> 40; under 10s -> hundredths)
 //   over      the winner is decided; the remaining ticks are the round end
 //
 // Everything is derived from tick numbers so the clock stays exact at any
@@ -85,11 +86,11 @@ export function clockAt(timing, tick) {
   }
 
   if (plantTick !== null && tick >= plantTick) {
-    const left = BOMB_SECONDS - secs(plantTick, tick);
+    const left = Math.max(0, BOMB_SECONDS - secs(plantTick, tick));
     return {
       phase: 'planted',
-      label: formatClock(Math.max(0, left)),
-      seconds: Math.max(0, left),
+      label: formatBombClock(left),
+      seconds: left,
       planted: true
     };
   }
@@ -102,13 +103,28 @@ export function clockAt(timing, tick) {
   };
 }
 
-/** "01:55", and "0:07.2" once the bomb timer is inside ten seconds. */
-export function formatClock(seconds, precise = false) {
+/** "01:55" style readout for round / transport clocks. */
+export function formatClock(seconds) {
   const s = Math.max(0, seconds);
   const m = Math.floor(s / 60);
-  const rem = s - m * 60;
-  if (precise && s < 10) return `0:${rem.toFixed(1).padStart(4, '0')}`;
-  return `${String(m).padStart(2, '0')}:${String(Math.floor(rem)).padStart(2, '0')}`;
+  const rem = Math.floor(s - m * 60);
+  return `${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+}
+
+/**
+ * Bomb countdown. Whole seconds use ceil so 39.999 reads as 40 (not 39).
+ * Under 10 seconds, show hundredths: 9.52, 0.01.
+ */
+export function formatBombClock(seconds) {
+  const s = Math.max(0, seconds);
+  if (s < 10) {
+    // Floor to hundredths so 9.999 never prints as "10.00".
+    return (Math.floor(s * 100) / 100).toFixed(2);
+  }
+  const whole = Math.min(BOMB_SECONDS, Math.ceil(s - 1e-9));
+  const m = Math.floor(whole / 60);
+  const rem = whole % 60;
+  return `${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
 }
 
 /** Phase boundaries as 0..1 fractions, for drawing markers on the scrub bar. */
