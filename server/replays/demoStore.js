@@ -408,14 +408,53 @@ export async function readRoundTicks(user, file, stride = 1) {
 // ---- Notes ------------------------------------------------------------------
 
 export const NOTE_MAX = 800;
+export const NOTES_MAX_PER_ROUND = 40;
 
 /**
- * A round's note lives in the round's own JSON, not in a side table. It is
- * read on every round load already, it travels with the round when a demo is
- * deleted, and it is a property of the round rather than of whoever wrote it —
- * everyone who can open the round sees the same note.
+ * Normalize meta.notes (and legacy meta.note) into a sorted list of
+ * { id, tick, text, updatedAt }.
  */
-export async function writeRoundNote(user, file, note) {
+export function normalizeRoundNotes(meta) {
+  if (!meta || typeof meta !== 'object') return [];
+  const out = [];
+  if (Array.isArray(meta.notes)) {
+    for (const raw of meta.notes) {
+      if (!raw || typeof raw !== 'object') continue;
+      const text = String(raw.text ?? '').slice(0, NOTE_MAX).trim();
+      if (!text) continue;
+      const tick = Number(raw.tick);
+      out.push({
+        id: String(raw.id || '').slice(0, 32) || `n${out.length}`,
+        tick: Number.isFinite(tick) ? Math.max(0, Math.round(tick)) : 0,
+        text,
+        updatedAt: Number(raw.updatedAt) || 0
+      });
+    }
+  } else if (meta.note) {
+    // Pre-timestamped single note → one entry at freezetime end when known.
+    const tick = Number(meta.freezeEndTick);
+    out.push({
+      id: 'legacy',
+      tick: Number.isFinite(tick) ? tick : 0,
+      text: String(meta.note).slice(0, NOTE_MAX).trim(),
+      updatedAt: Number(meta.noteUpdatedAt) || 0
+    });
+  }
+  out.sort((a, b) => a.tick - b.tick || a.updatedAt - b.updatedAt || a.id.localeCompare(b.id));
+  return out.slice(0, NOTES_MAX_PER_ROUND);
+}
+
+function roundHasNotes(meta) {
+  return normalizeRoundNotes(meta).length > 0;
+}
+
+/**
+ * Replace the round's notes list. Notes belong to the round (shared), live in
+ * the round JSON, and are indexed in notes.json for library badges.
+ *
+ * Accepts either `{ notes: [...] }` or legacy `{ note: "text" }`.
+ */
+export async function writeRoundNotes(user, file, payload) {
   const stem = sanitizeStem(file);
   const p = path.join(roundsDir(user), `${stem}.json`);
   let meta;
@@ -425,17 +464,47 @@ export async function writeRoundNote(user, file, note) {
     if (err.code === 'ENOENT') return null;
     throw err;
   }
-  const text = String(note ?? '').slice(0, NOTE_MAX).trim();
-  if (text) {
-    meta.note = text;
-    meta.noteUpdatedAt = Date.now();
+
+  let notes;
+  if (payload && Array.isArray(payload.notes)) {
+    notes = normalizeRoundNotes({ notes: payload.notes });
+  } else if (payload && (payload.note !== undefined || typeof payload === 'string')) {
+    // Legacy single-string save.
+    const text = String(payload.note ?? payload ?? '')
+      .slice(0, NOTE_MAX)
+      .trim();
+    notes = text
+      ? normalizeRoundNotes({
+          notes: [
+            {
+              id: 'legacy',
+              tick: Number(meta.freezeEndTick) || 0,
+              text,
+              updatedAt: Date.now()
+            }
+          ]
+        })
+      : [];
   } else {
-    delete meta.note;
-    delete meta.noteUpdatedAt;
+    notes = [];
   }
+
+  if (notes.length) {
+    meta.notes = notes;
+  } else {
+    delete meta.notes;
+  }
+  delete meta.note;
+  delete meta.noteUpdatedAt;
+
   await fsp.writeFile(p, JSON.stringify(meta));
-  await setNotedRound(user, stem, Boolean(text));
-  return { note: text, noteUpdatedAt: meta.noteUpdatedAt || null };
+  await setNotedRound(user, stem, notes.length > 0);
+  return { notes };
+}
+
+/** @deprecated use writeRoundNotes — kept for any stray callers */
+export async function writeRoundNote(user, file, note) {
+  return writeRoundNotes(user, file, { note });
 }
 
 /** Fast set of round stems that currently have a note (library-wide index). */
@@ -457,9 +526,9 @@ async function rebuildNotesIndex(user) {
   for (const stem of names) {
     try {
       const raw = await fsp.readFile(path.join(roundsDir(user), `${stem}.json`), 'utf8');
-      if (!/"note"\s*:/.test(raw)) continue;
+      if (!/"notes?"\s*:/.test(raw)) continue;
       const meta = JSON.parse(raw);
-      if (meta.note) noted.push(stem);
+      if (roundHasNotes(meta)) noted.push(stem);
     } catch {
       /* skip corrupt */
     }

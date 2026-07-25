@@ -46,7 +46,7 @@ import {
   usage,
   userDir,
   writeRecord,
-  writeRoundNote
+  writeRoundNotes
 } from './demoStore.js';
 import { forgetDemoIndex, statsPayload } from './statsIndex.js';
 import { allJobs, enqueueParse, jobStatus } from './jobs.js';
@@ -509,7 +509,7 @@ export async function handleReplayRequest(req, res, url) {
     }
     let saved;
     try {
-      saved = await writeRoundNote(user, noteMatch[1], body.note);
+      saved = await writeRoundNotes(user, noteMatch[1], body);
     } catch (err) {
       json(res, 400, { error: err.message || 'Bad round name.' });
       return true;

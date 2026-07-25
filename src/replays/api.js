@@ -183,14 +183,31 @@ export async function fetchRoundMeta(file) {
   return body.round;
 }
 
-/** Longest note a round will keep; the server truncates to the same length. */
+/** Longest text one note will keep; the server truncates to the same length. */
 export const NOTE_MAX = 800;
 
 /**
- * Save (or clear, with an empty string) a round's note. The note belongs to
- * the round, not to whoever wrote it, so everyone who can open the round sees
- * it and it survives the browser it was typed in.
+ * Replace a round's timestamped notes list.
+ * Each note: `{ id, tick, text, updatedAt? }`. Empty array clears all notes.
+ * Legacy `{ note: string }` is still accepted by the server.
  */
+export async function saveRoundNotes(file, notes) {
+  const list = (Array.isArray(notes) ? notes : []).map((n) => ({
+    id: String(n?.id || ''),
+    tick: Number(n?.tick) || 0,
+    text: String(n?.text ?? '').slice(0, NOTE_MAX),
+    updatedAt: Number(n?.updatedAt) || Date.now()
+  }));
+  return asJson(
+    await fetch(`${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}/note`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ notes: list })
+    })
+  );
+}
+
+/** @deprecated use saveRoundNotes */
 export async function saveRoundNote(file, note) {
   return asJson(
     await fetch(`${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}/note`, {

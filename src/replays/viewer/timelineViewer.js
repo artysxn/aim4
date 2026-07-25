@@ -10,7 +10,7 @@ import {
   NOTE_MAX,
   fetchPlaylists,
   fetchRoundMeta,
-  saveRoundNote,
+  saveRoundNotes,
   savePlaylist
 } from '../api.js';
 import { fetchStats } from '../api.js';
@@ -57,11 +57,19 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       <aside class="rv-team rv-team-2" data-team="2"></aside>
     </div>
     <aside class="rv-note-dock" id="rv-note-panel" hidden>
+      <div class="rv-note-head">
+        <button type="button" class="rp-btn-icon" id="rv-note-prev" title="Previous note" aria-label="Previous note">‹</button>
+        <span class="rv-note-stamp" id="rv-note-stamp">00:00</span>
+        <span class="rv-note-pos" id="rv-note-pos"></span>
+        <button type="button" class="rp-btn-icon" id="rv-note-next" title="Next note" aria-label="Next note">›</button>
+        <button type="button" class="rp-btn-icon rv-note-close" id="rv-note-close" title="Close" aria-label="Close">✕</button>
+      </div>
       <textarea id="rv-note-text" maxlength="${NOTE_MAX}" rows="6"
-        placeholder="What happens in this round?"></textarea>
+        placeholder="What happens here?"></textarea>
       <div class="rv-popover-foot">
         <span class="rv-note-count" id="rv-note-count">0 / ${NOTE_MAX}</span>
         <span class="rv-popover-msg" id="rv-note-msg"></span>
+        <button type="button" class="btn btn-sm" id="rv-note-delete" title="Delete this note">Delete</button>
         <button type="button" class="btn btn-sm primary" id="rv-note-save">Save</button>
       </div>
     </aside>
@@ -103,7 +111,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
             statsDemoId ? '' : 'hidden'
           }>${statsIconSvg}</button>
           <button type="button" class="rv-tool" id="rv-draw" title="Draw (right click always draws)">${icon(pencilIcon)}</button>
-          <button type="button" class="rv-tool" id="rv-note" title="Round note">${icon(commentsIcon)}</button>
+          <button type="button" class="rv-tool" id="rv-note" title="Add note at current time">${icon(commentsIcon)}</button>
           <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
         </div>
       </div>
@@ -144,6 +152,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const noteText = el.querySelector('#rv-note-text');
   const noteCount = el.querySelector('#rv-note-count');
   const noteMsg = el.querySelector('#rv-note-msg');
+  const noteStampEl = el.querySelector('#rv-note-stamp');
+  const notePosEl = el.querySelector('#rv-note-pos');
+  const notePrevBtn = el.querySelector('#rv-note-prev');
+  const noteNextBtn = el.querySelector('#rv-note-next');
   const bookmarkBtn = el.querySelector('#rv-bookmark');
   const playlistPanel = el.querySelector('#rv-playlist-panel');
   const playlistListEl = el.querySelector('#rv-playlist-list');
@@ -169,6 +181,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   let destroyed = false;
   /** Last rendered kill-feed signature (skip DOM work when unchanged). */
   let killFeedKey = '';
+  /** @type {{ id: string, tick: number, text: string, updatedAt: number }[]} */
+  let roundNotes = [];
+  /** Index into roundNotes for the dock (one note visible at a time). */
+  let noteIndex = 0;
   const states = [];
 
   const playback = new Playback((pos) => onPosition(pos));
@@ -378,7 +394,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     activeMeta = fallbackMeta(rounds[index]);
     renderScoreboards();
     renderActiveMarks();
-    syncNotePanel(true);
+    loadNotesFromMeta(true);
     notePanel.hidden = true;
     noteBtn.classList.remove('active');
     if (seek) playback.seek(liveOffsetOf(index), { emit: false });
@@ -419,7 +435,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       else markActiveRound();
       renderScoreboards();
       renderActiveMarks();
-      syncNotePanel(true);
+      loadNotesFromMeta(true);
       autoOpenNotesIfPresent();
     }
 
@@ -785,7 +801,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   });
   setColor(DRAW_COLORS[0].value);
 
-  // ---- notes --------------------------------------------------------------
+  // ---- notes (timestamped, many per round, one visible at a time) ---------
 
   function closePopovers(except = null) {
     if (notePanel !== except) notePanel.hidden = true;
@@ -794,29 +810,130 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     bookmarkBtn.classList.toggle('open', !playlistPanel.hidden);
   }
 
+  function newNoteId() {
+    return `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  }
+
+  /** Legacy `meta.note` + `meta.notes` → sorted list. */
+  function notesFromMeta(meta) {
+    if (!meta) return [];
+    if (Array.isArray(meta.notes) && meta.notes.length) {
+      return [...meta.notes]
+        .map((n) => ({
+          id: String(n.id || newNoteId()),
+          tick: Math.max(0, Math.round(Number(n.tick) || 0)),
+          text: String(n.text ?? ''),
+          updatedAt: Number(n.updatedAt) || 0
+        }))
+        .sort((a, b) => a.tick - b.tick || a.updatedAt - b.updatedAt);
+    }
+    if (meta.note) {
+      const tick = Number(meta.freezeEndTick);
+      return [
+        {
+          id: 'legacy',
+          tick: Number.isFinite(tick) ? tick : 0,
+          text: String(meta.note),
+          updatedAt: Number(meta.noteUpdatedAt) || 0
+        }
+      ];
+    }
+    return [];
+  }
+
+  function currentNote() {
+    return roundNotes[noteIndex] || null;
+  }
+
+  function noteClockLabel(tick) {
+    if (!activeMeta) return formatClock(0);
+    const timing = timingFor(activeMeta);
+    const local = Math.max(0, (tick - timing.startTick) / (timing.tickRate || 64));
+    return formatClock(local);
+  }
+
+  function playheadTick() {
+    const at = sequence.locate(playback.position);
+    if (at.index !== activeIndex) {
+      const timing = timingFor(activeMeta || {});
+      return timing.freezeEndTick || timing.startTick || 0;
+    }
+    return Math.round(at.tick);
+  }
+
+  function flushNoteText() {
+    const n = currentNote();
+    if (!n) return;
+    n.text = noteText.value;
+  }
+
   function syncNoteCount() {
     noteCount.textContent = `${noteText.value.length} / ${NOTE_MAX}`;
   }
 
-  /**
-   * Show whatever note the round arrived with. Skipped while the box has focus
-   * so a late meta load cannot overwrite what is being typed — except on a
-   * round change, where keeping the old text would save it to the wrong round.
-   */
-  function syncNotePanel(force = false) {
-    if (!force && document.activeElement === noteText) return;
-    noteText.value = activeMeta?.note || '';
-    noteMsg.textContent = '';
-    syncNoteCount();
-    noteBtn.classList.toggle('has-note', Boolean(activeMeta?.note));
+  function syncNoteHasBadge() {
+    const has = roundNotes.some((n) => String(n.text || '').trim());
+    noteBtn.classList.toggle('has-note', has);
   }
 
-  /** Open the note dock when this round has a saved note; otherwise leave it. */
+  function renderNoteDock({ forceText = false } = {}) {
+    const n = currentNote();
+    const total = roundNotes.length;
+    if (!n) {
+      noteStampEl.textContent = '—';
+      notePosEl.textContent = '';
+      noteText.value = '';
+      notePrevBtn.disabled = true;
+      noteNextBtn.disabled = true;
+      syncNoteCount();
+      syncNoteHasBadge();
+      return;
+    }
+    noteStampEl.textContent = noteClockLabel(n.tick);
+    notePosEl.textContent = total > 1 ? `${noteIndex + 1} / ${total}` : '';
+    if (forceText || document.activeElement !== noteText) noteText.value = n.text || '';
+    notePrevBtn.disabled = noteIndex <= 0;
+    noteNextBtn.disabled = noteIndex >= total - 1;
+    syncNoteCount();
+    syncNoteHasBadge();
+  }
+
+  function loadNotesFromMeta(force = false) {
+    if (!force && document.activeElement === noteText) return;
+    roundNotes = notesFromMeta(activeMeta);
+    noteIndex = roundNotes.length ? 0 : -1;
+    noteMsg.textContent = '';
+    renderNoteDock();
+  }
+
+  function seekToNoteTick(tick) {
+    if (activeIndex < 0 || !activeMeta) return;
+    const timing = timingFor(activeMeta);
+    const item = sequence.at(activeIndex);
+    if (!item) return;
+    const local = Math.max(0, (tick - timing.startTick) / (timing.tickRate || 64));
+    playback.seek(sequence.offsetOf(activeIndex) + Math.min(local, item.seconds));
+  }
+
+  function showNoteAt(index, { seek = false } = {}) {
+    if (!roundNotes.length) {
+      noteIndex = -1;
+      renderNoteDock({ forceText: true });
+      return;
+    }
+    noteIndex = Math.max(0, Math.min(roundNotes.length - 1, index));
+    renderNoteDock({ forceText: true });
+    if (seek) seekToNoteTick(roundNotes[noteIndex].tick);
+  }
+
+  /** Open the dock on the first chronological note when the round has any. */
   function autoOpenNotesIfPresent() {
-    if (!activeMeta?.note) return;
+    loadNotesFromMeta(true);
+    if (!roundNotes.length) return;
     closePopovers(notePanel);
     notePanel.hidden = false;
     noteBtn.classList.add('active');
+    showNoteAt(0, { seek: false });
   }
 
   function setNoteOpen(open) {
@@ -824,29 +941,100 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     notePanel.hidden = !open;
     noteBtn.classList.toggle('active', open);
     if (open) {
-      syncNotePanel();
+      renderNoteDock();
       noteText.focus();
     }
   }
 
-  noteText.addEventListener('input', syncNoteCount);
-  noteBtn.addEventListener('click', () => setNoteOpen(notePanel.hidden));
-  el.querySelector('#rv-note-save').addEventListener('click', async () => {
+  /** Stamp a new note at the scrubber time and show it. */
+  function createNoteAtPlayhead() {
+    flushNoteText();
+    const tick = playheadTick();
+    const note = { id: newNoteId(), tick, text: '', updatedAt: Date.now() };
+    roundNotes.push(note);
+    roundNotes.sort((a, b) => a.tick - b.tick || a.updatedAt - b.updatedAt);
+    noteIndex = roundNotes.findIndex((n) => n.id === note.id);
+    noteMsg.textContent = '';
+    setNoteOpen(true);
+    renderNoteDock({ forceText: true });
+    noteText.focus();
+  }
+
+  async function persistNotes() {
     const file = files[activeIndex];
     if (!file) return;
+    flushNoteText();
+    const payload = roundNotes
+      .map((n) => ({
+        id: n.id,
+        tick: n.tick,
+        text: String(n.text || '').trim(),
+        updatedAt: n.updatedAt || Date.now()
+      }))
+      .filter((n) => n.text);
     noteMsg.textContent = 'Saving…';
     try {
-      const res = await saveRoundNote(file, noteText.value);
-      if (activeMeta) activeMeta.note = res.note;
-      // The cached meta is what a later round switch reads back.
+      const res = await saveRoundNotes(file, payload);
+      const saved = Array.isArray(res.notes) ? res.notes : payload;
+      roundNotes = notesFromMeta({ notes: saved });
+      if (activeMeta) {
+        activeMeta.notes = roundNotes;
+        delete activeMeta.note;
+        delete activeMeta.noteUpdatedAt;
+      }
       const cached = await metaCache.get(file);
-      if (cached) cached.note = res.note;
-      noteMsg.textContent = res.note ? 'Saved.' : 'Note cleared.';
-      noteBtn.classList.toggle('has-note', Boolean(res.note));
+      if (cached) {
+        cached.notes = roundNotes;
+        delete cached.note;
+        delete cached.noteUpdatedAt;
+      }
+      if (!roundNotes.length) {
+        noteIndex = -1;
+        noteMsg.textContent = 'Notes cleared.';
+        setNoteOpen(false);
+      } else {
+        if (noteIndex < 0 || noteIndex >= roundNotes.length) noteIndex = 0;
+        noteMsg.textContent = 'Saved.';
+        renderNoteDock();
+      }
+      syncNoteHasBadge();
     } catch (err) {
       noteMsg.textContent = err.message || 'Could not save.';
     }
+  }
+
+  noteText.addEventListener('input', () => {
+    flushNoteText();
+    syncNoteCount();
+    syncNoteHasBadge();
   });
+  noteBtn.addEventListener('click', () => createNoteAtPlayhead());
+  notePrevBtn.addEventListener('click', () => {
+    flushNoteText();
+    showNoteAt(noteIndex - 1, { seek: true });
+  });
+  noteNextBtn.addEventListener('click', () => {
+    flushNoteText();
+    showNoteAt(noteIndex + 1, { seek: true });
+  });
+  el.querySelector('#rv-note-close').addEventListener('click', () => setNoteOpen(false));
+  el.querySelector('#rv-note-delete').addEventListener('click', () => {
+    const n = currentNote();
+    if (!n) return;
+    roundNotes = roundNotes.filter((x) => x.id !== n.id);
+    if (!roundNotes.length) {
+      noteIndex = -1;
+      noteText.value = '';
+      noteMsg.textContent = 'Deleted. Save to confirm.';
+      renderNoteDock();
+      syncNoteHasBadge();
+      return;
+    }
+    noteIndex = Math.min(noteIndex, roundNotes.length - 1);
+    noteMsg.textContent = 'Deleted. Save to confirm.';
+    renderNoteDock();
+  });
+  el.querySelector('#rv-note-save').addEventListener('click', () => persistNotes());
 
   // ---- playlists ----------------------------------------------------------
 

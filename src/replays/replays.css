@@ -1156,6 +1156,33 @@ body.rv-open {
   display: none;
 }
 
+.rv-note-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rv-note-stamp {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.rv-note-pos {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rv-note-close {
+  margin-left: 2px;
+}
+
 .rv-note-dock textarea {
   width: 100%;
   resize: vertical;
@@ -1168,6 +1195,10 @@ body.rv-open {
   font-family: var(--font-body);
   font-size: 13px;
   line-height: 1.45;
+}
+
+.rv-note-dock .rv-popover-foot {
+  flex-wrap: wrap;
 }
 
 .rv-tool {
