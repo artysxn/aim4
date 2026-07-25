@@ -2387,7 +2387,9 @@ body.rv-open {
 }
 
 .st-table {
-  width: 100%;
+  /* Pack columns to content — width:100% was stretching a huge gap after Player. */
+  width: max-content;
+  max-width: 100%;
   border-collapse: collapse;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
@@ -2396,7 +2398,7 @@ body.rv-open {
 .st-table th {
   position: sticky;
   top: 0;
-  padding: 8px 10px;
+  padding: 8px 8px;
   border-bottom: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--muted);
@@ -2424,10 +2426,15 @@ body.rv-open {
 }
 
 .st-table td {
-  padding: 7px 10px;
+  padding: 7px 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   text-align: right;
   white-space: nowrap;
+}
+
+.st-table th.left,
+.st-table td.name {
+  padding-right: 14px;
 }
 
 .st-table tbody tr:hover {
@@ -2451,12 +2458,46 @@ body.rv-open {
 }
 
 .st-table.compact {
+  width: max-content;
   font-size: 12px;
 }
 
 .st-table.compact th,
 .st-table.compact td {
-  padding: 4px 7px;
+  padding: 4px 6px;
+}
+
+.st-table.compact th.left,
+.st-table.compact td.name {
+  padding-right: 12px;
+}
+
+/* Single-match Statistics page: two team boards like the live scoreboard. */
+.st-match-boards {
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 18px;
+}
+
+.st-board {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.st-board-name {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.st-board-name.team1 {
+  color: var(--rv-team1);
+}
+
+.st-board-name.team2 {
+  color: var(--rv-team2);
 }
 
 .st-tip {
@@ -2512,15 +2553,22 @@ body.rv-open {
 
 .rv-scoreboard-body {
   display: grid;
-  grid-template-rows: 1fr 1fr;
-  gap: 10px;
+  grid-template-rows: auto auto;
+  gap: 12px;
   padding: 12px 14px 14px;
-  overflow-y: auto;
+  overflow: auto;
+  align-content: start;
 }
 
 .rv-board {
   min-width: 0;
+  width: max-content;
+  max-width: 100%;
   overflow-x: auto;
+}
+
+.rv-board .st-table {
+  width: max-content;
 }
 
 .rv-board-name {

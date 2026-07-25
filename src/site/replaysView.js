@@ -1119,11 +1119,6 @@ export function initReplaysView({ escapeHtml }) {
       return rounds.filter((r) => r.demoId === d.id || r.file?.endsWith(`~${d.id}`));
     }
 
-    const byMap = {};
-    for (const r of rounds) byMap[r.map] = (byMap[r.map] || 0) + 1;
-    const tags = Object.entries(byMap)
-      .map(([code, n]) => `<span class="rp-tag">${escapeHtml(MAPS[code]?.name || code)} ${n}</span>`)
-      .join('');
     const selCount = selectedFiles.size;
     const picked = rounds.filter((r) => selectedFiles.has(r.file));
     const analyze = analyzerGate(picked);
@@ -1134,11 +1129,14 @@ export function initReplaysView({ escapeHtml }) {
         ? 'Open Analyzer (pick a team inside)'
         : 'Open Analyzer overlay'
       : analyze.reason || 'Select rounds from one map that share a team';
+    const deselectBtn = selCount
+      ? `<button type="button" class="btn btn-sm" id="rp-deselect-all">Deselect all</button>`
+      : '';
     const head =
       rounds.length || selCount
         ? `<div class="rp-result-head">
         <span class="rp-result-count">${rounds.length} round${rounds.length === 1 ? '' : 's'} match</span>
-        <span class="rp-result-tags">${tags}</span>
+        ${deselectBtn}
         <div class="rp-result-actions">
           <button type="button" class="btn btn-sm" id="rp-stats-selected" title="${escapeHtml(
             selCount ? `Statistics for the ${selCount} selected round${selCount === 1 ? '' : 's'}` : 'Statistics for every round that matches these filters'
@@ -1196,6 +1194,10 @@ export function initReplaysView({ escapeHtml }) {
         }
       </div>`;
 
+    resultEl.querySelector('#rp-deselect-all')?.addEventListener('click', () => {
+      selectedFiles = new Set();
+      renderResults();
+    });
     resultEl.querySelector('#rp-stats-selected')?.addEventListener('click', () => {
       // Selected rounds when there are any, otherwise whatever the filters left.
       const list = picked.length ? picked : rounds;

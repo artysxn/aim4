@@ -98,7 +98,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
           ).join('')}
         </div>
         <div class="rv-tools" id="rv-tools">
-          <button type="button" class="rv-tool" id="rv-stats" title="Match stats up to this round" ${
+          <button type="button" class="rv-tool" id="rv-stats" title="Match stats up to this round (hold Tab)" ${
             statsDemoId ? '' : 'hidden'
           }>${statsIconSvg}</button>
           <button type="button" class="rv-tool" id="rv-draw" title="Draw (right click always draws)">${icon(pencilIcon)}</button>
@@ -939,11 +939,18 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     boardBody.innerHTML = board(1, demo.name1) + board(2, demo.name2);
   }
 
-  function toggleScoreboard(force = null) {
-    const open = force === null ? boardEl.hidden : force;
-    boardEl.hidden = !open;
-    statsBtn?.classList.toggle('active', open);
-    if (!open) return;
+  /** When true, Tab is holding the board open; release always closes it. */
+  let tabHoldingStats = false;
+
+  function setScoreboardOpen(open) {
+    const next = Boolean(open);
+    boardEl.hidden = !next;
+    statsBtn?.classList.toggle('active', next);
+    if (!next) return;
+    if (!statsDemoId) {
+      boardBody.innerHTML = '<p class="view-empty">Load a full match to see live stats.</p>';
+      return;
+    }
     renderScoreboard();
     if (statsPayload || statsPending) return;
     statsPending = fetchStats([statsDemoId])
@@ -959,8 +966,47 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       });
   }
 
+  function toggleScoreboard(force = null) {
+    const open = force === null ? boardEl.hidden : force;
+    // Clicking the tool button cancels a Tab-hold claim.
+    if (force === null) tabHoldingStats = false;
+    setScoreboardOpen(open);
+  }
+
   statsBtn?.addEventListener('click', () => toggleScoreboard());
-  el.querySelector('#rv-scoreboard-close').addEventListener('click', () => toggleScoreboard(false));
+  el.querySelector('#rv-scoreboard-close').addEventListener('click', () => {
+    tabHoldingStats = false;
+    setScoreboardOpen(false);
+  });
+
+  function onTabDown(e) {
+    if (e.key !== 'Tab' && e.code !== 'Tab') return;
+    if (e.target.matches?.('input, textarea, select')) return;
+    if (!statsDemoId) return;
+    e.preventDefault();
+    if (e.repeat) return;
+    // Hold Tab shows the board; overrides a click-opened sticky board.
+    tabHoldingStats = true;
+    setScoreboardOpen(true);
+  }
+
+  function onTabUp(e) {
+    if (e.key !== 'Tab' && e.code !== 'Tab') return;
+    if (!tabHoldingStats) return;
+    e.preventDefault();
+    tabHoldingStats = false;
+    setScoreboardOpen(false);
+  }
+
+  function onTabCancel() {
+    if (!tabHoldingStats) return;
+    tabHoldingStats = false;
+    setScoreboardOpen(false);
+  }
+
+  window.addEventListener('keydown', onTabDown);
+  window.addEventListener('keyup', onTabUp);
+  window.addEventListener('blur', onTabCancel);
 
   // ---- frame --------------------------------------------------------------
 
@@ -1211,6 +1257,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       offStore();
       chromeObserver?.disconnect();
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onTabDown);
+      window.removeEventListener('keyup', onTabUp);
+      window.removeEventListener('blur', onTabCancel);
       window.removeEventListener('resize', onResize);
     }
   };

@@ -171,12 +171,21 @@ export function createStatsPanel({ escapeHtml }) {
 
     if (tab === 'players') {
       const data = aggregatePlayers(rows, players, active);
-      bodyEl.innerHTML = statsTableHtml(data, {
-        columns: PLAYER_COLUMNS,
-        escapeHtml,
-        sortKey: sort.players.key,
-        sortDir: sort.players.dir
-      });
+      const matchDemo = singleMatchDemo(payload, scope);
+      if (matchDemo) {
+        bodyEl.innerHTML = matchBoardsHtml(data, matchDemo, {
+          escapeHtml,
+          sortKey: sort.players.key,
+          sortDir: sort.players.dir
+        });
+      } else {
+        bodyEl.innerHTML = statsTableHtml(data, {
+          columns: PLAYER_COLUMNS,
+          escapeHtml,
+          sortKey: sort.players.key,
+          sortDir: sort.players.dir
+        });
+      }
     } else {
       const data = aggregateTeams(rows, players, demos, active);
       bodyEl.innerHTML = statsTableHtml(data, {
@@ -186,6 +195,38 @@ export function createStatsPanel({ escapeHtml }) {
         sortDir: sort.teams.dir
       });
     }
+  }
+
+  /** One-demo scope → two team boards (same layout as the live match scoreboard). */
+  function singleMatchDemo(res, sc) {
+    const list = res?.demos || [];
+    if (list.length !== 1) return null;
+    // Whole-library / multi-demo views stay as one table; only a single-demo
+    // scope (match row stats, or filters that leave one demo) splits.
+    if (sc?.demos?.length === 1) return list[0];
+    if (!sc?.demos?.length && !sc?.files?.length && list.length === 1) return list[0];
+    return null;
+  }
+
+  function matchBoardsHtml(playerRows, demo, opts) {
+    const teamOf = new Map((demo.players || []).map((p) => [p.id, p.team]));
+    const board = (team, name) => {
+      const list = playerRows.filter((p) => teamOf.get(p.id) === team);
+      return `<div class="st-board">
+        <h4 class="st-board-name team${team}">${escapeHtml(name || `Team ${team}`)}</h4>
+        ${statsTableHtml(list, {
+          columns: PLAYER_COLUMNS,
+          escapeHtml,
+          sortKey: opts.sortKey,
+          sortDir: opts.sortDir,
+          compact: true
+        })}
+      </div>`;
+    };
+    return `<div class="st-match-boards">
+      ${board(1, demo.name1)}
+      ${board(2, demo.name2)}
+    </div>`;
   }
 
   /**

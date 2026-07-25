@@ -201,13 +201,23 @@ export function aggregatePlayers(rows, players, filter = {}) {
 // Teams
 // ---------------------------------------------------------------------------
 
+/** Normalize a team display name for merging across demos. */
+function teamNameKey(name, shortId = '') {
+  const norm = String(name || '')
+    .trim()
+    .toLowerCase();
+  // Empty / placeholder names stay on the short id so unrelated demos don't merge.
+  if (!norm || norm === 'team 1' || norm === 'team 2') return shortId || norm || '';
+  return norm;
+}
+
 /**
- * One table row per team. A team is keyed by its short id, so the same roster
- * appearing in ten demos is one row.
+ * One table row per team name. The same label across demos (even with different
+ * short ids) is one aggregated row.
  *
  * @param {Array} rows
  * @param {Map<string, {name: string, team: number, demoId: string}>} players
- * @param {Map<string, {t1: string, t2: string, names: object, winner: number}>} demos
+ * @param {Map<string, {t1: string, t2: string, name1: string, name2: string, winner: number}>} demos
  * @param {StatsFilter} filter
  */
 export function aggregateTeams(rows, players, demos, filter = {}) {
@@ -219,6 +229,8 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
       s = {
         key,
         name,
+        nameCounts: new Map(),
+        shortIds: new Set(),
         rounds: 0,
         won: 0,
         openKills: 0,
@@ -230,6 +242,8 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
       };
       acc.set(key, s);
     }
+    const label = String(name || '').trim();
+    if (label) s.nameCounts.set(label, (s.nameCounts.get(label) || 0) + 1);
     return s;
   };
 
@@ -237,10 +251,13 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
     const demo = demos.get(row.d);
     if (!demo) continue;
     for (const team of [1, 2]) {
-      const key = team === 1 ? demo.t1 : demo.t2;
+      const shortId = team === 1 ? demo.t1 : demo.t2;
+      const displayName = team === 1 ? demo.name1 : demo.name2;
+      const key = teamNameKey(displayName, shortId);
       if (!key) continue;
       if (!rowPasses(row, filter, team)) continue;
-      const s = seat(key, team === 1 ? demo.name1 : demo.name2);
+      const s = seat(key, displayName || shortId);
+      if (shortId) s.shortIds.add(shortId);
       s.rounds++;
       s.demoIds.add(row.d);
       if (row.w === team) s.won++;
@@ -270,6 +287,15 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
   for (const s of acc.values()) {
     if (!s.rounds) continue;
 
+    let bestName = s.name || s.key;
+    let bestCount = -1;
+    for (const [label, count] of s.nameCounts) {
+      if (count > bestCount || (count === bestCount && label.localeCompare(bestName) < 0)) {
+        bestName = label;
+        bestCount = count;
+      }
+    }
+
     // Map record is a property of the whole demo, not of the filtered rounds:
     // a map is won or lost once, however few of its rounds survive a filter.
     let mapWins = 0;
@@ -277,7 +303,9 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
     for (const demoId of s.demoIds) {
       const demo = demos.get(demoId);
       if (!demo?.winner) continue;
-      const asTeam = demo.t1 === s.key ? 1 : demo.t2 === s.key ? 2 : 0;
+      const side1 = teamNameKey(demo.name1, demo.t1);
+      const side2 = teamNameKey(demo.name2, demo.t2);
+      const asTeam = side1 === s.key ? 1 : side2 === s.key ? 2 : 0;
       if (!asTeam) continue;
       if (demo.winner === asTeam) mapWins++;
       else mapLosses++;
@@ -293,7 +321,7 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
 
     out.push({
       key: s.key,
-      name: s.name || s.key,
+      name: bestName,
       rounds: s.rounds,
       roundsWon: s.won,
       roundsLost: s.rounds - s.won,
