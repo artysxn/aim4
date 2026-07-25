@@ -7,10 +7,11 @@
 // ---------------------------------------------------------------------------
 
 import { fetchRoundMeta } from '../api.js';
-import { RadarRenderer, SIDE_COLORS, TEAM_COLORS } from './radarRenderer.js';
+import { RadarRenderer, SIDE_COLORS } from './radarRenderer.js';
 import { Playback, RoundSequence } from './playback.js';
-import { clockAt, formatClock, phaseMarkers, timingFor } from './roundClock.js';
+import { clockAt, formatClock, timingFor } from './roundClock.js';
 import { economyLabel, winningSide } from '../shared/roundId.js';
+import { iconImgHtml, inventoryAt } from './equipmentIcons.js';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 const MIN_ZOOM = 1;
@@ -37,7 +38,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
           <svg viewBox="0 -960 960 960" width="18" height="18"><path d="M320-200v-560l440 280-440 280Z"/></svg>
         </button>
         <div class="rv-scrub" id="rv-scrub">
-          <div class="rv-scrub-track"><div class="rv-scrub-fill" id="rv-scrub-fill"></div></div>
+          <div class="rv-scrub-track">
+            <div class="rv-scrub-phases" id="rv-scrub-phases"></div>
+            <div class="rv-scrub-fill" id="rv-scrub-fill"></div>
+          </div>
           <div class="rv-scrub-marks" id="rv-scrub-marks"></div>
           <div class="rv-scrub-handle" id="rv-scrub-handle"></div>
         </div>
@@ -52,6 +56,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
   const roundsEl = el.querySelector('#rv-rounds');
   const scrubEl = el.querySelector('#rv-scrub');
   const fillEl = el.querySelector('#rv-scrub-fill');
+  const phasesEl = el.querySelector('#rv-scrub-phases');
   const marksEl = el.querySelector('#rv-scrub-marks');
   const handleEl = el.querySelector('#rv-scrub-handle');
   const timeEl = el.querySelector('#rv-time');
@@ -62,6 +67,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
   const chromeEl = el.querySelector('.rv-chrome');
 
   const renderer = new RadarRenderer(canvas);
+  renderer.onIconLoad = () => {
+    if (!destroyed) draw();
+  };
   const metaCache = new Map();
   const files = rounds.map((r) => r.file);
 
@@ -165,17 +173,66 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
 
   // ---- active round's scrubber --------------------------------------------
 
+  function sideOfPlayer(playerId) {
+    if (!playerId || !activeMeta?.players) return null;
+    const p = activeMeta.players.find((x) => x.id === playerId);
+    if (!p) return null;
+    if (p.team === 1) return activeMeta.team1Side || 'T';
+    if (p.team === 2) return activeMeta.team2Side || 'CT';
+    return null;
+  }
+
   function renderActiveMarks() {
     if (activeIndex < 0 || !sequence.at(activeIndex)) {
       marksEl.innerHTML = '';
+      phasesEl.innerHTML = '';
       return;
     }
     const item = sequence.at(activeIndex);
+    const timing = item.timing;
+    const events = activeMeta?.events || item.round?.events || {};
+    const span = Math.max(1, timing.officialEndTick - timing.startTick);
+    const at = (tick) => Math.max(0, Math.min(1, (tick - timing.startTick) / span));
+
+    // Track background: plant → end dark red; defuse → end greenish.
+    const phaseParts = [];
+    const plantTick =
+      timing.plantTick ?? events.bomb?.find((b) => b.type === 'planted')?.tick ?? null;
+    const defuseTick = events.bomb?.find((b) => b.type === 'defused')?.tick ?? null;
+    if (plantTick != null) {
+      const plantAt = at(plantTick);
+      if (defuseTick != null) {
+        const defuseAt = at(defuseTick);
+        phaseParts.push(
+          `<span class="rv-scrub-phase planted" style="left:${plantAt * 100}%;width:${(defuseAt - plantAt) * 100}%"></span>`,
+          `<span class="rv-scrub-phase defused" style="left:${defuseAt * 100}%;width:${(1 - defuseAt) * 100}%"></span>`
+        );
+      } else {
+        phaseParts.push(
+          `<span class="rv-scrub-phase planted" style="left:${plantAt * 100}%;width:${(1 - plantAt) * 100}%"></span>`
+        );
+      }
+    }
+    phasesEl.innerHTML = phaseParts.join('');
+
     const parts = [];
-    for (const m of phaseMarkers(item.timing)) {
-      if (m.key !== 'plant') continue;
+    if (plantTick != null) {
       parts.push(
-        `<span class="rv-mark plant" style="left:${m.at * 100}%" title="Bomb planted"></span>`
+        `<span class="rv-mark plant" style="left:${at(plantTick) * 100}%" title="Bomb planted"></span>`
+      );
+    }
+    if (defuseTick != null) {
+      parts.push(
+        `<span class="rv-mark defuse" style="left:${at(defuseTick) * 100}%" title="Bomb defused"></span>`
+      );
+    }
+    for (const k of events.kills || []) {
+      if (k.tick == null) continue;
+      const side = sideOfPlayer(k.attacker);
+      if (side !== 'T' && side !== 'CT') continue;
+      const color = SIDE_COLORS[side].base;
+      parts.push(
+        `<span class="rv-mark kill" style="left:${at(k.tick) * 100}%;background:${color}" title="Kill"></span>`
       );
     }
     marksEl.innerHTML = parts.join('');
@@ -302,13 +359,15 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
       .map((p) => {
         const st = activeMeta.stats?.[p.id] || {};
         return `
-        <div class="rv-player" data-slot="${p.slot}" data-side="${escapeHtml(side || '')}">
-          <div class="rv-player-row">
-            <span class="rv-player-name">${escapeHtml(p.name || p.id)}</span>
+        <div class="rv-player" data-slot="${p.slot}" data-id="${escapeHtml(p.id)}" data-side="${escapeHtml(side || '')}">
+          <div class="rv-player-hp-row">
+            <div class="rv-player-pill">
+              <span class="rv-player-hp" data-slot="${p.slot}"></span>
+              <span class="rv-player-name">${escapeHtml(p.name || p.id)}</span>
+            </div>
             <span class="rv-player-money">$${st.money ?? 0}</span>
           </div>
-          <div class="rv-player-bar"><span class="rv-player-hp" data-slot="${p.slot}"></span></div>
-          <div class="rv-player-gear" data-slot="${p.slot}"></div>
+          <div class="rv-player-inv" data-slot="${p.slot}"></div>
         </div>`;
       })
       .join('');
@@ -322,29 +381,60 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
       <div class="rv-players">${rows}</div>`;
   }
 
-  function syncScoreboard() {
+  function armorIconKey(inv) {
+    if (!inv.armor) return '';
+    return inv.helmet ? 'armor_helmet' : 'kevlar';
+  }
+
+  function invHtml(inv) {
+    if (!inv) return '';
+    const armor = armorIconKey(inv);
+    const parts = [];
+    parts.push(
+      `<span class="rv-inv-armor">${armor ? iconImgHtml(armor, 'rv-inv-icon') : ''}</span>`
+    );
+    parts.push(
+      `<span class="rv-inv-primary">${
+        inv.primary ? iconImgHtml(inv.primary, 'rv-inv-icon rv-inv-gun') : ''
+      }</span>`
+    );
+    const util = (inv.util || []).map((u) => iconImgHtml(u, 'rv-inv-icon rv-inv-nade')).join('');
+    parts.push(`<span class="rv-inv-util">${util}</span>`);
+    return parts.join('');
+  }
+
+  function syncScoreboard(tick = 0) {
     if (!activeMeta) return;
     const weapons = activeMeta.weapons || [];
+    const grenades = activeMeta.events?.grenades || [];
     for (const p of activeMeta.players || []) {
       const s = states[p.slot];
       if (!s) continue;
       const root = el.querySelector(`.rv-player[data-slot="${p.slot}"]`);
       if (!root) continue;
       root.classList.toggle('dead', !s.alive);
+      const side = s.side || root.dataset.side;
+      if (side) root.dataset.side = side;
       const hp = root.querySelector('.rv-player-hp');
       if (hp) {
-        hp.style.width = `${Math.max(0, Math.min(100, s.health))}%`;
-        const side = s.side || root.dataset.side;
-        hp.style.background =
-          (side && SIDE_COLORS[side]?.base) || TEAM_COLORS[p.team]?.base || '#888';
+        const pct = s.alive ? Math.max(0, Math.min(100, s.health)) : 0;
+        hp.style.width = `${pct}%`;
       }
-      const gear = root.querySelector('.rv-player-gear');
-      if (gear) {
-        const w = weapons[s.weapon] || '';
-        if (gear.dataset.weapon !== w) {
-          gear.dataset.weapon = w;
-          gear.textContent = s.alive ? w.replace(/^weapon_/, '').replace(/_/g, ' ') : '';
-        }
+      const invEl = root.querySelector('.rv-player-inv');
+      if (!invEl) continue;
+      const st = activeMeta.stats?.[p.id] || {};
+      const inv = inventoryAt({
+        loadout: st.loadout || [],
+        grenades,
+        playerId: p.id,
+        tick,
+        state: s,
+        activeWeapon: weapons[s.weapon] || ''
+      });
+      const key = `${inv.primary}|${armorIconKey(inv)}|${(inv.util || []).join(',')}|${s.alive ? 1 : 0}`;
+      if (invEl.dataset.key !== key) {
+        invEl.dataset.key = key;
+        invEl.innerHTML = s.alive ? invHtml(inv) : '';
       }
     }
   }
@@ -502,7 +592,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     fillEl.style.width = `${pct}%`;
     handleEl.style.left = `${pct}%`;
 
-    syncScoreboard();
+    syncScoreboard(tick);
     syncLoading();
   }
 
