@@ -136,6 +136,8 @@ function queryFromUrl(url) {
     economies: nums(url, 'economies'),
     econA: url.searchParams.has('econA') ? Number(url.searchParams.get('econA')) : undefined,
     econB: url.searchParams.has('econB') ? Number(url.searchParams.get('econB')) : undefined,
+    hasAwpA: url.searchParams.get('hasAwpA') === '1' || url.searchParams.get('hasAwpA') === 'true',
+    hasAwpB: url.searchParams.get('hasAwpB') === '1' || url.searchParams.get('hasAwpB') === 'true',
     teamEconomies: nums(url, 'teamEconomies'),
     teamEconomyOf: url.searchParams.get('teamEconomyOf') || undefined,
     roundMin: url.searchParams.has('roundMin') ? Number(url.searchParams.get('roundMin')) : undefined,

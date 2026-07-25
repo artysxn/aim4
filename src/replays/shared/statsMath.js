@@ -11,6 +11,8 @@
 // every question after that is answered by summing numbers already in memory.
 // ---------------------------------------------------------------------------
 
+import { buyBucket, econHasAwp } from './roundId.js';
+
 /** Per-player, per-round counters, in the order the index packs them. */
 export const P = {
   KILLS: 0,
@@ -46,8 +48,10 @@ const div = (a, b) => (b > 0 ? a / b : 0);
  * @property {string[]} [maps]      map codes
  * @property {string[]} [files]     round names; when set, nothing else is considered
  * @property {'T'|'CT'|''} [side]   the side the subject played
- * @property {number|null} [econ]   the subject's buy bucket
- * @property {number|null} [oppEcon} the other team's buy bucket
+ * @property {number|null} [econ]   the subject's buy bucket (5 counts as 4)
+ * @property {number|null} [oppEcon] the other team's buy bucket
+ * @property {boolean} [hasAwp]     subject side must have had an AWP
+ * @property {boolean} [oppHasAwp]  opponent side must have had an AWP
  */
 
 /**
@@ -63,8 +67,22 @@ export function rowPasses(row, filter = {}, team = 0) {
   if (filter.side && side !== filter.side) return false;
   const own = team === 1 ? row.e1 : row.e2;
   const opp = team === 1 ? row.e2 : row.e1;
-  if (filter.econ !== null && filter.econ !== undefined && own !== filter.econ) return false;
-  if (filter.oppEcon !== null && filter.oppEcon !== undefined && opp !== filter.oppEcon) return false;
+  if (
+    filter.econ !== null &&
+    filter.econ !== undefined &&
+    buyBucket(own) !== buyBucket(filter.econ)
+  ) {
+    return false;
+  }
+  if (
+    filter.oppEcon !== null &&
+    filter.oppEcon !== undefined &&
+    buyBucket(opp) !== buyBucket(filter.oppEcon)
+  ) {
+    return false;
+  }
+  if (filter.hasAwp && !econHasAwp(own)) return false;
+  if (filter.oppHasAwp && !econHasAwp(opp)) return false;
   return true;
 }
 

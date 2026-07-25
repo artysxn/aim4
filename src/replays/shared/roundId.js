@@ -18,8 +18,9 @@
 //
 // Example:
 //   BFx-p41-154-ANC-02_2aF-XWf-kK0-15d-lkc_Ab1-92d-FfR-k20-FNf
-//   -> Vitality (BFx) beat FNATIC (p41) on Ancient, round 2. Vitality ran a
-//      full buy with an AWP (5), FNATIC a full buy without (4).
+//   -> Vitality (BFx) beat FNATIC (p41) on Ancient, round 2. Digit 5 in WEE
+//      still means "full buy + AWP" on disk (legacy encoding); the UI treats
+//      that as Full buy (4) plus a separate Has AWP filter.
 //
 // This module is pure data: it is imported by the browser bundle and by the
 // Node backend, so it must never touch `window`, `document` or `fs`.
@@ -44,19 +45,33 @@ const FILE_TO_CODE = Object.fromEntries(
 );
 
 /**
- * Economy buckets. The digit is stored verbatim in the WEE group, one per
- * team. 5 outranks 4: it means a full buy that also has an AWP on the server.
+ * Buy buckets shown in filters. Digit 5 still appears in filenames as
+ * "full buy + AWP"; use `buyBucket` / `econHasAwp` when reading it.
  */
 export const ECONOMIES = {
   0: { key: 'pistol', label: 'Pistol' },
   1: { key: 'eco', label: 'Eco' },
   2: { key: 'half', label: 'Half buy' },
   3: { key: 'force', label: 'Force buy' },
-  4: { key: 'full', label: 'Full buy' },
-  5: { key: 'awp', label: 'Full buy + AWP' }
+  4: { key: 'full', label: 'Full buy' }
 };
 
 export const ECONOMY_CODES = Object.keys(ECONOMIES).map(Number);
+
+/** Legacy WEE digit 5 = full buy that also had an AWP. */
+export const ECON_FULL_AWP = 5;
+
+/** Map a stored economy digit onto a buy filter bucket (5 → full buy). */
+export function buyBucket(code) {
+  const n = Number(code);
+  if (n === ECON_FULL_AWP) return 4;
+  return n;
+}
+
+/** True when the stored digit encodes a full buy with an AWP. */
+export function econHasAwp(code) {
+  return Number(code) === ECON_FULL_AWP;
+}
 
 const ID_RE = /^[A-Za-z0-9]{3}$/;
 const TOKEN = '[A-Za-z0-9]{3}';
@@ -195,7 +210,8 @@ export function loserTeamId(meta) {
 }
 
 export function economyLabel(code) {
-  return ECONOMIES[code]?.label ?? String(code);
+  const bucket = buyBucket(code);
+  return ECONOMIES[bucket]?.label ?? String(code);
 }
 
 /**

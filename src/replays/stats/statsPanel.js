@@ -43,6 +43,8 @@ export function createStatsPanel({ escapeHtml }) {
     side: '',
     econ: null,
     oppEcon: null,
+    hasAwp: false,
+    oppHasAwp: false,
     files: null
   };
 
@@ -69,6 +71,13 @@ export function createStatsPanel({ escapeHtml }) {
       .join('');
     return `<select class="site-select" data-filter="${id}">
       <option value=""${value === null ? ' selected' : ''}>Any buy</option>${opts}</select>`;
+  }
+
+  function hasAwpCheck(id, checked) {
+    return `<label class="st-awp-check">
+      <input type="checkbox" data-awp="${id}" ${checked ? 'checked' : ''} />
+      <span>Has AWP</span>
+    </label>`;
   }
 
   function renderFilters() {
@@ -99,10 +108,12 @@ export function createStatsPanel({ escapeHtml }) {
       <div class="st-filter-group">
         <span class="st-filter-label">${tab === 'teams' ? 'Team buy' : 'Own buy'}</span>
         ${econSelect('econ', filter.econ)}
+        ${hasAwpCheck('hasAwp', filter.hasAwp)}
       </div>
       <div class="st-filter-group">
         <span class="st-filter-label">Opponent buy</span>
         ${econSelect('oppEcon', filter.oppEcon)}
+        ${hasAwpCheck('oppHasAwp', filter.oppHasAwp)}
       </div>
       <button type="button" class="btn btn-sm" data-clear>Clear</button>`;
   }
@@ -128,11 +139,19 @@ export function createStatsPanel({ escapeHtml }) {
       filter.side = '';
       filter.econ = null;
       filter.oppEcon = null;
+      filter.hasAwp = false;
+      filter.oppHasAwp = false;
       render();
     }
   });
 
   filtersEl.addEventListener('change', (e) => {
+    const awp = e.target.closest('[data-awp]');
+    if (awp) {
+      filter[awp.dataset.awp] = Boolean(awp.checked);
+      render();
+      return;
+    }
     const sel = e.target.closest('[data-filter]');
     if (!sel) return;
     const value = sel.value === '' ? null : Number(sel.value);

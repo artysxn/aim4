@@ -104,7 +104,9 @@ export function initReplaysView({ escapeHtml }) {
     /** @type {number|null} */
     econA: null,
     /** @type {number|null} */
-    econB: null
+    econB: null,
+    hasAwpA: false,
+    hasAwpB: false
   };
 
   function setStatus(msg, isError = false) {
@@ -625,6 +627,13 @@ export function initReplaysView({ escapeHtml }) {
     }">${opts.join('')}</select>`;
   }
 
+  function hasAwpCheckHtml(id, checked) {
+    return `<label class="rp-awp-check">
+      <input type="checkbox" id="${id}" ${checked ? 'checked' : ''} />
+      <span>Has AWP</span>
+    </label>`;
+  }
+
   function selectedChipsHtml(group, items) {
     if (!items.length) return '';
     return `<div class="rp-chips rp-selected-chips">${items
@@ -722,14 +731,16 @@ export function initReplaysView({ escapeHtml }) {
       <div class="rp-filter-group">
         <h4>Economy</h4>
         <div class="rp-econ-pair">
-          <label class="rp-econ-side">
+          <div class="rp-econ-side">
             <span>Team 1</span>
             ${econSelectHtml('rp-econ-a', filters.econA)}
-          </label>
-          <label class="rp-econ-side">
+            ${hasAwpCheckHtml('rp-awp-a', filters.hasAwpA)}
+          </div>
+          <div class="rp-econ-side">
             <span>Team 2</span>
             ${econSelectHtml('rp-econ-b', filters.econB)}
-          </label>
+            ${hasAwpCheckHtml('rp-awp-b', filters.hasAwpB)}
+          </div>
         </div>
       </div>
       ${
@@ -780,6 +791,15 @@ export function initReplaysView({ escapeHtml }) {
     bindEcon('rp-econ-a', 'econA');
     bindEcon('rp-econ-b', 'econB');
 
+    const bindAwp = (id, key) => {
+      filtersEl.querySelector(`#${id}`)?.addEventListener('change', (e) => {
+        filters[key] = Boolean(e.target.checked);
+        runQuery();
+      });
+    };
+    bindAwp('rp-awp-a', 'hasAwpA');
+    bindAwp('rp-awp-b', 'hasAwpB');
+
     filtersEl.querySelector('#rp-won-by')?.addEventListener('change', (e) => {
       const v = e.target.value;
       filters.wonByMode = v === 'selected' || v === 'opponent' ? v : '';
@@ -805,6 +825,8 @@ export function initReplaysView({ escapeHtml }) {
       filters.wonByMode = '';
       filters.econA = null;
       filters.econB = null;
+      filters.hasAwpA = false;
+      filters.hasAwpB = false;
       teamSearch = '';
       playerSearch = '';
       mapMenuOpen = false;
@@ -912,7 +934,9 @@ export function initReplaysView({ escapeHtml }) {
       players: [...filters.players],
       wonByMode: teams.length && filters.wonByMode ? filters.wonByMode : undefined,
       econA: Number.isFinite(filters.econA) ? filters.econA : undefined,
-      econB: Number.isFinite(filters.econB) ? filters.econB : undefined
+      econB: Number.isFinite(filters.econB) ? filters.econB : undefined,
+      hasAwpA: filters.hasAwpA || undefined,
+      hasAwpB: filters.hasAwpB || undefined
     };
   }
 
@@ -923,7 +947,9 @@ export function initReplaysView({ escapeHtml }) {
         filters.players.size ||
         filters.wonByMode ||
         Number.isFinite(filters.econA) ||
-        Number.isFinite(filters.econB)
+        Number.isFinite(filters.econB) ||
+        filters.hasAwpA ||
+        filters.hasAwpB
     );
   }
 
@@ -1129,14 +1155,20 @@ export function initReplaysView({ escapeHtml }) {
         ? 'Open Analyzer (pick a team inside)'
         : 'Open Analyzer overlay'
       : analyze.reason || 'Select rounds from one map that share a team';
+    const allMatchingSelected =
+      rounds.length > 0 && rounds.every((r) => selectedFiles.has(r.file));
+    const selectAllBtn =
+      rounds.length && !allMatchingSelected
+        ? `<button type="button" class="btn btn-sm" id="rp-select-all" title="Select every round that matches these filters">Select all</button>`
+        : '';
     const deselectBtn = selCount
-      ? `<button type="button" class="btn btn-sm" id="rp-deselect-all">Deselect all</button>`
+      ? `<button type="button" class="btn btn-sm" id="rp-deselect-all" title="Clear the current selection">Deselect all</button>`
       : '';
     const head =
       rounds.length || selCount
         ? `<div class="rp-result-head">
         <span class="rp-result-count">${rounds.length} round${rounds.length === 1 ? '' : 's'} match</span>
-        ${deselectBtn}
+        <span class="rp-result-bulk">${selectAllBtn}${deselectBtn}</span>
         <div class="rp-result-actions">
           <button type="button" class="btn btn-sm" id="rp-stats-selected" title="${escapeHtml(
             selCount ? `Statistics for the ${selCount} selected round${selCount === 1 ? '' : 's'}` : 'Statistics for every round that matches these filters'
@@ -1194,6 +1226,10 @@ export function initReplaysView({ escapeHtml }) {
         }
       </div>`;
 
+    resultEl.querySelector('#rp-select-all')?.addEventListener('click', () => {
+      selectedFiles = new Set(rounds.map((r) => r.file).filter(Boolean));
+      renderResults();
+    });
     resultEl.querySelector('#rp-deselect-all')?.addEventListener('click', () => {
       selectedFiles = new Set();
       renderResults();
@@ -1381,9 +1417,18 @@ export function initReplaysView({ escapeHtml }) {
   function queryTitle(list = rounds) {
     const parts = [];
     if (filters.maps.size) parts.push([...filters.maps].map((c) => MAPS[c]?.name || c).join(', '));
-    if (filters.econA != null || filters.econB != null) {
-      const a = filters.econA != null ? economyLabel(filters.econA) : 'Any';
-      const b = filters.econB != null ? economyLabel(filters.econB) : 'Any';
+    if (
+      filters.econA != null ||
+      filters.econB != null ||
+      filters.hasAwpA ||
+      filters.hasAwpB
+    ) {
+      const a =
+        (filters.econA != null ? economyLabel(filters.econA) : 'Any') +
+        (filters.hasAwpA ? ' +AWP' : '');
+      const b =
+        (filters.econB != null ? economyLabel(filters.econB) : 'Any') +
+        (filters.hasAwpB ? ' +AWP' : '');
       parts.push(`${a} / ${b}`);
     }
     if (list?.length && list.length <= 3) {

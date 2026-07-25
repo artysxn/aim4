@@ -7,7 +7,7 @@
 // same code against the index it already holds, so both agree on results.
 // ---------------------------------------------------------------------------
 
-import { parseRoundId } from './roundId.js';
+import { buyBucket, econHasAwp, parseRoundId } from './roundId.js';
 
 /**
  * @typedef {object} RoundQuery
@@ -19,9 +19,11 @@ import { parseRoundId } from './roundId.js';
  * @property {'selected'|'opponent'} [wonByMode]
  *   Relative to `teams`: winner is a selected team, or the other side.
  *   When both sides of a round are in `teams`, either mode matches.
- * @property {number[]} [economies]   econ buckets, matched on either side
+ * @property {number[]} [economies]   buy buckets, matched on either side (5→4)
  * @property {number} [econA]         one side of an unordered economy pair
  * @property {number} [econB]         other side of an unordered economy pair
+ * @property {boolean} [hasAwpA]      econA side must have had an AWP (digit 5)
+ * @property {boolean} [hasAwpB]      econB side must have had an AWP (digit 5)
  * @property {number[]} [teamEconomies] econ buckets for `teamEconomyOf` only
  * @property {string} [teamEconomyOf] team id the `teamEconomies` filter applies to
  * @property {number} [roundMin=1]
@@ -29,14 +31,33 @@ import { parseRoundId } from './roundId.js';
  * @property {string} [search]        free text over the raw name
  */
 
-/** True when (e1,e2) matches (a,b) in either order. Missing sides are wildcards. */
-function matchesEconPair(e1, e2, a, b) {
-  const hasA = Number.isFinite(a);
-  const hasB = Number.isFinite(b);
-  if (!hasA && !hasB) return true;
-  if (hasA && hasB) return (e1 === a && e2 === b) || (e1 === b && e2 === a);
-  const only = hasA ? a : b;
-  return e1 === only || e2 === only;
+function awpOk(econCode, wantAwp) {
+  return !wantAwp || econHasAwp(econCode);
+}
+
+/**
+ * One seating of the unordered Team1/Team2 filter onto filename sides.
+ * Buy and Has AWP constraints travel together on each filter slot.
+ */
+function econOrientationOk(eLeft, eRight, buyLeft, buyRight, awpLeft, awpRight) {
+  if (Number.isFinite(buyLeft) && buyBucket(eLeft) !== buyBucket(buyLeft)) return false;
+  if (Number.isFinite(buyRight) && buyBucket(eRight) !== buyBucket(buyRight)) return false;
+  return awpOk(eLeft, awpLeft) && awpOk(eRight, awpRight);
+}
+
+/**
+ * True when (e1,e2) matches buy pair (a,b) in either order.
+ * Digits 5 (full+AWP) count as Full buy (4). Optional hasAwp flags require
+ * the matching side's stored digit to be 5.
+ */
+function matchesEconPair(e1, e2, a, b, awpA = false, awpB = false) {
+  const buyA = Number.isFinite(a) ? a : undefined;
+  const buyB = Number.isFinite(b) ? b : undefined;
+  if (buyA === undefined && buyB === undefined && !awpA && !awpB) return true;
+  return (
+    econOrientationOk(e1, e2, buyA, buyB, awpA, awpB) ||
+    econOrientationOk(e1, e2, buyB, buyA, awpB, awpA)
+  );
 }
 
 const asSet = (v) => (v && v.length ? new Set(v) : null);
@@ -102,7 +123,11 @@ export function matchesQuery(meta, query = {}) {
   if (wonBy && !wonBy.has(winner)) return false;
 
   const economies = asSet(query.economies);
-  if (economies && !economies.has(meta.econ1) && !economies.has(meta.econ2)) return false;
+  if (economies) {
+    const b1 = buyBucket(meta.econ1);
+    const b2 = buyBucket(meta.econ2);
+    if (!economies.has(b1) && !economies.has(b2)) return false;
+  }
 
   // Unordered pair: "full buy vs eco" matches either seating of the two teams.
   const asEcon = (v) => {
@@ -110,19 +135,28 @@ export function matchesQuery(meta, query = {}) {
     const n = Number(v);
     return Number.isFinite(n) ? n : undefined;
   };
-  if (!matchesEconPair(meta.econ1, meta.econ2, asEcon(query.econA), asEcon(query.econB))) {
+  if (
+    !matchesEconPair(
+      meta.econ1,
+      meta.econ2,
+      asEcon(query.econA),
+      asEcon(query.econB),
+      Boolean(query.hasAwpA),
+      Boolean(query.hasAwpB)
+    )
+  ) {
     return false;
   }
 
   // Economy of one specific team, rather than "either side".
   if (query.teamEconomyOf && query.teamEconomies?.length) {
-    const side =
+    const raw =
       query.teamEconomyOf === meta.team1
         ? meta.econ1
         : query.teamEconomyOf === meta.team2
           ? meta.econ2
           : null;
-    if (side === null || !query.teamEconomies.includes(side)) return false;
+    if (raw === null || !query.teamEconomies.includes(buyBucket(raw))) return false;
   }
 
   if (query.players?.length) {
@@ -183,8 +217,8 @@ export function summarize(rounds) {
     bump(maps, r.map);
     bump(teams, r.team1);
     bump(teams, r.team2);
-    bump(economies, r.econ1);
-    bump(economies, r.econ2);
+    bump(economies, buyBucket(r.econ1));
+    bump(economies, buyBucket(r.econ2));
     for (const p of r.players) bump(players, p);
   }
   return { total: rounds.length, maps, teams, players, economies };

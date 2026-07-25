@@ -3,7 +3,9 @@
 // Turns a team's freezetime loadout into the single digit the round name
 // carries. The buckets come from the naming scheme:
 //
-//   0 pistol   1 eco   2 half buy   3 force buy   4 full buy   5 full + AWP
+//   0 pistol   1 eco   2 half buy   3 force buy   4 full buy
+//   5 full buy + AWP  (legacy filename encoding; UI treats 5 as Full buy
+//                      and exposes Has AWP as a separate filter)
 //
 // Thresholds are heuristics over team equipment value, so they live here on
 // their own rather than being scattered through an adapter. Tune this file

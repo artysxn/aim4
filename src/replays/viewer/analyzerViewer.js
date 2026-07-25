@@ -7,7 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { fetchRoundMeta } from '../api.js';
-import { ECONOMIES, economyLabel } from '../shared/roundId.js';
+import { ECONOMIES, buyBucket, econHasAwp, economyLabel } from '../shared/roundId.js';
 import { iconImgHtml, isGrenade } from './equipmentIcons.js';
 import { RADAR_SIZE, worldToRadar } from './mapCalibration.js';
 import { RadarRenderer, grenadeWorldPos } from './radarRenderer.js';
@@ -143,6 +143,8 @@ export function createAnalyzerViewer({
   let sideFilter = 'T';
   /** @type {Set<number>} */
   let buyFilter = new Set(BUY_OPTIONS);
+  /** When true, focus team must have had an AWP (filename digit 5). */
+  let hasAwpFilter = false;
   /** Situation chips: empty = any. Values: '5v4' | '4v4' | '4v5'. */
   /** @type {Set<string>} */
   let situationFilter = new Set();
@@ -676,6 +678,10 @@ export function createAnalyzerViewer({
               }>${escapeHtml(economyLabel(code))}</option>`
           ).join('')}
         </select>
+        <label class="rv-az-awp-check">
+          <input type="checkbox" id="rv-az-awp" ${hasAwpFilter ? 'checked' : ''} />
+          <span>Has AWP</span>
+        </label>
       </div>
       <div class="rv-az-group">
         <h4>Situation</h4>
@@ -765,7 +771,8 @@ export function createAnalyzerViewer({
       if (!L.meta) return false;
       if (sideOfFocus(L) !== sideFilter) return false;
       const econ = econOfFocus(L);
-      if (econ == null || !buyFilter.has(econ)) return false;
+      if (econ == null || !buyFilter.has(buyBucket(econ))) return false;
+      if (hasAwpFilter && !econHasAwp(econ)) return false;
       if (situationFilter.size) {
         const sit = situationOfFocus(L);
         if (!sit || !situationFilter.has(sit)) return false;
@@ -1927,6 +1934,15 @@ export function createAnalyzerViewer({
       const v = buy.value;
       if (v === 'all') buyFilter = new Set(BUY_OPTIONS);
       else buyFilter = new Set([Number(v)]);
+      heatLayerCache = null;
+      renderFilters();
+      pruneSelectionToVisible();
+      draw(playback.position);
+      return;
+    }
+    const awp = e.target.closest('#rv-az-awp');
+    if (awp) {
+      hasAwpFilter = Boolean(awp.checked);
       heatLayerCache = null;
       renderFilters();
       pruneSelectionToVisible();
