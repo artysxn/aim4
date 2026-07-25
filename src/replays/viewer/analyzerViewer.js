@@ -20,10 +20,10 @@ const MAX_ZOOM = 5;
 const DRAG_THRESHOLD = 5;
 /** Selected rounds at rest — fully drawn, then blitted dim. */
 const SELECTION_GHOST_ALPHA = 0.3;
-/** Heatmap accumulation resolution (radar space). */
-const HEAT_RES = 512;
-/** Soft kernel radius in radar pixels before the blur pass. */
-const HEAT_STAMP_R = 14;
+/** Heatmap intensity resolution (matches radar for crisp upscale). */
+const HEAT_RES = 1024;
+/** Small white stamp radius in radar px; blur does the soft falloff. */
+const HEAT_STAMP_R = 5;
 
 /** Most-played players on the focus team. */
 const PRIMARY_COLORS = ['#e8913c', '#5ad17a', '#5b9fd4', '#a855f7', '#e8b84a'];
@@ -1101,23 +1101,34 @@ export function createAnalyzerViewer({
     return mask;
   }
 
-  /** Classic cool→hot ramp for density 0..1. */
+  /**
+   * Gradient map for intensity 0..1 after blur.
+   * Black (0) stays black so Screen blend hides the field background;
+   * low = cold purple, high = hot yellow/white.
+   */
   function heatColorAt(t) {
+    const stops = [
+      [0, 0, 0, 0],
+      [0.08, 40, 0, 70],
+      [0.22, 90, 10, 140],
+      [0.4, 180, 20, 160],
+      [0.58, 240, 50, 90],
+      [0.75, 255, 130, 30],
+      [0.9, 255, 220, 50],
+      [1, 255, 250, 200]
+    ];
     const x = Math.max(0, Math.min(1, t));
-    if (x < 0.25) {
-      const u = x / 0.25;
-      return [20 + 40 * u, 40 + 120 * u, 160 + 70 * u];
-    }
-    if (x < 0.5) {
-      const u = (x - 0.25) / 0.25;
-      return [60 + 20 * u, 160 + 70 * u, 230 - 150 * u];
-    }
-    if (x < 0.75) {
-      const u = (x - 0.5) / 0.25;
-      return [80 + 175 * u, 230 - 40 * u, 80 - 60 * u];
-    }
-    const u = (x - 0.75) / 0.25;
-    return [255, 190 - 120 * u, 20 * (1 - u)];
+    let i = 0;
+    while (i < stops.length - 2 && x > stops[i + 1][0]) i++;
+    const a = stops[i];
+    const b = stops[i + 1];
+    const u = (x - a[0]) / Math.max(1e-6, b[0] - a[0]);
+    const s = u * u * (3 - 2 * u);
+    return [
+      a[1] + (b[1] - a[1]) * s,
+      a[2] + (b[2] - a[2]) * s,
+      a[3] + (b[3] - a[3]) * s
+    ];
   }
 
   /**
@@ -1153,14 +1164,17 @@ export function createAnalyzerViewer({
   }
 
   /**
-   * Density field of current-tick positions across rounds → blur (smoothing)
-   * → colorized heatmap, clipped to the radar mask.
+   * Heat pipeline:
+   *   1) black field + additive white stamps (one Z / intensity layer)
+   *   2) Gaussian blur (slider)
+   *   3) gradient-map luminance → cool…hot (black stays black)
+   *   4) clip to radar mask
+   * Painted with Screen so the black field disappears over the map.
    */
   function buildHeatLayer(pos) {
     const playerId = heatmapPlayerId();
     const visible = visibleLayers();
     const files = visible.map((L) => L.round.file).join('\0');
-    // ~8 Hz cache while scrubbing; rebuild is cheap (one stamp per round).
     const posKey = Math.round(pos * 8);
     const key = [renderer.mapCode, playerId, files, posKey, heatmapSmooth, visible.length].join(
       '|'
@@ -1168,69 +1182,70 @@ export function createAnalyzerViewer({
     if (heatLayerCache?.key === key) return heatLayerCache.canvas;
 
     const pts = collectHeatRadarPoints(pos);
-    heatAccCtx.clearRect(0, 0, HEAT_RES, HEAT_RES);
-    heatColorCtx.clearRect(0, 0, HEAT_RES, HEAT_RES);
-
     if (!pts.length) {
       const empty = document.createElement('canvas');
       empty.width = HEAT_RES;
       empty.height = HEAT_RES;
+      const emptyCtx = empty.getContext('2d');
+      emptyCtx.fillStyle = '#000';
+      emptyCtx.fillRect(0, 0, HEAT_RES, HEAT_RES);
       heatLayerCache = { key, canvas: empty };
       return empty;
     }
 
     const scale = HEAT_RES / RADAR_SIZE;
-    const stampR = HEAT_STAMP_R * scale;
-    // Blur slider → Gaussian radius in heat-canvas pixels (HEAT_RES is half radar).
-    const blurPx = Math.max(4, heatmapSmooth * scale * 1.4);
-    const alpha = Math.min(0.9, 0.4 + 0.5 / Math.sqrt(Math.max(1, pts.length / 2)));
+    const stampR = Math.max(2, HEAT_STAMP_R * scale);
+    const blurPx = Math.max(6, heatmapSmooth * scale * 1.15);
+    const stampAlpha = Math.min(1, 0.55 + 0.35 / Math.sqrt(Math.max(1, pts.length / 2)));
 
+    // 1) Black field, white dots (additive where they stack).
+    heatAccCtx.setTransform(1, 0, 0, 1, 0, 0);
+    heatAccCtx.globalCompositeOperation = 'source-over';
+    heatAccCtx.filter = 'none';
+    heatAccCtx.fillStyle = '#000';
+    heatAccCtx.fillRect(0, 0, HEAT_RES, HEAT_RES);
     heatAccCtx.globalCompositeOperation = 'lighter';
+    heatAccCtx.fillStyle = `rgba(255,255,255,${stampAlpha})`;
     for (let i = 0; i < pts.length; i += 2) {
       const x = pts[i] * scale;
       const y = pts[i + 1] * scale;
-      const g = heatAccCtx.createRadialGradient(x, y, 0, x, y, stampR);
-      g.addColorStop(0, `rgba(255,255,255,${alpha})`);
-      g.addColorStop(0.45, `rgba(255,255,255,${alpha * 0.45})`);
-      g.addColorStop(1, 'rgba(255,255,255,0)');
-      heatAccCtx.fillStyle = g;
       heatAccCtx.beginPath();
       heatAccCtx.arc(x, y, stampR, 0, Math.PI * 2);
       heatAccCtx.fill();
     }
     heatAccCtx.globalCompositeOperation = 'source-over';
 
-    // Blur the intensity field so overlapping stamps fuse into a smooth gradient.
-    heatBlurCtx.clearRect(0, 0, HEAT_RES, HEAT_RES);
+    // 2) Blur the whole intensity layer.
+    heatBlurCtx.setTransform(1, 0, 0, 1, 0, 0);
+    heatBlurCtx.globalCompositeOperation = 'source-over';
+    heatBlurCtx.fillStyle = '#000';
+    heatBlurCtx.fillRect(0, 0, HEAT_RES, HEAT_RES);
     heatBlurCtx.filter = `blur(${blurPx}px)`;
     heatBlurCtx.drawImage(heatAcc, 0, 0);
     heatBlurCtx.filter = 'none';
 
+    // 3) Gradient-map: luminance → color. Keep RGB black where cold so Screen
+    //    compositing hides the field; always opaque (alpha 255).
     const src = heatBlurCtx.getImageData(0, 0, HEAT_RES, HEAT_RES);
     const out = heatColorCtx.createImageData(HEAT_RES, HEAT_RES);
     const s = src.data;
     const d = out.data;
     let maxV = 1;
-    for (let i = 0; i < s.length; i += 4) if (s[i] > maxV) maxV = s[i];
-    const floor = maxV * 0.04;
     for (let i = 0; i < s.length; i += 4) {
-      const v = s[i];
-      if (v < floor) {
-        d[i + 3] = 0;
-        continue;
-      }
-      const t = Math.min(1, (v - floor) / (maxV - floor));
-      // Ease so mid densities stay readable after blur.
-      const e = t * t * (3 - 2 * t);
-      const [r, g, b] = heatColorAt(e);
-      d[i] = Math.round(r);
-      d[i + 1] = Math.round(g);
-      d[i + 2] = Math.round(b);
-      d[i + 3] = Math.min(220, Math.round(30 + e * 190));
+      if (s[i] > maxV) maxV = s[i];
+    }
+    const inv = 1 / maxV;
+    for (let i = 0; i < s.length; i += 4) {
+      const t = s[i] * inv;
+      const [r, g, b] = heatColorAt(t);
+      d[i] = r + 0.5;
+      d[i + 1] = g + 0.5;
+      d[i + 2] = b + 0.5;
+      d[i + 3] = 255;
     }
     heatColorCtx.putImageData(out, 0, 0);
 
-    // Clip to playable radar pixels (not letterbox / black padding).
+    // 4) Clip to playable radar (outside → transparent; Screen ignores it).
     if (renderer.image && renderer.mapCode) {
       const mask = radarPlayableMask(renderer.mapCode, renderer.image);
       heatColorCtx.globalCompositeOperation = 'destination-in';
@@ -1260,11 +1275,13 @@ export function createAnalyzerViewer({
     const ctx = renderer.ctx;
     ctx.save();
     ctx.imageSmoothingEnabled = true;
-    ctx.globalAlpha = 0.92;
+    if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+    // Screen: black field vanishes; purple→yellow lightens the radar.
+    ctx.globalCompositeOperation = 'screen';
+    ctx.globalAlpha = 1;
     ctx.drawImage(layer, t.ox, t.oy, RADAR_SIZE * t.scale, RADAR_SIZE * t.scale);
     ctx.restore();
 
-    // Clock from first visible round at scrub position.
     const first = visibleLayers()[0];
     if (first) {
       const tick = tickForLayer(first, pos);
