@@ -434,7 +434,51 @@ export async function writeRoundNote(user, file, note) {
     delete meta.noteUpdatedAt;
   }
   await fsp.writeFile(p, JSON.stringify(meta));
+  await setNotedRound(user, stem, Boolean(text));
   return { note: text, noteUpdatedAt: meta.noteUpdatedAt || null };
+}
+
+/** Fast set of round stems that currently have a note (library-wide index). */
+const notesIndexPath = (user) => path.join(userDir(user), 'notes.json');
+
+export async function listNotedRounds(user) {
+  try {
+    const raw = JSON.parse(await fsp.readFile(notesIndexPath(user), 'utf8'));
+    if (Array.isArray(raw)) return raw;
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  return rebuildNotesIndex(user);
+}
+
+async function rebuildNotesIndex(user) {
+  const names = await listRoundNames(user);
+  const noted = [];
+  for (const stem of names) {
+    try {
+      const raw = await fsp.readFile(path.join(roundsDir(user), `${stem}.json`), 'utf8');
+      if (!/"note"\s*:/.test(raw)) continue;
+      const meta = JSON.parse(raw);
+      if (meta.note) noted.push(stem);
+    } catch {
+      /* skip corrupt */
+    }
+  }
+  await fsp.writeFile(notesIndexPath(user), JSON.stringify(noted));
+  return noted;
+}
+
+async function setNotedRound(user, stem, hasNote) {
+  let list = [];
+  try {
+    list = await listNotedRounds(user);
+  } catch {
+    list = [];
+  }
+  const has = list.includes(stem);
+  if (hasNote === has) return;
+  const next = hasNote ? [...list, stem] : list.filter((f) => f !== stem);
+  await fsp.writeFile(notesIndexPath(user), JSON.stringify(next));
 }
 
 // ---- Playlists --------------------------------------------------------------
@@ -544,6 +588,16 @@ export async function deleteDemo(user, id) {
     }
   }
   if (touched) await savePlaylists(user, lists);
+  // Drop note-index entries for rounds that went with the demo.
+  try {
+    const noted = await listNotedRounds(user);
+    const kept = noted.filter((f) => !f.endsWith(`~${demoId}`));
+    if (kept.length !== noted.length) {
+      await fsp.writeFile(notesIndexPath(user), JSON.stringify(kept));
+    }
+  } catch {
+    /* index is best-effort */
+  }
   return record;
 }
 

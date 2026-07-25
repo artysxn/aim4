@@ -492,54 +492,194 @@
   margin-left: auto;
 }
 
-.rp-round-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(62px, 1fr));
-  gap: 6px;
+.rp-result-actions .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
-.rp-round-chip {
+/* ---- Per-demo round dropdowns ------------------------------------------- */
+
+.rp-demo-groups {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 1px;
-  padding: 7px 4px;
+  gap: 8px;
+}
+
+.rp-demo-group {
   border: 1px solid var(--border);
-  border-left-width: 3px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--surface);
+  overflow: hidden;
+}
+
+.rp-demo-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 0;
+  background: transparent;
   color: var(--text);
-  font: 500 12px var(--font-body);
+  font: inherit;
+  text-align: left;
   cursor: pointer;
-  transition: background 0.12s var(--ease-smooth);
 }
 
-.rp-round-chip:hover {
-  background: var(--surface-hover);
+.rp-demo-head:hover {
+  background: rgba(255, 255, 255, 0.04);
 }
 
-.rp-round-chip.w1 {
-  border-left-color: var(--rv-team1);
+.rp-demo-chevron {
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--muted);
+  transition: transform 0.15s var(--ease-smooth);
+  flex-shrink: 0;
 }
 
-.rp-round-chip.w2 {
-  border-left-color: var(--rv-team2);
+.rp-demo-group.open .rp-demo-chevron {
+  transform: rotate(180deg);
 }
 
-.rp-chip-map {
+.rp-demo-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rp-demo-count {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.rp-demo-rounds {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.rp-demo-rounds[hidden] {
+  display: none;
+}
+
+.rp-round-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1.4fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rp-round-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.rp-round-row.selected {
+  border-color: rgba(232, 72, 72, 0.45);
+  background: rgba(232, 72, 72, 0.12);
+}
+
+.rp-round-num {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+
+.rp-round-econ {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rp-econ {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rp-econ-vs {
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+
+.rp-round-winner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rp-round-winner.side-t,
+.rp-round-row.side-t .rp-round-num {
+  color: var(--rv-team2); /* T orange */
+}
+
+.rp-round-winner.side-ct,
+.rp-round-row.side-ct .rp-round-num {
+  color: var(--rv-team1); /* CT blue */
+}
+
+.rp-winner-side {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
   color: var(--muted);
   font-size: 10px;
+  font-weight: 700;
   letter-spacing: 0.04em;
 }
 
-.rp-chip-round {
-  font-weight: 600;
+.rp-round-marks {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 40px;
 }
 
-.rp-more {
-  margin-top: 10px;
+.rp-round-mark {
+  display: inline-flex;
   color: var(--muted);
-  font-size: 12px;
+}
+
+.rp-round-mark.note {
+  color: var(--accent, #e84848);
+}
+
+.rp-round-mark.bookmark {
+  color: #e8c84a;
+}
+
+.rp-mark-svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
 }
 
 /* ---- Viewer overlay ----------------------------------------------------- */

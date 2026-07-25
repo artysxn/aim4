@@ -32,6 +32,7 @@ import {
   deleteDemo,
   findRounds,
   listDemos,
+  listNotedRounds,
   newDemoId,
   readPlaylists,
   readRecord,
@@ -440,8 +441,11 @@ export async function handleReplayRequest(req, res, url) {
   // ---- rounds -------------------------------------------------------------
   if (req.method === 'GET' && p === '/api/replays/rounds') {
     const limit = Number(url.searchParams.get('limit') || 2000);
-    const rounds = await findRounds(user, queryFromUrl(url), { limit });
-    json(res, 200, { rounds, total: rounds.length });
+    const [rounds, noted] = await Promise.all([
+      findRounds(user, queryFromUrl(url), { limit }),
+      listNotedRounds(user)
+    ]);
+    json(res, 200, { rounds, total: rounds.length, noted });
     return true;
   }
 

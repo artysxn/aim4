@@ -20,11 +20,17 @@ import {
   uploadDemo,
   uploadImport
 } from '../replays/api.js';
-import { ECONOMIES, MAPS, economyLabel } from '../replays/shared/roundId.js';
+import { ECONOMIES, MAPS, economyLabel, winningSide } from '../replays/shared/roundId.js';
 import { PACKAGE_EXT } from '../replays/shared/replayPackage.js';
 import { formatBytes } from '../replays/tickStore.js';
+import commentsIcon from '../icons/demos_comments.svg?raw';
+import bookmarkIcon from '../icons/demos_bookmarks_added.svg?raw';
 
 const POLL_MS = 1500;
+
+function svgIcon(raw) {
+  return raw.replace('<svg', '<svg class="rp-mark-svg" aria-hidden="true"');
+}
 
 export function initReplaysView({ escapeHtml }) {
   const uploadInput = document.getElementById('rp-file');
@@ -38,6 +44,14 @@ export function initReplaysView({ escapeHtml }) {
 
   let demos = [];
   let rounds = [];
+  /** @type {Set<string>} */
+  let notedFiles = new Set();
+  /** @type {Set<string>} rounds that appear in any playlist */
+  let bookmarkedFiles = new Set();
+  /** @type {Set<string>} selected round files */
+  let selectedFiles = new Set();
+  /** @type {Set<string>} collapsed demo ids */
+  let collapsedDemos = new Set();
   let pollTimer = 0;
   let visible = false;
   let viewerModule = null;
@@ -451,13 +465,99 @@ export function initReplaysView({ escapeHtml }) {
   async function runQuery() {
     const token = ++queryToken;
     try {
-      const res = await findRounds(currentQuery());
+      const [res, playlists] = await Promise.all([findRounds(currentQuery()), fetchPlaylists().catch(() => [])]);
       if (token !== queryToken) return;
       rounds = res.rounds || [];
+      notedFiles = new Set(res.noted || []);
+      bookmarkedFiles = new Set();
+      for (const pl of playlists || []) {
+        for (const f of pl.rounds || []) bookmarkedFiles.add(f);
+      }
+      // Drop selections that filters removed from the current result set.
+      const visible = new Set(rounds.map((r) => r.file));
+      selectedFiles = new Set([...selectedFiles].filter((f) => visible.has(f)));
       renderResults();
     } catch (err) {
       setStatus(err.message, true);
     }
+  }
+
+  function demoById(id) {
+    return demos.find((d) => d.id === id) || null;
+  }
+
+  function teamName(demo, team, shortId) {
+    if (team === 1) return demo?.team1?.name || shortId || 'Team 1';
+    return demo?.team2?.name || shortId || 'Team 2';
+  }
+
+  function gameTitle(demo, sample) {
+    const t1 = teamName(demo, 1, sample?.team1);
+    const t2 = teamName(demo, 2, sample?.team2);
+    const map = MAPS[demo?.map || sample?.map]?.name || demo?.mapName || sample?.map || '';
+    const score =
+      demo?.score && demo.status === 'ready' ? `${demo.score.team1}–${demo.score.team2}` : '';
+    const bits = [`${t1} vs ${t2}`];
+    if (map) bits.push(map);
+    if (score) bits.push(score);
+    return bits.join(' · ');
+  }
+
+  function groupRoundsByDemo(list) {
+    const groups = new Map();
+    for (const r of list) {
+      const key = r.demoId || '_';
+      let g = groups.get(key);
+      if (!g) {
+        g = { demoId: key, demo: demoById(key), rounds: [] };
+        groups.set(key, g);
+      }
+      g.rounds.push(r);
+    }
+    for (const g of groups.values()) {
+      g.rounds.sort((a, b) => (a.round || 0) - (b.round || 0));
+    }
+    // Newest demos first when we know upload time.
+    return [...groups.values()].sort((a, b) => {
+      const ta = a.demo?.uploadedAt || a.demo?.parsedAt || 0;
+      const tb = b.demo?.uploadedAt || b.demo?.parsedAt || 0;
+      return tb - ta;
+    });
+  }
+
+  function roundRowHtml(r, demo) {
+    const selected = selectedFiles.has(r.file);
+    const side = winningSide(r);
+    const winTeam = r.winner === 1 ? 1 : 2;
+    const winnerName = teamName(demo, winTeam, winTeam === 1 ? r.team1 : r.team2);
+    const t1 = teamName(demo, 1, r.team1);
+    const t2 = teamName(demo, 2, r.team2);
+    const marks = [];
+    if (notedFiles.has(r.file)) {
+      marks.push(
+        `<span class="rp-round-mark note" title="Has a note">${svgIcon(commentsIcon)}</span>`
+      );
+    }
+    if (bookmarkedFiles.has(r.file)) {
+      marks.push(
+        `<span class="rp-round-mark bookmark" title="In a playlist">${svgIcon(bookmarkIcon)}</span>`
+      );
+    }
+    return `
+      <button type="button" class="rp-round-row${selected ? ' selected' : ''} side-${side.toLowerCase()}"
+        data-file="${escapeHtml(r.file)}" aria-pressed="${selected ? 'true' : 'false'}">
+        <span class="rp-round-num">${String(r.round).padStart(2, '0')}</span>
+        <span class="rp-round-econ">
+          <span class="rp-econ" title="${escapeHtml(t1)}">${escapeHtml(economyLabel(r.econ1))}</span>
+          <span class="rp-econ-vs">vs</span>
+          <span class="rp-econ" title="${escapeHtml(t2)}">${escapeHtml(economyLabel(r.econ2))}</span>
+        </span>
+        <span class="rp-round-winner side-${side.toLowerCase()}" title="Winner">
+          ${escapeHtml(winnerName)}
+          <span class="rp-winner-side">${side}</span>
+        </span>
+        <span class="rp-round-marks">${marks.join('')}</span>
+      </button>`;
   }
 
   function renderResults() {
@@ -465,60 +565,84 @@ export function initReplaysView({ escapeHtml }) {
       resultEl.innerHTML = '<p class="view-empty">No rounds match these filters.</p>';
       return;
     }
+
+    const groups = groupRoundsByDemo(rounds);
     const byMap = {};
     for (const r of rounds) byMap[r.map] = (byMap[r.map] || 0) + 1;
     const tags = Object.entries(byMap)
       .map(([code, n]) => `<span class="rp-tag">${escapeHtml(MAPS[code]?.name || code)} ${n}</span>`)
       .join('');
+    const selCount = selectedFiles.size;
+    const loadLabel = selCount ? `Load rounds (${selCount})` : 'Load rounds';
 
     resultEl.innerHTML = `
       <div class="rp-result-head">
         <span class="rp-result-count">${rounds.length} round${rounds.length === 1 ? '' : 's'}</span>
         <span class="rp-result-tags">${tags}</span>
         <div class="rp-result-actions">
-          <button type="button" class="btn btn-sm primary" id="rp-open-timeline">Timeline</button>
-          <button type="button" class="btn btn-sm" id="rp-open-macro">Macro</button>
+          <button type="button" class="btn btn-sm primary" id="rp-load-rounds" ${
+            selCount ? '' : 'disabled'
+          }>${loadLabel}</button>
         </div>
       </div>
-      <div class="rp-round-grid">
-        ${rounds
-          .slice(0, 200)
-          .map(
-            (r) => {
-              const side = r.winner === 1 ? 'w1' : 'w2';
-              return `
-          <button type="button" class="rp-round-chip ${side}" data-file="${escapeHtml(r.file)}"
-            title="${escapeHtml(
-              `${MAPS[r.map]?.name || r.map} round ${r.round}: ${economyLabel(r.econ1)} vs ${economyLabel(r.econ2)}`
-            )}">
-            <span class="rp-chip-map">${escapeHtml(r.map)}</span>
-            <span class="rp-chip-round">${String(r.round).padStart(2, '0')}</span>
-          </button>`;
-            }
-          )
+      <div class="rp-demo-groups">
+        ${groups
+          .map((g) => {
+            const open = !collapsedDemos.has(g.demoId);
+            const title = gameTitle(g.demo, g.rounds[0]);
+            const selectedInGroup = g.rounds.filter((r) => selectedFiles.has(r.file)).length;
+            return `
+          <section class="rp-demo-group${open ? ' open' : ''}" data-demo="${escapeHtml(g.demoId)}">
+            <button type="button" class="rp-demo-head" data-toggle-demo="${escapeHtml(g.demoId)}"
+              aria-expanded="${open ? 'true' : 'false'}">
+              <span class="rp-demo-chevron" aria-hidden="true"></span>
+              <span class="rp-demo-title">${escapeHtml(title)}</span>
+              <span class="rp-demo-count">${g.rounds.length} round${g.rounds.length === 1 ? '' : 's'}${
+                selectedInGroup ? ` · ${selectedInGroup} selected` : ''
+              }</span>
+            </button>
+            <div class="rp-demo-rounds" ${open ? '' : 'hidden'}>
+              ${g.rounds.map((r) => roundRowHtml(r, g.demo)).join('')}
+            </div>
+          </section>`;
+          })
           .join('')}
-      </div>
-      ${rounds.length > 200 ? `<p class="rp-more">Showing the first 200 of ${rounds.length}. All of them open in the viewer.</p>` : ''}`;
+      </div>`;
 
-    resultEl.querySelector('#rp-open-timeline')?.addEventListener('click', () => {
-      launchViewer(rounds, 'timeline', queryTitle());
-    });
-    resultEl.querySelector('#rp-open-macro')?.addEventListener('click', () => {
-      launchViewer(rounds, 'macro', queryTitle());
-    });
-    resultEl.querySelectorAll('[data-file]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const one = rounds.filter((r) => r.file === btn.dataset.file);
-        launchViewer(one, 'timeline', queryTitle());
-      });
+    resultEl.querySelector('#rp-load-rounds')?.addEventListener('click', () => {
+      const picked = rounds.filter((r) => selectedFiles.has(r.file));
+      const ordered = groupRoundsByDemo(picked).flatMap((g) => g.rounds);
+      launchViewer(ordered, 'timeline', queryTitle(ordered));
     });
   }
 
-  function queryTitle() {
+  resultEl.addEventListener('click', (e) => {
+    const toggle = e.target.closest('[data-toggle-demo]');
+    if (toggle) {
+      const id = toggle.dataset.toggleDemo;
+      if (collapsedDemos.has(id)) collapsedDemos.delete(id);
+      else collapsedDemos.add(id);
+      renderResults();
+      return;
+    }
+    const row = e.target.closest('.rp-round-row[data-file]');
+    if (!row) return;
+    const file = row.dataset.file;
+    if (selectedFiles.has(file)) selectedFiles.delete(file);
+    else selectedFiles.add(file);
+    renderResults();
+  });
+
+  function queryTitle(list = rounds) {
     const parts = [];
     if (filters.maps.size) parts.push([...filters.maps].map((c) => MAPS[c]?.name || c).join(', '));
     if (filters.economies.size) parts.push([...filters.economies].map(economyLabel).join(', '));
-    return parts.join(' · ') || 'All rounds';
+    if (list?.length && list.length <= 3) {
+      parts.push(list.map((r) => `R${r.round}`).join(', '));
+    } else if (selectedFiles.size) {
+      parts.push(`${selectedFiles.size} rounds`);
+    }
+    return parts.join(' · ') || 'Selected rounds';
   }
 
   /** The viewer is a heavy module: it loads the first time one is opened. */
