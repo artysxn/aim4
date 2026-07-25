@@ -20,6 +20,20 @@ const WORKER = path.join(__dirname, 'parseWorker.js');
 /** Drop the .dem after a successful parse. Rounds are what the viewer reads. */
 const KEEP_SOURCE = process.env.AIM4_REPLAY_KEEP_DEM !== '0';
 
+/**
+ * Heap ceiling for the parse worker, in MB.
+ *
+ * This is a blast radius control, not a tuning knob. Without it a worker that
+ * runs out of memory takes the whole process down with it, which means one
+ * oversized demo also kills every live multiplayer match. With it, the worker
+ * dies alone, the job reports a real error, and the server keeps serving.
+ * Leave headroom: this must fit inside the host's RAM next to everything else.
+ */
+const WORKER_HEAP_MB = Number(process.env.AIM4_PARSE_HEAP_MB || 1536);
+
+/** Give up on a parse that has made no progress for this long. */
+const STALL_MS = Number(process.env.AIM4_PARSE_STALL_MS || 15 * 60 * 1000);
+
 const jobs = new Map(); // demoId -> job
 const queue = [];
 let running = null;
@@ -87,18 +101,42 @@ function pump() {
         sizeBytes: job.sizeBytes,
         uploadedAt: job.queuedAt
       }
+    },
+    resourceLimits: {
+      maxOldGenerationSizeMb: WORKER_HEAP_MB,
+      maxYoungGenerationSizeMb: 64
     }
   });
 
+  // A parse that stops reporting progress is hung. Killing it frees the queue
+  // and surfaces a real error, instead of leaving the demo on "Parsing" until
+  // someone restarts the server.
+  let stallTimer = null;
+  const touch = () => {
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      worker.terminate().catch(() => {});
+      const message = `Parsing stalled with no progress for ${Math.round(STALL_MS / 60000)} minutes.`;
+      markFailed(job, message).catch(() => {});
+      finish({ state: 'error', stage: 'error', error: message });
+    }, STALL_MS);
+    if (stallTimer.unref) stallTimer.unref();
+  };
+
   const finish = async (patch) => {
+    if (job.finishedAt) return; // terminate() and exit can both land here
+    if (stallTimer) clearTimeout(stallTimer);
     Object.assign(job, patch, { finishedAt: Date.now() });
     running = null;
     worker.terminate().catch(() => {});
     pump();
   };
 
+  touch();
+
   worker.on('message', async (msg) => {
     if (msg.type === 'progress') {
+      touch();
       job.stage = msg.stage || job.stage;
       if (msg.round !== undefined) job.round = msg.round;
       if (msg.total !== undefined) job.total = msg.total;
@@ -116,7 +154,15 @@ function pump() {
   });
 
   worker.on('error', async (err) => {
-    const message = err?.message || String(err);
+    // An out-of-memory worker is the common failure on a small host, and the
+    // raw V8 message does not say what to do about it.
+    const oom = err?.code === 'ERR_WORKER_OUT_OF_MEMORY';
+    const message = oom
+      ? `Parsing ran out of memory (worker limit ${WORKER_HEAP_MB} MB). Raise ` +
+        'AIM4_PARSE_HEAP_MB if the host has spare RAM, or lower ' +
+        'AIM4_PARSE_BATCH_TICKS to hold fewer ticks at once.'
+      : err?.message || String(err);
+    console.error(`[replays] parse failed for ${job.filename}:`, message);
     await markFailed(job, message);
     await finish({ state: 'error', stage: 'error', error: message });
   });

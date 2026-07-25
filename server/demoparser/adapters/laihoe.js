@@ -155,12 +155,15 @@ function eventsByName(all) {
 }
 
 /**
- * Build the match roster. Team membership is pinned from the first half and
- * kept for the whole match: the round name identifies *teams*, so a player
- * must not change group when the sides swap at halftime.
+ * Build the match roster from rows already in hand. Team membership is pinned
+ * from the first half and kept for the whole match: the round name identifies
+ * *teams*, so a player must not change group when the sides swap at halftime.
+ *
+ * This reads the first batch's rows rather than making a call of its own —
+ * every parseTicks call re-reads the whole demo, so a "cheap" one-tick lookup
+ * would cost a full extra pass over hundreds of megabytes.
  */
-function buildRoster(file, firstRoundTick) {
-  const rows = readTicks(file, [firstRoundTick]);
+function rosterFromRows(rows) {
   const seen = new Map();
   for (const r of rows) {
     const steam = sid(r.steamid);
@@ -212,48 +215,94 @@ function inventoryOf(row) {
   return active ? [String(active)] : [];
 }
 
+// Rounds are parsed in GROUPS, not one at a time. Every parseTicks call reads
+// and decodes the whole demo file, so asking for one round at a time costs
+// O(rounds x file size): on a 24 round, 300 MB demo that is over 7 GB of
+// redundant work, which is what made a parse crawl and then exhaust the heap.
+// Bigger batches mean fewer passes but more rows resident at once. This is the
+// knob to turn when a host is tight on either time or memory.
+const BATCH_TICKS = Number(process.env.AIM4_PARSE_BATCH_TICKS || 24000);
+
 /**
- * Read one round's ticks into a binary buffer.
- * Returns { buffer, weapons, freezeSnapshot } where freezeSnapshot holds the
- * per-player money/equipment the economy classifier needs.
+ * Group consecutive rounds so each group spans at most `maxTicks`.
+ * Exported so the grouping can be tested directly: a bug here would silently
+ * drop rounds from a parse rather than fail.
  */
-function packRound(file, round, roster, tickRate) {
-  const slotOf = new Map(roster.map((p) => [p.steamId, p.slot]));
-  const from = round.startTick;
-  const to = round.officialEndTick;
+export function batchSpans(spans, maxTicks) {
+  const batches = [];
+  let current = [];
+  let start = 0;
+  for (const span of spans) {
+    if (!current.length) {
+      current = [span];
+      start = span.startTick;
+      continue;
+    }
+    if (span.officialEndTick - start > maxTicks) {
+      batches.push(current);
+      current = [span];
+      start = span.startTick;
+    } else {
+      current.push(span);
+    }
+  }
+  if (current.length) batches.push(current);
+  return batches;
+}
+
+/** The one expensive call: every tick of every round in the batch. */
+function readBatchRows(file, batch) {
+  const from = batch[0].startTick;
+  const to = batch[batch.length - 1].officialEndTick;
   const wanted = [];
   for (let t = from; t <= to; t++) wanted.push(t);
+  return readTicks(file, wanted);
+}
 
-  const rows = readTicks(file, wanted);
+/**
+ * Distribute one batch's rows into a binary buffer per round, in a single
+ * pass. Each pack carries the freezetime money/equipment the economy
+ * classifier needs alongside its tick buffer.
+ */
+function packBatch(rows, batch, roster, tickRate) {
+  const slotOf = new Map(roster.map((p) => [p.steamId, p.slot]));
 
-  const tickCount = to - from + 1;
-  const buffer = new ArrayBuffer(HEADER_BYTES + tickCount * TICK_BYTES);
-  const view = new DataView(buffer);
-  writeHeader(view, {
-    tickCount,
-    firstTick: from,
-    stride: 1,
-    tickRate,
-    playerCount: Math.min(PLAYER_SLOTS, roster.length)
+  const packs = batch.map((span) => {
+    const tickCount = span.officialEndTick - span.startTick + 1;
+    const buffer = new ArrayBuffer(HEADER_BYTES + tickCount * TICK_BYTES);
+    const view = new DataView(buffer);
+    writeHeader(view, {
+      tickCount,
+      firstTick: span.startTick,
+      stride: 1,
+      tickRate,
+      playerCount: Math.min(PLAYER_SLOTS, roster.length)
+    });
+    return {
+      span,
+      buffer,
+      view,
+      tickCount,
+      weapons: ['none'],
+      weaponIndex: new Map([['none', 0]]),
+      freezeSnapshot: new Map()
+    };
   });
 
-  const weapons = ['none'];
-  const weaponIndex = new Map([['none', 0]]);
-  const weaponId = (raw) => {
+  const weaponId = (pack, raw) => {
     const w = raw ? String(raw).replace(/^weapon_/, '') : 'none';
-    let i = weaponIndex.get(w);
+    let i = pack.weaponIndex.get(w);
     if (i === undefined) {
-      i = weapons.length;
-      // The dictionary is a uint8 in the record; a round never comes close to
-      // 255 distinct weapons, but clamp rather than corrupt the index.
+      i = pack.weapons.length;
+      // The dictionary index is a uint8 in the record; a round never comes
+      // close to 255 distinct weapons, but clamp rather than corrupt it.
       if (i > 255) return 0;
-      weapons.push(w);
-      weaponIndex.set(w, i);
+      pack.weapons.push(w);
+      pack.weaponIndex.set(w, i);
     }
     return i;
   };
 
-  const freezeSnapshot = new Map();
   const state = {};
 
   for (const r of rows) {
@@ -261,8 +310,20 @@ function packRound(file, round, roster, tickRate) {
     const slot = slotOf.get(steam);
     if (slot === undefined) continue;
     const tick = num(r.tick);
-    const row = tick - from;
-    if (row < 0 || row >= tickCount) continue;
+
+    // A batch holds a handful of rounds, so a linear probe is cheaper than
+    // maintaining an index, and it tolerates rows arriving out of order.
+    let pack = null;
+    for (const p of packs) {
+      if (tick >= p.span.startTick && tick <= p.span.officialEndTick) {
+        pack = p;
+        break;
+      }
+    }
+    if (!pack) continue;
+
+    const row = tick - pack.span.startTick;
+    if (row < 0 || row >= pack.tickCount) continue;
 
     const inv = inventoryOf(r);
     state.x = num(r.X);
@@ -272,13 +333,16 @@ function packRound(file, round, roster, tickRate) {
     state.pitch = num(r.pitch);
     state.health = num(r.health);
     state.armor = num(r.armor_value);
-    state.weapon = weaponId(r.active_weapon_name);
+    state.weapon = weaponId(pack, r.active_weapon_name);
     state.flags = flagsFor(r, inv.some((w) => String(w).includes('c4')));
     state.flash = num(r.flash_duration);
-    writeRecord(view, row, slot, state);
+    writeRecord(pack.view, row, slot, state);
 
-    if (tick === round.freezeEndTick || (!freezeSnapshot.has(steam) && tick >= round.freezeEndTick)) {
-      freezeSnapshot.set(steam, {
+    if (
+      tick === pack.span.freezeEndTick ||
+      (!pack.freezeSnapshot.has(steam) && tick >= pack.span.freezeEndTick)
+    ) {
+      pack.freezeSnapshot.set(steam, {
         money: num(r.balance),
         equipValue: num(r.current_equip_value),
         loadout: inv
@@ -286,7 +350,7 @@ function packRound(file, round, roster, tickRate) {
     }
   }
 
-  return { buffer, weapons, freezeSnapshot, tickCount };
+  return packs;
 }
 
 /**
@@ -402,7 +466,9 @@ export async function parseDemo(file, opts = {}) {
   const spans = buildRoundSpans(byName, lastTick);
   if (!spans.length) throw new Error('No completed rounds found in this demo.');
 
-  const roster = buildRoster(file, spans[0].freezeEndTick || spans[0].startTick || 1);
+  const roster = rosterFromRows(
+    readTicks(file, [spans[0].freezeEndTick || spans[0].startTick || 1])
+  );
   if (roster.length < 10) {
     throw new Error(`Expected 10 players, found ${roster.length}. Is this a competitive demo?`);
   }
@@ -430,12 +496,22 @@ export async function parseDemo(file, opts = {}) {
   // be mapped back to a team through the halftime swap.
   const roundsPerHalf = 12;
 
+  const batches = batchSpans(spans, BATCH_TICKS);
   const rounds = [];
-  for (let i = 0; i < spans.length; i++) {
-    const span = spans[i];
-    progress({ stage: 'round', round: i + 1, total: spans.length });
+  let packedCount = 0;
 
-    const { buffer, weapons, freezeSnapshot } = packRound(file, span, roster, tickRate);
+  for (const batch of batches) {
+    progress({ stage: 'round', round: packedCount + 1, total: spans.length });
+
+    let rows = readBatchRows(file, batch);
+    const packs = packBatch(rows, batch, roster, tickRate);
+    // Drop the batch's rows before building records: they are by far the
+    // largest thing alive, and the records below allocate again.
+    rows = null;
+
+    for (const pack of packs) {
+    const span = pack.span;
+    const { buffer, weapons, freezeSnapshot } = pack;
 
     // team 1 starts on T (team_num 2) and swaps at the half.
     const swapped = span.round > roundsPerHalf;
@@ -551,6 +627,10 @@ export async function parseDemo(file, opts = {}) {
       },
       stats
     });
+
+      packedCount++;
+      progress({ stage: 'round', round: packedCount, total: spans.length });
+    }
   }
 
   progress({ stage: 'done', total: rounds.length });

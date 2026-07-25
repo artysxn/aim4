@@ -17,6 +17,7 @@ import { MultiplayerServer } from './lobby.js';
 import { FootballServer } from './football.js';
 import { tryServeStatic, distExists } from './static.js';
 import { handleReplayRequest } from './replays/routes.js';
+import { checkCaseSensitivity } from './replays/demoStore.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
 
 // PORT (no prefix) is the convention most hosts inject; AIM4_API_PORT still
@@ -210,6 +211,9 @@ if (SERVE_STATIC && !distExists()) {
 // rather than as a timeout. headersTimeout stays short: only the body is slow.
 server.requestTimeout = Number(process.env.AIM4_REQUEST_TIMEOUT_MS || 30 * 60 * 1000);
 server.headersTimeout = 65_000;
+
+// Round names are the replay database's keys and they are case-sensitive.
+checkCaseSensitivity();
 
 server.listen(PORT, HOST, async () => {
   if (SERVE_STATIC) {

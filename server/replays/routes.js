@@ -98,7 +98,20 @@ function queryFromUrl(url) {
 /** Merge the stored record with live job progress. */
 function withJob(user, record) {
   const job = jobStatus(user, record.id);
-  if (!job) return record;
+  if (!job) {
+    // Written as "parsing" but nothing is parsing it: the server restarted, or
+    // the worker died, while it was mid-flight. Job state is in memory, so it
+    // did not survive. Nothing will ever finish this record, and reporting it
+    // as still running leaves the row spinning forever with no way out.
+    if (record.status === 'parsing') {
+      return {
+        ...record,
+        status: 'error',
+        error: record.error || 'Parsing was interrupted before it finished. Retry to parse it again.'
+      };
+    }
+    return record;
+  }
   return {
     ...record,
     status: job.state === 'done' ? record.status || 'ready' : job.state === 'error' ? 'error' : 'parsing',

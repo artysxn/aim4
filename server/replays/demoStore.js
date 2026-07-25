@@ -10,6 +10,12 @@
 // <name> is the round id, optionally suffixed "~<demoId>" when two demos
 // produce the same round name. Filtering never opens a round file: the
 // collector reads the rounds directory and matches on names alone.
+//
+// REQUIRES A CASE-SENSITIVE FILESYSTEM. Round ids use upper case, lower case
+// and digits, so "HBq" and "hbQ" are two different rounds. On ext4/xfs they
+// are two different files, which is correct. On Windows or default macOS they
+// collide and one round silently overwrites the other. checkCaseSensitivity()
+// below turns that into a startup warning rather than quiet data loss.
 // ---------------------------------------------------------------------------
 
 import fs from 'node:fs';
@@ -46,6 +52,37 @@ const roundsDir = (user) => path.join(userDir(user), 'rounds');
 
 export function newDemoId() {
   return crypto.randomBytes(8).toString('hex');
+}
+
+/**
+ * Probe whether the storage volume distinguishes case, and warn if it does
+ * not. Round names are the database key and they are case-sensitive, so a
+ * case-folding volume merges distinct rounds into one file. That failure is
+ * invisible at write time and only shows up as missing rounds much later,
+ * which is exactly the kind of thing worth a loud line at startup.
+ *
+ * @returns {boolean} true when the filesystem is case-sensitive
+ */
+export function checkCaseSensitivity(dir = ROOT) {
+  const probe = path.join(dir, '.CaseProbe');
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(probe, '');
+    const folded = fs.existsSync(path.join(dir, '.caseprobe'));
+    fs.rmSync(probe, { force: true });
+    if (folded) {
+      console.warn(
+        '[replays] WARNING: the replay directory is on a case-insensitive ' +
+          'filesystem. Round ids differ by case ("HBq" and "hbQ" are different ' +
+          'rounds), so rounds will silently overwrite each other. Use a ' +
+          'case-sensitive volume (ext4/xfs) for AIM4_REPLAY_DIR.'
+      );
+    }
+    return !folded;
+  } catch {
+    // Never let a diagnostic stop the server from booting.
+    return true;
+  }
 }
 
 async function ensureDirs(user) {
