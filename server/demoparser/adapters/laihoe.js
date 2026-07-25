@@ -1045,6 +1045,22 @@ export async function parseDemo(file, opts = {}) {
       const gunHurts = myHurts.filter((e) => isGunName(e.weapon));
       const myShots = shots.filter((s) => s.player === pl.id);
       const gunShots = myShots.filter((s) => isGunName(s.weapon));
+
+      // One trigger pull can raise several damage events: a shotgun lands
+      // nine pellets, and a bullet that penetrates hits two people. Accuracy
+      // is shots that landed, not damage instances, so the events are
+      // collapsed onto the tick they fired on — no weapon in the game cycles
+      // fast enough to shoot twice inside one tick.
+      const landed = new Set();
+      const headshotTicks = new Set();
+      const awpLanded = new Set();
+      for (const e of gunHurts) {
+        const at = num(e.tick);
+        landed.add(at);
+        if (String(e.hitgroup) === 'head' || num(e.hitgroup) === 1) headshotTicks.add(at);
+        if (String(e.weapon || '') === 'awp') awpLanded.add(at);
+      }
+
       stats[pl.id] = {
         kills: kills.filter((k) => k.attacker === pl.id).length,
         deaths: kills.filter((k) => k.victim === pl.id).length,
@@ -1052,11 +1068,10 @@ export async function parseDemo(file, opts = {}) {
         damage: myHurts.reduce((sum, e) => sum + num(e.dmg_health), 0),
         shots: myShots.length,
         gunShots: gunShots.length,
-        hits: gunHurts.length,
-        headshots: gunHurts.filter((e) => String(e.hitgroup) === 'head' || num(e.hitgroup) === 1)
-          .length,
+        hits: landed.size,
+        headshots: headshotTicks.size,
         awpShots: myShots.filter((s) => s.weapon === 'awp').length,
-        awpHits: gunHurts.filter((e) => String(e.weapon || '') === 'awp').length,
+        awpHits: awpLanded.size,
         money: snap.money || 0,
         equipValue: snap.equipValue || 0,
         loadout: snap.loadout || []
