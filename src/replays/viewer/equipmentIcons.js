@@ -95,6 +95,13 @@ const ALIASES = {
   p2000: 'hkp2000',
   weapon_p2000: 'hkp2000',
   weapon_usp_silencer: 'usp_silencer',
+  usp_silencer: 'usp_silencer',
+  usp_s: 'usp_silencer',
+  usps: 'usp_silencer',
+  usp: 'usp_silencer',
+  weapon_glock: 'glock',
+  glock_18: 'glock',
+  glock18: 'glock',
   weapon_m4a1_silencer: 'm4a1_silencer',
   weapon_m4a1: 'm4a1',
   weapon_revolver: 'revolver',
@@ -115,6 +122,27 @@ const ALIASES = {
 };
 
 const GRENADES = ['flashbang', 'smokegrenade', 'hegrenade', 'molotov', 'incgrenade', 'decoy'];
+
+/**
+ * demoparser2 spellings vary ("Smoke Grenade", "weapon_smokegrenade", …).
+ * Collapse them to the dictionary keys we draw / icon against.
+ */
+export function normalizeGrenadeType(name) {
+  const raw = String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^weapon_/, '')
+    .replace(/[\s_-]+/g, '');
+  if (!raw) return '';
+  if (raw.includes('smoke')) return 'smokegrenade';
+  if (raw.includes('flash')) return 'flashbang';
+  if (raw.includes('molotov') || raw.includes('firebomb')) return 'molotov';
+  if (raw.includes('incen')) return 'incgrenade';
+  if (raw.includes('decoy')) return 'decoy';
+  if (raw === 'he' || raw.includes('hegrenade') || raw.includes('frag')) return 'hegrenade';
+  if (GRENADES.includes(raw)) return raw;
+  return raw;
+}
 
 const GUN_PRIORITY = [
   'awp',
@@ -161,9 +189,15 @@ export function bareWeapon(name) {
     .trim()
     .toLowerCase()
     .replace(/^weapon_/, '')
-    .replace(/^item_/, '');
+    .replace(/^item_/, '')
+    .replace(/-/g, '_')
+    .replace(/\s+/g, '_');
   if (ALIASES[s]) s = ALIASES[s];
   if (ALIASES[`weapon_${s}`]) s = ALIASES[`weapon_${s}`];
+  // demoparser display names: "Glock-18", "USP-S", "P2000"
+  if (s.startsWith('glock')) s = 'glock';
+  if (s === 'usp_s' || s === 'usps' || s === 'usp') s = 'usp_silencer';
+  if (s === 'p2000' || s === 'hk_p2000') s = 'hkp2000';
   return s;
 }
 
@@ -172,8 +206,11 @@ export function iconKey(name) {
   const bare = bareWeapon(name);
   if (!bare || bare === 'none') return '';
   if (ICON_FILES.has(bare)) return bare;
-  if (bare.startsWith('knife') && ICON_FILES.has(bare)) return bare;
   if (bare.startsWith('knife')) return ICON_FILES.has(bare) ? bare : 'knife';
+  // Last-chance pistol / common renames.
+  if (bare.includes('usp')) return 'usp_silencer';
+  if (bare.includes('glock')) return 'glock';
+  if (bare.includes('p2000') || bare.includes('hkp2000')) return 'hkp2000';
   return '';
 }
 
@@ -183,7 +220,8 @@ export function iconSrc(name) {
 }
 
 export function isGrenade(name) {
-  return GRENADES.includes(bareWeapon(name));
+  const n = normalizeGrenadeType(name) || bareWeapon(name);
+  return GRENADES.includes(n);
 }
 
 export function isKnife(name) {
@@ -228,7 +266,7 @@ export function inventoryAt({ loadout, grenades, playerId, tick, state, activeWe
   for (const g of grenades || []) {
     if (g.player !== playerId) continue;
     if ((g.throwTick ?? g.tick ?? 0) > tick) continue;
-    removeOne(items, bareWeapon(g.type));
+    removeOne(items, normalizeGrenadeType(g.type) || bareWeapon(g.type));
   }
 
   const active = bareWeapon(activeWeapon || '');

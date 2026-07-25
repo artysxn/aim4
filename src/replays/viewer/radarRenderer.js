@@ -16,7 +16,7 @@ import {
   FLAG_HAS_BOMB,
   FLAG_SCOPED
 } from '../shared/tickFormat.js';
-import { isGrenade, loadEquipmentIcon } from './equipmentIcons.js';
+import { isGrenade, isKnife, loadEquipmentIcon, normalizeGrenadeType } from './equipmentIcons.js';
 
 /** Roster team colors (fallback when a tick has no side byte). */
 export const TEAM_COLORS = {
@@ -86,8 +86,14 @@ export class RadarRenderer {
     this._pt = { x: 0, y: 0 };
     /** @type {number[]} previous health per slot, for damage flash */
     this._prevHealth = new Array(10).fill(-1);
+    /** Demo tick when each slot last took damage (for 5-tick red fade). */
+    this._damageTick = new Array(10).fill(-1);
+    /** Previous flash remaining, to detect a new blind. */
+    this._prevFlash = new Array(10).fill(0);
     /** Optional redraw hook when an equipment SVG finishes loading. */
     this.onIconLoad = null;
+    /** Scratch canvas for tinting white equipment SVGs. */
+    this._tintCanvas = null;
   }
 
   async setMap(mapCode) {
@@ -99,6 +105,8 @@ export class RadarRenderer {
       this.image = null;
     }
     this._prevHealth.fill(-1);
+    this._damageTick.fill(-1);
+    this._prevFlash.fill(0);
   }
 
   /** Match the backing store to the element's CSS size. */
@@ -115,11 +123,11 @@ export class RadarRenderer {
   }
 
   /**
-   * Radar pixels -> canvas pixels. Default (zoom=1) covers the map panel so
-   * the overview fills the stage instead of sitting in a letterboxed square.
+   * Radar pixels -> canvas pixels. Default (zoom=1) fits the full square map
+   * centered in the panel (letterbox), never cropping edges.
    */
   viewTransform(w, h) {
-    const fit = Math.max(w, h) / RADAR_SIZE;
+    const fit = Math.min(w, h) / RADAR_SIZE;
     const scale = fit * this.zoom;
     return {
       scale,
@@ -174,7 +182,7 @@ export class RadarRenderer {
   // ---- players -------------------------------------------------------------
 
   drawPlayers(ctx, t, frame, compact) {
-    const { states, players, highlight, weapons = [] } = frame;
+    const { states, players, highlight, weapons = [], tick = 0 } = frame;
     const r = (compact ? 3.6 : 7.5) * this.dpr;
 
     for (const p of players) {
@@ -186,12 +194,22 @@ export class RadarRenderer {
 
       if (!s.alive) {
         this._prevHealth[p.slot] = 0;
+        this._prevFlash[p.slot] = 0;
         continue;
       }
 
       const prev = this._prevHealth[p.slot];
-      const takingDamage = prev >= 0 && s.health < prev;
+      if (prev >= 0 && s.health < prev) this._damageTick[p.slot] = tick;
       this._prevHealth[p.slot] = s.health;
+
+      const damageAge = this._damageTick[p.slot] < 0 ? 99 : tick - this._damageTick[p.slot];
+      const damageFlash = damageAge >= 0 && damageAge < 5 ? 1 - damageAge / 5 : 0;
+
+      const prevFlash = this._prevFlash[p.slot] || 0;
+      this._prevFlash[p.slot] = s.flash || 0;
+      // Peak white on the tick blindness jumps up; otherwise track remaining blind.
+      const flashAmt = Math.max(0, s.flash || 0);
+      const flashPeak = flashAmt > prevFlash + 0.05 ? 1 : Math.min(1, flashAmt / 2.5);
 
       const lower = isLowerLevel(this.mapCode, s.z);
       ctx.save();
@@ -212,9 +230,15 @@ export class RadarRenderer {
       ctx.fillStyle = colors.base;
       ctx.fill();
 
-      if (takingDamage) {
+      if (damageFlash > 0) {
         pathDroplet(ctx, tip, bot, halfW);
-        ctx.fillStyle = 'rgba(255, 40, 40, 0.12)';
+        ctx.fillStyle = `rgba(255, 48, 48, ${0.55 * damageFlash})`;
+        ctx.fill();
+      }
+
+      if (flashPeak > 0.02) {
+        pathDroplet(ctx, tip, bot, halfW);
+        ctx.fillStyle = `rgba(255, 255, 255, ${0.75 * flashPeak})`;
         ctx.fill();
       }
 
@@ -252,13 +276,6 @@ export class RadarRenderer {
         ctx.lineWidth = 2 * this.dpr;
         ctx.stroke();
       }
-      if (s.flash > 0.4 && !compact) {
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, r + 5 * this.dpr, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(255,255,255,${Math.min(0.8, s.flash / 3)})`;
-        ctx.lineWidth = 2 * this.dpr;
-        ctx.stroke();
-      }
       if (s.flags & FLAG_SCOPED && !compact) {
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, r + 3 * this.dpr, 0, Math.PI * 2);
@@ -275,6 +292,27 @@ export class RadarRenderer {
           this.drawHeldGrenadeBadge(ctx, pt.x, pt.y, r, rawW, colors);
         }
 
+        // Stack above the droplet: weapon → name pill → droplet.
+        const pillH = 14 * this.dpr;
+        const pillBy = pt.y - r * 1.7 - pillH;
+
+        if (this.showWeapons && rawW && !holdingNade && !isKnife(rawW)) {
+          const img = loadEquipmentIcon(rawW, () => this.onIconLoad?.());
+          if (img?.complete && img.naturalWidth > 0) {
+            const maxW = 36 * this.dpr;
+            const maxH = 14 * this.dpr;
+            const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight);
+            const iw = img.naturalWidth * scale;
+            const ih = img.naturalHeight * scale;
+            const gap = 3 * this.dpr;
+            const wy = pillBy - gap - ih;
+            ctx.save();
+            ctx.globalAlpha = lower ? 0.45 : 0.95;
+            ctx.drawImage(img, pt.x - iw / 2, wy, iw, ih);
+            ctx.restore();
+          }
+        }
+
         if (this.showNames) {
           const name = p.name || p.id;
           if (name) {
@@ -282,12 +320,11 @@ export class RadarRenderer {
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             const padX = 6 * this.dpr;
-            const pillH = 14 * this.dpr;
             const radius = pillH / 2;
             const textW = ctx.measureText(name).width;
             const pillW = Math.max(textW + padX * 2, pillH * 1.8);
             const bx = pt.x - pillW / 2;
-            const by = pt.y - r * 1.7 - pillH;
+            const by = pillBy;
 
             roundPill(ctx, bx, by, pillW, pillH, radius);
             ctx.fillStyle = 'rgba(8,10,13,0.88)';
@@ -306,47 +343,55 @@ export class RadarRenderer {
             ctx.fillText(name, pt.x, by + pillH / 2 + 0.5 * this.dpr);
           }
         }
-
-        if (this.showWeapons && rawW && !holdingNade) {
-          const img = loadEquipmentIcon(rawW, () => this.onIconLoad?.());
-          if (img?.complete && img.naturalWidth > 0) {
-            const maxW = 34 * this.dpr;
-            const maxH = 14 * this.dpr;
-            const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight);
-            const iw = img.naturalWidth * scale;
-            const ih = img.naturalHeight * scale;
-            ctx.save();
-            ctx.globalAlpha = lower ? 0.4 : 0.9;
-            ctx.drawImage(img, pt.x - iw / 2, pt.y + r * 1.3, iw, ih);
-            ctx.restore();
-          }
-        }
       }
       ctx.restore();
     }
   }
 
-  /** Small grenade icon parked on the top-right of the droplet. */
+  /**
+   * Grenade SVG on the droplet's top-right: larger, +15° clockwise, team-colored
+   * with a 1px black drop-shadow duplicate (no circle chrome).
+   */
   drawHeldGrenadeBadge(ctx, x, y, r, weaponName, colors) {
     const img = loadEquipmentIcon(weaponName, () => this.onIconLoad?.());
-    const size = 11 * this.dpr;
-    const bx = x + r * 0.75;
-    const by = y - r * 1.15;
+    if (!img?.complete || img.naturalWidth <= 0) return;
+    const size = 16 * this.dpr;
+    const scale = Math.min(size / img.naturalWidth, size / img.naturalHeight) * 1.15;
+    const iw = img.naturalWidth * scale;
+    const ih = img.naturalHeight * scale;
+    const cx = x + r * 0.95;
+    const cy = y - r * 1.05;
+    const rot = (15 * Math.PI) / 180;
+    const tint = colors?.base || '#5b9fd4';
+    const px = this.dpr;
+
     ctx.save();
-    ctx.beginPath();
-    ctx.arc(bx + size * 0.35, by + size * 0.35, size * 0.62, 0, Math.PI * 2);
-    ctx.fillStyle = colors?.base || '#5b9fd4';
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(10,12,15,0.85)';
-    ctx.lineWidth = Math.max(1, 1.2 * this.dpr);
-    ctx.stroke();
-    if (img?.complete && img.naturalWidth > 0) {
-      const scale = Math.min(size / img.naturalWidth, size / img.naturalHeight);
-      const iw = img.naturalWidth * scale;
-      const ih = img.naturalHeight * scale;
-      ctx.drawImage(img, bx + size * 0.35 - iw / 2, by + size * 0.35 - ih / 2, iw, ih);
-    }
+    ctx.translate(cx, cy);
+    ctx.rotate(rot);
+    // Black outline duplicate, 1px down-right, under the colored icon.
+    this.drawTintedIcon(ctx, img, -iw / 2 + px, -ih / 2 + px, iw, ih, '#000000');
+    this.drawTintedIcon(ctx, img, -iw / 2, -ih / 2, iw, ih, tint);
     ctx.restore();
+  }
+
+  /** Draw a (typically white) SVG icon recolored to `tint`. */
+  drawTintedIcon(ctx, img, x, y, w, h, tint) {
+    if (!this._tintCanvas) this._tintCanvas = document.createElement('canvas');
+    const c = this._tintCanvas;
+    const tw = Math.max(1, Math.ceil(w));
+    const th = Math.max(1, Math.ceil(h));
+    if (c.width !== tw || c.height !== th) {
+      c.width = tw;
+      c.height = th;
+    }
+    const tctx = c.getContext('2d');
+    tctx.clearRect(0, 0, tw, th);
+    tctx.drawImage(img, 0, 0, tw, th);
+    tctx.globalCompositeOperation = 'source-in';
+    tctx.fillStyle = tint;
+    tctx.fillRect(0, 0, tw, th);
+    tctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(c, x, y, w, h);
   }
 
   // ---- deaths --------------------------------------------------------------
@@ -407,7 +452,7 @@ export class RadarRenderer {
 
   drawUtility(ctx, t, frame, compact) {
     const { events, tick, tickRate, players = [], states = [] } = frame;
-    if (!events?.grenades) return;
+    if (!events?.grenades?.length) return;
 
     const scale = this.mapScale() || 5;
     const worldR = (units) => (units / scale) * t.scale;
@@ -421,9 +466,10 @@ export class RadarRenderer {
     // Active HE detonations that can punch holes in smokes.
     const heHoles = [];
     for (const g of events.grenades) {
-      if (g.type !== 'hegrenade' || !g.at) continue;
-      const det = g.detonateTick ?? g.throwTick;
-      if (tick < det) continue;
+      const type = normalizeGrenadeType(g.type);
+      if (type !== 'hegrenade' || !g.at) continue;
+      const det = Number(g.detonateTick ?? g.throwTick);
+      if (!Number.isFinite(det) || tick < det) continue;
       const age = (tick - det) / tickRate;
       const strength = heSmokeMaskStrength(age);
       if (strength <= 0) continue;
@@ -436,30 +482,34 @@ export class RadarRenderer {
       });
     }
 
-    // Pass 1: smokes (with HE cutouts), fires, then other detonations / flight.
     for (const g of events.grenades) {
-      const det = g.detonateTick ?? g.throwTick;
+      const type = normalizeGrenadeType(g.type);
+      const throwTick = Number(g.throwTick);
+      const det = Number(g.detonateTick ?? g.throwTick);
+      if (!Number.isFinite(throwTick)) continue;
 
-      // In flight — small projectile icon.
-      if (tick >= g.throwTick && tick < det) {
-        const pos = pointAt(g.path, tick) || g.from;
-        if (!pos) continue;
-        const pt = this.project(t, pos.x, pos.y, { x: 0, y: 0 });
-        this.drawFlyingGrenade(ctx, pt, g.type, sideOf(g.player), compact);
-        continue;
+      // In flight (inclusive end so single-sample throws still render).
+      if (tick >= throwTick && tick <= det) {
+        const pos = grenadePosAt(g, tick);
+        if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
+          const pt = this.project(t, pos.x, pos.y, { x: 0, y: 0 });
+          this.drawFlyingGrenade(ctx, pt, type, sideOf(g.player), compact);
+        }
+        // Instant nades still get their detonation VFX below on the same tick.
+        if (tick < det) continue;
       }
 
       if (tick < det || !g.at) continue;
       const age = (tick - det) / tickRate;
       const pt = this.project(t, g.at.x, g.at.y, { x: 0, y: 0 });
 
-      if (g.type === 'smokegrenade') {
+      if (type === 'smokegrenade') {
         if (age > SMOKE_SECONDS) continue;
         this.drawSmoke(ctx, t, pt, age, worldR(SMOKE_RADIUS_UNITS), heHoles, g.at, compact);
-      } else if (g.type === 'molotov' || g.type === 'incgrenade') {
+      } else if (type === 'molotov' || type === 'incgrenade') {
         if (age > FIRE_SECONDS) continue;
         this.drawFire(ctx, pt, age, worldR(FIRE_RADIUS_UNITS), sideOf(g.player), compact);
-      } else if (g.type === 'flashbang') {
+      } else if (type === 'flashbang') {
         if (age > FLASH_SECONDS) continue;
         ctx.save();
         ctx.globalAlpha = 0.85 * (1 - age / FLASH_SECONDS);
@@ -469,7 +519,7 @@ export class RadarRenderer {
         ctx.arc(pt.x, pt.y, (6 + age * 28) * this.dpr, 0, Math.PI * 2);
         ctx.stroke();
         ctx.restore();
-      } else if (g.type === 'hegrenade') {
+      } else if (type === 'hegrenade') {
         if (age > HE_SECONDS) continue;
         ctx.save();
         const boom = 1 - age / HE_SECONDS;
@@ -479,14 +529,13 @@ export class RadarRenderer {
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, (8 + age * 70) * this.dpr, 0, Math.PI * 2);
         ctx.stroke();
-        // Soft fill so the HE read as the "green punch" before the hole fades.
         ctx.globalAlpha = 0.22 * boom;
         ctx.fillStyle = '#6dff5a';
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, worldR(HE_SMOKE_CLEAR_UNITS) * boom, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
-      } else if (g.type === 'decoy') {
+      } else if (type === 'decoy') {
         if (age > 15) continue;
         ctx.save();
         ctx.globalAlpha = 0.7;
@@ -501,20 +550,21 @@ export class RadarRenderer {
 
   drawFlyingGrenade(ctx, pt, type, side, compact) {
     const img = loadEquipmentIcon(type, () => this.onIconLoad?.());
-    const size = (compact ? 7 : 11) * this.dpr;
+    const size = (compact ? 9 : 14) * this.dpr;
     const tint = side === 'T' ? SIDE_COLORS.T.base : side === 'CT' ? SIDE_COLORS.CT.base : '#e6e8ec';
     ctx.save();
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, size * 0.55, 0, Math.PI * 2);
-    ctx.fillStyle = tint;
-    ctx.globalAlpha = 0.9;
-    ctx.fill();
     if (img?.complete && img.naturalWidth > 0) {
-      const scale = Math.min((size * 0.85) / img.naturalWidth, (size * 0.85) / img.naturalHeight);
+      const scale = Math.min(size / img.naturalWidth, size / img.naturalHeight);
       const iw = img.naturalWidth * scale;
       const ih = img.naturalHeight * scale;
-      ctx.globalAlpha = 1;
-      ctx.drawImage(img, pt.x - iw / 2, pt.y - ih / 2, iw, ih);
+      const px = this.dpr;
+      this.drawTintedIcon(ctx, img, pt.x - iw / 2 + px, pt.y - ih / 2 + px, iw, ih, '#000000');
+      this.drawTintedIcon(ctx, img, pt.x - iw / 2, pt.y - ih / 2, iw, ih, tint);
+    } else {
+      ctx.fillStyle = tint;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, size * 0.35, 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.restore();
   }
@@ -704,4 +754,22 @@ function pointAt(path, tick) {
     }
   }
   return path[path.length - 1];
+}
+
+function grenadePosAt(g, tick) {
+  const along = pointAt(g.path, tick);
+  if (along && Number.isFinite(along.x) && Number.isFinite(along.y)) return along;
+  const from = g.from;
+  const at = g.at;
+  const throwTick = Number(g.throwTick);
+  const det = Number(g.detonateTick ?? g.throwTick);
+  if (from && at && Number.isFinite(throwTick) && det > throwTick) {
+    const f = Math.max(0, Math.min(1, (tick - throwTick) / (det - throwTick)));
+    return {
+      x: from.x + (at.x - from.x) * f,
+      y: from.y + (at.y - from.y) * f,
+      z: (from.z ?? 0) + ((at.z ?? 0) - (from.z ?? 0)) * f
+    };
+  }
+  return from || at || null;
 }

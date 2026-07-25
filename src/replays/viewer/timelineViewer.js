@@ -12,6 +12,9 @@ import { Playback, RoundSequence } from './playback.js';
 import { clockAt, formatClock, timingFor } from './roundClock.js';
 import { economyLabel, winningSide } from '../shared/roundId.js';
 import { iconImgHtml, inventoryAt } from './equipmentIcons.js';
+import helmetSvg from '../../icons/helmet.svg?url';
+import kevlarSvg from '../../icons/kevlar.svg?url';
+import nokevlarSvg from '../../icons/nokevlar.svg?url';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 const MIN_ZOOM = 1;
@@ -271,6 +274,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
     activeIndex = index;
     markActiveRound();
     renderer._prevHealth?.fill?.(-1);
+    renderer._damageTick?.fill?.(-1);
+    renderer._prevFlash?.fill?.(0);
 
     // Instant chrome from the summary; ticks + meta load for this round only.
     activeMeta = fallbackMeta(rounds[index]);
@@ -381,17 +386,24 @@ export function createTimelineViewer({ store, rounds, escapeHtml }) {
       <div class="rv-players">${rows}</div>`;
   }
 
+  function armorIconSrc(inv) {
+    if (inv?.helmet) return helmetSvg;
+    if (inv?.armor) return kevlarSvg;
+    return nokevlarSvg;
+  }
+
   function armorIconKey(inv) {
-    if (!inv.armor) return '';
-    return inv.helmet ? 'armor_helmet' : 'kevlar';
+    if (inv?.helmet) return 'helmet';
+    if (inv?.armor) return 'kevlar';
+    return 'nokevlar';
   }
 
   function invHtml(inv) {
     if (!inv) return '';
-    const armor = armorIconKey(inv);
+    const armorSrc = armorIconSrc(inv);
     const parts = [];
     parts.push(
-      `<span class="rv-inv-armor">${armor ? iconImgHtml(armor, 'rv-inv-icon') : ''}</span>`
+      `<span class="rv-inv-armor"><img class="rv-inv-icon" src="${armorSrc}" alt="" data-item="${armorIconKey(inv)}" draggable="false" /></span>`
     );
     parts.push(
       `<span class="rv-inv-primary">${

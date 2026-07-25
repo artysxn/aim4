@@ -913,6 +913,12 @@ body.rv-open {
   justify-content: center;
 }
 
+.rv-inv-armor .rv-inv-icon {
+  height: 18px;
+  max-width: 20px;
+  opacity: 0.9;
+}
+
 .rv-inv-primary {
   flex: 1 1 auto;
   min-width: 0;

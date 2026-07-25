@@ -494,22 +494,39 @@ function grenadesForRound(allGrenades, round, idOf) {
     samples.sort((a, b) => num(a.tick) - num(b.tick));
     const first = samples[0];
     const last = samples[samples.length - 1];
+    const xyz = (s) => ({
+      x: num(s.X ?? s.x),
+      y: num(s.Y ?? s.y),
+      z: num(s.Z ?? s.z)
+    });
     out.push({
-      type: String(first.name || 'grenade').replace(/^weapon_/, ''),
-      player: idOf(sid(first.thrower_steamid)),
+      type: normalizeGrenadeType(first.name),
+      player: idOf(sid(first.thrower_steamid ?? first.thrower_steamid64)),
       throwTick: num(first.tick),
       detonateTick: num(last.tick),
-      from: { x: num(first.X), y: num(first.Y), z: num(first.Z) },
-      at: { x: num(last.X), y: num(last.Y), z: num(last.Z) },
-      path: samples.map((s) => ({
-        tick: num(s.tick),
-        x: num(s.X),
-        y: num(s.Y),
-        z: num(s.Z)
-      }))
+      from: xyz(first),
+      at: xyz(last),
+      path: samples.map((s) => ({ tick: num(s.tick), ...xyz(s) }))
     });
   }
   return out;
+}
+
+/** Match viewer dictionary keys regardless of demoparser spelling. */
+function normalizeGrenadeType(name) {
+  const raw = String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^weapon_/, '')
+    .replace(/[\s_-]+/g, '');
+  if (!raw) return 'grenade';
+  if (raw.includes('smoke')) return 'smokegrenade';
+  if (raw.includes('flash')) return 'flashbang';
+  if (raw.includes('molotov') || raw.includes('firebomb')) return 'molotov';
+  if (raw.includes('incen')) return 'incgrenade';
+  if (raw.includes('decoy')) return 'decoy';
+  if (raw === 'he' || raw.includes('hegrenade') || raw.includes('frag')) return 'hegrenade';
+  return raw;
 }
 
 /** Round boundaries from the event stream. */
