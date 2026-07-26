@@ -2,7 +2,8 @@
 // replays/zones/zoneOverlay.js
 // Timeline "positions" overlay: who has been where up to the playhead, who is
 // there now, who can see an empty/occupied position (11-ray FOV fan + radar
-// walkable mask + smokes), and surround-fill for neutrals locked in by one side.
+// walkable mask + smokes), surround-fill for neutrals locked in by one side,
+// and soft-pocket encirclement flips when the enemy ring goes active.
 //
 // Colors: gray empty, T yellow, CT blue, both red; active vs controlled
 // (darker) for single-side claims.
@@ -127,7 +128,13 @@ export function resetZoneVisionCache(cache) {
  * Every foot *entry* (rising edge) is logged — not only the first visit of the
  * round — so a later re-entry is the claim that soft control follows.
  *
- * @returns {{ firstT: Map<string, number>, firstCT: Map<string, number>, events: Map<string, ZoneClaimEvent[]> } | null}
+ * @returns {{
+ *   firstT: Map<string, number>,
+ *   firstCT: Map<string, number>,
+ *   events: Map<string, ZoneClaimEvent[]>,
+ *   activeT: Map<string, number[]>,
+ *   activeCT: Map<string, number[]>
+ * } | null}
  */
 export function buildZonePresence({ meta, track, network }) {
   if (!meta || !track || !network?.zones?.length) return null;
@@ -143,6 +150,11 @@ export function buildZonePresence({ meta, track, network }) {
   const firstCT = new Map();
   /** @type {Map<string, ZoneClaimEvent[]>} */
   const events = new Map();
+  /** 1Hz samples: ticks when each side had feet in the position. */
+  /** @type {Map<string, number[]>} */
+  const activeT = new Map();
+  /** @type {Map<string, number[]>} */
+  const activeCT = new Map();
   const scratch = [];
   /** @type {Set<string>} `${playerId}\0${posId}` occupied on the previous sample */
   let prevInside = new Set();
@@ -152,10 +164,23 @@ export function buildZonePresence({ meta, track, network }) {
     events.get(posId).push(ev);
   };
 
+  const pushActive = (map, posId, tick) => {
+    const list = map.get(posId);
+    if (!list) {
+      map.set(posId, [tick]);
+      return;
+    }
+    if (list[list.length - 1] !== tick) list.push(tick);
+  };
+
   for (let tick = from; tick <= to; tick += tickRate) {
     track.sampleAll(tick, scratch);
     /** @type {Set<string>} */
     const curInside = new Set();
+    /** @type {Set<string>} */
+    const tHere = new Set();
+    /** @type {Set<string>} */
+    const ctHere = new Set();
     for (const p of players) {
       const side = teamSides[p.team];
       if (side !== 'T' && side !== 'CT') continue;
@@ -167,6 +192,8 @@ export function buildZonePresence({ meta, track, network }) {
         if (!z?.id) continue;
         const key = `${p.id}\0${z.id}`;
         curInside.add(key);
+        if (side === 'T') tHere.add(z.id);
+        else ctHere.add(z.id);
         if (!map.has(z.id)) map.set(z.id, tick);
         // Rising edge only — staying inside is not a new claim.
         if (prevInside.has(key)) continue;
@@ -180,9 +207,11 @@ export function buildZonePresence({ meta, track, network }) {
         });
       }
     }
+    for (const id of tHere) pushActive(activeT, id, tick);
+    for (const id of ctHere) pushActive(activeCT, id, tick);
     prevInside = curInside;
   }
-  return { firstT, firstCT, events };
+  return { firstT, firstCT, events, activeT, activeCT };
 }
 
 /**
@@ -202,9 +231,14 @@ export function recordClaim(presence, posId, ev) {
       (ev.playerId ? e.playerId === ev.playerId : !e.playerId)
   );
   if (dup) return;
-  // Sight/surround can fire every paint frame while the condition holds —
+  // Sight/surround/encircle can fire every paint frame while the condition holds —
   // keep one row per reason/side/player and move it forward when re-claimed.
-  if (ev.reason === 'sight' || ev.reason === 'surround' || ev.reason === 'sight-enemy') {
+  if (
+    ev.reason === 'sight' ||
+    ev.reason === 'surround' ||
+    ev.reason === 'encircle' ||
+    ev.reason === 'sight-enemy'
+  ) {
     const prior = list.find(
       (e) =>
         e.reason === ev.reason &&
@@ -913,6 +947,124 @@ function latestOwnerSide(presence, posId, tick) {
 }
 
 /**
+ * Tick when `side` began its current soft tenure on `posId` (beam owner or
+ * latest presence claim), or null if that side does not soft-own it now.
+ */
+function softTenureStart(posId, side, tick, presence, claims) {
+  const st = claims?.get(posId);
+  if (st?.owner === side) {
+    if (Number.isFinite(st.ownerTick)) return st.ownerTick;
+  }
+  const claim = latestClaimAt(presence, posId, tick);
+  if (claim?.side === side) return claim.tick;
+  if (st?.owner === side) return 0;
+  return null;
+}
+
+/**
+ * Soft pocket flip: a connected soft-control component whose *external*
+ * neighbors are only enemy soft/active flips to enemy soft when ≥1 of those
+ * neighbors is active (feet). Vice versa. Beam-only rings with nobody
+ * standing do not flip.
+ *
+ * @returns {Map<string, { side: 'T'|'CT', neighborNames: string[] }>}
+ */
+function applyEncirclementFlip(paint, network, presence, tick, claims) {
+  const adj = buildPositionAdjacency(network);
+  const byId = new Map((network.zones || []).map((z) => [z.id, z]));
+  /** @type {Map<string, { side: 'T'|'CT', neighborNames: string[] }>} */
+  const assigned = new Map();
+  const seen = new Set();
+
+  for (const pos of network.zones || []) {
+    if (!pos?.id || pos.hidden || seen.has(pos.id)) continue;
+    const key = paint[pos.id];
+    if (key !== 't-control' && key !== 'ct-control') continue;
+    const softSide = key === 't-control' ? 'T' : 'CT';
+    const softKey = key;
+    const enemy = softSide === 'T' ? 'CT' : 'T';
+    const enemySoft = enemy === 'T' ? 't-control' : 'ct-control';
+    const enemyActive = enemy === 'T' ? 't-active' : 'ct-active';
+
+    // Connected component of the same soft paint.
+    const component = [];
+    const queue = [pos.id];
+    seen.add(pos.id);
+    while (queue.length) {
+      const id = queue.pop();
+      component.push(id);
+      for (const nid of adj.get(id) || []) {
+        if (seen.has(nid)) continue;
+        if ((paint[nid] || 'empty') !== softKey) continue;
+        seen.add(nid);
+        queue.push(nid);
+      }
+    }
+
+    let hasEnemyActive = false;
+    const neighborNames = [];
+    const borderSeen = new Set();
+    let ok = true;
+    for (const id of component) {
+      for (const nid of adj.get(id) || []) {
+        if ((paint[nid] || 'empty') === softKey) continue; // inside pocket
+        if (borderSeen.has(nid)) continue;
+        borderSeen.add(nid);
+        const nk = paint[nid] || 'empty';
+        const nName = byId.get(nid)?.name || nid;
+        if (nk === enemyActive) {
+          hasEnemyActive = true;
+          neighborNames.push(`${nName} (active)`);
+        } else if (nk === enemySoft) {
+          neighborNames.push(`${nName} (soft)`);
+        } else {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok) break;
+    }
+    if (!ok || !hasEnemyActive || !borderSeen.size) continue;
+
+    // Every cell in the pocket must still be soft-owned by softSide.
+    if (
+      component.some(
+        (id) => softTenureStart(id, softSide, tick, presence, claims) == null
+      )
+    ) {
+      continue;
+    }
+
+    const toKey = enemy === 'T' ? 't-control' : 'ct-control';
+    for (const id of component) {
+      paint[id] = toKey;
+      assigned.set(id, { side: enemy, neighborNames });
+      if (claims) {
+        if (!claims.has(id)) claims.set(id, emptyClaim());
+        const st = claims.get(id);
+        st.owner = enemy;
+        st.ownerTick = tick;
+        st.tHits = 0;
+        st.ctHits = 0;
+        st.tLast = null;
+        st.ctLast = null;
+      }
+      recordClaim(presence, id, {
+        tick,
+        side: enemy,
+        reason: 'encircle',
+        detail: `Soft pocket flipped — enclosed by ${enemy}: ${neighborNames.join(', ')}`
+      });
+      if (presence) {
+        const map = enemy === 'T' ? presence.firstT : presence.firstCT;
+        if (!map.has(id)) map.set(id, tick);
+      }
+    }
+  }
+  return assigned;
+}
+
+/**
  * Fill neutral positions only when their entire unbroken neutral component
  * borders exactly one side. A T-controlled cell three neutrals away still
  * blocks a CT fill of the whole pocket.
@@ -1099,6 +1251,13 @@ export function computeZonePaint({
   }
 
   const surroundAssigned = applySurroundControl(paint, network, presence, tick);
+  const encircleAssigned = applyEncirclementFlip(
+    paint,
+    network,
+    presence,
+    tick,
+    claims
+  );
 
   for (const pos of network.zones) {
     if (!pos?.id || pos.hidden) continue;
@@ -1121,8 +1280,16 @@ export function computeZonePaint({
           : `${s.playerName} (${s.side}) has clear sight now (${Math.round(s.cover * 100)}% cone)`
       });
     }
+    const enc = encircleAssigned.get(pos.id);
+    if (enc) {
+      why.push({
+        kind: 'surround',
+        side: enc.side,
+        text: `Soft pocket flipped → ${enc.side} (enclosed by: ${enc.neighborNames.join(', ')})`
+      });
+    }
     const sur = surroundAssigned.get(pos.id);
-    if (sur) {
+    if (sur && !enc) {
       why.push({
         kind: 'surround',
         side: sur.side,
@@ -1132,7 +1299,12 @@ export function computeZonePaint({
     const tFirst = presence?.firstT.get(pos.id);
     const ctFirst = presence?.firstCT.get(pos.id);
     const claimSt = claims?.get(pos.id);
-    if (claimSt && (key === 't-control' || key === 'ct-control' || key === 'contested') && !sur) {
+    if (
+      claimSt &&
+      (key === 't-control' || key === 'ct-control' || key === 'contested') &&
+      !sur &&
+      !enc
+    ) {
       const owner = claimSt.owner || 'none';
       const prog =
         claimSt.tHits || claimSt.ctHits
@@ -1143,7 +1315,7 @@ export function computeZonePaint({
         side: claimSt.owner,
         text: `Beam claim owner ${owner}${prog} (neutral needs 3, flip needs 20)`
       });
-    } else {
+    } else if (!enc) {
       const softClaim = latestClaimAt(presence, pos.id, tick);
       if (
         key === 't-control' &&

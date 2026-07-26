@@ -25,7 +25,14 @@ export const CLAIM_FLIP_HITS = 20;
 export const CONTEST_DECAY_SECONDS = 2;
 
 /**
- * @typedef {{ owner: 'T'|'CT'|null, tHits: number, ctHits: number, tLast: number|null, ctLast: number|null }} ClaimState
+ * @typedef {{
+ *   owner: 'T'|'CT'|null,
+ *   ownerTick: number|null,
+ *   tHits: number,
+ *   ctHits: number,
+ *   tLast: number|null,
+ *   ctLast: number|null
+ * }} ClaimState
  */
 
 function ringArea(ring) {
@@ -59,7 +66,14 @@ function areaOfPosition(zone) {
 
 /** @returns {ClaimState} */
 export function emptyClaim() {
-  return { owner: null, tHits: 0, ctHits: 0, tLast: null, ctLast: null };
+  return {
+    owner: null,
+    ownerTick: null,
+    tHits: 0,
+    ctHits: 0,
+    tLast: null,
+    ctLast: null
+  };
 }
 
 /**
@@ -106,6 +120,7 @@ export function applyBeamHits(st, side, beams, tick, tickRate) {
   const needed = st.owner == null ? CLAIM_NEUTRAL_HITS : CLAIM_FLIP_HITS;
   if (hits >= needed) {
     st.owner = side;
+    st.ownerTick = tick;
     st.tHits = 0;
     st.ctHits = 0;
     st.tLast = null;
