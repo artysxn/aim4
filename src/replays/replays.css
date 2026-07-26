@@ -3195,6 +3195,16 @@ body.rv-open {
   background: var(--surface);
 }
 
+/* Extra 200px so the player list isn't cropped before a subject is chosen. */
+.an-sidebar.an-sidebar--pick {
+  min-height: 420px;
+  overflow: visible;
+}
+
+.an-sidebar.an-sidebar--pick #an-player-typeahead .rp-typeahead-menu {
+  max-height: 360px;
+}
+
 .an-side-block {
   display: flex;
   flex-direction: column;

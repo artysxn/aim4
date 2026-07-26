@@ -287,6 +287,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       )
       .join('');
     const ready = Boolean(state.playerId && state.map);
+    sidebarEl.classList.toggle('an-sidebar--pick', !state.playerId);
 
     sidebarEl.innerHTML = `
       <div class="an-side-block">
