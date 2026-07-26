@@ -78,7 +78,8 @@ export default defineConfig({
         train: fileURLToPath(new URL('./train.html', import.meta.url)),
         // Easter-egg football — built as its own page so it reads VITE_API_URL
         // (the hosted backend) exactly like the main client's NetClient.
-        football: fileURLToPath(new URL('./tools/football.html', import.meta.url))
+        football: fileURLToPath(new URL('./tools/football.html', import.meta.url)),
+        zoneEditor: fileURLToPath(new URL('./tools/zone-editor.html', import.meta.url))
       }
     }
   },

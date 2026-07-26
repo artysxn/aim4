@@ -461,15 +461,30 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   }
 
   let scrubbing = false;
+  /** Round index locked for the active drag — scrub never crosses rounds mid-drag. */
+  let scrubRoundIndex = -1;
+
+  /** Last instant that still belongs to this round (not the next round's t=0). */
+  function roundLocalMax(item) {
+    if (!item) return 0;
+    const tick = 1 / Math.max(1, item.timing?.tickRate || 64);
+    return Math.max(0, item.seconds - tick);
+  }
+
   const seekFromEvent = (e) => {
-    const item = sequence.at(activeIndex);
+    const index = scrubbing && scrubRoundIndex >= 0 ? scrubRoundIndex : activeIndex;
+    const item = sequence.at(index);
     if (!item) return;
     const rect = scrubEl.getBoundingClientRect();
     const f = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    playback.seek(sequence.offsetOf(activeIndex) + f * item.seconds);
+    // Cap below the round boundary so locate() does not flip to the next round
+    // while the pointer sits on the right edge (that used to cascade every move).
+    const local = Math.min(roundLocalMax(item), f * item.seconds);
+    playback.seek(sequence.offsetOf(index) + local);
   };
   scrubEl.addEventListener('pointerdown', (e) => {
     scrubbing = true;
+    scrubRoundIndex = activeIndex;
     scrubEl.setPointerCapture(e.pointerId);
     seekFromEvent(e);
   });
@@ -477,8 +492,25 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (scrubbing) seekFromEvent(e);
   });
   scrubEl.addEventListener('pointerup', (e) => {
+    const from = scrubRoundIndex;
     scrubbing = false;
-    scrubEl.releasePointerCapture(e.pointerId);
+    scrubRoundIndex = -1;
+    try {
+      scrubEl.releasePointerCapture(e.pointerId);
+    } catch {
+      /* already released */
+    }
+    // Released at the end of a round → enter the next at its start (once).
+    const item = sequence.at(from);
+    if (!item || from < 0) return;
+    const loc = sequence.locate(playback.position);
+    if (loc.index !== from) return;
+    if (loc.local < roundLocalMax(item) - 1e-6) return;
+    if (from + 1 < files.length) selectRound(from + 1, { seek: true });
+  });
+  scrubEl.addEventListener('pointercancel', () => {
+    scrubbing = false;
+    scrubRoundIndex = -1;
   });
 
   // ---- round selection ----------------------------------------------------
@@ -740,7 +772,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     for (const k of all) {
       if (k.tick <= tick) happened.push(k);
     }
-    const recent = happened.slice(-KILLFEED_MAX).reverse();
+    // Oldest of the recent kills at the top; newest appears at the bottom.
+    const recent = happened.slice(-KILLFEED_MAX);
     // Include sides so colors refresh when round meta lands (roster team ≠ live side).
     const key = `${activeMeta.team1Side}|${activeMeta.team2Side}|${recent
       .map((k) => `${k.tick}:${k.attacker}:${k.victim}:${k.weapon}`)
@@ -773,6 +806,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       const inv = inventoryAt({
         loadout: st.loadout || [],
         grenades,
+        itemEvents: activeMeta.events?.items || [],
         playerId: p.id,
         tick,
         state: s,
@@ -1137,7 +1171,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const item = sequence.at(activeIndex);
     if (!item) return;
     const local = Math.max(0, (tick - timing.startTick) / (timing.tickRate || 64));
-    playback.seek(sequence.offsetOf(activeIndex) + Math.min(local, item.seconds));
+    playback.seek(sequence.offsetOf(activeIndex) + Math.min(local, roundLocalMax(item)));
   }
 
   /** Land at freezetime end (coach entry uses enterCoachRoundMoment instead). */
@@ -2130,15 +2164,29 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   // ---- frame --------------------------------------------------------------
 
   function onPosition(pos) {
-    let loc = sequence.locate(pos);
+    let at = pos;
+    let loc = sequence.locate(at);
+    // Scrub is clamped to one round; ignore any stray cross-round position.
+    if (scrubbing && scrubRoundIndex >= 0 && loc.index !== scrubRoundIndex) {
+      const item = sequence.at(scrubRoundIndex);
+      if (item) {
+        at = sequence.offsetOf(scrubRoundIndex) + roundLocalMax(item);
+        playback.seek(at, { emit: false });
+        loc = sequence.locate(at);
+      }
+    }
     const live = liveOffsetOf(loc.index);
     // Entering a round (or playing through freezetime) jumps to live.
-    if (playback.playing && pos < live) {
+    if (playback.playing && at < live) {
       playback.seek(live, { emit: false });
+      at = live;
       loc = sequence.locate(live);
     }
     if (loc.index !== activeIndex) {
-      selectRound(loc.index, { seek: false });
+      // Playing: keep wall-clock position (freezetime skip above). Paused seek
+      // across a boundary (e.g. nudge) lands at the next round's entry instead
+      // of leaving the scrubber pinned at 100% and chaining advances.
+      selectRound(loc.index, { seek: !playback.playing });
       return;
     }
     draw(loc);

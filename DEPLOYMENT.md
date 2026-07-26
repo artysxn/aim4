@@ -14,7 +14,8 @@ See [`.env.example`](.env.example) for the authoritative list. Summary:
 | `VITE_API_URL` | Client (build-time) | _empty_ | Backend origin for the REST API **and** multiplayer WS/status. Empty = same origin (dev/LAN). Set it for split deploys. |
 | `AIM4_HOST` | Server | `127.0.0.1` | Bind interface. Use `0.0.0.0` when hosted or on LAN. |
 | `AIM4_API_PORT` | Server | `3784` | HTTP + WS port. `PORT` is honored as a fallback, which is what most hosts inject. |
-| `AIM4_REPLAY_DIR` | Server | `server/data/replays` | Demo library storage. Needs a persistent disk. |
+| `AIM4_REPLAY_DIR` | Server | `server/data/replays` | Demo library + round notes + zone polygons (`zones/`). Needs a persistent disk. |
+| `AIM4_ZONES_DIR` | Server | `{AIM4_REPLAY_DIR}/zones` | Optional override for Zone Editor JSON. |
 | `AIM4_SERVE_STATIC` | Server | _off_ | `1`/`true` makes Node also serve `dist/`. Host mode only; off for split deploys. |
 
 > Vite only exposes variables prefixed `VITE_` to the client bundle. `VITE_API_URL`

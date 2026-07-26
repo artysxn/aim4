@@ -26,31 +26,27 @@ export const MAP_BASE_CT = {
 const DEFAULT_BASE_CT = 52.5;
 
 /**
- * Percentage points of win chance per dollar of equipment difference.
+ * Percentage points of win chance per dollar of *average* equipment difference
+ * (alive players only, each side capped at AVG_EQUIP_CAP).
  *
- * Least-squares fit through the origin over the four reference buys:
- *
- *   $13,600 -> +22pp    $15,800 -> +46pp
- *   $18,100 -> +24pp    $2,600  -> -1pp
- *
- *   k = Σ(xy) / Σ(x²) = 1,457,800 / 768,970,000 = 0.0018958
- *
- * One point per ~$528. Typical buy gaps stay on this line; larger swings are
- * bent toward the extremes in `economyWinPercent` so a full-buy vs eco gap
- * (~$12k) reads near 95/5 before map and man terms.
+ * Scaled from the old team-total fit (~$528/pp) so a typical full-buy vs eco
+ * average gap (~$3k) still reads strongly before the extreme bend.
  */
-export const PP_PER_DOLLAR = 0.0018958;
+export const PP_PER_DOLLAR = 0.0075;
 
-/** Side is eco'd when its live equipment is below this. */
+/** Cap on average equipment value per alive player (AWP ≈ rifle). */
+export const AVG_EQUIP_CAP = 5500;
+
+/** Side is eco'd when its average live equipment is below this. */
 export const ECON_POOR_MAX = 2000;
-/** Side is fully stacked when its live equipment is above this. */
-export const ECON_STACKED_MIN = 14000;
-/** Dollar gap that should land near a 95/5 economy split (14k vs 2k). */
+/** Side is fully stacked when its average live equipment is above this. */
+export const ECON_STACKED_MIN = 5000;
+/** Dollar gap that should land near a 95/5 economy split (full buy vs eco). */
 const ECON_EXTREME_GAP = ECON_STACKED_MIN - ECON_POOR_MAX;
 /** Max |pp| the economy term alone may contribute (50 ± this → 5% / 95%). */
 const ECON_SAT_PP = 45;
 /** Boost stays off until gaps pass this, so mid buys keep the linear fit. */
-const ECON_BOOST_FROM = 4000;
+const ECON_BOOST_FROM = 1200;
 
 /**
  * Man advantage, as the win rate it produces from an even start. +1 body is
@@ -152,8 +148,8 @@ function clampEcoMismatch(ctPercent, ctEquip, tEquip) {
  * @param {number} state.tAlive
  * @param {number} [state.ctEff]        HP-weighted bodies (defaults to ctAlive)
  * @param {number} [state.tEff]         HP-weighted bodies (defaults to tAlive)
- * @param {number} state.ctEquip        dollars still on the field, CT
- * @param {number} state.tEquip         dollars still on the field, T
+ * @param {number} state.ctEquip        avg $ per alive CT (capped)
+ * @param {number} state.tEquip         avg $ per alive T (capped)
  * @param {'CT'|'T'|null} [state.decided] set once the round is actually over
  * @returns {{ct: number, t: number, parts: object}} percentages
  */
@@ -176,7 +172,7 @@ export function winProbability(state) {
   const tBonus = ctAlive === tAlive ? EVEN_T_BONUS[even] ?? 0 : 0;
   const mapEdge = edge(baseCt - tBonus);
 
-  // 2. Equipment still alive on the field.
+  // 2. Average equipment still alive (per player), not team totals.
   const dollars = (state.ctEquip || 0) - (state.tEquip || 0);
   const econPct = economyWinPercent(dollars);
   const econEdge = edge(econPct);
@@ -227,7 +223,7 @@ export function explainProbability(sample, map = '') {
   if (ctEq != null && tEq != null) {
     const delta = ctEq - tEq;
     detail.push(
-      `Equip  CT $${ctEq.toLocaleString()}  ·  T $${tEq.toLocaleString()}  (${
+      `Equip avg  CT $${ctEq.toLocaleString()}  ·  T $${tEq.toLocaleString()}  (${
         delta >= 0 ? '+' : ''
       }$${delta.toLocaleString()} CT)`
     );
@@ -298,12 +294,15 @@ export function decidedSideAt({ tick, endTick, winnerSide, ctAlive, tAlive, bomb
 }
 
 /**
- * Dollars each side still has on the field at a tick.
+ * Average equipment value per alive player on each side at a tick.
  *
  * Per-tick inventory is deliberately not stored — it is the single most
  * expensive thing a parse can keep — so this starts from what each player
  * bought at freezetime and subtracts what has left their hands since: their
  * whole kit when they die, and the price of every grenade they have thrown.
+ *
+ * Returns capped averages (not team totals) so a 4v3 from one death does not
+ * look like a multi-thousand economy swing, and AWP kits match rifles at the cap.
  *
  * @param {object} args
  * @param {Array} args.players      roster ({id, team})
@@ -322,6 +321,8 @@ export function liveEquipment({ players, stats, states, grenades, tick, teamSide
     thrown.set(g.player, (thrown.get(g.player) || 0) + (NADE_COST[g.type] || 0));
   }
 
+  let ctSum = 0;
+  let tSum = 0;
   for (const p of players || []) {
     const side = teamSides?.[p.team];
     if (side !== 'T' && side !== 'CT') continue;
@@ -337,8 +338,13 @@ export function liveEquipment({ players, stats, states, grenades, tick, teamSide
       out.tEff += weight;
     }
     const bought = stats?.[p.id]?.equipValue || 0;
-    out[side] += Math.max(0, bought - (thrown.get(p.id) || 0));
+    const value = Math.max(0, bought - (thrown.get(p.id) || 0));
+    if (side === 'CT') ctSum += value;
+    else tSum += value;
   }
+  out.CT =
+    out.ctAlive > 0 ? Math.min(AVG_EQUIP_CAP, ctSum / out.ctAlive) : 0;
+  out.T = out.tAlive > 0 ? Math.min(AVG_EQUIP_CAP, tSum / out.tAlive) : 0;
   return out;
 }
 

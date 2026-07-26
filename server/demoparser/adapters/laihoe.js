@@ -989,6 +989,9 @@ export async function parseDemo(file, opts = {}) {
     // the active weapon, so these are what the viewer actually marks with.
     'bomb_dropped',
     'bomb_pickup',
+    // Ground pickups / drops so mid-round inventory can track utility & guns.
+    'item_pickup',
+    'item_remove',
     ...DETONATION_EVENTS.map(([name]) => name)
   ]);
   const byName = eventsByName(all);
@@ -1134,6 +1137,26 @@ export async function parseDemo(file, opts = {}) {
     bomb.sort((a, b) => a.tick - b.tick);
     const plantTick = bomb.find((b) => b.type === 'planted')?.tick ?? null;
 
+    // Post-freezetime only — buys already sit in the freezetime loadout.
+    const freezeCut = span.freezeEndTick || span.startTick;
+    const items = [];
+    for (const [evName, op] of [
+      ['item_pickup', 'pickup'],
+      ['item_remove', 'remove']
+    ]) {
+      for (const e of byName.get(evName) || []) {
+        if (!inSpan(e, span)) continue;
+        const t = num(e.tick);
+        if (t <= freezeCut) continue;
+        const item = String(e.item || e.weapon || '').replace(/^weapon_/, '');
+        if (!item) continue;
+        const player = idOf(sid(e.user_steamid));
+        if (!player) continue;
+        items.push({ tick: t, player, item, op });
+      }
+    }
+    items.sort((a, b) => a.tick - b.tick);
+
     let winnerSide =
       sideFromWinnerField(span.winnerRaw) || sideFromWinReason(span.reason);
     if (!winnerSide) {
@@ -1253,7 +1276,8 @@ export async function parseDemo(file, opts = {}) {
         shots,
         grenades,
         bomb,
-        damage
+        damage,
+        items
       },
       stats
     });

@@ -283,3 +283,39 @@ export async function fetchRoundTicks(file, stride = 1) {
   }
   return res.arrayBuffer();
 }
+
+// ---- Zone networks (same Coolify volume as notes; not Supabase) -----------
+
+export async function fetchZoneMaps() {
+  const data = await asJson(
+    await fetch(`${API_BASE}/api/replays/zones`, { headers: await headers() })
+  );
+  return data.maps || [];
+}
+
+/** @param {string} map  map code (MIR, INF, …) */
+export async function fetchZones(map) {
+  const data = await asJson(
+    await fetch(`${API_BASE}/api/replays/zones/${encodeURIComponent(map)}`, {
+      headers: await headers()
+    })
+  );
+  return data.network || { map, zones: [], updatedAt: 0 };
+}
+
+/**
+ * Persist zone polygons + names for one map. Same shared write path as
+ * saveRoundNotes — JSON on AIM4_REPLAY_DIR, no auth.
+ * @param {string} map
+ * @param {{ zones?: Array }} network
+ */
+export async function saveZones(map, network) {
+  const data = await asJson(
+    await fetch(`${API_BASE}/api/replays/zones/${encodeURIComponent(map)}`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ zones: network.zones || [] })
+    })
+  );
+  return data.network;
+}

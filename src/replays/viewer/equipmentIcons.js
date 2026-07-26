@@ -163,16 +163,25 @@ const ALIASES = {
   // SMGs / heavy
   weapon_mac10: 'mac10',
   mac_10: 'mac10',
+  mac10: 'mac10',
   weapon_mp9: 'mp9',
+  mp_9: 'mp9',
+  mp9: 'mp9',
   weapon_mp7: 'mp7',
+  mp_7: 'mp7',
+  mp7: 'mp7',
   weapon_mp5sd: 'mp5sd',
   mp5_sd: 'mp5sd',
+  mp5sd: 'mp5sd',
   weapon_ump45: 'ump45',
   ump_45: 'ump45',
+  ump45: 'ump45',
   weapon_p90: 'p90',
+  p90: 'p90',
   weapon_bizon: 'bizon',
   pp_bizon: 'bizon',
   ppbizon: 'bizon',
+  bizon: 'bizon',
   weapon_nova: 'nova',
   weapon_xm1014: 'xm1014',
   weapon_mag7: 'mag7',
@@ -432,34 +441,68 @@ export function normalizeLoadout(loadout) {
 }
 
 /**
- * Inventory at a tick: freezetime loadout minus grenades already thrown.
- * Armor / helmet / bomb come from live tick flags when provided.
+ * Normalize a pickup/remove item name to the same bare id used in loadouts.
+ * @param {string} name
+ */
+function inventoryItemId(name) {
+  if (isGrenade(name)) return normalizeGrenadeType(name);
+  return bareWeapon(name);
+}
+
+/**
+ * Inventory at a tick: freezetime loadout, plus post-freeze pickups/removes,
+ * minus grenades already thrown. Armor / helmet / bomb come from live tick flags.
  *
  * @param {object} opts
  * @param {string[]} opts.loadout
  * @param {Array} [opts.grenades]
+ * @param {Array<{tick?: number, player?: string, item?: string, op?: string}>} [opts.itemEvents]
  * @param {string} opts.playerId
  * @param {number} opts.tick
  * @param {object} [opts.state]  live tick record (armor, flags)
  * @param {string} [opts.activeWeapon]  bare or weapon_* name from dictionary
  */
-export function inventoryAt({ loadout, grenades, playerId, tick, state, activeWeapon }) {
+export function inventoryAt({
+  loadout,
+  grenades,
+  itemEvents,
+  playerId,
+  tick,
+  state,
+  activeWeapon
+}) {
   const items = normalizeLoadout(loadout);
+
+  // Ground pickups / drops after freezetime (buys are already in loadout).
+  for (const e of itemEvents || []) {
+    if (e.player !== playerId) continue;
+    if ((e.tick ?? 0) > tick) continue;
+    const id = inventoryItemId(e.item);
+    if (!id || id === 'none') continue;
+    if (e.op === 'remove') removeOne(items, id);
+    else items.push(id);
+  }
+
   for (const g of grenades || []) {
     if (g.player !== playerId) continue;
     if ((g.throwTick ?? g.tick ?? 0) > tick) continue;
     removeOne(items, normalizeGrenadeType(g.type) || bareWeapon(g.type));
   }
 
+  // Held grenade must appear even if pickup events are missing on old parses.
   const activeBare = bareWeapon(activeWeapon || '');
   const activeNade = isGrenade(activeWeapon || activeBare)
     ? normalizeGrenadeType(activeWeapon || activeBare)
     : '';
   const active = activeNade || activeBare;
+  if (activeNade && !items.includes(activeNade)) items.push(activeNade);
 
-  // Sidebar shows the best gun in the loadout (primary over secondary), not
-  // what is in hand — the droplet above the name already shows the active weapon.
+  // Sidebar shows the best gun known (loadout + pickups + currently held).
+  // Held primary covers SMGs/rifles picked up when item events are absent.
   const guns = items.filter(isGun);
+  if (activeBare && isGun(activeBare) && !guns.includes(activeBare)) {
+    guns.push(activeBare);
+  }
   guns.sort((a, b) => gunRank(a) - gunRank(b));
   let primary = guns[0] || '';
   if (!primary) {

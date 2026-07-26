@@ -37,7 +37,8 @@ export function distExists() {
 const PAGE_ALIASES = {
   '/train': '/train.html',
   '/tools/editvalues': '/tools/editvalues.html',
-  '/tools/level-editor': '/tools/level-editor.html'
+  '/tools/level-editor': '/tools/level-editor.html',
+  '/tools/zone-editor': '/tools/zone-editor.html'
 };
 
 // Paths owned by the site shell (index.html): its menu views live here.

@@ -13,6 +13,9 @@
 //   GET    /api/replays/rounds?...               filter by name, no file reads
 //   GET    /api/replays/rounds/:file             round meta + events
 //   GET    /api/replays/rounds/:file/ticks       tick buffer, ?stride=N
+//   GET    /api/replays/zones                    maps that have a zone file
+//   GET    /api/replays/zones/:map               zone network for one map
+//   POST   /api/replays/zones/:map               save zone polygons + names
 //
 // Uploads stream straight to disk: a demo / package is hundreds of megabytes
 // and must never be buffered in memory or pass through the JSON body reader.
@@ -52,6 +55,7 @@ import { allJobs, enqueueParse, jobStatus } from './jobs.js';
 import { authStatus, identify } from './auth.js';
 import { importReplayPackage } from './importPackage.js';
 import { PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
+import { getZones, listZoneMaps, saveZones } from '../zonesStore.js';
 
 /** What the stats index needs from storage, without importing it back. */
 const statsIo = { userDir, readRoundMeta };
@@ -85,13 +89,13 @@ function binary(res, buffer) {
   res.end(buf);
 }
 
-/** Small JSON bodies only (notes, playlists, team names). Uploads never come here. */
-async function readJson(req) {
+/** JSON bodies (notes, playlists, zones). Uploads never come here. */
+async function readJson(req, maxBytes = 64 * 1024) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 64 * 1024) throw new Error('Body too large.');
+    if (size > maxBytes) throw new Error('Body too large.');
     chunks.push(chunk);
   }
   try {
@@ -519,6 +523,41 @@ export async function handleReplayRequest(req, res, url) {
     }
     json(res, 200, { ...saved, maxLength: NOTE_MAX });
     return true;
+  }
+
+  // Zone networks — same shared on-disk library as notes (AIM4_REPLAY_DIR).
+  if (req.method === 'GET' && p === '/api/replays/zones') {
+    json(res, 200, { maps: await listZoneMaps() });
+    return true;
+  }
+  const zonesMatch = p.match(/^\/api\/replays\/zones\/([A-Za-z0-9]{2,4})$/i);
+  if (zonesMatch) {
+    const map = zonesMatch[1];
+    if (req.method === 'GET') {
+      const network = await getZones(map);
+      if (!network) {
+        json(res, 400, { error: 'Invalid map code.' });
+        return true;
+      }
+      json(res, 200, { network });
+      return true;
+    }
+    if (req.method === 'POST') {
+      let body;
+      try {
+        body = await readJson(req, 2 * 1024 * 1024);
+      } catch (err) {
+        json(res, 400, { error: err.message });
+        return true;
+      }
+      try {
+        const network = await saveZones(map, body);
+        json(res, 200, { ok: true, network });
+      } catch (err) {
+        json(res, 400, { error: err.message || 'Invalid zones payload' });
+      }
+      return true;
+    }
   }
 
   const roundMatch = p.match(/^\/api\/replays\/rounds\/([A-Za-z0-9_~-]+)$/);

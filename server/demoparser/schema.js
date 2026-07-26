@@ -46,6 +46,7 @@ export const SCHEMA_VERSION = 1;
  * @property {GrenadeEvent[]} grenades  throw + detonation, with trajectory
  * @property {BombEvent[]} bomb
  * @property {DamageEvent[]} [damage]   player_hurt hits (coach / attribution)
+ * @property {ItemEvent[]} [items]      post-freeze pickups / drops
  */
 
 /**
@@ -103,6 +104,14 @@ export const SCHEMA_VERSION = 1;
  * @property {number} [x]
  * @property {number} [y]
  * @property {number} [z]
+ */
+
+/**
+ * @typedef {object} ItemEvent
+ * @property {number} tick
+ * @property {string} player
+ * @property {string} item       weapon / grenade stem (no weapon_ prefix)
+ * @property {'pickup'|'remove'} op
  */
 
 /**
