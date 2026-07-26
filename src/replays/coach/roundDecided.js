@@ -9,6 +9,7 @@ import {
   deadPlayersAt,
   decidedSideAt,
   liveEquipment,
+  plantSituationAt,
   winProbability
 } from './winProbability.js';
 import { phaseAtTick, phaseBounds } from './roundPhases.js';
@@ -70,6 +71,16 @@ export function winSeriesFromMeta(meta) {
       tAlive: eq.tAlive,
       bomb
     });
+    // Kill-log stubs have no FLAG_DEFUSING — plantSituationAt leaves
+    // ctDefusing null so the hard no-time-to-defuse cutoff is skipped here.
+    const plant = plantSituationAt({
+      meta,
+      states,
+      tick,
+      deadIds,
+      teamSides,
+      players
+    });
     const wp = winProbability({
       map: meta.map,
       ctAlive: eq.ctAlive,
@@ -78,7 +89,8 @@ export function winSeriesFromMeta(meta) {
       tEff: eq.tEff,
       ctEquip: eq.CT,
       tEquip: eq.T,
-      decided
+      decided,
+      ...plant
     });
     series.push({
       tick,

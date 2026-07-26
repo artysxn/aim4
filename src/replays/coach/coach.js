@@ -15,6 +15,7 @@ import {
   deadPlayersAt,
   decidedSideAt,
   liveEquipment,
+  plantSituationAt,
   winProbability
 } from './winProbability.js';
 import { findRoundDecided } from './roundDecided.js';
@@ -204,6 +205,14 @@ export function analyseRound({ meta, sampleAt }) {
       tAlive: eq.tAlive,
       bomb
     });
+    const plant = plantSituationAt({
+      meta,
+      states,
+      tick,
+      deadIds,
+      teamSides,
+      players
+    });
     const wp = winProbability({
       map: meta.map,
       ctAlive: eq.ctAlive,
@@ -212,7 +221,8 @@ export function analyseRound({ meta, sampleAt }) {
       tEff: eq.tEff,
       ctEquip: eq.CT,
       tEquip: eq.T,
-      decided
+      decided,
+      ...plant
     });
     series.push({
       tick,

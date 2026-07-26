@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // replays/coach/winProbability.js
-// Live round win probability: map, economy, and bodies.
+// Live round win probability: map, economy, bodies, and after-plant.
 //
 // Everything composes in LOG-ODDS, not percentage points. Adding percentages
 // runs off the end of the scale (a 55% map base plus a 5v2 advantage is not
@@ -8,6 +8,10 @@
 // is therefore quoted as the win rate it produces on its own from an even
 // start, and converted to a log-odds delta before anything is combined.
 // ---------------------------------------------------------------------------
+
+import { FLAG_DEFUSING } from '../shared/tickFormat.js';
+import { isDefuser } from '../viewer/equipmentIcons.js';
+import { BOMB_SECONDS } from '../viewer/roundClock.js';
 
 /**
  * CT win rate at equal equipment and 5v5, per map. Anubis is the only one of
@@ -72,6 +76,27 @@ export const HP_BODY_FLOOR = 0.5;
 const FLOOR = 1;
 const CEIL = 99;
 
+/**
+ * After-plant T win% boost (pp from even) by bomb seconds remaining.
+ * Not cumulative — each rung replaces the previous.
+ * [secondsLeft ceiling, T bonus pp]
+ */
+const PLANT_T_BONUS_TIERS = [
+  [40, 11],
+  [35, 12],
+  [30, 13],
+  [25, 15],
+  [20, 17],
+  [15, 20],
+  [13, 22],
+  [11, 25]
+];
+
+/** Without a kit, CTs who have not started defusing by this many seconds lose. */
+export const DEFUSE_NO_KIT_DEADLINE = 9.99;
+/** With a kit, CTs who have not started defusing by this many seconds lose. */
+export const DEFUSE_KIT_DEADLINE = 4.99;
+
 const logit = (p) => Math.log(p / (1 - p));
 const sigmoid = (x) => 1 / (1 + Math.exp(-x));
 
@@ -80,6 +105,134 @@ const edge = (winPercent) => logit(clampP(winPercent) / 100);
 
 function clampP(p) {
   return Math.min(99.9, Math.max(0.1, p));
+}
+
+/**
+ * T percentage-point boost from a live plant at `secondsLeft` on the bomb timer.
+ * @param {number} secondsLeft
+ * @returns {number}
+ */
+export function plantTBonusPp(secondsLeft) {
+  if (!Number.isFinite(secondsLeft) || secondsLeft < 0) return 0;
+  let pp = 0;
+  for (const [at, bonus] of PLANT_T_BONUS_TIERS) {
+    if (secondsLeft <= at) pp = bonus;
+  }
+  // Just planted (≈40s): first rung. Slight float over 40 still counts as planted.
+  if (pp === 0 && secondsLeft <= BOMB_SECONDS + 0.05) pp = PLANT_T_BONUS_TIERS[0][1];
+  return pp;
+}
+
+/**
+ * True when the bomb is live and CTs can no longer start a successful defuse.
+ * Requires an explicit `ctDefusing === false` so kill-log-only series (no tick
+ * flags) do not hard-decide while someone may be mid-defuse.
+ *
+ * @param {{ bombSecondsLeft?: number, ctHasKit?: boolean, ctDefusing?: boolean|null }} s
+ */
+export function plantDefuseImpossible(s) {
+  const left = Number(s?.bombSecondsLeft);
+  if (!Number.isFinite(left)) return false;
+  if (s.ctDefusing !== false) return false;
+  if (s.ctHasKit) return left <= DEFUSE_KIT_DEADLINE;
+  return left <= DEFUSE_NO_KIT_DEADLINE;
+}
+
+/**
+ * Whether any living CT still holds a defuse kit at `tick` (freezetime loadout
+ * plus mid-round item pickup/remove).
+ */
+export function ctHasDefuseKitAt({ players, stats, teamSides, items, tick, deadIds }) {
+  const holders = new Set();
+  for (const p of players || []) {
+    if (teamSides?.[p.team] !== 'CT') continue;
+    const loadout = stats?.[p.id]?.loadout || [];
+    if (loadout.some(isDefuser)) holders.add(p.id);
+  }
+  for (const it of items || []) {
+    if ((it.tick || 0) > tick) continue;
+    if (!isDefuser(it.item)) continue;
+    if (it.op === 'pickup') holders.add(it.player);
+    else if (it.op === 'remove') holders.delete(it.player);
+  }
+  for (const id of holders) {
+    if (deadIds?.has(id)) continue;
+    const p = (players || []).find((x) => x.id === id);
+    if (p && teamSides?.[p.team] === 'CT') return true;
+  }
+  return false;
+}
+
+/** True when tick states carry FLAG_* bits (not the kill-log stub states). */
+function statesHaveFlags(states) {
+  for (const s of states || []) {
+    if (s && typeof s.flags === 'number') return true;
+  }
+  return false;
+}
+
+function anyCtDefusing({ players, states, teamSides, deadIds }) {
+  for (const p of players || []) {
+    if (teamSides?.[p.team] !== 'CT') continue;
+    if (deadIds?.has(p.id)) continue;
+    const s = states?.[p.slot];
+    if (!s?.alive) continue;
+    if ((s.flags || 0) & FLAG_DEFUSING) return true;
+  }
+  return false;
+}
+
+/**
+ * After-plant inputs for winProbability at a demo tick.
+ * @returns {{ planted: boolean, bombSecondsLeft: number|null, plantBonusPp: number, ctHasKit: boolean, ctDefusing: boolean|null }}
+ */
+export function plantSituationAt({ meta, states, tick, deadIds, teamSides, players }) {
+  const empty = {
+    planted: false,
+    bombSecondsLeft: null,
+    plantBonusPp: 0,
+    ctHasKit: false,
+    ctDefusing: null
+  };
+  if (!meta || tick == null) return empty;
+
+  const plantTick =
+    meta.plantTick ??
+    meta.events?.bomb?.find((b) => b.type === 'planted')?.tick ??
+    null;
+  if (plantTick == null || tick < plantTick) return empty;
+
+  for (const b of meta.events?.bomb || []) {
+    if ((b.tick || 0) > tick) continue;
+    if (b.type === 'defused' || b.type === 'exploded') return empty;
+  }
+
+  const tickRate = meta.tickRate || 64;
+  const bombSecondsLeft = Math.max(0, BOMB_SECONDS - (tick - plantTick) / tickRate);
+  const sides = teamSides || {
+    1: meta.team1Side || 'T',
+    2: meta.team2Side || 'CT'
+  };
+  const roster = players || meta.players || [];
+  const ctHasKit = ctHasDefuseKitAt({
+    players: roster,
+    stats: meta.stats,
+    teamSides: sides,
+    items: meta.events?.items || [],
+    tick,
+    deadIds
+  });
+  const ctDefusing = statesHaveFlags(states)
+    ? anyCtDefusing({ players: roster, states, teamSides: sides, deadIds })
+    : null;
+
+  return {
+    planted: true,
+    bombSecondsLeft,
+    plantBonusPp: plantTBonusPp(bombSecondsLeft),
+    ctHasKit,
+    ctDefusing
+  };
 }
 
 /**
@@ -151,6 +304,11 @@ function clampEcoMismatch(ctPercent, ctEquip, tEquip) {
  * @param {number} state.ctEquip        avg $ per alive CT (capped)
  * @param {number} state.tEquip         avg $ per alive T (capped)
  * @param {'CT'|'T'|null} [state.decided] set once the round is actually over
+ * @param {boolean} [state.planted]     bomb is live
+ * @param {number} [state.bombSecondsLeft]
+ * @param {number} [state.plantBonusPp] T pp boost from plant timer (overrides lookup)
+ * @param {boolean} [state.ctHasKit]
+ * @param {boolean|null} [state.ctDefusing] true/false when known; null skips hard cutoff
  * @returns {{ct: number, t: number, parts: object}} percentages
  */
 export function winProbability(state) {
@@ -163,6 +321,11 @@ export function winProbability(state) {
   if (state.decided === 'CT' || (tAlive === 0 && ctAlive > 0)) return decided('CT');
   if (state.decided === 'T' || (ctAlive === 0 && tAlive > 0)) return decided('T');
   if (!ctAlive && !tAlive) return decided(null);
+
+  // Bomb live and no time left to start a defuse → T win is certain.
+  if (state.planted && plantDefuseImpossible(state)) {
+    return decided('T');
+  }
 
   const baseCt = MAP_BASE_CT[state.map] ?? DEFAULT_BASE_CT;
 
@@ -183,13 +346,33 @@ export function winProbability(state) {
   const manEdge =
     gap < 1e-6 ? 0 : edge(advantageWinrate(gap)) * Math.sign(ctEff - tEff);
 
-  let ct = sigmoid(mapEdge + econEdge + manEdge) * 100;
+  // 4. After-plant T lean from bomb timer (standalone CT win% = 50 − pp).
+  const plantPp = state.planted
+    ? Number.isFinite(state.plantBonusPp)
+      ? state.plantBonusPp
+      : plantTBonusPp(state.bombSecondsLeft)
+    : 0;
+  const plantEdge = plantPp > 0 ? edge(50 - plantPp) : 0;
+
+  let ct = sigmoid(mapEdge + econEdge + manEdge + plantEdge) * 100;
   ct = clampEcoMismatch(ct, state.ctEquip, state.tEquip);
   const clamped = Math.min(CEIL, Math.max(FLOOR, ct));
   return {
     ct: clamped,
     t: 100 - clamped,
-    parts: { mapEdge, econEdge, manEdge, dollars, econPct, tBonus, ctEff, tEff }
+    parts: {
+      mapEdge,
+      econEdge,
+      manEdge,
+      plantEdge,
+      plantPp,
+      bombSecondsLeft: state.planted ? state.bombSecondsLeft : null,
+      dollars,
+      econPct,
+      tBonus,
+      ctEff,
+      tEff
+    }
   };
 }
 
@@ -232,6 +415,12 @@ export function explainProbability(sample, map = '') {
   detail.push(`Map base  ${base}% CT`);
   const tBonus = sample.parts?.tBonus || 0;
   if (tBonus) detail.push(`Even-man T lean  +${tBonus}pp`);
+  const plantPp = sample.parts?.plantPp || 0;
+  if (plantPp) {
+    const left = sample.parts?.bombSecondsLeft;
+    const leftLabel = Number.isFinite(left) ? `${left.toFixed(1)}s left` : 'planted';
+    detail.push(`Plant  T +${plantPp}pp (${leftLabel})`);
+  }
   if (Number.isFinite(ctEff) && Number.isFinite(tEff)) {
     const gap = Math.abs(ctEff - tEff);
     if (gap >= 0.05) {
@@ -377,6 +566,14 @@ export function winProbabilityAtTick({ meta, states, tick }) {
     tAlive: eq.tAlive,
     bomb: meta.events?.bomb
   });
+  const plant = plantSituationAt({
+    meta,
+    states,
+    tick,
+    deadIds,
+    teamSides,
+    players
+  });
   const wp = winProbability({
     map: meta.map,
     ctAlive: eq.ctAlive,
@@ -385,7 +582,8 @@ export function winProbabilityAtTick({ meta, states, tick }) {
     tEff: eq.tEff,
     ctEquip: eq.CT,
     tEquip: eq.T,
-    decided
+    decided,
+    ...plant
   });
   return {
     tick,
