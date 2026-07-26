@@ -76,8 +76,9 @@ What the host has to provide:
 - **Enough RAM and CPU to parse.** Demo parsing runs in a worker thread and is
   the heaviest thing the process does. Budget ~2 GB RAM and a real (not
   fractional) core, or parses will be killed mid-run on large demos.
-- **Room for the library.** The default quota is 50 demos / 20 GB shared across
-  all visitors. Size the disk for that, or lower `AIM4_REPLAY_MAX_BYTES`.
+- **Room for the library.** The default quota is 20 GB shared across all
+  visitors (no demo-count cap). Size the disk for that, or change
+  `AIM4_REPLAY_MAX_BYTES`.
 
 Do **not** set `AIM4_SERVE_STATIC` in a split deploy — the client is served by
 the static host.

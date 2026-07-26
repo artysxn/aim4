@@ -26,7 +26,6 @@ import { parserStatus } from '../demoparser/index.js';
 import {
   ROOT,
   MAX_BYTES,
-  MAX_DEMOS,
   NOTE_MAX,
   checkQuota,
   deleteDemo,
@@ -253,7 +252,7 @@ export async function handleReplayRequest(req, res, url) {
       parser: parserStatus(),
       auth: authStatus(),
       usage: await usage(user),
-      limits: { maxDemos: MAX_DEMOS, maxBytes: MAX_BYTES }
+      limits: { maxBytes: MAX_BYTES }
     });
     return true;
   }

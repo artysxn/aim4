@@ -117,14 +117,8 @@ export function initReplaysView({ escapeHtml }) {
 
   function renderQuota(usage) {
     if (!usage || !quotaEl) return;
-    const pctDemos = (usage.demos / usage.maxDemos) * 100;
-    const pctBytes = (usage.bytes / usage.maxBytes) * 100;
+    const pctBytes = usage.maxBytes ? (usage.bytes / usage.maxBytes) * 100 : 0;
     quotaEl.innerHTML = `
-      <div class="rp-quota-row">
-        <span class="rp-quota-label">Demos (shared)</span>
-        <span class="rp-quota-value">${usage.demos} / ${usage.maxDemos}</span>
-      </div>
-      <div class="rp-meter"><span style="width:${Math.min(100, pctDemos)}%"></span></div>
       <div class="rp-quota-row">
         <span class="rp-quota-label">Storage (shared)</span>
         <span class="rp-quota-value">${formatBytes(usage.bytes)} / ${formatBytes(usage.maxBytes)}</span>

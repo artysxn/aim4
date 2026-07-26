@@ -30,8 +30,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const ROOT = process.env.AIM4_REPLAY_DIR || path.join(__dirname, '..', 'data', 'replays');
 
-/** Shared library caps for the whole server (all visitors share one pool). */
-export const MAX_DEMOS = Number(process.env.AIM4_REPLAY_MAX_DEMOS || 50);
+/** Shared library storage cap for the whole server (all visitors share one pool). */
 export const MAX_BYTES = Number(process.env.AIM4_REPLAY_MAX_BYTES || 20 * 1024 ** 3); // 20 GB
 
 /**
@@ -218,12 +217,10 @@ export async function usage(user) {
   const bytes = demoBytes + roundBytes;
   return {
     demos: records.length,
-    maxDemos: MAX_DEMOS,
     bytes,
     maxBytes: MAX_BYTES,
     demoBytes,
     roundBytes,
-    demosLeft: Math.max(0, MAX_DEMOS - records.length),
     bytesLeft: Math.max(0, MAX_BYTES - bytes)
   };
 }
@@ -235,13 +232,6 @@ export async function usage(user) {
  */
 export async function checkQuota(user, incoming = 0) {
   const u = await usage(user);
-  if (u.demos >= MAX_DEMOS) {
-    return {
-      ok: false,
-      error: `Shared library is full (${MAX_DEMOS} demos). Delete one to upload more.`,
-      usage: u
-    };
-  }
   if (incoming > 0 && u.bytes + incoming > MAX_BYTES) {
     const gb = (MAX_BYTES / 1024 ** 3).toFixed(0);
     return {
