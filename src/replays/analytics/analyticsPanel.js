@@ -1,19 +1,29 @@
 // ---------------------------------------------------------------------------
 // Analytics: one player × one map × phase-window presence filters → stats + rounds.
+// Layout: sticky filter sidebar + main results (stats, presence, rounds).
 // ---------------------------------------------------------------------------
 
 import { fetchStats, fetchZones } from '../api.js';
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
+import { attachTips } from '../stats/statsTables.js';
 import {
   aggregateAnalytics,
   listPlayers,
   locationBreakdown
 } from './analyticsMath.js';
 
+const tipLines = (lines) => lines.filter(Boolean).join('\n');
+
 const PHASE_OPTS = [
   { key: 'early', label: 'Early' },
   { key: 'mid', label: 'Mid' },
   { key: 'late', label: 'Late' }
+];
+
+const LOC_KINDS = [
+  { key: 'pos', label: 'Position', set: 'positions' },
+  { key: 'zone', label: 'Zone', set: 'zones' },
+  { key: 'area', label: 'Area', set: 'areas' }
 ];
 
 /**
@@ -26,13 +36,13 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   const el = document.createElement('div');
   el.className = 'an-panel';
   el.innerHTML = `
-    <div class="an-setup" id="an-setup"></div>
-    <div class="an-filters st-filters" id="an-filters" hidden></div>
-    <div class="an-body" id="an-body"><p class="view-empty">Select a player and a map to begin.</p></div>`;
+    <div class="an-layout">
+      <aside class="an-sidebar" id="an-sidebar"></aside>
+      <div class="an-main" id="an-main"><p class="view-empty">Select a player and a map to begin.</p></div>
+    </div>`;
 
-  const setupEl = el.querySelector('#an-setup');
-  const filtersEl = el.querySelector('#an-filters');
-  const bodyEl = el.querySelector('#an-body');
+  const sidebarEl = el.querySelector('#an-sidebar');
+  const mainEl = el.querySelector('#an-main');
 
   let payload = null;
   /** @type {Array<{id:string,name:string,maps:string[]}>} */
@@ -40,6 +50,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   let loadToken = 0;
   let playerSearch = '';
   let playerMenuOpen = false;
+  /** @type {Record<string, boolean>} */
+  let locMenuOpen = { pos: false, zone: false, area: false };
 
   const state = {
     playerId: '',
@@ -87,118 +99,18 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     };
   }
 
+  function locSet(kind) {
+    if (kind === 'pos') return state.positions;
+    if (kind === 'zone') return state.zones;
+    return state.areas;
+  }
+
   function nameOf(kind, id) {
     if (!id || !network) return id || '';
     const list =
       kind === 'pos' ? network.zones : kind === 'zone' ? network.sections : network.areas;
     const hit = (list || []).find((x) => x.id === id);
     return hit?.name || id;
-  }
-
-  // ---- setup (player + map) -----------------------------------------------
-
-  function playerOptions() {
-    const q = playerSearch.trim().toLowerCase();
-    return players
-      .filter((p) => p.id !== state.playerId)
-      .filter((p) => !q || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q))
-      .slice(0, 40);
-  }
-
-  function playerMenuHtml() {
-    if (!playerMenuOpen && !playerSearch) return '';
-    const opts = playerOptions();
-    return `<div class="rp-typeahead-menu">
-      ${
-        opts.length
-          ? opts
-              .map(
-                (p) =>
-                  `<button type="button" class="rp-typeahead-option" data-pick-player="${escapeHtml(
-                    p.id
-                  )}">${escapeHtml(p.name)}</button>`
-              )
-              .join('')
-          : `<p class="rp-typeahead-empty">No players</p>`
-      }
-    </div>`;
-  }
-
-  /** Update dropdown only — never replace the focused search input. */
-  function refreshPlayerMenu() {
-    const wrap = setupEl.querySelector('#an-player-typeahead');
-    if (!wrap) return;
-    wrap.classList.toggle('open', playerMenuOpen);
-    wrap.querySelector('.rp-typeahead-menu')?.remove();
-    const html = playerMenuHtml();
-    if (html) wrap.insertAdjacentHTML('beforeend', html);
-  }
-
-  function renderSetup() {
-    const pl = selectedPlayer();
-    const maps = pl?.maps?.length
-      ? pl.maps
-      : [...new Set((payload?.demos || []).map((d) => d.map).filter(Boolean))].sort();
-    const mapOpts = maps
-      .map(
-        (code) =>
-          `<option value="${escapeHtml(code)}"${code === state.map ? ' selected' : ''}>${escapeHtml(
-            MAPS[code]?.name || code
-          )}</option>`
-      )
-      .join('');
-
-    setupEl.innerHTML = `
-      <div class="an-setup-row">
-        <div class="an-setup-field">
-          <span class="st-filter-label">Player</span>
-          <div class="rp-typeahead an-player-typeahead${playerMenuOpen ? ' open' : ''}" id="an-player-typeahead">
-            <input type="search" class="site-input" id="an-player-search"
-              placeholder="${pl ? escapeHtml(pl.name) : 'Search players'}"
-              spellcheck="false" autocomplete="off" value="${escapeHtml(playerSearch)}"
-              aria-label="Search players" />
-            ${playerMenuHtml()}
-          </div>
-          ${
-            pl
-              ? `<div class="rp-selected-chips rp-chips">
-            <button type="button" class="rp-chip active" data-clear-player>${escapeHtml(
-              pl.name
-            )} ×</button>
-          </div>`
-              : ''
-          }
-        </div>
-        <div class="an-setup-field">
-          <span class="st-filter-label">Map</span>
-          <select class="site-select" id="an-map" ${pl ? '' : 'disabled'} aria-label="Map">
-            <option value=""${!state.map ? ' selected' : ''}>Select map</option>
-            ${mapOpts}
-          </select>
-        </div>
-      </div>`;
-  }
-
-  // ---- filters ------------------------------------------------------------
-
-  function econSelect(id, value) {
-    const opts = Object.entries(ECONOMIES)
-      .map(
-        ([code, e]) =>
-          `<option value="${code}"${Number(code) === value ? ' selected' : ''}>${escapeHtml(
-            e.label || economyLabel(Number(code))
-          )}</option>`
-      )
-      .join('');
-    return `<select class="site-select" data-an-econ="${id}">
-      <option value=""${value === null ? ' selected' : ''}>Any buy</option>${opts}</select>`;
-  }
-
-  function awpCheck(id, checked) {
-    return `<label class="rp-awp-toggle${checked ? ' active' : ''}" title="Has AWP">
-      <input type="checkbox" data-an-awp="${id}" ${checked ? 'checked' : ''} aria-label="Has AWP" />
-      <span>AWP</span>
-    </label>`;
   }
 
   function networkItems(kind) {
@@ -214,115 +126,246 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  function locListHtml(kind, items, selected, search) {
-    const q = search.trim().toLowerCase();
-    const filtered = items
-      .filter((it) => !q || it.name.toLowerCase().includes(q))
-      .slice(0, 60);
-    if (!filtered.length) {
-      return `<p class="rp-typeahead-empty">No matches</p>`;
-    }
-    return filtered
+  function playerOptions() {
+    const q = playerSearch.trim().toLowerCase();
+    return players
+      .filter((p) => p.id !== state.playerId)
+      .filter((p) => !q || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q))
+      .slice(0, 40);
+  }
+
+  function locSuggestions(kind) {
+    const q = (state.locSearch[kind] || '').trim().toLowerCase();
+    if (!q) return [];
+    const selected = locSet(kind);
+    return networkItems(kind)
+      .filter((it) => !selected.has(it.id))
+      .filter((it) => it.name.toLowerCase().includes(q))
+      .slice(0, 12);
+  }
+
+  function econSelect(id, value) {
+    const opts = Object.entries(ECONOMIES)
       .map(
-        (it) =>
-          `<button type="button" class="rp-chip${
-            selected.has(it.id) ? ' active' : ''
-          }" data-loc-toggle="${kind}" data-id="${escapeHtml(it.id)}">${escapeHtml(
-            it.name
-          )}</button>`
+        ([code, e]) =>
+          `<option value="${code}"${Number(code) === value ? ' selected' : ''}>${escapeHtml(
+            e.label || economyLabel(Number(code))
+          )}</option>`
       )
       .join('');
+    return `<select class="site-select an-select" data-an-econ="${id}">
+      <option value=""${value === null ? ' selected' : ''}>Any</option>${opts}</select>`;
   }
 
-  function locPicker(kind, label, items, selected, search) {
-    const chips = [...selected]
-      .map((id) => {
-        const name = items.find((x) => x.id === id)?.name || id;
-        return `<button type="button" class="rp-chip active" data-loc-clear="${kind}" data-id="${escapeHtml(
-          id
-        )}">${escapeHtml(name)} ×</button>`;
-      })
-      .join('');
+  function awpCheck(id, checked) {
+    return `<label class="rp-awp-toggle an-awp${checked ? ' active' : ''}" title="Has AWP">
+      <input type="checkbox" data-an-awp="${id}" ${checked ? 'checked' : ''} aria-label="Has AWP" />
+      <span>AWP</span>
+    </label>`;
+  }
+
+  function chip(active, attrs, label) {
+    return `<button type="button" class="rp-chip${active ? ' active' : ''}" ${attrs}>${label}</button>`;
+  }
+
+  function selectedLocChips(kind) {
+    const set = locSet(kind);
+    if (!set.size) return '';
+    return `<div class="an-sel-chips">
+      ${[...set]
+        .map(
+          (id) =>
+            `<button type="button" class="an-sel-chip" data-loc-clear="${kind}" data-id="${escapeHtml(
+              id
+            )}">${escapeHtml(nameOf(kind, id))} <span aria-hidden="true">×</span></button>`
+        )
+        .join('')}
+    </div>`;
+  }
+
+  function locTypeahead(kind, label) {
+    const open = locMenuOpen[kind] && (state.locSearch[kind] || '').trim();
+    const opts = open ? locSuggestions(kind) : [];
     return `
-      <div class="an-loc-group" data-loc-group="${kind}">
-        <span class="st-filter-label">${label}</span>
-        <input type="search" class="site-input an-loc-search" data-loc-search="${kind}"
-          placeholder="Search ${label.toLowerCase()}" value="${escapeHtml(search)}"
-          spellcheck="false" autocomplete="off" />
-        <div class="an-loc-list">${locListHtml(kind, items, selected, search)}</div>
-        ${chips ? `<div class="rp-chips an-loc-selected">${chips}</div>` : ''}
+      <div class="an-field" data-loc-group="${kind}">
+        <span class="an-label">${label}</span>
+        <div class="rp-typeahead an-loc-typeahead" id="an-loc-${kind}">
+          <input type="search" class="site-input an-loc-search" data-loc-search="${kind}"
+            placeholder="Search…" spellcheck="false" autocomplete="off"
+            value="${escapeHtml(state.locSearch[kind] || '')}" aria-label="Search ${label}" />
+          ${
+            open
+              ? `<div class="rp-typeahead-menu an-loc-menu">
+            ${
+              opts.length
+                ? opts
+                    .map(
+                      (it) =>
+                        `<button type="button" class="rp-typeahead-option" data-loc-pick="${kind}" data-id="${escapeHtml(
+                          it.id
+                        )}">${escapeHtml(it.name)}</button>`
+                    )
+                    .join('')
+                : `<p class="rp-typeahead-empty">No matches</p>`
+            }
+          </div>`
+              : ''
+          }
+        </div>
+        ${selectedLocChips(kind)}
       </div>`;
   }
 
-  function refreshLocList(kind) {
-    const group = filtersEl.querySelector(`[data-loc-group="${kind}"]`);
-    const list = group?.querySelector('.an-loc-list');
-    if (!list) return;
-    const selected =
-      kind === 'pos' ? state.positions : kind === 'zone' ? state.zones : state.areas;
-    list.innerHTML = locListHtml(kind, networkItems(kind), selected, state.locSearch[kind] || '');
+  function refreshLocMenu(kind) {
+    const wrap = sidebarEl.querySelector(`#an-loc-${kind}`);
+    if (!wrap) return;
+    wrap.querySelector('.rp-typeahead-menu')?.remove();
+    const open = locMenuOpen[kind] && (state.locSearch[kind] || '').trim();
+    if (!open) return;
+    const opts = locSuggestions(kind);
+    wrap.insertAdjacentHTML(
+      'beforeend',
+      `<div class="rp-typeahead-menu an-loc-menu">
+        ${
+          opts.length
+            ? opts
+                .map(
+                  (it) =>
+                    `<button type="button" class="rp-typeahead-option" data-loc-pick="${kind}" data-id="${escapeHtml(
+                      it.id
+                    )}">${escapeHtml(it.name)}</button>`
+                )
+                .join('')
+            : `<p class="rp-typeahead-empty">No matches</p>`
+        }
+      </div>`
+    );
   }
 
-  function renderFilters() {
-    if (!state.playerId || !state.map) {
-      filtersEl.hidden = true;
-      filtersEl.innerHTML = '';
-      return;
-    }
-    filtersEl.hidden = false;
-    const positions = networkItems('pos');
-    const zones = networkItems('zone');
-    const areas = networkItems('area');
-
-    const sideBtn = (value, label) =>
-      `<button type="button" class="rp-chip${
-        state.side === value ? ' active' : ''
-      }" data-an-side="${value}">${label}</button>`;
-    const resultBtn = (value, label) =>
-      `<button type="button" class="rp-chip${
-        state.result === value ? ' active' : ''
-      }" data-an-result="${value}">${label}</button>`;
-    const phaseBtn = (key, label) =>
-      `<button type="button" class="rp-chip${
-        state.phases.has(key) ? ' active' : ''
-      }" data-an-phase="${key}">${label}</button>`;
-
-    filtersEl.innerHTML = `
-      <div class="st-filter-group st-filter-stack">
-        <span class="st-filter-label">Side</span>
-        <div class="rp-chips">${sideBtn('T', 'T')}${sideBtn('CT', 'CT')}</div>
-      </div>
-      <div class="st-filter-group st-filter-stack">
-        <span class="st-filter-label">Own buy</span>
-        <div class="st-filter-row">${econSelect('econ', state.econ)}${awpCheck(
-          'hasAwp',
-          state.hasAwp
-        )}</div>
-      </div>
-      <div class="st-filter-group st-filter-stack">
-        <span class="st-filter-label">Opp buy</span>
-        <div class="st-filter-row">${econSelect('oppEcon', state.oppEcon)}${awpCheck(
-          'oppHasAwp',
-          state.oppHasAwp
-        )}</div>
-      </div>
-      <div class="st-filter-group st-filter-stack">
-        <span class="st-filter-label">Result</span>
-        <div class="rp-chips">${resultBtn('won', 'Won')}${resultBtn('lost', 'Lost')}</div>
-      </div>
-      <div class="st-filter-group st-filter-stack">
-        <span class="st-filter-label">Phase</span>
-        <div class="rp-chips">${PHASE_OPTS.map((p) => phaseBtn(p.key, p.label)).join('')}</div>
-      </div>
-      <button type="button" class="btn btn-sm st-filter-clear" data-an-clear>Clear</button>
-      <div class="an-loc-filters">
-        ${locPicker('pos', 'Positions', positions, state.positions, state.locSearch.pos)}
-        ${locPicker('zone', 'Zones', zones, state.zones, state.locSearch.zone)}
-        ${locPicker('area', 'Areas', areas, state.areas, state.locSearch.area)}
-      </div>`;
+  function refreshPlayerMenu() {
+    const wrap = sidebarEl.querySelector('#an-player-typeahead');
+    if (!wrap) return;
+    wrap.classList.toggle('open', playerMenuOpen);
+    wrap.querySelector('.rp-typeahead-menu')?.remove();
+    if (!playerMenuOpen && !playerSearch) return;
+    const opts = playerOptions();
+    wrap.insertAdjacentHTML(
+      'beforeend',
+      `<div class="rp-typeahead-menu">
+        ${
+          opts.length
+            ? opts
+                .map(
+                  (p) =>
+                    `<button type="button" class="rp-typeahead-option" data-pick-player="${escapeHtml(
+                      p.id
+                    )}">${escapeHtml(p.name)}</button>`
+                )
+                .join('')
+            : `<p class="rp-typeahead-empty">No players</p>`
+        }
+      </div>`
+    );
   }
 
-  // ---- body ---------------------------------------------------------------
+  // ---- sidebar ------------------------------------------------------------
+
+  function renderSidebar() {
+    const pl = selectedPlayer();
+    const maps = pl?.maps?.length
+      ? pl.maps
+      : [...new Set((payload?.demos || []).map((d) => d.map).filter(Boolean))].sort();
+    const mapOpts = maps
+      .map(
+        (code) =>
+          `<option value="${escapeHtml(code)}"${code === state.map ? ' selected' : ''}>${escapeHtml(
+            MAPS[code]?.name || code
+          )}</option>`
+      )
+      .join('');
+    const ready = Boolean(state.playerId && state.map);
+
+    sidebarEl.innerHTML = `
+      <div class="an-side-block">
+        <h3 class="an-side-title">Subject</h3>
+        <div class="an-field">
+          <span class="an-label">Player</span>
+          <div class="rp-typeahead" id="an-player-typeahead">
+            <input type="search" class="site-input" id="an-player-search"
+              placeholder="${pl ? escapeHtml(pl.name) : 'Search players'}"
+              spellcheck="false" autocomplete="off" value="${escapeHtml(playerSearch)}"
+              aria-label="Search players" />
+          </div>
+          ${
+            pl
+              ? `<button type="button" class="an-sel-chip" data-clear-player>${escapeHtml(
+                  pl.name
+                )} <span aria-hidden="true">×</span></button>`
+              : ''
+          }
+        </div>
+        <div class="an-field">
+          <span class="an-label">Map</span>
+          <select class="site-select an-select" id="an-map" ${pl ? '' : 'disabled'} aria-label="Map">
+            <option value=""${!state.map ? ' selected' : ''}>Select map</option>
+            ${mapOpts}
+          </select>
+        </div>
+      </div>
+
+      <div class="an-side-block" ${ready ? '' : 'hidden'}>
+        <h3 class="an-side-title">Round filters</h3>
+        <div class="an-field">
+          <span class="an-label">Side</span>
+          <div class="rp-chips">
+            ${chip(state.side === 'T', 'data-an-side="T"', 'T')}
+            ${chip(state.side === 'CT', 'data-an-side="CT"', 'CT')}
+          </div>
+        </div>
+        <div class="an-field">
+          <span class="an-label">Own buy</span>
+          <div class="an-buy-row">${econSelect('econ', state.econ)}${awpCheck('hasAwp', state.hasAwp)}</div>
+        </div>
+        <div class="an-field">
+          <span class="an-label">Opp buy</span>
+          <div class="an-buy-row">${econSelect('oppEcon', state.oppEcon)}${awpCheck(
+            'oppHasAwp',
+            state.oppHasAwp
+          )}</div>
+        </div>
+        <div class="an-field">
+          <span class="an-label">Result</span>
+          <div class="rp-chips">
+            ${chip(state.result === 'won', 'data-an-result="won"', 'Won')}
+            ${chip(state.result === 'lost', 'data-an-result="lost"', 'Lost')}
+          </div>
+        </div>
+        <div class="an-field">
+          <span class="an-label">Phase</span>
+          <div class="rp-chips">
+            ${PHASE_OPTS.map((p) =>
+              chip(state.phases.has(p.key), `data-an-phase="${p.key}"`, p.label)
+            ).join('')}
+          </div>
+        </div>
+      </div>
+
+      <div class="an-side-block" ${ready ? '' : 'hidden'}>
+        <h3 class="an-side-title">Location</h3>
+        <p class="an-side-hint">Type to add a position, zone, or area. Windows must match every selected tier.</p>
+        ${LOC_KINDS.map((k) => locTypeahead(k.key, k.label)).join('')}
+      </div>
+
+      ${
+        ready
+          ? `<button type="button" class="btn btn-sm an-clear" data-an-clear>Clear filters</button>`
+          : ''
+      }`;
+
+    if (playerMenuOpen || playerSearch) refreshPlayerMenu();
+  }
+
+  // ---- main ---------------------------------------------------------------
 
   function fmt(n, digits = 2) {
     if (!Number.isFinite(n)) return '—';
@@ -331,59 +374,126 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
   function renderBreakdown(breakdown) {
     const block = (title, rows, kind) => {
-      if (!rows.length) return `<div class="an-break-col"><h4>${title}</h4><p class="view-empty">No data</p></div>`;
-      return `<div class="an-break-col"><h4>${title}</h4><ul class="an-break-list">
-        ${rows
-          .slice(0, 12)
-          .map(
-            (r) =>
-              `<li><button type="button" class="an-break-item${
-                (kind === 'pos'
-                  ? state.positions
-                  : kind === 'zone'
-                    ? state.zones
-                    : state.areas
-                ).has(r.id)
-                  ? ' active'
-                  : ''
-              }" data-loc-toggle="${kind}" data-id="${escapeHtml(r.id)}">
-                <span>${escapeHtml(nameOf(kind, r.id))}</span>
-                <small>${r.count}</small>
-              </button></li>`
-          )
-          .join('')}
-      </ul></div>`;
+      if (!rows.length) {
+        return `<div class="an-break-col"><h4>${title}</h4><p class="an-muted">—</p></div>`;
+      }
+      return `<div class="an-break-col"><h4>${title}</h4>
+        <ul class="an-break-list">
+          ${rows
+            .slice(0, 20)
+            .map((r) => {
+              const on = locSet(kind).has(r.id);
+              return `<li>
+                <button type="button" class="an-break-row${on ? ' active' : ''}"
+                  data-loc-toggle="${kind}" data-id="${escapeHtml(r.id)}"
+                  title="Filter to this ${kind === 'pos' ? 'position' : kind}">
+                  <span class="an-break-name">${escapeHtml(nameOf(kind, r.id))}</span>
+                  <span class="an-break-n">${r.count}</span>
+                </button>
+              </li>`;
+            })
+            .join('')}
+        </ul>
+      </div>`;
     };
-    return `<div class="an-breakdown">
-      <h3 class="an-section-title">Where they play</h3>
-      <p class="an-section-sub">Dominant position / zone / area per phase window (${breakdown.samples} samples)</p>
+    return `<section class="an-card an-breakdown">
+      <header class="an-card-head">
+        <h3 class="an-section-title">Where they play</h3>
+        <span class="an-muted">${breakdown.samples} samples</span>
+      </header>
       <div class="an-break-grid">
         ${block('Positions', breakdown.pos, 'pos')}
         ${block('Zones', breakdown.zone, 'zone')}
         ${block('Areas', breakdown.area, 'area')}
       </div>
-    </div>`;
+    </section>`;
+  }
+
+  function statTips(agg) {
+    const f1 = (n) => (Number.isFinite(n) ? n.toFixed(1) : '—');
+    const f2 = (n) => (Number.isFinite(n) ? n.toFixed(2) : '—');
+    const pct = (n) => (Number.isFinite(n) ? `${n.toFixed(1)}%` : '—');
+    const n = agg.samples || 0;
+    return {
+      Rating: tipLines([
+        `HLTV 2.0 over ${n} phase windows (same formula as Statistics).`,
+        `KPR: ${f2(agg.kpr)}`,
+        `DPR: ${f2(agg.dpr)}`,
+        `Impact: ${f2(agg.impact)}`,
+        `ADR: ${f1(agg.adr)}`,
+        `KAST: ${pct(agg.kast)}`
+      ]),
+      'K/D': tipLines([
+        `Kills: ${agg.kills}`,
+        `Assists: ${agg.assists}`,
+        `Deaths: ${agg.deaths}`,
+        `Across ${n} phase windows`
+      ]),
+      ADR: tipLines([
+        `Average damage per phase window`,
+        `Total damage: ${Math.round(agg.damage || 0)}`,
+        `Windows: ${n}`
+      ]),
+      KAST: tipLines([
+        `% of phase windows with a kill, assist, survival, or trade`,
+        `KAST: ${pct(agg.kast)}`,
+        `Windows: ${n}`
+      ]),
+      Impact: tipLines([
+        `Impact = 2.13×KPR + 0.42×APR − 0.41`,
+        `KPR: ${f2(agg.kpr)}`,
+        `APR: ${f2(agg.apr)}`
+      ]),
+      Acc: tipLines(
+        agg.shots > 0
+          ? [
+              `Shots fired: ${agg.shots}`,
+              `Shots hit: ${agg.hits}`,
+              `Headshots hit: ${agg.headshots}`,
+              `AWP shots fired: ${agg.awpShots}`,
+              `AWP shots hit: ${agg.awpHits}`,
+              `AWP hit rate: ${agg.awpShots > 0 ? pct(agg.awpAccuracy) : '—'}`
+            ]
+          : ['No hit data in these phase windows (older demos may lack damage events).']
+      ),
+      Kills: tipLines([`Kills in matching phase windows: ${agg.kills}`]),
+      Deaths: tipLines([`Deaths in matching phase windows: ${agg.deaths}`]),
+      Assists: tipLines([`Assists in matching phase windows: ${agg.assists}`])
+    };
   }
 
   function renderStats(agg) {
     if (!agg.samples) {
-      return `<div class="an-stats"><p class="view-empty">No phase windows match these filters.</p></div>`;
+      return `<section class="an-card"><p class="view-empty">No phase windows match these filters.</p></section>`;
     }
-    return `<div class="an-stats">
-      <h3 class="an-section-title">Phase stats</h3>
-      <p class="an-section-sub">${agg.samples} windows · ${agg.rounds} rounds</p>
+    const tips = statTips(agg);
+    const cells = [
+      ['Rating', fmt(agg.rating)],
+      ['K/D', fmt(agg.kd)],
+      ['ADR', fmt(agg.adr, 1)],
+      ['KAST', `${fmt(agg.kast, 1)}%`],
+      ['Impact', fmt(agg.impact)],
+      ['Acc', agg.shots > 0 ? `${fmt(agg.accuracy, 1)}%` : '—'],
+      ['Kills', String(agg.kills)],
+      ['Deaths', String(agg.deaths)],
+      ['Assists', String(agg.assists)]
+    ];
+    return `<section class="an-card an-stats">
+      <header class="an-card-head">
+        <h3 class="an-section-title">Phase stats</h3>
+        <span class="an-muted">${agg.samples} windows · ${agg.rounds} rounds</span>
+      </header>
       <div class="an-stat-grid">
-        <div class="an-stat"><span>Rating</span><strong>${fmt(agg.rating)}</strong></div>
-        <div class="an-stat"><span>K/D</span><strong>${fmt(agg.kd)}</strong></div>
-        <div class="an-stat"><span>ADR</span><strong>${fmt(agg.adr, 1)}</strong></div>
-        <div class="an-stat"><span>KAST</span><strong>${fmt(agg.kast, 1)}%</strong></div>
-        <div class="an-stat"><span>Impact</span><strong>${fmt(agg.impact)}</strong></div>
-        <div class="an-stat"><span>Acc</span><strong>${fmt(agg.accuracy, 1)}%</strong></div>
-        <div class="an-stat"><span>Kills</span><strong>${agg.kills}</strong></div>
-        <div class="an-stat"><span>Deaths</span><strong>${agg.deaths}</strong></div>
-        <div class="an-stat"><span>Assists</span><strong>${agg.assists}</strong></div>
+        ${cells
+          .map(([label, value]) => {
+            const tip = tips[label] || '';
+            return `<div class="an-stat${tip ? ' has-tip' : ''}"${
+              tip ? ` data-tip="${escapeHtml(tip)}"` : ''
+            }><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`;
+          })
+          .join('')}
       </div>
-    </div>`;
+    </section>`;
   }
 
   function renderRounds(agg) {
@@ -400,13 +510,13 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       (a, b) => (b.round || 0) - (a.round || 0) || a.file.localeCompare(b.file)
     );
     if (!list.length) {
-      return `<div class="an-rounds"><p class="view-empty">No rounds to play.</p></div>`;
+      return `<section class="an-card"><p class="view-empty">No rounds to play.</p></section>`;
     }
-    return `<div class="an-rounds">
-      <div class="an-rounds-head">
+    return `<section class="an-card an-rounds">
+      <header class="an-card-head">
         <h3 class="an-section-title">Rounds <small>${list.length}</small></h3>
         <button type="button" class="btn primary btn-sm" id="an-play-all">Play in Timeline</button>
-      </div>
+      </header>
       <ul class="an-round-list">
         ${list
           .map(
@@ -422,16 +532,16 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
           )
           .join('')}
       </ul>
-    </div>`;
+    </section>`;
   }
 
-  function renderBody() {
+  function renderMain() {
     if (!state.playerId || !state.map) {
-      bodyEl.innerHTML = `<p class="view-empty">Select a player and a map to begin.</p>`;
+      mainEl.innerHTML = `<p class="view-empty">Select a player and a map in the sidebar.</p>`;
       return;
     }
     if (!payload) {
-      bodyEl.innerHTML = `<p class="view-empty">Loading…</p>`;
+      mainEl.innerHTML = `<p class="view-empty">Loading…</p>`;
       return;
     }
     const filter = filterObj();
@@ -440,7 +550,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     const needsPh = (payload.demos || []).some((d) =>
       (d.rounds || []).some((r) => r.m === state.map && !r.ph)
     );
-    bodyEl.innerHTML = `
+    mainEl.innerHTML = `
       ${
         needsPh
           ? `<p class="an-warn">Some rounds are still building phase data. Refresh shortly if numbers look incomplete.</p>`
@@ -448,18 +558,17 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       }
       ${
         !network?.zones?.length
-          ? `<p class="an-warn">No position network for this map — location filters need a ready zone map in the Position Editor.</p>`
+          ? `<p class="an-warn">No position network for this map — add one in the Position Editor to use location filters.</p>`
           : ''
       }
-      ${renderBreakdown(breakdown)}
       ${renderStats(agg)}
+      ${renderBreakdown(breakdown)}
       ${renderRounds(agg)}`;
   }
 
   function render() {
-    renderSetup();
-    renderFilters();
-    renderBody();
+    renderSidebar();
+    renderMain();
   }
 
   async function ensureNetwork() {
@@ -480,7 +589,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
   async function load() {
     const token = ++loadToken;
-    bodyEl.innerHTML = `<p class="view-empty">Loading…</p>`;
+    mainEl.innerHTML = `<p class="view-empty">Loading…</p>`;
     try {
       const data = await fetchStats(null);
       if (token !== loadToken) return;
@@ -495,32 +604,65 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       render();
     } catch (err) {
       if (token !== loadToken) return;
-      bodyEl.innerHTML = `<p class="view-empty">Could not load stats. ${escapeHtml(
+      mainEl.innerHTML = `<p class="view-empty">Could not load stats. ${escapeHtml(
         err.message || String(err)
       )}</p>`;
     }
   }
 
+  function closeLocMenus(except = '') {
+    for (const k of ['pos', 'zone', 'area']) {
+      if (k === except) continue;
+      locMenuOpen[k] = false;
+      refreshLocMenu(k);
+    }
+  }
+
   // ---- events -------------------------------------------------------------
 
-  setupEl.addEventListener('input', (e) => {
-    if (e.target.id !== 'an-player-search') return;
-    playerSearch = e.target.value;
-    playerMenuOpen = true;
+  sidebarEl.addEventListener('input', (e) => {
+    if (e.target.id === 'an-player-search') {
+      playerSearch = e.target.value;
+      playerMenuOpen = true;
+      closeLocMenus();
+      refreshPlayerMenu();
+      return;
+    }
+    const loc = e.target.closest('[data-loc-search]');
+    if (!loc) return;
+    const kind = loc.dataset.locSearch;
+    if (kind !== 'pos' && kind !== 'zone' && kind !== 'area') return;
+    state.locSearch[kind] = loc.value;
+    locMenuOpen[kind] = true;
+    playerMenuOpen = false;
+    refreshPlayerMenu();
+    closeLocMenus(kind);
+    refreshLocMenu(kind);
+  });
+
+  sidebarEl.addEventListener('focusin', (e) => {
+    if (e.target.id === 'an-player-search') {
+      if (!playerMenuOpen) {
+        playerMenuOpen = true;
+        closeLocMenus();
+        refreshPlayerMenu();
+      }
+      return;
+    }
+    const loc = e.target.closest('[data-loc-search]');
+    if (!loc) return;
+    const kind = loc.dataset.locSearch;
+    if (kind !== 'pos' && kind !== 'zone' && kind !== 'area') return;
+    // Suggestions only after typing — just mark open for when text appears.
+    locMenuOpen[kind] = true;
+    playerMenuOpen = false;
     refreshPlayerMenu();
   });
 
-  setupEl.addEventListener('focusin', (e) => {
-    if (e.target.id !== 'an-player-search') return;
-    if (playerMenuOpen) return;
-    playerMenuOpen = true;
-    refreshPlayerMenu();
-  });
-
-  setupEl.addEventListener('click', async (e) => {
-    const pick = e.target.closest('[data-pick-player]');
-    if (pick) {
-      state.playerId = pick.dataset.pickPlayer;
+  sidebarEl.addEventListener('click', async (e) => {
+    const pickPlayer = e.target.closest('[data-pick-player]');
+    if (pickPlayer) {
+      state.playerId = pickPlayer.dataset.pickPlayer;
       playerSearch = '';
       playerMenuOpen = false;
       const pl = selectedPlayer();
@@ -535,28 +677,26 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       playerSearch = '';
       playerMenuOpen = false;
       render();
+      return;
     }
-  });
 
-  setupEl.addEventListener('change', async (e) => {
-    if (e.target.id === 'an-map') {
-      state.map = e.target.value || '';
-      state.positions.clear();
-      state.zones.clear();
-      state.areas.clear();
-      await ensureNetwork();
+    const locPick = e.target.closest('[data-loc-pick]');
+    if (locPick) {
+      const kind = locPick.dataset.locPick;
+      const id = locPick.dataset.id;
+      locSet(kind).add(id);
+      state.locSearch[kind] = '';
+      locMenuOpen[kind] = false;
       render();
+      return;
     }
-  });
+    const locClear = e.target.closest('[data-loc-clear]');
+    if (locClear) {
+      locSet(locClear.dataset.locClear).delete(locClear.dataset.id);
+      render();
+      return;
+    }
 
-  document.addEventListener('click', (e) => {
-    if (!playerMenuOpen) return;
-    if (e.target.closest?.('#an-player-typeahead')) return;
-    playerMenuOpen = false;
-    refreshPlayerMenu();
-  });
-
-  filtersEl.addEventListener('click', (e) => {
     const side = e.target.closest('[data-an-side]');
     if (side) {
       const v = side.dataset.anSide === 'CT' ? 'CT' : 'T';
@@ -591,36 +731,25 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       state.zones.clear();
       state.areas.clear();
       state.locSearch = { pos: '', zone: '', area: '' };
-      render();
-      return;
-    }
-    const locToggle = e.target.closest('[data-loc-toggle]');
-    if (locToggle) {
-      const kind = locToggle.dataset.locToggle;
-      const id = locToggle.dataset.id;
-      const set =
-        kind === 'pos' ? state.positions : kind === 'zone' ? state.zones : state.areas;
-      if (set.has(id)) set.delete(id);
-      else set.add(id);
-      render();
-      return;
-    }
-    const locClear = e.target.closest('[data-loc-clear]');
-    if (locClear) {
-      const kind = locClear.dataset.locClear;
-      const id = locClear.dataset.id;
-      const set =
-        kind === 'pos' ? state.positions : kind === 'zone' ? state.zones : state.areas;
-      set.delete(id);
+      locMenuOpen = { pos: false, zone: false, area: false };
       render();
     }
   });
 
-  filtersEl.addEventListener('change', (e) => {
+  sidebarEl.addEventListener('change', async (e) => {
+    if (e.target.id === 'an-map') {
+      state.map = e.target.value || '';
+      state.positions.clear();
+      state.zones.clear();
+      state.areas.clear();
+      state.locSearch = { pos: '', zone: '', area: '' };
+      await ensureNetwork();
+      render();
+      return;
+    }
     const awp = e.target.closest('[data-an-awp]');
     if (awp) {
       state[awp.dataset.anAwp] = Boolean(awp.checked);
-      awp.closest('.rp-awp-toggle')?.classList.toggle('active', awp.checked);
       render();
       return;
     }
@@ -631,22 +760,24 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     }
   });
 
-  filtersEl.addEventListener('input', (e) => {
-    const search = e.target.closest('[data-loc-search]');
-    if (!search) return;
-    const kind = search.dataset.locSearch;
-    if (kind !== 'pos' && kind !== 'zone' && kind !== 'area') return;
-    state.locSearch[kind] = search.value;
-    refreshLocList(kind);
+  document.addEventListener('click', (e) => {
+    const inPlayer = e.target.closest?.('#an-player-typeahead');
+    const inLoc = e.target.closest?.('.an-loc-typeahead');
+    if (!inPlayer && playerMenuOpen) {
+      playerMenuOpen = false;
+      refreshPlayerMenu();
+    }
+    if (!inLoc && (locMenuOpen.pos || locMenuOpen.zone || locMenuOpen.area)) {
+      closeLocMenus();
+    }
   });
 
-  bodyEl.addEventListener('click', async (e) => {
+  mainEl.addEventListener('click', async (e) => {
     const locToggle = e.target.closest('[data-loc-toggle]');
     if (locToggle) {
       const kind = locToggle.dataset.locToggle;
       const id = locToggle.dataset.id;
-      const set =
-        kind === 'pos' ? state.positions : kind === 'zone' ? state.zones : state.areas;
+      const set = locSet(kind);
       if (set.has(id)) set.delete(id);
       else set.add(id);
       render();
@@ -678,10 +809,13 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     }
   });
 
+  const detachTips = attachTips(el);
+
   return {
     el,
     load,
     destroy() {
+      detachTips();
       el.remove();
     }
   };
