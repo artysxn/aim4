@@ -145,7 +145,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
             statsDemoId ? '' : 'hidden'
           }>${statsIconSvg}</button>
           <button type="button" class="rv-tool active" id="rv-chart" title="Win chance chart">${icon(chartIcon)}</button>
-          <button type="button" class="rv-tool" id="rv-coach" title="Coach: mistake notes for one team">${icon(coachIcon)}</button>
+          <button type="button" class="rv-tool" id="rv-coach" title="Coach: mistake notes for one team" ${
+            statsDemoId ? '' : 'hidden'
+          }>${icon(coachIcon)}</button>
           <button type="button" class="rv-tool" id="rv-draw" title="Draw (right click always draws)">${icon(pencilIcon)}</button>
           <button type="button" class="rv-tool" id="rv-note" title="Notes">${icon(commentsIcon)}</button>
           <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
@@ -244,6 +246,11 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const coachNotedFiles = new Set();
   /** Bumps when a full-demo coach pass is superseded (toggle off / re-pick). */
   let coachPassId = 0;
+  /**
+   * Coach needs the whole unspliced match (same signal as the live scoreboard).
+   * Pick-and-choose / playlist / deep-link subsets leave this empty.
+   */
+  const coachAvailable = Boolean(statsDemoId);
   const states = [];
 
   const playback = new Playback((pos) => onPosition(pos));
@@ -949,7 +956,12 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   // ---- notes (timestamped, many per round, one visible at a time) ---------
 
   function syncCoachBtn() {
-    coachBtn?.classList.toggle('active', coachOn || coachPicking);
+    if (!coachBtn) return;
+    coachBtn.hidden = !coachAvailable;
+    coachBtn.classList.toggle('active', coachAvailable && (coachOn || coachPicking));
+    coachBtn.title = coachAvailable
+      ? 'Coach: mistake notes for one team'
+      : 'Coach needs a full match — open a demo, not a round selection';
   }
 
   function closePopovers(except = null) {
@@ -1815,6 +1827,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   }
 
   function showCoachPick() {
+    if (!coachAvailable) return;
     const t1 = activeMeta?.team1?.name || rounds[activeIndex]?.team1?.name || 'Team 1';
     const t2 = activeMeta?.team2?.name || rounds[activeIndex]?.team2?.name || 'Team 2';
     if (coachPickT1) coachPickT1.textContent = t1;
@@ -1823,16 +1836,19 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     coachPicking = true;
     if (coachPick) coachPick.hidden = false;
     syncCoachBtn();
+    // Start pulling every round's ticks while the team picker is open.
+    void preloadAllRoundsForCoach();
   }
 
   async function enableCoachForTeam(team) {
+    if (!coachAvailable) return;
     if (team !== 1 && team !== 2) return;
     coachTeam = team;
     hideCoachPick();
     coachOn = true;
     syncCoachBtn();
-    // Analyse every round up front so the strip can mark them and notes exist
-    // before the user jumps around the demo.
+    // Load + analyse every round up front so the strip can mark them and notes
+    // exist before the user jumps around the demo.
     await analyseAllCoachRounds();
     renderActiveMarks();
     enterCoachRoundMoment();
@@ -1845,6 +1861,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   });
 
   coachBtn?.addEventListener('click', () => {
+    if (!coachAvailable) return;
     if (coachOn) {
       coachOn = false;
       coachTeam = null;
@@ -1872,6 +1889,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
    * Only the selected roster team's mistakes are written.
    */
   async function mergeCoachNotesFor(index) {
+    if (!coachAvailable) return;
     if (coachTeam !== 1 && coachTeam !== 2) return;
     if (index < 0 || index >= files.length) return;
     const file = files[index];
@@ -1948,14 +1966,39 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     syncCoachRoundChips();
   }
 
+  /** Pull full tick data for every round in the match (coach needs them all). */
+  async function preloadAllRoundsForCoach(pass = coachPassId) {
+    if (!coachAvailable) return;
+    const total = files.length;
+    for (let i = 0; i < total; i++) {
+      if (destroyed || pass !== coachPassId) return;
+      // Allow preload during team pick (coachOn still false) and during analyse.
+      if (!coachPicking && !coachOn) return;
+      if (loadingEl) {
+        loadingEl.hidden = false;
+        loadingEl.textContent = `Coach loading ${i + 1}/${total}…`;
+      }
+      await store.loadFull(files[i]);
+    }
+    if (pass === coachPassId && !coachOn) syncLoading();
+  }
+
   /** Load + analyse every round once coach is turned on. */
   async function analyseAllCoachRounds() {
+    if (!coachAvailable) return;
     const pass = ++coachPassId;
-    for (let i = 0; i < files.length; i++) {
+    const total = files.length;
+
+    // Phase 1: every round's ticks, not just the one on screen.
+    await preloadAllRoundsForCoach(pass);
+    if (destroyed || !coachOn || pass !== coachPassId) return;
+
+    // Phase 2: run the coach over the full match and persist notes.
+    for (let i = 0; i < total; i++) {
       if (destroyed || !coachOn || pass !== coachPassId) return;
       if (loadingEl) {
         loadingEl.hidden = false;
-        loadingEl.textContent = `Coach analysing ${i + 1}/${files.length}…`;
+        loadingEl.textContent = `Coach analysing ${i + 1}/${total}…`;
       }
       await mergeCoachNotesFor(i);
     }

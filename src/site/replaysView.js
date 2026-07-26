@@ -292,8 +292,8 @@ export function initReplaysView({ escapeHtml }) {
           map: demo.map,
           tickRate: r.tickRate || demo.tickRate
         }));
-        // statsDemoId is what turns on the viewer's live scoreboard: it only
-        // means anything when the whole match is loaded, in order.
+        // statsDemoId marks a full unspliced match: live scoreboard + coach.
+        // Round picks / playlists omit it so those tools stay unavailable.
         launchViewer(
           list,
           'timeline',
