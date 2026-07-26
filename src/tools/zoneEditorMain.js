@@ -761,11 +761,57 @@ function commitRectAvoiding(worldRect, name, hits) {
   draw();
 }
 
+function sectionContainingPosition(positionId) {
+  return (network.sections || []).find((s) => (s.zoneIds || []).includes(positionId)) || null;
+}
+
+function areaContainingSection(sectionId) {
+  if (!sectionId) return null;
+  return (
+    (network.areas || []).find((a) => (a.sectionIds || []).includes(sectionId)) || null
+  );
+}
+
+/** Zones selected in the list, or zones that contain any selected position. */
+function selectedZonesForAreaCreate() {
+  if (selectedSectionIds.size) return [...selectedSectionIds];
+  const out = [];
+  for (const s of network.sections || []) {
+    if ((s.zoneIds || []).some((zid) => selectedIds.has(zid))) out.push(s.id);
+  }
+  return out;
+}
+
 function selectAtRadarPoint(radarPt, { shiftKey = false } = {}) {
   const world = radarToWorld(mapCode, radarPt.x, radarPt.y, {});
   const hits = positionsAtPoint(world.x, world.y, network);
   if (!hits.length) return false;
   const top = hits[hits.length - 1];
+  const mode = colorMode();
+
+  // In Zones/Areas view, click selects the parent group (so Area + works).
+  if (mode === 'area') {
+    const sec = sectionContainingPosition(top.id);
+    const area = areaContainingSection(sec?.id);
+    if (area) {
+      selectAreaWithChildren(area.id, { shiftKey });
+      renderList();
+      renderSections();
+      draw();
+      return true;
+    }
+  }
+  if (mode === 'section' || mode === 'area') {
+    const sec = sectionContainingPosition(top.id);
+    if (sec) {
+      selectZoneWithChildren(sec.id, { shiftKey });
+      renderList();
+      renderAreas();
+      draw();
+      return true;
+    }
+  }
+
   if (shiftKey) {
     if (selectedIds.has(top.id)) selectedIds.delete(top.id);
     else selectedIds.add(top.id);
@@ -1054,15 +1100,16 @@ el.btnAreaAdd?.addEventListener('click', () => {
     setStatus('Name the area first');
     return;
   }
-  if (!selectedSectionIds.size) {
-    setStatus('Select zones, then +');
+  const zoneIds = selectedZonesForAreaCreate();
+  if (!zoneIds.length) {
+    setStatus('Select zones (or their positions), then +');
     return;
   }
   const area = addArea(network, name);
-  for (const id of selectedSectionIds) addSectionToArea(network, area.id, id);
+  for (const id of zoneIds) addSectionToArea(network, area.id, id);
   if (el.areaNameInput) el.areaNameInput.value = '';
   markDirty(true);
-  setStatus('');
+  setStatus(`Area “${area.name}” · ${zoneIds.length} zone${zoneIds.length === 1 ? '' : 's'}`);
   selectAreaWithChildren(area.id, { shiftKey: false });
   renderAll();
   draw();
