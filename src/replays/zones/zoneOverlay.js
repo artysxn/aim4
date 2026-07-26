@@ -1,8 +1,9 @@
 // ---------------------------------------------------------------------------
 // replays/zones/zoneOverlay.js
 // Timeline "positions" overlay: who has been where up to the playhead, who is
-// there now, who can see an empty/occupied position (FOV + radar LOS), and
-// surround-fill for neutrals locked in by one side.
+// there now, who can see an empty/occupied position (FOV + radar LOS + smokes),
+// including cells further along the same clear sight ray, and surround-fill
+// for neutrals locked in by one side.
 //
 // Colors: gray empty, T yellow, CT blue, both red; active vs controlled
 // (darker) for single-side claims.
@@ -30,8 +31,16 @@ export const ZONE_PAINT = {
 
 /** Half-angle of the vision cone used for sight-control (degrees). */
 const SIGHT_FOV_DEG = 30;
-/** Fraction of a position that must be in-FOV + clear LOS to claim it. */
-const SIGHT_COVER = 0.6;
+/**
+ * Fraction of a position that must be in-FOV + clear LOS to claim it by
+ * looking *at* it. Kept modest so a real peek counts; corridor cells behind
+ * that peek are claimed via ray walk (see SIGHT_RAY_*).
+ */
+const SIGHT_COVER = 0.2;
+/** World-unit step when walking a clear sight ray through intermediate positions. */
+const SIGHT_RAY_STEP = 40;
+/** Min ray-step hits for a position the ray passes through to count as seen. */
+const SIGHT_RAY_MIN_HITS = 2;
 /** Radar alpha at or below this is a wall (transparent PNG). */
 const WALL_ALPHA = 28;
 /** Smoke lifetime — matches radar renderer. */
@@ -444,22 +453,44 @@ function segmentBlockedBySmoke(x0, y0, x1, y1, smokes, radius = SMOKE_RADIUS_UNI
 }
 
 /**
- * Fraction of sample points in-FOV with clear radar LOS from the player,
- * and not occluded by a smoke cloud on the way.
+ * Sample points of `pos` that the player can see (FOV + radar LOS + smokes).
  * @param {Array<{x:number,y:number}>} [smokes]
+ * @returns {{ cover: number, clearPts: Array<{x:number,y:number}> }}
  */
-function sightCover(player, pos, los, smokes) {
+function sightClearPoints(player, pos, los, smokes) {
   const pts = samplePointsForPosition(pos);
-  if (!pts.length) return 0;
-  let ok = 0;
+  /** @type {Array<{x:number,y:number}>} */
+  const clearPts = [];
+  if (!pts.length) return { cover: 0, clearPts };
   for (const p of pts) {
     if (yawDelta(player.yaw, yawToward(player, p)) > SIGHT_FOV_DEG) continue;
-    if (los && !los.clearWorld(player.x, player.y, p.x, p.y)) continue;
-    if (!los) continue;
+    if (!los || !los.clearWorld(player.x, player.y, p.x, p.y)) continue;
     if (segmentBlockedBySmoke(player.x, player.y, p.x, p.y, smokes)) continue;
-    ok++;
+    clearPts.push(p);
   }
-  return ok / pts.length;
+  return { cover: clearPts.length / pts.length, clearPts };
+}
+
+/**
+ * Walk a clear sight segment and tally every position the ray passes through.
+ * Walls/smokes are already enforced by the caller (endpoint is visible).
+ * @param {Map<string, number>} into  posId -> hit count
+ */
+function accumulateRayPositions(x0, y0, x1, y1, network, smoked, into) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1) return;
+  const steps = Math.max(1, Math.ceil(dist / SIGHT_RAY_STEP));
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const x = x0 + dx * t;
+    const y = y0 + dy * t;
+    for (const z of positionsAtPoint(x, y, network)) {
+      if (!z?.id || smoked?.has(z.id)) continue;
+      into.set(z.id, (into.get(z.id) || 0) + 1);
+    }
+  }
 }
 
 /**
@@ -511,10 +542,41 @@ function applyVisionClaims({
     const viewer = { x: s.x, y: s.y, yaw: s.yaw };
     const playerName = p.name || p.id;
 
+    /** @type {Map<string, number>} direct area cover 0..1 */
+    const coverById = new Map();
+    /** @type {Map<string, number>} positions crossed by clear sight rays */
+    const rayHits = new Map();
+
     for (const pos of positions) {
       if (smoked.has(pos.id)) continue;
-      const cover = sightCover(viewer, pos, los, smokeCenters);
-      if (cover < SIGHT_COVER) continue;
+      const { cover, clearPts } = sightClearPoints(viewer, pos, los, smokeCenters);
+      if (cover > 0) coverById.set(pos.id, cover);
+      // Walk each clear ray so mid / far cells along the same LOS also claim.
+      for (const pt of clearPts) {
+        accumulateRayPositions(
+          viewer.x,
+          viewer.y,
+          pt.x,
+          pt.y,
+          network,
+          smoked,
+          rayHits
+        );
+      }
+    }
+
+    for (const pos of positions) {
+      if (smoked.has(pos.id)) continue;
+      const cover = coverById.get(pos.id) || 0;
+      const along = rayHits.get(pos.id) || 0;
+      const direct = cover >= SIGHT_COVER;
+      const through = along >= SIGHT_RAY_MIN_HITS;
+      if (!direct && !through) continue;
+
+      // Prefer real area cover; corridor-only hits get a modest synthetic %.
+      const reportCover = direct
+        ? cover
+        : Math.max(cover, Math.min(0.95, along / (along + 6)));
 
       const hasT = active.t.has(pos.id);
       const hasCt = active.ct.has(pos.id);
@@ -526,7 +588,7 @@ function applyVisionClaims({
         side,
         playerId: p.id,
         playerName,
-        cover,
+        cover: reportCover,
         enemy: enemyInside
       });
 
@@ -541,7 +603,7 @@ function applyVisionClaims({
             reason: 'sight-enemy',
             playerId: p.id,
             playerName,
-            detail: `Saw enemy inside (${Math.round(cover * 100)}% cover)`
+            detail: `Saw enemy inside (${Math.round(reportCover * 100)}% cover)`
           });
         }
         continue;
@@ -551,15 +613,16 @@ function applyVisionClaims({
       else ctSight.add(pos.id);
       if (presence) {
         const map = side === 'T' ? presence.firstT : presence.firstCT;
-        const first = !map.has(pos.id);
-        if (first) map.set(pos.id, tick);
+        if (!map.has(pos.id)) map.set(pos.id, tick);
         recordClaim(presence, pos.id, {
           tick,
           side,
           reason: 'sight',
           playerId: p.id,
           playerName,
-          detail: `Clear sight (${Math.round(cover * 100)}% cover)`
+          detail: through && !direct
+            ? `Clear sight through corridor (${Math.round(reportCover * 100)}% cover)`
+            : `Clear sight (${Math.round(reportCover * 100)}% cover)`
         });
       }
     }
