@@ -45,6 +45,16 @@ export const SCHEMA_VERSION = 1;
  * @property {ShotEvent[]} shots        every shot fired, by every player
  * @property {GrenadeEvent[]} grenades  throw + detonation, with trajectory
  * @property {BombEvent[]} bomb
+ * @property {DamageEvent[]} [damage]   player_hurt hits (coach / attribution)
+ */
+
+/**
+ * @typedef {object} DamageEvent
+ * @property {number} tick
+ * @property {string} attacker  player id ('' for world / self omitted at parse)
+ * @property {string} victim    player id
+ * @property {number} hp        health damage dealt
+ * @property {string} [weapon]
  */
 
 /**

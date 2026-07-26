@@ -1153,6 +1153,24 @@ export async function parseDemo(file, opts = {}) {
     // sides drop utility and knives: a thrown flashbang is a weapon_fire and an
     // inferno tick is a player_hurt, and neither is a shot anybody aimed.
     const hurts = (byName.get('player_hurt') || []).filter((e) => inSpan(e, span));
+    // Compact hurt log for coach (sole-damager checks). Skip world / self.
+    const damage = [];
+    for (const e of hurts) {
+      const hp = num(e.dmg_health);
+      if (!(hp > 0)) continue;
+      const attacker = idOf(sid(e.attacker_steamid));
+      const victim = idOf(sid(e.user_steamid));
+      if (!attacker || !victim || attacker === victim) continue;
+      damage.push({
+        tick: num(e.tick),
+        attacker,
+        victim,
+        hp,
+        weapon: String(e.weapon || '').replace(/^weapon_/, '')
+      });
+    }
+    damage.sort((a, b) => a.tick - b.tick);
+
     const stats = {};
     for (const pl of roster) {
       const snap = buys.get(`${buyTick}:${pl.steamId}`) || {};
@@ -1234,7 +1252,8 @@ export async function parseDemo(file, opts = {}) {
         kills,
         shots,
         grenades,
-        bomb
+        bomb,
+        damage
       },
       stats
     });

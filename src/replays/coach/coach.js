@@ -29,8 +29,121 @@ const HOLD_SECONDS = 3;
 const HOPELESS = 25;
 /** Above this live win chance, a solo duel is throwing value away. */
 const DOMINANT = 75;
+/** Pad around a multikill when checking who dealt damage. */
+const DAMAGE_PAD_SECONDS = 4;
+/** Max gap between consecutive kills that still counts as one multikill. */
+const MULTIKILL_GAP_SECONDS = 4;
+/** Rifle-buy floor: average equip of the wiped group must clear this. */
+const MULTIKILL_EQUIP_PER = 2500;
+/** Aim cone: looking "at" an enemy means yaw within this many degrees. */
+const AIM_DEGREES = 15;
+/** Unchecked-position needs a living stack at least this large. */
+const UNCHECKED_GROUP = 3;
+/** Molly must have been down at least this long before the death counts. */
+const MOLLY_AWARE_SECONDS = 1;
+/** How long fire stays relevant after landing (matches radar burn life). */
+const MOLLY_LIFE_SECONDS = 7;
+/** World units: killer in or next to the fire pool. */
+const MOLLY_NEAR_UNITS = 150;
+/** Same-floor tolerance when matching a killer to a molly. */
+const MOLLY_SAME_Z = 200;
+
+const PISTOLS = new Set([
+  'glock',
+  'usp_silencer',
+  'hkp2000',
+  'p250',
+  'fiveseven',
+  'tec9',
+  'cz75a',
+  'deagle',
+  'revolver',
+  'elite'
+]);
 
 const pct = (n) => `${Math.round(n)}%`;
+
+function bareWeapon(name) {
+  return String(name || '')
+    .replace(/^weapon_/, '')
+    .toLowerCase();
+}
+
+/** True when every listed loadout is pistols / knife / util only. */
+function sideOnPistols(loadouts) {
+  const list = loadouts || [];
+  if (!list.length) return false;
+  return list.every((items) => {
+    if (!items?.length) return false;
+    return items.every((w) => {
+      const b = bareWeapon(w);
+      return (
+        PISTOLS.has(b) ||
+        b === 'knife' ||
+        b.startsWith('knife') ||
+        b === 'c4' ||
+        b === 'taser' ||
+        b === 'flashbang' ||
+        b === 'smokegrenade' ||
+        b === 'hegrenade' ||
+        b === 'molotov' ||
+        b === 'incgrenade' ||
+        b === 'decoy'
+      );
+    });
+  });
+}
+
+/** Victims form one stack when each is within trade range of another. */
+function victimsStacked(positions) {
+  if (positions.length < 2) return false;
+  for (const a of positions) {
+    let near = false;
+    for (const b of positions) {
+      if (a.id === b.id) continue;
+      if (Math.hypot(a.x - b.x, a.y - b.y) <= ALONE_DISTANCE) {
+        near = true;
+        break;
+      }
+    }
+    if (!near) return false;
+  }
+  return true;
+}
+
+/** Absolute yaw difference in [0, 180]. */
+function yawDelta(a, b) {
+  let d = Math.abs(Number(a) - Number(b)) % 360;
+  if (d > 180) d = 360 - d;
+  return d;
+}
+
+/** Source yaw toward a point: 0 = +X, 90 = +Y. */
+function yawToward(from, to) {
+  return (Math.atan2(to.y - from.y, to.x - from.x) * 180) / Math.PI;
+}
+
+/** Connected stack around seed (trade-range edges). */
+function groupAround(seed, mates) {
+  if (!seed) return [];
+  const ids = new Set([seed.id]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const m of mates) {
+      if (ids.has(m.id)) continue;
+      for (const id of ids) {
+        const a = mates.find((x) => x.id === id);
+        if (a && Math.hypot(a.x - m.x, a.y - m.y) <= ALONE_DISTANCE) {
+          ids.add(m.id);
+          grew = true;
+          break;
+        }
+      }
+    }
+  }
+  return mates.filter((m) => ids.has(m.id));
+}
 
 /**
  * @param {object} args
@@ -163,7 +276,7 @@ export function analyseRound({ meta, sampleAt }) {
       if (dead?.has(p.id)) continue;
       const st = sample?.states?.[p.slot];
       if (!st?.alive) continue;
-      out.push({ id: p.id, x: st.x, y: st.y, z: st.z });
+      out.push({ id: p.id, x: st.x, y: st.y, z: st.z, yaw: st.yaw });
     }
     return out;
   };
@@ -309,6 +422,213 @@ export function analyseRound({ meta, sampleAt }) {
           text: `${name} died alone in a ${evenN}v${evenN} with no trade. In an even situation the team needs to play together — a solo death here is still a mistake even when the HP looks bad.${drop}`
         });
       }
+    }
+
+  }
+
+  // 7. Stack of 3+ dies to an angle nobody in the group was holding.
+  //    Own pass so earlier death rules do not swallow it via continue.
+  for (const death of kills) {
+    const victim = death.victim;
+    const side = sideOf(victim);
+    const opp = side === 'CT' ? 'T' : 'CT';
+    if (!side || !gate[side]) continue;
+    if (!inCoachWindow(death.tick)) continue;
+    if (defusedTick != null && death.tick >= defusedTick) continue;
+    if (recentlyFragged(victim, death.tick)) continue;
+    if (aliveAt(death.tick - 1)[side] <= 1) continue;
+    if (!death.attacker || sideOf(death.attacker) !== opp) continue;
+
+    const pre = sampleNear(death.tick - 1);
+    const groupMates = positionsOf(pre, side);
+    const victimPos = groupMates.find((m) => m.id === victim);
+    const group = groupAround(victimPos, groupMates);
+    if (group.length < UNCHECKED_GROUP) continue;
+    if (!group.every((m) => Number.isFinite(m.yaw))) continue;
+
+    const killerPos = positionsOf(pre, opp).find((m) => m.id === death.attacker);
+    if (!killerPos) continue;
+    if (
+      !group.every((m) => yawDelta(m.yaw, yawToward(m, killerPos)) > AIM_DEGREES)
+    ) {
+      continue;
+    }
+
+    const name = byId.get(victim)?.name || victim;
+    const killerName = byId.get(death.attacker)?.name || death.attacker;
+    const wpBefore = pre?.[side === 'CT' ? 'ct' : 't'];
+    const wpAfter = sampleNear(death.tick + tickRate)?.[side === 'CT' ? 'ct' : 't'];
+    const drop =
+      Number.isFinite(wpBefore) && Number.isFinite(wpAfter) && wpAfter < wpBefore
+        ? ` Round win chance fell from ${pct(wpBefore)} to ${pct(wpAfter)}.`
+        : '';
+    flags.push({
+      tick: death.tick,
+      playerId: victim,
+      rule: 'unchecked-position',
+      text: `${name} died to ${killerName} from an angle nobody in the group was holding. With ${group.length} players stacked, that position needed a check — dying to an unchecked angle is a team mistake.${drop}`
+    });
+  }
+
+  // 8. Died to an enemy standing in/near your own molotov after it had time
+  //    to land — utility unawareness.
+  const mollyGrace = MOLLY_AWARE_SECONDS * tickRate;
+  const mollyLife = MOLLY_LIFE_SECONDS * tickRate;
+  const mollies = grenades.filter(
+    (g) =>
+      (g.type === 'molotov' || g.type === 'incgrenade') &&
+      g.player &&
+      g.at &&
+      Number.isFinite(g.detonateTick)
+  );
+  if (mollies.length) {
+    for (const death of kills) {
+      const victim = death.victim;
+      const side = sideOf(victim);
+      const opp = side === 'CT' ? 'T' : 'CT';
+      if (!side || !gate[side]) continue;
+      if (!inCoachWindow(death.tick)) continue;
+      if (defusedTick != null && death.tick >= defusedTick) continue;
+      if (!death.attacker || sideOf(death.attacker) !== opp) continue;
+
+      const mine = mollies.filter(
+        (g) =>
+          g.player === victim &&
+          death.tick >= g.detonateTick + mollyGrace &&
+          death.tick <= g.detonateTick + mollyLife
+      );
+      if (!mine.length) continue;
+
+      const pre = sampleNear(death.tick - 1);
+      const killerPos = positionsOf(pre, opp).find((m) => m.id === death.attacker);
+      if (!killerPos) continue;
+
+      const onFire = mine.find((g) => {
+        const dx = killerPos.x - g.at.x;
+        const dy = killerPos.y - g.at.y;
+        if (Math.hypot(dx, dy) > MOLLY_NEAR_UNITS) return false;
+        if (Number.isFinite(g.at.z) && Number.isFinite(killerPos.z)) {
+          if (Math.abs(killerPos.z - g.at.z) > MOLLY_SAME_Z) return false;
+        }
+        return true;
+      });
+      if (!onFire) continue;
+
+      const name = byId.get(victim)?.name || victim;
+      const killerName = byId.get(death.attacker)?.name || death.attacker;
+      flags.push({
+        tick: death.tick,
+        playerId: victim,
+        rule: 'utility-unawareness',
+        text: `${name} died to ${killerName} standing in their own molotov. Once fire lands you have to track who is playing it — dying to someone in your util is utility unawareness.`
+      });
+    }
+  }
+
+  // 6. Group wiped by one lone enemy who was the sole damager in the window.
+  //    Needs events.damage from a re-parse; older packs skip quietly.
+  const damages = meta.events?.damage || [];
+  if (damages.length) {
+    const pad = DAMAGE_PAD_SECONDS * tickRate;
+    const gap = MULTIKILL_GAP_SECONDS * tickRate;
+    const loadoutsOf = (side) =>
+      players
+        .filter((p) => sideOfTeam(p.team) === side)
+        .map((p) => meta.stats?.[p.id]?.loadout || []);
+    const pistolsVsPistols =
+      sideOnPistols(loadoutsOf('CT')) && sideOnPistols(loadoutsOf('T'));
+
+    // Maximal streaks: same attacker, same victim side, consecutive kills ≤ gap.
+    const streaks = [];
+    let cur = null;
+    for (const k of kills) {
+      if (!k.attacker || !k.victim) continue;
+      if (!inCoachWindow(k.tick)) continue;
+      if (defusedTick != null && k.tick >= defusedTick) continue;
+      const vSide = sideOf(k.victim);
+      const aSide = sideOf(k.attacker);
+      if (!vSide || aSide !== (vSide === 'CT' ? 'T' : 'CT')) continue;
+      if (
+        cur &&
+        cur.attacker === k.attacker &&
+        cur.side === vSide &&
+        k.tick - cur.lastTick <= gap
+      ) {
+        cur.kills.push(k);
+        cur.lastTick = k.tick;
+        continue;
+      }
+      if (cur && cur.kills.length >= 2) streaks.push(cur);
+      cur = {
+        attacker: k.attacker,
+        side: vSide,
+        kills: [k],
+        lastTick: k.tick
+      };
+    }
+    if (cur && cur.kills.length >= 2) streaks.push(cur);
+
+    for (const streak of streaks) {
+      if (!gate[streak.side]) continue;
+      const victims = streak.kills.map((k) => k.victim);
+      if (new Set(victims).size < 2) continue;
+
+      const avgEquip =
+        victims.reduce((s, id) => s + (meta.stats?.[id]?.equipValue || 0), 0) /
+        victims.length;
+      if (!pistolsVsPistols && avgEquip < MULTIKILL_EQUIP_PER) continue;
+
+      const firstTick = streak.kills[0].tick;
+      const lastTick = streak.kills[streak.kills.length - 1].tick;
+      const windowFrom = firstTick - pad;
+      const windowTo = lastTick + pad;
+      const victimSet = new Set(victims);
+
+      // Only enemy damage on the wiped group counts; teammate FF is ignored.
+      const attackers = new Set();
+      for (const d of damages) {
+        if (!victimSet.has(d.victim)) continue;
+        if (d.tick < windowFrom || d.tick > windowTo) continue;
+        if (sideOf(d.attacker) !== sideOf(streak.attacker)) continue;
+        if (!(d.hp > 0)) continue;
+        attackers.add(d.attacker);
+      }
+      if (attackers.size !== 1 || !attackers.has(streak.attacker)) continue;
+
+      // Positions just before the spray starts.
+      const sample = sampleNear(firstTick - 1);
+      const victimPos = [];
+      for (const id of victims) {
+        const death = streak.kills.find((k) => k.victim === id);
+        const s = sampleNear((death?.tick || firstTick) - 1);
+        const pos = positionsOf(s, streak.side).find((p) => p.id === id);
+        if (pos) victimPos.push(pos);
+      }
+      if (victimPos.length < 2 || !victimsStacked(victimPos)) continue;
+
+      const killerMates = positionsOf(sample, sideOf(streak.attacker));
+      const killer = killerMates.find((m) => m.id === streak.attacker);
+      // Killer must be alone — a stacked entry fragging a pack is different.
+      if (
+        !killer ||
+        (killerMates.length >= 2 &&
+          nearestTeammate(killer, killerMates) <= ALONE_DISTANCE)
+      ) {
+        continue;
+      }
+
+      const killerName = byId.get(streak.attacker)?.name || streak.attacker;
+      const victimNames = victims
+        .map((id) => byId.get(id)?.name || id)
+        .join(', ');
+      const n = victims.length;
+      // One note on the first death (team filter uses that player's side).
+      flags.push({
+        tick: firstTick,
+        playerId: victims[0],
+        rule: 'multikill-refrag',
+        text: `${victimNames} died to ${killerName} alone (${n}v1). Although enemy luck is a possibility, usually this has to be a refrag.`
+      });
     }
   }
 
