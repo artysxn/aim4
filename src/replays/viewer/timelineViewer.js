@@ -81,20 +81,29 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       <button type="button" class="rv-coach-pick-team" data-team="2" id="rv-coach-pick-t2">Team 2</button>
     </aside>
     <aside class="rv-note-dock" id="rv-note-panel" hidden>
-      <div class="rv-note-head">
-        <button type="button" class="rp-btn-icon" id="rv-note-prev" title="Previous note" aria-label="Previous note">‹</button>
-        <span class="rv-note-stamp" id="rv-note-stamp">00:00</span>
-        <span class="rv-note-pos" id="rv-note-pos"></span>
-        <button type="button" class="rp-btn-icon" id="rv-note-next" title="Next note" aria-label="Next note">›</button>
-        <button type="button" class="rp-btn-icon rv-note-close" id="rv-note-close" title="Close" aria-label="Close">✕</button>
+      <div class="rv-note-head" id="rv-note-head-list" hidden>
+        <span class="rv-note-stamp">Notes</span>
+        <button type="button" class="rp-btn-icon" id="rv-note-add" title="New note" aria-label="New note">+</button>
+        <button type="button" class="rp-btn-icon rv-note-close" id="rv-note-close-list" title="Close" aria-label="Close">✕</button>
       </div>
-      <textarea id="rv-note-text" maxlength="${NOTE_MAX}" rows="6"
-        placeholder="What happens here?"></textarea>
-      <div class="rv-popover-foot">
-        <span class="rv-note-count" id="rv-note-count">0 / ${NOTE_MAX}</span>
-        <span class="rv-popover-msg" id="rv-note-msg"></span>
-        <button type="button" class="btn btn-sm" id="rv-note-delete" title="Delete this note">Delete</button>
-        <button type="button" class="btn btn-sm primary" id="rv-note-save">Save</button>
+      <div class="rv-note-list" id="rv-note-list" hidden></div>
+      <div class="rv-note-editor" id="rv-note-editor">
+        <div class="rv-note-head">
+          <button type="button" class="rp-btn-icon" id="rv-note-prev" title="Previous note" aria-label="Previous note">‹</button>
+          <span class="rv-note-stamp" id="rv-note-stamp">00:00</span>
+          <span class="rv-note-pos" id="rv-note-pos"></span>
+          <button type="button" class="rp-btn-icon" id="rv-note-next" title="Next note" aria-label="Next note">›</button>
+          <button type="button" class="rp-btn-icon" id="rv-note-add-edit" title="New note" aria-label="New note">+</button>
+          <button type="button" class="rp-btn-icon rv-note-close" id="rv-note-close" title="Close" aria-label="Close">✕</button>
+        </div>
+        <textarea id="rv-note-text" maxlength="${NOTE_MAX}" rows="6"
+          placeholder="What happens here?"></textarea>
+        <div class="rv-popover-foot">
+          <span class="rv-note-count" id="rv-note-count">0 / ${NOTE_MAX}</span>
+          <span class="rv-popover-msg" id="rv-note-msg"></span>
+          <button type="button" class="btn btn-sm" id="rv-note-delete" title="Delete this note">Delete</button>
+          <button type="button" class="btn btn-sm primary" id="rv-note-save">Save</button>
+        </div>
       </div>
     </aside>
     <div class="rv-scoreboard" id="rv-scoreboard" hidden>
@@ -136,7 +145,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
           }>${statsIconSvg}</button>
           <button type="button" class="rv-tool" id="rv-coach" title="Coach: win chance and round notes">${icon(coachIcon)}</button>
           <button type="button" class="rv-tool" id="rv-draw" title="Draw (right click always draws)">${icon(pencilIcon)}</button>
-          <button type="button" class="rv-tool" id="rv-note" title="Add note at current time">${icon(commentsIcon)}</button>
+          <button type="button" class="rv-tool" id="rv-note" title="Notes">${icon(commentsIcon)}</button>
           <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
         </div>
       </div>
@@ -174,6 +183,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const eraseBtn = el.querySelector('#rv-erase');
   const noteBtn = el.querySelector('#rv-note');
   const notePanel = el.querySelector('#rv-note-panel');
+  const noteListHead = el.querySelector('#rv-note-head-list');
+  const noteListEl = el.querySelector('#rv-note-list');
+  const noteEditorEl = el.querySelector('#rv-note-editor');
   const noteText = el.querySelector('#rv-note-text');
   const noteCount = el.querySelector('#rv-note-count');
   const noteMsg = el.querySelector('#rv-note-msg');
@@ -181,6 +193,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const notePosEl = el.querySelector('#rv-note-pos');
   const notePrevBtn = el.querySelector('#rv-note-prev');
   const noteNextBtn = el.querySelector('#rv-note-next');
+  const noteAddBtn = el.querySelector('#rv-note-add');
+  const noteAddEditBtn = el.querySelector('#rv-note-add-edit');
   const coachBtn = el.querySelector('#rv-coach');
   const coachPick = el.querySelector('#rv-coach-pick');
   const coachPickT1 = el.querySelector('#rv-coach-pick-t1');
@@ -214,6 +228,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   let roundNotes = [];
   /** Index into roundNotes for the dock (one note visible at a time). */
   let noteIndex = 0;
+  /** 'list' shows every note; 'editor' shows one note's text. */
+  let noteView = 'editor';
   let coachOn = false;
   /** Roster team (1|2) whose mistakes coach notes; null until picked. */
   let coachTeam = null;
@@ -428,8 +444,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         if (coachOn) {
           await mergeCoachNotes();
           renderActiveMarks();
+          enterCoachRoundMoment();
+        } else {
+          seekRoundEntry(index);
         }
-        seekRoundEntry(index);
         draw();
       }
       return;
@@ -456,6 +474,11 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     notePanel.hidden = true;
     noteBtn.classList.remove('active');
     if (coachPicking) hideCoachPick();
+    // Pause early in coach mode so freezetime auto-skip can't race the seek.
+    if (coachOn && seek) {
+      playback.pause();
+      syncPlayButton();
+    }
     if (seek) playback.seek(liveOffsetOf(index), { emit: false });
     syncLoading();
     clearPlayerStates();
@@ -499,7 +522,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       renderScoreboards();
       loadNotesFromMeta(true);
       renderActiveMarks();
-      autoOpenNotesIfPresent();
+      if (!coachOn) autoOpenNotesIfPresent();
     }
 
     if (coachOn) {
@@ -507,8 +530,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       syncCoach();
       await mergeCoachNotes();
       renderActiveMarks();
+      if (seek) enterCoachRoundMoment();
+    } else if (seek) {
+      seekRoundEntry(index);
     }
-    if (seek) seekRoundEntry(index);
     draw();
   }
 
@@ -975,7 +1000,46 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     noteBtn.classList.toggle('has-note', has);
   }
 
+  function syncNoteView() {
+    const listing = noteView === 'list';
+    if (noteListHead) noteListHead.hidden = !listing;
+    if (noteListEl) noteListEl.hidden = !listing;
+    if (noteEditorEl) noteEditorEl.hidden = listing;
+  }
+
+  function notePreview(text) {
+    const t = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!t) return 'Empty note';
+    return t.length > 72 ? `${t.slice(0, 71)}…` : t;
+  }
+
+  function renderNoteList() {
+    if (!noteListEl) return;
+    if (!roundNotes.length) {
+      noteListEl.innerHTML = '<p class="rv-popover-empty">No notes yet.</p>';
+      return;
+    }
+    noteListEl.innerHTML = roundNotes
+      .map((n, i) => {
+        const coach = n.kind === 'coach';
+        return `<button type="button" class="rv-note-item${coach ? ' coach' : ''}" data-note-index="${i}">
+          <span class="rv-note-item-mark" aria-hidden="true"></span>
+          <span class="rv-note-item-body">
+            <span class="rv-note-item-time">${escapeHtml(noteClockLabel(n.tick))}</span>
+            <span class="rv-note-item-text">${escapeHtml(notePreview(n.text))}</span>
+          </span>
+        </button>`;
+      })
+      .join('');
+  }
+
   function renderNoteDock({ forceText = false } = {}) {
+    syncNoteView();
+    if (noteView === 'list') {
+      renderNoteList();
+      syncNoteHasBadge();
+      return;
+    }
     const n = currentNote();
     const total = roundNotes.length;
     if (!n) {
@@ -1015,21 +1079,32 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     playback.seek(sequence.offsetOf(activeIndex) + Math.min(local, item.seconds));
   }
 
-  /** With coach on, land on the earliest coach note; otherwise freezetime end. */
+  /** Land at freezetime end (coach entry uses enterCoachRoundMoment instead). */
   function seekRoundEntry(index = activeIndex) {
-    if (coachOn && index === activeIndex) {
-      const first = roundNotes.find((n) => n.kind === 'coach');
-      if (first) {
-        noteIndex = roundNotes.indexOf(first);
-        renderNoteDock({ forceText: true });
-        seekToNoteTick(first.tick);
-        return;
-      }
-    }
     playback.seek(liveOffsetOf(index), { emit: false });
   }
 
+  /**
+   * Coach mode round entry: open the earliest coach note, jump to its tick,
+   * and pause so the moment can be reviewed.
+   */
+  function enterCoachRoundMoment() {
+    const first = roundNotes.find((n) => n.kind === 'coach');
+    playback.pause();
+    syncPlayButton();
+    if (!first) {
+      seekRoundEntry(activeIndex);
+      return;
+    }
+    noteView = 'editor';
+    closePopovers(notePanel);
+    notePanel.hidden = false;
+    noteBtn.classList.add('active');
+    showNoteAt(roundNotes.indexOf(first), { seek: true });
+  }
+
   function showNoteAt(index, { seek = false } = {}) {
+    noteView = 'editor';
     if (!roundNotes.length) {
       noteIndex = -1;
       renderNoteDock({ forceText: true });
@@ -1044,10 +1119,21 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   function autoOpenNotesIfPresent() {
     loadNotesFromMeta(true);
     if (!roundNotes.length) return;
+    noteView = 'editor';
     closePopovers(notePanel);
     notePanel.hidden = false;
     noteBtn.classList.add('active');
     showNoteAt(0, { seek: false });
+  }
+
+  /** Comment button with existing notes: list first, + to create another. */
+  function openNoteList() {
+    flushNoteText();
+    noteView = 'list';
+    closePopovers(notePanel);
+    notePanel.hidden = false;
+    noteBtn.classList.add('active');
+    renderNoteDock();
   }
 
   /** Clicking a mark on the scrub jumps to it and opens what it is about. */
@@ -1062,25 +1148,37 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     showNoteAt(index, { seek: true });
   });
 
+  noteListEl?.addEventListener('click', (e) => {
+    const item = e.target.closest('[data-note-index]');
+    if (!item) return;
+    const index = Number(item.dataset.noteIndex);
+    if (!Number.isFinite(index)) return;
+    showNoteAt(index, { seek: true });
+  });
+
   function setNoteOpen(open) {
     closePopovers(open ? notePanel : null);
     notePanel.hidden = !open;
     noteBtn.classList.toggle('active', open);
     if (open) {
+      if (noteView !== 'list') noteView = 'editor';
       renderNoteDock();
-      noteText.focus();
+      if (noteView === 'editor') noteText.focus();
     }
   }
 
   /** Stamp a new note at the scrubber time and show it. */
   function createNoteAtPlayhead() {
-    flushNoteText();
+    // Don't flush while the list is showing — the textarea still holds the
+    // previously edited note and would overwrite it with stale text.
+    if (noteView === 'editor' && !notePanel.hidden) flushNoteText();
     const tick = playheadTick();
-    const note = { id: newNoteId(), tick, text: '', updatedAt: Date.now() };
+    const note = { id: newNoteId(), tick, text: '', kind: 'user', mark: '', updatedAt: Date.now() };
     roundNotes.push(note);
     roundNotes.sort((a, b) => a.tick - b.tick || a.updatedAt - b.updatedAt);
     noteIndex = roundNotes.findIndex((n) => n.id === note.id);
     noteMsg.textContent = '';
+    noteView = 'editor';
     setNoteOpen(true);
     renderNoteDock({ forceText: true });
     renderActiveMarks();
@@ -1138,7 +1236,17 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     syncNoteCount();
     syncNoteHasBadge();
   });
-  noteBtn.addEventListener('click', () => createNoteAtPlayhead());
+  noteBtn.addEventListener('click', () => {
+    if (!notePanel.hidden) {
+      setNoteOpen(false);
+      return;
+    }
+    if (roundNotes.length) openNoteList();
+    else createNoteAtPlayhead();
+  });
+  const onAddNote = () => createNoteAtPlayhead();
+  noteAddBtn?.addEventListener('click', onAddNote);
+  noteAddEditBtn?.addEventListener('click', onAddNote);
   notePrevBtn.addEventListener('click', () => {
     flushNoteText();
     showNoteAt(noteIndex - 1, { seek: true });
@@ -1148,6 +1256,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     showNoteAt(noteIndex + 1, { seek: true });
   });
   el.querySelector('#rv-note-close').addEventListener('click', () => setNoteOpen(false));
+  el.querySelector('#rv-note-close-list')?.addEventListener('click', () => setNoteOpen(false));
   el.querySelector('#rv-note-delete').addEventListener('click', () => {
     const n = currentNote();
     if (!n) return;
@@ -1156,6 +1265,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       noteIndex = -1;
       noteText.value = '';
       noteMsg.textContent = 'Deleted. Save to confirm.';
+      noteView = 'list';
       renderNoteDock();
       syncNoteHasBadge();
       renderActiveMarks();
@@ -1678,13 +1788,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     syncCoach();
     await mergeCoachNotes();
     renderActiveMarks();
-    const coachIdx = roundNotes.findIndex((n) => n.kind === 'coach');
-    if (coachIdx >= 0) {
-      noteIndex = coachIdx;
-      renderNoteDock({ forceText: true });
-      setNoteOpen(true);
-      seekToNoteTick(roundNotes[coachIdx].tick);
-    }
+    enterCoachRoundMoment();
   }
 
   coachBtn?.addEventListener('click', () => {

@@ -1214,6 +1214,10 @@ body.rv-open {
   gap: 4px;
 }
 
+.rv-note-head[hidden] {
+  display: none;
+}
+
 .rv-note-stamp {
   flex: 1;
   min-width: 0;
@@ -1233,6 +1237,86 @@ body.rv-open {
 
 .rv-note-close {
   margin-left: 2px;
+}
+
+.rv-note-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rv-note-editor[hidden] {
+  display: none;
+}
+
+.rv-note-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: min(280px, 40vh);
+  overflow: auto;
+}
+
+.rv-note-list[hidden] {
+  display: none;
+}
+
+.rv-note-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-family: var(--font-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.rv-note-item:hover {
+  border-color: var(--border-strong);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.rv-note-item-mark {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.rv-note-item.coach .rv-note-item-mark {
+  border-radius: 1px;
+  background: #3ee87a;
+  transform: rotate(45deg);
+}
+
+.rv-note-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rv-note-item-time {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.rv-note-item-text {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rv-note-dock textarea {
