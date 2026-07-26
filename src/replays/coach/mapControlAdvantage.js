@@ -21,16 +21,21 @@ import {
 export const MAP_CONTROL_BASE_CLOCK_LEFT = 106;
 
 /**
+ * How strongly map control shifts win%. 3 ⇒ 3× the base exponential curve.
+ */
+export const MAP_CONTROL_WEIGHT = 3;
+
+/**
  * Exponential win-pp from even for |relative possession delta| d:
- *   f(1)=1, f(2)=2.25, f(3)≈3.81 (~4).
- * f(d) = 4 * (1.25^d - 1)
+ *   base f(1)=1, f(2)=2.25, f(3)≈3.81; then × MAP_CONTROL_WEIGHT.
+ * f(d) = MAP_CONTROL_WEIGHT * 4 * (1.25^d - 1)
  */
 export function mapControlWinPpFromDelta(deltaRel) {
   const d = Math.abs(Number(deltaRel) || 0);
   if (d < 1e-9) return 0;
-  const mag = 4 * (Math.pow(1.25, d) - 1);
+  const mag = MAP_CONTROL_WEIGHT * 4 * (Math.pow(1.25, d) - 1);
   // Cap so a total steamroll cannot swamp man/econ in one term.
-  const capped = Math.min(28, mag);
+  const capped = Math.min(28 * MAP_CONTROL_WEIGHT, mag);
   return Math.sign(deltaRel) * capped;
 }
 

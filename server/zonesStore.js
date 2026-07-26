@@ -83,10 +83,30 @@ function sanitizeLayerPieces(raw) {
   return pieces;
 }
 
+/** @returns {{ type: 'rect', x: number, y: number, w: number, h: number } | null} */
+function sanitizeBombRect(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const x = Number(raw.x);
+  const y = Number(raw.y);
+  const w = Number(raw.w);
+  const h = Number(raw.h);
+  if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) return null;
+  return { type: 'rect', x, y, w, h };
+}
+
+/** @returns {{ a: object | null, b: object | null }} */
+function sanitizeBombSites(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  return {
+    a: sanitizeBombRect(src.a),
+    b: sanitizeBombRect(src.b)
+  };
+}
+
 /**
  * @param {string} map
  * @param {unknown} payload
- * @returns {{ map: string, zones: Array, sections: Array, areas: Array, visionBlocks: Array, elevated: Array, colorMode: string, updatedAt: number }}
+ * @returns {{ map: string, zones: Array, sections: Array, areas: Array, visionBlocks: Array, elevated: Array, bombSites: { a: object | null, b: object | null }, colorMode: string, updatedAt: number }}
  */
 export function sanitizeZones(map, payload) {
   const code = String(map || '').toUpperCase();
@@ -212,6 +232,7 @@ export function sanitizeZones(map, payload) {
     areas,
     visionBlocks: sanitizeLayerPieces(payload?.visionBlocks),
     elevated: sanitizeLayerPieces(payload?.elevated),
+    bombSites: sanitizeBombSites(payload?.bombSites),
     colorMode,
     updatedAt: Number(payload?.updatedAt) || Date.now()
   };
@@ -271,6 +292,7 @@ export async function getZones(map) {
       areas: [],
       visionBlocks: [],
       elevated: [],
+      bombSites: { a: null, b: null },
       colorMode: 'zone',
       updatedAt: 0
     };
@@ -291,6 +313,7 @@ export async function getZones(map) {
         areas: [],
         visionBlocks: [],
         elevated: [],
+        bombSites: { a: null, b: null },
         colorMode: 'zone',
         updatedAt: 0
       };
@@ -318,6 +341,10 @@ export async function saveZones(map, payload) {
       ? payload.visionBlocks
       : existing.visionBlocks || [],
     elevated: Array.isArray(payload?.elevated) ? payload.elevated : existing.elevated || [],
+    bombSites:
+      payload?.bombSites && typeof payload.bombSites === 'object'
+        ? payload.bombSites
+        : existing.bombSites || { a: null, b: null },
     colorMode:
       payload?.colorMode === 'section' ||
       payload?.colorMode === 'area' ||

@@ -31,11 +31,11 @@ import {
   computeZonePaint,
   createBeamCaster,
   createZoneVisionCache,
-  resetZoneVisionCache,
-  summarizeZoneControl
+  resetZoneVisionCache
 } from '../zones/zoneOverlay.js';
 import { buildMapControlSeries } from '../zones/mapControl.js';
 import { isZoneNetworkReady } from '../zones/zoneModel.js';
+import { hasBombSites } from '../zones/bombSites.js';
 import { mapControlAdvantageEnabled } from '../coach/mapControlAdvantage.js';
 import helmetSvg from '../../icons/helmet.svg?url';
 import kevlarSvg from '../../icons/kevlar.svg?url';
@@ -95,40 +95,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         </div>
         <canvas class="rv-wingraph-canvas" id="rv-wingraph-canvas"></canvas>
         <div class="rv-wingraph-tip" id="rv-wingraph-tip" hidden></div>
-      </div>
-    </aside>
-    <aside class="rv-zones-panel" id="rv-zones-panel" hidden>
-      <div class="rv-zones-block">
-        <div class="rv-zones-block-title">Positions</div>
-        <div class="rv-zones-grid" id="rv-zones-counts">
-          <div class="rv-zones-side t">
-            <span class="rv-zones-side-label">T</span>
-            <div class="rv-zones-stat"><span>Active</span><b id="rv-zc-t-active">0</b></div>
-            <div class="rv-zones-stat"><span>Controlled</span><b id="rv-zc-t-control">0</b></div>
-          </div>
-          <div class="rv-zones-side ct">
-            <span class="rv-zones-side-label">CT</span>
-            <div class="rv-zones-stat"><span>Active</span><b id="rv-zc-ct-active">0</b></div>
-            <div class="rv-zones-stat"><span>Controlled</span><b id="rv-zc-ct-control">0</b></div>
-          </div>
-          <div class="rv-zones-side shared">
-            <div class="rv-zones-stat"><span>Contested</span><b id="rv-zc-contested">0</b></div>
-            <div class="rv-zones-stat"><span>Neutral</span><b id="rv-zc-neutral">0</b></div>
-          </div>
-        </div>
-      </div>
-      <div class="rv-zones-block">
-        <div class="rv-zones-block-title">Map control</div>
-        <div class="rv-zones-bar" id="rv-zones-bar" aria-hidden="true">
-          <span class="t" id="rv-zones-bar-t"></span>
-          <span class="ct" id="rv-zones-bar-ct"></span>
-          <span class="neu" id="rv-zones-bar-neu"></span>
-        </div>
-        <div class="rv-zones-map-totals" id="rv-zones-map">
-          <span class="t">T <b id="rv-zm-t">0%</b></span>
-          <span class="ct">CT <b id="rv-zm-ct">0%</b></span>
-          <span class="neu">Neutral <b id="rv-zm-neu">0%</b></span>
-        </div>
       </div>
     </aside>
     <aside class="rv-coach-pick" id="rv-coach-pick" hidden>
@@ -708,62 +674,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     draw();
   }
 
-  const zonesPanel = el.querySelector('#rv-zones-panel');
-  const zcTActive = el.querySelector('#rv-zc-t-active');
-  const zcTControl = el.querySelector('#rv-zc-t-control');
-  const zcCtActive = el.querySelector('#rv-zc-ct-active');
-  const zcCtControl = el.querySelector('#rv-zc-ct-control');
-  const zcContested = el.querySelector('#rv-zc-contested');
-  const zcNeutral = el.querySelector('#rv-zc-neutral');
-  const zmT = el.querySelector('#rv-zm-t');
-  const zmCt = el.querySelector('#rv-zm-ct');
-  const zmNeu = el.querySelector('#rv-zm-neu');
-  const zbT = el.querySelector('#rv-zones-bar-t');
-  const zbCt = el.querySelector('#rv-zones-bar-ct');
-  const zbNeu = el.querySelector('#rv-zones-bar-neu');
-
   function syncZonesBtn() {
     zonesBtn?.classList.toggle('active', zonesOn);
-    if (zonesPanel) zonesPanel.hidden = !zonesOn;
-  }
-
-  function syncZonesPanel(tick, overlay = null) {
-    if (!zonesPanel) return;
-    if (!zonesOn) {
-      zonesPanel.hidden = true;
-      return;
-    }
-    zonesPanel.hidden = false;
-    overlay = overlay || zoneOverlayForTick(tick);
-    if (!overlay) {
-      if (zcTActive) zcTActive.textContent = '0';
-      if (zcTControl) zcTControl.textContent = '0';
-      if (zcCtActive) zcCtActive.textContent = '0';
-      if (zcCtControl) zcCtControl.textContent = '0';
-      if (zcContested) zcContested.textContent = '0';
-      if (zcNeutral) zcNeutral.textContent = '0';
-      if (zmT) zmT.textContent = '0%';
-      if (zmCt) zmCt.textContent = '0%';
-      if (zmNeu) zmNeu.textContent = '0%';
-      if (zbT) zbT.style.width = '0%';
-      if (zbCt) zbCt.style.width = '0%';
-      if (zbNeu) zbNeu.style.width = '100%';
-      return;
-    }
-    const { counts, pct } = summarizeZoneControl(overlay.network, overlay.paint);
-    if (zcTActive) zcTActive.textContent = String(counts.tActive);
-    if (zcTControl) zcTControl.textContent = String(counts.tControl);
-    if (zcCtActive) zcCtActive.textContent = String(counts.ctActive);
-    if (zcCtControl) zcCtControl.textContent = String(counts.ctControl);
-    if (zcContested) zcContested.textContent = String(counts.contested);
-    if (zcNeutral) zcNeutral.textContent = String(counts.neutral);
-    const fmt = (n) => `${Math.round(n)}%`;
-    if (zmT) zmT.textContent = fmt(pct.t);
-    if (zmCt) zmCt.textContent = fmt(pct.ct);
-    if (zmNeu) zmNeu.textContent = fmt(pct.neutral);
-    if (zbT) zbT.style.width = `${pct.t}%`;
-    if (zbCt) zbCt.style.width = `${pct.ct}%`;
-    if (zbNeu) zbNeu.style.width = `${pct.neutral}%`;
   }
 
   /** Load map positions (shared zone network) when the overlay is on. */
@@ -1851,9 +1763,12 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const scratch = [];
     let result;
     try {
+      // Pass zones when map-control and/or bomb-site execute notes can use them.
       const net =
-        isZoneNetworkReady(zoneNetwork) &&
-        mapControlAdvantageEnabled(roundMeta.map, zoneNetwork)
+        zoneNetwork &&
+        (hasBombSites(zoneNetwork) ||
+          (isZoneNetworkReady(zoneNetwork) &&
+            mapControlAdvantageEnabled(roundMeta.map, zoneNetwork)))
           ? zoneNetwork
           : null;
       result = analyseRound({
@@ -2439,7 +2354,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       resetZoneVisionCache(zoneVisionCache);
     }
     draw();
-    syncZonesPanel(sequence.locate(playback.position).tick);
   });
 
   coachBtn?.addEventListener('click', () => {
@@ -2778,11 +2692,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     syncScoreboard(tick);
     syncKillFeed(tick);
     if (chartOn) syncWinChart(tick);
-    if (zonesOn) {
-      syncZonesPanel(tick, zoneOverlay);
-    } else if (zonesPanel) {
-      zonesPanel.hidden = true;
-    }
     syncLoading();
   }
 

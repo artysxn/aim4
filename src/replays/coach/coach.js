@@ -25,6 +25,7 @@ import {
 import { buildZonePresence } from '../zones/zoneOverlay.js';
 import { findRoundDecided } from './roundDecided.js';
 import { ALONE_DISTANCE, findCore, nearestTeammate } from './cores.js';
+import { findSiteExecuteFlags } from './siteExecute.js';
 
 /** A kill this soon after a death answers it. */
 const TRADE_SECONDS = 3;
@@ -744,6 +745,19 @@ export function analyseRound({ meta, sampleAt, network = null, track = null }) {
         });
       }
     }
+  }
+
+  // Mid/late: T core held at a bombsite for 3s → coach CT stack vs defaults.
+  for (const f of findSiteExecuteFlags({
+    meta,
+    network,
+    series,
+    positionsOf,
+    inCoachWindow,
+    defusedTick,
+    gate
+  })) {
+    flags.push(f);
   }
 
   // Equal-buy rounds: mark the exact tick win% hit 88% and never came back.

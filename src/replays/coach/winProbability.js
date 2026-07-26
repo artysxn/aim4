@@ -38,10 +38,10 @@ const DEFAULT_BASE_CT = 52.5;
  * Percentage points of win chance per dollar of *average* equipment difference
  * (alive players only, each side capped at AVG_EQUIP_CAP).
  *
- * Scaled from the old team-total fit (~$528/pp) so a typical full-buy vs eco
- * average gap (~$3k) still reads strongly before the extreme bend.
+ * Tuned so a typical full-buy vs eco average gap (~$3k) reads strongly before
+ * the extreme bend saturates near 5/95.
  */
-export const PP_PER_DOLLAR = 0.0075;
+export const PP_PER_DOLLAR = 0.015;
 
 /** Cap on average equipment value per alive player (AWP ≈ rifle). */
 export const AVG_EQUIP_CAP = 5500;
@@ -73,9 +73,15 @@ const EVEN_T_BONUS = { 5: 0, 4: 2, 3: 5, 2: 7, 1: 11 };
 /**
  * An alive player counts as `hp/100` of a body, but never less than this.
  * Stops a 5×1HP side from collapsing to ~0.05 bodies against one full-HP
- * player (they still threaten as 2.5v1). At 30 HP the floor already binds.
+ * player. At 30 HP the floor already binds — then HP_INFLUENCE softens it.
  */
 export const HP_BODY_FLOOR = 0.5;
+
+/**
+ * How much HP deficit (below a full body) counts toward man-advantage.
+ * 1/3 ⇒ HP is factored 3× less than raw hp/100 weighting.
+ */
+export const HP_INFLUENCE = 1 / 3;
 
 /** Never show a decided round as decided until it actually is. */
 const FLOOR = 1;
@@ -242,12 +248,15 @@ export function plantSituationAt({ meta, states, tick, deadIds, teamSides, playe
 
 /**
  * Fraction of a body one living player is worth from remaining HP.
+ * Raw weight is max(HP_BODY_FLOOR, hp/100); only HP_INFLUENCE of the deficit
+ * from a full body is applied (HP factored 3× less).
  * @param {number} hp
- * @returns {number} in [HP_BODY_FLOOR, 1]
+ * @returns {number} in (HP_BODY_FLOOR, 1]
  */
 export function hpBodyWeight(hp) {
   const frac = Math.min(1, Math.max(0, (Number(hp) || 0) / 100));
-  return Math.max(HP_BODY_FLOOR, frac);
+  const raw = Math.max(HP_BODY_FLOOR, frac);
+  return 1 - (1 - raw) * HP_INFLUENCE;
 }
 
 /** Interpolate the man-advantage ladder for a fractional body gap. */
@@ -347,8 +356,8 @@ export function winProbability(state) {
   const econPct = economyWinPercent(dollars);
   const econEdge = edge(econPct);
 
-  // 3. Bodies — HP-weighted. 5v5 with one CT on 20 HP is ~4.2v5; five players
-  //    on 1 HP still count as 2.5 bodies thanks to HP_BODY_FLOOR.
+  // 3. Bodies — lightly HP-weighted (HP_INFLUENCE). 5v5 with one CT on 20 HP
+  //    is ~4.83v5; five players on 1 HP still count as ~4.17 bodies.
   const gap = Math.abs(ctEff - tEff);
   const manEdge =
     gap < 1e-6 ? 0 : edge(advantageWinrate(gap)) * Math.sign(ctEff - tEff);

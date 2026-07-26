@@ -154,6 +154,14 @@
     border-color: rgba(230, 160, 60, 0.65);
     background: rgba(200, 130, 40, 0.18);
   }
+  .ze-float button.active.bomb-a {
+    border-color: rgba(240, 190, 70, 0.7);
+    background: rgba(220, 170, 40, 0.18);
+  }
+  .ze-float button.active.bomb-b {
+    border-color: rgba(80, 160, 240, 0.7);
+    background: rgba(50, 130, 210, 0.18);
+  }
   #ze-brush-size {
     min-width: 28px;
     text-align: center;
@@ -544,6 +552,8 @@
       <div class="ze-stage">
         <div class="ze-float">
           <button type="button" class="ze-tool-wide active" id="ze-tool-positions" title="Draw position rectangles" data-tool="positions">Positions</button>
+          <button type="button" class="ze-tool-wide" id="ze-tool-bomb-a" title="Draw rough bomb site A rectangle" data-tool="bombA">Bomb A</button>
+          <button type="button" class="ze-tool-wide" id="ze-tool-bomb-b" title="Draw rough bomb site B rectangle" data-tool="bombB">Bomb B</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-vision" title="Paint vision blockers (rays stop)" data-tool="visionBlock">Vision block</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-elevated" title="Paint elevated (blocks ground sight; see past when standing on it)" data-tool="elevated">Elevated</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-erase" title="Erase vision block and elevated paint under the brush" data-tool="erase">Erase</button>
@@ -596,6 +606,26 @@
               <button type="button" class="ze-icon-btn" id="ze-area-add" title="Add selected zones to this area">+</button>
             </div>
             <div id="ze-areas-list" class="ze-panel-list"></div>
+          </div>
+        </details>
+        <details class="ze-panel" open>
+          <summary>Bomb sites</summary>
+          <div class="ze-panel-body">
+            <p class="ze-empty">
+              Rough A/B plant areas for coach and round win chance. One rectangle per site; redraw replaces it.
+            </p>
+            <div class="ze-row" style="grid-template-columns: 14px 1fr auto auto;">
+              <span class="ze-swatch" style="background:#e8c040"></span>
+              <span style="font-size:12px;color:var(--muted)">Site A</span>
+              <span id="ze-bomb-a-status" style="font-size:11px;color:var(--muted)">—</span>
+              <button type="button" class="ze-icon-btn" id="ze-clear-bomb-a" title="Clear bomb site A">✕</button>
+            </div>
+            <div class="ze-row" style="grid-template-columns: 14px 1fr auto auto;">
+              <span class="ze-swatch" style="background:#4aa3ff"></span>
+              <span style="font-size:12px;color:var(--muted)">Site B</span>
+              <span id="ze-bomb-b-status" style="font-size:11px;color:var(--muted)">—</span>
+              <button type="button" class="ze-icon-btn" id="ze-clear-bomb-b" title="Clear bomb site B">✕</button>
+            </div>
           </div>
         </details>
         <details class="ze-panel" open>

@@ -56,6 +56,7 @@ export function emptyNetwork(map) {
     areas: [],
     visionBlocks: [],
     elevated: [],
+    bombSites: { a: null, b: null },
     colorMode: 'zone',
     updatedAt: 0
   };

@@ -48,6 +48,7 @@ import {
   ensureVisionLayers,
   strokeBrush
 } from '../replays/zones/visionLayers.js';
+import { ensureBombSites } from '../replays/zones/bombSites.js';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 6;
@@ -55,6 +56,8 @@ const MIN_DRAW_PX = 8;
 const UNDO_MAX = 40;
 const VISION_COLOR = '#9b6cff';
 const ELEVATED_COLOR = '#e8a03c';
+const BOMB_A_COLOR = '#e8c040';
+const BOMB_B_COLOR = '#4aa3ff';
 
 const el = {
   mapTabs: document.querySelector('#ze-maps'),
@@ -72,6 +75,8 @@ const el = {
   brushSizeLabel: document.querySelector('#ze-brush-size'),
   brushRing: document.querySelector('#ze-brush-ring'),
   layerCounts: document.querySelector('#ze-layer-counts'),
+  bombAStatus: document.querySelector('#ze-bomb-a-status'),
+  bombBStatus: document.querySelector('#ze-bomb-b-status'),
   status: document.querySelector('#ze-status'),
   modal: document.querySelector('#ze-overlap'),
   modalBody: document.querySelector('#ze-overlap-body'),
@@ -81,18 +86,23 @@ const el = {
   btnZoomOut: document.querySelector('#ze-zoom-out'),
   btnReset: document.querySelector('#ze-reset'),
   toolPositions: document.querySelector('#ze-tool-positions'),
+  toolBombA: document.querySelector('#ze-tool-bomb-a'),
+  toolBombB: document.querySelector('#ze-tool-bomb-b'),
   toolVision: document.querySelector('#ze-tool-vision'),
   toolElevated: document.querySelector('#ze-tool-elevated'),
   toolErase: document.querySelector('#ze-tool-erase'),
   btnBrushDown: document.querySelector('#ze-brush-down'),
   btnBrushUp: document.querySelector('#ze-brush-up'),
   btnClearVision: document.querySelector('#ze-clear-vision'),
-  btnClearElevated: document.querySelector('#ze-clear-elevated')
+  btnClearElevated: document.querySelector('#ze-clear-elevated'),
+  btnClearBombA: document.querySelector('#ze-clear-bomb-a'),
+  btnClearBombB: document.querySelector('#ze-clear-bomb-b')
 };
 
 let mapCode = MAP_CODES.includes('INF') ? 'INF' : MAP_CODES[0];
 let network = emptyNetwork(mapCode);
 ensureVisionLayers(network);
+ensureBombSites(network);
 let savedSnapshot = '[]';
 /** @type {Array<object>} */
 let undoStack = [];
@@ -105,7 +115,7 @@ let dirty = false;
 let drawing = null;
 let panning = false;
 let lastPan = null;
-/** @type {'positions'|'visionBlock'|'elevated'|'erase'} */
+/** @type {'positions'|'bombA'|'bombB'|'visionBlock'|'elevated'|'erase'} */
 let paintTool = 'positions';
 /** Layer erase targets when erase tool is active. */
 let eraseTarget = 'visionBlock';
@@ -143,17 +153,20 @@ function ensureAreas() {
 }
 
 function snapshotOf(net) {
+  ensureBombSites(net);
   return JSON.stringify({
     zones: net.zones || [],
     sections: net.sections || [],
     areas: net.areas || [],
     visionBlocks: net.visionBlocks || [],
     elevated: net.elevated || [],
+    bombSites: net.bombSites || { a: null, b: null },
     colorMode: normalizeColorMode(net.colorMode)
   });
 }
 
 function cloneNetworkState() {
+  ensureBombSites(network);
   return JSON.parse(
     JSON.stringify({
       zones: network.zones || [],
@@ -161,9 +174,25 @@ function cloneNetworkState() {
       areas: network.areas || [],
       visionBlocks: network.visionBlocks || [],
       elevated: network.elevated || [],
+      bombSites: network.bombSites || { a: null, b: null },
       colorMode: normalizeColorMode(network.colorMode)
     })
   );
+}
+
+function isBrushTool(tool = paintTool) {
+  return tool === 'visionBlock' || tool === 'elevated' || tool === 'erase';
+}
+
+function isRectTool(tool = paintTool) {
+  return tool === 'positions' || tool === 'bombA' || tool === 'bombB';
+}
+
+/** @returns {'a' | 'b' | null} */
+function bombSiteForTool(tool = paintTool) {
+  if (tool === 'bombA') return 'a';
+  if (tool === 'bombB') return 'b';
+  return null;
 }
 
 function colorMode() {
@@ -262,6 +291,8 @@ function undoLast() {
   network.areas = prev.areas || [];
   network.visionBlocks = prev.visionBlocks || [];
   network.elevated = prev.elevated || [];
+  network.bombSites = prev.bombSites || { a: null, b: null };
+  ensureBombSites(network);
   network.colorMode = normalizeColorMode(prev.colorMode);
   bumpLayerPaintGen(network);
   pruneSelection();
@@ -478,18 +509,45 @@ function draw() {
   drawLayer(network.visionBlocks, VISION_COLOR, 0.45);
   drawLayer(network.elevated, ELEVATED_COLOR, 0.4);
 
-  if (drawing && paintTool === 'positions') {
+  ensureBombSites(network);
+  const drawBombSite = (rect, color, label) => {
+    if (!rect) return;
+    const a = worldToRadar(mapCode, rect.x, rect.y, {});
+    const b = worldToRadar(mapCode, rect.x + rect.w, rect.y + rect.h, {});
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    const w = Math.abs(b.x - a.x);
+    const h = Math.abs(b.y - a.y);
+    ctx.fillStyle = hexAlpha(color, 0.22);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2 / t.scale;
+    ctx.setLineDash([6 / t.scale, 4 / t.scale]);
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
+    ctx.fillStyle = color;
+    ctx.font = `bold ${Math.max(11, 13 / t.scale)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, x + w / 2, y + h / 2);
+  };
+  drawBombSite(network.bombSites.a, BOMB_A_COLOR, 'A');
+  drawBombSite(network.bombSites.b, BOMB_B_COLOR, 'B');
+
+  if (drawing && isRectTool()) {
     const x0 = Math.min(drawing.r0.x, drawing.r1.x);
     const y0 = Math.min(drawing.r0.y, drawing.r1.y);
     const rw = Math.abs(drawing.r1.x - drawing.r0.x);
     const rh = Math.abs(drawing.r1.y - drawing.r0.y);
-    const previewName = el.nameInput?.value.trim() || 'Position';
-    const color = colorForName(previewName);
+    const site = bombSiteForTool();
+    const color = site === 'a' ? BOMB_A_COLOR : site === 'b' ? BOMB_B_COLOR : colorForName(el.nameInput?.value.trim() || 'Position');
     ctx.fillStyle = hexAlpha(color, 0.25);
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.5 / t.scale;
+    if (site) ctx.setLineDash([6 / t.scale, 4 / t.scale]);
     ctx.fillRect(x0, y0, rw, rh);
     ctx.strokeRect(x0, y0, rw, rh);
+    ctx.setLineDash([]);
   }
 
   ctx.restore();
@@ -751,17 +809,28 @@ function syncLayerCounts() {
   el.layerCounts.textContent = `${vb} vision block stamp${vb === 1 ? '' : 's'} · ${elv} elevated stamp${elv === 1 ? '' : 's'}`;
 }
 
+function syncBombSitesUi() {
+  ensureBombSites(network);
+  if (el.bombAStatus) el.bombAStatus.textContent = network.bombSites.a ? 'Set' : '—';
+  if (el.bombBStatus) el.bombBStatus.textContent = network.bombSites.b ? 'Set' : '—';
+}
+
 function renderAll() {
   renderList();
   renderSections();
   renderAreas();
   syncLayerCounts();
+  syncBombSitesUi();
   syncPaintToolUi();
 }
 
 function syncPaintToolUi() {
-  const isBrush = paintTool !== 'positions';
+  const isBrush = isBrushTool();
   el.toolPositions?.classList.toggle('active', paintTool === 'positions');
+  el.toolBombA?.classList.toggle('active', paintTool === 'bombA');
+  el.toolBombA?.classList.toggle('bomb-a', paintTool === 'bombA');
+  el.toolBombB?.classList.toggle('active', paintTool === 'bombB');
+  el.toolBombB?.classList.toggle('bomb-b', paintTool === 'bombB');
   el.toolVision?.classList.toggle('active', paintTool === 'visionBlock');
   el.toolVision?.classList.toggle('vision', paintTool === 'visionBlock');
   el.toolElevated?.classList.toggle('active', paintTool === 'elevated');
@@ -788,7 +857,7 @@ function hideBrushRing() {
 }
 
 function updateBrushRing(clientX, clientY) {
-  if (!el.brushRing || paintTool === 'positions') {
+  if (!el.brushRing || !isBrushTool()) {
     hideBrushRing();
     return;
   }
@@ -836,12 +905,14 @@ async function loadMap(code) {
     // Fill missing arrays/colors in memory only — never wipe loaded polygons.
     if (!Array.isArray(network.zones)) network.zones = [];
     ensureVisionLayers(network);
+    ensureBombSites(network);
     ensureSections();
     ensureAreas();
     network.colorMode = normalizeColorMode(network.colorMode);
   } catch (err) {
     network = emptyNetwork(mapCode);
     ensureVisionLayers(network);
+    ensureBombSites(network);
     setStatus(err.message || 'Could not load positions', 'err');
   }
   savedSnapshot = snapshotOf(network);
@@ -876,6 +947,37 @@ function commitRect(worldRect, name) {
   markDirty(true);
   renderAll();
   draw();
+}
+
+/** @param {'a' | 'b'} site */
+function commitBombSite(site, worldRect) {
+  if (worldRect.w < 8 || worldRect.h < 8) return;
+  pushUndo();
+  ensureBombSites(network);
+  network.bombSites[site] = {
+    type: 'rect',
+    x: worldRect.x,
+    y: worldRect.y,
+    w: worldRect.w,
+    h: worldRect.h
+  };
+  markDirty(true);
+  syncBombSitesUi();
+  draw();
+  setStatus(`Bomb site ${site.toUpperCase()} set`);
+}
+
+/** @param {'a' | 'b'} site */
+function clearBombSite(site) {
+  ensureBombSites(network);
+  if (!network.bombSites[site]) return;
+  if (!confirm(`Clear bomb site ${site.toUpperCase()}?`)) return;
+  pushUndo();
+  network.bombSites[site] = null;
+  markDirty(true);
+  syncBombSitesUi();
+  draw();
+  setStatus(`Cleared bomb site ${site.toUpperCase()}`);
 }
 
 function commitRectAvoiding(worldRect, name, hits) {
@@ -967,8 +1069,10 @@ function tryFinishDraw() {
   drawing = null;
   const dx = Math.abs(r1.x - r0.x);
   const dy = Math.abs(r1.y - r0.y);
+  const site = bombSiteForTool();
   if (dx < MIN_DRAW_PX && dy < MIN_DRAW_PX) {
-    selectAtRadarPoint(r0, { shiftKey });
+    if (!site) selectAtRadarPoint(r0, { shiftKey });
+    else draw();
     return;
   }
   if (dx < MIN_DRAW_PX || dy < MIN_DRAW_PX) {
@@ -983,6 +1087,10 @@ function tryFinishDraw() {
     r1.x,
     r1.y
   );
+  if (site) {
+    commitBombSite(site, worldRect);
+    return;
+  }
   const name = el.nameInput?.value.trim() || 'Position';
   const hits = overlappingZones(network, worldRect, { ignoreSameName: name });
   if (!hits.length) {
@@ -1738,7 +1846,7 @@ el.canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
   const r = radarFromClient(e.clientX, e.clientY);
 
-  if (paintTool !== 'positions') {
+  if (isBrushTool()) {
     const layer = activeBrushLayer() || 'visionBlock';
     pushUndo();
     const erase = paintTool === 'erase';
@@ -1754,7 +1862,7 @@ el.canvas.addEventListener('pointerdown', (e) => {
 });
 
 el.canvas.addEventListener('pointermove', (e) => {
-  if (paintTool !== 'positions') updateBrushRing(e.clientX, e.clientY);
+  if (isBrushTool()) updateBrushRing(e.clientX, e.clientY);
   if (panning && lastPan) {
     panX += e.clientX - lastPan.x;
     panY += e.clientY - lastPan.y;
@@ -1800,9 +1908,14 @@ el.canvas.addEventListener('pointerleave', () => {
 el.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 el.toolPositions?.addEventListener('click', () => setPaintTool('positions'));
+el.toolBombA?.addEventListener('click', () => setPaintTool('bombA'));
+el.toolBombB?.addEventListener('click', () => setPaintTool('bombB'));
 el.toolVision?.addEventListener('click', () => setPaintTool('visionBlock'));
 el.toolElevated?.addEventListener('click', () => setPaintTool('elevated'));
 el.toolErase?.addEventListener('click', () => setPaintTool('erase'));
+
+el.btnClearBombA?.addEventListener('click', () => clearBombSite('a'));
+el.btnClearBombB?.addEventListener('click', () => clearBombSite('b'));
 
 el.btnBrushDown?.addEventListener('click', () => {
   brushPx = Math.max(MIN_BRUSH_PX, brushPx - 1);
@@ -1878,12 +1991,14 @@ el.btnDiscard?.addEventListener('click', async () => {
   try {
     network = await fetchZones(mapCode);
     ensureVisionLayers(network);
+    ensureBombSites(network);
     ensureSections();
     ensureAreas();
     network.colorMode = normalizeColorMode(network.colorMode);
   } catch {
     network = emptyNetwork(mapCode);
     ensureVisionLayers(network);
+    ensureBombSites(network);
   }
   savedSnapshot = snapshotOf(network);
   clearUndo();
@@ -1902,8 +2017,10 @@ el.btnSave?.addEventListener('click', async () => {
   setStatus('Saving…');
   try {
     ensureVisionLayers(network);
+    ensureBombSites(network);
     network = await saveZones(mapCode, network);
     ensureVisionLayers(network);
+    ensureBombSites(network);
     ensureSections();
     ensureAreas();
     network.colorMode = normalizeColorMode(network.colorMode);
