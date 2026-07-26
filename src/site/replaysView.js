@@ -29,6 +29,8 @@ import {
   winningSide
 } from '../replays/shared/roundId.js';
 import { collectRounds, matchesQuery, splitStoredName } from '../replays/shared/roundFilter.js';
+import { openingSituation, SITUATION_OPTIONS } from '../replays/shared/openingSituation.js';
+import { findRoundDecided } from '../replays/coach/roundDecided.js';
 import { PACKAGE_EXT } from '../replays/shared/replayPackage.js';
 import { formatBytes } from '../replays/tickStore.js';
 import { createStatsPanel } from '../replays/stats/statsPanel.js';
@@ -105,9 +107,18 @@ export function initReplaysView({ escapeHtml }) {
     econB: null,
     hasAwpA: false,
     hasAwpB: false,
-    /** Pistol/half/full vs same buy (zone-network equal-economy filter). */
-    equalBuy: false
+    /** Advanced (meta) filters */
+    /** @type {''|'T'|'CT'} */
+    side: '',
+    /** @type {Set<string>} */
+    situations: new Set(),
+    afterplant: false,
+    /** @type {Set<string>} early|mid|late */
+    decidedPhases: new Set()
   };
+  let advancedOpen = false;
+  /** @type {Map<string, object|null>} */
+  const roundMetaCache = new Map();
 
   function setStatus(msg, isError = false) {
     if (!statusEl) return;
@@ -736,10 +747,6 @@ export function initReplaysView({ escapeHtml }) {
             ${hasAwpCheckHtml('rp-awp-b', filters.hasAwpB)}
           </div>
         </div>
-        <label class="rp-awp-toggle${filters.equalBuy ? ' active' : ''}" title="Pistol vs pistol, half vs half, or full vs full (AWP ignored)">
-          <input type="checkbox" id="rp-equal-buy" ${filters.equalBuy ? 'checked' : ''} aria-label="Equal buy" />
-          <span>Equal buy</span>
-        </label>
       </div>
       ${
         teamClusters.length
@@ -763,9 +770,73 @@ export function initReplaysView({ escapeHtml }) {
             </div>`
           : ''
       }
-      ${
-        playerEntries.length
-          ? `<div class="rp-filter-group${playerMenuOpen ? ' menu-open' : ''}">
+      <div class="rp-filter-group rp-advanced-wrap">
+        <button type="button" class="btn btn-sm rp-advanced-toggle${
+          advancedOpen ? ' open' : ''
+        }${advancedFilterCount() ? ' has-active' : ''}" id="rp-advanced-toggle" aria-expanded="${
+          advancedOpen ? 'true' : 'false'
+        }">
+          Advanced Filters${
+            advancedFilterCount() ? ` · ${advancedFilterCount()}` : ''
+          }
+        </button>
+        <div class="rp-advanced-body" id="rp-advanced-body" ${advancedOpen ? '' : 'hidden'}>
+          <div class="rp-filter-group">
+            <h4>Side${
+              filters.teams.size !== 1
+                ? ' <span class="rp-filter-hint">(pick one team)</span>'
+                : ''
+            }</h4>
+            <div class="rp-chips">
+              <button type="button" class="rp-chip${
+                filters.side === 'T' ? ' active' : ''
+              }" data-adv-side="T" ${filters.teams.size !== 1 ? 'disabled' : ''}>T</button>
+              <button type="button" class="rp-chip${
+                filters.side === 'CT' ? ' active' : ''
+              }" data-adv-side="CT" ${filters.teams.size !== 1 ? 'disabled' : ''}>CT</button>
+            </div>
+          </div>
+          <div class="rp-filter-group">
+            <h4>Situation${
+              filters.teams.size !== 1
+                ? ' <span class="rp-filter-hint">(pick one team)</span>'
+                : ''
+            }</h4>
+            <div class="rp-chips rp-chips-wrap">
+              ${SITUATION_OPTIONS.map(
+                (s) =>
+                  `<button type="button" class="rp-chip${
+                    filters.situations.has(s.key) ? ' active' : ''
+                  }" data-adv-sit="${s.key}" ${
+                    filters.teams.size !== 1 ? 'disabled' : ''
+                  }>${escapeHtml(s.label)}</button>`
+              ).join('')}
+            </div>
+          </div>
+          <div class="rp-filter-group">
+            <h4>Bomb</h4>
+            <div class="rp-chips">
+              <button type="button" class="rp-chip${
+                filters.afterplant ? ' active' : ''
+              }" data-adv-afterplant="1">Afterplant</button>
+            </div>
+          </div>
+          <div class="rp-filter-group">
+            <h4>Round decided <span class="rp-filter-hint">(equal buy)</span></h4>
+            <div class="rp-chips">
+              ${['early', 'mid', 'late']
+                .map(
+                  (p) =>
+                    `<button type="button" class="rp-chip${
+                      filters.decidedPhases.has(p) ? ' active' : ''
+                    }" data-adv-decided="${p}">${p[0].toUpperCase()}${p.slice(1)}</button>`
+                )
+                .join('')}
+            </div>
+          </div>
+          ${
+            playerEntries.length
+              ? `<div class="rp-filter-group${playerMenuOpen ? ' menu-open' : ''}">
               <h4>Players on the server</h4>
               <div class="rp-typeahead" id="rp-player-typeahead">
                 <input type="search" class="site-input rp-filter-search" id="rp-player-search"
@@ -775,8 +846,10 @@ export function initReplaysView({ escapeHtml }) {
               </div>
               ${selectedChipsHtml('players', selectedPlayers)}
             </div>`
-          : ''
-      }
+              : ''
+          }
+        </div>
+      </div>
       <button type="button" class="btn btn-sm" id="rp-clear">Clear filters</button>`;
 
     const bindEcon = (id, key) => {
@@ -799,12 +872,6 @@ export function initReplaysView({ escapeHtml }) {
     bindAwp('rp-awp-a', 'hasAwpA');
     bindAwp('rp-awp-b', 'hasAwpB');
 
-    filtersEl.querySelector('#rp-equal-buy')?.addEventListener('change', (e) => {
-      filters.equalBuy = Boolean(e.target.checked);
-      e.target.closest('.rp-awp-toggle')?.classList.toggle('active', e.target.checked);
-      runQuery();
-    });
-
     filtersEl.querySelector('#rp-won-by')?.addEventListener('change', (e) => {
       const v = e.target.value;
       filters.wonByMode = v === 'selected' || v === 'opponent' ? v : '';
@@ -823,6 +890,11 @@ export function initReplaysView({ escapeHtml }) {
       multi?.closest('.rp-filter-group')?.classList.toggle('menu-open', mapMenuOpen);
     });
 
+    filtersEl.querySelector('#rp-advanced-toggle')?.addEventListener('click', () => {
+      advancedOpen = !advancedOpen;
+      renderFilters();
+    });
+
     filtersEl.querySelector('#rp-clear')?.addEventListener('click', () => {
       filters.maps.clear();
       filters.teams.clear();
@@ -832,10 +904,14 @@ export function initReplaysView({ escapeHtml }) {
       filters.econB = null;
       filters.hasAwpA = false;
       filters.hasAwpB = false;
-      filters.equalBuy = false;
+      filters.side = '';
+      filters.situations.clear();
+      filters.afterplant = false;
+      filters.decidedPhases.clear();
       teamSearch = '';
       playerSearch = '';
       mapMenuOpen = false;
+      advancedOpen = false;
       renderFilters();
       runQuery();
     });
@@ -890,6 +966,40 @@ export function initReplaysView({ escapeHtml }) {
   });
 
   filtersEl?.addEventListener('click', (e) => {
+    const sideBtn = e.target.closest('[data-adv-side]');
+    if (sideBtn && !sideBtn.disabled) {
+      const side = sideBtn.dataset.advSide === 'CT' ? 'CT' : 'T';
+      filters.side = filters.side === side ? '' : side;
+      renderFilters();
+      runQuery();
+      return;
+    }
+    const sitBtn = e.target.closest('[data-adv-sit]');
+    if (sitBtn && !sitBtn.disabled) {
+      const key = sitBtn.dataset.advSit;
+      if (filters.situations.has(key)) filters.situations.delete(key);
+      else filters.situations.add(key);
+      renderFilters();
+      runQuery();
+      return;
+    }
+    const plantBtn = e.target.closest('[data-adv-afterplant]');
+    if (plantBtn) {
+      filters.afterplant = !filters.afterplant;
+      renderFilters();
+      runQuery();
+      return;
+    }
+    const decidedBtn = e.target.closest('[data-adv-decided]');
+    if (decidedBtn) {
+      const phase = decidedBtn.dataset.advDecided;
+      if (filters.decidedPhases.has(phase)) filters.decidedPhases.delete(phase);
+      else filters.decidedPhases.add(phase);
+      renderFilters();
+      runQuery();
+      return;
+    }
+
     const chipEl = e.target.closest('[data-group]');
     if (!chipEl) return;
     const { group, value } = chipEl.dataset;
@@ -899,7 +1009,15 @@ export function initReplaysView({ escapeHtml }) {
       else set.add(value);
       if (group === 'teams') {
         teamSearch = '';
-        if (!filters.teams.size) filters.wonByMode = '';
+        if (!filters.teams.size) {
+          filters.wonByMode = '';
+          filters.side = '';
+          filters.situations.clear();
+        }
+        if (filters.teams.size !== 1) {
+          filters.side = '';
+          filters.situations.clear();
+        }
       }
       if (group === 'players') playerSearch = '';
       renderFilters();
@@ -942,9 +1060,27 @@ export function initReplaysView({ escapeHtml }) {
       econA: Number.isFinite(filters.econA) ? filters.econA : undefined,
       econB: Number.isFinite(filters.econB) ? filters.econB : undefined,
       hasAwpA: filters.hasAwpA || undefined,
-      hasAwpB: filters.hasAwpB || undefined,
-      equalBuy: filters.equalBuy || undefined
+      hasAwpB: filters.hasAwpB || undefined
     };
+  }
+
+  function advancedFilterCount() {
+    return (
+      (filters.side ? 1 : 0) +
+      filters.situations.size +
+      (filters.afterplant ? 1 : 0) +
+      filters.decidedPhases.size +
+      filters.players.size
+    );
+  }
+
+  function needsMetaFilters() {
+    return Boolean(
+      filters.side ||
+        filters.situations.size ||
+        filters.afterplant ||
+        filters.decidedPhases.size
+    );
   }
 
   function hasActiveFilters() {
@@ -957,8 +1093,117 @@ export function initReplaysView({ escapeHtml }) {
         Number.isFinite(filters.econB) ||
         filters.hasAwpA ||
         filters.hasAwpB ||
-        filters.equalBuy
+        filters.side ||
+        filters.situations.size ||
+        filters.afterplant ||
+        filters.decidedPhases.size
     );
+  }
+
+  function shortTeamId(value) {
+    if (!value) return '';
+    if (typeof value === 'string') return value.toLowerCase();
+    return String(value.id || value.shortId || '').toLowerCase();
+  }
+
+  /** Selected cluster short-ids when exactly one team is picked (for side/situation). */
+  function focusTeamIds() {
+    if (filters.teams.size !== 1) return new Set();
+    const key = [...filters.teams][0];
+    const cluster = teamClustersByKey.get(key);
+    if (cluster) return new Set([...cluster.shortIds].map((id) => String(id).toLowerCase()));
+    return new Set([String(key).toLowerCase()]);
+  }
+
+  function focusTeamIndex(meta, listRound, focusIds) {
+    if (!focusIds.size || !meta) return 0;
+    const t1 = String(listRound?.team1 || shortTeamId(meta.team1) || '').toLowerCase();
+    const t2 = String(listRound?.team2 || shortTeamId(meta.team2) || '').toLowerCase();
+    if (focusIds.has(t1)) return 1;
+    if (focusIds.has(t2)) return 2;
+    return 0;
+  }
+
+  function sideForIndex(meta, idx) {
+    if (idx === 1 && (meta.team1Side === 'T' || meta.team1Side === 'CT')) return meta.team1Side;
+    if (idx === 2 && (meta.team2Side === 'T' || meta.team2Side === 'CT')) return meta.team2Side;
+    if (idx === 1 && (meta.team2Side === 'T' || meta.team2Side === 'CT')) {
+      return meta.team2Side === 'T' ? 'CT' : 'T';
+    }
+    if (idx === 2 && (meta.team1Side === 'T' || meta.team1Side === 'CT')) {
+      return meta.team1Side === 'T' ? 'CT' : 'T';
+    }
+    const round = Number(meta.round) || Number(meta.roundNum) || 1;
+    const team1IsT = round <= 12;
+    if (idx === 1) return team1IsT ? 'T' : 'CT';
+    if (idx === 2) return team1IsT ? 'CT' : 'T';
+    return '';
+  }
+
+  function isAfterplantMeta(meta) {
+    if (!meta) return false;
+    if (meta.plantTick != null && Number.isFinite(meta.plantTick)) return true;
+    return (meta.events?.bomb || []).some((b) => b.type === 'planted');
+  }
+
+  function matchesAdvancedMeta(meta, listRound) {
+    if (!needsMetaFilters()) return true;
+    if (!meta) return false;
+
+    const focusIds = focusTeamIds();
+    const idx = focusTeamIndex(meta, listRound, focusIds);
+
+    if (filters.side) {
+      if (!idx) return false;
+      if (sideForIndex(meta, idx) !== filters.side) return false;
+    }
+    if (filters.situations.size) {
+      if (!idx) return false;
+      const sit = openingSituation(meta, idx);
+      if (!sit || !filters.situations.has(sit)) return false;
+    }
+    if (filters.afterplant && !isAfterplantMeta(meta)) return false;
+    if (filters.decidedPhases.size) {
+      const d = findRoundDecided(meta);
+      if (!d || !filters.decidedPhases.has(d.phase)) return false;
+    }
+    return true;
+  }
+
+  async function getCachedRoundMeta(file) {
+    if (!file) return null;
+    if (roundMetaCache.has(file)) return roundMetaCache.get(file);
+    try {
+      const meta = await fetchRoundMeta(file);
+      roundMetaCache.set(file, meta || null);
+      return meta || null;
+    } catch {
+      roundMetaCache.set(file, null);
+      return null;
+    }
+  }
+
+  /** Load metas with limited concurrency, then keep rounds that pass advanced filters. */
+  async function applyAdvancedMetaFilters(list, token) {
+    if (!needsMetaFilters()) return list;
+    const out = [];
+    const concurrency = 6;
+    let i = 0;
+    async function worker() {
+      while (i < list.length) {
+        if (token !== queryToken) return;
+        const idx = i++;
+        const r = list[idx];
+        const meta = await getCachedRoundMeta(r.file);
+        if (token !== queryToken) return;
+        if (matchesAdvancedMeta(meta, r)) out.push(r);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, () => worker()));
+    if (token !== queryToken) return list;
+    // Preserve original order
+    const keep = new Set(out.map((r) => r.file));
+    return list.filter((r) => keep.has(r.file));
   }
 
   /**
@@ -998,6 +1243,8 @@ export function initReplaysView({ escapeHtml }) {
     // Filter against the demo index immediately so an empty filter always
     // shows every round, even if the rounds API is slow or empty.
     rounds = filterLibraryRounds(query);
+    if (needsMetaFilters()) setStatus('Applying advanced filters…');
+    else setStatus('');
     renderResults();
 
     try {
@@ -1017,6 +1264,13 @@ export function initReplaysView({ escapeHtml }) {
         const names = demos.flatMap((d) => (d.rounds || []).map((r) => r.file).filter(Boolean));
         rounds = collectRounds(names, query);
       }
+
+      if (needsMetaFilters()) {
+        rounds = await applyAdvancedMetaFilters(rounds, token);
+        if (token !== queryToken) return;
+        setStatus('');
+      }
+
       notedFiles = new Set(res?.noted || []);
       bookmarkedFiles = new Set();
       for (const pl of playlists || []) {

@@ -24,6 +24,7 @@ import { iconImgHtml, inventoryAt } from './equipmentIcons.js';
 import { DRAW_COLORS, DrawingLayer } from './drawing.js';
 import { analyseRound, flagToNote } from '../coach/coach.js';
 import { explainProbability, winProbabilityAtTick } from '../coach/winProbability.js';
+import { phaseBounds } from '../coach/roundPhases.js';
 import helmetSvg from '../../icons/helmet.svg?url';
 import kevlarSvg from '../../icons/kevlar.svg?url';
 import nokevlarSvg from '../../icons/nokevlar.svg?url';
@@ -1708,6 +1709,48 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const xAt = (i) => (i / span) * w;
     const yAt = (i) => h - ctShare(series[i]) * h;
 
+    // Early / mid / late bands (freeze-end → end), behind the win% fill.
+    const meta = activeMeta;
+    if (meta && series.length > 1) {
+      const bounds = phaseBounds(meta);
+      const t0 = series[0].tick;
+      const t1 = series[series.length - 1].tick;
+      const xOfTick = (t) => {
+        const f = t1 > t0 ? (t - t0) / (t1 - t0) : 0;
+        return Math.max(0, Math.min(1, f)) * w;
+      };
+      const midX = xOfTick(bounds.midStartTick);
+      const lateX = xOfTick(bounds.lateStartTick);
+      const bands = [
+        { x0: 0, x1: midX, fill: 'rgba(90, 200, 140, 0.08)', label: 'Early' },
+        { x0: midX, x1: lateX, fill: 'rgba(232, 184, 74, 0.08)', label: 'Mid' },
+        { x0: lateX, x1: w, fill: 'rgba(245, 37, 37, 0.08)', label: 'Late' }
+      ];
+      ctx.save();
+      for (const b of bands) {
+        if (b.x1 <= b.x0) continue;
+        ctx.fillStyle = b.fill;
+        ctx.fillRect(b.x0, 0, b.x1 - b.x0, h);
+      }
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+      ctx.lineWidth = 1 * dpr;
+      for (const x of [midX, lateX]) {
+        if (x <= 0 || x >= w) continue;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(180, 186, 196, 0.7)';
+      ctx.font = `${10 * dpr}px system-ui, sans-serif`;
+      ctx.textBaseline = 'top';
+      for (const b of bands) {
+        if (b.x1 - b.x0 < 28 * dpr) continue;
+        ctx.fillText(b.label, b.x0 + 4 * dpr, 3 * dpr);
+      }
+      ctx.restore();
+    }
+
     const fillTo = (baseline, above) => {
       ctx.beginPath();
       ctx.moveTo(0, baseline);
@@ -1969,8 +2012,11 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       const existing =
         index === activeIndex && roundNotes.length ? roundNotes : notesFromMeta(meta);
       const have = new Set(existing.filter((n) => n.kind === 'coach').map((n) => n.id));
+      // Round-decided notes are for the whole round (either coaching seat).
       const fresh = result.flags
-        .filter((f) => teamOf.get(f.playerId) === coachTeam)
+        .filter(
+          (f) => f.rule === 'round-decided' || teamOf.get(f.playerId) === coachTeam
+        )
         .map(flagToNote)
         .filter((n) => !have.has(n.id));
 

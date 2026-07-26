@@ -688,6 +688,51 @@
   color: var(--text);
 }
 
+.rp-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.rp-filter-group h4 .rp-filter-hint {
+  margin: 0;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.rp-advanced-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rp-advanced-toggle {
+  width: 100%;
+  justify-content: center;
+}
+
+.rp-advanced-toggle.open,
+.rp-advanced-toggle.has-active {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--text);
+}
+
+.rp-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.rp-advanced-body[hidden] {
+  display: none;
+}
+
+.rp-chips-wrap {
+  gap: 6px;
+}
+
 .rp-range {
   display: flex;
   align-items: center;

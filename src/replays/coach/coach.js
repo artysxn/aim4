@@ -17,6 +17,7 @@ import {
   liveEquipment,
   winProbability
 } from './winProbability.js';
+import { findRoundDecided } from './roundDecided.js';
 import { ALONE_DISTANCE, findCore, nearestTeammate } from './cores.js';
 
 /** A kill this soon after a death answers it. */
@@ -706,10 +707,30 @@ export function analyseRound({ meta, sampleAt }) {
     }
   }
 
+  // Equal-buy rounds: mark the exact tick win% hit 88% and never came back.
+  const decidedMoment = findRoundDecided(meta);
+  if (decidedMoment) {
+    const onSide = players.find((p) => sideOf(p.id) === decidedMoment.side);
+    if (onSide) {
+      const phaseLabel =
+        decidedMoment.phase === 'early'
+          ? 'early round'
+          : decidedMoment.phase === 'late'
+            ? 'late round'
+            : 'mid round';
+      flags.push({
+        tick: decidedMoment.tick,
+        playerId: onSide.id,
+        rule: 'round-decided',
+        text: `Round decided in the ${phaseLabel}: ${decidedMoment.side} crossed 88% win chance and never dropped below it (equal buy).`
+      });
+    }
+  }
+
   flags.sort((a, b) => a.tick - b.tick);
   // The states are only needed while the rules run; the graph wants numbers.
   for (const s of series) delete s.states;
-  return { series, flags, gate };
+  return { series, flags, gate, decided: decidedMoment || null };
 }
 
 /** Turn a flag into the note shape the round file stores. */

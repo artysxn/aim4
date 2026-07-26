@@ -9,6 +9,7 @@
 import { fetchRoundMeta, fetchZones } from '../api.js';
 import { findRoundDecided } from '../coach/roundDecided.js';
 import { ECONOMIES, buyBucket, econHasAwp, economyLabel, isEqualBuyRound } from '../shared/roundId.js';
+import { openingSituation } from '../shared/openingSituation.js';
 import { isZoneNetworkReady } from '../zones/zoneModel.js';
 import { iconImgHtml, isGrenade } from './equipmentIcons.js';
 import { RADAR_SIZE, worldToRadar } from './mapCalibration.js';
@@ -304,61 +305,14 @@ export function createAnalyzerViewer({
   }
 
   /**
-   * Opening man-advantage for the focus team over the next 3 seconds:
-   * - `5v4` — opening kill, advantage held for 3s
-   * - `4v5` — opening death, disadvantage held for 3s
-   * - `4v4` — opening created 5v4/4v5 but equalized (or flipped) within 3s
-   * - `''` — no cross-team opening duel
+   * Opening man-advantage for the focus team over the next 3 seconds
+   * (see `openingSituation`). Empty when the focus team is unknown.
    */
   function situationOfFocus(L) {
     if (!L.meta) return '';
     const idx = teamIndex(L.meta, L.round);
     if (!idx) return '';
-    const players = L.meta.players || [];
-    const teamOf = new Map(players.map((p) => [p.id, p.team]));
-    const kills = [...(L.meta.events?.kills || [])].sort(
-      (a, b) => (a.tick || 0) - (b.tick || 0)
-    );
-    let opening = null;
-    for (const k of kills) {
-      const at = teamOf.get(k.attacker);
-      const vt = teamOf.get(k.victim);
-      if (!at || !vt || at === vt) continue;
-      opening = k;
-      break;
-    }
-    if (!opening) return '';
-
-    const focusGotKill = teamOf.get(opening.attacker) === idx;
-    const focusGotDeath = teamOf.get(opening.victim) === idx;
-    if (!focusGotKill && !focusGotDeath) return '';
-
-    let focusAlive = players.filter((p) => p.team === idx).length || 5;
-    let oppAlive = players.filter((p) => p.team && p.team !== idx).length || 5;
-    if (focusGotKill) oppAlive = Math.max(0, oppAlive - 1);
-    else focusAlive = Math.max(0, focusAlive - 1);
-
-    const tickRate = L.timing?.tickRate || L.meta.tickRate || 64;
-    const windowEnd = opening.tick + 3 * tickRate;
-
-    const equalized = () => {
-      if (focusGotKill) return focusAlive <= oppAlive;
-      return focusAlive >= oppAlive;
-    };
-
-    for (const k of kills) {
-      if (k.tick <= opening.tick) continue;
-      if (k.tick > windowEnd) break;
-      const vt = teamOf.get(k.victim);
-      if (!vt) continue;
-      if (vt === idx) focusAlive = Math.max(0, focusAlive - 1);
-      else oppAlive = Math.max(0, oppAlive - 1);
-      if (equalized()) return '4v4';
-    }
-
-    if (focusGotKill && focusAlive > oppAlive) return '5v4';
-    if (focusGotDeath && focusAlive < oppAlive) return '4v5';
-    return '4v4';
+    return openingSituation(L.meta, idx);
   }
 
   function focusDisplayName(meta, idx) {
@@ -622,23 +576,73 @@ export function createAnalyzerViewer({
     return [...enabledPlayers][0];
   }
 
+  /**
+   * Whether a layer passes the current filters. Pass `ignoreX` so chip counts
+   * reflect rounds remaining under every *other* constraint.
+   */
+  function matchesFilters(
+    L,
+    {
+      side = sideFilter,
+      ignoreBuy = false,
+      ignoreAwp = false,
+      ignoreSituation = false,
+      ignoreResult = false,
+      ignoreAfterplant = false,
+      ignoreDecided = false
+    } = {}
+  ) {
+    if (!L.meta) return false;
+    if (sideOfFocus(L) !== side) return false;
+    const econ = econOfFocus(L);
+    if (!ignoreBuy && (econ == null || !buyFilter.has(buyBucket(econ)))) return false;
+    if (!ignoreAwp && hasAwpFilter && !econHasAwp(econ)) return false;
+    if (!ignoreSituation && situationFilter.size) {
+      const sit = situationOfFocus(L);
+      if (!sit || !situationFilter.has(sit)) return false;
+    }
+    if (!ignoreResult && resultFilter.size) {
+      const res = resultOfFocus(L);
+      if (!res || !resultFilter.has(res)) return false;
+    }
+    if (!ignoreAfterplant && afterplantOnly && !isAfterplant(L)) return false;
+    if (!ignoreDecided && zoneNetworkReady && decidedPhaseFilter.size) {
+      if (!isEqualBuyRound(L.meta.econ1, L.meta.econ2)) return false;
+      const d = decidedOf(L);
+      if (!d || !decidedPhaseFilter.has(d.phase)) return false;
+    }
+    return true;
+  }
+
   function renderFilters() {
     const ranked = rankedPlayersForSide();
     enabledPlayers = new Set([...enabledPlayers].filter((id) => ranked.some((p) => p.id === id)));
     if (viewMode === 'heatmap') ensureHeatmapPlayer(ranked);
     else if (!enabledPlayers.size) enabledPlayers = new Set(ranked.map((p) => p.id));
-    const tCount = layers.filter((L) => L.meta && sideOfFocus(L) === 'T').length;
-    const ctCount = layers.filter((L) => L.meta && sideOfFocus(L) === 'CT').length;
-    const sideLayers = layers.filter((L) => L.meta && sideOfFocus(L) === sideFilter);
-    const sitCount = (key) => sideLayers.filter((L) => situationOfFocus(L) === key).length;
-    const wonCount = sideLayers.filter((L) => resultOfFocus(L) === 'won').length;
-    const lostCount = sideLayers.filter((L) => resultOfFocus(L) === 'lost').length;
-    const plantCount = sideLayers.filter((L) => isAfterplant(L)).length;
-    const equalBuyLayers = sideLayers.filter(
-      (L) => L.meta && isEqualBuyRound(L.meta.econ1, L.meta.econ2)
-    );
+
+    // Counts ignore their own chip group so numbers show what remains if you pick them.
+    const tCount = layers.filter((L) => matchesFilters(L, { side: 'T' })).length;
+    const ctCount = layers.filter((L) => matchesFilters(L, { side: 'CT' })).length;
+    const sitCount = (key) =>
+      layers.filter(
+        (L) => matchesFilters(L, { ignoreSituation: true }) && situationOfFocus(L) === key
+      ).length;
+    const wonCount = layers.filter(
+      (L) => matchesFilters(L, { ignoreResult: true }) && resultOfFocus(L) === 'won'
+    ).length;
+    const lostCount = layers.filter(
+      (L) => matchesFilters(L, { ignoreResult: true }) && resultOfFocus(L) === 'lost'
+    ).length;
+    const plantCount = layers.filter(
+      (L) => matchesFilters(L, { ignoreAfterplant: true }) && isAfterplant(L)
+    ).length;
     const decidedCount = (phase) =>
-      equalBuyLayers.filter((L) => decidedOf(L)?.phase === phase).length;
+      layers.filter(
+        (L) =>
+          matchesFilters(L, { ignoreDecided: true }) &&
+          isEqualBuyRound(L.meta.econ1, L.meta.econ2) &&
+          decidedOf(L)?.phase === phase
+      ).length;
     teamEl.textContent = focusName || focusId || 'Team';
 
     const teamSwitcher =
@@ -713,9 +717,12 @@ export function createAnalyzerViewer({
       <div class="rv-az-group">
         <h4>Situation</h4>
         <div class="rv-az-seg rv-az-multi" role="group" aria-label="Opening situation">
+          ${sitBtn('5v5', '5v5')}
           ${sitBtn('5v4', '5v4')}
+          ${sitBtn('5v3', '5v3')}
           ${sitBtn('4v4', '4v4')}
           ${sitBtn('4v5', '4v5')}
+          ${sitBtn('3v5', '3v5')}
         </div>
       </div>
       <div class="rv-az-group">
@@ -821,28 +828,7 @@ export function createAnalyzerViewer({
   }
 
   function visibleLayers() {
-    return layers.filter((L) => {
-      if (!L.meta) return false;
-      if (sideOfFocus(L) !== sideFilter) return false;
-      const econ = econOfFocus(L);
-      if (econ == null || !buyFilter.has(buyBucket(econ))) return false;
-      if (hasAwpFilter && !econHasAwp(econ)) return false;
-      if (situationFilter.size) {
-        const sit = situationOfFocus(L);
-        if (!sit || !situationFilter.has(sit)) return false;
-      }
-      if (resultFilter.size) {
-        const res = resultOfFocus(L);
-        if (!res || !resultFilter.has(res)) return false;
-      }
-      if (afterplantOnly && !isAfterplant(L)) return false;
-      if (zoneNetworkReady && decidedPhaseFilter.size) {
-        if (!L.meta || !isEqualBuyRound(L.meta.econ1, L.meta.econ2)) return false;
-        const d = decidedOf(L);
-        if (!d || !decidedPhaseFilter.has(d.phase)) return false;
-      }
-      return true;
-    });
+    return layers.filter((L) => matchesFilters(L));
   }
 
   function filterPlayers(L) {
