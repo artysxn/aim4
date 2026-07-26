@@ -33,6 +33,7 @@ import commentsIcon from '../../icons/demos_comments.svg?raw';
 import bookmarkAddIcon from '../../icons/demos_bookmarks_add.svg?raw';
 import bookmarkAddedIcon from '../../icons/demos_bookmarks_added.svg?raw';
 import coachIcon from '../../icons/demos_coach.svg?raw';
+import chartIcon from '../../icons/demos_chart.svg?raw';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 const MIN_ZOOM = 1;
@@ -143,7 +144,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
           <button type="button" class="rv-tool" id="rv-stats" title="Match stats up to this round (hold Tab)" ${
             statsDemoId ? '' : 'hidden'
           }>${statsIconSvg}</button>
-          <button type="button" class="rv-tool" id="rv-coach" title="Coach: win chance and round notes">${icon(coachIcon)}</button>
+          <button type="button" class="rv-tool active" id="rv-chart" title="Win chance chart">${icon(chartIcon)}</button>
+          <button type="button" class="rv-tool" id="rv-coach" title="Coach: mistake notes for one team">${icon(coachIcon)}</button>
           <button type="button" class="rv-tool" id="rv-draw" title="Draw (right click always draws)">${icon(pencilIcon)}</button>
           <button type="button" class="rv-tool" id="rv-note" title="Notes">${icon(commentsIcon)}</button>
           <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
@@ -195,6 +197,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const noteNextBtn = el.querySelector('#rv-note-next');
   const noteAddBtn = el.querySelector('#rv-note-add');
   const noteAddEditBtn = el.querySelector('#rv-note-add-edit');
+  const chartBtn = el.querySelector('#rv-chart');
   const coachBtn = el.querySelector('#rv-coach');
   const coachPick = el.querySelector('#rv-coach-pick');
   const coachPickT1 = el.querySelector('#rv-coach-pick-t1');
@@ -230,6 +233,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   let noteIndex = 0;
   /** 'list' shows every note; 'editor' shows one note's text. */
   let noteView = 'editor';
+  /** Win% graph + side badges (independent of coach notes). On by default. */
+  let chartOn = true;
   let coachOn = false;
   /** Roster team (1|2) whose mistakes coach notes; null until picked. */
   let coachTeam = null;
@@ -511,7 +516,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (seek) playback.seek(liveOffsetOf(index), { emit: false });
     syncLoading();
     clearPlayerStates();
-    if (coachOn) {
+    if (chartOn) {
       graphEl.hidden = false;
       syncSideWinrates(null);
     }
@@ -554,8 +559,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       if (!coachOn) autoOpenNotesIfPresent();
     }
 
+    if (chartOn) syncWinChart();
     if (coachOn) {
-      syncCoach();
       await mergeCoachNotesFor(index);
       renderActiveMarks();
       syncCoachRoundChips();
@@ -1602,7 +1607,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   function syncSideWinrates(now) {
     for (const badge of el.querySelectorAll('[data-side-wp]')) {
       const side = badge.dataset.sideWp;
-      if (!coachOn || !now || (side !== 'T' && side !== 'CT')) {
+      if (!chartOn || !now || (side !== 'T' && side !== 'CT')) {
         badge.textContent = side || '';
         badge.classList.toggle('is-wp', false);
         continue;
@@ -1716,7 +1721,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
   function updateWinGraphTip() {
     if (!graphTip) return;
-    if (!coachOn || !graphHoverDot || !graphPlayhead) {
+    if (!chartOn || !graphHoverDot || !graphPlayhead) {
       graphTip.hidden = true;
       return;
     }
@@ -1781,10 +1786,15 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   window.addEventListener('keydown', onGraphShiftKey);
   window.addEventListener('keyup', onGraphShiftKey);
 
-  function syncCoach(tick = null) {
-    graphEl.hidden = !coachOn;
-    syncCoachBtn();
-    if (!coachOn) {
+  function syncChartBtn() {
+    chartBtn?.classList.toggle('active', chartOn);
+  }
+
+  /** Win% graph + side badges — driven by the Chart tool, not coach mode. */
+  function syncWinChart(tick = null) {
+    graphEl.hidden = !chartOn;
+    syncChartBtn();
+    if (!chartOn) {
       syncSideWinrates(null);
       graphPlayhead = null;
       graphHoverDot = false;
@@ -1820,7 +1830,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     coachTeam = team;
     hideCoachPick();
     coachOn = true;
-    syncCoach();
+    syncCoachBtn();
     // Analyse every round up front so the strip can mark them and notes exist
     // before the user jumps around the demo.
     await analyseAllCoachRounds();
@@ -1828,13 +1838,19 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     enterCoachRoundMoment();
   }
 
+  chartBtn?.addEventListener('click', () => {
+    chartOn = !chartOn;
+    syncWinChart();
+    draw();
+  });
+
   coachBtn?.addEventListener('click', () => {
     if (coachOn) {
       coachOn = false;
       coachTeam = null;
       coachPassId += 1;
       hideCoachPick();
-      syncCoach();
+      syncCoachBtn();
       clearAllCoachNotes();
       return;
     }
@@ -2104,7 +2120,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
     syncScoreboard(tick);
     syncKillFeed(tick);
-    if (coachOn) syncCoach(tick);
+    if (chartOn) syncWinChart(tick);
     syncLoading();
   }
 

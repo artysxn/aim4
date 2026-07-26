@@ -35,13 +35,22 @@ const DEFAULT_BASE_CT = 52.5;
  *
  *   k = Σ(xy) / Σ(x²) = 1,457,800 / 768,970,000 = 0.0018958
  *
- * One point per ~$528. The four cases do not agree under any single
- * coefficient — the +46pp case had a losing side with no armour and no
- * utility, which a dollar figure understates — so this is a compromise, and it
- * is applied through a logistic below so a lopsided buy saturates rather than
- * running past certainty.
+ * One point per ~$528. Typical buy gaps stay on this line; larger swings are
+ * bent toward the extremes in `economyWinPercent` so a full-buy vs eco gap
+ * (~$12k) reads near 95/5 before map and man terms.
  */
 export const PP_PER_DOLLAR = 0.0018958;
+
+/** Side is eco'd when its live equipment is below this. */
+export const ECON_POOR_MAX = 2000;
+/** Side is fully stacked when its live equipment is above this. */
+export const ECON_STACKED_MIN = 14000;
+/** Dollar gap that should land near a 95/5 economy split (14k vs 2k). */
+const ECON_EXTREME_GAP = ECON_STACKED_MIN - ECON_POOR_MAX;
+/** Max |pp| the economy term alone may contribute (50 ± this → 5% / 95%). */
+const ECON_SAT_PP = 45;
+/** Boost stays off until gaps pass this, so mid buys keep the linear fit. */
+const ECON_BOOST_FROM = 4000;
 
 /**
  * Man advantage, as the win rate it produces from an even start. +1 body is
@@ -96,6 +105,44 @@ function advantageWinrate(gap) {
   return ADVANTAGE_WINRATE[i0] * (1 - f) + ADVANTAGE_WINRATE[i1] * f;
 }
 
+function smoothstep(edge0, edge1, x) {
+  if (edge1 <= edge0) return x >= edge1 ? 1 : 0;
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Equipment edge as a CT win% from an even start.
+ * Near-even buys follow `PP_PER_DOLLAR`; from ~$4k upward an extra bend fills
+ * out to ±45pp by a $12k gap so eco vs full-buy sits near 5/95.
+ *
+ * @param {number} dollarDiff  CT equipment − T equipment
+ * @returns {number} CT win percent from economy alone
+ */
+export function economyWinPercent(dollarDiff) {
+  const d = Number(dollarDiff) || 0;
+  const abs = Math.abs(d);
+  const linear = PP_PER_DOLLAR * d;
+  const linearAtExtreme = PP_PER_DOLLAR * ECON_EXTREME_GAP;
+  const boostRoom = ECON_SAT_PP - linearAtExtreme;
+  const t = smoothstep(ECON_BOOST_FROM, ECON_EXTREME_GAP, abs);
+  const boost = d === 0 ? 0 : Math.sign(d) * boostRoom * t;
+  const pp = Math.max(-ECON_SAT_PP, Math.min(ECON_SAT_PP, linear + boost));
+  return 50 + pp;
+}
+
+/**
+ * When one side is eco (<$2k) and the other is stacked (>$14k), never give the
+ * poor side more than 5% — map/man edges must not override that read.
+ */
+function clampEcoMismatch(ctPercent, ctEquip, tEquip) {
+  const ctEq = Number(ctEquip) || 0;
+  const tEq = Number(tEquip) || 0;
+  if (ctEq < ECON_POOR_MAX && tEq > ECON_STACKED_MIN) return Math.min(ctPercent, 5);
+  if (tEq < ECON_POOR_MAX && ctEq > ECON_STACKED_MIN) return Math.max(ctPercent, 95);
+  return ctPercent;
+}
+
 /**
  * Live round win probability for the CT side.
  *
@@ -131,7 +178,8 @@ export function winProbability(state) {
 
   // 2. Equipment still alive on the field.
   const dollars = (state.ctEquip || 0) - (state.tEquip || 0);
-  const econEdge = edge(50 + PP_PER_DOLLAR * dollars);
+  const econPct = economyWinPercent(dollars);
+  const econEdge = edge(econPct);
 
   // 3. Bodies — HP-weighted. 5v5 with one CT on 20 HP is ~4.2v5; five players
   //    on 1 HP still count as 2.5 bodies thanks to HP_BODY_FLOOR.
@@ -139,12 +187,13 @@ export function winProbability(state) {
   const manEdge =
     gap < 1e-6 ? 0 : edge(advantageWinrate(gap)) * Math.sign(ctEff - tEff);
 
-  const ct = sigmoid(mapEdge + econEdge + manEdge) * 100;
+  let ct = sigmoid(mapEdge + econEdge + manEdge) * 100;
+  ct = clampEcoMismatch(ct, state.ctEquip, state.tEquip);
   const clamped = Math.min(CEIL, Math.max(FLOOR, ct));
   return {
     ct: clamped,
     t: 100 - clamped,
-    parts: { mapEdge, econEdge, manEdge, dollars, tBonus, ctEff, tEff }
+    parts: { mapEdge, econEdge, manEdge, dollars, econPct, tBonus, ctEff, tEff }
   };
 }
 
