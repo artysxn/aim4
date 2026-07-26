@@ -27,9 +27,8 @@ import { analyseRound, flagToNote } from '../coach/coach.js';
 import { explainProbability, winProbabilityAtTick } from '../coach/winProbability.js';
 import { phaseBounds } from '../coach/roundPhases.js';
 import {
-  activePositionsAt,
   buildZonePresence,
-  paintForPosition,
+  computeZonePaint,
   summarizeZoneControl
 } from '../zones/zoneOverlay.js';
 import helmetSvg from '../../icons/helmet.svg?url';
@@ -789,17 +788,16 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
   function zoneOverlayForTick(tick) {
     if (!zonesOn || !zoneNetwork?.zones?.length) return null;
-    const active = activePositionsAt({
+    const paint = computeZonePaint({
       meta: activeMeta,
       states,
-      network: zoneNetwork
+      network: zoneNetwork,
+      tick,
+      presence: zonePresence,
+      mapCode: renderer.mapCode || activeMeta.map || '',
+      radarImage: renderer.image,
+      grenades: activeMeta.events?.grenades || []
     });
-    /** @type {Record<string, string>} */
-    const paint = {};
-    for (const z of zoneNetwork.zones) {
-      if (!z?.id || z.hidden) continue;
-      paint[z.id] = paintForPosition(z.id, tick, zonePresence, active);
-    }
     return { network: zoneNetwork, paint };
   }
 

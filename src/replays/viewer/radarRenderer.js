@@ -10,11 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import { CALIBRATION, RADAR_SIZE, isLowerLevel, worldToRadar } from './mapCalibration.js';
-import {
-  exteriorSegmentsFromRects,
-  pieceToRing,
-  rectsFromPieces
-} from '../zones/zoneGeom.js';
+import { pieceToRing, rectsFromPieces } from '../zones/zoneGeom.js';
 import { ZONE_PAINT } from '../zones/zoneOverlay.js';
 import { radarImage } from '../shared/roundId.js';
 import {
@@ -391,11 +387,12 @@ export class RadarRenderer {
     zc.clip();
     zc.lineJoin = 'round';
 
-    for (const z of network.zones) {
-      if (z.hidden || !z.pieces?.length) continue;
-      const key = paintMap[z.id] || 'empty';
+    // `network.zones` are positions (lowest tier) — not sections/areas.
+    for (const pos of network.zones) {
+      if (pos.hidden || !pos.pieces?.length) continue;
+      const key = paintMap[pos.id] || 'empty';
       const colors = ZONE_PAINT[key] || ZONE_PAINT.empty;
-      const rects = rectsFromPieces(z.pieces);
+      const rects = rectsFromPieces(pos.pieces);
 
       for (const r of rects) {
         const a = worldToRadar(this.mapCode, r.x, r.y, scratch);
@@ -408,7 +405,7 @@ export class RadarRenderer {
         zc.fillRect(x, y, rw, rh);
       }
 
-      for (const piece of z.pieces) {
+      for (const piece of pos.pieces) {
         if (piece.type === 'rect' || (piece.w > 0 && piece.h > 0 && !piece.ring)) continue;
         const ring = pieceToRing(piece);
         if (!ring?.length) continue;
@@ -423,20 +420,6 @@ export class RadarRenderer {
         zc.closePath();
         zc.fillStyle = colors.fill;
         zc.fill();
-      }
-
-      const segs = exteriorSegmentsFromRects(rects);
-      if (segs.length) {
-        zc.strokeStyle = colors.stroke;
-        zc.lineWidth = 1.35 * this.dpr;
-        zc.beginPath();
-        for (const s of segs) {
-          const p0 = worldToRadar(this.mapCode, s.x0, s.y0, scratch);
-          const p1 = worldToRadar(this.mapCode, s.x1, s.y1, {});
-          zc.moveTo(p0.x * t.scale + t.ox, p0.y * t.scale + t.oy);
-          zc.lineTo(p1.x * t.scale + t.ox, p1.y * t.scale + t.oy);
-        }
-        zc.stroke();
       }
     }
     zc.restore();
