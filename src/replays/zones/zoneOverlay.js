@@ -41,8 +41,17 @@ const SIGHT_COVER = 0.2;
 const SIGHT_RAY_STEP = 40;
 /** Min ray-step hits for a position the ray passes through to count as seen. */
 const SIGHT_RAY_MIN_HITS = 2;
-/** Radar alpha at or below this is a wall (transparent PNG). */
+/**
+ * Radar alpha at or below this is outside the map (transparent PNG) — same
+ * mask the zone overlay punches with `destination-in`.
+ */
 const WALL_ALPHA = 28;
+/**
+ * Near-black opaque texels are building / roof fill on Valve radars — solid
+ * alpha so they survive the clip mask, but they are not walkable floor and
+ * must block sight (Inferno Aps wall, Mirage kitchen, etc.).
+ */
+const WALKABLE_MIN_LUM = 28;
 /** Smoke lifetime — matches radar renderer. */
 const SMOKE_SECONDS = 22;
 /** Smoke cloud radius in world units — matches radarRenderer.SMOKE_RADIUS_UNITS. */
@@ -351,14 +360,17 @@ export function buildPositionAdjacency(network) {
 }
 
 /**
- * Line-of-sight through the radar PNG: transparent pixels are walls.
+ * Line-of-sight through the radar PNG.
+ * Walkable floor = opaque enough (same alpha punch as zone clips) and not
+ * near-black building fill. Transparent AND solid-black both block.
+ *
  * @param {string} mapCode
  * @param {CanvasImageSource} image
  */
 export function getRadarLos(mapCode, image) {
   if (!mapCode || !image) return null;
   const hit = losCache.get(mapCode);
-  if (hit && hit.image === image) return hit;
+  if (hit && hit.image === image && hit.version === 2) return hit;
 
   const c = document.createElement('canvas');
   c.width = RADAR_SIZE;
@@ -374,31 +386,57 @@ export function getRadarLos(mapCode, image) {
     return null;
   }
 
-  const opaque = (px, py) => {
+  /** True when this radar texel is walkable floor (not void, not building). */
+  const walkable = (px, py) => {
     const x = px | 0;
     const y = py | 0;
     if (x < 0 || y < 0 || x >= RADAR_SIZE || y >= RADAR_SIZE) return false;
-    return data[(y * RADAR_SIZE + x) * 4 + 3] > WALL_ALPHA;
+    const i = (y * RADAR_SIZE + x) * 4;
+    const alpha = data[i + 3];
+    if (alpha <= WALL_ALPHA) return false;
+    const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    return lum >= WALKABLE_MIN_LUM;
   };
 
   const a = {};
   const b = {};
+  const scratch = {};
+
+  const isWalkableWorld = (wx, wy) => {
+    worldToRadar(mapCode, wx, wy, scratch);
+    return walkable(scratch.x, scratch.y);
+  };
+
+  /**
+   * Clear LOS when every radar texel along the segment is walkable floor.
+   * Samples denser than one step per pixel so thin transparent walls cannot
+   * be skipped on diagonals.
+   */
   const clearWorld = (x0, y0, x1, y1) => {
     worldToRadar(mapCode, x0, y0, a);
     worldToRadar(mapCode, x1, y1, b);
+    // Target must sit on floor — zone polys often overhang into voids.
+    if (!walkable(b.x, b.y)) return false;
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const dist = Math.hypot(dx, dy);
-    const steps = Math.max(1, Math.ceil(dist));
-    // Skip the first couple of pixels (player footprint / edge).
-    for (let i = 2; i <= steps; i++) {
+    if (dist < 1e-6) return true;
+    // Manhattan + Euclidean margin: never skip a void texel between floors.
+    const steps = Math.max(2, Math.ceil(Math.abs(dx) + Math.abs(dy) + dist * 0.5));
+    const sx = a.x | 0;
+    const sy = a.y | 0;
+    for (let i = 1; i <= steps; i++) {
       const t = i / steps;
-      if (!opaque(a.x + dx * t, a.y + dy * t)) return false;
+      const px = a.x + dx * t;
+      const py = a.y + dy * t;
+      // Skip only the viewer's own cell (feet can sit on a dark edge texel).
+      if ((px | 0) === sx && (py | 0) === sy) continue;
+      if (!walkable(px, py)) return false;
     }
     return true;
   };
 
-  const los = { clearWorld, image };
+  const los = { clearWorld, isWalkableWorld, walkable, image, version: 2 };
   losCache.set(mapCode, los);
   return los;
 }
@@ -454,6 +492,8 @@ function segmentBlockedBySmoke(x0, y0, x1, y1, smokes, radius = SMOKE_RADIUS_UNI
 
 /**
  * Sample points of `pos` that the player can see (FOV + radar LOS + smokes).
+ * Only samples that land on walkable radar floor count — transparent holes
+ * and building fill inside a loose zone poly cannot grant vision.
  * @param {Array<{x:number,y:number}>} [smokes]
  * @returns {{ cover: number, clearPts: Array<{x:number,y:number}> }}
  */
@@ -461,22 +501,27 @@ function sightClearPoints(player, pos, los, smokes) {
   const pts = samplePointsForPosition(pos);
   /** @type {Array<{x:number,y:number}>} */
   const clearPts = [];
-  if (!pts.length) return { cover: 0, clearPts };
+  if (!pts.length || !los) return { cover: 0, clearPts };
+  let floorPts = 0;
   for (const p of pts) {
+    if (los.isWalkableWorld && !los.isWalkableWorld(p.x, p.y)) continue;
+    floorPts++;
     if (yawDelta(player.yaw, yawToward(player, p)) > SIGHT_FOV_DEG) continue;
-    if (!los || !los.clearWorld(player.x, player.y, p.x, p.y)) continue;
+    if (!los.clearWorld(player.x, player.y, p.x, p.y)) continue;
     if (segmentBlockedBySmoke(player.x, player.y, p.x, p.y, smokes)) continue;
     clearPts.push(p);
   }
-  return { cover: clearPts.length / pts.length, clearPts };
+  return { cover: floorPts ? clearPts.length / floorPts : 0, clearPts };
 }
 
 /**
  * Walk a clear sight segment and tally every position the ray passes through.
- * Walls/smokes are already enforced by the caller (endpoint is visible).
+ * Only steps on walkable radar floor count — zone polys that overhang a void
+ * or building must not pick up corridor vision.
  * @param {Map<string, number>} into  posId -> hit count
+ * @param {{ isWalkableWorld?: (x:number,y:number)=>boolean }} [los]
  */
-function accumulateRayPositions(x0, y0, x1, y1, network, smoked, into) {
+function accumulateRayPositions(x0, y0, x1, y1, network, smoked, into, los) {
   const dx = x1 - x0;
   const dy = y1 - y0;
   const dist = Math.hypot(dx, dy);
@@ -486,6 +531,7 @@ function accumulateRayPositions(x0, y0, x1, y1, network, smoked, into) {
     const t = i / steps;
     const x = x0 + dx * t;
     const y = y0 + dy * t;
+    if (los?.isWalkableWorld && !los.isWalkableWorld(x, y)) continue;
     for (const z of positionsAtPoint(x, y, network)) {
       if (!z?.id || smoked?.has(z.id)) continue;
       into.set(z.id, (into.get(z.id) || 0) + 1);
@@ -560,7 +606,8 @@ function applyVisionClaims({
           pt.y,
           network,
           smoked,
-          rayHits
+          rayHits,
+          los
         );
       }
     }
