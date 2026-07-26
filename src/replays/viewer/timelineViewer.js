@@ -1721,17 +1721,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       };
       const midX = xOfTick(bounds.midStartTick);
       const lateX = xOfTick(bounds.lateStartTick);
-      const bands = [
-        { x0: 0, x1: midX, fill: 'rgba(90, 200, 140, 0.08)', label: 'Early' },
-        { x0: midX, x1: lateX, fill: 'rgba(232, 184, 74, 0.08)', label: 'Mid' },
-        { x0: lateX, x1: w, fill: 'rgba(245, 37, 37, 0.08)', label: 'Late' }
-      ];
       ctx.save();
-      for (const b of bands) {
-        if (b.x1 <= b.x0) continue;
-        ctx.fillStyle = b.fill;
-        ctx.fillRect(b.x0, 0, b.x1 - b.x0, h);
-      }
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
       ctx.lineWidth = 1 * dpr;
       for (const x of [midX, lateX]) {
@@ -1741,10 +1731,15 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         ctx.lineTo(x, h);
         ctx.stroke();
       }
+      const labels = [
+        { x0: 0, x1: midX, label: 'Early' },
+        { x0: midX, x1: lateX, label: 'Mid' },
+        { x0: lateX, x1: w, label: 'Late' }
+      ];
       ctx.fillStyle = 'rgba(180, 186, 196, 0.7)';
       ctx.font = `${10 * dpr}px system-ui, sans-serif`;
       ctx.textBaseline = 'top';
-      for (const b of bands) {
+      for (const b of labels) {
         if (b.x1 - b.x0 < 28 * dpr) continue;
         ctx.fillText(b.label, b.x0 + 4 * dpr, 3 * dpr);
       }

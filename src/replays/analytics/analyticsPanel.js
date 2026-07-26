@@ -105,6 +105,35 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       .slice(0, 40);
   }
 
+  function playerMenuHtml() {
+    if (!playerMenuOpen && !playerSearch) return '';
+    const opts = playerOptions();
+    return `<div class="rp-typeahead-menu">
+      ${
+        opts.length
+          ? opts
+              .map(
+                (p) =>
+                  `<button type="button" class="rp-typeahead-option" data-pick-player="${escapeHtml(
+                    p.id
+                  )}">${escapeHtml(p.name)}</button>`
+              )
+              .join('')
+          : `<p class="rp-typeahead-empty">No players</p>`
+      }
+    </div>`;
+  }
+
+  /** Update dropdown only — never replace the focused search input. */
+  function refreshPlayerMenu() {
+    const wrap = setupEl.querySelector('#an-player-typeahead');
+    if (!wrap) return;
+    wrap.classList.toggle('open', playerMenuOpen);
+    wrap.querySelector('.rp-typeahead-menu')?.remove();
+    const html = playerMenuHtml();
+    if (html) wrap.insertAdjacentHTML('beforeend', html);
+  }
+
   function renderSetup() {
     const pl = selectedPlayer();
     const maps = pl?.maps?.length
@@ -128,24 +157,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
               placeholder="${pl ? escapeHtml(pl.name) : 'Search players'}"
               spellcheck="false" autocomplete="off" value="${escapeHtml(playerSearch)}"
               aria-label="Search players" />
-            ${
-              playerMenuOpen || playerSearch
-                ? `<div class="rp-typeahead-menu">
-              ${
-                playerOptions().length
-                  ? playerOptions()
-                      .map(
-                        (p) =>
-                          `<button type="button" class="rp-typeahead-option" data-pick-player="${escapeHtml(
-                            p.id
-                          )}">${escapeHtml(p.name)}</button>`
-                      )
-                      .join('')
-                  : `<p class="rp-typeahead-empty">No players</p>`
-              }
-            </div>`
-                : ''
-            }
+            ${playerMenuHtml()}
           </div>
           ${
             pl
@@ -189,11 +201,40 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     </label>`;
   }
 
-  function locPicker(kind, label, items, selected, search) {
+  function networkItems(kind) {
+    const list =
+      kind === 'pos'
+        ? network?.zones || []
+        : kind === 'zone'
+          ? network?.sections || []
+          : network?.areas || [];
+    return list
+      .filter((z) => z.id && (kind !== 'pos' || !z.hidden))
+      .map((z) => ({ id: z.id, name: z.name || z.id }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  function locListHtml(kind, items, selected, search) {
     const q = search.trim().toLowerCase();
     const filtered = items
       .filter((it) => !q || it.name.toLowerCase().includes(q))
       .slice(0, 60);
+    if (!filtered.length) {
+      return `<p class="rp-typeahead-empty">No matches</p>`;
+    }
+    return filtered
+      .map(
+        (it) =>
+          `<button type="button" class="rp-chip${
+            selected.has(it.id) ? ' active' : ''
+          }" data-loc-toggle="${kind}" data-id="${escapeHtml(it.id)}">${escapeHtml(
+            it.name
+          )}</button>`
+      )
+      .join('');
+  }
+
+  function locPicker(kind, label, items, selected, search) {
     const chips = [...selected]
       .map((id) => {
         const name = items.find((x) => x.id === id)?.name || id;
@@ -203,29 +244,23 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       })
       .join('');
     return `
-      <div class="an-loc-group">
+      <div class="an-loc-group" data-loc-group="${kind}">
         <span class="st-filter-label">${label}</span>
         <input type="search" class="site-input an-loc-search" data-loc-search="${kind}"
           placeholder="Search ${label.toLowerCase()}" value="${escapeHtml(search)}"
           spellcheck="false" autocomplete="off" />
-        <div class="an-loc-list">
-          ${
-            filtered.length
-              ? filtered
-                  .map(
-                    (it) =>
-                      `<button type="button" class="rp-chip${
-                        selected.has(it.id) ? ' active' : ''
-                      }" data-loc-toggle="${kind}" data-id="${escapeHtml(it.id)}">${escapeHtml(
-                        it.name
-                      )}</button>`
-                  )
-                  .join('')
-              : `<p class="rp-typeahead-empty">No ${label.toLowerCase()}</p>`
-          }
-        </div>
+        <div class="an-loc-list">${locListHtml(kind, items, selected, search)}</div>
         ${chips ? `<div class="rp-chips an-loc-selected">${chips}</div>` : ''}
       </div>`;
+  }
+
+  function refreshLocList(kind) {
+    const group = filtersEl.querySelector(`[data-loc-group="${kind}"]`);
+    const list = group?.querySelector('.an-loc-list');
+    if (!list) return;
+    const selected =
+      kind === 'pos' ? state.positions : kind === 'zone' ? state.zones : state.areas;
+    list.innerHTML = locListHtml(kind, networkItems(kind), selected, state.locSearch[kind] || '');
   }
 
   function renderFilters() {
@@ -235,18 +270,9 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       return;
     }
     filtersEl.hidden = false;
-    const positions = (network?.zones || [])
-      .filter((z) => !z.hidden && z.id)
-      .map((z) => ({ id: z.id, name: z.name || z.id }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    const zones = (network?.sections || [])
-      .filter((z) => z.id)
-      .map((z) => ({ id: z.id, name: z.name || z.id }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    const areas = (network?.areas || [])
-      .filter((z) => z.id)
-      .map((z) => ({ id: z.id, name: z.name || z.id }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const positions = networkItems('pos');
+    const zones = networkItems('zone');
+    const areas = networkItems('area');
 
     const sideBtn = (value, label) =>
       `<button type="button" class="rp-chip${
@@ -478,25 +504,17 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   // ---- events -------------------------------------------------------------
 
   setupEl.addEventListener('input', (e) => {
-    if (e.target.id === 'an-player-search') {
-      playerSearch = e.target.value;
-      playerMenuOpen = true;
-      renderSetup();
-      setupEl.querySelector('#an-player-search')?.focus();
-      const input = setupEl.querySelector('#an-player-search');
-      if (input) {
-        input.value = playerSearch;
-        input.setSelectionRange(playerSearch.length, playerSearch.length);
-      }
-    }
+    if (e.target.id !== 'an-player-search') return;
+    playerSearch = e.target.value;
+    playerMenuOpen = true;
+    refreshPlayerMenu();
   });
 
   setupEl.addEventListener('focusin', (e) => {
-    if (e.target.id === 'an-player-search') {
-      playerMenuOpen = true;
-      renderSetup();
-      setupEl.querySelector('#an-player-search')?.focus();
-    }
+    if (e.target.id !== 'an-player-search') return;
+    if (playerMenuOpen) return;
+    playerMenuOpen = true;
+    refreshPlayerMenu();
   });
 
   setupEl.addEventListener('click', async (e) => {
@@ -515,6 +533,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       state.playerId = '';
       state.map = '';
       playerSearch = '';
+      playerMenuOpen = false;
       render();
     }
   });
@@ -534,7 +553,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     if (!playerMenuOpen) return;
     if (e.target.closest?.('#an-player-typeahead')) return;
     playerMenuOpen = false;
-    renderSetup();
+    refreshPlayerMenu();
   });
 
   filtersEl.addEventListener('click', (e) => {
@@ -616,15 +635,9 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     const search = e.target.closest('[data-loc-search]');
     if (!search) return;
     const kind = search.dataset.locSearch;
-    if (kind === 'pos' || kind === 'zone' || kind === 'area') {
-      state.locSearch[kind] = search.value;
-      renderFilters();
-      const again = filtersEl.querySelector(`[data-loc-search="${kind}"]`);
-      if (again) {
-        again.focus();
-        again.setSelectionRange(search.value.length, search.value.length);
-      }
-    }
+    if (kind !== 'pos' && kind !== 'zone' && kind !== 'area') return;
+    state.locSearch[kind] = search.value;
+    refreshLocList(kind);
   });
 
   bodyEl.addEventListener('click', async (e) => {
