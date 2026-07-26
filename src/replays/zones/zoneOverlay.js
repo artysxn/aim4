@@ -1,9 +1,8 @@
 // ---------------------------------------------------------------------------
 // replays/zones/zoneOverlay.js
 // Timeline "positions" overlay: who has been where up to the playhead, who is
-// there now, who can see an empty/occupied position (FOV + radar LOS + smokes),
-// including cells further along the same clear sight ray, and surround-fill
-// for neutrals locked in by one side.
+// there now, who can see an empty/occupied position (11-ray FOV fan + radar
+// walkable mask + smokes), and surround-fill for neutrals locked in by one side.
 //
 // Colors: gray empty, T yellow, CT blue, both red; active vs controlled
 // (darker) for single-side claims.
@@ -32,15 +31,24 @@ export const ZONE_PAINT = {
 /** Half-angle of the vision cone used for sight-control (degrees). */
 const SIGHT_FOV_DEG = 30;
 /**
- * Fraction of a position that must be in-FOV + clear LOS to claim it by
- * looking *at* it. Kept modest so a real peek counts; corridor cells behind
- * that peek are claimed via ray walk (see SIGHT_RAY_*).
+ * Yaw offsets (degrees) for the FOV ray fan, relative to look direction:
+ * left edge, right edge, center, then 4 rays in each half-sector.
  */
-const SIGHT_COVER = 0.2;
-/** World-unit step when walking a clear sight ray through intermediate positions. */
-const SIGHT_RAY_STEP = 40;
-/** Min ray-step hits for a position the ray passes through to count as seen. */
-const SIGHT_RAY_MIN_HITS = 2;
+const FOV_RAY_OFFSETS = (() => {
+  const fov = SIGHT_FOV_DEG;
+  const offsets = [-fov, 0, fov];
+  for (let i = 1; i <= 4; i++) {
+    offsets.push((-fov * i) / 5);
+    offsets.push((fov * i) / 5);
+  }
+  return offsets;
+})();
+/** World-unit step when marching an FOV ray. */
+const SIGHT_RAY_STEP = 48;
+/** Stop marching past this world distance. */
+const SIGHT_RAY_MAX = 4200;
+/** Min ray-step hits inside a position to count it as seen. */
+const SIGHT_RAY_MIN_HITS = 1;
 /**
  * Radar alpha at or below this is outside the map (transparent PNG) — same
  * mask the zone overlay punches with `destination-in`.
@@ -58,11 +66,8 @@ const SMOKE_SECONDS = 22;
 const SMOKE_RADIUS_UNITS = 144;
 /** World-unit pad when deciding two positions share a border. */
 const ADJACENT_PAD = 18;
-/** Sample points per position for sight coverage. */
-const SIGHT_SAMPLES = 24;
 
 const adjacencyCache = new WeakMap();
-const sampleCache = new WeakMap();
 /** @type {Map<string, object>} */
 const losCache = new Map();
 
@@ -224,18 +229,6 @@ export function activePositionsAt({ meta, states, network }) {
   return { t, ct };
 }
 
-/** Absolute yaw difference in [0, 180]. */
-function yawDelta(a, b) {
-  let d = Math.abs(Number(a) - Number(b)) % 360;
-  if (d > 180) d = 360 - d;
-  return d;
-}
-
-/** Source yaw toward a point: 0 = +X, 90 = +Y. */
-function yawToward(from, to) {
-  return (Math.atan2(to.y - from.y, to.x - from.x) * 180) / Math.PI;
-}
-
 /** Shoelace area for a closed or open ring in world units². */
 function ringArea(ring) {
   if (!ring || ring.length < 3) return 0;
@@ -265,46 +258,6 @@ export function positionArea(zone) {
     }
   }
   return area;
-}
-
-/** Grid sample points inside a position (for sight coverage). */
-function samplePointsForPosition(pos) {
-  if (sampleCache.has(pos)) return sampleCache.get(pos);
-  /** @type {Array<{x:number,y:number}>} */
-  const pts = [];
-  const rects = rectsFromPieces(pos.pieces);
-  const area = Math.max(1, positionArea(pos));
-  for (const r of rects) {
-    const share = (r.w * r.h) / area;
-    const n = Math.max(1, Math.round(SIGHT_SAMPLES * share));
-    const cols = Math.max(1, Math.ceil(Math.sqrt(n * (r.w / Math.max(r.h, 1e-6)))));
-    const rows = Math.max(1, Math.ceil(n / cols));
-    for (let iy = 0; iy < rows; iy++) {
-      for (let ix = 0; ix < cols; ix++) {
-        pts.push({
-          x: r.x + ((ix + 0.5) / cols) * r.w,
-          y: r.y + ((iy + 0.5) / rows) * r.h
-        });
-      }
-    }
-  }
-  for (const piece of pos.pieces || []) {
-    if (piece.type === 'rect' || (piece.w > 0 && piece.h > 0 && !piece.ring)) continue;
-    const ring = piece.ring;
-    if (!ring?.length) continue;
-    const b = pieceBounds(piece);
-    const cx = (b.minX + b.maxX) / 2;
-    const cy = (b.minY + b.maxY) / 2;
-    pts.push({ x: cx, y: cy });
-  }
-  if (!pts.length) {
-    const b = pieceBounds(pos.pieces?.[0] || { type: 'rect', x: 0, y: 0, w: 0, h: 0 });
-    if (Number.isFinite(b.minX)) {
-      pts.push({ x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 });
-    }
-  }
-  sampleCache.set(pos, pts);
-  return pts;
 }
 
 function rectsShareEdge(a, b, pad = ADJACENT_PAD) {
@@ -501,65 +454,57 @@ function smokedPositions(grenades, tick, tickRate, network) {
   return ids;
 }
 
-/**
- * True when the world-space segment A→B passes through any smoke disc.
- * Used so a mid smoke blocks sight into positions *behind* it, not only the
- * cell the grenade landed in.
- */
-function segmentBlockedBySmoke(x0, y0, x1, y1, smokes, radius = SMOKE_RADIUS_UNITS) {
+/** True when a world point sits inside any active smoke disc. */
+function pointInSmoke(x, y, smokes, radius = SMOKE_RADIUS_UNITS) {
   if (!smokes?.length) return false;
   const r2 = radius * radius;
   for (const s of smokes) {
-    const dx = x1 - x0;
-    const dy = y1 - y0;
-    const len2 = dx * dx + dy * dy;
-    let t = 0;
-    if (len2 > 1e-6) {
-      t = ((s.x - x0) * dx + (s.y - y0) * dy) / len2;
-      t = Math.max(0, Math.min(1, t));
-    }
-    const cx = x0 + dx * t - s.x;
-    const cy = y0 + dy * t - s.y;
-    if (cx * cx + cy * cy <= r2) return true;
+    const dx = x - s.x;
+    const dy = y - s.y;
+    if (dx * dx + dy * dy <= r2) return true;
   }
   return false;
 }
 
 /**
- * Sample points of `pos` that the player can see (FOV + radar LOS + smokes).
- * Only samples that land on walkable radar floor count — transparent holes
- * and building fill inside a loose zone poly cannot grant vision.
- * @param {Array<{x:number,y:number}>} [smokes]
- * @returns {{ cover: number, clearPts: Array<{x:number,y:number}> }}
+ * March one FOV ray from the viewer until wall, smoke, or max range.
+ * Tallies walkable floor hits per position along the way.
+ *
+ * @param {Map<string, number>} hitCounts  posId -> step hits
+ * @param {Map<string, number>} rayCounts  posId -> distinct rays that touched it
  */
-function sightClearPoints(player, pos, los, smokes) {
-  const pts = samplePointsForPosition(pos);
-  /** @type {Array<{x:number,y:number}>} */
-  const clearPts = [];
-  if (!pts.length || !los) return { cover: 0, clearPts };
-  let floorPts = 0;
-  for (const p of pts) {
-    if (los.isWalkableWorld && !los.isWalkableWorld(p.x, p.y)) continue;
-    floorPts++;
-    // FOV before smoke/ray — cheap reject once we know the sample is on floor.
-    if (yawDelta(player.yaw, yawToward(player, p)) > SIGHT_FOV_DEG) continue;
-    if (segmentBlockedBySmoke(player.x, player.y, p.x, p.y, smokes)) continue;
-    if (!los.clearWorld(player.x, player.y, p.x, p.y)) continue;
-    clearPts.push(p);
+function castFovRay(viewer, yawDeg, los, smokes, network, smoked, hitCounts, rayCounts) {
+  const rad = (yawDeg * Math.PI) / 180;
+  // Match engine yaw: 0 = +X, 90 = +Y.
+  const dirX = Math.cos(rad);
+  const dirY = Math.sin(rad);
+  /** @type {Set<string>} */
+  const touched = new Set();
+
+  for (let dist = SIGHT_RAY_STEP; dist <= SIGHT_RAY_MAX; dist += SIGHT_RAY_STEP) {
+    const x = viewer.x + dirX * dist;
+    const y = viewer.y + dirY * dist;
+    if (!los.isWalkableWorld(x, y)) break;
+    if (pointInSmoke(x, y, smokes)) break;
+    for (const z of positionsAtPoint(x, y, network)) {
+      if (!z?.id || smoked?.has(z.id)) continue;
+      hitCounts.set(z.id, (hitCounts.get(z.id) || 0) + 1);
+      touched.add(z.id);
+    }
   }
-  return { cover: floorPts ? clearPts.length / floorPts : 0, clearPts };
+  for (const id of touched) {
+    rayCounts.set(id, (rayCounts.get(id) || 0) + 1);
+  }
 }
 
 /**
- * Full vision pass for one living player (expensive). Returns positions they
- * currently see with cover; presence claims are recorded here.
+ * Vision for one living player: 11-ray FOV fan (edges, center, 4 per half).
  */
 function computePlayerVision({
   player,
   side,
   viewer,
   playerName,
-  positions,
   smoked,
   smokeCenters,
   los,
@@ -570,80 +515,67 @@ function computePlayerVision({
 }) {
   /** @type {Array<{ posId: string, cover: number, through: boolean, direct: boolean }>} */
   const seen = [];
-
   /** @type {Map<string, number>} */
-  const coverById = new Map();
+  const hitCounts = new Map();
   /** @type {Map<string, number>} */
-  const rayHits = new Map();
+  const rayCounts = new Map();
 
-  for (const pos of positions) {
-    if (smoked.has(pos.id)) continue;
-    const { cover, clearPts } = sightClearPoints(viewer, pos, los, smokeCenters);
-    if (cover > 0) coverById.set(pos.id, cover);
-    for (const pt of clearPts) {
-      accumulateRayPositions(
-        viewer.x,
-        viewer.y,
-        pt.x,
-        pt.y,
-        network,
-        smoked,
-        rayHits,
-        los
-      );
-    }
+  const baseYaw = Number(viewer.yaw) || 0;
+  for (const offset of FOV_RAY_OFFSETS) {
+    castFovRay(
+      viewer,
+      baseYaw + offset,
+      los,
+      smokeCenters,
+      network,
+      smoked,
+      hitCounts,
+      rayCounts
+    );
   }
 
-  for (const pos of positions) {
-    if (smoked.has(pos.id)) continue;
-    const cover = coverById.get(pos.id) || 0;
-    const along = rayHits.get(pos.id) || 0;
-    const direct = cover >= SIGHT_COVER;
-    const through = along >= SIGHT_RAY_MIN_HITS;
-    if (!direct && !through) continue;
-
-    const reportCover = direct
-      ? cover
-      : Math.max(cover, Math.min(0.95, along / (along + 6)));
+  const rayTotal = FOV_RAY_OFFSETS.length;
+  for (const [posId, hits] of hitCounts) {
+    if (hits < SIGHT_RAY_MIN_HITS) continue;
+    const rays = rayCounts.get(posId) || 1;
+    const reportCover = Math.min(0.99, rays / rayTotal);
 
     seen.push({
-      posId: pos.id,
+      posId,
       cover: reportCover,
-      through,
-      direct
+      through: false,
+      direct: true
     });
 
     if (!presence) continue;
-    const hasT = active.t.has(pos.id);
-    const hasCt = active.ct.has(pos.id);
+    const hasT = active.t.has(posId);
+    const hasCt = active.ct.has(posId);
     const enemyInside = side === 'T' ? hasCt : hasT;
     const allyInside = side === 'T' ? hasT : hasCt;
 
     if (enemyInside) {
-      if (!presence.firstT.has(pos.id)) presence.firstT.set(pos.id, tick);
-      if (!presence.firstCT.has(pos.id)) presence.firstCT.set(pos.id, tick);
-      recordClaim(presence, pos.id, {
+      if (!presence.firstT.has(posId)) presence.firstT.set(posId, tick);
+      if (!presence.firstCT.has(posId)) presence.firstCT.set(posId, tick);
+      recordClaim(presence, posId, {
         tick,
         side: 'both',
         reason: 'sight-enemy',
         playerId: player.id,
         playerName,
-        detail: `Saw enemy inside (${Math.round(reportCover * 100)}% cover)`
+        detail: `Saw enemy inside (${Math.round(reportCover * 100)}% cone)`
       });
       continue;
     }
     if (allyInside) continue;
     const map = side === 'T' ? presence.firstT : presence.firstCT;
-    if (!map.has(pos.id)) map.set(pos.id, tick);
-    recordClaim(presence, pos.id, {
+    if (!map.has(posId)) map.set(posId, tick);
+    recordClaim(presence, posId, {
       tick,
       side,
       reason: 'sight',
       playerId: player.id,
       playerName,
-      detail: through && !direct
-        ? `Clear sight through corridor (${Math.round(reportCover * 100)}% cover)`
-        : `Clear sight (${Math.round(reportCover * 100)}% cover)`
+      detail: `Clear sight (${Math.round(reportCover * 100)}% cone)`
     });
   }
 
@@ -697,31 +629,6 @@ function mergePlayerVision(entries, active) {
 }
 
 /**
- * Walk a clear sight segment and tally every position the ray passes through.
- * Only steps on walkable radar floor count — zone polys that overhang a void
- * or building must not pick up corridor vision.
- * @param {Map<string, number>} into  posId -> hit count
- * @param {{ isWalkableWorld?: (x:number,y:number)=>boolean }} [los]
- */
-function accumulateRayPositions(x0, y0, x1, y1, network, smoked, into, los) {
-  const dx = x1 - x0;
-  const dy = y1 - y0;
-  const dist = Math.hypot(dx, dy);
-  if (dist < 1) return;
-  const steps = Math.max(1, Math.ceil(dist / SIGHT_RAY_STEP));
-  for (let i = 1; i <= steps; i++) {
-    const t = i / steps;
-    const x = x0 + dx * t;
-    const y = y0 + dy * t;
-    if (los?.isWalkableWorld && !los.isWalkableWorld(x, y)) continue;
-    for (const z of positionsAtPoint(x, y, network)) {
-      if (!z?.id || smoked?.has(z.id)) continue;
-      into.set(z.id, (into.get(z.id) || 0) + 1);
-    }
-  }
-}
-
-/**
  * Apply vision claims for the current tick.
  *
  * With `visionCache`, only one living player is raytraced per call (round-robin);
@@ -761,7 +668,6 @@ function applyVisionClaims({
   const smokeCenters = activeSmokes(grenades, tick, tickRate);
   const smoked = smokedPositions(grenades, tick, tickRate, network);
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
-  const positions = network.zones.filter((z) => z?.id && !z.hidden && z.pieces?.length);
 
   /** @type {Array<{ player: object, side: 'T'|'CT', viewer: {x:number,y:number,yaw:number}, playerName: string }>} */
   const viewers = [];
@@ -785,7 +691,6 @@ function applyVisionClaims({
       side: v.side,
       viewer: v.viewer,
       playerName: v.playerName,
-      positions,
       smoked,
       smokeCenters,
       los,
@@ -1105,8 +1010,8 @@ export function computeZonePaint({
         kind: s.enemy ? 'sight-enemy' : 'sight',
         side: s.side,
         text: s.enemy
-          ? `${s.playerName} (${s.side}) sees an enemy here now (${Math.round(s.cover * 100)}% cover)`
-          : `${s.playerName} (${s.side}) has clear sight now (${Math.round(s.cover * 100)}% cover)`
+          ? `${s.playerName} (${s.side}) sees an enemy here now (${Math.round(s.cover * 100)}% cone)`
+          : `${s.playerName} (${s.side}) has clear sight now (${Math.round(s.cover * 100)}% cone)`
       });
     }
     const sur = surroundAssigned.get(pos.id);
