@@ -247,6 +247,12 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   /** Bumps when a full-demo coach pass is superseded (toggle off / re-pick). */
   let coachPassId = 0;
   /**
+   * True while the initial full-match load+analyse is running. Round clicks
+   * must not trigger per-round coaching until this finishes — that was the
+   * "click round 6, then coach speaks" bug.
+   */
+  let coachScanning = false;
+  /**
    * Coach needs the whole unspliced match (same signal as the live scoreboard).
    * Pick-and-choose / playlist / deep-link subsets leave this empty.
    */
@@ -482,9 +488,11 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (index === activeIndex && store.get(files[index])?.isFull) {
       if (seek) {
         if (coachOn) {
-          await mergeCoachNotesFor(index);
-          renderActiveMarks();
-          syncCoachRoundChips();
+          if (!coachScanning) {
+            await mergeCoachNotesFor(index);
+            renderActiveMarks();
+            syncCoachRoundChips();
+          }
           enterCoachRoundMoment();
         } else {
           seekRoundEntry(index);
@@ -568,9 +576,17 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
     if (chartOn) syncWinChart();
     if (coachOn) {
-      await mergeCoachNotesFor(index);
-      renderActiveMarks();
-      syncCoachRoundChips();
+      // During the initial full-match scan, do not analyse on click — wait for
+      // the preload→analyse pass to finish so every round is covered once.
+      if (!coachScanning) {
+        await mergeCoachNotesFor(index);
+        renderActiveMarks();
+        syncCoachRoundChips();
+      } else {
+        loadNotesFromMeta(true);
+        renderActiveMarks();
+        syncCoachRoundChips();
+      }
       if (seek) enterCoachRoundMoment();
     } else if (seek) {
       seekRoundEntry(index);
@@ -1574,16 +1590,22 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (coachCache.has(file)) return coachCache.get(file);
     const roundMeta = meta || (index === activeIndex ? activeMeta : null);
     if (!roundMeta?.players?.length) return null;
-    const track = store.track(file);
+    // Full ticks only — never analyse against a missing / coarse buffer.
+    const track = store.get(file)?.full || null;
     if (!track) return null;
     const scratch = [];
-    const result = analyseRound({
-      meta: roundMeta,
-      sampleAt: (tick) => {
-        track.sampleAll(tick, scratch);
-        return scratch;
-      }
-    });
+    let result;
+    try {
+      result = analyseRound({
+        meta: roundMeta,
+        sampleAt: (tick) => {
+          track.sampleAll(tick, scratch);
+          return scratch;
+        }
+      });
+    } catch {
+      return null;
+    }
     coachCache.set(file, result);
     return result;
   }
@@ -1836,8 +1858,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     coachPicking = true;
     if (coachPick) coachPick.hidden = false;
     syncCoachBtn();
-    // Start pulling every round's ticks while the team picker is open.
-    void preloadAllRoundsForCoach();
   }
 
   async function enableCoachForTeam(team) {
@@ -1846,11 +1866,16 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     coachTeam = team;
     hideCoachPick();
     coachOn = true;
+    coachScanning = true;
     syncCoachBtn();
-    // Load + analyse every round up front so the strip can mark them and notes
-    // exist before the user jumps around the demo.
-    await analyseAllCoachRounds();
+    try {
+      // Strict order: preload every round, then analyse every round.
+      await analyseAllCoachRounds();
+    } finally {
+      coachScanning = false;
+    }
     renderActiveMarks();
+    syncCoachRoundChips();
     enterCoachRoundMoment();
   }
 
@@ -1865,6 +1890,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (coachOn) {
       coachOn = false;
       coachTeam = null;
+      coachScanning = false;
       coachPassId += 1;
       hideCoachPick();
       syncCoachBtn();
@@ -1895,105 +1921,117 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const file = files[index];
     if (!file) return;
 
-    let meta =
-      index === activeIndex && activeMeta?.players?.length ? activeMeta : await metaFor(file);
-    await store.loadFull(file);
-    if (destroyed || !coachOn) return;
-    if (!meta?.players?.length) return;
-
-    const result = coachFor(index, meta);
-    if (!result) return;
-
-    const teamOf = new Map((meta.players || []).map((p) => [p.id, p.team]));
-    const existing =
-      index === activeIndex && roundNotes.length ? roundNotes : notesFromMeta(meta);
-    const have = new Set(existing.filter((n) => n.kind === 'coach').map((n) => n.id));
-    const fresh = result.flags
-      .filter((f) => teamOf.get(f.playerId) === coachTeam)
-      .map(flagToNote)
-      .filter((n) => !have.has(n.id));
-
-    const next = fresh.length
-      ? [...existing, ...fresh].sort((a, b) => a.tick - b.tick || a.updatedAt - b.updatedAt)
-      : existing;
-
-    meta.notes = next;
-    delete meta.note;
-    delete meta.noteUpdatedAt;
-    setCoachNoted(file, next);
-
-    if (index === activeIndex) {
-      roundNotes = next;
-      activeMeta = meta;
-      if (noteIndex < 0 && roundNotes.length) noteIndex = 0;
-      renderNoteDock();
-      renderActiveMarks();
-      if (fresh.length) {
-        try {
-          await persistNotes();
-        } catch {
-          /* notes still show for this session even if the save failed */
-        }
-      } else {
-        syncCoachRoundChips();
-      }
-      return;
-    }
-
-    if (!fresh.length) {
-      syncCoachRoundChips();
-      return;
-    }
-
-    const payload = next
-      .map((n) => ({
-        id: n.id,
-        tick: n.tick,
-        text: String(n.text || '').trim(),
-        kind: n.kind === 'coach' ? 'coach' : 'user',
-        mark: n.mark || '',
-        updatedAt: n.updatedAt || Date.now()
-      }))
-      .filter((n) => n.text);
     try {
-      const res = await saveRoundNotes(file, payload);
-      const saved = Array.isArray(res.notes) ? notesFromMeta({ notes: res.notes }) : notesFromMeta({ notes: payload });
-      meta.notes = saved;
-      setCoachNoted(file, saved);
-    } catch {
-      /* keep local merge for strip marking */
-    }
-    syncCoachRoundChips();
-  }
+      let meta =
+        index === activeIndex && activeMeta?.players?.length ? activeMeta : await metaFor(file);
+      if (!store.get(file)?.full) await store.loadFull(file);
+      if (destroyed || !coachOn) return;
+      if (!meta?.players?.length) return;
+      if (!store.get(file)?.full) return;
 
-  /** Pull full tick data for every round in the match (coach needs them all). */
-  async function preloadAllRoundsForCoach(pass = coachPassId) {
-    if (!coachAvailable) return;
-    const total = files.length;
-    for (let i = 0; i < total; i++) {
-      if (destroyed || pass !== coachPassId) return;
-      // Allow preload during team pick (coachOn still false) and during analyse.
-      if (!coachPicking && !coachOn) return;
-      if (loadingEl) {
-        loadingEl.hidden = false;
-        loadingEl.textContent = `Coach loading ${i + 1}/${total}…`;
+      const result = coachFor(index, meta);
+      if (!result) return;
+
+      const teamOf = new Map((meta.players || []).map((p) => [p.id, p.team]));
+      const existing =
+        index === activeIndex && roundNotes.length ? roundNotes : notesFromMeta(meta);
+      const have = new Set(existing.filter((n) => n.kind === 'coach').map((n) => n.id));
+      const fresh = result.flags
+        .filter((f) => teamOf.get(f.playerId) === coachTeam)
+        .map(flagToNote)
+        .filter((n) => !have.has(n.id));
+
+      const next = fresh.length
+        ? [...existing, ...fresh].sort((a, b) => a.tick - b.tick || a.updatedAt - b.updatedAt)
+        : existing;
+
+      meta.notes = next;
+      delete meta.note;
+      delete meta.noteUpdatedAt;
+      setCoachNoted(file, next);
+
+      if (index === activeIndex) {
+        roundNotes = next;
+        activeMeta = meta;
+        if (noteIndex < 0 && roundNotes.length) noteIndex = 0;
+        renderNoteDock();
+        renderActiveMarks();
+        if (fresh.length) {
+          try {
+            await persistNotes();
+          } catch {
+            /* notes still show for this session even if the save failed */
+          }
+        } else {
+          syncCoachRoundChips();
+        }
+        return;
       }
-      await store.loadFull(files[i]);
+
+      if (!fresh.length) {
+        syncCoachRoundChips();
+        return;
+      }
+
+      const payload = next
+        .map((n) => ({
+          id: n.id,
+          tick: n.tick,
+          text: String(n.text || '').trim(),
+          kind: n.kind === 'coach' ? 'coach' : 'user',
+          mark: n.mark || '',
+          updatedAt: n.updatedAt || Date.now()
+        }))
+        .filter((n) => n.text);
+      try {
+        const res = await saveRoundNotes(file, payload);
+        const saved = Array.isArray(res.notes)
+          ? notesFromMeta({ notes: res.notes })
+          : notesFromMeta({ notes: payload });
+        meta.notes = saved;
+        setCoachNoted(file, saved);
+      } catch {
+        /* keep local merge for strip marking */
+      }
+      syncCoachRoundChips();
+    } catch {
+      /* one bad round must not abort the full-match scan */
     }
-    if (pass === coachPassId && !coachOn) syncLoading();
   }
 
-  /** Load + analyse every round once coach is turned on. */
+  /**
+   * When coach turns on: load EVERY round's full ticks first, then analyse.
+   * Never interleave those phases — analysing before the match is resident is
+   * what left later rounds unmarked until you clicked them.
+   */
   async function analyseAllCoachRounds() {
     if (!coachAvailable) return;
     const pass = ++coachPassId;
     const total = files.length;
 
-    // Phase 1: every round's ticks, not just the one on screen.
-    await preloadAllRoundsForCoach(pass);
+    // Phase 1 — preload only.
+    for (let i = 0; i < total; i++) {
+      if (destroyed || !coachOn || pass !== coachPassId) return;
+      if (loadingEl) {
+        loadingEl.hidden = false;
+        loadingEl.textContent = `Coach loading ${i + 1}/${total}…`;
+      }
+      try {
+        await store.loadFull(files[i]);
+      } catch {
+        /* retry once below */
+      }
+      if (!store.get(files[i])?.full) {
+        try {
+          await store.loadFull(files[i]);
+        } catch {
+          /* analysed phase will skip if still missing */
+        }
+      }
+    }
     if (destroyed || !coachOn || pass !== coachPassId) return;
 
-    // Phase 2: run the coach over the full match and persist notes.
+    // Phase 2 — analyse only after every load attempt finished.
     for (let i = 0; i < total; i++) {
       if (destroyed || !coachOn || pass !== coachPassId) return;
       if (loadingEl) {
