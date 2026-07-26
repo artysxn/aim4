@@ -192,6 +192,8 @@ export function analyseRound({ meta, sampleAt }) {
     const opp = side === 'CT' ? 'T' : 'CT';
     // Enemy team already wiped: nothing left to throw away.
     if (before[opp] <= 0) continue;
+    // Last alive: a 1vX is not a "solo peek" — there is nobody left to stack with.
+    if (before[side] <= 1) continue;
     const name = byId.get(victim)?.name || victim;
 
     // Answered inside the window? Then nothing was lost and nothing is said.
@@ -261,8 +263,13 @@ export function analyseRound({ meta, sampleAt }) {
       }
     }
 
+    // Alone only if teammates still exist and none are in trade range.
+    // With nobody left alive, nearestTeammate is Infinity — that is a clutch,
+    // not a spacing mistake.
     const alone =
-      Boolean(me) && nearestTeammate(me, mates) > ALONE_DISTANCE;
+      Boolean(me) &&
+      mates.length >= 2 &&
+      nearestTeammate(me, mates) > ALONE_DISTANCE;
     const liveWp = Number.isFinite(wpBefore)
       ? wpBefore
       : sample?.[side === 'CT' ? 'ct' : 't'];
@@ -317,13 +324,15 @@ export function analyseRound({ meta, sampleAt }) {
         if (!inCoachWindow(k.tick)) continue;
         if (defusedTick != null && k.tick >= defusedTick) continue;
         if (aliveAt(k.tick - 1)[opp] <= 0) continue;
+        // Last alive cannot take a "solo duel" — clutch fights are not coached.
+        if (aliveAt(k.tick - 1)[side] <= 1) continue;
         const sample = sampleNear(k.tick);
         // Live chance at the duel — freezetime dominance is not enough.
         const liveWp = sample?.[key];
         if (!Number.isFinite(liveWp) || liveWp < DOMINANT) continue;
         const mates = positionsOf(sample, side);
         const me = mates.find((m) => m.id === k.attacker);
-        if (!me || nearestTeammate(me, mates) <= ALONE_DISTANCE) continue;
+        if (!me || mates.length < 2 || nearestTeammate(me, mates) <= ALONE_DISTANCE) continue;
         if (flags.some((f) => f.playerId === k.attacker && Math.abs(f.tick - k.tick) <= trade)) continue;
         const name = byId.get(k.attacker)?.name || k.attacker;
         flags.push({
