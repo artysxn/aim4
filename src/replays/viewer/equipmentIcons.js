@@ -307,6 +307,21 @@ const GUN_PRIORITY = [
   'taser'
 ];
 
+/** Sidearms + Zeus — not a "primary" for sidebar highlight. */
+const SECONDARIES = new Set([
+  'deagle',
+  'revolver',
+  'fiveseven',
+  'tec9',
+  'cz75a',
+  'elite',
+  'p250',
+  'usp_silencer',
+  'hkp2000',
+  'glock',
+  'taser'
+]);
+
 const imageCache = new Map();
 
 export function bareWeapon(name) {
@@ -394,6 +409,15 @@ export function isGun(name) {
   return GUN_PRIORITY.includes(b) || ICON_FILES.has(b);
 }
 
+export function isSecondary(name) {
+  return SECONDARIES.has(bareWeapon(name));
+}
+
+/** Rifle / SMG / shotgun / sniper — the slot the sidebar shows at full opacity when held. */
+export function isPrimaryGun(name) {
+  return isGun(name) && !isSecondary(name);
+}
+
 export function isDefuser(name) {
   const b = bareWeapon(name);
   return b === 'defuser' || b === 'cutters';
@@ -427,22 +451,25 @@ export function inventoryAt({ loadout, grenades, playerId, tick, state, activeWe
     removeOne(items, normalizeGrenadeType(g.type) || bareWeapon(g.type));
   }
 
-  const active = bareWeapon(activeWeapon || '');
+  const activeBare = bareWeapon(activeWeapon || '');
+  const activeNade = isGrenade(activeWeapon || activeBare)
+    ? normalizeGrenadeType(activeWeapon || activeBare)
+    : '';
+  const active = activeNade || activeBare;
 
+  // Sidebar shows the best gun in the loadout (primary over secondary), not
+  // what is in hand — the droplet above the name already shows the active weapon.
   const guns = items.filter(isGun);
-  let primary = '';
-  // Prefer the live held weapon. Only fall back to freezetime loadout when the
-  // active name is missing/unrecognized (demoparser display-name gaps used to
-  // make rifles look like knives here).
-  if (active && isGun(active)) primary = active;
-  else if (active && isKnife(active)) primary = active;
-  else if (guns.length) {
-    guns.sort((a, b) => gunRank(a) - gunRank(b));
-    primary = guns[0];
-  } else {
+  guns.sort((a, b) => gunRank(a) - gunRank(b));
+  let primary = guns[0] || '';
+  if (!primary) {
     const knife = items.find(isKnife);
     if (knife) primary = knife;
   }
+
+  // Full opacity only while holding that primary. Pistol / knife / Zeus → dimmed.
+  const holdingPrimary =
+    Boolean(primary) && isPrimaryGun(primary) && active === primary;
 
   const util = [];
   if (items.some(isDefuser)) util.push('defuser');
@@ -461,6 +488,9 @@ export function inventoryAt({ loadout, grenades, playerId, tick, state, activeWe
   return {
     primary,
     active: active || primary,
+    holdingPrimary,
+    /** Grenade stem currently in hand, if any — that util icon is full opacity. */
+    holdingUtil: activeNade || (active === 'c4' ? 'c4' : ''),
     util,
     armor,
     helmet,

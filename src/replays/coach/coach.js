@@ -171,12 +171,20 @@ export function analyseRound({ meta, sampleAt }) {
   const defusedTick =
     (meta.events?.bomb || []).find((b) => b.type === 'defused')?.tick ?? null;
 
+  /** A frag in the prior TRADE_SECONDS means the death was part of a fight, not a free mistake. */
+  const recentlyFragged = (playerId, atTick) =>
+    kills.some(
+      (k) => k.attacker === playerId && k.tick < atTick && atTick - k.tick <= trade
+    );
+
   for (const death of kills) {
     const victim = death.victim;
     const side = sideOf(victim);
     if (!side || !gate[side]) continue;
     if (!inCoachWindow(death.tick)) continue;
     if (defusedTick != null && death.tick >= defusedTick) continue;
+    // Just got a kill? Dying in that window is not coached as a mistake.
+    if (recentlyFragged(victim, death.tick)) continue;
     const before = aliveAt(death.tick - 1);
     const opp = side === 'CT' ? 'T' : 'CT';
     // Enemy team already wiped: nothing left to throw away.

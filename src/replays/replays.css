@@ -1136,7 +1136,8 @@ body.rv-open {
 }
 
 /* Notes sit in the right gutter above chrome + drawing palette. */
-.rv-note-dock {
+.rv-note-dock,
+.rv-coach-pick {
   position: absolute;
   right: 16px;
   bottom: 120px;
@@ -1153,8 +1154,58 @@ body.rv-open {
   pointer-events: auto;
 }
 
-.rv-note-dock[hidden] {
+.rv-note-dock[hidden],
+.rv-coach-pick[hidden] {
   display: none;
+}
+
+.rv-coach-pick-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rv-coach-pick-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.rv-coach-pick-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.rv-coach-pick-team {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rv-coach-pick-team:hover {
+  border-color: var(--border-strong);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.rv-coach-pick-team[data-team='1'] {
+  color: var(--rv-team1);
+}
+
+.rv-coach-pick-team[data-team='2'] {
+  color: var(--rv-team2);
 }
 
 .rv-note-head {
@@ -1416,12 +1467,12 @@ body.rv-open {
   white-space: nowrap;
 }
 
-.rv-killfeed-name.team1 {
-  color: var(--rv-team1);
+.rv-killfeed-name.side-t {
+  color: var(--rv-t);
 }
 
-.rv-killfeed-name.team2 {
-  color: var(--rv-team2);
+.rv-killfeed-name.side-ct {
+  color: var(--rv-ct);
 }
 
 .rv-killfeed-weapon {
@@ -1733,12 +1784,22 @@ body.rv-open {
 .rv-inv-gun {
   height: 18px;
   max-width: 78px;
-  opacity: 0.92;
 }
 
 .rv-inv-nade {
   height: 15px;
   max-width: 16px;
+}
+
+/* Default: gun + util sit at ~67% (33% less visible). Held primary is full. */
+.rv-inv-gun.is-dim,
+.rv-inv-nade.is-dim {
+  opacity: 0.67;
+}
+
+.rv-inv-gun.is-held,
+.rv-inv-nade.is-held {
+  opacity: 1;
 }
 
 /* ---- Round chips (T / CT win colors) ------------------------------------ */
@@ -2817,13 +2878,23 @@ body.rv-open {
   min-height: 0;
 }
 
+/* Win graph docks bottom-left, mirroring the note box on the right. */
 .rv-wingraph {
-  position: relative;
-  flex: 0 0 auto;
+  position: absolute;
+  left: 16px;
+  right: auto;
+  bottom: 120px;
+  z-index: 9;
+  width: min(300px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px 10px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: rgba(12, 14, 18, 0.9);
+  background: rgba(14, 17, 21, 0.97);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
 }
 
 .rv-wingraph[hidden] {
@@ -2839,12 +2910,13 @@ body.rv-open {
   font-variant-numeric: tabular-nums;
 }
 
-.rv-wingraph-label {
-  color: var(--rv-team1);
+.rv-wingraph-label.ct {
+  color: var(--rv-ct);
 }
 
-.rv-wingraph-label.right {
-  color: var(--rv-team2);
+.rv-wingraph-label.t {
+  color: var(--rv-t);
+  margin-left: auto;
 }
 
 .rv-wingraph-canvas {

@@ -52,14 +52,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     <div class="rv-stage">
       <div class="rv-team-col">
         <aside class="rv-team rv-team-1" data-team="1"></aside>
-        <div class="rv-wingraph" id="rv-wingraph" hidden>
-          <div class="rv-wingraph-head">
-            <span class="rv-wingraph-label" id="rv-wingraph-t1">-</span>
-            <span class="rv-wingraph-label right" id="rv-wingraph-t2">-</span>
-          </div>
-          <canvas class="rv-wingraph-canvas" id="rv-wingraph-canvas"></canvas>
-          <div class="rv-wingraph-tip" id="rv-wingraph-tip" hidden></div>
-        </div>
       </div>
       <div class="rv-map">
         <div class="rv-clock" id="rv-clock">00:00</div>
@@ -71,6 +63,23 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         <aside class="rv-team rv-team-2" data-team="2"></aside>
       </div>
     </div>
+    <aside class="rv-wingraph" id="rv-wingraph" hidden>
+      <div class="rv-wingraph-head">
+        <span class="rv-wingraph-label ct" id="rv-wingraph-ct">-</span>
+        <span class="rv-wingraph-label t" id="rv-wingraph-t">-</span>
+      </div>
+      <canvas class="rv-wingraph-canvas" id="rv-wingraph-canvas"></canvas>
+      <div class="rv-wingraph-tip" id="rv-wingraph-tip" hidden></div>
+    </aside>
+    <aside class="rv-coach-pick" id="rv-coach-pick" hidden>
+      <div class="rv-coach-pick-head">
+        <span class="rv-coach-pick-title">Coach which team?</span>
+        <button type="button" class="rp-btn-icon" id="rv-coach-pick-close" title="Cancel" aria-label="Cancel">✕</button>
+      </div>
+      <p class="rv-coach-pick-hint">Mistakes are noted for one side only.</p>
+      <button type="button" class="rv-coach-pick-team" data-team="1" id="rv-coach-pick-t1">Team 1</button>
+      <button type="button" class="rv-coach-pick-team" data-team="2" id="rv-coach-pick-t2">Team 2</button>
+    </aside>
     <aside class="rv-note-dock" id="rv-note-panel" hidden>
       <div class="rv-note-head">
         <button type="button" class="rp-btn-icon" id="rv-note-prev" title="Previous note" aria-label="Previous note">‹</button>
@@ -179,6 +188,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const notePosEl = el.querySelector('#rv-note-pos');
   const notePrevBtn = el.querySelector('#rv-note-prev');
   const noteNextBtn = el.querySelector('#rv-note-next');
+  const coachBtn = el.querySelector('#rv-coach');
+  const coachPick = el.querySelector('#rv-coach-pick');
+  const coachPickT1 = el.querySelector('#rv-coach-pick-t1');
+  const coachPickT2 = el.querySelector('#rv-coach-pick-t2');
   const bookmarkBtn = el.querySelector('#rv-bookmark');
   const playlistPanel = el.querySelector('#rv-playlist-panel');
   const playlistListEl = el.querySelector('#rv-playlist-list');
@@ -208,6 +221,11 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   let roundNotes = [];
   /** Index into roundNotes for the dock (one note visible at a time). */
   let noteIndex = 0;
+  let coachOn = false;
+  /** Roster team (1|2) whose mistakes coach notes; null until picked. */
+  let coachTeam = null;
+  /** Team-picker dock is open; coach not enabled yet. */
+  let coachPicking = false;
   const states = [];
 
   const playback = new Playback((pos) => onPosition(pos));
@@ -413,7 +431,14 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   async function selectRound(index, { seek = true } = {}) {
     if (index < 0 || index >= files.length) return;
     if (index === activeIndex && store.get(files[index])?.isFull) {
-      if (seek) playback.seek(liveOffsetOf(index));
+      if (seek) {
+        if (coachOn) {
+          await mergeCoachNotes();
+          renderActiveMarks();
+        }
+        seekRoundEntry(index);
+        draw();
+      }
       return;
     }
 
@@ -437,6 +462,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     renderActiveMarks();
     notePanel.hidden = true;
     noteBtn.classList.remove('active');
+    if (coachPicking) hideCoachPick();
     if (seek) playback.seek(liveOffsetOf(index), { emit: false });
     syncLoading();
     clearPlayerStates();
@@ -483,13 +509,13 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       autoOpenNotesIfPresent();
     }
 
-    if (seek) playback.seek(liveOffsetOf(index), { emit: false });
     if (coachOn) {
       coachCache.delete(file);
       syncCoach();
-      mergeCoachNotes();
+      await mergeCoachNotes();
       renderActiveMarks();
     }
+    if (seek) seekRoundEntry(index);
     draw();
   }
 
@@ -575,12 +601,22 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     parts.push(
       `<span class="rv-inv-armor"><img class="rv-inv-icon" src="${armorSrc}" alt="" data-item="${armorIconKey(inv)}" draggable="false" /></span>`
     );
+    const gunClass = inv.holdingPrimary
+      ? 'rv-inv-icon rv-inv-gun is-held'
+      : 'rv-inv-icon rv-inv-gun is-dim';
     parts.push(
       `<span class="rv-inv-primary">${
-        inv.primary ? iconImgHtml(inv.primary, 'rv-inv-icon rv-inv-gun') : ''
+        inv.primary ? iconImgHtml(inv.primary, gunClass) : ''
       }</span>`
     );
-    const util = (inv.util || []).map((u) => iconImgHtml(u, 'rv-inv-icon rv-inv-nade')).join('');
+    let heldUtilMarked = false;
+    const util = (inv.util || [])
+      .map((u) => {
+        const held = !heldUtilMarked && inv.holdingUtil && u === inv.holdingUtil;
+        if (held) heldUtilMarked = true;
+        return iconImgHtml(u, held ? 'rv-inv-icon rv-inv-nade is-held' : 'rv-inv-icon rv-inv-nade is-dim');
+      })
+      .join('');
     parts.push(`<span class="rv-inv-util">${util}</span>`);
     return parts.join('');
   }
@@ -594,9 +630,11 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     return activeMeta.players.find((p) => p.id === id) || null;
   }
 
-  function killfeedNameClass(player) {
-    if (!player) return '';
-    return player.team === 2 ? 'team2' : 'team1';
+  function killfeedNameClass(playerId) {
+    const side = sideOfPlayer(playerId);
+    if (side === 'T') return 'side-t';
+    if (side === 'CT') return 'side-ct';
+    return '';
   }
 
   function killRowHtml(k) {
@@ -609,14 +647,14 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       ? '<span class="rv-killfeed-hs" title="Headshot">HS</span>'
       : '';
     const left = attackerName
-      ? `<span class="rv-killfeed-name ${killfeedNameClass(attacker)}">${escapeHtml(
+      ? `<span class="rv-killfeed-name ${killfeedNameClass(k.attacker)}">${escapeHtml(
           attackerName
         )}</span>`
       : '';
     return `<div class="rv-killfeed-row">
       ${left}
       <span class="rv-killfeed-weapon">${gun}${hs}</span>
-      <span class="rv-killfeed-name ${killfeedNameClass(victim)}">${escapeHtml(victimName)}</span>
+      <span class="rv-killfeed-name ${killfeedNameClass(k.victim)}">${escapeHtml(victimName)}</span>
     </div>`;
   }
 
@@ -628,7 +666,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       if (k.tick <= tick) happened.push(k);
     }
     const recent = happened.slice(-KILLFEED_MAX).reverse();
-    const key = recent.map((k) => `${k.tick}:${k.attacker}:${k.victim}:${k.weapon}`).join('|');
+    // Include sides so colors refresh when round meta lands (roster team ≠ live side).
+    const key = `${activeMeta.team1Side}|${activeMeta.team2Side}|${recent
+      .map((k) => `${k.tick}:${k.attacker}:${k.victim}:${k.weapon}`)
+      .join('|')}`;
     if (key === killFeedKey) return;
     killFeedKey = key;
     killfeedEl.innerHTML = recent.map((k) => killRowHtml(k)).join('');
@@ -662,7 +703,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         state: s,
         activeWeapon: weapons[s.weapon] || ''
       });
-      const key = `${inv.primary}|${armorIconKey(inv)}|${(inv.util || []).join(',')}|${s.alive ? 1 : 0}`;
+      const key = `${inv.primary}|${inv.holdingPrimary ? 1 : 0}|${inv.holdingUtil || ''}|${armorIconKey(inv)}|${(inv.util || []).join(',')}|${s.alive ? 1 : 0}`;
       if (invEl.dataset.key !== key) {
         invEl.dataset.key = key;
         invEl.innerHTML = s.alive ? invHtml(inv) : '';
@@ -855,11 +896,20 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
   // ---- notes (timestamped, many per round, one visible at a time) ---------
 
+  function syncCoachBtn() {
+    coachBtn?.classList.toggle('active', coachOn || coachPicking);
+  }
+
   function closePopovers(except = null) {
     if (notePanel !== except) notePanel.hidden = true;
     if (playlistPanel !== except) playlistPanel.hidden = true;
+    if (coachPick && coachPick !== except) {
+      coachPick.hidden = true;
+      coachPicking = false;
+    }
     noteBtn.classList.toggle('active', !notePanel.hidden);
     bookmarkBtn.classList.toggle('open', !playlistPanel.hidden);
+    syncCoachBtn();
   }
 
   function newNoteId() {
@@ -975,6 +1025,20 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (!item) return;
     const local = Math.max(0, (tick - timing.startTick) / (timing.tickRate || 64));
     playback.seek(sequence.offsetOf(activeIndex) + Math.min(local, item.seconds));
+  }
+
+  /** With coach on, land on the earliest coach note; otherwise freezetime end. */
+  function seekRoundEntry(index = activeIndex) {
+    if (coachOn && index === activeIndex) {
+      const first = roundNotes.find((n) => n.kind === 'coach');
+      if (first) {
+        noteIndex = roundNotes.indexOf(first);
+        renderNoteDock({ forceText: true });
+        seekToNoteTick(first.tick);
+        return;
+      }
+    }
+    playback.seek(liveOffsetOf(index), { emit: false });
   }
 
   function showNoteAt(index, { seek = false } = {}) {
@@ -1359,13 +1423,11 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   // run once per round on demand and cached. Everything the coach shows — the
   // graph, the readout, the diamonds — reads off that one result.
 
-  const coachBtn = el.querySelector('#rv-coach');
   const graphEl = el.querySelector('#rv-wingraph');
   const graphCanvas = el.querySelector('#rv-wingraph-canvas');
-  const graphT1 = el.querySelector('#rv-wingraph-t1');
-  const graphT2 = el.querySelector('#rv-wingraph-t2');
+  const graphCtLabel = el.querySelector('#rv-wingraph-ct');
+  const graphTLabel = el.querySelector('#rv-wingraph-t');
   const graphTip = el.querySelector('#rv-wingraph-tip');
-  let coachOn = false;
   /** CSS-pixel playhead on the canvas (for hit-testing + tip anchor). */
   let graphPlayhead = null;
   let graphHoverDot = false;
@@ -1455,12 +1517,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
     const series = result.series;
     const span = Math.max(1, series.length - 1);
-    const t1Side = activeMeta?.team1Side === 'CT';
-    const share = (p) => (t1Side ? p.ct : p.t) / 100;
+    // Always CT share on Y: top = CT 100% (blue), bottom = T 100% (yellow).
+    const ctShare = (p) => (Number(p?.ct) || 0) / 100;
     const xAt = (i) => (i / span) * w;
-    // Team 1 above the midline, team 2 below: the further from centre, the
-    // more one side is winning, the same way a chess eval bar reads.
-    const yAt = (i) => h - share(series[i]) * h;
+    const yAt = (i) => h - ctShare(series[i]) * h;
 
     const fillTo = (baseline, above) => {
       ctx.beginPath();
@@ -1475,9 +1535,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     };
 
     const mid = h / 2;
-    ctx.fillStyle = 'rgba(56, 163, 232, 0.42)';
+    ctx.fillStyle = 'rgba(91, 159, 212, 0.42)'; // CT
     fillTo(mid, true);
-    ctx.fillStyle = 'rgba(232, 145, 60, 0.42)';
+    ctx.fillStyle = 'rgba(232, 184, 74, 0.42)'; // T
     fillTo(mid, false);
 
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
@@ -1487,7 +1547,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     ctx.lineTo(w, mid);
     ctx.stroke();
 
-    ctx.strokeStyle = '#e8913c';
+    ctx.strokeStyle = 'rgba(180, 186, 196, 0.95)';
     ctx.lineWidth = 1.6 * dpr;
     ctx.beginPath();
     for (let i = 0; i < series.length; i++) {
@@ -1512,7 +1572,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const px = xAt(i0) * (1 - f) + xAt(i1) * f;
     const sample = live || coachSampleAt(result, tick);
     const py = sample
-      ? h - share(sample) * h
+      ? h - ctShare(sample) * h
       : yAt(i0) * (1 - f) + yAt(i1) * f;
     const r = 4 * dpr;
     ctx.beginPath();
@@ -1526,10 +1586,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
     graphPlayhead = { x: px / dpr, y: py / dpr, tick, sample };
 
-    const now = coachProbabilityAt(sample);
-    if (now) {
-      graphT1.textContent = `${Math.round(now.team1)}%`;
-      graphT2.textContent = `${Math.round(now.team2)}%`;
+    if (sample) {
+      if (graphCtLabel) graphCtLabel.textContent = `${Math.round(sample.ct)}%`;
+      if (graphTLabel) graphTLabel.textContent = `${Math.round(sample.t)}%`;
     }
     updateWinGraphTip();
   }
@@ -1610,7 +1669,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
   function syncCoach(tick = null) {
     graphEl.hidden = !coachOn;
-    coachBtn?.classList.toggle('active', coachOn);
+    syncCoachBtn();
     if (!coachOn) {
       syncSideWinrates(null);
       graphPlayhead = null;
@@ -1625,31 +1684,79 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     syncSideWinrates(coachProbabilityAt(live || coachSampleAt(result, at)));
   }
 
-  coachBtn?.addEventListener('click', () => {
-    coachOn = !coachOn;
+  function hideCoachPick() {
+    if (coachPick) coachPick.hidden = true;
+    coachPicking = false;
+    syncCoachBtn();
+  }
+
+  function showCoachPick() {
+    const t1 = activeMeta?.team1?.name || rounds[activeIndex]?.team1?.name || 'Team 1';
+    const t2 = activeMeta?.team2?.name || rounds[activeIndex]?.team2?.name || 'Team 2';
+    if (coachPickT1) coachPickT1.textContent = t1;
+    if (coachPickT2) coachPickT2.textContent = t2;
+    closePopovers(coachPick);
+    coachPicking = true;
+    if (coachPick) coachPick.hidden = false;
+    syncCoachBtn();
+  }
+
+  async function enableCoachForTeam(team) {
+    if (team !== 1 && team !== 2) return;
+    coachTeam = team;
+    hideCoachPick();
+    coachOn = true;
     syncCoach();
-    if (coachOn) {
-      mergeCoachNotes();
-      renderActiveMarks();
-    } else {
-      clearAllCoachNotes();
+    await mergeCoachNotes();
+    renderActiveMarks();
+    const coachIdx = roundNotes.findIndex((n) => n.kind === 'coach');
+    if (coachIdx >= 0) {
+      noteIndex = coachIdx;
+      renderNoteDock({ forceText: true });
+      setNoteOpen(true);
+      seekToNoteTick(roundNotes[coachIdx].tick);
     }
+  }
+
+  coachBtn?.addEventListener('click', () => {
+    if (coachOn) {
+      coachOn = false;
+      coachTeam = null;
+      hideCoachPick();
+      syncCoach();
+      clearAllCoachNotes();
+      return;
+    }
+    if (coachPicking) {
+      hideCoachPick();
+      return;
+    }
+    showCoachPick();
   });
+
+  coachPickT1?.addEventListener('click', () => enableCoachForTeam(1));
+  coachPickT2?.addEventListener('click', () => enableCoachForTeam(2));
+  el.querySelector('#rv-coach-pick-close')?.addEventListener('click', () => hideCoachPick());
 
   /**
    * Coach flags become notes in the round's own list, so they persist and can
    * be marked exactly like anything a person wrote. Existing coach notes are
    * left alone: a flag that has already been reviewed keeps its verdict.
+   * Only the selected roster team's mistakes are written.
    */
   async function mergeCoachNotes() {
     const file = files[activeIndex];
     const result = coachFor(activeIndex);
-    if (!file || !result) return;
+    if (!file || !result || (coachTeam !== 1 && coachTeam !== 2)) return;
+    const teamOf = new Map((activeMeta?.players || []).map((p) => [p.id, p.team]));
     // Work from the dock's list, not the meta: the user may have added or
     // edited notes since the round loaded, and those must survive the merge.
     const existing = roundNotes.length ? roundNotes : notesFromMeta(activeMeta);
     const have = new Set(existing.filter((n) => n.kind === 'coach').map((n) => n.id));
-    const fresh = result.flags.map(flagToNote).filter((n) => !have.has(n.id));
+    const fresh = result.flags
+      .filter((f) => teamOf.get(f.playerId) === coachTeam)
+      .map(flagToNote)
+      .filter((n) => !have.has(n.id));
     if (!fresh.length) return;
     const next = [...existing, ...fresh].sort((a, b) => a.tick - b.tick);
     roundNotes = next;
@@ -1670,6 +1777,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   async function clearAllCoachNotes() {
     flushNoteText();
     coachCache.clear();
+    coachTeam = null;
 
     const strip = (list) => list.filter((n) => n.kind !== 'coach');
 
