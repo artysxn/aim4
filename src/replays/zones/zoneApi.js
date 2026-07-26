@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // replays/zones/zoneApi.js
-// Zone networks use the same backend + VITE_API_URL path as round notes
+// Position/zone networks use the same backend + VITE_API_URL path as round notes
 // (/api/replays/* on the Coolify volume). No Supabase — shared JSON on disk.
 // ---------------------------------------------------------------------------
 

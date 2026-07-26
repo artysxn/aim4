@@ -1,13 +1,13 @@
 // ---------------------------------------------------------------------------
-// zonesStore.js — CS2 radar zone networks per map
+// zonesStore.js — CS2 radar position/zone networks per map
 //
 // Same persistence model as demo round notes: JSON on the Coolify volume that
 // backs AIM4_REPLAY_DIR (shared library, no Supabase). Notes live in
-// <library>/rounds/*.json; zones live beside that tree at:
+// <library>/rounds/*.json; position editor data lives beside that tree at:
 //
 //   {AIM4_REPLAY_DIR}/zones/<MAP>.json
 //
-// so one persistent disk mount covers demos, notes, and zone polygons.
+// (`zones` array = positions; `sections` = named zones grouping positions.)
 // ---------------------------------------------------------------------------
 
 import fs from 'node:fs';
@@ -31,6 +31,8 @@ const PIECES_MAX = 400;
 const ZONES_MAX = 80;
 const SECTIONS_MAX = 40;
 const SECTION_ZONES_MAX = 40;
+const AREAS_MAX = 40;
+const AREA_SECTIONS_MAX = 40;
 
 async function ensureDir(dir = ZONES_ROOT) {
   await fsp.mkdir(dir, { recursive: true });
@@ -53,7 +55,7 @@ function validRing(ring) {
 /**
  * @param {string} map
  * @param {unknown} payload
- * @returns {{ map: string, zones: Array, sections: Array, updatedAt: number }}
+ * @returns {{ map: string, zones: Array, sections: Array, areas: Array, colorMode: string, updatedAt: number }}
  */
 export function sanitizeZones(map, payload) {
   const code = String(map || '').toUpperCase();
@@ -78,7 +80,15 @@ export function sanitizeZones(map, payload) {
     const pieces = [];
     for (const piece of Array.isArray(z.pieces) ? z.pieces.slice(0, PIECES_MAX) : []) {
       if (!piece || typeof piece !== 'object') continue;
-      if (piece.type === 'rect') {
+      const asRect =
+        piece.type === 'rect' ||
+        // Older drafts sometimes omitted type on axis-aligned squares.
+        (piece.type == null &&
+          Number.isFinite(Number(piece.x)) &&
+          Number.isFinite(Number(piece.y)) &&
+          Number.isFinite(Number(piece.w)) &&
+          Number.isFinite(Number(piece.h)));
+      if (asRect) {
         const x = Number(piece.x);
         const y = Number(piece.y);
         const w = Number(piece.w);
@@ -93,7 +103,9 @@ export function sanitizeZones(map, payload) {
       }
     }
     if (!pieces.length) continue;
-    const id = String(z.id || `z${zones.length}`).slice(0, 40);
+    // Keep stored ids stable so section membership from older saves still matches.
+    let id = String(z.id || `z${zones.length}`).slice(0, 40);
+    if (zoneIds.has(id)) id = `${id}_${zones.length}`.slice(0, 40);
     zoneIds.add(id);
     zones.push({
       id,
@@ -121,20 +133,50 @@ export function sanitizeZones(map, payload) {
       ids.push(id);
     }
     const color = String(s.color || '').slice(0, 32);
+    const sid = String(s.id || `s${sections.length}`).slice(0, 40);
     sections.push({
-      id: String(s.id || `s${sections.length}`).slice(0, 40),
+      id: sid,
       name,
       color,
       zoneIds: ids
     });
   }
 
-  const colorMode = payload?.colorMode === 'section' ? 'section' : 'zone';
+  const sectionIds = new Set(sections.map((s) => s.id));
+  const areas = [];
+  const rawAreas = Array.isArray(payload?.areas) ? payload.areas : [];
+  for (const a of rawAreas.slice(0, AREAS_MAX)) {
+    if (!a || typeof a !== 'object') continue;
+    const name = String(a.name || '')
+      .trim()
+      .slice(0, NAME_MAX);
+    if (!name) continue;
+    const ids = [];
+    const seen = new Set();
+    for (const raw of Array.isArray(a.sectionIds) ? a.sectionIds.slice(0, AREA_SECTIONS_MAX) : []) {
+      const id = String(raw || '').slice(0, 40);
+      if (!id || !sectionIds.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+    areas.push({
+      id: String(a.id || `a${areas.length}`).slice(0, 40),
+      name,
+      color: String(a.color || '').slice(0, 32),
+      sectionIds: ids
+    });
+  }
+
+  const colorMode =
+    payload?.colorMode === 'section' || payload?.colorMode === 'area'
+      ? payload.colorMode
+      : 'zone';
 
   return {
     map: code,
     zones,
     sections,
+    areas,
     colorMode,
     updatedAt: Number(payload?.updatedAt) || Date.now()
   };
@@ -186,16 +228,48 @@ export async function getZones(map) {
   if (!MAP_RE.test(code)) return null;
   await migrateLegacyIfNeeded(code);
   const data = await readJsonFile(fileFor(code));
-  if (!data) return { map: code, zones: [], sections: [], colorMode: 'zone', updatedAt: 0 };
+  if (!data) {
+    return { map: code, zones: [], sections: [], areas: [], colorMode: 'zone', updatedAt: 0 };
+  }
   try {
+    // Read-only: never rewrite the file on GET. Missing sections/areas/colorMode
+    // become empty defaults in memory; existing polygons keep their ids/names.
     return sanitizeZones(code, data);
   } catch {
-    return { map: code, zones: [], sections: [], colorMode: 'zone', updatedAt: 0 };
+    // Last resort — still try not to blank a map the user already drew.
+    try {
+      return sanitizeZones(code, { zones: Array.isArray(data.zones) ? data.zones : [] });
+    } catch {
+      return { map: code, zones: [], sections: [], areas: [], colorMode: 'zone', updatedAt: 0 };
+    }
   }
 }
 
+/**
+ * Persist a network. Fields omitted by older clients are filled from the
+ * on-disk file so an upgrade never wipes sections/areas the UI hadn't heard of.
+ */
 export async function saveZones(map, payload) {
-  const clean = sanitizeZones(map, { ...payload, updatedAt: Date.now() });
+  const code = String(map || '').toUpperCase();
+  if (!MAP_RE.test(code)) throw new Error('Invalid map code');
+  await migrateLegacyIfNeeded(code);
+  const existing = (await readJsonFile(fileFor(code))) || {};
+
+  const merged = {
+    map: code,
+    zones: Array.isArray(payload?.zones) ? payload.zones : existing.zones || [],
+    sections: Array.isArray(payload?.sections) ? payload.sections : existing.sections || [],
+    areas: Array.isArray(payload?.areas) ? payload.areas : existing.areas || [],
+    colorMode:
+      payload?.colorMode === 'section' ||
+      payload?.colorMode === 'area' ||
+      payload?.colorMode === 'zone'
+        ? payload.colorMode
+        : existing.colorMode || 'zone',
+    updatedAt: Date.now()
+  };
+
+  const clean = sanitizeZones(code, merged);
   await ensureDir();
   // Same durable write style as round notes: replace the JSON file in place.
   await fsp.writeFile(fileFor(clean.map), JSON.stringify(clean, null, 2), 'utf8');

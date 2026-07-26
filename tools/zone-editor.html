@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Zone Editor · AIM4</title>
+<title>Position Editor · AIM4</title>
 <style>
   @font-face {
     font-family: 'Host Grotesk';
@@ -136,24 +136,22 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    overflow-y: auto;
     border-left: 1px solid var(--border);
     background: var(--panel);
   }
   .ze-side-head {
+    flex: 0 0 auto;
     padding: 14px 14px 10px;
     border-bottom: 1px solid var(--border);
-  }
-  .ze-side-head h2, .ze-sections-head h2 {
-    margin: 0 0 10px;
-    font-size: 12px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--panel);
   }
   .ze-color-mode {
     display: flex;
     gap: 4px;
-    margin-bottom: 10px;
   }
   .ze-color-mode button {
     flex: 1;
@@ -174,6 +172,46 @@
     color: var(--text);
     border-color: rgba(245, 37, 37, 0.55);
     background: rgba(245, 37, 37, 0.12);
+  }
+  .ze-panel {
+    flex: 0 0 auto;
+    border-bottom: 1px solid var(--border);
+  }
+  .ze-panel:last-child { border-bottom: none; }
+  .ze-panel > summary {
+    display: flex;
+    align-items: center;
+    padding: 12px 14px;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+  }
+  .ze-panel > summary::-webkit-details-marker { display: none; }
+  .ze-panel > summary::before {
+    content: '▸';
+    display: inline-block;
+    width: 14px;
+    margin-right: 4px;
+    font-size: 10px;
+    transition: transform 0.15s ease;
+  }
+  .ze-panel[open] > summary::before { transform: rotate(90deg); }
+  .ze-panel > summary:hover { color: var(--text); }
+  .ze-panel-body {
+    padding: 0 14px 12px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .ze-panel[open] .ze-panel-list {
+    max-height: min(240px, 32vh);
+    overflow-y: auto;
+    margin-top: 8px;
+    padding: 4px 0;
   }
   .ze-swatch-wrap {
     position: relative;
@@ -220,30 +258,8 @@
     height: auto;
     min-height: 34px;
   }
-  #ze-list {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    padding: 8px;
-  }
-  .ze-sections {
-    display: flex;
-    flex-direction: column;
-    max-height: 42%;
-    min-height: 140px;
-    border-top: 1px solid var(--border);
-  }
-  .ze-sections-head {
-    padding: 12px 14px 8px;
-  }
-  #ze-sections-list {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    padding: 0 8px 8px;
-  }
   .ze-empty {
-    margin: 16px 8px;
+    margin: 8px 0;
     color: var(--muted);
     font-size: 13px;
     line-height: 1.45;
@@ -302,8 +318,8 @@
     min-height: 44px;
   }
   .ze-sec.selected {
-    border-color: var(--border-strong);
-    background: rgba(255,255,255,0.04);
+    border-color: rgba(245, 37, 37, 0.45);
+    background: rgba(245, 37, 37, 0.1);
   }
   .ze-sec.ze-drop-over {
     border-color: rgba(245, 37, 37, 0.55);
@@ -336,6 +352,57 @@
     flex: 0 0 auto;
   }
   .ze-sec-members li span {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ze-area {
+    margin-bottom: 6px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-xs);
+    padding: 6px;
+    min-height: 44px;
+  }
+  .ze-area.selected {
+    border-color: rgba(245, 37, 37, 0.45);
+    background: rgba(245, 37, 37, 0.1);
+  }
+  .ze-area.ze-drop-over {
+    border-color: rgba(245, 37, 37, 0.55);
+    background: rgba(245, 37, 37, 0.08);
+  }
+  .ze-area-top {
+    display: grid;
+    grid-template-columns: 14px 1fr auto;
+    gap: 6px;
+    align-items: center;
+  }
+  .ze-area-members {
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+    min-height: 8px;
+  }
+  .ze-area-members li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    margin-bottom: 2px;
+    border-radius: var(--radius-xs);
+    font-size: 12px;
+    color: var(--muted);
+    cursor: grab;
+    border: 1px solid transparent;
+  }
+  .ze-area-members li:hover {
+    color: var(--text);
+    background: rgba(255,255,255,0.04);
+  }
+  .ze-area-members li.ze-dragging { opacity: 0.45; }
+  .ze-area-members li span {
     min-width: 0;
     flex: 1;
     overflow: hidden;
@@ -416,7 +483,7 @@
   <div class="ze">
     <header class="ze-top">
       <a class="ze-back" href="/tools">← Tools</a>
-      <div class="ze-brand">Zone <span>Editor</span></div>
+      <div class="ze-brand">Position <span>Editor</span></div>
       <div class="ze-maps" id="ze-maps"></div>
     </header>
     <div class="ze-body">
@@ -431,26 +498,41 @@
       </div>
       <aside class="ze-side">
         <div class="ze-side-head">
-          <h2>Areas</h2>
           <div class="ze-color-mode" id="ze-color-mode" role="group" aria-label="Color mode">
-            <button type="button" data-mode="zone" class="active" title="One color per area">Zones</button>
-            <button type="button" data-mode="section" title="One color per section">Groups</button>
-          </div>
-          <div class="ze-field">
-            <input id="ze-name" type="text" maxlength="48" value="" placeholder="Zone name" />
+            <button type="button" data-mode="zone" class="active" title="One color per position">Positions</button>
+            <button type="button" data-mode="section" title="One color per zone">Zones</button>
+            <button type="button" data-mode="area" title="One color per area">Areas</button>
           </div>
         </div>
-        <div id="ze-list" class="ze-list-drop"></div>
-        <div class="ze-sections">
-          <div class="ze-sections-head">
-            <h2>Sections</h2>
-            <div class="ze-field ze-field-row">
-              <input id="ze-section-name" type="text" maxlength="48" value="" placeholder="Section name" />
-              <button type="button" class="ze-icon-btn" id="ze-section-add" title="Add selected areas to this section (Shift-click to multi-select)">+</button>
+        <details class="ze-panel" open>
+          <summary>Positions</summary>
+          <div class="ze-panel-body">
+            <div class="ze-field">
+              <input id="ze-name" type="text" maxlength="48" value="" placeholder="Position name" />
             </div>
+            <div id="ze-list" class="ze-panel-list ze-list-drop"></div>
           </div>
-          <div id="ze-sections-list"></div>
-        </div>
+        </details>
+        <details class="ze-panel" open>
+          <summary>Zones</summary>
+          <div class="ze-panel-body">
+            <div class="ze-field ze-field-row">
+              <input id="ze-section-name" type="text" maxlength="48" value="" placeholder="Zone name" />
+              <button type="button" class="ze-icon-btn" id="ze-section-add" title="Add selected positions to this zone (Shift-click to multi-select)">+</button>
+            </div>
+            <div id="ze-sections-list" class="ze-panel-list"></div>
+          </div>
+        </details>
+        <details class="ze-panel" open>
+          <summary>Areas</summary>
+          <div class="ze-panel-body">
+            <div class="ze-field ze-field-row">
+              <input id="ze-area-name" type="text" maxlength="48" value="" placeholder="Area name" />
+              <button type="button" class="ze-icon-btn" id="ze-area-add" title="Add selected zones to this area (Shift-click to multi-select)">+</button>
+            </div>
+            <div id="ze-areas-list" class="ze-panel-list"></div>
+          </div>
+        </details>
       </aside>
     </div>
     <footer class="ze-foot">

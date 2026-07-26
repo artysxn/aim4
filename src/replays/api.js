@@ -284,7 +284,7 @@ export async function fetchRoundTicks(file, stride = 1) {
   return res.arrayBuffer();
 }
 
-// ---- Zone networks (same Coolify volume as notes; not Supabase) -----------
+// ---- Position / zone networks (same Coolify volume as notes; not Supabase) -
 
 export async function fetchZoneMaps() {
   const data = await asJson(
@@ -300,16 +300,29 @@ export async function fetchZones(map) {
       headers: await headers()
     })
   );
-  return data.network || { map, zones: [], sections: [], colorMode: 'zone', updatedAt: 0 };
+  return (
+    data.network || {
+      map,
+      zones: [],
+      sections: [],
+      areas: [],
+      colorMode: 'zone',
+      updatedAt: 0
+    }
+  );
 }
 
 /**
- * Persist zone polygons + names for one map. Same shared write path as
+ * Persist positions + zones + areas for one map. Same shared write path as
  * saveRoundNotes — JSON on AIM4_REPLAY_DIR, no auth.
  * @param {string} map
- * @param {{ zones?: Array, sections?: Array, colorMode?: string }} network
+ * @param {{ zones?: Array, sections?: Array, areas?: Array, colorMode?: string }} network
  */
 export async function saveZones(map, network) {
+  const colorMode =
+    network.colorMode === 'section' || network.colorMode === 'area'
+      ? network.colorMode
+      : 'zone';
   const data = await asJson(
     await fetch(`${API_BASE}/api/replays/zones/${encodeURIComponent(map)}`, {
       method: 'POST',
@@ -317,7 +330,8 @@ export async function saveZones(map, network) {
       body: JSON.stringify({
         zones: network.zones || [],
         sections: network.sections || [],
-        colorMode: network.colorMode === 'section' ? 'section' : 'zone'
+        areas: network.areas || [],
+        colorMode
       })
     })
   );
