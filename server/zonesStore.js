@@ -29,6 +29,8 @@ const MAP_RE = /^[A-Z0-9]{2,4}$/;
 const NAME_MAX = 48;
 const PIECES_MAX = 400;
 const ZONES_MAX = 80;
+const SECTIONS_MAX = 40;
+const SECTION_ZONES_MAX = 40;
 
 async function ensureDir(dir = ZONES_ROOT) {
   await fsp.mkdir(dir, { recursive: true });
@@ -51,7 +53,7 @@ function validRing(ring) {
 /**
  * @param {string} map
  * @param {unknown} payload
- * @returns {{ map: string, zones: Array, updatedAt: number }}
+ * @returns {{ map: string, zones: Array, sections: Array, updatedAt: number }}
  */
 export function sanitizeZones(map, payload) {
   const code = String(map || '').toUpperCase();
@@ -65,6 +67,7 @@ export function sanitizeZones(map, payload) {
   if (!rawZones) throw new Error('Invalid zones payload');
 
   const zones = [];
+  const zoneIds = new Set();
   for (const z of rawZones.slice(0, ZONES_MAX)) {
     if (!z || typeof z !== 'object') continue;
     const name = String(z.name || '')
@@ -90,8 +93,10 @@ export function sanitizeZones(map, payload) {
       }
     }
     if (!pieces.length) continue;
+    const id = String(z.id || `z${zones.length}`).slice(0, 40);
+    zoneIds.add(id);
     zones.push({
-      id: String(z.id || `z${zones.length}`).slice(0, 40),
+      id,
       name,
       color,
       hidden: Boolean(z.hidden),
@@ -99,9 +104,33 @@ export function sanitizeZones(map, payload) {
     });
   }
 
+  const sections = [];
+  const rawSections = Array.isArray(payload?.sections) ? payload.sections : [];
+  for (const s of rawSections.slice(0, SECTIONS_MAX)) {
+    if (!s || typeof s !== 'object') continue;
+    const name = String(s.name || '')
+      .trim()
+      .slice(0, NAME_MAX);
+    if (!name) continue;
+    const ids = [];
+    const seen = new Set();
+    for (const raw of Array.isArray(s.zoneIds) ? s.zoneIds.slice(0, SECTION_ZONES_MAX) : []) {
+      const id = String(raw || '').slice(0, 40);
+      if (!id || !zoneIds.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+    sections.push({
+      id: String(s.id || `s${sections.length}`).slice(0, 40),
+      name,
+      zoneIds: ids
+    });
+  }
+
   return {
     map: code,
     zones,
+    sections,
     updatedAt: Number(payload?.updatedAt) || Date.now()
   };
 }
@@ -152,11 +181,11 @@ export async function getZones(map) {
   if (!MAP_RE.test(code)) return null;
   await migrateLegacyIfNeeded(code);
   const data = await readJsonFile(fileFor(code));
-  if (!data) return { map: code, zones: [], updatedAt: 0 };
+  if (!data) return { map: code, zones: [], sections: [], updatedAt: 0 };
   try {
     return sanitizeZones(code, data);
   } catch {
-    return { map: code, zones: [], updatedAt: 0 };
+    return { map: code, zones: [], sections: [], updatedAt: 0 };
   }
 }
 

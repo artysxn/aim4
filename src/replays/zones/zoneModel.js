@@ -37,8 +37,58 @@ export function newZoneId() {
   return `z${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
+export function newSectionId() {
+  return `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
 export function emptyNetwork(map) {
-  return { map, zones: [], updatedAt: 0 };
+  return { map, zones: [], sections: [], updatedAt: 0 };
+}
+
+/**
+ * Named group of zone ids (e.g. Banana = top banana + logs + …).
+ * @param {object} network
+ * @param {string} name
+ * @param {string[]} [zoneIds]
+ */
+export function addSection(network, name, zoneIds = []) {
+  if (!Array.isArray(network.sections)) network.sections = [];
+  const label = String(name || '').trim() || 'Section';
+  const existing = network.sections.find(
+    (s) => s.name.trim().toLowerCase() === label.toLowerCase()
+  );
+  if (existing) return existing;
+  const section = {
+    id: newSectionId(),
+    name: label,
+    zoneIds: [...new Set((zoneIds || []).map(String).filter(Boolean))]
+  };
+  network.sections.push(section);
+  return section;
+}
+
+export function deleteSection(network, sectionId) {
+  if (!Array.isArray(network.sections)) return;
+  network.sections = network.sections.filter((s) => s.id !== sectionId);
+}
+
+export function renameSection(network, sectionId, newName) {
+  const section = network.sections?.find((s) => s.id === sectionId);
+  if (!section) return;
+  section.name = String(newName || '').trim() || section.name;
+}
+
+export function addZoneToSection(network, sectionId, zoneId) {
+  const section = network.sections?.find((s) => s.id === sectionId);
+  if (!section || !zoneId) return;
+  if (!Array.isArray(section.zoneIds)) section.zoneIds = [];
+  if (!section.zoneIds.includes(zoneId)) section.zoneIds.push(zoneId);
+}
+
+export function removeZoneFromSection(network, sectionId, zoneId) {
+  const section = network.sections?.find((s) => s.id === sectionId);
+  if (!section?.zoneIds) return;
+  section.zoneIds = section.zoneIds.filter((id) => id !== zoneId);
 }
 
 export function findZoneByName(network, name) {
@@ -99,6 +149,15 @@ export function addRectToNetwork(network, name, worldRect) {
   return zone;
 }
 
+function pruneSectionZoneIds(network) {
+  if (!Array.isArray(network.sections)) return;
+  const ids = new Set((network.zones || []).map((z) => z.id));
+  for (const s of network.sections) {
+    if (!Array.isArray(s.zoneIds)) continue;
+    s.zoneIds = s.zoneIds.filter((id) => ids.has(id));
+  }
+}
+
 /** Carve `cutter` out of every zone except the keeper (by id). */
 export function carveRectFromOthers(network, cutter, keepZoneId) {
   for (const z of network.zones) {
@@ -106,6 +165,7 @@ export function carveRectFromOthers(network, cutter, keepZoneId) {
     z.pieces = subtractRectFromPieces(z.pieces || [], cutter);
   }
   network.zones = network.zones.filter((z) => (z.pieces || []).length > 0);
+  pruneSectionZoneIds(network);
 }
 
 export function renameZone(network, zoneId, newName) {
@@ -114,9 +174,16 @@ export function renameZone(network, zoneId, newName) {
   const label = String(newName || '').trim() || zone.name;
   const existing = findZoneByName(network, label);
   if (existing && existing.id !== zone.id) {
-    // Merge into existing same-name zone.
+    // Merge into existing same-name zone; retarget section membership.
     existing.pieces.push(...(zone.pieces || []));
     existing.color = colorForName(existing.name);
+    if (Array.isArray(network.sections)) {
+      for (const s of network.sections) {
+        if (!Array.isArray(s.zoneIds)) continue;
+        s.zoneIds = s.zoneIds.map((id) => (id === zone.id ? existing.id : id));
+        s.zoneIds = [...new Set(s.zoneIds)];
+      }
+    }
     network.zones = network.zones.filter((z) => z.id !== zone.id);
   } else {
     zone.name = label;
@@ -126,6 +193,7 @@ export function renameZone(network, zoneId, newName) {
 
 export function deleteZone(network, zoneId) {
   network.zones = network.zones.filter((z) => z.id !== zoneId);
+  pruneSectionZoneIds(network);
 }
 
 /** Radar-space drag → world rect via radarToWorld corners. */

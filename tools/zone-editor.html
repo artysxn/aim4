@@ -143,17 +143,11 @@
     padding: 14px 14px 10px;
     border-bottom: 1px solid var(--border);
   }
-  .ze-side-head h2 {
+  .ze-side-head h2, .ze-sections-head h2 {
     margin: 0 0 10px;
     font-size: 12px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--muted);
-  }
-  .ze-field label {
-    display: block;
-    margin-bottom: 4px;
-    font-size: 11px;
     color: var(--muted);
   }
   .ze-field input {
@@ -166,17 +160,38 @@
     font: inherit;
     font-size: 13px;
   }
-  .ze-hint {
-    margin: 8px 0 0;
-    font-size: 11px;
-    line-height: 1.4;
-    color: var(--muted);
+  .ze-field-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 6px;
+    align-items: stretch;
+  }
+  .ze-field-row .ze-icon-btn {
+    width: 36px;
+    height: auto;
+    min-height: 34px;
   }
   #ze-list {
     flex: 1;
     min-height: 0;
     overflow: auto;
     padding: 8px;
+  }
+  .ze-sections {
+    display: flex;
+    flex-direction: column;
+    max-height: 42%;
+    min-height: 140px;
+    border-top: 1px solid var(--border);
+  }
+  .ze-sections-head {
+    padding: 12px 14px 8px;
+  }
+  #ze-sections-list {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 0 8px 8px;
   }
   .ze-empty {
     margin: 16px 8px;
@@ -215,6 +230,67 @@
     color: var(--text);
     font: inherit;
     font-size: 12px;
+  }
+  .ze-sec {
+    margin-bottom: 6px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-xs);
+    padding: 6px;
+  }
+  .ze-sec.selected {
+    border-color: var(--border-strong);
+    background: rgba(255,255,255,0.04);
+  }
+  .ze-sec-top {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 6px;
+    align-items: center;
+  }
+  .ze-sec-members {
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .ze-sec-members li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 3px 2px 3px 8px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .ze-sec-members li span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ze-sec-members .ze-icon-btn {
+    width: 24px;
+    height: 22px;
+    font-size: 11px;
+  }
+  .ze-sec-add {
+    margin-top: 6px;
+    width: 100%;
+    padding: 5px 8px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-xs);
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .ze-sec-add:hover:not(:disabled) {
+    color: var(--text);
+    border-color: var(--border-strong);
+  }
+  .ze-sec-add:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
   .ze-foot {
     display: flex;
@@ -307,12 +383,20 @@
         <div class="ze-side-head">
           <h2>Areas</h2>
           <div class="ze-field">
-            <label for="ze-name">Label for next square</label>
-            <input id="ze-name" type="text" maxlength="48" value="Banana" placeholder="Zone name" />
+            <input id="ze-name" type="text" maxlength="48" value="" placeholder="Zone name" />
           </div>
-          <p class="ze-hint">Same name merges into one zone. Overlaps ask which side keeps the area. Drag to draw · Shift-drag to pan · Scroll to zoom.</p>
         </div>
         <div id="ze-list"></div>
+        <div class="ze-sections">
+          <div class="ze-sections-head">
+            <h2>Sections</h2>
+            <div class="ze-field ze-field-row">
+              <input id="ze-section-name" type="text" maxlength="48" value="" placeholder="Section name" />
+              <button type="button" class="ze-icon-btn" id="ze-section-add" title="Create section">+</button>
+            </div>
+          </div>
+          <div id="ze-sections-list"></div>
+        </div>
       </aside>
     </div>
     <footer class="ze-foot">

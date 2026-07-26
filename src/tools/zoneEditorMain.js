@@ -9,11 +9,16 @@ import { loadRadar } from '../replays/viewer/radarRenderer.js';
 import { pieceToRing, subtractRectFromPieces } from '../replays/zones/zoneGeom.js';
 import {
   addRectToNetwork,
+  addSection,
+  addZoneToSection,
   carveRectFromOthers,
   colorForName,
+  deleteSection,
   deleteZone,
   emptyNetwork,
   overlappingZones,
+  removeZoneFromSection,
+  renameSection,
   renameZone,
   worldRectFromRadarDrag
 } from '../replays/zones/zoneModel.js';
@@ -22,12 +27,16 @@ import { fetchZones, saveZones } from '../replays/zones/zoneApi.js';
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 6;
 const MIN_DRAW_PX = 8;
+const UNDO_MAX = 40;
 
 const el = {
   mapTabs: document.querySelector('#ze-maps'),
   canvas: document.querySelector('#ze-canvas'),
   list: document.querySelector('#ze-list'),
+  sectionsList: document.querySelector('#ze-sections-list'),
   nameInput: document.querySelector('#ze-name'),
+  sectionNameInput: document.querySelector('#ze-section-name'),
+  btnSectionAdd: document.querySelector('#ze-section-add'),
   zoomLabel: document.querySelector('#ze-zoom'),
   status: document.querySelector('#ze-status'),
   modal: document.querySelector('#ze-overlap'),
@@ -42,6 +51,8 @@ const el = {
 let mapCode = MAP_CODES.includes('INF') ? 'INF' : MAP_CODES[0];
 let network = emptyNetwork(mapCode);
 let savedSnapshot = '[]';
+/** @type {Array<{ zones: Array, sections: Array }>} */
+let undoStack = [];
 let radarImg = null;
 let zoom = 1;
 let panX = 0;
@@ -52,11 +63,56 @@ let drawing = null;
 let panning = false;
 let lastPan = null;
 let selectedId = null;
+let selectedSectionId = null;
 /** @type {null | { worldRect: object, name: string, hits: Array }} */
 let pendingDraw = null;
 
+function ensureSections() {
+  if (!Array.isArray(network.sections)) network.sections = [];
+}
+
 function snapshotOf(net) {
-  return JSON.stringify(net.zones || []);
+  return JSON.stringify({
+    zones: net.zones || [],
+    sections: net.sections || []
+  });
+}
+
+function cloneNetworkState() {
+  return JSON.parse(
+    JSON.stringify({
+      zones: network.zones || [],
+      sections: network.sections || []
+    })
+  );
+}
+
+/** Snapshot before a zone-creating edit so Ctrl+Z can reverse it. */
+function pushCreateUndo() {
+  undoStack.push(cloneNetworkState());
+  if (undoStack.length > UNDO_MAX) undoStack.shift();
+}
+
+function clearUndo() {
+  undoStack = [];
+}
+
+function undoCreate() {
+  if (!undoStack.length) return;
+  const prev = undoStack.pop();
+  network.zones = prev.zones || [];
+  network.sections = prev.sections || [];
+  if (selectedId && !network.zones.some((z) => z.id === selectedId)) {
+    selectedId = null;
+  }
+  if (selectedSectionId && !network.sections.some((s) => s.id === selectedSectionId)) {
+    selectedSectionId = null;
+  }
+  markDirty(snapshotOf(network) !== savedSnapshot);
+  renderList();
+  renderSections();
+  draw();
+  setStatus('Undid zone');
 }
 
 function setStatus(msg, kind = '') {
@@ -233,11 +289,52 @@ function renderList() {
     .join('');
 }
 
+function renderSections() {
+  if (!el.sectionsList) return;
+  ensureSections();
+  if (!network.sections.length) {
+    el.sectionsList.innerHTML =
+      '<p class="ze-empty">No sections yet. Group areas (e.g. Banana) under one name.</p>';
+    return;
+  }
+  const byId = new Map(network.zones.map((z) => [z.id, z]));
+  el.sectionsList.innerHTML = network.sections
+    .map((s) => {
+      const selected = s.id === selectedSectionId ? ' selected' : '';
+      const members = (s.zoneIds || [])
+        .map((id) => byId.get(id))
+        .filter(Boolean);
+      const memberHtml = members.length
+        ? `<ul class="ze-sec-members">${members
+            .map(
+              (z) => `<li>
+              <span title="${escapeAttr(z.name)}">${escapeAttr(z.name)}</span>
+              <button type="button" class="ze-icon-btn" data-sec-act="rm" data-zone="${z.id}" title="Remove from section">✕</button>
+            </li>`
+            )
+            .join('')}</ul>`
+        : '';
+      const canAdd =
+        selectedId && !(s.zoneIds || []).includes(selectedId) && byId.has(selectedId);
+      return `<div class="ze-sec${selected}" data-section="${s.id}">
+        <div class="ze-sec-top">
+          <input class="ze-row-name" type="text" maxlength="48" value="${escapeAttr(s.name)}" data-sec-act="rename" />
+          <button type="button" class="ze-icon-btn" data-sec-act="del" title="Delete section">✕</button>
+        </div>
+        ${memberHtml}
+        <button type="button" class="ze-sec-add" data-sec-act="add" ${canAdd ? '' : 'disabled'} title="Add the selected area">
+          ${canAdd ? `+ Add “${escapeAttr(byId.get(selectedId).name)}”` : '+ Select an area first'}
+        </button>
+      </div>`;
+    })
+    .join('');
+}
+
 async function loadMap(code) {
   if (dirty && !confirm('Discard unsaved changes on this map?')) return;
   mapCode = code;
   renderMapTabs();
-  setStatus('Loading…');
+  setStatus('');
   try {
     radarImg = await loadRadar(mapCode);
   } catch {
@@ -245,23 +342,27 @@ async function loadMap(code) {
   }
   try {
     network = await fetchZones(mapCode);
+    ensureSections();
   } catch (err) {
     network = emptyNetwork(mapCode);
     setStatus(err.message || 'Could not load zones', 'err');
   }
   savedSnapshot = snapshotOf(network);
+  clearUndo();
   markDirty(false);
   selectedId = null;
+  selectedSectionId = null;
   zoom = 1;
   panX = 0;
   panY = 0;
   renderList();
+  renderSections();
   draw();
-  setStatus(`${MAPS[mapCode]?.name || mapCode} · ${network.zones.length} zones`);
 }
 
 function commitRect(worldRect, name) {
   if (worldRect.w < 8 || worldRect.h < 8) return;
+  pushCreateUndo();
   const label = String(name || '').trim() || 'Zone';
   const same = network.zones.find(
     (z) => z.name.trim().toLowerCase() === label.toLowerCase()
@@ -274,11 +375,13 @@ function commitRect(worldRect, name) {
   selectedId = z?.id || null;
   markDirty(true);
   renderList();
+  renderSections();
   draw();
 }
 
 /** Existing zones keep the overlap: add only the non-overlapping remainder. */
 function commitRectAvoiding(worldRect, name, hits) {
+  pushCreateUndo();
   let pieces = [{ ...worldRect, type: 'rect' }];
   for (const { zone } of hits) {
     for (const p of zone.pieces || []) {
@@ -294,6 +397,7 @@ function commitRectAvoiding(worldRect, name, hits) {
   selectedId = z?.id || null;
   markDirty(true);
   renderList();
+  renderSections();
   draw();
 }
 
@@ -358,6 +462,13 @@ el.mapTabs?.addEventListener('click', (e) => {
   if (btn) loadMap(btn.dataset.map);
 });
 
+function markRowSelected(id) {
+  selectedId = id;
+  el.list?.querySelectorAll('.ze-row').forEach((row) => {
+    row.classList.toggle('selected', row.dataset.id === id);
+  });
+}
+
 el.list?.addEventListener('click', (e) => {
   const row = e.target.closest('.ze-row');
   if (!row) return;
@@ -370,6 +481,7 @@ el.list?.addEventListener('click', (e) => {
     if (selectedId === id) selectedId = null;
     markDirty(true);
     renderList();
+    renderSections();
     draw();
     return;
   }
@@ -380,9 +492,18 @@ el.list?.addEventListener('click', (e) => {
     draw();
     return;
   }
-  selectedId = id;
-  el.nameInput.value = zone.name;
-  renderList();
+  // Clicking the name field must not rebuild the list — that killed focus
+  // and made renames impossible.
+  if (e.target.closest('.ze-row-name')) {
+    markRowSelected(id);
+    if (el.nameInput) el.nameInput.value = zone.name;
+    renderSections();
+    draw();
+    return;
+  }
+  markRowSelected(id);
+  if (el.nameInput) el.nameInput.value = zone.name;
+  renderSections();
   draw();
 });
 
@@ -392,9 +513,85 @@ el.list?.addEventListener('change', (e) => {
   const row = input.closest('.ze-row');
   if (!row) return;
   renameZone(network, row.dataset.id, input.value);
+  if (selectedId === row.dataset.id && el.nameInput) {
+    el.nameInput.value = input.value.trim() || el.nameInput.value;
+  }
   markDirty(true);
   renderList();
+  renderSections();
   draw();
+});
+
+// Commit rename on Enter without waiting for blur.
+el.list?.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const input = e.target.closest?.('.ze-row-name');
+  if (!input) return;
+  e.preventDefault();
+  input.blur();
+});
+
+el.btnSectionAdd?.addEventListener('click', () => {
+  ensureSections();
+  const name = el.sectionNameInput?.value.trim();
+  if (!name) {
+    el.sectionNameInput?.focus();
+    return;
+  }
+  const section = addSection(network, name);
+  selectedSectionId = section.id;
+  if (el.sectionNameInput) el.sectionNameInput.value = '';
+  markDirty(true);
+  renderSections();
+});
+
+el.sectionNameInput?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    el.btnSectionAdd?.click();
+  }
+});
+
+el.sectionsList?.addEventListener('click', (e) => {
+  const sec = e.target.closest('.ze-sec');
+  if (!sec) return;
+  const sectionId = sec.dataset.section;
+  const act = e.target.closest('[data-sec-act]')?.dataset.secAct;
+  if (act === 'del') {
+    deleteSection(network, sectionId);
+    if (selectedSectionId === sectionId) selectedSectionId = null;
+    markDirty(true);
+    renderSections();
+    return;
+  }
+  if (act === 'rm') {
+    const zoneId = e.target.closest('[data-zone]')?.dataset.zone;
+    removeZoneFromSection(network, sectionId, zoneId);
+    markDirty(true);
+    renderSections();
+    return;
+  }
+  if (act === 'add') {
+    if (!selectedId) return;
+    addZoneToSection(network, sectionId, selectedId);
+    selectedSectionId = sectionId;
+    markDirty(true);
+    renderSections();
+    return;
+  }
+  if (e.target.closest('input')) return;
+  selectedSectionId = sectionId;
+  renderSections();
+});
+
+el.sectionsList?.addEventListener('change', (e) => {
+  const input = e.target.closest('[data-sec-act="rename"]');
+  if (!input) return;
+  const sec = input.closest('.ze-sec');
+  if (!sec) return;
+  renameSection(network, sec.dataset.section, input.value);
+  markDirty(true);
+  renderSections();
 });
 
 el.canvas.addEventListener('pointerdown', (e) => {
@@ -424,7 +621,7 @@ el.canvas.addEventListener('pointermove', (e) => {
   draw();
 });
 
-el.canvas.addEventListener('pointerup', (e) => {
+el.canvas.addEventListener('pointerup', () => {
   if (panning) {
     panning = false;
     lastPan = null;
@@ -473,13 +670,17 @@ el.btnDiscard?.addEventListener('click', async () => {
   if (dirty && !confirm('Discard unsaved changes?')) return;
   try {
     network = await fetchZones(mapCode);
+    ensureSections();
   } catch {
     network = emptyNetwork(mapCode);
   }
   savedSnapshot = snapshotOf(network);
+  clearUndo();
   markDirty(false);
   selectedId = null;
+  selectedSectionId = null;
   renderList();
+  renderSections();
   draw();
   setStatus('Discarded');
 });
@@ -488,13 +689,23 @@ el.btnSave?.addEventListener('click', async () => {
   setStatus('Saving…');
   try {
     network = await saveZones(mapCode, network);
+    ensureSections();
     savedSnapshot = snapshotOf(network);
+    clearUndo();
     markDirty(false);
     setStatus('Saved', 'ok');
     renderList();
+    renderSections();
   } catch (err) {
     setStatus(err.message || 'Save failed', 'err');
   }
+});
+
+window.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || String(e.key).toLowerCase() !== 'z') return;
+  if (e.target?.matches?.('input, textarea, select')) return;
+  e.preventDefault();
+  undoCreate();
 });
 
 window.addEventListener('resize', resize);
