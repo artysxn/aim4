@@ -36,6 +36,8 @@ const SIGHT_COVER = 0.6;
 const WALL_ALPHA = 28;
 /** Smoke lifetime — matches radar renderer. */
 const SMOKE_SECONDS = 22;
+/** Smoke cloud radius in world units — matches radarRenderer.SMOKE_RADIUS_UNITS. */
+const SMOKE_RADIUS_UNITS = 144;
 /** World-unit pad when deciding two positions share a border. */
 const ADJACENT_PAD = 18;
 /** Sample points per position for sight coverage. */
@@ -54,6 +56,9 @@ const losCache = new Map();
  * First tick each side entered each position (sampled once per second), plus
  * a claim-event log used by the Shift-hover explain tip.
  *
+ * Every foot *entry* (rising edge) is logged — not only the first visit of the
+ * round — so a later re-entry is the claim that soft control follows.
+ *
  * @returns {{ firstT: Map<string, number>, firstCT: Map<string, number>, events: Map<string, ZoneClaimEvent[]> } | null}
  */
 export function buildZonePresence({ meta, track, network }) {
@@ -71,6 +76,8 @@ export function buildZonePresence({ meta, track, network }) {
   /** @type {Map<string, ZoneClaimEvent[]>} */
   const events = new Map();
   const scratch = [];
+  /** @type {Set<string>} `${playerId}\0${posId}` occupied on the previous sample */
+  let prevInside = new Set();
 
   const pushEvent = (posId, ev) => {
     if (!events.has(posId)) events.set(posId, []);
@@ -79,6 +86,8 @@ export function buildZonePresence({ meta, track, network }) {
 
   for (let tick = from; tick <= to; tick += tickRate) {
     track.sampleAll(tick, scratch);
+    /** @type {Set<string>} */
+    const curInside = new Set();
     for (const p of players) {
       const side = teamSides[p.team];
       if (side !== 'T' && side !== 'CT') continue;
@@ -87,8 +96,12 @@ export function buildZonePresence({ meta, track, network }) {
       const hits = positionsAtPoint(s.x, s.y, network);
       const map = side === 'T' ? firstT : firstCT;
       for (const z of hits) {
-        if (!z?.id || map.has(z.id)) continue;
-        map.set(z.id, tick);
+        if (!z?.id) continue;
+        const key = `${p.id}\0${z.id}`;
+        curInside.add(key);
+        if (!map.has(z.id)) map.set(z.id, tick);
+        // Rising edge only — staying inside is not a new claim.
+        if (prevInside.has(key)) continue;
         pushEvent(z.id, {
           tick,
           side,
@@ -99,22 +112,47 @@ export function buildZonePresence({ meta, track, network }) {
         });
       }
     }
+    prevInside = curInside;
   }
   return { firstT, firstCT, events };
 }
 
-/** Record a claim on the presence event log (one entry per reason/side/player). */
+/**
+ * Record a claim on the presence event log.
+ * Same reason/side/player on the same tick is ignored; a later tick is a new
+ * claim so soft control can follow the most recent one.
+ */
 export function recordClaim(presence, posId, ev) {
   if (!presence || !posId || !ev) return;
   if (!presence.events) presence.events = new Map();
   const list = presence.events.get(posId) || [];
   const dup = list.some(
     (e) =>
+      e.tick === ev.tick &&
       e.reason === ev.reason &&
       e.side === ev.side &&
       (ev.playerId ? e.playerId === ev.playerId : !e.playerId)
   );
   if (dup) return;
+  // Sight/surround can fire every paint frame while the condition holds —
+  // keep one row per reason/side/player and move it forward when re-claimed.
+  if (ev.reason === 'sight' || ev.reason === 'surround' || ev.reason === 'sight-enemy') {
+    const prior = list.find(
+      (e) =>
+        e.reason === ev.reason &&
+        e.side === ev.side &&
+        (ev.playerId ? e.playerId === ev.playerId : !e.playerId)
+    );
+    if (prior) {
+      if ((ev.tick || 0) > (prior.tick || 0)) {
+        prior.tick = ev.tick;
+        prior.detail = ev.detail || prior.detail;
+        list.sort((a, b) => a.tick - b.tick);
+        presence.events.set(posId, list);
+      }
+      return;
+    }
+  }
   list.push(ev);
   list.sort((a, b) => a.tick - b.tick);
   presence.events.set(posId, list);
@@ -356,16 +394,25 @@ export function getRadarLos(mapCode, image) {
   return los;
 }
 
-/** Position ids that currently have an active smoke on them. */
-function smokedPositions(grenades, tick, tickRate, network) {
-  const ids = new Set();
+/** Active smoke grenades at `tick` (detonated, still living). */
+function activeSmokes(grenades, tick, tickRate) {
+  const out = [];
   const life = SMOKE_SECONDS * (tickRate || 64);
   for (const g of grenades || []) {
     if (g.type !== 'smokegrenade') continue;
     const det = Number(g.detonateTick);
     if (!Number.isFinite(det) || tick < det || tick > det + life) continue;
-    if (!g.at || !Number.isFinite(g.at.x)) continue;
-    for (const z of positionsAtPoint(g.at.x, g.at.y, network)) {
+    if (!g.at || !Number.isFinite(g.at.x) || !Number.isFinite(g.at.y)) continue;
+    out.push({ x: g.at.x, y: g.at.y });
+  }
+  return out;
+}
+
+/** Position ids that currently have an active smoke on them. */
+function smokedPositions(grenades, tick, tickRate, network) {
+  const ids = new Set();
+  for (const s of activeSmokes(grenades, tick, tickRate)) {
+    for (const z of positionsAtPoint(s.x, s.y, network)) {
       if (z?.id) ids.add(z.id);
     }
   }
@@ -373,9 +420,35 @@ function smokedPositions(grenades, tick, tickRate, network) {
 }
 
 /**
- * Fraction of sample points in-FOV with clear radar LOS from the player.
+ * True when the world-space segment A→B passes through any smoke disc.
+ * Used so a mid smoke blocks sight into positions *behind* it, not only the
+ * cell the grenade landed in.
  */
-function sightCover(player, pos, los) {
+function segmentBlockedBySmoke(x0, y0, x1, y1, smokes, radius = SMOKE_RADIUS_UNITS) {
+  if (!smokes?.length) return false;
+  const r2 = radius * radius;
+  for (const s of smokes) {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const len2 = dx * dx + dy * dy;
+    let t = 0;
+    if (len2 > 1e-6) {
+      t = ((s.x - x0) * dx + (s.y - y0) * dy) / len2;
+      t = Math.max(0, Math.min(1, t));
+    }
+    const cx = x0 + dx * t - s.x;
+    const cy = y0 + dy * t - s.y;
+    if (cx * cx + cy * cy <= r2) return true;
+  }
+  return false;
+}
+
+/**
+ * Fraction of sample points in-FOV with clear radar LOS from the player,
+ * and not occluded by a smoke cloud on the way.
+ * @param {Array<{x:number,y:number}>} [smokes]
+ */
+function sightCover(player, pos, los, smokes) {
   const pts = samplePointsForPosition(pos);
   if (!pts.length) return 0;
   let ok = 0;
@@ -383,6 +456,7 @@ function sightCover(player, pos, los) {
     if (yawDelta(player.yaw, yawToward(player, p)) > SIGHT_FOV_DEG) continue;
     if (los && !los.clearWorld(player.x, player.y, p.x, p.y)) continue;
     if (!los) continue;
+    if (segmentBlockedBySmoke(player.x, player.y, p.x, p.y, smokes)) continue;
     ok++;
   }
   return ok / pts.length;
@@ -422,7 +496,9 @@ function applyVisionClaims({
   const los = getRadarLos(mapCode, radarImage);
   if (!los) return { tSight, ctSight, contestedSight, sightNow };
 
-  const smoked = smokedPositions(grenades, tick, meta.tickRate || 64, network);
+  const tickRate = meta.tickRate || 64;
+  const smokeCenters = activeSmokes(grenades, tick, tickRate);
+  const smoked = smokedPositions(grenades, tick, tickRate, network);
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
   const positions = network.zones.filter((z) => z?.id && !z.hidden && z.pieces?.length);
 
@@ -437,7 +513,7 @@ function applyVisionClaims({
 
     for (const pos of positions) {
       if (smoked.has(pos.id)) continue;
-      const cover = sightCover(viewer, pos, los);
+      const cover = sightCover(viewer, pos, los, smokeCenters);
       if (cover < SIGHT_COVER) continue;
 
       const hasT = active.t.has(pos.id);
@@ -508,24 +584,38 @@ function sideOfPaint(key) {
 }
 
 /**
- * Latest non-contested claim side at or before `tick` (for soft empty control).
- * @returns {'T'|'CT'|null}
+ * Latest non-contested claim at or before `tick` (for soft empty control).
+ * Ownership follows the most recent claim — not the first visit of the round.
+ * @returns {{ side: 'T'|'CT', tick: number, reason?: string } | null}
  */
-function latestOwnerSide(presence, posId, tick) {
-  const list = (presence?.events?.get(posId) || []).filter(
-    (e) => e.tick <= tick && (e.side === 'T' || e.side === 'CT')
-  );
-  if (!list.length) {
-    const t = presence?.firstT.get(posId);
-    const ct = presence?.firstCT.get(posId);
-    const tOk = Number.isFinite(t) && t <= tick;
-    const ctOk = Number.isFinite(ct) && ct <= tick;
-    if (tOk && !ctOk) return 'T';
-    if (ctOk && !tOk) return 'CT';
-    if (tOk && ctOk) return t >= ct ? 'T' : 'CT';
-    return null;
+function latestClaimAt(presence, posId, tick) {
+  const list = presence?.events?.get(posId) || [];
+  let best = null;
+  for (const e of list) {
+    if ((e.tick || 0) > tick) continue;
+    if (e.side !== 'T' && e.side !== 'CT') continue;
+    if (!best || e.tick >= best.tick) best = e;
   }
-  return list[list.length - 1].side;
+  if (best) {
+    return { side: best.side, tick: best.tick, reason: best.reason };
+  }
+  const t = presence?.firstT.get(posId);
+  const ct = presence?.firstCT.get(posId);
+  const tOk = Number.isFinite(t) && t <= tick;
+  const ctOk = Number.isFinite(ct) && ct <= tick;
+  if (tOk && !ctOk) return { side: 'T', tick: t, reason: 'visit' };
+  if (ctOk && !tOk) return { side: 'CT', tick: ct, reason: 'visit' };
+  if (tOk && ctOk) {
+    return t >= ct
+      ? { side: 'T', tick: t, reason: 'visit' }
+      : { side: 'CT', tick: ct, reason: 'visit' };
+  }
+  return null;
+}
+
+/** @returns {'T'|'CT'|null} */
+function latestOwnerSide(presence, posId, tick) {
+  return latestClaimAt(presence, posId, tick)?.side ?? null;
 }
 
 /**
@@ -702,17 +792,10 @@ export function computeZonePaint({
     } else if (ctSee) {
       paint[pos.id] = 'ct-control';
     } else {
-      const tHist = (presence?.firstT.get(pos.id) ?? Infinity) <= tick;
-      const ctHist = (presence?.firstCT.get(pos.id) ?? Infinity) <= tick;
-      if (tHist && !ctHist) paint[pos.id] = 't-control';
-      else if (ctHist && !tHist) paint[pos.id] = 'ct-control';
-      else if (tHist && ctHist) {
-        const latest = latestOwnerSide(presence, pos.id, tick);
-        paint[pos.id] =
-          latest === 'T' ? 't-control' : latest === 'CT' ? 'ct-control' : 'empty';
-      } else {
-        paint[pos.id] = 'empty';
-      }
+      // Soft control: whichever side claimed most recently (re-entries count).
+      const latest = latestOwnerSide(presence, pos.id, tick);
+      paint[pos.id] =
+        latest === 'T' ? 't-control' : latest === 'CT' ? 'ct-control' : 'empty';
     }
   }
 
@@ -748,28 +831,36 @@ export function computeZonePaint({
       });
     }
     // Soft historical control only explained when it actually drives the paint
-    // (empty of present fights) — never as a contested reason.
+    // (empty of present fights) — never as a contested reason. Cite the latest
+    // claim tick, not the first visit of the round.
     const tFirst = presence?.firstT.get(pos.id);
     const ctFirst = presence?.firstCT.get(pos.id);
-    if (key === 't-control' && !tSight.has(pos.id) && !sur) {
-      if (Number.isFinite(tFirst) && tFirst <= tick) {
-        why.push({
-          kind: 'visit',
-          side: 'T',
-          tick: tFirst,
-          text: 'Soft T control from an earlier claim (no present CT contest)'
-        });
-      }
+    const softClaim = latestClaimAt(presence, pos.id, tick);
+    if (
+      key === 't-control' &&
+      !tSight.has(pos.id) &&
+      !sur &&
+      softClaim?.side === 'T'
+    ) {
+      why.push({
+        kind: 'visit',
+        side: 'T',
+        tick: softClaim.tick,
+        text: 'Soft T control from the latest claim (no present CT contest)'
+      });
     }
-    if (key === 'ct-control' && !ctSight.has(pos.id) && !sur) {
-      if (Number.isFinite(ctFirst) && ctFirst <= tick) {
-        why.push({
-          kind: 'visit',
-          side: 'CT',
-          tick: ctFirst,
-          text: 'Soft CT control from an earlier claim (no present T contest)'
-        });
-      }
+    if (
+      key === 'ct-control' &&
+      !ctSight.has(pos.id) &&
+      !sur &&
+      softClaim?.side === 'CT'
+    ) {
+      why.push({
+        kind: 'visit',
+        side: 'CT',
+        tick: softClaim.tick,
+        text: 'Soft CT control from the latest claim (no present T contest)'
+      });
     }
     if (key === 't-active' && !ctOcc.length) {
       why.push({
@@ -824,14 +915,9 @@ export function paintForPosition(posId, tick, presence, active) {
   if (tAct && ctAct) return 'contested-active';
   if (tAct) return 't-active';
   if (ctAct) return 'ct-active';
-  const tVis = (presence?.firstT.get(posId) ?? Infinity) <= tick;
-  const ctVis = (presence?.firstCT.get(posId) ?? Infinity) <= tick;
-  if (tVis && !ctVis) return 't-control';
-  if (ctVis && !tVis) return 'ct-control';
-  if (tVis && ctVis) {
-    const latest = latestOwnerSide(presence, posId, tick);
-    return latest === 'T' ? 't-control' : latest === 'CT' ? 'ct-control' : 'empty';
-  }
+  const latest = latestOwnerSide(presence, posId, tick);
+  if (latest === 'T') return 't-control';
+  if (latest === 'CT') return 'ct-control';
   return 'empty';
 }
 
