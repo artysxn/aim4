@@ -27,7 +27,7 @@ const FRAG_GRACE_SECONDS = 5;
 const HOLD_SECONDS = 3;
 /** Below this at freezetime, the round was lost on the buy; say nothing. */
 const HOPELESS = 25;
-/** Above this on economy alone, trading a solo duel is throwing value away. */
+/** Above this live win chance, a solo duel is throwing value away. */
 const DOMINANT = 75;
 
 const pct = (n) => `${Math.round(n)}%`;
@@ -261,16 +261,47 @@ export function analyseRound({ meta, sampleAt }) {
       }
     }
 
-    // 4. Duelling alone while the buy had already won the round for you.
-    if (gate.dominant[side] && me && nearestTeammate(me, mates) > ALONE_DISTANCE) {
+    const alone =
+      Boolean(me) && nearestTeammate(me, mates) > ALONE_DISTANCE;
+    const liveWp = Number.isFinite(wpBefore)
+      ? wpBefore
+      : sample?.[side === 'CT' ? 'ct' : 't'];
+
+    // 4. Duelling alone while the round is *still* heavily won at this moment.
+    //    Gate on the live win chance at the fight — not freezetime economy.
+    //    A buy that opened at 94% can be 33% by the time the duel happens.
+    if (alone && Number.isFinite(liveWp) && liveWp >= DOMINANT) {
       flags.push({
         tick: death.tick,
         playerId: victim,
         rule: 'negative-ev',
         text: `${name} took a solo duel with the round already ${pct(
-          side === 'CT' ? opening.ct : opening.t
-        )} won on equipment. With that much of an edge a fight nobody can trade is negative EV whether it is won or lost.${drop}`
+          liveWp
+        )} won. With that much of an edge a fight nobody can trade is negative EV whether it is won or lost.${drop}`
       });
+      continue;
+    }
+
+    // 5. Solo death in a true 3v3 or 4v4. The even headcount must have held
+    //    for at least HOLD_SECONDS — a fleeting 3v3 that just formed does not
+    //    count. HP can drag live win% into the 20s and still be a spacing
+    //    mistake; eco sides stay quiet via gate[side].
+    const evenN = before[side];
+    if (
+      !answered &&
+      alone &&
+      evenN === before[opp] &&
+      (evenN === 3 || evenN === 4)
+    ) {
+      const held = aliveAt(death.tick - hold);
+      if (held[side] === evenN && held[opp] === evenN) {
+        flags.push({
+          tick: death.tick,
+          playerId: victim,
+          rule: 'solo-even',
+          text: `${name} died alone in a ${evenN}v${evenN} with no trade. In an even situation the team needs to play together — a solo death here is still a mistake even when the HP looks bad.${drop}`
+        });
+      }
     }
   }
 
@@ -278,14 +309,18 @@ export function analyseRound({ meta, sampleAt }) {
   // up from the kill side of the log rather than the death side.
   if (opening) {
     for (const side of ['CT', 'T']) {
-      if (!gate.dominant[side] || !gate[side]) continue;
+      if (!gate[side]) continue;
       const opp = side === 'CT' ? 'T' : 'CT';
+      const key = side === 'CT' ? 'ct' : 't';
       for (const k of kills) {
         if (sideOf(k.attacker) !== side) continue;
         if (!inCoachWindow(k.tick)) continue;
         if (defusedTick != null && k.tick >= defusedTick) continue;
         if (aliveAt(k.tick - 1)[opp] <= 0) continue;
         const sample = sampleNear(k.tick);
+        // Live chance at the duel — freezetime dominance is not enough.
+        const liveWp = sample?.[key];
+        if (!Number.isFinite(liveWp) || liveWp < DOMINANT) continue;
         const mates = positionsOf(sample, side);
         const me = mates.find((m) => m.id === k.attacker);
         if (!me || nearestTeammate(me, mates) <= ALONE_DISTANCE) continue;
@@ -296,8 +331,8 @@ export function analyseRound({ meta, sampleAt }) {
           playerId: k.attacker,
           rule: 'negative-ev',
           text: `${name} won a solo duel, but took it with no teammate in support and the round already ${pct(
-            side === 'CT' ? opening.ct : opening.t
-          )} won on equipment. That fight was negative EV even though it came off.`
+            liveWp
+          )} won. That fight was negative EV even though it came off.`
         });
       }
     }

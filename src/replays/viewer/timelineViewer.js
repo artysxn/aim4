@@ -1031,11 +1031,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     return roundNotes[noteIndex] || null;
   }
 
+  /** Same readout as the round clock above the map (countdown / bomb / etc.). */
   function noteClockLabel(tick) {
     if (!activeMeta) return formatClock(0);
-    const timing = timingFor(activeMeta);
-    const local = Math.max(0, (tick - timing.startTick) / (timing.tickRate || 64));
-    return formatClock(local);
+    return clockAt(timingFor(activeMeta), tick).label;
   }
 
   function playheadTick() {
