@@ -21,6 +21,7 @@ import {
   PLAYER_SLOTS,
   writeHeader,
   writeRecord,
+  readRecord,
   FLAG_ALIVE,
   FLAG_DUCKING,
   FLAG_SCOPED,
@@ -807,31 +808,143 @@ function normalizeGrenadeType(name) {
   return raw;
 }
 
-/** Round boundaries from the event stream. */
+/**
+ * Freezetime kept in the replay timeline. CS2 buy time is ~20s and tactical
+ * timeouts can stretch it much further; the viewer only wants a short lead-in
+ * before live action (matches FREEZE_SECONDS in roundClock.js).
+ */
+const MAX_FREEZE_SECONDS = 3;
+
+/** True when round_end carries a real winner or win reason (not a stub event). */
+function roundEndLooksReal(end) {
+  const winner = end?.winner;
+  const reason = end?.reason;
+  const hasWinner =
+    winner != null &&
+    winner !== '' &&
+    winner !== 0 &&
+    String(winner).toLowerCase() !== 'null' &&
+    String(winner).toLowerCase() !== 'none';
+  const hasReason =
+    reason != null && reason !== '' && String(reason).toLowerCase() !== 'null';
+  return hasWinner || hasReason;
+}
+
+/**
+ * Round boundaries from the event stream.
+ *
+ * Drops ghost / restore stubs (round_end with no freeze_end, no winner, or no
+ * live play). When total_rounds_played repeats, keeps the latest end for that
+ * number — the earlier one is usually an aborted round that got restored.
+ * Overlapping spans are resolved so a stub cannot steal the next round's ticks.
+ */
 function buildRoundSpans(byName, lastTick) {
   const starts = (byName.get('round_start') || []).map((e) => num(e.tick));
   const freezeEnds = (byName.get('round_freeze_end') || []).map((e) => num(e.tick));
   const ends = byName.get('round_end') || [];
   const officials = (byName.get('round_officially_ended') || []).map((e) => num(e.tick));
 
-  const spans = [];
+  const raw = [];
   for (let i = 0; i < ends.length; i++) {
     const end = ends[i];
+    if (!roundEndLooksReal(end)) continue;
+
     const endTick = num(end.tick);
-    const startTick = starts.filter((t) => t <= endTick).pop() ?? (spans.at(-1)?.officialEndTick ?? 0);
-    const freezeEndTick = freezeEnds.filter((t) => t > startTick && t <= endTick).shift() ?? startTick;
-    const officialEndTick = officials.find((t) => t >= endTick) ?? Math.min(endTick + 320, lastTick);
-    spans.push({
-      round: spans.length + 1,
+    if (endTick <= 0) continue;
+
+    const startTick = starts.filter((t) => t <= endTick).pop();
+    if (startTick == null) continue;
+
+    // A real round always fires round_freeze_end. Falling back to startTick
+    // used to keep warmup / restore stubs that then overlapped the next round
+    // and swallowed its tick data (empty "ghost" rounds in the viewer).
+    const freezeEndTick = freezeEnds.find((t) => t > startTick && t <= endTick);
+    if (freezeEndTick == null) continue;
+    if (endTick <= freezeEndTick) continue;
+
+    const officialEndTick =
+      officials.find((t) => t >= endTick) ?? Math.min(endTick + 320, lastTick);
+
+    raw.push({
       startTick,
       freezeEndTick,
       endTick,
-      officialEndTick,
+      officialEndTick: Math.max(officialEndTick, endTick),
       winnerRaw: end.winner,
-      reason: end.reason
+      reason: end.reason,
+      totalRoundsPlayed: numish(end.total_rounds_played)
     });
   }
+
+  // Restored rounds often emit two round_ends with the same total_rounds_played.
+  // Keep the last one for each index.
+  const byTrp = new Map();
+  const unnumbered = [];
+  for (const span of raw) {
+    const trp = span.totalRoundsPlayed;
+    if (trp > 0) byTrp.set(trp, span);
+    else unnumbered.push(span);
+  }
+  const deduped =
+    byTrp.size > 0
+      ? [...unnumbered, ...[...byTrp.entries()].sort((a, b) => a[0] - b[0]).map(([, s]) => s)].sort(
+          (a, b) => a.startTick - b.startTick || a.endTick - b.endTick
+        )
+      : raw;
+
+  const spans = [];
+  for (const span of deduped) {
+    const prev = spans.at(-1);
+    if (prev && span.startTick < prev.endTick) {
+      // Prefer the later, more specific span when lifetimes overlap.
+      if (span.startTick >= prev.startTick) spans[spans.length - 1] = span;
+      continue;
+    }
+    spans.push(span);
+  }
+
+  spans.forEach((span, i) => {
+    span.round = i + 1;
+  });
   return spans;
+}
+
+/** Cap buy-time / timeout padding so each round's timeline starts ≤3s before live. */
+function trimFreezeSpans(spans, tickRate) {
+  const rate = Math.max(1, tickRate || 64);
+  const maxFreeze = Math.max(1, Math.round(MAX_FREEZE_SECONDS * rate));
+  return spans.map((span) => {
+    const freezeLen = span.freezeEndTick - span.startTick;
+    if (freezeLen <= maxFreeze) return span;
+    return { ...span, startTick: span.freezeEndTick - maxFreeze };
+  });
+}
+
+/**
+ * True when the packed buffer has at least one player with a real position.
+ * Empty packs are restore/warmup ghosts that survived event filtering.
+ */
+function packHasPlayers(pack) {
+  const { view, tickCount } = pack;
+  if (!tickCount) return false;
+  const rows = [
+    0,
+    Math.floor(tickCount * 0.25),
+    Math.floor(tickCount * 0.5),
+    Math.floor(tickCount * 0.75),
+    tickCount - 1
+  ];
+  const tmp = {};
+  for (const row of rows) {
+    if (row < 0 || row >= tickCount) continue;
+    for (let slot = 0; slot < PLAYER_SLOTS; slot++) {
+      readRecord(view, row, slot, tmp);
+      if ((tmp.x !== 0 || tmp.y !== 0 || tmp.z !== 0) && (tmp.alive || tmp.health > 0)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -885,7 +998,7 @@ export async function parseDemo(file, opts = {}) {
     ...all.map((e) => num(e.tick)),
     num(header.playback_ticks)
   );
-  const spans = buildRoundSpans(byName, lastTick);
+  const spans = trimFreezeSpans(buildRoundSpans(byName, lastTick), tickRate);
   if (!spans.length) throw new Error('No completed rounds found in this demo.');
 
   const roster = rosterFromRows(
@@ -943,6 +1056,8 @@ export async function parseDemo(file, opts = {}) {
     reader = null;
 
     for (const pack of packs) {
+    if (!packHasPlayers(pack)) continue;
+
     const span = pack.span;
     const { buffer, weapons } = pack;
     const buyTick = span.freezeEndTick || span.startTick;
@@ -1128,6 +1243,13 @@ export async function parseDemo(file, opts = {}) {
       progress({ stage: 'round', round: packedCount, total: spans.length });
     }
   }
+
+  // Event / pack filters may drop ghosts mid-list; keep round numbers dense.
+  rounds.forEach((r, i) => {
+    r.round = i + 1;
+  });
+
+  if (!rounds.length) throw new Error('No playable rounds found in this demo.');
 
   progress({ stage: 'done', total: rounds.length });
 
