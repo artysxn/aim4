@@ -6,7 +6,13 @@
 import { MAPS, MAP_CODES } from '../replays/shared/roundId.js';
 import { RADAR_SIZE, radarToWorld, worldToRadar } from '../replays/viewer/mapCalibration.js';
 import { loadRadar } from '../replays/viewer/radarRenderer.js';
-import { pieceToRing, subtractRectFromPieces } from '../replays/zones/zoneGeom.js';
+import {
+  exteriorSegmentsFromRects,
+  exteriorVerticesFromSegments,
+  pieceToRing,
+  rectsFromPieces,
+  subtractRectFromPieces
+} from '../replays/zones/zoneGeom.js';
 import { positionsAtPoint } from '../replays/zones/pointInZone.js';
 import {
   addArea,
@@ -133,6 +139,41 @@ function colorMode() {
 
 function paintColor(zone) {
   return displayColorForZone(network, zone, { preferSectionId, preferAreaId });
+}
+
+/**
+ * Outline merge key: same key → one outer stroke (no internal walls).
+ * Positions mode: per position. Zones/Areas mode: per membership group.
+ */
+function outlineGroupKey(zone) {
+  const mode = colorMode();
+  const sections = network.sections || [];
+  const areas = network.areas || [];
+
+  if (mode === 'area') {
+    const inArea = (area) =>
+      (area.sectionIds || []).some((sid) => {
+        const sec = sections.find((s) => s.id === sid);
+        return sec?.zoneIds?.includes(zone.id);
+      });
+    if (preferAreaId) {
+      const pref = areas.find((a) => a.id === preferAreaId);
+      if (pref && inArea(pref)) return `area:${pref.id}`;
+    }
+    const area = areas.find(inArea);
+    if (area) return `area:${area.id}`;
+  }
+
+  if (mode === 'section') {
+    if (preferSectionId) {
+      const pref = sections.find((s) => s.id === preferSectionId);
+      if (pref?.zoneIds?.includes(zone.id)) return `section:${pref.id}`;
+    }
+    const sec = sections.find((s) => s.zoneIds?.includes(zone.id));
+    if (sec) return `section:${sec.id}`;
+  }
+
+  return `pos:${zone.id}`;
 }
 
 function toColorInputValue(hex) {
@@ -272,36 +313,92 @@ function draw() {
     ctx.fillRect(0, 0, RADAR_SIZE, RADAR_SIZE);
   }
 
+  // Group shapes so multi-rect positions (and zone/area unions) stroke only
+  // the outer outline — shared internal edges cancel.
+  const groups = new Map();
   for (const z of network.zones) {
     if (z.hidden) continue;
-    const color = paintColor(z);
-    const selected = selectedIds.has(z.id);
+    const key = outlineGroupKey(z);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        color: paintColor(z),
+        selected: false,
+        rects: [],
+        labels: []
+      });
+    }
+    const g = groups.get(key);
+    if (selectedIds.has(z.id)) g.selected = true;
+    g.rects.push(...rectsFromPieces(z.pieces));
+    const ring = [];
     for (const piece of z.pieces || []) {
-      const ring = pieceToRing(piece);
-      if (ring.length < 3) continue;
-      ctx.beginPath();
-      for (let i = 0; i < ring.length; i++) {
-        const rp = worldToRadar(mapCode, ring[i][0], ring[i][1], {});
-        if (i === 0) ctx.moveTo(rp.x, rp.y);
-        else ctx.lineTo(rp.x, rp.y);
+      const pr = pieceToRing(piece);
+      if (pr.length) ring.push(...pr);
+    }
+    if (ring.length) g.labels.push({ name: z.name, ring });
+  }
+
+  const labelsOnly = colorMode() === 'none';
+
+  for (const g of groups.values()) {
+    if (!labelsOnly) {
+      const alpha = g.selected ? 0.42 : 0.28;
+      for (const r of g.rects) {
+        const a = worldToRadar(mapCode, r.x, r.y, {});
+        const b = worldToRadar(mapCode, r.x + r.w, r.y + r.h, {});
+        const x = Math.min(a.x, b.x);
+        const y = Math.min(a.y, b.y);
+        const rw = Math.abs(b.x - a.x);
+        const rh = Math.abs(b.y - a.y);
+        ctx.fillStyle = hexAlpha(g.color, alpha);
+        ctx.fillRect(x, y, rw, rh);
       }
-      ctx.closePath();
-      ctx.fillStyle = hexAlpha(color, selected ? 0.42 : 0.28);
-      ctx.fill();
-      ctx.strokeStyle = selected ? '#ffffff' : color;
-      ctx.lineWidth = (selected ? 2.2 : 1.4) / t.scale;
+      for (const label of g.labels) {
+        if (label.ring?.length >= 3 && !g.rects.length) {
+          ctx.beginPath();
+          for (let i = 0; i < label.ring.length; i++) {
+            const rp = worldToRadar(mapCode, label.ring[i][0], label.ring[i][1], {});
+            if (i === 0) ctx.moveTo(rp.x, rp.y);
+            else ctx.lineTo(rp.x, rp.y);
+          }
+          ctx.closePath();
+          ctx.fillStyle = hexAlpha(g.color, alpha);
+          ctx.fill();
+        }
+      }
+
+      const segs = exteriorSegmentsFromRects(g.rects);
+      ctx.strokeStyle = g.selected ? '#ffffff' : g.color;
+      ctx.lineWidth = (g.selected ? 2.2 : 1.4) / t.scale;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      for (const s of segs) {
+        const p0 = worldToRadar(mapCode, s.x0, s.y0, {});
+        const p1 = worldToRadar(mapCode, s.x1, s.y1, {});
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+      }
       ctx.stroke();
+
       ctx.fillStyle = '#ffffff';
-      for (const [wx, wy] of ring) {
+      for (const [wx, wy] of exteriorVerticesFromSegments(segs)) {
         const rp = worldToRadar(mapCode, wx, wy, {});
         ctx.beginPath();
         ctx.arc(rp.x, rp.y, 3.2 / t.scale, 0, Math.PI * 2);
         ctx.fill();
       }
     }
-    const first = z.pieces?.[0];
-    if (first) {
-      const ring = pieceToRing(first);
+
+    // One label per position (centroid of that position's corners).
+    const labeled = new Set();
+    ctx.font = `${12 / t.scale}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const label of g.labels) {
+      if (!label.name || labeled.has(label.name)) continue;
+      labeled.add(label.name);
+      const ring = label.ring || [];
+      if (!ring.length) continue;
       let sx = 0;
       let sy = 0;
       for (const [wx, wy] of ring) {
@@ -311,13 +408,10 @@ function draw() {
       }
       sx /= ring.length;
       sy /= ring.length;
-      ctx.font = `${12 / t.scale}px system-ui, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
-      ctx.fillText(z.name, sx + 0.8 / t.scale, sy + 0.8 / t.scale);
-      ctx.fillStyle = '#f2f2f2';
-      ctx.fillText(z.name, sx, sy);
+      ctx.fillText(label.name, sx + 0.8 / t.scale, sy + 0.8 / t.scale);
+      ctx.fillStyle = g.selected && labelsOnly ? '#ffffff' : '#f2f2f2';
+      ctx.fillText(label.name, sx, sy);
     }
   }
 
@@ -348,7 +442,13 @@ function renderMapTabs() {
   ).join('');
 }
 
-function setSelection(ids, { primaryName = true } = {}) {
+function setSelection(ids, { primaryName = true, clearParents = true } = {}) {
+  if (clearParents) {
+    selectedSectionIds.clear();
+    selectedAreaIds.clear();
+    preferSectionId = null;
+    preferAreaId = null;
+  }
   selectedIds.clear();
   for (const id of ids) {
     if (network.zones.some((z) => z.id === id)) selectedIds.add(id);
@@ -359,34 +459,91 @@ function setSelection(ids, { primaryName = true } = {}) {
   }
 }
 
-function toggleSectionSelection(sectionId, { shiftKey = false, primaryName = true } = {}) {
+function positionIdsForSection(sectionId) {
+  const sec = network.sections?.find((s) => s.id === sectionId);
+  return (sec?.zoneIds || []).filter((id) => network.zones.some((z) => z.id === id));
+}
+
+function sectionIdsForArea(areaId) {
+  const area = network.areas?.find((a) => a.id === areaId);
+  return (area?.sectionIds || []).filter((id) => network.sections?.some((s) => s.id === id));
+}
+
+function positionIdsForArea(areaId) {
+  const ids = [];
+  for (const sid of sectionIdsForArea(areaId)) {
+    for (const zid of positionIdsForSection(sid)) ids.push(zid);
+  }
+  return [...new Set(ids)];
+}
+
+/** Sync list highlight classes after selection changes. */
+function syncAllSelectionClasses() {
+  syncListSelectionClasses();
+  syncSectionSelectionClasses();
+  syncAreaSelectionClasses();
+}
+
+/**
+ * Select a zone and all of its positions (Zones pick from Positions).
+ */
+function selectZoneWithChildren(sectionId, { shiftKey = false, primaryName = true } = {}) {
+  const posIds = positionIdsForSection(sectionId);
   if (shiftKey) {
-    if (selectedSectionIds.has(sectionId)) selectedSectionIds.delete(sectionId);
-    else selectedSectionIds.add(sectionId);
+    if (selectedSectionIds.has(sectionId)) {
+      selectedSectionIds.delete(sectionId);
+      for (const id of posIds) selectedIds.delete(id);
+    } else {
+      selectedSectionIds.add(sectionId);
+      for (const id of posIds) selectedIds.add(id);
+    }
   } else {
+    selectedAreaIds.clear();
+    preferAreaId = null;
     selectedSectionIds.clear();
     selectedSectionIds.add(sectionId);
+    selectedIds.clear();
+    for (const id of posIds) selectedIds.add(id);
   }
-  preferSectionId = sectionId;
+  preferSectionId = selectedSectionIds.has(sectionId) ? sectionId : [...selectedSectionIds][0] || null;
   if (primaryName && el.sectionNameInput) {
     const sec = network.sections?.find((s) => s.id === sectionId);
     if (sec) el.sectionNameInput.value = sec.name;
   }
+  syncAllSelectionClasses();
 }
 
-function toggleAreaSelection(areaId, { shiftKey = false, primaryName = true } = {}) {
+/**
+ * Select an area, all of its zones, and all underlying positions.
+ */
+function selectAreaWithChildren(areaId, { shiftKey = false, primaryName = true } = {}) {
+  const secIds = sectionIdsForArea(areaId);
+  const posIds = positionIdsForArea(areaId);
   if (shiftKey) {
-    if (selectedAreaIds.has(areaId)) selectedAreaIds.delete(areaId);
-    else selectedAreaIds.add(areaId);
+    if (selectedAreaIds.has(areaId)) {
+      selectedAreaIds.delete(areaId);
+      for (const id of secIds) selectedSectionIds.delete(id);
+      for (const id of posIds) selectedIds.delete(id);
+    } else {
+      selectedAreaIds.add(areaId);
+      for (const id of secIds) selectedSectionIds.add(id);
+      for (const id of posIds) selectedIds.add(id);
+    }
   } else {
     selectedAreaIds.clear();
     selectedAreaIds.add(areaId);
+    selectedSectionIds.clear();
+    for (const id of secIds) selectedSectionIds.add(id);
+    selectedIds.clear();
+    for (const id of posIds) selectedIds.add(id);
   }
-  preferAreaId = areaId;
+  preferAreaId = selectedAreaIds.has(areaId) ? areaId : [...selectedAreaIds][0] || null;
+  preferSectionId = [...selectedSectionIds][0] || null;
   if (primaryName && el.areaNameInput) {
     const area = network.areas?.find((a) => a.id === areaId);
     if (area) el.areaNameInput.value = area.name;
   }
+  syncAllSelectionClasses();
 }
 
 function syncListSelectionClasses() {
@@ -423,7 +580,7 @@ function renderList() {
     .map((z) => {
       const selected = selectedIds.has(z.id) ? ' selected' : '';
       const hex = toColorInputValue(paintColor(z));
-      return `<div class="ze-row${selected}${z.hidden ? ' is-hidden' : ''}" data-id="${z.id}" draggable="true" title="Click to select · Shift-click to multi-select · Drag into a zone">
+      return `<div class="ze-row${selected}${z.hidden ? ' is-hidden' : ''}" data-id="${z.id}" draggable="true" title="Click to select · Drag into a zone · Drag to map to delete">
         <label class="ze-swatch-wrap" title="Position color" draggable="false">
           <input type="color" class="ze-color" value="${hex}" data-act="color" draggable="false" ${
             disablePosColor ? 'disabled' : ''
@@ -444,7 +601,7 @@ function renderSections() {
   ensureSections();
   if (!network.sections.length) {
     el.sectionsList.innerHTML =
-      '<p class="ze-empty">Shift-select positions, name a zone, then +. Drag positions in or out. Positions can belong to several zones.</p>';
+      '<p class="ze-empty">Select positions, name a zone, then +. Drag onto the map to remove from a zone.</p>';
     return;
   }
   const byId = new Map(network.zones.map((z) => [z.id, z]));
@@ -462,13 +619,13 @@ function renderSections() {
           const swatch = groupPaint || areaPaint
             ? secColor
             : toColorInputValue(z.color || colorForName(z.name));
-          return `<li draggable="true" data-zone="${z.id}" data-from-section="${s.id}" title="Drag out to remove, or into another zone">
+          return `<li draggable="true" data-zone="${z.id}" data-from-section="${s.id}" title="Drag to map to remove from zone, or onto another zone">
               <span class="ze-swatch" style="background:${swatch}"></span>
               <span>${escapeAttr(z.name)}</span>
             </li>`;
         })
         .join('')}</ul>`;
-      return `<div class="ze-sec${selected}" data-section="${s.id}" draggable="true" title="Shift-click to multi-select · Drag into an area">
+      return `<div class="ze-sec${selected}" data-section="${s.id}" draggable="true" title="Click to select zone + positions · Drag into an area · Drag to map to delete">
         <div class="ze-sec-top">
           <label class="ze-swatch-wrap" title="Zone color" draggable="false">
             <input type="color" class="ze-color" value="${secColor}" data-sec-act="color" draggable="false" />
@@ -487,7 +644,7 @@ function renderAreas() {
   ensureAreas();
   if (!network.areas.length) {
     el.areasList.innerHTML =
-      '<p class="ze-empty">Shift-select zones, name an area, then +. Drag zones in or out. Zones can belong to several areas.</p>';
+      '<p class="ze-empty">Select zones, name an area, then +. Drag onto the map to remove from an area.</p>';
     return;
   }
   const bySectionId = new Map((network.sections || []).map((s) => [s.id, s]));
@@ -503,13 +660,13 @@ function renderAreas() {
         .map((s) => {
           const secColor = toColorInputValue(s.color || colorForName(s.name));
           const swatch = areaPaint ? areaColor : secColor;
-          return `<li draggable="true" data-section="${s.id}" data-from-area="${a.id}" title="Drag out to remove, or into another area">
+          return `<li draggable="true" data-section="${s.id}" data-from-area="${a.id}" title="Drag to map to remove from area, or onto another area">
               <span class="ze-swatch" style="background:${swatch}"></span>
               <span>${escapeAttr(s.name)}</span>
             </li>`;
         })
         .join('')}</ul>`;
-      return `<div class="ze-area${selected}" data-area="${a.id}" title="Shift-click to multi-select">
+      return `<div class="ze-area${selected}" data-area="${a.id}" draggable="true" title="Click to select area + zones + positions · Drag to map to delete">
         <div class="ze-area-top">
           <label class="ze-swatch-wrap" title="Area color" draggable="false">
             <input type="color" class="ze-color" value="${areaColor}" data-area-act="color" draggable="false" />
@@ -616,7 +773,7 @@ function selectAtRadarPoint(radarPt, { shiftKey = false } = {}) {
   } else {
     setSelection([top.id]);
   }
-  syncListSelectionClasses();
+  syncAllSelectionClasses();
   draw();
   return true;
 }
@@ -744,7 +901,7 @@ el.list?.addEventListener('click', (e) => {
     } else {
       setSelection([id]);
     }
-    syncListSelectionClasses();
+    syncAllSelectionClasses();
     draw();
     return;
   }
@@ -755,7 +912,7 @@ el.list?.addEventListener('click', (e) => {
   } else {
     setSelection([id]);
   }
-  syncListSelectionClasses();
+  syncAllSelectionClasses();
   draw();
 });
 
@@ -792,19 +949,17 @@ el.btnSectionAdd?.addEventListener('click', () => {
     return;
   }
   if (!selectedIds.size) {
-    setStatus('Shift-select positions, then +');
+    setStatus('Select positions, then +');
     return;
   }
   const section = addSection(network, name);
   for (const id of selectedIds) addZoneToSection(network, section.id, id);
-  selectedSectionIds.clear();
-  selectedSectionIds.add(section.id);
-  preferSectionId = section.id;
   if (el.sectionNameInput) el.sectionNameInput.value = '';
   markDirty(true);
   setStatus('');
-  renderSections();
-  renderAreas();
+  selectZoneWithChildren(section.id, { shiftKey: false });
+  renderAll();
+  draw();
 });
 
 el.sectionNameInput?.addEventListener('keydown', (e) => {
@@ -831,6 +986,19 @@ el.sectionsList?.addEventListener('input', (e) => {
 });
 
 el.sectionsList?.addEventListener('click', (e) => {
+  const member = e.target.closest('.ze-sec-members li[data-zone]');
+  if (member) {
+    const pid = member.dataset.zone;
+    if (e.shiftKey) {
+      if (selectedIds.has(pid)) selectedIds.delete(pid);
+      else selectedIds.add(pid);
+    } else {
+      setSelection([pid]);
+    }
+    syncAllSelectionClasses();
+    draw();
+    return;
+  }
   const sec = e.target.closest('.ze-sec');
   if (!sec) return;
   const sectionId = sec.dataset.section;
@@ -845,23 +1013,16 @@ el.sectionsList?.addEventListener('click', (e) => {
     draw();
     return;
   }
-  if (e.target.closest('.ze-sec-members')) return;
-  if (e.target.closest('input')) {
-    toggleSectionSelection(sectionId, { shiftKey: e.shiftKey, primaryName: false });
-    syncSectionSelectionClasses();
-    if (colorMode() !== 'zone') {
-      renderList();
-      draw();
-    }
+  if (e.target.closest('input[data-sec-act="rename"]')) {
+    selectZoneWithChildren(sectionId, { shiftKey: e.shiftKey, primaryName: false });
+    renderList();
+    draw();
     return;
   }
-  toggleSectionSelection(sectionId, { shiftKey: e.shiftKey });
-  syncSectionSelectionClasses();
-  if (colorMode() !== 'zone') {
-    renderList();
-    renderAreas();
-    draw();
-  }
+  selectZoneWithChildren(sectionId, { shiftKey: e.shiftKey });
+  renderList();
+  renderAreas();
+  draw();
 });
 
 el.sectionsList?.addEventListener('change', (e) => {
@@ -894,22 +1055,17 @@ el.btnAreaAdd?.addEventListener('click', () => {
     return;
   }
   if (!selectedSectionIds.size) {
-    setStatus('Shift-select zones, then +');
+    setStatus('Select zones, then +');
     return;
   }
   const area = addArea(network, name);
   for (const id of selectedSectionIds) addSectionToArea(network, area.id, id);
-  selectedAreaIds.clear();
-  selectedAreaIds.add(area.id);
-  preferAreaId = area.id;
   if (el.areaNameInput) el.areaNameInput.value = '';
   markDirty(true);
   setStatus('');
-  renderAreas();
-  if (colorMode() === 'area') {
-    renderList();
-    draw();
-  }
+  selectAreaWithChildren(area.id, { shiftKey: false });
+  renderAll();
+  draw();
 });
 
 el.areaNameInput?.addEventListener('keydown', (e) => {
@@ -934,6 +1090,14 @@ el.areasList?.addEventListener('input', (e) => {
 });
 
 el.areasList?.addEventListener('click', (e) => {
+  const member = e.target.closest('.ze-area-members li[data-section]');
+  if (member) {
+    selectZoneWithChildren(member.dataset.section, { shiftKey: e.shiftKey });
+    renderList();
+    renderSections();
+    draw();
+    return;
+  }
   const area = e.target.closest('.ze-area');
   if (!area) return;
   const areaId = area.dataset.area;
@@ -948,22 +1112,17 @@ el.areasList?.addEventListener('click', (e) => {
     draw();
     return;
   }
-  if (e.target.closest('.ze-area-members')) return;
-  if (e.target.closest('input')) {
-    toggleAreaSelection(areaId, { shiftKey: e.shiftKey, primaryName: false });
-    syncAreaSelectionClasses();
-    if (colorMode() === 'area') {
-      renderList();
-      draw();
-    }
+  if (e.target.closest('input[data-area-act="rename"]')) {
+    selectAreaWithChildren(areaId, { shiftKey: e.shiftKey, primaryName: false });
+    renderList();
+    renderSections();
+    draw();
     return;
   }
-  toggleAreaSelection(areaId, { shiftKey: e.shiftKey });
-  syncAreaSelectionClasses();
-  if (colorMode() === 'area') {
-    renderList();
-    draw();
-  }
+  selectAreaWithChildren(areaId, { shiftKey: e.shiftKey });
+  renderList();
+  renderSections();
+  draw();
 });
 
 el.areasList?.addEventListener('change', (e) => {
@@ -1219,13 +1378,88 @@ el.sectionsList?.addEventListener('drop', (e) => {
   dragPayload = null;
 });
 
+function beginAreaDrag(e, { areaIds }) {
+  if (e.target.closest('input, button, .ze-row-name')) {
+    e.preventDefault();
+    return false;
+  }
+  const ids = [...new Set(areaIds)].filter(Boolean);
+  if (!ids.length) {
+    e.preventDefault();
+    return false;
+  }
+  dragPayload = { kind: 'area', areaIds: ids };
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData(DRAG_MIME, JSON.stringify(dragPayload));
+  e.dataTransfer.setData('text/plain', JSON.stringify(dragPayload));
+  e.currentTarget?.classList?.add('ze-dragging');
+  return true;
+}
+
+/** Drop on the radar: remove from group, or delete the dragged item. */
+function applyCanvasDrop(payload) {
+  if (!payload) return false;
+  if (payload.kind === 'position' && payload.fromSectionId) {
+    applyDragOutOfSection(payload);
+    setStatus('Removed from zone');
+    return true;
+  }
+  if (payload.kind === 'section' && payload.fromAreaId) {
+    applyDragOutOfArea(payload);
+    setStatus('Removed from area');
+    return true;
+  }
+  if (payload.kind === 'position' && payload.zoneIds?.length) {
+    for (const id of payload.zoneIds) {
+      deleteZone(network, id);
+      selectedIds.delete(id);
+    }
+    markDirty(true);
+    renderAll();
+    draw();
+    setStatus('Deleted position');
+    return true;
+  }
+  if (payload.kind === 'section' && payload.sectionIds?.length) {
+    for (const id of payload.sectionIds) {
+      deleteSection(network, id);
+      selectedSectionIds.delete(id);
+    }
+    markDirty(true);
+    renderAll();
+    draw();
+    setStatus('Deleted zone');
+    return true;
+  }
+  if (payload.kind === 'area' && payload.areaIds?.length) {
+    for (const id of payload.areaIds) {
+      deleteArea(network, id);
+      selectedAreaIds.delete(id);
+    }
+    markDirty(true);
+    renderAll();
+    draw();
+    setStatus('Deleted area');
+    return true;
+  }
+  return false;
+}
+
 el.areasList?.addEventListener('dragstart', (e) => {
   const li = e.target.closest('.ze-area-members li[data-section]');
-  if (!li) return;
-  beginSectionDrag(e, {
-    sectionIds: [li.dataset.section],
-    fromAreaId: li.dataset.fromArea || null
-  });
+  if (li) {
+    beginSectionDrag(e, {
+      sectionIds: [li.dataset.section],
+      fromAreaId: li.dataset.fromArea || null
+    });
+    return;
+  }
+  const area = e.target.closest('.ze-area[data-area]');
+  if (!area || e.target.closest('.ze-area-members')) return;
+  const areaId = area.dataset.area;
+  const areaIds =
+    selectedAreaIds.has(areaId) && selectedAreaIds.size ? [...selectedAreaIds] : [areaId];
+  beginAreaDrag(e, { areaIds });
 });
 
 el.areasList?.addEventListener('dragend', clearAllDragging);
@@ -1252,6 +1486,26 @@ el.areasList?.addEventListener('drop', (e) => {
   e.preventDefault();
   clearDropMarks();
   applyDragToArea(area.dataset.area, readDrag(e));
+  dragPayload = null;
+});
+
+el.canvas.addEventListener('dragover', (e) => {
+  const payload = readDrag(e);
+  if (!payload) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  el.canvas.classList.add('ze-drop-target');
+});
+
+el.canvas.addEventListener('dragleave', (e) => {
+  if (e.target === el.canvas) el.canvas.classList.remove('ze-drop-target');
+});
+
+el.canvas.addEventListener('drop', (e) => {
+  e.preventDefault();
+  el.canvas.classList.remove('ze-drop-target');
+  clearDropMarks();
+  applyCanvasDrop(readDrag(e));
   dragPayload = null;
 });
 

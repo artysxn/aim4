@@ -63,7 +63,7 @@ function normalizeHex(color) {
 }
 
 export function normalizeColorMode(mode) {
-  if (mode === 'section' || mode === 'area') return mode;
+  if (mode === 'section' || mode === 'area' || mode === 'none') return mode;
   return 'zone';
 }
 

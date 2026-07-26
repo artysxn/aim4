@@ -168,7 +168,9 @@ export function sanitizeZones(map, payload) {
   }
 
   const colorMode =
-    payload?.colorMode === 'section' || payload?.colorMode === 'area'
+    payload?.colorMode === 'section' ||
+    payload?.colorMode === 'area' ||
+    payload?.colorMode === 'none'
       ? payload.colorMode
       : 'zone';
 
@@ -263,7 +265,8 @@ export async function saveZones(map, payload) {
     colorMode:
       payload?.colorMode === 'section' ||
       payload?.colorMode === 'area' ||
-      payload?.colorMode === 'zone'
+      payload?.colorMode === 'zone' ||
+      payload?.colorMode === 'none'
         ? payload.colorMode
         : existing.colorMode || 'zone',
     updatedAt: Date.now()

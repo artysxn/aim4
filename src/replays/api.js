@@ -320,7 +320,9 @@ export async function fetchZones(map) {
  */
 export async function saveZones(map, network) {
   const colorMode =
-    network.colorMode === 'section' || network.colorMode === 'area'
+    network.colorMode === 'section' ||
+    network.colorMode === 'area' ||
+    network.colorMode === 'none'
       ? network.colorMode
       : 'zone';
   const data = await asJson(

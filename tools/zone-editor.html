@@ -97,6 +97,10 @@
     cursor: crosshair;
     touch-action: none;
   }
+  #ze-canvas.ze-drop-target {
+    outline: 2px dashed rgba(245, 37, 37, 0.55);
+    outline-offset: -6px;
+  }
   .ze-float {
     position: absolute;
     top: 12px;
@@ -155,7 +159,7 @@
   }
   .ze-color-mode button {
     flex: 1;
-    padding: 6px 8px;
+    padding: 6px 4px;
     border: 1px solid var(--border);
     border-radius: var(--radius-xs);
     background: transparent;
@@ -502,6 +506,7 @@
             <button type="button" data-mode="zone" class="active" title="One color per position">Positions</button>
             <button type="button" data-mode="section" title="One color per zone">Zones</button>
             <button type="button" data-mode="area" title="One color per area">Areas</button>
+            <button type="button" data-mode="none" title="Labels only">None</button>
           </div>
         </div>
         <details class="ze-panel" open>
@@ -518,7 +523,7 @@
           <div class="ze-panel-body">
             <div class="ze-field ze-field-row">
               <input id="ze-section-name" type="text" maxlength="48" value="" placeholder="Zone name" />
-              <button type="button" class="ze-icon-btn" id="ze-section-add" title="Add selected positions to this zone (Shift-click to multi-select)">+</button>
+              <button type="button" class="ze-icon-btn" id="ze-section-add" title="Add selected positions to this zone">+</button>
             </div>
             <div id="ze-sections-list" class="ze-panel-list"></div>
           </div>
@@ -528,7 +533,7 @@
           <div class="ze-panel-body">
             <div class="ze-field ze-field-row">
               <input id="ze-area-name" type="text" maxlength="48" value="" placeholder="Area name" />
-              <button type="button" class="ze-icon-btn" id="ze-area-add" title="Add selected zones to this area (Shift-click to multi-select)">+</button>
+              <button type="button" class="ze-icon-btn" id="ze-area-add" title="Add selected zones to this area">+</button>
             </div>
             <div id="ze-areas-list" class="ze-panel-list"></div>
           </div>

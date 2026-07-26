@@ -157,3 +157,114 @@ export function pieceToRing(piece) {
   if (piece.type === 'rect') return rectToRing(piece);
   return piece.ring || [];
 }
+
+/** Quantize world coords so shared edges cancel despite float noise. */
+function qCoord(n) {
+  return Math.round(Number(n) * 1000) / 1000;
+}
+
+/**
+ * Sweep axis-aligned intervals; keep spans where coverage is odd.
+ * Shared walls between two rects appear twice → even → cancelled.
+ * @param {Array<[number, number]>} intervals
+ * @returns {Array<[number, number]>}
+ */
+function oddCoverageSpans(intervals) {
+  if (!intervals.length) return [];
+  /** @type {Array<[number, number]>} */
+  const events = [];
+  for (const [a, b] of intervals) {
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    if (hi - lo < 1e-6) continue;
+    events.push([lo, 1], [hi, -1]);
+  }
+  if (!events.length) return [];
+  events.sort((p, q) => p[0] - q[0] || q[1] - p[1]);
+  /** @type {Array<[number, number]>} */
+  const out = [];
+  let cover = 0;
+  let prev = events[0][0];
+  for (const [x, d] of events) {
+    if (x > prev && cover % 2 === 1) out.push([prev, x]);
+    cover += d;
+    prev = x;
+  }
+  return out;
+}
+
+/**
+ * Exterior edge segments of a union of axis-aligned rects (no internal walls).
+ * @param {Array<{x:number,y:number,w:number,h:number}>} rects
+ * @returns {Array<{x0:number,y0:number,x1:number,y1:number}>}
+ */
+export function exteriorSegmentsFromRects(rects) {
+  /** @type {Map<number, Array<[number, number]>>} */
+  const horiz = new Map();
+  /** @type {Map<number, Array<[number, number]>>} */
+  const vert = new Map();
+  const push = (map, line, a, b) => {
+    if (!map.has(line)) map.set(line, []);
+    map.get(line).push([a, b]);
+  };
+
+  for (const r of rects || []) {
+    if (!r) continue;
+    const w = Number(r.w);
+    const h = Number(r.h);
+    if (!(w > 0) || !(h > 0)) continue;
+    const x0 = qCoord(r.x);
+    const y0 = qCoord(r.y);
+    const x1 = qCoord(r.x + w);
+    const y1 = qCoord(r.y + h);
+    push(horiz, y0, x0, x1);
+    push(horiz, y1, x0, x1);
+    push(vert, x0, y0, y1);
+    push(vert, x1, y0, y1);
+  }
+
+  /** @type {Array<{x0:number,y0:number,x1:number,y1:number}>} */
+  const segs = [];
+  for (const [y, intervals] of horiz) {
+    for (const [a, b] of oddCoverageSpans(intervals)) {
+      segs.push({ x0: a, y0: y, x1: b, y1: y });
+    }
+  }
+  for (const [x, intervals] of vert) {
+    for (const [a, b] of oddCoverageSpans(intervals)) {
+      segs.push({ x0: x, y0: a, x1: x, y1: b });
+    }
+  }
+  return segs;
+}
+
+/** Unique endpoints of exterior segments (for corner handles). */
+export function exteriorVerticesFromSegments(segs) {
+  const seen = new Set();
+  /** @type {Array<[number, number]>} */
+  const pts = [];
+  for (const s of segs || []) {
+    for (const [x, y] of [
+      [s.x0, s.y0],
+      [s.x1, s.y1]
+    ]) {
+      const k = `${qCoord(x)},${qCoord(y)}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      pts.push([x, y]);
+    }
+  }
+  return pts;
+}
+
+/** Collect rect pieces only (polys ignored for outline merge). */
+export function rectsFromPieces(pieces) {
+  /** @type {Array<{x:number,y:number,w:number,h:number}>} */
+  const out = [];
+  for (const p of pieces || []) {
+    if (p?.type === 'rect' || (p && p.type == null && p.w > 0 && p.h > 0)) {
+      out.push({ x: p.x, y: p.y, w: p.w, h: p.h });
+    }
+  }
+  return out;
+}
