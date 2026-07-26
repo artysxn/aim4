@@ -1933,6 +1933,40 @@ body.rv-open {
   color: var(--text);
 }
 
+/* Soft green wash from the bottom — round has at least one coach note. */
+.rv-round.has-coach {
+  background:
+    linear-gradient(
+      to top,
+      rgba(62, 232, 122, 0.38) 0%,
+      rgba(62, 232, 122, 0.12) 40%,
+      transparent 72%
+    ),
+    rgba(255, 255, 255, 0.04);
+}
+
+.rv-round.has-coach:hover {
+  background:
+    linear-gradient(
+      to top,
+      rgba(62, 232, 122, 0.48) 0%,
+      rgba(62, 232, 122, 0.16) 42%,
+      transparent 74%
+    ),
+    var(--surface-hover);
+}
+
+.rv-round.has-coach.active {
+  background:
+    linear-gradient(
+      to top,
+      rgba(62, 232, 122, 0.52) 0%,
+      rgba(62, 232, 122, 0.18) 44%,
+      transparent 76%
+    ),
+    var(--surface-hover-solid);
+}
+
 /* ---- Transport ---------------------------------------------------------- */
 
 .rv-transport,

@@ -235,6 +235,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   let coachTeam = null;
   /** Team-picker dock is open; coach not enabled yet. */
   let coachPicking = false;
+  /** Round files that currently carry at least one coach note. */
+  const coachNotedFiles = new Set();
+  /** Bumps when a full-demo coach pass is superseded (toggle off / re-pick). */
+  let coachPassId = 0;
   const states = [];
 
   const playback = new Playback((pos) => onPosition(pos));
@@ -302,15 +306,39 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       .map((r, i) => {
         const side = winningSide(r);
         const sideClass = side === 'T' ? 'wt' : 'wct';
+        const coachClass = coachNotedFiles.has(r.file) ? ' has-coach' : '';
         const gap =
           i === 0 ? 0 : gapAfterRound(rounds[i - 1].round) * ROUND_GAP_PX;
         const margin = gap ? ` style="margin-left:${gap}px"` : '';
-        return `<button type="button" class="rv-round ${sideClass}" data-index="${i}"${margin} title="${escapeHtml(
-          `Round ${r.round} · ${side} win · ${economyLabel(r.econ1)} vs ${economyLabel(r.econ2)}`
+        const coachHint = coachNotedFiles.has(r.file) ? ' · coach notes' : '';
+        return `<button type="button" class="rv-round ${sideClass}${coachClass}" data-index="${i}"${margin} title="${escapeHtml(
+          `Round ${r.round} · ${side} win · ${economyLabel(r.econ1)} vs ${economyLabel(r.econ2)}${coachHint}`
         )}">${String(r.round).padStart(2, '0')}</button>`;
       })
       .join('');
     markActiveRound();
+  }
+
+  function syncCoachRoundChips() {
+    roundsEl.querySelectorAll('.rv-round').forEach((b) => {
+      const file = files[Number(b.dataset.index)];
+      const on = coachNotedFiles.has(file);
+      b.classList.toggle('has-coach', on);
+      if (!file || !rounds[Number(b.dataset.index)]) return;
+      const r = rounds[Number(b.dataset.index)];
+      const side = winningSide(r);
+      const coachHint = on ? ' · coach notes' : '';
+      b.title = `Round ${r.round} · ${side} win · ${economyLabel(r.econ1)} vs ${economyLabel(r.econ2)}${coachHint}`;
+    });
+  }
+
+  function setCoachNoted(file, notes) {
+    if (!file) return;
+    const has = (notes || []).some(
+      (n) => n.kind === 'coach' && String(n.text || '').trim()
+    );
+    if (has) coachNotedFiles.add(file);
+    else coachNotedFiles.delete(file);
   }
 
   function markActiveRound() {
@@ -442,8 +470,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (index === activeIndex && store.get(files[index])?.isFull) {
       if (seek) {
         if (coachOn) {
-          await mergeCoachNotes();
+          await mergeCoachNotesFor(index);
           renderActiveMarks();
+          syncCoachRoundChips();
           enterCoachRoundMoment();
         } else {
           seekRoundEntry(index);
@@ -526,10 +555,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     }
 
     if (coachOn) {
-      coachCache.delete(file);
       syncCoach();
-      await mergeCoachNotes();
+      await mergeCoachNotesFor(index);
       renderActiveMarks();
+      syncCoachRoundChips();
       if (seek) enterCoachRoundMoment();
     } else if (seek) {
       seekRoundEntry(index);
@@ -1224,6 +1253,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         noteMsg.textContent = 'Saved.';
         renderNoteDock();
       }
+      setCoachNoted(file, roundNotes);
+      syncCoachRoundChips();
       syncNoteHasBadge();
       renderActiveMarks();
     } catch (err) {
@@ -1516,17 +1547,21 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
   const coachScratch = [];
 
-  function coachFor(index) {
+  /**
+   * Analyse one round. `meta` must be that round's own full meta (never reuse
+   * another round's). Results are cached per file for the session.
+   */
+  function coachFor(index, meta = null) {
     const file = files[index];
-    // Only analyse the active round with its own full meta — never the prior
-    // round's meta against this file's ticks.
-    if (!file || index !== activeIndex || !activeMeta?.players?.length) return null;
+    if (!file) return null;
     if (coachCache.has(file)) return coachCache.get(file);
+    const roundMeta = meta || (index === activeIndex ? activeMeta : null);
+    if (!roundMeta?.players?.length) return null;
     const track = store.track(file);
     if (!track) return null;
     const scratch = [];
     const result = analyseRound({
-      meta: activeMeta,
+      meta: roundMeta,
       sampleAt: (tick) => {
         track.sampleAll(tick, scratch);
         return scratch;
@@ -1786,7 +1821,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     hideCoachPick();
     coachOn = true;
     syncCoach();
-    await mergeCoachNotes();
+    // Analyse every round up front so the strip can mark them and notes exist
+    // before the user jumps around the demo.
+    await analyseAllCoachRounds();
     renderActiveMarks();
     enterCoachRoundMoment();
   }
@@ -1795,6 +1832,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (coachOn) {
       coachOn = false;
       coachTeam = null;
+      coachPassId += 1;
       hideCoachPick();
       syncCoach();
       clearAllCoachNotes();
@@ -1817,31 +1855,97 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
    * left alone: a flag that has already been reviewed keeps its verdict.
    * Only the selected roster team's mistakes are written.
    */
-  async function mergeCoachNotes() {
-    const file = files[activeIndex];
-    const result = coachFor(activeIndex);
-    if (!file || !result || (coachTeam !== 1 && coachTeam !== 2)) return;
-    const teamOf = new Map((activeMeta?.players || []).map((p) => [p.id, p.team]));
-    // Work from the dock's list, not the meta: the user may have added or
-    // edited notes since the round loaded, and those must survive the merge.
-    const existing = roundNotes.length ? roundNotes : notesFromMeta(activeMeta);
+  async function mergeCoachNotesFor(index) {
+    if (coachTeam !== 1 && coachTeam !== 2) return;
+    if (index < 0 || index >= files.length) return;
+    const file = files[index];
+    if (!file) return;
+
+    let meta =
+      index === activeIndex && activeMeta?.players?.length ? activeMeta : await metaFor(file);
+    await store.loadFull(file);
+    if (destroyed || !coachOn) return;
+    if (!meta?.players?.length) return;
+
+    const result = coachFor(index, meta);
+    if (!result) return;
+
+    const teamOf = new Map((meta.players || []).map((p) => [p.id, p.team]));
+    const existing =
+      index === activeIndex && roundNotes.length ? roundNotes : notesFromMeta(meta);
     const have = new Set(existing.filter((n) => n.kind === 'coach').map((n) => n.id));
     const fresh = result.flags
       .filter((f) => teamOf.get(f.playerId) === coachTeam)
       .map(flagToNote)
       .filter((n) => !have.has(n.id));
-    if (!fresh.length) return;
-    const next = [...existing, ...fresh].sort((a, b) => a.tick - b.tick);
-    roundNotes = next;
-    activeMeta.notes = next;
-    if (noteIndex < 0 && roundNotes.length) noteIndex = 0;
-    renderNoteDock();
-    renderActiveMarks();
-    try {
-      await persistNotes();
-    } catch {
-      /* the notes still show for this session even if the save failed */
+
+    const next = fresh.length
+      ? [...existing, ...fresh].sort((a, b) => a.tick - b.tick || a.updatedAt - b.updatedAt)
+      : existing;
+
+    meta.notes = next;
+    delete meta.note;
+    delete meta.noteUpdatedAt;
+    setCoachNoted(file, next);
+
+    if (index === activeIndex) {
+      roundNotes = next;
+      activeMeta = meta;
+      if (noteIndex < 0 && roundNotes.length) noteIndex = 0;
+      renderNoteDock();
+      renderActiveMarks();
+      if (fresh.length) {
+        try {
+          await persistNotes();
+        } catch {
+          /* notes still show for this session even if the save failed */
+        }
+      } else {
+        syncCoachRoundChips();
+      }
+      return;
     }
+
+    if (!fresh.length) {
+      syncCoachRoundChips();
+      return;
+    }
+
+    const payload = next
+      .map((n) => ({
+        id: n.id,
+        tick: n.tick,
+        text: String(n.text || '').trim(),
+        kind: n.kind === 'coach' ? 'coach' : 'user',
+        mark: n.mark || '',
+        updatedAt: n.updatedAt || Date.now()
+      }))
+      .filter((n) => n.text);
+    try {
+      const res = await saveRoundNotes(file, payload);
+      const saved = Array.isArray(res.notes) ? notesFromMeta({ notes: res.notes }) : notesFromMeta({ notes: payload });
+      meta.notes = saved;
+      setCoachNoted(file, saved);
+    } catch {
+      /* keep local merge for strip marking */
+    }
+    syncCoachRoundChips();
+  }
+
+  /** Load + analyse every round once coach is turned on. */
+  async function analyseAllCoachRounds() {
+    const pass = ++coachPassId;
+    for (let i = 0; i < files.length; i++) {
+      if (destroyed || !coachOn || pass !== coachPassId) return;
+      if (loadingEl) {
+        loadingEl.hidden = false;
+        loadingEl.textContent = `Coach analysing ${i + 1}/${files.length}…`;
+      }
+      await mergeCoachNotesFor(i);
+    }
+    if (pass !== coachPassId) return;
+    syncCoachRoundChips();
+    syncLoading();
   }
 
   /**
@@ -1851,6 +1955,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     flushNoteText();
     coachCache.clear();
     coachTeam = null;
+    coachNotedFiles.clear();
+    syncCoachRoundChips();
 
     const strip = (list) => list.filter((n) => n.kind !== 'coach');
 
@@ -1899,6 +2005,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       meta.notes = next;
       delete meta.note;
       delete meta.noteUpdatedAt;
+      setCoachNoted(file, next);
       if (file === files[activeIndex]) {
         roundNotes = next;
         if (!roundNotes.length) noteIndex = -1;
@@ -1920,6 +2027,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         /* local strip still stands for this session */
       }
     }
+    coachNotedFiles.clear();
+    syncCoachRoundChips();
   }
 
   // ---- frame --------------------------------------------------------------
