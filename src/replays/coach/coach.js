@@ -21,6 +21,8 @@ import { ALONE_DISTANCE, findCore, nearestTeammate } from './cores.js';
 
 /** A kill this soon after a death answers it. */
 const TRADE_SECONDS = 3;
+/** A frag this soon before dying means the death is not coached as a mistake. */
+const FRAG_GRACE_SECONDS = 5;
 /** An advantage has to have been held this long before losing it is a mistake. */
 const HOLD_SECONDS = 3;
 /** Below this at freezetime, the round was lost on the buy; say nothing. */
@@ -129,6 +131,7 @@ export function analyseRound({ meta, sampleAt }) {
 
   const flags = [];
   const trade = TRADE_SECONDS * tickRate;
+  const fragGrace = FRAG_GRACE_SECONDS * tickRate;
   const hold = HOLD_SECONDS * tickRate;
 
   /** Living count per side at a tick, from the kill log. */
@@ -171,10 +174,10 @@ export function analyseRound({ meta, sampleAt }) {
   const defusedTick =
     (meta.events?.bomb || []).find((b) => b.type === 'defused')?.tick ?? null;
 
-  /** A frag in the prior TRADE_SECONDS means the death was part of a fight, not a free mistake. */
+  /** A frag in the prior FRAG_GRACE_SECONDS means the death was part of a fight, not a free mistake. */
   const recentlyFragged = (playerId, atTick) =>
     kills.some(
-      (k) => k.attacker === playerId && k.tick < atTick && atTick - k.tick <= trade
+      (k) => k.attacker === playerId && k.tick < atTick && atTick - k.tick <= fragGrace
     );
 
   for (const death of kills) {

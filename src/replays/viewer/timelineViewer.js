@@ -88,12 +88,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         <button type="button" class="rp-btn-icon" id="rv-note-next" title="Next note" aria-label="Next note">›</button>
         <button type="button" class="rp-btn-icon rv-note-close" id="rv-note-close" title="Close" aria-label="Close">✕</button>
       </div>
-      <div class="rv-note-coach" id="rv-note-coach" hidden>
-        <span class="rv-note-diamond"></span>
-        <span class="rv-note-coach-label">Coach</span>
-        <button type="button" class="rv-note-mark" data-mark="ok" title="Agree">✓</button>
-        <button type="button" class="rv-note-mark" data-mark="x" title="Dismiss">✗</button>
-      </div>
       <textarea id="rv-note-text" maxlength="${NOTE_MAX}" rows="6"
         placeholder="What happens here?"></textarea>
       <div class="rv-popover-foot">
@@ -184,7 +178,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const noteCount = el.querySelector('#rv-note-count');
   const noteMsg = el.querySelector('#rv-note-msg');
   const noteStampEl = el.querySelector('#rv-note-stamp');
-  const noteCoachEl = el.querySelector('#rv-note-coach');
   const notePosEl = el.querySelector('#rv-note-pos');
   const notePrevBtn = el.querySelector('#rv-note-prev');
   const noteNextBtn = el.querySelector('#rv-note-next');
@@ -395,9 +388,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       // marks around them at a glance.
       const coach = n.kind === 'coach';
       parts.push(
-        `<span class="rv-mark ${coach ? 'coach' : 'note'}${
-          coach && n.mark ? ` marked-${n.mark}` : ''
-        }" data-note="${escapeHtml(n.id)}" style="left:${at(n.tick) * 100}%" title="${
+        `<span class="rv-mark ${coach ? 'coach' : 'note'}" data-note="${escapeHtml(
+          n.id
+        )}" style="left:${at(n.tick) * 100}%" title="${
           coach ? 'Coach' : 'Note'
         } · ${escapeHtml(label)}"></span>`
       );
@@ -986,7 +979,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const n = currentNote();
     const total = roundNotes.length;
     if (!n) {
-      noteCoachEl.hidden = true;
       noteStampEl.textContent = '—';
       notePosEl.textContent = '';
       noteText.value = '';
@@ -996,10 +988,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       syncNoteHasBadge();
       return;
     }
-    noteCoachEl.hidden = n.kind !== 'coach';
-    noteCoachEl.querySelectorAll('[data-mark]').forEach((b) => {
-      b.classList.toggle('active', n.mark === b.dataset.mark);
-    });
     noteStampEl.textContent = noteClockLabel(n.tick);
     notePosEl.textContent = total > 1 ? `${noteIndex + 1} / ${total}` : '';
     if (forceText || document.activeElement !== noteText) noteText.value = n.text || '';
@@ -1061,25 +1049,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     noteBtn.classList.add('active');
     showNoteAt(0, { seek: false });
   }
-
-  /**
-   * A verdict on a coach note. Saved straight away rather than on the Save
-   * button: a tick or a cross is a decision, not a draft.
-   */
-  async function markCurrentNote(mark) {
-    const n = currentNote();
-    if (!n || n.kind !== 'coach') return;
-    n.mark = n.mark === mark ? '' : mark;
-    n.updatedAt = Date.now();
-    renderNoteDock();
-    renderActiveMarks();
-    await persistNotes();
-  }
-
-  noteCoachEl?.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-mark]');
-    if (btn) markCurrentNote(btn.dataset.mark);
-  });
 
   /** Clicking a mark on the scrub jumps to it and opens what it is about. */
   marksEl.addEventListener('click', (e) => {
