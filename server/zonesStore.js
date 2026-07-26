@@ -120,17 +120,22 @@ export function sanitizeZones(map, payload) {
       seen.add(id);
       ids.push(id);
     }
+    const color = String(s.color || '').slice(0, 32);
     sections.push({
       id: String(s.id || `s${sections.length}`).slice(0, 40),
       name,
+      color,
       zoneIds: ids
     });
   }
+
+  const colorMode = payload?.colorMode === 'section' ? 'section' : 'zone';
 
   return {
     map: code,
     zones,
     sections,
+    colorMode,
     updatedAt: Number(payload?.updatedAt) || Date.now()
   };
 }
@@ -181,11 +186,11 @@ export async function getZones(map) {
   if (!MAP_RE.test(code)) return null;
   await migrateLegacyIfNeeded(code);
   const data = await readJsonFile(fileFor(code));
-  if (!data) return { map: code, zones: [], sections: [], updatedAt: 0 };
+  if (!data) return { map: code, zones: [], sections: [], colorMode: 'zone', updatedAt: 0 };
   try {
     return sanitizeZones(code, data);
   } catch {
-    return { map: code, zones: [], sections: [], updatedAt: 0 };
+    return { map: code, zones: [], sections: [], colorMode: 'zone', updatedAt: 0 };
   }
 }
 

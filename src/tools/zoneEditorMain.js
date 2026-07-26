@@ -15,11 +15,14 @@ import {
   colorForName,
   deleteSection,
   deleteZone,
+  displayColorForZone,
   emptyNetwork,
   overlappingZones,
   removeZoneFromSection,
   renameSection,
   renameZone,
+  setSectionColor,
+  setZoneColor,
   worldRectFromRadarDrag
 } from '../replays/zones/zoneModel.js';
 import { fetchZones, saveZones } from '../replays/zones/zoneApi.js';
@@ -37,6 +40,7 @@ const el = {
   nameInput: document.querySelector('#ze-name'),
   sectionNameInput: document.querySelector('#ze-section-name'),
   btnSectionAdd: document.querySelector('#ze-section-add'),
+  colorMode: document.querySelector('#ze-color-mode'),
   zoomLabel: document.querySelector('#ze-zoom'),
   status: document.querySelector('#ze-status'),
   modal: document.querySelector('#ze-overlap'),
@@ -62,19 +66,28 @@ let dirty = false;
 let drawing = null;
 let panning = false;
 let lastPan = null;
-let selectedId = null;
+/** Multi-select in Areas (Shift-click toggles). */
+const selectedIds = new Set();
 let selectedSectionId = null;
 /** @type {null | { worldRect: object, name: string, hits: Array }} */
 let pendingDraw = null;
+/** Active HTML5 drag payload. */
+let dragPayload = null;
+
+const DRAG_MIME = 'application/x-aim4-zones';
 
 function ensureSections() {
   if (!Array.isArray(network.sections)) network.sections = [];
+  for (const s of network.sections) {
+    if (!s.color) s.color = colorForName(s.name);
+  }
 }
 
 function snapshotOf(net) {
   return JSON.stringify({
     zones: net.zones || [],
-    sections: net.sections || []
+    sections: net.sections || [],
+    colorMode: net.colorMode === 'section' ? 'section' : 'zone'
   });
 }
 
@@ -82,9 +95,37 @@ function cloneNetworkState() {
   return JSON.parse(
     JSON.stringify({
       zones: network.zones || [],
-      sections: network.sections || []
+      sections: network.sections || [],
+      colorMode: network.colorMode === 'section' ? 'section' : 'zone'
     })
   );
+}
+
+function colorMode() {
+  return network.colorMode === 'section' ? 'section' : 'zone';
+}
+
+function paintColor(zone) {
+  return displayColorForZone(network, zone, { preferSectionId: selectedSectionId });
+}
+
+function toColorInputValue(hex) {
+  const s = String(hex || '').trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(s)) return s.toLowerCase();
+  if (/^#[0-9a-fA-F]{3}$/.test(s)) {
+    const a = s[1];
+    const b = s[2];
+    const c = s[3];
+    return `#${a}${a}${b}${b}${c}${c}`.toLowerCase();
+  }
+  return '#5b9fd4';
+}
+
+function syncColorModeUi() {
+  const mode = colorMode();
+  el.colorMode?.querySelectorAll('[data-mode]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
 }
 
 /** Snapshot before a zone-creating edit so Ctrl+Z can reverse it. */
@@ -102,9 +143,9 @@ function undoCreate() {
   const prev = undoStack.pop();
   network.zones = prev.zones || [];
   network.sections = prev.sections || [];
-  if (selectedId && !network.zones.some((z) => z.id === selectedId)) {
-    selectedId = null;
-  }
+  network.colorMode = prev.colorMode === 'section' ? 'section' : 'zone';
+  pruneSelection();
+  syncColorModeUi();
   if (selectedSectionId && !network.sections.some((s) => s.id === selectedSectionId)) {
     selectedSectionId = null;
   }
@@ -194,8 +235,8 @@ function draw() {
 
   for (const z of network.zones) {
     if (z.hidden) continue;
-    const color = z.color || colorForName(z.name);
-    const selected = z.id === selectedId;
+    const color = paintColor(z);
+    const selected = selectedIds.has(z.id);
     for (const piece of z.pieces || []) {
       const ring = pieceToRing(piece);
       if (ring.length < 3) continue;
@@ -268,6 +309,30 @@ function renderMapTabs() {
   ).join('');
 }
 
+function pruneSelection() {
+  const alive = new Set(network.zones.map((z) => z.id));
+  for (const id of [...selectedIds]) {
+    if (!alive.has(id)) selectedIds.delete(id);
+  }
+}
+
+function setSelection(ids, { primaryName = true } = {}) {
+  selectedIds.clear();
+  for (const id of ids) {
+    if (network.zones.some((z) => z.id === id)) selectedIds.add(id);
+  }
+  if (primaryName && el.nameInput) {
+    const first = network.zones.find((z) => selectedIds.has(z.id));
+    if (first) el.nameInput.value = first.name;
+  }
+}
+
+function syncListSelectionClasses() {
+  el.list?.querySelectorAll('.ze-row').forEach((row) => {
+    row.classList.toggle('selected', selectedIds.has(row.dataset.id));
+  });
+}
+
 function renderList() {
   if (!network.zones.length) {
     el.list.innerHTML =
@@ -276,14 +341,19 @@ function renderList() {
   }
   el.list.innerHTML = network.zones
     .map((z) => {
-      const selected = z.id === selectedId ? ' selected' : '';
-      return `<div class="ze-row${selected}${z.hidden ? ' is-hidden' : ''}" data-id="${z.id}">
-        <span class="ze-swatch" style="background:${z.color || colorForName(z.name)}"></span>
-        <input class="ze-row-name" type="text" maxlength="48" value="${escapeAttr(z.name)}" />
-        <button type="button" class="ze-icon-btn" data-act="vis" title="Toggle visibility">${
+      const selected = selectedIds.has(z.id) ? ' selected' : '';
+      const hex = toColorInputValue(paintColor(z));
+      return `<div class="ze-row${selected}${z.hidden ? ' is-hidden' : ''}" data-id="${z.id}" draggable="true" title="Click to select · Shift-click to multi-select · Drag into a section">
+        <label class="ze-swatch-wrap" title="Area color" draggable="false">
+          <input type="color" class="ze-color" value="${hex}" data-act="color" draggable="false" ${
+            colorMode() === 'section' ? 'disabled' : ''
+          } />
+        </label>
+        <input class="ze-row-name" type="text" maxlength="48" value="${escapeAttr(z.name)}" draggable="false" />
+        <button type="button" class="ze-icon-btn" data-act="vis" title="Toggle visibility" draggable="false">${
           z.hidden ? '○' : '◉'
         }</button>
-        <button type="button" class="ze-icon-btn" data-act="del" title="Delete">✕</button>
+        <button type="button" class="ze-icon-btn" data-act="del" title="Delete" draggable="false">✕</button>
       </div>`;
     })
     .join('');
@@ -294,37 +364,36 @@ function renderSections() {
   ensureSections();
   if (!network.sections.length) {
     el.sectionsList.innerHTML =
-      '<p class="ze-empty">No sections yet. Group areas (e.g. Banana) under one name.</p>';
+      '<p class="ze-empty">Shift-select areas, name a section, then +. Drag areas in or out. Zones can belong to several sections.</p>';
     return;
   }
   const byId = new Map(network.zones.map((z) => [z.id, z]));
+  const groupPaint = colorMode() === 'section';
   el.sectionsList.innerHTML = network.sections
     .map((s) => {
       const selected = s.id === selectedSectionId ? ' selected' : '';
+      const secColor = toColorInputValue(s.color || colorForName(s.name));
       const members = (s.zoneIds || [])
         .map((id) => byId.get(id))
         .filter(Boolean);
-      const memberHtml = members.length
-        ? `<ul class="ze-sec-members">${members
-            .map(
-              (z) => `<li>
-              <span title="${escapeAttr(z.name)}">${escapeAttr(z.name)}</span>
-              <button type="button" class="ze-icon-btn" data-sec-act="rm" data-zone="${z.id}" title="Remove from section">✕</button>
-            </li>`
-            )
-            .join('')}</ul>`
-        : '';
-      const canAdd =
-        selectedId && !(s.zoneIds || []).includes(selectedId) && byId.has(selectedId);
+      const memberHtml = `<ul class="ze-sec-members" data-section="${s.id}">${members
+        .map((z) => {
+          const swatch = groupPaint ? secColor : toColorInputValue(z.color || colorForName(z.name));
+          return `<li draggable="true" data-zone="${z.id}" data-from-section="${s.id}" title="Drag out to remove, or into another section">
+              <span class="ze-swatch" style="background:${swatch}"></span>
+              <span>${escapeAttr(z.name)}</span>
+            </li>`;
+        })
+        .join('')}</ul>`;
       return `<div class="ze-sec${selected}" data-section="${s.id}">
         <div class="ze-sec-top">
-          <input class="ze-row-name" type="text" maxlength="48" value="${escapeAttr(s.name)}" data-sec-act="rename" />
-          <button type="button" class="ze-icon-btn" data-sec-act="del" title="Delete section">✕</button>
+          <label class="ze-swatch-wrap" title="Section color" draggable="false">
+            <input type="color" class="ze-color" value="${secColor}" data-sec-act="color" draggable="false" />
+          </label>
+          <input class="ze-row-name" type="text" maxlength="48" value="${escapeAttr(s.name)}" data-sec-act="rename" draggable="false" />
+          <button type="button" class="ze-icon-btn" data-sec-act="del" title="Delete section" draggable="false">✕</button>
         </div>
         ${memberHtml}
-        <button type="button" class="ze-sec-add" data-sec-act="add" ${canAdd ? '' : 'disabled'} title="Add the selected area">
-          ${canAdd ? `+ Add “${escapeAttr(byId.get(selectedId).name)}”` : '+ Select an area first'}
-        </button>
       </div>`;
     })
     .join('');
@@ -343,6 +412,7 @@ async function loadMap(code) {
   try {
     network = await fetchZones(mapCode);
     ensureSections();
+    if (network.colorMode !== 'section') network.colorMode = 'zone';
   } catch (err) {
     network = emptyNetwork(mapCode);
     setStatus(err.message || 'Could not load zones', 'err');
@@ -350,11 +420,12 @@ async function loadMap(code) {
   savedSnapshot = snapshotOf(network);
   clearUndo();
   markDirty(false);
-  selectedId = null;
+  selectedIds.clear();
   selectedSectionId = null;
   zoom = 1;
   panX = 0;
   panY = 0;
+  syncColorModeUi();
   renderList();
   renderSections();
   draw();
@@ -372,7 +443,7 @@ function commitRect(worldRect, name) {
   const z = network.zones.find(
     (x) => x.name.trim().toLowerCase() === label.toLowerCase()
   );
-  selectedId = z?.id || null;
+  setSelection(z ? [z.id] : []);
   markDirty(true);
   renderList();
   renderSections();
@@ -394,7 +465,7 @@ function commitRectAvoiding(worldRect, name, hits) {
   const z = network.zones.find(
     (x) => x.name.trim().toLowerCase() === String(name).trim().toLowerCase()
   );
-  selectedId = z?.id || null;
+  setSelection(z ? [z.id] : []);
   markDirty(true);
   renderList();
   renderSections();
@@ -462,12 +533,28 @@ el.mapTabs?.addEventListener('click', (e) => {
   if (btn) loadMap(btn.dataset.map);
 });
 
-function markRowSelected(id) {
-  selectedId = id;
-  el.list?.querySelectorAll('.ze-row').forEach((row) => {
-    row.classList.toggle('selected', row.dataset.id === id);
-  });
-}
+el.colorMode?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-mode]');
+  if (!btn) return;
+  const mode = btn.dataset.mode === 'section' ? 'section' : 'zone';
+  if (colorMode() === mode) return;
+  network.colorMode = mode;
+  markDirty(true);
+  syncColorModeUi();
+  renderList();
+  renderSections();
+  draw();
+});
+
+el.list?.addEventListener('input', (e) => {
+  const input = e.target.closest('input.ze-color[data-act="color"]');
+  if (!input || input.disabled) return;
+  const row = input.closest('.ze-row');
+  if (!row) return;
+  setZoneColor(network, row.dataset.id, input.value);
+  markDirty(true);
+  draw();
+});
 
 el.list?.addEventListener('click', (e) => {
   const row = e.target.closest('.ze-row');
@@ -476,9 +563,10 @@ el.list?.addEventListener('click', (e) => {
   const zone = network.zones.find((z) => z.id === id);
   if (!zone) return;
   const act = e.target.closest('[data-act]')?.dataset.act;
+  if (act === 'color') return;
   if (act === 'del') {
     deleteZone(network, id);
-    if (selectedId === id) selectedId = null;
+    selectedIds.delete(id);
     markDirty(true);
     renderList();
     renderSections();
@@ -492,18 +580,26 @@ el.list?.addEventListener('click', (e) => {
     draw();
     return;
   }
-  // Clicking the name field must not rebuild the list — that killed focus
-  // and made renames impossible.
+  // Name field: keep focus; still update selection without rebuilding.
   if (e.target.closest('.ze-row-name')) {
-    markRowSelected(id);
-    if (el.nameInput) el.nameInput.value = zone.name;
-    renderSections();
+    if (e.shiftKey) {
+      if (selectedIds.has(id)) selectedIds.delete(id);
+      else selectedIds.add(id);
+    } else {
+      setSelection([id]);
+    }
+    syncListSelectionClasses();
     draw();
     return;
   }
-  markRowSelected(id);
-  if (el.nameInput) el.nameInput.value = zone.name;
-  renderSections();
+  if (e.shiftKey) {
+    if (selectedIds.has(id)) selectedIds.delete(id);
+    else selectedIds.add(id);
+    if (el.nameInput) el.nameInput.value = zone.name;
+  } else {
+    setSelection([id]);
+  }
+  syncListSelectionClasses();
   draw();
 });
 
@@ -513,7 +609,7 @@ el.list?.addEventListener('change', (e) => {
   const row = input.closest('.ze-row');
   if (!row) return;
   renameZone(network, row.dataset.id, input.value);
-  if (selectedId === row.dataset.id && el.nameInput) {
+  if (selectedIds.has(row.dataset.id) && el.nameInput) {
     el.nameInput.value = input.value.trim() || el.nameInput.value;
   }
   markDirty(true);
@@ -536,12 +632,19 @@ el.btnSectionAdd?.addEventListener('click', () => {
   const name = el.sectionNameInput?.value.trim();
   if (!name) {
     el.sectionNameInput?.focus();
+    setStatus('Name the section first');
+    return;
+  }
+  if (!selectedIds.size) {
+    setStatus('Shift-select areas, then +');
     return;
   }
   const section = addSection(network, name);
+  for (const id of selectedIds) addZoneToSection(network, section.id, id);
   selectedSectionId = section.id;
   if (el.sectionNameInput) el.sectionNameInput.value = '';
   markDirty(true);
+  setStatus('');
   renderSections();
 });
 
@@ -552,36 +655,44 @@ el.sectionNameInput?.addEventListener('keydown', (e) => {
   }
 });
 
+el.sectionsList?.addEventListener('input', (e) => {
+  const input = e.target.closest('input.ze-color[data-sec-act="color"]');
+  if (!input) return;
+  const sec = input.closest('.ze-sec');
+  if (!sec) return;
+  setSectionColor(network, sec.dataset.section, input.value);
+  markDirty(true);
+  if (colorMode() === 'section') {
+    renderList();
+    renderSections();
+  }
+  draw();
+});
+
 el.sectionsList?.addEventListener('click', (e) => {
   const sec = e.target.closest('.ze-sec');
   if (!sec) return;
   const sectionId = sec.dataset.section;
   const act = e.target.closest('[data-sec-act]')?.dataset.secAct;
+  if (act === 'color') return;
   if (act === 'del') {
     deleteSection(network, sectionId);
     if (selectedSectionId === sectionId) selectedSectionId = null;
     markDirty(true);
     renderSections();
-    return;
-  }
-  if (act === 'rm') {
-    const zoneId = e.target.closest('[data-zone]')?.dataset.zone;
-    removeZoneFromSection(network, sectionId, zoneId);
-    markDirty(true);
-    renderSections();
-    return;
-  }
-  if (act === 'add') {
-    if (!selectedId) return;
-    addZoneToSection(network, sectionId, selectedId);
-    selectedSectionId = sectionId;
-    markDirty(true);
-    renderSections();
+    draw();
     return;
   }
   if (e.target.closest('input')) return;
   selectedSectionId = sectionId;
-  renderSections();
+  el.sectionsList.querySelectorAll('.ze-sec').forEach((node) => {
+    node.classList.toggle('selected', node.dataset.section === sectionId);
+  });
+  // Multi-section zones prefer the selected group's color in Groups mode.
+  if (colorMode() === 'section') {
+    renderList();
+    draw();
+  }
 });
 
 el.sectionsList?.addEventListener('change', (e) => {
@@ -592,6 +703,150 @@ el.sectionsList?.addEventListener('change', (e) => {
   renameSection(network, sec.dataset.section, input.value);
   markDirty(true);
   renderSections();
+});
+
+// ---- drag zones into / out of sections ------------------------------------
+
+function readDrag(e) {
+  if (dragPayload) return dragPayload;
+  try {
+    const raw = e.dataTransfer?.getData(DRAG_MIME) || e.dataTransfer?.getData('text/plain');
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function beginDrag(e, { zoneIds, fromSectionId = null }) {
+  if (e.target.closest('input, button, .ze-row-name')) {
+    e.preventDefault();
+    return false;
+  }
+  const ids = [...new Set(zoneIds)].filter(Boolean);
+  if (!ids.length) {
+    e.preventDefault();
+    return false;
+  }
+  dragPayload = { zoneIds: ids, fromSectionId: fromSectionId || null };
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData(DRAG_MIME, JSON.stringify(dragPayload));
+  e.dataTransfer.setData('text/plain', JSON.stringify(dragPayload));
+  e.currentTarget?.classList?.add('ze-dragging');
+  return true;
+}
+
+function clearDropMarks() {
+  document.querySelectorAll('.ze-drop-over').forEach((n) => n.classList.remove('ze-drop-over'));
+}
+
+function applyDragToSection(sectionId, payload) {
+  if (!sectionId || !payload?.zoneIds?.length) return false;
+  let changed = false;
+  for (const id of payload.zoneIds) {
+    const before = network.sections.find((s) => s.id === sectionId)?.zoneIds?.length || 0;
+    addZoneToSection(network, sectionId, id);
+    const after = network.sections.find((s) => s.id === sectionId)?.zoneIds?.length || 0;
+    if (after !== before) changed = true;
+    // Dropping into another section keeps membership in the source (multi-section).
+  }
+  if (changed) {
+    selectedSectionId = sectionId;
+    markDirty(true);
+    renderSections();
+  }
+  return changed;
+}
+
+function applyDragOutOfSection(payload) {
+  if (!payload?.fromSectionId || !payload.zoneIds?.length) return false;
+  let changed = false;
+  for (const id of payload.zoneIds) {
+    const sec = network.sections.find((s) => s.id === payload.fromSectionId);
+    const had = sec?.zoneIds?.includes(id);
+    removeZoneFromSection(network, payload.fromSectionId, id);
+    if (had) changed = true;
+  }
+  if (changed) {
+    markDirty(true);
+    renderSections();
+  }
+  return changed;
+}
+
+el.list?.addEventListener('dragstart', (e) => {
+  const row = e.target.closest('.ze-row');
+  if (!row || !el.list.contains(row)) return;
+  const id = row.dataset.id;
+  const zoneIds = selectedIds.has(id) && selectedIds.size ? [...selectedIds] : [id];
+  if (!beginDrag(e, { zoneIds, fromSectionId: null })) return;
+  row.classList.add('ze-dragging');
+});
+
+el.list?.addEventListener('dragend', () => {
+  dragPayload = null;
+  clearDropMarks();
+  el.list?.querySelectorAll('.ze-dragging').forEach((n) => n.classList.remove('ze-dragging'));
+  el.sectionsList?.querySelectorAll('.ze-dragging').forEach((n) => n.classList.remove('ze-dragging'));
+});
+
+el.list?.addEventListener('dragover', (e) => {
+  const payload = readDrag(e);
+  if (!payload?.fromSectionId) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  el.list.classList.add('ze-drop-over');
+});
+
+el.list?.addEventListener('dragleave', (e) => {
+  if (!el.list.contains(e.relatedTarget)) el.list.classList.remove('ze-drop-over');
+});
+
+el.list?.addEventListener('drop', (e) => {
+  e.preventDefault();
+  clearDropMarks();
+  const payload = readDrag(e);
+  applyDragOutOfSection(payload);
+  dragPayload = null;
+});
+
+el.sectionsList?.addEventListener('dragstart', (e) => {
+  const li = e.target.closest('.ze-sec-members li[data-zone]');
+  if (!li) return;
+  beginDrag(e, {
+    zoneIds: [li.dataset.zone],
+    fromSectionId: li.dataset.fromSection || null
+  });
+});
+
+el.sectionsList?.addEventListener('dragend', () => {
+  dragPayload = null;
+  clearDropMarks();
+  el.sectionsList?.querySelectorAll('.ze-dragging').forEach((n) => n.classList.remove('ze-dragging'));
+});
+
+el.sectionsList?.addEventListener('dragover', (e) => {
+  const sec = e.target.closest('.ze-sec');
+  if (!sec || !readDrag(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  clearDropMarks();
+  sec.classList.add('ze-drop-over');
+});
+
+el.sectionsList?.addEventListener('dragleave', (e) => {
+  const sec = e.target.closest('.ze-sec');
+  if (sec && !sec.contains(e.relatedTarget)) sec.classList.remove('ze-drop-over');
+});
+
+el.sectionsList?.addEventListener('drop', (e) => {
+  const sec = e.target.closest('.ze-sec');
+  if (!sec) return;
+  e.preventDefault();
+  clearDropMarks();
+  const payload = readDrag(e);
+  applyDragToSection(sec.dataset.section, payload);
+  dragPayload = null;
 });
 
 el.canvas.addEventListener('pointerdown', (e) => {
@@ -677,7 +932,7 @@ el.btnDiscard?.addEventListener('click', async () => {
   savedSnapshot = snapshotOf(network);
   clearUndo();
   markDirty(false);
-  selectedId = null;
+  selectedIds.clear();
   selectedSectionId = null;
   renderList();
   renderSections();

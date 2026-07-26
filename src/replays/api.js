@@ -300,14 +300,14 @@ export async function fetchZones(map) {
       headers: await headers()
     })
   );
-  return data.network || { map, zones: [], sections: [], updatedAt: 0 };
+  return data.network || { map, zones: [], sections: [], colorMode: 'zone', updatedAt: 0 };
 }
 
 /**
  * Persist zone polygons + names for one map. Same shared write path as
  * saveRoundNotes — JSON on AIM4_REPLAY_DIR, no auth.
  * @param {string} map
- * @param {{ zones?: Array, sections?: Array }} network
+ * @param {{ zones?: Array, sections?: Array, colorMode?: string }} network
  */
 export async function saveZones(map, network) {
   const data = await asJson(
@@ -316,7 +316,8 @@ export async function saveZones(map, network) {
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         zones: network.zones || [],
-        sections: network.sections || []
+        sections: network.sections || [],
+        colorMode: network.colorMode === 'section' ? 'section' : 'zone'
       })
     })
   );

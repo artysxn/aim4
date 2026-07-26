@@ -41,8 +41,10 @@ export function newSectionId() {
   return `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
+/** @typedef {'zone'|'section'} ColorMode */
+
 export function emptyNetwork(map) {
-  return { map, zones: [], sections: [], updatedAt: 0 };
+  return { map, zones: [], sections: [], colorMode: 'zone', updatedAt: 0 };
 }
 
 /**
@@ -61,10 +63,56 @@ export function addSection(network, name, zoneIds = []) {
   const section = {
     id: newSectionId(),
     name: label,
+    color: colorForName(label),
     zoneIds: [...new Set((zoneIds || []).map(String).filter(Boolean))]
   };
   network.sections.push(section);
   return section;
+}
+
+export function setZoneColor(network, zoneId, color) {
+  const zone = network.zones.find((z) => z.id === zoneId);
+  if (!zone) return;
+  const hex = normalizeHex(color);
+  if (hex) zone.color = hex;
+}
+
+export function setSectionColor(network, sectionId, color) {
+  const section = network.sections?.find((s) => s.id === sectionId);
+  if (!section) return;
+  const hex = normalizeHex(color);
+  if (hex) section.color = hex;
+}
+
+function normalizeHex(color) {
+  const s = String(color || '').trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(s)) return s.toLowerCase();
+  if (/^#[0-9a-fA-F]{3}$/.test(s)) {
+    const [, a, b, c] = s;
+    return `#${a}${a}${b}${b}${c}${c}`.toLowerCase();
+  }
+  return '';
+}
+
+/**
+ * Paint color for a zone under the network's color mode.
+ * Group mode: selected section wins if the zone is in it, else first section.
+ */
+export function displayColorForZone(network, zone, { preferSectionId = null } = {}) {
+  if (!zone) return PALETTE[0];
+  const mode = network?.colorMode === 'section' ? 'section' : 'zone';
+  if (mode === 'section') {
+    const sections = network.sections || [];
+    if (preferSectionId) {
+      const pref = sections.find((s) => s.id === preferSectionId);
+      if (pref?.zoneIds?.includes(zone.id)) {
+        return pref.color || colorForName(pref.name);
+      }
+    }
+    const sec = sections.find((s) => s.zoneIds?.includes(zone.id));
+    if (sec) return sec.color || colorForName(sec.name);
+  }
+  return zone.color || colorForName(zone.name);
 }
 
 export function deleteSection(network, sectionId) {
@@ -187,7 +235,7 @@ export function renameZone(network, zoneId, newName) {
     network.zones = network.zones.filter((z) => z.id !== zone.id);
   } else {
     zone.name = label;
-    zone.color = colorForName(label);
+    if (!zone.color) zone.color = colorForName(label);
   }
 }
 
