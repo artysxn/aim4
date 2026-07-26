@@ -818,6 +818,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   function zoneOverlayForTick(tick) {
     if (!zonesOn || !zoneNetwork?.zones?.length) return null;
     if (zonePresence && !zonePresence.events) zonePresence.events = new Map();
+    const file = files[activeIndex];
+    const track = store.get(file)?.full || store.track(file) || null;
     const { paint, info } = computeZonePaint({
       meta: activeMeta,
       states,
@@ -827,7 +829,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       mapCode: renderer.mapCode || activeMeta.map || '',
       radarImage: renderer.image,
       grenades: activeMeta.events?.grenades || [],
-      visionCache: zoneVisionCache
+      visionCache: zoneVisionCache,
+      track
     });
     zoneInfo = info;
     return { network: zoneNetwork, paint };

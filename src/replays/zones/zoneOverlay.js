@@ -18,9 +18,8 @@ import {
 import { RADAR_SIZE, worldToRadar } from '../viewer/mapCalibration.js';
 import {
   VISION_STRIDE,
-  applyBeamHits,
   claimVisual,
-  decayClaims,
+  createBeamClaimSimulator,
   emptyClaim
 } from './mapControl.js';
 import { getVisionLayerTests } from './visionLayers.js';
@@ -82,39 +81,43 @@ const losCache = new Map();
 
 /**
  * Per-viewer amortized LOS + beam-claim state for the timeline zones overlay.
- * One living player is fired every VISION_STRIDE demo ticks (round-robin).
+ * Sight cones are cached per player; beam claims come from a seek-safe
+ * stride simulator (same rules as the map-control graph).
  * @returns {{
  *   rr: number,
  *   byPlayer: Map<string, object>,
- *   claims: Map<string, import('./mapControl.js').ClaimState>,
  *   smokeKey: string,
  *   lastTick: number|null,
  *   lastStride: number|null,
- *   roundKey: string
+ *   roundKey: string,
+ *   claimSimKey: string,
+ *   claimSim: ReturnType<typeof createBeamClaimSimulator>|null
  * }}
  */
 export function createZoneVisionCache() {
   return {
     rr: 0,
     byPlayer: new Map(),
-    claims: new Map(),
     smokeKey: '',
     lastTick: null,
     lastStride: null,
-    roundKey: ''
+    roundKey: '',
+    claimSimKey: '',
+    claimSim: null
   };
 }
 
-/** Drop all cached per-player sight / claims (round change, seek, smoke pop). */
+/** Drop all cached per-player sight / claim simulator (round change, seek). */
 export function resetZoneVisionCache(cache) {
   if (!cache) return;
   cache.rr = 0;
   cache.byPlayer.clear();
-  cache.claims = new Map();
   cache.smokeKey = '';
   cache.lastTick = null;
   cache.lastStride = null;
   cache.roundKey = '';
+  cache.claimSimKey = '';
+  cache.claimSim = null;
 }
 
 /**
@@ -752,11 +755,12 @@ function mergePlayerVision(entries, active) {
 }
 
 /**
- * Apply vision + beam-claim accumulation for the current tick.
+ * Apply vision + beam claims for the current tick.
  *
- * With `visionCache`, one living player fires every VISION_STRIDE demo ticks
- * (round-robin). Beam hits accumulate toward neutral (3) / flip (20) thresholds.
- * Without a cache, every living player is computed once (no persistence).
+ * Beam claims are seek-safe: simulated from freeze-end → playhead with the
+ * same stride/RR rules as the map-control graph (snapshots, not live mutate).
+ * Sight cones use a short cache for smooth playback, but fully refresh on
+ * backward seeks / skipped strides so scrubbing cannot leave stale cones.
  *
  * @returns {{
  *   tSight: Set<string>,
@@ -776,7 +780,8 @@ function applyVisionClaims({
   mapCode,
   radarImage,
   grenades,
-  visionCache
+  visionCache,
+  track = null
 }) {
   const empty = {
     tSight: new Set(),
@@ -836,63 +841,65 @@ function applyVisionClaims({
     return { ...merged, claims: null };
   }
 
-  if (!visionCache.claims) visionCache.claims = new Map();
+  const roundKey = `${mapCode}|${meta.startTick ?? 0}|${meta.freezeEndTick ?? 0}|${meta.endTick ?? 0}`;
+  if (visionCache.roundKey !== roundKey) {
+    resetZoneVisionCache(visionCache);
+    visionCache.roundKey = roundKey;
+  }
+
+  /** @type {Map<string, import('./mapControl.js').ClaimState>|null} */
+  let claims = null;
+  if (track) {
+    const cast = createBeamCaster({ meta, network, mapCode, radarImage });
+    const simKey = `${roundKey}|${network.updatedAt || 0}|${network._layerPaintGen || 0}`;
+    if (!visionCache.claimSim || visionCache.claimSimKey !== simKey) {
+      visionCache.claimSim = createBeamClaimSimulator({
+        meta,
+        track,
+        castPlayerBeams: cast
+      });
+      visionCache.claimSimKey = simKey;
+    }
+    claims = visionCache.claimSim.claimsAt(tick);
+  }
 
   const smokeKey = smokeCenters
     .map((s) => `${Math.round(s.x)},${Math.round(s.y)}`)
     .join(';');
-  const roundKey = `${mapCode}|${meta.startTick ?? 0}|${meta.freezeEndTick ?? 0}|${meta.endTick ?? 0}`;
+  const stride = Math.floor(tick / VISION_STRIDE);
+  const lastTick = visionCache.lastTick;
+  const lastStride = visionCache.lastStride;
+  // Backward seek, skipped strides, or smoke change → refresh every living cone.
+  const seekOrSkip =
+    lastTick == null ||
+    tick < lastTick ||
+    (lastStride != null && stride < lastStride) ||
+    (lastStride != null && stride > lastStride + 1) ||
+    visionCache.smokeKey !== smokeKey ||
+    (lastTick != null && Math.abs(tick - lastTick) > tickRate * 2);
 
-  if (visionCache.roundKey !== roundKey) {
-    resetZoneVisionCache(visionCache);
-    visionCache.roundKey = roundKey;
-    visionCache.claims = new Map();
-  }
-  if (visionCache.smokeKey !== smokeKey) {
+  if (seekOrSkip) {
     visionCache.byPlayer.clear();
     visionCache.rr = 0;
     visionCache.lastStride = null;
     visionCache.smokeKey = smokeKey;
+    for (const v of viewers) {
+      visionCache.byPlayer.set(v.player.id, runOne(v));
+    }
+    visionCache.lastStride = stride;
+  } else if (viewers.length && lastStride !== stride) {
+    visionCache.lastStride = stride;
+    const focus = viewers[visionCache.rr % viewers.length];
+    visionCache.rr++;
+    visionCache.byPlayer.set(focus.player.id, runOne(focus));
   }
-  // Large scrub jump — drop cones + claim progress.
-  if (
-    visionCache.lastTick != null &&
-    Math.abs(tick - visionCache.lastTick) > tickRate * 2
-  ) {
-    visionCache.byPlayer.clear();
-    visionCache.rr = 0;
-    visionCache.claims = new Map();
-    visionCache.lastStride = null;
-  }
-  visionCache.lastTick = tick;
 
   const aliveIds = new Set(viewers.map((v) => v.player.id));
   for (const id of [...visionCache.byPlayer.keys()]) {
     if (!aliveIds.has(id)) visionCache.byPlayer.delete(id);
   }
 
-  const stride = Math.floor(tick / VISION_STRIDE);
-  decayClaims(visionCache.claims, tick, tickRate);
-
-  if (viewers.length && visionCache.lastStride !== stride) {
-    visionCache.lastStride = stride;
-    const focus = viewers[visionCache.rr % viewers.length];
-    visionCache.rr++;
-    const result = runOne(focus);
-    visionCache.byPlayer.set(focus.player.id, result);
-    for (const [posId, beams] of result.beamHits || []) {
-      if (!visionCache.claims.has(posId)) {
-        visionCache.claims.set(posId, emptyClaim());
-      }
-      applyBeamHits(
-        visionCache.claims.get(posId),
-        focus.side,
-        beams,
-        tick,
-        tickRate
-      );
-    }
-  }
+  visionCache.lastTick = tick;
 
   const merged = [];
   for (const v of viewers) {
@@ -900,7 +907,7 @@ function applyVisionClaims({
     if (hit) merged.push(hit);
   }
   const sight = mergePlayerVision(merged, active);
-  return { ...sight, claims: visionCache.claims };
+  return { ...sight, claims };
 }
 
 function sideOfPaint(key) {
@@ -1190,7 +1197,8 @@ export function computeZonePaint({
   mapCode,
   radarImage,
   grenades,
-  visionCache
+  visionCache,
+  track = null
 }) {
   /** @type {Record<string, ZonePaint>} */
   const paint = {};
@@ -1209,7 +1217,8 @@ export function computeZonePaint({
     mapCode,
     radarImage,
     grenades,
-    visionCache
+    visionCache,
+    track
   });
 
   // Feet first, then beam-claim ownership (3 hits neutral / 20 to flip).

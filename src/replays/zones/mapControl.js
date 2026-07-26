@@ -76,6 +76,130 @@ export function emptyClaim() {
   };
 }
 
+/** Deep-enough copy of a claims map (per-position state objects). */
+export function cloneClaims(claims) {
+  /** @type {Map<string, ClaimState>} */
+  const out = new Map();
+  for (const [id, st] of claims || []) {
+    if (!st) continue;
+    out.set(id, {
+      owner: st.owner ?? null,
+      ownerTick: st.ownerTick ?? null,
+      tHits: st.tHits || 0,
+      ctHits: st.ctHits || 0,
+      tLast: st.tLast ?? null,
+      ctLast: st.ctLast ?? null
+    });
+  }
+  return out;
+}
+
+/**
+ * Deterministic beam-claim simulator with per-stride snapshots.
+ * Seeking to any tick returns the same claims as playing forward from freeze.
+ *
+ * @param {object} args
+ * @param {object} args.meta
+ * @param {{ sampleAll: Function }} args.track
+ * @param {(ctx: { viewer: object, side: string, tick: number, states: Array }) => Map<string, number>} args.castPlayerBeams
+ */
+export function createBeamClaimSimulator({ meta, track, castPlayerBeams }) {
+  if (!meta || !track || !castPlayerBeams) {
+    return {
+      claimsAt: () => new Map(),
+      ensureUntil: () => {},
+      from: 0,
+      end: 0
+    };
+  }
+  const tickRate = meta.tickRate || 64;
+  const from = meta.freezeEndTick ?? meta.startTick ?? 0;
+  const end = Math.max(from, meta.endTick ?? from);
+  const players = meta.players || [];
+  const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
+  const scratch = [];
+  /** @type {Map<string, ClaimState>} */
+  let claims = new Map();
+  let rr = 0;
+  let nextTick = from;
+  /** @type {Array<{ tick: number, claims: Map<string, ClaimState> }>} */
+  const snapshots = [];
+
+  function stepOnce() {
+    if (nextTick > end) return false;
+    const tick = nextTick;
+    track.sampleAll(tick, scratch);
+    decayClaims(claims, tick, tickRate);
+
+    /** @type {Array<{ player: object, side: 'T'|'CT', viewer: object }>} */
+    const viewers = [];
+    for (const p of players) {
+      const side = teamSides[p.team];
+      if (side !== 'T' && side !== 'CT') continue;
+      const s = scratch[p.slot];
+      if (!s?.alive || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
+      if (!Number.isFinite(s.yaw)) continue;
+      viewers.push({
+        player: p,
+        side,
+        viewer: { x: s.x, y: s.y, yaw: s.yaw }
+      });
+    }
+
+    if (viewers.length) {
+      const focus = viewers[rr % viewers.length];
+      rr++;
+      const beams = castPlayerBeams({
+        viewer: focus.viewer,
+        side: focus.side,
+        tick,
+        states: scratch
+      });
+      for (const [posId, n] of beams || []) {
+        if (!claims.has(posId)) claims.set(posId, emptyClaim());
+        applyBeamHits(claims.get(posId), focus.side, n, tick, tickRate);
+      }
+    }
+
+    snapshots.push({ tick, claims: cloneClaims(claims) });
+    nextTick += VISION_STRIDE;
+    return true;
+  }
+
+  function ensureUntil(toTick) {
+    const target = Math.min(Math.max(Number(toTick) || from, from), end);
+    while (nextTick <= target) {
+      if (!stepOnce()) break;
+    }
+  }
+
+  /**
+   * Claims as of the last vision stride at or before `tick`.
+   * Always returns a fresh clone so callers can mutate safely.
+   */
+  function claimsAt(tick) {
+    const t = Number(tick);
+    if (!Number.isFinite(t) || t < from) return new Map();
+    ensureUntil(t);
+    if (!snapshots.length) return new Map();
+    let lo = 0;
+    let hi = snapshots.length - 1;
+    let best = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (snapshots[mid].tick <= t) {
+        best = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return best >= 0 ? cloneClaims(snapshots[best].claims) : new Map();
+  }
+
+  return { claimsAt, ensureUntil, from, end };
+}
+
 /**
  * Decay + apply beam hits for one side on one position.
  * @param {ClaimState} st
@@ -249,51 +373,15 @@ export function activeFromStates(meta, states, network) {
  */
 export function buildMapControlSeries({ meta, track, network, castPlayerBeams }) {
   if (!meta || !track || !network?.zones?.length || !castPlayerBeams) return [];
-  const tickRate = meta.tickRate || 64;
   const from = meta.freezeEndTick ?? meta.startTick ?? 0;
   const to = Math.max(from, meta.endTick ?? from);
-  const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
-  const players = meta.players || [];
   const scratch = [];
-  /** @type {Map<string, ClaimState>} */
-  const claims = new Map();
+  const sim = createBeamClaimSimulator({ meta, track, castPlayerBeams });
   const series = [];
 
-  let rr = 0;
   for (let tick = from; tick <= to; tick += VISION_STRIDE) {
+    const claims = sim.claimsAt(tick);
     track.sampleAll(tick, scratch);
-    decayClaims(claims, tick, tickRate);
-
-    /** @type {Array<{ player: object, side: 'T'|'CT', viewer: object }>} */
-    const viewers = [];
-    for (const p of players) {
-      const side = teamSides[p.team];
-      if (side !== 'T' && side !== 'CT') continue;
-      const s = scratch[p.slot];
-      if (!s?.alive || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
-      if (!Number.isFinite(s.yaw)) continue;
-      viewers.push({
-        player: p,
-        side,
-        viewer: { x: s.x, y: s.y, yaw: s.yaw }
-      });
-    }
-
-    if (viewers.length) {
-      const focus = viewers[rr % viewers.length];
-      rr++;
-      const beams = castPlayerBeams({
-        viewer: focus.viewer,
-        side: focus.side,
-        tick,
-        states: scratch
-      });
-      for (const [posId, n] of beams || []) {
-        if (!claims.has(posId)) claims.set(posId, emptyClaim());
-        applyBeamHits(claims.get(posId), focus.side, n, tick, tickRate);
-      }
-    }
-
     const active = activeFromStates(meta, scratch, network);
     const shares = controlShares(network, claims, active);
     series.push({ tick, t: shares.t, ct: shares.ct, neu: shares.neu });
