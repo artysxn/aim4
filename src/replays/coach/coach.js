@@ -37,6 +37,8 @@ const MULTIKILL_GAP_SECONDS = 4;
 const MULTIKILL_EQUIP_PER = 2500;
 /** Aim cone: looking "at" an enemy means yaw within this many degrees. */
 const AIM_DEGREES = 15;
+/** Victim not facing the killer (unaware openness) at or beyond this. */
+const UNAWARE_DEGREES = 30;
 /** Unchecked-position needs a living stack at least this large. */
 const UNCHECKED_GROUP = 3;
 /** Molly must have been down at least this long before the death counts. */
@@ -426,8 +428,9 @@ export function analyseRound({ meta, sampleAt }) {
 
   }
 
-  // 7. Stack of 3+ dies to an angle nobody in the group was holding.
-  //    Own pass so earlier death rules do not swallow it via continue.
+  // 7. Aim-unawareness deaths. Unchecked-position (stack of 3+, nobody on
+  //    the angle) wins over unaware-openness (victim alone ≥30° off).
+  const aimFlagged = new Set();
   for (const death of kills) {
     const victim = death.victim;
     const side = sideOf(victim);
@@ -467,6 +470,42 @@ export function analyseRound({ meta, sampleAt }) {
       playerId: victim,
       rule: 'unchecked-position',
       text: `${name} died to ${killerName} from an angle nobody in the group was holding. With ${group.length} players stacked, that position needed a check — dying to an unchecked angle is a team mistake.${drop}`
+    });
+    aimFlagged.add(`${victim}@${death.tick}`);
+  }
+
+  // 7b. Victim not facing the killer (≥30°), core or solo. Skips deaths
+  //     already covered by unchecked-position.
+  for (const death of kills) {
+    const victim = death.victim;
+    const side = sideOf(victim);
+    const opp = side === 'CT' ? 'T' : 'CT';
+    if (!side || !gate[side]) continue;
+    if (!inCoachWindow(death.tick)) continue;
+    if (defusedTick != null && death.tick >= defusedTick) continue;
+    if (recentlyFragged(victim, death.tick)) continue;
+    if (!death.attacker || sideOf(death.attacker) !== opp) continue;
+    if (aimFlagged.has(`${victim}@${death.tick}`)) continue;
+
+    const pre = sampleNear(death.tick - 1);
+    const me = positionsOf(pre, side).find((m) => m.id === victim);
+    const killerPos = positionsOf(pre, opp).find((m) => m.id === death.attacker);
+    if (!me || !killerPos || !Number.isFinite(me.yaw)) continue;
+    if (yawDelta(me.yaw, yawToward(me, killerPos)) < UNAWARE_DEGREES) continue;
+
+    const name = byId.get(victim)?.name || victim;
+    const killerName = byId.get(death.attacker)?.name || death.attacker;
+    const wpBefore = pre?.[side === 'CT' ? 'ct' : 't'];
+    const wpAfter = sampleNear(death.tick + tickRate)?.[side === 'CT' ? 'ct' : 't'];
+    const drop =
+      Number.isFinite(wpBefore) && Number.isFinite(wpAfter) && wpAfter < wpBefore
+        ? ` Round win chance fell from ${pct(wpBefore)} to ${pct(wpAfter)}.`
+        : '';
+    flags.push({
+      tick: death.tick,
+      playerId: victim,
+      rule: 'unaware-openness',
+      text: `${name} died to ${killerName} while not aiming anywhere near them. Getting opened while that unaware is a positioning / info mistake — you have to be ready for the fight you take.${drop}`
     });
   }
 
