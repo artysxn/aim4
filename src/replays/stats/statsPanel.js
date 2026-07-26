@@ -11,7 +11,13 @@ import {
   attachPlayerRoles,
   playerMatchesRoleFilter
 } from '../roles/assignRoles.js';
-import { CT_POSITIONS, CT_TACTICAL, T_POSITIONS, T_TACTICAL } from '../roles/regionKeys.js';
+import {
+  CT_POSITIONS,
+  CT_TACTICAL,
+  T_POSITIONS,
+  T_TACTICAL,
+  roleHowText
+} from '../roles/regionKeys.js';
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
 import { aggregatePlayers, aggregateTeams, allRows, indexMaps } from '../shared/statsMath.js';
 import {
@@ -126,77 +132,80 @@ export function createStatsPanel({ escapeHtml }) {
       <option value=""${!selected ? ' selected' : ''}>Any map</option>${opts}</select>`;
   }
 
-  function roleFilterHtml() {
+  function roleSelectHtml(side) {
     const mode = roleMode();
-    if (!mode || tab !== 'players') return '';
-
-    const tOpts =
+    if (!mode) return '';
+    const opts =
       mode === 'position'
-        ? Object.values(T_POSITIONS).map((p) => p.label)
-        : [...T_TACTICAL];
-    const ctOpts =
-      mode === 'position'
-        ? Object.values(CT_POSITIONS).map((p) => p.label)
-        : [...CT_TACTICAL];
-
-    const chip = (side, value) => {
-      const on = filter.role?.side === side && filter.role?.value === value;
-      return `<button type="button" class="rp-chip${on ? ' active' : ''}" data-role-side="${side}" data-role-value="${escapeHtml(
-        value
-      )}">${escapeHtml(value)}</button>`;
-    };
-
-    const label = mode === 'position' ? 'Position' : 'Role';
-    return `
-      <div class="st-filter-group">
-        <span class="st-filter-label">${label} (T)</span>
-        <div class="rp-chips st-role-chips">${tOpts.map((v) => chip('T', v)).join('')}</div>
-      </div>
-      <div class="st-filter-group">
-        <span class="st-filter-label">${label} (CT)</span>
-        <div class="rp-chips st-role-chips">${ctOpts.map((v) => chip('CT', v)).join('')}</div>
-      </div>`;
+        ? Object.values(side === 'CT' ? CT_POSITIONS : T_POSITIONS)
+        : side === 'CT'
+          ? CT_TACTICAL
+          : T_TACTICAL;
+    const selected = filter.role?.side === side ? filter.role.value : '';
+    const anyLabel = mode === 'position' ? 'Any position' : 'Any role';
+    const options = opts
+      .map((o) => {
+        const label = o.label;
+        const how = o.how || roleHowText(side, label, mode);
+        return `<option value="${escapeHtml(label)}" title="${escapeHtml(how)}"${
+          label === selected ? ' selected' : ''
+        }>${escapeHtml(label)}</option>`;
+      })
+      .join('');
+    return `<select class="site-select st-role-select" data-role-filter="${side}" aria-label="${
+      side === 'CT' ? 'CT' : 'T'
+    } ${mode === 'position' ? 'position' : 'role'}">
+      <option value=""${!selected ? ' selected' : ''}>${anyLabel}</option>${options}</select>`;
   }
 
   function renderFilters() {
+    const mode = roleMode();
     const sideBtn = (value, label) =>
       `<button type="button" class="rp-chip${
         filter.side === value ? ' active' : ''
       }" data-side="${value}">${label}</button>`;
 
+    const roleGroups =
+      mode && tab === 'players'
+        ? `
+      <div class="st-filter-group st-filter-stack">
+        <span class="st-filter-label">T ${mode === 'position' ? 'pos' : 'role'}</span>
+        ${roleSelectHtml('T')}
+      </div>
+      <div class="st-filter-group st-filter-stack">
+        <span class="st-filter-label">CT ${mode === 'position' ? 'pos' : 'role'}</span>
+        ${roleSelectHtml('CT')}
+      </div>`
+        : '';
+
     filtersEl.innerHTML = `
-      <div class="st-filter-group">
+      <div class="st-filter-group st-filter-stack">
         <span class="st-filter-label">Map</span>
         ${mapSelectHtml()}
       </div>
-      <div class="st-filter-group">
+      <div class="st-filter-group st-filter-stack">
         <span class="st-filter-label">Side</span>
         <div class="rp-chips">${sideBtn('T', 'T')}${sideBtn('CT', 'CT')}</div>
       </div>
-      ${roleFilterHtml()}
-      <div class="st-filter-group">
+      ${roleGroups}
+      <div class="st-filter-group st-filter-stack">
         <span class="st-filter-label">${tab === 'teams' ? 'Team buy' : 'Own buy'}</span>
-        ${econSelect('econ', filter.econ)}
-        ${hasAwpCheck('hasAwp', filter.hasAwp)}
+        <div class="st-filter-row">${econSelect('econ', filter.econ)}${hasAwpCheck(
+          'hasAwp',
+          filter.hasAwp
+        )}</div>
       </div>
-      <div class="st-filter-group">
-        <span class="st-filter-label">Opponent buy</span>
-        ${econSelect('oppEcon', filter.oppEcon)}
-        ${hasAwpCheck('oppHasAwp', filter.oppHasAwp)}
+      <div class="st-filter-group st-filter-stack">
+        <span class="st-filter-label">Opp buy</span>
+        <div class="st-filter-row">${econSelect('oppEcon', filter.oppEcon)}${hasAwpCheck(
+          'oppHasAwp',
+          filter.oppHasAwp
+        )}</div>
       </div>
       <button type="button" class="btn btn-sm st-filter-clear" data-clear>Clear</button>`;
   }
 
   filtersEl.addEventListener('click', (e) => {
-    const roleBtn = e.target.closest('[data-role-side]');
-    if (roleBtn) {
-      const side = roleBtn.dataset.roleSide === 'CT' ? 'CT' : 'T';
-      const value = roleBtn.dataset.roleValue || '';
-      if (filter.role?.side === side && filter.role?.value === value) filter.role = null;
-      else filter.role = { side, value };
-      render();
-      return;
-    }
     const side = e.target.closest('[data-side]');
     if (side) {
       filter.side = filter.side === side.dataset.side ? '' : side.dataset.side;
@@ -220,6 +229,14 @@ export function createStatsPanel({ escapeHtml }) {
     if (awp) {
       filter[awp.dataset.awp] = Boolean(awp.checked);
       awp.closest('.rp-awp-toggle')?.classList.toggle('active', awp.checked);
+      render();
+      return;
+    }
+    const roleSel = e.target.closest('[data-role-filter]');
+    if (roleSel) {
+      const side = roleSel.dataset.roleFilter === 'CT' ? 'CT' : 'T';
+      const value = roleSel.value || '';
+      filter.role = value ? { side, value } : null;
       render();
       return;
     }

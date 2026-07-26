@@ -2716,23 +2716,24 @@ body.rv-open {
 
 .st-filters {
   display: flex;
-  align-items: center;
-  flex-wrap: nowrap;
-  gap: 10px 16px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px 18px;
   padding: 12px 14px;
   margin-bottom: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  overflow-x: auto;
 }
 
-.st-map-select {
-  min-width: 120px;
+.st-map-select,
+.st-role-select {
+  min-width: 132px;
 }
 
 .st-filter-clear {
   margin-left: auto;
+  align-self: flex-end;
   flex-shrink: 0;
 }
 
@@ -2741,6 +2742,18 @@ body.rv-open {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.st-filter-group.st-filter-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+}
+
+.st-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .st-filter-label {
@@ -2892,7 +2905,7 @@ body.rv-open {
 .st-tip {
   position: fixed;
   z-index: 200;
-  max-width: 280px;
+  max-width: 340px;
   padding: 8px 10px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);

@@ -7,6 +7,8 @@
 // scoreboard inside the viewer.
 // ---------------------------------------------------------------------------
 
+import { roleHowText } from '../roles/regionKeys.js';
+
 const f2 = (n) => (Number.isFinite(n) ? n.toFixed(2) : '—');
 const f1 = (n) => (Number.isFinite(n) ? n.toFixed(1) : '—');
 const pct = (n) => (Number.isFinite(n) ? `${n.toFixed(1)}%` : '—');
@@ -94,6 +96,16 @@ export function playerColumnsWithRoles(roleMode = 'tactical') {
     (roleMode === 'position' ? p.posT || p.roleT : p.roleT || '') || '';
   const ctGet = (p) =>
     (roleMode === 'position' ? p.posCT || p.roleCT : p.roleCT || '') || '';
+  const roleTip = (side, p) => {
+    const label = side === 'T' ? tGet(p) : ctGet(p);
+    if (!label) return '';
+    const how = roleHowText(side, label, roleMode);
+    const tac = side === 'T' ? p.roleT : p.roleCT;
+    if (roleMode === 'position') {
+      return tip([label, how, tac ? `Tactical role: ${tac}` : '']);
+    }
+    return tip([label, how]);
+  };
   const roleCols = [
     {
       key: 'roleT',
@@ -102,10 +114,7 @@ export function playerColumnsWithRoles(roleMode = 'tactical') {
       get: (p) => tGet(p).toLowerCase(),
       cell: (p) => tGet(p) || '—',
       cellClass: 'st-role-t',
-      tip: (p) =>
-        roleMode === 'position'
-          ? tip([`T position: ${p.posT || '—'}`, `Tactical: ${p.roleT || '—'}`])
-          : tip([`T tactical role: ${p.roleT || '—'}`])
+      tip: (p) => roleTip('T', p)
     },
     {
       key: 'roleCT',
@@ -114,10 +123,7 @@ export function playerColumnsWithRoles(roleMode = 'tactical') {
       get: (p) => ctGet(p).toLowerCase(),
       cell: (p) => ctGet(p) || '—',
       cellClass: 'st-role-ct',
-      tip: (p) =>
-        roleMode === 'position'
-          ? tip([`CT position: ${p.posCT || '—'}`, `Tactical: ${p.roleCT || '—'}`])
-          : tip([`CT tactical role: ${p.roleCT || '—'}`])
+      tip: (p) => roleTip('CT', p)
     }
   ];
   return [PLAYER_COLUMNS[0], ...roleCols, ...PLAYER_COLUMNS.slice(1)];
