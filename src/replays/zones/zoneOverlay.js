@@ -63,8 +63,33 @@ const SIGHT_SAMPLES = 24;
 
 const adjacencyCache = new WeakMap();
 const sampleCache = new WeakMap();
-/** @type {Map<string, { clearWorld: Function, image: CanvasImageSource }>} */
+/** @type {Map<string, object>} */
 const losCache = new Map();
+
+/**
+ * Per-viewer amortized LOS state for the timeline zones overlay.
+ * One living player is recomputed per paint; others reuse their last result.
+ * @returns {{ rr: number, byPlayer: Map<string, object>, smokeKey: string, lastTick: number|null, roundKey: string }}
+ */
+export function createZoneVisionCache() {
+  return {
+    rr: 0,
+    byPlayer: new Map(),
+    smokeKey: '',
+    lastTick: null,
+    roundKey: ''
+  };
+}
+
+/** Drop all cached per-player sight (round change, seek, smoke pop, etc.). */
+export function resetZoneVisionCache(cache) {
+  if (!cache) return;
+  cache.rr = 0;
+  cache.byPlayer.clear();
+  cache.smokeKey = '';
+  cache.lastTick = null;
+  cache.roundKey = '';
+}
 
 /**
  * @typedef {{ tick: number, side: 'T'|'CT'|'both', reason: string, playerId?: string, playerName?: string, detail?: string }} ZoneClaimEvent
@@ -364,13 +389,15 @@ export function buildPositionAdjacency(network) {
  * Walkable floor = opaque enough (same alpha punch as zone clips) and not
  * near-black building fill. Transparent AND solid-black both block.
  *
+ * Bakes a Uint8 bitmask once so per-ray tests are byte lookups, not RGB math.
+ *
  * @param {string} mapCode
  * @param {CanvasImageSource} image
  */
 export function getRadarLos(mapCode, image) {
   if (!mapCode || !image) return null;
   const hit = losCache.get(mapCode);
-  if (hit && hit.image === image && hit.version === 2) return hit;
+  if (hit && hit.image === image && hit.version === 3) return hit;
 
   const c = document.createElement('canvas');
   c.width = RADAR_SIZE;
@@ -386,16 +413,24 @@ export function getRadarLos(mapCode, image) {
     return null;
   }
 
+  const mask = new Uint8Array(RADAR_SIZE * RADAR_SIZE);
+  for (let y = 0; y < RADAR_SIZE; y++) {
+    const row = y * RADAR_SIZE;
+    for (let x = 0; x < RADAR_SIZE; x++) {
+      const i = (row + x) * 4;
+      const alpha = data[i + 3];
+      if (alpha <= WALL_ALPHA) continue;
+      const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      if (lum >= WALKABLE_MIN_LUM) mask[row + x] = 1;
+    }
+  }
+
   /** True when this radar texel is walkable floor (not void, not building). */
   const walkable = (px, py) => {
     const x = px | 0;
     const y = py | 0;
     if (x < 0 || y < 0 || x >= RADAR_SIZE || y >= RADAR_SIZE) return false;
-    const i = (y * RADAR_SIZE + x) * 4;
-    const alpha = data[i + 3];
-    if (alpha <= WALL_ALPHA) return false;
-    const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-    return lum >= WALKABLE_MIN_LUM;
+    return mask[y * RADAR_SIZE + x] !== 0;
   };
 
   const a = {};
@@ -436,7 +471,7 @@ export function getRadarLos(mapCode, image) {
     return true;
   };
 
-  const los = { clearWorld, isWalkableWorld, walkable, image, version: 2 };
+  const los = { clearWorld, isWalkableWorld, walkable, mask, image, version: 3 };
   losCache.set(mapCode, los);
   return los;
 }
@@ -506,12 +541,159 @@ function sightClearPoints(player, pos, los, smokes) {
   for (const p of pts) {
     if (los.isWalkableWorld && !los.isWalkableWorld(p.x, p.y)) continue;
     floorPts++;
+    // FOV before smoke/ray — cheap reject once we know the sample is on floor.
     if (yawDelta(player.yaw, yawToward(player, p)) > SIGHT_FOV_DEG) continue;
-    if (!los.clearWorld(player.x, player.y, p.x, p.y)) continue;
     if (segmentBlockedBySmoke(player.x, player.y, p.x, p.y, smokes)) continue;
+    if (!los.clearWorld(player.x, player.y, p.x, p.y)) continue;
     clearPts.push(p);
   }
   return { cover: floorPts ? clearPts.length / floorPts : 0, clearPts };
+}
+
+/**
+ * Full vision pass for one living player (expensive). Returns positions they
+ * currently see with cover; presence claims are recorded here.
+ */
+function computePlayerVision({
+  player,
+  side,
+  viewer,
+  playerName,
+  positions,
+  smoked,
+  smokeCenters,
+  los,
+  network,
+  active,
+  presence,
+  tick
+}) {
+  /** @type {Array<{ posId: string, cover: number, through: boolean, direct: boolean }>} */
+  const seen = [];
+
+  /** @type {Map<string, number>} */
+  const coverById = new Map();
+  /** @type {Map<string, number>} */
+  const rayHits = new Map();
+
+  for (const pos of positions) {
+    if (smoked.has(pos.id)) continue;
+    const { cover, clearPts } = sightClearPoints(viewer, pos, los, smokeCenters);
+    if (cover > 0) coverById.set(pos.id, cover);
+    for (const pt of clearPts) {
+      accumulateRayPositions(
+        viewer.x,
+        viewer.y,
+        pt.x,
+        pt.y,
+        network,
+        smoked,
+        rayHits,
+        los
+      );
+    }
+  }
+
+  for (const pos of positions) {
+    if (smoked.has(pos.id)) continue;
+    const cover = coverById.get(pos.id) || 0;
+    const along = rayHits.get(pos.id) || 0;
+    const direct = cover >= SIGHT_COVER;
+    const through = along >= SIGHT_RAY_MIN_HITS;
+    if (!direct && !through) continue;
+
+    const reportCover = direct
+      ? cover
+      : Math.max(cover, Math.min(0.95, along / (along + 6)));
+
+    seen.push({
+      posId: pos.id,
+      cover: reportCover,
+      through,
+      direct
+    });
+
+    if (!presence) continue;
+    const hasT = active.t.has(pos.id);
+    const hasCt = active.ct.has(pos.id);
+    const enemyInside = side === 'T' ? hasCt : hasT;
+    const allyInside = side === 'T' ? hasT : hasCt;
+
+    if (enemyInside) {
+      if (!presence.firstT.has(pos.id)) presence.firstT.set(pos.id, tick);
+      if (!presence.firstCT.has(pos.id)) presence.firstCT.set(pos.id, tick);
+      recordClaim(presence, pos.id, {
+        tick,
+        side: 'both',
+        reason: 'sight-enemy',
+        playerId: player.id,
+        playerName,
+        detail: `Saw enemy inside (${Math.round(reportCover * 100)}% cover)`
+      });
+      continue;
+    }
+    if (allyInside) continue;
+    const map = side === 'T' ? presence.firstT : presence.firstCT;
+    if (!map.has(pos.id)) map.set(pos.id, tick);
+    recordClaim(presence, pos.id, {
+      tick,
+      side,
+      reason: 'sight',
+      playerId: player.id,
+      playerName,
+      detail: through && !direct
+        ? `Clear sight through corridor (${Math.round(reportCover * 100)}% cover)`
+        : `Clear sight (${Math.round(reportCover * 100)}% cover)`
+    });
+  }
+
+  return { playerId: player.id, side, playerName, seen };
+}
+
+/** Merge cached per-player sight against *current* occupancy. */
+function mergePlayerVision(entries, active) {
+  const tSight = new Set();
+  const ctSight = new Set();
+  const contestedSight = new Set();
+  /** @type {Map<string, Array<{side:string, playerId:string, playerName:string, cover:number, enemy:boolean}>>} */
+  const sightNow = new Map();
+
+  for (const entry of entries) {
+    if (!entry?.seen?.length) continue;
+    const side = entry.side;
+    for (const s of entry.seen) {
+      const hasT = active.t.has(s.posId);
+      const hasCt = active.ct.has(s.posId);
+      const enemyInside = side === 'T' ? hasCt : hasT;
+      const allyInside = side === 'T' ? hasT : hasCt;
+
+      if (!sightNow.has(s.posId)) sightNow.set(s.posId, []);
+      sightNow.get(s.posId).push({
+        side,
+        playerId: entry.playerId,
+        playerName: entry.playerName,
+        cover: s.cover,
+        enemy: enemyInside
+      });
+
+      if (enemyInside) {
+        contestedSight.add(s.posId);
+        continue;
+      }
+      if (allyInside) continue;
+      if (side === 'T') tSight.add(s.posId);
+      else ctSight.add(s.posId);
+    }
+  }
+
+  for (const id of [...tSight]) {
+    if (ctSight.has(id)) {
+      contestedSight.add(id);
+      tSight.delete(id);
+      ctSight.delete(id);
+    }
+  }
+  return { tSight, ctSight, contestedSight, sightNow };
 }
 
 /**
@@ -540,9 +722,11 @@ function accumulateRayPositions(x0, y0, x1, y1, network, smoked, into, los) {
 }
 
 /**
- * Apply vision claims for the current tick. Mutates `presence` when an empty
- * position is confirmed seen (persists like a foot visit) or when an enemy is
- * seen inside (both sides claim → contested).
+ * Apply vision claims for the current tick.
+ *
+ * With `visionCache`, only one living player is raytraced per call (round-robin);
+ * others reuse their last result and merge against current occupancy. Without a
+ * cache, every living player is computed (slow path).
  *
  * @returns {{
  *   tSight: Set<string>,
@@ -560,18 +744,18 @@ function applyVisionClaims({
   active,
   mapCode,
   radarImage,
-  grenades
+  grenades,
+  visionCache
 }) {
-  const tSight = new Set();
-  const ctSight = new Set();
-  const contestedSight = new Set();
-  /** @type {Map<string, Array<{side:string, playerId:string, playerName:string, cover:number, enemy:boolean}>>} */
-  const sightNow = new Map();
-  if (!meta || !network?.zones?.length || !radarImage) {
-    return { tSight, ctSight, contestedSight, sightNow };
-  }
+  const empty = {
+    tSight: new Set(),
+    ctSight: new Set(),
+    contestedSight: new Set(),
+    sightNow: new Map()
+  };
+  if (!meta || !network?.zones?.length || !radarImage) return empty;
   const los = getRadarLos(mapCode, radarImage);
-  if (!los) return { tSight, ctSight, contestedSight, sightNow };
+  if (!los) return empty;
 
   const tickRate = meta.tickRate || 64;
   const smokeCenters = activeSmokes(grenades, tick, tickRate);
@@ -579,110 +763,101 @@ function applyVisionClaims({
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
   const positions = network.zones.filter((z) => z?.id && !z.hidden && z.pieces?.length);
 
+  /** @type {Array<{ player: object, side: 'T'|'CT', viewer: {x:number,y:number,yaw:number}, playerName: string }>} */
+  const viewers = [];
   for (const p of meta.players || []) {
     const side = teamSides[p.team];
     if (side !== 'T' && side !== 'CT') continue;
     const s = states?.[p.slot];
     if (!s?.alive || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
     if (!Number.isFinite(s.yaw)) continue;
-    const viewer = { x: s.x, y: s.y, yaw: s.yaw };
-    const playerName = p.name || p.id;
+    viewers.push({
+      player: p,
+      side,
+      viewer: { x: s.x, y: s.y, yaw: s.yaw },
+      playerName: p.name || p.id
+    });
+  }
 
-    /** @type {Map<string, number>} direct area cover 0..1 */
-    const coverById = new Map();
-    /** @type {Map<string, number>} positions crossed by clear sight rays */
-    const rayHits = new Map();
+  const runOne = (v) =>
+    computePlayerVision({
+      player: v.player,
+      side: v.side,
+      viewer: v.viewer,
+      playerName: v.playerName,
+      positions,
+      smoked,
+      smokeCenters,
+      los,
+      network,
+      active,
+      presence,
+      tick
+    });
 
-    for (const pos of positions) {
-      if (smoked.has(pos.id)) continue;
-      const { cover, clearPts } = sightClearPoints(viewer, pos, los, smokeCenters);
-      if (cover > 0) coverById.set(pos.id, cover);
-      // Walk each clear ray so mid / far cells along the same LOS also claim.
-      for (const pt of clearPts) {
-        accumulateRayPositions(
-          viewer.x,
-          viewer.y,
-          pt.x,
-          pt.y,
-          network,
-          smoked,
-          rayHits,
-          los
-        );
+  if (!visionCache) {
+    return mergePlayerVision(
+      viewers.map((v) => runOne(v)),
+      active
+    );
+  }
+
+  const smokeKey = smokeCenters
+    .map((s) => `${Math.round(s.x)},${Math.round(s.y)}`)
+    .join(';');
+  const roundKey = `${mapCode}|${meta.startTick ?? 0}|${meta.freezeEndTick ?? 0}|${meta.endTick ?? 0}`;
+
+  if (visionCache.roundKey !== roundKey) {
+    resetZoneVisionCache(visionCache);
+    visionCache.roundKey = roundKey;
+  }
+  if (visionCache.smokeKey !== smokeKey) {
+    visionCache.byPlayer.clear();
+    visionCache.rr = 0;
+    visionCache.smokeKey = smokeKey;
+  }
+  // Large scrub jump — drop stale cones rather than blending distant times.
+  if (
+    visionCache.lastTick != null &&
+    Math.abs(tick - visionCache.lastTick) > tickRate * 2
+  ) {
+    visionCache.byPlayer.clear();
+    visionCache.rr = 0;
+  }
+  visionCache.lastTick = tick;
+
+  const aliveIds = new Set(viewers.map((v) => v.player.id));
+  for (const id of [...visionCache.byPlayer.keys()]) {
+    if (!aliveIds.has(id)) visionCache.byPlayer.delete(id);
+  }
+
+  if (viewers.length) {
+    // Cold cache (seek / smoke / round): compute everyone once, then amortize.
+    if (visionCache.byPlayer.size === 0) {
+      // Cold start after seek/smoke/round: one full pass, then amortize.
+      for (const v of viewers) {
+        visionCache.byPlayer.set(v.player.id, runOne(v));
       }
-    }
-
-    for (const pos of positions) {
-      if (smoked.has(pos.id)) continue;
-      const cover = coverById.get(pos.id) || 0;
-      const along = rayHits.get(pos.id) || 0;
-      const direct = cover >= SIGHT_COVER;
-      const through = along >= SIGHT_RAY_MIN_HITS;
-      if (!direct && !through) continue;
-
-      // Prefer real area cover; corridor-only hits get a modest synthetic %.
-      const reportCover = direct
-        ? cover
-        : Math.max(cover, Math.min(0.95, along / (along + 6)));
-
-      const hasT = active.t.has(pos.id);
-      const hasCt = active.ct.has(pos.id);
-      const enemyInside = side === 'T' ? hasCt : hasT;
-      const allyInside = side === 'T' ? hasT : hasCt;
-
-      if (!sightNow.has(pos.id)) sightNow.set(pos.id, []);
-      sightNow.get(pos.id).push({
-        side,
-        playerId: p.id,
-        playerName,
-        cover: reportCover,
-        enemy: enemyInside
-      });
-
-      if (enemyInside) {
-        contestedSight.add(pos.id);
-        if (presence) {
-          if (!presence.firstT.has(pos.id)) presence.firstT.set(pos.id, tick);
-          if (!presence.firstCT.has(pos.id)) presence.firstCT.set(pos.id, tick);
-          recordClaim(presence, pos.id, {
-            tick,
-            side: 'both',
-            reason: 'sight-enemy',
-            playerId: p.id,
-            playerName,
-            detail: `Saw enemy inside (${Math.round(reportCover * 100)}% cover)`
-          });
+      visionCache.rr = 0;
+    } else {
+      const focus = viewers[visionCache.rr % viewers.length];
+      visionCache.rr++;
+      visionCache.byPlayer.set(focus.player.id, runOne(focus));
+      // Edge case: a living viewer with no entry yet (skip until their slot).
+      for (const v of viewers) {
+        if (!visionCache.byPlayer.has(v.player.id)) {
+          visionCache.byPlayer.set(v.player.id, runOne(v));
         }
-        continue;
-      }
-      if (allyInside) continue;
-      if (side === 'T') tSight.add(pos.id);
-      else ctSight.add(pos.id);
-      if (presence) {
-        const map = side === 'T' ? presence.firstT : presence.firstCT;
-        if (!map.has(pos.id)) map.set(pos.id, tick);
-        recordClaim(presence, pos.id, {
-          tick,
-          side,
-          reason: 'sight',
-          playerId: p.id,
-          playerName,
-          detail: through && !direct
-            ? `Clear sight through corridor (${Math.round(reportCover * 100)}% cover)`
-            : `Clear sight (${Math.round(reportCover * 100)}% cover)`
-        });
       }
     }
   }
 
-  for (const id of [...tSight]) {
-    if (ctSight.has(id)) {
-      contestedSight.add(id);
-      tSight.delete(id);
-      ctSight.delete(id);
-    }
+  const merged = [];
+  for (const v of viewers) {
+    const hit = visionCache.byPlayer.get(v.player.id);
+    if (hit) merged.push(hit);
   }
-  return { tSight, ctSight, contestedSight, sightNow };
+  return mergePlayerVision(merged, active);
 }
 
 function sideOfPaint(key) {
@@ -853,7 +1028,8 @@ export function computeZonePaint({
   presence,
   mapCode,
   radarImage,
-  grenades
+  grenades,
+  visionCache
 }) {
   /** @type {Record<string, ZonePaint>} */
   const paint = {};
@@ -871,7 +1047,8 @@ export function computeZonePaint({
     active,
     mapCode,
     radarImage,
-    grenades
+    grenades,
+    visionCache
   });
 
   // Contested is present-tense only: both sides here now, or one side here

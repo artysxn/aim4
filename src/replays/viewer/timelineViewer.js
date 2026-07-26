@@ -29,6 +29,8 @@ import { phaseBounds } from '../coach/roundPhases.js';
 import {
   buildZonePresence,
   computeZonePaint,
+  createZoneVisionCache,
+  resetZoneVisionCache,
   summarizeZoneControl
 } from '../zones/zoneOverlay.js';
 import { positionsAtPoint } from '../zones/pointInZone.js';
@@ -294,6 +296,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   /** file -> presence { firstT, firstCT } */
   const zonePresenceCache = new Map();
   let zonePresence = null;
+  /** Round-robin per-player LOS cache (one viewer recomputed per paint). */
+  const zoneVisionCache = createZoneVisionCache();
   let zoneLoadId = 0;
   /** Roster team (1|2) whose mistakes coach notes; null until picked. */
   let coachTeam = null;
@@ -601,6 +605,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     renderer._damageTick?.fill?.(-1);
     killFeedKey = '';
     if (killfeedEl) killfeedEl.innerHTML = '';
+    resetZoneVisionCache(zoneVisionCache);
 
     // Instant chrome from the summary; ticks + meta load for this round only.
     // Coach waits until full meta + ticks land — analysing earlier caches a
@@ -803,7 +808,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       presence: zonePresence,
       mapCode: renderer.mapCode || activeMeta.map || '',
       radarImage: renderer.image,
-      grenades: activeMeta.events?.grenades || []
+      grenades: activeMeta.events?.grenades || [],
+      visionCache: zoneVisionCache
     });
     zoneInfo = info;
     return { network: zoneNetwork, paint };
@@ -2255,6 +2261,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     else {
       zonePresence = null;
       zoneInfo = null;
+      resetZoneVisionCache(zoneVisionCache);
       hideZonesTip();
     }
     mapEl.classList.toggle('zones-explain', zonesOn && zoneHoverShift);
