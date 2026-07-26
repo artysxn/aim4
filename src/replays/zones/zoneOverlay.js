@@ -508,9 +508,30 @@ function sideOfPaint(key) {
 }
 
 /**
- * Neutrals whose every adjacent border is either still-neutral or owned by
- * exactly one side become that side's controlled. Iterates to a fixpoint so
- * neutral chains fill in (as in the "pocket" next to two CT positions).
+ * Latest non-contested claim side at or before `tick` (for soft empty control).
+ * @returns {'T'|'CT'|null}
+ */
+function latestOwnerSide(presence, posId, tick) {
+  const list = (presence?.events?.get(posId) || []).filter(
+    (e) => e.tick <= tick && (e.side === 'T' || e.side === 'CT')
+  );
+  if (!list.length) {
+    const t = presence?.firstT.get(posId);
+    const ct = presence?.firstCT.get(posId);
+    const tOk = Number.isFinite(t) && t <= tick;
+    const ctOk = Number.isFinite(ct) && ct <= tick;
+    if (tOk && !ctOk) return 'T';
+    if (ctOk && !tOk) return 'CT';
+    if (tOk && ctOk) return t >= ct ? 'T' : 'CT';
+    return null;
+  }
+  return list[list.length - 1].side;
+}
+
+/**
+ * Fill neutral positions only when their entire unbroken neutral component
+ * borders exactly one side. A T-controlled cell three neutrals away still
+ * blocks a CT fill of the whole pocket.
  *
  * @returns {Map<string, { side: 'T'|'CT', neighborNames: string[] }>}
  */
@@ -519,60 +540,67 @@ function applySurroundControl(paint, network, presence, tick) {
   const byId = new Map((network.zones || []).map((z) => [z.id, z]));
   /** @type {Map<string, { side: 'T'|'CT', neighborNames: string[] }>} */
   const assigned = new Map();
-  let changed = true;
-  let guard = 0;
-  while (changed && guard++ < 64) {
-    changed = false;
-    for (const pos of network.zones || []) {
-      if (!pos?.id || pos.hidden) continue;
-      if (paint[pos.id] !== 'empty') continue;
-      const neigh = adj.get(pos.id) || [];
-      if (!neigh.length) continue;
-      let t = false;
-      let ct = false;
-      let both = false;
-      const neighborNames = [];
-      for (const nid of neigh) {
-        const s = sideOfPaint(paint[nid] || 'empty');
+  const seen = new Set();
+
+  for (const pos of network.zones || []) {
+    if (!pos?.id || pos.hidden || paint[pos.id] !== 'empty' || seen.has(pos.id)) continue;
+
+    // Connected component of neutrals only — the chain must stay unbroken.
+    const component = [];
+    const queue = [pos.id];
+    seen.add(pos.id);
+    while (queue.length) {
+      const id = queue.pop();
+      component.push(id);
+      for (const nid of adj.get(id) || []) {
+        if (seen.has(nid)) continue;
+        if ((paint[nid] || 'empty') !== 'empty') continue;
+        seen.add(nid);
+        queue.push(nid);
+      }
+    }
+
+    let t = false;
+    let ct = false;
+    let both = false;
+    const borderNames = [];
+    const borderSeen = new Set();
+    for (const id of component) {
+      for (const nid of adj.get(id) || []) {
+        if ((paint[nid] || 'empty') === 'empty') continue; // still inside the pocket
+        if (borderSeen.has(nid)) continue;
+        borderSeen.add(nid);
+        const s = sideOfPaint(paint[nid]);
         const nName = byId.get(nid)?.name || nid;
-        if (s == null) {
-          neighborNames.push(`${nName} (neutral)`);
-          continue;
-        }
         if (s === 'both') {
           both = true;
-          neighborNames.push(`${nName} (contested)`);
+          borderNames.push(`${nName} (contested)`);
         } else if (s === 'T') {
           t = true;
-          neighborNames.push(`${nName} (T)`);
+          borderNames.push(`${nName} (T)`);
         } else if (s === 'CT') {
           ct = true;
-          neighborNames.push(`${nName} (CT)`);
+          borderNames.push(`${nName} (CT)`);
         }
       }
-      if (both || (t && ct)) continue;
-      if (t && !ct) {
-        paint[pos.id] = 't-control';
-        assigned.set(pos.id, { side: 'T', neighborNames });
-        recordClaim(presence, pos.id, {
-          tick,
-          side: 'T',
-          reason: 'surround',
-          detail: `Surrounded by ${neighborNames.join(', ')}`
-        });
-        if (presence && !presence.firstT.has(pos.id)) presence.firstT.set(pos.id, tick);
-        changed = true;
-      } else if (ct && !t) {
-        paint[pos.id] = 'ct-control';
-        assigned.set(pos.id, { side: 'CT', neighborNames });
-        recordClaim(presence, pos.id, {
-          tick,
-          side: 'CT',
-          reason: 'surround',
-          detail: `Surrounded by ${neighborNames.join(', ')}`
-        });
-        if (presence && !presence.firstCT.has(pos.id)) presence.firstCT.set(pos.id, tick);
-        changed = true;
+    }
+
+    // Any opposing (or contested) hard border on the component blocks the fill.
+    if (both || (t && ct) || (!t && !ct)) continue;
+    const side = t ? 'T' : 'CT';
+    const key = side === 'T' ? 't-control' : 'ct-control';
+    for (const id of component) {
+      paint[id] = key;
+      assigned.set(id, { side, neighborNames: borderNames });
+      recordClaim(presence, id, {
+        tick,
+        side,
+        reason: 'surround',
+        detail: `Neutral pocket borders only ${side}: ${borderNames.join(', ')}`
+      });
+      if (presence) {
+        const map = side === 'T' ? presence.firstT : presence.firstCT;
+        if (!map.has(id)) map.set(id, tick);
       }
     }
   }
@@ -646,18 +674,46 @@ export function computeZonePaint({
     grenades
   });
 
+  // Contested is present-tense only: both sides here now, or one side here
+  // while the other sees it now, or both sides see it now. Old visits never
+  // force contested.
   for (const pos of network.zones) {
     if (!pos?.id || pos.hidden) continue;
-    let tVis = (presence?.firstT.get(pos.id) ?? Infinity) <= tick;
-    let ctVis = (presence?.firstCT.get(pos.id) ?? Infinity) <= tick;
-    if (tSight.has(pos.id) || contestedSight.has(pos.id)) tVis = true;
-    if (ctSight.has(pos.id) || contestedSight.has(pos.id)) ctVis = true;
     const tAct = active.t.has(pos.id);
     const ctAct = active.ct.has(pos.id);
-    if (tVis && ctVis) paint[pos.id] = tAct || ctAct ? 'contested-active' : 'contested';
-    else if (tVis) paint[pos.id] = tAct ? 't-active' : 't-control';
-    else if (ctVis) paint[pos.id] = ctAct ? 'ct-active' : 'ct-control';
-    else paint[pos.id] = 'empty';
+    const tSee = tSight.has(pos.id);
+    const ctSee = ctSight.has(pos.id);
+    const fightNow = contestedSight.has(pos.id);
+
+    if (tAct && ctAct) {
+      paint[pos.id] = 'contested-active';
+    } else if (tAct && (fightNow || ctSee)) {
+      paint[pos.id] = 'contested-active';
+    } else if (ctAct && (fightNow || tSee)) {
+      paint[pos.id] = 'contested-active';
+    } else if (tAct) {
+      paint[pos.id] = 't-active';
+    } else if (ctAct) {
+      paint[pos.id] = 'ct-active';
+    } else if (fightNow || (tSee && ctSee)) {
+      paint[pos.id] = 'contested';
+    } else if (tSee) {
+      paint[pos.id] = 't-control';
+    } else if (ctSee) {
+      paint[pos.id] = 'ct-control';
+    } else {
+      const tHist = (presence?.firstT.get(pos.id) ?? Infinity) <= tick;
+      const ctHist = (presence?.firstCT.get(pos.id) ?? Infinity) <= tick;
+      if (tHist && !ctHist) paint[pos.id] = 't-control';
+      else if (ctHist && !tHist) paint[pos.id] = 'ct-control';
+      else if (tHist && ctHist) {
+        const latest = latestOwnerSide(presence, pos.id, tick);
+        paint[pos.id] =
+          latest === 'T' ? 't-control' : latest === 'CT' ? 'ct-control' : 'empty';
+      } else {
+        paint[pos.id] = 'empty';
+      }
+    }
   }
 
   const surroundAssigned = applySurroundControl(paint, network, presence, tick);
@@ -669,18 +725,18 @@ export function computeZonePaint({
     const tOcc = occupantsInPosition(pos.id, meta, states, network, 'T');
     const ctOcc = occupantsInPosition(pos.id, meta, states, network, 'CT');
     if (tOcc.length) {
-      why.push({ kind: 'active', side: 'T', text: `T standing here: ${tOcc.join(', ')}` });
+      why.push({ kind: 'active', side: 'T', text: `T standing here now: ${tOcc.join(', ')}` });
     }
     if (ctOcc.length) {
-      why.push({ kind: 'active', side: 'CT', text: `CT standing here: ${ctOcc.join(', ')}` });
+      why.push({ kind: 'active', side: 'CT', text: `CT standing here now: ${ctOcc.join(', ')}` });
     }
     for (const s of sightNow.get(pos.id) || []) {
       why.push({
         kind: s.enemy ? 'sight-enemy' : 'sight',
         side: s.side,
         text: s.enemy
-          ? `${s.playerName} (${s.side}) sees an enemy here (${Math.round(s.cover * 100)}% cover)`
-          : `${s.playerName} (${s.side}) has clear sight (${Math.round(s.cover * 100)}% cover)`
+          ? `${s.playerName} (${s.side}) sees an enemy here now (${Math.round(s.cover * 100)}% cover)`
+          : `${s.playerName} (${s.side}) has clear sight now (${Math.round(s.cover * 100)}% cover)`
       });
     }
     const sur = surroundAssigned.get(pos.id);
@@ -688,18 +744,46 @@ export function computeZonePaint({
       why.push({
         kind: 'surround',
         side: sur.side,
-        text: `Surrounded fill → ${sur.side}: ${sur.neighborNames.join(', ')}`
+        text: `Neutral pocket → ${sur.side} (borders: ${sur.neighborNames.join(', ')})`
       });
-    } else if (key === 't-control' || key === 'ct-control') {
-      // Already controlled before this surround pass — still note visit times.
     }
+    // Soft historical control only explained when it actually drives the paint
+    // (empty of present fights) — never as a contested reason.
     const tFirst = presence?.firstT.get(pos.id);
     const ctFirst = presence?.firstCT.get(pos.id);
-    if (Number.isFinite(tFirst) && tFirst <= tick) {
-      why.push({ kind: 'visit', side: 'T', tick: tFirst, text: 'T claim (feet / sight / surround)' });
+    if (key === 't-control' && !tSight.has(pos.id) && !sur) {
+      if (Number.isFinite(tFirst) && tFirst <= tick) {
+        why.push({
+          kind: 'visit',
+          side: 'T',
+          tick: tFirst,
+          text: 'Soft T control from an earlier claim (no present CT contest)'
+        });
+      }
     }
-    if (Number.isFinite(ctFirst) && ctFirst <= tick) {
-      why.push({ kind: 'visit', side: 'CT', tick: ctFirst, text: 'CT claim (feet / sight / surround)' });
+    if (key === 'ct-control' && !ctSight.has(pos.id) && !sur) {
+      if (Number.isFinite(ctFirst) && ctFirst <= tick) {
+        why.push({
+          kind: 'visit',
+          side: 'CT',
+          tick: ctFirst,
+          text: 'Soft CT control from an earlier claim (no present T contest)'
+        });
+      }
+    }
+    if (key === 't-active' && !ctOcc.length) {
+      why.push({
+        kind: 'present',
+        side: 'T',
+        text: 'Only T here now — not contested (enemy must be present or see it now)'
+      });
+    }
+    if (key === 'ct-active' && !tOcc.length) {
+      why.push({
+        kind: 'present',
+        side: 'CT',
+        text: 'Only CT here now — not contested (enemy must be present or see it now)'
+      });
     }
     if (!why.length && key === 'empty') {
       why.push({ kind: 'neutral', side: null, text: 'No team has claimed this position yet' });
@@ -732,16 +816,22 @@ export function computeZonePaint({
 }
 
 /**
- * @deprecated Prefer computeZonePaint. Kept for simple foot-only callers.
+ * @deprecated Prefer computeZonePaint. Contested is present-tense only.
  */
 export function paintForPosition(posId, tick, presence, active) {
-  const tVis = (presence?.firstT.get(posId) ?? Infinity) <= tick;
-  const ctVis = (presence?.firstCT.get(posId) ?? Infinity) <= tick;
   const tAct = Boolean(active?.t?.has(posId));
   const ctAct = Boolean(active?.ct?.has(posId));
-  if (tVis && ctVis) return tAct || ctAct ? 'contested-active' : 'contested';
-  if (tVis) return tAct ? 't-active' : 't-control';
-  if (ctVis) return ctAct ? 'ct-active' : 'ct-control';
+  if (tAct && ctAct) return 'contested-active';
+  if (tAct) return 't-active';
+  if (ctAct) return 'ct-active';
+  const tVis = (presence?.firstT.get(posId) ?? Infinity) <= tick;
+  const ctVis = (presence?.firstCT.get(posId) ?? Infinity) <= tick;
+  if (tVis && !ctVis) return 't-control';
+  if (ctVis && !tVis) return 'ct-control';
+  if (tVis && ctVis) {
+    const latest = latestOwnerSide(presence, posId, tick);
+    return latest === 'T' ? 't-control' : latest === 'CT' ? 'ct-control' : 'empty';
+  }
   return 'empty';
 }
 
