@@ -1,10 +1,12 @@
 // ---------------------------------------------------------------------------
 // Aggregate rating-style stats over early/mid/late phase windows for one player.
-// Each matching phase window counts as one sample (like one round in Statistics).
+//
+// Combat is taken only from matching phase windows, then rolled up per round so
+// KPR / DPR / ADR use that round count as the "R" (same idea as Statistics).
 // ---------------------------------------------------------------------------
 
 import { PHASES } from '../roles/phaseCombat.js';
-import { P, bucketRating, rowPasses } from '../shared/statsMath.js';
+import { P, PLAYER_SLOTS, bucketRating, rowPasses } from '../shared/statsMath.js';
 
 /**
  * @typedef {object} AnalyticsFilter
@@ -29,6 +31,10 @@ function asSet(v) {
 
 function emptyBucket() {
   return { rounds: 0, kills: 0, deaths: 0, assists: 0, damage: 0, kast: 0 };
+}
+
+function emptyLine() {
+  return new Array(PLAYER_SLOTS).fill(0);
 }
 
 function addBucket(b, line) {
@@ -125,27 +131,88 @@ export function matchingWindows(payload, filter) {
 }
 
 /**
- * Aggregate stats over matching phase windows.
+ * Collapse matching phase windows into one combat line per distinct round.
+ * Kills/damage come only from those windows; the round counts once for KPR/ADR.
+ */
+function roundLinesFromWindows(windows, playerId) {
+  /** @type {Map<string, { file: string, demoId: string, round: number, line: number[], phases: Set<string> }>} */
+  const byFile = new Map();
+
+  for (const w of windows) {
+    let g = byFile.get(w.file);
+    if (!g) {
+      g = {
+        file: w.file,
+        demoId: w.demoId,
+        round: w.round,
+        line: emptyLine(),
+        phases: new Set()
+      };
+      byFile.set(w.file, g);
+    }
+    g.phases.add(w.phase);
+    const src = w.window.p;
+    for (let i = 0; i < PLAYER_SLOTS; i++) {
+      if (i === P.KAST) continue;
+      g.line[i] += Number(src[i]) || 0;
+    }
+    if (src[P.KAST]) g.line[P.KAST] = 1;
+  }
+
+  // Backfill damage / hits when phase bags were built without events.damage.
+  for (const g of byFile.values()) {
+    const row = windows.find((w) => w.file === g.file)?.row;
+    const whole = row?.p?.[playerId];
+    if (!whole) {
+      // Even without whole-round stats, kills/HS imply hits.
+      const minHits = Math.max(g.line[P.KILLS] || 0, g.line[P.HEADSHOTS] || 0);
+      if ((g.line[P.HITS] || 0) < minHits) g.line[P.HITS] = minHits;
+      continue;
+    }
+
+    const share = (slot) => {
+      const total = Number(whole[slot]) || 0;
+      if (total <= 0) return 0;
+      const wholeKills = Number(whole[P.KILLS]) || 0;
+      if (wholeKills > 0 && (g.line[P.KILLS] || 0) > 0) {
+        return Math.round((total * g.line[P.KILLS]) / wholeKills);
+      }
+      return Math.round((total * g.phases.size) / PHASES.length);
+    };
+
+    if (!(g.line[P.DAMAGE] > 0)) g.line[P.DAMAGE] = share(P.DAMAGE);
+    if (!(g.line[P.HITS] > 0)) g.line[P.HITS] = share(P.HITS);
+    if (!(g.line[P.AWP_HITS] > 0) && (Number(whole[P.AWP_HITS]) || 0) > 0) {
+      g.line[P.AWP_HITS] = share(P.AWP_HITS);
+    }
+
+    const minHits = Math.max(g.line[P.KILLS] || 0, g.line[P.HEADSHOTS] || 0);
+    if ((g.line[P.HITS] || 0) < minHits) g.line[P.HITS] = minHits;
+  }
+
+  return [...byFile.values()];
+}
+
+/**
+ * Aggregate stats over matching phase windows (rolled up per round).
  */
 export function aggregateAnalytics(payload, filter) {
   const windows = matchingWindows(payload, filter);
+  const roundRows = roundLinesFromWindows(windows, filter.playerId);
   const bucket = emptyBucket();
   let shots = 0;
   let hits = 0;
   let headshots = 0;
   let awpShots = 0;
   let awpHits = 0;
-  const files = new Set();
 
-  for (const w of windows) {
-    const line = w.window.p;
-    addBucket(bucket, line);
-    shots += line[P.SHOTS] || 0;
-    hits += line[P.HITS] || 0;
-    headshots += line[P.HEADSHOTS] || 0;
-    awpShots += line[P.AWP_SHOTS] || 0;
-    awpHits += line[P.AWP_HITS] || 0;
-    if (w.file) files.add(w.file);
+  for (const g of roundRows) {
+    addBucket(bucket, g.line);
+    shots += g.line[P.SHOTS] || 0;
+    hits += g.line[P.HITS] || 0;
+    headshots += g.line[P.HEADSHOTS] || 0;
+    awpShots += g.line[P.AWP_SHOTS] || 0;
+    awpHits += g.line[P.AWP_HITS] || 0;
   }
 
   const rating = bucketRating(bucket);
@@ -153,9 +220,9 @@ export function aggregateAnalytics(payload, filter) {
 
   return {
     windows,
-    files: [...files],
-    samples: rating.rounds,
-    rounds: files.size,
+    files: roundRows.map((g) => g.file),
+    samples: windows.length,
+    rounds: rating.rounds,
     kills: bucket.kills,
     deaths: bucket.deaths,
     assists: bucket.assists,
@@ -223,7 +290,6 @@ export function listPlayers(payload) {
       }
       if (p.name) cur.name = p.name;
       if (map) cur.maps.add(map);
-      // Also count maps from rounds they appear in.
       for (const row of demo.rounds || []) {
         if (row.p?.[p.id] || row.ph?.[p.id]) {
           if (row.m) cur.maps.add(row.m);

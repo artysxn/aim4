@@ -98,7 +98,7 @@ export function phaseCombatFromMeta(meta, playerIds) {
   for (const d of damage) {
     if (!d.attacker || !out[d.attacker]) continue;
     const phase = phaseAtTick(d.tick || 0, bounds);
-    const hp = Number(d.hp) || 0;
+    const hp = Number(d.hp ?? d.damage) || 0;
     if (hp > 0) out[d.attacker][phase].p[P.DAMAGE] += Math.round(hp);
     out[d.attacker][phase].p[P.HITS] += 1;
   }
@@ -136,6 +136,88 @@ export function phaseCombatFromMeta(meta, playerIds) {
     mid: bounds.midStartTick,
     late: bounds.lateStartTick
   };
+
+  /**
+   * Split a round total across phases by combat weight.
+   * @param {ReturnType<typeof emptyPhaseBag>} bag
+   * @param {Record<string, number>} weights
+   * @param {number} weightSum
+   * @param {number} total
+   * @param {number} slot  P.* index
+   */
+  const distribute = (bag, weights, weightSum, total, slot) => {
+    const n = Math.round(Number(total) || 0);
+    if (n <= 0) return;
+    if (weightSum <= 0) {
+      bag.early.p[slot] = (bag.early.p[slot] || 0) + n;
+      return;
+    }
+    let left = n;
+    for (let i = 0; i < PHASES.length; i++) {
+      const phase = PHASES[i];
+      const share =
+        i === PHASES.length - 1 ? left : Math.round((n * weights[phase]) / weightSum);
+      bag[phase].p[slot] = (bag[phase].p[slot] || 0) + Math.max(0, share);
+      left -= share;
+    }
+  };
+
+  // Older packs often lack events.damage — pull damage / hits from round stats
+  // and split across phases by activity (kills / assists / alive in window).
+  for (const id of playerIds) {
+    const bag = out[id];
+    if (!bag) continue;
+
+    let eventDmg = 0;
+    let eventHits = 0;
+    for (const phase of PHASES) {
+      eventDmg += bag[phase].p[P.DAMAGE] || 0;
+      eventHits += bag[phase].p[P.HITS] || 0;
+    }
+
+    const st = meta.stats?.[id] || {};
+    const deathTick = deathTickOf.get(id);
+    const weights = {};
+    let weightSum = 0;
+    for (const phase of PHASES) {
+      const start = phaseStartOf[phase];
+      const aliveAtStart = deathTick == null || deathTick >= start;
+      const w =
+        (bag[phase].p[P.KILLS] || 0) * 3 +
+        (bag[phase].p[P.ASSISTS] || 0) * 2 +
+        (aliveAtStart && !diedIn[phase].has(id) ? 1 : 0);
+      weights[phase] = w;
+      weightSum += w;
+    }
+
+    if (eventDmg <= 0) {
+      distribute(bag, weights, weightSum, st.damage, P.DAMAGE);
+    }
+    if (eventHits <= 0) {
+      // Prefer parser hit counts; otherwise every kill / HS is still a hit.
+      const killHits = PHASES.reduce((n, phase) => n + (bag[phase].p[P.KILLS] || 0), 0);
+      const hsHits = PHASES.reduce((n, phase) => n + (bag[phase].p[P.HEADSHOTS] || 0), 0);
+      const fallbackHits = Math.max(Number(st.hits) || 0, killHits, hsHits);
+      distribute(bag, weights, weightSum, fallbackHits, P.HITS);
+
+      // Kill-loop already stamped HEADSHOTS; only fill from stats when none.
+      if (hsHits <= 0 && (st.headshots || 0) > 0) {
+        distribute(bag, weights, weightSum, st.headshots, P.HEADSHOTS);
+      }
+      if ((st.awpHits || 0) > 0) {
+        let awpEventHits = 0;
+        for (const phase of PHASES) awpEventHits += bag[phase].p[P.AWP_HITS] || 0;
+        if (awpEventHits <= 0) distribute(bag, weights, weightSum, st.awpHits, P.AWP_HITS);
+      }
+    }
+
+    // Consistency: a headshot or kill always counts as a hit in that window.
+    for (const phase of PHASES) {
+      const line = bag[phase].p;
+      const minHits = Math.max(line[P.KILLS] || 0, line[P.HEADSHOTS] || 0);
+      if ((line[P.HITS] || 0) < minHits) line[P.HITS] = minHits;
+    }
+  }
 
   for (const phase of PHASES) {
     const start = phaseStartOf[phase];

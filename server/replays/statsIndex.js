@@ -24,7 +24,7 @@ import {
 import { presenceFromTicks } from '../../src/replays/roles/presenceFromTicks.js';
 import { isZoneNetworkReady } from '../../src/replays/zones/zoneModel.js';
 
-export const STATS_VERSION = 3;
+export const STATS_VERSION = 5;
 
 /** ~1 Hz occupancy samples (demo ticks between samples). */
 const TICK_STRIDE = 64;

@@ -11,6 +11,7 @@ import {
   listPlayers,
   locationBreakdown
 } from './analyticsMath.js';
+import { paintPresenceRadar } from './presenceRadar.js';
 
 const tipLines = (lines) => lines.filter(Boolean).join('\n');
 
@@ -340,19 +341,9 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
             ${chip(state.result === 'lost', 'data-an-result="lost"', 'Lost')}
           </div>
         </div>
-        <div class="an-field">
-          <span class="an-label">Phase</span>
-          <div class="rp-chips">
-            ${PHASE_OPTS.map((p) =>
-              chip(state.phases.has(p.key), `data-an-phase="${p.key}"`, p.label)
-            ).join('')}
-          </div>
-        </div>
       </div>
 
       <div class="an-side-block" ${ready ? '' : 'hidden'}>
-        <h3 class="an-side-title">Location</h3>
-        <p class="an-side-hint">Type to add a position, zone, or area. Windows must match every selected tier.</p>
         ${LOC_KINDS.map((k) => locTypeahead(k.key, k.label)).join('')}
       </div>
 
@@ -396,15 +387,29 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         </ul>
       </div>`;
     };
+    const phaseChips = PHASE_OPTS.map((p) =>
+      chip(state.phases.has(p.key), `data-an-phase="${p.key}"`, p.label)
+    ).join('');
     return `<section class="an-card an-breakdown">
-      <header class="an-card-head">
-        <h3 class="an-section-title">Where they play</h3>
-        <span class="an-muted">${breakdown.samples} samples</span>
+      <header class="an-card-head an-break-head">
+        <div>
+          <h3 class="an-section-title">Where they play</h3>
+          <span class="an-muted">${breakdown.samples} phase windows</span>
+        </div>
+        <div class="an-phase-chips">
+          <span class="an-label">Phase</span>
+          <div class="rp-chips">${phaseChips}</div>
+        </div>
       </header>
-      <div class="an-break-grid">
-        ${block('Positions', breakdown.pos, 'pos')}
-        ${block('Zones', breakdown.zone, 'zone')}
-        ${block('Areas', breakdown.area, 'area')}
+      <div class="an-break-body">
+        <div class="an-radar-wrap">
+          <canvas class="an-radar" id="an-radar" width="240" height="240" aria-label="Position radar"></canvas>
+        </div>
+        <div class="an-break-grid">
+          ${block('Positions', breakdown.pos, 'pos')}
+          ${block('Zones', breakdown.zone, 'zone')}
+          ${block('Areas', breakdown.area, 'area')}
+        </div>
       </div>
     </section>`;
   }
@@ -413,12 +418,12 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     const f1 = (n) => (Number.isFinite(n) ? n.toFixed(1) : '—');
     const f2 = (n) => (Number.isFinite(n) ? n.toFixed(2) : '—');
     const pct = (n) => (Number.isFinite(n) ? `${n.toFixed(1)}%` : '—');
-    const n = agg.samples || 0;
+    const n = agg.rounds || 0;
     return {
       Rating: tipLines([
-        `HLTV 2.0 over ${n} phase windows (same formula as Statistics).`,
-        `KPR: ${f2(agg.kpr)}`,
-        `DPR: ${f2(agg.dpr)}`,
+        `HLTV 2.0 over ${n} matching rounds (combat only from selected phases / locations).`,
+        `KPR: ${f2(agg.kpr)}  (${agg.kills} kills / ${n} rounds)`,
+        `DPR: ${f2(agg.dpr)}  (${agg.deaths} deaths / ${n} rounds)`,
         `Impact: ${f2(agg.impact)}`,
         `ADR: ${f1(agg.adr)}`,
         `KAST: ${pct(agg.kast)}`
@@ -427,17 +432,17 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         `Kills: ${agg.kills}`,
         `Assists: ${agg.assists}`,
         `Deaths: ${agg.deaths}`,
-        `Across ${n} phase windows`
+        `Across ${n} matching rounds (${agg.samples} phase windows)`
       ]),
       ADR: tipLines([
-        `Average damage per phase window`,
+        `Average damage per matching round`,
         `Total damage: ${Math.round(agg.damage || 0)}`,
-        `Windows: ${n}`
+        `Rounds: ${n}`
       ]),
       KAST: tipLines([
-        `% of phase windows with a kill, assist, survival, or trade`,
+        `% of matching rounds with a kill, assist, survival, or trade in a selected window`,
         `KAST: ${pct(agg.kast)}`,
-        `Windows: ${n}`
+        `Rounds: ${n}`
       ]),
       Impact: tipLines([
         `Impact = 2.13×KPR + 0.42×APR − 0.41`,
@@ -456,9 +461,18 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
             ]
           : ['No hit data in these phase windows (older demos may lack damage events).']
       ),
-      Kills: tipLines([`Kills in matching phase windows: ${agg.kills}`]),
-      Deaths: tipLines([`Deaths in matching phase windows: ${agg.deaths}`]),
-      Assists: tipLines([`Assists in matching phase windows: ${agg.assists}`])
+      Kills: tipLines([
+        `Kills in matching phase windows: ${agg.kills}`,
+        `Rounds: ${n}`
+      ]),
+      Deaths: tipLines([
+        `Deaths in matching phase windows: ${agg.deaths}`,
+        `Rounds: ${n}`
+      ]),
+      Assists: tipLines([
+        `Assists in matching phase windows: ${agg.assists}`,
+        `Rounds: ${n}`
+      ])
     };
   }
 
@@ -481,7 +495,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     return `<section class="an-card an-stats">
       <header class="an-card-head">
         <h3 class="an-section-title">Phase stats</h3>
-        <span class="an-muted">${agg.samples} windows · ${agg.rounds} rounds</span>
+        <span class="an-muted">${agg.rounds} rounds · ${agg.samples} phase windows</span>
       </header>
       <div class="an-stat-grid">
         ${cells
@@ -566,9 +580,24 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       ${renderRounds(agg)}`;
   }
 
+  function paintRadar(breakdown) {
+    const canvas = mainEl.querySelector('#an-radar');
+    if (!canvas || !state.map) return;
+    paintPresenceRadar(
+      canvas,
+      state.map,
+      network,
+      breakdown?.pos || [],
+      state.positions
+    ).catch(() => {});
+  }
+
   function render() {
     renderSidebar();
     renderMain();
+    if (state.playerId && state.map && payload) {
+      paintRadar(locationBreakdown(payload, filterObj()));
+    }
   }
 
   async function ensureNetwork() {
@@ -711,14 +740,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       render();
       return;
     }
-    const phase = e.target.closest('[data-an-phase]');
-    if (phase) {
-      const key = phase.dataset.anPhase;
-      if (state.phases.has(key)) state.phases.delete(key);
-      else state.phases.add(key);
-      render();
-      return;
-    }
     if (e.target.closest('[data-an-clear]')) {
       state.side = '';
       state.econ = null;
@@ -773,6 +794,14 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   });
 
   mainEl.addEventListener('click', async (e) => {
+    const phase = e.target.closest('[data-an-phase]');
+    if (phase) {
+      const key = phase.dataset.anPhase;
+      if (state.phases.has(key)) state.phases.delete(key);
+      else state.phases.add(key);
+      render();
+      return;
+    }
     const locToggle = e.target.closest('[data-loc-toggle]');
     if (locToggle) {
       const kind = locToggle.dataset.locToggle;

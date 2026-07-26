@@ -3378,10 +3378,57 @@ body.rv-open {
   font-variant-numeric: tabular-nums;
 }
 
+.an-break-head {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.an-phase-chips {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.an-break-body {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .an-break-body {
+    grid-template-columns: 1fr;
+  }
+
+  .an-radar-wrap {
+    justify-self: center;
+  }
+}
+
+.an-radar-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  background: #0c0e12;
+  line-height: 0;
+}
+
+.an-radar {
+  display: block;
+  width: 100%;
+  max-width: 240px;
+  height: auto;
+  aspect-ratio: 1;
+}
+
 .an-break-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+  min-width: 0;
 }
 
 @media (max-width: 700px) {
