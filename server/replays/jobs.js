@@ -12,7 +12,19 @@
 import path from 'node:path';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { readRecord, writeRecord, demoFilePath, discardSourceFile } from './demoStore.js';
+import {
+  readRecord,
+  writeRecord,
+  demoFilePath,
+  discardSourceFile,
+  readRoundMeta,
+  readRoundTicks,
+  userDir
+} from './demoStore.js';
+import { getZones } from '../zonesStore.js';
+import { scheduleStatsIndex } from './statsIndex.js';
+
+const statsIo = { userDir, readRoundMeta, readRoundTicks, getZones };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKER = path.join(__dirname, 'parseWorker.js');
@@ -145,6 +157,10 @@ function pump() {
     }
     if (msg.type === 'done') {
       if (!KEEP_SOURCE) await discardSourceFile(job.user, job.demoId).catch(() => {});
+      // Build stats (+ zone positions when the map network is ready) from the
+      // freshly written round files. Never needs a second parse.
+      const ready = msg.record || (await readRecord(job.user, job.demoId).catch(() => null));
+      if (ready) scheduleStatsIndex(statsIo, job.user, ready);
       await finish({ state: 'done', stage: 'done', record: msg.record });
       return;
     }

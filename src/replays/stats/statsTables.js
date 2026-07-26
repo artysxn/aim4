@@ -83,6 +83,46 @@ export const PLAYER_COLUMNS = [
   { key: 'impact', label: 'Impact', get: (p) => p.impact, cell: (p) => f2(p.impact) }
 ];
 
+/**
+ * Player columns with T (yellow) / CT (blue) role or position after the name.
+ * @param {'position'|'tactical'|''} roleMode
+ */
+export function playerColumnsWithRoles(roleMode = 'tactical') {
+  const tLabel = roleMode === 'position' ? 'T pos' : 'T role';
+  const ctLabel = roleMode === 'position' ? 'CT pos' : 'CT role';
+  const tGet = (p) =>
+    (roleMode === 'position' ? p.posT || p.roleT : p.roleT || '') || '';
+  const ctGet = (p) =>
+    (roleMode === 'position' ? p.posCT || p.roleCT : p.roleCT || '') || '';
+  const roleCols = [
+    {
+      key: 'roleT',
+      label: tLabel,
+      align: 'left',
+      get: (p) => tGet(p).toLowerCase(),
+      cell: (p) => tGet(p) || '—',
+      cellClass: 'st-role-t',
+      tip: (p) =>
+        roleMode === 'position'
+          ? tip([`T position: ${p.posT || '—'}`, `Tactical: ${p.roleT || '—'}`])
+          : tip([`T tactical role: ${p.roleT || '—'}`])
+    },
+    {
+      key: 'roleCT',
+      label: ctLabel,
+      align: 'left',
+      get: (p) => ctGet(p).toLowerCase(),
+      cell: (p) => ctGet(p) || '—',
+      cellClass: 'st-role-ct',
+      tip: (p) =>
+        roleMode === 'position'
+          ? tip([`CT position: ${p.posCT || '—'}`, `Tactical: ${p.roleCT || '—'}`])
+          : tip([`CT tactical role: ${p.roleCT || '—'}`])
+    }
+  ];
+  return [PLAYER_COLUMNS[0], ...roleCols, ...PLAYER_COLUMNS.slice(1)];
+}
+
 export const TEAM_COLUMNS = [
   { key: 'name', label: 'Team', align: 'left', get: (t) => t.name.toLowerCase() },
   { key: 'rounds', label: 'Rds', get: (t) => t.rounds, cell: (t) => int(t.rounds) },
@@ -191,9 +231,16 @@ export function statsTableHtml(rows, opts) {
           }
           const text = c.cell(r);
           const t = c.tip?.(r);
-          const cls = `${c.align === 'left' ? 'left ' : ''}${c.strong ? 'strong ' : ''}`.trim();
+          const cls = [
+            c.align === 'left' ? 'left' : '',
+            c.strong ? 'strong' : '',
+            c.cellClass || '',
+            t ? 'has-tip' : ''
+          ]
+            .filter(Boolean)
+            .join(' ');
           return t
-            ? `<td class="${cls} has-tip" data-tip="${escapeHtml(t)}">${escapeHtml(text)}</td>`
+            ? `<td class="${cls}" data-tip="${escapeHtml(t)}">${escapeHtml(text)}</td>`
             : `<td class="${cls}">${escapeHtml(text)}</td>`;
         })
         .join('');

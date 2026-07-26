@@ -163,6 +163,7 @@ export async function findRounds(query = {}, limit = 2000) {
   put('econB', Number.isFinite(query.econB) ? query.econB : undefined);
   put('hasAwpA', query.hasAwpA ? '1' : undefined);
   put('hasAwpB', query.hasAwpB ? '1' : undefined);
+  put('equalBuy', query.equalBuy ? '1' : undefined);
   put('teamEconomies', query.teamEconomies);
   put('teamEconomyOf', query.teamEconomyOf);
   put('roundMin', query.roundMin);

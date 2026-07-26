@@ -50,7 +50,7 @@ import {
   writeRecord,
   writeRoundNotes
 } from './demoStore.js';
-import { forgetDemoIndex, statsPayload } from './statsIndex.js';
+import { forgetDemoIndex, scheduleStatsIndex, statsPayload } from './statsIndex.js';
 import { allJobs, enqueueParse, jobStatus } from './jobs.js';
 import { authStatus, identify } from './auth.js';
 import { importReplayPackage } from './importPackage.js';
@@ -58,7 +58,7 @@ import { PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
 import { getZones, listZoneMaps, saveZones } from '../zonesStore.js';
 
 /** What the stats index needs from storage, without importing it back. */
-const statsIo = { userDir, readRoundMeta };
+const statsIo = { userDir, readRoundMeta, readRoundTicks, getZones };
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -141,6 +141,8 @@ function queryFromUrl(url) {
     econB: url.searchParams.has('econB') ? Number(url.searchParams.get('econB')) : undefined,
     hasAwpA: url.searchParams.get('hasAwpA') === '1' || url.searchParams.get('hasAwpA') === 'true',
     hasAwpB: url.searchParams.get('hasAwpB') === '1' || url.searchParams.get('hasAwpB') === 'true',
+    equalBuy:
+      url.searchParams.get('equalBuy') === '1' || url.searchParams.get('equalBuy') === 'true',
     teamEconomies: nums(url, 'teamEconomies'),
     teamEconomyOf: url.searchParams.get('teamEconomyOf') || undefined,
     roundMin: url.searchParams.has('roundMin') ? Number(url.searchParams.get('roundMin')) : undefined,
@@ -352,6 +354,7 @@ export async function handleReplayRequest(req, res, url) {
         filename,
         uploadedAt: Date.now()
       });
+      scheduleStatsIndex(statsIo, user, record);
       json(res, 201, { demo: withJob(user, record), usage: await usage(user) });
     } catch (err) {
       const status = err.status || 400;

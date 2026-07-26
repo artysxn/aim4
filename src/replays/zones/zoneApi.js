@@ -5,5 +5,6 @@
 // ---------------------------------------------------------------------------
 
 import { fetchZoneMaps, fetchZones, saveZones } from '../api.js';
+import { isZoneNetworkReady } from './zoneModel.js';
 
-export { fetchZoneMaps, fetchZones, saveZones };
+export { fetchZoneMaps, fetchZones, saveZones, isZoneNetworkReady };

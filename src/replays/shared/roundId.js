@@ -73,6 +73,16 @@ export function econHasAwp(code) {
   return Number(code) === ECON_FULL_AWP;
 }
 
+/**
+ * Equal-economy matchup for zone-network filters: pistol vs pistol, half vs
+ * half, or full vs full. AWP does not break equality (digit 5 → full).
+ */
+export function isEqualBuyRound(econ1, econ2) {
+  const a = buyBucket(econ1);
+  const b = buyBucket(econ2);
+  return a === b && (a === 0 || a === 2 || a === 4);
+}
+
 const ID_RE = /^[A-Za-z0-9]{3}$/;
 const TOKEN = '[A-Za-z0-9]{3}';
 const ROUND_ID_RE = new RegExp(

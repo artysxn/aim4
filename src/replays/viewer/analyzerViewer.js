@@ -6,8 +6,10 @@
 // Zoom/pan, hover full-round preview, click-to-open, box-select → Timeline.
 // ---------------------------------------------------------------------------
 
-import { fetchRoundMeta } from '../api.js';
-import { ECONOMIES, buyBucket, econHasAwp, economyLabel } from '../shared/roundId.js';
+import { fetchRoundMeta, fetchZones } from '../api.js';
+import { findRoundDecided } from '../coach/roundDecided.js';
+import { ECONOMIES, buyBucket, econHasAwp, economyLabel, isEqualBuyRound } from '../shared/roundId.js';
+import { isZoneNetworkReady } from '../zones/zoneModel.js';
 import { iconImgHtml, isGrenade } from './equipmentIcons.js';
 import { RADAR_SIZE, worldToRadar } from './mapCalibration.js';
 import { RadarRenderer, grenadeWorldPos } from './radarRenderer.js';
@@ -153,6 +155,14 @@ export function createAnalyzerViewer({
   let resultFilter = new Set();
   /** When true, only rounds where the bomb was planted. */
   let afterplantOnly = false;
+  /**
+   * Round-decided phase chips (zone network). Empty = off.
+   * Values: 'early' | 'mid' | 'late'. Implies equal-buy rounds only.
+   * @type {Set<string>}
+   */
+  let decidedPhaseFilter = new Set();
+  /** Map has ≥1 position, zone, and area — gates decided-phase filters. */
+  let zoneNetworkReady = false;
   /** @type {'regular'|'heatmap'} */
   let viewMode = 'regular';
   /** Heatmap blur strength (slider); mapped to canvas Gaussian blur. */
@@ -283,6 +293,14 @@ export function createAnalyzerViewer({
     if (!L.meta) return false;
     if (L.meta.plantTick != null && Number.isFinite(L.meta.plantTick)) return true;
     return (L.meta.events?.bomb || []).some((b) => b.type === 'planted');
+  }
+
+  /** Cached on the layer after meta load (`null` = not equal-buy / not decided). */
+  function decidedOf(L) {
+    if (!L.meta) return null;
+    if (L.decided !== undefined) return L.decided;
+    L.decided = findRoundDecided(L.meta);
+    return L.decided;
   }
 
   /**
@@ -616,6 +634,11 @@ export function createAnalyzerViewer({
     const wonCount = sideLayers.filter((L) => resultOfFocus(L) === 'won').length;
     const lostCount = sideLayers.filter((L) => resultOfFocus(L) === 'lost').length;
     const plantCount = sideLayers.filter((L) => isAfterplant(L)).length;
+    const equalBuyLayers = sideLayers.filter(
+      (L) => L.meta && isEqualBuyRound(L.meta.econ1, L.meta.econ2)
+    );
+    const decidedCount = (phase) =>
+      equalBuyLayers.filter((L) => decidedOf(L)?.phase === phase).length;
     teamEl.textContent = focusName || focusId || 'Team';
 
     const teamSwitcher =
@@ -706,6 +729,33 @@ export function createAnalyzerViewer({
           }" data-result="lost">Lost <small>${lostCount}</small></button>
         </div>
       </div>
+      ${
+        zoneNetworkReady
+          ? `<div class="rv-az-group">
+        <h4>Round decided <span class="rv-az-hint">(equal buy)</span></h4>
+        <div class="rv-az-seg rv-az-multi" role="group" aria-label="Round decided phase">
+          <button type="button" class="rv-az-seg-btn${
+            decidedPhaseFilter.has('early') ? ' active' : ''
+          }" data-decided-phase="early" title="Decided in early round (before 1:15 and 5v5)">Early <small>${decidedCount(
+            'early'
+          )}</small></button>
+          <button type="button" class="rv-az-seg-btn${
+            decidedPhaseFilter.has('mid') ? ' active' : ''
+          }" data-decided-phase="mid" title="Decided in mid round">Mid <small>${decidedCount(
+            'mid'
+          )}</small></button>
+          <button type="button" class="rv-az-seg-btn${
+            decidedPhaseFilter.has('late') ? ' active' : ''
+          }" data-decided-phase="late" title="Decided in late round (0:40 or ≤3v3)">Late <small>${decidedCount(
+            'late'
+          )}</small></button>
+        </div>
+      </div>`
+          : `<div class="rv-az-group">
+        <h4>Round decided</h4>
+        <p class="rv-az-empty">Needs a zone network (positions, zones, and areas) for this map.</p>
+      </div>`
+      }
       <div class="rv-az-group">
         <h4>Bomb</h4>
         <div class="rv-az-seg rv-az-multi" role="group" aria-label="Afterplant">
@@ -786,6 +836,11 @@ export function createAnalyzerViewer({
         if (!res || !resultFilter.has(res)) return false;
       }
       if (afterplantOnly && !isAfterplant(L)) return false;
+      if (zoneNetworkReady && decidedPhaseFilter.size) {
+        if (!L.meta || !isEqualBuyRound(L.meta.econ1, L.meta.econ2)) return false;
+        const d = decidedOf(L);
+        if (!d || !decidedPhaseFilter.has(d.phase)) return false;
+      }
       return true;
     });
   }
@@ -1830,8 +1885,20 @@ export function createAnalyzerViewer({
   replayBtn.addEventListener('click', () => openRoundsInTimeline(selectedFiles));
 
   async function loadMeta() {
-    await Promise.all(
-      layers.map(async (L, i) => {
+    const mapCode = rounds[0]?.map || '';
+    const zonesPromise = mapCode
+      ? fetchZones(mapCode)
+          .then((net) => {
+            zoneNetworkReady = isZoneNetworkReady(net);
+          })
+          .catch(() => {
+            zoneNetworkReady = false;
+          })
+      : Promise.resolve();
+
+    await Promise.all([
+      zonesPromise,
+      ...layers.map(async (L, i) => {
         const meta = await fetchRoundMeta(rounds[i].file).catch(() => null);
         if (destroyed || !meta) return;
         L.meta = meta;
@@ -1841,8 +1908,10 @@ export function createAnalyzerViewer({
         L.timing = timingFor(meta);
         if (i === 0) await renderer.setMap(meta.map || rounds[i].map);
       })
-    );
+    ]);
     if (destroyed) return;
+
+    if (!zoneNetworkReady) decidedPhaseFilter.clear();
 
     for (const L of layers) {
       if (!L.meta) continue;
@@ -1856,6 +1925,8 @@ export function createAnalyzerViewer({
       if (L.round.round != null && L.meta.round == null) L.meta.round = L.round.round;
       if (L.round.econ1 != null && L.meta.econ1 == null) L.meta.econ1 = L.round.econ1;
       if (L.round.econ2 != null && L.meta.econ2 == null) L.meta.econ2 = L.round.econ2;
+      // Precompute equal-buy decide moment (meta-only; no tick buffer).
+      L.decided = findRoundDecided(L.meta);
     }
 
     resolveFocusFromMeta();
@@ -1932,6 +2003,17 @@ export function createAnalyzerViewer({
     const plantBtn = e.target.closest('[data-afterplant]');
     if (plantBtn) {
       afterplantOnly = !afterplantOnly;
+      heatLayerCache = null;
+      renderFilters();
+      pruneSelectionToVisible();
+      draw(playback.position);
+      return;
+    }
+    const decidedBtn = e.target.closest('[data-decided-phase]');
+    if (decidedBtn && zoneNetworkReady) {
+      const key = decidedBtn.dataset.decidedPhase;
+      if (decidedPhaseFilter.has(key)) decidedPhaseFilter.delete(key);
+      else decidedPhaseFilter.add(key);
       heatLayerCache = null;
       renderFilters();
       pruneSelectionToVisible();

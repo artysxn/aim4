@@ -68,6 +68,21 @@ export function normalizeColorMode(mode) {
 }
 
 /**
+ * Zone-network features require at least one position, one zone, and one area.
+ * @param {{ zones?: Array, sections?: Array, areas?: Array } | null | undefined} network
+ */
+export function isZoneNetworkReady(network) {
+  return (
+    Array.isArray(network?.zones) &&
+    network.zones.length > 0 &&
+    Array.isArray(network?.sections) &&
+    network.sections.length > 0 &&
+    Array.isArray(network?.areas) &&
+    network.areas.length > 0
+  );
+}
+
+/**
  * Named zone grouping position ids (e.g. Banana = top banana + logs + …).
  */
 export function addSection(network, name, zoneIds = []) {

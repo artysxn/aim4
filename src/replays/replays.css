@@ -2819,6 +2819,18 @@ body.rv-open {
   font-weight: 700;
 }
 
+.st-table td.st-role-t {
+  color: #e8b84a;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.st-table td.st-role-ct {
+  color: #5b9fd4;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .st-table td.has-tip {
   cursor: help;
   text-decoration: underline dotted rgba(255, 255, 255, 0.28);

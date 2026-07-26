@@ -7,9 +7,20 @@
 // ---------------------------------------------------------------------------
 
 import { fetchStats } from '../api.js';
+import {
+  attachPlayerRoles,
+  playerMatchesRoleFilter
+} from '../roles/assignRoles.js';
+import { CT_POSITIONS, CT_TACTICAL, T_POSITIONS, T_TACTICAL } from '../roles/regionKeys.js';
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
 import { aggregatePlayers, aggregateTeams, allRows, indexMaps } from '../shared/statsMath.js';
-import { PLAYER_COLUMNS, TEAM_COLUMNS, attachTips, statsTableHtml } from './statsTables.js';
+import {
+  PLAYER_COLUMNS,
+  TEAM_COLUMNS,
+  attachTips,
+  playerColumnsWithRoles,
+  statsTableHtml
+} from './statsTables.js';
 
 /**
  * @param {{escapeHtml: (s: string) => string}} deps
@@ -45,10 +56,30 @@ export function createStatsPanel({ escapeHtml }) {
     oppEcon: null,
     hasAwp: false,
     oppHasAwp: false,
-    files: null
+    files: null,
+    /** @type {{ side: 'T'|'CT', value: string } | null} */
+    role: null
   };
 
   const detachTips = attachTips(el);
+
+  function singleMap() {
+    return filter.maps.length === 1 ? filter.maps[0] : '';
+  }
+
+  function payloadHasZoneRoles() {
+    for (const d of payload?.demos || []) {
+      for (const r of d.rounds || []) {
+        if (r.z && Object.keys(r.z).length) return true;
+      }
+    }
+    return false;
+  }
+
+  function roleMode() {
+    if (!payloadHasZoneRoles()) return '';
+    return singleMap() ? 'position' : 'tactical';
+  }
 
   // ---- filters ------------------------------------------------------------
 
@@ -95,6 +126,38 @@ export function createStatsPanel({ escapeHtml }) {
       <option value=""${!selected ? ' selected' : ''}>Any map</option>${opts}</select>`;
   }
 
+  function roleFilterHtml() {
+    const mode = roleMode();
+    if (!mode || tab !== 'players') return '';
+
+    const tOpts =
+      mode === 'position'
+        ? Object.values(T_POSITIONS).map((p) => p.label)
+        : [...T_TACTICAL];
+    const ctOpts =
+      mode === 'position'
+        ? Object.values(CT_POSITIONS).map((p) => p.label)
+        : [...CT_TACTICAL];
+
+    const chip = (side, value) => {
+      const on = filter.role?.side === side && filter.role?.value === value;
+      return `<button type="button" class="rp-chip${on ? ' active' : ''}" data-role-side="${side}" data-role-value="${escapeHtml(
+        value
+      )}">${escapeHtml(value)}</button>`;
+    };
+
+    const label = mode === 'position' ? 'Position' : 'Role';
+    return `
+      <div class="st-filter-group">
+        <span class="st-filter-label">${label} (T)</span>
+        <div class="rp-chips st-role-chips">${tOpts.map((v) => chip('T', v)).join('')}</div>
+      </div>
+      <div class="st-filter-group">
+        <span class="st-filter-label">${label} (CT)</span>
+        <div class="rp-chips st-role-chips">${ctOpts.map((v) => chip('CT', v)).join('')}</div>
+      </div>`;
+  }
+
   function renderFilters() {
     const sideBtn = (value, label) =>
       `<button type="button" class="rp-chip${
@@ -110,6 +173,7 @@ export function createStatsPanel({ escapeHtml }) {
         <span class="st-filter-label">Side</span>
         <div class="rp-chips">${sideBtn('T', 'T')}${sideBtn('CT', 'CT')}</div>
       </div>
+      ${roleFilterHtml()}
       <div class="st-filter-group">
         <span class="st-filter-label">${tab === 'teams' ? 'Team buy' : 'Own buy'}</span>
         ${econSelect('econ', filter.econ)}
@@ -124,6 +188,15 @@ export function createStatsPanel({ escapeHtml }) {
   }
 
   filtersEl.addEventListener('click', (e) => {
+    const roleBtn = e.target.closest('[data-role-side]');
+    if (roleBtn) {
+      const side = roleBtn.dataset.roleSide === 'CT' ? 'CT' : 'T';
+      const value = roleBtn.dataset.roleValue || '';
+      if (filter.role?.side === side && filter.role?.value === value) filter.role = null;
+      else filter.role = { side, value };
+      render();
+      return;
+    }
     const side = e.target.closest('[data-side]');
     if (side) {
       filter.side = filter.side === side.dataset.side ? '' : side.dataset.side;
@@ -137,6 +210,7 @@ export function createStatsPanel({ escapeHtml }) {
       filter.oppEcon = null;
       filter.hasAwp = false;
       filter.oppHasAwp = false;
+      filter.role = null;
       render();
     }
   });
@@ -153,6 +227,7 @@ export function createStatsPanel({ escapeHtml }) {
     if (!sel) return;
     if (sel.dataset.filter === 'maps') {
       filter.maps = sel.value ? [sel.value] : [];
+      filter.role = null;
       render();
       return;
     }
@@ -183,25 +258,35 @@ export function createStatsPanel({ escapeHtml }) {
 
   // ---- render -------------------------------------------------------------
 
+  function enrichedPlayers(rows, players, active) {
+    const data = aggregatePlayers(rows, players, active);
+    const withRoles = attachPlayerRoles(data, payload, active);
+    if (!filter.role) return withRoles;
+    return withRoles.filter((p) => playerMatchesRoleFilter(p, filter.role));
+  }
+
   function render() {
     if (!payload) return;
     renderFilters();
     const { players, demos } = indexMaps(payload);
     const rows = allRows(payload);
     const active = { ...filter, files: scope.files || null };
+    const mode = roleMode();
+    const columns = mode ? playerColumnsWithRoles(mode) : PLAYER_COLUMNS;
 
     if (tab === 'players') {
-      const data = aggregatePlayers(rows, players, active);
+      const data = enrichedPlayers(rows, players, active);
       const matchDemo = singleMatchDemo(payload, scope);
       if (matchDemo) {
         bodyEl.innerHTML = matchBoardsHtml(data, matchDemo, {
           escapeHtml,
           sortKey: sort.players.key,
-          sortDir: sort.players.dir
+          sortDir: sort.players.dir,
+          columns
         });
       } else {
         bodyEl.innerHTML = statsTableHtml(data, {
-          columns: PLAYER_COLUMNS,
+          columns,
           escapeHtml,
           sortKey: sort.players.key,
           sortDir: sort.players.dir
@@ -222,8 +307,6 @@ export function createStatsPanel({ escapeHtml }) {
   function singleMatchDemo(res, sc) {
     const list = res?.demos || [];
     if (list.length !== 1) return null;
-    // Whole-library / multi-demo views stay as one table; only a single-demo
-    // scope (match row stats, or filters that leave one demo) splits.
     if (sc?.demos?.length === 1) return list[0];
     if (!sc?.demos?.length && !sc?.files?.length && list.length === 1) return list[0];
     return null;
@@ -231,12 +314,13 @@ export function createStatsPanel({ escapeHtml }) {
 
   function matchBoardsHtml(playerRows, demo, opts) {
     const teamOf = new Map((demo.players || []).map((p) => [p.id, p.team]));
+    const columns = opts.columns || PLAYER_COLUMNS;
     const board = (team, name) => {
       const list = playerRows.filter((p) => teamOf.get(p.id) === team);
       return `<div class="st-board">
         <h4 class="st-board-name team${team}">${escapeHtml(name || `Team ${team}`)}</h4>
         ${statsTableHtml(list, {
-          columns: PLAYER_COLUMNS,
+          columns,
           escapeHtml,
           sortKey: opts.sortKey,
           sortDir: opts.sortDir
@@ -261,6 +345,9 @@ export function createStatsPanel({ escapeHtml }) {
     filter.side = '';
     filter.econ = null;
     filter.oppEcon = null;
+    filter.hasAwp = false;
+    filter.oppHasAwp = false;
+    filter.role = null;
     try {
       const res = await fetchStats(next.demos || null);
       if (token !== loadToken) return;

@@ -7,7 +7,7 @@
 // same code against the index it already holds, so both agree on results.
 // ---------------------------------------------------------------------------
 
-import { buyBucket, econHasAwp, parseRoundId } from './roundId.js';
+import { buyBucket, econHasAwp, isEqualBuyRound, parseRoundId } from './roundId.js';
 
 /**
  * @typedef {object} RoundQuery
@@ -24,6 +24,7 @@ import { buyBucket, econHasAwp, parseRoundId } from './roundId.js';
  * @property {number} [econB]         other side of an unordered economy pair
  * @property {boolean} [hasAwpA]      econA side must have had an AWP (digit 5)
  * @property {boolean} [hasAwpB]      econB side must have had an AWP (digit 5)
+ * @property {boolean} [equalBuy]     pistol/half/full vs same (AWP ignored)
  * @property {number[]} [teamEconomies] econ buckets for `teamEconomyOf` only
  * @property {string} [teamEconomyOf] team id the `teamEconomies` filter applies to
  * @property {number} [roundMin=1]
@@ -147,6 +148,8 @@ export function matchesQuery(meta, query = {}) {
   ) {
     return false;
   }
+
+  if (query.equalBuy && !isEqualBuyRound(meta.econ1, meta.econ2)) return false;
 
   // Economy of one specific team, rather than "either side".
   if (query.teamEconomyOf && query.teamEconomies?.length) {

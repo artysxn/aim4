@@ -195,7 +195,7 @@ function syncColorModeUi() {
   });
 }
 
-function pushCreateUndo() {
+function pushUndo() {
   undoStack.push(cloneNetworkState());
   if (undoStack.length > UNDO_MAX) undoStack.shift();
 }
@@ -221,7 +221,7 @@ function pruneSelection() {
   if (preferAreaId && !aliveAreas.has(preferAreaId)) preferAreaId = null;
 }
 
-function undoCreate() {
+function undoLast() {
   if (!undoStack.length) return;
   const prev = undoStack.pop();
   network.zones = prev.zones || [];
@@ -233,7 +233,7 @@ function undoCreate() {
   markDirty(snapshotOf(network) !== savedSnapshot);
   renderAll();
   draw();
-  setStatus('Undid position');
+  setStatus('Undid');
 }
 
 function setStatus(msg, kind = '') {
@@ -725,7 +725,7 @@ async function loadMap(code) {
 
 function commitRect(worldRect, name) {
   if (worldRect.w < 8 || worldRect.h < 8) return;
-  pushCreateUndo();
+  pushUndo();
   const label = String(name || '').trim() || 'Position';
   const same = network.zones.find(
     (z) => z.name.trim().toLowerCase() === label.toLowerCase()
@@ -742,7 +742,7 @@ function commitRect(worldRect, name) {
 }
 
 function commitRectAvoiding(worldRect, name, hits) {
-  pushCreateUndo();
+  pushUndo();
   let pieces = [{ ...worldRect, type: 'rect' }];
   for (const { zone } of hits) {
     for (const p of zone.pieces || []) {
@@ -926,6 +926,7 @@ el.list?.addEventListener('click', (e) => {
   const act = e.target.closest('[data-act]')?.dataset.act;
   if (act === 'color') return;
   if (act === 'del') {
+    pushUndo();
     deleteZone(network, id);
     selectedIds.delete(id);
     markDirty(true);
@@ -1051,6 +1052,7 @@ el.sectionsList?.addEventListener('click', (e) => {
   const act = e.target.closest('[data-sec-act]')?.dataset.secAct;
   if (act === 'color') return;
   if (act === 'del') {
+    pushUndo();
     deleteSection(network, sectionId);
     selectedSectionIds.delete(sectionId);
     if (preferSectionId === sectionId) preferSectionId = null;
@@ -1151,6 +1153,7 @@ el.areasList?.addEventListener('click', (e) => {
   const act = e.target.closest('[data-area-act]')?.dataset.areaAct;
   if (act === 'color') return;
   if (act === 'del') {
+    pushUndo();
     deleteArea(network, areaId);
     selectedAreaIds.delete(areaId);
     if (preferAreaId === areaId) preferAreaId = null;
@@ -1457,6 +1460,7 @@ function applyCanvasDrop(payload) {
     return true;
   }
   if (payload.kind === 'position' && payload.zoneIds?.length) {
+    pushUndo();
     for (const id of payload.zoneIds) {
       deleteZone(network, id);
       selectedIds.delete(id);
@@ -1468,6 +1472,7 @@ function applyCanvasDrop(payload) {
     return true;
   }
   if (payload.kind === 'section' && payload.sectionIds?.length) {
+    pushUndo();
     for (const id of payload.sectionIds) {
       deleteSection(network, id);
       selectedSectionIds.delete(id);
@@ -1479,6 +1484,7 @@ function applyCanvasDrop(payload) {
     return true;
   }
   if (payload.kind === 'area' && payload.areaIds?.length) {
+    pushUndo();
     for (const id of payload.areaIds) {
       deleteArea(network, id);
       selectedAreaIds.delete(id);
@@ -1675,7 +1681,7 @@ window.addEventListener('keydown', (e) => {
   if (!(e.ctrlKey || e.metaKey) || String(e.key).toLowerCase() !== 'z') return;
   if (e.target?.matches?.('input, textarea, select')) return;
   e.preventDefault();
-  undoCreate();
+  undoLast();
 });
 
 window.addEventListener('resize', resize);

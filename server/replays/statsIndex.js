@@ -2,24 +2,28 @@
 // replays/statsIndex.js
 // The stats database.
 //
-// Round files are the source of truth but they are far too heavy to read on
-// every visit to the stats page: a library is hundreds of files holding every
-// kill, shot and grenade of every round. So each demo is boiled down ONCE into
-// a compact index — ten numbers per player per round plus a few round facts —
-// and every question after that is answered from those numbers.
+// Round files (.json + .bin ticks) are the source of truth. Each demo is boiled
+// down once into a compact index — counters per player per round, plus optional
+// zone-presence samples for role assignment. That uses already-parsed round
+// files only; demos are never re-parsed for stats or positions.
 //
 //   server/data/replays/<user>/stats/<demoId>.json
 //
-// The file is a few kilobytes per demo. It is also held in memory keyed by the
-// demo's parse time, so repeat visits touch no disk at all, and a re-parse or
-// re-import invalidates it by changing that key.
+// After a successful parse we build the index immediately. Older demos that
+// already have a stats index but no position analysis are enriched the next
+// time they are loaded (ticks only — still no re-parse).
 // ---------------------------------------------------------------------------
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { P, PLAYER_SLOTS } from '../../src/replays/shared/statsMath.js';
+import { presenceFromTicks } from '../../src/replays/roles/presenceFromTicks.js';
+import { isZoneNetworkReady } from '../../src/replays/zones/zoneModel.js';
 
-export const STATS_VERSION = 1;
+export const STATS_VERSION = 2;
+
+/** ~1 Hz occupancy samples (demo ticks between samples). */
+const TICK_STRIDE = 64;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -30,8 +34,8 @@ const memory = new Map();
 const statsDir = (userDir) => path.join(userDir, 'stats');
 
 /**
- * Everything that makes an index stale, in one string: a re-parse, a re-import
- * or a team rename all move it.
+ * Base index fingerprint (parse / rename). Zone edits do not invalidate kill
+ * stats — they only trigger a positions re-sample via `pz`.
  */
 function versionKey(record) {
   return [
@@ -44,13 +48,6 @@ function versionKey(record) {
   ].join('|');
 }
 
-/**
- * Which rounds a player's death was avenged in. Returns the set of player ids
- * whose death that round was traded.
- *
- * ropz dies to s1mple, then ZywOo kills s1mple inside the window: ropz's death
- * was traded, and it counts toward his KAST even though he did nothing else.
- */
 function tradedVictims(kills, tickRate) {
   const window = TRADE_SECONDS * (tickRate || 64);
   const traded = new Set();
@@ -73,12 +70,6 @@ const isGun = (weapon) => {
   return Boolean(w) && !NOT_A_GUN.test(w);
 };
 
-/**
- * The first genuine duel of the round: the earliest kill where one side killed
- * the other. A teamkill, a bomb death or a fall is the first death of some
- * rounds and is nobody's opening kill, so those are skipped rather than handed
- * to whichever team happened to own the body.
- */
 function openingDuel(ordered, teamOf) {
   for (const k of ordered) {
     const at = teamOf.get(k.attacker);
@@ -90,15 +81,13 @@ function openingDuel(ordered, teamOf) {
 }
 
 /** One round of a demo -> one compact row. */
-function rowFromRound(meta, demoId, file, playerIds, teamOf) {
+function rowFromRound(meta, demoId, file, playerIds, teamOf, presence = null) {
   const kills = meta.events?.kills || [];
   const ordered = [...kills].sort((a, b) => (a.tick || 0) - (b.tick || 0));
   const opening = openingDuel(ordered, teamOf);
   const traded = tradedVictims(ordered, meta.tickRate);
   const victims = new Set(ordered.map((k) => k.victim).filter(Boolean));
 
-  // Shots are only in the round file for demos parsed before hit counts
-  // existed; when the parser supplied them, its numbers win.
   const shotsByPlayer = new Map();
   for (const s of meta.events?.shots || []) {
     if (!s.player || !isGun(s.weapon)) continue;
@@ -119,8 +108,6 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf) {
     line[P.DEATHS] = deaths0;
     line[P.ASSISTS] = assists0;
     line[P.DAMAGE] = Math.round(st.damage || 0);
-    // Accuracy is all-or-nothing per round: a round with no hit counts
-    // contributes nothing to it rather than reading as 0% accuracy.
     if (st.hits !== undefined) {
       line[P.SHOTS] = st.gunShots ?? shotsByPlayer.get(id) ?? 0;
       line[P.HITS] = st.hits || 0;
@@ -132,7 +119,7 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf) {
     p[id] = line;
   }
 
-  return {
+  const row = {
     f: file,
     d: demoId,
     m: meta.map || '',
@@ -146,41 +133,173 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf) {
     od: opening.od,
     p
   };
+  applyPresence(row, presence);
+  return row;
+}
+
+function applyPresence(row, presence) {
+  if (!presence?.z || !Object.keys(presence.z).length) return;
+  row.z = presence.z;
+  if (presence.ctTB && Object.keys(presence.ctTB).length) row.ctTB = presence.ctTB;
+  else delete row.ctTB;
+}
+
+async function loadZoneNetwork(io, mapCode) {
+  if (!mapCode || typeof io.getZones !== 'function') return null;
+  try {
+    const network = await io.getZones(mapCode);
+    if (!isZoneNetworkReady(network)) return null;
+    return network;
+  } catch {
+    return null;
+  }
+}
+
+/** True when this map has a network and the index is missing / stale positions. */
+export function needsPositionAnalysis(entry, network) {
+  if (!isZoneNetworkReady(network)) return false;
+  const want = Number(network.updatedAt) || 1;
+  if (Number(entry?.pz) === want && entry?.positions === true) {
+    // Sanity: at least one round should carry zone samples.
+    const hasZ = (entry.rounds || []).some((r) => r.z && Object.keys(r.z).length);
+    return !hasZ && (entry.rounds || []).length > 0;
+  }
+  return true;
 }
 
 /**
- * Read a demo's rounds and boil them down. This is the only place round files
- * are opened for stats, and it happens once per demo per parse.
+ * Sample ticks onto an existing index (no re-parse, no kill-stat rebuild).
  */
-async function buildIndex(readRoundMeta, user, record) {
+async function enrichPositions(io, user, record, entry, network) {
+  if (!entry?.rounds?.length || !network || typeof io.readRoundTicks !== 'function') {
+    entry.positions = false;
+    entry.pz = 0;
+    return entry;
+  }
+
+  const rosterFallback = (entry.players || []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    team: p.team,
+    slot: p.slot
+  }));
+
+  for (const row of entry.rounds) {
+    let meta = null;
+    try {
+      meta = await io.readRoundMeta(user, row.f);
+    } catch {
+      meta = null;
+    }
+    if (!meta) continue;
+
+    const roster =
+      meta.players?.length
+        ? meta.players.map((p) => ({
+            id: p.id,
+            name: p.name,
+            team: p.team,
+            slot: p.slot
+          }))
+        : rosterFallback;
+
+    try {
+      const buf = await io.readRoundTicks(user, row.f, TICK_STRIDE);
+      const presence = buf ? presenceFromTicks(buf, meta, network, roster) : null;
+      delete row.z;
+      delete row.ctTB;
+      applyPresence(row, presence);
+    } catch {
+      delete row.z;
+      delete row.ctTB;
+    }
+  }
+
+  entry.positions = (entry.rounds || []).some((r) => r.z && Object.keys(r.z).length);
+  entry.pz = Number(network.updatedAt) || 1;
+  return entry;
+}
+
+async function persistEntry(io, user, key, entry) {
+  memory.set(entry.id, { key, entry });
+  try {
+    const dir = statsDir(io.userDir(user));
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(path.join(dir, `${entry.id}.json`), JSON.stringify(entry));
+  } catch {
+    /* in-memory copy still serves this process */
+  }
+}
+
+/**
+ * Build kill/economy stats from round JSON; sample positions when a zone
+ * network exists. Uses parsed files only.
+ *
+ * @param {object} io  { readRoundMeta, readRoundTicks?, getZones? }
+ */
+async function buildIndex(io, user, record) {
   const files = (record.rounds || []).map((r) => r.file).filter(Boolean);
   const rounds = [];
-  let players = (record.players || []).map((p) => ({ id: p.id, name: p.name, team: p.team }));
+  let players = (record.players || []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    team: p.team,
+    slot: p.slot
+  }));
+
+  const mapCode = String(record.map || rounds[0]?.m || '').toUpperCase();
+  const network = await loadZoneNetwork(io, mapCode);
 
   for (const file of files) {
     let meta = null;
     try {
-      meta = await readRoundMeta(user, file);
+      meta = await io.readRoundMeta(user, file);
     } catch {
       meta = null;
     }
     if (!meta) continue;
     if (!players.length && meta.players?.length) {
-      players = meta.players.map((p) => ({ id: p.id, name: p.name, team: p.team }));
+      players = meta.players.map((p) => ({
+        id: p.id,
+        name: p.name,
+        team: p.team,
+        slot: p.slot
+      }));
     }
+    const roster =
+      meta.players?.length
+        ? meta.players.map((p) => ({
+            id: p.id,
+            name: p.name,
+            team: p.team,
+            slot: p.slot
+          }))
+        : players;
+
+    let presence = null;
+    if (network && typeof io.readRoundTicks === 'function') {
+      try {
+        const buf = await io.readRoundTicks(user, file, TICK_STRIDE);
+        if (buf) presence = presenceFromTicks(buf, meta, network, roster);
+      } catch {
+        presence = null;
+      }
+    }
+
     rounds.push(
       rowFromRound(
         meta,
         record.id,
         file,
-        players.map((p) => p.id),
-        new Map(players.map((p) => [p.id, p.team]))
+        roster.map((p) => p.id),
+        new Map(roster.map((p) => [p.id, p.team])),
+        presence
       )
     );
   }
 
   const score = record.score || { team1: 0, team2: 0 };
-  return {
+  const entry = {
     id: record.id,
     v: STATS_VERSION,
     key: versionKey(record),
@@ -193,42 +312,85 @@ async function buildIndex(readRoundMeta, user, record) {
     winner: score.team1 === score.team2 ? 0 : score.team1 > score.team2 ? 1 : 2,
     uploadedAt: record.uploadedAt || record.parsedAt || 0,
     players,
-    rounds
+    rounds,
+    positions: false,
+    pz: 0
   };
+
+  if (network) {
+    entry.positions = rounds.some((r) => r.z && Object.keys(r.z).length);
+    entry.pz = Number(network.updatedAt) || 1;
+  }
+
+  return entry;
+}
+
+async function loadStoredEntry(io, user, demoId) {
+  const cached = memory.get(demoId);
+  if (cached?.entry) return cached.entry;
+  const file = path.join(statsDir(io.userDir(user)), `${demoId}.json`);
+  try {
+    return JSON.parse(await fsp.readFile(file, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 /**
- * The index for one demo, from memory, then disk, then built from scratch.
+ * Ensure the stats index exists and positions are analyzed when possible.
+ * Never re-parses a demo — only reads round JSON / tick bins already on disk.
  *
- * @param {object} io  { userDir, readRoundMeta }
+ * @param {object} io  { userDir, readRoundMeta, readRoundTicks?, getZones? }
  */
 export async function demoIndex(io, user, record) {
   if (!record || record.status !== 'ready') return null;
+
   const key = versionKey(record);
-  const cached = memory.get(record.id);
-  if (cached && cached.key === key) return cached.entry;
+  const mapCode = String(record.map || '').toUpperCase();
+  const network = await loadZoneNetwork(io, mapCode);
 
-  const dir = statsDir(io.userDir(user));
-  const file = path.join(dir, `${record.id}.json`);
-  try {
-    const onDisk = JSON.parse(await fsp.readFile(file, 'utf8'));
-    if (onDisk.key === key) {
-      memory.set(record.id, { key, entry: onDisk });
-      return onDisk;
-    }
-  } catch {
-    /* not indexed yet, or the file is unreadable; rebuild below */
+  let entry = await loadStoredEntry(io, user, record.id);
+
+  // Full rebuild when missing or parse/rename fingerprint changed.
+  // Legacy keys appended |zoneUpdatedAt after the base fingerprint.
+  const keyOk =
+    entry &&
+    (entry.key === key ||
+      (typeof entry.key === 'string' && entry.key.startsWith(`${key}|`)));
+
+  if (!entry || !keyOk) {
+    entry = await buildIndex(io, user, record);
+    await persistEntry(io, user, key, entry);
+    return entry;
   }
 
-  const entry = await buildIndex(io.readRoundMeta, user, record);
+  // Normalize key on upgrade from zone-suffixed fingerprints.
+  if (entry.key !== key) entry.key = key;
+
+  if (needsPositionAnalysis(entry, network)) {
+    await enrichPositions(io, user, record, entry, network);
+    await persistEntry(io, user, key, entry);
+    return entry;
+  }
+
+  // Map has no zone network yet — mark so we don't keep trying.
+  if (!network && entry.positions !== false) {
+    entry.positions = false;
+    entry.pz = 0;
+  }
+
   memory.set(record.id, { key, entry });
-  try {
-    await fsp.mkdir(dir, { recursive: true });
-    await fsp.writeFile(file, JSON.stringify(entry));
-  } catch {
-    /* cache write failed; the in-memory copy still serves this process */
-  }
   return entry;
+}
+
+/**
+ * Fire-and-forget after a successful parse (or import). Safe to call often.
+ */
+export function scheduleStatsIndex(io, user, record) {
+  if (!record || record.status !== 'ready') return;
+  demoIndex(io, user, record).catch((err) => {
+    console.warn(`[stats] index failed for ${record.id}:`, err?.message || err);
+  });
 }
 
 /**

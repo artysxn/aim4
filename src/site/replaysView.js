@@ -104,7 +104,9 @@ export function initReplaysView({ escapeHtml }) {
     /** @type {number|null} */
     econB: null,
     hasAwpA: false,
-    hasAwpB: false
+    hasAwpB: false,
+    /** Pistol/half/full vs same buy (zone-network equal-economy filter). */
+    equalBuy: false
   };
 
   function setStatus(msg, isError = false) {
@@ -734,6 +736,10 @@ export function initReplaysView({ escapeHtml }) {
             ${hasAwpCheckHtml('rp-awp-b', filters.hasAwpB)}
           </div>
         </div>
+        <label class="rp-awp-toggle${filters.equalBuy ? ' active' : ''}" title="Pistol vs pistol, half vs half, or full vs full (AWP ignored)">
+          <input type="checkbox" id="rp-equal-buy" ${filters.equalBuy ? 'checked' : ''} aria-label="Equal buy" />
+          <span>Equal buy</span>
+        </label>
       </div>
       ${
         teamClusters.length
@@ -793,6 +799,12 @@ export function initReplaysView({ escapeHtml }) {
     bindAwp('rp-awp-a', 'hasAwpA');
     bindAwp('rp-awp-b', 'hasAwpB');
 
+    filtersEl.querySelector('#rp-equal-buy')?.addEventListener('change', (e) => {
+      filters.equalBuy = Boolean(e.target.checked);
+      e.target.closest('.rp-awp-toggle')?.classList.toggle('active', e.target.checked);
+      runQuery();
+    });
+
     filtersEl.querySelector('#rp-won-by')?.addEventListener('change', (e) => {
       const v = e.target.value;
       filters.wonByMode = v === 'selected' || v === 'opponent' ? v : '';
@@ -820,6 +832,7 @@ export function initReplaysView({ escapeHtml }) {
       filters.econB = null;
       filters.hasAwpA = false;
       filters.hasAwpB = false;
+      filters.equalBuy = false;
       teamSearch = '';
       playerSearch = '';
       mapMenuOpen = false;
@@ -929,7 +942,8 @@ export function initReplaysView({ escapeHtml }) {
       econA: Number.isFinite(filters.econA) ? filters.econA : undefined,
       econB: Number.isFinite(filters.econB) ? filters.econB : undefined,
       hasAwpA: filters.hasAwpA || undefined,
-      hasAwpB: filters.hasAwpB || undefined
+      hasAwpB: filters.hasAwpB || undefined,
+      equalBuy: filters.equalBuy || undefined
     };
   }
 
@@ -942,7 +956,8 @@ export function initReplaysView({ escapeHtml }) {
         Number.isFinite(filters.econA) ||
         Number.isFinite(filters.econB) ||
         filters.hasAwpA ||
-        filters.hasAwpB
+        filters.hasAwpB ||
+        filters.equalBuy
     );
   }
 
