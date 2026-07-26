@@ -47,13 +47,14 @@ const sampleCache = new WeakMap();
 const losCache = new Map();
 
 /**
- * First tick each side entered each position (sampled once per second).
+ * @typedef {{ tick: number, side: 'T'|'CT'|'both', reason: string, playerId?: string, playerName?: string, detail?: string }} ZoneClaimEvent
+ */
+
+/**
+ * First tick each side entered each position (sampled once per second), plus
+ * a claim-event log used by the Shift-hover explain tip.
  *
- * @param {object} args
- * @param {object} args.meta
- * @param {{ sampleAll: Function }} args.track
- * @param {object} args.network
- * @returns {{ firstT: Map<string, number>, firstCT: Map<string, number> } | null}
+ * @returns {{ firstT: Map<string, number>, firstCT: Map<string, number>, events: Map<string, ZoneClaimEvent[]> } | null}
  */
 export function buildZonePresence({ meta, track, network }) {
   if (!meta || !track || !network?.zones?.length) return null;
@@ -61,12 +62,20 @@ export function buildZonePresence({ meta, track, network }) {
   const to = Math.max(from, meta.endTick ?? from);
   const tickRate = meta.tickRate || 64;
   const players = meta.players || [];
+  const byId = new Map(players.map((p) => [p.id, p]));
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
   /** @type {Map<string, number>} */
   const firstT = new Map();
   /** @type {Map<string, number>} */
   const firstCT = new Map();
+  /** @type {Map<string, ZoneClaimEvent[]>} */
+  const events = new Map();
   const scratch = [];
+
+  const pushEvent = (posId, ev) => {
+    if (!events.has(posId)) events.set(posId, []);
+    events.get(posId).push(ev);
+  };
 
   for (let tick = from; tick <= to; tick += tickRate) {
     track.sampleAll(tick, scratch);
@@ -80,10 +89,35 @@ export function buildZonePresence({ meta, track, network }) {
       for (const z of hits) {
         if (!z?.id || map.has(z.id)) continue;
         map.set(z.id, tick);
+        pushEvent(z.id, {
+          tick,
+          side,
+          reason: 'visit',
+          playerId: p.id,
+          playerName: byId.get(p.id)?.name || p.id,
+          detail: 'Entered on foot'
+        });
       }
     }
   }
-  return { firstT, firstCT };
+  return { firstT, firstCT, events };
+}
+
+/** Record a claim on the presence event log (one entry per reason/side/player). */
+export function recordClaim(presence, posId, ev) {
+  if (!presence || !posId || !ev) return;
+  if (!presence.events) presence.events = new Map();
+  const list = presence.events.get(posId) || [];
+  const dup = list.some(
+    (e) =>
+      e.reason === ev.reason &&
+      e.side === ev.side &&
+      (ev.playerId ? e.playerId === ev.playerId : !e.playerId)
+  );
+  if (dup) return;
+  list.push(ev);
+  list.sort((a, b) => a.tick - b.tick);
+  presence.events.set(posId, list);
 }
 
 /**
@@ -359,7 +393,12 @@ function sightCover(player, pos, los) {
  * position is confirmed seen (persists like a foot visit) or when an enemy is
  * seen inside (both sides claim → contested).
  *
- * @returns {{ tSight: Set<string>, ctSight: Set<string>, contestedSight: Set<string> }}
+ * @returns {{
+ *   tSight: Set<string>,
+ *   ctSight: Set<string>,
+ *   contestedSight: Set<string>,
+ *   sightNow: Map<string, Array<{side:string, playerId:string, playerName:string, cover:number, enemy:boolean}>>
+ * }}
  */
 function applyVisionClaims({
   meta,
@@ -375,11 +414,13 @@ function applyVisionClaims({
   const tSight = new Set();
   const ctSight = new Set();
   const contestedSight = new Set();
+  /** @type {Map<string, Array<{side:string, playerId:string, playerName:string, cover:number, enemy:boolean}>>} */
+  const sightNow = new Map();
   if (!meta || !network?.zones?.length || !radarImage) {
-    return { tSight, ctSight, contestedSight };
+    return { tSight, ctSight, contestedSight, sightNow };
   }
   const los = getRadarLos(mapCode, radarImage);
-  if (!los) return { tSight, ctSight, contestedSight };
+  if (!los) return { tSight, ctSight, contestedSight, sightNow };
 
   const smoked = smokedPositions(grenades, tick, meta.tickRate || 64, network);
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
@@ -392,45 +433,70 @@ function applyVisionClaims({
     if (!s?.alive || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
     if (!Number.isFinite(s.yaw)) continue;
     const viewer = { x: s.x, y: s.y, yaw: s.yaw };
+    const playerName = p.name || p.id;
 
     for (const pos of positions) {
       if (smoked.has(pos.id)) continue;
-      if (sightCover(viewer, pos, los) < SIGHT_COVER) continue;
+      const cover = sightCover(viewer, pos, los);
+      if (cover < SIGHT_COVER) continue;
 
       const hasT = active.t.has(pos.id);
       const hasCt = active.ct.has(pos.id);
       const enemyInside = side === 'T' ? hasCt : hasT;
       const allyInside = side === 'T' ? hasT : hasCt;
 
+      if (!sightNow.has(pos.id)) sightNow.set(pos.id, []);
+      sightNow.get(pos.id).push({
+        side,
+        playerId: p.id,
+        playerName,
+        cover,
+        enemy: enemyInside
+      });
+
       if (enemyInside) {
         contestedSight.add(pos.id);
         if (presence) {
           if (!presence.firstT.has(pos.id)) presence.firstT.set(pos.id, tick);
           if (!presence.firstCT.has(pos.id)) presence.firstCT.set(pos.id, tick);
+          recordClaim(presence, pos.id, {
+            tick,
+            side: 'both',
+            reason: 'sight-enemy',
+            playerId: p.id,
+            playerName,
+            detail: `Saw enemy inside (${Math.round(cover * 100)}% cover)`
+          });
         }
         continue;
       }
-      // Standing in it (or ally is) is already handled by occupancy / visit.
       if (allyInside) continue;
-      // Empty and clearly seen → this side controls it.
       if (side === 'T') tSight.add(pos.id);
       else ctSight.add(pos.id);
       if (presence) {
         const map = side === 'T' ? presence.firstT : presence.firstCT;
-        if (!map.has(pos.id)) map.set(pos.id, tick);
+        const first = !map.has(pos.id);
+        if (first) map.set(pos.id, tick);
+        recordClaim(presence, pos.id, {
+          tick,
+          side,
+          reason: 'sight',
+          playerId: p.id,
+          playerName,
+          detail: `Clear sight (${Math.round(cover * 100)}% cover)`
+        });
       }
     }
   }
 
-  // Seen by both sides empty, or contested by sight of enemies.
-  for (const id of tSight) {
+  for (const id of [...tSight]) {
     if (ctSight.has(id)) {
       contestedSight.add(id);
       tSight.delete(id);
       ctSight.delete(id);
     }
   }
-  return { tSight, ctSight, contestedSight };
+  return { tSight, ctSight, contestedSight, sightNow };
 }
 
 function sideOfPaint(key) {
@@ -445,9 +511,14 @@ function sideOfPaint(key) {
  * Neutrals whose every adjacent border is either still-neutral or owned by
  * exactly one side become that side's controlled. Iterates to a fixpoint so
  * neutral chains fill in (as in the "pocket" next to two CT positions).
+ *
+ * @returns {Map<string, { side: 'T'|'CT', neighborNames: string[] }>}
  */
-function applySurroundControl(paint, network) {
+function applySurroundControl(paint, network, presence, tick) {
   const adj = buildPositionAdjacency(network);
+  const byId = new Map((network.zones || []).map((z) => [z.id, z]));
+  /** @type {Map<string, { side: 'T'|'CT', neighborNames: string[] }>} */
+  const assigned = new Map();
   let changed = true;
   let guard = 0;
   while (changed && guard++ < 64) {
@@ -460,30 +531,91 @@ function applySurroundControl(paint, network) {
       let t = false;
       let ct = false;
       let both = false;
+      const neighborNames = [];
       for (const nid of neigh) {
         const s = sideOfPaint(paint[nid] || 'empty');
-        if (s == null) continue; // neutral neighbor — allowed, pending
-        if (s === 'both') both = true;
-        else if (s === 'T') t = true;
-        else if (s === 'CT') ct = true;
+        const nName = byId.get(nid)?.name || nid;
+        if (s == null) {
+          neighborNames.push(`${nName} (neutral)`);
+          continue;
+        }
+        if (s === 'both') {
+          both = true;
+          neighborNames.push(`${nName} (contested)`);
+        } else if (s === 'T') {
+          t = true;
+          neighborNames.push(`${nName} (T)`);
+        } else if (s === 'CT') {
+          ct = true;
+          neighborNames.push(`${nName} (CT)`);
+        }
       }
       if (both || (t && ct)) continue;
       if (t && !ct) {
         paint[pos.id] = 't-control';
+        assigned.set(pos.id, { side: 'T', neighborNames });
+        recordClaim(presence, pos.id, {
+          tick,
+          side: 'T',
+          reason: 'surround',
+          detail: `Surrounded by ${neighborNames.join(', ')}`
+        });
+        if (presence && !presence.firstT.has(pos.id)) presence.firstT.set(pos.id, tick);
         changed = true;
       } else if (ct && !t) {
         paint[pos.id] = 'ct-control';
+        assigned.set(pos.id, { side: 'CT', neighborNames });
+        recordClaim(presence, pos.id, {
+          tick,
+          side: 'CT',
+          reason: 'surround',
+          detail: `Surrounded by ${neighborNames.join(', ')}`
+        });
+        if (presence && !presence.firstCT.has(pos.id)) presence.firstCT.set(pos.id, tick);
         changed = true;
       }
     }
+  }
+  return assigned;
+}
+
+function occupantsInPosition(posId, meta, states, network, side) {
+  const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
+  const names = [];
+  for (const p of meta.players || []) {
+    if (teamSides[p.team] !== side) continue;
+    const s = states?.[p.slot];
+    if (!s?.alive || !Number.isFinite(s.x)) continue;
+    if (positionsAtPoint(s.x, s.y, network).some((z) => z.id === posId)) {
+      names.push(p.name || p.id);
+    }
+  }
+  return names;
+}
+
+function paintLabel(key) {
+  switch (key) {
+    case 't-active':
+      return 'T active';
+    case 't-control':
+      return 'T controlled';
+    case 'ct-active':
+      return 'CT active';
+    case 'ct-control':
+      return 'CT controlled';
+    case 'contested':
+      return 'Contested';
+    case 'contested-active':
+      return 'Contested (occupied)';
+    default:
+      return 'Neutral';
   }
 }
 
 /**
  * Full paint map for the playhead: foot presence + vision + surround.
  *
- * @param {object} args
- * @returns {Record<string, ZonePaint>}
+ * @returns {{ paint: Record<string, ZonePaint>, info: Record<string, object> }}
  */
 export function computeZonePaint({
   meta,
@@ -497,10 +629,12 @@ export function computeZonePaint({
 }) {
   /** @type {Record<string, ZonePaint>} */
   const paint = {};
-  if (!network?.zones?.length) return paint;
+  /** @type {Record<string, object>} */
+  const info = {};
+  if (!network?.zones?.length) return { paint, info };
 
   const active = activePositionsAt({ meta, states, network });
-  const { tSight, ctSight, contestedSight } = applyVisionClaims({
+  const { tSight, ctSight, contestedSight, sightNow } = applyVisionClaims({
     meta,
     states,
     network,
@@ -516,7 +650,6 @@ export function computeZonePaint({
     if (!pos?.id || pos.hidden) continue;
     let tVis = (presence?.firstT.get(pos.id) ?? Infinity) <= tick;
     let ctVis = (presence?.firstCT.get(pos.id) ?? Infinity) <= tick;
-    // Sight this frame still counts even before presence has been built.
     if (tSight.has(pos.id) || contestedSight.has(pos.id)) tVis = true;
     if (ctSight.has(pos.id) || contestedSight.has(pos.id)) ctVis = true;
     const tAct = active.t.has(pos.id);
@@ -527,8 +660,75 @@ export function computeZonePaint({
     else paint[pos.id] = 'empty';
   }
 
-  applySurroundControl(paint, network);
-  return paint;
+  const surroundAssigned = applySurroundControl(paint, network, presence, tick);
+
+  for (const pos of network.zones) {
+    if (!pos?.id || pos.hidden) continue;
+    const key = paint[pos.id] || 'empty';
+    const why = [];
+    const tOcc = occupantsInPosition(pos.id, meta, states, network, 'T');
+    const ctOcc = occupantsInPosition(pos.id, meta, states, network, 'CT');
+    if (tOcc.length) {
+      why.push({ kind: 'active', side: 'T', text: `T standing here: ${tOcc.join(', ')}` });
+    }
+    if (ctOcc.length) {
+      why.push({ kind: 'active', side: 'CT', text: `CT standing here: ${ctOcc.join(', ')}` });
+    }
+    for (const s of sightNow.get(pos.id) || []) {
+      why.push({
+        kind: s.enemy ? 'sight-enemy' : 'sight',
+        side: s.side,
+        text: s.enemy
+          ? `${s.playerName} (${s.side}) sees an enemy here (${Math.round(s.cover * 100)}% cover)`
+          : `${s.playerName} (${s.side}) has clear sight (${Math.round(s.cover * 100)}% cover)`
+      });
+    }
+    const sur = surroundAssigned.get(pos.id);
+    if (sur) {
+      why.push({
+        kind: 'surround',
+        side: sur.side,
+        text: `Surrounded fill → ${sur.side}: ${sur.neighborNames.join(', ')}`
+      });
+    } else if (key === 't-control' || key === 'ct-control') {
+      // Already controlled before this surround pass — still note visit times.
+    }
+    const tFirst = presence?.firstT.get(pos.id);
+    const ctFirst = presence?.firstCT.get(pos.id);
+    if (Number.isFinite(tFirst) && tFirst <= tick) {
+      why.push({ kind: 'visit', side: 'T', tick: tFirst, text: 'T claim (feet / sight / surround)' });
+    }
+    if (Number.isFinite(ctFirst) && ctFirst <= tick) {
+      why.push({ kind: 'visit', side: 'CT', tick: ctFirst, text: 'CT claim (feet / sight / surround)' });
+    }
+    if (!why.length && key === 'empty') {
+      why.push({ kind: 'neutral', side: null, text: 'No team has claimed this position yet' });
+    }
+
+    const history = (presence?.events?.get(pos.id) || [])
+      .filter((e) => e.tick <= tick)
+      .map((e) => ({
+        tick: e.tick,
+        side: e.side,
+        reason: e.reason,
+        playerName: e.playerName || '',
+        detail: e.detail || ''
+      }));
+
+    info[pos.id] = {
+      id: pos.id,
+      name: pos.name || pos.id,
+      paint: key,
+      label: paintLabel(key),
+      owner: sideOfPaint(key),
+      why,
+      history,
+      firstT: Number.isFinite(tFirst) && tFirst <= tick ? tFirst : null,
+      firstCT: Number.isFinite(ctFirst) && ctFirst <= tick ? ctFirst : null
+    };
+  }
+
+  return { paint, info };
 }
 
 /**

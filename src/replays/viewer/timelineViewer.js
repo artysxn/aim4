@@ -31,6 +31,8 @@ import {
   computeZonePaint,
   summarizeZoneControl
 } from '../zones/zoneOverlay.js';
+import { positionsAtPoint } from '../zones/pointInZone.js';
+import { radarToWorld } from './mapCalibration.js';
 import helmetSvg from '../../icons/helmet.svg?url';
 import kevlarSvg from '../../icons/kevlar.svg?url';
 import nokevlarSvg from '../../icons/nokevlar.svg?url';
@@ -67,6 +69,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         <div class="rv-killfeed" id="rv-killfeed" aria-live="polite"></div>
         <canvas class="rv-canvas" id="rv-canvas"></canvas>
         <div class="rv-loading" id="rv-loading"></div>
+        <div class="rv-zones-tip" id="rv-zones-tip" hidden></div>
       </div>
       <div class="rv-team-col">
         <aside class="rv-team rv-team-2" data-team="2"></aside>
@@ -786,9 +789,13 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (entry?.isFull) zonePresenceCache.set(file, presence);
   }
 
+  /** Latest explain map from computeZonePaint (for Shift-hover tip). */
+  let zoneInfo = null;
+
   function zoneOverlayForTick(tick) {
     if (!zonesOn || !zoneNetwork?.zones?.length) return null;
-    const paint = computeZonePaint({
+    if (zonePresence && !zonePresence.events) zonePresence.events = new Map();
+    const { paint, info } = computeZonePaint({
       meta: activeMeta,
       states,
       network: zoneNetwork,
@@ -798,6 +805,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       radarImage: renderer.image,
       grenades: activeMeta.events?.grenades || []
     });
+    zoneInfo = info;
     return { network: zoneNetwork, paint };
   }
 
@@ -1077,6 +1085,112 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   }
 
   const radarAt = (e) => renderer.radarFromClient(e.clientX, e.clientY);
+  const zonesTip = el.querySelector('#rv-zones-tip');
+  let zoneHoverShift = false;
+  let zoneHoverClient = null;
+
+  function clockLabelForTick(tick) {
+    if (!activeMeta || !Number.isFinite(tick)) return '—';
+    return clockAt(timingFor(activeMeta), tick).label;
+  }
+
+  function hideZonesTip() {
+    if (zonesTip) zonesTip.hidden = true;
+  }
+
+  function updateZonesTip() {
+    if (!zonesTip) return;
+    if (!zonesOn || !zoneHoverShift || !zoneHoverClient || !zoneInfo || !renderer.mapCode) {
+      hideZonesTip();
+      return;
+    }
+    const rp = renderer.radarFromClient(zoneHoverClient.x, zoneHoverClient.y);
+    const world = radarToWorld(renderer.mapCode, rp.x, rp.y, {});
+    const hits = positionsAtPoint(world.x, world.y, zoneNetwork);
+    const pos = hits[hits.length - 1];
+    if (!pos?.id || !zoneInfo[pos.id]) {
+      hideZonesTip();
+      return;
+    }
+    const ex = zoneInfo[pos.id];
+    const ownerClass =
+      ex.owner === 'T' ? 't' : ex.owner === 'CT' ? 'ct' : ex.owner === 'both' ? 'both' : 'neu';
+    const whyHtml = (ex.why || [])
+      .map((w) => {
+        const side =
+          w.side === 'T' ? 't' : w.side === 'CT' ? 'ct' : w.side === 'both' ? 'both' : '';
+        const when = Number.isFinite(w.tick)
+          ? ` <span class="rv-zones-tip-time">${escapeHtml(clockLabelForTick(w.tick))}</span>`
+          : '';
+        return `<li class="${side}">${escapeHtml(w.text)}${when}</li>`;
+      })
+      .join('');
+    const reasonLabel = (r) =>
+      ({
+        visit: 'entered',
+        sight: 'sight control',
+        'sight-enemy': 'saw enemy',
+        surround: 'surround fill'
+      })[r] || r;
+    const hist = ex.history || [];
+    const histHtml = hist.length
+      ? hist
+          .map((h) => {
+            const side =
+              h.side === 'T' ? 't' : h.side === 'CT' ? 'ct' : h.side === 'both' ? 'both' : '';
+            const who = h.playerName ? ` · ${h.playerName}` : '';
+            const detail = h.detail ? ` — ${h.detail}` : '';
+            return `<li class="${side}"><span class="rv-zones-tip-time">${escapeHtml(
+              clockLabelForTick(h.tick)
+            )}</span> ${escapeHtml(String(h.side).toUpperCase())} · ${escapeHtml(
+              reasonLabel(h.reason)
+            )}${escapeHtml(who)}${escapeHtml(detail)}</li>`;
+          })
+          .join('')
+      : '<li class="neu">No prior claims</li>';
+
+    zonesTip.innerHTML = `
+      <div class="rv-zones-tip-name">${escapeHtml(ex.name)}</div>
+      <div class="rv-zones-tip-status ${ownerClass}">${escapeHtml(ex.label)}</div>
+      <div class="rv-zones-tip-sec">Why now</div>
+      <ul class="rv-zones-tip-list">${whyHtml || '<li class="neu">—</li>'}</ul>
+      <div class="rv-zones-tip-sec">Ownership history</div>
+      <ul class="rv-zones-tip-list hist">${histHtml}</ul>`;
+    zonesTip.hidden = false;
+
+    const mapRect = mapEl.getBoundingClientRect();
+    let left = zoneHoverClient.x - mapRect.left + 14;
+    let top = zoneHoverClient.y - mapRect.top + 14;
+    zonesTip.style.left = `${left}px`;
+    zonesTip.style.top = `${top}px`;
+    const tipRect = zonesTip.getBoundingClientRect();
+    if (tipRect.right > mapRect.right - 8) {
+      left = Math.max(8, zoneHoverClient.x - mapRect.left - tipRect.width - 12);
+      zonesTip.style.left = `${left}px`;
+    }
+    if (tipRect.bottom > mapRect.bottom - 8) {
+      top = Math.max(8, zoneHoverClient.y - mapRect.top - tipRect.height - 12);
+      zonesTip.style.top = `${top}px`;
+    }
+  }
+
+  function onZoneHoverMove(e) {
+    zoneHoverClient = { x: e.clientX, y: e.clientY };
+    if (zoneHoverShift && zonesOn) updateZonesTip();
+  }
+
+  function onZoneHoverLeave() {
+    zoneHoverClient = null;
+    hideZonesTip();
+  }
+
+  function onZoneShiftKey(e) {
+    if (e.key !== 'Shift') return;
+    zoneHoverShift = e.type === 'keydown';
+    mapEl.classList.toggle('zones-explain', zonesOn && zoneHoverShift);
+    if (zoneHoverShift && zonesOn) updateZonesTip();
+    else hideZonesTip();
+  }
 
   function startInk(e) {
     inkPointer = e.pointerId;
@@ -1110,6 +1224,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   });
 
   mapEl.addEventListener('pointermove', (e) => {
+    onZoneHoverMove(e);
     if (inkPointer === e.pointerId) {
       const pt = radarAt(e);
       if (drawing.erasing) drawing.eraseAt(pt, pt.scale);
@@ -1125,6 +1240,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     renderer.panY += dy;
     draw();
   });
+  mapEl.addEventListener('pointerleave', onZoneHoverLeave);
+  window.addEventListener('keydown', onZoneShiftKey);
+  window.addEventListener('keyup', onZoneShiftKey);
 
   const endStroke = (e) => {
     if (inkPointer !== e.pointerId) return false;
@@ -2134,9 +2252,15 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     zonesOn = !zonesOn;
     syncZonesBtn();
     if (zonesOn) await refreshZonePresence();
-    else zonePresence = null;
+    else {
+      zonePresence = null;
+      zoneInfo = null;
+      hideZonesTip();
+    }
+    mapEl.classList.toggle('zones-explain', zonesOn && zoneHoverShift);
     draw();
     syncZonesPanel(sequence.locate(playback.position).tick);
+    if (zonesOn && zoneHoverShift) updateZonesTip();
   });
 
   coachBtn?.addEventListener('click', () => {
@@ -2475,8 +2599,13 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     syncScoreboard(tick);
     syncKillFeed(tick);
     if (chartOn) syncWinChart(tick);
-    if (zonesOn) syncZonesPanel(tick, zoneOverlay);
-    else if (zonesPanel) zonesPanel.hidden = true;
+    if (zonesOn) {
+      syncZonesPanel(tick, zoneOverlay);
+      if (zoneHoverShift) updateZonesTip();
+    } else {
+      if (zonesPanel) zonesPanel.hidden = true;
+      hideZonesTip();
+    }
     syncLoading();
   }
 
@@ -2660,6 +2789,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       window.removeEventListener('resize', onResize);
       window.removeEventListener('keydown', onGraphShiftKey);
       window.removeEventListener('keyup', onGraphShiftKey);
+      window.removeEventListener('keydown', onZoneShiftKey);
+      window.removeEventListener('keyup', onZoneShiftKey);
+      mapEl.removeEventListener('pointerleave', onZoneHoverLeave);
       graphCanvas?.removeEventListener('pointermove', onGraphPointerMove);
       graphCanvas?.removeEventListener('pointerleave', onGraphPointerLeave);
     }
