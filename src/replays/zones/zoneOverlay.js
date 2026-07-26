@@ -950,7 +950,7 @@ function latestClaimAt(presence, posId, tick) {
 }
 
 /** @returns {'T'|'CT'|null} */
-function latestOwnerSide(presence, posId, tick) {
+export function latestOwnerSide(presence, posId, tick) {
   return latestClaimAt(presence, posId, tick)?.side ?? null;
 }
 

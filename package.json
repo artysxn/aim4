@@ -15,7 +15,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "parse-demo": "node tools/parse-demo-local.js",
-    "parse-demo:gui": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/parse-demo-gui.ps1"
+    "parse-demo:gui": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/parse-demo-gui.ps1",
+    "sample-map-control-bases": "node scripts/sample-map-control-bases.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",

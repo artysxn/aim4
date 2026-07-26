@@ -1,6 +1,7 @@
 // ---------------------------------------------------------------------------
 // replays/coach/winProbability.js
-// Live round win probability: map, economy, bodies, and after-plant.
+// Live round win probability: map, economy, bodies, after-plant, and
+// map-control vs per-map 01:46 possession baseline.
 //
 // Everything composes in LOG-ODDS, not percentage points. Adding percentages
 // runs off the end of the scale (a 55% map base plus a 5v2 advantage is not
@@ -12,6 +13,10 @@
 import { FLAG_DEFUSING } from '../shared/tickFormat.js';
 import { isDefuser } from '../viewer/equipmentIcons.js';
 import { BOMB_SECONDS } from '../viewer/roundClock.js';
+import {
+  mapControlAdvantage,
+  possessionSharesAt
+} from './mapControlAdvantage.js';
 
 /**
  * CT win rate at equal equipment and 5v5, per map. Anubis is the only one of
@@ -309,6 +314,8 @@ function clampEcoMismatch(ctPercent, ctEquip, tEquip) {
  * @param {number} [state.plantBonusPp] T pp boost from plant timer (overrides lookup)
  * @param {boolean} [state.ctHasKit]
  * @param {boolean|null} [state.ctDefusing] true/false when known; null skips hard cutoff
+ * @param {number} [state.mapControlCt]  area % CT soft+active (neutral ignored in term)
+ * @param {number} [state.mapControlT]   area % T soft+active
  * @returns {{ct: number, t: number, parts: object}} percentages
  */
 export function winProbability(state) {
@@ -354,7 +361,17 @@ export function winProbability(state) {
     : 0;
   const plantEdge = plantPp > 0 ? edge(50 - plantPp) : 0;
 
-  let ct = sigmoid(mapEdge + econEdge + manEdge + plantEdge) * 100;
+  // 5. Map control vs per-map 01:46 baseline (relative possession, exponential).
+  const ctrl = mapControlAdvantage(
+    state.map,
+    state.mapControlCt,
+    state.mapControlT
+  );
+  const controlPp = ctrl?.pp || 0;
+  const controlEdge = controlPp ? edge(50 + controlPp) : 0;
+
+  let ct =
+    sigmoid(mapEdge + econEdge + manEdge + plantEdge + controlEdge) * 100;
   ct = clampEcoMismatch(ct, state.ctEquip, state.tEquip);
   const clamped = Math.min(CEIL, Math.max(FLOOR, ct));
   return {
@@ -365,6 +382,13 @@ export function winProbability(state) {
       econEdge,
       manEdge,
       plantEdge,
+      controlEdge,
+      controlPp,
+      controlDeltaRel: ctrl?.deltaRel ?? null,
+      controlRelCt: ctrl?.relCt ?? null,
+      controlBaseRelCt: ctrl?.baseRelCt ?? null,
+      mapControlCt: ctrl?.ct ?? null,
+      mapControlT: ctrl?.t ?? null,
       plantPp,
       bombSecondsLeft: state.planted ? state.bombSecondsLeft : null,
       dollars,
@@ -429,6 +453,17 @@ export function explainProbability(sample, map = '') {
         `Man advantage  ${ctEff > tEff ? 'CT' : 'T'} (${gap.toFixed(1)}) → ~${wr.toFixed(1)}% from even`
       );
     }
+  }
+  const ctrlPp = sample.parts?.controlPp;
+  if (Number.isFinite(ctrlPp) && Math.abs(ctrlPp) >= 0.05) {
+    const rel = sample.parts?.controlDeltaRel;
+    const side = ctrlPp >= 0 ? 'CT' : 'T';
+    detail.push(
+      `Map control  ${side} +${Math.abs(ctrlPp).toFixed(1)}pp` +
+        (Number.isFinite(rel)
+          ? ` (${rel >= 0 ? '+' : ''}${rel.toFixed(1)} rel vs baseline)`
+          : '')
+    );
   }
   return { summary, detail };
 }
@@ -541,7 +576,13 @@ export function liveEquipment({ players, stats, states, grenades, tick, teamSide
  * Live win probability for one tick (badges / playhead). Same inputs the
  * series pass uses, so playback tracks bodies and utility every frame.
  */
-export function winProbabilityAtTick({ meta, states, tick }) {
+export function winProbabilityAtTick({
+  meta,
+  states,
+  tick,
+  network = null,
+  presence = null
+}) {
   if (!meta) return null;
   const players = meta.players || [];
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
@@ -574,6 +615,21 @@ export function winProbabilityAtTick({ meta, states, tick }) {
     teamSides,
     players
   });
+  let mapControlCt;
+  let mapControlT;
+  if (network && presence) {
+    const shares = possessionSharesAt({
+      meta,
+      states,
+      network,
+      presence,
+      tick
+    });
+    if (shares) {
+      mapControlCt = shares.ct;
+      mapControlT = shares.t;
+    }
+  }
   const wp = winProbability({
     map: meta.map,
     ctAlive: eq.ctAlive,
@@ -583,6 +639,8 @@ export function winProbabilityAtTick({ meta, states, tick }) {
     ctEquip: eq.CT,
     tEquip: eq.T,
     decided,
+    mapControlCt,
+    mapControlT,
     ...plant
   });
   return {

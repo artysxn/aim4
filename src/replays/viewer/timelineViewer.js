@@ -35,6 +35,8 @@ import {
   summarizeZoneControl
 } from '../zones/zoneOverlay.js';
 import { buildMapControlSeries } from '../zones/mapControl.js';
+import { isZoneNetworkReady } from '../zones/zoneModel.js';
+import { mapControlAdvantageEnabled } from '../coach/mapControlAdvantage.js';
 import helmetSvg from '../../icons/helmet.svg?url';
 import kevlarSvg from '../../icons/kevlar.svg?url';
 import nokevlarSvg from '../../icons/nokevlar.svg?url';
@@ -681,10 +683,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       if (!coachOn) autoOpenNotesIfPresent();
     }
 
-    if (zonesOn) await refreshZonePresence();
-    else if (chartOn) await ensureZoneNetwork();
+    if (zonesOn || chartOn) await refreshZonePresence();
     if (chartOn) {
       mapControlCache.delete(file);
+      coachCache.delete(file);
       syncWinChart();
     }
     if (coachOn) {
@@ -781,6 +783,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       zoneNetworkMap = map;
       zonePresenceCache.clear();
       mapControlCache.clear();
+      // Win% series may have been built without map-control; rebuild with it.
+      coachCache.clear();
       return zoneNetwork;
     } catch {
       if (load === zoneLoadId) {
@@ -794,9 +798,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   /** Recompute first-visit ticks for the active round (cached once the round is full). */
   async function refreshZonePresence() {
     zonePresence = null;
-    if (!zonesOn) return;
+    // Needed for the positions overlay and for map-control win% (chart / coach).
+    if (!zonesOn && !chartOn) return;
     const net = await ensureZoneNetwork();
-    if (!net?.zones?.length || !activeMeta) return;
+    if (!isZoneNetworkReady(net) || !activeMeta) return;
     const file = files[activeIndex];
     const entry = store.get(file);
     if (entry?.isFull && zonePresenceCache.has(file)) {
@@ -1846,8 +1851,15 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const scratch = [];
     let result;
     try {
+      const net =
+        isZoneNetworkReady(zoneNetwork) &&
+        mapControlAdvantageEnabled(roundMeta.map, zoneNetwork)
+          ? zoneNetwork
+          : null;
       result = analyseRound({
         meta: roundMeta,
+        track,
+        network: net,
         sampleAt: (tick) => {
           track.sampleAll(tick, scratch);
           return scratch;
@@ -1874,10 +1886,36 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   /** Fresh win% at this tick (kill log + live equip), for badges / playhead. */
   function liveCoachSample(tick) {
     const file = files[activeIndex];
-    const track = file ? store.track(file) : null;
+    const track = file ? store.get(file)?.full || store.track(file) : null;
     if (!track || !activeMeta?.players?.length) return null;
     track.sampleAll(tick, coachScratch);
-    return winProbabilityAtTick({ meta: activeMeta, states: coachScratch, tick });
+    const net =
+      isZoneNetworkReady(zoneNetwork) &&
+      mapControlAdvantageEnabled(activeMeta.map, zoneNetwork)
+        ? zoneNetwork
+        : null;
+    let presence = null;
+    if (net) {
+      if (zonePresence) presence = zonePresence;
+      else {
+        presence = buildZonePresence({
+          meta: activeMeta,
+          track,
+          network: net
+        });
+        zonePresence = presence;
+        if (store.get(file)?.isFull && presence) {
+          zonePresenceCache.set(file, presence);
+        }
+      }
+    }
+    return winProbabilityAtTick({
+      meta: activeMeta,
+      states: coachScratch,
+      tick,
+      network: net,
+      presence
+    });
   }
 
   /** Win chance for the side each roster team is playing this round. */
@@ -2380,8 +2418,12 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     enterCoachRoundMoment();
   }
 
-  chartBtn?.addEventListener('click', () => {
+  chartBtn?.addEventListener('click', async () => {
     chartOn = !chartOn;
+    if (chartOn) {
+      coachCache.clear();
+      await refreshZonePresence();
+    }
     syncWinChart();
     draw();
   });
@@ -2389,9 +2431,11 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   zonesBtn?.addEventListener('click', async () => {
     zonesOn = !zonesOn;
     syncZonesBtn();
-    if (zonesOn) await refreshZonePresence();
-    else {
-      zonePresence = null;
+    if (zonesOn) {
+      await refreshZonePresence();
+      coachCache.clear();
+    } else {
+      if (!chartOn) zonePresence = null;
       resetZoneVisionCache(zoneVisionCache);
     }
     draw();

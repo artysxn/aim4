@@ -18,6 +18,11 @@ import {
   plantSituationAt,
   winProbability
 } from './winProbability.js';
+import {
+  mapControlAdvantageEnabled,
+  possessionSharesAt
+} from './mapControlAdvantage.js';
+import { buildZonePresence } from '../zones/zoneOverlay.js';
 import { findRoundDecided } from './roundDecided.js';
 import { ALONE_DISTANCE, findCore, nearestTeammate } from './cores.js';
 
@@ -153,9 +158,11 @@ function groupAround(seed, mates) {
  * @param {object} args
  * @param {object} args.meta      round meta (events, stats, players, sides…)
  * @param {(tick: number) => Array} args.sampleAt  per-slot tick states
+ * @param {object} [args.network] zone network (map control term when ready + baselined)
+ * @param {{ sampleAll: Function }} [args.track]   full tick track for presence build
  * @returns {{series: Array, flags: Array, gate: object}}
  */
-export function analyseRound({ meta, sampleAt }) {
+export function analyseRound({ meta, sampleAt, network = null, track = null }) {
   const tickRate = meta.tickRate || 64;
   const players = meta.players || [];
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
@@ -166,6 +173,11 @@ export function analyseRound({ meta, sampleAt }) {
   const from = meta.freezeEndTick ?? meta.startTick ?? 0;
   const to = Math.max(from, meta.endTick ?? from);
   const endTick = meta.endTick ?? to;
+  const controlOn = mapControlAdvantageEnabled(meta.map, network);
+  const presence =
+    controlOn && track
+      ? buildZonePresence({ meta, track, network })
+      : null;
   // Coachable window: 1s after freezetime ends → 1s before the winner is decided.
   const coachFrom = from + tickRate;
   const coachUntil = endTick - tickRate;
@@ -213,6 +225,21 @@ export function analyseRound({ meta, sampleAt }) {
       teamSides,
       players
     });
+    let mapControlCt;
+    let mapControlT;
+    if (presence) {
+      const shares = possessionSharesAt({
+        meta,
+        states,
+        network,
+        presence,
+        tick
+      });
+      if (shares) {
+        mapControlCt = shares.ct;
+        mapControlT = shares.t;
+      }
+    }
     const wp = winProbability({
       map: meta.map,
       ctAlive: eq.ctAlive,
@@ -222,6 +249,8 @@ export function analyseRound({ meta, sampleAt }) {
       ctEquip: eq.CT,
       tEquip: eq.T,
       decided,
+      mapControlCt,
+      mapControlT,
       ...plant
     });
     series.push({
