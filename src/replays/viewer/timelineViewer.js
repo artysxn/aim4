@@ -23,6 +23,7 @@ import { economyLabel, winningSide } from '../shared/roundId.js';
 import { iconImgHtml, inventoryAt } from './equipmentIcons.js';
 import { DRAW_COLORS, DrawingLayer } from './drawing.js';
 import { analyseRound, flagToNote } from '../coach/coach.js';
+import { explainProbability, winProbabilityAtTick } from '../coach/winProbability.js';
 import helmetSvg from '../../icons/helmet.svg?url';
 import kevlarSvg from '../../icons/kevlar.svg?url';
 import nokevlarSvg from '../../icons/nokevlar.svg?url';
@@ -57,20 +58,18 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
             <span class="rv-wingraph-label right" id="rv-wingraph-t2">-</span>
           </div>
           <canvas class="rv-wingraph-canvas" id="rv-wingraph-canvas"></canvas>
+          <div class="rv-wingraph-tip" id="rv-wingraph-tip" hidden></div>
         </div>
       </div>
       <div class="rv-map">
         <div class="rv-clock" id="rv-clock">00:00</div>
-        <div class="rv-winline" id="rv-winline" hidden>
-          <span class="rv-winline-team t1" id="rv-winline-t1"></span>
-          <span class="rv-winline-bar"><span id="rv-winline-fill"></span></span>
-          <span class="rv-winline-team t2" id="rv-winline-t2"></span>
-        </div>
         <div class="rv-killfeed" id="rv-killfeed" aria-live="polite"></div>
         <canvas class="rv-canvas" id="rv-canvas"></canvas>
         <div class="rv-loading" id="rv-loading"></div>
       </div>
-      <aside class="rv-team rv-team-2" data-team="2"></aside>
+      <div class="rv-team-col">
+        <aside class="rv-team rv-team-2" data-team="2"></aside>
+      </div>
     </div>
     <aside class="rv-note-dock" id="rv-note-panel" hidden>
       <div class="rv-note-head">
@@ -423,10 +422,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     drawing.setRound(files[index]);
     onRound?.(rounds[index]);
     if (!boardEl.hidden) renderScoreboard();
-    if (coachOn) {
-      syncCoach();
-      mergeCoachNotes();
-    }
     syncBookmark();
     renderer._prevHealth?.fill?.(-1);
     renderer._damageTick?.fill?.(-1);
@@ -434,6 +429,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (killfeedEl) killfeedEl.innerHTML = '';
 
     // Instant chrome from the summary; ticks + meta load for this round only.
+    // Coach waits until full meta + ticks land — analysing earlier caches a
+    // series built from the previous round's meta against this round's track.
     activeMeta = fallbackMeta(rounds[index]);
     renderScoreboards();
     loadNotesFromMeta(true);
@@ -443,6 +440,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (seek) playback.seek(liveOffsetOf(index), { emit: false });
     syncLoading();
     clearPlayerStates();
+    if (coachOn) {
+      graphEl.hidden = false;
+      syncSideWinrates(null);
+    }
     draw();
 
     const file = files[index];
@@ -483,6 +484,12 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     }
 
     if (seek) playback.seek(liveOffsetOf(index), { emit: false });
+    if (coachOn) {
+      coachCache.delete(file);
+      syncCoach();
+      mergeCoachNotes();
+      renderActiveMarks();
+    }
     draw();
   }
 
@@ -540,7 +547,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const sideClass = side === 'T' ? 'side-t' : side === 'CT' ? 'side-ct' : '';
     return `
       <div class="rv-team-head ${sideClass}">
-        <span class="rv-team-side">${escapeHtml(side || '')}</span>
+        <span class="rv-team-side" data-side-wp="${escapeHtml(side || '')}">${escapeHtml(
+          side || ''
+        )}</span>
         <span class="rv-team-name">${escapeHtml(info.name || `Team ${team}`)}</span>
         <span class="rv-team-score">${score}</span>
       </div>
@@ -1355,17 +1364,22 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const graphCanvas = el.querySelector('#rv-wingraph-canvas');
   const graphT1 = el.querySelector('#rv-wingraph-t1');
   const graphT2 = el.querySelector('#rv-wingraph-t2');
-  const winlineEl = el.querySelector('#rv-winline');
-  const winlineT1 = el.querySelector('#rv-winline-t1');
-  const winlineT2 = el.querySelector('#rv-winline-t2');
-  const winlineFill = el.querySelector('#rv-winline-fill');
+  const graphTip = el.querySelector('#rv-wingraph-tip');
   let coachOn = false;
+  /** CSS-pixel playhead on the canvas (for hit-testing + tip anchor). */
+  let graphPlayhead = null;
+  let graphHoverDot = false;
+  let graphShift = false;
   /** round file -> { series, flags, gate } */
   const coachCache = new Map();
 
+  const coachScratch = [];
+
   function coachFor(index) {
     const file = files[index];
-    if (!file || !activeMeta) return null;
+    // Only analyse the active round with its own full meta — never the prior
+    // round's meta against this file's ticks.
+    if (!file || index !== activeIndex || !activeMeta?.players?.length) return null;
     if (coachCache.has(file)) return coachCache.get(file);
     const track = store.track(file);
     if (!track) return null;
@@ -1381,20 +1395,53 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     return result;
   }
 
-  /** Win chance for the side each roster team is playing this round. */
-  function coachProbabilityAt(result, tick) {
+  /** Win chance sample at (or just before) a tick from the cached series. */
+  function coachSampleAt(result, tick) {
     if (!result?.series?.length) return null;
     let best = result.series[0];
     for (const s of result.series) {
       if (s.tick <= tick) best = s;
       else break;
     }
-    const s1 = activeMeta?.team1Side === 'CT' ? best.ct : best.t;
-    return { team1: s1, team2: 100 - s1 };
+    return best;
   }
 
-  function drawWinGraph(result, tick) {
-    if (!graphCanvas || !result?.series?.length) return;
+  /** Fresh win% at this tick (kill log + live equip), for badges / playhead. */
+  function liveCoachSample(tick) {
+    const file = files[activeIndex];
+    const track = file ? store.track(file) : null;
+    if (!track || !activeMeta?.players?.length) return null;
+    track.sampleAll(tick, coachScratch);
+    return winProbabilityAtTick({ meta: activeMeta, states: coachScratch, tick });
+  }
+
+  /** Win chance for the side each roster team is playing this round. */
+  function coachProbabilityAt(sample) {
+    if (!sample) return null;
+    const s1 = activeMeta?.team1Side === 'CT' ? sample.ct : sample.t;
+    return { team1: s1, team2: 100 - s1, t: sample.t, ct: sample.ct };
+  }
+
+  /** Put T/CT win% in the side badges (or restore T/CT when coach is off). */
+  function syncSideWinrates(now) {
+    for (const badge of el.querySelectorAll('[data-side-wp]')) {
+      const side = badge.dataset.sideWp;
+      if (!coachOn || !now || (side !== 'T' && side !== 'CT')) {
+        badge.textContent = side || '';
+        badge.classList.toggle('is-wp', false);
+        continue;
+      }
+      const pct = Math.round(side === 'CT' ? now.ct : now.t);
+      badge.textContent = `${pct}%`;
+      badge.classList.toggle('is-wp', true);
+    }
+  }
+
+  function drawWinGraph(result, tick, live = null) {
+    if (!graphCanvas || !result?.series?.length) {
+      graphPlayhead = null;
+      return;
+    }
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const rect = graphCanvas.getBoundingClientRect();
     const w = Math.max(1, Math.round(rect.width * dpr));
@@ -1451,46 +1498,142 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     }
     ctx.stroke();
 
-    // Where playback is now.
-    let at = 0;
-    for (let i = 0; i < series.length; i++) if (series[i].tick <= tick) at = i;
-    ctx.fillStyle = '#ffffff';
+    // Playhead X follows time along the series; Y uses the live sample so the
+    // dot tracks bodies/utility every tick, not only on 1 Hz series points.
+    let i0 = 0;
+    for (let i = 0; i < series.length; i++) if (series[i].tick <= tick) i0 = i;
+    const i1 = Math.min(series.length - 1, i0 + 1);
+    let f = 0;
+    if (i1 > i0) {
+      const t0 = series[i0].tick;
+      const t1 = series[i1].tick;
+      f = t1 > t0 ? Math.min(1, Math.max(0, (tick - t0) / (t1 - t0))) : 0;
+    }
+    const px = xAt(i0) * (1 - f) + xAt(i1) * f;
+    const sample = live || coachSampleAt(result, tick);
+    const py = sample
+      ? h - share(sample) * h
+      : yAt(i0) * (1 - f) + yAt(i1) * f;
+    const r = 4 * dpr;
     ctx.beginPath();
-    ctx.arc(xAt(at), yAt(at), 3.2 * dpr, 0, Math.PI * 2);
+    ctx.arc(px, py, r + 1.2 * dpr, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
     ctx.fill();
 
-    const now = coachProbabilityAt(result, tick);
+    graphPlayhead = { x: px / dpr, y: py / dpr, tick, sample };
+
+    const now = coachProbabilityAt(sample);
     if (now) {
       graphT1.textContent = `${Math.round(now.team1)}%`;
       graphT2.textContent = `${Math.round(now.team2)}%`;
     }
+    updateWinGraphTip();
   }
+
+  function escapeTip(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function updateWinGraphTip() {
+    if (!graphTip) return;
+    if (!coachOn || !graphHoverDot || !graphPlayhead) {
+      graphTip.hidden = true;
+      return;
+    }
+    const sample =
+      graphPlayhead.sample ||
+      liveCoachSample(graphPlayhead.tick) ||
+      coachSampleAt(coachFor(activeIndex), graphPlayhead.tick);
+    if (!sample) {
+      graphTip.hidden = true;
+      return;
+    }
+    const map = activeMeta?.map || '';
+    const { summary, detail } = explainProbability(sample, map);
+    if (graphShift && detail.length) {
+      graphTip.innerHTML = `<strong>${escapeTip(summary)}</strong><br>${detail
+        .map(escapeTip)
+        .join('<br>')}`;
+    } else {
+      graphTip.textContent = summary;
+    }
+    graphTip.hidden = false;
+    const canvasRect = graphCanvas.getBoundingClientRect();
+    const hostRect = graphEl.getBoundingClientRect();
+    const left = canvasRect.left - hostRect.left + graphPlayhead.x;
+    const top = canvasRect.top - hostRect.top + graphPlayhead.y;
+    graphTip.style.left = `${left}px`;
+    graphTip.style.top = `${top}px`;
+  }
+
+  function onGraphPointerMove(e) {
+    if (!graphPlayhead || !graphCanvas) {
+      graphHoverDot = false;
+      updateWinGraphTip();
+      return;
+    }
+    const rect = graphCanvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const near =
+      Math.hypot(x - graphPlayhead.x, y - graphPlayhead.y) <= 16;
+    if (near !== graphHoverDot) {
+      graphHoverDot = near;
+      graphCanvas.classList.toggle('is-dot-hover', near);
+    }
+    updateWinGraphTip();
+  }
+
+  function onGraphPointerLeave() {
+    graphHoverDot = false;
+    graphCanvas?.classList.remove('is-dot-hover');
+    updateWinGraphTip();
+  }
+
+  function onGraphShiftKey(e) {
+    if (e.key !== 'Shift') return;
+    graphShift = e.type === 'keydown';
+    if (graphHoverDot) updateWinGraphTip();
+  }
+
+  graphCanvas?.addEventListener('pointermove', onGraphPointerMove);
+  graphCanvas?.addEventListener('pointerleave', onGraphPointerLeave);
+  window.addEventListener('keydown', onGraphShiftKey);
+  window.addEventListener('keyup', onGraphShiftKey);
 
   function syncCoach(tick = null) {
     graphEl.hidden = !coachOn;
-    if (winlineEl) winlineEl.hidden = !coachOn;
     coachBtn?.classList.toggle('active', coachOn);
-    if (!coachOn) return;
-    const result = coachFor(activeIndex);
-    if (!result) return;
-    const at = tick ?? sequence.locate(playback.position).tick;
-    drawWinGraph(result, at);
-
-    const now = coachProbabilityAt(result, at);
-    if (now && winlineEl) {
-      const n1 = activeMeta?.team1?.name || 'Team 1';
-      const n2 = activeMeta?.team2?.name || 'Team 2';
-      winlineT1.textContent = `${n1} ${Math.round(now.team1)}%`;
-      winlineT2.textContent = `${Math.round(now.team2)}% ${n2}`;
-      winlineFill.style.width = `${now.team1}%`;
+    if (!coachOn) {
+      syncSideWinrates(null);
+      graphPlayhead = null;
+      graphHoverDot = false;
+      if (graphTip) graphTip.hidden = true;
+      return;
     }
+    const at = tick ?? sequence.locate(playback.position).tick;
+    const live = liveCoachSample(at);
+    const result = coachFor(activeIndex);
+    if (result) drawWinGraph(result, at, live);
+    syncSideWinrates(coachProbabilityAt(live || coachSampleAt(result, at)));
   }
 
   coachBtn?.addEventListener('click', () => {
     coachOn = !coachOn;
     syncCoach();
-    renderActiveMarks();
-    if (coachOn) mergeCoachNotes();
+    if (coachOn) {
+      mergeCoachNotes();
+      renderActiveMarks();
+    } else {
+      clearAllCoachNotes();
+    }
   });
 
   /**
@@ -1518,6 +1661,83 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       await persistNotes();
     } catch {
       /* the notes still show for this session even if the save failed */
+    }
+  }
+
+  /**
+   * Turning coach off drops every coach note in this demo. User notes stay.
+   */
+  async function clearAllCoachNotes() {
+    flushNoteText();
+    coachCache.clear();
+
+    const strip = (list) => list.filter((n) => n.kind !== 'coach');
+
+    // Active round first so diamonds / dock update immediately.
+    roundNotes = strip(roundNotes);
+    if (activeMeta) activeMeta.notes = roundNotes;
+    if (!roundNotes.length) {
+      noteIndex = -1;
+      if (!notePanel.hidden) setNoteOpen(false);
+    } else if (noteIndex < 0 || noteIndex >= roundNotes.length) {
+      noteIndex = 0;
+    }
+    renderNoteDock({ forceText: true });
+    renderActiveMarks();
+
+    for (const file of files) {
+      let meta = null;
+      if (file === files[activeIndex] && activeMeta) meta = activeMeta;
+      else if (metaCache.has(file)) {
+        try {
+          meta = await metaCache.get(file);
+        } catch {
+          meta = null;
+        }
+      } else {
+        try {
+          meta = await metaFor(file);
+        } catch {
+          continue;
+        }
+      }
+      if (!meta) continue;
+      const before = notesFromMeta(meta);
+      if (!before.some((n) => n.kind === 'coach')) {
+        // Still persist the active round if we already stripped it locally.
+        if (file === files[activeIndex]) {
+          try {
+            await saveRoundNotes(file, roundNotes);
+          } catch {
+            /* ignore */
+          }
+        }
+        continue;
+      }
+      const next = strip(before);
+      meta.notes = next;
+      delete meta.note;
+      delete meta.noteUpdatedAt;
+      if (file === files[activeIndex]) {
+        roundNotes = next;
+        if (!roundNotes.length) noteIndex = -1;
+        else if (noteIndex >= roundNotes.length) noteIndex = 0;
+        renderNoteDock({ forceText: true });
+        renderActiveMarks();
+      }
+      try {
+        await saveRoundNotes(file, next);
+        if (metaCache.has(file)) {
+          const cached = await metaCache.get(file);
+          if (cached) {
+            cached.notes = next;
+            delete cached.note;
+            delete cached.noteUpdatedAt;
+          }
+        }
+      } catch {
+        /* local strip still stands for this session */
+      }
     }
   }
 
@@ -1594,6 +1814,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
     syncScoreboard(tick);
     syncKillFeed(tick);
+    if (coachOn) syncCoach(tick);
     syncLoading();
   }
 
@@ -1775,6 +1996,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       window.removeEventListener('keyup', onTabUp);
       window.removeEventListener('blur', onTabCancel);
       window.removeEventListener('resize', onResize);
+      window.removeEventListener('keydown', onGraphShiftKey);
+      window.removeEventListener('keyup', onGraphShiftKey);
+      graphCanvas?.removeEventListener('pointermove', onGraphPointerMove);
+      graphCanvas?.removeEventListener('pointerleave', onGraphPointerLeave);
     }
   };
 }

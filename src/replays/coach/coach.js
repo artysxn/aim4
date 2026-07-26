@@ -11,7 +11,12 @@
 // in node against a round file with no DOM anywhere near it.
 // ---------------------------------------------------------------------------
 
-import { liveEquipment, winProbability } from './winProbability.js';
+import {
+  deadPlayersAt,
+  decidedSideAt,
+  liveEquipment,
+  winProbability
+} from './winProbability.js';
 import { ALONE_DISTANCE, findCore, nearestTeammate } from './cores.js';
 
 /** A kill this soon after a death answers it. */
@@ -41,26 +46,55 @@ export function analyseRound({ meta, sampleAt }) {
 
   const from = meta.freezeEndTick ?? meta.startTick ?? 0;
   const to = Math.max(from, meta.endTick ?? from);
+  const endTick = meta.endTick ?? to;
+  // Coachable window: 1s after freezetime ends → 1s before the winner is decided.
+  const coachFrom = from + tickRate;
+  const coachUntil = endTick - tickRate;
+  const inCoachWindow = (tick) => tick >= coachFrom && tick <= coachUntil;
   const grenades = meta.events?.grenades || [];
-  // Round spans start at the previous round's cleanup, so the kill log can
-  // open with a knife death from the freezetime before the round went live.
-  // Nothing that happens before the timer starts is coachable.
+  // Kill log for alive counts starts at freeze end (not earlier freezetime knives).
+  // Flagging itself is further gated by inCoachWindow below.
   const kills = [...(meta.events?.kills || [])]
     .filter((k) => k.victim && (k.tick || 0) >= from)
     .sort((a, b) => (a.tick || 0) - (b.tick || 0));
+
+  const winnerSide = meta.winnerSide || (meta.winner === 1 ? teamSides[1] : teamSides[2]);
+  const bomb = meta.events?.bomb || [];
 
   // ---- pass one: the round, one second at a time --------------------------
 
   const series = [];
   for (let tick = from; tick <= to; tick += tickRate) {
-    const states = sampleAt(tick) || [];
-    const eq = liveEquipment({ players, stats: meta.stats, states, grenades, tick, teamSides });
+    const sampled = sampleAt(tick) || [];
+    // Copy out of the sampler scratch buffer — it is reused every step.
+    const states = sampled.map((s) => (s ? { ...s } : null));
+    const deadIds = deadPlayersAt(kills, tick);
+    const eq = liveEquipment({
+      players,
+      stats: meta.stats,
+      states,
+      grenades,
+      tick,
+      teamSides,
+      deadIds
+    });
+    const decided = decidedSideAt({
+      tick,
+      endTick,
+      winnerSide,
+      ctAlive: eq.ctAlive,
+      tAlive: eq.tAlive,
+      bomb
+    });
     const wp = winProbability({
       map: meta.map,
       ctAlive: eq.ctAlive,
       tAlive: eq.tAlive,
+      ctEff: eq.ctEff,
+      tEff: eq.tEff,
       ctEquip: eq.CT,
-      tEquip: eq.T
+      tEquip: eq.T,
+      decided
     });
     series.push({
       tick,
@@ -69,13 +103,18 @@ export function analyseRound({ meta, sampleAt }) {
       t: wp.t,
       ctAlive: eq.ctAlive,
       tAlive: eq.tAlive,
+      ctEff: eq.ctEff,
+      tEff: eq.tEff,
+      ctEquip: eq.CT,
+      tEquip: eq.T,
+      parts: wp.parts,
+      deadIds,
       states
     });
   }
 
   // The buy alone, before a shot is fired, decides whether the coach speaks.
   const opening = series[0];
-  const winnerSide = meta.winnerSide || (meta.winner === 1 ? teamSides[1] : teamSides[2]);
   const gate = {
     CT: opening ? opening.ct > HOPELESS : true,
     T: opening ? opening.t > HOPELESS : true,
@@ -115,8 +154,10 @@ export function analyseRound({ meta, sampleAt }) {
   /** Everyone alive on a side at a sample, as core-detection input. */
   const positionsOf = (sample, side) => {
     const out = [];
+    const dead = sample?.deadIds;
     for (const p of players) {
       if (sideOfTeam(p.team) !== side) continue;
+      if (dead?.has(p.id)) continue;
       const st = sample?.states?.[p.slot];
       if (!st?.alive) continue;
       out.push({ id: p.id, x: st.x, y: st.y, z: st.z });
@@ -124,12 +165,22 @@ export function analyseRound({ meta, sampleAt }) {
     return out;
   };
 
-  const firstDeathTick = kills[0]?.tick ?? null;
+  // First death inside the coachable window (not freezetime / post-round).
+  const firstDeathTick = kills.find((k) => inCoachWindow(k.tick))?.tick ?? null;
+  // Extra hard stops once the round is factually over (may precede endTick).
+  const defusedTick =
+    (meta.events?.bomb || []).find((b) => b.type === 'defused')?.tick ?? null;
 
   for (const death of kills) {
     const victim = death.victim;
     const side = sideOf(victim);
     if (!side || !gate[side]) continue;
+    if (!inCoachWindow(death.tick)) continue;
+    if (defusedTick != null && death.tick >= defusedTick) continue;
+    const before = aliveAt(death.tick - 1);
+    const opp = side === 'CT' ? 'T' : 'CT';
+    // Enemy team already wiped: nothing left to throw away.
+    if (before[opp] <= 0) continue;
     const name = byId.get(victim)?.name || victim;
 
     // Answered inside the window? Then nothing was lost and nothing is said.
@@ -137,8 +188,6 @@ export function analyseRound({ meta, sampleAt }) {
       (k) => k.tick > death.tick && k.tick - death.tick <= trade && sideOf(k.attacker) === side
     );
 
-    const before = aliveAt(death.tick - 1);
-    const opp = side === 'CT' ? 'T' : 'CT';
     const sample = sampleNear(death.tick);
     const mates = positionsOf(sample, side);
     const me = mates.find((m) => m.id === victim);
@@ -219,8 +268,12 @@ export function analyseRound({ meta, sampleAt }) {
   if (opening) {
     for (const side of ['CT', 'T']) {
       if (!gate.dominant[side] || !gate[side]) continue;
+      const opp = side === 'CT' ? 'T' : 'CT';
       for (const k of kills) {
         if (sideOf(k.attacker) !== side) continue;
+        if (!inCoachWindow(k.tick)) continue;
+        if (defusedTick != null && k.tick >= defusedTick) continue;
+        if (aliveAt(k.tick - 1)[opp] <= 0) continue;
         const sample = sampleNear(k.tick);
         const mates = positionsOf(sample, side);
         const me = mates.find((m) => m.id === k.attacker);
