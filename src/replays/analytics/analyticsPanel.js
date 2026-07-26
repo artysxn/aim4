@@ -11,7 +11,7 @@ import {
   listPlayers,
   locationBreakdown
 } from './analyticsMath.js';
-import { paintPresenceRadar } from './presenceRadar.js';
+import { createPresenceRadar } from './presenceRadar.js';
 
 const tipLines = (lines) => lines.filter(Boolean).join('\n');
 
@@ -78,6 +78,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   /** @type {object|null} */
   let network = null;
   let networkMap = '';
+  /** @type {ReturnType<typeof createPresenceRadar> | null} */
+  let radar = null;
 
   function selectedPlayer() {
     return players.find((p) => p.id === state.playerId) || null;
@@ -402,8 +404,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         </div>
       </header>
       <div class="an-break-body">
-        <div class="an-radar-wrap">
-          <canvas class="an-radar" id="an-radar" width="240" height="240" aria-label="Position radar"></canvas>
+        <div class="an-radar-wrap" id="an-radar-wrap" title="Scroll to zoom · drag to pan · double-click to reset">
+          <canvas class="an-radar" id="an-radar" aria-label="Position radar"></canvas>
         </div>
         <div class="an-break-grid">
           ${block('Positions', breakdown.pos, 'pos')}
@@ -580,16 +582,26 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       ${renderRounds(agg)}`;
   }
 
-  function paintRadar(breakdown) {
+  function ensureRadar() {
     const canvas = mainEl.querySelector('#an-radar');
-    if (!canvas || !state.map) return;
-    paintPresenceRadar(
-      canvas,
-      state.map,
-      network,
-      breakdown?.pos || [],
-      state.positions
-    ).catch(() => {});
+    const wrap = mainEl.querySelector('#an-radar-wrap');
+    if (!canvas) {
+      radar?.destroy();
+      radar = null;
+      return null;
+    }
+    if (!radar || radar._canvas !== canvas) {
+      radar?.destroy();
+      radar = createPresenceRadar({ canvas, wrap });
+      radar._canvas = canvas;
+    }
+    return radar;
+  }
+
+  function paintRadar(breakdown) {
+    const ctl = ensureRadar();
+    if (!ctl || !state.map) return;
+    ctl.setData(state.map, network, breakdown?.pos || [], state.positions).catch(() => {});
   }
 
   function render() {
@@ -845,6 +857,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     load,
     destroy() {
       detachTips();
+      radar?.destroy();
+      radar = null;
       el.remove();
     }
   };

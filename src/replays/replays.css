@@ -3392,36 +3392,32 @@ body.rv-open {
 }
 
 .an-break-body {
-  display: grid;
-  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
-  gap: 14px;
-  align-items: start;
-}
-
-@media (max-width: 900px) {
-  .an-break-body {
-    grid-template-columns: 1fr;
-  }
-
-  .an-radar-wrap {
-    justify-self: center;
-  }
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .an-radar-wrap {
+  width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
   overflow: hidden;
   background: #0c0e12;
   line-height: 0;
+  touch-action: none;
+  cursor: grab;
+}
+
+.an-radar-wrap:active,
+.an-radar.dragging {
+  cursor: grabbing;
 }
 
 .an-radar {
   display: block;
   width: 100%;
-  max-width: 240px;
   height: auto;
-  aspect-ratio: 1;
+  vertical-align: top;
 }
 
 .an-break-grid {

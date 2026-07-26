@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // Round phase: early → mid → late (clock + man-count transitions).
 //
-// Early ends when the live clock hits 1:15 remaining, or on the first death.
+// Early ends when the live clock hits 1:15 remaining, or 3 seconds after the
+// first death (whichever comes first).
 // Late begins at 0:40 remaining, or when both sides have ≤3 players alive.
 // Mid is everything between those two transitions.
 // ---------------------------------------------------------------------------
@@ -17,6 +18,9 @@ export const LATE_START_REMAINING = 40;
 export const EARLY_END_ELAPSED = ROUND_SECONDS - EARLY_END_REMAINING;
 /** Elapsed live seconds when late starts by clock (115 − 40 = 75). */
 export const LATE_START_ELAPSED = ROUND_SECONDS - LATE_START_REMAINING;
+
+/** Early continues this long after the first death before mid begins. */
+export const EARLY_AFTER_DEATH_SECONDS = 3;
 
 /**
  * @typedef {'early'|'mid'|'late'} RoundPhase
@@ -51,7 +55,10 @@ export function phaseBounds(meta) {
     .sort((a, b) => (a.tick || 0) - (b.tick || 0));
 
   const firstDeathTick = kills.length ? kills[0].tick : Infinity;
-  let midStartTick = Math.min(midByClock, firstDeathTick);
+  const midByDeath = Number.isFinite(firstDeathTick)
+    ? firstDeathTick + EARLY_AFTER_DEATH_SECONDS * tickRate
+    : Infinity;
+  let midStartTick = Math.min(midByClock, midByDeath);
   if (!Number.isFinite(midStartTick)) midStartTick = midByClock;
 
   let ctAlive = 5;
