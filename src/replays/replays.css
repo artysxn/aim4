@@ -3285,8 +3285,8 @@ body.rv-open {
   font-variant-numeric: tabular-nums;
 }
 
-/* Win graph docks bottom-left, mirroring the note box on the right. */
-.rv-wingraph {
+/* Win + map-control charts dock bottom-left, mirroring the note box. */
+.rv-charts {
   position: absolute;
   left: 16px;
   right: auto;
@@ -3295,26 +3295,36 @@ body.rv-open {
   width: min(300px, calc(100vw - 32px));
   display: flex;
   flex-direction: column;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.rv-charts[hidden] {
+  display: none;
+}
+
+.rv-mapgraph,
+.rv-wingraph {
+  display: flex;
+  flex-direction: column;
   gap: 6px;
   padding: 8px 10px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: rgba(14, 17, 21, 0.97);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-  pointer-events: auto;
-}
-
-.rv-wingraph[hidden] {
-  display: none;
+  position: relative;
 }
 
 .rv-wingraph-head {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
   margin-bottom: 6px;
   font-size: 12px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  gap: 8px;
 }
 
 .rv-wingraph-label.ct {
@@ -3326,10 +3336,20 @@ body.rv-open {
   margin-left: auto;
 }
 
+#rv-mapgraph-neu {
+  color: rgba(180, 186, 196, 0.85);
+  font-weight: 600;
+  margin: 0 auto;
+}
+
 .rv-wingraph-canvas {
   display: block;
   width: 100%;
   height: 96px;
+}
+
+.rv-mapgraph .rv-wingraph-canvas {
+  height: 88px;
 }
 
 .rv-wingraph-canvas.is-dot-hover {

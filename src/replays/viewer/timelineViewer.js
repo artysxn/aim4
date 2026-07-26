@@ -29,10 +29,12 @@ import { phaseBounds } from '../coach/roundPhases.js';
 import {
   buildZonePresence,
   computeZonePaint,
+  createBeamCaster,
   createZoneVisionCache,
   resetZoneVisionCache,
   summarizeZoneControl
 } from '../zones/zoneOverlay.js';
+import { buildMapControlSeries } from '../zones/mapControl.js';
 import { positionsAtPoint } from '../zones/pointInZone.js';
 import { radarToWorld } from './mapCalibration.js';
 import helmetSvg from '../../icons/helmet.svg?url';
@@ -77,13 +79,24 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         <aside class="rv-team rv-team-2" data-team="2"></aside>
       </div>
     </div>
-    <aside class="rv-wingraph" id="rv-wingraph" hidden>
-      <div class="rv-wingraph-head">
-        <span class="rv-wingraph-label ct" id="rv-wingraph-ct">-</span>
-        <span class="rv-wingraph-label t" id="rv-wingraph-t">-</span>
+    <aside class="rv-charts" id="rv-charts" hidden>
+      <div class="rv-mapgraph">
+        <div class="rv-wingraph-head">
+          <span class="rv-wingraph-label ct" id="rv-mapgraph-ct">CT</span>
+          <span class="rv-wingraph-label" id="rv-mapgraph-neu">Map control</span>
+          <span class="rv-wingraph-label t" id="rv-mapgraph-t">T</span>
+        </div>
+        <canvas class="rv-wingraph-canvas" id="rv-mapgraph-canvas"></canvas>
+        <div class="rv-wingraph-tip" id="rv-mapgraph-tip" hidden></div>
       </div>
-      <canvas class="rv-wingraph-canvas" id="rv-wingraph-canvas"></canvas>
-      <div class="rv-wingraph-tip" id="rv-wingraph-tip" hidden></div>
+      <div class="rv-wingraph" id="rv-wingraph">
+        <div class="rv-wingraph-head">
+          <span class="rv-wingraph-label ct" id="rv-wingraph-ct">-</span>
+          <span class="rv-wingraph-label t" id="rv-wingraph-t">-</span>
+        </div>
+        <canvas class="rv-wingraph-canvas" id="rv-wingraph-canvas"></canvas>
+        <div class="rv-wingraph-tip" id="rv-wingraph-tip" hidden></div>
+      </div>
     </aside>
     <aside class="rv-zones-panel" id="rv-zones-panel" hidden>
       <div class="rv-zones-block">
@@ -626,7 +639,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     syncLoading();
     clearPlayerStates();
     if (chartOn) {
-      graphEl.hidden = false;
+      chartsEl.hidden = false;
       syncSideWinrates(null);
     }
     draw();
@@ -668,8 +681,12 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       if (!coachOn) autoOpenNotesIfPresent();
     }
 
-    if (chartOn) syncWinChart();
     if (zonesOn) await refreshZonePresence();
+    else if (chartOn) await ensureZoneNetwork();
+    if (chartOn) {
+      mapControlCache.delete(file);
+      syncWinChart();
+    }
     if (coachOn) {
       // During the initial full-match scan, do not analyse on click — wait for
       // the preload→analyse pass to finish so every round is covered once.
@@ -763,6 +780,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       zoneNetwork = net;
       zoneNetworkMap = map;
       zonePresenceCache.clear();
+      mapControlCache.clear();
       return zoneNetwork;
     } catch {
       if (load === zoneLoadId) {
@@ -1898,17 +1916,28 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   // run once per round on demand and cached. Everything the coach shows — the
   // graph, the readout, the diamonds — reads off that one result.
 
+  const chartsEl = el.querySelector('#rv-charts');
   const graphEl = el.querySelector('#rv-wingraph');
   const graphCanvas = el.querySelector('#rv-wingraph-canvas');
   const graphCtLabel = el.querySelector('#rv-wingraph-ct');
   const graphTLabel = el.querySelector('#rv-wingraph-t');
   const graphTip = el.querySelector('#rv-wingraph-tip');
+  const mapGraphEl = el.querySelector('.rv-mapgraph');
+  const mapCanvas = el.querySelector('#rv-mapgraph-canvas');
+  const mapCtLabel = el.querySelector('#rv-mapgraph-ct');
+  const mapTLabel = el.querySelector('#rv-mapgraph-t');
+  const mapNeuLabel = el.querySelector('#rv-mapgraph-neu');
+  const mapTip = el.querySelector('#rv-mapgraph-tip');
   /** CSS-pixel playhead on the canvas (for hit-testing + tip anchor). */
   let graphPlayhead = null;
   let graphHoverDot = false;
   let graphShift = false;
+  let mapPlayhead = null;
+  let mapHoverDot = false;
   /** round file -> { series, flags, gate } */
   const coachCache = new Map();
+  /** round file -> map control series [{tick,t,ct,neu}] */
+  const mapControlCache = new Map();
 
   const coachScratch = [];
 
@@ -2189,19 +2218,66 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   window.addEventListener('keydown', onGraphShiftKey);
   window.addEventListener('keyup', onGraphShiftKey);
 
+  function updateMapControlTip() {
+    if (!mapTip) return;
+    if (!chartOn || !mapHoverDot || !mapPlayhead?.sample) {
+      mapTip.hidden = true;
+      return;
+    }
+    const s = mapPlayhead.sample;
+    mapTip.innerHTML =
+      `<strong>Map control</strong><br>` +
+      `T ${Math.round(s.t)}% · Neutral ${Math.round(s.neu)}% · CT ${Math.round(s.ct)}%`;
+    mapTip.hidden = false;
+    if (!mapCanvas || !mapGraphEl) return;
+    const canvasRect = mapCanvas.getBoundingClientRect();
+    const hostRect = mapGraphEl.getBoundingClientRect();
+    mapTip.style.left = `${canvasRect.left - hostRect.left + mapPlayhead.x}px`;
+    mapTip.style.top = `${canvasRect.top - hostRect.top + mapPlayhead.y}px`;
+  }
+
+  function onMapGraphPointerMove(e) {
+    if (!mapPlayhead || !mapCanvas) {
+      mapHoverDot = false;
+      updateMapControlTip();
+      return;
+    }
+    const rect = mapCanvas.getBoundingClientRect();
+    const near =
+      Math.hypot(e.clientX - rect.left - mapPlayhead.x, e.clientY - rect.top - mapPlayhead.y) <=
+      16;
+    if (near !== mapHoverDot) {
+      mapHoverDot = near;
+      mapCanvas.classList.toggle('is-dot-hover', near);
+    }
+    updateMapControlTip();
+  }
+
+  function onMapGraphPointerLeave() {
+    mapHoverDot = false;
+    mapCanvas?.classList.remove('is-dot-hover');
+    updateMapControlTip();
+  }
+
+  mapCanvas?.addEventListener('pointermove', onMapGraphPointerMove);
+  mapCanvas?.addEventListener('pointerleave', onMapGraphPointerLeave);
+
   function syncChartBtn() {
     chartBtn?.classList.toggle('active', chartOn);
   }
 
-  /** Win% graph + side badges — driven by the Chart tool, not coach mode. */
+  /** Win% + map-control graphs — driven by the Chart tool, not coach mode. */
   function syncWinChart(tick = null) {
-    graphEl.hidden = !chartOn;
+    if (chartsEl) chartsEl.hidden = !chartOn;
     syncChartBtn();
     if (!chartOn) {
       syncSideWinrates(null);
       graphPlayhead = null;
+      mapPlayhead = null;
       graphHoverDot = false;
+      mapHoverDot = false;
       if (graphTip) graphTip.hidden = true;
+      if (mapTip) mapTip.hidden = true;
       return;
     }
     const at = tick ?? sequence.locate(playback.position).tick;
@@ -2209,6 +2285,173 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const result = coachFor(activeIndex);
     if (result) drawWinGraph(result, at, live);
     syncSideWinrates(coachProbabilityAt(live || coachSampleAt(result, at)));
+    syncMapControlChart(at);
+  }
+
+  function mapControlFor(index) {
+    const file = files[index];
+    if (!file) return null;
+    if (mapControlCache.has(file)) return mapControlCache.get(file);
+    const roundMeta = index === activeIndex ? activeMeta : null;
+    if (!roundMeta?.players?.length) return null;
+    const track = store.get(file)?.full || null;
+    if (!track) return null;
+    const net = zoneNetwork;
+    if (!net?.zones?.length) return null;
+    const mapCode = renderer.mapCode || roundMeta.map || '';
+    if (!renderer.image || !mapCode) return null;
+    let series;
+    try {
+      series = buildMapControlSeries({
+        meta: roundMeta,
+        track,
+        network: net,
+        castPlayerBeams: createBeamCaster({
+          meta: roundMeta,
+          network: net,
+          mapCode,
+          radarImage: renderer.image
+        })
+      });
+    } catch {
+      return null;
+    }
+    if (series?.length) mapControlCache.set(file, series);
+    return series;
+  }
+
+  function mapSampleAt(series, tick) {
+    if (!series?.length) return null;
+    let best = series[0];
+    for (const s of series) {
+      if (s.tick <= tick) best = s;
+      else break;
+    }
+    return best;
+  }
+
+  function drawMapControlGraph(series, tick) {
+    if (!mapCanvas || !series?.length) {
+      mapPlayhead = null;
+      return;
+    }
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const rect = mapCanvas.getBoundingClientRect();
+    const w = Math.max(1, Math.round(rect.width * dpr));
+    const h = Math.max(1, Math.round(rect.height * dpr));
+    if (mapCanvas.width !== w || mapCanvas.height !== h) {
+      mapCanvas.width = w;
+      mapCanvas.height = h;
+    }
+    const ctx = mapCanvas.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
+
+    const span = Math.max(1, series.length - 1);
+    const xAt = (i) => (i / span) * w;
+    // Stacked: bottom CT, middle neutral, top T (y=0 is top of canvas).
+    const yCt = (i) => h - (series[i].ct / 100) * h;
+    const yNeuTop = (i) => h - ((series[i].ct + series[i].neu) / 100) * h;
+
+    const fillBand = (yBottomFn, yTopFn, color) => {
+      ctx.beginPath();
+      ctx.moveTo(0, yBottomFn(0));
+      for (let i = 0; i < series.length; i++) ctx.lineTo(xAt(i), yBottomFn(i));
+      for (let i = series.length - 1; i >= 0; i--) ctx.lineTo(xAt(i), yTopFn(i));
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+    };
+
+    // Bottom band = CT (up from canvas bottom).
+    fillBand(
+      () => h,
+      yCt,
+      'rgba(91, 159, 212, 0.72)'
+    );
+    // Middle = neutral.
+    fillBand(
+      yCt,
+      yNeuTop,
+      'rgba(150, 156, 168, 0.38)'
+    );
+    // Top = T.
+    fillBand(
+      yNeuTop,
+      () => 0,
+      'rgba(232, 184, 74, 0.72)'
+    );
+
+    // Jagged separators.
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    for (let i = 0; i < series.length; i++) {
+      const x = xAt(i);
+      const y = yCt(i);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.beginPath();
+    for (let i = 0; i < series.length; i++) {
+      const x = xAt(i);
+      const y = yNeuTop(i);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    let i0 = 0;
+    for (let i = 0; i < series.length; i++) if (series[i].tick <= tick) i0 = i;
+    const i1 = Math.min(series.length - 1, i0 + 1);
+    let f = 0;
+    if (i1 > i0) {
+      const t0 = series[i0].tick;
+      const t1 = series[i1].tick;
+      f = t1 > t0 ? Math.min(1, Math.max(0, (tick - t0) / (t1 - t0))) : 0;
+    }
+    const px = xAt(i0) * (1 - f) + xAt(i1) * f;
+    const sample = mapSampleAt(series, tick);
+    const ct = sample?.ct ?? 0;
+    const neu = sample?.neu ?? 0;
+    const tShare = sample?.t ?? 0;
+    const py = h - ((ct + neu / 2) / 100) * h;
+    const r = 3.5 * dpr;
+    ctx.beginPath();
+    ctx.arc(px, py, r + 1.2 * dpr, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+
+    mapPlayhead = { x: px / dpr, y: py / dpr, tick, sample };
+    if (mapCtLabel) mapCtLabel.textContent = `CT ${Math.round(ct)}%`;
+    if (mapTLabel) mapTLabel.textContent = `T ${Math.round(tShare)}%`;
+    if (mapNeuLabel) mapNeuLabel.textContent = `Neu ${Math.round(neu)}%`;
+  }
+
+  function syncMapControlChart(tick) {
+    if (!chartOn || !mapCanvas) return;
+    const series = mapControlFor(activeIndex);
+    if (series) {
+      drawMapControlGraph(series, tick);
+      return;
+    }
+    mapPlayhead = null;
+    if (mapCtLabel) mapCtLabel.textContent = 'CT';
+    if (mapTLabel) mapTLabel.textContent = 'T';
+    if (mapNeuLabel) mapNeuLabel.textContent = 'Map control';
+    // Chart works without the positions overlay — load the zone network on demand.
+    const file = files[activeIndex];
+    const wantTick = tick;
+    ensureZoneNetwork().then(() => {
+      if (destroyed || !chartOn || files[activeIndex] !== file) return;
+      mapControlCache.delete(file);
+      const built = mapControlFor(activeIndex);
+      if (built) drawMapControlGraph(built, wantTick);
+    });
   }
 
   function hideCoachPick() {
@@ -2801,6 +3044,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       mapEl.removeEventListener('pointerleave', onZoneHoverLeave);
       graphCanvas?.removeEventListener('pointermove', onGraphPointerMove);
       graphCanvas?.removeEventListener('pointerleave', onGraphPointerLeave);
+      mapCanvas?.removeEventListener('pointermove', onMapGraphPointerMove);
+      mapCanvas?.removeEventListener('pointerleave', onMapGraphPointerLeave);
     }
   };
 }

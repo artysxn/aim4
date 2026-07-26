@@ -15,6 +15,13 @@ import {
   rectsFromPieces
 } from './zoneGeom.js';
 import { RADAR_SIZE, worldToRadar } from '../viewer/mapCalibration.js';
+import {
+  VISION_STRIDE,
+  applyBeamHits,
+  claimVisual,
+  decayClaims,
+  emptyClaim
+} from './mapControl.js';
 
 /** @typedef {'empty'|'t-active'|'t-control'|'ct-active'|'ct-control'|'contested'|'contested-active'} ZonePaint */
 
@@ -72,27 +79,39 @@ const adjacencyCache = new WeakMap();
 const losCache = new Map();
 
 /**
- * Per-viewer amortized LOS state for the timeline zones overlay.
- * One living player is recomputed per paint; others reuse their last result.
- * @returns {{ rr: number, byPlayer: Map<string, object>, smokeKey: string, lastTick: number|null, roundKey: string }}
+ * Per-viewer amortized LOS + beam-claim state for the timeline zones overlay.
+ * One living player is fired every VISION_STRIDE demo ticks (round-robin).
+ * @returns {{
+ *   rr: number,
+ *   byPlayer: Map<string, object>,
+ *   claims: Map<string, import('./mapControl.js').ClaimState>,
+ *   smokeKey: string,
+ *   lastTick: number|null,
+ *   lastStride: number|null,
+ *   roundKey: string
+ * }}
  */
 export function createZoneVisionCache() {
   return {
     rr: 0,
     byPlayer: new Map(),
+    claims: new Map(),
     smokeKey: '',
     lastTick: null,
+    lastStride: null,
     roundKey: ''
   };
 }
 
-/** Drop all cached per-player sight (round change, seek, smoke pop, etc.). */
+/** Drop all cached per-player sight / claims (round change, seek, smoke pop). */
 export function resetZoneVisionCache(cache) {
   if (!cache) return;
   cache.rr = 0;
   cache.byPlayer.clear();
+  cache.claims = new Map();
   cache.smokeKey = '';
   cache.lastTick = null;
+  cache.lastStride = null;
   cache.roundKey = '';
 }
 
@@ -498,7 +517,55 @@ function castFovRay(viewer, yawDeg, los, smokes, network, smoked, hitCounts, ray
 }
 
 /**
- * Vision for one living player: 11-ray FOV fan (edges, center, 4 per half).
+ * Cast the 11-ray FOV fan; returns distinct beams per position (1–11).
+ * @returns {Map<string, number>}
+ */
+/**
+ * Bind map/radar/grenades into a cast function for `buildMapControlSeries`.
+ * @returns {(ctx: { viewer: object, tick: number }) => Map<string, number>}
+ */
+export function createBeamCaster({ meta, network, mapCode, radarImage }) {
+  const los = getRadarLos(mapCode, radarImage);
+  if (!los || !meta || !network) return () => new Map();
+  const tickRate = meta.tickRate || 64;
+  const grenades = meta.events?.grenades || [];
+  return ({ viewer, tick }) => {
+    const smokeCenters = activeSmokes(grenades, tick, tickRate);
+    const smoked = smokedPositions(grenades, tick, tickRate, network);
+    return castPlayerBeams({ viewer, los, smokeCenters, network, smoked });
+  };
+}
+
+export function castPlayerBeams({
+  viewer,
+  los,
+  smokeCenters,
+  network,
+  smoked
+}) {
+  /** @type {Map<string, number>} */
+  const hitCounts = new Map();
+  /** @type {Map<string, number>} */
+  const rayCounts = new Map();
+  const baseYaw = Number(viewer.yaw) || 0;
+  for (const offset of FOV_RAY_OFFSETS) {
+    castFovRay(
+      viewer,
+      baseYaw + offset,
+      los,
+      smokeCenters,
+      network,
+      smoked || new Set(),
+      hitCounts,
+      rayCounts
+    );
+  }
+  return rayCounts;
+}
+
+/**
+ * Vision for one living player: 11-ray FOV fan + tip/history events.
+ * `beamHits` is the per-position beam count used by the claim accumulator.
  */
 function computePlayerVision({
   player,
@@ -515,29 +582,17 @@ function computePlayerVision({
 }) {
   /** @type {Array<{ posId: string, cover: number, through: boolean, direct: boolean }>} */
   const seen = [];
-  /** @type {Map<string, number>} */
-  const hitCounts = new Map();
-  /** @type {Map<string, number>} */
-  const rayCounts = new Map();
-
-  const baseYaw = Number(viewer.yaw) || 0;
-  for (const offset of FOV_RAY_OFFSETS) {
-    castFovRay(
-      viewer,
-      baseYaw + offset,
-      los,
-      smokeCenters,
-      network,
-      smoked,
-      hitCounts,
-      rayCounts
-    );
-  }
+  const rayCounts = castPlayerBeams({
+    viewer,
+    los,
+    smokeCenters,
+    network,
+    smoked
+  });
 
   const rayTotal = FOV_RAY_OFFSETS.length;
-  for (const [posId, hits] of hitCounts) {
-    if (hits < SIGHT_RAY_MIN_HITS) continue;
-    const rays = rayCounts.get(posId) || 1;
+  for (const [posId, rays] of rayCounts) {
+    if (rays < SIGHT_RAY_MIN_HITS) continue;
     const reportCover = Math.min(0.99, rays / rayTotal);
 
     seen.push({
@@ -575,11 +630,11 @@ function computePlayerVision({
       reason: 'sight',
       playerId: player.id,
       playerName,
-      detail: `Clear sight (${Math.round(reportCover * 100)}% cone)`
+      detail: `Clear sight (${rays}/${rayTotal} beams)`
     });
   }
 
-  return { playerId: player.id, side, playerName, seen };
+  return { playerId: player.id, side, playerName, seen, beamHits: rayCounts };
 }
 
 /** Merge cached per-player sight against *current* occupancy. */
@@ -629,17 +684,18 @@ function mergePlayerVision(entries, active) {
 }
 
 /**
- * Apply vision claims for the current tick.
+ * Apply vision + beam-claim accumulation for the current tick.
  *
- * With `visionCache`, only one living player is raytraced per call (round-robin);
- * others reuse their last result and merge against current occupancy. Without a
- * cache, every living player is computed (slow path).
+ * With `visionCache`, one living player fires every VISION_STRIDE demo ticks
+ * (round-robin). Beam hits accumulate toward neutral (3) / flip (20) thresholds.
+ * Without a cache, every living player is computed once (no persistence).
  *
  * @returns {{
  *   tSight: Set<string>,
  *   ctSight: Set<string>,
  *   contestedSight: Set<string>,
- *   sightNow: Map<string, Array<{side:string, playerId:string, playerName:string, cover:number, enemy:boolean}>>
+ *   sightNow: Map<string, Array<{side:string, playerId:string, playerName:string, cover:number, enemy:boolean}>>,
+ *   claims: Map<string, import('./mapControl.js').ClaimState>|null
  * }}
  */
 function applyVisionClaims({
@@ -658,7 +714,8 @@ function applyVisionClaims({
     tSight: new Set(),
     ctSight: new Set(),
     contestedSight: new Set(),
-    sightNow: new Map()
+    sightNow: new Map(),
+    claims: null
   };
   if (!meta || !network?.zones?.length || !radarImage) return empty;
   const los = getRadarLos(mapCode, radarImage);
@@ -701,11 +758,14 @@ function applyVisionClaims({
     });
 
   if (!visionCache) {
-    return mergePlayerVision(
+    const merged = mergePlayerVision(
       viewers.map((v) => runOne(v)),
       active
     );
+    return { ...merged, claims: null };
   }
+
+  if (!visionCache.claims) visionCache.claims = new Map();
 
   const smokeKey = smokeCenters
     .map((s) => `${Math.round(s.x)},${Math.round(s.y)}`)
@@ -715,19 +775,23 @@ function applyVisionClaims({
   if (visionCache.roundKey !== roundKey) {
     resetZoneVisionCache(visionCache);
     visionCache.roundKey = roundKey;
+    visionCache.claims = new Map();
   }
   if (visionCache.smokeKey !== smokeKey) {
     visionCache.byPlayer.clear();
     visionCache.rr = 0;
+    visionCache.lastStride = null;
     visionCache.smokeKey = smokeKey;
   }
-  // Large scrub jump — drop stale cones rather than blending distant times.
+  // Large scrub jump — drop cones + claim progress.
   if (
     visionCache.lastTick != null &&
     Math.abs(tick - visionCache.lastTick) > tickRate * 2
   ) {
     visionCache.byPlayer.clear();
     visionCache.rr = 0;
+    visionCache.claims = new Map();
+    visionCache.lastStride = null;
   }
   visionCache.lastTick = tick;
 
@@ -736,24 +800,26 @@ function applyVisionClaims({
     if (!aliveIds.has(id)) visionCache.byPlayer.delete(id);
   }
 
-  if (viewers.length) {
-    // Cold cache (seek / smoke / round): compute everyone once, then amortize.
-    if (visionCache.byPlayer.size === 0) {
-      // Cold start after seek/smoke/round: one full pass, then amortize.
-      for (const v of viewers) {
-        visionCache.byPlayer.set(v.player.id, runOne(v));
+  const stride = Math.floor(tick / VISION_STRIDE);
+  decayClaims(visionCache.claims, tick, tickRate);
+
+  if (viewers.length && visionCache.lastStride !== stride) {
+    visionCache.lastStride = stride;
+    const focus = viewers[visionCache.rr % viewers.length];
+    visionCache.rr++;
+    const result = runOne(focus);
+    visionCache.byPlayer.set(focus.player.id, result);
+    for (const [posId, beams] of result.beamHits || []) {
+      if (!visionCache.claims.has(posId)) {
+        visionCache.claims.set(posId, emptyClaim());
       }
-      visionCache.rr = 0;
-    } else {
-      const focus = viewers[visionCache.rr % viewers.length];
-      visionCache.rr++;
-      visionCache.byPlayer.set(focus.player.id, runOne(focus));
-      // Edge case: a living viewer with no entry yet (skip until their slot).
-      for (const v of viewers) {
-        if (!visionCache.byPlayer.has(v.player.id)) {
-          visionCache.byPlayer.set(v.player.id, runOne(v));
-        }
-      }
+      applyBeamHits(
+        visionCache.claims.get(posId),
+        focus.side,
+        beams,
+        tick,
+        tickRate
+      );
     }
   }
 
@@ -762,7 +828,8 @@ function applyVisionClaims({
     const hit = visionCache.byPlayer.get(v.player.id);
     if (hit) merged.push(hit);
   }
-  return mergePlayerVision(merged, active);
+  const sight = mergePlayerVision(merged, active);
+  return { ...sight, claims: visionCache.claims };
 }
 
 function sideOfPaint(key) {
@@ -943,7 +1010,7 @@ export function computeZonePaint({
   if (!network?.zones?.length) return { paint, info };
 
   const active = activePositionsAt({ meta, states, network });
-  const { tSight, ctSight, contestedSight, sightNow } = applyVisionClaims({
+  const { tSight, ctSight, contestedSight, sightNow, claims } = applyVisionClaims({
     meta,
     states,
     network,
@@ -956,9 +1023,8 @@ export function computeZonePaint({
     visionCache
   });
 
-  // Contested is present-tense only: both sides here now, or one side here
-  // while the other sees it now, or both sides see it now. Old visits never
-  // force contested.
+  // Feet first, then beam-claim ownership (3 hits neutral / 20 to flip).
+  // Instant FOV alone no longer paints control — only accumulated beams do.
   for (const pos of network.zones) {
     if (!pos?.id || pos.hidden) continue;
     const tAct = active.t.has(pos.id);
@@ -966,25 +1032,29 @@ export function computeZonePaint({
     const tSee = tSight.has(pos.id);
     const ctSee = ctSight.has(pos.id);
     const fightNow = contestedSight.has(pos.id);
+    const visual = claims ? claimVisual(claims.get(pos.id)) : null;
 
     if (tAct && ctAct) {
       paint[pos.id] = 'contested-active';
-    } else if (tAct && (fightNow || ctSee)) {
+    } else if (tAct && (fightNow || ctSee || visual === 'contested' || visual === 'CT')) {
       paint[pos.id] = 'contested-active';
-    } else if (ctAct && (fightNow || tSee)) {
+    } else if (ctAct && (fightNow || tSee || visual === 'contested' || visual === 'T')) {
       paint[pos.id] = 'contested-active';
     } else if (tAct) {
       paint[pos.id] = 't-active';
     } else if (ctAct) {
       paint[pos.id] = 'ct-active';
-    } else if (fightNow || (tSee && ctSee)) {
+    } else if (fightNow || visual === 'contested') {
       paint[pos.id] = 'contested';
-    } else if (tSee) {
+    } else if (visual === 'T') {
       paint[pos.id] = 't-control';
-    } else if (ctSee) {
+    } else if (visual === 'CT') {
       paint[pos.id] = 'ct-control';
+    } else if (claims) {
+      // Beam-claim system is authoritative when the vision cache is active.
+      paint[pos.id] = 'empty';
     } else {
-      // Soft control: whichever side claimed most recently (re-entries count).
+      // Soft foot-history fallback (no live claim state).
       const latest = latestOwnerSide(presence, pos.id, tick);
       paint[pos.id] =
         latest === 'T' ? 't-control' : latest === 'CT' ? 'ct-control' : 'empty';
@@ -1022,37 +1092,48 @@ export function computeZonePaint({
         text: `Neutral pocket → ${sur.side} (borders: ${sur.neighborNames.join(', ')})`
       });
     }
-    // Soft historical control only explained when it actually drives the paint
-    // (empty of present fights) — never as a contested reason. Cite the latest
-    // claim tick, not the first visit of the round.
     const tFirst = presence?.firstT.get(pos.id);
     const ctFirst = presence?.firstCT.get(pos.id);
-    const softClaim = latestClaimAt(presence, pos.id, tick);
-    if (
-      key === 't-control' &&
-      !tSight.has(pos.id) &&
-      !sur &&
-      softClaim?.side === 'T'
-    ) {
+    const claimSt = claims?.get(pos.id);
+    if (claimSt && (key === 't-control' || key === 'ct-control' || key === 'contested') && !sur) {
+      const owner = claimSt.owner || 'none';
+      const prog =
+        claimSt.tHits || claimSt.ctHits
+          ? ` · progress T ${claimSt.tHits}/CT ${claimSt.ctHits}`
+          : '';
       why.push({
         kind: 'visit',
-        side: 'T',
-        tick: softClaim.tick,
-        text: 'Soft T control from the latest claim (no present CT contest)'
+        side: claimSt.owner,
+        text: `Beam claim owner ${owner}${prog} (neutral needs 3, flip needs 20)`
       });
-    }
-    if (
-      key === 'ct-control' &&
-      !ctSight.has(pos.id) &&
-      !sur &&
-      softClaim?.side === 'CT'
-    ) {
-      why.push({
-        kind: 'visit',
-        side: 'CT',
-        tick: softClaim.tick,
-        text: 'Soft CT control from the latest claim (no present T contest)'
-      });
+    } else {
+      const softClaim = latestClaimAt(presence, pos.id, tick);
+      if (
+        key === 't-control' &&
+        !tSight.has(pos.id) &&
+        !sur &&
+        softClaim?.side === 'T'
+      ) {
+        why.push({
+          kind: 'visit',
+          side: 'T',
+          tick: softClaim.tick,
+          text: 'Soft T control from the latest claim (no present CT contest)'
+        });
+      }
+      if (
+        key === 'ct-control' &&
+        !ctSight.has(pos.id) &&
+        !sur &&
+        softClaim?.side === 'CT'
+      ) {
+        why.push({
+          kind: 'visit',
+          side: 'CT',
+          tick: softClaim.tick,
+          text: 'Soft CT control from the latest claim (no present T contest)'
+        });
+      }
     }
     if (key === 't-active' && !ctOcc.length) {
       why.push({
