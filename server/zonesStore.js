@@ -33,6 +33,7 @@ const SECTIONS_MAX = 40;
 const SECTION_ZONES_MAX = 40;
 const AREAS_MAX = 40;
 const AREA_SECTIONS_MAX = 40;
+const LAYER_PIECES_MAX = 5000;
 
 async function ensureDir(dir = ZONES_ROOT) {
   await fsp.mkdir(dir, { recursive: true });
@@ -52,10 +53,40 @@ function validRing(ring) {
   return true;
 }
 
+/** Vision-block / elevated brush pieces (same rect/poly shape as positions). */
+function sanitizeLayerPieces(raw) {
+  const pieces = [];
+  if (!Array.isArray(raw)) return pieces;
+  for (const piece of raw.slice(0, LAYER_PIECES_MAX)) {
+    if (!piece || typeof piece !== 'object') continue;
+    const asRect =
+      piece.type === 'rect' ||
+      (piece.type == null &&
+        Number.isFinite(Number(piece.x)) &&
+        Number.isFinite(Number(piece.y)) &&
+        Number.isFinite(Number(piece.w)) &&
+        Number.isFinite(Number(piece.h)));
+    if (asRect) {
+      const x = Number(piece.x);
+      const y = Number(piece.y);
+      const w = Number(piece.w);
+      const h = Number(piece.h);
+      if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) continue;
+      pieces.push({ type: 'rect', x, y, w, h });
+    } else if (piece.type === 'poly' && validRing(piece.ring)) {
+      pieces.push({
+        type: 'poly',
+        ring: piece.ring.map((p) => [Number(p[0]), Number(p[1])])
+      });
+    }
+  }
+  return pieces;
+}
+
 /**
  * @param {string} map
  * @param {unknown} payload
- * @returns {{ map: string, zones: Array, sections: Array, areas: Array, colorMode: string, updatedAt: number }}
+ * @returns {{ map: string, zones: Array, sections: Array, areas: Array, visionBlocks: Array, elevated: Array, colorMode: string, updatedAt: number }}
  */
 export function sanitizeZones(map, payload) {
   const code = String(map || '').toUpperCase();
@@ -179,6 +210,8 @@ export function sanitizeZones(map, payload) {
     zones,
     sections,
     areas,
+    visionBlocks: sanitizeLayerPieces(payload?.visionBlocks),
+    elevated: sanitizeLayerPieces(payload?.elevated),
     colorMode,
     updatedAt: Number(payload?.updatedAt) || Date.now()
   };
@@ -231,7 +264,16 @@ export async function getZones(map) {
   await migrateLegacyIfNeeded(code);
   const data = await readJsonFile(fileFor(code));
   if (!data) {
-    return { map: code, zones: [], sections: [], areas: [], colorMode: 'zone', updatedAt: 0 };
+    return {
+      map: code,
+      zones: [],
+      sections: [],
+      areas: [],
+      visionBlocks: [],
+      elevated: [],
+      colorMode: 'zone',
+      updatedAt: 0
+    };
   }
   try {
     // Read-only: never rewrite the file on GET. Missing sections/areas/colorMode
@@ -242,7 +284,16 @@ export async function getZones(map) {
     try {
       return sanitizeZones(code, { zones: Array.isArray(data.zones) ? data.zones : [] });
     } catch {
-      return { map: code, zones: [], sections: [], areas: [], colorMode: 'zone', updatedAt: 0 };
+      return {
+        map: code,
+        zones: [],
+        sections: [],
+        areas: [],
+        visionBlocks: [],
+        elevated: [],
+        colorMode: 'zone',
+        updatedAt: 0
+      };
     }
   }
 }
@@ -262,6 +313,11 @@ export async function saveZones(map, payload) {
     zones: Array.isArray(payload?.zones) ? payload.zones : existing.zones || [],
     sections: Array.isArray(payload?.sections) ? payload.sections : existing.sections || [],
     areas: Array.isArray(payload?.areas) ? payload.areas : existing.areas || [],
+    // Older clients omit these — keep on-disk brush layers instead of wiping them.
+    visionBlocks: Array.isArray(payload?.visionBlocks)
+      ? payload.visionBlocks
+      : existing.visionBlocks || [],
+    elevated: Array.isArray(payload?.elevated) ? payload.elevated : existing.elevated || [],
     colorMode:
       payload?.colorMode === 'section' ||
       payload?.colorMode === 'area' ||

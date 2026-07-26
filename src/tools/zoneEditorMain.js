@@ -40,11 +40,21 @@ import {
   worldRectFromRadarDrag
 } from '../replays/zones/zoneModel.js';
 import { fetchZones, saveZones } from '../replays/zones/zoneApi.js';
+import {
+  DEFAULT_BRUSH_PX,
+  MAX_BRUSH_PX,
+  MIN_BRUSH_PX,
+  bumpLayerPaintGen,
+  ensureVisionLayers,
+  strokeBrush
+} from '../replays/zones/visionLayers.js';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 6;
 const MIN_DRAW_PX = 8;
 const UNDO_MAX = 40;
+const VISION_COLOR = '#9b6cff';
+const ELEVATED_COLOR = '#e8a03c';
 
 const el = {
   mapTabs: document.querySelector('#ze-maps'),
@@ -59,6 +69,9 @@ const el = {
   btnAreaAdd: document.querySelector('#ze-area-add'),
   colorMode: document.querySelector('#ze-color-mode'),
   zoomLabel: document.querySelector('#ze-zoom'),
+  brushSizeLabel: document.querySelector('#ze-brush-size'),
+  brushRing: document.querySelector('#ze-brush-ring'),
+  layerCounts: document.querySelector('#ze-layer-counts'),
   status: document.querySelector('#ze-status'),
   modal: document.querySelector('#ze-overlap'),
   modalBody: document.querySelector('#ze-overlap-body'),
@@ -66,11 +79,20 @@ const el = {
   btnSave: document.querySelector('#ze-save'),
   btnZoomIn: document.querySelector('#ze-zoom-in'),
   btnZoomOut: document.querySelector('#ze-zoom-out'),
-  btnReset: document.querySelector('#ze-reset')
+  btnReset: document.querySelector('#ze-reset'),
+  toolPositions: document.querySelector('#ze-tool-positions'),
+  toolVision: document.querySelector('#ze-tool-vision'),
+  toolElevated: document.querySelector('#ze-tool-elevated'),
+  toolErase: document.querySelector('#ze-tool-erase'),
+  btnBrushDown: document.querySelector('#ze-brush-down'),
+  btnBrushUp: document.querySelector('#ze-brush-up'),
+  btnClearVision: document.querySelector('#ze-clear-vision'),
+  btnClearElevated: document.querySelector('#ze-clear-elevated')
 };
 
 let mapCode = MAP_CODES.includes('INF') ? 'INF' : MAP_CODES[0];
 let network = emptyNetwork(mapCode);
+ensureVisionLayers(network);
 let savedSnapshot = '[]';
 /** @type {Array<object>} */
 let undoStack = [];
@@ -83,6 +105,13 @@ let dirty = false;
 let drawing = null;
 let panning = false;
 let lastPan = null;
+/** @type {'positions'|'visionBlock'|'elevated'|'erase'} */
+let paintTool = 'positions';
+/** Layer erase targets when erase tool is active. */
+let eraseTarget = 'visionBlock';
+let brushPx = DEFAULT_BRUSH_PX;
+/** @type {null | { last: {x:number,y:number}, layer: 'visionBlock'|'elevated', erase: boolean }} */
+let brushing = null;
 /** Multi-select positions (Shift-click toggles). */
 const selectedIds = new Set();
 /** Multi-select zones / sections. */
@@ -118,6 +147,8 @@ function snapshotOf(net) {
     zones: net.zones || [],
     sections: net.sections || [],
     areas: net.areas || [],
+    visionBlocks: net.visionBlocks || [],
+    elevated: net.elevated || [],
     colorMode: normalizeColorMode(net.colorMode)
   });
 }
@@ -128,6 +159,8 @@ function cloneNetworkState() {
       zones: network.zones || [],
       sections: network.sections || [],
       areas: network.areas || [],
+      visionBlocks: network.visionBlocks || [],
+      elevated: network.elevated || [],
       colorMode: normalizeColorMode(network.colorMode)
     })
   );
@@ -227,7 +260,10 @@ function undoLast() {
   network.zones = prev.zones || [];
   network.sections = prev.sections || [];
   network.areas = prev.areas || [];
+  network.visionBlocks = prev.visionBlocks || [];
+  network.elevated = prev.elevated || [];
   network.colorMode = normalizeColorMode(prev.colorMode);
+  bumpLayerPaintGen(network);
   pruneSelection();
   syncColorModeUi();
   markDirty(snapshotOf(network) !== savedSnapshot);
@@ -415,7 +451,34 @@ function draw() {
     }
   }
 
-  if (drawing) {
+  // Vision layers sit above positions so brush work stays visible.
+  ensureVisionLayers(network);
+  const drawLayer = (pieces, color, alpha) => {
+    if (!pieces?.length) return;
+    ctx.fillStyle = hexAlpha(color, alpha);
+    for (const piece of pieces) {
+      if (piece.type === 'rect' || (piece.w > 0 && piece.h > 0 && !piece.ring)) {
+        const a = worldToRadar(mapCode, piece.x, piece.y, {});
+        const b = worldToRadar(mapCode, piece.x + piece.w, piece.y + piece.h, {});
+        const x = Math.min(a.x, b.x);
+        const y = Math.min(a.y, b.y);
+        ctx.fillRect(x, y, Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+      } else if (piece.ring?.length >= 3) {
+        ctx.beginPath();
+        for (let i = 0; i < piece.ring.length; i++) {
+          const rp = worldToRadar(mapCode, piece.ring[i][0], piece.ring[i][1], {});
+          if (i === 0) ctx.moveTo(rp.x, rp.y);
+          else ctx.lineTo(rp.x, rp.y);
+        }
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+  };
+  drawLayer(network.visionBlocks, VISION_COLOR, 0.45);
+  drawLayer(network.elevated, ELEVATED_COLOR, 0.4);
+
+  if (drawing && paintTool === 'positions') {
     const x0 = Math.min(drawing.r0.x, drawing.r1.x);
     const y0 = Math.min(drawing.r0.y, drawing.r1.y);
     const rw = Math.abs(drawing.r1.x - drawing.r0.x);
@@ -680,10 +743,82 @@ function renderAreas() {
     .join('');
 }
 
+function syncLayerCounts() {
+  ensureVisionLayers(network);
+  if (!el.layerCounts) return;
+  const vb = network.visionBlocks.length;
+  const elv = network.elevated.length;
+  el.layerCounts.textContent = `${vb} vision block stamp${vb === 1 ? '' : 's'} · ${elv} elevated stamp${elv === 1 ? '' : 's'}`;
+}
+
 function renderAll() {
   renderList();
   renderSections();
   renderAreas();
+  syncLayerCounts();
+  syncPaintToolUi();
+}
+
+function syncPaintToolUi() {
+  const isBrush = paintTool !== 'positions';
+  el.toolPositions?.classList.toggle('active', paintTool === 'positions');
+  el.toolVision?.classList.toggle('active', paintTool === 'visionBlock');
+  el.toolVision?.classList.toggle('vision', paintTool === 'visionBlock');
+  el.toolElevated?.classList.toggle('active', paintTool === 'elevated');
+  el.toolElevated?.classList.toggle('elevated', paintTool === 'elevated');
+  el.toolErase?.classList.toggle('active', paintTool === 'erase');
+  el.canvas?.classList.toggle('ze-brush-cursor', isBrush);
+  if (el.brushSizeLabel) el.brushSizeLabel.textContent = String(brushPx);
+  if (!isBrush) hideBrushRing();
+}
+
+function setPaintTool(tool) {
+  if (tool === 'visionBlock' || tool === 'elevated') eraseTarget = tool;
+  paintTool = tool;
+  brushing = null;
+  drawing = null;
+  syncPaintToolUi();
+  draw();
+}
+
+function hideBrushRing() {
+  if (!el.brushRing) return;
+  el.brushRing.classList.remove('on', 'vision', 'elevated', 'erase');
+  el.brushRing.hidden = true;
+}
+
+function updateBrushRing(clientX, clientY) {
+  if (!el.brushRing || paintTool === 'positions') {
+    hideBrushRing();
+    return;
+  }
+  const stage = el.canvas.parentElement;
+  if (!stage) return;
+  const rect = stage.getBoundingClientRect();
+  const t = viewTransform(el.canvas.width, el.canvas.height);
+  const cssScale = (rect.width / el.canvas.width) * t.scale;
+  const diam = Math.max(4, brushPx * cssScale);
+  el.brushRing.hidden = false;
+  el.brushRing.classList.add('on');
+  el.brushRing.classList.toggle('vision', paintTool === 'visionBlock');
+  el.brushRing.classList.toggle('elevated', paintTool === 'elevated');
+  el.brushRing.classList.toggle('erase', paintTool === 'erase');
+  el.brushRing.style.left = `${clientX - rect.left}px`;
+  el.brushRing.style.top = `${clientY - rect.top}px`;
+  el.brushRing.style.width = `${diam}px`;
+  el.brushRing.style.height = `${diam}px`;
+}
+
+function activeBrushLayer() {
+  if (paintTool === 'visionBlock') return 'visionBlock';
+  if (paintTool === 'elevated') return 'elevated';
+  if (paintTool === 'erase') return eraseTarget;
+  return null;
+}
+
+function layerPieces(layer) {
+  ensureVisionLayers(network);
+  return layer === 'elevated' ? network.elevated : network.visionBlocks;
 }
 
 async function loadMap(code) {
@@ -700,11 +835,13 @@ async function loadMap(code) {
     network = await fetchZones(mapCode);
     // Fill missing arrays/colors in memory only — never wipe loaded polygons.
     if (!Array.isArray(network.zones)) network.zones = [];
+    ensureVisionLayers(network);
     ensureSections();
     ensureAreas();
     network.colorMode = normalizeColorMode(network.colorMode);
   } catch (err) {
     network = emptyNetwork(mapCode);
+    ensureVisionLayers(network);
     setStatus(err.message || 'Could not load positions', 'err');
   }
   savedSnapshot = snapshotOf(network);
@@ -1564,6 +1701,31 @@ el.canvas.addEventListener('drop', (e) => {
 
 // ---- canvas ----------------------------------------------------------------
 
+function applyBrushAt(radarPt, fromPt, layer, erase) {
+  const from = fromPt || radarPt;
+  let n = 0;
+  if (erase) {
+    // Eraser clears both vision layers under the tip.
+    n += strokeBrush(network.visionBlocks, mapCode, from, radarPt, brushPx, {
+      erase: true
+    });
+    n += strokeBrush(network.elevated, mapCode, from, radarPt, brushPx, {
+      erase: true
+    });
+  } else {
+    n = strokeBrush(layerPieces(layer), mapCode, from, radarPt, brushPx, {
+      erase: false
+    });
+  }
+  if (n > 0) {
+    bumpLayerPaintGen(network);
+    markDirty(true);
+    syncLayerCounts();
+    draw();
+  }
+  return n;
+}
+
 el.canvas.addEventListener('pointerdown', (e) => {
   if (pendingDraw) return;
   // Pan: middle/right click or Alt. Shift is reserved for multi-select on click.
@@ -1575,16 +1737,35 @@ el.canvas.addEventListener('pointerdown', (e) => {
   }
   if (e.button !== 0) return;
   const r = radarFromClient(e.clientX, e.clientY);
+
+  if (paintTool !== 'positions') {
+    const layer = activeBrushLayer() || 'visionBlock';
+    pushUndo();
+    const erase = paintTool === 'erase';
+    brushing = { last: { ...r }, layer, erase };
+    applyBrushAt(r, r, layer, erase);
+    el.canvas.setPointerCapture(e.pointerId);
+    updateBrushRing(e.clientX, e.clientY);
+    return;
+  }
+
   drawing = { r0: r, r1: { ...r }, shiftKey: e.shiftKey };
   el.canvas.setPointerCapture(e.pointerId);
 });
 
 el.canvas.addEventListener('pointermove', (e) => {
+  if (paintTool !== 'positions') updateBrushRing(e.clientX, e.clientY);
   if (panning && lastPan) {
     panX += e.clientX - lastPan.x;
     panY += e.clientY - lastPan.y;
     lastPan = { x: e.clientX, y: e.clientY };
     draw();
+    return;
+  }
+  if (brushing) {
+    const r = radarFromClient(e.clientX, e.clientY);
+    applyBrushAt(r, brushing.last, brushing.layer, brushing.erase);
+    brushing.last = r;
     return;
   }
   if (!drawing) return;
@@ -1598,10 +1779,65 @@ el.canvas.addEventListener('pointerup', () => {
     lastPan = null;
     return;
   }
+  if (brushing) {
+    brushing = null;
+    setStatus(
+      paintTool === 'erase'
+        ? 'Erased vision paint'
+        : paintTool === 'elevated'
+          ? 'Painted elevated'
+          : 'Painted vision block'
+    );
+    return;
+  }
   if (drawing) tryFinishDraw();
 });
 
+el.canvas.addEventListener('pointerleave', () => {
+  if (!brushing) hideBrushRing();
+});
+
 el.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+el.toolPositions?.addEventListener('click', () => setPaintTool('positions'));
+el.toolVision?.addEventListener('click', () => setPaintTool('visionBlock'));
+el.toolElevated?.addEventListener('click', () => setPaintTool('elevated'));
+el.toolErase?.addEventListener('click', () => setPaintTool('erase'));
+
+el.btnBrushDown?.addEventListener('click', () => {
+  brushPx = Math.max(MIN_BRUSH_PX, brushPx - 1);
+  syncPaintToolUi();
+});
+el.btnBrushUp?.addEventListener('click', () => {
+  brushPx = Math.min(MAX_BRUSH_PX, brushPx + 1);
+  syncPaintToolUi();
+});
+
+el.btnClearVision?.addEventListener('click', () => {
+  ensureVisionLayers(network);
+  if (!network.visionBlocks.length) return;
+  if (!confirm('Clear all vision block paint on this map?')) return;
+  pushUndo();
+  network.visionBlocks = [];
+  bumpLayerPaintGen(network);
+  markDirty(true);
+  syncLayerCounts();
+  draw();
+  setStatus('Cleared vision blocks');
+});
+
+el.btnClearElevated?.addEventListener('click', () => {
+  ensureVisionLayers(network);
+  if (!network.elevated.length) return;
+  if (!confirm('Clear all elevated paint on this map?')) return;
+  pushUndo();
+  network.elevated = [];
+  bumpLayerPaintGen(network);
+  markDirty(true);
+  syncLayerCounts();
+  draw();
+  setStatus('Cleared elevated');
+});
 
 el.canvas.addEventListener(
   'wheel',
@@ -1641,11 +1877,13 @@ el.btnDiscard?.addEventListener('click', async () => {
   if (dirty && !confirm('Discard unsaved changes?')) return;
   try {
     network = await fetchZones(mapCode);
+    ensureVisionLayers(network);
     ensureSections();
     ensureAreas();
     network.colorMode = normalizeColorMode(network.colorMode);
   } catch {
     network = emptyNetwork(mapCode);
+    ensureVisionLayers(network);
   }
   savedSnapshot = snapshotOf(network);
   clearUndo();
@@ -1663,7 +1901,9 @@ el.btnDiscard?.addEventListener('click', async () => {
 el.btnSave?.addEventListener('click', async () => {
   setStatus('Saving…');
   try {
+    ensureVisionLayers(network);
     network = await saveZones(mapCode, network);
+    ensureVisionLayers(network);
     ensureSections();
     ensureAreas();
     network.colorMode = normalizeColorMode(network.colorMode);

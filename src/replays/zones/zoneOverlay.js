@@ -22,6 +22,7 @@ import {
   decayClaims,
   emptyClaim
 } from './mapControl.js';
+import { getVisionLayerTests } from './visionLayers.js';
 
 /** @typedef {'empty'|'t-active'|'t-control'|'ct-active'|'ct-control'|'contested'|'contested-active'} ZonePaint */
 
@@ -486,24 +487,40 @@ function pointInSmoke(x, y, smokes, radius = SMOKE_RADIUS_UNITS) {
 }
 
 /**
- * March one FOV ray from the viewer until wall, smoke, or max range.
- * Tallies walkable floor hits per position along the way.
+ * March one FOV ray from the viewer until wall, smoke, vision-block, elevated
+ * ridge (from ground), or max range. Tallies walkable floor hits per position.
+ *
+ * Elevated: ground viewers cannot enter / see past painted elevated cells.
+ * Viewers standing on elevated can see onto elevated and continue past it.
  *
  * @param {Map<string, number>} hitCounts  posId -> step hits
  * @param {Map<string, number>} rayCounts  posId -> distinct rays that touched it
  */
-function castFovRay(viewer, yawDeg, los, smokes, network, smoked, hitCounts, rayCounts) {
+function castFovRay(
+  viewer,
+  yawDeg,
+  los,
+  smokes,
+  network,
+  smoked,
+  hitCounts,
+  rayCounts,
+  layers
+) {
   const rad = (yawDeg * Math.PI) / 180;
   // Match engine yaw: 0 = +X, 90 = +Y.
   const dirX = Math.cos(rad);
   const dirY = Math.sin(rad);
   /** @type {Set<string>} */
   const touched = new Set();
+  const viewerElevated = layers?.elevatedAt?.(viewer.x, viewer.y) || false;
 
   for (let dist = SIGHT_RAY_STEP; dist <= SIGHT_RAY_MAX; dist += SIGHT_RAY_STEP) {
     const x = viewer.x + dirX * dist;
     const y = viewer.y + dirY * dist;
     if (!los.isWalkableWorld(x, y)) break;
+    if (layers?.visionBlockAt?.(x, y)) break;
+    if (!viewerElevated && layers?.elevatedAt?.(x, y)) break;
     if (pointInSmoke(x, y, smokes)) break;
     for (const z of positionsAtPoint(x, y, network)) {
       if (!z?.id || smoked?.has(z.id)) continue;
@@ -532,7 +549,15 @@ export function createBeamCaster({ meta, network, mapCode, radarImage }) {
   return ({ viewer, tick }) => {
     const smokeCenters = activeSmokes(grenades, tick, tickRate);
     const smoked = smokedPositions(grenades, tick, tickRate, network);
-    return castPlayerBeams({ viewer, los, smokeCenters, network, smoked });
+    return castPlayerBeams({
+      viewer,
+      los,
+      smokeCenters,
+      network,
+      smoked,
+      layers: getVisionLayerTests(network, mapCode),
+      mapCode
+    });
   };
 }
 
@@ -541,12 +566,16 @@ export function castPlayerBeams({
   los,
   smokeCenters,
   network,
-  smoked
+  smoked,
+  layers = null,
+  mapCode = ''
 }) {
   /** @type {Map<string, number>} */
   const hitCounts = new Map();
   /** @type {Map<string, number>} */
   const rayCounts = new Map();
+  const layerTests =
+    layers || (mapCode && network ? getVisionLayerTests(network, mapCode) : null);
   const baseYaw = Number(viewer.yaw) || 0;
   for (const offset of FOV_RAY_OFFSETS) {
     castFovRay(
@@ -557,7 +586,8 @@ export function castPlayerBeams({
       network,
       smoked || new Set(),
       hitCounts,
-      rayCounts
+      rayCounts,
+      layerTests
     );
   }
   return rayCounts;
@@ -578,7 +608,9 @@ function computePlayerVision({
   network,
   active,
   presence,
-  tick
+  tick,
+  layers = null,
+  mapCode = ''
 }) {
   /** @type {Array<{ posId: string, cover: number, through: boolean, direct: boolean }>} */
   const seen = [];
@@ -587,7 +619,9 @@ function computePlayerVision({
     los,
     smokeCenters,
     network,
-    smoked
+    smoked,
+    layers,
+    mapCode
   });
 
   const rayTotal = FOV_RAY_OFFSETS.length;
@@ -724,6 +758,7 @@ function applyVisionClaims({
   const tickRate = meta.tickRate || 64;
   const smokeCenters = activeSmokes(grenades, tick, tickRate);
   const smoked = smokedPositions(grenades, tick, tickRate, network);
+  const layers = getVisionLayerTests(network, mapCode);
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
 
   /** @type {Array<{ player: object, side: 'T'|'CT', viewer: {x:number,y:number,yaw:number}, playerName: string }>} */
@@ -754,7 +789,9 @@ function applyVisionClaims({
       network,
       active,
       presence,
-      tick
+      tick,
+      layers,
+      mapCode
     });
 
   if (!visionCache) {

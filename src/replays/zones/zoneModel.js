@@ -49,7 +49,16 @@ export function newAreaId() {
 /** @typedef {'zone'|'section'|'area'} ColorMode */
 
 export function emptyNetwork(map) {
-  return { map, zones: [], sections: [], areas: [], colorMode: 'zone', updatedAt: 0 };
+  return {
+    map,
+    zones: [],
+    sections: [],
+    areas: [],
+    visionBlocks: [],
+    elevated: [],
+    colorMode: 'zone',
+    updatedAt: 0
+  };
 }
 
 function normalizeHex(color) {

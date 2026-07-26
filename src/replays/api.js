@@ -307,6 +307,8 @@ export async function fetchZones(map) {
       zones: [],
       sections: [],
       areas: [],
+      visionBlocks: [],
+      elevated: [],
       colorMode: 'zone',
       updatedAt: 0
     }
@@ -314,10 +316,10 @@ export async function fetchZones(map) {
 }
 
 /**
- * Persist positions + zones + areas for one map. Same shared write path as
- * saveRoundNotes — JSON on AIM4_REPLAY_DIR, no auth.
+ * Persist positions + zones + areas + vision layers for one map. Same shared
+ * write path as saveRoundNotes — JSON on AIM4_REPLAY_DIR, no auth.
  * @param {string} map
- * @param {{ zones?: Array, sections?: Array, areas?: Array, colorMode?: string }} network
+ * @param {{ zones?: Array, sections?: Array, areas?: Array, visionBlocks?: Array, elevated?: Array, colorMode?: string }} network
  */
 export async function saveZones(map, network) {
   const colorMode =
@@ -334,6 +336,8 @@ export async function saveZones(map, network) {
         zones: network.zones || [],
         sections: network.sections || [],
         areas: network.areas || [],
+        visionBlocks: network.visionBlocks || [],
+        elevated: network.elevated || [],
         colorMode
       })
     })
