@@ -17,10 +17,14 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { P, PLAYER_SLOTS } from '../../src/replays/shared/statsMath.js';
+import {
+  mergePhaseLocations,
+  phaseCombatFromMeta
+} from '../../src/replays/roles/phaseCombat.js';
 import { presenceFromTicks } from '../../src/replays/roles/presenceFromTicks.js';
 import { isZoneNetworkReady } from '../../src/replays/zones/zoneModel.js';
 
-export const STATS_VERSION = 2;
+export const STATS_VERSION = 3;
 
 /** ~1 Hz occupancy samples (demo ticks between samples). */
 const TICK_STRIDE = 64;
@@ -134,6 +138,7 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf, presence = null) {
     p
   };
   applyPresence(row, presence);
+  applyPhaseBags(row, meta, playerIds, presence);
   return row;
 }
 
@@ -142,6 +147,12 @@ function applyPresence(row, presence) {
   row.z = presence.z;
   if (presence.ctTB && Object.keys(presence.ctTB).length) row.ctTB = presence.ctTB;
   else delete row.ctTB;
+}
+
+function applyPhaseBags(row, meta, playerIds, presence = null) {
+  const combat = phaseCombatFromMeta(meta, playerIds);
+  if (presence?.phaseLoc) mergePhaseLocations(combat, presence.phaseLoc);
+  row.ph = combat;
 }
 
 async function loadZoneNetwork(io, mapCode) {
@@ -167,11 +178,19 @@ export function needsPositionAnalysis(entry, network) {
   return true;
 }
 
+/** Phase bags (combat + dominant locations) missing or on a pre-v3 index. */
+function needsPhaseEnrichment(entry) {
+  if (!entry?.rounds?.length) return false;
+  if (Number(entry.v) < STATS_VERSION) return true;
+  return entry.rounds.some((r) => !r.ph || typeof r.ph !== 'object');
+}
+
 /**
  * Sample ticks onto an existing index (no re-parse, no kill-stat rebuild).
+ * Also fills `row.ph` combat + dominant pos/zone/area when missing.
  */
 async function enrichPositions(io, user, record, entry, network) {
-  if (!entry?.rounds?.length || !network || typeof io.readRoundTicks !== 'function') {
+  if (!entry?.rounds?.length) {
     entry.positions = false;
     entry.pz = 0;
     return entry;
@@ -183,6 +202,8 @@ async function enrichPositions(io, user, record, entry, network) {
     team: p.team,
     slot: p.slot
   }));
+
+  const canTicks = Boolean(network && typeof io.readRoundTicks === 'function');
 
   for (const row of entry.rounds) {
     let meta = null;
@@ -202,21 +223,30 @@ async function enrichPositions(io, user, record, entry, network) {
             slot: p.slot
           }))
         : rosterFallback;
+    const playerIds = roster.map((p) => p.id);
 
-    try {
-      const buf = await io.readRoundTicks(user, row.f, TICK_STRIDE);
-      const presence = buf ? presenceFromTicks(buf, meta, network, roster) : null;
-      delete row.z;
-      delete row.ctTB;
-      applyPresence(row, presence);
-    } catch {
-      delete row.z;
-      delete row.ctTB;
+    let presence = null;
+    if (canTicks) {
+      try {
+        const buf = await io.readRoundTicks(user, row.f, TICK_STRIDE);
+        presence = buf ? presenceFromTicks(buf, meta, network, roster) : null;
+        delete row.z;
+        delete row.ctTB;
+        applyPresence(row, presence);
+      } catch {
+        delete row.z;
+        delete row.ctTB;
+      }
     }
+
+    applyPhaseBags(row, meta, playerIds, presence);
   }
 
-  entry.positions = (entry.rounds || []).some((r) => r.z && Object.keys(r.z).length);
-  entry.pz = Number(network.updatedAt) || 1;
+  if (network) {
+    entry.positions = (entry.rounds || []).some((r) => r.z && Object.keys(r.z).length);
+    entry.pz = Number(network.updatedAt) || 1;
+  }
+  entry.v = STATS_VERSION;
   return entry;
 }
 
@@ -367,7 +397,7 @@ export async function demoIndex(io, user, record) {
   // Normalize key on upgrade from zone-suffixed fingerprints.
   if (entry.key !== key) entry.key = key;
 
-  if (needsPositionAnalysis(entry, network)) {
+  if (needsPositionAnalysis(entry, network) || needsPhaseEnrichment(entry)) {
     await enrichPositions(io, user, record, entry, network);
     await persistEntry(io, user, key, entry);
     return entry;

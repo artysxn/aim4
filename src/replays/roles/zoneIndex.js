@@ -53,3 +53,45 @@ export function regionKeysAt(x, y, zIndex) {
   }
   return keys;
 }
+
+/**
+ * Position / section / area entity ids covering a world point.
+ * @returns {{ positionIds: string[], sectionIds: string[], areaIds: string[] }}
+ */
+export function occupancyAt(x, y, zIndex) {
+  const positionIds = [];
+  const sectionIds = [];
+  const areaIds = [];
+  if (!zIndex?.network) return { positionIds, sectionIds, areaIds };
+  const hits = positionsAtPoint(x, y, zIndex.network);
+  const seenSec = new Set();
+  const seenArea = new Set();
+  for (const pos of hits) {
+    if (pos.id) positionIds.push(pos.id);
+    const secs = zIndex.sectionsByZoneId.get(pos.id) || [];
+    for (const sec of secs) {
+      if (!sec.id || seenSec.has(sec.id)) continue;
+      seenSec.add(sec.id);
+      sectionIds.push(sec.id);
+      const ars = zIndex.areasBySectionId.get(sec.id) || [];
+      for (const area of ars) {
+        if (!area.id || seenArea.has(area.id)) continue;
+        seenArea.add(area.id);
+        areaIds.push(area.id);
+      }
+    }
+  }
+  return { positionIds, sectionIds, areaIds };
+}
+
+/** Id with the highest sample count (first max wins ties). */
+export function argmaxCount(counts) {
+  let best = '';
+  let bestN = 0;
+  for (const [id, n] of Object.entries(counts || {})) {
+    if (!id || n <= bestN) continue;
+    best = id;
+    bestN = n;
+  }
+  return best;
+}

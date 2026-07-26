@@ -34,6 +34,7 @@ import { findRoundDecided } from '../replays/coach/roundDecided.js';
 import { PACKAGE_EXT } from '../replays/shared/replayPackage.js';
 import { formatBytes } from '../replays/tickStore.js';
 import { createStatsPanel } from '../replays/stats/statsPanel.js';
+import { createAnalyticsPanel } from '../replays/analytics/analyticsPanel.js';
 import commentsIcon from '../icons/demos_comments.svg?raw';
 import bookmarkIcon from '../icons/demos_bookmarks_added.svg?raw';
 
@@ -55,6 +56,7 @@ export function initReplaysView({ escapeHtml }) {
   const uploadBtn = document.getElementById('rp-upload-btn');
   const playlistsBtn = document.getElementById('rp-playlists-btn');
   const statsBtn = document.getElementById('rp-stats-btn');
+  const analyticsBtn = document.getElementById('rp-analytics-btn');
   const libraryBtn = document.getElementById('rp-library-btn');
   const libraryEl = document.getElementById('rp-library');
   const uploadPageEl = document.getElementById('rp-upload-page');
@@ -62,6 +64,8 @@ export function initReplaysView({ escapeHtml }) {
   const playlistsBody = document.getElementById('rp-pl-body');
   const statsPageEl = document.getElementById('rp-stats-page');
   const statsBodyEl = document.getElementById('rp-stats-body');
+  const analyticsPageEl = document.getElementById('rp-analytics-page');
+  const analyticsBodyEl = document.getElementById('rp-analytics-body');
   const pageTitleEl = document.getElementById('page-title');
 
   let demos = [];
@@ -80,9 +84,10 @@ export function initReplaysView({ escapeHtml }) {
   let viewerModule = null;
   /** Round name already opened from the URL, so it opens once per link. */
   let openedRound = '';
-  /** @type {'library' | 'upload' | 'playlists' | 'stats'} */
+  /** @type {'library' | 'upload' | 'playlists' | 'stats' | 'analytics'} */
   let subpage = 'library';
-  /** Built on first use; the payload it holds is reused across scopes. */
+  /** Built on first use; payloads reused across visits. */
+  let analyticsPanel = null;
   let statsPanel = null;
   /** @type {{demos?: string[], files?: string[], title?: string}} */
   let statsScope = {};
@@ -1789,6 +1794,7 @@ export function initReplaysView({ escapeHtml }) {
       [uploadBtn, 'upload'],
       [playlistsBtn, 'playlists'],
       [statsBtn, 'stats'],
+      [analyticsBtn, 'analytics'],
       [libraryBtn, 'library']
     ];
     for (const [btn, key] of map) {
@@ -1798,12 +1804,18 @@ export function initReplaysView({ escapeHtml }) {
 
   function setSubpage(name, { push = false } = {}) {
     const next =
-      name === 'upload' || name === 'playlists' || name === 'stats' ? name : 'library';
+      name === 'upload' ||
+      name === 'playlists' ||
+      name === 'stats' ||
+      name === 'analytics'
+        ? name
+        : 'library';
     subpage = next;
     if (libraryEl) libraryEl.hidden = next !== 'library';
     if (uploadPageEl) uploadPageEl.hidden = next !== 'upload';
     if (playlistsPageEl) playlistsPageEl.hidden = next !== 'playlists';
     if (statsPageEl) statsPageEl.hidden = next !== 'stats';
+    if (analyticsPageEl) analyticsPageEl.hidden = next !== 'analytics';
     if (headActions) headActions.hidden = !visible;
     if (pageTitleEl) pageTitleEl.textContent = 'Replays';
     document.title = 'AIM4.io - Replays';
@@ -1816,7 +1828,9 @@ export function initReplaysView({ escapeHtml }) {
           ? '/replays/playlists'
           : next === 'stats'
             ? '/replays/stats'
-            : '/replays';
+            : next === 'analytics'
+              ? '/replays/analytics'
+              : '/replays';
     if (push && window.location.pathname.replace(/\/+$/, '') !== path) {
       window.history.pushState({ view: 'replays' }, '', path);
     }
@@ -1827,6 +1841,9 @@ export function initReplaysView({ escapeHtml }) {
     } else if (next === 'stats') {
       stopPolling();
       openStatsPage(statsScope);
+    } else if (next === 'analytics') {
+      stopPolling();
+      openAnalyticsPage();
     } else if (visible) {
       startPolling();
     }
@@ -1835,6 +1852,7 @@ export function initReplaysView({ escapeHtml }) {
   uploadBtn?.addEventListener('click', () => setSubpage('upload', { push: true }));
   playlistsBtn?.addEventListener('click', () => setSubpage('playlists', { push: true }));
   statsBtn?.addEventListener('click', () => showStats({}));
+  analyticsBtn?.addEventListener('click', () => setSubpage('analytics', { push: true }));
   libraryBtn?.addEventListener('click', () => setSubpage('library', { push: true }));
 
   playlistsBody?.addEventListener('click', async (e) => {
@@ -1883,6 +1901,34 @@ export function initReplaysView({ escapeHtml }) {
   function showStats(scope) {
     statsScope = scope || {};
     setSubpage('stats', { push: true });
+  }
+
+  async function playAnalyticsRounds(files, title) {
+    const list = [...new Set((files || []).map((f) => String(f || '').trim()).filter(Boolean))];
+    if (!list.length) return;
+    const rounds = [];
+    for (const file of list) {
+      const meta = await fetchRoundMeta(file).catch(() => null);
+      if (!meta) continue;
+      rounds.push({ ...meta, file });
+    }
+    if (!rounds.length) {
+      setStatus('Those rounds are not in this library.', true);
+      return;
+    }
+    launchViewer(rounds, 'timeline', title || `${rounds.length} rounds`);
+  }
+
+  function openAnalyticsPage() {
+    if (!analyticsBodyEl) return;
+    if (!analyticsPanel) {
+      analyticsPanel = createAnalyticsPanel({
+        escapeHtml,
+        onPlayRounds: playAnalyticsRounds
+      });
+      analyticsBodyEl.appendChild(analyticsPanel.el);
+    }
+    analyticsPanel.load();
   }
 
   // ---- deep links ---------------------------------------------------------
@@ -1947,7 +1993,8 @@ export function initReplaysView({ escapeHtml }) {
     stopPolling();
     // Only poll while something is actually mid-parse.
     pollTimer = window.setInterval(() => {
-      if (!visible || subpage === 'playlists') return;
+      if (!visible || subpage === 'playlists' || subpage === 'stats' || subpage === 'analytics')
+        return;
       if (demos.some((d) => d.status === 'parsing')) refresh();
     }, POLL_MS);
   }
@@ -1968,15 +2015,19 @@ export function initReplaysView({ escapeHtml }) {
         params.playlists === true ||
         path === '/replays/playlists';
       const wantStats = params.stats === '1' || params.stats === true || path === '/replays/stats';
+      const wantAnalytics =
+        params.analytics === '1' || params.analytics === true || path === '/replays/analytics';
       const page = wantUpload
         ? 'upload'
         : wantPlaylists
           ? 'playlists'
           : wantStats
             ? 'stats'
-            : 'library';
+            : wantAnalytics
+              ? 'analytics'
+              : 'library';
       setSubpage(page, { push: false });
-      if (page === 'playlists' || page === 'stats') {
+      if (page === 'playlists' || page === 'stats' || page === 'analytics') {
         stopPolling();
       } else {
         refresh();
