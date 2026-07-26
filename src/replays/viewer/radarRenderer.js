@@ -10,6 +10,12 @@
 // ---------------------------------------------------------------------------
 
 import { CALIBRATION, RADAR_SIZE, isLowerLevel, worldToRadar } from './mapCalibration.js';
+import {
+  exteriorSegmentsFromRects,
+  pieceToRing,
+  rectsFromPieces
+} from '../zones/zoneGeom.js';
+import { ZONE_PAINT } from '../zones/zoneOverlay.js';
 import { radarImage } from '../shared/roundId.js';
 import {
   FLAG_DEFUSING,
@@ -133,6 +139,9 @@ export class RadarRenderer {
     /** Cached opaque map (Analyzer: paint once, overlay rounds on top). */
     this._mapLayer = null;
     this._mapLayerKey = '';
+    /** Scratch for zone fills, masked to the radar image alpha. */
+    this._zoneLayer = null;
+    this._zoneCtx = null;
     /** Frozen world positions for kill markers: `scope:tick:victimId` -> {x,y}. */
     this._killPos = new Map();
   }
@@ -334,6 +343,9 @@ export class RadarRenderer {
       return;
     }
 
+    if (frame.zoneOverlay?.network?.zones?.length) {
+      this.drawZoneOverlay(ctx, t, frame.zoneOverlay);
+    }
     this.drawUtility(ctx, t, frame, compact);
     if (!frame.hideBomb) this.drawBomb(ctx, t, frame, compact);
     if (!frame.hideTracers) this.drawTracers(ctx, t, frame, compact);
@@ -341,6 +353,106 @@ export class RadarRenderer {
     this.drawPlayers(ctx, t, frame, compact);
     if (frame.drawings?.length) this.drawStrokes(ctx, t, frame.drawings);
     this._frameAlpha = 1;
+  }
+
+  /**
+   * Position fills for the timeline zones toggle. Painted above the radar
+   * image and below utility/players, then punched to the radar PNG alpha so
+   * fills never spill past the map artwork.
+   *
+   * @param {CanvasRenderingContext2D} ctx
+   * @param {{ scale: number, ox: number, oy: number }} t
+   * @param {{ network: object, paint?: Record<string, string> }} overlay
+   */
+  drawZoneOverlay(ctx, t, overlay) {
+    const network = overlay?.network;
+    if (!network?.zones?.length || !this.mapCode) return;
+    const paintMap = overlay.paint || {};
+    const scratch = {};
+    const mapW = RADAR_SIZE * t.scale;
+    const mapH = RADAR_SIZE * t.scale;
+    const cw = ctx.canvas.width;
+    const ch = ctx.canvas.height;
+
+    if (!this._zoneLayer || this._zoneLayer.width !== cw || this._zoneLayer.height !== ch) {
+      this._zoneLayer = document.createElement('canvas');
+      this._zoneLayer.width = cw;
+      this._zoneLayer.height = ch;
+      this._zoneCtx = this._zoneLayer.getContext('2d');
+    }
+    const zc = this._zoneCtx;
+    zc.setTransform(1, 0, 0, 1, 0, 0);
+    zc.clearRect(0, 0, cw, ch);
+
+    // Clip to the fitted radar square, then draw fills into the scratch layer.
+    zc.save();
+    zc.beginPath();
+    zc.rect(t.ox, t.oy, mapW, mapH);
+    zc.clip();
+    zc.lineJoin = 'round';
+
+    for (const z of network.zones) {
+      if (z.hidden || !z.pieces?.length) continue;
+      const key = paintMap[z.id] || 'empty';
+      const colors = ZONE_PAINT[key] || ZONE_PAINT.empty;
+      const rects = rectsFromPieces(z.pieces);
+
+      for (const r of rects) {
+        const a = worldToRadar(this.mapCode, r.x, r.y, scratch);
+        const b = worldToRadar(this.mapCode, r.x + r.w, r.y + r.h, {});
+        const x = Math.min(a.x, b.x) * t.scale + t.ox;
+        const y = Math.min(a.y, b.y) * t.scale + t.oy;
+        const rw = Math.abs(b.x - a.x) * t.scale;
+        const rh = Math.abs(b.y - a.y) * t.scale;
+        zc.fillStyle = colors.fill;
+        zc.fillRect(x, y, rw, rh);
+      }
+
+      for (const piece of z.pieces) {
+        if (piece.type === 'rect' || (piece.w > 0 && piece.h > 0 && !piece.ring)) continue;
+        const ring = pieceToRing(piece);
+        if (!ring?.length) continue;
+        zc.beginPath();
+        for (let i = 0; i < ring.length; i++) {
+          const rp = worldToRadar(this.mapCode, ring[i][0], ring[i][1], scratch);
+          const px = rp.x * t.scale + t.ox;
+          const py = rp.y * t.scale + t.oy;
+          if (i === 0) zc.moveTo(px, py);
+          else zc.lineTo(px, py);
+        }
+        zc.closePath();
+        zc.fillStyle = colors.fill;
+        zc.fill();
+      }
+
+      const segs = exteriorSegmentsFromRects(rects);
+      if (segs.length) {
+        zc.strokeStyle = colors.stroke;
+        zc.lineWidth = 1.35 * this.dpr;
+        zc.beginPath();
+        for (const s of segs) {
+          const p0 = worldToRadar(this.mapCode, s.x0, s.y0, scratch);
+          const p1 = worldToRadar(this.mapCode, s.x1, s.y1, {});
+          zc.moveTo(p0.x * t.scale + t.ox, p0.y * t.scale + t.oy);
+          zc.lineTo(p1.x * t.scale + t.ox, p1.y * t.scale + t.oy);
+        }
+        zc.stroke();
+      }
+    }
+    zc.restore();
+
+    // Punch to the radar image alpha so transparent corners stay clean.
+    if (this.image) {
+      zc.save();
+      zc.globalCompositeOperation = 'destination-in';
+      zc.drawImage(this.image, t.ox, t.oy, mapW, mapH);
+      zc.restore();
+    }
+
+    ctx.save();
+    ctx.globalAlpha = this._frameAlpha;
+    ctx.drawImage(this._zoneLayer, 0, 0);
+    ctx.restore();
   }
 
   /**

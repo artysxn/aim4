@@ -10,6 +10,7 @@ import {
   NOTE_MAX,
   fetchPlaylists,
   fetchRoundMeta,
+  fetchZones,
   saveRoundNotes,
   savePlaylist
 } from '../api.js';
@@ -25,6 +26,12 @@ import { DRAW_COLORS, DrawingLayer } from './drawing.js';
 import { analyseRound, flagToNote } from '../coach/coach.js';
 import { explainProbability, winProbabilityAtTick } from '../coach/winProbability.js';
 import { phaseBounds } from '../coach/roundPhases.js';
+import {
+  activePositionsAt,
+  buildZonePresence,
+  paintForPosition,
+  summarizeZoneControl
+} from '../zones/zoneOverlay.js';
 import helmetSvg from '../../icons/helmet.svg?url';
 import kevlarSvg from '../../icons/kevlar.svg?url';
 import nokevlarSvg from '../../icons/nokevlar.svg?url';
@@ -35,6 +42,7 @@ import bookmarkAddIcon from '../../icons/demos_bookmarks_add.svg?raw';
 import bookmarkAddedIcon from '../../icons/demos_bookmarks_added.svg?raw';
 import coachIcon from '../../icons/demos_coach.svg?raw';
 import chartIcon from '../../icons/demos_chart.svg?raw';
+import zonesIcon from '../../icons/demos_zones.svg?raw';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 const MIN_ZOOM = 1;
@@ -72,6 +80,40 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       </div>
       <canvas class="rv-wingraph-canvas" id="rv-wingraph-canvas"></canvas>
       <div class="rv-wingraph-tip" id="rv-wingraph-tip" hidden></div>
+    </aside>
+    <aside class="rv-zones-panel" id="rv-zones-panel" hidden>
+      <div class="rv-zones-block">
+        <div class="rv-zones-block-title">Positions</div>
+        <div class="rv-zones-grid" id="rv-zones-counts">
+          <div class="rv-zones-side t">
+            <span class="rv-zones-side-label">T</span>
+            <div class="rv-zones-stat"><span>Active</span><b id="rv-zc-t-active">0</b></div>
+            <div class="rv-zones-stat"><span>Controlled</span><b id="rv-zc-t-control">0</b></div>
+          </div>
+          <div class="rv-zones-side ct">
+            <span class="rv-zones-side-label">CT</span>
+            <div class="rv-zones-stat"><span>Active</span><b id="rv-zc-ct-active">0</b></div>
+            <div class="rv-zones-stat"><span>Controlled</span><b id="rv-zc-ct-control">0</b></div>
+          </div>
+          <div class="rv-zones-side shared">
+            <div class="rv-zones-stat"><span>Contested</span><b id="rv-zc-contested">0</b></div>
+            <div class="rv-zones-stat"><span>Neutral</span><b id="rv-zc-neutral">0</b></div>
+          </div>
+        </div>
+      </div>
+      <div class="rv-zones-block">
+        <div class="rv-zones-block-title">Map control</div>
+        <div class="rv-zones-bar" id="rv-zones-bar" aria-hidden="true">
+          <span class="t" id="rv-zones-bar-t"></span>
+          <span class="ct" id="rv-zones-bar-ct"></span>
+          <span class="neu" id="rv-zones-bar-neu"></span>
+        </div>
+        <div class="rv-zones-map-totals" id="rv-zones-map">
+          <span class="t">T <b id="rv-zm-t">0%</b></span>
+          <span class="ct">CT <b id="rv-zm-ct">0%</b></span>
+          <span class="neu">Neutral <b id="rv-zm-neu">0%</b></span>
+        </div>
+      </div>
     </aside>
     <aside class="rv-coach-pick" id="rv-coach-pick" hidden>
       <div class="rv-coach-pick-head">
@@ -149,6 +191,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
           <button type="button" class="rv-tool" id="rv-coach" title="Coach: mistake notes for one team" ${
             statsDemoId ? '' : 'hidden'
           }>${icon(coachIcon)}</button>
+          <button type="button" class="rv-tool" id="rv-zones"
+            title="Map positions: active / controlled / contested">${icon(zonesIcon)}</button>
           <button type="button" class="rv-tool" id="rv-draw" title="Draw (right click always draws)">${icon(pencilIcon)}</button>
           <button type="button" class="rv-tool" id="rv-note" title="Notes">${icon(commentsIcon)}</button>
           <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
@@ -201,6 +245,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const noteAddBtn = el.querySelector('#rv-note-add');
   const noteAddEditBtn = el.querySelector('#rv-note-add-edit');
   const chartBtn = el.querySelector('#rv-chart');
+  const zonesBtn = el.querySelector('#rv-zones');
   const coachBtn = el.querySelector('#rv-coach');
   const coachPick = el.querySelector('#rv-coach-pick');
   const coachPickT1 = el.querySelector('#rv-coach-pick-t1');
@@ -239,6 +284,15 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   /** Win% graph + side badges (independent of coach notes). On by default. */
   let chartOn = true;
   let coachOn = false;
+  /** Position overlay on the radar (control / contested). */
+  let zonesOn = false;
+  /** @type {object | null} */
+  let zoneNetwork = null;
+  let zoneNetworkMap = '';
+  /** file -> presence { firstT, firstCT } */
+  const zonePresenceCache = new Map();
+  let zonePresence = null;
+  let zoneLoadId = 0;
   /** Roster team (1|2) whose mistakes coach notes; null until picked. */
   let coachTeam = null;
   /** Team-picker dock is open; coach not enabled yet. */
@@ -608,6 +662,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     }
 
     if (chartOn) syncWinChart();
+    if (zonesOn) await refreshZonePresence();
     if (coachOn) {
       // During the initial full-match scan, do not analyse on click — wait for
       // the preload→analyse pass to finish so every round is covered once.
@@ -625,6 +680,127 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       seekRoundEntry(index);
     }
     draw();
+  }
+
+  const zonesPanel = el.querySelector('#rv-zones-panel');
+  const zcTActive = el.querySelector('#rv-zc-t-active');
+  const zcTControl = el.querySelector('#rv-zc-t-control');
+  const zcCtActive = el.querySelector('#rv-zc-ct-active');
+  const zcCtControl = el.querySelector('#rv-zc-ct-control');
+  const zcContested = el.querySelector('#rv-zc-contested');
+  const zcNeutral = el.querySelector('#rv-zc-neutral');
+  const zmT = el.querySelector('#rv-zm-t');
+  const zmCt = el.querySelector('#rv-zm-ct');
+  const zmNeu = el.querySelector('#rv-zm-neu');
+  const zbT = el.querySelector('#rv-zones-bar-t');
+  const zbCt = el.querySelector('#rv-zones-bar-ct');
+  const zbNeu = el.querySelector('#rv-zones-bar-neu');
+
+  function syncZonesBtn() {
+    zonesBtn?.classList.toggle('active', zonesOn);
+    if (zonesPanel) zonesPanel.hidden = !zonesOn;
+  }
+
+  function syncZonesPanel(tick, overlay = null) {
+    if (!zonesPanel) return;
+    if (!zonesOn) {
+      zonesPanel.hidden = true;
+      return;
+    }
+    zonesPanel.hidden = false;
+    overlay = overlay || zoneOverlayForTick(tick);
+    if (!overlay) {
+      if (zcTActive) zcTActive.textContent = '0';
+      if (zcTControl) zcTControl.textContent = '0';
+      if (zcCtActive) zcCtActive.textContent = '0';
+      if (zcCtControl) zcCtControl.textContent = '0';
+      if (zcContested) zcContested.textContent = '0';
+      if (zcNeutral) zcNeutral.textContent = '0';
+      if (zmT) zmT.textContent = '0%';
+      if (zmCt) zmCt.textContent = '0%';
+      if (zmNeu) zmNeu.textContent = '0%';
+      if (zbT) zbT.style.width = '0%';
+      if (zbCt) zbCt.style.width = '0%';
+      if (zbNeu) zbNeu.style.width = '100%';
+      return;
+    }
+    const { counts, pct } = summarizeZoneControl(overlay.network, overlay.paint);
+    if (zcTActive) zcTActive.textContent = String(counts.tActive);
+    if (zcTControl) zcTControl.textContent = String(counts.tControl);
+    if (zcCtActive) zcCtActive.textContent = String(counts.ctActive);
+    if (zcCtControl) zcCtControl.textContent = String(counts.ctControl);
+    if (zcContested) zcContested.textContent = String(counts.contested);
+    if (zcNeutral) zcNeutral.textContent = String(counts.neutral);
+    const fmt = (n) => `${Math.round(n)}%`;
+    if (zmT) zmT.textContent = fmt(pct.t);
+    if (zmCt) zmCt.textContent = fmt(pct.ct);
+    if (zmNeu) zmNeu.textContent = fmt(pct.neutral);
+    if (zbT) zbT.style.width = `${pct.t}%`;
+    if (zbCt) zbCt.style.width = `${pct.ct}%`;
+    if (zbNeu) zbNeu.style.width = `${pct.neutral}%`;
+  }
+
+  /** Load map positions (shared zone network) when the overlay is on. */
+  async function ensureZoneNetwork() {
+    const map = activeMeta?.map || rounds[activeIndex]?.map || '';
+    if (!map) {
+      zoneNetwork = null;
+      zoneNetworkMap = '';
+      return null;
+    }
+    if (zoneNetwork && zoneNetworkMap === map) return zoneNetwork;
+    const load = ++zoneLoadId;
+    try {
+      const net = await fetchZones(map);
+      if (destroyed || load !== zoneLoadId) return zoneNetwork;
+      zoneNetwork = net;
+      zoneNetworkMap = map;
+      zonePresenceCache.clear();
+      return zoneNetwork;
+    } catch {
+      if (load === zoneLoadId) {
+        zoneNetwork = null;
+        zoneNetworkMap = '';
+      }
+      return null;
+    }
+  }
+
+  /** Recompute first-visit ticks for the active round (cached once the round is full). */
+  async function refreshZonePresence() {
+    zonePresence = null;
+    if (!zonesOn) return;
+    const net = await ensureZoneNetwork();
+    if (!net?.zones?.length || !activeMeta) return;
+    const file = files[activeIndex];
+    const entry = store.get(file);
+    if (entry?.isFull && zonePresenceCache.has(file)) {
+      zonePresence = zonePresenceCache.get(file);
+      return;
+    }
+    const track = entry?.full || store.track(file);
+    if (!track) return;
+    const presence = buildZonePresence({ meta: activeMeta, track, network: net });
+    if (!presence) return;
+    zonePresence = presence;
+    // Only cache full-resolution presence so a coarse pass is not sticky.
+    if (entry?.isFull) zonePresenceCache.set(file, presence);
+  }
+
+  function zoneOverlayForTick(tick) {
+    if (!zonesOn || !zoneNetwork?.zones?.length) return null;
+    const active = activePositionsAt({
+      meta: activeMeta,
+      states,
+      network: zoneNetwork
+    });
+    /** @type {Record<string, string>} */
+    const paint = {};
+    for (const z of zoneNetwork.zones) {
+      if (!z?.id || z.hidden) continue;
+      paint[z.id] = paintForPosition(z.id, tick, zonePresence, active);
+    }
+    return { network: zoneNetwork, paint };
   }
 
   function clearPlayerStates() {
@@ -1956,6 +2132,15 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     draw();
   });
 
+  zonesBtn?.addEventListener('click', async () => {
+    zonesOn = !zonesOn;
+    syncZonesBtn();
+    if (zonesOn) await refreshZonePresence();
+    else zonePresence = null;
+    draw();
+    syncZonesPanel(sequence.locate(playback.position).tick);
+  });
+
   coachBtn?.addEventListener('click', () => {
     if (!coachAvailable) return;
     if (coachOn) {
@@ -2262,6 +2447,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       track.sampleAll(tick, states);
     } else clearPlayerStates();
 
+    const zoneOverlay = zoneOverlayForTick(tick);
     renderer.render({
       tick,
       tickRate: timing.tickRate,
@@ -2273,7 +2459,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       teamSides: { 1: activeMeta.team1Side, 2: activeMeta.team2Side },
       drawings: drawing.visible(),
       marksKey: files[activeIndex] || '',
-      hideDeaths: false
+      hideDeaths: false,
+      zoneOverlay
     });
 
     const clock = clockAt(timing, tick);
@@ -2290,6 +2477,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     syncScoreboard(tick);
     syncKillFeed(tick);
     if (chartOn) syncWinChart(tick);
+    if (zonesOn) syncZonesPanel(tick, zoneOverlay);
+    else if (zonesPanel) zonesPanel.hidden = true;
     syncLoading();
   }
 
