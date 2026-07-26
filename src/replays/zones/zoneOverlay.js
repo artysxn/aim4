@@ -126,7 +126,7 @@ export function resetZoneVisionCache(cache) {
 
 /**
  * First tick each side entered each position (sampled once per second), plus
- * a claim-event log used by the Shift-hover explain tip.
+ * a claim-event log used for soft-control ownership.
  *
  * Every foot *entry* (rising edge) is logged — not only the first visit of the
  * round — so a later re-entry is the claim that soft control follows.
@@ -851,7 +851,8 @@ function applyVisionClaims({
   let claims = null;
   if (track) {
     const cast = createBeamCaster({ meta, network, mapCode, radarImage });
-    const simKey = `${roundKey}|${network.updatedAt || 0}|${network._layerPaintGen || 0}`;
+    // Include team sides so half-time swaps cannot reuse the wrong sim.
+    const simKey = `${roundKey}|${meta.team1Side || ''}|${meta.team2Side || ''}|${network.updatedAt || 0}|${network._layerPaintGen || 0}`;
     if (!visionCache.claimSim || visionCache.claimSimKey !== simKey) {
       visionCache.claimSim = createBeamClaimSimulator({
         meta,
@@ -1150,43 +1151,10 @@ function applySurroundControl(paint, network, presence, tick) {
   return assigned;
 }
 
-function occupantsInPosition(posId, meta, states, network, side) {
-  const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
-  const names = [];
-  for (const p of meta.players || []) {
-    if (teamSides[p.team] !== side) continue;
-    const s = states?.[p.slot];
-    if (!s?.alive || !Number.isFinite(s.x)) continue;
-    if (positionsAtPoint(s.x, s.y, network).some((z) => z.id === posId)) {
-      names.push(p.name || p.id);
-    }
-  }
-  return names;
-}
-
-function paintLabel(key) {
-  switch (key) {
-    case 't-active':
-      return 'T active';
-    case 't-control':
-      return 'T controlled';
-    case 'ct-active':
-      return 'CT active';
-    case 'ct-control':
-      return 'CT controlled';
-    case 'contested':
-      return 'Contested';
-    case 'contested-active':
-      return 'Contested (occupied)';
-    default:
-      return 'Neutral';
-  }
-}
-
 /**
  * Full paint map for the playhead: foot presence + vision + surround.
  *
- * @returns {{ paint: Record<string, ZonePaint>, info: Record<string, object> }}
+ * @returns {{ paint: Record<string, ZonePaint> }}
  */
 export function computeZonePaint({
   meta,
@@ -1202,12 +1170,10 @@ export function computeZonePaint({
 }) {
   /** @type {Record<string, ZonePaint>} */
   const paint = {};
-  /** @type {Record<string, object>} */
-  const info = {};
-  if (!network?.zones?.length) return { paint, info };
+  if (!network?.zones?.length) return { paint };
 
   const active = activePositionsAt({ meta, states, network });
-  const { tSight, ctSight, contestedSight, sightNow, claims } = applyVisionClaims({
+  const { tSight, ctSight, contestedSight, claims } = applyVisionClaims({
     meta,
     states,
     network,
@@ -1222,7 +1188,8 @@ export function computeZonePaint({
   });
 
   // Feet first, then beam-claim ownership (3 hits neutral / 20 to flip).
-  // Instant FOV alone no longer paints control — only accumulated beams do.
+  // If beams have not claimed a position, keep soft control from foot/sight
+  // history — never wipe an active visit just because the claim map exists.
   for (const pos of network.zones) {
     if (!pos?.id || pos.hidden) continue;
     const tAct = active.t.has(pos.id);
@@ -1248,153 +1215,17 @@ export function computeZonePaint({
       paint[pos.id] = 't-control';
     } else if (visual === 'CT') {
       paint[pos.id] = 'ct-control';
-    } else if (claims) {
-      // Beam-claim system is authoritative when the vision cache is active.
-      paint[pos.id] = 'empty';
     } else {
-      // Soft foot-history fallback (no live claim state).
       const latest = latestOwnerSide(presence, pos.id, tick);
       paint[pos.id] =
         latest === 'T' ? 't-control' : latest === 'CT' ? 'ct-control' : 'empty';
     }
   }
 
-  const surroundAssigned = applySurroundControl(paint, network, presence, tick);
-  const encircleAssigned = applyEncirclementFlip(
-    paint,
-    network,
-    presence,
-    tick,
-    claims
-  );
+  applySurroundControl(paint, network, presence, tick);
+  applyEncirclementFlip(paint, network, presence, tick, claims);
 
-  for (const pos of network.zones) {
-    if (!pos?.id || pos.hidden) continue;
-    const key = paint[pos.id] || 'empty';
-    const why = [];
-    const tOcc = occupantsInPosition(pos.id, meta, states, network, 'T');
-    const ctOcc = occupantsInPosition(pos.id, meta, states, network, 'CT');
-    if (tOcc.length) {
-      why.push({ kind: 'active', side: 'T', text: `T standing here now: ${tOcc.join(', ')}` });
-    }
-    if (ctOcc.length) {
-      why.push({ kind: 'active', side: 'CT', text: `CT standing here now: ${ctOcc.join(', ')}` });
-    }
-    for (const s of sightNow.get(pos.id) || []) {
-      why.push({
-        kind: s.enemy ? 'sight-enemy' : 'sight',
-        side: s.side,
-        text: s.enemy
-          ? `${s.playerName} (${s.side}) sees an enemy here now (${Math.round(s.cover * 100)}% cone)`
-          : `${s.playerName} (${s.side}) has clear sight now (${Math.round(s.cover * 100)}% cone)`
-      });
-    }
-    const enc = encircleAssigned.get(pos.id);
-    if (enc) {
-      why.push({
-        kind: 'surround',
-        side: enc.side,
-        text: `Soft pocket flipped → ${enc.side} (enclosed by: ${enc.neighborNames.join(', ')})`
-      });
-    }
-    const sur = surroundAssigned.get(pos.id);
-    if (sur && !enc) {
-      why.push({
-        kind: 'surround',
-        side: sur.side,
-        text: `Neutral pocket → ${sur.side} (borders: ${sur.neighborNames.join(', ')})`
-      });
-    }
-    const tFirst = presence?.firstT.get(pos.id);
-    const ctFirst = presence?.firstCT.get(pos.id);
-    const claimSt = claims?.get(pos.id);
-    if (
-      claimSt &&
-      (key === 't-control' || key === 'ct-control' || key === 'contested') &&
-      !sur &&
-      !enc
-    ) {
-      const owner = claimSt.owner || 'none';
-      const prog =
-        claimSt.tHits || claimSt.ctHits
-          ? ` · progress T ${claimSt.tHits}/CT ${claimSt.ctHits}`
-          : '';
-      why.push({
-        kind: 'visit',
-        side: claimSt.owner,
-        text: `Beam claim owner ${owner}${prog} (neutral needs 3, flip needs 20)`
-      });
-    } else if (!enc) {
-      const softClaim = latestClaimAt(presence, pos.id, tick);
-      if (
-        key === 't-control' &&
-        !tSight.has(pos.id) &&
-        !sur &&
-        softClaim?.side === 'T'
-      ) {
-        why.push({
-          kind: 'visit',
-          side: 'T',
-          tick: softClaim.tick,
-          text: 'Soft T control from the latest claim (no present CT contest)'
-        });
-      }
-      if (
-        key === 'ct-control' &&
-        !ctSight.has(pos.id) &&
-        !sur &&
-        softClaim?.side === 'CT'
-      ) {
-        why.push({
-          kind: 'visit',
-          side: 'CT',
-          tick: softClaim.tick,
-          text: 'Soft CT control from the latest claim (no present T contest)'
-        });
-      }
-    }
-    if (key === 't-active' && !ctOcc.length) {
-      why.push({
-        kind: 'present',
-        side: 'T',
-        text: 'Only T here now — not contested (enemy must be present or see it now)'
-      });
-    }
-    if (key === 'ct-active' && !tOcc.length) {
-      why.push({
-        kind: 'present',
-        side: 'CT',
-        text: 'Only CT here now — not contested (enemy must be present or see it now)'
-      });
-    }
-    if (!why.length && key === 'empty') {
-      why.push({ kind: 'neutral', side: null, text: 'No team has claimed this position yet' });
-    }
-
-    const history = (presence?.events?.get(pos.id) || [])
-      .filter((e) => e.tick <= tick)
-      .map((e) => ({
-        tick: e.tick,
-        side: e.side,
-        reason: e.reason,
-        playerName: e.playerName || '',
-        detail: e.detail || ''
-      }));
-
-    info[pos.id] = {
-      id: pos.id,
-      name: pos.name || pos.id,
-      paint: key,
-      label: paintLabel(key),
-      owner: sideOfPaint(key),
-      why,
-      history,
-      firstT: Number.isFinite(tFirst) && tFirst <= tick ? tFirst : null,
-      firstCT: Number.isFinite(ctFirst) && ctFirst <= tick ? ctFirst : null
-    };
-  }
-
-  return { paint, info };
+  return { paint };
 }
 
 /**
