@@ -36,6 +36,7 @@ import {
 } from '../zones/zoneOverlay.js';
 import { buildMapControlSeries } from '../zones/mapControl.js';
 import { mapControlAdvantageEnabled } from '../coach/mapControlAdvantage.js';
+import { hasDynamicGrid } from '../zones/dynamicControl.js';
 import helmetSvg from '../../icons/helmet.svg?url';
 import kevlarSvg from '../../icons/kevlar.svg?url';
 import nokevlarSvg from '../../icons/nokevlar.svg?url';
@@ -722,7 +723,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (!net || !activeMeta) return;
     const mapCode = renderer.mapCode || activeMeta.map || '';
     prepareDynamicNetwork(net, mapCode, renderer.image);
-    if (!net.zones?.length) return;
+    if (!hasDynamicGrid(net)) return;
     const file = files[activeIndex];
     const entry = store.get(file);
     if (entry?.isFull && zonePresenceCache.has(file)) {
@@ -748,7 +749,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (!zonesOn || !zoneNetwork) return null;
     const mapCode = renderer.mapCode || activeMeta?.map || '';
     prepareDynamicNetwork(zoneNetwork, mapCode, renderer.image);
-    if (!zoneNetwork.zones?.length) return null;
+    if (!hasDynamicGrid(zoneNetwork)) return null;
     if (zonePresence && !zonePresence.events) zonePresence.events = new Map();
     const file = files[activeIndex];
     const track = store.get(file)?.full || store.track(file) || null;
@@ -2152,7 +2153,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const mapCode = renderer.mapCode || roundMeta.map || '';
     if (!renderer.image || !mapCode) return null;
     prepareDynamicNetwork(net, mapCode, renderer.image);
-    if (!net.zones?.length) return null;
+    if (!hasDynamicGrid(net)) return null;
     let series;
     try {
       series = buildMapControlSeries({

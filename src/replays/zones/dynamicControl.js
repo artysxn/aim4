@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
-// replays/zones/dynamicControl.js
+ // replays/zones/dynamicControl.js
 // Walkable cell grid for map possession (replaces painted positions).
 // ---------------------------------------------------------------------------
 
-import { RADAR_SIZE, calibrationFor, radarToWorld, worldToRadar } from '../viewer/mapCalibration.js';
+import { RADAR_SIZE, calibrationFor, worldToRadar } from '../viewer/mapCalibration.js';
 
 /** World-unit edge length of one claim cell. */
 export const CELL_WORLD = 16;
@@ -23,7 +23,8 @@ export const FOOT_NEAR_WORLD = 48;
  *   ixOf: Int16Array,
  *   iyOf: Int16Array,
  *   area: number,
- *   byKey: Map<string, number>
+ *   byKey: Map<string, number>,
+ *   idIndex: Map<string, number>
  * }} CellGrid
  */
 
@@ -57,6 +58,8 @@ export function getCellGrid(mapCode, los = null) {
   const iyOf = [];
   /** @type {Map<string, number>} */
   const byKey = new Map();
+  /** @type {Map<string, number>} */
+  const idIndex = new Map();
 
   const scratch = {};
   for (let iy = 0; iy < rows; iy++) {
@@ -74,6 +77,7 @@ export function getCellGrid(mapCode, los = null) {
       ixOf.push(ix);
       iyOf.push(iy);
       byKey.set(`${ix},${iy}`, idx);
+      idIndex.set(id, idx);
     }
   }
 
@@ -91,7 +95,8 @@ export function getCellGrid(mapCode, los = null) {
     ixOf: Int16Array.from(ixOf),
     iyOf: Int16Array.from(iyOf),
     area: cell * cell,
-    byKey
+    byKey,
+    idIndex
   };
   gridCache.set(key, grid);
   return grid;
@@ -99,6 +104,22 @@ export function getCellGrid(mapCode, los = null) {
 
 export function clearCellGridCache() {
   gridCache.clear();
+}
+
+/** @param {object | null | undefined} network */
+export function hasDynamicGrid(network) {
+  return Boolean(network?._dynGrid?.ids?.length);
+}
+
+/** Cell ids for iteration (dynamic grid or legacy zones). */
+export function cellIdsOf(network) {
+  if (network?._dynGrid?.ids?.length) return network._dynGrid.ids;
+  /** @type {string[]} */
+  const out = [];
+  for (const z of network?.zones || []) {
+    if (z?.id && !z.hidden) out.push(z.id);
+  }
+  return out;
 }
 
 /** @param {CellGrid} grid @param {number} x @param {number} y */
@@ -118,22 +139,25 @@ export function cellIdAt(grid, x, y) {
 }
 
 /**
- * Cell ids under a world point plus soft nearness (Chebyshev-ish ring).
+ * Cell ids under a world point plus soft nearness.
  * @param {CellGrid} grid
  * @param {number} x
  * @param {number} y
  * @param {number} [radius]
- * @returns {string[]}
+ * @param {Set<string>} [into]  optional set to fill (avoids array alloc)
+ * @returns {string[]|Set<string>}
  */
-export function cellsNear(grid, x, y, radius = FOOT_NEAR_WORLD) {
-  if (!grid) return [];
+export function cellsNear(grid, x, y, radius = FOOT_NEAR_WORLD, into = null) {
+  const out = into || [];
+  const asSet = into instanceof Set;
+  if (!grid) return out;
   const r = Math.max(0, radius);
   const ix0 = Math.floor((x - r - grid.originX) / grid.cell);
   const ix1 = Math.floor((x + r - grid.originX) / grid.cell);
   const iy0 = Math.floor((y - r - grid.originY) / grid.cell);
   const iy1 = Math.floor((y + r - grid.originY) / grid.cell);
-  const out = [];
   const r2 = r * r;
+  const underIdx = cellIndexAt(grid, x, y);
   for (let iy = iy0; iy <= iy1; iy++) {
     for (let ix = ix0; ix <= ix1; ix++) {
       const idx = grid.byKey.get(`${ix},${iy}`);
@@ -142,22 +166,26 @@ export function cellsNear(grid, x, y, radius = FOOT_NEAR_WORLD) {
       const cy = grid.originY + (iy + 0.5) * grid.cell;
       const dx = cx - x;
       const dy = cy - y;
-      if (dx * dx + dy * dy <= r2 || cellIndexAt(grid, x, y) === idx) {
-        out.push(grid.ids[idx]);
+      if (dx * dx + dy * dy <= r2 || underIdx === idx) {
+        const id = grid.ids[idx];
+        if (asSet) /** @type {Set<string>} */ (out).add(id);
+        else /** @type {string[]} */ (out).push(id);
       }
     }
   }
-  // Always include the cell under the feet when walkable.
-  const under = cellIdAt(grid, x, y);
-  if (under && !out.includes(under)) out.push(under);
+  if (underIdx >= 0) {
+    const under = grid.ids[underIdx];
+    if (asSet) /** @type {Set<string>} */ (out).add(under);
+    else if (!/** @type {string[]} */ (out).includes(under)) {
+      /** @type {string[]} */ (out).push(under);
+    }
+  }
   return out;
 }
 
-/** World rect for a cell id. */
-export function cellWorldRect(grid, cellId) {
-  if (!grid || !cellId) return null;
-  const idx = grid.ids.indexOf(cellId);
-  if (idx < 0) return null;
+/** World rect for a cell by index. */
+export function cellWorldRectAt(grid, idx) {
+  if (!grid || idx < 0 || idx >= grid.ids.length) return null;
   const ix = grid.ixOf[idx];
   const iy = grid.iyOf[idx];
   return {
@@ -167,6 +195,13 @@ export function cellWorldRect(grid, cellId) {
     w: grid.cell,
     h: grid.cell
   };
+}
+
+/** World rect for a cell id. */
+export function cellWorldRect(grid, cellId) {
+  if (!grid || !cellId) return null;
+  const idx = grid.ids.indexOf(cellId);
+  return cellWorldRectAt(grid, idx);
 }
 
 /** Area map for controlShares / summarize. */
@@ -179,43 +214,18 @@ export function cellAreas(grid) {
 }
 
 /**
- * Synthetic zones list so overlay/summarize can iterate cells like positions.
- * @param {CellGrid} grid
- */
-export function cellsAsZones(grid) {
-  if (!grid) return [];
-  return grid.ids.map((id, i) => {
-    const ix = grid.ixOf[i];
-    const iy = grid.iyOf[i];
-    return {
-      id,
-      name: id,
-      hidden: false,
-      pieces: [
-        {
-          type: 'rect',
-          x: grid.originX + ix * grid.cell,
-          y: grid.originY + iy * grid.cell,
-          w: grid.cell,
-          h: grid.cell
-        }
-      ]
-    };
-  });
-}
-
-/**
- * Attach dynamic cell proxies onto a slim network for claim/paint code paths.
+ * Attach dynamic grid onto a slim network — no materialized zones[] array.
  * @param {object} network
  * @param {CellGrid | null} grid
  */
 export function ensureDynamicZones(network, grid) {
   if (!network || !grid) return network;
-  if (network._dynGrid === grid && Array.isArray(network.zones) && network.zones.length) {
+  if (network._dynGrid === grid && network._areaCache instanceof Map) {
     return network;
   }
   network._dynGrid = grid;
-  network.zones = cellsAsZones(grid);
+  // Keep zones empty: paint/draw/claims use _dynGrid + _areaCache.
+  network.zones = [];
   network._areaCache = cellAreas(grid);
   return network;
 }

@@ -187,7 +187,7 @@ export function analyseRound({ meta, sampleAt, network = null, track = null }) {
     prepareDynamicNetwork(network, meta.map, null);
   }
   const presence =
-    controlOn && track && network?.zones?.length
+    controlOn && track && (network?._dynGrid?.ids?.length || network?.zones?.length)
       ? buildZonePresence({ meta, track, network, mapCode: meta.map })
       : null;
   // Coachable window: 1s after freezetime ends → 1s before the winner is decided.

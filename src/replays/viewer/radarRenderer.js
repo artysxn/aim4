@@ -339,7 +339,7 @@ export class RadarRenderer {
       return;
     }
 
-    if (frame.zoneOverlay?.network?.zones?.length) {
+    if (frame.zoneOverlay?.network && (frame.zoneOverlay.network._dynGrid || frame.zoneOverlay.network.zones?.length)) {
       this.drawZoneOverlay(ctx, t, frame.zoneOverlay);
     }
     this.drawUtility(ctx, t, frame, compact);
@@ -362,8 +362,11 @@ export class RadarRenderer {
    */
   drawZoneOverlay(ctx, t, overlay) {
     const network = overlay?.network;
-    if (!network?.zones?.length || !this.mapCode) return;
+    const grid = network?._dynGrid;
     const paintMap = overlay.paint || {};
+    if (!this.mapCode) return;
+    if (!grid?.ids?.length && !network?.zones?.length) return;
+
     const scratch = {};
     const mapW = RADAR_SIZE * t.scale;
     const mapH = RADAR_SIZE * t.scale;
@@ -380,25 +383,25 @@ export class RadarRenderer {
     zc.setTransform(1, 0, 0, 1, 0, 0);
     zc.clearRect(0, 0, cw, ch);
 
-    // Clip to the fitted radar square, then draw fills into the scratch layer.
     zc.save();
     zc.beginPath();
     zc.rect(t.ox, t.oy, mapW, mapH);
     zc.clip();
     zc.lineJoin = 'round';
 
-    // `network.zones` are claim cells (or legacy positions). Skip empty paint
-    // so fine 16uu grids stay cheap to draw.
-    for (const pos of network.zones) {
-      if (pos.hidden || !pos.pieces?.length) continue;
-      const key = paintMap[pos.id] || 'empty';
-      if (key === 'empty' && network._dynGrid) continue;
-      const colors = ZONE_PAINT[key] || ZONE_PAINT.empty;
-      const rects = rectsFromPieces(pos.pieces);
-
-      for (const r of rects) {
-        const a = worldToRadar(this.mapCode, r.x, r.y, scratch);
-        const b = worldToRadar(this.mapCode, r.x + r.w, r.y + r.h, {});
+    if (grid?.ids?.length) {
+      // Draw only non-empty claimed cells from the dynamic grid.
+      for (const [id, key] of Object.entries(paintMap)) {
+        if (!key || key === 'empty') continue;
+        const colors = ZONE_PAINT[key] || ZONE_PAINT.empty;
+        const idx = grid.idIndex?.get(id) ?? grid.ids.indexOf(id);
+        if (idx < 0) continue;
+        const ix = grid.ixOf[idx];
+        const iy = grid.iyOf[idx];
+        const wx = grid.originX + ix * grid.cell;
+        const wy = grid.originY + iy * grid.cell;
+        const a = worldToRadar(this.mapCode, wx, wy, scratch);
+        const b = worldToRadar(this.mapCode, wx + grid.cell, wy + grid.cell, {});
         const x = Math.min(a.x, b.x) * t.scale + t.ox;
         const y = Math.min(a.y, b.y) * t.scale + t.oy;
         const rw = Math.abs(b.x - a.x) * t.scale;
@@ -406,27 +409,43 @@ export class RadarRenderer {
         zc.fillStyle = colors.fill;
         zc.fillRect(x, y, rw, rh);
       }
-
-      for (const piece of pos.pieces) {
-        if (piece.type === 'rect' || (piece.w > 0 && piece.h > 0 && !piece.ring)) continue;
-        const ring = pieceToRing(piece);
-        if (!ring?.length) continue;
-        zc.beginPath();
-        for (let i = 0; i < ring.length; i++) {
-          const rp = worldToRadar(this.mapCode, ring[i][0], ring[i][1], scratch);
-          const px = rp.x * t.scale + t.ox;
-          const py = rp.y * t.scale + t.oy;
-          if (i === 0) zc.moveTo(px, py);
-          else zc.lineTo(px, py);
+    } else {
+      for (const pos of network.zones || []) {
+        if (pos.hidden || !pos.pieces?.length) continue;
+        const key = paintMap[pos.id] || 'empty';
+        if (key === 'empty') continue;
+        const colors = ZONE_PAINT[key] || ZONE_PAINT.empty;
+        const rects = rectsFromPieces(pos.pieces);
+        for (const r of rects) {
+          const a = worldToRadar(this.mapCode, r.x, r.y, scratch);
+          const b = worldToRadar(this.mapCode, r.x + r.w, r.y + r.h, {});
+          const x = Math.min(a.x, b.x) * t.scale + t.ox;
+          const y = Math.min(a.y, b.y) * t.scale + t.oy;
+          const rw = Math.abs(b.x - a.x) * t.scale;
+          const rh = Math.abs(b.y - a.y) * t.scale;
+          zc.fillStyle = colors.fill;
+          zc.fillRect(x, y, rw, rh);
         }
-        zc.closePath();
-        zc.fillStyle = colors.fill;
-        zc.fill();
+        for (const piece of pos.pieces) {
+          if (piece.type === 'rect' || (piece.w > 0 && piece.h > 0 && !piece.ring)) continue;
+          const ring = pieceToRing(piece);
+          if (!ring?.length) continue;
+          zc.beginPath();
+          for (let i = 0; i < ring.length; i++) {
+            const rp = worldToRadar(this.mapCode, ring[i][0], ring[i][1], scratch);
+            const px = rp.x * t.scale + t.ox;
+            const py = rp.y * t.scale + t.oy;
+            if (i === 0) zc.moveTo(px, py);
+            else zc.lineTo(px, py);
+          }
+          zc.closePath();
+          zc.fillStyle = colors.fill;
+          zc.fill();
+        }
       }
     }
     zc.restore();
 
-    // Punch to the radar image alpha so transparent corners stay clean.
     if (this.image) {
       zc.save();
       zc.globalCompositeOperation = 'destination-in';

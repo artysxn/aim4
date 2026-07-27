@@ -71,21 +71,23 @@ export function tickAtMapControlBaseline(meta) {
  * @returns {{ ct: number, t: number, neu: number } | null}
  */
 export function possessionSharesAt({ meta, states, network, presence, tick }) {
-  if (!meta || !network?.zones?.length) return null;
+  if (!meta || (!network?._dynGrid?.ids?.length && !network?.zones?.length)) return null;
   if (!Number.isFinite(tick)) return null;
   const active = activePositionsAt({ meta, states, network });
   /** @type {Record<string, string>} */
   const paint = {};
-  for (const pos of network.zones || []) {
-    if (!pos?.id || pos.hidden) continue;
-    const tAct = active.t.has(pos.id);
-    const ctAct = active.ct.has(pos.id);
-    if (tAct && ctAct) paint[pos.id] = 'contested-active';
-    else if (tAct) paint[pos.id] = 't-active';
-    else if (ctAct) paint[pos.id] = 'ct-active';
+  const ids = network._dynGrid?.ids?.length
+    ? network._dynGrid.ids
+    : (network.zones || []).filter((p) => p?.id && !p.hidden).map((p) => p.id);
+  for (const id of ids) {
+    const tAct = active.t.has(id);
+    const ctAct = active.ct.has(id);
+    if (tAct && ctAct) paint[id] = 'contested-active';
+    else if (tAct) paint[id] = 't-active';
+    else if (ctAct) paint[id] = 'ct-active';
     else {
-      const side = latestOwnerSide(presence, pos.id, tick);
-      paint[pos.id] =
+      const side = latestOwnerSide(presence, id, tick);
+      paint[id] =
         side === 'T' ? 't-control' : side === 'CT' ? 'ct-control' : 'empty';
     }
   }

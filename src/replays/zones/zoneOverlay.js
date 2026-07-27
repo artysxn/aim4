@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
 // replays/zones/zoneOverlay.js
 // Timeline "positions" overlay: who has been where up to the playhead, who is
-// there now, who can see an empty/occupied position (11-ray FOV fan + radar
-// walkable mask + smokes), surround-fill for neutrals locked in by one side,
-// and soft-pocket encirclement flips when the enemy ring goes active.
+// there now, who can see an empty/occupied cell (adaptive FOV cones + radar
+// walkable mask + smokes). Soft + beam claims drive map control on the
+// dynamic cell grid (surround/encircle skipped for fine grids).
 //
 // Colors: gray empty, T yellow, CT blue, both red; active vs controlled
 // (darker) for single-side claims.
@@ -24,10 +24,13 @@ import {
 } from './mapControl.js';
 import { getVisionLayerTests } from './visionLayers.js';
 import {
+  CELL_WORLD,
   cellIdAt,
+  cellIdsOf,
   cellsNear,
   ensureDynamicZones,
-  getCellGrid
+  getCellGrid,
+  hasDynamicGrid
 } from './dynamicControl.js';
 
 /**
@@ -58,25 +61,20 @@ export const ZONE_PAINT = {
 
 /** Half-angle of the vision cone used for sight-control (degrees). */
 const SIGHT_FOV_DEG = 30;
-/**
- * Yaw offsets (degrees) for the FOV ray fan, relative to look direction:
- * left edge, right edge, center, then 4 rays in each half-sector.
- */
-const FOV_RAY_OFFSETS = (() => {
-  const fov = SIGHT_FOV_DEG;
-  const offsets = [-fov, 0, fov];
-  for (let i = 1; i <= 4; i++) {
-    offsets.push((-fov * i) / 5);
-    offsets.push((fov * i) / 5);
-  }
-  return offsets;
-})();
-/** World-unit step when marching an FOV ray (≤ cell size so thin paint isn't skipped). */
-const SIGHT_RAY_STEP = 16;
+/** Full-FOV coverage units (matches old 11-ray fan for 3/20 claim thresholds). */
+const FOV_HIT_FULL = 11;
+/** World-unit ring step when expanding an adaptive cone. */
+const CONE_RING_STEP = 32;
 /** Stop marching past this world distance. */
 const SIGHT_RAY_MAX = 4200;
-/** Min ray-step hits inside a position to count it as seen. */
+/** Min ray-step / coverage hits inside a cell to count it as seen. */
 const SIGHT_RAY_MIN_HITS = 1;
+/** Max adaptive-cone split depth. */
+const CONE_MAX_DEPTH = 6;
+/** Below this half-width (degrees), fall back to a single center ray. */
+const CONE_MIN_HALF_DEG = 1.5;
+/** Probes across a wedge arc (odd ⇒ includes center). */
+const CONE_PROBES = 5;
 /**
  * Radar alpha at or below this is outside the map (transparent PNG) — same
  * mask the zone overlay punches with `destination-in`.
@@ -161,7 +159,7 @@ export function resetZoneVisionCache(cache) {
  */
 export function buildZonePresence({ meta, track, network, mapCode = '', radarImage = null }) {
   if (mapCode) prepareDynamicNetwork(network, mapCode, radarImage);
-  if (!meta || !track || !network?.zones?.length) return null;
+  if (!meta || !track || (!hasDynamicGrid(network) && !network?.zones?.length)) return null;
   const from = meta.freezeEndTick ?? meta.startTick ?? 0;
   const to = Math.max(from, meta.endTick ?? from);
   const tickRate = meta.tickRate || 64;
@@ -293,7 +291,7 @@ export function recordClaim(presence, posId, ev) {
 export function activePositionsAt({ meta, states, network }) {
   const t = new Set();
   const ct = new Set();
-  if (!meta || !network?.zones?.length) return { t, ct };
+  if (!meta || (!hasDynamicGrid(network) && !network?.zones?.length)) return { t, ct };
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
   const grid = network._dynGrid;
   for (const p of meta.players || []) {
@@ -364,11 +362,10 @@ function rectsShareEdge(a, b, pad = ADJACENT_PAD) {
 
 /** Undirected adjacency among positions (shared / near borders). */
 export function buildPositionAdjacency(network) {
-  if (!network?.zones?.length) return new Map();
   if (adjacencyCache.has(network)) return adjacencyCache.get(network);
 
   // Dynamic cell grid: 4-neighbor adjacency (O(cells)).
-  const grid = network._dynGrid;
+  const grid = network?._dynGrid;
   if (grid?.ids?.length) {
     /** @type {Map<string, string[]>} */
     const adj = new Map();
@@ -394,6 +391,7 @@ export function buildPositionAdjacency(network) {
     return adj;
   }
 
+  if (!network?.zones?.length) return new Map();
   const positions = network.zones.filter((z) => z?.id && !z.hidden && z.pieces?.length);
   /** @type {Map<string, string[]>} */
   const adj = new Map();
@@ -588,72 +586,292 @@ function pointInSmoke(x, y, smokes, radius = SMOKE_RADIUS_UNITS) {
 }
 
 /**
- * March one FOV ray from the viewer until wall, smoke, vision-block, elevated
- * ridge (from ground), or max range. Tallies walkable floor hits per position.
- *
- * Elevated paint:
- * - Viewer outside elevated → elevated samples act exactly like vision blocks
- *   (ray stops; no claim past the ridge).
- * - Viewer standing on elevated → elevated paint is ignored for this ray
- *   ("disabled"); only walls / vision-blocks / smoke stop sight.
- *
- * @param {Map<string, number>} hitCounts  posId -> step hits
- * @param {Map<string, number>} rayCounts  posId -> distinct rays that touched it
+ * True when a world sample blocks sight (vision block, elevated ridge, wall, smoke).
+ * Elevated is ignored when the viewer stands on elevated paint.
  */
-function castFovRay(
-  viewer,
+function sightBlockedAt(x, y, los, layers, elevatedDisabled, smokes) {
+  if (layers?.blockerAt) {
+    if (layers.blockerAt(x, y, elevatedDisabled)) return true;
+  } else {
+    if (layers?.visionBlockAt?.(x, y)) return true;
+    if (!elevatedDisabled && layers?.elevatedAt?.(x, y)) return true;
+  }
+  if (!los.isWalkableWorld(x, y)) return true;
+  if (pointInSmoke(x, y, smokes)) return true;
+  return false;
+}
+
+/** Accumulate coverage hits (keep max so overlapping rings don't inflate). */
+function addCoverage(rayCounts, id, weight) {
+  if (!id || weight <= 0) return;
+  const prev = rayCounts.get(id) || 0;
+  if (weight > prev) rayCounts.set(id, weight);
+}
+
+/**
+ * Stamp walkable cells in an annular FOV sector.
+ * @param {Map<string, number>} rayCounts
+ */
+function stampAnnulus(
+  ox,
+  oy,
+  yawMin,
+  yawMax,
+  d0,
+  d1,
+  grid,
+  smoked,
+  rayCounts,
+  hitWeight,
+  network
+) {
+  if (hitWeight <= 0 || d1 <= d0) return;
+  const cell = grid?.cell || CELL_WORLD;
+  const dStart = Math.max(d0, cell * 0.5);
+  for (let d = dStart; d <= d1; d += cell) {
+    const arc = Math.abs(yawMax - yawMin) * (Math.PI / 180) * d;
+    const nAng = Math.max(2, Math.ceil(arc / cell));
+    for (let i = 0; i <= nAng; i++) {
+      const ang = yawMin + ((yawMax - yawMin) * i) / nAng;
+      const rad = (ang * Math.PI) / 180;
+      const x = ox + Math.cos(rad) * d;
+      const y = oy + Math.sin(rad) * d;
+      if (grid) {
+        const id = cellIdAt(grid, x, y);
+        if (id && !smoked?.has(id)) addCoverage(rayCounts, id, hitWeight);
+      } else {
+        for (const z of positionsAtPoint(x, y, network)) {
+          if (!z?.id || smoked?.has(z.id)) continue;
+          addCoverage(rayCounts, z.id, hitWeight);
+        }
+      }
+    }
+  }
+}
+
+/** Single center ray for narrow leftover wedges. */
+function castThinRay(
+  ox,
+  oy,
   yawDeg,
+  distStart,
   los,
   smokes,
   network,
   smoked,
-  hitCounts,
   rayCounts,
-  layers
+  layers,
+  elevatedDisabled,
+  hitWeight
 ) {
   const rad = (yawDeg * Math.PI) / 180;
-  // Match engine yaw: 0 = +X, 90 = +Y.
   const dirX = Math.cos(rad);
   const dirY = Math.sin(rad);
-  /** @type {Set<string>} */
-  const touched = new Set();
-  // Standing on elevated disables elevated blocking for the whole fan ray.
-  const elevatedDisabled =
-    Boolean(layers?.elevatedAt) && layers.elevatedAt(viewer.x, viewer.y);
-
-  for (let dist = SIGHT_RAY_STEP; dist <= SIGHT_RAY_MAX; dist += SIGHT_RAY_STEP) {
-    const x = viewer.x + dirX * dist;
-    const y = viewer.y + dirY * dist;
-    // Painted layers first so elevated / vision-block ridges stop even when
-    // the texel is borderline non-walkable on the radar mask.
-    if (layers?.visionBlockAt?.(x, y)) break;
-    if (!elevatedDisabled && layers?.elevatedAt?.(x, y)) break;
-    if (!los.isWalkableWorld(x, y)) break;
-    if (pointInSmoke(x, y, smokes)) break;
-    const grid = network?._dynGrid;
+  const grid = network?._dynGrid;
+  const step = CELL_WORLD;
+  for (let dist = Math.max(step, distStart); dist <= SIGHT_RAY_MAX; dist += step) {
+    const x = ox + dirX * dist;
+    const y = oy + dirY * dist;
+    if (sightBlockedAt(x, y, los, layers, elevatedDisabled, smokes)) break;
     if (grid) {
       const id = cellIdAt(grid, x, y);
-      if (id && !smoked?.has(id)) {
-        hitCounts.set(id, (hitCounts.get(id) || 0) + 1);
-        touched.add(id);
-      }
+      if (id && !smoked?.has(id)) addCoverage(rayCounts, id, hitWeight);
     } else {
       for (const z of positionsAtPoint(x, y, network)) {
         if (!z?.id || smoked?.has(z.id)) continue;
-        hitCounts.set(z.id, (hitCounts.get(z.id) || 0) + 1);
-        touched.add(z.id);
+        addCoverage(rayCounts, z.id, hitWeight);
       }
     }
-  }
-  for (const id of touched) {
-    rayCounts.set(id, (rayCounts.get(id) || 0) + 1);
   }
 }
 
 /**
- * Cast the 11-ray FOV fan; returns distinct beams per position (1–11).
+ * Find contiguous clear angular spans from probe results (true = blocked).
+ * @param {boolean[]} blocked
+ * @param {number} yawMin
+ * @param {number} yawMax
+ * @returns {Array<[number, number]>}
+ */
+function clearYawSpans(blocked, yawMin, yawMax) {
+  const n = blocked.length;
+  if (n < 2) return [];
+  /** @type {Array<[number, number]>} */
+  const spans = [];
+  let runStart = -1;
+  for (let i = 0; i < n; i++) {
+    if (!blocked[i]) {
+      if (runStart < 0) runStart = i;
+    } else if (runStart >= 0) {
+      if (i - 1 > runStart) {
+        const a = yawMin + ((yawMax - yawMin) * runStart) / (n - 1);
+        const b = yawMin + ((yawMax - yawMin) * (i - 1)) / (n - 1);
+        spans.push([a, b]);
+      }
+      runStart = -1;
+    }
+  }
+  if (runStart >= 0 && n - 1 > runStart) {
+    const a = yawMin + ((yawMax - yawMin) * runStart) / (n - 1);
+    spans.push([a, yawMax]);
+  }
+  return spans;
+}
+
+/**
+ * Adaptive FOV cones: expand in open space, subdivide where partially blocked.
+ * Returns coverage-weighted hits (full FOV ≈ FOV_HIT_FULL for 3/20 claims).
+ *
+ * Elevated: outside → blocks like vision paint; standing on elevated → ignored.
+ *
  * @returns {Map<string, number>}
  */
+export function castPlayerBeams({
+  viewer,
+  los,
+  smokeCenters,
+  network,
+  smoked,
+  layers = null,
+  mapCode = ''
+}) {
+  /** @type {Map<string, number>} */
+  const rayCounts = new Map();
+  if (!viewer || !los?.isWalkableWorld) return rayCounts;
+
+  const layerTests =
+    layers || (mapCode && network ? getVisionLayerTests(network, mapCode) : null);
+  const elevatedDisabled =
+    Boolean(layerTests?.elevatedAt) && layerTests.elevatedAt(viewer.x, viewer.y);
+  const smokes = smokeCenters || [];
+  const smokeSet = smoked || new Set();
+  const grid = network?._dynGrid;
+  const ox = viewer.x;
+  const oy = viewer.y;
+  const baseYaw = Number(viewer.yaw) || 0;
+  const fovFull = SIGHT_FOV_DEG * 2;
+
+  /** @type {Array<{ yawMin: number, yawMax: number, distStart: number, depth: number }>} */
+  const queue = [
+    {
+      yawMin: baseYaw - SIGHT_FOV_DEG,
+      yawMax: baseYaw + SIGHT_FOV_DEG,
+      distStart: 0,
+      depth: 0
+    }
+  ];
+
+  while (queue.length) {
+    const wedge = queue.pop();
+    const { yawMin, yawMax, distStart, depth } = wedge;
+    const width = Math.abs(yawMax - yawMin);
+    const half = width * 0.5;
+    const hitWeight = Math.max(0.5, (FOV_HIT_FULL * width) / fovFull);
+
+    if (half < CONE_MIN_HALF_DEG || depth >= CONE_MAX_DEPTH) {
+      castThinRay(
+        ox,
+        oy,
+        (yawMin + yawMax) * 0.5,
+        distStart,
+        los,
+        smokes,
+        network,
+        smokeSet,
+        rayCounts,
+        layerTests,
+        elevatedDisabled,
+        hitWeight
+      );
+      continue;
+    }
+
+    let prevDist = distStart;
+    let dist = distStart + CONE_RING_STEP;
+    let stopped = false;
+
+    while (dist <= SIGHT_RAY_MAX) {
+      /** @type {boolean[]} */
+      const blocked = [];
+      for (let i = 0; i < CONE_PROBES; i++) {
+        const t = CONE_PROBES === 1 ? 0.5 : i / (CONE_PROBES - 1);
+        const ang = yawMin + (yawMax - yawMin) * t;
+        const rad = (ang * Math.PI) / 180;
+        const x = ox + Math.cos(rad) * dist;
+        const y = oy + Math.sin(rad) * dist;
+        blocked.push(sightBlockedAt(x, y, los, layerTests, elevatedDisabled, smokes));
+      }
+
+      const anyClear = blocked.some((b) => !b);
+      const anyBlocked = blocked.some((b) => b);
+
+      if (!anyClear) {
+        // Fully blocked — stop this wedge (don't stamp into the wall).
+        stopped = true;
+        break;
+      }
+
+      if (!anyBlocked) {
+        stampAnnulus(
+          ox,
+          oy,
+          yawMin,
+          yawMax,
+          prevDist,
+          dist,
+          grid,
+          smokeSet,
+          rayCounts,
+          hitWeight,
+          network
+        );
+        prevDist = dist;
+        dist += CONE_RING_STEP;
+        continue;
+      }
+
+      // Partial block: stamp only clear spans up to this ring, then split.
+      const spans = clearYawSpans(blocked, yawMin, yawMax);
+      for (const [a, b] of spans) {
+        if (Math.abs(b - a) < 0.25) continue;
+        stampAnnulus(
+          ox,
+          oy,
+          a,
+          b,
+          prevDist,
+          dist,
+          grid,
+          smokeSet,
+          rayCounts,
+          Math.max(0.5, (FOV_HIT_FULL * Math.abs(b - a)) / fovFull),
+          network
+        );
+        queue.push({ yawMin: a, yawMax: b, distStart: dist, depth: depth + 1 });
+      }
+      stopped = true;
+      break;
+    }
+
+    if (!stopped && prevDist < SIGHT_RAY_MAX) {
+      stampAnnulus(
+        ox,
+        oy,
+        yawMin,
+        yawMax,
+        prevDist,
+        SIGHT_RAY_MAX,
+        grid,
+        smokeSet,
+        rayCounts,
+        hitWeight,
+        network
+      );
+    }
+  }
+
+  return rayCounts;
+}
+
 /**
  * Bind map/radar/grenades into a cast function for `buildMapControlSeries`.
  * @returns {(ctx: { viewer: object, tick: number }) => Map<string, number>}
@@ -661,7 +879,7 @@ function castFovRay(
 export function createBeamCaster({ meta, network, mapCode, radarImage }) {
   const prepared = prepareDynamicNetwork(network, mapCode, radarImage);
   const los = getRadarLos(mapCode, radarImage);
-  if (!los || !meta || !prepared?.zones?.length) return () => new Map();
+  if (!los || !meta || !hasDynamicGrid(prepared)) return () => new Map();
   const tickRate = meta.tickRate || 64;
   const grenades = meta.events?.grenades || [];
   return ({ viewer, tick }) => {
@@ -679,41 +897,9 @@ export function createBeamCaster({ meta, network, mapCode, radarImage }) {
   };
 }
 
-export function castPlayerBeams({
-  viewer,
-  los,
-  smokeCenters,
-  network,
-  smoked,
-  layers = null,
-  mapCode = ''
-}) {
-  /** @type {Map<string, number>} */
-  const hitCounts = new Map();
-  /** @type {Map<string, number>} */
-  const rayCounts = new Map();
-  const layerTests =
-    layers || (mapCode && network ? getVisionLayerTests(network, mapCode) : null);
-  const baseYaw = Number(viewer.yaw) || 0;
-  for (const offset of FOV_RAY_OFFSETS) {
-    castFovRay(
-      viewer,
-      baseYaw + offset,
-      los,
-      smokeCenters,
-      network,
-      smoked || new Set(),
-      hitCounts,
-      rayCounts,
-      layerTests
-    );
-  }
-  return rayCounts;
-}
-
 /**
- * Vision for one living player: 11-ray FOV fan + tip/history events.
- * `beamHits` is the per-position beam count used by the claim accumulator.
+ * Vision for one living player: adaptive FOV cones + tip/history events.
+ * `beamHits` is the per-position coverage used by the claim accumulator.
  */
 function computePlayerVision({
   player,
@@ -742,7 +928,7 @@ function computePlayerVision({
     mapCode
   });
 
-  const rayTotal = FOV_RAY_OFFSETS.length;
+  const rayTotal = FOV_HIT_FULL;
   for (const [posId, rays] of rayCounts) {
     if (rays < SIGHT_RAY_MIN_HITS) continue;
     const reportCover = Math.min(0.99, rays / rayTotal);
@@ -873,7 +1059,7 @@ function applyVisionClaims({
   };
   if (!meta || !radarImage) return empty;
   prepareDynamicNetwork(network, mapCode, radarImage);
-  if (!network?.zones?.length) return empty;
+  if (!hasDynamicGrid(network) && !network?.zones?.length) return empty;
   const los = getRadarLos(mapCode, radarImage);
   if (!los) return empty;
 
@@ -1254,7 +1440,8 @@ export function computeZonePaint({
   /** @type {Record<string, ZonePaint>} */
   const paint = {};
   prepareDynamicNetwork(network, mapCode, radarImage);
-  if (!network?.zones?.length) return { paint };
+  const ids = cellIdsOf(network);
+  if (!ids.length) return { paint };
 
   const active = activePositionsAt({ meta, states, network });
   const { tSight, ctSight, contestedSight, claims } = applyVisionClaims({
@@ -1274,40 +1461,45 @@ export function computeZonePaint({
   // Feet first, then beam-claim ownership (3 hits neutral / 20 to flip).
   // If beams have not claimed a position, keep soft control from foot/sight
   // history — never wipe an active visit just because the claim map exists.
-  for (const pos of network.zones) {
-    if (!pos?.id || pos.hidden) continue;
-    const tAct = active.t.has(pos.id);
-    const ctAct = active.ct.has(pos.id);
-    const tSee = tSight.has(pos.id);
-    const ctSee = ctSight.has(pos.id);
-    const fightNow = contestedSight.has(pos.id);
-    const visual = claims ? claimVisual(claims.get(pos.id)) : null;
+  for (const id of ids) {
+    const tAct = active.t.has(id);
+    const ctAct = active.ct.has(id);
+    const tSee = tSight.has(id);
+    const ctSee = ctSight.has(id);
+    const fightNow = contestedSight.has(id);
+    const visual = claims ? claimVisual(claims.get(id)) : null;
 
+    let key = 'empty';
     if (tAct && ctAct) {
-      paint[pos.id] = 'contested-active';
+      key = 'contested-active';
     } else if (tAct && (fightNow || ctSee || visual === 'contested' || visual === 'CT')) {
-      paint[pos.id] = 'contested-active';
+      key = 'contested-active';
     } else if (ctAct && (fightNow || tSee || visual === 'contested' || visual === 'T')) {
-      paint[pos.id] = 'contested-active';
+      key = 'contested-active';
     } else if (tAct) {
-      paint[pos.id] = 't-active';
+      key = 't-active';
     } else if (ctAct) {
-      paint[pos.id] = 'ct-active';
+      key = 'ct-active';
     } else if (fightNow || visual === 'contested') {
-      paint[pos.id] = 'contested';
+      key = 'contested';
     } else if (visual === 'T') {
-      paint[pos.id] = 't-control';
+      key = 't-control';
     } else if (visual === 'CT') {
-      paint[pos.id] = 'ct-control';
+      key = 'ct-control';
     } else {
-      const latest = latestOwnerSide(presence, pos.id, tick);
-      paint[pos.id] =
-        latest === 'T' ? 't-control' : latest === 'CT' ? 'ct-control' : 'empty';
+      const latest = latestOwnerSide(presence, id, tick);
+      key = latest === 'T' ? 't-control' : latest === 'CT' ? 'ct-control' : 'empty';
     }
+    // Skip empty entries — summarize/draw treat missing as empty.
+    if (key !== 'empty') paint[id] = key;
   }
 
-  applySurroundControl(paint, network, presence, tick);
-  applyEncirclementFlip(paint, network, presence, tick, claims);
+  // Surround / encircle on fine 16uu grids is O(cells) and rarely worth it —
+  // soft + beam claims already drive map control.
+  if (!hasDynamicGrid(network)) {
+    applySurroundControl(paint, network, presence, tick);
+    applyEncirclementFlip(paint, network, presence, tick, claims);
+  }
 
   return { paint };
 }
@@ -1330,12 +1522,11 @@ export function paintForPosition(posId, tick, presence, active) {
 /**
  * Counts + area-weighted map control for the current paint map.
  *
- * Always tallies **positions** (`network.zones` — lowest tier), never
- * sections/zones or areas. Map control % uses each position's area.
- * Neutral = empty gray + contested red. T/CT = active + controlled only.
+ * Tallies claim cells (`_dynGrid`) or legacy positions. Neutral = empty +
+ * contested. T/CT = active + controlled only.
  *
  * @param {object} network
- * @param {Record<string, ZonePaint>} paint  keyed by position id
+ * @param {Record<string, ZonePaint>} paint  keyed by cell / position id
  */
 export function summarizeZoneControl(network, paint) {
   const counts = {
@@ -1352,10 +1543,13 @@ export function summarizeZoneControl(network, paint) {
   let neutralArea = 0;
   let totalArea = 0;
 
-  for (const pos of network?.zones || []) {
-    if (!pos?.id || pos.hidden) continue;
-    const key = paint?.[pos.id] || 'empty';
-    const area = positionArea(pos);
+  const grid = network?._dynGrid;
+  const areas = network?._areaCache instanceof Map ? network._areaCache : null;
+  const ids = cellIdsOf(network);
+
+  for (const id of ids) {
+    const key = paint?.[id] || 'empty';
+    const area = areas?.get(id) ?? (grid ? grid.area : 0);
     counts.total += 1;
     totalArea += area;
 

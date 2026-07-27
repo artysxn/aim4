@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // replays/zones/mapControl.js
-// Beam-hit map control: accumulate FOV ray hits to claim positions, and build
+// Beam-hit map control: accumulate FOV coverage hits to claim cells, and build
 // a T / neutral / CT area series for the stacked control chart.
 //
-// Rules (per vision check — one player every VISION_STRIDE ticks):
-//   • Each of 11 FOV beams that touch a position adds 1 hit.
+// Rules (per vision check — one living player every VISION_STRIDE ticks):
+//   • Adaptive FOV cones stamp coverage (full FOV ≈ 11 units).
 //   • Neutral → claim needs CLAIM_NEUTRAL_HITS (3).
 //   • Flip enemy ownership → CLAIM_FLIP_HITS (20).
 //   • No hits for CONTEST_DECAY_SECONDS → reset that side's progress.
@@ -14,10 +14,10 @@
 
 import { pieceBounds } from './zoneGeom.js';
 import { positionsAtPoint } from './pointInZone.js';
-import { cellsNear } from './dynamicControl.js';
+import { cellsNear, hasDynamicGrid } from './dynamicControl.js';
 
 /** Demo ticks between vision firings (one living player per stride). */
-export const VISION_STRIDE = 10;
+export const VISION_STRIDE = 16;
 /** Hits to take a never-owned (neutral) position. */
 export const CLAIM_NEUTRAL_HITS = 3;
 /** Hits to steal a position from the other side. */
@@ -382,7 +382,7 @@ export function activeFromStates(meta, states, network) {
  */
 export function buildMapControlSeries({ meta, track, network, castPlayerBeams }) {
   if (!meta || !track || !castPlayerBeams) return [];
-  if (!network?.zones?.length) return [];
+  if (!hasDynamicGrid(network) && !network?.zones?.length) return [];
   const from = meta.freezeEndTick ?? meta.startTick ?? 0;
   const to = Math.max(from, meta.endTick ?? from);
   const scratch = [];

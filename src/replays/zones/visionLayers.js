@@ -223,7 +223,11 @@ export function bakeLayerMask(mapCode, pieces) {
 
 /**
  * Cached vision / elevated testers on the network object.
- * @returns {{ visionBlockAt: Function, elevatedAt: Function }}
+ * @returns {{
+ *   visionBlockAt: Function,
+ *   elevatedAt: Function,
+ *   blockerAt: (x:number,y:number,elevatedDisabled?:boolean)=>boolean
+ * }}
  */
 export function getVisionLayerTests(network, mapCode) {
   ensureVisionLayers(network);
@@ -232,10 +236,19 @@ export function getVisionLayerTests(network, mapCode) {
 
   const vision = bakeLayerMask(mapCode, network.visionBlocks);
   const elev = bakeLayerMask(mapCode, network.elevated);
+  const visionBlockAt = vision.testWorld;
+  const elevatedAt = elev.testWorld;
+  /** One lookup: vision blocks always; elevated unless viewer stands on elevated. */
+  const blockerAt = (wx, wy, elevatedDisabled = false) => {
+    if (visionBlockAt(wx, wy)) return true;
+    if (!elevatedDisabled && elevatedAt(wx, wy)) return true;
+    return false;
+  };
   const tests = {
     key,
-    visionBlockAt: vision.testWorld,
-    elevatedAt: elev.testWorld
+    visionBlockAt,
+    elevatedAt,
+    blockerAt
   };
   network._layerTests = tests;
   return tests;
