@@ -6,10 +6,10 @@
 import { RADAR_SIZE, calibrationFor, radarToWorld, worldToRadar } from '../viewer/mapCalibration.js';
 
 /** World-unit edge length of one claim cell. */
-export const CELL_WORLD = 160;
+export const CELL_WORLD = 16;
 
 /** Soft nearness: claim cells within this world radius of the player's feet. */
-export const FOOT_NEAR_WORLD = 120;
+export const FOOT_NEAR_WORLD = 48;
 
 /**
  * @typedef {{
@@ -31,13 +31,14 @@ const gridCache = new Map();
 
 /**
  * Build (or reuse) walkable cells for a map.
+ * Requires a walkable LoS mask — at 16uu a full unfiltered grid is ~100k cells.
  * @param {string} mapCode
  * @param {{ isWalkableWorld: (x:number,y:number)=>boolean } | null} [los]
  * @returns {CellGrid | null}
  */
 export function getCellGrid(mapCode, los = null) {
-  if (!mapCode) return null;
-  const key = los ? mapCode : `${mapCode}:full`;
+  if (!mapCode || !los?.isWalkableWorld) return null;
+  const key = mapCode;
   const hit = gridCache.get(key);
   if (hit) return hit;
 
@@ -66,7 +67,7 @@ export function getCellGrid(mapCode, los = null) {
       if (scratch.x < 0 || scratch.y < 0 || scratch.x >= RADAR_SIZE || scratch.y >= RADAR_SIZE) {
         continue;
       }
-      if (los?.isWalkableWorld && !los.isWalkableWorld(cx, cy)) continue;
+      if (!los.isWalkableWorld(cx, cy)) continue;
       const id = `c${ix}_${iy}`;
       const idx = ids.length;
       ids.push(id);

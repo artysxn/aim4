@@ -387,10 +387,12 @@ export class RadarRenderer {
     zc.clip();
     zc.lineJoin = 'round';
 
-    // `network.zones` are positions (lowest tier) — not sections/areas.
+    // `network.zones` are claim cells (or legacy positions). Skip empty paint
+    // so fine 16uu grids stay cheap to draw.
     for (const pos of network.zones) {
       if (pos.hidden || !pos.pieces?.length) continue;
       const key = paintMap[pos.id] || 'empty';
+      if (key === 'empty' && network._dynGrid) continue;
       const colors = ZONE_PAINT[key] || ZONE_PAINT.empty;
       const rects = rectsFromPieces(pos.pieces);
 

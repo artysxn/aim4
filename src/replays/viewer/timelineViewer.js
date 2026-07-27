@@ -2335,6 +2335,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     syncCoachBtn();
     try {
       await ensureZoneNetwork();
+      const mapCode = renderer.mapCode || activeMeta?.map || '';
+      if (zoneNetwork && mapCode && renderer.image) {
+        prepareDynamicNetwork(zoneNetwork, mapCode, renderer.image);
+      }
       // Strict order: preload every round, then analyse every round.
       await analyseAllCoachRounds();
     } finally {

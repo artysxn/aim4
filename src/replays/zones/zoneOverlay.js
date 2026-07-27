@@ -71,8 +71,8 @@ const FOV_RAY_OFFSETS = (() => {
   }
   return offsets;
 })();
-/** World-unit step when marching an FOV ray. */
-const SIGHT_RAY_STEP = 48;
+/** World-unit step when marching an FOV ray (≤ cell size so thin paint isn't skipped). */
+const SIGHT_RAY_STEP = 16;
 /** Stop marching past this world distance. */
 const SIGHT_RAY_MAX = 4200;
 /** Min ray-step hits inside a position to count it as seen. */
@@ -591,8 +591,11 @@ function pointInSmoke(x, y, smokes, radius = SMOKE_RADIUS_UNITS) {
  * March one FOV ray from the viewer until wall, smoke, vision-block, elevated
  * ridge (from ground), or max range. Tallies walkable floor hits per position.
  *
- * Elevated: ground viewers cannot enter / see past painted elevated cells.
- * Viewers standing on elevated can see onto elevated and continue past it.
+ * Elevated paint:
+ * - Viewer outside elevated → elevated samples act exactly like vision blocks
+ *   (ray stops; no claim past the ridge).
+ * - Viewer standing on elevated → elevated paint is ignored for this ray
+ *   ("disabled"); only walls / vision-blocks / smoke stop sight.
  *
  * @param {Map<string, number>} hitCounts  posId -> step hits
  * @param {Map<string, number>} rayCounts  posId -> distinct rays that touched it
@@ -614,14 +617,18 @@ function castFovRay(
   const dirY = Math.sin(rad);
   /** @type {Set<string>} */
   const touched = new Set();
-  const viewerElevated = layers?.elevatedAt?.(viewer.x, viewer.y) || false;
+  // Standing on elevated disables elevated blocking for the whole fan ray.
+  const elevatedDisabled =
+    Boolean(layers?.elevatedAt) && layers.elevatedAt(viewer.x, viewer.y);
 
   for (let dist = SIGHT_RAY_STEP; dist <= SIGHT_RAY_MAX; dist += SIGHT_RAY_STEP) {
     const x = viewer.x + dirX * dist;
     const y = viewer.y + dirY * dist;
-    if (!los.isWalkableWorld(x, y)) break;
+    // Painted layers first so elevated / vision-block ridges stop even when
+    // the texel is borderline non-walkable on the radar mask.
     if (layers?.visionBlockAt?.(x, y)) break;
-    if (!viewerElevated && layers?.elevatedAt?.(x, y)) break;
+    if (!elevatedDisabled && layers?.elevatedAt?.(x, y)) break;
+    if (!los.isWalkableWorld(x, y)) break;
     if (pointInSmoke(x, y, smokes)) break;
     const grid = network?._dynGrid;
     if (grid) {

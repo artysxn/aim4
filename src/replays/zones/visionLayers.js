@@ -2,6 +2,11 @@
 // replays/zones/visionLayers.js
 // Painted vision-block / elevated masks for FOV rays + Position Editor brushes.
 // Stored as piece lists on the zone network (not as positions).
+//
+// Vision block: always stops FOV rays.
+// Elevated: acts as a vision block for viewers standing outside elevated paint;
+// when the viewer is standing on elevated paint, elevated is ignored for that
+// ray (you can see onto and past the ridge).
 // ---------------------------------------------------------------------------
 
 import { RADAR_SIZE, radarToWorld, worldToRadar } from '../viewer/mapCalibration.js';
