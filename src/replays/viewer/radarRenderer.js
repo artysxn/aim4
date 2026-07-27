@@ -10,7 +10,6 @@
 // ---------------------------------------------------------------------------
 
 import { CALIBRATION, RADAR_SIZE, isLowerLevel, worldToRadar } from './mapCalibration.js';
-import { pieceToRing, rectsFromPieces } from '../zones/zoneGeom.js';
 import { ZONE_PAINT } from '../zones/zoneOverlay.js';
 import { radarImage } from '../shared/roundId.js';
 import {
@@ -339,9 +338,7 @@ export class RadarRenderer {
       return;
     }
 
-    if (frame.zoneOverlay?.network && (frame.zoneOverlay.network._dynGrid || frame.zoneOverlay.network.zones?.length)) {
-      this.drawZoneOverlay(ctx, t, frame.zoneOverlay);
-    }
+    if (frame.zoneOverlay?.paint) this.drawZoneOverlay(ctx, t, frame.zoneOverlay);
     this.drawUtility(ctx, t, frame, compact);
     if (!frame.hideBomb) this.drawBomb(ctx, t, frame, compact);
     if (!frame.hideTracers) this.drawTracers(ctx, t, frame, compact);
@@ -352,22 +349,23 @@ export class RadarRenderer {
   }
 
   /**
-   * Position fills for the timeline zones toggle. Painted above the radar
-   * image and below utility/players, then punched to the radar PNG alpha so
-   * fills never spill past the map artwork.
+   * Map possession for the timeline zones toggle. Painted above the radar image
+   * and below utility/players, then punched to the radar PNG alpha so fills
+   * never spill past the map artwork.
+   *
+   * Six flat colors, and every pixel gets exactly one: each layer punches its
+   * own footprint out of what is already there before filling, so overlaps
+   * replace rather than blend. Ten stacked cones read the same as one, because
+   * a side's cones are unioned into a single path and filled once.
    *
    * @param {CanvasRenderingContext2D} ctx
    * @param {{ scale: number, ox: number, oy: number }} t
-   * @param {{ network: object, paint?: Record<string, string> }} overlay
+   * @param {{ paint: object }} overlay
    */
   drawZoneOverlay(ctx, t, overlay) {
-    const network = overlay?.network;
-    const grid = network?._dynGrid;
-    const paintMap = overlay.paint || {};
-    if (!this.mapCode) return;
-    if (!grid?.ids?.length && !network?.zones?.length) return;
+    const data = overlay?.paint;
+    if (!this.mapCode || !data) return;
 
-    const scratch = {};
     const mapW = RADAR_SIZE * t.scale;
     const mapH = RADAR_SIZE * t.scale;
     const cw = ctx.canvas.width;
@@ -381,69 +379,76 @@ export class RadarRenderer {
     }
     const zc = this._zoneCtx;
     zc.setTransform(1, 0, 0, 1, 0, 0);
+    zc.globalCompositeOperation = 'source-over';
     zc.clearRect(0, 0, cw, ch);
+
+    const scratch = {};
+    const addRing = (path, ring) => {
+      const n = ring.length / 2;
+      if (n < 3) return;
+      for (let i = 0; i < n; i++) {
+        const p = worldToRadar(this.mapCode, ring[i * 2], ring[i * 2 + 1], scratch);
+        const x = p.x * t.scale + t.ox;
+        const y = p.y * t.scale + t.oy;
+        if (i === 0) path.moveTo(x, y);
+        else path.lineTo(x, y);
+      }
+      path.closePath();
+    };
+    const pathOf = (rings) => {
+      if (!rings?.length) return null;
+      const path = new Path2D();
+      for (const r of rings) addRing(path, r);
+      return path;
+    };
+    /** Punch first, then fill: the new class replaces whatever was there. */
+    const stamp = (path, key) => {
+      if (!path) return;
+      zc.globalCompositeOperation = 'destination-out';
+      zc.fill(path);
+      zc.globalCompositeOperation = 'source-over';
+      zc.fillStyle = ZONE_PAINT[key].fill;
+      zc.fill(path);
+    };
 
     zc.save();
     zc.beginPath();
     zc.rect(t.ox, t.oy, mapW, mapH);
     zc.clip();
-    zc.lineJoin = 'round';
 
-    if (grid?.ids?.length) {
-      // Draw only non-empty claimed cells from the dynamic grid.
-      for (const [id, key] of Object.entries(paintMap)) {
-        if (!key || key === 'empty') continue;
-        const colors = ZONE_PAINT[key] || ZONE_PAINT.empty;
-        const idx = grid.idIndex?.get(id) ?? grid.ids.indexOf(id);
-        if (idx < 0) continue;
-        const ix = grid.ixOf[idx];
-        const iy = grid.iyOf[idx];
-        const wx = grid.originX + ix * grid.cell;
-        const wy = grid.originY + iy * grid.cell;
-        const a = worldToRadar(this.mapCode, wx, wy, scratch);
-        const b = worldToRadar(this.mapCode, wx + grid.cell, wy + grid.cell, {});
-        const x = Math.min(a.x, b.x) * t.scale + t.ox;
-        const y = Math.min(a.y, b.y) * t.scale + t.oy;
-        const rw = Math.abs(b.x - a.x) * t.scale;
-        const rh = Math.abs(b.y - a.y) * t.scale;
-        zc.fillStyle = colors.fill;
-        zc.fillRect(x, y, rw, rh);
+    // Held ground first, then who is live on it.
+    stamp(pathOf(data.territory?.t), 't-control');
+    stamp(pathOf(data.territory?.ct), 'ct-control');
+    stamp(pathOf(data.territory?.contested), 'contested');
+
+    const activePath = (cones, feet) => {
+      if (!cones?.length && !feet?.length) return null;
+      const path = new Path2D();
+      for (const r of cones || []) addRing(path, r);
+      const rPx = ((data.footRadius || 0) / (this.mapScale() || 5)) * t.scale;
+      for (const f of feet || []) {
+        const p = worldToRadar(this.mapCode, f.x, f.y, scratch);
+        path.moveTo(p.x * t.scale + t.ox + rPx, p.y * t.scale + t.oy);
+        path.arc(p.x * t.scale + t.ox, p.y * t.scale + t.oy, rPx, 0, Math.PI * 2);
       }
-    } else {
-      for (const pos of network.zones || []) {
-        if (pos.hidden || !pos.pieces?.length) continue;
-        const key = paintMap[pos.id] || 'empty';
-        if (key === 'empty') continue;
-        const colors = ZONE_PAINT[key] || ZONE_PAINT.empty;
-        const rects = rectsFromPieces(pos.pieces);
-        for (const r of rects) {
-          const a = worldToRadar(this.mapCode, r.x, r.y, scratch);
-          const b = worldToRadar(this.mapCode, r.x + r.w, r.y + r.h, {});
-          const x = Math.min(a.x, b.x) * t.scale + t.ox;
-          const y = Math.min(a.y, b.y) * t.scale + t.oy;
-          const rw = Math.abs(b.x - a.x) * t.scale;
-          const rh = Math.abs(b.y - a.y) * t.scale;
-          zc.fillStyle = colors.fill;
-          zc.fillRect(x, y, rw, rh);
-        }
-        for (const piece of pos.pieces) {
-          if (piece.type === 'rect' || (piece.w > 0 && piece.h > 0 && !piece.ring)) continue;
-          const ring = pieceToRing(piece);
-          if (!ring?.length) continue;
-          zc.beginPath();
-          for (let i = 0; i < ring.length; i++) {
-            const rp = worldToRadar(this.mapCode, ring[i][0], ring[i][1], scratch);
-            const px = rp.x * t.scale + t.ox;
-            const py = rp.y * t.scale + t.oy;
-            if (i === 0) zc.moveTo(px, py);
-            else zc.lineTo(px, py);
-          }
-          zc.closePath();
-          zc.fillStyle = colors.fill;
-          zc.fill();
-        }
-      }
+      return path;
+    };
+
+    const tActive = activePath(data.cones?.t, data.feet?.t);
+    const ctActive = activePath(data.cones?.ct, data.feet?.ct);
+    stamp(tActive, 't-active');
+    stamp(ctActive, 'ct-active');
+
+    // Where both sides are live it is contested. Clipping to one side and
+    // filling the other is the intersection, with no clipping library and no
+    // second canvas.
+    if (tActive && ctActive) {
+      zc.save();
+      zc.clip(tActive);
+      stamp(ctActive, 'contested');
+      zc.restore();
     }
+
     zc.restore();
 
     if (this.image) {

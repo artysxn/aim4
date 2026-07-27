@@ -29,14 +29,14 @@ import { phaseBounds } from '../coach/roundPhases.js';
 import {
   buildZonePresence,
   computeZonePaint,
-  createBeamCaster,
+  createConeCaster,
   createZoneVisionCache,
-  prepareDynamicNetwork,
+  hasControlField,
+  prepareControlField,
   resetZoneVisionCache
 } from '../zones/zoneOverlay.js';
 import { buildMapControlSeries } from '../zones/mapControl.js';
 import { mapControlAdvantageEnabled } from '../coach/mapControlAdvantage.js';
-import { hasDynamicGrid } from '../zones/dynamicControl.js';
 import helmetSvg from '../../icons/helmet.svg?url';
 import kevlarSvg from '../../icons/kevlar.svg?url';
 import nokevlarSvg from '../../icons/nokevlar.svg?url';
@@ -722,8 +722,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const net = await ensureZoneNetwork();
     if (!net || !activeMeta) return;
     const mapCode = renderer.mapCode || activeMeta.map || '';
-    prepareDynamicNetwork(net, mapCode, renderer.image);
-    if (!hasDynamicGrid(net)) return;
+    prepareControlField(net, mapCode, renderer.image);
+    if (!hasControlField(net)) return;
     const file = files[activeIndex];
     const entry = store.get(file);
     if (entry?.isFull && zonePresenceCache.has(file)) {
@@ -748,12 +748,11 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   function zoneOverlayForTick(tick) {
     if (!zonesOn || !zoneNetwork) return null;
     const mapCode = renderer.mapCode || activeMeta?.map || '';
-    prepareDynamicNetwork(zoneNetwork, mapCode, renderer.image);
-    if (!hasDynamicGrid(zoneNetwork)) return null;
-    if (zonePresence && !zonePresence.events) zonePresence.events = new Map();
+    prepareControlField(zoneNetwork, mapCode, renderer.image);
+    if (!hasControlField(zoneNetwork)) return null;
     const file = files[activeIndex];
     const track = store.get(file)?.full || store.track(file) || null;
-    const { paint } = computeZonePaint({
+    const paint = computeZonePaint({
       meta: activeMeta,
       states,
       network: zoneNetwork,
@@ -2152,15 +2151,15 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (!net) return null;
     const mapCode = renderer.mapCode || roundMeta.map || '';
     if (!renderer.image || !mapCode) return null;
-    prepareDynamicNetwork(net, mapCode, renderer.image);
-    if (!hasDynamicGrid(net)) return null;
+    prepareControlField(net, mapCode, renderer.image);
+    if (!hasControlField(net)) return null;
     let series;
     try {
       series = buildMapControlSeries({
         meta: roundMeta,
         track,
-        network: net,
-        castPlayerBeams: createBeamCaster({
+        geom: net._fieldGeom,
+        castCone: createConeCaster({
           meta: roundMeta,
           network: net,
           mapCode,
@@ -2338,7 +2337,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       await ensureZoneNetwork();
       const mapCode = renderer.mapCode || activeMeta?.map || '';
       if (zoneNetwork && mapCode && renderer.image) {
-        prepareDynamicNetwork(zoneNetwork, mapCode, renderer.image);
+        prepareControlField(zoneNetwork, mapCode, renderer.image);
       }
       // Strict order: preload every round, then analyse every round.
       await analyseAllCoachRounds();

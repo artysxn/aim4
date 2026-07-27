@@ -11,8 +11,8 @@
 import { MAP_CONTROL_BASE } from './mapControlBases.js';
 import { ROUND_SECONDS } from '../viewer/roundClock.js';
 import {
-  activePositionsAt,
-  latestOwnerSide,
+  activeMasksAt,
+  softOwnersAt,
   summarizeZoneControl
 } from '../zones/zoneOverlay.js';
 
@@ -71,27 +71,13 @@ export function tickAtMapControlBaseline(meta) {
  * @returns {{ ct: number, t: number, neu: number } | null}
  */
 export function possessionSharesAt({ meta, states, network, presence, tick }) {
-  if (!meta || (!network?._dynGrid?.ids?.length && !network?.zones?.length)) return null;
+  if (!meta || !network?._fieldGeom?.count) return null;
   if (!Number.isFinite(tick)) return null;
-  const active = activePositionsAt({ meta, states, network });
-  /** @type {Record<string, string>} */
-  const paint = {};
-  const ids = network._dynGrid?.ids?.length
-    ? network._dynGrid.ids
-    : (network.zones || []).filter((p) => p?.id && !p.hidden).map((p) => p.id);
-  for (const id of ids) {
-    const tAct = active.t.has(id);
-    const ctAct = active.ct.has(id);
-    if (tAct && ctAct) paint[id] = 'contested-active';
-    else if (tAct) paint[id] = 't-active';
-    else if (ctAct) paint[id] = 'ct-active';
-    else {
-      const side = latestOwnerSide(presence, id, tick);
-      paint[id] =
-        side === 'T' ? 't-control' : side === 'CT' ? 'ct-control' : 'empty';
-    }
-  }
-  const pct = summarizeZoneControl(network, paint).pct;
+  const masks = activeMasksAt({ meta, states, network });
+  const soft = softOwnersAt(presence, tick);
+  // No field: this term is deliberately soft+active only, so it needs neither
+  // the vision sweep nor the claim simulation.
+  const pct = summarizeZoneControl(network, null, masks, soft).pct;
   return { ct: pct.ct, t: pct.t, neu: pct.neutral };
 }
 

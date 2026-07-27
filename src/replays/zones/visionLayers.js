@@ -248,7 +248,10 @@ export function getVisionLayerTests(network, mapCode) {
     key,
     visionBlockAt,
     elevatedAt,
-    blockerAt
+    blockerAt,
+    // Raw rasters so the segment extractor can OR them without re-baking.
+    visionMask: vision.mask,
+    elevatedMask: elev.mask
   };
   network._layerTests = tests;
   return tests;

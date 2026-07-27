@@ -20,7 +20,13 @@ import {
 } from '../server/replays/demoStore.js';
 import { getZones } from '../server/zonesStore.js';
 import { TickTrack } from '../src/replays/tickStore.js';
-import { prepareDynamicNetwork, buildZonePresence } from '../src/replays/zones/zoneOverlay.js';
+import {
+  buildZonePresence,
+  hasControlField,
+  prepareControlField,
+  registerRadarMask
+} from '../src/replays/zones/zoneOverlay.js';
+import { loadRadarMask } from './lib/radarMask.mjs';
 import {
   possessionSharesAt,
   tickAtMapControlBaseline,
@@ -58,8 +64,12 @@ async function main() {
     let network = zoneCache.get(map);
     if (network === undefined) {
       network = await getZones(map);
-      // Slim network is enough — dynamic cells attach at sample time.
+      // Slim network is enough — the lattice attaches at sample time.
       if (!network) network = { map, visionBlocks: [], elevated: [], bombSites: { a: null, b: null } };
+      // No canvas here, so hand the walkable raster in from the PNG directly.
+      const mask = await loadRadarMask(map);
+      if (mask) registerRadarMask(map, mask);
+      else console.warn(`  ${map}: no radar PNG, possession unavailable`);
       zoneCache.set(map, network);
     }
     if (!mapControlAdvantageEnabled(map)) {
@@ -86,7 +96,11 @@ async function main() {
       continue;
     }
     const track = new TickTrack(buf);
-    prepareDynamicNetwork(network, map, null);
+    prepareControlField(network, map, null);
+    if (!hasControlField(network)) {
+      skipped++;
+      continue;
+    }
     const presence = buildZonePresence({ meta, track, network, mapCode: map });
     if (!presence) {
       skipped++;

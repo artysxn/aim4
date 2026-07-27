@@ -24,7 +24,8 @@ import {
 } from './mapControlAdvantage.js';
 import {
   buildZonePresence,
-  prepareDynamicNetwork
+  hasControlField,
+  prepareControlField
 } from '../zones/zoneOverlay.js';
 import { findRoundDecided } from './roundDecided.js';
 import { ALONE_DISTANCE, findCore, nearestTeammate } from './cores.js';
@@ -184,10 +185,10 @@ export function analyseRound({ meta, sampleAt, network = null, track = null }) {
   const endTick = meta.endTick ?? to;
   const controlOn = mapControlAdvantageEnabled(meta.map, network);
   if (controlOn && network && meta.map) {
-    prepareDynamicNetwork(network, meta.map, null);
+    prepareControlField(network, meta.map, null);
   }
   const presence =
-    controlOn && track && (network?._dynGrid?.ids?.length || network?.zones?.length)
+    controlOn && track && hasControlField(network)
       ? buildZonePresence({ meta, track, network, mapCode: meta.map })
       : null;
   // Coachable window: 1s after freezetime ends → 1s before the winner is decided.

@@ -1,400 +1,221 @@
 // ---------------------------------------------------------------------------
 // replays/zones/mapControl.js
-// Beam-hit map control: accumulate FOV coverage hits to claim cells, and build
-// a T / neutral / CT area series for the stacked control chart.
+// Possession accumulation over the control field.
 //
-// Rules (per vision check — one living player every VISION_STRIDE ticks):
-//   • Adaptive FOV cones stamp coverage (full FOV ≈ 11 units).
-//   • Neutral → claim needs CLAIM_NEUTRAL_HITS (3).
-//   • Flip enemy ownership → CLAIM_FLIP_HITS (20).
-//   • No hits for CONTEST_DECAY_SECONDS → reset that side's progress.
-//   • Owner stays until flipped; unfinished contests revert to prior owner
-//     (or stay neutral if never claimed).
+// Rules (applied once per VISION_STRIDE, for every living player):
+//   • Each player's visibility polygon adds `stride / tickRate` seconds of
+//     exposure to the cells it covers.
+//   • Neutral ground is taken after CLAIM_NEUTRAL_SECONDS of exposure.
+//   • Enemy ground needs CLAIM_FLIP_SECONDS, and an owner still looking at a
+//     cell wipes the challenger's progress.
+//   • CONTEST_DECAY_SECONDS without exposure resets a side's progress.
+//
+// Exposure is time, not "hits", so the numbers no longer depend on how often
+// the simulation happens to sample. VISION_STRIDE is now only a sampling rate.
 // ---------------------------------------------------------------------------
 
-import { pieceBounds } from './zoneGeom.js';
-import { positionsAtPoint } from './pointInZone.js';
-import { cellsNear, hasDynamicGrid } from './dynamicControl.js';
+import {
+  CLASS_CT,
+  CLASS_T,
+  SIDE_CT,
+  SIDE_NONE,
+  SIDE_T,
+  cellsNearInto,
+  classifyCell,
+  createControlField,
+  rasterizeConeInto,
+  resetControlField,
+  resolveOwners,
+  restoreField,
+  snapshotField
+} from './controlField.js';
 
-/** Demo ticks between vision firings (one living player per stride). */
+/** Demo ticks between vision samples. Every living player fires on each one. */
 export const VISION_STRIDE = 16;
-/** Hits to take a never-owned (neutral) position. */
-export const CLAIM_NEUTRAL_HITS = 3;
-/** Hits to steal a position from the other side. */
-export const CLAIM_FLIP_HITS = 20;
-/** Seconds without hits before a side's progress resets. */
+/** Seconds of exposure to take never-owned ground. */
+export const CLAIM_NEUTRAL_SECONDS = 0.35;
+/** Seconds of exposure to steal ground from the other side. */
+export const CLAIM_FLIP_SECONDS = 2.5;
+/** Seconds without exposure before a side's progress resets. */
 export const CONTEST_DECAY_SECONDS = 2;
+/** Strides between seek keyframes. */
+export const KEYFRAME_STRIDES = 32;
+
+/** Scratch for foot lookups; a player never touches more than a handful. */
+const footScratch = new Int32Array(64);
 
 /**
- * @typedef {{
- *   owner: 'T'|'CT'|null,
- *   ownerTick: number|null,
- *   tHits: number,
- *   ctHits: number,
- *   tLast: number|null,
- *   ctLast: number|null
- * }} ClaimState
+ * Per-side foot occupancy masks for a sampled tick.
+ * Buffers are reused, so callers must consume the result before the next call.
+ *
+ * @param {object} meta
+ * @param {Array} states
+ * @param {object} geom  FieldGeometry
+ * @param {{ t: Uint8Array, ct: Uint8Array }} out
  */
-
-function ringArea(ring) {
-  if (!ring || ring.length < 3) return 0;
-  let sum = 0;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    sum += ring[j][0] * ring[i][1] - ring[i][0] * ring[j][1];
-  }
-  return Math.abs(sum) * 0.5;
-}
-
-function areaOfPosition(zone) {
-  let area = 0;
-  for (const p of zone?.pieces || []) {
-    if (!p) continue;
-    if (p.type === 'rect' || (p.w > 0 && p.h > 0 && !p.ring)) {
-      area += Math.max(0, Number(p.w) || 0) * Math.max(0, Number(p.h) || 0);
-      continue;
-    }
-    if (p.type === 'poly' || p.ring?.length) {
-      area += ringArea(p.ring);
-      continue;
-    }
-    const b = pieceBounds(p);
-    if (Number.isFinite(b.minX)) {
-      area += Math.max(0, b.maxX - b.minX) * Math.max(0, b.maxY - b.minY);
-    }
-  }
-  return area;
-}
-
-/** @returns {ClaimState} */
-export function emptyClaim() {
-  return {
-    owner: null,
-    ownerTick: null,
-    tHits: 0,
-    ctHits: 0,
-    tLast: null,
-    ctLast: null
-  };
-}
-
-/** Deep-enough copy of a claims map (per-position state objects). */
-export function cloneClaims(claims) {
-  /** @type {Map<string, ClaimState>} */
-  const out = new Map();
-  for (const [id, st] of claims || []) {
-    if (!st) continue;
-    out.set(id, {
-      owner: st.owner ?? null,
-      ownerTick: st.ownerTick ?? null,
-      tHits: st.tHits || 0,
-      ctHits: st.ctHits || 0,
-      tLast: st.tLast ?? null,
-      ctLast: st.ctLast ?? null
-    });
+export function activeMasksFromStates(meta, states, geom, out) {
+  out.t.fill(0);
+  out.ct.fill(0);
+  if (!meta || !geom) return out;
+  const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
+  for (const p of meta.players || []) {
+    const side = teamSides[p.team];
+    if (side !== 'T' && side !== 'CT') continue;
+    const s = states?.[p.slot];
+    if (!s?.alive || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
+    const mask = side === 'T' ? out.t : out.ct;
+    const n = cellsNearInto(geom, s.x, s.y, 48, footScratch);
+    for (let i = 0; i < n; i++) mask[footScratch[i]] = 1;
   }
   return out;
 }
 
+/** Allocate reusable mask buffers for a lattice. */
+export function createActiveMasks(geom) {
+  return { t: new Uint8Array(geom.count), ct: new Uint8Array(geom.count) };
+}
+
 /**
- * Deterministic beam-claim simulator with per-stride snapshots.
- * Seeking to any tick returns the same claims as playing forward from freeze.
+ * Deterministic possession simulator with keyframed seeking.
+ *
+ * Playing forward never restores; seeking backward rewinds to the nearest
+ * keyframe and replays, so any tick yields the same field as playing to it.
  *
  * @param {object} args
  * @param {object} args.meta
  * @param {{ sampleAll: Function }} args.track
- * @param {(ctx: { viewer: object, side: string, tick: number, states: Array }) => Map<string, number>} args.castPlayerBeams
+ * @param {object} args.geom  FieldGeometry
+ * @param {(ctx: { viewer: object, side: 'T'|'CT', tick: number }) => Float32Array|null} args.castCone
  */
-export function createBeamClaimSimulator({ meta, track, castPlayerBeams }) {
-  if (!meta || !track || !castPlayerBeams) {
-    return {
-      claimsAt: () => new Map(),
-      ensureUntil: () => {},
-      from: 0,
-      end: 0
-    };
+export function createControlSimulator({ meta, track, geom, castCone }) {
+  const field = createControlField(geom);
+  if (!meta || !track || !castCone || !field) {
+    return { fieldAt: () => field, from: 0, end: 0, field };
   }
+
   const tickRate = meta.tickRate || 64;
   const from = meta.freezeEndTick ?? meta.startTick ?? 0;
   const end = Math.max(from, meta.endTick ?? from);
   const players = meta.players || [];
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
+  const rules = {
+    decayTicks: CONTEST_DECAY_SECONDS * tickRate,
+    neutralSeconds: CLAIM_NEUTRAL_SECONDS,
+    flipSeconds: CLAIM_FLIP_SECONDS
+  };
+  const dt = VISION_STRIDE / tickRate;
+  const lastStride = Math.floor((end - from) / VISION_STRIDE);
   const scratch = [];
-  /** @type {Map<string, ClaimState>} */
-  let claims = new Map();
-  let rr = 0;
-  let nextTick = from;
-  /** @type {Array<{ tick: number, claims: Map<string, ClaimState> }>} */
-  const snapshots = [];
+  /** Snapshots taken *before* stride `j * KEYFRAME_STRIDES` runs. */
+  const keyframes = [];
+  /** Index of the last stride applied; -1 means nothing has run. */
+  let cursor = -1;
 
-  function stepOnce() {
-    if (nextTick > end) return false;
-    const tick = nextTick;
+  function runStride(k) {
+    if (k % KEYFRAME_STRIDES === 0) {
+      const j = k / KEYFRAME_STRIDES;
+      if (!keyframes[j]) keyframes[j] = snapshotField(field, k);
+    }
+    const tick = from + k * VISION_STRIDE;
     track.sampleAll(tick, scratch);
-    decayClaims(claims, tick, tickRate);
-
-    /** @type {Array<{ player: object, side: 'T'|'CT', viewer: object }>} */
-    const viewers = [];
     for (const p of players) {
       const side = teamSides[p.team];
       if (side !== 'T' && side !== 'CT') continue;
       const s = scratch[p.slot];
       if (!s?.alive || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
       if (!Number.isFinite(s.yaw)) continue;
-      viewers.push({
-        player: p,
-        side,
-        viewer: { x: s.x, y: s.y, yaw: s.yaw }
-      });
+      const ring = castCone({ viewer: s, side, tick });
+      if (ring) rasterizeConeInto(field, ring, side === 'T' ? SIDE_T : SIDE_CT, dt, tick);
     }
-
-    if (viewers.length) {
-      const focus = viewers[rr % viewers.length];
-      rr++;
-      const beams = castPlayerBeams({
-        viewer: focus.viewer,
-        side: focus.side,
-        tick,
-        states: scratch
-      });
-      for (const [posId, n] of beams || []) {
-        if (!claims.has(posId)) claims.set(posId, emptyClaim());
-        applyBeamHits(claims.get(posId), focus.side, n, tick, tickRate);
-      }
-    }
-
-    snapshots.push({ tick, claims: cloneClaims(claims) });
-    nextTick += VISION_STRIDE;
-    return true;
+    resolveOwners(field, tick, rules);
+    cursor = k;
   }
 
-  function ensureUntil(toTick) {
-    const target = Math.min(Math.max(Number(toTick) || from, from), end);
-    while (nextTick <= target) {
-      if (!stepOnce()) break;
-    }
-  }
-
-  /**
-   * Claims as of the last vision stride at or before `tick`.
-   * Always returns a fresh clone so callers can mutate safely.
-   */
-  function claimsAt(tick) {
+  /** Field state as of the last stride at or before `tick`. */
+  function fieldAt(tick) {
     const t = Number(tick);
-    if (!Number.isFinite(t) || t < from) return new Map();
-    ensureUntil(t);
-    if (!snapshots.length) return new Map();
-    let lo = 0;
-    let hi = snapshots.length - 1;
-    let best = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (snapshots[mid].tick <= t) {
-        best = mid;
-        lo = mid + 1;
+    if (!Number.isFinite(t) || t < from) return field;
+    const target = Math.min(lastStride, Math.floor((t - from) / VISION_STRIDE));
+    if (target < 0) return field;
+
+    if (target < cursor) {
+      const j = Math.floor(target / KEYFRAME_STRIDES);
+      if (keyframes[j]) {
+        restoreField(field, keyframes[j]);
+        cursor = j * KEYFRAME_STRIDES - 1;
       } else {
-        hi = mid - 1;
+        resetControlField(field);
+        cursor = -1;
       }
     }
-    return best >= 0 ? cloneClaims(snapshots[best].claims) : new Map();
+    while (cursor < target) runStride(cursor + 1);
+    return field;
   }
 
-  return { claimsAt, ensureUntil, from, end };
-}
-
-/**
- * Decay + apply beam hits for one side on one position.
- * @param {ClaimState} st
- * @param {'T'|'CT'} side
- * @param {number} beams  distinct FOV rays that hit (0–11)
- * @param {number} tick
- * @param {number} tickRate
- */
-export function applyBeamHits(st, side, beams, tick, tickRate) {
-  const decay = CONTEST_DECAY_SECONDS * (tickRate || 64);
-  if (st.tLast != null && tick - st.tLast > decay) {
-    st.tHits = 0;
-    st.tLast = null;
-  }
-  if (st.ctLast != null && tick - st.ctLast > decay) {
-    st.ctHits = 0;
-    st.ctLast = null;
-  }
-  if (!beams || (side !== 'T' && side !== 'CT')) return st;
-
-  // Already own it — clear any enemy contest meter; no self-progress.
-  if (st.owner === side) {
-    if (side === 'T') {
-      st.ctHits = 0;
-      st.ctLast = null;
-    } else {
-      st.tHits = 0;
-      st.tLast = null;
-    }
-    return st;
-  }
-
-  if (side === 'T') {
-    st.tHits += beams;
-    st.tLast = tick;
-  } else {
-    st.ctHits += beams;
-    st.ctLast = tick;
-  }
-
-  const hits = side === 'T' ? st.tHits : st.ctHits;
-  const needed = st.owner == null ? CLAIM_NEUTRAL_HITS : CLAIM_FLIP_HITS;
-  if (hits >= needed) {
-    st.owner = side;
-    st.ownerTick = tick;
-    st.tHits = 0;
-    st.ctHits = 0;
-    st.tLast = null;
-    st.ctLast = null;
-  }
-  return st;
-}
-
-/** Decay-only pass so time scrubbing still clears unfinished contests. */
-export function decayClaims(claims, tick, tickRate) {
-  const decay = CONTEST_DECAY_SECONDS * (tickRate || 64);
-  for (const st of claims.values()) {
-    if (st.tLast != null && tick - st.tLast > decay) {
-      st.tHits = 0;
-      st.tLast = null;
-    }
-    if (st.ctLast != null && tick - st.ctLast > decay) {
-      st.ctHits = 0;
-      st.ctLast = null;
-    }
-  }
-}
-
-/**
- * Visual control from claim state (ignores feet — caller layers active on top).
- * @returns {'T'|'CT'|'contested'|null}
- */
-export function claimVisual(st) {
-  if (!st) return null;
-  const tBusy = st.tHits > 0;
-  const ctBusy = st.ctHits > 0;
-  if (tBusy && ctBusy) return 'contested';
-  if (st.owner === 'T' && ctBusy) return 'contested';
-  if (st.owner === 'CT' && tBusy) return 'contested';
-  if (!st.owner && (tBusy || ctBusy)) return 'contested';
-  if (st.owner === 'T' || st.owner === 'CT') return st.owner;
-  return null;
-}
-
-/**
- * @param {object} network
- * @returns {Map<string, number>}
- */
-export function positionAreas(network) {
-  if (network?._areaCache instanceof Map) return network._areaCache;
-  const map = new Map();
-  for (const pos of network?.zones || []) {
-    if (!pos?.id || pos.hidden) continue;
-    map.set(pos.id, Math.max(0, areaOfPosition(pos)));
-  }
-  if (network) network._areaCache = map;
-  return map;
+  return { fieldAt, field, from, end };
 }
 
 /**
  * Area-weighted T / CT / neutral shares.
- * Contested and empty both count as neutral for the stacked chart.
+ * Contested and empty both count as neutral, matching the stacked chart.
  *
- * @param {object} network
- * @param {Map<string, ClaimState>} claims
- * @param {{ t?: Set<string>, ct?: Set<string> }} [active]
+ * @param {object} field  ControlField
+ * @param {{ t: Uint8Array, ct: Uint8Array } | null} [active]
  * @returns {{ t: number, ct: number, neu: number }}
  */
-export function controlShares(network, claims, active = null) {
-  const areas = positionAreas(network);
-  let tArea = 0;
-  let ctArea = 0;
-  let neuArea = 0;
-  let total = 0;
-  for (const [id, area] of areas) {
-    total += area;
-    const tAct = active?.t?.has(id);
-    const ctAct = active?.ct?.has(id);
-    let side = null;
-    if (tAct && !ctAct) side = 'T';
-    else if (ctAct && !tAct) side = 'CT';
-    else if (!tAct && !ctAct) {
-      const v = claimVisual(claims.get(id));
-      side = v === 'T' || v === 'CT' ? v : null;
+export function controlShares(field, active = null) {
+  if (!field) return { t: 0, ct: 0, neu: 100 };
+  const { walkable, count, walkableCount } = field;
+  const aT = active?.t || null;
+  const aCT = active?.ct || null;
+  let tCells = 0;
+  let ctCells = 0;
+
+  for (let i = 0; i < count; i++) {
+    if (!walkable[i]) continue;
+    const tAct = aT ? aT[i] === 1 : false;
+    const ctAct = aCT ? aCT[i] === 1 : false;
+    if (tAct && !ctAct) {
+      tCells++;
+      continue;
     }
-    if (side === 'T') tArea += area;
-    else if (side === 'CT') ctArea += area;
-    else neuArea += area;
+    if (ctAct && !tAct) {
+      ctCells++;
+      continue;
+    }
+    if (tAct && ctAct) continue;
+    const cls = classifyCell(field, i);
+    if (cls === CLASS_T) tCells++;
+    else if (cls === CLASS_CT) ctCells++;
   }
-  if (total <= 0) return { t: 0, ct: 0, neu: 100 };
-  return {
-    t: (tArea / total) * 100,
-    ct: (ctArea / total) * 100,
-    neu: (neuArea / total) * 100
-  };
+
+  if (!walkableCount) return { t: 0, ct: 0, neu: 100 };
+  const t = (tCells / walkableCount) * 100;
+  const ct = (ctCells / walkableCount) * 100;
+  return { t, ct, neu: Math.max(0, 100 - t - ct) };
 }
 
 /**
- * Active feet sets from a sampled tick buffer.
- * @param {object} meta
- * @param {Array} states
- * @param {object} network
- */
-export function activeFromStates(meta, states, network) {
-  const t = new Set();
-  const ct = new Set();
-  const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
-  const grid = network?._dynGrid;
-  for (const p of meta.players || []) {
-    const side = teamSides[p.team];
-    if (side !== 'T' && side !== 'CT') continue;
-    const s = states?.[p.slot];
-    if (!s?.alive || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
-    if (grid) {
-      for (const id of cellsNear(grid, s.x, s.y)) {
-        if (side === 'T') t.add(id);
-        else ct.add(id);
-      }
-    } else {
-      for (const z of positionsAtPoint(s.x, s.y, network)) {
-        if (!z?.id) continue;
-        if (side === 'T') t.add(z.id);
-        else ct.add(z.id);
-      }
-    }
-  }
-  return { t, ct };
-}
-
-/**
- * Simulate beam claims across a round for the stacked control chart.
+ * Possession over a whole round for the stacked control chart.
+ * Walks forward once, so the sim never re-seeks.
  *
- * @param {object} args
- * @param {object} args.meta
- * @param {{ sampleAll: Function }} args.track
- * @param {object} args.network
- * @param {(ctx: { viewer: object, side: string, tick: number, states: Array }) => Map<string, number>} args.castPlayerBeams
  * @returns {Array<{ tick: number, t: number, ct: number, neu: number }>}
  */
-export function buildMapControlSeries({ meta, track, network, castPlayerBeams }) {
-  if (!meta || !track || !castPlayerBeams) return [];
-  if (!hasDynamicGrid(network) && !network?.zones?.length) return [];
-  const from = meta.freezeEndTick ?? meta.startTick ?? 0;
-  const to = Math.max(from, meta.endTick ?? from);
+export function buildMapControlSeries({ meta, track, geom, castCone }) {
+  if (!meta || !track || !geom || !castCone) return [];
+  const sim = createControlSimulator({ meta, track, geom, castCone });
+  const masks = createActiveMasks(geom);
   const scratch = [];
-  const sim = createBeamClaimSimulator({ meta, track, castPlayerBeams });
   const series = [];
 
-  for (let tick = from; tick <= to; tick += VISION_STRIDE) {
-    const claims = sim.claimsAt(tick);
+  for (let tick = sim.from; tick <= sim.end; tick += VISION_STRIDE) {
+    const field = sim.fieldAt(tick);
     track.sampleAll(tick, scratch);
-    const active = activeFromStates(meta, scratch, network);
-    const shares = controlShares(network, claims, active);
+    activeMasksFromStates(meta, scratch, geom, masks);
+    const shares = controlShares(field, masks);
     series.push({ tick, t: shares.t, ct: shares.ct, neu: shares.neu });
   }
   return series;
 }
+
+export { SIDE_CT, SIDE_NONE, SIDE_T };
