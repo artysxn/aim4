@@ -26,6 +26,11 @@ import { buildZonePresence } from '../zones/zoneOverlay.js';
 import { findRoundDecided } from './roundDecided.js';
 import { ALONE_DISTANCE, findCore, nearestTeammate } from './cores.js';
 import { findSiteExecuteFlags } from './siteExecute.js';
+import {
+  alivePositionsBySide,
+  sitePresenceAdvantage
+} from './sitePresenceAdvantage.js';
+import { hasBombSites } from '../zones/bombSites.js';
 
 /** A kill this soon after a death answers it. */
 const TRADE_SECONDS = 3;
@@ -241,6 +246,30 @@ export function analyseRound({ meta, sampleAt, network = null, track = null }) {
         mapControlT = shares.t;
       }
     }
+    let sitePp;
+    let site;
+    let siteCt;
+    let siteT;
+    if (network && hasBombSites(network) && !plant.planted) {
+      const bySide = alivePositionsBySide({
+        players,
+        states,
+        deadIds,
+        teamSides
+      });
+      const siteAdv = sitePresenceAdvantage({
+        network,
+        tAlive: bySide.T,
+        ctAlive: bySide.CT,
+        planted: false
+      });
+      if (siteAdv) {
+        sitePp = siteAdv.pp;
+        site = siteAdv.site;
+        siteCt = siteAdv.ct;
+        siteT = siteAdv.t;
+      }
+    }
     const wp = winProbability({
       map: meta.map,
       ctAlive: eq.ctAlive,
@@ -252,6 +281,10 @@ export function analyseRound({ meta, sampleAt, network = null, track = null }) {
       decided,
       mapControlCt,
       mapControlT,
+      sitePp,
+      site,
+      siteCt,
+      siteT,
       ...plant
     });
     series.push({

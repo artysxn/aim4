@@ -17,6 +17,7 @@ import {
   mapControlAdvantage,
   possessionSharesAt
 } from './mapControlAdvantage.js';
+import { sitePresenceAdvantage, alivePositionsBySide } from './sitePresenceAdvantage.js';
 
 /**
  * CT win rate at equal equipment and 5v5, per map. Anubis is the only one of
@@ -325,6 +326,10 @@ function clampEcoMismatch(ctPercent, ctEquip, tEquip) {
  * @param {boolean|null} [state.ctDefusing] true/false when known; null skips hard cutoff
  * @param {number} [state.mapControlCt]  area % CT soft+active (neutral ignored in term)
  * @param {number} [state.mapControlT]   area % T soft+active
+ * @param {number} [state.sitePp]        CT win-pp from even for bombsite stack (pre-plant)
+ * @param {'a'|'b'|null} [state.site]
+ * @param {number} [state.siteCt]
+ * @param {number} [state.siteT]
  * @returns {{ct: number, t: number, parts: object}} percentages
  */
 export function winProbability(state) {
@@ -379,8 +384,13 @@ export function winProbability(state) {
   const controlPp = ctrl?.pp || 0;
   const controlEdge = controlPp ? edge(50 + controlPp) : 0;
 
+  // 6. Pre-plant bombsite stack (T core at/near A|B): CT/T bodies on that pad.
+  const sitePp = !state.planted && Number.isFinite(state.sitePp) ? state.sitePp : 0;
+  const siteEdge = sitePp ? edge(50 + sitePp) : 0;
+
   let ct =
-    sigmoid(mapEdge + econEdge + manEdge + plantEdge + controlEdge) * 100;
+    sigmoid(mapEdge + econEdge + manEdge + plantEdge + controlEdge + siteEdge) *
+    100;
   ct = clampEcoMismatch(ct, state.ctEquip, state.tEquip);
   const clamped = Math.min(CEIL, Math.max(FLOOR, ct));
   return {
@@ -398,6 +408,11 @@ export function winProbability(state) {
       controlBaseRelCt: ctrl?.baseRelCt ?? null,
       mapControlCt: ctrl?.ct ?? null,
       mapControlT: ctrl?.t ?? null,
+      siteEdge,
+      sitePp,
+      site: state.site || null,
+      siteCt: Number.isFinite(state.siteCt) ? state.siteCt : null,
+      siteT: Number.isFinite(state.siteT) ? state.siteT : null,
       plantPp,
       bombSecondsLeft: state.planted ? state.bombSecondsLeft : null,
       dollars,
@@ -473,6 +488,16 @@ export function explainProbability(sample, map = '') {
           ? ` (${rel >= 0 ? '+' : ''}${rel.toFixed(1)} rel vs baseline)`
           : '')
     );
+  }
+  const sitePp = sample.parts?.sitePp;
+  if (Number.isFinite(sitePp) && sitePp !== 0) {
+    const site = sample.parts?.site === 'b' ? 'B' : 'A';
+    const ctN = sample.parts?.siteCt;
+    const tN = sample.parts?.siteT;
+    const side = sitePp >= 0 ? 'CT' : 'T';
+    const bodies =
+      Number.isFinite(ctN) && Number.isFinite(tN) ? ` (${ctN} CT / ${tN} T)` : '';
+    detail.push(`Site ${site}${bodies}  ${side} +${Math.abs(sitePp)}pp`);
   }
   return { summary, detail };
 }
@@ -639,6 +664,25 @@ export function winProbabilityAtTick({
       mapControlT = shares.t;
     }
   }
+  let sitePp;
+  let site;
+  let siteCt;
+  let siteT;
+  if (network && !plant.planted) {
+    const bySide = alivePositionsBySide({ players, states, deadIds, teamSides });
+    const siteAdv = sitePresenceAdvantage({
+      network,
+      tAlive: bySide.T,
+      ctAlive: bySide.CT,
+      planted: false
+    });
+    if (siteAdv) {
+      sitePp = siteAdv.pp;
+      site = siteAdv.site;
+      siteCt = siteAdv.ct;
+      siteT = siteAdv.t;
+    }
+  }
   const wp = winProbability({
     map: meta.map,
     ctAlive: eq.ctAlive,
@@ -650,6 +694,10 @@ export function winProbabilityAtTick({
     decided,
     mapControlCt,
     mapControlT,
+    sitePp,
+    site,
+    siteCt,
+    siteT,
     ...plant
   });
   return {

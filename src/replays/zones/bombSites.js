@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // replays/zones/bombSites.js
 // Rough A/B bomb-site rectangles on the zone network (not positions).
-// Drawn in the Position Editor; used by site-execute coach notes.
+// Drawn in the Position Editor; used by site-execute coach notes and
+// pre-plant bombsite stack win%.
 // ---------------------------------------------------------------------------
 
 import { pointInPiece } from './zoneGeom.js';
