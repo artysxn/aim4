@@ -17,17 +17,20 @@
 import {
   CLASS_CT,
   CLASS_T,
+  FOOT_NEAR_WORLD,
   SIDE_CT,
   SIDE_NONE,
   SIDE_T,
   cellsNearInto,
   classifyCell,
   createControlField,
+  decaySoftControl,
   rasterizeConeInto,
   resetControlField,
   resolveOwners,
   restoreField,
-  snapshotField
+  snapshotField,
+  stampDiscInto
 } from './controlField.js';
 
 /** Demo ticks between vision samples. Every living player fires on each one. */
@@ -38,6 +41,17 @@ export const CLAIM_NEUTRAL_SECONDS = 0.35;
 export const CLAIM_FLIP_SECONDS = 2.5;
 /** Seconds without exposure before a side's progress resets. */
 export const CONTEST_DECAY_SECONDS = 2;
+/**
+ * Seconds a side can go without eyes or boots on ground it owns before that
+ * ground starts giving way. Only applies where the surroundings are more
+ * neutral than controlled, so a held position is never on the clock.
+ */
+export const SOFT_HOLD_SECONDS = 10;
+/**
+ * Seconds an exposed cell spends dissolving. One ring peels per interval, so a
+ * long abandoned salient retracts from its open end rather than vanishing.
+ */
+export const SOFT_DISSOLVE_SECONDS = 1.5;
 /** Strides between seek keyframes. */
 export const KEYFRAME_STRIDES = 32;
 
@@ -103,6 +117,10 @@ export function createControlSimulator({ meta, track, geom, castCone }) {
     neutralSeconds: CLAIM_NEUTRAL_SECONDS,
     flipSeconds: CLAIM_FLIP_SECONDS
   };
+  const softRules = {
+    holdTicks: SOFT_HOLD_SECONDS * tickRate,
+    dissolveSeconds: SOFT_DISSOLVE_SECONDS
+  };
   const dt = VISION_STRIDE / tickRate;
   const lastStride = Math.floor((end - from) / VISION_STRIDE);
   const scratch = [];
@@ -123,11 +141,15 @@ export function createControlSimulator({ meta, track, geom, castCone }) {
       if (side !== 'T' && side !== 'CT') continue;
       const s = scratch[p.slot];
       if (!s?.alive || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
+      const sideId = side === 'T' ? SIDE_T : SIDE_CT;
+      // Boots hold ground regardless of where the player happens to be looking.
+      stampDiscInto(field, s.x, s.y, FOOT_NEAR_WORLD, sideId, dt, tick);
       if (!Number.isFinite(s.yaw)) continue;
       const ring = castCone({ viewer: s, side, tick });
-      if (ring) rasterizeConeInto(field, ring, side === 'T' ? SIDE_T : SIDE_CT, dt, tick);
+      if (ring) rasterizeConeInto(field, ring, sideId, dt, tick);
     }
     resolveOwners(field, tick, rules);
+    decaySoftControl(field, tick, dt, softRules);
     cursor = k;
   }
 

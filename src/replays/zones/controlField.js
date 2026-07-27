@@ -26,6 +26,13 @@ export const CLASS_EMPTY = 0;
 export const CLASS_T = 1;
 export const CLASS_CT = 2;
 export const CLASS_CONTESTED = 3;
+/**
+ * Owned, but dissolving back to neutral. Not a seventh and eighth color — the
+ * renderer draws these in their side's soft hue at lower opacity, so a
+ * retreating edge reads as the same territory going faint.
+ */
+export const CLASS_T_FADING = 4;
+export const CLASS_CT_FADING = 5;
 
 export const SIDE_NONE = 0;
 export const SIDE_T = 1;
@@ -45,6 +52,7 @@ export const SIDE_CT = 2;
  *   tExp: Float32Array, ctExp: Float32Array,
  *   tLast: Int32Array, ctLast: Int32Array,
  *   owner: Uint8Array,
+ *   decayFor: Float32Array,
  *   gen: number
  * }} ControlField
  */
@@ -119,6 +127,7 @@ export function createControlField(geom) {
     tLast: new Int32Array(geom.count).fill(-1),
     ctLast: new Int32Array(geom.count).fill(-1),
     owner: new Uint8Array(geom.count),
+    decayFor: new Float32Array(geom.count),
     gen: 0
   };
 }
@@ -130,6 +139,7 @@ export function resetControlField(field) {
   field.tLast.fill(-1);
   field.ctLast.fill(-1);
   field.owner.fill(SIDE_NONE);
+  field.decayFor.fill(0);
   field.gen++;
 }
 
@@ -257,6 +267,207 @@ export function rasterizeConeInto(field, ring, side, dt, tick) {
 }
 
 /**
+ * Add exposure to a disc — a player's own footprint.
+ *
+ * Standing somewhere holds it, whichever way you happen to be looking, so feet
+ * claim into the same field as vision. That also makes the field the single
+ * owner of soft control, which is what lets it decay uniformly.
+ *
+ * @param {ControlField} field
+ * @param {number} x @param {number} y @param {number} radius
+ * @param {1|2} side @param {number} dt @param {number} tick
+ */
+export function stampDiscInto(field, x, y, radius, side, dt, tick) {
+  if (!field || dt <= 0) return;
+  const exp = side === SIDE_T ? field.tExp : field.ctExp;
+  const last = side === SIDE_T ? field.tLast : field.ctLast;
+  const { cell, originX, originY, cols, rows, walkable } = field;
+  const ix0 = Math.max(0, Math.floor((x - radius - originX) / cell));
+  const ix1 = Math.min(cols - 1, Math.floor((x + radius - originX) / cell));
+  const iy0 = Math.max(0, Math.floor((y - radius - originY) / cell));
+  const iy1 = Math.min(rows - 1, Math.floor((y + radius - originY) / cell));
+  const r2 = radius * radius;
+  const under = cellIndexAt(field, x, y);
+
+  for (let iy = iy0; iy <= iy1; iy++) {
+    const cy = originY + (iy + 0.5) * cell;
+    const dy = cy - y;
+    const row = iy * cols;
+    for (let ix = ix0; ix <= ix1; ix++) {
+      const idx = row + ix;
+      if (!walkable[idx] && idx !== under) continue;
+      const cx = originX + (ix + 0.5) * cell;
+      const dx = cx - x;
+      if (dx * dx + dy * dy > r2 && idx !== under) continue;
+      exp[idx] += dt;
+      last[idx] = tick;
+    }
+  }
+}
+
+/** Reusable working state for the region pass. */
+let decayScratch = null;
+
+function decayScratchFor(count) {
+  if (!decayScratch || decayScratch.label.length !== count) {
+    decayScratch = {
+      label: new Int32Array(count),
+      stack: new Int32Array(count),
+      prevOwner: new Uint8Array(count),
+      lastSeen: [],
+      neutralEdge: [],
+      controlledEdge: [],
+      dying: []
+    };
+  }
+  return decayScratch;
+}
+
+/**
+ * Retire soft control nobody has held for a while.
+ *
+ * Ownership that is never revisited would otherwise sit on the map untouched
+ * for the rest of the round. The test is per *region*, not per cell: a region
+ * whose border is mostly neutral is a salient hanging in open space, while one
+ * pressed against friendly or enemy ground is a real frontier and stays. Judged
+ * cell by cell this would never work — a straight edge has five owned
+ * neighbours against three neutral, so a wide corridor would only ever nibble
+ * at its corners.
+ *
+ * A region qualifies when nobody on its side has had eyes or boots anywhere in
+ * it for `holdTicks`. It then peels one ring per `dissolveSeconds` from the
+ * outside in, so an abandoned salient visibly retracts rather than blinking
+ * out. Cells land on neutral — never contested, since nobody is fighting.
+ *
+ * @param {ControlField} field
+ * @param {number} tick
+ * @param {number} dt  seconds since the previous pass
+ * @param {{ holdTicks: number, dissolveSeconds: number }} rules
+ */
+export function decaySoftControl(field, tick, dt, { holdTicks, dissolveSeconds }) {
+  const { owner, decayFor, tLast, ctLast, walkable, cols, rows, count } = field;
+  const s = decayScratchFor(count);
+  const { label, stack, prevOwner } = s;
+  prevOwner.set(owner);
+  label.fill(-1);
+  s.lastSeen.length = 0;
+  s.neutralEdge.length = 0;
+  s.controlledEdge.length = 0;
+  s.dying.length = 0;
+
+  // ---- label connected regions, tracking the freshest hold in each ---------
+  let nRegions = 0;
+  for (let start = 0; start < count; start++) {
+    if (label[start] >= 0 || !walkable[start]) continue;
+    const own = owner[start];
+    if (own === SIDE_NONE) continue;
+
+    const id = nRegions++;
+    const lastOf = own === SIDE_T ? tLast : ctLast;
+    let newest = -1;
+    let top = 0;
+    stack[top++] = start;
+    label[start] = id;
+
+    while (top > 0) {
+      const i = stack[--top];
+      if (lastOf[i] > newest) newest = lastOf[i];
+      const ix = i % cols;
+      const iy = (i / cols) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        const ny = iy + dy;
+        if (ny < 0 || ny >= rows) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = ix + dx;
+          if (nx < 0 || nx >= cols) continue;
+          const j = ny * cols + nx;
+          if (label[j] >= 0 || !walkable[j] || owner[j] !== own) continue;
+          label[j] = id;
+          stack[top++] = j;
+        }
+      }
+    }
+
+    s.lastSeen.push(newest);
+    s.neutralEdge.push(0);
+    s.controlledEdge.push(0);
+    s.dying.push(false);
+  }
+  if (!nRegions) return;
+
+  // ---- measure each region's border ---------------------------------------
+  for (let i = 0; i < count; i++) {
+    const id = label[i];
+    if (id < 0) continue;
+    const ix = i % cols;
+    const iy = (i / cols) | 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      const ny = iy + dy;
+      if (ny < 0 || ny >= rows) continue;
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = ix + dx;
+        if (nx < 0 || nx >= cols) continue;
+        const j = ny * cols + nx;
+        // Walls are neither, so a corridor is not "exposed" along its length —
+        // only where it actually opens onto something.
+        if (!walkable[j] || label[j] === id) continue;
+        if (owner[j] !== SIDE_NONE || field.tExp[j] > 0 || field.ctExp[j] > 0) {
+          s.controlledEdge[id]++;
+        } else {
+          s.neutralEdge[id]++;
+        }
+      }
+    }
+  }
+
+  for (let id = 0; id < nRegions; id++) {
+    const held = s.lastSeen[id] >= 0 && tick - s.lastSeen[id] < holdTicks;
+    s.dying[id] = !held && s.neutralEdge[id] > s.controlledEdge[id];
+  }
+
+  // ---- peel one ring off each dying region --------------------------------
+  for (let i = 0; i < count; i++) {
+    const id = label[i];
+    if (id < 0 || !s.dying[id]) {
+      if (decayFor[i] !== 0) decayFor[i] = 0;
+      continue;
+    }
+
+    // Only the current outer ring erodes; cells behind it wait their turn.
+    const ix = i % cols;
+    const iy = (i / cols) | 0;
+    let onEdge = false;
+    for (let dy = -1; dy <= 1 && !onEdge; dy++) {
+      const ny = iy + dy;
+      if (ny < 0 || ny >= rows) continue;
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = ix + dx;
+        if (nx < 0 || nx >= cols) continue;
+        const j = ny * cols + nx;
+        if (!walkable[j]) continue;
+        if (prevOwner[j] === SIDE_NONE) {
+          onEdge = true;
+          break;
+        }
+      }
+    }
+    if (!onEdge) {
+      decayFor[i] = 0;
+      continue;
+    }
+
+    decayFor[i] += dt;
+    if (decayFor[i] >= dissolveSeconds) {
+      owner[i] = SIDE_NONE;
+      decayFor[i] = 0;
+    }
+  }
+}
+
+/**
  * Decay stale meters and promote ownership. One pass over the lattice.
  *
  * Mirrors the old per-hit rules: the owner makes no progress against itself,
@@ -339,6 +550,19 @@ export function classifyCell(field, i) {
   return CLASS_EMPTY;
 }
 
+/**
+ * Paint class including the dissolving state. Kept apart from `classifyCell` so
+ * the share maths keeps counting a fading cell as owned — it still is, right up
+ * until it goes neutral.
+ */
+export function paintClassOf(field, i) {
+  const c = classifyCell(field, i);
+  if (field.decayFor[i] <= 0) return c;
+  if (c === CLASS_T) return CLASS_T_FADING;
+  if (c === CLASS_CT) return CLASS_CT_FADING;
+  return c;
+}
+
 /** Copy the mutable state for seek keyframes. */
 export function snapshotField(field, tick) {
   return {
@@ -347,7 +571,8 @@ export function snapshotField(field, tick) {
     ctExp: field.ctExp.slice(),
     tLast: field.tLast.slice(),
     ctLast: field.ctLast.slice(),
-    owner: field.owner.slice()
+    owner: field.owner.slice(),
+    decayFor: field.decayFor.slice()
   };
 }
 
@@ -357,5 +582,6 @@ export function restoreField(field, snap) {
   field.tLast.set(snap.tLast);
   field.ctLast.set(snap.ctLast);
   field.owner.set(snap.owner);
+  field.decayFor.set(snap.decayFor);
   field.gen++;
 }

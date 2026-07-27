@@ -20,15 +20,18 @@ import { visibilityCone } from './visibilityPolygon.js';
 import {
   CLASS_CONTESTED,
   CLASS_CT,
+  CLASS_CT_FADING,
   CLASS_EMPTY,
   CLASS_T,
+  CLASS_T_FADING,
   FOOT_NEAR_WORLD,
   SIDE_CT,
   SIDE_NONE,
   SIDE_T,
   cellsNearInto,
   classifyCell,
-  getFieldGeometry
+  getFieldGeometry,
+  paintClassOf
 } from './controlField.js';
 import {
   VISION_STRIDE,
@@ -47,7 +50,11 @@ export const ZONE_PAINT = {
   't-control': { fill: 'rgba(150,115,28,0.34)', stroke: '#9a7620' },
   'ct-active': { fill: 'rgba(91,159,212,0.48)', stroke: '#5b9fd4' },
   'ct-control': { fill: 'rgba(40,90,130,0.34)', stroke: '#2f6a96' },
-  contested: { fill: 'rgba(210,70,70,0.40)', stroke: '#d45555' }
+  contested: { fill: 'rgba(210,70,70,0.40)', stroke: '#d45555' },
+  // Not new colors: the soft tones again, fainter, for ground that is slipping
+  // back to neutral. Same hue so a retreating edge still reads as that side's.
+  't-fading': { fill: 'rgba(150,115,28,0.15)', stroke: '#9a7620' },
+  'ct-fading': { fill: 'rgba(40,90,130,0.15)', stroke: '#2f6a96' }
 };
 
 /** Half-angle of the vision cone (degrees). */
@@ -465,24 +472,27 @@ export function computeZonePaint({
     field = visionCache.sim.fieldAt(tick);
   }
 
-  const soft = softOwnersAt(presence, tick);
-  const classifyAt = field
-    ? (i) => {
-        const c = classifyCell(field, i);
-        if (c !== CLASS_EMPTY) return c;
-        const v = soft ? soft[i] : SIDE_NONE;
-        return v === SIDE_T ? CLASS_T : v === SIDE_CT ? CLASS_CT : CLASS_EMPTY;
-      }
-    : (i) => {
-        const v = soft ? soft[i] : SIDE_NONE;
-        return v === SIDE_T ? CLASS_T : v === SIDE_CT ? CLASS_CT : CLASS_EMPTY;
-      };
+  // Soft control lives entirely in the field: feet claim into it just as vision
+  // does. Falling back to raw foot history here would resurrect every cell the
+  // field had just decayed, which is the whole point of the decay.
+  let classifyAt;
+  let key;
+  if (field) {
+    classifyAt = (i) => paintClassOf(field, i);
+    key = `f${field.gen}`;
+  } else {
+    const soft = softOwnersAt(presence, tick);
+    classifyAt = (i) => {
+      const v = soft ? soft[i] : SIDE_NONE;
+      return v === SIDE_T ? CLASS_T : v === SIDE_CT ? CLASS_CT : CLASS_EMPTY;
+    };
+    key = `p${presence ? presence.cursor : 0}`;
+  }
 
-  const key = `${field ? field.gen : 0}|${presence ? presence.cursor : 0}`;
   const rings = contoursFor(
     geom,
     classifyAt,
-    [CLASS_T, CLASS_CT, CLASS_CONTESTED],
+    [CLASS_T, CLASS_CT, CLASS_CONTESTED, CLASS_T_FADING, CLASS_CT_FADING],
     visionCache?.contour,
     key
   );
@@ -491,7 +501,9 @@ export function computeZonePaint({
     territory: {
       t: rings.get(CLASS_T) || [],
       ct: rings.get(CLASS_CT) || [],
-      contested: rings.get(CLASS_CONTESTED) || []
+      contested: rings.get(CLASS_CONTESTED) || [],
+      tFading: rings.get(CLASS_T_FADING) || [],
+      ctFading: rings.get(CLASS_CT_FADING) || []
     },
     cones,
     feet,
