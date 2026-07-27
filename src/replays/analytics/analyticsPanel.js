@@ -460,7 +460,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
               `Headshots hit: ${agg.headshots}`,
               `AWP shots fired: ${agg.awpShots}`,
               `AWP shots hit: ${agg.awpHits}`,
-              `AWP hit rate: ${agg.awpShots > 0 ? pct(agg.awpAccuracy) : '—'}`
+              `AWP hit rate: ${agg.awpShots > 0 ? pct(agg.awpAccuracy) : '—'}`,
+              `AWP Acc: holds within 10° of an enemy with a clear (no smoke) path`
             ]
           : ['No hit data in these phase windows (older demos may lack damage events).']
       ),

@@ -5,6 +5,7 @@
 
 import { P, PLAYER_SLOTS } from '../shared/statsMath.js';
 import { phaseAtTick, phaseBounds } from '../coach/roundPhases.js';
+import { eligibleAwpShotTicks } from '../shared/awpAccuracy.js';
 
 const PHASES = /** @type {const} */ (['early', 'mid', 'late']);
 
@@ -35,11 +36,14 @@ function emptyPhaseBag() {
 
 /**
  * Combat stats per player per phase from tick-stamped events.
+ * When `tickBuffer` is provided, AWP shots/hits are filtered to holds within
+ * 10° of an enemy with a clear (no smoke) path.
  * @param {object} meta
  * @param {string[]} playerIds
+ * @param {ArrayBuffer|Buffer|DataView|null} [tickBuffer]
  * @returns {Record<string, { early: object, mid: object, late: object }>}
  */
-export function phaseCombatFromMeta(meta, playerIds) {
+export function phaseCombatFromMeta(meta, playerIds, tickBuffer = null) {
   /** @type {Record<string, ReturnType<typeof emptyPhaseBag>>} */
   const out = {};
   for (const id of playerIds) out[id] = emptyPhaseBag();
@@ -52,6 +56,7 @@ export function phaseCombatFromMeta(meta, playerIds) {
   const kills = [...(meta.events?.kills || [])].sort((a, b) => (a.tick || 0) - (b.tick || 0));
   const damage = meta.events?.damage || [];
   const shots = meta.events?.shots || [];
+  const eligibleAwp = tickBuffer ? eligibleAwpShotTicks(meta, tickBuffer) : null;
 
   /** @type {Map<string, Set<string>>} phase → player ids with a kill */
   const killedIn = { early: new Set(), mid: new Set(), late: new Set() };
@@ -110,7 +115,10 @@ export function phaseCombatFromMeta(meta, playerIds) {
     const w = String(s.weapon || '')
       .toLowerCase()
       .replace(/^weapon_/, '');
-    if (w === 'awp') out[s.player][phase].p[P.AWP_SHOTS] += 1;
+    if (w === 'awp') {
+      if (eligibleAwp && !eligibleAwp.get(s.player)?.has(s.tick)) continue;
+      out[s.player][phase].p[P.AWP_SHOTS] += 1;
+    }
   }
 
   // AWP hits: damage events with awp weapon when present.
@@ -120,6 +128,7 @@ export function phaseCombatFromMeta(meta, playerIds) {
       .toLowerCase()
       .replace(/^weapon_/, '');
     if (w !== 'awp') continue;
+    if (eligibleAwp && !eligibleAwp.get(d.attacker)?.has(d.tick)) continue;
     const phase = phaseAtTick(d.tick || 0, bounds);
     out[d.attacker][phase].p[P.AWP_HITS] += 1;
   }
@@ -204,7 +213,7 @@ export function phaseCombatFromMeta(meta, playerIds) {
       if (hsHits <= 0 && (st.headshots || 0) > 0) {
         distribute(bag, weights, weightSum, st.headshots, P.HEADSHOTS);
       }
-      if ((st.awpHits || 0) > 0) {
+      if (!eligibleAwp && (st.awpHits || 0) > 0) {
         let awpEventHits = 0;
         for (const phase of PHASES) awpEventHits += bag[phase].p[P.AWP_HITS] || 0;
         if (awpEventHits <= 0) distribute(bag, weights, weightSum, st.awpHits, P.AWP_HITS);

@@ -7,6 +7,9 @@
 // zone-presence samples for role assignment. That uses already-parsed round
 // files only; demos are never re-parsed for stats or positions.
 //
+// AWP Acc is recalculated here from shot angles + smoke geometry (≤10° on an
+// enemy, clear path) — not taken raw from the parser.
+//
 //   server/data/replays/<user>/stats/<demoId>.json
 //
 // After a successful parse we build the index immediately. Older demos that
@@ -17,6 +20,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { P, PLAYER_SLOTS } from '../../src/replays/shared/statsMath.js';
+import { awpAccuracyFromTicks } from '../../src/replays/shared/awpAccuracy.js';
 import {
   mergePhaseLocations,
   phaseCombatFromMeta
@@ -24,7 +28,7 @@ import {
 import { presenceFromTicks } from '../../src/replays/roles/presenceFromTicks.js';
 import { isZoneNetworkReady } from '../../src/replays/zones/zoneModel.js';
 
-export const STATS_VERSION = 6;
+export const STATS_VERSION = 7;
 
 /** ~1 Hz occupancy samples (demo ticks between samples). */
 const TICK_STRIDE = 64;
@@ -85,7 +89,7 @@ function openingDuel(ordered, teamOf) {
 }
 
 /** One round of a demo -> one compact row. */
-function rowFromRound(meta, demoId, file, playerIds, teamOf, presence = null) {
+function rowFromRound(meta, demoId, file, playerIds, teamOf, presence = null, tickBuffer = null) {
   const kills = meta.events?.kills || [];
   const ordered = [...kills].sort((a, b) => (a.tick || 0) - (b.tick || 0));
   const opening = openingDuel(ordered, teamOf);
@@ -98,6 +102,9 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf, presence = null) {
     shotsByPlayer.set(s.player, (shotsByPlayer.get(s.player) || 0) + 1);
   }
 
+  // Recalculate AWP Acc from ticks + events (≤10° on enemy, no smoke).
+  const awpAcc = tickBuffer ? awpAccuracyFromTicks(meta, tickBuffer) : null;
+
   const p = {};
   for (const id of playerIds) {
     const st = meta.stats?.[id] || {};
@@ -106,6 +113,7 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf, presence = null) {
     const deaths0 = st.deaths || 0;
     const survived = !victims.has(id);
     const kast = kills0 > 0 || assists0 > 0 || survived || traded.has(id);
+    const awp = awpAcc?.get(id);
 
     const line = new Array(PLAYER_SLOTS).fill(0);
     line[P.KILLS] = kills0;
@@ -116,8 +124,8 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf, presence = null) {
       line[P.SHOTS] = st.gunShots ?? shotsByPlayer.get(id) ?? 0;
       line[P.HITS] = st.hits || 0;
       line[P.HEADSHOTS] = st.headshots || 0;
-      line[P.AWP_SHOTS] = st.awpShots || 0;
-      line[P.AWP_HITS] = st.awpHits || 0;
+      line[P.AWP_SHOTS] = awp ? awp.shots : st.awpShots || 0;
+      line[P.AWP_HITS] = awp ? awp.hits : st.awpHits || 0;
     }
     line[P.KAST] = kast ? 1 : 0;
     p[id] = line;
@@ -138,7 +146,7 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf, presence = null) {
     p
   };
   applyPresence(row, presence);
-  applyPhaseBags(row, meta, playerIds, presence);
+  applyPhaseBags(row, meta, playerIds, presence, tickBuffer);
   return row;
 }
 
@@ -149,8 +157,8 @@ function applyPresence(row, presence) {
   else delete row.ctTB;
 }
 
-function applyPhaseBags(row, meta, playerIds, presence = null) {
-  const combat = phaseCombatFromMeta(meta, playerIds);
+function applyPhaseBags(row, meta, playerIds, presence = null, tickBuffer = null) {
+  const combat = phaseCombatFromMeta(meta, playerIds, tickBuffer);
   if (presence?.phaseLoc) mergePhaseLocations(combat, presence.phaseLoc);
   row.ph = combat;
 }
@@ -203,7 +211,7 @@ async function enrichPositions(io, user, record, entry, network) {
     slot: p.slot
   }));
 
-  const canTicks = Boolean(network && typeof io.readRoundTicks === 'function');
+  const canTicks = typeof io.readRoundTicks === 'function';
 
   for (const row of entry.rounds) {
     let meta = null;
@@ -226,20 +234,37 @@ async function enrichPositions(io, user, record, entry, network) {
     const playerIds = roster.map((p) => p.id);
 
     let presence = null;
+    let tickBuffer = null;
     if (canTicks) {
       try {
-        const buf = await io.readRoundTicks(user, row.f, TICK_STRIDE);
-        presence = buf ? presenceFromTicks(buf, meta, network, roster) : null;
-        delete row.z;
-        delete row.ctTB;
-        applyPresence(row, presence);
+        tickBuffer = await io.readRoundTicks(user, row.f, TICK_STRIDE);
+        if (tickBuffer && network) {
+          presence = presenceFromTicks(tickBuffer, meta, network, roster);
+          delete row.z;
+          delete row.ctTB;
+          applyPresence(row, presence);
+        }
       } catch {
         delete row.z;
         delete row.ctTB;
       }
     }
 
-    applyPhaseBags(row, meta, playerIds, presence);
+    // Refresh whole-round AWP Acc from ticks when available.
+    if (tickBuffer && row.p) {
+      const awpAcc = awpAccuracyFromTicks(meta, tickBuffer);
+      for (const id of playerIds) {
+        const line = row.p[id];
+        if (!line) continue;
+        const awp = awpAcc.get(id);
+        if (awp) {
+          line[P.AWP_SHOTS] = awp.shots;
+          line[P.AWP_HITS] = awp.hits;
+        }
+      }
+    }
+
+    applyPhaseBags(row, meta, playerIds, presence, tickBuffer);
   }
 
   if (network) {
@@ -307,11 +332,15 @@ async function buildIndex(io, user, record) {
         : players;
 
     let presence = null;
-    if (network && typeof io.readRoundTicks === 'function') {
+    let tickBuffer = null;
+    if (typeof io.readRoundTicks === 'function') {
       try {
-        const buf = await io.readRoundTicks(user, file, TICK_STRIDE);
-        if (buf) presence = presenceFromTicks(buf, meta, network, roster);
+        tickBuffer = await io.readRoundTicks(user, file, TICK_STRIDE);
+        if (tickBuffer && network) {
+          presence = presenceFromTicks(tickBuffer, meta, network, roster);
+        }
       } catch {
+        tickBuffer = null;
         presence = null;
       }
     }
@@ -323,7 +352,8 @@ async function buildIndex(io, user, record) {
         file,
         roster.map((p) => p.id),
         new Map(roster.map((p) => [p.id, p.team])),
-        presence
+        presence,
+        tickBuffer
       )
     );
   }

@@ -55,7 +55,8 @@ export const PLAYER_COLUMNS = [
             `Headshots hit: ${p.headshots}`,
             `AWP shots fired: ${p.awpShots}`,
             `AWP shots hit: ${p.awpHits}`,
-            `AWP hit rate: ${p.awpShots > 0 ? pct(p.awpAccuracy) : '—'}`
+            `AWP hit rate: ${p.awpShots > 0 ? pct(p.awpAccuracy) : '—'}`,
+            `AWP Acc: holds within 10° of an enemy with a clear (no smoke) path`
           ])
         : 'No hit data. Re-parse this demo to record accuracy.'
   },
