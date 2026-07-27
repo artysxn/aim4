@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
-// Aggregate rating-style stats over early/mid/late phase windows for one player.
+// Aggregate rating-style stats over early/mid/late phase windows.
 //
-// Combat is taken only from matching phase windows, then rolled up per round so
-// KPR / DPR / ADR use that round count as the "R" (same idea as Statistics).
-// Geography filters use user-drawn shapes (see shapeFilters.js), applied async.
+// Subjects: 0–5 player ids. Empty ⇒ “anyone” (map + round filters only;
+// leaderboard/rounds, no pooled phase stats). Geography filters use drawn
+// shapes (see shapeFilters.js).
 // ---------------------------------------------------------------------------
 
 import { PHASES } from '../roles/phaseCombat.js';
@@ -18,7 +18,8 @@ import { filterWindowsByShapes } from './shapeFilters.js';
 
 /**
  * @typedef {object} AnalyticsFilter
- * @property {string} playerId
+ * @property {string} [playerId]  legacy single subject
+ * @property {string[]} [playerIds]  up to 5 subjects; empty ⇒ anyone
  * @property {string} map
  * @property {'T'|'CT'|''} [side]
  * @property {number|null} [econ]
@@ -26,11 +27,13 @@ import { filterWindowsByShapes } from './shapeFilters.js';
  * @property {boolean} [hasAwp]
  * @property {boolean} [oppHasAwp]
  * @property {''|'won'|'lost'} [result]
- * @property {''|'won'|'lost'} [opening]  opening duel for the focus player
- * @property {Set<string>|string[]} [phases]  empty ⇒ all
- * @property {Array<object>} [shapes]  enabled drawn selections
- * @property {'all'|'any'} [shapeMatch]  AND / OR across enabled shapes
+ * @property {''|'won'|'lost'} [opening]
+ * @property {Set<string>|string[]} [phases]
+ * @property {Array<object>} [shapes]
+ * @property {'all'|'any'} [shapeMatch]
  */
+
+export const ANALYTICS_PLAYER_MAX = 5;
 
 function asSet(v) {
   if (!v) return new Set();
@@ -82,6 +85,30 @@ function selectedPhases(filter) {
   return PHASES.filter((p) => set.has(p));
 }
 
+function hasActiveShapes(filter) {
+  return (filter?.shapes || []).some((s) => s && s.enabled !== false && s.geometry);
+}
+
+/** Resolve subject list (legacy playerId supported). Empty ⇒ anyone. */
+export function playerIdsFromFilter(filter) {
+  if (Array.isArray(filter?.playerIds)) {
+    return [...new Set(filter.playerIds.map(String).filter(Boolean))].slice(
+      0,
+      ANALYTICS_PLAYER_MAX
+    );
+  }
+  if (filter?.playerId) return [String(filter.playerId)];
+  return [];
+}
+
+function teamNameKey(name, shortId = '') {
+  const norm = String(name || '')
+    .trim()
+    .toLowerCase();
+  if (!norm || norm === 'team 1' || norm === 'team 2') return shortId || norm || '';
+  return norm;
+}
+
 /**
  * Player's team for a row (from demo roster).
  */
@@ -95,41 +122,88 @@ export function playerTeamOnRow(payload, row, playerId) {
  */
 export function analyticsRowPasses(row, filter, team) {
   if (!filter.map || row.m !== filter.map) return false;
-  if (!row.p?.[filter.playerId] && !row.ph?.[filter.playerId]) return false;
+  const pid = filter.playerId;
+  if (pid && !row.p?.[pid] && !row.ph?.[pid]) return false;
   if (!rowPasses(row, filter, team)) return false;
   if (!resultPasses(row, team, filter.result || '')) return false;
-  if (!openingPasses(row, filter.playerId, filter.opening || '')) return false;
+  if (pid && !openingPasses(row, pid, filter.opening || '')) return false;
   return true;
 }
 
 /**
+ * Round-level match when no subjects are selected (either team seating may pass).
+ */
+function roundMatchesAnyone(row, filter, demo) {
+  if (!filter.map || row.m !== filter.map) return false;
+  for (const team of [1, 2]) {
+    if (!rowPasses(row, filter, team)) continue;
+    if (!resultPasses(row, team, filter.result || '')) continue;
+    if (filter.opening === 'won') {
+      if (!row.ok || teamOfPlayer(demo, row.ok) !== team) continue;
+    } else if (filter.opening === 'lost') {
+      if (!row.od || teamOfPlayer(demo, row.od) !== team) continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+/** All player ids that appear on a map in the payload. */
+export function listPlayerIdsOnMap(payload, map) {
+  const ids = new Set();
+  if (!map) return [];
+  for (const demo of payload?.demos || []) {
+    for (const row of demo.rounds || []) {
+      if (row.m !== map) continue;
+      for (const id of Object.keys(row.p || {})) ids.add(id);
+      for (const id of Object.keys(row.ph || {})) ids.add(id);
+    }
+    if (demo.map === map) {
+      for (const p of demo.players || []) {
+        if (p?.id) ids.add(p.id);
+      }
+    }
+  }
+  return [...ids];
+}
+
+/**
  * Matching phase windows (sync — no shape geometry yet).
+ * Empty playerIds ⇒ no windows (use matchingFiles* for anyone mode).
  * @returns {Array<{ row, phase, window, team, file: string, playerId: string }>}
  */
 export function matchingWindows(payload, filter) {
-  if (!filter?.playerId || !filter?.map) return [];
+  if (!filter?.map) return [];
+  const playerIds = playerIdsFromFilter(filter);
+  if (!playerIds.length) return [];
+  const want = new Set(playerIds);
   const phases = selectedPhases(filter);
   const out = [];
+
   for (const demo of payload?.demos || []) {
-    const team = teamOfPlayer(demo, filter.playerId);
-    if (!team) continue;
-    for (const row of demo.rounds || []) {
-      if (!analyticsRowPasses(row, filter, team)) continue;
-      const bag = row.ph?.[filter.playerId];
-      if (!bag) continue;
-      for (const phase of phases) {
-        const window = bag[phase];
-        if (!window?.p) continue;
-        out.push({
-          row,
-          phase,
-          window,
-          team,
-          file: row.f,
-          demoId: row.d,
-          round: row.n,
-          playerId: filter.playerId
-        });
+    for (const p of demo.players || []) {
+      if (!want.has(p.id)) continue;
+      const team = p.team || 0;
+      if (!team) continue;
+      for (const row of demo.rounds || []) {
+        const f = { ...filter, playerId: p.id };
+        if (!analyticsRowPasses(row, f, team)) continue;
+        const bag = row.ph?.[p.id];
+        if (!bag) continue;
+        for (const phase of phases) {
+          const window = bag[phase];
+          if (!window?.p) continue;
+          out.push({
+            row,
+            phase,
+            window,
+            team,
+            file: row.f,
+            demoId: row.d,
+            round: row.n,
+            playerId: p.id
+          });
+        }
       }
     }
   }
@@ -137,7 +211,7 @@ export function matchingWindows(payload, filter) {
 }
 
 /**
- * Matching windows with optional drawn-shape filters applied.
+ * Matching windows with optional drawn-shape filters.
  */
 export async function matchingWindowsAsync(payload, filter, tickCache = new Map()) {
   const base = matchingWindows(payload, filter);
@@ -148,23 +222,60 @@ export async function matchingWindowsAsync(payload, filter, tickCache = new Map(
 }
 
 /**
- * Collapse matching phase windows into one combat line per distinct round.
+ * Round files matching filters (and shapes). Works with 0 subjects (anyone).
  */
-function roundLinesFromWindows(windows, playerId) {
-  /** @type {Map<string, { file: string, demoId: string, round: number, line: number[], phases: Set<string> }>} */
-  const byFile = new Map();
+export async function matchingFilesAsync(payload, filter, tickCache = new Map()) {
+  if (!filter?.map) return [];
+  const ids = playerIdsFromFilter(filter);
+
+  if (ids.length) {
+    const windows = await matchingWindowsAsync(payload, filter, tickCache);
+    return [...new Set(windows.map((w) => w.file).filter(Boolean))];
+  }
+
+  if (hasActiveShapes(filter)) {
+    const allIds = listPlayerIdsOnMap(payload, filter.map);
+    const windows = await matchingWindowsAsync(
+      payload,
+      { ...filter, playerIds: allIds },
+      tickCache
+    );
+    return [...new Set(windows.map((w) => w.file).filter(Boolean))];
+  }
+
+  const files = [];
+  const seen = new Set();
+  for (const demo of payload?.demos || []) {
+    for (const row of demo.rounds || []) {
+      if (!row?.f || seen.has(row.f)) continue;
+      if (!roundMatchesAnyone(row, filter, demo)) continue;
+      seen.add(row.f);
+      files.push(row.f);
+    }
+  }
+  return files;
+}
+
+/**
+ * Collapse matching phase windows into one combat line per player×round.
+ */
+function roundLinesFromWindows(windows) {
+  /** @type {Map<string, { file: string, demoId: string, round: number, playerId: string, line: number[], phases: Set<string> }>} */
+  const byKey = new Map();
 
   for (const w of windows) {
-    let g = byFile.get(w.file);
+    const key = `${w.file}\0${w.playerId}`;
+    let g = byKey.get(key);
     if (!g) {
       g = {
         file: w.file,
         demoId: w.demoId,
         round: w.round,
+        playerId: w.playerId,
         line: emptyLine(),
         phases: new Set()
       };
-      byFile.set(w.file, g);
+      byKey.set(key, g);
     }
     g.phases.add(w.phase);
     const src = w.window.p;
@@ -175,9 +286,9 @@ function roundLinesFromWindows(windows, playerId) {
     if (src[P.KAST]) g.line[P.KAST] = 1;
   }
 
-  for (const g of byFile.values()) {
-    const row = windows.find((w) => w.file === g.file)?.row;
-    const whole = row?.p?.[playerId];
+  for (const g of byKey.values()) {
+    const row = windows.find((w) => w.file === g.file && w.playerId === g.playerId)?.row;
+    const whole = row?.p?.[g.playerId];
     if (!whole) {
       const minHits = Math.max(g.line[P.KILLS] || 0, g.line[P.HEADSHOTS] || 0);
       if ((g.line[P.HITS] || 0) < minHits) g.line[P.HITS] = minHits;
@@ -204,11 +315,40 @@ function roundLinesFromWindows(windows, playerId) {
     if ((g.line[P.HITS] || 0) < minHits) g.line[P.HITS] = minHits;
   }
 
-  return [...byFile.values()];
+  return [...byKey.values()];
 }
 
-function aggregateFromWindows(windows, playerId) {
-  const roundRows = roundLinesFromWindows(windows, playerId);
+function emptyAggregate(files = []) {
+  return {
+    windows: [],
+    files,
+    samples: 0,
+    rounds: files.length,
+    kills: 0,
+    deaths: 0,
+    assists: 0,
+    damage: 0,
+    kd: 0,
+    adr: 0,
+    kast: 0,
+    impact: 0,
+    rating: 0,
+    kpr: 0,
+    dpr: 0,
+    apr: 0,
+    shots: 0,
+    hits: 0,
+    headshots: 0,
+    accuracy: 0,
+    awpShots: 0,
+    awpHits: 0,
+    awpAccuracy: 0,
+    anyone: true
+  };
+}
+
+function aggregateFromWindows(windows) {
+  const roundRows = roundLinesFromWindows(windows);
   const bucket = emptyBucket();
   let shots = 0;
   let hits = 0;
@@ -227,10 +367,11 @@ function aggregateFromWindows(windows, playerId) {
 
   const rating = bucketRating(bucket);
   const div = (a, b) => (b > 0 ? a / b : 0);
+  const files = [...new Set(roundRows.map((g) => g.file).filter(Boolean))];
 
   return {
     windows,
-    files: roundRows.map((g) => g.file),
+    files,
     samples: windows.length,
     rounds: rating.rounds,
     kills: bucket.kills,
@@ -251,7 +392,8 @@ function aggregateFromWindows(windows, playerId) {
     accuracy: div(hits, shots) * 100,
     awpShots,
     awpHits,
-    awpAccuracy: div(awpHits, awpShots) * 100
+    awpAccuracy: div(awpHits, awpShots) * 100,
+    anyone: false
   };
 }
 
@@ -259,23 +401,43 @@ function aggregateFromWindows(windows, playerId) {
  * Aggregate stats over matching phase windows (sync, ignores shapes).
  */
 export function aggregateAnalytics(payload, filter) {
-  return aggregateFromWindows(matchingWindows(payload, filter), filter.playerId);
+  const ids = playerIdsFromFilter(filter);
+  if (!ids.length) {
+    return emptyAggregate(
+      // sync path cannot load ticks for shapes; round filters only
+      (() => {
+        const files = [];
+        const seen = new Set();
+        for (const demo of payload?.demos || []) {
+          for (const row of demo.rounds || []) {
+            if (!row?.f || seen.has(row.f)) continue;
+            if (!roundMatchesAnyone(row, filter, demo)) continue;
+            seen.add(row.f);
+            files.push(row.f);
+          }
+        }
+        return files;
+      })()
+    );
+  }
+  return aggregateFromWindows(matchingWindows(payload, filter));
 }
 
 /**
- * Aggregate with drawn-shape filters.
+ * Aggregate with drawn-shape filters. Anyone mode → files + empty phase stats.
  */
 export async function aggregateAnalyticsAsync(payload, filter, tickCache = new Map()) {
+  const ids = playerIdsFromFilter(filter);
+  if (!ids.length) {
+    const files = await matchingFilesAsync(payload, filter, tickCache);
+    return emptyAggregate(files);
+  }
   const windows = await matchingWindowsAsync(payload, filter, tickCache);
-  return aggregateFromWindows(windows, filter.playerId);
+  return aggregateFromWindows(windows);
 }
 
 /**
  * Full-round player leaderboard for a set of matching round files.
- * Uses whole-round combat (same rating math as Statistics).
- *
- * @param {object} payload
- * @param {string[]} files
  */
 export function leaderboardFromFiles(payload, files) {
   const want = new Set((files || []).filter(Boolean));
@@ -300,9 +462,21 @@ export function leaderboardFromFiles(payload, files) {
   return aggregatePlayers(rows, players, { files: [...want] });
 }
 
+/** Unique maps across a stats payload. */
+export function listMaps(payload) {
+  const maps = new Set();
+  for (const demo of payload?.demos || []) {
+    if (demo.map) maps.add(demo.map);
+    for (const row of demo.rounds || []) {
+      if (row.m) maps.add(row.m);
+    }
+  }
+  return [...maps].sort();
+}
+
 /** Unique players across a stats payload. */
 export function listPlayers(payload) {
-  /** @type {Map<string, { id: string, name: string, maps: Set<string> }>} */
+  /** @type {Map<string, { id: string, name: string, maps: Set<string>, teamKeys: Set<string> }>} */
   const byId = new Map();
   for (const demo of payload?.demos || []) {
     const map = demo.map || '';
@@ -310,11 +484,18 @@ export function listPlayers(payload) {
       if (!p.id) continue;
       let cur = byId.get(p.id);
       if (!cur) {
-        cur = { id: p.id, name: p.name || p.id, maps: new Set() };
+        cur = { id: p.id, name: p.name || p.id, maps: new Set(), teamKeys: new Set() };
         byId.set(p.id, cur);
       }
       if (p.name) cur.name = p.name;
       if (map) cur.maps.add(map);
+      const team = p.team === 2 ? 2 : p.team === 1 ? 1 : 0;
+      if (team) {
+        const shortId = team === 1 ? demo.t1 : demo.t2;
+        const displayName = team === 1 ? demo.name1 : demo.name2;
+        const key = teamNameKey(displayName, shortId);
+        if (key) cur.teamKeys.add(key);
+      }
       for (const row of demo.rounds || []) {
         if (row.p?.[p.id] || row.ph?.[p.id]) {
           if (row.m) cur.maps.add(row.m);
@@ -323,6 +504,70 @@ export function listPlayers(payload) {
     }
   }
   return [...byId.values()]
-    .map((p) => ({ id: p.id, name: p.name, maps: [...p.maps].sort() }))
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      maps: [...p.maps].sort(),
+      teamKeys: [...p.teamKeys]
+    }))
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Teams merged by display name across demos (same idea as Statistics).
+ * @returns {Array<{ key: string, name: string, playerIds: string[], maps: string[] }>}
+ */
+export function listTeams(payload) {
+  /** @type {Map<string, { key: string, name: string, nameCounts: Map<string, number>, playerIds: Set<string>, maps: Set<string> }>} */
+  const byKey = new Map();
+
+  for (const demo of payload?.demos || []) {
+    const map = demo.map || '';
+    for (const team of [1, 2]) {
+      const shortId = team === 1 ? demo.t1 : demo.t2;
+      const displayName = team === 1 ? demo.name1 : demo.name2;
+      const key = teamNameKey(displayName, shortId);
+      if (!key) continue;
+      let cur = byKey.get(key);
+      if (!cur) {
+        cur = {
+          key,
+          name: String(displayName || shortId || key).trim() || key,
+          nameCounts: new Map(),
+          playerIds: new Set(),
+          maps: new Set()
+        };
+        byKey.set(key, cur);
+      }
+      const label = String(displayName || '').trim();
+      if (label) cur.nameCounts.set(label, (cur.nameCounts.get(label) || 0) + 1);
+      if (map) cur.maps.add(map);
+      for (const p of demo.players || []) {
+        if (p?.id && p.team === team) cur.playerIds.add(p.id);
+      }
+      for (const row of demo.rounds || []) {
+        if (row.m) cur.maps.add(row.m);
+      }
+    }
+  }
+
+  const out = [];
+  for (const cur of byKey.values()) {
+    if (!cur.playerIds.size) continue;
+    let bestName = cur.name;
+    let bestCount = -1;
+    for (const [label, count] of cur.nameCounts) {
+      if (count > bestCount || (count === bestCount && label.localeCompare(bestName) < 0)) {
+        bestName = label;
+        bestCount = count;
+      }
+    }
+    out.push({
+      key: cur.key,
+      name: bestName,
+      playerIds: [...cur.playerIds],
+      maps: [...cur.maps].sort()
+    });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }

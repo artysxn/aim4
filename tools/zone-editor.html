@@ -155,6 +155,15 @@
     border-color: rgba(61, 122, 184, 0.75);
     background: rgba(61, 122, 184, 0.16);
   }
+  .ze-float button.ze-shape-mode {
+    min-width: 0;
+    padding: 6px 8px;
+    font-size: 11px;
+  }
+  .ze-float button.ze-shape-mode.active {
+    border-color: rgba(220, 224, 232, 0.45);
+    background: rgba(220, 224, 232, 0.1);
+  }
   #ze-brush-size {
     min-width: 28px;
     text-align: center;
@@ -266,6 +275,9 @@
           <button type="button" class="ze-tool-wide" id="ze-tool-elevated" title="Paint elevated" data-tool="elevated">Elevated</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-erase" title="Erase vision paint" data-tool="erase">Erase</button>
           <div class="ze-float-sep"></div>
+          <button type="button" class="ze-shape-mode active" id="ze-shape-rect" title="Draw rectangles for bomb / key zones">Rectangle</button>
+          <button type="button" class="ze-shape-mode" id="ze-shape-poly" title="Draw polygons for bomb / key zones">Polygon</button>
+          <div class="ze-float-sep"></div>
           <button type="button" id="ze-brush-down" title="Smaller brush">−</button>
           <span id="ze-brush-size">8</span>
           <button type="button" id="ze-brush-up" title="Larger brush">+</button>
@@ -281,7 +293,7 @@
       <aside class="ze-side">
         <div>
           <h2>Bomb sites</h2>
-          <p class="ze-empty">Rough A/B plant areas for coach and win chance. Redraw replaces.</p>
+          <p class="ze-empty">Rough A/B plant areas for coach and win chance. Rectangle or polygon. Redraw replaces.</p>
           <div class="ze-row" style="grid-template-columns: 14px 1fr auto auto; margin-top: 8px;">
             <span class="ze-swatch" style="background:#e8c040"></span>
             <span style="font-size:12px;color:var(--muted)">Site A</span>
@@ -297,7 +309,7 @@
         </div>
         <div>
           <h2>Key zones</h2>
-          <p class="ze-empty">Up to 4 rectangles per site (entries, defaults, …). Used later for coaching.</p>
+          <p class="ze-empty">Up to 4 regions per site (rectangle or polygon). Used later for coaching.</p>
           <div class="ze-row" style="grid-template-columns: 14px 1fr auto auto; margin-top: 8px;">
             <span class="ze-swatch" style="background:#c9a227"></span>
             <span style="font-size:12px;color:var(--muted)">Key A</span>

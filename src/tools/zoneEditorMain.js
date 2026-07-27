@@ -6,7 +6,7 @@
 import { MAPS, MAP_CODES } from '../replays/shared/roundId.js';
 import { RADAR_SIZE, radarToWorld, worldToRadar } from '../replays/viewer/mapCalibration.js';
 import { loadRadar } from '../replays/viewer/radarRenderer.js';
-import { emptyNetwork, worldRectFromRadarDrag } from '../replays/zones/zoneModel.js';
+import { emptyNetwork, worldPolyFromRadarVerts, worldRectFromRadarDrag } from '../replays/zones/zoneModel.js';
 import { fetchZones, saveZones } from '../replays/zones/zoneApi.js';
 import {
   DEFAULT_BRUSH_PX,
@@ -59,6 +59,8 @@ const el = {
   toolVision: document.querySelector('#ze-tool-vision'),
   toolElevated: document.querySelector('#ze-tool-elevated'),
   toolErase: document.querySelector('#ze-tool-erase'),
+  shapeRect: document.querySelector('#ze-shape-rect'),
+  shapePoly: document.querySelector('#ze-shape-poly'),
   btnBrushDown: document.querySelector('#ze-brush-down'),
   btnBrushUp: document.querySelector('#ze-brush-up'),
   btnClearVision: document.querySelector('#ze-clear-vision'),
@@ -84,10 +86,14 @@ let panY = 0;
 let dpr = 1;
 let dirty = false;
 let drawing = null;
+/** @type {Array<[number, number]>} radar verts while drawing a polygon */
+let polyVerts = [];
 let panning = false;
 let lastPan = null;
 /** @type {'bombA'|'bombB'|'keyA'|'keyB'|'visionBlock'|'elevated'|'erase'} */
 let paintTool = 'bombA';
+/** @type {'rect'|'poly'} */
+let shapeMode = 'rect';
 let eraseTarget = 'visionBlock';
 let brushPx = DEFAULT_BRUSH_PX;
 /** @type {null | { last: {x:number,y:number}, layer: 'visionBlock'|'elevated', erase: boolean }} */
@@ -121,8 +127,16 @@ function isKeyTool(tool = paintTool) {
   return tool === 'keyA' || tool === 'keyB';
 }
 
-function isRectTool(tool = paintTool) {
+function isShapeTool(tool = paintTool) {
   return isBombTool(tool) || isKeyTool(tool);
+}
+
+function isRectTool(tool = paintTool) {
+  return isShapeTool(tool) && shapeMode === 'rect';
+}
+
+function isPolyTool(tool = paintTool) {
+  return isShapeTool(tool) && shapeMode === 'poly';
 }
 
 function bombSiteForTool(tool = paintTool) {
@@ -231,6 +245,8 @@ function syncUi() {
   el.toolElevated?.classList.toggle('active', paintTool === 'elevated');
   el.toolElevated?.classList.toggle('elevated', paintTool === 'elevated');
   el.toolErase?.classList.toggle('active', paintTool === 'erase');
+  el.shapeRect?.classList.toggle('active', shapeMode === 'rect');
+  el.shapePoly?.classList.toggle('active', shapeMode === 'poly');
   el.canvas?.classList.toggle('ze-brush-cursor', isBrush);
   if (el.brushSizeLabel) el.brushSizeLabel.textContent = String(brushPx);
   if (!isBrush) hideBrushRing();
@@ -239,10 +255,24 @@ function syncUi() {
 function setPaintTool(tool) {
   if (tool === 'visionBlock' || tool === 'elevated') eraseTarget = tool;
   paintTool = tool;
+  if (!isShapeTool()) polyVerts = [];
   brushing = null;
   drawing = null;
   syncUi();
   draw();
+}
+
+function setShapeMode(mode) {
+  shapeMode = mode === 'poly' ? 'poly' : 'rect';
+  drawing = null;
+  polyVerts = [];
+  syncUi();
+  draw();
+  setStatus(
+    shapeMode === 'poly'
+      ? 'Polygon: click vertices · double-click or Enter to finish'
+      : 'Rectangle: drag to draw'
+  );
 }
 
 function hideBrushRing() {
@@ -332,77 +362,106 @@ function draw() {
   drawLayer(network.elevated, ELEVATED_COLOR, 0.4);
 
   ensureBombSites(network);
-  const drawBomb = (rect, color, label) => {
-    if (!rect) return;
-    const a = worldToRadar(mapCode, rect.x, rect.y, {});
-    const b = worldToRadar(mapCode, rect.x + rect.w, rect.y + rect.h, {});
-    const x = Math.min(a.x, b.x);
-    const y = Math.min(a.y, b.y);
-    const rw = Math.abs(b.x - a.x);
-    const rh = Math.abs(b.y - a.y);
+  const drawPiece = (piece, color, label, lineW = 2) => {
+    if (!piece) return;
     ctx.fillStyle = hexAlpha(color, 0.22);
     ctx.strokeStyle = color;
-    ctx.lineWidth = 2 / t.scale;
+    ctx.lineWidth = lineW / t.scale;
     ctx.setLineDash([6 / t.scale, 4 / t.scale]);
-    ctx.fillRect(x, y, rw, rh);
-    ctx.strokeRect(x, y, rw, rh);
+    let cx;
+    let cy;
+    if (piece.type === 'poly' && piece.ring?.length >= 3) {
+      ctx.beginPath();
+      for (let i = 0; i < piece.ring.length; i++) {
+        const rp = worldToRadar(mapCode, piece.ring[i][0], piece.ring[i][1], {});
+        if (i === 0) ctx.moveTo(rp.x, rp.y);
+        else ctx.lineTo(rp.x, rp.y);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      let sx = 0;
+      let sy = 0;
+      for (const [wx, wy] of piece.ring) {
+        const rp = worldToRadar(mapCode, wx, wy, {});
+        sx += rp.x;
+        sy += rp.y;
+      }
+      cx = sx / piece.ring.length;
+      cy = sy / piece.ring.length;
+    } else {
+      const a = worldToRadar(mapCode, piece.x, piece.y, {});
+      const b = worldToRadar(mapCode, piece.x + piece.w, piece.y + piece.h, {});
+      const x = Math.min(a.x, b.x);
+      const y = Math.min(a.y, b.y);
+      const rw = Math.abs(b.x - a.x);
+      const rh = Math.abs(b.y - a.y);
+      ctx.fillRect(x, y, rw, rh);
+      ctx.strokeRect(x, y, rw, rh);
+      cx = x + rw / 2;
+      cy = y + rh / 2;
+    }
     ctx.setLineDash([]);
     ctx.fillStyle = color;
     ctx.font = `bold ${Math.max(11, 13 / t.scale)}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(label, x + rw / 2, y + rh / 2);
+    ctx.fillText(label, cx, cy);
   };
-  drawBomb(network.bombSites.a, BOMB_A_COLOR, 'A');
-  drawBomb(network.bombSites.b, BOMB_B_COLOR, 'B');
+  drawPiece(network.bombSites.a, BOMB_A_COLOR, 'A', 2);
+  drawPiece(network.bombSites.b, BOMB_B_COLOR, 'B', 2);
 
   ensureKeyZones(network);
   const drawKeyList = (list, color, prefix) => {
-    (list || []).forEach((rect, i) => {
-      if (!rect) return;
-      const a = worldToRadar(mapCode, rect.x, rect.y, {});
-      const b = worldToRadar(mapCode, rect.x + rect.w, rect.y + rect.h, {});
-      const x = Math.min(a.x, b.x);
-      const y = Math.min(a.y, b.y);
-      const rw = Math.abs(b.x - a.x);
-      const rh = Math.abs(b.y - a.y);
-      ctx.fillStyle = hexAlpha(color, 0.18);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.5 / t.scale;
-      ctx.setLineDash([4 / t.scale, 3 / t.scale]);
-      ctx.fillRect(x, y, rw, rh);
-      ctx.strokeRect(x, y, rw, rh);
-      ctx.setLineDash([]);
-      ctx.fillStyle = color;
-      ctx.font = `600 ${Math.max(10, 11 / t.scale)}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(`${prefix}${i + 1}`, x + rw / 2, y + rh / 2);
+    (list || []).forEach((piece, i) => {
+      drawPiece(piece, color, `${prefix}${i + 1}`, 1.5);
     });
   };
   drawKeyList(network.keyZones.a, KEY_A_COLOR, 'A');
   drawKeyList(network.keyZones.b, KEY_B_COLOR, 'B');
+
+  const draftColor =
+    paintTool === 'bombA'
+      ? BOMB_A_COLOR
+      : paintTool === 'bombB'
+        ? BOMB_B_COLOR
+        : paintTool === 'keyA'
+          ? KEY_A_COLOR
+          : paintTool === 'keyB'
+            ? KEY_B_COLOR
+            : '#88c0ff';
 
   if (drawing && isRectTool()) {
     const x0 = Math.min(drawing.r0.x, drawing.r1.x);
     const y0 = Math.min(drawing.r0.y, drawing.r1.y);
     const rw = Math.abs(drawing.r1.x - drawing.r0.x);
     const rh = Math.abs(drawing.r1.y - drawing.r0.y);
-    const color =
-      paintTool === 'bombA'
-        ? BOMB_A_COLOR
-        : paintTool === 'bombB'
-          ? BOMB_B_COLOR
-          : paintTool === 'keyA'
-            ? KEY_A_COLOR
-            : KEY_B_COLOR;
-    ctx.fillStyle = hexAlpha(color, 0.25);
-    ctx.strokeStyle = color;
+    ctx.fillStyle = hexAlpha(draftColor, 0.25);
+    ctx.strokeStyle = draftColor;
     ctx.lineWidth = 1.5 / t.scale;
     ctx.setLineDash([6 / t.scale, 4 / t.scale]);
     ctx.fillRect(x0, y0, rw, rh);
     ctx.strokeRect(x0, y0, rw, rh);
     ctx.setLineDash([]);
+  }
+
+  if (polyVerts.length && isPolyTool()) {
+    ctx.beginPath();
+    polyVerts.forEach(([rx, ry], i) => {
+      if (i === 0) ctx.moveTo(rx, ry);
+      else ctx.lineTo(rx, ry);
+    });
+    ctx.strokeStyle = draftColor;
+    ctx.lineWidth = 1.5 / t.scale;
+    ctx.setLineDash([6 / t.scale, 4 / t.scale]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (const [rx, ry] of polyVerts) {
+      ctx.fillStyle = draftColor;
+      ctx.beginPath();
+      ctx.arc(rx, ry, 3.5 / t.scale, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -445,21 +504,25 @@ async function loadMap(code) {
   zoom = 1;
   panX = 0;
   panY = 0;
+  drawing = null;
+  polyVerts = [];
   syncUi();
   draw();
 }
 
-function commitBombSite(site, worldRect) {
-  if (worldRect.w < 8 || worldRect.h < 8) return;
+function commitBombSite(site, piece) {
+  const clean =
+    piece?.type === 'poly'
+      ? piece.ring?.length >= 3
+        ? piece
+        : null
+      : piece && piece.w >= 8 && piece.h >= 8
+        ? piece
+        : null;
+  if (!clean) return;
   pushUndo();
   ensureBombSites(network);
-  network.bombSites[site] = {
-    type: 'rect',
-    x: worldRect.x,
-    y: worldRect.y,
-    w: worldRect.w,
-    h: worldRect.h
-  };
+  network.bombSites[site] = clean;
   markDirty(true);
   syncUi();
   draw();
@@ -478,8 +541,19 @@ function clearBombSite(site) {
   setStatus(`Cleared bomb site ${site.toUpperCase()}`);
 }
 
-function commitKeyZone(site, worldRect) {
-  if (worldRect.w < 8 || worldRect.h < 8) return;
+function commitKeyZone(site, piece) {
+  const clean =
+    piece?.type === 'poly'
+      ? piece.ring?.length >= 3
+        ? piece
+        : null
+      : piece && piece.w >= 8 && piece.h >= 8
+        ? piece
+        : null;
+  if (!clean) {
+    draw();
+    return;
+  }
   ensureKeyZones(network);
   const list = site === 'b' ? network.keyZones.b : network.keyZones.a;
   if (list.length >= KEY_ZONES_MAX) {
@@ -488,13 +562,7 @@ function commitKeyZone(site, worldRect) {
     return;
   }
   pushUndo();
-  addKeyZone(network, site, {
-    type: 'rect',
-    x: worldRect.x,
-    y: worldRect.y,
-    w: worldRect.w,
-    h: worldRect.h
-  });
+  addKeyZone(network, site, clean);
   markDirty(true);
   syncUi();
   draw();
@@ -514,6 +582,20 @@ function clearKeySite(site) {
   setStatus(`Cleared key ${site.toUpperCase()}`);
 }
 
+function commitShapePiece(piece) {
+  const bombSite = bombSiteForTool();
+  if (bombSite) {
+    commitBombSite(bombSite, piece);
+    return;
+  }
+  const keySite = keySiteForTool();
+  if (keySite) {
+    commitKeyZone(keySite, piece);
+    return;
+  }
+  draw();
+}
+
 function tryFinishDraw() {
   if (!drawing) return;
   const { r0, r1 } = drawing;
@@ -525,17 +607,25 @@ function tryFinishDraw() {
     return;
   }
   const worldRect = worldRectFromRadarDrag(mapCode, radarToWorld, r0.x, r0.y, r1.x, r1.y);
-  const bombSite = bombSiteForTool();
-  if (bombSite) {
-    commitBombSite(bombSite, worldRect);
+  commitShapePiece(worldRect);
+}
+
+function finishPoly() {
+  while (polyVerts.length >= 2) {
+    const a = polyVerts[polyVerts.length - 1];
+    const b = polyVerts[polyVerts.length - 2];
+    if ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 < 9) polyVerts.pop();
+    else break;
+  }
+  if (polyVerts.length < 3) {
+    polyVerts = [];
+    draw();
+    setStatus('Need at least 3 vertices', 'err');
     return;
   }
-  const keySite = keySiteForTool();
-  if (keySite) {
-    commitKeyZone(keySite, worldRect);
-    return;
-  }
-  draw();
+  const piece = worldPolyFromRadarVerts(mapCode, radarToWorld, polyVerts);
+  polyVerts = [];
+  commitShapePiece(piece);
 }
 
 function applyBrushAt(from, to, layer, erase) {
@@ -574,7 +664,12 @@ el.canvas.addEventListener('pointerdown', (e) => {
     updateBrushRing(e.clientX, e.clientY);
     return;
   }
-  if (!isRectTool()) return;
+  if (!isShapeTool()) return;
+  if (isPolyTool()) {
+    polyVerts.push([r.x, r.y]);
+    draw();
+    return;
+  }
   drawing = { r0: r, r1: { ...r } };
   el.canvas.setPointerCapture(e.pointerId);
 });
@@ -622,7 +717,34 @@ el.canvas.addEventListener('pointerup', () => {
 el.canvas.addEventListener('pointerleave', () => {
   if (!brushing) hideBrushRing();
 });
+el.canvas.addEventListener('dblclick', (e) => {
+  if (!isPolyTool()) return;
+  e.preventDefault();
+  finishPoly();
+});
+
 el.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+window.addEventListener('keydown', (e) => {
+  if (e.target?.matches?.('input, textarea, select')) return;
+  if (isPolyTool() && polyVerts.length) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      polyVerts = [];
+      draw();
+      setStatus('Polygon cancelled');
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      finishPoly();
+      return;
+    }
+  }
+  if (!(e.ctrlKey || e.metaKey) || String(e.key).toLowerCase() !== 'z') return;
+  e.preventDefault();
+  undoLast();
+});
 
 el.toolBombA?.addEventListener('click', () => setPaintTool('bombA'));
 el.toolBombB?.addEventListener('click', () => setPaintTool('bombB'));
@@ -631,6 +753,8 @@ el.toolKeyB?.addEventListener('click', () => setPaintTool('keyB'));
 el.toolVision?.addEventListener('click', () => setPaintTool('visionBlock'));
 el.toolElevated?.addEventListener('click', () => setPaintTool('elevated'));
 el.toolErase?.addEventListener('click', () => setPaintTool('erase'));
+el.shapeRect?.addEventListener('click', () => setShapeMode('rect'));
+el.shapePoly?.addEventListener('click', () => setShapeMode('poly'));
 el.btnClearBombA?.addEventListener('click', () => clearBombSite('a'));
 el.btnClearBombB?.addEventListener('click', () => clearBombSite('b'));
 el.btnClearKeyA?.addEventListener('click', () => clearKeySite('a'));
@@ -745,13 +869,6 @@ el.btnSave?.addEventListener('click', async () => {
   } catch (err) {
     setStatus(err.message || 'Save failed', 'err');
   }
-});
-
-window.addEventListener('keydown', (e) => {
-  if (!(e.ctrlKey || e.metaKey) || String(e.key).toLowerCase() !== 'z') return;
-  if (e.target?.matches?.('input, textarea, select')) return;
-  e.preventDefault();
-  undoLast();
 });
 
 window.addEventListener('resize', resize);

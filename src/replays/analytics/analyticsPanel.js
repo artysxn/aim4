@@ -1,15 +1,18 @@
 // ---------------------------------------------------------------------------
-// Analytics: one player × one map × phase-window + drawn-shape filters → stats.
-// Layout: sticky filter sidebar + main results (stats, radar shapes, rounds).
+// Analytics: map-first filters + optional subjects (players / teams) → stats.
+// Layout: sticky filter sidebar + main results (stats, radar, LB, rounds).
 // ---------------------------------------------------------------------------
 
 import { fetchStats } from '../api.js';
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
 import { attachTips } from '../stats/statsTables.js';
 import {
+  ANALYTICS_PLAYER_MAX,
   aggregateAnalyticsAsync,
   leaderboardFromFiles,
-  listPlayers
+  listMaps,
+  listPlayers,
+  listTeams
 } from './analyticsMath.js';
 import { createPresenceRadar } from './presenceRadar.js';
 import {
@@ -39,24 +42,29 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   el.innerHTML = `
     <div class="an-layout">
       <aside class="an-sidebar" id="an-sidebar"></aside>
-      <div class="an-main" id="an-main"><p class="view-empty">Select a player and a map to begin.</p></div>
+      <div class="an-main" id="an-main"><p class="view-empty">Select a map to begin.</p></div>
     </div>`;
 
   const sidebarEl = el.querySelector('#an-sidebar');
   const mainEl = el.querySelector('#an-main');
 
   let payload = null;
-  /** @type {Array<{id:string,name:string,maps:string[]}>} */
+  /** @type {Array<{id:string,name:string,maps:string[],teamKeys:string[]}>} */
   let players = [];
+  /** @type {Array<{key:string,name:string,playerIds:string[],maps:string[]}>} */
+  let teams = [];
+  /** @type {string[]} */
+  let maps = [];
   let loadToken = 0;
   let renderToken = 0;
-  let playerSearch = '';
-  let playerMenuOpen = false;
+  let subjectSearch = '';
+  let subjectMenuOpen = false;
   /** @type {Map<string, { meta: object|null, ticks: ArrayBuffer|null }>} */
   const tickCache = new Map();
 
   const state = {
-    playerId: '',
+    /** @type {string[]} */
+    playerIds: [],
     map: '',
     side: '',
     econ: null,
@@ -82,8 +90,15 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   /** @type {ReturnType<typeof createPresenceRadar> | null} */
   let radar = null;
 
-  function selectedPlayer() {
-    return players.find((p) => p.id === state.playerId) || null;
+  function playerById(id) {
+    return players.find((p) => p.id === id) || null;
+  }
+
+  function subjectLabel() {
+    if (!state.playerIds.length) return 'Anyone';
+    return state.playerIds
+      .map((id) => playerById(id)?.name || id)
+      .join(', ');
   }
 
   function persistShapes() {
@@ -93,7 +108,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
   function filterObj() {
     return {
-      playerId: state.playerId,
+      playerIds: [...state.playerIds],
       map: state.map,
       side: state.side,
       econ: state.econ,
@@ -112,12 +127,74 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     return SHAPE_FEATURES.find((f) => f.key === key)?.label || key;
   }
 
-  function playerOptions() {
-    const q = playerSearch.trim().toLowerCase();
-    return players
-      .filter((p) => p.id !== state.playerId)
-      .filter((p) => !q || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q))
-      .slice(0, 40);
+  function slotsLeft() {
+    return Math.max(0, ANALYTICS_PLAYER_MAX - state.playerIds.length);
+  }
+
+  function addPlayers(ids) {
+    const next = [...state.playerIds];
+    for (const id of ids) {
+      if (!id || next.includes(id)) continue;
+      if (next.length >= ANALYTICS_PLAYER_MAX) break;
+      next.push(id);
+    }
+    state.playerIds = next;
+  }
+
+  function removePlayer(id) {
+    state.playerIds = state.playerIds.filter((x) => x !== id);
+  }
+
+  /** @returns {{ kind: 'team'|'player', key: string, label: string, sub?: string, ids: string[] }[]} */
+  function subjectSuggestions() {
+    const q = subjectSearch.trim().toLowerCase();
+    const selected = new Set(state.playerIds);
+    const left = slotsLeft();
+    /** @type {{ kind: 'team'|'player', key: string, label: string, sub?: string, ids: string[] }[]} */
+    const out = [];
+
+    if (!left) return out;
+
+    const teamHits = teams
+      .filter((t) => {
+        if (!q) return true;
+        return t.name.toLowerCase().includes(q) || t.key.includes(q);
+      })
+      .filter((t) => t.playerIds.some((id) => !selected.has(id)))
+      .slice(0, q ? 8 : 12);
+
+    for (const t of teamHits) {
+      const fresh = t.playerIds.filter((id) => !selected.has(id));
+      const take = fresh.slice(0, left);
+      out.push({
+        kind: 'team',
+        key: t.key,
+        label: t.name,
+        sub: `${take.length} of ${t.playerIds.length} players`,
+        ids: take
+      });
+    }
+
+    if (q.length >= 1) {
+      const playerHits = players
+        .filter((p) => !selected.has(p.id))
+        .filter(
+          (p) =>
+            p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)
+        )
+        .slice(0, 20);
+      for (const p of playerHits) {
+        out.push({
+          kind: 'player',
+          key: p.id,
+          label: p.name,
+          sub: p.teamKeys?.length ? `Player` : 'Player',
+          ids: [p.id]
+        });
+      }
+    }
+
+    return out;
   }
 
   function econSelect(id, value) {
@@ -144,57 +221,106 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     return `<button type="button" class="rp-chip${active ? ' active' : ''}" ${attrs}>${label}</button>`;
   }
 
-  function refreshPlayerMenu() {
-    const menu = sidebarEl.querySelector('#an-player-menu');
+  function refreshSubjectMenu() {
+    const menu = sidebarEl.querySelector('#an-subject-menu');
     if (!menu) return;
-    const opts = playerOptions();
-    menu.hidden = !playerMenuOpen || !opts.length;
-    menu.innerHTML = opts
+    const opts = subjectSuggestions();
+    const q = subjectSearch.trim();
+    const show = subjectMenuOpen && (opts.length || q.length >= 1 || !state.playerIds.length);
+    menu.hidden = !show;
+
+    if (!opts.length) {
+      menu.innerHTML = `<p class="rp-typeahead-empty">${
+        !slotsLeft()
+          ? `Limit ${ANALYTICS_PLAYER_MAX} players`
+          : q
+            ? 'No matches'
+            : 'Type a player name, or pick a team'
+      }</p>`;
+      return;
+    }
+
+    const teamsHtml = opts
+      .filter((o) => o.kind === 'team')
       .map(
-        (p) =>
-          `<button type="button" class="rp-typeahead-item" data-pick-player="${escapeHtml(
-            p.id
-          )}">${escapeHtml(p.name)}</button>`
+        (o) => `<button type="button" class="an-suggest" data-pick-ids="${escapeHtml(
+          o.ids.join(',')
+        )}">
+          <span class="an-suggest-kind">Team</span>
+          <span class="an-suggest-main">
+            <strong>${escapeHtml(o.label)}</strong>
+            <span class="an-muted">${escapeHtml(o.sub || '')}</span>
+          </span>
+        </button>`
       )
       .join('');
+
+    const playersHtml = opts
+      .filter((o) => o.kind === 'player')
+      .map(
+        (o) => `<button type="button" class="an-suggest" data-pick-ids="${escapeHtml(
+          o.ids.join(',')
+        )}">
+          <span class="an-suggest-kind">Player</span>
+          <span class="an-suggest-main">
+            <strong>${escapeHtml(o.label)}</strong>
+          </span>
+        </button>`
+      )
+      .join('');
+
+    menu.innerHTML = `
+      ${teamsHtml ? `<div class="an-suggest-group"><span class="an-suggest-group-label">Teams</span>${teamsHtml}</div>` : ''}
+      ${playersHtml ? `<div class="an-suggest-group"><span class="an-suggest-group-label">Players</span>${playersHtml}</div>` : ''}`;
   }
 
   function renderSidebar() {
-    const pl = selectedPlayer();
-    const ready = Boolean(state.playerId && state.map);
-    const maps = pl?.maps || [];
+    const ready = Boolean(state.map);
+    const left = slotsLeft();
 
-    sidebarEl.classList.toggle('an-sidebar--pick', !state.playerId);
+    sidebarEl.classList.toggle('an-sidebar--pick', !state.map);
     sidebarEl.innerHTML = `
       <div class="an-field">
-        <span class="an-label">Player</span>
-        <div class="rp-typeahead" id="an-player-typeahead">
-          ${
-            pl
-              ? `<div class="an-sel-chips"><button type="button" class="an-sel-chip" data-clear-player>
-                  ${escapeHtml(pl.name)} <span aria-hidden="true">×</span></button></div>`
-              : `<input type="search" class="site-input" id="an-player-search"
-                  placeholder="Search players…" spellcheck="false" autocomplete="off"
-                  value="${escapeHtml(playerSearch)}" aria-label="Search players" />
-                <div class="rp-typeahead-menu" id="an-player-menu" hidden></div>`
-          }
-        </div>
+        <span class="an-label">Map</span>
+        <select class="site-select an-select" id="an-map">
+          <option value="">Select map…</option>
+          ${maps
+            .map(
+              (m) =>
+                `<option value="${escapeHtml(m)}"${m === state.map ? ' selected' : ''}>${escapeHtml(
+                  MAPS[m]?.name || m
+                )}</option>`
+            )
+            .join('')}
+        </select>
       </div>
 
-      <div class="an-side-block" ${pl ? '' : 'hidden'}>
-        <div class="an-field">
-          <span class="an-label">Map</span>
-          <select class="site-select an-select" id="an-map" ${maps.length ? '' : 'disabled'}>
-            <option value="">Select map…</option>
-            ${maps
-              .map(
-                (m) =>
-                  `<option value="${escapeHtml(m)}"${m === state.map ? ' selected' : ''}>${escapeHtml(
-                    MAPS[m]?.name || m
-                  )}</option>`
-              )
-              .join('')}
-          </select>
+      <div class="an-field">
+        <span class="an-label">Subjects <span class="an-label-soft">${state.playerIds.length}/${ANALYTICS_PLAYER_MAX}</span></span>
+        <p class="an-side-hint">Optional. Empty = anyone on this map. Teams add up to 5 players.</p>
+        <div class="an-subject" id="an-subject-typeahead">
+          ${
+            state.playerIds.length
+              ? `<div class="an-sel-chips">
+                  ${state.playerIds
+                    .map((id) => {
+                      const name = playerById(id)?.name || id;
+                      return `<button type="button" class="an-sel-chip" data-remove-player="${escapeHtml(
+                        id
+                      )}" title="Remove">${escapeHtml(name)} <span aria-hidden="true">×</span></button>`;
+                    })
+                    .join('')}
+                </div>`
+              : `<p class="an-anyone">Anyone · all demos on the map</p>`
+          }
+          ${
+            left
+              ? `<input type="search" class="site-input" id="an-subject-search"
+                  placeholder="Search teams or players…" spellcheck="false" autocomplete="off"
+                  value="${escapeHtml(subjectSearch)}" aria-label="Search teams or players" />
+                <div class="rp-typeahead-menu an-subject-menu" id="an-subject-menu" hidden></div>`
+              : ''
+          }
         </div>
       </div>
 
@@ -263,7 +389,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         <div class="an-field">
           <span class="an-label">Draw</span>
           <div class="rp-chips">
-            ${chip(state.drawMode === 'rect', 'data-an-draw="rect"', 'Rect')}
+            ${chip(state.drawMode === 'rect', 'data-an-draw="rect"', 'Rectangle')}
             ${chip(state.drawMode === 'poly', 'data-an-draw="poly"', 'Polygon')}
             ${chip(state.drawMode === 'lasso', 'data-an-draw="lasso"', 'Lasso')}
             ${
@@ -302,7 +428,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         <button type="button" class="btn btn-sm an-clear" data-an-clear>Clear filters</button>
       </div>`;
 
-    if (playerMenuOpen || playerSearch) refreshPlayerMenu();
+    if (subjectMenuOpen || subjectSearch) refreshSubjectMenu();
   }
 
   function fmt(n, digits = 2) {
@@ -317,7 +443,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     const n = agg.rounds || 0;
     return {
       Rating: tipLines([
-        `HLTV 2.0 over ${n} matching rounds (combat only from selected phases / shapes).`,
+        `HLTV 2.0 over ${n} matching player-rounds (combat only from selected phases / shapes).`,
         `KPR: ${f2(agg.kpr)}  (${agg.kills} kills / ${n} rounds)`,
         `DPR: ${f2(agg.dpr)}  (${agg.deaths} deaths / ${n} rounds)`,
         `Impact: ${f2(agg.impact)}`,
@@ -365,6 +491,15 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   }
 
   function renderStats(agg) {
+    if (agg.anyone) {
+      return `<section class="an-card">
+        <header class="an-card-head">
+          <h3 class="an-section-title">Phase stats</h3>
+          <span class="an-muted">${agg.files.length} rounds</span>
+        </header>
+        <p class="an-muted" style="margin:0">Select up to ${ANALYTICS_PLAYER_MAX} players (or a team) to see pooled phase combat. Leaderboard below covers everyone on matching rounds.</p>
+      </section>`;
+    }
     if (!agg.samples) {
       return `<section class="an-card"><p class="view-empty">No phase windows match these filters.</p></section>`;
     }
@@ -430,10 +565,11 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     </section>`;
   }
 
-  function renderLeaderboard(rows, focusId, roundCount) {
+  function renderLeaderboard(rows, focusIds, roundCount) {
     if (!rows.length) {
       return `<section class="an-card"><p class="view-empty">No players on matching rounds.</p></section>`;
     }
+    const focus = new Set(focusIds || []);
     const top = rows.slice(0, 40);
     return `<section class="an-card an-lb">
       <header class="an-card-head">
@@ -456,8 +592,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
           <tbody>
             ${top
               .map((p, i) => {
-                const focus = p.id === focusId ? ' focus' : '';
-                return `<tr class="an-lb-row${focus}">
+                const on = focus.has(p.id) ? ' focus' : '';
+                return `<tr class="an-lb-row${on}">
                   <td>${i + 1}</td>
                   <td class="an-lb-name">${escapeHtml(p.name || p.id)}</td>
                   <td>${p.rounds}</td>
@@ -475,14 +611,32 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   }
 
   function renderRounds(agg) {
+    /** @type {Map<string, { file: string, demoId: string, round: number, phases: Set<string> }>} */
     const byFile = new Map();
-    for (const w of agg.windows) {
-      let g = byFile.get(w.file);
-      if (!g) {
-        g = { file: w.file, demoId: w.demoId, round: w.round, phases: new Set() };
-        byFile.set(w.file, g);
+    if (agg.windows?.length) {
+      for (const w of agg.windows) {
+        let g = byFile.get(w.file);
+        if (!g) {
+          g = { file: w.file, demoId: w.demoId, round: w.round, phases: new Set() };
+          byFile.set(w.file, g);
+        }
+        g.phases.add(w.phase);
       }
-      g.phases.add(w.phase);
+    } else {
+      for (const file of agg.files || []) {
+        byFile.set(file, { file, demoId: '', round: 0, phases: new Set() });
+      }
+      // Enrich round numbers from payload when anyone-mode has no windows.
+      if (payload) {
+        for (const demo of payload.demos || []) {
+          for (const row of demo.rounds || []) {
+            const g = byFile.get(row.f);
+            if (!g) continue;
+            g.demoId = row.d;
+            g.round = row.n;
+          }
+        }
+      }
     }
     const list = [...byFile.values()].sort(
       (a, b) => (b.round || 0) - (a.round || 0) || a.file.localeCompare(b.file)
@@ -497,17 +651,18 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       </header>
       <ul class="an-round-list">
         ${list
-          .map(
-            (r) =>
-              `<li class="an-round-row">
-                <span class="an-round-label">R${r.round || '?'} · ${escapeHtml(
-                  [...r.phases].join(', ')
-                )}</span>
+          .map((r) => {
+            const phases = [...r.phases];
+            const label = r.round
+              ? `R${r.round}${phases.length ? ` · ${phases.join(', ')}` : ''}`
+              : r.file;
+            return `<li class="an-round-row">
+                <span class="an-round-label">${escapeHtml(label)}</span>
                 <button type="button" class="btn btn-sm" data-an-play="${escapeHtml(
                   r.file
                 )}">Play</button>
-              </li>`
-          )
+              </li>`;
+          })
           .join('')}
       </ul>
     </section>`;
@@ -536,7 +691,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
             enabled: true
           });
           persistShapes();
-          // Keep draw mode so multiple selections can be added quickly.
           render();
         }
       });
@@ -552,8 +706,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   }
 
   async function renderMain() {
-    if (!state.playerId || !state.map) {
-      mainEl.innerHTML = `<p class="view-empty">Select a player and a map in the sidebar.</p>`;
+    if (!state.map) {
+      mainEl.innerHTML = `<p class="view-empty">Select a map in the sidebar. Subjects are optional — leave empty to search anyone.</p>`;
       return;
     }
     if (!payload) {
@@ -577,6 +731,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     const needsPh = (payload.demos || []).some((d) =>
       (d.rounds || []).some((r) => r.m === state.map && !r.ph)
     );
+    const roundCount = agg.anyone ? agg.files.length : agg.rounds;
     mainEl.innerHTML = `
       ${
         needsPh
@@ -585,7 +740,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       }
       ${renderStats(agg)}
       ${renderRadarCard()}
-      ${renderLeaderboard(lb, state.playerId, agg.rounds)}
+      ${renderLeaderboard(lb, state.playerIds, roundCount)}
       ${renderRounds(agg)}`;
     paintRadar();
   }
@@ -608,10 +763,10 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       if (token !== loadToken) return;
       payload = data;
       players = listPlayers(payload);
-      if (state.playerId && !players.some((p) => p.id === state.playerId)) {
-        state.playerId = '';
-        state.map = '';
-      }
+      teams = listTeams(payload);
+      maps = listMaps(payload);
+      state.playerIds = state.playerIds.filter((id) => players.some((p) => p.id === id));
+      if (state.map && !maps.includes(state.map)) state.map = '';
       loadShapesForMap();
       if (token !== loadToken) return;
       render();
@@ -624,38 +779,36 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   }
 
   sidebarEl.addEventListener('input', (e) => {
-    if (e.target.id === 'an-player-search') {
-      playerSearch = e.target.value;
-      playerMenuOpen = true;
-      refreshPlayerMenu();
+    if (e.target.id === 'an-subject-search') {
+      subjectSearch = e.target.value;
+      subjectMenuOpen = true;
+      refreshSubjectMenu();
     }
   });
 
   sidebarEl.addEventListener('focusin', (e) => {
-    if (e.target.id === 'an-player-search' && !playerMenuOpen) {
-      playerMenuOpen = true;
-      refreshPlayerMenu();
+    if (e.target.id === 'an-subject-search') {
+      subjectMenuOpen = true;
+      refreshSubjectMenu();
     }
   });
 
   sidebarEl.addEventListener('click', (e) => {
-    const pickPlayer = e.target.closest('[data-pick-player]');
-    if (pickPlayer) {
-      state.playerId = pickPlayer.dataset.pickPlayer;
-      playerSearch = '';
-      playerMenuOpen = false;
-      const pl = selectedPlayer();
-      if (!pl?.maps.includes(state.map)) state.map = pl?.maps[0] || '';
-      loadShapesForMap();
+    const pick = e.target.closest('[data-pick-ids]');
+    if (pick) {
+      const ids = String(pick.dataset.pickIds || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      addPlayers(ids);
+      subjectSearch = '';
+      subjectMenuOpen = false;
       render();
       return;
     }
-    if (e.target.closest('[data-clear-player]')) {
-      state.playerId = '';
-      state.map = '';
-      state.shapes = [];
-      playerSearch = '';
-      playerMenuOpen = false;
+    const remove = e.target.closest('[data-remove-player]');
+    if (remove) {
+      removePlayer(remove.dataset.removePlayer);
       render();
       return;
     }
@@ -769,10 +922,10 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   });
 
   document.addEventListener('click', (e) => {
-    const inPlayer = e.target.closest?.('#an-player-typeahead');
-    if (!inPlayer && playerMenuOpen) {
-      playerMenuOpen = false;
-      refreshPlayerMenu();
+    const inSubject = e.target.closest?.('#an-subject-typeahead');
+    if (!inSubject && subjectMenuOpen) {
+      subjectMenuOpen = false;
+      refreshSubjectMenu();
     }
   });
 
@@ -789,7 +942,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     if (playOne && onPlayRounds) {
       playOne.disabled = true;
       try {
-        await onPlayRounds([playOne.dataset.anPlay], selectedPlayer()?.name || 'Analytics');
+        await onPlayRounds([playOne.dataset.anPlay], subjectLabel());
       } finally {
         playOne.disabled = false;
       }
@@ -803,7 +956,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       try {
         await onPlayRounds(
           agg.files,
-          `${selectedPlayer()?.name || 'Player'} · ${MAPS[state.map]?.name || state.map}`
+          `${subjectLabel()} · ${MAPS[state.map]?.name || state.map}`
         );
       } finally {
         btn.disabled = false;

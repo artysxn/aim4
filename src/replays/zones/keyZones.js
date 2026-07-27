@@ -1,12 +1,14 @@
 // ---------------------------------------------------------------------------
 // replays/zones/keyZones.js
-// Per-bombsite key rectangles (up to 4 each for A and B). Drawn in the Sites
-// editor for later coach / analytics use — not claim tiles.
+// Per-bombsite key regions (up to 4 each for A and B). Drawn in the Sites
+// editor as rectangles or polygons for later coach / analytics use.
 // ---------------------------------------------------------------------------
 
 /**
  * @typedef {{ type: 'rect', x: number, y: number, w: number, h: number }} KeyZoneRect
- * @typedef {{ a: KeyZoneRect[], b: KeyZoneRect[] }} KeyZones
+ * @typedef {{ type: 'poly', ring: [number, number][] }} KeyZonePoly
+ * @typedef {KeyZoneRect | KeyZonePoly} KeyZonePiece
+ * @typedef {{ a: KeyZonePiece[], b: KeyZonePiece[] }} KeyZones
  */
 
 export const KEY_ZONES_MAX = 4;
@@ -16,9 +18,21 @@ export function emptyKeyZones() {
   return { a: [], b: [] };
 }
 
-/** @param {unknown} raw @returns {KeyZoneRect | null} */
-function sanitizeKeyRect(raw) {
+/** @param {unknown} raw @returns {KeyZonePiece | null} */
+function sanitizeKeyPiece(raw) {
   if (!raw || typeof raw !== 'object') return null;
+  if (raw.type === 'poly' || Array.isArray(raw.ring)) {
+    const ring = [];
+    for (const p of (raw.ring || []).slice(0, 64)) {
+      if (!Array.isArray(p) || p.length < 2) continue;
+      const px = Number(p[0]);
+      const py = Number(p[1]);
+      if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
+      ring.push(/** @type {[number, number]} */ ([px, py]));
+    }
+    if (ring.length < 3) return null;
+    return { type: 'poly', ring };
+  }
   const x = Number(raw.x);
   const y = Number(raw.y);
   const w = Number(raw.w);
@@ -35,10 +49,10 @@ export function sanitizeKeyZones(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
   const one = (list) => {
     if (!Array.isArray(list)) return [];
-    /** @type {KeyZoneRect[]} */
+    /** @type {KeyZonePiece[]} */
     const out = [];
     for (const item of list.slice(0, KEY_ZONES_MAX)) {
-      const r = sanitizeKeyRect(item);
+      const r = sanitizeKeyPiece(item);
       if (r) out.push(r);
     }
     return out;
@@ -63,14 +77,14 @@ export function keyZonesFor(network, site) {
 }
 
 /**
- * Push a rect onto a site list (max KEY_ZONES_MAX). Returns false if full.
+ * Push a piece onto a site list (max KEY_ZONES_MAX). Returns false if full.
  * @param {object} network
  * @param {'a'|'b'} site
- * @param {KeyZoneRect} rect
+ * @param {KeyZonePiece} piece
  */
-export function addKeyZone(network, site, rect) {
+export function addKeyZone(network, site, piece) {
   ensureKeyZones(network);
-  const clean = sanitizeKeyRect(rect);
+  const clean = sanitizeKeyPiece(piece);
   if (!clean) return false;
   const list = site === 'b' ? network.keyZones.b : network.keyZones.a;
   if (list.length >= KEY_ZONES_MAX) return false;

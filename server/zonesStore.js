@@ -14,6 +14,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ROOT as REPLAY_ROOT } from './replays/demoStore.js';
+import { sanitizeBombSites } from '../src/replays/zones/bombSites.js';
 import { sanitizeKeyZones } from '../src/replays/zones/keyZones.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -70,24 +71,6 @@ function sanitizeLayerPieces(raw) {
     }
   }
   return pieces;
-}
-
-function sanitizeBombRect(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const x = Number(raw.x);
-  const y = Number(raw.y);
-  const w = Number(raw.w);
-  const h = Number(raw.h);
-  if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) return null;
-  return { type: 'rect', x, y, w, h };
-}
-
-function sanitizeBombSites(raw) {
-  const src = raw && typeof raw === 'object' ? raw : {};
-  return {
-    a: sanitizeBombRect(src.a),
-    b: sanitizeBombRect(src.b)
-  };
 }
 
 /** Empty slim network for a map code. */

@@ -3227,14 +3227,13 @@ body.rv-open {
   background: var(--surface);
 }
 
-/* Extra 200px so the player list isn't cropped before a subject is chosen. */
+/* Extra room while choosing a map before filters expand. */
 .an-sidebar.an-sidebar--pick {
-  min-height: 420px;
-  overflow: visible;
+  min-height: 280px;
 }
 
-.an-sidebar.an-sidebar--pick #an-player-typeahead .rp-typeahead-menu {
-  max-height: 360px;
+.an-sidebar.an-sidebar--pick #an-subject-typeahead .rp-typeahead-menu {
+  max-height: 320px;
 }
 
 .an-side-block {
@@ -3278,6 +3277,97 @@ body.rv-open {
   text-transform: uppercase;
 }
 
+.an-label-soft {
+  margin-left: 4px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  opacity: 0.75;
+}
+
+.an-subject {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.an-anyone {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.an-subject-menu {
+  max-height: 280px;
+}
+
+.an-suggest-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.an-suggest-group + .an-suggest-group {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.an-suggest-group-label {
+  padding: 2px 8px 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.an-suggest {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.an-suggest:hover {
+  background: var(--accent-dim);
+}
+
+.an-suggest-kind {
+  flex: 0 0 auto;
+  min-width: 44px;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.an-suggest-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.an-suggest-main strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .an-select {
   width: 100%;
   font-size: 12px;
@@ -3303,20 +3393,26 @@ body.rv-open {
 .an-sel-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px;
 }
 
 .an-sel-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border: 1px solid var(--accent-border);
-  border-radius: 999px;
-  background: var(--accent-dim);
+  gap: 5px;
+  max-width: 100%;
+  padding: 4px 9px;
+  border: 1px solid rgba(232, 184, 74, 0.35);
+  border-radius: 6px;
+  background: rgba(232, 184, 74, 0.1);
   color: var(--text);
-  font: 500 11px var(--font-body);
+  font: 500 12px var(--font-body);
   cursor: pointer;
+}
+
+.an-sel-chip:hover {
+  border-color: rgba(232, 184, 74, 0.55);
+  background: rgba(232, 184, 74, 0.16);
 }
 
 .an-sel-chip span {
