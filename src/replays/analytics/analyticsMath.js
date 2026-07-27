@@ -7,7 +7,13 @@
 // ---------------------------------------------------------------------------
 
 import { PHASES } from '../roles/phaseCombat.js';
-import { P, PLAYER_SLOTS, bucketRating, rowPasses } from '../shared/statsMath.js';
+import {
+  P,
+  PLAYER_SLOTS,
+  aggregatePlayers,
+  bucketRating,
+  rowPasses
+} from '../shared/statsMath.js';
 import { filterWindowsByShapes } from './shapeFilters.js';
 
 /**
@@ -20,8 +26,10 @@ import { filterWindowsByShapes } from './shapeFilters.js';
  * @property {boolean} [hasAwp]
  * @property {boolean} [oppHasAwp]
  * @property {''|'won'|'lost'} [result]
+ * @property {''|'won'|'lost'} [opening]  opening duel for the focus player
  * @property {Set<string>|string[]} [phases]  empty ⇒ all
  * @property {Array<object>} [shapes]  enabled drawn selections
+ * @property {'all'|'any'} [shapeMatch]  AND / OR across enabled shapes
  */
 
 function asSet(v) {
@@ -61,6 +69,13 @@ function resultPasses(row, team, result) {
   return true;
 }
 
+function openingPasses(row, playerId, opening) {
+  if (!opening) return true;
+  if (opening === 'won') return row.ok === playerId;
+  if (opening === 'lost') return row.od === playerId;
+  return true;
+}
+
 function selectedPhases(filter) {
   const set = asSet(filter.phases);
   if (!set.size) return [...PHASES];
@@ -83,6 +98,7 @@ export function analyticsRowPasses(row, filter, team) {
   if (!row.p?.[filter.playerId] && !row.ph?.[filter.playerId]) return false;
   if (!rowPasses(row, filter, team)) return false;
   if (!resultPasses(row, team, filter.result || '')) return false;
+  if (!openingPasses(row, filter.playerId, filter.opening || '')) return false;
   return true;
 }
 
@@ -128,7 +144,7 @@ export async function matchingWindowsAsync(payload, filter, tickCache = new Map(
   const shapes = filter?.shapes || [];
   const active = shapes.filter((s) => s && s.enabled !== false && s.geometry);
   if (!active.length) return base;
-  return filterWindowsByShapes(base, active, tickCache);
+  return filterWindowsByShapes(base, active, tickCache, filter.shapeMatch || 'all');
 }
 
 /**
@@ -252,6 +268,36 @@ export function aggregateAnalytics(payload, filter) {
 export async function aggregateAnalyticsAsync(payload, filter, tickCache = new Map()) {
   const windows = await matchingWindowsAsync(payload, filter, tickCache);
   return aggregateFromWindows(windows, filter.playerId);
+}
+
+/**
+ * Full-round player leaderboard for a set of matching round files.
+ * Uses whole-round combat (same rating math as Statistics).
+ *
+ * @param {object} payload
+ * @param {string[]} files
+ */
+export function leaderboardFromFiles(payload, files) {
+  const want = new Set((files || []).filter(Boolean));
+  if (!want.size) return [];
+
+  /** @type {Map<string, { name: string, team: number, demoId: string }>} */
+  const players = new Map();
+  const rows = [];
+  for (const demo of payload?.demos || []) {
+    for (const p of demo.players || []) {
+      if (!p?.id) continue;
+      players.set(`${demo.id}:${p.id}`, {
+        name: p.name || p.id,
+        team: p.team || 0,
+        demoId: demo.id
+      });
+    }
+    for (const row of demo.rounds || []) {
+      if (row?.f && want.has(row.f)) rows.push(row);
+    }
+  }
+  return aggregatePlayers(rows, players, { files: [...want] });
 }
 
 /** Unique players across a stats payload. */

@@ -3603,3 +3603,57 @@ body.rv-open {
   color: var(--text);
   font-size: 13px;
 }
+
+.an-lb-scroll {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.an-lb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.an-lb-table th,
+.an-lb-table td {
+  padding: 6px 8px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.an-lb-table th:nth-child(2),
+.an-lb-table td:nth-child(2),
+.an-lb-table th:first-child,
+.an-lb-table td:first-child {
+  text-align: left;
+}
+
+.an-lb-table th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+
+.an-lb-name {
+  font-weight: 600;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.an-lb-row.focus {
+  background: rgba(232, 184, 74, 0.12);
+}
+
+.an-lb-row.focus .an-lb-name {
+  color: #e8b84a;
+}

@@ -17,6 +17,12 @@ import {
   strokeBrush
 } from '../replays/zones/visionLayers.js';
 import { ensureBombSites } from '../replays/zones/bombSites.js';
+import {
+  KEY_ZONES_MAX,
+  addKeyZone,
+  clearKeyZones,
+  ensureKeyZones
+} from '../replays/zones/keyZones.js';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 6;
@@ -26,6 +32,8 @@ const VISION_COLOR = '#9b6cff';
 const ELEVATED_COLOR = '#e8a03c';
 const BOMB_A_COLOR = '#e8c040';
 const BOMB_B_COLOR = '#4aa3ff';
+const KEY_A_COLOR = '#c9a227';
+const KEY_B_COLOR = '#3d7ab8';
 
 const el = {
   mapTabs: document.querySelector('#ze-maps'),
@@ -36,6 +44,8 @@ const el = {
   layerCounts: document.querySelector('#ze-layer-counts'),
   bombAStatus: document.querySelector('#ze-bomb-a-status'),
   bombBStatus: document.querySelector('#ze-bomb-b-status'),
+  keyAStatus: document.querySelector('#ze-key-a-status'),
+  keyBStatus: document.querySelector('#ze-key-b-status'),
   status: document.querySelector('#ze-status'),
   btnDiscard: document.querySelector('#ze-discard'),
   btnSave: document.querySelector('#ze-save'),
@@ -44,6 +54,8 @@ const el = {
   btnReset: document.querySelector('#ze-reset'),
   toolBombA: document.querySelector('#ze-tool-bomb-a'),
   toolBombB: document.querySelector('#ze-tool-bomb-b'),
+  toolKeyA: document.querySelector('#ze-tool-key-a'),
+  toolKeyB: document.querySelector('#ze-tool-key-b'),
   toolVision: document.querySelector('#ze-tool-vision'),
   toolElevated: document.querySelector('#ze-tool-elevated'),
   toolErase: document.querySelector('#ze-tool-erase'),
@@ -52,13 +64,16 @@ const el = {
   btnClearVision: document.querySelector('#ze-clear-vision'),
   btnClearElevated: document.querySelector('#ze-clear-elevated'),
   btnClearBombA: document.querySelector('#ze-clear-bomb-a'),
-  btnClearBombB: document.querySelector('#ze-clear-bomb-b')
+  btnClearBombB: document.querySelector('#ze-clear-bomb-b'),
+  btnClearKeyA: document.querySelector('#ze-clear-key-a'),
+  btnClearKeyB: document.querySelector('#ze-clear-key-b')
 };
 
 let mapCode = MAP_CODES.includes('INF') ? 'INF' : MAP_CODES[0];
 let network = emptyNetwork(mapCode);
 ensureVisionLayers(network);
 ensureBombSites(network);
+ensureKeyZones(network);
 let savedSnapshot = '';
 /** @type {Array<object>} */
 let undoStack = [];
@@ -71,7 +86,7 @@ let dirty = false;
 let drawing = null;
 let panning = false;
 let lastPan = null;
-/** @type {'bombA'|'bombB'|'visionBlock'|'elevated'|'erase'} */
+/** @type {'bombA'|'bombB'|'keyA'|'keyB'|'visionBlock'|'elevated'|'erase'} */
 let paintTool = 'bombA';
 let eraseTarget = 'visionBlock';
 let brushPx = DEFAULT_BRUSH_PX;
@@ -81,10 +96,12 @@ let brushing = null;
 function snapshotOf(net) {
   ensureBombSites(net);
   ensureVisionLayers(net);
+  ensureKeyZones(net);
   return JSON.stringify({
     visionBlocks: net.visionBlocks || [],
     elevated: net.elevated || [],
-    bombSites: net.bombSites || { a: null, b: null }
+    bombSites: net.bombSites || { a: null, b: null },
+    keyZones: net.keyZones || { a: [], b: [] }
   });
 }
 
@@ -100,9 +117,23 @@ function isBombTool(tool = paintTool) {
   return tool === 'bombA' || tool === 'bombB';
 }
 
+function isKeyTool(tool = paintTool) {
+  return tool === 'keyA' || tool === 'keyB';
+}
+
+function isRectTool(tool = paintTool) {
+  return isBombTool(tool) || isKeyTool(tool);
+}
+
 function bombSiteForTool(tool = paintTool) {
   if (tool === 'bombA') return 'a';
   if (tool === 'bombB') return 'b';
+  return null;
+}
+
+function keySiteForTool(tool = paintTool) {
+  if (tool === 'keyA') return 'a';
+  if (tool === 'keyB') return 'b';
   return null;
 }
 
@@ -158,8 +189,10 @@ function undoLast() {
   network.visionBlocks = prev.visionBlocks || [];
   network.elevated = prev.elevated || [];
   network.bombSites = prev.bombSites || { a: null, b: null };
+  network.keyZones = prev.keyZones || { a: [], b: [] };
   ensureVisionLayers(network);
   ensureBombSites(network);
+  ensureKeyZones(network);
   bumpLayerPaintGen(network);
   markDirty(snapshotOf(network) !== savedSnapshot);
   syncUi();
@@ -177,12 +210,22 @@ function syncUi() {
   }
   if (el.bombAStatus) el.bombAStatus.textContent = network.bombSites.a ? 'Set' : '—';
   if (el.bombBStatus) el.bombBStatus.textContent = network.bombSites.b ? 'Set' : '—';
+  if (el.keyAStatus) {
+    el.keyAStatus.textContent = `${network.keyZones?.a?.length || 0}/${KEY_ZONES_MAX}`;
+  }
+  if (el.keyBStatus) {
+    el.keyBStatus.textContent = `${network.keyZones?.b?.length || 0}/${KEY_ZONES_MAX}`;
+  }
 
   const isBrush = isBrushTool();
   el.toolBombA?.classList.toggle('active', paintTool === 'bombA');
   el.toolBombA?.classList.toggle('bomb-a', paintTool === 'bombA');
   el.toolBombB?.classList.toggle('active', paintTool === 'bombB');
   el.toolBombB?.classList.toggle('bomb-b', paintTool === 'bombB');
+  el.toolKeyA?.classList.toggle('active', paintTool === 'keyA');
+  el.toolKeyA?.classList.toggle('key-a', paintTool === 'keyA');
+  el.toolKeyB?.classList.toggle('active', paintTool === 'keyB');
+  el.toolKeyB?.classList.toggle('key-b', paintTool === 'keyB');
   el.toolVision?.classList.toggle('active', paintTool === 'visionBlock');
   el.toolVision?.classList.toggle('vision', paintTool === 'visionBlock');
   el.toolElevated?.classList.toggle('active', paintTool === 'elevated');
@@ -313,12 +356,46 @@ function draw() {
   drawBomb(network.bombSites.a, BOMB_A_COLOR, 'A');
   drawBomb(network.bombSites.b, BOMB_B_COLOR, 'B');
 
-  if (drawing && isBombTool()) {
+  ensureKeyZones(network);
+  const drawKeyList = (list, color, prefix) => {
+    (list || []).forEach((rect, i) => {
+      if (!rect) return;
+      const a = worldToRadar(mapCode, rect.x, rect.y, {});
+      const b = worldToRadar(mapCode, rect.x + rect.w, rect.y + rect.h, {});
+      const x = Math.min(a.x, b.x);
+      const y = Math.min(a.y, b.y);
+      const rw = Math.abs(b.x - a.x);
+      const rh = Math.abs(b.y - a.y);
+      ctx.fillStyle = hexAlpha(color, 0.18);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5 / t.scale;
+      ctx.setLineDash([4 / t.scale, 3 / t.scale]);
+      ctx.fillRect(x, y, rw, rh);
+      ctx.strokeRect(x, y, rw, rh);
+      ctx.setLineDash([]);
+      ctx.fillStyle = color;
+      ctx.font = `600 ${Math.max(10, 11 / t.scale)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`${prefix}${i + 1}`, x + rw / 2, y + rh / 2);
+    });
+  };
+  drawKeyList(network.keyZones.a, KEY_A_COLOR, 'A');
+  drawKeyList(network.keyZones.b, KEY_B_COLOR, 'B');
+
+  if (drawing && isRectTool()) {
     const x0 = Math.min(drawing.r0.x, drawing.r1.x);
     const y0 = Math.min(drawing.r0.y, drawing.r1.y);
     const rw = Math.abs(drawing.r1.x - drawing.r0.x);
     const rh = Math.abs(drawing.r1.y - drawing.r0.y);
-    const color = paintTool === 'bombA' ? BOMB_A_COLOR : BOMB_B_COLOR;
+    const color =
+      paintTool === 'bombA'
+        ? BOMB_A_COLOR
+        : paintTool === 'bombB'
+          ? BOMB_B_COLOR
+          : paintTool === 'keyA'
+            ? KEY_A_COLOR
+            : KEY_B_COLOR;
     ctx.fillStyle = hexAlpha(color, 0.25);
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.5 / t.scale;
@@ -354,10 +431,12 @@ async function loadMap(code) {
     network = await fetchZones(mapCode);
     ensureVisionLayers(network);
     ensureBombSites(network);
+    ensureKeyZones(network);
   } catch (err) {
     network = emptyNetwork(mapCode);
     ensureVisionLayers(network);
     ensureBombSites(network);
+    ensureKeyZones(network);
     setStatus(err.message || 'Could not load', 'err');
   }
   savedSnapshot = snapshotOf(network);
@@ -399,23 +478,64 @@ function clearBombSite(site) {
   setStatus(`Cleared bomb site ${site.toUpperCase()}`);
 }
 
+function commitKeyZone(site, worldRect) {
+  if (worldRect.w < 8 || worldRect.h < 8) return;
+  ensureKeyZones(network);
+  const list = site === 'b' ? network.keyZones.b : network.keyZones.a;
+  if (list.length >= KEY_ZONES_MAX) {
+    setStatus(`Key ${site.toUpperCase()} already has ${KEY_ZONES_MAX} zones`, 'err');
+    draw();
+    return;
+  }
+  pushUndo();
+  addKeyZone(network, site, {
+    type: 'rect',
+    x: worldRect.x,
+    y: worldRect.y,
+    w: worldRect.w,
+    h: worldRect.h
+  });
+  markDirty(true);
+  syncUi();
+  draw();
+  setStatus(`Key ${site.toUpperCase()} #${list.length} added`);
+}
+
+function clearKeySite(site) {
+  ensureKeyZones(network);
+  const list = site === 'b' ? network.keyZones.b : network.keyZones.a;
+  if (!list.length) return;
+  if (!confirm(`Clear all key zones for ${site.toUpperCase()}?`)) return;
+  pushUndo();
+  clearKeyZones(network, site);
+  markDirty(true);
+  syncUi();
+  draw();
+  setStatus(`Cleared key ${site.toUpperCase()}`);
+}
+
 function tryFinishDraw() {
   if (!drawing) return;
   const { r0, r1 } = drawing;
   drawing = null;
   const dx = Math.abs(r1.x - r0.x);
   const dy = Math.abs(r1.y - r0.y);
-  const site = bombSiteForTool();
   if (dx < MIN_DRAW_PX || dy < MIN_DRAW_PX) {
     draw();
     return;
   }
-  if (!site) {
-    draw();
+  const worldRect = worldRectFromRadarDrag(mapCode, radarToWorld, r0.x, r0.y, r1.x, r1.y);
+  const bombSite = bombSiteForTool();
+  if (bombSite) {
+    commitBombSite(bombSite, worldRect);
     return;
   }
-  const worldRect = worldRectFromRadarDrag(mapCode, radarToWorld, r0.x, r0.y, r1.x, r1.y);
-  commitBombSite(site, worldRect);
+  const keySite = keySiteForTool();
+  if (keySite) {
+    commitKeyZone(keySite, worldRect);
+    return;
+  }
+  draw();
 }
 
 function applyBrushAt(from, to, layer, erase) {
@@ -454,6 +574,7 @@ el.canvas.addEventListener('pointerdown', (e) => {
     updateBrushRing(e.clientX, e.clientY);
     return;
   }
+  if (!isRectTool()) return;
   drawing = { r0: r, r1: { ...r } };
   el.canvas.setPointerCapture(e.pointerId);
 });
@@ -505,11 +626,15 @@ el.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 el.toolBombA?.addEventListener('click', () => setPaintTool('bombA'));
 el.toolBombB?.addEventListener('click', () => setPaintTool('bombB'));
+el.toolKeyA?.addEventListener('click', () => setPaintTool('keyA'));
+el.toolKeyB?.addEventListener('click', () => setPaintTool('keyB'));
 el.toolVision?.addEventListener('click', () => setPaintTool('visionBlock'));
 el.toolElevated?.addEventListener('click', () => setPaintTool('elevated'));
 el.toolErase?.addEventListener('click', () => setPaintTool('erase'));
 el.btnClearBombA?.addEventListener('click', () => clearBombSite('a'));
 el.btnClearBombB?.addEventListener('click', () => clearBombSite('b'));
+el.btnClearKeyA?.addEventListener('click', () => clearKeySite('a'));
+el.btnClearKeyB?.addEventListener('click', () => clearKeySite('b'));
 
 el.btnBrushDown?.addEventListener('click', () => {
   brushPx = Math.max(MIN_BRUSH_PX, brushPx - 1);
@@ -586,10 +711,12 @@ el.btnDiscard?.addEventListener('click', async () => {
     network = await fetchZones(mapCode);
     ensureVisionLayers(network);
     ensureBombSites(network);
+    ensureKeyZones(network);
   } catch {
     network = emptyNetwork(mapCode);
     ensureVisionLayers(network);
     ensureBombSites(network);
+    ensureKeyZones(network);
   }
   savedSnapshot = snapshotOf(network);
   clearUndo();
@@ -600,18 +727,21 @@ el.btnDiscard?.addEventListener('click', async () => {
 });
 
 el.btnSave?.addEventListener('click', async () => {
+  ensureVisionLayers(network);
+  ensureBombSites(network);
+  ensureKeyZones(network);
   setStatus('Saving…');
   try {
-    ensureVisionLayers(network);
-    ensureBombSites(network);
     network = await saveZones(mapCode, network);
     ensureVisionLayers(network);
     ensureBombSites(network);
+    ensureKeyZones(network);
     savedSnapshot = snapshotOf(network);
-    clearUndo();
     markDirty(false);
-    setStatus('Saved', 'ok');
+    clearUndo();
     syncUi();
+    draw();
+    setStatus('Saved', 'ok');
   } catch (err) {
     setStatus(err.message || 'Save failed', 'err');
   }

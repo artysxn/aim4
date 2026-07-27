@@ -307,15 +307,16 @@ export async function fetchZones(map) {
       visionBlocks: [],
       elevated: [],
       bombSites: { a: null, b: null },
+      keyZones: { a: [], b: [] },
       updatedAt: 0
     }
   );
 }
 
 /**
- * Persist bombsites + vision layers for one map.
+ * Persist bombsites + vision layers + key zones for one map.
  * @param {string} map
- * @param {{ visionBlocks?: Array, elevated?: Array, bombSites?: { a?: object | null, b?: object | null } }} network
+ * @param {{ visionBlocks?: Array, elevated?: Array, bombSites?: object, keyZones?: object }} network
  */
 export async function saveZones(map, network) {
   const data = await asJson(
@@ -325,7 +326,8 @@ export async function saveZones(map, network) {
       body: JSON.stringify({
         visionBlocks: network.visionBlocks || [],
         elevated: network.elevated || [],
-        bombSites: network.bombSites || { a: null, b: null }
+        bombSites: network.bombSites || { a: null, b: null },
+        keyZones: network.keyZones || { a: [], b: [] }
       })
     })
   );

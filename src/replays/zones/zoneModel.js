@@ -11,6 +11,7 @@ export function emptyNetwork(map) {
     visionBlocks: [],
     elevated: [],
     bombSites: { a: null, b: null },
+    keyZones: { a: [], b: [] },
     updatedAt: 0
   };
 }

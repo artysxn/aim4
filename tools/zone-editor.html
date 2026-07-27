@@ -147,6 +147,14 @@
     border-color: rgba(80, 160, 240, 0.7);
     background: rgba(50, 130, 210, 0.18);
   }
+  .ze-float button.active.key-a {
+    border-color: rgba(201, 162, 39, 0.75);
+    background: rgba(201, 162, 39, 0.16);
+  }
+  .ze-float button.active.key-b {
+    border-color: rgba(61, 122, 184, 0.75);
+    background: rgba(61, 122, 184, 0.16);
+  }
   #ze-brush-size {
     min-width: 28px;
     text-align: center;
@@ -252,6 +260,8 @@
         <div class="ze-float">
           <button type="button" class="ze-tool-wide active bomb-a" id="ze-tool-bomb-a" title="Draw bomb site A" data-tool="bombA">Bomb A</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-bomb-b" title="Draw bomb site B" data-tool="bombB">Bomb B</button>
+          <button type="button" class="ze-tool-wide" id="ze-tool-key-a" title="Key zone for A (up to 4)" data-tool="keyA">Key A</button>
+          <button type="button" class="ze-tool-wide" id="ze-tool-key-b" title="Key zone for B (up to 4)" data-tool="keyB">Key B</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-vision" title="Paint vision blockers" data-tool="visionBlock">Vision block</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-elevated" title="Paint elevated" data-tool="elevated">Elevated</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-erase" title="Erase vision paint" data-tool="erase">Erase</button>
@@ -283,6 +293,22 @@
             <span style="font-size:12px;color:var(--muted)">Site B</span>
             <span id="ze-bomb-b-status" style="font-size:11px;color:var(--muted)">—</span>
             <button type="button" class="ze-icon-btn" id="ze-clear-bomb-b" title="Clear B">✕</button>
+          </div>
+        </div>
+        <div>
+          <h2>Key zones</h2>
+          <p class="ze-empty">Up to 4 rectangles per site (entries, defaults, …). Used later for coaching.</p>
+          <div class="ze-row" style="grid-template-columns: 14px 1fr auto auto; margin-top: 8px;">
+            <span class="ze-swatch" style="background:#c9a227"></span>
+            <span style="font-size:12px;color:var(--muted)">Key A</span>
+            <span id="ze-key-a-status" style="font-size:11px;color:var(--muted)">0/4</span>
+            <button type="button" class="ze-icon-btn" id="ze-clear-key-a" title="Clear key A">✕</button>
+          </div>
+          <div class="ze-row" style="grid-template-columns: 14px 1fr auto auto; margin-top: 6px;">
+            <span class="ze-swatch" style="background:#3d7ab8"></span>
+            <span style="font-size:12px;color:var(--muted)">Key B</span>
+            <span id="ze-key-b-status" style="font-size:11px;color:var(--muted)">0/4</span>
+            <button type="button" class="ze-icon-btn" id="ze-clear-key-b" title="Clear key B">✕</button>
           </div>
         </div>
         <div>

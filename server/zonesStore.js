@@ -14,6 +14,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ROOT as REPLAY_ROOT } from './replays/demoStore.js';
+import { sanitizeKeyZones } from '../src/replays/zones/keyZones.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -97,6 +98,7 @@ export function emptyZones(map) {
     visionBlocks: [],
     elevated: [],
     bombSites: { a: null, b: null },
+    keyZones: { a: [], b: [] },
     updatedAt: 0
   };
 }
@@ -114,6 +116,7 @@ export function sanitizeZones(map, payload) {
     visionBlocks: sanitizeLayerPieces(src.visionBlocks),
     elevated: sanitizeLayerPieces(src.elevated),
     bombSites: sanitizeBombSites(src.bombSites),
+    keyZones: sanitizeKeyZones(src.keyZones),
     updatedAt: Number(src.updatedAt) || Date.now()
   };
 }
@@ -187,6 +190,10 @@ export async function saveZones(map, payload) {
       payload?.bombSites && typeof payload.bombSites === 'object'
         ? payload.bombSites
         : existing.bombSites || { a: null, b: null },
+    keyZones:
+      payload?.keyZones && typeof payload.keyZones === 'object'
+        ? payload.keyZones
+        : existing.keyZones || { a: [], b: [] },
     updatedAt: Date.now()
   };
 

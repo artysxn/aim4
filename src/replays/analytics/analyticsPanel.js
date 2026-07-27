@@ -8,6 +8,7 @@ import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
 import { attachTips } from '../stats/statsTables.js';
 import {
   aggregateAnalyticsAsync,
+  leaderboardFromFiles,
   listPlayers
 } from './analyticsMath.js';
 import { createPresenceRadar } from './presenceRadar.js';
@@ -64,13 +65,17 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     oppHasAwp: false,
     /** @type {''|'won'|'lost'} */
     result: '',
+    /** @type {''|'won'|'lost'} */
+    opening: '',
     /** @type {Set<string>} */
     phases: new Set(),
     /** @type {Array<object>} */
     shapes: [],
+    /** @type {'all'|'any'} */
+    shapeMatch: 'all',
     /** @type {ShapeFeature|'player_in'} */
     drawFeature: 'player_in',
-    /** @type {''|'rect'|'poly'} */
+    /** @type {''|'rect'|'poly'|'lasso'} */
     drawMode: ''
   };
 
@@ -96,8 +101,10 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       hasAwp: state.hasAwp,
       oppHasAwp: state.oppHasAwp,
       result: state.result,
+      opening: state.opening,
       phases: state.phases,
-      shapes: state.shapes
+      shapes: state.shapes,
+      shapeMatch: state.shapeMatch
     };
   }
 
@@ -207,6 +214,13 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
             ${chip(state.result === 'lost', 'data-an-result="lost"', 'Lost')}
           </div>
         </div>
+        <div class="an-field">
+          <span class="an-label">Opening</span>
+          <div class="rp-chips">
+            ${chip(state.opening === 'won', 'data-an-opening="won"', 'Got OK')}
+            ${chip(state.opening === 'lost', 'data-an-opening="lost"', 'Got OD')}
+          </div>
+        </div>
         <div class="an-field an-buy-row">
           <span class="an-label">Buy</span>
           ${econSelect('econ', state.econ)}
@@ -227,7 +241,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         </div>
 
         <p class="an-side-title">Map selections</p>
-        <p class="an-side-hint">Draw on the radar, pick what to detect.</p>
+        <p class="an-side-hint">Draw multiple regions; matching rounds feed stats and the leaderboard.</p>
         <div class="an-field">
           <span class="an-label">Feature</span>
           <select class="site-select an-select" id="an-shape-feature">
@@ -240,10 +254,18 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
           </select>
         </div>
         <div class="an-field">
+          <span class="an-label">Match</span>
+          <div class="rp-chips">
+            ${chip(state.shapeMatch === 'all', 'data-an-match="all"', 'All')}
+            ${chip(state.shapeMatch === 'any', 'data-an-match="any"', 'Any')}
+          </div>
+        </div>
+        <div class="an-field">
           <span class="an-label">Draw</span>
           <div class="rp-chips">
             ${chip(state.drawMode === 'rect', 'data-an-draw="rect"', 'Rect')}
             ${chip(state.drawMode === 'poly', 'data-an-draw="poly"', 'Polygon')}
+            ${chip(state.drawMode === 'lasso', 'data-an-draw="lasso"', 'Lasso')}
             ${
               state.drawMode === 'poly'
                 ? `<button type="button" class="rp-chip" data-an-poly-done>Finish</button>`
@@ -382,7 +404,9 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         ? 'Drag a rectangle on the radar.'
         : state.drawMode === 'poly'
           ? 'Click vertices · double-click or Finish to close.'
-          : 'Scroll to zoom · drag to pan · draw tools in the sidebar.';
+          : state.drawMode === 'lasso'
+            ? 'Drag freely to lasso a region · release to add.'
+            : 'Scroll to zoom · drag to pan · draw tools in the sidebar.';
     return `<section class="an-card an-breakdown">
       <header class="an-card-head an-break-head">
         <div>
@@ -402,6 +426,50 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         <div class="an-radar-wrap" id="an-radar-wrap">
           <canvas class="an-radar" id="an-radar" aria-label="Selection radar"></canvas>
         </div>
+      </div>
+    </section>`;
+  }
+
+  function renderLeaderboard(rows, focusId, roundCount) {
+    if (!rows.length) {
+      return `<section class="an-card"><p class="view-empty">No players on matching rounds.</p></section>`;
+    }
+    const top = rows.slice(0, 40);
+    return `<section class="an-card an-lb">
+      <header class="an-card-head">
+        <h3 class="an-section-title">Leaderboard <small>${roundCount} rounds</small></h3>
+        <span class="an-muted">Full-round stats on rounds matching the filters above</span>
+      </header>
+      <div class="an-lb-scroll">
+        <table class="an-lb-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Player</th>
+              <th>R</th>
+              <th>Rating</th>
+              <th>K/D</th>
+              <th>ADR</th>
+              <th>KAST</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${top
+              .map((p, i) => {
+                const focus = p.id === focusId ? ' focus' : '';
+                return `<tr class="an-lb-row${focus}">
+                  <td>${i + 1}</td>
+                  <td class="an-lb-name">${escapeHtml(p.name || p.id)}</td>
+                  <td>${p.rounds}</td>
+                  <td>${fmt(p.rating)}</td>
+                  <td>${fmt(p.kd)}</td>
+                  <td>${fmt(p.adr, 1)}</td>
+                  <td>${fmt(p.kast, 1)}%</td>
+                </tr>`;
+              })
+              .join('')}
+          </tbody>
+        </table>
       </div>
     </section>`;
   }
@@ -468,8 +536,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
             enabled: true
           });
           persistShapes();
-          state.drawMode = '';
-          radar?.setDrawMode('');
+          // Keep draw mode so multiple selections can be added quickly.
           render();
         }
       });
@@ -504,6 +571,9 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     const agg = await aggregateAnalyticsAsync(payload, filter, tickCache);
     if (token !== renderToken) return;
 
+    const lb = leaderboardFromFiles(payload, agg.files);
+    if (token !== renderToken) return;
+
     const needsPh = (payload.demos || []).some((d) =>
       (d.rounds || []).some((r) => r.m === state.map && !r.ph)
     );
@@ -515,6 +585,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       }
       ${renderStats(agg)}
       ${renderRadarCard()}
+      ${renderLeaderboard(lb, state.playerId, agg.rounds)}
       ${renderRounds(agg)}`;
     paintRadar();
   }
@@ -603,6 +674,19 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       render();
       return;
     }
+    const opening = e.target.closest('[data-an-opening]');
+    if (opening) {
+      const v = opening.dataset.anOpening === 'lost' ? 'lost' : 'won';
+      state.opening = state.opening === v ? '' : v;
+      render();
+      return;
+    }
+    const match = e.target.closest('[data-an-match]');
+    if (match) {
+      state.shapeMatch = match.dataset.anMatch === 'any' ? 'any' : 'all';
+      render();
+      return;
+    }
     const phase = e.target.closest('[data-an-phase]');
     if (phase) {
       const key = phase.dataset.anPhase;
@@ -613,7 +697,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     }
     const draw = e.target.closest('[data-an-draw]');
     if (draw) {
-      const mode = draw.dataset.anDraw === 'poly' ? 'poly' : 'rect';
+      const raw = draw.dataset.anDraw;
+      const mode = raw === 'poly' || raw === 'lasso' ? raw : 'rect';
       state.drawMode = state.drawMode === mode ? '' : mode;
       radar?.setDrawMode(state.drawMode);
       renderSidebar();
@@ -648,7 +733,9 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       state.hasAwp = false;
       state.oppHasAwp = false;
       state.result = '';
+      state.opening = '';
       state.phases.clear();
+      state.shapeMatch = 'all';
       state.drawMode = '';
       for (const s of state.shapes) s.enabled = false;
       persistShapes();

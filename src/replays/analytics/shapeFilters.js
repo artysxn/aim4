@@ -264,16 +264,24 @@ export function shapePassesWindow({ meta, tickBuffer, playerId, phase, shape }) 
 }
 
 /**
- * Active shapes must all pass (AND). Empty / all-disabled ⇒ pass.
+ * Filter phase windows by drawn shapes.
+ * `matchMode`: `'all'` (AND, default) or `'any'` (OR). Empty / all-disabled ⇒ pass.
  * Loads meta + ticks per distinct round file (cached by caller).
  *
  * @param {Array<{ file: string, phase: string, playerId: string, [k: string]: any }>} windows
  * @param {Array<object>} shapes
  * @param {Map<string, { meta: object|null, ticks: ArrayBuffer|null }>} [cache]
+ * @param {'all'|'any'} [matchMode]
  */
-export async function filterWindowsByShapes(windows, shapes, cache = new Map()) {
+export async function filterWindowsByShapes(
+  windows,
+  shapes,
+  cache = new Map(),
+  matchMode = 'all'
+) {
   const active = (shapes || []).filter((s) => s && s.enabled !== false && s.geometry);
   if (!active.length) return windows;
+  const requireAll = matchMode !== 'any';
 
   const out = [];
   for (const w of windows) {
@@ -297,18 +305,22 @@ export async function filterWindowsByShapes(windows, shapes, cache = new Map()) 
     }
     if (!pack.meta) continue;
 
-    let ok = true;
+    let ok = requireAll;
     for (const shape of active) {
-      if (
-        !shapePassesWindow({
-          meta: pack.meta,
-          tickBuffer: pack.ticks,
-          playerId: w.playerId,
-          phase: w.phase,
-          shape
-        })
-      ) {
-        ok = false;
+      const pass = shapePassesWindow({
+        meta: pack.meta,
+        tickBuffer: pack.ticks,
+        playerId: w.playerId,
+        phase: w.phase,
+        shape
+      });
+      if (requireAll) {
+        if (!pass) {
+          ok = false;
+          break;
+        }
+      } else if (pass) {
+        ok = true;
         break;
       }
     }

@@ -24,7 +24,7 @@ export function createPresenceRadar(els) {
   let mapCode = '';
   /** @type {Array<object>} */
   let shapes = [];
-  /** @type {''|'rect'|'poly'} */
+  /** @type {''|'rect'|'poly'|'lasso'} */
   let drawMode = '';
   let zoom = 1;
   let panX = 0;
@@ -36,11 +36,14 @@ export function createPresenceRadar(els) {
   let dragLastX = 0;
   let dragLastY = 0;
 
-  /** Rect drag in radar px (image space 0..RADAR_SIZE). */
+  /** Rect drag in world coords. */
   let rectStart = null;
   let rectCur = null;
   /** @type {Array<[number, number]>} world verts while drawing poly */
   let polyVerts = [];
+  /** @type {Array<[number, number]>} world path while lassoing */
+  let lassoPath = [];
+  let lassoing = false;
 
   function clampPan(viewW, viewH) {
     const world = Math.min(viewW, viewH) * zoom;
@@ -169,6 +172,26 @@ export function createPresenceRadar(els) {
       }
     }
 
+    // In-progress lasso
+    if (lassoPath.length) {
+      ctx.beginPath();
+      lassoPath.forEach(([wx, wy], i) => {
+        const p = toCanvas(wx, wy);
+        if (i === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      });
+      if (lassoPath.length >= 3) {
+        const first = toCanvas(lassoPath[0][0], lassoPath[0][1]);
+        ctx.lineTo(first.x, first.y);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(120, 200, 255, 0.14)';
+        ctx.fill();
+      }
+      ctx.strokeStyle = 'rgba(120, 200, 255, 0.95)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
     ctx.restore();
 
     if (zoom > 1.01) {
@@ -185,7 +208,7 @@ export function createPresenceRadar(els) {
   /**
    * @param {string} nextMap
    * @param {Array<object>} nextShapes
-   * @param {''|'rect'|'poly'} [nextDrawMode]
+   * @param {''|'rect'|'poly'|'lasso'} [nextDrawMode]
    */
   function setData(nextMap, nextShapes, nextDrawMode) {
     const mapChanged = nextMap !== mapCode;
@@ -215,6 +238,43 @@ export function createPresenceRadar(els) {
     rectStart = null;
     rectCur = null;
     polyVerts = [];
+    lassoPath = [];
+    lassoing = false;
+  }
+
+  /** Drop near-duplicate points; keep ≤64 verts for shape storage. */
+  function simplifyLasso(path) {
+    if (!path?.length) return [];
+    const minDist = 24;
+    /** @type {Array<[number, number]>} */
+    const out = [path[0]];
+    for (let i = 1; i < path.length; i++) {
+      const [x, y] = path[i];
+      const [lx, ly] = out[out.length - 1];
+      const dx = x - lx;
+      const dy = y - ly;
+      if (dx * dx + dy * dy >= minDist * minDist) out.push([x, y]);
+    }
+    if (out.length > 64) {
+      const step = Math.ceil(out.length / 64);
+      const thinned = [];
+      for (let i = 0; i < out.length; i += step) thinned.push(out[i]);
+      if (thinned[thinned.length - 1] !== out[out.length - 1]) thinned.push(out[out.length - 1]);
+      return thinned;
+    }
+    return out;
+  }
+
+  function finishLasso() {
+    const ring = simplifyLasso(lassoPath);
+    lassoPath = [];
+    lassoing = false;
+    if (ring.length < 3) {
+      paint();
+      return;
+    }
+    onShapeComplete?.({ type: 'poly', ring });
+    paint();
   }
 
   function finishPoly() {
@@ -261,6 +321,14 @@ export function createPresenceRadar(els) {
       paint();
       return;
     }
+    if (drawMode === 'lasso') {
+      const w = canvasToWorld(e.clientX, e.clientY);
+      lassoing = true;
+      lassoPath = [[w.x, w.y]];
+      canvas.setPointerCapture?.(e.pointerId);
+      paint();
+      return;
+    }
     if (drawMode === 'poly') {
       const w = canvasToWorld(e.clientX, e.clientY);
       polyVerts.push([w.x, w.y]);
@@ -282,6 +350,15 @@ export function createPresenceRadar(els) {
       paint();
       return;
     }
+    if (drawMode === 'lasso' && lassoing) {
+      const w = canvasToWorld(e.clientX, e.clientY);
+      const last = lassoPath[lassoPath.length - 1];
+      if (!last || (w.x - last[0]) ** 2 + (w.y - last[1]) ** 2 >= 12 * 12) {
+        lassoPath.push([w.x, w.y]);
+        paint();
+      }
+      return;
+    }
     if (!dragging) return;
     panX += e.clientX - dragLastX;
     panY += e.clientY - dragLastY;
@@ -291,6 +368,15 @@ export function createPresenceRadar(els) {
   }
 
   function onPointerUp(e) {
+    if (drawMode === 'lasso' && lassoing) {
+      try {
+        canvas.releasePointerCapture?.(e.pointerId);
+      } catch {
+        /* */
+      }
+      finishLasso();
+      return;
+    }
     if (drawMode === 'rect' && rectStart && rectCur) {
       const x = Math.min(rectStart.x, rectCur.x);
       const y = Math.min(rectStart.y, rectCur.y);
