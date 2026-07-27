@@ -3462,6 +3462,46 @@ body.rv-open {
   vertical-align: top;
 }
 
+.an-shape-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.an-shape-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.an-shape-row.off .an-shape-toggle {
+  opacity: 0.55;
+}
+
+.an-shape-toggle {
+  flex: 1;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 2px;
+  cursor: pointer;
+}
+
+.an-shape-del {
+  border: 0;
+  background: transparent;
+  color: var(--muted, #9aa3b2);
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
 .an-break-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -23,6 +23,26 @@ import {
   emptyClaim
 } from './mapControl.js';
 import { getVisionLayerTests } from './visionLayers.js';
+import {
+  cellIdAt,
+  cellsNear,
+  ensureDynamicZones,
+  getCellGrid
+} from './dynamicControl.js';
+
+/**
+ * Attach walkable cell proxies so claim/paint code can run without painted positions.
+ * @param {object | null | undefined} network
+ * @param {string} mapCode
+ * @param {CanvasImageSource | null} [radarImage]
+ */
+export function prepareDynamicNetwork(network, mapCode, radarImage = null) {
+  if (!network || !mapCode) return network;
+  const los = radarImage ? getRadarLos(mapCode, radarImage) : null;
+  const grid = getCellGrid(mapCode, los);
+  if (!grid) return network;
+  return ensureDynamicZones(network, grid);
+}
 
 /** @typedef {'empty'|'t-active'|'t-control'|'ct-active'|'ct-control'|'contested'|'contested-active'} ZonePaint */
 
@@ -139,7 +159,8 @@ export function resetZoneVisionCache(cache) {
  *   activeCT: Map<string, number[]>
  * } | null}
  */
-export function buildZonePresence({ meta, track, network }) {
+export function buildZonePresence({ meta, track, network, mapCode = '', radarImage = null }) {
+  if (mapCode) prepareDynamicNetwork(network, mapCode, radarImage);
   if (!meta || !track || !network?.zones?.length) return null;
   const from = meta.freezeEndTick ?? meta.startTick ?? 0;
   const to = Math.max(from, meta.endTick ?? from);
@@ -189,7 +210,9 @@ export function buildZonePresence({ meta, track, network }) {
       if (side !== 'T' && side !== 'CT') continue;
       const s = scratch[p.slot];
       if (!s?.alive || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
-      const hits = positionsAtPoint(s.x, s.y, network);
+      const hits = network._dynGrid
+        ? cellsNear(network._dynGrid, s.x, s.y).map((id) => ({ id }))
+        : positionsAtPoint(s.x, s.y, network);
       const map = side === 'T' ? firstT : firstCT;
       for (const z of hits) {
         if (!z?.id) continue;
@@ -272,15 +295,23 @@ export function activePositionsAt({ meta, states, network }) {
   const ct = new Set();
   if (!meta || !network?.zones?.length) return { t, ct };
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
+  const grid = network._dynGrid;
   for (const p of meta.players || []) {
     const side = teamSides[p.team];
     if (side !== 'T' && side !== 'CT') continue;
     const s = states?.[p.slot];
     if (!s?.alive || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
-    for (const z of positionsAtPoint(s.x, s.y, network)) {
-      if (!z?.id) continue;
-      if (side === 'T') t.add(z.id);
-      else ct.add(z.id);
+    if (grid) {
+      for (const id of cellsNear(grid, s.x, s.y)) {
+        if (side === 'T') t.add(id);
+        else ct.add(id);
+      }
+    } else {
+      for (const z of positionsAtPoint(s.x, s.y, network)) {
+        if (!z?.id) continue;
+        if (side === 'T') t.add(z.id);
+        else ct.add(z.id);
+      }
     }
   }
   return { t, ct };
@@ -335,6 +366,34 @@ function rectsShareEdge(a, b, pad = ADJACENT_PAD) {
 export function buildPositionAdjacency(network) {
   if (!network?.zones?.length) return new Map();
   if (adjacencyCache.has(network)) return adjacencyCache.get(network);
+
+  // Dynamic cell grid: 4-neighbor adjacency (O(cells)).
+  const grid = network._dynGrid;
+  if (grid?.ids?.length) {
+    /** @type {Map<string, string[]>} */
+    const adj = new Map();
+    for (const id of grid.ids) adj.set(id, []);
+    const dirs = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1]
+    ];
+    for (let i = 0; i < grid.ids.length; i++) {
+      const id = grid.ids[i];
+      const ix = grid.ixOf[i];
+      const iy = grid.iyOf[i];
+      const list = adj.get(id);
+      for (const [dx, dy] of dirs) {
+        const j = grid.byKey.get(`${ix + dx},${iy + dy}`);
+        if (j == null) continue;
+        list.push(grid.ids[j]);
+      }
+    }
+    adjacencyCache.set(network, adj);
+    return adj;
+  }
+
   const positions = network.zones.filter((z) => z?.id && !z.hidden && z.pieces?.length);
   /** @type {Map<string, string[]>} */
   const adj = new Map();
@@ -500,12 +559,17 @@ function activeSmokes(grenades, tick, tickRate) {
   return out;
 }
 
-/** Position ids that currently have an active smoke on them. */
+/** Cell / position ids that currently have an active smoke on them. */
 function smokedPositions(grenades, tick, tickRate, network) {
   const ids = new Set();
+  const grid = network?._dynGrid;
   for (const s of activeSmokes(grenades, tick, tickRate)) {
-    for (const z of positionsAtPoint(s.x, s.y, network)) {
-      if (z?.id) ids.add(z.id);
+    if (grid) {
+      for (const id of cellsNear(grid, s.x, s.y, SMOKE_RADIUS_UNITS)) ids.add(id);
+    } else {
+      for (const z of positionsAtPoint(s.x, s.y, network)) {
+        if (z?.id) ids.add(z.id);
+      }
     }
   }
   return ids;
@@ -559,10 +623,19 @@ function castFovRay(
     if (layers?.visionBlockAt?.(x, y)) break;
     if (!viewerElevated && layers?.elevatedAt?.(x, y)) break;
     if (pointInSmoke(x, y, smokes)) break;
-    for (const z of positionsAtPoint(x, y, network)) {
-      if (!z?.id || smoked?.has(z.id)) continue;
-      hitCounts.set(z.id, (hitCounts.get(z.id) || 0) + 1);
-      touched.add(z.id);
+    const grid = network?._dynGrid;
+    if (grid) {
+      const id = cellIdAt(grid, x, y);
+      if (id && !smoked?.has(id)) {
+        hitCounts.set(id, (hitCounts.get(id) || 0) + 1);
+        touched.add(id);
+      }
+    } else {
+      for (const z of positionsAtPoint(x, y, network)) {
+        if (!z?.id || smoked?.has(z.id)) continue;
+        hitCounts.set(z.id, (hitCounts.get(z.id) || 0) + 1);
+        touched.add(z.id);
+      }
     }
   }
   for (const id of touched) {
@@ -579,20 +652,21 @@ function castFovRay(
  * @returns {(ctx: { viewer: object, tick: number }) => Map<string, number>}
  */
 export function createBeamCaster({ meta, network, mapCode, radarImage }) {
+  const prepared = prepareDynamicNetwork(network, mapCode, radarImage);
   const los = getRadarLos(mapCode, radarImage);
-  if (!los || !meta || !network) return () => new Map();
+  if (!los || !meta || !prepared?.zones?.length) return () => new Map();
   const tickRate = meta.tickRate || 64;
   const grenades = meta.events?.grenades || [];
   return ({ viewer, tick }) => {
     const smokeCenters = activeSmokes(grenades, tick, tickRate);
-    const smoked = smokedPositions(grenades, tick, tickRate, network);
+    const smoked = smokedPositions(grenades, tick, tickRate, prepared);
     return castPlayerBeams({
       viewer,
       los,
       smokeCenters,
-      network,
+      network: prepared,
       smoked,
-      layers: getVisionLayerTests(network, mapCode),
+      layers: getVisionLayerTests(prepared, mapCode),
       mapCode
     });
   };
@@ -790,7 +864,9 @@ function applyVisionClaims({
     sightNow: new Map(),
     claims: null
   };
-  if (!meta || !network?.zones?.length || !radarImage) return empty;
+  if (!meta || !radarImage) return empty;
+  prepareDynamicNetwork(network, mapCode, radarImage);
+  if (!network?.zones?.length) return empty;
   const los = getRadarLos(mapCode, radarImage);
   if (!los) return empty;
 
@@ -1170,6 +1246,7 @@ export function computeZonePaint({
 }) {
   /** @type {Record<string, ZonePaint>} */
   const paint = {};
+  prepareDynamicNetwork(network, mapCode, radarImage);
   if (!network?.zones?.length) return { paint };
 
   const active = activePositionsAt({ meta, states, network });

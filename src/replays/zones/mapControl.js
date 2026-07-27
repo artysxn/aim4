@@ -14,6 +14,7 @@
 
 import { pieceBounds } from './zoneGeom.js';
 import { positionsAtPoint } from './pointInZone.js';
+import { cellsNear } from './dynamicControl.js';
 
 /** Demo ticks between vision firings (one living player per stride). */
 export const VISION_STRIDE = 10;
@@ -347,15 +348,23 @@ export function activeFromStates(meta, states, network) {
   const t = new Set();
   const ct = new Set();
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
+  const grid = network?._dynGrid;
   for (const p of meta.players || []) {
     const side = teamSides[p.team];
     if (side !== 'T' && side !== 'CT') continue;
     const s = states?.[p.slot];
     if (!s?.alive || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
-    for (const z of positionsAtPoint(s.x, s.y, network)) {
-      if (!z?.id) continue;
-      if (side === 'T') t.add(z.id);
-      else ct.add(z.id);
+    if (grid) {
+      for (const id of cellsNear(grid, s.x, s.y)) {
+        if (side === 'T') t.add(id);
+        else ct.add(id);
+      }
+    } else {
+      for (const z of positionsAtPoint(s.x, s.y, network)) {
+        if (!z?.id) continue;
+        if (side === 'T') t.add(z.id);
+        else ct.add(z.id);
+      }
     }
   }
   return { t, ct };
@@ -372,7 +381,8 @@ export function activeFromStates(meta, states, network) {
  * @returns {Array<{ tick: number, t: number, ct: number, neu: number }>}
  */
 export function buildMapControlSeries({ meta, track, network, castPlayerBeams }) {
-  if (!meta || !track || !network?.zones?.length || !castPlayerBeams) return [];
+  if (!meta || !track || !castPlayerBeams) return [];
+  if (!network?.zones?.length) return [];
   const from = meta.freezeEndTick ?? meta.startTick ?? 0;
   const to = Math.max(from, meta.endTick ?? from);
   const scratch = [];

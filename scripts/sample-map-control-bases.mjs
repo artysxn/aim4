@@ -20,11 +20,11 @@ import {
 } from '../server/replays/demoStore.js';
 import { getZones } from '../server/zonesStore.js';
 import { TickTrack } from '../src/replays/tickStore.js';
-import { isZoneNetworkReady } from '../src/replays/zones/zoneModel.js';
-import { buildZonePresence } from '../src/replays/zones/zoneOverlay.js';
+import { prepareDynamicNetwork, buildZonePresence } from '../src/replays/zones/zoneOverlay.js';
 import {
   possessionSharesAt,
-  tickAtMapControlBaseline
+  tickAtMapControlBaseline,
+  mapControlAdvantageEnabled
 } from '../src/replays/coach/mapControlAdvantage.js';
 import { parseRoundId } from '../src/replays/shared/roundId.js';
 
@@ -58,10 +58,11 @@ async function main() {
     let network = zoneCache.get(map);
     if (network === undefined) {
       network = await getZones(map);
-      if (!isZoneNetworkReady(network)) network = null;
+      // Slim network is enough — dynamic cells attach at sample time.
+      if (!network) network = { map, visionBlocks: [], elevated: [], bombSites: { a: null, b: null } };
       zoneCache.set(map, network);
     }
-    if (!network) {
+    if (!mapControlAdvantageEnabled(map)) {
       skipped++;
       continue;
     }
@@ -85,7 +86,8 @@ async function main() {
       continue;
     }
     const track = new TickTrack(buf);
-    const presence = buildZonePresence({ meta, track, network });
+    prepareDynamicNetwork(network, map, null);
+    const presence = buildZonePresence({ meta, track, network, mapCode: map });
     if (!presence) {
       skipped++;
       continue;
@@ -129,7 +131,7 @@ async function main() {
     );
   }
 
-  console.log(`Skipped ${skipped} rounds (no zones / no ticks / planted early).`);
+  console.log(`Skipped ${skipped} rounds (no baseline map / no ticks / planted early).`);
 
   if (!Object.keys(bases).length) {
     console.error('No baselines computed.');

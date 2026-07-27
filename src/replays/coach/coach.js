@@ -22,7 +22,10 @@ import {
   mapControlAdvantageEnabled,
   possessionSharesAt
 } from './mapControlAdvantage.js';
-import { buildZonePresence } from '../zones/zoneOverlay.js';
+import {
+  buildZonePresence,
+  prepareDynamicNetwork
+} from '../zones/zoneOverlay.js';
 import { findRoundDecided } from './roundDecided.js';
 import { ALONE_DISTANCE, findCore, nearestTeammate } from './cores.js';
 import { findSiteExecuteFlags } from './siteExecute.js';
@@ -180,9 +183,12 @@ export function analyseRound({ meta, sampleAt, network = null, track = null }) {
   const to = Math.max(from, meta.endTick ?? from);
   const endTick = meta.endTick ?? to;
   const controlOn = mapControlAdvantageEnabled(meta.map, network);
+  if (controlOn && network && meta.map) {
+    prepareDynamicNetwork(network, meta.map, null);
+  }
   const presence =
-    controlOn && track
-      ? buildZonePresence({ meta, track, network })
+    controlOn && track && network?.zones?.length
+      ? buildZonePresence({ meta, track, network, mapCode: meta.map })
       : null;
   // Coachable window: 1s after freezetime ends → 1s before the winner is decided.
   const coachFrom = from + tickRate;

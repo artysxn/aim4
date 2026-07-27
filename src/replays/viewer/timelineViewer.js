@@ -31,11 +31,10 @@ import {
   computeZonePaint,
   createBeamCaster,
   createZoneVisionCache,
+  prepareDynamicNetwork,
   resetZoneVisionCache
 } from '../zones/zoneOverlay.js';
 import { buildMapControlSeries } from '../zones/mapControl.js';
-import { isZoneNetworkReady } from '../zones/zoneModel.js';
-import { hasBombSites } from '../zones/bombSites.js';
 import { mapControlAdvantageEnabled } from '../coach/mapControlAdvantage.js';
 import helmetSvg from '../../icons/helmet.svg?url';
 import kevlarSvg from '../../icons/kevlar.svg?url';
@@ -700,10 +699,17 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       return zoneNetwork;
     } catch {
       if (load === zoneLoadId) {
-        zoneNetwork = null;
-        zoneNetworkMap = '';
+        // Still allow dynamic map control with an empty slim network.
+        zoneNetwork = {
+          map,
+          visionBlocks: [],
+          elevated: [],
+          bombSites: { a: null, b: null },
+          updatedAt: 0
+        };
+        zoneNetworkMap = map;
       }
-      return null;
+      return zoneNetwork;
     }
   }
 
@@ -713,7 +719,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     // Needed for the positions overlay and for map-control win% (chart / coach).
     if (!zonesOn && !chartOn) return;
     const net = await ensureZoneNetwork();
-    if (!isZoneNetworkReady(net) || !activeMeta) return;
+    if (!net || !activeMeta) return;
+    const mapCode = renderer.mapCode || activeMeta.map || '';
+    prepareDynamicNetwork(net, mapCode, renderer.image);
+    if (!net.zones?.length) return;
     const file = files[activeIndex];
     const entry = store.get(file);
     if (entry?.isFull && zonePresenceCache.has(file)) {
@@ -722,7 +731,13 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     }
     const track = entry?.full || store.track(file);
     if (!track) return;
-    const presence = buildZonePresence({ meta: activeMeta, track, network: net });
+    const presence = buildZonePresence({
+      meta: activeMeta,
+      track,
+      network: net,
+      mapCode,
+      radarImage: renderer.image
+    });
     if (!presence) return;
     zonePresence = presence;
     // Only cache full-resolution presence so a coarse pass is not sticky.
@@ -730,7 +745,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   }
 
   function zoneOverlayForTick(tick) {
-    if (!zonesOn || !zoneNetwork?.zones?.length) return null;
+    if (!zonesOn || !zoneNetwork) return null;
+    const mapCode = renderer.mapCode || activeMeta?.map || '';
+    prepareDynamicNetwork(zoneNetwork, mapCode, renderer.image);
+    if (!zoneNetwork.zones?.length) return null;
     if (zonePresence && !zonePresence.events) zonePresence.events = new Map();
     const file = files[activeIndex];
     const track = store.get(file)?.full || store.track(file) || null;
@@ -740,7 +758,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       network: zoneNetwork,
       tick,
       presence: zonePresence,
-      mapCode: renderer.mapCode || activeMeta.map || '',
+      mapCode,
       radarImage: renderer.image,
       grenades: activeMeta.events?.grenades || [],
       visionCache: zoneVisionCache,
@@ -1763,18 +1781,11 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const scratch = [];
     let result;
     try {
-      // Pass zones when map-control and/or bomb-site execute notes can use them.
-      const net =
-        zoneNetwork &&
-        (hasBombSites(zoneNetwork) ||
-          (isZoneNetworkReady(zoneNetwork) &&
-            mapControlAdvantageEnabled(roundMeta.map, zoneNetwork)))
-          ? zoneNetwork
-          : null;
+      // Pass zones for bombsites and/or dynamic map-control.
       result = analyseRound({
         meta: roundMeta,
         track,
-        network: net,
+        network: zoneNetwork,
         sampleAt: (tick) => {
           track.sampleAll(tick, scratch);
           return scratch;
@@ -1804,19 +1815,17 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const track = file ? store.get(file)?.full || store.track(file) : null;
     if (!track || !activeMeta?.players?.length) return null;
     track.sampleAll(tick, coachScratch);
-    const net =
-      isZoneNetworkReady(zoneNetwork) &&
-      mapControlAdvantageEnabled(activeMeta.map, zoneNetwork)
-        ? zoneNetwork
-        : null;
+    const net = zoneNetwork || null;
     let presence = null;
-    if (net) {
+    if (net && mapControlAdvantageEnabled(activeMeta.map, net)) {
       if (zonePresence) presence = zonePresence;
       else {
         presence = buildZonePresence({
           meta: activeMeta,
           track,
-          network: net
+          network: net,
+          mapCode: renderer.mapCode || activeMeta.map || '',
+          radarImage: renderer.image
         });
         zonePresence = presence;
         if (store.get(file)?.isFull && presence) {
@@ -2139,9 +2148,11 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const track = store.get(file)?.full || null;
     if (!track) return null;
     const net = zoneNetwork;
-    if (!net?.zones?.length) return null;
+    if (!net) return null;
     const mapCode = renderer.mapCode || roundMeta.map || '';
     if (!renderer.image || !mapCode) return null;
+    prepareDynamicNetwork(net, mapCode, renderer.image);
+    if (!net.zones?.length) return null;
     let series;
     try {
       series = buildMapControlSeries({
@@ -2323,6 +2334,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     coachScanning = true;
     syncCoachBtn();
     try {
+      await ensureZoneNetwork();
       // Strict order: preload every round, then analyse every round.
       await analyseAllCoachRounds();
     } finally {

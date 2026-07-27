@@ -3,10 +3,12 @@
 //
 // Combat is taken only from matching phase windows, then rolled up per round so
 // KPR / DPR / ADR use that round count as the "R" (same idea as Statistics).
+// Geography filters use user-drawn shapes (see shapeFilters.js), applied async.
 // ---------------------------------------------------------------------------
 
 import { PHASES } from '../roles/phaseCombat.js';
 import { P, PLAYER_SLOTS, bucketRating, rowPasses } from '../shared/statsMath.js';
+import { filterWindowsByShapes } from './shapeFilters.js';
 
 /**
  * @typedef {object} AnalyticsFilter
@@ -19,9 +21,7 @@ import { P, PLAYER_SLOTS, bucketRating, rowPasses } from '../shared/statsMath.js
  * @property {boolean} [oppHasAwp]
  * @property {''|'won'|'lost'} [result]
  * @property {Set<string>|string[]} [phases]  empty ⇒ all
- * @property {Set<string>|string[]} [positions]
- * @property {Set<string>|string[]} [zones]
- * @property {Set<string>|string[]} [areas]
+ * @property {Array<object>} [shapes]  enabled drawn selections
  */
 
 function asSet(v) {
@@ -61,16 +61,6 @@ function resultPasses(row, team, result) {
   return true;
 }
 
-function locationPasses(window, filter) {
-  const positions = asSet(filter.positions);
-  const zones = asSet(filter.zones);
-  const areas = asSet(filter.areas);
-  if (positions.size && !positions.has(window.pos || '')) return false;
-  if (zones.size && !zones.has(window.zone || '')) return false;
-  if (areas.size && !areas.has(window.area || '')) return false;
-  return true;
-}
-
 function selectedPhases(filter) {
   const set = asSet(filter.phases);
   if (!set.size) return [...PHASES];
@@ -97,8 +87,8 @@ export function analyticsRowPasses(row, filter, team) {
 }
 
 /**
- * Matching phase windows for one player under the current filters.
- * @returns {Array<{ row, phase, window, team, file: string }>}
+ * Matching phase windows (sync — no shape geometry yet).
+ * @returns {Array<{ row, phase, window, team, file: string, playerId: string }>}
  */
 export function matchingWindows(payload, filter) {
   if (!filter?.playerId || !filter?.map) return [];
@@ -114,7 +104,6 @@ export function matchingWindows(payload, filter) {
       for (const phase of phases) {
         const window = bag[phase];
         if (!window?.p) continue;
-        if (!locationPasses(window, filter)) continue;
         out.push({
           row,
           phase,
@@ -122,7 +111,8 @@ export function matchingWindows(payload, filter) {
           team,
           file: row.f,
           demoId: row.d,
-          round: row.n
+          round: row.n,
+          playerId: filter.playerId
         });
       }
     }
@@ -131,8 +121,18 @@ export function matchingWindows(payload, filter) {
 }
 
 /**
+ * Matching windows with optional drawn-shape filters applied.
+ */
+export async function matchingWindowsAsync(payload, filter, tickCache = new Map()) {
+  const base = matchingWindows(payload, filter);
+  const shapes = filter?.shapes || [];
+  const active = shapes.filter((s) => s && s.enabled !== false && s.geometry);
+  if (!active.length) return base;
+  return filterWindowsByShapes(base, active, tickCache);
+}
+
+/**
  * Collapse matching phase windows into one combat line per distinct round.
- * Kills/damage come only from those windows; the round counts once for KPR/ADR.
  */
 function roundLinesFromWindows(windows, playerId) {
   /** @type {Map<string, { file: string, demoId: string, round: number, line: number[], phases: Set<string> }>} */
@@ -159,12 +159,10 @@ function roundLinesFromWindows(windows, playerId) {
     if (src[P.KAST]) g.line[P.KAST] = 1;
   }
 
-  // Backfill damage / hits when phase bags were built without events.damage.
   for (const g of byFile.values()) {
     const row = windows.find((w) => w.file === g.file)?.row;
     const whole = row?.p?.[playerId];
     if (!whole) {
-      // Even without whole-round stats, kills/HS imply hits.
       const minHits = Math.max(g.line[P.KILLS] || 0, g.line[P.HEADSHOTS] || 0);
       if ((g.line[P.HITS] || 0) < minHits) g.line[P.HITS] = minHits;
       continue;
@@ -193,12 +191,8 @@ function roundLinesFromWindows(windows, playerId) {
   return [...byFile.values()];
 }
 
-/**
- * Aggregate stats over matching phase windows (rolled up per round).
- */
-export function aggregateAnalytics(payload, filter) {
-  const windows = matchingWindows(payload, filter);
-  const roundRows = roundLinesFromWindows(windows, filter.playerId);
+function aggregateFromWindows(windows, playerId) {
+  const roundRows = roundLinesFromWindows(windows, playerId);
   const bucket = emptyBucket();
   let shots = 0;
   let hits = 0;
@@ -246,33 +240,18 @@ export function aggregateAnalytics(payload, filter) {
 }
 
 /**
- * Frequency of dominant locations across matching windows (ignore location filters).
+ * Aggregate stats over matching phase windows (sync, ignores shapes).
  */
-export function locationBreakdown(payload, filter) {
-  const base = {
-    ...filter,
-    positions: new Set(),
-    zones: new Set(),
-    areas: new Set()
-  };
-  const windows = matchingWindows(payload, base);
-  const pos = new Map();
-  const zone = new Map();
-  const area = new Map();
-  const bump = (map, id) => {
-    if (!id) return;
-    map.set(id, (map.get(id) || 0) + 1);
-  };
-  for (const w of windows) {
-    bump(pos, w.window.pos);
-    bump(zone, w.window.zone);
-    bump(area, w.window.area);
-  }
-  const rank = (map) =>
-    [...map.entries()]
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([id, count]) => ({ id, count }));
-  return { pos: rank(pos), zone: rank(zone), area: rank(area), samples: windows.length };
+export function aggregateAnalytics(payload, filter) {
+  return aggregateFromWindows(matchingWindows(payload, filter), filter.playerId);
+}
+
+/**
+ * Aggregate with drawn-shape filters.
+ */
+export async function aggregateAnalyticsAsync(payload, filter, tickCache = new Map()) {
+  const windows = await matchingWindowsAsync(payload, filter, tickCache);
+  return aggregateFromWindows(windows, filter.playerId);
 }
 
 /** Unique players across a stats payload. */

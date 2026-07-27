@@ -250,35 +250,14 @@ export function tacticalFromCounts(counts, side) {
 
 /**
  * For one demo on one map: assign T and CT positions for both teams.
+ * Geography (painted regionKeys) path is disabled — returns empty until a
+ * dynamic-cell role design lands.
  * @param {object} demo  stats index entry
  * @param {object[]} rounds  filtered rounds belonging to this demo
  * @returns {{ T: Map<string, object>, CT: Map<string, object> }}
  */
-export function assignDemoRoles(demo, rounds) {
-  const empty = { T: new Map(), CT: new Map() };
-  if (!rounds.length) return empty;
-  const hasZ = rounds.some((r) => r.z && Object.keys(r.z).length);
-  if (!hasZ) return empty;
-
-  const teamPlayers = (team) =>
-    (demo.players || []).filter((p) => p.team === team).map((p) => p.id);
-
-  const out = { T: new Map(), CT: new Map() };
-  for (const team of [1, 2]) {
-    const ids = teamPlayers(team);
-    if (!ids.length) continue;
-    // Players may swap sides mid-match — assign using rounds on each side.
-    for (const side of ['T', 'CT']) {
-      const sideRounds = rounds.filter((r) => (team === 1 ? r.s1 : r.s2) === side);
-      if (!sideRounds.length) continue;
-      const stats = aggregateSidePresence(sideRounds, ids, side, team, null);
-      const assigned = side === 'T' ? assignTPositions(stats) : assignCTPositions(stats);
-      for (const [id, role] of assigned) {
-        out[side].set(id, role);
-      }
-    }
-  }
-  return out;
+export function assignDemoRoles(_demo, _rounds) {
+  return { T: new Map(), CT: new Map() };
 }
 
 /**

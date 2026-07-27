@@ -66,6 +66,14 @@ export function ensureVisionLayers(network) {
   return network;
 }
 
+/** True when the map has any painted vision-block or elevated brush. */
+export function hasVisionLayers(network) {
+  return Boolean(
+    (network?.visionBlocks && network.visionBlocks.length) ||
+      (network?.elevated && network.elevated.length)
+  );
+}
+
 export function pointInPieces(x, y, pieces) {
   if (!pieces?.length) return false;
   for (const p of pieces) {

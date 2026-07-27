@@ -10,7 +10,6 @@
 
 import { MAP_CONTROL_BASE } from './mapControlBases.js';
 import { ROUND_SECONDS } from '../viewer/roundClock.js';
-import { isZoneNetworkReady } from '../zones/zoneModel.js';
 import {
   activePositionsAt,
   latestOwnerSide,
@@ -72,7 +71,7 @@ export function tickAtMapControlBaseline(meta) {
  * @returns {{ ct: number, t: number, neu: number } | null}
  */
 export function possessionSharesAt({ meta, states, network, presence, tick }) {
-  if (!meta || !network || !isZoneNetworkReady(network)) return null;
+  if (!meta || !network?.zones?.length) return null;
   if (!Number.isFinite(tick)) return null;
   const active = activePositionsAt({ meta, states, network });
   /** @type {Record<string, string>} */
@@ -116,7 +115,7 @@ export function mapControlAdvantage(map, ctPct, tPct) {
   };
 }
 
-/** True when this map has a sampled baseline and a ready zone network. */
-export function mapControlAdvantageEnabled(map, network) {
-  return Boolean(MAP_CONTROL_BASE[map] && isZoneNetworkReady(network));
+/** True when this map has a sampled baseline (dynamic cells need no painted zones). */
+export function mapControlAdvantageEnabled(map, _network = null) {
+  return Boolean(MAP_CONTROL_BASE[map]);
 }

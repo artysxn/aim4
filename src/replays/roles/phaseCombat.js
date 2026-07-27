@@ -28,9 +28,9 @@ function emptyLine() {
 
 function emptyPhaseBag() {
   return {
-    early: { p: emptyLine(), pos: '', zone: '', area: '' },
-    mid: { p: emptyLine(), pos: '', zone: '', area: '' },
-    late: { p: emptyLine(), pos: '', zone: '', area: '' }
+    early: { p: emptyLine() },
+    mid: { p: emptyLine() },
+    late: { p: emptyLine() }
   };
 }
 

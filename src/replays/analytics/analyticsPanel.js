@@ -1,17 +1,22 @@
 // ---------------------------------------------------------------------------
-// Analytics: one player × one map × phase-window presence filters → stats + rounds.
-// Layout: sticky filter sidebar + main results (stats, presence, rounds).
+// Analytics: one player × one map × phase-window + drawn-shape filters → stats.
+// Layout: sticky filter sidebar + main results (stats, radar shapes, rounds).
 // ---------------------------------------------------------------------------
 
-import { fetchStats, fetchZones } from '../api.js';
+import { fetchStats } from '../api.js';
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
 import { attachTips } from '../stats/statsTables.js';
 import {
-  aggregateAnalytics,
-  listPlayers,
-  locationBreakdown
+  aggregateAnalyticsAsync,
+  listPlayers
 } from './analyticsMath.js';
 import { createPresenceRadar } from './presenceRadar.js';
+import {
+  SHAPE_FEATURES,
+  loadShapes,
+  saveShapes,
+  newShapeId
+} from './shapeFilters.js';
 
 const tipLines = (lines) => lines.filter(Boolean).join('\n');
 
@@ -19,12 +24,6 @@ const PHASE_OPTS = [
   { key: 'early', label: 'Early' },
   { key: 'mid', label: 'Mid' },
   { key: 'late', label: 'Late' }
-];
-
-const LOC_KINDS = [
-  { key: 'pos', label: 'Position', set: 'positions' },
-  { key: 'zone', label: 'Zone', set: 'zones' },
-  { key: 'area', label: 'Area', set: 'areas' }
 ];
 
 /**
@@ -49,10 +48,11 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   /** @type {Array<{id:string,name:string,maps:string[]}>} */
   let players = [];
   let loadToken = 0;
+  let renderToken = 0;
   let playerSearch = '';
   let playerMenuOpen = false;
-  /** @type {Record<string, boolean>} */
-  let locMenuOpen = { pos: false, zone: false, area: false };
+  /** @type {Map<string, { meta: object|null, ticks: ArrayBuffer|null }>} */
+  const tickCache = new Map();
 
   const state = {
     playerId: '',
@@ -66,23 +66,24 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     result: '',
     /** @type {Set<string>} */
     phases: new Set(),
-    /** @type {Set<string>} */
-    positions: new Set(),
-    /** @type {Set<string>} */
-    zones: new Set(),
-    /** @type {Set<string>} */
-    areas: new Set(),
-    locSearch: { pos: '', zone: '', area: '' }
+    /** @type {Array<object>} */
+    shapes: [],
+    /** @type {ShapeFeature|'player_in'} */
+    drawFeature: 'player_in',
+    /** @type {''|'rect'|'poly'} */
+    drawMode: ''
   };
 
-  /** @type {object|null} */
-  let network = null;
-  let networkMap = '';
   /** @type {ReturnType<typeof createPresenceRadar> | null} */
   let radar = null;
 
   function selectedPlayer() {
     return players.find((p) => p.id === state.playerId) || null;
+  }
+
+  function persistShapes() {
+    if (!state.map) return;
+    saveShapes(state.map, state.shapes);
   }
 
   function filterObj() {
@@ -96,37 +97,12 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       oppHasAwp: state.oppHasAwp,
       result: state.result,
       phases: state.phases,
-      positions: state.positions,
-      zones: state.zones,
-      areas: state.areas
+      shapes: state.shapes
     };
   }
 
-  function locSet(kind) {
-    if (kind === 'pos') return state.positions;
-    if (kind === 'zone') return state.zones;
-    return state.areas;
-  }
-
-  function nameOf(kind, id) {
-    if (!id || !network) return id || '';
-    const list =
-      kind === 'pos' ? network.zones : kind === 'zone' ? network.sections : network.areas;
-    const hit = (list || []).find((x) => x.id === id);
-    return hit?.name || id;
-  }
-
-  function networkItems(kind) {
-    const list =
-      kind === 'pos'
-        ? network?.zones || []
-        : kind === 'zone'
-          ? network?.sections || []
-          : network?.areas || [];
-    return list
-      .filter((z) => z.id && (kind !== 'pos' || !z.hidden))
-      .map((z) => ({ id: z.id, name: z.name || z.id }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+  function featureLabel(key) {
+    return SHAPE_FEATURES.find((f) => f.key === key)?.label || key;
   }
 
   function playerOptions() {
@@ -135,16 +111,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       .filter((p) => p.id !== state.playerId)
       .filter((p) => !q || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q))
       .slice(0, 40);
-  }
-
-  function locSuggestions(kind) {
-    const q = (state.locSearch[kind] || '').trim().toLowerCase();
-    if (!q) return [];
-    const selected = locSet(kind);
-    return networkItems(kind)
-      .filter((it) => !selected.has(it.id))
-      .filter((it) => it.name.toLowerCase().includes(q))
-      .slice(0, 12);
   }
 
   function econSelect(id, value) {
@@ -171,154 +137,62 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     return `<button type="button" class="rp-chip${active ? ' active' : ''}" ${attrs}>${label}</button>`;
   }
 
-  function selectedLocChips(kind) {
-    const set = locSet(kind);
-    if (!set.size) return '';
-    return `<div class="an-sel-chips">
-      ${[...set]
-        .map(
-          (id) =>
-            `<button type="button" class="an-sel-chip" data-loc-clear="${kind}" data-id="${escapeHtml(
-              id
-            )}">${escapeHtml(nameOf(kind, id))} <span aria-hidden="true">×</span></button>`
-        )
-        .join('')}
-    </div>`;
-  }
-
-  function locTypeahead(kind, label) {
-    const open = locMenuOpen[kind] && (state.locSearch[kind] || '').trim();
-    const opts = open ? locSuggestions(kind) : [];
-    return `
-      <div class="an-field" data-loc-group="${kind}">
-        <span class="an-label">${label}</span>
-        <div class="rp-typeahead an-loc-typeahead" id="an-loc-${kind}">
-          <input type="search" class="site-input an-loc-search" data-loc-search="${kind}"
-            placeholder="Search…" spellcheck="false" autocomplete="off"
-            value="${escapeHtml(state.locSearch[kind] || '')}" aria-label="Search ${label}" />
-          ${
-            open
-              ? `<div class="rp-typeahead-menu an-loc-menu">
-            ${
-              opts.length
-                ? opts
-                    .map(
-                      (it) =>
-                        `<button type="button" class="rp-typeahead-option" data-loc-pick="${kind}" data-id="${escapeHtml(
-                          it.id
-                        )}">${escapeHtml(it.name)}</button>`
-                    )
-                    .join('')
-                : `<p class="rp-typeahead-empty">No matches</p>`
-            }
-          </div>`
-              : ''
-          }
-        </div>
-        ${selectedLocChips(kind)}
-      </div>`;
-  }
-
-  function refreshLocMenu(kind) {
-    const wrap = sidebarEl.querySelector(`#an-loc-${kind}`);
-    if (!wrap) return;
-    wrap.querySelector('.rp-typeahead-menu')?.remove();
-    const open = locMenuOpen[kind] && (state.locSearch[kind] || '').trim();
-    if (!open) return;
-    const opts = locSuggestions(kind);
-    wrap.insertAdjacentHTML(
-      'beforeend',
-      `<div class="rp-typeahead-menu an-loc-menu">
-        ${
-          opts.length
-            ? opts
-                .map(
-                  (it) =>
-                    `<button type="button" class="rp-typeahead-option" data-loc-pick="${kind}" data-id="${escapeHtml(
-                      it.id
-                    )}">${escapeHtml(it.name)}</button>`
-                )
-                .join('')
-            : `<p class="rp-typeahead-empty">No matches</p>`
-        }
-      </div>`
-    );
-  }
-
   function refreshPlayerMenu() {
-    const wrap = sidebarEl.querySelector('#an-player-typeahead');
-    if (!wrap) return;
-    wrap.classList.toggle('open', playerMenuOpen);
-    wrap.querySelector('.rp-typeahead-menu')?.remove();
-    if (!playerMenuOpen && !playerSearch) return;
+    const menu = sidebarEl.querySelector('#an-player-menu');
+    if (!menu) return;
     const opts = playerOptions();
-    wrap.insertAdjacentHTML(
-      'beforeend',
-      `<div class="rp-typeahead-menu">
-        ${
-          opts.length
-            ? opts
-                .map(
-                  (p) =>
-                    `<button type="button" class="rp-typeahead-option" data-pick-player="${escapeHtml(
-                      p.id
-                    )}">${escapeHtml(p.name)}</button>`
-                )
-                .join('')
-            : `<p class="rp-typeahead-empty">No players</p>`
-        }
-      </div>`
-    );
+    menu.hidden = !playerMenuOpen || !opts.length;
+    menu.innerHTML = opts
+      .map(
+        (p) =>
+          `<button type="button" class="rp-typeahead-item" data-pick-player="${escapeHtml(
+            p.id
+          )}">${escapeHtml(p.name)}</button>`
+      )
+      .join('');
   }
-
-  // ---- sidebar ------------------------------------------------------------
 
   function renderSidebar() {
     const pl = selectedPlayer();
-    const maps = pl?.maps?.length
-      ? pl.maps
-      : [...new Set((payload?.demos || []).map((d) => d.map).filter(Boolean))].sort();
-    const mapOpts = maps
-      .map(
-        (code) =>
-          `<option value="${escapeHtml(code)}"${code === state.map ? ' selected' : ''}>${escapeHtml(
-            MAPS[code]?.name || code
-          )}</option>`
-      )
-      .join('');
     const ready = Boolean(state.playerId && state.map);
-    sidebarEl.classList.toggle('an-sidebar--pick', !state.playerId);
+    const maps = pl?.maps || [];
 
+    sidebarEl.classList.toggle('an-sidebar--pick', !state.playerId);
     sidebarEl.innerHTML = `
-      <div class="an-side-block">
-        <h3 class="an-side-title">Subject</h3>
-        <div class="an-field">
-          <span class="an-label">Player</span>
-          <div class="rp-typeahead" id="an-player-typeahead">
-            <input type="search" class="site-input" id="an-player-search"
-              placeholder="${pl ? escapeHtml(pl.name) : 'Search players'}"
-              spellcheck="false" autocomplete="off" value="${escapeHtml(playerSearch)}"
-              aria-label="Search players" />
-          </div>
+      <div class="an-field">
+        <span class="an-label">Player</span>
+        <div class="rp-typeahead" id="an-player-typeahead">
           ${
             pl
-              ? `<button type="button" class="an-sel-chip" data-clear-player>${escapeHtml(
-                  pl.name
-                )} <span aria-hidden="true">×</span></button>`
-              : ''
+              ? `<div class="an-sel-chips"><button type="button" class="an-sel-chip" data-clear-player>
+                  ${escapeHtml(pl.name)} <span aria-hidden="true">×</span></button></div>`
+              : `<input type="search" class="site-input" id="an-player-search"
+                  placeholder="Search players…" spellcheck="false" autocomplete="off"
+                  value="${escapeHtml(playerSearch)}" aria-label="Search players" />
+                <div class="rp-typeahead-menu" id="an-player-menu" hidden></div>`
           }
         </div>
+      </div>
+
+      <div class="an-side-block" ${pl ? '' : 'hidden'}>
         <div class="an-field">
           <span class="an-label">Map</span>
-          <select class="site-select an-select" id="an-map" ${pl ? '' : 'disabled'} aria-label="Map">
-            <option value=""${!state.map ? ' selected' : ''}>Select map</option>
-            ${mapOpts}
+          <select class="site-select an-select" id="an-map" ${maps.length ? '' : 'disabled'}>
+            <option value="">Select map…</option>
+            ${maps
+              .map(
+                (m) =>
+                  `<option value="${escapeHtml(m)}"${m === state.map ? ' selected' : ''}>${escapeHtml(
+                    MAPS[m]?.name || m
+                  )}</option>`
+              )
+              .join('')}
           </select>
         </div>
       </div>
 
       <div class="an-side-block" ${ready ? '' : 'hidden'}>
-        <h3 class="an-side-title">Round filters</h3>
+        <p class="an-side-title">Round filters</p>
         <div class="an-field">
           <span class="an-label">Side</span>
           <div class="rp-chips">
@@ -327,94 +201,91 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
           </div>
         </div>
         <div class="an-field">
-          <span class="an-label">Own buy</span>
-          <div class="an-buy-row">${econSelect('econ', state.econ)}${awpCheck('hasAwp', state.hasAwp)}</div>
-        </div>
-        <div class="an-field">
-          <span class="an-label">Opp buy</span>
-          <div class="an-buy-row">${econSelect('oppEcon', state.oppEcon)}${awpCheck(
-            'oppHasAwp',
-            state.oppHasAwp
-          )}</div>
-        </div>
-        <div class="an-field">
           <span class="an-label">Result</span>
           <div class="rp-chips">
             ${chip(state.result === 'won', 'data-an-result="won"', 'Won')}
             ${chip(state.result === 'lost', 'data-an-result="lost"', 'Lost')}
           </div>
         </div>
-      </div>
+        <div class="an-field an-buy-row">
+          <span class="an-label">Buy</span>
+          ${econSelect('econ', state.econ)}
+          ${awpCheck('hasAwp', state.hasAwp)}
+        </div>
+        <div class="an-field an-buy-row">
+          <span class="an-label">Opp buy</span>
+          ${econSelect('oppEcon', state.oppEcon)}
+          ${awpCheck('oppHasAwp', state.oppHasAwp)}
+        </div>
+        <div class="an-field">
+          <span class="an-label">Phase</span>
+          <div class="rp-chips">
+            ${PHASE_OPTS.map((p) =>
+              chip(state.phases.has(p.key), `data-an-phase="${p.key}"`, p.label)
+            ).join('')}
+          </div>
+        </div>
 
-      <div class="an-side-block" ${ready ? '' : 'hidden'}>
-        ${LOC_KINDS.map((k) => locTypeahead(k.key, k.label)).join('')}
-      </div>
+        <p class="an-side-title">Map selections</p>
+        <p class="an-side-hint">Draw on the radar, pick what to detect.</p>
+        <div class="an-field">
+          <span class="an-label">Feature</span>
+          <select class="site-select an-select" id="an-shape-feature">
+            ${SHAPE_FEATURES.map(
+              (f) =>
+                `<option value="${f.key}"${f.key === state.drawFeature ? ' selected' : ''}>${escapeHtml(
+                  f.label
+                )}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div class="an-field">
+          <span class="an-label">Draw</span>
+          <div class="rp-chips">
+            ${chip(state.drawMode === 'rect', 'data-an-draw="rect"', 'Rect')}
+            ${chip(state.drawMode === 'poly', 'data-an-draw="poly"', 'Polygon')}
+            ${
+              state.drawMode === 'poly'
+                ? `<button type="button" class="rp-chip" data-an-poly-done>Finish</button>`
+                : ''
+            }
+          </div>
+        </div>
+        <div class="an-shape-list">
+          ${
+            state.shapes.length
+              ? state.shapes
+                  .map((s, i) => {
+                    const label =
+                      s.name ||
+                      `${featureLabel(s.feature)} ${s.geometry?.type === 'poly' ? 'poly' : 'rect'} ${
+                        i + 1
+                      }`;
+                    return `<div class="an-shape-row${s.enabled === false ? ' off' : ''}">
+                      <button type="button" class="an-shape-toggle" data-shape-toggle="${escapeHtml(
+                        s.id
+                      )}" title="Toggle">
+                        ${s.enabled === false ? '○' : '●'} ${escapeHtml(label)}
+                      </button>
+                      <button type="button" class="an-shape-del" data-shape-del="${escapeHtml(
+                        s.id
+                      )}" aria-label="Remove">×</button>
+                    </div>`;
+                  })
+                  .join('')
+              : `<p class="an-muted">No selections yet.</p>`
+          }
+        </div>
 
-      ${
-        ready
-          ? `<button type="button" class="btn btn-sm an-clear" data-an-clear>Clear filters</button>`
-          : ''
-      }`;
+        <button type="button" class="btn btn-sm an-clear" data-an-clear>Clear filters</button>
+      </div>`;
 
     if (playerMenuOpen || playerSearch) refreshPlayerMenu();
   }
 
-  // ---- main ---------------------------------------------------------------
-
   function fmt(n, digits = 2) {
     if (!Number.isFinite(n)) return '—';
     return n.toFixed(digits);
-  }
-
-  function renderBreakdown(breakdown) {
-    const block = (title, rows, kind) => {
-      if (!rows.length) {
-        return `<div class="an-break-col"><h4>${title}</h4><p class="an-muted">—</p></div>`;
-      }
-      return `<div class="an-break-col"><h4>${title}</h4>
-        <ul class="an-break-list">
-          ${rows
-            .slice(0, 20)
-            .map((r) => {
-              const on = locSet(kind).has(r.id);
-              return `<li>
-                <button type="button" class="an-break-row${on ? ' active' : ''}"
-                  data-loc-toggle="${kind}" data-id="${escapeHtml(r.id)}"
-                  title="Filter to this ${kind === 'pos' ? 'position' : kind}">
-                  <span class="an-break-name">${escapeHtml(nameOf(kind, r.id))}</span>
-                  <span class="an-break-n">${r.count}</span>
-                </button>
-              </li>`;
-            })
-            .join('')}
-        </ul>
-      </div>`;
-    };
-    const phaseChips = PHASE_OPTS.map((p) =>
-      chip(state.phases.has(p.key), `data-an-phase="${p.key}"`, p.label)
-    ).join('');
-    return `<section class="an-card an-breakdown">
-      <header class="an-card-head an-break-head">
-        <div>
-          <h3 class="an-section-title">Where they play</h3>
-          <span class="an-muted">${breakdown.samples} phase windows</span>
-        </div>
-        <div class="an-phase-chips">
-          <span class="an-label">Phase</span>
-          <div class="rp-chips">${phaseChips}</div>
-        </div>
-      </header>
-      <div class="an-break-body">
-        <div class="an-radar-wrap" id="an-radar-wrap" title="Scroll to zoom · drag to pan · double-click to reset">
-          <canvas class="an-radar" id="an-radar" aria-label="Position radar"></canvas>
-        </div>
-        <div class="an-break-grid">
-          ${block('Positions', breakdown.pos, 'pos')}
-          ${block('Zones', breakdown.zone, 'zone')}
-          ${block('Areas', breakdown.area, 'area')}
-        </div>
-      </div>
-    </section>`;
   }
 
   function statTips(agg) {
@@ -424,7 +295,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     const n = agg.rounds || 0;
     return {
       Rating: tipLines([
-        `HLTV 2.0 over ${n} matching rounds (combat only from selected phases / locations).`,
+        `HLTV 2.0 over ${n} matching rounds (combat only from selected phases / shapes).`,
         `KPR: ${f2(agg.kpr)}  (${agg.kills} kills / ${n} rounds)`,
         `DPR: ${f2(agg.dpr)}  (${agg.deaths} deaths / ${n} rounds)`,
         `Impact: ${f2(agg.impact)}`,
@@ -465,18 +336,9 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
             ]
           : ['No hit data in these phase windows (older demos may lack damage events).']
       ),
-      Kills: tipLines([
-        `Kills in matching phase windows: ${agg.kills}`,
-        `Rounds: ${n}`
-      ]),
-      Deaths: tipLines([
-        `Deaths in matching phase windows: ${agg.deaths}`,
-        `Rounds: ${n}`
-      ]),
-      Assists: tipLines([
-        `Assists in matching phase windows: ${agg.assists}`,
-        `Rounds: ${n}`
-      ])
+      Kills: tipLines([`Kills in matching phase windows: ${agg.kills}`, `Rounds: ${n}`]),
+      Deaths: tipLines([`Deaths in matching phase windows: ${agg.deaths}`, `Rounds: ${n}`]),
+      Assists: tipLines([`Assists in matching phase windows: ${agg.assists}`, `Rounds: ${n}`])
     };
   }
 
@@ -510,6 +372,36 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
             }><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`;
           })
           .join('')}
+      </div>
+    </section>`;
+  }
+
+  function renderRadarCard() {
+    const hint =
+      state.drawMode === 'rect'
+        ? 'Drag a rectangle on the radar.'
+        : state.drawMode === 'poly'
+          ? 'Click vertices · double-click or Finish to close.'
+          : 'Scroll to zoom · drag to pan · draw tools in the sidebar.';
+    return `<section class="an-card an-breakdown">
+      <header class="an-card-head an-break-head">
+        <div>
+          <h3 class="an-section-title">Map selections</h3>
+          <span class="an-muted">${hint}</span>
+        </div>
+        <div class="an-phase-chips">
+          <span class="an-label">Phase</span>
+          <div class="rp-chips">
+            ${PHASE_OPTS.map((p) =>
+              chip(state.phases.has(p.key), `data-an-phase="${p.key}"`, p.label)
+            ).join('')}
+          </div>
+        </div>
+      </header>
+      <div class="an-break-body">
+        <div class="an-radar-wrap" id="an-radar-wrap">
+          <canvas class="an-radar" id="an-radar" aria-label="Selection radar"></canvas>
+        </div>
       </div>
     </section>`;
   }
@@ -553,37 +445,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     </section>`;
   }
 
-  function renderMain() {
-    if (!state.playerId || !state.map) {
-      mainEl.innerHTML = `<p class="view-empty">Select a player and a map in the sidebar.</p>`;
-      return;
-    }
-    if (!payload) {
-      mainEl.innerHTML = `<p class="view-empty">Loading…</p>`;
-      return;
-    }
-    const filter = filterObj();
-    const breakdown = locationBreakdown(payload, filter);
-    const agg = aggregateAnalytics(payload, filter);
-    const needsPh = (payload.demos || []).some((d) =>
-      (d.rounds || []).some((r) => r.m === state.map && !r.ph)
-    );
-    mainEl.innerHTML = `
-      ${
-        needsPh
-          ? `<p class="an-warn">Some rounds are still building phase data. Refresh shortly if numbers look incomplete.</p>`
-          : ''
-      }
-      ${
-        !network?.zones?.length
-          ? `<p class="an-warn">No position network for this map — add one in the Position Editor to use location filters.</p>`
-          : ''
-      }
-      ${renderStats(agg)}
-      ${renderBreakdown(breakdown)}
-      ${renderRounds(agg)}`;
-  }
-
   function ensureRadar() {
     const canvas = mainEl.querySelector('#an-radar');
     const wrap = mainEl.querySelector('#an-radar-wrap');
@@ -594,40 +455,78 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     }
     if (!radar || radar._canvas !== canvas) {
       radar?.destroy();
-      radar = createPresenceRadar({ canvas, wrap });
+      radar = createPresenceRadar({
+        canvas,
+        wrap,
+        onShapeComplete: (geometry) => {
+          state.shapes.push({
+            id: newShapeId(),
+            map: state.map,
+            name: '',
+            feature: state.drawFeature,
+            geometry,
+            enabled: true
+          });
+          persistShapes();
+          state.drawMode = '';
+          radar?.setDrawMode('');
+          render();
+        }
+      });
       radar._canvas = canvas;
     }
     return radar;
   }
 
-  function paintRadar(breakdown) {
+  function paintRadar() {
     const ctl = ensureRadar();
     if (!ctl || !state.map) return;
-    ctl.setData(state.map, network, breakdown?.pos || [], state.positions).catch(() => {});
+    ctl.setData(state.map, state.shapes, state.drawMode).catch(() => {});
+  }
+
+  async function renderMain() {
+    if (!state.playerId || !state.map) {
+      mainEl.innerHTML = `<p class="view-empty">Select a player and a map in the sidebar.</p>`;
+      return;
+    }
+    if (!payload) {
+      mainEl.innerHTML = `<p class="view-empty">Loading…</p>`;
+      return;
+    }
+    const token = ++renderToken;
+    const hasShapes = state.shapes.some((s) => s.enabled !== false);
+    if (hasShapes) {
+      mainEl.innerHTML = `<p class="view-empty">Matching selections…</p>${renderRadarCard()}`;
+      paintRadar();
+    }
+
+    const filter = filterObj();
+    const agg = await aggregateAnalyticsAsync(payload, filter, tickCache);
+    if (token !== renderToken) return;
+
+    const needsPh = (payload.demos || []).some((d) =>
+      (d.rounds || []).some((r) => r.m === state.map && !r.ph)
+    );
+    mainEl.innerHTML = `
+      ${
+        needsPh
+          ? `<p class="an-warn">Some rounds are still building phase data. Refresh shortly if numbers look incomplete.</p>`
+          : ''
+      }
+      ${renderStats(agg)}
+      ${renderRadarCard()}
+      ${renderRounds(agg)}`;
+    paintRadar();
   }
 
   function render() {
     renderSidebar();
     renderMain();
-    if (state.playerId && state.map && payload) {
-      paintRadar(locationBreakdown(payload, filterObj()));
-    }
   }
 
-  async function ensureNetwork() {
-    if (!state.map) {
-      network = null;
-      networkMap = '';
-      return;
-    }
-    if (networkMap === state.map && network) return;
-    try {
-      network = await fetchZones(state.map);
-      networkMap = state.map;
-    } catch {
-      network = { zones: [], sections: [], areas: [] };
-      networkMap = state.map;
-    }
+  function loadShapesForMap() {
+    state.shapes = state.map ? loadShapes(state.map) : [];
+    tickCache.clear();
   }
 
   async function load() {
@@ -642,7 +541,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         state.playerId = '';
         state.map = '';
       }
-      await ensureNetwork();
+      loadShapesForMap();
       if (token !== loadToken) return;
       render();
     } catch (err) {
@@ -653,56 +552,22 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     }
   }
 
-  function closeLocMenus(except = '') {
-    for (const k of ['pos', 'zone', 'area']) {
-      if (k === except) continue;
-      locMenuOpen[k] = false;
-      refreshLocMenu(k);
-    }
-  }
-
-  // ---- events -------------------------------------------------------------
-
   sidebarEl.addEventListener('input', (e) => {
     if (e.target.id === 'an-player-search') {
       playerSearch = e.target.value;
       playerMenuOpen = true;
-      closeLocMenus();
       refreshPlayerMenu();
-      return;
     }
-    const loc = e.target.closest('[data-loc-search]');
-    if (!loc) return;
-    const kind = loc.dataset.locSearch;
-    if (kind !== 'pos' && kind !== 'zone' && kind !== 'area') return;
-    state.locSearch[kind] = loc.value;
-    locMenuOpen[kind] = true;
-    playerMenuOpen = false;
-    refreshPlayerMenu();
-    closeLocMenus(kind);
-    refreshLocMenu(kind);
   });
 
   sidebarEl.addEventListener('focusin', (e) => {
-    if (e.target.id === 'an-player-search') {
-      if (!playerMenuOpen) {
-        playerMenuOpen = true;
-        closeLocMenus();
-        refreshPlayerMenu();
-      }
-      return;
+    if (e.target.id === 'an-player-search' && !playerMenuOpen) {
+      playerMenuOpen = true;
+      refreshPlayerMenu();
     }
-    const loc = e.target.closest('[data-loc-search]');
-    if (!loc) return;
-    const kind = loc.dataset.locSearch;
-    if (kind !== 'pos' && kind !== 'zone' && kind !== 'area') return;
-    // Suggestions only after typing — just mark open for when text appears.
-    locMenuOpen[kind] = true;
-    playerMenuOpen = false;
-    refreshPlayerMenu();
   });
 
-  sidebarEl.addEventListener('click', async (e) => {
+  sidebarEl.addEventListener('click', (e) => {
     const pickPlayer = e.target.closest('[data-pick-player]');
     if (pickPlayer) {
       state.playerId = pickPlayer.dataset.pickPlayer;
@@ -710,32 +575,16 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       playerMenuOpen = false;
       const pl = selectedPlayer();
       if (!pl?.maps.includes(state.map)) state.map = pl?.maps[0] || '';
-      await ensureNetwork();
+      loadShapesForMap();
       render();
       return;
     }
     if (e.target.closest('[data-clear-player]')) {
       state.playerId = '';
       state.map = '';
+      state.shapes = [];
       playerSearch = '';
       playerMenuOpen = false;
-      render();
-      return;
-    }
-
-    const locPick = e.target.closest('[data-loc-pick]');
-    if (locPick) {
-      const kind = locPick.dataset.locPick;
-      const id = locPick.dataset.id;
-      locSet(kind).add(id);
-      state.locSearch[kind] = '';
-      locMenuOpen[kind] = false;
-      render();
-      return;
-    }
-    const locClear = e.target.closest('[data-loc-clear]');
-    if (locClear) {
-      locSet(locClear.dataset.locClear).delete(locClear.dataset.id);
       render();
       return;
     }
@@ -754,6 +603,44 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       render();
       return;
     }
+    const phase = e.target.closest('[data-an-phase]');
+    if (phase) {
+      const key = phase.dataset.anPhase;
+      if (state.phases.has(key)) state.phases.delete(key);
+      else state.phases.add(key);
+      render();
+      return;
+    }
+    const draw = e.target.closest('[data-an-draw]');
+    if (draw) {
+      const mode = draw.dataset.anDraw === 'poly' ? 'poly' : 'rect';
+      state.drawMode = state.drawMode === mode ? '' : mode;
+      radar?.setDrawMode(state.drawMode);
+      renderSidebar();
+      paintRadar();
+      return;
+    }
+    if (e.target.closest('[data-an-poly-done]')) {
+      radar?.finishPoly();
+      return;
+    }
+    const toggle = e.target.closest('[data-shape-toggle]');
+    if (toggle) {
+      const s = state.shapes.find((x) => x.id === toggle.dataset.shapeToggle);
+      if (s) {
+        s.enabled = !(s.enabled !== false);
+        persistShapes();
+        render();
+      }
+      return;
+    }
+    const del = e.target.closest('[data-shape-del]');
+    if (del) {
+      state.shapes = state.shapes.filter((x) => x.id !== del.dataset.shapeDel);
+      persistShapes();
+      render();
+      return;
+    }
     if (e.target.closest('[data-an-clear]')) {
       state.side = '';
       state.econ = null;
@@ -762,24 +649,23 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       state.oppHasAwp = false;
       state.result = '';
       state.phases.clear();
-      state.positions.clear();
-      state.zones.clear();
-      state.areas.clear();
-      state.locSearch = { pos: '', zone: '', area: '' };
-      locMenuOpen = { pos: false, zone: false, area: false };
+      state.drawMode = '';
+      for (const s of state.shapes) s.enabled = false;
+      persistShapes();
       render();
     }
   });
 
-  sidebarEl.addEventListener('change', async (e) => {
+  sidebarEl.addEventListener('change', (e) => {
     if (e.target.id === 'an-map') {
       state.map = e.target.value || '';
-      state.positions.clear();
-      state.zones.clear();
-      state.areas.clear();
-      state.locSearch = { pos: '', zone: '', area: '' };
-      await ensureNetwork();
+      state.drawMode = '';
+      loadShapesForMap();
       render();
+      return;
+    }
+    if (e.target.id === 'an-shape-feature') {
+      state.drawFeature = e.target.value || 'player_in';
       return;
     }
     const awp = e.target.closest('[data-an-awp]');
@@ -797,13 +683,9 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
   document.addEventListener('click', (e) => {
     const inPlayer = e.target.closest?.('#an-player-typeahead');
-    const inLoc = e.target.closest?.('.an-loc-typeahead');
     if (!inPlayer && playerMenuOpen) {
       playerMenuOpen = false;
       refreshPlayerMenu();
-    }
-    if (!inLoc && (locMenuOpen.pos || locMenuOpen.zone || locMenuOpen.area)) {
-      closeLocMenus();
     }
   });
 
@@ -813,16 +695,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       const key = phase.dataset.anPhase;
       if (state.phases.has(key)) state.phases.delete(key);
       else state.phases.add(key);
-      render();
-      return;
-    }
-    const locToggle = e.target.closest('[data-loc-toggle]');
-    if (locToggle) {
-      const kind = locToggle.dataset.locToggle;
-      const id = locToggle.dataset.id;
-      const set = locSet(kind);
-      if (set.has(id)) set.delete(id);
-      else set.add(id);
       render();
       return;
     }
@@ -837,7 +709,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       return;
     }
     if (e.target.closest('#an-play-all') && onPlayRounds) {
-      const agg = aggregateAnalytics(payload, filterObj());
+      const agg = await aggregateAnalyticsAsync(payload, filterObj(), tickCache);
       if (!agg.files.length) return;
       const btn = e.target.closest('#an-play-all');
       btn.disabled = true;

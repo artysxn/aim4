@@ -10,7 +10,6 @@ import { fetchRoundMeta, fetchZones } from '../api.js';
 import { findRoundDecided } from '../coach/roundDecided.js';
 import { ECONOMIES, buyBucket, econHasAwp, economyLabel, isEqualBuyRound } from '../shared/roundId.js';
 import { openingSituation } from '../shared/openingSituation.js';
-import { isZoneNetworkReady } from '../zones/zoneModel.js';
 import { iconImgHtml, isGrenade } from './equipmentIcons.js';
 import { RADAR_SIZE, worldToRadar } from './mapCalibration.js';
 import { RadarRenderer, grenadeWorldPos } from './radarRenderer.js';
@@ -162,8 +161,8 @@ export function createAnalyzerViewer({
    * @type {Set<string>}
    */
   let decidedPhaseFilter = new Set();
-  /** Map has ≥1 position, zone, and area — gates decided-phase filters. */
-  let zoneNetworkReady = false;
+  /** Round-decided filters are always available (meta win% only). */
+  let zoneNetworkReady = true;
   /** @type {'regular'|'heatmap'} */
   let viewMode = 'regular';
   /** Heatmap blur strength (slider); mapped to canvas Gaussian blur. */
@@ -736,9 +735,7 @@ export function createAnalyzerViewer({
           }" data-result="lost">Lost <small>${lostCount}</small></button>
         </div>
       </div>
-      ${
-        zoneNetworkReady
-          ? `<div class="rv-az-group">
+      ${`<div class="rv-az-group">
         <h4>Round decided <span class="rv-az-hint">(equal buy)</span></h4>
         <div class="rv-az-seg rv-az-multi" role="group" aria-label="Round decided phase">
           <button type="button" class="rv-az-seg-btn${
@@ -757,12 +754,7 @@ export function createAnalyzerViewer({
             'late'
           )}</small></button>
         </div>
-      </div>`
-          : `<div class="rv-az-group">
-        <h4>Round decided</h4>
-        <p class="rv-az-empty">Needs a zone network (positions, zones, and areas) for this map.</p>
-      </div>`
-      }
+      </div>`}
       <div class="rv-az-group">
         <h4>Bomb</h4>
         <div class="rv-az-seg rv-az-multi" role="group" aria-label="Afterplant">
@@ -1874,11 +1866,11 @@ export function createAnalyzerViewer({
     const mapCode = rounds[0]?.map || '';
     const zonesPromise = mapCode
       ? fetchZones(mapCode)
-          .then((net) => {
-            zoneNetworkReady = isZoneNetworkReady(net);
+          .then(() => {
+            zoneNetworkReady = true;
           })
           .catch(() => {
-            zoneNetworkReady = false;
+            zoneNetworkReady = true;
           })
       : Promise.resolve();
 
@@ -1897,7 +1889,8 @@ export function createAnalyzerViewer({
     ]);
     if (destroyed) return;
 
-    if (!zoneNetworkReady) decidedPhaseFilter.clear();
+    // Round-decided uses win% from meta only — always available.
+    zoneNetworkReady = true;
 
     for (const L of layers) {
       if (!L.meta) continue;

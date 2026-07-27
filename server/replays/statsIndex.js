@@ -3,34 +3,25 @@
 // The stats database.
 //
 // Round files (.json + .bin ticks) are the source of truth. Each demo is boiled
-// down once into a compact index — counters per player per round, plus optional
-// zone-presence samples for role assignment. That uses already-parsed round
-// files only; demos are never re-parsed for stats or positions.
+// down once into a compact index — counters per player per round. Geography
+// stamping (painted positions / region bags) was removed; Analytics filters via
+// user-drawn shapes at query time instead.
 //
 // AWP Acc is recalculated here from shot angles + smoke geometry (≤10° on an
 // enemy, clear path) — not taken raw from the parser.
 //
 //   server/data/replays/<user>/stats/<demoId>.json
-//
-// After a successful parse we build the index immediately. Older demos that
-// already have a stats index but no position analysis are enriched the next
-// time they are loaded (ticks only — still no re-parse).
 // ---------------------------------------------------------------------------
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { P, PLAYER_SLOTS } from '../../src/replays/shared/statsMath.js';
 import { awpAccuracyFromTicks } from '../../src/replays/shared/awpAccuracy.js';
-import {
-  mergePhaseLocations,
-  phaseCombatFromMeta
-} from '../../src/replays/roles/phaseCombat.js';
-import { presenceFromTicks } from '../../src/replays/roles/presenceFromTicks.js';
-import { isZoneNetworkReady } from '../../src/replays/zones/zoneModel.js';
+import { phaseCombatFromMeta } from '../../src/replays/roles/phaseCombat.js';
 
-export const STATS_VERSION = 7;
+export const STATS_VERSION = 8;
 
-/** ~1 Hz occupancy samples (demo ticks between samples). */
+/** ~1 Hz occupancy samples (demo ticks between samples) — AWP Acc only. */
 const TICK_STRIDE = 64;
 
 /** A death counts as traded when the killer dies inside this window. */
@@ -43,7 +34,7 @@ const statsDir = (userDir) => path.join(userDir, 'stats');
 
 /**
  * Base index fingerprint (parse / rename). Zone edits do not invalidate kill
- * stats — they only trigger a positions re-sample via `pz`.
+ * stats.
  */
 function versionKey(record) {
   return [
@@ -89,7 +80,7 @@ function openingDuel(ordered, teamOf) {
 }
 
 /** One round of a demo -> one compact row. */
-function rowFromRound(meta, demoId, file, playerIds, teamOf, presence = null, tickBuffer = null) {
+function rowFromRound(meta, demoId, file, playerIds, teamOf, tickBuffer = null) {
   const kills = meta.events?.kills || [];
   const ordered = [...kills].sort((a, b) => (a.tick || 0) - (b.tick || 0));
   const opening = openingDuel(ordered, teamOf);
@@ -102,7 +93,6 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf, presence = null, ti
     shotsByPlayer.set(s.player, (shotsByPlayer.get(s.player) || 0) + 1);
   }
 
-  // Recalculate AWP Acc from ticks + events (≤10° on enemy, no smoke).
   const awpAcc = tickBuffer ? awpAccuracyFromTicks(meta, tickBuffer) : null;
 
   const p = {};
@@ -145,48 +135,24 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf, presence = null, ti
     od: opening.od,
     p
   };
-  applyPresence(row, presence);
-  applyPhaseBags(row, meta, playerIds, presence, tickBuffer);
+  applyPhaseBags(row, meta, playerIds, tickBuffer);
   return row;
 }
 
-function applyPresence(row, presence) {
-  if (!presence?.z || !Object.keys(presence.z).length) return;
-  row.z = presence.z;
-  if (presence.ctTB && Object.keys(presence.ctTB).length) row.ctTB = presence.ctTB;
-  else delete row.ctTB;
-}
-
-function applyPhaseBags(row, meta, playerIds, presence = null, tickBuffer = null) {
-  const combat = phaseCombatFromMeta(meta, playerIds, tickBuffer);
-  if (presence?.phaseLoc) mergePhaseLocations(combat, presence.phaseLoc);
-  row.ph = combat;
-}
-
-async function loadZoneNetwork(io, mapCode) {
-  if (!mapCode || typeof io.getZones !== 'function') return null;
-  try {
-    const network = await io.getZones(mapCode);
-    if (!isZoneNetworkReady(network)) return null;
-    return network;
-  } catch {
-    return null;
+function applyPhaseBags(row, meta, playerIds, tickBuffer = null) {
+  row.ph = phaseCombatFromMeta(meta, playerIds, tickBuffer);
+  // Drop legacy painted location fields if any sneak in.
+  for (const bag of Object.values(row.ph || {})) {
+    for (const phase of ['early', 'mid', 'late']) {
+      if (!bag?.[phase]) continue;
+      delete bag[phase].pos;
+      delete bag[phase].zone;
+      delete bag[phase].area;
+    }
   }
 }
 
-/** True when this map has a network and the index is missing / stale positions. */
-export function needsPositionAnalysis(entry, network) {
-  if (!isZoneNetworkReady(network)) return false;
-  const want = Number(network.updatedAt) || 1;
-  if (Number(entry?.pz) === want && entry?.positions === true) {
-    // Sanity: at least one round should carry zone samples.
-    const hasZ = (entry.rounds || []).some((r) => r.z && Object.keys(r.z).length);
-    return !hasZ && (entry.rounds || []).length > 0;
-  }
-  return true;
-}
-
-/** Phase bags (combat + dominant locations) missing or on a pre-v3 index. */
+/** Phase bags / AWP Acc missing or on a pre-v8 index. */
 function needsPhaseEnrichment(entry) {
   if (!entry?.rounds?.length) return false;
   if (Number(entry.v) < STATS_VERSION) return true;
@@ -194,15 +160,10 @@ function needsPhaseEnrichment(entry) {
 }
 
 /**
- * Sample ticks onto an existing index (no re-parse, no kill-stat rebuild).
- * Also fills `row.ph` combat + dominant pos/zone/area when missing.
+ * Refresh phase combat + AWP Acc from ticks (no painted geography).
  */
-async function enrichPositions(io, user, record, entry, network) {
-  if (!entry?.rounds?.length) {
-    entry.positions = false;
-    entry.pz = 0;
-    return entry;
-  }
+async function enrichPhases(io, user, entry) {
+  if (!entry?.rounds?.length) return entry;
 
   const rosterFallback = (entry.players || []).map((p) => ({
     id: p.id,
@@ -233,24 +194,19 @@ async function enrichPositions(io, user, record, entry, network) {
         : rosterFallback;
     const playerIds = roster.map((p) => p.id);
 
-    let presence = null;
     let tickBuffer = null;
     if (canTicks) {
       try {
         tickBuffer = await io.readRoundTicks(user, row.f, TICK_STRIDE);
-        if (tickBuffer && network) {
-          presence = presenceFromTicks(tickBuffer, meta, network, roster);
-          delete row.z;
-          delete row.ctTB;
-          applyPresence(row, presence);
-        }
       } catch {
-        delete row.z;
-        delete row.ctTB;
+        tickBuffer = null;
       }
     }
 
-    // Refresh whole-round AWP Acc from ticks when available.
+    // Strip legacy geography bags.
+    delete row.z;
+    delete row.ctTB;
+
     if (tickBuffer && row.p) {
       const awpAcc = awpAccuracyFromTicks(meta, tickBuffer);
       for (const id of playerIds) {
@@ -264,13 +220,11 @@ async function enrichPositions(io, user, record, entry, network) {
       }
     }
 
-    applyPhaseBags(row, meta, playerIds, presence, tickBuffer);
+    applyPhaseBags(row, meta, playerIds, tickBuffer);
   }
 
-  if (network) {
-    entry.positions = (entry.rounds || []).some((r) => r.z && Object.keys(r.z).length);
-    entry.pz = Number(network.updatedAt) || 1;
-  }
+  entry.positions = false;
+  entry.pz = 0;
   entry.v = STATS_VERSION;
   return entry;
 }
@@ -287,10 +241,9 @@ async function persistEntry(io, user, key, entry) {
 }
 
 /**
- * Build kill/economy stats from round JSON; sample positions when a zone
- * network exists. Uses parsed files only.
+ * Build kill/economy stats from round JSON. Uses parsed files only.
  *
- * @param {object} io  { readRoundMeta, readRoundTicks?, getZones? }
+ * @param {object} io  { readRoundMeta, readRoundTicks? }
  */
 async function buildIndex(io, user, record) {
   const files = (record.rounds || []).map((r) => r.file).filter(Boolean);
@@ -301,9 +254,6 @@ async function buildIndex(io, user, record) {
     team: p.team,
     slot: p.slot
   }));
-
-  const mapCode = String(record.map || rounds[0]?.m || '').toUpperCase();
-  const network = await loadZoneNetwork(io, mapCode);
 
   for (const file of files) {
     let meta = null;
@@ -331,17 +281,12 @@ async function buildIndex(io, user, record) {
           }))
         : players;
 
-    let presence = null;
     let tickBuffer = null;
     if (typeof io.readRoundTicks === 'function') {
       try {
         tickBuffer = await io.readRoundTicks(user, file, TICK_STRIDE);
-        if (tickBuffer && network) {
-          presence = presenceFromTicks(tickBuffer, meta, network, roster);
-        }
       } catch {
         tickBuffer = null;
-        presence = null;
       }
     }
 
@@ -352,14 +297,13 @@ async function buildIndex(io, user, record) {
         file,
         roster.map((p) => p.id),
         new Map(roster.map((p) => [p.id, p.team])),
-        presence,
         tickBuffer
       )
     );
   }
 
   const score = record.score || { team1: 0, team2: 0 };
-  const entry = {
+  return {
     id: record.id,
     v: STATS_VERSION,
     key: versionKey(record),
@@ -376,13 +320,6 @@ async function buildIndex(io, user, record) {
     positions: false,
     pz: 0
   };
-
-  if (network) {
-    entry.positions = rounds.some((r) => r.z && Object.keys(r.z).length);
-    entry.pz = Number(network.updatedAt) || 1;
-  }
-
-  return entry;
 }
 
 async function loadStoredEntry(io, user, demoId) {
@@ -397,22 +334,17 @@ async function loadStoredEntry(io, user, demoId) {
 }
 
 /**
- * Ensure the stats index exists and positions are analyzed when possible.
- * Never re-parses a demo — only reads round JSON / tick bins already on disk.
+ * Ensure the stats index exists. Never re-parses a demo — only reads round
+ * JSON / tick bins already on disk.
  *
- * @param {object} io  { userDir, readRoundMeta, readRoundTicks?, getZones? }
+ * @param {object} io  { userDir, readRoundMeta, readRoundTicks? }
  */
 export async function demoIndex(io, user, record) {
   if (!record || record.status !== 'ready') return null;
 
   const key = versionKey(record);
-  const mapCode = String(record.map || '').toUpperCase();
-  const network = await loadZoneNetwork(io, mapCode);
-
   let entry = await loadStoredEntry(io, user, record.id);
 
-  // Full rebuild when missing or parse/rename fingerprint changed.
-  // Legacy keys appended |zoneUpdatedAt after the base fingerprint.
   const keyOk =
     entry &&
     (entry.key === key ||
@@ -424,17 +356,16 @@ export async function demoIndex(io, user, record) {
     return entry;
   }
 
-  // Normalize key on upgrade from zone-suffixed fingerprints.
   if (entry.key !== key) entry.key = key;
 
-  if (needsPositionAnalysis(entry, network) || needsPhaseEnrichment(entry)) {
-    await enrichPositions(io, user, record, entry, network);
+  if (needsPhaseEnrichment(entry)) {
+    await enrichPhases(io, user, entry);
     await persistEntry(io, user, key, entry);
     return entry;
   }
 
-  // Map has no zone network yet — mark so we don't keep trying.
-  if (!network && entry.positions !== false) {
+  // Clear legacy geography flags on old indexes that already have phase bags.
+  if (entry.positions || entry.pz) {
     entry.positions = false;
     entry.pz = 0;
   }
@@ -477,4 +408,9 @@ export async function forgetDemoIndex(io, user, demoId) {
   } catch {
     /* nothing cached */
   }
+}
+
+/** @deprecated Painted networks are gone — always false. */
+export function needsPositionAnalysis(_entry, _network) {
+  return false;
 }

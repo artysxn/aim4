@@ -6,5 +6,14 @@
 
 import { fetchZoneMaps, fetchZones, saveZones } from '../api.js';
 import { isZoneNetworkReady } from './zoneModel.js';
+import { hasBombSites } from './bombSites.js';
+import { hasVisionLayers } from './visionLayers.js';
 
-export { fetchZoneMaps, fetchZones, saveZones, isZoneNetworkReady };
+export {
+  fetchZoneMaps,
+  fetchZones,
+  saveZones,
+  isZoneNetworkReady,
+  hasBombSites,
+  hasVisionLayers
+};

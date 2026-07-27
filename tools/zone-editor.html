@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Position Editor · AIM4</title>
+<title>Sites &amp; Vision · AIM4</title>
 <style>
   @font-face {
     font-family: 'Host Grotesk';
@@ -49,20 +49,9 @@
     border-bottom: 1px solid var(--border);
     background: rgba(12, 14, 18, 0.96);
   }
-  .ze-brand {
-    font-weight: 600;
-    font-size: 14px;
-    letter-spacing: 0.02em;
-    white-space: nowrap;
-  }
+  .ze-brand { font-weight: 600; font-size: 14px; letter-spacing: 0.02em; white-space: nowrap; }
   .ze-brand span { color: var(--accent); }
-  .ze-maps {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    flex: 1;
-    min-width: 0;
-  }
+  .ze-maps { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
   .ze-map-tab {
     padding: 6px 10px;
     border: 1px solid var(--border);
@@ -81,7 +70,7 @@
   }
   .ze-body {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-columns: minmax(0, 1fr) 280px;
     min-height: 0;
   }
   .ze-stage {
@@ -96,10 +85,6 @@
     height: 100%;
     cursor: crosshair;
     touch-action: none;
-  }
-  #ze-canvas.ze-drop-target {
-    outline: 2px dashed rgba(245, 37, 37, 0.55);
-    outline-offset: -6px;
   }
   .ze-float {
     position: absolute;
@@ -169,9 +154,7 @@
     font-variant-numeric: tabular-nums;
     color: var(--muted);
   }
-  #ze-canvas.ze-brush-cursor {
-    cursor: none;
-  }
+  #ze-canvas.ze-brush-cursor { cursor: none; }
   .ze-brush-ring {
     position: absolute;
     pointer-events: none;
@@ -181,9 +164,7 @@
     z-index: 3;
     display: none;
   }
-  .ze-brush-ring.on {
-    display: block;
-  }
+  .ze-brush-ring.on { display: block; }
   .ze-brush-ring.vision { border-color: rgba(180, 140, 255, 0.9); }
   .ze-brush-ring.elevated { border-color: rgba(240, 180, 80, 0.9); }
   .ze-brush-ring.erase { border-color: rgba(230, 90, 90, 0.9); }
@@ -201,275 +182,28 @@
     overflow-y: auto;
     border-left: 1px solid var(--border);
     background: var(--panel);
+    padding: 14px;
+    gap: 16px;
   }
-  .ze-side-head {
-    flex: 0 0 auto;
-    padding: 14px 14px 10px;
-    border-bottom: 1px solid var(--border);
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    background: var(--panel);
-  }
-  .ze-color-mode {
-    display: flex;
-    gap: 4px;
-  }
-  .ze-color-mode button {
-    flex: 1;
-    padding: 6px 4px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xs);
-    background: transparent;
-    color: var(--muted);
-    font: inherit;
-    font-size: 11px;
-    cursor: pointer;
-  }
-  .ze-color-mode button:hover {
-    color: var(--text);
-    border-color: var(--border-strong);
-  }
-  .ze-color-mode button.active {
-    color: var(--text);
-    border-color: rgba(245, 37, 37, 0.55);
-    background: rgba(245, 37, 37, 0.12);
-  }
-  .ze-panel {
-    flex: 0 0 auto;
-    border-bottom: 1px solid var(--border);
-  }
-  .ze-panel:last-child { border-bottom: none; }
-  .ze-panel > summary {
-    display: flex;
-    align-items: center;
-    padding: 12px 14px;
+  .ze-side h2 {
+    margin: 0;
     font-size: 12px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--muted);
-    cursor: pointer;
-    list-style: none;
-    user-select: none;
+    font-weight: 600;
   }
-  .ze-panel > summary::-webkit-details-marker { display: none; }
-  .ze-panel > summary::before {
-    content: '▸';
-    display: inline-block;
-    width: 14px;
-    margin-right: 4px;
-    font-size: 10px;
-    transition: transform 0.15s ease;
-  }
-  .ze-panel[open] > summary::before { transform: rotate(90deg); }
-  .ze-panel > summary:hover { color: var(--text); }
-  .ze-panel-body {
-    padding: 0 14px 12px;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-  }
-  .ze-panel[open] .ze-panel-list {
-    max-height: min(240px, 32vh);
-    overflow-y: auto;
-    margin-top: 8px;
-    padding: 4px 0;
-  }
-  .ze-swatch-wrap {
-    position: relative;
-    width: 14px;
-    height: 14px;
-    flex: 0 0 auto;
-    border-radius: 3px;
-    overflow: hidden;
-    border: 1px solid rgba(255,255,255,0.25);
-    cursor: pointer;
-  }
-  .ze-swatch-wrap input[type='color'] {
-    position: absolute;
-    inset: -4px;
-    width: calc(100% + 8px);
-    height: calc(100% + 8px);
-    padding: 0;
-    border: none;
-    cursor: pointer;
-    background: none;
-  }
-  .ze-swatch-wrap:has(input:disabled) {
-    opacity: 0.75;
-    cursor: default;
-  }
-  .ze-field input {
-    width: 100%;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xs);
-    background: rgba(0,0,0,0.35);
-    color: var(--text);
-    font: inherit;
-    font-size: 13px;
-  }
-  .ze-field-row {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 6px;
-    align-items: stretch;
-  }
-  .ze-field-row .ze-icon-btn {
-    width: 36px;
-    height: auto;
-    min-height: 34px;
-  }
-  .ze-empty {
-    margin: 8px 0;
-    color: var(--muted);
-    font-size: 13px;
-    line-height: 1.45;
-  }
+  .ze-empty { font-size: 12px; color: var(--muted); margin: 0; line-height: 1.45; }
   .ze-row {
     display: grid;
-    grid-template-columns: 14px 1fr auto auto;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
-    padding: 6px;
-    margin-bottom: 4px;
-    border: 1px solid transparent;
-    border-radius: var(--radius-xs);
-  }
-  .ze-row.selected {
-    border-color: rgba(245, 37, 37, 0.45);
-    background: rgba(245, 37, 37, 0.1);
-  }
-  .ze-row.is-hidden { opacity: 0.45; }
-  .ze-row[draggable='true'] { cursor: grab; }
-  .ze-row.ze-dragging { opacity: 0.45; }
-  .ze-list-drop.ze-drop-over {
-    outline: 1px dashed rgba(245, 37, 37, 0.45);
-    outline-offset: -2px;
-    border-radius: var(--radius-xs);
   }
   .ze-swatch {
     width: 14px;
     height: 14px;
     border-radius: 3px;
-    border: 1px solid rgba(255,255,255,0.2);
-    flex: 0 0 auto;
-  }
-  .ze-sec-top {
-    display: grid;
-    grid-template-columns: 14px 1fr auto;
-    gap: 6px;
-    align-items: center;
-  }
-  .ze-row-name {
-    width: 100%;
-    min-width: 0;
-    padding: 5px 7px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xs);
-    background: rgba(0,0,0,0.3);
-    color: var(--text);
-    font: inherit;
-    font-size: 12px;
-  }
-  .ze-sec {
-    margin-bottom: 6px;
-    border: 1px solid transparent;
-    border-radius: var(--radius-xs);
-    padding: 6px;
-    min-height: 44px;
-  }
-  .ze-sec.selected {
-    border-color: rgba(245, 37, 37, 0.45);
-    background: rgba(245, 37, 37, 0.1);
-  }
-  .ze-sec.ze-drop-over {
-    border-color: rgba(245, 37, 37, 0.55);
-    background: rgba(245, 37, 37, 0.08);
-  }
-  .ze-sec-members {
-    margin: 6px 0 0;
-    padding: 0;
-    list-style: none;
-    min-height: 8px;
-  }
-  .ze-sec-members li {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 6px;
-    margin-bottom: 2px;
-    border-radius: var(--radius-xs);
-    font-size: 12px;
-    color: var(--muted);
-    cursor: grab;
-    border: 1px solid transparent;
-  }
-  .ze-sec-members li:hover {
-    color: var(--text);
-    background: rgba(255,255,255,0.04);
-  }
-  .ze-sec-members li.ze-dragging { opacity: 0.45; }
-  .ze-sec-members .ze-swatch {
-    flex: 0 0 auto;
-  }
-  .ze-sec-members li span {
-    min-width: 0;
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .ze-area {
-    margin-bottom: 6px;
-    border: 1px solid transparent;
-    border-radius: var(--radius-xs);
-    padding: 6px;
-    min-height: 44px;
-  }
-  .ze-area.selected {
-    border-color: rgba(245, 37, 37, 0.45);
-    background: rgba(245, 37, 37, 0.1);
-  }
-  .ze-area.ze-drop-over {
-    border-color: rgba(245, 37, 37, 0.55);
-    background: rgba(245, 37, 37, 0.08);
-  }
-  .ze-area-top {
-    display: grid;
-    grid-template-columns: 14px 1fr auto;
-    gap: 6px;
-    align-items: center;
-  }
-  .ze-area-members {
-    margin: 6px 0 0;
-    padding: 0;
-    list-style: none;
-    min-height: 8px;
-  }
-  .ze-area-members li {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 6px;
-    margin-bottom: 2px;
-    border-radius: var(--radius-xs);
-    font-size: 12px;
-    color: var(--muted);
-    cursor: grab;
-    border: 1px solid transparent;
-  }
-  .ze-area-members li:hover {
-    color: var(--text);
-    background: rgba(255,255,255,0.04);
-  }
-  .ze-area-members li.ze-dragging { opacity: 0.45; }
-  .ze-area-members li span {
-    min-width: 0;
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    display: inline-block;
   }
   .ze-foot {
     display: flex;
@@ -479,14 +213,9 @@
     border-top: 1px solid var(--border);
     background: rgba(12, 14, 18, 0.96);
   }
-  #ze-status {
-    flex: 1;
-    min-width: 0;
-    font-size: 12px;
-    color: var(--muted);
-  }
-  #ze-status[data-kind='ok'] { color: #7bc96f; }
-  #ze-status[data-kind='err'] { color: #e2622a; }
+  #ze-status { flex: 1; font-size: 12px; color: var(--muted); min-width: 0; }
+  #ze-status[data-kind="ok"] { color: #7bc96f; }
+  #ze-status[data-kind="err"] { color: #e2622a; }
   .btn {
     padding: 8px 14px;
     border: 1px solid var(--border);
@@ -497,40 +226,10 @@
     font-size: 13px;
     cursor: pointer;
   }
-  .btn:hover { background: rgba(255,255,255,0.06); }
+  .btn:hover { border-color: var(--border-strong); }
   .btn.primary {
     border-color: rgba(245, 37, 37, 0.55);
-    background: rgba(245, 37, 37, 0.16);
-  }
-  .btn.primary.is-dirty {
-    background: rgba(245, 37, 37, 0.35);
-  }
-  .ze-modal {
-    position: fixed;
-    inset: 0;
-    z-index: 20;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0,0,0,0.55);
-    padding: 20px;
-  }
-  .ze-modal[hidden] { display: none; }
-  .ze-modal-card {
-    width: min(420px, 100%);
-    padding: 18px;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius);
-    background: #12151a;
-    box-shadow: 0 20px 50px rgba(0,0,0,0.55);
-  }
-  .ze-modal-card p { margin: 0 0 10px; font-size: 14px; line-height: 1.45; }
-  .ze-modal-hint { color: var(--muted); font-size: 12px !important; }
-  .ze-modal-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-top: 14px;
+    background: rgba(245, 37, 37, 0.18);
   }
   a.ze-back {
     color: var(--muted);
@@ -545,18 +244,17 @@
   <div class="ze">
     <header class="ze-top">
       <a class="ze-back" href="/tools">← Tools</a>
-      <div class="ze-brand">Position <span>Editor</span></div>
+      <div class="ze-brand">Sites &amp; <span>Vision</span></div>
       <div class="ze-maps" id="ze-maps"></div>
     </header>
     <div class="ze-body">
       <div class="ze-stage">
         <div class="ze-float">
-          <button type="button" class="ze-tool-wide active" id="ze-tool-positions" title="Draw position rectangles" data-tool="positions">Positions</button>
-          <button type="button" class="ze-tool-wide" id="ze-tool-bomb-a" title="Draw rough bomb site A rectangle" data-tool="bombA">Bomb A</button>
-          <button type="button" class="ze-tool-wide" id="ze-tool-bomb-b" title="Draw rough bomb site B rectangle" data-tool="bombB">Bomb B</button>
-          <button type="button" class="ze-tool-wide" id="ze-tool-vision" title="Paint vision blockers (rays stop)" data-tool="visionBlock">Vision block</button>
-          <button type="button" class="ze-tool-wide" id="ze-tool-elevated" title="Paint elevated (blocks ground sight; see past when standing on it)" data-tool="elevated">Elevated</button>
-          <button type="button" class="ze-tool-wide" id="ze-tool-erase" title="Erase vision block and elevated paint under the brush" data-tool="erase">Erase</button>
+          <button type="button" class="ze-tool-wide active bomb-a" id="ze-tool-bomb-a" title="Draw bomb site A" data-tool="bombA">Bomb A</button>
+          <button type="button" class="ze-tool-wide" id="ze-tool-bomb-b" title="Draw bomb site B" data-tool="bombB">Bomb B</button>
+          <button type="button" class="ze-tool-wide" id="ze-tool-vision" title="Paint vision blockers" data-tool="visionBlock">Vision block</button>
+          <button type="button" class="ze-tool-wide" id="ze-tool-elevated" title="Paint elevated" data-tool="elevated">Elevated</button>
+          <button type="button" class="ze-tool-wide" id="ze-tool-erase" title="Erase vision paint" data-tool="erase">Erase</button>
           <div class="ze-float-sep"></div>
           <button type="button" id="ze-brush-down" title="Smaller brush">−</button>
           <span id="ze-brush-size">8</span>
@@ -571,92 +269,44 @@
         <canvas id="ze-canvas"></canvas>
       </div>
       <aside class="ze-side">
-        <div class="ze-side-head">
-          <div class="ze-color-mode" id="ze-color-mode" role="group" aria-label="Color mode">
-            <button type="button" data-mode="zone" class="active" title="One color per position">Positions</button>
-            <button type="button" data-mode="section" title="One color per zone">Zones</button>
-            <button type="button" data-mode="area" title="One color per area">Areas</button>
-            <button type="button" data-mode="none" title="Labels only">None</button>
+        <div>
+          <h2>Bomb sites</h2>
+          <p class="ze-empty">Rough A/B plant areas for coach and win chance. Redraw replaces.</p>
+          <div class="ze-row" style="grid-template-columns: 14px 1fr auto auto; margin-top: 8px;">
+            <span class="ze-swatch" style="background:#e8c040"></span>
+            <span style="font-size:12px;color:var(--muted)">Site A</span>
+            <span id="ze-bomb-a-status" style="font-size:11px;color:var(--muted)">—</span>
+            <button type="button" class="ze-icon-btn" id="ze-clear-bomb-a" title="Clear A">✕</button>
+          </div>
+          <div class="ze-row" style="grid-template-columns: 14px 1fr auto auto; margin-top: 6px;">
+            <span class="ze-swatch" style="background:#4aa3ff"></span>
+            <span style="font-size:12px;color:var(--muted)">Site B</span>
+            <span id="ze-bomb-b-status" style="font-size:11px;color:var(--muted)">—</span>
+            <button type="button" class="ze-icon-btn" id="ze-clear-bomb-b" title="Clear B">✕</button>
           </div>
         </div>
-        <details class="ze-panel" open>
-          <summary>Positions</summary>
-          <div class="ze-panel-body">
-            <div class="ze-field">
-              <input id="ze-name" type="text" maxlength="48" value="" placeholder="Position name" />
-            </div>
-            <div id="ze-list" class="ze-panel-list ze-list-drop"></div>
+        <div>
+          <h2>Vision layers</h2>
+          <p class="ze-empty">Vision block stops rays. Elevated blocks ground sight; standing on it sees past.</p>
+          <div class="ze-row" style="grid-template-columns: 14px 1fr auto; margin-top: 8px;">
+            <span class="ze-swatch" style="background:#9b6cff"></span>
+            <span style="font-size:12px;color:var(--muted)">Vision block</span>
+            <button type="button" class="ze-icon-btn" id="ze-clear-vision" title="Clear vision">✕</button>
           </div>
-        </details>
-        <details class="ze-panel" open>
-          <summary>Zones</summary>
-          <div class="ze-panel-body">
-            <div class="ze-field ze-field-row">
-              <input id="ze-section-name" type="text" maxlength="48" value="" placeholder="Zone name" />
-              <button type="button" class="ze-icon-btn" id="ze-section-add" title="Add selected positions to this zone">+</button>
-            </div>
-            <div id="ze-sections-list" class="ze-panel-list"></div>
+          <div class="ze-row" style="grid-template-columns: 14px 1fr auto; margin-top: 6px;">
+            <span class="ze-swatch" style="background:#e8a03c"></span>
+            <span style="font-size:12px;color:var(--muted)">Elevated</span>
+            <button type="button" class="ze-icon-btn" id="ze-clear-elevated" title="Clear elevated">✕</button>
           </div>
-        </details>
-        <details class="ze-panel" open>
-          <summary>Areas</summary>
-          <div class="ze-panel-body">
-            <div class="ze-field ze-field-row">
-              <input id="ze-area-name" type="text" maxlength="48" value="" placeholder="Area name" />
-              <button type="button" class="ze-icon-btn" id="ze-area-add" title="Add selected zones to this area">+</button>
-            </div>
-            <div id="ze-areas-list" class="ze-panel-list"></div>
-          </div>
-        </details>
-        <details class="ze-panel" open>
-          <summary>Bomb sites</summary>
-          <div class="ze-panel-body">
-            <p class="ze-empty">
-              Rough A/B plant areas for coach and round win chance. One rectangle per site; redraw replaces it.
-            </p>
-            <div class="ze-row" style="grid-template-columns: 14px 1fr auto auto;">
-              <span class="ze-swatch" style="background:#e8c040"></span>
-              <span style="font-size:12px;color:var(--muted)">Site A</span>
-              <span id="ze-bomb-a-status" style="font-size:11px;color:var(--muted)">—</span>
-              <button type="button" class="ze-icon-btn" id="ze-clear-bomb-a" title="Clear bomb site A">✕</button>
-            </div>
-            <div class="ze-row" style="grid-template-columns: 14px 1fr auto auto;">
-              <span class="ze-swatch" style="background:#4aa3ff"></span>
-              <span style="font-size:12px;color:var(--muted)">Site B</span>
-              <span id="ze-bomb-b-status" style="font-size:11px;color:var(--muted)">—</span>
-              <button type="button" class="ze-icon-btn" id="ze-clear-bomb-b" title="Clear bomb site B">✕</button>
-            </div>
-          </div>
-        </details>
-        <details class="ze-panel" open>
-          <summary>Vision layers</summary>
-          <div class="ze-panel-body">
-            <p class="ze-empty" id="ze-vision-help">
-              Vision block stops rays. Elevated blocks ground sight; standing on it sees past and onto it.
-            </p>
-            <div class="ze-row" style="grid-template-columns: 14px 1fr auto;">
-              <span class="ze-swatch" style="background:#9b6cff"></span>
-              <span style="font-size:12px;color:var(--muted)">Vision block</span>
-              <button type="button" class="ze-icon-btn" id="ze-clear-vision" title="Clear all vision blocks">✕</button>
-            </div>
-            <div class="ze-row" style="grid-template-columns: 14px 1fr auto;">
-              <span class="ze-swatch" style="background:#e8a03c"></span>
-              <span style="font-size:12px;color:var(--muted)">Elevated</span>
-              <button type="button" class="ze-icon-btn" id="ze-clear-elevated" title="Clear all elevated paint">✕</button>
-            </div>
-            <div id="ze-layer-counts" class="ze-empty" style="margin-top:4px"></div>
-          </div>
-        </details>
+          <div id="ze-layer-counts" class="ze-empty" style="margin-top:8px"></div>
+        </div>
       </aside>
     </div>
     <footer class="ze-foot">
       <span id="ze-status"></span>
       <button type="button" class="btn" id="ze-discard">Discard</button>
-      <button type="button" class="btn primary" id="ze-save">Review &amp; Save</button>
+      <button type="button" class="btn primary" id="ze-save">Save</button>
     </footer>
-  </div>
-  <div class="ze-modal" id="ze-overlap" hidden>
-    <div class="ze-modal-card" id="ze-overlap-body"></div>
   </div>
   <script type="module" src="/src/tools/zoneEditorMain.js"></script>
 </body>

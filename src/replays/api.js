@@ -304,43 +304,28 @@ export async function fetchZones(map) {
   return (
     data.network || {
       map,
-      zones: [],
-      sections: [],
-      areas: [],
       visionBlocks: [],
       elevated: [],
       bombSites: { a: null, b: null },
-      colorMode: 'zone',
       updatedAt: 0
     }
   );
 }
 
 /**
- * Persist positions + zones + areas + vision layers + bomb sites for one map.
- * Same shared write path as saveRoundNotes — JSON on AIM4_REPLAY_DIR, no auth.
+ * Persist bombsites + vision layers for one map.
  * @param {string} map
- * @param {{ zones?: Array, sections?: Array, areas?: Array, visionBlocks?: Array, elevated?: Array, bombSites?: { a?: object | null, b?: object | null }, colorMode?: string }} network
+ * @param {{ visionBlocks?: Array, elevated?: Array, bombSites?: { a?: object | null, b?: object | null } }} network
  */
 export async function saveZones(map, network) {
-  const colorMode =
-    network.colorMode === 'section' ||
-    network.colorMode === 'area' ||
-    network.colorMode === 'none'
-      ? network.colorMode
-      : 'zone';
   const data = await asJson(
     await fetch(`${API_BASE}/api/replays/zones/${encodeURIComponent(map)}`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
-        zones: network.zones || [],
-        sections: network.sections || [],
-        areas: network.areas || [],
         visionBlocks: network.visionBlocks || [],
         elevated: network.elevated || [],
-        bombSites: network.bombSites || { a: null, b: null },
-        colorMode
+        bombSites: network.bombSites || { a: null, b: null }
       })
     })
   );
