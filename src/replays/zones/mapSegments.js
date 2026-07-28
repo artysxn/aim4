@@ -46,7 +46,7 @@ const MIN_RING_TEXELS = 6;
  * }} SegmentIndex
  */
 
-/** @type {Map<string, { key: string, base: SegmentIndex|null, elevated: SegmentIndex|null }>} */
+/** @type {Map<string, { key: string, base: SegmentIndex|null, elevated: SegmentIndex|null, underpass: SegmentIndex|null }>} */
 const segmentCache = new Map();
 
 /**
@@ -265,12 +265,13 @@ export function queryBounds(index, minX, minY, maxX, maxY, out, written, stamp) 
  *
  * `base` holds walls and vision blocks — always occluding. `elevated` is kept
  * apart so a viewer standing on elevated paint can simply skip it, matching the
- * old `elevatedDisabled` behaviour.
+ * old `elevatedDisabled` behaviour. `underpass` is the inverse: only queried
+ * when the viewer stands inside underpass paint.
  *
  * @param {string} mapCode
  * @param {{ mask: Uint8Array } | null} los  from getRadarLos
- * @param {{ key?: string, visionMask?: Uint8Array, elevatedMask?: Uint8Array } | null} [layers]
- * @returns {{ base: SegmentIndex|null, elevated: SegmentIndex|null } | null}
+ * @param {{ key?: string, visionMask?: Uint8Array, elevatedMask?: Uint8Array, underpassMask?: Uint8Array } | null} [layers]
+ * @returns {{ base: SegmentIndex|null, elevated: SegmentIndex|null, underpass: SegmentIndex|null } | null}
  */
 export function getMapSegments(mapCode, los, layers = null) {
   if (!mapCode || !los?.mask) return null;
@@ -307,7 +308,21 @@ export function getMapSegments(mapCode, los, layers = null) {
     }
   }
 
-  const entry = { key, base, elevated };
+  let underpass = null;
+  const underpassMask = layers?.underpassMask || null;
+  if (underpassMask) {
+    let any = false;
+    for (let i = 0; i < n; i++) {
+      if (underpassMask[i] !== 0) { any = true; break; }
+    }
+    if (any) {
+      const under = Uint8Array.from(underpassMask);
+      dropSmallComponents(under, 1, MIN_BLOB_TEXELS, stack, seen);
+      underpass = buildIndex(extractSegments(under, cal), cal);
+    }
+  }
+
+  const entry = { key, base, elevated, underpass };
   segmentCache.set(mapCode, entry);
   return entry;
 }

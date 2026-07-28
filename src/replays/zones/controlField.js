@@ -26,13 +26,6 @@ export const CLASS_EMPTY = 0;
 export const CLASS_T = 1;
 export const CLASS_CT = 2;
 export const CLASS_CONTESTED = 3;
-/**
- * Owned, but dissolving back to neutral. Not a seventh and eighth color — the
- * renderer draws these in their side's soft hue at lower opacity, so a
- * retreating edge reads as the same territory going faint.
- */
-export const CLASS_T_FADING = 4;
-export const CLASS_CT_FADING = 5;
 
 export const SIDE_NONE = 0;
 export const SIDE_T = 1;
@@ -52,7 +45,7 @@ export const SIDE_CT = 2;
  *   tExp: Float32Array, ctExp: Float32Array,
  *   tLast: Int32Array, ctLast: Int32Array,
  *   owner: Uint8Array,
- *   decayFor: Float32Array,
+ *   retreatBudget: number,
  *   gen: number
  * }} ControlField
  */
@@ -127,7 +120,7 @@ export function createControlField(geom) {
     tLast: new Int32Array(geom.count).fill(-1),
     ctLast: new Int32Array(geom.count).fill(-1),
     owner: new Uint8Array(geom.count),
-    decayFor: new Float32Array(geom.count),
+    retreatBudget: 0,
     gen: 0
   };
 }
@@ -139,7 +132,7 @@ export function resetControlField(field) {
   field.tLast.fill(-1);
   field.ctLast.fill(-1);
   field.owner.fill(SIDE_NONE);
-  field.decayFor.fill(0);
+  field.retreatBudget = 0;
   field.gen++;
 }
 
@@ -305,6 +298,9 @@ export function stampDiscInto(field, x, y, radius, side, dt, tick) {
   }
 }
 
+/** Distance stand-in for "no living player can reach this". */
+const DIST_FAR = 0x3fffffff;
+
 /** Reusable working state for the region pass. */
 let decayScratch = null;
 
@@ -313,93 +309,43 @@ function decayScratchFor(count) {
     decayScratch = {
       label: new Int32Array(count),
       stack: new Int32Array(count),
+      queue: new Int32Array(count),
       prevOwner: new Uint8Array(count),
-      lastSeen: [],
-      neutralEdge: [],
-      controlledEdge: [],
-      dying: []
+      tDist: new Int32Array(count),
+      ctDist: new Int32Array(count),
+      cleared: new Uint8Array(count),
+      /** @type {number[]} */
+      candidates: [],
+      /** @type {number[]} */
+      frontier: []
     };
   }
   return decayScratch;
 }
 
 /**
- * Retire soft control nobody has held for a while.
+ * Geodesic distance, in cells, from the nearest living player of one side.
  *
- * Ownership that is never revisited would otherwise sit on the map untouched
- * for the rest of the round. The test is per *region*, not per cell: a region
- * whose border is mostly neutral is a salient hanging in open space, while one
- * pressed against friendly or enemy ground is a real frontier and stays. Judged
- * cell by cell this would never work — a straight edge has five owned
- * neighbours against three neutral, so a wide corridor would only ever nibble
- * at its corners.
- *
- * A region qualifies when nobody on its side has had eyes or boots anywhere in
- * it for `holdTicks`. It then peels one ring per `dissolveSeconds` from the
- * outside in, so an abandoned salient visibly retracts rather than blinking
- * out. Cells land on neutral — never contested, since nobody is fighting.
- *
- * @param {ControlField} field
- * @param {number} tick
- * @param {number} dt  seconds since the previous pass
- * @param {{ holdTicks: number, dissolveSeconds: number }} rules
+ * Walked over the map rather than measured straight-line, so a spot just
+ * through a wall is correctly far away.
  */
-export function decaySoftControl(field, tick, dt, { holdTicks, dissolveSeconds }) {
-  const { owner, decayFor, tLast, ctLast, walkable, cols, rows, count } = field;
-  const s = decayScratchFor(count);
-  const { label, stack, prevOwner } = s;
-  prevOwner.set(owner);
-  label.fill(-1);
-  s.lastSeen.length = 0;
-  s.neutralEdge.length = 0;
-  s.controlledEdge.length = 0;
-  s.dying.length = 0;
+function buildPlayerDistance(field, anchors, side, dist, queue) {
+  const { cols, rows, walkable } = field;
+  dist.fill(DIST_FAR);
+  let head = 0;
+  let tail = 0;
 
-  // ---- label connected regions, tracking the freshest hold in each ---------
-  let nRegions = 0;
-  for (let start = 0; start < count; start++) {
-    if (label[start] >= 0 || !walkable[start]) continue;
-    const own = owner[start];
-    if (own === SIDE_NONE) continue;
-
-    const id = nRegions++;
-    const lastOf = own === SIDE_T ? tLast : ctLast;
-    let newest = -1;
-    let top = 0;
-    stack[top++] = start;
-    label[start] = id;
-
-    while (top > 0) {
-      const i = stack[--top];
-      if (lastOf[i] > newest) newest = lastOf[i];
-      const ix = i % cols;
-      const iy = (i / cols) | 0;
-      for (let dy = -1; dy <= 1; dy++) {
-        const ny = iy + dy;
-        if (ny < 0 || ny >= rows) continue;
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          const nx = ix + dx;
-          if (nx < 0 || nx >= cols) continue;
-          const j = ny * cols + nx;
-          if (label[j] >= 0 || !walkable[j] || owner[j] !== own) continue;
-          label[j] = id;
-          stack[top++] = j;
-        }
-      }
-    }
-
-    s.lastSeen.push(newest);
-    s.neutralEdge.push(0);
-    s.controlledEdge.push(0);
-    s.dying.push(false);
+  for (const a of anchors || []) {
+    if (a.side !== side) continue;
+    const i = cellIndexAt(field, a.x, a.y);
+    if (i < 0 || dist[i] === 0) continue;
+    dist[i] = 0;
+    queue[tail++] = i;
   }
-  if (!nRegions) return;
 
-  // ---- measure each region's border ---------------------------------------
-  for (let i = 0; i < count; i++) {
-    const id = label[i];
-    if (id < 0) continue;
+  while (head < tail) {
+    const i = queue[head++];
+    const d = dist[i] + 1;
     const ix = i % cols;
     const iy = (i / cols) | 0;
     for (let dy = -1; dy <= 1; dy++) {
@@ -410,36 +356,133 @@ export function decaySoftControl(field, tick, dt, { holdTicks, dissolveSeconds }
         const nx = ix + dx;
         if (nx < 0 || nx >= cols) continue;
         const j = ny * cols + nx;
-        // Walls are neither, so a corridor is not "exposed" along its length —
-        // only where it actually opens onto something.
-        if (!walkable[j] || label[j] === id) continue;
-        if (owner[j] !== SIDE_NONE || field.tExp[j] > 0 || field.ctExp[j] > 0) {
-          s.controlledEdge[id]++;
-        } else {
-          s.neutralEdge[id]++;
-        }
+        if (!walkable[j] || dist[j] <= d) continue;
+        dist[j] = d;
+        queue[tail++] = j;
       }
     }
   }
+}
 
-  for (let id = 0; id < nRegions; id++) {
-    const held = s.lastSeen[id] >= 0 && tick - s.lastSeen[id] < holdTicks;
-    s.dying[id] = !held && s.neutralEdge[id] > s.controlledEdge[id];
+/** Walkable neighbor with owner === SIDE_NONE (outer neutral border only). */
+function touchesNeutral(field, i, owners) {
+  const { cols, rows, walkable } = field;
+  const ix = i % cols;
+  const iy = (i / cols) | 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    const ny = iy + dy;
+    if (ny < 0 || ny >= rows) continue;
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const nx = ix + dx;
+      if (nx < 0 || nx >= cols) continue;
+      const j = ny * cols + nx;
+      if (walkable[j] && owners[j] === SIDE_NONE) return true;
+    }
+  }
+  return false;
+}
+
+function cellDist(own, i, tDist, ctDist) {
+  return own === SIDE_T ? tDist[i] : ctDist[i];
+}
+
+function cellLast(own, i, tLast, ctLast) {
+  return own === SIDE_T ? tLast[i] : ctLast[i];
+}
+
+function compareFarOldest(a, b, owner, tDist, ctDist, tLast, ctLast) {
+  const ownA = owner[a];
+  const ownB = owner[b];
+  const distA = cellDist(ownA, a, tDist, ctDist);
+  const distB = cellDist(ownB, b, tDist, ctDist);
+  if (distB !== distA) return distB - distA;
+  return cellLast(ownA, a, tLast, ctLast) - cellLast(ownB, b, tLast, ctLast);
+}
+
+/**
+ * Retire soft control nobody has held for a while.
+ *
+ * Ownership that is never revisited would otherwise sit on the map untouched
+ * for the rest of the round. Three things decide what goes, in this order:
+ *
+ *   1. How long ago that cell was last checked. Per cell, not per region — a
+ *      player at one end of a long corridor must not keep the far end alive.
+ *   2. How far it is from the nearest living player of its own side, walked
+ *      over the map. Near ground gets a little grace past the minimum; far
+ *      ground goes first.
+ *   3. Peel from the outer neutral tip as a wavefront: start at the furthest
+ *      ready edge, then spend the cell budget advancing inward — never jumping
+ *      to a disconnected near-side edge or eating out of interior holes.
+ *
+ * Cells land on neutral — never contested, since nobody is fighting over them.
+ *
+ * @param {ControlField} field
+ * @param {number} tick
+ * @param {number} dt  seconds since the previous pass
+ * @param {{ holdTicks: number, graceTicks: number, graceRangeCells: number, retreatCellsPerSecond: number }} rules
+ * @param {Array<{ x: number, y: number, side: 1|2 }>} anchors  living players
+ */
+export function decaySoftControl(field, tick, dt, rules, anchors = null) {
+  const { holdTicks, graceTicks, graceRangeCells, retreatCellsPerSecond } = rules;
+  const { owner, tLast, ctLast, walkable, cols, rows, count } = field;
+  const s = decayScratchFor(count);
+  const { queue, prevOwner, tDist, ctDist, cleared, candidates, frontier } = s;
+
+  buildPlayerDistance(field, anchors, SIDE_T, tDist, queue);
+  buildPlayerDistance(field, anchors, SIDE_CT, ctDist, queue);
+
+  const isReady = (i, own) => {
+    const last = cellLast(own, i, tLast, ctLast);
+    if (last < 0) return true;
+    const d = cellDist(own, i, tDist, ctDist);
+    const near = d >= graceRangeCells ? 0 : 1 - d / graceRangeCells;
+    return tick - last >= holdTicks + graceTicks * near;
+  };
+
+  prevOwner.set(owner);
+  cleared.fill(0);
+  candidates.length = 0;
+  for (let i = 0; i < count; i++) {
+    if (!walkable[i]) continue;
+    const own = prevOwner[i];
+    if (own === SIDE_NONE) continue;
+    if (!isReady(i, own)) continue;
+    if (!touchesNeutral(field, i, prevOwner)) continue;
+    candidates.push(i);
+  }
+  if (!candidates.length) return;
+
+  candidates.sort((a, b) => compareFarOldest(a, b, prevOwner, tDist, ctDist, tLast, ctLast));
+
+  field.retreatBudget = (field.retreatBudget || 0) + retreatCellsPerSecond * dt;
+  let budget = Math.floor(field.retreatBudget);
+  if (budget < 1) return;
+  field.retreatBudget -= budget;
+  if (budget > count) budget = count;
+
+  // Seed the wave at the furthest ready outer-edge cell(s) (same max distance).
+  const tipDist = cellDist(prevOwner[candidates[0]], candidates[0], tDist, ctDist);
+  frontier.length = 0;
+  for (const i of candidates) {
+    if (cellDist(prevOwner[i], i, tDist, ctDist) < tipDist) break;
+    frontier.push(i);
   }
 
-  // ---- peel one ring off each dying region --------------------------------
-  for (let i = 0; i < count; i++) {
-    const id = label[i];
-    if (id < 0 || !s.dying[id]) {
-      if (decayFor[i] !== 0) decayFor[i] = 0;
-      continue;
-    }
+  let removed = 0;
+  while (frontier.length && removed < budget) {
+    frontier.sort((a, b) => compareFarOldest(a, b, prevOwner, tDist, ctDist, tLast, ctLast));
+    const i = frontier.shift();
+    if (owner[i] === SIDE_NONE || cleared[i]) continue;
+    if (!touchesNeutral(field, i, owner)) continue;
 
-    // Only the current outer ring erodes; cells behind it wait their turn.
+    owner[i] = SIDE_NONE;
+    cleared[i] = 1;
+    removed++;
+
     const ix = i % cols;
     const iy = (i / cols) | 0;
-    let onEdge = false;
-    for (let dy = -1; dy <= 1 && !onEdge; dy++) {
+    for (let dy = -1; dy <= 1; dy++) {
       const ny = iy + dy;
       if (ny < 0 || ny >= rows) continue;
       for (let dx = -1; dx <= 1; dx++) {
@@ -447,24 +490,82 @@ export function decaySoftControl(field, tick, dt, { holdTicks, dissolveSeconds }
         const nx = ix + dx;
         if (nx < 0 || nx >= cols) continue;
         const j = ny * cols + nx;
-        if (!walkable[j]) continue;
-        if (prevOwner[j] === SIDE_NONE) {
-          onEdge = true;
-          break;
+        if (!walkable[j] || cleared[j] || owner[j] === SIDE_NONE) continue;
+        const own = owner[j];
+        if (!isReady(j, own)) continue;
+        if (!touchesNeutral(field, j, owner)) continue;
+        frontier.push(j);
+      }
+    }
+  }
+
+  if (removed > 0) field.gen++;
+}
+
+/**
+ * Hand a side any neutral pocket that only it surrounds.
+ *
+ * Cones leave gaps behind cover, so claimed ground comes out speckled with
+ * little holes that read as damage rather than as terrain. A pocket enclosed by
+ * one side alone was never really neutral.
+ *
+ * @param {ControlField} field
+ * @param {number} maxCells  largest pocket to absorb
+ * @returns {number} cells absorbed
+ */
+export function fillNeutralPockets(field, maxCells) {
+  const { owner, walkable, cols, rows, count } = field;
+  const s = decayScratchFor(count);
+  const { label, stack } = s;
+  label.fill(-1);
+  let absorbed = 0;
+
+  for (let start = 0; start < count; start++) {
+    if (label[start] >= 0 || !walkable[start] || owner[start] !== SIDE_NONE) continue;
+
+    let top = 0;
+    let n = 0;
+    let touching = SIDE_NONE;
+    let mixed = false;
+    stack[top++] = start;
+    label[start] = start;
+    const members = [];
+
+    while (top > 0) {
+      const i = stack[--top];
+      members.push(i);
+      n++;
+      if (n > maxCells) mixed = true;
+      const ix = i % cols;
+      const iy = (i / cols) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        const ny = iy + dy;
+        if (ny < 0 || ny >= rows) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = ix + dx;
+          if (nx < 0 || nx >= cols) continue;
+          const j = ny * cols + nx;
+          if (!walkable[j]) continue;
+          if (owner[j] !== SIDE_NONE) {
+            if (touching === SIDE_NONE) touching = owner[j];
+            else if (touching !== owner[j]) mixed = true;
+            continue;
+          }
+          if (label[j] >= 0) continue;
+          label[j] = start;
+          stack[top++] = j;
         }
       }
     }
-    if (!onEdge) {
-      decayFor[i] = 0;
-      continue;
-    }
 
-    decayFor[i] += dt;
-    if (decayFor[i] >= dissolveSeconds) {
-      owner[i] = SIDE_NONE;
-      decayFor[i] = 0;
-    }
+    if (mixed || touching === SIDE_NONE || n > maxCells) continue;
+    for (const i of members) owner[i] = touching;
+    absorbed += members.length;
   }
+
+  if (absorbed > 0) field.gen++;
+  return absorbed;
 }
 
 /**
@@ -550,18 +651,6 @@ export function classifyCell(field, i) {
   return CLASS_EMPTY;
 }
 
-/**
- * Paint class including the dissolving state. Kept apart from `classifyCell` so
- * the share maths keeps counting a fading cell as owned — it still is, right up
- * until it goes neutral.
- */
-export function paintClassOf(field, i) {
-  const c = classifyCell(field, i);
-  if (field.decayFor[i] <= 0) return c;
-  if (c === CLASS_T) return CLASS_T_FADING;
-  if (c === CLASS_CT) return CLASS_CT_FADING;
-  return c;
-}
 
 /** Copy the mutable state for seek keyframes. */
 export function snapshotField(field, tick) {
@@ -572,7 +661,7 @@ export function snapshotField(field, tick) {
     tLast: field.tLast.slice(),
     ctLast: field.ctLast.slice(),
     owner: field.owner.slice(),
-    decayFor: field.decayFor.slice()
+    retreatBudget: field.retreatBudget
   };
 }
 
@@ -582,6 +671,6 @@ export function restoreField(field, snap) {
   field.tLast.set(snap.tLast);
   field.ctLast.set(snap.ctLast);
   field.owner.set(snap.owner);
-  field.decayFor.set(snap.decayFor);
+  field.retreatBudget = snap.retreatBudget;
   field.gen++;
 }

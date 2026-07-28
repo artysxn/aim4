@@ -139,6 +139,14 @@
     border-color: rgba(230, 160, 60, 0.65);
     background: rgba(200, 130, 40, 0.18);
   }
+  .ze-float button.active.underpass {
+    border-color: rgba(70, 190, 170, 0.7);
+    background: rgba(40, 150, 130, 0.18);
+  }
+  .ze-float button.active.ledge {
+    border-color: rgba(220, 100, 140, 0.7);
+    background: rgba(190, 70, 110, 0.18);
+  }
   .ze-float button.active.bomb-a {
     border-color: rgba(240, 190, 70, 0.7);
     background: rgba(220, 170, 40, 0.18);
@@ -184,6 +192,8 @@
   .ze-brush-ring.on { display: block; }
   .ze-brush-ring.vision { border-color: rgba(180, 140, 255, 0.9); }
   .ze-brush-ring.elevated { border-color: rgba(240, 180, 80, 0.9); }
+  .ze-brush-ring.underpass { border-color: rgba(80, 210, 185, 0.9); }
+  .ze-brush-ring.ledge { border-color: rgba(230, 120, 155, 0.9); }
   .ze-brush-ring.erase { border-color: rgba(230, 90, 90, 0.9); }
   #ze-zoom {
     min-width: 48px;
@@ -273,7 +283,9 @@
           <button type="button" class="ze-tool-wide" id="ze-tool-key-b" title="Key zone for B (up to 4)" data-tool="keyB">Key B</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-vision" title="Paint vision blockers" data-tool="visionBlock">Vision block</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-elevated" title="Paint elevated" data-tool="elevated">Elevated</button>
-          <button type="button" class="ze-tool-wide" id="ze-tool-erase" title="Erase vision paint" data-tool="erase">Erase</button>
+          <button type="button" class="ze-tool-wide" id="ze-tool-underpass" title="Paint underpass (see into, not out)" data-tool="underpass">Underpass</button>
+          <button type="button" class="ze-tool-wide" id="ze-tool-ledge" title="Draw one-way ledge streak" data-tool="ledge">Ledge</button>
+          <button type="button" class="ze-tool-wide" id="ze-tool-erase" title="Erase last selected vision layer" data-tool="erase">Erase</button>
           <div class="ze-float-sep"></div>
           <button type="button" class="ze-shape-mode active" id="ze-shape-rect" title="Draw rectangles for bomb / key zones">Rectangle</button>
           <button type="button" class="ze-shape-mode" id="ze-shape-poly" title="Draw polygons for bomb / key zones">Polygon</button>
@@ -324,8 +336,12 @@
           </div>
         </div>
         <div>
+          <h2>Display</h2>
+          <button type="button" class="btn" id="ze-toggle-sites" style="width:100%;margin-top:6px;font-size:12px">Hide bombsite &amp; key zones</button>
+        </div>
+        <div>
           <h2>Vision layers</h2>
-          <p class="ze-empty">Vision block always stops rays. Elevated acts as a vision block unless you are standing on it — then elevated is ignored.</p>
+          <p class="ze-empty">Vision block always stops rays. Elevated blocks unless you stand on it. Underpass: others see in; from inside you only see the underpass. Ledge: drag a streak — left of travel is drop (blocked), right is upper (open).</p>
           <div class="ze-row" style="grid-template-columns: 14px 1fr auto; margin-top: 8px;">
             <span class="ze-swatch" style="background:#9b6cff"></span>
             <span style="font-size:12px;color:var(--muted)">Vision block</span>
@@ -335,6 +351,16 @@
             <span class="ze-swatch" style="background:#e8a03c"></span>
             <span style="font-size:12px;color:var(--muted)">Elevated</span>
             <button type="button" class="ze-icon-btn" id="ze-clear-elevated" title="Clear elevated">✕</button>
+          </div>
+          <div class="ze-row" style="grid-template-columns: 14px 1fr auto; margin-top: 6px;">
+            <span class="ze-swatch" style="background:#3db8a8"></span>
+            <span style="font-size:12px;color:var(--muted)">Underpass</span>
+            <button type="button" class="ze-icon-btn" id="ze-clear-underpass" title="Clear underpass">✕</button>
+          </div>
+          <div class="ze-row" style="grid-template-columns: 14px 1fr auto; margin-top: 6px;">
+            <span class="ze-swatch" style="background:#d45a82"></span>
+            <span style="font-size:12px;color:var(--muted)">Ledge</span>
+            <button type="button" class="ze-icon-btn" id="ze-clear-ledges" title="Clear ledges">✕</button>
           </div>
           <div id="ze-layer-counts" class="ze-empty" style="margin-top:8px"></div>
         </div>

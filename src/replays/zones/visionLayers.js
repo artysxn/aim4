@@ -1,12 +1,13 @@
 // ---------------------------------------------------------------------------
 // replays/zones/visionLayers.js
-// Painted vision-block / elevated masks for FOV rays + Position Editor brushes.
+// Painted vision-block / elevated / underpass masks for FOV rays + editor brushes.
 // Stored as piece lists on the zone network (not as positions).
 //
 // Vision block: always stops FOV rays.
-// Elevated: acts as a vision block for viewers standing outside elevated paint;
-// when the viewer is standing on elevated paint, elevated is ignored for that
-// ray (you can see onto and past the ridge).
+// Elevated: blocks viewers standing outside elevated paint; ignored when the
+// viewer stands on elevated (you can see onto and past the ridge).
+// Underpass: inverse of elevated — outsiders see into it; from inside, only the
+// underpass interior is visible (boundary blocks looking out).
 // ---------------------------------------------------------------------------
 
 import { RADAR_SIZE, radarToWorld, worldToRadar } from '../viewer/mapCalibration.js';
@@ -68,14 +69,16 @@ export function ensureVisionLayers(network) {
   if (!network || typeof network !== 'object') return network;
   if (!Array.isArray(network.visionBlocks)) network.visionBlocks = [];
   if (!Array.isArray(network.elevated)) network.elevated = [];
+  if (!Array.isArray(network.underpasses)) network.underpasses = [];
   return network;
 }
 
-/** True when the map has any painted vision-block or elevated brush. */
+/** True when the map has any painted vision-block / elevated / underpass brush. */
 export function hasVisionLayers(network) {
   return Boolean(
     (network?.visionBlocks && network.visionBlocks.length) ||
-      (network?.elevated && network.elevated.length)
+      (network?.elevated && network.elevated.length) ||
+      (network?.underpasses && network.underpasses.length)
   );
 }
 
@@ -222,22 +225,25 @@ export function bakeLayerMask(mapCode, pieces) {
 }
 
 /**
- * Cached vision / elevated testers on the network object.
+ * Cached vision / elevated / underpass testers on the network object.
  * @returns {{
  *   visionBlockAt: Function,
  *   elevatedAt: Function,
+ *   underpassAt: Function,
  *   blockerAt: (x:number,y:number,elevatedDisabled?:boolean)=>boolean
  * }}
  */
 export function getVisionLayerTests(network, mapCode) {
   ensureVisionLayers(network);
-  const key = `${mapCode}|${network.updatedAt || 0}|${network.visionBlocks.length}|${network.elevated.length}|${network._layerPaintGen || 0}`;
+  const key = `${mapCode}|${network.updatedAt || 0}|${network.visionBlocks.length}|${network.elevated.length}|${network.underpasses.length}|${network._layerPaintGen || 0}`;
   if (network._layerTests?.key === key) return network._layerTests;
 
   const vision = bakeLayerMask(mapCode, network.visionBlocks);
   const elev = bakeLayerMask(mapCode, network.elevated);
+  const under = bakeLayerMask(mapCode, network.underpasses);
   const visionBlockAt = vision.testWorld;
   const elevatedAt = elev.testWorld;
+  const underpassAt = under.testWorld;
   /** One lookup: vision blocks always; elevated unless viewer stands on elevated. */
   const blockerAt = (wx, wy, elevatedDisabled = false) => {
     if (visionBlockAt(wx, wy)) return true;
@@ -248,10 +254,12 @@ export function getVisionLayerTests(network, mapCode) {
     key,
     visionBlockAt,
     elevatedAt,
+    underpassAt,
     blockerAt,
     // Raw rasters so the segment extractor can OR them without re-baking.
     visionMask: vision.mask,
-    elevatedMask: elev.mask
+    elevatedMask: elev.mask,
+    underpassMask: under.mask
   };
   network._layerTests = tests;
   return tests;

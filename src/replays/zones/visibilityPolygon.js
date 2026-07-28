@@ -15,6 +15,7 @@
 // ---------------------------------------------------------------------------
 
 import { queryBounds } from './mapSegments.js';
+import { appendBlockingLedgeSegs } from './ledges.js';
 
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
@@ -129,6 +130,7 @@ function castRay(ox, oy, dx, dy, maxDist, bin) {
  * @param {number} args.halfFovDeg                    half-angle of the cone
  * @param {number} args.maxDist                       world-unit range cap
  * @param {Array<object|null>} args.sources           SegmentIndex list to query
+ * @param {Array<{pts:number[][], open?:string}>} [args.ledges] one-way strokes
  * @param {Array<{x:number,y:number}>} [args.smokes]  clouds, as extra occluders
  * @param {number} [args.smokeRadius]
  * @returns {Float32Array} ring [x,y,...] starting at the viewer
@@ -140,6 +142,7 @@ export function visibilityCone({
   halfFovDeg,
   maxDist,
   sources,
+  ledges = null,
   smokes = null,
   smokeRadius = 0
 }) {
@@ -154,6 +157,17 @@ export function visibilityCone({
     if (!src) continue;
     nSegs = queryBounds(src, b.minX, b.minY, b.maxX, b.maxY, scratchSegs, nSegs, queryStamp);
   }
+  nSegs = appendBlockingLedgeSegs(
+    ledges,
+    ox,
+    oy,
+    b.minX,
+    b.minY,
+    b.maxX,
+    b.maxY,
+    scratchSegs,
+    nSegs
+  );
 
   // Smokes are ordinary occluders, so nothing downstream special-cases them.
   if (smokes?.length && smokeRadius > 0) {

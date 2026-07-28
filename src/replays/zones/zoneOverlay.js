@@ -20,18 +20,15 @@ import { visibilityCone } from './visibilityPolygon.js';
 import {
   CLASS_CONTESTED,
   CLASS_CT,
-  CLASS_CT_FADING,
   CLASS_EMPTY,
   CLASS_T,
-  CLASS_T_FADING,
   FOOT_NEAR_WORLD,
   SIDE_CT,
   SIDE_NONE,
   SIDE_T,
   cellsNearInto,
   classifyCell,
-  getFieldGeometry,
-  paintClassOf
+  getFieldGeometry
 } from './controlField.js';
 import {
   VISION_STRIDE,
@@ -50,11 +47,7 @@ export const ZONE_PAINT = {
   't-control': { fill: 'rgba(150,115,28,0.34)', stroke: '#9a7620' },
   'ct-active': { fill: 'rgba(91,159,212,0.48)', stroke: '#5b9fd4' },
   'ct-control': { fill: 'rgba(40,90,130,0.34)', stroke: '#2f6a96' },
-  contested: { fill: 'rgba(210,70,70,0.40)', stroke: '#d45555' },
-  // Not new colors: the soft tones again, fainter, for ground that is slipping
-  // back to neutral. Same hue so a retreating edge still reads as that side's.
-  't-fading': { fill: 'rgba(150,115,28,0.15)', stroke: '#9a7620' },
-  'ct-fading': { fill: 'rgba(40,90,130,0.15)', stroke: '#2f6a96' }
+  contested: { fill: 'rgba(210,70,70,0.40)', stroke: '#d45555' }
 };
 
 /** Half-angle of the vision cone (degrees). */
@@ -231,6 +224,9 @@ function activeSmokes(grenades, tick, tickRate) {
  *
  * Elevated paint blocks everyone except a viewer standing on it, so it lives in
  * its own segment set and is simply left out of the query in that case.
+ * Underpass is the inverse: its segments are only included when the viewer is
+ * inside, so outsiders see in but insiders cannot see out.
+ * Ledges are one-way strokes: drop-down side blocks, upper side does not.
  *
  * @returns {Float32Array | null}
  */
@@ -239,13 +235,19 @@ export function castViewerCone({ viewer, network, smokes }) {
   if (!segments?.base || !viewer) return null;
   const layers = network._layers;
   const onElevated = Boolean(layers?.elevatedAt?.(viewer.x, viewer.y));
+  const onUnderpass = Boolean(layers?.underpassAt?.(viewer.x, viewer.y));
+  /** @type {Array<object|null>} */
+  const sources = [segments.base];
+  if (!onElevated && segments.elevated) sources.push(segments.elevated);
+  if (onUnderpass && segments.underpass) sources.push(segments.underpass);
   return visibilityCone({
     ox: viewer.x,
     oy: viewer.y,
     yawDeg: Number(viewer.yaw) || 0,
     halfFovDeg: SIGHT_FOV_DEG,
     maxDist: SIGHT_RAY_MAX,
-    sources: onElevated ? [segments.base] : [segments.base, segments.elevated],
+    sources,
+    ledges: network.ledges || null,
     smokes,
     smokeRadius: SMOKE_RADIUS_UNITS
   });
@@ -478,7 +480,7 @@ export function computeZonePaint({
   let classifyAt;
   let key;
   if (field) {
-    classifyAt = (i) => paintClassOf(field, i);
+    classifyAt = (i) => classifyCell(field, i);
     key = `f${field.gen}`;
   } else {
     const soft = softOwnersAt(presence, tick);
@@ -492,7 +494,7 @@ export function computeZonePaint({
   const rings = contoursFor(
     geom,
     classifyAt,
-    [CLASS_T, CLASS_CT, CLASS_CONTESTED, CLASS_T_FADING, CLASS_CT_FADING],
+    [CLASS_T, CLASS_CT, CLASS_CONTESTED],
     visionCache?.contour,
     key
   );
@@ -501,9 +503,7 @@ export function computeZonePaint({
     territory: {
       t: rings.get(CLASS_T) || [],
       ct: rings.get(CLASS_CT) || [],
-      contested: rings.get(CLASS_CONTESTED) || [],
-      tFading: rings.get(CLASS_T_FADING) || [],
-      ctFading: rings.get(CLASS_CT_FADING) || []
+      contested: rings.get(CLASS_CONTESTED) || []
     },
     cones,
     feet,

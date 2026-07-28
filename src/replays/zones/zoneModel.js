@@ -10,6 +10,8 @@ export function emptyNetwork(map) {
     map,
     visionBlocks: [],
     elevated: [],
+    underpasses: [],
+    ledges: [],
     bombSites: { a: null, b: null },
     keyZones: { a: [], b: [] },
     updatedAt: 0

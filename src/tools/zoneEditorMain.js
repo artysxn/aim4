@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // tools/zoneEditorMain.js — Sites & Vision editor
-// Bombsite A/B rectangles + vision-block / elevated paint only.
+// Bombsites, key zones, vision-block / elevated / underpass paint, ledges.
 // ---------------------------------------------------------------------------
 
 import { MAPS, MAP_CODES } from '../replays/shared/roundId.js';
@@ -23,13 +23,25 @@ import {
   clearKeyZones,
   ensureKeyZones
 } from '../replays/zones/keyZones.js';
+import {
+  LEDGES_MAX,
+  ensureLedges,
+  eraseLedgesNear,
+  simplifyStrokePts,
+  worldLedgeFromRadarStroke
+} from '../replays/zones/ledges.js';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 6;
 const MIN_DRAW_PX = 8;
+const MIN_LEDGE_LEN_PX = 6;
 const UNDO_MAX = 40;
 const VISION_COLOR = '#9b6cff';
 const ELEVATED_COLOR = '#e8a03c';
+const UNDERPASS_COLOR = '#3db8a8';
+const LEDGE_COLOR = '#d45a82';
+const LEDGE_DROP_COLOR = '#8a2f4a';
+const LEDGE_UPPER_COLOR = '#e8a0b4';
 const BOMB_A_COLOR = '#e8c040';
 const BOMB_B_COLOR = '#4aa3ff';
 const KEY_A_COLOR = '#c9a227';
@@ -58,6 +70,8 @@ const el = {
   toolKeyB: document.querySelector('#ze-tool-key-b'),
   toolVision: document.querySelector('#ze-tool-vision'),
   toolElevated: document.querySelector('#ze-tool-elevated'),
+  toolUnderpass: document.querySelector('#ze-tool-underpass'),
+  toolLedge: document.querySelector('#ze-tool-ledge'),
   toolErase: document.querySelector('#ze-tool-erase'),
   shapeRect: document.querySelector('#ze-shape-rect'),
   shapePoly: document.querySelector('#ze-shape-poly'),
@@ -65,15 +79,19 @@ const el = {
   btnBrushUp: document.querySelector('#ze-brush-up'),
   btnClearVision: document.querySelector('#ze-clear-vision'),
   btnClearElevated: document.querySelector('#ze-clear-elevated'),
+  btnClearUnderpass: document.querySelector('#ze-clear-underpass'),
+  btnClearLedges: document.querySelector('#ze-clear-ledges'),
   btnClearBombA: document.querySelector('#ze-clear-bomb-a'),
   btnClearBombB: document.querySelector('#ze-clear-bomb-b'),
   btnClearKeyA: document.querySelector('#ze-clear-key-a'),
-  btnClearKeyB: document.querySelector('#ze-clear-key-b')
+  btnClearKeyB: document.querySelector('#ze-clear-key-b'),
+  btnToggleSites: document.querySelector('#ze-toggle-sites')
 };
 
 let mapCode = MAP_CODES.includes('INF') ? 'INF' : MAP_CODES[0];
 let network = emptyNetwork(mapCode);
 ensureVisionLayers(network);
+ensureLedges(network);
 ensureBombSites(network);
 ensureKeyZones(network);
 let savedSnapshot = '';
@@ -90,22 +108,29 @@ let drawing = null;
 let polyVerts = [];
 let panning = false;
 let lastPan = null;
-/** @type {'bombA'|'bombB'|'keyA'|'keyB'|'visionBlock'|'elevated'|'erase'} */
+/** @type {'bombA'|'bombB'|'keyA'|'keyB'|'visionBlock'|'elevated'|'underpass'|'ledge'|'erase'} */
 let paintTool = 'bombA';
 /** @type {'rect'|'poly'} */
 let shapeMode = 'rect';
+/** @type {'visionBlock'|'elevated'|'underpass'|'ledge'} */
 let eraseTarget = 'visionBlock';
 let brushPx = DEFAULT_BRUSH_PX;
-/** @type {null | { last: {x:number,y:number}, layer: 'visionBlock'|'elevated', erase: boolean }} */
+let showSites = true;
+/** @type {null | { last: {x:number,y:number}, layer: string, erase: boolean }} */
 let brushing = null;
+/** @type {null | Array<[number, number]>} radar pts while drawing a ledge streak */
+let ledgeStroke = null;
 
 function snapshotOf(net) {
   ensureBombSites(net);
   ensureVisionLayers(net);
+  ensureLedges(net);
   ensureKeyZones(net);
   return JSON.stringify({
     visionBlocks: net.visionBlocks || [],
     elevated: net.elevated || [],
+    underpasses: net.underpasses || [],
+    ledges: net.ledges || [],
     bombSites: net.bombSites || { a: null, b: null },
     keyZones: net.keyZones || { a: [], b: [] }
   });
@@ -115,8 +140,19 @@ function cloneNetworkState() {
   return JSON.parse(snapshotOf(network));
 }
 
+function isStampBrushTool(tool = paintTool) {
+  return tool === 'visionBlock' || tool === 'elevated' || tool === 'underpass';
+}
+
 function isBrushTool(tool = paintTool) {
-  return tool === 'visionBlock' || tool === 'elevated' || tool === 'erase';
+  return isStampBrushTool(tool) || tool === 'erase' || tool === 'ledge';
+}
+
+function piecesForLayer(layer) {
+  ensureVisionLayers(network);
+  if (layer === 'elevated') return network.elevated;
+  if (layer === 'underpass') return network.underpasses;
+  return network.visionBlocks;
 }
 
 function isBombTool(tool = paintTool) {
@@ -202,9 +238,12 @@ function undoLast() {
   const prev = undoStack.pop();
   network.visionBlocks = prev.visionBlocks || [];
   network.elevated = prev.elevated || [];
+  network.underpasses = prev.underpasses || [];
+  network.ledges = prev.ledges || [];
   network.bombSites = prev.bombSites || { a: null, b: null };
   network.keyZones = prev.keyZones || { a: [], b: [] };
   ensureVisionLayers(network);
+  ensureLedges(network);
   ensureBombSites(network);
   ensureKeyZones(network);
   bumpLayerPaintGen(network);
@@ -216,11 +255,14 @@ function undoLast() {
 
 function syncUi() {
   ensureVisionLayers(network);
+  ensureLedges(network);
   ensureBombSites(network);
   if (el.layerCounts) {
     const vb = network.visionBlocks.length;
     const elv = network.elevated.length;
-    el.layerCounts.textContent = `${vb} vision · ${elv} elevated stamp${elv === 1 ? '' : 's'}`;
+    const up = network.underpasses.length;
+    const lg = network.ledges.length;
+    el.layerCounts.textContent = `${vb} vision · ${elv} elevated · ${up} underpass · ${lg} ledge${lg === 1 ? '' : 's'}`;
   }
   if (el.bombAStatus) el.bombAStatus.textContent = network.bombSites.a ? 'Set' : '—';
   if (el.bombBStatus) el.bombBStatus.textContent = network.bombSites.b ? 'Set' : '—';
@@ -244,22 +286,44 @@ function syncUi() {
   el.toolVision?.classList.toggle('vision', paintTool === 'visionBlock');
   el.toolElevated?.classList.toggle('active', paintTool === 'elevated');
   el.toolElevated?.classList.toggle('elevated', paintTool === 'elevated');
+  el.toolUnderpass?.classList.toggle('active', paintTool === 'underpass');
+  el.toolUnderpass?.classList.toggle('underpass', paintTool === 'underpass');
+  el.toolLedge?.classList.toggle('active', paintTool === 'ledge');
+  el.toolLedge?.classList.toggle('ledge', paintTool === 'ledge');
   el.toolErase?.classList.toggle('active', paintTool === 'erase');
   el.shapeRect?.classList.toggle('active', shapeMode === 'rect');
   el.shapePoly?.classList.toggle('active', shapeMode === 'poly');
   el.canvas?.classList.toggle('ze-brush-cursor', isBrush);
   if (el.brushSizeLabel) el.brushSizeLabel.textContent = String(brushPx);
+  if (el.btnToggleSites) {
+    el.btnToggleSites.textContent = showSites
+      ? 'Hide bombsite & key zones'
+      : 'Show bombsite & key zones';
+  }
   if (!isBrush) hideBrushRing();
 }
 
 function setPaintTool(tool) {
-  if (tool === 'visionBlock' || tool === 'elevated') eraseTarget = tool;
+  if (
+    tool === 'visionBlock' ||
+    tool === 'elevated' ||
+    tool === 'underpass' ||
+    tool === 'ledge'
+  ) {
+    eraseTarget = tool;
+  }
   paintTool = tool;
   if (!isShapeTool()) polyVerts = [];
   brushing = null;
+  ledgeStroke = null;
   drawing = null;
   syncUi();
   draw();
+  if (tool === 'ledge') {
+    setStatus('Ledge: drag a streak · left of travel = drop · right = upper');
+  } else if (tool === 'underpass') {
+    setStatus('Underpass: paint area others can see into; you cannot see out');
+  }
 }
 
 function setShapeMode(mode) {
@@ -277,7 +341,7 @@ function setShapeMode(mode) {
 
 function hideBrushRing() {
   if (!el.brushRing) return;
-  el.brushRing.classList.remove('on', 'vision', 'elevated', 'erase');
+  el.brushRing.classList.remove('on', 'vision', 'elevated', 'underpass', 'ledge', 'erase');
   el.brushRing.hidden = true;
 }
 
@@ -296,6 +360,8 @@ function updateBrushRing(clientX, clientY) {
   el.brushRing.classList.add('on');
   el.brushRing.classList.toggle('vision', paintTool === 'visionBlock');
   el.brushRing.classList.toggle('elevated', paintTool === 'elevated');
+  el.brushRing.classList.toggle('underpass', paintTool === 'underpass');
+  el.brushRing.classList.toggle('ledge', paintTool === 'ledge');
   el.brushRing.classList.toggle('erase', paintTool === 'erase');
   el.brushRing.style.left = `${clientX - rect.left}px`;
   el.brushRing.style.top = `${clientY - rect.top}px`;
@@ -306,6 +372,8 @@ function updateBrushRing(clientX, clientY) {
 function activeBrushLayer() {
   if (paintTool === 'visionBlock') return 'visionBlock';
   if (paintTool === 'elevated') return 'elevated';
+  if (paintTool === 'underpass') return 'underpass';
+  if (paintTool === 'ledge') return 'ledge';
   if (paintTool === 'erase') return eraseTarget;
   return null;
 }
@@ -360,6 +428,57 @@ function draw() {
   };
   drawLayer(network.visionBlocks, VISION_COLOR, 0.45);
   drawLayer(network.elevated, ELEVATED_COLOR, 0.4);
+  drawLayer(network.underpasses, UNDERPASS_COLOR, 0.4);
+
+  ensureLedges(network);
+  const halfW = Math.max(1.5, brushPx * 0.45);
+  const drawLedgeStroke = (radarPts, committed) => {
+    if (!radarPts || radarPts.length < 2) return;
+    for (let i = 0; i < radarPts.length - 1; i++) {
+      const x0 = radarPts[i][0];
+      const y0 = radarPts[i][1];
+      const x1 = radarPts[i + 1][0];
+      const y1 = radarPts[i + 1][1];
+      const dx = x1 - x0;
+      const dy = y1 - y0;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-6) continue;
+      const rNx = (dy / len) * halfW;
+      const rNy = (-dx / len) * halfW;
+      // Right of travel = upper (open); left = drop.
+      ctx.beginPath();
+      ctx.moveTo(x0 - rNx, y0 - rNy);
+      ctx.lineTo(x1 - rNx, y1 - rNy);
+      ctx.lineTo(x1, y1);
+      ctx.lineTo(x0, y0);
+      ctx.closePath();
+      ctx.fillStyle = hexAlpha(LEDGE_DROP_COLOR, committed ? 0.55 : 0.4);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.lineTo(x1 + rNx, y1 + rNy);
+      ctx.lineTo(x0 + rNx, y0 + rNy);
+      ctx.closePath();
+      ctx.fillStyle = hexAlpha(LEDGE_UPPER_COLOR, committed ? 0.5 : 0.35);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.strokeStyle = LEDGE_COLOR;
+      ctx.lineWidth = 1.25 / t.scale;
+      ctx.stroke();
+    }
+  };
+  for (const ledge of network.ledges) {
+    const radarPts = [];
+    for (const [wx, wy] of ledge.pts || []) {
+      const rp = worldToRadar(mapCode, wx, wy, {});
+      radarPts.push([rp.x, rp.y]);
+    }
+    drawLedgeStroke(radarPts, true);
+  }
+  if (ledgeStroke?.length >= 2) drawLedgeStroke(ledgeStroke, false);
 
   ensureBombSites(network);
   const drawPiece = (piece, color, label, lineW = 2) => {
@@ -408,17 +527,19 @@ function draw() {
     ctx.textBaseline = 'middle';
     ctx.fillText(label, cx, cy);
   };
-  drawPiece(network.bombSites.a, BOMB_A_COLOR, 'A', 2);
-  drawPiece(network.bombSites.b, BOMB_B_COLOR, 'B', 2);
+  if (showSites) {
+    drawPiece(network.bombSites.a, BOMB_A_COLOR, 'A', 2);
+    drawPiece(network.bombSites.b, BOMB_B_COLOR, 'B', 2);
 
-  ensureKeyZones(network);
-  const drawKeyList = (list, color, prefix) => {
-    (list || []).forEach((piece, i) => {
-      drawPiece(piece, color, `${prefix}${i + 1}`, 1.5);
-    });
-  };
-  drawKeyList(network.keyZones.a, KEY_A_COLOR, 'A');
-  drawKeyList(network.keyZones.b, KEY_B_COLOR, 'B');
+    ensureKeyZones(network);
+    const drawKeyList = (list, color, prefix) => {
+      (list || []).forEach((piece, i) => {
+        drawPiece(piece, color, `${prefix}${i + 1}`, 1.5);
+      });
+    };
+    drawKeyList(network.keyZones.a, KEY_A_COLOR, 'A');
+    drawKeyList(network.keyZones.b, KEY_B_COLOR, 'B');
+  }
 
   const draftColor =
     paintTool === 'bombA'
@@ -489,11 +610,13 @@ async function loadMap(code) {
   try {
     network = await fetchZones(mapCode);
     ensureVisionLayers(network);
+    ensureLedges(network);
     ensureBombSites(network);
     ensureKeyZones(network);
   } catch (err) {
     network = emptyNetwork(mapCode);
     ensureVisionLayers(network);
+    ensureLedges(network);
     ensureBombSites(network);
     ensureKeyZones(network);
     setStatus(err.message || 'Could not load', 'err');
@@ -506,6 +629,7 @@ async function loadMap(code) {
   panY = 0;
   drawing = null;
   polyVerts = [];
+  ledgeStroke = null;
   syncUi();
   draw();
 }
@@ -629,8 +753,25 @@ function finishPoly() {
 }
 
 function applyBrushAt(from, to, layer, erase) {
+  if (layer === 'ledge') {
+    if (!erase) return;
+    ensureLedges(network);
+    const mid = { x: (from.x + to.x) * 0.5, y: (from.y + to.y) * 0.5 };
+    const w = radarToWorld(mapCode, mid.x, mid.y, {});
+    const a = radarToWorld(mapCode, mid.x, mid.y, {});
+    const b = radarToWorld(mapCode, mid.x + brushPx * 0.5, mid.y, {});
+    const radius = Math.max(8, Math.hypot(b.x - a.x, b.y - a.y));
+    const n = eraseLedgesNear(network.ledges, w.x, w.y, radius);
+    if (n > 0) {
+      bumpLayerPaintGen(network);
+      markDirty(true);
+      syncUi();
+      draw();
+    }
+    return;
+  }
   ensureVisionLayers(network);
-  const pieces = layer === 'elevated' ? network.elevated : network.visionBlocks;
+  const pieces = piecesForLayer(layer);
   const n = strokeBrush(pieces, mapCode, from, to, brushPx, { erase });
   if (n > 0) {
     bumpLayerPaintGen(network);
@@ -638,6 +779,47 @@ function applyBrushAt(from, to, layer, erase) {
     syncUi();
     draw();
   }
+}
+
+function finishLedgeStroke() {
+  if (!ledgeStroke?.length) {
+    ledgeStroke = null;
+    draw();
+    return;
+  }
+  const pts = simplifyStrokePts(ledgeStroke, 2.5);
+  ledgeStroke = null;
+  if (pts.length < 2) {
+    draw();
+    return;
+  }
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) {
+    len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  }
+  if (len < MIN_LEDGE_LEN_PX) {
+    draw();
+    setStatus('Ledge too short', 'err');
+    return;
+  }
+  ensureLedges(network);
+  if (network.ledges.length >= LEDGES_MAX) {
+    draw();
+    setStatus(`At most ${LEDGES_MAX} ledges`, 'err');
+    return;
+  }
+  const ledge = worldLedgeFromRadarStroke(mapCode, radarToWorld, pts, 'R');
+  if (!ledge) {
+    draw();
+    return;
+  }
+  pushUndo();
+  network.ledges.push(ledge);
+  bumpLayerPaintGen(network);
+  markDirty(true);
+  syncUi();
+  draw();
+  setStatus('Ledge added · left = drop · right = upper');
 }
 
 el.mapTabs?.addEventListener('click', (e) => {
@@ -654,7 +836,14 @@ el.canvas.addEventListener('pointerdown', (e) => {
   }
   if (e.button !== 0) return;
   const r = radarFromClient(e.clientX, e.clientY);
-  if (isBrushTool()) {
+  if (paintTool === 'ledge') {
+    ledgeStroke = [[r.x, r.y]];
+    el.canvas.setPointerCapture(e.pointerId);
+    updateBrushRing(e.clientX, e.clientY);
+    draw();
+    return;
+  }
+  if (isStampBrushTool() || paintTool === 'erase') {
     const layer = activeBrushLayer() || 'visionBlock';
     pushUndo();
     const erase = paintTool === 'erase';
@@ -683,6 +872,15 @@ el.canvas.addEventListener('pointermove', (e) => {
     draw();
     return;
   }
+  if (ledgeStroke) {
+    const r = radarFromClient(e.clientX, e.clientY);
+    const last = ledgeStroke[ledgeStroke.length - 1];
+    if ((r.x - last[0]) ** 2 + (r.y - last[1]) ** 2 >= 1) {
+      ledgeStroke.push([r.x, r.y]);
+      draw();
+    }
+    return;
+  }
   if (brushing) {
     const r = radarFromClient(e.clientX, e.clientY);
     applyBrushAt(r, brushing.last, brushing.layer, brushing.erase);
@@ -700,14 +898,20 @@ el.canvas.addEventListener('pointerup', () => {
     lastPan = null;
     return;
   }
+  if (ledgeStroke) {
+    finishLedgeStroke();
+    return;
+  }
   if (brushing) {
     brushing = null;
     setStatus(
       paintTool === 'erase'
-        ? 'Erased vision paint'
+        ? `Erased ${eraseTarget}`
         : paintTool === 'elevated'
           ? 'Painted elevated'
-          : 'Painted vision block'
+          : paintTool === 'underpass'
+            ? 'Painted underpass'
+            : 'Painted vision block'
     );
     return;
   }
@@ -752,6 +956,8 @@ el.toolKeyA?.addEventListener('click', () => setPaintTool('keyA'));
 el.toolKeyB?.addEventListener('click', () => setPaintTool('keyB'));
 el.toolVision?.addEventListener('click', () => setPaintTool('visionBlock'));
 el.toolElevated?.addEventListener('click', () => setPaintTool('elevated'));
+el.toolUnderpass?.addEventListener('click', () => setPaintTool('underpass'));
+el.toolLedge?.addEventListener('click', () => setPaintTool('ledge'));
 el.toolErase?.addEventListener('click', () => setPaintTool('erase'));
 el.shapeRect?.addEventListener('click', () => setShapeMode('rect'));
 el.shapePoly?.addEventListener('click', () => setShapeMode('poly'));
@@ -759,6 +965,11 @@ el.btnClearBombA?.addEventListener('click', () => clearBombSite('a'));
 el.btnClearBombB?.addEventListener('click', () => clearBombSite('b'));
 el.btnClearKeyA?.addEventListener('click', () => clearKeySite('a'));
 el.btnClearKeyB?.addEventListener('click', () => clearKeySite('b'));
+el.btnToggleSites?.addEventListener('click', () => {
+  showSites = !showSites;
+  syncUi();
+  draw();
+});
 
 el.btnBrushDown?.addEventListener('click', () => {
   brushPx = Math.max(MIN_BRUSH_PX, brushPx - 1);
@@ -793,6 +1004,32 @@ el.btnClearElevated?.addEventListener('click', () => {
   syncUi();
   draw();
   setStatus('Cleared elevated');
+});
+
+el.btnClearUnderpass?.addEventListener('click', () => {
+  ensureVisionLayers(network);
+  if (!network.underpasses.length) return;
+  if (!confirm('Clear all underpass paint?')) return;
+  pushUndo();
+  network.underpasses = [];
+  bumpLayerPaintGen(network);
+  markDirty(true);
+  syncUi();
+  draw();
+  setStatus('Cleared underpass');
+});
+
+el.btnClearLedges?.addEventListener('click', () => {
+  ensureLedges(network);
+  if (!network.ledges.length) return;
+  if (!confirm('Clear all ledges?')) return;
+  pushUndo();
+  network.ledges = [];
+  bumpLayerPaintGen(network);
+  markDirty(true);
+  syncUi();
+  draw();
+  setStatus('Cleared ledges');
 });
 
 el.canvas.addEventListener(
@@ -834,11 +1071,13 @@ el.btnDiscard?.addEventListener('click', async () => {
   try {
     network = await fetchZones(mapCode);
     ensureVisionLayers(network);
+    ensureLedges(network);
     ensureBombSites(network);
     ensureKeyZones(network);
   } catch {
     network = emptyNetwork(mapCode);
     ensureVisionLayers(network);
+    ensureLedges(network);
     ensureBombSites(network);
     ensureKeyZones(network);
   }
@@ -852,12 +1091,14 @@ el.btnDiscard?.addEventListener('click', async () => {
 
 el.btnSave?.addEventListener('click', async () => {
   ensureVisionLayers(network);
+  ensureLedges(network);
   ensureBombSites(network);
   ensureKeyZones(network);
   setStatus('Saving…');
   try {
     network = await saveZones(mapCode, network);
     ensureVisionLayers(network);
+    ensureLedges(network);
     ensureBombSites(network);
     ensureKeyZones(network);
     savedSnapshot = snapshotOf(network);

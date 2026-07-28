@@ -6,7 +6,7 @@
 //
 // Painted position / zone / area hierarchies are no longer stored. Old files
 // may still contain those keys; GET ignores them and SAVE overwrites with the
-// slim shape (bombsites + visionBlocks + elevated only).
+// slim shape (bombsites + vision layers + ledges + key zones).
 // ---------------------------------------------------------------------------
 
 import fs from 'node:fs';
@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { ROOT as REPLAY_ROOT } from './replays/demoStore.js';
 import { sanitizeBombSites } from '../src/replays/zones/bombSites.js';
 import { sanitizeKeyZones } from '../src/replays/zones/keyZones.js';
+import { sanitizeLedges } from '../src/replays/zones/ledges.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -80,6 +81,8 @@ export function emptyZones(map) {
     map: code,
     visionBlocks: [],
     elevated: [],
+    underpasses: [],
+    ledges: [],
     bombSites: { a: null, b: null },
     keyZones: { a: [], b: [] },
     updatedAt: 0
@@ -98,6 +101,8 @@ export function sanitizeZones(map, payload) {
     map: code,
     visionBlocks: sanitizeLayerPieces(src.visionBlocks),
     elevated: sanitizeLayerPieces(src.elevated),
+    underpasses: sanitizeLayerPieces(src.underpasses),
+    ledges: sanitizeLedges(src.ledges),
     bombSites: sanitizeBombSites(src.bombSites),
     keyZones: sanitizeKeyZones(src.keyZones),
     updatedAt: Number(src.updatedAt) || Date.now()
@@ -169,6 +174,10 @@ export async function saveZones(map, payload) {
       ? payload.visionBlocks
       : existing.visionBlocks || [],
     elevated: Array.isArray(payload?.elevated) ? payload.elevated : existing.elevated || [],
+    underpasses: Array.isArray(payload?.underpasses)
+      ? payload.underpasses
+      : existing.underpasses || [],
+    ledges: Array.isArray(payload?.ledges) ? payload.ledges : existing.ledges || [],
     bombSites:
       payload?.bombSites && typeof payload.bombSites === 'object'
         ? payload.bombSites

@@ -705,6 +705,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
           map,
           visionBlocks: [],
           elevated: [],
+          underpasses: [],
+          ledges: [],
           bombSites: { a: null, b: null },
           updatedAt: 0
         };

@@ -25,6 +25,7 @@ import {
   classifyCell,
   createControlField,
   decaySoftControl,
+  fillNeutralPockets,
   rasterizeConeInto,
   resetControlField,
   resolveOwners,
@@ -42,16 +43,26 @@ export const CLAIM_FLIP_SECONDS = 2.5;
 /** Seconds without exposure before a side's progress resets. */
 export const CONTEST_DECAY_SECONDS = 2;
 /**
- * Seconds a side can go without eyes or boots on ground it owns before that
- * ground starts giving way. Only applies where the surroundings are more
- * neutral than controlled, so a held position is never on the clock.
+ * Minimum seconds a cell can go unchecked before its side gives it up.
+ * Measured per cell, so a player at one end of a corridor does not keep the far
+ * end alive.
  */
 export const SOFT_HOLD_SECONDS = 10;
 /**
- * Seconds an exposed cell spends dissolving. One ring peels per interval, so a
- * long abandoned salient retracts from its open end rather than vanishing.
+ * Extra seconds granted to ground right next to a living player, tapering to
+ * nothing at SOFT_GRACE_RANGE_CELLS. This is what makes the front sweep in from
+ * the far tip instead of the region shrinking evenly on every side.
  */
-export const SOFT_DISSOLVE_SECONDS = 1.5;
+export const SOFT_GRACE_SECONDS = 2;
+/** Distance, in cells, at which the grace above has fallen to zero. */
+export const SOFT_GRACE_RANGE_CELLS = 12;
+/** How fast a given-up outer frontier retracts, in cells per second. */
+export const SOFT_RETREAT_CELLS_PER_SECOND = 8;
+/**
+ * Largest neutral pocket a side absorbs when it is the only one surrounding it.
+ * Cones leave gaps behind cover; without this the map reads as moth-eaten.
+ */
+export const POCKET_FILL_CELLS = 12;
 /** Strides between seek keyframes. */
 export const KEYFRAME_STRIDES = 32;
 
@@ -119,8 +130,12 @@ export function createControlSimulator({ meta, track, geom, castCone }) {
   };
   const softRules = {
     holdTicks: SOFT_HOLD_SECONDS * tickRate,
-    dissolveSeconds: SOFT_DISSOLVE_SECONDS
+    graceTicks: SOFT_GRACE_SECONDS * tickRate,
+    graceRangeCells: SOFT_GRACE_RANGE_CELLS,
+    retreatCellsPerSecond: SOFT_RETREAT_CELLS_PER_SECOND
   };
+  /** Living players, reused each stride as the decay's distance sources. */
+  const anchors = [];
   const dt = VISION_STRIDE / tickRate;
   const lastStride = Math.floor((end - from) / VISION_STRIDE);
   const scratch = [];
@@ -136,12 +151,14 @@ export function createControlSimulator({ meta, track, geom, castCone }) {
     }
     const tick = from + k * VISION_STRIDE;
     track.sampleAll(tick, scratch);
+    anchors.length = 0;
     for (const p of players) {
       const side = teamSides[p.team];
       if (side !== 'T' && side !== 'CT') continue;
       const s = scratch[p.slot];
       if (!s?.alive || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
       const sideId = side === 'T' ? SIDE_T : SIDE_CT;
+      anchors.push({ x: s.x, y: s.y, side: sideId });
       // Boots hold ground regardless of where the player happens to be looking.
       stampDiscInto(field, s.x, s.y, FOOT_NEAR_WORLD, sideId, dt, tick);
       if (!Number.isFinite(s.yaw)) continue;
@@ -149,7 +166,9 @@ export function createControlSimulator({ meta, track, geom, castCone }) {
       if (ring) rasterizeConeInto(field, ring, sideId, dt, tick);
     }
     resolveOwners(field, tick, rules);
-    decaySoftControl(field, tick, dt, softRules);
+    // Absorb cone gaps before decay so interior holes cannot act as edges.
+    fillNeutralPockets(field, POCKET_FILL_CELLS);
+    decaySoftControl(field, tick, dt, softRules, anchors);
     cursor = k;
   }
 

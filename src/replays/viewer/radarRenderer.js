@@ -416,10 +416,7 @@ export class RadarRenderer {
     zc.rect(t.ox, t.oy, mapW, mapH);
     zc.clip();
 
-    // Held ground first, then who is live on it. Ground on its way out goes
-    // down before the solid tones so a retreating edge cannot overdraw them.
-    stamp(pathOf(data.territory?.tFading), 't-fading');
-    stamp(pathOf(data.territory?.ctFading), 'ct-fading');
+    // Held ground first, then who is live on it.
     stamp(pathOf(data.territory?.t), 't-control');
     stamp(pathOf(data.territory?.ct), 'ct-control');
     stamp(pathOf(data.territory?.contested), 'contested');
