@@ -450,7 +450,11 @@ export function computeZonePaint({
 
   // ---- accumulated ownership ---------------------------------------------
   let field = null;
-  if (track && visionCache) {
+  // Skip until players exist — summary/fallback meta often has players: [], and
+  // a sim built then would stamp nothing (cones still paint from live states).
+  if (track && visionCache && (meta.players || []).length) {
+    // Include player count so a sim built from summary/fallback meta (often
+    // players: []) is not reused after full round meta arrives.
     const simKey = [
       mapCode,
       meta.startTick ?? 0,
@@ -458,6 +462,7 @@ export function computeZonePaint({
       meta.endTick ?? 0,
       meta.team1Side || '',
       meta.team2Side || '',
+      (meta.players || []).length,
       network.updatedAt || 0,
       network._layerPaintGen || 0
     ].join('|');

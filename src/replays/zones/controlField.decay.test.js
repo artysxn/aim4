@@ -46,8 +46,8 @@ function idx(geom, ix, iy) {
 }
 
 const tickRate = 64;
-const holdTicks = 10 * tickRate;
-const graceTicks = 2 * tickRate;
+const holdTicks = 8 * tickRate;
+const graceTicks = 0.5 * tickRate;
 const graceRangeCells = 12;
 const rules = {
   holdTicks,
@@ -107,9 +107,9 @@ function testGraceKeepsNearAliveLonger() {
   const anchors = [{ x: p.x, y: p.y, side: SIDE_T }];
   decaySoftControl(field, tick, 1, { ...rules, retreatCellsPerSecond: 1000 }, anchors);
 
-  assert(field.owner[idx(geom, 20, 0)] === SIDE_NONE, 'far tip ready at 10s');
-  assert(field.owner[idx(geom, 1, 0)] === SIDE_T, 'player cell still in grace at 10s');
-  assert(field.owner[idx(geom, 2, 0)] === SIDE_T, 'near neighbor still in grace at 10s');
+  assert(field.owner[idx(geom, 20, 0)] === SIDE_NONE, 'far tip ready at 8s');
+  assert(field.owner[idx(geom, 1, 0)] === SIDE_T, 'player cell still in grace at 8s');
+  assert(field.owner[idx(geom, 2, 0)] === SIDE_T, 'near neighbor still in grace at 8s');
 }
 
 function testHoleAbsorbedBeforeDecay() {

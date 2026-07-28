@@ -623,6 +623,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
     if (meta) {
       activeMeta = meta;
+      // Early draw() may have built a control sim from fallbackMeta (often with
+      // empty players). That sim key can match the full meta's ticks/sides, so
+      // soft control would stay empty until the zone overlay is toggled. Drop it.
+      resetZoneVisionCache(zoneVisionCache);
       const sideChanged =
         (meta.winnerSide && meta.winnerSide !== rounds[index].winnerSide) ||
         (meta.team1Side && meta.team1Side !== rounds[index].team1Side);

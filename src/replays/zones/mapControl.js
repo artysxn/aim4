@@ -47,17 +47,17 @@ export const CONTEST_DECAY_SECONDS = 2;
  * Measured per cell, so a player at one end of a corridor does not keep the far
  * end alive.
  */
-export const SOFT_HOLD_SECONDS = 10;
+export const SOFT_HOLD_SECONDS = 8;
 /**
  * Extra seconds granted to ground right next to a living player, tapering to
  * nothing at SOFT_GRACE_RANGE_CELLS. This is what makes the front sweep in from
  * the far tip instead of the region shrinking evenly on every side.
  */
-export const SOFT_GRACE_SECONDS = 2;
+export const SOFT_GRACE_SECONDS = 0.5;
 /** Distance, in cells, at which the grace above has fallen to zero. */
 export const SOFT_GRACE_RANGE_CELLS = 12;
 /** How fast a given-up outer frontier retracts, in cells per second. */
-export const SOFT_RETREAT_CELLS_PER_SECOND = 8;
+export const SOFT_RETREAT_CELLS_PER_SECOND = 32;
 /**
  * Largest neutral pocket a side absorbs when it is the only one surrounding it.
  * Cones leave gaps behind cover; without this the map reads as moth-eaten.
