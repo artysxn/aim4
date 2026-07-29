@@ -4,6 +4,7 @@
 FROM node:20-alpine
 
 WORKDIR /app
+RUN apk add --no-cache 7zip
 
 # Install production dependencies first for better layer caching.
 COPY package.json package-lock.json ./
