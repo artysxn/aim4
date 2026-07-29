@@ -126,6 +126,35 @@ console.log(`  batch reported ${last.totals.files} demos unpacked, junk ignored`
   console.log('  both fixtures reported as failed parses with a reason');
 }
 
+// ---- an upload that unpacks to nothing must say so --------------------------
+
+{
+  // The regression this guards: a batch that fails before identifying any file
+  // has no per-file outcomes, so counting only files reported "nothing
+  // succeeded and nothing failed" and the UI printed "Upload complete." over
+  // the top of the real error. The reason has to survive on the batch.
+  const res = await fetch(`${base}/api/replays/demos`, {
+    method: 'POST',
+    headers: { 'X-Aim4-Filename': 'cs2-demos.rar' },
+    body: Buffer.alloc(4096, 7)
+  });
+  assert(res.status === 202, `upload accepted before unpacking, got ${res.status}`);
+  const { batch } = await res.json();
+
+  let settled = null;
+  for (let i = 0; i < 100; i++) {
+    settled = (await (await fetch(`${base}/api/replays/uploads/${batch.id}`)).json()).batch;
+    if (settled.stage === 'done' || settled.stage === 'error') break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert(settled.stage === 'error', `unreadable archive settles as error, got ${settled.stage}`);
+  assert(settled.totals.files === 0, 'no files were identified');
+  assert(settled.totals.parsed === 0 && settled.totals.failed === 0, 'no per-file outcomes exist');
+  // With no per-file outcomes, this is the ONLY thing the client can report.
+  assert(settled.error && settled.error.length > 10, `batch carries a reason: ${settled.error}`);
+  console.log(`  failed unpack carries its reason on the batch: "${settled.error.slice(0, 60)}…"`);
+}
+
 // ---- refusals ---------------------------------------------------------------
 
 {

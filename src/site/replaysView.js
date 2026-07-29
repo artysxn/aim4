@@ -159,16 +159,31 @@ export function initReplaysView({ escapeHtml }) {
       <div class="rp-meter"><span style="width:${Math.min(100, pctBytes)}%"></span></div>`;
   }
 
-  function renderParser(parser) {
-    if (!parser || !parserEl) return;
-    // Local .aim4replay import always works; warn only that raw .dem upload
-    // cannot be parsed on this host.
-    parserEl.hidden = parser.available;
-    if (!parser.available) {
-      parserEl.textContent =
+  /**
+   * Warn about anything this host cannot do, before it is attempted.
+   *
+   * Both of these are properties of the machine rather than of the site, so
+   * they are worth saying up front. Finding out that .rar is unsupported only
+   * after transferring a few gigabytes is the worst possible moment.
+   */
+  function renderCapabilities(status) {
+    if (!parserEl) return;
+    const notes = [];
+    const parser = status?.parser;
+    if (parser && !parser.available) {
+      notes.push(
         `Server-side .dem parsing is offline (${parser.name}). ` +
-        `Run tools\\parse-demo.bat on your PC (drag-and-drop GUI), then upload the ${PACKAGE_EXT} package.`;
+          `Run tools\\parse-demo.bat on your PC (drag-and-drop GUI), then upload the ${PACKAGE_EXT} package.`
+      );
     }
+    if (status?.rar && !status.rar.available) {
+      notes.push(
+        'This server has no .rar extractor installed, so .rar uploads will be refused. ' +
+          'Repack the demos as .zip or .tar.gz.'
+      );
+    }
+    parserEl.hidden = notes.length === 0;
+    parserEl.textContent = notes.join(' ');
   }
 
   // ---- demo list helpers --------------------------------------------------
@@ -577,6 +592,15 @@ export function initReplaysView({ escapeHtml }) {
     let imported = 0;
     let parsed = 0;
     let failed = 0;
+    /**
+     * Reasons an upload died before it produced a single demo.
+     *
+     * These live on the batch rather than on any file, because there were no
+     * files. Counting only per-file outcomes made a whole-upload failure look
+     * like "nothing succeeded and nothing failed", which then reported itself
+     * as "Upload complete." over the top of the real error.
+     */
+    const batchErrors = [];
     const namingQueue = [];
     try {
       for (let i = 0; i < ok.length; i++) {
@@ -607,6 +631,13 @@ export function initReplaysView({ escapeHtml }) {
         if (batch) {
           parsed += batch.totals.parsed;
           failed += batch.totals.failed;
+          if (batch.stage === 'error' && !batch.totals.files) {
+            batchErrors.push(batch.error || `Could not unpack ${name}.`);
+          }
+        } else {
+          // The batch is dropped once it settles, so losing track of it is not
+          // proof of success either.
+          batchErrors.push(`Lost track of ${name} before it finished.`);
         }
       }
 
@@ -614,7 +645,13 @@ export function initReplaysView({ escapeHtml }) {
       if (imported) parts.push(imported === 1 ? '1 package imported.' : `${imported} packages imported.`);
       if (parsed) parts.push(parsed === 1 ? '1 demo parsed.' : `${parsed} demos parsed.`);
       if (failed) parts.push(failed === 1 ? '1 demo failed.' : `${failed} demos failed.`);
-      setStatus(parts.join(' ') || 'Upload complete.', failed > 0 && !parsed);
+      parts.push(...batchErrors);
+
+      const nothingLanded = !imported && !parsed;
+      setStatus(
+        parts.join(' ') || 'Upload complete.',
+        nothingLanded && (failed > 0 || batchErrors.length > 0)
+      );
       await refresh();
 
       for (const demo of namingQueue) {
@@ -629,7 +666,7 @@ export function initReplaysView({ escapeHtml }) {
       uploadOwnsStatus = false;
       dropEl?.classList.remove('busy');
       if (uploadInput) uploadInput.value = '';
-      if (!failed) clearProgress();
+      if (!failed && !batchErrors.length) clearProgress();
     }
   }
 
@@ -2110,7 +2147,7 @@ export function initReplaysView({ escapeHtml }) {
       const [status, list] = await Promise.all([fetchStatus(), fetchDemos()]);
       setLocked(false);
       if (status.limits?.maxUploadBytes) maxUploadBytes = status.limits.maxUploadBytes;
-      renderParser(status.parser);
+      renderCapabilities(status);
       renderQuota(list.usage || status.usage);
       demos = list.demos || [];
       rebuildTeamClusters();
