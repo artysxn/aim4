@@ -16,7 +16,6 @@
 FROM node:22-slim
 
 WORKDIR /app
-RUN apk add --no-cache 7zip
 
 # .zip, .tar.gz and .gz/.zst are read in process by server/replays/archive.js.
 # .rar cannot be: the format is proprietary and there is no usable in-process
