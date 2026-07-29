@@ -376,12 +376,24 @@ export async function demoIndex(io, user, record) {
 
 /**
  * Fire-and-forget after a successful parse (or import). Safe to call often.
+ *
+ * @param {(err: Error|null) => void} [done] called once the index has landed.
+ *   The upload progress bar reports "analyzed" as its own phase, so it needs to
+ *   know when this finished rather than only that it started. Failures still
+ *   call back: a demo whose stats did not build is watchable, and leaving the
+ *   bar stuck at "parsed" forever would be the worse outcome.
  */
-export function scheduleStatsIndex(io, user, record) {
-  if (!record || record.status !== 'ready') return;
-  demoIndex(io, user, record).catch((err) => {
-    console.warn(`[stats] index failed for ${record.id}:`, err?.message || err);
-  });
+export function scheduleStatsIndex(io, user, record, done) {
+  if (!record || record.status !== 'ready') {
+    done?.(null);
+    return;
+  }
+  demoIndex(io, user, record)
+    .then(() => done?.(null))
+    .catch((err) => {
+      console.warn(`[stats] index failed for ${record.id}:`, err?.message || err);
+      done?.(err instanceof Error ? err : new Error(String(err)));
+    });
 }
 
 /**

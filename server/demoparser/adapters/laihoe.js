@@ -14,6 +14,7 @@
 // ---------------------------------------------------------------------------
 
 import { createRequire } from 'node:module';
+import { deriveBatchTicks } from '../../replays/hostMemory.js';
 import { mapCodeFromName, shortIdFor } from '../../../src/replays/shared/roundId.js';
 import {
   HEADER_BYTES,
@@ -349,14 +350,15 @@ function inventoryOf(row) {
 // Rounds are parsed in GROUPS, not one at a time. Every parseTicks call reads
 // and decodes the whole demo file, so asking for one round at a time costs
 // O(rounds x file size): on a 24 round, 300 MB demo that is over 7 GB of
-// redundant decoding.
+// redundant decoding. Fewer, larger passes are faster wherever they fit.
 //
-// The default is high enough that a normal match is a single pass. Now that
-// `inventory` is out of the per-tick props, the rows themselves are cheap and
-// the dominant cost is re-decoding the file, so FEWER passes is both faster
-// and lighter. Lower this only if a very long match runs out of memory; it
-// trades memory for repeated decoding, not the other way around.
-const BATCH_TICKS = Number(process.env.AIM4_PARSE_BATCH_TICKS || 200000);
+// They do not always fit. A batch materializes `ticks x 10 players` rows of 16
+// props in the JS heap at once, so the old fixed 200 000 made a whole match one
+// pass -- fastest when the memory is there, and an instant OOM kill when it is
+// not. On a 4 GB host that was the difference between a parse and a SIGKILL.
+// The size is now derived from the cgroup limit, and jobs.js halves it and
+// retries if the kernel still steps in. An explicit env value overrides both.
+const BATCH_TICKS = Number(process.env.AIM4_PARSE_BATCH_TICKS) || deriveBatchTicks();
 
 /**
  * Group consecutive rounds so each group spans at most `maxTicks`.

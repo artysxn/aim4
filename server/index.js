@@ -17,7 +17,7 @@ import { MultiplayerServer } from './lobby.js';
 import { FootballServer } from './football.js';
 import { tryServeStatic, distExists } from './static.js';
 import { handleReplayRequest } from './replays/routes.js';
-import { checkCaseSensitivity } from './replays/demoStore.js';
+import { checkCaseSensitivity, sweepStaleUploads } from './replays/demoStore.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
 
 // PORT (no prefix) is the convention most hosts inject; AIM4_API_PORT still
@@ -214,6 +214,10 @@ server.headersTimeout = 65_000;
 
 // Round names are the replay database's keys and they are case-sensitive.
 checkCaseSensitivity();
+
+// An upload interrupted by a restart leaves a temp file with nothing tracking
+// it. Best-effort, and never a reason to fail startup.
+sweepStaleUploads().catch(() => {});
 
 server.listen(PORT, HOST, async () => {
   if (SERVE_STATIC) {

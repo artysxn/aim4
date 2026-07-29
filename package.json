@@ -5,7 +5,7 @@
   "type": "module",
   "description": "A web-based Aim Trainer built with Three.js, Pointer Lock API and Vite.",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.15"
   },
   "scripts": {
     "dev": "vite --host",
@@ -14,8 +14,10 @@
     "host": "node server/run-host.js",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "node server/replays/tickCodec.test.js && node server/replays/demoStore.test.js && node server/replays/archive.test.js && node server/replays/uploadLimit.test.js && node server/replays/ingest.test.js && node src/replays/zones/ledges.test.js",
     "parse-demo": "node tools/parse-demo-local.js",
     "parse-demo:gui": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/parse-demo-gui.ps1",
+    "compact-replays": "node scripts/compact-replays.mjs",
     "sample-map-control-bases": "node scripts/sample-map-control-bases.mjs"
   },
   "dependencies": {

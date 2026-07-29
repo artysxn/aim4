@@ -14,6 +14,7 @@ import {
   fetchPlaylists,
   fetchRoundMeta,
   fetchStatus,
+  fetchUploadBatch,
   findRounds,
   renameDemoTeams,
   reparseDemo,
@@ -48,6 +49,7 @@ export function initReplaysView({ escapeHtml }) {
   const uploadInput = document.getElementById('rp-file');
   const dropEl = document.getElementById('rp-drop');
   const quotaEl = document.getElementById('rp-quota');
+  const progressEl = document.getElementById('rp-upload-progress');
   const statusEl = document.getElementById('rp-status');
   const filtersEl = document.getElementById('rp-filters');
   const resultEl = document.getElementById('rp-result');
@@ -125,10 +127,23 @@ export function initReplaysView({ escapeHtml }) {
   /** @type {Map<string, object|null>} */
   const roundMetaCache = new Map();
 
+  /**
+   * The status line is shared between uploading and filtering, and an upload
+   * refreshes the library as it goes. Without this the filter's "nothing to
+   * report" would wipe the upload's progress on every poll.
+   */
+  let uploadOwnsStatus = false;
+
   function setStatus(msg, isError = false) {
     if (!statusEl) return;
     statusEl.textContent = msg || '';
     statusEl.classList.toggle('is-error', isError);
+  }
+
+  /** setStatus for the filter, which yields to an upload in progress. */
+  function setQueryStatus(msg) {
+    if (uploadOwnsStatus) return;
+    setStatus(msg);
   }
 
   // ---- quota + parser -----------------------------------------------------
@@ -144,16 +159,31 @@ export function initReplaysView({ escapeHtml }) {
       <div class="rp-meter"><span style="width:${Math.min(100, pctBytes)}%"></span></div>`;
   }
 
-  function renderParser(parser) {
-    if (!parser || !parserEl) return;
-    // Local .aim4replay import always works; warn only that raw .dem upload
-    // cannot be parsed on this host.
-    parserEl.hidden = parser.available;
-    if (!parser.available) {
-      parserEl.textContent =
+  /**
+   * Warn about anything this host cannot do, before it is attempted.
+   *
+   * Both of these are properties of the machine rather than of the site, so
+   * they are worth saying up front. Finding out that .rar is unsupported only
+   * after transferring a few gigabytes is the worst possible moment.
+   */
+  function renderCapabilities(status) {
+    if (!parserEl) return;
+    const notes = [];
+    const parser = status?.parser;
+    if (parser && !parser.available) {
+      notes.push(
         `Server-side .dem parsing is offline (${parser.name}). ` +
-        `Run tools\\parse-demo.bat on your PC (drag-and-drop GUI), then upload the ${PACKAGE_EXT} package.`;
+          `Run tools\\parse-demo.bat on your PC (drag-and-drop GUI), then upload the ${PACKAGE_EXT} package.`
+      );
     }
+    if (status?.rar && !status.rar.available) {
+      notes.push(
+        'This server has no .rar extractor installed, so .rar uploads will be refused. ' +
+          'Repack the demos as .zip or .tar.gz.'
+      );
+    }
+    parserEl.hidden = notes.length === 0;
+    parserEl.textContent = notes.join(' ');
   }
 
   // ---- demo list helpers --------------------------------------------------
@@ -415,68 +445,213 @@ export function initReplaysView({ escapeHtml }) {
 
   // ---- upload -------------------------------------------------------------
 
+  /**
+   * What the server will accept. Archives may hold several demos each; .gz and
+   * .zst are single-stream compressors and can only ever carry one.
+   */
+  const UPLOAD_RE = /\.(dem|zip|rar|tar|tar\.gz|tgz|tar\.zst|tzst|gz|zst)$/i;
+
+  /** Overwritten from /api/replays/status; this is only the pre-first-load guess. */
+  let maxUploadBytes = 5 * 1024 ** 3;
+
   function pickUploadFiles(fileList) {
     const files = [...(fileList || [])];
     const ok = [];
     const skipped = [];
+    const tooBig = [];
     for (const file of files) {
       const name = file.name || '';
-      const isPackage = name.toLowerCase().endsWith(PACKAGE_EXT);
-      const isDem = /\.dem$/i.test(name);
-      if (isPackage || isDem) ok.push(file);
-      else skipped.push(name || 'unnamed');
+      const lower = name.toLowerCase();
+      if (!lower.endsWith(PACKAGE_EXT) && !UPLOAD_RE.test(name)) {
+        skipped.push(name || 'unnamed');
+      } else if (file.size > maxUploadBytes) {
+        // Caught here so a rejection does not cost the user the whole transfer
+        // first. The server enforces the same limit regardless.
+        tooBig.push(name || 'unnamed');
+      } else {
+        ok.push(file);
+      }
     }
-    return { ok, skipped };
+    return { ok, skipped, tooBig };
+  }
+
+  // ---- upload progress ----------------------------------------------------
+
+  /**
+   * The four phases the backend moves each demo through. An archive can hold
+   * several, so these are counts, not steps.
+   */
+  const PHASE_LABELS = [
+    ['unpacked', 'Unpacked'],
+    ['parsed', 'Parsed'],
+    ['analyzed', 'Analyzed']
+  ];
+
+  function clearProgress() {
+    if (!progressEl) return;
+    progressEl.hidden = true;
+    progressEl.innerHTML = '';
+  }
+
+  /**
+   * @param {number} uploadPct  0-100 for the transfer itself
+   * @param {object|null} batch  server-side batch status, once there is one
+   */
+  function renderProgress(uploadPct, batch) {
+    if (!progressEl) return;
+    const files = batch?.totals?.files || 0;
+    // Before unpacking finishes there is no file count, so the transfer is the
+    // only honest thing to show. Weight it as a quarter of the whole job.
+    const done = files
+      ? batch.totals.unpacked + batch.totals.parsed + batch.totals.analyzed
+      : 0;
+    const backendPct = files ? (done / (files * 3)) * 100 : 0;
+    const pct = files ? 25 + backendPct * 0.75 : Math.min(25, uploadPct * 0.25);
+
+    const counts = files
+      ? PHASE_LABELS.map(
+          ([key, label]) =>
+            `<span class="rp-phase${batch.totals[key] === files ? ' is-done' : ''}">
+               ${label} ${batch.totals[key]}/${files}
+             </span>`
+        ).join('')
+      : `<span class="rp-phase">Uploaded ${uploadPct}%</span>`;
+
+    const failed = batch?.totals?.failed
+      ? `<span class="rp-phase is-error">Failed ${batch.totals.failed}</span>`
+      : '';
+
+    progressEl.hidden = false;
+    progressEl.innerHTML = `
+      <div class="rp-meter"><span style="width:${Math.min(100, Math.max(0, pct))}%"></span></div>
+      <div class="rp-phases">${counts}${failed}</div>`;
+  }
+
+  /**
+   * Follow one upload until the server is finished with it.
+   *
+   * The batch is polled rather than pushed: parsing is serialized on the
+   * backend and takes minutes, which is far too long to hold a connection open
+   * for on a host that will time it out.
+   */
+  async function followBatch(batchId, label) {
+    for (;;) {
+      let batch;
+      try {
+        ({ batch } = await fetchUploadBatch(batchId));
+      } catch (err) {
+        // The batch is dropped some time after it settles, so a 404 here means
+        // it finished rather than that anything went wrong.
+        if (err.status === 404) return null;
+        throw err;
+      }
+      renderProgress(100, batch);
+
+      const t = batch.totals;
+      if (batch.stage === 'unpacking') setStatus(`${label}Unpacking…`);
+      else if (batch.stage === 'error' && !t.files) setStatus(batch.error, true);
+      else {
+        const current = batch.files.find((f) => !f.failed && f.phase === 'unpacked');
+        const where = current?.total
+          ? ` (${current.name}, round ${current.round}/${current.total})`
+          : current
+            ? ` (${current.name})`
+            : '';
+        setStatus(`${label}Parsed ${t.parsed}/${t.files}, analyzed ${t.analyzed}/${t.files}${where}`);
+      }
+
+      if (batch.stage === 'done' || batch.stage === 'error') return batch;
+      await refresh();
+      await new Promise((r) => setTimeout(r, POLL_MS));
+    }
   }
 
   async function startUpload(fileList) {
-    const { ok, skipped } = pickUploadFiles(fileList);
+    const { ok, skipped, tooBig } = pickUploadFiles(fileList);
+    const cap = `${Math.round(maxUploadBytes / 1024 ** 3)} GB`;
     if (!ok.length) {
-      setStatus(`Upload ${PACKAGE_EXT} packages (preferred) or .dem files.`, true);
+      setStatus(
+        tooBig.length
+          ? `One upload can be up to ${cap}, however many demos it holds. Split the archive and try again.`
+          : `Upload .dem files, .zip / .rar / .tar.gz / .gz / .zst archives, or ${PACKAGE_EXT} packages.`,
+        true
+      );
       return;
     }
+    const notes = [];
     if (skipped.length) {
-      setStatus(`Skipped ${skipped.length} unsupported file${skipped.length === 1 ? '' : 's'}.`, true);
+      notes.push(`Skipped ${skipped.length} unsupported file${skipped.length === 1 ? '' : 's'}.`);
     }
+    if (tooBig.length) {
+      notes.push(`Skipped ${tooBig.length} over ${cap}.`);
+    }
+    if (notes.length) setStatus(notes.join(' '), true);
 
     dropEl?.classList.add('busy');
+    uploadOwnsStatus = true;
     let imported = 0;
-    let demUploads = 0;
+    let parsed = 0;
+    let failed = 0;
+    /**
+     * Reasons an upload died before it produced a single demo.
+     *
+     * These live on the batch rather than on any file, because there were no
+     * files. Counting only per-file outcomes made a whole-upload failure look
+     * like "nothing succeeded and nothing failed", which then reported itself
+     * as "Upload complete." over the top of the real error.
+     */
+    const batchErrors = [];
     const namingQueue = [];
     try {
       for (let i = 0; i < ok.length; i++) {
         const file = ok[i];
         const name = file.name || `file ${i + 1}`;
         const isPackage = name.toLowerCase().endsWith(PACKAGE_EXT);
-        const upload = isPackage ? uploadImport : uploadDemo;
         const label = ok.length > 1 ? `(${i + 1}/${ok.length}) ` : '';
+
         setStatus(`Uploading ${label}${name}…`);
-        const res = await upload(file, (pct) => {
+        renderProgress(0, null);
+        const onProgress = (pct) => {
           setStatus(`Uploading ${label}${name}: ${pct}%`);
-        });
-        renderQuota(res.usage);
+          renderProgress(pct, null);
+        };
+
         if (isPackage) {
+          // A package is already parsed, so it lands ready and skips the queue.
+          const res = await uploadImport(file, onProgress);
+          renderQuota(res.usage);
           imported++;
           if (res.demo) namingQueue.push(res.demo);
+          continue;
+        }
+
+        const res = await uploadDemo(file, onProgress);
+        renderQuota(res.usage);
+        const batch = await followBatch(res.batch.id, label);
+        if (batch) {
+          parsed += batch.totals.parsed;
+          failed += batch.totals.failed;
+          if (batch.stage === 'error' && !batch.totals.files) {
+            batchErrors.push(batch.error || `Could not unpack ${name}.`);
+          }
         } else {
-          demUploads++;
+          // The batch is dropped once it settles, so losing track of it is not
+          // proof of success either.
+          batchErrors.push(`Lost track of ${name} before it finished.`);
         }
       }
 
       const parts = [];
-      if (imported) {
-        parts.push(
-          imported === 1 ? '1 package imported.' : `${imported} packages imported.`
-        );
-      }
-      if (demUploads) {
-        parts.push(
-          demUploads === 1
-            ? '1 .dem uploaded; parsing started.'
-            : `${demUploads} .dem files uploaded; parsing started.`
-        );
-      }
-      setStatus(parts.join(' ') || 'Upload complete.');
+      if (imported) parts.push(imported === 1 ? '1 package imported.' : `${imported} packages imported.`);
+      if (parsed) parts.push(parsed === 1 ? '1 demo parsed.' : `${parsed} demos parsed.`);
+      if (failed) parts.push(failed === 1 ? '1 demo failed.' : `${failed} demos failed.`);
+      parts.push(...batchErrors);
+
+      const nothingLanded = !imported && !parsed;
+      setStatus(
+        parts.join(' ') || 'Upload complete.',
+        nothingLanded && (failed > 0 || batchErrors.length > 0)
+      );
       await refresh();
 
       for (const demo of namingQueue) {
@@ -486,8 +661,12 @@ export function initReplaysView({ escapeHtml }) {
       setStatus(err.message, true);
       await refresh();
     } finally {
+      // Released last, after the closing refresh, so the result the user needs
+      // to read survives the library reload that follows it.
+      uploadOwnsStatus = false;
       dropEl?.classList.remove('busy');
       if (uploadInput) uploadInput.value = '';
+      if (!failed && !batchErrors.length) clearProgress();
     }
   }
 
@@ -1248,8 +1427,8 @@ export function initReplaysView({ escapeHtml }) {
     // Filter against the demo index immediately so an empty filter always
     // shows every round, even if the rounds API is slow or empty.
     rounds = filterLibraryRounds(query);
-    if (needsMetaFilters()) setStatus('Applying advanced filters…');
-    else setStatus('');
+    if (needsMetaFilters()) setQueryStatus('Applying advanced filters…');
+    else setQueryStatus('');
     renderResults();
 
     try {
@@ -1273,7 +1452,7 @@ export function initReplaysView({ escapeHtml }) {
       if (needsMetaFilters()) {
         rounds = await applyAdvancedMetaFilters(rounds, token);
         if (token !== queryToken) return;
-        setStatus('');
+        setQueryStatus('');
       }
 
       notedFiles = new Set(res?.noted || []);
@@ -1967,7 +2146,8 @@ export function initReplaysView({ escapeHtml }) {
     try {
       const [status, list] = await Promise.all([fetchStatus(), fetchDemos()]);
       setLocked(false);
-      renderParser(status.parser);
+      if (status.limits?.maxUploadBytes) maxUploadBytes = status.limits.maxUploadBytes;
+      renderCapabilities(status);
       renderQuota(list.usage || status.usage);
       demos = list.demos || [];
       rebuildTeamClusters();
