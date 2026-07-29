@@ -5,7 +5,8 @@
 //   GET    /api/replays/diag                     public crash / memory diagnostic
 //   GET    /api/replays/status                   parser + quota
 //   GET    /api/replays/demos                    library listing
-//   POST   /api/replays/demos                    upload (raw .dem body)
+//   POST   /api/replays/demos                    upload .dem / .zip / .gz / .zst
+//   GET    /api/replays/uploads/:batchId         unpack + parse progress for one upload
 //   POST   /api/replays/import                   upload a local .aim4replay package
 //   GET    /api/replays/demos/:id                one demo + parse progress
 //   POST   /api/replays/demos/:id/parse          re-run a failed parse
@@ -21,10 +22,9 @@
 // and must never be buffered in memory or pass through the JSON body reader.
 // ---------------------------------------------------------------------------
 
-import os from 'node:os';
-import fsSync from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { parserStatus } from '../demoparser/index.js';
 import {
   ROOT,
@@ -35,7 +35,6 @@ import {
   findRounds,
   listDemos,
   listNotedRounds,
-  newDemoId,
   readPlaylists,
   readRecord,
   readRoundMeta,
@@ -43,15 +42,16 @@ import {
   removePlaylist,
   renameDemoTeams,
   saveTempUpload,
-  saveUpload,
   upsertPlaylist,
   usage,
   userDir,
   writeRecord,
   writeRoundNotes
 } from './demoStore.js';
+import { memorySnapshot } from './hostMemory.js';
 import { forgetDemoIndex, scheduleStatsIndex, statsPayload } from './statsIndex.js';
-import { allJobs, enqueueParse, jobStatus } from './jobs.js';
+import { isAcceptedUpload } from './archive.js';
+import { allJobs, batchStatus, enqueueParse, getBatch, jobStatus, startIngest } from './jobs.js';
 import { authStatus, identify } from './auth.js';
 import { importReplayPackage } from './importPackage.js';
 import { PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
@@ -76,16 +76,35 @@ function json(res, status, body) {
   res.end(payload);
 }
 
-function binary(res, buffer) {
-  const buf = Buffer.from(buffer);
-  res.writeHead(200, {
+/**
+ * Tick buffers, compressed on the wire when the client says it can take it.
+ *
+ * These are fixed-width quantized records, so they compress well and the
+ * browser undoes it transparently in the network layer: the ArrayBuffer that
+ * reaches tickStore is the same either way, and no client code knows this
+ * happened. Deflate rather than the stronger options on purpose, since this
+ * runs per request on a two-core box and the marginal bytes are not worth the
+ * CPU next to what the on-disk codec already saved.
+ */
+function binary(res, buffer, req = null) {
+  let buf = Buffer.from(buffer);
+  const headers = {
     'Content-Type': 'application/octet-stream',
-    'Content-Length': buf.length,
     // Round files are immutable: the name encodes the content, so a round can
     // be cached hard once fetched.
     'Cache-Control': 'private, max-age=31536000, immutable',
     ...CORS
-  });
+  };
+  const accepts = String(req?.headers['accept-encoding'] || '');
+  if (/\bgzip\b/.test(accepts) && buf.length > 4096) {
+    buf = zlib.gzipSync(buf, { level: 6 });
+    headers['Content-Encoding'] = 'gzip';
+    // Caches key on this, and without it a shared cache could hand the gzipped
+    // body to a client that did not ask for one.
+    headers.Vary = 'Accept-Encoding';
+  }
+  headers['Content-Length'] = buf.length;
+  res.writeHead(200, headers);
   res.end(buf);
 }
 
@@ -163,30 +182,6 @@ async function readParseTrace() {
   } catch {
     return null;
   }
-}
-
-function memorySnapshot() {
-  const mem = process.memoryUsage();
-  const snap = {
-    serverRssMb: Math.round(mem.rss / 1024 / 1024),
-    heapLimitMb: Number(process.env.AIM4_PARSE_HEAP_MB || 1024),
-    batchTicks: Number(process.env.AIM4_PARSE_BATCH_TICKS || 200000)
-  };
-  // Inside a container the cgroup limit is what actually matters, and it is
-  // usually smaller than what os.totalmem() reports.
-  try {
-    const v2 = fsSync.readFileSync('/sys/fs/cgroup/memory.max', 'utf8').trim();
-    snap.containerLimitMb = v2 === 'max' ? 'unlimited' : Math.round(Number(v2) / 1024 / 1024);
-    snap.containerUsedMb = Math.round(
-      Number(fsSync.readFileSync('/sys/fs/cgroup/memory.current', 'utf8').trim()) / 1024 / 1024
-    );
-  } catch {
-    /* not cgroup v2, or not in a container */
-  }
-  snap.hostTotalMb = Math.round(os.totalmem() / 1024 / 1024);
-  snap.hostFreeMb = Math.round(os.freemem() / 1024 / 1024);
-  snap.cpus = os.cpus().length;
-  return snap;
 }
 
 /** Merge the stored record with live job progress. */
@@ -288,8 +283,10 @@ export async function handleReplayRequest(req, res, url) {
 
   if (req.method === 'POST' && p === '/api/replays/demos') {
     const filename = String(req.headers['x-aim4-filename'] || 'match.dem').slice(0, 160);
-    if (!/\.dem$/i.test(filename)) {
-      json(res, 400, { error: 'Only .dem files can be uploaded.' });
+    if (!isAcceptedUpload(filename)) {
+      json(res, 400, {
+        error: 'Upload a .dem file, or a .zip, .gz or .zst containing one.'
+      });
       return true;
     }
     const declared = Number(req.headers['content-length'] || 0);
@@ -299,30 +296,44 @@ export async function handleReplayRequest(req, res, url) {
       return true;
     }
 
-    const demoId = newDemoId();
-    let sizeBytes = 0;
+    // Always land on a temp file first, even for a bare .dem. Unpacking decides
+    // where the demo finally lives (a .zip produces several), and the ingest
+    // pipeline adopts a lone .dem by renaming it rather than copying it.
+    let saved;
     try {
-      sizeBytes = await saveUpload(user, demoId, req, gate.usage.bytesLeft);
+      saved = await saveTempUpload(req, gate.usage.bytesLeft, 'upload');
     } catch (err) {
       json(res, 413, { error: err.message || 'Upload failed.' });
       return true;
     }
-    if (!sizeBytes) {
+    if (!saved.sizeBytes) {
+      await rm(saved.path, { force: true }).catch(() => {});
       json(res, 400, { error: 'Empty upload.' });
       return true;
     }
 
-    const record = {
-      id: demoId,
-      status: 'parsing',
+    // Respond as soon as the bytes are on disk. Inflating a 450 MB archive
+    // takes long enough that holding the response open for it is exactly how an
+    // upload dies behind a proxy that is done waiting.
+    const batch = startIngest({
+      user,
       filename,
-      sizeBytes,
-      uploadedAt: Date.now(),
-      rounds: []
-    };
-    await writeRecord(user, record);
-    enqueueParse({ user, demoId, filename, sizeBytes });
-    json(res, 201, { demo: withJob(user, record), usage: await usage(user) });
+      source: saved.path,
+      sizeBytes: saved.sizeBytes,
+      allowedBytes: gate.usage.bytesLeft - saved.sizeBytes
+    });
+    json(res, 202, { batch: batchStatus(batch), usage: await usage(user) });
+    return true;
+  }
+
+  const batchMatch = p.match(/^\/api\/replays\/uploads\/([A-Za-z0-9_-]+)$/);
+  if (req.method === 'GET' && batchMatch) {
+    const batch = getBatch(user, batchMatch[1]);
+    if (!batch) {
+      json(res, 404, { error: 'That upload is no longer being tracked.' });
+      return true;
+    }
+    json(res, 200, { batch: batchStatus(batch), usage: await usage(user) });
     return true;
   }
 
@@ -500,7 +511,7 @@ export async function handleReplayRequest(req, res, url) {
       json(res, 404, { error: 'Round not found.' });
       return true;
     }
-    binary(res, buf);
+    binary(res, buf, req);
     return true;
   }
 

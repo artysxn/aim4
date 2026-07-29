@@ -119,14 +119,31 @@ function uploadBinary(url, file, onProgress) {
 }
 
 /**
- * Upload a .dem for server-side parsing. Prefer uploadImport for production:
- * parse locally and upload the .aim4replay package instead.
+ * Upload a .dem, or a .zip / .gz / .zst containing one or more, for parsing on
+ * the server. Resolves as soon as the bytes have landed, with a batch id: the
+ * server unpacks and parses in the background because a big archive takes long
+ * enough that holding the request open is how uploads die behind a proxy.
  *
  * @param {File} file
  * @param {(pct: number, loaded: number, total: number) => void} [onProgress]
+ * @returns {Promise<{batch: object, usage: object}>}
  */
 export async function uploadDemo(file, onProgress) {
   return uploadBinary(`${API_BASE}/api/replays/demos`, file, onProgress);
+}
+
+/**
+ * Where one upload has got to: how many demos it contained, and how many are
+ * unpacked, parsed and analyzed.
+ *
+ * @param {string} batchId
+ */
+export async function fetchUploadBatch(batchId) {
+  return asJson(
+    await fetch(`${API_BASE}/api/replays/uploads/${encodeURIComponent(batchId)}`, {
+      headers: await headers()
+    })
+  );
 }
 
 /**

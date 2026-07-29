@@ -122,6 +122,51 @@
   background: var(--accent);
 }
 
+/* ---- Upload progress -----------------------------------------------------
+   Named "upload" rather than "progress" on purpose: .rp-progress is already
+   the thin per-demo parse bar further down this file, and its bare `span`
+   rule would otherwise paint these phase chips solid accent. */
+
+.rp-upload-progress {
+  margin-top: 10px;
+}
+
+.rp-upload-progress .rp-meter {
+  margin: 0 0 8px;
+}
+
+/* Parsing is serialized, so the bar advances in visible steps. Easing the
+   width keeps that from reading as a stutter. */
+.rp-upload-progress .rp-meter > span {
+  transition: width 0.3s var(--ease-smooth);
+}
+
+.rp-phases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rp-phase {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rp-phase.is-done {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.rp-phase.is-error {
+  background: var(--accent-dim);
+  color: var(--accent-hover);
+}
+
 /* ---- Demo rows (match list) --------------------------------------------- */
 
 .rp-list {

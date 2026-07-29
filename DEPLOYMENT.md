@@ -74,12 +74,24 @@ What the host has to provide:
 - **A persistent disk**, mounted at `server/data` (or point `AIM4_REPLAY_DIR`
   and `server/store.js`'s path elsewhere). Without it, uploaded demos, parsed
   rounds and config share-codes vanish on every redeploy.
-- **Enough RAM and CPU to parse.** Demo parsing runs in a worker thread and is
-  the heaviest thing the process does. Budget ~2 GB RAM and a real (not
-  fractional) core, or parses will be killed mid-run on large demos.
+- **Enough RAM and CPU to parse.** Demo parsing runs in a separate process and
+  is the heaviest thing the host does. Budget ~2 GB RAM and a real (not
+  fractional) core. On a small box, do all three of these:
+  - **Set an explicit container memory limit** (on a 4 GB host, ~3.5 GB). The
+    parse sizes its batches against this limit, and if the kernel does have to
+    step in, a cgroup limit means it kills the parse process rather than the
+    host killer taking the whole container down with the HTTP server and every
+    live multiplayer match inside it.
+  - **Add swap** (4 GB is plenty). It turns a marginal parse from an instant
+    kill into a slow success. Parsing is not latency-sensitive.
+  - Leave `AIM4_PARSE_BATCH_TICKS` unset. It is derived from the memory limit
+    above, and a parse the kernel kills anyway is retried automatically with
+    half the batch, up to `AIM4_PARSE_ATTEMPTS` times. `GET /api/replays/diag`
+    reports the value in use and where it came from.
 - **Room for the library.** The default quota is 20 GB shared across all
   visitors (no demo-count cap). Size the disk for that, or change
-  `AIM4_REPLAY_MAX_BYTES`.
+  `AIM4_REPLAY_MAX_BYTES`. Source `.dem` files are deleted once parsing ends, so
+  what accumulates is the parsed rounds, roughly 5-8 MB per demo.
 
 Do **not** set `AIM4_SERVE_STATIC` in a split deploy — the client is served by
 the static host.
@@ -128,3 +140,20 @@ The client derives everything from that one origin: REST calls hit
 - **The demo parser is an optional dependency.** `@laihoe/demoparser2` is a native
   module; if the host cannot install it, the site still runs and the Replays page
   reports parsing as offline. See [`server/demoparser/README.md`](server/demoparser/README.md).
+- **Node 22.15 or newer is required.** The replay store uses zstd from
+  `node:zlib`, which older Node does not have. The image pins `node:22-slim`.
+
+## Compacting an existing library
+
+Round files written before the compact format are still read, so nothing breaks
+on deploy. Converting them frees roughly three quarters of the library:
+
+```bash
+node scripts/compact-replays.mjs --dry-run   # report only, changes nothing
+node scripts/compact-replays.mjs             # convert in place
+```
+
+Each round is re-read and compared byte for byte against the original before the
+old file is deleted; anything that fails is left alone and listed at the end
+(and the script exits non-zero). It is safe to interrupt and re-run, so a large
+library can be done in chunks with `--limit`.

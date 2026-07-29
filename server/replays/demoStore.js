@@ -2,10 +2,17 @@
 // replays/demoStore.js
 // On-disk library for uploaded demos and the rounds parsed out of them.
 //
-//   server/data/replays/<user>/demos/<demoId>.dem     the upload, kept as-is
-//   server/data/replays/<user>/demos/<demoId>.json    demo record + round list
-//   server/data/replays/<user>/rounds/<name>.json     round meta + events
-//   server/data/replays/<user>/rounds/<name>.bin      tick buffer (tickFormat)
+//   server/data/replays/<user>/demos/<demoId>.dem       the upload, deleted after parse
+//   server/data/replays/<user>/demos/<demoId>.json      demo record + round list
+//   server/data/replays/<user>/rounds/<name>.json.zst   round meta + events
+//   server/data/replays/<user>/rounds/<name>.tickz      tick buffer, compressed
+//   server/data/replays/<user>/rounds/<name>.c100.bin   stride-100 coarse pass
+//
+// The last three are the compact form. Their plain ancestors (<name>.json and
+// <name>.bin) are still read when present, so a library that has not been
+// through scripts/compact-replays.mjs keeps working unchanged. Everything above
+// readRoundTicks / readRoundMeta sees the same data either way: the codec stops
+// here and the viewer receives byte-identical tickFormat buffers.
 //
 // <name> is the round id, optionally suffixed "~<demoId>" when two demos
 // produce the same round name. Filtering never opens a round file: the
@@ -22,9 +29,11 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { collectRounds, sortRounds } from '../../src/replays/shared/roundFilter.js';
 import { readHeader, sliceStride } from '../../src/replays/shared/tickFormat.js';
+import { TICKZ_EXT, decodeTickz, decodeTickzStride, encodeTickz } from './tickCodec.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -87,6 +96,14 @@ async function ensureDirs(user) {
   await fsp.mkdir(roundsDir(user), { recursive: true });
 }
 
+/**
+ * Create the library folders before something writes into them directly.
+ *
+ * Ingest streams extracted demos to demoFilePath() before any record exists,
+ * so it cannot rely on writeRecord having made the directory first.
+ */
+export const ensureLibraryDirs = ensureDirs;
+
 async function listFiles(dir) {
   try {
     return await fsp.readdir(dir);
@@ -95,6 +112,31 @@ async function listFiles(dir) {
     throw err;
   }
 }
+
+// ---- round file naming ------------------------------------------------------
+
+/** Round meta, compact form first. Reads try these in order. */
+const META_EXTS = ['.json.zst', '.json'];
+/** Suffix for the precomputed coarse pass. */
+const COARSE_EXT = '.c100.bin';
+/**
+ * The stride the timeline's first pass asks for (COARSE_STRIDE in
+ * src/replays/tickStore.js). Precomputing exactly this one is what keeps the
+ * coarse pass cheap once the full buffer is compressed.
+ */
+const COARSE_STRIDE = 100;
+
+async function readIfPresent(file) {
+  try {
+    return await fsp.readFile(file);
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+const asArrayBuffer = (buf) =>
+  buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 
 async function dirBytes(dir) {
   let total = 0;
@@ -148,17 +190,16 @@ export async function renameDemoTeams(user, id, team1Name, team2Name) {
   record.team1 = { ...(record.team1 || {}), name: n1, id: record.team1?.id };
   record.team2 = { ...(record.team2 || {}), name: n2, id: record.team2?.id };
 
-  const dir = roundsDir(user);
   for (const r of record.rounds || []) {
     if (!r?.file) continue;
-    const p = path.join(dir, `${sanitizeStem(r.file)}.json`);
     try {
-      const meta = JSON.parse(await fsp.readFile(p, 'utf8'));
+      const meta = await readRoundMeta(user, r.file);
+      if (!meta) continue;
       if (meta.team1) meta.team1 = { ...meta.team1, name: n1 };
       if (meta.team2) meta.team2 = { ...meta.team2, name: n2 };
-      await fsp.writeFile(p, JSON.stringify(meta));
+      await writeRoundMeta(user, sanitizeStem(r.file), meta);
     } catch {
-      /* round file missing; skip */
+      /* round file missing or unreadable; skip */
     }
   }
 
@@ -177,7 +218,6 @@ export async function renameDemoTeams(user, id, team1Name, team2Name) {
 export async function writeMaterialized(user, record, files) {
   await ensureDirs(user);
   const demoId = sanitizeId(record.id);
-  const dir = roundsDir(user);
   for (const [name, data] of files) {
     const n = String(name).replace(/\\/g, '/');
     if (n === 'manifest.json') continue;
@@ -188,7 +228,16 @@ export async function writeMaterialized(user, record, files) {
     if (!base.endsWith(`~${demoId}.json`) && !base.endsWith(`~${demoId}.bin`)) {
       throw new Error(`Round file does not match demo id: ${base}`);
     }
-    await fsp.writeFile(path.join(dir, base), Buffer.from(data));
+    // Packages carry the plain v1 pair, which is the format the local parse
+    // tool writes. Store them the same way a server-side parse would, so an
+    // imported demo is not the one thing in the library still uncompressed.
+    const stem = base.split('.')[0];
+    const buf = Buffer.from(data);
+    if (base.endsWith('.json')) {
+      await writeRoundMeta(user, stem, JSON.parse(buf.toString('utf8')));
+    } else {
+      await writeRoundTicks(user, stem, buf);
+    }
   }
   await writeRecord(user, { ...record, id: demoId });
   return record;
@@ -244,42 +293,12 @@ export async function checkQuota(user, incoming = 0) {
 }
 
 /**
- * Stream an upload to disk, aborting if it exceeds what the quota allows.
- * Returns the byte count written.
- */
-export function saveUpload(user, id, req, allowedBytes) {
-  return new Promise((resolve, reject) => {
-    fs.mkdirSync(demosDir(user), { recursive: true });
-    const target = demoPath(user, id);
-    const out = fs.createWriteStream(target);
-    let written = 0;
-    let failed = null;
-
-    const abort = (err) => {
-      if (failed) return;
-      failed = err;
-      req.destroy();
-      out.destroy();
-      fs.promises.rm(target, { force: true }).catch(() => {});
-      reject(err);
-    };
-
-    req.on('data', (chunk) => {
-      written += chunk.length;
-      if (written > allowedBytes) abort(new Error('Upload exceeds the available space.'));
-    });
-    req.on('error', abort);
-    out.on('error', abort);
-    out.on('finish', () => {
-      if (!failed) resolve(written);
-    });
-    req.pipe(out);
-  });
-}
-
-/**
- * Stream a request body to a temp file under the replay root (used for
- * .aim4replay import before the package is decoded into round files).
+ * Stream a request body to a temp file under the replay root.
+ *
+ * Every upload lands here first, demo and .aim4replay package alike. Where a
+ * demo finally goes is not known until it has been unpacked (a .zip yields
+ * several, each needing its own id), so writing straight to a demo path would
+ * only have to be undone.
  */
 export function saveTempUpload(req, allowedBytes, prefix = 'import') {
   return new Promise((resolve, reject) => {
@@ -322,27 +341,58 @@ function roundStem(roundId, demoId) {
 }
 
 /**
- * Persist one parsed round: meta+events as JSON, ticks as a binary sidecar.
- * The pair share a stem so the collector can move from a name to both files
- * without an index.
+ * Write a round's meta+events, compressed. Any plaintext twin left over from
+ * before compaction is removed, so a read can never pick up the stale copy.
+ */
+async function writeRoundMeta(user, stem, meta) {
+  const dir = roundsDir(user);
+  await fsp.writeFile(
+    path.join(dir, `${stem}.json.zst`),
+    zlib.zstdCompressSync(Buffer.from(JSON.stringify(meta)))
+  );
+  await fsp.rm(path.join(dir, `${stem}.json`), { force: true });
+}
+
+/**
+ * Write a round's tick buffer in compact form: the compressed full-detail file
+ * plus the precomputed coarse pass. Takes a tickFormat v1 buffer, which is the
+ * only shape anything upstream produces.
+ */
+async function writeRoundTicks(user, stem, ticks) {
+  const dir = roundsDir(user);
+  const raw = Buffer.isBuffer(ticks) ? ticks : Buffer.from(ticks);
+  await fsp.writeFile(path.join(dir, `${stem}${TICKZ_EXT}`), encodeTickz(raw));
+  await fsp.writeFile(
+    path.join(dir, `${stem}${COARSE_EXT}`),
+    Buffer.from(sliceStride(raw, COARSE_STRIDE))
+  );
+  await fsp.rm(path.join(dir, `${stem}.bin`), { force: true });
+}
+
+/**
+ * Persist one parsed round: meta+events as compressed JSON, ticks as a
+ * compressed sidecar plus its coarse pass. All share a stem so the collector
+ * can move from a name to every file without an index.
  */
 export async function writeRound(user, demoId, round, extra = {}) {
   await ensureDirs(user);
   const stem = roundStem(round.id, demoId);
-  const dir = roundsDir(user);
   const { ticks, ...meta } = round;
-  await fsp.writeFile(
-    path.join(dir, `${stem}.json`),
-    JSON.stringify({ ...meta, ...extra, demoId }, null, 0)
-  );
-  await fsp.writeFile(path.join(dir, `${stem}.bin`), Buffer.from(ticks));
+  await writeRoundMeta(user, stem, { ...meta, ...extra, demoId });
+  await writeRoundTicks(user, stem, Buffer.from(ticks));
   return stem;
 }
 
 /** Names only. This is what makes filtering cheap. */
 export async function listRoundNames(user) {
   const files = await listFiles(roundsDir(user));
-  return files.filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5));
+  const stems = new Set();
+  for (const f of files) {
+    // Meta is the round's existence: a stem with only a tick file is a partial
+    // write, and the collector has nothing to filter it on anyway.
+    if (f.endsWith('.json') || f.endsWith('.json.zst')) stems.add(f.split('.')[0]);
+  }
+  return [...stems];
 }
 
 /**
@@ -356,16 +406,25 @@ export async function findRounds(user, query = {}, opts = {}) {
 
 export async function readRoundMeta(user, file) {
   const stem = sanitizeStem(file);
-  try {
-    return JSON.parse(await fsp.readFile(path.join(roundsDir(user), `${stem}.json`), 'utf8'));
-  } catch (err) {
-    if (err.code === 'ENOENT') return null;
-    throw err;
+  const dir = roundsDir(user);
+  for (const ext of META_EXTS) {
+    const raw = await readIfPresent(path.join(dir, `${stem}${ext}`));
+    if (!raw) continue;
+    return JSON.parse(ext.endsWith('.zst') ? zlib.zstdDecompressSync(raw) : raw.toString('utf8'));
   }
+  return null;
 }
 
+/**
+ * Reduce any round file name to its stem.
+ *
+ * Everything from the first dot goes, not just the last extension: round ids
+ * are drawn from `[A-Za-z0-9_~-]` and never contain a dot, so the first one is
+ * always the start of the suffix. Stripping a single extension would leave
+ * "<stem>.json" behind for "<stem>.json.zst" and fail the check below.
+ */
 function sanitizeStem(file) {
-  const s = String(file || '').replace(/\.[a-z0-9]+$/i, '');
+  const s = String(file || '').split('.')[0];
   if (!/^[A-Za-z0-9_~-]+$/.test(s)) throw new Error('Invalid round name');
   return s;
 }
@@ -379,20 +438,24 @@ function sanitizeStem(file) {
  */
 export async function readRoundTicks(user, file, stride = 1) {
   const stem = sanitizeStem(file);
-  const p = path.join(roundsDir(user), `${stem}.bin`);
-  let buf;
-  try {
-    buf = await fsp.readFile(p);
-  } catch (err) {
-    if (err.code === 'ENOENT') return null;
-    throw err;
-  }
+  const dir = roundsDir(user);
   const step = Math.max(1, Math.min(1000, Number(stride) || 1));
-  if (step === 1) {
-    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+
+  // The coarse pass is precomputed, so the common first paint never touches
+  // the compressed file at all.
+  if (step === COARSE_STRIDE) {
+    const coarse = await readIfPresent(path.join(dir, `${stem}${COARSE_EXT}`));
+    if (coarse) return asArrayBuffer(coarse);
   }
-  const header = readHeader(buf);
-  return sliceStride(buf, step, header);
+
+  const tickz = await readIfPresent(path.join(dir, `${stem}${TICKZ_EXT}`));
+  if (tickz) return step === 1 ? decodeTickz(tickz) : decodeTickzStride(tickz, step);
+
+  // Not compacted yet: the original fixed-width file, read exactly as before.
+  const buf = await readIfPresent(path.join(dir, `${stem}.bin`));
+  if (!buf) return null;
+  if (step === 1) return asArrayBuffer(buf);
+  return sliceStride(buf, step, readHeader(buf));
 }
 
 // ---- Notes ------------------------------------------------------------------
@@ -451,14 +514,8 @@ function roundHasNotes(meta) {
  */
 export async function writeRoundNotes(user, file, payload) {
   const stem = sanitizeStem(file);
-  const p = path.join(roundsDir(user), `${stem}.json`);
-  let meta;
-  try {
-    meta = JSON.parse(await fsp.readFile(p, 'utf8'));
-  } catch (err) {
-    if (err.code === 'ENOENT') return null;
-    throw err;
-  }
+  const meta = await readRoundMeta(user, stem);
+  if (!meta) return null;
 
   let notes;
   if (payload && Array.isArray(payload.notes)) {
@@ -492,7 +549,7 @@ export async function writeRoundNotes(user, file, payload) {
   delete meta.note;
   delete meta.noteUpdatedAt;
 
-  await fsp.writeFile(p, JSON.stringify(meta));
+  await writeRoundMeta(user, stem, meta);
   await setNotedRound(user, stem, notes.length > 0);
   return { notes };
 }
@@ -520,10 +577,11 @@ async function rebuildNotesIndex(user) {
   const noted = [];
   for (const stem of names) {
     try {
-      const raw = await fsp.readFile(path.join(roundsDir(user), `${stem}.json`), 'utf8');
-      if (!/"notes?"\s*:/.test(raw)) continue;
-      const meta = JSON.parse(raw);
-      if (roundHasNotes(meta)) noted.push(stem);
+      // The cheap regex prefilter this used to run cannot survive compression:
+      // a compressed round has no readable "notes" substring, so every round
+      // has to be decoded. This runs once, only when the index is missing.
+      const meta = await readRoundMeta(user, stem);
+      if (meta && roundHasNotes(meta)) noted.push(stem);
     } catch {
       /* skip corrupt */
     }
