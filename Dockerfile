@@ -17,6 +17,16 @@ FROM node:22-slim
 
 WORKDIR /app
 
+# .zip, .tar.gz and .gz/.zst are read in process by server/replays/archive.js.
+# .rar cannot be: the format is proprietary and there is no usable in-process
+# decoder, so it shells out to whichever of these is present. unar has the more
+# complete RAR5 and solid-archive support and is preferred at runtime;
+# libarchive-tools (bsdtar) is the fallback. Drop this line and .rar uploads are
+# refused with an explanation rather than failing obscurely.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends unar libarchive-tools \
+  && rm -rf /var/lib/apt/lists/*
+
 # Install production dependencies first for better layer caching.
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev

@@ -430,23 +430,34 @@ export function initReplaysView({ escapeHtml }) {
 
   // ---- upload -------------------------------------------------------------
 
-  /** What the server will accept. A .zip may hold several demos. */
-  const UPLOAD_RE = /\.(dem|zip|gz|zst)$/i;
+  /**
+   * What the server will accept. Archives may hold several demos each; .gz and
+   * .zst are single-stream compressors and can only ever carry one.
+   */
+  const UPLOAD_RE = /\.(dem|zip|rar|tar|tar\.gz|tgz|tar\.zst|tzst|gz|zst)$/i;
+
+  /** Overwritten from /api/replays/status; this is only the pre-first-load guess. */
+  let maxUploadBytes = 5 * 1024 ** 3;
 
   function pickUploadFiles(fileList) {
     const files = [...(fileList || [])];
     const ok = [];
     const skipped = [];
+    const tooBig = [];
     for (const file of files) {
       const name = file.name || '';
       const lower = name.toLowerCase();
-      // .tar.gz would pass the .gz test but is not a zip and holds no demo the
-      // server can reach, so it is turned away here rather than at the backend.
-      const isTar = lower.endsWith('.tar.gz') || lower.endsWith('.tgz');
-      if (!isTar && (lower.endsWith(PACKAGE_EXT) || UPLOAD_RE.test(name))) ok.push(file);
-      else skipped.push(name || 'unnamed');
+      if (!lower.endsWith(PACKAGE_EXT) && !UPLOAD_RE.test(name)) {
+        skipped.push(name || 'unnamed');
+      } else if (file.size > maxUploadBytes) {
+        // Caught here so a rejection does not cost the user the whole transfer
+        // first. The server enforces the same limit regardless.
+        tooBig.push(name || 'unnamed');
+      } else {
+        ok.push(file);
+      }
     }
-    return { ok, skipped };
+    return { ok, skipped, tooBig };
   }
 
   // ---- upload progress ----------------------------------------------------
@@ -541,14 +552,25 @@ export function initReplaysView({ escapeHtml }) {
   }
 
   async function startUpload(fileList) {
-    const { ok, skipped } = pickUploadFiles(fileList);
+    const { ok, skipped, tooBig } = pickUploadFiles(fileList);
+    const cap = `${Math.round(maxUploadBytes / 1024 ** 3)} GB`;
     if (!ok.length) {
-      setStatus(`Upload ${PACKAGE_EXT} packages (preferred) or .dem files.`, true);
+      setStatus(
+        tooBig.length
+          ? `One upload can be up to ${cap}, however many demos it holds. Split the archive and try again.`
+          : `Upload .dem files, .zip / .rar / .tar.gz / .gz / .zst archives, or ${PACKAGE_EXT} packages.`,
+        true
+      );
       return;
     }
+    const notes = [];
     if (skipped.length) {
-      setStatus(`Skipped ${skipped.length} unsupported file${skipped.length === 1 ? '' : 's'}.`, true);
+      notes.push(`Skipped ${skipped.length} unsupported file${skipped.length === 1 ? '' : 's'}.`);
     }
+    if (tooBig.length) {
+      notes.push(`Skipped ${tooBig.length} over ${cap}.`);
+    }
+    if (notes.length) setStatus(notes.join(' '), true);
 
     dropEl?.classList.add('busy');
     uploadOwnsStatus = true;
@@ -2087,6 +2109,7 @@ export function initReplaysView({ escapeHtml }) {
     try {
       const [status, list] = await Promise.all([fetchStatus(), fetchDemos()]);
       setLocked(false);
+      if (status.limits?.maxUploadBytes) maxUploadBytes = status.limits.maxUploadBytes;
       renderParser(status.parser);
       renderQuota(list.usage || status.usage);
       demos = list.demos || [];

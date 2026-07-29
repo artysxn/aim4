@@ -43,6 +43,21 @@ export const ROOT = process.env.AIM4_REPLAY_DIR || path.join(__dirname, '..', 'd
 export const MAX_BYTES = Number(process.env.AIM4_REPLAY_MAX_BYTES || 20 * 1024 ** 3); // 20 GB
 
 /**
+ * Largest single upload, archive or bare demo. An archive may hold as many
+ * demos as it likes within this.
+ *
+ * Separate from MAX_BYTES on purpose. The library cap answers "is there room to
+ * keep this", which the quota check already does. This answers "is one request
+ * allowed to be this big", which is a different question: the archive lands on
+ * disk whole before anything is extracted, so peak disk is the archive plus
+ * everything that comes out of it, and a single request that large also has to
+ * stay inside AIM4_REQUEST_TIMEOUT_MS to arrive at all.
+ */
+export const MAX_UPLOAD_BYTES = Number(
+  process.env.AIM4_MAX_UPLOAD_BYTES || 5 * 1024 ** 3
+); // 5 GB
+
+/**
  * Sanitize a library folder name under ROOT. The public library uses a fixed
  * key from auth.js (default "local"); this just keeps paths safe.
  */
@@ -89,6 +104,40 @@ export function checkCaseSensitivity(dir = ROOT) {
     // Never let a diagnostic stop the server from booting.
     return true;
   }
+}
+
+/**
+ * Delete upload temp files left behind by a restart.
+ *
+ * An upload in flight when the process dies leaves its .tmp on the volume with
+ * nothing tracking it, and at 5 GB a couple of those are a meaningful chunk of
+ * the disk. Anything still around from before this process started cannot
+ * belong to it, so age is a safe test.
+ *
+ * @returns {Promise<number>} bytes reclaimed
+ */
+export async function sweepStaleUploads(maxAgeMs = 60 * 60 * 1000) {
+  let freed = 0;
+  const cutoff = Date.now() - maxAgeMs;
+  for (const f of await listFiles(ROOT)) {
+    if (!/^\.(upload|import)-[a-f0-9]+\.tmp$/.test(f)) continue;
+    const p = path.join(ROOT, f);
+    try {
+      const st = await fsp.stat(p);
+      if (st.mtimeMs > cutoff) continue;
+      await fsp.rm(p, { force: true });
+      freed += st.size;
+    } catch {
+      /* raced with something else; nothing to do */
+    }
+  }
+  if (freed) {
+    const mb = freed / 1024 ** 2;
+    console.warn(
+      `[replays] removed abandoned upload temp files, freed ${mb >= 1 ? `${mb.toFixed(0)} MB` : `${freed} bytes`}`
+    );
+  }
+  return freed;
 }
 
 async function ensureDirs(user) {
@@ -275,21 +324,33 @@ export async function usage(user) {
 }
 
 /**
- * Check an upload against the quota before a byte is written. `incoming` is
- * the declared Content-Length; the writer enforces it again while streaming
- * so a lying header cannot overrun the limit.
+ * Check an upload against the per-upload cap and the library quota before a
+ * byte is written. `incoming` is the declared Content-Length; the writer
+ * enforces both again while streaming, so a lying or absent header cannot
+ * overrun either limit.
+ *
+ * `allowed` is what the caller must cap the stream at: the smaller of what is
+ * left in the library and what one upload may be.
  */
 export async function checkQuota(user, incoming = 0) {
   const u = await usage(user);
-  if (incoming > 0 && u.bytes + incoming > MAX_BYTES) {
-    const gb = (MAX_BYTES / 1024 ** 3).toFixed(0);
+  const gb = (n) => (n / 1024 ** 3).toFixed(n >= 1024 ** 3 ? 0 : 1);
+
+  if (incoming > MAX_UPLOAD_BYTES) {
     return {
       ok: false,
-      error: `Not enough shared storage. The server holds ${gb} GB total.`,
+      error: `That upload is ${gb(incoming)} GB. One upload can be up to ${gb(MAX_UPLOAD_BYTES)} GB, however many demos it holds.`,
       usage: u
     };
   }
-  return { ok: true, usage: u };
+  if (incoming > 0 && u.bytes + incoming > MAX_BYTES) {
+    return {
+      ok: false,
+      error: `Not enough shared storage. The server holds ${gb(MAX_BYTES)} GB total.`,
+      usage: u
+    };
+  }
+  return { ok: true, usage: u, allowed: Math.min(u.bytesLeft, MAX_UPLOAD_BYTES) };
 }
 
 /**
@@ -302,6 +363,16 @@ export async function checkQuota(user, incoming = 0) {
  */
 export function saveTempUpload(req, allowedBytes, prefix = 'import') {
   return new Promise((resolve, reject) => {
+    // The auth and quota checks ahead of this call are async, so the client can
+    // disconnect before we ever attach. Once that has happened 'end', 'error'
+    // and 'close' have all fired already and none of them will fire again:
+    // piping would wait forever, pinning the handler and orphaning the file it
+    // had just created. Checked up front so no file is created at all.
+    if (req.destroyed && !req.readableEnded) {
+      reject(new Error('Upload was interrupted before it finished.'));
+      return;
+    }
+
     fs.mkdirSync(ROOT, { recursive: true });
     const target = path.join(ROOT, `.${prefix}-${crypto.randomBytes(8).toString('hex')}.tmp`);
     const out = fs.createWriteStream(target);
@@ -312,20 +383,59 @@ export function saveTempUpload(req, allowedBytes, prefix = 'import') {
       if (failed) return;
       failed = err;
       req.destroy();
-      out.destroy();
-      fs.promises.rm(target, { force: true }).catch(() => {});
-      reject(err);
+
+      // Unlink only after the stream has finished tearing down. Deleting while
+      // a write is still in flight loses the race: the pending write recreates
+      // the file a moment later and it is then orphaned for good, which at
+      // these sizes means a multi-gigabyte file nobody will ever look for.
+      const discard = () => {
+        fs.promises
+          .rm(target, { force: true })
+          .catch(() => {})
+          .finally(() => reject(err));
+      };
+      if (out.closed) discard();
+      else {
+        out.once('close', discard);
+        out.destroy();
+      }
     };
 
     req.on('data', (chunk) => {
       written += chunk.length;
-      if (written > allowedBytes) abort(new Error('Upload exceeds the available space.'));
+      if (written > allowedBytes) {
+        // Which ceiling was hit changes what the user should do about it, so
+        // say. Being cut off at exactly the per-upload cap means split the
+        // archive; running out of quota means delete something first.
+        const gb = (n) => (n / 1024 ** 3).toFixed(0);
+        abort(
+          new Error(
+            allowedBytes >= MAX_UPLOAD_BYTES
+              ? `One upload can be up to ${gb(MAX_UPLOAD_BYTES)} GB, however many demos it holds.`
+              : `Not enough shared storage left for that upload.`
+          )
+        );
+      }
     });
     req.on('error', abort);
     out.on('error', abort);
     out.on('finish', () => {
       if (!failed) resolve({ path: target, sizeBytes: written });
     });
+
+    // A client that goes away mid-body emits neither 'end' nor 'error', so
+    // without this the promise never settles: the route awaits forever, the
+    // handler is pinned, and the partial file is orphaned with nothing left
+    // holding a reference to it. Over a multi-gigabyte upload on a domestic
+    // connection this is not an edge case.
+    let ended = false;
+    req.on('end', () => {
+      ended = true;
+    });
+    req.on('close', () => {
+      if (!ended) abort(new Error('Upload was interrupted before it finished.'));
+    });
+
     req.pipe(out);
   });
 }

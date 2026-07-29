@@ -5,7 +5,7 @@
 //   GET    /api/replays/diag                     public crash / memory diagnostic
 //   GET    /api/replays/status                   parser + quota
 //   GET    /api/replays/demos                    library listing
-//   POST   /api/replays/demos                    upload .dem / .zip / .gz / .zst
+//   POST   /api/replays/demos                    upload .dem or an archive of them
 //   GET    /api/replays/uploads/:batchId         unpack + parse progress for one upload
 //   POST   /api/replays/import                   upload a local .aim4replay package
 //   GET    /api/replays/demos/:id                one demo + parse progress
@@ -29,6 +29,7 @@ import { parserStatus } from '../demoparser/index.js';
 import {
   ROOT,
   MAX_BYTES,
+  MAX_UPLOAD_BYTES,
   NOTE_MAX,
   checkQuota,
   deleteDemo,
@@ -50,7 +51,7 @@ import {
 } from './demoStore.js';
 import { memorySnapshot } from './hostMemory.js';
 import { forgetDemoIndex, scheduleStatsIndex, statsPayload } from './statsIndex.js';
-import { isAcceptedUpload } from './archive.js';
+import { isAcceptedUpload, rarSupport } from './archive.js';
 import { allJobs, batchStatus, enqueueParse, getBatch, jobStatus, startIngest } from './jobs.js';
 import { authStatus, identify } from './auth.js';
 import { importReplayPackage } from './importPackage.js';
@@ -253,7 +254,10 @@ export async function handleReplayRequest(req, res, url) {
       parser: parserStatus(),
       auth: authStatus(),
       usage: await usage(user),
-      limits: { maxBytes: MAX_BYTES }
+      limits: { maxBytes: MAX_BYTES, maxUploadBytes: MAX_UPLOAD_BYTES },
+      // .rar needs an external extractor, so whether it works is a property of
+      // the host rather than of the code.
+      rar: rarSupport()
     });
     return true;
   }
@@ -285,7 +289,7 @@ export async function handleReplayRequest(req, res, url) {
     const filename = String(req.headers['x-aim4-filename'] || 'match.dem').slice(0, 160);
     if (!isAcceptedUpload(filename)) {
       json(res, 400, {
-        error: 'Upload a .dem file, or a .zip, .gz or .zst containing one.'
+        error: 'Upload a .dem file, or a .zip, .rar, .tar.gz, .gz or .zst containing one.'
       });
       return true;
     }
@@ -299,9 +303,13 @@ export async function handleReplayRequest(req, res, url) {
     // Always land on a temp file first, even for a bare .dem. Unpacking decides
     // where the demo finally lives (a .zip produces several), and the ingest
     // pipeline adopts a lone .dem by renaming it rather than copying it.
+    //
+    // gate.allowed, not bytesLeft: a request with no Content-Length, or a lying
+    // one, skips the check above entirely, so the per-upload cap has to be the
+    // ceiling the stream is actually held to.
     let saved;
     try {
-      saved = await saveTempUpload(req, gate.usage.bytesLeft, 'upload');
+      saved = await saveTempUpload(req, gate.allowed, 'upload');
     } catch (err) {
       json(res, 413, { error: err.message || 'Upload failed.' });
       return true;
@@ -312,15 +320,20 @@ export async function handleReplayRequest(req, res, url) {
       return true;
     }
 
-    // Respond as soon as the bytes are on disk. Inflating a 450 MB archive
-    // takes long enough that holding the response open for it is exactly how an
-    // upload dies behind a proxy that is done waiting.
+    // Respond as soon as the bytes are on disk. Inflating a multi-gigabyte
+    // archive takes long enough that holding the response open for it is
+    // exactly how an upload dies behind a proxy that is done waiting.
+    //
+    // What comes OUT of an archive is bounded by the library quota rather than
+    // the per-upload cap: 5 GB of demos can legitimately expand well past 5 GB,
+    // and the quota is the limit that actually protects the disk. The archive's
+    // own size is subtracted because it is still on disk at this point.
     const batch = startIngest({
       user,
       filename,
       source: saved.path,
       sizeBytes: saved.sizeBytes,
-      allowedBytes: gate.usage.bytesLeft - saved.sizeBytes
+      allowedBytes: Math.max(0, gate.usage.bytesLeft - saved.sizeBytes)
     });
     json(res, 202, { batch: batchStatus(batch), usage: await usage(user) });
     return true;
@@ -354,7 +367,7 @@ export async function handleReplayRequest(req, res, url) {
 
     let tmp = null;
     try {
-      const saved = await saveTempUpload(req, gate.usage.bytesLeft, 'import');
+      const saved = await saveTempUpload(req, gate.allowed, 'import');
       tmp = saved.path;
       if (!saved.sizeBytes) {
         json(res, 400, { error: 'Empty upload.' });
