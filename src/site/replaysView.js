@@ -566,6 +566,104 @@ export function initReplaysView({ escapeHtml }) {
     }
   }
 
+  // ---- surviving a page leave ---------------------------------------------
+  // Once the bytes have landed the server is on its own: unpacking, parsing and
+  // indexing all run detached from the request that started them, and the batch
+  // is snapshotted to the volume as it goes. So the only thing a reload used to
+  // cost was the WATCHING — and, worse, a multi-file drop would abandon the
+  // files it had not sent yet, because it waited for each parse before
+  // uploading the next. Both are fixed here: every file is uploaded up front,
+  // and the batch ids are remembered so a returning tab picks them back up.
+
+  const PENDING_KEY = 'aim4.replays.pendingUploads';
+  /** True while bytes are actually moving — the one thing a reload really kills. */
+  let transferring = false;
+  /** True while resumePendingUploads is already following what it found. */
+  let resuming = false;
+
+  function readPending() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(PENDING_KEY) || '[]');
+      return Array.isArray(raw) ? raw.filter((b) => b && typeof b.id === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function writePending(list) {
+    try {
+      if (list.length) localStorage.setItem(PENDING_KEY, JSON.stringify(list));
+      else localStorage.removeItem(PENDING_KEY);
+    } catch {
+      /* private mode / full quota: following still works for this tab */
+    }
+  }
+
+  function rememberBatch(id, name) {
+    const list = readPending().filter((b) => b.id !== id);
+    list.push({ id, name, at: Date.now() });
+    writePending(list);
+  }
+
+  function forgetBatch(id) {
+    writePending(readPending().filter((b) => b.id !== id));
+  }
+
+  /**
+   * Re-attach to uploads that were still running when the page went away.
+   *
+   * A batch the server no longer knows about is dropped quietly rather than
+   * reported: it finished, and the library listing is where its result lives.
+   */
+  async function resumePendingUploads() {
+    // onShow fires on every navigation back into the view; one follower is enough.
+    if (resuming || transferring) return;
+    const pending = readPending();
+    if (!pending.length) return;
+    // Older than the server's snapshot window is not worth asking about.
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const live = pending.filter((b) => (b.at || 0) > cutoff);
+    if (live.length !== pending.length) writePending(live);
+    if (!live.length) return;
+
+    // Set only once there is something to follow, and released in the finally
+    // below: an early return that left this true would disable resume for the
+    // rest of the session.
+    resuming = true;
+    uploadOwnsStatus = true;
+    try {
+      for (const entry of live) {
+        let batch;
+        try {
+          ({ batch } = await fetchUploadBatch(entry.id));
+        } catch {
+          forgetBatch(entry.id);
+          continue;
+        }
+        if (batch.stage === 'done' || batch.stage === 'error') {
+          forgetBatch(entry.id);
+          continue;
+        }
+        setStatus(`Still working on ${entry.name || 'your upload'}…`);
+        await followBatch(entry.id, '');
+        forgetBatch(entry.id);
+      }
+      await refresh();
+    } finally {
+      resuming = false;
+      uploadOwnsStatus = false;
+      clearProgress();
+    }
+  }
+
+  // Only a transfer in progress is worth interrupting someone for; anything
+  // past that finishes on the server whether the tab is open or not.
+  window.addEventListener('beforeunload', (e) => {
+    if (!transferring) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
+
   async function startUpload(fileList) {
     const { ok, skipped, tooBig } = pickUploadFiles(fileList);
     const cap = `${Math.round(maxUploadBytes / 1024 ** 3)} GB`;
@@ -602,7 +700,13 @@ export function initReplaysView({ escapeHtml }) {
      */
     const batchErrors = [];
     const namingQueue = [];
+    /** @type {{id: string, name: string, label: string}[]} */
+    const queued = [];
     try {
+      // Pass one: get every file onto the server. Nothing here waits on a parse,
+      // so dropping ten demos and walking away leaves all ten queued rather than
+      // one uploaded and nine abandoned in the browser.
+      transferring = true;
       for (let i = 0; i < ok.length; i++) {
         const file = ok[i];
         const name = file.name || `file ${i + 1}`;
@@ -627,17 +731,27 @@ export function initReplaysView({ escapeHtml }) {
 
         const res = await uploadDemo(file, onProgress);
         renderQuota(res.usage);
-        const batch = await followBatch(res.batch.id, label);
+        rememberBatch(res.batch.id, name);
+        queued.push({ id: res.batch.id, name, label });
+      }
+      transferring = false;
+
+      // Pass two: watch what the server is doing with them. Leaving at any
+      // point from here on is safe.
+      if (queued.length) await refresh();
+      for (const item of queued) {
+        const batch = await followBatch(item.id, item.label);
+        forgetBatch(item.id);
         if (batch) {
           parsed += batch.totals.parsed;
           failed += batch.totals.failed;
           if (batch.stage === 'error' && !batch.totals.files) {
-            batchErrors.push(batch.error || `Could not unpack ${name}.`);
+            batchErrors.push(batch.error || `Could not unpack ${item.name}.`);
           }
         } else {
           // The batch is dropped once it settles, so losing track of it is not
           // proof of success either.
-          batchErrors.push(`Lost track of ${name} before it finished.`);
+          batchErrors.push(`Lost track of ${item.name} before it finished.`);
         }
       }
 
@@ -661,6 +775,7 @@ export function initReplaysView({ escapeHtml }) {
       setStatus(err.message, true);
       await refresh();
     } finally {
+      transferring = false;
       // Released last, after the closing refresh, so the result the user needs
       // to read survives the library reload that follows it.
       uploadOwnsStatus = false;
@@ -2212,6 +2327,9 @@ export function initReplaysView({ escapeHtml }) {
       } else {
         refresh();
         startPolling();
+        // Uploads that were still parsing when the page went away: pick the
+        // progress back up rather than leaving the user guessing.
+        resumePendingUploads().catch(() => {});
       }
       // Only on the first arrival: a viewer close rewrites the URL back to
       // /replays, and re-entering the view must not reopen what was closed.

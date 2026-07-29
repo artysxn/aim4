@@ -151,6 +151,9 @@ export class RadarRenderer {
     } catch {
       this.image = null;
     }
+    // Again, after the image lands: a frame drawn during the await above would
+    // have cached a layer built without it, and the key is the same either way.
+    this._mapLayerKey = '';
     this._prevHealth.fill(-1);
     this._damageTick.fill(-1);
   }
@@ -307,24 +310,40 @@ export class RadarRenderer {
       frame.pixelSize ? { w: frame.pixelSize.w, h: frame.pixelSize.h } : undefined
     );
     const ctx = this.ctx;
-    const clear = frame.clear !== false;
-    if (clear) {
-      ctx.clearRect(0, 0, w, h);
-      // Analyzer ghost layers need a transparent clear so they can be blitted.
-      if (frame.clearStyle !== 'transparent') {
-        ctx.fillStyle = '#0b0d10';
-        ctx.fillRect(0, 0, w, h);
-      }
-    }
-
     const t = this.viewTransform(w, h);
+    const clear = frame.clear !== false;
+    const wantsMap = frame.drawMap !== false && Boolean(this.image);
+    const mapAlpha = Number.isFinite(frame.mapAlpha) ? frame.mapAlpha : 0.85;
+    // Analyzer ghost layers need a transparent clear so they can be blitted,
+    // and stacked frames must not clear at all. Neither can use the cached
+    // layer, which has the background baked into it.
+    const opaqueClear = clear && frame.clearStyle !== 'transparent';
 
-    if (frame.drawMap !== false && this.image) {
-      ctx.save();
-      ctx.imageSmoothingEnabled = true;
-      ctx.globalAlpha = Number.isFinite(frame.mapAlpha) ? frame.mapAlpha : 0.85;
-      ctx.drawImage(this.image, t.ox, t.oy, RADAR_SIZE * t.scale, RADAR_SIZE * t.scale);
-      ctx.restore();
+    if (opaqueClear && wantsMap) {
+      // The background fill and the scaled radar are the same two operations on
+      // every frame, and resampling a 1024px image 60 times a second is the
+      // most expensive thing in a draw. ensureMapLayer already caches exactly
+      // that pair, keyed on everything that can change it, so the steady state
+      // here is a single 1:1 blit — which is what Analyzer has always done.
+      const layer = this.ensureMapLayer(w, h, mapAlpha);
+      ctx.globalAlpha = 1;
+      ctx.clearRect(0, 0, w, h);
+      ctx.drawImage(layer, 0, 0);
+    } else {
+      if (clear) {
+        ctx.clearRect(0, 0, w, h);
+        if (frame.clearStyle !== 'transparent') {
+          ctx.fillStyle = '#0b0d10';
+          ctx.fillRect(0, 0, w, h);
+        }
+      }
+      if (wantsMap) {
+        ctx.save();
+        ctx.imageSmoothingEnabled = true;
+        ctx.globalAlpha = mapAlpha;
+        ctx.drawImage(this.image, t.ox, t.oy, RADAR_SIZE * t.scale, RADAR_SIZE * t.scale);
+        ctx.restore();
+      }
     }
 
     const compact = Boolean(frame.compact);

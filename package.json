@@ -14,7 +14,7 @@
     "host": "node server/run-host.js",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node server/replays/tickCodec.test.js && node server/replays/demoStore.test.js && node server/replays/archive.test.js && node server/replays/uploadLimit.test.js && node server/replays/ingest.test.js && node src/replays/zones/ledges.test.js",
+    "test": "node server/replays/tickCodec.test.js && node server/replays/tickPacked.test.js && node server/replays/demoStore.test.js && node server/replays/archive.test.js && node server/replays/uploadLimit.test.js && node server/replays/ingest.test.js && node src/replays/zones/ledges.test.js",
     "parse-demo": "node tools/parse-demo-local.js",
     "parse-demo:gui": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/parse-demo-gui.ps1",
     "compact-replays": "node scripts/compact-replays.mjs",

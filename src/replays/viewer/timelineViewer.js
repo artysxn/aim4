@@ -248,6 +248,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (!destroyed) draw();
   };
   const metaCache = new Map();
+  /** file -> resolved meta, so selectRound can tell resident rounds apart. */
+  const metaReady = new Map();
   const files = rounds.map((r) => r.file);
 
   let sequence = new RoundSequence(rounds.map(() => ({})));
@@ -302,9 +304,26 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
   async function metaFor(file) {
     if (metaCache.has(file)) return metaCache.get(file);
-    const p = fetchRoundMeta(file).catch(() => null);
+    const p = fetchRoundMeta(file)
+      .catch(() => null)
+      .then((meta) => {
+        if (meta) metaReady.set(file, meta);
+        return meta;
+      });
     metaCache.set(file, p);
     return p;
+  }
+
+  /**
+   * A round's meta if it is already in hand, without awaiting.
+   *
+   * selectRound uses this to tell "everything for this round is resident" from
+   * "some of it has to be fetched". The distinction is what lets a switch
+   * between two rounds already loaded happen in one pass instead of painting
+   * once from the summary and again from the real meta a microtask later.
+   */
+  function peekMeta(file) {
+    return metaReady.get(file) || null;
   }
 
   /**
@@ -573,11 +592,17 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       return;
     }
 
+    const file = files[index];
+    // A round whose meta AND ticks are both already in hand needs no waterfall:
+    // the whole switch runs in one pass below. Without this the provisional
+    // paint from fallbackMeta and the real one from meta a microtask later BOTH
+    // run, which is two scoreboard rebuilds, two marks rebuilds and two canvas
+    // draws on every visit to a round that was already loaded.
+    const resident = store.get(file)?.isFull ? peekMeta(file) : null;
+
     activeIndex = index;
-    markActiveRound();
-    drawing.setRound(files[index]);
+    drawing.setRound(file);
     onRound?.(rounds[index]);
-    if (!boardEl.hidden) renderScoreboard();
     syncBookmark();
     renderer._prevHealth?.fill?.(-1);
     renderer._damageTick?.fill?.(-1);
@@ -587,14 +612,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     // cannot soft-paint with another round's visit log.
     zonePresence = null;
     resetZoneVisionCache(zoneVisionCache);
-
-    // Instant chrome from the summary; ticks + meta load for this round only.
-    // Coach waits until full meta + ticks land — analysing earlier caches a
-    // series built from the previous round's meta against this round's track.
-    activeMeta = fallbackMeta(rounds[index]);
-    renderScoreboards();
-    loadNotesFromMeta(true);
-    renderActiveMarks();
     notePanel.hidden = true;
     noteBtn.classList.remove('active');
     if (coachPicking) hideCoachPick();
@@ -603,6 +620,19 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       playback.pause();
       syncPlayButton();
     }
+
+    // Chrome from the real meta when it is resident, from the summary when it
+    // is not. Coach still waits for the full pair — analysing earlier caches a
+    // series built from the previous round's meta against this round's track.
+    activeMeta = resident || fallbackMeta(rounds[index]);
+    if (resident) adoptRoundMeta(index, resident);
+    else markActiveRound();
+    renderScoreboards();
+    loadNotesFromMeta(true);
+    renderActiveMarks();
+    if (!boardEl.hidden) renderScoreboard();
+    if (resident && !coachOn) autoOpenNotesIfPresent();
+
     if (seek) playback.seek(liveOffsetOf(index), { emit: false });
     syncLoading();
     clearPlayerStates();
@@ -610,47 +640,43 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       chartsEl.hidden = false;
       syncSideWinrates(null);
     }
-    draw();
+    // Only the not-yet-resident path needs a holding frame; the resident path
+    // draws once at the end with everything already correct.
+    if (!resident) draw();
 
-    const file = files[index];
-    const mapCode = rounds[index].map || activeMeta.map;
-    const [meta] = await Promise.all([
-      metaFor(file),
-      store.loadFull(file),
-      mapCode ? renderer.setMap(mapCode) : Promise.resolve()
-    ]);
-    if (destroyed || activeIndex !== index) return;
+    // Re-aim the background prefetch at where the user now is.
+    store.warm(files, index);
 
-    if (meta) {
-      activeMeta = meta;
-      // Early draw() may have built a control sim from fallbackMeta (often with
-      // empty players). That sim key can match the full meta's ticks/sides, so
-      // soft control would stay empty until the zone overlay is toggled. Drop it.
-      resetZoneVisionCache(zoneVisionCache);
-      const sideChanged =
-        (meta.winnerSide && meta.winnerSide !== rounds[index].winnerSide) ||
-        (meta.team1Side && meta.team1Side !== rounds[index].team1Side);
-      if (meta.winnerSide) rounds[index].winnerSide = meta.winnerSide;
-      if (meta.team1Side) rounds[index].team1Side = meta.team1Side;
-      if (meta.team2Side) rounds[index].team2Side = meta.team2Side;
-      if (meta.winner === 1 || meta.winner === 2) rounds[index].winner = meta.winner;
-      // Patch this round's timing into the sequence without refetching others.
-      if (meta.freezeEndTick != null || meta.tickRate) {
-        const pos = playback.position;
-        const list = rounds.map((r, i) => {
-          if (i === index) return { ...fallbackMeta(r), ...meta };
-          return sequence.at(i)?.round || fallbackMeta(r);
-        });
-        sequence = new RoundSequence(list);
-        playback.setDuration(sequence.duration);
-        playback.seek(Math.min(pos, playback.duration), { emit: false });
+    if (resident) {
+      // Map is per-selection and normally already loaded, but a mixed-map
+      // selection must not draw this round onto the previous round's radar.
+      const want = rounds[index].map || activeMeta.map;
+      if (want && renderer.mapCode !== want) {
+        await renderer.setMap(want);
+        if (destroyed || activeIndex !== index) return;
       }
-      if (sideChanged) renderRoundStrip();
-      else markActiveRound();
-      renderScoreboards();
-      loadNotesFromMeta(true);
-      renderActiveMarks();
-      if (!coachOn) autoOpenNotesIfPresent();
+    } else {
+      const mapCode = rounds[index].map || activeMeta.map;
+      const [meta] = await Promise.all([
+        metaFor(file),
+        store.loadFull(file),
+        mapCode ? renderer.setMap(mapCode) : Promise.resolve()
+      ]);
+      if (destroyed || activeIndex !== index) return;
+
+      if (meta) {
+        activeMeta = meta;
+        // The holding draw may have built a control sim from fallbackMeta (often
+        // with empty players). That sim key can match the full meta's
+        // ticks/sides, so soft control would stay empty until the zone overlay
+        // is toggled. Drop it.
+        resetZoneVisionCache(zoneVisionCache);
+        adoptRoundMeta(index, meta);
+        renderScoreboards();
+        loadNotesFromMeta(true);
+        renderActiveMarks();
+        if (!coachOn) autoOpenNotesIfPresent();
+      }
     }
 
     if (zonesOn || chartOn) await refreshZonePresence();
@@ -677,6 +703,54 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     }
     draw();
   }
+
+  /**
+   * Fold a round's real meta into the strip and the timeline.
+   *
+   * Shared by both halves of selectRound so a resident round and a freshly
+   * fetched one end up in exactly the same state.
+   */
+  function adoptRoundMeta(index, meta) {
+    const sideChanged =
+      (meta.winnerSide && meta.winnerSide !== rounds[index].winnerSide) ||
+      (meta.team1Side && meta.team1Side !== rounds[index].team1Side);
+    if (meta.winnerSide) rounds[index].winnerSide = meta.winnerSide;
+    if (meta.team1Side) rounds[index].team1Side = meta.team1Side;
+    if (meta.team2Side) rounds[index].team2Side = meta.team2Side;
+    if (meta.winner === 1 || meta.winner === 2) rounds[index].winner = meta.winner;
+    if (meta.freezeEndTick != null || meta.tickRate) syncSequenceTiming(index, meta);
+    if (sideChanged) renderRoundStrip();
+    else markActiveRound();
+  }
+
+  /**
+   * Patch one round's timing into the sequence without refetching the others.
+   *
+   * Skipped when this round's timing is already what the sequence holds, which
+   * is the case for every round visited a second time: rebuilding it there cost
+   * a fresh RoundSequence over the whole match plus a re-seek, to arrive at
+   * exactly the offsets already in place.
+   */
+  function syncSequenceTiming(index, meta) {
+    const merged = { ...fallbackMeta(rounds[index]), ...meta };
+    const held = sequence.at(index)?.round;
+    if (held && sameTiming(timingFor(held), timingFor(merged))) return;
+    const pos = playback.position;
+    const list = rounds.map((r, i) =>
+      i === index ? merged : sequence.at(i)?.round || fallbackMeta(r)
+    );
+    sequence = new RoundSequence(list);
+    playback.setDuration(sequence.duration);
+    playback.seek(Math.min(pos, playback.duration), { emit: false });
+  }
+
+  const sameTiming = (a, b) =>
+    a.tickRate === b.tickRate &&
+    a.startTick === b.startTick &&
+    a.freezeEndTick === b.freezeEndTick &&
+    a.plantTick === b.plantTick &&
+    a.endTick === b.endTick &&
+    a.officialEndTick === b.officialEndTick;
 
   function syncZonesBtn() {
     zonesBtn?.classList.toggle('active', zonesOn);
@@ -779,6 +853,30 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
   // ---- scoreboards --------------------------------------------------------
 
+  /**
+   * Scoreboard rows by slot, rebuilt whenever the panels are.
+   *
+   * syncScoreboard runs on every frame and used to reach for each row and its
+   * three children with el.querySelector, which is ~40 tree walks a frame for
+   * nodes that only change when renderScoreboards replaces the markup.
+   *
+   * @type {Map<number, {root: HTMLElement, hp: HTMLElement|null, inv: HTMLElement|null}>}
+   */
+  const playerRows = new Map();
+
+  function indexPlayerRows() {
+    playerRows.clear();
+    for (const root of el.querySelectorAll('.rv-player')) {
+      const slot = Number(root.dataset.slot);
+      if (!Number.isFinite(slot)) continue;
+      playerRows.set(slot, {
+        root,
+        hp: root.querySelector('.rv-player-hp'),
+        inv: root.querySelector('.rv-player-inv')
+      });
+    }
+  }
+
   function renderScoreboards() {
     if (!activeMeta) return;
     const t1 = activeMeta.team1 || { name: 'Team 1' };
@@ -794,6 +892,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       team1El.innerHTML = teamHtml(1, t1, wins.team1, s1 || 'T');
       team2El.innerHTML = teamHtml(2, t2, wins.team2, s2 || 'CT');
     }
+    indexPlayerRows();
   }
 
   function countWins() {
@@ -937,17 +1036,16 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     for (const p of activeMeta.players || []) {
       const s = states[p.slot];
       if (!s) continue;
-      const root = el.querySelector(`.rv-player[data-slot="${p.slot}"]`);
-      if (!root) continue;
+      const row = playerRows.get(p.slot);
+      if (!row) continue;
+      const { root, hp, inv: invEl } = row;
       root.classList.toggle('dead', !s.alive);
       const side = s.side || root.dataset.side;
       if (side) root.dataset.side = side;
-      const hp = root.querySelector('.rv-player-hp');
       if (hp) {
         const pct = s.alive ? Math.max(0, Math.min(100, s.health)) : 0;
         hp.style.width = `${pct}%`;
       }
-      const invEl = root.querySelector('.rv-player-inv');
       if (!invEl) continue;
       const st = activeMeta.stats?.[p.id] || {};
       const inv = inventoryAt({
@@ -2876,7 +2974,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   });
 
   (async () => {
-    // buildSequence → selectRound(0) already full-loads round 1 only.
+    // buildSequence → selectRound(0) full-loads round 1 and starts the
+    // background prefetch of the rest behind it.
     syncChromeInset();
     loadPlaylists();
     await buildSequence();
@@ -2887,6 +2986,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     destroy() {
       destroyed = true;
       playback.destroy();
+      // The store outlives this view (the mode switch reuses it), so retire the
+      // prefetch rather than clearing what it loaded.
+      store.stopWarm();
       detachBoardTips();
       offStore();
       chromeObserver?.disconnect();

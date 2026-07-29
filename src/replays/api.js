@@ -7,6 +7,8 @@
 // helpers below stay so older call sites keep compiling.
 // ---------------------------------------------------------------------------
 
+import { decodePacked, isPacked } from './shared/tickPacked.js';
+
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 
 /** @deprecated Library is shared; account id is ignored. */
@@ -289,17 +291,28 @@ export async function deletePlaylist(id) {
 /**
  * Fetch a round's ticks. `stride` 100 is the timeline's coarse first pass;
  * stride 1 is the full-detail pass.
+ *
+ * Full detail asks for `fmt=packed`: the columnar body is about a third of the
+ * gzipped rows and costs the backend nothing to serve, and the browser has
+ * already inflated it by the time it gets here, so all that is left is the
+ * varint unpack. Whether the body actually came back packed is decided by the
+ * magic in the first four bytes rather than by a header, so a server that has
+ * not shipped the format yet — or a proxy that rewrote the content type, or a
+ * response still sitting in the HTTP cache from before — still decodes.
  */
 export async function fetchRoundTicks(file, stride = 1) {
+  const packed = stride === 1;
+  const qs = `stride=${stride}${packed ? '&fmt=packed' : ''}`;
   const res = await fetch(
-    `${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}/ticks?stride=${stride}`,
+    `${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}/ticks?${qs}`,
     { headers: await headers() }
   );
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `Could not load round (${res.status})`);
   }
-  return res.arrayBuffer();
+  const buf = await res.arrayBuffer();
+  return isPacked(buf) ? decodePacked(buf) : buf;
 }
 
 // ---- Position / zone networks (same Coolify volume as notes; not Supabase) -

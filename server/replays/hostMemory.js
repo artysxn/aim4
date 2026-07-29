@@ -63,17 +63,30 @@ export function availableMemoryMb() {
  * Six percent looks paranoid until you count what else is live at that moment:
  * the native parser decoding a 300-450 MB demo holds its own working set well
  * outside the V8 heap, V8 needs roughly the live set again as GC headroom, and
- * the HTTP server shares the container. The old fixed 200 000 assumed none of
- * that and made a whole match one pass, which is the fastest possible parse
- * right up until the kernel kills it.
+ * the HTTP server shares the container.
  *
- * This is a starting point, not a measurement. It is safe to be wrong here
- * because jobs.js halves it and retries on a kill, so a bad guess costs time
- * rather than the parse.
+ * The ceiling is not only about memory. readBatchRows hands parseTicks an
+ * explicit array of every tick in the batch, and the cost of the parser's
+ * membership test against that array grows with the SQUARE of its length. A
+ * whole match in one pass is therefore the SLOWEST setting as well as the one
+ * most likely to be killed. Measured on two demos (519 MB / 24 rounds and
+ * 412 MB / 23 rounds), for the tick stage alone:
+ *
+ *   200 000 ticks per batch   16.4 s / 11.9 s
+ *    40 000                    9.9 s /  7.4 s
+ *    25 000                    9.8 s /  7.0 s   <- MAX_BATCH_TICKS
+ *    16 000                   11.0 s
+ *    12 000                   11.8 s
+ *
+ * Below ~25 000 the redundant decoding of the demo prefix each call starts to
+ * cost more than the membership test saves. The round files written are byte
+ * for byte identical at every batch size, so this is purely a speed and memory
+ * knob. AIM4_PARSE_BATCH_TICKS overrides it, and jobs.js still halves it and
+ * retries if the kernel steps in anyway.
  */
 export const TICKS_PER_AVAILABLE_MB = 20;
 export const MIN_BATCH_TICKS = 15_000;
-export const MAX_BATCH_TICKS = 200_000;
+export const MAX_BATCH_TICKS = 25_000;
 
 export function deriveBatchTicks(availableMb = availableMemoryMb()) {
   const ticks = Math.round(availableMb * TICKS_PER_AVAILABLE_MB);

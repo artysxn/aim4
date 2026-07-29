@@ -35,11 +35,14 @@
 import zlib from 'node:zlib';
 import {
   HEADER_BYTES,
-  RECORD_BYTES,
-  PLAYER_SLOTS,
   TICK_BYTES,
   readHeader
 } from '../../src/replays/shared/tickFormat.js';
+import {
+  packColumnar,
+  packedCapacity,
+  unpackColumnarInto
+} from '../../src/replays/shared/tickPacked.js';
 
 export const TICKZ_MAGIC = 0x5a543441; // "A4TZ" in a hex dump
 export const TICKZ_VERSION = 1;
@@ -56,37 +59,6 @@ export const DEFAULT_LEVEL = 12;
 const PREFIX_BYTES = 48;
 const SRC_HEADER_AT = 16;
 
-/**
- * One player record, field by field. Order here is the order the columns are
- * written in, so it is part of the format: appending is fine, reordering is a
- * version bump.
- */
-const FIELDS = [
-  { off: 0, size: 2, signed: true }, // x
-  { off: 2, size: 2, signed: true }, // y
-  { off: 4, size: 2, signed: true }, // z
-  { off: 6, size: 2, signed: true }, // yaw
-  { off: 8, size: 2, signed: true }, // pitch
-  { off: 10, size: 1, signed: false }, // health
-  { off: 11, size: 1, signed: false }, // armor
-  { off: 12, size: 1, signed: false }, // weapon
-  { off: 13, size: 1, signed: false }, // flags
-  { off: 14, size: 1, signed: false }, // flash
-  { off: 15, size: 1, signed: false } // side
-];
-
-// A field list that does not cover the record exactly would drop bytes on the
-// floor and still round-trip most of a round, so it is checked at load.
-{
-  const covered = FIELDS.reduce((n, f) => n + f.size, 0);
-  if (covered !== RECORD_BYTES) {
-    throw new Error(`tickCodec: FIELDS cover ${covered} bytes, record is ${RECORD_BYTES}`);
-  }
-}
-
-/** Widest a zigzag varint can get here: i16 deltas span 17 bits -> 3 bytes. */
-const MAX_VARINT = 3;
-
 function zstd(buf, level) {
   return zlib.zstdCompressSync(buf, {
     params: { [zlib.constants.ZSTD_c_compressionLevel]: level }
@@ -98,67 +70,18 @@ function unzstd(buf) {
 }
 
 // ---- codec 2: columns, deltas, varints --------------------------------------
+// The transform itself lives in src/replays/shared/tickPacked.js: the viewer's
+// wire body uses the same one, and a field table that drifted between the two
+// would decode into plausible garbage rather than fail.
 
-/**
- * Transpose one block into per-slot, per-field streams of deltas.
- *
- * Two things make this compress far better than the raw rows. Interleaved, a
- * player's x sits 160 bytes from its next value and every byte between it
- * belongs to someone else; transposed, consecutive bytes are the same quantity
- * moving smoothly. And most fields barely move: health, armor, weapon and side
- * are constant for nearly a whole round, so their delta stream is a long run of
- * zeros that costs almost nothing once compressed.
- */
-function packColumnar(raw, rows) {
-  const out = Buffer.allocUnsafe(rows * PLAYER_SLOTS * FIELDS.length * MAX_VARINT);
-  let p = 0;
-  for (let slot = 0; slot < PLAYER_SLOTS; slot++) {
-    const base = slot * RECORD_BYTES;
-    for (const f of FIELDS) {
-      let prev = 0;
-      for (let r = 0; r < rows; r++) {
-        const o = r * TICK_BYTES + base + f.off;
-        const v = f.size === 2 ? raw.readInt16LE(o) : raw.readUInt8(o);
-        // Zigzag so that -1 costs one byte instead of five.
-        let z = ((v - prev) << 1) ^ ((v - prev) >> 31);
-        z >>>= 0;
-        prev = v;
-        while (z >= 0x80) {
-          out[p++] = (z & 0x7f) | 0x80;
-          z >>>= 7;
-        }
-        out[p++] = z;
-      }
-    }
-  }
-  return out.subarray(0, p);
+function packBlock(raw, rows) {
+  const out = packColumnar(raw, rows, new Uint8Array(packedCapacity(rows)));
+  return Buffer.from(out.buffer, out.byteOffset, out.byteLength);
 }
 
-function unpackColumnar(packed, rows) {
+function unpackBlock(packed, rows) {
   const raw = Buffer.alloc(rows * TICK_BYTES);
-  let p = 0;
-  for (let slot = 0; slot < PLAYER_SLOTS; slot++) {
-    const base = slot * RECORD_BYTES;
-    for (const f of FIELDS) {
-      let prev = 0;
-      for (let r = 0; r < rows; r++) {
-        let z = 0;
-        let shift = 0;
-        for (;;) {
-          const b = packed[p++];
-          z |= (b & 0x7f) << shift;
-          if ((b & 0x80) === 0) break;
-          shift += 7;
-        }
-        z >>>= 0;
-        const v = prev + ((z >>> 1) ^ -(z & 1));
-        prev = v;
-        const o = r * TICK_BYTES + base + f.off;
-        if (f.size === 2) raw.writeInt16LE(v, o);
-        else raw.writeUInt8(v & 0xff, o);
-      }
-    }
-  }
+  unpackColumnarInto(packed, rows, raw, 0);
   return raw;
 }
 
@@ -199,7 +122,7 @@ export function encodeTickz(source, opts = {}) {
       HEADER_BYTES + from * TICK_BYTES,
       HEADER_BYTES + (from + rows) * TICK_BYTES
     );
-    blocks.push(zstd(codec === CODEC_COLUMNAR ? packColumnar(raw, rows) : raw, level));
+    blocks.push(zstd(codec === CODEC_COLUMNAR ? packBlock(raw, rows) : raw, level));
   }
 
   const out = Buffer.alloc(
@@ -252,7 +175,7 @@ function blockAt(b, meta, index) {
     meta.source.tickCount - index * meta.blockTicks
   );
   const plain = unzstd(b.subarray(offset, offset + length));
-  return meta.codec === CODEC_COLUMNAR ? unpackColumnar(plain, rows) : plain;
+  return meta.codec === CODEC_COLUMNAR ? unpackBlock(plain, rows) : plain;
 }
 
 /**

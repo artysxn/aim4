@@ -115,6 +115,8 @@ export class TickStore {
     this.rounds = new Map();
     this.listeners = new Set();
     this.cancelled = false;
+    /** Bumped to retire the running background prefetch (see warm()). */
+    this.warmPass = 0;
   }
 
   onChange(fn) {
@@ -216,6 +218,66 @@ export class TickStore {
   }
 
   /**
+   * Pull the rest of a selection in the background, nearest round first.
+   *
+   * Timeline mode used to fetch a round only when it was clicked, so every
+   * first visit to a round paid a request, a decode and the download before
+   * anything moved. A full-detail round is ~75 KB on the wire, which makes a
+   * whole 24-round match under 2 MB: there is no reason to make the user wait
+   * for one of them.
+   *
+   * Ordering spirals out from the round on screen, because the next thing
+   * clicked is nearly always adjacent (or the next round arriving on its own
+   * during playback). Calling it again supersedes the previous pass, so moving
+   * around re-aims the prefetch at wherever the user now is rather than
+   * queueing another whole match behind the first.
+   *
+   * Requests are shared with loadFull, so clicking a round that is mid-warm
+   * waits on the same request instead of starting a second one.
+   *
+   * @param {string[]} files
+   * @param {number} activeIndex
+   * @param {number} [concurrency] kept low so a click is never stuck behind a
+   *   queue of speculative fetches on a slow connection
+   */
+  warm(files, activeIndex = 0, concurrency = 2) {
+    const pass = ++this.warmPass;
+    const order = spiral(files.length, activeIndex);
+    let next = 0;
+
+    const worker = async () => {
+      for (;;) {
+        if (this.cancelled || pass !== this.warmPass) return;
+        const i = next++;
+        if (i >= order.length) return;
+        const file = files[order[i]];
+        if (!file || this.get(file)?.isFull) continue;
+        try {
+          await this.loadFull(file);
+        } catch {
+          /* one unreachable round must not stop the rest of the pass */
+        }
+        if (pass === this.warmPass) {
+          this.emit({ type: 'warm-progress', file, done: i + 1, total: order.length });
+        }
+      }
+    };
+
+    const running = [];
+    for (let n = 0; n < Math.max(1, concurrency); n++) running.push(worker());
+    return Promise.all(running).then(() => {
+      if (pass === this.warmPass && !this.cancelled) {
+        this.emit({ type: 'warm-done', total: order.length });
+      }
+    });
+  }
+
+  /** Stop the background pass without touching what it already loaded. */
+  stopWarm() {
+    this.warmPass++;
+  }
+
+  /**
    * Macro mode: every tick of every round, one round at a time, in order.
    */
   async macroPass(files) {
@@ -233,6 +295,7 @@ export class TickStore {
    */
   clear() {
     this.cancelled = true;
+    this.warmPass++;
     this.rounds.clear();
     this.emit({ type: 'cleared' });
   }
@@ -241,7 +304,27 @@ export class TickStore {
   reset() {
     this.rounds.clear();
     this.cancelled = false;
+    this.warmPass++;
   }
+}
+
+/**
+ * Indices of `length` ordered outward from `from`: the round on screen, then
+ * the one after, the one before, and so on. Trailing rounds come first at a
+ * tie because playback moves forward.
+ */
+function spiral(length, from) {
+  const start = Math.max(0, Math.min(length - 1, from | 0));
+  const out = [];
+  for (let d = 0; out.length < length && d <= length; d++) {
+    if (d === 0) {
+      out.push(start);
+      continue;
+    }
+    if (start + d < length) out.push(start + d);
+    if (start - d >= 0) out.push(start - d);
+  }
+  return out;
 }
 
 /** Bytes -> "1.4 MB", for the loading readout. */

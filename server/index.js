@@ -18,6 +18,7 @@ import { FootballServer } from './football.js';
 import { tryServeStatic, distExists } from './static.js';
 import { handleReplayRequest } from './replays/routes.js';
 import { checkCaseSensitivity, sweepStaleUploads } from './replays/demoStore.js';
+import { resumeInterruptedParses, sweepBatchFiles } from './replays/jobs.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
 
 // PORT (no prefix) is the convention most hosts inject; AIM4_API_PORT still
@@ -218,6 +219,12 @@ checkCaseSensitivity();
 // An upload interrupted by a restart leaves a temp file with nothing tracking
 // it. Best-effort, and never a reason to fail startup.
 sweepStaleUploads().catch(() => {});
+// The parse queue is in memory, so a demo left mid-parse by a restart has
+// nothing working on it. Its .dem is still on the volume, so requeue rather
+// than making someone re-upload hundreds of megabytes. Not awaited: several
+// interrupted parses must not hold the port closed.
+resumeInterruptedParses().catch(() => {});
+sweepBatchFiles().catch(() => {});
 
 server.listen(PORT, HOST, async () => {
   if (SERVE_STATIC) {

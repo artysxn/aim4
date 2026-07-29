@@ -33,6 +33,7 @@ import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { collectRounds, sortRounds } from '../../src/replays/shared/roundFilter.js';
 import { readHeader, sliceStride } from '../../src/replays/shared/tickFormat.js';
+import { encodePacked } from '../../src/replays/shared/tickPacked.js';
 import { TICKZ_EXT, decodeTickz, decodeTickzStride, encodeTickz } from './tickCodec.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -70,6 +71,33 @@ export function userKey(raw) {
 export const userDir = (user) => path.join(ROOT, userKey(user));
 const demosDir = (user) => path.join(userDir(user), 'demos');
 const roundsDir = (user) => path.join(userDir(user), 'rounds');
+export const uploadsDir = (user) => path.join(userDir(user), 'uploads');
+
+/**
+ * Every library folder under ROOT.
+ *
+ * Normally one (the shared library from auth.js), but AIM4_REPLAY_LIBRARY can
+ * point at a former per-account folder, and the boot-time parse resume has to
+ * cover whatever is actually on the volume rather than assume.
+ */
+export async function listLibraryUsers() {
+  try {
+    const entries = await fsp.readdir(ROOT, { withFileTypes: true });
+    return entries.filter((e) => e.isDirectory() && e.name !== 'zones').map((e) => e.name);
+  } catch {
+    return [];
+  }
+}
+
+/** True when the uploaded .dem is still on disk, i.e. a parse can be retried. */
+export async function hasSourceFile(user, id) {
+  try {
+    await fsp.access(demoPath(user, sanitizeId(id)));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function newDemoId() {
   return crypto.randomBytes(8).toString('hex');
@@ -568,6 +596,81 @@ export async function readRoundTicks(user, file, stride = 1) {
   return sliceStride(buf, step, readHeader(buf));
 }
 
+// ---- the viewer's wire body --------------------------------------------------
+
+/**
+ * Full-detail rounds, compressed once and kept.
+ *
+ * A round is ~1 MB of fixed-width rows. Gzipping those per request cost ~10 ms
+ * of CPU to produce ~261 KB, which is 3.5x LARGER than the .tickz the bytes were
+ * just decoded from — the row layout simply does not compress well without the
+ * columnar transform. Applying that transform and gzipping the result gets the
+ * same round down to ~75 KB, and the browser inflates it in the network layer
+ * for free, so the only client-side work left is the varint unpack (~2 ms).
+ *
+ * Round files are immutable — the name encodes the content — so a body can be
+ * cached for as long as there is room for it, and only a delete has to evict.
+ */
+const WIRE_CACHE_BYTES = Number(process.env.AIM4_TICK_WIRE_CACHE_BYTES || 48 * 1024 * 1024);
+/** @type {Map<string, Buffer>} insertion-ordered, so the oldest key is the LRU victim */
+const wireCache = new Map();
+let wireCacheBytes = 0;
+
+function wireCacheGet(key) {
+  const hit = wireCache.get(key);
+  if (!hit) return null;
+  // Re-insert so recently used bodies survive eviction.
+  wireCache.delete(key);
+  wireCache.set(key, hit);
+  return hit;
+}
+
+function wireCachePut(key, buf) {
+  if (buf.length > WIRE_CACHE_BYTES) return;
+  wireCache.set(key, buf);
+  wireCacheBytes += buf.length;
+  for (const [k, v] of wireCache) {
+    if (wireCacheBytes <= WIRE_CACHE_BYTES) break;
+    if (k === key) continue;
+    wireCache.delete(k);
+    wireCacheBytes -= v.length;
+  }
+}
+
+/** Drop cached bodies for one demo's rounds (only a delete can invalidate). */
+function forgetWireCache(demoId) {
+  const suffix = `~${demoId}`;
+  for (const [k, v] of wireCache) {
+    if (!k.includes(suffix)) continue;
+    wireCache.delete(k);
+    wireCacheBytes -= v.length;
+  }
+}
+
+/**
+ * A round's full-detail ticks as a gzipped columnar body, ready to write to the
+ * socket with `Content-Encoding: gzip`.
+ *
+ * @returns {Promise<Buffer|null>} null when the round has no tick file
+ */
+export async function readRoundTicksPacked(user, file) {
+  const stem = sanitizeStem(file);
+  const key = `${user}/${stem}`;
+  const cached = wireCacheGet(key);
+  if (cached) return cached;
+
+  const raw = await readRoundTicks(user, stem, 1);
+  if (!raw) return null;
+  const bytes = Buffer.from(raw);
+  const body = encodePacked(bytes, readHeader(bytes).tickCount);
+  // Level 6: level 9 doubled the CPU for under 1% off the wire (measured).
+  const out = zlib.gzipSync(Buffer.from(body.buffer, body.byteOffset, body.byteLength), {
+    level: 6
+  });
+  wireCachePut(key, out);
+  return out;
+}
+
 // ---- Notes ------------------------------------------------------------------
 
 export const NOTE_MAX = 800;
@@ -809,6 +912,7 @@ export async function deleteDemo(user, id) {
   for (const f of await listFiles(dir)) {
     if (f.includes(`~${demoId}.`)) await fsp.rm(path.join(dir, f), { force: true });
   }
+  forgetWireCache(demoId);
   // Playlists would otherwise keep counting rounds that no longer exist.
   const lists = await readPlaylists(user);
   let touched = false;

@@ -22,7 +22,7 @@
 
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { rm } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
@@ -31,9 +31,13 @@ import {
   demoFilePath,
   discardSourceFile,
   ensureLibraryDirs,
+  hasSourceFile,
+  listDemos,
+  listLibraryUsers,
   newDemoId,
   readRoundMeta,
   readRoundTicks,
+  uploadsDir,
   userDir
 } from './demoStore.js';
 import { unpackUpload } from './archive.js';
@@ -67,7 +71,12 @@ const KEEP_SOURCE = process.env.AIM4_REPLAY_KEEP_DEM === '1';
  * it holds less in the heap at the cost of re-decoding the file once more.
  */
 const MAX_ATTEMPTS = Number(process.env.AIM4_PARSE_ATTEMPTS || 3);
-const MIN_BATCH_TICKS = 15_000;
+/**
+ * Floor for the retry ladder, deliberately below hostMemory's derivation floor.
+ * The derived batch now starts at 25 000 rather than 200 000, so halving twice
+ * has to still land somewhere for the ladder to be worth having at all.
+ */
+const MIN_BATCH_TICKS = 5_000;
 
 /**
  * Heap ceiling for the parse process, in MB, passed as --max-old-space-size.
@@ -89,11 +98,22 @@ const queue = [];
 let running = null;
 
 /**
- * Finished batches are kept so a client that polls a moment late still sees the
- * result rather than a 404, then dropped so a long-lived server does not
- * accumulate them.
+ * Finished batches are kept in memory so a client that polls a moment late
+ * still sees the result rather than a 404, then dropped so a long-lived server
+ * does not accumulate them. The on-disk snapshot outlives this window, so a
+ * client that left and came back still finds its upload.
  */
 const BATCH_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * How long a batch snapshot stays on the volume. Long enough that closing the
+ * tab and coming back the next day still explains what happened to an upload,
+ * short enough that the folder does not become a log.
+ */
+const BATCH_FILE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Smallest gap between snapshot writes for one batch, outside of settling. */
+const PERSIST_EVERY_MS = 2000;
 
 function jobKey(user, demoId) {
   return `${user}/${demoId}`;
@@ -140,7 +160,105 @@ function sweepBatches() {
   }
 }
 
-/** The shape the progress bar reads. Counts are cumulative by phase. */
+// ---- batch snapshots --------------------------------------------------------
+// Parsing is detached from the request that started it, so it finishes whether
+// or not anyone is watching. What used to be lost by leaving the page was the
+// ABILITY TO WATCH: batch state lived only in this process's memory, so a
+// reload — or a restart mid-parse — turned a running upload into "Lost track of
+// it". A snapshot on the volume is what lets a returning client pick the same
+// upload back up.
+
+const batchFile = (user, id) => path.join(uploadsDir(user), `${sanitizeBatchId(id)}.json`);
+
+function sanitizeBatchId(id) {
+  const s = String(id || '').replace(/[^A-Za-z0-9_-]/g, '');
+  if (!s) throw new Error('Invalid batch id');
+  return s;
+}
+
+async function persistBatch(batch, { force = false } = {}) {
+  if (!batch) return;
+  const now = Date.now();
+  if (!force && batch._persistedAt && now - batch._persistedAt < PERSIST_EVERY_MS) return;
+  batch._persistedAt = now;
+  try {
+    await mkdir(uploadsDir(batch.user), { recursive: true });
+    await writeFile(
+      batchFile(batch.user, batch.id),
+      JSON.stringify({
+        id: batch.id,
+        user: batch.user,
+        filename: batch.filename,
+        sizeBytes: batch.sizeBytes,
+        stage: batch.stage,
+        error: batch.error,
+        files: batch.files,
+        createdAt: batch.createdAt,
+        finishedAt: batch.finishedAt
+      })
+    );
+  } catch {
+    /* the in-memory copy still serves this process */
+  }
+}
+
+/** Fire-and-forget snapshot, for the many call sites that are not async. */
+const snapshot = (batch, opts) => {
+  persistBatch(batch, opts).catch(() => {});
+};
+
+async function loadBatch(user, batchId) {
+  try {
+    const raw = JSON.parse(await readFile(batchFile(user, batchId), 'utf8'));
+    if (!raw || raw.user !== user) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+/** Every snapshot on the volume for one library. */
+async function loadUserBatches(user) {
+  const dir = uploadsDir(user);
+  let names = [];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const raw = JSON.parse(await readFile(path.join(dir, name), 'utf8'));
+      if (raw?.id) out.push(raw);
+    } catch {
+      /* unreadable snapshot is not worth failing over */
+    }
+  }
+  return out;
+}
+
+/** Drop snapshots older than BATCH_FILE_TTL_MS, best-effort. */
+export async function sweepBatchFiles() {
+  const cutoff = Date.now() - BATCH_FILE_TTL_MS;
+  for (const user of await listLibraryUsers()) {
+    for (const raw of await loadUserBatches(user)) {
+      const at = raw.finishedAt || raw.createdAt || 0;
+      if (!at || at >= cutoff) continue;
+      if (batches.has(raw.id)) batches.delete(raw.id);
+      await rm(batchFile(user, raw.id), { force: true }).catch(() => {});
+    }
+  }
+}
+
+/**
+ * The shape the progress bar reads. Counts are cumulative by phase.
+ *
+ * Per-file round progress is overlaid from the live job rather than taken from
+ * the batch, so a snapshot loaded off disk after a reload still reports "round
+ * 14 of 24" for whatever is parsing right now.
+ */
 export function batchStatus(batch) {
   if (!batch) return null;
   const count = (phase) => {
@@ -160,22 +278,37 @@ export function batchStatus(batch) {
       analyzed: count('analyzed'),
       failed: batch.files.filter((f) => f.failed).length
     },
-    files: batch.files.map((f) => ({
-      name: f.name,
-      demoId: f.demoId,
-      phase: f.phase,
-      failed: f.failed,
-      round: f.round,
-      total: f.total,
-      error: f.error
-    })),
+    files: batch.files.map((f) => {
+      const job = jobs.get(jobKey(batch.user, f.demoId));
+      return {
+        name: f.name,
+        demoId: f.demoId,
+        phase: f.phase,
+        failed: f.failed,
+        round: job?.round ?? f.round,
+        total: job?.total ?? f.total,
+        error: f.error
+      };
+    }),
     finishedAt: batch.finishedAt
   };
 }
 
-export function getBatch(user, batchId) {
-  const b = batches.get(String(batchId || ''));
-  return b && b.user === user ? b : null;
+/**
+ * One upload's batch, from memory or from the volume.
+ *
+ * A disk-loaded batch is adopted back into memory so the rest of the pipeline
+ * (which mutates batches in place) keeps working on it, and so a snapshot taken
+ * mid-parse does not keep being re-read.
+ */
+export async function getBatch(user, batchId) {
+  const id = String(batchId || '');
+  const live = batches.get(id);
+  if (live) return live.user === user ? live : null;
+  const stored = await loadBatch(user, id);
+  if (!stored) return null;
+  batches.set(id, stored);
+  return stored;
 }
 
 function batchEntry(batch, demoId) {
@@ -185,9 +318,13 @@ function batchEntry(batch, demoId) {
 function settleBatch(batch) {
   if (!batch || batch.finishedAt) return;
   const pending = batch.files.some((f) => !f.failed && f.phase !== 'analyzed');
-  if (pending || batch.stage === 'unpacking') return;
+  if (pending || batch.stage === 'unpacking') {
+    snapshot(batch);
+    return;
+  }
   batch.stage = batch.files.every((f) => f.failed) ? 'error' : 'done';
   batch.finishedAt = Date.now();
+  snapshot(batch, { force: true });
   sweepBatches();
 }
 
@@ -211,6 +348,9 @@ export function startIngest({ user, filename, source, sizeBytes, allowedBytes })
     finishedAt: null
   };
   batches.set(batch.id, batch);
+  // Snapshot before unpacking starts: a client that reloads during a long
+  // archive extraction has to find the batch it was handed.
+  snapshot(batch, { force: true });
 
   (async () => {
     const idByPath = new Map();
@@ -267,10 +407,12 @@ export function startIngest({ user, filename, source, sizeBytes, allowedBytes })
         batch.error = 'No .dem files were found in that upload.';
         batch.finishedAt = Date.now();
       }
+      snapshot(batch, { force: true });
     } catch (err) {
       batch.stage = 'error';
       batch.error = err?.message || 'Could not unpack that upload.';
       batch.finishedAt = Date.now();
+      snapshot(batch, { force: true });
       console.error(`[replays] unpack failed for ${filename}:`, batch.error);
     } finally {
       // The archive has given up everything it is going to. Whether that went
@@ -389,17 +531,22 @@ function pump() {
       if (msg.total !== undefined) job.total = msg.total;
       // Mirror onto the batch so the bar can show round N of M within the file
       // it is currently working through.
-      const entry = batchEntry(batches.get(job.batchId), job.demoId);
+      const batch = batches.get(job.batchId);
+      const entry = batchEntry(batch, job.demoId);
       if (entry) {
         entry.round = job.round;
         entry.total = job.total;
       }
+      // Throttled: a snapshot per round would be a write every few hundred ms,
+      // and batchStatus overlays live job progress anyway.
+      snapshot(batch);
       return;
     }
     if (msg.type === 'done') {
       const batch = batches.get(job.batchId);
       const entry = batchEntry(batch, job.demoId);
       setPhase(entry, 'parsed');
+      snapshot(batch, { force: true });
       // Build stats (+ zone positions when the map network is ready) from the
       // freshly written round files. Never needs a second parse.
       const ready = msg.record || (await readRecord(job.user, job.demoId).catch(() => null));
@@ -485,4 +632,109 @@ async function markFailed(job, error) {
   } catch {
     /* the record may be gone if the user deleted the demo mid-parse */
   }
+}
+
+/**
+ * Pick up parses that a restart interrupted.
+ *
+ * The queue lives in memory, so a demo whose record says "parsing" when the
+ * process starts is one nothing is working on. Its .dem is still on the volume
+ * (the source is only discarded once a parse reaches a terminal state), which
+ * is exactly what a retry needs — so requeue it rather than making the user
+ * upload hundreds of megabytes again. A record with no source left cannot be
+ * resumed and is marked failed, which is what the library already showed for it.
+ *
+ * Called once at boot. Deliberately not awaited by the listener: a library with
+ * several interrupted parses should not hold the port closed.
+ */
+export async function resumeInterruptedParses() {
+  let resumed = 0;
+  let abandoned = 0;
+  for (const user of await listLibraryUsers()) {
+    let records = [];
+    try {
+      records = await listDemos(user);
+    } catch {
+      continue;
+    }
+
+    // Reattach resumed jobs to the batch they came from, and adopt those
+    // batches back into memory. Without this the upload a returning client is
+    // polling would never reach "analyzed", so its progress bar would sit at
+    // "parsed" forever while the parse itself quietly succeeded.
+    const batchOfDemo = new Map();
+    const adopted = [];
+    for (const raw of await loadUserBatches(user)) {
+      if (raw.finishedAt) continue;
+      const batch = batches.get(raw.id) || raw;
+      if (!batches.has(raw.id)) batches.set(raw.id, batch);
+      adopted.push(batch);
+      for (const f of batch.files || []) {
+        if (f?.demoId) batchOfDemo.set(f.demoId, raw.id);
+      }
+    }
+
+    for (const record of records) {
+      if (record.status !== 'parsing') continue;
+      if (jobs.get(jobKey(user, record.id))) continue;
+      if (await hasSourceFile(user, record.id)) {
+        enqueueParse({
+          user,
+          demoId: record.id,
+          filename: record.filename,
+          sizeBytes: record.sizeBytes,
+          batchId: batchOfDemo.get(record.id) || null
+        });
+        resumed++;
+      } else {
+        const message =
+          'Parsing was interrupted before it finished and the uploaded demo is no longer on ' +
+          'the server. Upload it again to retry.';
+        await markFailed(
+          { user, demoId: record.id, filename: record.filename, sizeBytes: record.sizeBytes },
+          message
+        );
+        // Fail it on the batch too, or the batch it belonged to would never
+        // settle and a returning client would poll a dead upload forever.
+        const batch = batches.get(batchOfDemo.get(record.id));
+        if (batch) {
+          failEntry(batchEntry(batch, record.id), message);
+          settleBatch(batch);
+        }
+        abandoned++;
+      }
+    }
+
+    // Finally, reconcile every adopted batch against the records.
+    //
+    // A parse can finish and the process can die before the stats index lands
+    // and settles its batch — a window of a few hundred milliseconds, but one
+    // where the record says "ready" while the snapshot still says "parsing".
+    // Nothing above catches that (the record is not parsing, so it is not
+    // resumed), and the result would be a client polling a batch that can never
+    // settle. Marking each file from what its record actually says closes it.
+    const byId = new Map(records.map((r) => [r.id, r]));
+    for (const batch of adopted) {
+      for (const f of batch.files || []) {
+        if (f.failed || f.phase === 'analyzed') continue;
+        const rec = byId.get(f.demoId);
+        // No record at all: the demo was deleted while the batch was in flight.
+        if (!rec) {
+          failEntry(f, 'That demo was removed before parsing finished.');
+        } else if (rec.status === 'ready') {
+          setPhase(f, 'analyzed');
+        } else if (rec.status === 'error') {
+          failEntry(f, rec.error);
+        }
+        // status 'parsing' means a job is on it now; leave it to finish.
+      }
+      settleBatch(batch);
+    }
+  }
+  if (resumed || abandoned) {
+    console.log(
+      `[replays] interrupted parses: ${resumed} requeued, ${abandoned} unrecoverable`
+    );
+  }
+  return { resumed, abandoned };
 }

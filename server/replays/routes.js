@@ -13,7 +13,7 @@
 //   DELETE /api/replays/demos/:id                remove demo + its rounds
 //   GET    /api/replays/rounds?...               filter by name, no file reads
 //   GET    /api/replays/rounds/:file             round meta + events
-//   GET    /api/replays/rounds/:file/ticks       tick buffer, ?stride=N
+//   GET    /api/replays/rounds/:file/ticks       tick buffer, ?stride=N&fmt=packed
 //   GET    /api/replays/zones                    maps that have a zone file
 //   GET    /api/replays/zones/:map               zone network for one map
 //   POST   /api/replays/zones/:map               save zone polygons + names
@@ -40,6 +40,7 @@ import {
   readRecord,
   readRoundMeta,
   readRoundTicks,
+  readRoundTicksPacked,
   removePlaylist,
   renameDemoTeams,
   saveTempUpload,
@@ -341,7 +342,7 @@ export async function handleReplayRequest(req, res, url) {
 
   const batchMatch = p.match(/^\/api\/replays\/uploads\/([A-Za-z0-9_-]+)$/);
   if (req.method === 'GET' && batchMatch) {
-    const batch = getBatch(user, batchMatch[1]);
+    const batch = await getBatch(user, batchMatch[1]);
     if (!batch) {
       json(res, 404, { error: 'That upload is no longer being tracked.' });
       return true;
@@ -513,6 +514,37 @@ export async function handleReplayRequest(req, res, url) {
   const ticksMatch = p.match(/^\/api\/replays\/rounds\/([A-Za-z0-9_~-]+)\/ticks$/);
   if (req.method === 'GET' && ticksMatch) {
     const stride = Number(url.searchParams.get('stride') || 1);
+    // A client that says fmt=packed ships the varint unpack, so the columnar
+    // body can go out as-is: ~75 KB instead of ~261 KB, and after the first
+    // request no CPU at all. Only full detail has a packed form; the coarse
+    // pass is a precomputed 10 KB file that is not worth transforming.
+    const wantsPacked = url.searchParams.get('fmt') === 'packed' && stride === 1;
+    if (wantsPacked && /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) {
+      let body;
+      try {
+        body = await readRoundTicksPacked(user, ticksMatch[1]);
+      } catch (err) {
+        json(res, 400, { error: err.message || 'Bad round name.' });
+        return true;
+      }
+      if (!body) {
+        json(res, 404, { error: 'Round not found.' });
+        return true;
+      }
+      res.writeHead(200, {
+        // The magic in the body is what the client actually branches on, so a
+        // proxy that rewrites this header cannot make it decode the wrong way.
+        'Content-Type': 'application/vnd.aim4.ticks-packed',
+        'Content-Encoding': 'gzip',
+        'Content-Length': body.length,
+        'Cache-Control': 'private, max-age=31536000, immutable',
+        Vary: 'Accept-Encoding',
+        ...CORS
+      });
+      res.end(body);
+      return true;
+    }
+
     let buf;
     try {
       buf = await readRoundTicks(user, ticksMatch[1], stride);
