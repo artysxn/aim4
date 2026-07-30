@@ -194,6 +194,55 @@ export function pressure() {
   return Object.keys(out).length ? out : null;
 }
 
+/**
+ * How fast one core here actually is, as a number comparable between machines.
+ *
+ * Parse timings cannot answer this: they move with demo size, disk and cache. A
+ * fixed synthetic loop does, and it is the difference between "the parser is
+ * slow" and "this core is slow" — which are fixed in completely different
+ * places. Run it on a machine you trust and compare.
+ *
+ * `alu` is branchy integer work, close to what a bitstream decoder does. `mem`
+ * walks a 32 MB array, which is past every cache level, so it reports memory
+ * bandwidth — the thing cheap shared instances are usually starved of and the
+ * thing this parser leans on hardest.
+ *
+ * Read it next to pressure(): measured while a parse is running, a low score may
+ * be contention rather than the core's ceiling.
+ */
+export function cpuProbe() {
+  const first = os.cpus()[0] || {};
+
+  const tAlu = process.hrtime.bigint();
+  let acc = 0;
+  for (let i = 1; i <= 12_000_000; i++) {
+    acc = (acc + i * 2654435761) % 4294967296;
+    if ((acc & 1023) === 0) acc ^= i;
+  }
+  const aluMs = Number(process.hrtime.bigint() - tAlu) / 1e6;
+
+  const N = 8 * 1024 * 1024; // 32 MB of Int32
+  const arr = new Int32Array(N);
+  for (let i = 0; i < N; i += 4096) arr[i] = i;
+  const tMem = process.hrtime.bigint();
+  let sum = 0;
+  for (let pass = 0; pass < 4; pass++) for (let i = 0; i < N; i++) sum += arr[i];
+  const memMs = Number(process.hrtime.bigint() - tMem) / 1e6;
+
+  return {
+    model: first.model || null,
+    reportedMhz: first.speed || null,
+    arch: process.arch,
+    platform: process.platform,
+    node: process.version,
+    aluMs: Math.round(aluMs),
+    memMs: Math.round(memMs),
+    memMbPerSec: memMs > 0 ? Math.round(((N * 4 * 4) / 1048576 / memMs) * 1000) : null,
+    // Kept so the loops cannot be optimised away.
+    _checksum: (acc ^ sum) | 0
+  };
+}
+
 /** Everything the diagnostics endpoint reports, in one place. */
 export function memorySnapshot(extra = {}) {
   const mem = process.memoryUsage();

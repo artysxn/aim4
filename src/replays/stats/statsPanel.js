@@ -63,6 +63,8 @@ export function createStatsPanel({ escapeHtml }) {
     hasAwp: false,
     oppHasAwp: false,
     files: null,
+    result: '',
+    advantage: '',
     /** @type {{ side: 'T'|'CT', value: string } | null} */
     role: null
   };
@@ -164,6 +166,14 @@ export function createStatsPanel({ escapeHtml }) {
       `<button type="button" class="rp-chip${
         filter.side === value ? ' active' : ''
       }" data-side="${value}">${label}</button>`;
+    const resultBtn = (value, label) =>
+      `<button type="button" class="rp-chip${
+        filter.result === value ? ' active' : ''
+      }" data-result="${value}">${label}</button>`;
+    const advBtn = (value, label) =>
+      `<button type="button" class="rp-chip${
+        filter.advantage === value ? ' active' : ''
+      }" data-advantage="${value}">${label}</button>`;
 
     const roleGroups =
       mode && tab === 'players'
@@ -186,6 +196,17 @@ export function createStatsPanel({ escapeHtml }) {
       <div class="st-filter-group st-filter-stack">
         <span class="st-filter-label">Side</span>
         <div class="rp-chips">${sideBtn('T', 'T')}${sideBtn('CT', 'CT')}</div>
+      </div>
+      <div class="st-filter-group st-filter-stack">
+        <span class="st-filter-label">Result</span>
+        <div class="rp-chips">${resultBtn('won', 'Won')}${resultBtn('lost', 'Lost')}</div>
+      </div>
+      <div class="st-filter-group st-filter-stack">
+        <span class="st-filter-label">Opening</span>
+        <div class="rp-chips">${advBtn('5v4', '5v4')}${advBtn('4v5', '4v5')}${advBtn(
+          'even',
+          'Even'
+        )}</div>
       </div>
       ${roleGroups}
       <div class="st-filter-group st-filter-stack">
@@ -212,6 +233,19 @@ export function createStatsPanel({ escapeHtml }) {
       render();
       return;
     }
+    const result = e.target.closest('[data-result]');
+    if (result) {
+      filter.result = filter.result === result.dataset.result ? '' : result.dataset.result;
+      render();
+      return;
+    }
+    const adv = e.target.closest('[data-advantage]');
+    if (adv) {
+      filter.advantage =
+        filter.advantage === adv.dataset.advantage ? '' : adv.dataset.advantage;
+      render();
+      return;
+    }
     if (e.target.closest('[data-clear]')) {
       filter.maps = [];
       filter.side = '';
@@ -219,6 +253,8 @@ export function createStatsPanel({ escapeHtml }) {
       filter.oppEcon = null;
       filter.hasAwp = false;
       filter.oppHasAwp = false;
+      filter.result = '';
+      filter.advantage = '';
       filter.role = null;
       render();
     }

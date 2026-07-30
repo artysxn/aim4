@@ -50,7 +50,7 @@ import {
   writeRecord,
   writeRoundNotes
 } from './demoStore.js';
-import { memorySnapshot } from './hostMemory.js';
+import { cpuProbe, memorySnapshot } from './hostMemory.js';
 import { forgetDemoIndex, scheduleStatsIndex, statsPayload } from './statsIndex.js';
 import { isAcceptedUpload, rarSupport } from './archive.js';
 import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
@@ -306,6 +306,10 @@ export async function handleReplayRequest(req, res, url) {
       // because it costs a few hundred MB of reads and evicts page cache, which
       // is not something a health check should do on its own.
       volume: url.searchParams.get('io') === '1' ? await volumeReadProbe() : undefined,
+      // ?cpu=1 runs a fixed synthetic loop, ~1s. Opt-in because it deliberately
+      // burns a core, which is the last thing to do to a box mid-parse unless
+      // that is exactly the question being asked.
+      cpu: url.searchParams.get('cpu') === '1' ? cpuProbe() : undefined,
       uptimeSeconds: Math.round(process.uptime())
     });
     return true;

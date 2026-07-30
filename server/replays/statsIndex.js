@@ -18,11 +18,20 @@ import path from 'node:path';
 import { P, PLAYER_SLOTS } from '../../src/replays/shared/statsMath.js';
 import { awpAccuracyFromTicks } from '../../src/replays/shared/awpAccuracy.js';
 import { phaseCombatFromMeta } from '../../src/replays/roles/phaseCombat.js';
+import {
+  averagePossessionOverRound,
+  enrichPrwAndSwing
+} from '../../src/replays/stats/prwEnrich.js';
+import { TickTrack } from '../../src/replays/tickStore.js';
+import {
+  buildZonePresence,
+  hasControlField,
+  prepareControlField,
+  registerRadarMask
+} from '../../src/replays/zones/zoneOverlay.js';
+import { loadRadarMask } from '../../scripts/lib/radarMask.mjs';
 
-export const STATS_VERSION = 8;
-
-/** ~1 Hz occupancy samples (demo ticks between samples) — AWP Acc only. */
-const TICK_STRIDE = 64;
+export const STATS_VERSION = 9;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -136,7 +145,17 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf, tickBuffer = null) 
     p
   };
   applyPhaseBags(row, meta, playerIds, tickBuffer);
+  applyPrwFields(row, meta);
   return row;
+}
+
+function applyPrwFields(row, meta) {
+  const { prw1, prw2, sw } = enrichPrwAndSwing(meta);
+  row.prw1 = prw1;
+  row.prw2 = prw2;
+  row.sw = sw;
+  if (row.pos1 === undefined) row.pos1 = null;
+  if (row.pos2 === undefined) row.pos2 = null;
 }
 
 function applyPhaseBags(row, meta, playerIds, tickBuffer = null) {
@@ -152,11 +171,70 @@ function applyPhaseBags(row, meta, playerIds, tickBuffer = null) {
   }
 }
 
-/** Phase bags / AWP Acc missing or on a pre-v8 index. */
+/** Phase bags / AWP Acc / PRW missing or on a pre-v9 index. */
 function needsPhaseEnrichment(entry) {
   if (!entry?.rounds?.length) return false;
   if (Number(entry.v) < STATS_VERSION) return true;
-  return entry.rounds.some((r) => !r.ph || typeof r.ph !== 'object');
+  return entry.rounds.some(
+    (r) =>
+      !r.ph ||
+      typeof r.ph !== 'object' ||
+      r.prw1 === undefined ||
+      r.sw === undefined
+  );
+}
+
+/** Cache radar + zones per map while indexing one demo. */
+async function ensureMapControl(io, mapCode, cache) {
+  if (!mapCode) return null;
+  if (cache.has(mapCode)) return cache.get(mapCode);
+  let network = null;
+  try {
+    network = typeof io.getZones === 'function' ? await io.getZones(mapCode) : null;
+  } catch {
+    network = null;
+  }
+  if (!network) {
+    network = {
+      map: mapCode,
+      visionBlocks: [],
+      elevated: [],
+      underpasses: [],
+      ledges: [],
+      bombSites: { a: null, b: null }
+    };
+  }
+  try {
+    const mask = await loadRadarMask(mapCode);
+    if (mask) registerRadarMask(mapCode, mask);
+  } catch {
+    /* possession stays null without a walkable mask */
+  }
+  prepareControlField(network, mapCode, null);
+  const ready = hasControlField(network) ? network : null;
+  cache.set(mapCode, ready);
+  return ready;
+}
+
+async function applyPossessionFields(row, meta, track, network) {
+  row.pos1 = null;
+  row.pos2 = null;
+  if (!network || !track || !meta) return;
+  const presence = buildZonePresence({
+    meta,
+    track,
+    network,
+    mapCode: meta.map || row.m || ''
+  });
+  if (!presence) return;
+  const { pos1, pos2 } = averagePossessionOverRound({
+    meta,
+    track,
+    network,
+    presence
+  });
+  row.pos1 = pos1;
+  row.pos2 = pos2;
 }
 
 /**
@@ -173,6 +251,7 @@ async function enrichPhases(io, user, entry) {
   }));
 
   const canTicks = typeof io.readRoundTicks === 'function';
+  const zoneCache = new Map();
 
   for (const row of entry.rounds) {
     let meta = null;
@@ -182,6 +261,7 @@ async function enrichPhases(io, user, entry) {
       meta = null;
     }
     if (!meta) continue;
+    meta.map = meta.map || row.m || entry.map || '';
 
     const roster =
       meta.players?.length
@@ -197,7 +277,8 @@ async function enrichPhases(io, user, entry) {
     let tickBuffer = null;
     if (canTicks) {
       try {
-        tickBuffer = await io.readRoundTicks(user, row.f, TICK_STRIDE);
+        // Full-detail ticks for possession sampling; AWP Acc tolerates stride.
+        tickBuffer = await io.readRoundTicks(user, row.f, 1);
       } catch {
         tickBuffer = null;
       }
@@ -221,6 +302,16 @@ async function enrichPhases(io, user, entry) {
     }
 
     applyPhaseBags(row, meta, playerIds, tickBuffer);
+    applyPrwFields(row, meta);
+
+    if (tickBuffer) {
+      const network = await ensureMapControl(io, meta.map || row.m, zoneCache);
+      const track = new TickTrack(tickBuffer);
+      await applyPossessionFields(row, meta, track, network);
+    } else {
+      row.pos1 = null;
+      row.pos2 = null;
+    }
   }
 
   entry.positions = false;
@@ -254,6 +345,7 @@ async function buildIndex(io, user, record) {
     team: p.team,
     slot: p.slot
   }));
+  const zoneCache = new Map();
 
   for (const file of files) {
     let meta = null;
@@ -281,25 +373,33 @@ async function buildIndex(io, user, record) {
           }))
         : players;
 
+    meta.map = meta.map || record.map || '';
+
     let tickBuffer = null;
     if (typeof io.readRoundTicks === 'function') {
       try {
-        tickBuffer = await io.readRoundTicks(user, file, TICK_STRIDE);
+        tickBuffer = await io.readRoundTicks(user, file, 1);
       } catch {
         tickBuffer = null;
       }
     }
 
-    rounds.push(
-      rowFromRound(
-        meta,
-        record.id,
-        file,
-        roster.map((p) => p.id),
-        new Map(roster.map((p) => [p.id, p.team])),
-        tickBuffer
-      )
+    const row = rowFromRound(
+      meta,
+      record.id,
+      file,
+      roster.map((p) => p.id),
+      new Map(roster.map((p) => [p.id, p.team])),
+      tickBuffer
     );
+
+    if (tickBuffer) {
+      const network = await ensureMapControl(io, meta.map || row.m, zoneCache);
+      const track = new TickTrack(tickBuffer);
+      await applyPossessionFields(row, meta, track, network);
+    }
+
+    rounds.push(row);
   }
 
   const score = record.score || { team1: 0, team2: 0 };

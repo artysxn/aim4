@@ -8,11 +8,15 @@
 // ---------------------------------------------------------------------------
 
 import { roleHowText } from '../roles/regionKeys.js';
+import { MAP_CONTROL_BASE } from '../coach/mapControlBases.js';
+import { relativePossession } from '../coach/mapControlAdvantage.js';
 
 const f2 = (n) => (Number.isFinite(n) ? n.toFixed(2) : '—');
 const f1 = (n) => (Number.isFinite(n) ? n.toFixed(1) : '—');
 const pct = (n) => (Number.isFinite(n) ? `${n.toFixed(1)}%` : '—');
 const int = (n) => (Number.isFinite(n) ? String(Math.round(n)) : '—');
+const signed = (n) =>
+  Number.isFinite(n) ? `${n > 0 ? '+' : ''}${n.toFixed(1)}` : '—';
 
 /** Accuracy is blank rather than 0% when the demo predates hit counts. */
 const accCell = (p) => (p.shots > 0 ? pct(p.accuracy) : '—');
@@ -76,6 +80,21 @@ export const PLAYER_COLUMNS = [
       ])
   },
   {
+    key: 'prwSwing',
+    label: 'Swing',
+    get: (p) => (Number.isFinite(p.prwSwing) ? p.prwSwing : -Infinity),
+    cell: (p) => signed(p.prwSwing),
+    tip: (p) =>
+      Number.isFinite(p.prwSwing)
+        ? tip([
+            `Avg PRW swing / round: ${signed(p.prwSwing)}`,
+            `Total swing: ${signed(p.prwSwingTotal)}`,
+            `Rounds with swing data: ${p.prwSwingRounds || 0}`,
+            `Kills / deaths / damage that move predicted win%`
+          ])
+        : 'No PRW swing data. Stats index will rebuild on next library load.'
+  },
+  {
     key: 'opkd',
     label: 'OPKD',
     get: (p) => p.opkd,
@@ -130,6 +149,34 @@ export function playerColumnsWithRoles(roleMode = 'tactical') {
   return [PLAYER_COLUMNS[0], ...roleCols, ...PLAYER_COLUMNS.slice(1)];
 }
 
+function possessionDeltaTip(t) {
+  const lines = [
+    `Avg possession: ${pct(t.possession)}`,
+    `Rounds sampled: ${t.possessionRounds || 0}`
+  ];
+  const byMap = t.possessionByMap || [];
+  for (const row of byMap) {
+    const base = MAP_CONTROL_BASE[row.map];
+    if (!base || !Number.isFinite(row.possession)) {
+      lines.push(`${row.map}: ${pct(row.possession)} (${row.rounds} rds)`);
+      continue;
+    }
+    const dCt = row.possession - base.ct;
+    const dT = row.possession - base.t;
+    const baseRel = relativePossession(base.ct, base.t);
+    // Treat team share vs (100 - share) as a 2-side split for relative Δ.
+    const curRel = relativePossession(row.possession, Math.max(0, 100 - row.possession));
+    const dRel = curRel.ct - baseRel.ct;
+    lines.push(
+      `${row.map}: ${pct(row.possession)} · vs CT avg ${signed(dCt)} · vs T avg ${signed(dT)} · rel Δ ${signed(dRel)} (${row.rounds} rds)`
+    );
+  }
+  if (!byMap.length && !Number.isFinite(t.possession)) {
+    return 'No possession data (needs Sites & Vision zones + radar).';
+  }
+  return tip(lines);
+}
+
 export const TEAM_COLUMNS = [
   { key: 'name', label: 'Team', align: 'left', get: (t) => t.name.toLowerCase() },
   { key: 'rounds', label: 'Rds', get: (t) => t.rounds, cell: (t) => int(t.rounds) },
@@ -148,8 +195,34 @@ export const TEAM_COLUMNS = [
     strong: true,
     tip: (t) =>
       t.members.length
-        ? tip(t.members.map((m) => `${m.name}: ${f2(m.rating)}`))
+        ? tip(
+            t.members.map((m) => {
+              const sw = Number.isFinite(m.prwSwing) ? ` · Swing ${signed(m.prwSwing)}` : '';
+              return `${m.name}: ${f2(m.rating)}${sw}`;
+            })
+          )
         : 'No players in range.'
+  },
+  {
+    key: 'possession',
+    label: 'Poss%',
+    get: (t) => (Number.isFinite(t.possession) ? t.possession : -1),
+    cell: (t) => (Number.isFinite(t.possession) ? pct(t.possession) : '—'),
+    tip: (t) => possessionDeltaTip(t)
+  },
+  {
+    key: 'prw',
+    label: 'PRW',
+    get: (t) => (Number.isFinite(t.prw) ? t.prw : -1),
+    cell: (t) => (Number.isFinite(t.prw) ? pct(t.prw) : '—'),
+    tip: (t) =>
+      Number.isFinite(t.prw)
+        ? tip([
+            `Avg predicted round win%: ${pct(t.prw)}`,
+            `Rounds sampled: ${t.prwRounds || 0}`,
+            `Sampled every 4s from kill-log win probability`
+          ])
+        : 'No PRW data yet. Stats index rebuilds on next library load.'
   },
   {
     key: 'mapWinrate',

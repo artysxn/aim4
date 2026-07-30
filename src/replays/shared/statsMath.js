@@ -52,14 +52,21 @@ const div = (a, b) => (b > 0 ? a / b : 0);
  * @property {number|null} [oppEcon] the other team's buy bucket
  * @property {boolean} [hasAwp]     subject side must have had an AWP
  * @property {boolean} [oppHasAwp]  opponent side must have had an AWP
+ * @property {''|'won'|'lost'} [result]  subject won / lost the round
+ * @property {''|'5v4'|'4v5'|'even'} [advantage]  opening situation for subject
  */
 
 /**
  * Does a round pass, from the point of view of one team (1 or 2)?
  * Side and economy are relative to that team, so the same round can pass for
  * the T side and fail for the CT side.
+ *
+ * @param {object} row
+ * @param {StatsFilter} [filter]
+ * @param {number} [team]
+ * @param {Map<string, {team: number}>} [players]  keyed demoId:playerId — needed for advantage
  */
-export function rowPasses(row, filter = {}, team = 0) {
+export function rowPasses(row, filter = {}, team = 0, players = null) {
   if (filter.files?.length && !filter.files.includes(row.f)) return false;
   if (filter.maps?.length && !filter.maps.includes(row.m)) return false;
   if (!team) return true;
@@ -83,6 +90,20 @@ export function rowPasses(row, filter = {}, team = 0) {
   }
   if (filter.hasAwp && !econHasAwp(own)) return false;
   if (filter.oppHasAwp && !econHasAwp(opp)) return false;
+
+  if (filter.result === 'won' && row.w !== team) return false;
+  if (filter.result === 'lost' && row.w === team) return false;
+
+  if (filter.advantage) {
+    const okTeam = row.ok && players ? players.get(`${row.d}:${row.ok}`)?.team : 0;
+    const odTeam = row.od && players ? players.get(`${row.d}:${row.od}`)?.team : 0;
+    const gotOk = okTeam === team;
+    const gotOd = odTeam === team;
+    if (filter.advantage === '5v4' && !gotOk) return false;
+    if (filter.advantage === '4v5' && !gotOd) return false;
+    if (filter.advantage === 'even' && (gotOk || gotOd)) return false;
+  }
+
   return true;
 }
 
@@ -147,7 +168,9 @@ export function aggregatePlayers(rows, players, filter = {}) {
         awpShots: 0,
         awpHits: 0,
         openKills: 0,
-        openDeaths: 0
+        openDeaths: 0,
+        swingSum: 0,
+        swingRounds: 0
       };
       acc.set(id, s);
     }
@@ -159,7 +182,7 @@ export function aggregatePlayers(rows, players, filter = {}) {
       const who = players.get(`${row.d}:${id}`);
       const team = who?.team;
       if (!team) continue;
-      if (!rowPasses(row, filter, team)) continue;
+      if (!rowPasses(row, filter, team, players)) continue;
       const line = row.p[id];
       const s = seat(id, who.name);
       const side = team === 1 ? row.s1 : row.s2;
@@ -173,6 +196,10 @@ export function aggregatePlayers(rows, players, filter = {}) {
       s.awpHits += line[P.AWP_HITS];
       if (row.ok === id) s.openKills++;
       if (row.od === id) s.openDeaths++;
+      if (row.sw && Number.isFinite(row.sw[id])) {
+        s.swingSum += row.sw[id];
+        s.swingRounds++;
+      }
     }
   }
 
@@ -208,7 +235,10 @@ export function aggregatePlayers(rows, players, filter = {}) {
       ratingLost: bucketRating(s.lost).rating,
       openKills: s.openKills,
       openDeaths: s.openDeaths,
-      opkd: s.openDeaths ? s.openKills / s.openDeaths : s.openKills
+      opkd: s.openDeaths ? s.openKills / s.openDeaths : s.openKills,
+      prwSwing: s.swingRounds ? s.swingSum / s.swingRounds : null,
+      prwSwingTotal: s.swingSum,
+      prwSwingRounds: s.swingRounds
     });
   }
   out.sort((a, b) => b.rating - a.rating);
@@ -256,7 +286,13 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
         openKillWon: 0,
         openDeathWon: 0,
         demoIds: new Set(),
-        playerIds: new Set()
+        playerIds: new Set(),
+        prwSum: 0,
+        prwN: 0,
+        posSum: 0,
+        posN: 0,
+        /** @type {Map<string, { posSum: number, posN: number, baseCt: number, baseT: number }>} */
+        posByMap: new Map()
       };
       acc.set(key, s);
     }
@@ -273,7 +309,7 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
       const displayName = team === 1 ? demo.name1 : demo.name2;
       const key = teamNameKey(displayName, shortId);
       if (!key) continue;
-      if (!rowPasses(row, filter, team)) continue;
+      if (!rowPasses(row, filter, team, players)) continue;
       const s = seat(key, displayName || shortId);
       if (shortId) s.shortIds.add(shortId);
       s.rounds++;
@@ -292,6 +328,27 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
       }
       for (const id of Object.keys(row.p)) {
         if (players.get(`${row.d}:${id}`)?.team === team) s.playerIds.add(id);
+      }
+
+      const prw = team === 1 ? row.prw1 : row.prw2;
+      if (Number.isFinite(prw)) {
+        s.prwSum += prw;
+        s.prwN++;
+      }
+      const pos = team === 1 ? row.pos1 : row.pos2;
+      if (Number.isFinite(pos)) {
+        s.posSum += pos;
+        s.posN++;
+        const map = row.m || '';
+        if (map) {
+          let m = s.posByMap.get(map);
+          if (!m) {
+            m = { posSum: 0, posN: 0 };
+            s.posByMap.set(map, m);
+          }
+          m.posSum += pos;
+          m.posN++;
+        }
       }
     }
   }
@@ -345,7 +402,12 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
       roundsLost: s.rounds - s.won,
       roundWinrate: div(s.won, s.rounds) * 100,
       avgRating,
-      members: members.map((m) => ({ id: m.id, name: m.name, rating: m.rating })),
+      members: members.map((m) => ({
+        id: m.id,
+        name: m.name,
+        rating: m.rating,
+        prwSwing: m.prwSwing
+      })),
       mapWins,
       mapLosses,
       maps: mapWins + mapLosses,
@@ -359,7 +421,16 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
       conv5v4Lost: s.openKills - s.openKillWon,
       conv4v5: div(s.openDeathWon, s.openDeaths) * 100,
       conv4v5Won: s.openDeathWon,
-      conv4v5Lost: s.openDeaths - s.openDeathWon
+      conv4v5Lost: s.openDeaths - s.openDeathWon,
+      prw: s.prwN ? s.prwSum / s.prwN : null,
+      prwRounds: s.prwN,
+      possession: s.posN ? s.posSum / s.posN : null,
+      possessionRounds: s.posN,
+      possessionByMap: [...s.posByMap.entries()].map(([map, m]) => ({
+        map,
+        possession: m.posN ? m.posSum / m.posN : null,
+        rounds: m.posN
+      }))
     });
   }
   out.sort((a, b) => b.avgRating - a.avgRating);
