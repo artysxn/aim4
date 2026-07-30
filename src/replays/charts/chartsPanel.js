@@ -84,6 +84,7 @@ export function createChartsPanel({ escapeHtml }) {
     series: 'team',
     binStep: 5,
     normalize: false,
+    perRound: false,
     trendline: true,
     minRounds: 5,
     maxCats: 24,
@@ -389,6 +390,9 @@ export function createChartsPanel({ escapeHtml }) {
           <label class="ch-check"><input type="checkbox" data-toggle="trendline"${
             state.trendline ? ' checked' : ''
           } /> Trendline</label>
+          <label class="ch-check"><input type="checkbox" data-toggle="perRound"${
+            state.perRound ? ' checked' : ''
+          } /> Divide by played rounds</label>
           ${
             isScatter()
               ? ''

@@ -65,6 +65,27 @@ function roundCount(list) {
   return seen.size;
 }
 
+/** Totals/counts (no den, no custom) — rates already divide by something else. */
+function isTotalMetric(metric) {
+  return Boolean(metric && !metric.den && !metric.custom);
+}
+
+/** Divide a total by distinct played rounds; leave rates/custom metrics alone. */
+function asPerRound(value, rounds, metric) {
+  if (!Number.isFinite(value) || !rounds || !isTotalMetric(metric)) return value;
+  return value / rounds;
+}
+
+function perRoundLabel(metric, axisFilter, on) {
+  const base = axisLabel(metric, axisFilter);
+  return on && isTotalMetric(metric) ? `${base} / round` : base;
+}
+
+function perRoundFmt(metric, on) {
+  if (on && isTotalMetric(metric) && metric.fmt === 'int') return 'num2';
+  return metric?.fmt;
+}
+
 // ---------------------------------------------------------------------------
 // Scatter: one point per subject, both axes measured
 // ---------------------------------------------------------------------------
@@ -97,11 +118,16 @@ function buildScatter(state, facts) {
 
   const points = [];
   const seriesSeen = new Map();
+  const perRound = Boolean(state.perRound);
   for (const [id, g] of groups) {
     const rounds = roundCount(g.facts);
     if (rounds < (state.minRounds || 0)) continue;
-    const x = aggregateMetric(xMetric, g.x);
-    const y = aggregateMetric(yMetric, g.y);
+    let x = aggregateMetric(xMetric, g.x);
+    let y = aggregateMetric(yMetric, g.y);
+    if (perRound) {
+      x = asPerRound(x, rounds, xMetric);
+      y = asPerRound(y, rounds, yMetric);
+    }
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     const sKey = seriesDim ? String(seriesDim.value(g.first) ?? '') : '';
     const sLabel = seriesDim
@@ -134,8 +160,10 @@ function buildScatter(state, facts) {
     xMetric,
     yMetric,
     subject,
-    xLabel: axisLabel(xMetric, state.x.filter),
-    yLabel: axisLabel(yMetric, state.y.filter)
+    xLabel: perRoundLabel(xMetric, state.x.filter, perRound),
+    yLabel: perRoundLabel(yMetric, state.y.filter, perRound),
+    xFmt: perRoundFmt(xMetric, perRound),
+    yFmt: perRoundFmt(yMetric, perRound)
   };
 }
 
@@ -223,13 +251,15 @@ function buildGrouped(state, facts) {
   capped.forEach((bin, i) => {
     for (const s of seriesList) {
       const list = bin.series.get(s.key) || [];
-      const value = aggregateMetric(yMetric, list);
+      const rounds = roundCount(list);
+      let value = aggregateMetric(yMetric, list);
+      if (state.perRound) value = asPerRound(value, rounds, yMetric);
       s.points.push({
         x: dim.kind === 'bin' ? Number(bin.key) + (step === 1 ? 0 : step / 2) : i,
         xLabel: bin.label,
         y: Number.isFinite(value) ? value : null,
         n: list.length,
-        rounds: roundCount(list)
+        rounds
       });
     }
   });
@@ -241,6 +271,7 @@ function buildGrouped(state, facts) {
     }
   }
 
+  const yBase = perRoundLabel(yMetric, state.y.filter, Boolean(state.perRound));
   return {
     kind: state.type === 'bar' ? 'bar' : state.type === 'area' ? 'area' : 'line',
     categorical: dim.kind === 'cat',
@@ -253,8 +284,8 @@ function buildGrouped(state, facts) {
     dim,
     yMetric,
     xLabel: dim.label,
-    yLabel: state.normalize ? `${axisLabel(yMetric, state.y.filter)} (share %)` : axisLabel(yMetric, state.y.filter),
-    yFmt: state.normalize ? 'pct' : yMetric.fmt
+    yLabel: state.normalize ? `${yBase} (share %)` : yBase,
+    yFmt: state.normalize ? 'pct' : perRoundFmt(yMetric, Boolean(state.perRound))
   };
 }
 
@@ -314,7 +345,8 @@ export function computeChart(state, facts) {
       : model.seriesList.flatMap((s) => s.points.filter((p) => p.y !== null));
   model.fit = correlate(points);
   model.count = points.length;
-  model.xFmt = model.kind === 'scatter' ? model.xMetric.fmt : model.categorical ? '' : 'num1';
+  model.xFmt =
+    model.xFmt || (model.kind === 'scatter' ? model.xMetric.fmt : model.categorical ? '' : 'num1');
   model.yFmt = model.yFmt || model.yMetric.fmt;
   return model;
 }
