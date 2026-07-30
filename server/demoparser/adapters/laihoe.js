@@ -13,8 +13,9 @@
 // which is packed straight into the binary buffer and released.
 // ---------------------------------------------------------------------------
 
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { deriveBatchTicks } from '../../replays/hostMemory.js';
+import { availableMemoryMb, deriveBatchTicks, freeMemoryMb } from '../../replays/hostMemory.js';
 import { mapCodeFromName, shortIdFor } from '../../../src/replays/shared/roundId.js';
 import {
   HEADER_BYTES,
@@ -65,6 +66,89 @@ export function isAvailable() {
     return true;
   } catch {
     return false;
+  }
+}
+
+// ---- where the bytes come from ---------------------------------------------
+
+/**
+ * Hand every parser call the same bytes instead of the same path.
+ *
+ * Each demoparser entry point decodes from byte 0 forward, so given a path it
+ * re-opens and re-reads the file every time. One parse makes ~13 such calls
+ * (events, grenades, buys, the roster probe and one per tick batch), and because
+ * each stops at its last wanted tick they add up to about 8.3x the file:
+ *
+ *   events 100% | roster 4% | grenades 100% | buys 98% | batches 15..100%
+ *
+ * For a 322 MB demo that is 2.7 GB of reads. On a host with room to cache the
+ * file that is nearly free, which is exactly why it went unnoticed — but the
+ * backend has 3.8 GB of RAM and the parse process alone holds ~970 MB of it, so
+ * the file cannot stay resident and those reads land on the volume. At 80-150
+ * MB/s that is 18-33 seconds of pure waiting, spread across the batches, which
+ * is what shows up as seconds per round on the progress bar.
+ *
+ * demoparser2 takes `string | Buffer` everywhere, so reading once turns 8.3
+ * passes into 1. The cost is one more copy of the demo held for the length of
+ * the parse — and only that. Peak memory otherwise tracks BATCH_TICKS, not file
+ * size: measured in path mode, a 519 MB and a 393 MB demo both peak around
+ * 400-460 MB at 24 000 ticks a batch, and both climb to ~570 MB at 48 000. So
+ * the question this has to answer is narrow: is there room for the file on top
+ * of what the parse was going to hold anyway?
+ *
+ * PARSE_RESERVE_MB is that "anyway" figure. The backend reports ~970 MB at
+ * 24 000 (roughly double what the same work costs on Windows, which is glibc
+ * holding freed pages rather than extra work), so the default leaves 1.2 GB
+ * clear and buffers only what fits underneath. Being wrong is survivable rather
+ * than fatal: the kernel kills the parse process alone, and jobs.js retries
+ * with buffering off before it starts shrinking the batch.
+ *
+ * @param {string} file
+ * @returns {{ ref: string|Buffer, buffered: boolean, sizeMb: number }}
+ */
+
+/** What the parse holds regardless of the demo, at the default batch size. */
+const PARSE_RESERVE_MB = Number(process.env.AIM4_PARSE_RESERVE_MB || 1200);
+
+function openDemo(file) {
+  let sizeMb = 0;
+  try {
+    sizeMb = Math.round(fs.statSync(file).size / 1048576);
+  } catch {
+    return { ref: file, buffered: false, sizeMb: 0 };
+  }
+
+  const mode = process.env.AIM4_PARSE_BUFFER;
+  const forced = mode === '1' || mode === 'true';
+  const banned = mode === '0' || mode === 'false';
+
+  const freeMb = freeMemoryMb();
+  // Two independent limits. The reserve is about this moment (is the memory
+  // there); the quarter-of-the-box cap is about proportion, so a host that
+  // happens to look idle cannot be talked into holding half of itself for a
+  // speed-up.
+  const fits = sizeMb + PARSE_RESERVE_MB <= freeMb;
+  const modest = sizeMb <= Math.round(availableMemoryMb() / 4);
+  const room = sizeMb > 0 && fits && modest;
+
+  if (banned || !(forced || room)) {
+    if (!banned && sizeMb) {
+      console.log(
+        `[parse] ${sizeMb} MB demo stays on disk (re-read each pass): ${freeMb} MB free, ` +
+          `needs ${sizeMb + PARSE_RESERVE_MB} MB${modest ? '' : ', and over a quarter of the host'}`
+      );
+    }
+    return { ref: file, buffered: false, sizeMb };
+  }
+
+  try {
+    const buf = fs.readFileSync(file);
+    console.log(`[parse] holding ${sizeMb} MB demo in memory (${freeMb} MB free)`);
+    return { ref: buf, buffered: true, sizeMb };
+  } catch {
+    // Failing to allocate it is not a reason to fail the parse; the path still
+    // works, just slower.
+    return { ref: file, buffered: false, sizeMb };
   }
 }
 
@@ -131,12 +215,12 @@ let propMode = null; // 'full' | 'core', decided on the first sweep of a demo
  * build honors the flag, so this normalizes both shapes to an indexed reader
  * and the callers never learn which one they got.
  */
-function readTicks(file, props, ticks, { structOfArrays = true } = {}) {
+function readTicks(src, props, ticks, { structOfArrays = true } = {}) {
   const p = parser();
   let raw;
   if (propMode !== 'core') {
     try {
-      raw = p.parseTicks(file, props, ticks, null, structOfArrays);
+      raw = p.parseTicks(src, props, ticks, null, structOfArrays);
       propMode = 'full';
     } catch (err) {
       if (propMode === 'full') throw err;
@@ -144,7 +228,7 @@ function readTicks(file, props, ticks, { structOfArrays = true } = {}) {
     }
   }
   if (raw === undefined) {
-    raw = p.parseTicks(file, CORE_PROPS, ticks, null, structOfArrays);
+    raw = p.parseTicks(src, CORE_PROPS, ticks, null, structOfArrays);
   }
   return tickReader(raw);
 }
@@ -177,14 +261,14 @@ export function tickReader(raw) {
   };
 }
 
-function readEvents(file, names) {
+function readEvents(src, names) {
   const p = parser();
   try {
-    return p.parseEvents(file, names, ['X', 'Y', 'Z', 'yaw', 'pitch'], ['total_rounds_played']);
+    return p.parseEvents(src, names, ['X', 'Y', 'Z', 'yaw', 'pitch'], ['total_rounds_played']);
   } catch {
     // Extra-field support varies by build; the bare form is always accepted.
     try {
-      return p.parseEvents(file, names);
+      return p.parseEvents(src, names);
     } catch {
       return [];
     }
@@ -347,17 +431,19 @@ function inventoryOf(row) {
   return active ? [String(active)] : [];
 }
 
-// Rounds are parsed in GROUPS, not one at a time. Every parseTicks call reads
-// and decodes the whole demo file, so asking for one round at a time costs
-// O(rounds x file size): on a 24 round, 300 MB demo that is over 7 GB of
-// redundant decoding. Fewer, larger passes are faster wherever they fit.
+// Rounds are parsed in GROUPS, not one at a time. Every parseTicks call decodes
+// the demo from the start, so asking for one round at a time costs O(rounds x
+// file size) in redundant decoding. Fewer, larger passes are cheaper wherever
+// they fit. (The redundant READING that used to come with it is gone — openDemo
+// holds the bytes for the whole parse. The decoding is still per call.)
 //
 // They do not always fit. A batch materializes `ticks x 10 players` rows of 16
-// props in the JS heap at once, so the old fixed 200 000 made a whole match one
-// pass -- fastest when the memory is there, and an instant OOM kill when it is
-// not. On a 4 GB host that was the difference between a parse and a SIGKILL.
-// The size is now derived from the cgroup limit, and jobs.js halves it and
-// retries if the kernel still steps in. An explicit env value overrides both.
+// props at once, so a whole match in one pass is an instant OOM kill on a small
+// host — and, less obviously, also the SLOWEST setting: the parser tests each
+// decoded tick against the wanted-tick array, at a cost that grows with the
+// square of its length. See hostMemory.js for the measurements. The size is
+// derived there, jobs.js halves it and retries if the kernel still steps in,
+// and an explicit env value overrides both.
 const BATCH_TICKS = Number(process.env.AIM4_PARSE_BATCH_TICKS) || deriveBatchTicks();
 
 /**
@@ -388,12 +474,12 @@ export function batchSpans(spans, maxTicks) {
 }
 
 /** The one expensive call: every tick of every round in the batch. */
-function readBatchRows(file, batch) {
+function readBatchRows(src, batch) {
   const from = batch[0].startTick;
   const to = batch[batch.length - 1].officialEndTick;
   const wanted = [];
   for (let t = from; t <= to; t++) wanted.push(t);
-  return readTicks(file, TICK_PROPS, wanted);
+  return readTicks(src, TICK_PROPS, wanted);
 }
 
 /**
@@ -401,12 +487,12 @@ function readBatchRows(file, batch) {
  * This is the only call that asks for `inventory`, and it asks for roughly
  * twenty ticks instead of a hundred thousand.
  */
-function readBuys(file, spans) {
+function readBuys(src, spans) {
   const ticks = spans.map((s) => s.freezeEndTick || s.startTick);
   const buys = new Map(); // `${tick}:${steamid}` -> snapshot
   let reader;
   try {
-    reader = readTicks(file, BUY_PROPS, ticks, { structOfArrays: false });
+    reader = readTicks(src, BUY_PROPS, ticks, { structOfArrays: false });
   } catch {
     return buys; // economy falls back to its defaults rather than failing the parse
   }
@@ -958,10 +1044,15 @@ export async function parseDemo(file, opts = {}) {
   const progress = opts.onProgress || (() => {});
   propMode = null;
 
-  progress({ stage: 'header' });
+  // Read the demo once and hand the same bytes to every call below, when there
+  // is room for it. See openDemo: on a path, each call re-reads the file, and
+  // they add up to ~8.3 passes over it.
+  const { ref: src, buffered, sizeMb } = openDemo(file);
+  progress({ stage: 'header', buffered, sizeMb });
+
   let header = {};
   try {
-    header = p.parseHeader(file) || {};
+    header = p.parseHeader(src) || {};
   } catch {
     header = {};
   }
@@ -976,7 +1067,7 @@ export async function parseDemo(file, opts = {}) {
   const tickRate = Math.round(num(header.tickrate) || num(header.tick_rate) || 64) || 64;
 
   progress({ stage: 'events' });
-  const all = readEvents(file, [
+  const all = readEvents(src, [
     'round_start',
     'round_freeze_end',
     'round_end',
@@ -1007,7 +1098,7 @@ export async function parseDemo(file, opts = {}) {
   if (!spans.length) throw new Error('No completed rounds found in this demo.');
 
   const roster = rosterFromRows(
-    readTicks(file, CORE_PROPS, [spans[0].freezeEndTick || spans[0].startTick || 1], {
+    readTicks(src, CORE_PROPS, [spans[0].freezeEndTick || spans[0].startTick || 1], {
       structOfArrays: false
     })
   );
@@ -1028,7 +1119,7 @@ export async function parseDemo(file, opts = {}) {
   try {
     // `false` = projectiles only. Carried grenades report the holder's
     // position for the whole match and are ~90% of the rows.
-    flights = buildFlights(p.parseGrenades(file, null, false) || []);
+    flights = buildFlights(p.parseGrenades(src, null, false) || []);
   } catch {
     flights = [];
   }
@@ -1045,7 +1136,7 @@ export async function parseDemo(file, opts = {}) {
 
   // Buys first: one cheap call covering every round's freezetime tick.
   progress({ stage: 'buys' });
-  const buys = readBuys(file, spans);
+  const buys = readBuys(src, spans);
 
   const batches = batchSpans(spans, BATCH_TICKS);
   const rounds = [];
@@ -1054,7 +1145,7 @@ export async function parseDemo(file, opts = {}) {
   for (const batch of batches) {
     progress({ stage: 'round', round: packedCount + 1, total: spans.length });
 
-    let reader = readBatchRows(file, batch);
+    let reader = readBatchRows(src, batch);
     const packs = packBatch(reader, batch, roster, tickRate);
     // Drop the batch's rows before building records: they are by far the
     // largest thing alive, and the records below allocate again.

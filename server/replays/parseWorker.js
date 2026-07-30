@@ -65,16 +65,45 @@ async function run() {
   }
   trace({ demoId, filename: meta?.filename, demoSizeMb: sizeMb, stage: 'starting' });
 
+  // Wall time per stage, accumulated across the whole parse.
+  //
+  // Without this, a slow parse is only ever a total, and a total cannot tell
+  // "the ticks are expensive" apart from "everything is uniformly throttled"
+  // apart from "there is dead time between stages waiting on the disk". The
+  // breakdown is what makes those three distinguishable from the outside, and it
+  // survives into .parse-trace.json / the diag endpoint so it can be read off a
+  // running backend rather than reproduced locally.
+  const stageMs = {};
+  let stage = 'starting';
+  let stageAt = Date.now();
+  const startedAt = stageAt;
+  const enter = (next) => {
+    const now = Date.now();
+    stageMs[stage] = (stageMs[stage] || 0) + (now - stageAt);
+    stage = next;
+    stageAt = now;
+  };
+
   const onProgress = (p) => {
+    if (p.stage && p.stage !== stage) enter(p.stage);
     send({ type: 'progress', ...p });
-    trace({ demoId, filename: meta?.filename, demoSizeMb: sizeMb, ...p });
+    trace({ demoId, filename: meta?.filename, demoSizeMb: sizeMb, ...p, stageMs });
   };
 
   const demo = await parseDemo(file, { onProgress });
   onProgress({ stage: 'store', round: 0, total: demo.rounds.length });
   const record = await ingestDemo(user, demoId, demo, meta, onProgress);
+  enter('done');
 
-  trace({ demoId, filename: meta?.filename, demoSizeMb: sizeMb, stage: 'done', rounds: record.roundCount });
+  trace({
+    demoId,
+    filename: meta?.filename,
+    demoSizeMb: sizeMb,
+    stage: 'done',
+    rounds: record.roundCount,
+    totalMs: Date.now() - startedAt,
+    stageMs
+  });
   send({ type: 'done', record });
   process.exit(0);
 }

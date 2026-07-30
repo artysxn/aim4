@@ -22,7 +22,7 @@
 // and must never be buffered in memory or pass through the JSON body reader.
 // ---------------------------------------------------------------------------
 
-import { readFile, rm } from 'node:fs/promises';
+import { open, readdir, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { parserStatus } from '../demoparser/index.js';
@@ -53,8 +53,8 @@ import {
 import { memorySnapshot } from './hostMemory.js';
 import { forgetDemoIndex, scheduleStatsIndex, statsPayload } from './statsIndex.js';
 import { isAcceptedUpload, rarSupport } from './archive.js';
-import { allJobs, batchStatus, enqueueParse, getBatch, jobStatus, startIngest } from './jobs.js';
-import { authStatus, identify } from './auth.js';
+import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
+import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
 import { importReplayPackage } from './importPackage.js';
 import { PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
 import { getZones, listZoneMaps, saveZones } from '../zonesStore.js';
@@ -186,6 +186,68 @@ async function readParseTrace() {
   }
 }
 
+/**
+ * What the replay volume actually delivers, read end to end.
+ *
+ * The parse used to re-read each demo ~8x, and whether that mattered came down
+ * to a number nobody had: how fast this disk is. Rather than infer it from parse
+ * times, read the largest round file that is already here and time it. Round
+ * files are small, so this is cheap and repeatable; the throughput generalises
+ * to the .dem reads that actually hurt.
+ */
+const PROBE_BUDGET_BYTES = 64 * 1024 * 1024;
+
+async function volumeReadProbe() {
+  const started = process.hrtime.bigint();
+  let handle = null;
+  try {
+    // Prefer a .dem when one is on the volume: a big sequential read is the
+    // access pattern that actually matters, and round files are far too small to
+    // time meaningfully. Falls back to the largest round file otherwise.
+    let target = null;
+    for (const sub of ['demos', 'rounds']) {
+      const dir = path.join(userDir(SHARED_LIBRARY), sub);
+      const names = await readdir(dir).catch(() => []);
+      for (const name of names) {
+        const full = path.join(dir, name);
+        const st = await stat(full).catch(() => null);
+        if (st?.isFile() && (!target || st.size > target.size)) {
+          target = { path: full, size: st.size };
+        }
+      }
+      if (target && sub === 'demos') break;
+    }
+    if (!target) return { error: 'nothing on the volume to read' };
+
+    // Capped so a diagnostic never turns into a few hundred MB of reads.
+    const budget = Math.min(target.size, PROBE_BUDGET_BYTES);
+    handle = await open(target.path, 'r');
+    const chunk = Buffer.allocUnsafe(4 * 1024 * 1024);
+    let read = 0;
+    const t0 = process.hrtime.bigint();
+    while (read < budget) {
+      const { bytesRead } = await handle.read(chunk, 0, Math.min(chunk.length, budget - read), read);
+      if (!bytesRead) break;
+      read += bytesRead;
+    }
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    return {
+      file: path.basename(target.path),
+      fileBytes: target.size,
+      readBytes: read,
+      ms: Math.round(ms),
+      mbPerSec: ms > 0 ? Math.round(read / 1048576 / (ms / 1000)) : null,
+      // A figure well above what the hardware can do means the page cache
+      // served it, which is itself the answer for a file this size.
+      probeMs: Math.round(Number(process.hrtime.bigint() - started) / 1e6)
+    };
+  } catch (err) {
+    return { error: err?.message || String(err) };
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
 /** Merge the stored record with live job progress. */
 function withJob(user, record) {
   const job = jobStatus(user, record.id);
@@ -240,6 +302,10 @@ export async function handleReplayRequest(req, res, url) {
       auth: authStatus(),
       lastParse: await readParseTrace(),
       memory: memorySnapshot(),
+      // ?io=1 reads a real file off the replay volume to measure it. Opt-in
+      // because it costs a few hundred MB of reads and evicts page cache, which
+      // is not something a health check should do on its own.
+      volume: url.searchParams.get('io') === '1' ? await volumeReadProbe() : undefined,
       uptimeSeconds: Math.round(process.uptime())
     });
     return true;
@@ -267,12 +333,17 @@ export async function handleReplayRequest(req, res, url) {
   if (req.method === 'GET' && p === '/api/replays/demos') {
     const records = await listDemos(user);
     const byId = new Set(records.map((r) => r.id));
-    // A job whose record has not landed yet (upload just finished) still shows.
+    // Jobs whose record has not landed yet (upload just finished). Terminal
+    // error/done jobs must not reappear here — otherwise deleting a failed
+    // parse removes the record and the same demo pops back from memory.
     const pending = allJobs(user)
-      .filter((j) => !byId.has(j.demoId) && j.state !== 'done')
+      .filter(
+        (j) =>
+          !byId.has(j.demoId) && (j.state === 'queued' || j.state === 'running')
+      )
       .map((j) => ({
         id: j.demoId,
-        status: j.state === 'error' ? 'error' : 'parsing',
+        status: 'parsing',
         filename: j.filename,
         sizeBytes: j.sizeBytes,
         uploadedAt: j.queuedAt,
@@ -404,6 +475,7 @@ export async function handleReplayRequest(req, res, url) {
     }
     if (req.method === 'DELETE') {
       const removed = await deleteDemo(user, id);
+      forgetJob(user, id);
       await forgetDemoIndex(statsIo, user, id);
       if (!removed) {
         json(res, 404, { error: 'Replay not found.' });

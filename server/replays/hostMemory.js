@@ -53,6 +53,31 @@ export function availableMemoryMb() {
 }
 
 /**
+ * How much can be allocated right now without pushing the box into swap.
+ *
+ * `os.freemem()` is MemFree on Linux, which counts only pages nobody is using
+ * at all — it excludes the page cache, even though the kernel will happily
+ * reclaim that on demand. On a host that has just streamed a 400 MB demo
+ * through several read passes, MemFree is small and MemAvailable is large, and
+ * MemAvailable is the one that answers "can I hold this file in memory".
+ *
+ * @returns {number} MB
+ */
+export function freeMemoryMb() {
+  const meminfo = readCgroup('/proc/meminfo');
+  if (meminfo) {
+    const m = /^MemAvailable:\s+(\d+)\s*kB/m.exec(meminfo);
+    if (m) return Math.round(Number(m[1]) / 1024);
+  }
+  // A cgroup with a limit: what is left of it, which can be far less than the
+  // host has free.
+  const limit = containerLimitMb();
+  const used = containerUsedMb();
+  if (limit != null && used != null) return Math.max(0, limit - used);
+  return Math.round(os.freemem() / MB);
+}
+
+/**
  * How many demo ticks one parseTicks call may cover.
  *
  * Every call materializes `ticks x 10 players` rows of 16 props in the JS heap
@@ -93,6 +118,82 @@ export function deriveBatchTicks(availableMb = availableMemoryMb()) {
   return Math.max(MIN_BATCH_TICKS, Math.min(MAX_BATCH_TICKS, ticks));
 }
 
+// ---- what is actually limiting this host -------------------------------------
+// os.cpus() reports the HOST's cores, so a container restricted to a fraction of
+// a CPU looks identical to one with two full cores and simply runs slower. That
+// is invisible from the inside unless the cgroup is read directly, and it is the
+// difference between "the parser is slow" and "the parser is being given a
+// quarter of a core". The same goes for the volume: a parse that spends its time
+// stalled on reads looks exactly like a parse that is compute-bound, unless
+// something counts the stalls.
+
+/**
+ * CPU the container is actually allowed, from the cgroup quota.
+ * @returns {{cpus: number|null, quota: string|null}}
+ */
+export function cpuAllowance() {
+  // v2: "<quota> <period>", or "max <period>" for unrestricted.
+  const v2 = readCgroup('/sys/fs/cgroup/cpu.max');
+  if (v2) {
+    const [quota, period] = v2.split(/\s+/);
+    if (quota && quota !== 'max') {
+      const q = Number(quota);
+      const p = Number(period) || 100000;
+      if (Number.isFinite(q) && q > 0) {
+        return { cpus: Math.round((q / p) * 100) / 100, quota: v2 };
+      }
+    }
+    return { cpus: null, quota: v2 };
+  }
+  const q = Number(readCgroup('/sys/fs/cgroup/cpu/cpu.cfs_quota_us'));
+  const p = Number(readCgroup('/sys/fs/cgroup/cpu/cpu.cfs_period_us')) || 100000;
+  if (Number.isFinite(q) && q > 0) {
+    return { cpus: Math.round((q / p) * 100) / 100, quota: `${q} ${p}` };
+  }
+  return { cpus: null, quota: null };
+}
+
+/**
+ * How often the scheduler has taken the CPU away because the quota ran out.
+ *
+ * `nr_throttled` climbing during a parse is direct proof the container is CPU
+ * capped rather than the work being slow.
+ */
+export function cpuThrottling() {
+  const stat = readCgroup('/sys/fs/cgroup/cpu.stat') || readCgroup('/sys/fs/cgroup/cpu/cpu.stat');
+  if (!stat) return null;
+  const out = {};
+  for (const line of stat.split('\n')) {
+    const [k, v] = line.trim().split(/\s+/);
+    if (k && v !== undefined && Number.isFinite(Number(v))) out[k] = Number(v);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Pressure Stall Information: the share of the last 10/60/300 seconds that tasks
+ * spent stalled waiting for cpu, io or memory. This is the one number that says
+ * WHICH resource is the constraint rather than leaving it to be inferred.
+ *
+ * `some avg10=45.00` on io means nearly half the time something was blocked on
+ * the disk. On cpu it means runnable-but-not-scheduled, i.e. contention or quota.
+ */
+export function pressure() {
+  const out = {};
+  for (const res of ['cpu', 'io', 'memory']) {
+    const raw =
+      readCgroup(`/sys/fs/cgroup/${res}.pressure`) || readCgroup(`/proc/pressure/${res}`);
+    if (!raw) continue;
+    const some = /some\s+avg10=([\d.]+)\s+avg60=([\d.]+)\s+avg300=([\d.]+)/.exec(raw);
+    const full = /full\s+avg10=([\d.]+)\s+avg60=([\d.]+)/.exec(raw);
+    if (some) {
+      out[res] = { avg10: Number(some[1]), avg60: Number(some[2]), avg300: Number(some[3]) };
+      if (full) out[res].fullAvg10 = Number(full[1]);
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 /** Everything the diagnostics endpoint reports, in one place. */
 export function memorySnapshot(extra = {}) {
   const mem = process.memoryUsage();
@@ -106,7 +207,15 @@ export function memorySnapshot(extra = {}) {
     containerUsedMb: containerUsedMb() ?? null,
     hostTotalMb: Math.round(os.totalmem() / MB),
     hostFreeMb: Math.round(os.freemem() / MB),
+    // MemAvailable when the kernel offers it, which is the figure the parser's
+    // buffering decision is made against.
+    availableMb: freeMemoryMb(),
     cpus: os.cpus().length,
+    // os.cpus() is the HOST's core count. This is what the container may use.
+    cpuQuota: cpuAllowance(),
+    cpuThrottling: cpuThrottling(),
+    // Which resource tasks are actually stalling on. See pressure().
+    pressure: pressure(),
     ...extra
   };
 }

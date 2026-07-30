@@ -902,9 +902,10 @@ export async function removePlaylist(user, id) {
   return savePlaylists(user, next);
 }
 
-/** Remove a demo and every round parsed from it. */
+/** Remove a demo and every round parsed from it. Always cleans up on disk. */
 export async function deleteDemo(user, id) {
   const demoId = sanitizeId(id);
+  if (!demoId) return null;
   const record = await readRecord(user, demoId);
   await fsp.rm(demoPath(user, demoId), { force: true });
   await fsp.rm(recordPath(user, demoId), { force: true });
@@ -934,7 +935,8 @@ export async function deleteDemo(user, id) {
   } catch {
     /* index is best-effort */
   }
-  return record;
+  // Still report success when only an in-memory failed job remained (no record).
+  return record || { id: demoId };
 }
 
 /** Drop the .dem once parsing succeeded, keeping the rounds. */

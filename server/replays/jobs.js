@@ -130,6 +130,11 @@ export function allJobs(user) {
     .map(([, v]) => v);
 }
 
+/** Drop an in-memory parse job so a deleted demo cannot reappear as a ghost. */
+export function forgetJob(user, demoId) {
+  return jobs.delete(jobKey(user, demoId));
+}
+
 // ---- upload batches ---------------------------------------------------------
 
 /**
@@ -447,6 +452,9 @@ export function enqueueParse({ user, demoId, filename, sizeBytes, batchId = null
     attempt: 1,
     // null means "let the parser derive it from the memory it can see".
     batchTicks: Number(process.env.AIM4_PARSE_BATCH_TICKS) || null,
+    // null means "let the parser decide from the memory it can see". Set to
+    // false by the retry path below, where holding the demo is a suspect.
+    bufferDemo: null,
     queuedAt: Date.now(),
     startedAt: null,
     finishedAt: null
@@ -477,11 +485,13 @@ function pump() {
     }
   });
 
+  const env = { ...process.env };
+  if (job.batchTicks) env.AIM4_PARSE_BATCH_TICKS = String(job.batchTicks);
+  if (job.bufferDemo === false) env.AIM4_PARSE_BUFFER = '0';
+
   const worker = fork(WORKER, [payload], {
     execArgv: [`--max-old-space-size=${WORKER_HEAP_MB}`],
-    env: job.batchTicks
-      ? { ...process.env, AIM4_PARSE_BATCH_TICKS: String(job.batchTicks) }
-      : process.env,
+    env,
     // The child's own stdio is forwarded so a native crash still reaches the
     // container log rather than vanishing.
     stdio: ['ignore', 'inherit', 'inherit', 'ipc']
@@ -585,17 +595,27 @@ function pump() {
     // the parse tried to hold rather than anything wrong with the demo. Retry
     // with half the batch so the attempt is actually different; an identical
     // retry just reproduces the kill, which is what made this loop forever.
+    //
+    // Holding the demo in memory (openDemo) is the other thing the attempt can
+    // give up, and it is given up FIRST: it is a pure speed optimisation, worth
+    // less than the parse completing, and it is the larger single allocation of
+    // the two. Only then does the batch start halving.
     if (killed && job.attempt < MAX_ATTEMPTS) {
       const current = job.batchTicks || deriveBatchTicks();
-      const next = Math.floor(current / 2);
-      if (next >= MIN_BATCH_TICKS) {
+      const dropBuffer = job.bufferDemo !== false;
+      const next = dropBuffer ? current : Math.floor(current / 2);
+      if (dropBuffer || next >= MIN_BATCH_TICKS) {
         if (stallTimer) clearTimeout(stallTimer);
         if (!worker.killed) worker.kill('SIGKILL');
         console.warn(
-          `[replays] parse of ${job.filename} was killed at batch ${current}; ` +
-            `retrying at ${next} (attempt ${job.attempt + 1}/${MAX_ATTEMPTS})`
+          `[replays] parse of ${job.filename} was killed; retrying ` +
+            (dropBuffer
+              ? 'without holding the demo in memory'
+              : `at batch ${next} (was ${current})`) +
+            ` (attempt ${job.attempt + 1}/${MAX_ATTEMPTS})`
         );
         job.attempt += 1;
+        job.bufferDemo = false;
         job.batchTicks = next;
         job.state = 'queued';
         job.stage = 'retrying';
