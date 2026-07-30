@@ -146,8 +146,9 @@ export function bucketRating(b) {
  * @param {Array} rows          per-round rows
  * @param {Map<string, {name: string, team: number}>} players
  * @param {StatsFilter} filter
+ * @param {Map<string, {t1?: string, t2?: string, name1?: string, name2?: string}>|null} [demos]
  */
-export function aggregatePlayers(rows, players, filter = {}) {
+export function aggregatePlayers(rows, players, filter = {}, demos = null) {
   /** @type {Map<string, any>} */
   const acc = new Map();
 
@@ -170,7 +171,9 @@ export function aggregatePlayers(rows, players, filter = {}) {
         openKills: 0,
         openDeaths: 0,
         swingSum: 0,
-        swingRounds: 0
+        swingRounds: 0,
+        /** @type {Map<string, {name: string, rounds: number}>} */
+        teamRounds: new Map()
       };
       acc.set(id, s);
     }
@@ -200,6 +203,22 @@ export function aggregatePlayers(rows, players, filter = {}) {
         s.swingSum += row.sw[id];
         s.swingRounds++;
       }
+      const demo = demos?.get(row.d);
+      if (demo) {
+        const shortId = team === 1 ? demo.t1 : demo.t2;
+        const displayName = team === 1 ? demo.name1 : demo.name2;
+        const key = teamNameKey(displayName, shortId) || `${row.d}:${team}`;
+        const label =
+          String(displayName || '').trim() ||
+          String(shortId || '').trim() ||
+          `Team ${team}`;
+        let tr = s.teamRounds.get(key);
+        if (!tr) {
+          tr = { name: label, rounds: 0 };
+          s.teamRounds.set(key, tr);
+        }
+        tr.rounds++;
+      }
     }
   }
 
@@ -207,9 +226,15 @@ export function aggregatePlayers(rows, players, filter = {}) {
   for (const s of acc.values()) {
     if (!s.all.rounds) continue;
     const all = bucketRating(s.all);
+    const teams = [...s.teamRounds.values()].sort(
+      (a, b) => b.rounds - a.rounds || a.name.localeCompare(b.name)
+    );
+    const teamLabel = !teams.length ? '' : teams.length === 1 ? teams[0].name : 'Multiple';
     out.push({
       id: s.id,
       name: s.name,
+      teams,
+      teamLabel,
       rounds: all.rounds,
       kills: s.all.kills,
       deaths: s.all.deaths,
@@ -355,7 +380,7 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
 
   // Player ratings under the same filter, so the team average and its hover
   // breakdown agree with the players table.
-  const playerRows = aggregatePlayers(rows, players, filter);
+  const playerRows = aggregatePlayers(rows, players, filter, demos);
   const byPlayer = new Map(playerRows.map((p) => [p.id, p]));
 
   const out = [];

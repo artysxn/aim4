@@ -2870,6 +2870,43 @@ body.rv-open {
   overflow-x: auto;
 }
 
+.st-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-top: 12px;
+  padding: 8px 2px 2px;
+  border-top: 1px solid var(--border);
+}
+
+.st-pager-meta {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.st-pager-btns {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.st-pager-page {
+  min-width: 7.5em;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.st-pager .btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .st-table {
   width: 100%;
   border-collapse: collapse;
@@ -2926,6 +2963,11 @@ body.rv-open {
 .st-table td.strong {
   color: var(--text);
   font-weight: 700;
+}
+
+.st-table td em {
+  font-style: italic;
+  font-weight: 500;
 }
 
 .st-table td.st-role-t {

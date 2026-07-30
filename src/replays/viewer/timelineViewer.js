@@ -1749,8 +1749,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     }
     const upTo = rounds[activeIndex]?.round ?? 0;
     const rows = allRows(statsPayload).filter((r) => r.n <= upTo);
-    const { players } = indexMaps(statsPayload);
-    const all = aggregatePlayers(rows, players, {});
+    const { players, demos } = indexMaps(statsPayload);
+    const all = aggregatePlayers(rows, players, {}, demos);
     const teamOf = new Map(demo.players.map((p) => [p.id, p.team]));
 
     boardTitle.textContent = `Rounds 1-${upTo}`;

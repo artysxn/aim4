@@ -26,6 +26,21 @@ const tip = (lines) => lines.filter(Boolean).join('\n');
 /** Columns of the player table, in order. `get` returns the sort value. */
 export const PLAYER_COLUMNS = [
   { key: 'name', label: 'Player', align: 'left', get: (p) => p.name.toLowerCase(), cell: null },
+  {
+    key: 'team',
+    label: 'Team',
+    align: 'left',
+    get: (p) => (p.teamLabel || '').toLowerCase(),
+    cell: (p) => p.teamLabel || '—',
+    em: (p) => (p.teams?.length || 0) > 1,
+    tip: (p) => {
+      const teams = p.teams || [];
+      if (!teams.length) return '';
+      return tip(
+        teams.map((t) => `${t.name}: ${t.rounds} round${t.rounds === 1 ? '' : 's'}`)
+      );
+    }
+  },
   { key: 'rounds', label: 'Rds', get: (p) => p.rounds, cell: (p) => int(p.rounds) },
   {
     key: 'kd',
@@ -146,7 +161,7 @@ export function playerColumnsWithRoles(roleMode = 'tactical') {
       tip: (p) => roleTip('CT', p)
     }
   ];
-  return [PLAYER_COLUMNS[0], ...roleCols, ...PLAYER_COLUMNS.slice(1)];
+  return [PLAYER_COLUMNS[0], PLAYER_COLUMNS[1], ...roleCols, ...PLAYER_COLUMNS.slice(2)];
 }
 
 function possessionDeltaTip(t) {
@@ -281,16 +296,61 @@ function sortRows(rows, columns, sortKey, dir) {
   });
 }
 
+/** Default page size for library Statistics tables. */
+export const STATS_PAGE_SIZE = 100;
+
+/**
+ * @param {{ page: number, pages: number, total: number, pageSize: number }} opts
+ */
+function pagerHtml({ page, pages, total, pageSize }) {
+  if (pages <= 1) return '';
+  const from = (page - 1) * pageSize + 1;
+  const to = Math.min(page * pageSize, total);
+  return `<div class="st-pager">
+    <span class="st-pager-meta">${from}–${to} of ${total}</span>
+    <div class="st-pager-btns">
+      <button type="button" class="btn btn-sm" data-page="1"${
+        page <= 1 ? ' disabled' : ''
+      }>First</button>
+      <button type="button" class="btn btn-sm" data-page="${page - 1}"${
+        page <= 1 ? ' disabled' : ''
+      }>Prev</button>
+      <span class="st-pager-page">Page ${page} / ${pages}</span>
+      <button type="button" class="btn btn-sm" data-page="${page + 1}"${
+        page >= pages ? ' disabled' : ''
+      }>Next</button>
+      <button type="button" class="btn btn-sm" data-page="${pages}"${
+        page >= pages ? ' disabled' : ''
+      }>Last</button>
+    </div>
+  </div>`;
+}
+
 /**
  * @param {object[]} rows
- * @param {object} opts { columns, escapeHtml, sortKey, sortDir, nameCell, compact }
+ * @param {object} opts { columns, escapeHtml, sortKey, sortDir, nameCell, compact, page, pageSize }
  */
 export function statsTableHtml(rows, opts) {
-  const { columns, escapeHtml, sortKey, sortDir = 'desc', nameCell, compact } = opts;
+  const {
+    columns,
+    escapeHtml,
+    sortKey,
+    sortDir = 'desc',
+    nameCell,
+    compact,
+    page = 1,
+    pageSize = 0
+  } = opts;
   if (!rows.length) {
     return '<p class="view-empty">Nothing matches these filters.</p>';
   }
   const sorted = sortRows(rows, columns, sortKey, sortDir);
+  const total = sorted.length;
+  const size = pageSize > 0 ? pageSize : total;
+  const pages = Math.max(1, Math.ceil(total / size));
+  const safePage = Math.min(Math.max(1, Number(page) || 1), pages);
+  const slice =
+    pageSize > 0 ? sorted.slice((safePage - 1) * size, safePage * size) : sorted;
 
   const head = columns
     .map((c) => {
@@ -301,7 +361,7 @@ export function statsTableHtml(rows, opts) {
     })
     .join('');
 
-  const body = sorted
+  const body = slice
     .map((r) => {
       const cells = columns
         .map((c) => {
@@ -314,24 +374,31 @@ export function statsTableHtml(rows, opts) {
           const cls = [
             c.align === 'left' ? 'left' : '',
             c.strong ? 'strong' : '',
-            c.cellClass || '',
+            typeof c.cellClass === 'function' ? c.cellClass(r) : c.cellClass || '',
             t ? 'has-tip' : ''
           ]
             .filter(Boolean)
             .join(' ');
+          const content = c.em?.(r) ? `<em>${escapeHtml(text)}</em>` : escapeHtml(text);
           return t
-            ? `<td class="${cls}" data-tip="${escapeHtml(t)}">${escapeHtml(text)}</td>`
-            : `<td class="${cls}">${escapeHtml(text)}</td>`;
+            ? `<td class="${cls}" data-tip="${escapeHtml(t)}">${content}</td>`
+            : `<td class="${cls}">${content}</td>`;
         })
         .join('');
       return `<tr>${cells}</tr>`;
     })
     .join('');
 
-  return `<table class="st-table${compact ? ' compact' : ''}">
+  const table = `<table class="st-table${compact ? ' compact' : ''}">
     <thead><tr>${head}</tr></thead>
     <tbody>${body}</tbody>
   </table>`;
+
+  if (!(pageSize > 0) || pages <= 1) return table;
+  return (
+    table +
+    pagerHtml({ page: safePage, pages, total, pageSize: size })
+  );
 }
 
 // ---------------------------------------------------------------------------

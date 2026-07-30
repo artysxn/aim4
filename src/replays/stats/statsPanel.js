@@ -23,6 +23,7 @@ import { aggregatePlayers, aggregateTeams, allRows, indexMaps } from '../shared/
 import {
   PLAYER_COLUMNS,
   TEAM_COLUMNS,
+  STATS_PAGE_SIZE,
   attachTips,
   playerColumnsWithRoles,
   statsTableHtml
@@ -53,6 +54,7 @@ export function createStatsPanel({ escapeHtml }) {
   let scope = {};
   let tab = 'players';
   let sort = { players: { key: 'rating', dir: 'desc' }, teams: { key: 'avgRating', dir: 'desc' } };
+  let page = { players: 1, teams: 1 };
   let loadToken = 0;
 
   const filter = {
@@ -227,12 +229,14 @@ export function createStatsPanel({ escapeHtml }) {
     const side = e.target.closest('[data-side]');
     if (side) {
       filter.side = filter.side === side.dataset.side ? '' : side.dataset.side;
+      page[tab] = 1;
       render();
       return;
     }
     const result = e.target.closest('[data-result]');
     if (result) {
       filter.result = filter.result === result.dataset.result ? '' : result.dataset.result;
+      page[tab] = 1;
       render();
       return;
     }
@@ -240,6 +244,7 @@ export function createStatsPanel({ escapeHtml }) {
     if (adv) {
       filter.advantage =
         filter.advantage === adv.dataset.advantage ? '' : adv.dataset.advantage;
+      page[tab] = 1;
       render();
       return;
     }
@@ -253,6 +258,7 @@ export function createStatsPanel({ escapeHtml }) {
       filter.result = '';
       filter.advantage = '';
       filter.role = null;
+      page[tab] = 1;
       render();
     }
   });
@@ -262,6 +268,7 @@ export function createStatsPanel({ escapeHtml }) {
     if (awp) {
       filter[awp.dataset.awp] = Boolean(awp.checked);
       awp.closest('.rp-awp-toggle')?.classList.toggle('active', awp.checked);
+      page[tab] = 1;
       render();
       return;
     }
@@ -270,6 +277,7 @@ export function createStatsPanel({ escapeHtml }) {
       const side = roleSel.dataset.roleFilter === 'CT' ? 'CT' : 'T';
       const value = roleSel.value || '';
       filter.role = value ? { side, value } : null;
+      page[tab] = 1;
       render();
       return;
     }
@@ -278,11 +286,13 @@ export function createStatsPanel({ escapeHtml }) {
     if (sel.dataset.filter === 'maps') {
       filter.maps = sel.value ? [sel.value] : [];
       filter.role = null;
+      page[tab] = 1;
       render();
       return;
     }
     const value = sel.value === '' ? null : Number(sel.value);
     filter[sel.dataset.filter] = value;
+    page[tab] = 1;
     render();
   });
 
@@ -295,21 +305,31 @@ export function createStatsPanel({ escapeHtml }) {
   });
 
   bodyEl.addEventListener('click', (e) => {
+    const pageBtn = e.target.closest('[data-page]');
+    if (pageBtn) {
+      if (pageBtn.disabled) return;
+      const next = Number(pageBtn.dataset.page);
+      if (!Number.isFinite(next) || next < 1) return;
+      page[tab] = next;
+      render();
+      return;
+    }
     const th = e.target.closest('[data-sort]');
     if (!th) return;
     const s = sort[tab];
     if (s.key === th.dataset.sort) s.dir = s.dir === 'desc' ? 'asc' : 'desc';
     else {
       s.key = th.dataset.sort;
-      s.dir = th.dataset.sort === 'name' ? 'asc' : 'desc';
+      s.dir = th.dataset.sort === 'name' || th.dataset.sort === 'team' ? 'asc' : 'desc';
     }
+    page[tab] = 1;
     render();
   });
 
   // ---- render -------------------------------------------------------------
 
-  function enrichedPlayers(rows, players, active) {
-    const data = aggregatePlayers(rows, players, active);
+  function enrichedPlayers(rows, players, active, demos) {
+    const data = aggregatePlayers(rows, players, active, demos);
     const withRoles = attachPlayerRoles(data, payload, active);
     if (!filter.role) return withRoles;
     return withRoles.filter((p) => playerMatchesRoleFilter(p, filter.role));
@@ -325,7 +345,7 @@ export function createStatsPanel({ escapeHtml }) {
     const columns = mode ? playerColumnsWithRoles(mode) : PLAYER_COLUMNS;
 
     if (tab === 'players') {
-      const data = enrichedPlayers(rows, players, active);
+      const data = enrichedPlayers(rows, players, active, demos);
       const matchDemo = singleMatchDemo(payload, scope);
       if (matchDemo) {
         bodyEl.innerHTML = matchBoardsHtml(data, matchDemo, {
@@ -339,7 +359,9 @@ export function createStatsPanel({ escapeHtml }) {
           columns,
           escapeHtml,
           sortKey: sort.players.key,
-          sortDir: sort.players.dir
+          sortDir: sort.players.dir,
+          page: page.players,
+          pageSize: STATS_PAGE_SIZE
         });
       }
     } else {
@@ -348,7 +370,9 @@ export function createStatsPanel({ escapeHtml }) {
         columns: TEAM_COLUMNS,
         escapeHtml,
         sortKey: sort.teams.key,
-        sortDir: sort.teams.dir
+        sortDir: sort.teams.dir,
+        page: page.teams,
+        pageSize: STATS_PAGE_SIZE
       });
     }
   }
@@ -398,6 +422,7 @@ export function createStatsPanel({ escapeHtml }) {
     filter.hasAwp = false;
     filter.oppHasAwp = false;
     filter.role = null;
+    page = { players: 1, teams: 1 };
     try {
       const res = await fetchStats(next.demos || null);
       if (token !== loadToken) return;

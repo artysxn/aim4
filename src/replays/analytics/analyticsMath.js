@@ -445,8 +445,10 @@ export function leaderboardFromFiles(payload, files) {
 
   /** @type {Map<string, { name: string, team: number, demoId: string }>} */
   const players = new Map();
+  const demos = new Map();
   const rows = [];
   for (const demo of payload?.demos || []) {
+    demos.set(demo.id, demo);
     for (const p of demo.players || []) {
       if (!p?.id) continue;
       players.set(`${demo.id}:${p.id}`, {
@@ -459,7 +461,7 @@ export function leaderboardFromFiles(payload, files) {
       if (row?.f && want.has(row.f)) rows.push(row);
     }
   }
-  return aggregatePlayers(rows, players, { files: [...want] });
+  return aggregatePlayers(rows, players, { files: [...want] }, demos);
 }
 
 /** Unique maps across a stats payload. */
