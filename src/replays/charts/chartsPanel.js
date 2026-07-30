@@ -46,106 +46,6 @@ const PHASES = [
   { key: 'late', label: 'Late' }
 ];
 
-/** The examples the builder ships with, so a new user has somewhere to start. */
-const PRESETS = [
-  {
-    key: 'firstKillTiming',
-    label: 'When first kills happen',
-    apply: (s) => {
-      s.type = 'area';
-      s.source = 'kill';
-      s.x.dimension = 'time';
-      s.y.metric = 'killCount';
-      s.binStep = 5;
-      s.normalize = true;
-      s.series = 'side';
-      s.trendline = false;
-      s.filter = { ...emptyFilter(), killKinds: ['opening'] };
-      s.x.filter = {};
-      s.y.filter = {};
-    }
-  },
-  {
-    key: 'eakVsSwing',
-    label: 'T-side EAK vs round swing',
-    apply: (s) => {
-      s.type = 'scatter';
-      s.subject = 'players';
-      s.x.metric = 'eak';
-      s.x.filter = { sides: ['T'] };
-      s.y.metric = 'swing';
-      s.y.filter = { econ: [4] };
-      s.series = 'team';
-      s.minRounds = 10;
-      s.trendline = true;
-      s.filter = emptyFilter();
-    }
-  },
-  {
-    key: 'prwVsPossession',
-    label: 'Team winrate vs possession',
-    apply: (s) => {
-      s.type = 'scatter';
-      s.subject = 'teams';
-      s.x.metric = 'possession';
-      s.y.metric = 'prw';
-      s.x.filter = {};
-      s.y.filter = {};
-      s.series = '';
-      s.minRounds = 8;
-      s.trendline = true;
-      s.filter = { ...emptyFilter(), econ: [4] };
-    }
-  },
-  {
-    key: 'killsByPhase',
-    label: 'Kills by phase and side',
-    apply: (s) => {
-      s.type = 'bar';
-      s.source = 'kill';
-      s.x.dimension = 'phase';
-      s.y.metric = 'killCount';
-      s.series = 'side';
-      s.normalize = true;
-      s.trendline = false;
-      s.filter = emptyFilter();
-      s.x.filter = {};
-      s.y.filter = {};
-    }
-  },
-  {
-    key: 'ratingByRound',
-    label: 'Rating through the map',
-    apply: (s) => {
-      s.type = 'line';
-      s.source = 'player';
-      s.x.dimension = 'roundNo';
-      s.y.metric = 'rating';
-      s.binStep = 3;
-      s.series = 'side';
-      s.normalize = false;
-      s.filter = emptyFilter();
-      s.x.filter = {};
-      s.y.filter = {};
-    }
-  },
-  {
-    key: 'openDuelEconomy',
-    label: 'Opening duels by enemy buy',
-    apply: (s) => {
-      s.type = 'bar';
-      s.source = 'round';
-      s.x.dimension = 'oppEcon';
-      s.y.metric = 'openKillPct';
-      s.series = 'side';
-      s.normalize = false;
-      s.filter = emptyFilter();
-      s.x.filter = {};
-      s.y.filter = {};
-    }
-  }
-];
-
 /**
  * @param {{escapeHtml: (s: string) => string}} deps
  */
@@ -171,6 +71,8 @@ export function createChartsPanel({ escapeHtml }) {
   let loadToken = 0;
   /** @type {object[]} hover payloads, indexed by the mark's data-i */
   let hoverPoints = [];
+  /** @type {Element | null} */
+  let hotMark = null;
   let lastModel = null;
 
   const state = {
@@ -193,15 +95,10 @@ export function createChartsPanel({ escapeHtml }) {
 
   // ---- small html helpers -------------------------------------------------
 
-  const chip = (scope, key, value, label, on) =>
-    `<button type="button" class="rp-chip${on ? ' active' : ''}" data-chip="${scope}|${key}|${value}">${escapeHtml(
-      label
-    )}</button>`;
-
-  const flag = (scope, key, label, on) =>
-    `<button type="button" class="rp-chip${on ? ' active' : ''}" data-flag="${scope}|${key}">${escapeHtml(
-      label
-    )}</button>`;
+  const checkFlag = (scope, key, label, on) =>
+    `<label class="ch-check"><input type="checkbox" data-flag="${scope}|${key}"${
+      on ? ' checked' : ''
+    } /> ${escapeHtml(label)}</label>`;
 
   function selectHtml(attr, options, value, { placeholder = '', cls = 'site-select' } = {}) {
     const opts = options
@@ -276,53 +173,68 @@ export function createChartsPanel({ escapeHtml }) {
     const maps = (facts?.maps || []).map((m) => ({ key: m, label: MAPS[m]?.name || m }));
     const econOpts = Object.entries(ECONOMIES).map(([code, e]) => ({ key: code, label: e.label }));
     const arr = (key) => f[key] || [];
-    const has = (key, v) => arr(key).map(String).includes(String(v));
 
     const rows = [
-      maps.length > 1
-        ? group('Map', `<div class="rp-chips">${maps
-            .map((m) => chip(scope, 'maps', m.key, m.label, has('maps', m.key)))
-            .join('')}</div>`)
-        : '',
+      maps.length > 1 ? group('Map', multiSelect(scope, 'maps', maps, arr('maps'))) : '',
       group(
         'Side',
-        `<div class="rp-chips">${SIDES.map((s) => chip(scope, 'sides', s, s, has('sides', s))).join(
-          ''
-        )}</div>`
+        multiSelect(
+          scope,
+          'sides',
+          SIDES.map((s) => ({ key: s, label: s })),
+          arr('sides')
+        )
       ),
       group(
         'Own buy',
-        `<div class="rp-chips">${econOpts
-          .map((o) => chip(scope, 'econ', o.key, o.label, has('econ', o.key)))
-          .join('')}${flag(scope, 'hasAwp', 'AWP', Boolean(f.hasAwp))}</div>`
+        `${multiSelect(scope, 'econ', econOpts, arr('econ'))}${checkFlag(
+          scope,
+          'hasAwp',
+          'Has AWP',
+          Boolean(f.hasAwp)
+        )}`
       ),
       group(
         'Enemy buy',
-        `<div class="rp-chips">${econOpts
-          .map((o) => chip(scope, 'oppEcon', o.key, o.label, has('oppEcon', o.key)))
-          .join('')}${flag(scope, 'oppHasAwp', 'AWP', Boolean(f.oppHasAwp))}</div>`
+        `${multiSelect(scope, 'oppEcon', econOpts, arr('oppEcon'))}${checkFlag(
+          scope,
+          'oppHasAwp',
+          'Has AWP',
+          Boolean(f.oppHasAwp)
+        )}`
       ),
       group(
         'Round',
-        `<div class="rp-chips">${chip(scope, 'result', 'won', 'Won', f.result === 'won')}${chip(
-          scope,
-          'result',
-          'lost',
-          'Lost',
-          f.result === 'lost'
-        )}${chip(scope, 'opening', '5v4', '5v4', f.opening === '5v4')}${chip(
-          scope,
-          'opening',
-          '4v5',
-          '4v5',
-          f.opening === '4v5'
-        )}${chip(scope, 'opening', 'even', 'Even', f.opening === 'even')}${chip(
-          scope,
-          'half',
-          '1',
-          '1st half',
-          f.half === '1'
-        )}${chip(scope, 'half', '2', '2nd half', f.half === '2')}</div>`
+        `<div class="ch-select-stack">
+          ${selectHtml(
+            `data-exclusive="${scope}|result"`,
+            [
+              { key: 'won', label: 'Won' },
+              { key: 'lost', label: 'Lost' }
+            ],
+            f.result || '',
+            { placeholder: 'Any result' }
+          )}
+          ${selectHtml(
+            `data-exclusive="${scope}|opening"`,
+            [
+              { key: '5v4', label: '5v4' },
+              { key: '4v5', label: '4v5' },
+              { key: 'even', label: 'Even' }
+            ],
+            f.opening || '',
+            { placeholder: 'Any opening' }
+          )}
+          ${selectHtml(
+            `data-exclusive="${scope}|half"`,
+            [
+              { key: '1', label: '1st half' },
+              { key: '2', label: '2nd half' }
+            ],
+            f.half || '',
+            { placeholder: 'Any half' }
+          )}
+        </div>`
       ),
       group(
         'Round number',
@@ -333,21 +245,9 @@ export function createChartsPanel({ escapeHtml }) {
         }" data-num="${scope}|roundTo" /></div>`
       ),
       killable
-        ? group(
-            'Kill type',
-            `<div class="rp-chips">${KILL_KINDS.map((k) =>
-              chip(scope, 'killKinds', k.key, k.label, has('killKinds', k.key))
-            ).join('')}</div>`
-          )
+        ? group('Kill type', multiSelect(scope, 'killKinds', KILL_KINDS, arr('killKinds')))
         : '',
-      killable
-        ? group(
-            'Phase',
-            `<div class="rp-chips">${PHASES.map((p) =>
-              chip(scope, 'phases', p.key, p.label, has('phases', p.key))
-            ).join('')}</div>`
-          )
-        : '',
+      killable ? group('Phase', multiSelect(scope, 'phases', PHASES, arr('phases'))) : '',
       killable
         ? group(
             'Time in round',
@@ -419,20 +319,12 @@ export function createChartsPanel({ escapeHtml }) {
 
     sideEl.innerHTML = `
       <div class="ch-block">
-        <span class="ch-label">Presets</span>
-        <div class="rp-chips">${PRESETS.map(
-          (p) => `<button type="button" class="rp-chip" data-preset="${p.key}">${escapeHtml(p.label)}</button>`
-        ).join('')}</div>
-      </div>
-
-      <div class="ch-block">
         <span class="ch-label">Chart</span>
-        <div class="rp-chips">${CHART_TYPES.map(
-          (t) =>
-            `<button type="button" class="rp-chip${
-              state.type === t.key ? ' active' : ''
-            }" data-type="${t.key}" title="${escapeHtml(t.tip)}">${escapeHtml(t.label)}</button>`
-        ).join('')}</div>
+        ${selectHtml(
+          'data-type-select',
+          CHART_TYPES.map((t) => ({ key: t.key, label: t.label })),
+          state.type
+        )}
         ${
           isScatter()
             ? group(
@@ -493,16 +385,16 @@ export function createChartsPanel({ escapeHtml }) {
 
       <div class="ch-block">
         <span class="ch-label">Options</span>
-        <div class="rp-chips">
-          <button type="button" class="rp-chip${
-            state.trendline ? ' active' : ''
-          }" data-toggle="trendline">Trendline</button>
+        <div class="ch-select-stack">
+          <label class="ch-check"><input type="checkbox" data-toggle="trendline"${
+            state.trendline ? ' checked' : ''
+          } /> Trendline</label>
           ${
             isScatter()
               ? ''
-              : `<button type="button" class="rp-chip${
-                  state.normalize ? ' active' : ''
-                }" data-toggle="normalize">As share %</button>`
+              : `<label class="ch-check"><input type="checkbox" data-toggle="normalize"${
+                  state.normalize ? ' checked' : ''
+                } /> As share %</label>`
           }
         </div>
         <div class="ch-range">
@@ -573,6 +465,7 @@ export function createChartsPanel({ escapeHtml }) {
 
   function renderCanvas() {
     if (!facts) return;
+    hotMark = null;
     let model;
     try {
       model = computeChart(state, facts);
@@ -627,70 +520,24 @@ export function createChartsPanel({ escapeHtml }) {
     return state.filter;
   }
 
-  function toggleIn(scope, key, value) {
-    const f = filterFor(scope);
-    const single = key === 'result' || key === 'opening' || key === 'half';
-    if (single) {
-      f[key] = f[key] === value ? '' : value;
-      return;
-    }
-    const list = (f[key] || []).map(String);
-    const v = String(value);
-    const next = list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
-    // Buy buckets are numbers on the facts, so keep them numeric here.
-    f[key] = key === 'econ' || key === 'oppEcon' ? next.map(Number) : next;
-  }
-
   function afterChange({ rebuildSide = true } = {}) {
     if (rebuildSide) renderSide();
     renderCanvas();
   }
 
+  function applyChartType(type) {
+    state.type = type;
+    const src = source();
+    state.y.metric = findMetric(src, state.y.metric).key;
+    state.x.metric = findMetric(src, state.x.metric).key;
+    const dim = findDimension(src, state.x.dimension);
+    state.x.dimension = dim?.key || '';
+    state.binStep = dim?.step || 1;
+    if (state.series && !seriesFor(src).some((d) => d.key === state.series)) state.series = '';
+    afterChange();
+  }
+
   sideEl.addEventListener('click', (e) => {
-    const preset = e.target.closest('[data-preset]');
-    if (preset) {
-      const p = PRESETS.find((x) => x.key === preset.dataset.preset);
-      if (p) {
-        p.apply(state);
-        afterChange();
-      }
-      return;
-    }
-    const type = e.target.closest('[data-type]');
-    if (type) {
-      state.type = type.dataset.type;
-      const src = source();
-      // Keep the axes valid for whatever fact table the new type reads.
-      state.y.metric = findMetric(src, state.y.metric).key;
-      state.x.metric = findMetric(src, state.x.metric).key;
-      const dim = findDimension(src, state.x.dimension);
-      state.x.dimension = dim?.key || '';
-      state.binStep = dim?.step || 1;
-      if (state.series && !seriesFor(src).some((d) => d.key === state.series)) state.series = '';
-      afterChange();
-      return;
-    }
-    const toggle = e.target.closest('[data-toggle]');
-    if (toggle) {
-      state[toggle.dataset.toggle] = !state[toggle.dataset.toggle];
-      afterChange();
-      return;
-    }
-    const c = e.target.closest('[data-chip]');
-    if (c) {
-      const [scope, key, value] = c.dataset.chip.split('|');
-      toggleIn(scope, key, value);
-      afterChange();
-      return;
-    }
-    const fl = e.target.closest('[data-flag]');
-    if (fl) {
-      const [scope, key] = fl.dataset.flag.split('|');
-      const f = filterFor(scope);
-      f[key] = !f[key];
-      afterChange();
-      return;
-    }
     const clear = e.target.closest('[data-clear]');
     if (clear) {
       const scope = clear.dataset.clear;
@@ -703,6 +550,27 @@ export function createChartsPanel({ escapeHtml }) {
 
   sideEl.addEventListener('change', (e) => {
     const t = e.target;
+    if (t.matches('[data-type-select]')) {
+      applyChartType(t.value);
+      return;
+    }
+    if (t.matches('[data-toggle]')) {
+      state[t.dataset.toggle] = Boolean(t.checked);
+      afterChange({ rebuildSide: false });
+      return;
+    }
+    if (t.matches('[data-flag]')) {
+      const [scope, key] = t.dataset.flag.split('|');
+      filterFor(scope)[key] = Boolean(t.checked);
+      afterChange({ rebuildSide: false });
+      return;
+    }
+    if (t.matches('[data-exclusive]')) {
+      const [scope, key] = t.dataset.exclusive.split('|');
+      filterFor(scope)[key] = t.value || '';
+      afterChange({ rebuildSide: false });
+      return;
+    }
     if (t.matches('[data-subject]')) {
       state.subject = t.value;
       const src = source();
@@ -753,7 +621,9 @@ export function createChartsPanel({ escapeHtml }) {
     }
     if (t.matches('[data-multi]')) {
       const [scope, key] = t.dataset.multi.split('|');
-      filterFor(scope)[key] = [...t.selectedOptions].map((o) => o.value);
+      const vals = [...t.selectedOptions].map((o) => o.value);
+      filterFor(scope)[key] =
+        key === 'econ' || key === 'oppEcon' ? vals.map(Number) : vals;
       afterChange({ rebuildSide: false });
       return;
     }
@@ -783,6 +653,13 @@ export function createChartsPanel({ escapeHtml }) {
     URL.revokeObjectURL(url);
   });
 
+  function hideTip() {
+    hotMark?.classList.remove('hot');
+    hotMark = null;
+    const tip = canvasEl.querySelector('#ch-tip');
+    if (tip) tip.hidden = true;
+  }
+
   function showTip(mark) {
     const tip = canvasEl.querySelector('#ch-tip');
     const plot = canvasEl.querySelector('#ch-plot');
@@ -807,39 +684,52 @@ export function createChartsPanel({ escapeHtml }) {
     tip.classList.toggle('flip', x > host.width * 0.6);
   }
 
-  canvasEl.addEventListener('pointerover', (e) => {
-    const mark = e.target.closest('[data-i]');
-    if (mark) {
-      mark.classList.add('hot');
-      showTip(mark);
+  function setHotMark(mark) {
+    if (hotMark === mark) {
+      if (mark) showTip(mark);
+      return;
     }
+    hotMark?.classList.remove('hot');
+    hotMark = mark;
+    if (!mark) {
+      hideTip();
+      return;
+    }
+    mark.classList.add('hot');
+    showTip(mark);
+  }
+
+  canvasEl.addEventListener('pointermove', (e) => {
+    const plot = canvasEl.querySelector('#ch-plot');
+    if (!plot || !plot.contains(e.target)) {
+      setHotMark(null);
+      return;
+    }
+    const mark = e.target.closest('[data-i]');
+    setHotMark(mark && plot.contains(mark) ? mark : null);
   });
 
-  canvasEl.addEventListener('pointerout', (e) => {
-    const mark = e.target.closest('[data-i]');
-    if (!mark) return;
-    mark.classList.remove('hot');
-    const tip = canvasEl.querySelector('#ch-tip');
-    if (tip) tip.hidden = true;
-  });
+  canvasEl.addEventListener('pointerleave', () => setHotMark(null));
+
+  // Mirror macro viewer: kill sticky tips when the pointer leaves the plot
+  // into side panels / chrome / another window.
+  const onDocPointerMove = (e) => {
+    if (!canvasEl.isConnected || !hotMark) return;
+    const plot = canvasEl.querySelector('#ch-plot');
+    if (!plot) return;
+    if (plot.contains(e.target)) return;
+    setHotMark(null);
+  };
+  document.addEventListener('pointermove', onDocPointerMove);
 
   detailsEl.addEventListener('pointerover', (e) => {
     const row = e.target.closest('[data-row]');
     if (!row) return;
     const mark = canvasEl.querySelector(`[data-i="${row.dataset.row}"]`);
-    if (mark) {
-      mark.classList.add('hot');
-      showTip(mark);
-    }
+    if (mark) setHotMark(mark);
   });
 
-  detailsEl.addEventListener('pointerout', (e) => {
-    const row = e.target.closest('[data-row]');
-    if (!row) return;
-    canvasEl.querySelector(`[data-i="${row.dataset.row}"]`)?.classList.remove('hot');
-    const tip = canvasEl.querySelector('#ch-tip');
-    if (tip) tip.hidden = true;
-  });
+  detailsEl.addEventListener('pointerleave', () => setHotMark(null));
 
   // ---- load ---------------------------------------------------------------
 
@@ -875,6 +765,8 @@ export function createChartsPanel({ escapeHtml }) {
     el,
     load,
     destroy() {
+      document.removeEventListener('pointermove', onDocPointerMove);
+      hideTip();
       el.remove();
     }
   };

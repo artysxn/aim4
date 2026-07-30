@@ -3946,7 +3946,30 @@ body.rv-open {
 
 .ch-multi {
   height: auto;
+  min-height: 4.5rem;
+  width: 100%;
   padding: 4px;
+}
+
+.ch-select-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ch-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--text);
+  font: 500 12px var(--font-body);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ch-check input {
+  margin: 0;
 }
 
 .ch-main {
