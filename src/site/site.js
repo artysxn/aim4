@@ -254,6 +254,7 @@ function paramsFromPath(pathname = window.location.pathname) {
   if (clean === '/replays/upload') return { ...fromSearch, upload: '1' };
   if (clean === '/replays/stats') return { ...fromSearch, stats: '1' };
   if (clean === '/replays/analytics') return { ...fromSearch, analytics: '1' };
+  if (clean === '/replays/charts') return { ...fromSearch, charts: '1' };
   return fromSearch;
 }
 
@@ -278,10 +279,12 @@ function setView(name, push = false, params = null) {
     const onUpload = pathParams.upload === '1' || pathParams.upload === true;
     const onStats = pathParams.stats === '1' || pathParams.stats === true;
     const onAnalytics = pathParams.analytics === '1' || pathParams.analytics === true;
+    const onCharts = pathParams.charts === '1' || pathParams.charts === true;
     delete pathParams.playlists;
     delete pathParams.upload;
     delete pathParams.stats;
     delete pathParams.analytics;
+    delete pathParams.charts;
     const search = Object.keys(pathParams).length
       ? `?${new URLSearchParams(pathParams)}`
       : '';
@@ -293,7 +296,9 @@ function setView(name, push = false, params = null) {
           ? '/replays/stats'
           : onAnalytics
             ? '/replays/analytics'
-            : VIEWS[view].path;
+            : onCharts
+              ? '/replays/charts'
+              : VIEWS[view].path;
     const target = base + search;
     if (window.location.pathname + window.location.search !== target) {
       window.history.pushState({ view }, '', target);

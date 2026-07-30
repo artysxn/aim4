@@ -37,6 +37,7 @@ import { PACKAGE_EXT } from '../replays/shared/replayPackage.js';
 import { formatBytes } from '../replays/tickStore.js';
 import { createStatsPanel } from '../replays/stats/statsPanel.js';
 import { createAnalyticsPanel } from '../replays/analytics/analyticsPanel.js';
+import { createChartsPanel } from '../replays/charts/chartsPanel.js';
 import commentsIcon from '../icons/demos_comments.svg?raw';
 import bookmarkIcon from '../icons/demos_bookmarks_added.svg?raw';
 
@@ -61,6 +62,7 @@ export function initReplaysView({ escapeHtml }) {
   const playlistsBtn = document.getElementById('rp-playlists-btn');
   const statsBtn = document.getElementById('rp-stats-btn');
   const analyticsBtn = document.getElementById('rp-analytics-btn');
+  const chartsBtn = document.getElementById('rp-charts-btn');
   const libraryBtn = document.getElementById('rp-library-btn');
   const libraryEl = document.getElementById('rp-library');
   const uploadPageEl = document.getElementById('rp-upload-page');
@@ -70,6 +72,8 @@ export function initReplaysView({ escapeHtml }) {
   const statsBodyEl = document.getElementById('rp-stats-body');
   const analyticsPageEl = document.getElementById('rp-analytics-page');
   const analyticsBodyEl = document.getElementById('rp-analytics-body');
+  const chartsPageEl = document.getElementById('rp-charts-page');
+  const chartsBodyEl = document.getElementById('rp-charts-body');
   const pageTitleEl = document.getElementById('page-title');
 
   let demos = [];
@@ -88,10 +92,11 @@ export function initReplaysView({ escapeHtml }) {
   let viewerModule = null;
   /** Round name already opened from the URL, so it opens once per link. */
   let openedRound = '';
-  /** @type {'library' | 'upload' | 'playlists' | 'stats' | 'analytics'} */
+  /** @type {'library' | 'upload' | 'playlists' | 'stats' | 'analytics' | 'charts'} */
   let subpage = 'library';
   /** Built on first use; payloads reused across visits. */
   let analyticsPanel = null;
+  let chartsPanel = null;
   let statsPanel = null;
   /** @type {{demos?: string[], files?: string[], title?: string}} */
   let statsScope = {};
@@ -2128,6 +2133,7 @@ export function initReplaysView({ escapeHtml }) {
       [playlistsBtn, 'playlists'],
       [statsBtn, 'stats'],
       [analyticsBtn, 'analytics'],
+      [chartsBtn, 'charts'],
       [libraryBtn, 'library']
     ];
     for (const [btn, key] of map) {
@@ -2140,7 +2146,8 @@ export function initReplaysView({ escapeHtml }) {
       name === 'upload' ||
       name === 'playlists' ||
       name === 'stats' ||
-      name === 'analytics'
+      name === 'analytics' ||
+      name === 'charts'
         ? name
         : 'library';
     subpage = next;
@@ -2149,6 +2156,7 @@ export function initReplaysView({ escapeHtml }) {
     if (playlistsPageEl) playlistsPageEl.hidden = next !== 'playlists';
     if (statsPageEl) statsPageEl.hidden = next !== 'stats';
     if (analyticsPageEl) analyticsPageEl.hidden = next !== 'analytics';
+    if (chartsPageEl) chartsPageEl.hidden = next !== 'charts';
     if (headActions) headActions.hidden = !visible;
     if (pageTitleEl) pageTitleEl.textContent = 'Replays';
     document.title = 'AIM4.io - Replays';
@@ -2163,7 +2171,9 @@ export function initReplaysView({ escapeHtml }) {
             ? '/replays/stats'
             : next === 'analytics'
               ? '/replays/analytics'
-              : '/replays';
+              : next === 'charts'
+                ? '/replays/charts'
+                : '/replays';
     if (push && window.location.pathname.replace(/\/+$/, '') !== path) {
       window.history.pushState({ view: 'replays' }, '', path);
     }
@@ -2177,6 +2187,9 @@ export function initReplaysView({ escapeHtml }) {
     } else if (next === 'analytics') {
       stopPolling();
       openAnalyticsPage();
+    } else if (next === 'charts') {
+      stopPolling();
+      openChartsPage();
     } else if (visible) {
       startPolling();
     }
@@ -2186,6 +2199,7 @@ export function initReplaysView({ escapeHtml }) {
   playlistsBtn?.addEventListener('click', () => setSubpage('playlists', { push: true }));
   statsBtn?.addEventListener('click', () => showStats({}));
   analyticsBtn?.addEventListener('click', () => setSubpage('analytics', { push: true }));
+  chartsBtn?.addEventListener('click', () => setSubpage('charts', { push: true }));
   libraryBtn?.addEventListener('click', () => setSubpage('library', { push: true }));
 
   playlistsBody?.addEventListener('click', async (e) => {
@@ -2264,6 +2278,16 @@ export function initReplaysView({ escapeHtml }) {
     analyticsPanel.load();
   }
 
+  /** Mount the chart builder on first use; the payload is reused after that. */
+  function openChartsPage() {
+    if (!chartsBodyEl) return;
+    if (!chartsPanel) {
+      chartsPanel = createChartsPanel({ escapeHtml });
+      chartsBodyEl.appendChild(chartsPanel.el);
+    }
+    chartsPanel.load(statsScope);
+  }
+
   // ---- deep links ---------------------------------------------------------
 
   /** /replays?round=<name> opens straight into that round. */
@@ -2327,7 +2351,13 @@ export function initReplaysView({ escapeHtml }) {
     stopPolling();
     // Only poll while something is actually mid-parse.
     pollTimer = window.setInterval(() => {
-      if (!visible || subpage === 'playlists' || subpage === 'stats' || subpage === 'analytics')
+      if (
+        !visible ||
+        subpage === 'playlists' ||
+        subpage === 'stats' ||
+        subpage === 'analytics' ||
+        subpage === 'charts'
+      )
         return;
       if (demos.some((d) => d.status === 'parsing')) refresh();
     }, POLL_MS);
@@ -2351,6 +2381,8 @@ export function initReplaysView({ escapeHtml }) {
       const wantStats = params.stats === '1' || params.stats === true || path === '/replays/stats';
       const wantAnalytics =
         params.analytics === '1' || params.analytics === true || path === '/replays/analytics';
+      const wantCharts =
+        params.charts === '1' || params.charts === true || path === '/replays/charts';
       const page = wantUpload
         ? 'upload'
         : wantPlaylists
@@ -2359,9 +2391,16 @@ export function initReplaysView({ escapeHtml }) {
             ? 'stats'
             : wantAnalytics
               ? 'analytics'
-              : 'library';
+              : wantCharts
+                ? 'charts'
+                : 'library';
       setSubpage(page, { push: false });
-      if (page === 'playlists' || page === 'stats' || page === 'analytics') {
+      if (
+        page === 'playlists' ||
+        page === 'stats' ||
+        page === 'analytics' ||
+        page === 'charts'
+      ) {
         stopPolling();
       } else {
         refresh();

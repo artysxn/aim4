@@ -23,6 +23,7 @@ import {
   enrichPrwAndSwing
 } from '../../src/replays/stats/prwEnrich.js';
 import { TickTrack } from '../../src/replays/tickStore.js';
+import { timingFor } from '../../src/replays/viewer/roundClock.js';
 import {
   buildZonePresence,
   hasControlField,
@@ -31,7 +32,7 @@ import {
 } from '../../src/replays/zones/zoneOverlay.js';
 import { loadRadarMask } from '../../scripts/lib/radarMask.mjs';
 
-export const STATS_VERSION = 9;
+export const STATS_VERSION = 10;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -146,7 +147,42 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf, tickBuffer = null) 
   };
   applyPhaseBags(row, meta, playerIds, tickBuffer);
   applyPrwFields(row, meta);
+  applyTimingFields(row, meta, playerIds);
   return row;
+}
+
+/**
+ * Timing + buy detail the chart builder needs: when each kill landed (live
+ * seconds after freeze end), what each player spent, and how long the round
+ * ran. Kept on the row so a time-in-round chart never reopens a round file.
+ */
+function applyTimingFields(row, meta, playerIds) {
+  const timing = timingFor(meta || {});
+  const rate = timing.tickRate || 64;
+  const secondsAt = (tick) => Math.round(((tick || 0) - timing.freezeEndTick) / rate * 10) / 10;
+
+  row.dur = Math.max(0, Math.round(((timing.endTick - timing.freezeEndTick) / rate) * 10) / 10);
+  row.pt = Number.isFinite(timing.plantTick) && timing.plantTick
+    ? Math.max(0, secondsAt(timing.plantTick))
+    : null;
+
+  const kills = [...(meta?.events?.kills || [])].sort((a, b) => (a.tick || 0) - (b.tick || 0));
+  row.kt = kills
+    .filter((k) => k.attacker || k.victim)
+    .map((k) => ({
+      t: secondsAt(k.tick),
+      a: k.attacker || '',
+      v: k.victim || '',
+      h: k.headshot ? 1 : 0,
+      g: isGun(k.weapon) ? 1 : 0,
+      w: String(k.weapon || '').toLowerCase().replace(/^weapon_/, '')
+    }));
+
+  row.ev = {};
+  for (const id of playerIds || []) {
+    const value = Number(meta?.stats?.[id]?.equipValue);
+    if (Number.isFinite(value) && value >= 0) row.ev[id] = Math.round(value);
+  }
 }
 
 function applyPrwFields(row, meta) {
@@ -180,7 +216,9 @@ function needsPhaseEnrichment(entry) {
       !r.ph ||
       typeof r.ph !== 'object' ||
       r.prw1 === undefined ||
-      r.sw === undefined
+      r.sw === undefined ||
+      !Array.isArray(r.kt) ||
+      !r.ev
   );
 }
 
@@ -303,6 +341,7 @@ async function enrichPhases(io, user, entry) {
 
     applyPhaseBags(row, meta, playerIds, tickBuffer);
     applyPrwFields(row, meta);
+    applyTimingFields(row, meta, playerIds);
 
     if (tickBuffer) {
       const network = await ensureMapControl(io, meta.map || row.m, zoneCache);

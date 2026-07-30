@@ -50,7 +50,9 @@ const SITE_VIEW_PATHS = new Set([
   '/replays',
   '/replays/playlists',
   '/replays/upload',
-  '/replays/stats'
+  '/replays/stats',
+  '/replays/analytics',
+  '/replays/charts'
 ]);
 
 /**

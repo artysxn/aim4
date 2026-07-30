@@ -3847,3 +3847,367 @@ body.rv-open {
 .an-lb-row.focus .an-lb-name {
   color: #e8b84a;
 }
+
+/* ---- Charts: the graph builder ------------------------------------------ */
+
+.ch-panel {
+  display: block;
+}
+
+.ch-layout {
+  display: grid;
+  grid-template-columns: 290px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .ch-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.ch-side {
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.ch-block {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ch-block:last-child {
+  border-bottom: 0;
+}
+
+.ch-label {
+  color: var(--muted);
+  font: 600 11px var(--font-body);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ch-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ch-axis-filter > summary {
+  color: var(--muted);
+  font: 500 12px var(--font-body);
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.ch-axis-filter[open] > summary {
+  color: var(--text);
+}
+
+.ch-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 9px 0 2px;
+}
+
+.ch-range {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ch-range .site-input {
+  width: 88px;
+  min-width: 0;
+}
+
+.ch-mini {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font: 500 12px var(--font-body);
+}
+
+.ch-mini .site-input {
+  width: 64px;
+}
+
+.ch-multi {
+  height: auto;
+  min-height: 4.5rem;
+  width: 100%;
+  padding: 4px;
+}
+
+.ch-select-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ch-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--text);
+  font: 500 12px var(--font-body);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ch-check input {
+  margin: 0;
+}
+
+.ch-main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ch-title {
+  margin: 0;
+  font: 600 15px var(--font-body);
+  color: var(--text);
+}
+
+.ch-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ch-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font: 500 12px var(--font-body);
+}
+
+.ch-legend-item i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.ch-plot {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 4px;
+}
+
+.ch-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.ch-svg .ch-bg {
+  fill: color-mix(in srgb, var(--surface-solid) 70%, transparent);
+}
+
+.ch-svg .ch-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.ch-svg .ch-grid-v {
+  opacity: 0.45;
+}
+
+.ch-svg .ch-zero {
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+}
+
+.ch-svg .ch-tick {
+  fill: var(--muted);
+  font: 500 12px var(--font-body);
+}
+
+.ch-svg .ch-tick-y {
+  text-anchor: end;
+}
+
+.ch-svg .ch-axis {
+  fill: var(--text);
+  font: 600 13px var(--font-body);
+}
+
+.ch-svg .ch-pt,
+.ch-svg .ch-dot {
+  stroke: var(--surface-solid);
+  stroke-width: 1.5;
+  cursor: pointer;
+  transition: r 0.1s var(--ease-smooth);
+}
+
+.ch-svg .ch-pt {
+  fill-opacity: 0.82;
+}
+
+.ch-svg .ch-pt.hot,
+.ch-svg .ch-dot.hot {
+  r: 9;
+  fill-opacity: 1;
+  stroke: var(--text);
+}
+
+.ch-svg .ch-line {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.ch-svg .ch-area {
+  fill-opacity: 0.16;
+  stroke: none;
+}
+
+.ch-svg .ch-bar {
+  fill-opacity: 0.78;
+  cursor: pointer;
+}
+
+.ch-svg .ch-bar.hot {
+  fill-opacity: 1;
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+
+.ch-svg .ch-trend {
+  stroke: var(--text);
+  stroke-width: 1.5;
+  stroke-dasharray: 7 5;
+  opacity: 0.55;
+}
+
+.ch-tip {
+  position: absolute;
+  z-index: 4;
+  transform: translate(-50%, calc(-100% - 12px));
+  min-width: 150px;
+  max-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  font: 500 12px var(--font-body);
+  color: var(--text);
+}
+
+.ch-tip[hidden] {
+  display: none;
+}
+
+.ch-tip.flip {
+  transform: translate(-88%, calc(-100% - 12px));
+}
+
+.ch-tip-sub {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ch-tip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ch-tip-row em {
+  color: var(--muted);
+  font-style: normal;
+}
+
+.ch-tip-row b {
+  font-variant-numeric: tabular-nums;
+}
+
+.ch-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  color: var(--muted);
+  font: 500 12px var(--font-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.ch-details {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+table.ch-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 500 12px var(--font-body);
+  font-variant-numeric: tabular-nums;
+}
+
+table.ch-table th,
+table.ch-table td {
+  padding: 6px 10px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+table.ch-table th:first-child,
+table.ch-table td:first-child,
+table.ch-table th:nth-child(2),
+table.ch-table td:nth-child(2) {
+  text-align: left;
+}
+
+table.ch-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-solid);
+  color: var(--muted);
+  font-weight: 600;
+  z-index: 1;
+}
+
+table.ch-table tbody tr:hover {
+  background: var(--surface-hover);
+  cursor: default;
+}
+
+.ch-name {
+  color: var(--text);
+}
