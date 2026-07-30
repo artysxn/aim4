@@ -327,6 +327,10 @@ a {
   gap: 8px;
 }
 
+.page-head-actions[hidden] {
+  display: none;
+}
+
 .rp-text-btn {
   padding: 6px 10px;
   border: 0;

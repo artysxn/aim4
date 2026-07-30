@@ -4128,6 +4128,10 @@ body.rv-open {
   color: var(--text);
 }
 
+.ch-tip[hidden] {
+  display: none;
+}
+
 .ch-tip.flip {
   transform: translate(-88%, calc(-100% - 12px));
 }
