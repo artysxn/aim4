@@ -131,6 +131,13 @@
   margin-top: 10px;
 }
 
+.rp-upload-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .rp-upload-progress .rp-meter {
   margin: 0 0 8px;
 }

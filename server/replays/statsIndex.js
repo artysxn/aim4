@@ -512,6 +512,76 @@ export async function statsPayload(io, user, records, demoIds = null) {
   return { demos };
 }
 
+/**
+ * Walk every ready demo and rebuild or enrich stats indexes that are missing
+ * or behind STATS_VERSION (PRW / possession / swing, etc.).
+ *
+ * @param {object} io
+ * @param {string} user
+ * @param {object[]} records  from listDemos
+ * @param {{ force?: boolean }} [opts]  force=true drops existing indexes first
+ * @returns {Promise<{
+ *   total: number,
+ *   ready: number,
+ *   built: number,
+ *   enriched: number,
+ *   current: number,
+ *   failed: number,
+ *   errors: Array<{ id: string, filename?: string, error: string }>
+ * }>}
+ */
+export async function refreshLibraryStats(io, user, records, { force = false } = {}) {
+  const ready = (records || []).filter((r) => (r.status || 'ready') === 'ready');
+  const report = {
+    total: (records || []).length,
+    ready: ready.length,
+    built: 0,
+    enriched: 0,
+    current: 0,
+    failed: 0,
+    errors: []
+  };
+
+  for (const record of ready) {
+    try {
+      if (force) await forgetDemoIndex(io, user, record.id);
+
+      const before = force ? null : await loadStoredEntry(io, user, record.id);
+      const key = versionKey(record);
+      const keyOk =
+        before &&
+        (before.key === key ||
+          (typeof before.key === 'string' && before.key.startsWith(`${key}|`)));
+      const wasMissing = !before || !keyOk;
+      const wasStale = Boolean(before && keyOk && needsPhaseEnrichment(before));
+
+      const entry = await demoIndex(io, user, record);
+      if (!entry) {
+        report.failed++;
+        report.errors.push({
+          id: record.id,
+          filename: record.filename,
+          error: 'No stats index produced.'
+        });
+        continue;
+      }
+
+      if (wasMissing || force) report.built++;
+      else if (wasStale) report.enriched++;
+      else report.current++;
+    } catch (err) {
+      report.failed++;
+      report.errors.push({
+        id: record.id,
+        filename: record.filename,
+        error: err?.message || String(err)
+      });
+    }
+  }
+
+  return report;
+}
+
 /** Drop a demo's index when the demo goes. */
 export async function forgetDemoIndex(io, user, demoId) {
   memory.delete(demoId);

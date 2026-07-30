@@ -203,10 +203,7 @@ export function createStatsPanel({ escapeHtml }) {
       </div>
       <div class="st-filter-group st-filter-stack">
         <span class="st-filter-label">Opening</span>
-        <div class="rp-chips">${advBtn('5v4', '5v4')}${advBtn('4v5', '4v5')}${advBtn(
-          'even',
-          'Even'
-        )}</div>
+        <div class="rp-chips">${advBtn('5v4', '5v4')}${advBtn('4v5', '4v5')}</div>
       </div>
       ${roleGroups}
       <div class="st-filter-group st-filter-stack">

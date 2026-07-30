@@ -16,6 +16,7 @@ import {
   fetchStatus,
   fetchUploadBatch,
   findRounds,
+  refreshStats,
   renameDemoTeams,
   reparseDemo,
   uploadDemo,
@@ -51,6 +52,7 @@ export function initReplaysView({ escapeHtml }) {
   const quotaEl = document.getElementById('rp-quota');
   const progressEl = document.getElementById('rp-upload-progress');
   const statusEl = document.getElementById('rp-status');
+  const statsRefreshBtn = document.getElementById('rp-stats-refresh');
   const filtersEl = document.getElementById('rp-filters');
   const resultEl = document.getElementById('rp-result');
   const parserEl = document.getElementById('rp-parser');
@@ -796,6 +798,43 @@ export function initReplaysView({ escapeHtml }) {
     e.preventDefault();
     dropEl.classList.remove('over');
     startUpload(e.dataTransfer?.files);
+  });
+
+  statsRefreshBtn?.addEventListener('click', async () => {
+    if (statsRefreshBtn.disabled) return;
+    statsRefreshBtn.disabled = true;
+    const prevLabel = statsRefreshBtn.textContent;
+    statsRefreshBtn.textContent = 'Refreshing stats…';
+    uploadOwnsStatus = true;
+    setStatus('Checking library stats indexes…');
+    try {
+      const report = await refreshStats();
+      const parts = [
+        `${report.ready || 0} ready demos`,
+        report.built ? `${report.built} built` : '',
+        report.enriched ? `${report.enriched} enriched` : '',
+        report.current ? `${report.current} already current` : '',
+        report.failed ? `${report.failed} failed` : ''
+      ].filter(Boolean);
+      setStatus(
+        report.failed
+          ? `Stats refresh finished with errors: ${parts.join(' · ')}`
+          : `Stats refresh done: ${parts.join(' · ')}`,
+        Boolean(report.failed)
+      );
+      // Drop the mounted panel so the next Statistics open reloads the index.
+      if (statsPanel) {
+        statsPanel.destroy();
+        statsPanel = null;
+        if (statsBodyEl) statsBodyEl.innerHTML = '';
+      }
+    } catch (err) {
+      setStatus(err.message || 'Stats refresh failed.', true);
+    } finally {
+      uploadOwnsStatus = false;
+      statsRefreshBtn.disabled = false;
+      statsRefreshBtn.textContent = prevLabel || 'Refresh library stats';
+    }
   });
 
   // ---- team clustering ----------------------------------------------------

@@ -14,6 +14,9 @@
 //   GET    /api/replays/rounds?...               filter by name, no file reads
 //   GET    /api/replays/rounds/:file             round meta + events
 //   GET    /api/replays/rounds/:file/ticks       tick buffer, ?stride=N&fmt=packed
+//   GET    /api/replays/stats                    compact per-round index
+//   POST   /api/replays/stats/refresh            rebuild missing / stale indexes
+//   GET    /api/replays/playlists
 //   GET    /api/replays/zones                    maps that have a zone file
 //   GET    /api/replays/zones/:map               zone network for one map
 //   POST   /api/replays/zones/:map               save zone polygons + names
@@ -51,7 +54,7 @@ import {
   writeRoundNotes
 } from './demoStore.js';
 import { cpuProbe, memorySnapshot } from './hostMemory.js';
-import { forgetDemoIndex, scheduleStatsIndex, statsPayload } from './statsIndex.js';
+import { forgetDemoIndex, refreshLibraryStats, scheduleStatsIndex, statsPayload } from './statsIndex.js';
 import { isAcceptedUpload, rarSupport } from './archive.js';
 import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
 import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
@@ -539,6 +542,21 @@ export async function handleReplayRequest(req, res, url) {
     const records = (await listDemos(user)).filter((r) => (r.status || 'ready') === 'ready');
     const payload = await statsPayload(statsIo, user, records, only);
     json(res, 200, payload);
+    return true;
+  }
+
+  // Rebuild / enrich stats indexes that are missing or behind the current
+  // schema (PRW, possession, swing, …). ?force=1 drops every index first.
+  if (req.method === 'POST' && p === '/api/replays/stats/refresh') {
+    const force =
+      url.searchParams.get('force') === '1' || url.searchParams.get('force') === 'true';
+    const records = await listDemos(user);
+    try {
+      const report = await refreshLibraryStats(statsIo, user, records, { force });
+      json(res, 200, { ok: true, ...report });
+    } catch (err) {
+      json(res, 500, { error: err?.message || 'Stats refresh failed.' });
+    }
     return true;
   }
 

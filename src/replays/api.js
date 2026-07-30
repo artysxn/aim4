@@ -254,6 +254,20 @@ export async function fetchStats(demoIds = null) {
   return asJson(await fetch(`${API_BASE}/api/replays/stats${q}`, { headers: await headers() }));
 }
 
+/**
+ * Rebuild / enrich stats indexes that are missing or behind the current schema.
+ * @param {{ force?: boolean }} [opts]
+ */
+export async function refreshStats(opts = {}) {
+  const q = opts.force ? '?force=1' : '';
+  return asJson(
+    await fetch(`${API_BASE}/api/replays/stats/refresh${q}`, {
+      method: 'POST',
+      headers: await headers()
+    })
+  );
+}
+
 export async function fetchPlaylists() {
   const body = await asJson(
     await fetch(`${API_BASE}/api/replays/playlists`, { headers: await headers() })
