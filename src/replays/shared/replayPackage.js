@@ -2,13 +2,13 @@
 // replays/shared/replayPackage.js
 // Binary container for a locally-parsed demo ready to import on the server.
 //
-// The package holds exactly what ingestDemo would have written: a demo record
-// (manifest) plus one .json/.bin pair per round, named with the round-id
+// The package holds exactly what the library stores after a server-side parse:
+// a demo record (manifest) plus compact round files named with the round-id
 // scheme so the library collector can filter without opening files.
 //
 // Layout (little-endian):
 //   magic      8 bytes   "AIM4RPLY"
-//   version   u32        1
+//   version   u32        1 = plain .json/.bin, 2 = compact library form
 //   count     u32        number of files
 //   repeated:
 //     nameLen u16
@@ -16,14 +16,20 @@
 //     dataLen u32
 //     data    bytes
 //
-// File names inside the package:
+// File names inside a v2 package (what the local tool writes):
 //   manifest.json
-//   rounds/<roundId>~<demoId>.json
-//   rounds/<roundId>~<demoId>.bin
+//   rounds/<roundId>~<demoId>.json.zst
+//   rounds/<roundId>~<demoId>.tickz
+//   rounds/<roundId>~<demoId>.c100.bin
+//
+// v1 packages (legacy) carry .json + .bin instead; import still accepts them.
 // ---------------------------------------------------------------------------
 
 export const PACKAGE_MAGIC = 'AIM4RPLY';
-export const PACKAGE_VERSION = 1;
+/** Current encode version: compact on-disk forms. */
+export const PACKAGE_VERSION = 2;
+/** Versions decodeReplayPackage accepts. */
+export const PACKAGE_VERSIONS = new Set([1, 2]);
 export const PACKAGE_EXT = '.aim4replay';
 
 /**
@@ -90,8 +96,10 @@ export function decodeReplayPackage(buf) {
   if (magic !== PACKAGE_MAGIC) throw new Error('Not an AIM4 replay package.');
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const version = view.getUint32(8, true);
-  if (version !== PACKAGE_VERSION) {
-    throw new Error(`Unsupported package version ${version} (need ${PACKAGE_VERSION}).`);
+  if (!PACKAGE_VERSIONS.has(version)) {
+    throw new Error(
+      `Unsupported package version ${version} (need ${[...PACKAGE_VERSIONS].join(' or ')}).`
+    );
   }
   const count = view.getUint32(12, true);
   const files = new Map();

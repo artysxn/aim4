@@ -2,11 +2,17 @@
 // replays/importPackage.js
 // Accept a locally-parsed .aim4replay package and land it in the library
 // with the same round filenames the server-side ingest would have produced.
+//
+// Packages may carry either the plain v1 pair (.json + .bin) or the compact
+// library form (.json.zst + .tickz + optional .c100.bin). Both land as the
+// compact on-disk shape via writeMaterialized.
 // ---------------------------------------------------------------------------
 
+import zlib from 'node:zlib';
 import { decodeReplayPackage } from '../../src/replays/shared/replayPackage.js';
 import { isRoundId, parseRoundId } from '../../src/replays/shared/roundId.js';
 import { checkQuota, readRecord, writeMaterialized } from './demoStore.js';
+import { TICKZ_EXT } from './tickCodec.js';
 
 /**
  * @param {string} user
@@ -54,21 +60,34 @@ export async function importReplayPackage(user, buf, meta = {}) {
     if (!String(r.file).endsWith(`~${demoId}`)) {
       throw new Error(`Round file stem does not match demo id: ${r.file}`);
     }
-    const jsonName = `rounds/${r.file}.json`;
-    const binName = `rounds/${r.file}.bin`;
-    if (!files.has(jsonName) || !files.has(binName)) {
+
+    const plainJson = `rounds/${r.file}.json`;
+    const zstJson = `rounds/${r.file}.json.zst`;
+    const plainBin = `rounds/${r.file}.bin`;
+    const tickz = `rounds/${r.file}${TICKZ_EXT}`;
+    const hasPlain = files.has(plainJson) && files.has(plainBin);
+    const hasCompact = files.has(zstJson) && files.has(tickz);
+    if (!hasPlain && !hasCompact) {
       throw new Error(`Package is missing files for round ${r.id}.`);
     }
+
     let metaJson;
     try {
-      metaJson = JSON.parse(new TextDecoder().decode(files.get(jsonName)));
+      if (hasCompact) {
+        const raw = zlib.zstdDecompressSync(Buffer.from(files.get(zstJson)));
+        metaJson = JSON.parse(raw.toString('utf8'));
+      } else {
+        metaJson = JSON.parse(new TextDecoder().decode(files.get(plainJson)));
+      }
     } catch {
       throw new Error(`Corrupt round JSON: ${r.file}`);
     }
     if (metaJson.id !== r.id || metaJson.demoId !== demoId) {
       throw new Error(`Round JSON does not match manifest for ${r.id}.`);
     }
-    if (!files.get(binName)?.byteLength) {
+
+    const tickBytes = hasCompact ? files.get(tickz) : files.get(plainBin);
+    if (!tickBytes?.byteLength) {
       throw new Error(`Empty tick buffer for ${r.id}.`);
     }
   }

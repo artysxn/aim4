@@ -53,9 +53,11 @@ tools\parse-demo.bat
 npm run parse-demo -- path\to\match.dem
 ```
 
-That writes `match.aim4replay` next to each demo. Upload the package on the
-Replays page (`POST /api/replays/import`). Round filenames inside the package
-are built with the same `buildRoundId` / ingest path the server uses.
+That writes `match.aim4replay` next to each demo. The package carries the same
+compact round files the server library uses after a parse (`.json.zst`,
+`.tickz`, `.c100.bin`). Upload it on the Replays page (`POST /api/replays/import`).
+Round filenames inside the package are built with the same `buildRoundId` /
+ingest path the server uses.
 
 ## Upgrading the parser
 

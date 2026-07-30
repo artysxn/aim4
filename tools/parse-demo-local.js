@@ -2,8 +2,10 @@
 // ---------------------------------------------------------------------------
 // parse-demo-local.js
 // Parse one or more CS2 .dem files on this machine and write .aim4replay
-// packages. Upload those packages on the website instead of the raw demos —
-// the server only has to store already-named rounds, not run the heavy parser.
+// packages in the same compact form the server library uses after a parse
+// (.json.zst + .tickz + .c100.bin). Upload those packages on the website
+// instead of the raw demos — the server only has to store already-named
+// rounds, not run the heavy parser or recompress ticks.
 //
 // Round files inside the package use the exact id scheme from
 // src/replays/shared/roundId.js (same as server ingest).
@@ -21,7 +23,10 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { parseDemo, parserStatus } from '../server/demoparser/index.js';
-import { materializeDemo } from '../server/replays/materialize.js';
+import {
+  compactMaterializedFiles,
+  materializeDemo
+} from '../server/replays/materialize.js';
 import { newDemoId } from '../server/replays/demoStore.js';
 import { encodeReplayPackage, PACKAGE_EXT } from '../src/replays/shared/replayPackage.js';
 
@@ -95,7 +100,7 @@ async function main() {
     }
     process.stdout.write('\n');
 
-    const { record, files } = materializeDemo(
+    const { record, files: plain } = materializeDemo(
       demo,
       demoId,
       {
@@ -110,6 +115,8 @@ async function main() {
         }
       }
     );
+    process.stdout.write('\n  compacting…');
+    const files = compactMaterializedFiles(plain);
     process.stdout.write('\n');
 
     const packaged = encodeReplayPackage(files);
@@ -122,7 +129,9 @@ async function main() {
     console.log(`  map ${record.mapName} (${record.map})  ${record.score.team1}:${record.score.team2}`);
     console.log(`  ${record.team1.name} vs ${record.team2.name}`);
     console.log(`  ${record.roundCount} rounds → ${outPath}`);
-    console.log(`  ${(packaged.byteLength / 1024 / 1024).toFixed(1)} MB package (upload this, not the .dem)`);
+    console.log(
+      `  ${(packaged.byteLength / 1024 / 1024).toFixed(1)} MB compact package (upload this, not the .dem)`
+    );
   }
 
   if (failed) {
@@ -145,7 +154,8 @@ Requires (once, from the repo root):
   npm install @laihoe/demoparser2
 
 Then upload the produced .aim4replay file on the website Replays page.
-Round names inside the package match the library filter scheme exactly.`);
+Packages use the same compact round files as a server-side parse
+(.json.zst / .tickz / .c100.bin). Round names match the library filter scheme.`);
 }
 
 function fail(msg) {

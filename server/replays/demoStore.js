@@ -288,6 +288,10 @@ export async function renameDemoTeams(user, id, team1Name, team2Name) {
  * Persist a fully materialized demo (manifest + round files) without
  * re-deriving round ids. Used by server ingest and by import of local packages.
  *
+ * Accepts either the plain v1 pair (`.json` + `.bin`) or the compact library
+ * form (`.json.zst` + `.tickz` + optional `.c100.bin`). Plain entries are
+ * recompressed on write; compact entries are stored as-is.
+ *
  * @param {string} user
  * @param {object} record
  * @param {Map<string, Uint8Array>|Iterable<[string, Uint8Array]>} files
@@ -295,6 +299,9 @@ export async function renameDemoTeams(user, id, team1Name, team2Name) {
 export async function writeMaterialized(user, record, files) {
   await ensureDirs(user);
   const demoId = sanitizeId(record.id);
+  /** @type {Map<string, { metaJson?: Buffer, metaZst?: Buffer, ticksBin?: Buffer, tickz?: Buffer, c100?: Buffer }>} */
+  const byStem = new Map();
+
   for (const [name, data] of files) {
     const n = String(name).replace(/\\/g, '/');
     if (n === 'manifest.json') continue;
@@ -302,20 +309,54 @@ export async function writeMaterialized(user, record, files) {
       throw new Error(`Unexpected package entry: ${name}`);
     }
     const base = path.basename(n);
-    if (!base.endsWith(`~${demoId}.json`) && !base.endsWith(`~${demoId}.bin`)) {
+    const stem = base.split('.')[0];
+    if (!stem.endsWith(`~${demoId}`)) {
       throw new Error(`Round file does not match demo id: ${base}`);
     }
-    // Packages carry the plain v1 pair, which is the format the local parse
-    // tool writes. Store them the same way a server-side parse would, so an
-    // imported demo is not the one thing in the library still uncompressed.
-    const stem = base.split('.')[0];
     const buf = Buffer.from(data);
-    if (base.endsWith('.json')) {
-      await writeRoundMeta(user, stem, JSON.parse(buf.toString('utf8')));
+    let entry = byStem.get(stem);
+    if (!entry) {
+      entry = {};
+      byStem.set(stem, entry);
+    }
+    if (base.endsWith('.json.zst')) entry.metaZst = buf;
+    else if (base.endsWith('.json')) entry.metaJson = buf;
+    else if (base.endsWith(TICKZ_EXT)) entry.tickz = buf;
+    else if (base.endsWith(COARSE_EXT)) entry.c100 = buf;
+    else if (base.endsWith('.bin')) entry.ticksBin = buf;
+    else throw new Error(`Unexpected round file: ${base}`);
+  }
+
+  const dir = roundsDir(user);
+  for (const [stem, entry] of byStem) {
+    if (entry.metaZst) {
+      await fsp.writeFile(path.join(dir, `${stem}.json.zst`), entry.metaZst);
+      await fsp.rm(path.join(dir, `${stem}.json`), { force: true });
+    } else if (entry.metaJson) {
+      await writeRoundMeta(user, stem, JSON.parse(entry.metaJson.toString('utf8')));
     } else {
-      await writeRoundTicks(user, stem, buf);
+      throw new Error(`Package is missing meta for ${stem}.`);
+    }
+
+    if (entry.tickz) {
+      await fsp.writeFile(path.join(dir, `${stem}${TICKZ_EXT}`), entry.tickz);
+      if (entry.c100) {
+        await fsp.writeFile(path.join(dir, `${stem}${COARSE_EXT}`), entry.c100);
+      } else {
+        const raw = Buffer.from(decodeTickz(entry.tickz));
+        await fsp.writeFile(
+          path.join(dir, `${stem}${COARSE_EXT}`),
+          Buffer.from(sliceStride(raw, COARSE_STRIDE))
+        );
+      }
+      await fsp.rm(path.join(dir, `${stem}.bin`), { force: true });
+    } else if (entry.ticksBin) {
+      await writeRoundTicks(user, stem, entry.ticksBin);
+    } else {
+      throw new Error(`Package is missing ticks for ${stem}.`);
     }
   }
+
   await writeRecord(user, { ...record, id: demoId });
   return record;
 }
