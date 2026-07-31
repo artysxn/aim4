@@ -343,7 +343,8 @@ export class UIOverlay {
     this._bindAuth();
     this.auth?.onChange(() => this.refreshAccountBar());
     this._populateSettings();
-    const hasReplayLink = !!new URLSearchParams(window.location.search).get('replay');
+    const qs = new URLSearchParams(window.location.search);
+    const hasReplayLink = !!(qs.get('replay') || qs.get('replayPath'));
     const pathRoute = !hasReplayLink ? parseGamemodePath() : null;
     if (!pathRoute) this.showScreen('menu');
     this.refreshAccountBar();
@@ -395,7 +396,8 @@ export class UIOverlay {
     this._routeFromPopstate = false;
     window.addEventListener('popstate', () => {
       if (this.mp?.urlLobbyCode?.()) return;
-      if (new URLSearchParams(window.location.search).get('replay')) return;
+      const q = new URLSearchParams(window.location.search);
+      if (q.get('replay') || q.get('replayPath')) return;
       const route = parseGamemodePath();
       if (route) {
         if (this.currentScenario !== route.scenario || this.scenarioConfig?.variant !== route.variant) {
@@ -7212,13 +7214,51 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
   _clearReplayUrlParam() {
     const url = new URL(window.location.href);
-    if (!url.searchParams.has('replay')) return;
-    url.searchParams.delete('replay');
+    let changed = false;
+    for (const key of ['replay', 'replayPath', 'replayTitle']) {
+      if (url.searchParams.has(key)) {
+        url.searchParams.delete(key);
+        changed = true;
+      }
+    }
+    if (!changed) return;
     window.history.replaceState(null, '', url);
   }
 
   async _maybeOpenReplayFromUrl() {
-    const id = new URLSearchParams(window.location.search).get('replay');
+    const params = new URLSearchParams(window.location.search);
+    const path = params.get('replayPath');
+    if (path) {
+      const title = params.get('replayTitle') || 'Replay';
+      this._clearReplayUrlParam();
+      this.showScreen('menu');
+      const menuBody = this.root.querySelector('.menu-panel-body-main');
+      const loading = document.createElement('p');
+      loading.className = 'center lb-hint';
+      loading.textContent = 'Loading replay…';
+      if (menuBody) menuBody.appendChild(loading);
+      try {
+        const decoded = await loadReplayByPath(path);
+        loading.remove();
+        if (!decoded) {
+          this.showError(new Error('Replay not found or could not be loaded.'));
+          return;
+        }
+        this._setReplayShareContext(null);
+        this._watchReplay(decoded, {
+          title,
+          returnTo: 'menu',
+          fromOtherPlayer: true,
+          sharedSettings: decoded.settings
+        });
+      } catch (e) {
+        loading.remove();
+        this.showError(e);
+      }
+      return;
+    }
+
+    const id = params.get('replay');
     if (!isSharedReplayId(id)) return;
     this._clearReplayUrlParam();
     this.showScreen('menu');

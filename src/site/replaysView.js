@@ -151,7 +151,6 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
     /** @type {Set<string>} early|mid|late */
     decidedPhases: new Set()
   };
-  let advancedOpen = false;
   /** @type {Map<string, object|null>} */
   const roundMetaCache = new Map();
 
@@ -207,12 +206,6 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
       notes.push(
         `Server-side .dem parsing is offline (${parser.name}). ` +
           `Run tools\\parse-demo.bat on your PC (drag-and-drop GUI), then upload the ${PACKAGE_EXT} package.`
-      );
-    }
-    if (status?.rar && !status.rar.available) {
-      notes.push(
-        'This server has no .rar extractor installed, so .rar uploads will be refused. ' +
-          'Repack the demos as .zip or .tar.gz.'
       );
     }
     parserEl.hidden = notes.length === 0;
@@ -281,7 +274,7 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
     const label = mapName || MAPS[mapCode]?.name || mapCode || 'Map';
     return `<img class="rp-map-icon" src="${escapeHtml(src)}" alt="${escapeHtml(
       label
-    )}" title="${escapeHtml(label)}" width="28" height="28" loading="lazy" />`;
+    )}" title="${escapeHtml(label)}" width="14" height="14" loading="lazy" />`;
   }
 
   function rowMetaHtml(when, mapCode, mapName) {
@@ -1079,16 +1072,7 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
           : ''
       }
       <div class="rp-filter-group rp-advanced-wrap">
-        <button type="button" class="btn btn-sm rp-advanced-toggle${
-          advancedOpen ? ' open' : ''
-        }${advancedFilterCount() ? ' has-active' : ''}" id="rp-advanced-toggle" aria-expanded="${
-          advancedOpen ? 'true' : 'false'
-        }">
-          Advanced Filters${
-            advancedFilterCount() ? ` · ${advancedFilterCount()}` : ''
-          }
-        </button>
-        <div class="rp-advanced-body" id="rp-advanced-body" ${advancedOpen ? '' : 'hidden'}>
+        <div class="rp-advanced-body" id="rp-advanced-body">
           <div class="rp-filter-group">
             <h4>Side${
               filters.teams.size !== 1
@@ -1198,11 +1182,6 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
       multi?.closest('.rp-filter-group')?.classList.toggle('menu-open', mapMenuOpen);
     });
 
-    filtersEl.querySelector('#rp-advanced-toggle')?.addEventListener('click', () => {
-      advancedOpen = !advancedOpen;
-      renderFilters();
-    });
-
     filtersEl.querySelector('#rp-clear')?.addEventListener('click', () => {
       filters.maps.clear();
       filters.teams.clear();
@@ -1219,7 +1198,6 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
       teamSearch = '';
       playerSearch = '';
       mapMenuOpen = false;
-      advancedOpen = false;
       renderFilters();
       runQuery();
     });
@@ -1370,16 +1348,6 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
       hasAwpA: filters.hasAwpA || undefined,
       hasAwpB: filters.hasAwpB || undefined
     };
-  }
-
-  function advancedFilterCount() {
-    return (
-      (filters.side ? 1 : 0) +
-      filters.situations.size +
-      (filters.afterplant ? 1 : 0) +
-      filters.decidedPhases.size +
-      filters.players.size
-    );
   }
 
   function needsMetaFilters() {

@@ -60,7 +60,7 @@
               <span class="side-icon" data-icon="leaderboards"></span>
               <span class="side-label">Leaderboards</span>
             </a>
-            <a class="side-link" href="/train">
+            <a class="side-link" href="/replay-viewer" data-nav="replay-viewer">
               <span class="side-icon" data-icon="replay-viewer"></span>
               <span class="side-label">Replay Viewer</span>
             </a>
@@ -152,7 +152,7 @@
 
           <!-- Replays ----------------------------------------------------- -->
           <section class="view" data-view="replays">
-            <div class="view-pad" id="rp-library">
+            <div class="view-pad view-pad-fill" id="rp-library">
               <p class="rp-parser-warn" id="rp-parser" hidden></p>
               <div class="rp-browser">
                 <aside class="rp-filters" id="rp-filters"></aside>
@@ -160,7 +160,7 @@
               </div>
             </div>
 
-            <div class="view-pad rp-upload-page" id="rp-upload-page" hidden>
+            <div class="view-pad view-pad-fill rp-upload-page" id="rp-upload-page" hidden>
               <div class="rp-top">
                 <div class="rp-upload">
                   <button type="button" class="rp-drop" id="rp-drop">
@@ -191,28 +191,28 @@
               </div>
             </div>
 
-            <div class="view-pad rp-playlists-page" id="rp-playlists-page" hidden>
+            <div class="view-pad view-pad-fill rp-playlists-page" id="rp-playlists-page" hidden>
               <div class="rp-playlists-panel">
                 <h2 class="rp-playlists-title">Demo Playlists</h2>
                 <div class="rp-playlist-body" id="rp-pl-body"><p class="view-empty">Loading…</p></div>
               </div>
             </div>
 
-            <div class="view-pad rp-stats-page" id="rp-stats-page" hidden>
+            <div class="view-pad view-pad-fill rp-stats-page" id="rp-stats-page" hidden>
               <div class="rp-stats-panel">
                 <h2 class="rp-playlists-title">Database</h2>
                 <div id="rp-stats-body"></div>
               </div>
             </div>
 
-            <div class="view-pad rp-analytics-page" id="rp-analytics-page" hidden>
+            <div class="view-pad view-pad-fill rp-analytics-page" id="rp-analytics-page" hidden>
               <div class="rp-stats-panel">
                 <h2 class="rp-playlists-title">Pattern Finder</h2>
                 <div id="rp-analytics-body"></div>
               </div>
             </div>
 
-            <div class="view-pad rp-charts-page" id="rp-charts-page" hidden>
+            <div class="view-pad view-pad-fill rp-charts-page" id="rp-charts-page" hidden>
               <div class="rp-stats-panel">
                 <h2 class="rp-playlists-title">Charts</h2>
                 <div id="rp-charts-body"></div>
@@ -222,7 +222,7 @@
 
           <!-- Leaderboards ------------------------------------------------ -->
           <section class="view" data-view="leaderboards">
-            <div class="view-pad">
+            <div class="view-pad view-pad-fill">
               <div class="lb-head" id="lb-tabs">
                 <button type="button" class="seg-tab active" data-lb="elo">Ranked ELO</button>
                 <button type="button" class="seg-tab" data-lb="aim-rating">Aim Rating</button>
@@ -290,6 +290,13 @@
           <section class="view" data-view="routines">
             <div class="view-pad">
               <p class="view-empty">Routines are coming soon. Build custom practice sets and run them in order.</p>
+            </div>
+          </section>
+
+          <!-- Replay Viewer (aim-trainer profiles + last/best runs) -------- -->
+          <section class="view" data-view="replay-viewer">
+            <div class="view-pad">
+              <div id="rvw-root" class="rvw-root"></div>
             </div>
           </section>
         </main>

@@ -91,6 +91,8 @@ html {
 
 html,
 body {
+  height: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-body);
@@ -105,7 +107,9 @@ a {
 
 .site-shell {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
 }
 
 /* ---- Sidebar --------------------------------------------------------------- */
@@ -342,8 +346,11 @@ a {
 .site-main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 /* Per-page top section: title left, actions right. */
@@ -381,6 +388,7 @@ a {
   position: sticky;
   top: 0;
   z-index: 10;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -404,6 +412,15 @@ a {
 
 .page-body {
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+/* Tool pages own their scroll inside .view-pad-fill */
+.page-body:has(> .view.active .view-pad-fill:not([hidden])) {
+  overflow: hidden;
 }
 
 /* ---- Views ------------------------------------------------------------------ */
@@ -412,7 +429,10 @@ a {
   display: none;
 }
 .view.active {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
   animation: view-in 0.25s ease;
 }
 @keyframes view-in {
@@ -430,6 +450,20 @@ a {
   max-width: 1100px;
   margin: 0 auto;
   padding: 36px 28px 64px;
+}
+
+/* Full-bleed tool pages: use the whole main column, no centered max-width. */
+.view-pad-fill {
+  max-width: none;
+  width: 100%;
+  margin: 0;
+  padding: 16px 20px 20px;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 /* ---- Buttons (mirrors trainer .btn) ---------------------------------------- */
@@ -587,9 +621,15 @@ a {
 /* ---- Footer ----------------------------------------------------------------- */
 
 .site-footer {
+  flex-shrink: 0;
   border-top: 1px solid var(--border);
   background: #0c0c0e;
   padding: 48px 28px 24px;
+}
+
+/* Expansive tool pages use the full column — tuck the marketing footer away. */
+.site-shell:has(.view.active .view-pad-fill:not([hidden])) .site-footer {
+  display: none;
 }
 .foot-grid {
   max-width: 1100px;
@@ -902,6 +942,16 @@ a {
 .lb-body {
   overflow-x: auto;
 }
+
+.view-pad-fill .lb-head {
+  flex-shrink: 0;
+}
+
+.view-pad-fill .lb-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
 .lb-hint {
   padding: 24px 4px;
   text-align: center;
@@ -1014,6 +1064,100 @@ a {
 .profile-stats-table td.profile-rank {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* ---- Replay Viewer (aim profiles + last/best runs) ------------------------- */
+
+.rvw-root {
+  max-width: 820px;
+}
+
+.rvw-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.rvw-kicker {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rvw-name {
+  margin: 0 0 6px;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.rvw-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.rvw-section {
+  margin-bottom: 28px;
+}
+
+.rvw-section-title {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.rvw-section-hint {
+  margin: -4px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rvw-replays {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rvw-replay-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.rvw-replay-name {
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.rvw-replay-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.rvw-empty {
+  max-width: 420px;
+}
+
+.rvw-empty h2 {
+  margin: 0 0 10px;
+  font-size: 22px;
+}
+
+.rvw-empty .btn {
+  margin-top: 14px;
 }
 
 /* ---- Football view ------------------------------------------------------------- */
@@ -1285,6 +1429,10 @@ a {
   .view-pad {
     padding-left: 18px;
     padding-right: 18px;
+  }
+  .view-pad-fill {
+    padding-left: 14px;
+    padding-right: 14px;
   }
   .foot-grid {
     grid-template-columns: 1fr 1fr;

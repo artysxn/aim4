@@ -29,7 +29,7 @@ import { initTrainingView } from './trainingView.js';
 import { initLeaderboardsView } from './leaderboardsView.js';
 import { initFootballView } from './footballView.js';
 import { initReplaysView } from './replaysView.js';
-import { initProfileModal } from './profileModal.js';
+import { initReplayViewerView } from './replayViewerView.js';
 
 // ---- Legacy redirects -------------------------------------------------------
 // The game used to live at "/". Lobby invites (?lobby=) and replay shares
@@ -39,7 +39,7 @@ import { initProfileModal } from './profileModal.js';
 {
   const params = new URLSearchParams(window.location.search);
   const hash = window.location.hash || '';
-  if (params.has('lobby') || params.has('replay') || params.has('server')) {
+  if (params.has('lobby') || params.has('replay') || params.has('replayPath') || params.has('server')) {
     window.location.replace('/train' + window.location.search + hash);
   }
 }
@@ -261,6 +261,7 @@ const ROUTES = {
   uploads: { title: 'Uploads & Storage', path: '/uploads', shell: 'replays', page: 'upload' },
   training: { title: 'Gamemodes', path: '/training', shell: 'training' },
   leaderboards: { title: 'Leaderboards', path: '/leaderboards', shell: 'leaderboards' },
+  'replay-viewer': { title: 'Replay Viewer', path: '/replay-viewer', shell: 'replay-viewer' },
   football: { title: 'Football', path: '/football', shell: 'football' },
   tools: { title: 'Tools', path: '/tools', shell: 'tools' },
   routines: { title: 'Routines', path: '/routines', shell: 'routines' }
@@ -365,11 +366,19 @@ function openLeaderboards(mode) {
   setView('leaderboards', true, mode ? { mode } : null);
 }
 
-const { openProfile } = initProfileModal({ escapeHtml });
+function openProfile(userId, username = 'Player') {
+  if (!userId) return;
+  setView('replay-viewer', true, { user: userId, name: username });
+}
 
 viewControllers.training = initTrainingView({ escapeHtml, openLeaderboards });
 viewControllers.leaderboards = initLeaderboardsView({ auth, escapeHtml, openProfile });
 viewControllers.football = initFootballView({ auth, escapeHtml });
+viewControllers['replay-viewer'] = initReplayViewerView({
+  auth,
+  escapeHtml,
+  openSelf: () => setView('replay-viewer', true, {})
+});
 viewControllers.replays = initReplaysView({
   auth,
   escapeHtml,
@@ -385,8 +394,15 @@ viewControllers.replays = initReplaysView({
 document.querySelectorAll('[data-nav]').forEach((el) => {
   el.addEventListener('click', (e) => {
     e.preventDefault();
-    setView(el.dataset.nav, true);
+    // Sidebar clicks start a fresh route — don't carry ?user= / ?mode= from the previous page.
+    setView(el.dataset.nav, true, {});
   });
+});
+
+auth.onChange(() => {
+  if (activeShell === 'replay-viewer') {
+    viewControllers['replay-viewer']?.onShow?.(searchParams());
+  }
 });
 
 window.addEventListener('popstate', () => setView(routeFromPath(), false, searchParams()));
