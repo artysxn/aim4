@@ -150,13 +150,13 @@ export function aim4Rating({ rating, ratingFull, impact, swing }) {
 
 /**
  * Aim4 Opening Rating.
- * 1.00 + (OPKD/100 − Swing/8 + OPATT)
+ * 1.00 + (OPKD/100 + Swing/8 + OPATT)
  */
 export function aim4OpeningRating({ opkd, swing, opatt }) {
   const ok = Number.isFinite(opkd) ? opkd : 0;
   const sw = Number.isFinite(swing) ? swing : 0;
   const att = Number.isFinite(opatt) ? opatt : 0;
-  return 1 + ok / 100 - sw / 8 + att;
+  return 1 + ok / 100 + sw / 8 + att;
 }
 
 /**

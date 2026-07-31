@@ -292,7 +292,7 @@ function buildGrouped(state, facts) {
   };
 }
 
-const trim = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+const trim = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(2));
 
 function totalFacts(bin) {
   let n = 0;

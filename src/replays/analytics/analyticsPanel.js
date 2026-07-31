@@ -482,9 +482,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   }
 
   function statTips(agg) {
-    const f1 = (n) => (Number.isFinite(n) ? n.toFixed(1) : '—');
     const f2 = (n) => (Number.isFinite(n) ? n.toFixed(2) : '—');
-    const pct = (n) => (Number.isFinite(n) ? `${n.toFixed(1)}%` : '—');
+    const pct = (n) => (Number.isFinite(n) ? `${n.toFixed(2)}%` : '—');
     const n = agg.rounds || 0;
     return {
       Rating: tipLines([
@@ -492,7 +491,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         `KPR: ${f2(agg.kpr)}  (${agg.kills} kills / ${n} rounds)`,
         `DPR: ${f2(agg.dpr)}  (${agg.deaths} deaths / ${n} rounds)`,
         `Impact: ${f2(agg.impact)}`,
-        `ADR: ${f1(agg.adr)}`,
+        `ADR: ${f2(agg.adr)}`,
         `KAST: ${pct(agg.kast)}`
       ]),
       'K/D': tipLines([

@@ -20,12 +20,12 @@ const div = (a, b) => (b > 0 ? a / b : 0);
 /** @type {Record<string, (v: number) => string>} */
 export const FORMATS = {
   int: (v) => String(Math.round(v)),
-  num1: (v) => v.toFixed(1),
+  num1: (v) => v.toFixed(2),
   num2: (v) => v.toFixed(2),
   num3: (v) => v.toFixed(3),
-  pct: (v) => `${v.toFixed(1)}%`,
+  pct: (v) => `${v.toFixed(2)}%`,
   money: (v) => `$${Math.round(v).toLocaleString('en-US')}`,
-  sec: (v) => `${v.toFixed(1)}s`
+  sec: (v) => `${v.toFixed(2)}s`
 };
 
 export function formatValue(value, fmt) {
@@ -142,7 +142,7 @@ const PLAYER_METRICS = [
     group: 'Core',
     fmt: 'num2',
     custom: a4orFromFacts,
-    tip: '1.00 + OPKD/100 − Swing/8 + OPATT'
+    tip: '1.00 + OPKD/100 + Swing/8 + OPATT'
   },
   {
     key: 'impact',
@@ -1050,7 +1050,7 @@ export const SUBJECTS = [
     source: 'kill',
     id: (f) => `${f.file}:${f.order}`,
     name: (f) => `${f.playerName} killed ${f.victimName}`,
-    sub: (f) => `R${f.roundNo} at ${f.t === null ? '?' : `${f.t.toFixed(1)}s`}`
+    sub: (f) => `R${f.roundNo} at ${f.t === null ? '?' : `${f.t.toFixed(2)}s`}`
   }
 ];
 

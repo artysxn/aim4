@@ -12,11 +12,10 @@ import { MAP_CONTROL_BASE } from '../coach/mapControlBases.js';
 import { relativePossession } from '../coach/mapControlAdvantage.js';
 
 const f2 = (n) => (Number.isFinite(n) ? n.toFixed(2) : '—');
-const f1 = (n) => (Number.isFinite(n) ? n.toFixed(1) : '—');
-const pct = (n) => (Number.isFinite(n) ? `${n.toFixed(1)}%` : '—');
+const pct = (n) => (Number.isFinite(n) ? `${n.toFixed(2)}%` : '—');
 const int = (n) => (Number.isFinite(n) ? String(Math.round(n)) : '—');
 const signed = (n) =>
-  Number.isFinite(n) ? `${n > 0 ? '+' : ''}${n.toFixed(1)}` : '—';
+  Number.isFinite(n) ? `${n > 0 ? '+' : ''}${n.toFixed(2)}` : '—';
 
 /** Accuracy is blank rather than 0% when the demo predates hit counts. */
 const accCell = (p) => (p.shots > 0 ? pct(p.accuracy) : '—');
@@ -86,8 +85,8 @@ export const PLAYER_METRIC_COLUMNS = [
     tip: (p) =>
       tip([
         `Aim4 Opening Rating: ${f2(p.a4or)}`,
-        `1.00 + OPKD/100 ${signed((p.opkd || 0) / 100)} − Swing/8 ${
-          Number.isFinite(p.prwSwing) ? signed(-(p.prwSwing / 8)) : '—'
+        `1.00 + OPKD/100 ${signed((p.opkd || 0) / 100)} + Swing/8 ${
+          Number.isFinite(p.prwSwing) ? signed(p.prwSwing / 8) : '—'
         } + OPATT ${f2(p.opatt)}`
       ])
   },
@@ -117,11 +116,11 @@ export const PLAYER_METRIC_COLUMNS = [
     key: 'adr',
     label: 'ADR',
     get: (p) => p.adr,
-    cell: (p) => f1(p.adr),
+    cell: (p) => f2(p.adr),
     tip: (p) =>
       tip([
-        `ADR in rounds won: ${f1(p.adrWon)}`,
-        `ADR in rounds lost: ${f1(p.adrLost)}`,
+        `ADR in rounds won: ${f2(p.adrWon)}`,
+        `ADR in rounds lost: ${f2(p.adrLost)}`,
         `Total damage: ${int(p.damage)}`
       ])
   },
