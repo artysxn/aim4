@@ -48,6 +48,13 @@ const SITE_VIEW_PATHS = new Set([
   '/leaderboards',
   '/football',
   '/routines',
+  '/demos',
+  '/playlists',
+  '/database',
+  '/charts',
+  '/patterns',
+  '/uploads',
+  // Legacy bookmarks still land on the SPA shell (client redirects).
   '/replays',
   '/replays/playlists',
   '/replays/upload',

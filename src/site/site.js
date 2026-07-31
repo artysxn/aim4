@@ -247,123 +247,117 @@ auth.onChange(() => {
 setTimeout(stripAuthFragment, 4000);
 
 // ---- View router ------------------------------------------------------------
-const VIEWS = {
-  home: { title: 'Home', path: '/' },
-  training: { title: 'Gamemodes', path: '/training' },
-  replays: { title: 'Demo Manager', path: '/replays' },
-  leaderboards: { title: 'Leaderboards', path: '/leaderboards' },
-  football: { title: 'Football', path: '/football' },
-  tools: { title: 'Tools', path: '/tools' },
-  routines: { title: 'Routines', path: '/routines' }
+// Each sidebar page owns a top-level path. Analytics tools share one shell
+// panel (`data-view="replays"`) but are routed as separate URLs so switching
+// never re-reads the previous pathname.
+
+const ROUTES = {
+  home: { title: 'Home', path: '/', shell: 'home' },
+  demos: { title: 'Demo Manager', path: '/demos', shell: 'replays', page: 'library' },
+  playlists: { title: 'Demo Playlists', path: '/playlists', shell: 'replays', page: 'playlists' },
+  database: { title: 'Database', path: '/database', shell: 'replays', page: 'stats' },
+  charts: { title: 'Charts', path: '/charts', shell: 'replays', page: 'charts' },
+  patterns: { title: 'Pattern Finder', path: '/patterns', shell: 'replays', page: 'analytics' },
+  uploads: { title: 'Uploads & Storage', path: '/uploads', shell: 'replays', page: 'upload' },
+  training: { title: 'Gamemodes', path: '/training', shell: 'training' },
+  leaderboards: { title: 'Leaderboards', path: '/leaderboards', shell: 'leaderboards' },
+  football: { title: 'Football', path: '/football', shell: 'football' },
+  tools: { title: 'Tools', path: '/tools', shell: 'tools' },
+  routines: { title: 'Routines', path: '/routines', shell: 'routines' }
 };
 
-const RP_SUBPAGES = {
-  library: { title: 'Demo Manager', path: '/replays', flag: null },
-  playlists: { title: 'Demo Playlists', path: '/replays/playlists', flag: 'playlists' },
-  stats: { title: 'Database', path: '/replays/stats', flag: 'stats' },
-  analytics: { title: 'Pattern Finder', path: '/replays/analytics', flag: 'analytics' },
-  charts: { title: 'Charts', path: '/replays/charts', flag: 'charts' },
-  upload: { title: 'Uploads & Storage', path: '/replays/upload', flag: 'upload' }
+/** Old /replays/* bookmarks → new top-level paths. */
+const LEGACY_PATHS = {
+  '/replays': '/demos',
+  '/replays/playlists': '/playlists',
+  '/replays/stats': '/database',
+  '/replays/charts': '/charts',
+  '/replays/analytics': '/patterns',
+  '/replays/upload': '/uploads'
 };
 
-const PATH_TO_VIEW = Object.fromEntries(
-  Object.entries(VIEWS).map(([name, v]) => [v.path, name])
+const PATH_TO_ROUTE = Object.fromEntries(
+  Object.entries(ROUTES).map(([name, r]) => [r.path, name])
 );
 
-function viewFromPath(pathname = window.location.pathname) {
-  const clean = pathname.replace(/\/+$/, '') || '/';
-  if (clean.startsWith('/replays/')) return 'replays';
-  return PATH_TO_VIEW[clean] || 'home';
+const PAGE_TO_ROUTE = Object.fromEntries(
+  Object.entries(ROUTES)
+    .filter(([, r]) => r.page)
+    .map(([name, r]) => [r.page, name])
+);
+
+function cleanPath(pathname = window.location.pathname) {
+  return pathname.replace(/\/+$/, '') || '/';
 }
 
-function rpFromParams(params = {}, pathname = window.location.pathname) {
-  const clean = pathname.replace(/\/+$/, '') || '/';
-  if (params.playlists === '1' || params.playlists === true || clean === '/replays/playlists') {
-    return 'playlists';
+function routeFromPath(pathname = window.location.pathname) {
+  const clean = cleanPath(pathname);
+  if (LEGACY_PATHS[clean]) {
+    return PATH_TO_ROUTE[LEGACY_PATHS[clean]] || 'home';
   }
-  if (params.upload === '1' || params.upload === true || clean === '/replays/upload') {
-    return 'upload';
-  }
-  if (params.stats === '1' || params.stats === true || clean === '/replays/stats') {
-    return 'stats';
-  }
-  if (params.analytics === '1' || params.analytics === true || clean === '/replays/analytics') {
-    return 'analytics';
-  }
-  if (params.charts === '1' || params.charts === true || clean === '/replays/charts') {
-    return 'charts';
-  }
-  return 'library';
+  return PATH_TO_ROUTE[clean] || 'home';
 }
 
-function paramsFromPath(pathname = window.location.pathname) {
-  const clean = pathname.replace(/\/+$/, '') || '/';
-  const fromSearch = Object.fromEntries(new URLSearchParams(window.location.search));
-  if (clean === '/replays/playlists') return { ...fromSearch, playlists: '1' };
-  if (clean === '/replays/upload') return { ...fromSearch, upload: '1' };
-  if (clean === '/replays/stats') return { ...fromSearch, stats: '1' };
-  if (clean === '/replays/analytics') return { ...fromSearch, analytics: '1' };
-  if (clean === '/replays/charts') return { ...fromSearch, charts: '1' };
-  return fromSearch;
+function searchParams() {
+  return Object.fromEntries(new URLSearchParams(window.location.search));
 }
 
-function paramsForRp(rp) {
-  const flag = RP_SUBPAGES[rp]?.flag;
-  return flag ? { [flag]: '1' } : {};
+/** Rewrite legacy /replays/* URLs once on load (keeps query string). */
+{
+  const clean = cleanPath();
+  const next = LEGACY_PATHS[clean];
+  if (next) {
+    window.history.replaceState(null, '', next + window.location.search + window.location.hash);
+  }
 }
 
-let activeView = null;
-let activeRp = 'library';
+let activeRoute = null;
+let activeShell = null;
 const viewControllers = {};
 
-function syncSideNav(view, rp = 'library') {
+function syncSideNav(routeName) {
   document.querySelectorAll('.side-link[data-nav]').forEach((el) => {
-    const nav = el.dataset.nav;
-    if (nav === 'replays' && el.dataset.rp) {
-      el.classList.toggle('active', view === 'replays' && el.dataset.rp === rp);
-      return;
-    }
-    el.classList.toggle('active', nav === view && !el.dataset.rp);
+    el.classList.toggle('active', el.dataset.nav === routeName);
   });
 }
 
+/**
+ * @param {string} name  ROUTES key
+ * @param {boolean} [push]
+ * @param {object|null} [params]  extra query params (round, mode, …)
+ */
 function setView(name, push = false, params = null) {
-  const view = VIEWS[name] ? name : 'home';
-  const resolvedParams = params || paramsFromPath();
-  const rp = view === 'replays' ? rpFromParams(resolvedParams) : 'library';
-  activeRp = rp;
+  const routeName = ROUTES[name] ? name : 'home';
+  const route = ROUTES[routeName];
+  const shell = route.shell;
+  const resolvedParams = { ...(params || searchParams()) };
+  if (route.page) resolvedParams.page = route.page;
+  else delete resolvedParams.page;
 
   document.querySelectorAll('.view').forEach((el) => {
-    el.classList.toggle('active', el.dataset.view === view);
+    el.classList.toggle('active', el.dataset.view === shell);
   });
-  syncSideNav(view, rp);
+  syncSideNav(routeName);
 
-  const title =
-    view === 'replays' ? RP_SUBPAGES[rp]?.title || VIEWS.replays.title : VIEWS[view].title;
-  document.getElementById('page-title').textContent = title;
-  document.title = view === 'home' ? 'AIM4.io' : `AIM4.io - ${title}`;
+  document.getElementById('page-title').textContent = route.title;
+  document.title = routeName === 'home' ? 'AIM4.io' : `AIM4.io - ${route.title}`;
 
   if (push) {
-    const pathParams = { ...resolvedParams };
-    delete pathParams.playlists;
-    delete pathParams.upload;
-    delete pathParams.stats;
-    delete pathParams.analytics;
-    delete pathParams.charts;
-    const search = Object.keys(pathParams).length
-      ? `?${new URLSearchParams(pathParams)}`
-      : '';
-    const base = view === 'replays' ? RP_SUBPAGES[rp].path : VIEWS[view].path;
-    const target = base + search;
+    const q = { ...resolvedParams };
+    delete q.page;
+    const search = Object.keys(q).length ? `?${new URLSearchParams(q)}` : '';
+    const target = route.path + search;
     if (window.location.pathname + window.location.search !== target) {
-      window.history.pushState({ view, rp }, '', target);
+      window.history.pushState({ route: routeName }, '', target);
     }
   }
-  if (activeView && activeView !== view) {
-    viewControllers[activeView]?.onHide?.();
+
+  if (activeShell && activeShell !== shell) {
+    viewControllers[activeShell]?.onHide?.();
   }
-  activeView = view;
-  viewControllers[view]?.onShow?.(resolvedParams);
+  activeRoute = routeName;
+  activeShell = shell;
+  viewControllers[shell]?.onShow?.(resolvedParams);
   window.scrollTo({ top: 0 });
 }
 
@@ -379,29 +373,22 @@ viewControllers.football = initFootballView({ auth, escapeHtml });
 viewControllers.replays = initReplaysView({
   auth,
   escapeHtml,
-  onSubpage(rp) {
-    activeRp = rp;
-    syncSideNav('replays', rp);
-    const title = RP_SUBPAGES[rp]?.title || VIEWS.replays.title;
-    document.getElementById('page-title').textContent = title;
-    document.title = `AIM4.io - ${title}`;
+  pathForPage(page) {
+    return ROUTES[PAGE_TO_ROUTE[page]]?.path || '/demos';
+  },
+  onNavigate(page, params = {}) {
+    const routeName = PAGE_TO_ROUTE[page] || 'demos';
+    setView(routeName, true, params);
   }
 });
 
 document.querySelectorAll('[data-nav]').forEach((el) => {
   el.addEventListener('click', (e) => {
     e.preventDefault();
-    const nav = el.dataset.nav;
-    if (nav === 'replays' && el.dataset.rp) {
-      setView('replays', true, paramsForRp(el.dataset.rp));
-      return;
-    }
-    setView(nav, true);
+    setView(el.dataset.nav, true);
   });
 });
 
-window.addEventListener('popstate', () =>
-  setView(viewFromPath(), false, paramsFromPath())
-);
+window.addEventListener('popstate', () => setView(routeFromPath(), false, searchParams()));
 
-setView(viewFromPath(), false, paramsFromPath());
+setView(routeFromPath(), false, searchParams());

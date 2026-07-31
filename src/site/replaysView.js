@@ -49,7 +49,7 @@ function svgIcon(raw) {
   return raw.replace('<svg', '<svg class="rp-mark-svg" aria-hidden="true"');
 }
 
-export function initReplaysView({ escapeHtml, onSubpage = null }) {
+export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = null }) {
   const uploadInput = document.getElementById('rp-file');
   const dropEl = document.getElementById('rp-drop');
   const quotaEl = document.getElementById('rp-quota');
@@ -70,7 +70,20 @@ export function initReplaysView({ escapeHtml, onSubpage = null }) {
   const chartsPageEl = document.getElementById('rp-charts-page');
   const chartsBodyEl = document.getElementById('rp-charts-body');
 
-  /** Page size for the /replays library browser (not stats/charts/analytics). */
+  const PAGE_PATHS = {
+    library: '/demos',
+    playlists: '/playlists',
+    stats: '/database',
+    analytics: '/patterns',
+    charts: '/charts',
+    upload: '/uploads'
+  };
+
+  function pagePath(page) {
+    return pathForPage?.(page) || PAGE_PATHS[page] || '/demos';
+  }
+
+  /** Page size for the /demos library browser (not stats/charts/analytics). */
   const LIBRARY_PAGE = 50;
   /** How many stored demos the library page currently requests (grows via Load more). */
   let libraryLimit = LIBRARY_PAGE;
@@ -2164,22 +2177,16 @@ export function initReplaysView({ escapeHtml, onSubpage = null }) {
     if (statsPageEl) statsPageEl.hidden = next !== 'stats';
     if (analyticsPageEl) analyticsPageEl.hidden = next !== 'analytics';
     if (chartsPageEl) chartsPageEl.hidden = next !== 'charts';
-    onSubpage?.(next);
 
-    const path =
-      next === 'upload'
-        ? '/replays/upload'
-        : next === 'playlists'
-          ? '/replays/playlists'
-          : next === 'stats'
-            ? '/replays/stats'
-            : next === 'analytics'
-              ? '/replays/analytics'
-              : next === 'charts'
-                ? '/replays/charts'
-                : '/replays';
-    if (push && window.location.pathname.replace(/\/+$/, '') !== path) {
-      window.history.pushState({ view: 'replays', rp: next }, '', path);
+    if (push) {
+      if (onNavigate) {
+        onNavigate(next);
+        return;
+      }
+      const path = pagePath(next);
+      if (window.location.pathname.replace(/\/+$/, '') !== path) {
+        window.history.pushState({ page: next }, '', path);
+      }
     }
 
     if (next === 'playlists') {
@@ -2286,13 +2293,13 @@ export function initReplaysView({ escapeHtml, onSubpage = null }) {
 
   // ---- deep links ---------------------------------------------------------
 
-  /** /replays?round=<name> opens straight into that round. */
+  /** /demos?round=<name> opens straight into that round. */
   async function openSharedRound(file) {
     if (!file) return;
     return openSharedRounds([file]);
   }
 
-  /** /replays?rounds=a,b,c opens those rounds in Timeline. */
+  /** /demos?rounds=a,b,c opens those rounds in Timeline. */
   async function openSharedRounds(files) {
     const list = [...new Set((files || []).map((f) => String(f || '').trim()).filter(Boolean))];
     if (!list.length) return;
@@ -2381,29 +2388,17 @@ export function initReplaysView({ escapeHtml, onSubpage = null }) {
   return {
     onShow(params = {}) {
       visible = true;
-      const path = window.location.pathname.replace(/\/+$/, '');
-      const wantUpload =
-        params.upload === '1' || params.upload === true || path === '/replays/upload';
-      const wantPlaylists =
-        params.playlists === '1' ||
-        params.playlists === true ||
-        path === '/replays/playlists';
-      const wantStats = params.stats === '1' || params.stats === true || path === '/replays/stats';
-      const wantAnalytics =
-        params.analytics === '1' || params.analytics === true || path === '/replays/analytics';
-      const wantCharts =
-        params.charts === '1' || params.charts === true || path === '/replays/charts';
-      const page = wantUpload
-        ? 'upload'
-        : wantPlaylists
-          ? 'playlists'
-          : wantStats
-            ? 'stats'
-            : wantAnalytics
-              ? 'analytics'
-              : wantCharts
-                ? 'charts'
-                : 'library';
+      // Prefer the explicit page from the router. Never re-derive from the
+      // previous pathname — that is what stuck Playlists/Database/Charts.
+      const page =
+        params.page === 'upload' ||
+        params.page === 'playlists' ||
+        params.page === 'stats' ||
+        params.page === 'analytics' ||
+        params.page === 'charts' ||
+        params.page === 'library'
+          ? params.page
+          : 'library';
       setSubpage(page, { push: false });
       if (
         page === 'playlists' ||
@@ -2420,7 +2415,7 @@ export function initReplaysView({ escapeHtml, onSubpage = null }) {
         resumePendingUploads().catch(() => {});
       }
       // Only on the first arrival: a viewer close rewrites the URL back to
-      // /replays, and re-entering the view must not reopen what was closed.
+      // /demos, and re-entering the view must not reopen what was closed.
       if (page === 'library') {
         if (params.rounds) {
           const key = `rounds:${params.rounds}`;

@@ -15,8 +15,8 @@ import { createAnalyzerViewer } from './analyzerViewer.js';
  */
 function syncUrl(round) {
   const target = round?.file
-    ? `/replays?round=${encodeURIComponent(round.file)}`
-    : '/replays';
+    ? `/demos?round=${encodeURIComponent(round.file)}`
+    : '/demos';
   if (window.location.pathname + window.location.search === target) return;
   try {
     window.history.replaceState(window.history.state, '', target);

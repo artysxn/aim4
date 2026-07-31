@@ -1499,7 +1499,7 @@ export function createAnalyzerViewer({
 
   function openRoundTab(file) {
     if (!file) return;
-    window.open(`/replays?round=${encodeURIComponent(file)}`, '_blank', 'noopener');
+    window.open(`/demos?round=${encodeURIComponent(file)}`, '_blank', 'noopener');
   }
 
   /** Open one or more rounds in Timeline in a new browser tab. */
@@ -1511,7 +1511,7 @@ export function createAnalyzerViewer({
       return;
     }
     const q = list.map(encodeURIComponent).join(',');
-    window.open(`/replays?rounds=${q}`, '_blank', 'noopener');
+    window.open(`/demos?rounds=${q}`, '_blank', 'noopener');
   }
 
   function setMenuHover(file) {
