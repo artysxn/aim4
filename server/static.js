@@ -47,6 +47,7 @@ const SITE_VIEW_PATHS = new Set([
   '/training',
   '/leaderboards',
   '/football',
+  '/routines',
   '/replays',
   '/replays/playlists',
   '/replays/upload',

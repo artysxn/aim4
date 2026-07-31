@@ -2,18 +2,27 @@
 // site.js
 // Behavior for the aim4.io site shell: legacy-link redirects into the trainer,
 // collapsible sidebar, account (sign in / register), and the view router for
-// the site menus (Home, Training, Leaderboards, Football, Tools). The trainer
-// itself lives at /train (train.html); gamemode deep links launch it directly.
+// Analytics (demo tools) and Training. The trainer itself lives at /train
+// (train.html); gamemode deep links launch it directly.
 // ---------------------------------------------------------------------------
 
 // site.css is linked from the HTML entries directly (no JS import: Vite
 // treats a dual link+import reference as two different modules in dev).
-import trainingIcon from '../icons/webmode_training.svg?raw';
+import accountIcon from '../icons/icon_account.svg?raw';
 import footballIcon from '../icons/webmode_football.svg?raw';
 import toolsIcon from '../icons/webmode_tools.svg?raw';
+import trainingIcon from '../icons/webmode_training.svg?raw';
 import replaysIcon from '../icons/webmode_replays.svg?raw';
-import accountIcon from '../icons/icon_account.svg?raw';
-import leaderboardsIcon from '../icons/icon_leaderboards.svg?raw';
+import sideDemoManager from '../icons/sideicons/sideicon_replays.svg?raw';
+import sidePlaylists from '../icons/sideicons/sideicon_playlists.svg?raw';
+import sideDatabase from '../icons/sideicons/sideicon_database.svg?raw';
+import sideCharts from '../icons/sideicons/sideicon_charts.svg?raw';
+import sideInspector from '../icons/sideicons/sideicon_inspector.svg?raw';
+import sideUpload from '../icons/sideicons/sideicon_upload.svg?raw';
+import sideGamemodes from '../icons/sideicons/sideicon_gamemodes.svg?raw';
+import sideLeaderboards from '../icons/sideicons/sideicon_leaderboards.svg?raw';
+import sideReplayViewer from '../icons/sideicons/sideicon_replayviewer.svg?raw';
+import sideRoutines from '../icons/sideicons/sideicon_routines.svg?raw';
 import { SettingsManager } from '../core/SettingsManager.js';
 import { AuthManager } from '../core/AuthManager.js';
 import { initTrainingView } from './trainingView.js';
@@ -44,12 +53,22 @@ function escapeHtml(s) {
 // ---- Icons -----------------------------------------------------------------
 // Inlined so CSS can tint them (fill: currentColor / var(--accent)).
 const ICONS = {
-  training: trainingIcon,
+  account: accountIcon,
   football: footballIcon,
   tools: toolsIcon,
+  training: trainingIcon,
   replays: replaysIcon,
-  account: accountIcon,
-  leaderboards: leaderboardsIcon
+  // Sidebar (sideicon_*.svg)
+  'demo-manager': sideDemoManager,
+  'demo-playlists': sidePlaylists,
+  database: sideDatabase,
+  charts: sideCharts,
+  'pattern-inspector': sideInspector,
+  uploads: sideUpload,
+  gamemodes: sideGamemodes,
+  leaderboards: sideLeaderboards,
+  'replay-viewer': sideReplayViewer,
+  routines: sideRoutines
 };
 
 document.querySelectorAll('[data-icon]').forEach((el) => {
@@ -230,11 +249,21 @@ setTimeout(stripAuthFragment, 4000);
 // ---- View router ------------------------------------------------------------
 const VIEWS = {
   home: { title: 'Home', path: '/' },
-  training: { title: 'Training', path: '/training' },
-  replays: { title: 'Replays', path: '/replays' },
+  training: { title: 'Gamemodes', path: '/training' },
+  replays: { title: 'Demo Manager', path: '/replays' },
   leaderboards: { title: 'Leaderboards', path: '/leaderboards' },
   football: { title: 'Football', path: '/football' },
-  tools: { title: 'Tools', path: '/tools' }
+  tools: { title: 'Tools', path: '/tools' },
+  routines: { title: 'Routines', path: '/routines' }
+};
+
+const RP_SUBPAGES = {
+  library: { title: 'Demo Manager', path: '/replays', flag: null },
+  playlists: { title: 'Demo Playlists', path: '/replays/playlists', flag: 'playlists' },
+  stats: { title: 'Database', path: '/replays/stats', flag: 'stats' },
+  analytics: { title: 'Pattern Finder', path: '/replays/analytics', flag: 'analytics' },
+  charts: { title: 'Charts', path: '/replays/charts', flag: 'charts' },
+  upload: { title: 'Uploads & Storage', path: '/replays/upload', flag: 'upload' }
 };
 
 const PATH_TO_VIEW = Object.fromEntries(
@@ -245,6 +274,26 @@ function viewFromPath(pathname = window.location.pathname) {
   const clean = pathname.replace(/\/+$/, '') || '/';
   if (clean.startsWith('/replays/')) return 'replays';
   return PATH_TO_VIEW[clean] || 'home';
+}
+
+function rpFromParams(params = {}, pathname = window.location.pathname) {
+  const clean = pathname.replace(/\/+$/, '') || '/';
+  if (params.playlists === '1' || params.playlists === true || clean === '/replays/playlists') {
+    return 'playlists';
+  }
+  if (params.upload === '1' || params.upload === true || clean === '/replays/upload') {
+    return 'upload';
+  }
+  if (params.stats === '1' || params.stats === true || clean === '/replays/stats') {
+    return 'stats';
+  }
+  if (params.analytics === '1' || params.analytics === true || clean === '/replays/analytics') {
+    return 'analytics';
+  }
+  if (params.charts === '1' || params.charts === true || clean === '/replays/charts') {
+    return 'charts';
+  }
+  return 'library';
 }
 
 function paramsFromPath(pathname = window.location.pathname) {
@@ -258,28 +307,44 @@ function paramsFromPath(pathname = window.location.pathname) {
   return fromSearch;
 }
 
+function paramsForRp(rp) {
+  const flag = RP_SUBPAGES[rp]?.flag;
+  return flag ? { [flag]: '1' } : {};
+}
+
 let activeView = null;
+let activeRp = 'library';
 const viewControllers = {};
+
+function syncSideNav(view, rp = 'library') {
+  document.querySelectorAll('.side-link[data-nav]').forEach((el) => {
+    const nav = el.dataset.nav;
+    if (nav === 'replays' && el.dataset.rp) {
+      el.classList.toggle('active', view === 'replays' && el.dataset.rp === rp);
+      return;
+    }
+    el.classList.toggle('active', nav === view && !el.dataset.rp);
+  });
+}
 
 function setView(name, push = false, params = null) {
   const view = VIEWS[name] ? name : 'home';
+  const resolvedParams = params || paramsFromPath();
+  const rp = view === 'replays' ? rpFromParams(resolvedParams) : 'library';
+  activeRp = rp;
+
   document.querySelectorAll('.view').forEach((el) => {
     el.classList.toggle('active', el.dataset.view === view);
   });
-  document.querySelectorAll('[data-nav]').forEach((el) => {
-    if (el.classList.contains('side-link')) {
-      el.classList.toggle('active', el.dataset.nav === view);
-    }
-  });
-  document.getElementById('page-title').textContent = VIEWS[view].title;
-  document.title = view === 'home' ? 'AIM4.io' : `AIM4.io - ${VIEWS[view].title}`;
+  syncSideNav(view, rp);
+
+  const title =
+    view === 'replays' ? RP_SUBPAGES[rp]?.title || VIEWS.replays.title : VIEWS[view].title;
+  document.getElementById('page-title').textContent = title;
+  document.title = view === 'home' ? 'AIM4.io' : `AIM4.io - ${title}`;
+
   if (push) {
-    const pathParams = { ...(params || {}) };
-    const onPlaylists = pathParams.playlists === '1' || pathParams.playlists === true;
-    const onUpload = pathParams.upload === '1' || pathParams.upload === true;
-    const onStats = pathParams.stats === '1' || pathParams.stats === true;
-    const onAnalytics = pathParams.analytics === '1' || pathParams.analytics === true;
-    const onCharts = pathParams.charts === '1' || pathParams.charts === true;
+    const pathParams = { ...resolvedParams };
     delete pathParams.playlists;
     delete pathParams.upload;
     delete pathParams.stats;
@@ -288,27 +353,17 @@ function setView(name, push = false, params = null) {
     const search = Object.keys(pathParams).length
       ? `?${new URLSearchParams(pathParams)}`
       : '';
-    const base = onPlaylists
-      ? '/replays/playlists'
-      : onUpload
-        ? '/replays/upload'
-        : onStats
-          ? '/replays/stats'
-          : onAnalytics
-            ? '/replays/analytics'
-            : onCharts
-              ? '/replays/charts'
-              : VIEWS[view].path;
+    const base = view === 'replays' ? RP_SUBPAGES[rp].path : VIEWS[view].path;
     const target = base + search;
     if (window.location.pathname + window.location.search !== target) {
-      window.history.pushState({ view }, '', target);
+      window.history.pushState({ view, rp }, '', target);
     }
   }
   if (activeView && activeView !== view) {
     viewControllers[activeView]?.onHide?.();
   }
   activeView = view;
-  viewControllers[view]?.onShow?.(params || paramsFromPath());
+  viewControllers[view]?.onShow?.(resolvedParams);
   window.scrollTo({ top: 0 });
 }
 
@@ -321,12 +376,27 @@ const { openProfile } = initProfileModal({ escapeHtml });
 viewControllers.training = initTrainingView({ escapeHtml, openLeaderboards });
 viewControllers.leaderboards = initLeaderboardsView({ auth, escapeHtml, openProfile });
 viewControllers.football = initFootballView({ auth, escapeHtml });
-viewControllers.replays = initReplaysView({ auth, escapeHtml });
+viewControllers.replays = initReplaysView({
+  auth,
+  escapeHtml,
+  onSubpage(rp) {
+    activeRp = rp;
+    syncSideNav('replays', rp);
+    const title = RP_SUBPAGES[rp]?.title || VIEWS.replays.title;
+    document.getElementById('page-title').textContent = title;
+    document.title = `AIM4.io - ${title}`;
+  }
+});
 
 document.querySelectorAll('[data-nav]').forEach((el) => {
   el.addEventListener('click', (e) => {
     e.preventDefault();
-    setView(el.dataset.nav, true);
+    const nav = el.dataset.nav;
+    if (nav === 'replays' && el.dataset.rp) {
+      setView('replays', true, paramsForRp(el.dataset.rp));
+      return;
+    }
+    setView(nav, true);
   });
 });
 

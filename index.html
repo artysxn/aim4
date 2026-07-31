@@ -20,26 +20,55 @@
         </div>
 
         <nav class="side-nav">
-          <a class="side-link" href="/training" data-nav="training">
-            <span class="side-icon" data-icon="training"></span>
-            <span class="side-label">Training</span>
-          </a>
-          <a class="side-link" href="/football" data-nav="football">
-            <span class="side-icon" data-icon="football"></span>
-            <span class="side-label">Football</span>
-          </a>
-          <a class="side-link" href="/replays" data-nav="replays">
-            <span class="side-icon" data-icon="replays"></span>
-            <span class="side-label">Replays</span>
-          </a>
-          <a class="side-link" href="/leaderboards" data-nav="leaderboards">
-            <span class="side-icon" data-icon="leaderboards"></span>
-            <span class="side-label">Leaderboards</span>
-          </a>
-          <a class="side-link" href="/tools" data-nav="tools">
-            <span class="side-icon" data-icon="tools"></span>
-            <span class="side-label">Tools</span>
-          </a>
+          <div class="side-cat">
+            <span class="side-cat-label">Analytics</span>
+            <a class="side-link" href="/replays" data-nav="replays" data-rp="library">
+              <span class="side-icon" data-icon="demo-manager"></span>
+              <span class="side-label">Demo Manager</span>
+            </a>
+            <a class="side-link" href="/replays/playlists" data-nav="replays" data-rp="playlists">
+              <span class="side-icon" data-icon="demo-playlists"></span>
+              <span class="side-label">Demo Playlists</span>
+            </a>
+            <a class="side-link" href="/replays/stats" data-nav="replays" data-rp="stats">
+              <span class="side-icon" data-icon="database"></span>
+              <span class="side-label">Database</span>
+            </a>
+            <a class="side-link" href="/replays/charts" data-nav="replays" data-rp="charts">
+              <span class="side-icon" data-icon="charts"></span>
+              <span class="side-label">Charts</span>
+            </a>
+            <a class="side-link" href="/replays/analytics" data-nav="replays" data-rp="analytics">
+              <span class="side-icon" data-icon="pattern-inspector"></span>
+              <span class="side-label">Pattern Finder</span>
+            </a>
+            <a class="side-link" href="/replays/upload" data-nav="replays" data-rp="upload">
+              <span class="side-icon" data-icon="uploads"></span>
+              <span class="side-label">Uploads &amp; Storage</span>
+            </a>
+          </div>
+
+          <div class="side-divider"></div>
+
+          <div class="side-cat">
+            <span class="side-cat-label">Training</span>
+            <a class="side-link" href="/training" data-nav="training">
+              <span class="side-icon" data-icon="gamemodes"></span>
+              <span class="side-label">Gamemodes</span>
+            </a>
+            <a class="side-link" href="/leaderboards" data-nav="leaderboards">
+              <span class="side-icon" data-icon="leaderboards"></span>
+              <span class="side-label">Leaderboards</span>
+            </a>
+            <a class="side-link" href="/train">
+              <span class="side-icon" data-icon="replay-viewer"></span>
+              <span class="side-label">Replay Viewer</span>
+            </a>
+            <a class="side-link" href="/routines" data-nav="routines">
+              <span class="side-icon" data-icon="routines"></span>
+              <span class="side-label">Routines</span>
+            </a>
+          </div>
 
           <div class="side-divider"></div>
 
@@ -65,14 +94,6 @@
       <div class="site-main">
         <header class="page-head">
           <h1 class="page-title" id="page-title">Home</h1>
-          <div class="page-head-actions" id="rp-head-actions" hidden>
-            <button type="button" class="rp-text-btn" id="rp-upload-btn">Upload</button>
-            <button type="button" class="rp-text-btn" id="rp-playlists-btn">Playlists</button>
-            <button type="button" class="rp-text-btn" id="rp-stats-btn">Statistics</button>
-            <button type="button" class="rp-text-btn" id="rp-analytics-btn">Analytics</button>
-            <button type="button" class="rp-text-btn" id="rp-charts-btn">Charts</button>
-            <button type="button" class="rp-text-btn" id="rp-library-btn">Replays</button>
-          </div>
         </header>
 
         <main class="page-body">
@@ -95,16 +116,16 @@
               <h3 class="explore-title">Explore AIM4.io</h3>
               <div class="site-cards">
                 <a class="site-card" href="/training" data-nav="training">
-                  <span class="card-icon" data-icon="training"></span>
-                  <span class="card-title">Training</span>
+                  <span class="card-icon" data-icon="gamemodes"></span>
+                  <span class="card-title">Gamemodes</span>
                 </a>
                 <a class="site-card" href="/football" data-nav="football">
                   <span class="card-icon" data-icon="football"></span>
                   <span class="card-title">Football</span>
                 </a>
-                <a class="site-card" href="/replays" data-nav="replays">
-                  <span class="card-icon" data-icon="replays"></span>
-                  <span class="card-title">Replays</span>
+                <a class="site-card" href="/replays" data-nav="replays" data-rp="library">
+                  <span class="card-icon" data-icon="demo-manager"></span>
+                  <span class="card-title">Demo Manager</span>
                 </a>
                 <a class="site-card" href="/leaderboards" data-nav="leaderboards">
                   <span class="card-icon" data-icon="leaderboards"></span>
@@ -172,21 +193,21 @@
 
             <div class="view-pad rp-playlists-page" id="rp-playlists-page" hidden>
               <div class="rp-playlists-panel">
-                <h2 class="rp-playlists-title">Playlists</h2>
+                <h2 class="rp-playlists-title">Demo Playlists</h2>
                 <div class="rp-playlist-body" id="rp-pl-body"><p class="view-empty">Loading…</p></div>
               </div>
             </div>
 
             <div class="view-pad rp-stats-page" id="rp-stats-page" hidden>
               <div class="rp-stats-panel">
-                <h2 class="rp-playlists-title">Statistics</h2>
+                <h2 class="rp-playlists-title">Database</h2>
                 <div id="rp-stats-body"></div>
               </div>
             </div>
 
             <div class="view-pad rp-analytics-page" id="rp-analytics-page" hidden>
               <div class="rp-stats-panel">
-                <h2 class="rp-playlists-title">Analytics</h2>
+                <h2 class="rp-playlists-title">Pattern Finder</h2>
                 <div id="rp-analytics-body"></div>
               </div>
             </div>
@@ -264,6 +285,13 @@
               </div>
             </div>
           </section>
+
+          <!-- Routines --------------------------------------------------- -->
+          <section class="view" data-view="routines">
+            <div class="view-pad">
+              <p class="view-empty">Routines are coming soon. Build custom practice sets and run them in order.</p>
+            </div>
+          </section>
         </main>
 
         <!-- Footer ------------------------------------------------------- -->
@@ -278,7 +306,8 @@
               <a href="/train">Trainer</a>
               <a href="/training" data-nav="training">Gamemodes</a>
               <a href="/leaderboards" data-nav="leaderboards">Leaderboards</a>
-              <a href="/replays" data-nav="replays">Replays</a>
+              <a href="/replays" data-nav="replays" data-rp="library">Demo Manager</a>
+              <a href="/replays/stats" data-nav="replays" data-rp="stats">Database</a>
               <a href="/football" data-nav="football">Football</a>
             </div>
             <div class="foot-col">

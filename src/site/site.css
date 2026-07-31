@@ -52,7 +52,7 @@
   --radius-sm: 8px;
   --radius-xs: 5px;
   --font-body: 'Host Grotesk', 'Segoe UI', system-ui, sans-serif;
-  --sidebar-w: 232px;
+  --sidebar-w: 248px;
   --sidebar-w-collapsed: 68px;
   --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -200,6 +200,32 @@ a {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+.side-cat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.side-cat-label {
+  padding: 10px 12px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: opacity 0.18s ease;
+}
+
+.site-shell[data-collapsed='true'] .side-cat-label {
+  opacity: 0;
+  height: 0;
+  padding: 0;
+  margin: 0;
+  pointer-events: none;
 }
 
 .side-link {

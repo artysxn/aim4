@@ -10,6 +10,7 @@
     { "source": "/tools", "destination": "/index.html" },
     { "source": "/training", "destination": "/index.html" },
     { "source": "/leaderboards", "destination": "/index.html" },
+    { "source": "/routines", "destination": "/index.html" },
     { "source": "/replays", "destination": "/index.html" },
     { "source": "/replays/playlists", "destination": "/index.html" },
     { "source": "/replays/upload", "destination": "/index.html" },

@@ -49,7 +49,7 @@ function svgIcon(raw) {
   return raw.replace('<svg', '<svg class="rp-mark-svg" aria-hidden="true"');
 }
 
-export function initReplaysView({ escapeHtml }) {
+export function initReplaysView({ escapeHtml, onSubpage = null }) {
   const uploadInput = document.getElementById('rp-file');
   const dropEl = document.getElementById('rp-drop');
   const quotaEl = document.getElementById('rp-quota');
@@ -59,13 +59,6 @@ export function initReplaysView({ escapeHtml }) {
   const filtersEl = document.getElementById('rp-filters');
   const resultEl = document.getElementById('rp-result');
   const parserEl = document.getElementById('rp-parser');
-  const headActions = document.getElementById('rp-head-actions');
-  const uploadBtn = document.getElementById('rp-upload-btn');
-  const playlistsBtn = document.getElementById('rp-playlists-btn');
-  const statsBtn = document.getElementById('rp-stats-btn');
-  const analyticsBtn = document.getElementById('rp-analytics-btn');
-  const chartsBtn = document.getElementById('rp-charts-btn');
-  const libraryBtn = document.getElementById('rp-library-btn');
   const libraryEl = document.getElementById('rp-library');
   const uploadPageEl = document.getElementById('rp-upload-page');
   const playlistsPageEl = document.getElementById('rp-playlists-page');
@@ -76,7 +69,6 @@ export function initReplaysView({ escapeHtml }) {
   const analyticsBodyEl = document.getElementById('rp-analytics-body');
   const chartsPageEl = document.getElementById('rp-charts-page');
   const chartsBodyEl = document.getElementById('rp-charts-body');
-  const pageTitleEl = document.getElementById('page-title');
 
   /** Page size for the /replays library browser (not stats/charts/analytics). */
   const LIBRARY_PAGE = 50;
@@ -1712,7 +1704,7 @@ export function initReplaysView({ escapeHtml }) {
         ${rowMetaHtml(when, mapCode, mapName)}
         ${matchBlockHtml(t1, t2, score)}
         <div class="rp-row-actions">
-          <button type="button" class="rp-btn-icon" data-demo-stats="${id}" title="Statistics for this match">${statsIconHtml()}</button>
+          <button type="button" class="rp-btn-icon" data-demo-stats="${id}" title="Database for this match">${statsIconHtml()}</button>
           <button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>
           <button type="button" class="rp-btn-icon danger" data-delete="${id}" title="Delete">
             ${deleteIconHtml()}
@@ -1795,8 +1787,8 @@ export function initReplaysView({ escapeHtml }) {
         <span class="rp-result-bulk">${selectAllBtn}${deselectBtn}</span>
         <div class="rp-result-actions">
           <button type="button" class="btn btn-sm" id="rp-stats-selected" title="${escapeHtml(
-            selCount ? `Statistics for the ${selCount} selected round${selCount === 1 ? '' : 's'}` : 'Statistics for every round that matches these filters'
-          )}">Statistics${selCount ? ` (${selCount})` : ''}</button>
+            selCount ? `Database for the ${selCount} selected round${selCount === 1 ? '' : 's'}` : 'Open Database for every round that matches these filters'
+          )}">Database${selCount ? ` (${selCount})` : ''}</button>
           <button type="button" class="btn btn-sm primary" id="rp-load-rounds" ${
             selCount ? '' : 'disabled'
           }>${loadLabel}</button>
@@ -2156,21 +2148,6 @@ export function initReplaysView({ escapeHtml }) {
     }
   }
 
-  function syncHeadNav(next) {
-    const active = next === 'library' ? 'library' : next;
-    const map = [
-      [uploadBtn, 'upload'],
-      [playlistsBtn, 'playlists'],
-      [statsBtn, 'stats'],
-      [analyticsBtn, 'analytics'],
-      [chartsBtn, 'charts'],
-      [libraryBtn, 'library']
-    ];
-    for (const [btn, key] of map) {
-      btn?.classList.toggle('active', key === active);
-    }
-  }
-
   function setSubpage(name, { push = false } = {}) {
     const next =
       name === 'upload' ||
@@ -2187,10 +2164,7 @@ export function initReplaysView({ escapeHtml }) {
     if (statsPageEl) statsPageEl.hidden = next !== 'stats';
     if (analyticsPageEl) analyticsPageEl.hidden = next !== 'analytics';
     if (chartsPageEl) chartsPageEl.hidden = next !== 'charts';
-    if (headActions) headActions.hidden = !visible;
-    if (pageTitleEl) pageTitleEl.textContent = 'Replays';
-    document.title = 'AIM4.io - Replays';
-    syncHeadNav(next);
+    onSubpage?.(next);
 
     const path =
       next === 'upload'
@@ -2205,7 +2179,7 @@ export function initReplaysView({ escapeHtml }) {
                 ? '/replays/charts'
                 : '/replays';
     if (push && window.location.pathname.replace(/\/+$/, '') !== path) {
-      window.history.pushState({ view: 'replays' }, '', path);
+      window.history.pushState({ view: 'replays', rp: next }, '', path);
     }
 
     if (next === 'playlists') {
@@ -2224,14 +2198,6 @@ export function initReplaysView({ escapeHtml }) {
       startPolling();
     }
   }
-
-  uploadBtn?.addEventListener('click', () => setSubpage('upload', { push: true }));
-  playlistsBtn?.addEventListener('click', () => setSubpage('playlists', { push: true }));
-  statsBtn?.addEventListener('click', () => showStats({}));
-  analyticsBtn?.addEventListener('click', () => setSubpage('analytics', { push: true }));
-  chartsBtn?.addEventListener('click', () => setSubpage('charts', { push: true }));
-  libraryBtn?.addEventListener('click', () => setSubpage('library', { push: true }));
-
   playlistsBody?.addEventListener('click', async (e) => {
     const play = e.target.closest('[data-play]');
     const drop = e.target.closest('[data-drop]');
@@ -2480,7 +2446,6 @@ export function initReplaysView({ escapeHtml }) {
     },
     onHide() {
       visible = false;
-      if (headActions) headActions.hidden = true;
       stopPolling();
     }
   };
