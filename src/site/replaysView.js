@@ -76,6 +76,14 @@ export function initReplaysView({ escapeHtml }) {
   const chartsBodyEl = document.getElementById('rp-charts-body');
   const pageTitleEl = document.getElementById('page-title');
 
+  /** Page size for the /replays library browser (not stats/charts/analytics). */
+  const LIBRARY_PAGE = 50;
+  /** How many stored demos the library page currently requests (grows via Load more). */
+  let libraryLimit = LIBRARY_PAGE;
+  /** Total stored demos on the server (from the last library fetch). */
+  let demoTotal = 0;
+  let demoHasMore = false;
+
   let demos = [];
   let rounds = [];
   /** @type {Set<string>} */
@@ -158,7 +166,12 @@ export function initReplaysView({ escapeHtml }) {
   function renderQuota(usage) {
     if (!usage || !quotaEl) return;
     const pctBytes = usage.maxBytes ? (usage.bytes / usage.maxBytes) * 100 : 0;
+    const stored = Number.isFinite(usage.demos) ? usage.demos : demoTotal;
     quotaEl.innerHTML = `
+      <div class="rp-quota-row">
+        <span class="rp-quota-label">Demos stored</span>
+        <span class="rp-quota-value">${stored}</span>
+      </div>
       <div class="rp-quota-row">
         <span class="rp-quota-label">Storage (shared)</span>
         <span class="rp-quota-value">${formatBytes(usage.bytes)} / ${formatBytes(usage.maxBytes)}</span>
@@ -1596,7 +1609,13 @@ export function initReplaysView({ escapeHtml }) {
         fetchPlaylists().catch(() => [])
       ]);
       if (token !== queryToken) return;
-      const fromApi = res?.rounds || [];
+      // Library only has a page of demos loaded — ignore rounds from the rest
+      // of the library (stats / analytics / charts fetch the full index).
+      const loadedIds = new Set(demos.map((d) => d.id));
+      const fromApi = (res?.rounds || []).filter((r) => {
+        const id = r.demoId || splitStoredName(r.file)?.demoId;
+        return id && loadedIds.has(id);
+      });
       // Prefer the larger set: directory listing can include rounds a stale
       // demo record omitted; the demo index covers the common import path.
       if (fromApi.length > rounds.length) {
@@ -1818,8 +1837,23 @@ export function initReplaysView({ escapeHtml }) {
       .filter(Boolean)
       .join('');
 
+    const shownStored = Math.min(libraryLimit, demoTotal);
+    const loadMoreBtn = demoHasMore
+      ? `<button type="button" class="btn btn-sm" data-load-more-demos>Load more</button>`
+      : '';
+    const pageNote =
+      demoTotal > 0
+        ? `<div class="rp-library-page">
+        <span class="rp-library-page-count">Showing ${shownStored} of ${demoTotal} demo${
+          demoTotal === 1 ? '' : 's'
+        }</span>
+        ${loadMoreBtn}
+      </div>`
+        : '';
+
     resultEl.innerHTML = `
       ${head}
+      ${pageNote}
       <div class="rp-demo-groups rp-list">
         ${
           demoBlocks ||
@@ -1829,7 +1863,12 @@ export function initReplaysView({ escapeHtml }) {
               : 'No replays yet. Upload a package (or a .dem).'
           }</p>`
         }
-      </div>`;
+      </div>
+      ${demoHasMore && demoBlocks ? pageNote : ''}`;
+
+    resultEl.querySelectorAll('[data-load-more-demos]').forEach((btn) => {
+      btn.addEventListener('click', () => loadMoreDemos());
+    });
 
     resultEl.querySelector('#rp-select-all')?.addEventListener('click', () => {
       selectedFiles = new Set(rounds.map((r) => r.file).filter(Boolean));
@@ -2322,10 +2361,15 @@ export function initReplaysView({ escapeHtml }) {
 
   async function refresh() {
     try {
-      const [status, list] = await Promise.all([fetchStatus(), fetchDemos()]);
+      const [status, list] = await Promise.all([
+        fetchStatus(),
+        fetchDemos({ limit: libraryLimit, offset: 0 })
+      ]);
       setLocked(false);
       if (status.limits?.maxUploadBytes) maxUploadBytes = status.limits.maxUploadBytes;
       renderCapabilities(status);
+      demoTotal = Number(list.total) || list.usage?.demos || 0;
+      demoHasMore = Boolean(list.hasMore);
       renderQuota(list.usage || status.usage);
       demos = list.demos || [];
       rebuildTeamClusters();
@@ -2340,6 +2384,12 @@ export function initReplaysView({ escapeHtml }) {
         )}</p>`;
       }
     }
+  }
+
+  function loadMoreDemos() {
+    if (!demoHasMore) return;
+    libraryLimit += LIBRARY_PAGE;
+    refresh();
   }
 
   function setLocked(locked) {

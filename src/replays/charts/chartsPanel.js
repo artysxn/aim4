@@ -23,7 +23,7 @@ import {
   seriesFor
 } from './chartFields.js';
 import { computeChart, correlationWords, filterWords } from './chartData.js';
-import { legendHtml, renderChart } from './chartRender.js';
+import { renderChart } from './chartRender.js';
 
 const SOURCES = [
   { key: 'kill', label: 'Kills' },
@@ -57,14 +57,12 @@ export function createChartsPanel({ escapeHtml }) {
       <aside class="ch-side" id="ch-side"></aside>
       <div class="ch-main">
         <div class="ch-canvas" id="ch-canvas"><p class="view-empty">Loading…</p></div>
-        <div class="ch-readout" id="ch-readout"></div>
         <div class="ch-details" id="ch-details"></div>
       </div>
     </div>`;
 
   const sideEl = el.querySelector('#ch-side');
   const canvasEl = el.querySelector('#ch-canvas');
-  const readoutEl = el.querySelector('#ch-readout');
   const detailsEl = el.querySelector('#ch-details');
 
   let facts = null;
@@ -84,7 +82,6 @@ export function createChartsPanel({ escapeHtml }) {
     series: 'team',
     binStep: 5,
     normalize: false,
-    perRound: false,
     trendline: true,
     minRounds: 5,
     maxCats: 24,
@@ -176,6 +173,12 @@ export function createChartsPanel({ escapeHtml }) {
     const arr = (key) => f[key] || [];
 
     const rows = [
+      scope === 'g'
+        ? ''
+        : group(
+            'Measure',
+            checkFlag(scope, 'perRound', 'Divide by played rounds', Boolean(f.perRound))
+          ),
       maps.length > 1 ? group('Map', multiSelect(scope, 'maps', maps, arr('maps'))) : '',
       group(
         'Side',
@@ -390,9 +393,6 @@ export function createChartsPanel({ escapeHtml }) {
           <label class="ch-check"><input type="checkbox" data-toggle="trendline"${
             state.trendline ? ' checked' : ''
           } /> Trendline</label>
-          <label class="ch-check"><input type="checkbox" data-toggle="perRound"${
-            state.perRound ? ' checked' : ''
-          } /> Divide by played rounds</label>
           ${
             isScatter()
               ? ''
@@ -475,7 +475,6 @@ export function createChartsPanel({ escapeHtml }) {
       model = computeChart(state, facts);
     } catch (err) {
       canvasEl.innerHTML = `<p class="view-empty">${escapeHtml(err.message || 'Could not build that chart.')}</p>`;
-      readoutEl.innerHTML = '';
       detailsEl.innerHTML = '';
       return;
     }
@@ -486,18 +485,9 @@ export function createChartsPanel({ escapeHtml }) {
     if (!svg) {
       canvasEl.innerHTML =
         '<p class="view-empty">Nothing matches those filters. Loosen a filter or lower Min rounds.</p>';
-      readoutEl.innerHTML = '';
       detailsEl.innerHTML = '';
       return;
     }
-
-    canvasEl.innerHTML = `
-      <div class="ch-head">
-        <h3 class="ch-title">${escapeHtml(chartTitle(model))}</h3>
-        <button type="button" class="btn btn-sm" data-save>Save SVG</button>
-      </div>
-      ${legendHtml(model)}
-      <div class="ch-plot" id="ch-plot">${svg}<div class="ch-tip" id="ch-tip" hidden></div></div>`;
 
     const fit = model.fit;
     const bits = [`${model.count} point${model.count === 1 ? '' : 's'} plotted`];
@@ -512,7 +502,22 @@ export function createChartsPanel({ escapeHtml }) {
     }
     const words = filterWords(state.filter);
     if (words.length) bits.push(`filters: ${words.join(', ')}`);
-    readoutEl.innerHTML = bits.map((b) => `<span>${escapeHtml(b)}</span>`).join('');
+    const infoPop = bits.map((b) => `<div>${escapeHtml(b)}</div>`).join('');
+
+    canvasEl.innerHTML = `
+      <div class="ch-head">
+        <h3 class="ch-title">${escapeHtml(chartTitle(model))}</h3>
+        <button type="button" class="btn btn-sm" data-save>Save SVG</button>
+      </div>
+      <div class="ch-plot" id="ch-plot">
+        ${svg}
+        <div class="ch-tip" id="ch-tip" hidden></div>
+        <div class="ch-info">
+          <button type="button" class="ch-info-btn" aria-label="Chart fit details">i</button>
+          <div class="ch-info-pop" role="tooltip">${infoPop}</div>
+        </div>
+      </div>`;
+
     detailsEl.innerHTML = detailsHtml(model);
   }
 

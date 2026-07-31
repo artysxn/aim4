@@ -15,6 +15,7 @@ import zlib from 'node:zlib';
 import { buildRoundId, MAPS } from '../../src/replays/shared/roundId.js';
 import { sliceStride } from '../../src/replays/shared/tickFormat.js';
 import { encodeTickz, TICKZ_EXT } from './tickCodec.js';
+import { applyStandingsToDemo } from './teamStandingsDb.js';
 
 const COARSE_STRIDE = 100;
 const COARSE_EXT = '.c100.bin';
@@ -27,6 +28,10 @@ const COARSE_EXT = '.c100.bin';
  * @returns {{ record: object, files: Map<string, Uint8Array> }}
  */
 export function materializeDemo(demo, demoId, meta = {}, onProgress = () => {}) {
+  // Prefer Valve standings org names when a side's handles match a roster
+  // (≥3 players). Runs before round ids are built so short ids stay aligned.
+  applyStandingsToDemo(demo);
+
   const files = new Map();
   const rounds = [];
 

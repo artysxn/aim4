@@ -36,8 +36,18 @@ export async function fetchStatus() {
   return asJson(await fetch(`${API_BASE}/api/replays/status`, { headers: await headers() }));
 }
 
-export async function fetchDemos() {
-  return asJson(await fetch(`${API_BASE}/api/replays/demos`, { headers: await headers() }));
+/**
+ * Library listing. Pass `{ limit, offset }` for a page (used by /replays).
+ * Omit them for the full list.
+ *
+ * @param {{ limit?: number, offset?: number }} [opts]
+ */
+export async function fetchDemos(opts = {}) {
+  const params = new URLSearchParams();
+  if (Number.isFinite(opts.limit) && opts.limit > 0) params.set('limit', String(opts.limit));
+  if (Number.isFinite(opts.offset) && opts.offset > 0) params.set('offset', String(opts.offset));
+  const q = params.toString() ? `?${params}` : '';
+  return asJson(await fetch(`${API_BASE}/api/replays/demos${q}`, { headers: await headers() }));
 }
 
 export async function fetchDemo(id) {

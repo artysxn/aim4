@@ -349,6 +349,8 @@ export function emptyFilter() {
     oppEcon: [],
     hasAwp: false,
     oppHasAwp: false,
+    /** Divide totals on this axis by distinct played rounds. */
+    perRound: false,
     /** @type {''|'won'|'lost'} */
     result: '',
     /** @type {''|'5v4'|'4v5'|'even'} */

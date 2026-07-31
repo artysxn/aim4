@@ -1,0 +1,9 @@
+Valve CS regional standings (2026-07-06 snapshot), used to auto-name teams from rosters.
+
+Upstream:
+https://github.com/ValveSoftware/counter-strike_regional_standings/tree/main/live/2026
+
+Files:
+  standings_europe_2026_07_06.md
+  standings_americas_2026_07_06.md
+  standings_asia_2026_07_06.md

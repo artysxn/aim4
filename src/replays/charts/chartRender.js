@@ -295,22 +295,3 @@ export function renderChart(model, opts = {}) {
 
   return { svg, points: hover };
 }
-
-/** Legend rows for the series split, or an empty string when there is one series. */
-export function legendHtml(model) {
-  const list =
-    model.kind === 'scatter'
-      ? model.seriesList
-      : model.seriesList.length > 1
-        ? model.seriesList
-        : [];
-  if (!list.length) return '';
-  return `<div class="ch-legend">${list
-    .map(
-      (s, i) =>
-        `<span class="ch-legend-item"><i style="background:${
-          SERIES_COLORS[i % SERIES_COLORS.length]
-        }"></i>${esc(s.label || 'Other')}</span>`
-    )
-    .join('')}</div>`;
-}

@@ -217,8 +217,31 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     </label>`;
   }
 
-  function chip(active, attrs, label) {
-    return `<button type="button" class="rp-chip${active ? ' active' : ''}" ${attrs}>${label}</button>`;
+  /**
+   * @param {string} attr  e.g. data-an-side
+   * @param {{ key: string, label: string }[]} options
+   * @param {string} value
+   * @param {{ placeholder?: string | null }} [opts]
+   */
+  function menuSelect(attr, options, value, { placeholder = 'Any' } = {}) {
+    const head =
+      placeholder === null
+        ? ''
+        : `<option value=""${!value ? ' selected' : ''}>${escapeHtml(placeholder)}</option>`;
+    const body = options
+      .map(
+        (o) =>
+          `<option value="${escapeHtml(o.key)}"${String(o.key) === String(value) ? ' selected' : ''}>${escapeHtml(
+            o.label
+          )}</option>`
+      )
+      .join('');
+    return `<select class="site-select an-select" ${attr}>${head}${body}</select>`;
+  }
+
+  function phaseSelectValue() {
+    if (state.phases.size === 1) return [...state.phases][0];
+    return '';
   }
 
   function refreshSubjectMenu() {
@@ -297,7 +320,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
       <div class="an-field">
         <span class="an-label">Subjects <span class="an-label-soft">${state.playerIds.length}/${ANALYTICS_PLAYER_MAX}</span></span>
-        <p class="an-side-hint">Optional. Empty = anyone on this map. Teams add up to 5 players.</p>
         <div class="an-subject" id="an-subject-typeahead">
           ${
             state.playerIds.length
@@ -311,7 +333,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
                     })
                     .join('')}
                 </div>`
-              : `<p class="an-anyone">Anyone · all demos on the map</p>`
+              : `<p class="an-anyone">Everyone</p>`
           }
           ${
             left
@@ -328,46 +350,57 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         <p class="an-side-title">Round filters</p>
         <div class="an-field">
           <span class="an-label">Side</span>
-          <div class="rp-chips">
-            ${chip(state.side === 'T', 'data-an-side="T"', 'T')}
-            ${chip(state.side === 'CT', 'data-an-side="CT"', 'CT')}
-          </div>
+          ${menuSelect(
+            'data-an-side',
+            [
+              { key: 'T', label: 'T' },
+              { key: 'CT', label: 'CT' }
+            ],
+            state.side
+          )}
         </div>
         <div class="an-field">
           <span class="an-label">Result</span>
-          <div class="rp-chips">
-            ${chip(state.result === 'won', 'data-an-result="won"', 'Won')}
-            ${chip(state.result === 'lost', 'data-an-result="lost"', 'Lost')}
-          </div>
+          ${menuSelect(
+            'data-an-result',
+            [
+              { key: 'won', label: 'Won' },
+              { key: 'lost', label: 'Lost' }
+            ],
+            state.result
+          )}
         </div>
         <div class="an-field">
           <span class="an-label">Opening</span>
-          <div class="rp-chips">
-            ${chip(state.opening === 'won', 'data-an-opening="won"', 'Got OK')}
-            ${chip(state.opening === 'lost', 'data-an-opening="lost"', 'Got OD')}
+          ${menuSelect(
+            'data-an-opening',
+            [
+              { key: 'won', label: '5v4' },
+              { key: 'lost', label: '4v5' }
+            ],
+            state.opening
+          )}
+        </div>
+        <div class="an-field">
+          <span class="an-label">Buy</span>
+          <div class="an-buy-controls">
+            ${econSelect('econ', state.econ)}
+            ${awpCheck('hasAwp', state.hasAwp)}
           </div>
         </div>
-        <div class="an-field an-buy-row">
-          <span class="an-label">Buy</span>
-          ${econSelect('econ', state.econ)}
-          ${awpCheck('hasAwp', state.hasAwp)}
-        </div>
-        <div class="an-field an-buy-row">
+        <div class="an-field">
           <span class="an-label">Opp buy</span>
-          ${econSelect('oppEcon', state.oppEcon)}
-          ${awpCheck('oppHasAwp', state.oppHasAwp)}
+          <div class="an-buy-controls">
+            ${econSelect('oppEcon', state.oppEcon)}
+            ${awpCheck('oppHasAwp', state.oppHasAwp)}
+          </div>
         </div>
         <div class="an-field">
           <span class="an-label">Phase</span>
-          <div class="rp-chips">
-            ${PHASE_OPTS.map((p) =>
-              chip(state.phases.has(p.key), `data-an-phase="${p.key}"`, p.label)
-            ).join('')}
-          </div>
+          ${menuSelect('data-an-phase', PHASE_OPTS, phaseSelectValue())}
         </div>
 
         <p class="an-side-title">Map selections</p>
-        <p class="an-side-hint">Draw multiple regions; matching rounds feed stats and the leaderboard.</p>
         <div class="an-field">
           <span class="an-label">Feature</span>
           <select class="site-select an-select" id="an-shape-feature">
@@ -381,20 +414,32 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         </div>
         <div class="an-field">
           <span class="an-label">Match</span>
-          <div class="rp-chips">
-            ${chip(state.shapeMatch === 'all', 'data-an-match="all"', 'All')}
-            ${chip(state.shapeMatch === 'any', 'data-an-match="any"', 'Any')}
-          </div>
+          ${menuSelect(
+            'data-an-match',
+            [
+              { key: 'all', label: 'All' },
+              { key: 'any', label: 'Any' }
+            ],
+            state.shapeMatch,
+            { placeholder: null }
+          )}
         </div>
         <div class="an-field">
           <span class="an-label">Draw</span>
-          <div class="rp-chips">
-            ${chip(state.drawMode === 'rect', 'data-an-draw="rect"', 'Rectangle')}
-            ${chip(state.drawMode === 'poly', 'data-an-draw="poly"', 'Polygon')}
-            ${chip(state.drawMode === 'lasso', 'data-an-draw="lasso"', 'Lasso')}
+          <div class="an-buy-controls">
+            ${menuSelect(
+              'data-an-draw',
+              [
+                { key: 'rect', label: 'Rectangle' },
+                { key: 'poly', label: 'Polygon' },
+                { key: 'lasso', label: 'Lasso' }
+              ],
+              state.drawMode,
+              { placeholder: 'None' }
+            )}
             ${
               state.drawMode === 'poly'
-                ? `<button type="button" class="rp-chip" data-an-poly-done>Finish</button>`
+                ? `<button type="button" class="btn btn-sm" data-an-poly-done>Finish</button>`
                 : ''
             }
           </div>
@@ -550,11 +595,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         </div>
         <div class="an-phase-chips">
           <span class="an-label">Phase</span>
-          <div class="rp-chips">
-            ${PHASE_OPTS.map((p) =>
-              chip(state.phases.has(p.key), `data-an-phase="${p.key}"`, p.label)
-            ).join('')}
-          </div>
+          ${menuSelect('data-an-phase', PHASE_OPTS, phaseSelectValue())}
         </div>
       </header>
       <div class="an-break-body">
@@ -813,51 +854,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       return;
     }
 
-    const side = e.target.closest('[data-an-side]');
-    if (side) {
-      const v = side.dataset.anSide === 'CT' ? 'CT' : 'T';
-      state.side = state.side === v ? '' : v;
-      render();
-      return;
-    }
-    const result = e.target.closest('[data-an-result]');
-    if (result) {
-      const v = result.dataset.anResult === 'lost' ? 'lost' : 'won';
-      state.result = state.result === v ? '' : v;
-      render();
-      return;
-    }
-    const opening = e.target.closest('[data-an-opening]');
-    if (opening) {
-      const v = opening.dataset.anOpening === 'lost' ? 'lost' : 'won';
-      state.opening = state.opening === v ? '' : v;
-      render();
-      return;
-    }
-    const match = e.target.closest('[data-an-match]');
-    if (match) {
-      state.shapeMatch = match.dataset.anMatch === 'any' ? 'any' : 'all';
-      render();
-      return;
-    }
-    const phase = e.target.closest('[data-an-phase]');
-    if (phase) {
-      const key = phase.dataset.anPhase;
-      if (state.phases.has(key)) state.phases.delete(key);
-      else state.phases.add(key);
-      render();
-      return;
-    }
-    const draw = e.target.closest('[data-an-draw]');
-    if (draw) {
-      const raw = draw.dataset.anDraw;
-      const mode = raw === 'poly' || raw === 'lasso' ? raw : 'rect';
-      state.drawMode = state.drawMode === mode ? '' : mode;
-      radar?.setDrawMode(state.drawMode);
-      renderSidebar();
-      paintRadar();
-      return;
-    }
     if (e.target.closest('[data-an-poly-done]')) {
       radar?.finishPoly();
       return;
@@ -897,24 +893,59 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   });
 
   sidebarEl.addEventListener('change', (e) => {
-    if (e.target.id === 'an-map') {
-      state.map = e.target.value || '';
+    const t = e.target;
+    if (t.id === 'an-map') {
+      state.map = t.value || '';
       state.drawMode = '';
       loadShapesForMap();
       render();
       return;
     }
-    if (e.target.id === 'an-shape-feature') {
-      state.drawFeature = e.target.value || 'player_in';
+    if (t.id === 'an-shape-feature') {
+      state.drawFeature = t.value || 'player_in';
       return;
     }
-    const awp = e.target.closest('[data-an-awp]');
+    if (t.matches('[data-an-side]')) {
+      state.side = t.value === 'CT' || t.value === 'T' ? t.value : '';
+      render();
+      return;
+    }
+    if (t.matches('[data-an-result]')) {
+      state.result = t.value === 'won' || t.value === 'lost' ? t.value : '';
+      render();
+      return;
+    }
+    if (t.matches('[data-an-opening]')) {
+      state.opening = t.value === 'won' || t.value === 'lost' ? t.value : '';
+      render();
+      return;
+    }
+    if (t.matches('[data-an-match]')) {
+      state.shapeMatch = t.value === 'any' ? 'any' : 'all';
+      render();
+      return;
+    }
+    if (t.matches('[data-an-phase]')) {
+      state.phases.clear();
+      if (t.value) state.phases.add(t.value);
+      render();
+      return;
+    }
+    if (t.matches('[data-an-draw]')) {
+      const raw = t.value;
+      state.drawMode = raw === 'poly' || raw === 'lasso' || raw === 'rect' ? raw : '';
+      radar?.setDrawMode(state.drawMode);
+      renderSidebar();
+      paintRadar();
+      return;
+    }
+    const awp = t.closest('[data-an-awp]');
     if (awp) {
       state[awp.dataset.anAwp] = Boolean(awp.checked);
       render();
       return;
     }
-    const econ = e.target.closest('[data-an-econ]');
+    const econ = t.closest('[data-an-econ]');
     if (econ) {
       state[econ.dataset.anEcon] = econ.value === '' ? null : Number(econ.value);
       render();
@@ -929,15 +960,16 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     }
   });
 
-  mainEl.addEventListener('click', async (e) => {
-    const phase = e.target.closest('[data-an-phase]');
-    if (phase) {
-      const key = phase.dataset.anPhase;
-      if (state.phases.has(key)) state.phases.delete(key);
-      else state.phases.add(key);
+  mainEl.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.matches('[data-an-phase]')) {
+      state.phases.clear();
+      if (t.value) state.phases.add(t.value);
       render();
-      return;
     }
+  });
+
+  mainEl.addEventListener('click', async (e) => {
     const playOne = e.target.closest('[data-an-play]');
     if (playOne && onPlayRounds) {
       playOne.disabled = true;

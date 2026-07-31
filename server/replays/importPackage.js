@@ -13,6 +13,7 @@ import { decodeReplayPackage } from '../../src/replays/shared/replayPackage.js';
 import { isRoundId, parseRoundId } from '../../src/replays/shared/roundId.js';
 import { checkQuota, readRecord, writeMaterialized } from './demoStore.js';
 import { TICKZ_EXT } from './tickCodec.js';
+import { applyStandingsToRecord } from './teamStandingsDb.js';
 
 /**
  * @param {string} user
@@ -105,6 +106,10 @@ export async function importReplayPackage(user, buf, meta = {}) {
     roundCount: rounds.length,
     rounds
   };
+
+  // Local packages often still carry clan/player fallbacks — stamp standings
+  // names onto the manifest + plain round JSON before they hit the library.
+  applyStandingsToRecord(ready, files);
 
   await writeMaterialized(user, ready, files);
   return ready;

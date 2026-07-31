@@ -76,14 +76,18 @@ function asPerRound(value, rounds, metric) {
   return value / rounds;
 }
 
-function perRoundLabel(metric, axisFilter, on) {
-  const base = axisLabel(metric, axisFilter);
-  return on && isTotalMetric(metric) ? `${base} / round` : base;
-}
-
 function perRoundFmt(metric, on) {
   if (on && isTotalMetric(metric) && metric.fmt === 'int') return 'num2';
   return metric?.fmt;
+}
+
+/** Axis caption: metric (+ / round when requested), then other filter hints. */
+function measureLabel(metric, axisFilter) {
+  if (!metric) return '';
+  const perRound = Boolean(axisFilter?.perRound) && isTotalMetric(metric);
+  const words = filterWords(axisFilter).filter((w) => w !== 'per round');
+  const name = perRound ? `${metric.label} / round` : metric.label;
+  return words.length ? `${name} (${words.join(', ')})` : name;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,16 +122,15 @@ function buildScatter(state, facts) {
 
   const points = [];
   const seriesSeen = new Map();
-  const perRound = Boolean(state.perRound);
+  const xPerRound = Boolean(state.x.filter?.perRound);
+  const yPerRound = Boolean(state.y.filter?.perRound);
   for (const [id, g] of groups) {
     const rounds = roundCount(g.facts);
     if (rounds < (state.minRounds || 0)) continue;
     let x = aggregateMetric(xMetric, g.x);
     let y = aggregateMetric(yMetric, g.y);
-    if (perRound) {
-      x = asPerRound(x, rounds, xMetric);
-      y = asPerRound(y, rounds, yMetric);
-    }
+    if (xPerRound) x = asPerRound(x, rounds, xMetric);
+    if (yPerRound) y = asPerRound(y, rounds, yMetric);
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     const sKey = seriesDim ? String(seriesDim.value(g.first) ?? '') : '';
     const sLabel = seriesDim
@@ -160,10 +163,10 @@ function buildScatter(state, facts) {
     xMetric,
     yMetric,
     subject,
-    xLabel: perRoundLabel(xMetric, state.x.filter, perRound),
-    yLabel: perRoundLabel(yMetric, state.y.filter, perRound),
-    xFmt: perRoundFmt(xMetric, perRound),
-    yFmt: perRoundFmt(yMetric, perRound)
+    xLabel: measureLabel(xMetric, state.x.filter),
+    yLabel: measureLabel(yMetric, state.y.filter),
+    xFmt: perRoundFmt(xMetric, xPerRound),
+    yFmt: perRoundFmt(yMetric, yPerRound)
   };
 }
 
@@ -253,7 +256,7 @@ function buildGrouped(state, facts) {
       const list = bin.series.get(s.key) || [];
       const rounds = roundCount(list);
       let value = aggregateMetric(yMetric, list);
-      if (state.perRound) value = asPerRound(value, rounds, yMetric);
+      if (state.y.filter?.perRound) value = asPerRound(value, rounds, yMetric);
       s.points.push({
         x: dim.kind === 'bin' ? Number(bin.key) + (step === 1 ? 0 : step / 2) : i,
         xLabel: bin.label,
@@ -271,7 +274,7 @@ function buildGrouped(state, facts) {
     }
   }
 
-  const yBase = perRoundLabel(yMetric, state.y.filter, Boolean(state.perRound));
+  const yBase = measureLabel(yMetric, state.y.filter);
   return {
     kind: state.type === 'bar' ? 'bar' : state.type === 'area' ? 'area' : 'line',
     categorical: dim.kind === 'cat',
@@ -285,7 +288,7 @@ function buildGrouped(state, facts) {
     yMetric,
     xLabel: dim.label,
     yLabel: state.normalize ? `${yBase} (share %)` : yBase,
-    yFmt: state.normalize ? 'pct' : perRoundFmt(yMetric, Boolean(state.perRound))
+    yFmt: state.normalize ? 'pct' : perRoundFmt(yMetric, Boolean(state.y.filter?.perRound))
   };
 }
 
@@ -297,13 +300,6 @@ function totalFacts(bin) {
   return n;
 }
 
-/** Axis caption: the metric, plus a hint that the axis carries its own filter. */
-function axisLabel(metric, axisFilter) {
-  if (!metric) return '';
-  const parts = filterWords(axisFilter);
-  return parts.length ? `${metric.label} (${parts.join(', ')})` : metric.label;
-}
-
 const buyWord = (code) =>
   (ECONOMIES[code]?.label || economyLabel(Number(code))).toLowerCase();
 
@@ -311,6 +307,7 @@ const buyWord = (code) =>
 export function filterWords(f) {
   if (!f) return [];
   const out = [];
+  if (f.perRound) out.push('per round');
   if (f.sides?.length) out.push(f.sides.join('/'));
   if (f.maps?.length) out.push(f.maps.map((m) => MAPS[m]?.name || m).join('/'));
   if (f.econ?.length) out.push(f.econ.map(buyWord).join('/'));

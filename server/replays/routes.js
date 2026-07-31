@@ -4,7 +4,7 @@
 //
 //   GET    /api/replays/diag                     public crash / memory diagnostic
 //   GET    /api/replays/status                   parser + quota
-//   GET    /api/replays/demos                    library listing
+//   GET    /api/replays/demos                    library listing (?limit=&offset=)
 //   POST   /api/replays/demos                    upload .dem or an archive of them
 //   GET    /api/replays/uploads/:batchId         unpack + parse progress for one upload
 //   POST   /api/replays/import                   upload a local .aim4replay package
@@ -357,8 +357,28 @@ export async function handleReplayRequest(req, res, url) {
         error: j.error,
         progress: { stage: j.stage, round: j.round, total: j.total }
       }));
+
+    // Optional window for the library browser. Omit / limit=0 → full list
+    // (status tools, migrations). Stats/analytics/charts use /stats instead.
+    const rawLimit = url.searchParams.get('limit');
+    const limit =
+      rawLimit === null || rawLimit === ''
+        ? 0
+        : Math.max(0, Math.min(5000, Number(rawLimit) || 0));
+    const offset = Math.max(0, Number(url.searchParams.get('offset') || 0) || 0);
+    const page =
+      limit > 0 ? records.slice(offset, offset + limit) : offset ? records.slice(offset) : records;
+    const mapped = page.map((r) => withJob(user, r));
+    // Pending parses always surface on the first page so uploads stay visible.
+    const demos = offset === 0 ? [...pending, ...mapped] : mapped;
+
     json(res, 200, {
-      demos: [...pending, ...records.map((r) => withJob(user, r))],
+      demos,
+      total: records.length,
+      offset,
+      limit: limit || records.length,
+      hasMore: limit > 0 && offset + page.length < records.length,
+      pending: pending.length,
       usage: await usage(user)
     });
     return true;
