@@ -39,7 +39,7 @@ import {
   ROLES_VERSION
 } from '../../src/replays/roles/computeRoles.js';
 
-export const STATS_VERSION = 11;
+export const STATS_VERSION = 10;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -47,21 +47,44 @@ const TRADE_SECONDS = 5;
 /** demoId -> { key, entry } for the current process. */
 const memory = new Map();
 
+/** demoIds currently computing roles in the background. */
+const roleJobs = new Set();
+
 const statsDir = (userDir) => path.join(userDir, 'stats');
 
-/**
- * Base index fingerprint (parse / rename). Zone edits do not invalidate kill
- * stats.
- */
-function versionKey(record) {
+/** Demo identity part of the index key (ignores STATS_VERSION prefix). */
+function recordFingerprint(record) {
   return [
-    STATS_VERSION,
     record.parsedAt || 0,
     record.uploadedAt || 0,
     record.roundCount || 0,
     record.team1?.name || '',
     record.team2?.name || ''
   ].join('|');
+}
+
+/**
+ * Base index fingerprint (parse / rename). Zone edits do not invalidate kill
+ * stats.
+ */
+function versionKey(record) {
+  return `${STATS_VERSION}|${recordFingerprint(record)}`;
+}
+
+/** True when the stored key is for the same demo bytes / rename, any stats ver. */
+function keyMatchesRecord(entryKey, record) {
+  if (typeof entryKey !== 'string' || !record) return false;
+  const fp = recordFingerprint(record);
+  const pipe = entryKey.indexOf('|');
+  if (pipe < 0) return false;
+  const rest = entryKey.slice(pipe + 1);
+  // Accept older/newer STATS_VERSION prefixes with the same fingerprint so a
+  // roles-only bump never forces a full library rebuild on GET /stats.
+  return rest === fp || rest.startsWith(`${fp}|`);
+}
+
+function yieldEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 function tradedVictims(kills, tickRate) {
@@ -303,9 +326,10 @@ async function applyPossessionFields(row, meta, track, network) {
 }
 
 /**
- * Refresh phase combat + AWP Acc + roles from ticks (no painted geography).
+ * Refresh phase combat + AWP Acc + possession from ticks (no painted geography).
+ * Also fills roles when ticks are already open (same pass).
  */
-async function enrichPhases(io, user, entry) {
+async function enrichPhases(io, user, entry, { roles = true } = {}) {
   if (!entry?.rounds?.length) return entry;
 
   const rosterFallback = (entry.players || []).map((p) => ({
@@ -318,7 +342,7 @@ async function enrichPhases(io, user, entry) {
   const canTicks = typeof io.readRoundTicks === 'function';
   const controlCache = new Map();
   const zoneCache = new Map();
-  const roleWork = createRoleWork();
+  const roleWork = roles ? createRoleWork() : null;
 
   for (const row of entry.rounds) {
     let meta = null;
@@ -381,18 +405,92 @@ async function enrichPhases(io, user, entry) {
       );
       const track = new TickTrack(tickBuffer);
       await applyPossessionFields(row, meta, track, network);
-      const zones = zoneCache.get(meta.map || row.m) || network;
-      accumulateRoundRoles(roleWork, {
-        meta,
-        track,
-        row,
-        network: zones,
-        roster
-      });
+      if (roleWork) {
+        const zones = zoneCache.get(meta.map || row.m) || network;
+        accumulateRoundRoles(roleWork, {
+          meta,
+          track,
+          row,
+          network: zones,
+          roster
+        });
+      }
     } else {
       row.pos1 = null;
       row.pos2 = null;
     }
+    await yieldEventLoop();
+  }
+
+  if (roleWork) {
+    const sitesByMap = new Map();
+    for (const [map, net] of zoneCache) {
+      sitesByMap.set(map, hasBombSites(net));
+    }
+    entry.roles = finalizeRoles(roleWork, sitesByMap);
+  }
+  entry.positions = false;
+  entry.pz = 0;
+  entry.v = STATS_VERSION;
+  return entry;
+}
+
+/** Roles-only pass (background). Does not rebuild kill/phase bags. */
+async function enrichRolesOnly(io, user, entry) {
+  if (!entry?.rounds?.length) return entry;
+  if (typeof io.readRoundTicks !== 'function') {
+    entry.roles = { v: ROLES_VERSION, maps: {} };
+    return entry;
+  }
+
+  const rosterFallback = (entry.players || []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    team: p.team,
+    slot: p.slot
+  }));
+  const zoneCache = new Map();
+  const roleWork = createRoleWork();
+
+  for (const row of entry.rounds) {
+    let meta = null;
+    try {
+      meta = await io.readRoundMeta(user, row.f);
+    } catch {
+      meta = null;
+    }
+    if (!meta) continue;
+    meta.map = meta.map || row.m || entry.map || '';
+
+    const roster =
+      meta.players?.length
+        ? meta.players.map((p) => ({
+            id: p.id,
+            name: p.name,
+            team: p.team,
+            slot: p.slot
+          }))
+        : rosterFallback;
+
+    let tickBuffer = null;
+    try {
+      tickBuffer = await io.readRoundTicks(user, row.f, 1);
+    } catch {
+      tickBuffer = null;
+    }
+    if (!tickBuffer) {
+      await yieldEventLoop();
+      continue;
+    }
+
+    const mapCode = meta.map || row.m || '';
+    if (!zoneCache.has(mapCode)) {
+      zoneCache.set(mapCode, await loadMapNetwork(io, mapCode));
+    }
+    const zones = zoneCache.get(mapCode);
+    const track = new TickTrack(tickBuffer);
+    accumulateRoundRoles(roleWork, { meta, track, row, network: zones, roster });
+    await yieldEventLoop();
   }
 
   const sitesByMap = new Map();
@@ -400,10 +498,44 @@ async function enrichPhases(io, user, entry) {
     sitesByMap.set(map, hasBombSites(net));
   }
   entry.roles = finalizeRoles(roleWork, sitesByMap);
-  entry.positions = false;
-  entry.pz = 0;
-  entry.v = STATS_VERSION;
   return entry;
+}
+
+/** Fire-and-forget role fill so GET /stats never blocks on tick walks. */
+function scheduleRoleEnrichment(io, user, record) {
+  if (!record?.id || roleJobs.has(record.id)) return;
+  roleJobs.add(record.id);
+  setImmediate(() => {
+    (async () => {
+      try {
+        const key = versionKey(record);
+        let entry = await loadStoredEntry(io, user, record.id);
+        if (!entry || !keyMatchesRecord(entry.key, record)) return;
+        if (!needsRoleEnrichment(entry)) return;
+        await enrichRolesOnly(io, user, entry);
+        entry.key = key;
+        await persistEntry(io, user, key, entry);
+      } catch (err) {
+        console.warn(
+          `[stats] role enrich failed for ${record.id}:`,
+          err?.message || err
+        );
+        try {
+          const key = versionKey(record);
+          const entry = await loadStoredEntry(io, user, record.id);
+          if (entry && needsRoleEnrichment(entry)) {
+            entry.roles = { v: ROLES_VERSION, maps: {} };
+            entry.key = key;
+            await persistEntry(io, user, key, entry);
+          }
+        } catch {
+          /* ignore */
+        }
+      } finally {
+        roleJobs.delete(record.id);
+      }
+    })();
+  });
 }
 
 async function persistEntry(io, user, key, entry) {
@@ -501,6 +633,7 @@ async function buildIndex(io, user, record) {
     }
 
     rounds.push(row);
+    await yieldEventLoop();
   }
 
   const sitesByMap = new Map();
@@ -544,18 +677,18 @@ async function loadStoredEntry(io, user, demoId) {
  * Ensure the stats index exists. Never re-parses a demo — only reads round
  * JSON / tick bins already on disk.
  *
+ * Role assignment is scheduled in the background so GET /stats stays fast.
+ * Pass `{ roles: true }` to wait for roles (explicit refresh).
+ *
  * @param {object} io  { userDir, readRoundMeta, readRoundTicks? }
+ * @param {{ roles?: boolean }} [opts]
  */
-export async function demoIndex(io, user, record) {
+export async function demoIndex(io, user, record, opts = {}) {
   if (!record || record.status !== 'ready') return null;
 
   const key = versionKey(record);
   let entry = await loadStoredEntry(io, user, record.id);
-
-  const keyOk =
-    entry &&
-    (entry.key === key ||
-      (typeof entry.key === 'string' && entry.key.startsWith(`${key}|`)));
+  const keyOk = entry && keyMatchesRecord(entry.key, record);
 
   if (!entry || !keyOk) {
     entry = await buildIndex(io, user, record);
@@ -565,10 +698,19 @@ export async function demoIndex(io, user, record) {
 
   if (entry.key !== key) entry.key = key;
 
-  if (needsPhaseEnrichment(entry) || needsRoleEnrichment(entry)) {
-    await enrichPhases(io, user, entry);
+  if (needsPhaseEnrichment(entry)) {
+    await enrichPhases(io, user, entry, { roles: true });
     await persistEntry(io, user, key, entry);
     return entry;
+  }
+
+  if (needsRoleEnrichment(entry)) {
+    if (opts.roles) {
+      await enrichRolesOnly(io, user, entry);
+      await persistEntry(io, user, key, entry);
+    } else {
+      scheduleRoleEnrichment(io, user, record);
+    }
   }
 
   // Clear legacy geography flags on old indexes that already have phase bags.
@@ -654,11 +796,7 @@ export async function refreshLibraryStats(io, user, records, { force = false } =
       if (force) await forgetDemoIndex(io, user, record.id);
 
       const before = force ? null : await loadStoredEntry(io, user, record.id);
-      const key = versionKey(record);
-      const keyOk =
-        before &&
-        (before.key === key ||
-          (typeof before.key === 'string' && before.key.startsWith(`${key}|`)));
+      const keyOk = before && keyMatchesRecord(before.key, record);
       const wasMissing = !before || !keyOk;
       const wasStale = Boolean(
         before &&
@@ -666,7 +804,7 @@ export async function refreshLibraryStats(io, user, records, { force = false } =
           (needsPhaseEnrichment(before) || needsRoleEnrichment(before))
       );
 
-      const entry = await demoIndex(io, user, record);
+      const entry = await demoIndex(io, user, record, { roles: true });
       if (!entry) {
         report.failed++;
         report.errors.push({

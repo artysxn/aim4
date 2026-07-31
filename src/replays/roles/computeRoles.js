@@ -133,7 +133,8 @@ export function accumulateRoundRoles(work, ctx) {
   const centers = bombSiteCenters(network);
   const sitesOk = hasBombSites(network);
   const tTicks = tSampleTicks(timing);
-  const psdtStride = Math.max(1, Math.round(rate / 4));
+  // ~2 samples/sec is enough for PSDT; denser walks starve the event loop.
+  const psdtStride = Math.max(1, Math.round(rate / 2));
   const siteStride = Math.max(1, Math.round(rate * 2));
 
   for (const who of roster) {
