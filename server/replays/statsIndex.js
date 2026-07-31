@@ -31,8 +31,15 @@ import {
   registerRadarMask
 } from '../../src/replays/zones/zoneOverlay.js';
 import { loadRadarMask } from '../../scripts/lib/radarMask.mjs';
+import { hasBombSites } from '../../src/replays/zones/bombSites.js';
+import {
+  accumulateRoundRoles,
+  createRoleWork,
+  finalizeRoles,
+  ROLES_VERSION
+} from '../../src/replays/roles/computeRoles.js';
 
-export const STATS_VERSION = 10;
+export const STATS_VERSION = 11;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -222,10 +229,15 @@ function needsPhaseEnrichment(entry) {
   );
 }
 
-/** Cache radar + zones per map while indexing one demo. */
-async function ensureMapControl(io, mapCode, cache) {
-  if (!mapCode) return null;
-  if (cache.has(mapCode)) return cache.get(mapCode);
+/** Roles missing or on an older role algorithm. */
+function needsRoleEnrichment(entry) {
+  if (!entry?.rounds?.length) return false;
+  if (!entry.roles || entry.roles.v !== ROLES_VERSION) return true;
+  return false;
+}
+
+/** Load zone network for a map (bombsites + vision). Always returns an object. */
+async function loadMapNetwork(io, mapCode) {
   let network = null;
   try {
     network = typeof io.getZones === 'function' ? await io.getZones(mapCode) : null;
@@ -242,6 +254,21 @@ async function ensureMapControl(io, mapCode, cache) {
       bombSites: { a: null, b: null }
     };
   }
+  return network;
+}
+
+/**
+ * Cache radar + zones per map while indexing one demo.
+ * Returns control-ready network for possession, or null if no field.
+ * Also fills `zoneCache` with the raw network (for roles / bombsites).
+ */
+async function ensureMapControl(io, mapCode, cache, zoneCache = null) {
+  if (!mapCode) return null;
+  if (zoneCache?.has(mapCode) && cache.has(mapCode)) {
+    return cache.get(mapCode);
+  }
+  const network = await loadMapNetwork(io, mapCode);
+  if (zoneCache) zoneCache.set(mapCode, network);
   try {
     const mask = await loadRadarMask(mapCode);
     if (mask) registerRadarMask(mapCode, mask);
@@ -276,7 +303,7 @@ async function applyPossessionFields(row, meta, track, network) {
 }
 
 /**
- * Refresh phase combat + AWP Acc from ticks (no painted geography).
+ * Refresh phase combat + AWP Acc + roles from ticks (no painted geography).
  */
 async function enrichPhases(io, user, entry) {
   if (!entry?.rounds?.length) return entry;
@@ -289,7 +316,9 @@ async function enrichPhases(io, user, entry) {
   }));
 
   const canTicks = typeof io.readRoundTicks === 'function';
+  const controlCache = new Map();
   const zoneCache = new Map();
+  const roleWork = createRoleWork();
 
   for (const row of entry.rounds) {
     let meta = null;
@@ -344,15 +373,33 @@ async function enrichPhases(io, user, entry) {
     applyTimingFields(row, meta, playerIds);
 
     if (tickBuffer) {
-      const network = await ensureMapControl(io, meta.map || row.m, zoneCache);
+      const network = await ensureMapControl(
+        io,
+        meta.map || row.m,
+        controlCache,
+        zoneCache
+      );
       const track = new TickTrack(tickBuffer);
       await applyPossessionFields(row, meta, track, network);
+      const zones = zoneCache.get(meta.map || row.m) || network;
+      accumulateRoundRoles(roleWork, {
+        meta,
+        track,
+        row,
+        network: zones,
+        roster
+      });
     } else {
       row.pos1 = null;
       row.pos2 = null;
     }
   }
 
+  const sitesByMap = new Map();
+  for (const [map, net] of zoneCache) {
+    sitesByMap.set(map, hasBombSites(net));
+  }
+  entry.roles = finalizeRoles(roleWork, sitesByMap);
   entry.positions = false;
   entry.pz = 0;
   entry.v = STATS_VERSION;
@@ -384,7 +431,9 @@ async function buildIndex(io, user, record) {
     team: p.team,
     slot: p.slot
   }));
+  const controlCache = new Map();
   const zoneCache = new Map();
+  const roleWork = createRoleWork();
 
   for (const file of files) {
     let meta = null;
@@ -433,12 +482,30 @@ async function buildIndex(io, user, record) {
     );
 
     if (tickBuffer) {
-      const network = await ensureMapControl(io, meta.map || row.m, zoneCache);
+      const network = await ensureMapControl(
+        io,
+        meta.map || row.m,
+        controlCache,
+        zoneCache
+      );
       const track = new TickTrack(tickBuffer);
       await applyPossessionFields(row, meta, track, network);
+      const zones = zoneCache.get(meta.map || row.m) || network;
+      accumulateRoundRoles(roleWork, {
+        meta,
+        track,
+        row,
+        network: zones,
+        roster
+      });
     }
 
     rounds.push(row);
+  }
+
+  const sitesByMap = new Map();
+  for (const [map, net] of zoneCache) {
+    sitesByMap.set(map, hasBombSites(net));
   }
 
   const score = record.score || { team1: 0, team2: 0 };
@@ -456,6 +523,7 @@ async function buildIndex(io, user, record) {
     uploadedAt: record.uploadedAt || record.parsedAt || 0,
     players,
     rounds,
+    roles: finalizeRoles(roleWork, sitesByMap),
     positions: false,
     pz: 0
   };
@@ -497,7 +565,7 @@ export async function demoIndex(io, user, record) {
 
   if (entry.key !== key) entry.key = key;
 
-  if (needsPhaseEnrichment(entry)) {
+  if (needsPhaseEnrichment(entry) || needsRoleEnrichment(entry)) {
     await enrichPhases(io, user, entry);
     await persistEntry(io, user, key, entry);
     return entry;
@@ -592,7 +660,11 @@ export async function refreshLibraryStats(io, user, records, { force = false } =
         (before.key === key ||
           (typeof before.key === 'string' && before.key.startsWith(`${key}|`)));
       const wasMissing = !before || !keyOk;
-      const wasStale = Boolean(before && keyOk && needsPhaseEnrichment(before));
+      const wasStale = Boolean(
+        before &&
+          keyOk &&
+          (needsPhaseEnrichment(before) || needsRoleEnrichment(before))
+      );
 
       const entry = await demoIndex(io, user, record);
       if (!entry) {

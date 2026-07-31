@@ -13,6 +13,7 @@
 
 import { P } from '../shared/statsMath.js';
 import { buyBucket, econHasAwp } from '../shared/roundId.js';
+import { roleForPlayer } from '../roles/computeRoles.js';
 
 /** Clock-based phase cuts, in live seconds after freeze end. */
 export const PHASE_CUTS = { earlyEnd: 40, lateStart: 75 };
@@ -183,6 +184,7 @@ export function buildFacts(payload) {
           const late = phaseLine(bag, 'late');
           const swing = Number.isFinite(row.sw?.[id]) ? row.sw[id] : null;
 
+          const role = roleForPlayer(demo.roles, map, side, id);
           const fact = {
             ...ctx,
             playerId: id,
@@ -211,7 +213,9 @@ export function buildFacts(payload) {
             killsLate: late ? late[P.KILLS] : 0,
             damageEarly: early ? early[P.DAMAGE] : 0,
             damageMid: mid ? mid[P.DAMAGE] : 0,
-            damageLate: late ? late[P.DAMAGE] : 0
+            damageLate: late ? late[P.DAMAGE] : 0,
+            roleLabel: role?.label || '',
+            roleTactical: role?.tactical || ''
           };
           fact.multiKill = fact.kills >= 2 ? 1 : 0;
           fact.tripleKill = fact.kills >= 3 ? 1 : 0;
@@ -270,6 +274,8 @@ export function buildFacts(payload) {
         const t = numOrNull(k.t);
         const weapon = String(k.w || '').trim();
         if (weapon) weapons.set(weapon, (weapons.get(weapon) || 0) + 1);
+        const killSide = (team === 1 ? row.s1 : row.s2) || '';
+        const role = roleForPlayer(demo.roles, map, killSide, k.a || '');
         killFacts.push({
           demoId: demo.id,
           file: row.f,
@@ -282,7 +288,7 @@ export function buildFacts(payload) {
           teamName: team === 1 ? name1 : name2,
           oppKey: team === 1 ? key2 : key1,
           oppName: team === 1 ? name2 : name1,
-          side: (team === 1 ? row.s1 : row.s2) || '',
+          side: killSide,
           oppSide: (team === 1 ? row.s2 : row.s1) || '',
           econ: buyBucket(rawEcon),
           oppEcon: buyBucket(rawOppEcon),
@@ -315,7 +321,9 @@ export function buildFacts(payload) {
           gun: k.g ? 1 : 0,
           weapon,
           postPlant: plantTime !== null && t !== null && t >= plantTime ? 1 : 0,
-          trade: 0
+          trade: 0,
+          roleLabel: role?.label || '',
+          roleTactical: role?.tactical || ''
         });
       });
     }
@@ -364,7 +372,9 @@ export function emptyFilter() {
     timeTo: null,
     /** @type {string[]} subset of hs / gun / awp / opening / postplant / preplant */
     killKinds: [],
-    weapons: []
+    weapons: [],
+    /** Role / position labels (Lurk, Pack, A Anchor, …). */
+    roles: []
   };
 }
 
@@ -394,6 +404,11 @@ export function factPasses(fact, f = {}) {
     if (!id || !f.players.includes(id)) return false;
   }
   if (f.sides?.length && !f.sides.includes(fact.side)) return false;
+  if (f.roles?.length) {
+    const label = fact.roleLabel || '';
+    const tac = fact.roleTactical || '';
+    if (!f.roles.includes(label) && !f.roles.includes(tac)) return false;
+  }
   if (f.econ?.length && !f.econ.includes(fact.econ)) return false;
   if (f.oppEcon?.length && !f.oppEcon.includes(fact.oppEcon)) return false;
   if (f.hasAwp && !fact.hasAwp) return false;

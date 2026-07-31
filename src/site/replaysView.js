@@ -31,6 +31,7 @@ import {
   winningSide
 } from '../replays/shared/roundId.js';
 import { collectRounds, matchesQuery, splitStoredName } from '../replays/shared/roundFilter.js';
+import { clusterTeams } from '../replays/shared/teamClusters.js';
 import { openingSituation, SITUATION_OPTIONS } from '../replays/shared/openingSituation.js';
 import { findRoundDecided } from '../replays/coach/roundDecided.js';
 import { PACKAGE_EXT } from '../replays/shared/replayPackage.js';
@@ -353,7 +354,15 @@ export function initReplaysView({ escapeHtml }) {
     const demoStats = target.closest('[data-demo-stats]');
 
     if (open) {
-      const demo = demos.find((d) => d.id === open.dataset.open);
+      const id = open.dataset.open;
+      let demo = demos.find((d) => d.id === id);
+      if (!demo) {
+        try {
+          demo = (await fetchDemo(id))?.demo || null;
+        } catch {
+          demo = null;
+        }
+      }
       if (demo) {
         const list = (demo.rounds || []).map((r) => ({
           ...r,
@@ -372,7 +381,15 @@ export function initReplaysView({ escapeHtml }) {
       return true;
     }
     if (demoStats) {
-      const demo = demos.find((d) => d.id === demoStats.dataset.demoStats);
+      const id = demoStats.dataset.demoStats;
+      let demo = demos.find((d) => d.id === id);
+      if (!demo) {
+        try {
+          demo = (await fetchDemo(id))?.demo || null;
+        } catch {
+          demo = null;
+        }
+      }
       if (demo) {
         showStats({
           demos: [demo.id],
@@ -382,7 +399,15 @@ export function initReplaysView({ escapeHtml }) {
       return true;
     }
     if (rename) {
-      const demo = demos.find((d) => d.id === rename.dataset.rename);
+      const id = rename.dataset.rename;
+      let demo = demos.find((d) => d.id === id);
+      if (!demo) {
+        try {
+          demo = (await fetchDemo(id))?.demo || null;
+        } catch {
+          demo = null;
+        }
+      }
       if (demo) await promptTeamNames(demo);
       return true;
     }
@@ -857,110 +882,23 @@ export function initReplaysView({ escapeHtml }) {
 
   // ---- team clustering ----------------------------------------------------
 
-  function clusterTeams(demoList) {
-    /** @type {{ shortId: string, name: string, players: Set<string> }[]} */
-    const appearances = [];
-    for (const d of demoList) {
-      for (const side of [1, 2]) {
-        const team = side === 1 ? d.team1 : d.team2;
-        if (!team?.id) continue;
-        const players = new Set();
-        for (const p of d.players || []) {
-          if (Number(p.team) !== side) continue;
-          const key = p.steamId || p.id;
-          if (key) players.add(String(key));
-        }
-        appearances.push({
-          shortId: String(team.id),
-          name: String(team.name || ''),
-          players
-        });
-      }
-    }
-    if (!appearances.length) return [];
-
-    const parent = appearances.map((_, i) => i);
-    const find = (i) => {
-      while (parent[i] !== i) {
-        parent[i] = parent[parent[i]];
-        i = parent[i];
-      }
-      return i;
-    };
-    const union = (a, b) => {
-      const ra = find(a);
-      const rb = find(b);
-      if (ra !== rb) parent[rb] = ra;
-    };
-
-    const byNormName = new Map();
-    for (let i = 0; i < appearances.length; i++) {
-      const norm = appearances[i].name.trim().toLowerCase();
-      if (!norm) continue;
-      if (byNormName.has(norm)) union(byNormName.get(norm), i);
-      else byNormName.set(norm, i);
-    }
-
-    for (let i = 0; i < appearances.length; i++) {
-      for (let j = i + 1; j < appearances.length; j++) {
-        if (find(i) === find(j)) continue;
-        const a = appearances[i].players;
-        const b = appearances[j].players;
-        if (a.size < 3 || b.size < 3) continue;
-        let shared = 0;
-        for (const p of a) {
-          if (b.has(p)) {
-            shared++;
-            if (shared >= 3) {
-              union(i, j);
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    const groups = new Map();
-    for (let i = 0; i < appearances.length; i++) {
-      const root = find(i);
-      let g = groups.get(root);
-      if (!g) {
-        g = { shortIds: new Set(), nameCounts: new Map() };
-        groups.set(root, g);
-      }
-      g.shortIds.add(appearances[i].shortId);
-      const name = appearances[i].name.trim();
-      if (name) g.nameCounts.set(name, (g.nameCounts.get(name) || 0) + 1);
-    }
-
-    const clusters = [];
-    for (const g of groups.values()) {
-      const shortIds = [...g.shortIds].sort();
-      let bestName = shortIds[0];
-      let bestCount = -1;
-      for (const [name, count] of g.nameCounts) {
-        if (count > bestCount || (count === bestCount && name.localeCompare(bestName) < 0)) {
-          bestName = name;
-          bestCount = count;
-        }
-      }
-      clusters.push({
-        key: shortIds.join('|'),
-        name: bestName || shortIds[0],
-        shortIds
-      });
-    }
-    clusters.sort((a, b) => a.name.localeCompare(b.name));
-    return clusters;
-  }
+  /** Full-library clusters from the last demos fetch (not just the current page). */
+  let libraryTeamClusters = [];
 
   function rebuildTeamClusters() {
-    teamClusters = clusterTeams(demos);
+    teamClusters = libraryTeamClusters.length
+      ? libraryTeamClusters
+      : clusterTeams(demos.filter((d) => (d.status || 'ready') === 'ready'));
     teamClustersByKey = new Map(teamClusters.map((c) => [c.key, c]));
     for (const key of [...filters.teams]) {
       if (!teamClustersByKey.has(key)) filters.teams.delete(key);
     }
     if (!filters.teams.size) filters.wonByMode = '';
+  }
+
+  /** Team / player filters must search the whole library, not the demo page. */
+  function libraryWideFilters() {
+    return Boolean(filters.teams.size || filters.players.size);
   }
 
   function knownPlayers() {
@@ -1609,16 +1547,18 @@ export function initReplaysView({ escapeHtml }) {
         fetchPlaylists().catch(() => [])
       ]);
       if (token !== queryToken) return;
-      // Library only has a page of demos loaded — ignore rounds from the rest
-      // of the library (stats / analytics / charts fetch the full index).
+      const wide = libraryWideFilters();
+      // Default: keep results on the loaded demo page. Team/player filters
+      // search the whole library via the rounds collector.
       const loadedIds = new Set(demos.map((d) => d.id));
       const fromApi = (res?.rounds || []).filter((r) => {
+        if (wide) return true;
         const id = r.demoId || splitStoredName(r.file)?.demoId;
         return id && loadedIds.has(id);
       });
-      // Prefer the larger set: directory listing can include rounds a stale
-      // demo record omitted; the demo index covers the common import path.
-      if (fromApi.length > rounds.length) {
+      if (wide && fromApi.length) {
+        rounds = fromApi;
+      } else if (fromApi.length > rounds.length) {
         rounds = fromApi;
       } else if (!rounds.length && fromApi.length) {
         rounds = fromApi;
@@ -1732,12 +1672,8 @@ export function initReplaysView({ escapeHtml }) {
         ${rowMetaHtml(when, mapCode, mapName)}
         ${matchBlockHtml(t1, t2, score)}
         <div class="rp-row-actions">
-          ${
-            d
-              ? `<button type="button" class="rp-btn-icon" data-demo-stats="${id}" title="Statistics for this match">${statsIconHtml()}</button>
-                 <button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>`
-              : ''
-          }
+          <button type="button" class="rp-btn-icon" data-demo-stats="${id}" title="Statistics for this match">${statsIconHtml()}</button>
+          <button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>
           <button type="button" class="rp-btn-icon danger" data-delete="${id}" title="Delete">
             ${deleteIconHtml()}
           </button>
@@ -1748,7 +1684,7 @@ export function initReplaysView({ escapeHtml }) {
 
   function renderResults() {
     if (!resultEl) return;
-    if (!demos.length) {
+    if (!demos.length && !demoTotal) {
       resultEl.innerHTML = `<p class="view-empty">No replays yet. Upload a ${PACKAGE_EXT} package (or a .dem).</p>`;
       return;
     }
@@ -1767,6 +1703,30 @@ export function initReplaysView({ escapeHtml }) {
         return files.map((f) => roundsByFile.get(f)).filter(Boolean);
       }
       return rounds.filter((r) => r.demoId === d.id || r.file?.endsWith(`~${d.id}`));
+    }
+
+    function demoGroupBlock(g) {
+      const d = g.demo;
+      const demoRounds = g.rounds || [];
+      if (!demoRounds.length) return '';
+      const open = expandedDemos.has(g.demoId);
+      const allSelected =
+        demoRounds.length > 0 && demoRounds.every((r) => selectedFiles.has(r.file));
+      return `
+        <section class="rp-demo-group${open ? ' open' : ''}" data-demo="${escapeHtml(g.demoId)}">
+          ${demoGroupHeadHtml(g)}
+          <div class="rp-demo-rounds" ${open ? '' : 'hidden'}>
+            <div class="rp-demo-rounds-tools">
+              <button type="button" class="rp-select-demo-rounds" data-select-demo="${escapeHtml(
+                g.demoId
+              )}">${allSelected ? 'Deselect all' : 'Select all'}</button>
+              <span class="rp-demo-rounds-meta">${demoRounds.length} round${
+                demoRounds.length === 1 ? '' : 's'
+              }</span>
+            </div>
+            ${demoRounds.map((r) => roundRowHtml(r, d)).join('')}
+          </div>
+        </section>`;
     }
 
     const selCount = selectedFiles.size;
@@ -1807,49 +1767,40 @@ export function initReplaysView({ escapeHtml }) {
       </div>`
         : '';
 
-    const demoBlocks = sortedDemos
-      .map((d) => {
-        const status = d.status || 'ready';
-        if (status !== 'ready') return demoRow(d);
-        const demoRounds = roundsForDemo(d);
-        // No matching rounds for the current filters → omit the demo entirely.
-        if (!demoRounds.length) return '';
-        const g = { demoId: d.id, demo: d, rounds: demoRounds };
-        const open = expandedDemos.has(d.id);
-        const allSelected =
-          demoRounds.length > 0 && demoRounds.every((r) => selectedFiles.has(r.file));
-        return `
-          <section class="rp-demo-group${open ? ' open' : ''}" data-demo="${escapeHtml(d.id)}">
-            ${demoGroupHeadHtml(g)}
-            <div class="rp-demo-rounds" ${open ? '' : 'hidden'}>
-              <div class="rp-demo-rounds-tools">
-                <button type="button" class="rp-select-demo-rounds" data-select-demo="${escapeHtml(
-                  d.id
-                )}">${allSelected ? 'Deselect all' : 'Select all'}</button>
-                <span class="rp-demo-rounds-meta">${demoRounds.length} round${
-                  demoRounds.length === 1 ? '' : 's'
-                }</span>
-              </div>
-              ${demoRounds.map((r) => roundRowHtml(r, d)).join('')}
-            </div>
-          </section>`;
-      })
-      .filter(Boolean)
-      .join('');
+    const wide = libraryWideFilters();
+    const demoBlocks = wide
+      ? groupRoundsByDemo(rounds)
+          .map((g) => demoGroupBlock(g))
+          .filter(Boolean)
+          .join('')
+      : sortedDemos
+          .map((d) => {
+            const status = d.status || 'ready';
+            if (status !== 'ready') return demoRow(d);
+            const demoRounds = roundsForDemo(d);
+            if (!demoRounds.length) return '';
+            return demoGroupBlock({ demoId: d.id, demo: d, rounds: demoRounds });
+          })
+          .filter(Boolean)
+          .join('');
 
     const shownStored = Math.min(libraryLimit, demoTotal);
     const loadMoreBtn = demoHasMore
       ? `<button type="button" class="btn btn-sm" data-load-more-demos>Load more</button>`
       : '';
     const pageNote =
-      demoTotal > 0
+      demoTotal > 0 && !wide
         ? `<div class="rp-library-page">
         <span class="rp-library-page-count">Showing ${shownStored} of ${demoTotal} demo${
           demoTotal === 1 ? '' : 's'
         }</span>
         ${loadMoreBtn}
       </div>`
-        : '';
+        : wide && rounds.length
+          ? `<div class="rp-library-page">
+        <span class="rp-library-page-count">Filtered across the whole library</span>
+      </div>`
+          : '';
 
     resultEl.innerHTML = `
       ${head}
@@ -2372,6 +2323,7 @@ export function initReplaysView({ escapeHtml }) {
       demoHasMore = Boolean(list.hasMore);
       renderQuota(list.usage || status.usage);
       demos = list.demos || [];
+      libraryTeamClusters = Array.isArray(list.teams) ? list.teams : [];
       rebuildTeamClusters();
       renderDemos();
       renderFilters();

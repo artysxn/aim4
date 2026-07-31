@@ -260,7 +260,13 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       ratingLost: bucketRating(s.lost).rating,
       openKills: s.openKills,
       openDeaths: s.openDeaths,
-      opkd: s.openDeaths ? s.openKills / s.openDeaths : s.openKills,
+      /** Opening kill differential (OK − OD). */
+      opkd: s.openKills - s.openDeaths,
+      /** Opening duel win rate, percent. */
+      opkRate:
+        s.openKills + s.openDeaths > 0
+          ? (s.openKills / (s.openKills + s.openDeaths)) * 100
+          : null,
       prwSwing: s.swingRounds ? s.swingSum / s.swingRounds : null,
       prwSwingTotal: s.swingSum,
       prwSwingRounds: s.swingRounds

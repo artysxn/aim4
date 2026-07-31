@@ -60,6 +60,7 @@ import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, sta
 import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
 import { importReplayPackage } from './importPackage.js';
 import { PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
+import { clusterTeams } from '../../src/replays/shared/teamClusters.js';
 import { getZones, listZoneMaps, saveZones } from '../zonesStore.js';
 
 /** What the stats index needs from storage, without importing it back. */
@@ -372,8 +373,13 @@ export async function handleReplayRequest(req, res, url) {
     // Pending parses always surface on the first page so uploads stay visible.
     const demos = offset === 0 ? [...pending, ...mapped] : mapped;
 
+    // Full-library team clusters for the TEAM typeahead (page of demos alone
+    // would hide orgs that only appear on later pages).
+    const teams = clusterTeams(records.filter((r) => (r.status || 'ready') === 'ready'));
+
     json(res, 200, {
       demos,
+      teams,
       total: records.length,
       offset,
       limit: limit || records.length,

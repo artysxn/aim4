@@ -9,13 +9,13 @@
 import { fetchStats } from '../api.js';
 import {
   attachPlayerRoles,
+  payloadHasRoles,
   playerMatchesRoleFilter
 } from '../roles/assignRoles.js';
 import {
-  CT_POSITIONS,
   CT_TACTICAL,
-  T_POSITIONS,
   T_TACTICAL,
+  positionRoleOptions,
   roleHowText
 } from '../roles/regionKeys.js';
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
@@ -77,17 +77,8 @@ export function createStatsPanel({ escapeHtml }) {
     return filter.maps.length === 1 ? filter.maps[0] : '';
   }
 
-  function payloadHasZoneRoles() {
-    for (const d of payload?.demos || []) {
-      for (const r of d.rounds || []) {
-        if (r.z && Object.keys(r.z).length) return true;
-      }
-    }
-    return false;
-  }
-
   function roleMode() {
-    if (!payloadHasZoneRoles()) return '';
+    if (!payloadHasRoles(payload)) return '';
     return singleMap() ? 'position' : 'tactical';
   }
 
@@ -141,7 +132,7 @@ export function createStatsPanel({ escapeHtml }) {
     if (!mode) return '';
     const opts =
       mode === 'position'
-        ? Object.values(side === 'CT' ? CT_POSITIONS : T_POSITIONS)
+        ? positionRoleOptions(side)
         : side === 'CT'
           ? CT_TACTICAL
           : T_TACTICAL;

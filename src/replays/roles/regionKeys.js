@@ -1,6 +1,7 @@
 // ---------------------------------------------------------------------------
-// Named Inferno (and future) regions for role assignment.
-// Matching is fuzzy on normalized names from the Position Editor.
+// Role labels for Statistics / Charts.
+// Map-specific columns use A/B Lurk, Pack, A/B Anchor, A/B Rotation, AWPer.
+// Cross-map columns use Lurk / Pack / Anchor / Rotation / AWPer.
 // ---------------------------------------------------------------------------
 
 /** Lowercase, collapse punctuation → spaces. */
@@ -26,7 +27,7 @@ export function nameMatches(name, aliases) {
   return false;
 }
 
-/** Area-level aliases (JSON `areas`). */
+/** @deprecated Inferno painted-region aliases (legacy presence). */
 export const AREA = {
   banana: ['banana'],
   bSite: ['b site', 'bsite'],
@@ -36,7 +37,7 @@ export const AREA = {
   aSite: ['a site', 'asite']
 };
 
-/** Zone-level aliases (JSON `sections`). */
+/** @deprecated */
 export const ZONE = {
   topBanana: ['top banana', 'topbanana'],
   bSite: ['b site', 'bsite'],
@@ -47,7 +48,7 @@ export const ZONE = {
   aps: ['aps', 'apps', 'apartments']
 };
 
-/** Compact keys stored on stats rows. */
+/** @deprecated Compact keys for legacy region bags. */
 export const RK = {
   BANANA: 'bn',
   B_SITE: 'bs',
@@ -59,12 +60,7 @@ export const RK = {
   B_CT: 'bc'
 };
 
-/**
- * Map area/section name → storage keys to increment.
- * @param {'area'|'zone'} kind
- * @param {string} name
- * @returns {string[]}
- */
+/** @deprecated */
 export function keysForName(kind, name) {
   const out = [];
   if (kind === 'area') {
@@ -91,27 +87,27 @@ export const T_POSITIONS = {
   awper: {
     label: 'AWPer',
     tactical: 'AWPer',
-    how: 'Most rounds on the team with an AWP on T.'
+    how: 'Most rounds on the team with an AWP out on T (rounds held / kills / shots).'
   },
-  bSite: {
-    label: 'B Site',
-    tactical: 'Lurker',
-    how: 'Most rounds spent in the Banana and/or B Site areas on T. Counts as Lurker.'
+  aLurk: {
+    label: 'A Lurk',
+    tactical: 'Lurk',
+    how: 'One of the two lowest spatial-diversity riflers on T; closer to bombsite A than B on average. Counts as Lurk.'
   },
-  bRotation: {
-    label: 'B Rotation',
-    tactical: 'Rotation',
-    how: '2nd-most rounds in T Spawn & Banana (behind B Site), with fewer AWP rounds than the AWPer. Counts as Rotation.'
+  bLurk: {
+    label: 'B Lurk',
+    tactical: 'Lurk',
+    how: 'One of the two lowest spatial-diversity riflers on T; closer to bombsite B than A on average. Counts as Lurk.'
   },
-  aRotation: {
-    label: 'A Rotation',
-    tactical: 'Rotation',
-    how: '2nd-most rounds in Aps, Mid Long, and A Site (behind A Site). Counts as Rotation.'
+  lurk: {
+    label: 'Lurk',
+    tactical: 'Lurk',
+    how: 'Low spatial diversity of mid-round positions (stable spots). Used when A/B sites are unavailable.'
   },
-  aSite: {
-    label: 'A Site',
-    tactical: 'Lurker',
-    how: 'Most rounds spent in the Aps area on T. Counts as Lurker.'
+  pack: {
+    label: 'Pack',
+    tactical: 'Pack',
+    how: 'One of the two highest spatial-diversity riflers on T — positions vary with the round plan.'
   }
 };
 
@@ -120,27 +116,37 @@ export const CT_POSITIONS = {
   awper: {
     label: 'AWPer',
     tactical: 'AWPer',
-    how: 'Most rounds on the team with an AWP on CT.'
+    how: 'Most rounds on the team with an AWP out on CT (rounds held / kills / shots).'
   },
-  bAggro: {
-    label: 'B Aggro',
-    tactical: 'Rotation',
-    how: 'One of the two players with the most time in B Site + Banana. More opening duels and more time in Top Banana while the other holds B Site / B CT. Counts as Rotation.'
-  },
-  bSite: {
-    label: 'B Site',
+  aAnchor: {
+    label: 'A Anchor',
     tactical: 'Anchor',
-    how: 'The other B duo player — fewer openings, more time on B Site / B CT. Counts as Anchor.'
+    how: 'One of the two lowest PSDT riflers on CT full buys; closer to bombsite A than B most rounds. Counts as Anchor.'
+  },
+  bAnchor: {
+    label: 'B Anchor',
+    tactical: 'Anchor',
+    how: 'One of the two lowest PSDT riflers on CT full buys; closer to bombsite B than A most rounds. Counts as Anchor.'
+  },
+  anchor: {
+    label: 'Anchor',
+    tactical: 'Anchor',
+    how: 'Low pulled-string distance travelled on CT full buys. Used when A/B sites are unavailable.'
   },
   aRotation: {
     label: 'A Rotation',
     tactical: 'Rotation',
-    how: 'Less AWP than the AWPer; less time on Mid Long + A Site than the A Site player. Counts as Rotation.'
+    how: 'One of the two highest PSDT riflers on CT full buys; closer to bombsite A than B most rounds. Counts as Rotation.'
   },
-  aSite: {
-    label: 'A Site',
-    tactical: 'Anchor',
-    how: 'Less AWP than the AWPer; most time on A Site, Mid Long, and Aps, least on B. Counts as Anchor.'
+  bRotation: {
+    label: 'B Rotation',
+    tactical: 'Rotation',
+    how: 'One of the two highest PSDT riflers on CT full buys; closer to bombsite B than A most rounds. Counts as Rotation.'
+  },
+  rotation: {
+    label: 'Rotation',
+    tactical: 'Rotation',
+    how: 'High pulled-string distance travelled on CT full buys. Used when A/B sites are unavailable.'
   }
 };
 
@@ -150,12 +156,12 @@ export const T_TACTICAL = [
     how: 'AWPer position on a majority of maps they played on T.'
   },
   {
-    label: 'Lurker',
-    how: 'More Lurker map-positions (A Site / B Site) than Rotation across maps on T.'
+    label: 'Lurk',
+    how: 'More Lurk map-positions (A/B Lurk) than Pack across maps on T.'
   },
   {
-    label: 'Rotation',
-    how: 'More Rotation map-positions (A / B Rotation) than Lurker across maps on T.'
+    label: 'Pack',
+    how: 'More Pack map-positions than Lurk across maps on T.'
   }
 ];
 
@@ -166,13 +172,27 @@ export const CT_TACTICAL = [
   },
   {
     label: 'Anchor',
-    how: 'More Anchor map-positions (A Site / B Site) than Rotation across maps on CT.'
+    how: 'More Anchor map-positions (A/B Anchor) than Rotation across maps on CT.'
   },
   {
     label: 'Rotation',
-    how: 'More Rotation map-positions (A Rotation / B Aggro) than Anchor across maps on CT.'
+    how: 'More Rotation map-positions (A/B Rotation) than Anchor across maps on CT.'
   }
 ];
+
+/** Filter options for a single map (position labels, no generic fallbacks). */
+export function positionRoleOptions(side) {
+  if (side === 'CT') {
+    return [
+      CT_POSITIONS.awper,
+      CT_POSITIONS.aAnchor,
+      CT_POSITIONS.bAnchor,
+      CT_POSITIONS.aRotation,
+      CT_POSITIONS.bRotation
+    ];
+  }
+  return [T_POSITIONS.awper, T_POSITIONS.aLurk, T_POSITIONS.bLurk, T_POSITIONS.pack];
+}
 
 /** Lookup how-text for a position or tactical label. */
 export function roleHowText(side, label, mode = 'position') {

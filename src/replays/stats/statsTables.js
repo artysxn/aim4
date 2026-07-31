@@ -113,8 +113,15 @@ export const PLAYER_COLUMNS = [
     key: 'opkd',
     label: 'OPKD',
     get: (p) => p.opkd,
-    cell: (p) => f2(p.opkd),
-    tip: (p) => tip([`Opening kills: ${p.openKills}`, `Opening deaths: ${p.openDeaths}`])
+    cell: (p) =>
+      Number.isFinite(p.opkd) ? `${p.opkd > 0 ? '+' : ''}${Math.round(p.opkd)}` : '—',
+    tip: (p) =>
+      tip([
+        Number.isFinite(p.opkRate) ? `Success rate: ${pct(p.opkRate)}` : 'No opening duels',
+        `Opening kills: ${p.openKills}`,
+        `Opening deaths: ${p.openDeaths}`,
+        `Difference: ${p.openKills - p.openDeaths}`
+      ])
   },
   { key: 'kast', label: 'KAST', get: (p) => p.kast, cell: (p) => pct(p.kast) },
   { key: 'impact', label: 'Impact', get: (p) => p.impact, cell: (p) => f2(p.impact) }

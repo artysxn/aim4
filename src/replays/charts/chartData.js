@@ -309,6 +309,7 @@ export function filterWords(f) {
   const out = [];
   if (f.perRound) out.push('per round');
   if (f.sides?.length) out.push(f.sides.join('/'));
+  if (f.roles?.length) out.push(f.roles.join('/'));
   if (f.maps?.length) out.push(f.maps.map((m) => MAPS[m]?.name || m).join('/'));
   if (f.econ?.length) out.push(f.econ.map(buyWord).join('/'));
   if (f.oppEcon?.length) out.push(`vs ${f.oppEcon.map(buyWord).join('/')}`);

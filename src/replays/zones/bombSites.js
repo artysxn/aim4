@@ -93,12 +93,26 @@ export function expandBombRect(piece, pad) {
   };
 }
 
-function pieceCenter(piece) {
+export function pieceCenter(piece) {
   if (piece?.type === 'poly' && piece.ring?.length) {
     const b = pieceBounds(piece);
     return { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 };
   }
+  if (!piece || !Number.isFinite(piece.x)) return null;
   return { x: piece.x + piece.w / 2, y: piece.y + piece.h / 2 };
+}
+
+/**
+ * Centers of A/B bombsite pieces (null when a site is missing).
+ * @param {object | null | undefined} network
+ * @returns {{ a: {x:number,y:number}|null, b: {x:number,y:number}|null }}
+ */
+export function bombSiteCenters(network) {
+  const sites = sanitizeBombSites(network?.bombSites);
+  return {
+    a: sites.a ? pieceCenter(sites.a) : null,
+    b: sites.b ? pieceCenter(sites.b) : null
+  };
 }
 
 /**

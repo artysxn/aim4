@@ -10,6 +10,11 @@
 
 import { fetchStats } from '../api.js';
 import { ECONOMIES, MAPS } from '../shared/roundId.js';
+import {
+  CT_TACTICAL,
+  T_TACTICAL,
+  positionRoleOptions
+} from '../roles/regionKeys.js';
 import { buildFacts, emptyFilter } from './chartFacts.js';
 import {
   CHART_TYPES,
@@ -161,6 +166,34 @@ export function createChartsPanel({ escapeHtml }) {
 
   // ---- filter editor ------------------------------------------------------
 
+  /** Role / position options — A/B labels only when a single map is selected. */
+  function roleFilterOptions(f) {
+    const selectedMaps = f.maps?.length ? f.maps : [];
+    const single =
+      selectedMaps.length === 1 ||
+      (!selectedMaps.length && (facts?.maps || []).length === 1);
+    if (single) {
+      const seen = new Set();
+      const out = [];
+      for (const side of ['T', 'CT']) {
+        for (const o of positionRoleOptions(side)) {
+          if (seen.has(o.label)) continue;
+          seen.add(o.label);
+          out.push({ key: o.label, label: o.label });
+        }
+      }
+      return out;
+    }
+    const out = [];
+    const seen = new Set();
+    for (const o of [...T_TACTICAL, ...CT_TACTICAL]) {
+      if (seen.has(o.label)) continue;
+      seen.add(o.label);
+      out.push({ key: o.label, label: o.label });
+    }
+    return out;
+  }
+
   /**
    * @param {'g'|'x'|'y'} scope
    * @param {object} f  the filter object this scope edits
@@ -189,6 +222,9 @@ export function createChartsPanel({ escapeHtml }) {
           arr('sides')
         )
       ),
+      src === 'player' || src === 'kill'
+        ? group('Role', multiSelect(scope, 'roles', roleFilterOptions(f), arr('roles')))
+        : '',
       group(
         'Own buy',
         `${multiSelect(scope, 'econ', econOpts, arr('econ'))}${checkFlag(
