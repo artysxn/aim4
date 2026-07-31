@@ -485,21 +485,71 @@ export function statsTableHtml(rows, opts) {
 }
 
 /**
+ * Pin sticky column `left` offsets from measured widths so scroll content
+ * cannot paint over frozen columns.
+ * @param {HTMLTableElement} table
+ */
+function layoutStickyColumns(table) {
+  if (!table) return;
+  const heads = [...table.querySelectorAll('thead th.st-sticky')];
+  if (!heads.length) return;
+
+  // Measure first (without writing) so reading width isn't affected mid-pass.
+  const widths = heads.map((th) => Math.ceil(th.getBoundingClientRect().width) || th.offsetWidth || 0);
+  let left = 0;
+  for (let i = 0; i < heads.length; i++) {
+    const width = Math.max(widths[i], 1);
+    const cells = table.querySelectorAll(`.st-sticky-${i}`);
+    // Leftmost sticky stays on top if offsets ever collide.
+    const z = String(30 - i);
+    cells.forEach((cell) => {
+      cell.style.left = `${left}px`;
+      cell.style.width = `${width}px`;
+      cell.style.minWidth = `${width}px`;
+      cell.style.maxWidth = `${width}px`;
+      cell.style.zIndex = z;
+      cell.style.boxSizing = 'border-box';
+    });
+    left += width;
+  }
+  // Keep scrolling headers/cells under the frozen block.
+  table.querySelectorAll('thead th:not(.st-sticky), tbody td:not(.st-sticky)').forEach((cell) => {
+    cell.style.zIndex = '0';
+  });
+}
+
+/**
  * Keep the top scrollbar in sync with the table body (call after render).
  * @param {ParentNode} root
  */
 export function bindStatsHScroll(root) {
   root.querySelectorAll('[data-st-hscroll]').forEach((wrap) => {
+    if (wrap.dataset.stHscrollBound === '1') {
+      // Re-measure after a re-render that reused the binder path.
+      const body = wrap.querySelector('[data-st-hscroll-body]');
+      const table = body?.querySelector('table');
+      const spacer = wrap.querySelector('[data-st-hscroll-spacer]');
+      requestAnimationFrame(() => {
+        layoutStickyColumns(table);
+        if (spacer && body) spacer.style.width = `${body.scrollWidth}px`;
+      });
+      return;
+    }
+    wrap.dataset.stHscrollBound = '1';
+
     const bar = wrap.querySelector('[data-st-hscroll-bar]');
     const body = wrap.querySelector('[data-st-hscroll-body]');
     const spacer = wrap.querySelector('[data-st-hscroll-spacer]');
+    const table = body?.querySelector('table');
     if (!bar || !body || !spacer) return;
 
     let lock = false;
-    const syncWidth = () => {
+    const sync = () => {
+      layoutStickyColumns(table);
       spacer.style.width = `${body.scrollWidth}px`;
     };
-    syncWidth();
+    // After paint — getBoundingClientRect is wrong before layout.
+    requestAnimationFrame(() => requestAnimationFrame(sync));
 
     bar.addEventListener('scroll', () => {
       if (lock) return;
@@ -515,9 +565,8 @@ export function bindStatsHScroll(root) {
     });
 
     if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver(syncWidth);
+      const ro = new ResizeObserver(() => requestAnimationFrame(sync));
       ro.observe(body);
-      const table = body.querySelector('table');
       if (table) ro.observe(table);
     }
   });

@@ -104,6 +104,33 @@ const PLAYER_METRICS = [
   { key: 'kd', label: 'K/D', group: 'Core', fmt: 'num2', num: (f) => f.kills, den: (f) => f.deaths },
   { key: 'kast', label: 'KAST %', group: 'Core', fmt: 'pct', num: (f) => f.kast * 100, den: () => 1 },
   {
+    key: 'opatt',
+    label: 'OPATT',
+    group: 'Core',
+    fmt: 'num2',
+    num: (f) => (f.openKill || 0) + (f.openDeath || 0),
+    den: () => 1,
+    tip: 'Opening attempts (kills + deaths) per round.'
+  },
+  {
+    key: 'psdt',
+    label: 'PSDT',
+    group: 'Core',
+    fmt: 'int',
+    num: (f) => f.psdt,
+    den: (f) => (f.psdt === null || f.psdt === undefined ? null : 1),
+    tip: 'Pulled-string distance travelled (125u), averaged per round.'
+  },
+  {
+    key: 'dt',
+    label: 'DT',
+    group: 'Core',
+    fmt: 'int',
+    num: (f) => f.dt,
+    den: (f) => (f.dt === null || f.dt === undefined ? null : 1),
+    tip: 'Raw distance travelled, averaged per round.'
+  },
+  {
     key: 'hsPct',
     label: 'Headshot %',
     group: 'Aim',
@@ -159,6 +186,23 @@ const PLAYER_METRICS = [
     fmt: 'pct',
     num: (f) => f.openKill * 100,
     den: (f) => f.openKill + f.openDeath
+  },
+  {
+    key: 'opkd',
+    label: 'OPKD',
+    group: 'Opening duel',
+    fmt: 'num1',
+    custom: (facts) => {
+      if (!facts.length) return null;
+      let ok = 0;
+      let od = 0;
+      for (const f of facts) {
+        ok += f.openKill || 0;
+        od += f.openDeath || 0;
+      }
+      return ok - od;
+    },
+    tip: 'Opening kill difference (OK − OD) over the filtered rounds.'
   },
   {
     key: 'firstKillTime',

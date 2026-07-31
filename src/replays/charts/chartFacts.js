@@ -215,7 +215,9 @@ export function buildFacts(payload) {
             damageMid: mid ? mid[P.DAMAGE] : 0,
             damageLate: late ? late[P.DAMAGE] : 0,
             roleLabel: role?.label || '',
-            roleTactical: role?.tactical || ''
+            roleTactical: role?.tactical || '',
+            psdt: Number.isFinite(row.mv?.[id]?.psdt) ? row.mv[id].psdt : null,
+            dt: Number.isFinite(row.mv?.[id]?.dt) ? row.mv[id].dt : null
           };
           fact.multiKill = fact.kills >= 2 ? 1 : 0;
           fact.tripleKill = fact.kills >= 3 ? 1 : 0;
