@@ -1,4 +1,4 @@
-// ---------------------------------------------------------------------------
+﻿// ---------------------------------------------------------------------------
 // UIOverlay.js
 // All HTML/CSS UI layered over the canvas: main menu, settings, leaderboards,
 // in-run HUD, pause + results screens. Holds the screen state machine and coordinates pointer-lock with
@@ -146,7 +146,7 @@ const SCENARIO_SETTING_IDS = new Set([
   'peekswitchbots'
 ]);
 
-/** Bot gamemodes — show the classic (static) bot model toggle in training gear. */
+/** Bot gamemodes â€” show the classic (static) bot model toggle in training gear. */
 const BOT_SCENARIO_IDS = new Set([
   'arena',
   'snipercrossfire',
@@ -426,7 +426,7 @@ export class UIOverlay {
       el.id = 'error-banner';
       el.style.cssText =
         'position:fixed;top:0;left:0;right:0;z-index:9999;pointer-events:auto;' +
-        'background:#7a1020;color:#fff;font:13px/1.4 "Host Grotesk",sans-serif;padding:10px 44px 10px 14px;' +
+        'background:#7a1020;color:#fff;font:13px/1.4 "PP Mori",sans-serif;padding:10px 44px 10px 14px;' +
         'white-space:pre-wrap;word-break:break-word;box-shadow:0 4px 20px rgba(0,0,0,.5);';
       const close = document.createElement('button');
       close.textContent = 'X';
@@ -449,7 +449,7 @@ export class UIOverlay {
         label: 'Game settings',
         body: `
           ${numField('set-sensitivity', 'Sensitivity', '0.001')}
-          ${rf('set-fov', 'Horizontal FOV (°)', 60, 130, 1)}
+          ${rf('set-fov', 'Horizontal FOV (Â°)', 60, 130, 1)}
           <div class="field field-plain">
             <div class="field-top">
               <span class="field-label">Resolution</span>
@@ -505,7 +505,7 @@ export class UIOverlay {
               <div class="field-top"><span class="field-label">Skybox</span></div>
               <select id="set-skybox-id"></select>
             </div>
-            ${rf('set-skybox-hue', 'Hue (°)', -180, 180, 5)}
+            ${rf('set-skybox-hue', 'Hue (Â°)', -180, 180, 5)}
             ${rf('set-skybox-sat', 'Saturation (%)', 0, 200, 5)}
             ${rf('set-skybox-bright', 'Brightness (%)', 0, 200, 5)}
             ${rf('set-skybox-contrast', 'Contrast (%)', 0, 200, 5)}
@@ -544,12 +544,12 @@ export class UIOverlay {
           </div>
           <div class="config-code-block">
             <div class="field-top"><span class="field-label">Graphics code</span></div>
-            <code class="config-export-code" id="gfx-code-export">—</code>
+            <code class="config-export-code" id="gfx-code-export">â€”</code>
             <div class="config-actions">
               <button type="button" class="btn" id="gfx-code-copy">Copy code</button>
             </div>
             <div class="playlist-add-row">
-              <input type="text" id="gfx-code-import" class="config-code-input" placeholder="Paste AIM4G-… code" spellcheck="false" autocomplete="off" />
+              <input type="text" id="gfx-code-import" class="config-code-input" placeholder="Paste AIM4G-â€¦ code" spellcheck="false" autocomplete="off" />
               <button type="button" class="btn" id="gfx-code-import-btn">Import</button>
             </div>
             <p class="readout" id="gfx-code-status"></p>
@@ -668,7 +668,7 @@ ${rf('set-stars-size', 'Dot size', 0.05, 0.5, 0.01)}
         body: `
 ${rf('set-bounce-size', 'Ball size', 0.15, 0.9, 0.05)}
           ${rf('set-bounce-count', 'Ball count', 1, 8, 1)}
-          ${rf('set-bounce-speed', 'Travel speed (°/s)', 10, 120, 5)}
+          ${rf('set-bounce-speed', 'Travel speed (Â°/s)', 10, 120, 5)}
           ${rf('set-bounce-min-dist', 'Min distance (m)', 3, 14, 0.5)}
           ${rf('set-bounce-max-dist', 'Max distance (m)', 4, 20, 0.5)}
           ${rf('set-bounce-strength', 'Bounce strength', 1, 15, 0.5)}
@@ -711,7 +711,7 @@ ${rf('set-pasu-size', 'Target size', 0.15, 0.9, 0.05)}
           ${rf('set-pasu-travel-speed', 'Max travel speed (m/s)', 0.5, 8, 0.5)}
           ${rf('set-pasu-bounds-y', 'Vertical spawn scale', 0.25, 2, 0.05)}
           ${rf('set-pasu-bounds-x', 'Horizontal spawn scale', 0.25, 2, 0.05)}
-          ${rf('set-pasu-angle', 'Angle offset (°)', 15, 360, 15)}
+          ${rf('set-pasu-angle', 'Angle offset (Â°)', 15, 360, 15)}
           <label class="field-check"><input type="checkbox" id="set-pasu-tl" /> Per-target time limit</label>
           ${rf('set-pasu-age', 'Max target age (ms)', 400, 3000, 100)}
           <label class="field-check"><input type="checkbox" id="set-pasu-infinite-ammo" /> Infinite ammo</label>
@@ -726,7 +726,7 @@ ${rf('set-spider-size', 'Target size', 0.25, 0.9, 0.05)}
           ${rf('set-spider-max-dist', 'Max distance (m)', 2, 12, 0.5)}
           ${rf('set-spider-min-dist', 'Min distance (m)', 0.5, 6, 0.25)}
           ${rf('set-spider-height', 'Height spread', 0.25, 2, 0.05)}
-          ${rf('set-spider-angle', 'Angle spread (°)', 0, 45, 1)}
+          ${rf('set-spider-angle', 'Angle spread (Â°)', 0, 45, 1)}
           ${rf('set-spider-streak', 'Streak chance (% per cycle)', 0, 100, 5)}
           ${rf('set-spider-streak-min', 'Streak extra waves (min)', 1, 6, 1)}
           ${rf('set-spider-streak-max', 'Streak extra waves (max)', 1, 8, 1)}
@@ -831,9 +831,9 @@ ${rf('set-dm-bots', 'Bots', 1, 6, 1)}
               <span class="field-label">Arc</span>
             </div>
             <select id="set-range-arc">
-              <option value="90">90°</option>
-              <option value="180">180°</option>
-              <option value="360">360°</option>
+              <option value="90">90Â°</option>
+              <option value="180">180Â°</option>
+              <option value="360">360Â°</option>
             </select>
           </div>
           ${rf('set-range-count', 'Enemies', 2, 8, 1)}
@@ -957,7 +957,7 @@ ${rf('set-dt-size', 'Dot size', 0.1, 0.6, 0.05)}
         label: 'Ball',
         body: `
 ${rf('set-ball-size', 'Ball size', 0.2, 1.0, 0.05)}
-          ${rf('set-ball-speed', 'Travel speed (°/s)', 20, 140, 5)}
+          ${rf('set-ball-speed', 'Travel speed (Â°/s)', 20, 140, 5)}
           ${rf('set-ball-min-dist', 'Min distance (m)', 4, 14, 0.5)}
           ${rf('set-ball-max-dist', 'Max distance (m)', 6, 22, 0.5)}
           ${rf('set-ball-height', 'Bounce height (m)', 0.5, 5, 0.1)}`
@@ -968,7 +968,7 @@ ${rf('set-ball-size', 'Ball size', 0.2, 1.0, 0.05)}
         body: `
 ${rf('set-bt-size', 'Ball size', 0.2, 1.0, 0.05)}
           ${rf('set-bt-count', 'Ball count', 1, 6, 1)}
-          ${rf('set-bt-speed', 'Travel speed (°/s)', 10, 100, 5)}
+          ${rf('set-bt-speed', 'Travel speed (Â°/s)', 10, 100, 5)}
           ${rf('set-bt-hold', 'Hold time (s)', 0.2, 2.0, 0.05)}
           ${rf('set-bt-height', 'Bounce height (m)', 0.5, 5, 0.1)}
           ${rf('set-bt-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
@@ -1000,7 +1000,7 @@ ${rf('set-box-size', 'Dot size', 0.1, 0.8, 0.05)}
           ${rf('set-box-w', 'Box size X (m)', 2, 14, 0.5)}
           ${rf('set-box-h', 'Box size Y (m)', 1, 10, 0.5)}
           ${rf('set-box-speed', 'Speed (u/s)', 50, 400, 5)}
-          ${rf('set-box-variance', 'Speed variance (± u/s)', 0, 150, 5)}
+          ${rf('set-box-variance', 'Speed variance (Â± u/s)', 0, 150, 5)}
 ${rf('set-box-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
@@ -1011,7 +1011,7 @@ ${rf('set-circle-size', 'Dot size', 0.1, 0.8, 0.05)}
           ${rf('set-circle-w', 'Circle size X (m)', 2, 14, 0.5)}
           ${rf('set-circle-h', 'Circle size Y (m)', 1, 10, 0.5)}
           ${rf('set-circle-speed', 'Speed (u/s)', 50, 400, 5)}
-          ${rf('set-circle-variance', 'Speed variance (± u/s)', 0, 150, 5)}
+          ${rf('set-circle-variance', 'Speed variance (Â± u/s)', 0, 150, 5)}
 ${rf('set-circle-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
       },
       {
@@ -1063,7 +1063,7 @@ ${rf('set-cvawp-rows', 'Rows', 1, 3, 1)}
         label: 'Drone',
         body: `
 ${rf('set-drone-size', 'Target size', 0.2, 1.0, 0.05)}
-          ${rf('set-drone-speed', 'Travel speed (°/s)', 20, 140, 5)}
+          ${rf('set-drone-speed', 'Travel speed (Â°/s)', 20, 140, 5)}
           ${rf('set-drone-min-dist', 'Min distance (m)', 4, 14, 0.5)}
           ${rf('set-drone-max-dist', 'Max distance (m)', 6, 22, 0.5)}
           ${rf('set-drone-height', 'Bounce height (m)', 0.5, 10, 0.1)}`
@@ -1081,7 +1081,7 @@ ${rf('set-line-size', 'Dot size', 0.1, 0.8, 0.05)}
         label: 'Loops (Static)',
         body: `
 ${rf('set-loops-size', 'Dot size', 0.15, 0.6, 0.05)}
-          ${rf('set-loops-speed', 'Orbit speed (°/s)', 20, 120, 5)}
+          ${rf('set-loops-speed', 'Orbit speed (Â°/s)', 20, 120, 5)}
           ${rf('set-loops-min-dist', 'Min distance (m)', 5, 14, 0.5)}
           ${rf('set-loops-max-dist', 'Max distance (m)', 8, 22, 0.5)}
           ${rf('set-loops-misslimit', 'Miss limit (0 = unlimited)', 0, 50, 1)}`
@@ -1091,7 +1091,7 @@ ${rf('set-loops-size', 'Dot size', 0.15, 0.6, 0.05)}
         label: 'Loops (Tracking)',
         body: `
 ${rf('set-looptr-size', 'Dot size', 0.15, 0.6, 0.05)}
-          ${rf('set-looptr-speed', 'Orbit speed (°/s)', 20, 120, 5)}
+          ${rf('set-looptr-speed', 'Orbit speed (Â°/s)', 20, 120, 5)}
           ${rf('set-looptr-min-dist', 'Min distance (m)', 5, 14, 0.5)}
           ${rf('set-looptr-max-dist', 'Max distance (m)', 8, 22, 0.5)}
           ${rf('set-looptr-hold', 'Hold time (s)', 0.25, 2.5, 0.05)}
@@ -1182,8 +1182,8 @@ ${rf('set-sntr-width', 'Bot size', 0.5, 2.0, 0.05)}
 <div class="field field-plain">
             <div class="field-top"><span class="field-label">Cross direction</span></div>
             <select id="set-doors-cross" class="config-code-input">
-              <option value="rightToLeft">Right → left</option>
-              <option value="leftToRight">Left → right</option>
+              <option value="rightToLeft">Right â†’ left</option>
+              <option value="leftToRight">Left â†’ right</option>
             </select>
           </div>
           ${rf('set-doors-speed', 'Bot cross speed', 0.5, 2.0, 0.05)}
@@ -1240,7 +1240,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     return `
     <!-- MATCHMAKING QUEUE CHIP (visible while queued + in SP/menu) -->
     <div id="mm-queue-chip" class="mm-queue-chip" hidden>
-      <span id="mm-queue-text">Finding ranked match…</span>
+      <span id="mm-queue-text">Finding ranked matchâ€¦</span>
       <button type="button" class="btn btn-sm" id="mm-queue-cancel">Leave queue</button>
     </div>
 
@@ -1280,7 +1280,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     <!-- DEATHMATCH KILL FEED -->
     <div id="dm-killfeed" class="dm-killfeed"></div>
 
-    <!-- MULTIPLAYER CHAT (Enter / Y to open · Tab to return to game) -->
+    <!-- MULTIPLAYER CHAT (Enter / Y to open Â· Tab to return to game) -->
     <div id="mp-chat" class="mp-chat">
       <div id="mp-chat-log" class="mp-chat-log"></div>
       <input id="mp-chat-input" type="text" class="mp-chat-input" maxlength="120" placeholder="" spellcheck="false" autocomplete="off" />
@@ -1430,7 +1430,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       <div class="panel wide menu-panel training-panel">
         <h2 class="text-big training-heading" id="training-heading">Training</h2>
         <div class="training-search-wrap hidden" id="training-search-wrap">
-          <input type="search" id="training-search" class="config-code-input training-search-input" placeholder="Search by name or tag…" spellcheck="false" autocomplete="off" aria-label="Search gamemodes" />
+          <input type="search" id="training-search" class="config-code-input training-search-input" placeholder="Search by name or tagâ€¦" spellcheck="false" autocomplete="off" aria-label="Search gamemodes" />
         </div>
         <div class="menu-panel-body menu-panel-scroll training-list-wrap">
         <div class="training-list" id="training-list"></div>
@@ -1449,7 +1449,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
           <div id="playlists-list" class="playlists-list"></div>
           <p class="readout" id="playlist-status"></p>
           <div class="playlist-add-row playlist-import-row">
-            <input type="text" id="playlist-import-code" class="config-code-input" placeholder="Import playlist code (AIM4P-…)" spellcheck="false" autocomplete="off" />
+            <input type="text" id="playlist-import-code" class="config-code-input" placeholder="Import playlist code (AIM4P-â€¦)" spellcheck="false" autocomplete="off" />
             <button type="button" class="btn" id="playlist-import-btn">Import</button>
           </div>
         </div>
@@ -1477,7 +1477,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
               <button type="button" class="btn" id="playlist-add-current">Add mode</button>
             </div>
             <div class="playlist-add-row">
-              <input type="text" id="playlist-add-code" class="config-code-input" placeholder="Paste mode code (AIM4M-…)" spellcheck="false" autocomplete="off" />
+              <input type="text" id="playlist-add-code" class="config-code-input" placeholder="Paste mode code (AIM4M-â€¦)" spellcheck="false" autocomplete="off" />
               <button type="button" class="btn" id="playlist-add-code-btn">Add code</button>
             </div>
             <div id="playlist-draft-items" class="playlist-draft-items"></div>
@@ -1543,12 +1543,12 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
             </div>
             <div class="config-code-block">
               <div class="field-top"><span class="field-label">Config code</span></div>
-              <code class="config-export-code" id="scn-code-export">—</code>
+              <code class="config-export-code" id="scn-code-export">â€”</code>
               <div class="config-actions">
                 <button type="button" class="btn" id="scn-code-copy">Copy code</button>
               </div>
               <div class="playlist-add-row">
-                <input type="text" id="scn-code-import" class="config-code-input" placeholder="Paste AIM4M-… code" spellcheck="false" autocomplete="off" />
+                <input type="text" id="scn-code-import" class="config-code-input" placeholder="Paste AIM4M-â€¦ code" spellcheck="false" autocomplete="off" />
                 <button type="button" class="btn" id="scn-code-import-btn">Import</button>
               </div>
               <p class="readout" id="scn-code-status"></p>
@@ -1630,7 +1630,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         <details class="account-section account-dropdown">
           <summary>Show placements</summary>
           <div id="account-stats" class="account-stats">
-            <p class="center lb-hint">Loading…</p>
+            <p class="center lb-hint">Loadingâ€¦</p>
           </div>
         </details>
 
@@ -1640,14 +1640,14 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
             <select id="account-aim-filter" class="config-code-input account-aim-filter"></select>
           </div>
           <div id="account-aim-stats" class="account-aim-stats">
-            <p class="center lb-hint">Loading…</p>
+            <p class="center lb-hint">Loadingâ€¦</p>
           </div>
         </details>
 
         <details class="account-section account-dropdown" id="account-replays-section">
           <summary>Replays</summary>
           <div id="account-replays" class="account-replays">
-            <p class="center lb-hint">Loading…</p>
+            <p class="center lb-hint">Loadingâ€¦</p>
           </div>
         </details>
 
@@ -1799,9 +1799,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         <div id="res-stats" class="res-stats"></div>
         <section id="res-infographics" class="res-infographics" hidden>
           <div class="res-info-header">
-            <button type="button" class="res-info-nav" id="res-info-prev" aria-label="Previous infographic">‹</button>
+            <button type="button" class="res-info-nav" id="res-info-prev" aria-label="Previous infographic">â€¹</button>
             <h3 class="res-info-title" id="res-info-title">Aim4 Rating</h3>
-            <button type="button" class="res-info-nav" id="res-info-next" aria-label="Next infographic">›</button>
+            <button type="button" class="res-info-nav" id="res-info-next" aria-label="Next infographic">â€º</button>
           </div>
           <div id="res-rating-panel" class="res-info-panel">
             <div class="account-rating">
@@ -1848,14 +1848,14 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     <div id="replay-stats" class="replay-stats" hidden></div>
     <div id="replay-overlay" class="replay-overlay">
       <div class="replay-controls">
-        <button type="button" class="btn btn-sm replay-playpause" id="replay-playpause">▶</button>
+        <button type="button" class="btn btn-sm replay-playpause" id="replay-playpause">â–¶</button>
         <input type="range" id="replay-scrub" class="replay-scrub" min="0" max="1000" value="0" />
         <span id="replay-time" class="replay-time">0.0 / 0.0s</span>
         <div class="replay-speeds" id="replay-speeds"></div>
         <button type="button" class="btn btn-sm" id="replay-share-btn">Share</button>
         <span id="replay-share-status" class="replay-share-status muted" hidden></span>
         <div class="replay-analytics">
-          <button type="button" class="btn btn-sm replay-gear" id="replay-settings-btn" title="Analysis settings" aria-label="Analysis settings">⚙</button>
+          <button type="button" class="btn btn-sm replay-gear" id="replay-settings-btn" title="Analysis settings" aria-label="Analysis settings">âš™</button>
           <div id="replay-settings-pop" class="replay-settings-pop" hidden>
             <h4>Analysis</h4>
             <label class="field-check"><input type="checkbox" id="ra-optimalPath" /> Optimal path</label>
@@ -2191,9 +2191,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     if (slider) slider.value = Math.min(+slider.max, Math.max(+slider.min, value));
   }
 
-  /** Human label for a KeyboardEvent.code ("Digit3" → "3", "KeyQ" → "Q"). */
+  /** Human label for a KeyboardEvent.code ("Digit3" â†’ "3", "KeyQ" â†’ "Q"). */
   _keyCodeLabel(code) {
-    if (!code) return '—';
+    if (!code) return 'â€”';
     if (code.startsWith('Key')) return code.slice(3);
     if (code.startsWith('Digit')) return code.slice(5);
     return code;
@@ -2227,7 +2227,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       if (btn.dataset.capturing) return;
       const prev = btn.textContent;
       btn.dataset.capturing = '1';
-      btn.textContent = 'Press a key or click…';
+      btn.textContent = 'Press a key or clickâ€¦';
       const finish = (code) => {
         document.removeEventListener('keydown', onKey, true);
         document.removeEventListener('mousedown', onMouse, true);
@@ -2462,7 +2462,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   }
 
   // -------------------------------------------------------------------------
-  // Scenario settings footer — per-mode duration + config code share
+  // Scenario settings footer â€” per-mode duration + config code share
   // -------------------------------------------------------------------------
 
   /** Fill the duration + config-code controls for the active scenario. */
@@ -2491,7 +2491,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         const mode = this.settings.getModeConfig(scenarioId);
         codeEl.textContent = encodeModeConfig(mode);
       } catch {
-        codeEl.textContent = '—';
+        codeEl.textContent = 'â€”';
       }
     }
     const status = $('#scn-code-status');
@@ -2514,7 +2514,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     try {
       codeEl.textContent = encodeModeConfig(this.settings.getModeConfig(scenarioId));
     } catch {
-      codeEl.textContent = '—';
+      codeEl.textContent = 'â€”';
     }
   }
 
@@ -2553,7 +2553,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     try {
       codeEl.textContent = encodeGraphicsConfig(this.settings.getGraphicsConfig());
     } catch {
-      codeEl.textContent = '—';
+      codeEl.textContent = 'â€”';
     }
   }
 
@@ -3428,12 +3428,12 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     el.classList.toggle('is-error', !!isError);
   }
 
-  /** Short label like "Gridshot · 60s" / "Gridshot · 100 kills". */
+  /** Short label like "Gridshot Â· 60s" / "Gridshot Â· 100 kills". */
   _modeSummary(item) {
     const title = SCENARIO_META[item.scenario]?.title || item.scenario;
     const dur = resolveModeDuration(item.config, 60);
     const tail = dur.type === 'kills' ? `${dur.value} kills` : `${dur.value}s`;
-    return `${title} · ${tail}`;
+    return `${title} Â· ${tail}`;
   }
 
   _bindPlaylists() {
@@ -3555,7 +3555,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       : { id: null };
     this._playlistDraft = structuredClone(playlist?.items || []);
     const title = this.root.querySelector('#playlist-edit-title');
-    if (title) title.textContent = playlist ? `Edit — ${playlist.name}` : 'New playlist';
+    if (title) title.textContent = playlist ? `Edit â€” ${playlist.name}` : 'New playlist';
     const name = this.root.querySelector('#playlist-name');
     if (name) name.value = playlist?.name || '';
     const code = this.root.querySelector('#playlist-add-code');
@@ -3607,17 +3607,17 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     if (el) {
       const list = loadPlaylists();
       if (!list.length) {
-        el.innerHTML = '<p class="center lb-hint">No playlists yet — press “New playlist” to build one.</p>';
+        el.innerHTML = '<p class="center lb-hint">No playlists yet â€” press â€œNew playlistâ€ to build one.</p>';
       } else {
         el.innerHTML = list.map((p) => {
           const chain = (p.items || [])
             .map((it) => SCENARIO_META[it.scenario]?.title || it.scenario)
-            .join(' → ');
+            .join(' â†’ ');
           return `
           <div class="playlist-row" data-playlist-id="${p.id}">
             <div class="playlist-row-main">
               <span class="playlist-row-title">${this._esc(p.name)}</span>
-              <span class="playlist-row-sub">${(p.items || []).length} mode${(p.items || []).length === 1 ? '' : 's'} · ${this._esc(chain)}</span>
+              <span class="playlist-row-sub">${(p.items || []).length} mode${(p.items || []).length === 1 ? '' : 's'} Â· ${this._esc(chain)}</span>
             </div>
             <div class="playlist-row-actions">
               <button type="button" class="btn training-row-play" data-playlist-play="${p.id}">Play</button>
@@ -3650,8 +3650,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         <span class="playlist-draft-idx">${i + 1}</span>
         <span class="playlist-draft-name">${this._esc(this._modeSummary(it))}</span>
         ${gear}
-        <button type="button" class="training-row-gear" data-playlist-up="${i}" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
-        <button type="button" class="training-row-gear" data-playlist-down="${i}" aria-label="Move down" ${i === last ? 'disabled' : ''}>▼</button>
+        <button type="button" class="training-row-gear" data-playlist-up="${i}" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>â–²</button>
+        <button type="button" class="training-row-gear" data-playlist-down="${i}" aria-label="Move down" ${i === last ? 'disabled' : ''}>â–¼</button>
         <button type="button" class="training-row-gear" data-playlist-remove="${i}" aria-label="Remove">${TRASH_ICON}</button>
       </div>`;
     }).join('');
@@ -3747,7 +3747,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     if ($('#pl-res-title')) $('#pl-res-title').textContent = run.playlist.name;
     if ($('#pl-res-progress')) {
       const title = SCENARIO_META[results.scenario]?.title || results.scenario;
-      $('#pl-res-progress').textContent = `${title} done — mode ${run.index + 1} of ${n}`;
+      $('#pl-res-progress').textContent = `${title} done â€” mode ${run.index + 1} of ${n}`;
     }
     if ($('#pl-res-stats')) $('#pl-res-stats').innerHTML = this._modeStatHtml(results);
     if ($('#pl-res-lb')) $('#pl-res-lb').innerHTML = '';
@@ -3768,9 +3768,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     const combined = combinePlaylistResults(playlist, run.results);
     const $ = (id) => this.root.querySelector(id);
 
-    if ($('#pl-res-title')) $('#pl-res-title').textContent = `${playlist.name} — complete`;
+    if ($('#pl-res-title')) $('#pl-res-title').textContent = `${playlist.name} â€” complete`;
     if ($('#pl-res-progress')) {
-      $('#pl-res-progress').textContent = `${playlist.items.length} modes · combined score`;
+      $('#pl-res-progress').textContent = `${playlist.items.length} modes Â· combined score`;
     }
     const stat = (label, val) =>
       `<div class="stat"><span class="stat-value">${val}</span><label>${label}</label></div>`;
@@ -3784,7 +3784,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     }
     if ($('#pl-res-continue')) $('#pl-res-continue').hidden = true;
     if ($('#pl-res-again')) $('#pl-res-again').hidden = false;
-    if ($('#pl-res-lb')) $('#pl-res-lb').innerHTML = '<p class="center lb-hint">Loading leaderboard…</p>';
+    if ($('#pl-res-lb')) $('#pl-res-lb').innerHTML = '<p class="center lb-hint">Loading leaderboardâ€¦</p>';
     this.showScreen('playlist-results');
 
     // This run is done; allow "Play again" to start a fresh one.
@@ -3838,7 +3838,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   async _renderPlaylistLeaderboard(playlist) {
     const body = this.root.querySelector('#lb-body');
     if (!body) return;
-    body.innerHTML = '<p class="center">…</p>';
+    body.innerHTML = '<p class="center">â€¦</p>';
     const { list, error } = await fetchLeaderboardWithMeta(
       PLAYLIST_SCENARIO,
       playlistConfigKey(playlist),
@@ -3856,8 +3856,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     }
     if (!list.length) {
       return `<p class="center lb-hint">${this.auth?.isLoggedIn
-        ? 'No scores yet — finish this playlist to appear here.'
-        : 'No scores yet — sign in and play to appear here.'}</p>`;
+        ? 'No scores yet â€” finish this playlist to appear here.'
+        : 'No scores yet â€” sign in and play to appear here.'}</p>`;
     }
     const rows = list.map((r, i) => {
       const hl = this.auth?.user?.id && r.user_id === this.auth.user.id ? ' class="hl"' : '';
@@ -3925,7 +3925,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     if (!acc?.userId) return;
     const status = this.root.querySelector('#account-profile-status-other');
     if (status) {
-      status.textContent = 'Loading settings…';
+      status.textContent = 'Loading settingsâ€¦';
       status.classList.remove('is-error');
     }
     let payload = acc.settings;
@@ -4042,7 +4042,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     };
 
     $('#account-username-save')?.addEventListener('click', async () => {
-      setProfileStatus('Saving…');
+      setProfileStatus('Savingâ€¦');
       try {
         await this.auth.updateUsername($('#account-username')?.value || '');
         setProfileStatus('Username updated.', true);
@@ -4054,7 +4054,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     });
 
     $('#account-country-save')?.addEventListener('click', async () => {
-      setProfileStatus('Saving…');
+      setProfileStatus('Savingâ€¦');
       try {
         const code = $('#account-country')?.value || '';
         await this.auth.updateCountryCode(code || null);
@@ -4066,7 +4066,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     });
 
     $('#account-link-google')?.addEventListener('click', async () => {
-      setProfileStatus('Redirecting to Google…');
+      setProfileStatus('Redirecting to Googleâ€¦');
       try {
         await this.auth.linkGoogle();
       } catch (e) {
@@ -4137,7 +4137,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     const roElo = this.root.querySelector('#account-ro-elo');
     const status = this.root.querySelector('#account-profile-status-other');
     const statsBody = this.root.querySelector('#account-stats');
-    if (statsBody) statsBody.innerHTML = '<p class="center lb-hint">Loading…</p>';
+    if (statsBody) statsBody.innerHTML = '<p class="center lb-hint">Loadingâ€¦</p>';
     if (status) {
       status.textContent = '';
       status.classList.remove('is-error');
@@ -4208,7 +4208,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   async _loadAccountStats() {
     const body = this.root.querySelector('#account-stats');
     if (!body || !this.auth?.user) return;
-    body.innerHTML = '<p class="center lb-hint">Loading…</p>';
+    body.innerHTML = '<p class="center lb-hint">Loadingâ€¦</p>';
     try {
       await this.auth.refreshProfile();
       this._renderAccountGoogleLink();
@@ -4222,7 +4222,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   _accountStatsHtml(stats) {
     const rows = [];
     const eloRank = formatRankLabel(stats.elo.rank, stats.elo.total);
-    const eloVal = stats.elo.elo != null ? `${stats.elo.elo} ELO` : '—';
+    const eloVal = stats.elo.elo != null ? `${stats.elo.elo} ELO` : 'â€”';
     rows.push(
       `<tr><td>Ranked matchmaking</td><td class="account-rank">${eloRank}</td><td>${eloVal}</td></tr>`
     );
@@ -4367,9 +4367,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         const need = OVERALL_AIM_MIN_MODES;
         const have = usable.length;
         if (have > 0 && have < need) {
-          el.textContent = `Overall aim rating unlocks at ${need} rated modes — you have ${have}.`;
+          el.textContent = `Overall aim rating unlocks at ${need} rated modes â€” you have ${have}.`;
         } else {
-          el.textContent = 'No Aim4 Rating yet — finish competitive runs to build your profile.';
+          el.textContent = 'No Aim4 Rating yet â€” finish competitive runs to build your profile.';
         }
         return;
       }
@@ -4377,7 +4377,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       let pct = '';
       if (rankInfo?.rank && rankInfo?.total) {
         const top = Math.round((1 - (rankInfo.rank - 1) / rankInfo.total) * 100);
-        pct = ` · Top ${top}% (${rankInfo.rank} / ${rankInfo.total})`;
+        pct = ` Â· Top ${top}% (${rankInfo.rank} / ${rankInfo.total})`;
       }
       el.textContent = `Overall aim rating: ${Number(score).toFixed(2)}${pct}`;
     } catch {
@@ -4429,7 +4429,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       if (legend) legend.innerHTML = '<p class="center lb-hint">Aim4 Rating is not available.</p>';
       return;
     }
-    if (legend) legend.innerHTML = '<p class="center lb-hint">Loading…</p>';
+    if (legend) legend.innerHTML = '<p class="center lb-hint">Loadingâ€¦</p>';
     await syncBaselinesFromServer();
     const config = loadBaselines();
     const mode = this._ratingMode || 'all';
@@ -4453,7 +4453,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         if (!qualifiesForOverallAimRating(usable)) {
           this._drawRadarChart(canvas, [], '#account-rating-tooltip', mode);
           if (legend) {
-            legend.innerHTML = `<p class="center lb-hint">Overall rating unlocks at ${OVERALL_AIM_MIN_MODES} rated modes — you have ${usable.length}. Per-mode ratings are available in the filter above.</p>`;
+            legend.innerHTML = `<p class="center lb-hint">Overall rating unlocks at ${OVERALL_AIM_MIN_MODES} rated modes â€” you have ${usable.length}. Per-mode ratings are available in the filter above.</p>`;
           }
           return;
         }
@@ -4563,7 +4563,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
   _ratingCompareLegendHtml(runRating, playerRating, globalRating, mode) {
     const cats = radarCategoriesForView(mode, runRating);
-    const fmt = (r, k) => (r && Number.isFinite(r[k]) ? r[k].toFixed(2) : '—');
+    const fmt = (r, k) => (r && Number.isFinite(r[k]) ? r[k].toFixed(2) : 'â€”');
     const rows = cats.map(
       (k) =>
         `<tr><td>${RATING_LABELS[k]}</td>` +
@@ -4577,7 +4577,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       '(each stat averaged across runs), then that combined telemetry is rated with the same baselines as this run. ' +
       'Hover a dot on the chart for the numbers behind each axis.';
     const globalTip =
-      'Global average: every player’s logged competitive runs of this mode are aggregated the same way ' +
+      'Global average: every playerâ€™s logged competitive runs of this mode are aggregated the same way ' +
       '(all runs pooled, each stat averaged), then rated with the same baselines. ' +
       'Hover a dot on the chart for the numbers behind each axis.';
     return (
@@ -4610,7 +4610,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     }
 
     panel.hidden = false;
-    legend.innerHTML = '<p class="center lb-hint">Loading rating…</p>';
+    legend.innerHTML = '<p class="center lb-hint">Loading ratingâ€¦</p>';
     this._drawRadarChart(chart, [], '#res-rating-tooltip', scenario);
 
     await syncBaselinesFromServer();
@@ -4747,7 +4747,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     if (!panel || !chart || !legend) return;
 
     panel.hidden = false;
-    legend.innerHTML = '<p class="center lb-hint">Loading history…</p>';
+    legend.innerHTML = '<p class="center lb-hint">Loading historyâ€¦</p>';
     chart.innerHTML = '';
 
     const userId = this.auth?.user?.id;
@@ -4785,10 +4785,10 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       trend == null
         ? ''
         : trend > 0.5
-          ? 'Trending up — you\'re improving.'
+          ? 'Trending up â€” you\'re improving.'
           : trend < -0.5
-            ? 'Trending down — scores dipping lately.'
-            : 'Trending flat — holding steady.';
+            ? 'Trending down â€” scores dipping lately.'
+            : 'Trending flat â€” holding steady.';
     legend.innerHTML =
       `<p class="run-rating-key">` +
       `<span class="run-rating-key-item"><i class="run-rating-swatch" style="background:#46c8ff"></i>Score</span>` +
@@ -4902,7 +4902,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       `</svg>`;
   }
 
-  /** Render a vector (SVG) 0–2 radar; optional multiple overlaid series. */
+  /** Render a vector (SVG) 0â€“2 radar; optional multiple overlaid series. */
   _drawRadarChart(host, series = [], tooltipSel = null, mode = 'all', categories = null, verboseTooltips = false) {
     if (!host) return;
     const tooltip = tooltipSel ? this.root.querySelector(tooltipSel) : null;
@@ -4941,7 +4941,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       const [lx, ly] = pt(i, R + 16);
       const c = Math.cos(angleAt(i));
       const anchor = Math.abs(c) < 0.3 ? 'middle' : (c > 0 ? 'start' : 'end');
-      labels += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" fill="#9a9a9a" font-size="11" font-family="'Host Grotesk',sans-serif" text-anchor="${anchor}" dominant-baseline="middle">${RATING_LABELS[cats[i]]}</text>`;
+      labels += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" fill="#9a9a9a" font-size="11" font-family="'PP Mori',sans-serif" text-anchor="${anchor}" dominant-baseline="middle">${RATING_LABELS[cats[i]]}</text>`;
     }
 
     let overlays = '';
@@ -4977,7 +4977,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       const entry = verboseTooltips ? meta.series.breakdown?.[meta.category] : null;
       if (entry?.detailLines?.length) {
         tooltip.classList.add('radar-tooltip-verbose');
-        const who = meta.series.label ? `${meta.series.label} — ` : '';
+        const who = meta.series.label ? `${meta.series.label} â€” ` : '';
         tooltip.innerHTML =
           `<strong>${this._esc(who)}${this._esc(RATING_LABELS[meta.category])}: ${entry.rating.toFixed(2)}</strong>` +
           entry.detailLines.map((l) => `<div class="radar-tooltip-line">${this._esc(l)}</div>`).join('');
@@ -5013,7 +5013,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       body.innerHTML = '<p class="center lb-hint">Aim analysis is not available.</p>';
       return;
     }
-    body.innerHTML = '<p class="center lb-hint">Loading…</p>';
+    body.innerHTML = '<p class="center lb-hint">Loadingâ€¦</p>';
     try {
       const { player } = await fetchAimComparison(userId, this._aimFilterId || 'all');
       body.innerHTML = this._aimStatsHtml(player);
@@ -5027,13 +5027,13 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       return '<p class="center lb-hint">No competitive runs in this range yet.</p>';
     }
     const num = (v, suffix = '', digits = 0) =>
-      v == null || Number.isNaN(Number(v)) ? '—' : `${Number(v).toFixed(digits)}${suffix}`;
+      v == null || Number.isNaN(Number(v)) ? 'â€”' : `${Number(v).toFixed(digits)}${suffix}`;
     const trioPct = (row) => {
       const a = Number(row.flicks_accurate) || 0;
       const o = Number(row.flicks_over) || 0;
       const u = Number(row.flicks_under) || 0;
       const total = a + o + u;
-      if (!total) return '—';
+      if (!total) return 'â€”';
       const pct = (n) => `${Math.round((n / total) * 100)}%`;
       return `${pct(a)} / ${pct(o)} / ${pct(u)}`;
     };
@@ -5042,16 +5042,16 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       const a = Number(row.clicks_accurate) || 0;
       const l = Number(row.clicks_late) || 0;
       const total = e + a + l;
-      if (!total) return '—';
+      if (!total) return 'â€”';
       const pct = (n) => `${Math.round((n / total) * 100)}%`;
       return `${pct(e)} / ${pct(a)} / ${pct(l)}`;
     };
     const rows = [
       ['Games', String(player.games)],
-      ['Flick speed', num(player.flick_speed_ms, ' ms/°')],
+      ['Flick speed', num(player.flick_speed_ms, ' ms/Â°')],
       ['Flick accuracy', num(player.flick_accuracy_pct, '%')],
       ['Tension', num(player.tension_pct, '%')],
-      ['Flicks ✓/↑/↓', trioPct(player)],
+      ['Flicks âœ“/â†‘/â†“', trioPct(player)],
       ['Clicks early/on/late', clkPct(player)]
     ];
     const body = rows
@@ -5073,7 +5073,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       body.innerHTML = '<p class="center lb-hint">Replays are not configured.</p>';
       return;
     }
-    body.innerHTML = '<p class="center lb-hint">Loading…</p>';
+    body.innerHTML = '<p class="center lb-hint">Loadingâ€¦</p>';
     let rows;
     try {
       rows = await listAccountReplays(uid);
@@ -5084,7 +5084,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     if (!rows.length) {
       body.innerHTML = viewingOther
         ? '<p class="center lb-hint">No replays yet.</p>'
-        : '<p class="center lb-hint">No replays yet — finish a run to record one.</p>';
+        : '<p class="center lb-hint">No replays yet â€” finish a run to record one.</p>';
       return;
     }
 
@@ -5139,7 +5139,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   }
 
   _replayBtnHtml(row, label, title) {
-    return `<button type="button" class="btn btn-sm" data-replay-path="${this._esc(row.replay_file_path)}" data-replay-title="${this._esc(`${title} — ${label}`)}">${label}</button>`;
+    return `<button type="button" class="btn btn-sm" data-replay-path="${this._esc(row.replay_file_path)}" data-replay-title="${this._esc(`${title} â€” ${label}`)}">${label}</button>`;
   }
 
   async _openAccountReplay(path, title) {
@@ -5355,7 +5355,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     }
   }
 
-  /** Connection / server errors — visible on both custom games and matchmaking. */
+  /** Connection / server errors â€” visible on both custom games and matchmaking. */
   netStatus(msg, ok = true) {
     this.mpStatus(msg, ok);
     this.mmStatus(msg, ok);
@@ -5366,11 +5366,11 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     const el = this.root.querySelector('#mp-lobby-list');
     if (!el) return;
     if (lobbies === null) {
-      el.innerHTML = '<div class="mp-lobby-empty">…</div>';
+      el.innerHTML = '<div class="mp-lobby-empty">â€¦</div>';
       return;
     }
     if (!lobbies.length) {
-      el.innerHTML = '<div class="mp-lobby-empty">—</div>';
+      el.innerHTML = '<div class="mp-lobby-empty">â€”</div>';
       return;
     }
     el.innerHTML = lobbies
@@ -5379,7 +5379,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         return `<div class="mp-lobby-item">
           <div class="mp-lobby-info">
             <span class="mp-lobby-host">${this._esc(l.host)}</span>
-            <span class="mp-lobby-meta">${this._esc(l.map)} · ${goal} · ${l.players}/${l.max}</span>
+            <span class="mp-lobby-meta">${this._esc(l.map)} Â· ${goal} Â· ${l.players}/${l.max}</span>
           </div>
           <button type="button" class="btn primary" data-join-code="${l.code}">Join</button>
         </div>`;
@@ -5432,7 +5432,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         if (p.id === lobby.hostId) tags.push('<span class="mp-tag host">HOST</span>');
         tags.push(p.ready ? '<span class="mp-tag ready">READY</span>' : '<span class="mp-tag">NOT READY</span>');
         const youName = p.name;
-        return `<div class="mp-player"><span class="mp-side">${p.side || '–'}</span><span class="mp-name">${youName}</span>${tags.join('')}</div>`;
+        return `<div class="mp-player"><span class="mp-side">${p.side || 'â€“'}</span><span class="mp-name">${youName}</span>${tags.join('')}</div>`;
       })
       .join('');
 
@@ -5481,7 +5481,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this.input.requestLock();
   }
 
-  /** Ranked queue status from server — surfaced via the floating queue chip. */
+  /** Ranked queue status from server â€” surfaced via the floating queue chip. */
   onQueueStatus(msg) {
     this._updateQueueChip(msg);
   }
@@ -5500,8 +5500,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     chip.hidden = !inQueue;
     if (inQueue && this.mmQueueText) {
       const n = msg.queueSize ?? 1;
-      const range = Number.isFinite(msg.searchRange) ? ` · ±${msg.searchRange}` : '';
-      this.mmQueueText.textContent = `Ranked queue · ${n} waiting · ${msg.elo ?? this.auth?.elo ?? 1000} ELO${range}`;
+      const range = Number.isFinite(msg.searchRange) ? ` Â· Â±${msg.searchRange}` : '';
+      this.mmQueueText.textContent = `Ranked queue Â· ${n} waiting Â· ${msg.elo ?? this.auth?.elo ?? 1000} ELO${range}`;
     }
   }
 
@@ -5605,7 +5605,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this.dmKillfeed.innerHTML = entries
       .map(({ killer, victim, headshot }) => {
         const hs = headshot ? '<span class="dm-kf-hs">HS</span>' : '';
-        return `<div class="dm-kf-row">${hs}<span class="dm-kf-killer">${this._esc(killer)}</span><span class="dm-kf-sep">▸</span><span class="dm-kf-victim">${this._esc(victim)}</span></div>`;
+        return `<div class="dm-kf-row">${hs}<span class="dm-kf-killer">${this._esc(killer)}</span><span class="dm-kf-sep">â–¸</span><span class="dm-kf-victim">${this._esc(victim)}</span></div>`;
       })
       .join('');
   }
@@ -5619,7 +5619,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         `<div class="mp-sb-row${r.isPlayer ? ' me' : ''}"><span class="mp-sb-name">${this._esc(r.name)}</span><span class="mp-sb-score">${r.kills} / ${r.deaths}</span></div>`
       )
       .join('');
-    this.mpScoreboard.innerHTML = `<div class="mp-sb-goal">Deathmatch · ${time}</div>${body}`;
+    this.mpScoreboard.innerHTML = `<div class="mp-sb-goal">Deathmatch Â· ${time}</div>${body}`;
   }
 
   _renderDmTabScoreboard({ title, rows, footer = '' }) {
@@ -5729,12 +5729,12 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   _mpNetLine() {
     const net = this.mp?.net;
     if (!net?.connected) return '';
-    return `${net.pingMs}ms · ${net.lossPct}% loss`;
+    return `${net.pingMs}ms Â· ${net.lossPct}% loss`;
   }
 
   _mpServerFootnote() {
     const region = formatServerRegion(this.mp?.net?.serverRegion);
-    return region ? `Server · ${region}` : '';
+    return region ? `Server Â· ${region}` : '';
   }
 
   _mpNetFooter() {
@@ -5853,7 +5853,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         .join('')}</tr>`;
 
     const goal = this._mpGameMode === 'tracking'
-      ? `${TRACKING_DURATION}s Tracking · head 3 · body 2`
+      ? `${TRACKING_DURATION}s Tracking Â· head 3 Â· body 2`
       : this._mpGoalLabel({ target: this._mpTarget, gameMode: this._mpGameMode });
     const net = this._mpNetFooter();
     this.mpTabScoreboard.innerHTML = `
@@ -5872,7 +5872,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
             ${row('Accuracy', (s) => Math.round((s.accuracy ?? 0) * 100) + '%')}
             ${row('Shots', (s) => s.shots ?? 0)}
             ${row('Hits', (s) => s.hits ?? 0)}
-            ${this._mpGameMode === 'tracking' ? '' : row('Avg TTK', (s) => (s.avgTtk != null ? `${s.avgTtk.toFixed(2)}s` : '—'))}
+            ${this._mpGameMode === 'tracking' ? '' : row('Avg TTK', (s) => (s.avgTtk != null ? `${s.avgTtk.toFixed(2)}s` : 'â€”'))}
           </tbody>
         </table>
         ${net ? `<div class="mp-tab-net">${net}</div>` : ''}
@@ -5914,7 +5914,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       );
       const goal = this._mpGoalLabel({ target: targetVal, gameMode: 'deathmatch' });
       const mapLabel = this._mpMapId ? getMap(this._mpMapId).label : '';
-      const goalLine = mapLabel ? `${goal} · ${mapLabel}` : goal;
+      const goalLine = mapLabel ? `${goal} Â· ${mapLabel}` : goal;
       const rows = sorted
         .map((p) => {
           const me = p.id === this.mp.myId ? ' me' : '';
@@ -5929,10 +5929,10 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     }
 
     const goal = this._mpGameMode === 'tracking'
-      ? `Tracking · ${this._mpTrackingRemainingSec().toFixed(1)}s · head 3 · body 2`
+      ? `Tracking Â· ${this._mpTrackingRemainingSec().toFixed(1)}s Â· head 3 Â· body 2`
       : this._mpGoalLabel({ target: targetVal, gameMode: this._mpGameMode });
     const mapLabel = this._mpGameMode === 'tracking' ? 'Empty arena' : (this._mpMapId ? getMap(this._mpMapId).label : '');
-    const goalLine = mapLabel ? `${goal} · ${mapLabel}` : goal;
+    const goalLine = mapLabel ? `${goal} Â· ${mapLabel}` : goal;
     const rows = players
       .map((p) => {
         const s = (scores && scores[p.id]) || 0;
@@ -6516,7 +6516,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       this.paceBar?.reset();
     }
     if (name === 'settings' && !skipSettingsOpen && !this._settingsExploreMode) this._openSettings();
-    // Hide the system cursor only while actively playing — when paused (Esc),
+    // Hide the system cursor only while actively playing â€” when paused (Esc),
     // the cursor must reappear so the menu is clickable.
     document.body.classList.toggle('in-run', inRun);
     if (name === 'training') this._renderTrainingList();
@@ -6672,7 +6672,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   quit() {
     this._countdownRemaining = 0;
     this._hideCountdownOverlay();
-    this.replayRecorder?.cancel(); // abandoned run — discard its recording
+    this.replayRecorder?.cancel(); // abandoned run â€” discard its recording
     this._playlistRun = null; // abandon any in-progress playlist
     this.settings.endModeOverride();
     this._resetMpChat();
@@ -6711,7 +6711,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         }
       }
     } else {
-      // Chat input steals pointer lock — keep the match running so remotes keep moving.
+      // Chat input steals pointer lock â€” keep the match running so remotes keep moving.
       if (this._suppressLockPause) return;
       if (this.state === 'countdown') {
         this._closeMpChatTyping(false);
@@ -6824,7 +6824,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
     if (speedWrap) {
       speedWrap.innerHTML = REPLAY_SPEEDS.map(
-        (s) => `<button type="button" class="btn btn-sm replay-speed" data-speed="${s}">${s}×</button>`
+        (s) => `<button type="button" class="btn btn-sm replay-speed" data-speed="${s}">${s}Ã—</button>`
       ).join('');
       speedWrap.querySelectorAll('[data-speed]').forEach((b) => {
         b.addEventListener('click', () => {
@@ -6848,7 +6848,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this.root.querySelector('#res-watch-replay')?.addEventListener('click', () => {
       const t = SCENARIO_META[this._lastReplay?.scenario]?.title || 'Replay';
       this._watchReplay(this._lastReplay, {
-        title: `${t} — last run`,
+        title: `${t} â€” last run`,
         returnTo: 'results',
         shareCtx: this._lastReplayShare
       });
@@ -6884,7 +6884,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
   // -------------------------------------------------------------------------
   // Replay analysis overlay (optimal path / flicks / trajectory / tension /
-  // click timing). Toggles gate visuals only — the engine measures everything.
+  // click timing). Toggles gate visuals only â€” the engine measures everything.
   // -------------------------------------------------------------------------
   _bindReplayAnalytics() {
     this.replayStats = this.root.querySelector('#replay-stats');
@@ -6943,7 +6943,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     if (this.replayStats) {
       const rows = [];
       const trio = (over, good, under) =>
-        `<span class="rs-metrics"><span class="rs-over">${over}↑</span><span class="rs-good">${good}✓</span><span class="rs-under">${under}↓</span></span>`;
+        `<span class="rs-metrics"><span class="rs-over">${over}â†‘</span><span class="rs-good">${good}âœ“</span><span class="rs-under">${under}â†“</span></span>`;
 
       // Live motion category (idle | tracking | flicking | reacting).
       const MOTION_UI = {
@@ -6953,13 +6953,13 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         reacting: ['Reacting', '#f52525']
       };
       const [motionLabel, motionColor] = MOTION_UI[sample.motionState] || MOTION_UI.idle;
-      rows.push(`<div class="rs-row"><span>Motion</span><span class="rs-val" style="color:${motionColor}">● ${motionLabel}</span></div>`);
+      rows.push(`<div class="rs-row"><span>Motion</span><span class="rs-val" style="color:${motionColor}">â— ${motionLabel}</span></div>`);
 
       // Crosshair on-target indicator (live, per tick).
       rows.push(
         sample.onTarget
-          ? `<div class="rs-row"><span>Crosshair</span><span class="rs-val" style="color:#35e06a">● On target</span></div>`
-          : `<div class="rs-row"><span>Crosshair</span><span class="rs-val" style="color:#f52525">○ Off target</span></div>`
+          ? `<div class="rs-row"><span>Crosshair</span><span class="rs-val" style="color:#35e06a">â— On target</span></div>`
+          : `<div class="rs-row"><span>Crosshair</span><span class="rs-val" style="color:#f52525">â—‹ Off target</span></div>`
       );
 
       // Adjustment counters: run total + current target (resets on each kill).
@@ -6971,10 +6971,10 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         rows.push(`<div class="rs-row"><span>Flicks</span>${trio(f.over, f.accurate, f.under)}</div>`);
       }
       if (ra.flickSpeed) {
-        rows.push(`<div class="rs-row"><span>Flick speed</span><span class="rs-val">${sample.flicksMeasured ? sample.flickSpeedMsPerDeg.toFixed(1) + ' ms/°' : '—'}</span></div>`);
+        rows.push(`<div class="rs-row"><span>Flick speed</span><span class="rs-val">${sample.flicksMeasured ? sample.flickSpeedMsPerDeg.toFixed(1) + ' ms/Â°' : 'â€”'}</span></div>`);
       }
       if (ra.flickAccuracy) {
-        rows.push(`<div class="rs-row"><span>Flick acc</span><span class="rs-val">${sample.flicksMeasured ? sample.flickAccuracyPct.toFixed(0) + '%' : '—'}</span></div>`);
+        rows.push(`<div class="rs-row"><span>Flick acc</span><span class="rs-val">${sample.flicksMeasured ? sample.flickAccuracyPct.toFixed(0) + '%' : 'â€”'}</span></div>`);
       }
       if (ra.tension) {
         rows.push(`<div class="rs-row"><span>Tension</span><span class="rs-val">${sample.tensionPct.toFixed(0)}%</span></div>`);
@@ -6983,7 +6983,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         const c = sample.clicks;
         rows.push(`<div class="rs-row"><span>Clicks</span>${trio(c.early, c.accurate, c.late)}</div>`);
         const clickTotal = c.early + c.accurate + c.late;
-        rows.push(`<div class="rs-row"><span>Click acc</span><span class="rs-val">${clickTotal ? sample.clickAccuracyPct.toFixed(0) + '%' : '—'}</span></div>`);
+        rows.push(`<div class="rs-row"><span>Click acc</span><span class="rs-val">${clickTotal ? sample.clickAccuracyPct.toFixed(0) + '%' : 'â€”'}</span></div>`);
       }
       this.replayStats.innerHTML = rows.join('');
     }
@@ -7037,7 +7037,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       }
     }
 
-    // Trajectory: flick start → crosshair → extended prediction.
+    // Trajectory: flick start â†’ crosshair â†’ extended prediction.
     if (raCanvas.trajectory && sample.flickActive && sample.flickStartDir) {
       const startOff = this._aimDirToScreenOffset(sample.flickStartDir, refDist, camera, w, h);
       if (startOff) {
@@ -7064,7 +7064,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       }
     }
     this._analysisLabels = this._analysisLabels.filter((l) => l.until > now);
-    ctx.font = '500 14px "Host Grotesk", sans-serif';
+    ctx.font = '500 14px "PP Mori", sans-serif';
     ctx.textBaseline = 'middle';
     const labelLineH = 18;
     for (const l of this._analysisLabels) {
@@ -7187,7 +7187,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       return;
     }
     if (triggerBtn) triggerBtn.disabled = true;
-    this._setReplayShareStatus('Creating link…');
+    this._setReplayShareStatus('Creating linkâ€¦');
     try {
       await this.auth.ensureProfileReady();
       const { url } = await createSharedReplay({
@@ -7235,7 +7235,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       const menuBody = this.root.querySelector('.menu-panel-body-main');
       const loading = document.createElement('p');
       loading.className = 'center lb-hint';
-      loading.textContent = 'Loading replay…';
+      loading.textContent = 'Loading replayâ€¦';
       if (menuBody) menuBody.appendChild(loading);
       try {
         const decoded = await loadReplayByPath(path);
@@ -7265,7 +7265,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     const menuBody = this.root.querySelector('.menu-panel-body-main');
     const loading = document.createElement('p');
     loading.className = 'center lb-hint';
-    loading.textContent = 'Loading shared replay…';
+    loading.textContent = 'Loading shared replayâ€¦';
     if (menuBody) menuBody.appendChild(loading);
     try {
       const data = await fetchSharedReplay(id);
@@ -7278,7 +7278,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       const variant = data.meta.variant === 'competitive' ? 'Competitive' : 'Training';
       this._setReplayShareContext(null);
       this._watchReplay(data.replay, {
-        title: `${data.meta.username} — ${mode} (${variant})`,
+        title: `${data.meta.username} â€” ${mode} (${variant})`,
         returnTo: 'menu',
         fromOtherPlayer: true,
         sharedSettings: data.meta.settings
@@ -7300,7 +7300,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     this._hiddenSceneRoot = this.sceneManager.current?.root || null;
     if (this._hiddenSceneRoot) this._hiddenSceneRoot.visible = false;
     this.showScreen(null); // hide every panel; the canvas + control bar show through
-    // showScreen() resets state + crosshair — apply replay state afterwards.
+    // showScreen() resets state + crosshair â€” apply replay state afterwards.
     this.replaying = true;
     this.state = 'replay';
     this.engine.audio?.resume();
@@ -7368,7 +7368,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   }
 
   _updateReplayUI(st) {
-    if (this.replayPlayPause) this.replayPlayPause.textContent = st.playing ? '❚❚' : '▶';
+    if (this.replayPlayPause) this.replayPlayPause.textContent = st.playing ? 'âšâš' : 'â–¶';
     if (st.time != null && st.duration && this.replayTime) {
       this.replayTime.textContent = `${st.time.toFixed(1)} / ${st.duration.toFixed(1)}s`;
     }
@@ -7459,7 +7459,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     });
   }
 
-  /** Ammo counter (bottom-right) — only for weapon scenarios. */
+  /** Ammo counter (bottom-right) â€” only for weapon scenarios. */
   _updateAmmo(sc) {
     if (!this.hudAmmo) return;
     const weapon = this.engine.weapon;
@@ -7468,13 +7468,13 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     if (!show) return;
     if (sc.infiniteAmmo) {
       this.hudAmmo.classList.remove('reloading');
-      this.hudAmmoMag.textContent = '∞';
-      this.hudAmmoSize.textContent = '∞';
+      this.hudAmmoMag.textContent = 'âˆž';
+      this.hudAmmoSize.textContent = 'âˆž';
       return;
     }
     if (weapon.reloading) {
       this.hudAmmo.classList.add('reloading');
-      this.hudAmmoMag.textContent = '·';
+      this.hudAmmoMag.textContent = 'Â·';
     } else {
       this.hudAmmo.classList.remove('reloading');
       this.hudAmmoMag.textContent = String(weapon.ammo);
@@ -7574,7 +7574,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   _formatHudScore(sc) {
     if (sc.name === 'reactiontime') {
       const ms = sc.reactionHudMs;
-      if (ms == null) return '—';
+      if (ms == null) return 'â€”';
       return `${ms} ms`;
     }
     return Math.round(this._hudScoreValue(sc)).toLocaleString();
@@ -7584,11 +7584,11 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     if (sc?.enableTimeLimit) return sc.modeSeconds.toFixed(1);
     if (sc?.showElapsedTime) return sc.elapsed.toFixed(1);
     const remaining = this.sceneManager.timeRemaining;
-    return Number.isFinite(remaining) ? remaining.toFixed(1) : '∞';
+    return Number.isFinite(remaining) ? remaining.toFixed(1) : 'âˆž';
   }
 
   _formatTimePlayed(seconds) {
-    if (seconds == null || !Number.isFinite(seconds)) return '—';
+    if (seconds == null || !Number.isFinite(seconds)) return 'â€”';
     if (seconds >= 60) {
       const m = Math.floor(seconds / 60);
       const s = seconds % 60;
@@ -7599,9 +7599,9 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
   /** Leaderboard run timestamp: `12.34 CEST, 29.06.2026` in the viewer's local timezone. */
   _formatLbRunWhen(iso) {
-    if (!iso) return '—';
+    if (!iso) return 'â€”';
     const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return '—';
+    if (Number.isNaN(d.getTime())) return 'â€”';
     const parts = new Intl.DateTimeFormat(undefined, {
       hour: '2-digit',
       minute: '2-digit',
@@ -7625,15 +7625,15 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     if (!list.length) {
       const hint = scenario === 'elo'
         ? (this.auth?.isLoggedIn
-          ? 'No ranked accounts yet — sign in and play matchmaking to appear here.'
-          : 'No ranked accounts yet — sign in to track your ELO.')
+          ? 'No ranked accounts yet â€” sign in and play matchmaking to appear here.'
+          : 'No ranked accounts yet â€” sign in to track your ELO.')
         : scenario === 'aim-rating'
           ? (this.auth?.isLoggedIn
-            ? `No aim ratings yet — rank in at least ${OVERALL_AIM_MIN_MODES} rated modes (Duels, Range, and Deathmatch excluded) to appear here.`
-            : 'No aim ratings yet — sign in and play to appear here.')
+            ? `No aim ratings yet â€” rank in at least ${OVERALL_AIM_MIN_MODES} rated modes (Duels, Range, and Deathmatch excluded) to appear here.`
+            : 'No aim ratings yet â€” sign in and play to appear here.')
         : (this.auth?.isLoggedIn
-          ? 'No scores for these settings yet — finish a run to appear here.'
-          : 'No scores yet — sign in and play to appear here.');
+          ? 'No scores for these settings yet â€” finish a run to appear here.'
+          : 'No scores yet â€” sign in and play to appear here.');
       return `<p class="center lb-hint">${hint}</p>`;
     }
 
@@ -7643,7 +7643,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
           const hl = highlightUserId && r.user_id === highlightUserId ? ' class="hl"' : '';
           const rating = r.overall_aim_rating != null
             ? Number(r.overall_aim_rating).toFixed(2)
-            : '—';
+            : 'â€”';
           return `<tr${hl}>
           <td>${i + 1}</td>
           ${this._lbPlayerCell(r)}
@@ -7657,17 +7657,17 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     }
 
     if (scenario === 'elo') {
-      const pct = (v) => (v != null && Number.isFinite(v) ? Math.round(v * 100) + '%' : '—');
+      const pct = (v) => (v != null && Number.isFinite(v) ? Math.round(v * 100) + '%' : 'â€”');
       const rows = list
         .map((r, i) => {
           const hl = highlightUserId && r.user_id === highlightUserId ? ' class="hl"' : '';
-          const games = r.games ?? r.games_played ?? '—';
-          const wl = r.wins != null && r.losses != null ? `${r.wins}–${r.losses}` : '—';
+          const games = r.games ?? r.games_played ?? 'â€”';
+          const wl = r.wins != null && r.losses != null ? `${r.wins}â€“${r.losses}` : 'â€”';
           const kd = r.kd != null
             ? Number(r.kd).toFixed(2)
             : (r.kills != null && r.deaths != null
               ? (r.kills / Math.max(1, r.deaths)).toFixed(2)
-              : '—');
+              : 'â€”');
           return `<tr${hl}>
           <td>${i + 1}</td>
           ${this._lbPlayerCell(r)}
@@ -7681,7 +7681,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         })
         .join('');
       return `<table class="lb-table">
-      <thead><tr><th>#</th><th>Player</th><th>ELO</th><th>Games</th><th>W–L</th><th>K/D</th><th>Acc</th><th>HS%</th></tr></thead>
+      <thead><tr><th>#</th><th>Player</th><th>ELO</th><th>Games</th><th>Wâ€“L</th><th>K/D</th><th>Acc</th><th>HS%</th></tr></thead>
       <tbody>${rows}</tbody></table>`;
     }
 
@@ -7731,7 +7731,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
         const hl = highlightUserId && r.user_id === highlightUserId ? ' class="hl"' : '';
         const crit = scenario !== 'survival' && scenario !== 'expand'
           ? `<td>${Math.round((r.crit_ratio || 0) * 100)}%</td>`
-          : '<td>—</td>';
+          : '<td>â€”</td>';
         const date = this._formatLbRunWhen(r.achieved_at);
         return `<tr${hl}>
           <td>${i + 1}</td>
@@ -7739,7 +7739,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
           <td class="score">${Number(r.score).toLocaleString()}</td>
           <td>${Math.round((r.accuracy || 0) * 100)}%</td>
           ${crit}
-          <td>${r.kills ?? '—'}</td>
+          <td>${r.kills ?? 'â€”'}</td>
           <td class="lb-when">${date}</td>
         </tr>`;
       })
@@ -7779,7 +7779,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
   async _renderLeaderboard(scenario) {
     const body = this.root.querySelector('#lb-body');
     if (!body) return;
-    body.innerHTML = `<p class="center">…</p>`;
+    body.innerHTML = `<p class="center">â€¦</p>`;
     const { list, error } = await this._fetchLeaderboard(scenario);
     body.innerHTML = this._leaderboardRowsHtml(list, scenario, this.auth?.user?.id, error);
   }
@@ -7791,7 +7791,7 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     if (infoWrap) infoWrap.hidden = true;
 
     this.root.querySelector('#res-lb').innerHTML =
-      `<p class="center lb-hint">${this.auth?.isLoggedIn ? 'Saving score…' : 'Loading leaderboard…'}</p>`;
+      `<p class="center lb-hint">${this.auth?.isLoggedIn ? 'Saving scoreâ€¦' : 'Loading leaderboardâ€¦'}</p>`;
 
     if (replayRes?.ok) {
       submitNote = 'Replay saved to your account.';
@@ -7824,8 +7824,8 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     } else if (results.leaderboardEligible === false) {
       const practiceNote =
         results.variant === 'practice'
-          ? 'Practice — not saved to leaderboards'
-          : 'Competitive — not saved to leaderboards yet';
+          ? 'Practice â€” not saved to leaderboards'
+          : 'Competitive â€” not saved to leaderboards yet';
       submitNote = submitNote ? `${submitNote} ${practiceNote}` : practiceNote;
     } else if (supabaseConfigured()) {
       const signInNote = 'Sign in to save to leaderboards';

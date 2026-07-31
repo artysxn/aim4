@@ -6,26 +6,88 @@
 --------------------------------------------------------------------------- */
 
 @font-face {
-  font-family: 'Host Grotesk';
-  src: url('./fonts/host_grotesk/HostGrotesk-Regular.ttf') format('truetype');
+  font-family: 'PP Mori';
+  src: url('./fonts/pp/PPMori-Extralight.otf') format('opentype');
+  font-weight: 200;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Mori';
+  src: url('./fonts/pp/PPMori-ExtralightItalic.otf') format('opentype');
+  font-weight: 200;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Mori';
+  src: url('./fonts/pp/PPMori-Regular.otf') format('opentype');
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
-
 @font-face {
-  font-family: 'Host Grotesk';
-  src: url('./fonts/host_grotesk/HostGrotesk-Medium.ttf') format('truetype');
+  font-family: 'PP Mori';
+  src: url('./fonts/pp/PPMori-RegularItalic.otf') format('opentype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Mori';
+  src: url('./fonts/pp/PPMori-SemiBold.otf') format('opentype');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Mori';
+  src: url('./fonts/pp/PPMori-SemiBoldItalic.otf') format('opentype');
+  font-weight: 600;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Mori';
+  src: url('./fonts/pp/PPMori-SemiBold.otf') format('opentype');
   font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Mori';
+  src: url('./fonts/pp/PPMori-SemiBold.otf') format('opentype');
+  font-weight: 700;
   font-style: normal;
   font-display: swap;
 }
 
 @font-face {
-  font-family: 'Host Grotesk';
-  src: url('./fonts/host_grotesk/HostGrotesk-SemiBold.ttf') format('truetype');
+  font-family: 'PP Monument Extended';
+  src: url('./fonts/pp/PPMonumentExtended-Book.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Monument Extended';
+  src: url('./fonts/pp/PPMonumentExtended-BookItalic.otf') format('opentype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Monument Extended';
+  src: url('./fonts/pp/PPMonumentExtended-SemiBold.otf') format('opentype');
   font-weight: 600;
   font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Monument Extended';
+  src: url('./fonts/pp/PPMonumentExtended-SemiBoldItalic.otf') format('opentype');
+  font-weight: 600;
+  font-style: italic;
   font-display: swap;
 }
 
@@ -55,8 +117,8 @@
   --radius-xs: 5px; /* tags, tiny bits */
   --shadow-panel: none;
   --focus-ring: none;
-  --font-body: 'Host Grotesk', sans-serif;
-  --font-display: 'Host Grotesk', sans-serif;
+  --font-body: 'PP Mori', system-ui, sans-serif;
+  --font-display: 'PP Monument Extended', 'PP Mori', system-ui, sans-serif;
   --font-display-base: 26px;
   --font-display-title-scale: 3;
   --font-display-size-scale: 0.6; /* title text only — 40% smaller than original display size */

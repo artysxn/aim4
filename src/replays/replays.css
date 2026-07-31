@@ -4395,3 +4395,12 @@ table.ch-table tbody tr:hover {
 .ch-name {
   color: var(--text);
 }
+
+/* Quieter labels use Mori Extralight */
+.rp-filter-group h4,
+.rp-filter-hint,
+.st-scope,
+.rp-demo-empty,
+.rp-section-hint {
+  font-weight: 200;
+}

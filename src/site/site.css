@@ -6,27 +6,92 @@
    is the styling source of truth for site pages; the trainer keeps style.css.
 --------------------------------------------------------------------------- */
 
+/* PP Mori — body / UI */
 @font-face {
-  font-family: 'Host Grotesk';
-  src: url('../fonts/host_grotesk/HostGrotesk-Regular.ttf') format('truetype');
+  font-family: 'PP Mori';
+  src: url('../fonts/pp/PPMori-Extralight.otf') format('opentype');
+  font-weight: 200;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Mori';
+  src: url('../fonts/pp/PPMori-ExtralightItalic.otf') format('opentype');
+  font-weight: 200;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Mori';
+  src: url('../fonts/pp/PPMori-Regular.otf') format('opentype');
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
-
 @font-face {
-  font-family: 'Host Grotesk';
-  src: url('../fonts/host_grotesk/HostGrotesk-Medium.ttf') format('truetype');
+  font-family: 'PP Mori';
+  src: url('../fonts/pp/PPMori-RegularItalic.otf') format('opentype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Mori';
+  src: url('../fonts/pp/PPMori-SemiBold.otf') format('opentype');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Mori';
+  src: url('../fonts/pp/PPMori-SemiBoldItalic.otf') format('opentype');
+  font-weight: 600;
+  font-style: italic;
+  font-display: swap;
+}
+/* Map legacy medium/bold weights onto SemiBold so existing rules don't faux-bold. */
+@font-face {
+  font-family: 'PP Mori';
+  src: url('../fonts/pp/PPMori-SemiBold.otf') format('opentype');
   font-weight: 500;
   font-style: normal;
   font-display: swap;
 }
-
 @font-face {
-  font-family: 'Host Grotesk';
-  src: url('../fonts/host_grotesk/HostGrotesk-SemiBold.ttf') format('truetype');
+  font-family: 'PP Mori';
+  src: url('../fonts/pp/PPMori-SemiBold.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* PP Monument Extended — category labels + page titles */
+@font-face {
+  font-family: 'PP Monument Extended';
+  src: url('../fonts/pp/PPMonumentExtended-Book.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Monument Extended';
+  src: url('../fonts/pp/PPMonumentExtended-BookItalic.otf') format('opentype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Monument Extended';
+  src: url('../fonts/pp/PPMonumentExtended-SemiBold.otf') format('opentype');
   font-weight: 600;
   font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'PP Monument Extended';
+  src: url('../fonts/pp/PPMonumentExtended-SemiBoldItalic.otf') format('opentype');
+  font-weight: 600;
+  font-style: italic;
   font-display: swap;
 }
 
@@ -51,7 +116,8 @@
   --radius: 12px;
   --radius-sm: 8px;
   --radius-xs: 5px;
-  --font-body: 'Host Grotesk', 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'PP Mori', system-ui, sans-serif;
+  --font-display: 'PP Monument Extended', 'PP Mori', system-ui, sans-serif;
   --sidebar-w: 248px;
   --sidebar-w-collapsed: 68px;
   --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
@@ -97,6 +163,29 @@ body {
   font-weight: 400;
 }
 
+/* Secondary / quieter copy uses Extralight */
+.chip,
+.foot-copy,
+.foot-col a,
+.foot-bottom,
+.view-empty,
+.lb-hint,
+.side-account-text small,
+.rvw-kicker,
+.rvw-meta,
+.rvw-section-hint,
+.training-row-meta,
+.fb-status,
+.fb-account,
+.auth-status,
+.rp-filter-hint,
+.rp-section-hint,
+.rp-parser-warn,
+.rp-status,
+.rp-demo-empty {
+  font-weight: 200;
+}
+
 a {
   color: inherit;
 }
@@ -137,26 +226,19 @@ a {
 }
 
 .side-logo {
-  font-size: 24px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  line-height: 1;
+  display: block;
+  flex-shrink: 0;
+  width: 132px;
+  height: 22px;
+  background: url('../icons/aim4logos/logocolor.png') left center / contain no-repeat;
   text-decoration: none;
-  white-space: nowrap;
-}
-.side-logo .lg-4 {
-  color: var(--accent);
-}
-.side-logo .lg-word {
-  display: inline-block;
-  max-width: 3em;
   overflow: hidden;
-  vertical-align: bottom;
-  transition: max-width 0.28s var(--ease-smooth), opacity 0.2s ease;
 }
-.site-shell[data-collapsed='true'] .side-logo .lg-word {
-  max-width: 0;
-  opacity: 0;
+.site-shell[data-collapsed='true'] .side-logo {
+  width: 36px;
+  height: 28px;
+  background-image: url('../icons/aim4logos/logo1x1.png');
+  background-position: center;
 }
 
 .side-collapse {
@@ -186,6 +268,7 @@ a {
 
 .site-shell[data-collapsed='true'] .side-top {
   flex-direction: column;
+  align-items: center;
   gap: 10px;
   padding: 18px 0 10px;
 }
@@ -211,9 +294,10 @@ a {
 .side-cat-label {
   padding: 10px 12px 4px;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   white-space: nowrap;
   overflow: hidden;
@@ -236,8 +320,9 @@ a {
   margin: 2px 0;
   border-radius: var(--radius-sm);
   color: var(--muted);
+  font-family: var(--font-body);
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 400;
   text-decoration: none;
   white-space: nowrap;
   transition: background 0.15s ease, color 0.15s ease;
@@ -321,11 +406,12 @@ a {
 }
 .side-account-text strong {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 400;
   color: var(--text);
 }
 .side-account-text small {
   font-size: 11px;
+  font-weight: 200;
 }
 .side-account-arrow {
   fill: currentColor;
@@ -392,9 +478,10 @@ a {
   -webkit-backdrop-filter: blur(10px);
 }
 .page-title {
+  font-family: var(--font-display);
   font-size: 18px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  font-weight: 400;
+  letter-spacing: 0.02em;
 }
 .page-actions {
   display: flex;
@@ -545,7 +632,7 @@ a {
 }
 .chip {
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 200;
   color: var(--muted);
   background: var(--chip-bg);
   border: 1px solid var(--border);

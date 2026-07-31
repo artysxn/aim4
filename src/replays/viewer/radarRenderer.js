@@ -1,4 +1,4 @@
-// ---------------------------------------------------------------------------
+﻿// ---------------------------------------------------------------------------
 // replays/viewer/radarRenderer.js
 // Draws one moment of a round onto a canvas: the map overview, a droplet per
 // player (tip = facing), an HP pill above the name, live utility, the bomb,
@@ -25,7 +25,7 @@ export const TEAM_COLORS = {
   2: { base: '#e8913c', bright: '#f5bb7c', dim: '#8a5420' }
 };
 
-/** Live T / CT colors — preferred when the tick buffer carries side. */
+/** Live T / CT colors â€” preferred when the tick buffer carries side. */
 export const SIDE_COLORS = {
   T: { base: '#e8b84a', bright: '#f5d27a', dim: '#8a6a20' },
   CT: { base: '#5b9fd4', bright: '#8fc4ef', dim: '#2a5578' }
@@ -79,7 +79,7 @@ const TRAIL_FADE_SECONDS = 1.4;
 /** HE punch-through: hole stays open, then smoke fades back in. */
 const HE_SMOKE_MASK_HOLD = 1;
 const HE_SMOKE_MASK_FADE = 2.5;
-/** World-unit radius of the HE smoke clear (≈ CS smoke punch). */
+/** World-unit radius of the HE smoke clear (â‰ˆ CS smoke punch). */
 const HE_SMOKE_CLEAR_UNITS = 130;
 const SMOKE_RADIUS_UNITS = 144;
 const FIRE_RADIUS_UNITS = 120;
@@ -324,7 +324,7 @@ export class RadarRenderer {
       // every frame, and resampling a 1024px image 60 times a second is the
       // most expensive thing in a draw. ensureMapLayer already caches exactly
       // that pair, keyed on everything that can change it, so the steady state
-      // here is a single 1:1 blit — which is what Analyzer has always done.
+      // here is a single 1:1 blit â€” which is what Analyzer has always done.
       const layer = this.ensureMapLayer(w, h, mapAlpha);
       ctx.globalAlpha = 1;
       ctx.clearRect(0, 0, w, h);
@@ -656,7 +656,7 @@ export class RadarRenderer {
           this.drawHeldGrenadeBadge(ctx, pt.x, pt.y, r, rawW, colors);
         }
 
-        // Stack above the droplet: weapon → name pill → droplet.
+        // Stack above the droplet: weapon â†’ name pill â†’ droplet.
         const pillH = 14 * this.dpr;
         const pillBy = pt.y - r * 1.7 - pillH;
 
@@ -680,7 +680,7 @@ export class RadarRenderer {
         if (this.showNames) {
           const name = p.name || p.id;
           if (name) {
-            ctx.font = `600 ${10 * this.dpr}px "Host Grotesk", system-ui, sans-serif`;
+            ctx.font = `600 ${10 * this.dpr}px "PP Mori", system-ui, sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             const padX = 6 * this.dpr;
@@ -717,7 +717,7 @@ export class RadarRenderer {
   }
 
   /**
-   * Grenade SVG on the droplet's top-right: larger, +15° clockwise, team-colored
+   * Grenade SVG on the droplet's top-right: larger, +15Â° clockwise, team-colored
    * with a 1px black drop-shadow duplicate (no circle chrome).
    */
   drawHeldGrenadeBadge(ctx, x, y, r, weaponName, colors) {
@@ -794,7 +794,7 @@ export class RadarRenderer {
           ? SIDE_COLORS[victimSide].base
           : '#c8ccd4';
 
-      // Full opacity always — never ghosted / never timed fade.
+      // Full opacity always â€” never ghosted / never timed fade.
       if (showX) {
         ctx.save();
         ctx.globalAlpha = 0.95;
@@ -1104,7 +1104,7 @@ export class RadarRenderer {
     ctx.setLineDash([]);
     if (!compact) {
       ctx.fillStyle = '#e8c84a';
-      ctx.font = `600 ${9 * this.dpr}px "Host Grotesk", system-ui, sans-serif`;
+      ctx.font = `600 ${9 * this.dpr}px "PP Mori", system-ui, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(String(left), pt.x, pt.y);
@@ -1180,7 +1180,7 @@ export class RadarRenderer {
     ctx.fill('evenodd');
     ctx.restore();
 
-    // Side-colored progress ring (remaining life) — drawn unclipped.
+    // Side-colored progress ring (remaining life) â€” drawn unclipped.
     ctx.save();
     ctx.globalAlpha = 0.95 * fade;
     ctx.strokeStyle = border;
@@ -1192,7 +1192,7 @@ export class RadarRenderer {
     if (!compact) {
       ctx.globalAlpha = 0.75 * fade;
       ctx.fillStyle = 'rgba(210, 216, 224, 0.95)';
-      ctx.font = `600 ${Math.max(11, Math.round(radius * 0.28))}px "Host Grotesk", system-ui, sans-serif`;
+      ctx.font = `600 ${Math.max(11, Math.round(radius * 0.28))}px "PP Mori", system-ui, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(String(left), pt.x, pt.y + 0.5 * this.dpr);
@@ -1248,7 +1248,7 @@ export class RadarRenderer {
         ctx.fill();
       }
       ctx.fillStyle = 'rgba(255, 236, 224, 0.95)';
-      ctx.font = `600 ${Math.max(11, Math.round(radius * 0.28))}px "Host Grotesk", system-ui, sans-serif`;
+      ctx.font = `600 ${Math.max(11, Math.round(radius * 0.28))}px "PP Mori", system-ui, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(String(left), pt.x, pt.y + radius * 0.26);
@@ -1334,7 +1334,7 @@ function flashPops(events) {
  * How blind a player is right now, 1 (just flashed) to 0 (clear).
  *
  * `flash_duration` is the *total* length of the blind, fixed at the moment the
- * flash goes off — it does not count down. So the remaining time is that total
+ * flash goes off â€” it does not count down. So the remaining time is that total
  * minus however long ago the flash actually popped, which is the most recent
  * flashbang detonation that is still inside the player's window. Deriving it
  * from the tick rather than from the previous frame is what makes it survive
