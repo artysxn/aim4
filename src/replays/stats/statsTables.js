@@ -62,6 +62,36 @@ export const PLAYER_METRIC_COLUMNS = [
       ])
   },
   {
+    key: 'a4r',
+    label: 'A4R',
+    get: (p) => (Number.isFinite(p.a4r) ? p.a4r : -Infinity),
+    cell: (p) => f2(p.a4r),
+    strong: true,
+    tip: (p) =>
+      tip([
+        `Aim4 Rating: ${f2(p.a4r)}`,
+        `0.40 × Rating ${f2(p.rating)}`,
+        `0.45 × Rating full vs full ${f2(p.ratingFullVsFull ?? p.rating)}${
+          p.ratingFullVsFullRounds ? ` (${p.ratingFullVsFullRounds} rds)` : ' (fallback: overall)'
+        }`,
+        `0.15 × Impact ${f2(p.impact)}`,
+        `+ Swing/6 ${Number.isFinite(p.prwSwing) ? signed(p.prwSwing / 6) : '—'}`
+      ])
+  },
+  {
+    key: 'a4or',
+    label: 'A4OR',
+    get: (p) => (Number.isFinite(p.a4or) ? p.a4or : -Infinity),
+    cell: (p) => f2(p.a4or),
+    tip: (p) =>
+      tip([
+        `Aim4 Opening Rating: ${f2(p.a4or)}`,
+        `1.00 + OPKD/100 ${signed((p.opkd || 0) / 100)} − Swing/8 ${
+          Number.isFinite(p.prwSwing) ? signed(-(p.prwSwing / 8)) : '—'
+        } + OPATT ${f2(p.opatt)}`
+      ])
+  },
+  {
     key: 'prwSwing',
     label: 'Swing',
     get: (p) => (Number.isFinite(p.prwSwing) ? p.prwSwing : -Infinity),

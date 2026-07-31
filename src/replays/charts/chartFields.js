@@ -12,7 +12,7 @@
 // ---------------------------------------------------------------------------
 
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
-import { impactOf, ratingOf } from '../shared/statsMath.js';
+import { aim4OpeningRating, aim4Rating, impactOf, ratingOf } from '../shared/statsMath.js';
 import { PHASE_CUTS } from './chartFacts.js';
 
 const div = (a, b) => (b > 0 ? a / b : 0);
@@ -72,6 +72,48 @@ function playerCounters(facts) {
   return c;
 }
 
+function avgSwing(facts) {
+  let sum = 0;
+  let n = 0;
+  for (const f of facts) {
+    if (!Number.isFinite(f.swing)) continue;
+    sum += f.swing;
+    n++;
+  }
+  return n ? sum / n : null;
+}
+
+function a4rFromFacts(facts) {
+  if (!facts.length) return null;
+  const rating = ratingFromCounters(facts.length, facts.length, playerCounters(facts));
+  if (!Number.isFinite(rating)) return null;
+  const full = facts.filter((f) => f.econ === 4 && f.oppEcon === 4);
+  const ratingFull = full.length
+    ? ratingFromCounters(full.length, full.length, playerCounters(full))
+    : rating;
+  const c = playerCounters(facts);
+  const impact = impactOf({
+    kpr: div(c.kills, facts.length),
+    apr: div(c.assists, facts.length)
+  });
+  return aim4Rating({ rating, ratingFull, impact, swing: avgSwing(facts) });
+}
+
+function a4orFromFacts(facts) {
+  if (!facts.length) return null;
+  let ok = 0;
+  let od = 0;
+  for (const f of facts) {
+    ok += f.openKill || 0;
+    od += f.openDeath || 0;
+  }
+  return aim4OpeningRating({
+    opkd: ok - od,
+    swing: avgSwing(facts),
+    opatt: (ok + od) / facts.length
+  });
+}
+
 /** Per-player, per-round facts. */
 const PLAYER_METRICS = [
   { key: 'rounds', label: 'Rounds played', group: 'Volume', fmt: 'int', num: () => 1 },
@@ -85,6 +127,22 @@ const PLAYER_METRICS = [
     group: 'Core',
     fmt: 'num2',
     custom: (facts) => ratingFromCounters(facts.length, facts.length, playerCounters(facts))
+  },
+  {
+    key: 'a4r',
+    label: 'A4R',
+    group: 'Core',
+    fmt: 'num2',
+    custom: a4rFromFacts,
+    tip: '0.40×Rating + 0.45×Rating(full vs full) + 0.15×Impact + Swing/6'
+  },
+  {
+    key: 'a4or',
+    label: 'A4OR',
+    group: 'Core',
+    fmt: 'num2',
+    custom: a4orFromFacts,
+    tip: '1.00 + OPKD/100 − Swing/8 + OPATT'
   },
   {
     key: 'impact',

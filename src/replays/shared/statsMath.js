@@ -137,6 +137,29 @@ export function bucketRating(b) {
 }
 
 /**
+ * Aim4 Rating.
+ * 0.40·Rating + 0.45·Rating(full vs full) + 0.15·Impact + Swing/6
+ * (Swing is signed, so the ± is built in.)
+ */
+export function aim4Rating({ rating, ratingFull, impact, swing }) {
+  if (!Number.isFinite(rating) || !Number.isFinite(impact)) return null;
+  const rFull = Number.isFinite(ratingFull) ? ratingFull : rating;
+  const sw = Number.isFinite(swing) ? swing : 0;
+  return 0.4 * rating + 0.45 * rFull + 0.15 * impact + sw / 6;
+}
+
+/**
+ * Aim4 Opening Rating.
+ * 1.00 + (OPKD/100 − Swing/8 + OPATT)
+ */
+export function aim4OpeningRating({ opkd, swing, opatt }) {
+  const ok = Number.isFinite(opkd) ? opkd : 0;
+  const sw = Number.isFinite(swing) ? swing : 0;
+  const att = Number.isFinite(opatt) ? opatt : 0;
+  return 1 + ok / 100 - sw / 8 + att;
+}
+
+/**
  * One table row per player, pooled across demos.
  *
  * `players` is keyed `demoId:playerId`, not by player id alone: the same
@@ -163,6 +186,8 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
         CT: emptyBucket(),
         won: emptyBucket(),
         lost: emptyBucket(),
+        /** Full buy vs full buy (bucket 4, AWP digit 5 → 4). */
+        fullVsFull: emptyBucket(),
         shots: 0,
         hits: 0,
         headshots: 0,
@@ -196,6 +221,11 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       addBucket(s.all, line);
       if (side === 'T' || side === 'CT') addBucket(s[side], line);
       addBucket(row.w === team ? s.won : s.lost, line);
+      const ownEcon = team === 1 ? row.e1 : row.e2;
+      const oppEcon = team === 1 ? row.e2 : row.e1;
+      if (buyBucket(ownEcon) === 4 && buyBucket(oppEcon) === 4) {
+        addBucket(s.fullVsFull, line);
+      }
       s.shots += line[P.SHOTS];
       s.hits += line[P.HITS];
       s.headshots += line[P.HEADSHOTS];
@@ -239,6 +269,18 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
   for (const s of acc.values()) {
     if (!s.all.rounds) continue;
     const all = bucketRating(s.all);
+    const fullVsFull = bucketRating(s.fullVsFull);
+    const swing = s.swingRounds ? s.swingSum / s.swingRounds : null;
+    const opkd = s.openKills - s.openDeaths;
+    const opatt = all.rounds ? (s.openKills + s.openDeaths) / all.rounds : null;
+    const ratingFull = fullVsFull.rounds ? fullVsFull.rating : all.rating;
+    const a4r = aim4Rating({
+      rating: all.rating,
+      ratingFull,
+      impact: all.impact,
+      swing
+    });
+    const a4or = aim4OpeningRating({ opkd, swing, opatt });
     const teams = [...s.teamRounds.values()].sort(
       (a, b) => b.rounds - a.rounds || a.name.localeCompare(b.name)
     );
@@ -271,18 +313,22 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       ratingCT: bucketRating(s.CT).rating,
       ratingWon: bucketRating(s.won).rating,
       ratingLost: bucketRating(s.lost).rating,
+      ratingFullVsFull: fullVsFull.rounds ? fullVsFull.rating : null,
+      ratingFullVsFullRounds: fullVsFull.rounds,
+      a4r,
+      a4or,
       openKills: s.openKills,
       openDeaths: s.openDeaths,
       /** Opening kill differential (OK − OD). */
-      opkd: s.openKills - s.openDeaths,
+      opkd,
       /** Opening attempts per round: (OK + OD) / rounds. */
-      opatt: all.rounds ? (s.openKills + s.openDeaths) / all.rounds : null,
+      opatt,
       /** Opening duel win rate, percent. */
       opkRate:
         s.openKills + s.openDeaths > 0
           ? (s.openKills / (s.openKills + s.openDeaths)) * 100
           : null,
-      prwSwing: s.swingRounds ? s.swingSum / s.swingRounds : null,
+      prwSwing: swing,
       prwSwingTotal: s.swingSum,
       prwSwingRounds: s.swingRounds,
       /** Avg pulled-string distance travelled / round. */
@@ -295,7 +341,7 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       dtRounds: s.dtRounds
     });
   }
-  out.sort((a, b) => b.rating - a.rating);
+  out.sort((a, b) => (b.a4r ?? b.rating) - (a.a4r ?? a.rating));
   return out;
 }
 
