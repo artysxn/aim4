@@ -529,21 +529,25 @@ function layoutStickyColumns(table) {
   for (let i = 0; i < heads.length; i++) {
     const width = Math.max(widths[i], 1);
     const cells = table.querySelectorAll(`.st-sticky-${i}`);
-    // Leftmost sticky stays on top if offsets ever collide.
-    const z = String(30 - i);
+    // Later sticky cols keep a slightly lower z so left edges win on collision,
+    // but all stay well above metric cells (z-index auto / 1).
+    const zBody = String(10 + (heads.length - i));
+    const zHead = String(20 + (heads.length - i));
     cells.forEach((cell) => {
       cell.style.left = `${left}px`;
       cell.style.width = `${width}px`;
       cell.style.minWidth = `${width}px`;
       cell.style.maxWidth = `${width}px`;
-      cell.style.zIndex = z;
+      cell.style.zIndex = cell.tagName === 'TH' ? zHead : zBody;
       cell.style.boxSizing = 'border-box';
     });
     left += width;
   }
-  // Keep scrolling headers/cells under the frozen block.
+  // Clear any leftover inline z-index on metrics (older renders set z-index:0
+  // with position:relative, which painted over the frozen block).
   table.querySelectorAll('thead th:not(.st-sticky), tbody td:not(.st-sticky)').forEach((cell) => {
-    cell.style.zIndex = '0';
+    cell.style.zIndex = '';
+    cell.style.position = '';
   });
 }
 
