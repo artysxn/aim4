@@ -19,9 +19,8 @@
 /* ---- Library ------------------------------------------------------------ */
 
 .rp-parser-warn {
-  flex-shrink: 0;
   padding: 10px 14px;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
   border: 1px solid var(--accent-border);
   border-radius: var(--radius-sm);
   background: var(--accent-dim);
@@ -31,9 +30,10 @@
 
 .rp-top {
   display: grid;
-  grid-template-columns: 1fr 260px;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
   gap: 16px;
   margin-bottom: 20px;
+  width: 100%;
 }
 
 .rp-drop {
@@ -261,7 +261,7 @@
   width: 14px;
   height: 14px;
   object-fit: contain;
-  border-radius: 3px;
+  border-radius: 2px;
   flex-shrink: 0;
 }
 
@@ -278,7 +278,7 @@
   gap: 14px;
   min-width: 0;
   justify-self: center;
-  width: min(100%, 420px);
+  width: min(100%, 560px);
 }
 
 .rp-side {
@@ -499,22 +499,23 @@
 .rp-browser {
   display: grid;
   grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
-  gap: 16px;
+  gap: 20px;
   align-items: stretch;
-  flex: 1 1 auto;
+  flex: 1;
   min-height: 0;
 }
 
-#rp-library.view-pad-fill .rp-browser {
-  flex: 1 1 auto;
+#rp-library {
   min-height: 0;
+}
+
+#rp-library .rp-browser {
+  min-height: calc(100vh - 140px);
 }
 
 .rp-result {
   min-width: 0;
   min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
 }
 
 .rp-result .rp-list {
@@ -529,18 +530,20 @@
 }
 
 .rp-filters {
+  position: sticky;
+  top: 16px;
   z-index: 4;
   display: flex;
   flex-direction: column;
   gap: 18px;
   padding: 16px;
-  min-height: 0;
-  height: 100%;
-  overflow-x: hidden;
+  max-height: calc(100vh - 120px);
+  overflow-x: visible;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+  align-self: start;
 }
 
 .rp-filter-group {
@@ -789,7 +792,7 @@
 .rp-advanced-wrap {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
 }
 
 .rp-advanced-toggle {
@@ -801,10 +804,6 @@
   flex-direction: column;
   gap: 14px;
   padding-top: 0;
-}
-
-.rp-advanced-body[hidden] {
-  display: none;
 }
 
 .rp-chips-wrap {
@@ -2725,38 +2724,15 @@ body.rv-open {
 }
 
 /* ---- Upload / Playlists / Statistics ------------------------------------- */
+/* Width comes from .view-pad (1100px) — same as Upload, Statistics, Replays. */
 
 .rp-playlists-title {
   margin: 0 0 14px;
   font-size: 20px;
-  flex-shrink: 0;
 }
 
 .rp-playlist-body {
   overflow-y: auto;
-}
-
-.view-pad-fill .rp-playlists-panel,
-.view-pad-fill .rp-stats-panel {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.view-pad-fill .rp-top {
-  flex: 1 1 auto;
-  min-height: 0;
-  align-content: start;
-}
-
-.view-pad-fill .rp-playlist-body,
-.view-pad-fill #rp-stats-body,
-.view-pad-fill #rp-analytics-body,
-.view-pad-fill #rp-charts-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
 }
 
 .rp-playlist-table {
@@ -2814,8 +2790,7 @@ body.rv-open {
   }
 
   .rp-filters {
-    height: auto;
-    max-height: min(48vh, 420px);
+    position: static;
   }
 
   .rv-stage {
@@ -2839,7 +2814,14 @@ body.rv-open {
 /* ---- Statistics ---------------------------------------------------------- */
 
 .rp-stats-panel {
-  padding: 4px 0 0;
+  padding: 4px 0 24px;
+  width: 100%;
+  max-width: none;
+}
+
+.rp-playlists-panel {
+  width: 100%;
+  max-width: none;
 }
 
 .st-head {
@@ -3469,6 +3451,7 @@ body.rv-open {
   grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
+  width: 100%;
 }
 
 @media (max-width: 900px) {
