@@ -22,9 +22,11 @@ import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
 import { aggregatePlayers, aggregateTeams, allRows, indexMaps } from '../shared/statsMath.js';
 import {
   PLAYER_COLUMNS,
+  PLAYER_FIXED_BASE,
   TEAM_COLUMNS,
   STATS_PAGE_SIZE,
   attachTips,
+  bindStatsHScroll,
   playerColumnsWithRoles,
   statsTableHtml
 } from './statsTables.js';
@@ -182,36 +184,38 @@ export function createStatsPanel({ escapeHtml }) {
         : '';
 
     filtersEl.innerHTML = `
-      <div class="st-filter-group st-filter-stack">
-        <span class="st-filter-label">Map</span>
-        ${mapSelectHtml()}
-      </div>
-      <div class="st-filter-group st-filter-stack">
-        <span class="st-filter-label">Side</span>
-        <div class="rp-chips">${sideBtn('T', 'T')}${sideBtn('CT', 'CT')}</div>
-      </div>
-      <div class="st-filter-group st-filter-stack">
-        <span class="st-filter-label">Result</span>
-        <div class="rp-chips">${resultBtn('won', 'Won')}${resultBtn('lost', 'Lost')}</div>
-      </div>
-      <div class="st-filter-group st-filter-stack">
-        <span class="st-filter-label">Opening</span>
-        <div class="rp-chips">${advBtn('5v4', '5v4')}${advBtn('4v5', '4v5')}</div>
-      </div>
-      ${roleGroups}
-      <div class="st-filter-group st-filter-stack">
-        <span class="st-filter-label">${tab === 'teams' ? 'Team buy' : 'Own buy'}</span>
-        <div class="st-filter-row">${econSelect('econ', filter.econ)}${hasAwpCheck(
-          'hasAwp',
-          filter.hasAwp
-        )}</div>
-      </div>
-      <div class="st-filter-group st-filter-stack">
-        <span class="st-filter-label">Opp buy</span>
-        <div class="st-filter-row">${econSelect('oppEcon', filter.oppEcon)}${hasAwpCheck(
-          'oppHasAwp',
-          filter.oppHasAwp
-        )}</div>
+      <div class="st-filters-scroll">
+        <div class="st-filter-group st-filter-stack">
+          <span class="st-filter-label">Map</span>
+          ${mapSelectHtml()}
+        </div>
+        <div class="st-filter-group st-filter-stack">
+          <span class="st-filter-label">Side</span>
+          <div class="rp-chips">${sideBtn('T', 'T')}${sideBtn('CT', 'CT')}</div>
+        </div>
+        <div class="st-filter-group st-filter-stack">
+          <span class="st-filter-label">Result</span>
+          <div class="rp-chips">${resultBtn('won', 'Won')}${resultBtn('lost', 'Lost')}</div>
+        </div>
+        <div class="st-filter-group st-filter-stack">
+          <span class="st-filter-label">Opening</span>
+          <div class="rp-chips">${advBtn('5v4', '5v4')}${advBtn('4v5', '4v5')}</div>
+        </div>
+        ${roleGroups}
+        <div class="st-filter-group st-filter-stack">
+          <span class="st-filter-label">${tab === 'teams' ? 'Team buy' : 'Own buy'}</span>
+          <div class="st-filter-row">${econSelect('econ', filter.econ)}${hasAwpCheck(
+            'hasAwp',
+            filter.hasAwp
+          )}</div>
+        </div>
+        <div class="st-filter-group st-filter-stack">
+          <span class="st-filter-label">Opp buy</span>
+          <div class="st-filter-row">${econSelect('oppEcon', filter.oppEcon)}${hasAwpCheck(
+            'oppHasAwp',
+            filter.oppHasAwp
+          )}</div>
+        </div>
       </div>
       <button type="button" class="btn btn-sm st-filter-clear" data-clear>Clear</button>`;
   }
@@ -333,7 +337,9 @@ export function createStatsPanel({ escapeHtml }) {
     const rows = allRows(payload);
     const active = { ...filter, files: scope.files || null };
     const mode = roleMode();
-    const columns = mode ? playerColumnsWithRoles(mode) : PLAYER_COLUMNS;
+    const playerCols = mode
+      ? playerColumnsWithRoles(mode)
+      : { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
 
     if (tab === 'players') {
       const data = enrichedPlayers(rows, players, active, demos);
@@ -343,11 +349,13 @@ export function createStatsPanel({ escapeHtml }) {
           escapeHtml,
           sortKey: sort.players.key,
           sortDir: sort.players.dir,
-          columns
+          columns: playerCols.columns,
+          fixedCount: playerCols.fixedCount
         });
       } else {
         bodyEl.innerHTML = statsTableHtml(data, {
-          columns,
+          columns: playerCols.columns,
+          fixedCount: playerCols.fixedCount,
           escapeHtml,
           sortKey: sort.players.key,
           sortDir: sort.players.dir,
@@ -359,6 +367,7 @@ export function createStatsPanel({ escapeHtml }) {
       const data = aggregateTeams(rows, players, demos, active);
       bodyEl.innerHTML = statsTableHtml(data, {
         columns: TEAM_COLUMNS,
+        fixedCount: 2,
         escapeHtml,
         sortKey: sort.teams.key,
         sortDir: sort.teams.dir,
@@ -366,6 +375,7 @@ export function createStatsPanel({ escapeHtml }) {
         pageSize: STATS_PAGE_SIZE
       });
     }
+    bindStatsHScroll(bodyEl);
   }
 
   /** One-demo scope → two team boards (same layout as the live match scoreboard). */
@@ -380,12 +390,14 @@ export function createStatsPanel({ escapeHtml }) {
   function matchBoardsHtml(playerRows, demo, opts) {
     const teamOf = new Map((demo.players || []).map((p) => [p.id, p.team]));
     const columns = opts.columns || PLAYER_COLUMNS;
+    const fixedCount = opts.fixedCount ?? PLAYER_FIXED_BASE.length;
     const board = (team, name) => {
       const list = playerRows.filter((p) => teamOf.get(p.id) === team);
       return `<div class="st-board">
         <h4 class="st-board-name team${team}">${escapeHtml(name || `Team ${team}`)}</h4>
         ${statsTableHtml(list, {
           columns,
+          fixedCount,
           escapeHtml,
           sortKey: opts.sortKey,
           sortDir: opts.sortDir

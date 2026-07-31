@@ -121,12 +121,12 @@ export const CT_POSITIONS = {
   aAnchor: {
     label: 'A Anchor',
     tactical: 'Anchor',
-    how: 'One of the two lowest PSDT riflers on CT full buys; closer to bombsite A than B most rounds. Counts as Anchor.'
+    how: 'One of the two lowest PSDT riflers on CT full buys; stronger A affinity from bombsite A (full) + A key zones (75%). Counts as Anchor.'
   },
   bAnchor: {
     label: 'B Anchor',
     tactical: 'Anchor',
-    how: 'One of the two lowest PSDT riflers on CT full buys; closer to bombsite B than A most rounds. Counts as Anchor.'
+    how: 'One of the two lowest PSDT riflers on CT full buys; stronger B affinity from bombsite B (full) + B key zones (75%). Counts as Anchor.'
   },
   anchor: {
     label: 'Anchor',
@@ -136,12 +136,12 @@ export const CT_POSITIONS = {
   aRotation: {
     label: 'A Rotation',
     tactical: 'Rotation',
-    how: 'One of the two highest PSDT riflers on CT full buys; closer to bombsite A than B most rounds. Counts as Rotation.'
+    how: 'One of the two highest PSDT riflers on CT full buys; stronger A affinity from bombsite + key zones (75%). Counts as Rotation.'
   },
   bRotation: {
     label: 'B Rotation',
     tactical: 'Rotation',
-    how: 'One of the two highest PSDT riflers on CT full buys; closer to bombsite B than A most rounds. Counts as Rotation.'
+    how: 'One of the two highest PSDT riflers on CT full buys; stronger B affinity from bombsite + key zones (75%). Counts as Rotation.'
   },
   rotation: {
     label: 'Rotation',

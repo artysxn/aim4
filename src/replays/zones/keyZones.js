@@ -76,6 +76,12 @@ export function keyZonesFor(network, site) {
   return site === 'b' ? kz.b : kz.a;
 }
 
+/** True when at least one A/B key zone is defined. */
+export function hasKeyZones(network) {
+  const kz = sanitizeKeyZones(network?.keyZones);
+  return Boolean(kz.a.length || kz.b.length);
+}
+
 /**
  * Push a piece onto a site list (max KEY_ZONES_MAX). Returns false if full.
  * @param {object} network

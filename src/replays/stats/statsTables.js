@@ -23,8 +23,8 @@ const accCell = (p) => (p.shots > 0 ? pct(p.accuracy) : '—');
 
 const tip = (lines) => lines.filter(Boolean).join('\n');
 
-/** Columns of the player table, in order. `get` returns the sort value. */
-export const PLAYER_COLUMNS = [
+/** Frozen left columns (before roles). */
+export const PLAYER_FIXED_BASE = [
   { key: 'name', label: 'Player', align: 'left', get: (p) => p.name.toLowerCase(), cell: null },
   {
     key: 'team',
@@ -41,44 +41,11 @@ export const PLAYER_COLUMNS = [
       );
     }
   },
-  { key: 'rounds', label: 'Rds', get: (p) => p.rounds, cell: (p) => int(p.rounds) },
-  {
-    key: 'kd',
-    label: 'K/D',
-    get: (p) => p.kd,
-    cell: (p) => f2(p.kd),
-    tip: (p) => tip([`Kills: ${p.kills}`, `Assists: ${p.assists}`, `Deaths: ${p.deaths}`])
-  },
-  {
-    key: 'adr',
-    label: 'ADR',
-    get: (p) => p.adr,
-    cell: (p) => f1(p.adr),
-    tip: (p) =>
-      tip([
-        `ADR in rounds won: ${f1(p.adrWon)}`,
-        `ADR in rounds lost: ${f1(p.adrLost)}`,
-        `Total damage: ${int(p.damage)}`
-      ])
-  },
-  {
-    key: 'accuracy',
-    label: 'Acc%',
-    get: (p) => (p.shots > 0 ? p.accuracy : -1),
-    cell: accCell,
-    tip: (p) =>
-      p.shots > 0
-        ? tip([
-            `Shots fired: ${p.shots}`,
-            `Shots hit: ${p.hits}`,
-            `Headshots hit: ${p.headshots}`,
-            `AWP shots fired: ${p.awpShots}`,
-            `AWP shots hit: ${p.awpHits}`,
-            `AWP hit rate: ${p.awpShots > 0 ? pct(p.awpAccuracy) : '—'}`,
-            `AWP Acc: holds within 10° of an enemy with a clear (no smoke) path`
-          ])
-        : 'No hit data. Re-parse this demo to record accuracy.'
-  },
+  { key: 'rounds', label: 'Rounds', get: (p) => p.rounds, cell: (p) => int(p.rounds) }
+];
+
+/** Scrollable metric columns (after fixed + optional roles). */
+export const PLAYER_METRIC_COLUMNS = [
   {
     key: 'rating',
     label: 'Rating',
@@ -110,6 +77,26 @@ export const PLAYER_COLUMNS = [
         : 'No PRW swing data. Stats index will rebuild on next library load.'
   },
   {
+    key: 'kd',
+    label: 'KD',
+    get: (p) => p.kd,
+    cell: (p) => f2(p.kd),
+    tip: (p) => tip([`Kills: ${p.kills}`, `Assists: ${p.assists}`, `Deaths: ${p.deaths}`])
+  },
+  {
+    key: 'adr',
+    label: 'ADR',
+    get: (p) => p.adr,
+    cell: (p) => f1(p.adr),
+    tip: (p) =>
+      tip([
+        `ADR in rounds won: ${f1(p.adrWon)}`,
+        `ADR in rounds lost: ${f1(p.adrLost)}`,
+        `Total damage: ${int(p.damage)}`
+      ])
+  },
+  { key: 'kast', label: 'KAST', get: (p) => p.kast, cell: (p) => pct(p.kast) },
+  {
     key: 'opkd',
     label: 'OPKD',
     get: (p) => p.opkd,
@@ -123,13 +110,78 @@ export const PLAYER_COLUMNS = [
         `Difference: ${p.openKills - p.openDeaths}`
       ])
   },
-  { key: 'kast', label: 'KAST', get: (p) => p.kast, cell: (p) => pct(p.kast) },
-  { key: 'impact', label: 'Impact', get: (p) => p.impact, cell: (p) => f2(p.impact) }
+  { key: 'impact', label: 'Impact', get: (p) => p.impact, cell: (p) => f2(p.impact) },
+  {
+    key: 'accuracy',
+    label: 'Acc',
+    get: (p) => (p.shots > 0 ? p.accuracy : -1),
+    cell: accCell,
+    tip: (p) =>
+      p.shots > 0
+        ? tip([
+            `Shots fired: ${p.shots}`,
+            `Shots hit: ${p.hits}`,
+            `Headshots hit: ${p.headshots}`,
+            `AWP shots fired: ${p.awpShots}`,
+            `AWP shots hit: ${p.awpHits}`,
+            `AWP hit rate: ${p.awpShots > 0 ? pct(p.awpAccuracy) : '—'}`,
+            `AWP Acc: holds within 10° of an enemy with a clear (no smoke) path`
+          ])
+        : 'No hit data. Re-parse this demo to record accuracy.'
+  },
+  {
+    key: 'opatt',
+    label: 'OPATT',
+    get: (p) => (Number.isFinite(p.opatt) ? p.opatt : -1),
+    cell: (p) => (Number.isFinite(p.opatt) ? f2(p.opatt) : '—'),
+    tip: (p) =>
+      tip([
+        `Opening attempts / round: ${f2(p.opatt)}`,
+        `Opening kills: ${p.openKills}`,
+        `Opening deaths: ${p.openDeaths}`,
+        `Attempts: ${p.openKills + p.openDeaths}`,
+        `Rounds: ${p.rounds}`
+      ])
+  },
+  {
+    key: 'psdt',
+    label: 'PSDT',
+    get: (p) => (Number.isFinite(p.psdt) ? p.psdt : -1),
+    cell: (p) => (Number.isFinite(p.psdt) ? int(p.psdt) : '—'),
+    tip: (p) =>
+      Number.isFinite(p.psdt)
+        ? tip([
+            `Avg pulled-string distance / round: ${int(p.psdt)}`,
+            `Total PSDT: ${int(p.psdtTotal)}`,
+            `Rounds sampled: ${p.psdtRounds || 0}`,
+            `125u brush — filters ADAD jitter`
+          ])
+        : 'No movement data yet. Reloading Statistics fills PSDT in the background.'
+  },
+  {
+    key: 'dt',
+    label: 'DT',
+    get: (p) => (Number.isFinite(p.dt) ? p.dt : -1),
+    cell: (p) => (Number.isFinite(p.dt) ? int(p.dt) : '—'),
+    tip: (p) =>
+      Number.isFinite(p.dt)
+        ? tip([
+            `Avg distance travelled / round: ${int(p.dt)}`,
+            `Total DT: ${int(p.dtTotal)}`,
+            `Rounds sampled: ${p.dtRounds || 0}`,
+            `Raw path length (resets on death)`
+          ])
+        : 'No movement data yet. Reloading Statistics fills DT in the background.'
+  }
 ];
 
+/** Default player columns without role fields. */
+export const PLAYER_COLUMNS = [...PLAYER_FIXED_BASE, ...PLAYER_METRIC_COLUMNS];
+
 /**
- * Player columns with T (yellow) / CT (blue) role or position after the name.
+ * Player columns with T (yellow) / CT (blue) role or position after Rounds.
  * @param {'position'|'tactical'|''} roleMode
+ * @returns {{ columns: object[], fixedCount: number }}
  */
 export function playerColumnsWithRoles(roleMode = 'tactical') {
   const tLabel = roleMode === 'position' ? 'T pos' : 'T role';
@@ -168,7 +220,10 @@ export function playerColumnsWithRoles(roleMode = 'tactical') {
       tip: (p) => roleTip('CT', p)
     }
   ];
-  return [PLAYER_COLUMNS[0], PLAYER_COLUMNS[1], ...roleCols, ...PLAYER_COLUMNS.slice(2)];
+  return {
+    columns: [...PLAYER_FIXED_BASE, ...roleCols, ...PLAYER_METRIC_COLUMNS],
+    fixedCount: PLAYER_FIXED_BASE.length + roleCols.length
+  };
 }
 
 function possessionDeltaTip(t) {
@@ -291,6 +346,9 @@ export const TEAM_COLUMNS = [
   }
 ];
 
+/** Default page size for library Statistics tables. */
+export const STATS_PAGE_SIZE = 100;
+
 function sortRows(rows, columns, sortKey, dir) {
   const col = columns.find((c) => c.key === sortKey) || columns.find((c) => c.key === 'rating');
   if (!col) return rows;
@@ -298,13 +356,10 @@ function sortRows(rows, columns, sortKey, dir) {
   return [...rows].sort((a, b) => {
     const va = col.get(a);
     const vb = col.get(b);
-    if (typeof va === 'string') return sign * va.localeCompare(vb);
+    if (typeof va === 'string') return sign * String(va).localeCompare(String(vb));
     return sign * ((va || 0) - (vb || 0));
   });
 }
-
-/** Default page size for library Statistics tables. */
-export const STATS_PAGE_SIZE = 100;
 
 /**
  * @param {{ page: number, pages: number, total: number, pageSize: number }} opts
@@ -335,18 +390,29 @@ function pagerHtml({ page, pages, total, pageSize }) {
 
 /**
  * @param {object[]} rows
- * @param {object} opts { columns, escapeHtml, sortKey, sortDir, nameCell, compact, page, pageSize }
+ * @param {{
+ *   columns: object[],
+ *   escapeHtml: (s: string) => string,
+ *   sortKey?: string,
+ *   sortDir?: 'asc'|'desc',
+ *   page?: number,
+ *   pageSize?: number,
+ *   compact?: boolean,
+ *   nameCell?: (r: object) => string,
+ *   fixedCount?: number
+ * }} opts
  */
 export function statsTableHtml(rows, opts) {
   const {
     columns,
     escapeHtml,
-    sortKey,
+    sortKey = 'rating',
     sortDir = 'desc',
-    nameCell,
-    compact,
     page = 1,
-    pageSize = 0
+    pageSize = 0,
+    compact = false,
+    nameCell = null,
+    fixedCount = 0
   } = opts;
   if (!rows.length) {
     return '<p class="view-empty">Nothing matches these filters.</p>';
@@ -356,14 +422,15 @@ export function statsTableHtml(rows, opts) {
   const size = pageSize > 0 ? pageSize : total;
   const pages = Math.max(1, Math.ceil(total / size));
   const safePage = Math.min(Math.max(1, Number(page) || 1), pages);
-  const slice =
-    pageSize > 0 ? sorted.slice((safePage - 1) * size, safePage * size) : sorted;
+  const slice = pageSize > 0 ? sorted.slice((safePage - 1) * size, safePage * size) : sorted;
 
+  const sticky = Math.max(0, Math.min(fixedCount, columns.length));
   const head = columns
-    .map((c) => {
+    .map((c, i) => {
       const active = c.key === sortKey;
       const arrow = active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
-      return `<th class="${c.align === 'left' ? 'left' : ''}${active ? ' sorted' : ''}"
+      const stick = i < sticky ? ` st-sticky st-sticky-${i}` : '';
+      return `<th class="${c.align === 'left' ? 'left' : ''}${active ? ' sorted' : ''}${stick}"
         data-sort="${c.key}" title="Sort by ${escapeHtml(c.label)}">${escapeHtml(c.label)}${arrow}</th>`;
     })
     .join('');
@@ -371,10 +438,11 @@ export function statsTableHtml(rows, opts) {
   const body = slice
     .map((r) => {
       const cells = columns
-        .map((c) => {
+        .map((c, i) => {
+          const stick = i < sticky ? ` st-sticky st-sticky-${i}` : '';
           if (!c.cell) {
             const label = nameCell ? nameCell(r) : escapeHtml(r.name);
-            return `<td class="left name">${label}</td>`;
+            return `<td class="left name${stick}">${label}</td>`;
           }
           const text = c.cell(r);
           const t = c.tip?.(r);
@@ -382,7 +450,8 @@ export function statsTableHtml(rows, opts) {
             c.align === 'left' ? 'left' : '',
             c.strong ? 'strong' : '',
             typeof c.cellClass === 'function' ? c.cellClass(r) : c.cellClass || '',
-            t ? 'has-tip' : ''
+            t ? 'has-tip' : '',
+            stick.trim()
           ]
             .filter(Boolean)
             .join(' ');
@@ -396,16 +465,62 @@ export function statsTableHtml(rows, opts) {
     })
     .join('');
 
-  const table = `<table class="st-table${compact ? ' compact' : ''}">
-    <thead><tr>${head}</tr></thead>
-    <tbody>${body}</tbody>
-  </table>`;
+  const table = `<div class="st-hscroll" data-st-hscroll>
+    <div class="st-hscroll-bar" data-st-hscroll-bar tabindex="0" aria-label="Scroll columns">
+      <div class="st-hscroll-spacer" data-st-hscroll-spacer></div>
+    </div>
+    <div class="st-hscroll-body" data-st-hscroll-body>
+      <table class="st-table${compact ? ' compact' : ''}${sticky ? ' st-table-sticky' : ''}">
+        <thead><tr>${head}</tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>
+  </div>`;
 
   if (!(pageSize > 0) || pages <= 1) return table;
   return (
     table +
     pagerHtml({ page: safePage, pages, total, pageSize: size })
   );
+}
+
+/**
+ * Keep the top scrollbar in sync with the table body (call after render).
+ * @param {ParentNode} root
+ */
+export function bindStatsHScroll(root) {
+  root.querySelectorAll('[data-st-hscroll]').forEach((wrap) => {
+    const bar = wrap.querySelector('[data-st-hscroll-bar]');
+    const body = wrap.querySelector('[data-st-hscroll-body]');
+    const spacer = wrap.querySelector('[data-st-hscroll-spacer]');
+    if (!bar || !body || !spacer) return;
+
+    let lock = false;
+    const syncWidth = () => {
+      spacer.style.width = `${body.scrollWidth}px`;
+    };
+    syncWidth();
+
+    bar.addEventListener('scroll', () => {
+      if (lock) return;
+      lock = true;
+      body.scrollLeft = bar.scrollLeft;
+      lock = false;
+    });
+    body.addEventListener('scroll', () => {
+      if (lock) return;
+      lock = true;
+      bar.scrollLeft = body.scrollLeft;
+      lock = false;
+    });
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(syncWidth);
+      ro.observe(body);
+      const table = body.querySelector('table');
+      if (table) ro.observe(table);
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

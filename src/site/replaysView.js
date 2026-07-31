@@ -10,6 +10,7 @@
 import {
   deleteDemo,
   deletePlaylist,
+  fetchDemo,
   fetchDemos,
   fetchPlaylists,
   fetchRoundMeta,
@@ -86,6 +87,12 @@ export function initReplaysView({ escapeHtml }) {
   let demoHasMore = false;
 
   let demos = [];
+  /**
+   * Demo records fetched for library-wide team/player filters when those demos
+   * are not on the current library page (pagination).
+   * @type {Map<string, object>}
+   */
+  let extraDemos = new Map();
   let rounds = [];
   /** @type {Set<string>} */
   let notedFiles = new Set();
@@ -417,14 +424,16 @@ export function initReplaysView({ escapeHtml }) {
       return true;
     }
     if (del) {
-      const demo = demos.find((d) => d.id === del.dataset.delete);
+      const id = del.dataset.delete;
+      const demo = demoById(id);
       const label =
         demo?.team1 && demo?.team2
           ? `${demo.team1.name} vs ${demo.team2.name}`
           : demo?.filename || 'this replay';
       if (!window.confirm(`Delete ${label} and every round parsed from it?`)) return true;
       try {
-        const res = await deleteDemo(del.dataset.delete);
+        const res = await deleteDemo(id);
+        extraDemos.delete(id);
         renderQuota(res.usage);
         setStatus('Replay deleted.');
       } catch (err) {
@@ -1567,6 +1576,13 @@ export function initReplaysView({ escapeHtml }) {
         rounds = collectRounds(names, query);
       }
 
+      // Wide filters can surface demos outside the loaded page — pull their
+      // records so heads show real names / scores / dates instead of short ids.
+      if (wide && rounds.length) {
+        await ensureDemosForRounds(rounds);
+        if (token !== queryToken) return;
+      }
+
       if (needsMetaFilters()) {
         rounds = await applyAdvancedMetaFilters(rounds, token);
         if (token !== queryToken) return;
@@ -1588,7 +1604,31 @@ export function initReplaysView({ escapeHtml }) {
   }
 
   function demoById(id) {
-    return demos.find((d) => d.id === id) || null;
+    if (!id) return null;
+    return demos.find((d) => d.id === id) || extraDemos.get(id) || null;
+  }
+
+  /** Fetch demo records missing from the current page (and extra cache). */
+  async function ensureDemosForRounds(list) {
+    const missing = [];
+    const seen = new Set();
+    for (const r of list || []) {
+      const id = r.demoId || splitStoredName(r.file)?.demoId;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      if (!demoById(id)) missing.push(id);
+    }
+    if (!missing.length) return;
+    await Promise.all(
+      missing.map(async (id) => {
+        try {
+          const res = await fetchDemo(id);
+          if (res?.demo?.id) extraDemos.set(res.demo.id, res.demo);
+        } catch {
+          /* header stays degraded for that demo */
+        }
+      })
+    );
   }
 
   function teamName(demo, team, shortId) {
@@ -2323,6 +2363,8 @@ export function initReplaysView({ escapeHtml }) {
       demoHasMore = Boolean(list.hasMore);
       renderQuota(list.usage || status.usage);
       demos = list.demos || [];
+      // Drop extras that are now on the page; keep the rest for active filters.
+      for (const d of demos) extraDemos.delete(d.id);
       libraryTeamClusters = Array.isArray(list.teams) ? list.teams : [];
       rebuildTeamClusters();
       renderDemos();

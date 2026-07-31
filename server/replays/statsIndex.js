@@ -32,12 +32,14 @@ import {
 } from '../../src/replays/zones/zoneOverlay.js';
 import { loadRadarMask } from '../../scripts/lib/radarMask.mjs';
 import { hasBombSites } from '../../src/replays/zones/bombSites.js';
+import { hasKeyZones } from '../../src/replays/zones/keyZones.js';
 import {
   accumulateRoundRoles,
   createRoleWork,
   finalizeRoles,
   ROLES_VERSION
 } from '../../src/replays/roles/computeRoles.js';
+import { applyMovementFields } from '../../src/replays/roles/movementFromTicks.js';
 
 export const STATS_VERSION = 10;
 
@@ -259,6 +261,17 @@ function needsRoleEnrichment(entry) {
   return false;
 }
 
+/** PSDT / distance-travelled bags missing on any round. */
+function needsMovementEnrichment(entry) {
+  if (!entry?.rounds?.length) return false;
+  return entry.rounds.some((r) => !r.mv || typeof r.mv !== 'object');
+}
+
+/** Background tick walk for roles and/or movement metrics. */
+function needsTickDerivedEnrichment(entry) {
+  return needsRoleEnrichment(entry) || needsMovementEnrichment(entry);
+}
+
 /** Load zone network for a map (bombsites + vision). Always returns an object. */
 async function loadMapNetwork(io, mapCode) {
   let network = null;
@@ -405,6 +418,7 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
       );
       const track = new TickTrack(tickBuffer);
       await applyPossessionFields(row, meta, track, network);
+      applyMovementFields(row, meta, track, roster);
       if (roleWork) {
         const zones = zoneCache.get(meta.map || row.m) || network;
         accumulateRoundRoles(roleWork, {
@@ -418,6 +432,7 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
     } else {
       row.pos1 = null;
       row.pos2 = null;
+      row.mv = row.mv || {};
     }
     await yieldEventLoop();
   }
@@ -425,7 +440,8 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
   if (roleWork) {
     const sitesByMap = new Map();
     for (const [map, net] of zoneCache) {
-      sitesByMap.set(map, hasBombSites(net));
+      const bomb = hasBombSites(net);
+      sitesByMap.set(map, { bomb, ct: bomb || hasKeyZones(net) });
     }
     entry.roles = finalizeRoles(roleWork, sitesByMap);
   }
@@ -435,11 +451,20 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
   return entry;
 }
 
-/** Roles-only pass (background). Does not rebuild kill/phase bags. */
-async function enrichRolesOnly(io, user, entry) {
+/**
+ * Background pass: roles + PSDT/DT from ticks. Does not rebuild kill/phase bags.
+ */
+async function enrichTickDerived(io, user, entry) {
   if (!entry?.rounds?.length) return entry;
+  const wantRoles = needsRoleEnrichment(entry);
+  const wantMv = needsMovementEnrichment(entry);
+  if (!wantRoles && !wantMv) return entry;
+
   if (typeof io.readRoundTicks !== 'function') {
-    entry.roles = { v: ROLES_VERSION, maps: {} };
+    if (wantRoles) entry.roles = { v: ROLES_VERSION, maps: {} };
+    if (wantMv) {
+      for (const row of entry.rounds) row.mv = row.mv || {};
+    }
     return entry;
   }
 
@@ -450,7 +475,7 @@ async function enrichRolesOnly(io, user, entry) {
     slot: p.slot
   }));
   const zoneCache = new Map();
-  const roleWork = createRoleWork();
+  const roleWork = wantRoles ? createRoleWork() : null;
 
   for (const row of entry.rounds) {
     let meta = null;
@@ -459,7 +484,11 @@ async function enrichRolesOnly(io, user, entry) {
     } catch {
       meta = null;
     }
-    if (!meta) continue;
+    if (!meta) {
+      if (wantMv) row.mv = row.mv || {};
+      await yieldEventLoop();
+      continue;
+    }
     meta.map = meta.map || row.m || entry.map || '';
 
     const roster =
@@ -479,30 +508,38 @@ async function enrichRolesOnly(io, user, entry) {
       tickBuffer = null;
     }
     if (!tickBuffer) {
+      if (wantMv) row.mv = row.mv || {};
       await yieldEventLoop();
       continue;
     }
 
-    const mapCode = meta.map || row.m || '';
-    if (!zoneCache.has(mapCode)) {
-      zoneCache.set(mapCode, await loadMapNetwork(io, mapCode));
-    }
-    const zones = zoneCache.get(mapCode);
     const track = new TickTrack(tickBuffer);
-    accumulateRoundRoles(roleWork, { meta, track, row, network: zones, roster });
+    if (wantMv) applyMovementFields(row, meta, track, roster);
+
+    if (roleWork) {
+      const mapCode = meta.map || row.m || '';
+      if (!zoneCache.has(mapCode)) {
+        zoneCache.set(mapCode, await loadMapNetwork(io, mapCode));
+      }
+      const zones = zoneCache.get(mapCode);
+      accumulateRoundRoles(roleWork, { meta, track, row, network: zones, roster });
+    }
     await yieldEventLoop();
   }
 
-  const sitesByMap = new Map();
-  for (const [map, net] of zoneCache) {
-    sitesByMap.set(map, hasBombSites(net));
+  if (roleWork) {
+    const sitesByMap = new Map();
+    for (const [map, net] of zoneCache) {
+      const bomb = hasBombSites(net);
+      sitesByMap.set(map, { bomb, ct: bomb || hasKeyZones(net) });
+    }
+    entry.roles = finalizeRoles(roleWork, sitesByMap);
   }
-  entry.roles = finalizeRoles(roleWork, sitesByMap);
   return entry;
 }
 
-/** Fire-and-forget role fill so GET /stats never blocks on tick walks. */
-function scheduleRoleEnrichment(io, user, record) {
+/** Fire-and-forget roles + movement so GET /stats never blocks on tick walks. */
+function scheduleTickDerivedEnrichment(io, user, record) {
   if (!record?.id || roleJobs.has(record.id)) return;
   roleJobs.add(record.id);
   setImmediate(() => {
@@ -511,13 +548,13 @@ function scheduleRoleEnrichment(io, user, record) {
         const key = versionKey(record);
         let entry = await loadStoredEntry(io, user, record.id);
         if (!entry || !keyMatchesRecord(entry.key, record)) return;
-        if (!needsRoleEnrichment(entry)) return;
-        await enrichRolesOnly(io, user, entry);
+        if (!needsTickDerivedEnrichment(entry)) return;
+        await enrichTickDerived(io, user, entry);
         entry.key = key;
         await persistEntry(io, user, key, entry);
       } catch (err) {
         console.warn(
-          `[stats] role enrich failed for ${record.id}:`,
+          `[stats] tick-derived enrich failed for ${record.id}:`,
           err?.message || err
         );
         try {
@@ -622,6 +659,7 @@ async function buildIndex(io, user, record) {
       );
       const track = new TickTrack(tickBuffer);
       await applyPossessionFields(row, meta, track, network);
+      applyMovementFields(row, meta, track, roster);
       const zones = zoneCache.get(meta.map || row.m) || network;
       accumulateRoundRoles(roleWork, {
         meta,
@@ -630,6 +668,8 @@ async function buildIndex(io, user, record) {
         network: zones,
         roster
       });
+    } else {
+      row.mv = {};
     }
 
     rounds.push(row);
@@ -638,7 +678,8 @@ async function buildIndex(io, user, record) {
 
   const sitesByMap = new Map();
   for (const [map, net] of zoneCache) {
-    sitesByMap.set(map, hasBombSites(net));
+    const bomb = hasBombSites(net);
+    sitesByMap.set(map, { bomb, ct: bomb || hasKeyZones(net) });
   }
 
   const score = record.score || { team1: 0, team2: 0 };
@@ -704,12 +745,12 @@ export async function demoIndex(io, user, record, opts = {}) {
     return entry;
   }
 
-  if (needsRoleEnrichment(entry)) {
+  if (needsTickDerivedEnrichment(entry)) {
     if (opts.roles) {
-      await enrichRolesOnly(io, user, entry);
+      await enrichTickDerived(io, user, entry);
       await persistEntry(io, user, key, entry);
     } else {
-      scheduleRoleEnrichment(io, user, record);
+      scheduleTickDerivedEnrichment(io, user, record);
     }
   }
 
@@ -801,7 +842,7 @@ export async function refreshLibraryStats(io, user, records, { force = false } =
       const wasStale = Boolean(
         before &&
           keyOk &&
-          (needsPhaseEnrichment(before) || needsRoleEnrichment(before))
+          (needsPhaseEnrichment(before) || needsTickDerivedEnrichment(before))
       );
 
       const entry = await demoIndex(io, user, record, { roles: true });

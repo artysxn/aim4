@@ -16,7 +16,13 @@ import {
 } from '../api.js';
 import { fetchStats } from '../api.js';
 import { aggregatePlayers, allRows, indexMaps } from '../shared/statsMath.js';
-import { PLAYER_COLUMNS, attachTips, statsTableHtml } from '../stats/statsTables.js';
+import {
+  PLAYER_COLUMNS,
+  PLAYER_FIXED_BASE,
+  attachTips,
+  bindStatsHScroll,
+  statsTableHtml
+} from '../stats/statsTables.js';
 import { RadarRenderer, SIDE_COLORS } from './radarRenderer.js';
 import { Playback, RoundSequence } from './playback.js';
 import { clockAt, formatClock, timingFor } from './roundClock.js';
@@ -1760,6 +1766,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         <h4 class="rv-board-name team${team}">${escapeHtml(name)}</h4>
         ${statsTableHtml(list, {
           columns: PLAYER_COLUMNS,
+          fixedCount: PLAYER_FIXED_BASE.length,
           escapeHtml,
           sortKey: 'rating',
           sortDir: 'desc'
@@ -1767,6 +1774,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       </div>`;
     };
     boardBody.innerHTML = board(1, demo.name1) + board(2, demo.name2);
+    bindStatsHScroll(boardBody);
   }
 
   /** When true, Tab is holding the board open; release always closes it. */

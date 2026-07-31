@@ -2831,13 +2831,29 @@ body.rv-open {
 .st-filters {
   display: flex;
   align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 12px 18px;
+  flex-wrap: nowrap;
+  gap: 12px;
   padding: 12px 14px;
   margin-bottom: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+}
+
+.st-filters-scroll {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: nowrap;
+  gap: 12px 18px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.st-filters-scroll .st-filter-group {
+  flex: 0 0 auto;
 }
 
 .st-map-select,
@@ -2846,7 +2862,7 @@ body.rv-open {
 }
 
 .st-filter-clear {
-  margin-left: auto;
+  margin-left: 0;
   align-self: flex-end;
   flex-shrink: 0;
 }
@@ -2885,7 +2901,37 @@ body.rv-open {
 }
 
 .st-body {
+  min-width: 0;
+}
+
+.st-hscroll {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.st-hscroll-bar {
   overflow-x: auto;
+  overflow-y: hidden;
+  height: 12px;
+  margin-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.st-hscroll-spacer {
+  height: 1px;
+  pointer-events: none;
+}
+
+.st-hscroll-body {
+  overflow-x: auto;
+  overflow-y: visible;
+  scrollbar-width: none;
+}
+
+.st-hscroll-body::-webkit-scrollbar {
+  display: none;
 }
 
 .st-pager {
@@ -2926,8 +2972,10 @@ body.rv-open {
 }
 
 .st-table {
-  width: 100%;
-  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
@@ -2935,6 +2983,7 @@ body.rv-open {
 .st-table th {
   position: sticky;
   top: 0;
+  z-index: 1;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-strong);
   background: var(--surface);
@@ -2947,6 +2996,47 @@ body.rv-open {
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
+}
+
+/* Frozen identity / role columns while metrics scroll horizontally. */
+.st-table .st-sticky {
+  position: sticky;
+  z-index: 2;
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--border);
+}
+
+.st-table thead .st-sticky {
+  z-index: 3;
+}
+
+.st-table .st-sticky-0 {
+  left: 0;
+  min-width: 9.5rem;
+}
+
+.st-table .st-sticky-1 {
+  left: 9.5rem;
+  min-width: 7rem;
+}
+
+.st-table .st-sticky-2 {
+  left: 16.5rem;
+  min-width: 4.25rem;
+}
+
+.st-table .st-sticky-3 {
+  left: 20.75rem;
+  min-width: 5.5rem;
+}
+
+.st-table .st-sticky-4 {
+  left: 26.25rem;
+  min-width: 5.5rem;
+}
+
+.st-table tbody tr:hover .st-sticky {
+  background: #1a1d22;
 }
 
 .st-table th.left,
@@ -2967,6 +3057,10 @@ body.rv-open {
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   text-align: right;
   white-space: nowrap;
+}
+
+.st-table td.st-sticky {
+  background: var(--surface);
 }
 
 .st-table tbody tr:hover {

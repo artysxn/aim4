@@ -11,8 +11,10 @@ import { P } from '../shared/statsMath.js';
 import { buyBucket } from '../shared/roundId.js';
 import { timingFor } from '../viewer/roundClock.js';
 import { bombSiteCenters, hasBombSites } from '../zones/bombSites.js';
+import { hasKeyZones } from '../zones/keyZones.js';
 import {
   avgSiteDistances,
+  ctZoneAffinity,
   pulledStringDistance,
   siteAffinity,
   spatialDiversity,
@@ -20,7 +22,8 @@ import {
 } from './roleMetrics.js';
 import { CT_POSITIONS, T_POSITIONS } from './regionKeys.js';
 
-export const ROLES_VERSION = 1;
+/** Bump when role metrics change — background enrich rewrites entry.roles. */
+export const ROLES_VERSION = 2;
 
 const SCRATCH = {};
 
@@ -44,6 +47,8 @@ function emptyPlayer(id) {
     ctPsdtN: 0,
     ctCloserA: 0,
     ctCloserB: 0,
+    ctScoreA: 0,
+    ctScoreB: 0,
     tAwpRounds: 0,
     tAwpKills: 0,
     tAwpShots: 0,
@@ -132,6 +137,7 @@ export function accumulateRoundRoles(work, ctx) {
   const rate = timing.tickRate || 64;
   const centers = bombSiteCenters(network);
   const sitesOk = hasBombSites(network);
+  const ctSitesOk = sitesOk || hasKeyZones(network);
   const tTicks = tSampleTicks(timing);
   // ~2 samples/sec is enough for PSDT; denser walks starve the event loop.
   const psdtStride = Math.max(1, Math.round(rate / 2));
@@ -184,7 +190,7 @@ export function accumulateRoundRoles(work, ctx) {
         p.ctPsdtSum += pulledStringDistance(path);
         p.ctPsdtN++;
 
-        if (sitesOk) {
+        if (ctSitesOk) {
           const sitePts = [];
           for (let tick = timing.freezeEndTick; tick <= timing.endTick; tick += siteStride) {
             const s = track.sample(slot, tick, SCRATCH);
@@ -192,10 +198,12 @@ export function accumulateRoundRoles(work, ctx) {
             sitePts.push({ x: s.x, y: s.y });
           }
           if (sitePts.length) {
-            const aff = siteAffinity(sitePts, centers);
-            // One vote per full-buy round: majority of samples closer to A or B.
-            if (aff.closerA > aff.closerB) p.ctCloserA++;
-            else if (aff.closerB > aff.closerA) p.ctCloserB++;
+            // Bombsite full weight + key zones at 75%; vote A/B on round totals.
+            const aff = ctZoneAffinity(sitePts, network);
+            p.ctScoreA += aff.scoreA;
+            p.ctScoreB += aff.scoreB;
+            if (aff.scoreA > aff.scoreB) p.ctCloserA++;
+            else if (aff.scoreB > aff.scoreA) p.ctCloserB++;
           }
         }
       }
@@ -243,7 +251,10 @@ function aLeanT(p) {
 }
 
 function aLeanCT(p) {
-  return (p.ctCloserA || 0) - (p.ctCloserB || 0);
+  // Prefer weighted zone score (bombsite + 0.75·key); break ties on round votes.
+  const scoreLean = (p.ctScoreA || 0) - (p.ctScoreB || 0);
+  const voteLean = (p.ctCloserA || 0) - (p.ctCloserB || 0);
+  return scoreLean * 1e6 + voteLean;
 }
 
 function assignT(list, sitesOk) {
@@ -359,21 +370,25 @@ function assignCT(list, sitesOk) {
 /**
  * Finalize accumulated samples into `entry.roles`.
  * @param {ReturnType<typeof createRoleWork>} work
- * @param {Map<string, boolean>} [sitesByMap] map → has bombsites
+ * @param {Map<string, boolean | { bomb?: boolean, ct?: boolean }>} [sitesByMap]
+ *   map → geometry flags. `true` means bombsites (legacy). Prefer
+ *   `{ bomb, ct }` so CT can A/B-split from key zones alone.
  */
 export function finalizeRoles(work, sitesByMap = new Map()) {
   /** @type {{ v: number, maps: Record<string, { T: object, CT: object }> }} */
   const roles = { v: ROLES_VERSION, maps: {} };
 
   for (const [map, byTeam] of work.maps) {
-    const sitesOk = sitesByMap.get(map) === true;
+    const flag = sitesByMap.get(map);
+    const bombOk = flag === true || flag?.bomb === true;
+    const ctOk = flag === true || flag?.ct === true || bombOk;
     const T = {};
     const CT = {};
     for (const [, byPlayer] of byTeam) {
       const list = [...byPlayer.values()];
       if (!list.length) continue;
-      Object.assign(T, assignT(list, sitesOk));
-      Object.assign(CT, assignCT(list, sitesOk));
+      Object.assign(T, assignT(list, bombOk));
+      Object.assign(CT, assignCT(list, ctOk));
     }
     roles.maps[map] = { T, CT };
   }

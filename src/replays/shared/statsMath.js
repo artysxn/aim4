@@ -172,6 +172,10 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
         openDeaths: 0,
         swingSum: 0,
         swingRounds: 0,
+        psdtSum: 0,
+        psdtRounds: 0,
+        dtSum: 0,
+        dtRounds: 0,
         /** @type {Map<string, {name: string, rounds: number}>} */
         teamRounds: new Map()
       };
@@ -202,6 +206,15 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       if (row.sw && Number.isFinite(row.sw[id])) {
         s.swingSum += row.sw[id];
         s.swingRounds++;
+      }
+      const mv = row.mv?.[id];
+      if (mv && Number.isFinite(mv.psdt)) {
+        s.psdtSum += mv.psdt;
+        s.psdtRounds++;
+      }
+      if (mv && Number.isFinite(mv.dt)) {
+        s.dtSum += mv.dt;
+        s.dtRounds++;
       }
       const demo = demos?.get(row.d);
       if (demo) {
@@ -262,6 +275,8 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       openDeaths: s.openDeaths,
       /** Opening kill differential (OK − OD). */
       opkd: s.openKills - s.openDeaths,
+      /** Opening attempts per round: (OK + OD) / rounds. */
+      opatt: all.rounds ? (s.openKills + s.openDeaths) / all.rounds : null,
       /** Opening duel win rate, percent. */
       opkRate:
         s.openKills + s.openDeaths > 0
@@ -269,7 +284,15 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
           : null,
       prwSwing: s.swingRounds ? s.swingSum / s.swingRounds : null,
       prwSwingTotal: s.swingSum,
-      prwSwingRounds: s.swingRounds
+      prwSwingRounds: s.swingRounds,
+      /** Avg pulled-string distance travelled / round. */
+      psdt: s.psdtRounds ? s.psdtSum / s.psdtRounds : null,
+      psdtTotal: s.psdtSum,
+      psdtRounds: s.psdtRounds,
+      /** Avg raw distance travelled / round. */
+      dt: s.dtRounds ? s.dtSum / s.dtRounds : null,
+      dtTotal: s.dtSum,
+      dtRounds: s.dtRounds
     });
   }
   out.sort((a, b) => b.rating - a.rating);
