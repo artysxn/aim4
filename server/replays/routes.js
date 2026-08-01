@@ -58,7 +58,7 @@ import { forgetDemoIndex, refreshLibraryStats, scheduleStatsIndex, statsPayload 
 import { isAcceptedUpload, rarSupport } from './archive.js';
 import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
 import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
-import { LEGACY_UPLOADER, whoami } from './identity.js';
+import { LEGACY_UPLOADER, isConfigured, whoami } from './identity.js';
 import { ownedTeam, teamsOf } from './teamsStore.js';
 import {
   accessFor,
@@ -331,6 +331,10 @@ export async function handleReplayRequest(req, res, url) {
       ok: true,
       parser: parserStatus(),
       auth: authStatus(),
+      // Whether the box can verify Supabase sessions at all. When this is
+      // false every caller is anonymous, uploads are refused, and the site
+      // looks signed out however the browser feels about it.
+      identity: { verifies: isConfigured() },
       lastParse: await readParseTrace(),
       memory: memorySnapshot(),
       // ?io=1 reads a real file off the replay volume to measure it. Opt-in
@@ -422,7 +426,11 @@ export async function handleReplayRequest(req, res, url) {
         id: me.id,
         username: me.username,
         admin: me.admin,
-        maxDemos: me.admin ? 0 : MAX_DEMOS_PER_USER
+        maxDemos: me.admin ? 0 : MAX_DEMOS_PER_USER,
+        // False when the backend has no SUPABASE_URL / SUPABASE_ANON_KEY: it
+        // cannot verify anyone, and the client needs to say that rather than
+        // telling a signed-in user to sign in.
+        verifies: isConfigured()
       },
       limits: { maxBytes: MAX_BYTES, maxUploadBytes: MAX_UPLOAD_BYTES },
       // .rar needs an external extractor, so whether it works is a property of

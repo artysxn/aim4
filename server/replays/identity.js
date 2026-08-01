@@ -13,20 +13,27 @@
 // visitors, but they can never upload or see anything non-public.
 // ---------------------------------------------------------------------------
 
-const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(
-  /\/$/,
-  ''
-);
-const SUPABASE_ANON_KEY =
-  process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+/**
+ * Read at call time rather than at import: the .env loader and the test
+ * harnesses both set these after this module is first pulled in, and a value
+ * captured too early is how "signed in everywhere except the server" happens.
+ */
+function supabase() {
+  return {
+    url: (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/$/, ''),
+    key: process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || ''
+  };
+}
 
 /** Accounts that bypass every limit: unlimited uploads, full read, full delete. */
-export const ADMIN_USERNAMES = new Set(
-  String(process.env.AIM4_ADMIN_USERNAMES || 'artysan,player_73b35f71')
-    .split(',')
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean)
-);
+export function adminUsernames() {
+  return new Set(
+    String(process.env.AIM4_ADMIN_USERNAMES || 'artysan,player_73b35f71')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
 
 /** Uploads before this feature landed are credited to this account. */
 export const LEGACY_UPLOADER = {
@@ -67,7 +74,8 @@ function usernameOf(user) {
 }
 
 export function isConfigured() {
-  return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+  const { url, key } = supabase();
+  return Boolean(url && key);
 }
 
 /**
@@ -78,15 +86,16 @@ export function isConfigured() {
  */
 export async function whoami(req) {
   const token = bearer(req);
-  if (!token || !isConfigured()) return ANONYMOUS;
+  const { url, key } = supabase();
+  if (!token || !url || !key) return ANONYMOUS;
 
   const hit = cache.get(token);
   if (hit && hit.expires > Date.now()) return hit.user;
 
   let user = ANONYMOUS;
   try {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY }
+    const res = await fetch(`${url}/auth/v1/user`, {
+      headers: { Authorization: `Bearer ${token}`, apikey: key }
     });
     if (res.ok) {
       const body = await res.json();
@@ -96,7 +105,7 @@ export async function whoami(req) {
           id: String(body.id),
           username,
           signedIn: true,
-          admin: ADMIN_USERNAMES.has(username.toLowerCase())
+          admin: adminUsernames().has(username.toLowerCase())
         });
       }
     }

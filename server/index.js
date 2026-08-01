@@ -8,6 +8,8 @@
 // Host: npm run host        (serves dist/ + API + WS on 0.0.0.0 for LAN/online)
 // ---------------------------------------------------------------------------
 
+// First, so every module below sees SUPABASE_* and friends from .env.
+import './env.js';
 import http from 'http';
 import { WebSocketServer } from 'ws';
 import { saveConfig, getConfig } from './store.js';

@@ -123,7 +123,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   /** @type {{demos?: string[], files?: string[], title?: string}} */
   let statsScope = {};
   /** From /status: who the backend thinks is calling, and what they may do. */
-  let account = { signedIn: false, id: '', username: '', admin: false, maxDemos: 5 };
+  let account = {
+    signedIn: false,
+    id: '',
+    username: '',
+    admin: false,
+    maxDemos: 5,
+    verifies: true
+  };
   /** Visibility applied to the next upload. */
   let uploadVisibility = 'public';
   const mineEl = document.getElementById('rp-mine');
@@ -454,8 +461,16 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   function renderMine() {
     if (!mineEl) return;
     if (!account.signedIn) {
-      mineEl.innerHTML =
-        '<p class="view-empty">Sign in to upload demos and manage your own uploads.</p>';
+      // Being signed in here but not there is a server configuration problem,
+      // not something the user can fix by signing in again.
+      const sessionButNoServer = Boolean(auth?.isLoggedIn);
+      mineEl.innerHTML = sessionButNoServer
+        ? `<p class="view-empty">${escapeHtml(
+            account.verifies === false
+              ? 'The replay backend cannot verify sign-ins yet. Set SUPABASE_URL and SUPABASE_ANON_KEY on the server, then reload.'
+              : 'Your session did not reach the replay backend. Reload the page, and sign in again if that does not help.'
+          )}</p>`
+        : '<p class="view-empty">Sign in to upload demos and manage your own uploads.</p>';
       return;
     }
     const mine = myDemos();
@@ -986,7 +1001,12 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   async function startUpload(fileList) {
     if (!account.signedIn) {
-      setStatus('Sign in to upload demos.', true);
+      setStatus(
+        auth?.isLoggedIn
+          ? 'The replay backend did not accept your session, so uploading is blocked. Reload the page and try again.'
+          : 'Sign in to upload demos.',
+        true
+      );
       return;
     }
     const cap0 = account.admin ? 0 : account.maxDemos || 5;

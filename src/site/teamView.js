@@ -65,7 +65,7 @@ export function initTeamView({ auth, escapeHtml }) {
    * the authority here: if the backend cannot verify it, every team call would
    * fail, and a page full of dead controls is worse than an honest prompt.
    */
-  let account = { signedIn: false, id: '', username: '', admin: false };
+  let account = { signedIn: false, id: '', username: '', admin: false, verifies: true };
   /** Set on an /i/<code> landing so the page can name the team before sign-in. */
   let invitePreview = null;
 
@@ -171,9 +171,15 @@ export function initTeamView({ auth, escapeHtml }) {
         </div>
       </div>`;
     }
+    const sessionButNoServer = Boolean(auth?.isLoggedIn);
+    const message = !sessionButNoServer
+      ? 'Sign in to use your team pages.'
+      : account.verifies === false
+        ? 'The backend cannot verify sign-ins yet. Set SUPABASE_URL and SUPABASE_ANON_KEY on the server, then reload.'
+        : 'Your session did not reach the backend. Reload the page, and sign in again if that does not help.';
     return `<div class="tm-empty">
       <h2 class="tm-title">${escapeHtml(what)}</h2>
-      <p class="view-empty">Sign in to use your team pages.</p>
+      <p class="view-empty">${escapeHtml(message)}</p>
     </div>`;
   }
 
