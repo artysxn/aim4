@@ -214,6 +214,87 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
 
   // ---- demo list helpers --------------------------------------------------
 
+  const TEAM_COLOR_KEY = 'aim4.teamColors';
+
+  /** @type {Record<string, { h: number, s: number, v: number }> | null} */
+  let teamColorCache = null;
+
+  function loadTeamColors() {
+    if (teamColorCache) return teamColorCache;
+    try {
+      const raw = localStorage.getItem(TEAM_COLOR_KEY);
+      teamColorCache = raw ? JSON.parse(raw) : {};
+      if (!teamColorCache || typeof teamColorCache !== 'object') teamColorCache = {};
+    } catch {
+      teamColorCache = {};
+    }
+    return teamColorCache;
+  }
+
+  function saveTeamColors() {
+    try {
+      localStorage.setItem(TEAM_COLOR_KEY, JSON.stringify(loadTeamColors()));
+    } catch {
+      /* quota / private mode */
+    }
+  }
+
+  /**
+   * Stable id for a team's crest colors — preferred by display name so the
+   * palette survives cluster-key reshuffles as the library grows.
+   * @param {string} [teamId]
+   * @param {string} [teamName]
+   */
+  function teamColorKey(teamId, teamName) {
+    const id = String(teamId || '').trim().toLowerCase();
+    let name = String(teamName || '').trim().toLowerCase();
+    if (id) {
+      for (const c of teamClusters) {
+        if (c.shortIds.some((s) => String(s).toLowerCase() === id)) {
+          name = c.name.trim().toLowerCase() || name;
+          break;
+        }
+      }
+    } else if (name) {
+      for (const c of teamClusters) {
+        if (c.name.trim().toLowerCase() === name) {
+          name = c.name.trim().toLowerCase();
+          break;
+        }
+      }
+    }
+    if (name) return `name:${name}`;
+    if (id) return `id:${id}`;
+    return 'unknown';
+  }
+
+  /** HSV → CSS hsl(); s/v are 0–100. */
+  function hslCss(h, s, v) {
+    return `hsl(${Math.round(h)} ${Math.round(s)}% ${Math.round(v)}%)`;
+  }
+
+  /**
+   * Persistent random crest palette per team.
+   * BG: H 0–360, S 25–90%, V 15–30%. Text: same H, S 30%, V 90%.
+   */
+  function teamCrestColors(key) {
+    const store = loadTeamColors();
+    let c = store[key];
+    if (!c || !Number.isFinite(c.h)) {
+      c = {
+        h: Math.random() * 360,
+        s: 25 + Math.random() * 65,
+        v: 15 + Math.random() * 15
+      };
+      store[key] = c;
+      saveTeamColors();
+    }
+    return {
+      bg: hslCss(c.h, c.s, c.v),
+      fg: hslCss(c.h, 30, 90)
+    };
+  }
+
   function initials(name) {
     const s = String(name || '?').trim();
     const parts = s.split(/\s+/).filter(Boolean);
@@ -230,17 +311,54 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
     return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${yy}`;
   }
 
-  function matchBlockHtml(t1, t2, score) {
+  /**
+   * @param {string} t1
+   * @param {string} t2
+   * @param {string} score
+   * @param {{ id1?: string, id2?: string }} [ids]
+   */
+  function matchBlockHtml(t1, t2, score, ids = {}) {
+    const resolveFilterKey = (teamId, teamName) => {
+      const colorKey = teamColorKey(teamId, teamName);
+      if (teamClustersByKey.has(colorKey)) return colorKey;
+      const id = String(teamId || '').trim().toLowerCase();
+      if (id) {
+        const hit = teamClusters.find((c) =>
+          c.shortIds.some((s) => String(s).toLowerCase() === id)
+        );
+        if (hit) return hit.key;
+      }
+      const name = String(teamName || '').trim().toLowerCase();
+      if (name) {
+        const hit = teamClusters.find((c) => c.name.trim().toLowerCase() === name);
+        if (hit) return hit.key;
+      }
+      return colorKey;
+    };
+    const key1 = teamColorKey(ids.id1, t1);
+    const key2 = teamColorKey(ids.id2, t2);
+    const c1 = teamCrestColors(key1);
+    const c2 = teamCrestColors(key2);
+    const fk1 = resolveFilterKey(ids.id1, t1);
+    const fk2 = resolveFilterKey(ids.id2, t2);
     return `
       <div class="rp-row-match">
         <div class="rp-side home">
-          <span class="rp-crest">${escapeHtml(initials(t1))}</span>
-          <span class="rp-side-name">${escapeHtml(t1)}</span>
+          <span class="rp-crest" style="background:${c1.bg};color:${c1.fg}">${escapeHtml(
+            initials(t1)
+          )}</span>
+          <button type="button" class="rp-side-name" data-filter-team="${escapeHtml(
+            fk1
+          )}" title="Filter by ${escapeHtml(t1)}">${escapeHtml(t1)}</button>
         </div>
         <div class="rp-score">${escapeHtml(score)}</div>
         <div class="rp-side away">
-          <span class="rp-crest">${escapeHtml(initials(t2))}</span>
-          <span class="rp-side-name">${escapeHtml(t2)}</span>
+          <span class="rp-crest" style="background:${c2.bg};color:${c2.fg}">${escapeHtml(
+            initials(t2)
+          )}</span>
+          <button type="button" class="rp-side-name" data-filter-team="${escapeHtml(
+            fk2
+          )}" title="Filter by ${escapeHtml(t2)}">${escapeHtml(t2)}</button>
         </div>
       </div>`;
   }
@@ -266,15 +384,21 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
 
   function mapIconHtml(mapCode, mapName) {
     const src = mapIcon(mapCode);
+    const label = mapName || MAPS[mapCode]?.name || mapCode || 'Map';
     if (!src) {
-      return mapName
-        ? `<span class="rp-map-fallback" title="${escapeHtml(mapName)}">${escapeHtml(mapName)}</span>`
+      return mapCode
+        ? `<button type="button" class="rp-map-filter rp-map-fallback" data-filter-map="${escapeHtml(
+            mapCode
+          )}" title="Filter by ${escapeHtml(label)}">${escapeHtml(label)}</button>`
         : '';
     }
-    const label = mapName || MAPS[mapCode]?.name || mapCode || 'Map';
-    return `<img class="rp-map-icon" src="${escapeHtml(src)}" alt="${escapeHtml(
-      label
-    )}" title="${escapeHtml(label)}" width="14" height="14" loading="lazy" />`;
+    return `<button type="button" class="rp-map-filter" data-filter-map="${escapeHtml(
+      mapCode
+    )}" title="Filter by ${escapeHtml(label)}">
+      <img class="rp-map-icon" src="${escapeHtml(src)}" alt="${escapeHtml(
+        label
+      )}" width="20" height="20" loading="lazy" draggable="false" />
+    </button>`;
   }
 
   function rowMetaHtml(when, mapCode, mapName) {
@@ -334,7 +458,10 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
     return `
       <div class="rp-row ${status}" data-id="${escapeHtml(d.id)}">
         ${rowMetaHtml(formatWhen(d.uploadedAt || d.parsedAt), d.map, mapName)}
-        ${matchBlockHtml(t1, t2, demoScoreText(d))}
+        ${matchBlockHtml(t1, t2, demoScoreText(d), {
+          id1: d.team1?.id,
+          id2: d.team2?.id
+        })}
         ${demoActionsHtml(d)}
         ${
           state
@@ -918,9 +1045,9 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
     return [...out.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1])));
   }
 
-  function econSelectHtml(id, selected) {
+  function econSelectHtml(id, selected, placeholder) {
     const opts = [
-      `<option value=""${selected == null ? ' selected' : ''}>Any</option>`,
+      `<option value=""${selected == null ? ' selected' : ''}>${escapeHtml(placeholder)}</option>`,
       ...Object.entries(ECONOMIES).map(
         ([code, e]) =>
           `<option value="${code}"${selected === Number(code) ? ' selected' : ''}>${escapeHtml(
@@ -928,9 +1055,9 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
           )}</option>`
       )
     ];
-    return `<select id="${id}" class="site-input rp-econ-select" aria-label="${
-      id === 'rp-econ-a' ? 'Team 1 economy' : 'Team 2 economy'
-    }">${opts.join('')}</select>`;
+    return `<select id="${id}" class="site-input rp-econ-select" aria-label="${escapeHtml(
+      placeholder
+    )}">${opts.join('')}</select>`;
   }
 
   function hasAwpCheckHtml(id, checked) {
@@ -938,6 +1065,45 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
       <input type="checkbox" id="${id}" ${checked ? 'checked' : ''} aria-label="Has AWP" />
       <span>AWP</span>
     </label>`;
+  }
+
+  /** Opening situations shown in the library filter (no 5v5). */
+  const FILTER_SITUATIONS = [
+    { key: '4v4', label: '4v4' },
+    { key: '5v4', label: '5v4' },
+    { key: '5v3', label: '5v3' },
+    { key: '4v5', label: '4v5' },
+    { key: '3v5', label: '3v5' }
+  ];
+
+  function sideSegHtml(enabled) {
+    if (!enabled) return '';
+    const btn = (side, src, label) =>
+      `<button type="button" class="rp-seg-btn${
+        filters.side === side ? ' active' : ''
+      }" data-adv-side="${side}" aria-label="${label}" title="${label}">
+        <img src="${src}" alt="" width="18" height="18" draggable="false" />
+      </button>`;
+    return `<div class="rp-filter-group">
+      <div class="rp-seg rp-seg-side" role="group" aria-label="Side">
+        ${btn('T', '/icons/icon_t.png', 'T')}
+        ${btn('CT', '/icons/icon_ct.png', 'CT')}
+      </div>
+    </div>`;
+  }
+
+  function situationSegHtml(enabled) {
+    if (!enabled) return '';
+    return `<div class="rp-filter-group">
+      <div class="rp-seg rp-seg-sit" role="group" aria-label="Situation">
+        ${FILTER_SITUATIONS.map(
+          (s) =>
+            `<button type="button" class="rp-seg-btn${
+              filters.situations.has(s.key) ? ' active' : ''
+            }" data-adv-sit="${s.key}">${escapeHtml(s.label)}</button>`
+        ).join('')}
+      </div>
+    </div>`;
   }
 
   function selectedChipsHtml(group, items) {
@@ -1006,8 +1172,8 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
     const mode = filters.wonByMode;
     return `
       <select id="rp-won-by" class="site-input rp-econ-select" ${hasTeams ? '' : 'disabled'}
-        aria-label="Round won by" title="${hasTeams ? '' : 'Select a team first'}">
-        <option value=""${mode === '' ? ' selected' : ''}>Any</option>
+        aria-label="Round winner" title="${hasTeams ? '' : 'Select a team first'}">
+        <option value=""${mode === '' ? ' selected' : ''}>Round winner...</option>
         <option value="selected"${mode === 'selected' ? ' selected' : ''}>Selected team</option>
         <option value="opponent"${mode === 'opponent' ? ' selected' : ''}>Opponent</option>
       </select>`;
@@ -1023,28 +1189,21 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
       .filter((c) => filters.teams.has(c.key))
       .map((c) => [c.key, c.name]);
 
-    const playerEntries = knownPlayers();
-    const playerOptions = playerEntries.filter(([id]) => !filters.players.has(id));
-    const selectedPlayers = playerEntries.filter(([id]) => filters.players.has(id));
     const teamMenuOpen = Boolean(teamSearch.trim());
-    const playerMenuOpen = Boolean(playerSearch.trim());
+    const teamPicked = filters.teams.size === 1;
 
     filtersEl.innerHTML = `
       <div class="rp-filter-group${mapMenuOpen ? ' menu-open' : ''}">
-        <h4>Map</h4>
         ${mapMenuHtml()}
       </div>
       <div class="rp-filter-group">
-        <h4>Economy</h4>
         <div class="rp-econ-pair">
           <div class="rp-econ-side">
-            <span>Team 1</span>
-            ${econSelectHtml('rp-econ-a', filters.econA)}
+            ${econSelectHtml('rp-econ-a', filters.econA, "Team 1's buy")}
             ${hasAwpCheckHtml('rp-awp-a', filters.hasAwpA)}
           </div>
           <div class="rp-econ-side">
-            <span>Team 2</span>
-            ${econSelectHtml('rp-econ-b', filters.econB)}
+            ${econSelectHtml('rp-econ-b', filters.econB, "Team 2's buy")}
             ${hasAwpCheckHtml('rp-awp-b', filters.hasAwpB)}
           </div>
         </div>
@@ -1066,45 +1225,14 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
       ${
         teamClusters.length
           ? `<div class="rp-filter-group">
-              <h4>Round won by</h4>
               ${wonBySelectHtml()}
             </div>`
           : ''
       }
+      ${sideSegHtml(teamPicked)}
+      ${situationSegHtml(teamPicked)}
       <div class="rp-filter-group rp-advanced-wrap">
         <div class="rp-advanced-body" id="rp-advanced-body">
-          <div class="rp-filter-group">
-            <h4>Side${
-              filters.teams.size !== 1
-                ? ' <span class="rp-filter-hint">(pick one team)</span>'
-                : ''
-            }</h4>
-            <div class="rp-chips">
-              <button type="button" class="rp-chip${
-                filters.side === 'T' ? ' active' : ''
-              }" data-adv-side="T" ${filters.teams.size !== 1 ? 'disabled' : ''}>T</button>
-              <button type="button" class="rp-chip${
-                filters.side === 'CT' ? ' active' : ''
-              }" data-adv-side="CT" ${filters.teams.size !== 1 ? 'disabled' : ''}>CT</button>
-            </div>
-          </div>
-          <div class="rp-filter-group">
-            <h4>Situation${
-              filters.teams.size !== 1
-                ? ' <span class="rp-filter-hint">(pick one team)</span>'
-                : ''
-            }</h4>
-            <div class="rp-chips rp-chips-wrap">
-              ${SITUATION_OPTIONS.map(
-                (s) =>
-                  `<button type="button" class="rp-chip${
-                    filters.situations.has(s.key) ? ' active' : ''
-                  }" data-adv-sit="${s.key}" ${
-                    filters.teams.size !== 1 ? 'disabled' : ''
-                  }>${escapeHtml(s.label)}</button>`
-              ).join('')}
-            </div>
-          </div>
           <div class="rp-filter-group">
             <h4>Bomb</h4>
             <div class="rp-chips">
@@ -1126,20 +1254,6 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
                 .join('')}
             </div>
           </div>
-          ${
-            playerEntries.length
-              ? `<div class="rp-filter-group${playerMenuOpen ? ' menu-open' : ''}">
-              <h4>Players on the server</h4>
-              <div class="rp-typeahead" id="rp-player-typeahead">
-                <input type="search" class="site-input rp-filter-search" id="rp-player-search"
-                  placeholder="Search players" spellcheck="false" autocomplete="off"
-                  value="${escapeHtml(playerSearch)}" aria-label="Search players" />
-                ${typeaheadMenuHtml('players', playerOptions, playerSearch)}
-              </div>
-              ${selectedChipsHtml('players', selectedPlayers)}
-            </div>`
-              : ''
-          }
         </div>
       </div>
       <button type="button" class="btn btn-sm" id="rp-clear">Clear filters</button>`;
@@ -1205,25 +1319,16 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
 
   function refreshTypeaheadMenu(kind) {
     if (!filtersEl) return;
-    if (kind === 'teams') {
-      const group = filtersEl.querySelector('#rp-team-typeahead')?.closest('.rp-filter-group');
-      const wrap = filtersEl.querySelector('#rp-team-typeahead');
-      if (!wrap) return;
-      wrap.querySelector('.rp-typeahead-menu')?.remove();
-      const options = teamClusters
-        .filter((c) => !filters.teams.has(c.key))
-        .map((c) => [c.key, c.name]);
-      wrap.insertAdjacentHTML('beforeend', typeaheadMenuHtml('teams', options, teamSearch));
-      group?.classList.toggle('menu-open', Boolean(teamSearch.trim()));
-      return;
-    }
-    const group = filtersEl.querySelector('#rp-player-typeahead')?.closest('.rp-filter-group');
-    const wrap = filtersEl.querySelector('#rp-player-typeahead');
+    if (kind !== 'teams') return;
+    const group = filtersEl.querySelector('#rp-team-typeahead')?.closest('.rp-filter-group');
+    const wrap = filtersEl.querySelector('#rp-team-typeahead');
     if (!wrap) return;
     wrap.querySelector('.rp-typeahead-menu')?.remove();
-    const options = knownPlayers().filter(([id]) => !filters.players.has(id));
-    wrap.insertAdjacentHTML('beforeend', typeaheadMenuHtml('players', options, playerSearch));
-    group?.classList.toggle('menu-open', Boolean(playerSearch.trim()));
+    const options = teamClusters
+      .filter((c) => !filters.teams.has(c.key))
+      .map((c) => [c.key, c.name]);
+    wrap.insertAdjacentHTML('beforeend', typeaheadMenuHtml('teams', options, teamSearch));
+    group?.classList.toggle('menu-open', Boolean(teamSearch.trim()));
   }
 
   filtersEl?.addEventListener('input', (e) => {
@@ -1231,12 +1336,6 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
     if (teamInput) {
       teamSearch = teamInput.value;
       refreshTypeaheadMenu('teams');
-      return;
-    }
-    const playerInput = e.target.closest('#rp-player-search');
-    if (playerInput) {
-      playerSearch = playerInput.value;
-      refreshTypeaheadMenu('players');
     }
   });
 
@@ -1265,6 +1364,8 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
       const key = sitBtn.dataset.advSit;
       if (filters.situations.has(key)) filters.situations.delete(key);
       else filters.situations.add(key);
+      // Drop legacy 5v5 picks — that option is no longer in the filter UI.
+      filters.situations.delete('5v5');
       renderFilters();
       runQuery();
       return;
@@ -1683,7 +1784,10 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
       <div class="rp-row rp-demo-head" data-toggle-demo="${id}" role="button" tabindex="0"
         aria-expanded="${open ? 'true' : 'false'}">
         ${rowMetaHtml(when, mapCode, mapName)}
-        ${matchBlockHtml(t1, t2, score)}
+        ${matchBlockHtml(t1, t2, score, {
+          id1: d?.team1?.id || sample?.team1,
+          id2: d?.team2?.id || sample?.team2
+        })}
         <div class="rp-row-actions">
           <button type="button" class="rp-btn-icon" data-demo-stats="${id}" title="Database for this match">${statsIconHtml()}</button>
           <button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>
@@ -1976,6 +2080,48 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
 
   resultEl?.addEventListener('click', async (e) => {
     if (await handleDemoAction(e.target)) return;
+
+    const filterTeam = e.target.closest('[data-filter-team]');
+    if (filterTeam) {
+      e.preventDefault();
+      e.stopPropagation();
+      let key = filterTeam.dataset.filterTeam || '';
+      if (!key || key === 'unknown') return;
+      if (key.startsWith('id:')) {
+        const shortId = key.slice(3);
+        key =
+          teamClusters.find((c) =>
+            c.shortIds.some((s) => String(s).toLowerCase() === shortId)
+          )?.key || shortId;
+      } else if (key.startsWith('name:')) {
+        const name = key.slice(5);
+        const hit = teamClusters.find((c) => c.name.trim().toLowerCase() === name);
+        if (!hit) return;
+        key = hit.key;
+      }
+      filters.teams.clear();
+      filters.teams.add(key);
+      filters.side = '';
+      filters.situations.clear();
+      teamSearch = '';
+      renderFilters();
+      runQuery();
+      return;
+    }
+
+    const filterMap = e.target.closest('[data-filter-map]');
+    if (filterMap) {
+      e.preventDefault();
+      e.stopPropagation();
+      const code = filterMap.dataset.filterMap;
+      if (!code || !MAPS[code]) return;
+      filters.maps.clear();
+      filters.maps.add(code);
+      mapMenuOpen = false;
+      renderFilters();
+      runQuery();
+      return;
+    }
 
     const selectDemo = e.target.closest('[data-select-demo]');
     if (selectDemo) {

@@ -260,8 +260,8 @@
 
 .rp-map-icon {
   display: block;
-  width: 14px;
-  height: 14px;
+  width: 20px;
+  height: 20px;
   object-fit: contain;
   border-radius: 2px;
   flex-shrink: 0;
@@ -309,16 +309,6 @@
   letter-spacing: 0.02em;
 }
 
-.rp-side.home .rp-crest {
-  background: color-mix(in srgb, var(--rv-team1) 35%, transparent);
-  color: var(--rv-team1);
-}
-
-.rp-side.away .rp-crest {
-  background: color-mix(in srgb, var(--rv-team2) 35%, transparent);
-  color: var(--rv-team2);
-}
-
 .rp-side-name {
   overflow: hidden;
   color: var(--text);
@@ -326,6 +316,50 @@
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+button.rp-side-name {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  max-width: 100%;
+}
+
+button.rp-side-name:hover {
+  color: #fff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.rp-side.away button.rp-side-name {
+  text-align: right;
+}
+
+.rp-map-filter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: 2px;
+  line-height: 0;
+}
+
+.rp-map-filter:hover {
+  outline: 1px solid var(--border-strong);
+  outline-offset: 2px;
+}
+
+.rp-map-filter:hover .rp-map-icon {
+  opacity: 1;
 }
 
 .rp-score {
@@ -505,14 +539,17 @@
   align-items: stretch;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 #rp-library {
   min-height: 0;
+  overflow: hidden;
 }
 
 #rp-library .rp-browser {
-  min-height: calc(100vh - 140px);
+  min-height: 0;
+  flex: 1;
 }
 
 .rp-result {
@@ -521,6 +558,8 @@
   padding: 16px;
   border-radius: var(--radius);
   background: var(--surface);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .rp-result .rp-list {
@@ -535,20 +574,20 @@
 }
 
 .rp-filters {
-  position: sticky;
-  top: 16px;
+  position: relative;
   z-index: 4;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
   padding: 16px;
-  max-height: calc(100vh - 120px);
-  overflow-x: visible;
+  height: 100%;
+  max-height: 100%;
+  overflow-x: hidden;
   overflow-y: auto;
   border: 0;
   border-radius: var(--radius);
   background: var(--surface);
-  align-self: start;
+  align-self: stretch;
 }
 
 .rp-filter-group {
@@ -595,15 +634,77 @@
   font-size: 11px;
 }
 
-.rp-econ-side > span:first-child {
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
 .rp-econ-select {
   width: 100%;
   font-size: 12px;
+}
+
+/* Segmented filter controls (side / situation) — bordered equal slots */
+.rp-seg {
+  display: flex;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #000000;
+}
+
+.rp-seg-btn {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 8px 4px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font: 500 12px var(--font-body);
+  cursor: pointer;
+  transition: background 0.12s var(--ease-smooth), color 0.12s var(--ease-smooth);
+}
+
+.rp-seg-btn:last-child {
+  border-right: 0;
+}
+
+.rp-seg-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.rp-seg-btn.active {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.rp-seg-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.rp-seg-btn img {
+  display: block;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  opacity: 0.75;
+}
+
+.rp-seg-btn.active img {
+  opacity: 1;
+}
+
+.rp-seg-side .rp-seg-btn {
+  padding: 9px 6px;
+}
+
+.rp-seg-side .rp-seg-btn img {
+  width: 18px;
+  height: 18px;
 }
 
 /* Compact AWP toggle — chip under buy select / beside stats filters */
@@ -2835,10 +2936,17 @@ body.rv-open {
   .rp-top,
   .rp-browser {
     grid-template-columns: 1fr;
+    overflow: visible;
   }
 
   .rp-filters {
-    position: static;
+    position: relative;
+    height: auto;
+    max-height: none;
+  }
+
+  .rp-result {
+    overflow: visible;
   }
 
   .rv-stage {
