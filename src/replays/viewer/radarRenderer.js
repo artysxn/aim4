@@ -227,7 +227,7 @@ export class RadarRenderer {
     }
     const lctx = layer.getContext('2d');
     lctx.clearRect(0, 0, w, h);
-    lctx.fillStyle = '#000000';
+    lctx.fillStyle = '#050505';
     lctx.fillRect(0, 0, w, h);
     if (this.image) {
       const t = this.viewTransform(w, h);
@@ -369,7 +369,7 @@ export class RadarRenderer {
       if (clear) {
         ctx.clearRect(0, 0, w, h);
         if (frame.clearStyle !== 'transparent') {
-          ctx.fillStyle = '#000000';
+          ctx.fillStyle = '#050505';
           ctx.fillRect(0, 0, w, h);
         }
       }
