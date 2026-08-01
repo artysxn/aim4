@@ -554,23 +554,6 @@ a {
   min-height: 0;
 }
 
-/* Demo library: pin the filter column; only the demo list scrolls. */
-.site-shell:has(.view.active[data-view='replays'] > #rp-library:not([hidden])) {
-  height: 100vh;
-  max-height: 100vh;
-  overflow: hidden;
-}
-
-.site-shell:has(.view.active[data-view='replays'] > #rp-library:not([hidden])) .site-main,
-.site-shell:has(.view.active[data-view='replays'] > #rp-library:not([hidden])) .page-body {
-  min-height: 0;
-  overflow: hidden;
-}
-
-.view.active[data-view='replays'] > #rp-library.view-pad-fill:not([hidden]) {
-  overflow: hidden;
-}
-
 .view.active[data-view='replays'] > .view-pad-fill:not([hidden]),
 .view.active[data-view='leaderboards'] > .view-pad-fill {
   flex: 1;

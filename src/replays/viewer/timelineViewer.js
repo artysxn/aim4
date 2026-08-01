@@ -75,7 +75,11 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         <aside class="rv-team rv-team-1" data-team="1"></aside>
       </div>
       <div class="rv-map">
-        <div class="rv-clock" id="rv-clock">00:00</div>
+        <div class="rv-clock-row" id="rv-clock-row">
+          <span class="rv-match-score" id="rv-score-left">0</span>
+          <div class="rv-clock" id="rv-clock">00:00</div>
+          <span class="rv-match-score" id="rv-score-right">0</span>
+        </div>
         <div class="rv-killfeed" id="rv-killfeed" aria-live="polite"></div>
         <canvas class="rv-canvas" id="rv-canvas"></canvas>
         <div class="rv-loading" id="rv-loading"></div>
@@ -199,6 +203,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const canvas = el.querySelector('#rv-canvas');
   const mapEl = el.querySelector('.rv-map');
   const clockEl = el.querySelector('#rv-clock');
+  const scoreLeftEl = el.querySelector('#rv-score-left');
+  const scoreRightEl = el.querySelector('#rv-score-right');
   const killfeedEl = el.querySelector('#rv-killfeed');
   const loadingEl = el.querySelector('#rv-loading');
   const roundsEl = el.querySelector('#rv-rounds');
@@ -891,13 +897,21 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     // Panels follow live sides when known (T left / CT right like most 2D viewers).
     const s1 = activeMeta.team1Side;
     const s2 = activeMeta.team2Side;
+    let leftScore;
+    let rightScore;
     if (s1 === 'CT' && s2 === 'T') {
-      team1El.innerHTML = teamHtml(2, t2, wins.team2, 'T');
-      team2El.innerHTML = teamHtml(1, t1, wins.team1, 'CT');
+      team1El.innerHTML = teamHtml(2, t2, 'T');
+      team2El.innerHTML = teamHtml(1, t1, 'CT');
+      leftScore = wins.team2;
+      rightScore = wins.team1;
     } else {
-      team1El.innerHTML = teamHtml(1, t1, wins.team1, s1 || 'T');
-      team2El.innerHTML = teamHtml(2, t2, wins.team2, s2 || 'CT');
+      team1El.innerHTML = teamHtml(1, t1, s1 || 'T');
+      team2El.innerHTML = teamHtml(2, t2, s2 || 'CT');
+      leftScore = wins.team1;
+      rightScore = wins.team2;
     }
+    scoreLeftEl.textContent = String(leftScore);
+    scoreRightEl.textContent = String(rightScore);
     indexPlayerRows();
   }
 
@@ -911,7 +925,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     return { team1, team2 };
   }
 
-  function teamHtml(team, info, score, side) {
+  function teamHtml(team, info, side) {
     const players = (activeMeta.players || []).filter((p) => p.team === team);
     const rows = players
       .map((p) => {
@@ -936,7 +950,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
           side || ''
         )}</span>
         <span class="rv-team-name">${escapeHtml(info.name || `Team ${team}`)}</span>
-        <span class="rv-team-score">${score}</span>
       </div>
       <div class="rv-players">${rows}</div>`;
   }
@@ -1168,7 +1181,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   }
 
   mapEl.addEventListener('pointerdown', (e) => {
-    if (e.target.closest?.('.rv-clock, .rv-loading')) return;
+    if (e.target.closest?.('.rv-clock-row, .rv-loading')) return;
     closePopovers();
 
     // Right click always draws, whatever mode the toolbar is in. Left click
