@@ -6535,6 +6535,55 @@ table.rp-mine-table tbody tr {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: rgba(12, 12, 14, 0.92);
+  pointer-events: auto;
+}
+
+.sc-util-seg {
+  display: flex;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #0c0c0c;
+}
+
+.sc-util-btn {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 6px;
+  border: 0;
+  border-right: 1px solid #000;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.12s var(--ease-smooth);
+}
+
+.sc-util-btn:last-child {
+  border-right: 0;
+}
+
+.sc-util-btn:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sc-util-btn.active {
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.sc-util-btn img {
+  display: block;
+  width: 16px;
+  height: 20px;
+  object-fit: contain;
+  opacity: 0.8;
+}
+
+.sc-util-btn.active img {
+  opacity: 1;
 }
 
 .sc-spawn-side {

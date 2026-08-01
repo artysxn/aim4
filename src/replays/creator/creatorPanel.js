@@ -37,6 +37,14 @@ import {
 /** Maps that have a radar image to draw on. */
 const CREATOR_MAPS = Object.entries(MAPS).map(([code, m]) => ({ code, name: m.name }));
 
+/** Pre-thrown utility picker order (matches the stratbook utility bar). */
+const PLACE_NADE_SLOTS = [
+  { type: 'smokegrenade', label: 'Smoke', icon: '/icons/equipment/smokegrenade.svg' },
+  { type: 'molotov', label: 'Molotov', icon: '/icons/equipment/molotov.svg' },
+  { type: 'flashbang', label: 'Flash', icon: '/icons/equipment/flashbang.svg' },
+  { type: 'hegrenade', label: 'HE', icon: '/icons/equipment/hegrenade.svg' }
+];
+
 const SIDE_FILL = {
   T: 'rgba(240, 196, 78, 0.28)',
   CT: 'rgba(96, 165, 250, 0.28)'
@@ -100,6 +108,8 @@ export function createCreatorPanel({
 
   /** (x, y) -> inside a painted vision block. */
   let blockedAt = null;
+  /** Bumps on every map load so a stale zones fetch cannot wipe a newer map. */
+  let mapLoadGen = 0;
 
   let hoverSpawn = null;
   let selectedTrack = '';
@@ -197,6 +207,7 @@ export function createCreatorPanel({
   // ---- map + data ---------------------------------------------------------
 
   async function loadMap(code) {
+    const gen = ++mapLoadGen;
     round.map = code;
     spawns = [];
     customSpawns = new Map();
@@ -212,29 +223,36 @@ export function createCreatorPanel({
     spawnsLoading = true;
     renderRight();
     await renderer.setMap(code);
+    if (gen !== mapLoadGen) return;
 
     // Painted vision blocks double as the map's walls for a 2D body.
-    fetchZones(code)
-      .then((network) => {
-        const pieces = network?.visionBlocks || [];
-        if (!pieces.length) {
-          blockedAt = null;
-          setStatus('This map has no painted vision blocks, so nothing stops a body yet.');
-          return;
-        }
+    // Cache (and the other Active Duty maps) have thousands of brush pieces on
+    // the API — an empty list usually means the request failed or returned a
+    // fallback shell, not that the map was never painted.
+    try {
+      const network = await fetchZones(code);
+      if (gen !== mapLoadGen) return;
+      const pieces = network?.visionBlocks || [];
+      if (pieces.length) {
         const baked = bakeLayerMask(code, pieces);
+        if (gen !== mapLoadGen) return;
         blockedAt = baked.testWorld;
-      })
-      .catch(() => {
+      } else {
         blockedAt = null;
-      });
+      }
+    } catch {
+      if (gen !== mapLoadGen) return;
+      blockedAt = null;
+    }
 
     try {
       spawns = await fetchSpawns(code);
+      if (gen !== mapLoadGen) return;
       if (!spawns.length) {
         setStatus('No parsed demos on this map yet, so there are no spawns to record from.', true);
       }
     } catch (err) {
+      if (gen !== mapLoadGen) return;
       setStatus(err.message || 'Could not read spawns.', true);
     }
     spawnsLoading = false;
@@ -297,7 +315,8 @@ export function createCreatorPanel({
 
     if (!recording) {
       for (const s of liveSpawns()) {
-        if (round.side && leftMode !== 'start' && s.side !== round.side) continue;
+        // Always draw T and CT spawns. Round side only tags the strategy, it
+        // does not hide the other team's spawn discs.
         worldToRadar(renderer.mapCode, s.x, s.y, pt);
         const x = pt.x * t.scale + t.ox;
         const y = pt.y * t.scale + t.oy;
@@ -415,23 +434,26 @@ export function createCreatorPanel({
           <input class="site-input" type="number" min="0" max="${ROUND_SECONDS}" step="1"
             value="${Math.round(round.startSeconds)}" data-start-seconds /> s
         </label>
-        <p class="sc-note">Drag any spawn to move it. Bodies recorded after that start from the new spot.</p>
         <button type="button" class="btn btn-sm" data-reset-spawns>Reset spawn positions</button>
 
-        <span class="sc-label">Pre-thrown utility</span>
-        <div class="rp-chips">
-          ${NADE_SLOTS.map(
+        <span class="sc-label">Utility</span>
+        <div class="sc-util-seg" role="group" aria-label="Pre-thrown utility">
+          ${PLACE_NADE_SLOTS.map(
             (s) =>
-              `<button type="button" class="rp-chip${
+              `<button type="button" class="sc-util-btn${
                 placingNade === s.type ? ' active' : ''
-              }" data-place-nade="${s.type}">${escapeHtml(s.label)}</button>`
+              }" data-place-nade="${s.type}" aria-label="${escapeHtml(s.label)}" title="${escapeHtml(
+                s.label
+              )}">
+                <img src="${s.icon}" alt="" width="18" height="22" draggable="false" />
+              </button>`
           ).join('')}
         </div>
-        <p class="sc-note">${
+        ${
           placingNade
-            ? 'Click the map to land it there before the round starts.'
-            : 'Pick a type, then click where it should already be.'
-        }</p>
+            ? `<p class="sc-note">Click the map to land it there before the round starts.</p>`
+            : ''
+        }
         ${
           round.preNades.length
             ? `<button type="button" class="btn btn-sm danger" data-clear-prenades>Clear ${
@@ -457,9 +479,17 @@ export function createCreatorPanel({
 
       <div class="sc-block">
         <span class="sc-label">Side</span>
-        <div class="rp-chips">
-          <button type="button" class="rp-chip${round.side === 'T' ? ' active' : ''}" data-side="T">T side</button>
-          <button type="button" class="rp-chip${round.side === 'CT' ? ' active' : ''}" data-side="CT">CT side</button>
+        <div class="rp-seg rp-seg-side" role="group" aria-label="Side">
+          <button type="button" class="rp-seg-btn${
+            round.side === 'T' ? ' active' : ''
+          }" data-side="T" aria-label="T" title="T" ${readOnly ? 'disabled' : ''}>
+            <img src="/icons/icon_t.png" alt="" width="18" height="18" draggable="false" />
+          </button>
+          <button type="button" class="rp-seg-btn${
+            round.side === 'CT' ? ' active' : ''
+          }" data-side="CT" aria-label="CT" title="CT" ${readOnly ? 'disabled' : ''}>
+            <img src="/icons/icon_ct.png" alt="" width="18" height="18" draggable="false" />
+          </button>
         </div>
       </div>
 
@@ -468,7 +498,6 @@ export function createCreatorPanel({
         <select class="site-select" data-strategy ${readOnly ? 'disabled' : ''}>
           <option value="">Not linked</option>${stratOptions}
         </select>
-        <p class="sc-note">Linking renames this round to match the strategy.</p>
       </div>
 
       <div class="sc-block">
@@ -521,7 +550,7 @@ export function createCreatorPanel({
                 spawnsLoading
                   ? 'Reading spawns from your demos…'
                   : round.map
-                    ? 'Hover a spawn on the map and hit Record.'
+                    ? 'Click a spawn on the map to record.'
                     : 'Pick a map to begin.'
               }</p>`
         }
@@ -548,10 +577,10 @@ export function createCreatorPanel({
       <div class="sc-block">
         <span class="sc-label">Round</span>
         <ul class="sc-facts">
-          <li><span>Bodies</span><b>${summary.tSide} T · ${summary.ctSide} CT</b></li>
-          <li><span>Length</span><b>${fmtClock(summary.durationMs)}</b></li>
-          <li><span>Shots</span><b>${summary.shots}</b></li>
-          <li><span>Spawns found</span><b>${spawns.length}</b></li>
+          <li><span>Name</span><b>${escapeHtml(round.name || 'Untitled')}</b></li>
+          <li><span>Map</span><b>${escapeHtml(
+            MAPS[round.map]?.name || round.map || '—'
+          )}</b></li>
         </ul>
         ${
           entry?.shareId
@@ -662,11 +691,21 @@ export function createCreatorPanel({
     if (changed || near) drawFrame(state);
   });
 
-  canvas.addEventListener('pointerleave', () => {
+  canvas.addEventListener('pointerleave', (e) => {
+    // Leaving the canvas for the Record tip must keep the tip open.
+    if (e.relatedTarget?.closest?.('.sc-spawn-tip')) return;
     if (hoverSpawn) {
       hoverSpawn = null;
       drawFrame(engine.state());
     }
+  });
+
+  overlayEl.addEventListener('pointerleave', (e) => {
+    if (!hoverSpawn) return;
+    if (e.relatedTarget === canvas || canvas.contains(e.relatedTarget)) return;
+    if (e.relatedTarget?.closest?.('.sc-spawn-tip')) return;
+    hoverSpawn = null;
+    drawFrame(engine.state());
   });
 
   canvas.addEventListener('pointerdown', (e) => {
@@ -684,10 +723,10 @@ export function createCreatorPanel({
     }
 
     if (readOnly) return;
-    const world = worldFromEvent(e);
-    if (!world) return;
 
     if (placingNade) {
+      const world = worldFromEvent(e);
+      if (!world) return;
       // Pre-thrown: it is already on the ground when the round starts.
       round.preNades.push(
         makeNade({ type: placingNade, t: 0, from: { x: world.x, y: world.y }, to: world })
@@ -706,6 +745,14 @@ export function createCreatorPanel({
         dragSpawn = near;
         canvas.setPointerCapture(e.pointerId);
       }
+      return;
+    }
+
+    // Click a spawn disc to start recording that body.
+    const near = spawnAtRadar(renderer.radarFromClient(e.clientX, e.clientY, {}));
+    if (near) {
+      e.preventDefault();
+      startRecording(near.id);
     }
   });
 

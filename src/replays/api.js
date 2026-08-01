@@ -394,18 +394,13 @@ export async function fetchZones(map) {
       headers: await headers()
     })
   );
-  return (
-    data.network || {
-      map,
-      visionBlocks: [],
-      elevated: [],
-      underpasses: [],
-      ledges: [],
-      bombSites: { a: null, b: null },
-      keyZones: { a: [], b: [] },
-      updatedAt: 0
-    }
-  );
+  const network = data?.network;
+  // A missing/invalid payload must not look like "this map was never painted"
+  // — SPA HTML fallthrough and empty `{}` bodies used to hit the empty fallback.
+  if (!network || typeof network !== 'object' || !Array.isArray(network.visionBlocks)) {
+    throw new Error(`Could not load zones for ${map}.`);
+  }
+  return network;
 }
 
 /**
