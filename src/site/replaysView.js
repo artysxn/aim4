@@ -163,7 +163,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     situations: new Set(),
     afterplant: false,
     /** @type {Set<string>} early|mid|late */
-    decidedPhases: new Set()
+    decidedPhases: new Set(),
+    /** Library visibility scope: public catalog vs own + team-unlisted. */
+    /** @type {'public'|'mine'} */
+    libraryScope: 'public'
   };
   /** @type {Map<string, object|null>} */
   const roundMetaCache = new Map();
@@ -1443,6 +1446,55 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     { key: '3v5', label: '3v5' }
   ];
 
+  function demoVisibility(d) {
+    return String(d?.owner?.visibility || d?.visibility || 'public').toLowerCase();
+  }
+
+  function demoOwnerId(d) {
+    return d?.owner?.id || d?.uploaderId || '';
+  }
+
+  function isOwnDemo(d) {
+    return Boolean(account.signedIn && account.id && demoOwnerId(d) === account.id);
+  }
+
+  /**
+   * Public: every public demo, plus everything you uploaded.
+   * My Uploads: only your uploads and team-visible unlisted demos.
+   */
+  function demoMatchesScope(d) {
+    if (!d) return false;
+    const mine = isOwnDemo(d);
+    const vis = demoVisibility(d);
+    if (filters.libraryScope === 'mine') return mine || vis === 'unlisted';
+    return vis === 'public' || mine;
+  }
+
+  function scopedDemos(list = demos) {
+    return list.filter(demoMatchesScope);
+  }
+
+  function roundMatchesScope(r) {
+    const id = r?.demoId || splitStoredName(r?.file)?.demoId;
+    if (!id) return false;
+    const d = demoById(id);
+    if (!d) return false;
+    return demoMatchesScope(d);
+  }
+
+  function libraryScopeHtml() {
+    const btn = (key, label) =>
+      `<button type="button" class="rp-seg-btn${
+        filters.libraryScope === key ? ' active' : ''
+      }" data-library-scope="${key}">${label}</button>`;
+    return `<div class="rp-filter-group">
+      <div class="rp-seg rp-seg-scope" role="group" aria-label="Library scope">
+        ${btn('public', 'Public')}
+        ${btn('mine', 'My Uploads')}
+      </div>
+    </div>`;
+  }
+
   function sideSegHtml(enabled) {
     if (!enabled) return '';
     const btn = (side, src, label) =>
@@ -1560,6 +1612,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const teamPicked = filters.teams.size === 1;
 
     filtersEl.innerHTML = `
+      ${libraryScopeHtml()}
       <div class="rp-filter-group${mapMenuOpen ? ' menu-open' : ''}">
         ${mapMenuHtml()}
       </div>
@@ -1669,6 +1722,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       filters.situations.clear();
       filters.afterplant = false;
       filters.decidedPhases.clear();
+      filters.libraryScope = 'public';
       // Early is not a valid decided filter anymore.
       teamSearch = '';
       playerSearch = '';
@@ -1712,6 +1766,15 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   });
 
   filtersEl?.addEventListener('click', (e) => {
+    const scopeBtn = e.target.closest('[data-library-scope]');
+    if (scopeBtn) {
+      const next = scopeBtn.dataset.libraryScope === 'mine' ? 'mine' : 'public';
+      if (filters.libraryScope === next) return;
+      filters.libraryScope = next;
+      renderFilters();
+      runQuery();
+      return;
+    }
     const sideBtn = e.target.closest('[data-adv-side]');
     if (sideBtn && !sideBtn.disabled) {
       const side = sideBtn.dataset.advSide === 'CT' ? 'CT' : 'T';
@@ -1825,7 +1888,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   function hasActiveFilters() {
     return Boolean(
-      filters.maps.size ||
+      filters.libraryScope !== 'public' ||
+        filters.maps.size ||
         filters.teams.size ||
         filters.players.size ||
         filters.wonByMode ||
@@ -1952,7 +2016,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
    */
   function filterLibraryRounds(query) {
     const out = [];
-    for (const d of demos) {
+    for (const d of scopedDemos()) {
       for (const r of d.rounds || []) {
         const file = r.file || (r.id && d.id ? `${r.id}~${d.id}` : '');
         if (!file && !r.id) continue;
@@ -2009,16 +2073,19 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       } else if (!rounds.length && fromApi.length) {
         rounds = fromApi;
       } else if (!rounds.length) {
-        const names = demos.flatMap((d) => (d.rounds || []).map((r) => r.file).filter(Boolean));
+        const names = scopedDemos().flatMap((d) => (d.rounds || []).map((r) => r.file).filter(Boolean));
         rounds = collectRounds(names, query);
       }
 
       // Wide filters can surface demos outside the loaded page — pull their
       // records so heads show real names / scores / dates instead of short ids.
-      if (wide && rounds.length) {
+      // Scope filtering also needs owner/visibility on every round's demo.
+      if (rounds.length) {
         await ensureDemosForRounds(rounds);
         if (token !== queryToken) return;
       }
+      rounds = rounds.filter(roundMatchesScope);
+      if (token !== queryToken) return;
 
       if (needsMetaFilters()) {
         rounds = await applyAdvancedMetaFilters(rounds, token);
@@ -2174,7 +2241,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
 
     const roundsByFile = new Map(rounds.map((r) => [r.file, r]));
-    const sortedDemos = [...demos].sort((a, b) => {
+    const sortedDemos = scopedDemos().sort((a, b) => {
       const ta = a.uploadedAt || a.parsedAt || 0;
       const tb = b.uploadedAt || b.parsedAt || 0;
       return tb - ta;

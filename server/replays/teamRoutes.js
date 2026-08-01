@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // replays/teamRoutes.js
-// /api/teams/* — roster, invites, roles, positions and documents.
+// /api/teams/* — roster, invites, roles, positions, documents and stratbook.
 //
 // Every route here needs a verified account: teams are the thing demo privacy
 // hangs off, so an anonymous caller has nothing to do in this file.
@@ -10,6 +10,7 @@ import { whoami } from './identity.js';
 import {
   createDummyMember,
   deleteDocument,
+  deleteStrategy,
   joinTeam,
   leaveTeam,
   listDocuments,
@@ -25,7 +26,8 @@ import {
   teamsOf,
   transferOwnership,
   unbanMember,
-  upsertDocument
+  upsertDocument,
+  upsertStrategy
 } from './teamsStore.js';
 
 const CORS = {
@@ -250,6 +252,21 @@ export async function handleTeamRequest(req, res, url) {
         json(res, 200, { ok: true, team: publicTeam(await teamById(teamId), me.id) });
         return true;
       }
+    }
+
+    // ---- stratbook --------------------------------------------------------
+    if (req.method === 'POST' && tail === '/stratbook') {
+      const body = await readJson(req);
+      const strategy = await upsertStrategy(me, teamId, body);
+      json(res, 200, { strategy, team: publicTeam(await teamById(teamId), me.id) });
+      return true;
+    }
+
+    const stratMatch = p.match(/^\/api\/teams\/[A-Za-z0-9_]+\/stratbook\/([A-Za-z0-9_-]+)$/);
+    if (stratMatch && req.method === 'DELETE') {
+      await deleteStrategy(me, teamId, stratMatch[1]);
+      json(res, 200, { ok: true, team: publicTeam(await teamById(teamId), me.id) });
+      return true;
     }
   } catch (err) {
     fail(err);

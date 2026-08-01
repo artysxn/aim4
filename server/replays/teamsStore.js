@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // replays/teamsStore.js
-// Teams, membership, invites, roles and per-map positions.
+// Teams, membership, invites, roles, per-map positions, documents and stratbook.
 //
 // One JSON file next to the replay library. A user may belong to many teams but
 // own exactly one: ownership is what grants the invite link, the kick/ban list
@@ -163,7 +163,8 @@ export async function createTeam(user, name) {
     banned: [],
     /** userId -> { T: { MAP: position }, CT: { MAP: position } } */
     positions: {},
-    documents: []
+    documents: [],
+    stratbook: []
   };
   state.teams.push(team);
   await writeTeams(state);
@@ -421,6 +422,160 @@ export async function deleteDocument(actor, teamId, docId) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Stratbook
+// ---------------------------------------------------------------------------
+
+export const MAX_STRATEGIES = 400;
+
+export const STRAT_ECONOMY = [
+  'Pistol',
+  'Full buy',
+  'Full buy + AWP',
+  'Antiforce',
+  'Force',
+  'Eco'
+];
+
+export const STRAT_CATEGORY_T = [
+  'Pistol',
+  'Set call',
+  'Default',
+  'Opener',
+  'Midround',
+  'Lateround',
+  'Cheap exec'
+];
+
+export const STRAT_CATEGORY_CT = [
+  'Pistol',
+  'Set call',
+  'Default',
+  'Opener',
+  'Midround',
+  'Setup',
+  'Retake'
+];
+
+const STRAT_MAPS = new Set(['ANC', 'DD2', 'MIR', 'NUK', 'INF', 'OVP', 'ANU', 'CCH']);
+
+const newStratId = () => `sb_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
+function sanitizeUrl(value) {
+  const raw = String(value || '').trim().slice(0, 2000);
+  if (!raw) return '';
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    return u.toString();
+  } catch {
+    return '';
+  }
+}
+
+function normalizeRoleNotes(raw) {
+  const src = Array.isArray(raw) ? raw : [];
+  return [0, 1, 2, 3, 4].map((i) => String(src[i] ?? '').slice(0, 200));
+}
+
+function normalizeVisibleTo(raw, team) {
+  const ids = new Set((team.members || []).map((m) => m.id));
+  const list = Array.isArray(raw) ? raw : [];
+  return [...new Set(list.map((id) => String(id)).filter((id) => ids.has(id)))];
+}
+
+function publicStrategy(s) {
+  return {
+    id: s.id,
+    map: s.map,
+    side: s.side,
+    economy: s.economy,
+    category: s.category,
+    name: s.name || '',
+    description: s.description || '',
+    link3d: s.link3d || '',
+    link2d: s.link2d || '',
+    roleNotes: normalizeRoleNotes(s.roleNotes),
+    visibleAll: Boolean(s.visibleAll),
+    visibleTo: Array.isArray(s.visibleTo) ? [...s.visibleTo] : [],
+    createdAt: s.createdAt,
+    updatedAt: s.updatedAt,
+    updatedBy: s.updatedBy || ''
+  };
+}
+
+/** Admin upsert for one strategy row in the Stratbook Editor. */
+export async function upsertStrategy(actor, teamId, patch = {}) {
+  return updateTeam(teamId, (t) => {
+    if (!isAdmin(t, actor.id)) throw denied('Only team admins can edit the stratbook.');
+    t.stratbook = t.stratbook || [];
+    const id = String(patch.id || '').replace(/[^A-Za-z0-9_-]/g, '');
+    const existing = id ? t.stratbook.find((s) => s.id === id) : null;
+
+    const side = (patch.side ?? existing?.side) === 'CT' ? 'CT' : 'T';
+    const map = String(patch.map ?? existing?.map ?? '').toUpperCase();
+    if (!STRAT_MAPS.has(map)) throw new Error('Unknown map.');
+
+    const economyOpts = STRAT_ECONOMY;
+    const categoryOpts = side === 'CT' ? STRAT_CATEGORY_CT : STRAT_CATEGORY_T;
+    const economy = String(patch.economy ?? existing?.economy ?? economyOpts[0]);
+    const category = String(patch.category ?? existing?.category ?? categoryOpts[0]);
+    if (!economyOpts.includes(economy)) throw new Error('Unknown economy.');
+    if (!categoryOpts.includes(category)) throw new Error('Unknown category.');
+
+    const next = {
+      id: existing?.id || newStratId(),
+      map,
+      side,
+      economy,
+      category,
+      name: String(patch.name ?? existing?.name ?? '')
+        .trim()
+        .slice(0, 120),
+      description: String(patch.description ?? existing?.description ?? '')
+        .trim()
+        .slice(0, 500),
+      link3d:
+        patch.link3d === undefined ? existing?.link3d || '' : sanitizeUrl(patch.link3d),
+      link2d:
+        patch.link2d === undefined ? existing?.link2d || '' : sanitizeUrl(patch.link2d),
+      roleNotes:
+        patch.roleNotes === undefined
+          ? normalizeRoleNotes(existing?.roleNotes)
+          : normalizeRoleNotes(patch.roleNotes),
+      visibleAll:
+        patch.visibleAll === undefined ? Boolean(existing?.visibleAll) : Boolean(patch.visibleAll),
+      visibleTo:
+        patch.visibleTo === undefined
+          ? normalizeVisibleTo(existing?.visibleTo, t)
+          : normalizeVisibleTo(patch.visibleTo, t),
+      createdAt: existing?.createdAt || Date.now(),
+      updatedAt: Date.now(),
+      updatedBy: actor.username
+    };
+
+    if (existing) {
+      Object.assign(existing, next);
+      return publicStrategy(existing);
+    }
+    if (t.stratbook.length >= MAX_STRATEGIES) {
+      throw new Error(`A team can keep ${MAX_STRATEGIES} strategies.`);
+    }
+    t.stratbook.push(next);
+    return publicStrategy(next);
+  });
+}
+
+export async function deleteStrategy(actor, teamId, strategyId) {
+  return updateTeam(teamId, (t) => {
+    if (!isAdmin(t, actor.id)) throw denied('Only team admins can edit the stratbook.');
+    const id = String(strategyId || '');
+    const before = (t.stratbook || []).length;
+    t.stratbook = (t.stratbook || []).filter((s) => s.id !== id);
+    if (t.stratbook.length === before) throw new Error('That strategy no longer exists.');
+  });
+}
+
 /** Shape sent to the client: no internal fields, invite only for the owner. */
 export function publicTeam(team, viewerId) {
   if (!team) return null;
@@ -455,6 +610,7 @@ export function publicTeam(team, viewerId) {
       updatedBy: d.updatedBy,
       canEdit: canEditDocument(team, d, viewerId)
     })),
+    stratbook: (team.stratbook || []).map(publicStrategy),
     isOwner: owner,
     isAdmin: isAdmin(team, viewerId),
     maxMembers: MAX_MEMBERS,

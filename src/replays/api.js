@@ -557,3 +557,23 @@ export async function deleteTeamDocument(teamId, docId) {
     )
   );
 }
+
+/** @param {object} strategy */
+export async function saveTeamStrategy(teamId, strategy) {
+  return asJson(
+    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/stratbook`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(strategy)
+    })
+  );
+}
+
+export async function deleteTeamStrategy(teamId, strategyId) {
+  return asJson(
+    await fetch(
+      `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/stratbook/${encodeURIComponent(strategyId)}`,
+      { method: 'DELETE', headers: await headers() }
+    )
+  );
+}

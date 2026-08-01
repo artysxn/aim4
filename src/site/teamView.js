@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // site/teamView.js
-// The TEAM shell: Overview, Documents, Roles & Positions, and the two pages
-// that are still being built.
+// The TEAM shell: Overview, Documents, Roles & Positions, Stratbook Editor,
+// and My Strategies.
 //
 // One controller owns all five pages because they share the same roster fetch:
 // switching between them re-renders, it does not re-load. Everything here is
@@ -13,6 +13,7 @@ import {
   createTeam,
   createTeamDummy,
   deleteTeamDocument,
+  deleteTeamStrategy,
   fetchDemos,
   fetchInvite,
   fetchStatus,
@@ -23,6 +24,7 @@ import {
   mergeTeamMember,
   rollTeamInvite,
   saveTeamDocument,
+  saveTeamStrategy,
   setTeamPosition,
   teamMemberAction
 } from '../replays/api.js';
@@ -31,6 +33,33 @@ import { POSITION_MAPS, positionsFor } from '../replays/roles/teamPositions.js';
 import { createDocsEditor } from './docsEditor.js';
 
 const PAGES = ['team-overview', 'team-docs', 'team-roles', 'team-stratbook', 'team-strategies'];
+
+const STRAT_ECONOMY = [
+  'Pistol',
+  'Full buy',
+  'Full buy + AWP',
+  'Antiforce',
+  'Force',
+  'Eco'
+];
+const STRAT_CATEGORY_T = [
+  'Pistol',
+  'Set call',
+  'Default',
+  'Opener',
+  'Midround',
+  'Lateround',
+  'Cheap exec'
+];
+const STRAT_CATEGORY_CT = [
+  'Pistol',
+  'Set call',
+  'Default',
+  'Opener',
+  'Midround',
+  'Setup',
+  'Retake'
+];
 
 function formatWhen(ts) {
   if (!ts) return '';
@@ -61,6 +90,10 @@ export function initTeamView({ auth, escapeHtml }) {
   let editor = null;
   let openDocId = '';
   let rolesSide = 'T';
+  /** Which stratbook "Visible to" menu is open (strategy id). */
+  let openVisibleMenu = '';
+  /** Member whose My Strategies view is shown. */
+  let strategiesPlayerId = '';
   let pendingInvite = '';
   /**
    * Who the backend says is calling. The client's own Supabase session is not
@@ -286,7 +319,7 @@ export function initTeamView({ auth, escapeHtml }) {
     const banned = team.banned || [];
     const realCount = team.realMembers ?? members.filter((m) => !m.dummy).length;
     return `
-      ${headerHtml('', rollInviteButtonHtml())}
+      ${headerHtml('')}
       <div class="tm-grid">
         <section class="tm-card">
           <div class="tm-card-head">
@@ -309,6 +342,7 @@ export function initTeamView({ auth, escapeHtml }) {
                       inviteUrl()
                     )}" aria-label="Invite link" />
                     <button type="button" class="btn btn-sm" data-copy>Copy</button>
+                    ${rollInviteButtonHtml()}
                   </div>
                 </div>`
               : '<p class="tm-note">Only the team owner can share the invite link.</p>'
@@ -572,6 +606,369 @@ export function initTeamView({ auth, escapeHtml }) {
       <div class="tm-wip"><p>Work in progress...</p></div>`;
   }
 
+  // ---- Stratbook Editor ---------------------------------------------------
+
+  /** Player assigned to a map position, if any. */
+  function assigneeFor(side, mapCode, position) {
+    const bag = team?.positions || {};
+    for (const m of team?.members || []) {
+      if (bag[m.id]?.[side]?.[mapCode] === position) return m.username || '';
+    }
+    return '';
+  }
+
+  function roleColumnTitle(side, mapCode, position) {
+    const who = assigneeFor(side, mapCode, position);
+    return who ? `${position} (${who})` : position;
+  }
+
+  function optionsHtml(list, selected) {
+    return list
+      .map(
+        (v) =>
+          `<option value="${escapeHtml(v)}"${v === selected ? ' selected' : ''}>${escapeHtml(
+            v
+          )}</option>`
+      )
+      .join('');
+  }
+
+  function stratRows(mapCode, side) {
+    const canEdit = Boolean(team?.isAdmin);
+    const roles = positionsFor(side, mapCode);
+    const categories = side === 'CT' ? STRAT_CATEGORY_CT : STRAT_CATEGORY_T;
+    const rows = (team.stratbook || [])
+      .filter((s) => s.map === mapCode && s.side === side)
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+
+    if (!rows.length) {
+      return `<tr class="sb-empty"><td colspan="${9 + roles.length}">No strategies yet.</td></tr>`;
+    }
+
+    return rows
+      .map((s) => {
+        const notes = Array.isArray(s.roleNotes) ? s.roleNotes : [];
+        const visibleTo = new Set(Array.isArray(s.visibleTo) ? s.visibleTo : []);
+        const menuOpen = openVisibleMenu === s.id;
+        const members = team.members || [];
+        const visibleLabel =
+          visibleTo.size === 0
+            ? 'None'
+            : members
+                .filter((m) => visibleTo.has(m.id))
+                .map((m) => m.username)
+                .join(', ') || `${visibleTo.size} selected`;
+
+        const roleCells = roles
+          .map(
+            (_, i) =>
+              `<td class="sb-cell-role">${
+                canEdit
+                  ? `<input class="sb-input" type="text" data-sb-field="roleNotes" data-sb-idx="${i}" data-sb-id="${escapeHtml(
+                      s.id
+                    )}" value="${escapeHtml(notes[i] || '')}" maxlength="200" />`
+                  : escapeHtml(notes[i] || '')
+              }</td>`
+          )
+          .join('');
+
+        const sideLabel = side === 'CT' ? 'CT Side' : 'T Side';
+        const dis = canEdit ? '' : ' disabled';
+
+        return `
+        <tr class="sb-row sb-${side.toLowerCase()}" data-sb-row="${escapeHtml(s.id)}">
+          <td class="sb-cell-side">${escapeHtml(sideLabel)}</td>
+          <td>${
+            canEdit
+              ? `<select class="site-select sb-select" data-sb-field="economy" data-sb-id="${escapeHtml(
+                  s.id
+                )}">${optionsHtml(STRAT_ECONOMY, s.economy || STRAT_ECONOMY[0])}</select>`
+              : escapeHtml(s.economy || '')
+          }</td>
+          <td>${
+            canEdit
+              ? `<select class="site-select sb-select" data-sb-field="category" data-sb-id="${escapeHtml(
+                  s.id
+                )}">${optionsHtml(categories, s.category || categories[0])}</select>`
+              : escapeHtml(s.category || '')
+          }</td>
+          <td class="sb-cell-name">${
+            canEdit
+              ? `<input class="sb-input" type="text" data-sb-field="name" data-sb-id="${escapeHtml(
+                  s.id
+                )}" value="${escapeHtml(s.name || '')}" maxlength="120" placeholder="Name" />`
+              : escapeHtml(s.name || '')
+          }</td>
+          <td class="sb-cell-desc">${
+            canEdit
+              ? `<input class="sb-input" type="text" data-sb-field="description" data-sb-id="${escapeHtml(
+                  s.id
+                )}" value="${escapeHtml(s.description || '')}" maxlength="500" placeholder="Description" />`
+              : escapeHtml(s.description || '')
+          }</td>
+          <td class="sb-cell-links">
+            <span class="sb-links">
+            <button type="button" class="sb-link${s.link3d ? '' : ' is-empty'}" data-sb-link="link3d" data-sb-id="${escapeHtml(
+              s.id
+            )}" title="${s.link3d ? 'Open · Shift+click to edit' : 'Set 3D link'}">3D</button>
+            <button type="button" class="sb-link${s.link2d ? '' : ' is-empty'}" data-sb-link="link2d" data-sb-id="${escapeHtml(
+              s.id
+            )}" title="${s.link2d ? 'Open · Shift+click to edit' : 'Set 2D link'}">2D</button>
+            </span>
+          </td>
+          ${roleCells}
+          <td class="sb-cell-all">
+            <input type="checkbox" class="sb-check" data-sb-field="visibleAll" data-sb-id="${escapeHtml(
+              s.id
+            )}"${s.visibleAll ? ' checked' : ''}${dis} />
+          </td>
+          <td class="sb-cell-visible">
+            <div class="sb-visible${menuOpen ? ' is-open' : ''}">
+              <button type="button" class="sb-visible-btn" data-sb-visible-toggle="${escapeHtml(
+                s.id
+              )}"${dis}>${escapeHtml(visibleLabel)}</button>
+              ${
+                menuOpen && canEdit
+                  ? `<div class="sb-visible-menu" data-sb-visible-menu="${escapeHtml(s.id)}">
+                      ${members
+                        .map(
+                          (m) => `<label class="sb-visible-item">
+                            <input type="checkbox" data-sb-visible-player="${escapeHtml(
+                              m.id
+                            )}" data-sb-id="${escapeHtml(s.id)}"${
+                              visibleTo.has(m.id) ? ' checked' : ''
+                            } />
+                            <span>${escapeHtml(m.username)}</span>
+                          </label>`
+                        )
+                        .join('')}
+                    </div>`
+                  : ''
+              }
+            </div>
+          </td>
+          <td class="sb-cell-del">
+            ${
+              canEdit
+                ? `<button type="button" class="btn btn-sm danger" data-sb-del="${escapeHtml(
+                    s.id
+                  )}">Delete</button>`
+                : ''
+            }
+          </td>
+        </tr>`;
+      })
+      .join('');
+  }
+
+  function stratSection(mapCode, side) {
+    const canEdit = Boolean(team?.isAdmin);
+    const roles = positionsFor(side, mapCode);
+    const roleHeads = roles
+      .map((pos) => `<th>${escapeHtml(roleColumnTitle(side, mapCode, pos))}</th>`)
+      .join('');
+    return `
+      <div class="sb-section sb-${side.toLowerCase()}">
+        <div class="sb-table-scroll">
+          <table class="sb-table">
+            <thead>
+              <tr>
+                <th>Side</th>
+                <th>Economy</th>
+                <th>Category</th>
+                <th>Name</th>
+                <th>Description</th>
+                <th>Links</th>
+                ${roleHeads}
+                <th>All</th>
+                <th>Visible to</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>${stratRows(mapCode, side)}</tbody>
+          </table>
+        </div>
+        ${
+          canEdit
+            ? `<button type="button" class="sb-add" data-sb-add="${escapeHtml(mapCode)}|${side}" title="Add ${side} strategy">+</button>`
+            : ''
+        }
+      </div>`;
+  }
+
+  function stratbookHtml() {
+    const maps = POSITION_MAPS.map(
+      (m) => `
+      <section class="tm-card sb-map" data-sb-map="${escapeHtml(m.code)}">
+        <h3 class="sb-map-title">${escapeHtml(m.name.toUpperCase())}</h3>
+        ${stratSection(m.code, 'T')}
+        ${stratSection(m.code, 'CT')}
+      </section>`
+    ).join('');
+
+    return `
+      ${headerHtml('')}
+      ${
+        team?.isAdmin
+          ? ''
+          : '<p class="tm-note">Only team admins can edit the stratbook.</p>'
+      }
+      <div class="sb-maps">${maps}</div>`;
+  }
+
+  function applyTeam(next) {
+    if (!next) return;
+    team = next;
+    teams = teams.map((x) => (x.id === team.id ? team : x));
+  }
+
+  /** Patch one strategy without a full re-render (keeps focus). */
+  async function patchStrategy(id, patch) {
+    const existing = (team.stratbook || []).find((s) => s.id === id);
+    if (!existing) return null;
+    const res = await run(
+      () => saveTeamStrategy(team.id, { ...existing, ...patch, id }),
+      ''
+    );
+    if (res?.team) applyTeam(res.team);
+    return res;
+  }
+
+  // ---- My Strategies ------------------------------------------------------
+
+  function ensureStrategiesPlayer() {
+    const members = team?.members || [];
+    if (!members.length) {
+      strategiesPlayerId = '';
+      return;
+    }
+    if (strategiesPlayerId && members.some((m) => m.id === strategiesPlayerId)) return;
+    const me = members.find((m) => !m.dummy && m.id === myId());
+    strategiesPlayerId = me?.id || members[0].id;
+  }
+
+  function stratVisibleToPlayer(s, playerId) {
+    if (s.visibleAll) return true;
+    return (s.visibleTo || []).includes(playerId);
+  }
+
+  /** Index of this player's assigned position on a map/side, or -1. */
+  function playerRoleIndex(playerId, side, mapCode) {
+    const position = team?.positions?.[playerId]?.[side]?.[mapCode] || '';
+    if (!position) return -1;
+    return positionsFor(side, mapCode).indexOf(position);
+  }
+
+  function playerRoleNote(s, playerId) {
+    const idx = playerRoleIndex(playerId, s.side, s.map);
+    if (idx < 0) return '';
+    const notes = Array.isArray(s.roleNotes) ? s.roleNotes : [];
+    return String(notes[idx] || '');
+  }
+
+  function econClass(value) {
+    const key = String(value || '')
+      .toLowerCase()
+      .replace(/\+/g, ' ')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-');
+    return `ms-econ ms-econ-${key}`;
+  }
+
+  function catClass(value) {
+    const key = String(value || '')
+      .toLowerCase()
+      .replace(/\s+/g, '-');
+    return `ms-cat ms-cat-${key}`;
+  }
+
+  function myStratRows(mapCode, side, playerId) {
+    const rows = (team.stratbook || [])
+      .filter(
+        (s) => s.map === mapCode && s.side === side && stratVisibleToPlayer(s, playerId)
+      )
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+
+    return rows
+      .map((s) => {
+        const note = playerRoleNote(s, playerId);
+        const name = (s.name || 'Untitled').toUpperCase();
+        const noteHtml = escapeHtml(note).replace(/\n/g, '<br />');
+        return `
+        <tr class="ms-row ms-${side.toLowerCase()}">
+          <td class="ms-cell-name">${escapeHtml(name)}</td>
+          <td class="ms-cell-econ"><span class="${econClass(s.economy)}">${escapeHtml(
+            s.economy || ''
+          )}</span></td>
+          <td class="ms-cell-cat"><span class="${catClass(s.category)}">${escapeHtml(
+            s.category || ''
+          )}</span></td>
+          <td class="ms-cell-note">${noteHtml || '<span class="ms-note-empty">—</span>'}</td>
+        </tr>`;
+      })
+      .join('');
+  }
+
+  function myStratMapHtml(map, playerId) {
+    const tBody = myStratRows(map.code, 'T', playerId);
+    const ctBody = myStratRows(map.code, 'CT', playerId);
+    if (!tBody && !ctBody) return '';
+    return `
+      <section class="tm-card ms-map">
+        <h3 class="ms-map-title">${escapeHtml(map.name.toUpperCase())}</h3>
+        <div class="ms-table-scroll">
+          <table class="ms-table">
+            <thead>
+              <tr>
+                <th>Strategy</th>
+                <th>Economy</th>
+                <th>Category</th>
+                <th>Your role</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${tBody}
+              ${ctBody}
+            </tbody>
+          </table>
+        </div>
+      </section>`;
+  }
+
+  function myStrategiesHtml() {
+    ensureStrategiesPlayer();
+    const members = team.members || [];
+    const playerChips = members
+      .map((m) => {
+        const active = m.id === strategiesPlayerId ? ' active' : '';
+        const label = m.dummy ? m.username : `@${m.username}`;
+        return `<button type="button" class="rp-chip${active}" data-ms-player="${escapeHtml(
+          m.id
+        )}">${escapeHtml(label)}</button>`;
+      })
+      .join('');
+
+    const selected = members.find((m) => m.id === strategiesPlayerId);
+    const mapsHtml = POSITION_MAPS.map((m) => myStratMapHtml(m, strategiesPlayerId)).join('');
+
+    return `
+      ${headerHtml('')}
+      <section class="tm-card">
+        <div class="tm-card-head">
+          <h3 class="tm-card-title">Player</h3>
+        </div>
+        <div class="rp-chips ms-player-chips">${playerChips || '<span class="tm-note">No members.</span>'}</div>
+      </section>
+      ${
+        selected
+          ? mapsHtml ||
+            `<section class="tm-card"><p class="tm-note">No strategies visible for ${escapeHtml(
+              selected.dummy ? selected.username : `@${selected.username}`
+            )} yet.</p></section>`
+          : ''
+      }`;
+  }
+
   // ---- render -------------------------------------------------------------
 
   function syncTeamChrome() {
@@ -603,11 +1000,11 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
     if (page === 'team-stratbook') {
-      shellEl.innerHTML = wipHtml();
+      shellEl.innerHTML = stratbookHtml();
       return;
     }
     if (page === 'team-strategies') {
-      shellEl.innerHTML = wipHtml();
+      shellEl.innerHTML = myStrategiesHtml();
       return;
     }
     shellEl.innerHTML = overviewHtml();
@@ -732,6 +1129,13 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
 
+    const msPlayer = t.closest('[data-ms-player]');
+    if (msPlayer) {
+      strategiesPlayerId = msPlayer.dataset.msPlayer || '';
+      render();
+      return;
+    }
+
     // ---- documents --------------------------------------------------------
     if (t.closest('[data-new-doc]')) {
       const res = await run(
@@ -765,6 +1169,89 @@ export function initTeamView({ auth, escapeHtml }) {
       await editor?.flush();
       openDocId = openDoc.dataset.openDoc;
       render();
+      return;
+    }
+
+    // ---- stratbook --------------------------------------------------------
+    const addStrat = t.closest('[data-sb-add]');
+    if (addStrat) {
+      const [mapCode, side] = (addStrat.dataset.sbAdd || '').split('|');
+      if (!mapCode || !side) return;
+      const cats = side === 'CT' ? STRAT_CATEGORY_CT : STRAT_CATEGORY_T;
+      const res = await run(
+        () =>
+          saveTeamStrategy(team.id, {
+            map: mapCode,
+            side,
+            economy: STRAT_ECONOMY[0],
+            category: cats[0],
+            name: '',
+            description: '',
+            visibleAll: false,
+            visibleTo: [],
+            roleNotes: ['', '', '', '', '']
+          }),
+        'Strategy added.'
+      );
+      if (res?.team) {
+        applyTeam(res.team);
+        render();
+      }
+      return;
+    }
+
+    const delStrat = t.closest('[data-sb-del]');
+    if (delStrat) {
+      const id = delStrat.dataset.sbDel;
+      if (!window.confirm('Delete this strategy?')) return;
+      const res = await run(() => deleteTeamStrategy(team.id, id), 'Strategy deleted.');
+      if (res?.team) {
+        applyTeam(res.team);
+        if (openVisibleMenu === id) openVisibleMenu = '';
+        render();
+      }
+      return;
+    }
+
+    const linkBtn = t.closest('[data-sb-link]');
+    if (linkBtn) {
+      const id = linkBtn.dataset.sbId;
+      const field = linkBtn.dataset.sbLink;
+      const existing = (team.stratbook || []).find((s) => s.id === id);
+      if (!existing) return;
+      const current = existing[field] || '';
+      if (!team.isAdmin) {
+        if (current) window.open(current, '_blank', 'noopener');
+        return;
+      }
+      if (e.shiftKey || !current) {
+        const next = window.prompt('Link URL (https://…)', current);
+        if (next === null) return;
+        await patchStrategy(id, { [field]: next.trim() });
+        render();
+        return;
+      }
+      window.open(current, '_blank', 'noopener');
+      return;
+    }
+
+    const visToggle = t.closest('[data-sb-visible-toggle]');
+    if (visToggle) {
+      if (!team.isAdmin) return;
+      const id = visToggle.dataset.sbVisibleToggle;
+      openVisibleMenu = openVisibleMenu === id ? '' : id;
+      render();
+      return;
+    }
+
+    if (
+      page === 'team-stratbook' &&
+      openVisibleMenu &&
+      !t.closest('[data-sb-visible-menu]') &&
+      !t.closest('[data-sb-visible-toggle]')
+    ) {
+      openVisibleMenu = '';
+      render();
     }
   });
 
@@ -775,6 +1262,8 @@ export function initTeamView({ auth, escapeHtml }) {
     if (picker) {
       team = teams.find((x) => x.id === picker.value) || team;
       openDocId = '';
+      openVisibleMenu = '';
+      strategiesPlayerId = '';
       render();
       return;
     }
@@ -829,6 +1318,64 @@ export function initTeamView({ auth, escapeHtml }) {
         team = res.team;
         teams = teams.map((x) => (x.id === team.id ? team : x));
       }
+      return;
+    }
+
+    // ---- stratbook fields -------------------------------------------------
+    const sbField = t.closest('[data-sb-field]');
+    if (sbField) {
+      const id = sbField.dataset.sbId;
+      const field = sbField.dataset.sbField;
+      if (!id || !field) return;
+
+      if (field === 'visibleAll') {
+        await patchStrategy(id, { visibleAll: sbField.checked });
+        return;
+      }
+      if (field === 'economy' || field === 'category') {
+        await patchStrategy(id, { [field]: sbField.value });
+        return;
+      }
+      return;
+    }
+
+    const visPlayer = t.closest('[data-sb-visible-player]');
+    if (visPlayer) {
+      const id = visPlayer.dataset.sbId;
+      const playerId = visPlayer.dataset.sbVisiblePlayer;
+      const existing = (team.stratbook || []).find((s) => s.id === id);
+      if (!existing) return;
+      const set = new Set(existing.visibleTo || []);
+      if (visPlayer.checked) set.add(playerId);
+      else set.delete(playerId);
+      await patchStrategy(id, { visibleTo: [...set] });
+      // Refresh the button label without closing the menu.
+      render();
+    }
+  });
+
+  shellEl.addEventListener('focusout', async (e) => {
+    const t = e.target;
+    const sbField = t.closest?.('[data-sb-field]');
+    if (!sbField || !team) return;
+    const field = sbField.dataset.sbField;
+    const id = sbField.dataset.sbId;
+    if (!id || !field) return;
+    if (field === 'name' || field === 'description') {
+      const existing = (team.stratbook || []).find((s) => s.id === id);
+      if (!existing || existing[field] === sbField.value) return;
+      await patchStrategy(id, { [field]: sbField.value });
+      return;
+    }
+    if (field === 'roleNotes') {
+      const idx = Number(sbField.dataset.sbIdx);
+      const existing = (team.stratbook || []).find((s) => s.id === id);
+      if (!existing || Number.isNaN(idx)) return;
+      const notes = [...(existing.roleNotes || ['', '', '', '', ''])];
+      while (notes.length < 5) notes.push('');
+      if (notes[idx] === sbField.value) return;
+      notes[idx] = sbField.value;
+      await patchStrategy(id, { roleNotes: notes });
     }
   });
 
@@ -897,7 +1444,9 @@ export function initTeamView({ auth, escapeHtml }) {
   return {
     /** @param {{page?: string, invite?: string}} params */
     onShow(params = {}) {
-      page = PAGES.includes(params.page) ? params.page : 'team-overview';
+      const next = PAGES.includes(params.page) ? params.page : 'team-overview';
+      if (next !== page) openVisibleMenu = '';
+      page = next;
       if (params.invite) pendingInvite = params.invite;
       // Re-check whenever the last answer was "signed out": a session that
       // landed while another page was open must not leave this one stuck on
