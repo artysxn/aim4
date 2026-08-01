@@ -656,7 +656,7 @@ button.rp-side-name:hover {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: #000000;
+  background: #050505;
 }
 
 .rp-seg-btn {
