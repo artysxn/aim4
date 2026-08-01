@@ -9,38 +9,40 @@
      buttons, fields, mp-* lobby pieces and kbd chips in sync with the app. */
   @font-face {
     font-family: 'PP Mori';
-    src: url('/fonts/host_grotesk/HostGrotesk-Regular.ttf') format('truetype');
+    src: url('/fonts/pp/PPMori-Regular.otf') format('opentype');
     font-weight: 400; font-style: normal; font-display: swap;
   }
   @font-face {
     font-family: 'PP Mori';
-    src: url('/fonts/host_grotesk/HostGrotesk-Medium.ttf') format('truetype');
+    src: url('/fonts/pp/PPMori-SemiBold.otf') format('opentype');
     font-weight: 500; font-style: normal; font-display: swap;
   }
   @font-face {
     font-family: 'PP Mori';
-    src: url('/fonts/host_grotesk/HostGrotesk-SemiBold.ttf') format('truetype');
+    src: url('/fonts/pp/PPMori-SemiBold.otf') format('opentype');
     font-weight: 600; font-style: normal; font-display: swap;
   }
   :root {
-    --bg: #0a0a0a;
-    --panel: rgba(18, 18, 20, 0.94);
-    --surface: rgba(255, 255, 255, 0.04);
-    --surface-hover: rgba(255, 255, 255, 0.08);
-    --border: rgba(255, 255, 255, 0.08);
-    --border-strong: rgba(255, 255, 255, 0.16);
-    --accent: #f52525;
-    --accent-down: #d41f1f;
-    --accent-dim: rgba(245, 37, 37, 0.14);
+    --bg: #000000;
+    --panel: #0c0c0c;
+    --surface: #0c0c0c;
+    --surface-hover: #141414;
+    --border: #181818;
+    --border-strong: #242424;
+    --accent: #e60611;
+    --accent-down: #c4050e;
+    --accent-dim: rgba(230, 6, 17, 0.16);
     --text: #f2f2f2;
     --muted: #9c9ca2;
+    --disabled-bg: #141414;
+    --disabled-text: #515151;
     --radius: 12px;
     --radius-sm: 8px;
     --radius-xs: 5px;
-    --red: #ff5544;
+    --red: #e60611;
     --blue: #4da3ff;
     --green: #37b26c;
-    --font-body: 'PP Mori', 'Segoe UI', system-ui, sans-serif;
+    --font-body: 'PP Mori', system-ui, sans-serif;
     --menu-panel-width: min(1180px, 94vw);
     --menu-panel-height: 520px;
   }
@@ -129,13 +131,13 @@
   a.btn { text-decoration: none; display: inline-block; }
   .btn:hover { background: #212125; }
   .btn:active { background: #101012; transform: translateY(1px); }
-  .btn.primary { background: linear-gradient(180deg, #ff3434, #e01d1d); color: #fff; }
-  .btn.primary:hover { background: linear-gradient(180deg, #ff4a4a, #ef2424); }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.primary:hover { background: #ff1a24; }
   .btn.primary:active { background: var(--accent-down); }
   .btn-danger { color: #ffb4b4; background: rgba(255, 60, 60, 0.12); }
   .btn-danger:hover { background: rgba(255, 60, 60, 0.22); }
   .btn-danger:active { background: rgba(255, 60, 60, 0.08); }
-  .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+  .btn:disabled, .btn.primary:disabled { opacity: 1; background: var(--disabled-bg); color: var(--disabled-text); cursor: not-allowed; transform: none; filter: none; }
   .btn.btn-sm { padding: 6px 12px; font-size: 12px; }
   .btn-block { width: 100%; margin-top: 8px; }
 

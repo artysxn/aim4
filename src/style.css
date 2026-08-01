@@ -92,26 +92,28 @@
 }
 
 :root {
-  --bg: #0a0a0a;
-  --panel: rgba(18, 18, 20, 0.94);
-  --surface: rgba(255, 255, 255, 0.04);
-  --surface-hover: rgba(255, 255, 255, 0.08);
-  --surface-down: rgba(255, 255, 255, 0.02);
+  --bg: #000000;
+  --panel: #0c0c0c;
+  --surface: #0c0c0c;
+  --surface-hover: #141414;
+  --surface-down: #0a0a0a;
   /* Opaque equivalents for tiles on blurred menu screens (rgba can fail to composite). */
-  --surface-solid: #19191c;
-  --surface-hover-solid: #232327;
-  --surface-icon-solid: #0f0f11;
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.16);
-  --accent: #f52525;
-  --accent-hover: #ff3b3b;
-  --accent-down: #d41f1f;
-  --accent-dim: rgba(245, 37, 37, 0.14);
-  --accent-glow: rgba(245, 37, 37, 0.35);
-  --accent-border: rgba(245, 37, 37, 0.5);
+  --surface-solid: #0c0c0c;
+  --surface-hover-solid: #141414;
+  --surface-icon-solid: #0a0a0a;
+  --border: #181818;
+  --border-strong: #242424;
+  --accent: #e60611;
+  --accent-hover: #ff1a24;
+  --accent-down: #c4050e;
+  --accent-dim: rgba(230, 6, 17, 0.16);
+  --accent-glow: rgba(230, 6, 17, 0.35);
+  --accent-border: rgba(230, 6, 17, 0.5);
   --text: #f2f2f2;
   --muted: #9c9ca2;
-  --chip-bg: rgba(17, 17, 17, 0.55);
+  --disabled-bg: #141414;
+  --disabled-text: #515151;
+  --chip-bg: #0c0c0c;
   --radius: 12px; /* panels / large containers */
   --radius-sm: 8px; /* buttons, inputs, rows */
   --radius-xs: 5px; /* tags, tiny bits */
@@ -806,42 +808,56 @@ h4 {
   font-size: 14px;
   font-weight: 500;
   color: var(--text);
-  background: #17171a;
+  background: var(--disabled-bg);
   border: none;
   border-radius: var(--radius-sm);
   padding: 10px 20px;
   cursor: pointer;
-  transition: background 0.15s ease, transform 0.06s ease;
+  transition: background 0.15s ease, transform 0.06s ease, color 0.15s ease;
 }
 a.btn {
   text-decoration: none;
   display: inline-block;
 }
 .btn:hover {
-  background: #212125;
+  background: #1a1a1a;
 }
 .btn:active {
-  background: #101012;
+  background: #101010;
   transform: translateY(1px);
 }
 .btn.primary {
-  background: linear-gradient(180deg, #ff3434, #e01d1d);
+  background: var(--accent);
   border: none;
   color: #fff;
   box-shadow: none;
 }
 .btn.primary:hover {
-  background: linear-gradient(180deg, #ff4a4a, #ef2424);
+  background: var(--accent-hover);
   box-shadow: none;
 }
 .btn.primary:active {
   background: var(--accent-down);
   box-shadow: none;
 }
-.btn:disabled {
-  opacity: 0.45;
+.btn:disabled,
+.btn[disabled],
+.btn.primary:disabled,
+.btn.primary[disabled] {
+  opacity: 1;
+  background: var(--disabled-bg);
+  color: var(--disabled-text);
   cursor: not-allowed;
   transform: none;
+  filter: none;
+  box-shadow: none;
+}
+.btn:disabled:hover,
+.btn[disabled]:hover,
+.btn.primary:disabled:hover,
+.btn.primary[disabled]:hover {
+  background: var(--disabled-bg);
+  color: var(--disabled-text);
 }
 
 .btn-danger {
@@ -857,7 +873,9 @@ a.btn {
   background: rgba(255, 60, 60, 0.08);
 }
 .btn-danger:disabled {
-  opacity: 0.45;
+  opacity: 1;
+  background: var(--disabled-bg);
+  color: var(--disabled-text);
   cursor: not-allowed;
 }
 
@@ -1448,7 +1466,7 @@ a.btn {
   margin-top: 3px;
 }
 .radar-tooltip-rating {
-  color: #f52525;
+  color: var(--accent);
   font-variant-numeric: tabular-nums;
   margin-bottom: 4px;
 }
@@ -1472,7 +1490,7 @@ a.btn {
 }
 .account-aim-summary {
   font-size: 15px;
-  color: #f52525;
+  color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
 .account-rating-controls {
@@ -1600,14 +1618,14 @@ a.btn {
   height: 10px;
   border-radius: 50%;
 }
-.run-rating-swatch-run { background: #f52525; }
+.run-rating-swatch-run { background: var(--accent); }
 .run-rating-swatch-player { background: #46c8ff; }
 .run-rating-swatch-global { background: #9a9a9a; }
 .run-rating-table th:nth-child(n+2),
 .run-rating-table td:nth-child(n+2) {
   text-align: right;
 }
-.run-rating-you { color: #f52525; }
+.run-rating-you { color: var(--accent); }
 .run-rating-player { color: #46c8ff; }
 .run-rating-global { color: #9a9a9a; }
 
@@ -2009,7 +2027,7 @@ input[type='checkbox'] {
   transition: opacity 0.12s ease;
   --pace-bar-track: #08080a;
   --pace-bar-ahead: #35e06a;
-  --pace-bar-behind: #f52525;
+  --pace-bar-behind: var(--accent);
   --pace-bar-neutral: #6a6a6a;
 }
 .pace-bar.active {
@@ -2138,7 +2156,7 @@ input[type='checkbox'] {
 }
 .tab.active {
   color: #fff;
-  background: linear-gradient(180deg, #ff3434, #e01d1d);
+  background: var(--accent);
   border: none;
 }
 .lb-header {

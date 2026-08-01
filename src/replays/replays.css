@@ -350,13 +350,13 @@
   padding: 0;
   border: 0;
   border-radius: 4px;
-  background: #c43c3c;
+  background: var(--accent);
   color: #fff;
   cursor: pointer;
 }
 
 .rp-btn-play:hover {
-  filter: brightness(1.1);
+  background: var(--accent-hover);
 }
 
 .rp-btn-replay {
@@ -778,7 +778,9 @@
 }
 
 .rp-chip:disabled {
-  opacity: 0.4;
+  opacity: 1;
+  background: var(--disabled-bg, #141414);
+  color: var(--disabled-text, #515151);
   cursor: not-allowed;
 }
 
@@ -855,23 +857,33 @@
   margin-left: auto;
 }
 
-.rp-result-actions .btn:disabled {
-  opacity: 0.45;
+.rp-result-actions .btn:disabled,
+.rp-result-actions .btn[disabled] {
+  opacity: 1;
+  background: var(--disabled-bg, #141414);
+  color: var(--disabled-text, #515151);
   cursor: not-allowed;
+  filter: none;
 }
 
 .rp-btn-analyzer {
   border: 0 !important;
-  background: #c43c3c !important;
+  background: var(--accent) !important;
   color: #fff !important;
 }
 
 .rp-btn-analyzer:hover:not(:disabled) {
-  filter: brightness(1.08);
+  background: var(--accent-hover) !important;
+  filter: none;
 }
 
-.rp-btn-analyzer:disabled {
-  filter: none;
+.rp-btn-analyzer:disabled,
+.rp-btn-analyzer[disabled] {
+  opacity: 1 !important;
+  background: var(--disabled-bg, #141414) !important;
+  color: var(--disabled-text, #515151) !important;
+  filter: none !important;
+  cursor: not-allowed;
 }
 
 /* ---- Per-demo round dropdowns ------------------------------------------- */

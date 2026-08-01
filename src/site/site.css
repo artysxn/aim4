@@ -96,23 +96,25 @@
 }
 
 :root {
-  --bg: #0a0a0a;
-  --panel: rgba(18, 18, 20, 0.94);
-  --surface: rgba(255, 255, 255, 0.04);
-  --surface-hover: rgba(255, 255, 255, 0.08);
-  --surface-solid: #19191c;
-  --surface-hover-solid: #232327;
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.16);
-  --accent: #f52525;
-  --accent-hover: #ff3b3b;
-  --accent-down: #d41f1f;
-  --accent-dim: rgba(245, 37, 37, 0.14);
-  --accent-glow: rgba(245, 37, 37, 0.35);
-  --accent-border: rgba(245, 37, 37, 0.5);
+  --bg: #000000;
+  --panel: #0c0c0c;
+  --surface: #0c0c0c;
+  --surface-hover: #141414;
+  --surface-solid: #0c0c0c;
+  --surface-hover-solid: #141414;
+  --border: #181818;
+  --border-strong: #242424;
+  --accent: #e60611;
+  --accent-hover: #ff1a24;
+  --accent-down: #c4050e;
+  --accent-dim: rgba(230, 6, 17, 0.16);
+  --accent-glow: rgba(230, 6, 17, 0.35);
+  --accent-border: rgba(230, 6, 17, 0.5);
   --text: #f2f2f2;
   --muted: #9c9ca2;
-  --chip-bg: rgba(17, 17, 17, 0.55);
+  --disabled-bg: #141414;
+  --disabled-text: #515151;
+  --chip-bg: #0c0c0c;
   --radius: 12px;
   --radius-sm: 8px;
   --radius-xs: 5px;
@@ -207,7 +209,7 @@ a {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: #0c0c0e;
+  background: var(--bg);
   border-right: 1px solid var(--border);
   transition: width 0.28s var(--ease-smooth);
   overflow: hidden;
@@ -485,15 +487,16 @@ a {
   gap: 16px;
   padding: 16px 28px;
   border-bottom: 1px solid var(--border);
-  background: rgba(10, 10, 10, 0.82);
+  background: rgba(0, 0, 0, 0.92);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
 }
 .page-title {
   font-family: var(--font-display);
-  font-size: 18px;
-  font-weight: 400;
-  letter-spacing: 0.02em;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 .page-actions {
   display: flex;
@@ -577,30 +580,48 @@ a {
   font-size: 14px;
   font-weight: 500;
   color: var(--text);
-  background: #17171a;
+  background: var(--disabled-bg);
   border: none;
   border-radius: var(--radius-sm);
   padding: 10px 20px;
   cursor: pointer;
   text-decoration: none;
-  transition: background 0.15s ease, transform 0.06s ease;
+  transition: background 0.15s ease, transform 0.06s ease, color 0.15s ease;
 }
 .btn:hover {
-  background: #212125;
+  background: #1a1a1a;
 }
 .btn:active {
-  background: #101012;
+  background: #101010;
   transform: translateY(1px);
 }
 .btn.primary {
-  background: linear-gradient(180deg, #ff3434, #e01d1d);
+  background: var(--accent);
   color: #fff;
 }
 .btn.primary:hover {
-  background: linear-gradient(180deg, #ff4a4a, #ef2424);
+  background: var(--accent-hover);
 }
 .btn.primary:active {
   background: var(--accent-down);
+}
+.btn:disabled,
+.btn[disabled],
+.btn.primary:disabled,
+.btn.primary[disabled] {
+  opacity: 1;
+  background: var(--disabled-bg);
+  color: var(--disabled-text);
+  cursor: not-allowed;
+  transform: none;
+  filter: none;
+}
+.btn:disabled:hover,
+.btn[disabled]:hover,
+.btn.primary:disabled:hover,
+.btn.primary[disabled]:hover {
+  background: var(--disabled-bg);
+  color: var(--disabled-text);
 }
 .btn-lg {
   font-size: 15px;
@@ -726,7 +747,7 @@ a {
 
 .site-footer {
   border-top: 1px solid var(--border);
-  background: #0c0c0e;
+  background: var(--bg);
   padding: 48px 28px 24px;
 }
 .foot-grid {
@@ -832,7 +853,10 @@ a {
   color: #5c5c62;
 }
 .site-input:disabled {
-  opacity: 0.6;
+  opacity: 1;
+  background: var(--disabled-bg);
+  color: var(--disabled-text);
+  cursor: not-allowed;
 }
 .site-select {
   padding: 8px 12px;
@@ -1384,7 +1408,7 @@ a {
 .auth-modal-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(6, 6, 7, 0.78);
+  background: rgba(0, 0, 0, 0.82);
   backdrop-filter: blur(7px);
   -webkit-backdrop-filter: blur(7px);
 }
@@ -1393,7 +1417,8 @@ a {
   width: min(400px, 100%);
   max-height: 92vh;
   overflow-y: auto;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 120px), var(--panel);
+  background: var(--panel);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 28px 30px;
   text-align: center;
