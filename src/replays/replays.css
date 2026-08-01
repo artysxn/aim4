@@ -5542,7 +5542,33 @@ table.rp-mine-table tbody tr {
 
 /* ---- Stratbook Editor --------------------------------------------------- */
 
+.sb-zoom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sb-zoom-label {
+  font: 500 11px var(--font-body);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sb-zoom-range {
+  width: 120px;
+  accent-color: var(--accent, #c44);
+}
+
+.sb-zoom-value {
+  min-width: 40px;
+  font: 600 12px var(--font-body);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
 .sb-maps {
+  --sb-zoom: 1;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -5557,15 +5583,19 @@ table.rp-mine-table tbody tr {
   padding: 10px 12px;
   border-radius: 4px;
   background: #1a1a1a;
-  font: 700 15px var(--font-body);
-  letter-spacing: 0.08em;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0;
+  text-align: left;
   color: #fff;
 }
 
 .sb-section {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
+  zoom: var(--sb-zoom);
 }
 
 .sb-table-scroll {
@@ -5573,61 +5603,53 @@ table.rp-mine-table tbody tr {
 }
 
 .sb-table {
-  width: 100%;
-  min-width: 1100px;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font: 500 12px var(--font-body);
 }
 
-.sb-table th {
-  padding: 4px 8px;
+.sb-table th,
+.sb-table td {
+  padding: 6px 8px;
   text-align: left;
+  vertical-align: top;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.sb-table th {
   color: var(--muted);
   font: 500 10px var(--font-body);
   letter-spacing: 0.02em;
   white-space: nowrap;
-  border-bottom: 0;
-  background: transparent;
+  background: rgba(0, 0, 0, 0.25);
 }
 
 .sb-table td {
-  padding: 6px 8px;
-  vertical-align: middle;
   white-space: nowrap;
-  border-bottom: 0;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.sb-table td:last-child {
-  border-right: 0;
-}
-
-.sb-row.sb-t td {
+.sb-row.sb-t td,
+.sb-empty.sb-t td,
+.sb-add-row.sb-t td {
   background: #1c0606;
 }
 
-.sb-row.sb-ct td {
+.sb-row.sb-ct td,
+.sb-empty.sb-ct td,
+.sb-add-row.sb-ct td {
   background: #091626;
 }
 
 .sb-empty td {
-  background: transparent;
   color: var(--muted);
   font: 500 12px var(--font-body);
   padding: 10px 8px;
 }
 
-.sb-cell-side {
-  font: 600 12px var(--font-body);
-  min-width: 72px;
-}
-
-.sb-row.sb-t .sb-cell-side {
-  color: #e07070;
-}
-
-.sb-row.sb-ct .sb-cell-side {
-  color: #6f9ad6;
+.sb-add-row td {
+  padding: 6px 8px;
 }
 
 .sb-select {
@@ -5663,9 +5685,66 @@ table.rp-mine-table tbody tr {
   max-width: 220px;
 }
 
-.sb-cell-role .sb-input {
-  min-width: 72px;
-  max-width: 110px;
+/* Uniform role columns sized for e.g. "B Rotation (olofmeister)". */
+.sb-role-h,
+.sb-cell-role {
+  width: 11.75rem;
+  min-width: 11.75rem;
+  max-width: 11.75rem;
+  box-sizing: border-box;
+}
+
+.sb-role-h-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sb-cell-role {
+  white-space: normal;
+  vertical-align: top;
+}
+
+.sb-role-note {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  min-height: 28px;
+  height: 28px;
+  padding: 5px 8px;
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  line-height: 1.35;
+  box-sizing: border-box;
+}
+
+/* Collapsed: clip role text to one line until hover/focus expands the row. */
+.sb-row:not(:hover):not(:focus-within) .sb-role-note {
+  height: 28px !important;
+  max-height: 28px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sb-row:not(:hover):not(:focus-within) .sb-cell-role {
+  max-height: 40px;
+  overflow: hidden;
+}
+
+.sb-row:hover .sb-cell-role,
+.sb-row:focus-within .sb-cell-role {
+  max-height: none;
+  overflow: visible;
+}
+
+.sb-row:hover .sb-role-note,
+.sb-row:focus-within .sb-role-note {
+  white-space: pre-wrap;
+  text-overflow: clip;
+  max-height: none;
 }
 
 .sb-cell-links {
@@ -5786,7 +5865,6 @@ table.rp-mine-table tbody tr {
 
 .sb-add {
   appearance: none;
-  align-self: flex-start;
   width: 32px;
   height: 28px;
   margin: 0;
@@ -5799,12 +5877,12 @@ table.rp-mine-table tbody tr {
   cursor: pointer;
 }
 
-.sb-section.sb-t .sb-add:hover {
+.sb-add-row.sb-t .sb-add:hover {
   border-color: rgba(224, 112, 112, 0.5);
   color: #e07070;
 }
 
-.sb-section.sb-ct .sb-add:hover {
+.sb-add-row.sb-ct .sb-add:hover {
   border-color: rgba(111, 154, 214, 0.5);
   color: #6f9ad6;
 }
@@ -5834,9 +5912,11 @@ table.rp-mine-table tbody tr {
   margin: 0;
   padding: 10px 14px;
   background: #2a2a2a;
-  font: 700 14px var(--font-body);
-  letter-spacing: 0.1em;
-  text-align: center;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0;
+  text-align: left;
   color: #f2f2f2;
 }
 
@@ -5851,34 +5931,15 @@ table.rp-mine-table tbody tr {
   font: 500 13px var(--font-body);
 }
 
-.ms-table th {
-  padding: 6px 12px;
-  text-align: left;
-  color: var(--muted);
-  font: 500 10px var(--font-body);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  background: #141414;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.ms-table th:nth-child(1) {
-  width: 18%;
-}
-
-.ms-table th:nth-child(2),
-.ms-table th:nth-child(3) {
-  width: 12%;
-}
-
-.ms-table th:nth-child(4) {
-  width: 58%;
-}
-
 .ms-table td {
   padding: 8px 12px;
   vertical-align: middle;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.35);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.45);
+  border-right: 1px solid rgba(0, 0, 0, 0.35);
+}
+
+.ms-table td:last-child {
+  border-right: 0;
 }
 
 .ms-row.ms-t td {
@@ -5892,8 +5953,9 @@ table.rp-mine-table tbody tr {
 }
 
 .ms-cell-name {
+  width: 110px;
   font: 700 12px var(--font-body);
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5901,88 +5963,74 @@ table.rp-mine-table tbody tr {
 
 .ms-cell-econ,
 .ms-cell-cat {
+  width: 88px;
+  padding: 8px 6px;
+  text-align: center;
   white-space: nowrap;
-}
-
-.ms-econ,
-.ms-cat {
-  display: inline-block;
-  padding: 3px 8px;
-  border-radius: 2px;
   font: 600 11px var(--font-body);
-  color: #111;
-  line-height: 1.2;
+  color: #fff;
 }
 
 .ms-econ-pistol,
 .ms-cat-pistol {
-  background: #9a9a9a;
+  background: #7a7a7a !important;
 }
 
 .ms-econ-full-buy {
-  background: #3db8b0;
+  background: #3db8b0 !important;
 }
 
 .ms-econ-full-buy-awp {
-  background: #2a9d96;
-  color: #fff;
+  background: #2a9d96 !important;
 }
 
 .ms-econ-antiforce {
-  background: #8b8fd4;
+  background: #8b8fd4 !important;
 }
 
 .ms-econ-force {
-  background: #d4a05a;
+  background: #d4a05a !important;
+  color: #111;
 }
 
 .ms-econ-eco {
-  background: #6a6a6a;
-  color: #fff;
+  background: #5a5a5a !important;
 }
 
 .ms-cat-set-call {
-  background: #3f8f4a;
-  color: #fff;
+  background: #3f8f4a !important;
 }
 
 .ms-cat-default {
-  background: #2a5c45;
-  color: #fff;
+  background: #2a5c45 !important;
 }
 
 .ms-cat-opener {
-  background: #b56a3a;
-  color: #fff;
+  background: #b56a3a !important;
 }
 
 .ms-cat-midround {
-  background: #7a4ea8;
-  color: #fff;
+  background: #7a4ea8 !important;
 }
 
 .ms-cat-lateround {
-  background: #8a3a5c;
-  color: #fff;
+  background: #8a3a5c !important;
 }
 
 .ms-cat-cheap-exec {
-  background: #a87830;
-  color: #fff;
+  background: #a87830 !important;
 }
 
 .ms-cat-setup {
-  background: #3a6f8f;
-  color: #fff;
+  background: #3a6f8f !important;
 }
 
 .ms-cat-retake {
-  background: #8f3a4a;
-  color: #fff;
+  background: #8f3a4a !important;
 }
 
 .ms-cell-note {
-  white-space: normal;
+  white-space: pre-wrap;
   word-break: break-word;
   font: 500 12px/1.45 var(--font-body);
   color: #e8e8e8;

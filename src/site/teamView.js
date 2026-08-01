@@ -94,6 +94,15 @@ export function initTeamView({ auth, escapeHtml }) {
   let openVisibleMenu = '';
   /** Member whose My Strategies view is shown. */
   let strategiesPlayerId = '';
+  const SB_ZOOM_KEY = 'aim4.stratbookZoom';
+  const SB_ZOOM_STEPS = [50, 75, 100, 125, 150, 175, 200];
+  let stratbookZoom = 100;
+  try {
+    const saved = Number(localStorage.getItem(SB_ZOOM_KEY));
+    if (SB_ZOOM_STEPS.includes(saved)) stratbookZoom = saved;
+  } catch {
+    /* ignore */
+  }
   let pendingInvite = '';
   /**
    * Who the backend says is calling. The client's own Supabase session is not
@@ -637,12 +646,13 @@ export function initTeamView({ auth, escapeHtml }) {
     const canEdit = Boolean(team?.isAdmin);
     const roles = positionsFor(side, mapCode);
     const categories = side === 'CT' ? STRAT_CATEGORY_CT : STRAT_CATEGORY_T;
+    const colCount = 8 + roles.length;
     const rows = (team.stratbook || [])
       .filter((s) => s.map === mapCode && s.side === side)
       .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 
     if (!rows.length) {
-      return `<tr class="sb-empty"><td colspan="${9 + roles.length}">No strategies yet.</td></tr>`;
+      return `<tr class="sb-empty sb-${side.toLowerCase()}"><td colspan="${colCount}">No strategies yet.</td></tr>`;
     }
 
     return rows
@@ -660,24 +670,22 @@ export function initTeamView({ auth, escapeHtml }) {
                 .join(', ') || `${visibleTo.size} selected`;
 
         const roleCells = roles
-          .map(
-            (_, i) =>
-              `<td class="sb-cell-role">${
-                canEdit
-                  ? `<input class="sb-input" type="text" data-sb-field="roleNotes" data-sb-idx="${i}" data-sb-id="${escapeHtml(
-                      s.id
-                    )}" value="${escapeHtml(notes[i] || '')}" maxlength="200" />`
-                  : escapeHtml(notes[i] || '')
-              }</td>`
-          )
+          .map((_, i) => {
+            const note = notes[i] || '';
+            if (!canEdit) {
+              const html = escapeHtml(note).replace(/\n/g, '<br />') || '—';
+              return `<td class="sb-cell-role">${html}</td>`;
+            }
+            return `<td class="sb-cell-role"><textarea class="sb-input sb-role-note" data-sb-field="roleNotes" data-sb-idx="${i}" data-sb-id="${escapeHtml(
+              s.id
+            )}" rows="1" maxlength="800" placeholder="Role">${escapeHtml(note)}</textarea></td>`;
+          })
           .join('');
 
-        const sideLabel = side === 'CT' ? 'CT Side' : 'T Side';
         const dis = canEdit ? '' : ' disabled';
 
         return `
         <tr class="sb-row sb-${side.toLowerCase()}" data-sb-row="${escapeHtml(s.id)}">
-          <td class="sb-cell-side">${escapeHtml(sideLabel)}</td>
           <td>${
             canEdit
               ? `<select class="site-select sb-select" data-sb-field="economy" data-sb-id="${escapeHtml(
@@ -764,16 +772,26 @@ export function initTeamView({ auth, escapeHtml }) {
   function stratSection(mapCode, side) {
     const canEdit = Boolean(team?.isAdmin);
     const roles = positionsFor(side, mapCode);
+    const colCount = 8 + roles.length;
     const roleHeads = roles
-      .map((pos) => `<th>${escapeHtml(roleColumnTitle(side, mapCode, pos))}</th>`)
+      .map(
+        (pos) =>
+          `<th class="sb-role-h"><span class="sb-role-h-text">${escapeHtml(
+            roleColumnTitle(side, mapCode, pos)
+          )}</span></th>`
+      )
       .join('');
+    const addRow = canEdit
+      ? `<tr class="sb-add-row sb-${side.toLowerCase()}"><td colspan="${colCount}"><button type="button" class="sb-add" data-sb-add="${escapeHtml(
+          mapCode
+        )}|${side}" title="Add ${side} strategy">+</button></td></tr>`
+      : '';
     return `
       <div class="sb-section sb-${side.toLowerCase()}">
         <div class="sb-table-scroll">
           <table class="sb-table">
             <thead>
               <tr>
-                <th>Side</th>
                 <th>Economy</th>
                 <th>Category</th>
                 <th>Name</th>
@@ -785,15 +803,18 @@ export function initTeamView({ auth, escapeHtml }) {
                 <th></th>
               </tr>
             </thead>
-            <tbody>${stratRows(mapCode, side)}</tbody>
+            <tbody>
+              ${stratRows(mapCode, side)}
+              ${addRow}
+            </tbody>
           </table>
         </div>
-        ${
-          canEdit
-            ? `<button type="button" class="sb-add" data-sb-add="${escapeHtml(mapCode)}|${side}" title="Add ${side} strategy">+</button>`
-            : ''
-        }
       </div>`;
+  }
+
+  function stratbookZoomIndex() {
+    const i = SB_ZOOM_STEPS.indexOf(stratbookZoom);
+    return i >= 0 ? i : SB_ZOOM_STEPS.indexOf(100);
   }
 
   function stratbookHtml() {
@@ -807,19 +828,44 @@ export function initTeamView({ auth, escapeHtml }) {
     ).join('');
 
     return `
-      ${headerHtml('')}
+      ${headerHtml(
+        '',
+        `<div class="sb-zoom">
+          <label class="sb-zoom-label" for="sb-zoom">Zoom</label>
+          <input id="sb-zoom" class="sb-zoom-range" type="range" min="0" max="${
+            SB_ZOOM_STEPS.length - 1
+          }" step="1" value="${stratbookZoomIndex()}" data-sb-zoom />
+          <span class="sb-zoom-value" data-sb-zoom-label>${stratbookZoom}%</span>
+        </div>`
+      )}
       ${
         team?.isAdmin
           ? ''
           : '<p class="tm-note">Only team admins can edit the stratbook.</p>'
       }
-      <div class="sb-maps">${maps}</div>`;
+      <div class="sb-maps" style="--sb-zoom: ${stratbookZoom / 100}">${maps}</div>`;
   }
 
   function applyTeam(next) {
     if (!next) return;
     team = next;
     teams = teams.map((x) => (x.id === team.id ? team : x));
+  }
+
+  function expandStratRow(row) {
+    if (!row) return;
+    row.querySelectorAll('textarea.sb-role-note').forEach((ta) => {
+      ta.style.height = 'auto';
+      ta.style.height = `${Math.max(28, ta.scrollHeight)}px`;
+    });
+  }
+
+  function collapseStratRow(row) {
+    if (!row) return;
+    row.querySelectorAll('textarea.sb-role-note').forEach((ta) => {
+      if (ta === document.activeElement) return;
+      ta.style.height = '28px';
+    });
   }
 
   /** Patch one strategy without a full re-render (keeps focus). */
@@ -897,12 +943,8 @@ export function initTeamView({ auth, escapeHtml }) {
         return `
         <tr class="ms-row ms-${side.toLowerCase()}">
           <td class="ms-cell-name">${escapeHtml(name)}</td>
-          <td class="ms-cell-econ"><span class="${econClass(s.economy)}">${escapeHtml(
-            s.economy || ''
-          )}</span></td>
-          <td class="ms-cell-cat"><span class="${catClass(s.category)}">${escapeHtml(
-            s.category || ''
-          )}</span></td>
+          <td class="ms-cell-econ ${econClass(s.economy)}">${escapeHtml(s.economy || '')}</td>
+          <td class="ms-cell-cat ${catClass(s.category)}">${escapeHtml(s.category || '')}</td>
           <td class="ms-cell-note">${noteHtml || '<span class="ms-note-empty">—</span>'}</td>
         </tr>`;
       })
@@ -918,14 +960,6 @@ export function initTeamView({ auth, escapeHtml }) {
         <h3 class="ms-map-title">${escapeHtml(map.name.toUpperCase())}</h3>
         <div class="ms-table-scroll">
           <table class="ms-table">
-            <thead>
-              <tr>
-                <th>Strategy</th>
-                <th>Economy</th>
-                <th>Category</th>
-                <th>Your role</th>
-              </tr>
-            </thead>
             <tbody>
               ${tBody}
               ${ctBody}
@@ -1001,6 +1035,9 @@ export function initTeamView({ auth, escapeHtml }) {
     }
     if (page === 'team-stratbook') {
       shellEl.innerHTML = stratbookHtml();
+      shellEl.querySelectorAll('textarea.sb-role-note').forEach((ta) => {
+        ta.style.height = '28px';
+      });
       return;
     }
     if (page === 'team-strategies') {
@@ -1258,6 +1295,22 @@ export function initTeamView({ auth, escapeHtml }) {
   shellEl.addEventListener('change', async (e) => {
     const t = e.target;
 
+    const zoom = t.closest?.('[data-sb-zoom]');
+    if (zoom) {
+      const next = SB_ZOOM_STEPS[Number(zoom.value)] ?? 100;
+      stratbookZoom = next;
+      try {
+        localStorage.setItem(SB_ZOOM_KEY, String(next));
+      } catch {
+        /* ignore */
+      }
+      const maps = shellEl.querySelector('.sb-maps');
+      if (maps) maps.style.setProperty('--sb-zoom', String(next / 100));
+      const label = shellEl.querySelector('[data-sb-zoom-label]');
+      if (label) label.textContent = `${next}%`;
+      return;
+    }
+
     const picker = t.closest('[data-team-picker]');
     if (picker) {
       team = teams.find((x) => x.id === picker.value) || team;
@@ -1355,6 +1408,15 @@ export function initTeamView({ auth, escapeHtml }) {
   });
 
   shellEl.addEventListener('focusout', async (e) => {
+    const leaving = e.target.closest?.('textarea.sb-role-note');
+    if (leaving) {
+      const row = leaving.closest('.sb-row');
+      queueMicrotask(() => {
+        if (!row || row.matches(':hover') || row.contains(document.activeElement)) return;
+        collapseStratRow(row);
+      });
+    }
+
     const t = e.target;
     const sbField = t.closest?.('[data-sb-field]');
     if (!sbField || !team) return;
@@ -1377,6 +1439,72 @@ export function initTeamView({ auth, escapeHtml }) {
       notes[idx] = sbField.value;
       await patchStrategy(id, { roleNotes: notes });
     }
+  });
+
+  shellEl.addEventListener('focusin', (e) => {
+    const ta = e.target.closest?.('textarea.sb-role-note');
+    if (!ta) return;
+    const row = ta.closest('.sb-row');
+    if (row) expandStratRow(row);
+  });
+
+  // Role notes: Ctrl/Cmd+Enter inserts a newline; plain Enter does not.
+  shellEl.addEventListener('keydown', (e) => {
+    const ta = e.target.closest?.('textarea.sb-role-note');
+    if (!ta) return;
+    if (e.key !== 'Enter') return;
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const start = ta.selectionStart ?? ta.value.length;
+      const end = ta.selectionEnd ?? start;
+      const v = ta.value;
+      ta.value = `${v.slice(0, start)}\n${v.slice(end)}`;
+      ta.selectionStart = ta.selectionEnd = start + 1;
+      ta.style.height = 'auto';
+      ta.style.height = `${Math.max(28, ta.scrollHeight)}px`;
+      return;
+    }
+    e.preventDefault();
+  });
+
+  shellEl.addEventListener('input', (e) => {
+    const zoom = e.target.closest?.('[data-sb-zoom]');
+    if (zoom) {
+      const next = SB_ZOOM_STEPS[Number(zoom.value)] ?? 100;
+      stratbookZoom = next;
+      try {
+        localStorage.setItem(SB_ZOOM_KEY, String(next));
+      } catch {
+        /* ignore */
+      }
+      const maps = shellEl.querySelector('.sb-maps');
+      if (maps) maps.style.setProperty('--sb-zoom', String(next / 100));
+      const label = shellEl.querySelector('[data-sb-zoom-label]');
+      if (label) label.textContent = `${next}%`;
+      return;
+    }
+    const ta = e.target.closest?.('textarea.sb-role-note');
+    if (ta) {
+      ta.style.height = 'auto';
+      ta.style.height = `${Math.max(28, ta.scrollHeight)}px`;
+    }
+  });
+
+  shellEl.addEventListener('mouseover', (e) => {
+    const row = e.target.closest?.('tr.sb-row');
+    if (!row || !shellEl.contains(row)) return;
+    const from = e.relatedTarget;
+    if (from instanceof Node && row.contains(from)) return;
+    expandStratRow(row);
+  });
+
+  shellEl.addEventListener('mouseout', (e) => {
+    const row = e.target.closest?.('tr.sb-row');
+    if (!row || !shellEl.contains(row)) return;
+    const to = e.relatedTarget;
+    if (to instanceof Node && row.contains(to)) return;
+    if (row.contains(document.activeElement)) return;
+    collapseStratRow(row);
   });
 
   // Drag a real member onto a placeholder to merge seats / positions.
