@@ -577,6 +577,11 @@ a {
   overflow: hidden;
 }
 
+.view.active[data-view='replays'] > #rp-upload-page.view-pad-fill:not([hidden]) {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 .view.active[data-view='replays'] > .view-pad-fill:not([hidden]),
 .view.active[data-view='leaderboards'] > .view-pad-fill {
   flex: 1;

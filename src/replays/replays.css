@@ -4675,6 +4675,43 @@ table.ch-table tbody tr:hover {
   font-variant-numeric: tabular-nums;
 }
 
+.rp-mine-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-top: 12px;
+  padding: 8px 2px 2px;
+  border-top: 1px solid var(--border);
+}
+
+.rp-mine-pager-meta {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rp-mine-pager-btns {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.rp-mine-pager-page {
+  min-width: 7.5em;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.rp-mine-pager .btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .rp-vis-picker {
   display: flex;
   align-items: center;
@@ -4930,10 +4967,11 @@ table.rp-mine-table tbody tr {
   font: 500 13px var(--font-body);
 }
 
-/* Kick / Ban drop to their own line before they can overflow the card. */
+/* Match Kick/Ban row height even when a member has no action buttons. */
 .tm-member {
-  flex-wrap: wrap;
-  row-gap: 6px;
+  flex-wrap: nowrap;
+  min-height: 44px;
+  box-sizing: border-box;
 }
 
 .tm-member:last-child,
@@ -4952,10 +4990,6 @@ table.rp-mine-table tbody tr {
 
 .tm-member .tm-tag {
   flex: 0 0 auto;
-}
-
-.tm-member-actions {
-  margin-left: auto;
 }
 
 .tm-member.me .tm-member-name {
@@ -5009,6 +5043,11 @@ table.rp-mine-table tbody tr {
   display: flex;
   gap: 6px;
   flex: 0 0 auto;
+  margin-left: auto;
+  min-width: 128px;
+  min-height: 30px;
+  justify-content: flex-end;
+  align-items: center;
 }
 
 .tm-tag {

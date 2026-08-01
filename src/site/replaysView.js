@@ -134,6 +134,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   };
   /** Selected demo ids on My Uploads (bulk visibility / click-to-select). */
   const selectedMine = new Set();
+  const MINE_PAGE_SIZE = 50;
+  let minePage = 1;
   const mineEl = document.getElementById('rp-mine');
   let teamSearch = '';
   let playerSearch = '';
@@ -484,11 +486,22 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       ? `${mine.length} of ${cap} uploads used`
       : `${mine.length} uploads (no limit on this account)`;
     const selCount = selectedMine.size;
-    const allSelected = mine.length > 0 && mine.every((d) => selectedMine.has(d.id));
 
-    const rows = mine
+    const sorted = mine
       .slice()
-      .sort((a, b) => (b.uploadedAt || b.parsedAt || 0) - (a.uploadedAt || a.parsedAt || 0))
+      .sort((a, b) => (b.uploadedAt || b.parsedAt || 0) - (a.uploadedAt || a.parsedAt || 0));
+    const total = sorted.length;
+    const pages = Math.max(1, Math.ceil(total / MINE_PAGE_SIZE) || 1);
+    if (minePage > pages) minePage = pages;
+    if (minePage < 1) minePage = 1;
+    const usePages = total > MINE_PAGE_SIZE;
+    const pageItems = usePages
+      ? sorted.slice((minePage - 1) * MINE_PAGE_SIZE, minePage * MINE_PAGE_SIZE)
+      : sorted;
+    const allSelected =
+      pageItems.length > 0 && pageItems.every((d) => selectedMine.has(d.id));
+
+    const rows = pageItems
       .map((d) => {
         const id = escapeHtml(d.id);
         const mapName = d.mapName || (d.map ? MAPS[d.map]?.name : '') || '';
@@ -539,6 +552,29 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           </div>`
         : '';
 
+    const from = total ? (minePage - 1) * MINE_PAGE_SIZE + 1 : 0;
+    const to = Math.min(minePage * MINE_PAGE_SIZE, total);
+    const pager = usePages
+      ? `<div class="rp-mine-pager">
+          <span class="rp-mine-pager-meta">${from}–${to} of ${total}</span>
+          <div class="rp-mine-pager-btns">
+            <button type="button" class="btn btn-sm" data-mine-page="1"${
+              minePage <= 1 ? ' disabled' : ''
+            }>First</button>
+            <button type="button" class="btn btn-sm" data-mine-page="${minePage - 1}"${
+              minePage <= 1 ? ' disabled' : ''
+            }>Prev</button>
+            <span class="rp-mine-pager-page">Page ${minePage} / ${pages}</span>
+            <button type="button" class="btn btn-sm" data-mine-page="${minePage + 1}"${
+              minePage >= pages ? ' disabled' : ''
+            }>Next</button>
+            <button type="button" class="btn btn-sm" data-mine-page="${pages}"${
+              minePage >= pages ? ' disabled' : ''
+            }>Last</button>
+          </div>
+        </div>`
+      : '';
+
     mineEl.innerHTML = `
       <div class="rp-mine-head">
         <h3 class="rp-mine-title">My uploads</h3>
@@ -551,13 +587,13 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
               <thead><tr>
                 <th class="rp-mine-check">
                   <input type="checkbox" data-mine-select-all ${allSelected ? 'checked' : ''} title="${
-                    allSelected ? 'Deselect all' : 'Select all'
-                  }" aria-label="${allSelected ? 'Deselect all' : 'Select all'}" />
+                    allSelected ? 'Deselect page' : 'Select page'
+                  }" aria-label="${allSelected ? 'Deselect page' : 'Select page'}" />
                 </th>
                 <th>Uploaded</th><th>Match</th><th>Map</th><th>Visibility</th><th></th>
               </tr></thead>
               <tbody>${rows}</tbody>
-            </table>`
+            </table>${pager}`
           : '<p class="view-empty">You have not uploaded anything yet.</p>'
       }`;
   }
@@ -1113,6 +1149,16 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   });
 
   mineEl?.addEventListener('click', async (e) => {
+    const pageBtn = e.target.closest('[data-mine-page]');
+    if (pageBtn) {
+      const next = Number(pageBtn.dataset.minePage);
+      if (Number.isFinite(next) && next >= 1) {
+        minePage = next;
+        renderMine();
+        mineEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }
+      return;
+    }
     const bulkVis = e.target.closest('[data-bulk-visibility]');
     if (bulkVis) {
       await applyMineVisibility([...selectedMine], bulkVis.dataset.bulkVisibility);
@@ -1125,10 +1171,16 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
     const selectAll = e.target.closest('[data-mine-select-all]');
     if (selectAll) {
-      const mine = myDemos();
-      const allOn = mine.length > 0 && mine.every((d) => selectedMine.has(d.id));
-      if (allOn) selectedMine.clear();
-      else for (const d of mine) selectedMine.add(d.id);
+      const sorted = myDemos()
+        .slice()
+        .sort((a, b) => (b.uploadedAt || b.parsedAt || 0) - (a.uploadedAt || a.parsedAt || 0));
+      const usePages = sorted.length > MINE_PAGE_SIZE;
+      const pageItems = usePages
+        ? sorted.slice((minePage - 1) * MINE_PAGE_SIZE, minePage * MINE_PAGE_SIZE)
+        : sorted;
+      const allOn = pageItems.length > 0 && pageItems.every((d) => selectedMine.has(d.id));
+      if (allOn) for (const d of pageItems) selectedMine.delete(d.id);
+      else for (const d of pageItems) selectedMine.add(d.id);
       renderMine();
       return;
     }

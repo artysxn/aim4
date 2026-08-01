@@ -77,18 +77,13 @@ export function initTeamView({ auth, escapeHtml }) {
   function setStatus(text, bad = false) {
     status = text || '';
     statusBad = Boolean(bad);
-    const el = shellEl.querySelector('#tm-status');
-    if (el) {
-      el.textContent = status;
-      el.classList.toggle('bad', statusBad);
-    }
+    // Success toasts are hidden; surface failures so actions aren't silent.
+    if (bad && text) window.alert(text);
   }
 
-  async function run(fn, okText = '') {
+  async function run(fn, _okText = '') {
     try {
-      const result = await fn();
-      if (okText) setStatus(okText);
-      return result;
+      return await fn();
     } catch (err) {
       setStatus(err?.message || 'That did not work.', true);
       return null;
@@ -156,8 +151,7 @@ export function initTeamView({ auth, escapeHtml }) {
       <div class="tm-head">
         ${title ? `<h2 class="tm-title">${escapeHtml(title)}</h2>` : ''}
         <div class="tm-head-actions">${picker}${actions}</div>
-      </div>
-      <p class="tm-status${statusBad ? ' bad' : ''}" id="tm-status">${escapeHtml(status)}</p>`;
+      </div>`;
   }
 
   function signedOutHtml(what) {
@@ -221,40 +215,37 @@ export function initTeamView({ auth, escapeHtml }) {
     const canMerge = team.isAdmin;
     const canManageReal = team.isOwner && !me && !dummy;
     const canRemoveDummy = dummy && team.isAdmin;
-    const roleLabel = dummy
-      ? 'Placeholder'
+    // Only Owner / Member / Placeholder — never Player, Admin, or Coach.
+    const rolePill = dummy
+      ? '<span class="tm-tag dummy">Placeholder</span>'
       : m.role === 'owner'
-        ? 'Owner'
-        : m.role === 'admin'
-          ? 'Admin'
-          : 'Member';
+        ? '<span class="tm-tag role">Owner</span>'
+        : m.role === 'player'
+          ? '<span class="tm-tag role">Member</span>'
+          : '';
     const dragAttrs =
       canMerge && !dummy
         ? `draggable="true" data-drag-member="${escapeHtml(m.id)}"`
         : dummy && canMerge
           ? `data-drop-dummy="${escapeHtml(m.id)}"`
           : '';
+    const actions = canManageReal
+      ? `<span class="tm-member-actions">
+            <button type="button" class="btn btn-sm" data-kick="${escapeHtml(m.id)}">Kick</button>
+            <button type="button" class="btn btn-sm danger" data-ban="${escapeHtml(m.id)}">Ban</button>
+          </span>`
+      : canRemoveDummy
+        ? `<span class="tm-member-actions">
+            <button type="button" class="btn btn-sm danger" data-kick="${escapeHtml(
+              m.id
+            )}" title="Remove placeholder">Remove</button>
+          </span>`
+        : '<span class="tm-member-actions" aria-hidden="true"></span>';
     return `
       <li class="tm-member${me ? ' me' : ''}${dummy ? ' is-dummy' : ''}" ${dragAttrs}>
         <span class="tm-member-name">${memberLabel(m)}${me ? ' (you)' : ''}</span>
-        <span class="tm-tag ${dummy ? 'dummy' : m.kind === 'coach' ? 'coach' : 'player'}">${
-          dummy ? 'Placeholder' : m.kind === 'coach' ? 'Coach' : 'Player'
-        }</span>
-        ${dummy ? '' : `<span class="tm-tag role">${escapeHtml(roleLabel)}</span>`}
-        ${
-          canManageReal
-            ? `<span class="tm-member-actions">
-                <button type="button" class="btn btn-sm" data-kick="${escapeHtml(m.id)}">Kick</button>
-                <button type="button" class="btn btn-sm danger" data-ban="${escapeHtml(m.id)}">Ban</button>
-              </span>`
-            : canRemoveDummy
-              ? `<span class="tm-member-actions">
-                  <button type="button" class="btn btn-sm danger" data-kick="${escapeHtml(
-                    m.id
-                  )}" title="Remove placeholder">Remove</button>
-                </span>`
-              : ''
-        }
+        ${rolePill}
+        ${actions}
       </li>`;
   }
 
@@ -299,25 +290,21 @@ export function initTeamView({ auth, escapeHtml }) {
     const members = team.members || [];
     const banned = team.banned || [];
     const realCount = team.realMembers ?? members.filter((m) => !m.dummy).length;
-    const dummyCount = members.filter((m) => m.dummy).length;
     return `
       ${headerHtml('', rollInviteButtonHtml())}
       <div class="tm-grid">
         <section class="tm-card">
-          <h3 class="tm-card-title">Members <span class="tm-count">${realCount} / ${
-            team.maxMembers || 7
-          }${dummyCount ? ` · ${dummyCount} placeholder${dummyCount === 1 ? '' : 's'}` : ''}</span></h3>
+          <div class="tm-card-head">
+            <h3 class="tm-card-title">Members</h3>
+            <span class="tm-count">${realCount} / ${team.maxMembers || 7}</span>
+          </div>
           <ul class="tm-members">${members.map(memberRowHtml).join('')}</ul>
           ${
             team.isOwner
               ? `<div class="tm-row tm-placeholder-add">
-                  <input class="site-input" id="tm-dummy-name" type="text" maxlength="32" placeholder="Placeholder name" />
                   <button type="button" class="btn btn-sm" data-add-dummy>Add placeholder</button>
-                </div>
-                <p class="tm-note">Placeholders hold positions until a real member joins. Admins drag a real member onto a placeholder to merge.</p>`
-              : team.isAdmin
-                ? '<p class="tm-note">Drag a real member onto a placeholder to give them that seat’s positions.</p>'
-                : ''
+                </div>`
+              : ''
           }
           ${
             team.isOwner
@@ -480,18 +467,16 @@ export function initTeamView({ auth, escapeHtml }) {
           </td>
           <td>
             ${
-              dummy
-                ? '—'
-                : team.isOwner && !owner
-                  ? `<select class="site-select" data-role="${escapeHtml(m.id)}">
-                    <option value="player"${m.role === 'player' ? ' selected' : ''}>Member</option>
+              team.isOwner && !owner
+                ? `<select class="site-select" data-role="${escapeHtml(m.id)}">
+                    <option value="player"${m.role === 'player' || m.role === 'coach' ? ' selected' : ''}>Member</option>
                     <option value="admin"${m.role === 'admin' ? ' selected' : ''}>Admin</option>
                   </select>`
-                  : owner
-                    ? 'Owner'
-                    : m.role === 'admin'
-                      ? 'Admin'
-                      : 'Member'
+                : owner
+                  ? 'Owner'
+                  : m.role === 'admin'
+                    ? 'Admin'
+                    : 'Member'
             }
           </td>
           <td>
@@ -684,7 +669,6 @@ export function initTeamView({ auth, escapeHtml }) {
         field.select();
         try {
           await navigator.clipboard.writeText(field.value);
-          setStatus('Invite link copied.');
         } catch {
           setStatus('Copy the link from the field.', true);
         }
@@ -703,13 +687,12 @@ export function initTeamView({ auth, escapeHtml }) {
     }
 
     if (t.closest('[data-add-dummy]')) {
-      const name = shellEl.querySelector('#tm-dummy-name')?.value || '';
+      const name = window.prompt('Placeholder name');
+      if (name == null) return;
       const res = await run(() => createTeamDummy(team.id, name), 'Placeholder added.');
       if (res?.team) {
         team = res.team;
         teams = res.teams || teams;
-        const field = shellEl.querySelector('#tm-dummy-name');
-        if (field) field.value = '';
         render();
       }
       return;
@@ -891,7 +874,7 @@ export function initTeamView({ auth, escapeHtml }) {
     if (!real || real.dummy || !dummy?.dummy) return;
     if (
       !window.confirm(
-        `Merge @${real.username} onto placeholder ${dummy.username}? They take that seat’s positions and kind.`
+        `Merge @${real.username} onto placeholder ${dummy.username}? They take that seat’s positions, kind, and permissions.`
       )
     ) {
       return;

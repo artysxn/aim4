@@ -264,6 +264,9 @@ export async function mergeMemberIntoDummy(actor, teamId, realUserId, dummyId) {
     t.positions[realUserId] = copyPositionBag(t.positions[dummyId]);
     clearMemberPositions(t, dummyId);
     real.kind = dummy.kind === 'coach' ? 'coach' : 'player';
+    if (real.role !== 'owner' && (dummy.role === 'admin' || dummy.role === 'player')) {
+      real.role = dummy.role;
+    }
     t.members = (t.members || []).filter((m) => m.id !== dummyId);
   });
 }
@@ -285,7 +288,6 @@ export async function setMemberRole(actor, teamId, memberId, patch = {}) {
     if (patch.role === 'admin' || patch.role === 'player' || patch.role === 'coach') {
       if (!isOwner(t, actor.id)) throw denied('Only the owner can grant admin rights.');
       if (m.id === t.ownerId) throw new Error('The owner already has every right.');
-      if (isDummyMember(m)) throw new Error('Placeholders cannot hold permissions.');
       m.role = patch.role;
     }
   });
