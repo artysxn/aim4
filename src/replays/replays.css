@@ -33,12 +33,16 @@
 .rp-top {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  grid-template-rows: auto auto;
   gap: 16px;
+  align-items: stretch;
   margin-bottom: 20px;
   width: 100%;
 }
 
 .rp-drop {
+  grid-column: 1;
+  grid-row: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -46,6 +50,7 @@
   gap: 10px;
   width: 100%;
   min-height: 132px;
+  height: 100%;
   padding: 20px;
   border: 0;
   border-radius: var(--radius);
@@ -54,6 +59,7 @@
   font: 500 14px var(--font-body);
   cursor: pointer;
   transition: background 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth);
+  box-sizing: border-box;
 }
 
 .rp-drop:hover,
@@ -73,7 +79,8 @@
 }
 
 .rp-status {
-  margin-top: 8px;
+  grid-column: 1 / -1;
+  margin: 0;
   min-height: 18px;
   color: var(--muted);
   font-size: 13px;
@@ -84,11 +91,14 @@
 }
 
 .rp-quota {
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 6px;
   min-height: 132px;
+  height: 100%;
   padding: 14px 16px;
   border: 0;
   border-radius: var(--radius);
@@ -155,7 +165,8 @@
    rule would otherwise paint these phase chips solid accent. */
 
 .rp-upload-progress {
-  margin-top: 10px;
+  grid-column: 1 / -1;
+  margin: 0;
 }
 
 .rp-upload-progress .rp-meter {
@@ -2978,6 +2989,14 @@ body.rv-open {
     overflow: visible;
   }
 
+  .rp-drop,
+  .rp-quota,
+  .rp-upload-progress,
+  .rp-status {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
   .rp-filters {
     position: relative;
     height: auto;
@@ -4017,6 +4036,11 @@ body.rv-open {
   gap: 4px;
   max-height: 160px;
   overflow: auto;
+  margin-top: 8px;
+}
+
+.an-shape-empty {
+  margin: 14px 0 0;
 }
 
 .an-shape-row {

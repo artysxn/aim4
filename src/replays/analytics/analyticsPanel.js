@@ -109,12 +109,12 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       playerIds: [...state.playerIds],
       map: state.map,
       side: state.side === 'T' || state.side === 'CT' ? state.side : '',
-      econ: state.econ,
-      oppEcon: state.oppEcon,
+      econ: typeof state.econ === 'number' ? state.econ : null,
+      oppEcon: typeof state.oppEcon === 'number' ? state.oppEcon : null,
       hasAwp: state.hasAwp,
       oppHasAwp: state.oppHasAwp,
       result: state.result === 'won' || state.result === 'lost' ? state.result : '',
-      opening: state.opening,
+      opening: state.opening === 'won' || state.opening === 'lost' ? state.opening : '',
       phases: state.phases,
       shapes: state.shapes,
       shapeMatch: state.shapeMatch === 'any' ? 'any' : 'all'
@@ -195,7 +195,9 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     return out;
   }
 
-  function econSelect(id, value) {
+  function econSelect(id, value, placeholder = 'Any') {
+    const blank = value === null || value === undefined || value === '';
+    const isAny = value === 'any';
     const opts = Object.entries(ECONOMIES)
       .map(
         ([code, e]) =>
@@ -205,7 +207,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       )
       .join('');
     return `<select class="site-select an-select" data-an-econ="${id}">
-      <option value=""${value === null ? ' selected' : ''}>Any</option>${opts}</select>`;
+      <option value=""${blank ? ' selected' : ''}>${escapeHtml(placeholder)}</option>
+      <option value="any"${isAny ? ' selected' : ''}>Any</option>${opts}</select>`;
   }
 
   function awpCheck(id, checked) {
@@ -302,9 +305,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     sidebarEl.classList.toggle('an-sidebar--pick', !state.map);
     sidebarEl.innerHTML = `
       <div class="an-field">
-        <span class="an-label">Map</span>
-        <select class="site-select an-select" id="an-map">
-          <option value="">Select map…</option>
+        <select class="site-select an-select" id="an-map" aria-label="Map">
+          <option value="">Map</option>
           ${maps
             .map(
               (m) =>
@@ -317,7 +319,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       </div>
 
       <div class="an-field">
-        <span class="an-label">Subjects <span class="an-label-soft">${state.playerIds.length}/${ANALYTICS_PLAYER_MAX}</span></span>
         <div class="an-subject" id="an-subject-typeahead">
           ${
             state.playerIds.length
@@ -345,7 +346,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       </div>
 
       <div class="an-side-block" ${ready ? '' : 'hidden'}>
-        <p class="an-side-title">Round filters</p>
         <div class="an-field">
           ${menuSelect(
             'data-an-side',
@@ -371,27 +371,26 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
           )}
         </div>
         <div class="an-field">
-          <span class="an-label">Opening</span>
           ${menuSelect(
             'data-an-opening',
             [
+              { key: 'any', label: 'Any' },
               { key: 'won', label: '5v4' },
               { key: 'lost', label: '4v5' }
             ],
-            state.opening
+            state.opening,
+            { placeholder: 'Opening' }
           )}
         </div>
         <div class="an-field">
-          <span class="an-label">Buy</span>
           <div class="an-buy-controls">
-            ${econSelect('econ', state.econ)}
+            ${econSelect('econ', state.econ, "Team's buy")}
             ${awpCheck('hasAwp', state.hasAwp)}
           </div>
         </div>
         <div class="an-field">
-          <span class="an-label">Opp buy</span>
           <div class="an-buy-controls">
-            ${econSelect('oppEcon', state.oppEcon)}
+            ${econSelect('oppEcon', state.oppEcon, "Enemy's buy")}
             ${awpCheck('oppHasAwp', state.oppHasAwp)}
           </div>
         </div>
@@ -466,7 +465,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
                     </div>`;
                   })
                   .join('')
-              : `<p class="an-muted">No selections yet.</p>`
+              : `<p class="an-muted an-shape-empty">No selections yet</p>`
           }
         </div>
 
@@ -639,23 +638,26 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     }
     const token = ++renderToken;
     const hasShapes = state.shapes.some((s) => s.enabled !== false);
-    if (hasShapes) {
-      mainEl.innerHTML = `<p class="view-empty">Matching selections…</p>${renderRadarCard()}`;
-      paintRadar();
-    }
+    // Always replace the empty-map prompt as soon as a map is chosen; otherwise
+    // it sticks around for the whole aggregate await (or forever on error).
+    mainEl.innerHTML = hasShapes
+      ? `<p class="view-empty">Matching selections…</p>${renderRadarCard()}`
+      : `<p class="view-empty">Loading…</p>${renderRadarCard()}`;
+    paintRadar();
 
-    const filter = filterObj();
-    const agg = await aggregateAnalyticsAsync(payload, filter, tickCache);
-    if (token !== renderToken) return;
+    try {
+      const filter = filterObj();
+      const agg = await aggregateAnalyticsAsync(payload, filter, tickCache);
+      if (token !== renderToken) return;
 
-    const lb = leaderboardFromFiles(payload, agg.files);
-    if (token !== renderToken) return;
+      const lb = leaderboardFromFiles(payload, agg.files);
+      if (token !== renderToken) return;
 
-    const needsPh = (payload.demos || []).some((d) =>
-      (d.rounds || []).some((r) => r.m === state.map && !r.ph)
-    );
-    const roundCount = agg.anyone ? agg.files.length : agg.rounds;
-    mainEl.innerHTML = `
+      const needsPh = (payload.demos || []).some((d) =>
+        (d.rounds || []).some((r) => r.m === state.map && !r.ph)
+      );
+      const roundCount = agg.anyone ? agg.files.length : agg.rounds;
+      mainEl.innerHTML = `
       ${
         needsPh
           ? `<p class="an-warn">Some rounds are still building phase data. Refresh shortly if numbers look incomplete.</p>`
@@ -664,7 +666,14 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       ${renderRadarCard()}
       ${renderLeaderboard(lb, state.playerIds, roundCount)}
       ${renderRounds(agg)}`;
-    paintRadar();
+      paintRadar();
+    } catch (err) {
+      if (token !== renderToken) return;
+      mainEl.innerHTML = `<p class="view-empty">Could not run filters. ${escapeHtml(
+        err?.message || String(err)
+      )}</p>${renderRadarCard()}`;
+      paintRadar();
+    }
   }
 
   function render() {
@@ -800,7 +809,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       return;
     }
     if (t.matches('[data-an-opening]')) {
-      state.opening = t.value === 'won' || t.value === 'lost' ? t.value : '';
+      state.opening = t.value === 'won' || t.value === 'lost' || t.value === 'any' ? t.value : '';
       render();
       return;
     }
@@ -831,7 +840,9 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     }
     const econ = t.closest('[data-an-econ]');
     if (econ) {
-      state[econ.dataset.anEcon] = econ.value === '' ? null : Number(econ.value);
+      const raw = econ.value;
+      const key = econ.dataset.anEcon;
+      state[key] = raw === '' ? null : raw === 'any' ? 'any' : Number(raw);
       render();
     }
   });
