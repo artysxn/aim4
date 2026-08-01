@@ -22,8 +22,6 @@ import {
   newShapeId
 } from './shapeFilters.js';
 
-const tipLines = (lines) => lines.filter(Boolean).join('\n');
-
 const PHASE_OPTS = [
   { key: 'early', label: 'Early' },
   { key: 'mid', label: 'Mid' },
@@ -79,10 +77,10 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     phases: new Set(),
     /** @type {Array<object>} */
     shapes: [],
-    /** @type {'all'|'any'} */
-    shapeMatch: 'all',
-    /** @type {ShapeFeature|'player_in'} */
-    drawFeature: 'player_in',
+    /** @type {'all'|'any'|''} */
+    shapeMatch: '',
+    /** @type {ShapeFeature|''} */
+    drawFeature: '',
     /** @type {''|'rect'|'poly'|'lasso'} */
     drawMode: ''
   };
@@ -110,16 +108,16 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     return {
       playerIds: [...state.playerIds],
       map: state.map,
-      side: state.side,
+      side: state.side === 'T' || state.side === 'CT' ? state.side : '',
       econ: state.econ,
       oppEcon: state.oppEcon,
       hasAwp: state.hasAwp,
       oppHasAwp: state.oppHasAwp,
-      result: state.result,
+      result: state.result === 'won' || state.result === 'lost' ? state.result : '',
       opening: state.opening,
       phases: state.phases,
       shapes: state.shapes,
-      shapeMatch: state.shapeMatch
+      shapeMatch: state.shapeMatch === 'any' ? 'any' : 'all'
     };
   }
 
@@ -349,25 +347,27 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       <div class="an-side-block" ${ready ? '' : 'hidden'}>
         <p class="an-side-title">Round filters</p>
         <div class="an-field">
-          <span class="an-label">Side</span>
           ${menuSelect(
             'data-an-side',
             [
+              { key: 'any', label: 'Any' },
               { key: 'T', label: 'T' },
               { key: 'CT', label: 'CT' }
             ],
-            state.side
+            state.side,
+            { placeholder: 'Side' }
           )}
         </div>
         <div class="an-field">
-          <span class="an-label">Result</span>
           ${menuSelect(
             'data-an-result',
             [
+              { key: 'any', label: 'Any' },
               { key: 'won', label: 'Won' },
               { key: 'lost', label: 'Lost' }
             ],
-            state.result
+            state.result,
+            { placeholder: 'Result' }
           )}
         </div>
         <div class="an-field">
@@ -396,46 +396,46 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
           </div>
         </div>
         <div class="an-field">
-          <span class="an-label">Phase</span>
-          ${menuSelect('data-an-phase', PHASE_OPTS, phaseSelectValue())}
+          ${menuSelect(
+            'data-an-phase',
+            [{ key: 'any', label: 'Any' }, ...PHASE_OPTS],
+            phaseSelectValue(),
+            { placeholder: 'Phase' }
+          )}
         </div>
 
         <p class="an-side-title">Map selections</p>
         <div class="an-field">
-          <span class="an-label">Feature</span>
-          <select class="site-select an-select" id="an-shape-feature">
-            ${SHAPE_FEATURES.map(
-              (f) =>
-                `<option value="${f.key}"${f.key === state.drawFeature ? ' selected' : ''}>${escapeHtml(
-                  f.label
-                )}</option>`
-            ).join('')}
-          </select>
-        </div>
-        <div class="an-field">
-          <span class="an-label">Match</span>
           ${menuSelect(
-            'data-an-match',
-            [
-              { key: 'all', label: 'All' },
-              { key: 'any', label: 'Any' }
-            ],
-            state.shapeMatch,
-            { placeholder: null }
+            'data-an-feature',
+            [{ key: 'any', label: 'Any' }, ...SHAPE_FEATURES.map((f) => ({ key: f.key, label: f.label }))],
+            state.drawFeature,
+            { placeholder: 'Feature' }
           )}
         </div>
         <div class="an-field">
-          <span class="an-label">Draw</span>
+          ${menuSelect(
+            'data-an-match',
+            [
+              { key: 'any', label: 'Any' },
+              { key: 'all', label: 'All' }
+            ],
+            state.shapeMatch,
+            { placeholder: 'Match' }
+          )}
+        </div>
+        <div class="an-field">
           <div class="an-buy-controls">
             ${menuSelect(
               'data-an-draw',
               [
+                { key: 'any', label: 'Any' },
                 { key: 'rect', label: 'Rectangle' },
                 { key: 'poly', label: 'Polygon' },
                 { key: 'lasso', label: 'Lasso' }
               ],
               state.drawMode,
-              { placeholder: 'None' }
+              { placeholder: 'Draw' }
             )}
             ${
               state.drawMode === 'poly'
@@ -476,126 +476,10 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     if (subjectMenuOpen || subjectSearch) refreshSubjectMenu();
   }
 
-  function fmt(n, digits = 2) {
-    if (!Number.isFinite(n)) return '—';
-    return n.toFixed(digits);
-  }
-
-  function statTips(agg) {
-    const f2 = (n) => (Number.isFinite(n) ? n.toFixed(2) : '—');
-    const pct = (n) => (Number.isFinite(n) ? `${n.toFixed(2)}%` : '—');
-    const n = agg.rounds || 0;
-    return {
-      Rating: tipLines([
-        `HLTV 2.0 over ${n} matching player-rounds (combat only from selected phases / shapes).`,
-        `KPR: ${f2(agg.kpr)}  (${agg.kills} kills / ${n} rounds)`,
-        `DPR: ${f2(agg.dpr)}  (${agg.deaths} deaths / ${n} rounds)`,
-        `Impact: ${f2(agg.impact)}`,
-        `ADR: ${f2(agg.adr)}`,
-        `KAST: ${pct(agg.kast)}`
-      ]),
-      'K/D': tipLines([
-        `Kills: ${agg.kills}`,
-        `Assists: ${agg.assists}`,
-        `Deaths: ${agg.deaths}`,
-        `Across ${n} matching rounds (${agg.samples} phase windows)`
-      ]),
-      ADR: tipLines([
-        `Average damage per matching round`,
-        `Total damage: ${Math.round(agg.damage || 0)}`,
-        `Rounds: ${n}`
-      ]),
-      KAST: tipLines([
-        `% of matching rounds with a kill, assist, survival, or trade in a selected window`,
-        `KAST: ${pct(agg.kast)}`,
-        `Rounds: ${n}`
-      ]),
-      Impact: tipLines([
-        `Impact = 2.13×KPR + 0.42×APR − 0.41`,
-        `KPR: ${f2(agg.kpr)}`,
-        `APR: ${f2(agg.apr)}`
-      ]),
-      Acc: tipLines(
-        agg.shots > 0
-          ? [
-              `Shots fired: ${agg.shots}`,
-              `Shots hit: ${agg.hits}`,
-              `Headshots hit: ${agg.headshots}`,
-              `AWP shots fired: ${agg.awpShots}`,
-              `AWP shots hit: ${agg.awpHits}`,
-              `AWP hit rate: ${agg.awpShots > 0 ? pct(agg.awpAccuracy) : '—'}`,
-              `AWP Acc: holds within 10° of an enemy with a clear (no smoke) path`
-            ]
-          : ['No hit data in these phase windows (older demos may lack damage events).']
-      ),
-      Kills: tipLines([`Kills in matching phase windows: ${agg.kills}`, `Rounds: ${n}`]),
-      Deaths: tipLines([`Deaths in matching phase windows: ${agg.deaths}`, `Rounds: ${n}`]),
-      Assists: tipLines([`Assists in matching phase windows: ${agg.assists}`, `Rounds: ${n}`])
-    };
-  }
-
-  function renderStats(agg) {
-    if (agg.anyone) {
-      return `<section class="an-card">
-        <header class="an-card-head">
-          <h3 class="an-section-title">Phase stats</h3>
-          <span class="an-muted">${agg.files.length} rounds</span>
-        </header>
-        <p class="an-muted" style="margin:0">Select up to ${ANALYTICS_PLAYER_MAX} players (or a team) to see pooled phase combat. Leaderboard below covers everyone on matching rounds.</p>
-      </section>`;
-    }
-    if (!agg.samples) {
-      return `<section class="an-card"><p class="view-empty">No phase windows match these filters.</p></section>`;
-    }
-    const tips = statTips(agg);
-    const cells = [
-      ['Rating', fmt(agg.rating)],
-      ['K/D', fmt(agg.kd)],
-      ['ADR', fmt(agg.adr, 1)],
-      ['KAST', `${fmt(agg.kast, 1)}%`],
-      ['Impact', fmt(agg.impact)],
-      ['Acc', agg.shots > 0 ? `${fmt(agg.accuracy, 1)}%` : '—'],
-      ['Kills', String(agg.kills)],
-      ['Deaths', String(agg.deaths)],
-      ['Assists', String(agg.assists)]
-    ];
-    return `<section class="an-card an-stats">
-      <header class="an-card-head">
-        <h3 class="an-section-title">Phase stats</h3>
-        <span class="an-muted">${agg.rounds} rounds · ${agg.samples} phase windows</span>
-      </header>
-      <div class="an-stat-grid">
-        ${cells
-          .map(([label, value]) => {
-            const tip = tips[label] || '';
-            return `<div class="an-stat${tip ? ' has-tip' : ''}"${
-              tip ? ` data-tip="${escapeHtml(tip)}"` : ''
-            }><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`;
-          })
-          .join('')}
-      </div>
-    </section>`;
-  }
-
   function renderRadarCard() {
-    const hint =
-      state.drawMode === 'rect'
-        ? 'Drag a rectangle on the radar.'
-        : state.drawMode === 'poly'
-          ? 'Click vertices · double-click or Finish to close.'
-          : state.drawMode === 'lasso'
-            ? 'Drag freely to lasso a region · release to add.'
-            : 'Scroll to zoom · drag to pan · draw tools in the sidebar.';
     return `<section class="an-card an-breakdown">
       <header class="an-card-head an-break-head">
-        <div>
-          <h3 class="an-section-title">Map selections</h3>
-          <span class="an-muted">${hint}</span>
-        </div>
-        <div class="an-phase-chips">
-          <span class="an-label">Phase</span>
-          ${menuSelect('data-an-phase', PHASE_OPTS, phaseSelectValue())}
-        </div>
+        <h3 class="an-section-title">Map selections</h3>
       </header>
       <div class="an-break-body">
         <div class="an-radar-wrap" id="an-radar-wrap">
@@ -614,7 +498,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     return `<section class="an-card an-lb">
       <header class="an-card-head">
         <h3 class="an-section-title">Leaderboard <small>${roundCount} rounds</small></h3>
-        <span class="an-muted">Full-round stats on rounds matching the filters above</span>
       </header>
       <div class="an-lb-scroll">
         <table class="an-lb-table">
@@ -726,7 +609,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
             id: newShapeId(),
             map: state.map,
             name: '',
-            feature: state.drawFeature,
+            feature: state.drawFeature && state.drawFeature !== 'any' ? state.drawFeature : 'player_in',
             geometry,
             enabled: true
           });
@@ -778,7 +661,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
           ? `<p class="an-warn">Some rounds are still building phase data. Refresh shortly if numbers look incomplete.</p>`
           : ''
       }
-      ${renderStats(agg)}
       ${renderRadarCard()}
       ${renderLeaderboard(lb, state.playerIds, roundCount)}
       ${renderRounds(agg)}`;
@@ -883,7 +765,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       state.result = '';
       state.opening = '';
       state.phases.clear();
-      state.shapeMatch = 'all';
+      state.shapeMatch = '';
+      state.drawFeature = '';
       state.drawMode = '';
       for (const s of state.shapes) s.enabled = false;
       persistShapes();
@@ -900,17 +783,19 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       render();
       return;
     }
-    if (t.id === 'an-shape-feature') {
-      state.drawFeature = t.value || 'player_in';
+    if (t.matches('[data-an-feature]')) {
+      const v = t.value;
+      state.drawFeature =
+        !v || v === 'any' ? (v === 'any' ? 'any' : '') : SHAPE_FEATURES.some((f) => f.key === v) ? v : '';
       return;
     }
     if (t.matches('[data-an-side]')) {
-      state.side = t.value === 'CT' || t.value === 'T' ? t.value : '';
+      state.side = t.value === 'CT' || t.value === 'T' || t.value === 'any' ? t.value : '';
       render();
       return;
     }
     if (t.matches('[data-an-result]')) {
-      state.result = t.value === 'won' || t.value === 'lost' ? t.value : '';
+      state.result = t.value === 'won' || t.value === 'lost' || t.value === 'any' ? t.value : '';
       render();
       return;
     }
@@ -920,13 +805,13 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       return;
     }
     if (t.matches('[data-an-match]')) {
-      state.shapeMatch = t.value === 'any' ? 'any' : 'all';
+      state.shapeMatch = t.value === 'any' || t.value === 'all' ? t.value : '';
       render();
       return;
     }
     if (t.matches('[data-an-phase]')) {
       state.phases.clear();
-      if (t.value) state.phases.add(t.value);
+      if (t.value && t.value !== 'any') state.phases.add(t.value);
       render();
       return;
     }
@@ -956,15 +841,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     if (!inSubject && subjectMenuOpen) {
       subjectMenuOpen = false;
       refreshSubjectMenu();
-    }
-  });
-
-  mainEl.addEventListener('change', (e) => {
-    const t = e.target;
-    if (t.matches('[data-an-phase]')) {
-      state.phases.clear();
-      if (t.value) state.phases.add(t.value);
-      render();
     }
   });
 

@@ -47,18 +47,18 @@
   width: 100%;
   min-height: 132px;
   padding: 20px;
-  border: 1px dashed var(--border-strong);
+  border: 0;
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--muted);
   font: 500 14px var(--font-body);
   cursor: pointer;
-  transition: border-color 0.15s var(--ease-smooth), background 0.15s var(--ease-smooth);
+  transition: background 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth);
 }
 
 .rp-drop:hover,
 .rp-drop.over {
-  border-color: var(--accent-border);
+  border-color: transparent;
   background: var(--surface-hover);
   color: var(--text);
 }
@@ -84,10 +84,16 @@
 }
 
 .rp-quota {
-  padding: 14px;
-  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-height: 132px;
+  padding: 14px 16px;
+  border: 0;
   border-radius: var(--radius);
   background: var(--surface);
+  box-sizing: border-box;
 }
 
 .rp-quota-row {
@@ -126,7 +132,7 @@
 
 .rp-meter {
   height: 5px;
-  margin: 6px 0 14px;
+  margin: 2px 0 8px;
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.07);
   overflow: hidden;
@@ -150,13 +156,6 @@
 
 .rp-upload-progress {
   margin-top: 10px;
-}
-
-.rp-upload-tools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
 }
 
 .rp-upload-progress .rp-meter {
@@ -3045,7 +3044,7 @@ body.rv-open {
   gap: 12px;
   padding: 12px 14px;
   margin-bottom: 14px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius);
   background: var(--surface);
 }
@@ -3667,7 +3666,7 @@ body.rv-open {
   max-height: calc(100vh - 120px);
   overflow: auto;
   padding: 14px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius);
   background: var(--surface);
 }
@@ -3698,6 +3697,10 @@ body.rv-open {
   font-weight: 650;
   letter-spacing: 0.07em;
   text-transform: uppercase;
+}
+
+.an-field + .an-side-title {
+  margin-top: 18px;
 }
 
 .an-side-hint {
@@ -3886,7 +3889,7 @@ body.rv-open {
 
 .an-card {
   padding: 12px 14px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius);
   background: var(--surface);
 }
@@ -4231,7 +4234,10 @@ body.rv-open {
   gap: 14px;
   max-height: calc(100vh - 120px);
   overflow-y: auto;
-  padding-right: 4px;
+  padding: 14px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 
 .ch-block {
@@ -4350,7 +4356,7 @@ body.rv-open {
 
 .ch-plot {
   position: relative;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius);
   background: var(--surface);
   padding: 4px;
@@ -4571,8 +4577,9 @@ body.rv-open {
 .ch-details {
   max-height: 320px;
   overflow-y: auto;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius);
+  background: var(--surface);
 }
 
 table.ch-table {

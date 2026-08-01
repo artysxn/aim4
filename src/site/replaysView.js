@@ -17,7 +17,6 @@ import {
   fetchStatus,
   fetchUploadBatch,
   findRounds,
-  refreshStats,
   renameDemoTeams,
   reparseDemo,
   savePlaylist,
@@ -57,7 +56,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   const quotaEl = document.getElementById('rp-quota');
   const progressEl = document.getElementById('rp-upload-progress');
   const statusEl = document.getElementById('rp-status');
-  const statsRefreshBtn = document.getElementById('rp-stats-refresh');
   const filtersEl = document.getElementById('rp-filters');
   const resultEl = document.getElementById('rp-result');
   const parserEl = document.getElementById('rp-parser');
@@ -193,15 +191,22 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   function renderQuota(usage) {
     if (!usage || !quotaEl) return;
+    const mine = myDemos();
+    const demoCount = mine.length;
+    const demoCap = account.admin ? 0 : account.maxDemos || 5;
+    const pctDemos = demoCap > 0 ? (demoCount / demoCap) * 100 : 0;
     const pctBytes = usage.maxBytes ? (usage.bytes / usage.maxBytes) * 100 : 0;
-    const stored = Number.isFinite(usage.demos) ? usage.demos : demoTotal;
+    const demosLine = demoCap
+      ? `${demoCount} / ${demoCap} demos`
+      : `${demoCount} demos`;
     quotaEl.innerHTML = `
       <div class="rp-quota-row">
-        <span class="rp-quota-label">Demos stored</span>
-        <span class="rp-quota-value">${stored}</span>
+        <span class="rp-quota-label">Demos</span>
+        <span class="rp-quota-value">${escapeHtml(demosLine)}</span>
       </div>
+      <div class="rp-meter"><span style="width:${Math.min(100, pctDemos)}%"></span></div>
       <div class="rp-quota-row">
-        <span class="rp-quota-label">Storage (shared)</span>
+        <span class="rp-quota-label">Storage</span>
         <span class="rp-quota-value">${formatBytes(usage.bytes)} / ${formatBytes(usage.maxBytes)}</span>
       </div>
       <div class="rp-meter"><span style="width:${Math.min(100, pctBytes)}%"></span></div>`;
@@ -481,10 +486,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     for (const id of [...selectedMine]) {
       if (!mineIds.has(id)) selectedMine.delete(id);
     }
-    const cap = account.admin ? 0 : account.maxDemos || 5;
-    const capLine = cap
-      ? `${mine.length} of ${cap} uploads used`
-      : `${mine.length} uploads (no limit on this account)`;
     const selCount = selectedMine.size;
 
     const sorted = mine
@@ -578,7 +579,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     mineEl.innerHTML = `
       <div class="rp-mine-head">
         <h3 class="rp-mine-title">My uploads</h3>
-        <span class="rp-mine-cap">${escapeHtml(capLine)}</span>
       </div>
       ${bulk}
       ${
@@ -1379,43 +1379,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     e.preventDefault();
     dropEl.classList.remove('over');
     startUpload(e.dataTransfer?.files);
-  });
-
-  statsRefreshBtn?.addEventListener('click', async () => {
-    if (statsRefreshBtn.disabled) return;
-    statsRefreshBtn.disabled = true;
-    const prevLabel = statsRefreshBtn.textContent;
-    statsRefreshBtn.textContent = 'Refreshing stats…';
-    uploadOwnsStatus = true;
-    setStatus('Checking library stats indexes…');
-    try {
-      const report = await refreshStats();
-      const parts = [
-        `${report.ready || 0} ready demos`,
-        report.built ? `${report.built} built` : '',
-        report.enriched ? `${report.enriched} enriched` : '',
-        report.current ? `${report.current} already current` : '',
-        report.failed ? `${report.failed} failed` : ''
-      ].filter(Boolean);
-      setStatus(
-        report.failed
-          ? `Stats refresh finished with errors: ${parts.join(' · ')}`
-          : `Stats refresh done: ${parts.join(' · ')}`,
-        Boolean(report.failed)
-      );
-      // Drop the mounted panel so the next Statistics open reloads the index.
-      if (statsPanel) {
-        statsPanel.destroy();
-        statsPanel = null;
-        if (statsBodyEl) statsBodyEl.innerHTML = '';
-      }
-    } catch (err) {
-      setStatus(err.message || 'Stats refresh failed.', true);
-    } finally {
-      uploadOwnsStatus = false;
-      statsRefreshBtn.disabled = false;
-      statsRefreshBtn.textContent = prevLabel || 'Refresh library stats';
-    }
   });
 
   // ---- team clustering ----------------------------------------------------
