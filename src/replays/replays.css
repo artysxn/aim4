@@ -4996,6 +4996,11 @@ table.rp-mine-table tbody tr {
   color: var(--accent);
 }
 
+.tm-member.is-dummy .tm-member-name,
+.tm-table tr.is-dummy .tm-cell-name {
+  color: #c9b37a;
+}
+
 .tm-member.is-dummy,
 .tm-table tr.is-dummy .tm-cell-name {
   opacity: 0.92;
@@ -5169,6 +5174,31 @@ table.rp-mine-table tbody tr {
   text-align: left;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+  vertical-align: middle;
+}
+
+.tm-table tbody td {
+  height: 46px;
+  box-sizing: border-box;
+}
+
+.tm-table .site-select {
+  min-width: 108px;
+}
+
+.tm-table .site-select:disabled {
+  opacity: 0.55;
+  color: var(--muted);
+  cursor: not-allowed;
+  background: var(--disabled-bg, #141414);
+}
+
+.tm-table .site-select:disabled:hover {
+  color: var(--muted);
+}
+
+.tm-cell-actions {
+  min-width: 108px;
 }
 
 .tm-table th {

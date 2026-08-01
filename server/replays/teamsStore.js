@@ -249,8 +249,9 @@ export async function createDummyMember(actor, teamId, displayName) {
 }
 
 /**
- * Admin: drag a real member onto a placeholder. The real member inherits the
- * placeholder's kind and map positions; the placeholder is removed.
+ * Admin: drag a real member onto a placeholder. The placeholder wins: its
+ * kind, permissions (unless the real member is owner), and map positions
+ * replace the real member's; then the placeholder seat is removed.
  */
 export async function mergeMemberIntoDummy(actor, teamId, realUserId, dummyId) {
   return updateTeam(teamId, (t) => {
@@ -261,11 +262,12 @@ export async function mergeMemberIntoDummy(actor, teamId, realUserId, dummyId) {
     if (isDummyMember(real)) throw new Error('Drag a real member onto a placeholder.');
     if (!dummy || !isDummyMember(dummy)) throw new Error('Drop onto a placeholder seat.');
     t.positions = t.positions || {};
+    // Always take the placeholder's positions, even when empty.
     t.positions[realUserId] = copyPositionBag(t.positions[dummyId]);
     clearMemberPositions(t, dummyId);
     real.kind = dummy.kind === 'coach' ? 'coach' : 'player';
-    if (real.role !== 'owner' && (dummy.role === 'admin' || dummy.role === 'player')) {
-      real.role = dummy.role;
+    if (real.role !== 'owner') {
+      real.role = dummy.role === 'admin' ? 'admin' : 'player';
     }
     t.members = (t.members || []).filter((m) => m.id !== dummyId);
   });

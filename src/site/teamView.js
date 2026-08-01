@@ -215,14 +215,9 @@ export function initTeamView({ auth, escapeHtml }) {
     const canMerge = team.isAdmin;
     const canManageReal = team.isOwner && !me && !dummy;
     const canRemoveDummy = dummy && team.isAdmin;
-    // Only Owner / Member / Placeholder — never Player, Admin, or Coach.
-    const rolePill = dummy
-      ? '<span class="tm-tag dummy">Placeholder</span>'
-      : m.role === 'owner'
-        ? '<span class="tm-tag role">Owner</span>'
-        : m.role === 'player'
-          ? '<span class="tm-tag role">Member</span>'
-          : '';
+    // Member only — never Player, Admin, Coach, Owner, or Placeholder pills.
+    const rolePill =
+      !dummy && m.role === 'player' ? '<span class="tm-tag role">Member</span>' : '';
     const dragAttrs =
       canMerge && !dummy
         ? `draggable="true" data-drag-member="${escapeHtml(m.id)}"`
@@ -448,50 +443,54 @@ export function initTeamView({ auth, escapeHtml }) {
             : dummy && canEdit
               ? `data-drop-dummy="${escapeHtml(m.id)}"`
               : '';
+        const kindSelect = canEdit
+          ? `<select class="site-select" data-kind="${escapeHtml(m.id)}"${
+              owner ? ' disabled' : ''
+            }>
+                <option value="player"${m.kind !== 'coach' ? ' selected' : ''}>Player</option>
+                <option value="coach"${m.kind === 'coach' ? ' selected' : ''}>Coach</option>
+              </select>`
+          : m.kind === 'coach'
+            ? 'Coach'
+            : 'Player';
+        const roleSelect = canEdit
+          ? owner
+            ? `<select class="site-select" disabled>
+                  <option value="owner" selected>Owner</option>
+                </select>`
+            : team.isOwner
+              ? `<select class="site-select" data-role="${escapeHtml(m.id)}">
+                  <option value="player"${
+                    m.role === 'player' || m.role === 'coach' ? ' selected' : ''
+                  }>Member</option>
+                  <option value="admin"${m.role === 'admin' ? ' selected' : ''}>Admin</option>
+                </select>`
+              : `<select class="site-select" disabled>
+                  <option value="${m.role === 'admin' ? 'admin' : 'player'}" selected>${
+                    m.role === 'admin' ? 'Admin' : 'Member'
+                  }</option>
+                </select>`
+          : owner
+            ? 'Owner'
+            : m.role === 'admin'
+              ? 'Admin'
+              : 'Member';
+        const actions =
+          team.isOwner && !owner && !dummy
+            ? `<button type="button" class="btn btn-sm" data-transfer="${escapeHtml(
+                m.id
+              )}">Make owner</button>`
+            : dummy && canEdit
+              ? `<button type="button" class="btn btn-sm danger" data-kick="${escapeHtml(
+                  m.id
+                )}">Remove</button>`
+              : '';
         return `
         <tr class="${dummy ? 'is-dummy' : ''}" ${dragAttrs}>
-          <td class="tm-cell-name">${memberLabel(m)}${
-            dummy ? ' <span class="tm-tag dummy">Placeholder</span>' : ''
-          }</td>
-          <td>
-            ${
-              canEdit && !owner
-                ? `<select class="site-select" data-kind="${escapeHtml(m.id)}">
-                    <option value="player"${m.kind !== 'coach' ? ' selected' : ''}>Player</option>
-                    <option value="coach"${m.kind === 'coach' ? ' selected' : ''}>Coach</option>
-                  </select>`
-                : m.kind === 'coach'
-                  ? 'Coach'
-                  : 'Player'
-            }
-          </td>
-          <td>
-            ${
-              team.isOwner && !owner
-                ? `<select class="site-select" data-role="${escapeHtml(m.id)}">
-                    <option value="player"${m.role === 'player' || m.role === 'coach' ? ' selected' : ''}>Member</option>
-                    <option value="admin"${m.role === 'admin' ? ' selected' : ''}>Admin</option>
-                  </select>`
-                : owner
-                  ? 'Owner'
-                  : m.role === 'admin'
-                    ? 'Admin'
-                    : 'Member'
-            }
-          </td>
-          <td>
-            ${
-              team.isOwner && !owner && !dummy
-                ? `<button type="button" class="btn btn-sm" data-transfer="${escapeHtml(
-                    m.id
-                  )}">Make owner</button>`
-                : dummy && canEdit
-                  ? `<button type="button" class="btn btn-sm danger" data-kick="${escapeHtml(
-                      m.id
-                    )}">Remove</button>`
-                  : ''
-            }
-          </td>
+          <td class="tm-cell-name">${memberLabel(m)}</td>
+          <td>${kindSelect}</td>
+          <td>${roleSelect}</td>
+          <td class="tm-cell-actions">${actions}</td>
         </tr>`;
       })
       .join('');
@@ -526,7 +525,7 @@ export function initTeamView({ auth, escapeHtml }) {
         }).join('');
         return `<tr class="${dummy ? 'is-dummy' : ''}" ${dragAttrs}><td class="tm-cell-name">${memberLabel(
           m
-        )}${dummy ? ' <span class="tm-tag dummy">Placeholder</span>' : ''}</td>${cells}</tr>`;
+        )}</td>${cells}</tr>`;
       })
       .join('');
 
@@ -874,7 +873,7 @@ export function initTeamView({ auth, escapeHtml }) {
     if (!real || real.dummy || !dummy?.dummy) return;
     if (
       !window.confirm(
-        `Merge @${real.username} onto placeholder ${dummy.username}? They take that seat’s positions, kind, and permissions.`
+        `Merge @${real.username} onto placeholder ${dummy.username}? The placeholder’s positions, kind, and permissions replace theirs.`
       )
     ) {
       return;
