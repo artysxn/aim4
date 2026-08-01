@@ -28,6 +28,8 @@ import sideTeamDocs from '../icons/sideicons/sideicon_docs.svg?raw';
 import sideTeamPositions from '../icons/sideicons/sideicon_positions.svg?raw';
 import sideTeamStratbook from '../icons/sideicons/sideicon_stratbook.svg?raw';
 import sideTeamStrategies from '../icons/sideicons/sideicon_my_strategies.svg?raw';
+import sideTeamDrawingBoard from '../icons/sideicons/sideicon_drawing_board.svg?raw';
+import sideTeamUtilityArchive from '../icons/sideicons/sideicon_utility_archive.svg?raw';
 import sideTeamCreator from '../icons/sideicons/sideicon_2d_creator.svg?raw';
 import logoFullUrl from '../icons/aim4logos/logocolor.png';
 import logoMarkUrl from '../icons/aim4logos/logo1x1.png';
@@ -93,6 +95,8 @@ const ICONS = {
   'team-positions': sideTeamPositions,
   'team-stratbook': sideTeamStratbook,
   'team-strategies': sideTeamStrategies,
+  'team-drawing-board': sideTeamDrawingBoard,
+  'team-utility-archive': sideTeamUtilityArchive,
   'team-creator': sideTeamCreator
 };
 
@@ -308,6 +312,18 @@ const ROUTES = {
     path: '/team/strategies',
     shell: 'team',
     page: 'team-strategies'
+  },
+  'team-drawing-board': {
+    title: 'Drawing Board',
+    path: '/team/drawing-board',
+    shell: 'team',
+    page: 'team-drawing-board'
+  },
+  'team-utility-archive': {
+    title: 'Utility Archive',
+    path: '/team/utility-archive',
+    shell: 'team',
+    page: 'team-utility-archive'
   },
   'team-creator': {
     title: '2D Strategy Creator',

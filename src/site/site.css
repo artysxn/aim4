@@ -306,7 +306,7 @@ a {
 }
 
 .side-cat-label {
-  padding: 10px 12px 4px;
+  padding: 8px 10px 3px;
   color: var(--muted);
   font-family: var(--font-display);
   font-size: 9px;
@@ -329,13 +329,13 @@ a {
 .side-link {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  margin: 2px 0;
+  gap: 10px;
+  padding: 7px 10px;
+  margin: 1px 0;
   border-radius: var(--radius-sm);
   color: var(--muted);
   font-family: var(--font-body);
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 400;
   text-decoration: none;
   white-space: nowrap;
@@ -354,15 +354,15 @@ a {
 }
 
 .side-icon {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   flex-shrink: 0;
   display: grid;
   place-items: center;
 }
 .side-icon svg {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   fill: currentColor;
 }
 
@@ -547,11 +547,18 @@ a {
 }
 
 .view.active[data-view='replays'],
-.view.active[data-view='leaderboards'] {
+.view.active[data-view='leaderboards'],
+.view.active[data-view='team'] {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
+}
+
+.view.active[data-view='team'] > .tm-shell.view-pad-fill {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 /* Demo library: pin the filter column; only the demo list scrolls.

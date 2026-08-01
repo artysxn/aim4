@@ -132,7 +132,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   };
   /** Selected demo ids on My Uploads (bulk visibility / click-to-select). */
   const selectedMine = new Set();
-  const MINE_PAGE_SIZE = 50;
+  const MINE_PAGE_SIZE = 100;
   let minePage = 1;
   const mineEl = document.getElementById('rp-mine');
   let teamSearch = '';

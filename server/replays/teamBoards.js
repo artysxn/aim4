@@ -1,0 +1,247 @@
+// ---------------------------------------------------------------------------
+// teamBoards.js — Drawing boards + Utility Archive per team/map
+//
+//   {AIM4_REPLAY_DIR}/teamBoards/<teamId>/drawing/<MAP>.json
+//   {AIM4_REPLAY_DIR}/teamBoards/<teamId>/utility/<MAP>.json
+// ---------------------------------------------------------------------------
+
+import crypto from 'node:crypto';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+import { ROOT } from './demoStore.js';
+import { isMember, teamById } from './teamsStore.js';
+import { MAPS } from '../../src/replays/shared/roundId.js';
+
+const baseDir = () => path.join(ROOT, 'teamBoards');
+const teamDir = (teamId) => path.join(baseDir(), safeId(teamId));
+
+const MAP_RE = /^[A-Z0-9]{2,4}$/;
+const ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+const MERGE_UNITS = 75;
+const MAX_COMMENT = 100;
+const MAX_STROKES = 800;
+const MAX_NADES_BOARD = 200;
+const MAX_PLAYERS_BOARD = 40;
+const MAX_UTILITY = 400;
+const MAX_THROWS = 24;
+
+function safeId(raw) {
+  const s = String(raw || '').replace(/[^A-Za-z0-9_-]/g, '');
+  if (!s) throw new Error('Bad id.');
+  return s;
+}
+
+function denied(message) {
+  const err = new Error(message);
+  err.status = 403;
+  return err;
+}
+
+function assertMember(team, actor) {
+  if (!team) throw new Error('That team no longer exists.');
+  if (!isMember(team, actor.id) && !actor.admin) throw denied('You are not on that team.');
+}
+
+function assertMap(map) {
+  const code = String(map || '').toUpperCase();
+  if (!MAP_RE.test(code) || !MAPS[code]) throw new Error('Unknown map.');
+  return code;
+}
+
+async function readJson(file, fallback) {
+  try {
+    return JSON.parse(await fsp.readFile(file, 'utf8'));
+  } catch {
+    return fallback;
+  }
+}
+
+async function writeJson(file, body) {
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  await fsp.writeFile(file, JSON.stringify(body, null, 2), 'utf8');
+}
+
+function clampNum(v, lo, hi, fallback = 0) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(lo, Math.min(hi, n));
+}
+
+function newUtilityId(used) {
+  for (let i = 0; i < 40; i++) {
+    let id = '';
+    for (let j = 0; j < 4; j++) id += ID_ALPHABET[(Math.random() * ID_ALPHABET.length) | 0];
+    if (!used.has(id)) return id;
+  }
+  return crypto.randomBytes(3).toString('base64url').slice(0, 4);
+}
+
+// ---- Drawing boards -------------------------------------------------------
+
+function emptyBoard(map) {
+  return { map, updatedAt: 0, strokes: [], nades: [], players: [] };
+}
+
+function sanitizeBoard(map, payload) {
+  const src = payload && typeof payload === 'object' ? payload : {};
+  const strokes = [];
+  for (const s of (src.strokes || []).slice(0, MAX_STROKES)) {
+    if (!s || typeof s !== 'object') continue;
+    const pts = Array.isArray(s.pts)
+      ? s.pts
+          .slice(0, 2000)
+          .map((p) => ({
+            x: clampNum(p?.x, -2000, 4000, 0),
+            y: clampNum(p?.y, -2000, 4000, 0)
+          }))
+          .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+      : [];
+    if (!pts.length) continue;
+    strokes.push({
+      color: String(s.color || '#f0f0f0').slice(0, 32),
+      width: clampNum(s.width, 0.5, 12, 2.6),
+      pts
+    });
+  }
+  const nades = [];
+  for (const n of (src.nades || []).slice(0, MAX_NADES_BOARD)) {
+    if (!n || typeof n !== 'object') continue;
+    const type = String(n.type || '');
+    if (!['smokegrenade', 'molotov', 'hegrenade', 'flashbang'].includes(type)) continue;
+    nades.push({
+      type,
+      x: clampNum(n.x, -10000, 10000, 0),
+      y: clampNum(n.y, -10000, 10000, 0),
+      playerColor: String(n.playerColor || '').slice(0, 32)
+    });
+  }
+  const players = [];
+  for (const p of (src.players || []).slice(0, MAX_PLAYERS_BOARD)) {
+    if (!p || typeof p !== 'object') continue;
+    players.push({
+      x: clampNum(p.x, -10000, 10000, 0),
+      y: clampNum(p.y, -10000, 10000, 0),
+      yaw: clampNum(p.yaw, -180, 180, 0),
+      color: String(p.color || '#e8b84a').slice(0, 32),
+      side: p.side === 'CT' ? 'CT' : p.side === 'T' ? 'T' : ''
+    });
+  }
+  return { map, updatedAt: Date.now(), strokes, nades, players };
+}
+
+export async function getDrawingBoard(actor, teamId, map) {
+  const team = await teamById(teamId);
+  assertMember(team, actor);
+  const code = assertMap(map);
+  const file = path.join(teamDir(teamId), 'drawing', `${code}.json`);
+  const raw = await readJson(file, null);
+  return raw ? sanitizeBoard(code, raw) : emptyBoard(code);
+}
+
+export async function saveDrawingBoard(actor, teamId, map, payload) {
+  const team = await teamById(teamId);
+  assertMember(team, actor);
+  const code = assertMap(map);
+  const board = sanitizeBoard(code, payload);
+  const file = path.join(teamDir(teamId), 'drawing', `${code}.json`);
+  await writeJson(file, board);
+  return board;
+}
+
+// ---- Utility archive ------------------------------------------------------
+
+function emptyUtility(map) {
+  return { map, updatedAt: 0, grenades: [] };
+}
+
+function sanitizeThrow(t) {
+  if (!t || typeof t !== 'object') return null;
+  return {
+    x: clampNum(t.x, -10000, 10000, 0),
+    y: clampNum(t.y, -10000, 10000, 0),
+    setpos: String(t.setpos || '').trim().slice(0, 240),
+    setang: String(t.setang || '').trim().slice(0, 240),
+    comment: String(t.comment || '').trim().slice(0, MAX_COMMENT)
+  };
+}
+
+function sanitizeUtility(map, payload) {
+  const src = payload && typeof payload === 'object' ? payload : {};
+  const used = new Set();
+  const grenades = [];
+  for (const g of (src.grenades || []).slice(0, MAX_UTILITY)) {
+    if (!g || typeof g !== 'object') continue;
+    const type = String(g.type || '');
+    if (!['smokegrenade', 'molotov', 'hegrenade', 'flashbang'].includes(type)) continue;
+    let id = String(g.id || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 4);
+    if (id.length !== 4 || used.has(id)) id = newUtilityId(used);
+    used.add(id);
+    const throws = [];
+    for (const t of (g.throws || []).slice(0, MAX_THROWS)) {
+      const clean = sanitizeThrow(t);
+      if (clean) throws.push(clean);
+    }
+    grenades.push({
+      id,
+      type,
+      name: String(g.name || '').trim().slice(0, 80),
+      detonate: {
+        x: clampNum(g.detonate?.x, -10000, 10000, 0),
+        y: clampNum(g.detonate?.y, -10000, 10000, 0)
+      },
+      throws
+    });
+  }
+  return { map, updatedAt: Date.now(), grenades };
+}
+
+export async function getUtilityArchive(actor, teamId, map) {
+  const team = await teamById(teamId);
+  assertMember(team, actor);
+  const code = assertMap(map);
+  const file = path.join(teamDir(teamId), 'utility', `${code}.json`);
+  const raw = await readJson(file, null);
+  return raw ? sanitizeUtility(code, raw) : emptyUtility(code);
+}
+
+export async function saveUtilityArchive(actor, teamId, map, payload) {
+  const team = await teamById(teamId);
+  assertMember(team, actor);
+  const code = assertMap(map);
+  const archive = sanitizeUtility(code, payload);
+  const file = path.join(teamDir(teamId), 'utility', `${code}.json`);
+  await writeJson(file, archive);
+  return archive;
+}
+
+/** Flat id → grenade lookup across every map for one team (stratbook links). */
+export async function listUtilityIndex(actor, teamId) {
+  const team = await teamById(teamId);
+  assertMember(team, actor);
+  const dir = path.join(teamDir(teamId), 'utility');
+  let files = [];
+  try {
+    files = await fsp.readdir(dir);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    const map = f.replace(/\.json$/i, '').toUpperCase();
+    if (!MAPS[map]) continue;
+    const archive = await getUtilityArchive(actor, teamId, map);
+    for (const g of archive.grenades) {
+      out.push({
+        id: g.id,
+        map,
+        type: g.type,
+        name: g.name || `${g.type} ${g.id}`,
+        throws: g.throws
+      });
+    }
+  }
+  return out;
+}
+
+export { MERGE_UNITS, MAX_COMMENT };

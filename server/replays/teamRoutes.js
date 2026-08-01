@@ -36,6 +36,13 @@ import {
   upsertDocument,
   upsertStrategy
 } from './teamsStore.js';
+import {
+  getDrawingBoard,
+  getUtilityArchive,
+  listUtilityIndex,
+  saveDrawingBoard,
+  saveUtilityArchive
+} from './teamBoards.js';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -326,6 +333,42 @@ export async function handleTeamRequest(req, res, url) {
       await deleteStrategy(me, teamId, stratMatch[1]);
       json(res, 200, { ok: true, team: publicTeam(await teamById(teamId), me.id) });
       return true;
+    }
+
+    // ---- drawing boards ---------------------------------------------------
+    const boardMatch = p.match(
+      /^\/api\/teams\/[A-Za-z0-9_]+\/drawing-boards\/([A-Za-z0-9]{2,4})$/i
+    );
+    if (boardMatch) {
+      const map = boardMatch[1];
+      if (req.method === 'GET') {
+        json(res, 200, { board: await getDrawingBoard(me, teamId, map) });
+        return true;
+      }
+      if (req.method === 'POST') {
+        const body = await readJson(req, 2 * 1024 * 1024);
+        json(res, 200, { board: await saveDrawingBoard(me, teamId, map, body) });
+        return true;
+      }
+    }
+
+    // ---- utility archive --------------------------------------------------
+    if (req.method === 'GET' && tail === '/utility') {
+      json(res, 200, { index: await listUtilityIndex(me, teamId) });
+      return true;
+    }
+    const utilMatch = p.match(/^\/api\/teams\/[A-Za-z0-9_]+\/utility\/([A-Za-z0-9]{2,4})$/i);
+    if (utilMatch) {
+      const map = utilMatch[1];
+      if (req.method === 'GET') {
+        json(res, 200, { archive: await getUtilityArchive(me, teamId, map) });
+        return true;
+      }
+      if (req.method === 'POST') {
+        const body = await readJson(req, 2 * 1024 * 1024);
+        json(res, 200, { archive: await saveUtilityArchive(me, teamId, map, body) });
+        return true;
+      }
     }
   } catch (err) {
     fail(err);

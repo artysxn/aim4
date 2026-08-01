@@ -634,3 +634,65 @@ export async function fetchSharedStrategyRound(shareId) {
     })
   );
 }
+
+// ---------------------------------------------------------------------------
+// Drawing boards + utility archive
+// ---------------------------------------------------------------------------
+
+export async function fetchDrawingBoard(teamId, map) {
+  const body = await asJson(
+    await fetch(
+      `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/drawing-boards/${encodeURIComponent(map)}`,
+      { headers: await headers() }
+    )
+  );
+  return body.board || null;
+}
+
+export async function saveDrawingBoard(teamId, map, board) {
+  const body = await asJson(
+    await fetch(
+      `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/drawing-boards/${encodeURIComponent(map)}`,
+      {
+        method: 'POST',
+        headers: await headers({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(board)
+      }
+    )
+  );
+  return body.board || null;
+}
+
+export async function fetchUtilityArchive(teamId, map) {
+  const body = await asJson(
+    await fetch(
+      `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/utility/${encodeURIComponent(map)}`,
+      { headers: await headers() }
+    )
+  );
+  return body.archive || null;
+}
+
+export async function saveUtilityArchive(teamId, map, archive) {
+  const body = await asJson(
+    await fetch(
+      `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/utility/${encodeURIComponent(map)}`,
+      {
+        method: 'POST',
+        headers: await headers({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(archive)
+      }
+    )
+  );
+  return body.archive || null;
+}
+
+/** Flat grenade index across all maps for stratbook `<!####>` links. */
+export async function fetchUtilityIndex(teamId) {
+  const body = await asJson(
+    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/utility`, {
+      headers: await headers()
+    })
+  );
+  return body.index || [];
+}

@@ -19,6 +19,7 @@ import {
   fetchStatus,
   fetchTeamDocument,
   fetchTeams,
+  fetchUtilityIndex,
   joinTeam,
   leaveTeam,
   mergeTeamMember,
@@ -31,8 +32,18 @@ import {
 import { MAPS } from '../replays/shared/roundId.js';
 import { POSITION_MAPS, positionsFor } from '../replays/roles/teamPositions.js';
 import { createDocsEditor } from './docsEditor.js';
+import { mountDrawingBoard } from './drawingBoard.js';
+import { mountUtilityArchive } from './utilityArchive.js';
 
-const PAGES = ['team-overview', 'team-docs', 'team-roles', 'team-stratbook', 'team-strategies'];
+const PAGES = [
+  'team-overview',
+  'team-docs',
+  'team-roles',
+  'team-stratbook',
+  'team-strategies',
+  'team-drawing-board',
+  'team-utility-archive'
+];
 
 const STRAT_ECONOMY = [
   'Pistol',
@@ -127,8 +138,13 @@ export function initTeamView({ auth, escapeHtml }) {
   let statusBad = false;
   /** @type {ReturnType<typeof createDocsEditor>|null} */
   let editor = null;
+  /** @type {{ destroy: () => void }|null} */
+  let boardMount = null;
   let openDocId = '';
   let rolesSide = 'T';
+  /** @type {Array<{id: string, map: string, type: string, name: string, throws: object[]}>} */
+  let utilityIndex = [];
+  let utilityIndexTeamId = '';
   /** Which stratbook "Visible to" menu is open (strategy id). */
   let openVisibleMenu = '';
   /** Member whose My Strategies view is shown. */
@@ -240,6 +256,71 @@ export function initTeamView({ auth, escapeHtml }) {
   }
 
   // ---- shared chrome ------------------------------------------------------
+
+  function destroyBoardMount() {
+    boardMount?.destroy?.();
+    boardMount = null;
+  }
+
+  async function ensureUtilityIndex(force = false) {
+    if (!team?.id) {
+      utilityIndex = [];
+      utilityIndexTeamId = '';
+      return;
+    }
+    if (!force && utilityIndexTeamId === team.id) return;
+    try {
+      utilityIndex = await fetchUtilityIndex(team.id);
+      utilityIndexTeamId = team.id;
+    } catch {
+      utilityIndex = [];
+      utilityIndexTeamId = team.id;
+    }
+  }
+
+  /** Escape note text, then turn `&lt;!####&gt;` into copyable utility links. */
+  function noteWithUtilityLinks(raw) {
+    return escapeHtml(raw || '').replace(
+      /&lt;!([A-Za-z0-9]{4})&gt;/g,
+      (_m, id) =>
+        `<button type="button" class="ua-link" data-ua-link="${id}" title="Copy setpos / setang">&lt;!${id}&gt;</button>`
+    );
+  }
+
+  async function copyUtilityById(id) {
+    await ensureUtilityIndex();
+    const entry = utilityIndex.find((g) => g.id === id);
+    if (!entry) {
+      setStatus(`No utility with id ${id} in the archive.`, true);
+      return;
+    }
+    const throws = Array.isArray(entry.throws) ? entry.throws : [];
+    if (!throws.length) {
+      setStatus(`${id} has no throw spots yet.`, true);
+      return;
+    }
+    let th = throws[0];
+    if (throws.length > 1) {
+      const lines = throws
+        .map((t, i) => `${i + 1}. ${(t.comment || t.setpos || 'Throw').slice(0, 60)}`)
+        .join('\n');
+      const pick = window.prompt(`Pick a throw spot for ${id}:\n${lines}`, '1');
+      if (pick == null) return;
+      const idx = Math.max(1, Math.min(throws.length, Number(pick) || 1)) - 1;
+      th = throws[idx];
+    }
+    const text = [th.setpos, th.setang].filter(Boolean).join('\n');
+    if (!text) {
+      setStatus('That throw has no setpos / setang yet.', true);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus(th.comment ? `Copied. ${th.comment}` : `Copied ${id}.`);
+    } catch {
+      setStatus('Could not copy to clipboard.', true);
+    }
+  }
 
   function headerHtml(title = '', actions = '') {
     const picker =
@@ -737,7 +818,7 @@ export function initTeamView({ auth, escapeHtml }) {
           .map((_, i) => {
             const note = notes[i] || '';
             if (!canEdit) {
-              const html = escapeHtml(note).replace(/\n/g, '<br />') || '—';
+              const html = noteWithUtilityLinks(note).replace(/\n/g, '<br />') || '—';
               return `<td class="sb-cell-role">${html}</td>`;
             }
             return `<td class="sb-cell-role"><textarea class="sb-input sb-role-note" data-sb-field="roleNotes" data-sb-idx="${i}" data-sb-id="${escapeHtml(
@@ -1077,7 +1158,7 @@ export function initTeamView({ auth, escapeHtml }) {
       .map((s) => {
         const note = playerRoleNote(s, playerId);
         const name = (s.name || 'Untitled').toUpperCase();
-        const noteHtml = escapeHtml(note).replace(/\n/g, '<br />');
+        const noteHtml = noteWithUtilityLinks(note).replace(/\n/g, '<br />');
         return `
         <tr class="ms-row ms-${side.toLowerCase()}">
           <td class="ms-cell-name">${escapeHtml(name)}</td>
@@ -1152,6 +1233,7 @@ export function initTeamView({ auth, escapeHtml }) {
 
   function render() {
     syncTeamChrome();
+    destroyBoardMount();
     if (!loaded) {
       shellEl.innerHTML = '<p class="view-empty">Loading…</p>';
       return;
@@ -1176,10 +1258,34 @@ export function initTeamView({ auth, escapeHtml }) {
     if (page === 'team-stratbook') {
       shellEl.innerHTML = stratbookHtml();
       applyStratbookViewHeights();
+      void ensureUtilityIndex();
       return;
     }
     if (page === 'team-strategies') {
       shellEl.innerHTML = myStrategiesHtml();
+      void ensureUtilityIndex();
+      return;
+    }
+    if (page === 'team-drawing-board') {
+      shellEl.innerHTML = '';
+      boardMount = mountDrawingBoard({
+        host: shellEl,
+        teamId: team.id,
+        escapeHtml,
+        headerHtml
+      });
+      return;
+    }
+    if (page === 'team-utility-archive') {
+      // Archive edits should refresh stratbook `<!####>` lookups next visit.
+      utilityIndexTeamId = '';
+      shellEl.innerHTML = '';
+      boardMount = mountUtilityArchive({
+        host: shellEl,
+        teamId: team.id,
+        escapeHtml,
+        headerHtml
+      });
       return;
     }
     shellEl.innerHTML = overviewHtml();
@@ -1192,7 +1298,9 @@ export function initTeamView({ auth, escapeHtml }) {
         'team-docs': 'Documents',
         'team-roles': 'Roles & Positions',
         'team-stratbook': 'Stratbook Editor',
-        'team-strategies': 'My Strategies'
+        'team-strategies': 'My Strategies',
+        'team-drawing-board': 'Drawing Board',
+        'team-utility-archive': 'Utility Archive'
       }[name] || 'Team'
     );
   }
@@ -1201,6 +1309,13 @@ export function initTeamView({ auth, escapeHtml }) {
 
   shellEl.addEventListener('click', async (e) => {
     const t = e.target;
+
+    const uaLink = t.closest('[data-ua-link]');
+    if (uaLink) {
+      e.preventDefault();
+      await copyUtilityById(uaLink.dataset.uaLink || '');
+      return;
+    }
 
     if (t.closest('[data-create]')) {
       const name = shellEl.querySelector('#tm-new-name')?.value || '';
@@ -1496,6 +1611,8 @@ export function initTeamView({ auth, escapeHtml }) {
       openDocId = '';
       openVisibleMenu = '';
       strategiesPlayerId = '';
+      utilityIndex = [];
+      utilityIndexTeamId = '';
       render();
       return;
     }
@@ -1785,6 +1902,7 @@ export function initTeamView({ auth, escapeHtml }) {
     },
     onHide() {
       editor?.flush();
+      destroyBoardMount();
     },
     /** Called by the router for /i/<code> landings. */
     setInvite(code) {
