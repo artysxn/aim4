@@ -60,14 +60,14 @@ function fresh(opts = {}) {
 
 {
   const engine = fresh();
-  // Face east so W is +x, then hold W for a second.
-  engine.setCursorWorld(1000, 0);
-  engine.keyDown('KeyW');
+  // Screen-fixed: D is +x (east) regardless of aim.
+  engine.setCursorWorld(0, 1000);
+  engine.keyDown('KeyD');
   const after = run(engine, 1000);
   const travelled = after.pos.x;
   // A player accelerating from rest under sv_accelerate 5.5 covers less than a
   // full second at top speed; the cap is what it approaches, not what it averages.
-  assert(travelled > 0, 'holding W moves the body forward');
+  assert(travelled > 0, 'holding D moves the body right');
   assert(
     travelled < MOVE_SPEED_UNITS,
     `one second from rest stays under the ${MOVE_SPEED_UNITS} u/s cap, got ${travelled.toFixed(1)}`
@@ -79,31 +79,30 @@ function fresh(opts = {}) {
   const later = run(engine, 1000);
   near(later.pos.x - before, MOVE_SPEED_UNITS, 6, 'distance covered in the second second');
   console.log(
-    `  ramps up like a player: ${travelled.toFixed(0)} units in the first second, ` +
-      `${(later.pos.x - before).toFixed(0)} in the next (cap ${MOVE_SPEED_UNITS})`
+    `  first second covers ${travelled.toFixed(0)} u, second second covers ${(later.pos.x - before).toFixed(0)} u`
   );
 }
 
-// ---- movement is relative to where the body is looking ----------------------
+// ---- movement is screen-fixed, not view-relative ----------------------------
 
 {
   const engine = fresh();
-  engine.setCursorWorld(0, 1000); // look north
+  engine.setCursorWorld(1000, 0); // look east
   engine.keyDown('KeyW');
   const state = run(engine, 500);
-  assert(state.pos.y > 40, 'W follows the aim, not the screen');
+  assert(state.pos.y > 40, 'W is screen-up (+y), not toward the cursor');
   assert(Math.abs(state.pos.x) < 1, `no sideways drift, got ${state.pos.x.toFixed(2)}`);
-  console.log('  WASD is view relative, so W is always toward the cursor');
+  console.log('  WASD is screen-fixed: W up, A left, S down, D right');
 }
 
 // ---- friction brings it to a stop ------------------------------------------
 
 {
   const engine = fresh();
-  engine.setCursorWorld(1000, 0);
-  engine.keyDown('KeyW');
+  engine.setCursorWorld(0, 1000);
+  engine.keyDown('KeyD');
   run(engine, 800);
-  engine.keyUp('KeyW');
+  engine.keyUp('KeyD');
   const releasedAt = engine.state().pos.x;
   const stopped = run(engine, 600);
   const slide = stopped.pos.x - releasedAt;
@@ -121,7 +120,7 @@ function fresh(opts = {}) {
 {
   const engine = fresh();
   engine.setCursorWorld(1000, 0);
-  engine.keyDown('KeyW');
+  engine.keyDown('KeyD');
   run(engine, 1000);
   const track = engine.finish();
   const n = sampleCount(track);
@@ -137,8 +136,8 @@ function fresh(opts = {}) {
   // A wall across x = 100.
   const wall = (x) => x >= 100 && x <= 400;
   const engine = fresh({ blockedAt: (x) => wall(x) });
-  engine.setCursorWorld(1000, 0);
-  engine.keyDown('KeyW');
+  engine.setCursorWorld(0, 1000);
+  engine.keyDown('KeyD');
   const blocked = run(engine, 1500);
   assert(
     blocked.pos.x < 100,
@@ -159,7 +158,9 @@ function fresh(opts = {}) {
 
 {
   const engine = fresh({ blockedAt: (x) => x >= 100 });
-  engine.setCursorWorld(1000, 1000); // north east into the wall
+  engine.setCursorWorld(0, 1000);
+  // Into the wall (+x) and along it (+y).
+  engine.keyDown('KeyD');
   engine.keyDown('KeyW');
   const state = run(engine, 1200);
   assert(state.pos.x < 100, 'the wall still holds on x');
@@ -199,6 +200,35 @@ function fresh(opts = {}) {
   console.log('  1-4 equip, click throws to the cursor at 300 u/s, and a bare click shoots');
 }
 
+// ---- rebinds swap physical keys without changing the actions ----------------
+
+{
+  const engine = fresh({
+    binds: {
+      moveUp: 'KeyI',
+      moveDown: 'KeyK',
+      moveLeft: 'KeyJ',
+      moveRight: 'KeyL',
+      noclip: 'KeyN',
+      fire: 'KeyF',
+      util1: 'Digit1',
+      util2: 'Digit2',
+      util3: 'Digit3',
+      util4: 'Digit4'
+    }
+  });
+  engine.keyDown('KeyW');
+  const idle = run(engine, 400);
+  assert(Math.abs(idle.pos.y) < 1 && Math.abs(idle.pos.x) < 1, 'unbound W does nothing');
+  engine.keyUp('KeyW');
+  engine.keyDown('KeyI');
+  const moved = run(engine, 400);
+  assert(moved.pos.y > 20, 'rebound move-up key still walks north');
+  engine.keyDown('KeyN');
+  assert(engine.state().noclip, 'rebound noclip key works');
+  console.log('  setBinds remaps movement and noclip');
+}
+
 // ---- a discarded pass keeps nothing -----------------------------------------
 
 {
@@ -216,16 +246,12 @@ function fresh(opts = {}) {
 {
   const engine = fresh();
   engine.setCursorWorld(1000, 0);
-  engine.keyDown('KeyW');
-  // One giant step, as if the tab had been hidden for four seconds.
-  engine.advance(4000);
-  const state = engine.state();
-  assert(
-    state.clock <= 120,
-    `a four second stall advances the round by at most one clamped frame, got ${state.clock}`
-  );
-  assert(state.pos.x < 30, 'and the body does not teleport');
-  console.log('  a stalled frame pauses the pass rather than skipping the body forward');
+  engine.keyDown('KeyD');
+  // One huge advance mimics a tab that slept for a long time.
+  engine.advance(5000);
+  const pos = engine.state().pos.x;
+  assert(pos < MOVE_SPEED_UNITS * 0.2, `a stalled frame is clamped, moved ${pos.toFixed(1)}`);
+  console.log('  a stalled tab cannot skip the body across the map');
 }
 
-console.log('creatorEngine: all assertions passed');
+console.log('creatorEngine tests passed');

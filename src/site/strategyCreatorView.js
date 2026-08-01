@@ -62,6 +62,10 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
   /** @type {ReturnType<typeof createCreatorPanel>|null} */
   let panel = null;
   let pendingShare = '';
+  /** True while a share link is being fetched/mounted — blocks auth reloads. */
+  let openingShare = false;
+  /** Guest opened a share (success or error) — do not replace with "Sign in". */
+  let shareView = false;
 
   const setStatus = (text, bad = false) => {
     status = text || '';
@@ -77,16 +81,30 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
 
   async function load() {
     const token = ++loadToken;
+
+    // Share links are public: open the round without waiting on account status.
+    // Auth onChange used to restart load() mid-fetch, clear pendingShare, and
+    // leave guests on "Sign in to build…" after a long Loading… hang.
+    const share = pendingShare;
+    if (share) {
+      if (openingShare) return;
+      openingShare = true;
+      loaded = false;
+      render();
+      try {
+        await openShared(share);
+        if (token !== loadToken) return;
+        pendingShare = '';
+        loaded = true;
+      } finally {
+        openingShare = false;
+      }
+      return;
+    }
+
     const statusBody = await fetchStatus().catch(() => null);
     if (token !== loadToken) return;
     account = { ...account, ...(statusBody?.account || { signedIn: false }) };
-
-    if (pendingShare) {
-      await openShared(pendingShare);
-      pendingShare = '';
-      loaded = true;
-      return;
-    }
 
     if (!account.signedIn) {
       teams = [];
@@ -197,7 +215,7 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
       shellEl.innerHTML = '<p class="view-empty">Loading…</p>';
       return;
     }
-    if (panel) return;
+    if (panel || shareView) return;
     if (!account.signedIn) {
       shellEl.innerHTML = `<div class="tm-empty">
         <h2 class="tm-title">2D Strategy Creator</h2>
@@ -224,7 +242,12 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
   function closeStage() {
     panel?.destroy();
     panel = null;
+    shareView = false;
     shellEl.classList.remove('sc-hosting');
+    // Drop ?share= so Back from a shared round does not reopen it forever.
+    if (new URLSearchParams(window.location.search).has('share')) {
+      window.history.replaceState(null, '', '/team/creator');
+    }
     render();
   }
 
@@ -237,6 +260,8 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
       onClose: () => {
         if (panel?.hasUnsavedWork() && !window.confirm('Leave without saving this round?')) return;
         closeStage();
+        // Reload so Back always lands on the rounds overview (account/teams may
+        // never have been fetched when the stage was opened from a share link).
         load();
       },
       onSave: async (payload) => {
@@ -261,10 +286,13 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
   }
 
   async function openShared(shareId) {
+    shareView = true;
     try {
       const res = await fetchSharedStrategyRound(shareId);
       mountStage({ entry: res.entry, round: res.round, readOnly: true });
     } catch (err) {
+      panel = null;
+      shellEl.classList.remove('sc-hosting');
       shellEl.innerHTML = `<div class="tm-empty">
         <h2 class="tm-title">Strategy round</h2>
         <p class="view-empty">${escapeHtml(err.message || 'That link is not valid.')}</p>
@@ -317,15 +345,17 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
   });
 
   auth?.onChange?.(() => {
-    if (panel) return;
+    if (panel || openingShare || pendingShare || shareView) return;
     loaded = false;
     load();
   });
 
   return {
     onShow(params = {}) {
-      if (params.share) {
-        pendingShare = params.share;
+      const share = String(params.share || '').trim();
+      if (share) {
+        pendingShare = share;
+        if (panel || openingShare) return;
         loaded = false;
         load();
         return;

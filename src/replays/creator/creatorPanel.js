@@ -22,6 +22,13 @@ import { bakeLayerMask } from '../zones/visionLayers.js';
 import { createCreatorEngine, COUNTDOWN_SECONDS } from './creatorEngine.js';
 import { createFrameLoop } from './frameLoop.js';
 import {
+  BIND_ROWS,
+  DEFAULT_BINDS,
+  formatBindCode,
+  loadBinds,
+  saveBinds
+} from './creatorBinds.js';
+import {
   NADE_SLOTS,
   ROUND_SECONDS,
   decodeRound,
@@ -33,6 +40,7 @@ import {
   roundSummary,
   trackEndMs
 } from './recordingFormat.js';
+import backIcon from '../../icons/icon_back.svg?raw';
 
 /** Maps that have a radar image to draw on. */
 const CREATOR_MAPS = Object.entries(MAPS).map(([code, m]) => ({ code, name: m.name }));
@@ -129,8 +137,14 @@ export function createCreatorPanel({
   let playing = false;
   let lastPlayAt = 0;
 
+  let binds = loadBinds();
+  let settingsOpen = false;
+  /** @type {string} action id waiting for a key press, or '' */
+  let rebinding = '';
+
   const engine = createCreatorEngine({
     blockedAt: (x, y) => Boolean(blockedAt && blockedAt(x, y)),
+    binds,
     onFrame: (state) => drawFrame(state),
     onFinish: (track) => {
       round.tracks.push(track);
@@ -142,6 +156,18 @@ export function createCreatorPanel({
   });
 
   // ---- helpers ------------------------------------------------------------
+
+  function hudHint() {
+    const m = `${formatBindCode(binds.moveUp)}${formatBindCode(binds.moveLeft)}${formatBindCode(
+      binds.moveDown
+    )}${formatBindCode(binds.moveRight)}`;
+    const util = [binds.util1, binds.util2, binds.util3, binds.util4]
+      .map(formatBindCode)
+      .join('');
+    return `${m} move · mouse aim · ${util} utility · ${formatBindCode(
+      binds.fire
+    )} fire · ${formatBindCode(binds.noclip)} through walls · Enter to stop`;
+  }
 
   function setStatus(text, bad = false) {
     statusText = text || '';
@@ -224,6 +250,15 @@ export function createCreatorPanel({
     renderRight();
     await renderer.setMap(code);
     if (gen !== mapLoadGen) return;
+
+    // Watch-only shares do not record, so walls and live spawn sampling are
+    // unused — skip them so a guest link is not blocked on zones/spawns.
+    if (readOnly) {
+      spawnsLoading = false;
+      renderRight();
+      drawFrame(engine.state());
+      return;
+    }
 
     // Painted vision blocks double as the map's walls for a 2D body.
     // Cache (and the other Active Duty maps) have thousands of brush pieces on
@@ -387,7 +422,7 @@ export function createCreatorPanel({
           <span class="sc-hud-clock">${escapeHtml(fmtClock(Math.max(0, state.clock)))}</span>
           <span class="sc-hud-item${held ? ' on' : ''}">${escapeHtml(held ? held.label : 'Gun')}</span>
           ${state.noclip ? '<span class="sc-hud-item warn">Noclip</span>' : ''}
-          <span class="sc-hud-hint">WASD move · mouse aim · 1-4 utility · click throw or shoot · space through walls · Enter to stop</span>
+          <span class="sc-hud-hint">${escapeHtml(hudHint())}</span>
         </div>`);
     } else if (hoverSpawn && !readOnly) {
       const used = takenSpawns().has(hoverSpawn.id);
@@ -600,14 +635,46 @@ export function createCreatorPanel({
 
   function renderHead() {
     const mapName = MAPS[round.map]?.name || 'No map';
+    const bindRows = BIND_ROWS.map((row) => {
+      const listening = rebinding === row.id;
+      return `
+        <div class="sc-bind-row">
+          <span class="sc-bind-label">${escapeHtml(row.label)}</span>
+          <button type="button" class="sc-bind-key${listening ? ' listening' : ''}"
+            data-rebind="${row.id}" ${readOnly ? 'disabled' : ''}>
+            ${listening ? 'Press key…' : escapeHtml(formatBindCode(binds[row.id]))}
+          </button>
+        </div>`;
+    }).join('');
+
     headEl.innerHTML = `
       <div class="sc-head-left">
-        <button type="button" class="btn btn-sm" data-close>Back</button>
+        <button type="button" class="sc-back" data-close aria-label="Back to rounds" title="Back to rounds">
+          ${backIcon}
+        </button>
         <h2 class="sc-title">${escapeHtml(round.name || 'Untitled round')}</h2>
         <span class="sc-head-tag ${round.side}">${round.side}</span>
         <span class="sc-head-tag">${escapeHtml(mapName)}</span>
       </div>
-      <div class="sc-head-right">${dirty ? '<span class="sc-dirty">Unsaved changes</span>' : ''}</div>`;
+      <div class="sc-head-right">
+        ${dirty ? '<span class="sc-dirty">Unsaved changes</span>' : ''}
+        <div class="sc-settings${settingsOpen ? ' is-open' : ''}">
+          <button type="button" class="sc-settings-btn" data-toggle-settings
+            aria-label="Controls" title="Controls" ${readOnly ? 'disabled' : ''}>
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <path fill="currentColor" d="M6.5 2.5a1.5 1.5 0 0 1 3 0v.4a4.5 4.5 0 0 1 1.3.75l.35-.2a1.5 1.5 0 1 1 1.5 2.6l-.35.2c.12.42.2.86.2 1.32s-.08.9-.2 1.32l.35.2a1.5 1.5 0 1 1-1.5 2.6l-.35-.2a4.5 4.5 0 0 1-1.3.75v.4a1.5 1.5 0 1 1-3 0v-.4a4.5 4.5 0 0 1-1.3-.75l-.35.2a1.5 1.5 0 1 1-1.5-2.6l.35-.2A4.6 4.6 0 0 1 3.5 8c0-.46.08-.9.2-1.32l-.35-.2a1.5 1.5 0 1 1 1.5-2.6l.35.2A4.5 4.5 0 0 1 6.5 2.9v-.4ZM8 6.25A1.75 1.75 0 1 0 8 9.75 1.75 1.75 0 0 0 8 6.25Z"/>
+            </svg>
+          </button>
+          <div class="sc-settings-panel" role="dialog" aria-label="Control bindings">
+            <div class="sc-settings-head">
+              <span class="sc-settings-title">Controls</span>
+              <button type="button" class="btn btn-sm" data-reset-binds>Reset</button>
+            </div>
+            <div class="sc-bind-list">${bindRows}</div>
+            <p class="sc-note">Click a bind, then press a key or mouse button.</p>
+          </div>
+        </div>
+      </div>`;
   }
 
   function renderTransport() {
@@ -714,6 +781,7 @@ export function createCreatorPanel({
 
     if (state.mode === 'recording') {
       e.preventDefault();
+      if (`Mouse${e.button}` !== binds.fire) return;
       const result = engine.fire();
       if (result) {
         dirty = true;
@@ -769,11 +837,44 @@ export function createCreatorPanel({
     const state = engine.state();
     if (state.mode === 'recording') {
       e.preventDefault();
-      if (state.equipped) engine.keyDown(`Digit${NADE_SLOTS.findIndex((s) => s.type === state.equipped) + 1}`);
+      if (state.equipped) engine.unequip();
     }
   });
 
+  function isBoundCode(code) {
+    return Object.values(binds).includes(code);
+  }
+
+  function applyBind(action, code) {
+    if (!action || !code) return;
+    // One physical input → one action: steal it from whoever had it.
+    const next = { ...binds };
+    for (const key of Object.keys(next)) {
+      if (next[key] === code) next[key] = binds[action];
+    }
+    next[action] = code;
+    binds = saveBinds(next);
+    engine.setBinds(binds);
+    rebinding = '';
+    renderHead();
+  }
+
   function onKeyDown(e) {
+    if (rebinding) {
+      if (e.code === 'Escape') {
+        e.preventDefault();
+        rebinding = '';
+        renderHead();
+        return;
+      }
+      // Leave Enter for finishing a pass; do not steal Escape-only cancel.
+      if (e.code === 'Enter' || e.code === 'NumpadEnter' || e.code === 'Tab') return;
+      e.preventDefault();
+      e.stopPropagation();
+      applyBind(rebinding, e.code);
+      return;
+    }
+
     const state = engine.state();
     if (state.mode !== 'recording' && state.mode !== 'countdown') return;
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
@@ -789,24 +890,35 @@ export function createCreatorPanel({
       drawFrame(engine.state());
       return;
     }
-    if (
-      ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'Digit1', 'Digit2', 'Digit3', 'Digit4'].includes(
-        e.code
-      )
-    ) {
-      e.preventDefault();
-      engine.keyDown(e.code);
+    if (!isBoundCode(e.code)) return;
+    e.preventDefault();
+    if (e.code === binds.fire && !String(binds.fire).startsWith('Mouse')) {
+      const result = engine.fire();
+      if (result) {
+        dirty = true;
+        renderRight();
+      }
+      return;
     }
+    engine.keyDown(e.code);
   }
 
   function onKeyUp(e) {
+    if (rebinding) return;
     engine.keyUp(e.code);
   }
 
-  window.addEventListener('keydown', onKeyDown);
+  function onRebindPointer(e) {
+    if (!rebinding) return;
+    e.preventDefault();
+    e.stopPropagation();
+    applyBind(rebinding, `Mouse${e.button}`);
+  }
+
+  window.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', () => engine.releaseKeys());
-
+  window.addEventListener('mousedown', onRebindPointer, true);
   // ---- actions ------------------------------------------------------------
 
   function startRecording(spawnId) {
@@ -835,10 +947,41 @@ export function createCreatorPanel({
   el.addEventListener('click', async (e) => {
     const t = e.target;
 
+    // Back to the rounds list — handle before settings dismiss so a re-render
+    // of the head cannot eat the click.
     if (t.closest('[data-close]')) {
       onClose?.();
       return;
     }
+
+    if (t.closest('[data-toggle-settings]')) {
+      settingsOpen = !settingsOpen;
+      rebinding = '';
+      renderHead();
+      return;
+    }
+    const rebindBtn = t.closest('[data-rebind]');
+    if (rebindBtn && !readOnly) {
+      const action = rebindBtn.dataset.rebind;
+      rebinding = rebinding === action ? '' : action;
+      settingsOpen = true;
+      renderHead();
+      return;
+    }
+    if (t.closest('[data-reset-binds]')) {
+      binds = saveBinds({ ...DEFAULT_BINDS });
+      engine.setBinds(binds);
+      rebinding = '';
+      renderHead();
+      return;
+    }
+    if (settingsOpen && !t.closest('.sc-settings')) {
+      settingsOpen = false;
+      rebinding = '';
+      renderHead();
+      return;
+    }
+
     const rec = t.closest('[data-record]');
     if (rec) {
       startRecording(rec.dataset.record);
@@ -1026,8 +1169,9 @@ export function createCreatorPanel({
     destroy() {
       engine.destroy();
       playLoop.stop();
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('mousedown', onRebindPointer, true);
       window.removeEventListener('resize', onResize);
       el.remove();
     }

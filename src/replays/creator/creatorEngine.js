@@ -9,8 +9,9 @@
 // accelerates and stops exactly like a player rather than sliding on rails.
 //
 // Collision is the painted vision-block layer: those pieces are the map's
-// walls as far as the 2D radar is concerned. Holding space lifts the check,
-// because a strat sometimes has to cross a wall the paint does not know about.
+// walls as far as the 2D radar is concerned. Holding the noclip bind lifts the
+// check, because a strat sometimes has to cross a wall the paint does not know
+// about.
 // ---------------------------------------------------------------------------
 
 import { srcAccelerate, srcFriction, UNIT } from '../../utils/SourceMovement.js';
@@ -23,6 +24,7 @@ import {
   normalizeYaw,
   pushSample
 } from './recordingFormat.js';
+import { DEFAULT_BINDS, UTIL_ACTION_TYPES } from './creatorBinds.js';
 
 /** Physics step. Fixed, so a slow frame cannot change how far a body travels. */
 const STEP_MS = 1000 / 128;
@@ -40,7 +42,8 @@ const MOVE_SPEED_MS = MOVE_SPEED_UNITS * UNIT;
  *   blockedAt?: (x: number, y: number) => boolean,
  *   onFrame?: (state: object) => void,
  *   onFinish?: (track: object) => void,
- *   selfDriven?: boolean
+ *   selfDriven?: boolean,
+ *   binds?: import('./creatorBinds.js').CreatorBinds
  * }} deps
  *   `selfDriven: false` leaves the clock to the caller through `advance(ms)`,
  *   which is what lets the movement model be tested without a display.
@@ -49,7 +52,8 @@ export function createCreatorEngine({
   blockedAt = null,
   onFrame = null,
   onFinish = null,
-  selfDriven = true
+  selfDriven = true,
+  binds = null
 } = {}) {
   /** @type {'idle'|'countdown'|'recording'|'playing'} */
   let mode = 'idle';
@@ -70,11 +74,17 @@ export function createCreatorEngine({
   /** Which grenade is in hand, or '' for a gun. */
   let equipped = '';
 
+  /** Physical key/mouse codes currently held. */
   const keys = new Set();
   let noclip = false;
 
+  /** @type {import('./creatorBinds.js').CreatorBinds} */
+  let keyBinds = { ...DEFAULT_BINDS, ...(binds || {}) };
+
   /** @type {{x: number, y: number}} cursor in world units */
   const cursor = { x: 0, y: 0 };
+
+  const held = (action) => keys.has(keyBinds[action]);
 
   const state = () => ({
     mode,
@@ -90,31 +100,19 @@ export function createCreatorEngine({
   // ---- movement -----------------------------------------------------------
 
   /**
-   * WASD in view space, the way the trainer reads it: W is wherever the body is
-   * looking, which is wherever the mouse is.
+   * WASD is screen-fixed on the radar: W up, S down, A left, D right.
+   * World Y grows north (screen up); world X grows east (screen right).
    */
   function wishDirection() {
-    let fwd = 0;
-    let side = 0;
-    if (keys.has('KeyW')) fwd += 1;
-    if (keys.has('KeyS')) fwd -= 1;
-    if (keys.has('KeyD')) side += 1;
-    if (keys.has('KeyA')) side -= 1;
-    if (!fwd && !side) return null;
-
-    const rad = (yaw * Math.PI) / 180;
-    const fx = Math.cos(rad);
-    const fy = Math.sin(rad);
-    // Right-hand normal of the facing vector; screen-right with y up in world.
-    const rx = fy;
-    const ry = -fx;
-    let x = fx * fwd + rx * side;
-    let y = fy * fwd + ry * side;
+    let x = 0;
+    let y = 0;
+    if (held('moveUp')) y += 1;
+    if (held('moveDown')) y -= 1;
+    if (held('moveRight')) x += 1;
+    if (held('moveLeft')) x -= 1;
+    if (!x && !y) return null;
     const len = Math.hypot(x, y);
-    if (len < 1e-6) return null;
-    x /= len;
-    y /= len;
-    return { x, y };
+    return { x: x / len, y: y / len };
   }
 
   const solid = (x, y) => Boolean(blockedAt && !noclip && blockedAt(x, y));
@@ -228,6 +226,16 @@ export function createCreatorEngine({
     loop?.stop();
   }
 
+  function equipFromCode(code) {
+    for (const [action, type] of Object.entries(UTIL_ACTION_TYPES)) {
+      if (keyBinds[action] === code) {
+        equipped = equipped === type ? '' : type;
+        return true;
+      }
+    }
+    return false;
+  }
+
   // ---- API ----------------------------------------------------------------
 
   return {
@@ -294,19 +302,33 @@ export function createCreatorEngine({
       }
     },
 
+    /** Replace the live key map (from settings). */
+    setBinds(next) {
+      keyBinds = { ...DEFAULT_BINDS, ...(next || {}) };
+      noclip = held('noclip');
+    },
+
+    getBinds() {
+      return { ...keyBinds };
+    },
+
     keyDown(code) {
       keys.add(code);
-      if (code === 'Space') noclip = true;
-      const slot = { Digit1: 'flashbang', Digit2: 'smokegrenade', Digit3: 'molotov', Digit4: 'hegrenade' }[code];
-      if (slot) equipped = equipped === slot ? '' : slot;
+      if (code === keyBinds.noclip) noclip = true;
+      equipFromCode(code);
     },
 
     keyUp(code) {
       keys.delete(code);
-      if (code === 'Space') noclip = false;
+      if (code === keyBinds.noclip) noclip = false;
     },
 
-    /** Left click: throw what is in hand, or fire a single shot. */
+    /** Put the nade away without toggling a slot. */
+    unequip() {
+      equipped = '';
+    },
+
+    /** Left click / fire bind: throw what is in hand, or fire a single shot. */
     fire() {
       if (mode !== 'recording' || !track) return null;
       if (equipped) {

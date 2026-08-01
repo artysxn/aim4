@@ -6434,6 +6434,34 @@ table.rp-mine-table tbody tr {
   min-width: 0;
 }
 
+.sc-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.12s var(--ease-smooth), color 0.12s var(--ease-smooth);
+}
+
+.sc-back:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #fff;
+}
+
+.sc-back svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  fill: currentColor;
+}
+
 .sc-title {
   margin: 0;
   font: 600 15px var(--font-body);
@@ -6441,6 +6469,121 @@ table.rp-mine-table tbody tr {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.sc-head-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.sc-settings {
+  position: relative;
+}
+
+.sc-settings-btn {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sc-settings-btn:hover,
+.sc-settings.is-open .sc-settings-btn {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #fff;
+}
+
+.sc-settings-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sc-settings-panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(300px, 86vw);
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #121212;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sc-settings.is-open .sc-settings-panel {
+  display: flex;
+}
+
+.sc-settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sc-settings-title {
+  font: 600 11px var(--font-body);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sc-bind-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sc-bind-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sc-bind-label {
+  font: 500 12px var(--font-body);
+  color: var(--text);
+}
+
+.sc-bind-key {
+  appearance: none;
+  min-width: 88px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #0c0c0c;
+  color: var(--muted);
+  font: 600 11px var(--font-body);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  text-align: center;
+}
+
+.sc-bind-key:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: var(--text);
+}
+
+.sc-bind-key.listening {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .sc-dirty {

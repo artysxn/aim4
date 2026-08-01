@@ -382,16 +382,20 @@ let inviteCode = '';
 }
 
 /**
- * A shared 2D round lands on aim4.io/s2/<code>. Same trick as the invite: lift
- * the code out and rewrite the URL, so a refresh does not re-resolve a link the
- * viewer has already opened.
+ * A shared 2D round lands on aim4.io/s2/<code>. Keep the code in the query
+ * string after rewriting so a refresh / auth race cannot lose it — the creator
+ * view reads `?share=` the same way onShow gets it from setView.
  */
 let sharedRoundCode = '';
 {
   const m = cleanPath().match(/^\/s2\/([A-Za-z0-9_-]{6,32})$/);
   if (m) {
     sharedRoundCode = m[1];
-    window.history.replaceState(null, '', '/team/creator');
+    window.history.replaceState(
+      null,
+      '',
+      `/team/creator?share=${encodeURIComponent(sharedRoundCode)}`
+    );
   }
 }
 
