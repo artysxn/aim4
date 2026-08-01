@@ -22,6 +22,25 @@ process.env.AIM4_REPLAY_DIR = ROOT;
 const CAP = 4 * 1024 * 1024;
 process.env.AIM4_MAX_UPLOAD_BYTES = String(CAP);
 
+// Uploads need a verified account. Rather than punching a hole in identity.js,
+// point it at a stub that answers Supabase's /auth/v1/user, so the real
+// verification path (bearer header, fetch, cache) is what the test exercises.
+const TOKEN = 'test-token';
+const authStub = http.createServer((req, res) => {
+  const authorized = req.headers.authorization === `Bearer ${TOKEN}`;
+  res.writeHead(authorized ? 200 : 401, { 'Content-Type': 'application/json' });
+  res.end(
+    JSON.stringify(
+      authorized
+        ? { id: 'user-1', email: 'tester@aim4.io', user_metadata: { username: 'tester' } }
+        : { error: 'bad token' }
+    )
+  );
+});
+await new Promise((r) => authStub.listen(0, '127.0.0.1', r));
+process.env.SUPABASE_URL = `http://127.0.0.1:${authStub.address().port}`;
+process.env.SUPABASE_ANON_KEY = 'anon';
+
 const { handleReplayRequest } = await import('./routes.js');
 const { MAX_UPLOAD_BYTES } = await import('./demoStore.js');
 assert(MAX_UPLOAD_BYTES === CAP, 'cap is configurable');
@@ -49,10 +68,11 @@ function chunked(size) {
   );
 }
 
-function post(body, { filename = 'bundle.zip', length = null } = {}) {
+function post(body, { filename = 'bundle.zip', length = null, token = TOKEN } = {}) {
   return new Promise((resolve) => {
     const u = new URL(`${base}/api/replays/demos`);
     const headers = { 'X-Aim4-Filename': filename, 'Content-Type': 'application/octet-stream' };
+    if (token) headers.Authorization = `Bearer ${token}`;
     if (length !== null) headers['Content-Length'] = String(length);
     const req = http.request(
       { hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers },
@@ -66,6 +86,16 @@ function post(body, { filename = 'bundle.zip', length = null } = {}) {
     if (Buffer.isBuffer(body)) req.end(body);
     else body.pipe(req);
   });
+}
+
+// ---- uploading needs an account ---------------------------------------------
+
+{
+  const res = await post(Buffer.alloc(1024, 3), { filename: 'ok.zip', token: '' });
+  assert(res.status === 401, `signed-out upload should be 401, got ${res.status}`);
+  const tmp = (await fsp.readdir(ROOT)).filter((f) => f.startsWith('.upload-'));
+  assert(tmp.length === 0, 'nothing was written for a signed-out upload');
+  console.log('  signed-out upload refused before any bytes land');
 }
 
 // ---- declared oversize is refused before anything is written ----------------
@@ -155,5 +185,6 @@ function post(body, { filename = 'bundle.zip', length = null } = {}) {
 }
 
 server.close();
+authStub.close();
 await fsp.rm(ROOT, { recursive: true, force: true });
 console.log('uploadLimit: all assertions passed');

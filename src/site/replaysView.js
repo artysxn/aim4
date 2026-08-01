@@ -20,6 +20,7 @@ import {
   refreshStats,
   renameDemoTeams,
   reparseDemo,
+  savePlaylist,
   uploadDemo,
   uploadImport
 } from '../replays/api.js';
@@ -49,7 +50,7 @@ function svgIcon(raw) {
   return raw.replace('<svg', '<svg class="rp-mark-svg" aria-hidden="true"');
 }
 
-export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = null }) {
+export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, onNavigate = null }) {
   const uploadInput = document.getElementById('rp-file');
   const dropEl = document.getElementById('rp-drop');
   const quotaEl = document.getElementById('rp-quota');
@@ -121,6 +122,11 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
   let statsPanel = null;
   /** @type {{demos?: string[], files?: string[], title?: string}} */
   let statsScope = {};
+  /** From /status: who the backend thinks is calling, and what they may do. */
+  let account = { signedIn: false, id: '', username: '', admin: false, maxDemos: 5 };
+  /** Visibility applied to the next upload. */
+  let uploadVisibility = 'public';
+  const mineEl = document.getElementById('rp-mine');
   let teamSearch = '';
   let playerSearch = '';
   let mapMenuOpen = false;
@@ -199,6 +205,7 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
    * after transferring a few gigabytes is the worst possible moment.
    */
   function renderCapabilities(status) {
+    if (status?.account) account = { ...account, ...status.account };
     if (!parserEl) return;
     const notes = [];
     const parser = status?.parser;
@@ -401,28 +408,150 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
     </button>`;
   }
 
-  function rowMetaHtml(when, mapCode, mapName) {
+  /**
+   * Uploader line under the date. The colour is the visibility: gray public,
+   * green unlisted, red private, which is the fastest way to read a library
+   * where most rows are someone else's.
+   */
+  function byLineHtml(owner) {
+    const visibility = owner?.visibility || 'public';
+    const name = owner?.username || 'artysan';
+    const title =
+      visibility === 'private'
+        ? 'Private: only the uploader can open this'
+        : visibility === 'unlisted'
+          ? 'Unlisted: the uploader, their team, and anyone with the link'
+          : 'Public: anyone on the site';
+    return `<span class="rp-by ${visibility}" title="${escapeHtml(title)}">by @${escapeHtml(
+      name
+    )}</span>`;
+  }
+
+  function rowMetaHtml(when, mapCode, mapName, owner = null) {
     return `
       <div class="rp-row-meta">
-        <span class="rp-row-when">${escapeHtml(when)}</span>
+        <span class="rp-row-when-block">
+          <span class="rp-row-when">${escapeHtml(when)}</span>
+          ${byLineHtml(owner)}
+        </span>
         ${mapIconHtml(mapCode, mapName)}
       </div>`;
+  }
+
+  const VISIBILITY_OPTIONS = [
+    { key: 'public', label: 'Public', note: 'Anyone on the site can watch it.' },
+    { key: 'unlisted', label: 'Unlisted', note: 'Your team, and anyone with the link.' },
+    { key: 'private', label: 'Private', note: 'Only you, link or not.' }
+  ];
+
+  /** Demos this account uploaded. Admins see the whole library here. */
+  function myDemos() {
+    if (!account.signedIn) return [];
+    if (account.admin) return demos;
+    return demos.filter((d) => (d.owner?.id || '') === account.id);
+  }
+
+  function renderMine() {
+    if (!mineEl) return;
+    if (!account.signedIn) {
+      mineEl.innerHTML =
+        '<p class="view-empty">Sign in to upload demos and manage your own uploads.</p>';
+      return;
+    }
+    const mine = myDemos();
+    const cap = account.admin ? 0 : account.maxDemos || 5;
+    const capLine = cap
+      ? `${mine.length} of ${cap} uploads used`
+      : `${mine.length} uploads (no limit on this account)`;
+
+    const rows = mine
+      .slice()
+      .sort((a, b) => (b.uploadedAt || b.parsedAt || 0) - (a.uploadedAt || a.parsedAt || 0))
+      .map((d) => {
+        const id = escapeHtml(d.id);
+        const mapName = d.mapName || (d.map ? MAPS[d.map]?.name : '') || '';
+        const visibility = d.owner?.visibility || 'public';
+        return `
+        <tr data-id="${id}">
+          <td class="rp-mine-when">${escapeHtml(formatWhen(d.uploadedAt || d.parsedAt))}</td>
+          <td class="rp-mine-match">${escapeHtml(d.team1?.name || 'Team 1')} vs ${escapeHtml(
+            d.team2?.name || 'Team 2'
+          )}</td>
+          <td class="rp-mine-map">${escapeHtml(mapName)}</td>
+          <td>${byLineHtml(d.owner)}</td>
+          <td class="rp-mine-actions">
+            <button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>
+            <button type="button" class="rp-btn-icon danger" data-delete="${id}" title="Delete">${deleteIconHtml()}</button>
+          </td>
+        </tr>`;
+      })
+      .join('');
+
+    mineEl.innerHTML = `
+      <div class="rp-mine-head">
+        <h3 class="rp-mine-title">My uploads</h3>
+        <span class="rp-mine-cap">${escapeHtml(capLine)}</span>
+      </div>
+      <div class="rp-vis-picker">
+        <span class="rp-vis-label">New uploads are</span>
+        <div class="rp-chips">
+          ${VISIBILITY_OPTIONS.map(
+            (o) =>
+              `<button type="button" class="rp-chip vis-${o.key}${
+                uploadVisibility === o.key ? ' active' : ''
+              }" data-visibility="${o.key}" title="${escapeHtml(o.note)}">${escapeHtml(
+                o.label
+              )}</button>`
+          ).join('')}
+        </div>
+        <span class="rp-vis-note">${escapeHtml(
+          VISIBILITY_OPTIONS.find((o) => o.key === uploadVisibility)?.note || ''
+        )}</span>
+      </div>
+      ${
+        rows
+          ? `<table class="rp-mine-table">
+              <thead><tr><th>Uploaded</th><th>Match</th><th>Map</th><th>Visibility</th><th></th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>`
+          : '<p class="view-empty">You have not uploaded anything yet.</p>'
+      }`;
+  }
+
+  /**
+   * Who may rename or delete a demo. The server enforces uploader-or-admin;
+   * this is the narrower UI rule.
+   *
+   * @param {object} d
+   * @param {boolean} [own]  true on the My Uploads page, where the uploader's
+   *   own rows carry the controls. The library list keeps them for site admins
+   *   only, so a shared library does not sprout a delete button on every row.
+   */
+  function canManageDemo(d, own = false) {
+    if (account.admin) return true;
+    if (!own) return false;
+    return Boolean(account.id) && (d?.owner?.id || '') === account.id;
   }
 
   function demoActionsHtml(d) {
     const status = d.status || 'ready';
     const id = escapeHtml(d.id);
+    const mine = canManageDemo(d);
     return `
       <div class="rp-row-actions">
         ${status === 'error' ? `<button type="button" class="btn btn-sm" data-retry="${id}">Retry</button>` : ''}
         ${
-          status === 'ready'
+          status === 'ready' && mine
             ? `<button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>`
             : ''
         }
-        <button type="button" class="rp-btn-icon danger" data-delete="${id}" title="Delete">
+        ${
+          mine
+            ? `<button type="button" class="rp-btn-icon danger" data-delete="${id}" title="Delete">
           ${deleteIconHtml()}
-        </button>
+        </button>`
+            : ''
+        }
         ${
           status === 'ready'
             ? `<button type="button" class="rp-btn-play" data-open="${id}" title="Replay">${playIconHtml()}</button>`
@@ -457,7 +586,7 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
 
     return `
       <div class="rp-row ${status}" data-id="${escapeHtml(d.id)}">
-        ${rowMetaHtml(formatWhen(d.uploadedAt || d.parsedAt), d.map, mapName)}
+        ${rowMetaHtml(formatWhen(d.uploadedAt || d.parsedAt), d.map, mapName, d.owner)}
         ${matchBlockHtml(t1, t2, demoScoreText(d), {
           id1: d.team1?.id,
           id2: d.team2?.id
@@ -843,7 +972,31 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
     e.returnValue = '';
   });
 
+  mineEl?.addEventListener('click', (e) => {
+    const vis = e.target.closest('[data-visibility]');
+    if (vis) {
+      uploadVisibility = vis.dataset.visibility;
+      renderMine();
+      return;
+    }
+    // Rename / delete share the library's handler, so the dialogs, the
+    // confirmation and the refresh all behave the same on both pages.
+    handleDemoAction(e.target);
+  });
+
   async function startUpload(fileList) {
+    if (!account.signedIn) {
+      setStatus('Sign in to upload demos.', true);
+      return;
+    }
+    const cap0 = account.admin ? 0 : account.maxDemos || 5;
+    if (cap0 && myDemos().length >= cap0) {
+      setStatus(
+        `You already have ${myDemos().length} demos uploaded. Delete one first (limit ${cap0}).`,
+        true
+      );
+      return;
+    }
     const { ok, skipped, tooBig } = pickUploadFiles(fileList);
     const cap = `${Math.round(maxUploadBytes / 1024 ** 3)} GB`;
     if (!ok.length) {
@@ -908,7 +1061,7 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
           continue;
         }
 
-        const res = await uploadDemo(file, onProgress);
+        const res = await uploadDemo(file, onProgress, uploadVisibility);
         renderQuota(res.usage);
         rememberBatch(res.batch.id, name);
         queued.push({ id: res.batch.id, name, label });
@@ -1783,17 +1936,21 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
     return `
       <div class="rp-row rp-demo-head" data-toggle-demo="${id}" role="button" tabindex="0"
         aria-expanded="${open ? 'true' : 'false'}">
-        ${rowMetaHtml(when, mapCode, mapName)}
+        ${rowMetaHtml(when, mapCode, mapName, d?.owner)}
         ${matchBlockHtml(t1, t2, score, {
           id1: d?.team1?.id || sample?.team1,
           id2: d?.team2?.id || sample?.team2
         })}
         <div class="rp-row-actions">
           <button type="button" class="rp-btn-icon" data-demo-stats="${id}" title="Database for this match">${statsIconHtml()}</button>
-          <button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>
+          ${
+            canManageDemo(d)
+              ? `<button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>
           <button type="button" class="rp-btn-icon danger" data-delete="${id}" title="Delete">
             ${deleteIconHtml()}
-          </button>
+          </button>`
+              : ''
+          }
           <button type="button" class="rp-btn-play" data-open="${id}" title="Replay">${playIconHtml()}</button>
         </div>
       </div>`;
@@ -2241,24 +2398,48 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
     playlistsBody.innerHTML = `
       <table class="rp-playlist-table">
         <thead>
-          <tr><th>Playlist</th><th>Last modified</th><th>Rounds</th><th></th></tr>
+          <tr><th>Playlist</th><th>Owner</th><th>Shared with</th><th>Last modified</th><th>Rounds</th><th></th></tr>
         </thead>
         <tbody>
           ${playlistLists
-            .map(
-              (p) => `
+            .map((p) => {
+              const scope = p.scope === 'team' ? 'team' : 'private';
+              // The server already decided this (owner or site admin); it also
+              // answers before /status has necessarily been read on this page.
+              const mine =
+                p.mine === undefined
+                  ? !p.ownerId || p.ownerId === account.id || account.admin
+                  : Boolean(p.mine);
+              return `
             <tr data-id="${escapeHtml(p.id)}">
               <td class="rp-pl-name">${escapeHtml(p.name)}</td>
+              <td class="rp-pl-owner">@${escapeHtml(p.ownerName || 'artysan')}</td>
+              <td class="rp-pl-scope">
+                ${
+                  mine
+                    ? `<select class="site-select rp-pl-scope-select" data-scope="${escapeHtml(p.id)}">
+                        <option value="private"${scope === 'private' ? ' selected' : ''}>Only me</option>
+                        <option value="team"${scope === 'team' ? ' selected' : ''}>My team</option>
+                      </select>`
+                    : scope === 'team'
+                      ? 'My team'
+                      : 'Only me'
+                }
+              </td>
               <td class="rp-pl-when">${escapeHtml(formatWhen(p.updatedAt || p.createdAt))}</td>
               <td class="rp-pl-count">${(p.rounds || []).length}</td>
               <td class="rp-pl-actions">
                 <button type="button" class="rp-btn-replay" data-play="${escapeHtml(p.id)}">▶ Replay</button>
-                <button type="button" class="rp-btn-icon danger" data-drop="${escapeHtml(p.id)}" title="Delete playlist">
-                  ${deleteIconHtml()}
-                </button>
+                ${
+                  mine
+                    ? `<button type="button" class="rp-btn-icon danger" data-drop="${escapeHtml(
+                        p.id
+                      )}" title="Delete playlist">${deleteIconHtml()}</button>`
+                    : ''
+                }
               </td>
-            </tr>`
-            )
+            </tr>`;
+            })
             .join('')}
         </tbody>
       </table>`;
@@ -2319,6 +2500,19 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
       startPolling();
     }
   }
+  playlistsBody?.addEventListener('change', async (e) => {
+    const scope = e.target.closest('[data-scope]');
+    if (!scope) return;
+    try {
+      playlistLists = await savePlaylist({ id: scope.dataset.scope, scope: scope.value });
+      renderPlaylistsPage();
+      setStatus(scope.value === 'team' ? 'Playlist shared with your team.' : 'Playlist is private.');
+    } catch (err) {
+      setStatus(err.message, true);
+      renderPlaylistsPage();
+    }
+  });
+
   playlistsBody?.addEventListener('click', async (e) => {
     const play = e.target.closest('[data-play]');
     const drop = e.target.closest('[data-drop]');
@@ -2456,6 +2650,7 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
       rebuildTeamClusters();
       renderDemos();
       renderFilters();
+      renderMine();
       await runQuery();
     } catch (err) {
       setLocked(false);
@@ -2498,6 +2693,13 @@ export function initReplaysView({ escapeHtml, pathForPage = null, onNavigate = n
     if (pollTimer) window.clearInterval(pollTimer);
     pollTimer = 0;
   }
+
+  // Signing in (or out) changes what the library contains, whether uploading is
+  // allowed, and which rows carry a rename button. Re-read rather than leaving
+  // the page showing the previous session's answer.
+  auth?.onChange?.(() => {
+    if (visible) refresh();
+  });
 
   return {
     onShow(params = {}) {

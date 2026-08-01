@@ -17,6 +17,7 @@ import { MultiplayerServer } from './lobby.js';
 import { FootballServer } from './football.js';
 import { tryServeStatic, distExists } from './static.js';
 import { handleReplayRequest } from './replays/routes.js';
+import { handleTeamRequest } from './replays/teamRoutes.js';
 import { checkCaseSensitivity, sweepStaleUploads } from './replays/demoStore.js';
 import { resumeInterruptedParses, sweepBatchFiles } from './replays/jobs.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
@@ -83,6 +84,12 @@ const server = http.createServer(async (req, res) => {
     // below, which allows neither Authorization nor the upload's own headers —
     // answering a replay preflight there makes the browser refuse the upload.
     if (url.pathname.startsWith('/api/replays') && (await handleReplayRequest(req, res, url))) {
+      return;
+    }
+
+    // Same reasoning as replays: teams answer their own preflight, because the
+    // generic OPTIONS reply below does not allow the Authorization header.
+    if (url.pathname.startsWith('/api/teams') && (await handleTeamRequest(req, res, url))) {
       return;
     }
 

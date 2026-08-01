@@ -903,11 +903,26 @@ function cleanRoundNames(rounds) {
   return out;
 }
 
-/** Create or update one playlist. Returns the whole list. */
-export async function upsertPlaylist(user, patch = {}) {
+/**
+ * Create or update one playlist. Returns the whole list.
+ *
+ * `actor` carries the account the playlist belongs to. A playlist is either
+ * private (its owner alone) or team (everyone on the team it was made for),
+ * and only the owner may edit it once it exists.
+ *
+ * @param {{id: string, username: string, admin?: boolean, teamId?: string}} [actor]
+ */
+export async function upsertPlaylist(user, patch = {}, actor = null) {
   const list = await readPlaylists(user);
   const id = String(patch.id || '').replace(/[^A-Za-z0-9_-]/g, '');
   const existing = id ? list.find((p) => p.id === id) : null;
+
+  if (existing && actor && !actor.admin && existing.ownerId && existing.ownerId !== actor.id) {
+    const err = new Error('That playlist belongs to someone else.');
+    err.status = 403;
+    throw err;
+  }
+  const scope = patch.scope === 'team' ? 'team' : patch.scope === 'private' ? 'private' : null;
 
   if (!existing && list.length >= MAX_PLAYLISTS) {
     const err = new Error(`You can keep ${MAX_PLAYLISTS} playlists. Delete one first.`);
@@ -922,11 +937,18 @@ export async function upsertPlaylist(user, patch = {}) {
     existing.name = name;
     existing.rounds = rounds;
     existing.updatedAt = Date.now();
+    if (scope) existing.scope = scope;
+    if (scope === 'team' && actor?.teamId) existing.teamId = actor.teamId;
+    if (scope === 'private') existing.teamId = '';
   } else {
     list.push({
       id: crypto.randomBytes(6).toString('hex'),
       name,
       rounds,
+      ownerId: actor?.id || '',
+      ownerName: actor?.username || '',
+      scope: scope || 'private',
+      teamId: scope === 'team' ? actor?.teamId || '' : '',
       createdAt: Date.now(),
       updatedAt: Date.now()
     });
@@ -935,9 +957,15 @@ export async function upsertPlaylist(user, patch = {}) {
   return savePlaylists(user, list);
 }
 
-export async function removePlaylist(user, id) {
+export async function removePlaylist(user, id, actor = null) {
   const key = String(id || '').replace(/[^A-Za-z0-9_-]/g, '');
   const list = await readPlaylists(user);
+  const target = list.find((p) => p.id === key);
+  if (target && actor && !actor.admin && target.ownerId && target.ownerId !== actor.id) {
+    const err = new Error('That playlist belongs to someone else.');
+    err.status = 403;
+    throw err;
+  }
   const next = list.filter((p) => p.id !== key);
   if (next.length === list.length) return null;
   return savePlaylists(user, next);

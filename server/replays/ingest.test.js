@@ -21,7 +21,32 @@ const ROOT = await fsp.mkdtemp(path.join(os.tmpdir(), 'aim4-ingest-'));
 process.env.AIM4_REPLAY_DIR = ROOT;
 process.env.AIM4_PARSE_ATTEMPTS = '1'; // no point retrying a fixture
 
+// Uploads are account-gated, so this drives the real verification path against
+// a stub that speaks Supabase's /auth/v1/user.
+const TOKEN = 'test-token';
+const authStub = http.createServer((req, res) => {
+  const authorized = req.headers.authorization === `Bearer ${TOKEN}`;
+  res.writeHead(authorized ? 200 : 401, { 'Content-Type': 'application/json' });
+  res.end(
+    JSON.stringify(
+      authorized
+        ? { id: 'user-1', email: 'tester@aim4.io', user_metadata: { username: 'tester' } }
+        : { error: 'bad token' }
+    )
+  );
+});
+await new Promise((r) => authStub.listen(0, '127.0.0.1', r));
+process.env.SUPABASE_URL = `http://127.0.0.1:${authStub.address().port}`;
+process.env.SUPABASE_ANON_KEY = 'anon';
+
 const { handleReplayRequest } = await import('./routes.js');
+
+/** Every call the browser makes carries the session token; so does this one. */
+const authed = (url, init = {}) =>
+  fetch(url, {
+    ...init,
+    headers: { ...(init.headers || {}), Authorization: `Bearer ${TOKEN}` }
+  });
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -63,7 +88,9 @@ const upload = await fetch(`${base}/api/replays/demos`, {
   method: 'POST',
   headers: {
     'Content-Type': 'application/octet-stream',
-    'X-Aim4-Filename': 'bundle.zip'
+    'X-Aim4-Filename': 'bundle.zip',
+    Authorization: `Bearer ${TOKEN}`,
+    'X-Aim4-Visibility': 'unlisted'
   },
   body: zip
 });
@@ -117,13 +144,20 @@ console.log(`  batch reported ${last.totals.files} demos unpacked, junk ignored`
 
 {
   assert(last.stage === 'error' || last.stage === 'done', `batch settled, got ${last.stage}`);
-  const listed = await (await fetch(`${base}/api/replays/demos`)).json();
+  const listed = await (await authed(`${base}/api/replays/demos`)).json();
   assert(listed.demos.length === 2, `library lists both demos, got ${listed.demos.length}`);
   for (const d of listed.demos) {
     assert(d.status === 'error', `fixture demo should fail to parse, got ${d.status}`);
     assert(d.error, 'a failed demo carries an error message');
   }
+  for (const d of listed.demos) {
+    assert(d.owner?.username === 'tester', `upload is credited to its uploader: ${d.owner?.username}`);
+    assert(d.owner?.visibility === 'unlisted', `visibility is stored: ${d.owner?.visibility}`);
+  }
+  const anonView = await (await fetch(`${base}/api/replays/demos`)).json();
+  assert(anonView.demos.length === 0, 'an unlisted upload is not browsable signed out');
   console.log('  both fixtures reported as failed parses with a reason');
+  console.log('  uploads carry their uploader and stay out of the signed-out library');
 }
 
 // ---- an upload that unpacks to nothing must say so --------------------------
@@ -133,7 +167,7 @@ console.log(`  batch reported ${last.totals.files} demos unpacked, junk ignored`
   // has no per-file outcomes, so counting only files reported "nothing
   // succeeded and nothing failed" and the UI printed "Upload complete." over
   // the top of the real error. The reason has to survive on the batch.
-  const res = await fetch(`${base}/api/replays/demos`, {
+  const res = await authed(`${base}/api/replays/demos`, {
     method: 'POST',
     headers: { 'X-Aim4-Filename': 'cs2-demos.rar' },
     body: Buffer.alloc(4096, 7)
@@ -158,7 +192,7 @@ console.log(`  batch reported ${last.totals.files} demos unpacked, junk ignored`
 // ---- refusals ---------------------------------------------------------------
 
 {
-  const res = await fetch(`${base}/api/replays/demos`, {
+  const res = await authed(`${base}/api/replays/demos`, {
     method: 'POST',
     headers: { 'X-Aim4-Filename': 'notes.txt' },
     body: Buffer.from('nope')
@@ -170,5 +204,6 @@ console.log(`  batch reported ${last.totals.files} demos unpacked, junk ignored`
 }
 
 server.close();
+authStub.close();
 await fsp.rm(ROOT, { recursive: true, force: true });
 console.log('ingest: all assertions passed');

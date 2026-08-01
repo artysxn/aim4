@@ -54,6 +54,32 @@
           <div class="side-divider"></div>
 
           <div class="side-cat">
+            <span class="side-cat-label">Team</span>
+            <a class="side-link" href="/team" data-nav="team">
+              <span class="side-icon" data-icon="team"></span>
+              <span class="side-label">Overview</span>
+            </a>
+            <a class="side-link" href="/team/documents" data-nav="team-documents">
+              <span class="side-icon" data-icon="team-docs"></span>
+              <span class="side-label">Documents</span>
+            </a>
+            <a class="side-link" href="/team/roles" data-nav="team-roles">
+              <span class="side-icon" data-icon="team-positions"></span>
+              <span class="side-label">Roles &amp; Positions</span>
+            </a>
+            <a class="side-link" href="/team/stratbook" data-nav="team-stratbook">
+              <span class="side-icon" data-icon="team-stratbook"></span>
+              <span class="side-label">Stratbook Editor</span>
+            </a>
+            <a class="side-link" href="/team/strategies" data-nav="team-strategies">
+              <span class="side-icon" data-icon="team-strategies"></span>
+              <span class="side-label">My Strategies</span>
+            </a>
+          </div>
+
+          <div class="side-divider"></div>
+
+          <div class="side-cat">
             <span class="side-cat-label">Training</span>
             <a class="side-link" href="/training" data-nav="training">
               <span class="side-icon" data-icon="gamemodes"></span>
@@ -192,6 +218,10 @@
                 </div>
                 <div class="rp-quota" id="rp-quota"></div>
               </div>
+
+              <div class="rp-mine" id="rp-mine">
+                <p class="view-empty">Loading…</p>
+              </div>
             </div>
 
             <div class="view-pad view-pad-fill rp-playlists-page" id="rp-playlists-page" hidden>
@@ -220,6 +250,13 @@
                 <h2 class="rp-playlists-title">Charts</h2>
                 <div id="rp-charts-body"></div>
               </div>
+            </div>
+          </section>
+
+          <!-- Team -------------------------------------------------------- -->
+          <section class="view" data-view="team">
+            <div class="view-pad view-pad-fill tm-shell" id="tm-shell">
+              <p class="view-empty">Loading…</p>
             </div>
           </section>
 

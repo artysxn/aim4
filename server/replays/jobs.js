@@ -340,7 +340,7 @@ function settleBatch(batch) {
  * that holding the HTTP response open for it is how uploads die behind a proxy.
  * The client gets a batch id immediately and polls.
  */
-export function startIngest({ user, filename, source, sizeBytes, allowedBytes }) {
+export function startIngest({ user, filename, source, sizeBytes, allowedBytes, owner = null }) {
   const batch = {
     id: crypto.randomBytes(8).toString('hex'),
     user,
@@ -393,6 +393,11 @@ export function startIngest({ user, filename, source, sizeBytes, allowedBytes })
           filename: file.name,
           sizeBytes: file.sizeBytes,
           uploadedAt: Date.now(),
+          // Stamped at ingest, not at parse: a demo that fails to parse still
+          // belongs to whoever uploaded it, and still counts against their cap.
+          uploaderId: owner?.uploaderId || '',
+          uploaderName: owner?.uploaderName || '',
+          visibility: owner?.visibility || 'public',
           rounds: []
         });
       }

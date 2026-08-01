@@ -58,6 +58,19 @@ import { forgetDemoIndex, refreshLibraryStats, scheduleStatsIndex, statsPayload 
 import { isAcceptedUpload, rarSupport } from './archive.js';
 import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
 import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
+import { LEGACY_UPLOADER, whoami } from './identity.js';
+import { ownedTeam, teamsOf } from './teamsStore.js';
+import {
+  accessFor,
+  canManage,
+  canSee,
+  normalizeVisibility,
+  ownerOf,
+  recordForRoundFile,
+  roundOwnerIndex,
+  visibleDemoIds,
+  visibleRecords
+} from './visibility.js';
 import { importReplayPackage } from './importPackage.js';
 import { PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
 import { clusterTeams } from '../../src/replays/shared/teamClusters.js';
@@ -253,6 +266,20 @@ async function volumeReadProbe() {
 }
 
 /** Merge the stored record with live job progress. */
+/** Uploads one non-admin account may hold at once. */
+export const MAX_DEMOS_PER_USER = Number(process.env.AIM4_MAX_DEMOS_PER_USER || 5);
+
+/**
+ * @returns {Promise<string>} an error message when the caller is at their cap,
+ *   or an empty string when they may upload.
+ */
+async function uploadCapReached(library, me) {
+  if (me.admin) return '';
+  const mine = (await listDemos(library)).filter((r) => r.uploaderId === me.id);
+  if (mine.length < MAX_DEMOS_PER_USER) return '';
+  return `You already have ${mine.length} demos uploaded. Delete one before uploading another (limit ${MAX_DEMOS_PER_USER}).`;
+}
+
 function withJob(user, record) {
   const job = jobStatus(user, record.id);
   if (!job) {
@@ -319,9 +346,70 @@ export async function handleReplayRequest(req, res, url) {
     return true;
   }
 
-  // Shared public library — identify always succeeds (no sign-in gate).
+  // The library folder is shared; who is asking is a separate question.
   const auth = await identify(req);
   const user = auth.user;
+  const me = await whoami(req);
+  const access = await accessFor(me);
+
+  /** Records the caller may browse, with ownership stamped on for the client. */
+  const readable = async () => {
+    const records = await listDemos(user);
+    return { records, allowed: visibleRecords(records, access) };
+  };
+
+  /**
+   * May the caller open this round file? Round URLs are the link case, which
+   * is exactly what "unlisted" is for: the file name is the link.
+   */
+  const canOpenRound = async (file) => {
+    const { records } = await readable();
+    const record = recordForRoundFile(file, records);
+    // No owning record: a round that predates materialization. Library default.
+    if (!record) return true;
+    return canSee(record, access, { viaLink: true });
+  };
+
+  /**
+   * Playlists the caller may see: their own, plus team playlists from any team
+   * they are on. Playlists made before accounts belong to the legacy uploader,
+   * so they stay with the admin accounts rather than disappearing.
+   */
+  const playlistsFor = async () => {
+    const list = await readPlaylists(user);
+    const myTeams = me.signedIn ? await teamsOf(me.id) : [];
+    const teamIds = new Set(myTeams.map((t) => t.id));
+    return list
+      .map((pl) => ({
+        ...pl,
+        ownerId: pl.ownerId || LEGACY_UPLOADER.id,
+        ownerName: pl.ownerName || LEGACY_UPLOADER.username,
+        scope: pl.scope === 'team' ? 'team' : 'private'
+      }))
+      .filter((pl) => {
+        if (me.admin) return true;
+        if (!me.signedIn) return false;
+        if (pl.ownerId === me.id) return true;
+        return pl.scope === 'team' && pl.teamId && teamIds.has(pl.teamId);
+      })
+      .map((pl) => ({ ...pl, mine: pl.ownerId === me.id || me.admin }));
+  };
+
+  /** The team a new team-scoped playlist belongs to: owned first, else first joined. */
+  const playlistTeamId = async () => {
+    if (!me.signedIn) return '';
+    const owned = await ownedTeam(me.id);
+    if (owned) return owned.id;
+    const [first] = await teamsOf(me.id);
+    return first?.id || '';
+  };
+
+  /** 401 unless signed in. */
+  const requireUser = () => {
+    if (me.signedIn) return true;
+    json(res, 401, { error: 'Sign in to do that.' });
+    return false;
+  };
 
   // ---- status -------------------------------------------------------------
   if (req.method === 'GET' && p === '/api/replays/status') {
@@ -329,6 +417,13 @@ export async function handleReplayRequest(req, res, url) {
       parser: parserStatus(),
       auth: authStatus(),
       usage: await usage(user),
+      account: {
+        signedIn: me.signedIn,
+        id: me.id,
+        username: me.username,
+        admin: me.admin,
+        maxDemos: me.admin ? 0 : MAX_DEMOS_PER_USER
+      },
       limits: { maxBytes: MAX_BYTES, maxUploadBytes: MAX_UPLOAD_BYTES },
       // .rar needs an external extractor, so whether it works is a property of
       // the host rather than of the code.
@@ -339,8 +434,9 @@ export async function handleReplayRequest(req, res, url) {
 
   // ---- library ------------------------------------------------------------
   if (req.method === 'GET' && p === '/api/replays/demos') {
-    const records = await listDemos(user);
-    const byId = new Set(records.map((r) => r.id));
+    const { records: allRecords, allowed } = await readable();
+    const records = allowed;
+    const byId = new Set(allRecords.map((r) => r.id));
     // Jobs whose record has not landed yet (upload just finished). Terminal
     // error/done jobs must not reappear here — otherwise deleting a failed
     // parse removes the record and the same demo pops back from memory.
@@ -369,7 +465,7 @@ export async function handleReplayRequest(req, res, url) {
     const offset = Math.max(0, Number(url.searchParams.get('offset') || 0) || 0);
     const page =
       limit > 0 ? records.slice(offset, offset + limit) : offset ? records.slice(offset) : records;
-    const mapped = page.map((r) => withJob(user, r));
+    const mapped = page.map((r) => ({ ...withJob(user, r), owner: ownerOf(r) }));
     // Pending parses always surface on the first page so uploads stay visible.
     const demos = offset === 0 ? [...pending, ...mapped] : mapped;
 
@@ -391,6 +487,12 @@ export async function handleReplayRequest(req, res, url) {
   }
 
   if (req.method === 'POST' && p === '/api/replays/demos') {
+    if (!requireUser()) return true;
+    const overCap = await uploadCapReached(user, me);
+    if (overCap) {
+      json(res, 403, { error: overCap });
+      return true;
+    }
     const filename = String(req.headers['x-aim4-filename'] || 'match.dem').slice(0, 160);
     if (!isAcceptedUpload(filename)) {
       json(res, 400, {
@@ -438,7 +540,12 @@ export async function handleReplayRequest(req, res, url) {
       filename,
       source: saved.path,
       sizeBytes: saved.sizeBytes,
-      allowedBytes: Math.max(0, gate.usage.bytesLeft - saved.sizeBytes)
+      allowedBytes: Math.max(0, gate.usage.bytesLeft - saved.sizeBytes),
+      owner: {
+        uploaderId: me.id,
+        uploaderName: me.username,
+        visibility: normalizeVisibility(req.headers['x-aim4-visibility'])
+      }
     });
     json(res, 202, { batch: batchStatus(batch), usage: await usage(user) });
     return true;
@@ -499,14 +606,20 @@ export async function handleReplayRequest(req, res, url) {
     const id = demoMatch[1];
     if (req.method === 'GET') {
       const record = await readRecord(user, id);
-      if (!record) {
+      // Named directly, so this is the link case: unlisted opens, private does not.
+      if (!record || !canSee(record, access, { viaLink: true })) {
         json(res, 404, { error: 'Replay not found.' });
         return true;
       }
-      json(res, 200, { demo: withJob(user, record) });
+      json(res, 200, { demo: { ...withJob(user, record), owner: ownerOf(record) } });
       return true;
     }
     if (req.method === 'DELETE') {
+      const record = await readRecord(user, id);
+      if (record && !canManage(record, me)) {
+        json(res, 403, { error: 'Only the uploader can delete that demo.' });
+        return true;
+      }
       const removed = await deleteDemo(user, id);
       forgetJob(user, id);
       await forgetDemoIndex(statsIo, user, id);
@@ -529,6 +642,11 @@ export async function handleReplayRequest(req, res, url) {
       body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
     } catch {
       json(res, 400, { error: 'Invalid JSON body.' });
+      return true;
+    }
+    const existing = await readRecord(user, id);
+    if (existing && !canManage(existing, me)) {
+      json(res, 403, { error: 'Only the uploader can rename that demo.' });
       return true;
     }
     const record = await renameDemoTeams(user, id, body.team1, body.team2);
@@ -565,7 +683,8 @@ export async function handleReplayRequest(req, res, url) {
   // the viewer's live scoreboard round by round) costs no request at all.
   if (req.method === 'GET' && p === '/api/replays/stats') {
     const only = csv(url, 'demos');
-    const records = (await listDemos(user)).filter((r) => (r.status || 'ready') === 'ready');
+    const { allowed } = await readable();
+    const records = allowed.filter((r) => (r.status || 'ready') === 'ready');
     const payload = await statsPayload(statsIo, user, records, only);
     json(res, 200, payload);
     return true;
@@ -574,6 +693,10 @@ export async function handleReplayRequest(req, res, url) {
   // Rebuild / enrich stats indexes that are missing or behind the current
   // schema (PRW, possession, swing, …). ?force=1 drops every index first.
   if (req.method === 'POST' && p === '/api/replays/stats/refresh') {
+    if (!me.admin) {
+      json(res, 403, { error: 'Only site admins can rebuild the stats index.' });
+      return true;
+    }
     const force =
       url.searchParams.get('force') === '1' || url.searchParams.get('force') === 'true';
     const records = await listDemos(user);
@@ -589,7 +712,7 @@ export async function handleReplayRequest(req, res, url) {
   // ---- playlists ----------------------------------------------------------
   if (p === '/api/replays/playlists') {
     if (req.method === 'GET') {
-      json(res, 200, { playlists: await readPlaylists(user) });
+      json(res, 200, { playlists: await playlistsFor() });
       return true;
     }
     if (req.method === 'POST') {
@@ -600,8 +723,15 @@ export async function handleReplayRequest(req, res, url) {
         json(res, 400, { error: err.message });
         return true;
       }
+      if (!requireUser()) return true;
       try {
-        json(res, 200, { playlists: await upsertPlaylist(user, body) });
+        await upsertPlaylist(user, body, {
+          id: me.id,
+          username: me.username,
+          admin: me.admin,
+          teamId: await playlistTeamId()
+        });
+        json(res, 200, { playlists: await playlistsFor() });
       } catch (err) {
         json(res, err.status || 400, { error: err.message || 'Could not save the playlist.' });
       }
@@ -611,28 +741,52 @@ export async function handleReplayRequest(req, res, url) {
 
   const playlistMatch = p.match(/^\/api\/replays\/playlists\/([A-Za-z0-9_-]+)$/);
   if (req.method === 'DELETE' && playlistMatch) {
-    const list = await removePlaylist(user, playlistMatch[1]);
+    if (!requireUser()) return true;
+    let list;
+    try {
+      list = await removePlaylist(user, playlistMatch[1], {
+        id: me.id,
+        username: me.username,
+        admin: me.admin
+      });
+    } catch (err) {
+      json(res, err.status || 400, { error: err.message || 'Could not delete that playlist.' });
+      return true;
+    }
     if (!list) {
       json(res, 404, { error: 'Playlist not found.' });
       return true;
     }
-    json(res, 200, { playlists: list });
+    json(res, 200, { playlists: await playlistsFor() });
     return true;
   }
 
   // ---- rounds -------------------------------------------------------------
   if (req.method === 'GET' && p === '/api/replays/rounds') {
     const limit = Number(url.searchParams.get('limit') || 2000);
-    const [rounds, noted] = await Promise.all([
+    const { records, allowed } = await readable();
+    const seen = visibleDemoIds(allowed, access);
+    const owners = roundOwnerIndex(records);
+    const [found, noted] = await Promise.all([
       findRounds(user, queryFromUrl(url), { limit }),
       listNotedRounds(user)
     ]);
+    const rounds = found.filter((r) => {
+      const record = recordForRoundFile(r.file || r.name || r, records, owners);
+      // A round with no owning record predates materialization; treat the
+      // library default (public) as the answer rather than hiding history.
+      return !record || seen.has(record.id);
+    });
     json(res, 200, { rounds, total: rounds.length, noted });
     return true;
   }
 
   const ticksMatch = p.match(/^\/api\/replays\/rounds\/([A-Za-z0-9_~-]+)\/ticks$/);
   if (req.method === 'GET' && ticksMatch) {
+    if (!(await canOpenRound(ticksMatch[1]))) {
+      json(res, 404, { error: 'Round not found.' });
+      return true;
+    }
     const stride = Number(url.searchParams.get('stride') || 1);
     // A client that says fmt=packed ships the varint unpack, so the columnar
     // body can go out as-is: ~75 KB instead of ~261 KB, and after the first
@@ -748,7 +902,7 @@ export async function handleReplayRequest(req, res, url) {
       json(res, 400, { error: err.message || 'Bad round name.' });
       return true;
     }
-    if (!meta) {
+    if (!meta || !(await canOpenRound(roundMatch[1]))) {
       json(res, 404, { error: 'Round not found.' });
       return true;
     }

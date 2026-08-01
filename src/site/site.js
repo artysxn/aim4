@@ -23,6 +23,11 @@ import sideGamemodes from '../icons/sideicons/sideicon_gamemodes.svg?raw';
 import sideLeaderboards from '../icons/sideicons/sideicon_leaderboards.svg?raw';
 import sideReplayViewer from '../icons/sideicons/sideicon_replayviewer.svg?raw';
 import sideRoutines from '../icons/sideicons/sideicon_routines.svg?raw';
+import sideTeam from '../icons/sideicons/sideicon_team.svg?raw';
+import sideTeamDocs from '../icons/sideicons/sideicon_docs.svg?raw';
+import sideTeamPositions from '../icons/sideicons/sideicon_positions.svg?raw';
+import sideTeamStratbook from '../icons/sideicons/sideicon_stratbook.svg?raw';
+import sideTeamStrategies from '../icons/sideicons/sideicon_my_strategies.svg?raw';
 import logoFullUrl from '../icons/aim4logos/logocolor.png';
 import logoMarkUrl from '../icons/aim4logos/logo1x1.png';
 import { SettingsManager } from '../core/SettingsManager.js';
@@ -32,6 +37,7 @@ import { initLeaderboardsView } from './leaderboardsView.js';
 import { initFootballView } from './footballView.js';
 import { initReplaysView } from './replaysView.js';
 import { initReplayViewerView } from './replayViewerView.js';
+import { initTeamView } from './teamView.js';
 
 // Brand logos — Vite hashes these into /assets so Vercel serves them (the
 // catch-all rewrite used to send /icons/* to train.html).
@@ -79,7 +85,12 @@ const ICONS = {
   gamemodes: sideGamemodes,
   leaderboards: sideLeaderboards,
   'replay-viewer': sideReplayViewer,
-  routines: sideRoutines
+  routines: sideRoutines,
+  team: sideTeam,
+  'team-docs': sideTeamDocs,
+  'team-positions': sideTeamPositions,
+  'team-stratbook': sideTeamStratbook,
+  'team-strategies': sideTeamStrategies
 };
 
 document.querySelectorAll('[data-icon]').forEach((el) => {
@@ -270,6 +281,31 @@ const ROUTES = {
   charts: { title: 'Charts', path: '/charts', shell: 'replays', page: 'charts' },
   patterns: { title: 'Pattern Finder', path: '/patterns', shell: 'replays', page: 'analytics' },
   uploads: { title: 'My Uploads', path: '/uploads', shell: 'replays', page: 'upload' },
+  team: { title: 'Team', path: '/team', shell: 'team', page: 'team-overview' },
+  'team-documents': {
+    title: 'Documents',
+    path: '/team/documents',
+    shell: 'team',
+    page: 'team-docs'
+  },
+  'team-roles': {
+    title: 'Roles & Positions',
+    path: '/team/roles',
+    shell: 'team',
+    page: 'team-roles'
+  },
+  'team-stratbook': {
+    title: 'Stratbook Editor',
+    path: '/team/stratbook',
+    shell: 'team',
+    page: 'team-stratbook'
+  },
+  'team-strategies': {
+    title: 'My Strategies',
+    path: '/team/strategies',
+    shell: 'team',
+    page: 'team-strategies'
+  },
   training: { title: 'Gamemodes', path: '/training', shell: 'training' },
   leaderboards: { title: 'Leaderboards', path: '/leaderboards', shell: 'leaderboards' },
   'replay-viewer': { title: 'Replay Viewer', path: '/replay-viewer', shell: 'replay-viewer' },
@@ -320,6 +356,20 @@ function searchParams() {
   const next = LEGACY_PATHS[clean];
   if (next) {
     window.history.replaceState(null, '', next + window.location.search + window.location.hash);
+  }
+}
+
+/**
+ * Team invites land on aim4.io/i/<code>. The code is lifted into a query param
+ * and the URL rewritten to /team, so a refresh after joining does not try to
+ * redeem the same invite twice.
+ */
+let inviteCode = '';
+{
+  const m = cleanPath().match(/^\/i\/([A-Za-z0-9]{4,16})$/);
+  if (m) {
+    inviteCode = m[1];
+    window.history.replaceState(null, '', '/team');
   }
 }
 
@@ -390,6 +440,7 @@ viewControllers['replay-viewer'] = initReplayViewerView({
   escapeHtml,
   openSelf: () => setView('replay-viewer', true, {})
 });
+viewControllers.team = initTeamView({ auth, escapeHtml });
 viewControllers.replays = initReplaysView({
   auth,
   escapeHtml,
@@ -418,4 +469,11 @@ auth.onChange(() => {
 
 window.addEventListener('popstate', () => setView(routeFromPath(), false, searchParams()));
 
-setView(routeFromPath(), false, searchParams());
+if (inviteCode) {
+  // Redeeming needs a signed-in account; the team view holds the code and
+  // retries once auth lands, so a signed-out visitor can sign in in place.
+  viewControllers.team?.setInvite?.(inviteCode);
+  setView('team', false, { invite: inviteCode });
+} else {
+  setView(routeFromPath(), false, searchParams());
+}

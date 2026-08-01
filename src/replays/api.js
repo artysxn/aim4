@@ -3,8 +3,9 @@
 // Client for /api/replays/*. Talks to the same backend as the trainer
 // (VITE_API_URL in production, same origin in dev through the Vite proxy).
 //
-// The demo library is shared for every visitor. Auth headers are unused; the
-// helpers below stay so older call sites keep compiling.
+// The library folder is shared, but who is asking is not: every request carries
+// the Supabase access token, and the backend decides from it which demos exist
+// for this caller. Signed-out visitors still read the public library.
 // ---------------------------------------------------------------------------
 
 import { decodePacked, isPacked } from './shared/tickPacked.js';
@@ -17,8 +18,32 @@ export function setAccount(_id) {}
 /** @deprecated Library is shared; tokens are not sent. */
 export function setTokenProvider(_provider) {}
 
+/**
+ * Bearer token for the current Supabase session, or '' when signed out.
+ *
+ * The Supabase client is pulled in lazily rather than imported at the top:
+ * this module is also loaded by the Node backend (through zoneApi), where a
+ * browser-only module reading import.meta.env would throw on load.
+ * getSession() refreshes a stale token, so a long-open tab never sends an
+ * expired one.
+ */
+export async function accessToken() {
+  if (typeof window === 'undefined') return '';
+  try {
+    const { getSupabase, supabaseConfigured } = await import('../lib/supabase.js');
+    if (!supabaseConfigured()) return '';
+    const sb = getSupabase();
+    if (!sb) return '';
+    const { data } = await sb.auth.getSession();
+    return data?.session?.access_token || '';
+  } catch {
+    return '';
+  }
+}
+
 async function headers(extra = {}) {
-  return { ...extra };
+  const token = await accessToken();
+  return token ? { ...extra, Authorization: `Bearer ${token}` } : { ...extra };
 }
 
 async function asJson(res) {
@@ -85,7 +110,7 @@ export async function renameDemoTeams(id, team1, team2) {
  * @param {File} file
  * @param {(pct: number, loaded: number, total: number) => void} [onProgress]
  */
-function uploadBinary(url, file, onProgress) {
+function uploadBinary(url, file, onProgress, extraHeaders = {}) {
   // Resolved before the request opens: XHR headers must be set before send,
   // and a stale token here would fail the upload after the whole file moved.
   return headers().then(
@@ -95,6 +120,7 @@ function uploadBinary(url, file, onProgress) {
         xhr.open('POST', url);
         xhr.setRequestHeader('Content-Type', 'application/octet-stream');
         xhr.setRequestHeader('X-Aim4-Filename', file.name);
+        for (const [k, v] of Object.entries(extraHeaders)) xhr.setRequestHeader(k, v);
         for (const [k, v] of Object.entries(auth)) xhr.setRequestHeader(k, v);
 
         xhr.upload.addEventListener('progress', (e) => {
@@ -140,8 +166,10 @@ function uploadBinary(url, file, onProgress) {
  * @param {(pct: number, loaded: number, total: number) => void} [onProgress]
  * @returns {Promise<{batch: object, usage: object}>}
  */
-export async function uploadDemo(file, onProgress) {
-  return uploadBinary(`${API_BASE}/api/replays/demos`, file, onProgress);
+export async function uploadDemo(file, onProgress, visibility = 'public') {
+  return uploadBinary(`${API_BASE}/api/replays/demos`, file, onProgress, {
+    'X-Aim4-Visibility': visibility
+  });
 }
 
 /**
@@ -289,7 +317,7 @@ export async function fetchPlaylists() {
  * Create a playlist (no id) or replace one (with an id). Returns the full
  * list back, so the caller never has to merge state by hand.
  *
- * @param {{id?: string, name?: string, rounds?: string[]}} playlist
+ * @param {{id?: string, name?: string, rounds?: string[], scope?: 'private'|'team'}} playlist
  */
 export async function savePlaylist(playlist) {
   const body = await asJson(
@@ -390,4 +418,121 @@ export async function saveZones(map, network) {
     })
   );
   return data.network;
+}
+
+// ---------------------------------------------------------------------------
+// Teams
+// ---------------------------------------------------------------------------
+
+/** Every team the signed-in account belongs to, owned team first. */
+export async function fetchTeams() {
+  const body = await asJson(
+    await fetch(`${API_BASE}/api/teams`, { headers: await headers() })
+  );
+  return body.teams || [];
+}
+
+export async function createTeam(name) {
+  const body = await asJson(
+    await fetch(`${API_BASE}/api/teams`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ name })
+    })
+  );
+  return body.teams || [];
+}
+
+/** Readable signed out, so /i/<code> can name the team before asking to sign in. */
+export async function fetchInvite(code) {
+  const body = await asJson(
+    await fetch(`${API_BASE}/api/teams/invite/${encodeURIComponent(code)}`, {
+      headers: await headers()
+    })
+  );
+  return body;
+}
+
+export async function joinTeam(code) {
+  return asJson(
+    await fetch(`${API_BASE}/api/teams/join`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ code })
+    })
+  );
+}
+
+export async function rollTeamInvite(teamId) {
+  return asJson(
+    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/invite`, {
+      method: 'POST',
+      headers: await headers()
+    })
+  );
+}
+
+export async function leaveTeam(teamId) {
+  return asJson(
+    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/leave`, {
+      method: 'POST',
+      headers: await headers()
+    })
+  );
+}
+
+/**
+ * @param {'kick'|'ban'|'unban'|'role'|'transfer'} action
+ * @param {{role?: string, kind?: 'player'|'coach'}} [extra]
+ */
+export async function teamMemberAction(teamId, memberId, action, extra = {}) {
+  return asJson(
+    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/members`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ memberId, action, ...extra })
+    })
+  );
+}
+
+/** @param {'T'|'CT'} side */
+export async function setTeamPosition(teamId, memberId, side, map, position) {
+  return asJson(
+    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/positions`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ memberId, side, map, position })
+    })
+  );
+}
+
+export async function fetchTeamDocument(teamId, docId) {
+  const body = await asJson(
+    await fetch(
+      `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/documents/${encodeURIComponent(docId)}`,
+      { headers: await headers() }
+    )
+  );
+  return body.document || null;
+}
+
+/** @param {{id?: string, title?: string, html?: string}} doc */
+export async function saveTeamDocument(teamId, doc) {
+  const body = await asJson(
+    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/documents`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(doc)
+    })
+  );
+  return body;
+}
+
+export async function deleteTeamDocument(teamId, docId) {
+  return asJson(
+    await fetch(
+      `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/documents/${encodeURIComponent(docId)}`,
+      { method: 'DELETE', headers: await headers() }
+    )
+  );
 }

@@ -194,6 +194,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         <div class="rv-playlist-list" id="rv-playlist-list"></div>
         <div class="rv-popover-foot">
           <input type="text" id="rv-playlist-new" class="site-input" maxlength="60" placeholder="New playlist" />
+          <select class="site-select rv-playlist-scope" id="rv-playlist-scope" title="Who can see this playlist">
+            <option value="private">Private</option>
+            <option value="team">Team</option>
+          </select>
           <button type="button" class="btn btn-sm primary" id="rv-playlist-add">Create</button>
         </div>
         <span class="rv-popover-msg" id="rv-playlist-msg"></span>
@@ -1768,7 +1772,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (!name || !file) return;
     playlistMsg.textContent = '';
     try {
-      playlists = await savePlaylist({ name, rounds: [file] });
+      const scope = el.querySelector('#rv-playlist-scope')?.value === 'team' ? 'team' : 'private';
+      playlists = await savePlaylist({ name, rounds: [file], scope });
       playlistNewEl.value = '';
       renderPlaylists();
       syncBookmark();
