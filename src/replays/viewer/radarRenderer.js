@@ -227,7 +227,7 @@ export class RadarRenderer {
     }
     const lctx = layer.getContext('2d');
     lctx.clearRect(0, 0, w, h);
-    lctx.fillStyle = '#0b0d10';
+    lctx.fillStyle = '#000000';
     lctx.fillRect(0, 0, w, h);
     if (this.image) {
       const t = this.viewTransform(w, h);
@@ -369,7 +369,7 @@ export class RadarRenderer {
       if (clear) {
         ctx.clearRect(0, 0, w, h);
         if (frame.clearStyle !== 'transparent') {
-          ctx.fillStyle = '#0b0d10';
+          ctx.fillStyle = '#000000';
           ctx.fillRect(0, 0, w, h);
         }
       }
@@ -627,7 +627,7 @@ export class RadarRenderer {
         ctx.shadowOffsetY = 2 * this.dpr;
       }
       pathDroplet(ctx, tip, bot, halfW);
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = '#b5b5b5';
       ctx.fill();
       ctx.shadowColor = 'transparent';
       ctx.shadowBlur = 0;
@@ -743,7 +743,7 @@ export class RadarRenderer {
               ctx.restore();
             }
 
-            ctx.fillStyle = '#0b0d10';
+            ctx.fillStyle = '#000000';
             ctx.fillText(name, pt.x, by + pillH / 2 + 0.5 * this.dpr);
           }
         }
@@ -1116,7 +1116,7 @@ export class RadarRenderer {
     }
     const out = 1 - life;
     ctx.globalAlpha = 0.9 * out * out;
-    ctx.strokeStyle = '#ffffff';
+    ctx.strokeStyle = '#b5b5b5';
     ctx.lineWidth = Math.max(1 * this.dpr, (3.2 - 2.4 * ease) * this.dpr);
     ctx.beginPath();
     ctx.arc(pt.x, pt.y, (5 + ease * 30) * this.dpr, 0, Math.PI * 2);

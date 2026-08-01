@@ -30,6 +30,10 @@ import {
 import { computeChart, correlationWords, filterWords } from './chartData.js';
 import { renderChart } from './chartRender.js';
 
+/** Match radar viewer: wheel zoom + left/middle drag pan when zoomed in. */
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 5;
+
 const SOURCES = [
   { key: 'kill', label: 'Kills' },
   { key: 'player', label: 'Player rounds' },
@@ -77,6 +81,14 @@ export function createChartsPanel({ escapeHtml }) {
   /** @type {Element | null} */
   let hotMark = null;
   let lastModel = null;
+
+  let plotZoom = 1;
+  let plotPanX = 0;
+  let plotPanY = 0;
+  let panning = false;
+  let panBtn = -1;
+  let lastPanX = 0;
+  let lastPanY = 0;
 
   const state = {
     type: 'scatter',
@@ -546,7 +558,9 @@ export function createChartsPanel({ escapeHtml }) {
         <button type="button" class="btn btn-sm" data-save>Save SVG</button>
       </div>
       <div class="ch-plot" id="ch-plot">
-        ${svg}
+        <div class="ch-plot-viewport">
+          <div class="ch-plot-stage">${svg}</div>
+        </div>
         <div class="ch-tip" id="ch-tip" hidden></div>
         <div class="ch-info">
           <button type="button" class="ch-info-btn" aria-label="Chart fit details">i</button>
@@ -554,10 +568,141 @@ export function createChartsPanel({ escapeHtml }) {
         </div>
       </div>`;
 
+    resetPlotView();
+    applyPlotTransform();
+
     detailsEl.innerHTML = detailsHtml(model);
   }
 
-  // ---- events -------------------------------------------------------------
+  // ---- plot zoom / pan (same controls as radar canvases) ------------------
+
+  function plotRoot() {
+    return canvasEl.querySelector('#ch-plot');
+  }
+
+  function plotViewport() {
+    return canvasEl.querySelector('.ch-plot-viewport');
+  }
+
+  function plotStage() {
+    return canvasEl.querySelector('.ch-plot-stage');
+  }
+
+  function resetPlotView() {
+    plotZoom = MIN_ZOOM;
+    plotPanX = 0;
+    plotPanY = 0;
+    panning = false;
+    panBtn = -1;
+  }
+
+  function applyPlotTransform() {
+    const stage = plotStage();
+    const plot = plotRoot();
+    if (!stage || !plot) return;
+    stage.style.transform = `translate(${plotPanX}px, ${plotPanY}px) scale(${plotZoom})`;
+    plot.classList.toggle('can-pan', plotZoom > MIN_ZOOM);
+    plot.classList.toggle('panning', panning);
+  }
+
+  function setPlotZoom(next, clientX, clientY) {
+    const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, next));
+    const viewport = plotViewport();
+    if (!viewport) {
+      plotZoom = z;
+      if (z <= MIN_ZOOM) {
+        plotPanX = 0;
+        plotPanY = 0;
+      }
+      applyPlotTransform();
+      return;
+    }
+    if (z === plotZoom) {
+      if (z <= MIN_ZOOM) {
+        plotPanX = 0;
+        plotPanY = 0;
+        applyPlotTransform();
+      }
+      return;
+    }
+    if (z <= MIN_ZOOM) {
+      plotZoom = MIN_ZOOM;
+      plotPanX = 0;
+      plotPanY = 0;
+    } else if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
+      const rect = viewport.getBoundingClientRect();
+      const mx = clientX - rect.left;
+      const my = clientY - rect.top;
+      const contentX = (mx - plotPanX) / plotZoom;
+      const contentY = (my - plotPanY) / plotZoom;
+      plotZoom = z;
+      plotPanX = mx - contentX * plotZoom;
+      plotPanY = my - contentY * plotZoom;
+    } else {
+      plotZoom = z;
+    }
+    applyPlotTransform();
+  }
+
+  canvasEl.addEventListener(
+    'wheel',
+    (e) => {
+      const plot = plotRoot();
+      if (!plot || !plot.contains(e.target)) return;
+      if (e.target.closest('.ch-info, .ch-head, button')) return;
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      setPlotZoom(plotZoom * factor, e.clientX, e.clientY);
+    },
+    { passive: false }
+  );
+
+  canvasEl.addEventListener('pointerdown', (e) => {
+    const plot = plotRoot();
+    if (!plot || !plot.contains(e.target)) return;
+    if (e.target.closest('.ch-info, button, .ch-head')) return;
+    const isPanBtn = e.button === 0 || e.button === 1;
+    if (!isPanBtn || plotZoom <= MIN_ZOOM) return;
+    panning = true;
+    panBtn = e.button;
+    lastPanX = e.clientX;
+    lastPanY = e.clientY;
+    setHotMark(null);
+    plot.classList.add('panning');
+    plot.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  canvasEl.addEventListener('pointermove', (e) => {
+    if (!panning) return;
+    const dx = e.clientX - lastPanX;
+    const dy = e.clientY - lastPanY;
+    lastPanX = e.clientX;
+    lastPanY = e.clientY;
+    plotPanX += dx;
+    plotPanY += dy;
+    applyPlotTransform();
+  });
+
+  const endPlotPan = (e) => {
+    if (!panning) return;
+    if (e.button !== undefined && e.button !== panBtn && e.type === 'pointerup') return;
+    panning = false;
+    panBtn = -1;
+    plotRoot()?.classList.remove('panning');
+    try {
+      plotRoot()?.releasePointerCapture(e.pointerId);
+    } catch {
+      /* already released */
+    }
+  };
+  canvasEl.addEventListener('pointerup', endPlotPan);
+  canvasEl.addEventListener('pointercancel', endPlotPan);
+  canvasEl.addEventListener('auxclick', (e) => {
+    if (e.button === 1) e.preventDefault();
+  });
+
+  // ---- events (filters / options) ----------------------------------------
 
   function filterFor(scope) {
     if (scope === 'x') return state.x.filter;
@@ -745,6 +890,7 @@ export function createChartsPanel({ escapeHtml }) {
   }
 
   canvasEl.addEventListener('pointermove', (e) => {
+    if (panning) return;
     const plot = canvasEl.querySelector('#ch-plot');
     if (!plot || !plot.contains(e.target)) {
       setHotMark(null);

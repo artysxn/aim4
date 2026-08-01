@@ -2138,7 +2138,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     ctx.fill();
     ctx.beginPath();
     ctx.arc(px, py, r, 0, Math.PI * 2);
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#b5b5b5';
     ctx.fill();
 
     graphPlayhead = { x: px / dpr, y: py / dpr, tick, sample };
@@ -2431,7 +2431,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     ctx.fill();
     ctx.beginPath();
     ctx.arc(px, py, r, 0, Math.PI * 2);
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#b5b5b5';
     ctx.fill();
 
     mapPlayhead = { x: px / dpr, y: py / dpr, tick, sample };

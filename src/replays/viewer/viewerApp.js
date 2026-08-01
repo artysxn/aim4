@@ -7,6 +7,7 @@
 import { TickStore } from '../tickStore.js';
 import { createTimelineViewer } from './timelineViewer.js';
 import { createAnalyzerViewer } from './analyzerViewer.js';
+import backIcon from '../../icons/icon_back.svg?raw';
 
 /**
  * Point the address bar at the round on screen so it can be copied and sent.
@@ -62,14 +63,13 @@ export function openViewer({
   overlay.className = 'rv-overlay';
   overlay.innerHTML = `
     <header class="rv-top">
-      <button type="button" class="rv-back" id="rv-back">
-        <svg viewBox="0 -960 960 960" width="18" height="18"><path d="M400-80 0-480l400-400 71 71-329 329 329 329-71 71Z"/></svg>
-        Back
+      <button type="button" class="rv-back" id="rv-back" aria-label="Back">
+        ${backIcon}
       </button>
       <div class="rv-title">
-        <strong id="rv-title-main">Analyzer</strong>
+        <strong id="rv-title-main">Viewer</strong>
       </div>
-      <div class="rv-modes">
+      <div class="rv-modes" hidden>
         <button type="button" class="rv-mode" data-mode="timeline">Timeline</button>
         <button type="button" class="rv-mode" data-mode="analyzer" ${
           canAnalyze ? '' : 'disabled title="Same map and at least one shared team required"'
@@ -105,13 +105,13 @@ export function openViewer({
     });
     if (next === 'analyzer') syncUrl(null);
     bodyEl.appendChild(current.el);
-    titleEl.textContent = next === 'analyzer' ? 'Analyzer' : 'Timeline';
+    titleEl.textContent = next === 'analyzer' ? 'Analyzer' : 'Viewer';
     overlay.querySelectorAll('.rv-mode').forEach((b) => {
       b.classList.toggle('active', b.dataset.mode === next);
     });
   }
 
-  overlay.querySelector('.rv-modes').addEventListener('click', (e) => {
+  overlay.querySelector('.rv-modes')?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-mode]');
     if (btn && !btn.disabled) setMode(btn.dataset.mode);
   });
