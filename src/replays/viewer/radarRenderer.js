@@ -11,7 +11,7 @@
 
 import { CALIBRATION, RADAR_SIZE, isLowerLevel, worldToRadar } from './mapCalibration.js';
 import { ZONE_PAINT } from '../zones/zoneOverlay.js';
-import { radarImage } from '../shared/roundId.js';
+import { mapHasLowerRadar, radarImage } from '../shared/roundId.js';
 import {
   FLAG_DEFUSING,
   FLAG_HAS_BOMB,
@@ -88,10 +88,11 @@ const TRACER_SECONDS = 0.25;
 
 const imageCache = new Map();
 
-/** Radar images are static assets; one load per map for the whole session. */
-export function loadRadar(mapCode) {
-  if (imageCache.has(mapCode)) return imageCache.get(mapCode);
-  const src = radarImage(mapCode);
+/** Radar images are static assets; one load per map+level for the session. */
+export function loadRadar(mapCode, level = 'default') {
+  const key = `${mapCode}:${level}`;
+  if (imageCache.has(key)) return imageCache.get(key);
+  const src = radarImage(mapCode, level);
   const promise = new Promise((resolve, reject) => {
     if (!src) {
       reject(new Error(`No radar image for map ${mapCode}`));
@@ -102,7 +103,7 @@ export function loadRadar(mapCode) {
     img.onerror = () => reject(new Error(`Could not load ${src}`));
     img.src = src;
   });
-  imageCache.set(mapCode, promise);
+  imageCache.set(key, promise);
   return promise;
 }
 
@@ -112,6 +113,12 @@ export class RadarRenderer {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.image = null;
+    /** @type {HTMLImageElement | null} */
+    this.defaultImage = null;
+    /** @type {HTMLImageElement | null} */
+    this.lowerImage = null;
+    /** `'default'` (upper) or `'lower'` — Nuke dual overview. */
+    this.radarLevel = 'default';
     this.mapCode = null;
     this.zoom = 1;
     this.panX = 0;
@@ -144,11 +151,18 @@ export class RadarRenderer {
   async setMap(mapCode) {
     if (this.mapCode === mapCode && this.image) return;
     this.mapCode = mapCode;
+    this.radarLevel = 'default';
     this._mapLayerKey = '';
     this._killPos.clear();
     try {
-      this.image = await loadRadar(mapCode);
+      this.defaultImage = await loadRadar(mapCode, 'default');
+      this.lowerImage = mapHasLowerRadar(mapCode)
+        ? await loadRadar(mapCode, 'lower').catch(() => null)
+        : null;
+      this.image = this.defaultImage;
     } catch {
+      this.defaultImage = null;
+      this.lowerImage = null;
       this.image = null;
     }
     // Again, after the image lands: a frame drawn during the await above would
@@ -156,6 +170,27 @@ export class RadarRenderer {
     this._mapLayerKey = '';
     this._prevHealth.fill(-1);
     this._damageTick.fill(-1);
+  }
+
+  /**
+   * Switch Nuke upper/lower overview. Returns true when the image changed.
+   * Left-click on the map during playback calls this.
+   */
+  toggleRadarLevel() {
+    if (!mapHasLowerRadar(this.mapCode) || !this.lowerImage) return false;
+    this.radarLevel = this.radarLevel === 'lower' ? 'default' : 'lower';
+    this.image =
+      this.radarLevel === 'lower' ? this.lowerImage : this.defaultImage;
+    this.invalidateMapCache();
+    return true;
+  }
+
+  /** Dim droplets that are not on the floor shown by the active radar image. */
+  _offFloorAlpha(z) {
+    if (!mapHasLowerRadar(this.mapCode)) return 1;
+    const playerLower = isLowerLevel(this.mapCode, z);
+    const viewLower = this.radarLevel === 'lower';
+    return playerLower === viewLower ? 1 : 0.45;
   }
 
   /** Drop the cached map so the next paintMapBase rebuilds it. */
@@ -170,6 +205,7 @@ export class RadarRenderer {
   ensureMapLayer(w, h, mapAlpha = 1) {
     const key = [
       this.mapCode || '',
+      this.radarLevel || 'default',
       w,
       h,
       this.zoom,
@@ -566,9 +602,9 @@ export class RadarRenderer {
 
       const blind = blindnessAt(pops, s, tick, tickRate);
 
-      const lower = isLowerLevel(this.mapCode, s.z);
+      const floorAlpha = this._offFloorAlpha(s.z);
       ctx.save();
-      ctx.globalAlpha = (lower ? 0.45 : 1) * (this._frameAlpha ?? 1);
+      ctx.globalAlpha = floorAlpha * (this._frameAlpha ?? 1);
 
       // Tip points in facing direction. Local tip is "up"; rotate so up = yaw.
       const yaw = (-s.yaw * Math.PI) / 180;
@@ -623,7 +659,7 @@ export class RadarRenderer {
 
       // Labels / held util in screen space (not rotated with the droplet).
       ctx.save();
-      ctx.globalAlpha = (lower ? 0.45 : 1) * (this._frameAlpha ?? 1);
+      ctx.globalAlpha = floorAlpha * (this._frameAlpha ?? 1);
       // Blind: the dot washes out and a white halo sits around the marker for
       // as long as the flash has left to run.
       if (blind > 0) {
@@ -671,7 +707,7 @@ export class RadarRenderer {
             const gap = 3 * this.dpr;
             const wy = pillBy - gap - ih;
             ctx.save();
-            ctx.globalAlpha = lower ? 0.45 : 0.95;
+            ctx.globalAlpha = floorAlpha * 0.95;
             ctx.drawImage(img, pt.x - iw / 2, wy, iw, ih);
             ctx.restore();
           }

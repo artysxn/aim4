@@ -1791,7 +1791,10 @@ export function createAnalyzerViewer({
     hideMarquee();
     const hit = hitAt(e.clientX, e.clientY);
     if (hit) openRoundTab(hit.file);
-    else clearSelection();
+    else {
+      clearSelection();
+      if (renderer.toggleRadarLevel()) draw(playback.position);
+    }
   }
 
   mapEl.addEventListener('pointerup', endPointer);

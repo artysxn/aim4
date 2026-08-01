@@ -21,8 +21,9 @@ export const RADAR_SIZE = 1024;
  * @property {number} posX     world X at pixel column 0
  * @property {number} posY     world Y at pixel row 0
  * @property {number} scale    world units per pixel
- * @property {number} [lowerZ] maps with a stacked level: below this altitude
- *                             a player is on the lower floor
+ * @property {number} [lowerZ] stacked maps (Nuke): z below this is the lower
+ *                             floor. Matches CS2 overview AltitudeMin/Max split
+ *                             (default ≥ lowerZ, lower < lowerZ).
  */
 
 /** Keyed by the map codes in the round naming scheme. */
@@ -32,6 +33,7 @@ export const CALIBRATION = {
   INF: { posX: -2087, posY: 3870, scale: 4.9 },
   CCH: { posX: -2000, posY: 3250, scale: 5.5 },
   MIR: { posX: -3230, posY: 1713, scale: 5.0 },
+  // Nuke: CS2 default radar AltitudeMin -495 / lower radar AltitudeMax -495.
   NUK: { posX: -3453, posY: 2887, scale: 7.0, lowerZ: -495 },
   ANU: { posX: -2796, posY: 3328, scale: 5.22 }
 };
@@ -60,9 +62,8 @@ export function radarToWorld(mapCode, px, py, out = {}) {
 }
 
 /**
- * True when a player is on the lower level of a stacked map. Only one radar
- * image ships per map, so lower-level droplets are drawn dimmed rather than
- * on a second overlay.
+ * True when a player is on the lower level of a stacked map (Nuke: z < -495).
+ * Used with the dual radar images so off-floor droplets can be dimmed.
  */
 export function isLowerLevel(mapCode, z) {
   const c = calibrationFor(mapCode);

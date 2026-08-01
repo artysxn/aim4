@@ -33,7 +33,7 @@ export const MAPS = {
   INF: { name: 'Inferno', file: 'de_inferno' },
   CCH: { name: 'Cache', file: 'de_cache' },
   MIR: { name: 'Mirage', file: 'de_mirage' },
-  NUK: { name: 'Nuke', file: 'de_nuke' },
+  NUK: { name: 'Nuke', file: 'de_nuke', lowerFile: 'de_nuke_lower' },
   ANU: { name: 'Anubis', file: 'de_anubis' }
 };
 
@@ -245,9 +245,18 @@ export function winningSide(r) {
   return team1IsT ? 'CT' : 'T';
 }
 
-export function radarImage(mapCode) {
+export function radarImage(mapCode, level = 'default') {
   const m = MAPS[mapCode];
-  return m ? `/maps/radar/${m.file}.png` : null;
+  if (!m) return null;
+  if (level === 'lower' && m.lowerFile) {
+    return `/maps/radar/${m.lowerFile}.png`;
+  }
+  return `/maps/radar/${m.file}.png`;
+}
+
+/** True when the map ships a second (lower) radar overview (Nuke). */
+export function mapHasLowerRadar(mapCode) {
+  return Boolean(MAPS[mapCode]?.lowerFile);
 }
 
 /** Compact map glyph for library rows (from MurkyYT/cs2-map-icons). */

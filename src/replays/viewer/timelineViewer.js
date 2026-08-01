@@ -1154,6 +1154,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
   const radarAt = (e) => renderer.radarFromClient(e.clientX, e.clientY);
 
+  /** Left-click (no drag) toggles Nuke upper/lower radar. */
+  let pendingClick = null;
+  const CLICK_SLOP = 6;
+
   function startInk(e) {
     inkPointer = e.pointerId;
     mapEl.setPointerCapture(e.pointerId);
@@ -1170,12 +1174,25 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     // Right click always draws, whatever mode the toolbar is in. Left click
     // only draws while drawing mode is on, so it stays a pan otherwise.
     if (e.button === 2 || (e.button === 0 && drawing.enabled)) {
+      pendingClick = null;
       startInk(e);
       return;
     }
 
+    if (e.button === 0) {
+      pendingClick = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    } else {
+      pendingClick = null;
+    }
+
     const isPanBtn = e.button === 0 || e.button === 1;
-    if (!isPanBtn || renderer.zoom <= MIN_ZOOM) return;
+    if (!isPanBtn || renderer.zoom <= MIN_ZOOM) {
+      if (pendingClick) {
+        mapEl.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      }
+      return;
+    }
     panning = true;
     panBtn = e.button;
     lastX = e.clientX;
@@ -1191,6 +1208,13 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       if (drawing.erasing) drawing.eraseAt(pt, pt.scale);
       else drawing.extend(pt, pt.scale);
       return;
+    }
+    if (
+      pendingClick &&
+      e.pointerId === pendingClick.id &&
+      Math.hypot(e.clientX - pendingClick.x, e.clientY - pendingClick.y) > CLICK_SLOP
+    ) {
+      pendingClick = null;
     }
     if (!panning) return;
     const dx = e.clientX - lastX;
@@ -1216,8 +1240,27 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   };
 
   const endPan = (e) => {
-    if (endStroke(e)) return;
-    if (!panning) return;
+    if (endStroke(e)) {
+      pendingClick = null;
+      return;
+    }
+    if (
+      pendingClick &&
+      e.pointerId === pendingClick.id &&
+      (e.button === undefined || e.button === 0) &&
+      e.type === 'pointerup'
+    ) {
+      if (renderer.toggleRadarLevel()) draw();
+    }
+    pendingClick = null;
+    if (!panning) {
+      try {
+        mapEl.releasePointerCapture(e.pointerId);
+      } catch {
+        /* already released */
+      }
+      return;
+    }
     if (e.button !== undefined && e.button !== panBtn && e.type === 'pointerup') return;
     panning = false;
     panBtn = -1;
