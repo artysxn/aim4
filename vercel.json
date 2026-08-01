@@ -25,6 +25,6 @@
     { "source": "/replays/analytics", "destination": "/index.html" },
     { "source": "/replays/charts", "destination": "/index.html" },
     { "source": "/football", "destination": "/index.html" },
-    { "source": "/((?!assets/|tools/|fonts/|maps/).*)", "destination": "/train.html" }
+    { "source": "/((?!assets/|tools/|fonts/|icons/|maps/).*)", "destination": "/train.html" }
   ]
 }
