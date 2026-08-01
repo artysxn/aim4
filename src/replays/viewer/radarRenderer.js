@@ -627,7 +627,7 @@ export class RadarRenderer {
         ctx.shadowOffsetY = 2 * this.dpr;
       }
       pathDroplet(ctx, tip, bot, halfW);
-      ctx.fillStyle = '#b5b5b5';
+      ctx.fillStyle = '#ffffff';
       ctx.fill();
       ctx.shadowColor = 'transparent';
       ctx.shadowBlur = 0;
@@ -743,7 +743,7 @@ export class RadarRenderer {
               ctx.restore();
             }
 
-            ctx.fillStyle = '#000000';
+            ctx.fillStyle = '#ffffff';
             ctx.fillText(name, pt.x, by + pillH / 2 + 0.5 * this.dpr);
           }
         }
