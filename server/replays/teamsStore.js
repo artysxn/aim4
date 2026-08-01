@@ -17,6 +17,9 @@ const FILE = () => path.join(ROOT, 'teams.json');
 
 export const MAX_MEMBERS = 7;
 
+/** How often the owner may mint a fresh invite code. */
+export const INVITE_ROLL_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
 /** Invite codes are 7 chars of mixed case, as in aim4.io/i/dNfrkEs. */
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 
@@ -61,6 +64,29 @@ export const isOwner = (team, userId) => team?.ownerId === userId;
 export const isAdmin = (team, userId) =>
   isOwner(team, userId) || memberOf(team, userId)?.role === 'admin';
 
+/** Placeholder roster slots used to plan positions before a real player joins. */
+export function isDummyMember(m) {
+  return Boolean(m?.dummy) || String(m?.id || '').startsWith('dummy_');
+}
+
+export function realMemberCount(team) {
+  return (team?.members || []).filter((m) => !isDummyMember(m)).length;
+}
+
+const newDummyId = () =>
+  `dummy_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
+function copyPositionBag(bag) {
+  return {
+    T: { ...(bag?.T || {}) },
+    CT: { ...(bag?.CT || {}) }
+  };
+}
+
+function clearMemberPositions(team, memberId) {
+  if (team?.positions && memberId in team.positions) delete team.positions[memberId];
+}
+
 /** Every team the user belongs to, owned first. */
 export async function teamsOf(userId) {
   if (!userId) return [];
@@ -85,7 +111,10 @@ export async function teammateIds(userId) {
   const mine = await teamsOf(userId);
   const out = new Set([userId]);
   for (const team of mine) {
-    for (const m of team.members || []) out.add(m.id);
+    for (const m of team.members || []) {
+      // Placeholders are not accounts — they must not unlock unlisted demos.
+      if (!isDummyMember(m)) out.add(m.id);
+    }
   }
   return out;
 }
@@ -148,7 +177,7 @@ export async function joinTeam(user, code) {
     throw denied('You cannot rejoin that team.');
   }
   if (isMember(team, user.id)) return team;
-  if ((team.members || []).length >= MAX_MEMBERS) {
+  if (realMemberCount(team) >= MAX_MEMBERS) {
     throw new Error(`That team is full (${MAX_MEMBERS} members).`);
   }
   return updateTeam(team.id, (t) => {
@@ -166,18 +195,76 @@ export async function leaveTeam(user, teamId) {
   return updateTeam(teamId, (t) => {
     if (isOwner(t, user.id)) throw new Error('Transfer ownership before leaving your own team.');
     t.members = (t.members || []).filter((m) => m.id !== user.id);
+    clearMemberPositions(t, user.id);
   });
 }
 
 export async function removeMember(actor, teamId, memberId, { ban = false } = {}) {
   return updateTeam(teamId, (t) => {
-    if (!isOwner(t, actor.id)) throw denied('Only the team owner can remove members.');
-    if (memberId === t.ownerId) throw new Error('The owner cannot be removed.');
     const gone = memberOf(t, memberId);
+    if (!gone) throw new Error('That member is not on the team.');
+    if (isDummyMember(gone)) {
+      if (!isAdmin(t, actor.id)) throw denied('Only team admins can remove placeholders.');
+    } else {
+      if (!isOwner(t, actor.id)) throw denied('Only the team owner can remove members.');
+      if (memberId === t.ownerId) throw new Error('The owner cannot be removed.');
+    }
     t.members = (t.members || []).filter((m) => m.id !== memberId);
-    if (ban && gone) {
+    clearMemberPositions(t, memberId);
+    if (ban && !isDummyMember(gone)) {
       t.banned = [...(t.banned || []), { id: gone.id, username: gone.username, at: Date.now() }];
     }
+  });
+}
+
+/**
+ * Owner-only: add a placeholder seat so positions can be planned before the
+ * real player joins. Placeholders do not count against the real-member cap.
+ */
+export async function createDummyMember(actor, teamId, displayName) {
+  return updateTeam(teamId, (t) => {
+    if (!isOwner(t, actor.id)) throw denied('Only the team owner can add placeholders.');
+    const label = String(displayName || '')
+      .trim()
+      .replace(/^@+/, '')
+      .slice(0, 32);
+    if (!label) throw new Error('Give the placeholder a name.');
+    const dummyCount = (t.members || []).filter((m) => isDummyMember(m)).length;
+    if (dummyCount >= MAX_MEMBERS) {
+      throw new Error(`A team can keep ${MAX_MEMBERS} placeholders.`);
+    }
+    const id = newDummyId();
+    t.members = t.members || [];
+    t.members.push({
+      id,
+      username: label,
+      role: 'player',
+      kind: 'player',
+      joinedAt: Date.now(),
+      dummy: true
+    });
+    t.positions = t.positions || {};
+    t.positions[id] = { T: {}, CT: {} };
+  });
+}
+
+/**
+ * Admin: drag a real member onto a placeholder. The real member inherits the
+ * placeholder's kind and map positions; the placeholder is removed.
+ */
+export async function mergeMemberIntoDummy(actor, teamId, realUserId, dummyId) {
+  return updateTeam(teamId, (t) => {
+    if (!isAdmin(t, actor.id)) throw denied('Only team admins can merge placeholders.');
+    const real = memberOf(t, realUserId);
+    const dummy = memberOf(t, dummyId);
+    if (!real) throw new Error('That member is not on the team.');
+    if (isDummyMember(real)) throw new Error('Drag a real member onto a placeholder.');
+    if (!dummy || !isDummyMember(dummy)) throw new Error('Drop onto a placeholder seat.');
+    t.positions = t.positions || {};
+    t.positions[realUserId] = copyPositionBag(t.positions[dummyId]);
+    clearMemberPositions(t, dummyId);
+    real.kind = dummy.kind === 'coach' ? 'coach' : 'player';
+    t.members = (t.members || []).filter((m) => m.id !== dummyId);
   });
 }
 
@@ -198,6 +285,7 @@ export async function setMemberRole(actor, teamId, memberId, patch = {}) {
     if (patch.role === 'admin' || patch.role === 'player' || patch.role === 'coach') {
       if (!isOwner(t, actor.id)) throw denied('Only the owner can grant admin rights.');
       if (m.id === t.ownerId) throw new Error('The owner already has every right.');
+      if (isDummyMember(m)) throw new Error('Placeholders cannot hold permissions.');
       m.role = patch.role;
     }
   });
@@ -210,6 +298,7 @@ export async function transferOwnership(actor, teamId, memberId) {
   if (!isOwner(team, actor.id)) throw denied('Only the owner can transfer a team.');
   const next = memberOf(team, memberId);
   if (!next) throw new Error('That member is not on the team.');
+  if (isDummyMember(next)) throw new Error('Cannot transfer ownership to a placeholder.');
   if (state.teams.some((t) => t.id !== teamId && isOwner(t, memberId))) {
     throw new Error('That member already owns a team.');
   }
@@ -225,7 +314,20 @@ export async function transferOwnership(actor, teamId, memberId) {
 export async function rollInvite(actor, teamId) {
   return updateTeam(teamId, (t) => {
     if (!isOwner(t, actor.id)) throw denied('Only the owner can change the invite link.');
+    const last = Number(t.inviteRolledAt) || 0;
+    const wait = last + INVITE_ROLL_COOLDOWN_MS - Date.now();
+    if (wait > 0) {
+      const hours = Math.ceil(wait / (60 * 60 * 1000));
+      const err = new Error(
+        hours <= 1
+          ? 'You can mint a new invite link in under an hour.'
+          : `You can mint a new invite link in about ${hours} hours.`
+      );
+      err.status = 429;
+      throw err;
+    }
     t.invite = newInviteCode();
+    t.inviteRolledAt = Date.now();
   });
 }
 
@@ -319,6 +421,8 @@ export async function deleteDocument(actor, teamId, docId) {
 export function publicTeam(team, viewerId) {
   if (!team) return null;
   const owner = isOwner(team, viewerId);
+  const inviteRolledAt = Number(team.inviteRolledAt) || 0;
+  const inviteRollReadyAt = inviteRolledAt ? inviteRolledAt + INVITE_ROLL_COOLDOWN_MS : 0;
   return {
     id: team.id,
     name: team.name,
@@ -326,12 +430,14 @@ export function publicTeam(team, viewerId) {
     ownerName: team.ownerName,
     createdAt: team.createdAt,
     invite: owner ? team.invite : '',
+    inviteRollReadyAt: owner ? inviteRollReadyAt : 0,
     members: (team.members || []).map((m) => ({
       id: m.id,
       username: m.username,
       role: m.role,
       kind: m.kind || 'player',
-      joinedAt: m.joinedAt
+      joinedAt: m.joinedAt,
+      dummy: isDummyMember(m)
     })),
     banned: owner ? team.banned || [] : [],
     positions: team.positions || {},
@@ -347,6 +453,7 @@ export function publicTeam(team, viewerId) {
     })),
     isOwner: owner,
     isAdmin: isAdmin(team, viewerId),
-    maxMembers: MAX_MEMBERS
+    maxMembers: MAX_MEMBERS,
+    realMembers: realMemberCount(team)
   };
 }

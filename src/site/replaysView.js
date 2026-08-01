@@ -21,6 +21,7 @@ import {
   renameDemoTeams,
   reparseDemo,
   savePlaylist,
+  setDemoVisibility,
   uploadDemo,
   uploadImport
 } from '../replays/api.js';
@@ -131,8 +132,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     maxDemos: 5,
     verifies: true
   };
-  /** Visibility applied to the next upload. */
-  let uploadVisibility = 'public';
+  /** Selected demo ids on My Uploads (bulk visibility / click-to-select). */
+  const selectedMine = new Set();
   const mineEl = document.getElementById('rp-mine');
   let teamSearch = '';
   let playerSearch = '';
@@ -474,10 +475,16 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       return;
     }
     const mine = myDemos();
+    const mineIds = new Set(mine.map((d) => d.id));
+    for (const id of [...selectedMine]) {
+      if (!mineIds.has(id)) selectedMine.delete(id);
+    }
     const cap = account.admin ? 0 : account.maxDemos || 5;
     const capLine = cap
       ? `${mine.length} of ${cap} uploads used`
       : `${mine.length} uploads (no limit on this account)`;
+    const selCount = selectedMine.size;
+    const allSelected = mine.length > 0 && mine.every((d) => selectedMine.has(d.id));
 
     const rows = mine
       .slice()
@@ -486,14 +493,27 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         const id = escapeHtml(d.id);
         const mapName = d.mapName || (d.map ? MAPS[d.map]?.name : '') || '';
         const visibility = d.owner?.visibility || 'public';
+        const checked = selectedMine.has(d.id);
         return `
-        <tr data-id="${id}">
+        <tr data-id="${id}" class="${checked ? 'is-selected' : ''}" tabindex="0">
+          <td class="rp-mine-check">
+            <input type="checkbox" data-mine-check="${id}" ${checked ? 'checked' : ''} aria-label="Select demo" />
+          </td>
           <td class="rp-mine-when">${escapeHtml(formatWhen(d.uploadedAt || d.parsedAt))}</td>
           <td class="rp-mine-match">${escapeHtml(d.team1?.name || 'Team 1')} vs ${escapeHtml(
             d.team2?.name || 'Team 2'
           )}</td>
           <td class="rp-mine-map">${escapeHtml(mapName)}</td>
-          <td>${byLineHtml(d.owner)}</td>
+          <td class="rp-mine-vis">
+            <select class="site-select rp-mine-vis-select" data-set-visibility="${id}" title="Who can see this demo">
+              ${VISIBILITY_OPTIONS.map(
+                (o) =>
+                  `<option value="${o.key}"${visibility === o.key ? ' selected' : ''}>${escapeHtml(
+                    o.label
+                  )}</option>`
+              ).join('')}
+            </select>
+          </td>
           <td class="rp-mine-actions">
             <button type="button" class="rp-btn-icon" data-rename="${id}" title="Rename teams">Aa</button>
             <button type="button" class="rp-btn-icon danger" data-delete="${id}" title="Delete">${deleteIconHtml()}</button>
@@ -502,35 +522,84 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       })
       .join('');
 
+    const bulk =
+      selCount > 0
+        ? `<div class="rp-mine-bulk">
+            <span class="rp-mine-bulk-count">${selCount} selected</span>
+            <span class="rp-vis-label">Set to</span>
+            <div class="rp-chips">
+              ${VISIBILITY_OPTIONS.map(
+                (o) =>
+                  `<button type="button" class="rp-chip vis-${o.key}" data-bulk-visibility="${o.key}" title="${escapeHtml(
+                    o.note
+                  )}">${escapeHtml(o.label)}</button>`
+              ).join('')}
+            </div>
+            <button type="button" class="btn btn-sm" data-mine-deselect>Deselect</button>
+          </div>`
+        : '';
+
     mineEl.innerHTML = `
       <div class="rp-mine-head">
         <h3 class="rp-mine-title">My uploads</h3>
         <span class="rp-mine-cap">${escapeHtml(capLine)}</span>
       </div>
-      <div class="rp-vis-picker">
-        <span class="rp-vis-label">New uploads are</span>
-        <div class="rp-chips">
-          ${VISIBILITY_OPTIONS.map(
-            (o) =>
-              `<button type="button" class="rp-chip vis-${o.key}${
-                uploadVisibility === o.key ? ' active' : ''
-              }" data-visibility="${o.key}" title="${escapeHtml(o.note)}">${escapeHtml(
-                o.label
-              )}</button>`
-          ).join('')}
-        </div>
-        <span class="rp-vis-note">${escapeHtml(
-          VISIBILITY_OPTIONS.find((o) => o.key === uploadVisibility)?.note || ''
-        )}</span>
-      </div>
+      ${bulk}
       ${
         rows
           ? `<table class="rp-mine-table">
-              <thead><tr><th>Uploaded</th><th>Match</th><th>Map</th><th>Visibility</th><th></th></tr></thead>
+              <thead><tr>
+                <th class="rp-mine-check">
+                  <input type="checkbox" data-mine-select-all ${allSelected ? 'checked' : ''} title="${
+                    allSelected ? 'Deselect all' : 'Select all'
+                  }" aria-label="${allSelected ? 'Deselect all' : 'Select all'}" />
+                </th>
+                <th>Uploaded</th><th>Match</th><th>Map</th><th>Visibility</th><th></th>
+              </tr></thead>
               <tbody>${rows}</tbody>
             </table>`
           : '<p class="view-empty">You have not uploaded anything yet.</p>'
       }`;
+  }
+
+  async function applyMineVisibility(ids, visibility) {
+    const list = [...ids];
+    if (!list.length) return;
+    let ok = 0;
+    let lastErr = '';
+    for (const id of list) {
+      try {
+        const res = await setDemoVisibility(id, visibility);
+        const demo = res?.demo;
+        if (demo) {
+          const i = demos.findIndex((d) => d.id === id);
+          const next = {
+            ...(i >= 0 ? demos[i] : {}),
+            ...demo,
+            visibility: demo.owner?.visibility || demo.visibility || visibility,
+            owner: demo.owner || {
+              ...(i >= 0 ? demos[i]?.owner : {}),
+              visibility
+            }
+          };
+          if (i >= 0) demos[i] = next;
+          else demos.push(next);
+        }
+        ok++;
+      } catch (err) {
+        lastErr = err?.message || 'Failed to update visibility.';
+      }
+    }
+    if (ok) {
+      setStatus(
+        ok === 1
+          ? `Visibility set to ${visibility}.`
+          : `Set ${ok} demos to ${visibility}.${lastErr ? ` (${list.length - ok} failed)` : ''}`
+      );
+    } else if (lastErr) {
+      setStatus(lastErr, true);
+    }
+    renderMine();
   }
 
   /**
@@ -766,6 +835,62 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     });
   }
 
+  /**
+   * Ask who may see a freshly uploaded demo. Uploads land as private; if this
+   * prompt never runs (tab closed / offline), they stay private.
+   */
+  function promptDemoVisibility(demoOrId) {
+    const id = typeof demoOrId === 'string' ? demoOrId : demoOrId?.id;
+    if (!id) return Promise.resolve();
+    const label =
+      typeof demoOrId === 'object' && demoOrId
+        ? `${demoOrId.team1?.name || 'Team 1'} vs ${demoOrId.team2?.name || 'Team 2'}`
+        : id;
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'rp-name-dialog';
+      overlay.innerHTML = `
+        <div class="rp-name-card" role="dialog" aria-label="Demo visibility">
+          <h3>Who can see this demo?</h3>
+          <p>${escapeHtml(label)} is private until you pick. If you close this without choosing, it stays private.</p>
+          <div class="rp-vis-prompt-chips">
+            ${VISIBILITY_OPTIONS.map(
+              (o) =>
+                `<button type="button" class="btn btn-sm vis-pick vis-${o.key}" data-pick="${o.key}" title="${escapeHtml(
+                  o.note
+                )}">${escapeHtml(o.label)}</button>`
+            ).join('')}
+          </div>
+          <p class="rp-vis-prompt-note">Public: anyone · Unlisted: team + link · Private: only you</p>
+          <div class="rp-name-actions">
+            <button type="button" class="btn btn-sm" data-skip>Keep private</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+
+      const close = () => {
+        overlay.remove();
+        resolve();
+      };
+
+      overlay.querySelector('[data-skip]').addEventListener('click', close);
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) close();
+      });
+      overlay.querySelectorAll('[data-pick]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const visibility = btn.dataset.pick;
+          try {
+            await applyMineVisibility([id], visibility);
+          } catch (err) {
+            setStatus(err?.message || 'Could not set visibility.', true);
+          }
+          close();
+        });
+      });
+    });
+  }
+
   // ---- upload -------------------------------------------------------------
 
   /**
@@ -987,16 +1112,53 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     e.returnValue = '';
   });
 
-  mineEl?.addEventListener('click', (e) => {
-    const vis = e.target.closest('[data-visibility]');
-    if (vis) {
-      uploadVisibility = vis.dataset.visibility;
+  mineEl?.addEventListener('click', async (e) => {
+    const bulkVis = e.target.closest('[data-bulk-visibility]');
+    if (bulkVis) {
+      await applyMineVisibility([...selectedMine], bulkVis.dataset.bulkVisibility);
+      return;
+    }
+    if (e.target.closest('[data-mine-deselect]')) {
+      selectedMine.clear();
       renderMine();
       return;
     }
-    // Rename / delete share the library's handler, so the dialogs, the
-    // confirmation and the refresh all behave the same on both pages.
-    handleDemoAction(e.target);
+    const selectAll = e.target.closest('[data-mine-select-all]');
+    if (selectAll) {
+      const mine = myDemos();
+      const allOn = mine.length > 0 && mine.every((d) => selectedMine.has(d.id));
+      if (allOn) selectedMine.clear();
+      else for (const d of mine) selectedMine.add(d.id);
+      renderMine();
+      return;
+    }
+    const check = e.target.closest('[data-mine-check]');
+    if (check) {
+      const id = check.dataset.mineCheck;
+      if (check.checked) selectedMine.add(id);
+      else selectedMine.delete(id);
+      renderMine();
+      return;
+    }
+    if (e.target.closest('[data-rename], [data-delete], [data-retry], [data-open], [data-demo-stats]')) {
+      await handleDemoAction(e.target);
+      return;
+    }
+    // Clicking the row (not controls) toggles selection.
+    if (e.target.closest('select, button, a, input, label')) return;
+    const row = e.target.closest('tr[data-id]');
+    if (row?.dataset.id) {
+      const id = row.dataset.id;
+      if (selectedMine.has(id)) selectedMine.delete(id);
+      else selectedMine.add(id);
+      renderMine();
+    }
+  });
+
+  mineEl?.addEventListener('change', (e) => {
+    const sel = e.target.closest('[data-set-visibility]');
+    if (!sel) return;
+    applyMineVisibility([sel.dataset.setVisibility], sel.value);
   });
 
   async function startUpload(fileList) {
@@ -1052,12 +1214,16 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
      */
     const batchErrors = [];
     const namingQueue = [];
+    /** @type {string[]} */
+    const visibilityQueue = [];
     /** @type {{id: string, name: string, label: string}[]} */
     const queued = [];
     try {
       // Pass one: get every file onto the server. Nothing here waits on a parse,
       // so dropping ten demos and walking away leaves all ten queued rather than
       // one uploaded and nine abandoned in the browser.
+      // Visibility starts private; the prompt after parse is what opens it up.
+      // If the tab is gone when parsing finishes, demos stay private.
       transferring = true;
       for (let i = 0; i < ok.length; i++) {
         const file = ok[i];
@@ -1077,11 +1243,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           const res = await uploadImport(file, onProgress);
           renderQuota(res.usage);
           imported++;
-          if (res.demo) namingQueue.push(res.demo);
+          if (res.demo) {
+            namingQueue.push(res.demo);
+            if (res.demo.id) visibilityQueue.push(res.demo.id);
+          }
           continue;
         }
 
-        const res = await uploadDemo(file, onProgress, uploadVisibility);
+        const res = await uploadDemo(file, onProgress, 'private');
         renderQuota(res.usage);
         rememberBatch(res.batch.id, name);
         queued.push({ id: res.batch.id, name, label });
@@ -1099,6 +1268,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           failed += batch.totals.failed;
           if (batch.stage === 'error' && !batch.totals.files) {
             batchErrors.push(batch.error || `Could not unpack ${item.name}.`);
+          }
+          for (const f of batch.files || []) {
+            if (!f.failed && f.demoId) visibilityQueue.push(f.demoId);
           }
         } else {
           // The batch is dropped once it settles, so losing track of it is not
@@ -1120,6 +1292,13 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       );
       await refresh();
 
+      const seenVis = new Set();
+      for (const id of visibilityQueue) {
+        if (!id || seenVis.has(id)) continue;
+        seenVis.add(id);
+        const demo = demos.find((d) => d.id === id);
+        await promptDemoVisibility(demo || id);
+      }
       for (const demo of namingQueue) {
         await promptTeamNames(demo);
       }
@@ -1384,7 +1563,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       ${
         teamClusters.length
           ? `<div class="rp-filter-group${teamMenuOpen ? ' menu-open' : ''}">
-              <h4>Team</h4>
               <div class="rp-typeahead" id="rp-team-typeahead">
                 <input type="search" class="site-input rp-filter-search" id="rp-team-search"
                   placeholder="Search teams" spellcheck="false" autocomplete="off"
@@ -1407,22 +1585,16 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       <div class="rp-filter-group rp-advanced-wrap">
         <div class="rp-advanced-body" id="rp-advanced-body">
           <div class="rp-filter-group">
-            <h4>Bomb</h4>
-            <div class="rp-chips">
-              <button type="button" class="rp-chip${
-                filters.afterplant ? ' active' : ''
-              }" data-adv-afterplant="1">Afterplant</button>
-            </div>
-          </div>
-          <div class="rp-filter-group">
-            <h4>Round decided <span class="rp-filter-hint">(equal buy)</span></h4>
-            <div class="rp-chips">
-              ${['early', 'mid', 'late']
+            <div class="rp-seg rp-seg-decided" role="group" aria-label="Round decided phase">
+              ${[
+                ['mid', 'Decided Midround'],
+                ['late', 'Decided Lateround']
+              ]
                 .map(
-                  (p) =>
-                    `<button type="button" class="rp-chip${
+                  ([p, label]) =>
+                    `<button type="button" class="rp-seg-btn${
                       filters.decidedPhases.has(p) ? ' active' : ''
-                    }" data-adv-decided="${p}">${p[0].toUpperCase()}${p.slice(1)}</button>`
+                    }" data-adv-decided="${p}">${label}</button>`
                 )
                 .join('')}
             </div>
@@ -1482,6 +1654,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       filters.situations.clear();
       filters.afterplant = false;
       filters.decidedPhases.clear();
+      // Early is not a valid decided filter anymore.
       teamSearch = '';
       playerSearch = '';
       mapMenuOpen = false;
@@ -1552,9 +1725,11 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
     const decidedBtn = e.target.closest('[data-adv-decided]');
     if (decidedBtn) {
-      const phase = decidedBtn.dataset.advDecided;
-      if (filters.decidedPhases.has(phase)) filters.decidedPhases.delete(phase);
-      else filters.decidedPhases.add(phase);
+      const key = decidedBtn.dataset.advDecided;
+      if (key !== 'mid' && key !== 'late') return;
+      filters.decidedPhases.delete('early');
+      if (filters.decidedPhases.has(key)) filters.decidedPhases.delete(key);
+      else filters.decidedPhases.add(key);
       renderFilters();
       runQuery();
       return;

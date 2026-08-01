@@ -9,6 +9,8 @@
 //   GET    /api/replays/uploads/:batchId         unpack + parse progress for one upload
 //   POST   /api/replays/import                   upload a local .aim4replay package
 //   GET    /api/replays/demos/:id                one demo + parse progress
+//   POST   /api/replays/demos/:id/teams          rename both teams
+//   POST   /api/replays/demos/:id/visibility     public / unlisted / private
 //   POST   /api/replays/demos/:id/parse          re-run a failed parse
 //   DELETE /api/replays/demos/:id                remove demo + its rounds
 //   GET    /api/replays/rounds?...               filter by name, no file reads
@@ -47,6 +49,7 @@ import {
   removePlaylist,
   renameDemoTeams,
   saveTempUpload,
+  setDemoVisibility,
   upsertPlaylist,
   usage,
   userDir,
@@ -552,7 +555,7 @@ export async function handleReplayRequest(req, res, url) {
       owner: {
         uploaderId: me.id,
         uploaderName: me.username,
-        visibility: normalizeVisibility(req.headers['x-aim4-visibility'])
+        visibility: normalizeVisibility(req.headers['x-aim4-visibility'] || 'private')
       }
     });
     json(res, 202, { batch: batchStatus(batch), usage: await usage(user) });
@@ -596,10 +599,16 @@ export async function handleReplayRequest(req, res, url) {
       const buf = await readFile(tmp);
       const record = await importReplayPackage(user, buf, {
         filename,
-        uploadedAt: Date.now()
+        uploadedAt: Date.now(),
+        uploaderId: me.id,
+        uploaderName: me.username,
+        visibility: 'private'
       });
       scheduleStatsIndex(statsIo, user, record);
-      json(res, 201, { demo: withJob(user, record), usage: await usage(user) });
+      json(res, 201, {
+        demo: { ...withJob(user, record), owner: ownerOf(record) },
+        usage: await usage(user)
+      });
     } catch (err) {
       const status = err.status || 400;
       json(res, status, { error: err.message || 'Import failed.', usage: err.usage });
@@ -663,6 +672,45 @@ export async function handleReplayRequest(req, res, url) {
       return true;
     }
     json(res, 200, { demo: withJob(user, record), usage: await usage(user) });
+    return true;
+  }
+
+  const visibilityMatch = p.match(/^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/visibility$/);
+  if (req.method === 'POST' && visibilityMatch) {
+    const id = visibilityMatch[1];
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    let body = {};
+    try {
+      body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+    } catch {
+      json(res, 400, { error: 'Invalid JSON body.' });
+      return true;
+    }
+    const existing = await readRecord(user, id);
+    if (!existing) {
+      json(res, 404, { error: 'Replay not found.' });
+      return true;
+    }
+    if (!canManage(existing, me)) {
+      json(res, 403, { error: 'Only the uploader can change that demo’s visibility.' });
+      return true;
+    }
+    let record;
+    try {
+      record = await setDemoVisibility(user, id, body.visibility);
+    } catch (err) {
+      json(res, 400, { error: err?.message || 'Invalid visibility.' });
+      return true;
+    }
+    if (!record) {
+      json(res, 404, { error: 'Replay not found.' });
+      return true;
+    }
+    json(res, 200, {
+      demo: { ...withJob(user, record), owner: ownerOf(record) },
+      usage: await usage(user)
+    });
     return true;
   }
 

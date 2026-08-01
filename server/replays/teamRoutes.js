@@ -8,12 +8,14 @@
 
 import { whoami } from './identity.js';
 import {
-  createTeam,
+  createDummyMember,
   deleteDocument,
   joinTeam,
   leaveTeam,
   listDocuments,
+  mergeMemberIntoDummy,
   publicTeam,
+  realMemberCount,
   removeMember,
   rollInvite,
   setMemberRole,
@@ -96,9 +98,9 @@ export async function handleTeamRequest(req, res, url) {
         ownerName: team.ownerName,
         members: (team.members || []).length,
         maxMembers: 7,
-        full: (team.members || []).length >= 7,
+        full: realMemberCount(team) >= 7,
         banned: (team.banned || []).some((b) => b.id === me.id),
-        alreadyIn: (team.members || []).some((m) => m.id === me.id)
+        alreadyIn: (team.members || []).some((m) => m.id === me.id && !String(m.id).startsWith('dummy_'))
       },
       signedIn: me.signedIn
     });
@@ -197,6 +199,10 @@ export async function handleTeamRequest(req, res, url) {
         });
       } else if (action === 'transfer') {
         await transferOwnership(me, teamId, body.memberId);
+      } else if (action === 'createDummy') {
+        await createDummyMember(me, teamId, body.name || body.username);
+      } else if (action === 'merge') {
+        await mergeMemberIntoDummy(me, teamId, body.memberId, body.dummyId);
       } else {
         json(res, 400, { error: 'Unknown member action.' });
         return true;

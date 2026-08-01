@@ -68,7 +68,7 @@ export function canSee(record, access, { viaLink = false } = {}) {
   return viaLink;
 }
 
-/** May the caller rename teams on, or delete, this demo? */
+/** May the caller rename teams on, delete, or change visibility of this demo? */
 export function canManage(record, user) {
   if (user?.admin) return true;
   return Boolean(user?.id) && ownerOf(record).id === user.id;

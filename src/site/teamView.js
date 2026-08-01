@@ -11,6 +11,7 @@
 
 import {
   createTeam,
+  createTeamDummy,
   deleteTeamDocument,
   fetchDemos,
   fetchInvite,
@@ -19,6 +20,7 @@ import {
   fetchTeams,
   joinTeam,
   leaveTeam,
+  mergeTeamMember,
   rollTeamInvite,
   saveTeamDocument,
   setTeamPosition,
@@ -138,7 +140,7 @@ export function initTeamView({ auth, escapeHtml }) {
 
   // ---- shared chrome ------------------------------------------------------
 
-  function headerHtml(title, actions = '') {
+  function headerHtml(title = '', actions = '') {
     const picker =
       teams.length > 1
         ? `<select class="site-select tm-team-picker" data-team-picker>${teams
@@ -152,7 +154,7 @@ export function initTeamView({ auth, escapeHtml }) {
         : '';
     return `
       <div class="tm-head">
-        <h2 class="tm-title">${escapeHtml(title)}</h2>
+        ${title ? `<h2 class="tm-title">${escapeHtml(title)}</h2>` : ''}
         <div class="tm-head-actions">${picker}${actions}</div>
       </div>
       <p class="tm-status${statusBad ? ' bad' : ''}" id="tm-status">${escapeHtml(status)}</p>`;
@@ -208,25 +210,50 @@ export function initTeamView({ auth, escapeHtml }) {
 
   // ---- overview -----------------------------------------------------------
 
+  function memberLabel(m) {
+    if (m.dummy) return escapeHtml(m.username);
+    return `@${escapeHtml(m.username)}`;
+  }
+
   function memberRowHtml(m) {
-    const me = m.id === myId();
-    const canManage = team.isOwner && !me;
-    const roleLabel = m.role === 'owner' ? 'Owner' : m.role === 'admin' ? 'Admin' : 'Member';
+    const me = !m.dummy && m.id === myId();
+    const dummy = Boolean(m.dummy);
+    const canMerge = team.isAdmin;
+    const canManageReal = team.isOwner && !me && !dummy;
+    const canRemoveDummy = dummy && team.isAdmin;
+    const roleLabel = dummy
+      ? 'Placeholder'
+      : m.role === 'owner'
+        ? 'Owner'
+        : m.role === 'admin'
+          ? 'Admin'
+          : 'Member';
+    const dragAttrs =
+      canMerge && !dummy
+        ? `draggable="true" data-drag-member="${escapeHtml(m.id)}"`
+        : dummy && canMerge
+          ? `data-drop-dummy="${escapeHtml(m.id)}"`
+          : '';
     return `
-      <li class="tm-member${me ? ' me' : ''}">
-        <span class="tm-member-name">@${escapeHtml(m.username)}${me ? ' (you)' : ''}</span>
-        <span class="tm-tag ${m.kind === 'coach' ? 'coach' : 'player'}">${
-          m.kind === 'coach' ? 'Coach' : 'Player'
+      <li class="tm-member${me ? ' me' : ''}${dummy ? ' is-dummy' : ''}" ${dragAttrs}>
+        <span class="tm-member-name">${memberLabel(m)}${me ? ' (you)' : ''}</span>
+        <span class="tm-tag ${dummy ? 'dummy' : m.kind === 'coach' ? 'coach' : 'player'}">${
+          dummy ? 'Placeholder' : m.kind === 'coach' ? 'Coach' : 'Player'
         }</span>
-        <span class="tm-tag role">${escapeHtml(roleLabel)}</span>
-        <span class="tm-member-when">${escapeHtml(formatWhen(m.joinedAt))}</span>
+        ${dummy ? '' : `<span class="tm-tag role">${escapeHtml(roleLabel)}</span>`}
         ${
-          canManage
+          canManageReal
             ? `<span class="tm-member-actions">
                 <button type="button" class="btn btn-sm" data-kick="${escapeHtml(m.id)}">Kick</button>
                 <button type="button" class="btn btn-sm danger" data-ban="${escapeHtml(m.id)}">Ban</button>
               </span>`
-            : ''
+            : canRemoveDummy
+              ? `<span class="tm-member-actions">
+                  <button type="button" class="btn btn-sm danger" data-kick="${escapeHtml(
+                    m.id
+                  )}" title="Remove placeholder">Remove</button>
+                </span>`
+              : ''
         }
       </li>`;
   }
@@ -246,25 +273,59 @@ export function initTeamView({ auth, escapeHtml }) {
       </li>`;
   }
 
+  function formatInviteCooldown(readyAt) {
+    const ms = Math.max(0, (Number(readyAt) || 0) - Date.now());
+    if (ms <= 0) return '';
+    const totalMin = Math.ceil(ms / 60000);
+    if (totalMin < 60) return `${totalMin}m`;
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    return m ? `${h}h ${m}m` : `${h}h`;
+  }
+
+  function rollInviteButtonHtml() {
+    if (!team?.isOwner) return '';
+    const readyAt = Number(team.inviteRollReadyAt) || 0;
+    const left = formatInviteCooldown(readyAt);
+    if (left) {
+      return `<button type="button" class="btn btn-sm" data-roll disabled title="New invite available in ${escapeHtml(
+        left
+      )}">New invite in ${escapeHtml(left)}</button>`;
+    }
+    return `<button type="button" class="btn btn-sm" data-roll title="Invalidate the current link and mint a new one (24h cooldown)">New invite link</button>`;
+  }
+
   function overviewHtml() {
     const members = team.members || [];
     const banned = team.banned || [];
+    const realCount = team.realMembers ?? members.filter((m) => !m.dummy).length;
+    const dummyCount = members.filter((m) => m.dummy).length;
     return `
-      ${headerHtml(team.name, team.isOwner ? '<button type="button" class="btn btn-sm" data-roll>New invite link</button>' : '')}
+      ${headerHtml('', rollInviteButtonHtml())}
       <div class="tm-grid">
         <section class="tm-card">
-          <h3 class="tm-card-title">Members <span class="tm-count">${members.length} / ${
+          <h3 class="tm-card-title">Members <span class="tm-count">${realCount} / ${
             team.maxMembers || 7
-          }</span></h3>
+          }${dummyCount ? ` · ${dummyCount} placeholder${dummyCount === 1 ? '' : 's'}` : ''}</span></h3>
           <ul class="tm-members">${members.map(memberRowHtml).join('')}</ul>
           ${
             team.isOwner
+              ? `<div class="tm-row tm-placeholder-add">
+                  <input class="site-input" id="tm-dummy-name" type="text" maxlength="32" placeholder="Placeholder name" />
+                  <button type="button" class="btn btn-sm" data-add-dummy>Add placeholder</button>
+                </div>
+                <p class="tm-note">Placeholders hold positions until a real member joins. Admins drag a real member onto a placeholder to merge.</p>`
+              : team.isAdmin
+                ? '<p class="tm-note">Drag a real member onto a placeholder to give them that seat’s positions.</p>'
+                : ''
+          }
+          ${
+            team.isOwner
               ? `<div class="tm-invite">
-                  <label class="tm-note" for="tm-invite-url">Invite link</label>
                   <div class="tm-row">
                     <input class="site-input" id="tm-invite-url" readonly value="${escapeHtml(
                       inviteUrl()
-                    )}" />
+                    )}" aria-label="Invite link" />
                     <button type="button" class="btn btn-sm" data-copy>Copy</button>
                   </div>
                 </div>`
@@ -315,7 +376,7 @@ export function initTeamView({ auth, escapeHtml }) {
     const docs = [...(team.documents || [])].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     const open = docs.find((d) => d.id === openDocId);
     return `
-      ${headerHtml('Documents', '<button type="button" class="btn btn-sm primary" data-new-doc>New document</button>')}
+      ${headerHtml('', '<button type="button" class="btn btn-sm primary" data-new-doc>New document</button>')}
       <div class="tm-docs">
         <aside class="tm-doc-list">
           ${
@@ -393,9 +454,18 @@ export function initTeamView({ auth, escapeHtml }) {
     const rosterRows = members
       .map((m) => {
         const owner = m.role === 'owner';
+        const dummy = Boolean(m.dummy);
+        const dragAttrs =
+          canEdit && !dummy
+            ? `draggable="true" data-drag-member="${escapeHtml(m.id)}"`
+            : dummy && canEdit
+              ? `data-drop-dummy="${escapeHtml(m.id)}"`
+              : '';
         return `
-        <tr>
-          <td class="tm-cell-name">@${escapeHtml(m.username)}</td>
+        <tr class="${dummy ? 'is-dummy' : ''}" ${dragAttrs}>
+          <td class="tm-cell-name">${memberLabel(m)}${
+            dummy ? ' <span class="tm-tag dummy">Placeholder</span>' : ''
+          }</td>
           <td>
             ${
               canEdit && !owner
@@ -410,25 +480,31 @@ export function initTeamView({ auth, escapeHtml }) {
           </td>
           <td>
             ${
-              team.isOwner && !owner
-                ? `<select class="site-select" data-role="${escapeHtml(m.id)}">
+              dummy
+                ? '—'
+                : team.isOwner && !owner
+                  ? `<select class="site-select" data-role="${escapeHtml(m.id)}">
                     <option value="player"${m.role === 'player' ? ' selected' : ''}>Member</option>
                     <option value="admin"${m.role === 'admin' ? ' selected' : ''}>Admin</option>
                   </select>`
-                : owner
-                  ? 'Owner'
-                  : m.role === 'admin'
-                    ? 'Admin'
-                    : 'Member'
+                  : owner
+                    ? 'Owner'
+                    : m.role === 'admin'
+                      ? 'Admin'
+                      : 'Member'
             }
           </td>
           <td>
             ${
-              team.isOwner && !owner
+              team.isOwner && !owner && !dummy
                 ? `<button type="button" class="btn btn-sm" data-transfer="${escapeHtml(
                     m.id
                   )}">Make owner</button>`
-                : ''
+                : dummy && canEdit
+                  ? `<button type="button" class="btn btn-sm danger" data-kick="${escapeHtml(
+                      m.id
+                    )}">Remove</button>`
+                  : ''
             }
           </td>
         </tr>`;
@@ -438,6 +514,13 @@ export function initTeamView({ auth, escapeHtml }) {
     const positionRows = members
       .map((m) => {
         const bag = positions[m.id]?.[rolesSide] || {};
+        const dummy = Boolean(m.dummy);
+        const dragAttrs =
+          canEdit && !dummy
+            ? `draggable="true" data-drag-member="${escapeHtml(m.id)}"`
+            : dummy && canEdit
+              ? `data-drop-dummy="${escapeHtml(m.id)}"`
+              : '';
         const cells = POSITION_MAPS.map((map) => {
           const value = bag[map.code] || '';
           const options = positionsFor(rolesSide, map.code)
@@ -456,14 +539,21 @@ export function initTeamView({ auth, escapeHtml }) {
               : escapeHtml(value || '-')
           }</td>`;
         }).join('');
-        return `<tr><td class="tm-cell-name">@${escapeHtml(m.username)}</td>${cells}</tr>`;
+        return `<tr class="${dummy ? 'is-dummy' : ''}" ${dragAttrs}><td class="tm-cell-name">${memberLabel(
+          m
+        )}${dummy ? ' <span class="tm-tag dummy">Placeholder</span>' : ''}</td>${cells}</tr>`;
       })
       .join('');
 
     return `
-      ${headerHtml('Roles & Positions')}
+      ${headerHtml('')}
       <section class="tm-card">
         <h3 class="tm-card-title">Roster</h3>
+        ${
+          canEdit
+            ? '<p class="tm-note">Drag a real member onto a placeholder to merge seats and positions.</p>'
+            : ''
+        }
         <table class="tm-table">
           <thead><tr><th>Member</th><th>Kind</th><th>Permissions</th><th></th></tr></thead>
           <tbody>${rosterRows}</tbody>
@@ -492,15 +582,21 @@ export function initTeamView({ auth, escapeHtml }) {
       </section>`;
   }
 
-  function wipHtml(title) {
+  function wipHtml() {
     return `
-      ${headerHtml(title)}
+      ${headerHtml('')}
       <div class="tm-wip"><p>Work in progress...</p></div>`;
   }
 
   // ---- render -------------------------------------------------------------
 
+  function syncTeamChrome() {
+    const sideLabel = document.getElementById('side-team-label');
+    if (sideLabel) sideLabel.textContent = team?.name || 'Team';
+  }
+
   function render() {
+    syncTeamChrome();
     if (!loaded) {
       shellEl.innerHTML = '<p class="view-empty">Loading…</p>';
       return;
@@ -523,11 +619,11 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
     if (page === 'team-stratbook') {
-      shellEl.innerHTML = wipHtml('Stratbook Editor');
+      shellEl.innerHTML = wipHtml();
       return;
     }
     if (page === 'team-strategies') {
-      shellEl.innerHTML = wipHtml('My Strategies');
+      shellEl.innerHTML = wipHtml();
       return;
     }
     shellEl.innerHTML = overviewHtml();
@@ -572,9 +668,12 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
     if (t.closest('[data-roll]')) {
+      const btn = t.closest('[data-roll]');
+      if (btn?.disabled) return;
       const res = await run(() => rollTeamInvite(team.id), 'New invite link created.');
       if (res?.team) {
         team = res.team;
+        teams = (res.teams || teams).map((x) => (x.id === team.id ? team : x));
         render();
       }
       return;
@@ -603,6 +702,19 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
 
+    if (t.closest('[data-add-dummy]')) {
+      const name = shellEl.querySelector('#tm-dummy-name')?.value || '';
+      const res = await run(() => createTeamDummy(team.id, name), 'Placeholder added.');
+      if (res?.team) {
+        team = res.team;
+        teams = res.teams || teams;
+        const field = shellEl.querySelector('#tm-dummy-name');
+        if (field) field.value = '';
+        render();
+      }
+      return;
+    }
+
     const kick = t.closest('[data-kick]');
     const ban = t.closest('[data-ban]');
     const unban = t.closest('[data-unban]');
@@ -611,9 +723,17 @@ export function initTeamView({ auth, escapeHtml }) {
       const id = (kick || ban || unban || transfer).dataset[
         kick ? 'kick' : ban ? 'ban' : unban ? 'unban' : 'transfer'
       ];
+      const target = (team.members || []).find((m) => m.id === id);
       const action = kick ? 'kick' : ban ? 'ban' : unban ? 'unban' : 'transfer';
       if (action === 'ban' && !window.confirm('Ban that member? They cannot rejoin.')) return;
       if (action === 'transfer' && !window.confirm('Hand the team over to that member?')) return;
+      if (
+        action === 'kick' &&
+        target?.dummy &&
+        !window.confirm(`Remove placeholder ${target.username}?`)
+      ) {
+        return;
+      }
       const res = await run(() => teamMemberAction(team.id, id, action), 'Done.');
       if (res?.team) {
         team = res.team;
@@ -727,6 +847,63 @@ export function initTeamView({ auth, escapeHtml }) {
         team = res.team;
         teams = teams.map((x) => (x.id === team.id ? team : x));
       }
+    }
+  });
+
+  // Drag a real member onto a placeholder to merge seats / positions.
+  shellEl.addEventListener('dragstart', (e) => {
+    const row = e.target.closest('[data-drag-member]');
+    if (!row || !team?.isAdmin) return;
+    const id = row.dataset.dragMember;
+    e.dataTransfer?.setData('text/aim4-member', id);
+    e.dataTransfer?.setData('text/plain', id);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+    row.classList.add('is-dragging');
+  });
+  shellEl.addEventListener('dragend', (e) => {
+    e.target.closest('[data-drag-member]')?.classList.remove('is-dragging');
+    shellEl.querySelectorAll('.is-drop-target').forEach((el) => el.classList.remove('is-drop-target'));
+  });
+  shellEl.addEventListener('dragover', (e) => {
+    const drop = e.target.closest('[data-drop-dummy]');
+    if (!drop || !team?.isAdmin) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    drop.classList.add('is-drop-target');
+  });
+  shellEl.addEventListener('dragleave', (e) => {
+    const drop = e.target.closest('[data-drop-dummy]');
+    if (!drop) return;
+    if (drop.contains(e.relatedTarget)) return;
+    drop.classList.remove('is-drop-target');
+  });
+  shellEl.addEventListener('drop', async (e) => {
+    const drop = e.target.closest('[data-drop-dummy]');
+    if (!drop || !team?.isAdmin) return;
+    e.preventDefault();
+    drop.classList.remove('is-drop-target');
+    const realId =
+      e.dataTransfer?.getData('text/aim4-member') || e.dataTransfer?.getData('text/plain') || '';
+    const dummyId = drop.dataset.dropDummy;
+    if (!realId || !dummyId || realId === dummyId) return;
+    const real = (team.members || []).find((m) => m.id === realId);
+    const dummy = (team.members || []).find((m) => m.id === dummyId);
+    if (!real || real.dummy || !dummy?.dummy) return;
+    if (
+      !window.confirm(
+        `Merge @${real.username} onto placeholder ${dummy.username}? They take that seat’s positions and kind.`
+      )
+    ) {
+      return;
+    }
+    const res = await run(
+      () => mergeTeamMember(team.id, realId, dummyId),
+      `@${real.username} took ${dummy.username}’s seat.`
+    );
+    if (res?.team) {
+      team = res.team;
+      teams = res.teams || teams;
+      render();
     }
   });
 

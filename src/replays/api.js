@@ -102,6 +102,17 @@ export async function renameDemoTeams(id, team1, team2) {
   );
 }
 
+/** Change who may browse a demo: public | unlisted | private. */
+export async function setDemoVisibility(id, visibility) {
+  return asJson(
+    await fetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/visibility`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ visibility })
+    })
+  );
+}
+
 /**
  * Upload a .dem. XMLHttpRequest rather than fetch: a demo is hundreds of
  * megabytes and upload progress is the only honest thing to show while it
@@ -482,8 +493,8 @@ export async function leaveTeam(teamId) {
 }
 
 /**
- * @param {'kick'|'ban'|'unban'|'role'|'transfer'} action
- * @param {{role?: string, kind?: 'player'|'coach'}} [extra]
+ * @param {'kick'|'ban'|'unban'|'role'|'transfer'|'createDummy'|'merge'} action
+ * @param {{role?: string, kind?: 'player'|'coach', name?: string, username?: string, dummyId?: string}} [extra]
  */
 export async function teamMemberAction(teamId, memberId, action, extra = {}) {
   return asJson(
@@ -493,6 +504,16 @@ export async function teamMemberAction(teamId, memberId, action, extra = {}) {
       body: JSON.stringify({ memberId, action, ...extra })
     })
   );
+}
+
+/** Owner: add a placeholder seat for planning positions. */
+export async function createTeamDummy(teamId, name) {
+  return teamMemberAction(teamId, '', 'createDummy', { name });
+}
+
+/** Admin: real member inherits a placeholder's positions/kind; placeholder goes. */
+export async function mergeTeamMember(teamId, memberId, dummyId) {
+  return teamMemberAction(teamId, memberId, 'merge', { dummyId });
 }
 
 /** @param {'T'|'CT'} side */

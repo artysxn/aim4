@@ -397,7 +397,7 @@ export function startIngest({ user, filename, source, sizeBytes, allowedBytes, o
           // belongs to whoever uploaded it, and still counts against their cap.
           uploaderId: owner?.uploaderId || '',
           uploaderName: owner?.uploaderName || '',
-          visibility: owner?.visibility || 'public',
+          visibility: owner?.visibility || 'private',
           rounds: []
         });
       }

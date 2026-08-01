@@ -539,14 +539,17 @@ button.rp-side-name:hover {
   align-items: stretch;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 #rp-library {
   min-height: 0;
+  overflow: hidden;
 }
 
 #rp-library .rp-browser {
-  min-height: calc(100vh - 140px);
+  min-height: 0;
+  flex: 1;
 }
 
 .rp-result {
@@ -555,6 +558,8 @@ button.rp-side-name:hover {
   padding: 16px;
   border-radius: var(--radius);
   background: var(--surface);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .rp-result .rp-list {
@@ -569,20 +574,20 @@ button.rp-side-name:hover {
 }
 
 .rp-filters {
-  position: sticky;
-  top: 16px;
+  position: relative;
   z-index: 4;
   display: flex;
   flex-direction: column;
   gap: 14px;
   padding: 16px;
-  max-height: calc(100vh - 120px);
-  overflow-x: visible;
+  height: 100%;
+  max-height: 100%;
+  overflow-x: hidden;
   overflow-y: auto;
   border: 0;
   border-radius: var(--radius);
   background: var(--surface);
-  align-self: start;
+  align-self: stretch;
 }
 
 .rp-filter-group {
@@ -700,6 +705,25 @@ button.rp-side-name:hover {
 .rp-seg-side .rp-seg-btn img {
   width: 18px;
   height: 18px;
+}
+
+.rp-seg-decided .rp-seg-btn {
+  padding: 9px 8px;
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+
+.rp-vis-prompt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 8px;
+}
+
+.rp-vis-prompt-note {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font: 200 12px var(--font-body);
 }
 
 /* Compact AWP toggle — chip under buy select / beside stats filters */
@@ -2952,10 +2976,17 @@ body.rv-open {
   .rp-top,
   .rp-browser {
     grid-template-columns: 1fr;
+    overflow: visible;
   }
 
   .rp-filters {
-    position: static;
+    position: relative;
+    height: auto;
+    max-height: none;
+  }
+
+  .rp-result {
+    overflow: visible;
   }
 
   .rv-stage {
@@ -4603,7 +4634,7 @@ table.ch-table tbody tr:hover {
 }
 
 .rp-by {
-  font: 500 11px var(--font-body);
+  font: 200 11px var(--font-body);
   color: var(--muted);
   white-space: nowrap;
 }
@@ -4702,6 +4733,59 @@ table.rp-mine-table tbody tr:hover {
   background: var(--surface-hover);
 }
 
+table.rp-mine-table tbody tr.is-selected {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+table.rp-mine-table tbody tr {
+  cursor: pointer;
+}
+
+.rp-mine-check {
+  width: 28px;
+  padding-right: 4px !important;
+  vertical-align: middle;
+}
+
+.rp-mine-check input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.rp-mine-vis-select {
+  min-width: 108px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.rp-mine-vis-select:has(option[value='unlisted']:checked) {
+  color: #4cd964;
+}
+
+.rp-mine-vis-select:has(option[value='private']:checked) {
+  color: #ff6b81;
+}
+
+.rp-mine-bulk {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.rp-mine-bulk-count {
+  color: var(--text);
+  font: 600 12px var(--font-body);
+  font-variant-numeric: tabular-nums;
+}
+
 .rp-mine-when {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -4751,6 +4835,7 @@ table.rp-mine-table tbody tr:hover {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-left: auto;
 }
 
 .tm-status {
@@ -4788,12 +4873,13 @@ table.rp-mine-table tbody tr:hover {
   flex-direction: column;
   gap: 10px;
   padding: 14px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius);
   background: var(--surface);
 }
 
-.tm-card + .tm-card {
+/* Stacked cards on Roles / Documents — not side-by-side grid cells. */
+.tm-shell > .tm-card + .tm-card {
   margin-top: 14px;
 }
 
@@ -4876,6 +4962,43 @@ table.rp-mine-table tbody tr:hover {
   color: var(--accent);
 }
 
+.tm-member.is-dummy,
+.tm-table tr.is-dummy .tm-cell-name {
+  opacity: 0.92;
+}
+
+.tm-member[data-drag-member],
+.tm-table tr[data-drag-member] {
+  cursor: grab;
+}
+
+.tm-member.is-dragging,
+.tm-table tr.is-dragging {
+  opacity: 0.45;
+}
+
+.tm-member[data-drop-dummy],
+.tm-table tr[data-drop-dummy] {
+  outline: 1px dashed transparent;
+  outline-offset: 2px;
+  transition: outline-color 0.12s ease, background 0.12s ease;
+}
+
+.tm-member.is-drop-target,
+.tm-table tr.is-drop-target {
+  outline-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.tm-placeholder-add {
+  margin-top: 10px;
+}
+
+.tm-tag.dummy {
+  color: #c9b37a;
+  background: rgba(201, 179, 122, 0.12);
+}
+
 .tm-member-when {
   color: var(--muted);
   font-size: 11px;
@@ -4910,6 +5033,7 @@ table.rp-mine-table tbody tr:hover {
 
 .tm-demo-when {
   color: var(--muted);
+  font: 200 12px var(--font-body);
   font-variant-numeric: tabular-nums;
   width: 62px;
 }
@@ -4924,7 +5048,11 @@ table.rp-mine-table tbody tr:hover {
 
 .tm-demo-map {
   color: var(--muted);
-  font-size: 12px;
+  font: 200 12px var(--font-body);
+}
+
+.tm-demo .rp-by {
+  font: 200 11px var(--font-body);
 }
 
 .tm-row {
@@ -4947,7 +5075,6 @@ table.rp-mine-table tbody tr:hover {
   flex-direction: column;
   gap: 5px;
   padding-top: 6px;
-  border-top: 1px solid var(--border);
 }
 
 .tm-setup {
@@ -4961,7 +5088,7 @@ table.rp-mine-table tbody tr:hover {
   flex-direction: column;
   gap: 8px;
   padding: 16px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius);
   background: var(--surface);
 }
@@ -4982,7 +5109,7 @@ table.rp-mine-table tbody tr:hover {
   display: grid;
   place-items: center;
   min-height: 320px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--muted);
@@ -5020,10 +5147,44 @@ table.rp-mine-table tbody tr:hover {
   overflow-x: auto;
 }
 
-.tm-pos-table th:first-child {
+.tm-pos-table {
+  table-layout: fixed;
+  min-width: 920px;
+  border-collapse: collapse;
+}
+
+.tm-pos-table th,
+.tm-pos-table td {
+  border: 1px solid var(--border);
+  padding: 8px 6px;
+  text-align: center;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.tm-pos-table td:has(.tm-pos) {
+  padding: 0;
+}
+
+.tm-pos-table thead th {
+  padding: 8px 6px;
+  font: 600 10px var(--font-body);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: #0a0a0a;
+}
+
+.tm-pos-table th:first-child,
+.tm-pos-table td.tm-cell-name {
   position: sticky;
   left: 0;
+  z-index: 1;
+  width: 120px;
+  min-width: 120px;
+  padding: 8px 10px;
+  text-align: left;
   background: var(--surface);
+  box-shadow: 1px 0 0 var(--border);
 }
 
 .tm-pos-table.t thead th {
@@ -5034,10 +5195,45 @@ table.rp-mine-table tbody tr:hover {
   color: var(--rv-ct, #6f9ad6);
 }
 
-.tm-pos {
-  min-width: 118px;
-  padding: 3px 6px;
-  font-size: 12px;
+/* Square cell editors — fill the grid, no pills. */
+.tm-pos-table .tm-pos {
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  margin: 0;
+  padding: 0 22px 0 8px;
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath fill='%23686868' d='M0 0l4 5 4-5z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 8px 5px;
+  color: var(--text);
+  font: 500 12px var(--font-body);
+  line-height: 34px;
+  cursor: pointer;
+  outline: none;
+  box-shadow: none;
+}
+
+.tm-pos-table .tm-pos:hover,
+.tm-pos-table .tm-pos:focus {
+  background-color: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.tm-pos-table .tm-pos:focus {
+  outline: 1px solid var(--border-strong);
+  outline-offset: -1px;
+}
+
+.tm-pos-table td:has(.tm-pos:focus) {
+  z-index: 2;
 }
 
 /* ---- Documents ---------------------------------------------------------- */
@@ -5060,7 +5256,7 @@ table.rp-mine-table tbody tr:hover {
   flex-direction: column;
   gap: 4px;
   padding: 8px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius);
   background: var(--surface);
   max-height: 70vh;
@@ -5142,7 +5338,7 @@ table.rp-mine-table tbody tr:hover {
   gap: 12px;
   flex-wrap: wrap;
   padding: 8px 10px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius);
   background: var(--surface);
 }
@@ -5193,9 +5389,9 @@ table.rp-mine-table tbody tr:hover {
 }
 
 .doc-page {
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius);
-  background: var(--surface-solid);
+  background: var(--surface);
   padding: 28px 34px;
   min-height: 60vh;
 }

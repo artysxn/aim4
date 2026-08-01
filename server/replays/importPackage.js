@@ -104,7 +104,11 @@ export async function importReplayPackage(user, buf, meta = {}) {
     source: 'import',
     error: null,
     roundCount: rounds.length,
-    rounds
+    rounds,
+    uploaderId: meta.uploaderId || record.uploaderId || '',
+    uploaderName: meta.uploaderName || record.uploaderName || '',
+    // Packages land private until the uploader picks in the client prompt.
+    visibility: meta.visibility || record.visibility || 'private'
   };
 
   // Local packages often still carry clan/player fallbacks — stamp standings

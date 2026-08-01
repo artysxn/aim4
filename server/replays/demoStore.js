@@ -285,6 +285,23 @@ export async function renameDemoTeams(user, id, team1Name, team2Name) {
 }
 
 /**
+ * Change who may browse a demo (public / unlisted / private).
+ * Round files are unchanged; only the demo record's visibility field moves.
+ */
+export async function setDemoVisibility(user, id, visibility) {
+  const demoId = sanitizeId(id);
+  const record = await readRecord(user, demoId);
+  if (!record) return null;
+  const next = String(visibility || '').toLowerCase();
+  if (!['public', 'unlisted', 'private'].includes(next)) {
+    throw new Error('Visibility must be public, unlisted, or private.');
+  }
+  record.visibility = next;
+  await writeRecord(user, record);
+  return record;
+}
+
+/**
  * Persist a fully materialized demo (manifest + round files) without
  * re-deriving round ids. Used by server ingest and by import of local packages.
  *
