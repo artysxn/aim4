@@ -23,6 +23,8 @@ import sideGamemodes from '../icons/sideicons/sideicon_gamemodes.svg?raw';
 import sideLeaderboards from '../icons/sideicons/sideicon_leaderboards.svg?raw';
 import sideReplayViewer from '../icons/sideicons/sideicon_replayviewer.svg?raw';
 import sideRoutines from '../icons/sideicons/sideicon_routines.svg?raw';
+import logoFullUrl from '../icons/aim4logos/logocolor.png';
+import logoMarkUrl from '../icons/aim4logos/logo1x1.png';
 import { SettingsManager } from '../core/SettingsManager.js';
 import { AuthManager } from '../core/AuthManager.js';
 import { initTrainingView } from './trainingView.js';
@@ -30,6 +32,15 @@ import { initLeaderboardsView } from './leaderboardsView.js';
 import { initFootballView } from './footballView.js';
 import { initReplaysView } from './replaysView.js';
 import { initReplayViewerView } from './replayViewerView.js';
+
+// Brand logos — Vite hashes these into /assets so Vercel serves them (the
+// catch-all rewrite used to send /icons/* to train.html).
+document.querySelectorAll('.side-logo-full, .hero-logo img, .foot-logo img').forEach((img) => {
+  img.src = logoFullUrl;
+});
+document.querySelectorAll('.side-logo-mark').forEach((img) => {
+  img.src = logoMarkUrl;
+});
 
 // ---- Legacy redirects -------------------------------------------------------
 // The game used to live at "/". Lobby invites (?lobby=) and replay shares
