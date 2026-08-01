@@ -8,6 +8,13 @@
 
 import { whoami } from './identity.js';
 import {
+  deleteRound as deleteStrategyRound,
+  findByShareId,
+  listRounds,
+  readRound,
+  saveRound
+} from './strategyReplays.js';
+import {
   createDummyMember,
   deleteDocument,
   deleteStrategy,
@@ -105,6 +112,24 @@ export async function handleTeamRequest(req, res, url) {
         alreadyIn: (team.members || []).some((m) => m.id === me.id && !String(m.id).startsWith('dummy_'))
       },
       signedIn: me.signedIn
+    });
+    return true;
+  }
+
+  // A shared 2D round opens for anyone holding the link, signed in or not —
+  // that is the whole point of the share id. It exposes one round and says
+  // nothing about the team's other work.
+  const shareMatch = p.match(/^\/api\/teams\/shared2d\/([A-Za-z0-9_-]{6,32})$/);
+  if (req.method === 'GET' && shareMatch) {
+    const hit = await findByShareId(shareMatch[1]);
+    if (!hit) {
+      json(res, 404, { error: 'That strategy link is not valid.' });
+      return true;
+    }
+    json(res, 200, {
+      entry: { ...hit.entry, teamId: undefined },
+      round: hit.round,
+      shared: true
     });
     return true;
   }
@@ -250,6 +275,40 @@ export async function handleTeamRequest(req, res, url) {
       if (req.method === 'DELETE') {
         await deleteDocument(me, teamId, docId);
         json(res, 200, { ok: true, team: publicTeam(await teamById(teamId), me.id) });
+        return true;
+      }
+    }
+
+    // ---- synthetic 2D rounds ----------------------------------------------
+    if (tail === '/replays2d') {
+      if (req.method === 'GET') {
+        json(res, 200, { rounds: await listRounds(teamId) });
+        return true;
+      }
+      if (req.method === 'POST') {
+        const body = await readJson(req, 12 * 1024 * 1024);
+        const entry = await saveRound(me, teamId, body);
+        json(res, 200, { entry, rounds: await listRounds(teamId) });
+        return true;
+      }
+    }
+
+    const roundMatch = p.match(/^\/api\/teams\/[A-Za-z0-9_]+\/replays2d\/([A-Za-z0-9_-]+)$/);
+    if (roundMatch) {
+      const roundId = roundMatch[1];
+      if (req.method === 'GET') {
+        const round = await readRound(teamId, roundId);
+        if (!round) {
+          json(res, 404, { error: 'That round no longer exists.' });
+          return true;
+        }
+        const entry = (await listRounds(teamId)).find((r) => r.id === roundId) || null;
+        json(res, 200, { entry, round });
+        return true;
+      }
+      if (req.method === 'DELETE') {
+        await deleteStrategyRound(me, teamId, roundId);
+        json(res, 200, { ok: true, rounds: await listRounds(teamId) });
         return true;
       }
     }

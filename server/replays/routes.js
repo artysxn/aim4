@@ -75,6 +75,7 @@ import {
   visibleRecords
 } from './visibility.js';
 import { importReplayPackage } from './importPackage.js';
+import { spawnsForMap } from './spawnPoints.js';
 import { PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
 import { clusterTeams } from '../../src/replays/shared/teamClusters.js';
 import { getZones, listZoneMaps, saveZones } from '../zonesStore.js';
@@ -85,7 +86,8 @@ const statsIo = { userDir, readRoundMeta, readRoundTicks, getZones };
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Aim4-User, X-Aim4-Filename'
+  'Access-Control-Allow-Headers':
+    'Authorization, Content-Type, X-Aim4-User, X-Aim4-Filename, X-Aim4-Visibility'
 };
 
 function json(res, status, body) {
@@ -814,6 +816,21 @@ export async function handleReplayRequest(req, res, url) {
       return true;
     }
     json(res, 200, { playlists: await playlistsFor() });
+    return true;
+  }
+
+  // ---- spawn points -------------------------------------------------------
+  // Real starting positions for one map, sampled from the demos this caller is
+  // allowed to read. The Strategy Creator paints these as its spawn choices.
+  if (req.method === 'GET' && p === '/api/replays/spawns') {
+    const map = String(url.searchParams.get('map') || '').toUpperCase();
+    if (!map) {
+      json(res, 400, { error: 'Name a map.' });
+      return true;
+    }
+    const { allowed } = await readable();
+    const spawns = await spawnsForMap(statsIo, user, allowed, map);
+    json(res, 200, { map, spawns, minSeparation: 30 });
     return true;
   }
 

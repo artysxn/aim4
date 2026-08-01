@@ -61,6 +61,45 @@ const STRAT_CATEGORY_CT = [
   'Retake'
 ];
 
+const SB_COLOR_DEFAULTS = {
+  'econ-pistol': '#7a7a7a',
+  'econ-full-buy': '#3db8b0',
+  'econ-full-buy-awp': '#2a9d96',
+  'econ-antiforce': '#8b8fd4',
+  'econ-force': '#d4a05a',
+  'econ-eco': '#5a5a5a',
+  'cat-pistol': '#7a7a7a',
+  'cat-set-call': '#3f8f4a',
+  'cat-default': '#2a5c45',
+  'cat-opener': '#b56a3a',
+  'cat-midround': '#7a4ea8',
+  'cat-lateround': '#8a3a5c',
+  'cat-cheap-exec': '#a87830',
+  'cat-setup': '#3a6f8f',
+  'cat-retake': '#8f3a4a'
+};
+
+const SB_ECON_COLOR_LABELS = STRAT_ECONOMY;
+const SB_CAT_COLOR_LABELS = [
+  ...new Set([...STRAT_CATEGORY_T, ...STRAT_CATEGORY_CT])
+];
+
+function stratToneSlug(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\+/g, ' ')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-');
+}
+
+function econToneKey(value) {
+  return `econ-${stratToneSlug(value)}`;
+}
+
+function catToneKey(value) {
+  return `cat-${stratToneSlug(value)}`;
+}
+
 function formatWhen(ts) {
   if (!ts) return '';
   const d = new Date(ts);
@@ -103,6 +142,31 @@ export function initTeamView({ auth, escapeHtml }) {
   } catch {
     /* ignore */
   }
+  const SB_VIEW_KEY = 'aim4.stratbookView';
+  /** @type {'compact'|'full'} */
+  let stratbookView = 'compact';
+  try {
+    const savedView = localStorage.getItem(SB_VIEW_KEY);
+    if (savedView === 'compact' || savedView === 'full') stratbookView = savedView;
+  } catch {
+    /* ignore */
+  }
+  const SB_COLORS_KEY = 'aim4.stratbookColors';
+  /** @type {Record<string, string>} */
+  let stratbookColors = { ...SB_COLOR_DEFAULTS };
+  try {
+    const raw = JSON.parse(localStorage.getItem(SB_COLORS_KEY) || '{}');
+    if (raw && typeof raw === 'object') {
+      for (const [k, v] of Object.entries(raw)) {
+        if (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v) && k in SB_COLOR_DEFAULTS) {
+          stratbookColors[k] = v;
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  let stratbookSettingsOpen = false;
   let pendingInvite = '';
   /**
    * Who the backend says is calling. The client's own Supabase session is not
@@ -686,26 +750,26 @@ export function initTeamView({ auth, escapeHtml }) {
 
         return `
         <tr class="sb-row sb-${side.toLowerCase()}" data-sb-row="${escapeHtml(s.id)}">
-          <td>${
-            canEdit
-              ? `<select class="site-select sb-select" data-sb-field="economy" data-sb-id="${escapeHtml(
-                  s.id
-                )}">${optionsHtml(STRAT_ECONOMY, s.economy || STRAT_ECONOMY[0])}</select>`
-              : escapeHtml(s.economy || '')
-          }</td>
-          <td>${
-            canEdit
-              ? `<select class="site-select sb-select" data-sb-field="category" data-sb-id="${escapeHtml(
-                  s.id
-                )}">${optionsHtml(categories, s.category || categories[0])}</select>`
-              : escapeHtml(s.category || '')
-          }</td>
           <td class="sb-cell-name">${
             canEdit
               ? `<input class="sb-input" type="text" data-sb-field="name" data-sb-id="${escapeHtml(
                   s.id
                 )}" value="${escapeHtml(s.name || '')}" maxlength="120" placeholder="Name" />`
               : escapeHtml(s.name || '')
+          }</td>
+          <td class="sb-cell-econ ${econClass(s.economy)}">${
+            canEdit
+              ? `<select class="sb-cell-select" data-sb-field="economy" data-sb-id="${escapeHtml(
+                  s.id
+                )}">${optionsHtml(STRAT_ECONOMY, s.economy || STRAT_ECONOMY[0])}</select>`
+              : escapeHtml(s.economy || '')
+          }</td>
+          <td class="sb-cell-cat ${catClass(s.category)}">${
+            canEdit
+              ? `<select class="sb-cell-select" data-sb-field="category" data-sb-id="${escapeHtml(
+                  s.id
+                )}">${optionsHtml(categories, s.category || categories[0])}</select>`
+              : escapeHtml(s.category || '')
           }</td>
           <td class="sb-cell-desc">${
             canEdit
@@ -792,9 +856,9 @@ export function initTeamView({ auth, escapeHtml }) {
           <table class="sb-table">
             <thead>
               <tr>
+                <th>Name</th>
                 <th>Economy</th>
                 <th>Category</th>
-                <th>Name</th>
                 <th>Description</th>
                 <th>Links</th>
                 ${roleHeads}
@@ -827,23 +891,17 @@ export function initTeamView({ auth, escapeHtml }) {
       </section>`
     ).join('');
 
+    const colorVars = stratColorVarsStyle();
     return `
-      ${headerHtml(
-        '',
-        `<div class="sb-zoom">
-          <label class="sb-zoom-label" for="sb-zoom">Zoom</label>
-          <input id="sb-zoom" class="sb-zoom-range" type="range" min="0" max="${
-            SB_ZOOM_STEPS.length - 1
-          }" step="1" value="${stratbookZoomIndex()}" data-sb-zoom />
-          <span class="sb-zoom-value" data-sb-zoom-label>${stratbookZoom}%</span>
-        </div>`
-      )}
+      ${headerHtml('', stratSettingsPanelHtml({ showZoomView: true }))}
       ${
         team?.isAdmin
           ? ''
           : '<p class="tm-note">Only team admins can edit the stratbook.</p>'
       }
-      <div class="sb-maps" style="--sb-zoom: ${stratbookZoom / 100}">${maps}</div>`;
+      <div class="sb-maps is-${stratbookView}" data-sb-color-root style="--sb-zoom: ${
+        stratbookZoom / 100
+      };${colorVars}">${maps}</div>`;
   }
 
   function applyTeam(next) {
@@ -861,11 +919,23 @@ export function initTeamView({ auth, escapeHtml }) {
   }
 
   function collapseStratRow(row) {
-    if (!row) return;
+    if (!row || stratbookView === 'full') return;
     row.querySelectorAll('textarea.sb-role-note').forEach((ta) => {
       if (ta === document.activeElement) return;
       ta.style.height = '28px';
     });
+  }
+
+  function applyStratbookViewHeights() {
+    const rows = shellEl.querySelectorAll('tr.sb-row');
+    if (stratbookView === 'full') {
+      rows.forEach(expandStratRow);
+    } else {
+      rows.forEach((row) => {
+        if (row.matches(':hover') || row.contains(document.activeElement)) expandStratRow(row);
+        else collapseStratRow(row);
+      });
+    }
   }
 
   /** Patch one strategy without a full re-render (keeps focus). */
@@ -913,19 +983,87 @@ export function initTeamView({ auth, escapeHtml }) {
   }
 
   function econClass(value) {
-    const key = String(value || '')
-      .toLowerCase()
-      .replace(/\+/g, ' ')
-      .replace(/\s+/g, '-')
-      .replace(/-+/g, '-');
-    return `ms-econ ms-econ-${key}`;
+    return `ms-econ ms-econ-${stratToneSlug(value)}`;
   }
 
   function catClass(value) {
-    const key = String(value || '')
-      .toLowerCase()
-      .replace(/\s+/g, '-');
-    return `ms-cat ms-cat-${key}`;
+    return `ms-cat ms-cat-${stratToneSlug(value)}`;
+  }
+
+  function stratColorVarsStyle() {
+    return Object.entries(stratbookColors)
+      .map(([k, v]) => `--sb-${k}:${v}`)
+      .join(';');
+  }
+
+  function saveStratbookColors() {
+    try {
+      localStorage.setItem(SB_COLORS_KEY, JSON.stringify(stratbookColors));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function applyStratColorVars() {
+    shellEl.querySelectorAll('[data-sb-color-root]').forEach((el) => {
+      for (const [k, v] of Object.entries(stratbookColors)) {
+        el.style.setProperty(`--sb-${k}`, v);
+      }
+    });
+  }
+
+  function colorRowHtml(kind, label) {
+    const key = kind === 'econ' ? econToneKey(label) : catToneKey(label);
+    const value = stratbookColors[key] || SB_COLOR_DEFAULTS[key] || '#888888';
+    return `<label class="sb-color-row">
+      <span class="sb-color-name">${escapeHtml(label)}</span>
+      <input type="color" class="sb-color-input" data-sb-color="${escapeHtml(key)}" value="${escapeHtml(
+        value
+      )}" />
+    </label>`;
+  }
+
+  function stratSettingsPanelHtml({ showZoomView }) {
+    const zoomBlock = showZoomView
+      ? `<div class="sb-settings-block">
+          <div class="sb-settings-title">Zoom</div>
+          <div class="sb-zoom">
+            <input class="sb-zoom-range" type="range" min="0" max="${
+              SB_ZOOM_STEPS.length - 1
+            }" step="1" value="${stratbookZoomIndex()}" data-sb-zoom />
+            <span class="sb-zoom-value" data-sb-zoom-label>${stratbookZoom}%</span>
+          </div>
+        </div>
+        <div class="sb-settings-block">
+          <div class="sb-settings-title">View</div>
+          <select class="site-select sb-view-select" data-sb-view>
+            <option value="compact"${stratbookView === 'compact' ? ' selected' : ''}>Compact view</option>
+            <option value="full"${stratbookView === 'full' ? ' selected' : ''}>Full view</option>
+          </select>
+        </div>`
+      : '';
+    return `
+      <div class="sb-settings${stratbookSettingsOpen ? ' is-open' : ''}" data-sb-settings>
+        <button type="button" class="sb-settings-btn" data-sb-settings-toggle title="Stratbook settings" aria-label="Stratbook settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.07 7.07 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.55-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.77 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94L2.89 14.5a.5.5 0 0 0-.12.64l1.92 3.32c.14.24.42.34.66.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.59-.24 1.13-.55 1.63-.94l2.39.96c.24.12.52.02.66-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/>
+          </svg>
+        </button>
+        <div class="sb-settings-panel" data-sb-settings-panel>
+          ${zoomBlock}
+          <div class="sb-settings-block">
+            <div class="sb-settings-head">
+              <div class="sb-settings-title">Economy colors</div>
+              <button type="button" class="btn btn-sm" data-sb-colors-reset>Reset</button>
+            </div>
+            <div class="sb-color-list">${SB_ECON_COLOR_LABELS.map((l) => colorRowHtml('econ', l)).join('')}</div>
+          </div>
+          <div class="sb-settings-block">
+            <div class="sb-settings-title">Category colors</div>
+            <div class="sb-color-list">${SB_CAT_COLOR_LABELS.map((l) => colorRowHtml('cat', l)).join('')}</div>
+          </div>
+        </div>
+      </div>`;
   }
 
   function myStratRows(mapCode, side, playerId) {
@@ -986,7 +1124,8 @@ export function initTeamView({ auth, escapeHtml }) {
     const mapsHtml = POSITION_MAPS.map((m) => myStratMapHtml(m, strategiesPlayerId)).join('');
 
     return `
-      ${headerHtml('')}
+      ${headerHtml('', stratSettingsPanelHtml({ showZoomView: false }))}
+      <div data-sb-color-root style="${stratColorVarsStyle()}">
       <section class="tm-card">
         <div class="tm-card-head">
           <h3 class="tm-card-title">Player</h3>
@@ -1000,7 +1139,8 @@ export function initTeamView({ auth, escapeHtml }) {
               selected.dummy ? selected.username : `@${selected.username}`
             )} yet.</p></section>`
           : ''
-      }`;
+      }
+      </div>`;
   }
 
   // ---- render -------------------------------------------------------------
@@ -1035,9 +1175,7 @@ export function initTeamView({ auth, escapeHtml }) {
     }
     if (page === 'team-stratbook') {
       shellEl.innerHTML = stratbookHtml();
-      shellEl.querySelectorAll('textarea.sb-role-note').forEach((ta) => {
-        ta.style.height = '28px';
-      });
+      applyStratbookViewHeights();
       return;
     }
     if (page === 'team-strategies') {
@@ -1171,6 +1309,29 @@ export function initTeamView({ auth, escapeHtml }) {
       strategiesPlayerId = msPlayer.dataset.msPlayer || '';
       render();
       return;
+    }
+
+    const settingsToggle = t.closest('[data-sb-settings-toggle]');
+    if (settingsToggle) {
+      stratbookSettingsOpen = !stratbookSettingsOpen;
+      shellEl.querySelector('[data-sb-settings]')?.classList.toggle('is-open', stratbookSettingsOpen);
+      return;
+    }
+
+    if (t.closest('[data-sb-colors-reset]')) {
+      stratbookColors = { ...SB_COLOR_DEFAULTS };
+      saveStratbookColors();
+      applyStratColorVars();
+      shellEl.querySelectorAll('[data-sb-color]').forEach((input) => {
+        const key = input.dataset.sbColor;
+        if (key && SB_COLOR_DEFAULTS[key]) input.value = SB_COLOR_DEFAULTS[key];
+      });
+      return;
+    }
+
+    if (stratbookSettingsOpen && !t.closest('[data-sb-settings]')) {
+      stratbookSettingsOpen = false;
+      shellEl.querySelector('[data-sb-settings]')?.classList.remove('is-open');
     }
 
     // ---- documents --------------------------------------------------------
@@ -1311,6 +1472,24 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
 
+    const viewSel = t.closest?.('[data-sb-view]');
+    if (viewSel) {
+      const next = viewSel.value === 'full' ? 'full' : 'compact';
+      stratbookView = next;
+      try {
+        localStorage.setItem(SB_VIEW_KEY, next);
+      } catch {
+        /* ignore */
+      }
+      const maps = shellEl.querySelector('.sb-maps');
+      if (maps) {
+        maps.classList.toggle('is-full', next === 'full');
+        maps.classList.toggle('is-compact', next === 'compact');
+      }
+      applyStratbookViewHeights();
+      return;
+    }
+
     const picker = t.closest('[data-team-picker]');
     if (picker) {
       team = teams.find((x) => x.id === picker.value) || team;
@@ -1387,6 +1566,13 @@ export function initTeamView({ auth, escapeHtml }) {
       }
       if (field === 'economy' || field === 'category') {
         await patchStrategy(id, { [field]: sbField.value });
+        const td = sbField.closest('td');
+        if (td) {
+          td.className =
+            field === 'economy'
+              ? `sb-cell-econ ${econClass(sbField.value)}`
+              : `sb-cell-cat ${catClass(sbField.value)}`;
+        }
         return;
       }
       return;
@@ -1468,6 +1654,16 @@ export function initTeamView({ auth, escapeHtml }) {
   });
 
   shellEl.addEventListener('input', (e) => {
+    const color = e.target.closest?.('[data-sb-color]');
+    if (color) {
+      const key = color.dataset.sbColor;
+      if (key && key in SB_COLOR_DEFAULTS) {
+        stratbookColors[key] = color.value;
+        saveStratbookColors();
+        applyStratColorVars();
+      }
+      return;
+    }
     const zoom = e.target.closest?.('[data-sb-zoom]');
     if (zoom) {
       const next = SB_ZOOM_STEPS[Number(zoom.value)] ?? 100;
@@ -1491,6 +1687,7 @@ export function initTeamView({ auth, escapeHtml }) {
   });
 
   shellEl.addEventListener('mouseover', (e) => {
+    if (stratbookView === 'full') return;
     const row = e.target.closest?.('tr.sb-row');
     if (!row || !shellEl.contains(row)) return;
     const from = e.relatedTarget;
@@ -1499,6 +1696,7 @@ export function initTeamView({ auth, escapeHtml }) {
   });
 
   shellEl.addEventListener('mouseout', (e) => {
+    if (stratbookView === 'full') return;
     const row = e.target.closest?.('tr.sb-row');
     if (!row || !shellEl.contains(row)) return;
     const to = e.relatedTarget;
@@ -1573,7 +1771,10 @@ export function initTeamView({ auth, escapeHtml }) {
     /** @param {{page?: string, invite?: string}} params */
     onShow(params = {}) {
       const next = PAGES.includes(params.page) ? params.page : 'team-overview';
-      if (next !== page) openVisibleMenu = '';
+      if (next !== page) {
+        openVisibleMenu = '';
+        stratbookSettingsOpen = false;
+      }
       page = next;
       if (params.invite) pendingInvite = params.invite;
       // Re-check whenever the last answer was "signed out": a session that

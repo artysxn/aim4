@@ -577,3 +577,65 @@ export async function deleteTeamStrategy(teamId, strategyId) {
     )
   );
 }
+
+// ---------------------------------------------------------------------------
+// Synthetic 2D strategy rounds
+// ---------------------------------------------------------------------------
+
+/** Real spawn points for a map, sampled from demos the caller may read. */
+export async function fetchSpawns(map) {
+  const body = await asJson(
+    await fetch(`${API_BASE}/api/replays/spawns?map=${encodeURIComponent(map)}`, {
+      headers: await headers()
+    })
+  );
+  return body.spawns || [];
+}
+
+/** Index entries only: the list view never downloads a round body. */
+export async function fetchStrategyRounds(teamId) {
+  const body = await asJson(
+    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/replays2d`, {
+      headers: await headers()
+    })
+  );
+  return body.rounds || [];
+}
+
+export async function fetchStrategyRound(teamId, id) {
+  return asJson(
+    await fetch(
+      `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/replays2d/${encodeURIComponent(id)}`,
+      { headers: await headers() }
+    )
+  );
+}
+
+/** @param {{id?: string, name?: string, round: object}} payload */
+export async function saveStrategyRound(teamId, payload) {
+  return asJson(
+    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/replays2d`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload)
+    })
+  );
+}
+
+export async function deleteStrategyRound(teamId, id) {
+  return asJson(
+    await fetch(
+      `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/replays2d/${encodeURIComponent(id)}`,
+      { method: 'DELETE', headers: await headers() }
+    )
+  );
+}
+
+/** Open a shared round by its link code. Works signed out. */
+export async function fetchSharedStrategyRound(shareId) {
+  return asJson(
+    await fetch(`${API_BASE}/api/teams/shared2d/${encodeURIComponent(shareId)}`, {
+      headers: await headers()
+    })
+  );
+}

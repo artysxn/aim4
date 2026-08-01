@@ -28,6 +28,7 @@ import sideTeamDocs from '../icons/sideicons/sideicon_docs.svg?raw';
 import sideTeamPositions from '../icons/sideicons/sideicon_positions.svg?raw';
 import sideTeamStratbook from '../icons/sideicons/sideicon_stratbook.svg?raw';
 import sideTeamStrategies from '../icons/sideicons/sideicon_my_strategies.svg?raw';
+import sideTeamCreator from '../icons/sideicons/sideicon_2d_creator.svg?raw';
 import logoFullUrl from '../icons/aim4logos/logocolor.png';
 import logoMarkUrl from '../icons/aim4logos/logo1x1.png';
 import { SettingsManager } from '../core/SettingsManager.js';
@@ -38,6 +39,7 @@ import { initFootballView } from './footballView.js';
 import { initReplaysView } from './replaysView.js';
 import { initReplayViewerView } from './replayViewerView.js';
 import { initTeamView } from './teamView.js';
+import { initStrategyCreatorView } from './strategyCreatorView.js';
 
 // Brand logos — Vite hashes these into /assets so Vercel serves them (the
 // catch-all rewrite used to send /icons/* to train.html).
@@ -90,7 +92,8 @@ const ICONS = {
   'team-docs': sideTeamDocs,
   'team-positions': sideTeamPositions,
   'team-stratbook': sideTeamStratbook,
-  'team-strategies': sideTeamStrategies
+  'team-strategies': sideTeamStrategies,
+  'team-creator': sideTeamCreator
 };
 
 document.querySelectorAll('[data-icon]').forEach((el) => {
@@ -306,6 +309,11 @@ const ROUTES = {
     shell: 'team',
     page: 'team-strategies'
   },
+  'team-creator': {
+    title: '2D Strategy Creator',
+    path: '/team/creator',
+    shell: 'strategy-creator'
+  },
   training: { title: 'Gamemodes', path: '/training', shell: 'training' },
   leaderboards: { title: 'Leaderboards', path: '/leaderboards', shell: 'leaderboards' },
   'replay-viewer': { title: 'Replay Viewer', path: '/replay-viewer', shell: 'replay-viewer' },
@@ -370,6 +378,20 @@ let inviteCode = '';
   if (m) {
     inviteCode = m[1];
     window.history.replaceState(null, '', '/team');
+  }
+}
+
+/**
+ * A shared 2D round lands on aim4.io/s2/<code>. Same trick as the invite: lift
+ * the code out and rewrite the URL, so a refresh does not re-resolve a link the
+ * viewer has already opened.
+ */
+let sharedRoundCode = '';
+{
+  const m = cleanPath().match(/^\/s2\/([A-Za-z0-9_-]{6,32})$/);
+  if (m) {
+    sharedRoundCode = m[1];
+    window.history.replaceState(null, '', '/team/creator');
   }
 }
 
@@ -441,6 +463,7 @@ viewControllers['replay-viewer'] = initReplayViewerView({
   openSelf: () => setView('replay-viewer', true, {})
 });
 viewControllers.team = initTeamView({ auth, escapeHtml });
+viewControllers['strategy-creator'] = initStrategyCreatorView({ auth, escapeHtml });
 viewControllers.replays = initReplaysView({
   auth,
   escapeHtml,
@@ -469,7 +492,10 @@ auth.onChange(() => {
 
 window.addEventListener('popstate', () => setView(routeFromPath(), false, searchParams()));
 
-if (inviteCode) {
+if (sharedRoundCode) {
+  viewControllers['strategy-creator']?.setShare?.(sharedRoundCode);
+  setView('team-creator', false, { share: sharedRoundCode });
+} else if (inviteCode) {
   // Redeeming needs a signed-in account; the team view holds the code and
   // retries once auth lands, so a signed-out visitor can sign in in place.
   viewControllers.team?.setInvite?.(inviteCode);
