@@ -13,7 +13,7 @@
   --rv-team2: #e8913c;
   --rv-t: #e8b84a;
   --rv-ct: #5b9fd4;
-  --rv-stage: #000000;
+  --rv-stage: #050505;
   --rv-panel: #0c0c0c;
   --rv-ink: #b5b5b5;
 }
@@ -1210,7 +1210,7 @@ body.rv-open {
   z-index: 60;
   display: flex;
   flex-direction: column;
-  background: #000000;
+  background: #050505;
   color: var(--rv-ink);
   font-family: var(--font-body);
   /* Soften site text tokens inside the viewer so whites are not harsh. */
@@ -1222,7 +1222,7 @@ body.rv-open {
   --surface-hover-solid: #141414;
   --panel: var(--rv-panel);
   --border: #181818;
-  --bg: #000000;
+  --bg: #050505;
 }
 
 .rv-top {
@@ -1311,7 +1311,7 @@ body.rv-open {
   flex: 1;
   min-height: 0;
   display: flex;
-  background: #000000;
+  background: #050505;
 }
 
 /* ---- Timeline mode ------------------------------------------------------ */
@@ -1329,8 +1329,8 @@ body.rv-open {
   flex: 1;
   min-height: 0;
   display: grid;
-  /* Side columns grow with roster/inventory instead of clipping with an h-scroll. */
-  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  /* Fixed side columns so roster util icons never resize the map gutters. */
+  grid-template-columns: 272px minmax(0, 1fr) 272px;
   /* minmax(0, 1fr), not auto: an auto row is sized by its content, and the
      canvas' own backing-store size is content. That fed the canvas' height
      back into the row height every frame and the map grew off the bottom of
@@ -1362,7 +1362,7 @@ body.rv-open {
   gap: 6px 12px;
   padding: 10px 16px 12px;
   border-top: 1px solid var(--border);
-  background: #000000;
+  background: #050505;
   pointer-events: none;
 }
 
@@ -1970,8 +1970,8 @@ body.rv-open {
   justify-content: flex-start;
   gap: 8px;
   box-sizing: border-box;
-  width: max-content;
-  min-width: 260px;
+  width: 100%;
+  min-width: 0;
   max-height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
@@ -2134,8 +2134,8 @@ body.rv-open {
   gap: 6px;
   margin-top: 5px;
   min-height: 20px;
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
+  min-width: 0;
 }
 
 .rv-inv-armor {
@@ -2163,7 +2163,9 @@ body.rv-open {
 }
 
 .rv-inv-util {
-  flex: 0 0 auto;
+  flex: 0 0 72px;
+  width: 72px;
+  min-width: 72px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -2977,8 +2979,8 @@ body.rv-open {
 /* ---- Narrow screens ----------------------------------------------------- */
 
 @media (max-width: 1100px) {
-  .rv-team {
-    min-width: 220px;
+  .rv-stage {
+    grid-template-columns: 232px minmax(0, 1fr) 232px;
   }
 }
 
@@ -3551,7 +3553,7 @@ body.rv-open {
   flex-direction: column;
   gap: 6px;
   padding: 8px 10px 10px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius-sm);
   background: var(--rv-panel);
   position: relative;
