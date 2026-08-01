@@ -743,7 +743,7 @@ export class RadarRenderer {
               ctx.restore();
             }
 
-            ctx.fillStyle = '#ffffff';
+            ctx.fillStyle = '#0b0d10';
             ctx.fillText(name, pt.x, by + pillH / 2 + 0.5 * this.dpr);
           }
         }

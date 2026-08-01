@@ -269,7 +269,7 @@ const ROUTES = {
   database: { title: 'Database', path: '/database', shell: 'replays', page: 'stats' },
   charts: { title: 'Charts', path: '/charts', shell: 'replays', page: 'charts' },
   patterns: { title: 'Pattern Finder', path: '/patterns', shell: 'replays', page: 'analytics' },
-  uploads: { title: 'Uploads & Storage', path: '/uploads', shell: 'replays', page: 'upload' },
+  uploads: { title: 'My Uploads', path: '/uploads', shell: 'replays', page: 'upload' },
   training: { title: 'Gamemodes', path: '/training', shell: 'training' },
   leaderboards: { title: 'Leaderboards', path: '/leaderboards', shell: 'leaderboards' },
   'replay-viewer': { title: 'Replay Viewer', path: '/replay-viewer', shell: 'replay-viewer' },

@@ -76,9 +76,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       </div>
       <div class="rv-map">
         <div class="rv-clock-row" id="rv-clock-row">
-          <span class="rv-match-score" id="rv-score-left">0</span>
+          <span class="rv-match-score" id="rv-score-left" data-side="T">0</span>
           <div class="rv-clock" id="rv-clock">00:00</div>
-          <span class="rv-match-score" id="rv-score-right">0</span>
+          <span class="rv-match-score" id="rv-score-right" data-side="CT">0</span>
         </div>
         <div class="rv-killfeed" id="rv-killfeed" aria-live="polite"></div>
         <canvas class="rv-canvas" id="rv-canvas"></canvas>
@@ -899,19 +899,27 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const s2 = activeMeta.team2Side;
     let leftScore;
     let rightScore;
+    let leftSide;
+    let rightSide;
     if (s1 === 'CT' && s2 === 'T') {
       team1El.innerHTML = teamHtml(2, t2, 'T');
       team2El.innerHTML = teamHtml(1, t1, 'CT');
       leftScore = wins.team2;
       rightScore = wins.team1;
+      leftSide = 'T';
+      rightSide = 'CT';
     } else {
       team1El.innerHTML = teamHtml(1, t1, s1 || 'T');
       team2El.innerHTML = teamHtml(2, t2, s2 || 'CT');
       leftScore = wins.team1;
       rightScore = wins.team2;
+      leftSide = s1 || 'T';
+      rightSide = s2 || 'CT';
     }
     scoreLeftEl.textContent = String(leftScore);
     scoreRightEl.textContent = String(rightScore);
+    scoreLeftEl.dataset.side = leftSide;
+    scoreRightEl.dataset.side = rightSide;
     indexPlayerRows();
   }
 
@@ -946,10 +954,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const sideClass = side === 'T' ? 'side-t' : side === 'CT' ? 'side-ct' : '';
     return `
       <div class="rv-team-head ${sideClass}">
+        <span class="rv-team-name">${escapeHtml(info.name || `Team ${team}`)}</span>
         <span class="rv-team-side" data-side-wp="${escapeHtml(side || '')}">${escapeHtml(
           side || ''
         )}</span>
-        <span class="rv-team-name">${escapeHtml(info.name || `Team ${team}`)}</span>
       </div>
       <div class="rv-players">${rows}</div>`;
   }

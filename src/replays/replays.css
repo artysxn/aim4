@@ -1241,7 +1241,7 @@ body.rv-open {
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--rv-ink);
+  color: #ffffff;
 }
 
 .rv-title span {
@@ -1899,6 +1899,14 @@ body.rv-open {
   line-height: 1;
 }
 
+.rv-match-score[data-side='T'] {
+  color: var(--rv-t);
+}
+
+.rv-match-score[data-side='CT'] {
+  color: var(--rv-ct);
+}
+
 .rv-clock[data-phase='planted'] {
   border-color: rgba(242, 208, 36, 0.6);
   color: #f2d024;
@@ -1941,6 +1949,7 @@ body.rv-open {
 .rv-team-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
