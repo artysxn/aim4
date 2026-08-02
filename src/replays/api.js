@@ -41,9 +41,25 @@ export async function accessToken() {
   }
 }
 
+/**
+ * The "view as" ticket, when an admin is impersonating. Read from
+ * sessionStorage rather than passed down, because every call site in this file
+ * would otherwise have to thread it, and the one that forgot would silently
+ * serve the admin's own library instead of the target's.
+ */
+function impersonateHeader() {
+  try {
+    const ticket = globalThis.sessionStorage?.getItem('aim4.impersonate');
+    return ticket ? { 'X-Aim4-Impersonate': ticket } : {};
+  } catch {
+    return {};
+  }
+}
+
 async function headers(extra = {}) {
   const token = await accessToken();
-  return token ? { ...extra, Authorization: `Bearer ${token}` } : { ...extra };
+  const base = { ...extra, ...impersonateHeader() };
+  return token ? { ...base, Authorization: `Bearer ${token}` } : base;
 }
 
 async function asJson(res) {
@@ -52,6 +68,34 @@ async function asJson(res) {
     const err = new Error(body.error || `Request failed (${res.status})`);
     // Carried so callers can tell "sign in" apart from "backend is down".
     err.status = res.status;
+    throw err;
+  }
+  return body;
+}
+
+/**
+ * Spend one use of a quota'd capability before running it.
+ *
+ * Call this immediately before the work, not when a panel opens: opening the
+ * charts page and looking at it should not cost one of three daily uses.
+ *
+ * Resolves `{ allowed: true, remaining, resetsAt }` when the use was granted.
+ * Throws with `err.status === 402` and `err.body` carrying the standard upgrade
+ * payload when the allowance is spent or the tier does not include it.
+ *
+ * @param {string} capability  a key from shared/entitlements/keys.js
+ */
+export async function consumeCapability(capability) {
+  const res = await fetch(`${API_BASE}/api/replays/consume`, {
+    method: 'POST',
+    headers: await headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ capability })
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(body.message || body.error || `Request failed (${res.status})`);
+    err.status = res.status;
+    err.body = body;
     throw err;
   }
   return body;

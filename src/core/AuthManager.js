@@ -1,15 +1,22 @@
 // ---------------------------------------------------------------------------
-// AuthManager.js — Supabase auth (email confirm on), profile, settings cloud sync
+// AuthManager.js — Supabase auth (Google), profile, settings cloud sync
+//
+// Sign-up and sign-in by email and password are gone. Google is the only way to
+// create an account, which removes the password reset flow, the confirmation
+// email, and the class of support ticket that comes with both.
+//
+// Existing password accounts are NOT locked out. The Email provider stays
+// enabled in Supabase until the migration window closes, signIn/signUp are
+// simply no longer reachable from the UI, and password holders are prompted to
+// link Google on their next visit. Disabling the provider is a dashboard action
+// taken after that window, not something this file does.
 // ---------------------------------------------------------------------------
 
 import {
   getSupabase,
   supabaseConfigured,
   authRedirectUrl,
-  normalizeEmail,
-  validateUsername,
-  validateEmail,
-  validatePassword
+  validateUsername
 } from '../lib/supabase.js';
 import * as Storage from '../utils/Storage.js';
 import { clampElo, DEFAULT_ELO } from '../multiplayer/elo.js';
@@ -126,7 +133,7 @@ export class AuthManager {
     const sb = getSupabase();
     const { data, error } = await sb
       .from('profiles')
-      .select('id, username, elo, country_code, created_at')
+      .select('id, username, elo, country_code, created_at, username_chosen')
       .eq('id', user.id)
       .maybeSingle();
     if (error) throw new Error(error.message);
@@ -152,7 +159,7 @@ export class AuthManager {
 
     const { data: refreshed, error: reloadErr } = await sb
       .from('profiles')
-      .select('id, username, elo, country_code, created_at')
+      .select('id, username, elo, country_code, created_at, username_chosen')
       .eq('id', user.id)
       .maybeSingle();
     if (reloadErr) throw new Error(reloadErr.message);
@@ -188,81 +195,61 @@ export class AuthManager {
   }
 
   /**
-   * Register username + email + password. With confirm-email enabled, returns
-   * { pendingConfirmation: true } until the user clicks the link in their inbox.
-   * Profile row is created by the DB trigger on auth.users insert.
+   * True when this account arrived without choosing a username, so the app must
+   * block on the picker.
+   *
+   * Without this, Google-only means a leaderboard full of player_a1b2c3d4.
    */
-  async signUp({ username, email, password }) {
-    if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');
-    const userErr = validateUsername(username);
-    if (userErr) throw new Error(userErr);
-    const emailErr = validateEmail(email);
-    if (emailErr) throw new Error(emailErr);
-    const passErr = validatePassword(password);
-    if (passErr) throw new Error(passErr);
-
-    const normalized = username.trim().toLowerCase();
-    const authEmail = normalizeEmail(email);
-    const sb = getSupabase();
-
-    const { data: taken } = await sb
-      .from('profiles')
-      .select('id')
-      .eq('username', normalized)
-      .maybeSingle();
-    if (taken) throw new Error('Username is already taken.');
-
-    const { data, error } = await sb.auth.signUp({
-      email: authEmail,
-      password,
-      options: {
-        data: { username: normalized },
-        emailRedirectTo: window.location.origin
-      }
-    });
-    if (error) {
-      if (/username_taken/i.test(error.message)) throw new Error('Username is already taken.');
-      throw new Error(error.message);
-    }
-    if (!data.user) throw new Error('Sign-up failed.');
-
-    if (!data.session) {
-      return { pendingConfirmation: true, email: authEmail };
-    }
-
-    await this._applySession(data.user);
-    if (!this.displayName) {
-      throw new Error('Account created but profile is missing. Contact support.');
-    }
-    await this._pushSettings();
-    return { pendingConfirmation: false, profile: this.profile };
+  get needsUsername() {
+    return Boolean(this.user) && this.profile?.username_chosen === false;
   }
 
-  async signIn({ email, password }) {
-    if (!this.isConfigured) throw new Error('Accounts are not configured on this deployment.');
-    const emailErr = validateEmail(email);
-    if (emailErr) throw new Error(emailErr);
-    if (!password) throw new Error('Enter your password.');
+  /**
+   * Claim a username, atomically.
+   *
+   * Done in one database call rather than "check, then update": between a
+   * check and an update someone else can take the name, and what the user then
+   * sees is a raw unique-constraint error.
+   */
+  async claimUsername(username) {
+    if (!this.user) throw new Error('Sign in first.');
+    const err = validateUsername(username);
+    if (err) throw new Error(err);
 
     const sb = getSupabase();
-    const { data, error } = await sb.auth.signInWithPassword({
-      email: normalizeEmail(email),
-      password
+    const { data, error } = await sb.rpc('claim_username', {
+      p_username: username.trim().toLowerCase()
     });
-    if (error) {
-      const msg = error.message || '';
-      if (/email not confirmed/i.test(msg)) {
-        throw new Error('Confirm your email first — check your inbox for the verification link.');
-      }
-      throw new Error(msg || 'Sign-in failed.');
-    }
-    if (!data.user) throw new Error('Sign-in failed.');
+    if (error) throw new Error(error.message);
 
-    await this._applySession(data.user);
-    if (!this.displayName) {
-      throw new Error('Account profile not found. Contact support.');
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row?.ok) {
+      if (row?.error === 'taken') throw new Error('That username is taken.');
+      if (row?.error === 'invalid') {
+        throw new Error('Usernames are 3 to 20 letters, numbers or underscores.');
+      }
+      throw new Error('Could not set that username.');
     }
-    return this.profile;
+
+    if (this.profile) {
+      this.profile.username = row.username;
+      this.profile.username_chosen = true;
+    }
+    Storage.write('mpName', row.username);
+    this._emit();
+    return row.username;
+  }
+
+  /**
+   * A password-only account that has not linked Google yet.
+   *
+   * Drives the one-time "link Google to keep access" prompt. Not a hard block:
+   * locking these accounts out before the window closes is exactly what the
+   * migration is designed to avoid.
+   */
+  get needsGoogleLink() {
+    if (!this.user || !this._linkedProviders.length) return false;
+    return !this._linkedProviders.includes('google');
   }
 
   /**
@@ -369,7 +356,7 @@ export class AuthManager {
     const sb = getSupabase();
     const { data, error } = await sb
       .from('profiles')
-      .select('id, username, elo, country_code, created_at')
+      .select('id, username, elo, country_code, created_at, username_chosen')
       .eq('id', this.user.id)
       .maybeSingle();
     if (error) throw new Error(error.message);

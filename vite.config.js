@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 // Paths the game-route fallback must never touch: backend proxies, the site
 // shell's own views (/tools, /training, /leaderboards, /football), tool pages
 // and Vite internals/assets.
-const GAME_FALLBACK_SKIP = /^\/(api|ws|football|training|leaderboards|replays|tools|assets|fonts|maps|src|public|node_modules|@|demos|playlists|database|charts|patterns|uploads|routines|replay-viewer|team|i|s2|icons)(\/|$)/;
+const GAME_FALLBACK_SKIP = /^\/(api|ws|football|training|leaderboards|replays|tools|assets|fonts|maps|src|public|node_modules|@|demos|playlists|database|charts|patterns|uploads|routines|replay-viewer|team|account|admin|i|s2|icons)(\/|$)/;
 
 // Dev-server twin of the vercel.json rewrites: the landing owns "/" and
 // "/tools", every other extension-less path (e.g. /train, /gridshot,

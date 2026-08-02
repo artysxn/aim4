@@ -33,31 +33,17 @@ export function getSupabase() {
   return client;
 }
 
-/** Normalize email for auth lookups. */
-export function normalizeEmail(email) {
-  return String(email || '').trim().toLowerCase();
-}
+// normalizeEmail, validateEmail and validatePassword lived here for the
+// email/password registration form. Google is now the only provider and the
+// form is gone, so they had no callers left. validateUsername stays: the
+// first-run username picker still needs it.
 
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function validateUsername(username) {
   const u = String(username || '').trim();
   if (!USERNAME_RE.test(u)) {
-    return 'Username must be 3–20 characters (letters, numbers, underscore).';
-  }
-  return null;
-}
-
-export function validateEmail(email) {
-  const e = normalizeEmail(email);
-  if (!EMAIL_RE.test(e)) return 'Enter a valid email address.';
-  return null;
-}
-
-export function validatePassword(password) {
-  if (!password || password.length < 6) {
-    return 'Password must be at least 6 characters.';
+    return 'Username must be 3-20 characters (letters, numbers, underscore).';
   }
   return null;
 }

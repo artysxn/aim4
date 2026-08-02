@@ -11,7 +11,17 @@
 // A request with no token is anonymous. Anonymous callers can still read the
 // public library, which is what keeps share links working for signed-out
 // visitors, but they can never upload or see anything non-public.
+//
+// Admin is resolved from the site_admins table by auth.users.id. It used to be
+// resolved from a comma-separated list of *usernames* in the environment, while
+// any signed-in user could rename themselves to any unclaimed username: if a
+// listed admin name was ever unregistered or freed up, whoever claimed it
+// inherited site admin. UUIDs cannot be claimed.
 // ---------------------------------------------------------------------------
+
+import { readTicketHeader, verifyTicket } from '../admin/impersonation.js';
+import { freeEntitlements, loadEntitlements } from '../entitlements/load.js';
+import { db, isSiteAdmin } from '../entitlements/service.js';
 
 /**
  * Read at call time rather than at import: the .env loader and the test
@@ -23,16 +33,6 @@ function supabase() {
     url: (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/$/, ''),
     key: process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || ''
   };
-}
-
-/** Accounts that bypass every limit: unlimited uploads, full read, full delete. */
-export function adminUsernames() {
-  return new Set(
-    String(process.env.AIM4_ADMIN_USERNAMES || 'artysan,player_73b35f71')
-      .split(',')
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean)
-  );
 }
 
 /** Uploads before this feature landed are credited to this account. */
@@ -49,7 +49,9 @@ export const ANONYMOUS = Object.freeze({
   id: '',
   username: '',
   signedIn: false,
-  admin: false
+  admin: false,
+  entitlements: freeEntitlements(),
+  impersonating: null
 });
 
 function bearer(req) {
@@ -79,12 +81,11 @@ export function isConfigured() {
 }
 
 /**
- * Resolve the caller. Never throws: a bad or expired token is simply anonymous,
- * which the route layer then rejects wherever sign-in is required.
- *
- * @returns {Promise<{id: string, username: string, signedIn: boolean, admin: boolean}>}
+ * Verify the bearer token and attach admin status and entitlements. Cached by
+ * token, so the three lookups happen once per minute per session rather than
+ * once per request.
  */
-export async function whoami(req) {
+async function resolveActor(req) {
   const token = bearer(req);
   const { url, key } = supabase();
   if (!token || !url || !key) return ANONYMOUS;
@@ -100,12 +101,15 @@ export async function whoami(req) {
     if (res.ok) {
       const body = await res.json();
       if (body?.id) {
-        const username = usernameOf(body);
+        const id = String(body.id);
+        const [admin, entitlements] = await Promise.all([isSiteAdmin(id), loadEntitlements(id)]);
         user = Object.freeze({
-          id: String(body.id),
-          username,
+          id,
+          username: usernameOf(body),
           signedIn: true,
-          admin: adminUsernames().has(username.toLowerCase())
+          admin,
+          entitlements,
+          impersonating: null
         });
       }
     }
@@ -120,4 +124,87 @@ export async function whoami(req) {
     }
   }
   return user;
+}
+
+async function usernameFor(userId) {
+  try {
+    const row = await db.selectOne('profiles', { select: 'username', id: `eq.${userId}` });
+    return row?.username || `player_${String(userId).slice(0, 8)}`;
+  } catch {
+    return `player_${String(userId).slice(0, 8)}`;
+  }
+}
+
+/**
+ * Resolve the caller. Never throws: a bad or expired token is simply anonymous,
+ * which the route layer then rejects wherever sign-in is required.
+ *
+ * When an impersonation ticket is present the returned identity is the
+ * *target's*, with `impersonating` describing who is actually driving. Both the
+ * ticket and the admin's own session must check out, every request.
+ *
+ * @returns {Promise<{
+ *   id: string, username: string, signedIn: boolean, admin: boolean,
+ *   entitlements: object, impersonating: null | {
+ *     actorId: string, actorUsername: string, targetId: string,
+ *     readOnly: boolean, jti: string
+ *   }
+ * }>}
+ */
+export async function whoami(req) {
+  const actor = await resolveActor(req);
+  const ticket = readTicketHeader(req);
+  if (!ticket || !actor.signedIn) return actor;
+
+  const claims = await verifyTicket(ticket);
+  if (!claims) return actor;
+
+  // Both checks, every request. The ticket names the admin it was minted for,
+  // so admin B cannot pick up admin A's ticket, and a ticket on its own is
+  // worthless without a live admin session behind it.
+  if (claims.actorId !== actor.id) return actor;
+  if (!actor.admin) return actor;
+
+  // Impersonating another admin would let one admin account launder actions
+  // through another, which defeats the audit log.
+  if (await isSiteAdmin(claims.targetId)) return actor;
+
+  const [username, entitlements] = await Promise.all([
+    usernameFor(claims.targetId),
+    loadEntitlements(claims.targetId)
+  ]);
+
+  return Object.freeze({
+    id: claims.targetId,
+    username,
+    signedIn: true,
+    // Impersonation never confers admin, even from an admin session. Otherwise
+    // "view as" would silently be "act as, with root".
+    admin: false,
+    entitlements,
+    impersonating: Object.freeze({
+      actorId: actor.id,
+      actorUsername: actor.username,
+      targetId: claims.targetId,
+      readOnly: claims.readOnly,
+      jti: claims.jti
+    })
+  });
+}
+
+/** Drop a cached identity, e.g. after an admin changes what someone can do. */
+export function invalidateToken(token) {
+  if (token) cache.delete(token);
+  else cache.clear();
+}
+
+/**
+ * Read-only impersonation must not be able to write. Route layers call this
+ * before any mutation; it is a second gate behind the per-route permission
+ * checks, not a replacement for them.
+ */
+export function readOnlyBlocked(req, user) {
+  if (!user?.impersonating?.readOnly) return false;
+  const method = String(req?.method || 'GET').toUpperCase();
+  return method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
 }

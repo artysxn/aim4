@@ -15,7 +15,46 @@ import { ROOT } from './demoStore.js';
 
 const FILE = () => path.join(ROOT, 'teams.json');
 
-export const MAX_MEMBERS = 7;
+/**
+ * Seats a team has when nothing says otherwise: an unconfigured backend, a team
+ * created before tiers existed, or an owner whose entitlements have not been
+ * recomputed yet. Matches the old flat cap, so behaviour is unchanged until a
+ * capacity is actually written.
+ */
+export const DEFAULT_MAX_MEMBERS = 7;
+
+/** -1, matching the catalogue's spelling of unlimited. */
+export const UNLIMITED_MEMBERS = -1;
+
+/**
+ * Seat capacity is a property of the owner's *subscription*, not of the team:
+ * Team Elite's 14 seats are pooled across the 2 teams it may create, so
+ * counting members of one team is the wrong question. The resolved number is
+ * denormalised onto the team record by recomputeUser(), the same way
+ * profiles.effective_capabilities is, because publicTeam() is synchronous and
+ * called from a dozen places that have no business awaiting an entitlement
+ * lookup.
+ */
+export function seatCapacityOf(team) {
+  const stored = Number(team?.seatCapacity);
+  if (Number.isFinite(stored) && (stored > 0 || stored === UNLIMITED_MEMBERS)) return stored;
+  return DEFAULT_MAX_MEMBERS;
+}
+
+export function teamIsFull(team) {
+  const capacity = seatCapacityOf(team);
+  if (capacity === UNLIMITED_MEMBERS) return false;
+  return realMemberCount(team) >= capacity;
+}
+
+/** Called by the entitlements recompute whenever an owner's plan changes. */
+export async function setTeamSeatCapacity(teamId, capacity) {
+  const value = Number(capacity);
+  if (!Number.isFinite(value)) return null;
+  return updateTeam(teamId, (t) => {
+    t.seatCapacity = value;
+  });
+}
 
 /** How often the owner may mint a fresh invite code. */
 export const INVITE_ROLL_COOLDOWN_MS = 24 * 60 * 60 * 1000;
@@ -178,8 +217,8 @@ export async function joinTeam(user, code) {
     throw denied('You cannot rejoin that team.');
   }
   if (isMember(team, user.id)) return team;
-  if (realMemberCount(team) >= MAX_MEMBERS) {
-    throw new Error(`That team is full (${MAX_MEMBERS} members).`);
+  if (teamIsFull(team)) {
+    throw new Error(`That team is full (${seatCapacityOf(team)} members).`);
   }
   return updateTeam(team.id, (t) => {
     t.members.push({
@@ -230,9 +269,12 @@ export async function createDummyMember(actor, teamId, displayName) {
       .replace(/^@+/, '')
       .slice(0, 32);
     if (!label) throw new Error('Give the placeholder a name.');
+    // Placeholders consume no seat, but a team that can field 14 players should
+    // be able to plan for 14, so the ceiling tracks capacity rather than 7.
+    const capacity = seatCapacityOf(t);
     const dummyCount = (t.members || []).filter((m) => isDummyMember(m)).length;
-    if (dummyCount >= MAX_MEMBERS) {
-      throw new Error(`A team can keep ${MAX_MEMBERS} placeholders.`);
+    if (capacity !== UNLIMITED_MEMBERS && dummyCount >= capacity) {
+      throw new Error(`A team can keep ${capacity} placeholders.`);
     }
     const id = newDummyId();
     t.members = t.members || [];
@@ -613,7 +655,7 @@ export function publicTeam(team, viewerId) {
     stratbook: (team.stratbook || []).map(publicStrategy),
     isOwner: owner,
     isAdmin: isAdmin(team, viewerId),
-    maxMembers: MAX_MEMBERS,
+    maxMembers: seatCapacityOf(team),
     realMembers: realMemberCount(team)
   };
 }

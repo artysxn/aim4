@@ -62,6 +62,17 @@ import { isAcceptedUpload, rarSupport } from './archive.js';
 import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
 import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
 import { LEGACY_UPLOADER, isConfigured, whoami } from './identity.js';
+import { UNLIMITED } from '../../shared/entitlements/catalogue.js';
+import { CAP } from '../../shared/entitlements/keys.js';
+import {
+  can,
+  capability,
+  checkLimit,
+  requireLimit,
+  requireQuota,
+  upgradeResponse
+} from '../entitlements/enforce.js';
+import { guardImpersonation } from '../admin/guard.js';
 import { ownedTeam, teamsOf } from './teamsStore.js';
 import {
   accessFor,
@@ -271,18 +282,73 @@ async function volumeReadProbe() {
 }
 
 /** Merge the stored record with live job progress. */
-/** Uploads one non-admin account may hold at once. */
-export const MAX_DEMOS_PER_USER = Number(process.env.AIM4_MAX_DEMOS_PER_USER || 5);
+/**
+ * Capabilities the client may spend through /api/replays/consume. An allowlist,
+ * so the endpoint cannot be pointed at an arbitrary capability key.
+ */
+const METERED = new Set([
+  CAP.DEMOS_MACRO_VIEWER,
+  CAP.DEMOS_MAP_CONTROL,
+  CAP.DEMOS_ROUND_WIN_PREDICTION,
+  CAP.DEMOS_DUEL_WIN_PREDICTION,
+  CAP.DEMOS_AUTO_COACH,
+  CAP.ANALYTICS_CHARTS,
+  CAP.ANALYTICS_PATTERN_FINDER
+]);
 
 /**
- * @returns {Promise<string>} an error message when the caller is at their cap,
- *   or an empty string when they may upload.
+ * Trim the stats aggregate to what the caller's tier includes.
+ *
+ * Free sees the basic table. Premium adds the full player metrics (PSDT, DT,
+ * accuracy), Team Premium adds single-game and team statistics, and only Elite
+ * gets the full team metrics (PRW, possession). Fields are deleted rather than
+ * zeroed so a client cannot tell a withheld metric from a real zero.
  */
-async function uploadCapReached(library, me) {
-  if (me.admin) return '';
+function gateStatsPayload(me, payload) {
+  if (!payload || typeof payload !== 'object') return payload;
+  const out = { ...payload };
+
+  const strip = (rows, fields) =>
+    Array.isArray(rows)
+      ? rows.map((row) => {
+          const copy = { ...row };
+          for (const f of fields) delete copy[f];
+          return copy;
+        })
+      : rows;
+
+  if (!can(me, CAP.STATS_METRICS_PLAYER_FULL)) {
+    out.players = strip(out.players, ['psdt', 'dt', 'accuracy', 'PSDT', 'DT', 'Accuracy']);
+  }
+  if (!can(me, CAP.STATS_METRICS_TEAM_FULL)) {
+    out.teams = strip(out.teams, ['prw', 'possession', 'possessionPct', 'PRW', 'Poss']);
+  }
+  if (!can(me, CAP.STATS_TEAM_STATISTICS)) delete out.teams;
+  if (!can(me, CAP.STATS_SINGLE_GAME)) delete out.perDemo;
+
+  out.entitlements = {
+    tier: me.entitlements?.tier || 'free',
+    playerMetricsFull: can(me, CAP.STATS_METRICS_PLAYER_FULL),
+    teamMetricsFull: can(me, CAP.STATS_METRICS_TEAM_FULL),
+    teamStatistics: can(me, CAP.STATS_TEAM_STATISTICS),
+    singleGame: can(me, CAP.STATS_SINGLE_GAME),
+    filtersFull: can(me, CAP.STATS_FILTERS_FULL)
+  };
+  return out;
+}
+
+/**
+ * How many demos this caller may hold at once.
+ *
+ * Was a single global constant with an admin bypass. It is now the
+ * `demos.upload_limit` capability, so the answer differs per tier and the admin
+ * bypass falls out of entitlement resolution rather than being a branch here.
+ *
+ * @returns {Promise<{allowed: boolean, current: number, limit: number, remaining: number, tier: string}>}
+ */
+async function uploadCap(library, me) {
   const mine = (await listDemos(library)).filter((r) => r.uploaderId === me.id);
-  if (mine.length < MAX_DEMOS_PER_USER) return '';
-  return `You already have ${mine.length} demos uploaded. Delete one before uploading another (limit ${MAX_DEMOS_PER_USER}).`;
+  return checkLimit(me, CAP.DEMOS_UPLOAD_LIMIT, mine.length);
 }
 
 function withJob(user, record) {
@@ -359,12 +425,39 @@ export async function handleReplayRequest(req, res, url) {
   const auth = await identify(req);
   const user = auth.user;
   const me = await whoami(req);
+
+  // A read-only "view as" session may browse the library but never change it.
+  const impersonationBlock = guardImpersonation(req, url, me);
+  if (impersonationBlock) {
+    json(res, impersonationBlock.status, impersonationBlock.body);
+    return true;
+  }
+
   const access = await accessFor(me);
 
   /** Records the caller may browse, with ownership stamped on for the client. */
   const readable = async () => {
     const records = await listDemos(user);
     return { records, allowed: visibleRecords(records, access) };
+  };
+
+  /**
+   * Free accounts get the first half of a recent demo, per the pricing matrix.
+   *
+   * "Recent" is under a month old: older demos are fully readable on every
+   * tier, which is what keeps the public library and its share links working
+   * for signed-out visitors. The half is computed from the round list rather
+   * than stored, so it moves as rounds are materialised.
+   */
+  const RECENT_MS = 30 * 24 * 60 * 60 * 1000;
+
+  const recentCutoffFor = (record) => {
+    if (can(me, CAP.DEMOS_FULL_RECENT_ACCESS)) return Infinity;
+    const uploaded = Date.parse(record?.uploadedAt || record?.createdAt || '');
+    if (!Number.isFinite(uploaded) || Date.now() - uploaded > RECENT_MS) return Infinity;
+    const rounds = Array.isArray(record?.rounds) ? record.rounds.length : 0;
+    if (!rounds) return Infinity;
+    return Math.ceil(rounds / 2);
   };
 
   /**
@@ -376,7 +469,15 @@ export async function handleReplayRequest(req, res, url) {
     const record = recordForRoundFile(file, records);
     // No owning record: a round that predates materialization. Library default.
     if (!record) return true;
-    return canSee(record, access, { viaLink: true });
+    if (!canSee(record, access, { viaLink: true })) return false;
+
+    const cutoff = recentCutoffFor(record);
+    if (cutoff === Infinity) return true;
+    const index = (record.rounds || []).findIndex((r) => (r.file || r) === file);
+    // Unknown position: allow rather than guess. Guessing here would hide
+    // rounds from paying users on a data shape this did not anticipate.
+    if (index < 0) return true;
+    return index < cutoff;
   };
 
   /**
@@ -431,12 +532,21 @@ export async function handleReplayRequest(req, res, url) {
         id: me.id,
         username: me.username,
         admin: me.admin,
-        maxDemos: me.admin ? 0 : MAX_DEMOS_PER_USER,
+        // 0 still means "no cap" on this field, which is the contract the
+        // replays view already reads. The catalogue spells unlimited as -1, so
+        // it is translated here rather than at every reader.
+        maxDemos: capability(me, CAP.DEMOS_UPLOAD_LIMIT) === UNLIMITED
+          ? 0
+          : capability(me, CAP.DEMOS_UPLOAD_LIMIT),
         // False when the backend has no SUPABASE_URL / SUPABASE_ANON_KEY: it
         // cannot verify anyone, and the client needs to say that rather than
         // telling a signed-in user to sign in.
         verifies: isConfigured()
       },
+      // The client mirrors this for UI state only. Every decision it drives has
+      // already been made on this side.
+      entitlements: me.entitlements,
+      impersonating: me.impersonating,
       limits: { maxBytes: MAX_BYTES, maxUploadBytes: MAX_UPLOAD_BYTES },
       // .rar needs an external extractor, so whether it works is a property of
       // the host rather than of the code.
@@ -501,10 +611,17 @@ export async function handleReplayRequest(req, res, url) {
 
   if (req.method === 'POST' && p === '/api/replays/demos') {
     if (!requireUser()) return true;
-    const overCap = await uploadCapReached(user, me);
-    if (overCap) {
-      json(res, 403, { error: overCap });
-      return true;
+    const cap = await uploadCap(user, me);
+    if (!cap.allowed) {
+      // 402, not 403: this is "not on your plan", and the client shows an
+      // upgrade prompt rather than a permission error.
+      try {
+        requireLimit(me, CAP.DEMOS_UPLOAD_LIMIT, cap.current);
+      } catch (err) {
+        const refusal = upgradeResponse(err);
+        json(res, refusal.status, refusal.body);
+        return true;
+      }
     }
     const filename = String(req.headers['x-aim4-filename'] || 'match.dem').slice(0, 160);
     if (!isAcceptedUpload(filename)) {
@@ -744,7 +861,43 @@ export async function handleReplayRequest(req, res, url) {
     const { allowed } = await readable();
     const records = allowed.filter((r) => (r.status || 'ready') === 'ready');
     const payload = await statsPayload(statsIo, user, records, only);
-    json(res, 200, payload);
+    // The aggregate is computed once and then trimmed to the caller's tier.
+    // Trimming here rather than in the client is the point: the client cannot
+    // reveal a metric it was never sent.
+    json(res, 200, gateStatsPayload(me, payload));
+    return true;
+  }
+
+  /**
+   * Spend one use of a quota'd capability.
+   *
+   * The macro viewer, auto coach, map control and the two win predictions all
+   * run in the browser over data the caller is already entitled to fetch, so
+   * this is the meter for them: the client asks before running, and a spent
+   * quota comes back as the same 402 as everything else.
+   *
+   * Worth being precise about what this does and does not do. It reliably
+   * meters normal use and it is what the UI reads. It is not a hard barrier
+   * against someone who skips the call and runs the maths themselves on data
+   * they can already download. Making it one means moving those computations
+   * onto the server, which is a much larger change than metering them.
+   */
+  if (req.method === 'POST' && p === '/api/replays/consume') {
+    if (!requireUser()) return true;
+    const raw = await readJson(req).catch(() => ({}));
+    const key = String(raw.capability || '');
+    if (!METERED.has(key)) {
+      json(res, 400, { error: 'Unknown capability.' });
+      return true;
+    }
+    try {
+      const result = await requireQuota(me, key);
+      json(res, 200, { allowed: true, ...result });
+    } catch (err) {
+      const refusal = upgradeResponse(err);
+      if (!refusal) throw err;
+      json(res, refusal.status, refusal.body);
+    }
     return true;
   }
 

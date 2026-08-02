@@ -1,6 +1,27 @@
 # AIM4 Accounts, Tiers, Entitlements & Admin Plan
 
-Status: proposal. Nothing in here is built yet.
+Status: built, 2026-08-02. All ten steps of the build order in section 7 have
+landed. Migrations 0002 to 0008 are written but **not yet applied to any
+Supabase project**; until they are, the server fails closed and every account
+resolves to Free.
+
+Decisions taken during the build, where they differed from this document:
+
+- Quota model: eight independent counters, as specified (open decision 1).
+- `consume_quota` gained a transaction-scoped advisory lock. The version in
+  section 1.8 has a race with no open window, and its OUT parameters shadow the
+  columns it reads.
+- The `site_admins` RLS policy in section 1.5 recurses into its own table.
+  Replaced with a `security definer` predicate, `public.is_site_admin()`.
+- The quota'd demo features (macro viewer, auto coach, map control, both win
+  predictions) and the two analytics tools compute in the browser, so they are
+  metered by `POST /api/replays/consume` rather than gated at a data endpoint.
+  See the note on that route for what that does and does not prevent.
+- Export returns a signed 24h download link and does not email it. There is no
+  mail provider in this project, and `server/entitlements/notify.js` records
+  every notice while reporting plainly that nothing was sent.
+
+Open decisions 2 to 7 in section 9 are still open and still product calls.
 
 This document covers six pieces of work that all depend on one shared foundation:
 

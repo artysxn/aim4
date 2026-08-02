@@ -1,0 +1,98 @@
+// ---------------------------------------------------------------------------
+// src/site/admin/adminApi.js
+// Client for /api/admin/*.
+//
+// The panel renders nothing until me() returns 200. That is a convenience, not
+// a control: the server answers 404 to anyone who is not an admin, so hiding
+// the UI only saves a non-admin from seeing a broken page.
+// ---------------------------------------------------------------------------
+
+import { accessToken } from '../../replays/api.js';
+
+const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
+
+async function headers(extra = {}) {
+  const token = await accessToken();
+  const secret = import.meta.env?.VITE_ADMIN_SECRET || '';
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(secret ? { 'X-Aim4-Admin-Secret': secret } : {}),
+    ...extra
+  };
+}
+
+async function asJson(res) {
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(body.error || `Request failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return body;
+}
+
+async function get(path) {
+  return asJson(await fetch(`${API_BASE}${path}`, { headers: await headers() }));
+}
+
+async function send(method, path, body) {
+  return asJson(
+    await fetch(`${API_BASE}${path}`, {
+      method,
+      headers: await headers(),
+      body: body === undefined ? undefined : JSON.stringify(body)
+    })
+  );
+}
+
+export const adminApi = {
+  me: () => get('/api/admin/me'),
+
+  users: ({ q = '', tier = '', status = '', page = 0, sort = 'created_at' } = {}) => {
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (tier) params.set('tier', tier);
+    if (status) params.set('status', status);
+    if (page) params.set('page', String(page));
+    if (sort) params.set('sort', sort);
+    return get(`/api/admin/users?${params}`);
+  },
+
+  user: (id) => get(`/api/admin/users/${id}`),
+  userContent: (id) => get(`/api/admin/users/${id}/content`),
+  lookup: (username) => get(`/api/admin/lookup?username=${encodeURIComponent(username)}`),
+
+  createGrant: (payload) => send('POST', '/api/admin/grants', payload),
+  revokeGrant: (id) => send('DELETE', `/api/admin/grants/${id}`),
+
+  createSubscription: (payload) => send('POST', '/api/admin/subscriptions', payload),
+  cancelSubscription: (id, immediate = false) =>
+    send('DELETE', `/api/admin/subscriptions/${id}${immediate ? '?immediate=1' : ''}`),
+  grantElite: (userId, reason) => send('POST', '/api/admin/grant-elite', { userId, reason }),
+
+  startTrial: (payload) => send('POST', '/api/admin/trials', payload),
+
+  assignSeat: (payload) => send('POST', '/api/admin/seats', payload),
+  releaseSeat: (id) => send('DELETE', `/api/admin/seats/${id}`),
+
+  impersonate: (targetId, { readOnly = true, ttlSeconds = 1800 } = {}) =>
+    send('POST', '/api/admin/impersonate', { targetId, readOnly, ttlSeconds }),
+  endImpersonation: (ticket) =>
+    send('DELETE', `/api/admin/impersonate/${encodeURIComponent(ticket)}`),
+
+  recompute: (userId) => send('POST', '/api/admin/recompute', { userId }),
+  entitlements: (userId) => get(`/api/admin/entitlements?userId=${encodeURIComponent(userId)}`),
+
+  content: (store, op, payload) => send('POST', `/api/admin/content/${store}/${op}`, payload),
+
+  audit: ({ actorId = '', targetUser = '', action = '', limit = 100, offset = 0 } = {}) => {
+    const params = new URLSearchParams();
+    if (actorId) params.set('actorId', actorId);
+    if (targetUser) params.set('targetUser', targetUser);
+    if (action) params.set('action', action);
+    params.set('limit', String(limit));
+    params.set('offset', String(offset));
+    return get(`/api/admin/audit?${params}`);
+  }
+};

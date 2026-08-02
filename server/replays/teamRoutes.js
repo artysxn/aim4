@@ -7,6 +7,16 @@
 // ---------------------------------------------------------------------------
 
 import { whoami } from './identity.js';
+import { guardImpersonation } from '../admin/guard.js';
+import { DRAWING_BOARD_CAP } from '../../shared/entitlements/catalogue.js';
+import { CAP } from '../../shared/entitlements/keys.js';
+import {
+  UpgradeRequiredError,
+  capability,
+  requireCapability,
+  requireLimit,
+  upgradeResponse
+} from '../entitlements/enforce.js';
 import {
   deleteRound as deleteStrategyRound,
   findByShareId,
@@ -26,7 +36,9 @@ import {
   realMemberCount,
   removeMember,
   rollInvite,
+  seatCapacityOf,
   setMemberRole,
+  teamIsFull,
   setPosition,
   teamById,
   teamByInvite,
@@ -100,6 +112,13 @@ export async function handleTeamRequest(req, res, url) {
 
   const me = await whoami(req);
 
+  // A read-only "view as" session may look at a team but never edit it.
+  const blocked = guardImpersonation(req, url, me);
+  if (blocked) {
+    json(res, blocked.status, blocked.body);
+    return true;
+  }
+
   // Invite previews are readable signed out so the landing page can name the
   // team before asking the visitor to sign in.
   const previewMatch = p.match(/^\/api\/teams\/invite\/([A-Za-z0-9]{4,16})$/);
@@ -115,8 +134,8 @@ export async function handleTeamRequest(req, res, url) {
         name: team.name,
         ownerName: team.ownerName,
         members: (team.members || []).length,
-        maxMembers: 7,
-        full: realMemberCount(team) >= 7,
+        maxMembers: seatCapacityOf(team),
+        full: teamIsFull(team),
         banned: (team.banned || []).some((b) => b.id === me.id),
         alreadyIn: (team.members || []).some((m) => m.id === me.id && !String(m.id).startsWith('dummy_'))
       },
@@ -148,8 +167,18 @@ export async function handleTeamRequest(req, res, url) {
     return true;
   }
 
-  const fail = (err) =>
+  /**
+   * Entitlement refusals leave here as 402 with the documented body, so the
+   * client can render the shared upgrade prompt. Everything else stays a 400.
+   */
+  const fail = (err) => {
+    const refusal = upgradeResponse(err);
+    if (refusal) {
+      json(res, refusal.status, refusal.body);
+      return;
+    }
     json(res, err?.status || 400, { error: err?.message || 'That did not work.' });
+  };
 
   // ---- my teams -----------------------------------------------------------
   if (p === '/api/teams') {
@@ -160,6 +189,10 @@ export async function handleTeamRequest(req, res, url) {
     if (req.method === 'POST') {
       try {
         const body = await readJson(req);
+        // Free and Premium may not create teams at all; Team Premium may create
+        // one and Elite two, counted against teams already owned.
+        const owned = (await teamsOf(me.id)).filter((t) => t.ownerId === me.id).length;
+        requireLimit(me, CAP.TEAM_CREATE_LIMIT, owned);
         await createTeam(me, body.name);
         json(res, 200, { teams: await myTeams(me) });
       } catch (err) {
@@ -172,6 +205,7 @@ export async function handleTeamRequest(req, res, url) {
   if (req.method === 'POST' && p === '/api/teams/join') {
     try {
       const body = await readJson(req);
+      await requireCapability(me, CAP.TEAM_JOIN);
       const team = await joinTeam(me, String(body.code || '').trim());
       json(res, 200, { team: publicTeam(team, me.id), teams: await myTeams(me) });
     } catch (err) {
@@ -249,6 +283,7 @@ export async function handleTeamRequest(req, res, url) {
 
     if (req.method === 'POST' && tail === '/positions') {
       const body = await readJson(req);
+      await requireCapability(me, CAP.TEAM_ROLES_POSITIONS);
       await setPosition(me, teamId, body.memberId, body.side, body.map, body.position);
       await ok();
       return true;
@@ -262,6 +297,12 @@ export async function handleTeamRequest(req, res, url) {
       }
       if (req.method === 'POST') {
         const body = await readJson(req);
+        const existing = await listDocuments(teamId);
+        // An edit of a document that already exists is not a new one, so the
+        // cap only applies to creating.
+        if (!body.id || !existing.some((d) => d.id === body.id)) {
+          requireLimit(me, CAP.TEAM_DOCUMENTS, existing.length);
+        }
         const doc = await upsertDocument(me, teamId, body);
         json(res, 200, { document: doc, team: publicTeam(await teamById(teamId), me.id) });
         return true;
@@ -296,6 +337,13 @@ export async function handleTeamRequest(req, res, url) {
       }
       if (req.method === 'POST') {
         const body = await readJson(req, 12 * 1024 * 1024);
+        const rounds = await listRounds(teamId);
+        // Capped per map, not per team.
+        const map = String(body.map || body.mapCode || '').toLowerCase();
+        if (!body.id || !rounds.some((r) => r.id === body.id)) {
+          const onMap = rounds.filter((r) => String(r.map || '').toLowerCase() === map).length;
+          requireLimit(me, CAP.TEAM_STRATEGY_CREATOR_2D, onMap);
+        }
         const entry = await saveRound(me, teamId, body);
         json(res, 200, { entry, rounds: await listRounds(teamId) });
         return true;
@@ -325,6 +373,13 @@ export async function handleTeamRequest(req, res, url) {
     // ---- stratbook --------------------------------------------------------
     if (req.method === 'POST' && tail === '/stratbook') {
       const body = await readJson(req);
+      await requireCapability(me, CAP.TEAM_STRATBOOK_ACCESS);
+      const book = team.stratbook || [];
+      const map = String(body.map || '').toLowerCase();
+      if (!body.id || !book.some((s) => s.id === body.id)) {
+        const onMap = book.filter((s) => String(s.map || '').toLowerCase() === map).length;
+        requireLimit(me, CAP.TEAM_STRATBOOK_LIMIT, onMap);
+      }
       const strategy = await upsertStrategy(me, teamId, body);
       json(res, 200, { strategy, team: publicTeam(await teamById(teamId), me.id) });
       return true;
@@ -364,6 +419,22 @@ export async function handleTeamRequest(req, res, url) {
       }
       if (req.method === 'POST') {
         const body = await readJson(req, 2 * 1024 * 1024);
+        // Access to the board is nearly free; persistence is the gate. Premium
+        // resolves to 'nosave', which is exactly this refusal.
+        await requireCapability(me, CAP.DRAWING_BOARD, { atLeast: 'limited' });
+        const boards = await listDrawingBoards(me, teamId, map);
+        if (capability(me, CAP.DRAWING_BOARD) === 'limited') {
+          const existing = boards.find((b) => b.id === body.id);
+          if (!existing && boards.length >= DRAWING_BOARD_CAP) {
+            throw new UpgradeRequiredError({
+              capability: CAP.DRAWING_BOARD,
+              message: `Drawing board: you are at your limit of ${DRAWING_BOARD_CAP} on this map. More is available on Team Elite.`,
+              currentTier: me.entitlements?.tier || 'free',
+              requiredTier: 'team_elite',
+              limit: { current: boards.length, limit: DRAWING_BOARD_CAP }
+            });
+          }
+        }
         json(res, 200, { board: await saveDrawingBoard(me, teamId, map, body) });
         return true;
       }
@@ -383,6 +454,12 @@ export async function handleTeamRequest(req, res, url) {
       }
       if (req.method === 'POST') {
         const body = await readJson(req, 2 * 1024 * 1024);
+        const current = await getUtilityArchive(me, teamId, map);
+        const held = Array.isArray(current?.entries) ? current.entries.length : 0;
+        const incoming = Array.isArray(body?.entries) ? body.entries.length : held;
+        // The archive is saved whole, so the cap is checked against what the
+        // save would leave behind rather than against a single new entry.
+        if (incoming > held) requireLimit(me, CAP.TEAM_UTILITY_ARCHIVE, incoming - 1);
         json(res, 200, { archive: await saveUtilityArchive(me, teamId, map, body) });
         return true;
       }

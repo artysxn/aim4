@@ -20,9 +20,14 @@ import { FootballServer } from './football.js';
 import { tryServeStatic, distExists } from './static.js';
 import { handleReplayRequest } from './replays/routes.js';
 import { handleTeamRequest } from './replays/teamRoutes.js';
+import { handleAdminRequest } from './admin/routes.js';
+import { handleAccountRequest } from './account/routes.js';
+import { handleBillingRequest } from './billing/routes.js';
 import { checkCaseSensitivity, sweepStaleUploads } from './replays/demoStore.js';
 import { resumeInterruptedParses, sweepBatchFiles } from './replays/jobs.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
+import { seedAdmins } from './entitlements/service.js';
+import { startSweep } from './entitlements/sweep.js';
 
 // PORT (no prefix) is the convention most hosts inject; AIM4_API_PORT still
 // wins so existing local/host scripts are unaffected.
@@ -92,6 +97,24 @@ const server = http.createServer(async (req, res) => {
     // Same reasoning as replays: teams answer their own preflight, because the
     // generic OPTIONS reply below does not allow the Authorization header.
     if (url.pathname.startsWith('/api/teams') && (await handleTeamRequest(req, res, url))) {
+      return;
+    }
+
+    // Admin owns its own CORS and cache headers: the generic send() below
+    // answers with Access-Control-Allow-Origin: *, which is right for a public
+    // demo library and wrong for an endpoint that can grant subscriptions.
+    if (url.pathname.startsWith('/api/admin') && (await handleAdminRequest(req, res, url))) {
+      return;
+    }
+
+    // Billing runs before the JSON reader below: webhook signatures are
+    // computed over the exact bytes a provider sent, so the raw body has to
+    // survive, and MAX_BODY / JSON.parse would consume it.
+    if (url.pathname.startsWith('/api/billing') && (await handleBillingRequest(req, res, url))) {
+      return;
+    }
+
+    if (await handleAccountRequest(req, res, url)) {
       return;
     }
 
@@ -234,6 +257,14 @@ sweepStaleUploads().catch(() => {});
 // interrupted parses must not hold the port closed.
 resumeInterruptedParses().catch(() => {});
 sweepBatchFiles().catch(() => {});
+// Admins are a table, not an env list. AIM4_ADMIN_USER_IDS only bootstraps it,
+// so a fresh project has someone who can reach the panel. Never awaited and
+// never fatal: no admins configured is a normal state for a local run.
+seedAdmins().catch(() => {});
+// Converts or expires trials, lapses ended subscriptions, sends the 48 hour
+// warning, and tidies quota counters. Entitlement resolution is time-aware on
+// its own, so a sweep that has not run is a reporting gap, not an access one.
+startSweep();
 
 server.listen(PORT, HOST, async () => {
   if (SERVE_STATIC) {

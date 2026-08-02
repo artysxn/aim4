@@ -42,6 +42,13 @@ import { initReplaysView } from './replaysView.js';
 import { initReplayViewerView } from './replayViewerView.js';
 import { initTeamView } from './teamView.js';
 import { initStrategyCreatorView } from './strategyCreatorView.js';
+import { initAccountView } from './account/accountView.js';
+import { initAdminView } from './admin/adminView.js';
+import { mountImpersonationBanner } from './admin/impersonate.js';
+import { getEntitlements } from '../lib/entitlements.js';
+import { upgradePrompt } from './upgradeGate.js';
+import { accountApi } from './account/accountApi.js';
+import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
 
 // Brand logos — Vite hashes these into /assets so Vercel serves them (the
 // catch-all rewrite used to send /icons/* to train.html).
@@ -147,30 +154,19 @@ const authModal = document.getElementById('auth-modal');
 const sideAccountBtn = document.getElementById('side-account-btn');
 const sideAccountName = document.getElementById('side-account-name');
 const sideAccountHint = document.getElementById('side-account-hint');
-let authMode = 'login';
-
 function setAuthStatus(msg, ok = true) {
   const status = document.getElementById('auth-status');
   status.textContent = msg || '';
   status.classList.toggle('is-error', !ok);
 }
 
-function setAuthMode(mode) {
-  authMode = mode === 'register' ? 'register' : 'login';
-  const isReg = authMode === 'register';
-  document.getElementById('auth-title').textContent = isReg ? 'Create account' : 'Sign in';
-  document.getElementById('auth-submit').textContent = isReg ? 'Register' : 'Sign in';
-  document.getElementById('auth-username-wrap').hidden = !isReg;
-  document.getElementById('auth-confirm-wrap').hidden = !isReg;
-  document.getElementById('auth-password').autocomplete = isReg ? 'new-password' : 'current-password';
-  document.querySelectorAll('#auth-tabs .auth-tab').forEach((t) => {
-    t.classList.toggle('active', t.dataset.authTab === authMode);
-  });
+/**
+ * Google is the only provider. `mode` is still accepted because callers all
+ * over the shell pass 'register', and there is now no difference between
+ * signing in and signing up.
+ */
+function openAuth() {
   setAuthStatus('');
-}
-
-function openAuth(mode = 'login') {
-  setAuthMode(mode);
   authModal.hidden = false;
 }
 
@@ -184,12 +180,6 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !authModal.hidden) closeAuth();
 });
 
-document.getElementById('auth-tabs').addEventListener('click', (e) => {
-  const tab = e.target.closest('[data-auth-tab]');
-  if (!tab) return;
-  setAuthMode(tab.dataset.authTab);
-});
-
 document.getElementById('auth-google').addEventListener('click', async () => {
   setAuthStatus('Redirecting to Google…');
   try {
@@ -199,34 +189,90 @@ document.getElementById('auth-google').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('auth-submit').addEventListener('click', async () => {
-  const username = document.getElementById('auth-username').value.trim();
-  const email = document.getElementById('auth-email').value.trim();
-  const password = document.getElementById('auth-password').value || '';
-  const password2 = document.getElementById('auth-password2').value || '';
-  setAuthStatus('…');
-  try {
-    if (authMode === 'register') {
-      if (password !== password2) throw new Error('Passwords do not match.');
-      const result = await auth.signUp({ username, email, password });
-      if (result.pendingConfirmation) {
-        setAuthStatus(`Check ${result.email} for a confirmation link, then sign in.`, true);
-        setAuthMode('login');
-        return;
-      }
-      setAuthStatus('Account created!', true);
-    } else {
-      await auth.signIn({ email, password });
-      setAuthStatus('', true);
-    }
+// ---- Username picker --------------------------------------------------------
+// A Google sign-in carries no username, so a first-run account gets a
+// provisional player_<id> name and username_chosen = false. This modal blocks
+// until a real one is set: no backdrop click, no escape, no close button.
+
+const usernameModal = document.getElementById('username-modal');
+const usernameInput = document.getElementById('username-input');
+const usernameStatus = document.getElementById('username-status');
+const usernameSubmit = document.getElementById('username-submit');
+
+function syncUsernamePrompt() {
+  if (!auth.ready) return;
+  const needed = auth.needsUsername;
+  usernameModal.hidden = !needed;
+  if (needed) {
     closeAuth();
+    usernameInput.focus();
+  }
+}
+
+usernameSubmit.addEventListener('click', async () => {
+  usernameStatus.textContent = '';
+  usernameStatus.classList.remove('is-error');
+  try {
+    await auth.claimUsername(usernameInput.value);
+    usernameModal.hidden = true;
   } catch (e) {
-    setAuthStatus(e.message || 'Authentication failed.', false);
+    usernameStatus.textContent = e.message || 'Could not set that username.';
+    usernameStatus.classList.add('is-error');
   }
 });
 
-document.getElementById('auth-password').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') document.getElementById('auth-submit').click();
+usernameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') usernameSubmit.click();
+});
+
+// ---- Password account migration ---------------------------------------------
+// Existing email/password accounts keep working. They are asked once, per
+// browser, to link Google before the Email provider is turned off. Dismissible:
+// this is a prompt, not a lockout, and the lockout only comes after a real
+// deadline and an email.
+
+const linkGoogleModal = document.getElementById('link-google-modal');
+const linkGoogleStatus = document.getElementById('link-google-status');
+const LINK_PROMPT_KEY = 'aim4.linkGooglePrompted';
+
+function closeLinkGoogle() {
+  linkGoogleModal.hidden = true;
+  try {
+    localStorage.setItem(LINK_PROMPT_KEY, '1');
+  } catch {
+    /* private browsing */
+  }
+}
+
+document.getElementById('link-google-close').addEventListener('click', closeLinkGoogle);
+document.getElementById('link-google-backdrop').addEventListener('click', closeLinkGoogle);
+
+document.getElementById('link-google-btn').addEventListener('click', async () => {
+  linkGoogleStatus.textContent = '';
+  try {
+    await auth.linkGoogle();
+  } catch (e) {
+    linkGoogleStatus.textContent = e.message || 'Could not link Google.';
+    linkGoogleStatus.classList.add('is-error');
+  }
+});
+
+function syncLinkGooglePrompt() {
+  if (!auth.ready || !auth.isLoggedIn) return;
+  let prompted = false;
+  try {
+    prompted = localStorage.getItem(LINK_PROMPT_KEY) === '1';
+  } catch {
+    prompted = false;
+  }
+  // Never over the username picker: one blocking decision at a time.
+  if (prompted || auth.needsUsername || !auth.needsGoogleLink) return;
+  linkGoogleModal.hidden = false;
+}
+
+auth.onChange(() => {
+  syncUsernamePrompt();
+  syncLinkGooglePrompt();
 });
 
 function syncAccountRow() {
@@ -285,8 +331,20 @@ const ROUTES = {
   demos: { title: 'Demo Manager', path: '/demos', shell: 'replays', page: 'library' },
   playlists: { title: 'Demo Playlists', path: '/playlists', shell: 'replays', page: 'playlists' },
   database: { title: 'Database', path: '/database', shell: 'replays', page: 'stats' },
-  charts: { title: 'Charts', path: '/charts', shell: 'replays', page: 'charts' },
-  patterns: { title: 'Pattern Finder', path: '/patterns', shell: 'replays', page: 'analytics' },
+  charts: {
+    title: 'Charts',
+    path: '/charts',
+    shell: 'replays',
+    page: 'charts',
+    requires: 'analytics.charts'
+  },
+  patterns: {
+    title: 'Pattern Finder',
+    path: '/patterns',
+    shell: 'replays',
+    page: 'analytics',
+    requires: 'analytics.pattern_finder'
+  },
   uploads: { title: 'My Uploads', path: '/uploads', shell: 'replays', page: 'upload' },
   team: { title: 'Team', path: '/team', shell: 'team', page: 'team-overview' },
   'team-documents': {
@@ -335,7 +393,20 @@ const ROUTES = {
   'replay-viewer': { title: 'Replay Viewer', path: '/replay-viewer', shell: 'replay-viewer' },
   football: { title: 'Football', path: '/football', shell: 'football' },
   tools: { title: 'Tools', path: '/tools', shell: 'tools' },
-  routines: { title: 'Routines', path: '/routines', shell: 'routines' }
+  routines: { title: 'Routines', path: '/routines', shell: 'routines' },
+  account: { title: 'My Account', path: '/account', shell: 'account' },
+  'account-subscription': {
+    title: 'Subscription',
+    path: '/account/subscription',
+    shell: 'account'
+  },
+  'account-teams': { title: 'Teams', path: '/account/teams', shell: 'account' },
+  'account-data': { title: 'Data', path: '/account/data', shell: 'account' },
+  'account-security': { title: 'Security', path: '/account/security', shell: 'account' },
+  // The panel itself refuses to render until /api/admin/me returns 200, and the
+  // API answers 404 to everyone else. This entry only stops the deep link from
+  // falling through to the trainer.
+  admin: { title: 'Admin', path: '/admin', shell: 'admin' }
 };
 
 /** Old /replays/* bookmarks → new top-level paths. */
@@ -462,7 +533,55 @@ function setView(name, push = false, params = null) {
   activeRoute = routeName;
   activeShell = shell;
   viewControllers[shell]?.onShow?.(resolvedParams);
+  applyRouteGate(route, shell);
   window.scrollTo({ top: 0 });
+}
+
+/**
+ * Show the upgrade prompt above a gated page.
+ *
+ * The page still renders. Redirecting away from a paid feature is a bad
+ * conversion surface and it breaks shared links: someone following a colleague's
+ * link to a chart should land on the chart and be told what unlocks it, not be
+ * bounced to the home page with no explanation.
+ */
+function applyRouteGate(route, shell) {
+  const host = document.querySelector(`.view[data-view="${shell}"]`);
+  if (!host) return;
+  host.querySelector(':scope > .upgrade-gate')?.remove();
+  if (!route.requires) return;
+
+  const show = () => {
+    host.querySelector(':scope > .upgrade-gate')?.remove();
+    if (activeRoute !== PATH_TO_ROUTE[route.path]) return;
+    if (entitlements.can(route.requires)) return;
+    const tier = entitlements.requiredPlan(route.requires);
+    host.prepend(
+      upgradePrompt({
+        message: `${entitlements.label(route.requires)} is available on ${
+          PLAN_NAMES[tier] || tier
+        }.`,
+        requiredTier: tier,
+        trialOffer: entitlements.trialOffer,
+        onTrial: startTrialFromGate
+      })
+    );
+  };
+
+  // Entitlements may not have landed yet on a cold load, so render once now and
+  // again when they arrive rather than flashing a lock at a paying user.
+  show();
+  entitlements.ready().then(show);
+}
+
+async function startTrialFromGate() {
+  try {
+    await accountApi.startTrial();
+    await entitlements.refresh();
+    setView(activeRoute, false, searchParams());
+  } catch (e) {
+    window.alert(e.message || 'Could not start the trial.');
+  }
 }
 
 function openLeaderboards(mode) {
@@ -484,6 +603,20 @@ viewControllers['replay-viewer'] = initReplayViewerView({
 });
 viewControllers.team = initTeamView({ auth, escapeHtml });
 viewControllers['strategy-creator'] = initStrategyCreatorView({ auth, escapeHtml });
+// One manager per page, refreshed whenever the session changes. Gates read it
+// for UI state only; the server has already made every decision it reflects.
+const entitlements = getEntitlements(auth);
+entitlements.refresh();
+
+viewControllers.account = initAccountView(
+  document.querySelector('.view[data-view="account"]'),
+  { auth }
+);
+viewControllers.admin = initAdminView(document.querySelector('.view[data-view="admin"]'));
+
+// A "view as" session must be unmissable on every page, not only on /admin.
+mountImpersonationBanner();
+
 viewControllers.replays = initReplaysView({
   auth,
   escapeHtml,
