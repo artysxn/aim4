@@ -639,10 +639,22 @@ export async function fetchSharedStrategyRound(shareId) {
 // Drawing boards + utility archive
 // ---------------------------------------------------------------------------
 
-export async function fetchDrawingBoard(teamId, map) {
+export async function listDrawingBoards(teamId, map) {
   const body = await asJson(
     await fetch(
       `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/drawing-boards/${encodeURIComponent(map)}`,
+      { headers: await headers() }
+    )
+  );
+  return body.boards || [];
+}
+
+export async function fetchDrawingBoard(teamId, map, boardId) {
+  const body = await asJson(
+    await fetch(
+      `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/drawing-boards/${encodeURIComponent(
+        map
+      )}/${encodeURIComponent(boardId)}`,
       { headers: await headers() }
     )
   );
@@ -661,6 +673,17 @@ export async function saveDrawingBoard(teamId, map, board) {
     )
   );
   return body.board || null;
+}
+
+export async function deleteDrawingBoard(teamId, map, boardId) {
+  await asJson(
+    await fetch(
+      `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/drawing-boards/${encodeURIComponent(
+        map
+      )}/${encodeURIComponent(boardId)}`,
+      { method: 'DELETE', headers: await headers() }
+    )
+  );
 }
 
 export async function fetchUtilityArchive(teamId, map) {

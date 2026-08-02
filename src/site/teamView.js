@@ -140,11 +140,14 @@ export function initTeamView({ auth, escapeHtml }) {
   let editor = null;
   /** @type {{ destroy: () => void }|null} */
   let boardMount = null;
+  let boardMountKey = '';
   let openDocId = '';
   let rolesSide = 'T';
   /** @type {Array<{id: string, map: string, type: string, name: string, throws: object[]}>} */
   let utilityIndex = [];
   let utilityIndexTeamId = '';
+  let loadInFlight = false;
+  let demosLoaded = false;
   /** Which stratbook "Visible to" menu is open (strategy id). */
   let openVisibleMenu = '';
   /** Member whose My Strategies view is shown. */
@@ -214,45 +217,62 @@ export function initTeamView({ auth, escapeHtml }) {
 
   // ---- data ---------------------------------------------------------------
 
+  async function ensureDemos() {
+    if (!signedIn() || demosLoaded) return;
+    demosLoaded = true;
+    try {
+      const r = await fetchDemos();
+      demos = (r.demos || []).filter((d) => (d.status || 'ready') === 'ready');
+    } catch {
+      demos = [];
+      demosLoaded = false;
+    }
+    if (page === 'team-overview') render();
+  }
+
   async function load() {
+    if (loadInFlight) return;
+    loadInFlight = true;
     const token = ++loadToken;
-    const status = await fetchStatus().catch(() => null);
-    if (token !== loadToken) return;
-    account = { ...account, ...(status?.account || { signedIn: false }) };
-    if (!signedIn()) {
-      // An invite is readable signed out, so the visitor at least learns who
-      // invited them and to what before being asked to sign in.
-      invitePreview = pendingInvite
-        ? (await fetchInvite(pendingInvite).catch(() => null))?.invite || null
-        : null;
-      teams = [];
-      team = null;
+    try {
+      const status = await fetchStatus().catch(() => null);
+      if (token !== loadToken) return;
+      account = { ...account, ...(status?.account || { signedIn: false }) };
+      if (!signedIn()) {
+        // An invite is readable signed out, so the visitor at least learns who
+        // invited them and to what before being asked to sign in.
+        invitePreview = pendingInvite
+          ? (await fetchInvite(pendingInvite).catch(() => null))?.invite || null
+          : null;
+        teams = [];
+        team = null;
+        demos = [];
+        demosLoaded = false;
+        loaded = true;
+        render();
+        return;
+      }
+      // Teams only here — the full demo library is heavy and only needed on Overview.
+      const teamList = await fetchTeams().catch(() => []);
+      if (token !== loadToken) return;
+      teams = teamList;
+      // Keep the selected team across reloads when it still exists.
+      team = teams.find((t) => t.id === team?.id) || teams[0] || null;
       loaded = true;
+      if (pendingInvite) {
+        const code = pendingInvite;
+        pendingInvite = '';
+        await run(async () => {
+          const res = await joinTeam(code);
+          teams = res.teams || teams;
+          team = teams.find((t) => t.id === res.team?.id) || team;
+        }, 'You joined the team.');
+      }
       render();
-      return;
+      if (page === 'team-overview') void ensureDemos();
+    } finally {
+      if (token === loadToken) loadInFlight = false;
     }
-    const [teamList, demoList] = await Promise.all([
-      fetchTeams().catch(() => []),
-      fetchDemos()
-        .then((r) => r.demos || [])
-        .catch(() => [])
-    ]);
-    if (token !== loadToken) return;
-    teams = teamList;
-    // Keep the selected team across reloads when it still exists.
-    team = teams.find((t) => t.id === team?.id) || teams[0] || null;
-    demos = demoList.filter((d) => (d.status || 'ready') === 'ready');
-    loaded = true;
-    if (pendingInvite) {
-      const code = pendingInvite;
-      pendingInvite = '';
-      await run(async () => {
-        const res = await joinTeam(code);
-        teams = res.teams || teams;
-        team = teams.find((t) => t.id === res.team?.id) || team;
-      }, 'You joined the team.');
-    }
-    render();
   }
 
   // ---- shared chrome ------------------------------------------------------
@@ -260,6 +280,17 @@ export function initTeamView({ auth, escapeHtml }) {
   function destroyBoardMount() {
     boardMount?.destroy?.();
     boardMount = null;
+    boardMountKey = '';
+  }
+
+  function mountBoardPage(kind) {
+    const key = `${kind}:${team.id}`;
+    if (boardMount && boardMountKey === key) return;
+    destroyBoardMount();
+    boardMountKey = key;
+    const deps = { host: shellEl, teamId: team.id, escapeHtml, headerHtml };
+    boardMount =
+      kind === 'drawing' ? mountDrawingBoard(deps) : mountUtilityArchive(deps);
   }
 
   async function ensureUtilityIndex(force = false) {
@@ -1233,16 +1264,19 @@ export function initTeamView({ auth, escapeHtml }) {
 
   function render() {
     syncTeamChrome();
-    destroyBoardMount();
+    const onBoard = page === 'team-drawing-board' || page === 'team-utility-archive';
+    if (!onBoard) destroyBoardMount();
     if (!loaded) {
       shellEl.innerHTML = '<p class="view-empty">Loading…</p>';
       return;
     }
     if (!signedIn()) {
+      destroyBoardMount();
       shellEl.innerHTML = signedOutHtml(titleFor(page));
       return;
     }
     if (!team) {
+      destroyBoardMount();
       shellEl.innerHTML = noTeamHtml();
       return;
     }
@@ -1267,25 +1301,17 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
     if (page === 'team-drawing-board') {
-      shellEl.innerHTML = '';
-      boardMount = mountDrawingBoard({
-        host: shellEl,
-        teamId: team.id,
-        escapeHtml,
-        headerHtml
-      });
+      if (!boardMount || boardMountKey !== `drawing:${team.id}`) shellEl.innerHTML = '';
+      mountBoardPage('drawing');
       return;
     }
     if (page === 'team-utility-archive') {
       // Archive edits should refresh stratbook `<!####>` lookups next visit.
-      utilityIndexTeamId = '';
-      shellEl.innerHTML = '';
-      boardMount = mountUtilityArchive({
-        host: shellEl,
-        teamId: team.id,
-        escapeHtml,
-        headerHtml
-      });
+      if (!boardMount || boardMountKey !== `utility:${team.id}`) {
+        utilityIndexTeamId = '';
+        shellEl.innerHTML = '';
+      }
+      mountBoardPage('utility');
       return;
     }
     shellEl.innerHTML = overviewHtml();
@@ -1881,7 +1907,9 @@ export function initTeamView({ auth, escapeHtml }) {
 
   auth?.onChange?.(() => {
     loaded = false;
-    load();
+    demosLoaded = false;
+    loadInFlight = false;
+    void load();
   });
 
   return {
@@ -1894,11 +1922,19 @@ export function initTeamView({ auth, escapeHtml }) {
       }
       page = next;
       if (params.invite) pendingInvite = params.invite;
-      // Re-check whenever the last answer was "signed out": a session that
-      // landed while another page was open must not leave this one stuck on
-      // the sign-in prompt.
-      if (!loaded || params.invite || !signedIn()) load();
-      else render();
+      // Page switches must paint immediately. Only the first visit / invite /
+      // auth recovery refetch teams — never block nav on the demo library.
+      if (params.invite) {
+        void load();
+        return;
+      }
+      if (!loaded) {
+        render();
+        if (!loadInFlight) void load();
+        return;
+      }
+      render();
+      if (page === 'team-overview') void ensureDemos();
     },
     onHide() {
       editor?.flush();

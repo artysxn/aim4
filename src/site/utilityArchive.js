@@ -1,6 +1,7 @@
 // ---------------------------------------------------------------------------
 // site/utilityArchive.js
-// Per-team utility database: detonation spots, throw origins, setpos/setang.
+// Per-team utility database: drag grenades onto the map, click throw origins,
+// Save / Cancel on the right. Zoom/pan matches the timeline viewer.
 // ---------------------------------------------------------------------------
 
 import { RadarRenderer } from '../replays/viewer/radarRenderer.js';
@@ -10,6 +11,10 @@ import { fetchUtilityArchive, saveUtilityArchive } from '../replays/api.js';
 
 const MERGE_UNITS = 75;
 const MAX_COMMENT = 100;
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 5;
+const SMOKE_RADIUS_UNITS = 144;
+const FIRE_RADIUS_UNITS = 120;
 
 const NADE_TOOLS = [
   { type: 'smokegrenade', label: 'Smoke', icon: '/icons/equipment/smokegrenade.svg' },
@@ -37,6 +42,10 @@ function dist2(a, b) {
   return (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
 }
 
+function cloneArchive(a) {
+  return JSON.parse(JSON.stringify(a));
+}
+
 /**
  * @param {{
  *   host: HTMLElement,
@@ -48,14 +57,19 @@ function dist2(a, b) {
 export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
   let map = '';
   let archive = emptyArchive();
-  let nadeType = 'smokegrenade';
-  /** @type {'place-detonate'|'place-throw'|''} */
-  let mode = 'place-detonate';
+  /** Snapshot before an in-progress create/edit session. */
+  let checkpoint = null;
   let selectedId = '';
+  /** True while creating a new grenade (dragged) — clicks add throw spots. */
+  let creating = false;
   let status = '';
   let statusBad = false;
   let saving = false;
   let dirty = false;
+
+  /** @type {{ type: string }|null} */
+  let dragPalette = null;
+  let dragGhost = null;
 
   host.innerHTML = `
     ${headerHtml('Utility Archive')}
@@ -70,6 +84,7 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
   const toolsEl = host.querySelector('#ua-tools');
   const detailEl = host.querySelector('#ua-detail');
   const canvas = host.querySelector('#ua-canvas');
+  const stageEl = host.querySelector('.ua-stage');
   const renderer = new RadarRenderer(canvas);
 
   function setStatus(text, bad = false) {
@@ -90,6 +105,10 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     return new Set(archive.grenades.map((g) => g.id));
   }
 
+  function beginSession() {
+    if (!checkpoint) checkpoint = cloneArchive(archive);
+  }
+
   function renderTools() {
     const mapOpts = MAP_CODES.map(
       (c) =>
@@ -97,43 +116,27 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     ).join('');
     toolsEl.innerHTML = `
       <div class="db-block">
-        <span class="sc-label">Map</span>
         <select class="site-select" data-map>
           <option value="">Pick a map</option>${mapOpts}
         </select>
       </div>
       <div class="db-block">
-        <span class="sc-label">Grenade</span>
         <div class="db-nade-row">
           ${NADE_TOOLS.map(
             (n) =>
-              `<button type="button" class="db-nade${
-                nadeType === n.type ? ' active' : ''
-              }" data-nade="${n.type}" title="${escapeHtml(n.label)}">
+              `<button type="button" class="db-nade" data-drag-nade="${n.type}" title="${escapeHtml(
+                n.label
+              )} — drag onto map">
                 <img src="${n.icon}" alt="" width="16" height="20" draggable="false" />
               </button>`
           ).join('')}
         </div>
+        <p class="sc-note">Drag a grenade onto the map. Then click to add throw spots.</p>
       </div>
       <div class="db-block">
-        <span class="sc-label">Mode</span>
-        <div class="db-tool-row">
-          <button type="button" class="db-tool${
-            mode === 'place-detonate' ? ' active' : ''
-          }" data-mode="place-detonate">Detonate</button>
-          <button type="button" class="db-tool${
-            mode === 'place-throw' ? ' active' : ''
-          }" data-mode="place-throw" ${selectedId ? '' : 'disabled'}>Throw spot</button>
-        </div>
-        <p class="sc-note">Detonate places/merges the land point. Throw spot adds an origin on the selected grenade.</p>
-      </div>
-      <div class="db-block db-actions">
-        <button type="button" class="btn primary" data-save ${saving || !map ? 'disabled' : ''}>
-          ${saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
-        </button>
         <p class="sc-status${statusBad ? ' bad' : ''}" id="ua-status">${escapeHtml(status)}</p>
       </div>
-      <p class="sc-note">Stratbook: type &lt;!####&gt; with the grenade’s 4-character ID.</p>
+      <p class="sc-note">TIP: You can write &lt;!1234&gt; in the stratbook role editor to auto-link utility setpos/setang to the rounds you are making.</p>
     `;
   }
 
@@ -141,24 +144,21 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     const g = selected();
     if (!g) {
       detailEl.innerHTML = `<div class="db-block">
-        <span class="sc-label">Selected</span>
-        <p class="sc-note">Click a detonation on the map.</p>
+        <p class="sc-note">Select a grenade on the map, or drag one from the left to create.</p>
       </div>`;
       return;
     }
     const typeLabel = NADE_TOOLS.find((n) => n.type === g.type)?.label || g.type;
+    const showActions = creating || dirty;
     detailEl.innerHTML = `
       <div class="db-block">
         <span class="sc-label">Grenade <code class="ua-id">&lt;!${escapeHtml(g.id)}&gt;</code></span>
-        <label class="ua-field">Name
+        <label class="ua-field">
           <input class="site-input" data-name maxlength="80" value="${escapeHtml(g.name || '')}"
-            placeholder="${escapeHtml(typeLabel)}" />
+            placeholder="Grenade name" />
         </label>
-        <p class="sc-note">${typeLabel} · ${g.throws.length} throw spot${g.throws.length === 1 ? '' : 's'}</p>
-        <button type="button" class="btn btn-sm danger" data-drop-nade>Delete grenade</button>
       </div>
       <div class="db-block">
-        <span class="sc-label">Throw spots</span>
         ${
           g.throws.length
             ? `<ul class="ua-throw-list">${g.throws
@@ -182,16 +182,38 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
               </li>`
                 )
                 .join('')}</ul>`
-            : '<p class="sc-note">Switch to Throw spot and click the map.</p>'
+            : `<p class="sc-note">${
+                creating ? 'Click the map to add throw spots.' : 'No throw spots yet.'
+              }</p>`
         }
-      </div>`;
+      </div>
+      ${
+        showActions
+          ? `<div class="db-block db-actions-row">
+              <button type="button" class="btn btn-sm primary" data-save-grenade ${
+                saving ? 'disabled' : ''
+              }>${saving ? '…' : 'Save'}</button>
+              <button type="button" class="btn btn-sm" data-cancel-grenade>Cancel</button>
+            </div>`
+          : ''
+      }
+      <div class="db-block" style="margin-top:auto">
+        <button type="button" class="btn btn-sm danger" data-drop-nade>Delete grenade</button>
+      </div>
+      <p class="sc-note" style="display:none">${escapeHtml(typeLabel)}</p>
+    `;
   }
 
   async function loadMap(code) {
     map = code || '';
     archive = emptyArchive(map);
     selectedId = '';
+    creating = false;
+    checkpoint = null;
     dirty = false;
+    renderer.zoom = MIN_ZOOM;
+    renderer.panX = 0;
+    renderer.panY = 0;
     if (!map) {
       paint();
       renderTools();
@@ -208,7 +230,7 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
       setStatus(
         archive.grenades.length
           ? `${archive.grenades.length} grenade${archive.grenades.length === 1 ? '' : 's'} on this map.`
-          : 'No utility yet — place a detonation.'
+          : 'Drag a grenade onto the map to start.'
       );
     } catch (err) {
       archive = emptyArchive(map);
@@ -217,6 +239,70 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     renderTools();
     renderDetail();
     paint();
+  }
+
+  function worldRadiusPx(units, t) {
+    const scale = renderer.mapScale() || 5;
+    return (units / scale) * t.scale;
+  }
+
+  function drawNade(ctx, t, g, active) {
+    const rp = worldToRadar(map, g.detonate.x, g.detonate.y, {});
+    const x = rp.x * t.scale + t.ox;
+    const y = rp.y * t.scale + t.oy;
+    const dpr = renderer.dpr;
+    ctx.save();
+    if (g.type === 'smokegrenade') {
+      const r = worldRadiusPx(SMOKE_RADIUS_UNITS, t);
+      ctx.globalAlpha = active ? 0.65 : 0.45;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(160, 168, 180, 0.92)';
+      ctx.fill();
+      ctx.globalAlpha = 0.95;
+      ctx.strokeStyle = active ? '#ffffff' : '#a0a8b4';
+      ctx.lineWidth = (active ? 2 : 1) * dpr;
+      ctx.stroke();
+    } else if (g.type === 'molotov') {
+      const r = worldRadiusPx(FIRE_RADIUS_UNITS, t);
+      ctx.globalAlpha = active ? 0.5 : 0.35;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = '#e24e2c';
+      ctx.fill();
+      ctx.globalAlpha = 0.95;
+      ctx.strokeStyle = active ? '#ffffff' : '#e2622a';
+      ctx.lineWidth = (active ? 2 : 1) * dpr;
+      ctx.stroke();
+    } else if (g.type === 'hegrenade') {
+      const r = (active ? 7 : 5.5) * dpr;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.strokeStyle = '#7dff6a';
+      ctx.lineWidth = 1.6 * dpr;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y, r * 0.35, 0, Math.PI * 2);
+      ctx.fillStyle = '#6dff5a';
+      ctx.fill();
+    } else {
+      const r = (active ? 6.5 : 5) * dpr;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.fill();
+      ctx.strokeStyle = active ? '#ffffff' : '#b5b5b5';
+      ctx.lineWidth = 1.2 * dpr;
+      ctx.stroke();
+    }
+    if (active) {
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `600 ${11 * dpr}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(g.id, x, y);
+    }
+    ctx.restore();
   }
 
   function paint() {
@@ -232,25 +318,7 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     const gSel = selected();
 
     for (const g of archive.grenades) {
-      const rp = worldToRadar(map, g.detonate.x, g.detonate.y, {});
-      const x = rp.x * t.scale + t.ox;
-      const y = rp.y * t.scale + t.oy;
-      const active = g.id === selectedId;
-      const r = (active ? 16 : 13) * renderer.dpr;
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = active ? 'rgba(255, 255, 255, 0.28)' : 'rgba(200, 205, 215, 0.22)';
-      ctx.fill();
-      ctx.lineWidth = (active ? 2.2 : 1.4) * renderer.dpr;
-      ctx.strokeStyle = '#ffffff';
-      ctx.stroke();
-      ctx.fillStyle = '#ffffff';
-      ctx.font = `600 ${11 * renderer.dpr}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(g.id, x, y);
-      ctx.restore();
+      drawNade(ctx, t, g, g.id === selectedId);
     }
 
     if (gSel) {
@@ -280,6 +348,39 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
         ctx.restore();
       }
     }
+    stageEl.classList.toggle('can-pan', renderer.zoom > MIN_ZOOM);
+  }
+
+  function setZoom(next, anchorX, anchorY) {
+    const prev = renderer.zoom;
+    const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, next));
+    if (z === prev) {
+      if (z <= MIN_ZOOM) {
+        renderer.panX = 0;
+        renderer.panY = 0;
+      }
+      return;
+    }
+    if (z <= MIN_ZOOM) {
+      renderer.zoom = MIN_ZOOM;
+      renderer.panX = 0;
+      renderer.panY = 0;
+    } else if (Number.isFinite(anchorX) && Number.isFinite(anchorY)) {
+      const rect = canvas.getBoundingClientRect();
+      const { w, h } = renderer.resize();
+      const t0 = renderer.viewTransform(w, h);
+      const cx = ((anchorX - rect.left) / rect.width) * w;
+      const cy = ((anchorY - rect.top) / rect.height) * h;
+      const worldX = (cx - t0.ox) / t0.scale;
+      const worldY = (cy - t0.oy) / t0.scale;
+      renderer.zoom = z;
+      const t1 = renderer.viewTransform(w, h);
+      renderer.panX += (cx - (worldX * t1.scale + t1.ox)) / renderer.dpr;
+      renderer.panY += (cy - (worldY * t1.scale + t1.oy)) / renderer.dpr;
+    } else {
+      renderer.zoom = z;
+    }
+    paint();
   }
 
   function worldFromEvent(e) {
@@ -291,7 +392,7 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
 
   function hitGrenade(world) {
     let best = null;
-    let bestD = 55 * 55;
+    let bestD = 90 * 90;
     for (const g of archive.grenades) {
       const d = dist2(g.detonate, world);
       if (d < bestD) {
@@ -299,21 +400,6 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
         best = g;
       }
     }
-    return best;
-  }
-
-  function hitThrow(world) {
-    const g = selected();
-    if (!g) return -1;
-    let best = -1;
-    let bestD = 45 * 45;
-    g.throws.forEach((th, i) => {
-      const d = dist2(th, world);
-      if (d < bestD) {
-        bestD = d;
-        best = i;
-      }
-    });
     return best;
   }
 
@@ -331,12 +417,38 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     }
   }
 
+  let panning = false;
+  let lastX = 0;
+  let lastY = 0;
+
   canvas.addEventListener('pointerdown', (e) => {
-    if (!map || e.button !== 0) return;
+    if (!map) return;
+    e.preventDefault();
+
+    if (e.button === 1) {
+      panning = renderer.zoom > MIN_ZOOM;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      canvas.setPointerCapture(e.pointerId);
+      if (panning) stageEl.classList.add('panning');
+      return;
+    }
+
+    if (e.button === 0 && renderer.zoom > MIN_ZOOM && e.altKey) {
+      panning = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      canvas.setPointerCapture(e.pointerId);
+      stageEl.classList.add('panning');
+      return;
+    }
+
+    if (e.button !== 0) return;
     const world = worldFromEvent(e);
     if (!world) return;
 
-    if (mode === 'place-throw' && selectedId) {
+    // Creating: each click adds a throw spot on the selected grenade.
+    if (creating && selectedId) {
       const g = selected();
       if (!g) return;
       g.throws.push({
@@ -349,139 +461,166 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
       dirty = true;
       paint();
       renderDetail();
-      renderTools();
       return;
     }
 
-    // Select existing or place/merge detonation.
+    // Select mode.
     const hit = hitGrenade(world);
-    if (hit && mode !== 'place-detonate') {
-      selectedId = hit.id;
-      paint();
-      renderDetail();
-      renderTools();
-      return;
-    }
-
-    if (mode === 'place-detonate') {
-      const near = archive.grenades.find(
-        (g) => g.type === nadeType && dist2(g.detonate, world) <= MERGE_UNITS * MERGE_UNITS
-      );
-      if (near) {
-        selectedId = near.id;
-        setStatus(`Merged into ${near.id} (within ${MERGE_UNITS}u).`);
-      } else {
-        const id = newId(usedIds());
-        archive.grenades.push({
-          id,
-          type: nadeType,
-          name: '',
-          detonate: { x: Math.round(world.x), y: Math.round(world.y) },
-          throws: []
-        });
-        selectedId = id;
-        dirty = true;
-        setStatus(`Added ${id}.`);
-      }
-      mode = 'place-throw';
-      paint();
-      renderDetail();
-      renderTools();
-      return;
-    }
-
-    const th = hitThrow(world);
-    if (th >= 0) {
-      copyThrow(selected().throws[th]);
-      return;
-    }
-
     if (hit) {
       selectedId = hit.id;
+      creating = false;
       paint();
       renderDetail();
-      renderTools();
+      return;
     }
+    selectedId = '';
+    paint();
+    renderDetail();
   });
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (!panning) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    renderer.panX += dx;
+    renderer.panY += dy;
+    paint();
+  });
+
+  const endPan = (e) => {
+    if (!panning) return;
+    panning = false;
+    stageEl.classList.remove('panning');
+    try {
+      canvas.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  };
+  canvas.addEventListener('pointerup', endPan);
+  canvas.addEventListener('pointercancel', endPan);
+  canvas.addEventListener('auxclick', (e) => {
+    if (e.button === 1) e.preventDefault();
+  });
+  canvas.addEventListener(
+    'mousedown',
+    (e) => {
+      if (e.button === 1) e.preventDefault();
+    },
+    { passive: false }
+  );
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
   canvas.addEventListener(
     'wheel',
     (e) => {
       if (!map) return;
       e.preventDefault();
-      const factor = e.deltaY > 0 ? 0.9 : 1.1;
-      renderer.zoom = Math.max(0.5, Math.min(8, (renderer.zoom || 1) * factor));
-      paint();
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      setZoom(renderer.zoom * factor, e.clientX, e.clientY);
     },
     { passive: false }
   );
 
-  let panLast = null;
-  canvas.addEventListener('pointerdown', (e) => {
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
-      panLast = { x: e.clientX, y: e.clientY };
-      canvas.setPointerCapture(e.pointerId);
+  // ---- palette drag -------------------------------------------------------
+
+  function ensureGhost() {
+    if (dragGhost) return dragGhost;
+    dragGhost = document.createElement('div');
+    dragGhost.className = 'db-drag-ghost';
+    document.body.appendChild(dragGhost);
+    return dragGhost;
+  }
+
+  function clearDrag() {
+    dragPalette = null;
+    if (dragGhost) {
+      dragGhost.remove();
+      dragGhost = null;
     }
+  }
+
+  toolsEl.addEventListener('pointerdown', (e) => {
+    const nadeBtn = e.target.closest('[data-drag-nade]');
+    if (!nadeBtn) return;
+    if (!map) {
+      setStatus('Pick a map first.', true);
+      return;
+    }
+    e.preventDefault();
+    dragPalette = { type: nadeBtn.dataset.dragNade };
+    const ghost = ensureGhost();
+    ghost.innerHTML = nadeBtn.innerHTML;
+    ghost.style.left = `${e.clientX}px`;
+    ghost.style.top = `${e.clientY}px`;
+    nadeBtn.setPointerCapture(e.pointerId);
   });
-  canvas.addEventListener('pointermove', (e) => {
-    if (!panLast) return;
-    const dx = e.clientX - panLast.x;
-    const dy = e.clientY - panLast.y;
-    panLast = { x: e.clientX, y: e.clientY };
-    const { w, h } = renderer.resize();
-    const t = renderer.viewTransform(w, h);
-    renderer.panX += dx / Math.max(t.scale, 1e-6);
-    renderer.panY += dy / Math.max(t.scale, 1e-6);
-    paint();
-  });
-  canvas.addEventListener('pointerup', () => {
-    panLast = null;
-  });
+
+  window.addEventListener('pointermove', onWinMove);
+  window.addEventListener('pointerup', onWinUp);
+
+  function onWinMove(e) {
+    if (!dragPalette || !dragGhost) return;
+    dragGhost.style.left = `${e.clientX}px`;
+    dragGhost.style.top = `${e.clientY}px`;
+  }
+
+  function onWinUp(e) {
+    if (!dragPalette) return;
+    const rect = canvas.getBoundingClientRect();
+    const over =
+      e.clientX >= rect.left &&
+      e.clientX <= rect.right &&
+      e.clientY >= rect.top &&
+      e.clientY <= rect.bottom;
+    if (over && map) {
+      const world = worldFromEvent(e);
+      if (world) {
+        beginSession();
+        const near = archive.grenades.find(
+          (g) => g.type === dragPalette.type && dist2(g.detonate, world) <= MERGE_UNITS * MERGE_UNITS
+        );
+        if (near) {
+          selectedId = near.id;
+          creating = true;
+          setStatus(`Merged into ${near.id}. Click to add throw spots.`);
+        } else {
+          const id = newId(usedIds());
+          archive.grenades.push({
+            id,
+            type: dragPalette.type,
+            name: '',
+            detonate: { x: Math.round(world.x), y: Math.round(world.y) },
+            throws: []
+          });
+          selectedId = id;
+          creating = true;
+          dirty = true;
+          setStatus(`Placed ${id}. Click to add throw spots.`);
+        }
+        paint();
+        renderDetail();
+        renderTools();
+      }
+    }
+    clearDrag();
+  }
 
   toolsEl.addEventListener('change', (e) => {
     if (e.target.closest('[data-map]')) loadMap(e.target.value);
   });
 
-  toolsEl.addEventListener('click', async (e) => {
-    const t = e.target;
-    const nadeBtn = t.closest('[data-nade]');
-    if (nadeBtn) {
-      nadeType = nadeBtn.dataset.nade;
-      mode = 'place-detonate';
-      renderTools();
-      return;
-    }
-    const modeBtn = t.closest('[data-mode]');
-    if (modeBtn) {
-      mode = modeBtn.dataset.mode;
-      renderTools();
-      return;
-    }
-    if (t.closest('[data-save]')) {
-      if (!map || saving) return;
-      saving = true;
-      renderTools();
-      try {
-        archive = await saveUtilityArchive(teamId, map, archive);
-        dirty = false;
-        setStatus('Saved.');
-      } catch (err) {
-        setStatus(err.message || 'Could not save.', true);
-      }
-      saving = false;
-      renderTools();
-      renderDetail();
-    }
-  });
-
   detailEl.addEventListener('input', (e) => {
     const g = selected();
     if (!g) return;
+    beginSession();
     const name = e.target.closest('[data-name]');
     if (name) {
       g.name = name.value.slice(0, 80);
       dirty = true;
-      renderTools();
+      if (!detailEl.querySelector('[data-save-grenade]')) renderDetail();
       return;
     }
     const setpos = e.target.closest('[data-setpos]');
@@ -490,7 +629,6 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
       if (g.throws[i]) {
         g.throws[i].setpos = setpos.value;
         dirty = true;
-        renderTools();
       }
       return;
     }
@@ -500,7 +638,6 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
       if (g.throws[i]) {
         g.throws[i].setang = setang.value;
         dirty = true;
-        renderTools();
       }
       return;
     }
@@ -510,13 +647,43 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
       if (g.throws[i]) {
         g.throws[i].comment = comment.value.slice(0, MAX_COMMENT);
         dirty = true;
-        renderTools();
       }
     }
   });
 
   detailEl.addEventListener('click', async (e) => {
     const g = selected();
+    if (e.target.closest('[data-save-grenade]')) {
+      if (!map || saving) return;
+      saving = true;
+      renderDetail();
+      try {
+        archive = await saveUtilityArchive(teamId, map, archive);
+        dirty = false;
+        creating = false;
+        checkpoint = null;
+        setStatus('Saved.');
+      } catch (err) {
+        setStatus(err.message || 'Could not save.', true);
+      }
+      saving = false;
+      renderDetail();
+      renderTools();
+      paint();
+      return;
+    }
+    if (e.target.closest('[data-cancel-grenade]')) {
+      if (checkpoint) archive = checkpoint;
+      checkpoint = null;
+      creating = false;
+      dirty = false;
+      selectedId = '';
+      setStatus('Cancelled.');
+      paint();
+      renderDetail();
+      renderTools();
+      return;
+    }
     if (!g) return;
     const copy = e.target.closest('[data-copy-throw]');
     if (copy) {
@@ -526,19 +693,29 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     }
     const dropT = e.target.closest('[data-drop-throw]');
     if (dropT) {
+      beginSession();
       const i = Number(dropT.dataset.dropThrow);
       g.throws.splice(i, 1);
       dirty = true;
       paint();
       renderDetail();
-      renderTools();
       return;
     }
     if (e.target.closest('[data-drop-nade]')) {
       if (!window.confirm(`Delete grenade ${g.id}?`)) return;
+      beginSession();
       archive.grenades = archive.grenades.filter((x) => x.id !== g.id);
       selectedId = '';
+      creating = false;
       dirty = true;
+      try {
+        archive = await saveUtilityArchive(teamId, map, archive);
+        dirty = false;
+        checkpoint = null;
+        setStatus('Deleted.');
+      } catch (err) {
+        setStatus(err.message || 'Could not delete.', true);
+      }
       paint();
       renderDetail();
       renderTools();
@@ -553,6 +730,9 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
   return {
     destroy() {
       window.removeEventListener('resize', paint);
+      window.removeEventListener('pointermove', onWinMove);
+      window.removeEventListener('pointerup', onWinUp);
+      clearDrag();
       host.innerHTML = '';
     }
   };

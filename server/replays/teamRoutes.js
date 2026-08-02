@@ -37,8 +37,10 @@ import {
   upsertStrategy
 } from './teamsStore.js';
 import {
+  deleteDrawingBoard,
   getDrawingBoard,
   getUtilityArchive,
+  listDrawingBoards,
   listUtilityIndex,
   saveDrawingBoard,
   saveUtilityArchive
@@ -336,13 +338,28 @@ export async function handleTeamRequest(req, res, url) {
     }
 
     // ---- drawing boards ---------------------------------------------------
+    const boardOne = p.match(
+      /^\/api\/teams\/[A-Za-z0-9_]+\/drawing-boards\/([A-Za-z0-9]{2,4})\/([A-Za-z0-9_-]{4,40})$/i
+    );
+    if (boardOne) {
+      const map = boardOne[1];
+      const boardId = boardOne[2];
+      if (req.method === 'GET') {
+        json(res, 200, { board: await getDrawingBoard(me, teamId, map, boardId) });
+        return true;
+      }
+      if (req.method === 'DELETE') {
+        json(res, 200, await deleteDrawingBoard(me, teamId, map, boardId));
+        return true;
+      }
+    }
     const boardMatch = p.match(
       /^\/api\/teams\/[A-Za-z0-9_]+\/drawing-boards\/([A-Za-z0-9]{2,4})$/i
     );
     if (boardMatch) {
       const map = boardMatch[1];
       if (req.method === 'GET') {
-        json(res, 200, { board: await getDrawingBoard(me, teamId, map) });
+        json(res, 200, { boards: await listDrawingBoards(me, teamId, map) });
         return true;
       }
       if (req.method === 'POST') {

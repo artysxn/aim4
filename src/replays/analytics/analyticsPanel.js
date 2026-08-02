@@ -28,6 +28,11 @@ const PHASE_OPTS = [
   { key: 'late', label: 'Late' }
 ];
 
+/** Format a finite number for leaderboard cells; `digits` = decimal places. */
+function fmt(n, digits = 2) {
+  return Number.isFinite(n) ? Number(n).toFixed(digits) : '—';
+}
+
 /**
  * @param {{
  *   escapeHtml: (s: string) => string,

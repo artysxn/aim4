@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // teamBoards.js — Drawing boards + Utility Archive per team/map
 //
-//   {AIM4_REPLAY_DIR}/teamBoards/<teamId>/drawing/<MAP>.json
+//   {AIM4_REPLAY_DIR}/teamBoards/<teamId>/drawing/<MAP>/<boardId>.json
+//   Legacy single file (migrated on read): drawing/<MAP>.json
 //   {AIM4_REPLAY_DIR}/teamBoards/<teamId>/utility/<MAP>.json
 // ---------------------------------------------------------------------------
 
@@ -24,6 +25,8 @@ const MAX_NADES_BOARD = 200;
 const MAX_PLAYERS_BOARD = 40;
 const MAX_UTILITY = 400;
 const MAX_THROWS = 24;
+const MAX_BOARDS_PER_MAP = 80;
+const BOARD_ID_RE = /^[A-Za-z0-9_-]{4,40}$/;
 
 function safeId(raw) {
   const s = String(raw || '').replace(/[^A-Za-z0-9_-]/g, '');
@@ -78,11 +81,23 @@ function newUtilityId(used) {
 
 // ---- Drawing boards -------------------------------------------------------
 
-function emptyBoard(map) {
-  return { map, updatedAt: 0, strokes: [], nades: [], players: [] };
+function drawingDir(teamId, map) {
+  return path.join(teamDir(teamId), 'drawing', map);
 }
 
-function sanitizeBoard(map, payload) {
+function legacyDrawingFile(teamId, map) {
+  return path.join(teamDir(teamId), 'drawing', `${map}.json`);
+}
+
+function newBoardId() {
+  return crypto.randomBytes(6).toString('base64url').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 10);
+}
+
+function emptyBoard(map, id = '', name = '') {
+  return { id, name, map, updatedAt: 0, strokes: [], nades: [], players: [] };
+}
+
+function sanitizeBoard(map, payload, id, name) {
   const src = payload && typeof payload === 'object' ? payload : {};
   const strokes = [];
   for (const s of (src.strokes || []).slice(0, MAX_STROKES)) {
@@ -126,26 +141,119 @@ function sanitizeBoard(map, payload) {
       side: p.side === 'CT' ? 'CT' : p.side === 'T' ? 'T' : ''
     });
   }
-  return { map, updatedAt: Date.now(), strokes, nades, players };
+  const cleanName = String(name || src.name || 'Untitled').trim().slice(0, 80) || 'Untitled';
+  const cleanId = BOARD_ID_RE.test(String(id || src.id || ''))
+    ? String(id || src.id)
+    : newBoardId();
+  return {
+    id: cleanId,
+    name: cleanName,
+    map,
+    updatedAt: Date.now(),
+    strokes,
+    nades,
+    players
+  };
 }
 
-export async function getDrawingBoard(actor, teamId, map) {
+async function migrateLegacyBoard(teamId, map) {
+  const legacy = legacyDrawingFile(teamId, map);
+  const raw = await readJson(legacy, null);
+  if (!raw) return null;
+  const board = sanitizeBoard(map, raw, 'legacy', raw.name || 'Untitled');
+  await writeJson(path.join(drawingDir(teamId, map), `${board.id}.json`), board);
+  try {
+    await fsp.unlink(legacy);
+  } catch {
+    /* ignore */
+  }
+  return board;
+}
+
+export async function listDrawingBoards(actor, teamId, map) {
   const team = await teamById(teamId);
   assertMember(team, actor);
   const code = assertMap(map);
-  const file = path.join(teamDir(teamId), 'drawing', `${code}.json`);
-  const raw = await readJson(file, null);
-  return raw ? sanitizeBoard(code, raw) : emptyBoard(code);
+  const dir = drawingDir(teamId, code);
+  let names = [];
+  try {
+    names = await fsp.readdir(dir);
+  } catch {
+    names = [];
+  }
+  if (!names.length) {
+    const migrated = await migrateLegacyBoard(teamId, code);
+    if (migrated) {
+      return [{ id: migrated.id, name: migrated.name, updatedAt: migrated.updatedAt }];
+    }
+    return [];
+  }
+  const out = [];
+  for (const f of names) {
+    if (!f.endsWith('.json')) continue;
+    const raw = await readJson(path.join(dir, f), null);
+    if (!raw) continue;
+    const id = String(raw.id || f.replace(/\.json$/i, ''));
+    out.push({
+      id,
+      name: String(raw.name || 'Untitled').slice(0, 80),
+      updatedAt: Number(raw.updatedAt) || 0
+    });
+  }
+  out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return out.slice(0, MAX_BOARDS_PER_MAP);
 }
 
+export async function getDrawingBoard(actor, teamId, map, boardId) {
+  const team = await teamById(teamId);
+  assertMember(team, actor);
+  const code = assertMap(map);
+  const id = String(boardId || '');
+  if (!BOARD_ID_RE.test(id)) throw new Error('Unknown board.');
+  const file = path.join(drawingDir(teamId, code), `${id}.json`);
+  let raw = await readJson(file, null);
+  if (!raw && id === 'legacy') {
+    raw = await readJson(legacyDrawingFile(teamId, code), null);
+  }
+  if (!raw) throw Object.assign(new Error('Board not found.'), { status: 404 });
+  return sanitizeBoard(code, raw, id, raw.name);
+}
+
+/** Create or overwrite a named board for a map. */
 export async function saveDrawingBoard(actor, teamId, map, payload) {
   const team = await teamById(teamId);
   assertMember(team, actor);
   const code = assertMap(map);
-  const board = sanitizeBoard(code, payload);
-  const file = path.join(teamDir(teamId), 'drawing', `${code}.json`);
-  await writeJson(file, board);
+  const incomingId = String(payload?.id || '');
+  if (!BOARD_ID_RE.test(incomingId)) {
+    let count = 0;
+    try {
+      count = (await fsp.readdir(drawingDir(teamId, code))).filter((f) => f.endsWith('.json')).length;
+    } catch {
+      count = 0;
+    }
+    if (count >= MAX_BOARDS_PER_MAP) {
+      throw new Error(`At most ${MAX_BOARDS_PER_MAP} boards per map.`);
+    }
+  }
+  const board = sanitizeBoard(code, payload, incomingId, payload?.name);
+  await writeJson(path.join(drawingDir(teamId, code), `${board.id}.json`), board);
   return board;
+}
+
+export async function deleteDrawingBoard(actor, teamId, map, boardId) {
+  const team = await teamById(teamId);
+  assertMember(team, actor);
+  const code = assertMap(map);
+  const id = String(boardId || '');
+  if (!BOARD_ID_RE.test(id)) throw new Error('Unknown board.');
+  const file = path.join(drawingDir(teamId, code), `${id}.json`);
+  try {
+    await fsp.unlink(file);
+  } catch {
+    throw Object.assign(new Error('Board not found.'), { status: 404 });
+  }
+  return { ok: true };
 }
 
 // ---- Utility archive ------------------------------------------------------
