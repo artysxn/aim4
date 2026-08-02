@@ -181,6 +181,9 @@ async function ensureDirs(user) {
  */
 export const ensureLibraryDirs = ensureDirs;
 
+/** Open file descriptors per batch. Enough to saturate a disk, not enough to exhaust one. */
+const READ_CONCURRENCY = 32;
+
 async function listFiles(dir) {
   try {
     return await fsp.readdir(dir);
@@ -215,14 +218,28 @@ async function readIfPresent(file) {
 const asArrayBuffer = (buf) =>
   buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 
+/**
+ * Total bytes in one directory.
+ *
+ * The rounds directory holds roughly 25 files per demo, so a few hundred demos
+ * put five figures of entries in here. Statting them one await at a time made
+ * the storage meter, which rides along on every library listing, the slowest
+ * thing in the request.
+ */
 async function dirBytes(dir) {
+  const files = await listFiles(dir);
   let total = 0;
-  for (const f of await listFiles(dir)) {
-    try {
-      total += (await fsp.stat(path.join(dir, f))).size;
-    } catch {
-      /* raced with a delete */
-    }
+  for (let i = 0; i < files.length; i += READ_CONCURRENCY) {
+    const sizes = await Promise.all(
+      files.slice(i, i + READ_CONCURRENCY).map(async (f) => {
+        try {
+          return (await fsp.stat(path.join(dir, f))).size;
+        } catch {
+          return 0; /* raced with a delete */
+        }
+      })
+    );
+    for (const size of sizes) total += size;
   }
   return total;
 }
@@ -250,6 +267,10 @@ export async function readRecord(user, id) {
 export async function writeRecord(user, record) {
   await ensureDirs(user);
   await fsp.writeFile(recordPath(user, record.id), JSON.stringify(record, null, 2));
+  // Every record write funnels through here, so this one line is what keeps the
+  // listing cache honest: uploads, renames, visibility changes and parse-status
+  // updates all land on disk via writeRecord.
+  invalidateDemoList(user);
   return record;
 }
 
@@ -378,28 +399,96 @@ export async function writeMaterialized(user, record, files) {
   return record;
 }
 
-export async function listDemos(user) {
-  const files = await listFiles(demosDir(user));
-  const records = [];
-  for (const f of files) {
-    if (!f.endsWith('.json')) continue;
-    try {
-      records.push(JSON.parse(await fsp.readFile(path.join(demosDir(user), f), 'utf8')));
-    } catch {
-      /* skip a corrupt record rather than fail the whole listing */
-    }
+// ---- record listing ---------------------------------------------------------
+//
+// listDemos is the hottest read in the server. Every library page, every round
+// open and every tick request resolves visibility through it, and it used to
+// re-read and re-parse every record JSON in the library, one await at a time,
+// for each of those. Opening a 25-round demo against a 300-demo library meant
+// roughly 7,500 sequential file reads before a single tick was served.
+//
+// Two changes: the reads happen in parallel batches, and the parsed result is
+// cached in memory until something writes to the library. The cache is keyed by
+// library rather than by caller because the store is one shared directory.
+//
+// Records handed out here are shared, so treat them as read-only. Every write
+// path goes through writeRecord or deleteDemo, and both drop the entry.
+
+/** @type {Map<string, {records: object[], expires: number}>} */
+const recordListCache = new Map();
+/** Safety net for anything that writes to the directory behind our back. */
+const RECORD_LIST_TTL_MS = 30 * 1000;
+/** Drop the cached listing and storage totals for one library, or for all. */
+export function invalidateDemoList(user = undefined) {
+  if (user === undefined) {
+    recordListCache.clear();
+    usageCache.clear();
+    return;
   }
-  return records.sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
+  const key = userKey(user);
+  recordListCache.delete(key);
+  usageCache.delete(key);
 }
 
-export async function usage(user) {
+export async function listDemos(user, { fresh = false } = {}) {
+  const key = userKey(user);
+  if (!fresh) {
+    const hit = recordListCache.get(key);
+    // A copy of the array: callers sort and splice their own view of it.
+    if (hit && hit.expires > Date.now()) return hit.records.slice();
+  }
+
+  const dir = demosDir(user);
+  const files = (await listFiles(dir)).filter((f) => f.endsWith('.json'));
+  const records = [];
+  for (let i = 0; i < files.length; i += READ_CONCURRENCY) {
+    const batch = await Promise.all(
+      files.slice(i, i + READ_CONCURRENCY).map(async (f) => {
+        try {
+          return JSON.parse(await fsp.readFile(path.join(dir, f), 'utf8'));
+        } catch {
+          /* skip a corrupt record rather than fail the whole listing */
+          return null;
+        }
+      })
+    );
+    for (const record of batch) if (record) records.push(record);
+  }
+  records.sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
+
+  recordListCache.set(key, { records, expires: Date.now() + RECORD_LIST_TTL_MS });
+  return records.slice();
+}
+
+/**
+ * Storage totals, cached.
+ *
+ * This rides along on every library listing but only changes when something is
+ * uploaded, parsed or deleted, and walking the rounds directory is the most
+ * expensive thing in the request. A stale byte count for a few seconds costs
+ * nothing; recomputing it per request costs the whole page.
+ *
+ * Writes clear it through invalidateDemoList, and quota checks that must not
+ * race an upload pass `fresh: true`.
+ *
+ * @type {Map<string, {value: object, expires: number}>}
+ */
+const usageCache = new Map();
+const USAGE_TTL_MS = 15 * 1000;
+
+export async function usage(user, { fresh = false } = {}) {
+  const key = userKey(user);
+  if (!fresh) {
+    const hit = usageCache.get(key);
+    if (hit && hit.expires > Date.now()) return hit.value;
+  }
   const [demoBytes, roundBytes, records] = await Promise.all([
     dirBytes(demosDir(user)),
     dirBytes(roundsDir(user)),
-    listDemos(user)
+    listDemos(user, { fresh })
   ]);
   const bytes = demoBytes + roundBytes;
-  return {
+  const value = {
     demos: records.length,
     bytes,
     maxBytes: MAX_BYTES,
@@ -407,6 +496,8 @@ export async function usage(user) {
     roundBytes,
     bytesLeft: Math.max(0, MAX_BYTES - bytes)
   };
+  usageCache.set(key, { value, expires: Date.now() + USAGE_TTL_MS });
+  return value;
 }
 
 /**
@@ -419,7 +510,9 @@ export async function usage(user) {
  * left in the library and what one upload may be.
  */
 export async function checkQuota(user, incoming = 0) {
-  const u = await usage(user);
+  // Fresh: this is the gate that protects the disk, so it must not admit an
+  // upload on the strength of a byte count from fifteen seconds ago.
+  const u = await usage(user, { fresh: true });
   const gb = (n) => (n / 1024 ** 3).toFixed(n >= 1024 ** 3 ? 0 : 1);
 
   if (incoming > MAX_UPLOAD_BYTES) {
@@ -576,6 +669,9 @@ export async function writeRound(user, demoId, round, extra = {}) {
   const { ticks, ...meta } = round;
   await writeRoundMeta(user, stem, { ...meta, ...extra, demoId });
   await writeRoundTicks(user, stem, Buffer.from(ticks));
+  // Round files are most of the library's bytes, so the storage meter is stale
+  // until this clears it.
+  invalidateDemoList(user);
   return stem;
 }
 
@@ -995,6 +1091,7 @@ export async function deleteDemo(user, id) {
   const record = await readRecord(user, demoId);
   await fsp.rm(demoPath(user, demoId), { force: true });
   await fsp.rm(recordPath(user, demoId), { force: true });
+  invalidateDemoList(user);
   const dir = roundsDir(user);
   for (const f of await listFiles(dir)) {
     if (f.includes(`~${demoId}.`)) await fsp.rm(path.join(dir, f), { force: true });

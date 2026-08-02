@@ -37,6 +37,7 @@ import { POSITION_MAPS, positionsFor } from '../replays/roles/teamPositions.js';
 import { createDocsEditor } from './docsEditor.js';
 import { mountDrawingBoard } from './drawingBoard.js';
 import { mountUtilityArchive } from './utilityArchive.js';
+import { spinnerHtml } from '../lib/spinner.js';
 
 const PAGES = [
   'team-overview',
@@ -1288,7 +1289,7 @@ export function initTeamView({ auth, escapeHtml }) {
     const onBoard = page === 'team-drawing-board' || page === 'team-utility-archive';
     if (!onBoard) destroyBoardMount();
     if (!loaded) {
-      shellEl.innerHTML = '<p class="view-empty">Loading…</p>';
+      shellEl.innerHTML = spinnerHtml();
       return;
     }
     if (!signedIn()) {

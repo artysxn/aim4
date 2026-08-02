@@ -434,10 +434,18 @@ export function isDefuser(name) {
 
 /**
  * Loadout strings from the parser → bare item ids (keeps duplicates for nades).
+ *
+ * Must go through `inventoryItemId`, not `bareWeapon`: the `inventory` prop
+ * gives display names, and `bareWeapon` only collapses whitespace, so "Smoke
+ * Grenade" became `smoke_grenade` and never matched the `smokegrenade` key the
+ * util list is built from. Single-word nades (Flashbang, Molotov) matched by
+ * luck, which is why the sidebar showed some of a player's util and not the
+ * rest.
+ *
  * @param {string[]} loadout
  */
 export function normalizeLoadout(loadout) {
-  return (loadout || []).map(bareWeapon).filter((b) => b && b !== 'none');
+  return (loadout || []).map(inventoryItemId).filter((b) => b && b !== 'none');
 }
 
 /**
@@ -547,7 +555,9 @@ function gunRank(name) {
 }
 
 function removeOne(list, name) {
-  const b = bareWeapon(name);
+  // Same normalizer the list was built with, so a thrown "Smoke Grenade"
+  // removes the `smokegrenade` entry rather than missing and leaving it.
+  const b = inventoryItemId(name);
   const i = list.indexOf(b);
   if (i >= 0) list.splice(i, 1);
 }

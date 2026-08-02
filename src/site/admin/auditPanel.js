@@ -8,6 +8,7 @@
 
 import { adminApi } from './adminApi.js';
 import { button, date, el, input, render, table } from './dom.js';
+import { spinnerNode } from '../../lib/spinner.js';
 
 const ACTIONS = [
   '',
@@ -44,7 +45,7 @@ export function auditPanel() {
   let offset = 0;
 
   async function load() {
-    render(results, el('p', 'admin-loading', 'Loading'));
+    render(results, spinnerNode());
     try {
       const { entries } = await adminApi.audit({
         actorId: actor.value.trim(),

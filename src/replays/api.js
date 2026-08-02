@@ -110,12 +110,19 @@ export async function fetchStatus() {
  * Library listing. Pass `{ limit, offset }` for a page (used by /replays).
  * Omit them for the full list.
  *
- * @param {{ limit?: number, offset?: number }} [opts]
+ * `{ mine: true }` returns everything this account owns, unpaginated, which is
+ * what My Uploads needs: filtering the library page client-side capped that
+ * screen at the page size no matter how many demos the account actually had.
+ *
+ * @param {{ limit?: number, offset?: number, mine?: boolean }} [opts]
  */
 export async function fetchDemos(opts = {}) {
   const params = new URLSearchParams();
-  if (Number.isFinite(opts.limit) && opts.limit > 0) params.set('limit', String(opts.limit));
-  if (Number.isFinite(opts.offset) && opts.offset > 0) params.set('offset', String(opts.offset));
+  if (opts.mine) params.set('mine', '1');
+  else {
+    if (Number.isFinite(opts.limit) && opts.limit > 0) params.set('limit', String(opts.limit));
+    if (Number.isFinite(opts.offset) && opts.offset > 0) params.set('offset', String(opts.offset));
+  }
   const q = params.toString() ? `?${params}` : '';
   return asJson(await fetch(`${API_BASE}/api/replays/demos${q}`, { headers: await headers() }));
 }

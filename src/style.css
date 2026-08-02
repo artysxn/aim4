@@ -5,6 +5,8 @@
    #ui-root is click-through except for actual panels/buttons.
 --------------------------------------------------------------------------- */
 
+@import './lib/entitlementUi.css';
+
 @font-face {
   font-family: 'PP Mori';
   src: url('/fonts/pp/PPMori-Extralight.otf') format('opentype');

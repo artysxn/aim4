@@ -30,6 +30,7 @@ import {
   playerColumnsWithRoles,
   statsTableHtml
 } from './statsTables.js';
+import { spinnerHtml } from '../../lib/spinner.js';
 
 /**
  * @param {{escapeHtml: (s: string) => string}} deps
@@ -46,7 +47,7 @@ export function createStatsPanel({ escapeHtml }) {
       <span class="st-scope" id="st-scope"></span>
     </div>
     <div class="st-filters" id="st-filters"></div>
-    <div class="st-body" id="st-body"><p class="view-empty">Loading…</p></div>`;
+    <div class="st-body" id="st-body"><div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div></div>`;
 
   const filtersEl = el.querySelector('#st-filters');
   const bodyEl = el.querySelector('#st-body');
@@ -417,7 +418,7 @@ export function createStatsPanel({ escapeHtml }) {
     const token = ++loadToken;
     scope = next;
     scopeEl.textContent = next.title || '';
-    bodyEl.innerHTML = '<p class="view-empty">Loading…</p>';
+    bodyEl.innerHTML = spinnerHtml();
     filter.maps = [];
     filter.side = '';
     filter.econ = null;

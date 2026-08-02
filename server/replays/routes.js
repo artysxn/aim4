@@ -30,6 +30,9 @@
 import { open, readdir, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { promisify } from 'node:util';
+
+const gzip = promisify(zlib.gzip);
 import { parserStatus } from '../demoparser/index.js';
 import {
   ROOT,
@@ -101,12 +104,13 @@ const CORS = {
     'Authorization, Content-Type, X-Aim4-User, X-Aim4-Filename, X-Aim4-Visibility'
 };
 
-function json(res, status, body) {
+function json(res, status, body, extraHeaders = null) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload),
-    ...CORS
+    ...CORS,
+    ...(extraHeaders || {})
   });
   res.end(payload);
 }
@@ -121,7 +125,7 @@ function json(res, status, body) {
  * runs per request on a two-core box and the marginal bytes are not worth the
  * CPU next to what the on-disk codec already saved.
  */
-function binary(res, buffer, req = null) {
+async function binary(res, buffer, req = null) {
   let buf = Buffer.from(buffer);
   const headers = {
     'Content-Type': 'application/octet-stream',
@@ -132,7 +136,12 @@ function binary(res, buffer, req = null) {
   };
   const accepts = String(req?.headers['accept-encoding'] || '');
   if (/\bgzip\b/.test(accepts) && buf.length > 4096) {
-    buf = zlib.gzipSync(buf, { level: 6 });
+    // Asynchronous, deliberately. gzipSync on a 260 KB tick buffer holds the
+    // only thread for long enough to matter, and the viewer asks for a whole
+    // match's rounds in a burst: every one of those compressions used to block
+    // every other request on the server, including the ones the rest of the
+    // site was waiting on.
+    buf = await gzip(buf, { level: 6 });
     headers['Content-Encoding'] = 'gzip';
     // Caches key on this, and without it a shared cache could hand the gzipped
     // body to a client that did not ask for one.
@@ -435,10 +444,22 @@ export async function handleReplayRequest(req, res, url) {
 
   const access = await accessFor(me);
 
-  /** Records the caller may browse, with ownership stamped on for the client. */
+  /**
+   * Records the caller may browse, with ownership stamped on for the client.
+   *
+   * Memoized for the life of the request. canOpenRound() calls this, and the
+   * round and tick routes call canOpenRound(), so an unmemoized version
+   * re-filtered the whole library several times while serving one round.
+   */
+  let readableOnce = null;
   const readable = async () => {
-    const records = await listDemos(user);
-    return { records, allowed: visibleRecords(records, access) };
+    if (!readableOnce) {
+      readableOnce = (async () => {
+        const records = await listDemos(user);
+        return { records, allowed: visibleRecords(records, access) };
+      })();
+    }
+    return readableOnce;
   };
 
   /**
@@ -558,7 +579,13 @@ export async function handleReplayRequest(req, res, url) {
   // ---- library ------------------------------------------------------------
   if (req.method === 'GET' && p === '/api/replays/demos') {
     const { records: allRecords, allowed } = await readable();
-    const records = allowed;
+    // `?mine=1` is the My Uploads listing: everything this account owns, in one
+    // response and never paginated. It used to reuse the library's paged fetch
+    // and filter client-side, which silently capped the page at the library's
+    // 50 and made an account with 300 uploads look like it had 50.
+    const mineOnly = url.searchParams.get('mine') === '1';
+    const ownedBy = (r) => ownerOf(r).id === me.id;
+    const records = mineOnly && !me.admin ? allowed.filter(ownedBy) : allowed;
     const byId = new Set(allRecords.map((r) => r.id));
     // Jobs whose record has not landed yet (upload just finished). Terminal
     // error/done jobs must not reappear here — otherwise deleting a failed
@@ -580,12 +607,13 @@ export async function handleReplayRequest(req, res, url) {
 
     // Optional window for the library browser. Omit / limit=0 → full list
     // (status tools, migrations). Stats/analytics/charts use /stats instead.
+    // `mine=1` ignores the window entirely: that page owns its own paging.
     const rawLimit = url.searchParams.get('limit');
     const limit =
-      rawLimit === null || rawLimit === ''
+      mineOnly || rawLimit === null || rawLimit === ''
         ? 0
         : Math.max(0, Math.min(5000, Number(rawLimit) || 0));
-    const offset = Math.max(0, Number(url.searchParams.get('offset') || 0) || 0);
+    const offset = mineOnly ? 0 : Math.max(0, Number(url.searchParams.get('offset') || 0) || 0);
     const page =
       limit > 0 ? records.slice(offset, offset + limit) : offset ? records.slice(offset) : records;
     const mapped = page.map((r) => ({ ...withJob(user, r), owner: ownerOf(r) }));
@@ -604,6 +632,12 @@ export async function handleReplayRequest(req, res, url) {
       limit: limit || records.length,
       hasMore: limit > 0 && offset + page.length < records.length,
       pending: pending.length,
+      // What My Uploads will show, which is what the quota meter counts against.
+      // Derived here because the store is one shared library: `usage.demos` is
+      // the size of the whole library, not of this account's slice of it. Admins
+      // manage the whole library from that page, so their count is the whole
+      // readable set, matching what `mine=1` returns them.
+      owned: me.signedIn ? (me.admin ? allowed.length : allowed.filter(ownedBy).length) : 0,
       usage: await usage(user)
     });
     return true;
@@ -1056,7 +1090,7 @@ export async function handleReplayRequest(req, res, url) {
       json(res, 404, { error: 'Round not found.' });
       return true;
     }
-    binary(res, buf, req);
+    await binary(res, buf, req);
     return true;
   }
 
@@ -1132,7 +1166,11 @@ export async function handleReplayRequest(req, res, url) {
       json(res, 404, { error: 'Round not found.' });
       return true;
     }
-    json(res, 200, { round: meta });
+    // Immutable for the same reason the tick buffer is: the round file name
+    // encodes which round of which demo this is, and a written round is never
+    // rewritten. Reopening a demo was refetching every round's meta from the
+    // server; now the browser answers from its own cache.
+    json(res, 200, { round: meta }, { 'Cache-Control': 'private, max-age=31536000, immutable' });
     return true;
   }
 

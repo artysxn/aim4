@@ -43,6 +43,7 @@ import { createAnalyticsPanel } from '../replays/analytics/analyticsPanel.js';
 import { createChartsPanel } from '../replays/charts/chartsPanel.js';
 import commentsIcon from '../icons/demos_comments.svg?raw';
 import bookmarkIcon from '../icons/demos_bookmarks_added.svg?raw';
+import { spinnerHtml } from '../lib/spinner.js';
 
 const POLL_MS = 1500;
 
@@ -140,6 +141,13 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
    */
   let mineDemos = [];
   let mineDemosLoaded = false;
+  /**
+   * Owned-demo count as counted by the server. The quota meter reads this
+   * rather than `myDemos().length`, which is only correct once the full owned
+   * list has landed and reported "50 / 50" against the library page before it.
+   * @type {number|null}
+   */
+  let mineOwnedCount = null;
   const mineEl = document.getElementById('rp-mine');
   let teamSearch = '';
   let playerSearch = '';
@@ -200,8 +208,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   function renderQuota(usage) {
     if (!usage || !quotaEl) return;
-    const mine = myDemos();
-    const demoCount = mine.length;
+    const demoCount = mineOwnedCount ?? myDemos().length;
     const demoCap = account.admin ? 0 : account.maxDemos || 5;
     const pctDemos = demoCap > 0 ? (demoCount / demoCap) * 100 : 0;
     const pctBytes = usage.maxBytes ? (usage.bytes / usage.maxBytes) * 100 : 0;
@@ -471,30 +478,46 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   /** Demos this account uploaded. Admins see the whole library here. */
   function myDemos() {
     if (!account.signedIn) return [];
-    const source = mineDemosLoaded ? mineDemos : demos;
-    if (account.admin) return source;
-    return source.filter((d) => (d.owner?.id || '') === account.id);
+    // Already filtered by the server, and re-filtering would empty the list
+    // whenever this runs before /status has told us our own account id.
+    if (mineDemosLoaded) return mineDemos;
+    if (account.admin) return demos;
+    return demos.filter((d) => (d.owner?.id || '') === account.id);
   }
 
-  /** Load every demo the uploads page needs (library fetch is paginated at 50). */
+  /**
+   * Load every demo the uploads page needs.
+   *
+   * `mine=1` is resolved server-side, so this no longer depends on the library
+   * page size, and no longer re-downloads the whole shared library to throw
+   * most of it away.
+   *
+   * Coalesced: onShow fires this from setSubpage and again from refresh(), and
+   * two full listings racing is both wasted work and a way for the older
+   * response to overwrite the newer one.
+   */
+  let mineInFlight = null;
   async function refreshMineDemos() {
-    if (!account.signedIn) {
+    if (!auth?.isLoggedIn && !account.signedIn) {
       mineDemos = [];
       mineDemosLoaded = false;
       return;
     }
-    try {
-      // No limit → full library (server treats omit/0 as “all”).
-      const list = await fetchDemos();
-      const all = list.demos || [];
-      mineDemos = account.admin
-        ? all
-        : all.filter((d) => (d.owner?.id || '') === account.id);
-      mineDemosLoaded = true;
-    } catch {
-      // Keep whatever we had; fall back to the paged library list in myDemos().
-      mineDemosLoaded = mineDemos.length > 0;
-    }
+    if (mineInFlight) return mineInFlight;
+    mineInFlight = (async () => {
+      try {
+        const list = await fetchDemos({ mine: true });
+        mineDemos = list.demos || [];
+        if (Number.isFinite(list.owned)) mineOwnedCount = Number(list.owned);
+        mineDemosLoaded = true;
+      } catch {
+        // Keep whatever we had; fall back to the paged library list in myDemos().
+        mineDemosLoaded = mineDemos.length > 0;
+      } finally {
+        mineInFlight = null;
+      }
+    })();
+    return mineInFlight;
   }
 
   function renderMine() {
@@ -2764,7 +2787,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   async function loadPlaylistsPage() {
     if (!playlistsBody) return;
-    playlistsBody.innerHTML = '<p class="view-empty">Loading…</p>';
+    playlistsBody.innerHTML = spinnerHtml();
     try {
       playlistLists = await fetchPlaylists();
       renderPlaylistsPage();
@@ -2951,7 +2974,40 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   // ---- polling ------------------------------------------------------------
 
+  /**
+   * Single-flight guard.
+   *
+   * refresh() is fired by the 1.5s parse poll, by every mutation, and by every
+   * arrival on the view. Each call is several requests, and none of them was
+   * cancelled or awaited by the next one, so on a slow backend the poll stacked
+   * refreshes faster than they completed. That saturates the browser's six
+   * connections per host, and once it does, nothing else on the site can load:
+   * navigating away appears to hang because the new page's requests are queued
+   * behind a backlog of stale library listings.
+   *
+   * A refresh already in flight is returned as-is. A request that arrives while
+   * one is running sets a flag so exactly one more runs afterwards, which keeps
+   * "reload after upload" correct without letting the queue grow.
+   */
+  let refreshInFlight = null;
+  let refreshAgain = false;
+
   async function refresh() {
+    if (refreshInFlight) {
+      refreshAgain = true;
+      return refreshInFlight;
+    }
+    refreshInFlight = refreshOnce().finally(() => {
+      refreshInFlight = null;
+      if (refreshAgain) {
+        refreshAgain = false;
+        refresh();
+      }
+    });
+    return refreshInFlight;
+  }
+
+  async function refreshOnce() {
     try {
       const [status, list] = await Promise.all([
         fetchStatus(),
@@ -2962,6 +3018,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       renderCapabilities(status);
       demoTotal = Number(list.total) || list.usage?.demos || 0;
       demoHasMore = Boolean(list.hasMore);
+      // Server-counted, so the meter is right on the first paint rather than
+      // reading the library page and claiming the cap is already full.
+      if (Number.isFinite(list.owned)) mineOwnedCount = Number(list.owned);
       renderQuota(list.usage || status.usage);
       demos = list.demos || [];
       // Drop extras that are now on the page; keep the rest for active filters.
@@ -3009,6 +3068,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         subpage === 'charts'
       )
         return;
+      // A poll tick is skippable by definition: if one is still running, the
+      // answer it is about to deliver is the one this tick wanted.
+      if (refreshInFlight) return;
       if (demos.some((d) => d.status === 'parsing')) refresh();
     }, POLL_MS);
   }

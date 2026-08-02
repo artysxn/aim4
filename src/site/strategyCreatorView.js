@@ -22,6 +22,7 @@ import {
 } from '../replays/api.js';
 import { MAPS } from '../replays/shared/roundId.js';
 import { createCreatorPanel } from '../replays/creator/creatorPanel.js';
+import { spinnerHtml } from '../lib/spinner.js';
 
 const MAX_PER_MAP = 8;
 
@@ -212,7 +213,7 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
 
   function render() {
     if (!loaded) {
-      shellEl.innerHTML = '<p class="view-empty">Loading…</p>';
+      shellEl.innerHTML = spinnerHtml();
       return;
     }
     if (panel || shareView) return;

@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 
 import { fetchStats, consumeCapability } from '../api.js';
-import { CAP } from '../../shared/entitlements/keys.js';
+import { CAP } from '../../../shared/entitlements/keys.js';
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
 import { attachTips } from '../stats/statsTables.js';
 import {
@@ -22,6 +22,8 @@ import {
   saveShapes,
   newShapeId
 } from './shapeFilters.js';
+import { spinnerHtml } from '../../lib/spinner.js';
+import { renderUpgradeError } from '../../site/upgradeGate.js';
 
 const PHASE_OPTS = [
   { key: 'early', label: 'Early' },
@@ -639,7 +641,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       return;
     }
     if (!payload) {
-      mainEl.innerHTML = `<p class="view-empty">Loading…</p>`;
+      mainEl.innerHTML = spinnerHtml();
       return;
     }
     const token = ++renderToken;
@@ -648,7 +650,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     // it sticks around for the whole aggregate await (or forever on error).
     mainEl.innerHTML = hasShapes
       ? `<p class="view-empty">Matching selections…</p>${renderRadarCard()}`
-      : `<p class="view-empty">Loading…</p>${renderRadarCard()}`;
+      : `<div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div>${renderRadarCard()}`;
     paintRadar();
 
     try {
@@ -694,7 +696,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
   async function load() {
     const token = ++loadToken;
-    mainEl.innerHTML = `<p class="view-empty">Loading…</p>`;
+    mainEl.innerHTML = spinnerHtml();
     try {
       await consumeCapability(CAP.ANALYTICS_PATTERN_FINDER);
       if (token !== loadToken) return;
@@ -711,11 +713,16 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       render();
     } catch (err) {
       if (token !== loadToken) return;
-      const msg =
-        err.status === 402
-          ? err.body?.message || err.message || 'Pattern finder is not available on your plan.'
-          : err.message || String(err);
-      mainEl.innerHTML = `<p class="view-empty">${escapeHtml(msg)}</p>`;
+      // A spent allowance gets the real upgrade prompt, with a button. Telling
+      // someone they are out of uses and giving them nothing to click is the
+      // one moment where an Upgrade button is actually wanted.
+      const prompt = err.status === 402 ? renderUpgradeError(err.body) : null;
+      mainEl.innerHTML = '';
+      if (prompt) {
+        mainEl.appendChild(prompt);
+      } else {
+        mainEl.innerHTML = `<p class="view-empty">${escapeHtml(err.message || String(err))}</p>`;
+      }
     }
   }
 

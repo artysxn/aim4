@@ -18,6 +18,16 @@ import {
   FLAG_SCOPED
 } from '../shared/tickFormat.js';
 import { isGrenade, isKnife, loadEquipmentIcon, normalizeGrenadeType } from './equipmentIcons.js';
+// Shared with the Drawing Board and the Team utility archive, so the same
+// grenade is the same size and colour on all three surfaces.
+import {
+  FIRE_RADIUS_UNITS,
+  FIRE_SECONDS,
+  SMOKE_RADIUS_UNITS,
+  SMOKE_SECONDS,
+  UTIL_STYLE,
+  drawFireIcon
+} from './utilityMarkers.js';
 
 /** Roster team colors (fallback when a tick has no side byte). */
 export const TEAM_COLORS = {
@@ -65,10 +75,8 @@ function killVictimSide(k, states, byId) {
 /** The T holding the C4 wears this instead of the side color. */
 const BOMB_CARRIER_COLOR = '#e2532b';
 
-const SMOKE_SECONDS = 22;
 /** Smoke stays full strength until this age, then fades out by SMOKE_SECONDS. */
 const SMOKE_FADE_START = 20;
-const FIRE_SECONDS = 7;
 const FLASH_SECONDS = 0.8;
 const HE_SECONDS = 0.85;
 /** Area utility (molotov) holds full strength, then clears in this long. */
@@ -81,8 +89,6 @@ const HE_SMOKE_MASK_HOLD = 1;
 const HE_SMOKE_MASK_FADE = 2.5;
 /** World-unit radius of the HE smoke clear (â‰ˆ CS smoke punch). */
 const HE_SMOKE_CLEAR_UNITS = 130;
-const SMOKE_RADIUS_UNITS = 144;
-const FIRE_RADIUS_UNITS = 120;
 const TRACER_SECONDS = 0.25;
 /** Kill X / death circle stay for the rest of the round (no timed fade). */
 
@@ -1184,7 +1190,11 @@ export class RadarRenderer {
     const left = Math.max(0, Math.ceil(SMOKE_SECONDS - age));
     const progress = 1 - age / SMOKE_SECONDS;
     const border =
-      side === 'T' ? SIDE_COLORS.T.base : side === 'CT' ? SIDE_COLORS.CT.base : '#a0a8b4';
+      side === 'T'
+        ? SIDE_COLORS.T.base
+        : side === 'CT'
+          ? SIDE_COLORS.CT.base
+          : UTIL_STYLE.smoke.ring;
 
     // Holes that overlap this smoke (world space).
     const holes = [];
@@ -1205,14 +1215,14 @@ export class RadarRenderer {
     ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
     ctx.clip();
 
-    ctx.globalAlpha = 0.55 * fade;
+    ctx.globalAlpha = UTIL_STYLE.smoke.alpha * fade;
     ctx.beginPath();
     ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
     for (const h of holes) {
       ctx.moveTo(h.x + h.r, h.y);
       ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2, true);
     }
-    ctx.fillStyle = 'rgba(160, 168, 180, 0.92)';
+    ctx.fillStyle = UTIL_STYLE.smoke.fill;
     ctx.fill('evenodd');
     ctx.restore();
 
@@ -1245,12 +1255,16 @@ export class RadarRenderer {
     const left = Math.max(0, Math.ceil(FIRE_SECONDS - age));
     const progress = Math.max(0, 1 - age / FIRE_SECONDS);
     const border =
-      side === 'T' ? SIDE_COLORS.T.base : side === 'CT' ? SIDE_COLORS.CT.base : '#e2622a';
+      side === 'T'
+        ? SIDE_COLORS.T.base
+        : side === 'CT'
+          ? SIDE_COLORS.CT.base
+          : UTIL_STYLE.fire.ring;
     const fade = utilFade(age, FIRE_SECONDS);
 
     ctx.save();
-    ctx.globalAlpha = 0.4 * fade;
-    ctx.fillStyle = '#e24e2c';
+    ctx.globalAlpha = UTIL_STYLE.fire.alpha * fade;
+    ctx.fillStyle = UTIL_STYLE.fire.fill;
     ctx.beginPath();
     ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
     ctx.fill();
@@ -1263,26 +1277,16 @@ export class RadarRenderer {
     ctx.stroke();
 
     if (!compact) {
-      const img = loadEquipmentIcon(side === 'CT' ? 'incgrenade' : 'molotov', () =>
-        this.onIconLoad?.()
-      );
-      const iconR = Math.min(11 * this.dpr, radius * 0.3);
-      const iconY = pt.y - radius * 0.3;
+      drawFireIcon(ctx, {
+        x: pt.x,
+        y: pt.y,
+        radius,
+        dpr: this.dpr,
+        type: side === 'CT' ? 'incgrenade' : 'molotov',
+        alpha: fade,
+        onIconLoad: () => this.onIconLoad?.()
+      });
       ctx.globalAlpha = 0.95 * fade;
-      if (img?.complete && img.naturalWidth > 0) {
-        const scale = Math.min((iconR * 1.7) / img.naturalWidth, (iconR * 1.7) / img.naturalHeight);
-        const iw = img.naturalWidth * scale;
-        const ih = img.naturalHeight * scale;
-        ctx.drawImage(img, pt.x - iw / 2, iconY - ih / 2, iw, ih);
-      } else {
-        // Fallback flame blob.
-        ctx.fillStyle = '#ff6a2a';
-        ctx.beginPath();
-        ctx.moveTo(pt.x, iconY - iconR);
-        ctx.quadraticCurveTo(pt.x + iconR, iconY, pt.x, iconY + iconR * 0.7);
-        ctx.quadraticCurveTo(pt.x - iconR, iconY, pt.x, iconY - iconR);
-        ctx.fill();
-      }
       ctx.fillStyle = 'rgba(255, 236, 224, 0.95)';
       ctx.font = `600 ${Math.max(11, Math.round(radius * 0.28))}px "PP Mori", system-ui, sans-serif`;
       ctx.textAlign = 'center';

@@ -7,6 +7,8 @@
 import { TickStore } from '../tickStore.js';
 import { createTimelineViewer } from './timelineViewer.js';
 import { createAnalyzerViewer } from './analyzerViewer.js';
+import { useMeteredFeature } from '../../lib/meteredFeature.js';
+import { CAP } from '../../../shared/entitlements/keys.js';
 import backIcon from '../../icons/icon_back.svg?raw';
 
 /**
@@ -83,11 +85,22 @@ export function openViewer({
 
   let current = null;
   let activeMode = null;
+  /** One macro-viewer use per opened viewer, not one per mode toggle. */
+  let spentMacro = false;
 
-  function setMode(next) {
+  /**
+   * Analyzer is the macro viewer, which is metered: one session a day on Free.
+   * Spent on entry rather than per interaction, so a session is a session and
+   * not an allowance that drains while someone uses it.
+   */
+  async function setMode(next) {
     if (next === 'macro') next = 'analyzer';
     if (next === 'analyzer' && !canAnalyze) return;
     if (next === activeMode) return;
+    if (next === 'analyzer' && !spentMacro) {
+      if (!(await useMeteredFeature(CAP.DEMOS_MACRO_VIEWER, { host: overlay }))) return;
+      spentMacro = true;
+    }
     activeMode = next;
     current?.destroy();
     bodyEl.innerHTML = '';
@@ -113,7 +126,7 @@ export function openViewer({
 
   overlay.querySelector('.rv-modes')?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-mode]');
-    if (btn && !btn.disabled) setMode(btn.dataset.mode);
+    if (btn && !btn.disabled) void setMode(btn.dataset.mode);
   });
 
   function close() {
@@ -138,7 +151,13 @@ export function openViewer({
 
   document.body.appendChild(overlay);
   document.body.classList.add('rv-open');
-  setMode(mode === 'analyzer' && !canAnalyze ? 'timeline' : mode);
+  // Opening straight into Analyzer from a link still spends a use; if it is
+  // refused, fall back to the timeline rather than leaving an empty overlay.
+  void (async () => {
+    const wanted = mode === 'analyzer' && !canAnalyze ? 'timeline' : mode;
+    await setMode(wanted);
+    if (!activeMode) await setMode('timeline');
+  })();
 
   return { close };
 }

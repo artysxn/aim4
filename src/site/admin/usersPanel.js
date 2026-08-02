@@ -6,6 +6,7 @@
 import { PLAN_IDS, PLAN_NAMES } from '../../../shared/entitlements/catalogue.js';
 import { adminApi } from './adminApi.js';
 import { button, date, el, input, render, select, table } from './dom.js';
+import { spinnerNode } from '../../lib/spinner.js';
 
 const STATUSES = ['', 'trialing', 'active', 'past_due', 'cancelled', 'expired'];
 
@@ -27,7 +28,7 @@ export function usersPanel({ onOpenUser }) {
   let page = 0;
 
   async function load() {
-    render(results, el('p', 'admin-loading', 'Loading'));
+    render(results, spinnerNode());
     try {
       const data = await adminApi.users({
         q: search.value.trim(),

@@ -9,7 +9,7 @@
 // ---------------------------------------------------------------------------
 
 import { fetchStats, consumeCapability } from '../api.js';
-import { CAP } from '../../shared/entitlements/keys.js';
+import { CAP } from '../../../shared/entitlements/keys.js';
 import { ECONOMIES, MAPS } from '../shared/roundId.js';
 import {
   CT_TACTICAL,
@@ -30,6 +30,8 @@ import {
 } from './chartFields.js';
 import { computeChart, correlationWords, filterWords } from './chartData.js';
 import { renderChart } from './chartRender.js';
+import { spinnerHtml } from '../../lib/spinner.js';
+import { renderUpgradeError } from '../../site/upgradeGate.js';
 
 /** Match radar viewer: wheel zoom + left/middle drag pan when zoomed in. */
 const MIN_ZOOM = 1;
@@ -66,7 +68,7 @@ export function createChartsPanel({ escapeHtml }) {
     <div class="ch-layout">
       <aside class="ch-side" id="ch-side"></aside>
       <div class="ch-main">
-        <div class="ch-canvas" id="ch-canvas"><p class="view-empty">Loading…</p></div>
+        <div class="ch-canvas" id="ch-canvas"><div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div></div>
         <div class="ch-details" id="ch-details"></div>
       </div>
     </div>`;
@@ -927,7 +929,7 @@ export function createChartsPanel({ escapeHtml }) {
 
   async function load(scope = {}) {
     const token = ++loadToken;
-    canvasEl.innerHTML = '<p class="view-empty">Loading…</p>';
+    canvasEl.innerHTML = spinnerHtml();
     try {
       // Spending happens when the chart actually loads data, not when the route
       // opens. Free gets three of these per rolling day.
@@ -951,11 +953,17 @@ export function createChartsPanel({ escapeHtml }) {
     } catch (err) {
       if (token !== loadToken) return;
       sideEl.innerHTML = '';
-      const msg =
-        err.status === 402
-          ? err.body?.message || err.message || 'Charts are not available on your plan.'
-          : err.message || 'Could not load stats.';
-      canvasEl.innerHTML = `<p class="view-empty">${escapeHtml(msg)}</p>`;
+      // Spent allowance gets the upgrade prompt with its button, not a
+      // dead-end sentence.
+      const prompt = err.status === 402 ? renderUpgradeError(err.body) : null;
+      canvasEl.innerHTML = '';
+      if (prompt) {
+        canvasEl.appendChild(prompt);
+      } else {
+        canvasEl.innerHTML = `<p class="view-empty">${escapeHtml(
+          err.message || 'Could not load stats.'
+        )}</p>`;
+      }
     }
   }
 

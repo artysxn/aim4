@@ -14,6 +14,7 @@ import {
   saveDrawingBoard
 } from '../replays/api.js';
 import { DrawingLayer } from '../replays/viewer/drawing.js';
+import { drawUtilityMarker, utilityRadiusUnits } from '../replays/viewer/utilityMarkers.js';
 
 export const BOARD_COLORS = [
   { id: 'white', value: '#f0f0f0', label: 'White' },
@@ -36,8 +37,6 @@ const NADE_TOOLS = [
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 5;
-const SMOKE_RADIUS_UNITS = 144;
-const FIRE_RADIUS_UNITS = 120;
 
 const emptyBoard = (map = '', id = '', name = '') => ({
   id,
@@ -307,50 +306,17 @@ export function mountDrawingBoard({ host, teamId, escapeHtml, headerHtml }) {
     const y = rp.y * t.scale + t.oy;
     const dpr = renderer.dpr;
     ctx.save();
-    if (n.type === 'smokegrenade') {
-      const r = worldRadiusPx(SMOKE_RADIUS_UNITS, t);
-      ctx.globalAlpha = 0.55;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(160, 168, 180, 0.92)';
-      ctx.fill();
-      ctx.globalAlpha = 0.95;
-      ctx.strokeStyle = '#a0a8b4';
-      ctx.lineWidth = Math.max(0.75, 1 * dpr);
-      ctx.stroke();
-    } else if (n.type === 'molotov') {
-      const r = worldRadiusPx(FIRE_RADIUS_UNITS, t);
-      ctx.globalAlpha = 0.4;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = '#e24e2c';
-      ctx.fill();
-      ctx.globalAlpha = 0.95;
-      ctx.strokeStyle = '#e2622a';
-      ctx.lineWidth = Math.max(0.75, 1 * dpr);
-      ctx.stroke();
-    } else if (n.type === 'hegrenade') {
-      const r = 5.5 * dpr;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.strokeStyle = '#7dff6a';
-      ctx.lineWidth = 1.6 * dpr;
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(x, y, r * 0.35, 0, Math.PI * 2);
-      ctx.fillStyle = '#6dff5a';
-      ctx.fill();
-    } else {
-      // flashbang — small white
-      const r = 5 * dpr;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-      ctx.fill();
-      ctx.strokeStyle = '#b5b5b5';
-      ctx.lineWidth = 1.2 * dpr;
-      ctx.stroke();
-    }
+    // Same renderer the timeline round viewer uses, so a smoke placed here
+    // matches the smoke you saw in the demo you copied it from.
+    const units = utilityRadiusUnits(n.type);
+    drawUtilityMarker(ctx, {
+      type: n.type,
+      x,
+      y,
+      radius: units ? worldRadiusPx(units, t) : 0,
+      dpr,
+      onIconLoad: () => paint()
+    });
     if (n.playerColor) {
       ctx.beginPath();
       ctx.arc(x, y, 3.2 * dpr, 0, Math.PI * 2);
@@ -505,6 +471,7 @@ export function mountDrawingBoard({ host, teamId, escapeHtml, headerHtml }) {
   // ---- canvas input (viewer-style zoom / pan) -----------------------------
 
   let drawingStroke = false;
+  let erasingStroke = false;
   let panning = false;
   let lastX = 0;
   let lastY = 0;
@@ -550,11 +517,15 @@ export function mountDrawingBoard({ host, teamId, escapeHtml, headerHtml }) {
     }
 
     if (tool === 'erase' || e.button === 2) {
+      // `radar.scale` is CSS pixels per radar unit; `viewTransform().scale` is
+      // device pixels. Passing the latter shrank the eraser's reach by the
+      // device pixel ratio, so on a retina screen you had to land within about
+      // 4px of a line to take it. Erasing also only fired on pointerdown, so
+      // dragging the eraser across a drawing did nothing.
       const radar = renderer.radarFromClient(e.clientX, e.clientY, {});
-      const { w, h } = renderer.resize();
-      const t = renderer.viewTransform(w, h);
-      drawing.eraseAt(radar, t.scale);
-      dirty = true;
+      erasingStroke = true;
+      canvas.setPointerCapture(e.pointerId);
+      if (drawing.eraseAt(radar, radar.scale)) dirty = true;
       paint();
       renderTools();
     }
@@ -581,11 +552,18 @@ export function mountDrawingBoard({ host, teamId, escapeHtml, headerHtml }) {
       }
       return;
     }
+    if (erasingStroke) {
+      const radar = renderer.radarFromClient(e.clientX, e.clientY, {});
+      if (drawing.eraseAt(radar, radar.scale)) {
+        dirty = true;
+        paint();
+        renderTools();
+      }
+      return;
+    }
     if (drawingStroke) {
       const radar = renderer.radarFromClient(e.clientX, e.clientY, {});
-      const { w, h } = renderer.resize();
-      const t = renderer.viewTransform(w, h);
-      drawing.extend(radar, t.scale);
+      drawing.extend(radar, radar.scale);
       paint();
     }
   });
@@ -597,6 +575,7 @@ export function mountDrawingBoard({ host, teamId, escapeHtml, headerHtml }) {
       dirty = true;
       renderTools();
     }
+    erasingStroke = false;
     if (panning) {
       panning = false;
       stageEl.classList.remove('panning');

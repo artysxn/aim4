@@ -12,6 +12,7 @@ import { auditPanel } from './auditPanel.js';
 import { el, render } from './dom.js';
 import { usersPanel } from './usersPanel.js';
 import { userDetail } from './userDetail.js';
+import { spinnerNode } from '../../lib/spinner.js';
 
 const TABS = [
   { id: 'users', label: 'Users' },
@@ -77,7 +78,7 @@ export function initAdminView(host) {
 
   async function load() {
     if (loaded) return;
-    render(root, el('p', 'admin-loading', 'Loading'));
+    render(root, spinnerNode());
     try {
       me = await adminApi.me();
       loaded = true;

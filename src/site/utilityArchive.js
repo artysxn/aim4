@@ -8,13 +8,12 @@ import { RadarRenderer } from '../replays/viewer/radarRenderer.js';
 import { radarToWorld, worldToRadar } from '../replays/viewer/mapCalibration.js';
 import { MAPS, MAP_CODES } from '../replays/shared/roundId.js';
 import { fetchUtilityArchive, saveUtilityArchive } from '../replays/api.js';
+import { drawUtilityMarker, utilityRadiusUnits } from '../replays/viewer/utilityMarkers.js';
 
 const MERGE_UNITS = 75;
 const MAX_COMMENT = 100;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 5;
-const SMOKE_RADIUS_UNITS = 144;
-const FIRE_RADIUS_UNITS = 120;
 
 const NADE_TOOLS = [
   { type: 'smokegrenade', label: 'Smoke', icon: '/icons/equipment/smokegrenade.svg' },
@@ -252,49 +251,19 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     const y = rp.y * t.scale + t.oy;
     const dpr = renderer.dpr;
     ctx.save();
-    if (g.type === 'smokegrenade') {
-      const r = worldRadiusPx(SMOKE_RADIUS_UNITS, t);
-      ctx.globalAlpha = active ? 0.65 : 0.45;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(160, 168, 180, 0.92)';
-      ctx.fill();
-      ctx.globalAlpha = 0.95;
-      ctx.strokeStyle = active ? '#ffffff' : '#a0a8b4';
-      ctx.lineWidth = (active ? 2 : 1) * dpr;
-      ctx.stroke();
-    } else if (g.type === 'molotov') {
-      const r = worldRadiusPx(FIRE_RADIUS_UNITS, t);
-      ctx.globalAlpha = active ? 0.5 : 0.35;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = '#e24e2c';
-      ctx.fill();
-      ctx.globalAlpha = 0.95;
-      ctx.strokeStyle = active ? '#ffffff' : '#e2622a';
-      ctx.lineWidth = (active ? 2 : 1) * dpr;
-      ctx.stroke();
-    } else if (g.type === 'hegrenade') {
-      const r = (active ? 7 : 5.5) * dpr;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.strokeStyle = '#7dff6a';
-      ctx.lineWidth = 1.6 * dpr;
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(x, y, r * 0.35, 0, Math.PI * 2);
-      ctx.fillStyle = '#6dff5a';
-      ctx.fill();
-    } else {
-      const r = (active ? 6.5 : 5) * dpr;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-      ctx.fill();
-      ctx.strokeStyle = active ? '#ffffff' : '#b5b5b5';
-      ctx.lineWidth = 1.2 * dpr;
-      ctx.stroke();
-    }
+    // Same renderer the timeline round viewer uses. The archive used to fade
+    // its discs harder than the viewer did, so saved utility looked weaker here
+    // than the throw it was copied from.
+    const units = utilityRadiusUnits(g.type);
+    drawUtilityMarker(ctx, {
+      type: g.type,
+      x,
+      y,
+      radius: units ? worldRadiusPx(units, t) : 0,
+      dpr,
+      active,
+      onIconLoad: () => paint()
+    });
     if (active) {
       ctx.fillStyle = '#ffffff';
       ctx.font = `600 ${11 * dpr}px sans-serif`;

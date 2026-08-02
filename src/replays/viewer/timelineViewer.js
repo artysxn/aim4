@@ -15,6 +15,9 @@ import {
   savePlaylist
 } from '../api.js';
 import { fetchStats } from '../api.js';
+import { useMeteredFeature } from '../../lib/meteredFeature.js';
+import { getEntitlements } from '../../lib/entitlements.js';
+import { CAP } from '../../../shared/entitlements/keys.js';
 import { aggregatePlayers, allRows, indexMaps } from '../shared/statsMath.js';
 import {
   PLAYER_COLUMNS,
@@ -54,6 +57,7 @@ import bookmarkAddedIcon from '../../icons/demos_bookmarks_added.svg?raw';
 import coachIcon from '../../icons/demos_coach.svg?raw';
 import chartIcon from '../../icons/demos_chart.svg?raw';
 import zonesIcon from '../../icons/demos_zones.svg?raw';
+import { spinnerHtml } from '../../lib/spinner.js';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 const MIN_ZOOM = 1;
@@ -281,11 +285,26 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   let noteIndex = 0;
   /** 'list' shows every note; 'editor' shows one note's text. */
   let noteView = 'editor';
-  /** Win% graph + side badges (independent of coach notes). On by default. */
-  let chartOn = true;
+  /**
+   * Win% graph + side badges (independent of coach notes).
+   *
+   * This is the round win prediction, which the pricing matrix puts on Team
+   * Premium and up. It used to be on by default for everyone. It now starts off
+   * and is switched on automatically only for tiers that hold it outright;
+   * metered tiers spend a use when they turn it on.
+   */
+  let chartOn = false;
   let coachOn = false;
   /** Position overlay on the radar (control / contested). */
   let zonesOn = false;
+  /**
+   * Daily allowances are spent once per opened viewer, not once per toggle.
+   * Otherwise turning an overlay off and on again would bill twice for what
+   * the user experiences as one sitting with one demo.
+   */
+  let spentCoach = false;
+  let spentMapControl = false;
+  let spentRoundWin = false;
   /** @type {object | null} */
   let zoneNetwork = null;
   let zoneNetworkMap = '';
@@ -1713,7 +1732,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   function renderPlaylists() {
     const file = files[activeIndex];
     if (!playlists) {
-      playlistListEl.innerHTML = '<p class="rv-popover-empty">Loading…</p>';
+      playlistListEl.innerHTML = spinnerHtml('', { size: 'sm' });
       return;
     }
     if (!playlists.length) {
@@ -1814,7 +1833,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
   function renderScoreboard() {
     if (!statsPayload) {
-      boardBody.innerHTML = '<p class="view-empty">Loading…</p>';
+      boardBody.innerHTML = spinnerHtml();
       return;
     }
     const demo = statsPayload.demos?.[0];
@@ -2509,6 +2528,16 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   async function enableCoachForTeam(team) {
     if (!coachAvailable) return;
     if (team !== 1 && team !== 2) return;
+    // Metered: one run a day on Free, four on Premium. Spent here rather than
+    // on the toolbar button, so opening the team picker and backing out again
+    // does not cost anything.
+    if (!spentCoach) {
+      if (!(await useMeteredFeature(CAP.DEMOS_AUTO_COACH, { host: el }))) {
+        hideCoachPick();
+        return;
+      }
+      spentCoach = true;
+    }
     coachTeam = team;
     hideCoachPick();
     coachOn = true;
@@ -2531,6 +2560,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   }
 
   chartBtn?.addEventListener('click', async () => {
+    if (!chartOn && !spentRoundWin) {
+      if (!(await useMeteredFeature(CAP.DEMOS_ROUND_WIN_PREDICTION, { host: el }))) return;
+      spentRoundWin = true;
+    }
     chartOn = !chartOn;
     if (chartOn) {
       coachCache.clear();
@@ -2540,7 +2573,33 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     draw();
   });
 
+  /**
+   * Turn the win chart on without spending anything for tiers that hold the
+   * capability outright (Elite). A metered tier is left to ask for it, so a
+   * Team Premium account does not silently burn its one daily use by opening
+   * a demo.
+   */
+  void (async () => {
+    const ents = getEntitlements();
+    if (!ents) return;
+    await ents.ready();
+    if (destroyed || chartOn) return;
+    if (!ents.quota(CAP.DEMOS_ROUND_WIN_PREDICTION).unlimited) return;
+    spentRoundWin = true;
+    chartOn = true;
+    coachCache.clear();
+    await refreshZonePresence();
+    syncWinChart();
+    draw();
+  })();
+
   zonesBtn?.addEventListener('click', async () => {
+    // Map control is Team Premium and up, metered at one a day there and
+    // unlimited on Elite. Only charged on the way on, never on the way off.
+    if (!zonesOn && !spentMapControl) {
+      if (!(await useMeteredFeature(CAP.DEMOS_MAP_CONTROL, { host: el }))) return;
+      spentMapControl = true;
+    }
     zonesOn = !zonesOn;
     syncZonesBtn();
     if (zonesOn) {

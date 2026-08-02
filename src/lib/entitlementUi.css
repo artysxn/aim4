@@ -1,0 +1,144 @@
+/* ---------------------------------------------------------------------------
+   lib/entitlementUi.css
+   Shared chrome for locked features and loading states.
+
+   The site (site.css) and the aim trainer (style.css) are separate bundles with
+   separate entry points, and both render upgrade prompts and spinners. This is
+   imported by each rather than duplicated, so a locked panel in the trainer
+   looks like a locked panel on the site.
+
+   Depends only on the theme variables both bundles already define.
+   --------------------------------------------------------------------------- */
+
+/* Off-screen text for assistive tech. The spinner is the only visual cue, so
+   the state still needs a name for anyone not looking at it. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- loading spinner -----------------------------------------------------
+   Replaces the "Loading…" text that used to sit in every panel. A ring reads
+   as "working" at a glance; a word has to be read, and reads as stuck the
+   moment it stays put for more than a second. */
+.is-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 22px 4px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.spinner {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong, #242424);
+  border-top-color: var(--accent, #e60611);
+  animation: spin 0.7s linear infinite;
+}
+.spinner-sm {
+  width: 13px;
+  height: 13px;
+  border-width: 1.5px;
+}
+.spinner-lg {
+  width: 26px;
+  height: 26px;
+  border-width: 2.5px;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: spinner-pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes spinner-pulse {
+    0%,
+    100% {
+      opacity: 0.35;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+}
+
+/* ---- locked features ----------------------------------------------------- */
+
+.upgrade-gate {
+  border: 1px solid var(--accent-border, rgba(230, 6, 17, 0.5));
+  background: var(--accent-dim, rgba(230, 6, 17, 0.16));
+  border-radius: var(--radius-sm, 8px);
+  padding: 14px 16px;
+  margin: 10px 0;
+}
+
+.upgrade-gate-message {
+  margin: 0 0 10px;
+  color: var(--text, #f2f2f2);
+  font-size: 14px;
+}
+
+.upgrade-gate-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Modal form of the same prompt, for the fullscreen viewer and the trainer,
+   where a gated feature has nowhere to put an inline banner. */
+.upgrade-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(2px);
+}
+.upgrade-dialog {
+  position: relative;
+  width: min(420px, 100%);
+  padding: 8px 14px 14px;
+  border: 1px solid var(--border-strong, #242424);
+  border-radius: var(--radius, 12px);
+  background: var(--panel, #0c0c0c);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+}
+.upgrade-dialog .upgrade-gate {
+  margin: 0;
+}
+.upgrade-dialog-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs, 5px);
+  background: transparent;
+  color: var(--muted, #9c9ca2);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.upgrade-dialog-close:hover {
+  background: var(--surface-hover, #141414);
+  color: var(--text, #f2f2f2);
+}

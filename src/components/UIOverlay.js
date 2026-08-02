@@ -65,6 +65,10 @@ import {
 } from '../lib/aim4Ratings.js';
 import { computeOverallAimRating } from '../lib/aimRating.js';
 import { supabaseConfigured } from '../lib/supabase.js';
+import { getEntitlements } from '../lib/entitlements.js';
+import { spinnerHtml } from '../lib/spinner.js';
+import { CAP } from '../../shared/entitlements/keys.js';
+import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
 import { localDecode } from '../lib/replayCodec.js';
 import { ReplayAnalytics } from '../lib/replayAnalytics.js';
 import { REPLAY_SPEEDS } from '../core/ReplayPlayer.js';
@@ -3012,6 +3016,13 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     col('#set-col-cover', 'cover');
     col('#set-col-target', 'target');
     $('#set-custom-skybox')?.addEventListener('change', (e) => {
+      // Custom skybox and texture work is the `aim.cosmetics` capability:
+      // presets from Premium, full control on Elite, nothing on Free.
+      if (e.target.checked && !this._aimCan(CAP.AIM_COSMETICS, 'presets')) {
+        e.target.checked = false;
+        this._showAimUpgrade(CAP.AIM_COSMETICS, 'presets');
+        return;
+      }
       draft((d) => {
         d.customSkybox = e.target.checked;
         if (d.customSkybox && !d.skyboxId) d.skyboxId = defaultSkyboxId();
@@ -5060,6 +5071,57 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
     return `<table class="account-stats-table"><thead><tr><th>Metric</th><th>You</th></tr></thead><tbody>${body}</tbody></table>`;
   }
 
+  // ---- entitlements -------------------------------------------------------
+  //
+  // The trainer reads the same capability catalogue the site does. Access and
+  // the built-in routines are free forever; analytics, saved replays and
+  // cosmetics are not.
+
+  /**
+   * True when this account holds a capability. Falls back to the free tier's
+   * value before /api/me lands, so a gate never opens on a missing answer.
+   *
+   * @param {string} key
+   * @param {any} [level]  for enum capabilities, the minimum required
+   */
+  _aimCan(key, level = undefined) {
+    const ents = getEntitlements();
+    if (!ents) return false;
+    return level === undefined ? ents.can(key) : ents.atLeast(key, level);
+  }
+
+  /** The locked-panel markup, matching the site's upgrade copy. */
+  _lockedHtml(key, level = undefined) {
+    const ents = getEntitlements();
+    const label = ents ? ents.label(key) : 'This feature';
+    const tier = ents ? ents.requiredPlan(key, level) : null;
+    const message = tier
+      ? `${label} is available on ${PLAN_NAMES[tier] || tier}.`
+      : `${label} is not available.`;
+    return `<div class="upgrade-gate">
+      <p class="upgrade-gate-message">${message}</p>
+      <div class="upgrade-gate-actions">
+        <a class="btn btn-primary upgrade-gate-btn" href="/#pricing">Upgrade</a>
+      </div>
+    </div>`;
+  }
+
+  /** Modal upgrade prompt, for gates that have no panel to fill. */
+  _showAimUpgrade(key, level = undefined) {
+    const host = document.createElement('div');
+    host.className = 'upgrade-dialog-backdrop';
+    host.innerHTML = `<div class="upgrade-dialog" role="dialog" aria-modal="true">
+      ${this._lockedHtml(key, level)}
+      <button type="button" class="upgrade-dialog-close" aria-label="Close">✕</button>
+    </div>`;
+    const close = () => host.remove();
+    host.querySelector('.upgrade-dialog-close')?.addEventListener('click', close);
+    host.addEventListener('click', (e) => {
+      if (e.target === host) close();
+    });
+    document.body.appendChild(host);
+  }
+
   async _loadAccountReplays(userId = null) {
     const body = this.root.querySelector('#account-replays');
     const uid = userId ?? this.auth?.user?.id;
@@ -5073,7 +5135,13 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
       body.innerHTML = '<p class="center lb-hint">Replays are not configured.</p>';
       return;
     }
-    body.innerHTML = '<p class="center lb-hint">Loadingâ€¦</p>';
+    // Saved replays are Premium and up. Shown locked rather than hidden: an
+    // empty Replays panel reads as "this does not work", not as "this is paid".
+    if (!this._aimCan(CAP.AIM_REPLAYS, 'best_and_recent')) {
+      body.innerHTML = this._lockedHtml(CAP.AIM_REPLAYS, 'best_and_recent');
+      return;
+    }
+    body.innerHTML = spinnerHtml();
     let rows;
     try {
       rows = await listAccountReplays(uid);
@@ -6895,7 +6963,15 @@ ${botDifficultyField('set-peekswitchbots-bot-difficulty')}
 
     btn?.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (pop) pop.hidden = !pop.hidden;
+      if (!pop) return;
+      // Replay analysis overlays (optimal path, flick breakdown, tension) are
+      // the advanced analytics the pricing matrix puts behind Premium.
+      if (!this._aimCan(CAP.AIM_ADVANCED_ANALYTICS)) {
+        pop.innerHTML = this._lockedHtml(CAP.AIM_ADVANCED_ANALYTICS);
+        pop.hidden = false;
+        return;
+      }
+      pop.hidden = !pop.hidden;
     });
     // Click outside closes the popover.
     document.addEventListener('click', (e) => {

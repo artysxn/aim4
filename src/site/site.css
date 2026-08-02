@@ -6,6 +6,8 @@
    is the styling source of truth for site pages; the trainer keeps style.css.
 --------------------------------------------------------------------------- */
 
+@import '../lib/entitlementUi.css';
+
 /* PP Mori — body / UI */
 @font-face {
   font-family: 'PP Mori';
@@ -861,6 +863,7 @@ a {
   color: var(--muted);
   font-size: 14px;
 }
+
 .btn-sm {
   font-size: 13px;
   padding: 7px 14px;
@@ -1611,26 +1614,6 @@ a {
   opacity: 0.45;
   pointer-events: none;
   filter: grayscale(0.6);
-}
-
-.upgrade-gate {
-  border: 1px solid var(--accent-border);
-  background: var(--accent-dim);
-  border-radius: var(--radius-sm);
-  padding: 14px 16px;
-  margin: 10px 0;
-}
-
-.upgrade-gate-message {
-  margin: 0 0 10px;
-  color: var(--text);
-  font-size: 14px;
-}
-
-.upgrade-gate-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 /* ---- Impersonation banner ----------------------------------------------- */

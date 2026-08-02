@@ -62,7 +62,7 @@ export function createAnalyzerViewer({
   el.innerHTML = `
     <div class="rv-analyzer-stage">
       <aside class="rv-analyzer-panel" id="rv-az-panel">
-        <div class="rv-analyzer-team" id="rv-az-team">Loading…</div>
+        <div class="rv-analyzer-team" id="rv-az-team"><div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div></div>
         <div class="rv-analyzer-filters" id="rv-az-filters" hidden></div>
       </aside>
       <div class="rv-analyzer-map" id="rv-az-map">

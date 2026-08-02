@@ -9,6 +9,7 @@
 import { el, render } from '../admin/dom.js';
 import { accountApi } from './accountApi.js';
 import { dataTab, overviewTab, securityTab, subscriptionTab, teamsTab } from './tabs.js';
+import { spinnerNode } from '../../lib/spinner.js';
 
 const TABS = [
   { id: 'overview', label: 'Overview', path: '/account', render: overviewTab },
@@ -60,7 +61,7 @@ export function initAccountView(host, { auth } = {}) {
   }
 
   async function load() {
-    render(root, el('p', 'account-loading', 'Loading'));
+    render(root, spinnerNode());
     try {
       const [me, billingStatus] = await Promise.all([
         accountApi.me(),

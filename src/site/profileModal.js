@@ -12,6 +12,7 @@ import {
 import { SCENARIO_META } from '../lib/gamemodeCatalog.js';
 import { formatPlayTime } from '../lib/playTime.js';
 import { flagEmoji } from '../lib/countries.js';
+import { spinnerHtml } from '../lib/spinner.js';
 
 /**
  * @param {{ escapeHtml: (s: string) => string }} opts
@@ -43,7 +44,7 @@ export function initProfileModal({ escapeHtml }) {
     document.body.classList.add('profile-open');
     if (titleEl) titleEl.textContent = username || 'Player';
     if (metaEl) metaEl.textContent = '';
-    bodyEl.innerHTML = '<p class="lb-hint">Loading…</p>';
+    bodyEl.innerHTML = spinnerHtml();
     loadProfile(userId, username, seq);
   }
 

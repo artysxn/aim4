@@ -19,6 +19,7 @@ import { fetchAimRatingLeaderboard } from '../lib/aimRating.js';
 import { OVERALL_AIM_MIN_MODES } from '../lib/aim4Ratings.js';
 import { isKillLeaderboardScenario } from '../scenarios/leaderboardConfig.js';
 import { supabaseConfigured } from '../lib/supabase.js';
+import { spinnerHtml } from '../lib/spinner.js';
 
 const EMPTY = '-';
 
@@ -187,7 +188,7 @@ export function initLeaderboardsView({ auth, escapeHtml, openProfile }) {
   async function render() {
     const seq = ++renderSeq;
     syncControls();
-    body.innerHTML = '<p class="lb-hint">Loading…</p>';
+    body.innerHTML = spinnerHtml();
     const { list, error } = await fetchBoard(board);
     if (seq !== renderSeq) return;
     body.innerHTML = rowsHtml(list || [], board, error);

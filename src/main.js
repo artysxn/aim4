@@ -19,9 +19,14 @@ import { SceneManager } from './core/SceneManager.js';
 import { ReplayRecorder } from './core/ReplayRecorder.js';
 import { ReplayPlayer } from './core/ReplayPlayer.js';
 import { UIOverlay } from './components/UIOverlay.js';
+import { getEntitlements } from './lib/entitlements.js';
 
 const settings = new SettingsManager();
 const auth = new AuthManager(settings);
+// The trainer is its own entry point, so it has to build the entitlement
+// manager itself. Without this, getEntitlements() inside UIOverlay returns null
+// and every aim trainer gate silently passes.
+const entitlements = getEntitlements(auth);
 const engine = new Engine(settings);
 const input = new InputManager(engine, settings);
 const player = new PlayerController(engine, input);
@@ -46,7 +51,10 @@ const ui = new UIOverlay({
 });
 
 ui.init();
-auth.init().then(() => ui.refreshAccountBar());
+auth.init().then(() => {
+  ui.refreshAccountBar();
+  entitlements.refresh();
+});
 
 // One animation loop drives everything: advance the active scenario, then
 // refresh the (cheap) UI read-outs.

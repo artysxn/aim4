@@ -532,7 +532,15 @@ function setView(name, push = false, params = null) {
   }
   activeRoute = routeName;
   activeShell = shell;
-  viewControllers[shell]?.onShow?.(resolvedParams);
+  // A view that throws on entry must not take the router down with it. Without
+  // this, one bad onShow leaves the history entry pushed and the shell swapped
+  // but the gate unapplied, and the next Back or nav click throws again from
+  // the same place: the site looks stuck on a page it has already left.
+  try {
+    viewControllers[shell]?.onShow?.(resolvedParams);
+  } catch (err) {
+    console.error(`[router] ${routeName} failed to open`, err);
+  }
   applyRouteGate(route, shell);
   window.scrollTo({ top: 0 });
 }

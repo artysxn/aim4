@@ -12,6 +12,7 @@ import { adminApi } from './adminApi.js';
 import { bytes, button, date, el, field, input, notice, render, select, table } from './dom.js';
 import { grantsPanel } from './grantsPanel.js';
 import { startImpersonation } from './impersonate.js';
+import { spinnerNode } from '../../lib/spinner.js';
 
 export function userDetail({ userId, canImpersonate, onBack }) {
   const root = el('div', 'admin-panel');
@@ -23,7 +24,7 @@ export function userDetail({ userId, canImpersonate, onBack }) {
   root.append(head, body, contentBox);
 
   async function load() {
-    render(body, el('p', 'admin-loading', 'Loading'));
+    render(body, spinnerNode());
     try {
       const detail = await adminApi.user(userId);
       renderDetail(detail);
@@ -207,7 +208,7 @@ export function userDetail({ userId, canImpersonate, onBack }) {
   }
 
   async function loadContent() {
-    render(contentBox, el('p', 'admin-loading', 'Loading demos and teams'));
+    render(contentBox, spinnerNode('Loading demos and teams'));
     try {
       const content = await adminApi.userContent(userId);
       const wrap = el('div');
