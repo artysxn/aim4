@@ -134,6 +134,12 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   const selectedMine = new Set();
   const MINE_PAGE_SIZE = 100;
   let minePage = 1;
+  /**
+   * Full list of demos for My Uploads (not capped by the library’s 50-page fetch).
+   * @type {object[]}
+   */
+  let mineDemos = [];
+  let mineDemosLoaded = false;
   const mineEl = document.getElementById('rp-mine');
   let teamSearch = '';
   let playerSearch = '';
@@ -465,8 +471,30 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   /** Demos this account uploaded. Admins see the whole library here. */
   function myDemos() {
     if (!account.signedIn) return [];
-    if (account.admin) return demos;
-    return demos.filter((d) => (d.owner?.id || '') === account.id);
+    const source = mineDemosLoaded ? mineDemos : demos;
+    if (account.admin) return source;
+    return source.filter((d) => (d.owner?.id || '') === account.id);
+  }
+
+  /** Load every demo the uploads page needs (library fetch is paginated at 50). */
+  async function refreshMineDemos() {
+    if (!account.signedIn) {
+      mineDemos = [];
+      mineDemosLoaded = false;
+      return;
+    }
+    try {
+      // No limit → full library (server treats omit/0 as “all”).
+      const list = await fetchDemos();
+      const all = list.demos || [];
+      mineDemos = account.admin
+        ? all
+        : all.filter((d) => (d.owner?.id || '') === account.id);
+      mineDemosLoaded = true;
+    } catch {
+      // Keep whatever we had; fall back to the paged library list in myDemos().
+      mineDemosLoaded = mineDemos.length > 0;
+    }
   }
 
   function renderMine() {
@@ -611,18 +639,22 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         const res = await setDemoVisibility(id, visibility);
         const demo = res?.demo;
         if (demo) {
-          const i = demos.findIndex((d) => d.id === id);
-          const next = {
-            ...(i >= 0 ? demos[i] : {}),
-            ...demo,
-            visibility: demo.owner?.visibility || demo.visibility || visibility,
-            owner: demo.owner || {
-              ...(i >= 0 ? demos[i]?.owner : {}),
-              visibility
-            }
+          const patch = (arr) => {
+            const i = arr.findIndex((d) => d.id === id);
+            const next = {
+              ...(i >= 0 ? arr[i] : {}),
+              ...demo,
+              visibility: demo.owner?.visibility || demo.visibility || visibility,
+              owner: demo.owner || {
+                ...(i >= 0 ? arr[i]?.owner : {}),
+                visibility
+              }
+            };
+            if (i >= 0) arr[i] = next;
+            else arr.push(next);
           };
-          if (i >= 0) demos[i] = next;
-          else demos.push(next);
+          patch(demos);
+          if (mineDemosLoaded) patch(mineDemos);
         }
         ok++;
       } catch (err) {
@@ -811,6 +843,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       try {
         const res = await deleteDemo(id);
         extraDemos.delete(id);
+        mineDemos = mineDemos.filter((d) => d.id !== id);
+        demos = demos.filter((d) => d.id !== id);
         renderQuota(res.usage);
         setStatus('Replay deleted.');
       } catch (err) {
@@ -2562,12 +2596,18 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       e.preventDefault();
       e.stopPropagation();
       const demoId = selectDemo.dataset.selectDemo;
-      const demo = demos.find((d) => d.id === demoId);
-      if (!demo) return;
-      const files = (demo.rounds || [])
+      // Use the rounds currently shown for this demo (query results), not the
+      // paged library record — that miss is why Select all often did nothing.
+      let files = rounds
+        .filter((r) => (r.demoId || splitStoredName(r.file)?.demoId) === demoId)
         .map((r) => r.file)
-        .filter((f) => f && rounds.some((r) => r.file === f));
-      const allOn = files.length > 0 && files.every((f) => selectedFiles.has(f));
+        .filter(Boolean);
+      if (!files.length) {
+        const demo = demoById(demoId);
+        files = (demo?.rounds || []).map((r) => r.file).filter(Boolean);
+      }
+      if (!files.length) return;
+      const allOn = files.every((f) => selectedFiles.has(f));
       if (allOn) for (const f of files) selectedFiles.delete(f);
       else for (const f of files) selectedFiles.add(f);
       renderResults();
@@ -2773,6 +2813,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     } else if (next === 'charts') {
       stopPolling();
       openChartsPage();
+    } else if (next === 'upload') {
+      void refreshMineDemos().then(() => renderMine());
+      if (visible) startPolling();
     } else if (visible) {
       startPolling();
     }
@@ -2927,6 +2970,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       rebuildTeamClusters();
       renderDemos();
       renderFilters();
+      // My Uploads needs the full owned list — libraryLimit is only for /demos paging.
+      if (subpage === 'upload' || mineDemosLoaded) {
+        await refreshMineDemos();
+      }
       renderMine();
       await runQuery();
     } catch (err) {
