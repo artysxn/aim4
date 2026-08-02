@@ -8,7 +8,8 @@
 // the cached facts in memory; nothing here refetches.
 // ---------------------------------------------------------------------------
 
-import { fetchStats } from '../api.js';
+import { fetchStats, consumeCapability } from '../api.js';
+import { CAP } from '../../shared/entitlements/keys.js';
 import { ECONOMIES, MAPS } from '../shared/roundId.js';
 import {
   CT_TACTICAL,
@@ -928,6 +929,10 @@ export function createChartsPanel({ escapeHtml }) {
     const token = ++loadToken;
     canvasEl.innerHTML = '<p class="view-empty">Loading…</p>';
     try {
+      // Spending happens when the chart actually loads data, not when the route
+      // opens. Free gets three of these per rolling day.
+      await consumeCapability(CAP.ANALYTICS_CHARTS);
+      if (token !== loadToken) return;
       const payload = await fetchStats(scope.demos || null);
       if (token !== loadToken) return;
       facts = buildFacts(payload);
@@ -946,9 +951,11 @@ export function createChartsPanel({ escapeHtml }) {
     } catch (err) {
       if (token !== loadToken) return;
       sideEl.innerHTML = '';
-      canvasEl.innerHTML = `<p class="view-empty">${escapeHtml(
-        err.message || 'Could not load stats.'
-      )}</p>`;
+      const msg =
+        err.status === 402
+          ? err.body?.message || err.message || 'Charts are not available on your plan.'
+          : err.message || 'Could not load stats.';
+      canvasEl.innerHTML = `<p class="view-empty">${escapeHtml(msg)}</p>`;
     }
   }
 

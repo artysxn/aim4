@@ -164,6 +164,27 @@ export function userDetail({ userId, canImpersonate, onBack }) {
 
     wrap.appendChild(grantsPanel({ userId, detail, onChanged: load }));
 
+    // ---- resolved capabilities --------------------------------------------
+    const caps = ents.capabilities || {};
+    const capBox = el('div', 'admin-subpanel');
+    capBox.appendChild(el('h3', null, 'Resolved capabilities'));
+    capBox.appendChild(
+      el(
+        'p',
+        'admin-muted',
+        'Edit access with Grants above (whole tier or one capability). Recompute after changes.'
+      )
+    );
+    const capRows = Object.keys(caps)
+      .sort()
+      .map((key) => [key, JSON.stringify(caps[key])]);
+    if (capRows.length) {
+      capBox.appendChild(table(['Capability', 'Value'], capRows));
+    } else {
+      capBox.appendChild(el('p', 'admin-empty', 'No capabilities resolved.'));
+    }
+    wrap.appendChild(capBox);
+
     // ---- profile ----------------------------------------------------------
     const profileBox = el('div', 'admin-subpanel');
     profileBox.appendChild(el('h3', null, 'Profile'));

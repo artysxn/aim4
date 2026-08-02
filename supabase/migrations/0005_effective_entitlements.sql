@@ -73,16 +73,14 @@ grant execute on function public.capability_value(text) to authenticated, servic
 -- ---------------------------------------------------------------------------
 -- admin_user_overview
 --
--- Joins auth.users, so it must never be reachable with the anon key. Views run
--- with the privileges of their owner, which is exactly the exposure to avoid
--- here, so it is created with security_invoker on: a caller who is not allowed
--- to read auth.users gets nothing, rather than getting everyone's email.
+-- Joins auth.users, so it must never be reachable with the anon key. Only
+-- service_role is granted SELECT. The view runs with the privileges of its
+-- owner (postgres), which can read auth.users; security_invoker would make
+-- PostgREST's service_role call fail with "permission denied for table users".
 -- ---------------------------------------------------------------------------
 drop view if exists public.admin_user_overview;
 
-create view public.admin_user_overview
-with (security_invoker = true)
-as
+create view public.admin_user_overview as
 select
   u.id,
   u.email,

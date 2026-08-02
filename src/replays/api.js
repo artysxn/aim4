@@ -65,9 +65,10 @@ async function headers(extra = {}) {
 async function asJson(res) {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = new Error(body.error || `Request failed (${res.status})`);
+    const err = new Error(body.message || body.error || `Request failed (${res.status})`);
     // Carried so callers can tell "sign in" apart from "backend is down".
     err.status = res.status;
+    err.body = body;
     throw err;
   }
   return body;

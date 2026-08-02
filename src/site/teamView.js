@@ -29,6 +29,9 @@ import {
   setTeamPosition,
   teamMemberAction
 } from '../replays/api.js';
+import { getEntitlements } from '../lib/entitlements.js';
+import { CAP } from '../../shared/entitlements/keys.js';
+import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
 import { MAPS } from '../replays/shared/roundId.js';
 import { POSITION_MAPS, positionsFor } from '../replays/roles/teamPositions.js';
 import { createDocsEditor } from './docsEditor.js';
@@ -125,6 +128,8 @@ function formatWhen(ts) {
 export function initTeamView({ auth, escapeHtml }) {
   const shellEl = document.getElementById('tm-shell');
   if (!shellEl) return { onShow() {}, onHide() {} };
+
+  const ents = getEntitlements(auth);
 
   /** @type {object[]} */
   let teams = [];
@@ -398,23 +403,39 @@ export function initTeamView({ auth, escapeHtml }) {
   }
 
   function noTeamHtml() {
+    const canCreate = ents.can(CAP.TEAM_CREATE_LIMIT);
+    const canJoin = ents.can(CAP.TEAM_JOIN);
+    const createTier = PLAN_NAMES[ents.requiredPlan(CAP.TEAM_CREATE_LIMIT)] || 'Team Premium';
+    const joinTier = PLAN_NAMES[ents.requiredPlan(CAP.TEAM_JOIN)] || 'Premium';
     return `
       ${headerHtml('Team')}
       <div class="tm-setup">
         <div class="tm-setup-card">
           <h3>Create a team</h3>
-          <p class="tm-note">You can own one team. Invite up to ${escapeHtml(String(7))} members with a link.</p>
+          <p class="tm-note">${
+            canCreate
+              ? `You can own a team. Invite members with a link.`
+              : `Creating a team is available on ${escapeHtml(createTier)}.`
+          }</p>
           <div class="tm-row">
-            <input class="site-input" id="tm-new-name" type="text" maxlength="40" placeholder="Team name" />
-            <button type="button" class="btn primary" data-create>Create</button>
+            <input class="site-input" id="tm-new-name" type="text" maxlength="40" placeholder="Team name"${
+              canCreate ? '' : ' disabled'
+            } />
+            <button type="button" class="btn primary" data-create${canCreate ? '' : ' disabled'}>Create</button>
           </div>
         </div>
         <div class="tm-setup-card">
           <h3>Join with an invite</h3>
-          <p class="tm-note">Paste the code or the whole aim4.io/i/ link.</p>
+          <p class="tm-note">${
+            canJoin
+              ? `Paste the code or the whole aim4.io/i/ link.`
+              : `Joining a team is available on ${escapeHtml(joinTier)}.`
+          }</p>
           <div class="tm-row">
-            <input class="site-input" id="tm-join-code" type="text" maxlength="80" placeholder="dNfrkEs" />
-            <button type="button" class="btn" data-join>Join</button>
+            <input class="site-input" id="tm-join-code" type="text" maxlength="80" placeholder="dNfrkEs"${
+              canJoin ? '' : ' disabled'
+            } />
+            <button type="button" class="btn" data-join${canJoin ? '' : ' disabled'}>Join</button>
           </div>
         </div>
       </div>`;
@@ -1344,6 +1365,13 @@ export function initTeamView({ auth, escapeHtml }) {
     }
 
     if (t.closest('[data-create]')) {
+      if (!ents.can(CAP.TEAM_CREATE_LIMIT)) {
+        setStatus(
+          `Creating a team is available on ${PLAN_NAMES[ents.requiredPlan(CAP.TEAM_CREATE_LIMIT)] || 'Team Premium'}.`,
+          true
+        );
+        return;
+      }
       const name = shellEl.querySelector('#tm-new-name')?.value || '';
       const list = await run(() => createTeam(name), 'Team created.');
       if (list) {
@@ -1354,6 +1382,13 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
     if (t.closest('[data-join]')) {
+      if (!ents.can(CAP.TEAM_JOIN)) {
+        setStatus(
+          `Joining a team is available on ${PLAN_NAMES[ents.requiredPlan(CAP.TEAM_JOIN)] || 'Premium'}.`,
+          true
+        );
+        return;
+      }
       const raw = shellEl.querySelector('#tm-join-code')?.value || '';
       const code = raw.trim().split('/').filter(Boolean).pop() || '';
       const res = await run(() => joinTeam(code), 'You joined the team.');
@@ -1922,6 +1957,7 @@ export function initTeamView({ auth, escapeHtml }) {
       }
       page = next;
       if (params.invite) pendingInvite = params.invite;
+      void ents.ready();
       // Page switches must paint immediately. Only the first visit / invite /
       // auth recovery refetch teams — never block nav on the demo library.
       if (params.invite) {

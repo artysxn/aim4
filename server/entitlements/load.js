@@ -102,3 +102,58 @@ export function invalidateUser(userId) {
   if (userId) cache.delete(userId);
   else cache.clear();
 }
+
+/**
+ * Write Free (or current) capabilities onto profiles when the denormalised
+ * copy is missing. RLS policies read that copy; without it, has_capability()
+ * is false for everyone who is not a site admin.
+ */
+export async function ensureEffectiveEntitlements(userId) {
+  if (!userId || !isConfigured()) return null;
+  try {
+    const row = await db.selectOne('profiles', {
+      select: 'entitlements_updated_at,effective_capabilities',
+      id: `eq.${userId}`
+    });
+    const caps = row?.effective_capabilities;
+    const empty =
+      caps == null ||
+      (typeof caps === 'object' && !Array.isArray(caps) && Object.keys(caps).length === 0);
+    if (row?.entitlements_updated_at && !empty) return null;
+  } catch {
+    return null;
+  }
+  const { recomputeUser } = await import('./recompute.js');
+  return recomputeUser(userId);
+}
+
+/** One-shot after boot: fill effective_* for accounts that never got a write. */
+export async function backfillEffectiveEntitlements({ limit = 500 } = {}) {
+  if (!isConfigured()) return { updated: 0 };
+  let rows = [];
+  try {
+    rows = await db.select('profiles', {
+      select: 'id,entitlements_updated_at,effective_capabilities',
+      limit
+    });
+  } catch (err) {
+    console.warn(`[entitlements] backfill list failed: ${err.message}`);
+    return { updated: 0, error: err.message };
+  }
+  const { recomputeUser } = await import('./recompute.js');
+  let updated = 0;
+  for (const row of rows) {
+    const caps = row?.effective_capabilities;
+    const empty =
+      caps == null ||
+      (typeof caps === 'object' && !Array.isArray(caps) && Object.keys(caps).length === 0);
+    if (row?.entitlements_updated_at && !empty) continue;
+    try {
+      await recomputeUser(row.id);
+      updated++;
+    } catch (err) {
+      console.warn(`[entitlements] backfill ${row.id}: ${err.message}`);
+    }
+  }
+  return { updated };
+}

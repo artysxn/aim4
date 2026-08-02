@@ -27,6 +27,7 @@ import { checkCaseSensitivity, sweepStaleUploads } from './replays/demoStore.js'
 import { resumeInterruptedParses, sweepBatchFiles } from './replays/jobs.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
 import { seedAdmins } from './entitlements/service.js';
+import { backfillEffectiveEntitlements } from './entitlements/load.js';
 import { startSweep } from './entitlements/sweep.js';
 
 // PORT (no prefix) is the convention most hosts inject; AIM4_API_PORT still
@@ -261,6 +262,11 @@ sweepBatchFiles().catch(() => {});
 // so a fresh project has someone who can reach the panel. Never awaited and
 // never fatal: no admins configured is a normal state for a local run.
 seedAdmins().catch(() => {});
+// Profiles that predate entitlements still have empty effective_capabilities;
+// RLS reads that column, so fill it once after boot.
+backfillEffectiveEntitlements().then((r) => {
+  if (r?.updated) console.log(`[entitlements] backfilled effective_* for ${r.updated} profiles`);
+}).catch(() => {});
 // Converts or expires trials, lapses ended subscriptions, sends the 48 hour
 // warning, and tidies quota counters. Entitlement resolution is time-aware on
 // its own, so a sweep that has not run is a reporting gap, not an access one.

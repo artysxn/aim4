@@ -76,28 +76,39 @@ export async function consume(userId, capability, limit, { windowSeconds = WINDO
     return { allowed: false, used: 0, limit: 0, resetsAt: null, remaining: 0 };
   }
   if (!userId || !isConfigured()) {
-    // No way to meter. Refusing would lock out a whole tier because of a
-    // missing environment variable, so the capability is allowed and the
-    // missing key is already warned about loudly at startup.
+    // Cannot meter without the service role. Fail closed so a missing key does
+    // not silently hand Free users unlimited quota'd features.
     return {
-      allowed: true,
+      allowed: false,
       used: 0,
       limit: numericLimit,
       resetsAt: null,
-      remaining: numericLimit,
+      remaining: 0,
       unmetered: true
     };
   }
 
-  const rows = await db.rpc('consume_quota', {
-    p_user_id: userId,
-    p_capability: capability,
-    p_limit: numericLimit,
-    p_window_seconds: windowSeconds
-  });
+  let rows;
+  try {
+    rows = await db.rpc('consume_quota', {
+      p_user_id: userId,
+      p_capability: capability,
+      p_limit: numericLimit,
+      p_window_seconds: windowSeconds
+    });
+  } catch (err) {
+    console.warn(`[entitlements] consume_quota failed for ${capability}: ${err.message}`);
+    return {
+      allowed: false,
+      used: 0,
+      limit: numericLimit,
+      resetsAt: null,
+      remaining: 0
+    };
+  }
   const row = Array.isArray(rows) ? rows[0] : rows;
   if (!row) {
-    return { allowed: true, used: 0, limit: numericLimit, resetsAt: null, remaining: numericLimit };
+    return { allowed: false, used: 0, limit: numericLimit, resetsAt: null, remaining: 0 };
   }
 
   const used = Number(row.used_count || 0);

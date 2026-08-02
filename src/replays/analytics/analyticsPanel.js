@@ -3,7 +3,8 @@
 // Layout: sticky filter sidebar + main results (stats, radar, LB, rounds).
 // ---------------------------------------------------------------------------
 
-import { fetchStats } from '../api.js';
+import { fetchStats, consumeCapability } from '../api.js';
+import { CAP } from '../../shared/entitlements/keys.js';
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
 import { attachTips } from '../stats/statsTables.js';
 import {
@@ -695,6 +696,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     const token = ++loadToken;
     mainEl.innerHTML = `<p class="view-empty">Loading…</p>`;
     try {
+      await consumeCapability(CAP.ANALYTICS_PATTERN_FINDER);
+      if (token !== loadToken) return;
       const data = await fetchStats(null);
       if (token !== loadToken) return;
       payload = data;
@@ -708,9 +711,11 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       render();
     } catch (err) {
       if (token !== loadToken) return;
-      mainEl.innerHTML = `<p class="view-empty">Could not load stats. ${escapeHtml(
-        err.message || String(err)
-      )}</p>`;
+      const msg =
+        err.status === 402
+          ? err.body?.message || err.message || 'Pattern finder is not available on your plan.'
+          : err.message || String(err);
+      mainEl.innerHTML = `<p class="view-empty">${escapeHtml(msg)}</p>`;
     }
   }
 

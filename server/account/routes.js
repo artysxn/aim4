@@ -15,6 +15,7 @@
 import { CAPABILITIES, UNLIMITED } from '../../shared/entitlements/catalogue.js';
 import { guardImpersonation } from '../admin/guard.js';
 import { peek } from '../entitlements/quota.js';
+import { ensureEffectiveEntitlements } from '../entitlements/load.js';
 import { whoami } from '../replays/identity.js';
 import {
   activeSubscription,
@@ -128,6 +129,10 @@ async function route(req, res, url, me) {
 
   // ---- who am I, and what may I do ----------------------------------------
   if (req.method === 'GET' && p === '/api/me') {
+    if (me.signedIn) {
+      // Best-effort: keep profiles.effective_* filled for RLS readers.
+      await ensureEffectiveEntitlements(me.id).catch(() => null);
+    }
     const [quotas, subscription, seats, eligibility] = await Promise.all([
       quotaState(me),
       me.signedIn ? activeSubscription(me.id) : null,
