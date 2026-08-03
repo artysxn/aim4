@@ -37,6 +37,15 @@ const SMOKE_RADIUS = 144;
 const MAX_ENGAGE_DISTANCE = 3000;
 /** The enemy has to be roughly looking at you for it to be an engagement. */
 const ENEMY_FACING_DEG = 45;
+/**
+ * Yaw sampled this far before a first-bullet shot is the "pre-flick" angle used
+ * to decide whether a miss stopped short of the enemy (under) or past them (over).
+ */
+const FLICK_LOOKBACK_SECONDS = 0.2;
+/** Ignore "already on them" / "landed on them" noise below this many degrees. */
+const FLICK_EPSILON_DEG = 0.5;
+/** Below this target error at lookback, the miss is not treated as a flick. */
+const FLICK_MIN_TARGET_DEG = 1.5;
 
 const bare = (w) =>
   String(w || '')
@@ -57,8 +66,38 @@ export function yawDeltaDeg(a, b) {
   return d;
 }
 
+/** Signed yaw delta in (−180, 180]: positive means `to` is CCW from `from`. */
+export function signedYawDelta(from, to) {
+  let d = (Number(to) - Number(from)) % 360;
+  if (d > 180) d -= 360;
+  if (d <= -180) d += 360;
+  return d;
+}
+
 export function yawTowardPoint(from, to) {
   return (Math.atan2(to.y - from.y, to.x - from.x) * 180) / Math.PI;
+}
+
+/**
+ * Classify a first-bullet miss as an underflick or overflick.
+ *
+ * Relative to the pre-flick yaw: under = stopped short of the enemy, over =
+ * went past them. Returns null when the miss is not a directional flick miss
+ * (already aimed, flicked the wrong way, or landed on the enemy within epsilon).
+ *
+ * @returns {'under'|'over'|null}
+ */
+export function classifyFlickMiss(startYaw, endYaw, targetYaw) {
+  const toTarget = signedYawDelta(startYaw, targetYaw);
+  if (Math.abs(toTarget) < FLICK_MIN_TARGET_DEG) return null;
+  const toEnd = signedYawDelta(startYaw, endYaw);
+  // Flicking away from the enemy is not over/under in the usual sense.
+  if (toEnd * toTarget < 0) return null;
+  const endMag = Math.abs(toEnd);
+  const targetMag = Math.abs(toTarget);
+  if (endMag + FLICK_EPSILON_DEG < targetMag) return 'under';
+  if (endMag > targetMag + FLICK_EPSILON_DEG) return 'over';
+  return null;
 }
 
 function toDataView(buffer) {
@@ -167,7 +206,10 @@ function emptyPlayer() {
     shotsInSmoke: 0,
     // 4. first bullet accuracy
     firstBullets: 0,
-    firstBulletHits: 0
+    firstBulletHits: 0,
+    // 5. first-bullet miss direction (of firstBullets / engagements in cone)
+    overflicks: 0,
+    underflicks: 0
   };
 }
 
@@ -210,6 +252,8 @@ export function aimFromRound(meta, tickBuffer, opts = {}) {
 
   const a = {};
   const b = {};
+  const c = {};
+  const flickLookback = Math.max(1, Math.round(FLICK_LOOKBACK_SECONDS * tickRate));
 
   /** Live state for one player at a tick, or null when dead / missing. */
   const stateAt = (slot, tick, into) => {
@@ -319,7 +363,19 @@ export function aimFromRound(meta, tickBuffer, opts = {}) {
 
     if (isFirstOfBurst && coneEnemy && !intoSmoke) {
       counters.firstBullets += 1;
-      if (hitAfter(shot.player, shot.weapon, shot.tick)) counters.firstBulletHits += 1;
+      const hit = hitAfter(shot.player, shot.weapon, shot.tick);
+      if (hit) {
+        counters.firstBulletHits += 1;
+      } else {
+        // Miss: was the adjustment short of the enemy, or past them?
+        const start = stateAt(shooter.slot, shot.tick - flickLookback, c);
+        if (start) {
+          const targetYaw = yawTowardPoint(from, { x: coneEnemy.x, y: coneEnemy.y });
+          const kind = classifyFlickMiss(start.yaw, yaw, targetYaw);
+          if (kind === 'over') counters.overflicks += 1;
+          else if (kind === 'under') counters.underflicks += 1;
+        }
+      }
     }
   }
 
@@ -384,7 +440,9 @@ export const AIM_FIELDS = Object.freeze([
   'hits',
   'shotsInSmoke',
   'firstBullets',
-  'firstBulletHits'
+  'firstBulletHits',
+  'overflicks',
+  'underflicks'
 ]);
 
 export function addAim(into, from) {
@@ -467,14 +525,19 @@ export function aimRating(totals) {
     crosshairError: div(totals.crosshairErrorSum, totals.engagements),
     readyRate: div(totals.fightsReady, totals.fightsReady + totals.fightsUnaware),
     accuracy: div(totals.hits, totals.shots),
-    firstBullet: div(totals.firstBulletHits, totals.firstBullets)
+    firstBullet: div(totals.firstBulletHits, totals.firstBullets),
+    /** Share of first-bullet cone engagements that were overflick / underflick misses. */
+    overflick: div(totals.overflicks, totals.firstBullets),
+    underflick: div(totals.underflicks, totals.firstBullets)
   };
 
   const sample = {
     crosshairError: totals.engagements || 0,
     readyRate: (totals.fightsReady || 0) + (totals.fightsUnaware || 0),
     accuracy: totals.shots || 0,
-    firstBullet: totals.firstBullets || 0
+    firstBullet: totals.firstBullets || 0,
+    overflick: totals.overflicks || 0,
+    underflick: totals.underflicks || 0
   };
 
   /** @type {Record<string, number|null>} */

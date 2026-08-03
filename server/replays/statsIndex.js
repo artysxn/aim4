@@ -44,10 +44,10 @@ import {
 } from '../../src/replays/roles/computeRoles.js';
 import { applyMovementFields } from '../../src/replays/roles/movementFromTicks.js';
 
-// v11 adds aim measurements (row.am) and utility effectiveness (row.ut/row.utt).
+// v12 adds overflick / underflick counters on first-bullet misses (row.am).
 // Bumping this rebuilds every index from the round files already on disk; it
 // does NOT reparse demos.
-export const STATS_VERSION = 11;
+export const STATS_VERSION = 12;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;

@@ -7,7 +7,7 @@
 // without a fixture that knows what the answer should be.
 
 import { writeHeader, writeRecord, HEADER_BYTES, TICK_BYTES, FLAG_ALIVE } from './tickFormat.js';
-import { aimFromRound, aimRating, addAim, yawDeltaDeg, FIRST_BULLET_CONE_DEG } from './aimMetrics.js';
+import { aimFromRound, aimRating, addAim, yawDeltaDeg, signedYawDelta, classifyFlickMiss, FIRST_BULLET_CONE_DEG } from './aimMetrics.js';
 import { utilityFromRound, utilityAverages } from './utilityMetrics.js';
 import { segmentCrossesVision } from '../zones/visionLayers.js';
 
@@ -74,6 +74,21 @@ function twoPlayerMeta(events) {
   assert(yawDeltaDeg(350, 10) === 20, 'yaw wraps');
   assert(yawDeltaDeg(-170, 170) === 20, 'negative yaw wraps');
   assert(yawDeltaDeg(0, 180) === 180, 'opposite is 180');
+  assert(close(signedYawDelta(70, 80), 10), 'signed +10');
+  assert(close(signedYawDelta(80, 74), -6), 'signed -6');
+}
+
+{
+  // Under: start 70, enemy 80, fire at 79.1 — short of the target.
+  assert(classifyFlickMiss(70, 79.1, 80) === 'under', 'underflick example');
+  // Over: start 80, enemy 74, fire at 71 — past the target.
+  assert(classifyFlickMiss(80, 71, 74) === 'over', 'overflick example');
+  // Landed on them but still "missed" (spread): neither.
+  assert(classifyFlickMiss(70, 80, 80) === null, 'on target is not over/under');
+  // Already aimed at lookback: not a flick.
+  assert(classifyFlickMiss(80, 79, 80) === null, 'tiny target delta is not a flick');
+  // Wrong way: not over/under.
+  assert(classifyFlickMiss(70, 60, 80) === null, 'away from enemy is not classified');
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +262,40 @@ function twoPlayerMeta(events) {
   const out = aimFromRound(meta, ticks);
   assert(out.aaa.firstBullets === 2, `two bursts, got ${out.aaa.firstBullets}`);
   assert(out.aaa.firstBulletHits === 1, `first bullet of burst 1 hit, got ${out.aaa.firstBulletHits}`);
+}
+
+{
+  // Overflick / underflick on first-bullet misses.
+  // Geometry: A at origin, B at (500, 0) → enemy yaw is 0°.
+  // Under: A starts at yaw −10, fires at −1 (short of 0). Miss.
+  // Over: later burst, A starts at +10, fires at −3 (past 0). Miss.
+  const underTick = 50;
+  const overTick = 200;
+  const ticks = buildTicks(260, (t, slot) => {
+    if (slot === 5) return alive({ x: 500, y: 0, yaw: 180, side: 3 });
+    let yaw = 0;
+    if (t < underTick - 5) yaw = -10;
+    else if (t <= underTick) yaw = -1;
+    else if (t < overTick - 5) yaw = 10;
+    else yaw = -3;
+    return alive({ x: 0, y: 0, yaw, side: 2 });
+  });
+  const meta = twoPlayerMeta({
+    shots: [
+      { tick: underTick, player: 'aaa', weapon: 'ak47', x: 0, y: 0, z: 0, yaw: -1, pitch: 0 },
+      { tick: overTick, player: 'aaa', weapon: 'ak47', x: 0, y: 0, z: 0, yaw: -3, pitch: 0 }
+    ],
+    damage: []
+  });
+  const out = aimFromRound(meta, ticks);
+  assert(out.aaa.firstBullets === 2, `two first-bullet misses, got ${out.aaa.firstBullets}`);
+  assert(out.aaa.firstBulletHits === 0, 'both missed');
+  assert(out.aaa.underflicks === 1, `one underflick, got ${out.aaa.underflicks}`);
+  assert(out.aaa.overflicks === 1, `one overflick, got ${out.aaa.overflicks}`);
+
+  const rated = aimRating(out.aaa);
+  assert(close(rated.raw.underflick, 0.5), `underflick 50% of engagements, got ${rated.raw.underflick}`);
+  assert(close(rated.raw.overflick, 0.5), `overflick 50% of engagements, got ${rated.raw.overflick}`);
 }
 
 {

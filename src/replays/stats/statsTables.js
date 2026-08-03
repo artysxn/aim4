@@ -231,6 +231,8 @@ export const PLAYER_METRIC_COLUMNS = [
             `Ready for the fight: ${pct1(p.aimRaw?.readyRate)} (${f0(p.aimComponents?.readyRate)})`,
             `Accuracy, no smoke shots: ${pct1(p.aimRaw?.accuracy)} (${f0(p.aimComponents?.accuracy)})`,
             `First bullet: ${pct1(p.aimRaw?.firstBullet)} (${f0(p.aimComponents?.firstBullet)})`,
+            `Overflick: ${pct1(p.aimRaw?.overflick)} (${p.aimSample?.overflick || 0})`,
+            `Underflick: ${pct1(p.aimRaw?.underflick)} (${p.aimSample?.underflick || 0})`,
             `Sample: ${p.aimSample?.crosshairError || 0} engagements, ${p.aimSample?.accuracy || 0} shots`
           ])
         : 'Not enough sampled duels yet for an aim rating.'
@@ -297,6 +299,39 @@ export const PLAYER_METRIC_COLUMNS = [
             `Component score: ${f0(p.aimComponents?.firstBullet)} / 100`,
             `Sample: ${p.aimSample?.firstBullet || 0} first bullets`,
             'High variance (~15–50%).'
+          ])
+        : 'Not enough first-bullet samples yet.'
+  },
+  {
+    key: 'aimOverflick',
+    label: 'Overflick%',
+    // Lower is better → negate so default desc still puts the tidy aimers first.
+    get: (p) =>
+      Number.isFinite(p.aimRaw?.overflick) ? -p.aimRaw.overflick * 100 : 1,
+    cell: (p) => (Number.isFinite(p.aimRaw?.overflick) ? pct1(p.aimRaw.overflick) : '—'),
+    tip: (p) =>
+      Number.isFinite(p.aimRaw?.overflick)
+        ? tip([
+            `First-bullet misses that went past the enemy: ${pct1(p.aimRaw.overflick)} of cone engagements`,
+            `Count: ${p.aimSample?.overflick || 0} overflicks`,
+            `Sample: ${p.aimSample?.firstBullet || 0} first-bullet engagements`,
+            'Yaw at shot vs enemy, relative to yaw ~0.2s earlier.'
+          ])
+        : 'Not enough first-bullet samples yet.'
+  },
+  {
+    key: 'aimUnderflick',
+    label: 'Underflick%',
+    get: (p) =>
+      Number.isFinite(p.aimRaw?.underflick) ? -p.aimRaw.underflick * 100 : 1,
+    cell: (p) => (Number.isFinite(p.aimRaw?.underflick) ? pct1(p.aimRaw.underflick) : '—'),
+    tip: (p) =>
+      Number.isFinite(p.aimRaw?.underflick)
+        ? tip([
+            `First-bullet misses that stopped short of the enemy: ${pct1(p.aimRaw.underflick)} of cone engagements`,
+            `Count: ${p.aimSample?.underflick || 0} underflicks`,
+            `Sample: ${p.aimSample?.firstBullet || 0} first-bullet engagements`,
+            'Yaw at shot vs enemy, relative to yaw ~0.2s earlier.'
           ])
         : 'Not enough first-bullet samples yet.'
   },
