@@ -444,6 +444,21 @@ export const TEAM_COLUMNS = [
         `After the opening death: ${t.conv4v5Won} won, ${t.conv4v5Lost} lost`,
         `Rounds with the opening death: ${t.openDeaths}`
       ])
+  },
+  {
+    key: 'utilDmg',
+    label: 'Util dmg',
+    get: (t) => (Number.isFinite(t.utilDmgPerRound) ? t.utilDmgPerRound : -1),
+    cell: (t) => (Number.isFinite(t.utilDmgPerRound) ? f1(t.utilDmgPerRound) : '—'),
+    tip: (t) =>
+      Number.isFinite(t.utilDmgPerRound)
+        ? tip([
+            `Average grenade damage per round: ${f1(t.utilDmgPerRound)}`,
+            `HE + molotov / incendiary damage dealt by the team`,
+            `Over ${t.utilDmgRounds || 0} rounds with utility data`,
+            'Enemy damage only. Team and self damage never count.'
+          ])
+        : 'No utility damage data yet. Recalculate statistics from Admin → Tools if indexes are stale.'
   }
 ];
 

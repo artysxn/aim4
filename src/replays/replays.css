@@ -3128,6 +3128,12 @@ body.rv-open {
   white-space: nowrap;
 }
 
+.st-min-rounds {
+  width: 72px;
+  min-width: 72px;
+  padding: 6px 8px;
+}
+
 .st-none {
   color: var(--muted);
   font-size: 12px;

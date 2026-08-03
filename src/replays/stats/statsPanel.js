@@ -70,6 +70,8 @@ export function createStatsPanel({ escapeHtml }) {
     files: null,
     result: '',
     advantage: '',
+    /** Minimum rounds played to appear in the table (0 = no floor). */
+    minRounds: 0,
     /** @type {{ side: 'T'|'CT', value: string } | null} */
     role: null
   };
@@ -217,6 +219,19 @@ export function createStatsPanel({ escapeHtml }) {
             filter.oppHasAwp
           )}</div>
         </div>
+        <div class="st-filter-group st-filter-stack">
+          <span class="st-filter-label">Min rounds</span>
+          <input
+            class="site-input st-min-rounds"
+            type="number"
+            min="0"
+            step="1"
+            data-filter="minRounds"
+            value="${filter.minRounds || 0}"
+            title="Hide rows with fewer rounds than this"
+            aria-label="Minimum rounds played"
+          />
+        </div>
       </div>
       <button type="button" class="btn btn-sm st-filter-clear" data-clear>Clear</button>`;
   }
@@ -254,6 +269,7 @@ export function createStatsPanel({ escapeHtml }) {
       filter.result = '';
       filter.advantage = '';
       filter.role = null;
+      filter.minRounds = 0;
       page[tab] = 1;
       render();
     }
@@ -282,6 +298,14 @@ export function createStatsPanel({ escapeHtml }) {
     if (sel.dataset.filter === 'maps') {
       filter.maps = sel.value ? [sel.value] : [];
       filter.role = null;
+      page[tab] = 1;
+      render();
+      return;
+    }
+    if (sel.dataset.filter === 'minRounds') {
+      const n = Math.max(0, Math.floor(Number(sel.value) || 0));
+      filter.minRounds = n;
+      sel.value = String(n);
       page[tab] = 1;
       render();
       return;
@@ -343,7 +367,9 @@ export function createStatsPanel({ escapeHtml }) {
       : { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
 
     if (tab === 'players') {
-      const data = enrichedPlayers(rows, players, active, demos);
+      let data = enrichedPlayers(rows, players, active, demos);
+      const minR = Math.max(0, Number(filter.minRounds) || 0);
+      if (minR > 0) data = data.filter((p) => (p.rounds || 0) >= minR);
       const matchDemo = singleMatchDemo(payload, scope);
       if (matchDemo) {
         bodyEl.innerHTML = matchBoardsHtml(data, matchDemo, {
@@ -365,7 +391,9 @@ export function createStatsPanel({ escapeHtml }) {
         });
       }
     } else {
-      const data = aggregateTeams(rows, players, demos, active);
+      let data = aggregateTeams(rows, players, demos, active);
+      const minR = Math.max(0, Number(filter.minRounds) || 0);
+      if (minR > 0) data = data.filter((t) => (t.rounds || 0) >= minR);
       bodyEl.innerHTML = statsTableHtml(data, {
         columns: TEAM_COLUMNS,
         fixedCount: 2,
@@ -426,6 +454,7 @@ export function createStatsPanel({ escapeHtml }) {
     filter.hasAwp = false;
     filter.oppHasAwp = false;
     filter.role = null;
+    filter.minRounds = 0;
     page = { players: 1, teams: 1 };
     try {
       const res = await fetchStats(next.demos || null);

@@ -434,6 +434,8 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
         prwN: 0,
         posSum: 0,
         posN: 0,
+        utilDmgSum: 0,
+        utilDmgRounds: 0,
         /** @type {Map<string, { posSum: number, posN: number, baseCt: number, baseT: number }>} */
         posByMap: new Map()
       };
@@ -492,6 +494,11 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
           m.posSum += pos;
           m.posN++;
         }
+      }
+      const utilDmg = row.utt?.[team];
+      if (Number.isFinite(utilDmg)) {
+        s.utilDmgSum += utilDmg;
+        s.utilDmgRounds++;
       }
     }
   }
@@ -569,6 +576,9 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
       prwRounds: s.prwN,
       possession: s.posN ? s.posSum / s.posN : null,
       possessionRounds: s.posN,
+      /** Average grenade (HE + fire) damage dealt by the team per round. */
+      utilDmgPerRound: s.utilDmgRounds ? s.utilDmgSum / s.utilDmgRounds : null,
+      utilDmgRounds: s.utilDmgRounds,
       possessionByMap: [...s.posByMap.entries()].map(([map, m]) => ({
         map,
         possession: m.posN ? m.posSum / m.posN : null,
