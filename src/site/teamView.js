@@ -1208,7 +1208,8 @@ export function initTeamView({ auth, escapeHtml }) {
     return `
       <div class="sb-section sb-${side.toLowerCase()}">
         <div class="sb-table-scroll">
-          <table class="sb-table">
+          <table class="sb-table" style="--sb-cols: ${colCount}">
+            <colgroup>${Array.from({ length: colCount }, () => '<col />').join('')}</colgroup>
             <thead>
               <tr>
                 <th>Name</th>

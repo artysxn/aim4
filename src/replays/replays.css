@@ -5805,11 +5805,15 @@ table.rp-mine-table tbody tr {
 }
 
 .sb-table {
-  width: max-content;
-  min-width: 100%;
+  --sb-cols: 10;
+  width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
   font: 500 12px var(--font-body);
+}
+
+.sb-table col {
+  width: calc(100% / var(--sb-cols));
 }
 
 .sb-table th,
@@ -5818,6 +5822,8 @@ table.rp-mine-table tbody tr {
   text-align: left;
   vertical-align: top;
   border: 1px solid rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sb-table th {
@@ -5855,15 +5861,13 @@ table.rp-mine-table tbody tr {
 }
 
 .sb-select {
-  min-width: 96px;
-  max-width: 140px;
+  min-width: 0;
+  max-width: none;
+  width: 100%;
 }
 
 .sb-cell-econ,
 .sb-cell-cat {
-  width: 96px;
-  min-width: 96px;
-  max-width: 110px;
   padding: 0 !important;
   text-align: center;
   vertical-align: middle !important;
@@ -5904,8 +5908,8 @@ table.rp-mine-table tbody tr {
 .sb-input {
   box-sizing: border-box;
   width: 100%;
-  min-width: 88px;
-  max-width: 180px;
+  min-width: 0;
+  max-width: none;
   height: 28px;
   margin: 0;
   padding: 0 8px;
@@ -5920,21 +5924,15 @@ table.rp-mine-table tbody tr {
   outline: 1px solid rgba(255, 255, 255, 0.18);
 }
 
-.sb-cell-name .sb-input {
-  min-width: 100px;
-}
-
+.sb-cell-name .sb-input,
 .sb-cell-desc .sb-input {
-  min-width: 140px;
-  max-width: 220px;
+  min-width: 0;
+  max-width: none;
 }
 
-/* Uniform role columns sized for e.g. "B Rotation (olofmeister)". */
+/* Role columns share the same equal width as every other column. */
 .sb-role-h,
 .sb-cell-role {
-  width: 11.75rem;
-  min-width: 11.75rem;
-  max-width: 11.75rem;
   box-sizing: border-box;
 }
 
@@ -5993,14 +5991,12 @@ table.rp-mine-table tbody tr {
   max-height: none;
 }
 
-.sb-cell-links {
-  width: 56px;
-}
-
 .sb-links {
   display: flex;
   gap: 10px;
   align-items: center;
+  justify-content: center;
+  min-width: 0;
 }
 
 .sb-link {
@@ -6026,7 +6022,6 @@ table.rp-mine-table tbody tr {
 
 .sb-cell-all {
   text-align: center;
-  width: 36px;
 }
 
 .sb-check {
@@ -6043,7 +6038,7 @@ table.rp-mine-table tbody tr {
 
 .sb-cell-visible {
   position: relative;
-  min-width: 120px;
+  overflow: visible;
 }
 
 .sb-visible {
@@ -6054,8 +6049,8 @@ table.rp-mine-table tbody tr {
   appearance: none;
   box-sizing: border-box;
   width: 100%;
-  min-width: 110px;
-  max-width: 160px;
+  min-width: 0;
+  max-width: none;
   height: 28px;
   padding: 0 8px;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -6106,7 +6101,7 @@ table.rp-mine-table tbody tr {
 }
 
 .sb-cell-del {
-  width: 72px;
+  text-align: center;
 }
 
 .sb-add {
