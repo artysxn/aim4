@@ -56,6 +56,7 @@ const div = (a, b) => (b > 0 ? a / b : 0);
  * @property {boolean} [oppHasAwp]  opponent side must have had an AWP
  * @property {''|'won'|'lost'} [result]  subject won / lost the round
  * @property {''|'5v4'|'4v5'|'even'} [advantage]  opening situation for subject
+ * @property {string} [teamName]  only count rounds while the subject played under this display name
  */
 
 /**
@@ -223,6 +224,12 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       const team = who?.team;
       if (!team) continue;
       if (!rowPasses(row, filter, team, players)) continue;
+      if (filter.teamName) {
+        const demo = demos?.get(row.d);
+        if (!demo) continue;
+        const displayName = team === 1 ? demo.name1 : demo.name2;
+        if (teamNameKey(displayName) !== teamNameKey(filter.teamName)) continue;
+      }
       const line = row.p[id];
       const s = seat(id, who.name);
       const side = team === 1 ? row.s1 : row.s2;
@@ -393,7 +400,7 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
 // ---------------------------------------------------------------------------
 
 /** Normalize a team display name for merging across demos. */
-function teamNameKey(name, shortId = '') {
+export function teamNameKey(name, shortId = '') {
   const norm = String(name || '')
     .trim()
     .toLowerCase();
@@ -454,6 +461,7 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
       const displayName = team === 1 ? demo.name1 : demo.name2;
       const key = teamNameKey(displayName, shortId);
       if (!key) continue;
+      if (filter.teamName && teamNameKey(displayName) !== teamNameKey(filter.teamName)) continue;
       if (!rowPasses(row, filter, team, players)) continue;
       const s = seat(key, displayName || shortId);
       if (shortId) s.shortIds.add(shortId);

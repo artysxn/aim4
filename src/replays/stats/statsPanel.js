@@ -55,6 +55,8 @@ export function createStatsPanel({ escapeHtml }) {
 
   let payload = null;
   let scope = {};
+  /** When set, only players/rounds under this team display name are counted. */
+  let lockedTeamName = '';
   let tab = 'players';
   let sort = { players: { key: 'rating', dir: 'desc' }, teams: { key: 'avgRating', dir: 'desc' } };
   let page = { players: 1, teams: 1 };
@@ -360,7 +362,11 @@ export function createStatsPanel({ escapeHtml }) {
     renderFilters();
     const { players, demos } = indexMaps(payload);
     const rows = allRows(payload);
-    const active = { ...filter, files: scope.files || null };
+    const active = {
+      ...filter,
+      files: scope.files || null,
+      ...(lockedTeamName ? { teamName: lockedTeamName } : {})
+    };
     const mode = roleMode();
     const playerCols = mode
       ? playerColumnsWithRoles(mode)
@@ -440,11 +446,12 @@ export function createStatsPanel({ escapeHtml }) {
   }
 
   /**
-   * @param {{demos?: string[], files?: string[], title?: string}} next
+   * @param {{demos?: string[], files?: string[], title?: string, teamName?: string}} next
    */
   async function load(next = {}) {
     const token = ++loadToken;
     scope = next;
+    lockedTeamName = String(next.teamName || '').trim();
     scopeEl.textContent = next.title || '';
     bodyEl.innerHTML = spinnerHtml();
     filter.maps = [];

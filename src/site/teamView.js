@@ -16,6 +16,7 @@ import {
   deleteTeamStrategy,
   fetchDemos,
   fetchInvite,
+  fetchStats,
   fetchStatus,
   fetchTeamDocument,
   fetchTeams,
@@ -33,6 +34,8 @@ import { getEntitlements } from '../lib/entitlements.js';
 import { CAP } from '../../shared/entitlements/keys.js';
 import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
 import { MAPS } from '../replays/shared/roundId.js';
+import { aggregatePlayers, allRows, indexMaps, teamNameKey } from '../replays/shared/statsMath.js';
+import { createStatsPanel } from '../replays/stats/statsPanel.js';
 import { POSITION_MAPS, positionsFor } from '../replays/roles/teamPositions.js';
 import { createDocsEditor } from './docsEditor.js';
 import { mountDrawingBoard } from './drawingBoard.js';
@@ -147,6 +150,16 @@ export function initTeamView({ auth, escapeHtml }) {
   /** @type {{ destroy: () => void }|null} */
   let boardMount = null;
   let boardMountKey = '';
+  /** @type {ReturnType<typeof createStatsPanel>|null} */
+  let overviewStatsPanel = null;
+  let overviewStatsKey = '';
+  let overviewRosterKey = '';
+  /** @type {Array<{id: string, name: string, matches: number, of: number, rating: number|null}>} */
+  let activeRoster = [];
+  let activeRosterLoading = false;
+  let activeRosterToken = 0;
+  /** @type {'idle'|'short'|'empty'|'ready'} */
+  let activeRosterState = 'idle';
   let openDocId = '';
   let rolesSide = 'T';
   /** @type {Array<{id: string, map: string, type: string, name: string, throws: object[]}>} */
@@ -499,6 +512,190 @@ export function initTeamView({ auth, escapeHtml }) {
       </li>`;
   }
 
+  /** Demos where either side's display name matches the current team. */
+  function demosForTeam() {
+    const want = teamNameKey(team?.name || '');
+    if (!want) return [];
+    return demos.filter((d) => {
+      const a = teamNameKey(d.team1?.name);
+      const b = teamNameKey(d.team2?.name);
+      return a === want || b === want;
+    });
+  }
+
+  function demoWhen(d) {
+    return Number(d.uploadedAt || d.parsedAt || 0) || 0;
+  }
+
+  function formatRating(n) {
+    return Number.isFinite(n) ? n.toFixed(2) : '—';
+  }
+
+  function activeRosterBodyHtml() {
+    if (activeRosterLoading) {
+      return `<div class="is-loading" role="status" aria-live="polite">${spinnerHtml()}</div>`;
+    }
+    if (activeRosterState === 'short') {
+      return '<p class="view-empty">Need at least 3 recent replays with this team name (3 of last 4).</p>';
+    }
+    if (!activeRoster.length) {
+      return '<p class="view-empty">No players appeared in at least 3 of the last 4 team replays.</p>';
+    }
+    return `<ul class="tm-active-roster">${activeRoster
+      .map(
+        (p) => `
+      <li class="tm-active-player">
+        <span class="tm-active-name">${escapeHtml(p.name)}</span>
+        <span class="tm-active-meta">${p.matches}/${p.of}</span>
+        <span class="tm-active-rating" title="Overall rating (A4R)">${escapeHtml(
+          formatRating(p.rating)
+        )}</span>
+      </li>`
+      )
+      .join('')}</ul>`;
+  }
+
+  function paintActiveRoster() {
+    const el = document.getElementById('tm-active-roster');
+    if (el) el.innerHTML = activeRosterBodyHtml();
+  }
+
+  function destroyOverviewStats() {
+    if (overviewStatsPanel) {
+      overviewStatsPanel.destroy();
+      overviewStatsPanel = null;
+    }
+    overviewStatsKey = '';
+    overviewRosterKey = '';
+    activeRoster = [];
+    activeRosterLoading = false;
+    activeRosterState = 'idle';
+    activeRosterToken++;
+  }
+
+  /**
+   * Last up to 4 team demos → players present in ≥75% of them (3 of 4),
+   * ranked by overall A4R, top 5.
+   */
+  async function refreshActiveRoster(teamDemos) {
+    const token = ++activeRosterToken;
+    const sorted = [...teamDemos].sort((a, b) => demoWhen(b) - demoWhen(a));
+    const window = sorted.slice(0, 4);
+    if (window.length < 3) {
+      activeRoster = [];
+      activeRosterLoading = false;
+      activeRosterState = 'short';
+      paintActiveRoster();
+      return;
+    }
+    activeRosterLoading = true;
+    activeRosterState = 'idle';
+    paintActiveRoster();
+    const need = Math.ceil(window.length * 0.75);
+    try {
+      const payload = await fetchStats(window.map((d) => d.id));
+      if (token !== activeRosterToken) return;
+      const want = teamNameKey(team?.name || '');
+      /** @type {Map<string, {id: string, name: string, matches: Set<string>}>} */
+      const seen = new Map();
+      for (const d of payload.demos || []) {
+        const side =
+          teamNameKey(d.name1) === want ? 1 : teamNameKey(d.name2) === want ? 2 : 0;
+        if (!side) continue;
+        for (const p of d.players || []) {
+          if (p.team !== side) continue;
+          let row = seen.get(p.id);
+          if (!row) {
+            row = { id: p.id, name: p.name || p.id, matches: new Set() };
+            seen.set(p.id, row);
+          }
+          row.matches.add(d.id);
+          if (p.name) row.name = p.name;
+        }
+      }
+      const { players, demos: demoMap } = indexMaps(payload);
+      const rated = aggregatePlayers(allRows(payload), players, { teamName: team.name }, demoMap);
+      const byId = new Map(rated.map((p) => [p.id, p]));
+      const eligible = [...seen.values()]
+        .filter((p) => p.matches.size >= need)
+        .map((p) => {
+          const stats = byId.get(p.id);
+          const rating = Number.isFinite(stats?.a4r)
+            ? stats.a4r
+            : Number.isFinite(stats?.rating)
+              ? stats.rating
+              : null;
+          return {
+            id: p.id,
+            name: p.name,
+            matches: p.matches.size,
+            of: window.length,
+            rating
+          };
+        })
+        .sort(
+          (a, b) =>
+            (b.rating ?? -1) - (a.rating ?? -1) ||
+            b.matches - a.matches ||
+            a.name.localeCompare(b.name)
+        )
+        .slice(0, 5);
+      if (token !== activeRosterToken) return;
+      activeRoster = eligible;
+      activeRosterState = eligible.length ? 'ready' : 'empty';
+    } catch {
+      if (token !== activeRosterToken) return;
+      activeRoster = [];
+      activeRosterState = 'empty';
+    }
+    activeRosterLoading = false;
+    paintActiveRoster();
+  }
+
+  function mountOverviewExtras() {
+    const teamDemos = demosForTeam();
+    const mount = document.getElementById('tm-overview-stats');
+    if (mount) {
+      const ids = teamDemos.map((d) => d.id).filter(Boolean);
+      const key = `${team.id}|${teamNameKey(team.name)}|${ids.join(',')}`;
+      if (!overviewStatsPanel) overviewStatsPanel = createStatsPanel({ escapeHtml });
+      if (overviewStatsPanel.el.parentElement !== mount) {
+        mount.replaceChildren(overviewStatsPanel.el);
+      }
+      if (overviewStatsKey !== key) {
+        overviewStatsKey = key;
+        if (!ids.length) {
+          const filtersEl = overviewStatsPanel.el.querySelector('#st-filters');
+          const body = overviewStatsPanel.el.querySelector('#st-body');
+          const scope = overviewStatsPanel.el.querySelector('#st-scope');
+          if (filtersEl) filtersEl.innerHTML = '';
+          if (scope) scope.textContent = team.name || '';
+          if (body) {
+            body.innerHTML =
+              '<p class="view-empty">No replays with this team name yet. Rename demo teams to match, or upload matches.</p>';
+          }
+        } else {
+          void overviewStatsPanel.load({
+            demos: ids,
+            title: team.name || '',
+            teamName: team.name || ''
+          });
+        }
+      }
+    }
+    const rosterKey = `${team.id}|${teamNameKey(team.name)}|${[...teamDemos]
+      .sort((a, b) => demoWhen(b) - demoWhen(a))
+      .slice(0, 4)
+      .map((d) => d.id)
+      .join(',')}`;
+    if (overviewRosterKey !== rosterKey) {
+      overviewRosterKey = rosterKey;
+      void refreshActiveRoster(teamDemos);
+    } else {
+      paintActiveRoster();
+    }
+  }
+
   function formatInviteCooldown(readyAt) {
     const ms = Math.max(0, (Number(readyAt) || 0) - Date.now());
     if (ms <= 0) return '';
@@ -525,65 +722,89 @@ export function initTeamView({ auth, escapeHtml }) {
     const members = team.members || [];
     const banned = team.banned || [];
     const realCount = team.realMembers ?? members.filter((m) => !m.dummy).length;
+    const teamDemos = demosForTeam();
     return `
       ${headerHtml('')}
-      <div class="tm-grid">
-        <section class="tm-card">
+      <div class="tm-grid tm-grid-overview">
+        <div class="tm-overview-left">
+          <section class="tm-card">
+            <div class="tm-card-head">
+              <h3 class="tm-card-title">Members</h3>
+              <span class="tm-count">${realCount} / ${team.maxMembers || 7}</span>
+            </div>
+            <ul class="tm-members">${members.map(memberRowHtml).join('')}</ul>
+            ${
+              team.isOwner
+                ? `<div class="tm-row tm-placeholder-add">
+                    <button type="button" class="btn btn-sm" data-add-dummy>Add placeholder</button>
+                  </div>`
+                : ''
+            }
+            ${
+              team.isOwner
+                ? `<div class="tm-invite">
+                    <div class="tm-row">
+                      <input class="site-input" id="tm-invite-url" readonly value="${escapeHtml(
+                        inviteUrl()
+                      )}" aria-label="Invite link" />
+                      <button type="button" class="btn btn-sm" data-copy>Copy</button>
+                      ${rollInviteButtonHtml()}
+                    </div>
+                  </div>`
+                : '<p class="tm-note">Only the team owner can share the invite link.</p>'
+            }
+            ${
+              banned.length
+                ? `<div class="tm-banned">
+                    <h4 class="tm-sub">Banned</h4>
+                    <ul class="tm-members">${banned
+                      .map(
+                        (b) =>
+                          `<li class="tm-member"><span class="tm-member-name">@${escapeHtml(
+                            b.username
+                          )}</span><span class="tm-member-actions"><button type="button" class="btn btn-sm" data-unban="${escapeHtml(
+                            b.id
+                          )}">Lift ban</button></span></li>`
+                      )
+                      .join('')}</ul>
+                  </div>`
+                : ''
+            }
+            ${
+              team.isOwner
+                ? ''
+                : '<div class="tm-row tm-leave"><button type="button" class="btn btn-sm danger" data-leave>Leave team</button></div>'
+            }
+          </section>
+
+          <section class="tm-card">
+            <div class="tm-card-head">
+              <h3 class="tm-card-title">Active lineup</h3>
+              <span class="tm-count">3 of last 4</span>
+            </div>
+            <p class="tm-note">Players on this team name in at least 3 of the last 4 replays.</p>
+            <div id="tm-active-roster">${activeRosterBodyHtml()}</div>
+          </section>
+        </div>
+
+        <section class="tm-card tm-overview-stats">
           <div class="tm-card-head">
-            <h3 class="tm-card-title">Members</h3>
-            <span class="tm-count">${realCount} / ${team.maxMembers || 7}</span>
+            <h3 class="tm-card-title">Statistics</h3>
           </div>
-          <ul class="tm-members">${members.map(memberRowHtml).join('')}</ul>
-          ${
-            team.isOwner
-              ? `<div class="tm-row tm-placeholder-add">
-                  <button type="button" class="btn btn-sm" data-add-dummy>Add placeholder</button>
-                </div>`
-              : ''
-          }
-          ${
-            team.isOwner
-              ? `<div class="tm-invite">
-                  <div class="tm-row">
-                    <input class="site-input" id="tm-invite-url" readonly value="${escapeHtml(
-                      inviteUrl()
-                    )}" aria-label="Invite link" />
-                    <button type="button" class="btn btn-sm" data-copy>Copy</button>
-                    ${rollInviteButtonHtml()}
-                  </div>
-                </div>`
-              : '<p class="tm-note">Only the team owner can share the invite link.</p>'
-          }
-          ${
-            banned.length
-              ? `<div class="tm-banned">
-                  <h4 class="tm-sub">Banned</h4>
-                  <ul class="tm-members">${banned
-                    .map(
-                      (b) =>
-                        `<li class="tm-member"><span class="tm-member-name">@${escapeHtml(
-                          b.username
-                        )}</span><span class="tm-member-actions"><button type="button" class="btn btn-sm" data-unban="${escapeHtml(
-                          b.id
-                        )}">Lift ban</button></span></li>`
-                    )
-                    .join('')}</ul>
-                </div>`
-              : ''
-          }
-          ${
-            team.isOwner
-              ? ''
-              : '<div class="tm-row tm-leave"><button type="button" class="btn btn-sm danger" data-leave>Leave team</button></div>'
-          }
+          <div id="tm-overview-stats" class="tm-overview-stats-mount"></div>
         </section>
 
         <section class="tm-card">
-          <h3 class="tm-card-title">Demos you can see <span class="tm-count">${demos.length}</span></h3>
+          <div class="tm-card-head">
+            <h3 class="tm-card-title">Your replays</h3>
+            <span class="tm-count">${teamDemos.length}</span>
+          </div>
           ${
-            demos.length
-              ? `<ul class="tm-demos">${demos.slice(0, 200).map(demoRowHtml).join('')}</ul>`
-              : '<p class="view-empty">No demos are shared with you yet.</p>'
+            teamDemos.length
+              ? `<ul class="tm-demos">${teamDemos.slice(0, 200).map(demoRowHtml).join('')}</ul>`
+              : `<p class="view-empty">No replays with ${escapeHtml(
+                  team.name || 'this team'
+                )} as a team name yet.</p>`
           }
         </section>
       </div>`;
@@ -1287,18 +1508,22 @@ export function initTeamView({ auth, escapeHtml }) {
   function render() {
     syncTeamChrome();
     const onBoard = page === 'team-drawing-board' || page === 'team-utility-archive';
+    const onOverview = page === 'team-overview';
     if (!onBoard) destroyBoardMount();
+    if (!onOverview) destroyOverviewStats();
     if (!loaded) {
       shellEl.innerHTML = spinnerHtml();
       return;
     }
     if (!signedIn()) {
       destroyBoardMount();
+      destroyOverviewStats();
       shellEl.innerHTML = signedOutHtml(titleFor(page));
       return;
     }
     if (!team) {
       destroyBoardMount();
+      destroyOverviewStats();
       shellEl.innerHTML = noTeamHtml();
       return;
     }
@@ -1337,6 +1562,7 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
     shellEl.innerHTML = overviewHtml();
+    mountOverviewExtras();
   }
 
   function titleFor(name) {
