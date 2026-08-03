@@ -9,6 +9,7 @@
 import { writeHeader, writeRecord, HEADER_BYTES, TICK_BYTES, FLAG_ALIVE } from './tickFormat.js';
 import { aimFromRound, aimRating, addAim, yawDeltaDeg, FIRST_BULLET_CONE_DEG } from './aimMetrics.js';
 import { utilityFromRound, utilityAverages } from './utilityMetrics.js';
+import { segmentCrossesVision } from '../zones/visionLayers.js';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
@@ -260,6 +261,56 @@ function twoPlayerMeta(events) {
   });
   const out = aimFromRound(meta, ticks);
   assert(out.aaa.firstBullets === 0, 'no first-bullet chance outside the cone');
+}
+
+// ---------------------------------------------------------------------------
+{
+  // Painted vision blocks are the same category as smoke, on both sides of the
+  // measurement. A wall between two players means neither "he missed" nor
+  // "she was caught unaware" is a claim we can make.
+  const ticks = buildTicks(120, (t, slot) =>
+    alive({ x: slot === 0 ? 0 : 500, y: 0, yaw: slot === 0 ? 180 : 180, side: slot < 5 ? 2 : 3 })
+  );
+  // A block sitting between them, at x = 250.
+  const wallAt = (x) => x > 200 && x < 300;
+
+  // 1. Shots at an enemy behind a wall do not count against accuracy.
+  const shootMeta = twoPlayerMeta({
+    shots: [{ tick: 60, player: 'aaa', weapon: 'ak47', x: 0, y: 0, z: 0, yaw: 0, pitch: 0 }]
+  });
+  const open = aimFromRound(shootMeta, ticks);
+  assert(open.aaa.shots === 1, 'baseline: the shot counts with no wall');
+  const walled = aimFromRound(shootMeta, ticks, { visionBlockAt: (x) => wallAt(x) });
+  assert(walled.aaa.shots === 0, `wall excludes the shot, got ${walled.aaa.shots}`);
+  assert(walled.aaa.shotsInSmoke === 1, 'and is counted as a blocked shot');
+
+  // 2. An enemy firing from behind a wall is not an engagement, so the player
+  //    on the other side is never scored as unaware.
+  const engageMeta = twoPlayerMeta({
+    shots: [{ tick: 60, player: 'bbb', weapon: 'ak47', x: 500, y: 0, z: 0, yaw: 180, pitch: 0 }]
+  });
+  const seen = aimFromRound(engageMeta, ticks);
+  assert(seen.aaa.engagements === 1, 'baseline: engagement counts with no wall');
+  assert(seen.aaa.fightsUnaware === 1, 'baseline: scored unaware');
+
+  const blocked = aimFromRound(engageMeta, ticks, { visionBlockAt: (x) => wallAt(x) });
+  assert(blocked.aaa.engagements === 0, `wall removes the engagement, got ${blocked.aaa.engagements}`);
+  assert(blocked.aaa.fightsUnaware === 0, 'and the unaware penalty with it');
+  assert(blocked.aaa.crosshairErrorSum === 0, 'no crosshair error recorded');
+
+  // 3. A block that is NOT between them changes nothing.
+  const elsewhere = aimFromRound(engageMeta, ticks, { visionBlockAt: (x) => x > 900 });
+  assert(elsewhere.aaa.engagements === 1, 'a block off the sight line is ignored');
+}
+
+{
+  // segmentCrossesVision itself: endpoints are excluded so a player standing in
+  // the edge of a painted block is not blind along every line they hold.
+  const inBlock = (x, y) => x >= 0 && x <= 10;
+  assert(segmentCrossesVision(inBlock, 0, 0, 500, 0) === false, 'own footprint does not block');
+  assert(segmentCrossesVision((x) => x > 200 && x < 300, 0, 0, 500, 0), 'a wall in between blocks');
+  assert(segmentCrossesVision(null, 0, 0, 500, 0) === false, 'no tester means no blocking');
+  assert(segmentCrossesVision((x) => x > 200, 0, 0, 0, 0) === false, 'zero-length line never blocks');
 }
 
 // ---------------------------------------------------------------------------

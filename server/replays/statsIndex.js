@@ -35,6 +35,7 @@ import {
 import { loadRadarMask } from '../../scripts/lib/radarMask.mjs';
 import { hasBombSites } from '../../src/replays/zones/bombSites.js';
 import { hasKeyZones } from '../../src/replays/zones/keyZones.js';
+import { getVisionLayerTests } from '../../src/replays/zones/visionLayers.js';
 import {
   accumulateRoundRoles,
   createRoleWork,
@@ -127,7 +128,7 @@ function openingDuel(ordered, teamOf) {
 }
 
 /** One round of a demo -> one compact row. */
-function rowFromRound(meta, demoId, file, playerIds, teamOf, tickBuffer = null) {
+function rowFromRound(meta, demoId, file, playerIds, teamOf, tickBuffer = null, network = null) {
   const kills = meta.events?.kills || [];
   const ordered = [...kills].sort((a, b) => (a.tick || 0) - (b.tick || 0));
   const opening = openingDuel(ordered, teamOf);
@@ -185,7 +186,7 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf, tickBuffer = null) 
   applyPhaseBags(row, meta, playerIds, tickBuffer);
   applyPrwFields(row, meta);
   applyTimingFields(row, meta, playerIds);
-  applyAimUtility(row, meta, tickBuffer);
+  applyAimUtility(row, meta, tickBuffer, network);
   return row;
 }
 
@@ -241,15 +242,24 @@ function applyPrwFields(row, meta) {
  * line, because they are sums that get divided at query time and the line array
  * is a set of plain counters.
  */
-function applyAimUtility(row, meta, tickBuffer) {
+function applyAimUtility(row, meta, tickBuffer, network = null) {
   if (!tickBuffer) {
     row.am = null;
     row.ut = null;
     row.utt = null;
     return;
   }
+  // Painted vision blocks let the aim pass tell "could not see" from "missed".
+  // Absent (no zone network for this map) it falls back to smoke-only, which is
+  // how it behaved before zones were wired in.
+  let visionBlockAt = null;
   try {
-    row.am = aimFromRound(meta, tickBuffer);
+    if (network && meta.map) visionBlockAt = getVisionLayerTests(network, meta.map).visionBlockAt;
+  } catch {
+    visionBlockAt = null;
+  }
+  try {
+    row.am = aimFromRound(meta, tickBuffer, { visionBlockAt });
   } catch {
     row.am = null;
   }
@@ -680,22 +690,25 @@ async function buildIndex(io, user, record) {
       }
     }
 
+    // Zones are loaded before the row is built, not after: the aim pass needs
+    // the painted vision blocks to tell "could not see them" apart from
+    // "missed them", and possession and roles reuse the same cached network.
+    const controlNetwork = tickBuffer
+      ? await ensureMapControl(io, meta.map, controlCache, zoneCache)
+      : null;
+
     const row = rowFromRound(
       meta,
       record.id,
       file,
       roster.map((p) => p.id),
       new Map(roster.map((p) => [p.id, p.team])),
-      tickBuffer
+      tickBuffer,
+      zoneCache.get(meta.map) || controlNetwork
     );
 
     if (tickBuffer) {
-      const network = await ensureMapControl(
-        io,
-        meta.map || row.m,
-        controlCache,
-        zoneCache
-      );
+      const network = controlNetwork;
       const track = new TickTrack(tickBuffer);
       await applyPossessionFields(row, meta, track, network);
       applyMovementFields(row, meta, track, roster);

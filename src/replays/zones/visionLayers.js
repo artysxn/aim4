@@ -265,6 +265,64 @@ export function getVisionLayerTests(network, mapCode) {
   return tests;
 }
 
+/**
+ * World units between samples when walking a sight line.
+ *
+ * The layer masks are rasterised at RADAR_SIZE, which is roughly 5 world units
+ * per pixel on every supported map, so 4 is a shade finer than the data and
+ * cannot step over a painted block.
+ */
+const SIGHT_STEP_UNITS = 4;
+/** Ceiling on samples for one line, so a map-length ray stays cheap. */
+const SIGHT_MAX_SAMPLES = 600;
+/**
+ * World units at each end of the line that are not tested.
+ *
+ * The masks are rasterised at radar resolution, roughly 5 world units per
+ * pixel, and players stand flush against walls constantly. Without this margin
+ * a player whose own position rounds into a painted block reads as blind along
+ * every line they hold, including the open angle they are actually watching.
+ * A CS player hitbox is ~32 units wide, so 40 clears the body plus rounding.
+ */
+const SIGHT_ENDPOINT_MARGIN = 40;
+
+/**
+ * Is the sight line between two world points broken by painted vision blocks?
+ *
+ * This is the map's own geometry, the same layer the zone editor paints and the
+ * viewer draws. Without it the only occluder available is smoke, which means
+ * two players on opposite sides of a wall read as though they can see each
+ * other. That matters most for crosshair placement, where a "you were engaged
+ * and looking the wrong way" event fires for a duel that could never happen.
+ *
+ * Elevated geometry is deliberately NOT included: it blocks vision only for
+ * players who are not themselves on it, and this test has no height context.
+ * Vision blocks are unconditional, which is what makes them safe here.
+ *
+ * @param {(x: number, y: number) => boolean} visionBlockAt  from getVisionLayerTests
+ * @returns {boolean} true when something solid is in the way
+ */
+export function segmentCrossesVision(visionBlockAt, x0, y0, x1, y1) {
+  if (typeof visionBlockAt !== 'function') return false;
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const length = Math.hypot(dx, dy);
+  if (!(length > 0)) return false;
+
+  // Two players closer together than the margins can see each other for any
+  // purpose this is used for, so there is nothing worth testing.
+  if (length <= SIGHT_ENDPOINT_MARGIN * 2) return false;
+
+  const steps = Math.min(SIGHT_MAX_SAMPLES, Math.max(2, Math.ceil(length / SIGHT_STEP_UNITS)));
+  const skip = SIGHT_ENDPOINT_MARGIN / length;
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    if (t < skip || t > 1 - skip) continue;
+    if (visionBlockAt(x0 + dx * t, y0 + dy * t)) return true;
+  }
+  return false;
+}
+
 /** Bump editor cache after painting without changing updatedAt yet. */
 export function bumpLayerPaintGen(network) {
   network._layerPaintGen = (network._layerPaintGen || 0) + 1;

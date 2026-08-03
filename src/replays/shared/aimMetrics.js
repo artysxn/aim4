@@ -22,6 +22,7 @@
 // ---------------------------------------------------------------------------
 
 import { FLAG_ALIVE, readHeader, readRecord } from './tickFormat.js';
+import { segmentCrossesVision } from '../zones/visionLayers.js';
 
 /** An enemy inside this cone counts as "you were on them" for first bullet. */
 export const FIRST_BULLET_CONE_DEG = 25;
@@ -109,6 +110,21 @@ function segmentThroughSmoke(x0, y0, x1, y1, smokes, radius = SMOKE_RADIUS) {
 }
 
 /**
+ * Is the sight line broken by the map's own painted vision blocks?
+ *
+ * Same category as smoke, and for the same reason: you cannot be expected to
+ * hit, or to be holding an angle on, something you cannot see. The difference
+ * is that smoke is temporary and comes from the round's grenades, while these
+ * are permanent map geometry from the zone editor.
+ *
+ * Optional throughout. A map with no painted blocks, or an index built before
+ * zones existed, simply behaves as it did before rather than failing.
+ */
+function blockedByGeometry(vision, x0, y0, x1, y1) {
+  return vision ? segmentCrossesVision(vision, x0, y0, x1, y1) : false;
+}
+
+/**
  * How far along the shooter's line of fire a smoke sits, as a distance.
  *
  * Used for the "smoke before an enemy" rule: a shot is only excluded when the
@@ -160,7 +176,10 @@ function emptyPlayer() {
  *
  * @param {object} meta  round meta: players, events, tickRate, sides, weapons
  * @param {ArrayBuffer|DataView|Uint8Array} tickBuffer  stride-1 ticks
- * @param {{weaponFilter?: (w: string) => boolean}} [opts]
+ * @param {{weaponFilter?: (w: string) => boolean,
+ *          visionBlockAt?: (x: number, y: number) => boolean}} [opts]
+ *   `visionBlockAt` comes from getVisionLayerTests for this map. Optional: a
+ *   map with no painted blocks behaves exactly as before.
  * @returns {Record<string, object>} per player id
  */
 export function aimFromRound(meta, tickBuffer, opts = {}) {
@@ -187,6 +206,7 @@ export function aimFromRound(meta, tickBuffer, opts = {}) {
     (s) => s.player && isAimWeapon(s.weapon) && (!opts.weaponFilter || opts.weaponFilter(bare(s.weapon)))
   );
   const damage = meta.events?.damage || [];
+  const vision = typeof opts.visionBlockAt === 'function' ? opts.visionBlockAt : null;
 
   const a = {};
   const b = {};
@@ -266,14 +286,24 @@ export function aimFromRound(meta, tickBuffer, opts = {}) {
       }
     }
 
-    // --- smoke rule -------------------------------------------------------
+    // --- vision rule ------------------------------------------------------
     // Excluded when a smoke sits on the line of fire BEFORE any enemy, or when
     // there is no enemy on the line at all and a smoke is. Spraying a smoke is
     // not an accuracy failure and must not drag the number down.
+    //
+    // Painted vision blocks count the same way. Shooting a wall is not a miss
+    // in any sense worth measuring, and on maps with a zone network this is a
+    // far bigger source of unaimed shots than smoke is.
     const smokeDist = nearestSmokeOnLine(from, yaw, smokes, MAX_ENGAGE_DISTANCE);
     const targetDist = coneEnemy ? coneEnemyDist : nearestEnemyDist;
-    const intoSmoke =
+    const behindSmoke =
       Number.isFinite(smokeDist) && (!Number.isFinite(targetDist) || smokeDist < targetDist);
+    // Only meaningful when there is an enemy to be blocked from: with nobody on
+    // the line, geometry says nothing the smoke test has not already said.
+    const behindWall = Boolean(
+      coneEnemy && blockedByGeometry(vision, from.x, from.y, coneEnemy.x, coneEnemy.y)
+    );
+    const intoSmoke = behindSmoke || behindWall;
 
     if (intoSmoke) {
       counters.shotsInSmoke += 1;
@@ -323,12 +353,15 @@ export function aimFromRound(meta, tickBuffer, opts = {}) {
       const d = dist2d(attackerPos, victimPos);
       if (d > MAX_ENGAGE_DISTANCE) continue;
 
-      // "That enemy sees you": they are pointed at you and nothing blocks it.
-      // Smoke is the only occluder available without a world mesh, so this is
-      // an approximation; it is the same one AWP accuracy already relies on.
+      // "That enemy sees you": they are pointed at you, and neither smoke nor
+      // map geometry is in the way. The geometry half matters most here. Two
+      // players either side of a wall would otherwise register as an
+      // engagement every time one of them fired, scoring the other as caught
+      // unaware in a duel that could not happen.
       const towardVictim = yawTowardPoint(attackerPos, victimPos);
       if (yawDeltaDeg(attackerYaw, towardVictim) > ENEMY_FACING_DEG) continue;
       if (segmentThroughSmoke(ax, ay, victimPos.x, victimPos.y, smokes)) continue;
+      if (blockedByGeometry(vision, ax, ay, victimPos.x, victimPos.y)) continue;
 
       // How far off was the victim's own crosshair from the attacker?
       const error = yawDeltaDeg(vs.yaw, yawTowardPoint(victimPos, attackerPos));
