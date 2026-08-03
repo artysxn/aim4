@@ -169,7 +169,6 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
     return `
       <div class="sc-list">
         <div class="sc-list-head">
-          <h2 class="tm-title">2D Strategy Creator</h2>
           <div class="sc-list-filters">
             <select class="site-select" data-filter-map>
               <option value="">All maps</option>
@@ -219,7 +218,6 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
     if (panel || shareView) return;
     if (!account.signedIn) {
       shellEl.innerHTML = `<div class="tm-empty">
-        <h2 class="tm-title">2D Strategy Creator</h2>
         <p class="view-empty">${escapeHtml(
           auth?.isLoggedIn
             ? 'Your session did not reach the backend. Reload the page and try again.'
@@ -230,7 +228,6 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
     }
     if (!team) {
       shellEl.innerHTML = `<div class="tm-empty">
-        <h2 class="tm-title">2D Strategy Creator</h2>
         <p class="view-empty">Join or create a team first: strategy rounds belong to a team.</p>
       </div>`;
       return;
@@ -295,7 +292,6 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
       panel = null;
       shellEl.classList.remove('sc-hosting');
       shellEl.innerHTML = `<div class="tm-empty">
-        <h2 class="tm-title">Strategy round</h2>
         <p class="view-empty">${escapeHtml(err.message || 'That link is not valid.')}</p>
       </div>`;
     }

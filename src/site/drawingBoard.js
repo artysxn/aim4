@@ -95,7 +95,7 @@ export function mountDrawingBoard({ host, teamId, escapeHtml, headerHtml }) {
   };
 
   host.innerHTML = `
-    ${headerHtml('Drawing Board')}
+    ${headerHtml('')}
     <div class="db-shell">
       <aside class="db-tools" id="db-tools"></aside>
       <div class="db-stage">

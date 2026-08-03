@@ -71,7 +71,7 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
   let dragGhost = null;
 
   host.innerHTML = `
-    ${headerHtml('Utility Archive')}
+    ${headerHtml('')}
     <div class="ua-shell">
       <aside class="ua-tools" id="ua-tools"></aside>
       <div class="ua-stage">

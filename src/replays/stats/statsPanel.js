@@ -446,7 +446,7 @@ export function createStatsPanel({ escapeHtml }) {
   }
 
   /**
-   * @param {{demos?: string[], files?: string[], title?: string, teamName?: string}} next
+   * @param {{demos?: string[], files?: string[], title?: string, teamName?: string, maps?: string[], tab?: 'players'|'teams'}} next
    */
   async function load(next = {}) {
     const token = ++loadToken;
@@ -454,7 +454,7 @@ export function createStatsPanel({ escapeHtml }) {
     lockedTeamName = String(next.teamName || '').trim();
     scopeEl.textContent = next.title || '';
     bodyEl.innerHTML = spinnerHtml();
-    filter.maps = [];
+    filter.maps = Array.isArray(next.maps) ? [...next.maps] : [];
     filter.side = '';
     filter.econ = null;
     filter.oppEcon = null;
@@ -462,6 +462,12 @@ export function createStatsPanel({ escapeHtml }) {
     filter.oppHasAwp = false;
     filter.role = null;
     filter.minRounds = 0;
+    filter.result = '';
+    filter.advantage = '';
+    if (next.tab === 'players' || next.tab === 'teams') tab = next.tab;
+    el.querySelectorAll('[data-tab]').forEach((b) =>
+      b.classList.toggle('active', b.dataset.tab === tab)
+    );
     page = { players: 1, teams: 1 };
     try {
       const res = await fetchStats(next.demos || null);
@@ -482,9 +488,32 @@ export function createStatsPanel({ escapeHtml }) {
     }
   }
 
+  /**
+   * Change tab / map filter without refetching. Used by Team Overview map picks.
+   * @param {{tab?: 'players'|'teams', maps?: string[]|string|null}} opts
+   */
+  function applyView(opts = {}) {
+    if (opts.tab === 'players' || opts.tab === 'teams') {
+      tab = opts.tab;
+      el.querySelectorAll('[data-tab]').forEach((b) =>
+        b.classList.toggle('active', b.dataset.tab === tab)
+      );
+    }
+    if ('maps' in opts) {
+      const m = opts.maps;
+      if (Array.isArray(m)) filter.maps = [...m];
+      else if (typeof m === 'string' && m) filter.maps = [m];
+      else filter.maps = [];
+      filter.role = null;
+    }
+    page[tab] = 1;
+    if (payload) render();
+  }
+
   return {
     el,
     load,
+    applyView,
     destroy() {
       detachTips();
       el.remove();

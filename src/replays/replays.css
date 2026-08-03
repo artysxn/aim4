@@ -4986,7 +4986,32 @@ table.rp-mine-table tbody tr {
   border-radius: 0;
 }
 
-.tm-active-roster {
+.tm-maps-head,
+.tm-map-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2.6em 3.2em 3.2em;
+  gap: 6px;
+  align-items: center;
+  font: 500 12px var(--font-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-maps-head {
+  color: var(--muted);
+  font: 500 10px var(--font-body);
+  letter-spacing: 0.02em;
+  padding: 0 2px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tm-maps-head span:not(:first-child),
+.tm-map-wl,
+.tm-map-rwr,
+.tm-map-prw {
+  text-align: right;
+}
+
+.tm-maps-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -4994,38 +5019,105 @@ table.rp-mine-table tbody tr {
   flex-direction: column;
 }
 
-.tm-active-player {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 0;
+.tm-map-row {
+  padding: 7px 2px;
   border-bottom: 1px solid var(--border);
-  font: 500 13px var(--font-body);
+  cursor: pointer;
+  color: var(--text);
 }
 
-.tm-active-player:last-child {
+.tm-map-row:last-child {
   border-bottom: 0;
 }
 
-.tm-active-name {
-  flex: 1;
+.tm-map-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.tm-map-row.is-active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tm-map-name {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 13px var(--font-body);
+}
+
+.tm-map-wl,
+.tm-map-rwr,
+.tm-map-prw {
+  color: var(--muted);
+}
+
+.tm-map-row.is-active .tm-map-name,
+.tm-map-row.is-active .tm-map-wl,
+.tm-map-row.is-active .tm-map-rwr,
+.tm-map-row.is-active .tm-map-prw {
+  color: var(--text);
+}
+
+.tm-overview-replays-card {
+  min-width: 0;
+}
+
+.tm-replays-scroll {
+  max-height: min(70vh, 640px);
+  overflow: auto;
+}
+
+.tm-replays-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font: 500 13px var(--font-body);
+}
+
+.tm-replays-table th {
+  color: var(--muted);
+  font: 500 10px var(--font-body);
+  letter-spacing: 0.02em;
+  text-align: left;
+  padding: 0 6px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tm-replays-table th:last-child,
+.tm-replay-actions {
+  width: 5.5rem;
+  text-align: right;
+}
+
+.tm-replay-row td {
+  padding: 7px 6px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.tm-replay-row:last-child td {
+  border-bottom: 0;
+}
+
+.tm-replay-enemy,
+.tm-replay-map {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.tm-active-meta {
+.tm-replay-map {
   color: var(--muted);
   font: 500 12px var(--font-body);
-  font-variant-numeric: tabular-nums;
 }
 
-.tm-active-rating {
-  font: 600 13px var(--font-body);
-  font-variant-numeric: tabular-nums;
-  min-width: 3.2em;
-  text-align: right;
+.tm-replay-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  white-space: nowrap;
 }
 
 @media (max-width: 1100px) {
