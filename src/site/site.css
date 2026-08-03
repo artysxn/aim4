@@ -1785,6 +1785,34 @@ body.is-impersonating {
   color: var(--accent-hover);
 }
 
+.admin-note {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 8px 0 0;
+}
+
+.admin-tool-card {
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.admin-tool-title {
+  margin: 0;
+  font: 600 15px var(--font-body);
+  color: var(--text);
+}
+
+.admin-tool-card .btn {
+  align-self: flex-start;
+}
+
 .admin-tier-line,
 .account-tier {
   font-family: var(--font-display);

@@ -91,6 +91,10 @@ export const adminApi = {
   recompute: (userId) => send('POST', '/api/admin/recompute', { userId }),
   entitlements: (userId) => get(`/api/admin/entitlements?userId=${encodeURIComponent(userId)}`),
 
+  /** Force-rebuild compact stats indexes for the whole demo library. */
+  refreshStats: ({ force = true } = {}) =>
+    send('POST', '/api/admin/stats/refresh', { force }),
+
   content: (store, op, payload) => send('POST', `/api/admin/content/${store}/${op}`, payload),
 
   audit: ({ actorId = '', targetUser = '', action = '', limit = 100, offset = 0 } = {}) => {

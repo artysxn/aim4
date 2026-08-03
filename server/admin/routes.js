@@ -38,6 +38,20 @@ import { flushImpersonationAudit } from '../entitlements/audit.js';
 import { mintTicket, revokeTicket, verifyTicket } from './impersonation.js';
 import { applyContentOp, contentOps } from './content.js';
 import { findByUsername, listUsers, userContent, userDetail } from './users.js';
+import {
+  listDemos,
+  readRoundMeta,
+  readRoundTicks,
+  userDir
+} from '../replays/demoStore.js';
+import { SHARED_LIBRARY } from '../replays/auth.js';
+import { refreshLibraryStats } from '../replays/statsIndex.js';
+import { getZones } from '../zonesStore.js';
+
+const statsIo = { userDir, readRoundMeta, readRoundTicks, getZones };
+
+/** Only one full-library stats rebuild at a time. */
+let statsRefreshRunning = null;
 
 const MAX_BODY = 256 * 1024;
 
@@ -424,7 +438,7 @@ async function route(req, res, url, me) {
     await writeAudit({
       actorId: me.id,
       action: 'ingest.start',
-      detail: result,
+      payload: result,
       req
     });
     json(res, req, result.started ? 200 : 409, { ...result, ...(await ingest.status()) });
@@ -436,10 +450,52 @@ async function route(req, res, url, me) {
     await writeAudit({
       actorId: me.id,
       action: 'ingest.stop',
-      detail: result,
+      payload: result,
       req
     });
     json(res, req, 200, { ...result, ...(await ingest.status()) });
+    return true;
+  }
+
+  // ---- replay stats indexes -----------------------------------------------
+  // Force-rebuild every ready demo's compact stats index from parsed round
+  // data (PRW, possession, swing, …). Can take a long time on a large library.
+  if (req.method === 'POST' && p === '/api/admin/stats/refresh') {
+    if (statsRefreshRunning) {
+      json(res, req, 409, {
+        error: 'A statistics recalculation is already running.',
+        startedAt: statsRefreshRunning.startedAt,
+        startedBy: statsRefreshRunning.startedBy
+      });
+      return true;
+    }
+    const body = await readJson(req).catch(() => ({}));
+    const force = body.force !== false;
+    const startedAt = Date.now();
+    statsRefreshRunning = { startedAt, startedBy: me.id };
+    try {
+      const records = await listDemos(SHARED_LIBRARY);
+      const report = await refreshLibraryStats(statsIo, SHARED_LIBRARY, records, { force });
+      await writeAudit({
+        actorId: me.id,
+        targetUser: null,
+        action: 'stats.refresh',
+        payload: {
+          force,
+          total: report.total,
+          ready: report.ready,
+          built: report.built,
+          enriched: report.enriched,
+          current: report.current,
+          failed: report.failed,
+          ms: Date.now() - startedAt
+        },
+        req
+      });
+      json(res, req, 200, { ok: true, force, ...report, ms: Date.now() - startedAt });
+    } finally {
+      statsRefreshRunning = null;
+    }
     return true;
   }
 

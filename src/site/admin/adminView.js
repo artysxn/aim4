@@ -11,6 +11,7 @@ import { adminApi } from './adminApi.js';
 import { auditPanel } from './auditPanel.js';
 import { el, render } from './dom.js';
 import { ingestPanel } from './ingestPanel.js';
+import { toolsPanel } from './toolsPanel.js';
 import { usersPanel } from './usersPanel.js';
 import { userDetail } from './userDetail.js';
 import { spinnerNode } from '../../lib/spinner.js';
@@ -18,6 +19,7 @@ import { spinnerNode } from '../../lib/spinner.js';
 const TABS = [
   { id: 'users', label: 'Users' },
   { id: 'ingest', label: 'Ingest' },
+  { id: 'tools', label: 'Tools' },
   { id: 'audit', label: 'Audit' }
 ];
 
@@ -65,6 +67,8 @@ export function initAdminView(host) {
       panel.appendChild(livePanel);
     } else if (tab === 'audit') {
       panel.appendChild(auditPanel());
+    } else if (tab === 'tools') {
+      panel.appendChild(toolsPanel());
     } else if (openUserId) {
       panel.appendChild(
         userDetail({
