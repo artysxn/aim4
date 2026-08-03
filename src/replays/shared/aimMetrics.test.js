@@ -323,27 +323,43 @@ function twoPlayerMeta(events) {
 
   const full = aimRating({
     engagements: 400,
-    crosshairErrorSum: 400 * 12, // at the "best" anchor
-    fightsReady: 320,
-    fightsUnaware: 80, // 0.8, the best anchor
+    crosshairErrorSum: 400 * 15, // at the "best" anchor
+    fightsReady: 300,
+    fightsUnaware: 100, // 0.75, the best anchor
     shots: 300,
-    hits: 96, // 0.32, the best anchor
+    hits: 126, // 0.42, the best anchor
     firstBullets: 100,
-    firstBulletHits: 55 // 0.55, the best anchor
+    firstBulletHits: 52 // 0.52, the best anchor
   });
   assert(full.rating === 100, `all four at best anchors is 100, got ${full.rating}`);
 
   const worst = aimRating({
     engagements: 400,
-    crosshairErrorSum: 400 * 70,
-    fightsReady: 100,
-    fightsUnaware: 300,
+    crosshairErrorSum: 400 * 55,
+    fightsReady: 220,
+    fightsUnaware: 180, // 0.55, the worst anchor
     shots: 300,
-    hits: 30,
+    hits: 36, // 0.12
     firstBullets: 100,
-    firstBulletHits: 15
+    firstBulletHits: 12
   });
   assert(worst.rating === 0, `all four at worst anchors is 0, got ${worst.rating}`);
+
+  // Average-ish values should land near the middle of the scale.
+  const average = aimRating({
+    engagements: 400,
+    crosshairErrorSum: 400 * 30, // ~library mean
+    fightsReady: 260,
+    fightsUnaware: 140, // 0.65
+    shots: 300,
+    hits: 81, // 0.27
+    firstBullets: 100,
+    firstBulletHits: 32 // 0.32
+  });
+  assert(
+    average.rating != null && average.rating > 35 && average.rating < 70,
+    `average-ish corpus should score mid-scale, got ${average.rating}`
+  );
 
   // Values beyond the anchors clamp rather than running off the scale.
   const superhuman = aimRating({

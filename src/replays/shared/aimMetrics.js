@@ -404,32 +404,36 @@ export function addAim(into, from) {
  * curved on purpose: the whole scale is provisional until it has been run over
  * a real corpus, and a straight line is far easier to re-anchor than a curve.
  *
- * These numbers are ESTIMATES from typical CS2 values, not measurements. They
- * are collected here, named, so recalibrating is one edit. `calibrateAnchors`
- * below turns a real population into a replacement.
+ * Anchors are tuned from observed library ranges (not a theoretical CS2 ideal):
+ *   crosshair ≈ 30° mean (lower better)
+ *   ready     ≈ 60–70% with a tight band (a few points matter a lot)
+ *   accuracy  ≈ 15–40% (wide)
+ *   first bullet ≈ 15–50% (wide)
  */
 export const AIM_ANCHORS = Object.freeze({
   /** Mean yaw error, degrees, when an enemy engages you. Lower is better. */
-  crosshairError: { worst: 70, best: 12, invert: true },
-  /** Share of engagements where you were already within the cone. */
-  readyRate: { worst: 0.25, best: 0.8, invert: false },
-  /** Hits per shot, smoke shots excluded. */
-  accuracy: { worst: 0.1, best: 0.32, invert: false },
+  crosshairError: { worst: 55, best: 15, invert: true },
+  /**
+   * Share of engagements where you were already within the cone.
+   * Typical band is ~60–70%; the span is tight so a few points move the score.
+   */
+  readyRate: { worst: 0.55, best: 0.75, invert: false },
+  /** Hits per shot, smoke shots excluded. High variance across roles/weapons. */
+  accuracy: { worst: 0.12, best: 0.42, invert: false },
   /** First bullet of a burst connecting when an enemy was in the cone. */
-  firstBullet: { worst: 0.15, best: 0.55, invert: false }
+  firstBullet: { worst: 0.12, best: 0.52, invert: false }
 });
 
 /**
- * Component weights. Crosshair placement and first bullet carry the most
- * because they are the least confounded by teammates, economy and role.
- * General accuracy is heavily weapon-dependent and unaware rate is partly a
- * team-information problem, so both are worth less.
+ * Component weights. Ready rate is weighted highest because its real range is
+ * narrow — small percentage gaps separate mediocre from elite. Accuracy and
+ * first-bullet vary widely by weapon and role, so they carry less.
  */
 export const AIM_WEIGHTS = Object.freeze({
-  crosshairError: 0.3,
-  firstBullet: 0.3,
-  accuracy: 0.25,
-  readyRate: 0.15
+  readyRate: 0.32,
+  crosshairError: 0.28,
+  accuracy: 0.2,
+  firstBullet: 0.2
 });
 
 /** Minimum sample before a component is trusted; below this it is dropped. */

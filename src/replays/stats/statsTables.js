@@ -224,7 +224,9 @@ export const PLAYER_METRIC_COLUMNS = [
         ? tip([
             `Aim rating: ${f1(p.a4aim)} / 100`,
             `Crosshair placement: ${
-              Number.isFinite(p.aimRaw?.crosshairError) ? `${f1(p.aimRaw.crosshairError)}° off` : '—'
+              Number.isFinite(p.aimRaw?.crosshairError)
+                ? `${f1(-p.aimRaw.crosshairError)}°`
+                : '—'
             } (${f0(p.aimComponents?.crosshairError)})`,
             `Ready for the fight: ${pct1(p.aimRaw?.readyRate)} (${f0(p.aimComponents?.readyRate)})`,
             `Accuracy, no smoke shots: ${pct1(p.aimRaw?.accuracy)} (${f0(p.aimComponents?.accuracy)})`,
@@ -232,6 +234,71 @@ export const PLAYER_METRIC_COLUMNS = [
             `Sample: ${p.aimSample?.crosshairError || 0} engagements, ${p.aimSample?.accuracy || 0} shots`
           ])
         : 'Not enough sampled duels yet for an aim rating.'
+  },
+  {
+    key: 'aimCrosshair',
+    label: 'Crosshair°',
+    // Negative degrees so lower-is-better sorts correctly under default desc.
+    get: (p) =>
+      Number.isFinite(p.aimRaw?.crosshairError) ? -p.aimRaw.crosshairError : 1,
+    cell: (p) =>
+      Number.isFinite(p.aimRaw?.crosshairError) ? f1(-p.aimRaw.crosshairError) : '—',
+    tip: (p) =>
+      Number.isFinite(p.aimRaw?.crosshairError)
+        ? tip([
+            `Mean yaw error when engaged: ${f1(-p.aimRaw.crosshairError)}°`,
+            `Component score: ${f0(p.aimComponents?.crosshairError)} / 100`,
+            `Sample: ${p.aimSample?.crosshairError || 0} engagements`,
+            'Negative because lower error is better. ~−30° is average.'
+          ])
+        : 'Not enough engagements yet.'
+  },
+  {
+    key: 'aimReady',
+    label: 'Ready%',
+    get: (p) =>
+      Number.isFinite(p.aimRaw?.readyRate) ? p.aimRaw.readyRate * 100 : -1,
+    cell: (p) => (Number.isFinite(p.aimRaw?.readyRate) ? pct1(p.aimRaw.readyRate) : '—'),
+    tip: (p) =>
+      Number.isFinite(p.aimRaw?.readyRate)
+        ? tip([
+            `Already in the cone when engaged: ${pct1(p.aimRaw.readyRate)}`,
+            `Component score: ${f0(p.aimComponents?.readyRate)} / 100`,
+            `Sample: ${p.aimSample?.readyRate || 0} engagements`,
+            'Typical band ~60–70%. A few points move the aim rating a lot.'
+          ])
+        : 'Not enough engagements yet.'
+  },
+  {
+    key: 'aimAcc',
+    label: 'Aim acc%',
+    get: (p) => (Number.isFinite(p.aimRaw?.accuracy) ? p.aimRaw.accuracy * 100 : -1),
+    cell: (p) => (Number.isFinite(p.aimRaw?.accuracy) ? pct1(p.aimRaw.accuracy) : '—'),
+    tip: (p) =>
+      Number.isFinite(p.aimRaw?.accuracy)
+        ? tip([
+            `Hits / shots (smoke shots excluded): ${pct1(p.aimRaw.accuracy)}`,
+            `Component score: ${f0(p.aimComponents?.accuracy)} / 100`,
+            `Sample: ${p.aimSample?.accuracy || 0} shots`,
+            'High variance by weapon and role (~15–40%).'
+          ])
+        : 'Not enough sampled shots yet.'
+  },
+  {
+    key: 'aimFirst',
+    label: '1st bullet%',
+    get: (p) =>
+      Number.isFinite(p.aimRaw?.firstBullet) ? p.aimRaw.firstBullet * 100 : -1,
+    cell: (p) => (Number.isFinite(p.aimRaw?.firstBullet) ? pct1(p.aimRaw.firstBullet) : '—'),
+    tip: (p) =>
+      Number.isFinite(p.aimRaw?.firstBullet)
+        ? tip([
+            `First bullet hit when enemy was in the cone: ${pct1(p.aimRaw.firstBullet)}`,
+            `Component score: ${f0(p.aimComponents?.firstBullet)} / 100`,
+            `Sample: ${p.aimSample?.firstBullet || 0} first bullets`,
+            'High variance (~15–50%).'
+          ])
+        : 'Not enough first-bullet samples yet.'
   },
   {
     key: 'heDmg',
