@@ -17,6 +17,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { P, PLAYER_SLOTS } from '../../src/replays/shared/statsMath.js';
 import { awpAccuracyFromTicks } from '../../src/replays/shared/awpAccuracy.js';
+import { aimFromRound } from '../../src/replays/shared/aimMetrics.js';
+import { utilityFromRound } from '../../src/replays/shared/utilityMetrics.js';
 import { phaseCombatFromMeta } from '../../src/replays/roles/phaseCombat.js';
 import {
   averagePossessionOverRound,
@@ -41,7 +43,10 @@ import {
 } from '../../src/replays/roles/computeRoles.js';
 import { applyMovementFields } from '../../src/replays/roles/movementFromTicks.js';
 
-export const STATS_VERSION = 10;
+// v11 adds aim measurements (row.am) and utility effectiveness (row.ut/row.utt).
+// Bumping this rebuilds every index from the round files already on disk; it
+// does NOT reparse demos.
+export const STATS_VERSION = 11;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -180,6 +185,7 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf, tickBuffer = null) 
   applyPhaseBags(row, meta, playerIds, tickBuffer);
   applyPrwFields(row, meta);
   applyTimingFields(row, meta, playerIds);
+  applyAimUtility(row, meta, tickBuffer);
   return row;
 }
 
@@ -224,6 +230,39 @@ function applyPrwFields(row, meta) {
   row.sw = sw;
   if (row.pos1 === undefined) row.pos1 = null;
   if (row.pos2 === undefined) row.pos2 = null;
+}
+
+/**
+ * Aim measurements and utility effectiveness, per player, for this round.
+ *
+ * Both read only the round meta and its tick buffer, which is why adding these
+ * columns is a stats rebuild rather than a demo reparse. Stored as their own
+ * per-player bags (like `row.ph`) rather than widened into the fixed-width P
+ * line, because they are sums that get divided at query time and the line array
+ * is a set of plain counters.
+ */
+function applyAimUtility(row, meta, tickBuffer) {
+  if (!tickBuffer) {
+    row.am = null;
+    row.ut = null;
+    row.utt = null;
+    return;
+  }
+  try {
+    row.am = aimFromRound(meta, tickBuffer);
+  } catch {
+    row.am = null;
+  }
+  try {
+    const { players, teams } = utilityFromRound(meta, tickBuffer);
+    row.ut = players;
+    // Team totals are kept per round so "utility damage per round" is a real
+    // average over rounds played rather than a sum divided by a guess.
+    row.utt = { 1: teams[1].utilDamage, 2: teams[2].utilDamage };
+  } catch {
+    row.ut = null;
+    row.utt = null;
+  }
 }
 
 function applyPhaseBags(row, meta, playerIds, tickBuffer = null) {

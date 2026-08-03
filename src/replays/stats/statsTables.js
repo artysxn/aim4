@@ -12,7 +12,11 @@ import { MAP_CONTROL_BASE } from '../coach/mapControlBases.js';
 import { relativePossession } from '../coach/mapControlAdvantage.js';
 
 const f2 = (n) => (Number.isFinite(n) ? n.toFixed(2) : '—');
+const f1 = (n) => (Number.isFinite(n) ? n.toFixed(1) : '—');
+const f0 = (n) => (Number.isFinite(n) ? String(Math.round(n)) : '—');
 const pct = (n) => (Number.isFinite(n) ? `${n.toFixed(2)}%` : '—');
+/** A 0-1 fraction as a percentage. The aim components are stored as fractions. */
+const pct1 = (n) => (Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—');
 const int = (n) => (Number.isFinite(n) ? String(Math.round(n)) : '—');
 const signed = (n) =>
   Number.isFinite(n) ? `${n > 0 ? '+' : ''}${n.toFixed(2)}` : '—';
@@ -201,6 +205,74 @@ export const PLAYER_METRIC_COLUMNS = [
             `Raw path length (resets on death)`
           ])
         : 'No movement data yet. Reloading Statistics fills DT in the background.'
+  },
+
+  // ---- aim and utility effectiveness (stats index v11) --------------------
+  //
+  // All four are computed from ticks and events already on disk, so they arrive
+  // with a stats rebuild rather than a reparse. A dash means "not enough sample
+  // yet" and never "zero": claiming 0.0 damage per HE for someone who has not
+  // thrown one is worse than admitting we do not know.
+  {
+    key: 'a4aim',
+    label: 'Aim',
+    get: (p) => (Number.isFinite(p.a4aim) ? p.a4aim : -1),
+    cell: (p) => (Number.isFinite(p.a4aim) ? f1(p.a4aim) : '—'),
+    strong: true,
+    tip: (p) =>
+      Number.isFinite(p.a4aim)
+        ? tip([
+            `Aim rating: ${f1(p.a4aim)} / 100`,
+            `Crosshair placement: ${
+              Number.isFinite(p.aimRaw?.crosshairError) ? `${f1(p.aimRaw.crosshairError)}° off` : '—'
+            } (${f0(p.aimComponents?.crosshairError)})`,
+            `Ready for the fight: ${pct1(p.aimRaw?.readyRate)} (${f0(p.aimComponents?.readyRate)})`,
+            `Accuracy, no smoke shots: ${pct1(p.aimRaw?.accuracy)} (${f0(p.aimComponents?.accuracy)})`,
+            `First bullet: ${pct1(p.aimRaw?.firstBullet)} (${f0(p.aimComponents?.firstBullet)})`,
+            `Sample: ${p.aimSample?.crosshairError || 0} engagements, ${p.aimSample?.accuracy || 0} shots`
+          ])
+        : 'Not enough sampled duels yet for an aim rating.'
+  },
+  {
+    key: 'heDmg',
+    label: 'HE dmg',
+    get: (p) => (p.heThrown > 0 ? p.heDmgPerNade : -1),
+    cell: (p) => (p.heThrown > 0 ? f1(p.heDmgPerNade) : '—'),
+    tip: (p) =>
+      p.heThrown > 0
+        ? tip([
+            `Damage per HE thrown: ${f1(p.heDmgPerNade)}`,
+            `${p.heDamage} damage from ${p.heThrown} HE`,
+            'Enemy damage only. Team and self damage never count.'
+          ])
+        : 'No HE grenades thrown in this selection.'
+  },
+  {
+    key: 'blind',
+    label: 'Blind/flash',
+    get: (p) => (p.flashesThrown > 0 ? p.blindPerFlash : -1),
+    cell: (p) => (p.flashesThrown > 0 ? `${f2(p.blindPerFlash)}s` : '—'),
+    tip: (p) =>
+      p.flashesThrown > 0
+        ? tip([
+            `Enemy blind per flash: ${f2(p.blindPerFlash)}s`,
+            `${f1(p.enemyBlindSeconds)}s across ${p.flashesThrown} flashes`,
+            `Flashes that blinded someone: ${pct1(p.flashHitRate)}`,
+            'Duds are counted in the denominator. Team flashes earn nothing.'
+          ])
+        : 'No flashbangs thrown in this selection.'
+  },
+  {
+    key: 'utilDmg',
+    label: 'Util dmg',
+    get: (p) => (Number.isFinite(p.utilDmgPerRound) ? p.utilDmgPerRound : -1),
+    cell: (p) => (Number.isFinite(p.utilDmgPerRound) ? f1(p.utilDmgPerRound) : '—'),
+    tip: (p) =>
+      tip([
+        `All utility damage per round: ${f1(p.utilDmgPerRound)}`,
+        `HE: ${p.heDamage} over ${p.heThrown} thrown`,
+        `Fire: ${p.fireDamage} over ${p.fireThrown} thrown`
+      ])
   }
 ];
 

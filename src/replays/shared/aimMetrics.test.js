@@ -1,0 +1,320 @@
+// Aim and utility metrics, on synthetic rounds where the right answer is known.
+//
+// These exist mostly to pin the unit conversions and the exclusion rules, which
+// are where the quiet mistakes live. The flash column shipped reading zero for
+// every player because readRecord already converts the stored 20ths-of-a-second
+// byte and it was divided by 20 a second time; nothing about that is visible
+// without a fixture that knows what the answer should be.
+
+import { writeHeader, writeRecord, HEADER_BYTES, TICK_BYTES, FLAG_ALIVE } from './tickFormat.js';
+import { aimFromRound, aimRating, addAim, yawDeltaDeg, FIRST_BULLET_CONE_DEG } from './aimMetrics.js';
+import { utilityFromRound, utilityAverages } from './utilityMetrics.js';
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assert failed');
+}
+const close = (a, b, eps = 0.05) => Math.abs(a - b) <= eps;
+
+const TICK_RATE = 64;
+
+/**
+ * Build a stride-1 tick buffer.
+ * @param {number} tickCount
+ * @param {(tick: number, slot: number) => object} at  state for a player
+ */
+function buildTicks(tickCount, at) {
+  const buffer = new ArrayBuffer(HEADER_BYTES + tickCount * TICK_BYTES);
+  const view = new DataView(buffer);
+  writeHeader(view, {
+    tickCount,
+    firstTick: 0,
+    stride: 1,
+    tickRate: TICK_RATE,
+    playerCount: 10
+  });
+  for (let t = 0; t < tickCount; t++) {
+    for (let slot = 0; slot < 10; slot++) writeRecord(view, t, slot, at(t, slot));
+  }
+  return buffer;
+}
+
+const alive = (over = {}) => ({
+  x: 0,
+  y: 0,
+  z: 0,
+  yaw: 0,
+  pitch: 0,
+  health: 100,
+  armor: 100,
+  weapon: 0,
+  flags: FLAG_ALIVE,
+  flash: 0,
+  side: 2,
+  ...over
+});
+
+/** Two players: slot 0 on team 1, slot 5 on team 2. */
+function twoPlayerMeta(events) {
+  return {
+    tickRate: TICK_RATE,
+    team1Side: 'T',
+    team2Side: 'CT',
+    players: [
+      { id: 'aaa', name: 'A', team: 1, slot: 0 },
+      { id: 'bbb', name: 'B', team: 2, slot: 5 }
+    ],
+    events: { kills: [], shots: [], grenades: [], bomb: [], damage: [], items: [], ...events }
+  };
+}
+
+// ---------------------------------------------------------------------------
+{
+  // yaw wrap-around: 350 and 10 are 20 apart, not 340.
+  assert(yawDeltaDeg(350, 10) === 20, 'yaw wraps');
+  assert(yawDeltaDeg(-170, 170) === 20, 'negative yaw wraps');
+  assert(yawDeltaDeg(0, 180) === 180, 'opposite is 180');
+}
+
+// ---------------------------------------------------------------------------
+{
+  // Flash blindness is measured as the RISE across the detonation, in seconds.
+  // Player B (enemy) goes from 0 to 2.5 s of blind at tick 100.
+  const ticks = buildTicks(200, (t, slot) =>
+    alive({
+      x: slot === 0 ? 0 : 500,
+      flash: slot === 5 && t >= 100 && t < 160 ? 2.5 : 0,
+      side: slot < 5 ? 2 : 3
+    })
+  );
+  const meta = twoPlayerMeta({
+    grenades: [{ type: 'flashbang', player: 'aaa', throwTick: 80, detonateTick: 100, at: { x: 250, y: 0 } }]
+  });
+
+  const { players } = utilityFromRound(meta, ticks);
+  assert(players.aaa.flashesThrown === 1, 'one flash thrown');
+  assert(
+    close(players.aaa.enemyBlindSeconds, 2.5),
+    `2.5 s of enemy blind, got ${players.aaa.enemyBlindSeconds}`
+  );
+  assert(players.aaa.flashesLanded === 1, 'flash counted as landed');
+
+  const avg = utilityAverages({ ...players.aaa, rounds: 1 });
+  assert(close(avg.blindPerFlash, 2.5), `blind per flash, got ${avg.blindPerFlash}`);
+  assert(close(avg.flashHitRate, 1), 'hit rate 1');
+}
+
+{
+  // A flash that blinds a TEAMMATE is worth nothing.
+  const ticks = buildTicks(200, (t, slot) =>
+    alive({ flash: slot === 1 && t >= 100 ? 3 : 0, side: slot < 5 ? 2 : 3 })
+  );
+  const meta = {
+    ...twoPlayerMeta({
+      grenades: [{ type: 'flashbang', player: 'aaa', throwTick: 80, detonateTick: 100, at: { x: 0, y: 0 } }]
+    })
+  };
+  meta.players = [
+    { id: 'aaa', name: 'A', team: 1, slot: 0 },
+    { id: 'mate', name: 'M', team: 1, slot: 1 },
+    { id: 'bbb', name: 'B', team: 2, slot: 5 }
+  ];
+  const { players } = utilityFromRound(meta, ticks);
+  assert(players.aaa.enemyBlindSeconds === 0, 'team flash earns nothing');
+  assert(players.aaa.flashesLanded === 0, 'team flash is not a landed flash');
+}
+
+// ---------------------------------------------------------------------------
+{
+  // HE damage per nade, and team damage excluded.
+  const ticks = buildTicks(50, () => alive());
+  const meta = twoPlayerMeta({
+    grenades: [
+      { type: 'hegrenade', player: 'aaa', throwTick: 5, detonateTick: 10, at: { x: 0, y: 0 } },
+      { type: 'hegrenade', player: 'aaa', throwTick: 20, detonateTick: 25, at: { x: 0, y: 0 } }
+    ],
+    damage: [
+      { tick: 10, attacker: 'aaa', victim: 'bbb', hp: 60, weapon: 'hegrenade' },
+      { tick: 25, attacker: 'aaa', victim: 'bbb', hp: 20, weapon: 'hegrenade' },
+      // Self and team damage must not count.
+      { tick: 26, attacker: 'aaa', victim: 'aaa', hp: 30, weapon: 'hegrenade' }
+    ]
+  });
+  const { players, teams } = utilityFromRound(meta, ticks);
+  assert(players.aaa.heThrown === 2, 'two HEs thrown');
+  assert(players.aaa.heDamage === 80, `80 HE damage, got ${players.aaa.heDamage}`);
+  assert(teams[1].utilDamage === 80, 'team util damage excludes self damage');
+
+  const avg = utilityAverages({ ...players.aaa, rounds: 1 });
+  assert(close(avg.heDamagePerNade, 40), `40 dmg per HE, got ${avg.heDamagePerNade}`);
+}
+
+// ---------------------------------------------------------------------------
+{
+  // Crosshair placement: B shoots at A from due east while looking at them.
+  // A is facing due east too (yaw 0 points +x), so A's error is ~180 because
+  // the attacker is at +x and A must turn to face them... place carefully:
+  // A at origin, B at (500,0). Direction from A to B is yaw 0. If A looks at
+  // yaw 0 the error is 0; if A looks at yaw 180 the error is 180.
+  const ticks = buildTicks(120, (t, slot) =>
+    alive({
+      x: slot === 0 ? 0 : 500,
+      y: 0,
+      yaw: slot === 0 ? 180 : 180, // A looks away (180); B looks back at A (180)
+      side: slot < 5 ? 2 : 3
+    })
+  );
+  const meta = twoPlayerMeta({
+    shots: [{ tick: 60, player: 'bbb', weapon: 'ak47', x: 500, y: 0, z: 0, yaw: 180, pitch: 0 }]
+  });
+  const out = aimFromRound(meta, ticks);
+  assert(out.aaa.engagements === 1, `one engagement, got ${out.aaa.engagements}`);
+  assert(close(out.aaa.crosshairErrorSum, 180, 1), `error ~180, got ${out.aaa.crosshairErrorSum}`);
+  assert(out.aaa.fightsUnaware === 1, 'counted as unaware');
+  assert(out.aaa.fightsReady === 0, 'not ready');
+}
+
+{
+  // Same geometry, but A is looking straight at B: ready, error ~0.
+  const ticks = buildTicks(120, (t, slot) =>
+    alive({ x: slot === 0 ? 0 : 500, y: 0, yaw: slot === 0 ? 0 : 180, side: slot < 5 ? 2 : 3 })
+  );
+  const meta = twoPlayerMeta({
+    shots: [{ tick: 60, player: 'bbb', weapon: 'ak47', x: 500, y: 0, z: 0, yaw: 180, pitch: 0 }]
+  });
+  const out = aimFromRound(meta, ticks);
+  assert(out.aaa.fightsReady === 1, 'ready when already on the angle');
+  assert(close(out.aaa.crosshairErrorSum, 0, 1), `error ~0, got ${out.aaa.crosshairErrorSum}`);
+}
+
+// ---------------------------------------------------------------------------
+{
+  // Accuracy: three shots, one hit. Then the same with a smoke on the line,
+  // which must be excluded from the denominator entirely.
+  const ticks = buildTicks(300, (t, slot) =>
+    alive({ x: slot === 0 ? 0 : 500, y: 0, yaw: 0, side: slot < 5 ? 2 : 3 })
+  );
+  const shot = (tick) => ({ tick, player: 'aaa', weapon: 'ak47', x: 0, y: 0, z: 0, yaw: 0, pitch: 0 });
+  const meta = twoPlayerMeta({
+    shots: [shot(50), shot(120), shot(200)],
+    damage: [{ tick: 52, attacker: 'aaa', victim: 'bbb', hp: 27, weapon: 'ak47' }]
+  });
+  const out = aimFromRound(meta, ticks);
+  assert(out.aaa.shots === 3, `three shots counted, got ${out.aaa.shots}`);
+  assert(out.aaa.hits === 1, `one hit, got ${out.aaa.hits}`);
+
+  // Now put a smoke between A and B. Every shot goes into it, so none count.
+  const smoky = twoPlayerMeta({
+    shots: [shot(50), shot(120), shot(200)],
+    damage: [],
+    grenades: [
+      { type: 'smokegrenade', player: 'bbb', throwTick: 10, detonateTick: 20, at: { x: 250, y: 0 } }
+    ]
+  });
+  const smokyOut = aimFromRound(smoky, ticks);
+  assert(smokyOut.aaa.shots === 0, `smoke shots excluded, got ${smokyOut.aaa.shots}`);
+  assert(smokyOut.aaa.shotsInSmoke === 3, `three smoke shots, got ${smokyOut.aaa.shotsInSmoke}`);
+}
+
+{
+  // A smoke BEHIND the enemy must not exclude the shot: shooting someone
+  // standing in front of a smoke is a normal duel.
+  const ticks = buildTicks(120, (t, slot) =>
+    alive({ x: slot === 0 ? 0 : 500, y: 0, yaw: 0, side: slot < 5 ? 2 : 3 })
+  );
+  const meta = twoPlayerMeta({
+    shots: [{ tick: 60, player: 'aaa', weapon: 'ak47', x: 0, y: 0, z: 0, yaw: 0, pitch: 0 }],
+    grenades: [
+      { type: 'smokegrenade', player: 'bbb', throwTick: 10, detonateTick: 20, at: { x: 900, y: 0 } }
+    ]
+  });
+  const out = aimFromRound(meta, ticks);
+  assert(out.aaa.shots === 1, `smoke behind the enemy still counts, got ${out.aaa.shots}`);
+}
+
+// ---------------------------------------------------------------------------
+{
+  // First bullet: only the first shot of a burst, and only with an enemy in
+  // the cone. Three shots 2 ticks apart are one burst.
+  const ticks = buildTicks(300, (t, slot) =>
+    alive({ x: slot === 0 ? 0 : 500, y: 0, yaw: 0, side: slot < 5 ? 2 : 3 })
+  );
+  const shot = (tick) => ({ tick, player: 'aaa', weapon: 'ak47', x: 0, y: 0, z: 0, yaw: 0, pitch: 0 });
+  const meta = twoPlayerMeta({
+    shots: [shot(50), shot(52), shot(54), shot(200)],
+    damage: [{ tick: 51, attacker: 'aaa', victim: 'bbb', hp: 27, weapon: 'ak47' }]
+  });
+  const out = aimFromRound(meta, ticks);
+  assert(out.aaa.firstBullets === 2, `two bursts, got ${out.aaa.firstBullets}`);
+  assert(out.aaa.firstBulletHits === 1, `first bullet of burst 1 hit, got ${out.aaa.firstBulletHits}`);
+}
+
+{
+  // An enemy outside the cone is not a first-bullet opportunity.
+  const ticks = buildTicks(120, (t, slot) =>
+    alive({ x: slot === 0 ? 0 : 0, y: slot === 0 ? 0 : 500, yaw: 0, side: slot < 5 ? 2 : 3 })
+  );
+  // Enemy is due north (yaw 90); shooter faces east (yaw 0): 90 apart.
+  assert(yawDeltaDeg(0, 90) > FIRST_BULLET_CONE_DEG, 'fixture is outside the cone');
+  const meta = twoPlayerMeta({
+    shots: [{ tick: 60, player: 'aaa', weapon: 'ak47', x: 0, y: 0, z: 0, yaw: 0, pitch: 0 }]
+  });
+  const out = aimFromRound(meta, ticks);
+  assert(out.aaa.firstBullets === 0, 'no first-bullet chance outside the cone');
+}
+
+// ---------------------------------------------------------------------------
+{
+  // Rating: components without enough sample are dropped and the remaining
+  // weights renormalise, rather than scoring a confident zero.
+  const thin = aimRating({ engagements: 2, crosshairErrorSum: 40, shots: 3, hits: 1 });
+  assert(thin.components.crosshairError === null, 'thin sample is not scored');
+  assert(thin.components.accuracy === null, 'thin accuracy is not scored');
+
+  const full = aimRating({
+    engagements: 400,
+    crosshairErrorSum: 400 * 12, // at the "best" anchor
+    fightsReady: 320,
+    fightsUnaware: 80, // 0.8, the best anchor
+    shots: 300,
+    hits: 96, // 0.32, the best anchor
+    firstBullets: 100,
+    firstBulletHits: 55 // 0.55, the best anchor
+  });
+  assert(full.rating === 100, `all four at best anchors is 100, got ${full.rating}`);
+
+  const worst = aimRating({
+    engagements: 400,
+    crosshairErrorSum: 400 * 70,
+    fightsReady: 100,
+    fightsUnaware: 300,
+    shots: 300,
+    hits: 30,
+    firstBullets: 100,
+    firstBulletHits: 15
+  });
+  assert(worst.rating === 0, `all four at worst anchors is 0, got ${worst.rating}`);
+
+  // Values beyond the anchors clamp rather than running off the scale.
+  const superhuman = aimRating({
+    engagements: 400,
+    crosshairErrorSum: 400 * 2,
+    fightsReady: 400,
+    fightsUnaware: 0,
+    shots: 300,
+    hits: 300,
+    firstBullets: 100,
+    firstBulletHits: 100
+  });
+  assert(superhuman.rating === 100, 'clamped at 100');
+}
+
+{
+  // addAim is a plain fold, used to roll rounds into a match and matches into
+  // a library. Order must not matter.
+  const a = { shots: 3, hits: 1 };
+  const b = { shots: 5, hits: 2 };
+  const sum = addAim(addAim({}, a), b);
+  assert(sum.shots === 8 && sum.hits === 3, 'counters add');
+}
+
+console.log('aimMetrics + utilityMetrics: all assertions passed');

@@ -25,6 +25,7 @@ import { ValidationError, createGrant, listGrants, revokeGrant } from '../entitl
 import { invalidateUser, loadEntitlements } from '../entitlements/load.js';
 import { recomputeUser } from '../entitlements/recompute.js';
 import { invalidateAdmin, isSiteAdmin, siteAdmin } from '../entitlements/service.js';
+import * as ingest from '../ingest/hltv/service.js';
 import {
   assignSeat,
   cancelSubscription,
@@ -405,6 +406,40 @@ async function route(req, res, url, me) {
       req
     });
     json(res, req, 200, result);
+    return true;
+  }
+
+  // ---- demo ingest --------------------------------------------------------
+  //
+  // Start/stop a long-running backfill. The ingester is a separate process, so
+  // these only ever spawn it or signal it: a parser OOM must not be able to
+  // take the API server down with it.
+  if (req.method === 'GET' && p === '/api/admin/ingest') {
+    json(res, req, 200, await ingest.status());
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/ingest/start') {
+    const result = await ingest.start();
+    await writeAudit({
+      actorId: me.id,
+      action: 'ingest.start',
+      detail: result,
+      req
+    });
+    json(res, req, result.started ? 200 : 409, { ...result, ...(await ingest.status()) });
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/ingest/stop') {
+    const result = await ingest.stop();
+    await writeAudit({
+      actorId: me.id,
+      action: 'ingest.stop',
+      detail: result,
+      req
+    });
+    json(res, req, 200, { ...result, ...(await ingest.status()) });
     return true;
   }
 

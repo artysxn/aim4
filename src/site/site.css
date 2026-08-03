@@ -1806,6 +1806,139 @@ body.is-impersonating {
   font-size: 13px;
 }
 
+/* ---- admin: demo ingest -------------------------------------------------- */
+
+.ingest-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.ingest-chip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ingest-chip.is-running {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--accent-hover);
+}
+.ingest-chip.is-idle {
+  color: var(--muted);
+}
+/* Switch is on but no process is up: starting, or backing off after a crash. */
+.ingest-chip.is-warn {
+  border-color: #7a5c12;
+  background: rgba(224, 168, 42, 0.14);
+  color: #e0a82a;
+}
+.ingest-chip.is-stopped {
+  color: var(--disabled-text);
+}
+
+.ingest-progress {
+  margin: 16px 0;
+}
+.ingest-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--disabled-bg);
+  overflow: hidden;
+}
+.ingest-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s var(--ease-smooth);
+}
+.ingest-progress-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ingest-current {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+.ingest-dim {
+  color: var(--muted);
+}
+.ingest-stage {
+  color: var(--accent-hover);
+  font-variant-numeric: tabular-nums;
+}
+
+.ingest-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0;
+}
+.ingest-count {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 88px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.ingest-count-value {
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+}
+.ingest-count-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ingest-config {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+
+.ingest-recent h4 {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.ingest-recent-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ingest-recent-item {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+}
+.ingest-recent-item.is-failed .ingest-recent-text {
+  color: var(--accent-hover);
+}
+.ingest-recent-time {
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+.ingest-recent-text {
+  overflow-wrap: anywhere;
+}
+
 .link-btn {
   background: none;
   border: none;

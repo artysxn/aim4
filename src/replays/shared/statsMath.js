@@ -12,6 +12,8 @@
 // ---------------------------------------------------------------------------
 
 import { buyBucket, econHasAwp } from './roundId.js';
+import { addAim, aimRating } from './aimMetrics.js';
+import { addUtility, utilityAverages } from './utilityMetrics.js';
 
 /** Per-player, per-round counters, in the order the index packs them. */
 export const P = {
@@ -201,6 +203,12 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
         psdtRounds: 0,
         dtSum: 0,
         dtRounds: 0,
+        /** Aim counters (aimMetrics), summed across every round that passes. */
+        aim: {},
+        /** Utility counters (utilityMetrics), same. */
+        util: {},
+        /** Rounds counted for the per-round utility average. */
+        utilRounds: 0,
         /** @type {Map<string, {name: string, rounds: number}>} */
         teamRounds: new Map()
       };
@@ -237,6 +245,15 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
         s.swingSum += row.sw[id];
         s.swingRounds++;
       }
+      // Aim measurements and utility effectiveness (stats index v11). Plain
+      // sums here; the divisions happen once at the end, so a player filtered
+      // down to three rounds averages over those three rounds and not the
+      // whole match.
+      const am = row.am?.[id];
+      if (am) addAim(s.aim, am);
+      const ut = row.ut?.[id];
+      if (ut) addUtility(s.util, ut);
+      s.utilRounds++;
       const mv = row.mv?.[id];
       if (mv && Number.isFinite(mv.psdt)) {
         s.psdtSum += mv.psdt;
@@ -281,6 +298,9 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       swing
     });
     const a4or = aim4OpeningRating({ opkd, swing, opatt });
+    // Divided once, here, over exactly the rounds that passed the filter.
+    const aim = aimRating(s.aim);
+    const utilAvg = utilityAverages({ ...s.util, rounds: s.utilRounds });
     const teams = [...s.teamRounds.values()].sort(
       (a, b) => b.rounds - a.rounds || a.name.localeCompare(b.name)
     );
@@ -338,7 +358,30 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       /** Avg raw distance travelled / round. */
       dt: s.dtRounds ? s.dtSum / s.dtRounds : null,
       dtTotal: s.dtSum,
-      dtRounds: s.dtRounds
+      dtRounds: s.dtRounds,
+
+      // ---- utility effectiveness (stats index v11) ------------------------
+      /** Damage per HE actually thrown, not per round. */
+      heDmgPerNade: utilAvg.heDamagePerNade,
+      heThrown: s.util.heThrown || 0,
+      heDamage: s.util.heDamage || 0,
+      fireDmgPerNade: utilAvg.fireDamagePerNade,
+      fireThrown: s.util.fireThrown || 0,
+      fireDamage: s.util.fireDamage || 0,
+      /** Enemy blind seconds per flashbang thrown, duds included. */
+      blindPerFlash: utilAvg.blindPerFlash,
+      flashesThrown: s.util.flashesThrown || 0,
+      flashHitRate: utilAvg.flashHitRate,
+      enemyBlindSeconds: s.util.enemyBlindSeconds || 0,
+      /** All utility damage per round played. */
+      utilDmgPerRound: utilAvg.utilDamagePerRound,
+
+      // ---- aim (stats index v11) ------------------------------------------
+      /** 0-100. Null until every component has enough sample to be honest. */
+      a4aim: aim.rating,
+      aimComponents: aim.components,
+      aimRaw: aim.raw,
+      aimSample: aim.sample
     });
   }
   out.sort((a, b) => (b.a4r ?? b.rating) - (a.a4r ?? a.rating));

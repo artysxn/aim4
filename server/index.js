@@ -29,6 +29,7 @@ import { printHostBanner, fetchPublicIp } from './network.js';
 import { seedAdmins } from './entitlements/service.js';
 import { backfillEffectiveEntitlements } from './entitlements/load.js';
 import { startSweep } from './entitlements/sweep.js';
+import { startSupervisor as startIngestSupervisor } from './ingest/hltv/service.js';
 
 // PORT (no prefix) is the convention most hosts inject; AIM4_API_PORT still
 // wins so existing local/host scripts are unaffected.
@@ -271,6 +272,11 @@ backfillEffectiveEntitlements().then((r) => {
 // warning, and tidies quota counters. Entitlement resolution is time-aware on
 // its own, so a sweep that has not run is a reporting gap, not an access one.
 startSweep();
+// The demo ingester is a switch, not a button: if an admin left it on, it comes
+// back after a deploy or a reboot without anyone visiting the panel. The
+// supervisor also covers the ingester crashing on its own, with backoff so a
+// broken config cannot turn into a spawn loop.
+startIngestSupervisor();
 
 server.listen(PORT, HOST, async () => {
   if (SERVE_STATIC) {

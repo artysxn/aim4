@@ -10,12 +10,14 @@
 import { adminApi } from './adminApi.js';
 import { auditPanel } from './auditPanel.js';
 import { el, render } from './dom.js';
+import { ingestPanel } from './ingestPanel.js';
 import { usersPanel } from './usersPanel.js';
 import { userDetail } from './userDetail.js';
 import { spinnerNode } from '../../lib/spinner.js';
 
 const TABS = [
   { id: 'users', label: 'Users' },
+  { id: 'ingest', label: 'Ingest' },
   { id: 'audit', label: 'Audit' }
 ];
 
@@ -32,8 +34,17 @@ export function initAdminView(host) {
   let tab = 'users';
   let openUserId = null;
   let loaded = false;
+  /** The panel currently on screen, so its polling can be shut down. */
+  let livePanel = null;
+
+  /** Ingest polls on a timer; leaving the tab or the page has to stop it. */
+  function releasePanel() {
+    livePanel?._stopPolling?.();
+    livePanel = null;
+  }
 
   function renderShell() {
+    releasePanel();
     const wrap = el('div');
     const nav = el('nav', 'admin-nav');
     for (const t of TABS) {
@@ -49,7 +60,10 @@ export function initAdminView(host) {
     wrap.appendChild(nav);
 
     const panel = el('div', 'admin-body');
-    if (tab === 'audit') {
+    if (tab === 'ingest') {
+      livePanel = ingestPanel();
+      panel.appendChild(livePanel);
+    } else if (tab === 'audit') {
       panel.appendChild(auditPanel());
     } else if (openUserId) {
       panel.appendChild(
@@ -97,6 +111,11 @@ export function initAdminView(host) {
     onShow() {
       load();
     },
-    onHide() {}
+    onHide() {
+      // Navigating away from /admin must stop the ingest poll; a weeks-long
+      // backfill does not need a request every five seconds from a tab nobody
+      // is looking at.
+      releasePanel();
+    }
   };
 }

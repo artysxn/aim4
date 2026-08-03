@@ -49,6 +49,13 @@ async function send(method, path, body) {
 export const adminApi = {
   me: () => get('/api/admin/me'),
 
+  // Demo ingest. start/stop only signal the separate ingester process; the
+  // status they return is the same shape as ingestStatus so the panel can
+  // redraw from the response without a second round trip.
+  ingestStatus: () => get('/api/admin/ingest'),
+  ingestStart: () => send('POST', '/api/admin/ingest/start'),
+  ingestStop: () => send('POST', '/api/admin/ingest/stop'),
+
   users: ({ q = '', tier = '', status = '', page = 0, sort = 'created_at' } = {}) => {
     const params = new URLSearchParams();
     if (q) params.set('q', q);
