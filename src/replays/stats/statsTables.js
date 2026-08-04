@@ -64,7 +64,7 @@ export const PLAYER_FIXED_BASE = [
 
 /**
  * Scrollable metric columns (after fixed + optional roles).
- * Order: Rating, Swing, KD, Duel Win%, ADR, KAST, OPKD, Impact, A4R, A4OR,
+ * Order: Rating, Swing, KD, xK, Duel Win%, ADR, KAST, OPKD, Impact, A4R, A4OR,
  * Opatt, OR, PFW, PFO, Aim, Acc, C°, R%, AA%, 1st%, O%, U%, DT, PSDT, util.
  */
 export const PLAYER_METRIC_COLUMNS = [
@@ -110,6 +110,24 @@ export const PLAYER_METRIC_COLUMNS = [
     avgOf: (p) => (Number.isFinite(p.kd) ? p.kd : null),
     avgFormat: f2,
     tip: (p) => tip([`Kills: ${p.kills}`, `Assists: ${p.assists}`, `Deaths: ${p.deaths}`])
+  },
+  {
+    key: 'xk',
+    label: 'xK',
+    get: (p) => (Number.isFinite(p.xk) ? p.xk : -Infinity),
+    cell: (p) => (Number.isFinite(p.xk) ? f2(p.xk) : '—'),
+    avgOf: (p) => (Number.isFinite(p.xk) ? p.xk : null),
+    avgFormat: f2,
+    tip: (p) =>
+      Number.isFinite(p.xk)
+        ? tip([
+            'Expected kills per round.',
+            'Sum of the model’s win chance across every duel, averaged per round.',
+            'A 50/50 is 0.50; a 1v2 at high odds is close to 2.',
+            Number.isFinite(p.xkTotal) ? `Total xK: ${f2(p.xkTotal)}` : '',
+            `Duels: ${f1(p.duels)}`
+          ])
+        : 'No duel data yet. Stats index rebuilds on next library load (v13+).'
   },
   {
     key: 'tfw',

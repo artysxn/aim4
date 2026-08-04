@@ -522,7 +522,7 @@ export function explainProbability(sample, map = '') {
 // ---------------------------------------------------------------------------
 
 /** What a grenade costs, so a thrown one can be taken back off the board. */
-const NADE_COST = {
+export const NADE_COST = {
   smokegrenade: 300,
   flashbang: 200,
   hegrenade: 300,
@@ -553,13 +553,22 @@ export function deadPlayersAt(kills, tick) {
  * Wipe, bomb outcome, or past round end with a known winner.
  */
 export function decidedSideAt({ tick, endTick, winnerSide, ctAlive, tAlive, bomb }) {
-  if (tAlive === 0 && ctAlive > 0) return 'CT';
-  if (ctAlive === 0 && tAlive > 0) return 'T';
+  let planted = false;
   for (const b of bomb || []) {
     if ((b.tick || 0) > tick) continue;
+    if (b.type === 'planted') planted = true;
     if (b.type === 'defused') return 'CT';
     if (b.type === 'exploded') return 'T';
   }
+  // A wiped T side does NOT end a round with the bomb down: the CTs still have
+  // to reach it and defuse it in time, and plenty of rounds are lost to a
+  // ticking bomb with nobody left to defend it. Treating those as decided was
+  // silently deleting every such moment from the round model's training data,
+  // which is precisely the situation the model most needs to learn.
+  if (tAlive === 0 && ctAlive > 0 && !planted) return 'CT';
+  if (ctAlive === 0 && tAlive > 0 && !planted) return 'T';
+  // With the bomb down and no CTs, nothing can stop the detonation.
+  if (planted && ctAlive === 0) return 'T';
   if (endTick != null && tick >= endTick && (winnerSide === 'CT' || winnerSide === 'T')) {
     return winnerSide;
   }
