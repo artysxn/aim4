@@ -378,15 +378,14 @@ export const PLAYER_METRIC_COLUMNS = [
   }
 ];
 
-/** Default player columns without role fields. */
+/** Default player columns (includes duel PFW / PFO / TFW). */
 /**
  * Duel model columns.
  *
- * Separate from the metric columns because they are not always available: the
- * numbers come from running the duel model over a match's tick data, which only
- * the viewer does. Everywhere else these render as a dash rather than a zero,
- * because "not computed" and "predicted to lose every fight" must not look the
- * same.
+ * PFW / PFO come from the duel model over tick + zone data (stored on the stats
+ * index as `row.du`). TFW is kills / (kills + deaths). Until an index is rebuilt
+ * to v13 these render as a dash rather than a zero, because "not computed" and
+ * "predicted to lose every fight" must not look the same.
  *
  * PFW is how hard the fights were, PFO is whether the player beat those odds,
  * and TFW is the plain kill share for comparison. The three are meant to be
@@ -408,7 +407,7 @@ export const PLAYER_DUEL_COLUMNS = [
             'were, not how they did in them.',
             `Duels: ${f1(p.duels)}`
           ])
-        : 'Open the match in the viewer to compute duel stats.'
+        : 'No duel data yet. Stats index rebuilds on next library load (v13+).'
   },
   {
     key: 'pfo',
@@ -417,7 +416,9 @@ export const PLAYER_DUEL_COLUMNS = [
     cell: (p) => (Number.isFinite(p.pfo) ? `${p.pfo > 0 ? '+' : ''}${p.pfo.toFixed(2)}%` : '—'),
     strong: true,
     tip: (p) => {
-      if (!Number.isFinite(p.pfo)) return 'Open the match in the viewer to compute duel stats.';
+      if (!Number.isFinite(p.pfo)) {
+        return 'No duel data yet. Stats index rebuilds on next library load (v13+).';
+      }
       const rows = (p.pfoBuckets || []).map(
         (b) =>
           `  ${String(b.centre).padStart(3)}%: won ${b.actual.toFixed(0)}% of ${b.duels.toFixed(1)}` +
@@ -449,14 +450,14 @@ export const PLAYER_DUEL_COLUMNS = [
   }
 ];
 
-export const PLAYER_COLUMNS = [...PLAYER_FIXED_BASE, ...PLAYER_METRIC_COLUMNS];
-
-/** Player columns plus the duel model's, for surfaces that can compute them. */
-export const PLAYER_COLUMNS_WITH_DUELS = [
+export const PLAYER_COLUMNS = [
   ...PLAYER_FIXED_BASE,
   ...PLAYER_DUEL_COLUMNS,
   ...PLAYER_METRIC_COLUMNS
 ];
+
+/** Alias kept for the viewer scoreboard (same columns as the Statistics page). */
+export const PLAYER_COLUMNS_WITH_DUELS = PLAYER_COLUMNS;
 
 /**
  * Player columns with T (yellow) / CT (blue) role or position after Rounds.
@@ -501,7 +502,7 @@ export function playerColumnsWithRoles(roleMode = 'tactical') {
     }
   ];
   return {
-    columns: [...PLAYER_FIXED_BASE, ...roleCols, ...PLAYER_METRIC_COLUMNS],
+    columns: [...PLAYER_FIXED_BASE, ...roleCols, ...PLAYER_DUEL_COLUMNS, ...PLAYER_METRIC_COLUMNS],
     fixedCount: PLAYER_FIXED_BASE.length + roleCols.length
   };
 }
@@ -552,9 +553,11 @@ export const TEAM_DUEL_COLUMNS = [
         ? tip([
             'Team predicted fight winrate.',
             'The five players’ PFW averaged: how hard this side’s duels were.',
-            ...(t.members || []).map((m) => `${m.name}: ${m.pfw.toFixed(1)}%`)
+            ...(t.members || [])
+              .filter((m) => Number.isFinite(m.pfw))
+              .map((m) => `${m.name}: ${m.pfw.toFixed(1)}%`)
           ])
-        : 'Open the match in the viewer to compute duel stats.'
+        : 'No duel data yet. Stats index rebuilds on next library load (v13+).'
   },
   {
     key: 'teamPfo',
@@ -567,11 +570,11 @@ export const TEAM_DUEL_COLUMNS = [
         ? tip([
             'Team predicted fight overperformance.',
             'How far the side beat the odds it was given, in points.',
-            ...(t.members || []).map(
-              (m) => `${m.name}: ${m.pfo > 0 ? '+' : ''}${m.pfo.toFixed(1)}`
-            )
+            ...(t.members || [])
+              .filter((m) => Number.isFinite(m.pfo))
+              .map((m) => `${m.name}: ${m.pfo > 0 ? '+' : ''}${m.pfo.toFixed(1)}`)
           ])
-        : 'Open the match in the viewer to compute duel stats.'
+        : 'No duel data yet. Stats index rebuilds on next library load (v13+).'
   }
 ];
 
@@ -601,6 +604,7 @@ export const TEAM_COLUMNS = [
           )
         : 'No players in range.'
   },
+  ...TEAM_DUEL_COLUMNS,
   {
     key: 'possession',
     label: 'Poss%',

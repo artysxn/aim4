@@ -210,6 +210,12 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
         util: {},
         /** Rounds counted for the per-round utility average. */
         utilRounds: 0,
+        /** Duel model totals (row.du): weight, predSum, wins. */
+        duelW: 0,
+        duelP: 0,
+        duelN: 0,
+        /** @type {Map<number, { weight: number, predSum: number, wins: number }>} */
+        duelBuckets: new Map(),
         /** @type {Map<string, {name: string, rounds: number}>} */
         teamRounds: new Map()
       };
@@ -270,6 +276,27 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
         s.dtSum += mv.dt;
         s.dtRounds++;
       }
+      const du = row.du?.[id];
+      if (du && Number.isFinite(du.w) && du.w > 0) {
+        s.duelW += du.w;
+        s.duelP += Number(du.p) || 0;
+        s.duelN += Number(du.n) || 0;
+        for (const entry of du.b || []) {
+          const centre = entry[0];
+          const w = entry[1];
+          const p = entry[2];
+          const n = entry[3];
+          if (!Number.isFinite(centre) || !(w > 0)) continue;
+          let b = s.duelBuckets.get(centre);
+          if (!b) {
+            b = { weight: 0, predSum: 0, wins: 0 };
+            s.duelBuckets.set(centre, b);
+          }
+          b.weight += w;
+          b.predSum += p || 0;
+          b.wins += n || 0;
+        }
+      }
       const demo = demos?.get(row.d);
       if (demo) {
         const shortId = team === 1 ? demo.t1 : demo.t2;
@@ -312,6 +339,20 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       (a, b) => b.rounds - a.rounds || a.name.localeCompare(b.name)
     );
     const teamLabel = !teams.length ? '' : teams.length === 1 ? teams[0].name : 'Multiple';
+    const fights = s.all.kills + s.all.deaths;
+    const pfw = s.duelW > 0 ? (s.duelP / s.duelW) * 100 : null;
+    const pfo = s.duelW > 0 ? ((s.duelN - s.duelP) / s.duelW) * 100 : null;
+    const tfw = fights > 0 ? (s.all.kills / fights) * 100 : null;
+    const pfoBuckets = [...s.duelBuckets]
+      .filter(([, b]) => b.weight >= 0.5)
+      .sort((x, y) => x[0] - y[0])
+      .map(([centre, b]) => ({
+        centre,
+        duels: b.weight,
+        predicted: (b.predSum / b.weight) * 100,
+        actual: (b.wins / b.weight) * 100,
+        delta: ((b.wins - b.predSum) / b.weight) * 100
+      }));
     out.push({
       id: s.id,
       name: s.name,
@@ -366,6 +407,16 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       dt: s.dtRounds ? s.dtSum / s.dtRounds : null,
       dtTotal: s.dtSum,
       dtRounds: s.dtRounds,
+
+      // ---- duel model (stats index v13) ------------------------------------
+      /** Average predicted fight winrate (%). Null until duels are indexed. */
+      pfw,
+      /** Predicted fight overperformance (pp). Null until duels are indexed. */
+      pfo,
+      /** Total fight winrate: kills / (kills + deaths) as %. */
+      tfw,
+      duels: s.duelW > 0 ? s.duelW : null,
+      pfoBuckets,
 
       // ---- utility effectiveness (stats index v11) ------------------------
       /** Damage per HE actually thrown, not per round. */
@@ -551,6 +602,15 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
     const avgRating = members.length
       ? members.reduce((sum, m) => sum + m.rating, 0) / members.length
       : 0;
+    // Team PFW / PFO: plain average of the side's players (equal say each),
+    // matching teamDuelStats — not a pooled duel weight average.
+    const duelMembers = members.filter((m) => Number.isFinite(m.pfw));
+    const teamPfw = duelMembers.length
+      ? duelMembers.reduce((sum, m) => sum + m.pfw, 0) / duelMembers.length
+      : null;
+    const teamPfo = duelMembers.length
+      ? duelMembers.reduce((sum, m) => sum + m.pfo, 0) / duelMembers.length
+      : null;
 
     out.push({
       key: s.key,
@@ -564,8 +624,13 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
         id: m.id,
         name: m.name,
         rating: m.rating,
-        prwSwing: m.prwSwing
+        prwSwing: m.prwSwing,
+        pfw: m.pfw,
+        pfo: m.pfo,
+        duels: m.duels
       })),
+      pfw: teamPfw,
+      pfo: teamPfo,
       mapWins,
       mapLosses,
       maps: mapWins + mapLosses,

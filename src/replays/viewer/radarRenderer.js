@@ -423,9 +423,10 @@ export class RadarRenderer {
   /**
    * Duel stats: the pair network and each player's line of sight.
    *
-   * Drawn under the players so the droplets stay readable on top of it. Lines
-   * for pairings where neither player can see the other are dimmer than the
-   * rest: those duels exist, but they have not started.
+   * Drawn under the players so the droplets stay readable on top of it. Only
+   * pairings inside their fight window (active ± 2s) are present; within that
+   * window, lines where neither player can see the other yet are dimmer than
+   * the rest.
    */
   drawDuelNetwork(ctx, t, overlay) {
     ctx.save();

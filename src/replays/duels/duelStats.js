@@ -185,3 +185,40 @@ export function teamDuelStats(summary, roster) {
   }
   return teams;
 }
+
+/**
+ * Compact per-player totals for one round, for the stats index.
+ *
+ * Shape: `{ [playerId]: { w, p, n, b } }` where `w` is duel weight, `p` is the
+ * sum of predicted odds, `n` is the weighted win count, and `b` is the 5% PFO
+ * buckets as `[centre, w, p, n][]`. Aggregation across filtered rounds is then
+ * `PFW = p/w` and `PFO = (n-p)/w`, the same formulas summarizeDuelStats uses
+ * on a whole match.
+ *
+ * @returns {Record<string, { w: number, p: number, n: number, b: number[][] }> | null}
+ */
+export function roundDuelBag({ meta, track, network, mapCode }) {
+  if (!meta?.players?.length || !track || !network || !mapCode) return null;
+  const stats = createDuelStats();
+  addRoundDuels(stats, { meta, track, network, mapCode });
+  if (!stats.duels) return {};
+  /** @type {Record<string, { w: number, p: number, n: number, b: number[][] }>} */
+  const bag = {};
+  for (const [id, e] of stats.players) {
+    if (e.weight <= 0) continue;
+    bag[id] = {
+      w: Math.round(e.weight * 1e6) / 1e6,
+      p: Math.round(e.predSum * 1e6) / 1e6,
+      n: Math.round(e.wins * 1e6) / 1e6,
+      b: [...e.buckets]
+        .filter(([, b]) => b.weight > 0)
+        .map(([centre, b]) => [
+          centre,
+          Math.round(b.weight * 1e6) / 1e6,
+          Math.round(b.predSum * 1e6) / 1e6,
+          Math.round(b.wins * 1e6) / 1e6
+        ])
+    };
+  }
+  return bag;
+}

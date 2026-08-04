@@ -16,6 +16,7 @@ import { getZones } from '../server/zonesStore.js';
 import {
   addRoundDuels,
   createDuelStats,
+  roundDuelBag,
   summarizeDuelStats,
   teamDuelStats
 } from '../src/replays/duels/duelStats.js';
@@ -54,6 +55,47 @@ assert(stats.duels > 0, 'a match should contain duels');
 const summary = summarizeDuelStats(stats);
 assert(summary.size > 0, 'summary should hold players');
 assert(summary.size <= 12, 'a match has ten players, give or take a coach');
+
+// Compact per-round bags must reassemble to the same match totals.
+{
+  const bagStats = createDuelStats();
+  for (const entry of pkg.rounds) {
+    const { meta, track } = pkg.readRound(entry);
+    const bag = roundDuelBag({ meta, track, network, mapCode: pkg.map });
+    assert(bag && typeof bag === 'object', 'roundDuelBag should return a bag');
+    for (const [id, d] of Object.entries(bag)) {
+      const e = bagStats.players.get(id) || {
+        id,
+        name: id,
+        weight: 0,
+        predSum: 0,
+        wins: 0,
+        buckets: new Map()
+      };
+      e.weight += d.w;
+      e.predSum += d.p;
+      e.wins += d.n;
+      for (const [centre, w, p, n] of d.b || []) {
+        let b = e.buckets.get(centre);
+        if (!b) {
+          b = { weight: 0, wins: 0, predSum: 0 };
+          e.buckets.set(centre, b);
+        }
+        b.weight += w;
+        b.predSum += p;
+        b.wins += n;
+      }
+      bagStats.players.set(id, e);
+    }
+  }
+  const fromBags = summarizeDuelStats(bagStats);
+  for (const [id, s] of summary) {
+    const o = fromBags.get(id);
+    assert(o, `${id}: missing from roundDuelBag reassembly`);
+    assert(Math.abs(o.pfw - s.pfw) < 1e-4, `${id}: bag PFW mismatch`);
+    assert(Math.abs(o.pfo - s.pfo) < 1e-4, `${id}: bag PFO mismatch`);
+  }
+}
 
 // Ranges. PFW is a probability and PFO is a difference of two, so neither can
 // leave its own bounds however the fights went.

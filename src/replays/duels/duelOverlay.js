@@ -3,9 +3,14 @@
 // The Duel stats tool's per-frame state.
 //
 // Keeps the trackers the model needs across frames and hands the renderer a
-// plain description of what to draw: one line per living cross-side pairing,
-// one aim ray per living player, and the win percentages for whichever pairing
-// the cursor is on.
+// plain description of what to draw: one line per living cross-side pairing
+// that is inside a gunfight window (active ± 2s), one aim ray per player in
+// those pairings, and the win percentages for whichever pairing the cursor is
+// on.
+//
+// Pairings far from any fight are dropped rather than drawn dim. A full-buy
+// round would otherwise paint every living enemy link at once, and the network
+// stops being readable the moment more than one duel is on the map.
 //
 // The awkward part is that information advantage is a memory. Who saw whom
 // first only exists as a running answer built by walking ticks in order, and a
@@ -38,20 +43,106 @@ const TRACK_STRIDE = 16;
  */
 const REBUILD_TICKS = 320;
 
+/**
+ * How long the pair network stays on screen before a fight opens and after it
+ * goes quiet. Outside that window the line is dropped so a full buy round does
+ * not paint twenty-five dim pairings across the radar.
+ */
+export const DUEL_NETWORK_PAD_SECONDS = 2;
+
 /** How far an aim ray is drawn before giving up, world units. */
 const RAY_MAX = VISION_MAX_DIST;
+
+const pairKey = (a, b) => (a < b ? `${a}:${b}` : `${b}:${a}`);
+
+/**
+ * Walk a round once and record, per pairing, every contiguous span where either
+ * player had the other on screen. The overlay uses these spans plus
+ * {@link DUEL_NETWORK_PAD_SECONDS} to decide what to draw without peeking ahead
+ * on every frame.
+ *
+ * @returns {Map<string, Array<{ start: number, end: number }>>}
+ */
+function buildActiveWindows({ meta, track, network, mapCode }) {
+  const tickRate = meta.tickRate || 64;
+  const visionTracker = createVisionTracker(tickRate);
+  const reloadTracker = createReloadTracker({ meta });
+  const start = meta.freezeEndTick ?? track.firstTick;
+  const end = Math.min(meta.endTick ?? track.lastTick, track.lastTick);
+
+  /** @type {Map<string, Array<{ start: number, end: number }>>} */
+  const windows = new Map();
+  /** @type {Map<string, number>} open window start tick */
+  const open = new Map();
+
+  const close = (key, endTick) => {
+    const s = open.get(key);
+    if (s === undefined) return;
+    open.delete(key);
+    let list = windows.get(key);
+    if (!list) {
+      list = [];
+      windows.set(key, list);
+    }
+    list.push({ start: s, end: Math.max(s, endTick) });
+  };
+
+  for (let tick = start; tick <= end; tick += TRACK_STRIDE) {
+    const smokes = blockingSmokesAt(meta.events?.grenades, tick, tickRate);
+    const snapshot = computeDuelSnapshot({
+      meta,
+      track,
+      tick,
+      network,
+      mapCode,
+      smokes,
+      visionTracker,
+      reloadTracker
+    });
+    const activeNow = new Set();
+    for (const pair of snapshot.pairs) {
+      if (!(pair.aSeesB || pair.bSeesA)) continue;
+      const key = pairKey(pair.aSlot, pair.bSlot);
+      activeNow.add(key);
+      if (!open.has(key)) open.set(key, tick);
+    }
+    for (const key of [...open.keys()]) {
+      if (activeNow.has(key)) continue;
+      // Last sample where this pair was active was the previous stride.
+      close(key, tick - TRACK_STRIDE);
+    }
+  }
+  for (const key of [...open.keys()]) close(key, end);
+  return windows;
+}
+
+/** True when `tick` falls inside any padded active window for the pair. */
+function pairVisible(windows, aSlot, bSlot, tick, padTicks) {
+  const list = windows?.get(pairKey(aSlot, bSlot));
+  if (!list?.length) return false;
+  for (const w of list) {
+    if (tick >= w.start - padTicks && tick <= w.end + padTicks) return true;
+  }
+  return false;
+}
 
 export function createDuelOverlay() {
   let visionTracker = null;
   let reloadTracker = null;
   let key = '';
   let lastTick = -Infinity;
+  /** Per-round active fight windows, built once when the round is first drawn. */
+  let windowsKey = '';
+  /** @type {Map<string, Array<{ start: number, end: number }>> | null} */
+  let activeWindows = null;
 
   const reset = () => {
     visionTracker = null;
     reloadTracker = null;
     key = '';
     lastTick = -Infinity;
+    windowsKey = '';
+    activeWindows = null;
   };
 
   /**
@@ -123,6 +214,12 @@ export function createDuelOverlay() {
       advance({ meta, track, tick, network, mapCode, roundKey });
 
       const tickRate = meta.tickRate || 64;
+      if (windowsKey !== roundKey) {
+        windowsKey = roundKey;
+        activeWindows = buildActiveWindows({ meta, track, network, mapCode });
+      }
+      const padTicks = DUEL_NETWORK_PAD_SECONDS * tickRate;
+
       const smokes = blockingSmokesAt(meta.events?.grenades, tick, tickRate);
       const snapshot = computeDuelSnapshot({
         meta,
@@ -138,11 +235,14 @@ export function createDuelOverlay() {
 
       const v = paramVector();
 
-      // One line per pairing. The probability is computed for every pair, not
-      // just the hovered one, so hovering is instant and so a future readout
-      // can use them without another pass.
+      // One line per pairing that is inside its fight window (active ± pad).
+      // Pairings that never become a gunfight, or that are more than the pad
+      // away from one, are dropped entirely so the radar stays readable.
       const lines = [];
       for (const pair of snapshot.pairs) {
+        if (!pairVisible(activeWindows, pair.aSlot, pair.bSlot, tick, padTicks)) {
+          continue;
+        }
         const ctx = duelContext(snapshot, pair.aSlot, pair.bSlot);
         if (!ctx) continue;
         const pa = predictDuel(ctx, v);
@@ -157,7 +257,7 @@ export function createDuelOverlay() {
           bSide: pair.b.side,
           dist: pair.dist,
           // A duel is active the moment either player has the other on screen.
-          // Everything else on the map is a duel that has not started yet.
+          // Everything else still drawn here is in the pad before / after that.
           active: pair.aSeesB || pair.bSeesA,
           losClear: pair.losClear,
           pa,
@@ -165,9 +265,13 @@ export function createDuelOverlay() {
         });
       }
 
-      // Aim rays. Drawn from each living player along their view angle until
-      // the map, the painted geometry or a smoke stops them, which is the same
-      // set of occluders the duel's own sight test uses.
+      // Aim rays only for players in a currently visible duel. Drawing every
+      // living player's ray is most of the clutter the pad is meant to kill.
+      const raySlots = new Set();
+      for (const line of lines) {
+        raySlots.add(line.aSlot);
+        raySlots.add(line.bSlot);
+      }
       const rays = [];
       // On a stacked map the two floors share one radar image, so a ray cast on
       // the floor that is not being shown would be drawn across rooms it has
@@ -175,6 +279,7 @@ export function createDuelOverlay() {
       // nothing is skipped.
       const showingLower = radarLevel === 'lower';
       for (const p of snapshot.players) {
+        if (!raySlots.has(p.slot)) continue;
         if (isLowerLevel(mapCode, p.z) !== showingLower) continue;
         const hit = castSightRay({
           ox: p.x,

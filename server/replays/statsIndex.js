@@ -43,11 +43,12 @@ import {
   ROLES_VERSION
 } from '../../src/replays/roles/computeRoles.js';
 import { applyMovementFields } from '../../src/replays/roles/movementFromTicks.js';
+import { roundDuelBag } from '../../src/replays/duels/duelStats.js';
 
-// v12 adds overflick / underflick counters on first-bullet misses (row.am).
+// v13 adds per-round duel bags (row.du) for PFW / PFO / TFW on Statistics.
 // Bumping this rebuilds every index from the round files already on disk; it
 // does NOT reparse demos.
-export const STATS_VERSION = 12;
+export const STATS_VERSION = 13;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -288,7 +289,7 @@ function applyPhaseBags(row, meta, playerIds, tickBuffer = null) {
   }
 }
 
-/** Phase bags / AWP Acc / PRW missing or on a pre-v9 index. */
+/** Phase bags / AWP Acc / PRW / duel bags missing or on a pre-v13 index. */
 function needsPhaseEnrichment(entry) {
   if (!entry?.rounds?.length) return false;
   if (Number(entry.v) < STATS_VERSION) return true;
@@ -299,7 +300,8 @@ function needsPhaseEnrichment(entry) {
       r.prw1 === undefined ||
       r.sw === undefined ||
       !Array.isArray(r.kt) ||
-      !r.ev
+      !r.ev ||
+      r.du === undefined
   );
 }
 
@@ -387,6 +389,14 @@ async function applyPossessionFields(row, meta, track, network) {
   row.pos2 = pos2;
 }
 
+/** Per-round duel model totals for Statistics PFW / PFO. */
+function applyDuelFields(row, meta, track, network) {
+  row.du = null;
+  if (!network || !track || !meta) return;
+  const mapCode = meta.map || row.m || '';
+  row.du = roundDuelBag({ meta, track, network, mapCode });
+}
+
 /**
  * Refresh phase combat + AWP Acc + possession from ticks (no painted geography).
  * Also fills roles when ticks are already open (same pass).
@@ -467,6 +477,7 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
       );
       const track = new TickTrack(tickBuffer);
       await applyPossessionFields(row, meta, track, network);
+      applyDuelFields(row, meta, track, network);
       applyMovementFields(row, meta, track, roster);
       if (roleWork) {
         const zones = zoneCache.get(meta.map || row.m) || network;
@@ -481,6 +492,7 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
     } else {
       row.pos1 = null;
       row.pos2 = null;
+      row.du = null;
       row.mv = row.mv || {};
     }
     await yieldEventLoop();
@@ -711,6 +723,7 @@ async function buildIndex(io, user, record) {
       const network = controlNetwork;
       const track = new TickTrack(tickBuffer);
       await applyPossessionFields(row, meta, track, network);
+      applyDuelFields(row, meta, track, network);
       applyMovementFields(row, meta, track, roster);
       const zones = zoneCache.get(meta.map || row.m) || network;
       accumulateRoundRoles(roleWork, {
@@ -721,6 +734,7 @@ async function buildIndex(io, user, record) {
         roster
       });
     } else {
+      row.du = null;
       row.mv = {};
     }
 
