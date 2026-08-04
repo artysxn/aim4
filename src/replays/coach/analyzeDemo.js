@@ -75,8 +75,9 @@ export async function analyzeDemoCoach({ demoId, side, rounds, onProgress }) {
       const teamOf = new Map((meta.players || []).map((p) => [p.id, p.team]));
       const existing = notesFromMeta(meta);
       const have = new Set(existing.filter((n) => n.kind === 'coach').map((n) => n.id));
+      // Only our roster side: every coach note is a mistake for that team.
       const fresh = result.flags
-        .filter((f) => f.rule === 'round-decided' || teamOf.get(f.playerId) === seat)
+        .filter((f) => teamOf.get(f.playerId) === seat)
         .map(flagToNote)
         .filter((n) => !have.has(n.id));
       if (!fresh.length) continue;

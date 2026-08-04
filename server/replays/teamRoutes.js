@@ -24,7 +24,7 @@ import {
   readRound,
   saveRound
 } from './strategyReplays.js';
-import { buildAutocoachSummary } from './autocoachSummary.js';
+import { buildAutocoachSummary, clearCoachNotesForDemos } from './autocoachSummary.js';
 import {
   createDummyMember,
   createTeam,
@@ -48,6 +48,7 @@ import {
   teamByInvite,
   teamsOf,
   transferOwnership,
+  unmarkAutocoachDemos,
   unbanMember,
   upsertDocument,
   upsertStrategy
@@ -465,6 +466,51 @@ export async function handleTeamRequest(req, res, url) {
       json(res, 200, {
         team: publicTeam(next, me.id),
         demos: autocoachDemosOf(next)
+      });
+      return true;
+    }
+    if (req.method === 'POST' && tail === '/autocoach/reset') {
+      await requireCapability(me, CAP.DEMOS_AUTO_COACH, { consume: false });
+      const body = await readJson(req);
+      const team = await teamById(teamId);
+      if (!team) {
+        json(res, 404, { error: 'not_found', message: 'Team not found.' });
+        return true;
+      }
+      const all = Boolean(body?.all);
+      let target;
+      if (all) {
+        const summary = await buildAutocoachSummary(team);
+        target = [
+          ...new Set([
+            ...Object.keys(autocoachDemosOf(team)),
+            ...(summary.demos || [])
+              .filter((d) => d.analyzed || d.mistakeCount > 0)
+              .map((d) => d.id)
+          ])
+        ];
+      } else {
+        target = [
+          ...new Set(
+            (Array.isArray(body?.demoIds) ? body.demoIds : [])
+              .map((id) => String(id || '').replace(/[^A-Za-z0-9_-]/g, ''))
+              .filter(Boolean)
+          )
+        ];
+      }
+      if (!target.length) {
+        json(res, 400, { error: 'bad_request', message: 'No demos to reset.' });
+        return true;
+      }
+      const cleared = await clearCoachNotesForDemos(target);
+      await unmarkAutocoachDemos(me, teamId, all ? 'all' : target);
+      const next = await teamById(teamId);
+      const summary = await buildAutocoachSummary(next);
+      json(res, 200, {
+        cleared,
+        reset: target.length,
+        ...summary,
+        team: publicTeam(next, me.id)
       });
       return true;
     }

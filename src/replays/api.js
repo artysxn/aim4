@@ -589,6 +589,17 @@ export async function markTeamAutocoachDemo(teamId, demoId, side) {
   );
 }
 
+/** Clear Autocoach notes + registry for selected demos, or all when `{ all: true }`. */
+export async function resetTeamAutocoachDemos(teamId, { demoIds, all = false } = {}) {
+  return asJson(
+    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/autocoach/reset`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(all ? { all: true } : { demoIds: demoIds || [] })
+    })
+  );
+}
+
 export async function setTeamPosition(teamId, memberId, side, map, position) {
   return asJson(
     await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/positions`, {

@@ -3149,11 +3149,9 @@ export function createTimelineViewer({
       const existing =
         index === activeIndex && roundNotes.length ? roundNotes : notesFromMeta(meta);
       const have = new Set(existing.filter((n) => n.kind === 'coach').map((n) => n.id));
-      // Round-decided notes are for the whole round (either coaching seat).
+      // Only the selected roster team's mistakes are written.
       const fresh = result.flags
-        .filter(
-          (f) => f.rule === 'round-decided' || teamOf.get(f.playerId) === coachTeam
-        )
+        .filter((f) => teamOf.get(f.playerId) === coachTeam)
         .map(flagToNote)
         .filter((n) => !have.has(n.id));
 

@@ -29,6 +29,7 @@ import {
   leaveTeam,
   markTeamAutocoachDemo,
   mergeTeamMember,
+  resetTeamAutocoachDemos,
   rollTeamInvite,
   saveTeamDocument,
   saveTeamStrategy,
@@ -178,6 +179,8 @@ export function initTeamView({ auth, escapeHtml }) {
   let autocoachBusy = '';
   let autocoachSelectedPlayer = '';
   let autocoachReviewDemoId = '';
+  /** @type {Set<string>} */
+  let autocoachSelectedDemos = new Set();
   /** @type {Array<{id: string, map: string, type: string, name: string, throws: object[]}>} */
   let utilityIndex = [];
   let utilityIndexTeamId = '';
@@ -1257,6 +1260,13 @@ export function initTeamView({ auth, escapeHtml }) {
     const players = autocoachSummary?.players || [];
     const demos = autocoachSummary?.demos || [];
     const n = Number(autocoachSummary?.unanalyzedCount) || 0;
+    const selectedCount = autocoachSelectedDemos.size;
+    const analyzedCount = demos.filter((d) => d.analyzed).length;
+    const reviewDemo = demos.find((d) => d.id === autocoachReviewDemoId) || null;
+    const reviewPlayers = reviewDemo?.players?.length
+      ? reviewDemo.players
+      : players;
+
     const playerRows = players.length
       ? players
           .map((p) => {
@@ -1273,17 +1283,25 @@ export function initTeamView({ auth, escapeHtml }) {
             </button>`;
           })
           .join('')
-      : '<p class="tm-note">No coach notes yet. Analyze demos to begin.</p>';
+      : '<p class="tm-note">No demos with this team name yet.</p>';
 
-    const demoRows = demos.length
-      ? demos
+    const visibleDemos = autocoachSelectedPlayer
+      ? demos.filter((d) => (d.players || []).some((p) => p.id === autocoachSelectedPlayer))
+      : demos;
+
+    const demoRows = visibleDemos.length
+      ? visibleDemos
           .map((d) => {
             const title = `${d.name1} vs ${d.name2}`;
             const score = `${d.score1}-${d.score2}`;
             const badge = d.analyzed
               ? '<span class="tm-ac-badge done">Analyzed</span>'
               : '<span class="tm-ac-badge">Pending</span>';
+            const checked = autocoachSelectedDemos.has(d.id) ? ' checked' : '';
             return `<div class="tm-ac-demo" data-ac-demo="${escapeHtml(d.id)}">
+              <label class="tm-ac-demo-check">
+                <input type="checkbox" data-ac-select="${escapeHtml(d.id)}"${checked} />
+              </label>
               <div class="tm-ac-demo-main">
                 <strong>${escapeHtml(title)}</strong>
                 <span class="tm-ac-demo-meta">${escapeHtml(mapLabel(d.map))} · ${escapeHtml(
@@ -1312,20 +1330,24 @@ export function initTeamView({ auth, escapeHtml }) {
           .join('')
       : '<p class="tm-note">No demos with this team name yet.</p>';
 
-    const reviewPicker = autocoachReviewDemoId
+    const reviewPicker = reviewDemo
       ? `<div class="tm-ac-review-pick">
           <p>Review as</p>
           <div class="tm-ac-review-players">
-            ${players
-              .map(
-                (p) =>
-                  `<button type="button" class="btn btn-sm" data-ac-review-as="${escapeHtml(
-                    p.id
-                  )}" data-ac-review-demo="${escapeHtml(
-                    autocoachReviewDemoId
-                  )}">${escapeHtml(p.name)}</button>`
-              )
-              .join('') || '<span class="tm-note">No players with mistakes yet.</span>'}
+            ${
+              reviewPlayers
+                .map((p) => {
+                  const nMistakes = Number(p.total) || 0;
+                  const label = nMistakes > 0 ? `${p.name} (${nMistakes})` : p.name;
+                  return `<button type="button" class="btn btn-sm${
+                    autocoachSelectedPlayer === p.id ? ' primary' : ''
+                  }" data-ac-review-as="${escapeHtml(p.id)}" data-ac-review-demo="${escapeHtml(
+                    reviewDemo.id
+                  )}">${escapeHtml(label)}</button>`;
+                })
+                .join('') ||
+              '<span class="tm-note">No players on this team in that demo.</span>'
+            }
           </div>
           <button type="button" class="btn btn-sm" data-ac-review-cancel>Cancel</button>
         </div>`
@@ -1344,11 +1366,19 @@ export function initTeamView({ auth, escapeHtml }) {
           }</div>
         </section>
         <section class="tm-card tm-ac-demos">
-          <div class="tm-card-head">
+          <div class="tm-card-head tm-ac-demos-head">
             <h3 class="tm-card-title">Games</h3>
-            <button type="button" class="btn btn-sm primary" data-ac-analyze ${
-              n <= 0 || autocoachBusy ? ' disabled' : ''
-            }>Analyze (${n}) demos</button>
+            <div class="tm-ac-demo-toolbar">
+              <button type="button" class="btn btn-sm primary" data-ac-analyze ${
+                n <= 0 || autocoachBusy ? ' disabled' : ''
+              }>Analyze (${n}) demos</button>
+              <button type="button" class="btn btn-sm" data-ac-reset-selected ${
+                selectedCount <= 0 || autocoachBusy ? ' disabled' : ''
+              }>Reset selected (${selectedCount})</button>
+              <button type="button" class="btn btn-sm" data-ac-reset-all ${
+                analyzedCount <= 0 || autocoachBusy ? ' disabled' : ''
+              }>Reset all</button>
+            </div>
           </div>
           ${
             autocoachBusy
@@ -1374,12 +1404,17 @@ export function initTeamView({ auth, escapeHtml }) {
       autocoachBusy = `Analyzing ${i + 1}/${pending.length}: ${d.name1} vs ${d.name2}`;
       render();
       try {
-        const demo = await fetchDemo(d.id);
+        const wrapped = await fetchDemo(d.id);
+        const demo = wrapped?.demo || wrapped;
         const list = (demo?.rounds || []).map((r) => ({
           ...r,
           map: demo.map,
           tickRate: r.tickRate || demo.tickRate
         }));
+        if (!list.length) {
+          setStatus(`No rounds in ${d.name1} vs ${d.name2}.`, true);
+          continue;
+        }
         await analyzeDemoCoach({
           demoId: d.id,
           side: d.side === 2 ? 2 : 1,
@@ -1403,17 +1438,55 @@ export function initTeamView({ auth, escapeHtml }) {
     setStatus('Autocoach analysis finished.');
   }
 
+  async function runResetAutocoach({ all = false } = {}) {
+    if (!team?.id || autocoachBusy) return;
+    const demoIds = all ? [] : [...autocoachSelectedDemos];
+    if (!all && !demoIds.length) return;
+    const label = all
+      ? 'Reset Autocoach on all analyzed demos? Coach notes for this team will be cleared.'
+      : `Reset Autocoach on ${demoIds.length} selected demo${
+          demoIds.length === 1 ? '' : 's'
+        }? Coach notes will be cleared.`;
+    if (!window.confirm(label)) return;
+    autocoachBusy = all ? 'Resetting all analyses…' : `Resetting ${demoIds.length} demos…`;
+    render();
+    try {
+      const res = await resetTeamAutocoachDemos(team.id, { demoIds, all });
+      autocoachSummary = {
+        players: res.players || [],
+        demos: res.demos || [],
+        unanalyzedCount: Number(res.unanalyzedCount) || 0
+      };
+      if (res.team) team = res.team;
+      autocoachSelectedDemos = new Set();
+      autocoachReviewDemoId = '';
+      setStatus(
+        `Reset ${res.reset || 0} demo${res.reset === 1 ? '' : 's'} (${res.cleared || 0} rounds cleared).`
+      );
+    } catch (err) {
+      setStatus(err.message || 'Could not reset Autocoach.', true);
+    } finally {
+      autocoachBusy = '';
+      render();
+    }
+  }
+
   async function openAutocoachReview(demoId, playerId) {
     const row = (autocoachSummary?.demos || []).find((d) => d.id === demoId);
     if (!row || !playerId) return;
     setStatus('Loading review rounds…');
     try {
-      const demo = await fetchDemo(demoId);
+      const wrapped = await fetchDemo(demoId);
+      const demo = wrapped?.demo || wrapped;
       const all = (demo?.rounds || []).map((r) => ({
         ...r,
         map: demo.map,
         tickRate: r.tickRate || demo.tickRate
       }));
+      if (!all.length) {
+        setStatus('That replay has no rounds yet.', true);
+        return;
+      }
       const kept = [];
       for (const r of all) {
         if (!r.file) continue;
@@ -1423,17 +1496,17 @@ export function initTeamView({ auth, escapeHtml }) {
           kept.push(r);
         }
       }
-      if (!kept.length) {
-        setStatus('No mistake rounds for that player in this demo.', true);
-        return;
-      }
+      // Mistake rounds when they exist; otherwise the full match to watch as that player.
+      const rounds = kept.length ? kept : all;
       if (!viewerModule) {
         viewerModule = await import('../replays/viewer/viewerApp.js');
       }
       const playerName =
-        (autocoachSummary?.players || []).find((p) => p.id === playerId)?.name || playerId;
+        (row.players || []).find((p) => p.id === playerId)?.name ||
+        (autocoachSummary?.players || []).find((p) => p.id === playerId)?.name ||
+        playerId;
       viewerModule.openViewer({
-        rounds: kept,
+        rounds,
         mode: 'timeline',
         title: `Autocoach · ${playerName}`,
         escapeHtml,
@@ -1442,7 +1515,7 @@ export function initTeamView({ auth, escapeHtml }) {
         coachForceSide: row.side === 2 ? 2 : 1,
         coachAutoEnable: true
       });
-      setStatus('');
+      setStatus(kept.length ? '' : `No mistakes for ${playerName} in this demo. Opening full match.`);
     } catch (err) {
       setStatus(err.message || 'Could not open review.', true);
     }
@@ -2011,6 +2084,29 @@ export function initTeamView({ auth, escapeHtml }) {
 
     if (t.closest('[data-ac-analyze]')) {
       void runAnalyzePending();
+      return;
+    }
+    if (t.closest('[data-ac-reset-selected]')) {
+      void runResetAutocoach({ all: false });
+      return;
+    }
+    if (t.closest('[data-ac-reset-all]')) {
+      void runResetAutocoach({ all: true });
+      return;
+    }
+    const acSelect = t.closest('[data-ac-select]');
+    if (acSelect) {
+      const id = acSelect.dataset.acSelect || '';
+      if (!id) return;
+      // Checkbox state is already toggled when this click handler runs.
+      if (acSelect.checked) autocoachSelectedDemos.add(id);
+      else autocoachSelectedDemos.delete(id);
+      const btn = shellEl.querySelector('[data-ac-reset-selected]');
+      if (btn) {
+        const count = autocoachSelectedDemos.size;
+        btn.textContent = `Reset selected (${count})`;
+        btn.disabled = count <= 0 || Boolean(autocoachBusy);
+      }
       return;
     }
     const acPlayer = t.closest('[data-ac-player]');

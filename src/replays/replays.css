@@ -5405,6 +5405,18 @@ table.rp-mine-table tbody tr {
   color: #eb5757;
 }
 
+.tm-ac-demos-head {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tm-ac-demo-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
 .tm-ac-demo {
   display: flex;
   align-items: center;
@@ -5415,11 +5427,20 @@ table.rp-mine-table tbody tr {
   border-radius: var(--radius-sm);
 }
 
+.tm-ac-demo-check {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin: 0;
+  cursor: pointer;
+}
+
 .tm-ac-demo-main {
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .tm-ac-demo-meta {

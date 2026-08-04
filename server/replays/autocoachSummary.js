@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // replays/autocoachSummary.js
 // Build the Autocoach team page payload: players with mark tallies + demos
-// that match the team name, analyzed or not.
+// that match the team name, analyzed or not. Coach notes on our roster side
+// are mistakes.
 // ---------------------------------------------------------------------------
 
 import { SHARED_LIBRARY } from './auth.js';
@@ -9,7 +10,8 @@ import {
   listDemos,
   listNotedRounds,
   normalizeRoundNotes,
-  readRoundMeta
+  readRoundMeta,
+  writeRoundNotes
 } from './demoStore.js';
 import { autocoachDemosOf } from './teamsStore.js';
 
@@ -17,6 +19,33 @@ function teamNameKey(name) {
   return String(name || '')
     .trim()
     .toLowerCase();
+}
+
+function emptyPlayer(id, name) {
+  return { id, name: name || id, total: 0, ok: 0, x: 0 };
+}
+
+/**
+ * Players who appeared on our roster seat in this demo (same idea as Overview
+ * ratings: everyone who played under the matching team display name).
+ */
+async function rosterForSide(demo, side) {
+  const file = (demo.rounds || []).find((r) => r?.file)?.file;
+  if (!file) return [];
+  let meta = null;
+  try {
+    meta = await readRoundMeta(SHARED_LIBRARY, file);
+  } catch {
+    return [];
+  }
+  const out = [];
+  const seen = new Set();
+  for (const p of meta?.players || []) {
+    if (!p?.id || p.team !== side || seen.has(p.id)) continue;
+    seen.add(p.id);
+    out.push({ id: p.id, name: p.name || p.id });
+  }
+  return out;
 }
 
 /**
@@ -60,8 +89,8 @@ export async function buildAutocoachSummary(team) {
     const side = teamNameKey(demo.team1?.name) === want ? 1 : 2;
     const entry = analyzed[demo.id] || null;
     const stems = notedByDemo.get(demo.id) || [];
-    let coachNotes = 0;
-    let playerMistakes = 0;
+    const roster = await rosterForSide(demo, side);
+    const perDemo = new Map(roster.map((p) => [p.id, emptyPlayer(p.id, p.name)]));
 
     for (const stem of stems) {
       let meta = null;
@@ -74,29 +103,41 @@ export async function buildAutocoachSummary(team) {
       const nameOf = new Map((meta.players || []).map((p) => [p.id, p]));
       for (const n of normalizeRoundNotes(meta)) {
         if (n.kind !== 'coach') continue;
-        coachNotes++;
         const pid = n.playerId;
         if (!pid) continue;
         const seat = nameOf.get(pid);
-        // Count mistakes attributed to players on our side (or unseated).
-        if (seat && seat.team && seat.team !== side) continue;
-        playerMistakes++;
-        const bag = players.get(pid) || {
-          id: pid,
-          name: seat?.name || pid,
-          total: 0,
-          ok: 0,
-          x: 0
-        };
-        if (seat?.name) bag.name = seat.name;
+        // Only mistakes by players on our roster side.
+        if (!seat || seat.team !== side) continue;
+
+        const bag = perDemo.get(pid) || emptyPlayer(pid, seat.name || pid);
+        if (seat.name) bag.name = seat.name;
         bag.total++;
         if (n.mark === 'ok') bag.ok++;
         if (n.mark === 'x') bag.x++;
-        players.set(pid, bag);
+        perDemo.set(pid, bag);
+
+        const global = players.get(pid) || emptyPlayer(pid, bag.name);
+        if (bag.name) global.name = bag.name;
+        global.total++;
+        if (n.mark === 'ok') global.ok++;
+        if (n.mark === 'x') global.x++;
+        players.set(pid, global);
       }
     }
 
-    const isAnalyzed = Boolean(entry) || coachNotes > 0;
+    // Roster players with zero mistakes still belong on the team list / Review.
+    for (const p of roster) {
+      if (!players.has(p.id)) players.set(p.id, emptyPlayer(p.id, p.name));
+      else if (p.name && players.get(p.id).name === p.id) players.get(p.id).name = p.name;
+    }
+
+    const demoPlayers = [...perDemo.values()].sort(
+      (a, b) => b.total - a.total || a.name.localeCompare(b.name)
+    );
+    const mistakeCount = demoPlayers.reduce((n, p) => n + p.total, 0);
+    // Analyzed means we ran (or restored) a pass for this team — registry wins.
+    // Notes alone also count so older demos coached in the viewer stay marked.
+    const isAnalyzed = Boolean(entry) || mistakeCount > 0;
     const score = demo.score || { team1: 0, team2: 0 };
     demos.push({
       id: demo.id,
@@ -109,7 +150,8 @@ export async function buildAutocoachSummary(team) {
       side,
       analyzed: isAnalyzed,
       analyzedAt: entry?.analyzedAt || 0,
-      mistakeCount: playerMistakes,
+      mistakeCount,
+      players: demoPlayers,
       uploadedAt: Number(demo.uploadedAt || demo.parsedAt || 0) || 0
     });
   }
@@ -121,4 +163,42 @@ export async function buildAutocoachSummary(team) {
   const unanalyzedCount = demos.filter((d) => !d.analyzed).length;
 
   return { players: playerList, demos, unanalyzedCount };
+}
+
+/**
+ * Strip coach notes from the given demos' rounds so analysis can run again.
+ * User notes are kept.
+ * @param {string[]} demoIds
+ * @returns {Promise<number>} rounds cleared
+ */
+export async function clearCoachNotesForDemos(demoIds) {
+  const want = new Set(
+    (Array.isArray(demoIds) ? demoIds : [])
+      .map((id) => String(id || '').replace(/[^A-Za-z0-9_-]/g, ''))
+      .filter(Boolean)
+  );
+  if (!want.size) return 0;
+
+  const records = await listDemos(SHARED_LIBRARY);
+  let cleared = 0;
+  for (const demo of records) {
+    if (!want.has(demo.id)) continue;
+    for (const r of demo.rounds || []) {
+      const file = r?.file;
+      if (!file) continue;
+      let meta = null;
+      try {
+        meta = await readRoundMeta(SHARED_LIBRARY, file);
+      } catch {
+        continue;
+      }
+      if (!meta) continue;
+      const before = normalizeRoundNotes(meta);
+      if (!before.some((n) => n.kind === 'coach')) continue;
+      const next = before.filter((n) => n.kind !== 'coach');
+      await writeRoundNotes(SHARED_LIBRARY, file, { notes: next });
+      cleared++;
+    }
+  }
+  return cleared;
 }

@@ -620,7 +620,7 @@ export async function deleteStrategy(actor, teamId, strategyId) {
   });
 }
 
-/** Mark a demo as Autocoach-analyzed for this team (idempotent; never re-runs). */
+/** Mark a demo as Autocoach-analyzed for this team (idempotent until reset). */
 export async function markAutocoachDemo(actor, teamId, demoId, side) {
   return updateTeam(teamId, (t) => {
     if (!isMember(t, actor.id)) throw denied('You are not on that team.');
@@ -635,6 +635,26 @@ export async function markAutocoachDemo(actor, teamId, demoId, side) {
       analyzedAt: Date.now(),
       analyzedBy: actor.id
     };
+  });
+}
+
+/**
+ * Drop Autocoach registry entries so demos can be analyzed again.
+ * @param {string[]|'all'} demoIds
+ */
+export async function unmarkAutocoachDemos(actor, teamId, demoIds) {
+  return updateTeam(teamId, (t) => {
+    if (!isMember(t, actor.id)) throw denied('You are not on that team.');
+    t.autocoach = t.autocoach && typeof t.autocoach === 'object' ? t.autocoach : { demos: {} };
+    t.autocoach.demos = t.autocoach.demos || {};
+    if (demoIds === 'all') {
+      t.autocoach.demos = {};
+      return;
+    }
+    const ids = (Array.isArray(demoIds) ? demoIds : [])
+      .map((id) => String(id || '').replace(/[^A-Za-z0-9_-]/g, ''))
+      .filter(Boolean);
+    for (const id of ids) delete t.autocoach.demos[id];
   });
 }
 
