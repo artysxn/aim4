@@ -713,8 +713,8 @@ export function initTeamView({ auth, escapeHtml }) {
 
   function applyOverviewMapToStats() {
     if (!overviewStatsPanel?.applyView) return;
+    // Maps only — do not reset Players/Teams; remounts and map picks used to force Teams.
     overviewStatsPanel.applyView({
-      tab: 'teams',
       maps: overviewMapFilter || []
     });
   }
@@ -1873,7 +1873,8 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
 
-    const side = t.closest('[data-side]');
+    // Roles page only — stats Side chips also use data-side and must not remount Overview.
+    const side = page === 'team-roles' ? t.closest('[data-side]') : null;
     if (side) {
       rolesSide = side.dataset.side === 'CT' ? 'CT' : 'T';
       render();

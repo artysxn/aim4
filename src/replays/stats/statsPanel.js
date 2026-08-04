@@ -19,7 +19,14 @@ import {
   roleHowText
 } from '../roles/regionKeys.js';
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
-import { aggregatePlayers, aggregateTeams, allRows, indexMaps } from '../shared/statsMath.js';
+import {
+  aggregatePlayers,
+  aggregateTeams,
+  allRows,
+  indexMaps,
+  rowPasses,
+  teamNameKey
+} from '../shared/statsMath.js';
 import {
   PLAYER_COLUMNS,
   PLAYER_FIXED_BASE,
@@ -28,21 +35,30 @@ import {
   attachTips,
   bindStatsHScroll,
   playerColumnsWithRoles,
+  playerMatchColumns,
+  teamMatchColumns,
   statsTableHtml
 } from './statsTables.js';
 import { spinnerHtml } from '../../lib/spinner.js';
 
 /**
- * @param {{escapeHtml: (s: string) => string}} deps
+ * @param {{
+ *   escapeHtml: (s: string) => string,
+ *   onDetailChange?: (detail: null | { kind: 'player'|'team', id?: string, name?: string, label: string }) => void
+ * }} deps
  */
-export function createStatsPanel({ escapeHtml }) {
+export function createStatsPanel({ escapeHtml, onDetailChange }) {
   const el = document.createElement('div');
   el.className = 'st-panel';
   el.innerHTML = `
     <div class="st-head">
-      <div class="st-tabs">
-        <button type="button" class="seg-tab active" data-tab="players">Players</button>
-        <button type="button" class="seg-tab" data-tab="teams">Teams</button>
+      <div class="st-head-main">
+        <button type="button" class="btn btn-sm st-back" data-st-back hidden>Back</button>
+        <div class="st-tabs">
+          <button type="button" class="seg-tab active" data-tab="players">Players</button>
+          <button type="button" class="seg-tab" data-tab="teams">Teams</button>
+        </div>
+        <span class="st-detail-label" id="st-detail-label" hidden></span>
       </div>
       <span class="st-scope" id="st-scope"></span>
     </div>
@@ -52,6 +68,9 @@ export function createStatsPanel({ escapeHtml }) {
   const filtersEl = el.querySelector('#st-filters');
   const bodyEl = el.querySelector('#st-body');
   const scopeEl = el.querySelector('#st-scope');
+  const tabsEl = el.querySelector('.st-tabs');
+  const backEl = el.querySelector('[data-st-back]');
+  const detailLabelEl = el.querySelector('#st-detail-label');
 
   let payload = null;
   let scope = {};
@@ -61,6 +80,10 @@ export function createStatsPanel({ escapeHtml }) {
   let sort = { players: { key: 'rating', dir: 'desc' }, teams: { key: 'avgRating', dir: 'desc' } };
   let page = { players: 1, teams: 1 };
   let loadToken = 0;
+  /** @type {null | { kind: 'player', id: string, label: string } | { kind: 'team', name: string, label: string }} */
+  let detail = null;
+  let detailSort = { key: 'date', dir: 'desc' };
+  let detailPage = 1;
 
   const filter = {
     maps: [],
@@ -238,18 +261,23 @@ export function createStatsPanel({ escapeHtml }) {
       <button type="button" class="btn btn-sm st-filter-clear" data-clear>Clear</button>`;
   }
 
+  function resetListPage() {
+    if (detail) detailPage = 1;
+    else page[tab] = 1;
+  }
+
   filtersEl.addEventListener('click', (e) => {
     const side = e.target.closest('[data-side]');
     if (side) {
       filter.side = filter.side === side.dataset.side ? '' : side.dataset.side;
-      page[tab] = 1;
+      resetListPage();
       render();
       return;
     }
     const result = e.target.closest('[data-result]');
     if (result) {
       filter.result = filter.result === result.dataset.result ? '' : result.dataset.result;
-      page[tab] = 1;
+      resetListPage();
       render();
       return;
     }
@@ -257,7 +285,7 @@ export function createStatsPanel({ escapeHtml }) {
     if (adv) {
       filter.advantage =
         filter.advantage === adv.dataset.advantage ? '' : adv.dataset.advantage;
-      page[tab] = 1;
+      resetListPage();
       render();
       return;
     }
@@ -272,7 +300,7 @@ export function createStatsPanel({ escapeHtml }) {
       filter.advantage = '';
       filter.role = null;
       filter.minRounds = 0;
-      page[tab] = 1;
+      resetListPage();
       render();
     }
   });
@@ -282,7 +310,7 @@ export function createStatsPanel({ escapeHtml }) {
     if (awp) {
       filter[awp.dataset.awp] = Boolean(awp.checked);
       awp.closest('.rp-awp-toggle')?.classList.toggle('active', awp.checked);
-      page[tab] = 1;
+      resetListPage();
       render();
       return;
     }
@@ -291,7 +319,7 @@ export function createStatsPanel({ escapeHtml }) {
       const side = roleSel.dataset.roleFilter === 'CT' ? 'CT' : 'T';
       const value = roleSel.value || '';
       filter.role = value ? { side, value } : null;
-      page[tab] = 1;
+      resetListPage();
       render();
       return;
     }
@@ -300,7 +328,7 @@ export function createStatsPanel({ escapeHtml }) {
     if (sel.dataset.filter === 'maps') {
       filter.maps = sel.value ? [sel.value] : [];
       filter.role = null;
-      page[tab] = 1;
+      resetListPage();
       render();
       return;
     }
@@ -308,47 +336,123 @@ export function createStatsPanel({ escapeHtml }) {
       const n = Math.max(0, Math.floor(Number(sel.value) || 0));
       filter.minRounds = n;
       sel.value = String(n);
-      page[tab] = 1;
+      resetListPage();
       render();
       return;
     }
     const value = sel.value === '' ? null : Number(sel.value);
     filter[sel.dataset.filter] = value;
-    page[tab] = 1;
+    resetListPage();
     render();
   });
 
-  el.querySelector('.st-tabs').addEventListener('click', (e) => {
+  tabsEl.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-tab]');
-    if (!btn || btn.dataset.tab === tab) return;
+    if (!btn || btn.dataset.tab === tab || detail) return;
     tab = btn.dataset.tab;
     el.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
     render();
   });
 
+  backEl.addEventListener('click', () => {
+    clearDetail();
+    render();
+  });
+
   bodyEl.addEventListener('click', (e) => {
+    const playerBtn = e.target.closest('[data-st-player]');
+    if (playerBtn) {
+      openPlayerDetail(playerBtn.dataset.stPlayer, playerBtn.textContent || '');
+      return;
+    }
+    const teamBtn = e.target.closest('[data-st-team]');
+    if (teamBtn) {
+      openTeamDetail(teamBtn.dataset.stTeam, teamBtn.textContent || '');
+      return;
+    }
     const pageBtn = e.target.closest('[data-page]');
     if (pageBtn) {
       if (pageBtn.disabled) return;
       const next = Number(pageBtn.dataset.page);
       if (!Number.isFinite(next) || next < 1) return;
-      page[tab] = next;
+      if (detail) detailPage = next;
+      else page[tab] = next;
       render();
       return;
     }
     const th = e.target.closest('[data-sort]');
     if (!th) return;
-    const s = sort[tab];
+    const s = detail ? detailSort : sort[tab];
     if (s.key === th.dataset.sort) s.dir = s.dir === 'desc' ? 'asc' : 'desc';
     else {
       s.key = th.dataset.sort;
-      s.dir = th.dataset.sort === 'name' || th.dataset.sort === 'team' ? 'asc' : 'desc';
+      s.dir =
+        th.dataset.sort === 'name' ||
+        th.dataset.sort === 'team' ||
+        th.dataset.sort === 'map' ||
+        th.dataset.sort === 'opponent' ||
+        th.dataset.sort === 'result'
+          ? 'asc'
+          : 'desc';
     }
-    page[tab] = 1;
+    if (detail) detailPage = 1;
+    else page[tab] = 1;
     render();
   });
 
   // ---- render -------------------------------------------------------------
+
+  function notifyDetail() {
+    onDetailChange?.(detail);
+  }
+
+  function clearDetail() {
+    detail = null;
+    detailPage = 1;
+    detailSort = { key: 'date', dir: 'desc' };
+    notifyDetail();
+  }
+
+  function openPlayerDetail(id, label) {
+    const pid = String(id || '').trim();
+    if (!pid) return;
+    detail = { kind: 'player', id: pid, label: String(label || pid).trim() || pid };
+    detailPage = 1;
+    detailSort = { key: 'date', dir: 'desc' };
+    tab = 'players';
+    el.querySelectorAll('[data-tab]').forEach((b) =>
+      b.classList.toggle('active', b.dataset.tab === 'players')
+    );
+    notifyDetail();
+    render();
+  }
+
+  function openTeamDetail(name, label) {
+    const team = String(name || '').trim();
+    if (!team || team === '—' || team === 'Multiple') return;
+    detail = { kind: 'team', name: team, label: String(label || team).trim() || team };
+    detailPage = 1;
+    detailSort = { key: 'date', dir: 'desc' };
+    tab = 'teams';
+    el.querySelectorAll('[data-tab]').forEach((b) =>
+      b.classList.toggle('active', b.dataset.tab === 'teams')
+    );
+    notifyDetail();
+    render();
+  }
+
+  function syncHead() {
+    const inDetail = Boolean(detail);
+    backEl.hidden = !inDetail;
+    tabsEl.hidden = inDetail;
+    detailLabelEl.hidden = !inDetail;
+    if (inDetail) {
+      const kind = detail.kind === 'team' ? 'Team' : 'Player';
+      detailLabelEl.textContent = `${kind} · ${detail.label}`;
+    } else {
+      detailLabelEl.textContent = '';
+    }
+  }
 
   function enrichedPlayers(rows, players, active, demos) {
     const data = aggregatePlayers(rows, players, active, demos);
@@ -357,8 +461,148 @@ export function createStatsPanel({ escapeHtml }) {
     return withRoles.filter((p) => playerMatchesRoleFilter(p, filter.role));
   }
 
+  function mapLabel(demo) {
+    return demo.mapName || MAPS[demo.map]?.name || demo.map || '—';
+  }
+
+  function filteredScore(demo, team, active, players) {
+    let mine = 0;
+    let theirs = 0;
+    for (const row of demo.rounds || []) {
+      if (!rowPasses(row, active, team, players)) continue;
+      if (row.w === team) mine++;
+      else if (row.w === 1 || row.w === 2) theirs++;
+    }
+    return { mine, theirs, label: `${mine}:${theirs}`, sort: mine - theirs };
+  }
+
+  function buildPlayerMatchRows(playerId, active, players, demos) {
+    const out = [];
+    for (const demo of payload.demos || []) {
+      const seat = (demo.players || []).find((p) => p.id === playerId);
+      if (!seat) continue;
+      const team = seat.team === 2 ? 2 : 1;
+      let agg = aggregatePlayers(demo.rounds || [], players, active, demos).find(
+        (p) => p.id === playerId
+      );
+      if (!agg || !(agg.rounds > 0)) continue;
+      if (filter.role) {
+        const withRoles = attachPlayerRoles([agg], { demos: [demo] }, active);
+        agg = withRoles[0] || agg;
+        if (!playerMatchesRoleFilter(agg, filter.role)) continue;
+      }
+      const score = filteredScore(demo, team, active, players);
+      const opp = team === 1 ? demo.name2 : demo.name1;
+      out.push({
+        ...agg,
+        demoId: demo.id,
+        map: demo.map || '',
+        mapName: mapLabel(demo),
+        scoreLabel: score.label,
+        scoreSort: score.sort,
+        result: demo.winner === team ? 'W' : demo.winner ? 'L' : '—',
+        opponent: opp || '—',
+        uploadedAt: demo.uploadedAt || 0
+      });
+    }
+    return out;
+  }
+
+  function buildTeamMatchRows(teamName, active, players, demos) {
+    const key = teamNameKey(teamName);
+    if (!key) return [];
+    const out = [];
+    for (const demo of payload.demos || []) {
+      const side =
+        teamNameKey(demo.name1) === key ? 1 : teamNameKey(demo.name2) === key ? 2 : 0;
+      if (!side) continue;
+      const agg = aggregateTeams(demo.rounds || [], players, demos, {
+        ...active,
+        teamName
+      }).find((t) => teamNameKey(t.name) === key);
+      if (!agg || !(agg.rounds > 0)) continue;
+      const score = filteredScore(demo, side, active, players);
+      const opp = side === 1 ? demo.name2 : demo.name1;
+      out.push({
+        ...agg,
+        demoId: demo.id,
+        map: demo.map || '',
+        mapName: mapLabel(demo),
+        scoreLabel: score.label,
+        scoreSort: score.sort,
+        result: demo.winner === side ? 'W' : demo.winner ? 'L' : '—',
+        opponent: opp || '—',
+        uploadedAt: demo.uploadedAt || 0
+      });
+    }
+    return out;
+  }
+
+  function playerNameCell(r) {
+    return `<button type="button" class="st-link" data-st-player="${escapeHtml(
+      r.id
+    )}">${escapeHtml(r.name)}</button>`;
+  }
+
+  function playerTeamCell(r) {
+    const teams = r.teams || [];
+    if (teams.length !== 1) {
+      const text = r.teamLabel || '—';
+      return r.teams?.length > 1 ? `<em>${escapeHtml(text)}</em>` : escapeHtml(text);
+    }
+    const name = teams[0].name;
+    return `<button type="button" class="st-link" data-st-team="${escapeHtml(
+      name
+    )}">${escapeHtml(name)}</button>`;
+  }
+
+  function teamNameCell(r) {
+    return `<button type="button" class="st-link" data-st-team="${escapeHtml(
+      r.name
+    )}">${escapeHtml(r.name)}</button>`;
+  }
+
+  function renderDetail(active, players, demos) {
+    if (detail.kind === 'player') {
+      let data = buildPlayerMatchRows(detail.id, active, players, demos);
+      if (detail.label === detail.id) {
+        const named = data.find((r) => r.name);
+        if (named?.name) detail.label = named.name;
+      }
+      const cols = playerMatchColumns();
+      bodyEl.innerHTML = statsTableHtml(data, {
+        columns: cols.columns,
+        fixedCount: cols.fixedCount,
+        escapeHtml,
+        sortKey: detailSort.key,
+        sortDir: detailSort.dir,
+        page: detailPage,
+        pageSize: STATS_PAGE_SIZE,
+        showAverage: true
+      });
+      return;
+    }
+    let data = buildTeamMatchRows(detail.name, active, players, demos);
+    if (detail.label === detail.name) {
+      const named = data.find((r) => r.name);
+      if (named?.name) detail.label = named.name;
+    }
+    const cols = teamMatchColumns();
+    bodyEl.innerHTML = statsTableHtml(data, {
+      columns: cols.columns,
+      fixedCount: cols.fixedCount,
+      escapeHtml,
+      sortKey: detailSort.key,
+      sortDir: detailSort.dir,
+      page: detailPage,
+      pageSize: STATS_PAGE_SIZE,
+      showAverage: true
+    });
+  }
+
   function render() {
     if (!payload) return;
+    syncHead();
     renderFilters();
     const { players, demos } = indexMaps(payload);
     const rows = allRows(payload);
@@ -367,6 +611,14 @@ export function createStatsPanel({ escapeHtml }) {
       files: scope.files || null,
       ...(lockedTeamName ? { teamName: lockedTeamName } : {})
     };
+
+    if (detail) {
+      renderDetail(active, players, demos);
+      syncHead();
+      bindStatsHScroll(bodyEl);
+      return;
+    }
+
     const mode = roleMode();
     const playerCols = mode
       ? playerColumnsWithRoles(mode)
@@ -393,7 +645,10 @@ export function createStatsPanel({ escapeHtml }) {
           sortKey: sort.players.key,
           sortDir: sort.players.dir,
           page: page.players,
-          pageSize: STATS_PAGE_SIZE
+          pageSize: STATS_PAGE_SIZE,
+          showAverage: true,
+          nameCell: playerNameCell,
+          teamCell: playerTeamCell
         });
       }
     } else {
@@ -407,7 +662,9 @@ export function createStatsPanel({ escapeHtml }) {
         sortKey: sort.teams.key,
         sortDir: sort.teams.dir,
         page: page.teams,
-        pageSize: STATS_PAGE_SIZE
+        pageSize: STATS_PAGE_SIZE,
+        showAverage: true,
+        nameCell: teamNameCell
       });
     }
     bindStatsHScroll(bodyEl);
@@ -446,7 +703,16 @@ export function createStatsPanel({ escapeHtml }) {
   }
 
   /**
-   * @param {{demos?: string[], files?: string[], title?: string, teamName?: string, maps?: string[], tab?: 'players'|'teams'}} next
+   * @param {{
+   *   demos?: string[],
+   *   files?: string[],
+   *   title?: string,
+   *   teamName?: string,
+   *   maps?: string[],
+   *   tab?: 'players'|'teams',
+   *   player?: string,
+   *   team?: string
+   * }} next
    */
   async function load(next = {}) {
     const token = ++loadToken;
@@ -469,6 +735,29 @@ export function createStatsPanel({ escapeHtml }) {
       b.classList.toggle('active', b.dataset.tab === tab)
     );
     page = { players: 1, teams: 1 };
+    detailPage = 1;
+    detailSort = { key: 'date', dir: 'desc' };
+    if (next.player) {
+      detail = {
+        kind: 'player',
+        id: String(next.player),
+        label: String(next.playerLabel || next.player)
+      };
+      tab = 'players';
+    } else if (next.team) {
+      detail = {
+        kind: 'team',
+        name: String(next.team),
+        label: String(next.teamLabel || next.team)
+      };
+      tab = 'teams';
+    } else {
+      detail = null;
+    }
+    el.querySelectorAll('[data-tab]').forEach((b) =>
+      b.classList.toggle('active', b.dataset.tab === tab)
+    );
+    notifyDetail();
     try {
       const res = await fetchStats(next.demos || null);
       if (token !== loadToken) return;
@@ -506,7 +795,8 @@ export function createStatsPanel({ escapeHtml }) {
       else filter.maps = [];
       filter.role = null;
     }
-    page[tab] = 1;
+    if (detail) detailPage = 1;
+    else page[tab] = 1;
     if (payload) render();
   }
 
@@ -514,6 +804,10 @@ export function createStatsPanel({ escapeHtml }) {
     el,
     load,
     applyView,
+    openPlayerDetail,
+    openTeamDetail,
+    clearDetail,
+    getDetail: () => detail,
     destroy() {
       detachTips();
       el.remove();

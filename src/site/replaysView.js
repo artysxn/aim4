@@ -2886,11 +2886,30 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   // ---- statistics ---------------------------------------------------------
 
+  function pushStatsDetailUrl(detail) {
+    const path = pagePath('stats');
+    const q = new URLSearchParams();
+    if (detail?.kind === 'player' && detail.id) q.set('player', detail.id);
+    else if (detail?.kind === 'team' && detail.name) q.set('team', detail.name);
+    const search = q.toString();
+    const target = path + (search ? `?${search}` : '');
+    const current = window.location.pathname.replace(/\/+$/, '') + window.location.search;
+    if (current !== target) {
+      window.history.pushState({ page: 'stats' }, '', target);
+    }
+  }
+
   /** Mount the panel on first use and point it at a scope. */
   function openStatsPage(scope) {
     if (!statsBodyEl) return;
     if (!statsPanel) {
-      statsPanel = createStatsPanel({ escapeHtml });
+      statsPanel = createStatsPanel({
+        escapeHtml,
+        onDetailChange(detail) {
+          if (subpage !== 'stats') return;
+          pushStatsDetailUrl(detail);
+        }
+      });
       statsBodyEl.appendChild(statsPanel.el);
     }
     statsPanel.load(scope);
@@ -3101,6 +3120,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         params.page === 'library'
           ? params.page
           : 'library';
+      if (page === 'stats') {
+        const next = { ...statsScope };
+        if (params.player) next.player = String(params.player);
+        else delete next.player;
+        if (params.team) next.team = String(params.team);
+        else delete next.team;
+        statsScope = next;
+      }
       setSubpage(page, { push: false });
       if (
         page === 'playlists' ||

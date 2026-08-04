@@ -3134,6 +3134,73 @@ body.rv-open {
   margin-bottom: 14px;
 }
 
+.st-head-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.st-back {
+  flex: 0 0 auto;
+}
+
+.st-detail-label {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.st-link {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline dotted rgba(255, 255, 255, 0.28);
+  text-underline-offset: 3px;
+}
+
+.st-link:hover {
+  color: var(--text);
+  text-decoration-color: rgba(255, 255, 255, 0.55);
+}
+
+.st-table tfoot .st-avg-row td {
+  border-top: 1px solid var(--border-strong, rgba(255, 255, 255, 0.16));
+  border-bottom: 0;
+  color: var(--muted, rgba(255, 255, 255, 0.62));
+  font-weight: 600;
+  background-color: var(--surface-solid, #19191c);
+}
+
+.st-table tfoot .st-avg-row td.st-sticky {
+  background-color: var(--surface-solid, #19191c);
+}
+
+.st-table tfoot .st-avg-label {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.st-table td.st-result-w {
+  color: #6fcf97;
+  font-weight: 700;
+}
+
+.st-table td.st-result-l {
+  color: #eb5757;
+  font-weight: 700;
+}
+
 .st-tabs {
   display: flex;
   gap: 6px;

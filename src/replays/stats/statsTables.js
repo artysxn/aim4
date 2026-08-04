@@ -28,11 +28,19 @@ const tip = (lines) => lines.filter(Boolean).join('\n');
 
 /** Frozen left columns (before roles). */
 export const PLAYER_FIXED_BASE = [
-  { key: 'name', label: 'Player', align: 'left', get: (p) => p.name.toLowerCase(), cell: null },
+  {
+    key: 'name',
+    label: 'Player',
+    align: 'left',
+    noAvg: true,
+    get: (p) => p.name.toLowerCase(),
+    cell: null
+  },
   {
     key: 'team',
     label: 'Team',
     align: 'left',
+    noAvg: true,
     get: (p) => (p.teamLabel || '').toLowerCase(),
     cell: (p) => p.teamLabel || '—',
     em: (p) => (p.teams?.length || 0) > 1,
@@ -44,16 +52,29 @@ export const PLAYER_FIXED_BASE = [
       );
     }
   },
-  { key: 'rounds', label: 'Rounds', get: (p) => p.rounds, cell: (p) => int(p.rounds) }
+  {
+    key: 'rounds',
+    label: 'Rounds',
+    get: (p) => p.rounds,
+    cell: (p) => int(p.rounds),
+    avgOf: (p) => (Number.isFinite(p.rounds) ? p.rounds : null),
+    avgFormat: int
+  }
 ];
 
-/** Scrollable metric columns (after fixed + optional roles). */
+/**
+ * Scrollable metric columns (after fixed + optional roles).
+ * Order: Rating, Swing, KD, Duel Win%, ADR, KAST, OPKD, Impact, A4R, A4OR,
+ * Opatt, OR, PFW, PFO, Aim, Acc, C°, R%, AA%, 1st%, O%, U%, DT, PSDT, util.
+ */
 export const PLAYER_METRIC_COLUMNS = [
   {
     key: 'rating',
     label: 'Rating',
     get: (p) => p.rating,
     cell: (p) => f2(p.rating),
+    avgOf: (p) => (Number.isFinite(p.rating) ? p.rating : null),
+    avgFormat: f2,
     strong: true,
     tip: (p) =>
       tip([
@@ -65,10 +86,101 @@ export const PLAYER_METRIC_COLUMNS = [
       ])
   },
   {
+    key: 'prwSwing',
+    label: 'Swing',
+    get: (p) => (Number.isFinite(p.prwSwing) ? p.prwSwing : -Infinity),
+    cell: (p) => signed(p.prwSwing),
+    avgOf: (p) => (Number.isFinite(p.prwSwing) ? p.prwSwing : null),
+    avgFormat: signed,
+    tip: (p) =>
+      Number.isFinite(p.prwSwing)
+        ? tip([
+            `Avg PRW swing / round: ${signed(p.prwSwing)}`,
+            `Total swing: ${signed(p.prwSwingTotal)}`,
+            `Rounds with swing data: ${p.prwSwingRounds || 0}`,
+            `Kills / deaths / damage that move predicted win%`
+          ])
+        : 'No PRW swing data. Stats index will rebuild on next library load.'
+  },
+  {
+    key: 'kd',
+    label: 'KD',
+    get: (p) => p.kd,
+    cell: (p) => f2(p.kd),
+    avgOf: (p) => (Number.isFinite(p.kd) ? p.kd : null),
+    avgFormat: f2,
+    tip: (p) => tip([`Kills: ${p.kills}`, `Assists: ${p.assists}`, `Deaths: ${p.deaths}`])
+  },
+  {
+    key: 'tfw',
+    label: 'Duel Win%',
+    get: (p) => (Number.isFinite(p.tfw) ? p.tfw : -Infinity),
+    cell: (p) => pct(p.tfw),
+    avgOf: (p) => (Number.isFinite(p.tfw) ? p.tfw : null),
+    avgFormat: pct,
+    tip: (p) =>
+      Number.isFinite(p.tfw)
+        ? tip([
+            'Total fight winrate.',
+            'Kills as a share of kills plus deaths.',
+            `Kills: ${int(p.kills)}`,
+            `Deaths: ${int(p.deaths)}`
+          ])
+        : '—'
+  },
+  {
+    key: 'adr',
+    label: 'ADR',
+    get: (p) => p.adr,
+    cell: (p) => f2(p.adr),
+    avgOf: (p) => (Number.isFinite(p.adr) ? p.adr : null),
+    avgFormat: f2,
+    tip: (p) =>
+      tip([
+        `ADR in rounds won: ${f2(p.adrWon)}`,
+        `ADR in rounds lost: ${f2(p.adrLost)}`,
+        `Total damage: ${int(p.damage)}`
+      ])
+  },
+  {
+    key: 'kast',
+    label: 'KAST',
+    get: (p) => p.kast,
+    cell: (p) => pct(p.kast),
+    avgOf: (p) => (Number.isFinite(p.kast) ? p.kast : null),
+    avgFormat: pct
+  },
+  {
+    key: 'opkd',
+    label: 'OPKD',
+    get: (p) => p.opkd,
+    cell: (p) =>
+      Number.isFinite(p.opkd) ? `${p.opkd > 0 ? '+' : ''}${Math.round(p.opkd)}` : '—',
+    avgOf: (p) => (Number.isFinite(p.opkd) ? p.opkd : null),
+    avgFormat: (n) => `${n > 0 ? '+' : ''}${Math.round(n)}`,
+    tip: (p) =>
+      tip([
+        Number.isFinite(p.opkRate) ? `Success rate: ${pct(p.opkRate)}` : 'No opening duels',
+        `Opening kills: ${p.openKills}`,
+        `Opening deaths: ${p.openDeaths}`,
+        `Difference: ${p.openKills - p.openDeaths}`
+      ])
+  },
+  {
+    key: 'impact',
+    label: 'Impact',
+    get: (p) => p.impact,
+    cell: (p) => f2(p.impact),
+    avgOf: (p) => (Number.isFinite(p.impact) ? p.impact : null),
+    avgFormat: f2
+  },
+  {
     key: 'a4r',
     label: 'A4R',
     get: (p) => (Number.isFinite(p.a4r) ? p.a4r : -Infinity),
     cell: (p) => f2(p.a4r),
+    avgOf: (p) => (Number.isFinite(p.a4r) ? p.a4r : null),
+    avgFormat: f2,
     strong: true,
     tip: (p) =>
       tip([
@@ -86,6 +198,8 @@ export const PLAYER_METRIC_COLUMNS = [
     label: 'A4OR',
     get: (p) => (Number.isFinite(p.a4or) ? p.a4or : -Infinity),
     cell: (p) => f2(p.a4or),
+    avgOf: (p) => (Number.isFinite(p.a4or) ? p.a4or : null),
+    avgFormat: f2,
     tip: (p) =>
       tip([
         `Aim4 Opening Rating: ${f2(p.a4or)}`,
@@ -95,78 +209,12 @@ export const PLAYER_METRIC_COLUMNS = [
       ])
   },
   {
-    key: 'prwSwing',
-    label: 'Swing',
-    get: (p) => (Number.isFinite(p.prwSwing) ? p.prwSwing : -Infinity),
-    cell: (p) => signed(p.prwSwing),
-    tip: (p) =>
-      Number.isFinite(p.prwSwing)
-        ? tip([
-            `Avg PRW swing / round: ${signed(p.prwSwing)}`,
-            `Total swing: ${signed(p.prwSwingTotal)}`,
-            `Rounds with swing data: ${p.prwSwingRounds || 0}`,
-            `Kills / deaths / damage that move predicted win%`
-          ])
-        : 'No PRW swing data. Stats index will rebuild on next library load.'
-  },
-  {
-    key: 'kd',
-    label: 'KD',
-    get: (p) => p.kd,
-    cell: (p) => f2(p.kd),
-    tip: (p) => tip([`Kills: ${p.kills}`, `Assists: ${p.assists}`, `Deaths: ${p.deaths}`])
-  },
-  {
-    key: 'adr',
-    label: 'ADR',
-    get: (p) => p.adr,
-    cell: (p) => f2(p.adr),
-    tip: (p) =>
-      tip([
-        `ADR in rounds won: ${f2(p.adrWon)}`,
-        `ADR in rounds lost: ${f2(p.adrLost)}`,
-        `Total damage: ${int(p.damage)}`
-      ])
-  },
-  { key: 'kast', label: 'KAST', get: (p) => p.kast, cell: (p) => pct(p.kast) },
-  {
-    key: 'opkd',
-    label: 'OPKD',
-    get: (p) => p.opkd,
-    cell: (p) =>
-      Number.isFinite(p.opkd) ? `${p.opkd > 0 ? '+' : ''}${Math.round(p.opkd)}` : '—',
-    tip: (p) =>
-      tip([
-        Number.isFinite(p.opkRate) ? `Success rate: ${pct(p.opkRate)}` : 'No opening duels',
-        `Opening kills: ${p.openKills}`,
-        `Opening deaths: ${p.openDeaths}`,
-        `Difference: ${p.openKills - p.openDeaths}`
-      ])
-  },
-  { key: 'impact', label: 'Impact', get: (p) => p.impact, cell: (p) => f2(p.impact) },
-  {
-    key: 'accuracy',
-    label: 'Acc',
-    get: (p) => (p.shots > 0 ? p.accuracy : -1),
-    cell: accCell,
-    tip: (p) =>
-      p.shots > 0
-        ? tip([
-            `Shots fired: ${p.shots}`,
-            `Shots hit: ${p.hits}`,
-            `Headshots hit: ${p.headshots}`,
-            `AWP shots fired: ${p.awpShots}`,
-            `AWP shots hit: ${p.awpHits}`,
-            `AWP hit rate: ${p.awpShots > 0 ? pct(p.awpAccuracy) : '—'}`,
-            `AWP Acc: holds within 10° of an enemy with a clear (no smoke) path`
-          ])
-        : 'No hit data. Re-parse this demo to record accuracy.'
-  },
-  {
     key: 'opatt',
-    label: 'OPATT',
+    label: 'Opatt',
     get: (p) => (Number.isFinite(p.opatt) ? p.opatt : -1),
     cell: (p) => (Number.isFinite(p.opatt) ? f2(p.opatt) : '—'),
+    avgOf: (p) => (Number.isFinite(p.opatt) ? p.opatt : null),
+    avgFormat: f2,
     tip: (p) =>
       tip([
         `Opening attempts / round: ${f2(p.opatt)}`,
@@ -177,227 +225,28 @@ export const PLAYER_METRIC_COLUMNS = [
       ])
   },
   {
-    key: 'psdt',
-    label: 'PSDT',
-    get: (p) => (Number.isFinite(p.psdt) ? p.psdt : -1),
-    cell: (p) => (Number.isFinite(p.psdt) ? int(p.psdt) : '—'),
-    tip: (p) =>
-      Number.isFinite(p.psdt)
-        ? tip([
-            `Avg pulled-string distance / round: ${int(p.psdt)}`,
-            `Total PSDT: ${int(p.psdtTotal)}`,
-            `Rounds sampled: ${p.psdtRounds || 0}`,
-            `125u brush — filters ADAD jitter`
-          ])
-        : 'No movement data yet. Reloading Statistics fills PSDT in the background.'
-  },
-  {
-    key: 'dt',
-    label: 'DT',
-    get: (p) => (Number.isFinite(p.dt) ? p.dt : -1),
-    cell: (p) => (Number.isFinite(p.dt) ? int(p.dt) : '—'),
-    tip: (p) =>
-      Number.isFinite(p.dt)
-        ? tip([
-            `Avg distance travelled / round: ${int(p.dt)}`,
-            `Total DT: ${int(p.dtTotal)}`,
-            `Rounds sampled: ${p.dtRounds || 0}`,
-            `Raw path length (resets on death)`
-          ])
-        : 'No movement data yet. Reloading Statistics fills DT in the background.'
-  },
-
-  // ---- aim and utility effectiveness (stats index v11) --------------------
-  //
-  // All four are computed from ticks and events already on disk, so they arrive
-  // with a stats rebuild rather than a reparse. A dash means "not enough sample
-  // yet" and never "zero": claiming 0.0 damage per HE for someone who has not
-  // thrown one is worse than admitting we do not know.
-  {
-    key: 'a4aim',
-    label: 'Aim',
-    get: (p) => (Number.isFinite(p.a4aim) ? p.a4aim : -1),
-    cell: (p) => (Number.isFinite(p.a4aim) ? f1(p.a4aim) : '—'),
-    strong: true,
-    tip: (p) =>
-      Number.isFinite(p.a4aim)
-        ? tip([
-            `Aim rating: ${f1(p.a4aim)} / 100`,
-            `Crosshair placement: ${
-              Number.isFinite(p.aimRaw?.crosshairError)
-                ? `${f1(-p.aimRaw.crosshairError)}°`
-                : '—'
-            } (${f0(p.aimComponents?.crosshairError)})`,
-            `Ready for the fight: ${pct1(p.aimRaw?.readyRate)} (${f0(p.aimComponents?.readyRate)})`,
-            `Accuracy, no smoke shots: ${pct1(p.aimRaw?.accuracy)} (${f0(p.aimComponents?.accuracy)})`,
-            `First bullet: ${pct1(p.aimRaw?.firstBullet)} (${f0(p.aimComponents?.firstBullet)})`,
-            `Overflick: ${pct1(p.aimRaw?.overflick)} (${p.aimSample?.overflick || 0})`,
-            `Underflick: ${pct1(p.aimRaw?.underflick)} (${p.aimSample?.underflick || 0})`,
-            `Sample: ${p.aimSample?.crosshairError || 0} engagements, ${p.aimSample?.accuracy || 0} shots`
-          ])
-        : 'Not enough sampled duels yet for an aim rating.'
-  },
-  {
-    key: 'aimCrosshair',
-    label: 'Crosshair°',
-    // Negative degrees so lower-is-better sorts correctly under default desc.
+    key: 'opkRate',
+    label: 'OR',
     get: (p) =>
-      Number.isFinite(p.aimRaw?.crosshairError) ? -p.aimRaw.crosshairError : 1,
-    cell: (p) =>
-      Number.isFinite(p.aimRaw?.crosshairError) ? f1(-p.aimRaw.crosshairError) : '—',
-    tip: (p) =>
-      Number.isFinite(p.aimRaw?.crosshairError)
-        ? tip([
-            `Mean yaw error when engaged: ${f1(-p.aimRaw.crosshairError)}°`,
-            `Component score: ${f0(p.aimComponents?.crosshairError)} / 100`,
-            `Sample: ${p.aimSample?.crosshairError || 0} engagements`,
-            'Negative because lower error is better. ~−30° is average.'
-          ])
-        : 'Not enough engagements yet.'
-  },
-  {
-    key: 'aimReady',
-    label: 'Ready%',
-    get: (p) =>
-      Number.isFinite(p.aimRaw?.readyRate) ? p.aimRaw.readyRate * 100 : -1,
-    cell: (p) => (Number.isFinite(p.aimRaw?.readyRate) ? pct1(p.aimRaw.readyRate) : '—'),
-    tip: (p) =>
-      Number.isFinite(p.aimRaw?.readyRate)
-        ? tip([
-            `Already in the cone when engaged: ${pct1(p.aimRaw.readyRate)}`,
-            `Component score: ${f0(p.aimComponents?.readyRate)} / 100`,
-            `Sample: ${p.aimSample?.readyRate || 0} engagements`,
-            'Typical band ~60–70%. A few points move the aim rating a lot.'
-          ])
-        : 'Not enough engagements yet.'
-  },
-  {
-    key: 'aimAcc',
-    label: 'Aim acc%',
-    get: (p) => (Number.isFinite(p.aimRaw?.accuracy) ? p.aimRaw.accuracy * 100 : -1),
-    cell: (p) => (Number.isFinite(p.aimRaw?.accuracy) ? pct1(p.aimRaw.accuracy) : '—'),
-    tip: (p) =>
-      Number.isFinite(p.aimRaw?.accuracy)
-        ? tip([
-            `Hits / shots (smoke shots excluded): ${pct1(p.aimRaw.accuracy)}`,
-            `Component score: ${f0(p.aimComponents?.accuracy)} / 100`,
-            `Sample: ${p.aimSample?.accuracy || 0} shots`,
-            'High variance by weapon and role (~15–40%).'
-          ])
-        : 'Not enough sampled shots yet.'
-  },
-  {
-    key: 'aimFirst',
-    label: '1st bullet%',
-    get: (p) =>
-      Number.isFinite(p.aimRaw?.firstBullet) ? p.aimRaw.firstBullet * 100 : -1,
-    cell: (p) => (Number.isFinite(p.aimRaw?.firstBullet) ? pct1(p.aimRaw.firstBullet) : '—'),
-    tip: (p) =>
-      Number.isFinite(p.aimRaw?.firstBullet)
-        ? tip([
-            `First bullet hit when enemy was in the cone: ${pct1(p.aimRaw.firstBullet)}`,
-            `Component score: ${f0(p.aimComponents?.firstBullet)} / 100`,
-            `Sample: ${p.aimSample?.firstBullet || 0} first bullets`,
-            'High variance (~15–50%).'
-          ])
-        : 'Not enough first-bullet samples yet.'
-  },
-  {
-    key: 'aimOverflick',
-    label: 'Overflick%',
-    // Lower is better → negate so default desc still puts the tidy aimers first.
-    get: (p) =>
-      Number.isFinite(p.aimRaw?.overflick) ? -p.aimRaw.overflick * 100 : 1,
-    cell: (p) => (Number.isFinite(p.aimRaw?.overflick) ? pct1(p.aimRaw.overflick) : '—'),
-    tip: (p) =>
-      Number.isFinite(p.aimRaw?.overflick)
-        ? tip([
-            `First-bullet misses that went past the enemy: ${pct1(p.aimRaw.overflick)} of cone engagements`,
-            `Count: ${p.aimSample?.overflick || 0} overflicks`,
-            `Sample: ${p.aimSample?.firstBullet || 0} first-bullet engagements`,
-            'Yaw at shot vs enemy, relative to yaw ~0.2s earlier.'
-          ])
-        : 'Not enough first-bullet samples yet.'
-  },
-  {
-    key: 'aimUnderflick',
-    label: 'Underflick%',
-    get: (p) =>
-      Number.isFinite(p.aimRaw?.underflick) ? -p.aimRaw.underflick * 100 : 1,
-    cell: (p) => (Number.isFinite(p.aimRaw?.underflick) ? pct1(p.aimRaw.underflick) : '—'),
-    tip: (p) =>
-      Number.isFinite(p.aimRaw?.underflick)
-        ? tip([
-            `First-bullet misses that stopped short of the enemy: ${pct1(p.aimRaw.underflick)} of cone engagements`,
-            `Count: ${p.aimSample?.underflick || 0} underflicks`,
-            `Sample: ${p.aimSample?.firstBullet || 0} first-bullet engagements`,
-            'Yaw at shot vs enemy, relative to yaw ~0.2s earlier.'
-          ])
-        : 'Not enough first-bullet samples yet.'
-  },
-  {
-    key: 'heDmg',
-    label: 'HE dmg',
-    get: (p) => (p.heThrown > 0 ? p.heDmgPerNade : -1),
-    cell: (p) => (p.heThrown > 0 ? f1(p.heDmgPerNade) : '—'),
-    tip: (p) =>
-      p.heThrown > 0
-        ? tip([
-            `Damage per HE thrown: ${f1(p.heDmgPerNade)}`,
-            `${p.heDamage} damage from ${p.heThrown} HE`,
-            'Enemy damage only. Team and self damage never count.'
-          ])
-        : 'No HE grenades thrown in this selection.'
-  },
-  {
-    key: 'blind',
-    label: 'Blind/flash',
-    get: (p) => (p.flashesThrown > 0 ? p.blindPerFlash : -1),
-    cell: (p) => (p.flashesThrown > 0 ? `${f2(p.blindPerFlash)}s` : '—'),
-    tip: (p) =>
-      p.flashesThrown > 0
-        ? tip([
-            `Enemy blind per flash: ${f2(p.blindPerFlash)}s`,
-            `${f1(p.enemyBlindSeconds)}s across ${p.flashesThrown} flashes`,
-            `Flashes that blinded someone: ${pct1(p.flashHitRate)}`,
-            'Duds are counted in the denominator. Team flashes earn nothing.'
-          ])
-        : 'No flashbangs thrown in this selection.'
-  },
-  {
-    key: 'utilDmg',
-    label: 'Util dmg',
-    get: (p) => (Number.isFinite(p.utilDmgPerRound) ? p.utilDmgPerRound : -1),
-    cell: (p) => (Number.isFinite(p.utilDmgPerRound) ? f1(p.utilDmgPerRound) : '—'),
+      p.openKills + p.openDeaths > 0 && Number.isFinite(p.opkRate) ? p.opkRate : -1,
+    cell: (p) => (p.openKills + p.openDeaths > 0 ? pct(p.opkRate) : '—'),
+    avgOf: (p) =>
+      p.openKills + p.openDeaths > 0 && Number.isFinite(p.opkRate) ? p.opkRate : null,
+    avgFormat: pct,
     tip: (p) =>
       tip([
-        `All utility damage per round: ${f1(p.utilDmgPerRound)}`,
-        `HE: ${p.heDamage} over ${p.heThrown} thrown`,
-        `Fire: ${p.fireDamage} over ${p.fireThrown} thrown`
+        `Opening success rate: ${p.openKills + p.openDeaths > 0 ? pct(p.opkRate) : '—'}`,
+        `Opening kills: ${p.openKills}`,
+        `Opening deaths: ${p.openDeaths}`
       ])
-  }
-];
-
-/** Default player columns (includes duel PFW / PFO / TFW). */
-/**
- * Duel model columns.
- *
- * PFW / PFO come from the duel model over tick + zone data (stored on the stats
- * index as `row.du`). TFW is kills / (kills + deaths). Until an index is rebuilt
- * to v13 these render as a dash rather than a zero, because "not computed" and
- * "predicted to lose every fight" must not look the same.
- *
- * PFW is how hard the fights were, PFO is whether the player beat those odds,
- * and TFW is the plain kill share for comparison. The three are meant to be
- * read across: a high PFW with a negative PFO is a player who was handed good
- * spots and lost them anyway.
- */
-export const PLAYER_DUEL_COLUMNS = [
+  },
   {
     key: 'pfw',
     label: 'PFW',
     get: (p) => (Number.isFinite(p.pfw) ? p.pfw : -Infinity),
     cell: (p) => pct(p.pfw),
+    avgOf: (p) => (Number.isFinite(p.pfw) ? p.pfw : null),
+    avgFormat: pct,
     tip: (p) =>
       Number.isFinite(p.pfw)
         ? tip([
@@ -414,6 +263,8 @@ export const PLAYER_DUEL_COLUMNS = [
     label: 'PFO',
     get: (p) => (Number.isFinite(p.pfo) ? p.pfo : -Infinity),
     cell: (p) => (Number.isFinite(p.pfo) ? `${p.pfo > 0 ? '+' : ''}${p.pfo.toFixed(2)}%` : '—'),
+    avgOf: (p) => (Number.isFinite(p.pfo) ? p.pfo : null),
+    avgFormat: (n) => `${n > 0 ? '+' : ''}${n.toFixed(2)}%`,
     strong: true,
     tip: (p) => {
       if (!Number.isFinite(p.pfo)) {
@@ -434,43 +285,254 @@ export const PLAYER_DUEL_COLUMNS = [
     }
   },
   {
-    key: 'tfw',
-    label: 'TFW',
-    get: (p) => (Number.isFinite(p.tfw) ? p.tfw : -Infinity),
-    cell: (p) => pct(p.tfw),
+    key: 'a4aim',
+    label: 'Aim',
+    get: (p) => (Number.isFinite(p.a4aim) ? p.a4aim : -1),
+    cell: (p) => (Number.isFinite(p.a4aim) ? f1(p.a4aim) : '—'),
+    avgOf: (p) => (Number.isFinite(p.a4aim) ? p.a4aim : null),
+    avgFormat: f1,
+    strong: true,
     tip: (p) =>
-      Number.isFinite(p.tfw)
+      Number.isFinite(p.a4aim)
         ? tip([
-            'Total fight winrate.',
-            'Kills as a share of kills plus deaths.',
-            `Kills: ${int(p.kills)}`,
-            `Deaths: ${int(p.deaths)}`
+            `Aim rating: ${f1(p.a4aim)} / 100`,
+            `Crosshair placement: ${
+              Number.isFinite(p.aimRaw?.crosshairError)
+                ? `${f1(-p.aimRaw.crosshairError)}°`
+                : '—'
+            } (${f0(p.aimComponents?.crosshairError)})`,
+            `Ready for the fight: ${pct1(p.aimRaw?.readyRate)} (${f0(p.aimComponents?.readyRate)})`,
+            `Accuracy, no smoke shots: ${pct1(p.aimRaw?.accuracy)} (${f0(p.aimComponents?.accuracy)})`,
+            `First bullet: ${pct1(p.aimRaw?.firstBullet)} (${f0(p.aimComponents?.firstBullet)})`,
+            `Overflick: ${pct1(p.aimRaw?.overflick)} (${p.aimSample?.overflick || 0})`,
+            `Underflick: ${pct1(p.aimRaw?.underflick)} (${p.aimSample?.underflick || 0})`,
+            `Sample: ${p.aimSample?.crosshairError || 0} engagements, ${p.aimSample?.accuracy || 0} shots`
           ])
-        : '—'
+        : 'Not enough sampled duels yet for an aim rating.'
   },
   {
-    key: 'xk',
-    label: 'xK',
-    get: (p) => (Number.isFinite(p.xk) ? p.xk : -Infinity),
-    cell: (p) => (Number.isFinite(p.xk) ? f2(p.xk) : '—'),
+    key: 'accuracy',
+    label: 'Acc',
+    get: (p) => (p.shots > 0 ? p.accuracy : -1),
+    cell: accCell,
+    avgOf: (p) => (p.shots > 0 && Number.isFinite(p.accuracy) ? p.accuracy : null),
+    avgFormat: pct,
     tip: (p) =>
-      Number.isFinite(p.xk)
+      p.shots > 0
         ? tip([
-            'Expected kills per round.',
-            'Sum of the model’s win chance across every duel, averaged per round.',
-            'A 50/50 is 0.50; a 1v2 at high odds is close to 2.',
-            Number.isFinite(p.xkTotal) ? `Total xK: ${f2(p.xkTotal)}` : '',
-            `Duels: ${f1(p.duels)}`
+            `Shots fired: ${p.shots}`,
+            `Shots hit: ${p.hits}`,
+            `Headshots hit: ${p.headshots}`,
+            `AWP shots fired: ${p.awpShots}`,
+            `AWP shots hit: ${p.awpHits}`,
+            `AWP hit rate: ${p.awpShots > 0 ? pct(p.awpAccuracy) : '—'}`,
+            `AWP Acc: holds within 10° of an enemy with a clear (no smoke) path`
           ])
-        : 'No duel data yet. Stats index rebuilds on next library load (v13+).'
+        : 'No hit data. Re-parse this demo to record accuracy.'
+  },
+  {
+    key: 'aimCrosshair',
+    label: 'C°',
+    // Negative degrees so lower-is-better sorts correctly under default desc.
+    get: (p) =>
+      Number.isFinite(p.aimRaw?.crosshairError) ? -p.aimRaw.crosshairError : 1,
+    cell: (p) =>
+      Number.isFinite(p.aimRaw?.crosshairError) ? f1(-p.aimRaw.crosshairError) : '—',
+    avgOf: (p) =>
+      Number.isFinite(p.aimRaw?.crosshairError) ? -p.aimRaw.crosshairError : null,
+    avgFormat: f1,
+    tip: (p) =>
+      Number.isFinite(p.aimRaw?.crosshairError)
+        ? tip([
+            `Mean yaw error when engaged: ${f1(-p.aimRaw.crosshairError)}°`,
+            `Component score: ${f0(p.aimComponents?.crosshairError)} / 100`,
+            `Sample: ${p.aimSample?.crosshairError || 0} engagements`,
+            'Negative because lower error is better. ~−30° is average.'
+          ])
+        : 'Not enough engagements yet.'
+  },
+  {
+    key: 'aimReady',
+    label: 'R%',
+    get: (p) =>
+      Number.isFinite(p.aimRaw?.readyRate) ? p.aimRaw.readyRate * 100 : -1,
+    cell: (p) => (Number.isFinite(p.aimRaw?.readyRate) ? pct1(p.aimRaw.readyRate) : '—'),
+    avgOf: (p) =>
+      Number.isFinite(p.aimRaw?.readyRate) ? p.aimRaw.readyRate * 100 : null,
+    avgFormat: (n) => pct1(n / 100),
+    tip: (p) =>
+      Number.isFinite(p.aimRaw?.readyRate)
+        ? tip([
+            `Already in the cone when engaged: ${pct1(p.aimRaw.readyRate)}`,
+            `Component score: ${f0(p.aimComponents?.readyRate)} / 100`,
+            `Sample: ${p.aimSample?.readyRate || 0} engagements`,
+            'Typical band ~60–70%. A few points move the aim rating a lot.'
+          ])
+        : 'Not enough engagements yet.'
+  },
+  {
+    key: 'aimAcc',
+    label: 'AA%',
+    get: (p) => (Number.isFinite(p.aimRaw?.accuracy) ? p.aimRaw.accuracy * 100 : -1),
+    cell: (p) => (Number.isFinite(p.aimRaw?.accuracy) ? pct1(p.aimRaw.accuracy) : '—'),
+    avgOf: (p) =>
+      Number.isFinite(p.aimRaw?.accuracy) ? p.aimRaw.accuracy * 100 : null,
+    avgFormat: (n) => pct1(n / 100),
+    tip: (p) =>
+      Number.isFinite(p.aimRaw?.accuracy)
+        ? tip([
+            `Hits / shots (smoke shots excluded): ${pct1(p.aimRaw.accuracy)}`,
+            `Component score: ${f0(p.aimComponents?.accuracy)} / 100`,
+            `Sample: ${p.aimSample?.accuracy || 0} shots`,
+            'High variance by weapon and role (~15–40%).'
+          ])
+        : 'Not enough sampled shots yet.'
+  },
+  {
+    key: 'aimFirst',
+    label: '1st%',
+    get: (p) =>
+      Number.isFinite(p.aimRaw?.firstBullet) ? p.aimRaw.firstBullet * 100 : -1,
+    cell: (p) => (Number.isFinite(p.aimRaw?.firstBullet) ? pct1(p.aimRaw.firstBullet) : '—'),
+    avgOf: (p) =>
+      Number.isFinite(p.aimRaw?.firstBullet) ? p.aimRaw.firstBullet * 100 : null,
+    avgFormat: (n) => pct1(n / 100),
+    tip: (p) =>
+      Number.isFinite(p.aimRaw?.firstBullet)
+        ? tip([
+            `First bullet hit when enemy was in the cone: ${pct1(p.aimRaw.firstBullet)}`,
+            `Component score: ${f0(p.aimComponents?.firstBullet)} / 100`,
+            `Sample: ${p.aimSample?.firstBullet || 0} first bullets`,
+            'High variance (~15–50%).'
+          ])
+        : 'Not enough first-bullet samples yet.'
+  },
+  {
+    key: 'aimOverflick',
+    label: 'O%',
+    // Lower is better → negate so default desc still puts the tidy aimers first.
+    get: (p) =>
+      Number.isFinite(p.aimRaw?.overflick) ? -p.aimRaw.overflick * 100 : 1,
+    cell: (p) => (Number.isFinite(p.aimRaw?.overflick) ? pct1(p.aimRaw.overflick) : '—'),
+    avgOf: (p) =>
+      Number.isFinite(p.aimRaw?.overflick) ? p.aimRaw.overflick * 100 : null,
+    avgFormat: (n) => pct1(n / 100),
+    tip: (p) =>
+      Number.isFinite(p.aimRaw?.overflick)
+        ? tip([
+            `First-bullet misses that went past the enemy: ${pct1(p.aimRaw.overflick)} of cone engagements`,
+            `Count: ${p.aimSample?.overflick || 0} overflicks`,
+            `Sample: ${p.aimSample?.firstBullet || 0} first-bullet engagements`,
+            'Yaw at shot vs enemy, relative to yaw ~0.2s earlier.'
+          ])
+        : 'Not enough first-bullet samples yet.'
+  },
+  {
+    key: 'aimUnderflick',
+    label: 'U%',
+    get: (p) =>
+      Number.isFinite(p.aimRaw?.underflick) ? -p.aimRaw.underflick * 100 : 1,
+    cell: (p) => (Number.isFinite(p.aimRaw?.underflick) ? pct1(p.aimRaw.underflick) : '—'),
+    avgOf: (p) =>
+      Number.isFinite(p.aimRaw?.underflick) ? p.aimRaw.underflick * 100 : null,
+    avgFormat: (n) => pct1(n / 100),
+    tip: (p) =>
+      Number.isFinite(p.aimRaw?.underflick)
+        ? tip([
+            `First-bullet misses that stopped short of the enemy: ${pct1(p.aimRaw.underflick)} of cone engagements`,
+            `Count: ${p.aimSample?.underflick || 0} underflicks`,
+            `Sample: ${p.aimSample?.firstBullet || 0} first-bullet engagements`,
+            'Yaw at shot vs enemy, relative to yaw ~0.2s earlier.'
+          ])
+        : 'Not enough first-bullet samples yet.'
+  },
+  {
+    key: 'dt',
+    label: 'DT',
+    get: (p) => (Number.isFinite(p.dt) ? p.dt : -1),
+    cell: (p) => (Number.isFinite(p.dt) ? int(p.dt) : '—'),
+    avgOf: (p) => (Number.isFinite(p.dt) ? p.dt : null),
+    avgFormat: int,
+    tip: (p) =>
+      Number.isFinite(p.dt)
+        ? tip([
+            `Avg distance travelled / round: ${int(p.dt)}`,
+            `Total DT: ${int(p.dtTotal)}`,
+            `Rounds sampled: ${p.dtRounds || 0}`,
+            `Raw path length (resets on death)`
+          ])
+        : 'No movement data yet. Reloading Statistics fills DT in the background.'
+  },
+  {
+    key: 'psdt',
+    label: 'PSDT',
+    get: (p) => (Number.isFinite(p.psdt) ? p.psdt : -1),
+    cell: (p) => (Number.isFinite(p.psdt) ? int(p.psdt) : '—'),
+    avgOf: (p) => (Number.isFinite(p.psdt) ? p.psdt : null),
+    avgFormat: int,
+    tip: (p) =>
+      Number.isFinite(p.psdt)
+        ? tip([
+            `Avg pulled-string distance / round: ${int(p.psdt)}`,
+            `Total PSDT: ${int(p.psdtTotal)}`,
+            `Rounds sampled: ${p.psdtRounds || 0}`,
+            `125u brush — filters ADAD jitter`
+          ])
+        : 'No movement data yet. Reloading Statistics fills PSDT in the background.'
+  },
+  {
+    key: 'heDmg',
+    label: 'HE dmg',
+    get: (p) => (p.heThrown > 0 ? p.heDmgPerNade : -1),
+    cell: (p) => (p.heThrown > 0 ? f1(p.heDmgPerNade) : '—'),
+    avgOf: (p) => (p.heThrown > 0 ? p.heDmgPerNade : null),
+    avgFormat: f1,
+    tip: (p) =>
+      p.heThrown > 0
+        ? tip([
+            `Damage per HE thrown: ${f1(p.heDmgPerNade)}`,
+            `${p.heDamage} damage from ${p.heThrown} HE`,
+            'Enemy damage only. Team and self damage never count.'
+          ])
+        : 'No HE grenades thrown in this selection.'
+  },
+  {
+    key: 'blind',
+    label: 'Blind/flash',
+    get: (p) => (p.flashesThrown > 0 ? p.blindPerFlash : -1),
+    cell: (p) => (p.flashesThrown > 0 ? `${f2(p.blindPerFlash)}s` : '—'),
+    avgOf: (p) => (p.flashesThrown > 0 ? p.blindPerFlash : null),
+    avgFormat: (n) => `${f2(n)}s`,
+    tip: (p) =>
+      p.flashesThrown > 0
+        ? tip([
+            `Enemy blind per flash: ${f2(p.blindPerFlash)}s`,
+            `${f1(p.enemyBlindSeconds)}s across ${p.flashesThrown} flashes`,
+            `Flashes that blinded someone: ${pct1(p.flashHitRate)}`,
+            'Duds are counted in the denominator. Team flashes earn nothing.'
+          ])
+        : 'No flashbangs thrown in this selection.'
+  },
+  {
+    key: 'utilDmg',
+    label: 'Util dmg',
+    get: (p) => (Number.isFinite(p.utilDmgPerRound) ? p.utilDmgPerRound : -1),
+    cell: (p) => (Number.isFinite(p.utilDmgPerRound) ? f1(p.utilDmgPerRound) : '—'),
+    avgOf: (p) => (Number.isFinite(p.utilDmgPerRound) ? p.utilDmgPerRound : null),
+    avgFormat: f1,
+    tip: (p) =>
+      tip([
+        `All utility damage per round: ${f1(p.utilDmgPerRound)}`,
+        `HE: ${p.heDamage} over ${p.heThrown} thrown`,
+        `Fire: ${p.fireDamage} over ${p.fireThrown} thrown`
+      ])
   }
 ];
 
-export const PLAYER_COLUMNS = [
-  ...PLAYER_FIXED_BASE,
-  ...PLAYER_DUEL_COLUMNS,
-  ...PLAYER_METRIC_COLUMNS
-];
+/** @deprecated Duel cols live inside PLAYER_METRIC_COLUMNS; kept for imports. */
+export const PLAYER_DUEL_COLUMNS = [];
+
+export const PLAYER_COLUMNS = [...PLAYER_FIXED_BASE, ...PLAYER_METRIC_COLUMNS];
 
 /** Alias kept for the viewer scoreboard (same columns as the Statistics page). */
 export const PLAYER_COLUMNS_WITH_DUELS = PLAYER_COLUMNS;
@@ -502,6 +564,7 @@ export function playerColumnsWithRoles(roleMode = 'tactical') {
       key: 'roleT',
       label: tLabel,
       align: 'left',
+      noAvg: true,
       get: (p) => tGet(p).toLowerCase(),
       cell: (p) => tGet(p) || '—',
       cellClass: 'st-role-t',
@@ -511,6 +574,7 @@ export function playerColumnsWithRoles(roleMode = 'tactical') {
       key: 'roleCT',
       label: ctLabel,
       align: 'left',
+      noAvg: true,
       get: (p) => ctGet(p).toLowerCase(),
       cell: (p) => ctGet(p) || '—',
       cellClass: 'st-role-ct',
@@ -518,8 +582,85 @@ export function playerColumnsWithRoles(roleMode = 'tactical') {
     }
   ];
   return {
-    columns: [...PLAYER_FIXED_BASE, ...roleCols, ...PLAYER_DUEL_COLUMNS, ...PLAYER_METRIC_COLUMNS],
+    columns: [...PLAYER_FIXED_BASE, ...roleCols, ...PLAYER_METRIC_COLUMNS],
     fixedCount: PLAYER_FIXED_BASE.length + roleCols.length
+  };
+}
+
+function formatMatchDate(ts) {
+  const n = Number(ts);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  try {
+    return new Date(n).toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  } catch {
+    return '—';
+  }
+}
+
+/** Sticky identity columns for player/team match drill-down tables. */
+export const MATCH_IDENTITY_COLUMNS = [
+  {
+    key: 'map',
+    label: 'Map',
+    align: 'left',
+    noAvg: true,
+    get: (r) => (r.mapName || r.map || '').toLowerCase(),
+    cell: (r) => r.mapName || r.map || '—'
+  },
+  {
+    key: 'score',
+    label: 'Score',
+    align: 'left',
+    noAvg: true,
+    get: (r) => r.scoreSort ?? 0,
+    cell: (r) => r.scoreLabel || '—'
+  },
+  {
+    key: 'result',
+    label: 'Result',
+    align: 'left',
+    noAvg: true,
+    get: (r) => r.result || '',
+    cell: (r) => r.result || '—',
+    cellClass: (r) =>
+      r.result === 'W' ? 'st-result-w' : r.result === 'L' ? 'st-result-l' : ''
+  },
+  {
+    key: 'opponent',
+    label: 'Opponent',
+    align: 'left',
+    noAvg: true,
+    get: (r) => (r.opponent || '').toLowerCase(),
+    cell: (r) => r.opponent || '—'
+  },
+  {
+    key: 'date',
+    label: 'Date',
+    align: 'left',
+    noAvg: true,
+    get: (r) => Number(r.uploadedAt) || 0,
+    cell: (r) => formatMatchDate(r.uploadedAt)
+  }
+];
+
+/** Player match detail: identity + metric cols (no Player/Team/Rounds/roles). */
+export function playerMatchColumns() {
+  return {
+    columns: [...MATCH_IDENTITY_COLUMNS, ...PLAYER_METRIC_COLUMNS],
+    fixedCount: MATCH_IDENTITY_COLUMNS.length
+  };
+}
+
+/** Team match detail: identity + team metrics (skip Team name col). */
+export function teamMatchColumns() {
+  const metrics = TEAM_COLUMNS.filter((c) => c.key !== 'name');
+  return {
+    columns: [...MATCH_IDENTITY_COLUMNS, ...metrics],
+    fixedCount: MATCH_IDENTITY_COLUMNS.length
   };
 }
 
@@ -564,6 +705,8 @@ export const TEAM_DUEL_COLUMNS = [
     label: 'PFW',
     get: (t) => (Number.isFinite(t.pfw) ? t.pfw : -Infinity),
     cell: (t) => pct(t.pfw),
+    avgOf: (t) => (Number.isFinite(t.pfw) ? t.pfw : null),
+    avgFormat: pct,
     tip: (t) =>
       Number.isFinite(t.pfw)
         ? tip([
@@ -580,6 +723,8 @@ export const TEAM_DUEL_COLUMNS = [
     label: 'PFO',
     get: (t) => (Number.isFinite(t.pfo) ? t.pfo : -Infinity),
     cell: (t) => (Number.isFinite(t.pfo) ? `${t.pfo > 0 ? '+' : ''}${t.pfo.toFixed(2)}%` : '—'),
+    avgOf: (t) => (Number.isFinite(t.pfo) ? t.pfo : null),
+    avgFormat: (n) => `${n > 0 ? '+' : ''}${n.toFixed(2)}%`,
     strong: true,
     tip: (t) =>
       Number.isFinite(t.pfo)
@@ -597,6 +742,8 @@ export const TEAM_DUEL_COLUMNS = [
     label: 'xK',
     get: (t) => (Number.isFinite(t.xk) ? t.xk : -Infinity),
     cell: (t) => (Number.isFinite(t.xk) ? f2(t.xk) : '—'),
+    avgOf: (t) => (Number.isFinite(t.xk) ? t.xk : null),
+    avgFormat: f2,
     tip: (t) =>
       Number.isFinite(t.xk)
         ? tip([
@@ -611,13 +758,22 @@ export const TEAM_DUEL_COLUMNS = [
 ];
 
 export const TEAM_COLUMNS = [
-  { key: 'name', label: 'Team', align: 'left', get: (t) => t.name.toLowerCase() },
-  { key: 'rounds', label: 'Rds', get: (t) => t.rounds, cell: (t) => int(t.rounds) },
+  { key: 'name', label: 'Team', align: 'left', noAvg: true, get: (t) => t.name.toLowerCase() },
+  {
+    key: 'rounds',
+    label: 'Rds',
+    get: (t) => t.rounds,
+    cell: (t) => int(t.rounds),
+    avgOf: (t) => (Number.isFinite(t.rounds) ? t.rounds : null),
+    avgFormat: int
+  },
   {
     key: 'roundWinrate',
     label: 'Round WR',
     get: (t) => t.roundWinrate,
     cell: (t) => pct(t.roundWinrate),
+    avgOf: (t) => (Number.isFinite(t.roundWinrate) ? t.roundWinrate : null),
+    avgFormat: pct,
     tip: (t) => tip([`Rounds won: ${t.roundsWon}`, `Rounds lost: ${t.roundsLost}`])
   },
   {
@@ -625,6 +781,8 @@ export const TEAM_COLUMNS = [
     label: 'Avg rating',
     get: (t) => t.avgRating,
     cell: (t) => f2(t.avgRating),
+    avgOf: (t) => (Number.isFinite(t.avgRating) ? t.avgRating : null),
+    avgFormat: f2,
     strong: true,
     tip: (t) =>
       t.members.length
@@ -642,6 +800,8 @@ export const TEAM_COLUMNS = [
     label: 'Poss%',
     get: (t) => (Number.isFinite(t.possession) ? t.possession : -1),
     cell: (t) => (Number.isFinite(t.possession) ? pct(t.possession) : '—'),
+    avgOf: (t) => (Number.isFinite(t.possession) ? t.possession : null),
+    avgFormat: pct,
     tip: (t) => possessionDeltaTip(t)
   },
   {
@@ -649,6 +809,8 @@ export const TEAM_COLUMNS = [
     label: 'PRW',
     get: (t) => (Number.isFinite(t.prw) ? t.prw : -1),
     cell: (t) => (Number.isFinite(t.prw) ? pct(t.prw) : '—'),
+    avgOf: (t) => (Number.isFinite(t.prw) ? t.prw : null),
+    avgFormat: pct,
     tip: (t) =>
       Number.isFinite(t.prw)
         ? tip([
@@ -663,6 +825,8 @@ export const TEAM_COLUMNS = [
     label: 'Win%',
     get: (t) => t.mapWinrate,
     cell: (t) => (t.maps > 0 ? pct(t.mapWinrate) : '—'),
+    avgOf: (t) => (t.maps > 0 && Number.isFinite(t.mapWinrate) ? t.mapWinrate : null),
+    avgFormat: pct,
     tip: (t) =>
       tip([
         `Map wins: ${t.mapWins}`,
@@ -677,6 +841,9 @@ export const TEAM_COLUMNS = [
     label: 'OPK rate',
     get: (t) => t.opkRate,
     cell: (t) => (t.openKills + t.openDeaths > 0 ? pct(t.opkRate) : '—'),
+    avgOf: (t) =>
+      t.openKills + t.openDeaths > 0 && Number.isFinite(t.opkRate) ? t.opkRate : null,
+    avgFormat: pct,
     tip: (t) => tip([`Opening kills: ${t.openKills}`, `Opening deaths: ${t.openDeaths}`])
   },
   {
@@ -684,6 +851,8 @@ export const TEAM_COLUMNS = [
     label: '5v4',
     get: (t) => t.conv5v4,
     cell: (t) => (t.openKills > 0 ? pct(t.conv5v4) : '—'),
+    avgOf: (t) => (t.openKills > 0 && Number.isFinite(t.conv5v4) ? t.conv5v4 : null),
+    avgFormat: pct,
     tip: (t) =>
       tip([
         `After the opening kill: ${t.conv5v4Won} won, ${t.conv5v4Lost} lost`,
@@ -695,6 +864,8 @@ export const TEAM_COLUMNS = [
     label: '4v5',
     get: (t) => t.conv4v5,
     cell: (t) => (t.openDeaths > 0 ? pct(t.conv4v5) : '—'),
+    avgOf: (t) => (t.openDeaths > 0 && Number.isFinite(t.conv4v5) ? t.conv4v5 : null),
+    avgFormat: pct,
     tip: (t) =>
       tip([
         `After the opening death: ${t.conv4v5Won} won, ${t.conv4v5Lost} lost`,
@@ -706,6 +877,8 @@ export const TEAM_COLUMNS = [
     label: 'Util dmg',
     get: (t) => (Number.isFinite(t.utilDmgPerRound) ? t.utilDmgPerRound : -1),
     cell: (t) => (Number.isFinite(t.utilDmgPerRound) ? f1(t.utilDmgPerRound) : '—'),
+    avgOf: (t) => (Number.isFinite(t.utilDmgPerRound) ? t.utilDmgPerRound : null),
+    avgFormat: f1,
     tip: (t) =>
       Number.isFinite(t.utilDmgPerRound)
         ? tip([
@@ -761,6 +934,49 @@ function pagerHtml({ page, pages, total, pageSize }) {
 }
 
 /**
+ * Average footer over all filtered rows (not just the current page).
+ * @param {object[]} rows
+ * @param {object[]} columns
+ * @param {number} sticky
+ * @param {(s: string) => string} escapeHtml
+ */
+function averageFooterHtml(rows, columns, sticky, escapeHtml) {
+  if (!rows.length) return '';
+  const cells = columns
+    .map((c, i) => {
+      const stick = i < sticky ? ` st-sticky st-sticky-${i}` : '';
+      if (i === 0) {
+        return `<td class="left st-avg-label${stick}">Average</td>`;
+      }
+      if (c.noAvg || !c.cell) {
+        return `<td class="${c.align === 'left' ? 'left ' : ''}${stick.trim()}">—</td>`;
+      }
+      const vals = [];
+      for (const r of rows) {
+        const v = typeof c.avgOf === 'function' ? c.avgOf(r) : null;
+        if (v == null || !Number.isFinite(v)) continue;
+        vals.push(v);
+      }
+      if (!vals.length) {
+        return `<td class="${c.align === 'left' ? 'left ' : ''}${stick.trim()}">—</td>`;
+      }
+      const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+      const text =
+        typeof c.avgFormat === 'function' ? c.avgFormat(avg) : String(Math.round(avg * 100) / 100);
+      const cls = [
+        c.align === 'left' ? 'left' : '',
+        c.strong ? 'strong' : '',
+        stick.trim()
+      ]
+        .filter(Boolean)
+        .join(' ');
+      return `<td class="${cls}">${escapeHtml(text)}</td>`;
+    })
+    .join('');
+  return `<tfoot><tr class="st-avg-row">${cells}</tr></tfoot>`;
+}
+
+/**
  * @param {object[]} rows
  * @param {{
  *   columns: object[],
@@ -771,7 +987,9 @@ function pagerHtml({ page, pages, total, pageSize }) {
  *   pageSize?: number,
  *   compact?: boolean,
  *   nameCell?: (r: object) => string,
- *   fixedCount?: number
+ *   teamCell?: (r: object) => string,
+ *   fixedCount?: number,
+ *   showAverage?: boolean
  * }} opts
  */
 export function statsTableHtml(rows, opts) {
@@ -784,7 +1002,9 @@ export function statsTableHtml(rows, opts) {
     pageSize = 0,
     compact = false,
     nameCell = null,
-    fixedCount = 0
+    teamCell = null,
+    fixedCount = 0,
+    showAverage = false
   } = opts;
   if (!rows.length) {
     return '<p class="view-empty">Nothing matches these filters.</p>';
@@ -816,6 +1036,21 @@ export function statsTableHtml(rows, opts) {
             const label = nameCell ? nameCell(r) : escapeHtml(r.name);
             return `<td class="left name${stick}">${label}</td>`;
           }
+          if (c.key === 'team' && teamCell) {
+            const label = teamCell(r);
+            const t = c.tip?.(r);
+            const cls = [
+              'left',
+              c.em?.(r) ? '' : '',
+              t ? 'has-tip' : '',
+              stick.trim()
+            ]
+              .filter(Boolean)
+              .join(' ');
+            return t
+              ? `<td class="${cls}" data-tip="${escapeHtml(t)}">${label}</td>`
+              : `<td class="${cls}">${label}</td>`;
+          }
           const text = c.cell(r);
           const t = c.tip?.(r);
           const cls = [
@@ -837,6 +1072,9 @@ export function statsTableHtml(rows, opts) {
     })
     .join('');
 
+  const foot =
+    showAverage && total > 0 ? averageFooterHtml(sorted, columns, sticky, escapeHtml) : '';
+
   const table = `<div class="st-hscroll" data-st-hscroll>
     <div class="st-hscroll-bar" data-st-hscroll-bar tabindex="0" aria-label="Scroll columns">
       <div class="st-hscroll-spacer" data-st-hscroll-spacer></div>
@@ -845,6 +1083,7 @@ export function statsTableHtml(rows, opts) {
       <table class="st-table${compact ? ' compact' : ''}${sticky ? ' st-table-sticky' : ''}">
         <thead><tr>${head}</tr></thead>
         <tbody>${body}</tbody>
+        ${foot}
       </table>
     </div>
   </div>`;
@@ -860,14 +1099,18 @@ export function statsTableHtml(rows, opts) {
  * Pin sticky column `left` offsets from measured widths so scroll content
  * cannot paint over frozen columns.
  * @param {HTMLTableElement} table
+ * @param {Record<number, number>} [forcedWidths] sticky index → px width
  */
-function layoutStickyColumns(table) {
+function layoutStickyColumns(table, forcedWidths = null) {
   if (!table) return;
   const heads = [...table.querySelectorAll('thead th.st-sticky')];
   if (!heads.length) return;
 
   // Measure first (without writing) so reading width isn't affected mid-pass.
-  const widths = heads.map((th) => Math.ceil(th.getBoundingClientRect().width) || th.offsetWidth || 0);
+  const widths = heads.map((th, i) => {
+    if (forcedWidths && Number.isFinite(forcedWidths[i])) return forcedWidths[i];
+    return Math.ceil(th.getBoundingClientRect().width) || th.offsetWidth || 0;
+  });
   let left = 0;
   for (let i = 0; i < heads.length; i++) {
     const width = Math.max(widths[i], 1);
@@ -895,6 +1138,30 @@ function layoutStickyColumns(table) {
 }
 
 /**
+ * Match boards: Team sticky col (index 1) shares the wider of the two team names.
+ * @param {ParentNode} root
+ */
+export function syncMatchBoardTeamColWidths(root) {
+  const boards = root.querySelector?.('.st-match-boards') || root;
+  const tables = [...boards.querySelectorAll('table.st-table')];
+  if (tables.length < 2) return;
+  let maxW = 0;
+  for (const table of tables) {
+    table.querySelectorAll('.st-sticky-1').forEach((c) => {
+      maxW = Math.max(
+        maxW,
+        Math.ceil(c.scrollWidth) || 0,
+        Math.ceil(c.getBoundingClientRect().width) || 0
+      );
+    });
+  }
+  if (maxW < 1) return;
+  for (const table of tables) {
+    layoutStickyColumns(table, { 1: maxW });
+  }
+}
+
+/**
  * Keep the top scrollbar in sync with the table body (call after render).
  * @param {ParentNode} root
  */
@@ -908,6 +1175,7 @@ export function bindStatsHScroll(root) {
       requestAnimationFrame(() => {
         layoutStickyColumns(table);
         if (spacer && body) spacer.style.width = `${body.scrollWidth}px`;
+        syncMatchBoardTeamColWidths(root);
       });
       return;
     }
@@ -923,6 +1191,7 @@ export function bindStatsHScroll(root) {
     const sync = () => {
       layoutStickyColumns(table);
       spacer.style.width = `${body.scrollWidth}px`;
+      syncMatchBoardTeamColWidths(root);
     };
     // After paint — getBoundingClientRect is wrong before layout.
     requestAnimationFrame(() => requestAnimationFrame(sync));
