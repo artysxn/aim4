@@ -294,6 +294,15 @@ const PLAYER_METRICS = [
     tip: 'Total fight winrate: kills as a share of kills plus deaths.'
   },
   {
+    key: 'xk',
+    label: 'xK',
+    group: 'Duels',
+    fmt: 'num2',
+    num: (f) => f.duelXk,
+    den: (f) => (f.duelXk === null || f.duelXk === undefined ? null : 1),
+    tip: 'Expected kills per round: sum of model win chances across duels. A 50/50 is 0.50; a strong 1v2 is close to 2.'
+  },
+  {
     key: 'firstKillTime',
     label: 'First kill time (avg)',
     group: 'Timing',
@@ -568,6 +577,15 @@ const ROUND_METRICS = [
     num: (f) => f.duelPfoSum,
     den: (f) => (f.duelPlayers > 0 ? f.duelPlayers : null),
     tip: 'Team predicted fight overperformance: the side’s players’ PFO averaged.'
+  },
+  {
+    key: 'teamXk',
+    label: 'Team xK',
+    group: 'Duels',
+    fmt: 'num2',
+    num: (f) => f.duelXkSum,
+    den: (f) => (f.duelXkPlayers > 0 ? f.duelXkPlayers : null),
+    tip: 'Team expected kills per round: the side’s players’ xK averaged.'
   },
   {
     key: 'conv5v4',

@@ -5,8 +5,8 @@
 // Keeps the trackers the model needs across frames and hands the renderer a
 // plain description of what to draw: one line per living cross-side pairing
 // that is inside a gunfight window (active ± 2s), one aim ray per player in
-// those pairings, and the win percentages for whichever pairing the cursor is
-// on.
+// those pairings, expected kills (xK) for fighters, and win percentages when
+// a pairing is hovered.
 //
 // Pairings far from any fight are dropped rather than drawn dim. A full-buy
 // round would otherwise paint every living enemy link at once, and the network
@@ -196,7 +196,7 @@ export function createDuelOverlay() {
      * @param {string} args.mapCode
      * @param {string} args.roundKey       changes when the round changes
      * @param {{aSlot:number,bSlot:number}|null} args.hover
-     * @param {boolean} args.showPercent   shift is held
+     * @param {boolean} [args.showPercent]  unused; odds show whenever hover is set
      * @param {'default'|'lower'} [args.radarLevel]  stacked maps: floor on show
      */
     compute({
@@ -207,7 +207,7 @@ export function createDuelOverlay() {
       mapCode,
       roundKey,
       hover = null,
-      showPercent = false,
+      showPercent: _showPercent = false,
       radarLevel = 'default'
     }) {
       if (!meta || !track || !network) return null;
@@ -300,6 +300,28 @@ export function createDuelOverlay() {
         });
       }
 
+      // Expected kills: sum of this player's win chance across every active
+      // duel they are in. A 50/50 is 0.5; a 1v2 at 99% into both is ~2.
+      const xkBySlot = new Map();
+      for (const line of lines) {
+        if (!line.active) continue;
+        xkBySlot.set(line.aSlot, (xkBySlot.get(line.aSlot) || 0) + line.pa);
+        xkBySlot.set(line.bSlot, (xkBySlot.get(line.bSlot) || 0) + line.pb);
+      }
+      const xk = [];
+      for (const p of snapshot.players) {
+        const value = xkBySlot.get(p.slot);
+        if (!(value > 0)) continue;
+        if (isLowerLevel(mapCode, p.z) !== showingLower) continue;
+        xk.push({
+          slot: p.slot,
+          side: p.side,
+          x: p.x,
+          y: p.y,
+          xk: value
+        });
+      }
+
       const hovered =
         hover &&
         lines.find(
@@ -311,8 +333,10 @@ export function createDuelOverlay() {
       return {
         lines,
         rays,
+        xk,
         hover: hovered || null,
-        showPercent: Boolean(showPercent && hovered),
+        /** True when a pair is hovered — renderer shows exact win % on both. */
+        showPercent: Boolean(hovered),
         // False while the committed seed parameters are still in place, so the
         // caller can avoid presenting guesses as though they were measurements.
         trained: DUEL_MODEL_PARAMS.trainedOn > 0

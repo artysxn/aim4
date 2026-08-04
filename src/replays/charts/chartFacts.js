@@ -156,10 +156,12 @@ export function buildFacts(payload) {
           kastCount: 0,
           swingSum: 0,
           swingN: 0,
-          /** Sum of per-player PFW / PFO for this side this round (equal player weight). */
+          /** Sum of per-player PFW / PFO / xK for this side this round (equal player weight). */
           duelPfwSum: 0,
           duelPfoSum: 0,
+          duelXkSum: 0,
           duelPlayers: 0,
+          duelXkPlayers: 0,
           killsEarly: 0,
           killsMid: 0,
           killsLate: 0,
@@ -191,6 +193,14 @@ export function buildFacts(payload) {
           const duelW = du && Number.isFinite(du.w) && du.w > 0 ? du.w : null;
           const duelP = duelW !== null ? Number(du.p) || 0 : null;
           const duelN = duelW !== null ? Number(du.n) || 0 : null;
+          // Per-round expected kills: 0 when the index has duel data but this
+          // player fought nobody; null only when the round was never duel-indexed.
+          const duelXk =
+            row.du == null || typeof row.du !== 'object'
+              ? null
+              : duelP !== null
+                ? duelP
+                : 0;
 
           const role = roleForPlayer(demo.roles, map, side, id);
           const fact = {
@@ -215,6 +225,7 @@ export function buildFacts(payload) {
             duelW,
             duelP,
             duelN,
+            duelXk,
             equip: Number.isFinite(row.ev?.[id]) ? row.ev[id] : null,
             survived: death ? 0 : 1,
             deathTime: death ? numOrNull(death.t) : null,
@@ -260,6 +271,10 @@ export function buildFacts(payload) {
             roundFact.duelPfwSum += (duelP / duelW) * 100;
             roundFact.duelPfoSum += ((duelN - duelP) / duelW) * 100;
             roundFact.duelPlayers++;
+          }
+          if (fact.duelXk !== null && fact.duelXk !== undefined) {
+            roundFact.duelXkSum += fact.duelXk;
+            roundFact.duelXkPlayers++;
           }
           if (fact.firstKillTime !== null) {
             roundFact.teamFirstKillTime =

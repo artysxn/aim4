@@ -416,6 +416,8 @@ export class RadarRenderer {
     if (frame.duelOverlay) this.drawDuelNetwork(ctx, t, frame.duelOverlay);
     this.drawPlayers(ctx, t, frame, compact);
     if (frame.drawings?.length) this.drawStrokes(ctx, t, frame.drawings);
+    // xK stays on for every fighter; hover adds exact pair odds above them.
+    if (frame.duelOverlay?.xk?.length) this.drawDuelXk(ctx, t, frame.duelOverlay);
     if (frame.duelOverlay?.showPercent) this.drawDuelOdds(ctx, t, frame.duelOverlay);
     this._frameAlpha = 1;
   }
@@ -474,25 +476,57 @@ export class RadarRenderer {
     ctx.restore();
   }
 
-  /** Win percentages beside the two players of the hovered duel. */
+  /** Win percentages above the two players of the hovered duel. */
   drawDuelOdds(ctx, t, overlay) {
     const line = overlay.hover;
     if (!line) return;
     ctx.save();
     const a = this.project(t, line.ax, line.ay);
-    this._duelBadge(ctx, a.x, a.y, line.pa, SIDE_COLORS[line.aSide] || SIDE_COLORS.CT);
+    this._duelBadge(
+      ctx,
+      a.x,
+      a.y - 18 * this.dpr,
+      `${Math.round(line.pa * 100)}%`,
+      SIDE_COLORS[line.aSide] || SIDE_COLORS.CT,
+      { center: true }
+    );
     const b = this.project(t, line.bx, line.by);
-    this._duelBadge(ctx, b.x, b.y, line.pb, SIDE_COLORS[line.bSide] || SIDE_COLORS.T);
+    this._duelBadge(
+      ctx,
+      b.x,
+      b.y - 18 * this.dpr,
+      `${Math.round(line.pb * 100)}%`,
+      SIDE_COLORS[line.bSide] || SIDE_COLORS.T,
+      { center: true }
+    );
     ctx.restore();
   }
 
-  _duelBadge(ctx, x, y, p, colors) {
-    const text = `${Math.round(p * 100)}%`;
+  /**
+   * Expected kills to the right of each player in an active duel.
+   * Sum of their win chances across every fight they are in right now.
+   */
+  drawDuelXk(ctx, t, overlay) {
+    const rows = overlay.xk || [];
+    if (!rows.length) return;
+    ctx.save();
+    for (const row of rows) {
+      const p = this.project(t, row.x, row.y);
+      const colors = SIDE_COLORS[row.side] || SIDE_COLORS.CT;
+      this._duelBadge(ctx, p.x, p.y, row.xk.toFixed(2), colors, { right: true });
+    }
+    ctx.restore();
+  }
+
+  _duelBadge(ctx, x, y, text, colors, { center = false, right = false } = {}) {
     const pad = 5 * this.dpr;
     const h = 17 * this.dpr;
     ctx.font = `${600} ${12 * this.dpr}px system-ui, sans-serif`;
     const w = ctx.measureText(text).width + pad * 2;
-    const bx = x + 13 * this.dpr;
+    let bx;
+    if (center) bx = x - w / 2;
+    else if (right) bx = x + 14 * this.dpr;
+    else bx = x + 13 * this.dpr;
     const by = y - h / 2;
 
     ctx.beginPath();

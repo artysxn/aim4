@@ -214,6 +214,8 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
         duelW: 0,
         duelP: 0,
         duelN: 0,
+        /** Rounds where row.du was present (for xK / round). */
+        duelDataRounds: 0,
         /** @type {Map<number, { weight: number, predSum: number, wins: number }>} */
         duelBuckets: new Map(),
         /** @type {Map<string, {name: string, rounds: number}>} */
@@ -277,24 +279,28 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
         s.dtRounds++;
       }
       const du = row.du?.[id];
-      if (du && Number.isFinite(du.w) && du.w > 0) {
-        s.duelW += du.w;
-        s.duelP += Number(du.p) || 0;
-        s.duelN += Number(du.n) || 0;
-        for (const entry of du.b || []) {
-          const centre = entry[0];
-          const w = entry[1];
-          const p = entry[2];
-          const n = entry[3];
-          if (!Number.isFinite(centre) || !(w > 0)) continue;
-          let b = s.duelBuckets.get(centre);
-          if (!b) {
-            b = { weight: 0, predSum: 0, wins: 0 };
-            s.duelBuckets.set(centre, b);
+      if (row.du != null && typeof row.du === 'object') {
+        // Index has duel data for this round: no fights still count as 0 xK.
+        s.duelDataRounds++;
+        if (du && Number.isFinite(du.w) && du.w > 0) {
+          s.duelW += du.w;
+          s.duelP += Number(du.p) || 0;
+          s.duelN += Number(du.n) || 0;
+          for (const entry of du.b || []) {
+            const centre = entry[0];
+            const w = entry[1];
+            const p = entry[2];
+            const n = entry[3];
+            if (!Number.isFinite(centre) || !(w > 0)) continue;
+            let b = s.duelBuckets.get(centre);
+            if (!b) {
+              b = { weight: 0, predSum: 0, wins: 0 };
+              s.duelBuckets.set(centre, b);
+            }
+            b.weight += w;
+            b.predSum += p || 0;
+            b.wins += n || 0;
           }
-          b.weight += w;
-          b.predSum += p || 0;
-          b.wins += n || 0;
         }
       }
       const demo = demos?.get(row.d);
@@ -343,6 +349,9 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
     const pfw = s.duelW > 0 ? (s.duelP / s.duelW) * 100 : null;
     const pfo = s.duelW > 0 ? ((s.duelN - s.duelP) / s.duelW) * 100 : null;
     const tfw = fights > 0 ? (s.all.kills / fights) * 100 : null;
+    // Expected kills per round: sum of predicted win chances across duels,
+    // divided by rounds played (rounds with no duel data stay null overall).
+    const xk = s.duelDataRounds > 0 ? s.duelP / all.rounds : null;
     const pfoBuckets = [...s.duelBuckets]
       .filter(([, b]) => b.weight >= 0.5)
       .sort((x, y) => x[0] - y[0])
@@ -415,6 +424,10 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       pfo,
       /** Total fight winrate: kills / (kills + deaths) as %. */
       tfw,
+      /** Expected kills per round from the duel model. */
+      xk,
+      /** Total expected kills (sum of duel win chances). */
+      xkTotal: s.duelDataRounds > 0 ? s.duelP : null,
       duels: s.duelW > 0 ? s.duelW : null,
       pfoBuckets,
 
@@ -611,6 +624,10 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
     const teamPfo = duelMembers.length
       ? duelMembers.reduce((sum, m) => sum + m.pfo, 0) / duelMembers.length
       : null;
+    const xkMembers = members.filter((m) => Number.isFinite(m.xk));
+    const teamXk = xkMembers.length
+      ? xkMembers.reduce((sum, m) => sum + m.xk, 0) / xkMembers.length
+      : null;
 
     out.push({
       key: s.key,
@@ -627,10 +644,12 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
         prwSwing: m.prwSwing,
         pfw: m.pfw,
         pfo: m.pfo,
+        xk: m.xk,
         duels: m.duels
       })),
       pfw: teamPfw,
       pfo: teamPfo,
+      xk: teamXk,
       mapWins,
       mapLosses,
       maps: mapWins + mapLosses,

@@ -92,7 +92,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
           <div class="rv-clock" id="rv-clock">00:00</div>
           <span class="rv-match-score" id="rv-score-right" data-side="CT">0</span>
         </div>
-        <div class="rv-killfeed" id="rv-killfeed" aria-live="polite"></div>
+        <div class="rv-feed-stack" id="rv-feed-stack">
+          <div class="rv-killfeed" id="rv-killfeed" aria-live="polite"></div>
+          <div class="rv-duel-feed" id="rv-duel-feed" hidden></div>
+        </div>
         <canvas class="rv-canvas" id="rv-canvas"></canvas>
         <div class="rv-loading" id="rv-loading"></div>
       </div>
@@ -198,7 +201,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
           <button type="button" class="rv-tool" id="rv-zones"
             title="Map positions: active / controlled / contested">${icon(zonesIcon)}</button>
           <button type="button" class="rv-tool" id="rv-duels"
-            title="Duel stats: hold Shift over a line for win chance">${icon(duelsIcon)}</button>
+            title="Duel stats: xK beside fighters; hover a player or line for win %">${icon(duelsIcon)}</button>
           <button type="button" class="rv-tool" id="rv-draw" title="Draw (right click always draws)">${icon(pencilIcon)}</button>
           <button type="button" class="rv-tool" id="rv-note" title="Notes">${icon(commentsIcon)}</button>
           <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
@@ -224,6 +227,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const scoreLeftEl = el.querySelector('#rv-score-left');
   const scoreRightEl = el.querySelector('#rv-score-right');
   const killfeedEl = el.querySelector('#rv-killfeed');
+  const duelFeedEl = el.querySelector('#rv-duel-feed');
   const loadingEl = el.querySelector('#rv-loading');
   const roundsEl = el.querySelector('#rv-rounds');
   const scrubEl = el.querySelector('#rv-scrub');
@@ -290,6 +294,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   let destroyed = false;
   /** Last rendered kill-feed signature (skip DOM work when unchanged). */
   let killFeedKey = '';
+  /** Last rendered live-duel feed signature. */
+  let duelFeedKey = '';
   /** @type {{ id: string, tick: number, text: string, updatedAt: number }[]} */
   let roundNotes = [];
   /** Index into roundNotes for the dock (one note visible at a time). */
@@ -308,7 +314,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   let coachOn = false;
   /** Position overlay on the radar (control / contested). */
   let zonesOn = false;
-  /** Duel network on the radar, with win chance on shift-hover. */
+  /** Duel network on the radar: xK beside fighters, win % on hover. */
   let duelsOn = false;
   let spentDuelStats = false;
   const duelOverlay = createDuelOverlay();
@@ -320,7 +326,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const winDuelScanner = createDuelScanner();
   /** @type {{aSlot:number,bSlot:number}|null} */
   let duelHover = null;
-  let duelShift = false;
   /** Projected duel geometry in CSS pixels, rebuilt each paint for hit tests. */
   let duelHitLines = [];
   /**
@@ -668,7 +673,12 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     renderer._prevHealth?.fill?.(-1);
     renderer._damageTick?.fill?.(-1);
     killFeedKey = '';
+    duelFeedKey = '';
     if (killfeedEl) killfeedEl.innerHTML = '';
+    if (duelFeedEl) {
+      duelFeedEl.innerHTML = '';
+      duelFeedEl.hidden = true;
+    }
     // Drop previous-round presence immediately so the first draw after a skip
     // cannot soft-paint with another round's visit log.
     zonePresence = null;
@@ -852,7 +862,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       mapCode,
       roundKey: file,
       hover: duelHover,
-      showPercent: duelShift,
       radarLevel: renderer.radarLevel || 'default'
     });
     if (!overlay) return null;
@@ -895,9 +904,14 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const px = clientX - rect.left;
     const py = clientY - rect.top;
     let best = null;
-    let bestDist = 7;
+    // Droplets are larger than a line stroke; give endpoints more reach so
+    // "hover the player" reliably picks a fight without needing the line.
+    let bestDist = 14;
     for (const line of duelHitLines) {
-      const d = distToSegment(px, py, line.ax, line.ay, line.bx, line.by);
+      const dLine = distToSegment(px, py, line.ax, line.ay, line.bx, line.by);
+      const dA = Math.hypot(px - line.ax, py - line.ay);
+      const dB = Math.hypot(px - line.bx, py - line.by);
+      const d = Math.min(dLine, dA, dB);
       if (d < bestDist) {
         bestDist = d;
         best = line;
@@ -1194,6 +1208,58 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     killfeedEl.innerHTML = recent.map((k) => killRowHtml(k)).join('');
   }
 
+  /**
+   * Live engagements under the kill feed: each active duel and the model's
+   * win chances, updating as the fight develops.
+   */
+  function syncDuelFeed(overlay) {
+    if (!duelFeedEl) return;
+    if (!duelsOn || !overlay || !activeMeta) {
+      if (duelFeedKey !== '') {
+        duelFeedKey = '';
+        duelFeedEl.innerHTML = '';
+        duelFeedEl.hidden = true;
+      }
+      return;
+    }
+    const active = (overlay.lines || []).filter((l) => l.active);
+    const key = active
+      .map(
+        (l) =>
+          `${l.aSlot}:${l.bSlot}:${Math.round(l.pa * 1000)}:${Math.round(l.pb * 1000)}`
+      )
+      .join('|');
+    if (key === duelFeedKey) return;
+    duelFeedKey = key;
+    if (!active.length) {
+      duelFeedEl.innerHTML = '';
+      duelFeedEl.hidden = true;
+      return;
+    }
+    const bySlot = new Map((activeMeta.players || []).map((p) => [p.slot, p]));
+    const sideClass = (side) => (side === 'T' ? 'side-t' : side === 'CT' ? 'side-ct' : '');
+    duelFeedEl.hidden = false;
+    duelFeedEl.innerHTML = `<div class="rv-duel-feed-label">Engagements</div>${active
+      .map((l) => {
+        const a = bySlot.get(l.aSlot);
+        const b = bySlot.get(l.bSlot);
+        const aName = escapeHtml(a?.name || `P${l.aSlot}`);
+        const bName = escapeHtml(b?.name || `P${l.bSlot}`);
+        const pa = Math.round(l.pa * 100);
+        const pb = Math.round(l.pb * 100);
+        return `<div class="rv-duel-feed-row">
+          <span class="rv-duel-feed-name ${sideClass(l.aSide)}">${aName}</span>
+          <span class="rv-duel-feed-odds" title="Predicted win chance">
+            <b class="${sideClass(l.aSide)}">${pa}%</b>
+            <span class="rv-duel-feed-sep">–</span>
+            <b class="${sideClass(l.bSide)}">${pb}%</b>
+          </span>
+          <span class="rv-duel-feed-name ${sideClass(l.bSide)}">${bName}</span>
+        </div>`;
+      })
+      .join('')}`;
+  }
+
   function syncScoreboard(tick = 0) {
     if (!activeMeta) return;
     const weapons = activeMeta.weapons || [];
@@ -1383,7 +1449,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         (hit && duelHover && hit.aSlot === duelHover.aSlot && hit.bSlot === duelHover.bSlot);
       if (same) return;
       duelHover = hit;
-      duelShift = e.shiftKey;
       draw();
       return;
     }
@@ -2545,14 +2610,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (e.key !== 'Shift') return;
     graphShift = e.type === 'keydown';
     if (graphHoverDot) updateWinGraphTip();
-    // Shift is what reveals the duel odds. Reading e.shiftKey here rather than
-    // claiming the key means the win-graph detail and the Shift+Arrow nudge
-    // keep working exactly as they did.
-    const held = e.type === 'keydown';
-    if (duelsOn && held !== duelShift) {
-      duelShift = held;
-      if (duelHover) draw();
-    }
   }
 
   graphCanvas?.addEventListener('pointermove', onGraphPointerMove);
@@ -2918,8 +2975,12 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     } else {
       duelOverlay.reset();
       duelHover = null;
-      duelShift = false;
       duelHitLines = [];
+      duelFeedKey = '';
+      if (duelFeedEl) {
+        duelFeedEl.innerHTML = '';
+        duelFeedEl.hidden = true;
+      }
     }
     draw();
   });
@@ -3261,6 +3322,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
     syncScoreboard(tick);
     syncKillFeed(tick);
+    syncDuelFeed(duelOverlayFrame);
     if (chartOn) syncWinChart(tick);
     syncLoading();
   }

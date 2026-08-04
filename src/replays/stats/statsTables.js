@@ -447,6 +447,22 @@ export const PLAYER_DUEL_COLUMNS = [
             `Deaths: ${int(p.deaths)}`
           ])
         : '—'
+  },
+  {
+    key: 'xk',
+    label: 'xK',
+    get: (p) => (Number.isFinite(p.xk) ? p.xk : -Infinity),
+    cell: (p) => (Number.isFinite(p.xk) ? f2(p.xk) : '—'),
+    tip: (p) =>
+      Number.isFinite(p.xk)
+        ? tip([
+            'Expected kills per round.',
+            'Sum of the model’s win chance across every duel, averaged per round.',
+            'A 50/50 is 0.50; a 1v2 at high odds is close to 2.',
+            Number.isFinite(p.xkTotal) ? `Total xK: ${f2(p.xkTotal)}` : '',
+            `Duels: ${f1(p.duels)}`
+          ])
+        : 'No duel data yet. Stats index rebuilds on next library load (v13+).'
   }
 ];
 
@@ -573,6 +589,22 @@ export const TEAM_DUEL_COLUMNS = [
             ...(t.members || [])
               .filter((m) => Number.isFinite(m.pfo))
               .map((m) => `${m.name}: ${m.pfo > 0 ? '+' : ''}${m.pfo.toFixed(1)}`)
+          ])
+        : 'No duel data yet. Stats index rebuilds on next library load (v13+).'
+  },
+  {
+    key: 'teamXk',
+    label: 'xK',
+    get: (t) => (Number.isFinite(t.xk) ? t.xk : -Infinity),
+    cell: (t) => (Number.isFinite(t.xk) ? f2(t.xk) : '—'),
+    tip: (t) =>
+      Number.isFinite(t.xk)
+        ? tip([
+            'Team expected kills per round.',
+            'The five players’ xK averaged.',
+            ...(t.members || [])
+              .filter((m) => Number.isFinite(m.xk))
+              .map((m) => `${m.name}: ${m.xk.toFixed(2)}`)
           ])
         : 'No duel data yet. Stats index rebuilds on next library load (v13+).'
   }
