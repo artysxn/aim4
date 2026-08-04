@@ -207,6 +207,16 @@ async function createPool(count, { limit, holdout, rows }) {
         workerData: { shard, shardCount: count, limit, holdout }
       });
       workers.push(w);
+      // A worker that dies takes its shard's answers with it. Recording the
+      // death lets every in-flight and future request reject instead of
+      // awaiting a reply that can never arrive: an out-of-memory worker used to
+      // hang the whole run silently, which looks exactly like slow training.
+      w.on('error', (err) => {
+        w._dead = err;
+      });
+      w.on('exit', (code) => {
+        if (code !== 0) w._dead = w._dead || new Error(`worker exited with code ${code}`);
+      });
       return new Promise((resolve, reject) => {
         w.once('message', resolve);
         w.once('error', reject);
@@ -240,8 +250,15 @@ async function createPool(count, { limit, holdout, rows }) {
                 w.off('message', onMessage);
                 reject(err);
               };
+              if (w._dead) {
+                reject(w._dead);
+                return;
+              }
               w.on('message', onMessage);
               w.once('error', onError);
+              w.once('exit', (code) => {
+                if (code !== 0) reject(new Error(`worker exited with code ${code}`));
+              });
               w.postMessage({ type: 'eval', id, count: vectors.length, buffer: copy.buffer }, [
                 copy.buffer
               ]);

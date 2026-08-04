@@ -4,6 +4,7 @@
 // ---------------------------------------------------------------------------
 
 import { findCore } from './cores.js';
+import { coachText } from './coachMessages.js';
 import { phaseAtTick, phaseBounds } from './roundPhases.js';
 import {
   bombSiteAtPoint,
@@ -42,10 +43,6 @@ export function defaultCtOnSite(map, site) {
 
 function siteLabel(site) {
   return site === 'a' ? 'A' : 'B';
-}
-
-function plural(n, one, many) {
-  return n === 1 ? one : many;
 }
 
 /**
@@ -147,16 +144,14 @@ export function findSiteExecuteFlags({
     const sideName = siteLabel(site);
 
     if (ctOnSite > defaultN) {
-      const extra = ctOnSite - defaultN;
       out.push({
         tick: sample.tick,
         playerId: pin,
         rule: `${site}-overstack`,
-        text: `You are about to take on a T execute with ${extra} more ${plural(
-          extra,
-          'player',
-          'players'
-        )} than the default for a ${sideName} bombsite defense. Well done on rotating and stacking correctly!`
+        text: coachText('overstack', sample.tick, {
+          n: ctOnSite - defaultN,
+          site: sideName
+        })
       });
     } else {
       // Matches or below default → ask whether an earlier rotate was possible.
@@ -164,11 +159,7 @@ export function findSiteExecuteFlags({
         tick: sample.tick,
         playerId: pin,
         rule: `${site}-understack`,
-        text: `You are about to take on a T execute with ${ctOnSite} ${plural(
-          ctOnSite,
-          'player',
-          'players'
-        )} on the ${sideName} bombsite. Is there any way you could have taken info or rotated earlier to set up a stronger defense?`
+        text: coachText('understack', sample.tick, { n: ctOnSite, site: sideName })
       });
     }
   }

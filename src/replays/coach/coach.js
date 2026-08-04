@@ -32,6 +32,10 @@ import {
 import { findRoundDecided } from './roundDecided.js';
 import { ALONE_DISTANCE, findCore, nearestTeammate } from './cores.js';
 import { findSiteExecuteFlags } from './siteExecute.js';
+import { coachCategory, coachText } from './coachMessages.js';
+import { findUtilityFlags } from './utilityMistakes.js';
+import { findShotFlags } from './shotMistakes.js';
+import { findDuelFlags } from './duelMistakes.js';
 import {
   alivePositionsBySide,
   sitePresenceAdvantage
@@ -106,6 +110,13 @@ const HOLD_SECONDS = 3;
 const HOPELESS = 25;
 /** Above this live win chance, a solo duel is throwing value away. */
 const DOMINANT = 75;
+/**
+ * Above this the round is won on health and guns rather than on bodies.
+ *
+ * The headcount gate on `advantage-lost` misses those rounds entirely, and an
+ * untraded death in one still costs a rifle and the next round's buy.
+ */
+const WON_ROUND = 70;
 /** Pad around a multikill when checking who dealt damage. */
 const DAMAGE_PAD_SECONDS = 4;
 /** Max gap between consecutive kills that still counts as one multikill. */
@@ -460,6 +471,30 @@ export function analyseRound({
     return best;
   };
 
+  /**
+   * Tick states off the series grid, copied and cached.
+   *
+   * The shot and utility rules ask about exact event ticks rather than sample
+   * ticks, and often about two of them at once (a shot, and the yaw a fifth of
+   * a second before it). The sampler hands back one reused scratch buffer, so
+   * holding two answers from it at the same time would silently compare a tick
+   * against itself. Copying is the fix; the cache keeps it affordable.
+   */
+  const stateCache = new Map();
+  const STATE_CACHE_MAX = 4096;
+  const statesAt = (tick) => {
+    const key = Math.round(tick);
+    const hit = stateCache.get(key);
+    if (hit) return hit;
+    const sampled = sampleAt(key) || [];
+    const copy = sampled.map((s) => (s ? { ...s } : null));
+    if (stateCache.size >= STATE_CACHE_MAX) stateCache.clear();
+    stateCache.set(key, copy);
+    return copy;
+  };
+  const stateAt = (slot, tick) => statesAt(tick)[slot] || null;
+  const flashAt = (slot, tick) => stateAt(slot, tick)?.flash || 0;
+
   /** Everyone alive on a side at a sample, as core-detection input. */
   const positionsOf = (sample, side) => {
     const out = [];
@@ -500,7 +535,6 @@ export function analyseRound({
     if (before[opp] <= 0) continue;
     // Last alive: a 1vX is not a "solo peek" — there is nobody left to stack with.
     if (before[side] <= 1) continue;
-    const name = byId.get(victim)?.name || victim;
 
     // Answered inside the window? Then nothing was lost and nothing is said.
     const answered = kills.some(
@@ -511,7 +545,6 @@ export function analyseRound({
     const mates = positionsOf(sample, side);
     const me = mates.find((m) => m.id === victim);
     const { core, lurkers } = findCore(mates);
-    const inCore = core.includes(victim);
     const isLurker = lurkers.includes(victim);
 
     const wpBefore = sampleNear(death.tick)?.[side === 'CT' ? 'ct' : 't'];
@@ -529,9 +562,11 @@ export function analyseRound({
           tick: death.tick,
           playerId: victim,
           rule: 'advantage-lost',
-          text: inCore
-            ? `${name} died in a ${before[side]}v${before[opp]} with no trade. In a man advantage the refrags and the spacing have to be tighter than this.${drop}`
-            : `${name} died alone in a ${before[side]}v${before[opp]} with no trade. A solo player should not be the one dying when the team is already up.${drop}`
+          text:
+            coachText('advantage-lost', death.tick, {
+              n: before[side],
+              m: before[opp]
+            }) + drop
         });
         continue;
       }
@@ -547,7 +582,7 @@ export function analyseRound({
           tick: death.tick,
           playerId: victim,
           rule: 'lurk-first',
-          text: `${name} died out on their own before the group had taken a fight. In an even round it is generally better to let the core play first and open the map from there.${drop}`
+          text: coachText('lurk-first', death.tick) + drop
         });
         continue;
       }
@@ -563,7 +598,7 @@ export function analyseRound({
           tick: death.tick,
           playerId: victim,
           rule: 'free-opening',
-          text: `${name} opened the round by dying with nothing else happening anywhere on the map. Nothing was traded and nothing was gained, so this is a potentially unnecessary opening death.${drop}`
+          text: coachText('free-opening', death.tick) + drop
         });
         continue;
       }
@@ -588,11 +623,31 @@ export function analyseRound({
         tick: death.tick,
         playerId: victim,
         rule: 'negative-ev',
-        text: `${name} took a solo duel with the round already ${pct(
-          liveWp
-        )} won. With that much of an edge a fight nobody can trade is negative EV whether it is won or lost.${drop}`
+        text: coachText('negative-ev', death.tick, { win: pct(liveWp) }) + drop
       });
       continue;
+    }
+
+    // 4b. Even bodies, but the round was already won on health and equipment.
+    //     "Advantage first": above WON_ROUND this is carelessness rather than
+    //     the spacing note below, and it is the only rule that prices the lost
+    //     rifle into the next round as well.
+    if (
+      !answered &&
+      before[side] === before[opp] &&
+      Number.isFinite(liveWp) &&
+      liveWp >= WON_ROUND
+    ) {
+      const held = sampleNear(death.tick - hold)?.[side === 'CT' ? 'ct' : 't'];
+      if (Number.isFinite(held) && held >= WON_ROUND) {
+        flags.push({
+          tick: death.tick,
+          playerId: victim,
+          rule: 'untraded-won-round',
+          text: coachText('untraded-won-round', death.tick, { win: pct(liveWp) }) + drop
+        });
+        continue;
+      }
     }
 
     // 5. Solo death in a true 3v3 or 4v4. The even headcount must have held
@@ -612,7 +667,7 @@ export function analyseRound({
           tick: death.tick,
           playerId: victim,
           rule: 'solo-even',
-          text: `${name} died alone in a ${evenN}v${evenN} with no trade. In an even situation the team needs to play together — a solo death here is still a mistake even when the HP looks bad.${drop}`
+          text: coachText('solo-even', death.tick, { n: evenN }) + drop
         });
       }
     }
@@ -648,7 +703,6 @@ export function analyseRound({
       continue;
     }
 
-    const name = byId.get(victim)?.name || victim;
     const killerName = byId.get(death.attacker)?.name || death.attacker;
     const wpBefore = pre?.[side === 'CT' ? 'ct' : 't'];
     const wpAfter = sampleNear(death.tick + tickRate)?.[side === 'CT' ? 'ct' : 't'];
@@ -660,7 +714,11 @@ export function analyseRound({
       tick: death.tick,
       playerId: victim,
       rule: 'unchecked-position',
-      text: `${name} died to ${killerName} from an angle nobody in the group was holding. With ${group.length} players stacked, that position needed a check — dying to an unchecked angle is a team mistake.${drop}`
+      text:
+        coachText('unchecked-position', death.tick, {
+          enemy: killerName,
+          n: group.length
+        }) + drop
     });
     aimFlagged.add(`${victim}@${death.tick}`);
   }
@@ -682,9 +740,9 @@ export function analyseRound({
     const me = positionsOf(pre, side).find((m) => m.id === victim);
     const killerPos = positionsOf(pre, opp).find((m) => m.id === death.attacker);
     if (!me || !killerPos || !Number.isFinite(me.yaw)) continue;
-    if (yawDelta(me.yaw, yawToward(me, killerPos)) < UNAWARE_DEGREES) continue;
+    const off = yawDelta(me.yaw, yawToward(me, killerPos));
+    if (off < UNAWARE_DEGREES) continue;
 
-    const name = byId.get(victim)?.name || victim;
     const killerName = byId.get(death.attacker)?.name || death.attacker;
     const wpBefore = pre?.[side === 'CT' ? 'ct' : 't'];
     const wpAfter = sampleNear(death.tick + tickRate)?.[side === 'CT' ? 'ct' : 't'];
@@ -696,7 +754,11 @@ export function analyseRound({
       tick: death.tick,
       playerId: victim,
       rule: 'unaware-openness',
-      text: `${name} died to ${killerName} while not aiming anywhere near them. Getting opened while that unaware is a positioning / info mistake — you have to be ready for the fight you take.${drop}`
+      text:
+        coachText('unaware-openness', death.tick, {
+          enemy: killerName,
+          deg: Math.round(off)
+        }) + drop
     });
   }
 
@@ -744,13 +806,12 @@ export function analyseRound({
       });
       if (!onFire) continue;
 
-      const name = byId.get(victim)?.name || victim;
       const killerName = byId.get(death.attacker)?.name || death.attacker;
       flags.push({
         tick: death.tick,
         playerId: victim,
         rule: 'utility-unawareness',
-        text: `${name} died to ${killerName} standing in their own molotov. Once fire lands you have to track who is playing it — dying to someone in your util is utility unawareness.`
+        text: coachText('utility-unawareness', death.tick, { enemy: killerName })
       });
     }
   }
@@ -848,16 +909,15 @@ export function analyseRound({
       }
 
       const killerName = byId.get(streak.attacker)?.name || streak.attacker;
-      const victimNames = victims
-        .map((id) => byId.get(id)?.name || id)
-        .join(', ');
-      const n = victims.length;
       // One note on the first death (team filter uses that player's side).
       flags.push({
         tick: firstTick,
         playerId: victims[0],
         rule: 'multikill-refrag',
-        text: `${victimNames} died to ${killerName} alone (${n}v1). Although enemy luck is a possibility, usually this has to be a refrag.`
+        text: coachText('multikill-refrag', firstTick, {
+          enemy: killerName,
+          n: victims.length
+        })
       });
     }
   }
@@ -884,14 +944,11 @@ export function analyseRound({
         const me = mates.find((m) => m.id === k.attacker);
         if (!me || mates.length < 2 || nearestTeammate(me, mates) <= ALONE_DISTANCE) continue;
         if (flags.some((f) => f.playerId === k.attacker && Math.abs(f.tick - k.tick) <= trade)) continue;
-        const name = byId.get(k.attacker)?.name || k.attacker;
         flags.push({
           tick: k.tick,
           playerId: k.attacker,
           rule: 'negative-ev',
-          text: `${name} won a solo duel, but took it with no teammate in support and the round already ${pct(
-            liveWp
-          )} won. That fight was negative EV even though it came off.`
+          text: coachText('negative-ev-won', k.tick, { win: pct(liveWp) })
         });
       }
     }
@@ -910,27 +967,41 @@ export function analyseRound({
     flags.push(f);
   }
 
-  // Equal-buy rounds: mark the exact tick win% hit 88% and never came back.
-  const decidedMoment = findRoundDecided(meta);
-  if (decidedMoment) {
-    const onSide = players.find((p) => sideOf(p.id) === decidedMoment.side);
-    if (onSide) {
-      const phaseLabel =
-        decidedMoment.phase === 'early'
-          ? 'early round'
-          : decidedMoment.phase === 'late'
-            ? 'late round'
-            : 'mid round';
-      flags.push({
-        tick: decidedMoment.tick,
-        playerId: onSide.id,
-        rule: 'round-decided',
-        text: `Round decided in the ${phaseLabel}: ${decidedMoment.side} crossed 88% win chance and never dropped below it (equal buy).`
-      });
-    }
+  // ---- pass three: the shot log and the grenade log -----------------------
+  //
+  // Neither of these is a death rule. A spray that stopped landing, or a flash
+  // that blinded its own side, is the same mistake whichever way the fight then
+  // went, so the trade window and the frag grace deliberately do not reach
+  // them. The buy gate and the coach window still do.
+
+  const passThree = { meta, tickRate, byId, sideOf, gate, inCoachWindow, defusedTick, kills };
+  try {
+    for (const f of findUtilityFlags({ ...passThree, flashAt })) flags.push(f);
+  } catch {
+    /* one missing event list must not cost the round its other notes */
+  }
+  try {
+    for (const f of findShotFlags({ ...passThree, stateAt })) flags.push(f);
+  } catch {
+    /* same */
+  }
+  // Priced against the duel model, so these need the map. They stay quiet when
+  // it is not loaded rather than guessing at line of sight.
+  try {
+    for (const f of findDuelFlags({ ...passThree, network, track })) flags.push(f);
+  } catch {
+    /* same */
   }
 
+  // Round-decided is not a mistake and was the only flag pinned to a side
+  // rather than to a player, so it is no longer written as a note. The moment
+  // itself still rides along for anything that wants to draw it.
+  const decidedMoment = findRoundDecided(meta);
+
   flags.sort((a, b) => a.tick - b.tick);
+  // Category is a property of the rule, so it is stamped once here rather than
+  // repeated at every push site.
+  for (const f of flags) f.category = coachCategory(f.rule);
   // The states are only needed while the rules run; the graph wants numbers.
   for (const s of series) delete s.states;
   return { series, flags, gate, decided: decidedMoment || null };

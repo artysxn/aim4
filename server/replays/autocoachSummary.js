@@ -22,7 +22,13 @@ function teamNameKey(name) {
 }
 
 function emptyPlayer(id, name) {
-  return { id, name: name || id, total: 0, ok: 0, x: 0 };
+  return { id, name: name || id, total: 0, ok: 0, x: 0, rounds: 0, avg: 0 };
+}
+
+function withAvg(bag) {
+  const rounds = Number(bag.rounds) || 0;
+  bag.avg = rounds > 0 ? bag.total / rounds : 0;
+  return bag;
 }
 
 /**
@@ -51,7 +57,7 @@ async function rosterForSide(demo, side) {
 /**
  * @param {object} team
  * @returns {Promise<{
- *   players: Array<{id:string,name:string,total:number,ok:number,x:number}>,
+ *   players: Array<{id:string,name:string,total:number,ok:number,x:number,rounds:number,avg:number}>,
  *   demos: Array<object>,
  *   unanalyzedCount: number
  * }>}
@@ -90,6 +96,10 @@ export async function buildAutocoachSummary(team) {
     const entry = analyzed[demo.id] || null;
     const stems = notedByDemo.get(demo.id) || [];
     const roster = await rosterForSide(demo, side);
+    const roundCount =
+      (Array.isArray(demo.rounds) && demo.rounds.length) ||
+      Number(demo.roundCount) ||
+      0;
     const perDemo = new Map(roster.map((p) => [p.id, emptyPlayer(p.id, p.name)]));
 
     for (const stem of stems) {
@@ -125,19 +135,27 @@ export async function buildAutocoachSummary(team) {
       }
     }
 
-    // Roster players with zero mistakes still belong on the team list / Review.
-    for (const p of roster) {
-      if (!players.has(p.id)) players.set(p.id, emptyPlayer(p.id, p.name));
-      else if (p.name && players.get(p.id).name === p.id) players.get(p.id).name = p.name;
-    }
-
-    const demoPlayers = [...perDemo.values()].sort(
-      (a, b) => b.total - a.total || a.name.localeCompare(b.name)
-    );
-    const mistakeCount = demoPlayers.reduce((n, p) => n + p.total, 0);
+    const mistakeCount = [...perDemo.values()].reduce((n, p) => n + p.total, 0);
     // Analyzed means we ran (or restored) a pass for this team — registry wins.
     // Notes alone also count so older demos coached in the viewer stay marked.
     const isAnalyzed = Boolean(entry) || mistakeCount > 0;
+
+    // Roster players with zero mistakes still belong on the team list / Review.
+    // Avg uses rounds from analyzed demos only (pending matches do not dilute it).
+    for (const p of roster) {
+      const global = players.get(p.id) || emptyPlayer(p.id, p.name);
+      if (p.name && (global.name === p.id || !global.name)) global.name = p.name;
+      if (isAnalyzed && roundCount > 0) global.rounds += roundCount;
+      players.set(p.id, global);
+
+      const local = perDemo.get(p.id) || emptyPlayer(p.id, p.name);
+      if (isAnalyzed && roundCount > 0) local.rounds = roundCount;
+      perDemo.set(p.id, withAvg(local));
+    }
+
+    const demoPlayers = [...perDemo.values()]
+      .map(withAvg)
+      .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
     const score = demo.score || { team1: 0, team2: 0 };
     demos.push({
       id: demo.id,
@@ -157,9 +175,9 @@ export async function buildAutocoachSummary(team) {
   }
 
   demos.sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
-  const playerList = [...players.values()].sort(
-    (a, b) => b.total - a.total || a.name.localeCompare(b.name)
-  );
+  const playerList = [...players.values()]
+    .map(withAvg)
+    .sort((a, b) => b.avg - a.avg || b.total - a.total || a.name.localeCompare(b.name));
   const unanalyzedCount = demos.filter((d) => !d.analyzed).length;
 
   return { players: playerList, demos, unanalyzedCount };

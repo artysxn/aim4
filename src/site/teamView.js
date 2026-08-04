@@ -1271,12 +1271,15 @@ export function initTeamView({ auth, escapeHtml }) {
       ? players
           .map((p) => {
             const active = autocoachSelectedPlayer === p.id ? ' active' : '';
+            const avg = Number(p.avg);
+            const avgLabel = Number.isFinite(avg) ? avg.toFixed(2) : '0.00';
             return `<button type="button" class="tm-ac-player${active}" data-ac-player="${escapeHtml(
               p.id
             )}">
               <span class="tm-ac-player-name">${escapeHtml(p.name)}</span>
               <span class="tm-ac-player-stats">
                 <span title="Mistakes">${p.total}</span>
+                <span class="avg" title="Mistakes per round">${escapeHtml(avgLabel)}</span>
                 <span class="ok" title="Acknowledged">${p.ok}</span>
                 <span class="deny" title="Disagreed">${p.x}</span>
               </span>
@@ -1359,7 +1362,7 @@ export function initTeamView({ auth, escapeHtml }) {
         <section class="tm-card tm-ac-players">
           <div class="tm-card-head">
             <h3 class="tm-card-title">Players</h3>
-            <span class="tm-ac-legend"><span class="ok">✓</span> ack · <span class="deny">✗</span> deny</span>
+            <span class="tm-ac-legend">total · avg/r · <span class="ok">✓</span> ack · <span class="deny">✗</span> deny</span>
           </div>
           <div class="tm-ac-player-list">${
             autocoachLoading ? spinnerHtml() : playerRows

@@ -5332,7 +5332,7 @@ table.rp-mine-table tbody tr {
 
 .tm-ac-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
   gap: 14px;
   align-items: start;
 }
@@ -5344,8 +5344,14 @@ table.rp-mine-table tbody tr {
 }
 
 .tm-ac-legend {
+  font-family: var(--font-body);
   font-size: 12px;
   color: var(--muted);
+}
+
+.tm-ac-layout,
+.tm-ac-layout .tm-note {
+  font-family: var(--font-body);
 }
 
 .tm-ac-legend .ok {
@@ -5375,6 +5381,9 @@ table.rp-mine-table tbody tr {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 400;
   cursor: pointer;
   text-align: left;
 }
@@ -5386,15 +5395,33 @@ table.rp-mine-table tbody tr {
 }
 
 .tm-ac-player-name {
+  font-family: var(--font-body);
   font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tm-ac-player-stats {
   display: flex;
-  gap: 10px;
+  gap: 12px;
+  font-family: var(--font-body);
   font-variant-numeric: tabular-nums;
   color: var(--muted);
   font-size: 12px;
+  font-weight: 400;
+  flex: 0 0 auto;
+}
+
+.tm-ac-player-stats > span {
+  min-width: 2.4ch;
+  text-align: right;
+}
+
+.tm-ac-player-stats .avg {
+  min-width: 3.6ch;
+  color: var(--text);
 }
 
 .tm-ac-player-stats .ok {

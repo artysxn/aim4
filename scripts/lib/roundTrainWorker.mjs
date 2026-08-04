@@ -14,21 +14,34 @@ import { parentPort, workerData } from 'node:worker_threads';
 
 import { predictRound } from '../../src/replays/rounds/roundModel.js';
 import { MAN_BUCKET_COUNT, manBucketOf } from '../../src/replays/rounds/roundBuckets.js';
-import { loadRoundCorpus } from './roundCorpus.mjs';
+import { holdoutSet, listCorpusDemos, loadRoundCorpus } from './roundCorpus.mjs';
 
 const { shard, shardCount, limit, holdout } = workerData;
 
 const rows = [];
-const { rounds } = await loadRoundCorpus({ limit });
-const demos = [...new Set(rounds.map((r) => r.demo))].sort();
-const held = new Set(demos.slice(0, Math.max(1, Math.round(demos.length * holdout))));
 
-let seen = 0;
+// Only this shard's rounds are decoded, and the held-out demos are never
+// decoded at all. That matters more here than it looks: workers are threads
+// sharing one process heap, so four workers each building the whole corpus and
+// discarding three quarters of it means four redundant copies in one address
+// space. On a server-sized library that is the difference between starting in
+// seconds and appearing to hang.
+const allDemos = await listCorpusDemos({ limit });
+const held = holdoutSet(allDemos, holdout);
+
+let kept = 0;
+const { rounds } = await loadRoundCorpus({
+  limit,
+  keepRound: (row, index) => {
+    if (held.has(row.d)) return false;
+    // Sharded by position in the training stream, so the shards are disjoint
+    // and together cover exactly what the parent trains on.
+    return kept++ % shardCount === shard;
+  }
+});
+
 for (const r of rounds) {
-  if (held.has(r.demo)) continue;
   for (const s of r.samples) {
-    // Round-robin so every shard sees a similar mix of maps and phases.
-    if (seen++ % shardCount !== shard) continue;
     rows.push({
       f: s.f,
       y: s.y,

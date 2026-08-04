@@ -25,9 +25,9 @@ const HE_WEAPONS = new Set(['hegrenade']);
 const FIRE_WEAPONS = new Set(['molotov', 'incgrenade', 'inferno', 'firebomb']);
 
 /** A flash's contribution is measured in this window after it detonates. */
-const FLASH_SAMPLE_SECONDS = 0.5;
+export const FLASH_SAMPLE_SECONDS = 0.5;
 /** Blindness below this is a flicker, not a flash. Matches CS's own "blind" bar. */
-const FLASH_MIN_SECONDS = 0.5;
+export const FLASH_MIN_SECONDS = 0.5;
 
 const bare = (w) =>
   String(w || '')
@@ -88,38 +88,73 @@ function flashSecondsAt(view, row, slot) {
 }
 
 /**
- * Blind seconds this flashbang put on each enemy.
+ * Blind seconds one flashbang put on every player it reached, by player id.
  *
- * Measured as the RISE in each enemy's blind timer across the detonation, not
+ * Measured as the RISE in each player's blind timer across the detonation, not
  * the absolute value. Two flashes landing together would otherwise both claim
  * the full duration, and a player already blind would inflate whoever flashed
  * them second.
  *
- * @returns {number} total enemy blind seconds attributable to this flash
+ * Deliberately side-agnostic. Utility effectiveness only wants the enemies, but
+ * the coach needs both sides to say whether a flash did more to its own team
+ * than to theirs, and measuring that twice in two places would let the two
+ * answers drift apart.
+ *
+ * @param {object} args
+ * @param {Array<{id: string, slot: number}>} args.players
+ * @param {number} args.detonateTick
+ * @param {number} args.tickRate
+ * @param {(slot: number, tick: number) => number} args.flashAt  blind seconds left
+ * @param {number} [args.minSeconds]  floor below which a flicker is not a flash
+ * @returns {Map<string, number>} player id -> blind seconds gained
  */
-function blindFromFlash(view, header, meta, grenade, teams, tickRate) {
-  const det = Number(grenade.detonateTick);
-  if (!Number.isFinite(det)) return 0;
-
-  const throwerTeam = teams.get(grenade.player);
-  const before = rowForTick(header, det - 1);
+export function flashBlindRise({
+  players,
+  detonateTick,
+  tickRate,
+  flashAt,
+  minSeconds = FLASH_MIN_SECONDS
+}) {
+  const out = new Map();
+  const det = Number(detonateTick);
+  if (!Number.isFinite(det) || typeof flashAt !== 'function') return out;
   const windowEnd = det + Math.max(1, Math.round(FLASH_SAMPLE_SECONDS * (tickRate || 64)));
 
-  let total = 0;
-  for (const player of meta.players || []) {
-    // Team flashes are not effectiveness. Neither is flashing yourself.
-    if (!throwerTeam || teams.get(player.id) === throwerTeam) continue;
-
-    const baseline = flashSecondsAt(view, before, player.slot);
+  for (const player of players || []) {
+    if (!player?.id || player.slot == null) continue;
+    const baseline = flashAt(player.slot, det - 1);
     let peak = 0;
     for (let tick = det; tick <= windowEnd; tick++) {
-      const row = rowForTick(header, tick);
-      if (row < 0) continue;
-      const value = flashSecondsAt(view, row, player.slot);
+      const value = flashAt(player.slot, tick);
       if (value > peak) peak = value;
     }
     const gained = peak - baseline;
-    if (gained >= FLASH_MIN_SECONDS) total += gained;
+    if (gained >= minSeconds) out.set(player.id, gained);
+  }
+  return out;
+}
+
+/**
+ * Blind seconds this flashbang put on each enemy.
+ *
+ * @returns {number} total enemy blind seconds attributable to this flash
+ */
+function blindFromFlash(view, header, meta, grenade, teams, tickRate) {
+  const throwerTeam = teams.get(grenade.player);
+  if (!throwerTeam) return 0;
+
+  const rise = flashBlindRise({
+    players: meta.players || [],
+    detonateTick: grenade.detonateTick,
+    tickRate,
+    flashAt: (slot, tick) => flashSecondsAt(view, rowForTick(header, tick), slot)
+  });
+
+  let total = 0;
+  for (const [id, seconds] of rise) {
+    // Team flashes are not effectiveness. Neither is flashing yourself.
+    if (teams.get(id) === throwerTeam) continue;
+    total += seconds;
   }
   return total;
 }

@@ -167,6 +167,14 @@ body {
   font-weight: 400;
 }
 
+/* UA stylesheets give <button> its own face; keep PP Mori everywhere. */
+button,
+input[type='button'],
+input[type='submit'],
+input[type='reset'] {
+  font-family: inherit;
+}
+
 /* Secondary / quieter copy uses Extralight */
 .chip,
 .foot-copy,

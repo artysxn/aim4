@@ -67,7 +67,7 @@ import {
 } from '../src/replays/rounds/roundCalibration.js';
 import { roundLogit, sigmoid } from '../src/replays/rounds/roundModel.js';
 import { createScoreAccumulator, score, summarize } from '../src/replays/duels/scoring.js';
-import { CACHE_DIR, loadRoundCorpus } from './lib/roundCorpus.mjs';
+import { CACHE_DIR, holdoutSet, loadRoundCorpus } from './lib/roundCorpus.mjs';
 
 import { offerChampion } from '../server/training/champion.js';
 import { patchStatus } from '../server/training/status.js';
@@ -278,6 +278,16 @@ async function createPool(count, { limit, holdout, rows }) {
         workerData: { shard, shardCount: count, limit, holdout }
       });
       workers.push(w);
+      // A worker that dies takes its shard's answers with it. Recording the
+      // death lets every in-flight and future request reject instead of
+      // awaiting a reply that can never arrive: an out-of-memory worker used to
+      // hang the whole run silently, which looks exactly like slow training.
+      w.on('error', (err) => {
+        w._dead = err;
+      });
+      w.on('exit', (code) => {
+        if (code !== 0) w._dead = w._dead || new Error(`worker exited with code ${code}`);
+      });
       return new Promise((resolve, reject) => {
         w.once('message', resolve);
         w.once('error', reject);
@@ -308,8 +318,15 @@ async function createPool(count, { limit, holdout, rows }) {
                 w.off('message', onMessage);
                 reject(err);
               };
+              if (w._dead) {
+                reject(w._dead);
+                return;
+              }
               w.on('message', onMessage);
               w.once('error', onError);
+              w.once('exit', (code) => {
+                if (code !== 0) reject(new Error(`worker exited with code ${code}`));
+              });
               w.postMessage({ type: 'eval', id, count: vectors.length, buffer: copy.buffer }, [
                 copy.buffer
               ]);
@@ -508,9 +525,11 @@ async function main() {
 
   // Split by demo, never by round: rounds inside one match share an economy,
   // a roster and a map, so splitting rounds would leak across the divide.
+  // The same helper the workers use, so a row the parent counts as held out is
+  // never a row a worker is scoring. Two implementations of this would drift and
+  // the held-out loss would quietly stop meaning anything.
   const names = [...new Set(rounds.map((r) => r.demo))].sort();
-  const holdCount = Math.max(1, Math.round(names.length * HOLDOUT));
-  const holdout = new Set(names.slice(0, holdCount));
+  const holdout = holdoutSet(names, HOLDOUT);
   const trainRounds = rounds.filter((r) => !holdout.has(r.demo));
   const validRounds = rounds.filter((r) => holdout.has(r.demo));
 
@@ -531,6 +550,19 @@ async function main() {
     console.log(`Warm start from the exported model (${ROUND_MODEL_PARAMS.trainedOn} rounds).`);
   }
 
+  if (statusFile) {
+    await patchStatus(
+      statusFile,
+      {
+        stage: 'starting workers',
+        generation: 0,
+        generations: GENERATIONS,
+        seed: SEED,
+        rounds: rounds.length
+      },
+      championKind || 'round'
+    ).catch(() => {});
+  }
   const pool = await createPool(WORKERS, { limit: LIMIT, holdout: HOLDOUT, rows: trainRows });
   console.log(
     pool.size > 1
@@ -552,6 +584,15 @@ async function main() {
   let bestTrain = best.logLoss;
 
   for (let gen = 1; gen <= GENERATIONS; gen++) {
+    if (statusFile) {
+      // Written at the start, so a long generation shows the number it is
+      // working on rather than the last one it finished.
+      await patchStatus(
+        statusFile,
+        { stage: 'fitting', generation: gen, generations: GENERATIONS },
+        championKind || 'round'
+      ).catch(() => {});
+    }
     const blame = blamePerParam(best);
     for (let step = 0; step < ADAM_STEPS; step++) {
       await numericGradient(elite, pool, grad);

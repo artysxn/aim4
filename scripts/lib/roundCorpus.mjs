@@ -156,8 +156,54 @@ export function cacheFileFor(demoName) {
   return path.join(CACHE_DIR, `v${FEATURE_VERSION}`, `${cacheKey(demoName)}.jsonl`);
 }
 
+/**
+ * Demo names in the corpus, from each file's header line only.
+ *
+ * Cheap: one line read per demo rather than a full parse. It exists so the
+ * trainer and its workers can derive the same held-out split without either of
+ * them having to decode the corpus first, which is what makes it possible for a
+ * worker to skip decoding the rounds it does not own.
+ */
+export async function listCorpusDemos({ limit = 0 } = {}) {
+  const dir = path.join(CACHE_DIR, `v${FEATURE_VERSION}`);
+  let names;
+  try {
+    names = (await fs.readdir(dir)).filter((n) => n.endsWith('.jsonl')).sort();
+  } catch {
+    return [];
+  }
+  if (limit) names = names.slice(0, limit);
+
+  const demos = [];
+  for (const name of names) {
+    const text = await fs.readFile(path.join(dir, name), 'utf8');
+    const nl = text.indexOf('\n');
+    const first = nl >= 0 ? text.slice(0, nl) : text;
+    try {
+      const header = JSON.parse(first);
+      if (header?.header && header.demo) demos.push(String(header.demo));
+    } catch {
+      /* a file without a readable header contributes no demo name */
+    }
+  }
+  return [...new Set(demos)].sort();
+}
+
+/**
+ * The held-out demos, given every demo name.
+ *
+ * One definition, used by the trainer and by every worker. If these ever
+ * disagreed, workers would be scoring rows the trainer thinks are held out and
+ * the reported held-out loss would be quietly meaningless.
+ */
+export function holdoutSet(names, holdout = 0.2) {
+  const sorted = [...names].sort();
+  const count = Math.max(1, Math.round(sorted.length * holdout));
+  return new Set(sorted.slice(0, count));
+}
+
 /** Every cached round, decoded. */
-export async function loadRoundCorpus({ limit = 0, maps = null } = {}) {
+export async function loadRoundCorpus({ limit = 0, maps = null, keepRound = null } = {}) {
   const dir = path.join(CACHE_DIR, `v${FEATURE_VERSION}`);
   let names;
   try {
@@ -169,6 +215,8 @@ export async function loadRoundCorpus({ limit = 0, maps = null } = {}) {
 
   const rounds = [];
   const demos = [];
+  /** Position in the undecoded stream, so sharding is stable across workers. */
+  let index = 0;
   for (const name of names) {
     const text = await fs.readFile(path.join(dir, name), 'utf8');
     let header = null;
@@ -180,6 +228,14 @@ export async function loadRoundCorpus({ limit = 0, maps = null } = {}) {
         continue;
       }
       if (maps?.length && !maps.includes(row.m)) continue;
+      // Decoding is the expensive half, so a caller that only wants a slice
+      // says so before it happens rather than after. A training worker owning
+      // one shard of four would otherwise build the whole corpus and throw
+      // three quarters of it away, in a thread sharing the process heap with
+      // every other worker doing exactly the same thing.
+      const keep = !keepRound || keepRound(row, index);
+      index++;
+      if (!keep) continue;
       rounds.push(decodeRound(row));
     }
     demos.push({ name: name.replace(/\.jsonl$/, ''), header });
