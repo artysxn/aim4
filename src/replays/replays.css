@@ -3375,7 +3375,9 @@ body.rv-open {
   padding: 5px 8px;
 }
 
-/* Single-match Statistics page: two full-width team tables. */
+/* Single-match Statistics page: two full-width team tables.
+   Same column sizing / horizontal scroll as the database list — do not force
+   `table-layout: fixed`, or PFW/PFO and the rest get crushed into unreadability. */
 .st-match-boards {
   display: grid;
   grid-template-rows: auto auto;
@@ -3385,19 +3387,15 @@ body.rv-open {
 .st-board {
   min-width: 0;
   width: 100%;
-  overflow-x: auto;
 }
 
-.st-board .st-table {
+.st-board .st-hscroll {
   width: 100%;
-  /* Same column template on both teams — auto layout sized each table from
-     its own names, so short-name sides looked more spaced out. */
-  table-layout: fixed;
 }
 
-.st-board .st-table th:first-child,
 .st-board .st-table td.name {
-  width: 26%;
+  min-width: 9rem;
+  max-width: 14rem;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -3447,7 +3445,7 @@ body.rv-open {
   z-index: 12;
   display: flex;
   flex-direction: column;
-  width: min(920px, calc(100% - 40px));
+  width: min(1100px, calc(100% - 40px));
   max-height: min(720px, calc(100% - 120px));
   transform: translate(-50%, -50%);
   border: 1px solid var(--border-strong);
@@ -3488,17 +3486,15 @@ body.rv-open {
 .rv-board {
   min-width: 0;
   width: 100%;
-  overflow-x: auto;
 }
 
-.rv-board .st-table {
+.rv-board .st-hscroll {
   width: 100%;
-  table-layout: fixed;
 }
 
-.rv-board .st-table th:first-child,
 .rv-board .st-table td.name {
-  width: 26%;
+  min-width: 9rem;
+  max-width: 14rem;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -3510,28 +3506,6 @@ body.rv-open {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-}
-
-/* Team duel numbers, sat beside the team name rather than in the table. */
-.rv-board-duels {
-  margin-left: auto;
-  display: flex;
-  gap: 10px;
-  font-family: var(--font-body, inherit);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: none;
-  color: var(--text-dim, #8b93a1);
-  white-space: nowrap;
-}
-
-.rv-board-duels b {
-  font-weight: 600;
-  color: var(--text, #e6e9ef);
 }
 
 .rv-board-name.team1 {

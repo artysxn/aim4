@@ -22,7 +22,6 @@ import { aggregatePlayers, allRows, indexMaps } from '../shared/statsMath.js';
 import {
   PLAYER_COLUMNS_WITH_DUELS,
   PLAYER_FIXED_BASE,
-  TEAM_DUEL_COLUMNS,
   attachTips,
   bindStatsHScroll,
   statsTableHtml
@@ -60,11 +59,11 @@ import chartIcon from '../../icons/demos_chart.svg?raw';
 import zonesIcon from '../../icons/demos_zones.svg?raw';
 import duelsIcon from '../../icons/demos_duels.svg?raw';
 import { createDuelOverlay } from '../duels/duelOverlay.js';
+import { createDuelScanner, scanTickFor } from '../duels/duelScanner.js';
 import {
   addRoundDuels,
   createDuelStats,
-  summarizeDuelStats,
-  teamDuelStats
+  summarizeDuelStats
 } from '../duels/duelStats.js';
 import { spinnerHtml } from '../../lib/spinner.js';
 
@@ -313,6 +312,12 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   let duelsOn = false;
   let spentDuelStats = false;
   const duelOverlay = createDuelOverlay();
+  /**
+   * Feeds the win chart, not the radar: the round win chance has to know about
+   * the fights that are open whether or not the Duels tool is switched on, so
+   * it keeps its own trackers on its own cadence.
+   */
+  const winDuelScanner = createDuelScanner();
   /** @type {{aSlot:number,bSlot:number}|null} */
   let duelHover = null;
   let duelShift = false;
@@ -1989,19 +1994,12 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       const fights = (p.kills || 0) + (p.deaths || 0);
       p.tfw = fights > 0 ? ((p.kills || 0) / fights) * 100 : NaN;
     }
-    const teamStats = duels ? teamDuelStats(duels, demo.players) : null;
 
     boardTitle.textContent = `Rounds 1-${upTo}${duelStatsPending ? ' · computing duels…' : ''}`;
     const board = (team, name) => {
       const list = all.filter((p) => teamOf.get(p.id) === team);
-      const t = teamStats?.get(team);
-      const teamLine = t
-        ? `<span class="rv-board-duels">${TEAM_DUEL_COLUMNS.map(
-            (c) => `<b title="${escapeHtml(c.tip(t) || '')}">${c.label} ${c.cell(t)}</b>`
-          ).join('')}</span>`
-        : '';
       return `<div class="rv-board">
-        <h4 class="rv-board-name team${team}">${escapeHtml(name)}${teamLine}</h4>
+        <h4 class="rv-board-name team${team}">${escapeHtml(name)}</h4>
         ${statsTableHtml(list, {
           columns: PLAYER_COLUMNS_WITH_DUELS,
           fixedCount: PLAYER_FIXED_BASE.length,
@@ -2170,6 +2168,34 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const coachScratch = [];
 
   /**
+   * A duel lookup for one round's analysis pass, or null when the model has
+   * nothing to work with.
+   *
+   * The pass walks the round a second at a time, so its scanner is told to walk
+   * with it: catching up in eight-tick steps to reach ticks it only ever asks
+   * about once a second would be eight times the work for the same answers.
+   * The eight-tick grid is for the live readout, where it is the resolution the
+   * number is actually shown at.
+   */
+  function seriesDuelsAt(index, roundMeta, track) {
+    const file = files[index];
+    if (!zoneNetwork || !file || !store.get(file)?.isFull) return null;
+    const mapCode = renderer.mapCode || roundMeta.map || '';
+    prepareControlField(zoneNetwork, mapCode, renderer.image);
+    if (!hasControlField(zoneNetwork)) return null;
+    const scanner = createDuelScanner({ stride: roundMeta.tickRate || 64 });
+    return (tick) =>
+      scanner.at({
+        meta: roundMeta,
+        track,
+        tick,
+        network: zoneNetwork,
+        mapCode,
+        roundKey: file
+      });
+  }
+
+  /**
    * Analyse one round. `meta` must be that round's own full meta (never reuse
    * another round's). Results are cached per file for the session.
    */
@@ -2193,13 +2219,32 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         sampleAt: (tick) => {
           track.sampleAll(tick, scratch);
           return scratch;
-        }
+        },
+        duelsAt: seriesDuelsAt(index, roundMeta, track)
       });
     } catch {
       return null;
     }
     coachCache.set(file, result);
     return result;
+  }
+
+  /**
+   * A series point as the chart shows it.
+   *
+   * Each point carries two readings: the body-count win chance the coach
+   * measures deaths against, and the same moment with the fights that were open
+   * in it resolved forward. Everything on screen wants the second one, so the
+   * promotion happens once, here, rather than at every label and tip.
+   */
+  function displaySample(point) {
+    if (!point || !Number.isFinite(point.ctDuel)) return point;
+    return {
+      ...point,
+      ct: point.ctDuel,
+      t: point.tDuel,
+      parts: point.duelParts || point.parts
+    };
   }
 
   /** Win chance sample at (or just before) a tick from the cached series. */
@@ -2210,7 +2255,37 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       if (s.tick <= tick) best = s;
       else break;
     }
-    return best;
+    return displaySample(best);
+  }
+
+  /**
+   * The fights open at (or just before) `tick`, for the win chance.
+   *
+   * The tick is snapped to the scan grid so playback asks for the same answer
+   * for eight ticks running and pays for one scan, rather than recomputing
+   * every pairing on the map on every rendered frame.
+   *
+   * Requires the same things the Duels tool does: map geometry, and full tick
+   * data. Coarse data interpolates over a second and a half, which makes view
+   * angles and movement speed meaningless — and a duel model reading those is
+   * not conservative about it, it is confidently wrong.
+   */
+  function liveDuelsAt(tick) {
+    if (!zoneNetwork || !activeMeta) return null;
+    const file = files[activeIndex];
+    const entry = store.get(file);
+    if (!entry?.isFull || !entry.full) return null;
+    const mapCode = renderer.mapCode || activeMeta.map || '';
+    prepareControlField(zoneNetwork, mapCode, renderer.image);
+    if (!hasControlField(zoneNetwork)) return null;
+    return winDuelScanner.at({
+      meta: activeMeta,
+      track: entry.full,
+      tick: scanTickFor(tick),
+      network: zoneNetwork,
+      mapCode,
+      roundKey: file
+    });
   }
 
   /** Fresh win% at this tick (kill log + live equip), for badges / playhead. */
@@ -2242,7 +2317,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       states: coachScratch,
       tick,
       network: net,
-      presence
+      presence,
+      duels: liveDuelsAt(tick)
     });
   }
 
@@ -2287,7 +2363,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const series = result.series;
     const span = Math.max(1, series.length - 1);
     // Always CT share on Y: top = CT 100% (blue), bottom = T 100% (yellow).
-    const ctShare = (p) => (Number(p?.ct) || 0) / 100;
+    // `ctDuel` is the same moment with the fights that were open in it resolved
+    // forward; it is what the badges and the playhead read, so the line has to
+    // read it too or the dot would sit off its own curve during every fight.
+    const ctShare = (p) => (Number(p?.ctDuel ?? p?.ct) || 0) / 100;
     const xAt = (i) => (i / span) * w;
     const yAt = (i) => h - ctShare(series[i]) * h;
 

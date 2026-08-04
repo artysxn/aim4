@@ -9,6 +9,11 @@
 // question the model answers is "who wins from here", and "here" is every
 // moment of the fight, not just the last one.
 //
+// Samples are kept at the first active tick, the last tick (the kill/death
+// moment when there is one), and every DEFAULT_STRIDE ticks between. That is
+// nearly as informative as averaging every tick, at a fraction of the cost
+// once the same walk runs over a whole demo library.
+//
 // Two decisions matter more than the rest.
 //
 // Episodes persist through lost contact for a grace period. Without that, a
@@ -39,27 +44,66 @@ import {
 export const DEFAULT_STRIDE = 16;
 
 /**
- * Snapshots kept per episode.
- *
- * Enough to see a fight develop, few enough that one long standoff does not
- * fill the corpus with near-identical rows. Sampling is spread across the
- * episode and always keeps the last one, which is the moment of the kill.
- */
-const MAX_SNAPSHOTS = 12;
-
-/**
  * Rescan window for a kill that produced no episode, and its step.
  *
  * Two seconds covers a swing and the approach behind it; four ticks is fine
  * enough to catch a peek that a quarter second stride stepped straight over.
  * This runs only for orphaned kills, a few hundred in a whole corpus, so it can
- * afford to be much finer than the main walk.
+ * afford to be much finer than the main walk. The fine samples are thinned to
+ * first / last / every {@link DEFAULT_STRIDE} before they are kept.
  */
 const RETRY_LOOKBACK_TICKS = 128;
 const RETRY_STRIDE = 4;
 
 /** Unordered key for a pair of slots. */
 const pairKey = (a, b) => (a < b ? `${a}:${b}` : `${b}:${a}`);
+
+/**
+ * Keep the first sample, the last sample, and one sample every `stride` ticks
+ * between them.
+ *
+ * Averaging a prediction on every dense tick of a fight is correct but wasteful
+ * once the same work runs over a whole library: most neighbouring ticks barely
+ * move the odds, and a long AWP standoff would dominate compute for no gain.
+ * Endpoints matter (fight open + kill/death), and a quarter-second grid between
+ * them is enough to track how the fight developed.
+ *
+ * @param {{ samples: object[], ticks: number[] }} ep
+ * @param {number} [stride]
+ */
+export function thinEpisodeSamples(ep, stride = DEFAULT_STRIDE) {
+  const n = ep.samples?.length || 0;
+  if (n === 0) {
+    ep.weight = 0;
+    return;
+  }
+  if (n <= 2) {
+    ep.weight = 1 / n;
+    return;
+  }
+  const step = Math.max(1, stride | 0);
+  const firstTick = ep.ticks[0];
+  const lastTick = ep.ticks[n - 1];
+  const keep = new Set([0, n - 1]);
+  for (let target = firstTick + step; target < lastTick; target += step) {
+    let best = -1;
+    let bestDist = Infinity;
+    for (let i = 1; i < n - 1; i++) {
+      const d = Math.abs(ep.ticks[i] - target);
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    // Accept the nearest fine sample only when it actually sits on this grid
+    // cell; otherwise the same index would be picked for every empty gap.
+    if (best >= 0 && bestDist <= step / 2) keep.add(best);
+  }
+  const ordered = [...keep].sort((a, b) => a - b);
+  ep.samples = ordered.map((i) => ep.samples[i]);
+  ep.ticks = ordered.map((i) => ep.ticks[i]);
+  ep.weight = 1 / ep.samples.length;
+}
 
 /**
  * @typedef {object} DuelEpisode
@@ -138,6 +182,32 @@ export function extractEpisodes({
     const ep = open.get(key);
     if (!ep) return;
     open.delete(key);
+    // Labelled fights always keep a sample at the kill/death moment when the
+    // geometry still describes the pair. Prefer the kill tick; if the victim
+    // has already dropped out of the living set there, try one tick earlier.
+    // A fresh vision tracker is used so the walk's memory is not rewound.
+    if (winnerSlot !== null) {
+      const tryTick = (t) => {
+        if (!Number.isFinite(t) || t < start) return false;
+        if (ep.ticks.length && ep.ticks[ep.ticks.length - 1] === t) return true;
+        const snap = computeDuelSnapshot({
+          meta,
+          track,
+          tick: t,
+          network,
+          mapCode,
+          smokes: blockingSmokesAt(meta.events?.grenades, t, tickRate),
+          visionTracker: null,
+          reloadTracker
+        });
+        const ctx = duelContext(snap, ep.aSlot, ep.bSlot);
+        if (!ctx) return false;
+        ep.samples.push(ctx);
+        ep.ticks.push(t);
+        return true;
+      };
+      if (!tryTick(tick)) tryTick(tick - 1);
+    }
     if (!ep.samples.length) return;
     ep.endTick = tick;
     ep.winnerSlot = winnerSlot;
@@ -214,7 +284,9 @@ export function extractEpisodes({
           winnerSlot: null,
           samples: [],
           ticks: [],
-          lastContact: tick
+          lastContact: tick,
+          /** Next tick at which a mid-fight sample is due (first active is free). */
+          nextSampleTick: null
         };
         open.set(key, ep);
       }
@@ -224,14 +296,18 @@ export function extractEpisodes({
         close(key, null, tick);
         continue;
       }
-      // Only moments with a live sightline describe a duel. A pair waiting out
-      // the grace period behind cover is still one episode, but those ticks are
-      // not fights and must not be scored as though they were.
-      if (!pair.losClear) continue;
+      // Sample only while the gunfight is active (someone has the other on
+      // screen). Clear LoS without eyes on target keeps the episode alive for
+      // the grace window, but those ticks are not fights and must not enter
+      // the average. First active tick, then every `stride` ticks after that.
+      const active = pair.aSeesB || pair.bSeesA;
+      if (!active) continue;
+      if (ep.nextSampleTick !== null && tick < ep.nextSampleTick) continue;
       const ctx = duelContext(snapshot, ep.aSlot, ep.bSlot);
       if (!ctx) continue;
       ep.samples.push(ctx);
       ep.ticks.push(tick);
+      ep.nextSampleTick = tick + stride;
     }
 
     // Anyone gone from the living pairs without a kill to explain it (falls,
@@ -259,7 +335,6 @@ export function extractEpisodes({
   for (const k of orphans) {
     const scanFrom = Math.max(start, k.tick - RETRY_LOOKBACK_TICKS);
     const scanTracker = createVisionTracker(tickRate);
-    const clear = { samples: [], ticks: [] };
     const any = { samples: [], ticks: [] };
     // Same orientation rule as the main walk, so the two sources cannot differ
     // in which player ends up as A and skew the per-scenario reporting.
@@ -282,31 +357,72 @@ export function extractEpisodes({
       if (ctx.pair.dist > VISION_MAX_DIST) continue;
       any.samples.push(ctx);
       any.ticks.push(t);
-      if (ctx.pair.losClear) {
-        clear.samples.push(ctx);
-        clear.ticks.push(t);
-      }
     }
 
-    // Prefer moments the geometry agrees were fights. Failing that, take the
-    // kill feed's word for it.
-    //
-    // This is the model's own limits being worked around, and it is sound for a
-    // specific reason: line of sight is not one of the model's inputs. It gates
-    // which moments count as a duel, but the features that decide the duel are
-    // crosshairs, guns, range, health and the rest, and all of those are just as
-    // true when the shot went through a door gap the flat map cannot represent.
-    // Throwing these fights away would not make the corpus cleaner, it would
-    // make it selectively blind to close-quarters and awkward-angle duels,
-    // which is precisely the population it would then be worst at.
-    const use = clear.samples.length ? clear : any;
+    // Prefer active (on-screen) moments, then clear LoS, then any geometry that
+    // still places the two players in range. See the comment in the historical
+    // recovery path: line of sight gates which moments count, it is not a model
+    // feature, so dropping unsighted close-range kills would bias the corpus.
+    const activeOnly = { samples: [], ticks: [] };
+    const losOnly = { samples: [], ticks: [] };
+    for (let i = 0; i < any.samples.length; i++) {
+      const pair = any.samples[i].pair;
+      if (pair.aSeesB || pair.bSeesA) {
+        activeOnly.samples.push(any.samples[i]);
+        activeOnly.ticks.push(any.ticks[i]);
+      }
+      if (pair.losClear) {
+        losOnly.samples.push(any.samples[i]);
+        losOnly.ticks.push(any.ticks[i]);
+      }
+    }
+    const use = activeOnly.samples.length
+      ? activeOnly
+      : losOnly.samples.length
+        ? losOnly
+        : any;
     if (!use.samples.length) {
       stats.killsWithoutEpisode++;
       continue;
     }
-    if (clear.samples.length) stats.recovered++;
+    if (activeOnly.samples.length) stats.recovered++;
+    else if (losOnly.samples.length) stats.recovered++;
     else stats.recoveredUnsighted++;
     stats.labelled++;
+
+    // Always include the kill tick when possible (last sample may already be it).
+    if (use.ticks[use.ticks.length - 1] !== k.tick) {
+      const killSnap = computeDuelSnapshot({
+        meta,
+        track,
+        tick: k.tick,
+        network,
+        mapCode,
+        smokes: blockingSmokesAt(meta.events?.grenades, k.tick, tickRate),
+        visionTracker: null,
+        reloadTracker
+      });
+      let killCtx = duelContext(killSnap, aSlot, bSlot);
+      let killTick = k.tick;
+      if (!killCtx) {
+        const prev = computeDuelSnapshot({
+          meta,
+          track,
+          tick: k.tick - 1,
+          network,
+          mapCode,
+          smokes: blockingSmokesAt(meta.events?.grenades, k.tick - 1, tickRate),
+          visionTracker: null,
+          reloadTracker
+        });
+        killCtx = duelContext(prev, aSlot, bSlot);
+        killTick = k.tick - 1;
+      }
+      if (killCtx) {
+        use.samples.push(killCtx);
+        use.ticks.push(killTick);
+      }
+    }
 
     episodes.push({
       round: roundFile,
@@ -316,27 +432,15 @@ export function extractEpisodes({
       startTick: use.ticks[0],
       endTick: k.tick,
       winnerSlot: k.attacker,
-      sighted: clear.samples.length > 0,
+      sighted: Boolean(activeOnly.samples.length || losOnly.samples.length),
       samples: use.samples,
       ticks: use.ticks
     });
   }
 
-  // --- thin long episodes, and weight each one as a single fight -----------
+  // --- thin to first / last / every stride, weight each fight once ---------
   for (const ep of episodes) {
-    if (ep.samples.length > MAX_SNAPSHOTS) {
-      const keep = [];
-      const keepTicks = [];
-      const step = (ep.samples.length - 1) / (MAX_SNAPSHOTS - 1);
-      for (let i = 0; i < MAX_SNAPSHOTS; i++) {
-        const idx = Math.round(i * step);
-        keep.push(ep.samples[idx]);
-        keepTicks.push(ep.ticks[idx]);
-      }
-      ep.samples = keep;
-      ep.ticks = keepTicks;
-    }
-    ep.weight = ep.samples.length ? 1 / ep.samples.length : 0;
+    thinEpisodeSamples(ep, stride);
     stats.snapshots += ep.samples.length;
   }
 

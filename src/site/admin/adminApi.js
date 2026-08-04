@@ -95,6 +95,9 @@ export const adminApi = {
   refreshStats: ({ force = true } = {}) =>
     send('POST', '/api/admin/stats/refresh', { force }),
 
+  /** Progress for an in-flight (or just-finished) stats rebuild. */
+  refreshStatsStatus: () => get('/api/admin/stats/refresh'),
+
   content: (store, op, payload) => send('POST', `/api/admin/content/${store}/${op}`, payload),
 
   audit: ({ actorId = '', targetUser = '', action = '', limit = 100, offset = 0 } = {}) => {

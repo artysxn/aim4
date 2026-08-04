@@ -51,7 +51,30 @@ import { getZones } from '../zonesStore.js';
 const statsIo = { userDir, readRoundMeta, readRoundTicks, getZones };
 
 /** Only one full-library stats rebuild at a time. */
-let statsRefreshRunning = null;
+let statsRefreshJob = null;
+
+function statsRefreshStatus() {
+  if (!statsRefreshJob) return { running: false };
+  const j = statsRefreshJob;
+  const finishedAt = j.finishedAt || null;
+  const ageMs = finishedAt ? Date.now() - finishedAt : Date.now() - j.startedAt;
+  return {
+    running: !j.finished,
+    finished: Boolean(j.finished),
+    stale: Boolean(j.finished && ageMs > 15 * 60 * 1000),
+    startedAt: j.startedAt,
+    finishedAt,
+    startedBy: j.startedBy,
+    force: j.force,
+    done: j.done || 0,
+    total: j.total || 0,
+    percent: j.percent || 0,
+    current: j.current || null,
+    ms: j.finished && finishedAt ? finishedAt - j.startedAt : Date.now() - j.startedAt,
+    report: j.report || null,
+    error: j.error || null
+  };
+}
 
 const MAX_BODY = 256 * 1024;
 
@@ -459,43 +482,85 @@ async function route(req, res, url, me) {
 
   // ---- replay stats indexes -----------------------------------------------
   // Force-rebuild every ready demo's compact stats index from parsed round
-  // data (PRW, possession, swing, …). Can take a long time on a large library.
+  // data (PRW, possession, swing, duels, …). Runs in the background; poll
+  // GET for progress. Can take a long time on a large library.
+  if (req.method === 'GET' && p === '/api/admin/stats/refresh') {
+    json(res, req, 200, statsRefreshStatus());
+    return true;
+  }
+
   if (req.method === 'POST' && p === '/api/admin/stats/refresh') {
-    if (statsRefreshRunning) {
+    if (statsRefreshJob && !statsRefreshJob.finished) {
       json(res, req, 409, {
         error: 'A statistics recalculation is already running.',
-        startedAt: statsRefreshRunning.startedAt,
-        startedBy: statsRefreshRunning.startedBy
+        ...statsRefreshStatus()
       });
       return true;
     }
     const body = await readJson(req).catch(() => ({}));
     const force = body.force !== false;
     const startedAt = Date.now();
-    statsRefreshRunning = { startedAt, startedBy: me.id };
-    try {
-      const records = await listDemos(SHARED_LIBRARY);
-      const report = await refreshLibraryStats(statsIo, SHARED_LIBRARY, records, { force });
-      await writeAudit({
-        actorId: me.id,
-        targetUser: null,
-        action: 'stats.refresh',
-        payload: {
+    statsRefreshJob = {
+      startedAt,
+      startedBy: me.id,
+      force,
+      done: 0,
+      total: 0,
+      percent: 0,
+      current: null,
+      finished: false,
+      report: null,
+      error: null
+    };
+
+    // Detach from the request so the panel can poll progress instead of
+    // holding one HTTP connection open for the whole library rebuild.
+    setImmediate(async () => {
+      try {
+        const records = await listDemos(SHARED_LIBRARY);
+        const report = await refreshLibraryStats(statsIo, SHARED_LIBRARY, records, {
           force,
-          total: report.total,
-          ready: report.ready,
-          built: report.built,
-          enriched: report.enriched,
-          current: report.current,
-          failed: report.failed,
-          ms: Date.now() - startedAt
-        },
-        req
-      });
-      json(res, req, 200, { ok: true, force, ...report, ms: Date.now() - startedAt });
-    } finally {
-      statsRefreshRunning = null;
-    }
+          onProgress: (p) => {
+            if (!statsRefreshJob || statsRefreshJob.startedAt !== startedAt) return;
+            statsRefreshJob.done = p.done;
+            statsRefreshJob.total = p.total;
+            statsRefreshJob.percent = p.percent;
+            statsRefreshJob.current = p.current;
+          }
+        });
+        if (!statsRefreshJob || statsRefreshJob.startedAt !== startedAt) return;
+        statsRefreshJob.report = { ...report, ms: Date.now() - startedAt };
+        statsRefreshJob.done = report.ready;
+        statsRefreshJob.total = report.ready;
+        statsRefreshJob.percent = 100;
+        statsRefreshJob.current = null;
+        statsRefreshJob.finished = true;
+        statsRefreshJob.finishedAt = Date.now();
+        await writeAudit({
+          actorId: me.id,
+          targetUser: null,
+          action: 'stats.refresh',
+          payload: {
+            force,
+            total: report.total,
+            ready: report.ready,
+            built: report.built,
+            enriched: report.enriched,
+            current: report.current,
+            failed: report.failed,
+            ms: Date.now() - startedAt
+          },
+          req: null
+        });
+      } catch (err) {
+        if (!statsRefreshJob || statsRefreshJob.startedAt !== startedAt) return;
+        statsRefreshJob.error = err?.message || String(err);
+        statsRefreshJob.finished = true;
+        statsRefreshJob.finishedAt = Date.now();
+      }
+    });
+
+    json(res, req, 202, { ok: true, started: true, ...statsRefreshStatus() });
     return true;
   }
 

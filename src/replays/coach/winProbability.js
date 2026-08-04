@@ -13,6 +13,7 @@
 import { FLAG_DEFUSING } from '../shared/tickFormat.js';
 import { isDefuser } from '../viewer/equipmentIcons.js';
 import { BOMB_SECONDS } from '../viewer/roundClock.js';
+import { expectedCtOverDuels } from './duelLookahead.js';
 import {
   mapControlAdvantage,
   possessionSharesAt
@@ -499,6 +500,20 @@ export function explainProbability(sample, map = '') {
       Number.isFinite(ctN) && Number.isFinite(tN) ? ` (${ctN} CT / ${tN} T)` : '';
     detail.push(`Site ${site}${bodies}  ${side} +${Math.abs(sitePp)}pp`);
   }
+  const duels = sample.parts?.duels;
+  if (duels?.length) {
+    const before = sample.parts?.duelBaseCt;
+    const swing = Number.isFinite(before)
+      ? `  CT ${before.toFixed(1)}% → ${Number(sample.ct).toFixed(1)}%`
+      : '';
+    detail.push(`Open fights  ${duels.length}${swing}`);
+    for (const d of duels) {
+      const aWin = Math.round(d.pa * 100);
+      const a = d.aName || `slot ${d.aSlot}`;
+      const b = d.bName || `slot ${d.bSlot}`;
+      detail.push(`  ${a} ${aWin}%  vs  ${b} ${100 - aWin}%`);
+    }
+  }
   return { summary, detail };
 }
 
@@ -562,6 +577,10 @@ export function decidedSideAt({ tick, endTick, winnerSide, ctAlive, tAlive, bomb
  * Returns capped averages (not team totals) so a 4v3 from one death does not
  * look like a multi-thousand economy swing, and AWP kits match rifles at the cap.
  *
+ * The uncapped side totals and the per-slot breakdown come back alongside them,
+ * because the duel lookahead has to ask what the averages become when a named
+ * player falls, and that cannot be recovered from an average.
+ *
  * @param {object} args
  * @param {Array} args.players      roster ({id, team})
  * @param {object} args.stats       per-player freezetime stats ({equipValue})
@@ -572,7 +591,17 @@ export function decidedSideAt({ tick, endTick, winnerSide, ctAlive, tAlive, bomb
  * @param {Set<string>} [args.deadIds]  kill-log deaths at this tick
  */
 export function liveEquipment({ players, stats, states, grenades, tick, teamSides, deadIds }) {
-  const out = { CT: 0, T: 0, ctAlive: 0, tAlive: 0, ctEff: 0, tEff: 0 };
+  const out = {
+    CT: 0,
+    T: 0,
+    ctAlive: 0,
+    tAlive: 0,
+    ctEff: 0,
+    tEff: 0,
+    ctSum: 0,
+    tSum: 0,
+    bySlot: {}
+  };
   const thrown = new Map();
   for (const g of grenades || []) {
     if (!g.player || Number(g.throwTick) > tick) continue;
@@ -588,34 +617,113 @@ export function liveEquipment({ players, stats, states, grenades, tick, teamSide
     const s = states?.[p.slot];
     if (!s?.alive) continue;
     const weight = hpBodyWeight(s.health);
+    const bought = stats?.[p.id]?.equipValue || 0;
+    const value = Math.max(0, bought - (thrown.get(p.id) || 0));
     if (side === 'CT') {
       out.ctAlive++;
       out.ctEff += weight;
+      ctSum += value;
     } else {
       out.tAlive++;
       out.tEff += weight;
+      tSum += value;
     }
-    const bought = stats?.[p.id]?.equipValue || 0;
-    const value = Math.max(0, bought - (thrown.get(p.id) || 0));
-    if (side === 'CT') ctSum += value;
-    else tSum += value;
+    out.bySlot[p.slot] = { side, weight, value };
   }
-  out.CT =
-    out.ctAlive > 0 ? Math.min(AVG_EQUIP_CAP, ctSum / out.ctAlive) : 0;
-  out.T = out.tAlive > 0 ? Math.min(AVG_EQUIP_CAP, tSum / out.tAlive) : 0;
+  out.ctSum = ctSum;
+  out.tSum = tSum;
+  out.CT = avgEquip(ctSum, out.ctAlive);
+  out.T = avgEquip(tSum, out.tAlive);
   return out;
+}
+
+/** Side equipment total -> the capped per-player average the model wants. */
+export function avgEquip(sum, alive) {
+  return alive > 0 ? Math.min(AVG_EQUIP_CAP, sum / alive) : 0;
+}
+
+/**
+ * The round probability, with every fight that is open right now resolved
+ * forward — see duelLookahead.js for why an open fight is already part of the
+ * round state and not a thing to wait for.
+ *
+ * Map control, bombsite presence and the plant timer are carried across each
+ * branch unchanged. They describe where the players are standing, and a fight
+ * resolving in the next second does not move anyone; the bodies and the
+ * equipment averages are the only things a trade actually changes.
+ *
+ * @param {object} args
+ * @param {object} args.state    the same state {@link winProbability} takes
+ * @param {Array<{aSlot:number,bSlot:number,pa:number}>} [args.duels] open fights
+ * @param {Record<number, object>} [args.bySlot]  from {@link liveEquipment}
+ * @param {number} [args.ctSum]  uncapped CT equipment total
+ * @param {number} [args.tSum]
+ * @returns {{ct:number, t:number, parts:object}}
+ */
+export function winProbabilityWithDuels({ state, duels, bySlot, ctSum, tSum }) {
+  const wp = winProbability(state);
+  // A round that is already over has nothing left to predict, and a fight
+  // inside one is a fight nobody is going to finish.
+  if (!duels?.length || !bySlot || wp.parts.decided) return wp;
+
+  const ctAlive = Math.max(0, state.ctAlive | 0);
+  const tAlive = Math.max(0, state.tAlive | 0);
+  const base = {
+    ctAlive,
+    tAlive,
+    ctEff: Number.isFinite(state.ctEff) ? state.ctEff : ctAlive,
+    tEff: Number.isFinite(state.tEff) ? state.tEff : tAlive,
+    ctSum: Number.isFinite(ctSum) ? ctSum : (state.ctEquip || 0) * ctAlive,
+    tSum: Number.isFinite(tSum) ? tSum : (state.tEquip || 0) * tAlive
+  };
+
+  const result = expectedCtOverDuels({
+    base,
+    duels,
+    bySlot,
+    evaluate: (s) =>
+      winProbability({
+        ...state,
+        ctAlive: s.ctAlive,
+        tAlive: s.tAlive,
+        ctEff: s.ctEff,
+        tEff: s.tEff,
+        ctEquip: avgEquip(s.ctSum, s.ctAlive),
+        tEquip: avgEquip(s.tSum, s.tAlive)
+      }).ct
+  });
+  if (!result) return wp;
+
+  const ct = Math.min(CEIL, Math.max(FLOOR, result.ct));
+  return {
+    ct,
+    t: 100 - ct,
+    parts: {
+      ...wp.parts,
+      // What the round looked like before the open fights were resolved, so the
+      // tip can show the swing rather than only the number it landed on.
+      duelBaseCt: wp.ct,
+      duels: result.used
+    }
+  };
 }
 
 /**
  * Live win probability for one tick (badges / playhead). Same inputs the
  * series pass uses, so playback tracks bodies and utility every frame.
+ *
+ * `duels` is optional and is what makes the live number move with the fights
+ * rather than with the kill feed. Callers that have no duel model available
+ * (no map geometry, coarse tick data) simply omit it and get the body-count
+ * reading, which is the same number as before.
  */
 export function winProbabilityAtTick({
   meta,
   states,
   tick,
   network = null,
-  presence = null
+  presence = null,
+  duels = null
 }) {
   if (!meta) return null;
   const players = meta.players || [];
@@ -683,22 +791,28 @@ export function winProbabilityAtTick({
       siteT = siteAdv.t;
     }
   }
-  const wp = winProbability({
-    map: meta.map,
-    ctAlive: eq.ctAlive,
-    tAlive: eq.tAlive,
-    ctEff: eq.ctEff,
-    tEff: eq.tEff,
-    ctEquip: eq.CT,
-    tEquip: eq.T,
-    decided,
-    mapControlCt,
-    mapControlT,
-    sitePp,
-    site,
-    siteCt,
-    siteT,
-    ...plant
+  const wp = winProbabilityWithDuels({
+    state: {
+      map: meta.map,
+      ctAlive: eq.ctAlive,
+      tAlive: eq.tAlive,
+      ctEff: eq.ctEff,
+      tEff: eq.tEff,
+      ctEquip: eq.CT,
+      tEquip: eq.T,
+      decided,
+      mapControlCt,
+      mapControlT,
+      sitePp,
+      site,
+      siteCt,
+      siteT,
+      ...plant
+    },
+    duels,
+    bySlot: eq.bySlot,
+    ctSum: eq.ctSum,
+    tSum: eq.tSum
   });
   return {
     tick,

@@ -16,7 +16,8 @@ import {
   decidedSideAt,
   liveEquipment,
   plantSituationAt,
-  winProbability
+  winProbability,
+  winProbabilityWithDuels
 } from './winProbability.js';
 import {
   mapControlAdvantageEnabled,
@@ -170,9 +171,21 @@ function groupAround(seed, mates) {
  * @param {(tick: number) => Array} args.sampleAt  per-slot tick states
  * @param {object} [args.network] zone network (map control term when ready + baselined)
  * @param {{ sampleAll: Function }} [args.track]   full tick track for presence build
+ * @param {(tick: number) => Array} [args.duelsAt]  open fights, for the graph's
+ *   duel-aware line. Deliberately kept off `ct`/`t`: every rule below measures
+ *   what a death cost by reading the win chance either side of it, and a
+ *   probability that has already priced the death in would report that every
+ *   death cost nothing. The lookahead is a better account of the round and a
+ *   useless one to coach against, so it rides alongside as `ctDuel`.
  * @returns {{series: Array, flags: Array, gate: object}}
  */
-export function analyseRound({ meta, sampleAt, network = null, track = null }) {
+export function analyseRound({
+  meta,
+  sampleAt,
+  network = null,
+  track = null,
+  duelsAt = null
+}) {
   const tickRate = meta.tickRate || 64;
   const players = meta.players || [];
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
@@ -277,7 +290,7 @@ export function analyseRound({ meta, sampleAt, network = null, track = null }) {
         siteT = siteAdv.t;
       }
     }
-    const wp = winProbability({
+    const state = {
       map: meta.map,
       ctAlive: eq.ctAlive,
       tAlive: eq.tAlive,
@@ -293,12 +306,27 @@ export function analyseRound({ meta, sampleAt, network = null, track = null }) {
       siteCt,
       siteT,
       ...plant
-    });
+    };
+    const wp = winProbability(state);
+    const duels = duelsAt ? duelsAt(tick) : null;
+    const ahead = duels?.length
+      ? winProbabilityWithDuels({
+          state,
+          duels,
+          bySlot: eq.bySlot,
+          ctSum: eq.ctSum,
+          tSum: eq.tSum
+        })
+      : null;
     series.push({
       tick,
       second: Math.round((tick - from) / tickRate),
       ct: wp.ct,
       t: wp.t,
+      // Same moment with the open fights resolved forward, or null when nobody
+      // is fighting / no duel model is available. Drawn, never coached against.
+      ctDuel: ahead ? ahead.ct : null,
+      tDuel: ahead ? ahead.t : null,
       ctAlive: eq.ctAlive,
       tAlive: eq.tAlive,
       ctEff: eq.ctEff,
@@ -306,6 +334,7 @@ export function analyseRound({ meta, sampleAt, network = null, track = null }) {
       ctEquip: eq.CT,
       tEquip: eq.T,
       parts: wp.parts,
+      duelParts: ahead ? ahead.parts : null,
       deadIds,
       states
     });

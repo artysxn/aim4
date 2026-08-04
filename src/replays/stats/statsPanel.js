@@ -24,7 +24,6 @@ import {
   PLAYER_COLUMNS,
   PLAYER_FIXED_BASE,
   TEAM_COLUMNS,
-  TEAM_DUEL_COLUMNS,
   STATS_PAGE_SIZE,
   attachTips,
   bindStatsHScroll,
@@ -429,28 +428,8 @@ export function createStatsPanel({ escapeHtml }) {
     const fixedCount = opts.fixedCount ?? PLAYER_FIXED_BASE.length;
     const board = (team, name) => {
       const list = playerRows.filter((p) => teamOf.get(p.id) === team);
-      const duelMembers = list.filter((p) => Number.isFinite(p.pfw));
-      const t =
-        duelMembers.length > 0
-          ? {
-              pfw:
-                duelMembers.reduce((sum, m) => sum + m.pfw, 0) / duelMembers.length,
-              pfo:
-                duelMembers.reduce((sum, m) => sum + m.pfo, 0) / duelMembers.length,
-              members: duelMembers.map((m) => ({
-                name: m.name,
-                pfw: m.pfw,
-                pfo: m.pfo
-              }))
-            }
-          : null;
-      const teamLine = t
-        ? `<span class="rv-board-duels">${TEAM_DUEL_COLUMNS.map(
-            (c) => `<b title="${escapeHtml(c.tip(t) || '')}">${c.label} ${c.cell(t)}</b>`
-          ).join('')}</span>`
-        : '';
       return `<div class="st-board">
-        <h4 class="st-board-name team${team}">${escapeHtml(name || `Team ${team}`)}${teamLine}</h4>
+        <h4 class="st-board-name team${team}">${escapeHtml(name || `Team ${team}`)}</h4>
         ${statsTableHtml(list, {
           columns,
           fixedCount,

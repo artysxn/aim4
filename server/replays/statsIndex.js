@@ -45,10 +45,10 @@ import {
 import { applyMovementFields } from '../../src/replays/roles/movementFromTicks.js';
 import { roundDuelBag } from '../../src/replays/duels/duelStats.js';
 
-// v13 adds per-round duel bags (row.du) for PFW / PFO / TFW on Statistics.
+// v14 thins duel bags to first / last / every-16th active tick (cheaper PFW).
 // Bumping this rebuilds every index from the round files already on disk; it
 // does NOT reparse demos.
-export const STATS_VERSION = 13;
+export const STATS_VERSION = 14;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -886,7 +886,7 @@ export async function statsPayload(io, user, records, demoIds = null) {
  *   errors: Array<{ id: string, filename?: string, error: string }>
  * }>}
  */
-export async function refreshLibraryStats(io, user, records, { force = false } = {}) {
+export async function refreshLibraryStats(io, user, records, { force = false, onProgress = null } = {}) {
   const ready = (records || []).filter((r) => (r.status || 'ready') === 'ready');
   const report = {
     total: (records || []).length,
@@ -898,7 +898,21 @@ export async function refreshLibraryStats(io, user, records, { force = false } =
     errors: []
   };
 
+  const emit = (done, current = null) => {
+    if (typeof onProgress !== 'function') return;
+    onProgress({
+      done,
+      total: ready.length,
+      percent: ready.length ? Math.round((done / ready.length) * 100) : 100,
+      current
+    });
+  };
+
+  emit(0, null);
+
+  let i = 0;
   for (const record of ready) {
+    emit(i, record.filename || record.id || null);
     try {
       if (force) await forgetDemoIndex(io, user, record.id);
 
@@ -919,6 +933,7 @@ export async function refreshLibraryStats(io, user, records, { force = false } =
           filename: record.filename,
           error: 'No stats index produced.'
         });
+        i++;
         continue;
       }
 
@@ -933,8 +948,10 @@ export async function refreshLibraryStats(io, user, records, { force = false } =
         error: err?.message || String(err)
       });
     }
+    i++;
   }
 
+  emit(ready.length, null);
   return report;
 }
 
