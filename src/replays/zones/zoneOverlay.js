@@ -205,8 +205,21 @@ export function hasControlField(network) {
   return Boolean(network?._fieldGeom?.count);
 }
 
+/**
+ * The walkable raster already baked for a map, or null.
+ *
+ * Exposed so callers that want to walk a sight line directly, rather than sweep
+ * a polygon, can read the same mask the segments were extracted from instead of
+ * baking a second, slightly different one.
+ *
+ * @param {string} mapCode
+ */
+export function getCachedLos(mapCode) {
+  return losCache.get(mapCode) || null;
+}
+
 /** Active smoke grenades at `tick` (detonated, still living). */
-function activeSmokes(grenades, tick, tickRate) {
+export function activeSmokes(grenades, tick, tickRate) {
   const out = [];
   const life = SMOKE_SECONDS * (tickRate || 64);
   for (const g of grenades || []) {

@@ -278,7 +278,7 @@ export function normalizeGrenadeType(name) {
   return raw;
 }
 
-const GUN_PRIORITY = [
+export const GUN_PRIORITY = [
   'awp',
   'scar20',
   'g3sg1',

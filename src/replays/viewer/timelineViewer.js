@@ -20,8 +20,9 @@ import { getEntitlements } from '../../lib/entitlements.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { aggregatePlayers, allRows, indexMaps } from '../shared/statsMath.js';
 import {
-  PLAYER_COLUMNS,
+  PLAYER_COLUMNS_WITH_DUELS,
   PLAYER_FIXED_BASE,
+  TEAM_DUEL_COLUMNS,
   attachTips,
   bindStatsHScroll,
   statsTableHtml
@@ -57,6 +58,14 @@ import bookmarkAddedIcon from '../../icons/demos_bookmarks_added.svg?raw';
 import coachIcon from '../../icons/demos_coach.svg?raw';
 import chartIcon from '../../icons/demos_chart.svg?raw';
 import zonesIcon from '../../icons/demos_zones.svg?raw';
+import duelsIcon from '../../icons/demos_duels.svg?raw';
+import { createDuelOverlay } from '../duels/duelOverlay.js';
+import {
+  addRoundDuels,
+  createDuelStats,
+  summarizeDuelStats,
+  teamDuelStats
+} from '../duels/duelStats.js';
 import { spinnerHtml } from '../../lib/spinner.js';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
@@ -189,6 +198,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
           }>${icon(coachIcon)}</button>
           <button type="button" class="rv-tool" id="rv-zones"
             title="Map positions: active / controlled / contested">${icon(zonesIcon)}</button>
+          <button type="button" class="rv-tool" id="rv-duels"
+            title="Duel stats: hold Shift over a line for win chance">${icon(duelsIcon)}</button>
           <button type="button" class="rv-tool" id="rv-draw" title="Draw (right click always draws)">${icon(pencilIcon)}</button>
           <button type="button" class="rv-tool" id="rv-note" title="Notes">${icon(commentsIcon)}</button>
           <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
@@ -248,6 +259,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   const noteAddEditBtn = el.querySelector('#rv-note-add-edit');
   const chartBtn = el.querySelector('#rv-chart');
   const zonesBtn = el.querySelector('#rv-zones');
+  const duelsBtn = el.querySelector('#rv-duels');
   const coachBtn = el.querySelector('#rv-coach');
   const coachPick = el.querySelector('#rv-coach-pick');
   const coachPickT1 = el.querySelector('#rv-coach-pick-t1');
@@ -297,6 +309,15 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   let coachOn = false;
   /** Position overlay on the radar (control / contested). */
   let zonesOn = false;
+  /** Duel network on the radar, with win chance on shift-hover. */
+  let duelsOn = false;
+  let spentDuelStats = false;
+  const duelOverlay = createDuelOverlay();
+  /** @type {{aSlot:number,bSlot:number}|null} */
+  let duelHover = null;
+  let duelShift = false;
+  /** Projected duel geometry in CSS pixels, rebuilt each paint for hit tests. */
+  let duelHitLines = [];
   /**
    * Daily allowances are spent once per opened viewer, not once per toggle.
    * Otherwise turning an overlay off and on again would bill twice for what
@@ -791,6 +812,95 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     zonesBtn?.classList.toggle('active', zonesOn);
   }
 
+  function syncDuelsBtn() {
+    duelsBtn?.classList.toggle('active', duelsOn);
+  }
+
+  /**
+   * The duel network for this tick, or null when the tool is off or the map
+   * geometry it needs has not loaded.
+   *
+   * Also rebuilds the hit-test geometry in CSS pixels, because that is only
+   * knowable once the view transform for this frame is known, and doing it here
+   * means hovering never has to project anything itself.
+   */
+  function duelOverlayForTick(tick) {
+    duelHitLines = [];
+    if (!duelsOn || !zoneNetwork || !activeMeta) return null;
+    const mapCode = renderer.mapCode || activeMeta.map || '';
+    prepareControlField(zoneNetwork, mapCode, renderer.image);
+    if (!hasControlField(zoneNetwork)) return null;
+    const file = files[activeIndex];
+    const entry = store.get(file);
+    // Coarse tick data interpolates over a second and a half, which makes
+    // movement speed and view angles meaningless. Better to draw nothing than
+    // to draw confident numbers derived from them.
+    if (!entry?.isFull) return null;
+    const track = entry.full;
+    if (!track) return null;
+
+    const overlay = duelOverlay.compute({
+      meta: activeMeta,
+      track,
+      tick,
+      network: zoneNetwork,
+      mapCode,
+      roundKey: file,
+      hover: duelHover,
+      showPercent: duelShift,
+      radarLevel: renderer.radarLevel || 'default'
+    });
+    if (!overlay) return null;
+
+    const { w, h } = renderer.resize();
+    const t = renderer.viewTransform(w, h);
+    const toCss = (wx, wy) => {
+      const p = renderer.project(t, wx, wy, {});
+      return { x: p.x / renderer.dpr, y: p.y / renderer.dpr };
+    };
+    for (const line of overlay.lines) {
+      const a = toCss(line.ax, line.ay);
+      const b = toCss(line.bx, line.by);
+      duelHitLines.push({ aSlot: line.aSlot, bSlot: line.bSlot, ax: a.x, ay: a.y, bx: b.x, by: b.y });
+    }
+    return overlay;
+  }
+
+  /** Distance from a point to a segment, in the same units as both. */
+  function distToSegment(px, py, x0, y0, x1, y1) {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 > 0 ? ((px - x0) * dx + (py - y0) * dy) / len2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    return Math.hypot(px - (x0 + dx * t), py - (y0 + dy * t));
+  }
+
+  /**
+   * Which duel the cursor is on, if any.
+   *
+   * A pair is hit either by its line or by sitting on one of its two players,
+   * which is what makes "hover a player" work without a separate player hit
+   * test: a player's own position is the endpoint of every line they are in,
+   * and the nearest of those wins.
+   */
+  function duelAt(clientX, clientY) {
+    if (!duelHitLines.length) return null;
+    const rect = mapEl.getBoundingClientRect();
+    const px = clientX - rect.left;
+    const py = clientY - rect.top;
+    let best = null;
+    let bestDist = 7;
+    for (const line of duelHitLines) {
+      const d = distToSegment(px, py, line.ax, line.ay, line.bx, line.by);
+      if (d < bestDist) {
+        bestDist = d;
+        best = line;
+      }
+    }
+    return best ? { aSlot: best.aSlot, bSlot: best.bSlot } : null;
+  }
+
   /** Load map positions (shared zone network) when the overlay is on. */
   async function ensureZoneNetwork() {
     const map = activeMeta?.map || rounds[activeIndex]?.map || '';
@@ -1260,13 +1370,30 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     ) {
       pendingClick = null;
     }
-    if (!panning) return;
+    if (!panning) {
+      if (!duelsOn) return;
+      const hit = duelAt(e.clientX, e.clientY);
+      const same =
+        (!hit && !duelHover) ||
+        (hit && duelHover && hit.aSlot === duelHover.aSlot && hit.bSlot === duelHover.bSlot);
+      if (same) return;
+      duelHover = hit;
+      duelShift = e.shiftKey;
+      draw();
+      return;
+    }
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
     lastX = e.clientX;
     lastY = e.clientY;
     renderer.panX += dx;
     renderer.panY += dy;
+    draw();
+  });
+
+  mapEl.addEventListener('pointerleave', () => {
+    if (!duelHover) return;
+    duelHover = null;
     draw();
   });
 
@@ -1847,13 +1974,36 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const all = aggregatePlayers(rows, players, {}, demos);
     const teamOf = new Map(demo.players.map((p) => [p.id, p.team]));
 
-    boardTitle.textContent = `Rounds 1-${upTo}`;
+    // Duel numbers are merged in by player id when they are ready. Until then
+    // the columns render as dashes rather than zeroes, so a match still loading
+    // never reads as a team that lost every fight.
+    const duels = duelSummary;
+    for (const p of all) {
+      const d = duels?.get(p.id);
+      if (d) {
+        p.pfw = d.pfw;
+        p.pfo = d.pfo;
+        p.duels = d.duels;
+        p.pfoBuckets = d.buckets;
+      }
+      const fights = (p.kills || 0) + (p.deaths || 0);
+      p.tfw = fights > 0 ? ((p.kills || 0) / fights) * 100 : NaN;
+    }
+    const teamStats = duels ? teamDuelStats(duels, demo.players) : null;
+
+    boardTitle.textContent = `Rounds 1-${upTo}${duelStatsPending ? ' · computing duels…' : ''}`;
     const board = (team, name) => {
       const list = all.filter((p) => teamOf.get(p.id) === team);
+      const t = teamStats?.get(team);
+      const teamLine = t
+        ? `<span class="rv-board-duels">${TEAM_DUEL_COLUMNS.map(
+            (c) => `<b title="${escapeHtml(c.tip(t) || '')}">${c.label} ${c.cell(t)}</b>`
+          ).join('')}</span>`
+        : '';
       return `<div class="rv-board">
-        <h4 class="rv-board-name team${team}">${escapeHtml(name)}</h4>
+        <h4 class="rv-board-name team${team}">${escapeHtml(name)}${teamLine}</h4>
         ${statsTableHtml(list, {
-          columns: PLAYER_COLUMNS,
+          columns: PLAYER_COLUMNS_WITH_DUELS,
           fixedCount: PLAYER_FIXED_BASE.length,
           escapeHtml,
           sortKey: 'rating',
@@ -1863,6 +2013,57 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     };
     boardBody.innerHTML = board(1, demo.name1) + board(2, demo.name2);
     bindStatsHScroll(boardBody);
+  }
+
+  /** @type {Map<string, object> | null} per-player duel numbers, once computed */
+  let duelSummary = null;
+  /** Retires an in-flight pass when the selection changes underneath it. */
+  let duelStatsPass = 0;
+  let duelStatsPending = false;
+  let duelStatsDone = false;
+
+  /**
+   * Run the duel model over every round of this match, once.
+   *
+   * The scoreboard is a whole-match view, so the numbers behind it have to come
+   * from every round rather than the one on screen. Rounds are pulled at full
+   * detail through the same store the timeline uses, so anything already warmed
+   * in the background costs nothing, and the work is yielded between rounds to
+   * keep the transport responsive while it runs.
+   */
+  async function ensureDuelStats() {
+    if (duelStatsDone || duelStatsPending) return;
+    if (!activeMeta || !files.length) return;
+    duelStatsPending = true;
+    const pass = ++duelStatsPass;
+    try {
+      const network = await ensureZoneNetwork();
+      const mapCode = renderer.mapCode || activeMeta.map || '';
+      if (!network || !mapCode) return;
+      prepareControlField(network, mapCode, renderer.image);
+      if (!hasControlField(network)) return;
+
+      const stats = createDuelStats();
+      for (const file of files) {
+        if (destroyed || pass !== duelStatsPass) return;
+        const track = store.get(file)?.full || (await store.loadFull(file));
+        if (!track) continue;
+        const meta = await metaFor(file);
+        if (!meta?.players?.length) continue;
+        addRoundDuels(stats, { meta, track, network, mapCode });
+        // Hand the frame back between rounds; a full match is a second or so of
+        // work and blocking straight through it would stall playback.
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      if (destroyed || pass !== duelStatsPass) return;
+      duelSummary = summarizeDuelStats(stats);
+      duelStatsDone = true;
+    } catch {
+      // Leave the columns as dashes; nothing else on the board depends on this.
+    } finally {
+      if (pass === duelStatsPass) duelStatsPending = false;
+      if (!destroyed && !boardEl.hidden) renderScoreboard();
+    }
   }
 
   /** When true, Tab is holding the board open; release always closes it. */
@@ -1878,6 +2079,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       return;
     }
     renderScoreboard();
+    // Duel numbers are the viewer's own work rather than the stats API's, so
+    // they start as soon as the board is opened and fill in when they land.
+    ensureDuelStats();
     if (statsPayload || statsPending) return;
     statsPending = fetchStats([statsDemoId])
       .then((res) => {
@@ -2262,6 +2466,14 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (e.key !== 'Shift') return;
     graphShift = e.type === 'keydown';
     if (graphHoverDot) updateWinGraphTip();
+    // Shift is what reveals the duel odds. Reading e.shiftKey here rather than
+    // claiming the key means the win-graph detail and the Shift+Arrow nudge
+    // keep working exactly as they did.
+    const held = e.type === 'keydown';
+    if (duelsOn && held !== duelShift) {
+      duelShift = held;
+      if (duelHover) draw();
+    }
   }
 
   graphCanvas?.addEventListener('pointermove', onGraphPointerMove);
@@ -2612,6 +2824,27 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     draw();
   });
 
+  duelsBtn?.addEventListener('click', async () => {
+    // Same metering shape as map control: charged once per opened viewer, on
+    // the way on only, never again when it is toggled back off and on.
+    if (!duelsOn && !spentDuelStats) {
+      if (!(await useMeteredFeature(CAP.DEMOS_DUEL_WIN_PREDICTION, { host: el }))) return;
+      spentDuelStats = true;
+    }
+    duelsOn = !duelsOn;
+    syncDuelsBtn();
+    if (duelsOn) {
+      // The duel sight test needs the painted geometry, same as the zones tool.
+      await ensureZoneNetwork();
+    } else {
+      duelOverlay.reset();
+      duelHover = null;
+      duelShift = false;
+      duelHitLines = [];
+    }
+    draw();
+  });
+
   coachBtn?.addEventListener('click', () => {
     if (!coachAvailable) return;
     if (coachOn) {
@@ -2919,6 +3152,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     } else clearPlayerStates();
 
     const zoneOverlay = zoneOverlayForTick(tick);
+    const duelOverlayFrame = duelOverlayForTick(tick);
     renderer.render({
       tick,
       tickRate: timing.tickRate,
@@ -2931,7 +3165,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       drawings: drawing.visible(),
       marksKey: files[activeIndex] || '',
       hideDeaths: false,
-      zoneOverlay
+      zoneOverlay,
+      duelOverlay: duelOverlayFrame
     });
 
     const clock = clockAt(timing, tick);

@@ -2,6 +2,10 @@ node_modules/
 dist/
 server/data/
 
+# Extracted duel corpus + training logs. Regenerate with:
+#   node scripts/extract-duel-episodes.mjs
+scripts/duel-cache/
+
 # Local env files (never commit keys — only .env.example is tracked)
 .env
 .env.local

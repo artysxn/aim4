@@ -41,6 +41,15 @@ export const SIDE_COLORS = {
   CT: { base: '#5b9fd4', bright: '#8fc4ef', dim: '#2a5578' }
 };
 
+/** A palette hex plus an alpha, as an rgba string. */
+function hexAlpha(hex, a) {
+  const h = String(hex || '#ffffff').replace('#', '');
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  const n = parseInt(full, 16);
+  if (!Number.isFinite(n)) return `rgba(255,255,255,${a})`;
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
 export function colorsForState(state, rosterTeam) {
   if (state?.side === 'T' || state?.side === 'CT') return SIDE_COLORS[state.side];
   return TEAM_COLORS[rosterTeam] || TEAM_COLORS[1];
@@ -404,9 +413,99 @@ export class RadarRenderer {
     if (!frame.hideBomb) this.drawBomb(ctx, t, frame, compact);
     if (!frame.hideTracers) this.drawTracers(ctx, t, frame, compact);
     if (!frame.hideDeaths) this.drawDeaths(ctx, t, frame, compact);
+    if (frame.duelOverlay) this.drawDuelNetwork(ctx, t, frame.duelOverlay);
     this.drawPlayers(ctx, t, frame, compact);
     if (frame.drawings?.length) this.drawStrokes(ctx, t, frame.drawings);
+    if (frame.duelOverlay?.showPercent) this.drawDuelOdds(ctx, t, frame.duelOverlay);
     this._frameAlpha = 1;
+  }
+
+  /**
+   * Duel stats: the pair network and each player's line of sight.
+   *
+   * Drawn under the players so the droplets stay readable on top of it. Lines
+   * for pairings where neither player can see the other are dimmer than the
+   * rest: those duels exist, but they have not started.
+   */
+  drawDuelNetwork(ctx, t, overlay) {
+    ctx.save();
+    ctx.lineCap = 'round';
+
+    // Sight lines first, so a pair line crossing one stays legible.
+    for (const ray of overlay.rays || []) {
+      const a = this.project(t, ray.x0, ray.y0);
+      const ax = a.x;
+      const ay = a.y;
+      const b = this.project(t, ray.x1, ray.y1);
+      const colors = SIDE_COLORS[ray.side] || SIDE_COLORS.CT;
+      const grad = ctx.createLinearGradient(ax, ay, b.x, b.y);
+      // Fades out along its length: the far end is where the player is looking,
+      // not how far they can meaningfully fight.
+      grad.addColorStop(0, hexAlpha(colors.bright, 0.55));
+      grad.addColorStop(1, hexAlpha(colors.bright, 0.04));
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 1.4 * this.dpr;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+
+    const hover = overlay.hover;
+    for (const line of overlay.lines || []) {
+      const a = this.project(t, line.ax, line.ay);
+      const ax = a.x;
+      const ay = a.y;
+      const b = this.project(t, line.bx, line.by);
+      const isHover =
+        hover && hover.aSlot === line.aSlot && hover.bSlot === line.bSlot;
+      ctx.strokeStyle = isHover
+        ? 'rgba(255,255,255,0.85)'
+        : line.active
+          ? 'rgba(255,255,255,0.30)'
+          : 'rgba(255,255,255,0.10)';
+      ctx.lineWidth = (isHover ? 2.4 : 1) * this.dpr;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /** Win percentages beside the two players of the hovered duel. */
+  drawDuelOdds(ctx, t, overlay) {
+    const line = overlay.hover;
+    if (!line) return;
+    ctx.save();
+    const a = this.project(t, line.ax, line.ay);
+    this._duelBadge(ctx, a.x, a.y, line.pa, SIDE_COLORS[line.aSide] || SIDE_COLORS.CT);
+    const b = this.project(t, line.bx, line.by);
+    this._duelBadge(ctx, b.x, b.y, line.pb, SIDE_COLORS[line.bSide] || SIDE_COLORS.T);
+    ctx.restore();
+  }
+
+  _duelBadge(ctx, x, y, p, colors) {
+    const text = `${Math.round(p * 100)}%`;
+    const pad = 5 * this.dpr;
+    const h = 17 * this.dpr;
+    ctx.font = `${600} ${12 * this.dpr}px system-ui, sans-serif`;
+    const w = ctx.measureText(text).width + pad * 2;
+    const bx = x + 13 * this.dpr;
+    const by = y - h / 2;
+
+    ctx.beginPath();
+    ctx.roundRect(bx, by, w, h, 4 * this.dpr);
+    ctx.fillStyle = 'rgba(14,16,20,0.88)';
+    ctx.fill();
+    ctx.strokeStyle = hexAlpha(colors.base, 0.9);
+    ctx.lineWidth = 1.2 * this.dpr;
+    ctx.stroke();
+
+    ctx.fillStyle = colors.bright;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, bx + pad, by + h / 2);
   }
 
   /**

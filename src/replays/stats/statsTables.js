@@ -379,7 +379,84 @@ export const PLAYER_METRIC_COLUMNS = [
 ];
 
 /** Default player columns without role fields. */
+/**
+ * Duel model columns.
+ *
+ * Separate from the metric columns because they are not always available: the
+ * numbers come from running the duel model over a match's tick data, which only
+ * the viewer does. Everywhere else these render as a dash rather than a zero,
+ * because "not computed" and "predicted to lose every fight" must not look the
+ * same.
+ *
+ * PFW is how hard the fights were, PFO is whether the player beat those odds,
+ * and TFW is the plain kill share for comparison. The three are meant to be
+ * read across: a high PFW with a negative PFO is a player who was handed good
+ * spots and lost them anyway.
+ */
+export const PLAYER_DUEL_COLUMNS = [
+  {
+    key: 'pfw',
+    label: 'PFW',
+    get: (p) => (Number.isFinite(p.pfw) ? p.pfw : -Infinity),
+    cell: (p) => pct(p.pfw),
+    tip: (p) =>
+      Number.isFinite(p.pfw)
+        ? tip([
+            'Predicted fight winrate.',
+            'The average chance the model gave this player across every',
+            'active duel they were in, so it measures how hard their fights',
+            'were, not how they did in them.',
+            `Duels: ${f1(p.duels)}`
+          ])
+        : 'Open the match in the viewer to compute duel stats.'
+  },
+  {
+    key: 'pfo',
+    label: 'PFO',
+    get: (p) => (Number.isFinite(p.pfo) ? p.pfo : -Infinity),
+    cell: (p) => (Number.isFinite(p.pfo) ? `${p.pfo > 0 ? '+' : ''}${p.pfo.toFixed(2)}%` : '—'),
+    strong: true,
+    tip: (p) => {
+      if (!Number.isFinite(p.pfo)) return 'Open the match in the viewer to compute duel stats.';
+      const rows = (p.pfoBuckets || []).map(
+        (b) =>
+          `  ${String(b.centre).padStart(3)}%: won ${b.actual.toFixed(0)}% of ${b.duels.toFixed(1)}` +
+          ` (${b.delta > 0 ? '+' : ''}${b.delta.toFixed(0)})`
+      );
+      return tip([
+        'Predicted fight overperformance.',
+        'Actual win rate minus what the model predicted, in points.',
+        'Already adjusted for difficulty: winning easy fights scores zero.',
+        rows.length ? 'By predicted odds:' : '',
+        ...rows
+      ]);
+    }
+  },
+  {
+    key: 'tfw',
+    label: 'TFW',
+    get: (p) => (Number.isFinite(p.tfw) ? p.tfw : -Infinity),
+    cell: (p) => pct(p.tfw),
+    tip: (p) =>
+      Number.isFinite(p.tfw)
+        ? tip([
+            'Total fight winrate.',
+            'Kills as a share of kills plus deaths.',
+            `Kills: ${int(p.kills)}`,
+            `Deaths: ${int(p.deaths)}`
+          ])
+        : '—'
+  }
+];
+
 export const PLAYER_COLUMNS = [...PLAYER_FIXED_BASE, ...PLAYER_METRIC_COLUMNS];
+
+/** Player columns plus the duel model's, for surfaces that can compute them. */
+export const PLAYER_COLUMNS_WITH_DUELS = [
+  ...PLAYER_FIXED_BASE,
+  ...PLAYER_DUEL_COLUMNS,
+  ...PLAYER_METRIC_COLUMNS
+];
 
 /**
  * Player columns with T (yellow) / CT (blue) role or position after Rounds.
@@ -456,6 +533,47 @@ function possessionDeltaTip(t) {
   }
   return tip(lines);
 }
+
+/**
+ * Team duel columns: the side's five players averaged.
+ *
+ * Averaging the players rather than pooling their duels gives each of the five
+ * an equal say. Pooling would let whoever fought most often speak for the team,
+ * which is exactly the player whose numbers are least in need of amplifying.
+ */
+export const TEAM_DUEL_COLUMNS = [
+  {
+    key: 'teamPfw',
+    label: 'PFW',
+    get: (t) => (Number.isFinite(t.pfw) ? t.pfw : -Infinity),
+    cell: (t) => pct(t.pfw),
+    tip: (t) =>
+      Number.isFinite(t.pfw)
+        ? tip([
+            'Team predicted fight winrate.',
+            'The five players’ PFW averaged: how hard this side’s duels were.',
+            ...(t.members || []).map((m) => `${m.name}: ${m.pfw.toFixed(1)}%`)
+          ])
+        : 'Open the match in the viewer to compute duel stats.'
+  },
+  {
+    key: 'teamPfo',
+    label: 'PFO',
+    get: (t) => (Number.isFinite(t.pfo) ? t.pfo : -Infinity),
+    cell: (t) => (Number.isFinite(t.pfo) ? `${t.pfo > 0 ? '+' : ''}${t.pfo.toFixed(2)}%` : '—'),
+    strong: true,
+    tip: (t) =>
+      Number.isFinite(t.pfo)
+        ? tip([
+            'Team predicted fight overperformance.',
+            'How far the side beat the odds it was given, in points.',
+            ...(t.members || []).map(
+              (m) => `${m.name}: ${m.pfo > 0 ? '+' : ''}${m.pfo.toFixed(1)}`
+            )
+          ])
+        : 'Open the match in the viewer to compute duel stats.'
+  }
+];
 
 export const TEAM_COLUMNS = [
   { key: 'name', label: 'Team', align: 'left', get: (t) => t.name.toLowerCase() },
