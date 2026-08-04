@@ -18,7 +18,6 @@ import {
   fetchDemo,
   fetchDemos,
   fetchInvite,
-  fetchRoundMeta,
   fetchStats,
   fetchStatus,
   fetchTeamAutocoach,
@@ -1477,30 +1476,19 @@ export function initTeamView({ auth, escapeHtml }) {
   async function openAutocoachReview(demoId, playerId) {
     const row = (autocoachSummary?.demos || []).find((d) => d.id === demoId);
     if (!row || !playerId) return;
-    setStatus('Loading review rounds…');
+    setStatus('Loading review…');
     try {
       const wrapped = await fetchDemo(demoId);
       const demo = wrapped?.demo || wrapped;
-      const all = (demo?.rounds || []).map((r) => ({
+      const rounds = (demo?.rounds || []).map((r) => ({
         ...r,
         map: demo.map,
         tickRate: r.tickRate || demo.tickRate
       }));
-      if (!all.length) {
+      if (!rounds.length) {
         setStatus('That replay has no rounds yet.', true);
         return;
       }
-      const kept = [];
-      for (const r of all) {
-        if (!r.file) continue;
-        const meta = await fetchRoundMeta(r.file).catch(() => null);
-        const notes = Array.isArray(meta?.notes) ? meta.notes : [];
-        if (notes.some((n) => n.kind === 'coach' && n.playerId === playerId)) {
-          kept.push(r);
-        }
-      }
-      // Mistake rounds when they exist; otherwise the full match to watch as that player.
-      const rounds = kept.length ? kept : all;
       if (!viewerModule) {
         viewerModule = await import('../replays/viewer/viewerApp.js');
       }
@@ -1508,6 +1496,8 @@ export function initTeamView({ auth, escapeHtml }) {
         (row.players || []).find((p) => p.id === playerId)?.name ||
         (autocoachSummary?.players || []).find((p) => p.id === playerId)?.name ||
         playerId;
+      // Full match: notes are generated for the whole team, but the viewer
+      // only shows the selected player's mistakes.
       viewerModule.openViewer({
         rounds,
         mode: 'timeline',
@@ -1516,9 +1506,10 @@ export function initTeamView({ auth, escapeHtml }) {
         statsDemoId: demoId,
         coachTeamId: team.id,
         coachForceSide: row.side === 2 ? 2 : 1,
-        coachAutoEnable: true
+        coachAutoEnable: true,
+        coachReviewPlayerId: playerId
       });
-      setStatus(kept.length ? '' : `No mistakes for ${playerName} in this demo. Opening full match.`);
+      setStatus('');
     } catch (err) {
       setStatus(err.message || 'Could not open review.', true);
     }

@@ -64,11 +64,22 @@ const AWP_FREE = 0.75;
 /** A duel this far in your favour is one you are expected to convert. */
 const AHEAD = 0.75;
 /**
+ * A fight this one-sided is already decided. Mistake notes are not sent for it
+ * — neither "you should have converted" nor "you walked into a lost duel".
+ */
+const FIGHT_WON = 0.8;
+/**
  * Enemy duel win chance this high, on this share of active fight samples, with
  * the round already won, is a fight that should not have been taken.
+ * Stays below {@link FIGHT_WON}: decided fights are never coached.
  */
 const UNDERDOG = 0.75;
 const UNDERDOG_SHARE = 0.75;
+
+/** True when one side already has the duel at {@link FIGHT_WON} or better. */
+function fightIsWon(winProb) {
+  return Number.isFinite(winProb) && (winProb >= FIGHT_WON || winProb <= 1 - FIGHT_WON);
+}
 /** Round win chance (0-100 series units) required before that duel. */
 const ROUND_WON_PCT = 75;
 /** How long before a death to look for the moment the fight opened. */
@@ -225,6 +236,8 @@ export function findDuelFlags({
     open.delete(playerId);
     if (!burst || burst.count < RUNNING_SHOTS || !(burst.delta >= RUNNING_DELTA)) return;
     if (!coachable(playerId, burst.tick)) return;
+    // A fight that was already won standing still is not coached as a mistake.
+    if (fightIsWon(burst.still)) return;
     flags.push({
       tick: burst.tick,
       playerId,
@@ -276,7 +289,12 @@ export function findDuelFlags({
     // The AWP shot you were expected to take, and did not land.
     if (isAwp) {
       const free = predictDuel(duel.ctx, weights);
-      if (free >= AWP_FREE && !landedNear(shot.player, shot.tick, weapon)) {
+      // Free enough to expect a hit, but not a fight that was already decided.
+      if (
+        free >= AWP_FREE &&
+        !fightIsWon(free) &&
+        !landedNear(shot.player, shot.tick, weapon)
+      ) {
         const foe = snapshot.players.find((p) => p.slot === duel.foeSlot);
         flags.push({
           tick: shot.tick,
@@ -422,7 +440,8 @@ export function findDuelFlags({
         odds = predictDuel(ctx, weights);
         break;
       }
-      if (odds !== null && odds >= AHEAD) {
+      // Favourable enough to expect a convert, but not an already-decided fight.
+      if (odds !== null && odds >= AHEAD && !fightIsWon(odds)) {
         lostAhead = true;
         flags.push({
           tick: death.tick,
@@ -437,6 +456,7 @@ export function findDuelFlags({
 
       // Losing duel in a winning round: most active fight samples heavily
       // favoured the enemy, while the round was already decided beforehand.
+      // Decided fights (≥80% one way) are never coached.
       if (!lostAhead && typeof roundWinAt === 'function') {
         const samples = sampleActiveFight(
           victimSlot,
@@ -447,14 +467,18 @@ export function findDuelFlags({
         if (samples.length) {
           const fightStart = samples[0].tick;
           const roundWp = roundWinAt(Math.max(0, fightStart - 1), side);
-          const bad = samples.filter((s) => 1 - s.odds >= UNDERDOG).length;
+          const avgEnemy =
+            samples.reduce((n, s) => n + (1 - s.odds), 0) / samples.length;
+          const bad = samples.filter((s) => {
+            const enemy = 1 - s.odds;
+            return enemy >= UNDERDOG && enemy < FIGHT_WON;
+          }).length;
           if (
             Number.isFinite(roundWp) &&
             roundWp >= ROUND_WON_PCT &&
+            !fightIsWon(1 - avgEnemy) &&
             bad / samples.length >= UNDERDOG_SHARE
           ) {
-            const avgEnemy =
-              samples.reduce((n, s) => n + (1 - s.odds), 0) / samples.length;
             flags.push({
               tick: death.tick,
               playerId: victim,
@@ -490,7 +514,7 @@ export function findDuelFlags({
       const ctx = duelContext(snapshot, mate.slot, killerSlot);
       if (!ctx) continue;
       const odds = predictDuel(ctx, weights);
-      if (odds < TRADE_ODDS) continue;
+      if (odds < TRADE_ODDS || fightIsWon(odds)) continue;
 
       const tried = firedBetween(mate.id, death.tick, death.tick + tradeWindow);
       const diedForIt = deaths.some(

@@ -51,6 +51,7 @@ export function openViewer({
   coachTeamId = '',
   coachForceSide = 0,
   coachAutoEnable = false,
+  coachReviewPlayerId = '',
   onClose
 }) {
   const store = new TickStore();
@@ -120,6 +121,7 @@ export function openViewer({
       coachTeamId,
       coachForceSide,
       coachAutoEnable,
+      coachReviewPlayerId,
       onRound: syncUrl
     });
     if (next === 'analyzer') syncUrl(null);
