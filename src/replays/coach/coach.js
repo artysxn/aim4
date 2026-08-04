@@ -2,10 +2,11 @@
 // replays/coach/coach.js
 // Reads one round and says what went wrong.
 //
-// Two passes. The first walks the round at COACH_SAMPLE_HZ, recording the win
-// probability and who was standing where — that series feeds the graph and is
-// also what every rule below reasons against. The second walks the deaths and
-// asks, of each, whether it cost something it did not have to.
+// Two passes. The first walks the round at COACH_SAMPLE_HZ (plus kill / death /
+// assist ticks), recording the win probability and who was standing where —
+// that series feeds the graph and is also what every rule below reasons
+// against. The second walks the deaths and asks, of each, whether it cost
+// something it did not have to.
 //
 // Pure: positions arrive through a sampler the caller supplies, so this runs
 // in node against a round file with no DOM anywhere near it.
@@ -41,18 +42,58 @@ import { createReloadTracker } from '../duels/reloadTracker.js';
 import { phaseBounds } from './roundPhases.js';
 
 /**
- * Win-chance series samples per second.
+ * Win-chance series samples per second (baseline cadence).
  *
- * One hertz was smooth enough for body-count drifts but washed out fight swings
- * that resolve in a few hundred milliseconds. Eight hertz matches the live
- * duel-scan cadence so the chart's bumps track the playhead instead of lagging
- * a full second behind them.
+ * Half a second (2 Hz) is enough for slow drifts; kill / death / assist ticks
+ * are force-sampled so fight swings still land on the chart. At 64 tick that
+ * baseline is every 32nd tick.
  */
-export const COACH_SAMPLE_HZ = 8;
+export const COACH_SAMPLE_HZ = 2;
 
 /** Tick stride for the coach / win-graph series at a given demo tick rate. */
 export function coachSampleStride(tickRate = 64) {
   return Math.max(1, Math.round((tickRate || 64) / COACH_SAMPLE_HZ));
+}
+
+/**
+ * Light 3-point smooth on CT win% (and duel overlay). Keeps T complementary.
+ * @param {Array<{ct:number,t:number,ctDuel:number|null,tDuel:number|null}>} series
+ */
+function smoothWinSeries(series) {
+  if (!series || series.length < 3) return;
+  const cts = series.map((s) => s.ct);
+  const duels = series.map((s) => s.ctDuel);
+  for (let i = 0; i < series.length; i++) {
+    const prev = cts[i - 1] ?? cts[i];
+    const cur = cts[i];
+    const next = cts[i + 1] ?? cts[i];
+    const sm = prev * 0.25 + cur * 0.5 + next * 0.25;
+    series[i].ct = sm;
+    series[i].t = 100 - sm;
+    const dc = duels[i];
+    if (dc == null) continue;
+    const dprev = duels[i - 1] ?? dc;
+    const dnext = duels[i + 1] ?? dc;
+    const dsm = dprev * 0.25 + dc * 0.5 + dnext * 0.25;
+    series[i].ctDuel = dsm;
+    series[i].tDuel = 100 - dsm;
+  }
+}
+
+/**
+ * Baseline stride ticks plus combat events that move win chance hard.
+ * Assists share the kill tick (assister field on the kill event).
+ */
+function winSeriesSampleTicks(from, to, stride, kills) {
+  const ticks = new Set();
+  for (let tick = from; tick <= to; tick += stride) ticks.add(tick);
+  ticks.add(from);
+  ticks.add(to);
+  for (const k of kills) {
+    const t = k.tick || 0;
+    if (t >= from && t <= to) ticks.add(t);
+  }
+  return [...ticks].sort((a, b) => a - b);
 }
 
 /** A kill this soon after a death answers it. */
@@ -241,11 +282,12 @@ export function analyseRound({
   const winnerSide = meta.winnerSide || (meta.winner === 1 ? teamSides[1] : teamSides[2]);
   const bomb = meta.events?.bomb || [];
 
-  // ---- pass one: the round, COACH_SAMPLE_HZ times a second ----------------
+  // ---- pass one: baseline cadence + kill / death / assist ticks -----------
 
   const sampleStride = coachSampleStride(tickRate);
+  const sampleTicks = winSeriesSampleTicks(from, to, sampleStride, kills);
   const series = [];
-  for (let tick = from; tick <= to; tick += sampleStride) {
+  for (const tick of sampleTicks) {
     const sampled = sampleAt(tick) || [];
     // Copy out of the sampler scratch buffer — it is reused every step.
     const states = sampled.map((s) => (s ? { ...s } : null));
@@ -377,6 +419,7 @@ export function analyseRound({
       states
     });
   }
+  smoothWinSeries(series);
 
   // The buy alone, before a shot is fired, decides whether the coach speaks.
   const opening = series[0];
@@ -901,6 +944,8 @@ export function flagToNote(flag) {
     text: flag.text,
     kind: 'coach',
     mark: '',
+    playerId: flag.playerId || '',
+    rule: flag.rule || '',
     updatedAt: Date.now()
   };
 }

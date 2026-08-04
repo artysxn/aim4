@@ -3805,6 +3805,36 @@ body.rv-open {
   transform: translate(-50%, -50%) rotate(45deg);
 }
 
+.rv-mark.coach.mark-ok {
+  background: #6fcf97;
+  box-shadow: none;
+  opacity: 0.45;
+}
+
+.rv-mark.coach.mark-x {
+  background: #eb5757;
+  box-shadow: none;
+  opacity: 0.55;
+}
+
+.rv-note-mark-btn.active {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.rv-note-item.mark-ok .rv-note-item-mark::after,
+.rv-note-item.mark-x .rv-note-item-mark::after {
+  content: '';
+}
+
+.rv-note-item.mark-ok {
+  opacity: 0.7;
+}
+
+.rv-note-item.mark-x {
+  opacity: 0.7;
+}
+
 /* Note and coach marks are the only ones worth clicking. */
 .rv-mark.note,
 .rv-mark.coach {
@@ -5298,6 +5328,145 @@ table.rp-mine-table tbody tr {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.tm-ac-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .tm-ac-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.tm-ac-legend {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tm-ac-legend .ok {
+  color: #6fcf97;
+}
+
+.tm-ac-legend .deny {
+  color: #eb5757;
+}
+
+.tm-ac-player-list,
+.tm-ac-demo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.tm-ac-player {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.tm-ac-player:hover,
+.tm-ac-player.active {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--border-strong);
+}
+
+.tm-ac-player-name {
+  font-weight: 600;
+}
+
+.tm-ac-player-stats {
+  display: flex;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tm-ac-player-stats .ok {
+  color: #6fcf97;
+}
+
+.tm-ac-player-stats .deny {
+  color: #eb5757;
+}
+
+.tm-ac-demo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.tm-ac-demo-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tm-ac-demo-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tm-ac-badge {
+  display: inline-block;
+  width: fit-content;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.tm-ac-badge.done {
+  color: #6fcf97;
+  border-color: rgba(111, 207, 151, 0.35);
+}
+
+.tm-ac-review-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.tm-ac-review-pick p {
+  margin: 0;
+  font-weight: 600;
+}
+
+.tm-ac-review-players {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tm-ac-busy {
+  margin: 8px 0 0;
 }
 
 .tm-card-title {

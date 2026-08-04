@@ -18,13 +18,16 @@ import {
   fetchDemo,
   fetchDemos,
   fetchInvite,
+  fetchRoundMeta,
   fetchStats,
   fetchStatus,
+  fetchTeamAutocoach,
   fetchTeamDocument,
   fetchTeams,
   fetchUtilityIndex,
   joinTeam,
   leaveTeam,
+  markTeamAutocoachDemo,
   mergeTeamMember,
   rollTeamInvite,
   saveTeamDocument,
@@ -33,11 +36,13 @@ import {
   teamMemberAction
 } from '../replays/api.js';
 import { getEntitlements } from '../lib/entitlements.js';
+import { useMeteredFeature } from '../lib/meteredFeature.js';
 import { CAP } from '../../shared/entitlements/keys.js';
 import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
 import { MAPS } from '../replays/shared/roundId.js';
 import { teamNameKey } from '../replays/shared/statsMath.js';
 import { createStatsPanel } from '../replays/stats/statsPanel.js';
+import { analyzeDemoCoach } from '../replays/coach/analyzeDemo.js';
 import { POSITION_MAPS, positionsFor } from '../replays/roles/teamPositions.js';
 import { createDocsEditor } from './docsEditor.js';
 import { mountDrawingBoard } from './drawingBoard.js';
@@ -51,7 +56,8 @@ const PAGES = [
   'team-stratbook',
   'team-strategies',
   'team-drawing-board',
-  'team-utility-archive'
+  'team-utility-archive',
+  'team-autocoach'
 ];
 
 const STRAT_ECONOMY = [
@@ -166,6 +172,12 @@ export function initTeamView({ auth, escapeHtml }) {
   let viewerModule = null;
   let openDocId = '';
   let rolesSide = 'T';
+  /** @type {{ players: object[], demos: object[], unanalyzedCount: number }|null} */
+  let autocoachSummary = null;
+  let autocoachLoading = false;
+  let autocoachBusy = '';
+  let autocoachSelectedPlayer = '';
+  let autocoachReviewDemoId = '';
   /** @type {Array<{id: string, map: string, type: string, name: string, throws: object[]}>} */
   let utilityIndex = [];
   let utilityIndexTeamId = '';
@@ -280,7 +292,13 @@ export function initTeamView({ auth, escapeHtml }) {
       if (token !== loadToken) return;
       teams = teamList;
       // Keep the selected team across reloads when it still exists.
-      team = teams.find((t) => t.id === team?.id) || teams[0] || null;
+      const nextTeam = teams.find((t) => t.id === team?.id) || teams[0] || null;
+      if (nextTeam?.id !== team?.id) {
+        autocoachSummary = null;
+        autocoachSelectedPlayer = '';
+        autocoachReviewDemoId = '';
+      }
+      team = nextTeam;
       loaded = true;
       if (pendingInvite) {
         const code = pendingInvite;
@@ -776,12 +794,22 @@ export function initTeamView({ auth, escapeHtml }) {
     if (!viewerModule) {
       viewerModule = await import('../replays/viewer/viewerApp.js');
     }
+    const want = teamNameKey(team?.name || '');
+    const side =
+      want && teamNameKey(demo.team1?.name) === want
+        ? 1
+        : want && teamNameKey(demo.team2?.name) === want
+          ? 2
+          : 0;
     viewerModule.openViewer({
       rounds: list,
       mode: 'timeline',
       title: `${demo.team1?.name || 'Team 1'} vs ${demo.team2?.name || 'Team 2'}`,
       escapeHtml,
-      statsDemoId: demo.id
+      statsDemoId: demo.id,
+      coachTeamId: team?.id || '',
+      coachForceSide: side,
+      coachAutoEnable: Boolean(team?.autocoach?.demos?.[demo.id])
     });
   }
 
@@ -1183,6 +1211,241 @@ export function initTeamView({ auth, escapeHtml }) {
     return `
       ${headerHtml('')}
       <div class="tm-wip"><p>Work in progress...</p></div>`;
+  }
+
+  function mapLabel(code) {
+    return MAPS[code]?.name || code || '—';
+  }
+
+  function formatWhen(ts) {
+    const n = Number(ts);
+    if (!Number.isFinite(n) || n <= 0) return '—';
+    try {
+      return new Date(n).toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      });
+    } catch {
+      return '—';
+    }
+  }
+
+  async function refreshAutocoach() {
+    if (!team?.id) {
+      autocoachSummary = null;
+      return;
+    }
+    autocoachLoading = true;
+    try {
+      const res = await fetchTeamAutocoach(team.id);
+      autocoachSummary = {
+        players: res.players || [],
+        demos: res.demos || [],
+        unanalyzedCount: Number(res.unanalyzedCount) || 0
+      };
+      if (res.team) team = res.team;
+    } catch (err) {
+      autocoachSummary = { players: [], demos: [], unanalyzedCount: 0 };
+      setStatus(err.message || 'Could not load Autocoach.', true);
+    } finally {
+      autocoachLoading = false;
+    }
+  }
+
+  function autocoachHtml() {
+    const players = autocoachSummary?.players || [];
+    const demos = autocoachSummary?.demos || [];
+    const n = Number(autocoachSummary?.unanalyzedCount) || 0;
+    const playerRows = players.length
+      ? players
+          .map((p) => {
+            const active = autocoachSelectedPlayer === p.id ? ' active' : '';
+            return `<button type="button" class="tm-ac-player${active}" data-ac-player="${escapeHtml(
+              p.id
+            )}">
+              <span class="tm-ac-player-name">${escapeHtml(p.name)}</span>
+              <span class="tm-ac-player-stats">
+                <span title="Mistakes">${p.total}</span>
+                <span class="ok" title="Acknowledged">${p.ok}</span>
+                <span class="deny" title="Disagreed">${p.x}</span>
+              </span>
+            </button>`;
+          })
+          .join('')
+      : '<p class="tm-note">No coach notes yet. Analyze demos to begin.</p>';
+
+    const demoRows = demos.length
+      ? demos
+          .map((d) => {
+            const title = `${d.name1} vs ${d.name2}`;
+            const score = `${d.score1}-${d.score2}`;
+            const badge = d.analyzed
+              ? '<span class="tm-ac-badge done">Analyzed</span>'
+              : '<span class="tm-ac-badge">Pending</span>';
+            return `<div class="tm-ac-demo" data-ac-demo="${escapeHtml(d.id)}">
+              <div class="tm-ac-demo-main">
+                <strong>${escapeHtml(title)}</strong>
+                <span class="tm-ac-demo-meta">${escapeHtml(mapLabel(d.map))} · ${escapeHtml(
+                  score
+                )} · ${escapeHtml(formatWhen(d.uploadedAt))}</span>
+                ${badge}
+                ${
+                  d.analyzed
+                    ? `<span class="tm-ac-demo-meta">${d.mistakeCount} mistake${
+                        d.mistakeCount === 1 ? '' : 's'
+                      }</span>`
+                    : ''
+                }
+              </div>
+              <div class="tm-ac-demo-actions">
+                ${
+                  d.analyzed
+                    ? `<button type="button" class="btn btn-sm" data-ac-review="${escapeHtml(
+                        d.id
+                      )}">Review</button>`
+                    : ''
+                }
+              </div>
+            </div>`;
+          })
+          .join('')
+      : '<p class="tm-note">No demos with this team name yet.</p>';
+
+    const reviewPicker = autocoachReviewDemoId
+      ? `<div class="tm-ac-review-pick">
+          <p>Review as</p>
+          <div class="tm-ac-review-players">
+            ${players
+              .map(
+                (p) =>
+                  `<button type="button" class="btn btn-sm" data-ac-review-as="${escapeHtml(
+                    p.id
+                  )}" data-ac-review-demo="${escapeHtml(
+                    autocoachReviewDemoId
+                  )}">${escapeHtml(p.name)}</button>`
+              )
+              .join('') || '<span class="tm-note">No players with mistakes yet.</span>'}
+          </div>
+          <button type="button" class="btn btn-sm" data-ac-review-cancel>Cancel</button>
+        </div>`
+      : '';
+
+    return `
+      ${headerHtml('')}
+      <div class="tm-ac-layout">
+        <section class="tm-card tm-ac-players">
+          <div class="tm-card-head">
+            <h3 class="tm-card-title">Players</h3>
+            <span class="tm-ac-legend"><span class="ok">✓</span> ack · <span class="deny">✗</span> deny</span>
+          </div>
+          <div class="tm-ac-player-list">${
+            autocoachLoading ? spinnerHtml() : playerRows
+          }</div>
+        </section>
+        <section class="tm-card tm-ac-demos">
+          <div class="tm-card-head">
+            <h3 class="tm-card-title">Games</h3>
+            <button type="button" class="btn btn-sm primary" data-ac-analyze ${
+              n <= 0 || autocoachBusy ? ' disabled' : ''
+            }>Analyze (${n}) demos</button>
+          </div>
+          ${
+            autocoachBusy
+              ? `<p class="tm-note tm-ac-busy">${escapeHtml(autocoachBusy)}</p>`
+              : ''
+          }
+          ${reviewPicker}
+          <div class="tm-ac-demo-list">${autocoachLoading ? spinnerHtml() : demoRows}</div>
+        </section>
+      </div>`;
+  }
+
+  async function runAnalyzePending() {
+    const pending = (autocoachSummary?.demos || []).filter((d) => !d.analyzed);
+    if (!pending.length) return;
+    for (let i = 0; i < pending.length; i++) {
+      const d = pending[i];
+      // One metered use per demo, same as enabling coach in the viewer.
+      if (!(await useMeteredFeature(CAP.DEMOS_AUTO_COACH, { host: shellEl }))) {
+        if (i === 0) return;
+        break;
+      }
+      autocoachBusy = `Analyzing ${i + 1}/${pending.length}: ${d.name1} vs ${d.name2}`;
+      render();
+      try {
+        const demo = await fetchDemo(d.id);
+        const list = (demo?.rounds || []).map((r) => ({
+          ...r,
+          map: demo.map,
+          tickRate: r.tickRate || demo.tickRate
+        }));
+        await analyzeDemoCoach({
+          demoId: d.id,
+          side: d.side === 2 ? 2 : 1,
+          rounds: list,
+          onProgress: (msg) => {
+            if (msg) {
+              autocoachBusy = `${i + 1}/${pending.length}: ${msg}`;
+              const el = shellEl.querySelector('.tm-ac-busy');
+              if (el) el.textContent = autocoachBusy;
+            }
+          }
+        });
+        await markTeamAutocoachDemo(team.id, d.id, d.side === 2 ? 2 : 1);
+      } catch (err) {
+        setStatus(err.message || `Failed on ${d.id}`, true);
+      }
+    }
+    autocoachBusy = '';
+    await refreshAutocoach();
+    render();
+    setStatus('Autocoach analysis finished.');
+  }
+
+  async function openAutocoachReview(demoId, playerId) {
+    const row = (autocoachSummary?.demos || []).find((d) => d.id === demoId);
+    if (!row || !playerId) return;
+    setStatus('Loading review rounds…');
+    try {
+      const demo = await fetchDemo(demoId);
+      const all = (demo?.rounds || []).map((r) => ({
+        ...r,
+        map: demo.map,
+        tickRate: r.tickRate || demo.tickRate
+      }));
+      const kept = [];
+      for (const r of all) {
+        if (!r.file) continue;
+        const meta = await fetchRoundMeta(r.file).catch(() => null);
+        const notes = Array.isArray(meta?.notes) ? meta.notes : [];
+        if (notes.some((n) => n.kind === 'coach' && n.playerId === playerId)) {
+          kept.push(r);
+        }
+      }
+      if (!kept.length) {
+        setStatus('No mistake rounds for that player in this demo.', true);
+        return;
+      }
+      if (!viewerModule) {
+        viewerModule = await import('../replays/viewer/viewerApp.js');
+      }
+      const playerName =
+        (autocoachSummary?.players || []).find((p) => p.id === playerId)?.name || playerId;
+      viewerModule.openViewer({
+        rounds: kept,
+        mode: 'timeline',
+        title: `Autocoach · ${playerName}`,
+        escapeHtml,
+        statsDemoId: demoId,
+        coachTeamId: team.id,
+        coachForceSide: row.side === 2 ? 2 : 1,
+        coachAutoEnable: true
+      });
+      setStatus('');
+    } catch (err) {
+      setStatus(err.message || 'Could not open review.', true);
+    }
   }
 
   // ---- Stratbook Editor ---------------------------------------------------
@@ -1713,6 +1976,15 @@ export function initTeamView({ auth, escapeHtml }) {
       mountBoardPage('utility');
       return;
     }
+    if (page === 'team-autocoach') {
+      shellEl.innerHTML = autocoachHtml();
+      if (!autocoachSummary && !autocoachLoading) {
+        void refreshAutocoach().then(() => {
+          if (page === 'team-autocoach') render();
+        });
+      }
+      return;
+    }
     shellEl.innerHTML = overviewHtml();
     mountOverviewExtras();
   }
@@ -1726,7 +1998,8 @@ export function initTeamView({ auth, escapeHtml }) {
         'team-stratbook': 'Stratbook Editor',
         'team-strategies': 'My Strategies',
         'team-drawing-board': 'Drawing Board',
-        'team-utility-archive': 'Utility Archive'
+        'team-utility-archive': 'Utility Archive',
+        'team-autocoach': 'Autocoach'
       }[name] || 'Team'
     );
   }
@@ -1735,6 +2008,38 @@ export function initTeamView({ auth, escapeHtml }) {
 
   shellEl.addEventListener('click', async (e) => {
     const t = e.target;
+
+    if (t.closest('[data-ac-analyze]')) {
+      void runAnalyzePending();
+      return;
+    }
+    const acPlayer = t.closest('[data-ac-player]');
+    if (acPlayer) {
+      const id = acPlayer.dataset.acPlayer || '';
+      autocoachSelectedPlayer = autocoachSelectedPlayer === id ? '' : id;
+      render();
+      return;
+    }
+    const acReview = t.closest('[data-ac-review]');
+    if (acReview) {
+      autocoachReviewDemoId = acReview.dataset.acReview || '';
+      render();
+      return;
+    }
+    if (t.closest('[data-ac-review-cancel]')) {
+      autocoachReviewDemoId = '';
+      render();
+      return;
+    }
+    const acReviewAs = t.closest('[data-ac-review-as]');
+    if (acReviewAs) {
+      const demoId = acReviewAs.dataset.acReviewDemo || '';
+      const playerId = acReviewAs.dataset.acReviewAs || '';
+      autocoachReviewDemoId = '';
+      render();
+      void openAutocoachReview(demoId, playerId);
+      return;
+    }
 
     const uaLink = t.closest('[data-ua-link]');
     if (uaLink) {
@@ -2075,6 +2380,9 @@ export function initTeamView({ auth, escapeHtml }) {
       strategiesPlayerId = '';
       utilityIndex = [];
       utilityIndexTeamId = '';
+      autocoachSummary = null;
+      autocoachSelectedPlayer = '';
+      autocoachReviewDemoId = '';
       render();
       return;
     }

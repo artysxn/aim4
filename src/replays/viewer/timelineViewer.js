@@ -10,11 +10,14 @@ import {
   NOTE_MAX,
   fetchPlaylists,
   fetchRoundMeta,
+  fetchTeams,
   fetchZones,
+  markTeamAutocoachDemo,
   saveRoundNotes,
-  savePlaylist
+  savePlaylist,
+  fetchStats
 } from '../api.js';
-import { fetchStats } from '../api.js';
+import { teamNameKey } from '../shared/statsMath.js';
 import { useMeteredFeature } from '../../lib/meteredFeature.js';
 import { getEntitlements } from '../../lib/entitlements.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
@@ -33,9 +36,7 @@ import { economyLabel, winningSide } from '../shared/roundId.js';
 import { iconImgHtml, inventoryAt } from './equipmentIcons.js';
 import { DRAW_COLORS, DrawingLayer } from './drawing.js';
 import { analyseRound, coachSampleStride, flagToNote } from '../coach/coach.js';
-import { roundWinAtTick } from '../rounds/roundWinAdapter.js';
 import { explainRoundLines } from '../rounds/roundExplain.js';
-import { createReloadTracker } from '../duels/reloadTracker.js';
 import { phaseBounds } from '../coach/roundPhases.js';
 import {
   buildZonePresence,
@@ -47,7 +48,6 @@ import {
   resetZoneVisionCache
 } from '../zones/zoneOverlay.js';
 import { buildMapControlSeries } from '../zones/mapControl.js';
-import { mapControlAdvantageEnabled } from '../coach/mapControlAdvantage.js';
 import helmetSvg from '../../icons/helmet.svg?url';
 import kevlarSvg from '../../icons/kevlar.svg?url';
 import nokevlarSvg from '../../icons/nokevlar.svg?url';
@@ -80,7 +80,16 @@ const statsIconSvg =
 /** The shipped SVGs are a fixed light grey; let CSS drive the colour instead. */
 const icon = (raw) => String(raw).replace(/fill="#[0-9a-fA-F]{3,8}"/g, 'fill="currentColor"');
 
-export function createTimelineViewer({ store, rounds, escapeHtml, onRound, statsDemoId = '' }) {
+export function createTimelineViewer({
+  store,
+  rounds,
+  escapeHtml,
+  onRound,
+  statsDemoId = '',
+  coachTeamId = '',
+  coachForceSide = 0,
+  coachAutoEnable = false
+}) {
   const el = document.createElement('div');
   el.className = 'rv-timeline';
   el.innerHTML = `
@@ -154,6 +163,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         <div class="rv-popover-foot">
           <span class="rv-note-count" id="rv-note-count">0 / ${NOTE_MAX}</span>
           <span class="rv-popover-msg" id="rv-note-msg"></span>
+          <button type="button" class="rp-btn-icon rv-note-mark-btn" id="rv-note-ok" hidden title="Acknowledge" aria-label="Acknowledge">✓</button>
+          <button type="button" class="rp-btn-icon rv-note-mark-btn" id="rv-note-deny" hidden title="Disagree" aria-label="Disagree">✗</button>
           <button type="button" class="btn btn-sm" id="rv-note-delete" title="Delete this note">Delete</button>
           <button type="button" class="btn btn-sm primary" id="rv-note-save">Save</button>
         </div>
@@ -575,8 +586,14 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       // Coach notes get the green diamond so they read apart from the round
       // marks around them at a glance.
       const coach = n.kind === 'coach';
+      const markCls =
+        coach && n.mark === 'ok'
+          ? ' mark-ok'
+          : coach && n.mark === 'x'
+            ? ' mark-x'
+            : '';
       parts.push(
-        `<span class="rv-mark ${coach ? 'coach' : 'note'}" data-note="${escapeHtml(
+        `<span class="rv-mark ${coach ? 'coach' : 'note'}${markCls}" data-note="${escapeHtml(
           n.id
         )}" style="left:${at(n.tick) * 100}%" title="${
           coach ? 'Coach' : 'Note'
@@ -1587,6 +1604,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
           text: String(n.text ?? ''),
           kind: n.kind === 'coach' ? 'coach' : 'user',
           mark: n.mark === 'ok' || n.mark === 'x' ? n.mark : '',
+          playerId: String(n.playerId || ''),
+          rule: String(n.rule || ''),
           updatedAt: Number(n.updatedAt) || 0
         }))
         .sort((a, b) => a.tick - b.tick || a.updatedAt - b.updatedAt);
@@ -1600,6 +1619,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
           text: String(meta.note),
           kind: 'user',
           mark: '',
+          playerId: '',
+          rule: '',
           updatedAt: Number(meta.noteUpdatedAt) || 0
         }
       ];
@@ -1663,7 +1684,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     noteListEl.innerHTML = roundNotes
       .map((n, i) => {
         const coach = n.kind === 'coach';
-        return `<button type="button" class="rv-note-item${coach ? ' coach' : ''}" data-note-index="${i}">
+        const markCls =
+          n.mark === 'ok' ? ' mark-ok' : n.mark === 'x' ? ' mark-x' : '';
+        return `<button type="button" class="rv-note-item${coach ? ' coach' : ''}${markCls}" data-note-index="${i}">
           <span class="rv-note-item-mark" aria-hidden="true"></span>
           <span class="rv-note-item-body">
             <span class="rv-note-item-time">${escapeHtml(noteClockLabel(n.tick))}</span>
@@ -1674,11 +1697,26 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       .join('');
   }
 
+  function syncNoteMarkButtons(note) {
+    const okBtn = el.querySelector('#rv-note-ok');
+    const denyBtn = el.querySelector('#rv-note-deny');
+    const coach = note?.kind === 'coach';
+    if (okBtn) {
+      okBtn.hidden = !coach;
+      okBtn.classList.toggle('active', note?.mark === 'ok');
+    }
+    if (denyBtn) {
+      denyBtn.hidden = !coach;
+      denyBtn.classList.toggle('active', note?.mark === 'x');
+    }
+  }
+
   function renderNoteDock({ forceText = false } = {}) {
     syncNoteView();
     if (noteView === 'list') {
       renderNoteList();
       syncNoteHasBadge();
+      syncNoteMarkButtons(null);
       return;
     }
     const n = currentNote();
@@ -1691,6 +1729,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       noteNextBtn.disabled = true;
       syncNoteCount();
       syncNoteHasBadge();
+      syncNoteMarkButtons(null);
       return;
     }
     noteStampEl.textContent = noteClockLabel(n.tick);
@@ -1700,6 +1739,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     noteNextBtn.disabled = noteIndex >= total - 1;
     syncNoteCount();
     syncNoteHasBadge();
+    syncNoteMarkButtons(n);
   }
 
   function loadNotesFromMeta(force = false) {
@@ -1814,7 +1854,16 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     // previously edited note and would overwrite it with stale text.
     if (noteView === 'editor' && !notePanel.hidden) flushNoteText();
     const tick = playheadTick();
-    const note = { id: newNoteId(), tick, text: '', kind: 'user', mark: '', updatedAt: Date.now() };
+    const note = {
+      id: newNoteId(),
+      tick,
+      text: '',
+      kind: 'user',
+      mark: '',
+      playerId: '',
+      rule: '',
+      updatedAt: Date.now()
+    };
     roundNotes.push(note);
     roundNotes.sort((a, b) => a.tick - b.tick || a.updatedAt - b.updatedAt);
     noteIndex = roundNotes.findIndex((n) => n.id === note.id);
@@ -1837,6 +1886,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         text: String(n.text || '').trim(),
         kind: n.kind === 'coach' ? 'coach' : 'user',
         mark: n.mark || '',
+        playerId: n.playerId || '',
+        rule: n.rule || '',
         updatedAt: n.updatedAt || Date.now()
       }))
       .filter((n) => n.text);
@@ -1900,24 +1951,37 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   });
   el.querySelector('#rv-note-close').addEventListener('click', () => setNoteOpen(false));
   el.querySelector('#rv-note-close-list')?.addEventListener('click', () => setNoteOpen(false));
-  el.querySelector('#rv-note-delete').addEventListener('click', () => {
+  async function setCoachNoteMark(mark) {
+    const n = currentNote();
+    if (!n || n.kind !== 'coach') return;
+    n.mark = n.mark === mark ? '' : mark;
+    n.updatedAt = Date.now();
+    renderNoteDock();
+    renderActiveMarks();
+    await persistNotes();
+  }
+
+  el.querySelector('#rv-note-ok')?.addEventListener('click', () => setCoachNoteMark('ok'));
+  el.querySelector('#rv-note-deny')?.addEventListener('click', () => setCoachNoteMark('x'));
+
+  el.querySelector('#rv-note-delete').addEventListener('click', async () => {
     const n = currentNote();
     if (!n) return;
     roundNotes = roundNotes.filter((x) => x.id !== n.id);
     if (!roundNotes.length) {
       noteIndex = -1;
       noteText.value = '';
-      noteMsg.textContent = 'Deleted. Save to confirm.';
       noteView = 'list';
       renderNoteDock();
       syncNoteHasBadge();
       renderActiveMarks();
+      await persistNotes();
       return;
     }
     noteIndex = Math.min(noteIndex, roundNotes.length - 1);
-    noteMsg.textContent = 'Deleted. Save to confirm.';
     renderNoteDock();
     renderActiveMarks();
+    await persistNotes();
   });
   el.querySelector('#rv-note-save').addEventListener('click', () => persistNotes());
 
@@ -2241,8 +2305,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   /** round file -> map control series [{tick,t,ct,neu}] */
   const mapControlCache = new Map();
 
-  const coachScratch = [];
-
   /**
    * A duel lookup for one round's analysis pass, or null when the model has
    * nothing to work with.
@@ -2256,8 +2318,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const mapCode = renderer.mapCode || roundMeta.map || '';
     prepareControlField(zoneNetwork, mapCode, renderer.image);
     if (!hasControlField(zoneNetwork)) return null;
-    // Same stride as the coach series — coarser than this would reintroduce the
-    // 1 Hz flattening the denser graph sampling is meant to undo.
+    // Same baseline stride as the coach series (event ticks still sample
+    // exactly; the scanner walks up to that tick).
     const scanner = createDuelScanner({
       stride: coachSampleStride(roundMeta.tickRate || 64)
     });
@@ -2339,7 +2401,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
    * The fights open at (or just before) `tick`, for the win chance.
    *
    * The tick is snapped to the scan grid so playback asks for the same answer
-   * for eight ticks running and pays for one scan, rather than recomputing
+   * for several ticks running and pays for one scan, rather than recomputing
    * every pairing on the map on every rendered frame.
    *
    * Requires the same things the Duels tool does: map geometry, and full tick
@@ -2365,62 +2427,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     });
   }
 
-  /** Fresh win% at this tick (kill log + live equip), for badges / playhead. */
-  /** Reload state and phase bounds are per round; rebuilding them per frame is waste. */
-  let liveReloadTracker = null;
-  let liveReloadFile = '';
-  let livePhaseBoundsCache = null;
-  let livePhaseBoundsFile = '';
-  function livePhaseBounds(meta, file) {
-    if (livePhaseBoundsFile !== file || !livePhaseBoundsCache) {
-      livePhaseBoundsCache = phaseBounds(meta);
-      livePhaseBoundsFile = file;
-    }
-    return livePhaseBoundsCache;
-  }
-
-  function liveCoachSample(tick) {
-    const file = files[activeIndex];
-    const track = file ? store.get(file)?.full || store.track(file) : null;
-    if (!track || !activeMeta?.players?.length) return null;
-    track.sampleAll(tick, coachScratch);
-    const net = zoneNetwork || null;
-    let presence = null;
-    if (net && mapControlAdvantageEnabled(activeMeta.map, net)) {
-      if (zonePresence) presence = zonePresence;
-      else {
-        presence = buildZonePresence({
-          meta: activeMeta,
-          track,
-          network: net,
-          mapCode: renderer.mapCode || activeMeta.map || '',
-          radarImage: renderer.image
-        });
-        zonePresence = presence;
-        if (store.get(file)?.isFull && presence) {
-          zonePresenceCache.set(file, presence);
-        }
-      }
-    }
-    // The trained model reads the map itself rather than being handed a duel
-    // summary: it needs the track for movement speed and a reload tracker for
-    // magazine state, both of which are per-round and cached here.
-    if (liveReloadFile !== file) {
-      liveReloadTracker = createReloadTracker({ meta: activeMeta });
-      liveReloadFile = file;
-    }
-    return roundWinAtTick({
-      meta: activeMeta,
-      states: coachScratch,
-      tick,
-      network: net,
-      presence,
-      track,
-      reloadTracker: liveReloadTracker,
-      bounds: livePhaseBounds(activeMeta, file)
-    });
-  }
-
   /** Win chance for the side each roster team is playing this round. */
   function coachProbabilityAt(sample) {
     if (!sample) return null;
@@ -2443,7 +2449,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     }
   }
 
-  function drawWinGraph(result, tick, live = null) {
+  function drawWinGraph(result, tick) {
     if (!graphCanvas || !result?.series?.length) {
       graphPlayhead = null;
       return;
@@ -2533,6 +2539,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
 
     ctx.strokeStyle = 'rgba(180, 186, 196, 0.95)';
     ctx.lineWidth = 1.6 * dpr;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
     ctx.beginPath();
     for (let i = 0; i < series.length; i++) {
       const x = xAt(i);
@@ -2542,8 +2550,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     }
     ctx.stroke();
 
-    // Playhead X follows time along the series; Y uses the live sample so the
-    // dot tracks bodies/utility every tick, not only on 1 Hz series points.
+    // Playhead follows the series curve (half-second / event samples), not a
+    // per-tick recompute.
     let i0 = 0;
     for (let i = 0; i < series.length; i++) if (series[i].tick <= tick) i0 = i;
     const i1 = Math.min(series.length - 1, i0 + 1);
@@ -2554,10 +2562,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       f = t1 > t0 ? Math.min(1, Math.max(0, (tick - t0) / (t1 - t0))) : 0;
     }
     const px = xAt(i0) * (1 - f) + xAt(i1) * f;
-    const sample = live || coachSampleAt(result, tick);
-    const py = sample
-      ? h - ctShare(sample) * h
-      : yAt(i0) * (1 - f) + yAt(i1) * f;
+    const py = yAt(i0) * (1 - f) + yAt(i1) * f;
+    // Badge / tip text steps on series points; playhead Y lerps between them.
+    const sample = coachSampleAt(result, tick);
     const r = 4 * dpr;
     ctx.beginPath();
     ctx.arc(px, py, r + 1.2 * dpr, 0, Math.PI * 2);
@@ -2592,7 +2599,6 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     }
     const sample =
       graphPlayhead.sample ||
-      liveCoachSample(graphPlayhead.tick) ||
       coachSampleAt(coachFor(activeIndex), graphPlayhead.tick);
     if (!sample) {
       graphTip.hidden = true;
@@ -2716,10 +2722,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       return;
     }
     const at = tick ?? sequence.locate(playback.position).tick;
-    const live = liveCoachSample(at);
     const result = coachFor(activeIndex);
-    if (result) drawWinGraph(result, at, live);
-    syncSideWinrates(coachProbabilityAt(live || coachSampleAt(result, at)));
+    if (result) drawWinGraph(result, at);
+    syncSideWinrates(coachProbabilityAt(coachSampleAt(result, at)));
     syncMapControlChart(at);
   }
 
@@ -2909,13 +2914,68 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     syncCoachBtn();
   }
 
-  async function enableCoachForTeam(team) {
+  async function demoAlreadyCoached() {
+    // Any persisted coach note locks the demo: notes stay and never regenerate.
+    for (const file of files) {
+      try {
+        let meta = null;
+        if (file === files[activeIndex] && activeMeta) meta = activeMeta;
+        else if (metaCache.has(file)) meta = await metaCache.get(file);
+        else meta = await metaFor(file);
+        if (notesFromMeta(meta).some((n) => n.kind === 'coach')) return true;
+      } catch {
+        /* keep scanning */
+      }
+    }
+    return false;
+  }
+
+  async function hydrateCoachNotedFromDisk() {
+    coachNotedFiles.clear();
+    for (const file of files) {
+      try {
+        let meta = null;
+        if (file === files[activeIndex] && activeMeta) meta = activeMeta;
+        else if (metaCache.has(file)) meta = await metaCache.get(file);
+        else meta = await metaFor(file);
+        setCoachNoted(file, notesFromMeta(meta));
+      } catch {
+        /* skip */
+      }
+    }
+    syncCoachRoundChips();
+  }
+
+  async function registerTeamAutocoach(side) {
+    const demoId = String(statsDemoId || '');
+    if (!demoId) return;
+    try {
+      let teamId = String(coachTeamId || '');
+      if (!teamId) {
+        const teams = await fetchTeams().catch(() => []);
+        const list = Array.isArray(teams) ? teams : teams?.teams || [];
+        const meta = activeMeta || rounds[0] || {};
+        const n1 = teamNameKey(meta.team1?.name || meta.name1 || '');
+        const n2 = teamNameKey(meta.team2?.name || meta.name2 || '');
+        const hit = list.find((t) => {
+          const key = teamNameKey(t.name);
+          return key && (key === n1 || key === n2);
+        });
+        teamId = hit?.id || '';
+      }
+      if (!teamId) return;
+      await markTeamAutocoachDemo(teamId, demoId, side);
+    } catch {
+      /* team registry is best-effort; notes already persist on the rounds */
+    }
+  }
+
+  async function enableCoachForTeam(team, { force = false } = {}) {
     if (!coachAvailable) return;
     if (team !== 1 && team !== 2) return;
-    // Metered: one run a day on Free, four on Premium. Spent here rather than
-    // on the toolbar button, so opening the team picker and backing out again
-    // does not cost anything.
-    if (!spentCoach) {
+    const locked = !force && (await demoAlreadyCoached());
+    // Metered only when generating fresh notes — restoring an analyzed demo is free.
+    if (!locked && !spentCoach) {
       if (!(await useMeteredFeature(CAP.DEMOS_AUTO_COACH, { host: el }))) {
         hideCoachPick();
         return;
@@ -2925,16 +2985,23 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     coachTeam = team;
     hideCoachPick();
     coachOn = true;
-    coachScanning = true;
     syncCoachBtn();
+    if (locked) {
+      spentCoach = true;
+      await hydrateCoachNotedFromDisk();
+      renderActiveMarks();
+      enterCoachRoundMoment();
+      return;
+    }
+    coachScanning = true;
     try {
       await ensureZoneNetwork();
       const mapCode = renderer.mapCode || activeMeta?.map || '';
       if (zoneNetwork && mapCode && renderer.image) {
         prepareControlField(zoneNetwork, mapCode, renderer.image);
       }
-      // Strict order: preload every round, then analyse every round.
       await analyseAllCoachRounds();
+      await registerTeamAutocoach(team);
     } finally {
       coachScanning = false;
     }
@@ -3021,20 +3088,30 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     draw();
   });
 
-  coachBtn?.addEventListener('click', () => {
+  coachBtn?.addEventListener('click', async () => {
     if (!coachAvailable) return;
     if (coachOn) {
+      // Notes stay on disk — toggling off only hides the live coach chrome.
       coachOn = false;
-      coachTeam = null;
       coachScanning = false;
       coachPassId += 1;
       hideCoachPick();
       syncCoachBtn();
-      clearAllCoachNotes();
       return;
     }
     if (coachPicking) {
       hideCoachPick();
+      return;
+    }
+    // Already analyzed demos reopen on the recorded side without a re-pick.
+    if (await demoAlreadyCoached()) {
+      const side =
+        coachForceSide === 1 || coachForceSide === 2
+          ? coachForceSide
+          : coachTeam === 1 || coachTeam === 2
+            ? coachTeam
+            : 1;
+      await enableCoachForTeam(side);
       return;
     }
     showCoachPick();
@@ -3119,6 +3196,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
           text: String(n.text || '').trim(),
           kind: n.kind === 'coach' ? 'coach' : 'user',
           mark: n.mark || '',
+          playerId: n.playerId || '',
+          rule: n.rule || '',
           updatedAt: n.updatedAt || Date.now()
         }))
         .filter((n) => n.text);
@@ -3521,12 +3600,50 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     if (event.type === 'full' && event.file === files[activeIndex]) draw();
   });
 
+  async function restorePersistedCoach() {
+    if (!coachAvailable || destroyed) return;
+    let side = coachForceSide === 1 || coachForceSide === 2 ? coachForceSide : 0;
+    let should = Boolean(coachAutoEnable);
+    if (!should || !side) {
+      try {
+        const teams = await fetchTeams().catch(() => []);
+        const list = Array.isArray(teams) ? teams : teams?.teams || [];
+        const meta = activeMeta || rounds[0] || {};
+        const n1 = teamNameKey(meta.team1?.name || '');
+        const n2 = teamNameKey(meta.team2?.name || '');
+        for (const t of list) {
+          const key = teamNameKey(t.name);
+          if (!key) continue;
+          const entry = t.autocoach?.demos?.[statsDemoId];
+          if (entry && (key === n1 || key === n2)) {
+            should = true;
+            side = entry.side === 2 ? 2 : 1;
+            break;
+          }
+          if (coachTeamId && t.id === coachTeamId && (key === n1 || key === n2)) {
+            should = true;
+            side = key === n1 ? 1 : 2;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!should && (await demoAlreadyCoached())) {
+      should = true;
+      side = side || 1;
+    }
+    if (!should || destroyed) return;
+    await enableCoachForTeam(side || 1);
+  }
+
   (async () => {
     // buildSequence → selectRound(0) full-loads round 1 and starts the
     // background prefetch of the rest behind it.
     syncChromeInset();
     loadPlaylists();
     await buildSequence();
+    await restorePersistedCoach();
   })();
 
   return {

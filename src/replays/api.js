@@ -319,6 +319,8 @@ export async function saveRoundNotes(file, notes) {
     text: String(n?.text ?? '').slice(0, NOTE_MAX),
     kind: n?.kind === 'coach' ? 'coach' : 'user',
     mark: n?.mark === 'ok' || n?.mark === 'x' ? n.mark : '',
+    playerId: String(n?.playerId || ''),
+    rule: String(n?.rule || ''),
     updatedAt: Number(n?.updatedAt) || Date.now()
   }));
   return asJson(
@@ -564,6 +566,29 @@ export async function mergeTeamMember(teamId, memberId, dummyId) {
 }
 
 /** @param {'T'|'CT'} side */
+export async function fetchTeamAutocoach(teamId) {
+  return asJson(
+    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/autocoach`, {
+      headers: await headers()
+    })
+  );
+}
+
+export async function markTeamAutocoachDemo(teamId, demoId, side) {
+  return asJson(
+    await fetch(
+      `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/autocoach/demos/${encodeURIComponent(
+        demoId
+      )}`,
+      {
+        method: 'POST',
+        headers: await headers({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ side: side === 2 ? 2 : 1 })
+      }
+    )
+  );
+}
+
 export async function setTeamPosition(teamId, memberId, side, map, position) {
   return asJson(
     await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/positions`, {

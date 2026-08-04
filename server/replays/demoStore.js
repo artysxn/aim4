@@ -41,7 +41,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = process.env.AIM4_REPLAY_DIR || path.join(__dirname, '..', 'data', 'replays');
 
 /** Shared library storage cap for the whole server (all visitors share one pool). */
-export const MAX_BYTES = Number(process.env.AIM4_REPLAY_MAX_BYTES || 20 * 1024 ** 3); // 20 GB
+export const MAX_BYTES = Number(process.env.AIM4_REPLAY_MAX_BYTES || 100 * 1024 ** 3); // 100 GB
 
 /**
  * Largest single upload, archive or bare demo. An archive may hold as many
@@ -846,12 +846,16 @@ export function normalizeRoundNotes(meta) {
       // `kind` separates what the coach wrote from what a person wrote, and
       // `mark` is the reader's verdict on a coach note. Both round-trip so a
       // reviewed note stays reviewed.
+      const playerId = String(raw.playerId || '').slice(0, 64);
+      const rule = String(raw.rule || '').slice(0, 64);
       out.push({
         id: String(raw.id || '').slice(0, 32) || `n${out.length}`,
         tick: Number.isFinite(tick) ? Math.max(0, Math.round(tick)) : 0,
         text,
         kind: raw.kind === 'coach' ? 'coach' : 'user',
         mark: raw.mark === 'ok' || raw.mark === 'x' ? raw.mark : '',
+        ...(playerId ? { playerId } : {}),
+        ...(rule ? { rule } : {}),
         updatedAt: Number(raw.updatedAt) || 0
       });
     }

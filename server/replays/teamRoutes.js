@@ -24,13 +24,17 @@ import {
   readRound,
   saveRound
 } from './strategyReplays.js';
+import { buildAutocoachSummary } from './autocoachSummary.js';
 import {
   createDummyMember,
+  createTeam,
   deleteDocument,
   deleteStrategy,
   joinTeam,
   leaveTeam,
   listDocuments,
+  autocoachDemosOf,
+  markAutocoachDemo,
   mergeMemberIntoDummy,
   publicTeam,
   realMemberCount,
@@ -438,6 +442,31 @@ export async function handleTeamRequest(req, res, url) {
         json(res, 200, { board: await saveDrawingBoard(me, teamId, map, body) });
         return true;
       }
+    }
+
+    // ---- autocoach --------------------------------------------------------
+    if (req.method === 'GET' && tail === '/autocoach') {
+      await requireCapability(me, CAP.DEMOS_AUTO_COACH, { consume: false });
+      const summary = await buildAutocoachSummary(await teamById(teamId));
+      json(res, 200, {
+        ...summary,
+        team: publicTeam(await teamById(teamId), me.id)
+      });
+      return true;
+    }
+    const coachDemoMatch = p.match(
+      /^\/api\/teams\/[A-Za-z0-9_]+\/autocoach\/demos\/([A-Za-z0-9_-]+)$/
+    );
+    if (coachDemoMatch && req.method === 'POST') {
+      await requireCapability(me, CAP.DEMOS_AUTO_COACH, { consume: false });
+      const body = await readJson(req);
+      await markAutocoachDemo(me, teamId, coachDemoMatch[1], body.side);
+      const next = await teamById(teamId);
+      json(res, 200, {
+        team: publicTeam(next, me.id),
+        demos: autocoachDemosOf(next)
+      });
+      return true;
     }
 
     // ---- utility archive --------------------------------------------------

@@ -203,7 +203,9 @@ export async function createTeam(user, name) {
     /** userId -> { T: { MAP: position }, CT: { MAP: position } } */
     positions: {},
     documents: [],
-    stratbook: []
+    stratbook: [],
+    /** demoId -> { side: 1|2, analyzedAt, analyzedBy } — Autocoach pass registry */
+    autocoach: { demos: {} }
   };
   state.teams.push(team);
   await writeTeams(state);
@@ -618,6 +620,29 @@ export async function deleteStrategy(actor, teamId, strategyId) {
   });
 }
 
+/** Mark a demo as Autocoach-analyzed for this team (idempotent; never re-runs). */
+export async function markAutocoachDemo(actor, teamId, demoId, side) {
+  return updateTeam(teamId, (t) => {
+    if (!isMember(t, actor.id)) throw denied('You are not on that team.');
+    const id = String(demoId || '').replace(/[^A-Za-z0-9_-]/g, '');
+    if (!id) throw new Error('Missing demo id.');
+    const seat = side === 2 ? 2 : 1;
+    t.autocoach = t.autocoach && typeof t.autocoach === 'object' ? t.autocoach : { demos: {} };
+    t.autocoach.demos = t.autocoach.demos || {};
+    if (t.autocoach.demos[id]) return; // already locked — do not overwrite
+    t.autocoach.demos[id] = {
+      side: seat,
+      analyzedAt: Date.now(),
+      analyzedBy: actor.id
+    };
+  });
+}
+
+export function autocoachDemosOf(team) {
+  const bag = team?.autocoach?.demos;
+  return bag && typeof bag === 'object' ? bag : {};
+}
+
 /** Shape sent to the client: no internal fields, invite only for the owner. */
 export function publicTeam(team, viewerId) {
   if (!team) return null;
@@ -653,6 +678,7 @@ export function publicTeam(team, viewerId) {
       canEdit: canEditDocument(team, d, viewerId)
     })),
     stratbook: (team.stratbook || []).map(publicStrategy),
+    autocoach: { demos: autocoachDemosOf(team) },
     isOwner: owner,
     isAdmin: isAdmin(team, viewerId),
     maxMembers: seatCapacityOf(team),
