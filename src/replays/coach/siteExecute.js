@@ -142,6 +142,8 @@ export function findSiteExecuteFlags({
 
     fired[site] = true;
     const sideName = siteLabel(site);
+    const pinName =
+      (meta.players || []).find((p) => p.id === pin)?.name || pin || 'Player';
 
     if (ctOnSite > defaultN) {
       out.push({
@@ -149,6 +151,7 @@ export function findSiteExecuteFlags({
         playerId: pin,
         rule: `${site}-overstack`,
         text: coachText('overstack', sample.tick, {
+          player: pinName,
           n: ctOnSite - defaultN,
           site: sideName
         })
@@ -159,7 +162,11 @@ export function findSiteExecuteFlags({
         tick: sample.tick,
         playerId: pin,
         rule: `${site}-understack`,
-        text: coachText('understack', sample.tick, { n: ctOnSite, site: sideName })
+        text: coachText('understack', sample.tick, {
+          player: pinName,
+          n: ctOnSite,
+          site: sideName
+        })
       });
     }
   }

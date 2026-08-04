@@ -261,6 +261,7 @@ export function analyseRound({
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
   const sideOfTeam = (team) => teamSides[team];
   const byId = new Map(players.map((p) => [p.id, p]));
+  const nameOf = (id) => byId.get(id)?.name || id || 'Player';
   const sideOf = (id) => sideOfTeam(byId.get(id)?.team);
 
   const from = meta.freezeEndTick ?? meta.startTick ?? 0;
@@ -564,6 +565,7 @@ export function analyseRound({
           rule: 'advantage-lost',
           text:
             coachText('advantage-lost', death.tick, {
+              player: nameOf(victim),
               n: before[side],
               m: before[opp]
             }) + drop
@@ -582,7 +584,7 @@ export function analyseRound({
           tick: death.tick,
           playerId: victim,
           rule: 'lurk-first',
-          text: coachText('lurk-first', death.tick) + drop
+          text: coachText('lurk-first', death.tick, { player: nameOf(victim) }) + drop
         });
         continue;
       }
@@ -598,7 +600,7 @@ export function analyseRound({
           tick: death.tick,
           playerId: victim,
           rule: 'free-opening',
-          text: coachText('free-opening', death.tick) + drop
+          text: coachText('free-opening', death.tick, { player: nameOf(victim) }) + drop
         });
         continue;
       }
@@ -623,7 +625,11 @@ export function analyseRound({
         tick: death.tick,
         playerId: victim,
         rule: 'negative-ev',
-        text: coachText('negative-ev', death.tick, { win: pct(liveWp) }) + drop
+        text:
+          coachText('negative-ev', death.tick, {
+            player: nameOf(victim),
+            win: pct(liveWp)
+          }) + drop
       });
       continue;
     }
@@ -644,7 +650,11 @@ export function analyseRound({
           tick: death.tick,
           playerId: victim,
           rule: 'untraded-won-round',
-          text: coachText('untraded-won-round', death.tick, { win: pct(liveWp) }) + drop
+          text:
+            coachText('untraded-won-round', death.tick, {
+              player: nameOf(victim),
+              win: pct(liveWp)
+            }) + drop
         });
         continue;
       }
@@ -667,7 +677,11 @@ export function analyseRound({
           tick: death.tick,
           playerId: victim,
           rule: 'solo-even',
-          text: coachText('solo-even', death.tick, { n: evenN }) + drop
+          text:
+            coachText('solo-even', death.tick, {
+              player: nameOf(victim),
+              n: evenN
+            }) + drop
         });
       }
     }
@@ -716,6 +730,7 @@ export function analyseRound({
       rule: 'unchecked-position',
       text:
         coachText('unchecked-position', death.tick, {
+          player: nameOf(victim),
           enemy: killerName,
           n: group.length
         }) + drop
@@ -756,6 +771,7 @@ export function analyseRound({
       rule: 'unaware-openness',
       text:
         coachText('unaware-openness', death.tick, {
+          player: nameOf(victim),
           enemy: killerName,
           deg: Math.round(off)
         }) + drop
@@ -811,7 +827,10 @@ export function analyseRound({
         tick: death.tick,
         playerId: victim,
         rule: 'utility-unawareness',
-        text: coachText('utility-unawareness', death.tick, { enemy: killerName })
+        text: coachText('utility-unawareness', death.tick, {
+          player: nameOf(victim),
+          enemy: killerName
+        })
       });
     }
   }
@@ -915,6 +934,7 @@ export function analyseRound({
         playerId: victims[0],
         rule: 'multikill-refrag',
         text: coachText('multikill-refrag', firstTick, {
+          player: nameOf(victims[0]),
           enemy: killerName,
           n: victims.length
         })
@@ -948,7 +968,10 @@ export function analyseRound({
           tick: k.tick,
           playerId: k.attacker,
           rule: 'negative-ev',
-          text: coachText('negative-ev-won', k.tick, { win: pct(liveWp) })
+          text: coachText('negative-ev-won', k.tick, {
+            player: nameOf(k.attacker),
+            win: pct(liveWp)
+          })
         });
       }
     }
@@ -988,7 +1011,14 @@ export function analyseRound({
   // Priced against the duel model, so these need the map. They stay quiet when
   // it is not loaded rather than guessing at line of sight.
   try {
-    for (const f of findDuelFlags({ ...passThree, network, track })) flags.push(f);
+    for (const f of findDuelFlags({
+      ...passThree,
+      network,
+      track,
+      roundWinAt: (tick, side) => sampleNear(tick)?.[side === 'CT' ? 'ct' : 't']
+    })) {
+      flags.push(f);
+    }
   } catch {
     /* same */
   }

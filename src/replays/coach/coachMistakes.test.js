@@ -5,7 +5,7 @@
 // pass takes its inputs explicitly precisely so it can be driven without a
 // round file, and the interesting behaviour is the thresholds, not the wiring.
 
-import { coachCategory, coachText } from './coachMessages.js';
+import { COACH_MESSAGES, coachCategory, coachText } from './coachMessages.js';
 import { findDuelFlags } from './duelMistakes.js';
 import { findShotFlags } from './shotMistakes.js';
 import { findUtilityFlags } from './utilityMistakes.js';
@@ -78,6 +78,8 @@ function assertFilled(flags) {
   for (const f of flags) {
     assert(f.text && f.text.length > 10, `empty copy for ${f.rule}`);
     assert(!/\{\w+\}/.test(f.text), `unfilled placeholder in ${f.rule}: ${f.text}`);
+    assert(!/\byou\b/i.test(f.text), `second-person "you" in ${f.rule}: ${f.text}`);
+    assert(!/\byour\b/i.test(f.text), `second-person "your" in ${f.rule}: ${f.text}`);
   }
 }
 
@@ -86,16 +88,19 @@ function assertFilled(flags) {
 {
   // Same rule and tick always reads the same way, so a round does not rewrite
   // itself every time it is opened.
-  const a = coachText('solo-even', 4321, { n: 3 });
-  const b = coachText('solo-even', 4321, { n: 3 });
+  const a = coachText('solo-even', 4321, { player: 'Alice', n: 3 });
+  const b = coachText('solo-even', 4321, { player: 'Alice', n: 3 });
   assert(a === b, 'variant pick must be deterministic');
+  assert(a.includes('Alice'), 'filled copy must name the player');
+  assert(!/\byou\b/i.test(a), 'filled copy must not say you');
 
   // Different ticks should not all land on one variant, and every variant that
   // does use the headcount has it filled in.
   const seen = new Set();
   for (let t = 0; t < 400; t++) {
-    const text = coachText('solo-even', t, { n: 3 });
+    const text = coachText('solo-even', t, { player: 'Alice', n: 3 });
     assert(!text.includes('{n}'), `unfilled placeholder: ${text}`);
+    assert(text.includes('Alice'), `missing player name: ${text}`);
     seen.add(text);
   }
   assert(seen.size === 4, `expected all four variants over many ticks, got ${seen.size}`);
@@ -104,7 +109,7 @@ function assertFilled(flags) {
   // An unsupplied placeholder stays visible rather than printing "undefined",
   // so a copy bug is obvious in the note instead of quiet.
   const bare = [];
-  for (let t = 0; t < 50; t++) bare.push(coachText('late-off-flash', t));
+  for (let t = 0; t < 50; t++) bare.push(coachText('late-off-flash', t, { player: 'Alice' }));
   assert(
     bare.some((text) => text.includes('{seconds}')),
     'missing var must stay literal'
@@ -114,10 +119,33 @@ function assertFilled(flags) {
     'missing var must never print undefined'
   );
 
+  // Every shipped variant names the player; none speak in second person.
+  for (const [key, entry] of Object.entries(COACH_MESSAGES)) {
+    for (const variant of entry.variants) {
+      assert(
+        variant.includes('{player}'),
+        `${key} variant missing {player}: ${variant}`
+      );
+      assert(!/\byou\b/i.test(variant), `${key} still says you: ${variant}`);
+      assert(!/\byour\b/i.test(variant), `${key} still says your: ${variant}`);
+    }
+  }
+
   assert(coachCategory('advantage-lost') === 'carelessness', 'category lookup');
+  assert(coachCategory('underdog-won-round') === 'carelessness', 'underdog-won-round category');
   assert(coachCategory('a-understack') === 'synchronization', 'per-site rule category');
   assert(coachCategory('b-overstack') === 'praise', 'praise has its own lane');
   assert(coachCategory('nope') === '', 'unknown rule has no category');
+
+  const underdog = coachText('underdog-won-round', 100, {
+    player: 'Alice',
+    win: '82%',
+    duel: '78%',
+    share: '80%'
+  });
+  assert(underdog.includes('Alice'), 'underdog-won-round names the player');
+  assert(underdog.includes('82%') || underdog.includes('78%') || underdog.includes('80%'), 'underdog-won-round fills odds');
+  assert(!/\byou\b/i.test(underdog), 'underdog-won-round has no you');
 }
 
 // --- flashbangs -------------------------------------------------------------

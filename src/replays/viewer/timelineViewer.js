@@ -181,8 +181,6 @@ export function createTimelineViewer({
           <span class="rv-popover-msg" id="rv-note-msg"></span>
           <button type="button" class="rp-btn-icon rv-note-mark-btn" id="rv-note-ok" hidden title="Acknowledge" aria-label="Acknowledge">✓</button>
           <button type="button" class="rp-btn-icon rv-note-mark-btn" id="rv-note-deny" hidden title="Disagree" aria-label="Disagree">✗</button>
-          <button type="button" class="btn btn-sm" id="rv-note-delete" title="Delete this note">Delete</button>
-          <button type="button" class="btn btn-sm primary" id="rv-note-save">Save</button>
         </div>
       </div>
     </aside>
@@ -1852,16 +1850,19 @@ export function createTimelineViewer({
     return out;
   }
 
+  /** ✓/✗ only when the viewer was opened from the team section. */
+  const coachMarksEnabled = Boolean(coachTeamId);
+
   function syncNoteMarkButtons(note) {
     const okBtn = el.querySelector('#rv-note-ok');
     const denyBtn = el.querySelector('#rv-note-deny');
-    const coach = note?.kind === 'coach';
+    const show = coachMarksEnabled && note?.kind === 'coach';
     if (okBtn) {
-      okBtn.hidden = !coach;
+      okBtn.hidden = !show;
       okBtn.classList.toggle('active', note?.mark === 'ok');
     }
     if (denyBtn) {
-      denyBtn.hidden = !coach;
+      denyBtn.hidden = !show;
       denyBtn.classList.toggle('active', note?.mark === 'x');
     }
   }
@@ -2071,10 +2072,14 @@ export function createTimelineViewer({
     noteText.focus();
   }
 
-  async function persistNotes() {
+  async function persistNotes({ quiet = false } = {}) {
     const file = files[activeIndex];
     if (!file) return;
     flushNoteText();
+    // Empty drafts stay local until they have text; do not wipe them on autosave.
+    const emptyDrafts = roundNotes.filter(
+      (n) => n.kind !== 'coach' && !String(n.text || '').trim()
+    );
     const payload = roundNotes
       .map((n) => ({
         id: n.id,
@@ -2087,11 +2092,20 @@ export function createTimelineViewer({
         updatedAt: n.updatedAt || Date.now()
       }))
       .filter((n) => n.text);
-    noteMsg.textContent = 'Saving…';
+    if (!quiet) noteMsg.textContent = 'Saving…';
     try {
       const res = await saveRoundNotes(file, payload);
       const saved = Array.isArray(res.notes) ? res.notes : payload;
+      const curId = currentNote()?.id;
       roundNotes = notesFromMeta({ notes: saved });
+      for (const n of emptyDrafts) {
+        if (!roundNotes.some((x) => x.id === n.id)) roundNotes.push(n);
+      }
+      roundNotes.sort((a, b) => a.tick - b.tick || a.updatedAt - b.updatedAt);
+      if (curId) {
+        const idx = roundNotes.findIndex((n) => n.id === curId);
+        if (idx >= 0) noteIndex = idx;
+      }
       if (activeMeta) {
         activeMeta.notes = roundNotes;
         delete activeMeta.note;
@@ -2105,11 +2119,12 @@ export function createTimelineViewer({
       }
       if (!roundNotes.length) {
         noteIndex = -1;
-        noteMsg.textContent = 'Notes cleared.';
+        if (!quiet) noteMsg.textContent = 'Notes cleared.';
         setNoteOpen(false);
       } else {
         if (noteIndex < 0 || noteIndex >= roundNotes.length) noteIndex = 0;
-        noteMsg.textContent = 'Saved.';
+        if (!quiet) noteMsg.textContent = 'Saved.';
+        else if (noteMsg.textContent === 'Saving…') noteMsg.textContent = '';
         renderNoteDock();
       }
       setCoachNoted(file, roundNotes);
@@ -2121,10 +2136,27 @@ export function createTimelineViewer({
     }
   }
 
+  let noteSaveTimer = 0;
+  function schedulePersistNotes() {
+    if (noteSaveTimer) clearTimeout(noteSaveTimer);
+    noteSaveTimer = setTimeout(() => {
+      noteSaveTimer = 0;
+      void persistNotes({ quiet: true });
+    }, 450);
+  }
+
   noteText.addEventListener('input', () => {
     flushNoteText();
     syncNoteCount();
     syncNoteHasBadge();
+    schedulePersistNotes();
+  });
+  noteText.addEventListener('blur', () => {
+    if (noteSaveTimer) {
+      clearTimeout(noteSaveTimer);
+      noteSaveTimer = 0;
+    }
+    void persistNotes({ quiet: true });
   });
   noteBtn.addEventListener('click', () => {
     if (!notePanel.hidden) {
@@ -2142,6 +2174,7 @@ export function createTimelineViewer({
   el.querySelector('#rv-note-close').addEventListener('click', () => setNoteOpen(false));
   el.querySelector('#rv-note-close-list')?.addEventListener('click', () => setNoteOpen(false));
   async function setCoachNoteMark(mark) {
+    if (!coachMarksEnabled) return;
     const n = currentNote();
     if (!n || n.kind !== 'coach') return;
     n.mark = n.mark === mark ? '' : mark;
@@ -2153,27 +2186,6 @@ export function createTimelineViewer({
 
   el.querySelector('#rv-note-ok')?.addEventListener('click', () => setCoachNoteMark('ok'));
   el.querySelector('#rv-note-deny')?.addEventListener('click', () => setCoachNoteMark('x'));
-
-  el.querySelector('#rv-note-delete').addEventListener('click', async () => {
-    const n = currentNote();
-    if (!n) return;
-    roundNotes = roundNotes.filter((x) => x.id !== n.id);
-    if (!roundNotes.length) {
-      noteIndex = -1;
-      noteText.value = '';
-      noteView = 'list';
-      renderNoteDock();
-      syncNoteHasBadge();
-      renderActiveMarks();
-      await persistNotes();
-      return;
-    }
-    noteIndex = Math.min(noteIndex, roundNotes.length - 1);
-    renderNoteDock();
-    renderActiveMarks();
-    await persistNotes();
-  });
-  el.querySelector('#rv-note-save').addEventListener('click', () => persistNotes());
 
   // ---- playlists ----------------------------------------------------------
 
@@ -3933,6 +3945,10 @@ export function createTimelineViewer({
     el,
     destroy() {
       destroyed = true;
+      if (noteSaveTimer) {
+        clearTimeout(noteSaveTimer);
+        noteSaveTimer = 0;
+      }
       cancelViewAnim();
       playback.destroy();
       // The store outlives this view (the mode switch reuses it), so retire the

@@ -63,8 +63,18 @@ const BURST_GAP_CYCLES = 3;
 const AWP_FREE = 0.75;
 /** A duel this far in your favour is one you are expected to convert. */
 const AHEAD = 0.75;
+/**
+ * Enemy duel win chance this high, on this share of active fight samples, with
+ * the round already won, is a fight that should not have been taken.
+ */
+const UNDERDOG = 0.75;
+const UNDERDOG_SHARE = 0.75;
+/** Round win chance (0-100 series units) required before that duel. */
+const ROUND_WON_PCT = 75;
 /** How long before a death to look for the moment the fight opened. */
 const SIGHT_LOOKBACK_SECONDS = 3;
+/** How far back to sample an active gunfight for the underdog-won-round note. */
+const FIGHT_LOOKBACK_SECONDS = 5;
 /** The refrag has to be available this well before not taking it is a mistake. */
 const TRADE_ODDS = 0.66;
 /** Seconds you have to step up before the trade is gone. */
@@ -96,6 +106,8 @@ const pct = (p) => `${Math.round(p * 100)}%`;
  * @param {number|null} args.defusedTick
  * @param {object|null} args.network  prepared zone network
  * @param {object|null} args.track    full tick track
+ * @param {(tick: number, side: 'CT'|'T') => number|undefined|null} [args.roundWinAt]
+ *        Live round win chance in 0-100 units for `side` at `tick`.
  * @returns {Array<{tick: number, playerId: string, rule: string, text: string}>}
  */
 export function findDuelFlags({
@@ -108,7 +120,8 @@ export function findDuelFlags({
   defusedTick,
   kills = [],
   network,
-  track
+  track,
+  roundWinAt = null
 }) {
   const flags = [];
   const players = meta?.players || [];
@@ -217,6 +230,7 @@ export function findDuelFlags({
       playerId,
       rule: 'running-shot',
       text: coachText('running-shot', burst.tick, {
+        player: nameOf(playerId),
         speed: Math.round(burst.speed),
         was: pct(burst.still),
         is: pct(burst.moving),
@@ -269,6 +283,7 @@ export function findDuelFlags({
           playerId: shot.player,
           rule: 'awp-miss',
           text: coachText('awp-miss', shot.tick, {
+            player: nameOf(shot.player),
             win: pct(free),
             enemy: nameOf(foe?.id || '')
           })
@@ -340,11 +355,31 @@ export function findDuelFlags({
     (shotsByPlayer.get(playerId) || []).some((t) => t >= from && t <= to);
 
   const sightLookback = SIGHT_LOOKBACK_SECONDS * tickRate;
+  const fightLookback = FIGHT_LOOKBACK_SECONDS * tickRate;
   const tradeWindow = TRADE_WINDOW_SECONDS * tickRate;
   const tradeDeath = TRADE_DEATH_SECONDS * tickRate;
   const deaths = [...kills]
     .filter((k) => k.victim && k.attacker)
     .sort((a, b) => a.tick - b.tick);
+
+  /** Active (on-screen) samples of victim vs killer in [from, to). */
+  const sampleActiveFight = (victimSlot, killerSlot, from, to) => {
+    /** @type {Array<{ tick: number, odds: number }>} */
+    const samples = [];
+    for (let t = from; t < to; t += WALK_STRIDE) {
+      let snap;
+      try {
+        snap = snapshotWalked(t);
+      } catch {
+        continue;
+      }
+      const ctx = duelContext(snap, victimSlot, killerSlot);
+      if (!ctx?.pair?.losClear) continue;
+      if (!(ctx.pair.aSeesB || ctx.pair.bSeesA)) continue;
+      samples.push({ tick: t, odds: predictDuel(ctx, weights) });
+    }
+    return samples;
+  };
 
   for (const death of deaths) {
     const victim = death.victim;
@@ -371,6 +406,7 @@ export function findDuelFlags({
     const sameSide = snapshot.players.filter((p) => p.side === victimFeat.side);
 
     // A duel that was already yours the moment you could see them.
+    let lostAhead = false;
     if (coachable(victim, death.tick)) {
       let odds = null;
       for (let t = death.tick - sightLookback; t < death.tick; t += WALK_STRIDE) {
@@ -387,13 +423,53 @@ export function findDuelFlags({
         break;
       }
       if (odds !== null && odds >= AHEAD) {
+        lostAhead = true;
         flags.push({
           tick: death.tick,
           playerId: victim,
           rule: 'lost-ahead',
-          text: coachText('lost-ahead', death.tick, { win: pct(odds) })
+          text: coachText('lost-ahead', death.tick, {
+            player: nameOf(victim),
+            win: pct(odds)
+          })
         });
       }
+
+      // Losing duel in a winning round: most active fight samples heavily
+      // favoured the enemy, while the round was already decided beforehand.
+      if (!lostAhead && typeof roundWinAt === 'function') {
+        const samples = sampleActiveFight(
+          victimSlot,
+          killerSlot,
+          death.tick - fightLookback,
+          death.tick
+        );
+        if (samples.length) {
+          const fightStart = samples[0].tick;
+          const roundWp = roundWinAt(Math.max(0, fightStart - 1), side);
+          const bad = samples.filter((s) => 1 - s.odds >= UNDERDOG).length;
+          if (
+            Number.isFinite(roundWp) &&
+            roundWp >= ROUND_WON_PCT &&
+            bad / samples.length >= UNDERDOG_SHARE
+          ) {
+            const avgEnemy =
+              samples.reduce((n, s) => n + (1 - s.odds), 0) / samples.length;
+            flags.push({
+              tick: death.tick,
+              playerId: victim,
+              rule: 'underdog-won-round',
+              text: coachText('underdog-won-round', death.tick, {
+                player: nameOf(victim),
+                win: `${Math.round(roundWp)}%`,
+                duel: pct(avgEnemy),
+                share: `${Math.round((bad / samples.length) * 100)}%`
+              })
+            });
+          }
+        }
+      }
+
       // The lookback above walked backwards, so put the walker back where the
       // rest of this iteration expects it.
       try {
@@ -431,6 +507,7 @@ export function findDuelFlags({
           playerId: mate.id,
           rule: 'no-trade-attempt',
           text: coachText('no-trade-attempt', death.tick, {
+            player: nameOf(mate.id),
             teammate: nameOf(victim),
             win: pct(odds)
           })
@@ -444,6 +521,7 @@ export function findDuelFlags({
           playerId: mate.id,
           rule: 'trade-failure',
           text: coachText('trade-failure', death.tick, {
+            player: nameOf(mate.id),
             teammate: nameOf(victim),
             win: pct(odds)
           })

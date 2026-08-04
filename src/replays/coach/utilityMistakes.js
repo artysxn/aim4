@@ -122,6 +122,7 @@ export function findUtilityFlags({
         playerId: g.player,
         rule: 'early-off-flash',
         text: coachText('early-off-flash', throwerDied, {
+          player: nameOf(g.player),
           enemy: nameOf(killerOf.get(g.player) || '') || 'They'
         })
       });
@@ -159,6 +160,7 @@ export function findUtilityFlags({
         playerId: g.player,
         rule: 'missed-flash',
         text: coachText('missed-flash', g.detonateTick, {
+          player: nameOf(g.player),
           teammate: nameOf(worstMate),
           seconds: round1(worstMateSeconds)
         })
@@ -182,8 +184,10 @@ export function findUtilityFlags({
         playerId: id,
         rule: 'ate-team-flash',
         text:
-          coachText('ate-team-flash', g.detonateTick, { seconds: round1(seconds) }) +
-          (costTheRound ? ' You died before it wore off.' : '')
+          coachText('ate-team-flash', g.detonateTick, {
+            player: nameOf(id),
+            seconds: round1(seconds)
+          }) + (costTheRound ? ` ${nameOf(id)} died before it wore off.` : '')
       });
     }
   }
@@ -233,6 +237,7 @@ export function findUtilityFlags({
         playerId: victim,
         rule: 'late-off-flash',
         text: coachText('late-off-flash', death.tick, {
+          player: nameOf(victim),
           enemy: nameOf(killer),
           seconds: round1((death.tick - endedAt) / tickRate)
         })
@@ -282,7 +287,10 @@ export function findUtilityFlags({
         tick: bag.tick,
         playerId: victim,
         rule: 'team-util-damage',
-        text: coachText('team-util-damage', bag.tick, { hp: Math.round(bag.hp) })
+        text: coachText('team-util-damage', bag.tick, {
+          player: nameOf(victim),
+          hp: Math.round(bag.hp)
+        })
       });
     }
 
@@ -301,6 +309,7 @@ export function findUtilityFlags({
         playerId: pin,
         rule: 'nade-stack',
         text: coachText('nade-stack', group.tick, {
+          player: nameOf(pin),
           hp: Math.round(total),
           n: hit.length
         })
@@ -325,7 +334,10 @@ export function findUtilityFlags({
       tick,
       playerId: victim,
       rule: 'died-holding-util',
-      text: coachText('died-holding-util', tick, { n: left })
+      text: coachText('died-holding-util', tick, {
+        player: nameOf(victim),
+        n: left
+      })
     });
   }
 

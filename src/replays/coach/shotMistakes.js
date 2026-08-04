@@ -61,7 +61,7 @@ function noGunLabel(weapon) {
   if (!b) return '';
   if (b === 'c4') return 'the bomb';
   if (b === 'taser') return 'the zeus';
-  if (b === 'knife' || b.startsWith('knife') || b.startsWith('bayonet')) return 'your knife';
+  if (b === 'knife' || b.startsWith('knife') || b.startsWith('bayonet')) return 'a knife';
   if (/grenade|molotov|incgrenade|firebomb|decoy|flash/.test(b)) return 'a grenade';
   return '';
 }
@@ -176,6 +176,7 @@ export function findShotFlags({
         playerId: victim,
         rule: 'missed-everything',
         text: coachText('missed-everything', tick, {
+          player: nameOf(victim),
           shots: fired.length,
           hits: landed,
           missed
@@ -230,6 +231,7 @@ export function findShotFlags({
         playerId: victim,
         rule: 'flick-error',
         text: coachText('flick-error', tick, {
+          player: nameOf(victim),
           share: `${Math.round((flicks / judged) * 100)}%`
         })
       });
@@ -259,7 +261,10 @@ export function findShotFlags({
       tick: end,
       playerId,
       rule: 'spray-past-control',
-      text: coachText('spray-past-control', end, { n: after })
+      text: coachText('spray-past-control', end, {
+        player: nameOf(playerId),
+        n: after
+      })
     });
   };
 
@@ -308,6 +313,7 @@ export function findShotFlags({
         playerId: victim,
         rule: 'knife-out',
         text: coachText('knife-out', tick, {
+          player: nameOf(victim),
           item: label,
           enemy: nameOf(killerOf.get(victim) || '')
         })

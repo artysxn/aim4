@@ -18,6 +18,7 @@
 // House rules for the copy, from the plan:
 //   - No long dash. Plain English, short sentences.
 //   - State the consequence, not just the event.
+//   - Always name the player with {player}. Never write "you" or "your".
 //   - Never write the win-chance sentence into a variant. Rules that measure a
 //     drop append "Round win chance fell from X to Y." themselves.
 // ---------------------------------------------------------------------------
@@ -47,6 +48,8 @@ const C = COACH_CATEGORY;
  * The key is not always the rule id: `negative-ev` fires both when the solo
  * duel was lost and when it was won, and those need different copy while
  * staying one rule for filtering and for notes already on disk.
+ *
+ * Every variant must include `{player}`.
  */
 export const COACH_MESSAGES = Object.freeze({
   // ---- Carelessness -------------------------------------------------------
@@ -55,10 +58,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'advantage-lost',
     category: C.CARELESSNESS,
     variants: [
-      'You died in a {n}v{m} with nobody able to trade you. Being up a man only wins the round if you stay up a man, and this made it even again.',
-      'That death was untraded in a man advantage. The extra player was the whole edge and it is gone.',
-      'You were up a man and died for free. Your team now has to win a duel they never had to take.',
-      'No teammate was close enough to punish that. When you are ahead you should be the last one taking a risk, not the first.'
+      '{player} died in a {n}v{m} with nobody able to trade. Being up a man only wins the round if the side stays up a man, and this made it even again.',
+      '{player} died untraded in a man advantage. The extra player was the whole edge and it is gone.',
+      '{player} was up a man and died for free. The team now has to win a duel they never had to take.',
+      'No teammate was close enough to punish that. When ahead, {player} should be the last one taking a risk, not the first.'
     ]
   },
 
@@ -66,10 +69,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'negative-ev',
     category: C.CARELESSNESS,
     variants: [
-      'You took a solo fight with the round already {win} won. Winning it added almost nothing and losing it cost most of the round.',
-      'The round was {win} in your favour before this duel. A fight nobody can trade is a bad deal even when it works, and this one did not.',
-      'There was no reason to go looking for that fight. At {win} the round wins itself if you stay alive and make them come to you.',
-      'You put a {win} round on a coinflip nobody could back you up on. That is the whole loss right there.'
+      '{player} took a solo fight with the round already {win} won. Winning it added almost nothing and losing it cost most of the round.',
+      'The round was {win} in {player}\'s favour before this duel. A fight nobody can trade is a bad deal even when it works, and this one did not.',
+      'There was no reason for {player} to go looking for that fight. At {win} the round wins itself if they stay alive and make the enemy come to them.',
+      '{player} put a {win} round on a coinflip nobody could back up. That is the whole loss right there.'
     ]
   },
 
@@ -77,10 +80,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'negative-ev',
     category: C.CARELESSNESS,
     variants: [
-      'You won that solo duel, but you took it at {win} with no support. The round did not need it.',
-      'Good fight, wrong fight. At {win} you risked a won round to gain almost nothing.',
-      'That came off, but it was still the wrong choice. Take the same fight ten times at {win} and you lose rounds you had already won.',
-      'You did not need that kill. Holding your angle wins the round with none of the risk.'
+      '{player} won that solo duel, but took it at {win} with no support. The round did not need it.',
+      'Good fight, wrong fight. At {win} {player} risked a won round to gain almost nothing.',
+      'That came off for {player}, but it was still the wrong choice. Take the same fight ten times at {win} and rounds already won get lost.',
+      '{player} did not need that kill. Holding the angle wins the round with none of the risk.'
     ]
   },
 
@@ -88,10 +91,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'untraded-won-round',
     category: C.CARELESSNESS,
     variants: [
-      "You died untraded in a round you were already {win} to win. You dropped your gun as well, so this costs the next round's buy on top of it.",
-      'That death was free for them. Even when the round still wins, losing a rifle for nothing quietly costs you the round after it.',
-      'The round was {win} yours and nobody could trade you. Every one of these takes a percent or two off the match, not just the round.',
-      'You had the round won on health and guns. Dying here hands them equipment they did not earn.'
+      '{player} died untraded in a round already {win} to win. The gun dropped as well, so this costs the next round\'s buy on top of it.',
+      '{player}\'s death was free for them. Even when the round still wins, losing a rifle for nothing quietly costs the round after it.',
+      'The round was {win} {player}\'s and nobody could trade. Every one of these takes a percent or two off the match, not just the round.',
+      '{player} had the round won on health and guns. Dying here hands them equipment they did not earn.'
     ]
   },
 
@@ -99,10 +102,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'pushed-advantage',
     category: C.CARELESSNESS,
     variants: [
-      'You pushed alone into space they had held for {seconds} seconds while up a man. Nothing to gain there and a whole round to lose.',
-      'That was their ground and you walked into it on your own with the advantage. They only had to stand still and wait.',
-      'Up a man you do not need to find them. Going into territory they already control hands the extra player straight back.',
-      'You gave the advantage away by moving into their space alone. Make them come to you when you are the ones ahead.'
+      '{player} pushed alone into space they had held for {seconds} seconds while up a man. Nothing to gain there and a whole round to lose.',
+      'That was their ground and {player} walked into it alone with the advantage. They only had to stand still and wait.',
+      'Up a man {player} does not need to find them. Going into territory they already control hands the extra player straight back.',
+      '{player} gave the advantage away by moving into their space alone. Make them come forward when the side is ahead.'
     ]
   },
 
@@ -110,10 +113,21 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'afterplant-duel',
     category: C.CARELESSNESS,
     variants: [
-      'You took a 1v1 in the first {seconds} seconds after the plant at only {win} to win it. Below about two thirds, the bomb wins you more rounds than the fight does.',
-      'The bomb was down and the clock was already working for you. A {win} duel this early throws that away.',
-      'In an afterplant your job is to make them come to you. Taking a {win} fight this early gives them a free defuse when it goes wrong.',
-      'That duel was close to a coinflip and you did not need it. Play off the bomb and make them find you.'
+      '{player} took a 1v1 in the first {seconds} seconds after the plant at only {win} to win it. Below about two thirds, the bomb wins more rounds than the fight does.',
+      'The bomb was down and the clock was already working for {player}\'s side. A {win} duel this early throws that away.',
+      'In an afterplant {player}\'s job is to make them come forward. Taking a {win} fight this early gives them a free defuse when it goes wrong.',
+      'That duel was close to a coinflip and {player} did not need it. Play off the bomb and make them find the hold.'
+    ]
+  },
+
+  'underdog-won-round': {
+    rule: 'underdog-won-round',
+    category: C.CARELESSNESS,
+    variants: [
+      '{player} took a fight that was {duel} against them for {share} of the duel, in a round already {win} won. That is the opposite of what a won round asks for.',
+      'The round was {win} {player}\'s before that gunfight. Across the active fight the enemy sat at {duel} or better on {share} of the ticks. Dying there hands back a round that was already decided.',
+      '{player} walked into a duel the enemy was winning at {duel} while the round sat at {win}. There was no reason to take that fight.',
+      'Most of that gunfight was {duel} or worse for {player}, and their side already had the round at {win}. Make them come to the hold instead.'
     ]
   },
 
@@ -123,10 +137,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'unaware-openness',
     category: C.MECHANICAL,
     variants: [
-      'You died to {enemy} with your crosshair {deg} degrees off them. The fight was over before you could aim at it.',
-      'Your crosshair was nowhere near {enemy} when they opened. Pre-aiming the angle you walk into is what makes these fights winnable.',
-      'You were looking {deg} degrees away from where the shot came from. That is a free kill for them every time.',
-      '{enemy} did not have to out-aim you here. Your crosshair was already off the angle before the duel started.'
+      '{player} died to {enemy} with the crosshair {deg} degrees off them. The fight was over before {player} could aim at it.',
+      '{player}\'s crosshair was nowhere near {enemy} when they opened. Pre-aiming the angle walked into is what makes these fights winnable.',
+      '{player} was looking {deg} degrees away from where the shot came from. That is a free kill for them every time.',
+      '{enemy} did not have to out-aim {player} here. The crosshair was already off the angle before the duel started.'
     ]
   },
 
@@ -134,10 +148,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'running-shot',
     category: C.MECHANICAL,
     variants: [
-      'You fired at {speed} units per second. Standing still made that fight {was}. Moving turned it into {is}.',
-      'Those bullets went nowhere near your crosshair because you were still running. You dropped the duel from {was} to {is} on your own.',
-      'You had the better fight until you shot while moving. {was} became {is} before they even fired back.',
-      'Stop first, then shoot. That one habit was worth {delta} points of win chance in this duel alone.'
+      '{player} fired at {speed} units per second. Standing still made that fight {was}. Moving turned it into {is}.',
+      'Those bullets went nowhere near {player}\'s crosshair because they were still running. The duel dropped from {was} to {is} on their own.',
+      '{player} had the better fight until they shot while moving. {was} became {is} before the enemy even fired back.',
+      'Stop first, then shoot. For {player} that one habit was worth {delta} points of win chance in this duel alone.'
     ]
   },
 
@@ -145,10 +159,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'awp-miss',
     category: C.MECHANICAL,
     variants: [
-      'That AWP shot was {win} free when you pulled it and you missed. One shot decided the round and it did not land.',
-      'You had {enemy} dead to rights at {win} and the shot missed. Whatever happened after, that was the round.',
-      'A {win} AWP shot is a kill you are expected to take. Missing it costs your team the man advantage you had already earned.',
-      'That was as close to free as an AWP shot gets. Missing turns a won angle into a fight you now have to reload through.'
+      'That AWP shot was {win} free when {player} pulled it and missed. One shot decided the round and it did not land.',
+      '{player} had {enemy} dead to rights at {win} and the shot missed. Whatever happened after, that was the round.',
+      'A {win} AWP shot is a kill {player} is expected to take. Missing it costs the team the man advantage already earned.',
+      'That was as close to free as an AWP shot gets for {player}. Missing turns a won angle into a fight that now needs a reload.'
     ]
   },
 
@@ -156,10 +170,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'lost-ahead',
     category: C.MECHANICAL,
     variants: [
-      'You entered that duel {win} in front and lost it. Every advantage was yours going in.',
-      'The fight was {win} yours the moment you had sight of them. Losing it hands over a round you should have had.',
-      'You saw them first, from the better spot, {win} to win, and died anyway. That is the fight to convert every time.',
-      'Everything about that duel was in your favour at {win}. Losing it costs the round and the gun.'
+      '{player} entered that duel {win} in front and lost it. Every advantage was theirs going in.',
+      'The fight was {win} {player}\'s the moment they had sight of them. Losing it hands over a round that should have been won.',
+      '{player} saw them first, from the better spot, {win} to win, and died anyway. That is the fight to convert every time.',
+      'Everything about that duel was in {player}\'s favour at {win}. Losing it costs the round and the gun.'
     ]
   },
 
@@ -167,10 +181,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'flick-error',
     category: C.MECHANICAL,
     variants: [
-      '{share} of your shots in that fight went past or short of the target. You were aiming through them, not at them.',
-      'You overshot and undershot your way through that engagement and died to it. Slow the first shot down and land it.',
-      'Most of your shots in that duel missed on one side of the target or the other. That is crosshair speed, not reaction time.',
-      'You kept flicking past the target. Every one of those misses gave them a free shot back.'
+      '{share} of {player}\'s shots in that fight went past or short of the target. They were aiming through them, not at them.',
+      '{player} overshot and undershot through that engagement and died to it. Slow the first shot down and land it.',
+      'Most of {player}\'s shots in that duel missed on one side of the target or the other. That is crosshair speed, not reaction time.',
+      '{player} kept flicking past the target. Every one of those misses gave them a free shot back.'
     ]
   },
 
@@ -178,10 +192,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'missed-everything',
     category: C.MECHANICAL,
     variants: [
-      'You fired {shots} shots in that fight and hit none. That is a duel you were in and lost for free.',
-      '{shots} shots, {hits} hits, and you died. The fight was there, the aim was not.',
-      'You missed {missed} of {shots} before dying. Your team is a player down because none of those landed.',
-      'None of that spray touched them. Take the first shot properly instead of hoping the rest catch up.'
+      '{player} fired {shots} shots in that fight and hit none. That is a duel they were in and lost for free.',
+      '{shots} shots, {hits} hits, and {player} died. The fight was there, the aim was not.',
+      '{player} missed {missed} of {shots} before dying. The team is a player down because none of those landed.',
+      'None of {player}\'s spray touched them. Take the first shot properly instead of hoping the rest catch up.'
     ]
   },
 
@@ -189,10 +203,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'spray-past-control',
     category: C.MECHANICAL,
     variants: [
-      'You kept firing for {n} more bullets after your last one did any damage. That is an empty magazine and a dead player.',
-      'The spray stopped working {n} bullets before you stopped shooting. Reset and take a second burst.',
-      '{n} bullets after your last hit is not a spray, it is a reload you are giving them for free.',
-      'You held the trigger long past the point it was landing. Burst it, let the pattern reset, and you win that fight.'
+      '{player} kept firing for {n} more bullets after the last one did any damage. That is an empty magazine and a dead player.',
+      'The spray stopped working {n} bullets before {player} stopped shooting. Reset and take a second burst.',
+      '{n} bullets after {player}\'s last hit is not a spray, it is a reload given away for free.',
+      '{player} held the trigger long past the point it was landing. Burst it, let the pattern reset, and that fight is winnable.'
     ]
   },
 
@@ -200,10 +214,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'not-ready',
     category: C.MECHANICAL,
     variants: [
-      '{enemy} was on your screen for {seconds} seconds and you never fired. You were in that fight before you were ready for it.',
-      'You had line of sight and time to shoot and did neither. Clear angles expecting a fight, not hoping there is not one.',
-      'That fight caught you unprepared. Being on the angle is not the same as being ready for the angle.',
-      'You never got a shot off. Come to the angle already set up and that duel is a normal one.'
+      '{enemy} was on {player}\'s screen for {seconds} seconds and {player} never fired. They were in that fight before they were ready for it.',
+      '{player} had line of sight and time to shoot and did neither. Clear angles expecting a fight, not hoping there is not one.',
+      'That fight caught {player} unprepared. Being on the angle is not the same as being ready for the angle.',
+      '{player} never got a shot off. Come to the angle already set up and that duel is a normal one.'
     ]
   },
 
@@ -213,10 +227,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'solo-even',
     category: C.QUALITY,
     variants: [
-      'You died alone in a {n}v{n} with no trade. Even rounds go to the team that fights together.',
-      'Nobody could trade you in an even fight. That one death is what turned it into a losing one.',
-      'You were on your own in a {n}v{n}. That costs the round even when your health already looked bad.',
-      'In an even fight a teammate has to be close enough to punish whoever kills you. Nobody was.'
+      '{player} died alone in a {n}v{n} with no trade. Even rounds go to the team that fights together.',
+      'Nobody could trade {player} in an even fight. That one death is what turned it into a losing one.',
+      '{player} was on their own in a {n}v{n}. That costs the round even when their health already looked bad.',
+      'In an even fight a teammate has to be close enough to punish whoever kills {player}. Nobody was.'
     ]
   },
 
@@ -224,10 +238,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'multikill-refrag',
     category: C.QUALITY,
     variants: [
-      '{enemy} killed {n} of you alone. Someone had to punish the first kill and nobody did.',
-      '{n} players died to one enemy with no help from their side at all. That is a refrag your team never attempted.',
-      'One player took {n} of yours by themselves. Whatever the first fight was, the rest were free.',
-      '{enemy} won a {n}v1. That does not happen when the second player is ready to trade the first.'
+      '{enemy} killed {n} of {player}\'s team alone. Someone had to punish the first kill and nobody did.',
+      '{n} players including {player} died to one enemy with no help from their side at all. That is a refrag the team never attempted.',
+      'One player took {n} of {player}\'s side by themselves. Whatever the first fight was, the rest were free.',
+      '{enemy} won a {n}v1 starting with {player}. That does not happen when the second player is ready to trade the first.'
     ]
   },
 
@@ -235,10 +249,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'utility-unawareness',
     category: C.QUALITY,
     variants: [
-      'You died to {enemy} standing in your own fire. Once you throw it, watch it.',
-      'Your molotov was burning and {enemy} played it against you. That is your own utility used against your position.',
-      'You lost that fight to someone in your own fire. The fire told you exactly where they had to be.',
-      'You threw the fire and stopped tracking it. {enemy} did not.'
+      '{player} died to {enemy} standing in their own fire. Once it is thrown, watch it.',
+      '{player}\'s molotov was burning and {enemy} played it against them. That is their own utility used against their position.',
+      '{player} lost that fight to someone in their own fire. The fire told them exactly where the enemy had to be.',
+      '{player} threw the fire and stopped tracking it. {enemy} did not.'
     ]
   },
 
@@ -246,10 +260,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'missed-flash',
     category: C.QUALITY,
     variants: [
-      'That flash blinded {teammate} for {seconds} seconds and did less to the enemy. You took a player out of the fight and it was one of yours.',
-      'Your flash hurt your own team more than theirs. Anyone on your side who could not see was a free kill.',
-      '{teammate} ate that flashbang. You spent a grenade to make your own team easier to kill.',
-      'That was a bad lineup. The flash has to land behind their angle, not in front of yours.'
+      'That flash from {player} blinded {teammate} for {seconds} seconds and did less to the enemy. It took a player out of the fight and it was one of theirs.',
+      '{player}\'s flash hurt their own team more than the enemy. Anyone on their side who could not see was a free kill.',
+      '{teammate} ate {player}\'s flashbang. {player} spent a grenade to make their own team easier to kill.',
+      'That was a bad lineup from {player}. The flash has to land behind their angle, not in front of the team\'s.'
     ]
   },
 
@@ -257,10 +271,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'ate-team-flash',
     category: C.QUALITY,
     variants: [
-      "You were blind for {seconds} seconds from your own team's flash. You cannot hold or take an angle while you cannot see.",
-      'A teammate flashed you for {seconds} seconds. Turn away from your own utility so you are not the one paying for it.',
-      'You lost {seconds} seconds of the round to a friendly flash. That is free time for the enemy to move.',
-      "Your own team's flash took you out of the fight. Watch for the throw and turn."
+      '{player} was blind for {seconds} seconds from their own team\'s flash. Nobody can hold or take an angle while they cannot see.',
+      'A teammate flashed {player} for {seconds} seconds. Turn away from friendly utility so they are not the one paying for it.',
+      '{player} lost {seconds} seconds of the round to a friendly flash. That is free time for the enemy to move.',
+      'Their own team\'s flash took {player} out of the fight. Watch for the throw and turn.'
     ]
   },
 
@@ -268,10 +282,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'team-util-damage',
     category: C.QUALITY,
     variants: [
-      "You lost {hp} health to your own team's utility. Every point of that makes the next fight harder to win.",
-      '{hp} damage from a friendly grenade. Now you have to win the next duel from behind for no reason.',
-      "Your own team's utility took {hp} off you. That is a duel you would have won at full health.",
-      'You walked into your own team\u2019s grenades for {hp}. Let the utility come down before you move.'
+      '{player} lost {hp} health to their own team\'s utility. Every point of that makes the next fight harder to win.',
+      '{hp} damage on {player} from a friendly grenade. Now they have to win the next duel from behind for no reason.',
+      'Their own team\'s utility took {hp} off {player}. That is a duel they would have won at full health.',
+      '{player} walked into their own team\'s grenades for {hp}. Let the utility come down before moving.'
     ]
   },
 
@@ -279,10 +293,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'died-holding-util',
     category: C.QUALITY,
     variants: [
-      'You died with {n} grenades still unthrown. All of that value goes back to nobody.',
-      '{n} pieces of utility died with you. They were bought to be used, not carried.',
-      'You had {n} grenades in hand and never used one. Throw them into the fight, or throw them for the next round\u2019s buy.',
-      'Utility does nothing in your inventory. You died holding {n} pieces that could have won that fight.'
+      '{player} died with {n} grenades still unthrown. All of that value goes back to nobody.',
+      '{n} pieces of utility died with {player}. They were bought to be used, not carried.',
+      '{player} had {n} grenades in hand and never used one. Throw them into the fight, or throw them for the next round\'s buy.',
+      'Utility does nothing in inventory. {player} died holding {n} pieces that could have won that fight.'
     ]
   },
 
@@ -290,10 +304,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'knife-out',
     category: C.QUALITY,
     variants: [
-      'You died without a gun out. There was no version of that fight you could win.',
-      'You were caught holding {item} instead of your weapon. Free kill for them, lost round for you.',
-      'Running with the knife saves a second and costs the duel. You had nothing to shoot back with.',
-      'You died with no gun in hand. Switch back before you cross anywhere someone can see you.'
+      '{player} died without a gun out. There was no version of that fight they could win.',
+      '{player} was caught holding {item} instead of their weapon. Free kill for them, lost round for {player}\'s side.',
+      'Running with the knife saves a second and costs the duel. {player} had nothing to shoot back with.',
+      '{player} died with no gun in hand. Switch back before crossing anywhere someone can see.'
     ]
   },
 
@@ -301,10 +315,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'flash-no-followup',
     category: C.QUALITY,
     variants: [
-      'That flash blinded {enemy} in the {zone} and nothing happened. Nobody moved in, no fight was taken, and the grenade was spent for nothing.',
-      'You bought {seconds} seconds of blindness late in the round and nobody used them. That is a grenade and a timing gone.',
-      'The flash landed and the round stood still. Late round utility has to be followed by someone taking space.',
-      'Nothing came of that flash. If nobody is moving, hold the grenade until someone is.'
+      'That flash from {player} blinded {enemy} in the {zone} and nothing happened. Nobody moved in, no fight was taken, and the grenade was spent for nothing.',
+      '{player} bought {seconds} seconds of blindness late in the round and nobody used them. That is a grenade and a timing gone.',
+      '{player}\'s flash landed and the round stood still. Late round utility has to be followed by someone taking space.',
+      'Nothing came of {player}\'s flash. If nobody is moving, hold the grenade until someone is.'
     ]
   },
 
@@ -312,10 +326,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'spacing',
     category: C.QUALITY,
     variants: [
-      'You and {teammate} both died to {enemy} in separate fights. Each of you was close to a coinflip alone. Together it was {win} in your favour.',
-      '{enemy} got to fight you one at a time. Peeking together turns two coinflips into a {win} kill.',
-      'You were close enough to die to the same player and too far apart to fight them together. That is the worst place to be.',
-      'Two isolated duels against one enemy. The same two players peeking at once wins that {win} of the time.'
+      '{player} and {teammate} both died to {enemy} in separate fights. Each was close to a coinflip alone. Together it was {win} in their favour.',
+      '{enemy} got to fight {player} one at a time. Peeking together turns two coinflips into a {win} kill.',
+      '{player} was close enough to die to the same player and too far apart to fight them together. That is the worst place to be.',
+      'Two isolated duels against one enemy, with {player} in one of them. The same two players peeking at once wins that {win} of the time.'
     ]
   },
 
@@ -323,10 +337,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'nade-stack',
     category: C.QUALITY,
     variants: [
-      'One HE took {hp} health across {n} of you. Standing that close means a single grenade can decide the round.',
-      '{n} players damaged by one grenade for {hp} total. Spread out before their utility comes down.',
-      'That grenade got {hp} damage because you were all in the same place. Now every one of you fights from behind.',
-      'One enemy HE hurt {n} of you. That is one throw putting the whole group at a disadvantage.'
+      'One HE took {hp} health across {n} of {player}\'s side. Standing that close means a single grenade can decide the round.',
+      '{n} players including {player} damaged by one grenade for {hp} total. Spread out before their utility comes down.',
+      'That grenade got {hp} damage because {player}\'s group was all in the same place. Now every one of them fights from behind.',
+      'One enemy HE hurt {n} of {player}\'s side. That is one throw putting the whole group at a disadvantage.'
     ]
   },
 
@@ -334,10 +348,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'no-trade-attempt',
     category: C.QUALITY,
     variants: [
-      '{teammate} died right next to you and you never moved. Stepping up was a {win} fight for you and you did not take it.',
-      'You were close enough to trade {teammate} and did not try. Their death bought the enemy a free player.',
-      'The trade was there at {win} in your favour. Not going for it turns one loss into two.',
-      'You had one second to punish that kill and stayed where you were. That is the difference between an even round and a losing one.'
+      '{teammate} died right next to {player} and {player} never moved. Stepping up was a {win} fight and they did not take it.',
+      '{player} was close enough to trade {teammate} and did not try. Their death bought the enemy a free player.',
+      'The trade was there at {win} in {player}\'s favour. Not going for it turns one loss into two.',
+      '{player} had one second to punish that kill and stayed where they were. That is the difference between an even round and a losing one.'
     ]
   },
 
@@ -345,10 +359,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'trade-failure',
     category: C.QUALITY,
     variants: [
-      'You went for the trade on {teammate} and lost it. The attempt was right, the fight was not won.',
-      'Right instinct, wrong outcome. You had {win} on that refrag and it did not land.',
-      'You tried to trade and died doing it. Check the angle before you step out so the second death is not free too.',
-      'The refrag was there and you missed it. Now they are up two for one fight.'
+      '{player} went for the trade on {teammate} and lost it. The attempt was right, the fight was not won.',
+      'Right instinct, wrong outcome. {player} had {win} on that refrag and it did not land.',
+      '{player} tried to trade and died doing it. Check the angle before stepping out so the second death is not free too.',
+      'The refrag was there and {player} missed it. Now they are up two for one fight.'
     ]
   },
 
@@ -356,10 +370,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'late-off-flash',
     category: C.QUALITY,
     variants: [
-      '{enemy} was blind {seconds} seconds ago and could see again by the time you fired. You paid for the flash and arrived after it.',
-      'You took that fight just after the flash ended. All the value of the grenade went to nobody.',
-      'The flash did its job and you were {seconds} seconds late to use it. Move on the pop, not after it.',
-      'By the time you shot, {enemy} could see you fine. The grenade was wasted and the fight was even.'
+      '{enemy} was blind {seconds} seconds ago and could see again by the time {player} fired. The flash was paid for and arrived after it.',
+      '{player} took that fight just after the flash ended. All the value of the grenade went to nobody.',
+      'The flash did its job and {player} was {seconds} seconds late to use it. Move on the pop, not after it.',
+      'By the time {player} shot, {enemy} could see fine. The grenade was wasted and the fight was even.'
     ]
   },
 
@@ -367,10 +381,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'early-off-flash',
     category: C.QUALITY,
     variants: [
-      'You crossed before your own flash went off. {enemy} was never blind when you got there.',
-      'The flash detonated behind you. You took the fight at full disadvantage with a grenade already spent.',
-      'You were early. Wait for the pop, then move, or the flash does nothing at all.',
-      'That flash blinded nobody because you were already in the fight. Timing the move is what makes the grenade work.'
+      '{player} crossed before their own flash went off. {enemy} was never blind when they got there.',
+      'The flash detonated behind {player}. They took the fight at full disadvantage with a grenade already spent.',
+      '{player} was early. Wait for the pop, then move, or the flash does nothing at all.',
+      'That flash blinded nobody because {player} was already in the fight. Timing the move is what makes the grenade work.'
     ]
   },
 
@@ -378,10 +392,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'smoke-peek',
     category: C.QUALITY,
     variants: [
-      '{enemy} killed you across a line that a smoke closed {seconds} seconds later. Waiting would have removed the fight completely.',
-      'You crossed with a smoke already in the air. Two more seconds and they could not have seen you at all.',
-      'That angle was about to be smoked off. You took the one fight the utility was there to prevent.',
-      'Your team was closing that line for you. Peeking before it landed gave away a player for nothing.'
+      '{enemy} killed {player} across a line that a smoke closed {seconds} seconds later. Waiting would have removed the fight completely.',
+      '{player} crossed with a smoke already in the air. Two more seconds and they could not have seen {player} at all.',
+      'That angle was about to be smoked off. {player} took the one fight the utility was there to prevent.',
+      '{player}\'s team was closing that line. Peeking before it landed gave away a player for nothing.'
     ]
   },
 
@@ -391,10 +405,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'lurk-first',
     category: C.SYNCHRONIZATION,
     variants: [
-      'You died on your own before the rest of the team had taken a fight. There was no information yet for the lurk to work off.',
-      'The core had not moved and you were already dead. A lurk works after the team pulls attention, not before.',
-      'You went alone before anything happened on the map. Your team now plays the round a man down with nothing gained.',
-      'Nothing had happened anywhere when you died. Let the group take a fight first, then open the map behind it.'
+      '{player} died on their own before the rest of the team had taken a fight. There was no information yet for the lurk to work off.',
+      'The core had not moved and {player} was already dead. A lurk works after the team pulls attention, not before.',
+      '{player} went alone before anything happened on the map. The team now plays the round a man down with nothing gained.',
+      'Nothing had happened anywhere when {player} died. Let the group take a fight first, then open the map behind it.'
     ]
   },
 
@@ -402,10 +416,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'free-opening',
     category: C.SYNCHRONIZATION,
     variants: [
-      'You opened the round by dying with nothing happening anywhere else. Nothing was traded and nothing was gained.',
-      'First death of the round with the map completely quiet. Your team starts behind for free.',
-      'Nobody else was in a fight when you died. That death bought your team no space and no information.',
-      'That was a free opening kill for them. Take that fight when your team is set up to use it.'
+      '{player} opened the round by dying with nothing happening anywhere else. Nothing was traded and nothing was gained.',
+      'First death of the round on {player} with the map completely quiet. The team starts behind for free.',
+      'Nobody else was in a fight when {player} died. That death bought the team no space and no information.',
+      'That was a free opening kill for them on {player}. Take that fight when the team is set up to use it.'
     ]
   },
 
@@ -413,10 +427,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'unchecked-position',
     category: C.SYNCHRONIZATION,
     variants: [
-      'You died to {enemy} from an angle none of the {n} of you were watching. With that many players someone has to hold it.',
-      '{n} players stacked and nobody covering the angle they came from. That is a team mistake, not a duel you lost.',
-      'Nobody was looking where {enemy} came from. Split the angles when you group up, or the group dies one at a time.',
-      'All {n} of you were watching the same direction. That is the one thing a stack cannot afford.'
+      '{player} died to {enemy} from an angle none of the {n} were watching. With that many players someone has to hold it.',
+      '{n} players stacked with {player} and nobody covering the angle they came from. That is a team mistake, not a duel lost alone.',
+      'Nobody was looking where {enemy} came from when {player} died. Split the angles when the group stacks, or the group dies one at a time.',
+      'All {n} including {player} were watching the same direction. That is the one thing a stack cannot afford.'
     ]
   },
 
@@ -424,10 +438,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'understack',
     category: C.SYNCHRONIZATION,
     variants: [
-      'The T side is setting up on {site} and you have {n} there. Could you have taken info or rotated earlier?',
-      '{n} players on {site} against a full execute. That defense needs an earlier read to survive.',
-      'You are about to defend {site} with {n}. Anything you learn before this point is worth a rotation.',
-      'The execute is coming to {site} and you are at {n}. Getting one more body there in time is the whole round.'
+      'The T side is setting up on {site} and {player}\'s side has {n} there. Could info have been taken or a rotate started earlier?',
+      '{n} players on {site} against a full execute, with {player} among them. That defense needs an earlier read to survive.',
+      '{player} is about to defend {site} with {n}. Anything learned before this point is worth a rotation.',
+      'The execute is coming to {site} and {player} is at {n}. Getting one more body there in time is the whole round.'
     ]
   },
 
@@ -435,10 +449,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'late-rotation',
     category: C.SYNCHRONIZATION,
     variants: [
-      'You started rotating {seconds} seconds after the plant with {distance} still to travel. You cannot arrive in time to matter.',
-      'The bomb was down before you moved. From there the retake happens without you.',
-      'You had {seconds} seconds of readable information before the plant and rotated after it. Your team retakes a player short.',
-      'That rotation started too late to reach the site. Read the commitment earlier and you are part of the retake.'
+      '{player} started rotating {seconds} seconds after the plant with {distance} still to travel. They cannot arrive in time to matter.',
+      'The bomb was down before {player} moved. From there the retake happens without them.',
+      '{player} had {seconds} seconds of readable information before the plant and rotated after it. The team retakes a player short.',
+      'That rotation from {player} started too late to reach the site. Read the commitment earlier and they are part of the retake.'
     ]
   },
 
@@ -448,10 +462,10 @@ export const COACH_MESSAGES = Object.freeze({
     rule: 'overstack',
     category: C.PRAISE,
     variants: [
-      'You are about to take on a T execute with {n} more than the default for a {site} bombsite defense. Well done on rotating and stacking correctly.',
-      '{site} is stacked {n} over the default before the execute lands. That is the rotation working.',
-      'You read the execute early and brought {n} extra to {site}. That is how a retake stops being a retake.',
-      'You are {n} over the default on {site} with the execute coming. Good rotate.'
+      '{player} is about to take on a T execute with {n} more than the default for a {site} bombsite defense. Well done on rotating and stacking correctly.',
+      '{site} is stacked {n} over the default before the execute lands, with {player} there. That is the rotation working.',
+      '{player} read the execute early and brought {n} extra to {site}. That is how a retake stops being a retake.',
+      '{player} is {n} over the default on {site} with the execute coming. Good rotate.'
     ]
   }
 });
@@ -497,6 +511,9 @@ function variantIndex(key, tick, count) {
  * Unknown placeholders are left as-is rather than printed as "undefined": a
  * variant that references a value the rule did not compute is a copy bug, and
  * leaving `{seconds}` visible in the note makes it obvious instead of quiet.
+ *
+ * Callers must pass `{ player }` (the pinned player's name). Every variant
+ * includes that placeholder.
  *
  * @param {string} key   key into COACH_MESSAGES
  * @param {number} tick  flag tick, the seed for the variant pick
