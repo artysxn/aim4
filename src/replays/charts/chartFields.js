@@ -24,6 +24,7 @@ export const FORMATS = {
   num2: (v) => v.toFixed(2),
   num3: (v) => v.toFixed(3),
   pct: (v) => `${v.toFixed(2)}%`,
+  signedPct: (v) => `${v > 0 ? '+' : ''}${v.toFixed(2)}%`,
   money: (v) => `$${Math.round(v).toLocaleString('en-US')}`,
   sec: (v) => `${v.toFixed(2)}s`
 };
@@ -261,6 +262,36 @@ const PLAYER_METRICS = [
       return ok - od;
     },
     tip: 'Opening kill difference (OK − OD) over the filtered rounds.'
+  },
+  {
+    key: 'pfw',
+    label: 'PFW',
+    group: 'Duels',
+    fmt: 'pct',
+    num: (f) => (f.duelW > 0 ? f.duelP * 100 : null),
+    den: (f) => (f.duelW > 0 ? f.duelW : null),
+    tip: 'Predicted fight winrate: average model odds across active duels. How hard the fights were, not how they went.'
+  },
+  {
+    key: 'pfo',
+    label: 'PFO',
+    group: 'Duels',
+    fmt: 'signedPct',
+    num: (f) => (f.duelW > 0 ? (f.duelN - f.duelP) * 100 : null),
+    den: (f) => (f.duelW > 0 ? f.duelW : null),
+    tip: 'Predicted fight overperformance: actual win rate minus predicted, in points. Already adjusted for difficulty.'
+  },
+  {
+    key: 'tfw',
+    label: 'TFW',
+    group: 'Duels',
+    fmt: 'pct',
+    num: (f) => f.kills * 100,
+    den: (f) => {
+      const fights = (f.kills || 0) + (f.deaths || 0);
+      return fights > 0 ? fights : null;
+    },
+    tip: 'Total fight winrate: kills as a share of kills plus deaths.'
   },
   {
     key: 'firstKillTime',
@@ -519,6 +550,24 @@ const ROUND_METRICS = [
     fmt: 'pct',
     num: (f) => f.teamOpenKill * 100,
     den: (f) => f.teamOpenKill + f.teamOpenDeath
+  },
+  {
+    key: 'teamPfw',
+    label: 'Team PFW',
+    group: 'Duels',
+    fmt: 'pct',
+    num: (f) => f.duelPfwSum,
+    den: (f) => (f.duelPlayers > 0 ? f.duelPlayers : null),
+    tip: 'Team predicted fight winrate: the side’s players’ PFW averaged.'
+  },
+  {
+    key: 'teamPfo',
+    label: 'Team PFO',
+    group: 'Duels',
+    fmt: 'signedPct',
+    num: (f) => f.duelPfoSum,
+    den: (f) => (f.duelPlayers > 0 ? f.duelPlayers : null),
+    tip: 'Team predicted fight overperformance: the side’s players’ PFO averaged.'
   },
   {
     key: 'conv5v4',

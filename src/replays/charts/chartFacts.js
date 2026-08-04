@@ -156,6 +156,10 @@ export function buildFacts(payload) {
           kastCount: 0,
           swingSum: 0,
           swingN: 0,
+          /** Sum of per-player PFW / PFO for this side this round (equal player weight). */
+          duelPfwSum: 0,
+          duelPfoSum: 0,
+          duelPlayers: 0,
           killsEarly: 0,
           killsMid: 0,
           killsLate: 0,
@@ -183,6 +187,10 @@ export function buildFacts(payload) {
           const mid = phaseLine(bag, 'mid');
           const late = phaseLine(bag, 'late');
           const swing = Number.isFinite(row.sw?.[id]) ? row.sw[id] : null;
+          const du = row.du?.[id];
+          const duelW = du && Number.isFinite(du.w) && du.w > 0 ? du.w : null;
+          const duelP = duelW !== null ? Number(du.p) || 0 : null;
+          const duelN = duelW !== null ? Number(du.n) || 0 : null;
 
           const role = roleForPlayer(demo.roles, map, side, id);
           const fact = {
@@ -204,6 +212,9 @@ export function buildFacts(payload) {
             openKill: row.ok === id ? 1 : 0,
             openDeath: row.od === id ? 1 : 0,
             swing,
+            duelW,
+            duelP,
+            duelN,
             equip: Number.isFinite(row.ev?.[id]) ? row.ev[id] : null,
             survived: death ? 0 : 1,
             deathTime: death ? numOrNull(death.t) : null,
@@ -243,6 +254,12 @@ export function buildFacts(payload) {
           if (swing !== null) {
             roundFact.swingSum += swing;
             roundFact.swingN++;
+          }
+          if (duelW !== null) {
+            // Equal say per player, matching teamDuelStats — not pooled duel weight.
+            roundFact.duelPfwSum += (duelP / duelW) * 100;
+            roundFact.duelPfoSum += ((duelN - duelP) / duelW) * 100;
+            roundFact.duelPlayers++;
           }
           if (fact.firstKillTime !== null) {
             roundFact.teamFirstKillTime =
