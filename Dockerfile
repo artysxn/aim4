@@ -38,8 +38,19 @@ RUN npm ci --omit=dev
 COPY server ./server
 COPY src/multiplayer ./src/multiplayer
 COPY src/utils/shotAccuracy.js src/utils/SourceMovement.js ./src/utils/
-# Replay round naming and the binary tick layout are shared with the browser.
-COPY src/replays/shared ./src/replays/shared
+# The whole replay tree, not just shared/. The server imports from zones/,
+# duels/, rounds/, stats/, viewer/, roles/, creator/, tick/ and data/ as well:
+# the stats index runs the fitted duel model over real geometry, and the
+# training service fits both models against the library. Copying only shared/
+# leaves those imports unresolved at runtime.
+COPY src/replays ./src/replays
+# Training and the stats index both decode radar PNGs to build the walkable
+# mask (scripts/lib/radarMask.mjs -> registerRadarMask -> prepareControlField).
+COPY scripts/lib ./scripts/lib
+COPY scripts/extract-round-snapshots.mjs scripts/extract-duel-episodes.mjs ./scripts/
+COPY scripts/train-round-model.mjs scripts/train-duel-model.mjs ./scripts/
+COPY scripts/train-model-server.mjs ./scripts/
+COPY public/maps/radar ./public/maps/radar
 
 ENV NODE_ENV=production
 EXPOSE 8080

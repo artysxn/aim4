@@ -69,6 +69,9 @@ import { roundLogit, sigmoid } from '../src/replays/rounds/roundModel.js';
 import { createScoreAccumulator, score, summarize } from '../src/replays/duels/scoring.js';
 import { CACHE_DIR, loadRoundCorpus } from './lib/roundCorpus.mjs';
 
+import { offerChampion } from '../server/training/champion.js';
+import { patchStatus } from '../server/training/status.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(__dirname, '../src/replays/rounds/roundModelParams.js');
 const LOG = path.join(CACHE_DIR, 'training-log.jsonl');
@@ -109,6 +112,14 @@ const CALIB_MIN_SHARE = 0.005;
 const warmStart = has('--warm-start');
 const doExport = has('--export');
 const dryRun = has('--dry-run');
+/**
+ * Server-side reporting. `--status-file` makes every generation visible to the
+ * admin panel through an atomically-replaced JSON file; `--champion` offers the
+ * finished model to the champion slot instead of rewriting the bundled source,
+ * which a running server cannot pick up anyway.
+ */
+const statusFile = arg('--status-file', '');
+const championKind = arg('--champion', '');
 
 function createRng(seed) {
   let s = seed >>> 0 || 1;
@@ -624,6 +635,25 @@ async function main() {
         `${bestGen === gen ? '  <- best' : ''}`
     );
 
+    if (statusFile) {
+      await patchStatus(
+        statusFile,
+        {
+          stage: 'fitting',
+          generation: gen,
+          generations: GENERATIONS,
+          seed: SEED,
+          trainLoss: report.logLoss,
+          validLoss: valid.logLoss,
+          bestValidLoss: bestValid.logLoss,
+          bestGeneration: bestGen,
+          exams: valid.exams || null,
+          rounds: rounds.length
+        },
+        'round'
+      ).catch(() => {});
+    }
+
     if (!dryRun) {
       await fs.mkdir(CACHE_DIR, { recursive: true });
       await fs.appendFile(
@@ -721,6 +751,35 @@ async function main() {
   } else if (doExport) {
     console.log('\nDry run, params not exported.');
   }
+
+  if (championKind) {
+    // Held-out loss decides, and the champion store refuses anything that is
+    // not an improvement, so a bad seed cannot regress the live model.
+    const offer = await offerChampion(championKind, {
+      specHash: specHash(),
+      values: toNamed(bestVec),
+      validLoss: finalValid.logLoss,
+      exams: finalValid.exams || null,
+      generation: bestGen,
+      seed: SEED,
+      trainedOn: rounds.length
+    });
+    console.log(
+      `
+champion: ${offer.promoted ? 'PROMOTED' : 'kept existing'} (${offer.reason})`
+    );
+    if (statusFile) {
+      await patchStatus(
+        statusFile,
+        {
+          promoted: offer.promoted,
+          promoteReason: offer.reason,
+          improvement: offer.improvement
+        },
+        championKind
+      ).catch(() => {});
+    }
+  }
 }
 
 async function writeParamsModule(v, train, valid, roundCount, calib = identityCalibration()) {
@@ -760,6 +819,7 @@ async function writeParamsModule(v, train, valid, roundCount, calib = identityCa
 // ---------------------------------------------------------------------------
 
 import { fromNamed } from './roundParamSpec.js';
+import { primeRuntimeParams, runtimeParams } from '../models/runtimeParams.js';
 
 export const ROUND_MODEL_PARAMS = {
   specHash: '${specHash()}',
@@ -786,9 +846,21 @@ ${body}
 
 let cached = null;
 
+// Weights fitted on the server against the whole replay library beat these,
+// which were fitted on whatever corpus was to hand. The fetch runs once and
+// drops the cached vector when better weights land; on any failure or a
+// parameter-layout mismatch the values above are used unchanged.
+primeRuntimeParams('round', ROUND_MODEL_PARAMS.specHash, () => {
+  cached = null;
+});
+
 /** The fitted parameter vector, in roundParamSpec order. */
 export function roundParamVector() {
-  if (!cached) cached = fromNamed(ROUND_MODEL_PARAMS.values);
+  if (!cached) {
+    const live = runtimeParams('round');
+    const useLive = live && live.specHash === ROUND_MODEL_PARAMS.specHash;
+    cached = fromNamed(useLive ? live.values : ROUND_MODEL_PARAMS.values);
+  }
   return cached;
 }
 

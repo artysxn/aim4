@@ -1813,6 +1813,36 @@ body.is-impersonating {
   align-self: flex-start;
 }
 
+/* Model training cards carry tables, so they need more room than the tool
+   cards they otherwise match, and their controls sit on one row. */
+.admin-panel > .admin-tool-card {
+  max-width: none;
+  margin-bottom: 18px;
+}
+
+.admin-panel > .admin-tool-card .btn {
+  align-self: flex-end;
+}
+
+.admin-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.admin-subsection:empty {
+  display: none;
+}
+
+.admin-subtitle {
+  margin: 6px 0 0;
+  font: 600 13px var(--font-body);
+  color: var(--text-dim);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
 .admin-tier-line,
 .account-tier {
   font-family: var(--font-display);

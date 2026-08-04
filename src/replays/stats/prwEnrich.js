@@ -5,13 +5,9 @@
 // ---------------------------------------------------------------------------
 
 import { winSeriesFromMeta } from '../coach/roundDecided.js';
-import {
-  deadPlayersAt,
-  decidedSideAt,
-  liveEquipment,
-  plantSituationAt,
-  winProbability
-} from '../coach/winProbability.js';
+import { deadPlayersAt } from '../coach/winProbability.js';
+import { phaseBounds } from '../coach/roundPhases.js';
+import { roundWinAtTick } from '../rounds/roundWinAdapter.js';
 import { possessionSharesAt } from '../coach/mapControlAdvantage.js';
 
 /** Seconds between PRW / possession samples. */
@@ -61,7 +57,7 @@ export function averagePrwFromMeta(meta) {
  * WP for one side at a tick, using kill-log deaths + optional HP map.
  * @returns {{ ct: number, t: number } | null}
  */
-function wpSidesAt(meta, tick, deadIds, healthById = null) {
+function wpSidesAt(meta, tick, deadIds, healthById = null, bounds = null) {
   if (!meta) return null;
   const players = meta.players || [];
   const teamSides = { 1: meta.team1Side || 'T', 2: meta.team2Side || 'CT' };
@@ -81,43 +77,12 @@ function wpSidesAt(meta, tick, deadIds, healthById = null) {
     states[p.slot] = { alive, health: alive ? Math.max(1, hp) : 0 };
   }
 
-  const eq = liveEquipment({
-    players,
-    stats: meta.stats,
-    states,
-    grenades: meta.events?.grenades || [],
-    tick,
-    teamSides,
-    deadIds
-  });
-  const decided = decidedSideAt({
-    tick,
-    endTick,
-    winnerSide,
-    ctAlive: eq.ctAlive,
-    tAlive: eq.tAlive,
-    bomb: meta.events?.bomb
-  });
-  const plant = plantSituationAt({
-    meta,
-    states,
-    tick,
-    deadIds,
-    teamSides,
-    players
-  });
-  const wp = winProbability({
-    map: meta.map,
-    ctAlive: eq.ctAlive,
-    tAlive: eq.tAlive,
-    ctEff: eq.ctEff,
-    tEff: eq.tEff,
-    ctEquip: eq.CT,
-    tEquip: eq.T,
-    decided,
-    ...plant
-  });
-  return { ct: wp.ct, t: wp.t };
+  // No tick buffer here by design: this path walks the kill log so a whole
+  // library can be indexed without decoding positions. The model reads that as
+  // missing geometry and falls back to bodies, economy, the clock and the
+  // plant, which is exactly the information this call site ever had.
+  const wp = roundWinAtTick({ meta, states, tick, bounds });
+  return wp ? { ct: wp.ct, t: wp.t } : null;
 }
 
 function sideWp(wp, side) {
@@ -139,6 +104,9 @@ export function playerSwingFromMeta(meta) {
   const sw = {};
   if (!meta?.players?.length) return sw;
 
+  // Computed once: phaseBounds sorts the kill log, and this walks one entry per
+  // kill and per damage event, so recomputing it per call would be quadratic.
+  const bounds = phaseBounds(meta);
   const teamOf = new Map((meta.players || []).map((p) => [p.id, p.team]));
   const kills = [...(meta.events?.kills || [])].sort((a, b) => (a.tick || 0) - (b.tick || 0));
   const damages = [...(meta.events?.damage || [])]
@@ -160,8 +128,8 @@ export function playerSwingFromMeta(meta) {
     const beforeDead = deadPlayersAt(kills, tick - 1);
     const afterDead = new Set(beforeDead);
     afterDead.add(k.victim);
-    const before = wpSidesAt(meta, Math.max(0, tick - 1), beforeDead);
-    const after = wpSidesAt(meta, tick, afterDead);
+    const before = wpSidesAt(meta, Math.max(0, tick - 1), beforeDead, null, bounds);
+    const after = wpSidesAt(meta, tick, afterDead, null, bounds);
     if (!before || !after) continue;
     const aSide = teamSide(meta, at);
     const vSide = teamSide(meta, vt);
@@ -198,8 +166,8 @@ export function playerSwingFromMeta(meta) {
     dmgTaken.set(d.victim, nextTaken);
 
     const dead = deadPlayersAt(kills, tick);
-    const before = wpSidesAt(meta, tick, dead, healthBefore);
-    const after = wpSidesAt(meta, tick, dead, healthAfter);
+    const before = wpSidesAt(meta, tick, dead, healthBefore, bounds);
+    const after = wpSidesAt(meta, tick, dead, healthAfter, bounds);
     if (!before || !after) continue;
     const aSide = teamSide(meta, at);
     const vSide = teamSide(meta, vt);

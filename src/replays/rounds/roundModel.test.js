@@ -11,6 +11,9 @@ import { ROUND_BUCKET_IDS, bucketizeRound } from './roundBuckets.js';
 import { predictRound, roundLogit, sigmoid } from './roundModel.js';
 import { ROUND_PARAM_SPEC, clampVector, fromNamed, initialVector, toNamed } from './roundParamSpec.js';
 import { roundParamVector } from './roundModelParams.js';
+import { FLAG_ALIVE } from '../shared/tickFormat.js';
+import { bombRaceAt } from './bombRace.js';
+import { isAlive, livingSide } from './stateReading.js';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
@@ -191,9 +194,13 @@ for (const v of [initialVector(), roundParamVector()]) {
     predictRound(doomed, v, 'MIR') < predictRound(reachable, v, 'MIR'),
     'an impossible defuse must read worse than a reachable one at the same 5v0'
   );
+  // The flag itself may fit to zero: defuseSlack and the deadline term carry
+  // the same fact in continuous form, and training is free to prefer them. The
+  // structural guarantee is only that the flag can never point the wrong way.
   assert(
-    predictRound(doomed, v, 'MIR') < predictRound({ ...doomed, defuseImpossible: false }, v, 'MIR'),
-    'the impossible-defuse term must cost CT on its own'
+    predictRound(doomed, v, 'MIR') <=
+      predictRound({ ...doomed, defuseImpossible: false }, v, 'MIR'),
+    'the impossible-defuse flag must never help CT'
   );
 }
 
@@ -254,6 +261,85 @@ for (const v of [initialVector(), roundParamVector()]) {
   assert(close(sigmoid(0), 0.5), 'sigmoid(0)');
   assert(sigmoid(800) > 0.999999 && Number.isFinite(sigmoid(-800)), 'no overflow either way');
   assert(close(predictRound(f(), initialVector(), ''), sigmoid(roundLogit(f(), initialVector(), ''))));
+}
+
+// --- kill-log stub states ---------------------------------------------------
+// The stats index and the round-decided detector build states from the kill log
+// alone: `{ alive, health }`, no flags and no coordinates. That used to make
+// every player read as dead, which made the bomb race declare the defuse
+// impossible, which scored every post-plant moment as a certain T win. The
+// guarantee is that missing geometry reads as no information.
+{
+  const players = [
+    { id: 'a1', slot: 0, team: 1 },
+    { id: 'a2', slot: 1, team: 1 },
+    { id: 'b1', slot: 5, team: 2 },
+    { id: 'b2', slot: 6, team: 2 }
+  ];
+  const teamSides = { 1: 'CT', 2: 'T' };
+  const stubs = [];
+  stubs[0] = { alive: true, health: 100 };
+  stubs[1] = { alive: true, health: 100 };
+  stubs[5] = { alive: true, health: 100 };
+  stubs[6] = { alive: true, health: 100 };
+
+  for (const side of ['CT', 'T']) {
+    const live = livingSide(players, stubs, teamSides, new Set(), side);
+    assert(live.all.length === 2, `${side}: stubs must read as alive`);
+    assert(live.positioned.length === 0, `${side}: stubs have no positions`);
+    assert(live.geometryKnown === false, `${side}: geometry must read as unknown`);
+  }
+
+  // Real tick records, by contrast, are fully positioned.
+  const ticks = [];
+  ticks[0] = { flags: FLAG_ALIVE, health: 100, x: 10, y: 20 };
+  ticks[5] = { flags: FLAG_ALIVE, health: 100, x: 30, y: 40 };
+  const realCt = livingSide(players, ticks, teamSides, new Set(['a2']), 'CT');
+  assert(realCt.geometryKnown === true, 'tick records must read as positioned');
+
+  // A dead player is dead in both representations.
+  assert(!isAlive({ alive: false, health: 100 }), 'stub dead');
+  assert(!isAlive({ alive: true, health: 0 }), 'stub at zero hp');
+  assert(!isAlive({ flags: 0, health: 100 }), 'record without the alive flag');
+  assert(isAlive({ flags: FLAG_ALIVE, health: 1 }), 'record alive on one hp');
+
+  // The bomb race must stay neutral rather than invent a verdict.
+  const race = bombRaceAt({
+    meta: { players, events: { bomb: [{ type: 'planted', tick: 0, x: 100, y: 100, site: 'a' }] } },
+    states: stubs,
+    tick: 500,
+    network: { bombSites: { a: null, b: null }, keyZones: { a: [], b: [] } },
+    deadIds: new Set(),
+    teamSides,
+    bombSecondsLeft: 9.9,
+    ctHasKit: false
+  });
+  assert(race.defuseImpossible === false, 'an unseen defuse is not an impossible one');
+  assert(race.geometryKnown === false, 'the race must admit it cannot see');
+  assert(race.ctBombDist === 0 && race.bombDistDiff === 0, 'unknown distances are neutral');
+
+  // And the whole point: the prediction must not collapse to a certain T win.
+  for (const v of [initialVector(), roundParamVector()]) {
+    const blind = f({
+      planted: true,
+      bombSecondsLeft: 9.9,
+      ctHasKit: false,
+      ctAlive: 5,
+      tAlive: 0,
+      ctEff: 5,
+      tEff: 0,
+      secondsLeft: 0,
+      defuseSlack: 0,
+      defuseImpossible: false,
+      ctBombDist: 0,
+      tBombDist: 0,
+      bombDistDiff: 0,
+      duelEdge: 0,
+      bombDuelEdge: 0
+    });
+    const p = predictRound(blind, v, 'MIR');
+    assert(p > 0.02, `a blind post-plant 5v0 must not read as hopeless for CT (got ${p})`);
+  }
 }
 
 console.log('roundModel.test.js: ok');

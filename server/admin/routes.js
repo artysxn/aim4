@@ -47,6 +47,12 @@ import {
 import { SHARED_LIBRARY } from '../replays/auth.js';
 import { refreshLibraryStats } from '../replays/statsIndex.js';
 import { getZones } from '../zonesStore.js';
+import {
+  start as startTraining,
+  status as trainingStatus,
+  stop as stopTraining
+} from '../training/service.js';
+import { modelWeights } from '../training/weights.js';
 
 const statsIo = { userDir, readRoundMeta, readRoundTicks, getZones };
 
@@ -482,6 +488,75 @@ async function route(req, res, url, me) {
 
   // ---- replay stats indexes -----------------------------------------------
   // Force-rebuild every ready demo's compact stats index from parsed round
+  // --- model training ------------------------------------------------------
+  // Both fitted models can be trained against the whole replay library from
+  // here. A run is a detached child process, so it survives a deploy and cannot
+  // take the API server down with it; progress is a file the child rewrites
+  // atomically and this endpoint reads.
+  const trainMatch = p.match(/^\/api\/admin\/training\/(duel|round)(\/start|\/stop|\/weights)?$/);
+  if (trainMatch) {
+    const kind = trainMatch[1];
+    const action = trainMatch[2] || '';
+
+    if (req.method === 'GET' && !action) {
+      json(res, req, 200, await trainingStatus(kind));
+      return true;
+    }
+
+    if (req.method === 'GET' && action === '/weights') {
+      // The full parameter listing: current value, bounds, group, and the
+      // scenarios each one is allowed to move. This is what makes the fit
+      // inspectable rather than a black box.
+      json(res, req, 200, await modelWeights(kind));
+      return true;
+    }
+
+    if (req.method === 'POST' && action === '/start') {
+      const body = await readJson(req).catch(() => ({}));
+      const started = await startTraining(kind, {
+        generations: body.generations,
+        seed: body.seed,
+        workers: body.workers,
+        force: Boolean(body.force),
+        startedBy: me.id
+      });
+      if (!started.ok) {
+        json(res, req, started.error === 'already running' ? 409 : 400, {
+          error: started.error,
+          ...(started.status || {})
+        });
+        return true;
+      }
+      await writeAudit({
+        actorId: me.id,
+        targetUser: null,
+        action: 'training.start',
+        payload: { kind, generations: body.generations, seed: body.seed },
+        req
+      });
+      json(res, req, 202, started.status);
+      return true;
+    }
+
+    if (req.method === 'POST' && action === '/stop') {
+      const stopped = await stopTraining(kind);
+      if (stopped.ok) {
+        await writeAudit({
+          actorId: me.id,
+          targetUser: null,
+          action: 'training.stop',
+          payload: { kind },
+          req
+        });
+      }
+      json(res, req, stopped.ok ? 200 : 409, {
+        ...(stopped.error ? { error: stopped.error } : {}),
+        ...(stopped.status || {})
+      });
+      return true;
+    }
+  }
+
   // data (PRW, possession, swing, duels, …). Runs in the background; poll
   // GET for progress. Can take a long time on a large library.
   if (req.method === 'GET' && p === '/api/admin/stats/refresh') {

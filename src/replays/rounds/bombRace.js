@@ -15,8 +15,8 @@
 // DOM-free.
 // ---------------------------------------------------------------------------
 
-import { FLAG_ALIVE } from '../shared/tickFormat.js';
 import { pointInPiece } from '../zones/zoneGeom.js';
+import { livingSide } from './stateReading.js';
 import { bombSiteCenters, sanitizeBombSites } from '../zones/bombSites.js';
 import { keyZonesFor } from '../zones/keyZones.js';
 import { pathDistanceField } from '../zones/pathDistance.js';
@@ -37,19 +37,6 @@ export const APPROACH_SPEED = 200;
 
 /** World units used to normalise bomb distances. */
 const DIST_SCALE = 2000;
-
-/** Alive players on a side, from the tick states. */
-function alivePlayers(players, states, teamSides, deadIds, side) {
-  const out = [];
-  for (const p of players || []) {
-    if (teamSides?.[p.team] !== side) continue;
-    if (deadIds?.has(p.id)) continue;
-    const s = states?.[p.slot];
-    if (!s || (s.flags & FLAG_ALIVE) === 0 || s.health <= 0) continue;
-    out.push({ player: p, state: s });
-  }
-  return out;
-}
 
 const dist2d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -139,6 +126,7 @@ export function bombRaceAt({
 }) {
   const empty = {
     known: false,
+    geometryKnown: false,
     ctBombDist: 0,
     tBombDist: 0,
     bombDistDiff: 0,
@@ -153,8 +141,17 @@ export function bombRaceAt({
   if (!network) return empty;
 
   const players = meta.players || [];
-  const ct = alivePlayers(players, states, teamSides, deadIds, 'CT');
-  const t = alivePlayers(players, states, teamSides, deadIds, 'T');
+  const ctSide = livingSide(players, states, teamSides, deadIds, 'CT');
+  const tSide = livingSide(players, states, teamSides, deadIds, 'T');
+
+  // Without positions there is no race to describe. Returning the neutral bag
+  // is the whole point: a kill-log stub knows who is alive but not where they
+  // are, and guessing would mean declaring defuses impossible on every
+  // post-plant sample.
+  if (!ctSide.geometryKnown && !tSide.geometryKnown) return empty;
+
+  const ct = ctSide.positioned;
+  const t = tSide.positioned;
   const target = bombTarget({ meta, tick, network, tAlive: t });
   if (!target) return empty;
 
@@ -221,7 +218,7 @@ export function bombRaceAt({
   // than one.
   let defuseSlack = 0;
   let defuseImpossible = false;
-  if (target.planted && bombSecondsLeft > 0) {
+  if (target.planted && bombSecondsLeft > 0 && ctSide.geometryKnown) {
     const defuseTime = ctHasKit ? DEFUSE_KIT_DEADLINE : DEFUSE_NO_KIT_DEADLINE;
     if (!ct.length) {
       defuseImpossible = true;
@@ -235,6 +232,7 @@ export function bombRaceAt({
 
   return {
     known: true,
+    geometryKnown: ctSide.geometryKnown && tSide.geometryKnown,
     ctBombDist: Number.isFinite(nearCt.d) ? nearCt.d / DIST_SCALE : 0,
     tBombDist: Number.isFinite(nearT.d) ? nearT.d / DIST_SCALE : 0,
     bombDistDiff: Number.isFinite(nearT.d) && Number.isFinite(nearCt.d)

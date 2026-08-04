@@ -5,13 +5,8 @@
 // ---------------------------------------------------------------------------
 
 import { isEqualBuyRound } from '../shared/roundId.js';
-import {
-  deadPlayersAt,
-  decidedSideAt,
-  liveEquipment,
-  plantSituationAt,
-  winProbability
-} from './winProbability.js';
+import { deadPlayersAt } from './winProbability.js';
+import { roundWinAtTick } from '../rounds/roundWinAdapter.js';
 import { phaseAtTick, phaseBounds } from './roundPhases.js';
 
 export { isEqualBuyRound };
@@ -43,6 +38,7 @@ export function winSeriesFromMeta(meta) {
     if (Number.isFinite(p.slot) && p.slot > maxSlot) maxSlot = p.slot;
   }
 
+  const bounds = phaseBounds(meta);
   const series = [];
   for (let tick = from; tick <= endTick; tick += tickRate) {
     const deadIds = deadPlayersAt(kills, tick);
@@ -54,50 +50,18 @@ export function winSeriesFromMeta(meta) {
         health: 100
       };
     }
-    const eq = liveEquipment({
-      players,
-      stats: meta.stats,
-      states,
-      grenades,
-      tick,
-      teamSides,
-      deadIds
-    });
-    const decided = decidedSideAt({
-      tick,
-      endTick,
-      winnerSide,
-      ctAlive: eq.ctAlive,
-      tAlive: eq.tAlive,
-      bomb
-    });
-    // Kill-log stubs have no FLAG_DEFUSING — plantSituationAt leaves
-    // ctDefusing null so the hard no-time-to-defuse cutoff is skipped here.
-    const plant = plantSituationAt({
-      meta,
-      states,
-      tick,
-      deadIds,
-      teamSides,
-      players
-    });
-    const wp = winProbability({
-      map: meta.map,
-      ctAlive: eq.ctAlive,
-      tAlive: eq.tAlive,
-      ctEff: eq.ctEff,
-      tEff: eq.tEff,
-      ctEquip: eq.CT,
-      tEquip: eq.T,
-      decided,
-      ...plant
-    });
+    // Kill-log stubs carry no positions, so the model reads this as missing
+    // geometry and scores from bodies, economy, the clock and the plant. That
+    // is all this series ever had: it exists precisely so a round can be
+    // summarised without decoding tick data.
+    const wp = roundWinAtTick({ meta, states, tick, bounds });
+    if (!wp) continue;
     series.push({
       tick,
       ct: wp.ct,
       t: wp.t,
-      ctAlive: eq.ctAlive,
-      tAlive: eq.tAlive
+      ctAlive: wp.ctAlive,
+      tAlive: wp.tAlive
     });
   }
   return series;

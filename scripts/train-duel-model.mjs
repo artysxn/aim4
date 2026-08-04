@@ -51,6 +51,9 @@ import {
 import { DUEL_MODEL_PARAMS } from '../src/replays/duels/duelModelParams.js';
 import { CACHE_DIR, loadCorpus } from './lib/duelCorpus.mjs';
 
+import { offerChampion } from '../server/training/champion.js';
+import { patchStatus } from '../server/training/status.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(__dirname, '../src/replays/duels/duelModelParams.js');
 const LOG = path.join(CACHE_DIR, 'training-log.jsonl');
@@ -80,6 +83,14 @@ const warmStart = has('--warm-start');
 const resume = has('--resume');
 const doExport = has('--export');
 const dryRun = has('--dry-run');
+/**
+ * Server-side reporting. `--status-file` makes every generation visible to the
+ * admin panel through an atomically-replaced JSON file; `--champion` offers the
+ * finished model to the champion slot instead of rewriting the bundled source,
+ * which a running server cannot pick up anyway.
+ */
+const statusFile = arg('--status-file', '');
+const championKind = arg('--champion', '');
 
 // --- deterministic randomness ---------------------------------------------
 // Seeded so a run can be reproduced exactly, which matters when a generation
@@ -622,6 +633,25 @@ async function main() {
       console.log(fmtBuckets(valid));
     }
 
+    if (statusFile) {
+      await patchStatus(
+        statusFile,
+        {
+          stage: 'fitting',
+          generation: gen,
+          generations: GENERATIONS,
+          seed: SEED,
+          trainLoss: report.logLoss,
+          validLoss: valid.logLoss,
+          bestValidLoss: bestValid.logLoss,
+          bestGeneration: bestGen,
+          exams: valid.exams || null,
+          rounds: episodes.length
+        },
+        'duel'
+      ).catch(() => {});
+    }
+
     if (!dryRun) {
       await fs.mkdir(CACHE_DIR, { recursive: true });
       await fs.appendFile(
@@ -687,6 +717,35 @@ mutation: ${mutationStats.accepted} of ${mutationStats.tried} proposals beat the
   } else if (doExport) {
     console.log('\nDry run, params not exported.');
   }
+
+  if (championKind) {
+    // Held-out loss decides, and the champion store refuses anything that is
+    // not an improvement, so a bad seed cannot regress the live model.
+    const offer = await offerChampion(championKind, {
+      specHash: specHash(),
+      values: toNamed(bestVec),
+      validLoss: finalValid.logLoss,
+      exams: finalValid.exams || null,
+      generation: bestGen,
+      seed: SEED,
+      trainedOn: episodes.length
+    });
+    console.log(
+      `
+champion: ${offer.promoted ? 'PROMOTED' : 'kept existing'} (${offer.reason})`
+    );
+    if (statusFile) {
+      await patchStatus(
+        statusFile,
+        {
+          promoted: offer.promoted,
+          promoteReason: offer.reason,
+          improvement: offer.improvement
+        },
+        championKind
+      ).catch(() => {});
+    }
+  }
 }
 
 async function writeParamsModule(v, train, valid, duels) {
@@ -713,6 +772,7 @@ async function writeParamsModule(v, train, valid, duels) {
 // ---------------------------------------------------------------------------
 
 import { fromNamed } from './paramSpec.js';
+import { primeRuntimeParams, runtimeParams } from '../models/runtimeParams.js';
 
 export const DUEL_MODEL_PARAMS = {
   specHash: '${specHash()}',
@@ -729,9 +789,21 @@ ${body}
 
 let cached = null;
 
+// Weights fitted on the server against the whole replay library beat these,
+// which were fitted on whatever corpus was to hand. The fetch runs once and
+// drops the cached vector when better weights land; on any failure or a
+// parameter-layout mismatch the values above are used unchanged.
+primeRuntimeParams('duel', DUEL_MODEL_PARAMS.specHash, () => {
+  cached = null;
+});
+
 /** The fitted parameter vector, in paramSpec order. */
 export function paramVector() {
-  if (!cached) cached = fromNamed(DUEL_MODEL_PARAMS.values);
+  if (!cached) {
+    const live = runtimeParams('duel');
+    const useLive = live && live.specHash === DUEL_MODEL_PARAMS.specHash;
+    cached = fromNamed(useLive ? live.values : DUEL_MODEL_PARAMS.values);
+  }
   return cached;
 }
 `;

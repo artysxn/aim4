@@ -33,7 +33,9 @@ import { economyLabel, winningSide } from '../shared/roundId.js';
 import { iconImgHtml, inventoryAt } from './equipmentIcons.js';
 import { DRAW_COLORS, DrawingLayer } from './drawing.js';
 import { analyseRound, coachSampleStride, flagToNote } from '../coach/coach.js';
-import { explainProbability, winProbabilityAtTick } from '../coach/winProbability.js';
+import { roundWinAtTick } from '../rounds/roundWinAdapter.js';
+import { explainRoundLines } from '../rounds/roundExplain.js';
+import { createReloadTracker } from '../duels/reloadTracker.js';
 import { phaseBounds } from '../coach/roundPhases.js';
 import {
   buildZonePresence,
@@ -2364,6 +2366,19 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   }
 
   /** Fresh win% at this tick (kill log + live equip), for badges / playhead. */
+  /** Reload state and phase bounds are per round; rebuilding them per frame is waste. */
+  let liveReloadTracker = null;
+  let liveReloadFile = '';
+  let livePhaseBoundsCache = null;
+  let livePhaseBoundsFile = '';
+  function livePhaseBounds(meta, file) {
+    if (livePhaseBoundsFile !== file || !livePhaseBoundsCache) {
+      livePhaseBoundsCache = phaseBounds(meta);
+      livePhaseBoundsFile = file;
+    }
+    return livePhaseBoundsCache;
+  }
+
   function liveCoachSample(tick) {
     const file = files[activeIndex];
     const track = file ? store.get(file)?.full || store.track(file) : null;
@@ -2387,13 +2402,22 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         }
       }
     }
-    return winProbabilityAtTick({
+    // The trained model reads the map itself rather than being handed a duel
+    // summary: it needs the track for movement speed and a reload tracker for
+    // magazine state, both of which are per-round and cached here.
+    if (liveReloadFile !== file) {
+      liveReloadTracker = createReloadTracker({ meta: activeMeta });
+      liveReloadFile = file;
+    }
+    return roundWinAtTick({
       meta: activeMeta,
       states: coachScratch,
       tick,
       network: net,
       presence,
-      duels: liveDuelsAt(tick)
+      track,
+      reloadTracker: liveReloadTracker,
+      bounds: livePhaseBounds(activeMeta, file)
     });
   }
 
@@ -2575,7 +2599,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       return;
     }
     const map = activeMeta?.map || '';
-    const { summary, detail } = explainProbability(sample, map);
+    const ctPct = Number.isFinite(sample.ct) ? sample.ct : 50;
+    const summary = `CT ${ctPct.toFixed(0)}%  T ${(100 - ctPct).toFixed(0)}%`;
+    const detail = explainRoundLines(sample, map);
     if (graphShift && detail.length) {
       graphTip.innerHTML = `<strong>${escapeTip(summary)}</strong><br>${detail
         .map(escapeTip)

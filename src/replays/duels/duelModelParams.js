@@ -17,6 +17,7 @@
 // ---------------------------------------------------------------------------
 
 import { fromNamed } from './paramSpec.js';
+import { primeRuntimeParams, runtimeParams } from '../models/runtimeParams.js';
 
 export const DUEL_MODEL_PARAMS = {
   specHash: '23582734',
@@ -90,8 +91,21 @@ export const DUEL_MODEL_PARAMS = {
 
 let cached = null;
 
+// Weights fitted on the server against the whole replay library beat the ones
+// compiled into this bundle, which were fitted on a sample. The fetch is
+// started once, and the cached vector is dropped when better weights land so
+// the next prediction picks them up. Until then, and on any failure, the values
+// below are used unchanged.
+primeRuntimeParams('duel', DUEL_MODEL_PARAMS.specHash, () => {
+  cached = null;
+});
+
 /** The fitted parameter vector, in paramSpec order. */
 export function paramVector() {
-  if (!cached) cached = fromNamed(DUEL_MODEL_PARAMS.values);
+  if (!cached) {
+    const live = runtimeParams('duel');
+    const useLive = live && live.specHash === DUEL_MODEL_PARAMS.specHash;
+    cached = fromNamed(useLive ? live.values : DUEL_MODEL_PARAMS.values);
+  }
   return cached;
 }

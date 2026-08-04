@@ -36,6 +36,9 @@ import {
   sitePresenceAdvantage
 } from './sitePresenceAdvantage.js';
 import { hasBombSites } from '../zones/bombSites.js';
+import { roundWinAtTick } from '../rounds/roundWinAdapter.js';
+import { createReloadTracker } from '../duels/reloadTracker.js';
+import { phaseBounds } from './roundPhases.js';
 
 /**
  * Win-chance series samples per second.
@@ -211,6 +214,11 @@ export function analyseRound({
   const from = meta.freezeEndTick ?? meta.startTick ?? 0;
   const to = Math.max(from, meta.endTick ?? from);
   const endTick = meta.endTick ?? to;
+  // Both are per round and are walked hundreds of times below, so they are
+  // built once rather than per sample. The reload tracker only reads the shot
+  // log; phaseBounds sorts the kill log.
+  const reloadTracker = createReloadTracker({ meta });
+  const phaseBoundsCache = phaseBounds(meta);
   const controlOn = mapControlAdvantageEnabled(meta.map, network);
   if (controlOn && network && meta.map) {
     prepareControlField(network, meta.map, null);
@@ -323,7 +331,21 @@ export function analyseRound({
       siteT,
       ...plant
     };
-    const wp = winProbability(state);
+    // The drawn line comes from the trained round model. It reads the same
+    // states plus the map geometry the coach already prepared, and it accounts
+    // for open gunfights itself through its duel term, so the separate
+    // lookahead below is only kept for the `ctDuel` overlay the coach rules
+    // deliberately never read.
+    const wp = roundWinAtTick({
+      meta,
+      states,
+      tick,
+      network,
+      presence,
+      track,
+      reloadTracker,
+      bounds: phaseBoundsCache
+    }) || winProbability(state);
     const duels = duelsAt ? duelsAt(tick) : null;
     const ahead = duels?.length
       ? winProbabilityWithDuels({

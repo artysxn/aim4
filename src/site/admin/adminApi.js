@@ -98,6 +98,13 @@ export const adminApi = {
   /** Progress for an in-flight (or just-finished) stats rebuild. */
   refreshStatsStatus: () => get('/api/admin/stats/refresh'),
 
+  /** Model training. `kind` is 'duel' or 'round'. */
+  trainingStatus: (kind) => get(`/api/admin/training/${kind}`),
+  trainingWeights: (kind) => get(`/api/admin/training/${kind}/weights`),
+  trainingStart: (kind, { generations, seed, workers, force = false } = {}) =>
+    send('POST', `/api/admin/training/${kind}/start`, { generations, seed, workers, force }),
+  trainingStop: (kind) => send('POST', `/api/admin/training/${kind}/stop`, {}),
+
   content: (store, op, payload) => send('POST', `/api/admin/content/${store}/${op}`, payload),
 
   audit: ({ actorId = '', targetUser = '', action = '', limit = 100, offset = 0 } = {}) => {

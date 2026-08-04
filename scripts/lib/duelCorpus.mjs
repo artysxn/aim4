@@ -31,7 +31,17 @@ import { loadRadarMask } from './radarMask.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Cache location and format version. Bump the version to force a re-extract. */
-export const CACHE_DIR = path.join(__dirname, '../duel-cache');
+/**
+ * Where the extracted corpus lives.
+ *
+ * Defaults to the repo for the local CLI workflow. On the server it must sit on
+ * the persistent volume beside the replay library and the painted zones, or
+ * every deploy would throw away hours of extraction. Same reasoning, and same
+ * environment variable, as zonesStore's ZONES_ROOT.
+ */
+export const CACHE_DIR = process.env.AIM4_TRAIN_CACHE_DIR
+  ? path.join(process.env.AIM4_TRAIN_CACHE_DIR, 'duel-cache')
+  : path.join(__dirname, '../duel-cache');
 export const FEATURE_VERSION = 2;
 
 /**

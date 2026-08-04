@@ -18,6 +18,7 @@ import path from 'node:path';
 import { extractRoundSnapshots } from '../src/replays/rounds/roundSnapshots.js';
 import { buildZonePresence } from '../src/replays/zones/zoneOverlay.js';
 import { eachRound, listSamplePackages } from './lib/sampledemoPackages.mjs';
+import { countLibraryDemos, eachLibraryRound } from './lib/serverCorpus.mjs';
 import { prepareMap } from './lib/duelCorpus.mjs';
 import {
   CACHE_DIR,
@@ -37,16 +38,34 @@ const limit = Number(arg('--limit', 0)) || 0;
 const match = arg('--demo', '') || '';
 const stride = Number(arg('--stride', 0)) || undefined;
 const force = has('--force');
+/**
+ * Where rounds come from. `samples` reads the local .aim4replay folder and is
+ * the default so the CLI workflow is unchanged; `library` reads the server's
+ * replay library, which is what server-side training uses and is the only
+ * source with enough demos to move the numbers.
+ */
+const source = arg('--source', 'samples');
 const dryRun = has('--dry-run');
 
 async function main() {
-  const packages = await listSamplePackages();
-  if (!packages.length) {
-    console.error('No .aim4replay packages in sampledemos/.');
-    process.exitCode = 1;
-    return;
+  let available;
+  if (source === 'library') {
+    available = await countLibraryDemos();
+    if (!available) {
+      console.error('No ready demos in the replay library.');
+      process.exitCode = 1;
+      return;
+    }
+  } else {
+    const packages = await listSamplePackages();
+    available = packages.length;
+    if (!available) {
+      console.error('No .aim4replay packages in sampledemos/.');
+      process.exitCode = 1;
+      return;
+    }
   }
-  console.log(`Packages: ${packages.length}   cache: ${CACHE_DIR} (v${FEATURE_VERSION})`);
+  console.log(`Source: ${source}   demos: ${available}   cache: ${CACHE_DIR} (v${FEATURE_VERSION})`);
   if (!dryRun) await fs.mkdir(path.join(CACHE_DIR, `v${FEATURE_VERSION}`), { recursive: true });
 
   const mapCache = new Map();
@@ -83,11 +102,12 @@ async function main() {
     current = null;
   };
 
-  for await (const { pkg, entry, meta, track } of eachRound({
-    limit,
-    match,
-    skipMaps: SKIP_MAPS
-  })) {
+  const walk =
+    source === 'library'
+      ? eachLibraryRound({ limit, match, skipMaps: SKIP_MAPS, onWarn: (m) => console.warn('  ' + m) })
+      : eachRound({ limit, match, skipMaps: SKIP_MAPS });
+
+  for await (const { pkg, entry, meta, track } of walk) {
     if (!current || current.name !== pkg.name) {
       await flush();
       if (!force && !dryRun) {

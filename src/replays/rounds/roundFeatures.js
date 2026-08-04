@@ -19,7 +19,6 @@
 // DOM-free.
 // ---------------------------------------------------------------------------
 
-import { FLAG_ALIVE } from '../shared/tickFormat.js';
 import { normalizeGrenadeType, normalizeLoadout } from '../viewer/equipmentIcons.js';
 import { ROUND_SECONDS, timingFor } from '../viewer/roundClock.js';
 import {
@@ -31,6 +30,7 @@ import {
 } from '../coach/winProbability.js';
 import { possessionSharesAt } from '../coach/mapControlAdvantage.js';
 import { bombRaceAt } from './bombRace.js';
+import { livingSide } from './stateReading.js';
 import { predictDuel } from '../duels/duelModel.js';
 import { paramVector } from '../duels/duelModelParams.js';
 import { computeDuelSnapshot, duelContext } from '../duels/duelSnapshot.js';
@@ -94,16 +94,16 @@ function utilityValue({ players, stats, grenades, itemEvents, tick, teamSides, d
  * centroid is large is a lone player in contact ahead of their team.
  */
 function sideDistances(players, states, teamSides, deadIds) {
-  const ct = [];
-  const t = [];
-  for (const p of players || []) {
-    const side = teamSides?.[p.team];
-    if (side !== 'T' && side !== 'CT') continue;
-    if (deadIds?.has(p.id)) continue;
-    const s = states?.[p.slot];
-    if (!s || (s.flags & FLAG_ALIVE) === 0 || s.health <= 0) continue;
-    (side === 'CT' ? ct : t).push(s);
+  const ctSide = livingSide(players, states, teamSides, deadIds, 'CT');
+  const tSide = livingSide(players, states, teamSides, deadIds, 'T');
+  // Both sides must be fully positioned for a separation to mean anything.
+  // Kill-log stubs know who is alive but not where, and a made-up distance is
+  // worse than none: the model reads zero as "no contribution".
+  if (!ctSide.geometryKnown || !tSide.geometryKnown) {
+    return { centroid: 0, nearest: 0, known: false };
   }
+  const ct = ctSide.positioned.map((e) => e.state);
+  const t = tSide.positioned.map((e) => e.state);
   if (!ct.length || !t.length) return { centroid: 0, nearest: 0, known: false };
 
   const mean = (list, k) => list.reduce((a, s) => a + s[k], 0) / list.length;
@@ -316,6 +316,11 @@ export function roundFeaturesAt({
     duelEdge: duels.edge,
     openDuels: duels.open,
     bombDuelEdge: duels.bombDuel,
+    // True only when positions, ticks and map geometry were all available. The
+    // model does not read this directly (every geometry feature is already zero
+    // without it) but callers and tests use it to tell a genuinely even round
+    // from one nobody could see.
+    geometryKnown: Boolean(duels.known && race.geometryKnown && dist.known),
     centroidDist: dist.centroid / DIST_SCALE,
     nearestDist: dist.nearest / DIST_SCALE,
     secondsLeft,

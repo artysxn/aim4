@@ -48,7 +48,7 @@ import { roundDuelBag } from '../../src/replays/duels/duelStats.js';
 // v14 thins duel bags to first / last / every-16th active tick (cheaper PFW).
 // Bumping this rebuilds every index from the round files already on disk; it
 // does NOT reparse demos.
-export const STATS_VERSION = 14;
+export const STATS_VERSION = 15;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;

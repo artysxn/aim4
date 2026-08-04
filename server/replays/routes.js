@@ -89,6 +89,7 @@ import {
   visibleRecords
 } from './visibility.js';
 import { importReplayPackage } from './importPackage.js';
+import { readChampion } from '../training/champion.js';
 import { spawnsForMap } from './spawnPoints.js';
 import { PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
 import { clusterTeams } from '../../src/replays/shared/teamClusters.js';
@@ -1119,6 +1120,37 @@ export async function handleReplayRequest(req, res, url) {
   }
 
   // Zone networks — same shared on-disk library as notes (AIM4_REPLAY_DIR).
+  // --- fitted model weights ------------------------------------------------
+  // Public and unauthenticated, because every viewer needs them to draw a win
+  // chart and they are derived statistics rather than anyone's data. This is
+  // what lets a model trained on the server reach users without a redeploy:
+  // the bundled params file is only ever the fallback.
+  const modelMatch = p.match(/^\/api\/replays\/models\/(duel|round)$/);
+  if (modelMatch && req.method === 'GET') {
+    const champion = await readChampion(modelMatch[1]);
+    if (!champion) {
+      json(res, 404, { error: 'no trained model' }, { 'Cache-Control': 'public, max-age=60' });
+      return true;
+    }
+    json(
+      res,
+      200,
+      {
+        kind: champion.kind,
+        specHash: champion.specHash,
+        values: champion.values,
+        validLoss: champion.validLoss,
+        exams: champion.exams,
+        trainedOn: champion.trainedOn,
+        updatedAt: champion.updatedAt
+      },
+      // Short enough that a promotion reaches viewers within minutes, long
+      // enough that it is not fetched on every round change.
+      { 'Cache-Control': 'public, max-age=300' }
+    );
+    return true;
+  }
+
   if (req.method === 'GET' && p === '/api/replays/zones') {
     json(res, 200, { maps: await listZoneMaps() });
     return true;
