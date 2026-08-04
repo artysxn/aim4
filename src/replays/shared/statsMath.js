@@ -503,6 +503,8 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
         playerIds: new Set(),
         prwSum: 0,
         prwN: 0,
+        acAdv: 0,
+        acChoke: 0,
         posSum: 0,
         posN: 0,
         utilDmgSum: 0,
@@ -551,6 +553,10 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
       if (Number.isFinite(prw)) {
         s.prwSum += prw;
         s.prwN++;
+      }
+      if (row.aca1 !== undefined || row.aca2 !== undefined) {
+        s.acAdv += Number(team === 1 ? row.aca1 : row.aca2) || 0;
+        s.acChoke += Number(team === 1 ? row.ack1 : row.ack2) || 0;
       }
       const pos = team === 1 ? row.pos1 : row.pos2;
       if (Number.isFinite(pos)) {
@@ -666,6 +672,14 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
       conv4v5Lost: s.openDeaths - s.openDeathWon,
       prw: s.prwN ? s.prwSum / s.prwN : null,
       prwRounds: s.prwN,
+      /**
+       * AC% = chance to convert an advantage (held >51% without falling below 50%).
+       * Advantage-choke rate is the inverse (lost / advantages).
+       */
+      ac: s.acAdv > 0 ? ((s.acAdv - s.acChoke) / s.acAdv) * 100 : null,
+      acAdvantages: s.acAdv,
+      acChokes: s.acChoke,
+      acChokeRate: s.acAdv > 0 ? (s.acChoke / s.acAdv) * 100 : null,
       possession: s.posN ? s.posSum / s.posN : null,
       possessionRounds: s.posN,
       /** Average grenade (HE + fire) damage dealt by the team per round. */

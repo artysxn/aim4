@@ -32,6 +32,7 @@ import { speedAt } from '../duels/duelFeatures.js';
 import { hasControlField } from '../zones/zoneOverlay.js';
 import { isAimWeapon } from '../shared/aimMetrics.js';
 import { ALONE_DISTANCE } from './cores.js';
+import { isHoldingVsPeekIn } from './angleHold.js';
 
 /**
  * Speed at or above which a weapon stops shooting where it is pointed.
@@ -77,8 +78,111 @@ const UNDERDOG = 0.75;
 const UNDERDOG_SHARE = 0.75;
 
 /** True when one side already has the duel at {@link FIGHT_WON} or better. */
-function fightIsWon(winProb) {
+export function fightIsWon(winProb) {
   return Number.isFinite(winProb) && (winProb >= FIGHT_WON || winProb <= 1 - FIGHT_WON);
+}
+
+/**
+ * Rules that are not about a gunfight's odds (utility / rotates / stacks).
+ * Everything else tied to a death in a decided fight is dropped.
+ */
+const KEEP_IF_DECIDED = new Set([
+  'missed-flash',
+  'ate-team-flash',
+  'team-util-damage',
+  'died-holding-util',
+  'flash-no-followup',
+  'nade-stack',
+  'late-rotation',
+  'overstack',
+  'understack',
+  'a-overstack',
+  'b-overstack',
+  'a-understack',
+  'b-understack'
+]);
+
+/**
+ * Drop mistake flags for deaths whose duel was already ≥80% one way.
+ * Silent when the map / model is missing — same as the priced rules.
+ */
+export function dropDecidedFightFlags(flags, {
+  meta,
+  tickRate,
+  byId,
+  kills = [],
+  network,
+  track
+}) {
+  if (!flags?.length) return flags || [];
+  if (!track || !network || !meta || !hasControlField(network)) return flags;
+  if (!(DUEL_MODEL_PARAMS.trainedOn > 0)) return flags;
+
+  const weights = paramVector();
+  const mapCode = meta.map || '';
+  const grenades = meta.events?.grenades || [];
+  const visionTracker = createVisionTracker(tickRate);
+  const reloadTracker = createReloadTracker({ meta });
+  let lastWalked = -Infinity;
+
+  const snapshotAt = (tick) =>
+    computeDuelSnapshot({
+      meta,
+      track,
+      tick,
+      network,
+      mapCode,
+      smokes: blockingSmokesAt(grenades, tick, tickRate),
+      visionTracker,
+      reloadTracker
+    });
+
+  const snapshotWalked = (tick) => {
+    const warm = WARM_SECONDS * tickRate;
+    const from =
+      tick < lastWalked || tick - lastWalked > warm
+        ? Math.max(meta.freezeEndTick ?? track.firstTick, tick - warm)
+        : lastWalked + WALK_STRIDE;
+    if (tick < lastWalked) visionTracker.reset();
+    for (let t = from; t < tick; t += WALK_STRIDE) snapshotAt(t);
+    lastWalked = tick;
+    return snapshotAt(tick);
+  };
+
+  /** death key -> whether that gunfight was already decided */
+  const decided = new Map();
+  const window = Math.max(1, Math.round(tickRate));
+  const deaths = [...kills].filter((k) => k.victim && k.attacker);
+
+  for (const death of deaths) {
+    const key = `${death.victim}@${death.tick}`;
+    const victimSlot = byId.get(death.victim)?.slot;
+    const killerSlot = byId.get(death.attacker)?.slot;
+    if (victimSlot == null || killerSlot == null) {
+      decided.set(key, false);
+      continue;
+    }
+    let odds = null;
+    try {
+      const snap = snapshotWalked(Math.max(track.firstTick, death.tick - 1));
+      const ctx = duelContext(snap, victimSlot, killerSlot);
+      if (ctx?.pair && (ctx.pair.aSeesB || ctx.pair.bSeesA || ctx.pair.losClear)) {
+        odds = predictDuel(ctx, weights);
+      }
+    } catch {
+      odds = null;
+    }
+    decided.set(key, fightIsWon(odds));
+  }
+
+  return flags.filter((f) => {
+    if (!f || KEEP_IF_DECIDED.has(f.rule)) return true;
+    const death = deaths.find(
+      (k) => k.victim === f.playerId && Math.abs(k.tick - f.tick) <= window
+    );
+    if (!death) return true;
+    return !decided.get(`${death.victim}@${death.tick}`);
+  });
 }
 /** Round win chance (0-100 series units) required before that duel. */
 const ROUND_WON_PCT = 75;
@@ -441,7 +545,13 @@ export function findDuelFlags({
         break;
       }
       // Favourable enough to expect a convert, but not an already-decided fight.
-      if (odds !== null && odds >= AHEAD && !fightIsWon(odds)) {
+      // Holding an angle into a peek is not coached as failing to convert.
+      if (
+        odds !== null &&
+        odds >= AHEAD &&
+        !fightIsWon(odds) &&
+        !isHoldingVsPeekIn(track, tickRate, victimSlot, killerSlot, death.tick - 1)
+      ) {
         lostAhead = true;
         flags.push({
           tick: death.tick,
@@ -476,7 +586,7 @@ export function findDuelFlags({
           if (
             Number.isFinite(roundWp) &&
             roundWp >= ROUND_WON_PCT &&
-            !fightIsWon(1 - avgEnemy) &&
+            !fightIsWon(avgEnemy) &&
             bad / samples.length >= UNDERDOG_SHARE
           ) {
             flags.push({

@@ -467,6 +467,7 @@ export function addAim(into, from) {
  *   ready     ≈ 60–70% with a tight band (a few points matter a lot)
  *   accuracy  ≈ 15–40% (wide)
  *   first bullet ≈ 15–50% (wide)
+ *   over/underflick ≈ 5–28% of first-bullet cone shots (lower better)
  */
 export const AIM_ANCHORS = Object.freeze({
   /** Mean yaw error, degrees, when an enemy engages you. Lower is better. */
@@ -479,19 +480,26 @@ export const AIM_ANCHORS = Object.freeze({
   /** Hits per shot, smoke shots excluded. High variance across roles/weapons. */
   accuracy: { worst: 0.12, best: 0.42, invert: false },
   /** First bullet of a burst connecting when an enemy was in the cone. */
-  firstBullet: { worst: 0.12, best: 0.52, invert: false }
+  firstBullet: { worst: 0.12, best: 0.52, invert: false },
+  /** Share of first-bullet cone shots that overflicked. Lower is better. */
+  overflick: { worst: 0.28, best: 0.05, invert: true },
+  /** Share of first-bullet cone shots that underflicked. Lower is better. */
+  underflick: { worst: 0.28, best: 0.05, invert: true }
 });
 
 /**
  * Component weights. Ready rate is weighted highest because its real range is
  * narrow — small percentage gaps separate mediocre from elite. Accuracy and
- * first-bullet vary widely by weapon and role, so they carry less.
+ * first-bullet vary widely by weapon and role, so they carry less. Over/under
+ * flick rates share a lighter slice: lower rates score higher.
  */
 export const AIM_WEIGHTS = Object.freeze({
-  readyRate: 0.32,
-  crosshairError: 0.28,
-  accuracy: 0.2,
-  firstBullet: 0.2
+  readyRate: 0.28,
+  crosshairError: 0.24,
+  accuracy: 0.16,
+  firstBullet: 0.16,
+  overflick: 0.08,
+  underflick: 0.08
 });
 
 /** Minimum sample before a component is trusted; below this it is dropped. */
@@ -499,7 +507,10 @@ export const AIM_MIN_SAMPLE = Object.freeze({
   crosshairError: 40,
   readyRate: 40,
   accuracy: 60,
-  firstBullet: 15
+  firstBullet: 15,
+  /** Same denominator as the rate: first-bullet cone engagements. */
+  overflick: 15,
+  underflick: 15
 });
 
 function scoreComponent(value, anchor) {
@@ -521,23 +532,27 @@ function scoreComponent(value, anchor) {
 export function aimRating(totals) {
   const div = (a, b) => (b > 0 ? a / b : null);
 
+  const firstBullets = totals.firstBullets || 0;
   const raw = {
     crosshairError: div(totals.crosshairErrorSum, totals.engagements),
     readyRate: div(totals.fightsReady, totals.fightsReady + totals.fightsUnaware),
     accuracy: div(totals.hits, totals.shots),
-    firstBullet: div(totals.firstBulletHits, totals.firstBullets),
+    firstBullet: div(totals.firstBulletHits, firstBullets),
     /** Share of first-bullet cone engagements that were overflick / underflick misses. */
-    overflick: div(totals.overflicks, totals.firstBullets),
-    underflick: div(totals.underflicks, totals.firstBullets)
+    overflick: div(totals.overflicks || 0, firstBullets),
+    underflick: div(totals.underflicks || 0, firstBullets)
   };
 
   const sample = {
     crosshairError: totals.engagements || 0,
     readyRate: (totals.fightsReady || 0) + (totals.fightsUnaware || 0),
     accuracy: totals.shots || 0,
-    firstBullet: totals.firstBullets || 0,
-    overflick: totals.overflicks || 0,
-    underflick: totals.underflicks || 0
+    firstBullet: firstBullets,
+    // Gate on first-bullet engagements (the rate denominator), not on how
+    // many over/under misses happened — a tidy aimer with few flicks still
+    // earns the component, and lower rates score higher.
+    overflick: firstBullets,
+    underflick: firstBullets
   };
 
   /** @type {Record<string, number|null>} */

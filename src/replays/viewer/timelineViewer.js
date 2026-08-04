@@ -516,12 +516,35 @@ export function createTimelineViewer({
     });
   }
 
+  /** Normalize + expand focus ids (same display name on the roster shares focus). */
+  function focusPlayerIdSet() {
+    if (!coachFocusPlayers || !coachFocusPlayers.size) return null;
+    const set = new Set([...coachFocusPlayers].map((id) => String(id || '')).filter(Boolean));
+    if (!set.size) return null;
+    const roster = activeMeta?.players || [];
+    const names = new Set();
+    for (const p of roster) {
+      if (set.has(String(p.id || '')) && p.name) names.add(String(p.name));
+    }
+    if (names.size) {
+      for (const p of roster) {
+        if (p.id && names.has(String(p.name || ''))) set.add(String(p.id));
+      }
+    }
+    return set;
+  }
+
+  /** Keep single-player Autocoach review pinned to that player. */
+  function ensureReviewFocus() {
+    const id = String(coachReviewPlayerId || '');
+    if (!id) return;
+    coachFocusPlayers = new Set([id]);
+  }
+
   /** Coach notes that count for the green round chip under the current player filter. */
   function coachNoteVisibleOnChip(n) {
     if (!n || n.kind !== 'coach' || !String(n.text || '').trim()) return false;
-    if (!coachFocusPlayers || !coachFocusPlayers.size) return true;
-    if (!n.playerId) return true;
-    return coachFocusPlayers.has(n.playerId);
+    return noteInCoachFocus(n);
   }
 
   function setCoachNoted(file, notes) {
@@ -1842,12 +1865,25 @@ export function createTimelineViewer({
     }
   }
 
-  /** Coach notes for players outside the pick are hidden from marks / nav. */
+  /**
+   * Coach notes for players outside the pick are hidden from marks / nav.
+   * Autocoach "Review as" is strict: only that player's coach notes.
+   */
   function noteInCoachFocus(n) {
-    if (!n || n.kind !== 'coach') return true;
+    if (!n) return false;
+    const reviewId = String(coachReviewPlayerId || '');
+    if (reviewId) {
+      if (n.kind !== 'coach') return false;
+      const focus = focusPlayerIdSet() || new Set([reviewId]);
+      const pid = String(n.playerId || '');
+      return Boolean(pid) && focus.has(pid);
+    }
+    if (n.kind !== 'coach') return true;
     if (!coachOn || !coachFocusPlayers || !coachFocusPlayers.size) return true;
-    if (!n.playerId) return true;
-    return coachFocusPlayers.has(n.playerId);
+    const focus = focusPlayerIdSet();
+    if (!focus?.size) return true;
+    const pid = String(n.playerId || '');
+    return Boolean(pid) && focus.has(pid);
   }
 
   function visibleNoteIndices() {
@@ -1856,6 +1892,11 @@ export function createTimelineViewer({
       if (noteInCoachFocus(roundNotes[i])) out.push(i);
     }
     return out;
+  }
+
+  function firstVisibleNoteIndex() {
+    const vis = visibleNoteIndices();
+    return vis.length ? vis[0] : -1;
   }
 
   function renderNoteDock({ forceText = false } = {}) {
@@ -1892,8 +1933,14 @@ export function createTimelineViewer({
 
   function loadNotesFromMeta(force = false) {
     if (!force && document.activeElement === noteText) return;
+    ensureReviewFocus();
     roundNotes = notesFromMeta(activeMeta);
-    noteIndex = roundNotes.length ? 0 : -1;
+    const vis = visibleNoteIndices();
+    if (vis.length) {
+      noteIndex = vis.includes(noteIndex) ? noteIndex : vis[0];
+    } else {
+      noteIndex = -1;
+    }
     noteMsg.textContent = '';
     renderNoteDock();
     renderActiveMarks();
@@ -1932,10 +1979,20 @@ export function createTimelineViewer({
    * and pause so the moment can be reviewed.
    */
   function enterCoachRoundMoment() {
-    const first = roundNotes.find((n) => n.kind === 'coach' && noteInCoachFocus(n));
+    ensureReviewFocus();
+    // Prefer the earliest focused coach note; otherwise the first visible note.
+    let at = -1;
+    for (let i = 0; i < roundNotes.length; i++) {
+      const n = roundNotes[i];
+      if (n?.kind === 'coach' && noteInCoachFocus(n)) {
+        at = i;
+        break;
+      }
+    }
+    if (at < 0) at = firstVisibleNoteIndex();
     playback.pause();
     syncPlayButton();
-    if (!first) {
+    if (at < 0) {
       seekRoundEntry(activeIndex);
       return;
     }
@@ -1943,7 +2000,7 @@ export function createTimelineViewer({
     closePopovers(notePanel);
     notePanel.hidden = false;
     noteBtn.classList.add('active');
-    showNoteAt(roundNotes.indexOf(first), { seek: true });
+    showNoteAt(at, { seek: true });
   }
 
   function showNoteAt(index, { seek = false } = {}) {
@@ -3223,7 +3280,11 @@ export function createTimelineViewer({
   function defaultCoachFocusPlayers(team) {
     const reviewId = String(coachReviewPlayerId || '');
     if (reviewId) return new Set([reviewId]);
-    return new Set(rosterForCoachTeam(team).map((p) => p.id));
+    return new Set(
+      rosterForCoachTeam(team)
+        .map((p) => String(p.id || ''))
+        .filter(Boolean)
+    );
   }
 
   async function enableCoachForTeam(team, { force = false, players = null } = {}) {
@@ -3239,9 +3300,16 @@ export function createTimelineViewer({
       spentCoach = true;
     }
     coachTeam = team;
-    if (players instanceof Set) coachFocusPlayers = new Set(players);
-    else if (Array.isArray(players)) coachFocusPlayers = new Set(players);
-    else coachFocusPlayers = defaultCoachFocusPlayers(team);
+    const reviewId = String(coachReviewPlayerId || '');
+    if (reviewId) {
+      coachFocusPlayers = new Set([reviewId]);
+    } else if (players instanceof Set) {
+      coachFocusPlayers = new Set([...players].map((id) => String(id || '')).filter(Boolean));
+    } else if (Array.isArray(players)) {
+      coachFocusPlayers = new Set(players.map((id) => String(id || '')).filter(Boolean));
+    } else {
+      coachFocusPlayers = defaultCoachFocusPlayers(team);
+    }
     hideCoachPick();
     coachOn = true;
     syncCoachBtn();
@@ -3462,7 +3530,10 @@ export function createTimelineViewer({
       if (index === activeIndex) {
         roundNotes = next;
         activeMeta = meta;
-        if (noteIndex < 0 && roundNotes.length) noteIndex = 0;
+        ensureReviewFocus();
+        const vis = visibleNoteIndices();
+        if (!vis.length) noteIndex = -1;
+        else if (!vis.includes(noteIndex)) noteIndex = vis[0];
         renderNoteDock();
         renderActiveMarks();
         if (fresh.length) {

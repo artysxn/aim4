@@ -1,6 +1,8 @@
 import {
   averagePrwFromMeta,
-  playerSwingFromMeta
+  playerSwingFromMeta,
+  advantageChokeForSide,
+  advantageChokeFromMeta
 } from './prwEnrich.js';
 
 function assert(cond, msg) {
@@ -78,6 +80,54 @@ function fixtureMeta() {
   assert(sw.t0 < 0, `victim swing should be negative, got ${sw.t0}`);
   // Non-lethal damage also attributes something to ct0 / t1.
   assert(Number.isFinite(sw.t1), 'damage victim has swing');
+}
+
+{
+  // Four CT peaks above 51 that each fall below 50 → 4 advantages, 4 chokes
+  // (convert AC% = 0%). Held-to-end peak would not count as a choke.
+  const series = [
+    { ct: 45, t: 55 },
+    { ct: 56, t: 44 }, // enter 1
+    { ct: 48, t: 52 }, // choke 1
+    { ct: 54, t: 46 }, // enter 2
+    { ct: 40, t: 60 }, // choke 2
+    { ct: 60, t: 40 }, // enter 3
+    { ct: 49, t: 51 }, // choke 3
+    { ct: 52, t: 48 }, // enter 4
+    { ct: 30, t: 70 } // choke 4
+  ];
+  const ct = advantageChokeForSide(series, 'CT');
+  assert(ct.advantages === 4, `CT advantages 4, got ${ct.advantages}`);
+  assert(ct.chokes === 4, `CT chokes 4, got ${ct.chokes}`);
+  const t = advantageChokeForSide(series, 'T');
+  assert(t.advantages >= 1, 'T also picks up advantages in the same series');
+}
+
+{
+  // Advantage held to the end converts (no choke).
+  const held = advantageChokeForSide(
+    [
+      { ct: 40, t: 60 },
+      { ct: 55, t: 45 },
+      { ct: 62, t: 38 },
+      { ct: 58, t: 42 }
+    ],
+    'CT'
+  );
+  assert(held.advantages === 1 && held.chokes === 0, 'held lead converts');
+}
+
+{
+  const meta = fixtureMeta();
+  const bag = advantageChokeFromMeta(meta);
+  assert(
+    Number.isFinite(bag.aca1) && Number.isFinite(bag.ack1),
+    'team1 AC counters'
+  );
+  assert(
+    Number.isFinite(bag.aca2) && Number.isFinite(bag.ack2),
+    'team2 AC counters'
+  );
 }
 
 console.log('prwEnrich.test.js: ok');

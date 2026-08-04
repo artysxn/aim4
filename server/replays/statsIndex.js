@@ -45,10 +45,10 @@ import {
 import { applyMovementFields } from '../../src/replays/roles/movementFromTicks.js';
 import { roundDuelBag } from '../../src/replays/duels/duelStats.js';
 
-// v14 thins duel bags to first / last / every-16th active tick (cheaper PFW).
+// v16 adds advantage-choke counters (aca/ack) for team AC%.
 // Bumping this rebuilds every index from the round files already on disk; it
 // does NOT reparse demos.
-export const STATS_VERSION = 15;
+export const STATS_VERSION = 16;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -226,10 +226,14 @@ function applyTimingFields(row, meta, playerIds) {
 }
 
 function applyPrwFields(row, meta) {
-  const { prw1, prw2, sw } = enrichPrwAndSwing(meta);
+  const { prw1, prw2, sw, aca1, ack1, aca2, ack2 } = enrichPrwAndSwing(meta);
   row.prw1 = prw1;
   row.prw2 = prw2;
   row.sw = sw;
+  row.aca1 = aca1 || 0;
+  row.ack1 = ack1 || 0;
+  row.aca2 = aca2 || 0;
+  row.ack2 = ack2 || 0;
   if (row.pos1 === undefined) row.pos1 = null;
   if (row.pos2 === undefined) row.pos2 = null;
 }
@@ -299,6 +303,7 @@ function needsPhaseEnrichment(entry) {
       typeof r.ph !== 'object' ||
       r.prw1 === undefined ||
       r.sw === undefined ||
+      r.aca1 === undefined ||
       !Array.isArray(r.kt) ||
       !r.ev ||
       r.du === undefined

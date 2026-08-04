@@ -7,7 +7,7 @@ import { RADAR_SIZE, radarToWorld, worldToRadar } from '../viewer/mapCalibration
 import { loadRadar } from '../viewer/radarRenderer.js';
 
 const MIN_ZOOM = 1;
-const MAX_ZOOM = 4;
+const MAX_ZOOM = 8;
 
 /**
  * @param {{
@@ -290,7 +290,8 @@ export function createPresenceRadar(els) {
   }
 
   function onWheel(e) {
-    if (drawMode) return;
+    // Zoom always (including draw mode) so the map stays inspectable while
+    // placing shapes. Pan still requires zoom > 1 and no active draw drag.
     e.preventDefault();
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
@@ -309,7 +310,25 @@ export function createPresenceRadar(els) {
       panX = 0;
       panY = 0;
     }
+    canvas.style.cursor = drawMode ? 'crosshair' : zoom > 1.001 ? 'grab' : 'default';
     paint();
+  }
+
+  function getView() {
+    return { zoom, panX, panY };
+  }
+
+  function setView(view) {
+    if (!view) return;
+    zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Number(view.zoom) || 1));
+    panX = Number(view.panX) || 0;
+    panY = Number(view.panY) || 0;
+    if (zoom <= 1.001) {
+      zoom = 1;
+      panX = 0;
+      panY = 0;
+    }
+    canvas.style.cursor = drawMode ? 'crosshair' : zoom > 1.001 ? 'grab' : 'default';
   }
 
   function onPointerDown(e) {
@@ -444,6 +463,8 @@ export function createPresenceRadar(els) {
   return {
     setData,
     setDrawMode,
+    getView,
+    setView,
     finishPoly,
     cancelDraft,
     paint,

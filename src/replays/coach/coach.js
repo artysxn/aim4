@@ -35,7 +35,8 @@ import { findSiteExecuteFlags } from './siteExecute.js';
 import { coachCategory, coachText } from './coachMessages.js';
 import { findUtilityFlags } from './utilityMistakes.js';
 import { findShotFlags } from './shotMistakes.js';
-import { findDuelFlags } from './duelMistakes.js';
+import { dropAngleHoldAdvice } from './angleHold.js';
+import { dropDecidedFightFlags, findDuelFlags } from './duelMistakes.js';
 import { findTacticalFlags } from './tacticalMistakes.js';
 import {
   alivePositionsBySide,
@@ -448,7 +449,7 @@ export function analyseRound({
 
   // ---- pass two: the deaths -----------------------------------------------
 
-  const flags = [];
+  let flags = [];
   const trade = TRADE_SECONDS * tickRate;
   const fragGrace = FRAG_GRACE_SECONDS * tickRate;
   const hold = HOLD_SECONDS * tickRate;
@@ -1030,6 +1031,27 @@ export function analyseRound({
     for (const f of findTacticalFlags({ ...passThree, network, track })) flags.push(f);
   } catch {
     /* same */
+  }
+
+  // Fights already ≥80% one way are not coached as mistakes.
+  try {
+    flags = dropDecidedFightFlags(flags, {
+      meta,
+      tickRate,
+      byId,
+      kills,
+      network,
+      track
+    });
+  } catch {
+    /* keep the unfiltered list rather than lose the round */
+  }
+
+  // Holding an angle into a peek is not "should have held" / "not ready".
+  try {
+    flags = dropAngleHoldAdvice(flags, { tickRate, byId, kills, track });
+  } catch {
+    /* keep the unfiltered list rather than lose the round */
   }
 
   // Round-decided is not a mistake and was the only flag pinned to a side

@@ -4235,6 +4235,11 @@ body.rv-open {
   gap: 12px;
 }
 
+.an-radar-hint {
+  color: var(--muted);
+  font: 500 11px var(--font-body);
+}
+
 .an-radar-wrap {
   width: 100%;
   border: 1px solid var(--border);
@@ -4563,6 +4568,36 @@ body.rv-open {
   min-height: 4.5rem;
   width: 100%;
   padding: 4px;
+}
+
+.ch-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.ch-chip {
+  appearance: none;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  font: 500 11px var(--font-body);
+  padding: 4px 8px;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.ch-chip:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--text) 28%, var(--border));
+}
+
+.ch-chip.on {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent, #6ea8fe) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 16%, transparent);
 }
 
 .ch-select-stack {

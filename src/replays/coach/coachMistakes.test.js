@@ -5,6 +5,7 @@
 // pass takes its inputs explicitly precisely so it can be driven without a
 // round file, and the interesting behaviour is the thresholds, not the wiring.
 
+import { dropAngleHoldAdvice, isHoldingVsPeekIn } from './angleHold.js';
 import { COACH_MESSAGES, coachCategory, coachText } from './coachMessages.js';
 import { findDuelFlags } from './duelMistakes.js';
 import { findShotFlags } from './shotMistakes.js';
@@ -405,6 +406,84 @@ const aliveState = (over = {}) => ({ x: 0, y: 0, yaw: 0, alive: true, flags: 0, 
   assert(
     !findDuelFlags({ ...ctx, network: {}, track: fakeTrack }).length,
     'an unprepared network has no line of sight to read'
+  );
+}
+
+// --- angle hold vs peek-in --------------------------------------------------
+
+{
+  // Holder stands still at the origin; peeker runs +X toward them.
+  const track = {
+    firstTick: 0,
+    sample(slot, tick, out = {}) {
+      if (slot === 0) {
+        out.alive = true;
+        out.x = 0;
+        out.y = 0;
+        return out;
+      }
+      out.alive = true;
+      out.x = -800 + tick * 4; // ~256 u/s toward the holder at 64 tick
+      out.y = 0;
+      return out;
+    }
+  };
+  assert(
+    isHoldingVsPeekIn(track, 64, 0, 1, 200),
+    'still holder + enemy closing should read as hold vs peek'
+  );
+
+  // Both moving: not a hold.
+  const bothMoving = {
+    firstTick: 0,
+    sample(slot, tick, out = {}) {
+      out.alive = true;
+      out.x = tick * 3;
+      out.y = 0;
+      return out;
+    }
+  };
+  assert(
+    !isHoldingVsPeekIn(bothMoving, 64, 0, 1, 200),
+    'a moving "holder" is not holding'
+  );
+
+  // Enemy strafing sideways, not into the hold.
+  const strafe = {
+    firstTick: 0,
+    sample(slot, tick, out = {}) {
+      if (slot === 0) {
+        out.alive = true;
+        out.x = 0;
+        out.y = 0;
+        return out;
+      }
+      out.alive = true;
+      out.x = -500;
+      out.y = tick * 4;
+      return out;
+    }
+  };
+  assert(
+    !isHoldingVsPeekIn(strafe, 64, 0, 1, 200),
+    'sideways velocity is not peeking into the angle'
+  );
+
+  const byId = new Map([
+    ['holder', { id: 'holder', slot: 0 }],
+    ['peeker', { id: 'peeker', slot: 1 }]
+  ]);
+  const kills = [{ tick: 200, victim: 'holder', attacker: 'peeker' }];
+  const kept = dropAngleHoldAdvice(
+    [
+      { rule: 'not-ready', playerId: 'holder', tick: 200, text: 'x' },
+      { rule: 'knife-out', playerId: 'holder', tick: 200, text: 'y' }
+    ],
+    { tickRate: 64, byId, kills, track }
+  );
+  assert(
+    kept.length === 1 && kept[0].rule === 'knife-out',
+    'hold advice drops; unrelated death notes stay'
   );
 }
 

@@ -95,6 +95,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
   /** @type {ReturnType<typeof createPresenceRadar> | null} */
   let radar = null;
+  /** Survive main re-renders so wheel-zoom is not wiped every aggregate. */
+  let radarView = { zoom: 1, panX: 0, panY: 0 };
 
   function playerById(id) {
     return players.find((p) => p.id === id) || null;
@@ -487,6 +489,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     return `<section class="an-card an-breakdown">
       <header class="an-card-head an-break-head">
         <h3 class="an-section-title">Map selections</h3>
+        <span class="an-radar-hint">Scroll to zoom · drag to pan · double-click to reset</span>
       </header>
       <div class="an-break-body">
         <div class="an-radar-wrap" id="an-radar-wrap">
@@ -598,20 +601,27 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     </section>`;
   }
 
+  function rememberRadarView() {
+    if (radar?.getView) radarView = radar.getView();
+  }
+
   function ensureRadar() {
     const canvas = mainEl.querySelector('#an-radar');
     const wrap = mainEl.querySelector('#an-radar-wrap');
     if (!canvas) {
+      rememberRadarView();
       radar?.destroy();
       radar = null;
       return null;
     }
     if (!radar || radar._canvas !== canvas) {
+      rememberRadarView();
       radar?.destroy();
       radar = createPresenceRadar({
         canvas,
         wrap,
         onShapeComplete: (geometry) => {
+          rememberRadarView();
           state.shapes.push({
             id: newShapeId(),
             map: state.map,
@@ -625,6 +635,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         }
       });
       radar._canvas = canvas;
+      radar.setView?.(radarView);
     }
     return radar;
   }
@@ -637,10 +648,12 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
   async function renderMain() {
     if (!state.map) {
+      rememberRadarView();
       mainEl.innerHTML = `<p class="view-empty">Select a map in the sidebar. Subjects are optional — leave empty to search anyone.</p>`;
       return;
     }
     if (!payload) {
+      rememberRadarView();
       mainEl.innerHTML = spinnerHtml();
       return;
     }
@@ -648,6 +661,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     const hasShapes = state.shapes.some((s) => s.enabled !== false);
     // Always replace the empty-map prompt as soon as a map is chosen; otherwise
     // it sticks around for the whole aggregate await (or forever on error).
+    rememberRadarView();
     mainEl.innerHTML = hasShapes
       ? `<p class="view-empty">Matching selections…</p>${renderRadarCard()}`
       : `<div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div>${renderRadarCard()}`;
@@ -665,6 +679,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         (d.rounds || []).some((r) => r.m === state.map && !r.ph)
       );
       const roundCount = agg.anyone ? agg.files.length : agg.rounds;
+      rememberRadarView();
       mainEl.innerHTML = `
       ${
         needsPh
@@ -677,6 +692,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       paintRadar();
     } catch (err) {
       if (token !== renderToken) return;
+      rememberRadarView();
       mainEl.innerHTML = `<p class="view-empty">Could not run filters. ${escapeHtml(
         err?.message || String(err)
       )}</p>${renderRadarCard()}`;
@@ -805,6 +821,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     if (t.id === 'an-map') {
       state.map = t.value || '';
       state.drawMode = '';
+      radarView = { zoom: 1, panX: 0, panY: 0 };
       loadShapesForMap();
       render();
       return;

@@ -20,6 +20,7 @@
 // ---------------------------------------------------------------------------
 
 import { coachText } from './coachMessages.js';
+import { isHoldingVsPeekIn } from './angleHold.js';
 import { hasControlField } from '../zones/zoneOverlay.js';
 import { bombSiteCenters, bombSiteNearPoint } from '../zones/bombSites.js';
 import { predictDuel } from '../duels/duelModel.js';
@@ -41,6 +42,8 @@ const WARM_SECONDS = 3;
 const AFTERPLANT_SECONDS = 15;
 /** Below this, the bomb wins more rounds than the fight does. */
 const AFTERPLANT_ODDS = 0.66;
+/** A fight this one-sided is already decided; mistake notes are not sent for it. */
+const FIGHT_WON = 0.8;
 
 // --- not-ready --------------------------------------------------------------
 /** An enemy on screen this long with no shot fired is being looked at, not fought. */
@@ -228,7 +231,8 @@ export function findTacticalFlags({
       if (!ctx?.pair) continue;
       if (!(ctx.pair.aSeesB || ctx.pair.bSeesA)) continue;
       const odds = predictDuel(ctx, weights);
-      if (odds >= AFTERPLANT_ODDS) continue;
+      // Already a fine fight, or already hopeless: not coached.
+      if (odds >= AFTERPLANT_ODDS || odds <= 1 - FIGHT_WON) continue;
 
       flags.push({
         tick: death.tick,
@@ -298,6 +302,15 @@ export function findTacticalFlags({
       if (seenFrom === null || odds === null) continue;
       const held = (death.tick - seenFrom) / tickRate;
       if (held < NOT_READY_SECONDS || odds < NOT_READY_MIN_ODDS) continue;
+      // Already-decided fights are not coached.
+      if (odds >= FIGHT_WON || odds <= 1 - FIGHT_WON) continue;
+      // Holding the angle into a peek is not "not ready on the angle".
+      if (
+        track &&
+        isHoldingVsPeekIn(track, tickRate, victimSlot, killerSlot, seenFrom)
+      ) {
+        continue;
+      }
 
       flags.push({
         tick: death.tick,
@@ -359,7 +372,7 @@ export function findTacticalFlags({
         if (a < SPACING_SOLO_MIN || a > SPACING_SOLO_MAX) continue;
         if (b < SPACING_SOLO_MIN || b > SPACING_SOLO_MAX) continue;
         const together = 1 - (1 - a) * (1 - b);
-        if (together < SPACING_PAIR_ODDS) continue;
+        if (together < SPACING_PAIR_ODDS || together >= FIGHT_WON) continue;
 
         flags.push({
           tick: second.tick,

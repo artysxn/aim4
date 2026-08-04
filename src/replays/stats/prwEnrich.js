@@ -29,19 +29,20 @@ function isGun(weapon) {
  * PRW_SAMPLE_SECONDS. Returns nulls when the series is empty.
  *
  * @param {object} meta
+ * @param {Array<{ct:number,t:number}>} [series]
  * @returns {{ prw1: number|null, prw2: number|null, samples: number }}
  */
-export function averagePrwFromMeta(meta) {
-  const series = winSeriesFromMeta(meta);
-  if (!series.length) return { prw1: null, prw2: null, samples: 0 };
+export function averagePrwFromMeta(meta, series = null) {
+  const samples = series || winSeriesFromMeta(meta);
+  if (!samples.length) return { prw1: null, prw2: null, samples: 0 };
   const stride = Math.max(1, PRW_SAMPLE_SECONDS);
   let sum1 = 0;
   let sum2 = 0;
   let n = 0;
   const s1 = meta.team1Side || 'T';
   const s2 = meta.team2Side || 'CT';
-  for (let i = 0; i < series.length; i += stride) {
-    const s = series[i];
+  for (let i = 0; i < samples.length; i += stride) {
+    const s = samples[i];
     const t1 = s1 === 'CT' ? s.ct : s.t;
     const t2 = s2 === 'CT' ? s.ct : s.t;
     if (!Number.isFinite(t1) || !Number.isFinite(t2)) continue;
@@ -51,6 +52,58 @@ export function averagePrwFromMeta(meta) {
   }
   if (!n) return { prw1: null, prw2: null, samples: 0 };
   return { prw1: sum1 / n, prw2: sum2 / n, samples: n };
+}
+
+/** Win% that opens a model advantage. */
+export const ADVANTAGE_ENTER = 51;
+/** Win% that closes (chokes) an open advantage. */
+export const ADVANTAGE_EXIT = 50;
+
+/**
+ * Count advantage episodes for one side on a win% series.
+ * An advantage starts when win% crosses above 51, and chokes if it later
+ * falls below 50 before the round ends (held to the end = converted).
+ *
+ * @param {Array<{ct:number,t:number}>} series
+ * @param {'CT'|'T'} side
+ * @returns {{ advantages: number, chokes: number }}
+ */
+export function advantageChokeForSide(series, side) {
+  let advantages = 0;
+  let chokes = 0;
+  let inAdv = false;
+  const key = side === 'CT' ? 'ct' : 't';
+  for (const s of series || []) {
+    const wp = s?.[key];
+    if (!Number.isFinite(wp)) continue;
+    if (!inAdv && wp > ADVANTAGE_ENTER) {
+      inAdv = true;
+      advantages += 1;
+    } else if (inAdv && wp < ADVANTAGE_EXIT) {
+      chokes += 1;
+      inAdv = false;
+    }
+  }
+  return { advantages, chokes };
+}
+
+/**
+ * Advantage / choke counters for team 1 and team 2.
+ * @param {object} meta
+ * @param {Array<{ct:number,t:number}>} [series]
+ */
+export function advantageChokeFromMeta(meta, series = null) {
+  const samples = series || winSeriesFromMeta(meta);
+  const s1 = meta?.team1Side === 'CT' ? 'CT' : 'T';
+  const s2 = meta?.team2Side === 'CT' ? 'CT' : 'T';
+  const a1 = advantageChokeForSide(samples, s1);
+  const a2 = advantageChokeForSide(samples, s2);
+  return {
+    aca1: a1.advantages,
+    ack1: a1.chokes,
+    aca2: a2.advantages,
+    ack2: a2.chokes
+  };
 }
 
 /**
@@ -179,13 +232,15 @@ export function playerSwingFromMeta(meta) {
 }
 
 /**
- * PRW averages + swing bag for one round meta.
+ * PRW averages + swing bag + advantage-choke counters for one round meta.
  * @param {object} meta
  */
 export function enrichPrwAndSwing(meta) {
-  const { prw1, prw2 } = averagePrwFromMeta(meta);
+  const series = winSeriesFromMeta(meta);
+  const { prw1, prw2 } = averagePrwFromMeta(meta, series);
+  const ac = advantageChokeFromMeta(meta, series);
   const sw = playerSwingFromMeta(meta);
-  return { prw1, prw2, sw };
+  return { prw1, prw2, sw, ...ac };
 }
 
 /**

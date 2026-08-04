@@ -378,9 +378,11 @@ function twoPlayerMeta(events) {
     shots: 300,
     hits: 126, // 0.42, the best anchor
     firstBullets: 100,
-    firstBulletHits: 52 // 0.52, the best anchor
+    firstBulletHits: 52, // 0.52, the best anchor
+    overflicks: 5, // 0.05, the best anchor
+    underflicks: 5
   });
-  assert(full.rating === 100, `all four at best anchors is 100, got ${full.rating}`);
+  assert(full.rating === 100, `all components at best anchors is 100, got ${full.rating}`);
 
   const worst = aimRating({
     engagements: 400,
@@ -390,9 +392,11 @@ function twoPlayerMeta(events) {
     shots: 300,
     hits: 36, // 0.12
     firstBullets: 100,
-    firstBulletHits: 12
+    firstBulletHits: 12,
+    overflicks: 28, // 0.28, the worst anchor
+    underflicks: 28
   });
-  assert(worst.rating === 0, `all four at worst anchors is 0, got ${worst.rating}`);
+  assert(worst.rating === 0, `all components at worst anchors is 0, got ${worst.rating}`);
 
   // Average-ish values should land near the middle of the scale.
   const average = aimRating({
@@ -403,7 +407,9 @@ function twoPlayerMeta(events) {
     shots: 300,
     hits: 81, // 0.27
     firstBullets: 100,
-    firstBulletHits: 32 // 0.32
+    firstBulletHits: 32, // 0.32
+    overflicks: 16, // ~0.16 mid
+    underflicks: 16
   });
   assert(
     average.rating != null && average.rating > 35 && average.rating < 70,
@@ -419,9 +425,34 @@ function twoPlayerMeta(events) {
     shots: 300,
     hits: 300,
     firstBullets: 100,
-    firstBulletHits: 100
+    firstBulletHits: 100,
+    overflicks: 0,
+    underflicks: 0
   });
   assert(superhuman.rating === 100, 'clamped at 100');
+
+  // Lower over/underflick rates must score higher than high rates.
+  const base = {
+    engagements: 400,
+    crosshairErrorSum: 400 * 30,
+    fightsReady: 260,
+    fightsUnaware: 140,
+    shots: 300,
+    hits: 81,
+    firstBullets: 100,
+    firstBulletHits: 32
+  };
+  const tidy = aimRating({ ...base, overflicks: 5, underflicks: 5 });
+  const sloppy = aimRating({ ...base, overflicks: 28, underflicks: 28 });
+  assert(
+    tidy.components.underflick > sloppy.components.underflick,
+    `lower underflick rate scores higher (${tidy.components.underflick} vs ${sloppy.components.underflick})`
+  );
+  assert(
+    tidy.components.overflick > sloppy.components.overflick,
+    `lower overflick rate scores higher (${tidy.components.overflick} vs ${sloppy.components.overflick})`
+  );
+  assert(tidy.rating > sloppy.rating, `tidy flick rates raise aim rating (${tidy.rating} vs ${sloppy.rating})`);
 }
 
 {

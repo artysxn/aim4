@@ -162,16 +162,29 @@ export function createChartsPanel({ escapeHtml }) {
     );
   }
 
+  /** Clickable chips: click selects, click again clears (no Ctrl needed). */
   function multiSelect(scope, key, options, selected) {
-    const size = Math.min(6, Math.max(3, options.length));
-    return `<select class="site-select ch-multi" multiple size="${size}" data-multi="${scope}|${key}">${options
-      .map(
-        (o) =>
-          `<option value="${escapeHtml(o.key)}"${
-            selected.map(String).includes(String(o.key)) ? ' selected' : ''
-          }>${escapeHtml(o.label)}</option>`
-      )
-      .join('')}</select>`;
+    const sel = new Set((selected || []).map(String));
+    return `<div class="ch-chips" role="group">${options
+      .map((o) => {
+        const on = sel.has(String(o.key));
+        return `<button type="button" class="ch-chip${on ? ' on' : ''}" data-chip="${scope}|${key}" data-value="${escapeHtml(
+          String(o.key)
+        )}" aria-pressed="${on ? 'true' : 'false'}">${escapeHtml(o.label)}</button>`;
+      })
+      .join('')}</div>`;
+  }
+
+  /** Single-choice chips: click selects, click the active one clears to Any. */
+  function exclusiveChips(scope, key, options, value) {
+    return `<div class="ch-chips" role="group">${options
+      .map((o) => {
+        const on = String(value || '') === String(o.key);
+        return `<button type="button" class="ch-chip${on ? ' on' : ''}" data-exclusive-chip="${scope}|${key}" data-value="${escapeHtml(
+          String(o.key)
+        )}" aria-pressed="${on ? 'true' : 'false'}">${escapeHtml(o.label)}</button>`;
+      })
+      .join('')}</div>`;
   }
 
   const group = (label, body, extra = '') =>
@@ -261,33 +274,33 @@ export function createChartsPanel({ escapeHtml }) {
       group(
         'Round',
         `<div class="ch-select-stack">
-          ${selectHtml(
-            `data-exclusive="${scope}|result"`,
+          ${exclusiveChips(
+            scope,
+            'result',
             [
               { key: 'won', label: 'Won' },
               { key: 'lost', label: 'Lost' }
             ],
-            f.result || '',
-            { placeholder: 'Any result' }
+            f.result || ''
           )}
-          ${selectHtml(
-            `data-exclusive="${scope}|opening"`,
+          ${exclusiveChips(
+            scope,
+            'opening',
             [
               { key: '5v4', label: '5v4' },
               { key: '4v5', label: '4v5' },
               { key: 'even', label: 'Even' }
             ],
-            f.opening || '',
-            { placeholder: 'Any opening' }
+            f.opening || ''
           )}
-          ${selectHtml(
-            `data-exclusive="${scope}|half"`,
+          ${exclusiveChips(
+            scope,
+            'half',
             [
               { key: '1', label: '1st half' },
               { key: '2', label: '2nd half' }
             ],
-            f.half || '',
-            { placeholder: 'Any half' }
+            f.half || ''
           )}
         </div>`
       ),
@@ -738,6 +751,35 @@ export function createChartsPanel({ escapeHtml }) {
       else if (scope === 'x') state.x.filter = {};
       else state.y.filter = {};
       afterChange();
+      return;
+    }
+    const chip = e.target.closest('[data-chip]');
+    if (chip) {
+      const [scope, key] = chip.dataset.chip.split('|');
+      const val = chip.dataset.value;
+      const f = filterFor(scope);
+      const cur = [...(f[key] || [])].map(String);
+      const at = cur.indexOf(String(val));
+      if (at >= 0) cur.splice(at, 1);
+      else cur.push(String(val));
+      f[key] = key === 'econ' || key === 'oppEcon' ? cur.map(Number) : cur;
+      // Map chips reshape the Role list; rebuild so options stay in sync.
+      if (key === 'maps') {
+        afterChange();
+        return;
+      }
+      chip.classList.toggle('on', at < 0);
+      chip.setAttribute('aria-pressed', at < 0 ? 'true' : 'false');
+      afterChange({ rebuildSide: false });
+      return;
+    }
+    const exclusive = e.target.closest('[data-exclusive-chip]');
+    if (exclusive) {
+      const [scope, key] = exclusive.dataset.exclusiveChip.split('|');
+      const val = exclusive.dataset.value;
+      const f = filterFor(scope);
+      f[key] = String(f[key] || '') === String(val) ? '' : String(val);
+      afterChange();
     }
   });
 
@@ -755,12 +797,6 @@ export function createChartsPanel({ escapeHtml }) {
     if (t.matches('[data-flag]')) {
       const [scope, key] = t.dataset.flag.split('|');
       filterFor(scope)[key] = Boolean(t.checked);
-      afterChange({ rebuildSide: false });
-      return;
-    }
-    if (t.matches('[data-exclusive]')) {
-      const [scope, key] = t.dataset.exclusive.split('|');
-      filterFor(scope)[key] = t.value || '';
       afterChange({ rebuildSide: false });
       return;
     }
@@ -809,14 +845,6 @@ export function createChartsPanel({ escapeHtml }) {
     }
     if (t.matches('[data-opt]')) {
       state[t.dataset.opt] = Math.max(0, Number(t.value) || 0);
-      afterChange({ rebuildSide: false });
-      return;
-    }
-    if (t.matches('[data-multi]')) {
-      const [scope, key] = t.dataset.multi.split('|');
-      const vals = [...t.selectedOptions].map((o) => o.value);
-      filterFor(scope)[key] =
-        key === 'econ' || key === 'oppEcon' ? vals.map(Number) : vals;
       afterChange({ rebuildSide: false });
       return;
     }
