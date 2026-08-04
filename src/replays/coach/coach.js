@@ -2,7 +2,7 @@
 // replays/coach/coach.js
 // Reads one round and says what went wrong.
 //
-// Two passes. The first walks the round a second at a time, recording the win
+// Two passes. The first walks the round at COACH_SAMPLE_HZ, recording the win
 // probability and who was standing where — that series feeds the graph and is
 // also what every rule below reasons against. The second walks the deaths and
 // asks, of each, whether it cost something it did not have to.
@@ -36,6 +36,21 @@ import {
   sitePresenceAdvantage
 } from './sitePresenceAdvantage.js';
 import { hasBombSites } from '../zones/bombSites.js';
+
+/**
+ * Win-chance series samples per second.
+ *
+ * One hertz was smooth enough for body-count drifts but washed out fight swings
+ * that resolve in a few hundred milliseconds. Eight hertz matches the live
+ * duel-scan cadence so the chart's bumps track the playhead instead of lagging
+ * a full second behind them.
+ */
+export const COACH_SAMPLE_HZ = 8;
+
+/** Tick stride for the coach / win-graph series at a given demo tick rate. */
+export function coachSampleStride(tickRate = 64) {
+  return Math.max(1, Math.round((tickRate || 64) / COACH_SAMPLE_HZ));
+}
 
 /** A kill this soon after a death answers it. */
 const TRADE_SECONDS = 3;
@@ -218,10 +233,11 @@ export function analyseRound({
   const winnerSide = meta.winnerSide || (meta.winner === 1 ? teamSides[1] : teamSides[2]);
   const bomb = meta.events?.bomb || [];
 
-  // ---- pass one: the round, one second at a time --------------------------
+  // ---- pass one: the round, COACH_SAMPLE_HZ times a second ----------------
 
+  const sampleStride = coachSampleStride(tickRate);
   const series = [];
-  for (let tick = from; tick <= to; tick += tickRate) {
+  for (let tick = from; tick <= to; tick += sampleStride) {
     const sampled = sampleAt(tick) || [];
     // Copy out of the sampler scratch buffer — it is reused every step.
     const states = sampled.map((s) => (s ? { ...s } : null));
@@ -320,7 +336,7 @@ export function analyseRound({
       : null;
     series.push({
       tick,
-      second: Math.round((tick - from) / tickRate),
+      second: (tick - from) / tickRate,
       ct: wp.ct,
       t: wp.t,
       // Same moment with the open fights resolved forward, or null when nobody

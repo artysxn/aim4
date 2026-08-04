@@ -32,7 +32,7 @@ import { clockAt, formatClock, timingFor } from './roundClock.js';
 import { economyLabel, winningSide } from '../shared/roundId.js';
 import { iconImgHtml, inventoryAt } from './equipmentIcons.js';
 import { DRAW_COLORS, DrawingLayer } from './drawing.js';
-import { analyseRound, flagToNote } from '../coach/coach.js';
+import { analyseRound, coachSampleStride, flagToNote } from '../coach/coach.js';
 import { explainProbability, winProbabilityAtTick } from '../coach/winProbability.js';
 import { phaseBounds } from '../coach/roundPhases.js';
 import {
@@ -683,6 +683,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     // cannot soft-paint with another round's visit log.
     zonePresence = null;
     resetZoneVisionCache(zoneVisionCache);
+    // Same class of sticky-cache bug as zone vision: a holding draw with
+    // fallbackMeta can poison per-round duel windows under this file key.
+    if (duelsOn) duelOverlay.reset();
     notePanel.hidden = true;
     noteBtn.classList.remove('active');
     if (coachPicking) hideCoachPick();
@@ -742,6 +745,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
         // ticks/sides, so soft control would stay empty until the zone overlay
         // is toggled. Drop it.
         resetZoneVisionCache(zoneVisionCache);
+        // Same for duel fight windows cached under this round key.
+        if (duelsOn) duelOverlay.reset();
         adoptRoundMeta(index, meta);
         renderScoreboards();
         loadNotesFromMeta(true);
@@ -750,7 +755,10 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
       }
     }
 
+    // Zones / chart / duels all need the map network; duels also need a clean
+    // overlay pass once real meta is in place (flag stays on across rounds).
     if (zonesOn || chartOn) await refreshZonePresence();
+    else if (duelsOn) await ensureZoneNetwork();
     if (chartOn) {
       mapControlCache.delete(file);
       coachCache.delete(file);
@@ -841,7 +849,7 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
    */
   function duelOverlayForTick(tick) {
     duelHitLines = [];
-    if (!duelsOn || !zoneNetwork || !activeMeta) return null;
+    if (!duelsOn || !zoneNetwork || !activeMeta?.players?.length) return null;
     const mapCode = renderer.mapCode || activeMeta.map || '';
     prepareControlField(zoneNetwork, mapCode, renderer.image);
     if (!hasControlField(zoneNetwork)) return null;
@@ -1209,8 +1217,9 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
   }
 
   /**
-   * Live engagements under the kill feed: each active duel and the model's
-   * win chances, updating as the fight develops.
+   * Live engagements in their own panel below the kill-feed slot: each active
+   * duel and the model's win chances, updating as the fight develops. Anchored
+   * independently so kill rows do not shove this block up and down.
    */
   function syncDuelFeed(overlay) {
     if (!duelFeedEl) return;
@@ -2236,11 +2245,8 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
    * A duel lookup for one round's analysis pass, or null when the model has
    * nothing to work with.
    *
-   * The pass walks the round a second at a time, so its scanner is told to walk
-   * with it: catching up in eight-tick steps to reach ticks it only ever asks
-   * about once a second would be eight times the work for the same answers.
-   * The eight-tick grid is for the live readout, where it is the resolution the
-   * number is actually shown at.
+   * Stride matches `coachSampleStride` so each series point gets a duel scan
+   * at the same tick rather than inheriting a stale answer from a coarser grid.
    */
   function seriesDuelsAt(index, roundMeta, track) {
     const file = files[index];
@@ -2248,7 +2254,11 @@ export function createTimelineViewer({ store, rounds, escapeHtml, onRound, stats
     const mapCode = renderer.mapCode || roundMeta.map || '';
     prepareControlField(zoneNetwork, mapCode, renderer.image);
     if (!hasControlField(zoneNetwork)) return null;
-    const scanner = createDuelScanner({ stride: roundMeta.tickRate || 64 });
+    // Same stride as the coach series — coarser than this would reintroduce the
+    // 1 Hz flattening the denser graph sampling is meant to undo.
+    const scanner = createDuelScanner({
+      stride: coachSampleStride(roundMeta.tickRate || 64)
+    });
     return (tick) =>
       scanner.at({
         meta: roundMeta,

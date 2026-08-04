@@ -211,6 +211,10 @@ export function createDuelOverlay() {
       radarLevel = 'default'
     }) {
       if (!meta || !track || !network) return null;
+      // Fallback / holding meta often has an empty roster. Building windows from
+      // that and caching them under the real round key leaves the overlay empty
+      // until the tool is toggled (reset). Wait for a real roster.
+      if (!(meta.players?.length > 0)) return null;
       advance({ meta, track, tick, network, mapCode, roundKey });
 
       const tickRate = meta.tickRate || 64;
