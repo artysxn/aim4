@@ -49,7 +49,18 @@ export function roundLogit(f, v, mapCode = '') {
   if (mp !== undefined) z += v[mp];
 
   // --- bodies --------------------------------------------------------------
-  z += v[P.manW] * sat((f.ctAlive - f.tAlive) / v[P.manTau]);
+  // Shallow on the first man, steeper after, saturating at the end. The power
+  // is applied to the magnitude and the sign put back afterwards, because a
+  // fractional power of a negative number is not a number.
+  const menDiff = f.ctAlive - f.tAlive;
+  if (menDiff !== 0) {
+    const size = Math.pow(Math.abs(menDiff) / v[P.manTau], v[P.manPow]);
+    z += v[P.manW] * Math.sign(menDiff) * sat(size);
+    // The same gap against a thinner server. One man up out of nine bodies is a
+    // 5v4 and worth about 68%; one man up out of three is a 2v1 and worth about
+    // 84%. Without this the model cannot tell those apart.
+    z += v[P.manShareW] * (menDiff / Math.max(1, f.ctAlive + f.tAlive));
+  }
 
   // Health beyond the body count. `ctEff` is the health-weighted body count, so
   // the gap between it and the raw count is how hurt that side is; the model
@@ -59,8 +70,15 @@ export function roundLogit(f, v, mapCode = '') {
   z += v[P.hpW] * (tHurt - ctHurt);
 
   // Down to one player, with nobody to trade with.
-  if (f.ctAlive === 1 && f.tAlive > 1) z -= v[P.lastManW];
-  if (f.tAlive === 1 && f.ctAlive > 1) z += v[P.lastManW];
+  //
+  // `<= 1` rather than `=== 1` on purpose. Firing only at exactly one left put
+  // a step in the curve at the wipe: 5v1 collected this bonus and 5v0 did not,
+  // so the model rated a wiped enemy *worse* for CT than a live last man. With
+  // the previously fitted values that was 4.48 against 3.28, and it landed
+  // squarely on the post-plant 5v0 moments the extraction censoring fix had
+  // just added. A side with none left is not better off than a side with one.
+  if (f.ctAlive <= 1 && f.tAlive > 1) z -= v[P.lastManW];
+  if (f.tAlive <= 1 && f.ctAlive > 1) z += v[P.lastManW];
 
   // --- fights already in progress -----------------------------------------
   z += v[P.duelW] * sat(f.duelEdge / v[P.duelTau]);
@@ -74,12 +92,24 @@ export function roundLogit(f, v, mapCode = '') {
   z += v[P.centroidW] * sat(f.centroidDist);
   z += v[P.nearestW] * sat(f.nearestDist);
 
+  // --- who is holding the ground around the bomb ---------------------------
+  // Bodies in the live bombsite, and possession of the zones that lead into it.
+  // Both read before a plant as well as after: a site that has been taken is a
+  // site, whether or not the bomb is down yet.
+  z += v[P.siteOccW] * ((f.ctInSite || 0) - (f.tInSite || 0));
+  z += v[P.keyZoneW] * (f.keyZoneNet || 0);
+
   // --- the clock -----------------------------------------------------------
   if (!f.planted) {
     // Time spent without a plant is time the T side is running out of, so this
     // only ever helps CT. Applied as a rising power of elapsed share.
     const spent = Math.min(1, Math.max(0, 1 - f.secondsLeft / ROUND_SECONDS));
     z += v[P.timeW] * Math.pow(spent, v[P.timePow]);
+
+    // How far the T side still is from the site it is converging on. Context
+    // rather than advantage, like the centroid distance, so the sign is left to
+    // the data.
+    z += v[P.approachDistW] * sat(f.tBombDist || 0);
   } else {
     z += v[P.plantW];
 
@@ -96,6 +126,23 @@ export function roundLogit(f, v, mapCode = '') {
     // term instead of being left to the timer curve to approximate.
     const deadline = f.ctHasKit ? DEFUSE_KIT_DEADLINE : DEFUSE_NO_KIT_DEADLINE;
     if (left > 0 && left < deadline) z += v[P.noDefuseW];
+
+    // --- the race for the bomb ---------------------------------------------
+    // Who is closer to it, and who wins the fight over it. The bomb duel is the
+    // retake in miniature and is a different question from the average of every
+    // open duel on the map, which is why it is weighted separately.
+    z += v[P.bombDistW] * sat(f.bombDistDiff || 0);
+    z += v[P.bombDuelW] * (f.bombDuelEdge || 0);
+
+    // Travel plus defuse against the clock. Saturating on the way out, because
+    // the seconds either side of zero carry the whole signal: twenty spare
+    // seconds and thirty are both just "there is time".
+    z += v[P.defuseSlackW] * sat((f.defuseSlack || 0) / v[P.defuseSlackTau]);
+
+    // And the hard version of the same fact: the defuse cannot happen at all,
+    // whoever is alive and wherever they are standing. Five players cannot
+    // defuse faster than one, so this holds at 5v0 exactly as it does at 1v0.
+    if (f.defuseImpossible) z += v[P.defuseImpossibleW];
   }
 
   return z;

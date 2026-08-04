@@ -22,6 +22,15 @@ export const PRIOR_MAPS = ['ANC', 'ANU', 'CCH', 'DD2', 'INF', 'MIR'];
 
 const PHASES = ['phase_early', 'phase_mid', 'phase_late'];
 const MEN = ['man_even', 'man_ct_up', 'man_t_up'];
+/** By size and side of the advantage. The man terms steer on these. */
+const MEN_SIZE = [
+  'men_ct_d1',
+  'men_ct_d2',
+  'men_ct_d3up',
+  'men_t_d1',
+  'men_t_d2',
+  'men_t_d3up'
+];
 const ALL = [...PHASES, ...MEN];
 
 /**
@@ -40,10 +49,38 @@ export const ROUND_PARAM_SPEC = [
   })),
 
   // --- bodies --------------------------------------------------------------
-  // The dominant term by far. Saturating, because 5v2 and 5v1 are both simply
-  // winning, while 5v4 against 5v3 is a real difference.
-  { name: 'manW', init: 1.6, min: 0, max: 12, group: 'grad', buckets: ALL },
-  { name: 'manTau', init: 1.4, min: 0.3, max: 10, group: 'shape', buckets: MEN },
+  // The dominant term by far, and the one that was most wrong.
+  //
+  // It used to be a plain tanh of the man difference, which is steepest at zero
+  // and flattens after. Measured against 937 rounds that is the wrong way
+  // round: the true log-odds of a man advantage rise roughly linearly, about
+  // 1.8 per body, so a curve that spends most of its travel on the first man
+  // has to be cranked up to reach two and three and then badly overshoots one.
+  // It did: a one-man lead came out twelve points too confident while two and
+  // three men were calibrated to within a point.
+  //
+  // `manPow` puts an inflection in it. Above one, the first man is compressed
+  // and the curve steepens after, which is the shape the rounds actually have;
+  // at exactly one this is the old tanh back again, so the optimizer can still
+  // choose it if the data ever says so.
+  { name: 'manW', init: 5, min: 0, max: 12, group: 'grad', buckets: [...ALL, ...MEN_SIZE] },
+  { name: 'manTau', init: 3, min: 0.3, max: 10, group: 'shape', buckets: [...MEN, ...MEN_SIZE] },
+  { name: 'manPow', init: 1.8, min: 0.5, max: 4, group: 'shape', buckets: [...MEN, ...MEN_SIZE] },
+  // How big the advantage is relative to how many bodies are still on the
+  // server. The difference alone cannot tell 5v4 from 2v1, and the rounds say
+  // those are not the same thing at all: a one-man lead is worth 68% at 5v4 and
+  // 84% at 2v1. Sharing one man term between them fits a compromise that is too
+  // confident in the common case and not confident enough in the rare one.
+  // Non-negative, which keeps the model monotone in bodies: adding a player
+  // raises both the gap and the total, and raises the ratio with them.
+  {
+    name: 'manShareW',
+    init: 1.5,
+    min: 0,
+    max: 8,
+    group: 'grad',
+    buckets: [...ALL, ...MEN_SIZE]
+  },
   // Health left over above the body count: five players on 30 hp are not five
   // players, and the man advantage alone cannot express that.
   { name: 'hpW', init: 0.5, min: 0, max: 6, group: 'grad', buckets: ALL },
@@ -90,7 +127,39 @@ export const ROUND_PARAM_SPEC = [
   { name: 'kitW', init: 0.7, min: -0.5, max: 3, group: 'grad', buckets: ['planted'] },
   // Not enough seconds left to complete a defuse at all. A hard fact, not a
   // tendency, and the model should be allowed to treat it as one.
-  { name: 'noDefuseW', init: -1.5, min: -5, max: 0, group: 'grad', buckets: ['planted'] }
+  { name: 'noDefuseW', init: -1.5, min: -5, max: 0, group: 'grad', buckets: ['planted'] },
+
+  // --- the race for the bomb -----------------------------------------------
+  // The first version knew the bomb timer and nothing about the geometry around
+  // it, so "nine seconds left, no kit, nearest CT across the map" was invisible
+  // to it. These terms are that geometry.
+  //
+  // Who is closer to the planted bomb, which is the retake in one number.
+  { name: 'bombDistW', init: 0.4, min: -2, max: 2, group: 'grad', buckets: ['planted'] },
+  // The specific fight that decides the site: nearest CT against nearest T.
+  // Signed like duelEdge, so the weight stays non-negative and the direction is
+  // a structural guarantee rather than something training has to rediscover.
+  { name: 'bombDuelW', init: 0.5, min: 0, max: 3, group: 'grad', buckets: ['planted'] },
+  // Spare seconds after travelling to the bomb and defusing it. Saturating,
+  // because the seconds either side of zero are the entire signal: twenty
+  // spare seconds and thirty are both simply "there is time".
+  { name: 'defuseSlackW', init: 0.8, min: 0, max: 4, group: 'grad', buckets: ['planted'] },
+  { name: 'defuseSlackTau', init: 5, min: 0.5, max: 20, group: 'shape', buckets: ['planted'] },
+  // The defuse physically cannot happen, whoever is alive and wherever they
+  // are. Bounded well below the other plant terms so the model can say so
+  // outright instead of approximating it with a timer curve.
+  { name: 'defuseImpossibleW', init: -2, min: -8, max: 0, group: 'grad', buckets: ['planted'] },
+
+  // --- who is holding the ground ------------------------------------------
+  // Bodies in the live bombsite and possession of the zones around it. Both
+  // read before a plant as well as after: an executed site is a site whether or
+  // not the bomb is down yet.
+  { name: 'siteOccW', init: 0.3, min: -1.5, max: 1.5, group: 'grad', buckets: [...PHASES, 'planted'] },
+  { name: 'keyZoneW', init: 0.3, min: -1.5, max: 1.5, group: 'grad', buckets: [...PHASES, 'planted'] },
+  // Before a plant, how far the T side still is from the site it is converging
+  // on. Free to go either way for the same reason the centroid distance is:
+  // far apart is a round still being set up, not an advantage to anyone.
+  { name: 'approachDistW', init: 0, min: -1.5, max: 1.5, group: 'grad', buckets: [...PHASES, 'unplanted'] }
 ];
 
 export const ROUND_PARAM_INDEX = Object.fromEntries(

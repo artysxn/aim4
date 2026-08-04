@@ -43,7 +43,13 @@ import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
 import { predictRound } from '../src/replays/rounds/roundModel.js';
-import { ROUND_BUCKET_IDS, bucketizeRound } from '../src/replays/rounds/roundBuckets.js';
+import {
+  MAN_BUCKET_COUNT,
+  MAN_BUCKET_NAMES,
+  ROUND_BUCKET_IDS,
+  bucketizeRound,
+  manBucketOf
+} from '../src/replays/rounds/roundBuckets.js';
 import {
   ROUND_PARAM_SPEC,
   clampVector,
@@ -53,6 +59,13 @@ import {
   toNamed
 } from '../src/replays/rounds/roundParamSpec.js';
 import { ROUND_MODEL_PARAMS } from '../src/replays/rounds/roundModelParams.js';
+import {
+  CALIBRATION_PHASES,
+  calibratedLogit,
+  fitCalibration,
+  identityCalibration
+} from '../src/replays/rounds/roundCalibration.js';
+import { roundLogit, sigmoid } from '../src/replays/rounds/roundModel.js';
 import { createScoreAccumulator, score, summarize } from '../src/replays/duels/scoring.js';
 import { CACHE_DIR, loadRoundCorpus } from './lib/roundCorpus.mjs';
 
@@ -74,6 +87,25 @@ const LIMIT = Number(arg('--limit', 0));
 const SEED = Number(arg('--seed', 12345));
 const HOLDOUT = Number(arg('--holdout', 0.2));
 const WORKERS = Number(arg('--workers', Math.max(1, Math.min(16, os.cpus().length - 2))));
+/**
+ * How hard the fit is held to the real win rate in each man-advantage bucket.
+ *
+ * Log loss on its own does not deliver this. A one-man lead was coming out nine
+ * points too confident on the training demos themselves, not just on held-out
+ * ones, because the man term and the duel edge both read the same thing: a side
+ * that just won a fight is up a body AND favoured in the next one, and the two
+ * terms each charge for it. Log loss is happy to pay that as long as the
+ * ranking improves somewhere else.
+ *
+ * So the objective gains a term: the squared gap between what the model says
+ * and what actually happened, per bucket, weighted by the bucket's share of the
+ * corpus. Note which direction this pushes. Training on the exam score is
+ * banned because it rewards shouting; this is the opposite, and it can only
+ * ever punish a prediction for being louder than the outcomes justify.
+ */
+const CALIB_WEIGHT = Number(arg('--calib-weight', 15));
+/** A matchup needs this share of the corpus before its calibration is trusted. */
+const CALIB_MIN_SHARE = 0.005;
 const warmStart = has('--warm-start');
 const doExport = has('--export');
 const dryRun = has('--dry-run');
@@ -155,7 +187,7 @@ function flatten(rounds) {
   return rows;
 }
 
-function evaluate(v, rows) {
+function evaluate(v, rows, calib = null) {
   const all = createScoreAccumulator();
   const buckets = new Map(ROUND_BUCKET_IDS.map((id) => [id, createScoreAccumulator()]));
   // Exam rows are single moments, so each counts once rather than carrying the
@@ -165,7 +197,9 @@ function evaluate(v, rows) {
     ['examEarly', 'examMid', 'examFinal'].map((id) => [id, createScoreAccumulator()])
   );
   for (const row of rows) {
-    const p = predictRound(row.f, v, row.map);
+    const p = calib
+      ? sigmoid(calibratedLogit(roundLogit(row.f, v, row.map), row.phase, calib))
+      : predictRound(row.f, v, row.map);
     score(all, p, row.y, row.w);
     for (const id of row.buckets) score(buckets.get(id), p, row.y, row.w);
     if (row.exam && exams.has(row.exam)) score(exams.get(row.exam), p, row.y, 1);
@@ -178,16 +212,39 @@ function evaluate(v, rows) {
   return out;
 }
 
+/**
+ * Turn combined per-bucket sums into the calibration penalty.
+ *
+ * @param {Float64Array} sums predSum/ySum/weight per man bucket, packed
+ * @param {number} total corpus weight
+ */
+function calibrationPenalty(sums, total) {
+  if (!(CALIB_WEIGHT > 0) || total <= 0) return 0;
+  let penalty = 0;
+  for (let b = 0; b < MAN_BUCKET_COUNT; b++) {
+    const w = sums[b * 3 + 2];
+    if (w <= 0 || w / total < CALIB_MIN_SHARE) continue;
+    const err = sums[b * 3] / w - sums[b * 3 + 1] / w;
+    penalty += (w / total) * err * err;
+  }
+  return CALIB_WEIGHT * penalty;
+}
+
 function batchLoss(v, rows, idx) {
   let loss = 0;
   let weight = 0;
+  const sums = new Float64Array(MAN_BUCKET_COUNT * 3);
   for (const i of idx) {
     const row = rows[i];
     const p = Math.min(1 - 1e-6, Math.max(1e-6, predictRound(row.f, v, row.map)));
     loss -= (row.y * Math.log(p) + (1 - row.y) * Math.log(1 - p)) * row.w;
     weight += row.w;
+    const b = manBucketOf(row.f.ctAlive, row.f.tAlive) * 3;
+    sums[b] += p * row.w;
+    sums[b + 1] += row.y * row.w;
+    sums[b + 2] += row.w;
   }
-  return weight > 0 ? loss / weight : 0;
+  return weight > 0 ? loss / weight + calibrationPenalty(sums, weight) : 0;
 }
 
 async function createPool(count, { limit, holdout, rows }) {
@@ -248,14 +305,18 @@ async function createPool(count, { limit, holdout, rows }) {
             })
         )
       );
+      const stride = 2 + MAN_BUCKET_COUNT * 3;
       return vectors.map((_, i) => {
         let loss = 0;
         let weight = 0;
+        const sums = new Float64Array(MAN_BUCKET_COUNT * 3);
         for (const r of replies) {
-          loss += r[i * 2];
-          weight += r[i * 2 + 1];
+          const base = i * stride;
+          loss += r[base];
+          weight += r[base + 1];
+          for (let k = 0; k < sums.length; k++) sums[k] += r[base + 2 + k];
         }
-        return weight > 0 ? loss / weight : 0;
+        return weight > 0 ? loss / weight + calibrationPenalty(sums, weight) : 0;
       });
     },
     async close() {
@@ -359,6 +420,48 @@ function fmtBuckets(report) {
     );
   }
   return lines.join('\n');
+}
+
+/** Model against outcome in each man-advantage bucket, from a row set. */
+function manCalibration(v, rows) {
+  const sums = new Float64Array(MAN_BUCKET_COUNT * 3);
+  let total = 0;
+  for (const row of rows) {
+    const b = manBucketOf(row.f.ctAlive, row.f.tAlive) * 3;
+    const p = predictRound(row.f, v, row.map);
+    sums[b] += p * row.w;
+    sums[b + 1] += row.y * row.w;
+    sums[b + 2] += row.w;
+    total += row.w;
+  }
+  const out = [];
+  for (let b = 0; b < MAN_BUCKET_COUNT; b++) {
+    const w = sums[b * 3 + 2];
+    if (w <= 0 || w / total < CALIB_MIN_SHARE) continue;
+    out.push({
+      name: MAN_BUCKET_NAMES[b],
+      share: w / total,
+      // Always CT's win rate; the name says which side holds the bodies.
+      pred: sums[b * 3] / w,
+      actual: sums[b * 3 + 1] / w
+    });
+  }
+  out.sort((a, b) => Math.abs(b.pred - b.actual) - Math.abs(a.pred - a.actual));
+  return out;
+}
+
+function fmtManCalibration(v, rows) {
+  const rows2 = manCalibration(v, rows);
+  const worst = rows2.length ? Math.abs(rows2[0].pred - rows2[0].actual) : 0;
+  const body = rows2
+    .map(
+      (b) =>
+        `    ${b.name.padEnd(5)} ${(b.share * 100).toFixed(1).padStart(4)}% of rounds` +
+        `  model=${(b.pred * 100).toFixed(1).padStart(5)}%  actual=${(b.actual * 100).toFixed(1).padStart(5)}%` +
+        `  off=${((b.pred - b.actual) * 100 >= 0 ? '+' : '') + ((b.pred - b.actual) * 100).toFixed(1).padStart(5)}pt`
+    )
+    .join('\n');
+  return `${body}\n    worst matchup miss: ${(worst * 100).toFixed(1)}pt`;
 }
 
 function fmtExams(report) {
@@ -552,8 +655,40 @@ async function main() {
 
   await pool.close();
 
-  const finalTrain = evaluate(bestVec, trainRows);
-  const finalValid = evaluate(bestVec, validRows);
+  // --- the calibration layer ------------------------------------------------
+  // Two parameters per phase, fitted on the training rows after the main fit,
+  // shipped only if they lower the held-out loss. The ceiling underneath is the
+  // same fit made against the validation rows themselves: unshippable by
+  // definition, but it is the only honest answer to "how much is calibration
+  // worth here at all", and it is what says whether a miss is a bad fit or an
+  // empty pocket.
+  const logitRows = (rows) =>
+    rows.map((r) => ({ z: roundLogit(r.f, bestVec, r.map), y: r.y, w: r.w, phase: r.phase }));
+  const calib = fitCalibration(logitRows(trainRows));
+  const ceilingCalib = fitCalibration(logitRows(validRows));
+
+  const rawValid = evaluate(bestVec, validRows);
+  const calValid = evaluate(bestVec, validRows, calib);
+  const ceilValid = evaluate(bestVec, validRows, ceilingCalib);
+  const calibHelps = calValid.logLoss < rawValid.logLoss;
+
+  console.log('\n=== CALIBRATION (Platt scale per phase, fitted on train) ===');
+  for (const ph of CALIBRATION_PHASES) {
+    console.log(`    ${ph.padEnd(6)} a=${calib[ph].a.toFixed(4)}  b=${calib[ph].b.toFixed(4)}`);
+  }
+  console.log(
+    `    held-out loss ${rawValid.logLoss.toFixed(4)} raw -> ${calValid.logLoss.toFixed(4)} calibrated` +
+      ` (${(calValid.logLoss - rawValid.logLoss >= 0 ? '+' : '') + (calValid.logLoss - rawValid.logLoss).toFixed(4)})`
+  );
+  console.log(
+    `    ceiling if fitted on the held-out rows themselves: ${ceilValid.logLoss.toFixed(4)}` +
+      ` (${(ceilValid.logLoss - rawValid.logLoss).toFixed(4)}), not shippable`
+  );
+  console.log(calibHelps ? '    -> shipping it' : '    -> NOT shipping it, it does not help');
+
+  const shipCalib = calibHelps ? calib : identityCalibration();
+  const finalTrain = evaluate(bestVec, trainRows, calibHelps ? calib : null);
+  const finalValid = calibHelps ? calValid : rawValid;
   console.log(
     `\n--- best model: generation ${bestGen}${bestGen === 0 ? ' (the starting point)' : ''}, ` +
       'chosen on held-out loss ---'
@@ -569,21 +704,30 @@ async function main() {
       ` (strongest accepted boost x${mutationStats.bestBoost.toFixed(1)})`
   );
 
+  console.log('\n=== MAN ADVANTAGE, held to the real win rates ===');
+  console.log('  training demos:');
+  console.log(fmtManCalibration(bestVec, trainRows));
+  console.log('  held-out demos:');
+  console.log(fmtManCalibration(bestVec, validRows));
+
   console.log('\n=== THE THREE EXAMS (held-out demos) ===');
   console.log(fmtExams(finalValid));
   console.log('\nvalidation by scenario:');
   console.log(fmtBuckets(finalValid));
 
   if (doExport && !dryRun) {
-    await writeParamsModule(bestVec, finalTrain, finalValid, rounds.length);
+    await writeParamsModule(bestVec, finalTrain, finalValid, rounds.length, shipCalib);
     console.log(`\nWrote ${path.relative(path.join(__dirname, '..'), OUT)}`);
   } else if (doExport) {
     console.log('\nDry run, params not exported.');
   }
 }
 
-async function writeParamsModule(v, train, valid, roundCount) {
+async function writeParamsModule(v, train, valid, roundCount, calib = identityCalibration()) {
   const named = toNamed(v);
+  const calibBody = CALIBRATION_PHASES.map(
+    (ph) => `    ${ph}: { a: ${Number(calib[ph].a.toFixed(6))}, b: ${Number(calib[ph].b.toFixed(6))} }`
+  ).join(',\n');
   const body = Object.entries(named)
     .map(([k, val]) => `    ${k}: ${Number(val.toFixed(6))}`)
     .join(',\n');
@@ -620,6 +764,11 @@ import { fromNamed } from './roundParamSpec.js';
 export const ROUND_MODEL_PARAMS = {
   specHash: '${specHash()}',
   trainedOn: ${roundCount},
+  // Per-phase Platt scale, p' = sigmoid(a * logit + b). All ones and zeroes
+  // means the fit did not beat the raw model on held-out loss and was refused.
+  calibration: {
+${calibBody}
+  },
   validation: {
     logLoss: ${Number(valid.logLoss.toFixed(6))},
     brier: ${Number(valid.brier.toFixed(6))},
@@ -641,6 +790,11 @@ let cached = null;
 export function roundParamVector() {
   if (!cached) cached = fromNamed(ROUND_MODEL_PARAMS.values);
   return cached;
+}
+
+/** The fitted per-phase output curve, for predictRoundCalibrated. */
+export function roundCalibration() {
+  return ROUND_MODEL_PARAMS.calibration;
 }
 `;
   await fs.writeFile(OUT, source, 'utf8');

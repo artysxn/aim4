@@ -19,15 +19,19 @@ import { FLAG_ALIVE } from '../shared/tickFormat.js';
 import { pointInPiece } from '../zones/zoneGeom.js';
 import { bombSiteCenters, sanitizeBombSites } from '../zones/bombSites.js';
 import { keyZonesFor } from '../zones/keyZones.js';
+import { pathDistanceField } from '../zones/pathDistance.js';
 import { DEFUSE_KIT_DEADLINE, DEFUSE_NO_KIT_DEADLINE } from '../coach/winProbability.js';
 
 /**
  * Ground speed used to turn a distance into a time, world units per second.
  *
- * Deliberately below the 250 a knife-out sprint reaches. A player crossing a
- * map to defuse is holding a rifle, taking corners, and probably checking
- * angles on the way; assuming a straight-line sprint would make the model think
- * defuses are reachable that in practice are not.
+ * Deliberately below the 250 a knife-out sprint reaches: a player crossing a
+ * map to defuse is holding a rifle and probably checking angles on the way.
+ *
+ * This used to be carrying a second job. When distance was a straight line
+ * through walls, the low speed was also standing in for the detour the line
+ * ignored. Distance is now measured on the walkable raster, so the geometry
+ * pays for itself and this is only the behavioural discount it claims to be.
  */
 export const APPROACH_SPEED = 200;
 
@@ -127,6 +131,7 @@ export function bombRaceAt({
   states,
   tick,
   network,
+  mapCode = '',
   deadIds,
   teamSides,
   bombSecondsLeft,
@@ -153,11 +158,21 @@ export function bombRaceAt({
   const target = bombTarget({ meta, tick, network, tAlive: t });
   if (!target) return empty;
 
+  // Distance on foot where the walkable raster is available, straight line
+  // where it is not. The difference is not cosmetic: a straight line through a
+  // wall makes a defuse look reachable that in practice cannot be started, and
+  // that is exactly the situation the defuse slack term exists to catch.
+  const field = mapCode ? pathDistanceField(mapCode, target.x, target.y) : null;
+  const distTo = (state) => {
+    const walked = field?.distanceTo(state.x, state.y);
+    return Number.isFinite(walked) ? walked : dist2d(state, target);
+  };
+
   const nearest = (list) => {
     let bestD = Infinity;
     let bestSlot = -1;
     for (const e of list) {
-      const d = dist2d(e.state, target);
+      const d = distTo(e.state);
       if (d < bestD) {
         bestD = d;
         bestSlot = e.player.slot;

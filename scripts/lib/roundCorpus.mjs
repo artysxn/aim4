@@ -17,7 +17,16 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const CACHE_DIR = path.join(__dirname, '../round-cache');
-export const FEATURE_VERSION = 1;
+/**
+ * 2: bomb geometry, site occupancy, key zone possession and defuse feasibility.
+ * 3: bomb distances measured on foot over the walkable raster instead of as
+ *    straight lines through walls.
+ *
+ * The cache is keyed by this, so an older extraction is simply ignored rather
+ * than silently fed to a model that now expects different numbers in the same
+ * fields.
+ */
+export const FEATURE_VERSION = 3;
 
 /** Nuke has no painted vision geometry and two floors a flat test cannot split. */
 export const SKIP_MAPS = ['NUK'];
@@ -45,7 +54,17 @@ export function encodeSnapshot(s) {
     sl: r3(f.secondsLeft),
     pl: f.planted ? 1 : 0,
     bl: r3(f.bombSecondsLeft),
-    kt: f.ctHasKit ? 1 : 0
+    kt: f.ctHasKit ? 1 : 0,
+    // --- v2: the bomb and the ground around it ------------------------------
+    be: r3(f.bombDuelEdge),
+    cb: r3(f.ctBombDist),
+    tb: r3(f.tBombDist),
+    bd: r3(f.bombDistDiff),
+    ci: f.ctInSite,
+    ti: f.tInSite,
+    kz: r3(f.keyZoneNet),
+    ds: r3(f.defuseSlack),
+    di: f.defuseImpossible ? 1 : 0
   };
 }
 
@@ -70,7 +89,16 @@ export function decodeSnapshot(e) {
       secondsLeft: e.sl,
       planted: e.pl === 1,
       bombSecondsLeft: e.bl,
-      ctHasKit: e.kt === 1
+      ctHasKit: e.kt === 1,
+      bombDuelEdge: e.be || 0,
+      ctBombDist: e.cb || 0,
+      tBombDist: e.tb || 0,
+      bombDistDiff: e.bd || 0,
+      ctInSite: e.ci || 0,
+      tInSite: e.ti || 0,
+      keyZoneNet: e.kz || 0,
+      defuseSlack: e.ds || 0,
+      defuseImpossible: e.di === 1
     }
   };
 }

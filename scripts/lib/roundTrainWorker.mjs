@@ -13,6 +13,7 @@
 import { parentPort, workerData } from 'node:worker_threads';
 
 import { predictRound } from '../../src/replays/rounds/roundModel.js';
+import { MAN_BUCKET_COUNT, manBucketOf } from '../../src/replays/rounds/roundBuckets.js';
 import { loadRoundCorpus } from './roundCorpus.mjs';
 
 const { shard, shardCount, limit, holdout } = workerData;
@@ -28,13 +29,27 @@ for (const r of rounds) {
   for (const s of r.samples) {
     // Round-robin so every shard sees a similar mix of maps and phases.
     if (seen++ % shardCount !== shard) continue;
-    rows.push({ f: s.f, y: s.y, w: r.weight, map: r.map });
+    rows.push({
+      f: s.f,
+      y: s.y,
+      w: r.weight,
+      map: r.map,
+      mb: manBucketOf(s.f.ctAlive, s.f.tAlive)
+    });
   }
 }
 
 const EPS = 1e-6;
+/** loss, weight, then predSum/ySum/weight for each man bucket. */
+export const SHARD_STRIDE = 2 + MAN_BUCKET_COUNT * 3;
 
-function shardLoss(v) {
+/**
+ * Log loss for this shard, plus the per-man-bucket sums the trainer needs to
+ * hold the model to the real 5v4 / 5v3 / 5v2 / 5v1 win rates. The sums have to
+ * come back rather than the finished calibration error, because a bucket's mean
+ * only means anything once every shard's share of it has been added up.
+ */
+function shardLoss(v, out, base) {
   let loss = 0;
   let weight = 0;
   for (const row of rows) {
@@ -42,8 +57,13 @@ function shardLoss(v) {
     const q = p < EPS ? EPS : p > 1 - EPS ? 1 - EPS : p;
     loss -= (row.y * Math.log(q) + (1 - row.y) * Math.log(1 - q)) * row.w;
     weight += row.w;
+    const b = base + 2 + row.mb * 3;
+    out[b] += p * row.w;
+    out[b + 1] += row.y * row.w;
+    out[b + 2] += row.w;
   }
-  return { loss, weight };
+  out[base] = loss;
+  out[base + 1] = weight;
 }
 
 parentPort.postMessage({ ready: true, rows: rows.length });
@@ -53,13 +73,11 @@ parentPort.on('message', (msg) => {
     const flat = new Float64Array(msg.buffer);
     const n = msg.count;
     const width = flat.length / n;
-    const out = new Float64Array(n * 2);
+    const out = new Float64Array(n * SHARD_STRIDE);
     const v = new Float64Array(width);
     for (let i = 0; i < n; i++) {
       v.set(flat.subarray(i * width, (i + 1) * width));
-      const { loss, weight } = shardLoss(v);
-      out[i * 2] = loss;
-      out[i * 2 + 1] = weight;
+      shardLoss(v, out, i * SHARD_STRIDE);
     }
     parentPort.postMessage({ id: msg.id, buffer: out.buffer }, [out.buffer]);
     return;

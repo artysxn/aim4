@@ -277,6 +277,7 @@ export function roundFeaturesAt({
     states,
     tick,
     network,
+    mapCode,
     deadIds,
     teamSides,
     bombSecondsLeft,

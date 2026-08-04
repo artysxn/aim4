@@ -35,6 +35,15 @@ function f(over = {}) {
     planted: false,
     bombSecondsLeft: 0,
     ctHasKit: false,
+    bombDuelEdge: 0,
+    ctBombDist: 0.5,
+    tBombDist: 0.5,
+    bombDistDiff: 0,
+    ctInSite: 0,
+    tInSite: 0,
+    keyZoneNet: 0,
+    defuseSlack: 0,
+    defuseImpossible: false,
     ...over
   };
 }
@@ -64,6 +73,20 @@ for (const v of [initialVector(), roundParamVector()]) {
       predictRound(f({ tAlive: 4, tEff: 4 }), v, 'MIR'),
     'two men up should beat one man up'
   );
+  // Monotone the whole way out and symmetric about even, whatever shape the
+  // power puts on the curve.
+  for (let n = 4; n >= 1; n--) {
+    assert(
+      predictRound(f({ tAlive: n - 1, tEff: n - 1 }), v, 'MIR') >
+        predictRound(f({ tAlive: n, tEff: n }), v, 'MIR'),
+      `5v${n - 1} should beat 5v${n} for CT`
+    );
+    assert(
+      predictRound(f({ ctAlive: n - 1, ctEff: n - 1 }), v, 'MIR') <
+        predictRound(f({ ctAlive: n, ctEff: n }), v, 'MIR'),
+      `${n - 1}v5 should be worse than ${n}v5 for CT`
+    );
+  }
 
   // Health beyond the body count.
   assert(predictRound(f({ tEff: 3.5 }), v, 'MIR') > even, 'hurting the T side should help CT');
@@ -108,6 +131,69 @@ for (const v of [initialVector(), roundParamVector()]) {
   assert(
     close(predictRound(f({ bombSecondsLeft: 3 }), v, 'MIR'), predictRound(f(), v, 'MIR')),
     'the bomb timer must do nothing before a plant'
+  );
+
+  // --- the race for the bomb ----------------------------------------------
+  // Everything about defusing is meaningless until there is something to
+  // defuse, so none of it may move the number before a plant.
+  assert(
+    close(
+      predictRound(
+        f({ bombDistDiff: 1, bombDuelEdge: 1, defuseSlack: 15, defuseImpossible: true }),
+        v,
+        'MIR'
+      ),
+      predictRound(f(), v, 'MIR')
+    ),
+    'the bomb race must do nothing before a plant'
+  );
+
+  // A plant with the clock still open, as the baseline for the terms below.
+  const race = f({ planted: true, bombSecondsLeft: 35, secondsLeft: 0, defuseSlack: 10 });
+  const raceP = predictRound(race, v, 'MIR');
+  assert(
+    predictRound({ ...race, bombDuelEdge: 1 }, v, 'MIR') >= raceP,
+    'winning the fight over the bomb should not hurt CT'
+  );
+  assert(
+    predictRound({ ...race, bombDuelEdge: -1 }, v, 'MIR') <= raceP,
+    'losing the fight over the bomb should not help CT'
+  );
+  assert(
+    predictRound({ ...race, defuseSlack: 20 }, v, 'MIR') >= raceP,
+    'more spare seconds should not hurt CT'
+  );
+  assert(
+    predictRound({ ...race, defuseSlack: -5 }, v, 'MIR') <= raceP,
+    'running short of the defuse should not help CT'
+  );
+
+  // The whole point of the term: a defuse that physically cannot happen. Five
+  // players cannot defuse faster than one, so a full CT side with the bomb
+  // ticking out of reach must still read as a round already lost, and must read
+  // worse than the same five players with time to work with.
+  const doomed = f({
+    planted: true,
+    bombSecondsLeft: 9.9,
+    secondsLeft: 0,
+    ctHasKit: false,
+    ctAlive: 5,
+    tAlive: 0,
+    ctEff: 5,
+    tEff: 0,
+    defuseSlack: -12,
+    defuseImpossible: true,
+    ctBombDist: 1.6,
+    tBombDist: 0
+  });
+  const reachable = { ...doomed, bombSecondsLeft: 40, defuseSlack: 15, defuseImpossible: false };
+  assert(
+    predictRound(doomed, v, 'MIR') < predictRound(reachable, v, 'MIR'),
+    'an impossible defuse must read worse than a reachable one at the same 5v0'
+  );
+  assert(
+    predictRound(doomed, v, 'MIR') < predictRound({ ...doomed, defuseImpossible: false }, v, 'MIR'),
+    'the impossible-defuse term must cost CT on its own'
   );
 }
 
