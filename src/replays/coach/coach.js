@@ -36,6 +36,7 @@ import { coachCategory, coachText } from './coachMessages.js';
 import { findUtilityFlags } from './utilityMistakes.js';
 import { findShotFlags } from './shotMistakes.js';
 import { findDuelFlags } from './duelMistakes.js';
+import { findTacticalFlags } from './tacticalMistakes.js';
 import {
   alivePositionsBySide,
   sitePresenceAdvantage
@@ -1019,6 +1020,14 @@ export function analyseRound({
     })) {
       flags.push(f);
     }
+  } catch {
+    /* same */
+  }
+
+  // Position, timing and geometry rules. Same map dependency as the duel rules,
+  // so they stay quiet for the same reasons when it is not loaded.
+  try {
+    for (const f of findTacticalFlags({ ...passThree, network, track })) flags.push(f);
   } catch {
     /* same */
   }
