@@ -17,6 +17,7 @@ import {
   fetchStatus,
   fetchUploadBatch,
   findRounds,
+  formatApiError,
   renameDemoTeams,
   reparseDemo,
   savePlaylist,
@@ -43,7 +44,7 @@ import { createAnalyticsPanel } from '../replays/analytics/analyticsPanel.js';
 import { createChartsPanel } from '../replays/charts/chartsPanel.js';
 import commentsIcon from '../icons/demos_comments.svg?raw';
 import bookmarkIcon from '../icons/demos_bookmarks_added.svg?raw';
-import { spinnerHtml } from '../lib/spinner.js';
+import { spinnerHtml, watchSlowLoad } from '../lib/spinner.js';
 
 const POLL_MS = 1500;
 
@@ -3027,11 +3028,29 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   }
 
   async function refreshOnce() {
+    const showLibraryChrome = subpage === 'library' || !subpage;
+    const cancelSlow =
+      showLibraryChrome && filtersEl && resultEl
+        ? (() => {
+            if (!filtersEl.innerHTML.trim()) filtersEl.innerHTML = spinnerHtml();
+            if (!resultEl.innerHTML.trim()) resultEl.innerHTML = spinnerHtml('Loading demos…');
+            const a = watchSlowLoad(filtersEl);
+            const b = watchSlowLoad(resultEl, {
+              message:
+                'Still loading demos after 4s. The API may be down, starting, or blocked. Check the server console and retry.'
+            });
+            return () => {
+              a();
+              b();
+            };
+          })()
+        : () => {};
     try {
       const [status, list] = await Promise.all([
         fetchStatus(),
         fetchDemos({ limit: libraryLimit, offset: 0 })
       ]);
+      cancelSlow();
       setLocked(false);
       if (status.limits?.maxUploadBytes) maxUploadBytes = status.limits.maxUploadBytes;
       renderCapabilities(status);
@@ -3055,11 +3074,22 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       renderMine();
       await runQuery();
     } catch (err) {
+      cancelSlow();
       setLocked(false);
-      if (resultEl) {
-        resultEl.innerHTML = `<p class="view-empty">Could not reach the replay service. ${escapeHtml(
-          err.message
-        )}</p>`;
+      const msg = formatApiError(err).message || 'Could not reach the replay service.';
+      setStatus(msg, true);
+      // First paint / empty library: surface the error in the panels. A later
+      // poll failure keeps the last good list and only updates the status line.
+      const blank = !demos.length;
+      if (blank && filtersEl) {
+        filtersEl.innerHTML = `<p class="view-empty">${escapeHtml(msg)}</p>
+          <button type="button" class="btn btn-sm" data-rp-retry-load>Retry</button>`;
+        filtersEl.querySelector('[data-rp-retry-load]')?.addEventListener('click', () => refresh());
+      }
+      if (blank && resultEl) {
+        resultEl.innerHTML = `<p class="view-empty">Could not load demos. ${escapeHtml(msg)}</p>
+          <button type="button" class="btn btn-sm" data-rp-retry-load>Retry</button>`;
+        resultEl.querySelector('[data-rp-retry-load]')?.addEventListener('click', () => refresh());
       }
     }
   }
@@ -3137,6 +3167,13 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       ) {
         stopPolling();
       } else {
+        // Paint loaders before the network wait so the page never sits blank.
+        if (page === 'library') {
+          if (filtersEl && !filtersEl.innerHTML.trim()) filtersEl.innerHTML = spinnerHtml();
+          if (resultEl && !resultEl.innerHTML.trim()) {
+            resultEl.innerHTML = spinnerHtml('Loading demos…');
+          }
+        }
         refresh();
         startPolling();
         // Uploads that were still parsing when the page went away: pick the

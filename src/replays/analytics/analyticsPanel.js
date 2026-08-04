@@ -3,7 +3,7 @@
 // Layout: sticky filter sidebar + main results (stats, radar, LB, rounds).
 // ---------------------------------------------------------------------------
 
-import { fetchStats, consumeCapability } from '../api.js';
+import { fetchStats, consumeCapability, formatApiError } from '../api.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
 import { attachTips } from '../stats/statsTables.js';
@@ -22,7 +22,7 @@ import {
   saveShapes,
   newShapeId
 } from './shapeFilters.js';
-import { spinnerHtml } from '../../lib/spinner.js';
+import { spinnerHtml, watchSlowLoad } from '../../lib/spinner.js';
 import { renderUpgradeError } from '../../site/upgradeGate.js';
 
 const PHASE_OPTS = [
@@ -712,11 +712,19 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
   async function load() {
     const token = ++loadToken;
-    mainEl.innerHTML = spinnerHtml();
+    mainEl.innerHTML = spinnerHtml('Loading pattern finder…');
+    const cancelSlow = watchSlowLoad(mainEl, {
+      message:
+        'Still loading after 4s. The stats API may be rebuilding or unreachable (Failed to fetch).'
+    });
     try {
       await consumeCapability(CAP.ANALYTICS_PATTERN_FINDER);
-      if (token !== loadToken) return;
+      if (token !== loadToken) {
+        cancelSlow();
+        return;
+      }
       const data = await fetchStats(null);
+      cancelSlow();
       if (token !== loadToken) return;
       payload = data;
       players = listPlayers(payload);
@@ -728,6 +736,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       if (token !== loadToken) return;
       render();
     } catch (err) {
+      cancelSlow();
       if (token !== loadToken) return;
       // A spent allowance gets the real upgrade prompt, with a button. Telling
       // someone they are out of uses and giving them nothing to click is the
@@ -737,7 +746,10 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       if (prompt) {
         mainEl.appendChild(prompt);
       } else {
-        mainEl.innerHTML = `<p class="view-empty">${escapeHtml(err.message || String(err))}</p>`;
+        const msg = formatApiError(err).message || String(err);
+        mainEl.innerHTML = `<p class="view-empty">${escapeHtml(msg)}</p>
+          <button type="button" class="btn btn-sm" data-an-retry>Retry</button>`;
+        mainEl.querySelector('[data-an-retry]')?.addEventListener('click', () => load());
       }
     }
   }

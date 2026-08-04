@@ -6,7 +6,7 @@
 // that is a re-aggregation in memory. Nothing here re-reads a round.
 // ---------------------------------------------------------------------------
 
-import { fetchStats } from '../api.js';
+import { fetchStats, formatApiError } from '../api.js';
 import {
   attachPlayerRoles,
   payloadHasRoles,
@@ -39,7 +39,7 @@ import {
   teamMatchColumns,
   statsTableHtml
 } from './statsTables.js';
-import { spinnerHtml } from '../../lib/spinner.js';
+import { spinnerHtml, watchSlowLoad } from '../../lib/spinner.js';
 
 /**
  * @param {{
@@ -719,7 +719,12 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
     scope = next;
     lockedTeamName = String(next.teamName || '').trim();
     scopeEl.textContent = next.title || '';
-    bodyEl.innerHTML = spinnerHtml();
+    bodyEl.innerHTML = spinnerHtml('Loading database…');
+    filtersEl.innerHTML = '';
+    const cancelSlow = watchSlowLoad(bodyEl, {
+      message:
+        'Still loading the database after 4s. Stats indexes may be rebuilding, or the API may be unreachable (Failed to fetch).'
+    });
     filter.maps = Array.isArray(next.maps) ? [...next.maps] : [];
     filter.side = '';
     filter.econ = null;
@@ -760,6 +765,7 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
     notifyDetail();
     try {
       const res = await fetchStats(next.demos || null);
+      cancelSlow();
       if (token !== loadToken) return;
       payload = res;
       const rounds = (res.demos || []).reduce((n, d) => n + (d.rounds?.length || 0), 0);
@@ -771,9 +777,13 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
       }
       render();
     } catch (err) {
+      cancelSlow();
       if (token !== loadToken) return;
       filtersEl.innerHTML = '';
-      bodyEl.innerHTML = `<p class="view-empty">${escapeHtml(err.message || 'Could not load stats.')}</p>`;
+      const msg = formatApiError(err).message || 'Could not load stats.';
+      bodyEl.innerHTML = `<p class="view-empty">${escapeHtml(msg)}</p>
+        <button type="button" class="btn btn-sm" data-st-retry>Retry</button>`;
+      bodyEl.querySelector('[data-st-retry]')?.addEventListener('click', () => load(scope));
     }
   }
 

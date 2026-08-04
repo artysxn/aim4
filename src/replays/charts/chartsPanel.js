@@ -8,7 +8,7 @@
 // the cached facts in memory; nothing here refetches.
 // ---------------------------------------------------------------------------
 
-import { fetchStats, consumeCapability } from '../api.js';
+import { fetchStats, consumeCapability, formatApiError } from '../api.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { ECONOMIES, MAPS } from '../shared/roundId.js';
 import {
@@ -30,7 +30,7 @@ import {
 } from './chartFields.js';
 import { computeChart, correlationWords, filterWords } from './chartData.js';
 import { renderChart } from './chartRender.js';
-import { spinnerHtml } from '../../lib/spinner.js';
+import { spinnerHtml, watchSlowLoad } from '../../lib/spinner.js';
 import { renderUpgradeError } from '../../site/upgradeGate.js';
 
 /** Match radar viewer: wheel zoom + left/middle drag pan when zoomed in. */
@@ -957,13 +957,21 @@ export function createChartsPanel({ escapeHtml }) {
 
   async function load(scope = {}) {
     const token = ++loadToken;
-    canvasEl.innerHTML = spinnerHtml();
+    canvasEl.innerHTML = spinnerHtml('Loading charts…');
+    const cancelSlow = watchSlowLoad(canvasEl, {
+      message:
+        'Still loading charts after 4s. The stats API may be rebuilding or unreachable (Failed to fetch).'
+    });
     try {
       // Spending happens when the chart actually loads data, not when the route
       // opens. Free gets three of these per rolling day.
       await consumeCapability(CAP.ANALYTICS_CHARTS);
-      if (token !== loadToken) return;
+      if (token !== loadToken) {
+        cancelSlow();
+        return;
+      }
       const payload = await fetchStats(scope.demos || null);
+      cancelSlow();
       if (token !== loadToken) return;
       facts = buildFacts(payload);
       if (!facts.playerFacts.length) {
@@ -979,6 +987,7 @@ export function createChartsPanel({ escapeHtml }) {
       renderSide();
       renderCanvas();
     } catch (err) {
+      cancelSlow();
       if (token !== loadToken) return;
       sideEl.innerHTML = '';
       // Spent allowance gets the upgrade prompt with its button, not a
@@ -988,9 +997,10 @@ export function createChartsPanel({ escapeHtml }) {
       if (prompt) {
         canvasEl.appendChild(prompt);
       } else {
-        canvasEl.innerHTML = `<p class="view-empty">${escapeHtml(
-          err.message || 'Could not load stats.'
-        )}</p>`;
+        const msg = formatApiError(err).message || 'Could not load stats.';
+        canvasEl.innerHTML = `<p class="view-empty">${escapeHtml(msg)}</p>
+          <button type="button" class="btn btn-sm" data-ch-retry>Retry</button>`;
+        canvasEl.querySelector('[data-ch-retry]')?.addEventListener('click', () => load(scope));
       }
     }
   }

@@ -62,6 +62,37 @@ async function headers(extra = {}) {
   return token ? { ...base, Authorization: `Bearer ${token}` } : base;
 }
 
+/**
+ * Turn opaque browser network failures into something a person can act on.
+ * "Failed to fetch" usually means the API host is down, blocked, or CORS-broken.
+ */
+export function formatApiError(err) {
+  if (!err) return new Error('Request failed.');
+  if (err.status) return err;
+  const raw = String(err.message || err || 'Request failed.');
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(raw)) {
+    const next = new Error(
+      'Could not reach the server (Failed to fetch). Check that the API is running and your connection is up, then retry.'
+    );
+    next.cause = err;
+    return next;
+  }
+  if (/abort(ed)?|timed?\s*out/i.test(raw)) {
+    const next = new Error('The request timed out. The server may be busy — retry in a moment.');
+    next.cause = err;
+    return next;
+  }
+  return err instanceof Error ? err : new Error(raw);
+}
+
+async function safeFetch(url, init) {
+  try {
+    return await globalThis.fetch(url, init);
+  } catch (err) {
+    throw formatApiError(err);
+  }
+}
+
 async function asJson(res) {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -87,7 +118,7 @@ async function asJson(res) {
  * @param {string} capability  a key from shared/entitlements/keys.js
  */
 export async function consumeCapability(capability) {
-  const res = await fetch(`${API_BASE}/api/replays/consume`, {
+  const res = await safeFetch(`${API_BASE}/api/replays/consume`, {
     method: 'POST',
     headers: await headers({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ capability })
@@ -103,7 +134,7 @@ export async function consumeCapability(capability) {
 }
 
 export async function fetchStatus() {
-  return asJson(await fetch(`${API_BASE}/api/replays/status`, { headers: await headers() }));
+  return asJson(await safeFetch(`${API_BASE}/api/replays/status`, { headers: await headers() }));
 }
 
 /**
@@ -124,29 +155,29 @@ export async function fetchDemos(opts = {}) {
     if (Number.isFinite(opts.offset) && opts.offset > 0) params.set('offset', String(opts.offset));
   }
   const q = params.toString() ? `?${params}` : '';
-  return asJson(await fetch(`${API_BASE}/api/replays/demos${q}`, { headers: await headers() }));
+  return asJson(await safeFetch(`${API_BASE}/api/replays/demos${q}`, { headers: await headers() }));
 }
 
 export async function fetchDemo(id) {
-  return asJson(await fetch(`${API_BASE}/api/replays/demos/${id}`, { headers: await headers() }));
+  return asJson(await safeFetch(`${API_BASE}/api/replays/demos/${id}`, { headers: await headers() }));
 }
 
 export async function deleteDemo(id) {
   return asJson(
-    await fetch(`${API_BASE}/api/replays/demos/${id}`, { method: 'DELETE', headers: await headers() })
+    await safeFetch(`${API_BASE}/api/replays/demos/${id}`, { method: 'DELETE', headers: await headers() })
   );
 }
 
 export async function reparseDemo(id) {
   return asJson(
-    await fetch(`${API_BASE}/api/replays/demos/${id}/parse`, { method: 'POST', headers: await headers() })
+    await safeFetch(`${API_BASE}/api/replays/demos/${id}/parse`, { method: 'POST', headers: await headers() })
   );
 }
 
 /** Set display names for both teams after import (ids / round files stay put). */
 export async function renameDemoTeams(id, team1, team2) {
   return asJson(
-    await fetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/teams`, {
+    await safeFetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/teams`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ team1, team2 })
@@ -157,7 +188,7 @@ export async function renameDemoTeams(id, team1, team2) {
 /** Change who may browse a demo: public | unlisted | private. */
 export async function setDemoVisibility(id, visibility) {
   return asJson(
-    await fetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/visibility`, {
+    await safeFetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/visibility`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ visibility })
@@ -243,7 +274,7 @@ export async function uploadDemo(file, onProgress, visibility = 'public') {
  */
 export async function fetchUploadBatch(batchId) {
   return asJson(
-    await fetch(`${API_BASE}/api/replays/uploads/${encodeURIComponent(batchId)}`, {
+    await safeFetch(`${API_BASE}/api/replays/uploads/${encodeURIComponent(batchId)}`, {
       headers: await headers()
     })
   );
@@ -291,13 +322,13 @@ export async function findRounds(query = {}, limit = 2000) {
   put('search', query.search);
   put('limit', limit);
   return asJson(
-    await fetch(`${API_BASE}/api/replays/rounds?${params}`, { headers: await headers() })
+    await safeFetch(`${API_BASE}/api/replays/rounds?${params}`, { headers: await headers() })
   );
 }
 
 export async function fetchRoundMeta(file) {
   const body = await asJson(
-    await fetch(`${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}`, {
+    await safeFetch(`${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}`, {
       headers: await headers()
     })
   );
@@ -324,7 +355,7 @@ export async function saveRoundNotes(file, notes) {
     updatedAt: Number(n?.updatedAt) || Date.now()
   }));
   return asJson(
-    await fetch(`${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}/note`, {
+    await safeFetch(`${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}/note`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ notes: list })
@@ -335,7 +366,7 @@ export async function saveRoundNotes(file, notes) {
 /** @deprecated use saveRoundNotes */
 export async function saveRoundNote(file, note) {
   return asJson(
-    await fetch(`${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}/note`, {
+    await safeFetch(`${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}/note`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ note: String(note ?? '').slice(0, NOTE_MAX) })
@@ -354,7 +385,7 @@ export async function saveRoundNote(file, note) {
  */
 export async function fetchStats(demoIds = null) {
   const q = demoIds?.length ? `?demos=${encodeURIComponent(demoIds.join(','))}` : '';
-  return asJson(await fetch(`${API_BASE}/api/replays/stats${q}`, { headers: await headers() }));
+  return asJson(await safeFetch(`${API_BASE}/api/replays/stats${q}`, { headers: await headers() }));
 }
 
 /**
@@ -364,7 +395,7 @@ export async function fetchStats(demoIds = null) {
 export async function refreshStats(opts = {}) {
   const q = opts.force ? '?force=1' : '';
   return asJson(
-    await fetch(`${API_BASE}/api/replays/stats/refresh${q}`, {
+    await safeFetch(`${API_BASE}/api/replays/stats/refresh${q}`, {
       method: 'POST',
       headers: await headers()
     })
@@ -373,7 +404,7 @@ export async function refreshStats(opts = {}) {
 
 export async function fetchPlaylists() {
   const body = await asJson(
-    await fetch(`${API_BASE}/api/replays/playlists`, { headers: await headers() })
+    await safeFetch(`${API_BASE}/api/replays/playlists`, { headers: await headers() })
   );
   return body.playlists || [];
 }
@@ -386,7 +417,7 @@ export async function fetchPlaylists() {
  */
 export async function savePlaylist(playlist) {
   const body = await asJson(
-    await fetch(`${API_BASE}/api/replays/playlists`, {
+    await safeFetch(`${API_BASE}/api/replays/playlists`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(playlist)
@@ -397,7 +428,7 @@ export async function savePlaylist(playlist) {
 
 export async function deletePlaylist(id) {
   const body = await asJson(
-    await fetch(`${API_BASE}/api/replays/playlists/${encodeURIComponent(id)}`, {
+    await safeFetch(`${API_BASE}/api/replays/playlists/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: await headers()
     })
@@ -420,7 +451,7 @@ export async function deletePlaylist(id) {
 export async function fetchRoundTicks(file, stride = 1) {
   const packed = stride === 1;
   const qs = `stride=${stride}${packed ? '&fmt=packed' : ''}`;
-  const res = await fetch(
+  const res = await safeFetch(
     `${API_BASE}/api/replays/rounds/${encodeURIComponent(file)}/ticks?${qs}`,
     { headers: await headers() }
   );
@@ -436,7 +467,7 @@ export async function fetchRoundTicks(file, stride = 1) {
 
 export async function fetchZoneMaps() {
   const data = await asJson(
-    await fetch(`${API_BASE}/api/replays/zones`, { headers: await headers() })
+    await safeFetch(`${API_BASE}/api/replays/zones`, { headers: await headers() })
   );
   return data.maps || [];
 }
@@ -444,7 +475,7 @@ export async function fetchZoneMaps() {
 /** @param {string} map  map code (MIR, INF, …) */
 export async function fetchZones(map) {
   const data = await asJson(
-    await fetch(`${API_BASE}/api/replays/zones/${encodeURIComponent(map)}`, {
+    await safeFetch(`${API_BASE}/api/replays/zones/${encodeURIComponent(map)}`, {
       headers: await headers()
     })
   );
@@ -464,7 +495,7 @@ export async function fetchZones(map) {
  */
 export async function saveZones(map, network) {
   const data = await asJson(
-    await fetch(`${API_BASE}/api/replays/zones/${encodeURIComponent(map)}`, {
+    await safeFetch(`${API_BASE}/api/replays/zones/${encodeURIComponent(map)}`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
@@ -487,14 +518,14 @@ export async function saveZones(map, network) {
 /** Every team the signed-in account belongs to, owned team first. */
 export async function fetchTeams() {
   const body = await asJson(
-    await fetch(`${API_BASE}/api/teams`, { headers: await headers() })
+    await safeFetch(`${API_BASE}/api/teams`, { headers: await headers() })
   );
   return body.teams || [];
 }
 
 export async function createTeam(name) {
   const body = await asJson(
-    await fetch(`${API_BASE}/api/teams`, {
+    await safeFetch(`${API_BASE}/api/teams`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ name })
@@ -506,7 +537,7 @@ export async function createTeam(name) {
 /** Readable signed out, so /i/<code> can name the team before asking to sign in. */
 export async function fetchInvite(code) {
   const body = await asJson(
-    await fetch(`${API_BASE}/api/teams/invite/${encodeURIComponent(code)}`, {
+    await safeFetch(`${API_BASE}/api/teams/invite/${encodeURIComponent(code)}`, {
       headers: await headers()
     })
   );
@@ -515,7 +546,7 @@ export async function fetchInvite(code) {
 
 export async function joinTeam(code) {
   return asJson(
-    await fetch(`${API_BASE}/api/teams/join`, {
+    await safeFetch(`${API_BASE}/api/teams/join`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ code })
@@ -525,7 +556,7 @@ export async function joinTeam(code) {
 
 export async function rollTeamInvite(teamId) {
   return asJson(
-    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/invite`, {
+    await safeFetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/invite`, {
       method: 'POST',
       headers: await headers()
     })
@@ -534,7 +565,7 @@ export async function rollTeamInvite(teamId) {
 
 export async function leaveTeam(teamId) {
   return asJson(
-    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/leave`, {
+    await safeFetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/leave`, {
       method: 'POST',
       headers: await headers()
     })
@@ -547,7 +578,7 @@ export async function leaveTeam(teamId) {
  */
 export async function teamMemberAction(teamId, memberId, action, extra = {}) {
   return asJson(
-    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/members`, {
+    await safeFetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/members`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ memberId, action, ...extra })
@@ -568,7 +599,7 @@ export async function mergeTeamMember(teamId, memberId, dummyId) {
 /** @param {'T'|'CT'} side */
 export async function fetchTeamAutocoach(teamId) {
   return asJson(
-    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/autocoach`, {
+    await safeFetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/autocoach`, {
       headers: await headers()
     })
   );
@@ -576,7 +607,7 @@ export async function fetchTeamAutocoach(teamId) {
 
 export async function markTeamAutocoachDemo(teamId, demoId, side) {
   return asJson(
-    await fetch(
+    await safeFetch(
       `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/autocoach/demos/${encodeURIComponent(
         demoId
       )}`,
@@ -592,7 +623,7 @@ export async function markTeamAutocoachDemo(teamId, demoId, side) {
 /** Clear Autocoach notes + registry for selected demos, or all when `{ all: true }`. */
 export async function resetTeamAutocoachDemos(teamId, { demoIds, all = false } = {}) {
   return asJson(
-    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/autocoach/reset`, {
+    await safeFetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/autocoach/reset`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(all ? { all: true } : { demoIds: demoIds || [] })
@@ -602,7 +633,7 @@ export async function resetTeamAutocoachDemos(teamId, { demoIds, all = false } =
 
 export async function setTeamPosition(teamId, memberId, side, map, position) {
   return asJson(
-    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/positions`, {
+    await safeFetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/positions`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ memberId, side, map, position })
@@ -612,7 +643,7 @@ export async function setTeamPosition(teamId, memberId, side, map, position) {
 
 export async function fetchTeamDocument(teamId, docId) {
   const body = await asJson(
-    await fetch(
+    await safeFetch(
       `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/documents/${encodeURIComponent(docId)}`,
       { headers: await headers() }
     )
@@ -623,7 +654,7 @@ export async function fetchTeamDocument(teamId, docId) {
 /** @param {{id?: string, title?: string, html?: string}} doc */
 export async function saveTeamDocument(teamId, doc) {
   const body = await asJson(
-    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/documents`, {
+    await safeFetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/documents`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(doc)
@@ -634,7 +665,7 @@ export async function saveTeamDocument(teamId, doc) {
 
 export async function deleteTeamDocument(teamId, docId) {
   return asJson(
-    await fetch(
+    await safeFetch(
       `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/documents/${encodeURIComponent(docId)}`,
       { method: 'DELETE', headers: await headers() }
     )
@@ -644,7 +675,7 @@ export async function deleteTeamDocument(teamId, docId) {
 /** @param {object} strategy */
 export async function saveTeamStrategy(teamId, strategy) {
   return asJson(
-    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/stratbook`, {
+    await safeFetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/stratbook`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(strategy)
@@ -654,7 +685,7 @@ export async function saveTeamStrategy(teamId, strategy) {
 
 export async function deleteTeamStrategy(teamId, strategyId) {
   return asJson(
-    await fetch(
+    await safeFetch(
       `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/stratbook/${encodeURIComponent(strategyId)}`,
       { method: 'DELETE', headers: await headers() }
     )
@@ -668,7 +699,7 @@ export async function deleteTeamStrategy(teamId, strategyId) {
 /** Real spawn points for a map, sampled from demos the caller may read. */
 export async function fetchSpawns(map) {
   const body = await asJson(
-    await fetch(`${API_BASE}/api/replays/spawns?map=${encodeURIComponent(map)}`, {
+    await safeFetch(`${API_BASE}/api/replays/spawns?map=${encodeURIComponent(map)}`, {
       headers: await headers()
     })
   );
@@ -678,7 +709,7 @@ export async function fetchSpawns(map) {
 /** Index entries only: the list view never downloads a round body. */
 export async function fetchStrategyRounds(teamId) {
   const body = await asJson(
-    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/replays2d`, {
+    await safeFetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/replays2d`, {
       headers: await headers()
     })
   );
@@ -687,7 +718,7 @@ export async function fetchStrategyRounds(teamId) {
 
 export async function fetchStrategyRound(teamId, id) {
   return asJson(
-    await fetch(
+    await safeFetch(
       `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/replays2d/${encodeURIComponent(id)}`,
       { headers: await headers() }
     )
@@ -697,7 +728,7 @@ export async function fetchStrategyRound(teamId, id) {
 /** @param {{id?: string, name?: string, round: object}} payload */
 export async function saveStrategyRound(teamId, payload) {
   return asJson(
-    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/replays2d`, {
+    await safeFetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/replays2d`, {
       method: 'POST',
       headers: await headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload)
@@ -707,7 +738,7 @@ export async function saveStrategyRound(teamId, payload) {
 
 export async function deleteStrategyRound(teamId, id) {
   return asJson(
-    await fetch(
+    await safeFetch(
       `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/replays2d/${encodeURIComponent(id)}`,
       { method: 'DELETE', headers: await headers() }
     )
@@ -717,7 +748,7 @@ export async function deleteStrategyRound(teamId, id) {
 /** Open a shared round by its link code. Works signed out. */
 export async function fetchSharedStrategyRound(shareId) {
   return asJson(
-    await fetch(`${API_BASE}/api/teams/shared2d/${encodeURIComponent(shareId)}`, {
+    await safeFetch(`${API_BASE}/api/teams/shared2d/${encodeURIComponent(shareId)}`, {
       headers: await headers()
     })
   );
@@ -729,7 +760,7 @@ export async function fetchSharedStrategyRound(shareId) {
 
 export async function listDrawingBoards(teamId, map) {
   const body = await asJson(
-    await fetch(
+    await safeFetch(
       `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/drawing-boards/${encodeURIComponent(map)}`,
       { headers: await headers() }
     )
@@ -739,7 +770,7 @@ export async function listDrawingBoards(teamId, map) {
 
 export async function fetchDrawingBoard(teamId, map, boardId) {
   const body = await asJson(
-    await fetch(
+    await safeFetch(
       `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/drawing-boards/${encodeURIComponent(
         map
       )}/${encodeURIComponent(boardId)}`,
@@ -751,7 +782,7 @@ export async function fetchDrawingBoard(teamId, map, boardId) {
 
 export async function saveDrawingBoard(teamId, map, board) {
   const body = await asJson(
-    await fetch(
+    await safeFetch(
       `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/drawing-boards/${encodeURIComponent(map)}`,
       {
         method: 'POST',
@@ -765,7 +796,7 @@ export async function saveDrawingBoard(teamId, map, board) {
 
 export async function deleteDrawingBoard(teamId, map, boardId) {
   await asJson(
-    await fetch(
+    await safeFetch(
       `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/drawing-boards/${encodeURIComponent(
         map
       )}/${encodeURIComponent(boardId)}`,
@@ -776,7 +807,7 @@ export async function deleteDrawingBoard(teamId, map, boardId) {
 
 export async function fetchUtilityArchive(teamId, map) {
   const body = await asJson(
-    await fetch(
+    await safeFetch(
       `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/utility/${encodeURIComponent(map)}`,
       { headers: await headers() }
     )
@@ -786,7 +817,7 @@ export async function fetchUtilityArchive(teamId, map) {
 
 export async function saveUtilityArchive(teamId, map, archive) {
   const body = await asJson(
-    await fetch(
+    await safeFetch(
       `${API_BASE}/api/teams/${encodeURIComponent(teamId)}/utility/${encodeURIComponent(map)}`,
       {
         method: 'POST',
@@ -801,7 +832,7 @@ export async function saveUtilityArchive(teamId, map, archive) {
 /** Flat grenade index across all maps for stratbook `<!####>` links. */
 export async function fetchUtilityIndex(teamId) {
   const body = await asJson(
-    await fetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/utility`, {
+    await safeFetch(`${API_BASE}/api/teams/${encodeURIComponent(teamId)}/utility`, {
       headers: await headers()
     })
   );

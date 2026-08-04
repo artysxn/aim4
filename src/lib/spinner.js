@@ -57,3 +57,43 @@ function escapeHtml(s) {
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
   );
 }
+
+/** Default copy when a load is still running after SLOW_LOAD_MS. */
+export const SLOW_LOAD_MS = 4000;
+
+export const SLOW_LOAD_HINT =
+  'This is taking longer than usual. The API may be starting, rebuilding stats, or unreachable. Check the server and your connection.';
+
+/**
+ * After `delayMs`, append a hint under the first `.is-loading` in `host`
+ * (or replace `host` contents if it is the loader). Cleared via the return value.
+ *
+ * @param {ParentNode|null} host
+ * @param {{ delayMs?: number, message?: string }} [opts]
+ * @returns {() => void} cancel
+ */
+export function watchSlowLoad(host, opts = {}) {
+  if (!host) return () => {};
+  const delayMs = Number.isFinite(opts.delayMs) ? opts.delayMs : SLOW_LOAD_MS;
+  const message = opts.message || SLOW_LOAD_HINT;
+  const timer = globalThis.setTimeout?.(() => {
+    try {
+      if (typeof host.isConnected === 'boolean' && !host.isConnected) return;
+      const loading = host.querySelector?.('.is-loading') || host;
+      if (!loading || loading.querySelector?.('.load-slow-hint')) return;
+      const hint = document.createElement('p');
+      hint.className = 'view-empty load-slow-hint';
+      hint.textContent = message;
+      if (loading.classList?.contains('is-loading')) {
+        loading.insertAdjacentElement('afterend', hint);
+      } else {
+        loading.appendChild(hint);
+      }
+    } catch {
+      /* host may have been replaced */
+    }
+  }, delayMs);
+  return () => {
+    if (timer) globalThis.clearTimeout?.(timer);
+  };
+}

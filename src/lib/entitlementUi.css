@@ -37,6 +37,13 @@
   color: var(--muted);
   font-size: 14px;
 }
+.load-slow-hint {
+  margin: 0 0 12px;
+  padding: 0 12px 8px;
+  text-align: center;
+  max-width: 36rem;
+  margin-inline: auto;
+}
 .spinner {
   width: 18px;
   height: 18px;
