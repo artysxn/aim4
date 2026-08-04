@@ -48,6 +48,7 @@ import {
   resetZoneVisionCache
 } from '../zones/zoneOverlay.js';
 import { buildMapControlSeries } from '../zones/mapControl.js';
+import { RADAR_SIZE, worldToRadar } from './mapCalibration.js';
 import helmetSvg from '../../icons/helmet.svg?url';
 import kevlarSvg from '../../icons/kevlar.svg?url';
 import nokevlarSvg from '../../icons/nokevlar.svg?url';
@@ -72,6 +73,10 @@ import { spinnerHtml } from '../../lib/spinner.js';
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 5;
+/** Mild map zoom when jumping to a coach mistake. */
+const COACH_FOCUS_ZOOM = 2.15;
+/** View travel duration (ms). Quick, but ease-out so it does not feel snapped. */
+const COACH_FOCUS_MS = 300;
 
 const statsIconSvg =
   '<svg viewBox="0 -960 960 960" width="19" height="19" fill="currentColor" aria-hidden="true">' +
@@ -135,12 +140,23 @@ export function createTimelineViewer({
     </aside>
     <aside class="rv-coach-pick" id="rv-coach-pick" hidden>
       <div class="rv-coach-pick-head">
-        <span class="rv-coach-pick-title">Coach which team?</span>
+        <span class="rv-coach-pick-title" id="rv-coach-pick-title">Coach which team?</span>
         <button type="button" class="rp-btn-icon" id="rv-coach-pick-close" title="Cancel" aria-label="Cancel">✕</button>
       </div>
-      <p class="rv-coach-pick-hint">Mistakes are noted for one side only.</p>
-      <button type="button" class="rv-coach-pick-team" data-team="1" id="rv-coach-pick-t1">Team 1</button>
-      <button type="button" class="rv-coach-pick-team" data-team="2" id="rv-coach-pick-t2">Team 2</button>
+      <div id="rv-coach-pick-teams">
+        <p class="rv-coach-pick-hint">Mistakes are noted for one side only.</p>
+        <button type="button" class="rv-coach-pick-team" data-team="1" id="rv-coach-pick-t1">Team 1</button>
+        <button type="button" class="rv-coach-pick-team" data-team="2" id="rv-coach-pick-t2">Team 2</button>
+      </div>
+      <div id="rv-coach-pick-players" hidden>
+        <p class="rv-coach-pick-hint">Watch mistakes for</p>
+        <div class="rv-coach-pick-player-list" id="rv-coach-pick-player-list"></div>
+        <div class="rv-coach-pick-actions">
+          <button type="button" class="btn btn-sm" id="rv-coach-pick-back">Back</button>
+          <button type="button" class="btn btn-sm" id="rv-coach-pick-all">All</button>
+          <button type="button" class="btn btn-sm primary" id="rv-coach-pick-go">Continue</button>
+        </div>
+      </div>
     </aside>
     <aside class="rv-note-dock" id="rv-note-panel" hidden>
       <div class="rv-note-head" id="rv-note-head-list" hidden>
@@ -278,8 +294,15 @@ export function createTimelineViewer({
   const duelsBtn = el.querySelector('#rv-duels');
   const coachBtn = el.querySelector('#rv-coach');
   const coachPick = el.querySelector('#rv-coach-pick');
+  const coachPickTitle = el.querySelector('#rv-coach-pick-title');
+  const coachPickTeams = el.querySelector('#rv-coach-pick-teams');
+  const coachPickPlayers = el.querySelector('#rv-coach-pick-players');
+  const coachPickPlayerList = el.querySelector('#rv-coach-pick-player-list');
   const coachPickT1 = el.querySelector('#rv-coach-pick-t1');
   const coachPickT2 = el.querySelector('#rv-coach-pick-t2');
+  const coachPickBack = el.querySelector('#rv-coach-pick-back');
+  const coachPickAll = el.querySelector('#rv-coach-pick-all');
+  const coachPickGo = el.querySelector('#rv-coach-pick-go');
   const bookmarkBtn = el.querySelector('#rv-bookmark');
   const playlistPanel = el.querySelector('#rv-playlist-panel');
   const playlistListEl = el.querySelector('#rv-playlist-list');
@@ -360,8 +383,16 @@ export function createTimelineViewer({
   let zoneLoadId = 0;
   /** Roster team (1|2) whose mistakes coach notes; null until picked. */
   let coachTeam = null;
+  /** Player ids whose coach notes are shown; null = no filter yet. */
+  let coachFocusPlayers = null;
+  /** Team chosen in the pick UI before Continue. */
+  let pendingCoachTeam = null;
+  /** True when the team step is skipped (already analyzed / forced side). */
+  let coachPickTeamLocked = false;
   /** Team-picker dock is open; coach not enabled yet. */
   let coachPicking = false;
+  /** Active view pan/zoom animation frame id. */
+  let viewAnimRaf = 0;
   /** Round files that currently carry at least one coach note. */
   const coachNotedFiles = new Set();
   /** Bumps when a full-demo coach pass is superseded (toggle off / re-pick). */
@@ -582,6 +613,7 @@ export function createTimelineViewer({
     const noteList = roundNotes.length ? roundNotes : notesFromMeta(activeMeta);
     for (const n of noteList) {
       if (n.tick == null) continue;
+      if (!noteInCoachFocus(n)) continue;
       const label = noteClockLabel(n.tick);
       // Coach notes get the green diamond so they read apart from the round
       // marks around them at a glance.
@@ -1326,7 +1358,109 @@ export function createTimelineViewer({
 
   // ---- zoom / pan ---------------------------------------------------------
 
+  function cancelViewAnim() {
+    if (viewAnimRaf) {
+      cancelAnimationFrame(viewAnimRaf);
+      viewAnimRaf = 0;
+    }
+  }
+
+  function easeOutCubic(t) {
+    return 1 - (1 - t) ** 3;
+  }
+
+  /** Pan offsets that place radar pixel (rx, ry) at the canvas center at `zoom`. */
+  function panToCenterRadar(rx, ry, zoom) {
+    const { w, h } = renderer.resize();
+    const dpr = renderer.dpr;
+    const top = (renderer.viewInset.top || 0) * dpr;
+    const right = (renderer.viewInset.right || 0) * dpr;
+    const bottom = (renderer.viewInset.bottom || 0) * dpr;
+    const left = (renderer.viewInset.left || 0) * dpr;
+    const boxW = Math.max(1, w - left - right);
+    const boxH = Math.max(1, h - top - bottom);
+    const scale = (Math.min(boxW, boxH) / RADAR_SIZE) * zoom;
+    const ox = w / 2 - rx * scale;
+    const oy = h / 2 - ry * scale;
+    return {
+      panX: (ox - left - (boxW - RADAR_SIZE * scale) / 2) / dpr,
+      panY: (oy - top - (boxH - RADAR_SIZE * scale) / 2) / dpr
+    };
+  }
+
+  function animateViewTo({ zoom, panX, panY }, ms = COACH_FOCUS_MS) {
+    cancelViewAnim();
+    const fromZ = renderer.zoom;
+    const fromX = renderer.panX;
+    const fromY = renderer.panY;
+    const toZ = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
+    const t0 = performance.now();
+    const step = (now) => {
+      const u = Math.min(1, (now - t0) / Math.max(1, ms));
+      const e = easeOutCubic(u);
+      renderer.zoom = fromZ + (toZ - fromZ) * e;
+      renderer.panX = fromX + (panX - fromX) * e;
+      renderer.panY = fromY + (panY - fromY) * e;
+      syncPanCursor();
+      draw();
+      if (u < 1) viewAnimRaf = requestAnimationFrame(step);
+      else viewAnimRaf = 0;
+    };
+    viewAnimRaf = requestAnimationFrame(step);
+  }
+
+  /**
+   * Soft-zoom toward the given player ids at `tick` (radar centroid).
+   * Used when opening a coach mistake so the map settles on the people involved.
+   */
+  function focusPlayersAtTick(playerIds, tick) {
+    const ids = (playerIds || []).filter(Boolean);
+    if (!ids.length || !activeMeta || activeIndex < 0) return;
+    const file = files[activeIndex];
+    const track = store.get(file)?.track;
+    if (!track) return;
+    const byId = new Map((activeMeta.players || []).map((p) => [p.id, p]));
+    const scratch = [];
+    track.sampleAll(tick, scratch);
+    const radarPts = [];
+    const tmp = {};
+    for (const id of ids) {
+      const p = byId.get(id);
+      if (!p) continue;
+      const s = scratch[p.slot];
+      if (!s || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
+      worldToRadar(renderer.mapCode || activeMeta.map || '', s.x, s.y, tmp);
+      radarPts.push({ x: tmp.x, y: tmp.y });
+    }
+    if (!radarPts.length) return;
+    let cx = 0;
+    let cy = 0;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const p of radarPts) {
+      cx += p.x;
+      cy += p.y;
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    cx /= radarPts.length;
+    cy /= radarPts.length;
+    const span = Math.max(maxX - minX, maxY - minY, 1);
+    let zoom = COACH_FOCUS_ZOOM;
+    if (radarPts.length > 1) {
+      // Keep the group framed without crushing the mild single-player zoom.
+      zoom = Math.max(1.45, Math.min(COACH_FOCUS_ZOOM, (0.42 * RADAR_SIZE) / span));
+    }
+    const pan = panToCenterRadar(cx, cy, zoom);
+    animateViewTo({ zoom, panX: pan.panX, panY: pan.panY });
+  }
+
   function setZoom(next, anchorX, anchorY) {
+    cancelViewAnim();
     const prev = renderer.zoom;
     const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, next));
     if (z === prev) {
@@ -1446,6 +1580,7 @@ export function createTimelineViewer({
       }
       return;
     }
+    cancelViewAnim();
     panning = true;
     panBtn = e.button;
     lastX = e.clientX;
@@ -1683,6 +1818,7 @@ export function createTimelineViewer({
     }
     noteListEl.innerHTML = roundNotes
       .map((n, i) => {
+        if (!noteInCoachFocus(n)) return '';
         const coach = n.kind === 'coach';
         const markCls =
           n.mark === 'ok' ? ' mark-ok' : n.mark === 'x' ? ' mark-x' : '';
@@ -1695,6 +1831,25 @@ export function createTimelineViewer({
         </button>`;
       })
       .join('');
+    if (!noteListEl.innerHTML) {
+      noteListEl.innerHTML = '<p class="rv-popover-empty">No notes for selected players.</p>';
+    }
+  }
+
+  /** Coach notes for players outside the pick are hidden from marks / nav. */
+  function noteInCoachFocus(n) {
+    if (!n || n.kind !== 'coach') return true;
+    if (!coachOn || !coachFocusPlayers || !coachFocusPlayers.size) return true;
+    if (!n.playerId) return true;
+    return coachFocusPlayers.has(n.playerId);
+  }
+
+  function visibleNoteIndices() {
+    const out = [];
+    for (let i = 0; i < roundNotes.length; i++) {
+      if (noteInCoachFocus(roundNotes[i])) out.push(i);
+    }
+    return out;
   }
 
   function syncNoteMarkButtons(note) {
@@ -1720,7 +1875,9 @@ export function createTimelineViewer({
       return;
     }
     const n = currentNote();
-    const total = roundNotes.length;
+    const vis = visibleNoteIndices();
+    const visPos = vis.indexOf(noteIndex);
+    const total = vis.length || roundNotes.length;
     if (!n) {
       noteStampEl.textContent = '—';
       notePosEl.textContent = '';
@@ -1733,10 +1890,12 @@ export function createTimelineViewer({
       return;
     }
     noteStampEl.textContent = noteClockLabel(n.tick);
-    notePosEl.textContent = total > 1 ? `${noteIndex + 1} / ${total}` : '';
+    const pos = visPos >= 0 ? visPos + 1 : noteIndex + 1;
+    notePosEl.textContent = total > 1 ? `${pos} / ${total}` : '';
     if (forceText || document.activeElement !== noteText) noteText.value = n.text || '';
-    notePrevBtn.disabled = noteIndex <= 0;
-    noteNextBtn.disabled = noteIndex >= total - 1;
+    notePrevBtn.disabled = !vis.length || (visPos >= 0 ? visPos <= 0 : noteIndex <= vis[0]);
+    noteNextBtn.disabled =
+      !vis.length || (visPos >= 0 ? visPos >= vis.length - 1 : noteIndex >= vis[vis.length - 1]);
     syncNoteCount();
     syncNoteHasBadge();
     syncNoteMarkButtons(n);
@@ -1751,13 +1910,18 @@ export function createTimelineViewer({
     renderActiveMarks();
   }
 
-  function seekToNoteTick(tick) {
+  function seekToNoteTick(tick, { leadSeconds = 0, focusPlayerIds = null } = {}) {
     if (activeIndex < 0 || !activeMeta) return;
     const timing = timingFor(activeMeta);
     const item = sequence.at(activeIndex);
     if (!item) return;
-    const local = Math.max(0, (tick - timing.startTick) / (timing.tickRate || 64));
+    const rate = timing.tickRate || 64;
+    const leadTicks = Math.max(0, Math.round(leadSeconds * rate));
+    const floor = timing.freezeEndTick ?? timing.startTick;
+    const seekTick = Math.max(floor, tick - leadTicks);
+    const local = Math.max(0, (seekTick - timing.startTick) / rate);
     playback.seek(sequence.offsetOf(activeIndex) + Math.min(local, roundLocalMax(item)));
+    if (focusPlayerIds?.length) focusPlayersAtTick(focusPlayerIds, seekTick);
   }
 
   /** Land at freezetime end (coach entry uses enterCoachRoundMoment instead). */
@@ -1766,11 +1930,11 @@ export function createTimelineViewer({
   }
 
   /**
-   * Coach mode round entry: open the earliest coach note, jump to its tick,
+   * Coach mode round entry: open the earliest coach note, jump to 1s before,
    * and pause so the moment can be reviewed.
    */
   function enterCoachRoundMoment() {
-    const first = roundNotes.find((n) => n.kind === 'coach');
+    const first = roundNotes.find((n) => n.kind === 'coach' && noteInCoachFocus(n));
     playback.pause();
     syncPlayButton();
     if (!first) {
@@ -1793,7 +1957,39 @@ export function createTimelineViewer({
     }
     noteIndex = Math.max(0, Math.min(roundNotes.length - 1, index));
     renderNoteDock({ forceText: true });
-    if (seek) seekToNoteTick(roundNotes[noteIndex].tick);
+    if (!seek) return;
+    const n = roundNotes[noteIndex];
+    const coach = n?.kind === 'coach';
+    seekToNoteTick(n.tick, {
+      leadSeconds: coach ? 1 : 0,
+      focusPlayerIds: coach && n.playerId ? [n.playerId] : null
+    });
+  }
+
+  function showAdjacentVisibleNote(dir) {
+    flushNoteText();
+    const vis = visibleNoteIndices();
+    if (!vis.length) return;
+    let at = vis.indexOf(noteIndex);
+    if (at < 0) {
+      // Current note filtered out: jump to nearest in the travel direction.
+      if (dir > 0) {
+        at = vis.findIndex((i) => i > noteIndex);
+        if (at < 0) return;
+        showNoteAt(vis[at], { seek: true });
+        return;
+      }
+      for (let i = vis.length - 1; i >= 0; i--) {
+        if (vis[i] < noteIndex) {
+          showNoteAt(vis[i], { seek: true });
+          return;
+        }
+      }
+      return;
+    }
+    const next = at + dir;
+    if (next < 0 || next >= vis.length) return;
+    showNoteAt(vis[next], { seek: true });
   }
 
   /** Open the dock on the first chronological note when the round has any. */
@@ -1941,14 +2137,8 @@ export function createTimelineViewer({
   const onAddNote = () => createNoteAtPlayhead();
   noteAddBtn?.addEventListener('click', onAddNote);
   noteAddEditBtn?.addEventListener('click', onAddNote);
-  notePrevBtn.addEventListener('click', () => {
-    flushNoteText();
-    showNoteAt(noteIndex - 1, { seek: true });
-  });
-  noteNextBtn.addEventListener('click', () => {
-    flushNoteText();
-    showNoteAt(noteIndex + 1, { seek: true });
-  });
+  notePrevBtn.addEventListener('click', () => showAdjacentVisibleNote(-1));
+  noteNextBtn.addEventListener('click', () => showAdjacentVisibleNote(1));
   el.querySelector('#rv-note-close').addEventListener('click', () => setNoteOpen(false));
   el.querySelector('#rv-note-close-list')?.addEventListener('click', () => setNoteOpen(false));
   async function setCoachNoteMark(mark) {
@@ -2899,19 +3089,84 @@ export function createTimelineViewer({
   function hideCoachPick() {
     if (coachPick) coachPick.hidden = true;
     coachPicking = false;
+    pendingCoachTeam = null;
+    coachPickTeamLocked = false;
     syncCoachBtn();
   }
 
-  function showCoachPick() {
+  function rosterForCoachTeam(team) {
+    const byId = new Map();
+    const add = (meta) => {
+      for (const p of meta?.players || []) {
+        if (p.team === team && p.id) byId.set(p.id, p);
+      }
+    };
+    add(activeMeta);
+    for (const r of rounds || []) add(r);
+    return [...byId.values()].sort((a, b) =>
+      String(a.name || '').localeCompare(String(b.name || ''))
+    );
+  }
+
+  function showCoachTeamStep() {
     if (!coachAvailable) return;
+    coachPickTeamLocked = false;
+    pendingCoachTeam = null;
     const t1 = activeMeta?.team1?.name || rounds[activeIndex]?.team1?.name || 'Team 1';
     const t2 = activeMeta?.team2?.name || rounds[activeIndex]?.team2?.name || 'Team 2';
+    if (coachPickTitle) coachPickTitle.textContent = 'Coach which team?';
     if (coachPickT1) coachPickT1.textContent = t1;
     if (coachPickT2) coachPickT2.textContent = t2;
+    if (coachPickTeams) coachPickTeams.hidden = false;
+    if (coachPickPlayers) coachPickPlayers.hidden = true;
+    if (coachPickBack) coachPickBack.hidden = true;
     closePopovers(coachPick);
     coachPicking = true;
     if (coachPick) coachPick.hidden = false;
     syncCoachBtn();
+  }
+
+  function showCoachPick() {
+    showCoachTeamStep();
+  }
+
+  function showCoachPlayerStep(team, { lockedTeam = false } = {}) {
+    if (!coachAvailable) return;
+    if (team !== 1 && team !== 2) return;
+    pendingCoachTeam = team;
+    coachPickTeamLocked = lockedTeam;
+    const roster = rosterForCoachTeam(team);
+    if (coachPickTitle) coachPickTitle.textContent = 'Which players?';
+    if (coachPickTeams) coachPickTeams.hidden = true;
+    if (coachPickPlayers) coachPickPlayers.hidden = false;
+    if (coachPickBack) coachPickBack.hidden = lockedTeam;
+    if (coachPickPlayerList) {
+      if (!roster.length) {
+        coachPickPlayerList.innerHTML =
+          '<p class="rv-popover-empty">No players found for this team.</p>';
+      } else {
+        coachPickPlayerList.innerHTML = roster
+          .map(
+            (p) => `<label class="rv-coach-pick-player">
+              <input type="checkbox" data-player-id="${escapeHtml(p.id)}" checked />
+              <span>${escapeHtml(p.name || p.id)}</span>
+            </label>`
+          )
+          .join('');
+      }
+    }
+    closePopovers(coachPick);
+    coachPicking = true;
+    if (coachPick) coachPick.hidden = false;
+    syncCoachBtn();
+  }
+
+  function selectedCoachPlayerIds() {
+    if (!coachPickPlayerList) return [];
+    return [...coachPickPlayerList.querySelectorAll('input[type="checkbox"][data-player-id]')]
+      .filter((el) => el.checked)
+      .map((el) => el.dataset.playerId)
+      .filter(Boolean);
   }
 
   async function demoAlreadyCoached() {
@@ -2970,7 +3225,7 @@ export function createTimelineViewer({
     }
   }
 
-  async function enableCoachForTeam(team, { force = false } = {}) {
+  async function enableCoachForTeam(team, { force = false, players = null } = {}) {
     if (!coachAvailable) return;
     if (team !== 1 && team !== 2) return;
     const locked = !force && (await demoAlreadyCoached());
@@ -2983,6 +3238,9 @@ export function createTimelineViewer({
       spentCoach = true;
     }
     coachTeam = team;
+    if (players instanceof Set) coachFocusPlayers = new Set(players);
+    else if (Array.isArray(players)) coachFocusPlayers = new Set(players);
+    else coachFocusPlayers = new Set(rosterForCoachTeam(team).map((p) => p.id));
     hideCoachPick();
     coachOn = true;
     syncCoachBtn();
@@ -3095,6 +3353,8 @@ export function createTimelineViewer({
       coachOn = false;
       coachScanning = false;
       coachPassId += 1;
+      coachFocusPlayers = null;
+      cancelViewAnim();
       hideCoachPick();
       syncCoachBtn();
       return;
@@ -3103,7 +3363,7 @@ export function createTimelineViewer({
       hideCoachPick();
       return;
     }
-    // Already analyzed demos reopen on the recorded side without a re-pick.
+    // Already analyzed: skip team pick, still choose which players to watch.
     if (await demoAlreadyCoached()) {
       const side =
         coachForceSide === 1 || coachForceSide === 2
@@ -3111,14 +3371,37 @@ export function createTimelineViewer({
           : coachTeam === 1 || coachTeam === 2
             ? coachTeam
             : 1;
-      await enableCoachForTeam(side);
+      showCoachPlayerStep(side, { lockedTeam: true });
       return;
     }
     showCoachPick();
   });
 
-  coachPickT1?.addEventListener('click', () => enableCoachForTeam(1));
-  coachPickT2?.addEventListener('click', () => enableCoachForTeam(2));
+  coachPickT1?.addEventListener('click', () => showCoachPlayerStep(1));
+  coachPickT2?.addEventListener('click', () => showCoachPlayerStep(2));
+  coachPickBack?.addEventListener('click', () => {
+    if (coachPickTeamLocked) {
+      hideCoachPick();
+      return;
+    }
+    showCoachTeamStep();
+  });
+  coachPickAll?.addEventListener('click', () => {
+    coachPickPlayerList
+      ?.querySelectorAll('input[type="checkbox"][data-player-id]')
+      .forEach((el) => {
+        el.checked = true;
+      });
+  });
+  coachPickGo?.addEventListener('click', async () => {
+    const team = pendingCoachTeam;
+    if (team !== 1 && team !== 2) return;
+    let players = selectedCoachPlayerIds();
+    if (!players.length) {
+      players = rosterForCoachTeam(team).map((p) => p.id);
+    }
+    await enableCoachForTeam(team, { players });
+  });
   el.querySelector('#rv-coach-pick-close')?.addEventListener('click', () => hideCoachPick());
 
   /**
@@ -3268,6 +3551,8 @@ export function createTimelineViewer({
     flushNoteText();
     coachCache.clear();
     coachTeam = null;
+    coachFocusPlayers = null;
+    cancelViewAnim();
     coachNotedFiles.clear();
     syncCoachRoundChips();
 
@@ -3648,6 +3933,7 @@ export function createTimelineViewer({
     el,
     destroy() {
       destroyed = true;
+      cancelViewAnim();
       playback.destroy();
       // The store outlives this view (the mode switch reuses it), so retire the
       // prefetch rather than clearing what it loaded.

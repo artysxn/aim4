@@ -1501,6 +1501,47 @@ body.rv-open {
   color: var(--rv-team2);
 }
 
+.rv-coach-pick-player-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: min(240px, 40vh);
+  overflow: auto;
+  padding: 2px 0;
+}
+
+.rv-coach-pick-player {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rv-coach-pick-player:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.rv-coach-pick-player input {
+  margin: 0;
+  accent-color: var(--accent, #6ee7b7);
+}
+
+.rv-coach-pick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.rv-coach-pick-actions .btn {
+  font-family: var(--font-body);
+}
+
 .rv-note-head {
   display: flex;
   align-items: center;
