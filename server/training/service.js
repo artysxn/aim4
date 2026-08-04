@@ -33,7 +33,7 @@ import {
   isModelKind,
   paths
 } from './config.js';
-import { emptyStatus, readStatus, writeStatus } from './status.js';
+import { emptyStatus, patchStatus, readStatus, writeStatus } from './status.js';
 import { readChampion, totalImprovement } from './champion.js';
 
 /** Is a pid still alive? Signal 0 tests without delivering anything. */
@@ -189,14 +189,46 @@ export async function stop(kind) {
   if (!isModelKind(kind)) return { ok: false, error: 'unknown model' };
   const p = paths(kind);
   const pid = await readPid(p.lock);
+
   if (!alive(pid)) {
+    // Nothing to signal. That is not an error worth refusing: the run has
+    // already ended, possibly by dying without writing a finish, and the useful
+    // thing to do is tidy up so the panel stops claiming it is running. Anything
+    // else leaves an admin pressing a button that always fails.
     await fsp.rm(p.lock, { force: true }).catch(() => {});
-    return { ok: false, error: 'not running', status: await status(kind) };
+    const stored = await readStatus(p.status, kind);
+    if (stored.running && !stored.finished) {
+      await writeStatus(p.status, {
+        ...stored,
+        running: false,
+        finished: true,
+        finishedAt: new Date().toISOString(),
+        stage: 'stopped',
+        error: stored.error || 'the run ended without reporting a result'
+      });
+    }
+    return { ok: true, note: 'was not running', status: await status(kind) };
   }
+
+  // The child spawns the extractor and the trainer as its own children, and it
+  // was started detached, which makes it a process group leader. Signalling the
+  // group reaches whichever stage is actually working even if the parent is
+  // wedged; the single-pid signal is the fallback where groups are not a thing.
+  let signalled = false;
   try {
-    process.kill(pid, 'SIGTERM');
-  } catch (err) {
-    return { ok: false, error: err.message, status: await status(kind) };
+    process.kill(-pid, 'SIGTERM');
+    signalled = true;
+  } catch {
+    /* not a group leader, or not supported here */
   }
+  if (!signalled) {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch (err) {
+      return { ok: false, error: err.message, status: await status(kind) };
+    }
+  }
+
+  await patchStatus(p.status, { stage: 'stopping' }, kind).catch(() => {});
   return { ok: true, status: await status(kind) };
 }

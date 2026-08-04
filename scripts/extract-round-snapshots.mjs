@@ -19,6 +19,7 @@ import { extractRoundSnapshots } from '../src/replays/rounds/roundSnapshots.js';
 import { buildZonePresence } from '../src/replays/zones/zoneOverlay.js';
 import { eachRound, listSamplePackages } from './lib/sampledemoPackages.mjs';
 import { countLibraryDemos, eachLibraryRound } from './lib/serverCorpus.mjs';
+import { patchStatus } from '../server/training/status.js';
 import { prepareMap } from './lib/duelCorpus.mjs';
 import {
   CACHE_DIR,
@@ -45,6 +46,15 @@ const force = has('--force');
  * source with enough demos to move the numbers.
  */
 const source = arg('--source', 'samples');
+/**
+ * Progress reporting for the admin panel.
+ *
+ * Extraction over a server library is the long half of training and can run for
+ * many minutes. Without this it reports nothing at all until it finishes, which
+ * is indistinguishable from being hung.
+ */
+const statusFile = arg('--status-file', '');
+const statusKind = arg('--status-kind', '');
 const dryRun = has('--dry-run');
 
 async function main() {
@@ -68,6 +78,23 @@ async function main() {
   console.log(`Source: ${source}   demos: ${available}   cache: ${CACHE_DIR} (v${FEATURE_VERSION})`);
   if (!dryRun) await fs.mkdir(path.join(CACHE_DIR, `v${FEATURE_VERSION}`), { recursive: true });
 
+  let demosDone = 0;
+  const demosTotal = available;
+  const bumpProgress = async () => {
+    demosDone++;
+    if (!statusFile) return;
+    await patchStatus(
+      statusFile,
+      { stage: 'extracting', demosDone, demosTotal },
+      statusKind
+    ).catch(() => {});
+  };
+  if (statusFile) {
+    await patchStatus(statusFile, { stage: 'extracting', demosDone: 0, demosTotal }, statusKind).catch(
+      () => {}
+    );
+  }
+
   const mapCache = new Map();
   const totals = { rounds: 0, samples: 0, exams: 0, decidedSkipped: 0, noWinner: 0, ctWins: 0 };
   let current = null;
@@ -76,6 +103,7 @@ async function main() {
     if (!current) return;
     if (current.skip) {
       current = null;
+      await bumpProgress();
       return;
     }
     if (!dryRun) {
@@ -100,6 +128,7 @@ async function main() {
         `  CT won ${((s.ctWins / Math.max(1, current.rounds)) * 100).toFixed(0)}%`
     );
     current = null;
+    await bumpProgress();
   };
 
   const walk =

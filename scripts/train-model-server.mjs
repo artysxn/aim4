@@ -93,7 +93,7 @@ async function main() {
   // server locally has an empty one, so the source can be overridden to the
   // sample folder for a real end-to-end check without a populated volume.
   const source = process.env.AIM4_TRAIN_SOURCE === 'samples' ? 'samples' : 'library';
-  const extractArgs = ['--source', source];
+  const extractArgs = ['--source', source, '--status-file', p.status, '--status-kind', kind];
   if (force) extractArgs.push('--force');
   const extracted = await run(cfg.extract, extractArgs);
   if (extracted.signal === 'SIGTERM') {
@@ -108,7 +108,9 @@ async function main() {
     throw new Error(`extraction failed with code ${extracted.code}`);
   }
 
-  await patchStatus(p.status, { stage: 'fitting', demosDone: 0 }, kind);
+  // Keep the extraction counts: they say how much of the library this run
+  // actually covers, which is the first thing to check when a score moves.
+  await patchStatus(p.status, { stage: 'fitting' }, kind);
 
   const trained = await run(cfg.train, [
     '--generations',

@@ -186,9 +186,17 @@ export function decodeEpisode(e) {
   };
 }
 
+/** Library demo names are arbitrary; keep them safe as filenames. */
+export function cacheKey(demoName) {
+  return String(demoName || 'unnamed')
+    .replace(/\.(dem|aim4replay)$/i, '')
+    .replace(/[^A-Za-z0-9._-]+/g, '_')
+    .slice(0, 120);
+}
+
 /** Cache file for one demo package. */
 export function cacheFileFor(demoName) {
-  return path.join(CACHE_DIR, `v${FEATURE_VERSION}`, `${demoName}.jsonl`);
+  return path.join(CACHE_DIR, `v${FEATURE_VERSION}`, `${cacheKey(demoName)}.jsonl`);
 }
 
 /**

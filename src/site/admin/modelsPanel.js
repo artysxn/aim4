@@ -182,13 +182,26 @@ function buildCard(model, timers) {
     setBusy(Boolean(job.running));
 
     if (job.running) {
-      const pct =
-        job.generations > 0 ? Math.min(100, (job.generation / job.generations) * 100) : 0;
+      // Extraction and fitting are separate progress bars wearing one widget.
+      // Extraction is the long half on a large library and reports per demo;
+      // showing a stalled zero for all of it is what makes a working run look
+      // hung.
+      const extracting = job.stage === 'extracting' || job.stage === 'starting';
+      const pct = extracting
+        ? job.demosTotal > 0
+          ? Math.min(100, (job.demosDone / job.demosTotal) * 100)
+          : 0
+        : job.generations > 0
+          ? Math.min(100, (job.generation / job.generations) * 100)
+          : 0;
       progressWrap.hidden = false;
       fill.style.width = `${pct.toFixed(1)}%`;
-      progressMeta.textContent =
-        job.stage === 'extracting'
-          ? 'Extracting the corpus from the replay library'
+      progressMeta.textContent = extracting
+        ? job.demosTotal > 0
+          ? `Extracting: ${job.demosDone} of ${job.demosTotal} demos (${pct.toFixed(0)}%)`
+          : 'Reading the replay library'
+        : job.stage === 'stopping'
+          ? 'Stopping after this generation'
           : `Generation ${job.generation} of ${job.generations} (${pct.toFixed(0)}%)`;
 
       const bits = [`seed ${job.seed ?? '—'}`];

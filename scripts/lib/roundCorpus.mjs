@@ -139,8 +139,21 @@ export function decodeRound(e) {
   };
 }
 
+/**
+ * Cache filenames come from demo names, which on a server library are whatever
+ * the uploader called the file. Anything that is not plainly safe becomes an
+ * underscore so a name can never escape the cache directory or break on a
+ * filesystem that dislikes it.
+ */
+export function cacheKey(demoName) {
+  return String(demoName || 'unnamed')
+    .replace(/\.(dem|aim4replay)$/i, '')
+    .replace(/[^A-Za-z0-9._-]+/g, '_')
+    .slice(0, 120);
+}
+
 export function cacheFileFor(demoName) {
-  return path.join(CACHE_DIR, `v${FEATURE_VERSION}`, `${demoName}.jsonl`);
+  return path.join(CACHE_DIR, `v${FEATURE_VERSION}`, `${cacheKey(demoName)}.jsonl`);
 }
 
 /** Every cached round, decoded. */
