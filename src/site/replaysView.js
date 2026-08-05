@@ -39,7 +39,7 @@ import { openingSituation, SITUATION_OPTIONS } from '../replays/shared/openingSi
 import { findRoundDecided } from '../replays/coach/roundDecided.js';
 import { PACKAGE_EXT } from '../replays/shared/replayPackage.js';
 import { formatBytes } from '../replays/tickStore.js';
-import { createStatsPanel } from '../replays/stats/statsPanel.js';
+import { createStatsPanel, DEFAULT_MIN_ROUNDS } from '../replays/stats/statsPanel.js';
 import { createAnalyticsPanel } from '../replays/analytics/analyticsPanel.js';
 import { createChartsPanel } from '../replays/charts/chartsPanel.js';
 import commentsIcon from '../icons/demos_comments.svg?raw';
@@ -2830,7 +2830,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       loadPlaylistsPage();
     } else if (next === 'stats') {
       stopPolling();
-      openStatsPage(statsScope);
+      openStatsPage(statsScope, Object.fromEntries(new URLSearchParams(window.location.search)));
     } else if (next === 'analytics') {
       stopPolling();
       openAnalyticsPage();
@@ -2887,33 +2887,155 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   // ---- statistics ---------------------------------------------------------
 
-  function pushStatsDetailUrl(detail) {
-    const path = pagePath('stats');
+  /** Last player/team detail key written to the URL (for push vs replace). */
+  let lastStatsDetailKey = '';
+
+  /** Encode database view state into query params (shareable). */
+  function statsViewToParams(state = {}) {
     const q = new URLSearchParams();
-    if (detail?.kind === 'player' && detail.id) q.set('player', detail.id);
-    else if (detail?.kind === 'team' && detail.name) q.set('team', detail.name);
+    if (state.tab === 'teams' || state.tab === 'players') q.set('tab', state.tab);
+    const map = Array.isArray(state.maps) && state.maps[0] ? state.maps[0] : state.map;
+    if (map) q.set('map', String(map));
+    if (state.side === 'T' || state.side === 'CT') q.set('side', state.side);
+    if (state.result === 'won' || state.result === 'lost') q.set('result', state.result);
+    if (state.advantage) q.set('adv', String(state.advantage));
+    if (state.econ != null && Number.isFinite(Number(state.econ))) q.set('econ', String(state.econ));
+    if (state.oppEcon != null && Number.isFinite(Number(state.oppEcon))) {
+      q.set('oppEcon', String(state.oppEcon));
+    }
+    if (state.hasAwp) q.set('awp', '1');
+    if (state.oppHasAwp) q.set('oppAwp', '1');
+    // Always write minR when it differs from the Database default, including 0.
+    const minR = Math.max(0, Math.floor(Number(state.minRounds) || 0));
+    if (minR !== DEFAULT_MIN_ROUNDS) q.set('minR', String(minR));
+    if (state.role?.side && state.role?.value) {
+      q.set('role', `${state.role.side}:${state.role.value}`);
+    }
+    if (state.sortKey) q.set('sort', String(state.sortKey));
+    if (state.sortDir === 'asc' || state.sortDir === 'desc') q.set('dir', state.sortDir);
+    if (Number(state.page) > 1) q.set('page', String(Math.floor(Number(state.page))));
+    if (state.player) {
+      q.set('player', String(state.player));
+      if (state.playerLabel && state.playerLabel !== state.player) {
+        q.set('label', String(state.playerLabel));
+      }
+    } else if (state.team) {
+      q.set('team', String(state.team));
+      if (state.teamLabel && state.teamLabel !== state.team) {
+        q.set('label', String(state.teamLabel));
+      }
+    }
+    if (state.teamName) q.set('teamName', String(state.teamName));
+    if (state.title) q.set('title', String(state.title));
+    if (Array.isArray(state.demos) && state.demos.length) {
+      q.set('demos', state.demos.map(String).join(','));
+    }
+    if (Array.isArray(state.files) && state.files.length) {
+      q.set('files', state.files.map(String).join(','));
+    }
+    return q;
+  }
+
+  /** Parse /database query params into a statsPanel view object. */
+  function statsViewFromParams(params = {}) {
+    const out = {};
+    if (params.tab === 'players' || params.tab === 'teams') out.tab = params.tab;
+    if (params.map) out.maps = [String(params.map)];
+    if (params.side === 'T' || params.side === 'CT') out.side = params.side;
+    if (params.result === 'won' || params.result === 'lost') out.result = params.result;
+    if (params.adv) out.advantage = String(params.adv);
+    if (params.advantage) out.advantage = String(params.advantage);
+    if (params.econ !== undefined && params.econ !== '') {
+      const n = Number(params.econ);
+      if (Number.isFinite(n)) out.econ = n;
+    }
+    if (params.oppEcon !== undefined && params.oppEcon !== '') {
+      const n = Number(params.oppEcon);
+      if (Number.isFinite(n)) out.oppEcon = n;
+    }
+    if (params.awp === '1' || params.awp === 'true') out.hasAwp = true;
+    if (params.oppAwp === '1' || params.oppAwp === 'true') out.oppHasAwp = true;
+    if (params.minR !== undefined && params.minR !== '') {
+      out.minRounds = Math.max(0, Math.floor(Number(params.minR) || 0));
+    }
+    if (params.role) {
+      const raw = String(params.role);
+      const i = raw.indexOf(':');
+      if (i > 0) {
+        const side = raw.slice(0, i);
+        const value = raw.slice(i + 1);
+        if ((side === 'T' || side === 'CT') && value) out.role = { side, value };
+      }
+    }
+    if (params.sort) out.sortKey = String(params.sort);
+    if (params.dir === 'asc' || params.dir === 'desc') out.sortDir = params.dir;
+    if (params.page) out.page = Math.max(1, Math.floor(Number(params.page) || 1));
+    if (params.player) {
+      out.player = String(params.player);
+      if (params.label) out.playerLabel = String(params.label);
+    } else if (params.team) {
+      out.team = String(params.team);
+      if (params.label) out.teamLabel = String(params.label);
+    } else {
+      out.player = '';
+      out.team = '';
+    }
+    if (params.teamName) out.teamName = String(params.teamName);
+    if (params.title) out.title = String(params.title);
+    if (params.demos) {
+      out.demos = String(params.demos)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    if (params.files) {
+      out.files = String(params.files)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    return out;
+  }
+
+  function syncStatsUrl(state, { push = false } = {}) {
+    if (subpage !== 'stats') return;
+    const path = pagePath('stats');
+    const q = statsViewToParams(state);
     const search = q.toString();
     const target = path + (search ? `?${search}` : '');
     const current = window.location.pathname.replace(/\/+$/, '') + window.location.search;
-    if (current !== target) {
-      window.history.pushState({ page: 'stats' }, '', target);
-    }
+    if (current === target) return;
+    const detailKey = state.player ? `p:${state.player}` : state.team ? `t:${state.team}` : '';
+    const usePush = push || detailKey !== lastStatsDetailKey;
+    lastStatsDetailKey = detailKey;
+    if (usePush) window.history.pushState({ page: 'stats' }, '', target);
+    else window.history.replaceState({ page: 'stats' }, '', target);
   }
 
   /** Mount the panel on first use and point it at a scope. */
-  function openStatsPage(scope) {
+  function openStatsPage(scope = {}, urlParams = null) {
     if (!statsBodyEl) return;
+    const fromUrl = statsViewFromParams(urlParams || Object.fromEntries(new URLSearchParams(window.location.search)));
+    const merged = { ...scope, ...fromUrl };
+    // Scope demos/files from the caller win over a stale URL when opening from
+    // a selection; otherwise URL demos keep a shared link intact.
+    if (Array.isArray(scope.demos)) merged.demos = scope.demos;
+    if (Array.isArray(scope.files)) merged.files = scope.files;
+    if (scope.title) merged.title = scope.title;
+    if (scope.teamName) merged.teamName = scope.teamName;
+    statsScope = merged;
+
     if (!statsPanel) {
       statsPanel = createStatsPanel({
         escapeHtml,
-        onDetailChange(detail) {
+        onViewChange(state) {
           if (subpage !== 'stats') return;
-          pushStatsDetailUrl(detail);
+          syncStatsUrl(state);
         }
       });
       statsBodyEl.appendChild(statsPanel.el);
     }
-    statsPanel.load(scope);
+    void statsPanel.load(merged);
   }
 
   /**
@@ -2921,6 +3043,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
    */
   function showStats(scope) {
     statsScope = scope || {};
+    lastStatsDetailKey = '';
     setSubpage('stats', { push: true });
   }
 
@@ -3151,12 +3274,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           ? params.page
           : 'library';
       if (page === 'stats') {
-        const next = { ...statsScope };
-        if (params.player) next.player = String(params.player);
-        else delete next.player;
-        if (params.team) next.team = String(params.team);
-        else delete next.team;
-        statsScope = next;
+        statsScope = { ...statsScope, ...statsViewFromParams(params) };
       }
       setSubpage(page, { push: false });
       if (

@@ -44,10 +44,14 @@ import { spinnerHtml, watchSlowLoad } from '../../lib/spinner.js';
 /**
  * @param {{
  *   escapeHtml: (s: string) => string,
+ *   onViewChange?: (state: object) => void,
  *   onDetailChange?: (detail: null | { kind: 'player'|'team', id?: string, name?: string, label: string }) => void
  * }} deps
  */
-export function createStatsPanel({ escapeHtml, onDetailChange }) {
+/** Default minimum rounds filter when opening Database (can still be set to 0). */
+export const DEFAULT_MIN_ROUNDS = 80;
+
+export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange }) {
   const el = document.createElement('div');
   el.className = 'st-panel';
   el.innerHTML = `
@@ -96,7 +100,7 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
     result: '',
     advantage: '',
     /** Minimum rounds played to appear in the table (0 = no floor). */
-    minRounds: 0,
+    minRounds: DEFAULT_MIN_ROUNDS,
     /** @type {{ side: 'T'|'CT', value: string } | null} */
     role: null
   };
@@ -299,7 +303,7 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
       filter.result = '';
       filter.advantage = '';
       filter.role = null;
-      filter.minRounds = 0;
+      filter.minRounds = DEFAULT_MIN_ROUNDS;
       resetListPage();
       render();
     }
@@ -400,17 +404,174 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
     render();
   });
 
-  // ---- render -------------------------------------------------------------
+  // ---- view state (URL / share) -------------------------------------------
 
-  function notifyDetail() {
+  function activeSort() {
+    return detail ? detailSort : sort[tab] || sort.players;
+  }
+
+  function activePage() {
+    return detail ? detailPage : page[tab] || 1;
+  }
+
+  /** Snapshot of filters, tab, sort, page, and player/team selection. */
+  function viewState() {
+    const s = activeSort();
+    return {
+      tab,
+      maps: [...(filter.maps || [])],
+      side: filter.side || '',
+      result: filter.result || '',
+      advantage: filter.advantage || '',
+      econ: filter.econ,
+      oppEcon: filter.oppEcon,
+      hasAwp: Boolean(filter.hasAwp),
+      oppHasAwp: Boolean(filter.oppHasAwp),
+      minRounds: Math.max(0, Number(filter.minRounds) || 0),
+      role: filter.role ? { side: filter.role.side, value: filter.role.value } : null,
+      sortKey: s?.key || (tab === 'teams' ? 'avgRating' : 'rating'),
+      sortDir: s?.dir === 'asc' ? 'asc' : 'desc',
+      page: Math.max(1, Number(activePage()) || 1),
+      player: detail?.kind === 'player' ? detail.id : '',
+      team: detail?.kind === 'team' ? detail.name : '',
+      playerLabel: detail?.kind === 'player' ? detail.label : '',
+      teamLabel: detail?.kind === 'team' ? detail.label : '',
+      demos: Array.isArray(scope.demos) ? [...scope.demos] : undefined,
+      files: Array.isArray(scope.files) ? [...scope.files] : undefined,
+      title: scope.title || '',
+      teamName: lockedTeamName || ''
+    };
+  }
+
+  function emitViewChange() {
+    const state = viewState();
+    onViewChange?.(state);
     onDetailChange?.(detail);
+  }
+
+  /**
+   * Apply a shared / URL view without refetching. Unknown fields are ignored.
+   * @param {object} next
+   * @param {{ notify?: boolean }} [opts]
+   */
+  function applyViewState(next = {}, opts = {}) {
+    const notify = opts.notify !== false;
+    if (next.tab === 'players' || next.tab === 'teams') tab = next.tab;
+
+    if ('maps' in next) {
+      const m = next.maps;
+      if (Array.isArray(m)) filter.maps = m.map(String).filter(Boolean);
+      else if (typeof m === 'string' && m) filter.maps = [m];
+      else if (next.map) filter.maps = [String(next.map)];
+      else filter.maps = [];
+    } else if (next.map) {
+      filter.maps = [String(next.map)];
+    }
+
+    if ('side' in next) filter.side = next.side === 'T' || next.side === 'CT' ? next.side : '';
+    if ('result' in next) {
+      filter.result = next.result === 'won' || next.result === 'lost' ? next.result : '';
+    }
+    if ('advantage' in next || 'adv' in next) {
+      const adv = next.advantage ?? next.adv ?? '';
+      filter.advantage = String(adv || '');
+    }
+    if ('econ' in next) {
+      const n = next.econ;
+      filter.econ = n === null || n === '' || n === undefined ? null : Number(n);
+      if (!Number.isFinite(filter.econ)) filter.econ = null;
+    }
+    if ('oppEcon' in next) {
+      const n = next.oppEcon;
+      filter.oppEcon = n === null || n === '' || n === undefined ? null : Number(n);
+      if (!Number.isFinite(filter.oppEcon)) filter.oppEcon = null;
+    }
+    if ('hasAwp' in next || 'awp' in next) {
+      filter.hasAwp = Boolean(next.hasAwp ?? next.awp);
+    }
+    if ('oppHasAwp' in next || 'oppAwp' in next) {
+      filter.oppHasAwp = Boolean(next.oppHasAwp ?? next.oppAwp);
+    }
+    if ('minRounds' in next || 'minR' in next) {
+      filter.minRounds = Math.max(0, Math.floor(Number(next.minRounds ?? next.minR) || 0));
+    }
+    if ('role' in next) {
+      const r = next.role;
+      if (r && typeof r === 'object' && (r.side === 'T' || r.side === 'CT') && r.value) {
+        filter.role = { side: r.side, value: String(r.value) };
+      } else if (typeof r === 'string' && r.includes(':')) {
+        const i = r.indexOf(':');
+        const side = r.slice(0, i);
+        const value = r.slice(i + 1);
+        filter.role =
+          (side === 'T' || side === 'CT') && value ? { side, value } : null;
+      } else {
+        filter.role = null;
+      }
+    }
+
+    const sortKey = String(next.sortKey || next.sort || '').trim();
+    const sortDir = next.sortDir === 'asc' || next.dir === 'asc' ? 'asc' : 'desc';
+    const pageNum = Math.max(1, Math.floor(Number(next.page) || 1));
+
+    if (next.player) {
+      detail = {
+        kind: 'player',
+        id: String(next.player),
+        label: String(next.playerLabel || next.label || next.player)
+      };
+      tab = 'players';
+      detailSort = { key: sortKey || 'date', dir: sortDir };
+      detailPage = pageNum;
+    } else if (next.team) {
+      detail = {
+        kind: 'team',
+        name: String(next.team),
+        label: String(next.teamLabel || next.label || next.team)
+      };
+      tab = 'teams';
+      detailSort = { key: sortKey || 'date', dir: sortDir };
+      detailPage = pageNum;
+    } else if ('player' in next || 'team' in next) {
+      detail = null;
+      detailPage = 1;
+      detailSort = { key: 'date', dir: 'desc' };
+      if (sortKey) {
+        sort[tab] = { key: sortKey, dir: sortDir };
+        page[tab] = pageNum;
+      }
+    } else if (sortKey) {
+      if (detail) {
+        detailSort = { key: sortKey, dir: sortDir };
+        detailPage = pageNum;
+      } else {
+        sort[tab] = { key: sortKey, dir: sortDir };
+        page[tab] = pageNum;
+      }
+    } else if ('page' in next) {
+      if (detail) detailPage = pageNum;
+      else page[tab] = pageNum;
+    }
+
+    if ('teamName' in next && next.teamName != null) {
+      lockedTeamName = String(next.teamName || '').trim();
+    }
+    if ('title' in next && next.title != null) scopeEl.textContent = String(next.title || '');
+    if (Array.isArray(next.demos)) scope = { ...scope, demos: [...next.demos] };
+    if (Array.isArray(next.files)) scope = { ...scope, files: [...next.files] };
+
+    el.querySelectorAll('[data-tab]').forEach((b) =>
+      b.classList.toggle('active', b.dataset.tab === tab)
+    );
+    if (payload) render();
+    else if (notify) emitViewChange();
   }
 
   function clearDetail() {
     detail = null;
     detailPage = 1;
     detailSort = { key: 'date', dir: 'desc' };
-    notifyDetail();
+    render();
   }
 
   function openPlayerDetail(id, label) {
@@ -423,7 +584,6 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
     el.querySelectorAll('[data-tab]').forEach((b) =>
       b.classList.toggle('active', b.dataset.tab === 'players')
     );
-    notifyDetail();
     render();
   }
 
@@ -437,7 +597,6 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
     el.querySelectorAll('[data-tab]').forEach((b) =>
       b.classList.toggle('active', b.dataset.tab === 'teams')
     );
-    notifyDetail();
     render();
   }
 
@@ -616,6 +775,7 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
       renderDetail(active, players, demos);
       syncHead();
       bindStatsHScroll(bodyEl);
+      emitViewChange();
       return;
     }
 
@@ -668,6 +828,7 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
       });
     }
     bindStatsHScroll(bodyEl);
+    emitViewChange();
   }
 
   /** One-demo scope → two team boards (same layout as the live match scoreboard). */
@@ -709,14 +870,34 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
    *   title?: string,
    *   teamName?: string,
    *   maps?: string[],
+   *   map?: string,
    *   tab?: 'players'|'teams',
    *   player?: string,
-   *   team?: string
+   *   team?: string,
+   *   sortKey?: string,
+   *   sort?: string,
+   *   sortDir?: string,
+   *   dir?: string,
+   *   page?: number,
+   *   side?: string,
+   *   result?: string,
+   *   advantage?: string,
+   *   adv?: string,
+   *   econ?: number|null,
+   *   oppEcon?: number|null,
+   *   hasAwp?: boolean,
+   *   oppHasAwp?: boolean,
+   *   minRounds?: number,
+   *   role?: object|string|null
    * }} next
    */
   async function load(next = {}) {
     const token = ++loadToken;
-    scope = next;
+    scope = {
+      demos: Array.isArray(next.demos) ? [...next.demos] : undefined,
+      files: Array.isArray(next.files) ? [...next.files] : undefined,
+      title: next.title || ''
+    };
     lockedTeamName = String(next.teamName || '').trim();
     scopeEl.textContent = next.title || '';
     bodyEl.innerHTML = spinnerHtml('Loading database…');
@@ -725,46 +906,26 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
       message:
         'Still loading the database after 4s. Stats indexes may be rebuilding, or the API may be unreachable (Failed to fetch).'
     });
-    filter.maps = Array.isArray(next.maps) ? [...next.maps] : [];
+    // Reset then overlay anything the URL / caller asked for.
+    filter.maps = [];
     filter.side = '';
     filter.econ = null;
     filter.oppEcon = null;
     filter.hasAwp = false;
     filter.oppHasAwp = false;
     filter.role = null;
-    filter.minRounds = 0;
+    filter.minRounds = DEFAULT_MIN_ROUNDS;
     filter.result = '';
     filter.advantage = '';
-    if (next.tab === 'players' || next.tab === 'teams') tab = next.tab;
-    el.querySelectorAll('[data-tab]').forEach((b) =>
-      b.classList.toggle('active', b.dataset.tab === tab)
-    );
+    tab = 'players';
+    sort = { players: { key: 'rating', dir: 'desc' }, teams: { key: 'avgRating', dir: 'desc' } };
     page = { players: 1, teams: 1 };
+    detail = null;
     detailPage = 1;
     detailSort = { key: 'date', dir: 'desc' };
-    if (next.player) {
-      detail = {
-        kind: 'player',
-        id: String(next.player),
-        label: String(next.playerLabel || next.player)
-      };
-      tab = 'players';
-    } else if (next.team) {
-      detail = {
-        kind: 'team',
-        name: String(next.team),
-        label: String(next.teamLabel || next.team)
-      };
-      tab = 'teams';
-    } else {
-      detail = null;
-    }
-    el.querySelectorAll('[data-tab]').forEach((b) =>
-      b.classList.toggle('active', b.dataset.tab === tab)
-    );
-    notifyDetail();
+    applyViewState(next, { notify: false });
     try {
-      const res = await fetchStats(next.demos || null);
+      const res = await fetchStats(scope.demos || null);
       cancelSlow();
       if (token !== loadToken) return;
       payload = res;
@@ -773,6 +934,7 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
         filtersEl.innerHTML = '';
         bodyEl.innerHTML =
           '<p class="view-empty">No parsed rounds to measure yet. Upload a replay first.</p>';
+        emitViewChange();
         return;
       }
       render();
@@ -783,7 +945,7 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
       const msg = formatApiError(err).message || 'Could not load stats.';
       bodyEl.innerHTML = `<p class="view-empty">${escapeHtml(msg)}</p>
         <button type="button" class="btn btn-sm" data-st-retry>Retry</button>`;
-      bodyEl.querySelector('[data-st-retry]')?.addEventListener('click', () => load(scope));
+      bodyEl.querySelector('[data-st-retry]')?.addEventListener('click', () => load({ ...scope, ...next }));
     }
   }
 
@@ -792,28 +954,15 @@ export function createStatsPanel({ escapeHtml, onDetailChange }) {
    * @param {{tab?: 'players'|'teams', maps?: string[]|string|null}} opts
    */
   function applyView(opts = {}) {
-    if (opts.tab === 'players' || opts.tab === 'teams') {
-      tab = opts.tab;
-      el.querySelectorAll('[data-tab]').forEach((b) =>
-        b.classList.toggle('active', b.dataset.tab === tab)
-      );
-    }
-    if ('maps' in opts) {
-      const m = opts.maps;
-      if (Array.isArray(m)) filter.maps = [...m];
-      else if (typeof m === 'string' && m) filter.maps = [m];
-      else filter.maps = [];
-      filter.role = null;
-    }
-    if (detail) detailPage = 1;
-    else page[tab] = 1;
-    if (payload) render();
+    applyViewState(opts);
   }
 
   return {
     el,
     load,
     applyView,
+    applyViewState,
+    viewState,
     openPlayerDetail,
     openTeamDetail,
     clearDetail,
