@@ -4,10 +4,10 @@
 // strat doc actually needs.
 //
 // Text size and line gap, bold / italic / underline, horizontal rules, links,
-// tab indent, bullet lists from "* ", dashed lists from "- ", numbered lists
-// from "1. ", and paste that keeps or drops formatting. Everything is stored
-// as HTML and sanitized on the way in and out, because the same document is
-// rendered for every member of the team.
+// Tab / Shift+Tab block indent (multiple levels), bullet lists from "* ",
+// dashed lists from "- ", numbered lists from "1. ", and paste that keeps or
+// drops formatting. Everything is stored as HTML and sanitized on the way in
+// and out, because the same document is rendered for every member of the team.
 // ---------------------------------------------------------------------------
 
 const SIZES = [
@@ -22,6 +22,11 @@ const GAPS = [
   { key: '1.7', label: 'Normal' },
   { key: '2.1', label: 'Wide' }
 ];
+
+/** Pixels per Tab indent step on a paragraph. */
+const INDENT_STEP_PX = 36;
+/** Cap so a runaway Tab mash cannot push content off-screen. */
+const INDENT_MAX_LEVEL = 12;
 
 /** Tags a stored document may contain. Anything else is unwrapped. */
 const ALLOWED = new Set([
@@ -332,6 +337,63 @@ export function createDocsEditor({ escapeHtml, onSave, onDirty }) {
     return surface.firstElementChild || surface;
   }
 
+  function isEmptyBlock(block) {
+    if (!block || block === surface) return true;
+    const text = (block.textContent || '').replace(/\u200B/g, '').trim();
+    return !text;
+  }
+
+  /** Indent level from margin-left / padding-left on the block. */
+  function indentLevelOf(block) {
+    if (!block || block.nodeType !== Node.ELEMENT_NODE) return 0;
+    const style = block.style;
+    const px =
+      parseFloat(style.marginLeft || '') ||
+      parseFloat(style.paddingLeft || '') ||
+      0;
+    if (!(px > 0)) return 0;
+    return Math.max(0, Math.round(px / INDENT_STEP_PX));
+  }
+
+  function setIndentLevel(block, level) {
+    if (!block || block === surface || block.nodeType !== Node.ELEMENT_NODE) return;
+    const n = Math.max(0, Math.min(INDENT_MAX_LEVEL, level));
+    if (n <= 0) {
+      block.style.marginLeft = '';
+      // Clear leftover padding from older span-based indents on the block itself.
+      if (block.style.paddingLeft) block.style.paddingLeft = '';
+      return;
+    }
+    block.style.marginLeft = `${n * INDENT_STEP_PX}px`;
+  }
+
+  /** Blocks covered by the current selection (one or many paragraphs). */
+  function selectedBlocks() {
+    const sel = window.getSelection();
+    if (!sel?.rangeCount) return [];
+    const range = sel.getRangeAt(0);
+    const start = blockAt(range.startContainer);
+    const end = blockAt(range.endContainer);
+    if (!start || start === surface) return [];
+    if (start === end || range.collapsed) return [start];
+    const out = [];
+    let on = false;
+    for (const el of surface.querySelectorAll('p, div, h1, h2, h3')) {
+      if (el === start) on = true;
+      if (on) out.push(el);
+      if (el === end) break;
+    }
+    return out.length ? out : [start];
+  }
+
+  function changeIndent(delta) {
+    const blocks = selectedBlocks();
+    if (!blocks.length) return;
+    for (const block of blocks) {
+      setIndentLevel(block, indentLevelOf(block) + delta);
+    }
+  }
+
   async function pastePlain() {
     surface.focus();
     try {
@@ -387,12 +449,39 @@ export function createDocsEditor({ escapeHtml, onSave, onDirty }) {
     }
     if (e.key === 'Tab') {
       e.preventDefault();
-      // Inside a list Tab nests, everywhere else it indents like a doc.
+      // Inside a list Tab nests / outdents. Everywhere else: block indent levels.
       if (inList()) exec(e.shiftKey ? 'outdent' : 'indent');
-      else if (e.shiftKey) exec('outdent');
-      else exec('insertHTML', '<span style="padding-left: 36px"></span>');
+      else changeIndent(e.shiftKey ? -1 : 1);
       markDirty();
       return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !mod && !inList()) {
+      // Empty indented line + Enter → drop back to the default level.
+      // Non-empty + Enter keeps the indent on the new line (browser copies
+      // margin-left; we re-apply after the split in case an engine drops it).
+      const sel = window.getSelection();
+      if (sel?.rangeCount) {
+        const block = blockAt(sel.getRangeAt(0).startContainer);
+        const level = indentLevelOf(block);
+        if (level > 0 && isEmptyBlock(block)) {
+          e.preventDefault();
+          setIndentLevel(block, 0);
+          markDirty();
+          return;
+        }
+        if (level > 0) {
+          // After the browser inserts the new paragraph, mirror the indent.
+          const prev = block;
+          requestAnimationFrame(() => {
+            const nextSel = window.getSelection();
+            if (!nextSel?.rangeCount) return;
+            const next = blockAt(nextSel.getRangeAt(0).startContainer);
+            if (next && next !== prev && next !== surface) {
+              setIndentLevel(next, level);
+            }
+          });
+        }
+      }
     }
     if (e.key === ' ') {
       // "* ", "- " and "1. " at the start of a line become lists.

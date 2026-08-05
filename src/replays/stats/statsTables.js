@@ -1010,6 +1010,9 @@ function averageFooterHtml(rows, columns, sticky, escapeHtml) {
       }
       const vals = [];
       for (const r of rows) {
+        // Roster placeholders (0 rounds under the current filter) stay visible
+        // but must not pull team averages toward zero.
+        if (r.absent) continue;
         const v = typeof c.avgOf === 'function' ? c.avgOf(r) : null;
         if (v == null || !Number.isFinite(v)) continue;
         vals.push(v);

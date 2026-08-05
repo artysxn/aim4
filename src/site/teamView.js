@@ -155,6 +155,8 @@ export function initTeamView({ auth, escapeHtml }) {
   let statusBad = false;
   /** @type {ReturnType<typeof createDocsEditor>|null} */
   let editor = null;
+  /** Doc id currently mounted in `editor` (survives soft re-renders). */
+  let mountedDocId = '';
   /** @type {{ destroy: () => void }|null} */
   let boardMount = null;
   let boardMountKey = '';
@@ -1043,25 +1045,73 @@ export function initTeamView({ auth, escapeHtml }) {
       </div>`;
   }
 
+  /** Patch the docs sidebar / title without tearing down the live editor. */
+  function refreshDocsChrome() {
+    const list = shellEl.querySelector('.tm-doc-list');
+    if (list) {
+      const docs = [...(team.documents || [])].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      list.innerHTML = docs.length
+        ? docs
+            .map(
+              (d) => `
+              <div class="tm-doc-item${d.id === openDocId ? ' active' : ''}" data-open-doc="${escapeHtml(d.id)}">
+                <span class="tm-doc-name">${escapeHtml(d.title)}</span>
+                <span class="tm-doc-meta">@${escapeHtml(d.authorName || '')} · ${escapeHtml(
+                  formatWhen(d.updatedAt)
+                )}</span>
+                ${
+                  d.canEdit
+                    ? `<button type="button" class="rp-btn-icon danger tm-doc-del" data-del-doc="${escapeHtml(
+                        d.id
+                      )}" title="Delete">×</button>`
+                    : ''
+                }
+              </div>`
+            )
+            .join('')
+        : '<p class="view-empty">No documents yet.</p>';
+    }
+    const open = (team.documents || []).find((d) => d.id === openDocId);
+    const title = shellEl.querySelector('#tm-doc-title');
+    if (title && open && document.activeElement !== title) {
+      title.value = open.title || '';
+    }
+    const note = shellEl.querySelector('.tm-doc-head .tm-note');
+    if (note && open) {
+      note.textContent = `Last edit by @${open.updatedBy || open.authorName || ''}`;
+    }
+  }
+
   async function mountEditor() {
     const host = shellEl.querySelector('#tm-doc-editor');
     if (!host || !openDocId) return;
-    const doc = await fetchTeamDocument(team.id, openDocId).catch(() => null);
-    if (!doc) return;
-    const meta = (team.documents || []).find((d) => d.id === openDocId);
+    // Keep the live surface when the open doc has not changed.
+    if (editor && mountedDocId === openDocId && host.contains(editor.el)) {
+      refreshDocsChrome();
+      return;
+    }
+    const wantId = openDocId;
+    const doc = await fetchTeamDocument(team.id, wantId).catch(() => null);
+    if (!doc || openDocId !== wantId) return;
+    const hostNow = shellEl.querySelector('#tm-doc-editor');
+    if (!hostNow) return;
+    const meta = (team.documents || []).find((d) => d.id === wantId);
     editor?.destroy();
     editor = createDocsEditor({
       escapeHtml,
       onSave: async (html) => {
         if (!meta?.canEdit) throw new Error('You can only edit your own documents.');
-        const res = await saveTeamDocument(team.id, { id: openDocId, html });
+        const res = await saveTeamDocument(team.id, { id: wantId, html });
         if (res?.team) {
           team = res.team;
           teams = teams.map((t) => (t.id === team.id ? team : t));
+          // Sidebar timestamps only. Never re-render the shell while typing.
+          if (page === 'team-docs' && openDocId === wantId) refreshDocsChrome();
         }
       }
     });
-    host.appendChild(editor.el);
+    mountedDocId = wantId;
+    hostNow.appendChild(editor.el);
     editor.load({ html: doc.html });
     if (!meta?.canEdit) {
       editor.el.querySelector('#doc-surface')?.setAttribute('contenteditable', 'false');
@@ -1993,25 +2043,92 @@ export function initTeamView({ auth, escapeHtml }) {
     const onOverview = page === 'team-overview';
     if (!onBoard) destroyBoardMount();
     if (!onOverview) destroyOverviewStats();
+    if (page !== 'team-docs' && editor) {
+      void editor.flush();
+      editor.destroy();
+      editor = null;
+      mountedDocId = '';
+    }
     if (!loaded) {
+      if (editor) {
+        void editor.flush();
+        editor.destroy();
+        editor = null;
+        mountedDocId = '';
+      }
       shellEl.innerHTML = spinnerHtml();
       return;
     }
     if (!signedIn()) {
       destroyBoardMount();
       destroyOverviewStats();
+      if (editor) {
+        editor.destroy();
+        editor = null;
+        mountedDocId = '';
+      }
       shellEl.innerHTML = signedOutHtml(titleFor(page));
       return;
     }
     if (!team) {
       destroyBoardMount();
       destroyOverviewStats();
+      if (editor) {
+        editor.destroy();
+        editor = null;
+        mountedDocId = '';
+      }
       shellEl.innerHTML = noTeamHtml();
       return;
     }
     if (page === 'team-docs') {
+      // Re-homing the live editor avoids a blank flash (and caret loss) when
+      // auth token refresh or another chrome update calls render() mid-edit.
+      const live =
+        editor && mountedDocId === openDocId && editor.el?.isConnected ? editor.el : null;
+      let savedRange = null;
+      const hadFocus = Boolean(live && live.contains(document.activeElement));
+      if (live) {
+        const sel = window.getSelection?.();
+        if (sel?.rangeCount && live.contains(sel.anchorNode)) {
+          try {
+            savedRange = sel.getRangeAt(0).cloneRange();
+          } catch {
+            savedRange = null;
+          }
+        }
+        live.remove();
+      } else {
+        editor?.destroy();
+        editor = null;
+        mountedDocId = '';
+      }
       shellEl.innerHTML = documentsHtml();
-      mountEditor();
+      if (live) {
+        const host = shellEl.querySelector('#tm-doc-editor');
+        if (host) {
+          host.appendChild(live);
+          refreshDocsChrome();
+          if (hadFocus) {
+            const surface = live.querySelector('#doc-surface');
+            surface?.focus();
+            if (savedRange) {
+              const sel = window.getSelection?.();
+              try {
+                sel?.removeAllRanges();
+                sel?.addRange(savedRange);
+              } catch {
+                /* range may be stale after a rare DOM rewrite */
+              }
+            }
+          }
+          return;
+        }
+        editor?.destroy();
+        editor = null;
+        mountedDocId = '';
+      }
+      void mountEditor();
       return;
     }
     if (page === 'team-roles') {
@@ -2740,6 +2857,12 @@ export function initTeamView({ auth, escapeHtml }) {
   });
 
   auth?.onChange?.(() => {
+    // Same signed-in user (e.g. JWT refresh while a doc autosaves): keep the
+    // page mounted. A full reload remounts the docs editor and flashes blank.
+    if (auth?.isLoggedIn && account.signedIn && auth.user?.id && auth.user.id === account.id) {
+      return;
+    }
+    if (!auth?.isLoggedIn && !account.signedIn) return;
     loaded = false;
     demosLoaded = false;
     loadInFlight = false;
@@ -2753,6 +2876,12 @@ export function initTeamView({ auth, escapeHtml }) {
       if (next !== page) {
         openVisibleMenu = '';
         stratbookSettingsOpen = false;
+        if (page === 'team-docs' && next !== 'team-docs' && editor) {
+          void editor.flush();
+          editor.destroy();
+          editor = null;
+          mountedDocId = '';
+        }
       }
       page = next;
       if (params.invite) pendingInvite = params.invite;
@@ -2773,6 +2902,9 @@ export function initTeamView({ auth, escapeHtml }) {
     },
     onHide() {
       editor?.flush();
+      editor?.destroy();
+      editor = null;
+      mountedDocId = '';
       destroyBoardMount();
     },
     /** Called by the router for /i/<code> landings. */

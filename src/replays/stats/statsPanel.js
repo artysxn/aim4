@@ -640,6 +640,100 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange }) {
     return withRoles.filter((p) => playerMatchesRoleFilter(p, filter.role));
   }
 
+  /**
+   * Empty row for a roster player who has no rounds under the active filter.
+   * Keeps them on the team Overview table instead of disappearing.
+   */
+  function absentPlayerRow(base) {
+    return {
+      ...base,
+      rounds: 0,
+      kills: 0,
+      deaths: 0,
+      assists: 0,
+      damage: 0,
+      kd: null,
+      adr: null,
+      adrWon: null,
+      adrLost: null,
+      shots: 0,
+      hits: 0,
+      headshots: 0,
+      accuracy: null,
+      awpShots: 0,
+      awpHits: 0,
+      awpAccuracy: null,
+      kast: null,
+      impact: null,
+      rating: null,
+      ratingT: null,
+      ratingCT: null,
+      ratingWon: null,
+      ratingLost: null,
+      ratingFullVsFull: null,
+      ratingFullVsFullRounds: 0,
+      a4r: null,
+      a4rDetail: null,
+      a4or: null,
+      openKills: 0,
+      openDeaths: 0,
+      opkd: null,
+      opatt: null,
+      opkRate: null,
+      prwSwing: null,
+      prwSwingTotal: 0,
+      prwSwingRounds: 0,
+      prwSwingWon: null,
+      prwSwingLost: null,
+      psdt: null,
+      psdtTotal: 0,
+      psdtRounds: 0,
+      dt: null,
+      dtTotal: 0,
+      dtRounds: 0,
+      pfw: null,
+      pfo: null,
+      tfw: null,
+      xk: null,
+      xkTotal: null,
+      duels: null,
+      pfoBuckets: [],
+      heDmgPerNade: null,
+      fireDmgPerNade: null,
+      blindPerFlash: null,
+      flashHitRate: null,
+      utilDmgPerRound: null,
+      a4aim: null,
+      aimRaw: null,
+      aimComponents: null,
+      aimSample: null,
+      absent: true
+    };
+  }
+
+  /**
+   * On the team page, keep every player who qualifies for the map/team scope
+   * (min-rounds against that scope), even when side/result/opening filters
+   * leave them with 0 matching rounds.
+   */
+  function pinTeamRoster(rows, players, active, demos, filtered, minR) {
+    if (!lockedTeamName) {
+      return minR > 0 ? filtered.filter((p) => (p.rounds || 0) >= minR) : filtered;
+    }
+    const rosterActive = {
+      maps: active.maps,
+      files: active.files,
+      teamName: lockedTeamName
+    };
+    let roster = enrichedPlayers(rows, players, rosterActive, demos);
+    if (minR > 0) roster = roster.filter((p) => (p.rounds || 0) >= minR);
+    if (!roster.length) {
+      return minR > 0 ? filtered.filter((p) => (p.rounds || 0) >= minR) : filtered;
+    }
+    const byId = new Map(filtered.map((p) => [p.id, p]));
+    return roster.map((base) => byId.get(base.id) || absentPlayerRow(base));
+  }
+
   function mapLabel(demo) {
     return demo.mapName || MAPS[demo.map]?.name || demo.map || '—';
   }
@@ -814,9 +908,9 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange }) {
       : { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
 
     if (tab === 'players') {
-      let data = enrichedPlayers(rows, players, active, demos);
+      const filtered = enrichedPlayers(rows, players, active, demos);
       const minR = Math.max(0, Number(filter.minRounds) || 0);
-      if (minR > 0) data = data.filter((p) => (p.rounds || 0) >= minR);
+      let data = pinTeamRoster(rows, players, active, demos, filtered, minR);
       const matchDemo = singleMatchDemo(payload, scope);
       if (matchDemo) {
         bodyEl.innerHTML = matchBoardsHtml(data, matchDemo, {

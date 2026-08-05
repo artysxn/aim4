@@ -99,8 +99,19 @@ export class AuthManager {
     }
 
     const sb = getSupabase();
-    sb.auth.onAuthStateChange((_event, session) => {
-      this._applySession(session?.user ?? null).catch((e) => {
+    sb.auth.onAuthStateChange((event, session) => {
+      const next = session?.user ?? null;
+      // Token rotation keeps the same user. Re-running profile/settings sync and
+      // emitting onChange would remount live editors (team docs) on every autosave
+      // that touches a near-expiry JWT via getSession().
+      if (
+        event === 'TOKEN_REFRESHED' &&
+        this.user?.id &&
+        next?.id === this.user.id
+      ) {
+        return;
+      }
+      this._applySession(next).catch((e) => {
         console.warn('[auth] session sync failed', e);
       });
     });
