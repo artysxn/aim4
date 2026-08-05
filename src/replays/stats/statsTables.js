@@ -1044,6 +1044,7 @@ function averageFooterHtml(rows, columns, sticky, escapeHtml) {
  *   compact?: boolean,
  *   nameCell?: (r: object) => string,
  *   teamCell?: (r: object) => string,
+ *   opponentCell?: (r: object) => string,
  *   fixedCount?: number,
  *   showAverage?: boolean
  * }} opts
@@ -1059,6 +1060,7 @@ export function statsTableHtml(rows, opts) {
     compact = false,
     nameCell = null,
     teamCell = null,
+    opponentCell = null,
     fixedCount = 0,
     showAverage = false
   } = opts;
@@ -1111,6 +1113,10 @@ export function statsTableHtml(rows, opts) {
             return t
               ? `<td class="${cls}" data-tip="${escapeHtml(t)}">${label}</td>`
               : `<td class="${cls}">${label}</td>`;
+          }
+          if (c.key === 'opponent' && opponentCell) {
+            const label = opponentCell(r);
+            return `<td class="left${stick}">${label}</td>`;
           }
           const text = c.cell(r);
           const t = c.tip?.(r);

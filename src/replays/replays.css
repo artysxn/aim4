@@ -3208,11 +3208,25 @@ body.rv-open {
   text-align: left;
   text-decoration: underline dotted rgba(255, 255, 255, 0.28);
   text-underline-offset: 3px;
+  /* Spans (not buttons) so names stay clickable and copyable. */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .st-link:hover {
   color: var(--text);
   text-decoration-color: rgba(255, 255, 255, 0.55);
+}
+
+.st-link:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.45);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.st-board-name .st-link {
+  font: inherit;
+  color: inherit;
 }
 
 .st-table tfoot .st-avg-row td {

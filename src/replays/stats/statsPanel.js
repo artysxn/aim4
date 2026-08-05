@@ -363,17 +363,29 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange }) {
     render();
   });
 
+  /** True when the user is dragging a text selection inside a name link. */
+  function selectionInside(el) {
+    const sel = window.getSelection?.();
+    if (!sel || sel.isCollapsed || !sel.anchorNode) return false;
+    return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
+  }
+
+  function activateNameLink(link) {
+    if (!link || selectionInside(link)) return false;
+    if (link.dataset.stPlayer != null) {
+      openPlayerDetail(link.dataset.stPlayer, link.textContent || '');
+      return true;
+    }
+    if (link.dataset.stTeam != null) {
+      openTeamDetail(link.dataset.stTeam, link.textContent || '');
+      return true;
+    }
+    return false;
+  }
+
   bodyEl.addEventListener('click', (e) => {
-    const playerBtn = e.target.closest('[data-st-player]');
-    if (playerBtn) {
-      openPlayerDetail(playerBtn.dataset.stPlayer, playerBtn.textContent || '');
-      return;
-    }
-    const teamBtn = e.target.closest('[data-st-team]');
-    if (teamBtn) {
-      openTeamDetail(teamBtn.dataset.stTeam, teamBtn.textContent || '');
-      return;
-    }
+    const nameLink = e.target.closest('[data-st-player], [data-st-team]');
+    if (nameLink && activateNameLink(nameLink)) return;
     const pageBtn = e.target.closest('[data-page]');
     if (pageBtn) {
       if (pageBtn.disabled) return;
@@ -402,6 +414,14 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange }) {
     if (detail) detailPage = 1;
     else page[tab] = 1;
     render();
+  });
+
+  bodyEl.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const nameLink = e.target.closest?.('[data-st-player], [data-st-team]');
+    if (!nameLink || e.target !== nameLink) return;
+    e.preventDefault();
+    activateNameLink(nameLink);
   });
 
   // ---- view state (URL / share) -------------------------------------------
@@ -697,10 +717,20 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange }) {
     return out;
   }
 
+  function playerLink(id, name) {
+    return `<span class="st-link" role="link" tabindex="0" data-st-player="${escapeHtml(
+      id
+    )}">${escapeHtml(name)}</span>`;
+  }
+
+  function teamLink(name) {
+    return `<span class="st-link" role="link" tabindex="0" data-st-team="${escapeHtml(
+      name
+    )}">${escapeHtml(name)}</span>`;
+  }
+
   function playerNameCell(r) {
-    return `<button type="button" class="st-link" data-st-player="${escapeHtml(
-      r.id
-    )}">${escapeHtml(r.name)}</button>`;
+    return playerLink(r.id, r.name);
   }
 
   function playerTeamCell(r) {
@@ -709,16 +739,11 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange }) {
       const text = r.teamLabel || '—';
       return r.teams?.length > 1 ? `<em>${escapeHtml(text)}</em>` : escapeHtml(text);
     }
-    const name = teams[0].name;
-    return `<button type="button" class="st-link" data-st-team="${escapeHtml(
-      name
-    )}">${escapeHtml(name)}</button>`;
+    return teamLink(teams[0].name);
   }
 
   function teamNameCell(r) {
-    return `<button type="button" class="st-link" data-st-team="${escapeHtml(
-      r.name
-    )}">${escapeHtml(r.name)}</button>`;
+    return teamLink(r.name);
   }
 
   function renderDetail(active, players, demos) {
@@ -737,7 +762,9 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange }) {
         sortDir: detailSort.dir,
         page: detailPage,
         pageSize: STATS_PAGE_SIZE,
-        showAverage: true
+        showAverage: true,
+        opponentCell: (r) =>
+          r.opponent && r.opponent !== '—' ? teamLink(r.opponent) : escapeHtml(r.opponent || '—')
       });
       return;
     }
@@ -755,7 +782,9 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange }) {
       sortDir: detailSort.dir,
       page: detailPage,
       pageSize: STATS_PAGE_SIZE,
-      showAverage: true
+      showAverage: true,
+      opponentCell: (r) =>
+        r.opponent && r.opponent !== '—' ? teamLink(r.opponent) : escapeHtml(r.opponent || '—')
     });
   }
 
@@ -846,14 +875,17 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange }) {
     const fixedCount = opts.fixedCount ?? PLAYER_FIXED_BASE.length;
     const board = (team, name) => {
       const list = playerRows.filter((p) => teamOf.get(p.id) === team);
+      const title = name || `Team ${team}`;
       return `<div class="st-board">
-        <h4 class="st-board-name team${team}">${escapeHtml(name || `Team ${team}`)}</h4>
+        <h4 class="st-board-name team${team}">${teamLink(title)}</h4>
         ${statsTableHtml(list, {
           columns,
           fixedCount,
           escapeHtml,
           sortKey: opts.sortKey,
-          sortDir: opts.sortDir
+          sortDir: opts.sortDir,
+          nameCell: playerNameCell,
+          teamCell: playerTeamCell
         })}
       </div>`;
     };
