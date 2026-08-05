@@ -45,7 +45,8 @@ function a4rTip(p) {
     `Swing lost ${f2(d.swingLost.input)} → ${signed(d.swingLost.contrib)}`,
     `Core: ${signed(d.core)}`,
     `Core^1.25: ${signed(d.powered)}`,
-    `Rounds ${int(d.rounds)} / 3000 → ${signed(d.roundsBonus)}`
+    `Rounds ${int(d.rounds)} / 3000 → ${signed(d.roundsBonus)}`,
+    `Offset → ${signed(d.offset)}`
   ];
   return tip(lines);
 }
