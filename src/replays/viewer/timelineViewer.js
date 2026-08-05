@@ -61,6 +61,8 @@ import coachIcon from '../../icons/demos_coach.svg?raw';
 import chartIcon from '../../icons/demos_chart.svg?raw';
 import zonesIcon from '../../icons/demos_zones.svg?raw';
 import duelsIcon from '../../icons/demos_duels.svg?raw';
+import povIcon from '../../icons/demos_pov.svg?raw';
+import { createPovVision, povDuelOverlay, povZonePaint } from './teamPov.js';
 import { createDuelOverlay } from '../duels/duelOverlay.js';
 import { createDuelScanner, scanTickFor } from '../duels/duelScanner.js';
 import {
@@ -233,6 +235,8 @@ export function createTimelineViewer({
             title="Map positions: active / controlled / contested">${icon(zonesIcon)}</button>
           <button type="button" class="rv-tool" id="rv-duels"
             title="Duel stats: xK beside fighters; hover a player or line for win %">${icon(duelsIcon)}</button>
+          <button type="button" class="rv-tool" id="rv-pov"
+            title="Team POV: one team's map control and only the enemies they can see">${icon(povIcon)}</button>
           <button type="button" class="rv-tool" id="rv-draw" title="Draw (right click always draws)">${icon(pencilIcon)}</button>
           <button type="button" class="rv-tool" id="rv-note" title="Notes">${icon(commentsIcon)}</button>
           <button type="button" class="rv-tool" id="rv-bookmark" title="Save to a playlist">${icon(bookmarkAddIcon)}</button>
@@ -294,6 +298,7 @@ export function createTimelineViewer({
   const chartBtn = el.querySelector('#rv-chart');
   const zonesBtn = el.querySelector('#rv-zones');
   const duelsBtn = el.querySelector('#rv-duels');
+  const povBtn = el.querySelector('#rv-pov');
   const coachBtn = el.querySelector('#rv-coach');
   const coachPick = el.querySelector('#rv-coach-pick');
   const coachPickTitle = el.querySelector('#rv-coach-pick-title');
@@ -389,6 +394,13 @@ export function createTimelineViewer({
   /** Round-robin per-player LOS cache (one viewer recomputed per paint). */
   const zoneVisionCache = createZoneVisionCache();
   let zoneLoadId = 0;
+  /**
+   * Roster team (1|2) the viewer is restricted to, or 0 for the omniscient
+   * default. Held as a team rather than a side because sides swap at half and
+   * the choice is meant to follow the team across the whole demo.
+   */
+  let povTeam = 0;
+  const povVision = createPovVision();
   /** Roster team (1|2) whose mistakes coach notes; null until picked. */
   let coachTeam = null;
   /** Player ids whose coach notes are shown; null = no filter yet. */
@@ -675,6 +687,17 @@ export function createTimelineViewer({
   let scrubbing = false;
   /** Round index locked for the active drag — scrub never crosses rounds mid-drag. */
   let scrubRoundIndex = -1;
+  /** Transport was running when the drag started, so it can be put back. */
+  let scrubResume = false;
+  /**
+   * Whether entering freezetime should still skip forward to the live tick.
+   *
+   * On by default — playing into a round is meant to land on the first live
+   * moment rather than sit through the buy. A drag that deliberately lands in
+   * freezetime disarms it for that round, otherwise the frame right after the
+   * release would pull the position straight back out from under the user.
+   */
+  let freezeSkip = true;
 
   /** Last instant that still belongs to this round (not the next round's t=0). */
   function roundLocalMax(item) {
@@ -692,11 +715,32 @@ export function createTimelineViewer({
     // Cap below the round boundary so locate() does not flip to the next round
     // while the pointer sits on the right edge (that used to cascade every move).
     const local = Math.min(roundLocalMax(item), f * item.seconds);
+    // Landing in the buy means the user wants the buy, so stop skipping it.
+    const timing = item.timing;
+    const freezeSecs = Math.max(
+      0,
+      (timing.freezeEndTick - timing.startTick) / timing.tickRate
+    );
+    if (local < freezeSecs) freezeSkip = false;
     playback.seek(sequence.offsetOf(index) + local);
+  };
+  /** End a drag: put the transport back the way it was found. */
+  const endScrub = () => {
+    scrubbing = false;
+    scrubRoundIndex = -1;
+    if (scrubResume) {
+      scrubResume = false;
+      playback.play();
+    }
   };
   scrubEl.addEventListener('pointerdown', (e) => {
     scrubbing = true;
     scrubRoundIndex = activeIndex;
+    // The transport is held for the drag. Without this the wall clock keeps
+    // pushing the position forward between pointer moves, and a backwards drag
+    // is a tug of war against it that the pointer loses.
+    scrubResume = playback.playing;
+    if (scrubResume) playback.pause();
     scrubEl.setPointerCapture(e.pointerId);
     seekFromEvent(e);
   });
@@ -705,8 +749,7 @@ export function createTimelineViewer({
   });
   scrubEl.addEventListener('pointerup', (e) => {
     const from = scrubRoundIndex;
-    scrubbing = false;
-    scrubRoundIndex = -1;
+    endScrub();
     try {
       scrubEl.releasePointerCapture(e.pointerId);
     } catch {
@@ -720,10 +763,7 @@ export function createTimelineViewer({
     if (loc.local < roundLocalMax(item) - 1e-6) return;
     if (from + 1 < files.length) selectRound(from + 1, { seek: true });
   });
-  scrubEl.addEventListener('pointercancel', () => {
-    scrubbing = false;
-    scrubRoundIndex = -1;
-  });
+  scrubEl.addEventListener('pointercancel', endScrub);
 
   // ---- round selection ----------------------------------------------------
 
@@ -755,6 +795,9 @@ export function createTimelineViewer({
     const resident = store.get(file)?.isFull ? peekMeta(file) : null;
 
     activeIndex = index;
+    // A new round arms the buy skip again — it is only ever disarmed for the
+    // round the user dragged into.
+    freezeSkip = true;
     drawing.setRound(file);
     onRound?.(rounds[index]);
     syncBookmark();
@@ -935,7 +978,7 @@ export function createTimelineViewer({
    * knowable once the view transform for this frame is known, and doing it here
    * means hovering never has to project anything itself.
    */
-  function duelOverlayForTick(tick) {
+  function duelOverlayForTick(tick, pov = null) {
     duelHitLines = [];
     if (!duelsOn || !zoneNetwork || !activeMeta?.players?.length) return null;
     const mapCode = renderer.mapCode || activeMeta.map || '';
@@ -961,6 +1004,11 @@ export function createTimelineViewer({
       radarLevel: renderer.radarLevel || 'default'
     });
     if (!overlay) return null;
+    // Team POV: a pair line to an enemy nobody can see is the position the
+    // droplet was withheld to protect. Filtered here rather than at the
+    // renderer so the hit test below inherits it and hovering cannot get it
+    // back either.
+    const shown = pov ? povDuelOverlay(overlay, pov.side, pov.seen) : overlay;
 
     const { w, h } = renderer.resize();
     const t = renderer.viewTransform(w, h);
@@ -968,12 +1016,12 @@ export function createTimelineViewer({
       const p = renderer.project(t, wx, wy, {});
       return { x: p.x / renderer.dpr, y: p.y / renderer.dpr };
     };
-    for (const line of overlay.lines) {
+    for (const line of shown.lines) {
       const a = toCss(line.ax, line.ay);
       const b = toCss(line.bx, line.by);
       duelHitLines.push({ aSlot: line.aSlot, bSlot: line.bSlot, ax: a.x, ay: a.y, bx: b.x, by: b.y });
     }
-    return overlay;
+    return shown;
   }
 
   /** Distance from a point to a segment, in the same units as both. */
@@ -1104,7 +1152,60 @@ export function createTimelineViewer({
       visionCache: zoneVisionCache,
       track
     });
-    return { network: zoneNetwork, paint };
+    // Under POV, possession is only ever the chosen team's own. Ground the
+    // other side is taking is not something this team can see happening.
+    const side = povSideNow();
+    return { network: zoneNetwork, paint: side ? povZonePaint(paint, side) : paint };
+  }
+
+  // ---- team POV -----------------------------------------------------------
+
+  /** The chosen team's side in the active round, or '' when POV is off. */
+  function povSideNow() {
+    if (!povTeam || !activeMeta) return '';
+    const side = povTeam === 1 ? activeMeta.team1Side : activeMeta.team2Side;
+    return side === 'T' || side === 'CT' ? side : '';
+  }
+
+  /** The name of the team POV is following, for the button's tooltip. */
+  function povTeamName() {
+    if (!povTeam) return '';
+    const info = povTeam === 1 ? activeMeta?.team1 : activeMeta?.team2;
+    return info?.name || `Team ${povTeam}`;
+  }
+
+  /**
+   * Enemy slots the chosen team can see right now, or null when POV is off.
+   *
+   * Needs the zone network for line of sight. Without it every line is clear,
+   * which is a worse answer than none but not a wrong one: the field of view
+   * and range tests still apply, and the network is normally in hand by the
+   * time the first frame with a POV team is drawn.
+   */
+  function povFrameFor(tick) {
+    const side = povSideNow();
+    if (!side) return null;
+    return {
+      side,
+      seen: povVision.seenAt({
+        meta: activeMeta,
+        states,
+        network: zoneNetwork,
+        mapCode: renderer.mapCode || activeMeta?.map || '',
+        tick,
+        tickRate: activeMeta?.tickRate || 64,
+        povSide: side,
+        roundKey: files[activeIndex] || ''
+      })
+    };
+  }
+
+  function syncPovBtn() {
+    povBtn?.classList.toggle('active', Boolean(povTeam));
+    if (!povBtn) return;
+    povBtn.title = povTeam
+      ? `Team POV: ${povTeamName()}. Click for the other team, again to turn it off.`
+      : 'Team POV: one team’s map control and only the enemies they can see';
   }
 
   function clearPlayerStates() {
@@ -1149,6 +1250,10 @@ export function createTimelineViewer({
     let rightScore;
     let leftSide;
     let rightSide;
+    // Which roster team each panel ended up holding, so POV can hide the other
+    // one. The panels swap with the sides, so the markup's data-team is not it.
+    let leftTeam;
+    let rightTeam;
     if (s1 === 'CT' && s2 === 'T') {
       team1El.innerHTML = teamHtml(2, t2, 'T');
       team2El.innerHTML = teamHtml(1, t1, 'CT');
@@ -1156,6 +1261,8 @@ export function createTimelineViewer({
       rightScore = wins.team1;
       leftSide = 'T';
       rightSide = 'CT';
+      leftTeam = 2;
+      rightTeam = 1;
     } else {
       team1El.innerHTML = teamHtml(1, t1, s1 || 'T');
       team2El.innerHTML = teamHtml(2, t2, s2 || 'CT');
@@ -1163,11 +1270,26 @@ export function createTimelineViewer({
       rightScore = wins.team2;
       leftSide = s1 || 'T';
       rightSide = s2 || 'CT';
+      leftTeam = 1;
+      rightTeam = 2;
     }
     scoreLeftEl.textContent = String(leftScore);
     scoreRightEl.textContent = String(rightScore);
     scoreLeftEl.dataset.side = leftSide;
     scoreRightEl.dataset.side = rightSide;
+    // Team POV: one roster on the sidebar. The other side's HP, buy and
+    // inventory are exactly the information the mode exists to withhold, so the
+    // panel is emptied rather than hidden and syncScoreboard stops feeding it.
+    // The grid column stays where it is: the map should not resize on a toggle.
+    const hideLeft = Boolean(povTeam) && leftTeam !== povTeam;
+    const hideRight = Boolean(povTeam) && rightTeam !== povTeam;
+    if (hideLeft) team1El.innerHTML = '';
+    if (hideRight) team2El.innerHTML = '';
+    team1El.hidden = hideLeft;
+    team2El.hidden = hideRight;
+    // Team names arrive with the round, so the POV tooltip is refreshed here
+    // rather than only when the button is clicked.
+    syncPovBtn();
     indexPlayerRows();
   }
 
@@ -3403,6 +3525,18 @@ export function createTimelineViewer({
     draw();
   });
 
+  // Off → team 1 → team 2 → off. A cycle rather than a picker: there are only
+  // ever two answers, and the tooltip names the one currently in force.
+  povBtn?.addEventListener('click', async () => {
+    povTeam = povTeam === 0 ? 1 : povTeam === 1 ? 2 : 0;
+    povVision.reset();
+    syncPovBtn();
+    // Line of sight is what the mode is built on, same as the duels tool.
+    if (povTeam) await ensureZoneNetwork();
+    renderScoreboards();
+    draw();
+  });
+
   duelsBtn?.addEventListener('click', async () => {
     // Same metering shape as map control: charged once per opened viewer, on
     // the way on only, never again when it is toggled back off and on.
@@ -3740,8 +3874,9 @@ export function createTimelineViewer({
       }
     }
     const live = liveOffsetOf(loc.index);
-    // Entering a round (or playing through freezetime) jumps to live.
-    if (playback.playing && at < live) {
+    // Entering a round (or playing through freezetime) jumps to live, unless a
+    // drag put the position in the buy on purpose.
+    if (playback.playing && freezeSkip && at < live) {
       playback.seek(live, { emit: false });
       at = live;
       loc = sequence.locate(live);
@@ -3785,8 +3920,9 @@ export function createTimelineViewer({
       track.sampleAll(tick, states);
     } else clearPlayerStates();
 
+    const pov = povFrameFor(tick);
     const zoneOverlay = zoneOverlayForTick(tick);
-    const duelOverlayFrame = duelOverlayForTick(tick);
+    const duelOverlayFrame = duelOverlayForTick(tick, pov);
     renderer.render({
       tick,
       tickRate: timing.tickRate,
@@ -3800,7 +3936,8 @@ export function createTimelineViewer({
       marksKey: files[activeIndex] || '',
       hideDeaths: false,
       zoneOverlay,
-      duelOverlay: duelOverlayFrame
+      duelOverlay: duelOverlayFrame,
+      pov
     });
 
     const clock = clockAt(timing, tick);
@@ -3835,7 +3972,7 @@ export function createTimelineViewer({
 
   playBtn.addEventListener('click', () => {
     const live = liveOffsetOf(activeIndex);
-    if (!playback.playing && playback.position < live) {
+    if (!playback.playing && freezeSkip && playback.position < live) {
       playback.seek(live, { emit: false });
     }
     playback.toggle();

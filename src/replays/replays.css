@@ -2107,6 +2107,13 @@ body.rv-open {
   background: #0c0c0c;
 }
 
+/* Team POV hides one roster. The display above outranks the UA hidden rule, so
+   this has to say it again; the grid column itself stays, because the map
+   should not resize when the mode is toggled. */
+.rv-team[hidden] {
+  display: none;
+}
+
 .rv-team-head {
   display: flex;
   align-items: center;
@@ -2526,8 +2533,14 @@ body.rv-open {
   transform: translate(-50%, -50%);
 }
 
+/* The plant is a state change, not an instant like a kill, so it reads as a
+   block rather than another tick on the bar. */
 .rv-mark.plant {
-  background: #f2d024;
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  background: #e0453c;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
 }
 
 .rv-mark.defuse {

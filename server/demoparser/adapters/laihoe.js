@@ -736,11 +736,53 @@ function detonationFor(flight, byEntity) {
 }
 
 /**
+ * How long after a weapon_fire the projectile's first sample may appear and
+ * still belong to that throw. One second is far longer than the real gap (a
+ * tick or two) and far shorter than the gap to the same player's next nade.
+ */
+const THROW_MATCH_TICKS = 64;
+
+/**
+ * Fire-grenade throws per player, from the shot log.
+ *
+ * Molotov and incendiary share one projectile class, so the flight rows cannot
+ * tell them apart. weapon_fire can: it names the weapon that left the hand. A
+ * CT who picked up a dropped molotov threw a molotov, and this is the only
+ * source that still knows that.
+ *
+ * @returns {Map<string, Array<{ tick: number, type: string }>>}
+ */
+function fireThrowsBySteam(byName) {
+  const out = new Map();
+  for (const e of byName.get('weapon_fire') || []) {
+    const type = normalizeGrenadeType(e.weapon);
+    if (type !== 'molotov' && type !== 'incgrenade') continue;
+    const steam = sid(e.user_steamid);
+    if (!steam) continue;
+    if (!out.has(steam)) out.set(steam, []);
+    out.get(steam).push({ tick: num(e.tick), type });
+  }
+  for (const list of out.values()) list.sort((a, b) => a.tick - b.tick);
+  return out;
+}
+
+/** The fire grenade this player threw for a projectile that appeared at `tick`. */
+function thrownFireType(fireThrows, steamId, tick) {
+  let best = null;
+  for (const t of fireThrows.get(steamId) || []) {
+    if (t.tick > tick) break;
+    if (tick - t.tick > THROW_MATCH_TICKS) continue;
+    best = t;
+  }
+  return best?.type || null;
+}
+
+/**
  * A flight plus its detonation, in the shape the viewer draws. The path is
  * cut at the detonation so a smoke does not appear to fly for 18 seconds, and
  * simplified so a round's worth of trajectories stays a few kilobytes.
  */
-function grenadeEventFrom(flight, det, idOf, sideOf) {
+function grenadeEventFrom(flight, det, idOf, sideOf, fireType = null) {
   const detonateTick = det ? det.tick : flight.endTick;
   const path = simplifyPath(
     flight.path.filter((p) => p.tick <= detonateTick),
@@ -752,9 +794,16 @@ function grenadeEventFrom(flight, det, idOf, sideOf) {
   if (at && last && Math.hypot(at.x - last.x, at.y - last.y) > PATH_EPSILON) {
     path.push({ tick: detonateTick, ...at });
   }
+  // Both fire grenades arrive as one projectile class. The shot log knows which
+  // one actually left the hand; the thrower's side is only the fallback for
+  // demos with no usable weapon_fire row, and it is wrong for a picked-up nade.
   const side = sideOf(flight.steamId);
+  const isFire = flight.type === 'molotov' || flight.type === 'incgrenade';
+  const type = !isFire
+    ? flight.type
+    : fireType || (side === 'CT' ? 'incgrenade' : 'molotov');
   return {
-    type: flight.type === 'molotov' && side === 'CT' ? 'incgrenade' : flight.type,
+    type,
     player: idOf(flight.steamId),
     throwTick: flight.throwTick,
     detonateTick,
@@ -1124,6 +1173,8 @@ export async function parseDemo(file, opts = {}) {
     flights = [];
   }
   if (!flights.length) flights = flightsFromFire(byName, detonations, tickRate);
+  // Molotov vs incendiary is only knowable from the shot log; see grenadeEventFrom.
+  const fireThrows = fireThrowsBySteam(byName);
 
   const inSpan = (e, span) => {
     const t = num(e.tick);
@@ -1164,8 +1215,8 @@ export async function parseDemo(file, opts = {}) {
     const team1Side =
       sideFromBuys(1, buyTick, roster, buys) || (span.round > roundsPerHalf ? 'CT' : 'T');
     const team2Side = team1Side === 'T' ? 'CT' : 'T';
-    // Molotov and incendiary share one projectile class; the thrower's side
-    // is what separates them.
+    // Molotov and incendiary share one projectile class; the shot log separates
+    // them, and the thrower's side is only the fallback when it cannot.
     const sideOfSteam = (steam) =>
       bySteam.get(steam)?.team === 2 ? team2Side : team1Side;
 
@@ -1173,7 +1224,13 @@ export async function parseDemo(file, opts = {}) {
     for (const flight of flights) {
       if (flight.throwTick < span.startTick || flight.throwTick > span.officialEndTick) continue;
       grenades.push(
-        grenadeEventFrom(flight, detonationFor(flight, detonations.byEntity), idOf, sideOfSteam)
+        grenadeEventFrom(
+          flight,
+          detonationFor(flight, detonations.byEntity),
+          idOf,
+          sideOfSteam,
+          thrownFireType(fireThrows, flight.steamId, flight.throwTick)
+        )
       );
     }
 

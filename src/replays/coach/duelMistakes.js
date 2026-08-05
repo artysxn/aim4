@@ -184,12 +184,171 @@ export function dropDecidedFightFlags(flags, {
     return !decided.get(`${death.victim}@${death.tick}`);
   });
 }
+
+/**
+ * Drop gunfight notes for players who were carrying the fight they are being
+ * coached about.
+ *
+ * The decided-fight filter above asks about one pairing at one instant. This
+ * asks a different question over the whole fight: across every enemy they could
+ * see, for how much of it was this player expected to come out ahead? Someone
+ * holding {@link XK_CARRY} expected kills for most of a fight was not making a
+ * positioning error that happened to end badly, and a note built from headcount
+ * or round win chance cannot see that.
+ *
+ * The AWP carve-out is the same idea at a lower bar. A rifle in a good spot is
+ * in two fights at once and its xK climbs past one; an AWP is one bullet, so
+ * even a completely free angle sits near {@link XK_AWP_HOLD}. Holding that is
+ * the whole job, and "good fight, wrong fight" is the wrong note for it.
+ *
+ * Silent when the map / model is missing, same as every priced rule here.
+ */
+export function dropCarriedFightFlags(flags, { meta, tickRate, byId, network, track }) {
+  if (!flags?.length) return flags || [];
+  if (!track || !network || !meta || !hasControlField(network)) return flags;
+  if (!(DUEL_MODEL_PARAMS.trainedOn > 0)) return flags;
+
+  const weights = paramVector();
+  const mapCode = meta.map || '';
+  const grenades = meta.events?.grenades || [];
+  const visionTracker = createVisionTracker(tickRate);
+  const reloadTracker = createReloadTracker({ meta });
+  let lastWalked = -Infinity;
+
+  const snapshotAt = (tick) =>
+    computeDuelSnapshot({
+      meta,
+      track,
+      tick,
+      network,
+      mapCode,
+      smokes: blockingSmokesAt(grenades, tick, tickRate),
+      visionTracker,
+      reloadTracker
+    });
+
+  const snapshotWalked = (tick) => {
+    const warm = WARM_SECONDS * tickRate;
+    const from =
+      tick < lastWalked || tick - lastWalked > warm
+        ? Math.max(meta.freezeEndTick ?? track.firstTick, tick - warm)
+        : lastWalked + WALK_STRIDE;
+    if (tick < lastWalked) visionTracker.reset();
+    for (let t = from; t < tick; t += WALK_STRIDE) snapshotAt(t);
+    lastWalked = tick;
+    return snapshotAt(tick);
+  };
+
+  const lookback = XK_LOOKBACK_SECONDS * tickRate;
+  const carried = new Set();
+  // Tick order keeps the walker moving forward between notes as much as it can.
+  const ordered = [...flags].sort((a, b) => a.tick - b.tick);
+
+  for (const flag of ordered) {
+    if (!flag?.playerId || !XK_FIGHT_RULES.has(flag.rule)) continue;
+    const slot = byId.get(flag.playerId)?.slot;
+    if (slot == null) continue;
+
+    let samples = 0;
+    let above = 0;
+    let awpAbove = 0;
+    const from = Math.max(meta.freezeEndTick ?? track.firstTick, flag.tick - lookback);
+    for (let t = from; t < flag.tick; t += XK_STRIDE) {
+      let snap;
+      try {
+        snap = snapshotWalked(t);
+      } catch {
+        continue;
+      }
+      const xk = expectedKillsAt(snap, slot, weights);
+      // Not in a fight at this instant: not part of the fight being measured.
+      if (xk === null) continue;
+      samples++;
+      if (xk > XK_CARRY) above++;
+      const me = snap.players.find((p) => p.slot === slot);
+      if (me?.weapon === 'awp' && xk >= XK_AWP_HOLD) awpAbove++;
+    }
+    // No fight to read: leave the note to the rule that raised it.
+    if (!samples) continue;
+
+    if (above / samples > XK_SHARE) {
+      carried.add(flag);
+      continue;
+    }
+    // "Good fight, wrong fight" and its siblings, for an AWPer who held.
+    if (flag.rule === 'negative-ev' && awpAbove / samples > XK_SHARE) carried.add(flag);
+  }
+
+  return flags.filter((f) => !carried.has(f));
+}
+/**
+ * How far back from a note the fight it belongs to is sampled. Shared with the
+ * underdog-won-round rule below so "the fight" means one thing in this file.
+ */
+const XK_LOOKBACK_SECONDS = 5;
+
+/**
+ * Expected kills for one player at one snapshot: their win chance summed over
+ * every fight they are currently in. Null when they are in none, which is how
+ * the caller tells "not fighting" apart from "fighting and losing badly".
+ */
+function expectedKillsAt(snapshot, slot, weights) {
+  let xk = 0;
+  let fighting = false;
+  for (const pair of snapshot?.pairs || []) {
+    if (pair.aSlot !== slot && pair.bSlot !== slot) continue;
+    if (!(pair.aSeesB || pair.bSeesA)) continue;
+    const foe = pair.aSlot === slot ? pair.bSlot : pair.aSlot;
+    const ctx = duelContext(snapshot, slot, foe);
+    if (!ctx) continue;
+    fighting = true;
+    xk += predictDuel(ctx, weights);
+  }
+  return fighting ? xk : null;
+}
+
+/**
+ * Expected kills that make a fight the player's own to lose.
+ *
+ * xK is the same number the Duels tool draws: this player's win chance summed
+ * across every fight they are currently in, so a clean 1v2 hold reads as ~2.
+ * Above this the player was not in a mistake, they were carrying a fight, and a
+ * note saying otherwise is arguing with the model that produced it.
+ */
+const XK_CARRY = 1.5;
+/** Share of the fight the xK has to hold for before the note is dropped. */
+const XK_SHARE = 0.5;
+/**
+ * xK an AWPer has to hold to earn the fight they took.
+ *
+ * Lower than {@link XK_CARRY} because an AWP is one bullet: it is rarely in two
+ * fights at once, so its xK caps out near 1 however free the angle is. Judging
+ * it on a threshold built for multi-fight rifle holds would never fire.
+ */
+const XK_AWP_HOLD = 0.8;
+/** Ticks between xK samples. Coarser than the walk stride; xK drifts slowly. */
+const XK_STRIDE = 32;
+/** Rules the xK pass may drop: notes that are about how a gunfight went. */
+const XK_FIGHT_RULES = new Set([
+  'negative-ev',
+  'advantage-lost',
+  'untraded-won-round',
+  'lost-ahead',
+  'underdog-won-round',
+  'solo-even',
+  'lurk-first',
+  'free-opening',
+  'unaware-openness',
+  'unchecked-position',
+  'running-shot',
+  'awp-miss',
+  'trade-failure'
+]);
+
 /** Round win chance (0-100 series units) required before that duel. */
 const ROUND_WON_PCT = 75;
 /** How long before a death to look for the moment the fight opened. */
 const SIGHT_LOOKBACK_SECONDS = 3;
-/** How far back to sample an active gunfight for the underdog-won-round note. */
-const FIGHT_LOOKBACK_SECONDS = 5;
 /** The refrag has to be available this well before not taking it is a mistake. */
 const TRADE_ODDS = 0.66;
 /** Seconds you have to step up before the trade is gone. */
@@ -477,7 +636,7 @@ export function findDuelFlags({
     (shotsByPlayer.get(playerId) || []).some((t) => t >= from && t <= to);
 
   const sightLookback = SIGHT_LOOKBACK_SECONDS * tickRate;
-  const fightLookback = FIGHT_LOOKBACK_SECONDS * tickRate;
+  const fightLookback = XK_LOOKBACK_SECONDS * tickRate;
   const tradeWindow = TRADE_WINDOW_SECONDS * tickRate;
   const tradeDeath = TRADE_DEATH_SECONDS * tickRate;
   const deaths = [...kills]

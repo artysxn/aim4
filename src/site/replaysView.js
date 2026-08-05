@@ -1517,15 +1517,21 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   }
 
   /**
-   * Public: every public demo, plus everything you uploaded.
+   * Public: every public demo, plus everything you uploaded, plus the unlisted
+   * demos you have been given access to.
    * My Uploads: only your uploads and team-visible unlisted demos.
+   *
+   * An unlisted demo only ever reaches the client when the server decided the
+   * caller may browse it, which means it is theirs or a teammate's. Dropping it
+   * here was the whole reason "unlisted" looked broken to a teammate: the demo
+   * arrived, the default scope threw it away, and nothing said so.
    */
   function demoMatchesScope(d) {
     if (!d) return false;
     const mine = isOwnDemo(d);
     const vis = demoVisibility(d);
     if (filters.libraryScope === 'mine') return mine || vis === 'unlisted';
-    return vis === 'public' || mine;
+    return vis === 'public' || vis === 'unlisted' || mine;
   }
 
   function scopedDemos(list = demos) {

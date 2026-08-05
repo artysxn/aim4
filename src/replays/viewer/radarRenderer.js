@@ -13,6 +13,7 @@ import { CALIBRATION, RADAR_SIZE, isLowerLevel, worldToRadar } from './mapCalibr
 import { ZONE_PAINT } from '../zones/zoneOverlay.js';
 import { mapHasLowerRadar, radarImage } from '../shared/roundId.js';
 import {
+  FLAG_AIRBORNE,
   FLAG_DEFUSING,
   FLAG_HAS_BOMB,
   FLAG_SCOPED
@@ -28,6 +29,11 @@ import {
   UTIL_STYLE,
   drawFireIcon
 } from './utilityMarkers.js';
+
+/** How much bigger a mid-air droplet is drawn than one on the ground. */
+const AIRBORNE_SCALE = 1.18;
+/** Ground shadow offset below a mid-air droplet, in droplet radii. */
+const AIRBORNE_SHADOW_DROP = 1.15;
 
 /** Roster team colors (fallback when a tick has no side byte). */
 export const TEAM_COLORS = {
@@ -355,6 +361,9 @@ export class RadarRenderer {
    * @param {number}  [frame.alpha]       multiply drawable opacity
    * @param {Record<string,string>} [frame.playerColors] player id -> hex color
    * @param {Record<string,boolean>} [frame.utilityVisible] grenade type -> shown
+   * @param {{side: 'T'|'CT', seen: Set<number>}} [frame.pov]  team-POV mode:
+   *   enemies exist only while `seen` holds their slot, and then as a bare
+   *   droplet. See viewer/teamPov.js for how `seen` is decided.
    */
   render(frame) {
     const { w, h } = this.resize(
@@ -399,6 +408,10 @@ export class RadarRenderer {
 
     const compact = Boolean(frame.compact);
     this._frameAlpha = Number.isFinite(frame.alpha) ? frame.alpha : 1;
+    // Players the POV team cannot see. Held for the frame because more than one
+    // pass has to stay quiet about them: a tracer from an unseen enemy gives
+    // away the position the droplet was withheld to protect.
+    this._povHiddenIds = povHiddenIds(frame);
 
     // Analyzer kill-mark pass: only X/O, always full opacity, never ghosted.
     if (frame.marksOnly) {
@@ -711,11 +724,13 @@ export class RadarRenderer {
 
   drawPlayers(ctx, t, frame, compact) {
     const { states, players, highlight, weapons = [], tick = 0, tickRate = 64 } = frame;
-    const r = (compact ? 3.6 : 7.5) * this.dpr;
+    const baseR = (compact ? 3.6 : 7.5) * this.dpr;
     const bombCarrier = bombCarrierAt(frame.events, tick);
     const pops = flashPops(frame.events);
     const custom = frame.playerColors || null;
     const deadAt = deathTickByPlayer(frame.events, tick);
+    const pov = frame.pov?.side === 'T' || frame.pov?.side === 'CT' ? frame.pov : null;
+    const teamSides = frame.teamSides || null;
 
     for (const p of players) {
       const s = states[p.slot];
@@ -725,6 +740,18 @@ export class RadarRenderer {
       if (deadAt.has(p.id) || !s.alive) {
         this._prevHealth[p.slot] = 0;
         continue;
+      }
+      // Team POV: an enemy is either in view or is not on the map at all, and
+      // one that is in view is a droplet and nothing else. Everything the
+      // `hidden` branches below skip is a callout, not something the radar
+      // would ever have told this team.
+      let hidden = false;
+      if (pov) {
+        const side = s.side || teamSides?.[p.team];
+        if (side && side !== pov.side) {
+          if (!frame.pov.seen?.has(p.slot)) continue;
+          hidden = true;
+        }
       }
       const override = custom?.[p.id];
       const colors = override
@@ -743,6 +770,31 @@ export class RadarRenderer {
       const blind = blindnessAt(pops, s, tick, tickRate);
 
       const floorAlpha = this._offFloorAlpha(s.z);
+
+      // Mid-air: a jumping player is nearer the camera on a top-down radar, so
+      // the marker grows and casts a separate ground shadow. It is the only
+      // read there is for a jump peek, which otherwise looks like standing
+      // still on the same pixel.
+      const airborne = (s.flags & FLAG_AIRBORNE) !== 0;
+      const r = airborne ? baseR * AIRBORNE_SCALE : baseR;
+      if (airborne && !compact) {
+        ctx.save();
+        ctx.globalAlpha = floorAlpha * (this._frameAlpha ?? 1) * 0.45;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+        ctx.beginPath();
+        ctx.ellipse(
+          pt.x,
+          pt.y + r * AIRBORNE_SHADOW_DROP,
+          r * 0.8,
+          r * 0.42,
+          0,
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+        ctx.restore();
+      }
+
       ctx.save();
       ctx.globalAlpha = floorAlpha * (this._frameAlpha ?? 1);
 
@@ -791,9 +843,11 @@ export class RadarRenderer {
       };
 
       // Analyzer (and any custom palette) keeps the assigned color even on bomb.
-      dot(hasBomb && !override ? BOMB_CARRIER_COLOR : colors.base);
-      if (damageFlash > 0) dot(`rgba(255, 48, 48, ${0.75 * damageFlash})`);
-      if (blind > 0) dot(`rgba(255, 255, 255, ${0.25 + 0.65 * blind})`);
+      // Under POV the dot is the side colour and nothing more: who is carrying,
+      // who is hurt and who is flashed are all reads this team does not have.
+      dot(hasBomb && !override && !hidden ? BOMB_CARRIER_COLOR : colors.base);
+      if (!hidden && damageFlash > 0) dot(`rgba(255, 48, 48, ${0.75 * damageFlash})`);
+      if (!hidden && blind > 0) dot(`rgba(255, 255, 255, ${0.25 + 0.65 * blind})`);
 
       ctx.restore();
 
@@ -802,21 +856,21 @@ export class RadarRenderer {
       ctx.globalAlpha = floorAlpha * (this._frameAlpha ?? 1);
       // Blind: the dot washes out and a white halo sits around the marker for
       // as long as the flash has left to run.
-      if (blind > 0) {
+      if (blind > 0 && !hidden) {
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, r + (compact ? 2 : 4.5) * this.dpr, 0, Math.PI * 2);
         ctx.strokeStyle = `rgba(255, 255, 255, ${0.35 + 0.55 * blind})`;
         ctx.lineWidth = (compact ? 1 : 1.8) * this.dpr;
         ctx.stroke();
       }
-      if (s.flags & FLAG_DEFUSING && !compact) {
+      if (s.flags & FLAG_DEFUSING && !compact && !hidden) {
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, r + 6 * this.dpr, 0, Math.PI * 2);
         ctx.strokeStyle = '#5ad17a';
         ctx.lineWidth = 2 * this.dpr;
         ctx.stroke();
       }
-      if (s.flags & FLAG_SCOPED && !compact) {
+      if (s.flags & FLAG_SCOPED && !compact && !hidden) {
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, r + 3 * this.dpr, 0, Math.PI * 2);
         ctx.strokeStyle = `${colors.bright}88`;
@@ -824,7 +878,7 @@ export class RadarRenderer {
         ctx.stroke();
       }
 
-      if (!compact) {
+      if (!compact && !hidden) {
         const rawW = weapons[s.weapon] || '';
         const holdingNade = rawW && isGrenade(rawW);
 
@@ -1042,6 +1096,7 @@ export class RadarRenderer {
     ctx.lineWidth = Math.max(1, (compact ? 0.9 : 1.2) * this.dpr);
     for (const shot of events.shots) {
       if (shot.tick > tick || tick - shot.tick > window) continue;
+      if (this._povHiddenIds?.has(shot.player)) continue;
       const from = this.project(t, shot.x, shot.y, { x: 0, y: 0 });
       const a = (-shot.yaw * Math.PI) / 180;
       ctx.globalAlpha = 0.5 * (1 - (tick - shot.tick) / window) * (this._frameAlpha ?? 1);
@@ -1135,7 +1190,7 @@ export class RadarRenderer {
         this.drawSmoke(ctx, t, pt, age, worldR(SMOKE_RADIUS_UNITS), heHoles, g.at, side, compact);
       } else if (type === 'molotov' || type === 'incgrenade') {
         if (age > FIRE_SECONDS) continue;
-        this.drawFire(ctx, pt, age, worldR(FIRE_RADIUS_UNITS), side, compact);
+        this.drawFire(ctx, pt, age, worldR(FIRE_RADIUS_UNITS), side, compact, type);
       }
     }
 
@@ -1385,7 +1440,7 @@ export class RadarRenderer {
    * unwinds with the time left, and a bright countdown. The flame icon sits
    * above the number so the two do not sit on top of each other.
    */
-  drawFire(ctx, pt, age, radius, side, compact) {
+  drawFire(ctx, pt, age, radius, side, compact, type = '') {
     const left = Math.max(0, Math.ceil(FIRE_SECONDS - age));
     const progress = Math.max(0, 1 - age / FIRE_SECONDS);
     const border =
@@ -1416,7 +1471,9 @@ export class RadarRenderer {
         y: pt.y,
         radius,
         dpr: this.dpr,
-        type: side === 'CT' ? 'incgrenade' : 'molotov',
+        // The nade decides the icon, not the thrower's side: a CT who picked up
+        // a dropped molotov threw a molotov. The ring above still shows side.
+        type: type || (side === 'CT' ? 'incgrenade' : 'molotov'),
         alpha: fade,
         onIconLoad: () => this.onIconLoad?.()
       });
@@ -1459,6 +1516,24 @@ export class RadarRenderer {
     }
     ctx.restore();
   }
+}
+
+/**
+ * Player ids the POV team cannot see this frame, or null when POV is off.
+ *
+ * Only enemies are ever in it: everyone on the chosen team is always drawn,
+ * whatever anyone can see.
+ */
+function povHiddenIds(frame) {
+  const pov = frame.pov;
+  if (!pov || (pov.side !== 'T' && pov.side !== 'CT')) return null;
+  const teamSides = frame.teamSides || null;
+  const out = new Set();
+  for (const p of frame.players || []) {
+    const side = frame.states?.[p.slot]?.side || teamSides?.[p.team];
+    if (side && side !== pov.side && !pov.seen?.has(p.slot)) out.add(p.id);
+  }
+  return out;
 }
 
 function roundPill(ctx, x, y, w, h, r) {

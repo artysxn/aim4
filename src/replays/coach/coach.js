@@ -36,7 +36,11 @@ import { coachCategory, coachText } from './coachMessages.js';
 import { findUtilityFlags } from './utilityMistakes.js';
 import { findShotFlags } from './shotMistakes.js';
 import { dropAngleHoldAdvice } from './angleHold.js';
-import { dropDecidedFightFlags, findDuelFlags } from './duelMistakes.js';
+import {
+  dropCarriedFightFlags,
+  dropDecidedFightFlags,
+  findDuelFlags
+} from './duelMistakes.js';
 import { findTacticalFlags } from './tacticalMistakes.js';
 import {
   alivePositionsBySide,
@@ -958,6 +962,11 @@ export function analyseRound({
         if (aliveAt(k.tick - 1)[opp] <= 0) continue;
         // Last alive cannot take a "solo duel" — clutch fights are not coached.
         if (aliveAt(k.tick - 1)[side] <= 1) continue;
+        // Already fragging. The second kill of a multikill is the same fight as
+        // the first, and telling someone the round did not need it reads as
+        // punishing them for winning it. The death rules have always had this
+        // grace; the kill side was missing it.
+        if (recentlyFragged(k.attacker, k.tick)) continue;
         const sample = sampleNear(k.tick);
         // Live chance at the duel — freezetime dominance is not enough.
         const liveWp = sample?.[key];
@@ -1043,6 +1052,14 @@ export function analyseRound({
       network,
       track
     });
+  } catch {
+    /* keep the unfiltered list rather than lose the round */
+  }
+
+  // A fight the player was expected to win for most of its length is not a
+  // mistake, whatever the headcount around it said.
+  try {
+    flags = dropCarriedFightFlags(flags, { meta, tickRate, byId, network, track });
   } catch {
     /* keep the unfiltered list rather than lose the round */
   }
