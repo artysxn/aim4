@@ -26,6 +26,30 @@ const accCell = (p) => (p.shots > 0 ? pct(p.accuracy) : '—');
 
 const tip = (lines) => lines.filter(Boolean).join('\n');
 
+/** Hover breakdown for Aim4 Rating: each input and its contribution. */
+function a4rTip(p) {
+  const d = p.a4rDetail;
+  if (!d || !Number.isFinite(d.value)) return 'Aim4 Rating unavailable.';
+  const fmtIn = (t) => {
+    if (t.key === 'duelWin' || t.key === 'kast' || t.key === 'or' || t.key === 'ready') {
+      return pct(t.input);
+    }
+    if (t.key === 'aim') return f1(t.input);
+    return f2(t.input);
+  };
+  const lines = [
+    `Aim4 Rating: ${f2(d.value)}`,
+    ...d.terms.map((t) => `${t.label} ${fmtIn(t)} → ${signed(t.contrib)}`),
+    `Average (/10): ${signed(d.avg)}`,
+    `Swing won ${f2(d.swingWon.input)} → ${signed(d.swingWon.contrib)}`,
+    `Swing lost ${f2(d.swingLost.input)} → ${signed(d.swingLost.contrib)}`,
+    `Core: ${signed(d.core)}`,
+    `Core^1.25: ${signed(d.powered)}`,
+    `Rounds ${int(d.rounds)} / 3000 → ${signed(d.roundsBonus)}`
+  ];
+  return tip(lines);
+}
+
 /** Frozen left columns (before roles). */
 export const PLAYER_FIXED_BASE = [
   {
@@ -64,7 +88,7 @@ export const PLAYER_FIXED_BASE = [
 
 /**
  * Scrollable metric columns (after fixed + optional roles).
- * Order: Rating, Swing, KD, xK, Duel Win%, ADR, KAST, OPKD, Impact, A4R, A4OR,
+ * Order: Rating, A4R, Swing, KD, xK, Duel Win%, ADR, KAST, OPKD, Impact, A4OR,
  * Opatt, OR, PFW, PFO, Aim, Acc, C°, R%, AA%, 1st%, O%, U%, DT, PSDT, util.
  */
 export const PLAYER_METRIC_COLUMNS = [
@@ -84,6 +108,16 @@ export const PLAYER_METRIC_COLUMNS = [
         `In rounds won: ${f2(p.ratingWon)}`,
         `In rounds lost: ${f2(p.ratingLost)}`
       ])
+  },
+  {
+    key: 'a4r',
+    label: 'A4R',
+    get: (p) => (Number.isFinite(p.a4r) ? p.a4r : -Infinity),
+    cell: (p) => f2(p.a4r),
+    avgOf: (p) => (Number.isFinite(p.a4r) ? p.a4r : null),
+    avgFormat: f2,
+    strong: true,
+    tip: (p) => a4rTip(p)
   },
   {
     key: 'prwSwing',
@@ -191,25 +225,6 @@ export const PLAYER_METRIC_COLUMNS = [
     cell: (p) => f2(p.impact),
     avgOf: (p) => (Number.isFinite(p.impact) ? p.impact : null),
     avgFormat: f2
-  },
-  {
-    key: 'a4r',
-    label: 'A4R',
-    get: (p) => (Number.isFinite(p.a4r) ? p.a4r : -Infinity),
-    cell: (p) => f2(p.a4r),
-    avgOf: (p) => (Number.isFinite(p.a4r) ? p.a4r : null),
-    avgFormat: f2,
-    strong: true,
-    tip: (p) =>
-      tip([
-        `Aim4 Rating: ${f2(p.a4r)}`,
-        `0.40 × Rating ${f2(p.rating)}`,
-        `0.45 × Rating full vs full ${f2(p.ratingFullVsFull ?? p.rating)}${
-          p.ratingFullVsFullRounds ? ` (${p.ratingFullVsFullRounds} rds)` : ' (fallback: overall)'
-        }`,
-        `0.15 × Impact ${f2(p.impact)}`,
-        `+ Swing/6 ${Number.isFinite(p.prwSwing) ? signed(p.prwSwing / 6) : '—'}`
-      ])
   },
   {
     key: 'a4or',

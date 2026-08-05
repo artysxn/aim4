@@ -84,20 +84,59 @@ function avgSwing(facts) {
   return n ? sum / n : null;
 }
 
+function avgSwingWhere(facts, won) {
+  let sum = 0;
+  let n = 0;
+  for (const f of facts) {
+    if (!Number.isFinite(f.swing)) continue;
+    if (!!f.won !== won) continue;
+    sum += f.swing;
+    n++;
+  }
+  return n ? sum / n : null;
+}
+
 function a4rFromFacts(facts) {
   if (!facts.length) return null;
   const rating = ratingFromCounters(facts.length, facts.length, playerCounters(facts));
   if (!Number.isFinite(rating)) return null;
-  const full = facts.filter((f) => f.econ === 4 && f.oppEcon === 4);
-  const ratingFull = full.length
-    ? ratingFromCounters(full.length, full.length, playerCounters(full))
-    : rating;
   const c = playerCounters(facts);
-  const impact = impactOf({
-    kpr: div(c.kills, facts.length),
-    apr: div(c.assists, facts.length)
+  const rounds = facts.length;
+  const kills = c.kills;
+  const deaths = c.deaths;
+  const kd = deaths ? kills / deaths : kills;
+  const fights = kills + deaths;
+  const duelWin = fights > 0 ? (kills / fights) * 100 : null;
+  const kast = div(c.kast, rounds) * 100;
+  let ok = 0;
+  let od = 0;
+  let xkSum = 0;
+  let xkN = 0;
+  for (const f of facts) {
+    ok += f.openKill || 0;
+    od += f.openDeath || 0;
+    if (f.duelXk !== null && f.duelXk !== undefined && Number.isFinite(f.duelXk)) {
+      xkSum += f.duelXk;
+      xkN++;
+    }
+  }
+  const openings = ok + od;
+  return aim4Rating({
+    rating,
+    swing: avgSwing(facts),
+    kd,
+    xk: xkN ? xkSum / rounds : null,
+    duelWin,
+    kast,
+    opatt: openings / rounds,
+    or: openings > 0 ? (ok / openings) * 100 : null,
+    // Charts facts do not carry aim / ready rate yet; baselines contribute 0.
+    ready: null,
+    aim: null,
+    swingWon: avgSwingWhere(facts, true),
+    swingLost: avgSwingWhere(facts, false),
+    rounds
   });
-  return aim4Rating({ rating, ratingFull, impact, swing: avgSwing(facts) });
 }
 
 function a4orFromFacts(facts) {
@@ -135,7 +174,7 @@ const PLAYER_METRICS = [
     group: 'Core',
     fmt: 'num2',
     custom: a4rFromFacts,
-    tip: '0.40×Rating + 0.45×Rating(full vs full) + 0.15×Impact + Swing/6'
+    tip: 'Composite ^1.25 + rounds/3000 (Rating, Swing, K/D, xK, Duel Win%, KAST, OPATT, OR, R%, Aim, swing won/lost)'
   },
   {
     key: 'a4or',

@@ -139,16 +139,116 @@ export function bucketRating(b) {
   return { rounds: b.rounds, rating: ratingOf({ kast, kpr, dpr, impact, adr }), kast, kpr, dpr, apr, impact, adr };
 }
 
+/** Signed power: preserves sign so below-average cores stay real. */
+function signedPow(x, exp) {
+  if (!Number.isFinite(x)) return null;
+  if (x === 0) return 0;
+  return Math.sign(x) * Math.pow(Math.abs(x), exp);
+}
+
 /**
- * Aim4 Rating.
- * 0.40·Rating + 0.45·Rating(full vs full) + 0.15·Impact + Swing/6
- * (Swing is signed, so the ± is built in.)
+ * Full Aim4 Rating breakdown (inputs, per-term contributions, final value).
+ *
+ * Missing optional inputs use the formula baselines so they contribute 0.
+ * Percent stats and aim are passed on the 0–100 table scale and converted to
+ * fractions so terms like (duelWin% − 50.03%) stay O(0.1).
+ * Swing in lost rounds uses baseline −4.72 (the written "9.2" is the
+ * swingLost placeholder).
  */
-export function aim4Rating({ rating, ratingFull, impact, swing }) {
-  if (!Number.isFinite(rating) || !Number.isFinite(impact)) return null;
-  const rFull = Number.isFinite(ratingFull) ? ratingFull : rating;
-  const sw = Number.isFinite(swing) ? swing : 0;
-  return 0.4 * rating + 0.45 * rFull + 0.15 * impact + sw / 6;
+export function aim4RatingBreakdown({
+  rating,
+  swing,
+  kd,
+  xk,
+  duelWin,
+  kast,
+  opatt,
+  or: openingRate,
+  ready,
+  aim,
+  swingWon,
+  swingLost,
+  rounds
+}) {
+  if (!Number.isFinite(rating) || !Number.isFinite(kd)) {
+    return { value: null, terms: [], core: null, powered: null, roundsBonus: 0 };
+  }
+
+  const sw = Number.isFinite(swing) ? swing : 0.11;
+  const xK = Number.isFinite(xk) ? xk : 0.63;
+  const dwPct = Number.isFinite(duelWin) ? duelWin : 50.03;
+  const kastPct = Number.isFinite(kast) ? kast : 72.48;
+  const oa = Number.isFinite(opatt) ? opatt : 0.185;
+  const orPct = Number.isFinite(openingRate) ? openingRate : 50;
+  const readyPct = Number.isFinite(ready) ? ready : 68.8;
+  const aimScore = Number.isFinite(aim) ? aim : 63.1;
+  const swWon = Number.isFinite(swingWon) ? swingWon : 10.2;
+  const swLost = Number.isFinite(swingLost) ? swingLost : -4.72;
+  const nRounds = Number.isFinite(rounds) && rounds > 0 ? rounds : 0;
+
+  const terms = [
+    { key: 'rating', label: 'Rating', input: rating, contrib: rating - 0.14 },
+    { key: 'swing', label: 'Swing', input: sw, contrib: ((sw - 0.11) / 8) * 1.05 },
+    { key: 'kd', label: 'K/D', input: kd, contrib: (kd - 1.02) * 0.9 },
+    { key: 'xk', label: 'xK', input: xK, contrib: (xK - 0.63) * 7 * 1.05 },
+    {
+      key: 'duelWin',
+      label: 'Duel Win%',
+      input: dwPct,
+      contrib: (dwPct / 100 - 0.5003) * 24 * 1.1
+    },
+    {
+      key: 'kast',
+      label: 'KAST',
+      input: kastPct,
+      contrib: (kastPct / 100 - 0.7248) * 13
+    },
+    { key: 'opatt', label: 'OPATT', input: oa, contrib: (oa - 0.185) * 7.5 * 0.95 },
+    {
+      key: 'or',
+      label: 'OR',
+      input: orPct,
+      contrib: (orPct / 100 - 0.5) * 9 * 1.05
+    },
+    {
+      key: 'ready',
+      label: 'R%',
+      input: readyPct,
+      contrib: (readyPct / 100 - 0.688) * 8.5
+    },
+    {
+      key: 'aim',
+      label: 'Aim',
+      input: aimScore,
+      contrib: (aimScore / 100 - 0.631) * 5.4
+    }
+  ];
+
+  const sum = terms.reduce((a, t) => a + t.contrib, 0);
+  const avg = sum / 10;
+  const swingWonContrib = ((swWon - 10.2) / 6) * 0.175;
+  const swingLostContrib = ((swLost - -4.72) / 6) * 0.125;
+  const core = avg + swingWonContrib + swingLostContrib;
+  const powered = signedPow(core, 1.25);
+  const roundsBonus = nRounds / 3000;
+  const value = powered + roundsBonus;
+
+  return {
+    value,
+    terms,
+    avg,
+    swingWon: { input: swWon, contrib: swingWonContrib },
+    swingLost: { input: swLost, contrib: swingLostContrib },
+    core,
+    powered,
+    rounds: nRounds,
+    roundsBonus
+  };
+}
+
+/** Aim4 Rating: composite ^1.25 + rounds/3000. */
+export function aim4Rating(input) {
+  return aim4RatingBreakdown(input).value;
 }
 
 /**
@@ -200,6 +300,10 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
         openDeaths: 0,
         swingSum: 0,
         swingRounds: 0,
+        swingWonSum: 0,
+        swingWonRounds: 0,
+        swingLostSum: 0,
+        swingLostRounds: 0,
         psdtSum: 0,
         psdtRounds: 0,
         dtSum: 0,
@@ -257,8 +361,16 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       if (row.ok === id) s.openKills++;
       if (row.od === id) s.openDeaths++;
       if (row.sw && Number.isFinite(row.sw[id])) {
-        s.swingSum += row.sw[id];
+        const sw = row.sw[id];
+        s.swingSum += sw;
         s.swingRounds++;
+        if (row.w === team) {
+          s.swingWonSum += sw;
+          s.swingWonRounds++;
+        } else {
+          s.swingLostSum += sw;
+          s.swingLostRounds++;
+        }
       }
       // Aim measurements and utility effectiveness (stats index v11). Plain
       // sums here; the divisions happen once at the end, so a player filtered
@@ -328,15 +440,10 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
     const all = bucketRating(s.all);
     const fullVsFull = bucketRating(s.fullVsFull);
     const swing = s.swingRounds ? s.swingSum / s.swingRounds : null;
+    const swingWon = s.swingWonRounds ? s.swingWonSum / s.swingWonRounds : null;
+    const swingLost = s.swingLostRounds ? s.swingLostSum / s.swingLostRounds : null;
     const opkd = s.openKills - s.openDeaths;
     const opatt = all.rounds ? (s.openKills + s.openDeaths) / all.rounds : null;
-    const ratingFull = fullVsFull.rounds ? fullVsFull.rating : all.rating;
-    const a4r = aim4Rating({
-      rating: all.rating,
-      ratingFull,
-      impact: all.impact,
-      swing
-    });
     const a4or = aim4OpeningRating({ opkd, swing, opatt });
     // Divided once, here, over exactly the rounds that passed the filter.
     const aim = aimRating(s.aim);
@@ -352,6 +459,28 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
     // Expected kills per round: sum of predicted win chances across duels,
     // divided by rounds played (rounds with no duel data stay null overall).
     const xk = s.duelDataRounds > 0 ? s.duelP / all.rounds : null;
+    const kd = s.all.deaths ? s.all.kills / s.all.deaths : s.all.kills;
+    const opkRate =
+      s.openKills + s.openDeaths > 0
+        ? (s.openKills / (s.openKills + s.openDeaths)) * 100
+        : null;
+    const readyPct = Number.isFinite(aim.raw?.readyRate) ? aim.raw.readyRate * 100 : null;
+    const a4rDetail = aim4RatingBreakdown({
+      rating: all.rating,
+      swing,
+      kd,
+      xk,
+      duelWin: tfw,
+      kast: all.kast,
+      opatt,
+      or: opkRate,
+      ready: readyPct,
+      aim: aim.rating,
+      swingWon,
+      swingLost,
+      rounds: all.rounds
+    });
+    const a4r = a4rDetail.value;
     const pfoBuckets = [...s.duelBuckets]
       .filter(([, b]) => b.weight >= 0.5)
       .sort((x, y) => x[0] - y[0])
@@ -372,7 +501,7 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       deaths: s.all.deaths,
       assists: s.all.assists,
       damage: s.all.damage,
-      kd: s.all.deaths ? s.all.kills / s.all.deaths : s.all.kills,
+      kd,
       adr: all.adr,
       adrWon: div(s.won.damage, s.won.rounds),
       adrLost: div(s.lost.damage, s.lost.rounds),
@@ -393,6 +522,8 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       ratingFullVsFull: fullVsFull.rounds ? fullVsFull.rating : null,
       ratingFullVsFullRounds: fullVsFull.rounds,
       a4r,
+      /** Per-term A4R breakdown for hover tips. */
+      a4rDetail,
       a4or,
       openKills: s.openKills,
       openDeaths: s.openDeaths,
@@ -401,13 +532,13 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       /** Opening attempts per round: (OK + OD) / rounds. */
       opatt,
       /** Opening duel win rate, percent. */
-      opkRate:
-        s.openKills + s.openDeaths > 0
-          ? (s.openKills / (s.openKills + s.openDeaths)) * 100
-          : null,
+      opkRate,
       prwSwing: swing,
       prwSwingTotal: s.swingSum,
       prwSwingRounds: s.swingRounds,
+      /** Avg PRW swing in rounds the player's team won / lost. */
+      prwSwingWon: swingWon,
+      prwSwingLost: swingLost,
       /** Avg pulled-string distance travelled / round. */
       psdt: s.psdtRounds ? s.psdtSum / s.psdtRounds : null,
       psdtTotal: s.psdtSum,
