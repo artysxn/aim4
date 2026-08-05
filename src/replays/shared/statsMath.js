@@ -152,6 +152,7 @@ function signedPow(x, exp) {
  * Missing optional inputs use the formula baselines so they contribute 0.
  * Percent stats and aim are passed on the 0–100 table scale and converted to
  * fractions so terms like (duelWin% − 50.03%) stay O(0.1).
+ * PFW is kept on the 0–100 scale (baseline 45.54). PFO is pp (baseline 1.04).
  * Swing in lost rounds uses baseline −4.72 (the written "9.2" is the
  * swingLost placeholder).
  */
@@ -166,6 +167,8 @@ export function aim4RatingBreakdown({
   or: openingRate,
   ready,
   aim,
+  pfo,
+  pfw,
   swingWon,
   swingLost,
   rounds
@@ -182,6 +185,8 @@ export function aim4RatingBreakdown({
   const orPct = Number.isFinite(openingRate) ? openingRate : 50;
   const readyPct = Number.isFinite(ready) ? ready : 68.8;
   const aimScore = Number.isFinite(aim) ? aim : 63.1;
+  const pfoVal = Number.isFinite(pfo) ? pfo : 1.04;
+  const pfwPct = Number.isFinite(pfw) ? pfw : 45.54;
   const swWon = Number.isFinite(swingWon) ? swingWon : 10.2;
   const swLost = Number.isFinite(swingLost) ? swingLost : -4.72;
   const nRounds = Number.isFinite(rounds) && rounds > 0 ? rounds : 0;
@@ -221,17 +226,19 @@ export function aim4RatingBreakdown({
       label: 'Aim',
       input: aimScore,
       contrib: (aimScore / 100 - 0.631) * 5.4
-    }
+    },
+    { key: 'pfo', label: 'PFO', input: pfoVal, contrib: (pfoVal - 1.04) / 5 },
+    { key: 'pfw', label: 'PFW', input: pfwPct, contrib: (pfwPct - 45.54) / 6 }
   ];
 
   const sum = terms.reduce((a, t) => a + t.contrib, 0);
-  const avg = sum / 10;
-  const swingWonContrib = ((swWon - 10.2) / 6) * 0.175;
-  const swingLostContrib = ((swLost - -4.72) / 6) * 0.125;
+  const avg = sum / 12;
+  const swingWonContrib = ((swWon - 10.2) / 6) * 0.2;
+  const swingLostContrib = ((swLost - -4.72) / 6) * 0.15;
   const core = avg + swingWonContrib + swingLostContrib;
-  const powered = signedPow(core, 1.25);
+  const powered = signedPow(core, 1.1);
   const roundsBonus = nRounds / 3000;
-  const offset = 0.92;
+  const offset = 0.93;
   const value = powered + roundsBonus + offset;
 
   return {
@@ -248,7 +255,7 @@ export function aim4RatingBreakdown({
   };
 }
 
-/** Aim4 Rating: composite ^1.25 + rounds/3000 + 0.92. */
+/** Aim4 Rating: composite ^1.10 + rounds/3000 + 0.93. */
 export function aim4Rating(input) {
   return aim4RatingBreakdown(input).value;
 }
@@ -478,6 +485,8 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       or: opkRate,
       ready: readyPct,
       aim: aim.rating,
+      pfo,
+      pfw,
       swingWon,
       swingLost,
       rounds: all.rounds

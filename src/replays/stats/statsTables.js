@@ -31,20 +31,21 @@ function a4rTip(p) {
   const d = p.a4rDetail;
   if (!d || !Number.isFinite(d.value)) return 'Aim4 Rating unavailable.';
   const fmtIn = (t) => {
-    if (t.key === 'duelWin' || t.key === 'kast' || t.key === 'or' || t.key === 'ready') {
+    if (t.key === 'duelWin' || t.key === 'kast' || t.key === 'or' || t.key === 'ready' || t.key === 'pfw') {
       return pct(t.input);
     }
     if (t.key === 'aim') return f1(t.input);
+    if (t.key === 'pfo') return signed(t.input);
     return f2(t.input);
   };
   const lines = [
     `Aim4 Rating: ${f2(d.value)}`,
     ...d.terms.map((t) => `${t.label} ${fmtIn(t)} → ${signed(t.contrib)}`),
-    `Average (/10): ${signed(d.avg)}`,
+    `Average (/12): ${signed(d.avg)}`,
     `Swing won ${f2(d.swingWon.input)} → ${signed(d.swingWon.contrib)}`,
     `Swing lost ${f2(d.swingLost.input)} → ${signed(d.swingLost.contrib)}`,
     `Core: ${signed(d.core)}`,
-    `Core^1.25: ${signed(d.powered)}`,
+    `Core^1.10: ${signed(d.powered)}`,
     `Rounds ${int(d.rounds)} / 3000 → ${signed(d.roundsBonus)}`,
     `Offset → ${signed(d.offset)}`
   ];

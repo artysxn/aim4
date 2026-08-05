@@ -112,12 +112,20 @@ function a4rFromFacts(facts) {
   let od = 0;
   let xkSum = 0;
   let xkN = 0;
+  let duelW = 0;
+  let duelP = 0;
+  let duelN = 0;
   for (const f of facts) {
     ok += f.openKill || 0;
     od += f.openDeath || 0;
     if (f.duelXk !== null && f.duelXk !== undefined && Number.isFinite(f.duelXk)) {
       xkSum += f.duelXk;
       xkN++;
+    }
+    if (Number.isFinite(f.duelW) && f.duelW > 0) {
+      duelW += f.duelW;
+      duelP += Number(f.duelP) || 0;
+      duelN += Number(f.duelN) || 0;
     }
   }
   const openings = ok + od;
@@ -133,6 +141,8 @@ function a4rFromFacts(facts) {
     // Charts facts do not carry aim / ready rate yet; baselines contribute 0.
     ready: null,
     aim: null,
+    pfw: duelW > 0 ? (duelP / duelW) * 100 : null,
+    pfo: duelW > 0 ? ((duelN - duelP) / duelW) * 100 : null,
     swingWon: avgSwingWhere(facts, true),
     swingLost: avgSwingWhere(facts, false),
     rounds
@@ -174,7 +184,7 @@ const PLAYER_METRICS = [
     group: 'Core',
     fmt: 'num2',
     custom: a4rFromFacts,
-    tip: 'Composite ^1.25 + rounds/3000 + 0.92 (Rating, Swing, K/D, xK, Duel Win%, KAST, OPATT, OR, R%, Aim, swing won/lost)'
+    tip: 'Composite ^1.10 + rounds/3000 + 0.93 (Rating, Swing, K/D, xK, Duel Win%, KAST, OPATT, OR, R%, Aim, PFO, PFW, swing won/lost)'
   },
   {
     key: 'a4or',
