@@ -238,7 +238,7 @@ export function aim4RatingBreakdown({
   const core = avg + swingWonContrib + swingLostContrib;
   const powered = signedPow(core, 1.1);
   const roundsBonus = nRounds / 3000;
-  const offset = 0.93;
+  const offset = 0.91;
   const value = powered + roundsBonus + offset;
 
   return {
@@ -255,7 +255,7 @@ export function aim4RatingBreakdown({
   };
 }
 
-/** Aim4 Rating: composite ^1.10 + rounds/3000 + 0.93. */
+/** Aim4 Rating: composite ^1.10 + rounds/3000 + 0.91. */
 export function aim4Rating(input) {
   return aim4RatingBreakdown(input).value;
 }

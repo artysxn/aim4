@@ -184,7 +184,7 @@ const PLAYER_METRICS = [
     group: 'Core',
     fmt: 'num2',
     custom: a4rFromFacts,
-    tip: 'Composite ^1.10 + rounds/3000 + 0.93 (Rating, Swing, K/D, xK, Duel Win%, KAST, OPATT, OR, R%, Aim, PFO, PFW, swing won/lost)'
+    tip: 'Composite ^1.10 + rounds/3000 + 0.91 (Rating, Swing, K/D, xK, Duel Win%, KAST, OPATT, OR, R%, Aim, PFO, PFW, swing won/lost)'
   },
   {
     key: 'a4or',
