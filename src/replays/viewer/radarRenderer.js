@@ -1162,8 +1162,20 @@ export class RadarRenderer {
         if (key && utilVis[key] === false) continue;
       }
       const age = (tick - det) / tickRate;
+      // Team POV: an unseen enemy's throw position is information. Keep the
+      // landing / detonation, drop the flight path and in-air icon.
+      const concealOrigin = Boolean(this._povHiddenIds?.has(g.player));
       // The icon hands over to the detonation on the exact tick it goes off.
-      live.push({ g, type, throwTick, det, age, flying: tick < det, side: sideOf(g.player) });
+      live.push({
+        g,
+        type,
+        throwTick,
+        det,
+        age,
+        flying: tick < det,
+        side: sideOf(g.player),
+        concealOrigin
+      });
     }
     if (!live.length) return;
 
@@ -1197,6 +1209,7 @@ export class RadarRenderer {
     // ---- layer 2: trajectories
     if (!compact) {
       for (const it of live) {
+        if (it.concealOrigin) continue;
         if (it.age > TRAIL_FADE_SECONDS) continue;
         this.drawTrajectory(ctx, t, it, tick);
       }
@@ -1232,8 +1245,8 @@ export class RadarRenderer {
     }
 
     // ---- layer 4: grenades still in the air
-    for (const { g, type, flying, side } of live) {
-      if (!flying) continue;
+    for (const { g, type, flying, side, concealOrigin } of live) {
+      if (!flying || concealOrigin) continue;
       const pos = grenadePosAt(g, tick);
       if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) continue;
       const pt = this.project(t, pos.x, pos.y, { x: 0, y: 0 });

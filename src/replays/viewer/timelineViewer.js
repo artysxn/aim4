@@ -61,7 +61,7 @@ import coachIcon from '../../icons/demos_coach.svg?raw';
 import chartIcon from '../../icons/demos_chart.svg?raw';
 import zonesIcon from '../../icons/demos_zones.svg?raw';
 import duelsIcon from '../../icons/demos_duels.svg?raw';
-import povIcon from '../../icons/demos_pov.svg?raw';
+import povIcon from '../../icons/demo_pov.svg?raw';
 import { createPovVision, povDuelOverlay, povZonePaint } from './teamPov.js';
 import { createDuelOverlay } from '../duels/duelOverlay.js';
 import { createDuelScanner, scanTickFor } from '../duels/duelScanner.js';
@@ -400,6 +400,8 @@ export function createTimelineViewer({
    * the choice is meant to follow the team across the whole demo.
    */
   let povTeam = 0;
+  /** Side the eye tool is following across halves ('T'|'CT'|''). */
+  let povFollowSide = '';
   const povVision = createPovVision();
   /** Roster team (1|2) whose mistakes coach notes; null until picked. */
   let coachTeam = null;
@@ -832,6 +834,7 @@ export function createTimelineViewer({
     activeMeta = resident || fallbackMeta(rounds[index]);
     if (resident) adoptRoundMeta(index, resident);
     else markActiveRound();
+    realignPovToFollowSide();
     renderScoreboards();
     loadNotesFromMeta(true);
     renderActiveMarks();
@@ -879,6 +882,7 @@ export function createTimelineViewer({
         // Same for duel fight windows cached under this round key.
         if (duelsOn) duelOverlay.reset();
         adoptRoundMeta(index, meta);
+        realignPovToFollowSide();
         renderScoreboards();
         loadNotesFromMeta(true);
         renderActiveMarks();
@@ -1200,11 +1204,37 @@ export function createTimelineViewer({
     };
   }
 
+  /** Team number (1|2) playing `side` this round, or 0 if unknown. */
+  function teamForSide(side) {
+    if (!activeMeta || (side !== 'T' && side !== 'CT')) return 0;
+    if (activeMeta.team1Side === side) return 1;
+    if (activeMeta.team2Side === side) return 2;
+    return 0;
+  }
+
+  /**
+   * Keep the eye on the same side through halftime. When T↔CT swap, the
+   * selected team flips so yellow stays T and blue stays CT.
+   */
+  function realignPovToFollowSide() {
+    if (!povFollowSide) return;
+    const next = teamForSide(povFollowSide);
+    if (!next) return;
+    if (next !== povTeam) {
+      povTeam = next;
+      povVision.reset();
+    }
+    syncPovBtn();
+  }
+
   function syncPovBtn() {
-    povBtn?.classList.toggle('active', Boolean(povTeam));
     if (!povBtn) return;
+    const side = povSideNow();
+    povBtn.classList.toggle('active', Boolean(povTeam));
+    povBtn.classList.toggle('pov-t', side === 'T');
+    povBtn.classList.toggle('pov-ct', side === 'CT');
     povBtn.title = povTeam
-      ? `Team POV: ${povTeamName()}. Click for the other team, again to turn it off.`
+      ? `Team POV: ${povTeamName()} (${side}). Click for the other team, again to turn it off.`
       : 'Team POV: one team’s map control and only the enemies they can see';
   }
 
@@ -3529,6 +3559,7 @@ export function createTimelineViewer({
   // ever two answers, and the tooltip names the one currently in force.
   povBtn?.addEventListener('click', async () => {
     povTeam = povTeam === 0 ? 1 : povTeam === 1 ? 2 : 0;
+    povFollowSide = povSideNow();
     povVision.reset();
     syncPovBtn();
     // Line of sight is what the mode is built on, same as the duels tool.

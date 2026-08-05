@@ -1700,6 +1700,17 @@ body.rv-open {
   color: var(--accent);
 }
 
+/* Team POV eye: color by the side being followed, not the team number. */
+.rv-tool.active.pov-t {
+  background: rgba(232, 184, 74, 0.18);
+  color: var(--rv-t);
+}
+
+.rv-tool.active.pov-ct {
+  background: rgba(91, 159, 212, 0.2);
+  color: var(--rv-ct);
+}
+
 .rv-tool.has-note {
   color: var(--accent);
 }
