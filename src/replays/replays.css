@@ -3470,20 +3470,36 @@ body.rv-open {
   z-index: auto;
 }
 
-.st-table .st-sticky-0 {
+/* sticky-0 = # rank; sticky-1+ = name / team / roles */
+.st-table .st-sticky-0,
+.st-table th.st-rank,
+.st-table td.st-rank {
+  min-width: 2.25rem;
+  width: 2.25rem;
+  max-width: 2.75rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  z-index: 5;
+}
+.st-table th.st-rank {
+  cursor: default;
+  text-align: right;
+}
+.st-table .st-sticky-1 {
   min-width: 8.5rem;
   z-index: 5;
 }
-.st-table .st-sticky-1 {
+.st-table .st-sticky-2 {
   min-width: 6.5rem;
   z-index: 5;
 }
-.st-table .st-sticky-2 {
+.st-table .st-sticky-3 {
   min-width: 4rem;
   z-index: 5;
 }
-.st-table .st-sticky-3,
-.st-table .st-sticky-4 {
+.st-table .st-sticky-4,
+.st-table .st-sticky-5 {
   min-width: 5.25rem;
   z-index: 5;
 }
@@ -3492,7 +3508,8 @@ body.rv-open {
 .st-table.st-table-sticky thead .st-sticky-1,
 .st-table.st-table-sticky thead .st-sticky-2,
 .st-table.st-table-sticky thead .st-sticky-3,
-.st-table.st-table-sticky thead .st-sticky-4 {
+.st-table.st-table-sticky thead .st-sticky-4,
+.st-table.st-table-sticky thead .st-sticky-5 {
   z-index: 7;
 }
 

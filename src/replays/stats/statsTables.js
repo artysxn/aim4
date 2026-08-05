@@ -980,9 +980,11 @@ function pagerHtml({ page, pages, total, pageSize }) {
  */
 function averageFooterHtml(rows, columns, sticky, escapeHtml) {
   if (!rows.length) return '';
+  // Rank column is always sticky-0; data columns shift by +1.
+  const rankCell = `<td class="st-rank st-sticky st-sticky-0" aria-hidden="true"></td>`;
   const cells = columns
     .map((c, i) => {
-      const stick = i < sticky ? ` st-sticky st-sticky-${i}` : '';
+      const stick = i < sticky ? ` st-sticky st-sticky-${i + 1}` : '';
       if (i === 0) {
         return `<td class="left st-avg-label${stick}">Average</td>`;
       }
@@ -1011,7 +1013,7 @@ function averageFooterHtml(rows, columns, sticky, escapeHtml) {
       return `<td class="${cls}">${escapeHtml(text)}</td>`;
     })
     .join('');
-  return `<tfoot><tr class="st-avg-row">${cells}</tr></tfoot>`;
+  return `<tfoot><tr class="st-avg-row">${rankCell}${cells}</tr></tfoot>`;
 }
 
 /**
@@ -1055,21 +1057,26 @@ export function statsTableHtml(rows, opts) {
   const slice = pageSize > 0 ? sorted.slice((safePage - 1) * size, safePage * size) : sorted;
 
   const sticky = Math.max(0, Math.min(fixedCount, columns.length));
+  // Leading # column (sticky-0); data sticky cols are shifted by +1.
+  const rankHead = `<th class="st-rank st-sticky st-sticky-0" title="Rank">#</th>`;
   const head = columns
     .map((c, i) => {
       const active = c.key === sortKey;
       const arrow = active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
-      const stick = i < sticky ? ` st-sticky st-sticky-${i}` : '';
+      const stick = i < sticky ? ` st-sticky st-sticky-${i + 1}` : '';
       return `<th class="${c.align === 'left' ? 'left' : ''}${active ? ' sorted' : ''}${stick}"
         data-sort="${c.key}" title="Sort by ${escapeHtml(c.label)}">${escapeHtml(c.label)}${arrow}</th>`;
     })
     .join('');
 
+  const rankOffset = (safePage - 1) * size;
   const body = slice
-    .map((r) => {
+    .map((r, idx) => {
+      const rank = rankOffset + idx + 1;
+      const rankCell = `<td class="st-rank st-sticky st-sticky-0">${rank}</td>`;
       const cells = columns
         .map((c, i) => {
-          const stick = i < sticky ? ` st-sticky st-sticky-${i}` : '';
+          const stick = i < sticky ? ` st-sticky st-sticky-${i + 1}` : '';
           if (!c.cell) {
             const label = nameCell ? nameCell(r) : escapeHtml(r.name);
             return `<td class="left name${stick}">${label}</td>`;
@@ -1106,7 +1113,7 @@ export function statsTableHtml(rows, opts) {
             : `<td class="${cls}">${content}</td>`;
         })
         .join('');
-      return `<tr>${cells}</tr>`;
+      return `<tr>${rankCell}${cells}</tr>`;
     })
     .join('');
 
@@ -1118,8 +1125,8 @@ export function statsTableHtml(rows, opts) {
       <div class="st-hscroll-spacer" data-st-hscroll-spacer></div>
     </div>
     <div class="st-hscroll-body" data-st-hscroll-body>
-      <table class="st-table${compact ? ' compact' : ''}${sticky ? ' st-table-sticky' : ''}">
-        <thead><tr>${head}</tr></thead>
+      <table class="st-table st-table-sticky${compact ? ' compact' : ''}">
+        <thead><tr>${rankHead}${head}</tr></thead>
         <tbody>${body}</tbody>
         ${foot}
       </table>
@@ -1176,7 +1183,8 @@ function layoutStickyColumns(table, forcedWidths = null) {
 }
 
 /**
- * Match boards: Team sticky col (index 1) shares the wider of the two team names.
+ * Match boards: Team sticky col (index 2 after #) shares the wider of the two
+ * team names.
  * @param {ParentNode} root
  */
 export function syncMatchBoardTeamColWidths(root) {
@@ -1184,8 +1192,10 @@ export function syncMatchBoardTeamColWidths(root) {
   const tables = [...boards.querySelectorAll('table.st-table')];
   if (tables.length < 2) return;
   let maxW = 0;
+  // sticky-0 = #, sticky-1 = Player, sticky-2 = Team
+  const teamSticky = 2;
   for (const table of tables) {
-    table.querySelectorAll('.st-sticky-1').forEach((c) => {
+    table.querySelectorAll(`.st-sticky-${teamSticky}`).forEach((c) => {
       maxW = Math.max(
         maxW,
         Math.ceil(c.scrollWidth) || 0,
@@ -1195,7 +1205,7 @@ export function syncMatchBoardTeamColWidths(root) {
   }
   if (maxW < 1) return;
   for (const table of tables) {
-    layoutStickyColumns(table, { 1: maxW });
+    layoutStickyColumns(table, { [teamSticky]: maxW });
   }
 }
 
