@@ -119,4 +119,16 @@ export function initMobileFilterToggle() {
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
   filters.before(btn);
+
+  // Leaving Demo Manager must not leave the drawer latched open for next time.
+  const close = () => {
+    if (!library.classList.contains('filters-open')) return;
+    library.classList.remove('filters-open');
+    btn.textContent = 'Filters';
+    btn.setAttribute('aria-expanded', 'false');
+  };
+  const mo = new MutationObserver(() => {
+    if (library.hidden) close();
+  });
+  mo.observe(library, { attributes: true, attributeFilter: ['hidden'] });
 }

@@ -221,7 +221,11 @@ export function createTimelineViewer({
           <button type="button" class="rv-tool" id="rv-stats" title="Match stats up to this round (hold Tab)" ${
             statsDemoId ? '' : 'hidden'
           }>${statsIconSvg}</button>
-          <button type="button" class="rv-tool active" id="rv-chart" title="Win chance chart">${icon(chartIcon)}</button>
+          <!-- Starts inactive to match chartOn: the tiers that hold the chart
+               outright switch it on below, and syncWinChart lights the button
+               when they do. Hardcoding active here left every other tier with
+               a lit button and no panel. -->
+          <button type="button" class="rv-tool" id="rv-chart" title="Win chance chart">${icon(chartIcon)}</button>
           <button type="button" class="rv-tool" id="rv-coach" title="Coach: mistake notes for one team" ${
             statsDemoId ? '' : 'hidden'
           }>${icon(coachIcon)}</button>
@@ -345,6 +349,12 @@ export function createTimelineViewer({
    * metered tiers spend a use when they turn it on.
    */
   let chartOn = false;
+  /**
+   * Narrow layout: the rosters move under the map and the docked panels span
+   * the width, so anything that opens on its own would land on top of the
+   * rosters. Matches the breakpoint the stacked layout uses in replays.css.
+   */
+  const stackedQuery = window.matchMedia('(max-width: 860px)');
   let coachOn = false;
   /** Position overlay on the radar (control / contested). */
   let zonesOn = false;
@@ -3362,6 +3372,9 @@ export function createTimelineViewer({
     if (!ents) return;
     await ents.ready();
     if (destroyed || chartOn) return;
+    // On the stacked layout the chart dock covers the rosters, so it waits to
+    // be asked for rather than opening over them on arrival.
+    if (stackedQuery.matches) return;
     if (!ents.quota(CAP.DEMOS_ROUND_WIN_PREDICTION).unlimited) return;
     spentRoundWin = true;
     chartOn = true;
@@ -3937,10 +3950,19 @@ export function createTimelineViewer({
   // The round strip + transport float over the bottom of the stage, so the map
   // fits itself above them. The strip wraps to two rows on narrow windows, so
   // the inset is measured rather than assumed.
+  //
+  // The measurement is also published as --rv-chrome-h: the narrow layout puts
+  // the rosters under the map, where the chrome would cover them, so the stage
+  // turns this into bottom padding. Once it does, the map box already stops
+  // above the chrome and insetting the drawing again would only shrink the
+  // radar into the top of an empty box.
   function syncChromeInset() {
     const chromeH = chromeEl.offsetHeight;
+    el.style.setProperty('--rv-chrome-h', `${chromeH}px`);
     const stageH = el.querySelector('.rv-stage')?.clientHeight || 0;
-    const overlap = Math.max(0, Math.min(chromeH - 12, stageH * 0.35));
+    const overlap = stackedQuery.matches
+      ? 0
+      : Math.max(0, Math.min(chromeH - 12, stageH * 0.35));
     if (renderer.viewInset.bottom !== overlap) {
       renderer.viewInset.bottom = overlap;
       return true;

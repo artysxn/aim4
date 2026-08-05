@@ -39,7 +39,7 @@ import { openingSituation, SITUATION_OPTIONS } from '../replays/shared/openingSi
 import { findRoundDecided } from '../replays/coach/roundDecided.js';
 import { PACKAGE_EXT } from '../replays/shared/replayPackage.js';
 import { formatBytes } from '../replays/tickStore.js';
-import { createStatsPanel, DEFAULT_MIN_ROUNDS } from '../replays/stats/statsPanel.js';
+import { createStatsPanel, defaultMinRounds } from '../replays/stats/statsPanel.js';
 import { createAnalyticsPanel } from '../replays/analytics/analyticsPanel.js';
 import { createChartsPanel } from '../replays/charts/chartsPanel.js';
 import commentsIcon from '../icons/demos_comments.svg?raw';
@@ -2905,9 +2905,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
     if (state.hasAwp) q.set('awp', '1');
     if (state.oppHasAwp) q.set('oppAwp', '1');
-    // Always write minR when it differs from the Database default, including 0.
+    // Always write minR when it differs from this scope's default, including 0
+    // on the unfiltered Database (default 80) or a raised floor on a match scope.
     const minR = Math.max(0, Math.floor(Number(state.minRounds) || 0));
-    if (minR !== DEFAULT_MIN_ROUNDS) q.set('minR', String(minR));
+    if (minR !== defaultMinRounds(state)) q.set('minR', String(minR));
     if (state.role?.side && state.role?.value) {
       q.set('role', `${state.role.side}:${state.role.value}`);
     }
@@ -3004,10 +3005,23 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const search = q.toString();
     const target = path + (search ? `?${search}` : '');
     const current = window.location.pathname.replace(/\/+$/, '') + window.location.search;
-    if (current === target) return;
+    if (current === target) {
+      const detailKey =
+        state.player ? `p:${state.player}` : state.team ? `t:${state.team}` : '';
+      lastStatsDetailKey = detailKey;
+      return;
+    }
     const detailKey = state.player ? `p:${state.player}` : state.team ? `t:${state.team}` : '';
-    const usePush = push || detailKey !== lastStatsDetailKey;
+    const enteringDetail = Boolean(detailKey) && detailKey !== lastStatsDetailKey;
+    const leavingDetail = !detailKey && Boolean(lastStatsDetailKey);
     lastStatsDetailKey = detailKey;
+    // Entering a player/team pushes so Back can pop. Leaving or filter-only
+    // edits replace so we do not stack a duplicate list entry on top of detail.
+    const usePush = push || enteringDetail;
+    if (leavingDetail && !push) {
+      window.history.replaceState({ page: 'stats' }, '', target);
+      return;
+    }
     if (usePush) window.history.pushState({ page: 'stats' }, '', target);
     else window.history.replaceState({ page: 'stats' }, '', target);
   }
@@ -3015,34 +3029,84 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   /** Mount the panel on first use and point it at a scope. */
   function openStatsPage(scope = {}, urlParams = null) {
     if (!statsBodyEl) return;
-    const fromUrl = statsViewFromParams(urlParams || Object.fromEntries(new URLSearchParams(window.location.search)));
+    const rawParams = urlParams || Object.fromEntries(new URLSearchParams(window.location.search));
+    const fromUrl = scope.__fresh ? {} : statsViewFromParams(rawParams);
     const merged = { ...scope, ...fromUrl };
+    delete merged.__fresh;
     // Scope demos/files from the caller win over a stale URL when opening from
     // a selection; otherwise URL demos keep a shared link intact.
     if (Array.isArray(scope.demos)) merged.demos = scope.demos;
     if (Array.isArray(scope.files)) merged.files = scope.files;
     if (scope.title) merged.title = scope.title;
     if (scope.teamName) merged.teamName = scope.teamName;
+    // Fresh sidebar Database: drop sticky match/team scope and URL filters.
+    if (scope.__fresh) {
+      delete merged.demos;
+      delete merged.files;
+      delete merged.teamName;
+      delete merged.title;
+      delete merged.maps;
+      delete merged.map;
+      delete merged.side;
+      delete merged.result;
+      delete merged.advantage;
+      delete merged.econ;
+      delete merged.oppEcon;
+      delete merged.hasAwp;
+      delete merged.oppHasAwp;
+      delete merged.role;
+      delete merged.player;
+      delete merged.team;
+      delete merged.minRounds;
+      lastStatsDetailKey = '';
+    }
+    const prevScope = statsScope;
     statsScope = merged;
 
+    let created = false;
     if (!statsPanel) {
+      created = true;
       statsPanel = createStatsPanel({
         escapeHtml,
         onViewChange(state) {
           if (subpage !== 'stats') return;
           syncStatsUrl(state);
+        },
+        onBack() {
+          const q = new URLSearchParams(window.location.search);
+          if (!q.has('player') && !q.has('team')) return false;
+          // Pop the detail entry; popstate re-applies the previous list URL.
+          window.history.back();
+          return true;
         }
       });
       statsBodyEl.appendChild(statsPanel.el);
+    }
+
+    // Same library scope + only the view (detail/filters) changed: apply without
+    // refetching. Needed so Back (history.back) is instant and reliable.
+    const sameLibrary =
+      !created &&
+      !scope.__fresh &&
+      JSON.stringify(prevScope?.demos || null) === JSON.stringify(merged.demos || null) &&
+      JSON.stringify(prevScope?.files || null) === JSON.stringify(merged.files || null) &&
+      String(prevScope?.teamName || '') === String(merged.teamName || '');
+    if (sameLibrary) {
+      statsPanel.applyViewState(merged);
+      syncStatsUrl(statsPanel.viewState());
+      return;
     }
     void statsPanel.load(merged);
   }
 
   /**
-   * @param {{demos?: string[], files?: string[], title?: string}} scope
+   * @param {{demos?: string[], files?: string[], title?: string, teamName?: string}} scope
    */
   function showStats(scope) {
-    statsScope = scope || {};
+    // Mark so onShow keeps this scope even though the pushed URL is clean /database
+    // until syncStatsUrl runs — without the mark, a bare Database sidebar click
+    // would correctly clear sticky match demos.
+    statsScope = { ...(scope || {}), __open: true };
     lastStatsDetailKey = '';
     setSubpage('stats', { push: true });
   }
@@ -3274,7 +3338,45 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           ? params.page
           : 'library';
       if (page === 'stats') {
-        statsScope = { ...statsScope, ...statsViewFromParams(params) };
+        const fromUrl = statsViewFromParams(params);
+        const urlScoped =
+          (Array.isArray(fromUrl.demos) && fromUrl.demos.length > 0) ||
+          (Array.isArray(fromUrl.files) && fromUrl.files.length > 0) ||
+          Boolean(fromUrl.teamName);
+        if (statsScope?.__open) {
+          // Explicit open from match / selection — keep caller scope, fold URL filters.
+          const { __open: _mark, ...kept } = statsScope;
+          statsScope = { ...kept, ...fromUrl };
+          if (Array.isArray(kept.demos)) statsScope.demos = kept.demos;
+          if (Array.isArray(kept.files)) statsScope.files = kept.files;
+          if (kept.title) statsScope.title = kept.title;
+          if (kept.teamName) statsScope.teamName = kept.teamName;
+        } else if (urlScoped) {
+          statsScope = { ...fromUrl };
+        } else {
+          const hasViewFilters = Boolean(
+            fromUrl.maps?.length ||
+              fromUrl.side ||
+              fromUrl.result ||
+              fromUrl.advantage ||
+              fromUrl.econ != null ||
+              fromUrl.oppEcon != null ||
+              fromUrl.hasAwp ||
+              fromUrl.oppHasAwp ||
+              fromUrl.role ||
+              fromUrl.player ||
+              fromUrl.team ||
+              (fromUrl.minRounds != null && fromUrl.minRounds !== '')
+          );
+          if (hasViewFilters) {
+            // Browser Back / shared link — restore list filters, do not wipe.
+            statsScope = { ...fromUrl };
+          } else {
+            // Bare sidebar Database — reset sticky filters from the prior visit.
+            statsScope = { __fresh: true };
+            lastStatsDetailKey = '';
+          }
+        }
       }
       setSubpage(page, { push: false });
       if (

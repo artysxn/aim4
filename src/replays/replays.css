@@ -3135,23 +3135,6 @@ body.rv-open {
   .rp-result {
     overflow: visible;
   }
-
-  .rv-stage {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .rv-team {
-    flex-direction: row;
-    gap: 10px;
-    width: 100%;
-    min-width: 0;
-    overflow-x: hidden;
-  }
-
-  .rv-team-2 {
-    display: none;
-  }
 }
 
 /* ---- Statistics ---------------------------------------------------------- */
@@ -3346,18 +3329,29 @@ body.rv-open {
 
 .st-body {
   min-width: 0;
+  max-width: 100%;
+}
+
+.st-panel {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .st-hscroll {
   display: flex;
   flex-direction: column;
   gap: 0;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
 }
 
 .st-hscroll-bar {
   overflow-x: auto;
   overflow-y: hidden;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   height: 12px;
   margin-bottom: 2px;
   scrollbar-width: thin;
@@ -3369,9 +3363,15 @@ body.rv-open {
 }
 
 .st-hscroll-body {
+  /* Flex default min-width:auto expands to the table and kills overflow-x. */
   overflow-x: auto;
   overflow-y: visible;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
   /* Own stacking context so sticky column z-index stays above metrics. */
   isolation: isolate;
 }
@@ -5258,7 +5258,9 @@ table.rp-mine-table tbody tr {
 
 .tm-overview-stats .st-body {
   max-height: min(70vh, 640px);
-  overflow: auto;
+  /* Vertical only — horizontal belongs on .st-hscroll-body or the table cannot scroll. */
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .tm-overview-stats .st-filters {
@@ -7855,4 +7857,209 @@ table.rp-mine-table tbody tr {
   overflow-x: hidden;
   overflow-y: auto;
   min-height: 0;
+}
+
+
+/* ---- Round viewer: narrow screens --------------------------------------
+   Placed at the end of the file on purpose. These override .rv-* base rules
+   of equal specificity defined above, so they only win by source order; kept
+   next to the demo-browser narrow rules they lost to .rv-charts / .rv-team-col
+   and the docked panels floated over the chrome.
+   ---------------------------------------------------------------------- */
+
+@media (max-width: 860px) {
+  /* Narrow screens: the map takes the top and both rosters sit under it, side
+     by side. This replaces an earlier layout that laid one roster out as a
+     horizontally scrolling row and hid the second team outright, which on a
+     phone meant half the server was missing.
+
+     The stage reserves the chrome's real height (published as --rv-chrome-h by
+     syncChromeInset) as bottom padding, because down here the chrome overlays
+     the rosters rather than the map. */
+  .rv-stage {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 8px 8px calc(var(--rv-chrome-h, 132px) + 8px);
+  }
+
+  .rv-map {
+    grid-area: 1 / 1 / 2 / -1;
+  }
+
+  .rv-stage > .rv-team-col:first-child {
+    grid-area: 2 / 1;
+  }
+
+  .rv-stage > .rv-team-col:last-child {
+    grid-area: 2 / 2;
+  }
+
+  .rv-team-col {
+    height: auto;
+    max-height: none;
+  }
+
+  /* Two rosters share the width, so every row is tightened and the block
+     scrolls on its own rather than pushing the map off the screen. The bar
+     itself is hidden: it would sit on top of a roster only a few pixels too
+     tall, and touch scrolling does not need it. */
+  .rv-team {
+    max-height: 38vh;
+    padding: 8px 9px;
+    gap: 6px;
+    scrollbar-width: none;
+  }
+
+  .rv-team::-webkit-scrollbar {
+    display: none;
+  }
+
+  .rv-team-head {
+    padding-bottom: 6px;
+  }
+
+  .rv-team-name {
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .rv-team-side {
+    min-width: 18px;
+    padding: 1px 4px;
+    font-size: 10px;
+  }
+
+  .rv-players {
+    gap: 5px;
+  }
+
+  .rv-player {
+    padding: 3px 4px;
+    margin: 0 -4px;
+  }
+
+  .rv-player-hp-row {
+    gap: 5px;
+  }
+
+  .rv-player-pill {
+    height: 18px;
+  }
+
+  .rv-player-name {
+    padding: 0 6px;
+    font-size: 11px;
+    line-height: 18px;
+  }
+
+  .rv-player-money {
+    min-width: 2.6em;
+    font-size: 10px;
+  }
+
+  .rv-player-inv {
+    gap: 4px;
+    margin-top: 2px;
+    min-height: 15px;
+  }
+
+  .rv-inv-armor {
+    flex: 0 0 13px;
+    width: 13px;
+    height: 14px;
+  }
+
+  .rv-inv-armor .rv-inv-icon {
+    height: 14px;
+    max-width: 13px;
+  }
+
+  .rv-inv-util {
+    flex: 0 1 auto;
+    width: auto;
+    min-width: 0;
+    gap: 2px;
+  }
+
+  .rv-inv-icon {
+    height: 13px;
+    max-width: 18px;
+  }
+
+  .rv-inv-gun {
+    height: 14px;
+    max-width: 46px;
+  }
+
+  .rv-inv-nade {
+    height: 12px;
+    max-width: 13px;
+  }
+
+  /* Chrome stacks: round strip, then transport, then the tool row full width.
+     Side by side, the tools squeezed the transport until the clock was cut off. */
+  .rv-chrome {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    gap: 6px;
+    padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .rv-chrome > .rv-rounds {
+    grid-area: 1 / 1;
+  }
+
+  /* Centering a strip that overflows puts its first chips out of reach of the
+     scroller. The active round is scrolled into view on selection anyway. */
+  .rv-rounds {
+    justify-content: flex-start;
+    padding: 0 2px 4px;
+  }
+
+  .rv-chrome > .rv-transport {
+    grid-area: 2 / 1;
+  }
+
+  .rv-chrome > .rv-tools-anchor {
+    grid-area: 3 / 1;
+    justify-self: stretch;
+  }
+
+  .rv-tools {
+    justify-content: space-around;
+    overflow-x: auto;
+  }
+
+  .rv-tools-draw {
+    left: 0;
+    right: 0;
+    justify-content: center;
+  }
+
+  /* Docked panels span the width and sit directly above the chrome, in the
+     gutter the side columns used to provide. They land on the rosters rather
+     than on empty map, so they carry their own background: as loose floating
+     cards the roster showed through the gaps between them. */
+  .rv-charts,
+  .rv-note-dock,
+  .rv-coach-pick {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    bottom: calc(var(--rv-chrome-h, 132px) + 8px);
+    max-height: 38vh;
+    overflow-y: auto;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--rv-panel);
+  }
+
+  .rv-scoreboard-body {
+    overflow-x: auto;
+  }
 }

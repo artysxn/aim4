@@ -289,12 +289,58 @@ html[data-mobile] .rp-top {
 
 /* ---- Database / Charts / Patterns -------------------------------------------- */
 
-/* Stat blocks can be wide; scroll them, never the page. */
+html[data-mobile] #rp-stats-page,
+html[data-mobile] #rp-stats-page .rp-stats-panel,
+html[data-mobile] .tm-overview-stats,
+html[data-mobile] .tm-overview-stats-mount {
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* Keep the page width fixed; the table wrappers below do the horizontal swipe. */
 html[data-mobile] #rp-stats-body,
 html[data-mobile] #rp-analytics-body,
 html[data-mobile] #rp-charts-body {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+html[data-mobile] .st-panel,
+html[data-mobile] .st-body,
+html[data-mobile] .st-hscroll,
+html[data-mobile] .st-board,
+html[data-mobile] .rv-board {
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* Swipe the metrics on the table itself. The thin top bar is a poor touch target. */
+html[data-mobile] .st-hscroll-bar {
+  display: none;
+}
+
+html[data-mobile] .st-hscroll-body {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  /* Show a slim scrollbar so wide tables are discoverable without the top bar. */
+  scrollbar-width: thin;
+}
+
+html[data-mobile] .st-hscroll-body::-webkit-scrollbar {
+  display: block;
+  height: 4px;
+}
+
+html[data-mobile] .st-hscroll-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
+}
+
+html[data-mobile] .st-table {
+  width: max-content;
+  min-width: 100%;
 }
 
 /* ---- Leaderboards ------------------------------------------------------------- */
@@ -311,6 +357,64 @@ html[data-mobile] .lb-head .site-select {
 html[data-mobile] .rvw-replay-btns,
 html[data-mobile] .rvw-section-hint {
   display: none;
+}
+
+/* ---- Round viewer -------------------------------------------------------------- */
+
+/* The narrow layout itself (map on top, both rosters under it, chrome stacked)
+   lives in replays.css, keyed on width so a narrow desktop window gets it too.
+   What belongs here is the sizing that follows the device rather than the
+   viewport: controls a finger can actually hit. */
+
+html[data-mobile] .rv-round {
+  min-width: 40px;
+  padding: 8px 0;
+}
+
+html[data-mobile] .rv-transport {
+  gap: 10px;
+}
+
+html[data-mobile] .rv-speed {
+  min-width: 46px;
+  padding: 9px 10px;
+  font-size: 13px;
+}
+
+html[data-mobile] .rv-play {
+  width: 40px;
+  height: 40px;
+}
+
+/* A 4px-tall bar is not a drag target. The track stays slim; the row around it
+   is what grows. */
+html[data-mobile] .rv-scrub {
+  height: 34px;
+}
+
+html[data-mobile] .rv-scrub-track {
+  height: 6px;
+  border-radius: 3px;
+}
+
+html[data-mobile] .rv-time {
+  min-width: 46px;
+  font-size: 12px;
+}
+
+html[data-mobile] .rv-tool {
+  width: 36px;
+  height: 36px;
+}
+
+html[data-mobile] .rv-tool svg {
+  width: 20px;
+  height: 20px;
+}
+
+html[data-mobile] .rv-swatch {
+  width: 30px;
+  height: 30px;
 }
 
 /* ---- Team ---------------------------------------------------------------------- */

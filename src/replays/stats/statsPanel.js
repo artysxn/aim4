@@ -45,13 +45,31 @@ import { spinnerHtml, watchSlowLoad } from '../../lib/spinner.js';
  * @param {{
  *   escapeHtml: (s: string) => string,
  *   onViewChange?: (state: object) => void,
- *   onDetailChange?: (detail: null | { kind: 'player'|'team', id?: string, name?: string, label: string }) => void
+ *   onDetailChange?: (detail: null | { kind: 'player'|'team', id?: string, name?: string, label: string }) => void,
+ *   onBack?: () => boolean
  * }} deps
  */
-/** Default minimum rounds filter when opening Database (can still be set to 0). */
+/** Default minimum rounds when opening the unfiltered Database (can still be set to 0). */
 export const DEFAULT_MIN_ROUNDS = 80;
 
-export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange }) {
+/** True when the panel is scoped to a match, selection, or team — not the full library. */
+export function isStatsScopeFiltered(scope = {}) {
+  return (
+    (Array.isArray(scope.demos) && scope.demos.length > 0) ||
+    (Array.isArray(scope.files) && scope.files.length > 0) ||
+    Boolean(String(scope.teamName || '').trim())
+  );
+}
+
+/**
+ * Min-rounds default for a load.
+ * Unfiltered Database → 80. Match / team / selection scopes → 0.
+ */
+export function defaultMinRounds(scope = {}) {
+  return isStatsScopeFiltered(scope) ? 0 : DEFAULT_MIN_ROUNDS;
+}
+
+export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onBack }) {
   const el = document.createElement('div');
   el.className = 'st-panel';
   el.innerHTML = `
@@ -303,7 +321,11 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange }) {
       filter.result = '';
       filter.advantage = '';
       filter.role = null;
-      filter.minRounds = DEFAULT_MIN_ROUNDS;
+      filter.minRounds = defaultMinRounds({
+        demos: scope.demos,
+        files: scope.files,
+        teamName: lockedTeamName
+      });
       resetListPage();
       render();
     }
@@ -359,8 +381,10 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange }) {
   });
 
   backEl.addEventListener('click', () => {
+    // Prefer popping the detail history entry (opened via pushState). Pushing a
+    // third "list" URL made browser Back return to the player/team view.
+    if (typeof onBack === 'function' && onBack()) return;
     clearDetail();
-    render();
   });
 
   /** True when the user is dragging a text selection inside a name link. */
@@ -1040,7 +1064,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange }) {
     filter.hasAwp = false;
     filter.oppHasAwp = false;
     filter.role = null;
-    filter.minRounds = DEFAULT_MIN_ROUNDS;
+    // Full Database keeps the 80-round floor; match / team / selection scopes do not.
+    filter.minRounds = defaultMinRounds(next);
     filter.result = '';
     filter.advantage = '';
     tab = 'players';
