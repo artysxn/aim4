@@ -12,6 +12,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev:mp"],
       "port": 5173
+    },
+    {
+      "name": "aim4-host",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "host"],
+      "port": 3784
     }
   ]
 }

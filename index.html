@@ -5,8 +5,49 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="AIM4.io: browser-based FPS aim training. 30+ scenarios, competitive ratings, multiplayer duels and replays." />
     <title>AIM4.io</title>
+    <script>
+      // Mobile shell bootstrap. One site, one URL: a phone gets the mobile
+      // layout automatically, and either layout can be forced with ?view=
+      // mobile / desktop, which is then remembered in localStorage (per device,
+      // per browser) until ?view=auto puts detection back in charge. Runs
+      // inline, before styles and modules, so the shell never flips after paint.
+      //
+      // data-mobile drives the layout; data-phone records that the device looks
+      // like a phone, so a phone that chose the desktop layout still gets a way
+      // back to the mobile one.
+      (function () {
+        try {
+          var PREF = 'aim4_site_view';
+          var qs = new URLSearchParams(location.search);
+          var view = qs.get('view');
+          if (view === 'mobile' || view === 'desktop') localStorage.setItem(PREF, view);
+          else if (view === 'auto') localStorage.removeItem(PREF);
+          if (view) {
+            qs.delete('view');
+            var rest = qs.toString();
+            history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+          }
+          // Phones by user agent, plus anything with a touch-only pointer on a
+          // phone-sized screen. The 600px floor on the shorter side keeps
+          // tablets (768 and up) on the desktop layout, which they have room for.
+          var phone =
+            /Android.*Mobile|iPhone|iPod|Windows Phone/i.test(navigator.userAgent) ||
+            (matchMedia('(hover: none) and (pointer: coarse)').matches &&
+              Math.min(screen.width, screen.height) <= 600);
+          var pref = localStorage.getItem(PREF);
+          var root = document.documentElement;
+          if (pref === 'mobile' || (pref !== 'desktop' && phone)) {
+            root.setAttribute('data-mobile', '1');
+          }
+          if (phone) root.setAttribute('data-phone', '1');
+        } catch (e) {
+          /* detection must never block the page */
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="/src/site/site.css" />
     <link rel="stylesheet" href="/src/replays/replays.css" />
+    <link rel="stylesheet" href="/src/site/mobile.css" />
   </head>
   <body class="site">
     <div class="site-shell" id="site-shell">

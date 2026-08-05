@@ -46,6 +46,9 @@ function parse(text) {
 
 export function loadEnv() {
   const loaded = [];
+  // Keys this loader set, as opposed to ones the real environment already
+  // had: a later file may override the former, never the latter.
+  const fromFiles = new Set();
   for (const file of FILES) {
     let text;
     try {
@@ -54,7 +57,10 @@ export function loadEnv() {
       continue;
     }
     for (const [key, value] of Object.entries(parse(text))) {
-      if (process.env[key] === undefined) process.env[key] = value;
+      if (process.env[key] === undefined || fromFiles.has(key)) {
+        process.env[key] = value;
+        fromFiles.add(key);
+      }
     }
     loaded.push(file);
   }

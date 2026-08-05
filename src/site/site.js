@@ -50,6 +50,19 @@ import { getEntitlements } from '../lib/entitlements.js';
 import { upgradePrompt } from './upgradeGate.js';
 import { accountApi } from './account/accountApi.js';
 import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
+import {
+  isMobileSite,
+  isPhoneDevice,
+  viewSwitchUrl,
+  addFooterViewSwitch,
+  initMobileChrome,
+  initMobileFilterToggle
+} from './mobileMode.js';
+
+// The mobile layout. The inline script in index.html has already resolved it
+// from the device and the saved preference, and set <html data-mobile="1">,
+// by the time modules run.
+const IS_MOBILE = isMobileSite();
 
 // Brand logos — Vite hashes these into /assets so Vercel serves them (the
 // catch-all rewrite used to send /icons/* to train.html).
@@ -69,7 +82,15 @@ document.querySelectorAll('.side-logo-mark').forEach((img) => {
   const params = new URLSearchParams(window.location.search);
   const hash = window.location.hash || '';
   if (params.has('lobby') || params.has('replay') || params.has('replayPath') || params.has('server')) {
-    window.location.replace('/train' + window.location.search + hash);
+    if (IS_MOBILE) {
+      // The trainer is desktop only; drop its params instead of bouncing
+      // through /train and straight back here.
+      for (const k of ['lobby', 'replay', 'replayPath', 'server']) params.delete(k);
+      const rest = params.toString();
+      window.history.replaceState(null, '', window.location.pathname + (rest ? `?${rest}` : ''));
+    } else {
+      window.location.replace('/train' + window.location.search + hash);
+    }
   }
 }
 
@@ -144,6 +165,46 @@ setCollapsed(initialCollapsed, false);
 collapseBtn.addEventListener('click', () => {
   setCollapsed(shell.dataset.collapsed !== 'true');
 });
+
+// ---- Mobile layout ----------------------------------------------------------
+// In the mobile layout the sidebar is a drawer and the trainer has no entry
+// points: gamemodes need a mouse and pointer lock, so it drops the sidebar
+// link, home card, hero button and footer links, and /training explains
+// instead of launching. Everything else keeps working.
+if (IS_MOBILE) {
+  document.body.classList.add('is-mobile-site');
+  setCollapsed(false, false);
+  initMobileChrome({ shell });
+  initMobileFilterToggle();
+
+  document
+    .querySelectorAll('.side-link[data-nav="training"], .site-card[data-nav="training"]')
+    .forEach((el) => el.remove());
+  document
+    .querySelectorAll('.site-footer a[href="/train"], .site-footer a[href="/training"]')
+    .forEach((el) => el.remove());
+
+  const heroActions = document.querySelector('.hero-actions');
+  if (heroActions) {
+    heroActions.innerHTML = `
+      <a class="btn primary btn-lg" href="/demos" data-nav="demos">Demo Manager</a>
+      <a class="btn btn-lg" href="/leaderboards" data-nav="leaderboards">Leaderboards</a>`;
+  }
+
+  const trainingPad = document.querySelector('.view[data-view="training"] .view-pad');
+  if (trainingPad) {
+    trainingPad.innerHTML = `
+      <div class="mobile-desktop-only">
+        <h3>Aim training is desktop only</h3>
+        <p>Gamemodes need a mouse and pointer lock.</p>
+        <a class="btn" href="${viewSwitchUrl('desktop')}">Use the desktop site</a>
+      </div>`;
+  }
+} else if (isPhoneDevice()) {
+  // A phone that asked for the desktop layout keeps it, on this device and in
+  // this browser, until it switches back from here.
+  addFooterViewSwitch('mobile', 'Mobile site');
+}
 
 // ---- Account (sign in / register) -------------------------------------------
 // Sign-in lives here, on the main site, and nowhere else: the trainer and
@@ -609,7 +670,9 @@ function openProfile(userId, username = 'Player') {
   setView('replay-viewer', true, { user: userId, name: username });
 }
 
-viewControllers.training = initTrainingView({ escapeHtml, openLeaderboards });
+// On mobile the training view is the static desktop-only notice above, and the
+// launch-list DOM this controller renders into is gone.
+viewControllers.training = IS_MOBILE ? {} : initTrainingView({ escapeHtml, openLeaderboards });
 viewControllers.leaderboards = initLeaderboardsView({ auth, escapeHtml, openProfile });
 viewControllers.football = initFootballView({ auth, escapeHtml });
 viewControllers['replay-viewer'] = initReplayViewerView({

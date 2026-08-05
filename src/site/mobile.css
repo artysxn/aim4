@@ -1,0 +1,430 @@
+/* ---------------------------------------------------------------------------
+   mobile.css
+   The mobile layout. Every rule is scoped to html[data-mobile], which the
+   inline script in index.html sets before first paint from the device and the
+   saved preference, so this file is inert on the desktop layout and needs no
+   media queries of its own: once mobile is chosen it stays mobile-shaped at
+   any viewport width. Loaded after site.css and replays.css so plain selectors
+   of equal specificity win by order.
+--------------------------------------------------------------------------- */
+
+/* ---- Shell ---------------------------------------------------------------- */
+
+html[data-mobile] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html[data-mobile] .site-shell {
+  display: block;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+html[data-mobile] .site-main {
+  max-width: 780px;
+  margin: 0 auto;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* ---- Sidebar becomes a drawer --------------------------------------------- */
+
+html[data-mobile] .site-sidebar {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  height: 100vh;
+  height: 100dvh;
+  width: min(304px, 86vw);
+  transform: translateX(-105%);
+  transition: transform 0.28s var(--ease-smooth);
+  border-right: 1px solid var(--border-strong);
+  padding-bottom: env(safe-area-inset-bottom);
+  z-index: 95;
+}
+
+html[data-mobile] .site-shell[data-drawer='open'] .site-sidebar {
+  transform: none;
+  box-shadow: 24px 0 70px rgba(0, 0, 0, 0.55);
+}
+
+html[data-mobile] .drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+  z-index: 90;
+}
+
+html[data-mobile] body.drawer-open .drawer-backdrop {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+html[data-mobile] body.drawer-open {
+  overflow: hidden;
+}
+
+/* The drawer is always the full, labeled sidebar. The collapse button is
+   meaningless here, and a stored collapsed state must not shrink the drawer. */
+html[data-mobile] .side-collapse {
+  display: none;
+}
+html[data-mobile] .site-shell[data-collapsed='true'] .site-sidebar {
+  width: min(304px, 86vw);
+}
+html[data-mobile] .site-shell[data-collapsed='true'] .side-label {
+  opacity: 1;
+}
+html[data-mobile] .site-shell[data-collapsed='true'] .side-cat-label {
+  opacity: 1;
+  height: auto;
+  padding: 10px 12px 4px;
+  pointer-events: auto;
+}
+html[data-mobile] .site-shell[data-collapsed='true'] .side-link,
+html[data-mobile] .site-shell[data-collapsed='true'] .side-account {
+  gap: 12px;
+}
+html[data-mobile] .site-shell[data-collapsed='true'] .side-top {
+  flex-direction: row;
+  align-items: center;
+  padding: 18px 14px 14px 18px;
+}
+html[data-mobile] .site-shell[data-collapsed='true'] .side-logo .side-logo-full {
+  display: block;
+}
+html[data-mobile] .site-shell[data-collapsed='true'] .side-logo .side-logo-mark {
+  display: none;
+}
+html[data-mobile] .site-shell[data-collapsed='true'] .side-account-arrow {
+  opacity: 1;
+  width: 16px;
+}
+
+/* Touch-sized nav rows. */
+html[data-mobile] .side-nav {
+  padding: 4px 12px 14px;
+}
+html[data-mobile] .side-link {
+  padding: 11px 12px;
+  font-size: 14px;
+}
+html[data-mobile] .side-cat-label {
+  font-size: 10px;
+  padding: 10px 12px 4px;
+}
+html[data-mobile] .side-account {
+  padding: 12px;
+}
+html[data-mobile] .side-desktop-link {
+  margin-top: 6px;
+}
+
+/* ---- Page header ----------------------------------------------------------- */
+
+html[data-mobile] .page-head {
+  padding: 10px 14px;
+  gap: 10px;
+}
+
+html[data-mobile] .mobile-menu-btn {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  margin-left: -6px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+html[data-mobile] .mobile-menu-btn:active {
+  background: var(--surface-hover);
+}
+html[data-mobile] .mobile-menu-btn svg {
+  fill: currentColor;
+}
+
+html[data-mobile] .page-title {
+  flex: 1;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Content spacing -------------------------------------------------------- */
+
+html[data-mobile] .view-pad {
+  padding: 22px 16px 56px;
+}
+
+html[data-mobile] .view-pad-fill {
+  padding: 14px 12px 36px;
+}
+
+/* ---- Home ------------------------------------------------------------------- */
+
+html[data-mobile] .hero {
+  padding: 56px 20px 44px;
+}
+html[data-mobile] .hero-logo {
+  margin-bottom: 26px;
+}
+html[data-mobile] .hero-logo img {
+  width: min(320px, 82vw);
+}
+html[data-mobile] .hero-actions {
+  flex-direction: column;
+  align-items: stretch;
+  max-width: 320px;
+  margin: 0 auto;
+  gap: 10px;
+}
+html[data-mobile] .hero-chips {
+  margin-top: 24px;
+}
+
+html[data-mobile] .explore {
+  padding: 36px 16px 52px;
+}
+html[data-mobile] .explore-title {
+  font-size: 21px;
+  margin-bottom: 18px;
+}
+html[data-mobile] .site-cards {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+html[data-mobile] .site-card {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px;
+}
+html[data-mobile] .card-title {
+  font-size: 14px;
+}
+
+/* ---- Desktop-only notice (training) ----------------------------------------- */
+
+html[data-mobile] .mobile-desktop-only {
+  max-width: 420px;
+  margin: 28px auto 0;
+  padding: 24px 20px;
+  text-align: center;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+html[data-mobile] .mobile-desktop-only h3 {
+  font-size: 17px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+html[data-mobile] .mobile-desktop-only p {
+  color: var(--muted);
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+/* ---- Demo Manager (library) -------------------------------------------------- */
+
+/* Un-pin the desktop's fixed-viewport split view: on a phone the page scrolls
+   as one column and the filter panel folds behind the toggle. */
+html[data-mobile] .site-shell:has(.view.active[data-view='replays'] > #rp-library:not([hidden])) {
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+html[data-mobile]
+  .site-shell:has(.view.active[data-view='replays'] > #rp-library:not([hidden]))
+  .site-main,
+html[data-mobile]
+  .site-shell:has(.view.active[data-view='replays'] > #rp-library:not([hidden]))
+  .page-body {
+  overflow: visible;
+}
+html[data-mobile] .view.active[data-view='replays'] > #rp-library.view-pad-fill:not([hidden]) {
+  overflow: visible;
+}
+
+html[data-mobile] .rp-browser {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: visible;
+}
+html[data-mobile] .rp-filters {
+  display: none;
+  position: static;
+  width: 100%;
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+html[data-mobile] #rp-library.filters-open .rp-filters {
+  display: block;
+}
+html[data-mobile] .rp-filters-toggle {
+  width: 100%;
+}
+html[data-mobile] .rp-result {
+  overflow: visible;
+  min-height: 40vh;
+}
+
+/* ---- Uploads ----------------------------------------------------------------- */
+
+html[data-mobile] .rp-top {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- Database / Charts / Patterns -------------------------------------------- */
+
+/* Stat blocks can be wide; scroll them, never the page. */
+html[data-mobile] #rp-stats-body,
+html[data-mobile] #rp-analytics-body,
+html[data-mobile] #rp-charts-body {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ---- Leaderboards ------------------------------------------------------------- */
+
+html[data-mobile] .lb-head .site-select {
+  margin-left: 0;
+  width: 100%;
+}
+
+/* ---- Replay Viewer (profiles) -------------------------------------------------- */
+
+/* Run playback opens the Three.js player inside the trainer, which the mobile
+   site does not have; the profile keeps placements and history only. */
+html[data-mobile] .rvw-replay-btns,
+html[data-mobile] .rvw-section-hint {
+  display: none;
+}
+
+/* ---- Team ---------------------------------------------------------------------- */
+
+html[data-mobile] .tm-grid,
+html[data-mobile] .tm-grid-overview {
+  grid-template-columns: minmax(0, 1fr);
+}
+html[data-mobile] .tm-head {
+  flex-wrap: wrap;
+}
+html[data-mobile] .tm-replays-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Roster and similar cards hold fixed-width tables; scroll the table like
+   .admin-table does rather than clipping at the card edge. */
+html[data-mobile] .tm-table {
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Stratbook grids divide their width over ~13 fixed columns, which turns the
+   headers into single letters on a phone. Keep desktop column widths and let
+   the existing .sb-table-scroll wrapper scroll. */
+html[data-mobile] .sb-table {
+  min-width: 860px;
+}
+
+/* ---- 2D Strategy Creator ---------------------------------------------------- */
+
+/* The round editor is a fixed-height three-column stage on desktop. Stack it:
+   map stage on top, then the round panel and the recordings panel, with the
+   page scrolling normally. */
+html[data-mobile] .sc-shell {
+  display: flex;
+  flex-direction: column;
+  height: auto;
+}
+html[data-mobile] .sc-stage {
+  order: -1;
+  min-height: min(100vw, 480px);
+}
+html[data-mobile] .sc-side {
+  overflow-y: visible;
+}
+html[data-mobile] .sc-left {
+  border-right: 0;
+  border-top: 1px solid var(--border);
+}
+html[data-mobile] .sc-right {
+  border-left: 0;
+  border-top: 1px solid var(--border);
+}
+
+/* ---- Account and Admin ---------------------------------------------------------- */
+
+/* Both panels replace their .view-pad-fill wrapper when they mount, so the
+   side padding has to live on the panel roots here. */
+html[data-mobile] .account-root,
+html[data-mobile] .admin-root {
+  padding: 8px 16px 48px;
+}
+
+/* ---- Football ------------------------------------------------------------------- */
+
+html[data-mobile] .fb-cols {
+  grid-template-columns: 1fr;
+  gap: 18px;
+}
+
+/* ---- Modals ---------------------------------------------------------------------- */
+
+html[data-mobile] .auth-modal {
+  padding: 16px;
+}
+html[data-mobile] .auth-panel {
+  max-height: 88vh;
+  max-height: 88dvh;
+}
+
+/* ---- Footer ----------------------------------------------------------------------- */
+
+html[data-mobile] .site-footer {
+  padding: 36px 20px 22px;
+  padding-bottom: calc(22px + env(safe-area-inset-bottom));
+}
+html[data-mobile] .foot-grid {
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+html[data-mobile] .foot-bottom {
+  flex-wrap: wrap;
+}
+html[data-mobile] .foot-bottom a {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ---- Forms and touch targets -------------------------------------------------------- */
+
+/* 16px stops iOS zooming the page on focus. */
+html[data-mobile] input,
+html[data-mobile] select,
+html[data-mobile] textarea {
+  font-size: 16px;
+}
+
+html[data-mobile] .btn {
+  min-height: 40px;
+}
+html[data-mobile] .seg-tab {
+  padding: 9px 16px;
+}

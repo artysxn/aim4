@@ -56,6 +56,9 @@ const SITE_VIEW_PATHS = new Set([
   '/charts',
   '/patterns',
   '/uploads',
+  '/team',
+  '/account',
+  '/admin',
   // Legacy bookmarks still land on the SPA shell (client redirects).
   '/replays',
   '/replays/playlists',
@@ -64,6 +67,14 @@ const SITE_VIEW_PATHS = new Set([
   '/replays/analytics',
   '/replays/charts'
 ]);
+
+// Shell-owned subtrees: /team/*, /account/* (sub-pages), /i/* (invites),
+// /s2/* (shared 2D rounds).
+const SITE_VIEW_PREFIXES = ['/team/', '/account/', '/i/', '/s2/'];
+
+function isSiteViewPath(rel) {
+  return SITE_VIEW_PATHS.has(rel) || SITE_VIEW_PREFIXES.some((p) => rel.startsWith(p));
+}
 
 /**
  * Try to serve a file from dist/. Returns true if handled.
@@ -86,7 +97,7 @@ export function tryServeStatic(req, res, url) {
 
   let target = filePath;
   if (!fs.existsSync(target) || fs.statSync(target).isDirectory()) {
-    const fallback = rel === '/index.html' || SITE_VIEW_PATHS.has(rel) ? 'index.html' : 'train.html';
+    const fallback = rel === '/index.html' || isSiteViewPath(rel) ? 'index.html' : 'train.html';
     target = path.join(DIST_DIR, fallback);
     if (!fs.existsSync(target)) target = path.join(DIST_DIR, 'index.html');
     if (!fs.existsSync(target)) return false;

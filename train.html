@@ -4,6 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>AIM4.io - Trainer</title>
+    <script>
+      // The trainer is desktop only, so a gamemode deep link opened while the
+      // mobile layout is in charge lands back on the site home page. Detection
+      // matches index.html; choosing the desktop layout on a phone opts back
+      // into the trainer rather than looping here.
+      (function () {
+        try {
+          var phone =
+            /Android.*Mobile|iPhone|iPod|Windows Phone/i.test(navigator.userAgent) ||
+            (matchMedia('(hover: none) and (pointer: coarse)').matches &&
+              Math.min(screen.width, screen.height) <= 600);
+          var pref = localStorage.getItem('aim4_site_view');
+          if (pref === 'mobile' || (pref !== 'desktop' && phone)) location.replace('/');
+        } catch (e) {
+          /* detection must never block the trainer */
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
