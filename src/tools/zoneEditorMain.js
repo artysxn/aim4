@@ -5,6 +5,7 @@
 
 import { MAPS, MAP_CODES, mapHasLowerRadar } from '../replays/shared/roundId.js';
 import { RADAR_SIZE, radarToWorld, worldToRadar } from '../replays/viewer/mapCalibration.js';
+import { pieceBounds } from '../replays/zones/zoneGeom.js';
 import { loadRadar } from '../replays/viewer/radarRenderer.js';
 import { emptyNetwork, worldPolyFromRadarVerts, worldRectFromRadarDrag } from '../replays/zones/zoneModel.js';
 import { fetchZones, saveZones } from '../replays/zones/zoneApi.js';
@@ -31,6 +32,8 @@ import {
   worldLedgeFromRadarStroke
 } from '../replays/zones/ledges.js';
 import {
+  carvePieceUnderPositions,
+  carvePositionsUnder,
   createArea,
   createPosition,
   createZone,
@@ -38,6 +41,9 @@ import {
   deletePosition,
   deleteZone,
   ensureRegionHierarchy,
+  findPositionByName,
+  mergePositions,
+  positionsOverlapping,
   renameArea,
   renamePosition,
   renameZone,
@@ -65,6 +71,13 @@ const POSITION_SELECTED = '#b8f0c0';
 
 const el = {
   mapTabs: document.querySelector('#ze-maps'),
+  modeMap: document.querySelector('#ze-mode-map'),
+  modeRegions: document.querySelector('#ze-mode-regions'),
+  toolsMap: document.querySelector('#ze-tools-map'),
+  toolsRegions: document.querySelector('#ze-tools-regions'),
+  brushGroup: document.querySelector('#ze-brush-group'),
+  panelMap: document.querySelector('#ze-panel-map'),
+  panelRegions: document.querySelector('#ze-panel-regions'),
   canvas: document.querySelector('#ze-canvas'),
   zoomLabel: document.querySelector('#ze-zoom'),
   brushSizeLabel: document.querySelector('#ze-brush-size'),
@@ -107,6 +120,10 @@ const el = {
   btnClearKeyB: document.querySelector('#ze-clear-key-b'),
   btnToggleSites: document.querySelector('#ze-toggle-sites'),
   regions: document.querySelector('#ze-regions'),
+  modal: document.querySelector('#ze-modal'),
+  modalTitle: document.querySelector('#ze-modal-title'),
+  modalText: document.querySelector('#ze-modal-text'),
+  modalActions: document.querySelector('#ze-modal-actions'),
   btnMakeZone: document.querySelector('#ze-make-zone'),
   btnMakeArea: document.querySelector('#ze-make-area')
 };
@@ -132,8 +149,12 @@ let drawing = null;
 let polyVerts = [];
 let panning = false;
 let lastPan = null;
+/** @type {'map'|'regions'} which editor is open */
+let editorMode = 'map';
 /** @type {'bombA'|'bombB'|'keyA'|'keyB'|'position'|'visionBlock'|'elevated'|'underpass'|'ledge'|'erase'} */
 let paintTool = 'bombA';
+/** last tool used in the map editor, restored when switching back */
+let lastMapTool = 'bombA';
 /** @type {'rect'|'poly'} */
 let shapeMode = 'rect';
 /** @type {'visionBlock'|'elevated'|'underpass'|'ledge'} */
@@ -316,6 +337,14 @@ function syncUi() {
 
   const isBrush = isBrushTool();
   const hasLower = mapHasLowerRadar(mapCode);
+  const mapMode = editorMode === 'map';
+  el.modeMap?.classList.toggle('active', mapMode);
+  el.modeRegions?.classList.toggle('active', !mapMode);
+  if (el.toolsMap) el.toolsMap.hidden = !mapMode;
+  if (el.toolsRegions) el.toolsRegions.hidden = mapMode;
+  if (el.brushGroup) el.brushGroup.hidden = !mapMode;
+  if (el.panelMap) el.panelMap.hidden = !mapMode;
+  if (el.panelRegions) el.panelRegions.hidden = mapMode;
   el.toolBombA?.classList.toggle('active', paintTool === 'bombA');
   el.toolBombA?.classList.toggle('bomb-a', paintTool === 'bombA');
   el.toolBombB?.classList.toggle('active', paintTool === 'bombB');
@@ -367,6 +396,7 @@ function setPaintTool(tool) {
     eraseTarget = tool;
   }
   paintTool = tool;
+  if (tool !== 'position') lastMapTool = tool;
   if (!isShapeTool()) polyVerts = [];
   brushing = null;
   ledgeStroke = null;
@@ -379,9 +409,25 @@ function setPaintTool(tool) {
     setStatus('Underpass: paint area others can see into; you cannot see out');
   } else if (tool === 'position') {
     setStatus(
-      `Position (${radarLevel === 'lower' ? 'lower' : 'upper'}): draw one footprint · no overlap on this floor`
+      `Position (${radarLevel === 'lower' ? 'lower' : 'upper'}): draw a footprint · drawing over one asks who keeps the overlap`
     );
   }
+}
+
+function setEditorMode(mode) {
+  const next = mode === 'regions' ? 'regions' : 'map';
+  if (next === editorMode) return;
+  editorMode = next;
+  drawing = null;
+  polyVerts = [];
+  brushing = null;
+  ledgeStroke = null;
+  setPaintTool(editorMode === 'regions' ? 'position' : lastMapTool);
+  setStatus(
+    editorMode === 'regions'
+      ? 'Positions editor: draw footprints, then group them into zones and areas'
+      : 'Map geometry editor: bomb sites, key zones, vision layers'
+  );
 }
 
 function setShapeMode(mode) {
@@ -484,9 +530,12 @@ function draw() {
       }
     }
   };
-  drawLayer(network.visionBlocks, VISION_COLOR, 0.45);
-  drawLayer(network.elevated, ELEVATED_COLOR, 0.4);
-  drawLayer(network.underpasses, UNDERPASS_COLOR, 0.4);
+  // The editor you are not in stays visible as faint context.
+  const mapAlpha = editorMode === 'map' ? 1 : 0.3;
+  const posAlpha = editorMode === 'regions' ? 1 : 0.3;
+  drawLayer(network.visionBlocks, VISION_COLOR, 0.45 * mapAlpha);
+  drawLayer(network.elevated, ELEVATED_COLOR, 0.4 * mapAlpha);
+  drawLayer(network.underpasses, UNDERPASS_COLOR, 0.4 * mapAlpha);
 
   ensureLedges(network);
   const halfW = Math.max(1.5, brushPx * 0.45);
@@ -528,6 +577,7 @@ function draw() {
       ctx.stroke();
     }
   };
+  ctx.globalAlpha = mapAlpha;
   for (const ledge of network.ledges) {
     const radarPts = [];
     for (const [wx, wy] of ledge.pts || []) {
@@ -536,11 +586,13 @@ function draw() {
     }
     drawLedgeStroke(radarPts, true);
   }
+  ctx.globalAlpha = 1;
   if (ledgeStroke?.length >= 2) drawLedgeStroke(ledgeStroke, false);
 
   ensureBombSites(network);
-  const drawPiece = (piece, color, label, lineW = 2) => {
+  const drawPiece = (piece, color, label, lineW = 2, alphaMul = 1) => {
     if (!piece) return;
+    ctx.globalAlpha = alphaMul;
     ctx.fillStyle = hexAlpha(color, 0.22);
     ctx.strokeStyle = color;
     ctx.lineWidth = lineW / t.scale;
@@ -579,20 +631,23 @@ function draw() {
       cy = y + rh / 2;
     }
     ctx.setLineDash([]);
-    ctx.fillStyle = color;
-    ctx.font = `bold ${Math.max(11, 13 / t.scale)}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(label, cx, cy);
+    if (label) {
+      ctx.fillStyle = color;
+      ctx.font = `bold ${Math.max(11, 13 / t.scale)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, cx, cy);
+    }
+    ctx.globalAlpha = 1;
   };
   if (showSites) {
-    drawPiece(network.bombSites.a, BOMB_A_COLOR, 'A', 2);
-    drawPiece(network.bombSites.b, BOMB_B_COLOR, 'B', 2);
+    drawPiece(network.bombSites.a, BOMB_A_COLOR, 'A', 2, mapAlpha);
+    drawPiece(network.bombSites.b, BOMB_B_COLOR, 'B', 2, mapAlpha);
 
     ensureKeyZones(network);
     const drawKeyList = (list, color, prefix) => {
       (list || []).forEach((piece, i) => {
-        drawPiece(piece, color, `${prefix}${i + 1}`, 1.5);
+        drawPiece(piece, color, `${prefix}${i + 1}`, 1.5, mapAlpha);
       });
     };
     drawKeyList(network.keyZones.a, KEY_A_COLOR, 'A');
@@ -600,13 +655,24 @@ function draw() {
   }
 
   ensureRegionHierarchy(network);
+  // A carved or merged position is several pieces; name only its biggest one.
+  const pieceArea = (piece) => {
+    const bb = pieceBounds(piece);
+    return Math.max(0, bb.maxX - bb.minX) * Math.max(0, bb.maxY - bb.minY);
+  };
   for (const pos of network.positions || []) {
     if ((pos.level || 'default') !== radarLevel) continue;
     const selected = selectedPositionIds.has(pos.id) || highlightPositionId === pos.id;
     const color = selected ? POSITION_SELECTED : POSITION_COLOR;
-    for (const piece of pos.pieces || []) {
-      drawPiece(piece, color, pos.name || 'Pos', selected ? 2.5 : 1.5);
+    const pieces = pos.pieces || [];
+    let mainIdx = 0;
+    for (let i = 1; i < pieces.length; i++) {
+      if (pieceArea(pieces[i]) > pieceArea(pieces[mainIdx])) mainIdx = i;
     }
+    pieces.forEach((piece, i) => {
+      const label = i === mainIdx ? pos.name || 'Pos' : '';
+      drawPiece(piece, color, label, selected ? 2.5 : 1.5, posAlpha);
+    });
   }
 
   const draftColor =
@@ -785,7 +851,64 @@ function commitKeyZone(site, piece) {
   setStatus(`Key ${site.toUpperCase()} #${list.length} added`);
 }
 
-function commitPosition(piece) {
+/**
+ * Modal with one button per choice. Resolves with the chosen value, or null
+ * when the user backs out.
+ * @param {{ title: string, text: string, choices: Array<{ value: string, label: string, primary?: boolean }> }} opts
+ * @returns {Promise<string|null>}
+ */
+function askChoice({ title, text, choices }) {
+  if (!el.modal || !el.modalActions) return Promise.resolve(null);
+  el.modalTitle.textContent = title;
+  el.modalText.textContent = text;
+  el.modalActions.innerHTML = '';
+  return new Promise((resolve) => {
+    let done = false;
+    const close = (value) => {
+      if (done) return;
+      done = true;
+      el.modal.hidden = true;
+      el.modalActions.innerHTML = '';
+      window.removeEventListener('keydown', onKey, true);
+      resolve(value);
+    };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      close(null);
+    };
+    for (const choice of choices) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = choice.primary ? 'btn primary' : 'btn';
+      btn.textContent = choice.label;
+      btn.addEventListener('click', () => close(choice.value));
+      el.modalActions.appendChild(btn);
+    }
+    window.addEventListener('keydown', onKey, true);
+    el.modal.hidden = false;
+    el.modalActions.querySelector('button')?.focus();
+  });
+}
+
+function addPosition(pieces) {
+  const pos = createPosition(network, {
+    name: `Pos ${(network.positions?.length || 0) + 1}`,
+    level: radarLevel,
+    pieces,
+    allowOverlap: true
+  });
+  if (!pos) return null;
+  selectedPositionIds.add(pos.id);
+  highlightPositionId = pos.id;
+  markDirty(true);
+  syncUi();
+  draw();
+  return pos;
+}
+
+async function commitPosition(piece) {
   const clean =
     piece?.type === 'poly'
       ? piece.ring?.length >= 3
@@ -798,29 +921,66 @@ function commitPosition(piece) {
     draw();
     return;
   }
-  pushUndo();
-  try {
-    const pos = createPosition(network, {
-      name: `Pos ${(network.positions?.length || 0) + 1}`,
-      level: radarLevel,
-      pieces: [clean]
-    });
+  const hits = positionsOverlapping(network, clean, radarLevel);
+  if (!hits.length) {
+    pushUndo();
+    const pos = addPosition([clean]);
     if (!pos) {
       undoStack.pop();
       draw();
       return;
     }
-    selectedPositionIds.add(pos.id);
-    highlightPositionId = pos.id;
-    markDirty(true);
-    syncUi();
-    draw();
     setStatus(`Position "${pos.name}" added (${pos.level === 'lower' ? 'lower' : 'upper'})`);
-  } catch (err) {
+    return;
+  }
+
+  const names = hits.map((p) => `"${p.name}"`).join(', ');
+  const choice = await askChoice({
+    title: 'Positions cannot overlap',
+    text: `The new shape runs into ${names}. Pick which one keeps the shared ground.`,
+    choices: [
+      { value: 'new', label: 'New shape on top', primary: true },
+      { value: 'old', label: `Keep ${hits.length === 1 ? hits[0].name : 'the existing ones'}` },
+      { value: '', label: 'Cancel' }
+    ]
+  });
+  if (!choice) {
+    draw();
+    setStatus('Cancelled');
+    return;
+  }
+
+  pushUndo();
+  if (choice === 'new') {
+    const { removed } = carvePositionsUnder(network, clean, radarLevel);
+    for (const pos of removed) selectedPositionIds.delete(pos.id);
+    const pos = addPosition([clean]);
+    if (!pos) {
+      undoStack.pop();
+      draw();
+      return;
+    }
+    const gone = removed.length ? `, ${removed.length} fully covered and removed` : '';
+    setStatus(`Position "${pos.name}" added, carved out of ${hits.length} position${
+      hits.length === 1 ? '' : 's'
+    }${gone}`);
+    return;
+  }
+
+  const parts = carvePieceUnderPositions(network, clean, radarLevel);
+  if (!parts.length) {
     undoStack.pop();
     draw();
-    setStatus(err.message || 'Could not add position', 'err');
+    setStatus('Nothing left after carving, position not added', 'err');
+    return;
   }
+  const pos = addPosition(parts);
+  if (!pos) {
+    undoStack.pop();
+    draw();
+    return;
+  }
+  setStatus(`Position "${pos.name}" added around ${names}`);
 }
 
 function clearKeySite(site) {
@@ -848,7 +1008,7 @@ function commitShapePiece(piece) {
     return;
   }
   if (paintTool === 'position') {
-    commitPosition(piece);
+    void commitPosition(piece);
     return;
   }
   draw();
@@ -938,13 +1098,16 @@ function renderRegionsPanel() {
           const checked = selectedPositionIds.has(p.id) ? ' checked' : '';
           const selected = selectedPositionIds.has(p.id) ? ' is-selected' : '';
           const lvl = p.level === 'lower' ? 'lower' : 'upper';
+          const parts = (p.pieces || []).length;
           return `<div class="ze-item${selected}" data-pos-row="${esc(p.id)}">
             <input type="checkbox" data-sel-pos="${esc(p.id)}"${checked} />
             <input class="ze-item-name" type="text" maxlength="64" data-rename-pos="${esc(
               p.id
-            )}" value="${esc(p.name)}" />
+            )}" value="${esc(p.name)}" title="Rename to an existing name to merge" />
             <button type="button" class="ze-icon-btn" data-del-pos="${esc(p.id)}" title="Delete">✕</button>
-            <span class="ze-item-meta"><span class="ze-level-tag">${lvl}</span> · ${esc(p.id)}</span>
+            <span class="ze-item-meta"><span class="ze-level-tag">${lvl}</span> · ${parts} part${
+              parts === 1 ? '' : 's'
+            }</span>
           </div>`;
         })
         .join('')
@@ -965,7 +1128,7 @@ function renderRegionsPanel() {
             )}" value="${esc(z.name)}" />
             <button type="button" class="ze-icon-btn" data-del-zone="${esc(z.id)}" title="Delete">✕</button>
             <span class="ze-item-members">${esc(members) || 'No positions'} ·
-              <button type="button" class="btn" style="padding:2px 6px;font-size:10px" data-add-sel-pos="${esc(
+              <button type="button" class="btn btn-sm" data-add-sel-pos="${esc(
                 z.id
               )}">Add selected</button>
             </span>
@@ -987,7 +1150,7 @@ function renderRegionsPanel() {
             )}" value="${esc(a.name)}" />
             <button type="button" class="ze-icon-btn" data-del-area="${esc(a.id)}" title="Delete">✕</button>
             <span class="ze-item-members">${esc(members) || 'No zones'} ·
-              <button type="button" class="btn" style="padding:2px 6px;font-size:10px" data-add-sel-zone="${esc(
+              <button type="button" class="btn btn-sm" data-add-sel-zone="${esc(
                 a.id
               )}">Add selected</button>
             </span>
@@ -998,17 +1161,61 @@ function renderRegionsPanel() {
 
   el.regions.innerHTML = `
     <div>
-      <h2 style="margin-bottom:4px">Positions <span style="font-weight:400;text-transform:none;letter-spacing:0">(${positions.length})</span></h2>
+      <h2>Positions <span class="ze-count">(${positions.length})</span></h2>
       <div class="ze-list">${posRows}</div>
     </div>
     <div>
-      <h2 style="margin-bottom:4px">Zones <span style="font-weight:400;text-transform:none;letter-spacing:0">(${zones.length})</span></h2>
+      <h2>Zones <span class="ze-count">(${zones.length})</span></h2>
       <div class="ze-list">${zoneRows}</div>
     </div>
     <div>
-      <h2 style="margin-bottom:4px">Areas <span style="font-weight:400;text-transform:none;letter-spacing:0">(${areas.length})</span></h2>
+      <h2>Areas <span class="ze-count">(${areas.length})</span></h2>
       <div class="ze-list">${areaRows}</div>
     </div>`;
+}
+
+/**
+ * Rename a position. Renaming it to a name already used on the same floor
+ * offers to fold the two into one position.
+ */
+async function renamePositionMaybeMerge(id, rawName) {
+  const twin = findPositionByName(network, rawName, radarLevel, id);
+  const self = network.positions.find((p) => p.id === id);
+  if (!twin || !self || (self.level || 'default') !== (twin.level || 'default')) {
+    pushUndo();
+    renamePosition(network, id, rawName);
+    markDirty(true);
+    syncUi();
+    draw();
+    return;
+  }
+  const choice = await askChoice({
+    title: 'Merge positions',
+    text: `"${twin.name}" already exists on this floor. Merge the two into one position?`,
+    choices: [
+      { value: 'merge', label: `Merge into "${twin.name}"`, primary: true },
+      { value: '', label: 'Cancel' }
+    ]
+  });
+  if (!choice) {
+    syncUi();
+    return;
+  }
+  pushUndo();
+  const merged = mergePositions(network, twin.id, id);
+  if (!merged) {
+    undoStack.pop();
+    syncUi();
+    setStatus('Could not merge', 'err');
+    return;
+  }
+  selectedPositionIds.delete(id);
+  selectedPositionIds.add(merged.id);
+  if (highlightPositionId === id) highlightPositionId = merged.id;
+  markDirty(true);
+  syncUi();
+  draw();
+  setStatus(`Merged into "${merged.name}"`);
 }
 
 function makeZoneFromSelection() {
@@ -1223,6 +1430,8 @@ window.addEventListener('keydown', (e) => {
   undoLast();
 });
 
+el.modeMap?.addEventListener('click', () => setEditorMode('map'));
+el.modeRegions?.addEventListener('click', () => setEditorMode('regions'));
 el.toolBombA?.addEventListener('click', () => setPaintTool('bombA'));
 el.toolBombB?.addEventListener('click', () => setPaintTool('bombB'));
 el.toolKeyA?.addEventListener('click', () => setPaintTool('keyA'));
@@ -1268,11 +1477,7 @@ el.regions?.addEventListener('change', (e) => {
     return;
   }
   if (t.matches?.('[data-rename-pos]')) {
-    pushUndo();
-    renamePosition(network, t.dataset.renamePos, t.value);
-    markDirty(true);
-    syncUi();
-    draw();
+    void renamePositionMaybeMerge(t.dataset.renamePos, t.value);
     return;
   }
   if (t.matches?.('[data-rename-zone]')) {

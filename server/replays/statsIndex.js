@@ -22,6 +22,7 @@ import {
 } from '../../src/replays/shared/statsMath.js';
 import { setDemoTopPlayer } from './demoStore.js';
 import { awpAccuracyFromTicks } from '../../src/replays/shared/awpAccuracy.js';
+import { applyAwpHoldFields } from '../../src/replays/shared/awpHold.js';
 import { aimFromRound } from '../../src/replays/shared/aimMetrics.js';
 import { utilityFromRound } from '../../src/replays/shared/utilityMetrics.js';
 import { phaseCombatFromMeta } from '../../src/replays/roles/phaseCombat.js';
@@ -50,10 +51,10 @@ import {
 import { applyMovementFields } from '../../src/replays/roles/movementFromTicks.js';
 import { roundDuelBag } from '../../src/replays/duels/duelStats.js';
 
-// v16 adds advantage-choke counters (aca/ack) for team AC%.
+// v17 adds per-player AWP primary hold seconds (row.aw) for Database aKPR.
 // Bumping this rebuilds every index from the round files already on disk; it
 // does NOT reparse demos.
-export const STATS_VERSION = 16;
+export const STATS_VERSION = 17;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -311,7 +312,8 @@ function needsPhaseEnrichment(entry) {
       r.aca1 === undefined ||
       !Array.isArray(r.kt) ||
       !r.ev ||
-      r.du === undefined
+      r.du === undefined ||
+      r.aw === undefined
   );
 }
 
@@ -489,6 +491,7 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
       await applyPossessionFields(row, meta, track, network);
       applyDuelFields(row, meta, track, network);
       applyMovementFields(row, meta, track, roster);
+      applyAwpHoldFields(row, meta, track, roster);
       if (roleWork) {
         const zones = zoneCache.get(meta.map || row.m) || network;
         accumulateRoundRoles(roleWork, {
@@ -504,6 +507,7 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
       row.pos2 = null;
       row.du = null;
       row.mv = row.mv || {};
+      row.aw = row.aw || {};
     }
     await yieldEventLoop();
   }
@@ -735,6 +739,7 @@ async function buildIndex(io, user, record) {
       await applyPossessionFields(row, meta, track, network);
       applyDuelFields(row, meta, track, network);
       applyMovementFields(row, meta, track, roster);
+      applyAwpHoldFields(row, meta, track, roster);
       const zones = zoneCache.get(meta.map || row.m) || network;
       accumulateRoundRoles(roleWork, {
         meta,
@@ -746,6 +751,7 @@ async function buildIndex(io, user, record) {
     } else {
       row.du = null;
       row.mv = {};
+      row.aw = {};
     }
 
     rounds.push(row);

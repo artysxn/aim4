@@ -91,7 +91,8 @@ export const PLAYER_FIXED_BASE = [
 /**
  * Scrollable metric columns (after fixed + optional roles).
  * Order: Rating, A4R, Swing, KD, xK, Duel Win%, ADR, KAST, OPKD, Impact, A4OR,
- * Opatt, OR, PFW, PFO, Aim, Acc, C°, R%, AA%, 1st%, O%, U%, DT, PSDT, util.
+ * Opatt, OR, PFW, PFO, Aim, Acc, C°, R%, AA%, 1st%, O%, U%, DT, PSDT, util,
+ * 5k…0k, aKPR.
  */
 export const PLAYER_METRIC_COLUMNS = [
   {
@@ -563,6 +564,37 @@ export const PLAYER_METRIC_COLUMNS = [
         `HE: ${p.heDamage} over ${p.heThrown} thrown`,
         `Fire: ${p.fireDamage} over ${p.fireThrown} thrown`
       ])
+  },
+  ...[5, 4, 3, 2, 1, 0].map((n) => ({
+    key: `mk${n}`,
+    label: `${n}k`,
+    get: (p) => p[`mk${n}`] || 0,
+    cell: (p) => int(p[`mk${n}`] || 0),
+    avgOf: (p) => (Number.isFinite(p[`mk${n}`]) ? p[`mk${n}`] : null),
+    avgFormat: int,
+    tip: (p) =>
+      tip([
+        n === 5
+          ? `Rounds with 5+ kills: ${int(p.mk5 || 0)}`
+          : `Rounds with exactly ${n} kill${n === 1 ? '' : 's'}: ${int(p[`mk${n}`] || 0)}`,
+        `Of ${int(p.rounds || 0)} rounds`
+      ])
+  })),
+  {
+    key: 'akpr',
+    label: 'aKPR',
+    get: (p) => (Number.isFinite(p.akpr) ? p.akpr : -1),
+    cell: (p) => (Number.isFinite(p.akpr) ? f2(p.akpr) : '—'),
+    avgOf: (p) => (Number.isFinite(p.akpr) ? p.akpr : null),
+    avgFormat: f2,
+    tip: (p) =>
+      Number.isFinite(p.akpr)
+        ? tip([
+            `Kills per round with AWP out: ${f2(p.akpr)}`,
+            `${int(p.akprKills || 0)} kills in ${int(p.akprRounds || 0)} rounds`,
+            'Rounds where the AWP was held as primary for at least 10 seconds'
+          ])
+        : 'No rounds with the AWP held as primary for at least 10 seconds. Stats index rebuilds on next library load (v17+).'
   }
 ];
 

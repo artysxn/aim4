@@ -15,12 +15,15 @@ import {
   boundsOverlap,
   pieceBounds,
   pieceToRing,
-  pointInPiece
+  pointInPiece,
+  subtractPieceFromPiece,
+  subtractPieceFromPieces
 } from './zoneGeom.js';
 
 const ID_RE = /^[A-Za-z0-9_-]{2,40}$/;
 const NAME_MAX = 64;
 const POSITIONS_MAX = 400;
+const PIECES_MAX = 64;
 const ZONES_MAX = 200;
 const AREAS_MAX = 100;
 const MEMBERS_MAX = 80;
@@ -97,16 +100,31 @@ function segmentsIntersect(a, b, c, d) {
   return false;
 }
 
+/** Pull a ring a hair toward its centre so shapes that only share an edge
+ *  (what carving leaves behind) do not read as overlapping. */
+function shrinkRing(ring) {
+  if (!ring?.length) return [];
+  let cx = 0;
+  let cy = 0;
+  for (const [x, y] of ring) {
+    cx += x;
+    cy += y;
+  }
+  cx /= ring.length;
+  cy /= ring.length;
+  return ring.map(([x, y]) => [x + (cx - x) * 1e-3, y + (cy - y) * 1e-3]);
+}
+
 /** True when two pieces share interior (same-level positions must not). */
 export function piecesOverlap(a, b) {
   if (!a || !b) return false;
   if (!boundsOverlap(pieceBounds(a), pieceBounds(b), -0.5)) return false;
   const ra = pieceToRing(a);
   const rb = pieceToRing(b);
-  for (const [x, y] of ra) {
+  for (const [x, y] of shrinkRing(ra)) {
     if (pointInPiece(x, y, b)) return true;
   }
-  for (const [x, y] of rb) {
+  for (const [x, y] of shrinkRing(rb)) {
     if (pointInPiece(x, y, a)) return true;
   }
   for (let i = 0; i < ra.length; i++) {
@@ -170,7 +188,7 @@ export function sanitizeRegionHierarchy(src) {
     if (positionsById.has(id)) continue;
     const pieces = [];
     const list = Array.isArray(row.pieces) ? row.pieces : row.piece ? [row.piece] : [];
-    for (const piece of list.slice(0, 8)) {
+    for (const piece of list.slice(0, PIECES_MAX)) {
       const clean = validPiece(piece);
       if (clean) pieces.push(clean);
     }
@@ -249,7 +267,102 @@ export function sanitizeRegionHierarchy(src) {
   };
 }
 
-export function createPosition(network, { name, level, pieces }) {
+/** Every same-level position whose footprint the piece runs into. */
+export function positionsOverlapping(network, piece, level, exceptId = '') {
+  const want = cleanLevel(level);
+  const hits = [];
+  for (const pos of network?.positions || []) {
+    if (!pos || pos.id === exceptId) continue;
+    if (cleanLevel(pos.level) !== want) continue;
+    if ((pos.pieces || []).some((p) => piecesOverlap(piece, p))) hits.push(pos);
+  }
+  return hits;
+}
+
+/**
+ * Cut `piece` out of every same-level position it overlaps (new shape on top).
+ * Positions left with nothing are removed.
+ * @returns {{ carved: object[], removed: object[] }}
+ */
+export function carvePositionsUnder(network, piece, level, exceptId = '') {
+  ensureRegionHierarchy(network);
+  const clean = validPiece(piece);
+  const carved = [];
+  const removed = [];
+  if (!clean) return { carved, removed };
+  for (const pos of positionsOverlapping(network, clean, level, exceptId)) {
+    const next = subtractPieceFromPieces(pos.pieces || [], clean)
+      .map(validPiece)
+      .filter(Boolean)
+      .slice(0, PIECES_MAX);
+    if (next.length) {
+      pos.pieces = next;
+      carved.push(pos);
+    } else {
+      removed.push(pos);
+    }
+  }
+  for (const pos of removed) deletePosition(network, pos.id);
+  return { carved, removed };
+}
+
+/**
+ * Cut every same-level position out of `piece` (existing shapes stay on top).
+ * @returns {Piece[]} the parts of the piece that survive
+ */
+export function carvePieceUnderPositions(network, piece, level, exceptId = '') {
+  ensureRegionHierarchy(network);
+  const clean = validPiece(piece);
+  if (!clean) return [];
+  let parts = [clean];
+  for (const pos of positionsOverlapping(network, clean, level, exceptId)) {
+    for (const cutter of pos.pieces || []) {
+      const next = [];
+      for (const part of parts) next.push(...subtractPieceFromPiece(part, cutter));
+      parts = next;
+      if (!parts.length) return [];
+    }
+  }
+  return parts.map(validPiece).filter(Boolean).slice(0, PIECES_MAX);
+}
+
+/**
+ * Fold `sourceId` into `targetId`: pieces join, zone membership follows.
+ * @returns {object|null} the surviving position
+ */
+export function mergePositions(network, targetId, sourceId) {
+  ensureRegionHierarchy(network);
+  if (targetId === sourceId) return null;
+  const target = network.positions.find((p) => p.id === targetId);
+  const source = network.positions.find((p) => p.id === sourceId);
+  if (!target || !source) return null;
+  target.pieces = [...(target.pieces || []), ...(source.pieces || [])].slice(0, PIECES_MAX);
+  for (const z of network.zones) {
+    if (!(z.positionIds || []).includes(sourceId)) continue;
+    const ids = z.positionIds.filter((pid) => pid !== sourceId);
+    if (!ids.includes(targetId)) ids.push(targetId);
+    z.positionIds = ids;
+  }
+  network.positions = network.positions.filter((p) => p.id !== sourceId);
+  return target;
+}
+
+/** Same-level position sharing this name, ignoring case. */
+export function findPositionByName(network, name, level, exceptId = '') {
+  const want = cleanName(name, '').toLowerCase();
+  if (!want) return null;
+  const lvl = cleanLevel(level);
+  return (
+    (network?.positions || []).find(
+      (p) =>
+        p.id !== exceptId &&
+        cleanLevel(p.level) === lvl &&
+        cleanName(p.name, '').toLowerCase() === want
+    ) || null
+  );
+}
+
+export function createPosition(network, { name, level, pieces, allowOverlap = false }) {
   ensureRegionHierarchy(network);
   const list = Array.isArray(pieces) ? pieces : [pieces];
   const cleanPieces = [];
@@ -259,13 +372,15 @@ export function createPosition(network, { name, level, pieces }) {
   }
   if (!cleanPieces.length) return null;
   const lvl = cleanLevel(level);
-  for (const piece of cleanPieces) {
-    const hit = positionOverlapsOthers(network, piece, lvl);
-    if (hit) {
-      const err = new Error(`Overlaps position "${hit.name}"`);
-      err.code = 'OVERLAP';
-      err.position = hit;
-      throw err;
+  if (!allowOverlap) {
+    for (const piece of cleanPieces) {
+      const hit = positionOverlapsOthers(network, piece, lvl);
+      if (hit) {
+        const err = new Error(`Overlaps position "${hit.name}"`);
+        err.code = 'OVERLAP';
+        err.position = hit;
+        throw err;
+      }
     }
   }
   let id = newRegionId('p');
@@ -274,7 +389,7 @@ export function createPosition(network, { name, level, pieces }) {
     id,
     name: cleanName(name, `Position ${network.positions.length + 1}`),
     level: lvl,
-    pieces: cleanPieces
+    pieces: cleanPieces.slice(0, PIECES_MAX)
   };
   network.positions.push(pos);
   return pos;

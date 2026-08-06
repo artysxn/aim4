@@ -116,6 +116,151 @@ export function subtractRectFromPieces(pieces, cutter) {
   return out;
 }
 
+const CLIP_EPS = 1e-9;
+const MIN_PIECE_AREA = 4;
+
+/** Signed area of a ring; positive when counter-clockwise in math coords. */
+export function ringSignedArea(ring) {
+  let s = 0;
+  for (let i = 0, j = (ring?.length || 0) - 1; i < (ring?.length || 0); j = i++) {
+    s += ring[j][0] * ring[i][1] - ring[i][0] * ring[j][1];
+  }
+  return s / 2;
+}
+
+function ccwRing(ring) {
+  return ringSignedArea(ring) < 0 ? ring.slice().reverse() : ring.slice();
+}
+
+/** Keep the half of `ring` on one side of the directed line a→b. */
+function clipRingToHalfPlane(ring, a, b, keepLeft) {
+  const side = (p) => {
+    const d = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+    return keepLeft ? d : -d;
+  };
+  const cut = (p, q, dp, dq) => {
+    const t = dp / (dp - dq);
+    return [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+  };
+  const out = [];
+  for (let i = 0; i < ring.length; i++) {
+    const cur = ring[i];
+    const prev = ring[(i + ring.length - 1) % ring.length];
+    const dc = side(cur);
+    const dp = side(prev);
+    if (dc >= -CLIP_EPS) {
+      if (dp < -CLIP_EPS) out.push(cut(prev, cur, dp, dc));
+      out.push(cur);
+    } else if (dp >= -CLIP_EPS) {
+      out.push(cut(prev, cur, dp, dc));
+    }
+  }
+  return out.length >= 3 ? out : [];
+}
+
+function pointInTriangle(p, a, b, c) {
+  const s = (u, v, w) => (v[0] - u[0]) * (w[1] - u[1]) - (v[1] - u[1]) * (w[0] - u[0]);
+  const d1 = s(a, b, p);
+  const d2 = s(b, c, p);
+  const d3 = s(c, a, p);
+  const neg = d1 < -CLIP_EPS || d2 < -CLIP_EPS || d3 < -CLIP_EPS;
+  const pos = d1 > CLIP_EPS || d2 > CLIP_EPS || d3 > CLIP_EPS;
+  return !(neg && pos);
+}
+
+/** Ear-clip a ring into triangles so concave cutters subtract correctly. */
+export function triangulateRing(ring) {
+  const pts = ccwRing(ring || []);
+  if (pts.length < 3) return [];
+  const idx = pts.map((_, i) => i);
+  const tris = [];
+  let guard = 0;
+  while (idx.length > 3 && guard++ < 4000) {
+    let clipped = false;
+    for (let i = 0; i < idx.length; i++) {
+      const a = pts[idx[(i + idx.length - 1) % idx.length]];
+      const b = pts[idx[i]];
+      const c = pts[idx[(i + 1) % idx.length]];
+      const cross = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+      if (cross <= CLIP_EPS) continue;
+      let contains = false;
+      for (const j of idx) {
+        const p = pts[j];
+        if (p === a || p === b || p === c) continue;
+        if (pointInTriangle(p, a, b, c)) {
+          contains = true;
+          break;
+        }
+      }
+      if (contains) continue;
+      tris.push([a, b, c]);
+      idx.splice(i, 1);
+      clipped = true;
+      break;
+    }
+    if (!clipped) break;
+  }
+  if (idx.length === 3) tris.push([pts[idx[0]], pts[idx[1]], pts[idx[2]]]);
+  return tris;
+}
+
+/** subject − convex, as a set of disjoint rings. */
+function subtractConvexRing(subject, convex) {
+  const clip = ccwRing(convex);
+  const out = [];
+  let remaining = subject;
+  for (let i = 0; i < clip.length && remaining.length >= 3; i++) {
+    const a = clip[i];
+    const b = clip[(i + 1) % clip.length];
+    const outside = clipRingToHalfPlane(remaining, a, b, false);
+    if (outside.length >= 3) out.push(outside);
+    remaining = clipRingToHalfPlane(remaining, a, b, true);
+  }
+  return out;
+}
+
+function convexPartsOfPiece(piece) {
+  if (piece.type === 'rect') return [ccwRing(rectToRing(piece))];
+  return triangulateRing(pieceToRing(piece));
+}
+
+function ringToPiece(ring) {
+  if (Math.abs(ringSignedArea(ring)) < MIN_PIECE_AREA) return null;
+  return { type: 'poly', ring: ring.map(([x, y]) => [x, y]) };
+}
+
+/**
+ * piece − cutter, for any mix of rect and poly. Rect − rect stays rectangular;
+ * anything else comes back as polygons.
+ * @param {Piece} piece
+ * @param {Piece} cutter
+ * @returns {Piece[]}
+ */
+export function subtractPieceFromPiece(piece, cutter) {
+  if (!piece) return [];
+  if (!cutter) return [piece];
+  if (!boundsOverlap(pieceBounds(piece), pieceBounds(cutter))) return [piece];
+  if (piece.type === 'rect' && cutter.type === 'rect') {
+    return rectDifference(piece, cutter).filter((r) => r.w * r.h >= MIN_PIECE_AREA);
+  }
+  let rings = [ccwRing(pieceToRing(piece))];
+  for (const part of convexPartsOfPiece(cutter)) {
+    const next = [];
+    for (const ring of rings) next.push(...subtractConvexRing(ring, part));
+    rings = next;
+    if (!rings.length) break;
+  }
+  return rings.map(ringToPiece).filter(Boolean);
+}
+
+/** Subtract one cutter from every piece in a list. */
+export function subtractPieceFromPieces(pieces, cutter) {
+  /** @type {Piece[]} */
+  const out = [];
+  for (const p of pieces || []) out.push(...subtractPieceFromPiece(p, cutter));
+  return out;
+}
+
 /** Point-in-rect (world). Inclusive min, exclusive max on +edges to avoid double hits. */
 export function pointInRect(x, y, r) {
   return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;

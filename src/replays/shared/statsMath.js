@@ -13,6 +13,7 @@
 
 import { buyBucket, econHasAwp } from './roundId.js';
 import { addAim, aimRating } from './aimMetrics.js';
+import { AKPR_HOLD_SECONDS } from './awpHold.js';
 import { addUtility, utilityAverages } from './utilityMetrics.js';
 
 /** Per-player, per-round counters, in the order the index packs them. */
@@ -378,7 +379,12 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
         /** @type {Map<number, { weight: number, predSum: number, wins: number }>} */
         duelBuckets: new Map(),
         /** @type {Map<string, {name: string, rounds: number}>} */
-        teamRounds: new Map()
+        teamRounds: new Map(),
+        /** Rounds with exactly 0–4 kills; index 5 is 5+ kills. */
+        mk: [0, 0, 0, 0, 0, 0],
+        /** Kills / rounds while holding AWP as primary ≥ AKPR_HOLD_SECONDS. */
+        akprKills: 0,
+        akprRounds: 0
       };
       acc.set(id, s);
     }
@@ -469,6 +475,14 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
             b.wins += n || 0;
           }
         }
+      }
+      const kills = line[P.KILLS] || 0;
+      const mkIdx = kills >= 5 ? 5 : Math.max(0, kills | 0);
+      s.mk[mkIdx]++;
+      const awHold = row.aw?.[id];
+      if (Number.isFinite(awHold) && awHold >= AKPR_HOLD_SECONDS) {
+        s.akprRounds++;
+        s.akprKills += kills;
       }
       const demo = demos?.get(row.d);
       if (demo) {
@@ -640,7 +654,19 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       a4aim: aim.rating,
       aimComponents: aim.components,
       aimRaw: aim.raw,
-      aimSample: aim.sample
+      aimSample: aim.sample,
+
+      // ---- multi-kill round counts + AWP KPR ----------------------------
+      mk5: s.mk[5],
+      mk4: s.mk[4],
+      mk3: s.mk[3],
+      mk2: s.mk[2],
+      mk1: s.mk[1],
+      mk0: s.mk[0],
+      /** Kills per round in rounds with AWP held as primary ≥ 10s. */
+      akpr: s.akprRounds > 0 ? s.akprKills / s.akprRounds : null,
+      akprKills: s.akprKills,
+      akprRounds: s.akprRounds
     });
   }
   out.sort((a, b) => (b.a4r ?? b.rating) - (a.a4r ?? a.rating));

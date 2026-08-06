@@ -809,6 +809,15 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       aimRaw: null,
       aimComponents: null,
       aimSample: null,
+      mk5: 0,
+      mk4: 0,
+      mk3: 0,
+      mk2: 0,
+      mk1: 0,
+      mk0: 0,
+      akpr: null,
+      akprKills: 0,
+      akprRounds: 0,
       absent: true
     };
   }
