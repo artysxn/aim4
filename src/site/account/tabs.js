@@ -35,12 +35,41 @@ function limitText(value) {
 
 // ---------------------------------------------------------------------------
 
-export function overviewTab(state, { reload }) {
+export function overviewTab(state, { reload, auth }) {
   const root = el('div', 'account-panel');
   const account = state.account || {};
 
   root.appendChild(el('h2', null, account.username || 'Account'));
   root.appendChild(el('p', 'account-tier', tierBadge(state)));
+
+  // The display name, editable in place. It is what every other surface shows
+  // for this account, so this is the one field worth putting on the front tab.
+  if (account.signedIn) {
+    const nameInput = input('text', account.username || '', 'Display name');
+    nameInput.maxLength = 24;
+    const save = button(
+      'Save name',
+      async () => {
+        const next = nameInput.value.trim();
+        if (!next || next === account.username) return;
+        save.disabled = true;
+        try {
+          await accountApi.setUsername(next);
+          notice(root, 'Name changed.');
+          reload();
+        } catch (err) {
+          notice(root, err.message, 'error');
+        } finally {
+          save.disabled = false;
+        }
+      },
+      'btn'
+    );
+    const row = el('div', 'account-name-row');
+    row.appendChild(field('Display name', nameInput));
+    row.appendChild(save);
+    root.appendChild(row);
+  }
 
   if (state.entitlements?.expiresAt) {
     root.appendChild(el('p', 'account-muted', `Renews ${date(state.entitlements.expiresAt)}`));
@@ -83,6 +112,14 @@ export function overviewTab(state, { reload }) {
         'btn btn-primary'
       )
     );
+  }
+
+  // Signing out lives here now. The sidebar button that used to do it opens
+  // this page instead, so it needs somewhere to go.
+  if (account.signedIn && auth?.signOut) {
+    const out = el('div', 'account-signout');
+    out.appendChild(button('Sign out', () => auth.signOut(), 'btn'));
+    root.appendChild(out);
   }
 
   return root;

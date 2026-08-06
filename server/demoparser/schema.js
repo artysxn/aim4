@@ -10,6 +10,22 @@
 export const SCHEMA_VERSION = 1;
 
 /**
+ * Our own adapter revision, bumped whenever a parse of the same .dem would now
+ * produce different round files.
+ *
+ * Distinct from the parser package version: fixing how we read the underlying
+ * rows changes the output without the dependency moving at all, and a demo
+ * parsed before such a fix keeps the old answer until it is parsed again. This
+ * number is what makes that visible on the uploads list, so bump it with any
+ * change to the adapters that alters output.
+ *
+ *   1  original
+ *   2  fire grenades read their type from the shot log, so a molotov thrown by
+ *      a CT is stored as a molotov instead of an incendiary
+ */
+export const PARSER_REVISION = 2;
+
+/**
  * @typedef {object} NormalizedPlayer
  * @property {string} id        3-char short id used in round names
  * @property {string} name      display name at parse time

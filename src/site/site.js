@@ -43,6 +43,8 @@ import { initReplaysView } from './replaysView.js';
 import { initReplayViewerView } from './replayViewerView.js';
 import { initTeamView } from './teamView.js';
 import { initStrategyCreatorView } from './strategyCreatorView.js';
+import { initPlayerProfileView } from './playerProfileView.js';
+import { initHomeView } from './homeView.js';
 import { initAccountView } from './account/accountView.js';
 import { initAdminView } from './admin/adminView.js';
 import { mountImpersonationBanner } from './admin/impersonate.js';
@@ -345,16 +347,20 @@ function syncAccountRow() {
   }
   if (auth.isLoggedIn) {
     sideAccountName.textContent = auth.displayName ? `@${auth.displayName}` : 'Signed in';
-    sideAccountHint.textContent = 'Log out';
+    sideAccountHint.textContent = 'My profile';
   } else {
     sideAccountName.textContent = 'Guest';
     sideAccountHint.textContent = 'Sign in';
   }
 }
 
+// Signed in, this is the way to My Profile: name, subscription and settings.
+// It used to sign out on click, which is a destructive action sitting where
+// every other app puts the profile, and there was nowhere else to change a
+// name from. Sign out moved onto the page itself.
 sideAccountBtn.addEventListener('click', () => {
   if (auth.isLoggedIn) {
-    auth.signOut();
+    setView('account', true, {});
   } else {
     openAuth('login');
   }
@@ -463,7 +469,8 @@ const ROUTES = {
   football: { title: 'Football', path: '/football', shell: 'football' },
   tools: { title: 'Tools', path: '/tools', shell: 'tools' },
   routines: { title: 'Routines', path: '/routines', shell: 'routines' },
-  account: { title: 'My Account', path: '/account', shell: 'account' },
+  player: { title: 'Player', path: '/player', shell: 'player' },
+  account: { title: 'My Profile', path: '/account', shell: 'account' },
   'account-subscription': {
     title: 'Subscription',
     path: '/account/subscription',
@@ -534,6 +541,20 @@ let inviteCode = '';
   if (m) {
     inviteCode = m[1];
     window.history.replaceState(null, '', '/team');
+  }
+}
+
+/**
+ * A player page is linked as aim4.io/player/<id>, which is the readable form
+ * worth putting in a message. The router matches exact paths, so the id moves
+ * into the query string the same way an invite code does.
+ */
+{
+  const m = cleanPath().match(/^\/player\/([A-Za-z0-9_-]{1,32})$/);
+  if (m) {
+    const q = new URLSearchParams(window.location.search);
+    q.set('id', m[1]);
+    window.history.replaceState(null, '', `/player?${q}`);
   }
 }
 
@@ -682,6 +703,8 @@ viewControllers['replay-viewer'] = initReplayViewerView({
 });
 viewControllers.team = initTeamView({ auth, escapeHtml });
 viewControllers['strategy-creator'] = initStrategyCreatorView({ auth, escapeHtml });
+viewControllers.player = initPlayerProfileView({ escapeHtml });
+viewControllers.home = initHomeView({ auth, escapeHtml });
 // One manager per page, refreshed whenever the session changes. Gates read it
 // for UI state only; the server has already made every decision it reflects.
 const entitlements = getEntitlements(auth);
@@ -714,6 +737,36 @@ document.querySelectorAll('[data-nav]').forEach((el) => {
     // Sidebar clicks start a fresh route — don't carry ?user= / ?mode= from the previous page.
     setView(el.dataset.nav, true, {});
   });
+});
+
+/**
+ * Route internal links that were rendered after boot.
+ *
+ * `data-nav` is wired once over the markup that exists at load, which covers
+ * the sidebar and nothing else. A player name inside a stats table is written
+ * long afterwards, and it should still navigate rather than reload the site.
+ */
+document.addEventListener('click', (e) => {
+  if (e.defaultPrevented || e.button !== 0) return;
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const a = e.target.closest?.('a[href^="/"]');
+  if (!a || a.target === '_blank' || a.hasAttribute('data-nav') || a.hasAttribute('download')) {
+    return;
+  }
+  const url = new URL(a.getAttribute('href'), window.location.origin);
+  const clean = cleanPath(url.pathname);
+  const params = Object.fromEntries(url.searchParams);
+  const player = clean.match(/^\/player\/([A-Za-z0-9_-]{1,32})$/);
+  if (player) {
+    e.preventDefault();
+    setView('player', true, { ...params, id: player[1] });
+    return;
+  }
+  const route =
+    PATH_TO_ROUTE[clean] || (LEGACY_PATHS[clean] ? PATH_TO_ROUTE[LEGACY_PATHS[clean]] : '');
+  if (!route) return;
+  e.preventDefault();
+  setView(route, true, params);
 });
 
 auth.onChange(() => {

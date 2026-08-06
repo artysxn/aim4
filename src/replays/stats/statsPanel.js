@@ -40,6 +40,7 @@ import {
   statsTableHtml
 } from './statsTables.js';
 import { spinnerHtml, watchSlowLoad } from '../../lib/spinner.js';
+import { createSavedViews } from '../savedViews.js';
 
 /**
  * @param {{
@@ -83,6 +84,7 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
         <span class="st-detail-label" id="st-detail-label" hidden></span>
       </div>
       <span class="st-scope" id="st-scope"></span>
+      <span class="st-saved" id="st-saved"></span>
     </div>
     <div class="st-filters" id="st-filters"></div>
     <div class="st-body" id="st-body"><div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div></div>`;
@@ -644,6 +646,22 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     render();
   }
 
+  // ---- saved views --------------------------------------------------------
+  //
+  // The Database already had a view state, because filters and sort have to
+  // survive Back and a shared URL. Saving one is that same object under a name,
+  // so this is the shortest of the three wirings.
+
+  const savedViews = createSavedViews({
+    page: 'database',
+    escapeHtml,
+    read: () => viewState(),
+    apply(spec) {
+      applyViewState(spec || {});
+    }
+  });
+  el.querySelector('#st-saved')?.appendChild(savedViews.el);
+
   function syncHead() {
     const inDetail = Boolean(detail);
     backEl.hidden = !inDetail;
@@ -872,7 +890,15 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
         if (named?.name) detail.label = named.name;
       }
       const cols = playerMatchColumns();
-      bodyEl.innerHTML = statsTableHtml(data, {
+      // The per-match table is one view of a player; the profile is the whole
+      // of them. Linked from here because this is where someone already is
+      // when they start asking about a person rather than a match.
+      const profileLink = `<p class="st-profile-link">
+        <a href="/player/${encodeURIComponent(detail.id)}?name=${encodeURIComponent(
+          detail.label || detail.id
+        )}">Open player profile</a>
+      </p>`;
+      bodyEl.innerHTML = profileLink + statsTableHtml(data, {
         columns: cols.columns,
         fixedCount: cols.fixedCount,
         escapeHtml,
@@ -1089,6 +1115,10 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
         return;
       }
       render();
+      void savedViews.refresh();
+      void savedViews.applyShareParam(
+        Object.fromEntries(new URLSearchParams(window.location.search))
+      );
     } catch (err) {
       cancelSlow();
       if (token !== loadToken) return;

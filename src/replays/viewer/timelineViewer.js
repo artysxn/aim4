@@ -8,6 +8,7 @@
 
 import {
   NOTE_MAX,
+  countDemoView,
   fetchPlaylists,
   fetchRoundMeta,
   fetchTeams,
@@ -62,7 +63,9 @@ import chartIcon from '../../icons/demos_chart.svg?raw';
 import zonesIcon from '../../icons/demos_zones.svg?raw';
 import duelsIcon from '../../icons/demos_duels.svg?raw';
 import povIcon from '../../icons/demo_pov.svg?raw';
+import rosterIcon from '../../icons/icon_multiplayer.svg?raw';
 import { createPovVision, povDuelOverlay, povZonePaint } from './teamPov.js';
+import { rememberRound } from '../../site/homeView.js';
 import { createDuelOverlay } from '../duels/duelOverlay.js';
 import { createDuelScanner, scanTickFor } from '../duels/duelScanner.js';
 import {
@@ -97,8 +100,22 @@ export function createTimelineViewer({
   coachForceSide = 0,
   coachAutoEnable = false,
   /** When set, coach notes are generated for the team but only this player is shown. */
-  coachReviewPlayerId = ''
+  coachReviewPlayerId = '',
+  /** `{ tick, zoom, panX, panY }` from a shared moment link, or null. */
+  startAt = null
 }) {
+  /**
+   * True when the viewer was opened from the team's Autocoach page.
+   *
+   * The ok / x marks belong to that review: they are a team's record of which
+   * flagged moments have been accepted and which were dismissed, and the team
+   * page tallies them per player. Opening the same demo from the Demo Manager
+   * is not that review, so the marks are neither shown nor settable there -
+   * a stray red cross on someone else's library round says nothing useful and
+   * would land in the team's tally if it could be clicked.
+   */
+  const teamReview = Boolean(coachTeamId);
+
   const el = document.createElement('div');
   el.className = 'rv-timeline';
   el.innerHTML = `
@@ -174,6 +191,12 @@ export function createTimelineViewer({
           <button type="button" class="rp-btn-icon" id="rv-note-prev" title="Previous note" aria-label="Previous note">‹</button>
           <span class="rv-note-stamp" id="rv-note-stamp">00:00</span>
           <span class="rv-note-pos" id="rv-note-pos"></span>
+          <span class="rv-note-marks" id="rv-note-marks" hidden>
+            <button type="button" class="rv-note-mark-btn ok" id="rv-note-mark-ok"
+              title="Accept this note" aria-label="Accept this note">✓</button>
+            <button type="button" class="rv-note-mark-btn x" id="rv-note-mark-x"
+              title="Dismiss this note" aria-label="Dismiss this note">✗</button>
+          </span>
           <button type="button" class="rp-btn-icon" id="rv-note-next" title="Next note" aria-label="Next note">›</button>
           <button type="button" class="rp-btn-icon" id="rv-note-add-edit" title="New note" aria-label="New note">+</button>
           <button type="button" class="rp-btn-icon rv-note-close" id="rv-note-close" title="Close" aria-label="Close">✕</button>
@@ -209,6 +232,10 @@ export function createTimelineViewer({
           <div class="rv-scrub-handle" id="rv-scrub-handle"></div>
         </div>
         <span class="rv-time" id="rv-time">00:00</span>
+        <button type="button" class="rv-share" id="rv-share"
+          title="Copy a link to this moment" aria-label="Copy a link to this moment">
+          <svg viewBox="0 -960 960 960" width="16" height="16"><path d="M440-280H280q-83 0-141.5-58.5T80-480q0-83 58.5-141.5T280-680h160v80H280q-50 0-85 35t-35 85q0 50 35 85t85 35h160v80ZM320-440v-80h320v80H320Zm200 160v-80h160q50 0 85-35t35-85q0-50-35-85t-85-35H520v-80h160q83 0 141.5 58.5T880-480q0 83-58.5 141.5T680-280H520Z"/></svg>
+        </button>
       </div>
       <div class="rv-tools-anchor">
         <div class="rv-tools rv-tools-draw" id="rv-draw-tools" hidden>
@@ -231,6 +258,8 @@ export function createTimelineViewer({
           <button type="button" class="rv-tool" id="rv-coach" title="Coach: mistake notes for one team" ${
             statsDemoId ? '' : 'hidden'
           }>${icon(coachIcon)}</button>
+          <button type="button" class="rv-tool" id="rv-rosters" hidden
+            title="Player sidebars">${icon(rosterIcon)}</button>
           <button type="button" class="rv-tool" id="rv-zones"
             title="Map positions: active / controlled / contested">${icon(zonesIcon)}</button>
           <button type="button" class="rv-tool" id="rv-duels"
@@ -271,6 +300,7 @@ export function createTimelineViewer({
   const marksEl = el.querySelector('#rv-scrub-marks');
   const handleEl = el.querySelector('#rv-scrub-handle');
   const timeEl = el.querySelector('#rv-time');
+  const shareBtn = el.querySelector('#rv-share');
   const playBtn = el.querySelector('#rv-play');
   const speedBtn = el.querySelector('#rv-speed');
   const team1El = el.querySelector('.rv-team-1');
@@ -293,6 +323,9 @@ export function createTimelineViewer({
   const notePosEl = el.querySelector('#rv-note-pos');
   const notePrevBtn = el.querySelector('#rv-note-prev');
   const noteNextBtn = el.querySelector('#rv-note-next');
+  const noteMarksEl = el.querySelector('#rv-note-marks');
+  const noteMarkOkBtn = el.querySelector('#rv-note-mark-ok');
+  const noteMarkXBtn = el.querySelector('#rv-note-mark-x');
   const noteAddBtn = el.querySelector('#rv-note-add');
   const noteAddEditBtn = el.querySelector('#rv-note-add-edit');
   const chartBtn = el.querySelector('#rv-chart');
@@ -300,6 +333,7 @@ export function createTimelineViewer({
   const duelsBtn = el.querySelector('#rv-duels');
   const povBtn = el.querySelector('#rv-pov');
   const coachBtn = el.querySelector('#rv-coach');
+  const rostersBtn = el.querySelector('#rv-rosters');
   const coachPick = el.querySelector('#rv-coach-pick');
   const coachPickTitle = el.querySelector('#rv-coach-pick-title');
   const coachPickTeams = el.querySelector('#rv-coach-pick-teams');
@@ -361,6 +395,11 @@ export function createTimelineViewer({
    */
   const stackedQuery = window.matchMedia('(max-width: 860px)');
   let coachOn = false;
+  /**
+   * Mobile coach only: show the under-map player sidebars. Off by default so
+   * the radar can fill the screen; toggle with the roster tool.
+   */
+  let coachRostersOn = false;
   /** Position overlay on the radar (control / contested). */
   let zonesOn = false;
   /** Duel network on the radar: xK beside fighters, win % on hover. */
@@ -530,7 +569,9 @@ export function createTimelineViewer({
   function syncCoachRoundChips() {
     roundsEl.querySelectorAll('.rv-round').forEach((b) => {
       const file = files[Number(b.dataset.index)];
-      const on = coachNotedFiles.has(file);
+      // Coach off means the notes are hidden, so the chips must not advertise
+      // rounds the user cannot open anything on.
+      const on = coachOn && coachNotedFiles.has(file);
       b.classList.toggle('has-coach', on);
       if (!file || !rounds[Number(b.dataset.index)]) return;
       const r = rounds[Number(b.dataset.index)];
@@ -662,6 +703,11 @@ export function createTimelineViewer({
       );
     }
     const noteList = roundNotes.length ? roundNotes : notesFromMeta(activeMeta);
+    // Marks are the team review's record; outside it a note is just a note.
+    const markClassFor = (n, coach) => {
+      if (!teamReview || !coach) return '';
+      return n.mark === 'ok' ? ' mark-ok' : n.mark === 'x' ? ' mark-x' : '';
+    };
     for (const n of noteList) {
       if (n.tick == null) continue;
       if (!noteInCoachFocus(n)) continue;
@@ -669,12 +715,7 @@ export function createTimelineViewer({
       // Coach notes get the green diamond so they read apart from the round
       // marks around them at a glance.
       const coach = n.kind === 'coach';
-      const markCls =
-        coach && n.mark === 'ok'
-          ? ' mark-ok'
-          : coach && n.mark === 'x'
-            ? ' mark-x'
-            : '';
+      const markCls = markClassFor(n, coach);
       parts.push(
         `<span class="rv-mark ${coach ? 'coach' : 'note'}${markCls}" data-note="${escapeHtml(
           n.id
@@ -769,6 +810,33 @@ export function createTimelineViewer({
 
   // ---- round selection ----------------------------------------------------
 
+  /** Rounds already counted this session, so a re-entry is not a second view. */
+  const viewedFiles = new Set();
+
+  /**
+   * Report one round open.
+   *
+   * Counted per round rather than per demo: watching six rounds of a match is
+   * six looks at it. Counted once per round per open viewer, so bouncing
+   * between two rounds does not inflate the number.
+   */
+  function countRoundView(file) {
+    // Home's Continue card reads this. Written for every round, counted once.
+    if (file) {
+      rememberRound({
+        file,
+        demoId: statsDemoId || '',
+        map: rounds[activeIndex]?.map || '',
+        title: `${rounds[activeIndex]?.team1 || 'Team 1'} vs ${
+          rounds[activeIndex]?.team2 || 'Team 2'
+        }`
+      });
+    }
+    if (!statsDemoId || !file || viewedFiles.has(file)) return;
+    viewedFiles.add(file);
+    void countDemoView(statsDemoId);
+  }
+
   async function selectRound(index, { seek = true } = {}) {
     if (index < 0 || index >= files.length) return;
     if (index === activeIndex && store.get(files[index])?.isFull) {
@@ -800,6 +868,7 @@ export function createTimelineViewer({
     // A new round arms the buy skip again — it is only ever disarmed for the
     // round the user dragged into.
     freezeSkip = true;
+    countRoundView(file);
     drawing.setRound(file);
     onRound?.(rounds[index]);
     syncBookmark();
@@ -916,6 +985,8 @@ export function createTimelineViewer({
       seekRoundEntry(index);
     }
     draw();
+    // Last, so nothing above can seek back over the moment the link asked for.
+    applyStartAt();
   }
 
   /**
@@ -1236,6 +1307,22 @@ export function createTimelineViewer({
     povBtn.title = povTeam
       ? `Team POV: ${povTeamName()} (${side}). Click for the other team, again to turn it off.`
       : 'Team POV: one team’s map control and only the enemies they can see';
+  }
+
+  /** Mobile coach: sidebars optional; when off the map fills the stage. */
+  function syncRostersLayout() {
+    const mobileCoach = coachOn && stackedQuery.matches;
+    if (rostersBtn) {
+      rostersBtn.hidden = !mobileCoach;
+      rostersBtn.classList.toggle('active', mobileCoach && coachRostersOn);
+      rostersBtn.title = coachRostersOn
+        ? 'Hide player sidebars (map fills the screen)'
+        : 'Show player sidebars';
+    }
+    const hideRosters = mobileCoach && !coachRostersOn;
+    el.classList.toggle('rosters-hidden', hideRosters);
+    syncChromeInset();
+    if (!destroyed) draw();
   }
 
   function clearPlayerStates() {
@@ -1973,6 +2060,82 @@ export function createTimelineViewer({
     return Math.round(at.tick);
   }
 
+  // ---- moment links -------------------------------------------------------
+  //
+  // A round already has a URL. A moment needs the tick as well, and the camera
+  // with it: "watch this" and "watch this, zoomed on B site" are different
+  // things to send someone, and the second one is most of why anyone shares a
+  // position at all.
+
+  /** `/demos?round=<file>&tick=<n>` plus the camera when it has been moved. */
+  function momentLink() {
+    const file = files[activeIndex];
+    if (!file) return '';
+    const url = new URL('/demos', window.location.origin);
+    url.searchParams.set('round', file);
+    url.searchParams.set('tick', String(playheadTick()));
+    // A default camera is not worth putting in the link.
+    if (renderer.zoom > 1.001) {
+      url.searchParams.set('zoom', renderer.zoom.toFixed(2));
+      url.searchParams.set('px', String(Math.round(renderer.panX)));
+      url.searchParams.set('py', String(Math.round(renderer.panY)));
+    }
+    return url.toString();
+  }
+
+  async function copyMomentLink() {
+    const link = momentLink();
+    if (!link) return;
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(link);
+      ok = true;
+    } catch {
+      ok = false;
+    }
+    if (!shareBtn) return;
+    shareBtn.classList.toggle('copied', ok);
+    shareBtn.title = ok ? 'Link copied' : 'Could not copy. Check clipboard permissions.';
+    window.setTimeout(() => {
+      if (destroyed || !shareBtn) return;
+      shareBtn.classList.remove('copied');
+      shareBtn.title = 'Copy a link to this moment';
+    }, 1600);
+  }
+
+  shareBtn?.addEventListener('click', () => void copyMomentLink());
+
+  /**
+   * Land on a shared moment, once the round it belongs to is loaded.
+   *
+   * Consumed on first use: a link opens the viewer where it says, and every
+   * scrub afterwards is the user's own.
+   */
+  function applyStartAt() {
+    if (!startAt || !activeMeta) return;
+    const tick = Number(startAt.tick);
+    const item = sequence.at(activeIndex);
+    if (!item || !Number.isFinite(tick)) {
+      startAt = null;
+      return;
+    }
+    const timing = timingFor(activeMeta);
+    const local = Math.max(0, (tick - timing.startTick) / (timing.tickRate || 64));
+    playback.pause();
+    syncPlayButton();
+    // A link into the buy is a deliberate choice, same as dragging there.
+    freezeSkip = false;
+    playback.seek(sequence.offsetOf(activeIndex) + Math.min(local, roundLocalMax(item)));
+    const zoom = Number(startAt.zoom);
+    if (Number.isFinite(zoom) && zoom > 1) {
+      renderer.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
+      renderer.panX = Number(startAt.panX) || 0;
+      renderer.panY = Number(startAt.panY) || 0;
+    }
+    startAt = null;
+    draw();
+  }
+
   function flushNoteText() {
     const n = currentNote();
     if (!n) return;
@@ -2011,8 +2174,15 @@ export function createTimelineViewer({
       .map((n, i) => {
         if (!noteInCoachFocus(n)) return '';
         const coach = n.kind === 'coach';
+        // Same rule as the scrub markers: marks only read inside a team review.
         const markCls =
-          n.mark === 'ok' ? ' mark-ok' : n.mark === 'x' ? ' mark-x' : '';
+          !teamReview || !coach
+            ? ''
+            : n.mark === 'ok'
+              ? ' mark-ok'
+              : n.mark === 'x'
+                ? ' mark-x'
+                : '';
         return `<button type="button" class="rv-note-item${coach ? ' coach' : ''}${markCls}" data-note-index="${i}">
           <span class="rv-note-item-mark" aria-hidden="true"></span>
           <span class="rv-note-item-body">
@@ -2034,14 +2204,18 @@ export function createTimelineViewer({
   function noteInCoachFocus(n) {
     if (!n) return false;
     const reviewId = String(coachReviewPlayerId || '');
+    // A user note is always a user note; the review view is coach-only.
+    if (n.kind !== 'coach') return !reviewId;
+    // Coach notes belong to coach mode. Turning it off puts them away along
+    // with the round chips and scrub markers that point at them, rather than
+    // leaving flags on the timeline with nothing behind them.
+    if (!coachOn) return false;
     if (reviewId) {
-      if (n.kind !== 'coach') return false;
       const focus = focusPlayerIdSet() || new Set([reviewId]);
       const pid = String(n.playerId || '');
       return Boolean(pid) && focus.has(pid);
     }
-    if (n.kind !== 'coach') return true;
-    if (!coachOn || !coachFocusPlayers || !coachFocusPlayers.size) return true;
+    if (!coachFocusPlayers || !coachFocusPlayers.size) return true;
     const focus = focusPlayerIdSet();
     if (!focus?.size) return true;
     const pid = String(n.playerId || '');
@@ -2089,8 +2263,32 @@ export function createTimelineViewer({
     notePrevBtn.disabled = !vis.length || (visPos >= 0 ? visPos <= 0 : noteIndex <= vis[0]);
     noteNextBtn.disabled =
       !vis.length || (visPos >= 0 ? visPos >= vis.length - 1 : noteIndex >= vis[vis.length - 1]);
+    syncNoteMarks(n);
     syncNoteCount();
     syncNoteHasBadge();
+  }
+
+  /** The accept / dismiss pair: team review only, and only on a coach note. */
+  function syncNoteMarks(n) {
+    if (!noteMarksEl) return;
+    const show = teamReview && n?.kind === 'coach';
+    noteMarksEl.hidden = !show;
+    if (!show) return;
+    noteMarkOkBtn?.classList.toggle('active', n.mark === 'ok');
+    noteMarkXBtn?.classList.toggle('active', n.mark === 'x');
+  }
+
+  /** Toggle a coach note's mark and save. Clicking the set one clears it. */
+  function setNoteMark(mark) {
+    if (!teamReview) return;
+    const n = currentNote();
+    if (!n || n.kind !== 'coach') return;
+    n.mark = n.mark === mark ? '' : mark;
+    n.updatedAt = Date.now();
+    syncNoteMarks(n);
+    renderNoteList();
+    renderActiveMarks();
+    void persistNotes({ quiet: true });
   }
 
   function loadNotesFromMeta(force = false) {
@@ -2387,6 +2585,8 @@ export function createTimelineViewer({
   noteAddEditBtn?.addEventListener('click', onAddNote);
   notePrevBtn.addEventListener('click', () => showAdjacentVisibleNote(-1));
   noteNextBtn.addEventListener('click', () => showAdjacentVisibleNote(1));
+  noteMarkOkBtn?.addEventListener('click', () => setNoteMark('ok'));
+  noteMarkXBtn?.addEventListener('click', () => setNoteMark('x'));
   el.querySelector('#rv-note-close').addEventListener('click', () => setNoteOpen(false));
   el.querySelector('#rv-note-close-list')?.addEventListener('click', () => setNoteOpen(false));
   // ---- playlists ----------------------------------------------------------
@@ -3474,7 +3674,10 @@ export function createTimelineViewer({
     }
     hideCoachPick();
     coachOn = true;
+    // Phone coach starts map-first; the roster tool brings the sidebars back.
+    if (stackedQuery.matches) coachRostersOn = false;
     syncCoachBtn();
+    syncRostersLayout();
     if (locked) {
       spentCoach = true;
       await hydrateCoachNotedFromDisk();
@@ -3555,6 +3758,14 @@ export function createTimelineViewer({
     draw();
   });
 
+  rostersBtn?.addEventListener('click', () => {
+    if (!(coachOn && stackedQuery.matches)) return;
+    coachRostersOn = !coachRostersOn;
+    syncRostersLayout();
+    // POV may have emptied a panel; rebuild so shown sidebars are current.
+    if (coachRostersOn) renderScoreboards();
+  });
+
   // Off → team 1 → team 2 → off. A cycle rather than a picker: there are only
   // ever two answers, and the tooltip names the one currently in force.
   povBtn?.addEventListener('click', async () => {
@@ -3596,7 +3807,9 @@ export function createTimelineViewer({
   coachBtn?.addEventListener('click', async () => {
     if (!coachAvailable) return;
     if (coachOn) {
-      // Notes stay on disk — toggling off only hides the live coach chrome.
+      // Notes stay on disk; what goes away is every trace of them on screen -
+      // the notes themselves, the scrub markers, and the round chips that said
+      // a round had something to look at.
       coachOn = false;
       coachScanning = false;
       coachPassId += 1;
@@ -3604,6 +3817,13 @@ export function createTimelineViewer({
       cancelViewAnim();
       hideCoachPick();
       syncCoachBtn();
+      syncRostersLayout();
+      const vis = visibleNoteIndices();
+      noteIndex = vis.includes(noteIndex) ? noteIndex : (vis[0] ?? -1);
+      if (noteIndex < 0) setNoteOpen(false);
+      renderNoteDock({ forceText: true });
+      renderActiveMarks();
+      syncCoachRoundChips();
       return;
     }
     if (coachPicking) {
@@ -4128,7 +4348,10 @@ export function createTimelineViewer({
     const chromeH = chromeEl.offsetHeight;
     el.style.setProperty('--rv-chrome-h', `${chromeH}px`);
     const stageH = el.querySelector('.rv-stage')?.clientHeight || 0;
-    const overlap = stackedQuery.matches
+    // Stacked + sidebars: chrome sits over the roster row (padding), not the map.
+    // Stacked + sidebars hidden (mobile coach): map fills; chrome overlays it.
+    const rosterRow = stackedQuery.matches && !el.classList.contains('rosters-hidden');
+    const overlap = rosterRow
       ? 0
       : Math.max(0, Math.min(chromeH - 12, stageH * 0.35));
     if (renderer.viewInset.bottom !== overlap) {
@@ -4136,6 +4359,15 @@ export function createTimelineViewer({
       return true;
     }
     return false;
+  }
+
+  const onStackedChange = () => {
+    syncRostersLayout();
+  };
+  if (typeof stackedQuery.addEventListener === 'function') {
+    stackedQuery.addEventListener('change', onStackedChange);
+  } else {
+    stackedQuery.addListener?.(onStackedChange);
   }
 
   const chromeObserver =

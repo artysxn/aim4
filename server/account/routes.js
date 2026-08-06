@@ -28,6 +28,7 @@ import {
   trialsEnabled
 } from '../entitlements/subscriptions.js';
 import { ValidationError } from '../entitlements/grants.js';
+import { db } from '../entitlements/service.js';
 import {
   cancelDeletion,
   deleteAccount,
@@ -203,6 +204,36 @@ async function route(req, res, url, me) {
       // "cancel" button from reading as "lose it immediately".
       accessUntil: row.trial_ends_at || row.current_period_end
     });
+    return true;
+  }
+
+  // ---- profile -------------------------------------------------------------
+  //
+  // The display name is the one thing about an account the owner can change,
+  // and it is what every other surface shows: uploads are attributed by it,
+  // rosters list it, leaderboards rank it. Taken names are refused rather than
+  // silently suffixed, because two players with one name is a worse outcome
+  // than being told to pick another.
+  if (req.method === 'POST' && p === '/api/account/username') {
+    if (!requireUser()) return true;
+    const body = await readJson(req);
+    const next = String(body?.username || '').trim();
+    if (!/^[A-Za-z0-9_.-]{3,24}$/.test(next)) {
+      json(res, 400, {
+        error: 'Use 3 to 24 characters: letters, numbers, dot, dash or underscore.'
+      });
+      return true;
+    }
+    const taken = await db.selectOne('profiles', {
+      select: 'id',
+      username: `eq.${next}`
+    });
+    if (taken && taken.id !== me.id) {
+      json(res, 409, { error: 'That name is taken.' });
+      return true;
+    }
+    await db.update('profiles', { id: `eq.${me.id}` }, { username: next });
+    json(res, 200, { username: next });
     return true;
   }
 

@@ -196,6 +196,35 @@ export async function setDemoVisibility(id, visibility) {
   );
 }
 
+/** Replace a demo's tag list. Tags are free text the uploader chooses. */
+export async function setDemoTags(id, tags) {
+  return asJson(
+    await safeFetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/tags`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ tags })
+    })
+  );
+}
+
+/**
+ * Count one round view against a demo.
+ *
+ * Fire and forget: a view that fails to record is not worth telling anyone
+ * about, and it must never delay the round opening.
+ */
+export async function countDemoView(id) {
+  if (!id) return;
+  try {
+    await safeFetch(`${API_BASE}/api/replays/demos/${encodeURIComponent(id)}/view`, {
+      method: 'POST',
+      headers: await headers()
+    });
+  } catch {
+    /* the count is a nice-to-have, never a blocker */
+  }
+}
+
 /**
  * Upload a .dem. XMLHttpRequest rather than fetch: a demo is hundreds of
  * megabytes and upload progress is the only honest thing to show while it
@@ -424,6 +453,50 @@ export async function savePlaylist(playlist) {
     })
   );
   return body.playlists || [];
+}
+
+// ---- saved views ------------------------------------------------------------
+//
+// One store behind Charts, Pattern Finder and Database. The spec is opaque to
+// the server; each page decides what its own spec means.
+
+export async function fetchSavedViews() {
+  const body = await asJson(
+    await safeFetch(`${API_BASE}/api/replays/views`, { headers: await headers() })
+  );
+  return body.views || [];
+}
+
+/** Create (no id) or update (with id). Returns the whole list back. */
+export async function saveSavedView(view) {
+  const body = await asJson(
+    await safeFetch(`${API_BASE}/api/replays/views`, {
+      method: 'POST',
+      headers: await headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(view)
+    })
+  );
+  return body.views || [];
+}
+
+export async function deleteSavedView(id) {
+  const body = await asJson(
+    await safeFetch(`${API_BASE}/api/replays/views/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: await headers()
+    })
+  );
+  return body.views || [];
+}
+
+/** Resolve a share link. The id is the authorisation. */
+export async function fetchSharedView(shareId) {
+  const body = await asJson(
+    await safeFetch(`${API_BASE}/api/replays/views/share/${encodeURIComponent(shareId)}`, {
+      headers: await headers()
+    })
+  );
+  return body.view || null;
 }
 
 export async function deletePlaylist(id) {

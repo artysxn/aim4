@@ -100,8 +100,37 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     return archive.grenades.find((g) => g.id === selectedId) || null;
   }
 
+  /**
+   * Every id in the archive: landing spots and throw spots together.
+   *
+   * They share one namespace because a stratbook note writes `<!abcd>` without
+   * saying which kind it means.
+   */
   function usedIds() {
-    return new Set(archive.grenades.map((g) => g.id));
+    const out = new Set();
+    for (const g of archive.grenades) {
+      out.add(g.id);
+      for (const t of g.throws || []) if (t.id) out.add(t.id);
+    }
+    return out;
+  }
+
+  /**
+   * Fill in throw ids for archives written before a throw had one.
+   *
+   * The server does this too, on both read and write, so this only matters for
+   * the seconds between loading an old archive and saving it back. Doing it
+   * here as well means the ids on screen are the ids that will be stored.
+   */
+  function ensureThrowIds() {
+    const used = usedIds();
+    for (const g of archive.grenades) {
+      for (const t of g.throws || []) {
+        if (t.id) continue;
+        t.id = newId(used);
+        used.add(t.id);
+      }
+    }
   }
 
   function beginSession() {
@@ -151,7 +180,7 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     const showActions = creating || dirty;
     detailEl.innerHTML = `
       <div class="db-block">
-        <span class="sc-label">Grenade <code class="ua-id">&lt;!${escapeHtml(g.id)}&gt;</code></span>
+        <span class="sc-label">Landing spot <code class="ua-id">&lt;!${escapeHtml(g.id)}&gt;</code></span>
         <label class="ua-field">
           <input class="site-input" data-name maxlength="80" value="${escapeHtml(g.name || '')}"
             placeholder="Grenade name" />
@@ -164,6 +193,9 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
                 .map(
                   (t, i) => `
               <li class="ua-throw" data-throw="${i}">
+                <code class="ua-id ua-throw-id" title="Link this exact throw">&lt;!${escapeHtml(
+                  t.id || ''
+                )}&gt;</code>
                 <button type="button" class="ua-throw-copy" data-copy-throw="${i}" title="Copy setpos / setang">
                   Copy
                 </button>
@@ -225,6 +257,7 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
       await renderer.setMap(map);
       const saved = await fetchUtilityArchive(teamId, map);
       archive = saved && saved.map ? saved : emptyArchive(map);
+      ensureThrowIds();
       dirty = false;
       setStatus(
         archive.grenades.length
@@ -420,7 +453,10 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     if (creating && selectedId) {
       const g = selected();
       if (!g) return;
+      // Its own id: this is a distinct lineup, not another note on the landing
+      // spot, and a stratbook link has to be able to name exactly this throw.
       g.throws.push({
+        id: newId(usedIds()),
         x: Math.round(world.x),
         y: Math.round(world.y),
         setpos: '',

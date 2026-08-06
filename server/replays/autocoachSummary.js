@@ -14,6 +14,7 @@ import {
   writeRoundNotes
 } from './demoStore.js';
 import { autocoachDemosOf } from './teamsStore.js';
+import { coachCategory } from '../../src/replays/coach/coachMessages.js';
 
 function teamNameKey(name) {
   return String(name || '')
@@ -22,7 +23,17 @@ function teamNameKey(name) {
 }
 
 function emptyPlayer(id, name) {
-  return { id, name: name || id, total: 0, ok: 0, x: 0, rounds: 0, avg: 0 };
+  // `cats` is the per-category tally. A bare total says a player made twelve
+  // mistakes; the split says whether they were twelve of the same thing, which
+  // is the only version anyone can act on.
+  return { id, name: name || id, total: 0, ok: 0, x: 0, rounds: 0, avg: 0, cats: {} };
+}
+
+/** Fold one note's category into a bag. */
+function countCategory(bag, rule) {
+  const cat = coachCategory(rule);
+  if (!cat) return;
+  bag.cats[cat] = (bag.cats[cat] || 0) + 1;
 }
 
 function withAvg(bag) {
@@ -124,6 +135,11 @@ export async function buildAutocoachSummary(team) {
         bag.total++;
         if (n.mark === 'ok') bag.ok++;
         if (n.mark === 'x') bag.x++;
+        countCategory(bag, n.rule);
+        // The rounds this player was flagged in, so the team page can turn a
+        // tally into something to watch instead of a number to argue with.
+        if (!bag.files) bag.files = [];
+        if (!bag.files.includes(stem)) bag.files.push(stem);
         perDemo.set(pid, bag);
 
         const global = players.get(pid) || emptyPlayer(pid, bag.name);
@@ -131,6 +147,7 @@ export async function buildAutocoachSummary(team) {
         global.total++;
         if (n.mark === 'ok') global.ok++;
         if (n.mark === 'x') global.x++;
+        countCategory(global, n.rule);
         players.set(pid, global);
       }
     }

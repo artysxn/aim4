@@ -262,9 +262,22 @@ function emptyUtility(map) {
   return { map, updatedAt: 0, grenades: [] };
 }
 
-function sanitizeThrow(t) {
+/**
+ * One throw spot, with its own id.
+ *
+ * A lineup is a landing spot AND the place it is thrown from. The id used to
+ * name only the landing spot, so three different smokes onto the same window
+ * shared one `<!abcd>` and a stratbook link could not say which one it meant -
+ * the reader was prompted to pick. The throw carries the id now, so a different
+ * setpos is a different id. Landing spots still group them for the map.
+ *
+ * Throws saved before this share the grenade's id namespace, so `used` is the
+ * archive-wide set and a missing id is filled in here.
+ */
+function sanitizeThrow(t, claim) {
   if (!t || typeof t !== 'object') return null;
   return {
+    id: claim(t.id),
     x: clampNum(t.x, -10000, 10000, 0),
     y: clampNum(t.y, -10000, 10000, 0),
     setpos: String(t.setpos || '').trim().slice(0, 240),
@@ -273,20 +286,52 @@ function sanitizeThrow(t) {
   };
 }
 
+/** A stored id, or '' when it is missing or malformed. */
+function heldId(raw) {
+  const id = String(raw || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 4);
+  return id.length === 4 ? id : '';
+}
+
 function sanitizeUtility(map, payload) {
   const src = payload && typeof payload === 'object' ? payload : {};
-  const used = new Set();
+  const incoming = (src.grenades || []).slice(0, MAX_UTILITY);
+
+  // Grenades and throws share one id namespace, because a stratbook note writes
+  // `<!abcd>` without saying which kind it is. Two passes keep that honest:
+  //
+  //   reserved  every id already on disk. Reserved before a single new id is
+  //             minted, so migrating a throw cannot take an id a later grenade
+  //             already holds and rename it out from under a live note.
+  //   taken     ids actually handed out during this pass, which is what makes a
+  //             genuine duplicate detectable.
+  const reserved = new Set();
+  for (const g of incoming) {
+    if (!g || typeof g !== 'object') continue;
+    const gid = heldId(g.id);
+    if (gid) reserved.add(gid);
+    for (const t of (g.throws || []).slice(0, MAX_THROWS)) {
+      const tid = heldId(t?.id);
+      if (tid) reserved.add(tid);
+    }
+  }
+  const taken = new Set();
+  const claim = (raw) => {
+    let id = heldId(raw);
+    if (!id || taken.has(id)) id = newUtilityId(reserved);
+    reserved.add(id);
+    taken.add(id);
+    return id;
+  };
+
   const grenades = [];
-  for (const g of (src.grenades || []).slice(0, MAX_UTILITY)) {
+  for (const g of incoming) {
     if (!g || typeof g !== 'object') continue;
     const type = String(g.type || '');
     if (!['smokegrenade', 'molotov', 'hegrenade', 'flashbang'].includes(type)) continue;
-    let id = String(g.id || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 4);
-    if (id.length !== 4 || used.has(id)) id = newUtilityId(used);
-    used.add(id);
+    const id = claim(g.id);
     const throws = [];
     for (const t of (g.throws || []).slice(0, MAX_THROWS)) {
-      const clean = sanitizeThrow(t);
+      const clean = sanitizeThrow(t, claim);
       if (clean) throws.push(clean);
     }
     grenades.push({

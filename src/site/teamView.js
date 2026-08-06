@@ -30,6 +30,7 @@ import {
   mergeTeamMember,
   resetTeamAutocoachDemos,
   rollTeamInvite,
+  savePlaylist,
   saveTeamDocument,
   saveTeamStrategy,
   setTeamPosition,
@@ -43,11 +44,15 @@ import { MAPS } from '../replays/shared/roundId.js';
 import { teamNameKey } from '../replays/shared/statsMath.js';
 import { createStatsPanel } from '../replays/stats/statsPanel.js';
 import { analyzeDemoCoach } from '../replays/coach/analyzeDemo.js';
+import { COACH_CATEGORY_LABELS } from '../replays/coach/coachMessages.js';
 import { POSITION_MAPS, positionsFor } from '../replays/roles/teamPositions.js';
 import { createDocsEditor } from './docsEditor.js';
 import { mountDrawingBoard } from './drawingBoard.js';
 import { mountUtilityArchive } from './utilityArchive.js';
 import { spinnerHtml } from '../lib/spinner.js';
+
+/** Below this a per-side winrate is noise, so the bar stays empty. */
+const MIN_SIDE_ROUNDS = 12;
 
 const PAGES = [
   'team-overview',
@@ -365,26 +370,48 @@ export function initTeamView({ auth, escapeHtml }) {
 
   async function copyUtilityById(id) {
     await ensureUtilityIndex();
-    const entry = utilityIndex.find((g) => g.id === id);
-    if (!entry) {
-      setStatus(`No utility with id ${id} in the archive.`, true);
-      return;
+
+    // A throw carries its own id, so a link naming one resolves to exactly that
+    // lineup. This is the whole point of the id living on the throw: the same
+    // landing spot reached from three places is three ids, and a note can say
+    // which one it means instead of asking the reader to guess.
+    let th = null;
+    for (const g of utilityIndex) {
+      const hit = (g.throws || []).find((t) => t.id === id);
+      if (hit) {
+        th = hit;
+        break;
+      }
     }
-    const throws = Array.isArray(entry.throws) ? entry.throws : [];
-    if (!throws.length) {
-      setStatus(`${id} has no throw spots yet.`, true);
-      return;
+
+    if (!th) {
+      // Older notes name a landing spot. One throw under it is unambiguous;
+      // several still have to be picked from.
+      const entry = utilityIndex.find((g) => g.id === id);
+      if (!entry) {
+        setStatus(`No utility with id ${id} in the archive.`, true);
+        return;
+      }
+      const throws = Array.isArray(entry.throws) ? entry.throws : [];
+      if (!throws.length) {
+        setStatus(`${id} has no throw spots yet.`, true);
+        return;
+      }
+      th = throws[0];
+      if (throws.length > 1) {
+        const lines = throws
+          .map((t, i) => `${i + 1}. ${(t.comment || t.setpos || 'Throw').slice(0, 60)}`)
+          .join('\n');
+        const pick = window.prompt(
+          `<!${id}> is a landing spot with ${throws.length} throws. Pick one:\n${lines}`,
+          '1'
+        );
+        if (pick == null) return;
+        const idx = Math.max(1, Math.min(throws.length, Number(pick) || 1)) - 1;
+        th = throws[idx];
+      }
     }
-    let th = throws[0];
-    if (throws.length > 1) {
-      const lines = throws
-        .map((t, i) => `${i + 1}. ${(t.comment || t.setpos || 'Throw').slice(0, 60)}`)
-        .join('\n');
-      const pick = window.prompt(`Pick a throw spot for ${id}:\n${lines}`, '1');
-      if (pick == null) return;
-      const idx = Math.max(1, Math.min(throws.length, Number(pick) || 1)) - 1;
-      th = throws[idx];
-    }
+
     const text = [th.setpos, th.setang].filter(Boolean).join('\n');
     if (!text) {
       setStatus('That throw has no setpos / setang yet.', true);
@@ -586,7 +613,14 @@ export function initTeamView({ auth, escapeHtml }) {
       matches: 0,
       wins: 0,
       losses: 0,
+      rounds: 0,
       roundWinrate: null,
+      tWinrate: null,
+      tRounds: 0,
+      ctWinrate: null,
+      ctRounds: 0,
+      pistolWinrate: null,
+      pistols: 0,
       prw: null
     }));
   }
@@ -596,6 +630,25 @@ export function initTeamView({ auth, escapeHtml }) {
       return `<div class="is-loading" role="status" aria-live="polite">${spinnerHtml()}</div>`;
     }
     const rows = overviewMaps.length ? overviewMaps : emptyMapStats();
+    /**
+     * A round winrate as a bar.
+     *
+     * Anchored at 50%, because a map pool decision is never "how high is this
+     * number" but "which side of even is it, and by how much". Below-even bars
+     * grow left from the centre line, above-even grow right.
+     */
+    const sideBar = (side, rate, rounds) => {
+      const known = Number.isFinite(rate) && rounds >= MIN_SIDE_ROUNDS;
+      const offset = known ? Math.max(-50, Math.min(50, rate - 50)) : 0;
+      const left = offset < 0 ? 50 + offset : 50;
+      return `<span class="tm-map-bar" data-side="${side}"
+        title="${side} round winrate${known ? ` ${pct1(rate)} over ${rounds} rounds` : ', not enough rounds yet'}">
+        <span class="tm-map-bar-track">
+          <span class="tm-map-bar-fill" style="left:${left}%;width:${Math.abs(offset)}%"></span>
+        </span>
+        <span class="tm-map-bar-label">${side} ${known ? escapeHtml(pct1(rate)) : '—'}</span>
+      </span>`;
+    };
     return `<ul class="tm-maps-list">${rows
       .map((m) => {
         const active = overviewMapFilter === m.code ? ' is-active' : '';
@@ -607,6 +660,13 @@ export function initTeamView({ auth, escapeHtml }) {
         <span class="tm-map-wl" title="Map wins–losses">${escapeHtml(record)}</span>
         <span class="tm-map-rwr" title="Round winrate">${escapeHtml(pct1(m.roundWinrate))}</span>
         <span class="tm-map-prw" title="Predicted round winrate">${escapeHtml(pct1(m.prw))}</span>
+        <span class="tm-map-pistol" title="Pistol rounds won${
+          m.pistols ? ` (${m.pistols})` : ''
+        }">${escapeHtml(pct1(m.pistolWinrate))}</span>
+        <span class="tm-map-bars">
+          ${sideBar('T', m.tWinrate, m.tRounds)}
+          ${sideBar('CT', m.ctWinrate, m.ctRounds)}
+        </span>
       </li>`;
       })
       .join('')}</ul>`;
@@ -687,7 +747,13 @@ export function initTeamView({ auth, escapeHtml }) {
           rounds: 0,
           won: 0,
           prwSum: 0,
-          prwN: 0
+          prwN: 0,
+          // Per side, because a map is two different games and a single
+          // winrate hides which half of it is the problem.
+          T: { rounds: 0, won: 0 },
+          CT: { rounds: 0, won: 0 },
+          pistols: 0,
+          pistolsWon: 0
         });
       }
       for (const d of payload.demos || []) {
@@ -702,7 +768,19 @@ export function initTeamView({ auth, escapeHtml }) {
         else if (d.winner === 1 || d.winner === 2) s.losses += 1;
         for (const row of d.rounds || []) {
           s.rounds += 1;
-          if (row.w === side) s.won += 1;
+          const won = row.w === side;
+          if (won) s.won += 1;
+          const ourSide = side === 1 ? row.s1 : row.s2;
+          const bag = ourSide === 'T' ? s.T : ourSide === 'CT' ? s.CT : null;
+          if (bag) {
+            bag.rounds += 1;
+            if (won) bag.won += 1;
+          }
+          // MR12: rounds 1 and 13 open each half on pistols.
+          if (row.n === 1 || row.n === 13) {
+            s.pistols += 1;
+            if (won) s.pistolsWon += 1;
+          }
           const prw = side === 1 ? row.prw1 : row.prw2;
           if (Number.isFinite(prw)) {
             s.prwSum += prw;
@@ -710,6 +788,7 @@ export function initTeamView({ auth, escapeHtml }) {
           }
         }
       }
+      const rate = (bag) => (bag.rounds ? (bag.won / bag.rounds) * 100 : null);
       overviewMaps = POSITION_MAPS.map((m) => {
         const s = acc.get(m.code);
         return {
@@ -718,7 +797,14 @@ export function initTeamView({ auth, escapeHtml }) {
           matches: s.matches,
           wins: s.wins,
           losses: s.losses,
+          rounds: s.rounds,
           roundWinrate: s.rounds ? (s.won / s.rounds) * 100 : null,
+          tWinrate: rate(s.T),
+          tRounds: s.T.rounds,
+          ctWinrate: rate(s.CT),
+          ctRounds: s.CT.rounds,
+          pistolWinrate: s.pistols ? (s.pistolsWon / s.pistols) * 100 : null,
+          pistols: s.pistols,
           prw: s.prwN ? s.prwSum / s.prwN : null
         };
       }).sort(
@@ -975,6 +1061,8 @@ export function initTeamView({ auth, escapeHtml }) {
               <span>W–L</span>
               <span>RWR</span>
               <span>PRW</span>
+              <span>PIS</span>
+              <span>By side</span>
             </div>
             <div id="tm-overview-maps">${mapsBodyHtml()}</div>
           </section>
@@ -1305,6 +1393,212 @@ export function initTeamView({ auth, escapeHtml }) {
     }
   }
 
+  /**
+   * One player's mistakes, broken out.
+   *
+   * A running total reads as an accusation and offers nothing to do about it.
+   * Two things fix that: which kind of mistake it is, and whether it is getting
+   * better. Both come out of the payload already in hand; the categories are
+   * counted server-side and the trend is the per-demo rate over time.
+   */
+  function playerFocusHtml(p, demos) {
+    const cats = Object.entries(p.cats || {})
+      .filter(([, n]) => n > 0)
+      .sort((a, b) => b[1] - a[1]);
+    const worst = cats[0]?.[1] || 1;
+
+    // Per demo, oldest first. Rate rather than count, so a long match does not
+    // look worse than a short one.
+    const points = (demos || [])
+      .filter((d) => d.analyzed)
+      .map((d) => {
+        const seat = (d.players || []).find((x) => x.id === p.id);
+        if (!seat || !seat.rounds) return null;
+        return { at: d.uploadedAt || 0, rate: seat.total / seat.rounds, label: `${d.name1} vs ${d.name2}` };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.at - b.at);
+
+    let trend = '';
+    if (points.length >= 4) {
+      const half = Math.floor(points.length / 2);
+      const mean = (list) => list.reduce((s, x) => s + x.rate, 0) / list.length;
+      const before = mean(points.slice(0, half));
+      const after = mean(points.slice(half));
+      const delta = after - before;
+      // Down is better here: fewer flagged moments per round.
+      trend = `<span class="tm-ac-trend ${delta <= 0 ? 'good' : 'bad'}">${
+        delta <= 0 ? '↓' : '↑'
+      } ${Math.abs(delta).toFixed(2)} per round vs earlier</span>`;
+    }
+
+    const bars = cats.length
+      ? cats
+          .map(
+            ([key, n]) => `<li class="tm-ac-cat">
+              <span class="tm-ac-cat-label">${escapeHtml(
+                COACH_CATEGORY_LABELS[key] || key
+              )}</span>
+              <span class="tm-ac-cat-track"><span style="width:${Math.round(
+                (n / worst) * 100
+              )}%"></span></span>
+              <span class="tm-ac-cat-count">${n}</span>
+            </li>`
+          )
+          .join('')
+      : '<li class="tm-note">Nothing flagged yet.</li>';
+
+    return `
+      <section class="tm-card tm-ac-focus">
+        <div class="tm-card-head">
+          <h3 class="tm-card-title">${escapeHtml(p.name)}</h3>
+          ${trend}
+        </div>
+        <ul class="tm-ac-cats">${bars}</ul>
+        <div class="tm-ac-focus-actions">
+          <button type="button" class="btn btn-sm" data-ac-playlist="${escapeHtml(p.id)}"
+            ${p.total > 0 ? '' : 'disabled'}>Playlist of this week</button>
+          <button type="button" class="btn btn-sm" data-ac-digest>Write weekly digest</button>
+        </div>
+      </section>`;
+  }
+
+  /** A week back from now, for the digest and the per-player playlist. */
+  const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+  /** Demos analyzed in the last week, newest first. */
+  function recentAnalyzedDemos() {
+    const cutoff = Date.now() - WEEK_MS;
+    return (autocoachSummary?.demos || [])
+      .filter((d) => d.analyzed && (d.uploadedAt || 0) >= cutoff)
+      .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
+  }
+
+  /**
+   * One player's flagged rounds from the last week, as a playlist.
+   *
+   * This is the link the whole team side was missing: a tally is an argument,
+   * a playlist is twelve minutes of watching the actual moments.
+   */
+  async function buildMistakePlaylist(playerId) {
+    const player = (autocoachSummary?.players || []).find((p) => p.id === playerId);
+    if (!player) return;
+    let recent = recentAnalyzedDemos();
+    // Nothing this week is common on a quiet roster; fall back to everything
+    // analyzed rather than handing back an empty playlist with no explanation.
+    let windowed = true;
+    if (!recent.length) {
+      recent = (autocoachSummary?.demos || []).filter((d) => d.analyzed);
+      windowed = false;
+    }
+    const files = [];
+    for (const d of recent) {
+      const seat = (d.players || []).find((p) => p.id === playerId);
+      for (const f of seat?.files || []) if (!files.includes(f)) files.push(f);
+    }
+    if (!files.length) {
+      setStatus(`No flagged rounds for ${player.name} yet.`, true);
+      return;
+    }
+    const name = `${player.name} mistakes${windowed ? ' this week' : ''}`;
+    await run(
+      () => savePlaylist({ name, rounds: files, scope: 'team' }),
+      `Saved "${name}" with ${files.length} round${files.length === 1 ? '' : 's'}.`
+    );
+  }
+
+  /**
+   * The week, written into a team document.
+   *
+   * Top categories across the roster, who improved most, and one linked example
+   * per category. Written as a document rather than shown here because the
+   * point is that it survives the week it describes.
+   */
+  async function writeWeeklyDigest() {
+    const recent = recentAnalyzedDemos();
+    if (!recent.length) {
+      setStatus('No demos analyzed in the last week.', true);
+      return;
+    }
+    /** category -> count, and category -> one round to watch. */
+    const cats = new Map();
+    const example = new Map();
+    /** playerId -> { name, total, rounds } over the window. */
+    const perPlayer = new Map();
+    for (const d of recent) {
+      for (const seat of d.players || []) {
+        const bag = perPlayer.get(seat.id) || { name: seat.name, total: 0, rounds: 0 };
+        bag.total += seat.total || 0;
+        bag.rounds += seat.rounds || 0;
+        perPlayer.set(seat.id, bag);
+        for (const [key, n] of Object.entries(seat.cats || {})) {
+          cats.set(key, (cats.get(key) || 0) + n);
+          if (!example.has(key) && seat.files?.length) {
+            example.set(key, { file: seat.files[0], who: seat.name });
+          }
+        }
+      }
+    }
+    const top = [...cats.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    if (!top.length) {
+      setStatus('Nothing was flagged in the last week.', true);
+      return;
+    }
+
+    // Biggest improver: lowest rate this week against their rate before it.
+    const older = (autocoachSummary?.demos || []).filter(
+      (d) => d.analyzed && !recent.includes(d)
+    );
+    const before = new Map();
+    for (const d of older) {
+      for (const seat of d.players || []) {
+        const bag = before.get(seat.id) || { total: 0, rounds: 0 };
+        bag.total += seat.total || 0;
+        bag.rounds += seat.rounds || 0;
+        before.set(seat.id, bag);
+      }
+    }
+    let improver = null;
+    for (const [id, now] of perPlayer) {
+      const was = before.get(id);
+      if (!was?.rounds || !now.rounds) continue;
+      const delta = now.total / now.rounds - was.total / was.rounds;
+      if (!improver || delta < improver.delta) improver = { name: now.name, delta };
+    }
+
+    const esc = escapeHtml;
+    const lines = [
+      `<h2>Autocoach week to ${esc(new Date().toLocaleDateString())}</h2>`,
+      `<p>${recent.length} match${recent.length === 1 ? '' : 'es'} analyzed.</p>`,
+      '<h3>Most common</h3>',
+      '<ul>',
+      ...top.map(([key, n]) => {
+        const ex = example.get(key);
+        const label = esc(COACH_CATEGORY_LABELS[key] || key);
+        const link = ex
+          ? ` <a href="/demos?round=${encodeURIComponent(ex.file)}">watch ${esc(ex.who)}</a>`
+          : '';
+        return `<li>${label}: ${n}${link}</li>`;
+      }),
+      '</ul>'
+    ];
+    if (improver && improver.delta < 0) {
+      lines.push(
+        `<h3>Biggest improver</h3><p>${esc(improver.name)}, ${Math.abs(
+          improver.delta
+        ).toFixed(2)} fewer flagged moments per round.</p>`
+      );
+    }
+    await run(
+      () =>
+        saveTeamDocument(team.id, {
+          title: `Autocoach week to ${new Date().toLocaleDateString()}`,
+          html: lines.join('\n')
+        }),
+      'Digest written to Documents.'
+    );
+  }
+
   function autocoachHtml() {
     const players = autocoachSummary?.players || [];
     const demos = autocoachSummary?.demos || [];
@@ -1336,6 +1630,11 @@ export function initTeamView({ auth, escapeHtml }) {
           })
           .join('')
       : '<p class="tm-note">No demos with this team name yet.</p>';
+
+    const focus = autocoachSelectedPlayer
+      ? players.find((p) => p.id === autocoachSelectedPlayer)
+      : null;
+    const focusPanel = focus ? playerFocusHtml(focus, demos) : '';
 
     const visibleDemos = autocoachSelectedPlayer
       ? demos.filter((d) => (d.players || []).some((p) => p.id === autocoachSelectedPlayer))
@@ -1417,6 +1716,7 @@ export function initTeamView({ auth, escapeHtml }) {
             autocoachLoading ? spinnerHtml() : playerRows
           }</div>
         </section>
+        ${focusPanel}
         <section class="tm-card tm-ac-demos">
           <div class="tm-card-head tm-ac-demos-head">
             <h3 class="tm-card-title">Games</h3>
@@ -2245,6 +2545,16 @@ export function initTeamView({ auth, escapeHtml }) {
       autocoachReviewDemoId = '';
       render();
       void openAutocoachReview(demoId, playerId);
+      return;
+    }
+
+    const acPlaylist = t.closest('[data-ac-playlist]');
+    if (acPlaylist) {
+      await buildMistakePlaylist(acPlaylist.dataset.acPlaylist || '');
+      return;
+    }
+    if (t.closest('[data-ac-digest]')) {
+      await writeWeeklyDigest();
       return;
     }
 

@@ -1852,6 +1852,20 @@ body.is-impersonating {
 }
 
 .admin-tier-line,
+.account-name-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin: 14px 0 18px;
+  flex-wrap: wrap;
+}
+
+.account-signout {
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
 .account-tier {
   font-family: var(--font-display);
   font-size: 15px;
@@ -2035,4 +2049,164 @@ body.is-impersonating {
   gap: 8px;
   padding: 5px 4px;
   font-size: 13px;
+}
+
+/* ---- Home ---------------------------------------------------------------- */
+/* Signed out: a front door. Signed in: a dashboard. */
+
+.hm-front {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 48px;
+  flex-wrap: wrap;
+  padding: 72px 28px;
+  background:
+    radial-gradient(600px 300px at 20% -60px, var(--accent-dim), transparent 70%),
+    url('../aim4/background.png') center / cover no-repeat,
+    var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.hm-front-copy {
+  max-width: 560px;
+}
+
+.hm-front-title {
+  margin: 0 0 24px;
+  font-family: var(--font-display);
+  font-size: clamp(28px, 4vw, 44px);
+  line-height: 1.1;
+  letter-spacing: 0.01em;
+}
+
+.hm-front-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.hm-front-art img {
+  display: block;
+  width: min(360px, 60vw);
+  height: auto;
+  opacity: 0.9;
+}
+
+.hm-dash {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 32px 28px 48px;
+  max-width: 1100px;
+}
+
+.hm-dash-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.hm-dash-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 26px;
+  letter-spacing: 0.01em;
+}
+
+.hm-block-title {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.hm-block-loading {
+  min-height: 96px;
+}
+
+.hm-continue-row,
+.hm-demos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.hm-continue,
+.hm-demo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #0c0c0c;
+  text-decoration: none;
+  color: inherit;
+}
+
+.hm-continue:hover,
+.hm-demo:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: #101010;
+}
+
+.hm-continue-kind {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.hm-continue-title,
+.hm-demo-teams {
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hm-continue-meta,
+.hm-demo-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.hm-demo-top {
+  margin-top: 2px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.hm-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.hm-jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.hm-jump-link {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.hm-jump-link:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.04);
 }

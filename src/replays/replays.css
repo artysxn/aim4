@@ -1043,6 +1043,114 @@ button.rp-side-name:hover {
   width: 100%;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   cursor: pointer;
+  /* meta · match · facts · actions. The facts column is content-width so a
+     match with no tags reads exactly as it did before. */
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.rp-demo-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 260px;
+}
+
+.rp-demo-fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font: 600 11px var(--font-body);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.rp-demo-fact-name {
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rp-demo-fact-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The view count is a bare number; the tooltip says what it counts. */
+.rp-demo-fact.views {
+  font-variant-numeric: tabular-nums;
+}
+
+.rp-demo-fact.views::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+}
+
+/* Tag filter chips above the library list. */
+.rp-tag-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rp-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rp-tag-count {
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Uploads table: the tag field and the parse stamp. */
+.rp-mine-tag-input {
+  width: 100%;
+  min-width: 120px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.rp-mine-parser {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font: 500 10px var(--font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.rp-demo-tag {
+  padding: 2px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  font: 600 11px var(--font-body);
+  color: var(--text);
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 900px) {
+  .rp-demo-group > .rp-row.rp-demo-head {
+    grid-template-columns: 1fr auto;
+  }
+
+  .rp-demo-facts {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    max-width: none;
+  }
 }
 
 .rp-demo-group.open > .rp-row.rp-demo-head {
@@ -2594,6 +2702,34 @@ body.rv-open {
   text-align: right;
 }
 
+/* Copy a link to the exact tick (and camera) on screen. */
+.rv-share {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.rv-share svg {
+  fill: currentColor;
+}
+
+.rv-share:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.rv-share.copied {
+  color: #6fcf97;
+}
+
 /* ---- Analyzer mode ------------------------------------------------------ */
 
 .rv-analyzer {
@@ -3913,9 +4049,49 @@ body.rv-open {
   opacity: 0.55;
 }
 
+/* Accept / dismiss on a coach note. Only rendered inside a team review, which
+   is the only context where the mark means anything. */
+.rv-note-marks {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.rv-note-marks[hidden] {
+  display: none;
+}
+
+.rv-note-mark-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.rv-note-mark-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
 .rv-note-mark-btn.active {
   color: var(--text);
   background: rgba(255, 255, 255, 0.1);
+}
+
+.rv-note-mark-btn.ok.active {
+  color: #6fcf97;
+}
+
+.rv-note-mark-btn.x.active {
+  color: #eb5757;
 }
 
 .rv-note-item.mark-ok .rv-note-item-mark::after,
@@ -5296,9 +5472,10 @@ table.rp-mine-table tbody tr {
 }
 
 .tm-maps-head,
+/* name · W-L · RWR · PRW · pistols · the two side bars */
 .tm-map-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 2.6em 3.2em 3.2em;
+  grid-template-columns: minmax(0, 1fr) 2.6em 3.2em 3.2em 3.2em 8.5em;
   gap: 6px;
   align-items: center;
   font: 500 12px var(--font-body);
@@ -5316,8 +5493,70 @@ table.rp-mine-table tbody tr {
 .tm-maps-head span:not(:first-child),
 .tm-map-wl,
 .tm-map-rwr,
-.tm-map-prw {
+.tm-map-prw,
+.tm-map-pistol {
   text-align: right;
+}
+
+/* "By side" is a label over two bars, not a number, so it reads from the left. */
+.tm-maps-head span:last-child {
+  text-align: left;
+  padding-left: 6px;
+}
+
+.tm-map-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 6px;
+}
+
+.tm-map-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 4.2em;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Anchored at the halfway line: the question is which side of even, not how
+   big the number is. The line itself is the 50% mark. */
+.tm-map-bar-track {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.tm-map-bar-track::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -1px;
+  bottom: -1px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.tm-map-bar-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.tm-map-bar[data-side='T'] {
+  color: var(--rv-t, #d9a441);
+}
+
+.tm-map-bar[data-side='CT'] {
+  color: var(--rv-ct, #4e8fd9);
+}
+
+.tm-map-bar-label {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
 }
 
 .tm-maps-list {
@@ -7823,11 +8062,20 @@ table.rp-mine-table tbody tr {
   gap: 10px;
 }
 
+/* id, copy, fields, remove. The id is its own column because a throw is what a
+   stratbook note links to, so it has to be readable without opening anything. */
 .ua-throw {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto auto 1fr auto;
   gap: 8px;
   align-items: start;
+}
+
+.ua-throw-id {
+  padding-top: 5px;
+  color: var(--muted);
+  white-space: nowrap;
+  user-select: all;
 }
 
 .ua-throw-fields {
@@ -7917,6 +8165,22 @@ table.rp-mine-table tbody tr {
 
   .rv-stage > .rv-team-col:last-child {
     grid-area: 2 / 2;
+  }
+
+  /* Mobile coach with sidebars off: one full-bleed map cell; chrome overlays. */
+  .rv-timeline.rosters-hidden .rv-stage {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+    padding: 8px;
+  }
+
+  .rv-timeline.rosters-hidden .rv-map {
+    grid-area: 1 / 1 / -1 / -1;
+  }
+
+  .rv-timeline.rosters-hidden .rv-team-col {
+    display: none;
   }
 
   .rv-team-col {
@@ -8086,4 +8350,344 @@ table.rp-mine-table tbody tr {
   .rv-scoreboard-body {
     overflow-x: auto;
   }
+}
+
+/* ---- Player profile ------------------------------------------------------ */
+
+.pp-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 1100px;
+}
+
+.pp-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pp-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 28px;
+  letter-spacing: 0.02em;
+}
+
+.pp-team {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pp-headline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+}
+
+.pp-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.pp-stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-stat-label,
+.pp-cell-label,
+.pp-form-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.pp-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.pp-card {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #0c0c0c;
+}
+
+.pp-card-title {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.pp-form-body {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.pp-spark {
+  width: 260px;
+  height: 44px;
+  color: var(--rv-team1, #38a3e8);
+}
+
+.pp-form-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pp-form-value {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-delta.up,
+.pp-cell-value.up {
+  color: #6fcf97;
+}
+
+.pp-delta.down,
+.pp-cell-value.down {
+  color: #eb5757;
+}
+
+.pp-delta {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-sides {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pp-side {
+  display: grid;
+  grid-template-columns: 32px auto;
+  grid-template-areas:
+    'label rating'
+    'bar bar'
+    'meta meta';
+  gap: 4px 10px;
+  align-items: center;
+}
+
+.pp-side-label {
+  grid-area: label;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.pp-side[data-side='T'] .pp-side-label {
+  color: var(--rv-t, #d9a441);
+}
+
+.pp-side[data-side='CT'] .pp-side-label {
+  color: var(--rv-ct, #4e8fd9);
+}
+
+.pp-side-rating {
+  grid-area: rating;
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-bar {
+  grid-area: bar;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.pp-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: currentColor;
+}
+
+.pp-side[data-side='T'] .pp-bar > span {
+  background: var(--rv-t, #d9a441);
+}
+
+.pp-side[data-side='CT'] .pp-bar > span {
+  background: var(--rv-ct, #4e8fd9);
+}
+
+.pp-side-meta {
+  grid-area: meta;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 14px;
+}
+
+.pp-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pp-cell-value {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-table th {
+  padding: 6px 10px 8px;
+  text-align: right;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+}
+
+.pp-table th:first-child,
+.pp-table td:first-child {
+  text-align: left;
+}
+
+.pp-table td {
+  padding: 7px 10px;
+  text-align: right;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.pp-num-strong {
+  font-weight: 700;
+}
+
+.st-profile-link {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
+.st-profile-link a {
+  color: var(--rv-team1, #38a3e8);
+}
+
+/* ---- Autocoach: one player's breakdown ---------------------------------- */
+
+.tm-ac-focus {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tm-ac-trend {
+  font: 600 11px var(--font-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-ac-trend.good {
+  color: #6fcf97;
+}
+
+.tm-ac-trend.bad {
+  color: #eb5757;
+}
+
+.tm-ac-cats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tm-ac-cat {
+  display: grid;
+  grid-template-columns: 9.5em minmax(0, 1fr) 2em;
+  align-items: center;
+  gap: 8px;
+  font: 500 12px var(--font-body);
+}
+
+.tm-ac-cat-track {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.tm-ac-cat-track > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.tm-ac-cat-count {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.tm-ac-focus-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+}
+
+/* ---- Saved views strip --------------------------------------------------- */
+/* Shared by Charts, Pattern Finder and the Database, so it looks the same on
+   all three and nobody has to relearn it per page. */
+
+.sv-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.sv-pick {
+  min-width: 0;
+  flex: 1 1 8em;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.st-saved .sv-row {
+  flex-wrap: nowrap;
+}
+
+.st-saved .sv-pick {
+  max-width: 12em;
 }

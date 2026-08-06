@@ -52,6 +52,11 @@ export function openViewer({
   coachForceSide = 0,
   coachAutoEnable = false,
   coachReviewPlayerId = '',
+  /**
+   * A moment to open at: `{ tick, zoom, panX, panY }`, from a shared link.
+   * Timeline only — the Analyzer has no single playhead to point at.
+   */
+  startAt = null,
   onClose
 }) {
   const store = new TickStore();
@@ -89,6 +94,8 @@ export function openViewer({
 
   let current = null;
   let activeMode = null;
+  /** A shared moment is consumed once, on the first Timeline mount. */
+  let usedStartAt = false;
   /** One macro-viewer use per opened viewer, not one per mode toggle. */
   let spentMacro = false;
 
@@ -122,6 +129,9 @@ export function openViewer({
       coachForceSide,
       coachAutoEnable,
       coachReviewPlayerId,
+      // Only the first Timeline mount honours it; switching modes afterwards
+      // should keep where the user has scrubbed to, not jump back to the link.
+      startAt: next === 'timeline' && !usedStartAt ? (usedStartAt = true, startAt) : null,
       onRound: syncUrl
     });
     if (next === 'analyzer') syncUrl(null);

@@ -31,6 +31,7 @@ import {
 import { computeChart, correlationWords, filterWords } from './chartData.js';
 import { renderChart } from './chartRender.js';
 import { spinnerHtml, watchSlowLoad } from '../../lib/spinner.js';
+import { createSavedViews } from '../savedViews.js';
 import { renderUpgradeError } from '../../site/upgradeGate.js';
 
 /** Match radar viewer: wheel zoom + left/middle drag pan when zoomed in. */
@@ -110,6 +111,34 @@ export function createChartsPanel({ escapeHtml }) {
 
   const isScatter = () => state.type === 'scatter';
   const source = () => (isScatter() ? findSubject(state.subject).source : state.source);
+
+  // ---- saved views --------------------------------------------------------
+  //
+  // The whole builder state IS the spec, so save and load are a copy in each
+  // direction. Everything is plain data; nothing here holds a DOM reference.
+
+  const savedViews = createSavedViews({
+    page: 'charts',
+    escapeHtml,
+    read: () => JSON.parse(JSON.stringify(state)),
+    apply(spec) {
+      if (!spec || typeof spec !== 'object') return;
+      // Assigned key by key so a spec saved by an older build cannot delete
+      // fields this one needs.
+      for (const [key, value] of Object.entries(spec)) {
+        if (key in state) state[key] = value;
+      }
+      renderSide();
+      renderCanvas();
+      mountSavedViews();
+    }
+  });
+
+  /** renderSide() rewrites the sidebar, so the strip is re-attached after it. */
+  function mountSavedViews() {
+    const slot = el.querySelector('#ch-saved');
+    if (slot && !slot.contains(savedViews.el)) slot.replaceChildren(savedViews.el);
+  }
 
   // ---- small html helpers -------------------------------------------------
 
@@ -386,6 +415,7 @@ export function createChartsPanel({ escapeHtml }) {
     const stepOpts = (dim?.steps || []).map((s) => ({ key: String(s), label: `${s}${dim.unit || ''}` }));
 
     sideEl.innerHTML = `
+      <div class="ch-block ch-saved" id="ch-saved"></div>
       <div class="ch-block">
         <span class="ch-label">Chart</span>
         ${selectHtml(
@@ -986,6 +1016,10 @@ export function createChartsPanel({ escapeHtml }) {
       }
       renderSide();
       renderCanvas();
+      mountSavedViews();
+      void savedViews.refresh().then(mountSavedViews);
+      // A share link wins over whatever the builder was left on.
+      void savedViews.applyShareParam(scope.params || {});
     } catch (err) {
       cancelSlow();
       if (token !== loadToken) return;

@@ -322,6 +322,92 @@ export async function setDemoVisibility(user, id, visibility) {
   return record;
 }
 
+/** Longest a single tag may be, and how many a demo may carry. */
+export const MAX_TAG_LENGTH = 24;
+export const MAX_TAGS = 12;
+
+/**
+ * Normalize a tag list: trimmed, deduped case-insensitively, capped.
+ *
+ * Tags are whatever the uploader wants them to be (scrim, faceit, an opponent
+ * name), so there is no vocabulary to validate against. What is enforced is
+ * shape: no empties, no duplicates that differ only in case, no essays.
+ */
+export function normalizeTags(raw) {
+  const out = [];
+  const seen = new Set();
+  for (const t of Array.isArray(raw) ? raw : []) {
+    const tag = String(t || '').replace(/\s+/g, ' ').trim().slice(0, MAX_TAG_LENGTH);
+    if (!tag) continue;
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(tag);
+    if (out.length >= MAX_TAGS) break;
+  }
+  return out;
+}
+
+/** Replace a demo's tag list. */
+export async function setDemoTags(user, id, tags) {
+  const demoId = sanitizeId(id);
+  const record = await readRecord(user, demoId);
+  if (!record) return null;
+  record.tags = normalizeTags(tags);
+  await writeRecord(user, record);
+  return record;
+}
+
+/**
+ * Count one round view against a demo.
+ *
+ * Counts round opens, not demo opens: watching six rounds of a match is six.
+ * That is the question the number answers ("how much has this been looked at"),
+ * and it is the only one the viewer can report without tracking sessions.
+ */
+export async function bumpDemoViews(user, id) {
+  const demoId = sanitizeId(id);
+  const record = await readRecord(user, demoId);
+  if (!record) return null;
+  record.views = (Number(record.views) || 0) + 1;
+  await writeRecord(user, record);
+  return record;
+}
+
+/**
+ * Stamp the match's best-rated player onto the record.
+ *
+ * The library listing has no stats index in hand and cannot afford to open one
+ * per demo, so the answer is written here when the index is built and read for
+ * free afterwards. A no-op when nothing changed, because every write clears the
+ * listing cache.
+ */
+export async function setDemoTopPlayer(user, id, top) {
+  const demoId = sanitizeId(id);
+  const record = await readRecord(user, demoId);
+  if (!record) return null;
+  const next = top
+    ? {
+        id: String(top.id || ''),
+        name: String(top.name || ''),
+        rating: Math.round((Number(top.rating) || 0) * 100) / 100
+      }
+    : null;
+  const held = record.topPlayer || null;
+  const same =
+    (!next && !held) ||
+    (next &&
+      held &&
+      held.id === next.id &&
+      held.name === next.name &&
+      held.rating === next.rating);
+  if (same) return record;
+  if (next) record.topPlayer = next;
+  else delete record.topPlayer;
+  await writeRecord(user, record);
+  return record;
+}
+
 /**
  * Persist a fully materialized demo (manifest + round files) without
  * re-deriving round ids. Used by server ingest and by import of local packages.
@@ -1086,6 +1172,131 @@ export async function removePlaylist(user, id, actor = null) {
   const next = list.filter((p) => p.id !== key);
   if (next.length === list.length) return null;
   return savePlaylists(user, next);
+}
+
+// ---- Saved views ------------------------------------------------------------
+//
+// A chart spec, a Pattern Finder query and a Database filter are all the same
+// thing on disk: a small JSON object plus the page it belongs to. Saving one
+// turns a finding into something that survives the session, and the share id
+// makes it something you can send.
+//
+// The spec is stored opaquely. The server has no opinion about what a chart
+// looks like, only about how big it is and who may see it.
+
+export const MAX_SAVED_VIEWS = 200;
+/** A spec bigger than this is not a view, it is a payload. */
+const MAX_VIEW_SPEC_BYTES = 16 * 1024;
+export const VIEW_PAGES = ['charts', 'patterns', 'database'];
+
+const viewsPath = (user) => path.join(userDir(user), 'views.json');
+
+export async function readSavedViews(user) {
+  try {
+    const raw = JSON.parse(await fsp.readFile(viewsPath(user), 'utf8'));
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveViews(user, list) {
+  await fsp.mkdir(userDir(user), { recursive: true });
+  await fsp.writeFile(viewsPath(user), JSON.stringify(list, null, 2));
+  return list;
+}
+
+function cleanViewSpec(spec) {
+  if (!spec || typeof spec !== 'object') return null;
+  const text = JSON.stringify(spec);
+  if (text.length > MAX_VIEW_SPEC_BYTES) {
+    const err = new Error('That view is too large to save.');
+    err.status = 400;
+    throw err;
+  }
+  return JSON.parse(text);
+}
+
+/**
+ * Create or update one saved view. Returns the whole list.
+ *
+ * Same ownership rules as playlists: private to its owner, or shared with the
+ * team it was made for. The share id is separate from the record id so a link
+ * stays valid across renames and cannot be guessed from a list position.
+ */
+export async function upsertSavedView(user, patch = {}, actor = null) {
+  const list = await readSavedViews(user);
+  const id = String(patch.id || '').replace(/[^A-Za-z0-9_-]/g, '');
+  const existing = id ? list.find((v) => v.id === id) : null;
+
+  if (existing && actor && !actor.admin && existing.ownerId && existing.ownerId !== actor.id) {
+    const err = new Error('That view belongs to someone else.');
+    err.status = 403;
+    throw err;
+  }
+  if (!existing && list.length >= MAX_SAVED_VIEWS) {
+    const err = new Error(`You can keep ${MAX_SAVED_VIEWS} saved views. Delete one first.`);
+    err.status = 409;
+    throw err;
+  }
+
+  const page = VIEW_PAGES.includes(patch.page) ? patch.page : existing?.page;
+  if (!page) {
+    const err = new Error('A saved view needs a page.');
+    err.status = 400;
+    throw err;
+  }
+  const name = cleanPlaylistName(patch.name) || existing?.name || 'Untitled view';
+  const spec = patch.spec === undefined ? existing?.spec || {} : cleanViewSpec(patch.spec) || {};
+  const scope = patch.scope === 'team' ? 'team' : patch.scope === 'private' ? 'private' : null;
+
+  if (existing) {
+    existing.name = name;
+    existing.page = page;
+    existing.spec = spec;
+    existing.updatedAt = Date.now();
+    if (scope) existing.scope = scope;
+    if (scope === 'team' && actor?.teamId) existing.teamId = actor.teamId;
+    if (scope === 'private') existing.teamId = '';
+  } else {
+    list.push({
+      id: crypto.randomBytes(6).toString('hex'),
+      shareId: crypto.randomBytes(8).toString('base64url'),
+      name,
+      page,
+      spec,
+      ownerId: actor?.id || '',
+      ownerName: actor?.username || '',
+      scope: scope || 'private',
+      teamId: scope === 'team' ? actor?.teamId || '' : '',
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+  }
+  list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return saveViews(user, list);
+}
+
+export async function removeSavedView(user, id, actor = null) {
+  const key = String(id || '').replace(/[^A-Za-z0-9_-]/g, '');
+  const list = await readSavedViews(user);
+  const target = list.find((v) => v.id === key);
+  if (target && actor && !actor.admin && target.ownerId && target.ownerId !== actor.id) {
+    const err = new Error('That view belongs to someone else.');
+    err.status = 403;
+    throw err;
+  }
+  const next = list.filter((v) => v.id !== key);
+  if (next.length === list.length) return null;
+  return saveViews(user, next);
+}
+
+/** Resolve a share id. The id is the authorisation, same as an export token. */
+export async function savedViewByShareId(user, shareId) {
+  const key = String(shareId || '').replace(/[^A-Za-z0-9_-]/g, '');
+  if (!key) return null;
+  const list = await readSavedViews(user);
+  return list.find((v) => v.shareId === key) || null;
 }
 
 /** Remove a demo and every round parsed from it. Always cleans up on disk. */

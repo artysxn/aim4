@@ -24,6 +24,7 @@ import {
 } from './shapeFilters.js';
 import { spinnerHtml, watchSlowLoad } from '../../lib/spinner.js';
 import { renderUpgradeError } from '../../site/upgradeGate.js';
+import { createSavedViews } from '../savedViews.js';
 
 const PHASE_OPTS = [
   { key: 'early', label: 'Early' },
@@ -112,6 +113,56 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   function persistShapes() {
     if (!state.map) return;
     saveShapes(state.map, state.shapes);
+  }
+
+  // ---- saved views --------------------------------------------------------
+  //
+  // A pattern query is a finding waiting to be written down. Saving it keeps
+  // the map, the subjects, the filters and the drawn shapes together, which is
+  // the only form in which any of them mean anything.
+  //
+  // `phases` is a Set, so it crosses JSON as an array and comes back as a Set.
+
+  const savedViews = createSavedViews({
+    page: 'patterns',
+    escapeHtml,
+    read: () => ({
+      playerIds: [...state.playerIds],
+      map: state.map,
+      side: state.side,
+      econ: state.econ,
+      oppEcon: state.oppEcon,
+      hasAwp: state.hasAwp,
+      oppHasAwp: state.oppHasAwp,
+      result: state.result,
+      opening: state.opening,
+      phases: [...state.phases],
+      shapes: JSON.parse(JSON.stringify(state.shapes || [])),
+      shapeMatch: state.shapeMatch
+    }),
+    apply(spec) {
+      if (!spec || typeof spec !== 'object') return;
+      state.playerIds = Array.isArray(spec.playerIds) ? [...spec.playerIds] : [];
+      state.map = String(spec.map || '');
+      state.side = spec.side === 'T' || spec.side === 'CT' ? spec.side : '';
+      state.econ = typeof spec.econ === 'number' ? spec.econ : null;
+      state.oppEcon = typeof spec.oppEcon === 'number' ? spec.oppEcon : null;
+      state.hasAwp = Boolean(spec.hasAwp);
+      state.oppHasAwp = Boolean(spec.oppHasAwp);
+      state.result = spec.result === 'won' || spec.result === 'lost' ? spec.result : '';
+      state.opening = spec.opening === 'won' || spec.opening === 'lost' ? spec.opening : '';
+      state.phases = new Set(Array.isArray(spec.phases) ? spec.phases : []);
+      state.shapes = Array.isArray(spec.shapes) ? spec.shapes : [];
+      state.shapeMatch = spec.shapeMatch === 'any' ? 'any' : 'all';
+      render();
+      mountSavedViews();
+    }
+  });
+
+  /** renderSidebar() rewrites the aside, so the strip is re-attached after it. */
+  function mountSavedViews() {
+    const slot = el.querySelector('#an-saved');
+    if (slot && !slot.contains(savedViews.el)) slot.replaceChildren(savedViews.el);
   }
 
   function filterObj() {
@@ -314,6 +365,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
     sidebarEl.classList.toggle('an-sidebar--pick', !state.map);
     sidebarEl.innerHTML = `
+      <div class="an-field an-saved" id="an-saved"></div>
       <div class="an-field">
         <select class="site-select an-select" id="an-map" aria-label="Map">
           <option value="">Map</option>
@@ -735,6 +787,11 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       loadShapesForMap();
       if (token !== loadToken) return;
       render();
+      mountSavedViews();
+      void savedViews.refresh().then(mountSavedViews);
+      void savedViews.applyShareParam(
+        Object.fromEntries(new URLSearchParams(window.location.search))
+      );
     } catch (err) {
       cancelSlow();
       if (token !== loadToken) return;

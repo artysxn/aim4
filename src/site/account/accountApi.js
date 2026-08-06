@@ -32,6 +32,15 @@ async function asJson(res) {
 export const accountApi = {
   me: async () => asJson(await fetch(`${API_BASE}/api/me`, { headers: await headers() })),
 
+  setUsername: async (username) =>
+    asJson(
+      await fetch(`${API_BASE}/api/account/username`, {
+        method: 'POST',
+        headers: await headers(),
+        body: JSON.stringify({ username })
+      })
+    ),
+
   retention: async () =>
     asJson(await fetch(`${API_BASE}/api/account/retention`, { headers: await headers() })),
 

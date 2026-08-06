@@ -32,7 +32,7 @@ import {
   FLAG_AIRBORNE,
   FLAG_HAS_HELMET
 } from '../../../src/replays/shared/tickFormat.js';
-import { SCHEMA_VERSION } from '../schema.js';
+import { PARSER_REVISION, SCHEMA_VERSION } from '../schema.js';
 import { classifyEconomy, isPistolRoundNumber } from '../economy.js';
 import { bareWeapon } from '../../../src/replays/viewer/equipmentIcons.js';
 
@@ -1448,7 +1448,7 @@ export async function parseDemo(file, opts = {}) {
 
   return {
     schemaVersion: SCHEMA_VERSION,
-    parser: { name, version: version() },
+    parser: { name, version: version(), revision: PARSER_REVISION },
     map,
     mapRaw,
     tickRate,

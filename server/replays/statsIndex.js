@@ -15,7 +15,12 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { P, PLAYER_SLOTS } from '../../src/replays/shared/statsMath.js';
+import {
+  P,
+  PLAYER_SLOTS,
+  aggregatePlayers
+} from '../../src/replays/shared/statsMath.js';
+import { setDemoTopPlayer } from './demoStore.js';
 import { awpAccuracyFromTicks } from '../../src/replays/shared/awpAccuracy.js';
 import { aimFromRound } from '../../src/replays/shared/aimMetrics.js';
 import { utilityFromRound } from '../../src/replays/shared/utilityMetrics.js';
@@ -774,6 +779,28 @@ async function buildIndex(io, user, record) {
   };
 }
 
+/**
+ * The best-rated player in one match, by the same rating the Database shows.
+ *
+ * `aggregatePlayers` sorts by A4 rating (falling back to rating), so the answer
+ * is the head of that list. Runs over one demo's own rows, so it is a match
+ * rating and not a career one.
+ *
+ * @returns {{ id: string, name: string, rating: number }|null}
+ */
+export function topPlayerOf(entry) {
+  if (!entry?.rounds?.length) return null;
+  let list;
+  try {
+    list = aggregatePlayers(entry.rounds, entry.players || []);
+  } catch {
+    return null;
+  }
+  const best = (list || []).find((p) => Number.isFinite(p?.rating));
+  if (!best) return null;
+  return { id: String(best.id || ''), name: String(best.name || ''), rating: best.rating };
+}
+
 async function loadStoredEntry(io, user, demoId) {
   const cached = memory.get(demoId);
   if (cached?.entry) return cached.entry;
@@ -795,6 +822,15 @@ async function loadStoredEntry(io, user, demoId) {
  * @param {object} io  { userDir, readRoundMeta, readRoundTicks? }
  * @param {{ roles?: boolean }} [opts]
  */
+/** Best-effort: a failed stamp must never cost the caller its index. */
+async function stampTopPlayer(user, record, entry) {
+  try {
+    await setDemoTopPlayer(user, record.id, topPlayerOf(entry));
+  } catch {
+    /* the card loses one number; the stats themselves are unaffected */
+  }
+}
+
 export async function demoIndex(io, user, record, opts = {}) {
   if (!record || record.status !== 'ready') return null;
 
@@ -805,8 +841,12 @@ export async function demoIndex(io, user, record, opts = {}) {
   if (!entry || !keyOk) {
     entry = await buildIndex(io, user, record);
     await persistEntry(io, user, key, entry);
+    await stampTopPlayer(user, record, entry);
     return entry;
   }
+  // Backfill for demos indexed before the card carried a rating. Writes only
+  // when the answer actually changes, so the listing cache is left alone.
+  if (!record.topPlayer) await stampTopPlayer(user, record, entry);
 
   if (entry.key !== key) entry.key = key;
 

@@ -21,6 +21,7 @@ import {
   renameDemoTeams,
   reparseDemo,
   savePlaylist,
+  setDemoTags,
   setDemoVisibility,
   uploadDemo,
   uploadImport
@@ -123,6 +124,16 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   let statsPanel = null;
   /** @type {{demos?: string[], files?: string[], title?: string}} */
   let statsScope = {};
+  /**
+   * The library scope statsPanel currently holds, as a comparable key.
+   *
+   * Kept separately from statsScope because statsScope is written by callers
+   * before navigation and rewritten again on arrival, so it never describes
+   * what the panel actually has. This does.
+   */
+  let loadedStatsKey = '';
+  const libraryKeyOf = (s) =>
+    JSON.stringify([s?.demos || null, s?.files || null, String(s?.teamName || '')]);
   /** From /status: who the backend thinks is calling, and what they may do. */
   let account = {
     signedIn: false,
@@ -181,7 +192,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     decidedPhases: new Set(),
     /** Library visibility scope: public catalog vs own + team-unlisted. */
     /** @type {'public'|'mine'} */
-    libraryScope: 'public'
+    libraryScope: 'public',
+    /** Demo tags, lowercased. A demo must carry every one that is picked. */
+    /** @type {Set<string>} */
+    tags: new Set()
   };
   /** @type {Map<string, object|null>} */
   const roundMetaCache = new Map();
@@ -470,6 +484,38 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       </div>`;
   }
 
+  /**
+   * The two facts that ride on a demo row: who played best, and how much this
+   * match has been looked at.
+   *
+   * Deliberately short. A card is for picking a match out of a list, and every
+   * extra number on it makes that harder rather than easier.
+   */
+  function demoFactsHtml(d) {
+    const parts = [];
+    const top = d?.topPlayer;
+    if (top?.name && Number.isFinite(top.rating)) {
+      parts.push(
+        `<span class="rp-demo-fact top" title="Best rating in this match">
+          <span class="rp-demo-fact-name">${escapeHtml(top.name)}</span>
+          <span class="rp-demo-fact-value">${top.rating.toFixed(2)}</span>
+        </span>`
+      );
+    }
+    const views = Number(d?.views) || 0;
+    if (views > 0) {
+      parts.push(
+        `<span class="rp-demo-fact views" title="Rounds opened from this match">${views}</span>`
+      );
+    }
+    const tags = Array.isArray(d?.tags) ? d.tags : [];
+    for (const t of tags) {
+      parts.push(`<span class="rp-demo-tag">${escapeHtml(t)}</span>`);
+    }
+    if (!parts.length) return '<div class="rp-demo-facts"></div>';
+    return `<div class="rp-demo-facts">${parts.join('')}</div>`;
+  }
+
   const VISIBILITY_OPTIONS = [
     { key: 'public', label: 'Public', note: 'Anyone on the site can watch it.' },
     { key: 'unlisted', label: 'Unlisted', note: 'Your team, and anyone with the link.' },
@@ -521,6 +567,27 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     return mineInFlight;
   }
 
+  /**
+   * The parse's version, as plain numbers: our adapter revision, then the
+   * parser package it ran on.
+   *
+   * Round files are only as current as the parse that produced them. When the
+   * adapter is fixed, everything already on disk keeps the old answer until it
+   * is parsed again, and without this stamp there is nothing on the page that
+   * says so.
+   */
+  function parserStampHtml(d) {
+    const rev = Number(d?.parser?.revision);
+    const ver = String(d?.parser?.version || '').trim();
+    const parts = [];
+    if (Number.isFinite(rev) && rev > 0) parts.push(String(rev));
+    if (ver && ver !== 'unknown') parts.push(ver);
+    if (!parts.length) return '';
+    return `<span class="rp-mine-parser" title="Adapter revision and parser version">${escapeHtml(
+      parts.join(' · ')
+    )}</span>`;
+  }
+
   function renderMine() {
     if (!mineEl) return;
     if (!account.signedIn) {
@@ -568,11 +635,19 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           <td class="rp-mine-check">
             <input type="checkbox" data-mine-check="${id}" ${checked ? 'checked' : ''} aria-label="Select demo" />
           </td>
-          <td class="rp-mine-when">${escapeHtml(formatWhen(d.uploadedAt || d.parsedAt))}</td>
+          <td class="rp-mine-when">
+            ${escapeHtml(formatWhen(d.uploadedAt || d.parsedAt))}
+            ${parserStampHtml(d)}
+          </td>
           <td class="rp-mine-match">${escapeHtml(d.team1?.name || 'Team 1')} vs ${escapeHtml(
             d.team2?.name || 'Team 2'
           )}</td>
           <td class="rp-mine-map">${escapeHtml(mapName)}</td>
+          <td class="rp-mine-tags">
+            <input class="site-input rp-mine-tag-input" data-set-tags="${id}"
+              value="${escapeHtml((d.tags || []).join(', '))}"
+              placeholder="Tags" title="Comma separated. Your own labels." />
+          </td>
           <td class="rp-mine-vis">
             <select class="site-select rp-mine-vis-select" data-set-visibility="${id}" title="Who can see this demo">
               ${VISIBILITY_OPTIONS.map(
@@ -645,7 +720,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
                     allSelected ? 'Deselect page' : 'Select page'
                   }" aria-label="${allSelected ? 'Deselect page' : 'Select page'}" />
                 </th>
-                <th>Uploaded</th><th>Match</th><th>Map</th><th>Visibility</th><th></th>
+                <th>Uploaded</th><th>Match</th><th>Map</th><th>Tags</th><th>Visibility</th><th></th>
               </tr></thead>
               <tbody>${rows}</tbody>
             </table>${pager}`
@@ -1270,9 +1345,42 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   mineEl?.addEventListener('change', (e) => {
     const sel = e.target.closest('[data-set-visibility]');
-    if (!sel) return;
-    applyMineVisibility([sel.dataset.setVisibility], sel.value);
+    if (sel) {
+      applyMineVisibility([sel.dataset.setVisibility], sel.value);
+      return;
+    }
+    // Tags commit on blur / Enter, which is what `change` is on a text input.
+    const tagInput = e.target.closest('[data-set-tags]');
+    if (tagInput) void applyDemoTags(tagInput.dataset.setTags, tagInput.value);
   });
+
+  /**
+   * Save one demo's tags from the comma-separated field.
+   *
+   * The server normalizes (trim, dedupe, cap), so what comes back is what is
+   * stored and the field is repainted from it rather than from what was typed.
+   */
+  async function applyDemoTags(id, raw) {
+    const tags = String(raw || '')
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    try {
+      const res = await setDemoTags(id, tags);
+      const next = res?.demo;
+      if (!next) return;
+      const apply = (list) => {
+        const at = (list || []).findIndex((d) => d.id === id);
+        if (at >= 0) list[at] = { ...list[at], tags: next.tags || [] };
+      };
+      apply(demos);
+      apply(mineDemos);
+      renderMine();
+      renderResults();
+    } catch (err) {
+      setStatus(err?.message || 'Could not save tags.', true);
+    }
+  }
 
   async function startUpload(fileList) {
     if (!account.signedIn) {
@@ -1528,10 +1636,54 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
    */
   function demoMatchesScope(d) {
     if (!d) return false;
+    if (!demoMatchesTags(d)) return false;
     const mine = isOwnDemo(d);
     const vis = demoVisibility(d);
     if (filters.libraryScope === 'mine') return mine || vis === 'unlisted';
     return vis === 'public' || vis === 'unlisted' || mine;
+  }
+
+  /** Picked tags are ANDed: narrowing is the only thing a tag filter is for. */
+  function demoMatchesTags(d) {
+    if (!filters.tags.size) return true;
+    const held = new Set((d?.tags || []).map((t) => String(t).toLowerCase()));
+    for (const want of filters.tags) if (!held.has(want)) return false;
+    return true;
+  }
+
+  /** Every tag in the library, with how many demos carry it. */
+  function tagCounts() {
+    const out = new Map();
+    for (const d of demos) {
+      for (const raw of d?.tags || []) {
+        const key = String(raw).toLowerCase();
+        const held = out.get(key);
+        if (held) held.count += 1;
+        else out.set(key, { key, label: String(raw), count: 1 });
+      }
+    }
+    return [...out.values()].sort(
+      (a, b) => b.count - a.count || a.label.localeCompare(b.label)
+    );
+  }
+
+  function tagFilterHtml() {
+    const all = tagCounts();
+    if (!all.length) return '';
+    return `<div class="rp-filter-group">
+      <div class="rp-tag-filter">
+        ${all
+          .map(
+            (t) =>
+              `<button type="button" class="rp-chip rp-tag-chip${
+                filters.tags.has(t.key) ? ' active' : ''
+              }" data-tag-filter="${escapeHtml(t.key)}">${escapeHtml(t.label)}<span class="rp-tag-count">${
+                t.count
+              }</span></button>`
+          )
+          .join('')}
+      </div>
+    </div>`;
   }
 
   function scopedDemos(list = demos) {
@@ -1677,6 +1829,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
     filtersEl.innerHTML = `
       ${libraryScopeHtml()}
+      ${tagFilterHtml()}
       <div class="rp-filter-group${mapMenuOpen ? ' menu-open' : ''}">
         ${mapMenuHtml()}
       </div>
@@ -1787,6 +1940,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       filters.afterplant = false;
       filters.decidedPhases.clear();
       filters.libraryScope = 'public';
+      filters.tags.clear();
       // Early is not a valid decided filter anymore.
       teamSearch = '';
       playerSearch = '';
@@ -1830,6 +1984,15 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   });
 
   filtersEl?.addEventListener('click', (e) => {
+    const tagBtn = e.target.closest('[data-tag-filter]');
+    if (tagBtn) {
+      const key = tagBtn.dataset.tagFilter;
+      if (filters.tags.has(key)) filters.tags.delete(key);
+      else filters.tags.add(key);
+      renderFilters();
+      runQuery();
+      return;
+    }
     const scopeBtn = e.target.closest('[data-library-scope]');
     if (scopeBtn) {
       const next = scopeBtn.dataset.libraryScope === 'mine' ? 'mine' : 'public';
@@ -1953,6 +2116,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   function hasActiveFilters() {
     return Boolean(
       filters.libraryScope !== 'public' ||
+        filters.tags.size ||
         filters.maps.size ||
         filters.teams.size ||
         filters.players.size ||
@@ -2282,6 +2446,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           id1: d?.team1?.id || sample?.team1,
           id2: d?.team2?.id || sample?.team2
         })}
+        ${demoFactsHtml(d)}
         <div class="rp-row-actions">
           <button type="button" class="rp-btn-icon" data-demo-stats="${id}" title="Database for this match">${statsIconHtml()}</button>
           ${
@@ -2715,7 +2880,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       focusTeamIds: focus.focusTeamIds || [],
       focusName: focus.focusName || '',
       teamOptions: focus.teamOptions || [],
-      statsDemoId: focus.statsDemoId || ''
+      statsDemoId: focus.statsDemoId || '',
+      startAt: focus.startAt || null
     });
   }
 
@@ -3066,7 +3232,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       delete merged.minRounds;
       lastStatsDetailKey = '';
     }
-    const prevScope = statsScope;
     statsScope = merged;
 
     let created = false;
@@ -3091,18 +3256,27 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
     // Same library scope + only the view (detail/filters) changed: apply without
     // refetching. Needed so Back (history.back) is instant and reliable.
-    const sameLibrary =
-      !created &&
-      !scope.__fresh &&
-      JSON.stringify(prevScope?.demos || null) === JSON.stringify(merged.demos || null) &&
-      JSON.stringify(prevScope?.files || null) === JSON.stringify(merged.files || null) &&
-      String(prevScope?.teamName || '') === String(merged.teamName || '');
+    //
+    // Compared against what the panel actually holds, NOT against the previous
+    // `statsScope`. Every caller that opens a scoped Database assigns statsScope
+    // before navigating, and onShow assigns it again, so by the time this runs
+    // `prevScope` is already the incoming scope and this test was comparing the
+    // new scope with itself. It answered "same library" for every match, the
+    // load was skipped, and the Database went on showing whichever match the
+    // session had cached first.
+    const sameLibrary = !created && !scope.__fresh && loadedStatsKey === libraryKeyOf(merged);
     if (sameLibrary) {
       statsPanel.applyViewState(merged);
       syncStatsUrl(statsPanel.viewState());
       return;
     }
-    void statsPanel.load(merged);
+    const key = libraryKeyOf(merged);
+    loadedStatsKey = key;
+    void Promise.resolve(statsPanel.load(merged)).catch(() => {
+      // A failed load holds nothing, so the next visit must fetch again rather
+      // than trust this key.
+      if (loadedStatsKey === key) loadedStatsKey = '';
+    });
   }
 
   /**
@@ -3152,19 +3326,41 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       chartsPanel = createChartsPanel({ escapeHtml });
       chartsBodyEl.appendChild(chartsPanel.el);
     }
-    chartsPanel.load(statsScope);
+    // `params` carries ?view=<shareId> through to the saved-views strip.
+    chartsPanel.load({
+      ...statsScope,
+      params: Object.fromEntries(new URLSearchParams(window.location.search))
+    });
   }
 
   // ---- deep links ---------------------------------------------------------
 
+  /**
+   * A moment out of the URL: `tick` plus an optional camera.
+   *
+   * Only meaningful alongside `round`, which is why it is read here rather than
+   * folded into the general param handling.
+   */
+  function momentFromParams(params) {
+    const tick = Number(params?.tick);
+    if (!Number.isFinite(tick)) return null;
+    const zoom = Number(params?.zoom);
+    return {
+      tick,
+      zoom: Number.isFinite(zoom) ? zoom : 0,
+      panX: Number(params?.px) || 0,
+      panY: Number(params?.py) || 0
+    };
+  }
+
   /** /demos?round=<name> opens straight into that round. */
-  async function openSharedRound(file) {
+  async function openSharedRound(file, startAt = null) {
     if (!file) return;
-    return openSharedRounds([file]);
+    return openSharedRounds([file], startAt);
   }
 
   /** /demos?rounds=a,b,c opens those rounds in Timeline. */
-  async function openSharedRounds(files) {
+  async function openSharedRounds(files, startAt = null) {
     const list = [...new Set((files || []).map((f) => String(f || '').trim()).filter(Boolean))];
     if (!list.length) return;
     try {
@@ -3179,7 +3375,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         rounds.length === 1
           ? `${rounds[0].team1?.name || 'Team 1'} vs ${rounds[0].team2?.name || 'Team 2'}`
           : `${rounds.length} rounds`;
-      launchViewer(rounds, 'timeline', title);
+      // A moment names one round, so it only rides along on a single-round open.
+      launchViewer(rounds, 'timeline', title, {
+        startAt: rounds.length === 1 ? startAt : null
+      });
     } catch (err) {
       setStatus(`Could not open that round. ${err.message}`, true);
     }
@@ -3427,7 +3626,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           }
         } else if (params.round && params.round !== openedRound) {
           openedRound = params.round;
-          openSharedRound(params.round);
+          openSharedRound(params.round, momentFromParams(params));
         }
       }
     },

@@ -39,6 +39,7 @@ import {
   MAX_BYTES,
   MAX_UPLOAD_BYTES,
   NOTE_MAX,
+  bumpDemoViews,
   checkQuota,
   deleteDemo,
   findRounds,
@@ -46,12 +47,17 @@ import {
   listNotedRounds,
   readPlaylists,
   readRecord,
+  readSavedViews,
+  removeSavedView,
+  savedViewByShareId,
+  upsertSavedView,
   readRoundMeta,
   readRoundTicks,
   readRoundTicksPacked,
   removePlaylist,
   renameDemoTeams,
   saveTempUpload,
+  setDemoTags,
   setDemoVisibility,
   upsertPlaylist,
   usage,
@@ -868,6 +874,57 @@ export async function handleReplayRequest(req, res, url) {
     return true;
   }
 
+  // Tags are the uploader's own labels (scrim, faceit, an opponent name), so
+  // the only thing enforced is shape; setDemoTags does that.
+  const tagsMatch = p.match(/^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/tags$/);
+  if (req.method === 'POST' && tagsMatch) {
+    const id = tagsMatch[1];
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    let body = {};
+    try {
+      body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+    } catch {
+      json(res, 400, { error: 'Invalid JSON body.' });
+      return true;
+    }
+    const existing = await readRecord(user, id);
+    if (!existing) {
+      json(res, 404, { error: 'Replay not found.' });
+      return true;
+    }
+    if (!canManage(existing, me)) {
+      json(res, 403, { error: 'Only the uploader can tag that demo.' });
+      return true;
+    }
+    const record = await setDemoTags(user, id, body.tags);
+    if (!record) {
+      json(res, 404, { error: 'Replay not found.' });
+      return true;
+    }
+    json(res, 200, { demo: { ...withJob(user, record), owner: ownerOf(record) } });
+    return true;
+  }
+
+  // One round opened in the viewer. Gated on the same read permission as the
+  // rounds themselves, so a demo nobody may open cannot have its count moved.
+  const viewMatch = p.match(/^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/view$/);
+  if (req.method === 'POST' && viewMatch) {
+    const id = viewMatch[1];
+    const record = await readRecord(user, id);
+    if (!record) {
+      json(res, 404, { error: 'Replay not found.' });
+      return true;
+    }
+    if (!canSee(record, access, { viaLink: true })) {
+      json(res, 404, { error: 'Replay not found.' });
+      return true;
+    }
+    const next = await bumpDemoViews(user, id);
+    json(res, 200, { views: Number(next?.views) || 0 });
+    return true;
+  }
+
   const parseMatch = p.match(/^\/api\/replays\/demos\/([A-Za-z0-9_-]+)\/parse$/);
   if (req.method === 'POST' && parseMatch) {
     const id = parseMatch[1];
@@ -952,6 +1009,86 @@ export async function handleReplayRequest(req, res, url) {
     } catch (err) {
       json(res, 500, { error: err?.message || 'Stats refresh failed.' });
     }
+    return true;
+  }
+
+  // ---- saved views --------------------------------------------------------
+  //
+  // Visibility mirrors playlists: yours, plus the team views of any team you
+  // are on. A share id resolves without either, which is the point of it.
+  const viewsFor = async () => {
+    const list = await readSavedViews(user);
+    if (me.admin) return list;
+    const myTeams = me.signedIn ? await teamsOf(me.id) : [];
+    const teamIds = new Set(myTeams.map((t) => t.id));
+    return list.filter(
+      (v) =>
+        (v.ownerId && v.ownerId === me.id) ||
+        (v.scope === 'team' && v.teamId && teamIds.has(v.teamId))
+    );
+  };
+
+  if (p === '/api/replays/views') {
+    if (req.method === 'GET') {
+      json(res, 200, { views: await viewsFor() });
+      return true;
+    }
+    if (req.method === 'POST') {
+      let body;
+      try {
+        body = await readJson(req);
+      } catch (err) {
+        json(res, 400, { error: err.message });
+        return true;
+      }
+      if (!requireUser()) return true;
+      try {
+        await upsertSavedView(user, body, {
+          id: me.id,
+          username: me.username,
+          admin: me.admin,
+          teamId: await playlistTeamId()
+        });
+        json(res, 200, { views: await viewsFor() });
+      } catch (err) {
+        json(res, err.status || 400, { error: err.message || 'Could not save that view.' });
+      }
+      return true;
+    }
+  }
+
+  const viewShareMatch = p.match(/^\/api\/replays\/views\/share\/([A-Za-z0-9_-]{8,32})$/);
+  if (req.method === 'GET' && viewShareMatch) {
+    const view = await savedViewByShareId(user, viewShareMatch[1]);
+    if (!view) {
+      json(res, 404, { error: 'That view no longer exists.' });
+      return true;
+    }
+    // The share link carries the spec only. Who made it and which team it
+    // belongs to are not the link holder's business.
+    json(res, 200, { view: { name: view.name, page: view.page, spec: view.spec } });
+    return true;
+  }
+
+  const savedViewMatch = p.match(/^\/api\/replays\/views\/([A-Za-z0-9_-]+)$/);
+  if (req.method === 'DELETE' && savedViewMatch) {
+    if (!requireUser()) return true;
+    let list;
+    try {
+      list = await removeSavedView(user, savedViewMatch[1], {
+        id: me.id,
+        username: me.username,
+        admin: me.admin
+      });
+    } catch (err) {
+      json(res, err.status || 400, { error: err.message || 'Could not delete that view.' });
+      return true;
+    }
+    if (!list) {
+      json(res, 404, { error: 'View not found.' });
+      return true;
+    }
+    json(res, 200, { views: await viewsFor() });
     return true;
   }
 
