@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
-import { factPasses, mergeFilters } from './chartFacts.js';
+import { emptyFilter, factPasses, mergeFilters } from './chartFacts.js';
 import {
   aggregateMetric,
   findDimension,
@@ -20,6 +20,60 @@ function factsForSource(facts, source) {
   if (source === 'player') return facts.playerFacts;
   if (source === 'kill') return facts.killFacts;
   return facts.roundFacts;
+}
+
+/**
+ * Active compare slots (A/B). Same player is allowed when maps or games differ.
+ * @returns {null | Array<{ key: string, label: string, playerId: string, maps: string[], matches: string[] }>}
+ */
+export function compareSlots(state, facts) {
+  const c = state?.compare;
+  if (!c?.on) return null;
+  const nameOf = (id) => {
+    const row = (facts?.players || []).find((p) => String(p.id) === String(id));
+    return row?.name || String(id);
+  };
+  const slots = [];
+  for (const key of ['a', 'b']) {
+    const s = c[key] || {};
+    const playerId = String(s.playerId || '').trim();
+    if (!playerId) continue;
+    const maps = Array.isArray(s.maps) ? s.maps.map(String).filter(Boolean) : [];
+    const matches = Array.isArray(s.matches) ? s.matches.map(String).filter(Boolean) : [];
+    const mapBit = maps.length
+      ? ` (${maps.map((m) => MAPS[m]?.name || m).join(', ')})`
+      : '';
+    const gameBit =
+      !mapBit && matches.length
+        ? ` (${matches.length} game${matches.length === 1 ? '' : 's'})`
+        : matches.length
+          ? ` · ${matches.length}g`
+          : '';
+    slots.push({
+      key,
+      label: `${nameOf(playerId)}${mapBit}${gameBit}`,
+      playerId,
+      maps,
+      matches
+    });
+  }
+  return slots.length ? slots : null;
+}
+
+/** Global filter without players/maps/matches — those are owned by compare slots. */
+function filterWithoutPlayersMaps(base) {
+  const out = mergeFilters(emptyFilter(), base || {});
+  out.players = [];
+  out.maps = [];
+  out.matches = [];
+  return out;
+}
+
+function factInCompareSlot(f, slot) {
+  if (String(f.playerId || '') !== slot.playerId) return false;
+  if (slot.maps.length && !slot.maps.includes(String(f.map || ''))) return false;
+  if (slot.matches.length && !slot.matches.includes(String(f.demoId || ''))) return false;
+  return true;
 }
 
 /** Least squares fit plus Pearson r over the plotted points. */
@@ -99,10 +153,63 @@ function buildScatter(state, facts) {
   const source = subject.source;
   const xMetric = findMetric(source, state.x.metric);
   const yMetric = findMetric(source, state.y.metric);
-  const base = state.filter;
+  const slots = compareSlots(state, facts);
+  const base = slots ? filterWithoutPlayersMaps(state.filter) : state.filter;
   const xFilter = mergeFilters(base, state.x.filter);
   const yFilter = mergeFilters(base, state.y.filter);
-  const seriesDim = state.series ? findDimension(source, state.series) : null;
+  const seriesDim = !slots && state.series ? findDimension(source, state.series) : null;
+  const xPerRound = Boolean(state.x.filter?.perRound);
+  const yPerRound = Boolean(state.y.filter?.perRound);
+
+  // Compare: one point per slot (A vs B), including same player on different maps.
+  if (slots) {
+    const points = [];
+    const seriesList = [];
+    for (const slot of slots) {
+      const pool = [];
+      const xPool = [];
+      const yPool = [];
+      for (const f of factsForSource(facts, source)) {
+        if (!factPasses(f, base) || !factInCompareSlot(f, slot)) continue;
+        pool.push(f);
+        if (factPasses(f, xFilter)) xPool.push(f);
+        if (factPasses(f, yFilter)) yPool.push(f);
+      }
+      const rounds = roundCount(pool);
+      if (rounds < (state.minRounds || 0)) continue;
+      let x = aggregateMetric(xMetric, xPool);
+      let y = aggregateMetric(yMetric, yPool);
+      if (xPerRound) x = asPerRound(x, rounds, xMetric);
+      if (yPerRound) y = asPerRound(y, rounds, yMetric);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      seriesList.push({ key: slot.key, label: slot.label });
+      points.push({
+        id: slot.key,
+        name: slot.label,
+        sub: '',
+        x,
+        y,
+        rounds,
+        xn: xPool.length,
+        yn: yPool.length,
+        seriesKey: slot.key,
+        seriesLabel: slot.label
+      });
+    }
+    return {
+      kind: 'scatter',
+      points,
+      seriesList,
+      xMetric,
+      yMetric,
+      subject,
+      xLabel: measureLabel(xMetric, state.x.filter),
+      yLabel: measureLabel(yMetric, state.y.filter),
+      xFmt: perRoundFmt(xMetric, xPerRound),
+      yFmt: perRoundFmt(yMetric, yPerRound),
+      compare: true
+    };
+  }
 
   /** @type {Map<string, {facts: object[], x: object[], y: object[], first: object}>} */
   const groups = new Map();
@@ -122,8 +229,6 @@ function buildScatter(state, facts) {
 
   const points = [];
   const seriesSeen = new Map();
-  const xPerRound = Boolean(state.x.filter?.perRound);
-  const yPerRound = Boolean(state.y.filter?.perRound);
   for (const [id, g] of groups) {
     const rounds = roundCount(g.facts);
     if (rounds < (state.minRounds || 0)) continue;
@@ -178,17 +283,31 @@ function buildGrouped(state, facts) {
   const source = state.source;
   const yMetric = findMetric(source, state.y.metric);
   const dim = findDimension(source, state.x.dimension);
-  const seriesDim = state.series ? findDimension(source, state.series) : null;
-  const base = state.filter;
+  const slots = compareSlots(state, facts);
+  const seriesDim = !slots && state.series ? findDimension(source, state.series) : null;
+  const base = slots ? filterWithoutPlayersMaps(state.filter) : state.filter;
   const yFilter = mergeFilters(base, state.y.filter);
   const step = Number(state.binStep) > 0 ? Number(state.binStep) : dim.step || 1;
 
   /** @type {Map<string, {label: string, sort: number, series: Map<string, object[]>}>} */
   const bins = new Map();
   const seriesSeen = new Map();
+  if (slots) {
+    for (const slot of slots) seriesSeen.set(slot.key, slot.label);
+  }
 
   for (const f of factsForSource(facts, source)) {
     if (!factPasses(f, yFilter)) continue;
+
+    /** @type {string[]} */
+    let seriesKeys;
+    if (slots) {
+      seriesKeys = slots.filter((s) => factInCompareSlot(f, s)).map((s) => s.key);
+      if (!seriesKeys.length) continue;
+    } else {
+      seriesKeys = [seriesDim ? String(seriesDim.value(f) ?? '') : ''];
+    }
+
     const raw = dim.value(f);
     if (raw === null || raw === undefined || raw === '') continue;
 
@@ -220,19 +339,20 @@ function buildGrouped(state, facts) {
       bin = { key: binKey, label: binLabel, sort, series: new Map() };
       bins.set(binKey, bin);
     }
-    const sKey = seriesDim ? String(seriesDim.value(f) ?? '') : '';
-    if (seriesDim && !seriesSeen.has(sKey)) {
-      seriesSeen.set(
-        sKey,
-        seriesDim.labelOf
-          ? seriesDim.labelOf(f)
-          : seriesDim.tick
-            ? seriesDim.tick(seriesDim.value(f))
-            : String(seriesDim.value(f) ?? '')
-      );
+    for (const sKey of seriesKeys) {
+      if (!slots && seriesDim && !seriesSeen.has(sKey)) {
+        seriesSeen.set(
+          sKey,
+          seriesDim.labelOf
+            ? seriesDim.labelOf(f)
+            : seriesDim.tick
+              ? seriesDim.tick(seriesDim.value(f))
+              : String(seriesDim.value(f) ?? '')
+        );
+      }
+      if (!bin.series.has(sKey)) bin.series.set(sKey, []);
+      bin.series.get(sKey).push(f);
     }
-    if (!bin.series.has(sKey)) bin.series.set(sKey, []);
-    bin.series.get(sKey).push(f);
   }
 
   const ordered = [...bins.values()].sort(
@@ -244,10 +364,10 @@ function buildGrouped(state, facts) {
   }
   const capped = state.maxCats > 0 ? ordered.slice(0, state.maxCats) : ordered;
 
-  const seriesKeys = seriesDim ? [...seriesSeen.keys()] : [''];
+  const seriesKeys = slots || seriesDim ? [...seriesSeen.keys()] : [''];
   const seriesList = seriesKeys.map((key) => ({
     key,
-    label: seriesDim ? seriesSeen.get(key) : yMetric.label,
+    label: slots || seriesDim ? seriesSeen.get(key) : yMetric.label,
     points: []
   }));
 
@@ -288,7 +408,8 @@ function buildGrouped(state, facts) {
     yMetric,
     xLabel: dim.label,
     yLabel: state.normalize ? `${yBase} (share %)` : yBase,
-    yFmt: state.normalize ? 'pct' : perRoundFmt(yMetric, Boolean(state.y.filter?.perRound))
+    yFmt: state.normalize ? 'pct' : perRoundFmt(yMetric, Boolean(state.y.filter?.perRound)),
+    compare: Boolean(slots)
   };
 }
 

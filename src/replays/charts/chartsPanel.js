@@ -106,8 +106,26 @@ export function createChartsPanel({ escapeHtml }) {
     trendline: true,
     minRounds: 5,
     maxCats: 24,
-    filter: emptyFilter()
+    filter: emptyFilter(),
+    /** Two-player (or same player / different maps or games) comparison series. */
+    compare: {
+      on: false,
+      a: { playerId: '', maps: [], matches: [] },
+      b: { playerId: '', maps: [], matches: [] }
+    }
   };
+
+  function emptyCompareSlot() {
+    return { playerId: '', maps: [], matches: [] };
+  }
+
+  function normalizeCompareSlot(raw) {
+    return {
+      playerId: String(raw?.playerId || ''),
+      maps: Array.isArray(raw?.maps) ? raw.maps.map(String) : [],
+      matches: Array.isArray(raw?.matches) ? raw.matches.map(String) : []
+    };
+  }
 
   const isScatter = () => state.type === 'scatter';
   const source = () => (isScatter() ? findSubject(state.subject).source : state.source);
@@ -126,7 +144,16 @@ export function createChartsPanel({ escapeHtml }) {
       // Assigned key by key so a spec saved by an older build cannot delete
       // fields this one needs.
       for (const [key, value] of Object.entries(spec)) {
-        if (key in state) state[key] = value;
+        if (!(key in state)) continue;
+        if (key === 'compare' && value && typeof value === 'object') {
+          state.compare = {
+            on: Boolean(value.on),
+            a: normalizeCompareSlot(value.a),
+            b: normalizeCompareSlot(value.b)
+          };
+          continue;
+        }
+        state[key] = value;
       }
       renderSide();
       renderCanvas();
@@ -270,7 +297,9 @@ export function createChartsPanel({ escapeHtml }) {
             'Measure',
             checkFlag(scope, 'perRound', 'Divide by played rounds', Boolean(f.perRound))
           ),
-      maps.length > 1 ? group('Map', multiSelect(scope, 'maps', maps, arr('maps'))) : '',
+      maps.length > 1 && !(scope === 'g' && state.compare?.on)
+        ? group('Map', multiSelect(scope, 'maps', maps, arr('maps')))
+        : '',
       group(
         'Side',
         multiSelect(
@@ -367,7 +396,7 @@ export function createChartsPanel({ escapeHtml }) {
             )
           )
         : '',
-      facts?.players?.length
+      facts?.players?.length && !(scope === 'g' && state.compare?.on)
         ? group(
             'Players',
             multiSelect(
@@ -378,7 +407,7 @@ export function createChartsPanel({ escapeHtml }) {
             )
           )
         : '',
-      facts?.matches?.length > 1
+      facts?.matches?.length > 1 && !(scope === 'g' && state.compare?.on)
         ? group(
             'Matches',
             multiSelect(
@@ -409,11 +438,102 @@ export function createChartsPanel({ escapeHtml }) {
 
   // ---- builder ------------------------------------------------------------
 
+  /** Games this compare slot can include, given player + optional map chips. */
+  function matchesForCompareSlot(s) {
+    const playerId = String(s?.playerId || '').trim();
+    if (!playerId || !facts) return [];
+    const maps = new Set((s.maps || []).map(String).filter(Boolean));
+    const ids = new Set();
+    for (const f of facts.playerFacts || []) {
+      if (String(f.playerId || '') !== playerId) continue;
+      if (maps.size && !maps.has(String(f.map || ''))) continue;
+      if (f.demoId) ids.add(String(f.demoId));
+    }
+    return (facts.matches || []).filter((m) => ids.has(String(m.id)));
+  }
+
+  function compareSlotHtml(slot) {
+    const s = state.compare[slot] || emptyCompareSlot();
+    const players = (facts?.players || []).map((p) => ({
+      key: p.id,
+      label: `${p.name} (${p.rounds})`
+    }));
+    const maps = (facts?.maps || []).map((m) => ({ key: m, label: MAPS[m]?.name || m }));
+    const selMaps = new Set((s.maps || []).map(String));
+    const matchOpts = matchesForCompareSlot(s);
+    const selMatches = new Set((s.matches || []).map(String));
+    return `
+      <div class="ch-compare-slot" data-compare-slot="${slot}">
+        <span class="ch-label">${slot === 'a' ? 'A' : 'B'}</span>
+        ${selectHtml(
+          `data-compare-player="${slot}"`,
+          players,
+          s.playerId || '',
+          { placeholder: 'Pick a player' }
+        )}
+        ${
+          maps.length
+            ? `<div class="ch-chips" role="group" title="Optional: limit this side to maps">
+                ${maps
+                  .map((m) => {
+                    const on = selMaps.has(String(m.key));
+                    return `<button type="button" class="ch-chip${on ? ' on' : ''}" data-compare-map="${slot}" data-value="${escapeHtml(
+                      String(m.key)
+                    )}" aria-pressed="${on ? 'true' : 'false'}">${escapeHtml(m.label)}</button>`;
+                  })
+                  .join('')}
+              </div>`
+            : ''
+        }
+        ${
+          matchOpts.length
+            ? `<div class="ch-compare-games">
+                <span class="ch-label">Games${selMatches.size ? ` (${selMatches.size})` : ''}</span>
+                <div class="ch-chips ch-compare-match-chips" role="group" title="Optional: limit this side to specific games. None selected means all.">
+                  ${matchOpts
+                    .map((m) => {
+                      const on = selMatches.has(String(m.id));
+                      return `<button type="button" class="ch-chip${on ? ' on' : ''}" data-compare-match="${slot}" data-value="${escapeHtml(
+                        String(m.id)
+                      )}" aria-pressed="${on ? 'true' : 'false'}">${escapeHtml(m.label)}</button>`;
+                    })
+                    .join('')}
+                </div>
+              </div>`
+            : s.playerId
+              ? `<p class="ch-hint">No games for this player with the current maps.</p>`
+              : ''
+        }
+      </div>`;
+  }
+
+  function compareHtml() {
+    const on = Boolean(state.compare?.on);
+    return `
+      <div class="ch-block">
+        <span class="ch-label">Compare</span>
+        <label class="ch-check">
+          <input type="checkbox" data-compare-on${on ? ' checked' : ''} />
+          Two players (or one player on two maps)
+        </label>
+        ${
+          on
+            ? `<div class="ch-compare-slots">
+                ${compareSlotHtml('a')}
+                ${compareSlotHtml('b')}
+              </div>
+              <p class="ch-hint">Same player on both sides is fine when maps or games differ. Leave Games empty to include all.</p>`
+            : ''
+        }
+      </div>`;
+  }
+
   function renderSide() {
     const src = source();
     const seriesOpts = seriesFor(src).map((d) => ({ key: d.key, label: d.label }));
     const dim = isScatter() ? null : findDimension(src, state.x.dimension);
     const stepOpts = (dim?.steps || []).map((s) => ({ key: String(s), label: `${s}${dim.unit || ''}` }));
+    const comparing = Boolean(state.compare?.on);
 
     sideEl.innerHTML = `
       <div class="ch-block ch-saved" id="ch-saved"></div>
@@ -444,6 +564,8 @@ export function createChartsPanel({ escapeHtml }) {
               )
         }
       </div>
+
+      ${compareHtml()}
 
       <div class="ch-block">
         <span class="ch-label">Y axis</span>
@@ -477,7 +599,7 @@ export function createChartsPanel({ escapeHtml }) {
         }
       </div>
 
-      <div class="ch-block">
+      <div class="ch-block"${comparing ? ' hidden' : ''}>
         <span class="ch-label">Split into series</span>
         ${selectHtml('data-series', seriesOpts, state.series, { placeholder: 'No split' })}
       </div>
@@ -517,10 +639,27 @@ export function createChartsPanel({ escapeHtml }) {
   // ---- canvas -------------------------------------------------------------
 
   function chartTitle(model) {
+    const cmp = state.compare?.on
+      ? compareSlotsLabel()
+      : '';
     if (model.kind === 'scatter') {
-      return `${model.yLabel} vs ${model.xLabel} by ${findSubject(state.subject).label.toLowerCase()}`;
+      const base = `${model.yLabel} vs ${model.xLabel} by ${findSubject(state.subject).label.toLowerCase()}`;
+      return cmp ? `${base} · ${cmp}` : base;
     }
-    return `${model.yLabel} by ${model.xLabel}`;
+    const base = `${model.yLabel} by ${model.xLabel}`;
+    return cmp ? `${base} · ${cmp}` : base;
+  }
+
+  function compareSlotsLabel() {
+    const a = state.compare?.a?.playerId;
+    const b = state.compare?.b?.playerId;
+    if (!a && !b) return 'compare';
+    const name = (id) => {
+      const row = (facts?.players || []).find((p) => String(p.id) === String(id));
+      return row?.name || id;
+    };
+    if (a && b) return `${name(a)} vs ${name(b)}`;
+    return a ? name(a) : name(b);
   }
 
   function detailsHtml(model) {
@@ -785,6 +924,37 @@ export function createChartsPanel({ escapeHtml }) {
       afterChange();
       return;
     }
+    const compareMap = e.target.closest('[data-compare-map]');
+    if (compareMap) {
+      const slot = compareMap.dataset.compareMap === 'b' ? 'b' : 'a';
+      const val = String(compareMap.dataset.value || '');
+      if (!state.compare[slot]) state.compare[slot] = emptyCompareSlot();
+      const cur = [...(state.compare[slot].maps || [])].map(String);
+      const at = cur.indexOf(val);
+      if (at >= 0) cur.splice(at, 1);
+      else cur.push(val);
+      state.compare[slot].maps = cur;
+      // Drop games that no longer fit the map filter.
+      const allowed = new Set(matchesForCompareSlot(state.compare[slot]).map((m) => String(m.id)));
+      state.compare[slot].matches = (state.compare[slot].matches || [])
+        .map(String)
+        .filter((id) => allowed.has(id));
+      afterChange();
+      return;
+    }
+    const compareMatch = e.target.closest('[data-compare-match]');
+    if (compareMatch) {
+      const slot = compareMatch.dataset.compareMatch === 'b' ? 'b' : 'a';
+      const val = String(compareMatch.dataset.value || '');
+      if (!state.compare[slot]) state.compare[slot] = emptyCompareSlot();
+      const cur = [...(state.compare[slot].matches || [])].map(String);
+      const at = cur.indexOf(val);
+      if (at >= 0) cur.splice(at, 1);
+      else cur.push(val);
+      state.compare[slot].matches = cur;
+      afterChange();
+      return;
+    }
     const chip = e.target.closest('[data-chip]');
     if (chip) {
       const [scope, key] = chip.dataset.chip.split('|');
@@ -817,6 +987,26 @@ export function createChartsPanel({ escapeHtml }) {
 
   sideEl.addEventListener('change', (e) => {
     const t = e.target;
+    if (t.matches('[data-compare-on]')) {
+      if (!state.compare) {
+        state.compare = {
+          on: false,
+          a: emptyCompareSlot(),
+          b: emptyCompareSlot()
+        };
+      }
+      state.compare.on = Boolean(t.checked);
+      afterChange();
+      return;
+    }
+    if (t.matches('[data-compare-player]')) {
+      const slot = t.dataset.comparePlayer === 'b' ? 'b' : 'a';
+      if (!state.compare[slot]) state.compare[slot] = emptyCompareSlot();
+      state.compare[slot].playerId = t.value || '';
+      state.compare[slot].matches = [];
+      afterChange();
+      return;
+    }
     if (t.matches('[data-type-select]')) {
       applyChartType(t.value);
       return;

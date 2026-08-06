@@ -553,11 +553,12 @@ export function createTimelineViewer({
       .map((r, i) => {
         const side = winningSide(r);
         const sideClass = side === 'T' ? 'wt' : 'wct';
-        const coachClass = coachNotedFiles.has(r.file) ? ' has-coach' : '';
+        const noted = coachOn && coachNotedFiles.has(r.file);
+        const coachClass = noted ? ' has-coach' : '';
         const gap =
           i === 0 ? 0 : gapAfterRound(rounds[i - 1].round) * ROUND_GAP_PX;
         const margin = gap ? ` style="margin-left:${gap}px"` : '';
-        const coachHint = coachNotedFiles.has(r.file) ? ' · coach notes' : '';
+        const coachHint = noted ? ' · coach notes' : '';
         return `<button type="button" class="rv-round ${sideClass}${coachClass}" data-index="${i}"${margin} title="${escapeHtml(
           `Round ${r.round} · ${side} win · ${economyLabel(r.econ1)} vs ${economyLabel(r.econ2)}${coachHint}`
         )}">${String(r.round).padStart(2, '0')}</button>`;
@@ -2153,7 +2154,7 @@ export function createTimelineViewer({
   }
 
   function syncNoteHasBadge() {
-    const has = roundNotes.some((n) => String(n.text || '').trim());
+    const has = visibleNoteIndices().some((i) => String(roundNotes[i]?.text || '').trim());
     noteBtn.classList.toggle('has-note', has);
   }
 
@@ -2416,12 +2417,13 @@ export function createTimelineViewer({
   /** Open the dock on the first chronological note when the round has any. */
   function autoOpenNotesIfPresent() {
     loadNotesFromMeta(true);
-    if (!roundNotes.length) return;
+    const vis = visibleNoteIndices();
+    if (!vis.length) return;
     noteView = 'editor';
     closePopovers(notePanel);
     notePanel.hidden = false;
     noteBtn.classList.add('active');
-    showNoteAt(0, { seek: false });
+    showNoteAt(vis[0], { seek: false });
   }
 
   /** Comment button with existing notes: list first, + to create another. */
@@ -2583,7 +2585,7 @@ export function createTimelineViewer({
       setNoteOpen(false);
       return;
     }
-    if (roundNotes.length) openNoteList();
+    if (visibleNoteIndices().length) openNoteList();
     else createNoteAtPlayhead();
   });
   const onAddNote = () => createNoteAtPlayhead();

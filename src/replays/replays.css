@@ -4883,6 +4883,41 @@ body.rv-open {
   gap: 6px;
 }
 
+.ch-compare-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.ch-compare-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.ch-compare-games {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ch-compare-match-chips {
+  max-height: 7.5rem;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.ch-hint {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font: 500 11px var(--font-body);
+}
+
 .ch-check {
   display: flex;
   align-items: center;
