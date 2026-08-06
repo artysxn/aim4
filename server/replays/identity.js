@@ -199,6 +199,19 @@ export function invalidateToken(token) {
 }
 
 /**
+ * Drop every cached whoami entry for a user id.
+ * Needed after gifts / trials / recomputes: the 60s token cache otherwise keeps
+ * serving the old free entitlements until TTL.
+ */
+export function invalidateUserIdentity(userId) {
+  const id = String(userId || '');
+  if (!id) return;
+  for (const [token, entry] of cache) {
+    if (entry?.user?.id === id) cache.delete(token);
+  }
+}
+
+/**
  * Read-only impersonation must not be able to write. Route layers call this
  * before any mutation; it is a second gate behind the per-route permission
  * checks, not a replacement for them.

@@ -1,37 +1,58 @@
 // ---------------------------------------------------------------------------
-// Lookup tables: position → sections → areas for occupancy classification.
+// Lookup tables: position → zone → area for occupancy classification.
 // ---------------------------------------------------------------------------
 
 import { positionsAtPoint } from '../zones/pointInZone.js';
 import { keysForName } from './regionKeys.js';
 
 /**
- * @param {{ zones?: Array, sections?: Array, areas?: Array }} network
+ * @param {{ positions?: Array, zones?: Array, areas?: Array, sections?: Array }} network
  */
 export function buildZoneIndex(network) {
-  const sections = network?.sections || [];
-  const areas = network?.areas || [];
-  /** @type {Map<string, object[]>} positionId → sections */
-  const sectionsByZoneId = new Map();
-  for (const sec of sections) {
-    for (const zid of sec.zoneIds || []) {
-      if (!sectionsByZoneId.has(zid)) sectionsByZoneId.set(zid, []);
-      sectionsByZoneId.get(zid).push(sec);
+  // Modern: zones group positionIds. Legacy: sections grouped zoneIds (old
+  // "positions" stored as zones with pieces).
+  const zones =
+    Array.isArray(network?.zones) && network.zones[0] && !network.zones[0].pieces
+      ? network.zones
+      : Array.isArray(network?.sections)
+        ? network.sections.map((s) => ({
+            ...s,
+            positionIds: s.positionIds || s.zoneIds || []
+          }))
+        : [];
+  const areas = (network?.areas || []).map((a) => ({
+    ...a,
+    zoneIds: a.zoneIds || a.sectionIds || []
+  }));
+
+  /** @type {Map<string, object[]>} positionId → zones */
+  const zonesByPositionId = new Map();
+  for (const zone of zones) {
+    for (const pid of zone.positionIds || zone.zoneIds || []) {
+      if (!zonesByPositionId.has(pid)) zonesByPositionId.set(pid, []);
+      zonesByPositionId.get(pid).push(zone);
     }
   }
-  /** @type {Map<string, object[]>} sectionId → areas */
-  const areasBySectionId = new Map();
+  /** @type {Map<string, object[]>} zoneId → areas */
+  const areasByZoneId = new Map();
   for (const area of areas) {
-    for (const sid of area.sectionIds || []) {
-      if (!areasBySectionId.has(sid)) areasBySectionId.set(sid, []);
-      areasBySectionId.get(sid).push(area);
+    for (const zid of area.zoneIds || []) {
+      if (!areasByZoneId.has(zid)) areasByZoneId.set(zid, []);
+      areasByZoneId.get(zid).push(area);
     }
   }
-  return { network, sectionsByZoneId, areasBySectionId };
+  return {
+    network,
+    /** @deprecated alias */
+    sectionsByZoneId: zonesByPositionId,
+    zonesByPositionId,
+    areasBySectionId: areasByZoneId,
+    areasByZoneId
+  };
 }
 
 /**
- * Region storage keys for a world point (areas + sections).
+ * Region storage keys for a world point (areas + zones).
  * @returns {Set<string>}
  */
 export function regionKeysAt(x, y, zIndex) {
@@ -39,15 +60,14 @@ export function regionKeysAt(x, y, zIndex) {
   if (!zIndex?.network) return keys;
   const hits = positionsAtPoint(x, y, zIndex.network);
   for (const pos of hits) {
-    const secs = zIndex.sectionsByZoneId.get(pos.id) || [];
-    for (const sec of secs) {
-      for (const k of keysForName('zone', sec.name)) keys.add(k);
-      const ars = zIndex.areasBySectionId.get(sec.id) || [];
+    const zones = zIndex.zonesByPositionId?.get(pos.id) || zIndex.sectionsByZoneId?.get(pos.id) || [];
+    for (const zone of zones) {
+      for (const k of keysForName('zone', zone.name)) keys.add(k);
+      const ars = zIndex.areasByZoneId?.get(zone.id) || zIndex.areasBySectionId?.get(zone.id) || [];
       for (const area of ars) {
         for (const k of keysForName('area', area.name)) keys.add(k);
       }
     }
-    // Also match bare position names (editor labels sometimes equal zone names).
     for (const k of keysForName('zone', pos.name)) keys.add(k);
     for (const k of keysForName('area', pos.name)) keys.add(k);
   }
@@ -55,25 +75,25 @@ export function regionKeysAt(x, y, zIndex) {
 }
 
 /**
- * Position / section / area entity ids covering a world point.
- * @returns {{ positionIds: string[], sectionIds: string[], areaIds: string[] }}
+ * Position / zone / area entity ids covering a world point.
+ * @returns {{ positionIds: string[], zoneIds: string[], sectionIds: string[], areaIds: string[] }}
  */
 export function occupancyAt(x, y, zIndex) {
   const positionIds = [];
-  const sectionIds = [];
+  const zoneIds = [];
   const areaIds = [];
-  if (!zIndex?.network) return { positionIds, sectionIds, areaIds };
+  if (!zIndex?.network) return { positionIds, zoneIds, sectionIds: zoneIds, areaIds };
   const hits = positionsAtPoint(x, y, zIndex.network);
-  const seenSec = new Set();
+  const seenZone = new Set();
   const seenArea = new Set();
   for (const pos of hits) {
     if (pos.id) positionIds.push(pos.id);
-    const secs = zIndex.sectionsByZoneId.get(pos.id) || [];
-    for (const sec of secs) {
-      if (!sec.id || seenSec.has(sec.id)) continue;
-      seenSec.add(sec.id);
-      sectionIds.push(sec.id);
-      const ars = zIndex.areasBySectionId.get(sec.id) || [];
+    const zones = zIndex.zonesByPositionId?.get(pos.id) || zIndex.sectionsByZoneId?.get(pos.id) || [];
+    for (const zone of zones) {
+      if (!zone.id || seenZone.has(zone.id)) continue;
+      seenZone.add(zone.id);
+      zoneIds.push(zone.id);
+      const ars = zIndex.areasByZoneId?.get(zone.id) || zIndex.areasBySectionId?.get(zone.id) || [];
       for (const area of ars) {
         if (!area.id || seenArea.has(area.id)) continue;
         seenArea.add(area.id);
@@ -81,7 +101,7 @@ export function occupancyAt(x, y, zIndex) {
       }
     }
   }
-  return { positionIds, sectionIds, areaIds };
+  return { positionIds, zoneIds, sectionIds: zoneIds, areaIds };
 }
 
 /** Id with the highest sample count (first max wins ties). */

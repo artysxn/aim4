@@ -23,6 +23,7 @@ import {
   aggregatePlayers,
   aggregateTeams,
   allRows,
+  demoPassesDate,
   indexMaps,
   rowPasses,
   teamNameKey
@@ -31,6 +32,7 @@ import {
   PLAYER_COLUMNS,
   PLAYER_FIXED_BASE,
   TEAM_COLUMNS,
+  TEAM_MAP_COLUMNS,
   STATS_PAGE_SIZE,
   attachTips,
   bindStatsHScroll,
@@ -41,6 +43,7 @@ import {
 } from './statsTables.js';
 import { spinnerHtml, watchSlowLoad } from '../../lib/spinner.js';
 import { createSavedViews } from '../savedViews.js';
+import { POSITION_MAPS } from '../roles/teamPositions.js';
 
 /**
  * @param {{
@@ -121,6 +124,9 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     advantage: '',
     /** Minimum rounds played to appear in the table (0 = no floor). */
     minRounds: DEFAULT_MIN_ROUNDS,
+    /** Inclusive upload/parse day bounds (YYYY-MM-DD), or ''. */
+    dateFrom: '',
+    dateTo: '',
     /** @type {{ side: 'T'|'CT', value: string } | null} */
     role: null
   };
@@ -269,6 +275,28 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
           )}</div>
         </div>
         <div class="st-filter-group st-filter-stack">
+          <span class="st-filter-label">From</span>
+          <input
+            class="site-input st-date"
+            type="date"
+            data-filter="dateFrom"
+            value="${escapeHtml(filter.dateFrom || '')}"
+            title="Games from this day (upload / parse date)"
+            aria-label="From date"
+          />
+        </div>
+        <div class="st-filter-group st-filter-stack">
+          <span class="st-filter-label">To</span>
+          <input
+            class="site-input st-date"
+            type="date"
+            data-filter="dateTo"
+            value="${escapeHtml(filter.dateTo || '')}"
+            title="Games through this day (upload / parse date)"
+            aria-label="To date"
+          />
+        </div>
+        <div class="st-filter-group st-filter-stack">
           <span class="st-filter-label">Min rounds</span>
           <input
             class="site-input st-min-rounds"
@@ -323,6 +351,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       filter.result = '';
       filter.advantage = '';
       filter.role = null;
+      filter.dateFrom = '';
+      filter.dateTo = '';
       filter.minRounds = defaultMinRounds({
         demos: scope.demos,
         files: scope.files,
@@ -364,6 +394,20 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       const n = Math.max(0, Math.floor(Number(sel.value) || 0));
       filter.minRounds = n;
       sel.value = String(n);
+      resetListPage();
+      render();
+      return;
+    }
+    if (sel.dataset.filter === 'dateFrom' || sel.dataset.filter === 'dateTo') {
+      const key = sel.dataset.filter;
+      let next = String(sel.value || '').trim();
+      if (next && !/^\d{4}-\d{2}-\d{2}$/.test(next)) next = '';
+      filter[key] = next;
+      // Keep From ≤ To when both are set.
+      if (filter.dateFrom && filter.dateTo && filter.dateFrom > filter.dateTo) {
+        if (key === 'dateFrom') filter.dateTo = filter.dateFrom;
+        else filter.dateFrom = filter.dateTo;
+      }
       resetListPage();
       render();
       return;
@@ -474,6 +518,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       hasAwp: Boolean(filter.hasAwp),
       oppHasAwp: Boolean(filter.oppHasAwp),
       minRounds: Math.max(0, Number(filter.minRounds) || 0),
+      dateFrom: filter.dateFrom || '',
+      dateTo: filter.dateTo || '',
       role: filter.role ? { side: filter.role.side, value: filter.role.value } : null,
       sortKey: s?.key || (tab === 'teams' ? 'avgRating' : 'rating'),
       sortDir: s?.dir === 'asc' ? 'asc' : 'desc',
@@ -493,6 +539,7 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     const state = viewState();
     onViewChange?.(state);
     onDetailChange?.(detail);
+    savedViews.touch();
   }
 
   /**
@@ -540,6 +587,19 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     }
     if ('minRounds' in next || 'minR' in next) {
       filter.minRounds = Math.max(0, Math.floor(Number(next.minRounds ?? next.minR) || 0));
+    }
+    if ('dateFrom' in next || 'from' in next) {
+      const raw = String(next.dateFrom ?? next.from ?? '').trim();
+      filter.dateFrom = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : '';
+    }
+    if ('dateTo' in next || 'to' in next) {
+      const raw = String(next.dateTo ?? next.to ?? '').trim();
+      filter.dateTo = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : '';
+    }
+    if (filter.dateFrom && filter.dateTo && filter.dateFrom > filter.dateTo) {
+      const swap = filter.dateFrom;
+      filter.dateFrom = filter.dateTo;
+      filter.dateTo = swap;
     }
     if ('role' in next) {
       const r = next.role;
@@ -780,11 +840,11 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     return demo.mapName || MAPS[demo.map]?.name || demo.map || '—';
   }
 
-  function filteredScore(demo, team, active, players) {
+  function filteredScore(demo, team, active, players, demos) {
     let mine = 0;
     let theirs = 0;
     for (const row of demo.rounds || []) {
-      if (!rowPasses(row, active, team, players)) continue;
+      if (!rowPasses(row, active, team, players, demos)) continue;
       if (row.w === team) mine++;
       else if (row.w === 1 || row.w === 2) theirs++;
     }
@@ -794,6 +854,7 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
   function buildPlayerMatchRows(playerId, active, players, demos) {
     const out = [];
     for (const demo of payload.demos || []) {
+      if (!demoPassesDate(demo, active)) continue;
       const seat = (demo.players || []).find((p) => p.id === playerId);
       if (!seat) continue;
       const team = seat.team === 2 ? 2 : 1;
@@ -806,7 +867,7 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
         agg = withRoles[0] || agg;
         if (!playerMatchesRoleFilter(agg, filter.role)) continue;
       }
-      const score = filteredScore(demo, team, active, players);
+      const score = filteredScore(demo, team, active, players, demos);
       const opp = team === 1 ? demo.name2 : demo.name1;
       out.push({
         ...agg,
@@ -828,6 +889,7 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     if (!key) return [];
     const out = [];
     for (const demo of payload.demos || []) {
+      if (!demoPassesDate(demo, active)) continue;
       const side =
         teamNameKey(demo.name1) === key ? 1 : teamNameKey(demo.name2) === key ? 2 : 0;
       if (!side) continue;
@@ -836,7 +898,7 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
         teamName
       }).find((t) => teamNameKey(t.name) === key);
       if (!agg || !(agg.rounds > 0)) continue;
-      const score = filteredScore(demo, side, active, players);
+      const score = filteredScore(demo, side, active, players, demos);
       const opp = side === 1 ? demo.name2 : demo.name1;
       out.push({
         ...agg,
@@ -879,7 +941,107 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
   }
 
   function teamNameCell(r) {
-    return teamLink(r.name);
+    if (r.mapRow) return escapeHtml(r.name);
+    const link = teamLink(r.name);
+    if (r.compareRole === 'us') return `<strong class="st-us-name">${link}</strong>`;
+    return link;
+  }
+
+  /**
+   * One row per map the locked team has played (Any map on Overview Teams).
+   */
+  function lockedTeamPerMapRows(rows, players, demos, active) {
+    const want = teamNameKey(lockedTeamName);
+    if (!want) return [];
+    const played = new Set();
+    for (const d of payload?.demos || []) {
+      if (teamNameKey(d.name1) === want || teamNameKey(d.name2) === want) {
+        if (d.map) played.add(String(d.map).toUpperCase());
+      }
+    }
+    for (const row of rows) {
+      const demo = demos.get(row.d);
+      if (!demo) continue;
+      if (teamNameKey(demo.name1) !== want && teamNameKey(demo.name2) !== want) continue;
+      if (row.m) played.add(String(row.m).toUpperCase());
+    }
+    const order = POSITION_MAPS.map((m) => m.code);
+    const codes = [...played].sort((a, b) => {
+      const ia = order.indexOf(a);
+      const ib = order.indexOf(b);
+      if (ia < 0 && ib < 0) return a.localeCompare(b);
+      if (ia < 0) return 1;
+      if (ib < 0) return -1;
+      return ia - ib;
+    });
+    const out = [];
+    for (const code of codes) {
+      const list = aggregateTeams(rows, players, demos, {
+        ...active,
+        maps: [code],
+        teamName: lockedTeamName
+      });
+      const row = list[0];
+      if (!row || !(row.rounds > 0)) continue;
+      out.push({
+        ...row,
+        name: MAPS[code]?.name || POSITION_MAPS.find((m) => m.code === code)?.name || code,
+        mapCode: code,
+        mapRow: true,
+        key: `${row.key}|${code}`
+      });
+    }
+    return out;
+  }
+
+  /**
+   * On one map: worst / best / middle / us by Round WR, with DB average over all
+   * teams that played that map.
+   */
+  function lockedTeamMapCompare(rows, players, demos, active, mapCode, minR) {
+    const { teamName: _lock, ...base } = active;
+    let all = aggregateTeams(rows, players, demos, {
+      ...base,
+      maps: [mapCode]
+    });
+    if (minR > 0) all = all.filter((t) => (t.rounds || 0) >= minR);
+    else all = all.filter((t) => (t.rounds || 0) > 0);
+    const byWr = [...all].sort(
+      (a, b) =>
+        (b.roundWinrate || 0) - (a.roundWinrate || 0) ||
+        String(a.name).localeCompare(String(b.name))
+    );
+    if (!byWr.length) return { rows: [], averageRows: [] };
+
+    const want = teamNameKey(lockedTeamName);
+    const best = byWr[0];
+    const worst = byWr[byWr.length - 1];
+    const mid = byWr[Math.floor((byWr.length - 1) / 2)];
+    const us =
+      byWr.find((t) => teamNameKey(t.name) === want) ||
+      aggregateTeams(rows, players, demos, {
+        ...base,
+        maps: [mapCode],
+        teamName: lockedTeamName
+      })[0] ||
+      null;
+
+    const display = [];
+    const seen = new Set();
+    const push = (row, role) => {
+      if (!row) return;
+      const k = row.key || teamNameKey(row.name);
+      if (!k || seen.has(k)) return;
+      seen.add(k);
+      display.push({ ...row, compareRole: role });
+    };
+    // Worst → best → middle → us (skip duplicates).
+    push(worst, 'worst');
+    push(best, 'best');
+    push(mid, 'mid');
+    push(us, 'us');
+
+    return { rows: display, averageRows: byWr };
   }
 
   function renderDetail(active, players, demos) {
@@ -985,20 +1147,55 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
         });
       }
     } else {
-      let data = aggregateTeams(rows, players, demos, active);
       const minR = Math.max(0, Number(filter.minRounds) || 0);
-      if (minR > 0) data = data.filter((t) => (t.rounds || 0) >= minR);
-      bodyEl.innerHTML = statsTableHtml(data, {
-        columns: TEAM_COLUMNS,
-        fixedCount: 2,
-        escapeHtml,
-        sortKey: sort.teams.key,
-        sortDir: sort.teams.dir,
-        page: page.teams,
-        pageSize: STATS_PAGE_SIZE,
-        showAverage: true,
-        nameCell: teamNameCell
-      });
+      const maps = Array.isArray(active.maps) ? active.maps.filter(Boolean) : [];
+      const oneMap = maps.length === 1 ? String(maps[0]) : '';
+
+      if (lockedTeamName && !oneMap) {
+        // Any map: one row per map for the locked team.
+        const data = lockedTeamPerMapRows(rows, players, demos, active);
+        bodyEl.innerHTML = statsTableHtml(data, {
+          columns: TEAM_MAP_COLUMNS,
+          fixedCount: 2,
+          escapeHtml,
+          preserveOrder: true,
+          showAverage: true,
+          nameCell: teamNameCell
+        });
+      } else if (lockedTeamName && oneMap) {
+        // One map: us vs best / mid / worst on that map; footer = all-team average.
+        const { rows: data, averageRows } = lockedTeamMapCompare(
+          rows,
+          players,
+          demos,
+          active,
+          oneMap,
+          minR
+        );
+        bodyEl.innerHTML = statsTableHtml(data, {
+          columns: TEAM_COLUMNS,
+          fixedCount: 2,
+          escapeHtml,
+          preserveOrder: true,
+          showAverage: true,
+          averageRows,
+          nameCell: teamNameCell
+        });
+      } else {
+        let data = aggregateTeams(rows, players, demos, active);
+        if (minR > 0) data = data.filter((t) => (t.rounds || 0) >= minR);
+        bodyEl.innerHTML = statsTableHtml(data, {
+          columns: TEAM_COLUMNS,
+          fixedCount: 2,
+          escapeHtml,
+          sortKey: sort.teams.key,
+          sortDir: sort.teams.dir,
+          page: page.teams,
+          pageSize: STATS_PAGE_SIZE,
+          showAverage: true,
+          nameCell: teamNameCell
+        });
+      }
     }
     bindStatsHScroll(bodyEl);
     emitViewChange();
@@ -1090,6 +1287,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     filter.hasAwp = false;
     filter.oppHasAwp = false;
     filter.role = null;
+    filter.dateFrom = '';
+    filter.dateTo = '';
     // Full Database keeps the 80-round floor; match / team / selection scopes do not.
     filter.minRounds = defaultMinRounds(next);
     filter.result = '';
@@ -1138,11 +1337,39 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     applyViewState(opts);
   }
 
+  /**
+   * Expand a team-scoped payload to the full library once (for map compare).
+   * No-op when already unscoped. Preserves filters / locked team name.
+   */
+  async function ensureLibraryPayload() {
+    if (!scope.demos?.length && !scope.files?.length) return false;
+    const snap = viewState();
+    await load({
+      title: scope.title || '',
+      teamName: lockedTeamName || '',
+      tab: snap.tab || tab,
+      maps: snap.maps,
+      side: snap.side,
+      result: snap.result,
+      advantage: snap.advantage,
+      econ: snap.econ,
+      oppEcon: snap.oppEcon,
+      hasAwp: snap.hasAwp,
+      oppHasAwp: snap.oppHasAwp,
+      minRounds: snap.minRounds,
+      dateFrom: snap.dateFrom,
+      dateTo: snap.dateTo,
+      role: snap.role
+    });
+    return true;
+  }
+
   return {
     el,
     load,
     applyView,
     applyViewState,
+    ensureLibraryPayload,
     viewState,
     openPlayerDetail,
     openTeamDetail,

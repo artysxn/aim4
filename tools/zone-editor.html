@@ -75,7 +75,7 @@
   }
   .ze-body {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 280px;
+    grid-template-columns: minmax(0, 1fr) 320px;
     min-height: 0;
   }
   .ze-stage {
@@ -167,6 +167,19 @@
   .ze-float button.active.key-b {
     border-color: rgba(61, 122, 184, 0.75);
     background: rgba(61, 122, 184, 0.16);
+  }
+  .ze-float button.active.position {
+    border-color: rgba(120, 220, 140, 0.7);
+    background: rgba(70, 180, 90, 0.18);
+  }
+  .ze-float button.ze-floor {
+    min-width: 0;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+  .ze-float button.ze-floor.active {
+    border-color: rgba(220, 224, 232, 0.45);
+    background: rgba(220, 224, 232, 0.1);
   }
   .ze-float button.ze-shape-mode {
     min-width: 0;
@@ -270,6 +283,61 @@
     white-space: nowrap;
   }
   a.ze-back:hover { color: var(--text); }
+  .ze-hier { display: flex; flex-direction: column; gap: 10px; }
+  .ze-hier-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ze-hier-actions .btn { padding: 5px 8px; font-size: 11px; }
+  .ze-list { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+  .ze-item {
+    display: grid;
+    grid-template-columns: 16px 1fr auto;
+    gap: 6px;
+    align-items: center;
+    padding: 5px 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xs);
+    background: rgba(0,0,0,0.25);
+  }
+  .ze-item.is-selected {
+    border-color: rgba(120, 220, 140, 0.55);
+    background: rgba(70, 180, 90, 0.1);
+  }
+  .ze-item input[type="checkbox"] { margin: 0; }
+  .ze-item-name {
+    width: 100%;
+    min-width: 0;
+    padding: 3px 6px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+  }
+  .ze-item-name:focus {
+    border-color: var(--border-strong);
+    background: rgba(0,0,0,0.35);
+    outline: none;
+  }
+  .ze-item-meta {
+    font-size: 10px;
+    color: var(--muted);
+    grid-column: 2 / -1;
+  }
+  .ze-item-members {
+    grid-column: 1 / -1;
+    font-size: 10px;
+    color: var(--muted);
+    line-height: 1.35;
+  }
+  .ze-level-tag {
+    font-size: 9px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 4px;
+  }
 </style>
 </head>
 <body>
@@ -286,6 +354,7 @@
           <button type="button" class="ze-tool-wide" id="ze-tool-bomb-b" title="Draw bomb site B" data-tool="bombB">Bomb B</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-key-a" title="Key zone for A (up to 4)" data-tool="keyA">Key A</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-key-b" title="Key zone for B (up to 4)" data-tool="keyB">Key B</button>
+          <button type="button" class="ze-tool-wide" id="ze-tool-position" title="Draw a named position (no overlap on this floor)" data-tool="position">Position</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-vision" title="Paint vision blockers" data-tool="visionBlock">Vision block</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-elevated" title="Paint elevated" data-tool="elevated">Elevated</button>
           <button type="button" class="ze-tool-wide" id="ze-tool-underpass" title="Paint underpass (see into, not out)" data-tool="underpass">Underpass</button>
@@ -293,7 +362,10 @@
           <button type="button" class="ze-tool-wide" id="ze-tool-erase" title="Erase last selected vision layer" data-tool="erase">Erase</button>
           <div class="ze-float-sep"></div>
           <button type="button" class="ze-shape-mode active" id="ze-shape-rect" title="Draw rectangles for bomb / key zones">Rectangle</button>
-          <button type="button" class="ze-shape-mode" id="ze-shape-poly" title="Draw polygons for bomb / key zones">Polygon</button>
+          <button type="button" class="ze-shape-mode" id="ze-shape-poly" title="Draw polygons for bomb / key / positions">Polygon</button>
+          <div class="ze-float-sep" id="ze-floor-sep" hidden></div>
+          <button type="button" class="ze-floor" id="ze-floor-default" title="Upper / default radar" hidden>Upper</button>
+          <button type="button" class="ze-floor" id="ze-floor-lower" title="Lower radar" hidden>Lower</button>
           <div class="ze-float-sep"></div>
           <button type="button" id="ze-brush-down" title="Smaller brush">−</button>
           <span id="ze-brush-size">8</span>
@@ -308,6 +380,15 @@
         <canvas id="ze-canvas"></canvas>
       </div>
       <aside class="ze-side">
+        <div>
+          <h2>Regions</h2>
+          <p class="ze-empty">Positions are unique footprints (no overlap on a floor). Zones group positions. Areas group zones. Same name may exist on both Nuke floors.</p>
+          <div class="ze-hier-actions" style="margin-top:8px">
+            <button type="button" class="btn" id="ze-make-zone" title="Group selected positions into a zone">+ Zone</button>
+            <button type="button" class="btn" id="ze-make-area" title="Group selected zones into an area">+ Area</button>
+          </div>
+          <div id="ze-regions" class="ze-hier" style="margin-top:10px"></div>
+        </div>
         <div>
           <h2>Bomb sites</h2>
           <p class="ze-empty">Rough A/B plant areas for coach and win chance. Rectangle or polygon. Redraw replaces.</p>

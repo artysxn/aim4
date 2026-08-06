@@ -131,6 +131,7 @@ export function createChartsPanel({ escapeHtml }) {
       renderSide();
       renderCanvas();
       mountSavedViews();
+      savedViews.touch();
     }
   });
 
@@ -759,6 +760,7 @@ export function createChartsPanel({ escapeHtml }) {
   function afterChange({ rebuildSide = true } = {}) {
     if (rebuildSide) renderSide();
     renderCanvas();
+    savedViews.touch();
   }
 
   function applyChartType(type) {
@@ -1019,7 +1021,9 @@ export function createChartsPanel({ escapeHtml }) {
       mountSavedViews();
       void savedViews.refresh().then(mountSavedViews);
       // A share link wins over whatever the builder was left on.
-      void savedViews.applyShareParam(scope.params || {});
+      void savedViews.applyShareParam(scope.params || {}).then((hit) => {
+        if (!hit) savedViews.touch();
+      });
     } catch (err) {
       cancelSlow();
       if (token !== loadToken) return;

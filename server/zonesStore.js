@@ -1,12 +1,8 @@
 // ---------------------------------------------------------------------------
-// zonesStore.js — bombsites + vision layers per map
+// zonesStore.js — bombsites + vision layers + Positions/Zones/Areas per map
 //
 // JSON on the Coolify volume beside the replay library:
 //   {AIM4_REPLAY_DIR}/zones/<MAP>.json
-//
-// Painted position / zone / area hierarchies are no longer stored. Old files
-// may still contain those keys; GET ignores them and SAVE overwrites with the
-// slim shape (bombsites + vision layers + ledges + key zones).
 // ---------------------------------------------------------------------------
 
 import fs from 'node:fs';
@@ -17,6 +13,7 @@ import { ROOT as REPLAY_ROOT } from './replays/demoStore.js';
 import { sanitizeBombSites } from '../src/replays/zones/bombSites.js';
 import { sanitizeKeyZones } from '../src/replays/zones/keyZones.js';
 import { sanitizeLedges } from '../src/replays/zones/ledges.js';
+import { sanitizeRegionHierarchy } from '../src/replays/zones/regionHierarchy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -74,7 +71,7 @@ function sanitizeLayerPieces(raw) {
   return pieces;
 }
 
-/** Empty slim network for a map code. */
+/** Empty network for a map code. */
 export function emptyZones(map) {
   const code = String(map || '').toUpperCase();
   return {
@@ -85,6 +82,9 @@ export function emptyZones(map) {
     ledges: [],
     bombSites: { a: null, b: null },
     keyZones: { a: [], b: [] },
+    positions: [],
+    zones: [],
+    areas: [],
     updatedAt: 0
   };
 }
@@ -97,6 +97,7 @@ export function sanitizeZones(map, payload) {
   const code = String(map || '').toUpperCase();
   if (!MAP_RE.test(code)) throw new Error('Invalid map code');
   const src = payload && typeof payload === 'object' ? payload : {};
+  const hierarchy = sanitizeRegionHierarchy(src);
   return {
     map: code,
     visionBlocks: sanitizeLayerPieces(src.visionBlocks),
@@ -105,6 +106,9 @@ export function sanitizeZones(map, payload) {
     ledges: sanitizeLedges(src.ledges),
     bombSites: sanitizeBombSites(src.bombSites),
     keyZones: sanitizeKeyZones(src.keyZones),
+    positions: hierarchy.positions,
+    zones: hierarchy.zones,
+    areas: hierarchy.areas,
     updatedAt: Number(src.updatedAt) || Date.now()
   };
 }
@@ -186,6 +190,14 @@ export async function saveZones(map, payload) {
       payload?.keyZones && typeof payload.keyZones === 'object'
         ? payload.keyZones
         : existing.keyZones || { a: [], b: [] },
+    positions: Array.isArray(payload?.positions)
+      ? payload.positions
+      : existing.positions || [],
+    zones: Array.isArray(payload?.zones) ? payload.zones : existing.zones || [],
+    areas: Array.isArray(payload?.areas) ? payload.areas : existing.areas || [],
+    // Legacy keys kept only when modern arrays were omitted, so old files still
+    // round-trip through sanitizeRegionHierarchy until the next explicit save.
+    sections: payload?.sections ?? existing.sections,
     updatedAt: Date.now()
   };
 

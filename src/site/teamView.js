@@ -12,7 +12,6 @@
 import {
   createTeam,
   createTeamDummy,
-  deleteDemo,
   deleteTeamDocument,
   deleteTeamStrategy,
   fetchDemo,
@@ -265,7 +264,11 @@ export function initTeamView({ auth, escapeHtml }) {
     if (!signedIn() || demosLoaded) return;
     demosLoaded = true;
     try {
-      const r = await fetchDemos();
+      // Prefer a team-name filter so Overview does not download the whole library.
+      const teamName = String(team?.name || '').trim();
+      const r = teamName
+        ? await fetchDemos({ team: teamName })
+        : await fetchDemos({ limit: 200 });
       demos = (r.demos || []).filter((d) => (d.status || 'ready') === 'ready');
     } catch {
       demos = [];
@@ -306,6 +309,8 @@ export function initTeamView({ auth, escapeHtml }) {
         autocoachSummary = null;
         autocoachSelectedPlayer = '';
         autocoachReviewDemoId = '';
+        demos = [];
+        demosLoaded = false;
       }
       team = nextTeam;
       loaded = true;
@@ -522,9 +527,6 @@ export function initTeamView({ auth, escapeHtml }) {
     const canMerge = team.isAdmin;
     const canManageReal = team.isOwner && !me && !dummy;
     const canRemoveDummy = dummy && team.isAdmin;
-    // Member only — never Player, Admin, Coach, Owner, or Placeholder pills.
-    const rolePill =
-      !dummy && m.role === 'player' ? '<span class="tm-tag role">Member</span>' : '';
     const dragAttrs =
       canMerge && !dummy
         ? `draggable="true" data-drag-member="${escapeHtml(m.id)}"`
@@ -546,39 +548,8 @@ export function initTeamView({ auth, escapeHtml }) {
     return `
       <li class="tm-member${me ? ' me' : ''}${dummy ? ' is-dummy' : ''}" ${dragAttrs}>
         <span class="tm-member-name">${memberLabel(m)}${me ? ' (you)' : ''}</span>
-        ${rolePill}
         ${actions}
       </li>`;
-  }
-
-  function demoRowHtml(d) {
-    const want = teamNameKey(team?.name || '');
-    const a = teamNameKey(d.team1?.name);
-    const enemy =
-      a === want ? d.team2?.name || 'Team 2' : d.team1?.name || 'Team 1';
-    const mapName = d.mapName || MAPS[d.map]?.name || d.map || '—';
-    const id = escapeHtml(d.id);
-    const canDelete =
-      Boolean(account.admin) ||
-      (Boolean(account.id) && (d.owner?.id || '') === account.id);
-    return `
-      <tr class="tm-replay-row" data-demo-id="${id}">
-        <td class="tm-replay-enemy">${escapeHtml(enemy)}</td>
-        <td class="tm-replay-map">${escapeHtml(mapName)}</td>
-        <td class="tm-replay-actions">
-          <button type="button" class="rp-btn-icon" data-tm-demo-stats="${id}" title="Stats">
-            <svg viewBox="0 -960 960 960" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M640-160v-280h120v280H640Zm-220 0v-640h120v640H420Zm-220 0v-440h120v440H200Z"/></svg>
-          </button>
-          ${
-            canDelete
-              ? `<button type="button" class="rp-btn-icon danger" data-tm-demo-delete="${id}" title="Delete">×</button>`
-              : ''
-          }
-          <button type="button" class="rp-btn-play" data-tm-demo-replay="${id}" title="Replay">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7L8 5z"/></svg>
-          </button>
-        </td>
-      </tr>`;
   }
 
   /** Demos where either side's display name matches the current team. */
@@ -590,16 +561,6 @@ export function initTeamView({ auth, escapeHtml }) {
       const b = teamNameKey(d.team2?.name);
       return a === want || b === want;
     });
-  }
-
-  function visibleTeamDemos() {
-    const list = demosForTeam();
-    if (!overviewMapFilter) return list;
-    return list.filter((d) => String(d.map || '').toUpperCase() === overviewMapFilter);
-  }
-
-  function demoWhen(d) {
-    return Number(d.uploadedAt || d.parsedAt || 0) || 0;
   }
 
   function pct1(n) {
@@ -623,6 +584,35 @@ export function initTeamView({ auth, escapeHtml }) {
       pistols: 0,
       prw: null
     }));
+  }
+
+  function mapsInsightsHtml() {
+    const played = (overviewMaps.length ? overviewMaps : emptyMapStats()).filter(
+      (m) => m.matches > 0 && Number.isFinite(m.roundWinrate)
+    );
+    if (!played.length) return '';
+    const byRwr = [...played].sort((a, b) => b.roundWinrate - a.roundWinrate);
+    const best = byRwr[0];
+    const worst = byRwr[byRwr.length - 1];
+    const byPistol = [...played]
+      .filter((m) => m.pistols >= 2 && Number.isFinite(m.pistolWinrate))
+      .sort((a, b) => b.pistolWinrate - a.pistolWinrate);
+    const pistol = byPistol[0];
+    const bits = [
+      `Best RWR: ${escapeHtml(best.name)} ${escapeHtml(pct1(best.roundWinrate))}`,
+      best !== worst
+        ? `Lowest RWR: ${escapeHtml(worst.name)} ${escapeHtml(pct1(worst.roundWinrate))}`
+        : ''
+    ];
+    if (pistol) {
+      bits.push(
+        `Pistols: ${escapeHtml(pistol.name)} ${escapeHtml(pct1(pistol.pistolWinrate))}`
+      );
+    }
+    return `<ul class="tm-map-insights">${bits
+      .filter(Boolean)
+      .map((b) => `<li>${b}</li>`)
+      .join('')}</ul>`;
   }
 
   function mapsBodyHtml() {
@@ -649,7 +639,7 @@ export function initTeamView({ auth, escapeHtml }) {
         <span class="tm-map-bar-label">${side} ${known ? escapeHtml(pct1(rate)) : '—'}</span>
       </span>`;
     };
-    return `<ul class="tm-maps-list">${rows
+    return `${mapsInsightsHtml()}<ul class="tm-maps-list">${rows
       .map((m) => {
         const active = overviewMapFilter === m.code ? ' is-active' : '';
         const record =
@@ -672,38 +662,9 @@ export function initTeamView({ auth, escapeHtml }) {
       .join('')}</ul>`;
   }
 
-  function replaysBodyHtml() {
-    const list = visibleTeamDemos();
-    if (!list.length) {
-      return overviewMapFilter
-        ? `<p class="view-empty">No replays on ${escapeHtml(
-            MAPS[overviewMapFilter]?.name || overviewMapFilter
-          )}.</p>`
-        : `<p class="view-empty">No replays with this team name yet.</p>`;
-    }
-    return `<div class="tm-replays-scroll">
-      <table class="tm-replays-table">
-        <thead>
-          <tr><th>Enemy</th><th>Map</th><th></th></tr>
-        </thead>
-        <tbody>${list
-          .slice()
-          .sort((a, b) => demoWhen(b) - demoWhen(a))
-          .slice(0, 200)
-          .map(demoRowHtml)
-          .join('')}</tbody>
-      </table>
-    </div>`;
-  }
-
   function paintOverviewMaps() {
     const el = document.getElementById('tm-overview-maps');
     if (el) el.innerHTML = mapsBodyHtml();
-  }
-
-  function paintOverviewReplays() {
-    const el = document.getElementById('tm-overview-replays');
-    if (el) el.innerHTML = replaysBodyHtml();
   }
 
   function destroyOverviewStats() {
@@ -822,16 +783,21 @@ export function initTeamView({ auth, escapeHtml }) {
   function applyOverviewMapToStats() {
     if (!overviewStatsPanel?.applyView) return;
     // Maps only — do not reset Players/Teams; remounts and map picks used to force Teams.
-    overviewStatsPanel.applyView({
-      maps: overviewMapFilter || []
-    });
+    const maps = overviewMapFilter || [];
+    // Full-library compare only when a single map is picked (worst/best/mid).
+    if (overviewMapFilter && overviewStatsPanel.ensureLibraryPayload) {
+      void overviewStatsPanel.ensureLibraryPayload().then(() => {
+        overviewStatsPanel.applyView({ maps });
+      });
+      return;
+    }
+    overviewStatsPanel.applyView({ maps });
   }
 
   function selectOverviewMap(code) {
     const next = overviewMapFilter === code ? '' : code;
     overviewMapFilter = next;
     paintOverviewMaps();
-    paintOverviewReplays();
     // Single-demo stats leave the middle panel scoped to one match; a map pick
     // should return to the full team library with that map filter.
     if (String(overviewStatsKey).startsWith('single:')) {
@@ -842,87 +808,13 @@ export function initTeamView({ auth, escapeHtml }) {
     applyOverviewMapToStats();
   }
 
-  async function openTeamDemoStats(id) {
-    const d = demos.find((x) => x.id === id);
-    if (!overviewStatsPanel) return;
-    overviewMapFilter = '';
-    paintOverviewMaps();
-    paintOverviewReplays();
-    await overviewStatsPanel.load({
-      demos: [id],
-      title: d
-        ? `${d.team1?.name || 'Team 1'} vs ${d.team2?.name || 'Team 2'}`
-        : '',
-      teamName: team?.name || '',
-      tab: 'teams'
-    });
-    overviewStatsKey = `single:${id}`;
-  }
-
-  async function openTeamDemoReplay(id) {
-    let demo = demos.find((d) => d.id === id);
-    if (!demo) {
-      try {
-        demo = (await fetchDemo(id))?.demo || null;
-      } catch {
-        demo = null;
-      }
-    }
-    if (!demo) {
-      setStatus('Could not open that replay.', true);
-      return;
-    }
-    const list = (demo.rounds || []).map((r) => ({
-      ...r,
-      map: demo.map,
-      tickRate: r.tickRate || demo.tickRate
-    }));
-    if (!list.length) {
-      setStatus('That replay has no rounds yet.', true);
-      return;
-    }
-    if (!viewerModule) {
-      viewerModule = await import('../replays/viewer/viewerApp.js');
-    }
-    const want = teamNameKey(team?.name || '');
-    const side =
-      want && teamNameKey(demo.team1?.name) === want
-        ? 1
-        : want && teamNameKey(demo.team2?.name) === want
-          ? 2
-          : 0;
-    viewerModule.openViewer({
-      rounds: list,
-      mode: 'timeline',
-      title: `${demo.team1?.name || 'Team 1'} vs ${demo.team2?.name || 'Team 2'}`,
-      escapeHtml,
-      statsDemoId: demo.id,
-      coachTeamId: team?.id || '',
-      coachForceSide: side,
-      coachAutoEnable: Boolean(team?.autocoach?.demos?.[demo.id])
-    });
-  }
-
-  async function deleteTeamDemo(id) {
-    const d = demos.find((x) => x.id === id);
-    const label = d
-      ? `${d.team1?.name || 'Team 1'} vs ${d.team2?.name || 'Team 2'}`
-      : 'this replay';
-    if (!window.confirm(`Delete ${label}?`)) return;
-    const res = await run(() => deleteDemo(id), '');
-    if (!res) return;
-    demos = demos.filter((x) => x.id !== id);
-    overviewStatsKey = '';
-    overviewMapsKey = '';
-    mountOverviewExtras();
-    paintOverviewReplays();
-  }
-
   function mountOverviewExtras() {
     const teamDemos = demosForTeam();
     const mount = document.getElementById('tm-overview-stats');
     if (mount) {
       const ids = teamDemos.map((d) => d.id).filter(Boolean);
+      // Team-scoped stats for the default view (fast). Full library is loaded
+      // lazily when a map chip is selected for database-wide compare.
       const key = `${team.id}|${teamNameKey(team.name)}|${ids.join(',')}`;
       if (!overviewStatsPanel) overviewStatsPanel = createStatsPanel({ escapeHtml });
       if (overviewStatsPanel.el.parentElement !== mount) {
@@ -962,7 +854,6 @@ export function initTeamView({ auth, escapeHtml }) {
     } else {
       paintOverviewMaps();
     }
-    paintOverviewReplays();
   }
 
   function idsKey(list) {
@@ -994,67 +885,70 @@ export function initTeamView({ auth, escapeHtml }) {
     return `<button type="button" class="btn btn-sm" data-roll title="Invalidate the current link and mint a new one (24h cooldown)">New invite link</button>`;
   }
 
-  function overviewHtml() {
+  function membersCardHtml() {
     const members = team.members || [];
     const banned = team.banned || [];
     const realCount = team.realMembers ?? members.filter((m) => !m.dummy).length;
+    return `
+      <section class="tm-card tm-members-card">
+        <div class="tm-card-head">
+          <h3 class="tm-card-title">Members</h3>
+          <span class="tm-count">${realCount} / ${team.maxMembers || 7}</span>
+        </div>
+        <ul class="tm-members">${members.map(memberRowHtml).join('')}</ul>
+        ${
+          team.isOwner
+            ? `<div class="tm-row tm-placeholder-add">
+                <button type="button" class="btn btn-sm" data-add-dummy>Add placeholder</button>
+              </div>`
+            : ''
+        }
+        ${
+          team.isOwner
+            ? `<div class="tm-invite">
+                <div class="tm-row">
+                  <input class="site-input" id="tm-invite-url" readonly value="${escapeHtml(
+                    inviteUrl()
+                  )}" aria-label="Invite link" />
+                  <button type="button" class="btn btn-sm" data-copy>Copy</button>
+                  ${rollInviteButtonHtml()}
+                </div>
+              </div>`
+            : '<p class="tm-note">Only the team owner can share the invite link.</p>'
+        }
+        ${
+          banned.length
+            ? `<div class="tm-banned">
+                <h4 class="tm-sub">Banned</h4>
+                <ul class="tm-members">${banned
+                  .map(
+                    (b) =>
+                      `<li class="tm-member"><span class="tm-member-name">@${escapeHtml(
+                        b.username
+                      )}</span><span class="tm-member-actions"><button type="button" class="btn btn-sm" data-unban="${escapeHtml(
+                        b.id
+                      )}">Lift ban</button></span></li>`
+                  )
+                  .join('')}</ul>
+              </div>`
+            : ''
+        }
+        ${
+          team.isOwner
+            ? ''
+            : '<div class="tm-row tm-leave"><button type="button" class="btn btn-sm danger" data-leave>Leave team</button></div>'
+        }
+      </section>`;
+  }
+
+  function overviewHtml() {
     return `
       ${headerHtml('')}
       <div class="tm-grid tm-grid-overview">
         <div class="tm-overview-left">
           <section class="tm-card">
             <div class="tm-card-head">
-              <h3 class="tm-card-title">Members</h3>
-              <span class="tm-count">${realCount} / ${team.maxMembers || 7}</span>
-            </div>
-            <ul class="tm-members">${members.map(memberRowHtml).join('')}</ul>
-            ${
-              team.isOwner
-                ? `<div class="tm-row tm-placeholder-add">
-                    <button type="button" class="btn btn-sm" data-add-dummy>Add placeholder</button>
-                  </div>`
-                : ''
-            }
-            ${
-              team.isOwner
-                ? `<div class="tm-invite">
-                    <div class="tm-row">
-                      <input class="site-input" id="tm-invite-url" readonly value="${escapeHtml(
-                        inviteUrl()
-                      )}" aria-label="Invite link" />
-                      <button type="button" class="btn btn-sm" data-copy>Copy</button>
-                      ${rollInviteButtonHtml()}
-                    </div>
-                  </div>`
-                : '<p class="tm-note">Only the team owner can share the invite link.</p>'
-            }
-            ${
-              banned.length
-                ? `<div class="tm-banned">
-                    <h4 class="tm-sub">Banned</h4>
-                    <ul class="tm-members">${banned
-                      .map(
-                        (b) =>
-                          `<li class="tm-member"><span class="tm-member-name">@${escapeHtml(
-                            b.username
-                          )}</span><span class="tm-member-actions"><button type="button" class="btn btn-sm" data-unban="${escapeHtml(
-                            b.id
-                          )}">Lift ban</button></span></li>`
-                      )
-                      .join('')}</ul>
-                  </div>`
-                : ''
-            }
-            ${
-              team.isOwner
-                ? ''
-                : '<div class="tm-row tm-leave"><button type="button" class="btn btn-sm danger" data-leave>Leave team</button></div>'
-            }
-          </section>
-
-          <section class="tm-card">
-            <div class="tm-card-head">
-              <h3 class="tm-card-title">Maps</h3>
+              <h3 class="tm-card-title">Map winrate</h3>
             </div>
             <div class="tm-maps-head" aria-hidden="true">
               <span></span>
@@ -1062,7 +956,6 @@ export function initTeamView({ auth, escapeHtml }) {
               <span>RWR</span>
               <span>PRW</span>
               <span>PIS</span>
-              <span>By side</span>
             </div>
             <div id="tm-overview-maps">${mapsBodyHtml()}</div>
           </section>
@@ -1073,10 +966,6 @@ export function initTeamView({ auth, escapeHtml }) {
             <h3 class="tm-card-title">Statistics</h3>
           </div>
           <div id="tm-overview-stats" class="tm-overview-stats-mount"></div>
-        </section>
-
-        <section class="tm-card tm-overview-replays-card">
-          <div id="tm-overview-replays">${replaysBodyHtml()}</div>
         </section>
       </div>`;
   }
@@ -1312,19 +1201,23 @@ export function initTeamView({ auth, escapeHtml }) {
 
     return `
       ${headerHtml('')}
-      <section class="tm-card">
-        <h3 class="tm-card-title">Roster</h3>
-        ${
-          canEdit
-            ? '<p class="tm-note">Drag a real member onto a placeholder to merge seats and positions.</p>'
-            : ''
-        }
-        <table class="tm-table">
-          <thead><tr><th>Member</th><th>Kind</th><th>Permissions</th><th></th></tr></thead>
-          <tbody>${rosterRows}</tbody>
-        </table>
-        ${canEdit ? '' : '<p class="tm-note">Only team admins can change this.</p>'}
-      </section>
+      <div class="tm-grid tm-grid-roles-top">
+        <section class="tm-card">
+          <h3 class="tm-card-title">Roster</h3>
+          ${
+            canEdit
+              ? '<p class="tm-note">Drag a real member onto a placeholder to merge seats and positions.</p>'
+              : ''
+          }
+          <table class="tm-table">
+            <thead><tr><th>Member</th><th>Kind</th><th>Permissions</th><th></th></tr></thead>
+            <tbody>${rosterRows}</tbody>
+          </table>
+          ${canEdit ? '' : '<p class="tm-note">Only team admins can change this.</p>'}
+        </section>
+
+        ${membersCardHtml()}
+      </div>
 
       <section class="tm-card">
         <div class="tm-card-head">
@@ -2483,7 +2376,7 @@ export function initTeamView({ auth, escapeHtml }) {
         'team-strategies': 'My Strategies',
         'team-drawing-board': 'Drawing Board',
         'team-utility-archive': 'Utility Archive',
-        'team-autocoach': 'Autocoach'
+        'team-autocoach': 'Team Replays'
       }[name] || 'Team'
     );
   }
@@ -2568,21 +2461,6 @@ export function initTeamView({ auth, escapeHtml }) {
     const mapRow = t.closest('[data-tm-map]');
     if (mapRow) {
       selectOverviewMap(mapRow.dataset.tmMap || '');
-      return;
-    }
-    const demoStats = t.closest('[data-tm-demo-stats]');
-    if (demoStats) {
-      await openTeamDemoStats(demoStats.dataset.tmDemoStats || '');
-      return;
-    }
-    const demoReplay = t.closest('[data-tm-demo-replay]');
-    if (demoReplay) {
-      await openTeamDemoReplay(demoReplay.dataset.tmDemoReplay || '');
-      return;
-    }
-    const demoDelete = t.closest('[data-tm-demo-delete]');
-    if (demoDelete) {
-      await deleteTeamDemo(demoDelete.dataset.tmDemoDelete || '');
       return;
     }
 

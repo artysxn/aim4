@@ -755,6 +755,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   function render() {
     renderSidebar();
     renderMain();
+    savedViews.touch();
   }
 
   function loadShapesForMap() {
@@ -789,9 +790,11 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       render();
       mountSavedViews();
       void savedViews.refresh().then(mountSavedViews);
-      void savedViews.applyShareParam(
-        Object.fromEntries(new URLSearchParams(window.location.search))
-      );
+      void savedViews
+        .applyShareParam(Object.fromEntries(new URLSearchParams(window.location.search)))
+        .then((hit) => {
+          if (!hit) savedViews.touch();
+        });
     } catch (err) {
       cancelSlow();
       if (token !== loadToken) return;

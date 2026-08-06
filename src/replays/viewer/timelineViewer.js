@@ -258,7 +258,7 @@ export function createTimelineViewer({
           <button type="button" class="rv-tool" id="rv-coach" title="Coach: mistake notes for one team" ${
             statsDemoId ? '' : 'hidden'
           }>${icon(coachIcon)}</button>
-          <button type="button" class="rv-tool" id="rv-rosters" hidden
+          <button type="button" class="rv-tool" id="rv-rosters"
             title="Player sidebars">${icon(rosterIcon)}</button>
           <button type="button" class="rv-tool" id="rv-zones"
             title="Map positions: active / controlled / contested">${icon(zonesIcon)}</button>
@@ -396,10 +396,10 @@ export function createTimelineViewer({
   const stackedQuery = window.matchMedia('(max-width: 860px)');
   let coachOn = false;
   /**
-   * Mobile coach only: show the under-map player sidebars. Off by default so
-   * the radar can fill the screen; toggle with the roster tool.
+   * Under-map player sidebars on the stacked (phone) layout. On by default;
+   * coach flips this off so the radar can fill, and the roster tool toggles it.
    */
-  let coachRostersOn = false;
+  let rostersOn = true;
   /** Position overlay on the radar (control / contested). */
   let zonesOn = false;
   /** Duel network on the radar: xK beside fighters, win % on hover. */
@@ -1309,21 +1309,21 @@ export function createTimelineViewer({
       : 'Team POV: one team’s map control and only the enemies they can see';
   }
 
-  /** Mobile coach: sidebars optional; when off the map fills the stage. */
+  /** Stacked (phone) layout: sidebars optional; when off the map fills. */
   function syncRostersLayout() {
-    const mobileCoach = coachOn && stackedQuery.matches;
+    const stacked = stackedQuery.matches;
     if (rostersBtn) {
-      rostersBtn.hidden = !mobileCoach;
-      rostersBtn.classList.toggle('active', mobileCoach && coachRostersOn);
-      rostersBtn.title = coachRostersOn
+      // Always available on the under-map roster layout, not only while coach runs.
+      rostersBtn.hidden = !stacked;
+      rostersBtn.classList.toggle('active', stacked && rostersOn);
+      rostersBtn.title = rostersOn
         ? 'Hide player sidebars (map fills the screen)'
         : 'Show player sidebars';
     }
-    const hideRosters = mobileCoach && !coachRostersOn;
+    const hideRosters = stacked && !rostersOn;
     el.classList.toggle('rosters-hidden', hideRosters);
     // Force the columns off in the DOM too: display:flex on .rv-team-col
-    // outranks the UA [hidden] rule, and class-only CSS was a no-op when the
-    // tool stayed visible while the layout never changed.
+    // outranks the UA [hidden] rule without an explicit [hidden] override.
     for (const col of el.querySelectorAll('.rv-team-col')) {
       col.hidden = hideRosters;
     }
@@ -3681,7 +3681,7 @@ export function createTimelineViewer({
     hideCoachPick();
     coachOn = true;
     // Phone coach starts map-first; the roster tool brings the sidebars back.
-    if (stackedQuery.matches) coachRostersOn = false;
+    if (stackedQuery.matches) rostersOn = false;
     syncCoachBtn();
     syncRostersLayout();
     if (locked) {
@@ -3765,13 +3765,11 @@ export function createTimelineViewer({
   });
 
   rostersBtn?.addEventListener('click', () => {
-    // Button is only un-hidden in mobile coach; trust that over re-checking
-    // matchMedia (and avoid a no-op when the tool was wrongly still painted).
-    if (rostersBtn.hidden) return;
-    coachRostersOn = !coachRostersOn;
+    if (!stackedQuery.matches) return;
+    rostersOn = !rostersOn;
     syncRostersLayout();
     // POV may have emptied a panel; rebuild so shown sidebars are current.
-    if (coachRostersOn) renderScoreboards();
+    if (rostersOn) renderScoreboards();
   });
 
   // Off → team 1 → team 2 → off. A cycle rather than a picker: there are only
@@ -3824,6 +3822,8 @@ export function createTimelineViewer({
       coachFocusPlayers = null;
       cancelViewAnim();
       hideCoachPick();
+      // Leaving coach restores the under-map rosters on phones.
+      if (stackedQuery.matches) rostersOn = true;
       syncCoachBtn();
       syncRostersLayout();
       const vis = visibleNoteIndices();
@@ -4437,6 +4437,7 @@ export function createTimelineViewer({
   (async () => {
     // buildSequence → selectRound(0) full-loads round 1 and starts the
     // background prefetch of the rest behind it.
+    syncRostersLayout();
     syncChromeInset();
     loadPlaylists();
     await buildSequence();

@@ -3,7 +3,7 @@
 // Bombsites, key zones, vision-block / elevated / underpass paint, ledges.
 // ---------------------------------------------------------------------------
 
-import { MAPS, MAP_CODES } from '../replays/shared/roundId.js';
+import { MAPS, MAP_CODES, mapHasLowerRadar } from '../replays/shared/roundId.js';
 import { RADAR_SIZE, radarToWorld, worldToRadar } from '../replays/viewer/mapCalibration.js';
 import { loadRadar } from '../replays/viewer/radarRenderer.js';
 import { emptyNetwork, worldPolyFromRadarVerts, worldRectFromRadarDrag } from '../replays/zones/zoneModel.js';
@@ -30,6 +30,20 @@ import {
   simplifyStrokePts,
   worldLedgeFromRadarStroke
 } from '../replays/zones/ledges.js';
+import {
+  createArea,
+  createPosition,
+  createZone,
+  deleteArea,
+  deletePosition,
+  deleteZone,
+  ensureRegionHierarchy,
+  renameArea,
+  renamePosition,
+  renameZone,
+  setAreaMembers,
+  setZoneMembers
+} from '../replays/zones/regionHierarchy.js';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 6;
@@ -46,6 +60,8 @@ const BOMB_A_COLOR = '#e8c040';
 const BOMB_B_COLOR = '#4aa3ff';
 const KEY_A_COLOR = '#c9a227';
 const KEY_B_COLOR = '#3d7ab8';
+const POSITION_COLOR = '#5dce6e';
+const POSITION_SELECTED = '#b8f0c0';
 
 const el = {
   mapTabs: document.querySelector('#ze-maps'),
@@ -68,6 +84,7 @@ const el = {
   toolBombB: document.querySelector('#ze-tool-bomb-b'),
   toolKeyA: document.querySelector('#ze-tool-key-a'),
   toolKeyB: document.querySelector('#ze-tool-key-b'),
+  toolPosition: document.querySelector('#ze-tool-position'),
   toolVision: document.querySelector('#ze-tool-vision'),
   toolElevated: document.querySelector('#ze-tool-elevated'),
   toolUnderpass: document.querySelector('#ze-tool-underpass'),
@@ -75,6 +92,9 @@ const el = {
   toolErase: document.querySelector('#ze-tool-erase'),
   shapeRect: document.querySelector('#ze-shape-rect'),
   shapePoly: document.querySelector('#ze-shape-poly'),
+  floorSep: document.querySelector('#ze-floor-sep'),
+  floorDefault: document.querySelector('#ze-floor-default'),
+  floorLower: document.querySelector('#ze-floor-lower'),
   btnBrushDown: document.querySelector('#ze-brush-down'),
   btnBrushUp: document.querySelector('#ze-brush-up'),
   btnClearVision: document.querySelector('#ze-clear-vision'),
@@ -85,7 +105,10 @@ const el = {
   btnClearBombB: document.querySelector('#ze-clear-bomb-b'),
   btnClearKeyA: document.querySelector('#ze-clear-key-a'),
   btnClearKeyB: document.querySelector('#ze-clear-key-b'),
-  btnToggleSites: document.querySelector('#ze-toggle-sites')
+  btnToggleSites: document.querySelector('#ze-toggle-sites'),
+  regions: document.querySelector('#ze-regions'),
+  btnMakeZone: document.querySelector('#ze-make-zone'),
+  btnMakeArea: document.querySelector('#ze-make-area')
 };
 
 let mapCode = MAP_CODES.includes('INF') ? 'INF' : MAP_CODES[0];
@@ -94,6 +117,7 @@ ensureVisionLayers(network);
 ensureLedges(network);
 ensureBombSites(network);
 ensureKeyZones(network);
+ensureRegionHierarchy(network);
 let savedSnapshot = '';
 /** @type {Array<object>} */
 let undoStack = [];
@@ -108,7 +132,7 @@ let drawing = null;
 let polyVerts = [];
 let panning = false;
 let lastPan = null;
-/** @type {'bombA'|'bombB'|'keyA'|'keyB'|'visionBlock'|'elevated'|'underpass'|'ledge'|'erase'} */
+/** @type {'bombA'|'bombB'|'keyA'|'keyB'|'position'|'visionBlock'|'elevated'|'underpass'|'ledge'|'erase'} */
 let paintTool = 'bombA';
 /** @type {'rect'|'poly'} */
 let shapeMode = 'rect';
@@ -116,6 +140,14 @@ let shapeMode = 'rect';
 let eraseTarget = 'visionBlock';
 let brushPx = DEFAULT_BRUSH_PX;
 let showSites = true;
+/** @type {'default'|'lower'} */
+let radarLevel = 'default';
+/** @type {Set<string>} */
+let selectedPositionIds = new Set();
+/** @type {Set<string>} */
+let selectedZoneIds = new Set();
+/** @type {string} */
+let highlightPositionId = '';
 /** @type {null | { last: {x:number,y:number}, layer: string, erase: boolean }} */
 let brushing = null;
 /** @type {null | Array<[number, number]>} radar pts while drawing a ledge streak */
@@ -126,13 +158,17 @@ function snapshotOf(net) {
   ensureVisionLayers(net);
   ensureLedges(net);
   ensureKeyZones(net);
+  ensureRegionHierarchy(net);
   return JSON.stringify({
     visionBlocks: net.visionBlocks || [],
     elevated: net.elevated || [],
     underpasses: net.underpasses || [],
     ledges: net.ledges || [],
     bombSites: net.bombSites || { a: null, b: null },
-    keyZones: net.keyZones || { a: [], b: [] }
+    keyZones: net.keyZones || { a: [], b: [] },
+    positions: net.positions || [],
+    zones: net.zones || [],
+    areas: net.areas || []
   });
 }
 
@@ -164,7 +200,7 @@ function isKeyTool(tool = paintTool) {
 }
 
 function isShapeTool(tool = paintTool) {
-  return isBombTool(tool) || isKeyTool(tool);
+  return isBombTool(tool) || isKeyTool(tool) || tool === 'position';
 }
 
 function isRectTool(tool = paintTool) {
@@ -242,10 +278,14 @@ function undoLast() {
   network.ledges = prev.ledges || [];
   network.bombSites = prev.bombSites || { a: null, b: null };
   network.keyZones = prev.keyZones || { a: [], b: [] };
+  network.positions = prev.positions || [];
+  network.zones = prev.zones || [];
+  network.areas = prev.areas || [];
   ensureVisionLayers(network);
   ensureLedges(network);
   ensureBombSites(network);
   ensureKeyZones(network);
+  ensureRegionHierarchy(network);
   bumpLayerPaintGen(network);
   markDirty(snapshotOf(network) !== savedSnapshot);
   syncUi();
@@ -257,6 +297,7 @@ function syncUi() {
   ensureVisionLayers(network);
   ensureLedges(network);
   ensureBombSites(network);
+  ensureRegionHierarchy(network);
   if (el.layerCounts) {
     const vb = network.visionBlocks.length;
     const elv = network.elevated.length;
@@ -274,6 +315,7 @@ function syncUi() {
   }
 
   const isBrush = isBrushTool();
+  const hasLower = mapHasLowerRadar(mapCode);
   el.toolBombA?.classList.toggle('active', paintTool === 'bombA');
   el.toolBombA?.classList.toggle('bomb-a', paintTool === 'bombA');
   el.toolBombB?.classList.toggle('active', paintTool === 'bombB');
@@ -282,6 +324,8 @@ function syncUi() {
   el.toolKeyA?.classList.toggle('key-a', paintTool === 'keyA');
   el.toolKeyB?.classList.toggle('active', paintTool === 'keyB');
   el.toolKeyB?.classList.toggle('key-b', paintTool === 'keyB');
+  el.toolPosition?.classList.toggle('active', paintTool === 'position');
+  el.toolPosition?.classList.toggle('position', paintTool === 'position');
   el.toolVision?.classList.toggle('active', paintTool === 'visionBlock');
   el.toolVision?.classList.toggle('vision', paintTool === 'visionBlock');
   el.toolElevated?.classList.toggle('active', paintTool === 'elevated');
@@ -293,6 +337,15 @@ function syncUi() {
   el.toolErase?.classList.toggle('active', paintTool === 'erase');
   el.shapeRect?.classList.toggle('active', shapeMode === 'rect');
   el.shapePoly?.classList.toggle('active', shapeMode === 'poly');
+  el.floorSep && (el.floorSep.hidden = !hasLower);
+  if (el.floorDefault) {
+    el.floorDefault.hidden = !hasLower;
+    el.floorDefault.classList.toggle('active', radarLevel === 'default');
+  }
+  if (el.floorLower) {
+    el.floorLower.hidden = !hasLower;
+    el.floorLower.classList.toggle('active', radarLevel === 'lower');
+  }
   el.canvas?.classList.toggle('ze-brush-cursor', isBrush);
   if (el.brushSizeLabel) el.brushSizeLabel.textContent = String(brushPx);
   if (el.btnToggleSites) {
@@ -301,6 +354,7 @@ function syncUi() {
       : 'Show bombsite & key zones';
   }
   if (!isBrush) hideBrushRing();
+  renderRegionsPanel();
 }
 
 function setPaintTool(tool) {
@@ -323,6 +377,10 @@ function setPaintTool(tool) {
     setStatus('Ledge: drag a streak · left of travel = drop · right = upper');
   } else if (tool === 'underpass') {
     setStatus('Underpass: paint area others can see into; you cannot see out');
+  } else if (tool === 'position') {
+    setStatus(
+      `Position (${radarLevel === 'lower' ? 'lower' : 'upper'}): draw one footprint · no overlap on this floor`
+    );
   }
 }
 
@@ -541,6 +599,16 @@ function draw() {
     drawKeyList(network.keyZones.b, KEY_B_COLOR, 'B');
   }
 
+  ensureRegionHierarchy(network);
+  for (const pos of network.positions || []) {
+    if ((pos.level || 'default') !== radarLevel) continue;
+    const selected = selectedPositionIds.has(pos.id) || highlightPositionId === pos.id;
+    const color = selected ? POSITION_SELECTED : POSITION_COLOR;
+    for (const piece of pos.pieces || []) {
+      drawPiece(piece, color, pos.name || 'Pos', selected ? 2.5 : 1.5);
+    }
+  }
+
   const draftColor =
     paintTool === 'bombA'
       ? BOMB_A_COLOR
@@ -550,7 +618,9 @@ function draw() {
           ? KEY_A_COLOR
           : paintTool === 'keyB'
             ? KEY_B_COLOR
-            : '#88c0ff';
+            : paintTool === 'position'
+              ? POSITION_COLOR
+              : '#88c0ff';
 
   if (drawing && isRectTool()) {
     const x0 = Math.min(drawing.r0.x, drawing.r1.x);
@@ -597,28 +667,50 @@ function renderMapTabs() {
   }).join('');
 }
 
-async function loadMap(code) {
-  if (dirty && !confirm('Discard unsaved changes on this map?')) return;
-  mapCode = code;
-  renderMapTabs();
-  setStatus('');
+async function loadRadarForLevel() {
   try {
-    radarImg = await loadRadar(mapCode);
+    radarImg = await loadRadar(mapCode, radarLevel);
   } catch {
     radarImg = null;
   }
+}
+
+async function setRadarLevel(level) {
+  const next = level === 'lower' ? 'lower' : 'default';
+  if (!mapHasLowerRadar(mapCode)) {
+    radarLevel = 'default';
+  } else {
+    radarLevel = next;
+  }
+  await loadRadarForLevel();
+  syncUi();
+  draw();
+}
+
+async function loadMap(code) {
+  if (dirty && !confirm('Discard unsaved changes on this map?')) return;
+  mapCode = code;
+  radarLevel = 'default';
+  selectedPositionIds = new Set();
+  selectedZoneIds = new Set();
+  highlightPositionId = '';
+  renderMapTabs();
+  setStatus('');
+  await loadRadarForLevel();
   try {
     network = await fetchZones(mapCode);
     ensureVisionLayers(network);
     ensureLedges(network);
     ensureBombSites(network);
     ensureKeyZones(network);
+    ensureRegionHierarchy(network);
   } catch (err) {
     network = emptyNetwork(mapCode);
     ensureVisionLayers(network);
     ensureLedges(network);
     ensureBombSites(network);
     ensureKeyZones(network);
+    ensureRegionHierarchy(network);
     setStatus(err.message || 'Could not load', 'err');
   }
   savedSnapshot = snapshotOf(network);
@@ -693,6 +785,44 @@ function commitKeyZone(site, piece) {
   setStatus(`Key ${site.toUpperCase()} #${list.length} added`);
 }
 
+function commitPosition(piece) {
+  const clean =
+    piece?.type === 'poly'
+      ? piece.ring?.length >= 3
+        ? piece
+        : null
+      : piece && piece.w >= 8 && piece.h >= 8
+        ? piece
+        : null;
+  if (!clean) {
+    draw();
+    return;
+  }
+  pushUndo();
+  try {
+    const pos = createPosition(network, {
+      name: `Pos ${(network.positions?.length || 0) + 1}`,
+      level: radarLevel,
+      pieces: [clean]
+    });
+    if (!pos) {
+      undoStack.pop();
+      draw();
+      return;
+    }
+    selectedPositionIds.add(pos.id);
+    highlightPositionId = pos.id;
+    markDirty(true);
+    syncUi();
+    draw();
+    setStatus(`Position "${pos.name}" added (${pos.level === 'lower' ? 'lower' : 'upper'})`);
+  } catch (err) {
+    undoStack.pop();
+    draw();
+    setStatus(err.message || 'Could not add position', 'err');
+  }
+}
+
 function clearKeySite(site) {
   ensureKeyZones(network);
   const list = site === 'b' ? network.keyZones.b : network.keyZones.a;
@@ -715,6 +845,10 @@ function commitShapePiece(piece) {
   const keySite = keySiteForTool();
   if (keySite) {
     commitKeyZone(keySite, piece);
+    return;
+  }
+  if (paintTool === 'position') {
+    commitPosition(piece);
     return;
   }
   draw();
@@ -779,6 +913,145 @@ function applyBrushAt(from, to, layer, erase) {
     syncUi();
     draw();
   }
+}
+
+function esc(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderRegionsPanel() {
+  if (!el.regions) return;
+  ensureRegionHierarchy(network);
+  const positions = network.positions || [];
+  const zones = network.zones || [];
+  const areas = network.areas || [];
+  const posById = new Map(positions.map((p) => [p.id, p]));
+  const zoneById = new Map(zones.map((z) => [z.id, z]));
+
+  const posRows = positions.length
+    ? positions
+        .map((p) => {
+          const checked = selectedPositionIds.has(p.id) ? ' checked' : '';
+          const selected = selectedPositionIds.has(p.id) ? ' is-selected' : '';
+          const lvl = p.level === 'lower' ? 'lower' : 'upper';
+          return `<div class="ze-item${selected}" data-pos-row="${esc(p.id)}">
+            <input type="checkbox" data-sel-pos="${esc(p.id)}"${checked} />
+            <input class="ze-item-name" type="text" maxlength="64" data-rename-pos="${esc(
+              p.id
+            )}" value="${esc(p.name)}" />
+            <button type="button" class="ze-icon-btn" data-del-pos="${esc(p.id)}" title="Delete">✕</button>
+            <span class="ze-item-meta"><span class="ze-level-tag">${lvl}</span> · ${esc(p.id)}</span>
+          </div>`;
+        })
+        .join('')
+    : '<p class="ze-empty">No positions yet. Use the Position tool.</p>';
+
+  const zoneRows = zones.length
+    ? zones
+        .map((z) => {
+          const checked = selectedZoneIds.has(z.id) ? ' checked' : '';
+          const selected = selectedZoneIds.has(z.id) ? ' is-selected' : '';
+          const members = (z.positionIds || [])
+            .map((id) => posById.get(id)?.name || id)
+            .join(', ');
+          return `<div class="ze-item${selected}" data-zone-row="${esc(z.id)}">
+            <input type="checkbox" data-sel-zone="${esc(z.id)}"${checked} />
+            <input class="ze-item-name" type="text" maxlength="64" data-rename-zone="${esc(
+              z.id
+            )}" value="${esc(z.name)}" />
+            <button type="button" class="ze-icon-btn" data-del-zone="${esc(z.id)}" title="Delete">✕</button>
+            <span class="ze-item-members">${esc(members) || 'No positions'} ·
+              <button type="button" class="btn" style="padding:2px 6px;font-size:10px" data-add-sel-pos="${esc(
+                z.id
+              )}">Add selected</button>
+            </span>
+          </div>`;
+        })
+        .join('')
+    : '<p class="ze-empty">No zones yet. Select positions, then + Zone.</p>';
+
+  const areaRows = areas.length
+    ? areas
+        .map((a) => {
+          const members = (a.zoneIds || [])
+            .map((id) => zoneById.get(id)?.name || id)
+            .join(', ');
+          return `<div class="ze-item" data-area-row="${esc(a.id)}">
+            <span></span>
+            <input class="ze-item-name" type="text" maxlength="64" data-rename-area="${esc(
+              a.id
+            )}" value="${esc(a.name)}" />
+            <button type="button" class="ze-icon-btn" data-del-area="${esc(a.id)}" title="Delete">✕</button>
+            <span class="ze-item-members">${esc(members) || 'No zones'} ·
+              <button type="button" class="btn" style="padding:2px 6px;font-size:10px" data-add-sel-zone="${esc(
+                a.id
+              )}">Add selected</button>
+            </span>
+          </div>`;
+        })
+        .join('')
+    : '<p class="ze-empty">No areas yet. Select zones, then + Area.</p>';
+
+  el.regions.innerHTML = `
+    <div>
+      <h2 style="margin-bottom:4px">Positions <span style="font-weight:400;text-transform:none;letter-spacing:0">(${positions.length})</span></h2>
+      <div class="ze-list">${posRows}</div>
+    </div>
+    <div>
+      <h2 style="margin-bottom:4px">Zones <span style="font-weight:400;text-transform:none;letter-spacing:0">(${zones.length})</span></h2>
+      <div class="ze-list">${zoneRows}</div>
+    </div>
+    <div>
+      <h2 style="margin-bottom:4px">Areas <span style="font-weight:400;text-transform:none;letter-spacing:0">(${areas.length})</span></h2>
+      <div class="ze-list">${areaRows}</div>
+    </div>`;
+}
+
+function makeZoneFromSelection() {
+  const ids = [...selectedPositionIds];
+  if (!ids.length) {
+    setStatus('Select one or more positions first', 'err');
+    return;
+  }
+  const name = window.prompt('Zone name', `Zone ${(network.zones?.length || 0) + 1}`);
+  if (name == null) return;
+  pushUndo();
+  const zone = createZone(network, { name, positionIds: ids });
+  if (!zone) {
+    undoStack.pop();
+    setStatus('Could not create zone', 'err');
+    return;
+  }
+  selectedZoneIds.add(zone.id);
+  markDirty(true);
+  syncUi();
+  draw();
+  setStatus(`Zone "${zone.name}" created`);
+}
+
+function makeAreaFromSelection() {
+  const ids = [...selectedZoneIds];
+  if (!ids.length) {
+    setStatus('Select one or more zones first', 'err');
+    return;
+  }
+  const name = window.prompt('Area name', `Area ${(network.areas?.length || 0) + 1}`);
+  if (name == null) return;
+  pushUndo();
+  const area = createArea(network, { name, zoneIds: ids });
+  if (!area) {
+    undoStack.pop();
+    setStatus('Could not create area', 'err');
+    return;
+  }
+  markDirty(true);
+  syncUi();
+  draw();
+  setStatus(`Area "${area.name}" created`);
 }
 
 function finishLedgeStroke() {
@@ -954,6 +1227,7 @@ el.toolBombA?.addEventListener('click', () => setPaintTool('bombA'));
 el.toolBombB?.addEventListener('click', () => setPaintTool('bombB'));
 el.toolKeyA?.addEventListener('click', () => setPaintTool('keyA'));
 el.toolKeyB?.addEventListener('click', () => setPaintTool('keyB'));
+el.toolPosition?.addEventListener('click', () => setPaintTool('position'));
 el.toolVision?.addEventListener('click', () => setPaintTool('visionBlock'));
 el.toolElevated?.addEventListener('click', () => setPaintTool('elevated'));
 el.toolUnderpass?.addEventListener('click', () => setPaintTool('underpass'));
@@ -961,6 +1235,10 @@ el.toolLedge?.addEventListener('click', () => setPaintTool('ledge'));
 el.toolErase?.addEventListener('click', () => setPaintTool('erase'));
 el.shapeRect?.addEventListener('click', () => setShapeMode('rect'));
 el.shapePoly?.addEventListener('click', () => setShapeMode('poly'));
+el.floorDefault?.addEventListener('click', () => setRadarLevel('default'));
+el.floorLower?.addEventListener('click', () => setRadarLevel('lower'));
+el.btnMakeZone?.addEventListener('click', () => makeZoneFromSelection());
+el.btnMakeArea?.addEventListener('click', () => makeAreaFromSelection());
 el.btnClearBombA?.addEventListener('click', () => clearBombSite('a'));
 el.btnClearBombB?.addEventListener('click', () => clearBombSite('b'));
 el.btnClearKeyA?.addEventListener('click', () => clearKeySite('a'));
@@ -969,6 +1247,115 @@ el.btnToggleSites?.addEventListener('click', () => {
   showSites = !showSites;
   syncUi();
   draw();
+});
+
+el.regions?.addEventListener('change', (e) => {
+  const t = e.target;
+  if (t.matches?.('[data-sel-pos]')) {
+    const id = t.dataset.selPos;
+    if (t.checked) selectedPositionIds.add(id);
+    else selectedPositionIds.delete(id);
+    highlightPositionId = t.checked ? id : '';
+    syncUi();
+    draw();
+    return;
+  }
+  if (t.matches?.('[data-sel-zone]')) {
+    const id = t.dataset.selZone;
+    if (t.checked) selectedZoneIds.add(id);
+    else selectedZoneIds.delete(id);
+    syncUi();
+    return;
+  }
+  if (t.matches?.('[data-rename-pos]')) {
+    pushUndo();
+    renamePosition(network, t.dataset.renamePos, t.value);
+    markDirty(true);
+    syncUi();
+    draw();
+    return;
+  }
+  if (t.matches?.('[data-rename-zone]')) {
+    pushUndo();
+    renameZone(network, t.dataset.renameZone, t.value);
+    markDirty(true);
+    syncUi();
+    return;
+  }
+  if (t.matches?.('[data-rename-area]')) {
+    pushUndo();
+    renameArea(network, t.dataset.renameArea, t.value);
+    markDirty(true);
+    syncUi();
+  }
+});
+
+el.regions?.addEventListener('click', (e) => {
+  const t = e.target;
+  const delPos = t.closest?.('[data-del-pos]');
+  if (delPos) {
+    const id = delPos.dataset.delPos;
+    const pos = network.positions.find((p) => p.id === id);
+    if (!confirm(`Delete position "${pos?.name || id}"?`)) return;
+    pushUndo();
+    deletePosition(network, id);
+    selectedPositionIds.delete(id);
+    if (highlightPositionId === id) highlightPositionId = '';
+    markDirty(true);
+    syncUi();
+    draw();
+    return;
+  }
+  const delZone = t.closest?.('[data-del-zone]');
+  if (delZone) {
+    const id = delZone.dataset.delZone;
+    const zone = network.zones.find((z) => z.id === id);
+    if (!confirm(`Delete zone "${zone?.name || id}"?`)) return;
+    pushUndo();
+    deleteZone(network, id);
+    selectedZoneIds.delete(id);
+    markDirty(true);
+    syncUi();
+    draw();
+    return;
+  }
+  const delArea = t.closest?.('[data-del-area]');
+  if (delArea) {
+    const id = delArea.dataset.delArea;
+    const area = network.areas.find((a) => a.id === id);
+    if (!confirm(`Delete area "${area?.name || id}"?`)) return;
+    pushUndo();
+    deleteArea(network, id);
+    markDirty(true);
+    syncUi();
+    draw();
+    return;
+  }
+  const addPos = t.closest?.('[data-add-sel-pos]');
+  if (addPos) {
+    const zone = network.zones.find((z) => z.id === addPos.dataset.addSelPos);
+    if (!zone) return;
+    const next = new Set([...(zone.positionIds || []), ...selectedPositionIds]);
+    pushUndo();
+    setZoneMembers(network, zone.id, [...next]);
+    markDirty(true);
+    syncUi();
+    draw();
+    setStatus(`Updated zone "${zone.name}"`);
+    return;
+  }
+  const addZone = t.closest?.('[data-add-sel-zone]');
+  if (addZone) {
+    const area = network.areas.find((a) => a.id === addZone.dataset.addSelZone);
+    if (!area) return;
+    const next = new Set([...(area.zoneIds || []), ...selectedZoneIds]);
+    pushUndo();
+    setAreaMembers(network, area.id, [...next]);
+    markDirty(true);
+    syncUi();
+    draw();
+    setStatus(`Updated area "${area.name}"`);
+  }
 });
 
 el.btnBrushDown?.addEventListener('click', () => {
@@ -1074,13 +1461,18 @@ el.btnDiscard?.addEventListener('click', async () => {
     ensureLedges(network);
     ensureBombSites(network);
     ensureKeyZones(network);
+    ensureRegionHierarchy(network);
   } catch {
     network = emptyNetwork(mapCode);
     ensureVisionLayers(network);
     ensureLedges(network);
     ensureBombSites(network);
     ensureKeyZones(network);
+    ensureRegionHierarchy(network);
   }
+  selectedPositionIds = new Set();
+  selectedZoneIds = new Set();
+  highlightPositionId = '';
   savedSnapshot = snapshotOf(network);
   clearUndo();
   markDirty(false);
@@ -1094,6 +1486,7 @@ el.btnSave?.addEventListener('click', async () => {
   ensureLedges(network);
   ensureBombSites(network);
   ensureKeyZones(network);
+  ensureRegionHierarchy(network);
   setStatus('Saving…');
   try {
     network = await saveZones(mapCode, network);
@@ -1101,6 +1494,7 @@ el.btnSave?.addEventListener('click', async () => {
     ensureLedges(network);
     ensureBombSites(network);
     ensureKeyZones(network);
+    ensureRegionHierarchy(network);
     savedSnapshot = snapshotOf(network);
     markDirty(false);
     clearUndo();

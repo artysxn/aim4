@@ -57,7 +57,48 @@ const div = (a, b) => (b > 0 ? a / b : 0);
  * @property {''|'won'|'lost'} [result]  subject won / lost the round
  * @property {''|'5v4'|'4v5'|'even'} [advantage]  opening situation for subject
  * @property {string} [teamName]  only count rounds while the subject played under this display name
+ * @property {string} [dateFrom]  inclusive start day (YYYY-MM-DD, local)
+ * @property {string} [dateTo]    inclusive end day (YYYY-MM-DD, local)
  */
+
+/** Match / upload time for a demo (ms), or 0 when unknown. */
+export function demoTimestamp(demo) {
+  return Number(demo?.uploadedAt || demo?.parsedAt || 0) || 0;
+}
+
+/** Local midnight / end-of-day for a YYYY-MM-DD string. */
+function localDayBound(ymd, end) {
+  const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (!y || !mo || !d) return null;
+  return end
+    ? new Date(y, mo - 1, d, 23, 59, 59, 999).getTime()
+    : new Date(y, mo - 1, d, 0, 0, 0, 0).getTime();
+}
+
+/**
+ * Does this demo fall inside filter.dateFrom / filter.dateTo (inclusive local days)?
+ * Missing dates fail the filter when either bound is set.
+ */
+export function demoPassesDate(demo, filter = {}) {
+  const from = String(filter.dateFrom || '').trim();
+  const to = String(filter.dateTo || '').trim();
+  if (!from && !to) return true;
+  const ts = demoTimestamp(demo);
+  if (!ts) return false;
+  if (from) {
+    const start = localDayBound(from, false);
+    if (start != null && ts < start) return false;
+  }
+  if (to) {
+    const end = localDayBound(to, true);
+    if (end != null && ts > end) return false;
+  }
+  return true;
+}
 
 /**
  * Does a round pass, from the point of view of one team (1 or 2)?
@@ -68,10 +109,15 @@ const div = (a, b) => (b > 0 ? a / b : 0);
  * @param {StatsFilter} [filter]
  * @param {number} [team]
  * @param {Map<string, {team: number}>} [players]  keyed demoId:playerId — needed for advantage
+ * @param {Map<string, object>} [demos]  keyed demoId — needed for dateFrom / dateTo
  */
-export function rowPasses(row, filter = {}, team = 0, players = null) {
+export function rowPasses(row, filter = {}, team = 0, players = null, demos = null) {
   if (filter.files?.length && !filter.files.includes(row.f)) return false;
   if (filter.maps?.length && !filter.maps.includes(row.m)) return false;
+  if (filter.dateFrom || filter.dateTo) {
+    const demo = demos?.get?.(row.d) || null;
+    if (!demoPassesDate(demo, filter)) return false;
+  }
   if (!team) return true;
   const side = team === 1 ? row.s1 : row.s2;
   if (filter.side && side !== filter.side) return false;
@@ -344,7 +390,7 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       const who = players.get(`${row.d}:${id}`);
       const team = who?.team;
       if (!team) continue;
-      if (!rowPasses(row, filter, team, players)) continue;
+      if (!rowPasses(row, filter, team, players, demos)) continue;
       if (filter.teamName) {
         const demo = demos?.get(row.d);
         if (!demo) continue;
@@ -670,7 +716,7 @@ export function aggregateTeams(rows, players, demos, filter = {}) {
       const key = teamNameKey(displayName, shortId);
       if (!key) continue;
       if (filter.teamName && teamNameKey(displayName) !== teamNameKey(filter.teamName)) continue;
-      if (!rowPasses(row, filter, team, players)) continue;
+      if (!rowPasses(row, filter, team, players, demos)) continue;
       const s = seat(key, displayName || shortId);
       if (shortId) s.shortIds.add(shortId);
       s.rounds++;

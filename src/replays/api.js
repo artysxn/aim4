@@ -145,7 +145,11 @@ export async function fetchStatus() {
  * what My Uploads needs: filtering the library page client-side capped that
  * screen at the page size no matter how many demos the account actually had.
  *
- * @param {{ limit?: number, offset?: number, mine?: boolean }} [opts]
+ * `{ team: 'Name' }` keeps only demos whose team1/team2 display name matches
+ * (case-insensitive). Used by Team Overview so it does not download the whole
+ * shared library.
+ *
+ * @param {{ limit?: number, offset?: number, mine?: boolean, team?: string }} [opts]
  */
 export async function fetchDemos(opts = {}) {
   const params = new URLSearchParams();
@@ -154,6 +158,7 @@ export async function fetchDemos(opts = {}) {
     if (Number.isFinite(opts.limit) && opts.limit > 0) params.set('limit', String(opts.limit));
     if (Number.isFinite(opts.offset) && opts.offset > 0) params.set('offset', String(opts.offset));
   }
+  if (opts.team) params.set('team', String(opts.team));
   const q = params.toString() ? `?${params}` : '';
   return asJson(await safeFetch(`${API_BASE}/api/replays/demos${q}`, { headers: await headers() }));
 }
@@ -562,9 +567,9 @@ export async function fetchZones(map) {
 }
 
 /**
- * Persist bombsites + vision layers + key zones for one map.
+ * Persist bombsites + vision layers + key zones + Positions/Zones/Areas.
  * @param {string} map
- * @param {{ visionBlocks?: Array, elevated?: Array, underpasses?: Array, ledges?: Array, bombSites?: object, keyZones?: object }} network
+ * @param {object} network
  */
 export async function saveZones(map, network) {
   const data = await asJson(
@@ -577,7 +582,10 @@ export async function saveZones(map, network) {
         underpasses: network.underpasses || [],
         ledges: network.ledges || [],
         bombSites: network.bombSites || { a: null, b: null },
-        keyZones: network.keyZones || { a: [], b: [] }
+        keyZones: network.keyZones || { a: [], b: [] },
+        positions: network.positions || [],
+        zones: network.zones || [],
+        areas: network.areas || []
       })
     })
   );

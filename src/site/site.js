@@ -30,7 +30,7 @@ import sideTeamStratbook from '../icons/sideicons/sideicon_stratbook.svg?raw';
 import sideTeamStrategies from '../icons/sideicons/sideicon_my_strategies.svg?raw';
 import sideTeamDrawingBoard from '../icons/sideicons/sideicon_drawing_board.svg?raw';
 import sideTeamUtilityArchive from '../icons/sideicons/sideicon_utility_archive.svg?raw';
-import sideTeamCoach from '../icons/sideicons/sideicon_coach.svg?raw';
+import sideTeamCoach from '../icons/sideicons/sideicon_teamreplays.svg?raw';
 import sideTeamCreator from '../icons/sideicons/sideicon_2d_creator.svg?raw';
 import logoFullUrl from '../icons/aim4logos/logocolor.png';
 import logoMarkUrl from '../icons/aim4logos/logo1x1.png';
@@ -453,8 +453,8 @@ const ROUTES = {
     page: 'team-utility-archive'
   },
   'team-autocoach': {
-    title: 'Autocoach',
-    path: '/team/autocoach',
+    title: 'Team Replays',
+    path: '/team/replays',
     shell: 'team',
     page: 'team-autocoach'
   },
@@ -492,7 +492,8 @@ const LEGACY_PATHS = {
   '/replays/stats': '/database',
   '/replays/charts': '/charts',
   '/replays/analytics': '/patterns',
-  '/replays/upload': '/uploads'
+  '/replays/upload': '/uploads',
+  '/team/autocoach': '/team/replays'
 };
 
 const PATH_TO_ROUTE = Object.fromEntries(

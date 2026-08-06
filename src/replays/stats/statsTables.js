@@ -946,6 +946,11 @@ export const TEAM_COLUMNS = [
   }
 ];
 
+/** Teams table when each row is one map for a locked team (Overview, Any map). */
+export const TEAM_MAP_COLUMNS = TEAM_COLUMNS.map((c) =>
+  c.key === 'name' ? { ...c, label: 'Map' } : c
+);
+
 /** Default page size for library Statistics tables. */
 export const STATS_PAGE_SIZE = 100;
 
@@ -1066,12 +1071,16 @@ export function statsTableHtml(rows, opts) {
     teamCell = null,
     opponentCell = null,
     fixedCount = 0,
-    showAverage = false
+    showAverage = false,
+    /** When set, footer averages these rows instead of the visible/sorted set. */
+    averageRows = null,
+    /** Keep input order (no column sort). Used for fixed comparison layouts. */
+    preserveOrder = false
   } = opts;
   if (!rows.length) {
     return '<p class="view-empty">Nothing matches these filters.</p>';
   }
-  const sorted = sortRows(rows, columns, sortKey, sortDir);
+  const sorted = preserveOrder ? [...rows] : sortRows(rows, columns, sortKey, sortDir);
   const total = sorted.length;
   const size = pageSize > 0 ? pageSize : total;
   const pages = Math.max(1, Math.ceil(total / size));
@@ -1083,11 +1092,15 @@ export function statsTableHtml(rows, opts) {
   const rankHead = `<th class="st-rank st-sticky st-sticky-0" title="Rank">#</th>`;
   const head = columns
     .map((c, i) => {
-      const active = c.key === sortKey;
+      const active = !preserveOrder && c.key === sortKey;
       const arrow = active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
       const stick = i < sticky ? ` st-sticky st-sticky-${i + 1}` : '';
-      return `<th class="${c.align === 'left' ? 'left' : ''}${active ? ' sorted' : ''}${stick}"
-        data-sort="${c.key}" title="Sort by ${escapeHtml(c.label)}">${escapeHtml(c.label)}${arrow}</th>`;
+      const sortAttr = preserveOrder ? '' : ` data-sort="${c.key}"`;
+      const title = preserveOrder
+        ? escapeHtml(c.label)
+        : `Sort by ${escapeHtml(c.label)}`;
+      return `<th class="${c.align === 'left' ? 'left' : ''}${active ? ' sorted' : ''}${stick}"${sortAttr}
+        title="${title}">${escapeHtml(c.label)}${arrow}</th>`;
     })
     .join('');
 
@@ -1139,12 +1152,17 @@ export function statsTableHtml(rows, opts) {
             : `<td class="${cls}">${content}</td>`;
         })
         .join('');
-      return `<tr>${rankCell}${cells}</tr>`;
+      const rowCls = r.compareRole === 'us' ? ' class="st-row-us"' : '';
+      return `<tr${rowCls}>${rankCell}${cells}</tr>`;
     })
     .join('');
 
+  const avgSource =
+    Array.isArray(averageRows) && averageRows.length ? averageRows : sorted;
   const foot =
-    showAverage && total > 0 ? averageFooterHtml(sorted, columns, sticky, escapeHtml) : '';
+    showAverage && avgSource.length > 0
+      ? averageFooterHtml(avgSource, columns, sticky, escapeHtml)
+      : '';
 
   const table = `<div class="st-hscroll" data-st-hscroll>
     <div class="st-hscroll-bar" data-st-hscroll-bar tabindex="0" aria-label="Scroll columns">
@@ -1159,7 +1177,7 @@ export function statsTableHtml(rows, opts) {
     </div>
   </div>`;
 
-  if (!(pageSize > 0) || pages <= 1) return table;
+  if (preserveOrder || !(pageSize > 0) || pages <= 1) return table;
   return (
     table +
     pagerHtml({ page: safePage, pages, total, pageSize: size })

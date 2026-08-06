@@ -1043,9 +1043,13 @@ button.rp-side-name:hover {
   width: 100%;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   cursor: pointer;
-  /* meta · match · facts · actions. The facts column is content-width so a
-     match with no tags reads exactly as it did before. */
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  /* meta · match · facts · actions. Facts and actions are fixed tracks so a
+     views pill never moves the centred score. */
+  grid-template-columns: auto minmax(0, 1fr) 5.5rem 10.5rem;
+}
+
+.rp-demo-group > .rp-row.rp-demo-head > .rp-row-actions {
+  justify-self: end;
 }
 
 .rp-demo-facts {
@@ -1054,7 +1058,11 @@ button.rp-side-name:hover {
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  max-width: 260px;
+  width: 5.5rem;
+  max-width: 5.5rem;
+  min-height: 1.25rem;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .rp-demo-fact {
@@ -1149,7 +1157,9 @@ button.rp-side-name:hover {
   .rp-demo-facts {
     grid-column: 1 / -1;
     justify-content: flex-start;
+    width: auto;
     max-width: none;
+    overflow: visible;
   }
 }
 
@@ -3316,6 +3326,16 @@ body.rv-open {
   max-width: none;
 }
 
+.rp-playlists-panel > .rp-status {
+  grid-column: auto;
+  margin: 0 0 10px;
+  min-height: 0;
+}
+
+.rp-playlists-panel > .rp-status:empty {
+  display: none;
+}
+
 .st-head {
   display: flex;
   align-items: center;
@@ -3393,6 +3413,14 @@ body.rv-open {
 .st-table tfoot .st-avg-label {
   font-weight: 700;
   color: var(--text);
+}
+
+.st-table tr.st-row-us td {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.st-us-name {
+  font-weight: 700;
 }
 
 .st-table td.st-result-w {
@@ -3486,6 +3514,13 @@ body.rv-open {
   width: 72px;
   min-width: 72px;
   padding: 6px 8px;
+}
+
+.st-date {
+  width: 9.5em;
+  min-width: 9.5em;
+  padding: 6px 8px;
+  font-size: 12px;
 }
 
 .st-none {
@@ -5440,7 +5475,8 @@ table.rp-mine-table tbody tr {
 }
 
 .tm-grid-overview {
-  grid-template-columns: minmax(0, 300px) minmax(0, 1fr) minmax(0, 300px);
+  /* Map winrate (left) · Statistics (right) */
+  grid-template-columns: minmax(280px, 420px) minmax(0, 1fr);
 }
 
 .tm-overview-left {
@@ -5448,6 +5484,19 @@ table.rp-mine-table tbody tr {
   flex-direction: column;
   gap: 14px;
   min-width: 0;
+}
+
+.tm-grid-roles-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 14px;
+}
+
+.tm-members-card .tm-members {
+  max-height: min(42vh, 360px);
+  overflow: auto;
 }
 
 .tm-overview-stats {
@@ -5483,11 +5532,11 @@ table.rp-mine-table tbody tr {
 }
 
 .tm-maps-head,
-/* name · W-L · RWR · PRW · pistols · the two side bars */
+/* name · W-L · RWR · PRW · pistols — side bars sit on the next row */
 .tm-map-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 2.6em 3.2em 3.2em 3.2em 8.5em;
-  gap: 6px;
+  grid-template-columns: minmax(5.5em, 1fr) 2.6em 3em 3em 2.8em;
+  gap: 4px 6px;
   align-items: center;
   font: 500 12px var(--font-body);
   font-variant-numeric: tabular-nums;
@@ -5509,17 +5558,12 @@ table.rp-mine-table tbody tr {
   text-align: right;
 }
 
-/* "By side" is a label over two bars, not a number, so it reads from the left. */
-.tm-maps-head span:last-child {
-  text-align: left;
-  padding-left: 6px;
-}
-
 .tm-map-bars {
+  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding-left: 6px;
+  padding: 2px 0 0;
 }
 
 .tm-map-bar {
@@ -5578,6 +5622,21 @@ table.rp-mine-table tbody tr {
   flex-direction: column;
 }
 
+.tm-map-insights {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font: 500 12px var(--font-body);
+}
+
+.tm-map-insights li {
+  padding: 0 2px;
+}
+
 .tm-map-row {
   padding: 7px 2px;
   border-bottom: 1px solid var(--border);
@@ -5603,6 +5662,7 @@ table.rp-mine-table tbody tr {
   text-overflow: ellipsis;
   white-space: nowrap;
   font: 600 13px var(--font-body);
+  color: var(--text);
 }
 
 .tm-map-wl,
@@ -5680,7 +5740,8 @@ table.rp-mine-table tbody tr {
 }
 
 @media (max-width: 1100px) {
-  .tm-grid-overview {
+  .tm-grid-overview,
+  .tm-grid-roles-top {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -8691,9 +8752,17 @@ table.rp-mine-table tbody tr {
   gap: 6px;
 }
 
+.sv-url {
+  flex: 1 1 14em;
+  min-width: 0;
+  font: 500 11px var(--font-mono, ui-monospace, monospace);
+  color: var(--muted);
+  cursor: text;
+}
+
 .sv-pick {
   min-width: 0;
-  flex: 1 1 8em;
+  flex: 0 1 8em;
   font-size: 12px;
   padding: 4px 8px;
 }
@@ -8702,6 +8771,10 @@ table.rp-mine-table tbody tr {
   flex-wrap: nowrap;
 }
 
+.st-saved .sv-url {
+  flex: 1 1 10em;
+}
+
 .st-saved .sv-pick {
-  max-width: 12em;
+  max-width: 10em;
 }

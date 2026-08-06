@@ -66,6 +66,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   const uploadPageEl = document.getElementById('rp-upload-page');
   const playlistsPageEl = document.getElementById('rp-playlists-page');
   const playlistsBody = document.getElementById('rp-pl-body');
+  const playlistStatusEl = document.getElementById('rp-pl-status');
   const statsPageEl = document.getElementById('rp-stats-page');
   const statsBodyEl = document.getElementById('rp-stats-body');
   const analyticsPageEl = document.getElementById('rp-analytics-page');
@@ -2887,18 +2888,38 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   // ---- playlists page -----------------------------------------------------
 
+  /** Status line on the playlists page (upload-page #rp-status is hidden here). */
+  function setPlaylistStatus(msg, isError = false) {
+    if (playlistStatusEl) {
+      playlistStatusEl.textContent = msg || '';
+      playlistStatusEl.classList.toggle('is-error', isError);
+    }
+    // Keep the shared status in sync for anywhere else that reads it.
+    setStatus(msg, isError);
+  }
+
   /**
-   * A playlist stores round names only, so it is turned back into rounds by
-   * matching against one collector call. Rounds that have since been deleted
-   * simply do not come back, which is why a playlist can never point at a
-   * round that no longer plays.
+   * A playlist stores round file stems only. Resolve each one with meta fetch
+   * (same path Analytics uses) so a large library or a visibility-filtered
+   * collector listing cannot drop rounds the playlist still names.
    */
   async function roundsForPlaylist(playlist) {
-    const wanted = playlist.rounds || [];
+    const wanted = [...new Set((playlist.rounds || []).map((f) => String(f || '').trim()).filter(Boolean))];
     if (!wanted.length) return [];
-    const res = await findRounds({}, 5000);
-    const byFile = new Map((res.rounds || []).map((r) => [r.file, r]));
-    return wanted.map((f) => byFile.get(f)).filter(Boolean);
+    const rounds = [];
+    const concurrency = 6;
+    let i = 0;
+    async function worker() {
+      while (i < wanted.length) {
+        const idx = i++;
+        const file = wanted[idx];
+        const meta = await fetchRoundMeta(file).catch(() => null);
+        if (!meta) continue;
+        rounds[idx] = { ...meta, file: meta.file || file };
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, wanted.length) }, () => worker()));
+    return rounds.filter(Boolean);
   }
 
   function renderPlaylistsPage() {
@@ -2960,6 +2981,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   async function loadPlaylistsPage() {
     if (!playlistsBody) return;
+    setPlaylistStatus('');
     playlistsBody.innerHTML = spinnerHtml();
     try {
       playlistLists = await fetchPlaylists();
@@ -3036,13 +3058,20 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       const pl = playlistLists.find((p) => p.id === play.dataset.play);
       if (!pl) return;
       play.disabled = true;
-      const list = await roundsForPlaylist(pl).catch(() => []);
-      play.disabled = false;
-      if (!list.length) {
-        setStatus('That playlist has no rounds left to play.', true);
-        return;
+      setPlaylistStatus('Opening playlist…');
+      try {
+        const list = await roundsForPlaylist(pl);
+        if (!list.length) {
+          setPlaylistStatus('That playlist has no rounds left to play.', true);
+          return;
+        }
+        await launchViewer(list, 'timeline', pl.name);
+        setPlaylistStatus('');
+      } catch (err) {
+        setPlaylistStatus(err?.message || 'Could not open the playlist.', true);
+      } finally {
+        play.disabled = false;
       }
-      launchViewer(list, 'timeline', pl.name);
       return;
     }
     if (drop) {
@@ -3051,8 +3080,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       try {
         playlistLists = await deletePlaylist(pl.id);
         renderPlaylistsPage();
+        setPlaylistStatus('Playlist deleted.');
       } catch (err) {
-        setStatus(err.message, true);
+        setPlaylistStatus(err.message, true);
       }
     }
   });
@@ -3081,6 +3111,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     // on the unfiltered Database (default 80) or a raised floor on a match scope.
     const minR = Math.max(0, Math.floor(Number(state.minRounds) || 0));
     if (minR !== defaultMinRounds(state)) q.set('minR', String(minR));
+    if (state.dateFrom) q.set('from', String(state.dateFrom));
+    if (state.dateTo) q.set('to', String(state.dateTo));
     if (state.role?.side && state.role?.value) {
       q.set('role', `${state.role.side}:${state.role.value}`);
     }
@@ -3130,6 +3162,12 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     if (params.oppAwp === '1' || params.oppAwp === 'true') out.oppHasAwp = true;
     if (params.minR !== undefined && params.minR !== '') {
       out.minRounds = Math.max(0, Math.floor(Number(params.minR) || 0));
+    }
+    if (params.from && /^\d{4}-\d{2}-\d{2}$/.test(String(params.from))) {
+      out.dateFrom = String(params.from);
+    }
+    if (params.to && /^\d{4}-\d{2}-\d{2}$/.test(String(params.to))) {
+      out.dateTo = String(params.to);
     }
     if (params.role) {
       const raw = String(params.role);
@@ -3230,6 +3268,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       delete merged.player;
       delete merged.team;
       delete merged.minRounds;
+      delete merged.dateFrom;
+      delete merged.dateTo;
       lastStatsDetailKey = '';
     }
     statsScope = merged;

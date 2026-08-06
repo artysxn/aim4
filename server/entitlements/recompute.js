@@ -15,6 +15,7 @@
 // ---------------------------------------------------------------------------
 
 import { isOwner, seatCapacityOf, setTeamSeatCapacity, teamsOf } from '../replays/teamsStore.js';
+import { invalidateUserIdentity } from '../replays/identity.js';
 import { CAP } from '../../shared/entitlements/keys.js';
 import { invalidateUser, loadEntitlements } from './load.js';
 import { db, isConfigured } from './service.js';
@@ -35,6 +36,7 @@ export async function recomputeUser(userId) {
   // Drop the cache first, then read through it, so the value written to the
   // database and the value the next request sees are the same one.
   invalidateUser(userId);
+  invalidateUserIdentity(userId);
   const resolved = await loadEntitlements(userId, { fresh: true });
 
   if (isConfigured()) {

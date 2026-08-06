@@ -1,9 +1,10 @@
 // ---------------------------------------------------------------------------
 // replays/zones/zoneModel.js
-// Slim map network: bombsites + vision layers. Hierarchy helpers removed.
+// Map network: bombsites, vision layers, and Positions → Zones → Areas.
 // ---------------------------------------------------------------------------
 
 import { normalizeRect } from './zoneGeom.js';
+import { ensureRegionHierarchy } from './regionHierarchy.js';
 
 export function emptyNetwork(map) {
   return {
@@ -14,19 +15,21 @@ export function emptyNetwork(map) {
     ledges: [],
     bombSites: { a: null, b: null },
     keyZones: { a: [], b: [] },
+    positions: [],
+    zones: [],
+    areas: [],
     updatedAt: 0
   };
 }
 
 /**
- * @deprecated Painted position networks are gone. Always false.
- * Use hasBombSites() / dynamic control instead.
+ * True when the map has at least one painted position (hierarchy ready).
  */
-export function isZoneNetworkReady(_network) {
-  return false;
+export function isZoneNetworkReady(network) {
+  return Boolean(network?.positions?.length);
 }
 
-/** World rect from a radar drag (bomb-site / key-zone tool). */
+/** World rect from a radar drag (bomb-site / key-zone / position tool). */
 export function worldRectFromRadarDrag(mapCode, radarToWorldFn, x0, y0, x1, y1) {
   const a = radarToWorldFn(mapCode, x0, y0, {});
   const b = radarToWorldFn(mapCode, x1, y1, {});
@@ -48,3 +51,5 @@ export function worldPolyFromRadarVerts(mapCode, radarToWorldFn, radarVerts) {
   }
   return { type: 'poly', ring };
 }
+
+export { ensureRegionHierarchy };

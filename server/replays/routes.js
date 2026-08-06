@@ -591,8 +591,22 @@ export async function handleReplayRequest(req, res, url) {
     // and filter client-side, which silently capped the page at the library's
     // 50 and made an account with 300 uploads look like it had 50.
     const mineOnly = url.searchParams.get('mine') === '1';
+    const teamQ = String(url.searchParams.get('team') || '')
+      .trim()
+      .toLowerCase();
     const ownedBy = (r) => ownerOf(r).id === me.id;
-    const records = mineOnly && !me.admin ? allowed.filter(ownedBy) : allowed;
+    const nameKey = (n) =>
+      String(n || '')
+        .trim()
+        .toLowerCase();
+    let records = mineOnly && !me.admin ? allowed.filter(ownedBy) : allowed;
+    // Team Overview only needs demos that name this roster, not the whole library.
+    if (teamQ) {
+      records = records.filter((r) => {
+        if ((r.status || 'ready') !== 'ready' && (r.status || '') !== 'parsing') return false;
+        return nameKey(r.team1?.name) === teamQ || nameKey(r.team2?.name) === teamQ;
+      });
+    }
     const byId = new Set(allRecords.map((r) => r.id));
     // Jobs whose record has not landed yet (upload just finished). Terminal
     // error/done jobs must not reappear here — otherwise deleting a failed

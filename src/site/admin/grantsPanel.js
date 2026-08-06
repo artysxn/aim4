@@ -164,7 +164,12 @@ export function grantsPanel({ userId, detail, onChanged }) {
   );
 
   const trialDays = input('number', '7');
-  const trialPlan = select(PLAN_IDS.map((id) => ({ value: id, label: PLAN_NAMES[id] })), 'premium');
+  // Team Premium unlocks create-team + Team Replays / Autocoach. Premium alone
+  // can only join an existing team, which is why gifted "trials" looked broken.
+  const trialPlan = select(
+    PLAN_IDS.map((id) => ({ value: id, label: PLAN_NAMES[id] })),
+    'team_premium'
+  );
   subs.append(
     el('h3', null, 'Trial'),
     field('Plan', trialPlan),

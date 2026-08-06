@@ -28,8 +28,11 @@ export function trialDays() {
 }
 
 export function trialPlan() {
-  const plan = process.env.AIM4_TRIAL_PLAN || 'premium';
-  return PLAN_IDS.includes(plan) ? plan : 'premium';
+  // Team Premium is the useful trial for the team suite (create team, Autocoach /
+  // Team Replays). Premium cannot create a team, so a gifted Premium trial left
+  // those pages looking "locked".
+  const plan = process.env.AIM4_TRIAL_PLAN || 'team_premium';
+  return PLAN_IDS.includes(plan) ? plan : 'team_premium';
 }
 
 export function trialsEnabled() {
