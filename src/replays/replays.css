@@ -1793,6 +1793,12 @@ body.rv-open {
   cursor: pointer;
 }
 
+/* Author display above beats the UA [hidden] rule; tools that set .hidden must
+   actually disappear (roster toggle is coach-only on stacked layouts). */
+.rv-tool[hidden] {
+  display: none !important;
+}
+
 .rv-tool svg {
   width: 19px;
   height: 19px;
@@ -3909,6 +3915,11 @@ body.rv-open {
   min-height: 0;
   height: 100%;
   max-height: 100%;
+}
+
+/* Same [hidden] vs display:flex fight as .rv-team / .rv-tool. */
+.rv-team-col[hidden] {
+  display: none !important;
 }
 
 .rv-team-col > .rv-team {
@@ -8169,18 +8180,21 @@ table.rp-mine-table tbody tr {
 
   /* Mobile coach with sidebars off: one full-bleed map cell; chrome overlays. */
   .rv-timeline.rosters-hidden .rv-stage {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
     gap: 0;
     padding: 8px;
+    align-items: stretch;
   }
 
   .rv-timeline.rosters-hidden .rv-map {
-    grid-area: 1 / 1 / -1 / -1;
+    grid-area: 1 / 1 / -1 / -1 !important;
+    height: 100%;
+    min-height: 0;
   }
 
   .rv-timeline.rosters-hidden .rv-team-col {
-    display: none;
+    display: none !important;
   }
 
   .rv-team-col {

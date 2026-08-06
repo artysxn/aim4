@@ -1321,6 +1321,12 @@ export function createTimelineViewer({
     }
     const hideRosters = mobileCoach && !coachRostersOn;
     el.classList.toggle('rosters-hidden', hideRosters);
+    // Force the columns off in the DOM too: display:flex on .rv-team-col
+    // outranks the UA [hidden] rule, and class-only CSS was a no-op when the
+    // tool stayed visible while the layout never changed.
+    for (const col of el.querySelectorAll('.rv-team-col')) {
+      col.hidden = hideRosters;
+    }
     syncChromeInset();
     if (!destroyed) draw();
   }
@@ -3759,7 +3765,9 @@ export function createTimelineViewer({
   });
 
   rostersBtn?.addEventListener('click', () => {
-    if (!(coachOn && stackedQuery.matches)) return;
+    // Button is only un-hidden in mobile coach; trust that over re-checking
+    // matchMedia (and avoid a no-op when the tool was wrongly still painted).
+    if (rostersBtn.hidden) return;
     coachRostersOn = !coachRostersOn;
     syncRostersLayout();
     // POV may have emptied a panel; rebuild so shown sidebars are current.
