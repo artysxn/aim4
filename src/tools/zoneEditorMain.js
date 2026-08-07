@@ -76,7 +76,7 @@ const KEY_B_COLOR = '#3d7ab8';
 const POSITION_COLOR = '#5dce6e';
 const POSITION_PIECES_MAX = 64;
 
-/** Stable, distinct HSL color from an id (zones on the map). */
+/** Stable, distinct HSL color from an id (one color per position). */
 function colorFromId(id) {
   const s = String(id || '');
   let h = 2166136261;
@@ -90,17 +90,8 @@ function colorFromId(id) {
   return `hsl(${hue} ${sat}% ${light}%)`;
 }
 
-/** First zone that owns this position, or null. */
-function zoneForPosition(posId) {
-  for (const z of network.zones || []) {
-    if ((z.positionIds || []).includes(posId)) return z;
-  }
-  return null;
-}
-
 function colorForPosition(pos) {
-  const zone = zoneForPosition(pos?.id);
-  return zone ? colorFromId(zone.id) : POSITION_COLOR;
+  return pos?.id ? colorFromId(pos.id) : POSITION_COLOR;
 }
 
 const el = {
@@ -718,7 +709,7 @@ function draw() {
   for (const pos of network.positions || []) {
     const onFloor = (pos.level || 'default') === radarLevel;
     const selected = selectedPositionIds.has(pos.id) || highlightPositionId === pos.id;
-    // Keep zone colors when selected; thicker stroke marks the selection.
+    // Keep per-position colors when selected; thicker stroke marks the selection.
     const color = colorForPosition(pos);
     const alpha = posAlpha * (onFloor ? 1 : OFF_FLOOR_ALPHA);
     const pieces = pos.pieces || [];
@@ -1214,6 +1205,7 @@ function renderRegionsPanel() {
           const parts = (p.pieces || []).length;
           return `<div class="ze-item${selected}" data-pos-row="${esc(p.id)}">
             <input type="checkbox" data-sel-pos="${esc(p.id)}"${checked} />
+            <span class="ze-zone-swatch" style="background:${esc(colorFromId(p.id))}" title="Position color"></span>
             <input class="ze-item-name" type="text" maxlength="64" data-rename-pos="${esc(
               p.id
             )}" value="${esc(p.name)}" title="Rename to an existing name to merge" />
@@ -1236,7 +1228,6 @@ function renderRegionsPanel() {
             .join(', ');
           return `<div class="ze-item${selected}" data-zone-row="${esc(z.id)}">
             <input type="checkbox" data-sel-zone="${esc(z.id)}"${checked} />
-            <span class="ze-zone-swatch" style="background:${esc(colorFromId(z.id))}" title="Zone color"></span>
             <input class="ze-item-name" type="text" maxlength="64" data-rename-zone="${esc(
               z.id
             )}" value="${esc(z.name)}" />
