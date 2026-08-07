@@ -141,9 +141,9 @@ function coreOf(points) {
 
 function topCounts(map, limit = 6) {
   return [...map.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, limit)
-    .map(([name, count]) => ({ name, count }));
+    .map(([name, count]) => ({ name: String(name), count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+    .slice(0, limit);
 }
 
 function bump(map, key, by = 1) {
@@ -1205,12 +1205,17 @@ export async function runAntistratScan({
     .sort((a, b) => b.matches - a.matches || b.last - a.last)
     .slice(0, 5);
 
-  /** Majority role per player per side across the included demos. */
+  /**
+   * Majority role per player per side across the included demos.
+   * `roleForPlayer` hands back `{ position, label, tactical }`, so the vote is
+   * on the label: that is the string the Roles & Positions editor shows.
+   */
   const rolesOf = (playerId, side) => {
     const votes = new Map();
     for (const { demo } of includedDemos) {
       const role = roleForPlayer(demo.roles, mapCode, side, playerId);
-      if (role) bump(votes, role);
+      const label = typeof role === 'string' ? role : role?.label || role?.position || '';
+      if (label) bump(votes, label);
     }
     return topCounts(votes, 1)[0]?.name || '';
   };
