@@ -73,25 +73,121 @@ const BOMB_A_COLOR = '#e8c040';
 const BOMB_B_COLOR = '#4aa3ff';
 const KEY_A_COLOR = '#c9a227';
 const KEY_B_COLOR = '#3d7ab8';
-const POSITION_COLOR = '#5dce6e';
+const POSITION_COLOR = '#5b9bd5';
 const POSITION_PIECES_MAX = 64;
+/** Soft palette that stays readable on dark radar (hex for hexAlpha). */
+const REGION_PALETTE = [
+  '#5b9bd5',
+  '#70ad47',
+  '#e08e3c',
+  '#9b7bb8',
+  '#2a9d8f',
+  '#d46a6a',
+  '#4c8dca',
+  '#8fbc5a',
+  '#c985c0',
+  '#c4a035',
+  '#5dade2',
+  '#58a37a',
+  '#d9885b',
+  '#7f8cbf',
+  '#48a9a6',
+  '#c77d8e',
+  '#6aa3c7',
+  '#a3b86c',
+  '#b8956c',
+  '#8e7cc3'
+];
+const UNASSIGNED_COLOR = '#6e6e78';
 
-/** Stable, distinct HSL color from an id (one color per position). */
-function colorFromId(id) {
+/** @type {'position'|'zone'|'area'} */
+let colorView = 'position';
+
+function hashId(id) {
   const s = String(id || '');
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
-  const hue = h % 360;
-  const sat = 55 + (h % 25);
-  const light = 42 + ((h >>> 8) % 14);
-  return `hsl(${hue} ${sat}% ${light}%)`;
+  return h >>> 0;
+}
+
+/** Palette color by stable order in `orderedIds`, else hash fallback. */
+function colorFromId(id, orderedIds = null) {
+  if (Array.isArray(orderedIds) && orderedIds.length) {
+    const i = orderedIds.indexOf(id);
+    if (i >= 0) return REGION_PALETTE[i % REGION_PALETTE.length];
+  }
+  return REGION_PALETTE[hashId(id) % REGION_PALETTE.length];
+}
+
+function zoneOwningPosition(posId) {
+  for (const z of network.zones || []) {
+    if ((z.positionIds || []).includes(posId)) return z;
+  }
+  return null;
+}
+
+function areaOwningPosition(posId) {
+  const zone = zoneOwningPosition(posId);
+  if (!zone) return null;
+  for (const a of network.areas || []) {
+    if ((a.zoneIds || []).includes(zone.id)) return a;
+  }
+  return null;
 }
 
 function colorForPosition(pos) {
-  return pos?.id ? colorFromId(pos.id) : POSITION_COLOR;
+  if (!pos?.id) return POSITION_COLOR;
+  if (colorView === 'zone') {
+    const z = zoneOwningPosition(pos.id);
+    if (!z) return UNASSIGNED_COLOR;
+    return colorFromId(
+      z.id,
+      (network.zones || []).map((row) => row.id)
+    );
+  }
+  if (colorView === 'area') {
+    const a = areaOwningPosition(pos.id);
+    if (!a) return UNASSIGNED_COLOR;
+    return colorFromId(
+      a.id,
+      (network.areas || []).map((row) => row.id)
+    );
+  }
+  return colorFromId(
+    pos.id,
+    (network.positions || []).map((row) => row.id)
+  );
+}
+
+/** Swatch color for a list row under the active color view. */
+function swatchForRow(kind, row) {
+  if (!row?.id) return UNASSIGNED_COLOR;
+  if (kind === 'position') return colorForPosition(row);
+  if (kind === 'zone') {
+    if (colorView === 'area') {
+      const area = (network.areas || []).find((a) => (a.zoneIds || []).includes(row.id));
+      return area
+        ? colorFromId(
+            area.id,
+            (network.areas || []).map((a) => a.id)
+          )
+        : UNASSIGNED_COLOR;
+    }
+    return colorFromId(
+      row.id,
+      (network.zones || []).map((z) => z.id)
+    );
+  }
+  if (kind === 'area') {
+    return colorFromId(
+      row.id,
+      (network.areas || []).map((a) => a.id)
+    );
+  }
+  return UNASSIGNED_COLOR;
 }
 
 const el = {
@@ -152,7 +248,8 @@ const el = {
   modalActions: document.querySelector('#ze-modal-actions'),
   btnMakeZone: document.querySelector('#ze-make-zone'),
   btnMakeArea: document.querySelector('#ze-make-area'),
-  posName: document.querySelector('#ze-pos-name')
+  posName: document.querySelector('#ze-pos-name'),
+  colorView: document.querySelector('#ze-color-view')
 };
 
 let mapCode = MAP_CODES.includes('INF') ? 'INF' : MAP_CODES[0];
@@ -484,8 +581,24 @@ function syncUi() {
       ? 'Hide bombsite & key zones'
       : 'Show bombsite & key zones';
   }
+  el.colorView?.querySelectorAll('[data-color-view]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.colorView === colorView);
+  });
   if (!isBrush) hideBrushRing();
   renderRegionsPanel();
+}
+
+function setColorView(mode) {
+  colorView = mode === 'zone' || mode === 'area' ? mode : 'position';
+  syncUi();
+  draw();
+  setStatus(
+    colorView === 'zone'
+      ? 'Coloring by zone · gray = not in a zone'
+      : colorView === 'area'
+        ? 'Coloring by area · gray = not in an area'
+        : 'Coloring by position'
+  );
 }
 
 function setPaintTool(tool) {
@@ -703,13 +816,25 @@ function draw() {
   if (ledgeStroke?.length >= 2) drawLedgeStroke(ledgeStroke, false);
 
   ensureBombSites(network);
-  const drawPiece = (piece, color, label, lineW = 2, alphaMul = 1) => {
+  /**
+   * @param {object} piece
+   * @param {string} color  hex
+   * @param {string} label
+   * @param {number} lineW
+   * @param {number} alphaMul
+   * @param {{ dashed?: boolean, fillAlpha?: number, selected?: boolean }} [opts]
+   */
+  const drawPiece = (piece, color, label, lineW = 2, alphaMul = 1, opts = {}) => {
     if (!piece) return;
+    const dashed = opts.dashed !== false;
+    const fillA = Number.isFinite(opts.fillAlpha) ? opts.fillAlpha : 0.22;
+    const selected = Boolean(opts.selected);
     ctx.globalAlpha = alphaMul;
-    ctx.fillStyle = hexAlpha(color, 0.22);
+    ctx.fillStyle = hexAlpha(color, selected ? Math.min(0.45, fillA + 0.12) : fillA);
     ctx.strokeStyle = color;
     ctx.lineWidth = lineW / t.scale;
-    ctx.setLineDash([6 / t.scale, 4 / t.scale]);
+    if (dashed) ctx.setLineDash([6 / t.scale, 4 / t.scale]);
+    else ctx.setLineDash([]);
     let cx;
     let cy;
     if (piece.type === 'poly' && piece.ring?.length >= 3) {
@@ -745,10 +870,14 @@ function draw() {
     }
     ctx.setLineDash([]);
     if (label) {
-      ctx.fillStyle = color;
-      ctx.font = `bold ${Math.max(11, 13 / t.scale)}px sans-serif`;
+      const size = Math.max(11, 12 / t.scale);
+      ctx.font = `600 ${size}px var(--font-body), sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
+      ctx.lineWidth = Math.max(2.5, 3 / t.scale);
+      ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+      ctx.strokeText(label, cx, cy);
+      ctx.fillStyle = '#f4f4f6';
       ctx.fillText(label, cx, cy);
     }
     ctx.globalAlpha = 1;
@@ -784,7 +913,6 @@ function draw() {
   for (const pos of network.positions || []) {
     const onFloor = (pos.level || 'default') === radarLevel;
     const selected = selectedPositionIds.has(pos.id) || highlightPositionId === pos.id;
-    // Keep per-position colors when selected; thicker stroke marks the selection.
     const color = colorForPosition(pos);
     const alpha = posAlpha * (onFloor ? 1 : OFF_FLOOR_ALPHA);
     const pieces = pos.pieces || [];
@@ -794,7 +922,11 @@ function draw() {
     }
     pieces.forEach((piece, i) => {
       const label = i === mainIdx ? pos.name || 'Pos' : '';
-      drawPiece(piece, color, label, selected ? 2.5 : 1.5, alpha);
+      drawPiece(piece, color, label, selected ? 2.75 : 1.75, alpha, {
+        dashed: false,
+        fillAlpha: 0.3,
+        selected
+      });
     });
   }
 
@@ -1278,9 +1410,10 @@ function renderRegionsPanel() {
           const selected = selectedPositionIds.has(p.id) ? ' is-selected' : '';
           const lvl = p.level === 'lower' ? 'lower' : 'upper';
           const parts = (p.pieces || []).length;
+          const swatch = swatchForRow('position', p);
           return `<div class="ze-item${selected}" data-pos-row="${esc(p.id)}">
             <input type="checkbox" data-sel-pos="${esc(p.id)}"${checked} />
-            <span class="ze-zone-swatch" style="background:${esc(colorFromId(p.id))}" title="Position color"></span>
+            <span class="ze-zone-swatch" style="background:${esc(swatch)}" title="Map color"></span>
             <input class="ze-item-name" type="text" maxlength="64" data-rename-pos="${esc(
               p.id
             )}" value="${esc(p.name)}" title="Rename to an existing name to merge" />
@@ -1301,8 +1434,10 @@ function renderRegionsPanel() {
           const members = (z.positionIds || [])
             .map((id) => posById.get(id)?.name || id)
             .join(', ');
+          const swatch = swatchForRow('zone', z);
           return `<div class="ze-item${selected}" data-zone-row="${esc(z.id)}">
             <input type="checkbox" data-sel-zone="${esc(z.id)}"${checked} />
+            <span class="ze-zone-swatch" style="background:${esc(swatch)}" title="Map color"></span>
             <input class="ze-item-name" type="text" maxlength="64" data-rename-zone="${esc(
               z.id
             )}" value="${esc(z.name)}" />
@@ -1323,8 +1458,9 @@ function renderRegionsPanel() {
           const members = (a.zoneIds || [])
             .map((id) => zoneById.get(id)?.name || id)
             .join(', ');
+          const swatch = swatchForRow('area', a);
           return `<div class="ze-item" data-area-row="${esc(a.id)}">
-            <span></span>
+            <span class="ze-zone-swatch" style="background:${esc(swatch)}" title="Map color"></span>
             <input class="ze-item-name" type="text" maxlength="64" data-rename-area="${esc(
               a.id
             )}" value="${esc(a.name)}" />
@@ -1631,6 +1767,12 @@ el.shapePoly?.addEventListener('click', () => setShapeMode('poly'));
 el.shapeSelect?.addEventListener('click', () => setShapeMode('select'));
 el.floorDefault?.addEventListener('click', () => setRadarLevel('default'));
 el.floorLower?.addEventListener('click', () => setRadarLevel('lower'));
+el.colorView?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-color-view]');
+  if (!btn) return;
+  setColorView(btn.dataset.colorView);
+});
+
 el.btnMakeZone?.addEventListener('click', () => makeZoneFromSelection());
 el.btnMakeArea?.addEventListener('click', () => makeAreaFromSelection());
 el.btnClearBombA?.addEventListener('click', () => clearBombSite('a'));

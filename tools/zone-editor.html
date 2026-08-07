@@ -204,7 +204,32 @@
     height: 10px;
     border-radius: 2px;
     flex-shrink: 0;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
   }
+  .ze-color-view {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .ze-color-view-label {
+    font-size: 11px;
+    color: var(--muted);
+    margin-right: 2px;
+  }
+  .ze-color-view-btn {
+    padding: 5px 10px;
+    border: none;
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--muted);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .ze-color-view-btn:hover { color: var(--text); background: var(--surface-hover); }
+  .ze-color-view-btn.active { color: #fff; background: #3a3a41; }
   .ze-float button.ze-floor,
   .ze-float button.ze-shape-mode {
     width: auto;
@@ -336,6 +361,13 @@
   }
   .ze-item:has(.ze-zone-swatch) .ze-item-meta {
     grid-column: 3 / -1;
+  }
+  /* Areas have no checkbox — swatch | name | delete */
+  .ze-item[data-area-row] {
+    grid-template-columns: 12px 1fr auto;
+  }
+  .ze-item[data-area-row] .ze-item-members {
+    grid-column: 1 / -1;
   }
   .ze-item:hover { background: var(--surface-hover); }
   .ze-item.is-selected { background: rgba(55, 178, 108, 0.14); }
@@ -487,7 +519,13 @@
         <div class="ze-panel" id="ze-panel-regions" hidden>
           <div>
             <h2>Regions</h2>
-            <p class="ze-empty" style="margin-top:8px">Set a name in the bar, then draw. Matching an existing name on this floor merges into that position. Positions cannot overlap on a floor, so drawing over another asks which shape keeps the overlap. Each position gets its own color on the map.</p>
+            <p class="ze-empty" style="margin-top:8px">Set a name in the bar, then draw. Matching an existing name on this floor merges into that position. Positions cannot overlap on a floor, so drawing over another asks which shape keeps the overlap.</p>
+            <div class="ze-color-view" id="ze-color-view" style="margin-top:12px" role="group" aria-label="Color map by">
+              <span class="ze-color-view-label">Color by</span>
+              <button type="button" class="ze-color-view-btn active" data-color-view="position">Position</button>
+              <button type="button" class="ze-color-view-btn" data-color-view="zone">Zone</button>
+              <button type="button" class="ze-color-view-btn" data-color-view="area">Area</button>
+            </div>
             <div class="ze-hier-actions" style="margin-top:12px">
               <button type="button" class="btn btn-sm" id="ze-make-zone" title="Group selected positions into a zone">+ Zone</button>
               <button type="button" class="btn btn-sm" id="ze-make-area" title="Group selected zones into an area">+ Area</button>
