@@ -587,6 +587,22 @@ let sharedRoundCode = '';
   }
 }
 
+/**
+ * A shared team document lands on aim4.io/d/<code>. Same rewrite pattern as /s2/.
+ */
+let sharedDocCode = '';
+{
+  const m = cleanPath().match(/^\/d\/([A-Za-z0-9_-]{6,32})$/);
+  if (m) {
+    sharedDocCode = m[1];
+    window.history.replaceState(
+      null,
+      '',
+      `/team/documents?share=${encodeURIComponent(sharedDocCode)}`
+    );
+  }
+}
+
 let activeRoute = null;
 let activeShell = null;
 const viewControllers = {};
@@ -797,6 +813,9 @@ window.addEventListener('popstate', () => setView(routeFromPath(), false, search
 if (sharedRoundCode) {
   viewControllers['strategy-creator']?.setShare?.(sharedRoundCode);
   setView('team-creator', false, { share: sharedRoundCode });
+} else if (sharedDocCode) {
+  viewControllers.team?.setShare?.(sharedDocCode);
+  setView('team-documents', false, { share: sharedDocCode });
 } else if (inviteCode) {
   // Redeeming needs a signed-in account; the team view holds the code and
   // retries once auth lands, so a signed-out visitor can sign in in place.

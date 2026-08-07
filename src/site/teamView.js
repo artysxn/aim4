@@ -4,9 +4,10 @@
 // and My Strategies.
 //
 // One controller owns all five pages because they share the same roster fetch:
-// switching between them re-renders, it does not re-load. Everything here is
-// signed-in only, and the server rejects anything the account may not do, so
-// the UI hides controls rather than enforcing rules.
+// switching between them re-renders, it does not re-load. Team pages are
+// signed-in only, except /d/<shareId> document links which open view-only for
+// anyone. The server rejects anything the account may not do, so the UI hides
+// controls rather than enforcing rules.
 // ---------------------------------------------------------------------------
 
 import {
@@ -21,6 +22,7 @@ import {
   fetchStatus,
   fetchTeamAutocoach,
   fetchTeamDocument,
+  fetchSharedDocument,
   fetchTeams,
   fetchUtilityIndex,
   joinTeam,
@@ -177,6 +179,12 @@ export function initTeamView({ auth, escapeHtml }) {
   /** Lazy-loaded timeline viewer module. */
   let viewerModule = null;
   let openDocId = '';
+  /** Public /d/<code> landings — view-only, signed in or not. */
+  let pendingShare = '';
+  let openingShare = false;
+  let shareView = false;
+  /** @type {object|null} */
+  let sharedDoc = null;
   let rolesSide = 'T';
   /** @type {{ players: object[], demos: object[], unanalyzedCount: number }|null} */
   let autocoachSummary = null;
@@ -282,6 +290,24 @@ export function initTeamView({ auth, escapeHtml }) {
     loadInFlight = true;
     const token = ++loadToken;
     try {
+      // Share links are public: open the document without waiting on account status.
+      const share = pendingShare;
+      if (share) {
+        if (openingShare) return;
+        openingShare = true;
+        loaded = false;
+        render();
+        try {
+          await openSharedDoc(share);
+          if (token !== loadToken) return;
+          pendingShare = '';
+          loaded = true;
+        } finally {
+          openingShare = false;
+        }
+        return;
+      }
+
       const status = await fetchStatus().catch(() => null);
       if (token !== loadToken) return;
       account = { ...account, ...(status?.account || { signedIn: false }) };
@@ -976,9 +1002,69 @@ export function initTeamView({ auth, escapeHtml }) {
 
   // ---- documents ----------------------------------------------------------
 
+  function documentShareUrl(shareId) {
+    if (!shareId) return '';
+    return `${window.location.origin}/d/${shareId}`;
+  }
+
+  function sharedDocHtml(doc) {
+    return `
+      <div class="tm-docs tm-docs-shared">
+        <div class="tm-doc-main" id="tm-doc-main">
+          <div class="tm-doc-head">
+            <h1 class="tm-doc-title-static">${escapeHtml(doc.title || 'Untitled')}</h1>
+            <span class="tm-note">View only</span>
+          </div>
+          <div id="tm-doc-editor"></div>
+        </div>
+      </div>`;
+  }
+
+  function mountSharedEditor(doc) {
+    destroyBoardMount();
+    destroyOverviewStats();
+    editor?.destroy();
+    editor = null;
+    mountedDocId = '';
+    shellEl.innerHTML = sharedDocHtml(doc);
+    const host = shellEl.querySelector('#tm-doc-editor');
+    if (!host) return;
+    editor = createDocsEditor({
+      escapeHtml,
+      onSave: async () => {
+        throw new Error('This shared link is view only.');
+      }
+    });
+    mountedDocId = doc.id || doc.shareId || 'shared';
+    host.appendChild(editor.el);
+    editor.load({ html: doc.html || '' });
+    editor.el.querySelector('#doc-surface')?.setAttribute('contenteditable', 'false');
+    editor.el.querySelector('#doc-toolbar')?.setAttribute('hidden', 'hidden');
+  }
+
+  async function openSharedDoc(shareId) {
+    shareView = true;
+    page = 'team-docs';
+    try {
+      const doc = await fetchSharedDocument(shareId);
+      if (!doc) throw new Error('That document link is not valid.');
+      sharedDoc = doc;
+      mountSharedEditor(doc);
+    } catch (err) {
+      sharedDoc = null;
+      editor?.destroy();
+      editor = null;
+      mountedDocId = '';
+      shellEl.innerHTML = `<div class="tm-empty">
+        <p class="view-empty">${escapeHtml(err.message || 'That document link is not valid.')}</p>
+      </div>`;
+    }
+  }
+
   function documentsHtml() {
     const docs = [...(team.documents || [])].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     const open = docs.find((d) => d.id === openDocId);
+    const shareUrl = open ? documentShareUrl(open.shareId) : '';
     return `
       ${headerHtml('', '<button type="button" class="btn btn-sm primary" data-new-doc>New document</button>')}
       <div class="tm-docs">
@@ -1013,6 +1099,13 @@ export function initTeamView({ auth, escapeHtml }) {
                   <input class="site-input tm-doc-title" id="tm-doc-title" value="${escapeHtml(
                     open.title
                   )}" ${open.canEdit ? '' : 'readonly'} maxlength="120" />
+                  ${
+                    shareUrl
+                      ? `<button type="button" class="btn btn-sm" data-copy-doc-link title="${escapeHtml(
+                          shareUrl
+                        )}">Copy link</button>`
+                      : ''
+                  }
                   <span class="tm-note">Last edit by @${escapeHtml(open.updatedBy || open.authorName || '')}</span>
                 </div>
                 <div id="tm-doc-editor"></div>`
@@ -1053,6 +1146,25 @@ export function initTeamView({ auth, escapeHtml }) {
     if (title && open && document.activeElement !== title) {
       title.value = open.title || '';
     }
+    const head = shellEl.querySelector('.tm-doc-head');
+    if (head && open) {
+      const shareUrl = documentShareUrl(open.shareId);
+      let copyBtn = head.querySelector('[data-copy-doc-link]');
+      if (shareUrl) {
+        if (!copyBtn) {
+          copyBtn = document.createElement('button');
+          copyBtn.type = 'button';
+          copyBtn.className = 'btn btn-sm';
+          copyBtn.dataset.copyDocLink = '';
+          copyBtn.textContent = 'Copy link';
+          const note = head.querySelector('.tm-note');
+          head.insertBefore(copyBtn, note || null);
+        }
+        copyBtn.title = shareUrl;
+      } else if (copyBtn) {
+        copyBtn.remove();
+      }
+    }
     const note = shellEl.querySelector('.tm-doc-head .tm-note');
     if (note && open) {
       note.textContent = `Last edit by @${open.updatedBy || open.authorName || ''}`;
@@ -1073,6 +1185,9 @@ export function initTeamView({ auth, escapeHtml }) {
     const hostNow = shellEl.querySelector('#tm-doc-editor');
     if (!hostNow) return;
     const meta = (team.documents || []).find((d) => d.id === wantId);
+    if (meta && doc.shareId && meta.shareId !== doc.shareId) {
+      meta.shareId = doc.shareId;
+    }
     editor?.destroy();
     editor = createDocsEditor({
       escapeHtml,
@@ -1094,6 +1209,7 @@ export function initTeamView({ auth, escapeHtml }) {
       editor.el.querySelector('#doc-surface')?.setAttribute('contenteditable', 'false');
       editor.el.querySelector('#doc-toolbar')?.setAttribute('hidden', 'hidden');
     }
+    refreshDocsChrome();
   }
 
   // ---- roles & positions --------------------------------------------------
@@ -2243,13 +2359,22 @@ export function initTeamView({ auth, escapeHtml }) {
       mountedDocId = '';
     }
     if (!loaded) {
-      if (editor) {
+      if (editor && !shareView) {
         void editor.flush();
         editor.destroy();
         editor = null;
         mountedDocId = '';
       }
       shellEl.innerHTML = spinnerHtml();
+      return;
+    }
+    // Guest (or member) viewing a /d/<code> link: keep the read-only surface.
+    if (shareView) {
+      if (sharedDoc && editor && editor.el?.isConnected) return;
+      if (sharedDoc) {
+        mountSharedEditor(sharedDoc);
+        return;
+      }
       return;
     }
     if (!signedIn()) {
@@ -2519,6 +2644,18 @@ export function initTeamView({ auth, escapeHtml }) {
         } catch {
           setStatus('Copy the link from the field.', true);
         }
+      }
+      return;
+    }
+    if (t.closest('[data-copy-doc-link]')) {
+      const open = (team?.documents || []).find((d) => d.id === openDocId);
+      const url = documentShareUrl(open?.shareId);
+      if (!url) return;
+      try {
+        await navigator.clipboard.writeText(url);
+        setStatus('Document link copied.');
+      } catch {
+        setStatus(url, true);
       }
       return;
     }
@@ -3051,6 +3188,8 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
     if (!auth?.isLoggedIn && !account.signedIn) return;
+    // A public document link stays up across auth changes.
+    if (openingShare || pendingShare || shareView) return;
     loaded = false;
     demosLoaded = false;
     loadInFlight = false;
@@ -3058,8 +3197,25 @@ export function initTeamView({ auth, escapeHtml }) {
   });
 
   return {
-    /** @param {{page?: string, invite?: string}} params */
+    /** @param {{page?: string, invite?: string, share?: string}} params */
     onShow(params = {}) {
+      const share = String(params.share || '').trim();
+      if (share) {
+        pendingShare = share;
+        page = 'team-docs';
+        if (openingShare) return;
+        loaded = false;
+        void load();
+        return;
+      }
+      // Leaving a share landing for normal team pages.
+      if (shareView && !share) {
+        shareView = false;
+        sharedDoc = null;
+        editor?.destroy();
+        editor = null;
+        mountedDocId = '';
+      }
       const next = PAGES.includes(params.page) ? params.page : 'team-overview';
       if (next !== page) {
         openVisibleMenu = '';
@@ -3089,6 +3245,7 @@ export function initTeamView({ auth, escapeHtml }) {
       if (page === 'team-overview') void ensureDemos();
     },
     onHide() {
+      if (shareView) return;
       editor?.flush();
       editor?.destroy();
       editor = null;
@@ -3098,6 +3255,10 @@ export function initTeamView({ auth, escapeHtml }) {
     /** Called by the router for /i/<code> landings. */
     setInvite(code) {
       pendingInvite = code;
+    },
+    /** Called by the router for /d/<code> landings. */
+    setShare(code) {
+      pendingShare = code;
     }
   };
 }

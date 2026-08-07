@@ -391,11 +391,19 @@ export function createAntistratPanel({ escapeHtml }) {
               { label: 'All', points: bag.phases.all.points }
             ]);
             if (heat) images.players.heat[p.name][side] = heat;
-            const nades = await nadePathsGridDataUri(state.mapCode, [
-              { label: 'Early', paths: bag.nadePaths.early },
-              { label: 'Mid', paths: bag.nadePaths.mid },
-              { label: 'Late', paths: bag.nadePaths.late }
-            ]);
+            const nades = await nadePathsGridDataUri(
+              state.mapCode,
+              [
+                { label: 'Early', paths: bag.nadePaths.early },
+                { label: 'Mid', paths: bag.nadePaths.mid },
+                { label: 'Late', paths: bag.nadePaths.late },
+                {
+                  label: 'All',
+                  paths: [...bag.nadePaths.early, ...bag.nadePaths.mid, ...bag.nadePaths.late]
+                }
+              ],
+              { cols: 2 }
+            );
             if (nades) images.players.nades[p.name][side] = nades;
           }
         }

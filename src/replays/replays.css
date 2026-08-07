@@ -6637,6 +6637,19 @@ table.rp-mine-table tbody tr {
   font: 600 15px var(--font-body);
 }
 
+.tm-doc-title-static {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font: 600 18px var(--font-body);
+}
+
+.tm-docs-shared {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 920px;
+  margin: 0 auto;
+}
+
 .doc-editor {
   display: flex;
   flex-direction: column;

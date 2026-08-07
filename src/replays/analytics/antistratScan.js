@@ -188,6 +188,7 @@ function roundFeatures({ meta, track, row, teamIdx, opponent, network, utilDb, m
       clock: clockOf(k.tick || 0),
       attacker: k.attacker,
       victim: k.victim,
+      weapon: k.weapon || '',
       x: Number.isFinite(k._wx) ? k._wx : null,
       y: Number.isFinite(k._wy) ? k._wy : null,
       attackerOurs: ourIds.has(k.attacker),
@@ -229,6 +230,27 @@ function roundFeatures({ meta, track, row, teamIdx, opponent, network, utilDb, m
     if (Number.isFinite(s.x) && Number.isFinite(s.y) && (s.x || s.y)) {
       k.x = s.x;
       k.y = s.y;
+    }
+  }
+
+  // The opening kill gets named ground on both ends (for the Openings report):
+  // where the shooter stood, and where the victim dropped.
+  const firstKill = kills[0] || null;
+  if (firstKill && network) {
+    firstKill.attackerZone = '';
+    firstKill.victimZone =
+      firstKill.x !== null
+        ? positionsAtPoint(firstKill.x, firstKill.y, network).map((z) => z.name)[0] || ''
+        : '';
+    if (track) {
+      const shooter = roster.find((x) => x.id === firstKill.attacker);
+      if (shooter) {
+        const s = track.sample(shooter.slot, firstKill.tick, {});
+        if (Number.isFinite(s.x) && Number.isFinite(s.y) && (s.x || s.y)) {
+          firstKill.attackerZone =
+            positionsAtPoint(s.x, s.y, network).map((z) => z.name)[0] || '';
+        }
+      }
     }
   }
 
@@ -336,7 +358,7 @@ function roundFeatures({ meta, track, row, teamIdx, opponent, network, utilDb, m
     oppEcon,
     situation: openingSituation(meta, teamIdx),
     kills,
-    firstKill: kills[0] || null,
+    firstKill,
     nades,
     plantTick,
     plantClock: plantTick != null ? clockOf(plantTick) : null,
@@ -1023,11 +1045,11 @@ function resolveLaneSets(mapCode, network) {
   return sets;
 }
 
-/** T formation notation at the snapshot clock, or '' when unresolvable. */
-function laneFormation(r, mapCode, laneSets) {
-  if (!laneSets) return '';
+/** Per-lane player counts at the snapshot clock, or null without geometry. */
+function laneCountsAt(r, mapCode, laneSets) {
+  if (!laneSets) return null;
   const snap = snapshotSample(r, mapCode);
-  if (!snap || !snap.pts.length) return '';
+  if (!snap || !snap.pts.length) return null;
   const counts = laneSets.map(() => 0);
   for (const p of snap.pts) {
     const key = String(p.pos || '').toLowerCase();
@@ -1035,7 +1057,172 @@ function laneFormation(r, mapCode, laneSets) {
     if (hit === -1) hit = Math.min(1, laneSets.length - 1);
     counts[hit]++;
   }
-  return formatFormation(mapCode, counts);
+  return counts;
+}
+
+/** T formation notation at the snapshot clock, or '' when unresolvable. */
+function laneFormation(r, mapCode, laneSets) {
+  const counts = laneCountsAt(r, mapCode, laneSets);
+  return counts ? formatFormation(mapCode, counts) : '';
+}
+
+/** "4 B, 1 Mid" from lane counts, zeros skipped. */
+function laneSpread(mapCode, counts) {
+  if (!counts) return '';
+  const lanes = FORMATIONS[mapCode]?.t || [];
+  return counts
+    .map((n, i) => (n && lanes[i] ? `${n} ${lanes[i].short}` : ''))
+    .filter(Boolean)
+    .join(', ');
+}
+
+const WEAPON_GROUPS = [
+  ['AWP', new Set(['awp'])],
+  ['Scout', new Set(['ssg08'])],
+  ['Rifle', new Set(['ak47', 'm4a1', 'm4a1_silencer', 'm4a4', 'famas', 'galilar', 'aug', 'sg556'])],
+  ['SMG', new Set(['mp9', 'mac10', 'mp7', 'mp5sd', 'ump45', 'p90', 'bizon'])],
+  [
+    'Pistol',
+    new Set([
+      'glock', 'usp_silencer', 'hkp2000', 'p250', 'fiveseven', 'tec9', 'cz75a', 'deagle',
+      'revolver', 'elite'
+    ])
+  ],
+  ['Shotgun', new Set(['nova', 'xm1014', 'mag7', 'sawedoff'])],
+  ['MG', new Set(['m249', 'negev'])]
+];
+
+function weaponClass(weapon) {
+  const w = String(weapon || '')
+    .toLowerCase()
+    .replace(/^weapon_/, '');
+  if (!w) return 'Rifle';
+  for (const [label, set] of WEAPON_GROUPS) {
+    if (set.has(w)) return label;
+  }
+  if (/knife|bayonet|karambit/.test(w)) return 'Knife';
+  if (/grenade|molotov|inc|inferno|decoy/.test(w)) return 'Grenade';
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+
+/** "1:52" or "1:44-1:39" from a list of countdown clocks. */
+function clockRange(clocks) {
+  if (!clocks.length) return '';
+  const hi = Math.max(...clocks);
+  const lo = Math.min(...clocks);
+  return Math.round(hi) === Math.round(lo)
+    ? fmtClock(hi)
+    : `${fmtClock(hi)}-${fmtClock(lo)}`;
+}
+
+/**
+ * Openings: rounds that stay alive deep (lateround starts 50s+ in) but open
+ * with a kill by the scouted team inside the first 20 seconds. Merged by
+ * weapon class + shooter ground + victim ground. CT keeps only AWP openings.
+ */
+function aggOpenings(rounds) {
+  const out = {};
+  for (const side of ['T', 'CT']) {
+    const set = rounds.filter((r) => {
+      const k = r.firstKill;
+      if (r.side !== side || !k || !k.attackerOurs) return false;
+      if (k.clock < 95) return false;
+      if ((r.bounds.lateStartTick - r.t0) / r.tickRate < 50) return false;
+      if (side === 'CT' && weaponClass(k.weapon) !== 'AWP') return false;
+      return true;
+    });
+    if (!set.length) continue;
+    /** @type {Map<string, { rounds: object[], clocks: number[] }>} */
+    const groups = new Map();
+    for (const r of set) {
+      const k = r.firstKill;
+      const key = `${weaponClass(k.weapon)}\0${k.attackerZone || ''}\0${k.victimZone || ''}`;
+      if (!groups.has(key)) groups.set(key, { rounds: [], clocks: [] });
+      const g = groups.get(key);
+      g.rounds.push(r);
+      g.clocks.push(k.clock);
+    }
+    out[side] = {
+      rounds: set.length,
+      files: filesOf(set),
+      groups: [...groups.entries()]
+        .sort((a, b) => b[1].rounds.length - a[1].rounds.length)
+        .slice(0, 14)
+        .map(([key, g]) => {
+          const [weapon, from, to] = key.split('\0');
+          return {
+            count: g.rounds.length,
+            weapon,
+            from,
+            to,
+            clocks: clockRange(g.clocks),
+            files: filesOf(g.rounds)
+          };
+        })
+    };
+  }
+  return out;
+}
+
+/**
+ * Set calls: every T buy round that is not a default, merged when the site,
+ * pace and lane spread agree. Utility named in half the group's rounds rides
+ * along, and so does the first-kill window.
+ */
+function aggSetCalls(rounds, mapCode, laneSets) {
+  const set = rounds.filter((r) => {
+    if (r.side !== 'T' || r.ownEcon < 2 || !r.hasTicks) return false;
+    const pace = classifyPace(r);
+    return pace && pace !== 'default' && pace !== 'slow-default';
+  });
+  if (!set.length) return { rounds: 0, groups: [] };
+
+  /** @type {Map<string, { rounds: object[], counts: number[]|null }>} */
+  const groups = new Map();
+  for (const r of set) {
+    const pace = classifyPace(r);
+    const site = paceSite(r)?.toUpperCase() || '';
+    const counts = laneCountsAt(r, mapCode, laneSets);
+    const key = `${site}\0${pace}\0${counts ? counts.join('-') : ''}`;
+    if (!groups.has(key)) groups.set(key, { rounds: [], counts });
+    groups.get(key).rounds.push(r);
+  }
+
+  const rows = [...groups.entries()]
+    .sort((a, b) => b[1].rounds.length - a[1].rounds.length)
+    .slice(0, 16)
+    .map(([key, g]) => {
+      const [site, pace] = key.split('\0');
+      const n = g.rounds.length;
+      // Named utility thrown in at least half the group's rounds.
+      const nadeRounds = new Map();
+      const types = new Map();
+      for (const r of g.rounds) {
+        const seen = new Set();
+        for (const nd of r.nades) {
+          if (!nd.name || seen.has(nd.name)) continue;
+          seen.add(nd.name);
+          bump(nadeRounds, nd.name);
+          types.set(nd.name, nd.type);
+        }
+      }
+      const util = [...nadeRounds.entries()]
+        .filter(([, c]) => c / n >= 0.5)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4)
+        .map(([name]) => ({ name, type: types.get(name) || '' }));
+      const clocks = g.rounds.map((r) => r.firstKill?.clock).filter(Number.isFinite);
+      return {
+        count: n,
+        site,
+        pace,
+        spread: laneSpread(mapCode, g.counts),
+        util,
+        clocks: clockRange(clocks),
+        files: filesOf(g.rounds)
+      };
+    });
+  return { rounds: set.length, files: filesOf(set), groups: rows };
 }
 
 function aggPositions(mains, rolesOf) {
@@ -1215,6 +1402,8 @@ export async function runAntistratScan({
   const playerStats = new Map();
   const nameOf = new Map();
   const includedDemos = [];
+  /** Scouted team's short ids across demos, for analyzer deep links. */
+  const focusIds = new Set();
   for (const demo of payload?.demos || []) {
     if (!wanted.has(demo.id)) continue;
     const k1 = teamNameKey(demo.name1, demo.t1);
@@ -1222,6 +1411,8 @@ export async function runAntistratScan({
     const teamIdx = k1 === teamKey ? 1 : k2 === teamKey ? 2 : 0;
     if (!teamIdx) continue;
     includedDemos.push({ demo, teamIdx });
+    const shortId = teamIdx === 1 ? demo.t1 : demo.t2;
+    if (shortId) focusIds.add(shortId);
     const opponent = (teamIdx === 1 ? demo.name2 : demo.name1) || 'Unknown';
     for (const p of demo.players || []) {
       if (p.team !== teamIdx || !p.id) continue;
@@ -1308,6 +1499,9 @@ export async function runAntistratScan({
     ticked: rounds.filter((r) => r.hasTicks).length,
     zonesReady: Boolean(network?.positions?.length),
     utilityDb: Boolean(utilDb?.utilities?.length),
+    focusIds: [...focusIds],
+    tFullBuy: filesOf(rounds.filter((r) => r.side === 'T' && r.ownEcon === 4)),
+    ctFullBuy: filesOf(rounds.filter((r) => r.side === 'CT' && r.ownEcon === 4)),
     sections: {
       pistols: aggPistols(rounds, mapCode, laneSets),
       positions: aggPositions(mains, rolesOf),
@@ -1318,6 +1512,8 @@ export async function runAntistratScan({
       force: aggForce(rounds),
       firstEngagement: aggFirstEngagement(rounds, nameOf, network),
       patterns: aggPatterns(rounds, nameOf),
+      openings: aggOpenings(rounds),
+      setCalls: aggSetCalls(rounds, mapCode, laneSets),
       tFormations: aggTFormations(rounds, mapCode, laneSets),
       afterplants: aggPostplant(rounds, 'T'),
       retakes: {

@@ -31,7 +31,9 @@ export const ANTISTRAT_CATEGORIES = [
   { key: 'force', group: 'General', label: 'Force buys' },
   { key: 'firstEngagement', group: 'General', label: 'First engagement timing' },
   { key: 'patterns', group: 'General', label: 'Patterns' },
+  { key: 'openings', group: 'General', label: 'Openings' },
   { key: 'players', group: 'General', label: 'Per player' },
+  { key: 'setCalls', group: 'T specific', label: 'Set calls' },
   { key: 'tFormations', group: 'T specific', label: 'T formations in defaults' },
   { key: 'afterplants', group: 'T specific', label: 'Afterplants' },
   { key: 'tEarly', group: 'T specific', label: 'Early rounds' },
@@ -265,6 +267,44 @@ function renderPatterns(esc, s) {
   return li(rows);
 }
 
+function renderOpenings(esc, s) {
+  const parts = [];
+  for (const side of ['T', 'CT']) {
+    const bag = s[side];
+    if (!bag) continue;
+    const head = side === 'CT' ? 'CT, AWP openings' : side;
+    parts.push(
+      `<p><strong>${esc(head)}</strong> (${link(esc, `${bag.rounds} rounds`, bag.files)})</p>`
+    );
+    parts.push(
+      li(
+        bag.groups.map((g) => {
+          const from = g.from ? ` on ${esc(g.from)}` : '';
+          const to = g.to ? ` on ${esc(g.to)}` : '';
+          const label = `${g.count}x ${esc(g.weapon)}${from} kills enemy${to}${g.clocks ? ` at ${esc(g.clocks)}` : ''}`;
+          return link(esc, label, g.files);
+        })
+      )
+    );
+  }
+  return parts.length ? parts.join('') : NONE;
+}
+
+function renderSetCalls(esc, s) {
+  if (!s.rounds || !s.groups.length) return NONE;
+  return `<p>${link(esc, `${s.rounds} non-default rounds`, s.files)}</p>${li(
+    s.groups.map((g) => {
+      const call = [g.site, paceType(g.pace)?.label || 'Other'].filter(Boolean).join(' ');
+      const util = g.util.length
+        ? ` with ${g.util.map((u) => `${esc(u.name)} ${NADE_WORD[u.type] || ''}`.trim()).join(', ')}`
+        : '';
+      const spread = g.spread ? `. ${esc(g.spread)}` : '';
+      const kills = g.clocks ? `, first kill ${esc(g.clocks)}` : '';
+      return link(esc, `${g.count}x ${esc(call)}${util}${spread}${kills}`, g.files);
+    })
+  )}`;
+}
+
 function renderTFormations(esc, s) {
   if (!s.basis || !s.rows.length) return NONE;
   return `<p>${link(esc, `${s.basis} default rounds`, s.files)}</p>${li(
@@ -393,6 +433,26 @@ export function buildAntistratDocHtml(spec, esc) {
   const parts = [];
   parts.push(`<h1>Antistrat: ${esc(spec.teamName)} on ${esc(mapName)}</h1>`);
   parts.push(`<p>${esc(spec.matches.map((m) => m.label).join(', '))}</p>`);
+
+  // One-click loads of every full buy per side, into the timeline or the
+  // macro analyzer (the analyzer link carries the scouted team as focus).
+  const focus = (spec.results?.focusIds || []).join(',');
+  const loadLink = (files, label, analyzer) => {
+    const list = (files || []).slice(0, 120);
+    if (!list.length) return '';
+    let href = `/demos?rounds=${list.map(encodeURIComponent).join(',')}`;
+    if (analyzer) {
+      href += `&mode=analyzer${focus ? `&team=${encodeURIComponent(focus)}` : ''}&name=${encodeURIComponent(spec.teamName)}`;
+    }
+    return `<a href="${esc(href)}"><strong>${esc(label)}</strong></a>`;
+  };
+  const loads = [
+    loadLink(spec.results?.tFullBuy, 'View T rounds', false),
+    loadLink(spec.results?.ctFullBuy, 'View CT rounds', false),
+    loadLink(spec.results?.tFullBuy, 'Analyze T rounds', true),
+    loadLink(spec.results?.ctFullBuy, 'Analyze CT rounds', true)
+  ].filter(Boolean);
+  if (loads.length) parts.push(`<p>${loads.join(' · ')}</p>`);
   parts.push('<hr>');
 
   const sections = spec.results?.sections || {};
@@ -406,6 +466,8 @@ export function buildAntistratDocHtml(spec, esc) {
     force: (s) => renderForce(esc, s),
     firstEngagement: (s) => renderFirstEngagement(esc, s, images.firstEngagement),
     patterns: (s) => renderPatterns(esc, s),
+    openings: (s) => renderOpenings(esc, s),
+    setCalls: (s) => renderSetCalls(esc, s),
     players: (s) => renderPlayers(esc, s, images.players),
     tFormations: (s) => renderTFormations(esc, s),
     afterplants: (s) => renderPostplant(esc, s, 'afterplants', images.afterplants),

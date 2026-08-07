@@ -69,8 +69,8 @@ const SITE_VIEW_PATHS = new Set([
 ]);
 
 // Shell-owned subtrees: /team/*, /account/* (sub-pages), /i/* (invites),
-// /s2/* (shared 2D rounds).
-const SITE_VIEW_PREFIXES = ['/team/', '/account/', '/i/', '/s2/'];
+// /s2/* (shared 2D rounds), /d/* (shared documents).
+const SITE_VIEW_PREFIXES = ['/team/', '/account/', '/i/', '/s2/', '/d/'];
 
 function isSiteViewPath(rel) {
   return SITE_VIEW_PATHS.has(rel) || SITE_VIEW_PREFIXES.some((p) => rel.startsWith(p));

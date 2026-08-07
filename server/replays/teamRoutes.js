@@ -30,6 +30,8 @@ import {
   createTeam,
   deleteDocument,
   deleteStrategy,
+  ensureDocumentShareIds,
+  findDocumentByShareId,
   joinTeam,
   leaveTeam,
   listDocuments,
@@ -99,7 +101,11 @@ async function readJson(req, maxBytes = 512 * 1024) {
 /** Teams the caller is on, in the client's shape. */
 async function myTeams(me) {
   const teams = await teamsOf(me.id);
-  return teams.map((t) => publicTeam(t, me.id));
+  for (const t of teams) {
+    await ensureDocumentShareIds(t.id);
+  }
+  // Re-read so freshly minted share ids are in the payload.
+  return (await teamsOf(me.id)).map((t) => publicTeam(t, me.id));
 }
 
 /**
@@ -164,6 +170,18 @@ export async function handleTeamRequest(req, res, url) {
       round: hit.round,
       shared: true
     });
+    return true;
+  }
+
+  // Shared team documents: view-only for anyone with the link.
+  const sharedDocMatch = p.match(/^\/api\/teams\/sharedDoc\/([A-Za-z0-9_-]{6,32})$/);
+  if (req.method === 'GET' && sharedDocMatch) {
+    const hit = await findDocumentByShareId(sharedDocMatch[1]);
+    if (!hit) {
+      json(res, 404, { error: 'That document link is not valid.' });
+      return true;
+    }
+    json(res, 200, { document: hit.document, shared: true });
     return true;
   }
 
@@ -320,6 +338,7 @@ export async function handleTeamRequest(req, res, url) {
     if (docMatch) {
       const docId = docMatch[1];
       if (req.method === 'GET') {
+        await ensureDocumentShareIds(teamId);
         const docs = await listDocuments(teamId);
         const doc = docs.find((d) => d.id === docId);
         if (!doc) {

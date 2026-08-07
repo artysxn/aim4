@@ -3402,7 +3402,15 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   }
 
   /** /demos?rounds=a,b,c opens those rounds in Timeline. */
-  async function openSharedRounds(files, startAt = null) {
+  /**
+   * @param {string[]} files
+   * @param {object|null} [startAt]
+   * @param {{ mode?: string, focusTeamIds?: string[], focusName?: string }} [opts]
+   *   mode 'analyzer' opens the macro analyzer instead of the timeline
+   *   (antistrat documents link full-buy sets this way, with the scouted
+   *   team's short ids as focus).
+   */
+  async function openSharedRounds(files, startAt = null, opts = {}) {
     const list = [...new Set((files || []).map((f) => String(f || '').trim()).filter(Boolean))];
     if (!list.length) return;
     try {
@@ -3417,9 +3425,21 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         rounds.length === 1
           ? `${rounds[0].team1?.name || 'Team 1'} vs ${rounds[0].team2?.name || 'Team 2'}`
           : `${rounds.length} rounds`;
+      const analyzer = opts.mode === 'analyzer';
+      const focusIds = (opts.focusTeamIds || []).filter(Boolean);
+      // The analyzer resolves its focus against round.team1/team2 as SHORT
+      // IDS (library rows carry them that way); a meta carries team objects,
+      // so flatten them before handing the list over.
+      const shortId = (t) => (typeof t === 'string' ? t : t?.id || '');
+      const list2 = analyzer
+        ? rounds.map((r) => ({ ...r, team1: shortId(r.team1), team2: shortId(r.team2) }))
+        : rounds;
       // A moment names one round, so it only rides along on a single-round open.
-      launchViewer(rounds, 'timeline', title, {
-        startAt: rounds.length === 1 ? startAt : null
+      launchViewer(list2, analyzer ? 'analyzer' : 'timeline', opts.focusName || title, {
+        startAt: !analyzer && rounds.length === 1 ? startAt : null,
+        focusTeam: analyzer ? focusIds[0] || '' : '',
+        focusTeamIds: analyzer ? focusIds : [],
+        focusName: analyzer ? opts.focusName || '' : ''
       });
     } catch (err) {
       setStatus(`Could not open that round. ${err.message}`, true);
@@ -3651,7 +3671,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       // /demos, and re-entering the view must not reopen what was closed.
       if (page === 'library') {
         if (params.rounds) {
-          const key = `rounds:${params.rounds}`;
+          const key = `rounds:${params.rounds}:${params.mode || ''}`;
           if (key !== openedRound) {
             openedRound = key;
             const files = String(params.rounds)
@@ -3664,7 +3684,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
                 }
               })
               .filter(Boolean);
-            openSharedRounds(files);
+            openSharedRounds(files, null, {
+              mode: params.mode === 'analyzer' ? 'analyzer' : '',
+              focusTeamIds: String(params.team || '')
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean),
+              focusName: params.name || ''
+            });
           }
         } else if (params.round && params.round !== openedRound) {
           openedRound = params.round;

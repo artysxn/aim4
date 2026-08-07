@@ -732,6 +732,16 @@ export async function fetchTeamDocument(teamId, docId) {
   return body.document || null;
 }
 
+/** Open a shared document by its link code. Works signed out. View only. */
+export async function fetchSharedDocument(shareId) {
+  const body = await asJson(
+    await safeFetch(`${API_BASE}/api/teams/sharedDoc/${encodeURIComponent(shareId)}`, {
+      headers: await headers()
+    })
+  );
+  return body.document || null;
+}
+
 /** @param {{id?: string, title?: string, html?: string}} doc */
 export async function saveTeamDocument(teamId, doc) {
   const body = await asJson(

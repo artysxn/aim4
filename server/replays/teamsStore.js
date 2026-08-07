@@ -9,6 +9,7 @@
 //   server/data/replays/teams.json
 // ---------------------------------------------------------------------------
 
+import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { ROOT } from './demoStore.js';
@@ -407,6 +408,8 @@ export const MAX_DOCUMENTS = 200;
 export const DOC_MAX_BYTES = 4 * 1024 * 1024;
 
 const newDocId = () => `d_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+/** Opaque public link id, same shape as shared 2D rounds (`/d/<shareId>`). */
+const newDocShareId = () => crypto.randomBytes(9).toString('base64url');
 
 /** Owner edits and deletes everything; a member owns what they wrote. */
 export function canEditDocument(team, doc, userId) {
@@ -414,9 +417,50 @@ export function canEditDocument(team, doc, userId) {
   return isOwner(team, userId) || doc.authorId === userId;
 }
 
+/** Mint share ids for older documents that predate public links. */
+export async function ensureDocumentShareIds(teamId) {
+  const team = await teamById(teamId);
+  if (!team) return null;
+  if (!(team.documents || []).some((d) => !d.shareId)) return team;
+  return updateTeam(teamId, (t) => {
+    for (const d of t.documents || []) {
+      if (!d.shareId) d.shareId = newDocShareId();
+    }
+  });
+}
+
 export async function listDocuments(teamId) {
+  await ensureDocumentShareIds(teamId);
   const team = await teamById(teamId);
   return (team?.documents || []).map((d) => ({ ...d }));
+}
+
+/**
+ * Resolve a document share link. Walks every team so the URL stays opaque
+ * (nothing about `/d/<code>` says which team it belongs to).
+ *
+ * @returns {Promise<{document: object}|null>}
+ */
+export async function findDocumentByShareId(shareId) {
+  const code = String(shareId || '').replace(/[^A-Za-z0-9_-]/g, '');
+  if (!code || code.length < 6 || code.length > 32) return null;
+  const { teams } = await readTeams();
+  for (const team of teams) {
+    const doc = (team.documents || []).find((d) => d.shareId === code);
+    if (!doc) continue;
+    return {
+      document: {
+        id: doc.id,
+        shareId: doc.shareId,
+        title: doc.title,
+        html: doc.html,
+        authorName: doc.authorName,
+        updatedAt: doc.updatedAt,
+        updatedBy: doc.updatedBy
+      }
+    };
+  }
+  return null;
 }
 
 export async function upsertDocument(actor, teamId, patch = {}) {
@@ -438,12 +482,14 @@ export async function upsertDocument(actor, teamId, patch = {}) {
     if (existing) {
       existing.title = title;
       existing.html = html;
+      if (!existing.shareId) existing.shareId = newDocShareId();
       existing.updatedAt = Date.now();
       existing.updatedBy = actor.username;
       return existing;
     }
     const doc = {
       id: newDocId(),
+      shareId: newDocShareId(),
       title,
       html,
       authorId: actor.id,
@@ -691,6 +737,7 @@ export function publicTeam(team, viewerId) {
     positions: team.positions || {},
     documents: (team.documents || []).map((d) => ({
       id: d.id,
+      shareId: d.shareId || '',
       title: d.title,
       authorId: d.authorId,
       authorName: d.authorName,
