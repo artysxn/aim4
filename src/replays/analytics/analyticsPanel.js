@@ -1,6 +1,11 @@
 // ---------------------------------------------------------------------------
-// Analytics: map-first filters + optional subjects (players / teams) → stats.
-// Layout: sticky filter sidebar + main results (stats, radar, LB, rounds).
+// Pattern finder, split into chapters (see the rework plan):
+//   Players        map-first filters + optional subjects → stats. This is the
+//                  pre-rework surface: sticky filter sidebar + main results.
+//   Antistrat      scout a library team, write a team document (antistratPanel).
+//   Teams explore  loose exploration counterpart to Antistrat. WIP shell.
+//   Meta           per-map tendencies across the whole library. WIP shell.
+//   Search         round search by map / players / sides. WIP shell.
 // ---------------------------------------------------------------------------
 
 import { fetchStats, consumeCapability, formatApiError } from '../api.js';
@@ -25,11 +30,21 @@ import {
 import { spinnerHtml, watchSlowLoad } from '../../lib/spinner.js';
 import { renderUpgradeError } from '../../site/upgradeGate.js';
 import { createSavedViews } from '../savedViews.js';
+import { createAntistratPanel } from './antistratPanel.js';
 
 const PHASE_OPTS = [
   { key: 'early', label: 'Early' },
   { key: 'mid', label: 'Mid' },
   { key: 'late', label: 'Late' }
+];
+
+/** Rework chapters. `wip` renders the shell and keeps the tab honest. */
+const CHAPTERS = [
+  { key: 'players', label: 'Players' },
+  { key: 'antistrat', label: 'Teams: Antistrat' },
+  { key: 'teams-explore', label: 'Teams: Explore', wip: true },
+  { key: 'meta', label: 'Meta', wip: true },
+  { key: 'search', label: 'Search', wip: true }
 ];
 
 /** Format a finite number for leaderboard cells; `digits` = decimal places. */
@@ -47,13 +62,105 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   const el = document.createElement('div');
   el.className = 'an-panel';
   el.innerHTML = `
-    <div class="an-layout">
-      <aside class="an-sidebar" id="an-sidebar"></aside>
-      <div class="an-main" id="an-main"><p class="view-empty">Select a map to begin.</p></div>
-    </div>`;
+    <nav class="an-chapters" id="an-chapters" aria-label="Pattern finder chapters"></nav>
+    <div class="an-chapter" data-chapter="players">
+      <div class="an-layout">
+        <aside class="an-sidebar" id="an-sidebar"></aside>
+        <div class="an-main" id="an-main"><p class="view-empty">Select a map to begin.</p></div>
+      </div>
+    </div>
+    <div class="an-chapter" data-chapter="antistrat" hidden></div>
+    <div class="an-chapter" data-chapter="teams-explore" hidden></div>
+    <div class="an-chapter" data-chapter="meta" hidden></div>
+    <div class="an-chapter" data-chapter="search" hidden></div>`;
 
   const sidebarEl = el.querySelector('#an-sidebar');
   const mainEl = el.querySelector('#an-main');
+  const chaptersEl = el.querySelector('#an-chapters');
+
+  let chapter = 'players';
+  /** @type {ReturnType<typeof createAntistratPanel> | null} */
+  let antistrat = null;
+
+  function chapterEl(key) {
+    return el.querySelector(`.an-chapter[data-chapter="${key}"]`);
+  }
+
+  function renderChapterNav() {
+    chaptersEl.innerHTML = CHAPTERS.map(
+      (c) => `<button type="button" class="an-chapter-btn${c.key === chapter ? ' active' : ''}"
+        data-an-chapter="${c.key}">${escapeHtml(c.label)}${
+        c.wip ? ' <span class="an-wip-chip">WIP</span>' : ''
+      }</button>`
+    ).join('');
+  }
+
+  /** WIP shells: the planned selectors, inert, so the shape is already there. */
+  function wipShellHtml(key) {
+    if (key === 'teams-explore') {
+      return `<section class="an-card an-wip-card">
+        <header class="an-card-head"><h3 class="an-section-title">Teams: loose exploration</h3></header>
+        <div class="an-wip-body">
+          <p class="an-muted">Browse a team's rounds without a fixed question. WIP.</p>
+        </div>
+      </section>`;
+    }
+    if (key === 'meta') {
+      return `<section class="an-card an-wip-card">
+        <header class="an-card-head"><h3 class="an-section-title">Meta</h3></header>
+        <div class="an-wip-body">
+          <p class="an-muted">Pick a map and side to see the most common grenades from the utility database, how often teams push, and more. WIP.</p>
+          <div class="an-wip-controls">
+            <select class="site-select an-select" disabled aria-label="Map"><option>Map</option></select>
+            <select class="site-select an-select" disabled aria-label="Side"><option>Side</option></select>
+          </div>
+        </div>
+      </section>`;
+    }
+    if (key === 'search') {
+      return `<section class="an-card an-wip-card">
+        <header class="an-card-head"><h3 class="an-section-title">Search</h3></header>
+        <div class="an-wip-body">
+          <p class="an-muted">Pick a map, players or sides and see how often they do specific actions, and their rating when they do. WIP.</p>
+          <div class="an-wip-controls">
+            <select class="site-select an-select" disabled aria-label="Map"><option>Map</option></select>
+            <input class="site-input" disabled placeholder="Players or sides" aria-label="Players or sides" />
+          </div>
+        </div>
+      </section>`;
+    }
+    return '';
+  }
+
+  function setChapter(next) {
+    if (!CHAPTERS.some((c) => c.key === next)) return;
+    chapter = next;
+    for (const c of CHAPTERS) {
+      const host = chapterEl(c.key);
+      if (host) host.hidden = c.key !== chapter;
+    }
+    renderChapterNav();
+
+    if (chapter === 'antistrat') {
+      const host = chapterEl('antistrat');
+      if (!antistrat && host) {
+        antistrat = createAntistratPanel({ escapeHtml });
+        host.appendChild(antistrat.el);
+      }
+      antistrat?.load(payload);
+      return;
+    }
+    if (chapter !== 'players') {
+      const host = chapterEl(chapter);
+      if (host && !host.innerHTML) host.innerHTML = wipShellHtml(chapter);
+    }
+  }
+
+  renderChapterNav();
+  chaptersEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-an-chapter]');
+    if (btn) setChapter(btn.dataset.anChapter);
+  });
 
   let payload = null;
   /** @type {Array<{id:string,name:string,maps:string[],teamKeys:string[]}>} */
@@ -408,6 +515,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       </div>
 
       <div class="an-side-block" ${ready ? '' : 'hidden'}>
+        <p class="an-side-hint">Per-player deep dive view: WIP.</p>
         <div class="an-field">
           ${menuSelect(
             'data-an-side',
@@ -789,6 +897,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       if (token !== loadToken) return;
       render();
       mountSavedViews();
+      antistrat?.load(payload);
       void savedViews.refresh().then(mountSavedViews);
       void savedViews
         .applyShareParam(Object.fromEntries(new URLSearchParams(window.location.search)))
@@ -997,6 +1106,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       detachTips();
       radar?.destroy();
       radar = null;
+      antistrat?.destroy();
+      antistrat = null;
       el.remove();
     }
   };

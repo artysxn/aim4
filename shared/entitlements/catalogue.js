@@ -174,6 +174,11 @@ export const CAPABILITIES = Object.freeze({
     label: 'Pattern finder',
     values: { free: 3, premium: UNLIMITED, team_premium: UNLIMITED, team_elite: UNLIMITED }
   },
+  'analytics.antistrat': {
+    shape: BOOL,
+    label: 'Teams antistrat',
+    values: { free: false, premium: false, team_premium: true, team_elite: true }
+  },
 
   // --- Teams --------------------------------------------------------------
   'team.create_limit': {

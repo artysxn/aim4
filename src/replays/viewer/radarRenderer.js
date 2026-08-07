@@ -1508,23 +1508,59 @@ export class RadarRenderer {
 
   drawBomb(ctx, t, frame, compact) {
     const { events, tick } = frame;
-    const planted = events?.bomb?.find((b) => b.type === 'planted' && b.tick <= tick);
-    if (!planted) return;
-    const defused = events.bomb.find((b) => b.type === 'defused' && b.tick <= tick);
-    const pt = this.project(t, planted.x, planted.y, { x: 0, y: 0 });
-    const r = (compact ? 3 : 5) * this.dpr;
-    ctx.save();
-    ctx.fillStyle = defused ? '#5ad17a' : '#f2d024';
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
-    ctx.fill();
-    if (!defused) {
-      const pulse = 0.5 + 0.5 * Math.sin(tick / 6);
-      ctx.globalAlpha = 0.35 + 0.35 * pulse;
-      ctx.strokeStyle = '#f2d024';
-      ctx.lineWidth = 2 * this.dpr;
+    if (!events?.bomb?.length) return;
+
+    const planted = events.bomb.find((b) => b.type === 'planted' && b.tick <= tick);
+    if (planted) {
+      const defused = events.bomb.find((b) => b.type === 'defused' && b.tick <= tick);
+      const pt = this.project(t, planted.x, planted.y, { x: 0, y: 0 });
+      const r = (compact ? 3 : 5) * this.dpr;
+      ctx.save();
+      ctx.fillStyle = defused ? '#5ad17a' : '#f2d024';
       ctx.beginPath();
-      ctx.arc(pt.x, pt.y, r + (3 + pulse * 4) * this.dpr, 0, Math.PI * 2);
+      ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      if (!defused) {
+        const pulse = 0.5 + 0.5 * Math.sin(tick / 6);
+        ctx.globalAlpha = 0.35 + 0.35 * pulse;
+        ctx.strokeStyle = '#f2d024';
+        ctx.lineWidth = 2 * this.dpr;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, r + (3 + pulse * 4) * this.dpr, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+      return;
+    }
+
+    // Lying on the ground between drop and pickup (spawn drop included).
+    const dropped = bombDroppedAt(events, tick);
+    if (!dropped || !Number.isFinite(dropped.x) || !Number.isFinite(dropped.y)) return;
+    const pt = this.project(t, dropped.x, dropped.y, { x: 0, y: 0 });
+    this.drawDroppedBomb(ctx, pt, compact);
+  }
+
+  drawDroppedBomb(ctx, pt, compact) {
+    const img = loadEquipmentIcon('c4', () => this.onIconLoad?.());
+    const size = (compact ? 10 : 16) * this.dpr;
+    const tint = '#f2d024';
+    const outline = '#000000';
+    ctx.save();
+    if (img?.complete && img.naturalWidth > 0) {
+      const scale = Math.min(size / img.naturalWidth, size / img.naturalHeight);
+      const iw = img.naturalWidth * scale;
+      const ih = img.naturalHeight * scale;
+      const px = this.dpr;
+      this.drawTintedIcon(ctx, img, pt.x - iw / 2 + px, pt.y - ih / 2 + px, iw, ih, outline);
+      this.drawTintedIcon(ctx, img, pt.x - iw / 2, pt.y - ih / 2, iw, ih, tint);
+    } else {
+      const r = (compact ? 3 : 4.5) * this.dpr;
+      ctx.fillStyle = tint;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = outline;
+      ctx.lineWidth = Math.max(1, 1.25 * this.dpr);
       ctx.stroke();
     }
     ctx.restore();
@@ -1580,6 +1616,17 @@ function bombCarrierAt(events, tick) {
     if (!latest || b.tick >= latest.tick) latest = b;
   }
   return latest?.type === 'pickup' ? latest.player || '' : '';
+}
+
+/** Latest bomb_dropped still on the ground at tick, or null if carried/planted. */
+function bombDroppedAt(events, tick) {
+  let latest = null;
+  for (const b of events?.bomb || []) {
+    if (b.tick > tick) continue;
+    if (b.type !== 'pickup' && b.type !== 'dropped' && b.type !== 'planted') continue;
+    if (!latest || b.tick >= latest.tick) latest = b;
+  }
+  return latest?.type === 'dropped' ? latest : null;
 }
 
 function flashPops(events) {

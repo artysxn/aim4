@@ -30,6 +30,7 @@ export const CAP = Object.freeze({
   STATS_FILTERS_FULL: 'stats.filters_full',
   ANALYTICS_CHARTS: 'analytics.charts',
   ANALYTICS_PATTERN_FINDER: 'analytics.pattern_finder',
+  ANALYTICS_ANTISTRAT: 'analytics.antistrat',
 
   TEAM_CREATE_LIMIT: 'team.create_limit',
   TEAM_JOIN: 'team.join',

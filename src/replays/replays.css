@@ -4731,6 +4731,201 @@ body.rv-open {
   color: #e8b84a;
 }
 
+/* ---- Pattern finder chapters -------------------------------------------- */
+
+.an-chapters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.an-chapter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.an-chapter-btn:hover {
+  color: var(--text);
+}
+
+.an-chapter-btn.active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.an-wip-chip {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+}
+
+.an-chapter[hidden] {
+  display: none;
+}
+
+.an-wip-card {
+  max-width: 560px;
+}
+
+.an-wip-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.an-wip-body p {
+  margin: 0;
+}
+
+.an-wip-controls {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---- Teams antistrat ----------------------------------------------------- */
+
+.as-panel {
+  display: block;
+}
+
+.as-locked {
+  max-width: 720px;
+  margin-bottom: 12px;
+}
+
+.as-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 720px;
+}
+
+.as-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.as-step-body .an-warn {
+  margin: 0;
+}
+
+.as-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.as-controls .an-select {
+  min-width: 180px;
+}
+
+.as-match-list {
+  gap: 4px;
+}
+
+.as-match {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.as-match:hover {
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+}
+
+.as-match.off span {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.as-cats {
+  gap: 14px;
+}
+
+.as-cat-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.as-cat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 10px;
+  align-items: center;
+}
+
+.as-cat.wip {
+  opacity: 0.65;
+}
+
+.as-cat-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.as-cat.wip .as-cat-main {
+  cursor: default;
+}
+
+.as-cat-desc {
+  grid-column: 1;
+  margin: 0 0 0 24px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.as-detail {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  width: 110px;
+}
+
+.as-cat.wip .as-detail {
+  display: none;
+}
+
+.as-status {
+  margin: 0;
+  font-size: 13px;
+}
+
+.as-status.ok {
+  color: var(--ok, #58c08a);
+}
+
+.as-status.error {
+  color: var(--danger, #e06c6c);
+}
+
 /* ---- Charts: the graph builder ------------------------------------------ */
 
 .ch-panel {
