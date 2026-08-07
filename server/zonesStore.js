@@ -14,6 +14,7 @@ import { sanitizeBombSites } from '../src/replays/zones/bombSites.js';
 import { sanitizeKeyZones } from '../src/replays/zones/keyZones.js';
 import { sanitizeLedges } from '../src/replays/zones/ledges.js';
 import { sanitizeRegionHierarchy } from '../src/replays/zones/regionHierarchy.js';
+import { sanitizeLayerPieces } from '../src/replays/zones/visionLayers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -23,7 +24,6 @@ export const ZONES_ROOT =
 const LEGACY_DIR = path.join(__dirname, 'data', 'zones');
 
 const MAP_RE = /^[A-Z0-9]{2,4}$/;
-const LAYER_PIECES_MAX = 5000;
 
 async function ensureDir(dir = ZONES_ROOT) {
   await fsp.mkdir(dir, { recursive: true });
@@ -31,44 +31,6 @@ async function ensureDir(dir = ZONES_ROOT) {
 
 function fileFor(map, root = ZONES_ROOT) {
   return path.join(root, `${map}.json`);
-}
-
-function validRing(ring) {
-  if (!Array.isArray(ring) || ring.length < 3 || ring.length > 64) return false;
-  for (const p of ring) {
-    if (!Array.isArray(p) || p.length < 2) return false;
-    if (!Number.isFinite(Number(p[0])) || !Number.isFinite(Number(p[1]))) return false;
-  }
-  return true;
-}
-
-function sanitizeLayerPieces(raw) {
-  const pieces = [];
-  if (!Array.isArray(raw)) return pieces;
-  for (const piece of raw.slice(0, LAYER_PIECES_MAX)) {
-    if (!piece || typeof piece !== 'object') continue;
-    const asRect =
-      piece.type === 'rect' ||
-      (piece.type == null &&
-        Number.isFinite(Number(piece.x)) &&
-        Number.isFinite(Number(piece.y)) &&
-        Number.isFinite(Number(piece.w)) &&
-        Number.isFinite(Number(piece.h)));
-    if (asRect) {
-      const x = Number(piece.x);
-      const y = Number(piece.y);
-      const w = Number(piece.w);
-      const h = Number(piece.h);
-      if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) continue;
-      pieces.push({ type: 'rect', x, y, w, h });
-    } else if (piece.type === 'poly' && validRing(piece.ring)) {
-      pieces.push({
-        type: 'poly',
-        ring: piece.ring.map((p) => [Number(p[0]), Number(p[1])])
-      });
-    }
-  }
-  return pieces;
 }
 
 /** Empty network for a map code. */
