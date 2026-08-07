@@ -183,6 +183,28 @@
   .ze-float button.active.key-a { background: #8a6e15; }
   .ze-float button.active.key-b { background: #2b567f; }
   .ze-float button.active.position { background: #2f8f45; }
+  .ze-pos-name {
+    width: 148px;
+    height: 28px;
+    padding: 0 8px;
+    border: none;
+    border-radius: var(--radius-xs);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+  }
+  .ze-pos-name::placeholder { color: var(--muted); }
+  .ze-pos-name:focus {
+    outline: none;
+    background: var(--surface-hover);
+  }
+  .ze-zone-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
   .ze-float button.ze-floor,
   .ze-float button.ze-shape-mode {
     width: auto;
@@ -308,6 +330,9 @@
     background: var(--surface);
     transition: background 0.15s ease;
   }
+  .ze-item:has(.ze-zone-swatch) {
+    grid-template-columns: 18px 12px 1fr auto;
+  }
   .ze-item:hover { background: var(--surface-hover); }
   .ze-item.is-selected { background: rgba(55, 178, 108, 0.14); }
   input[type="checkbox"] {
@@ -335,6 +360,9 @@
     font-size: 10px;
     color: var(--muted);
     grid-column: 2 / -1;
+  }
+  .ze-item:has(.ze-zone-swatch) .ze-item-meta {
+    grid-column: 3 / -1;
   }
   .ze-item-members {
     grid-column: 1 / -1;
@@ -421,6 +449,16 @@
           </div>
           <div class="ze-tool-group" id="ze-tools-regions" hidden>
             <button type="button" class="ze-tool-wide active position" id="ze-tool-position" title="Draw a position footprint" data-tool="position">Position</button>
+            <input
+              class="ze-pos-name"
+              id="ze-pos-name"
+              type="text"
+              maxlength="64"
+              placeholder="Name (merge if exists)"
+              title="Name for the next position. Matching an existing name on this floor merges into it."
+              autocomplete="off"
+              spellcheck="false"
+            />
           </div>
           <div class="ze-float-sep"></div>
           <button type="button" class="ze-shape-mode active" id="ze-shape-rect" title="Draw rectangles">Rectangle</button>
@@ -447,7 +485,7 @@
         <div class="ze-panel" id="ze-panel-regions" hidden>
           <div>
             <h2>Regions</h2>
-            <p class="ze-empty" style="margin-top:8px">Draw a footprint with the Position tool. Positions cannot overlap on a floor, so drawing over one asks which shape keeps the overlap. Rename a position to an existing name to merge the two. Zones group positions, areas group zones.</p>
+            <p class="ze-empty" style="margin-top:8px">Set a name in the bar, then draw. Matching an existing name on this floor merges into that position. Positions cannot overlap on a floor, so drawing over another asks which shape keeps the overlap. Zones get distinct colors on the map.</p>
             <div class="ze-hier-actions" style="margin-top:12px">
               <button type="button" class="btn btn-sm" id="ze-make-zone" title="Group selected positions into a zone">+ Zone</button>
               <button type="button" class="btn btn-sm" id="ze-make-area" title="Group selected zones into an area">+ Area</button>

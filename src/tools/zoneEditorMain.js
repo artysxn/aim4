@@ -74,7 +74,34 @@ const BOMB_B_COLOR = '#4aa3ff';
 const KEY_A_COLOR = '#c9a227';
 const KEY_B_COLOR = '#3d7ab8';
 const POSITION_COLOR = '#5dce6e';
-const POSITION_SELECTED = '#b8f0c0';
+const POSITION_PIECES_MAX = 64;
+
+/** Stable, distinct HSL color from an id (zones on the map). */
+function colorFromId(id) {
+  const s = String(id || '');
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const hue = h % 360;
+  const sat = 55 + (h % 25);
+  const light = 42 + ((h >>> 8) % 14);
+  return `hsl(${hue} ${sat}% ${light}%)`;
+}
+
+/** First zone that owns this position, or null. */
+function zoneForPosition(posId) {
+  for (const z of network.zones || []) {
+    if ((z.positionIds || []).includes(posId)) return z;
+  }
+  return null;
+}
+
+function colorForPosition(pos) {
+  const zone = zoneForPosition(pos?.id);
+  return zone ? colorFromId(zone.id) : POSITION_COLOR;
+}
 
 const el = {
   mapTabs: document.querySelector('#ze-maps'),
@@ -132,7 +159,8 @@ const el = {
   modalText: document.querySelector('#ze-modal-text'),
   modalActions: document.querySelector('#ze-modal-actions'),
   btnMakeZone: document.querySelector('#ze-make-zone'),
-  btnMakeArea: document.querySelector('#ze-make-area')
+  btnMakeArea: document.querySelector('#ze-make-area'),
+  posName: document.querySelector('#ze-pos-name')
 };
 
 let mapCode = MAP_CODES.includes('INF') ? 'INF' : MAP_CODES[0];
@@ -690,7 +718,8 @@ function draw() {
   for (const pos of network.positions || []) {
     const onFloor = (pos.level || 'default') === radarLevel;
     const selected = selectedPositionIds.has(pos.id) || highlightPositionId === pos.id;
-    const color = selected ? POSITION_SELECTED : POSITION_COLOR;
+    // Keep zone colors when selected; thicker stroke marks the selection.
+    const color = colorForPosition(pos);
     const alpha = posAlpha * (onFloor ? 1 : OFF_FLOOR_ALPHA);
     const pieces = pos.pieces || [];
     let mainIdx = 0;
@@ -713,7 +742,10 @@ function draw() {
           : paintTool === 'keyB'
             ? KEY_B_COLOR
             : paintTool === 'position'
-              ? POSITION_COLOR
+              ? (() => {
+                  const twin = findPositionByName(network, intendedPositionName(), radarLevel);
+                  return twin ? colorForPosition(twin) : POSITION_COLOR;
+                })()
               : '#88c0ff';
 
   if (drawing && isRectTool()) {
@@ -929,9 +961,33 @@ function askChoice({ title, text, choices }) {
   });
 }
 
+/** Name typed in the bar, or the next Pos N fallback. */
+function intendedPositionName() {
+  const typed = String(el.posName?.value || '')
+    .trim()
+    .replace(/\s+/g, ' ');
+  if (typed) return typed.slice(0, 64);
+  return `Pos ${(network.positions?.length || 0) + 1}`;
+}
+
+/**
+ * Create a position, or merge pieces into the same-name position on this floor.
+ * @returns {{ pos: object, merged: boolean } | null}
+ */
 function addPosition(pieces) {
+  const name = intendedPositionName();
+  const twin = findPositionByName(network, name, radarLevel);
+  if (twin) {
+    twin.pieces = [...(twin.pieces || []), ...(pieces || [])].slice(0, POSITION_PIECES_MAX);
+    selectedPositionIds.add(twin.id);
+    highlightPositionId = twin.id;
+    markDirty(true);
+    syncUi();
+    draw();
+    return { pos: twin, merged: true };
+  }
   const pos = createPosition(network, {
-    name: `Pos ${(network.positions?.length || 0) + 1}`,
+    name,
     level: radarLevel,
     pieces,
     allowOverlap: true
@@ -942,7 +998,17 @@ function addPosition(pieces) {
   markDirty(true);
   syncUi();
   draw();
-  return pos;
+  return { pos, merged: false };
+}
+
+function statusForAdded(result, extra = '') {
+  if (!result?.pos) return;
+  const floor = result.pos.level === 'lower' ? 'lower' : 'upper';
+  if (result.merged) {
+    setStatus(`Merged into "${result.pos.name}" (${floor})${extra}`);
+    return;
+  }
+  setStatus(`Position "${result.pos.name}" added (${floor})${extra}`);
 }
 
 async function commitPosition(piece) {
@@ -958,16 +1024,21 @@ async function commitPosition(piece) {
     draw();
     return;
   }
-  const hits = positionsOverlapping(network, clean, radarLevel);
+  const name = intendedPositionName();
+  const twin = findPositionByName(network, name, radarLevel);
+  // Same-name target is a merge, not an overlap conflict.
+  const hits = positionsOverlapping(network, clean, radarLevel).filter(
+    (p) => !twin || p.id !== twin.id
+  );
   if (!hits.length) {
     pushUndo();
-    const pos = addPosition([clean]);
-    if (!pos) {
+    const result = addPosition([clean]);
+    if (!result) {
       undoStack.pop();
       draw();
       return;
     }
-    setStatus(`Position "${pos.name}" added (${pos.level === 'lower' ? 'lower' : 'upper'})`);
+    statusForAdded(result);
     return;
   }
 
@@ -991,16 +1062,17 @@ async function commitPosition(piece) {
   if (choice === 'new') {
     const { removed } = carvePositionsUnder(network, clean, radarLevel);
     for (const pos of removed) selectedPositionIds.delete(pos.id);
-    const pos = addPosition([clean]);
-    if (!pos) {
+    const result = addPosition([clean]);
+    if (!result) {
       undoStack.pop();
       draw();
       return;
     }
     const gone = removed.length ? `, ${removed.length} fully covered and removed` : '';
-    setStatus(`Position "${pos.name}" added, carved out of ${hits.length} position${
-      hits.length === 1 ? '' : 's'
-    }${gone}`);
+    statusForAdded(
+      result,
+      `, carved out of ${hits.length} position${hits.length === 1 ? '' : 's'}${gone}`
+    );
     return;
   }
 
@@ -1011,13 +1083,13 @@ async function commitPosition(piece) {
     setStatus('Nothing left after carving, position not added', 'err');
     return;
   }
-  const pos = addPosition(parts);
-  if (!pos) {
+  const result = addPosition(parts);
+  if (!result) {
     undoStack.pop();
     draw();
     return;
   }
-  setStatus(`Position "${pos.name}" added around ${names}`);
+  statusForAdded(result, ` around ${names}`);
 }
 
 function clearKeySite(site) {
@@ -1164,6 +1236,7 @@ function renderRegionsPanel() {
             .join(', ');
           return `<div class="ze-item${selected}" data-zone-row="${esc(z.id)}">
             <input type="checkbox" data-sel-zone="${esc(z.id)}"${checked} />
+            <span class="ze-zone-swatch" style="background:${esc(colorFromId(z.id))}" title="Zone color"></span>
             <input class="ze-item-name" type="text" maxlength="64" data-rename-zone="${esc(
               z.id
             )}" value="${esc(z.name)}" />
