@@ -581,7 +581,7 @@ export async function saveZones(map, network) {
         elevated: network.elevated || [],
         underpasses: network.underpasses || [],
         ledges: network.ledges || [],
-        bombSites: network.bombSites || { a: null, b: null },
+        bombSites: network.bombSites || { a: [], b: [] },
         keyZones: network.keyZones || { a: [], b: [] },
         positions: network.positions || [],
         zones: network.zones || [],

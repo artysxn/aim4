@@ -187,16 +187,23 @@ export function registerRadarMask(mapCode, mask) {
  * @param {string} mapCode
  * @param {CanvasImageSource | null} [radarImage]
  */
-export function prepareControlField(network, mapCode, radarImage = null) {
+/**
+ * @param {object | null | undefined} network
+ * @param {string} mapCode
+ * @param {CanvasImageSource | null} [radarImage]
+ * @param {'default'|'lower'} [level]  stacked maps: bake vision for this floor
+ */
+export function prepareControlField(network, mapCode, radarImage = null, level = 'default') {
   if (!network || !mapCode) return network;
   const los = radarImage ? getRadarLos(mapCode, radarImage) : losCache.get(mapCode) || null;
   if (!los) return network;
   const geom = getFieldGeometry(mapCode, los);
   if (!geom) return network;
-  const layers = getVisionLayerTests(network, mapCode);
+  const layers = getVisionLayerTests(network, mapCode, level);
   network._fieldGeom = geom;
   network._segments = getMapSegments(mapCode, los, layers);
   network._layers = layers;
+  network._fieldLevel = level === 'lower' ? 'lower' : 'default';
   return network;
 }
 
@@ -299,8 +306,15 @@ export function createConeCaster({ meta, network, mapCode, radarImage }) {
  *
  * @returns {object | null}
  */
-export function buildZonePresence({ meta, track, network, mapCode = '', radarImage = null }) {
-  if (mapCode) prepareControlField(network, mapCode, radarImage);
+export function buildZonePresence({
+  meta,
+  track,
+  network,
+  mapCode = '',
+  radarImage = null,
+  level = 'default'
+}) {
+  if (mapCode) prepareControlField(network, mapCode, radarImage, level);
   const geom = network?._fieldGeom;
   if (!meta || !track || !geom) return null;
 
@@ -437,9 +451,10 @@ export function computeZonePaint({
   radarImage,
   grenades,
   visionCache,
-  track = null
+  track = null,
+  level = 'default'
 }) {
-  prepareControlField(network, mapCode, radarImage);
+  prepareControlField(network, mapCode, radarImage, level);
   const geom = network?._fieldGeom;
   if (!geom || !meta) return null;
 

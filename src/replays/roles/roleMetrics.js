@@ -156,11 +156,14 @@ function proximityFromDist(d) {
  * One side's CT affinity: bombsite at full weight + best key zone at 75%.
  * @param {number} x
  * @param {number} y
- * @param {import('../zones/bombSites.js').BombSitePiece | null} bomb
+ * @param {import('../zones/bombSites.js').BombSitePiece[]} bombs
  * @param {import('../zones/keyZones.js').KeyZonePiece[]} keys
  */
-function sideZoneScore(x, y, bomb, keys) {
-  const bombProx = proximityFromDist(distToPiece(x, y, bomb));
+function sideZoneScore(x, y, bombs, keys) {
+  let bombProx = 0;
+  for (const bomb of bombs || []) {
+    bombProx = Math.max(bombProx, proximityFromDist(distToPiece(x, y, bomb)));
+  }
   let keyProx = 0;
   for (const k of keys || []) {
     keyProx = Math.max(keyProx, proximityFromDist(distToPiece(x, y, k)));
@@ -181,7 +184,7 @@ export function ctZoneAffinity(points, network) {
   if (!points?.length || !network) return out;
   const sites = sanitizeBombSites(network.bombSites);
   const keys = sanitizeKeyZones(network.keyZones);
-  if (!sites.a && !sites.b && !keys.a.length && !keys.b.length) return out;
+  if (!sites.a.length && !sites.b.length && !keys.a.length && !keys.b.length) return out;
 
   for (const p of points) {
     const a = sideZoneScore(p.x, p.y, sites.a, keys.a);

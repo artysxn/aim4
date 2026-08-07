@@ -350,7 +350,8 @@ async function loadMapNetwork(io, mapCode) {
       elevated: [],
       underpasses: [],
       ledges: [],
-      bombSites: { a: null, b: null }
+      bombSites: { a: [], b: [] },
+      keyZones: { a: [], b: [] }
     };
   }
   return network;

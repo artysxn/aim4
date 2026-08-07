@@ -17,13 +17,20 @@ import {
   ensureVisionLayers,
   strokeBrush
 } from '../replays/zones/visionLayers.js';
-import { ensureBombSites } from '../replays/zones/bombSites.js';
+import {
+  bombSitePieces,
+  clearBombSitePiece,
+  ensureBombSites,
+  setBombSitePiece
+} from '../replays/zones/bombSites.js';
 import {
   KEY_ZONES_MAX,
   addKeyZone,
   clearKeyZones,
-  ensureKeyZones
+  ensureKeyZones,
+  keyZonesFor
 } from '../replays/zones/keyZones.js';
+import { cleanRegionLevel, filterPiecesByLevel } from '../replays/zones/zoneLevel.js';
 import {
   LEDGES_MAX,
   ensureLedges,
@@ -185,7 +192,7 @@ function snapshotOf(net) {
     elevated: net.elevated || [],
     underpasses: net.underpasses || [],
     ledges: net.ledges || [],
-    bombSites: net.bombSites || { a: null, b: null },
+    bombSites: net.bombSites || { a: [], b: [] },
     keyZones: net.keyZones || { a: [], b: [] },
     positions: net.positions || [],
     zones: net.zones || [],
@@ -297,7 +304,7 @@ function undoLast() {
   network.elevated = prev.elevated || [];
   network.underpasses = prev.underpasses || [];
   network.ledges = prev.ledges || [];
-  network.bombSites = prev.bombSites || { a: null, b: null };
+  network.bombSites = prev.bombSites || { a: [], b: [] };
   network.keyZones = prev.keyZones || { a: [], b: [] };
   network.positions = prev.positions || [];
   network.zones = prev.zones || [];
@@ -320,19 +327,27 @@ function syncUi() {
   ensureBombSites(network);
   ensureRegionHierarchy(network);
   if (el.layerCounts) {
-    const vb = network.visionBlocks.length;
-    const elv = network.elevated.length;
-    const up = network.underpasses.length;
+    const floor = radarLevel;
+    const vb = filterPiecesByLevel(network.visionBlocks, floor, mapCode).length;
+    const elv = filterPiecesByLevel(network.elevated, floor, mapCode).length;
+    const up = filterPiecesByLevel(network.underpasses, floor, mapCode).length;
     const lg = network.ledges.length;
     el.layerCounts.textContent = `${vb} vision · ${elv} elevated · ${up} underpass · ${lg} ledge${lg === 1 ? '' : 's'}`;
   }
-  if (el.bombAStatus) el.bombAStatus.textContent = network.bombSites.a ? 'Set' : '—';
-  if (el.bombBStatus) el.bombBStatus.textContent = network.bombSites.b ? 'Set' : '—';
+  const bombOpts = { level: radarLevel, mapCode };
+  if (el.bombAStatus) {
+    el.bombAStatus.textContent = bombSitePieces(network, 'a', bombOpts).length ? 'Set' : '—';
+  }
+  if (el.bombBStatus) {
+    el.bombBStatus.textContent = bombSitePieces(network, 'b', bombOpts).length ? 'Set' : '—';
+  }
   if (el.keyAStatus) {
-    el.keyAStatus.textContent = `${network.keyZones?.a?.length || 0}/${KEY_ZONES_MAX}`;
+    const n = keyZonesFor(network, 'a', bombOpts).length;
+    el.keyAStatus.textContent = `${n}/${KEY_ZONES_MAX}`;
   }
   if (el.keyBStatus) {
-    el.keyBStatus.textContent = `${network.keyZones?.b?.length || 0}/${KEY_ZONES_MAX}`;
+    const n = keyZonesFor(network, 'b', bombOpts).length;
+    el.keyBStatus.textContent = `${n}/${KEY_ZONES_MAX}`;
   }
 
   const isBrush = isBrushTool();
@@ -508,10 +523,14 @@ function draw() {
   }
 
   ensureVisionLayers(network);
-  const drawLayer = (pieces, color, alpha) => {
+  // Other floor stays at 10% so upper/lower context is visible while editing.
+  const OFF_FLOOR_ALPHA = 0.1;
+  const floorMul = (piece) =>
+    cleanRegionLevel(piece?.level) === radarLevel ? 1 : OFF_FLOOR_ALPHA;
+  const drawLayer = (pieces, color, baseAlpha) => {
     if (!pieces?.length) return;
-    ctx.fillStyle = hexAlpha(color, alpha);
     for (const piece of pieces) {
+      ctx.fillStyle = hexAlpha(color, baseAlpha * floorMul(piece));
       if (piece.type === 'rect' || (piece.w > 0 && piece.h > 0 && !piece.ring)) {
         const a = worldToRadar(mapCode, piece.x, piece.y, {});
         const b = worldToRadar(mapCode, piece.x + piece.w, piece.y + piece.h, {});
@@ -641,13 +660,21 @@ function draw() {
     ctx.globalAlpha = 1;
   };
   if (showSites) {
-    drawPiece(network.bombSites.a, BOMB_A_COLOR, 'A', 2, mapAlpha);
-    drawPiece(network.bombSites.b, BOMB_B_COLOR, 'B', 2, mapAlpha);
+    ensureBombSites(network);
+    for (const piece of network.bombSites.a || []) {
+      drawPiece(piece, BOMB_A_COLOR, 'A', 2, mapAlpha * floorMul(piece));
+    }
+    for (const piece of network.bombSites.b || []) {
+      drawPiece(piece, BOMB_B_COLOR, 'B', 2, mapAlpha * floorMul(piece));
+    }
 
     ensureKeyZones(network);
     const drawKeyList = (list, color, prefix) => {
-      (list || []).forEach((piece, i) => {
-        drawPiece(piece, color, `${prefix}${i + 1}`, 1.5, mapAlpha);
+      let onIdx = 0;
+      (list || []).forEach((piece) => {
+        const onFloor = cleanRegionLevel(piece.level) === radarLevel;
+        const label = onFloor ? `${prefix}${++onIdx}` : '';
+        drawPiece(piece, color, label, 1.5, mapAlpha * floorMul(piece));
       });
     };
     drawKeyList(network.keyZones.a, KEY_A_COLOR, 'A');
@@ -660,9 +687,6 @@ function draw() {
     const bb = pieceBounds(piece);
     return Math.max(0, bb.maxX - bb.minX) * Math.max(0, bb.maxY - bb.minY);
   };
-  // Other floor stays at 10% so upper/lower context is visible while editing
-  // the active Nuke level (and the reverse when that floor is selected).
-  const OFF_FLOOR_ALPHA = 0.1;
   for (const pos of network.positions || []) {
     const onFloor = (pos.level || 'default') === radarLevel;
     const selected = selectedPositionIds.has(pos.id) || highlightPositionId === pos.id;
@@ -808,23 +832,26 @@ function commitBombSite(site, piece) {
   if (!clean) return;
   pushUndo();
   ensureBombSites(network);
-  network.bombSites[site] = clean;
+  setBombSitePiece(network, site, clean, radarLevel);
   markDirty(true);
   syncUi();
   draw();
-  setStatus(`Bomb site ${site.toUpperCase()} set`);
+  const floor = radarLevel === 'lower' ? 'lower' : 'upper';
+  setStatus(`Bomb site ${site.toUpperCase()} set (${floor})`);
 }
 
 function clearBombSite(site) {
   ensureBombSites(network);
-  if (!network.bombSites[site]) return;
-  if (!confirm(`Clear bomb site ${site.toUpperCase()}?`)) return;
+  const onFloor = bombSitePieces(network, site, { level: radarLevel, mapCode });
+  if (!onFloor.length) return;
+  const floor = radarLevel === 'lower' ? 'lower' : 'upper';
+  if (!confirm(`Clear bomb site ${site.toUpperCase()} on ${floor}?`)) return;
   pushUndo();
-  network.bombSites[site] = null;
+  clearBombSitePiece(network, site, radarLevel);
   markDirty(true);
   syncUi();
   draw();
-  setStatus(`Cleared bomb site ${site.toUpperCase()}`);
+  setStatus(`Cleared bomb site ${site.toUpperCase()} (${floor})`);
 }
 
 function commitKeyZone(site, piece) {
@@ -841,18 +868,24 @@ function commitKeyZone(site, piece) {
     return;
   }
   ensureKeyZones(network);
-  const list = site === 'b' ? network.keyZones.b : network.keyZones.a;
-  if (list.length >= KEY_ZONES_MAX) {
-    setStatus(`Key ${site.toUpperCase()} already has ${KEY_ZONES_MAX} zones`, 'err');
+  const onFloor = keyZonesFor(network, site, { level: radarLevel, mapCode });
+  if (onFloor.length >= KEY_ZONES_MAX) {
+    setStatus(`Key ${site.toUpperCase()} already has ${KEY_ZONES_MAX} zones on this floor`, 'err');
     draw();
     return;
   }
   pushUndo();
-  addKeyZone(network, site, clean);
+  if (!addKeyZone(network, site, clean, radarLevel)) {
+    undoStack.pop();
+    setStatus(`Key ${site.toUpperCase()} already has ${KEY_ZONES_MAX} zones on this floor`, 'err');
+    draw();
+    return;
+  }
   markDirty(true);
   syncUi();
   draw();
-  setStatus(`Key ${site.toUpperCase()} #${list.length} added`);
+  const n = keyZonesFor(network, site, { level: radarLevel, mapCode }).length;
+  setStatus(`Key ${site.toUpperCase()} #${n} added`);
 }
 
 /**
@@ -989,15 +1022,16 @@ async function commitPosition(piece) {
 
 function clearKeySite(site) {
   ensureKeyZones(network);
-  const list = site === 'b' ? network.keyZones.b : network.keyZones.a;
-  if (!list.length) return;
-  if (!confirm(`Clear all key zones for ${site.toUpperCase()}?`)) return;
+  const onFloor = keyZonesFor(network, site, { level: radarLevel, mapCode });
+  if (!onFloor.length) return;
+  const floor = radarLevel === 'lower' ? 'lower' : 'upper';
+  if (!confirm(`Clear key zones for ${site.toUpperCase()} on ${floor}?`)) return;
   pushUndo();
-  clearKeyZones(network, site);
+  clearKeyZones(network, site, -1, radarLevel);
   markDirty(true);
   syncUi();
   draw();
-  setStatus(`Cleared key ${site.toUpperCase()}`);
+  setStatus(`Cleared key ${site.toUpperCase()} (${floor})`);
 }
 
 function commitShapePiece(piece) {
@@ -1070,7 +1104,10 @@ function applyBrushAt(from, to, layer, erase) {
   }
   ensureVisionLayers(network);
   const pieces = piecesForLayer(layer);
-  const n = strokeBrush(pieces, mapCode, from, to, brushPx, { erase });
+  const n = strokeBrush(pieces, mapCode, from, to, brushPx, {
+    erase,
+    level: radarLevel
+  });
   if (n > 0) {
     bumpLayerPaintGen(network);
     markDirty(true);
@@ -1576,44 +1613,25 @@ el.btnBrushUp?.addEventListener('click', () => {
   syncUi();
 });
 
-el.btnClearVision?.addEventListener('click', () => {
+function clearLayerOnFloor(layerKey, label) {
   ensureVisionLayers(network);
-  if (!network.visionBlocks.length) return;
-  if (!confirm('Clear all vision block paint?')) return;
+  const list = network[layerKey] || [];
+  const keep = list.filter((p) => cleanRegionLevel(p.level) !== radarLevel);
+  if (keep.length === list.length) return;
+  const floor = radarLevel === 'lower' ? 'lower' : 'upper';
+  if (!confirm(`Clear ${label} paint on ${floor}?`)) return;
   pushUndo();
-  network.visionBlocks = [];
+  network[layerKey] = keep;
   bumpLayerPaintGen(network);
   markDirty(true);
   syncUi();
   draw();
-  setStatus('Cleared vision blocks');
-});
+  setStatus(`Cleared ${label} (${floor})`);
+}
 
-el.btnClearElevated?.addEventListener('click', () => {
-  ensureVisionLayers(network);
-  if (!network.elevated.length) return;
-  if (!confirm('Clear all elevated paint?')) return;
-  pushUndo();
-  network.elevated = [];
-  bumpLayerPaintGen(network);
-  markDirty(true);
-  syncUi();
-  draw();
-  setStatus('Cleared elevated');
-});
-
-el.btnClearUnderpass?.addEventListener('click', () => {
-  ensureVisionLayers(network);
-  if (!network.underpasses.length) return;
-  if (!confirm('Clear all underpass paint?')) return;
-  pushUndo();
-  network.underpasses = [];
-  bumpLayerPaintGen(network);
-  markDirty(true);
-  syncUi();
-  draw();
-  setStatus('Cleared underpass');
-});
+el.btnClearVision?.addEventListener('click', () => clearLayerOnFloor('visionBlocks', 'vision block'));
+el.btnClearElevated?.addEventListener('click', () => clearLayerOnFloor('elevated', 'elevated'));
+el.btnClearUnderpass?.addEventListener('click', () => clearLayerOnFloor('underpasses', 'underpass'));
 
 el.btnClearLedges?.addEventListener('click', () => {
   ensureLedges(network);

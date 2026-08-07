@@ -17,6 +17,12 @@ import {
   pointInRing,
   subtractRectFromPieces
 } from './zoneGeom.js';
+import {
+  cleanRegionLevel,
+  filterPiecesByLevel,
+  mapHasStackedFloors,
+  withPieceLevel
+} from './zoneLevel.js';
 
 export const VISION_LAYER_PIECES_MAX = 5000;
 /** Default brush diameter in radar pixels. */
@@ -34,6 +40,7 @@ export function sanitizeLayerPieces(pieces, max = VISION_LAYER_PIECES_MAX) {
   const out = [];
   for (const piece of pieces.slice(0, max)) {
     if (!piece || typeof piece !== 'object') continue;
+    const level = cleanRegionLevel(piece.level);
     const asRect =
       piece.type === 'rect' ||
       (piece.type == null &&
@@ -47,7 +54,7 @@ export function sanitizeLayerPieces(pieces, max = VISION_LAYER_PIECES_MAX) {
       const w = Number(piece.w);
       const h = Number(piece.h);
       if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) continue;
-      out.push({ type: 'rect', x, y, w, h });
+      out.push({ type: 'rect', x, y, w, h, level });
       continue;
     }
     if (piece.type === 'poly' && Array.isArray(piece.ring) && piece.ring.length >= 3) {
@@ -59,7 +66,7 @@ export function sanitizeLayerPieces(pieces, max = VISION_LAYER_PIECES_MAX) {
         if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
         ring.push([px, py]);
       }
-      if (ring.length >= 3) out.push({ type: 'poly', ring });
+      if (ring.length >= 3) out.push({ type: 'poly', ring, level });
     }
   }
   return out;
@@ -104,26 +111,45 @@ export function brushStampRect(mapCode, radarX, radarY, brushPx) {
 
 /**
  * Paint one brush stamp onto a layer. Returns true if a piece was added.
- * Snaps to the stamp grid and skips if the center is already covered.
+ * Snaps to the stamp grid and skips if the center is already covered on this floor.
+ * @param {object} [opts]
+ * @param {'default'|'lower'} [opts.level]
  */
-export function paintBrushStamp(pieces, mapCode, radarX, radarY, brushPx) {
-  const stamp = brushStampRect(mapCode, radarX, radarY, brushPx);
+export function paintBrushStamp(pieces, mapCode, radarX, radarY, brushPx, opts = {}) {
+  const level = cleanRegionLevel(opts.level);
+  const stamp = withPieceLevel(brushStampRect(mapCode, radarX, radarY, brushPx), level);
   const cx = stamp.x + stamp.w * 0.5;
   const cy = stamp.y + stamp.h * 0.5;
-  if (pointInPieces(cx, cy, pieces)) return false;
+  const peers = filterPiecesByLevel(pieces, level, mapCode);
+  if (pointInPieces(cx, cy, peers)) return false;
   if (pieces.length >= VISION_LAYER_PIECES_MAX) return false;
   pieces.push(stamp);
   return true;
 }
 
-/** Erase with the same stamp shape (subtract from rect pieces). */
-export function eraseBrushStamp(pieces, mapCode, radarX, radarY, brushPx) {
+/**
+ * Erase with the same stamp shape (subtract from rect pieces on this floor only).
+ * @param {object} [opts]
+ * @param {'default'|'lower'} [opts.level]
+ */
+export function eraseBrushStamp(pieces, mapCode, radarX, radarY, brushPx, opts = {}) {
+  const level = cleanRegionLevel(opts.level);
   const stamp = brushStampRect(mapCode, radarX, radarY, brushPx);
-  const next = subtractRectFromPieces(pieces, stamp);
-  const changed = next.length !== pieces.length || next.some((p, i) => p !== pieces[i]);
+  const stacked = mapHasStackedFloors(mapCode);
+  const same = [];
+  const other = [];
+  for (const p of pieces) {
+    if (stacked && cleanRegionLevel(p.level) !== level) other.push(p);
+    else same.push(p);
+  }
+  const nextSame = subtractRectFromPieces(same, stamp).map((p) =>
+    stacked || p.level != null ? withPieceLevel(p, level) : p
+  );
+  const changed =
+    nextSame.length !== same.length || nextSame.some((p, i) => p !== same[i]);
   if (!changed) return false;
   pieces.length = 0;
-  pieces.push(...next);
+  pieces.push(...other, ...nextSame);
   return true;
 }
 
@@ -137,7 +163,7 @@ export function strokeBrush(
   from,
   to,
   brushPx,
-  { erase = false } = {}
+  { erase = false, level = 'default' } = {}
 ) {
   const size = Math.max(MIN_BRUSH_PX, Math.min(MAX_BRUSH_PX, Math.round(brushPx)));
   const step = Math.max(1, size * 0.45);
@@ -145,14 +171,15 @@ export function strokeBrush(
   const dy = to.y - from.y;
   const dist = Math.hypot(dx, dy);
   const n = dist < 1e-6 ? 1 : Math.max(1, Math.ceil(dist / step));
+  const opts = { level };
   let applied = 0;
   for (let i = 0; i <= n; i++) {
     const t = i / n;
     const rx = from.x + dx * t;
     const ry = from.y + dy * t;
     if (erase) {
-      if (eraseBrushStamp(pieces, mapCode, rx, ry, size)) applied++;
-    } else if (paintBrushStamp(pieces, mapCode, rx, ry, size)) {
+      if (eraseBrushStamp(pieces, mapCode, rx, ry, size, opts)) applied++;
+    } else if (paintBrushStamp(pieces, mapCode, rx, ry, size, opts)) {
       applied++;
     }
   }
@@ -226,21 +253,31 @@ export function bakeLayerMask(mapCode, pieces) {
 
 /**
  * Cached vision / elevated / underpass testers on the network object.
+ * On stacked maps (Nuke), only pieces for `level` are baked into the masks.
+ *
+ * @param {object} network
+ * @param {string} mapCode
+ * @param {'default'|'lower'} [level]
  * @returns {{
  *   visionBlockAt: Function,
  *   elevatedAt: Function,
  *   underpassAt: Function,
- *   blockerAt: (x:number,y:number,elevatedDisabled?:boolean)=>boolean
+ *   blockerAt: (x:number,y:number,elevatedDisabled?:boolean)=>boolean,
+ *   level: string
  * }}
  */
-export function getVisionLayerTests(network, mapCode) {
+export function getVisionLayerTests(network, mapCode, level = 'default') {
   ensureVisionLayers(network);
-  const key = `${mapCode}|${network.updatedAt || 0}|${network.visionBlocks.length}|${network.elevated.length}|${network.underpasses.length}|${network._layerPaintGen || 0}`;
+  const floor = cleanRegionLevel(level);
+  const key = `${mapCode}|${floor}|${network.updatedAt || 0}|${network.visionBlocks.length}|${network.elevated.length}|${network.underpasses.length}|${network._layerPaintGen || 0}`;
   if (network._layerTests?.key === key) return network._layerTests;
 
-  const vision = bakeLayerMask(mapCode, network.visionBlocks);
-  const elev = bakeLayerMask(mapCode, network.elevated);
-  const under = bakeLayerMask(mapCode, network.underpasses);
+  const visionPieces = filterPiecesByLevel(network.visionBlocks, floor, mapCode);
+  const elevPieces = filterPiecesByLevel(network.elevated, floor, mapCode);
+  const underPieces = filterPiecesByLevel(network.underpasses, floor, mapCode);
+  const vision = bakeLayerMask(mapCode, visionPieces);
+  const elev = bakeLayerMask(mapCode, elevPieces);
+  const under = bakeLayerMask(mapCode, underPieces);
   const visionBlockAt = vision.testWorld;
   const elevatedAt = elev.testWorld;
   const underpassAt = under.testWorld;
@@ -252,6 +289,7 @@ export function getVisionLayerTests(network, mapCode) {
   };
   const tests = {
     key,
+    level: floor,
     visionBlockAt,
     elevatedAt,
     underpassAt,

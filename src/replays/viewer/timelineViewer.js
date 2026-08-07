@@ -427,6 +427,11 @@ export function createTimelineViewer({
   /** @type {object | null} */
   let zoneNetwork = null;
   let zoneNetworkMap = '';
+
+  /** Bake vision / segments for the radar floor currently on screen (Nuke). */
+  function prepareZones(network, mapCode, radarImage = renderer.image) {
+    prepareControlField(network, mapCode, radarImage, renderer.radarLevel || 'default');
+  }
   /** file -> presence { firstT, firstCT } */
   const zonePresenceCache = new Map();
   let zonePresence = null;
@@ -1058,7 +1063,7 @@ export function createTimelineViewer({
     duelHitLines = [];
     if (!duelsOn || !zoneNetwork || !activeMeta?.players?.length) return null;
     const mapCode = renderer.mapCode || activeMeta.map || '';
-    prepareControlField(zoneNetwork, mapCode, renderer.image);
+    prepareZones(zoneNetwork, mapCode);
     if (!hasControlField(zoneNetwork)) return null;
     const file = files[activeIndex];
     const entry = store.get(file);
@@ -1169,7 +1174,8 @@ export function createTimelineViewer({
           elevated: [],
           underpasses: [],
           ledges: [],
-          bombSites: { a: null, b: null },
+          bombSites: { a: [], b: [] },
+          keyZones: { a: [], b: [] },
           updatedAt: 0
         };
         zoneNetworkMap = map;
@@ -1186,7 +1192,7 @@ export function createTimelineViewer({
     const net = await ensureZoneNetwork();
     if (!net || !activeMeta) return;
     const mapCode = renderer.mapCode || activeMeta.map || '';
-    prepareControlField(net, mapCode, renderer.image);
+    prepareZones(net, mapCode);
     if (!hasControlField(net)) return;
     const file = files[activeIndex];
     const entry = store.get(file);
@@ -1212,7 +1218,7 @@ export function createTimelineViewer({
   function zoneOverlayForTick(tick) {
     if (!zonesOn || !zoneNetwork) return null;
     const mapCode = renderer.mapCode || activeMeta?.map || '';
-    prepareControlField(zoneNetwork, mapCode, renderer.image);
+    prepareZones(zoneNetwork, mapCode);
     if (!hasControlField(zoneNetwork)) return null;
     const file = files[activeIndex];
     const track = store.get(file)?.full || store.track(file) || null;
@@ -1226,7 +1232,8 @@ export function createTimelineViewer({
       radarImage: renderer.image,
       grenades: activeMeta.events?.grenades || [],
       visionCache: zoneVisionCache,
-      track
+      track,
+      level: renderer.radarLevel || 'default'
     });
     // Under POV, possession is only ever the chosen team's own. Ground the
     // other side is taking is not something this team can see happening.
@@ -2790,7 +2797,7 @@ export function createTimelineViewer({
       const network = await ensureZoneNetwork();
       const mapCode = renderer.mapCode || activeMeta.map || '';
       if (!network || !mapCode) return;
-      prepareControlField(network, mapCode, renderer.image);
+      prepareZones(network, mapCode);
       if (!hasControlField(network)) return;
 
       const stats = createDuelStats();
@@ -2928,7 +2935,7 @@ export function createTimelineViewer({
     const file = files[index];
     if (!zoneNetwork || !file || !store.get(file)?.isFull) return null;
     const mapCode = renderer.mapCode || roundMeta.map || '';
-    prepareControlField(zoneNetwork, mapCode, renderer.image);
+    prepareZones(zoneNetwork, mapCode);
     if (!hasControlField(zoneNetwork)) return null;
     // Same baseline stride as the coach series (event ticks still sample
     // exactly; the scanner walks up to that tick).
@@ -3027,7 +3034,7 @@ export function createTimelineViewer({
     const entry = store.get(file);
     if (!entry?.isFull || !entry.full) return null;
     const mapCode = renderer.mapCode || activeMeta.map || '';
-    prepareControlField(zoneNetwork, mapCode, renderer.image);
+    prepareZones(zoneNetwork, mapCode);
     if (!hasControlField(zoneNetwork)) return null;
     return winDuelScanner.at({
       meta: activeMeta,
@@ -3352,7 +3359,7 @@ export function createTimelineViewer({
     if (!net) return null;
     const mapCode = renderer.mapCode || roundMeta.map || '';
     if (!renderer.image || !mapCode) return null;
-    prepareControlField(net, mapCode, renderer.image);
+    prepareZones(net, mapCode);
     if (!hasControlField(net)) return null;
     let series;
     try {
@@ -3698,7 +3705,7 @@ export function createTimelineViewer({
       await ensureZoneNetwork();
       const mapCode = renderer.mapCode || activeMeta?.map || '';
       if (zoneNetwork && mapCode && renderer.image) {
-        prepareControlField(zoneNetwork, mapCode, renderer.image);
+        prepareZones(zoneNetwork, mapCode);
       }
       await analyseAllCoachRounds();
       await registerTeamAutocoach(team);

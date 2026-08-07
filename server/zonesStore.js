@@ -80,7 +80,7 @@ export function emptyZones(map) {
     elevated: [],
     underpasses: [],
     ledges: [],
-    bombSites: { a: null, b: null },
+    bombSites: { a: [], b: [] },
     keyZones: { a: [], b: [] },
     positions: [],
     zones: [],
@@ -185,7 +185,7 @@ export async function saveZones(map, payload) {
     bombSites:
       payload?.bombSites && typeof payload.bombSites === 'object'
         ? payload.bombSites
-        : existing.bombSites || { a: null, b: null },
+        : existing.bombSites || { a: [], b: [] },
     keyZones:
       payload?.keyZones && typeof payload.keyZones === 'object'
         ? payload.keyZones

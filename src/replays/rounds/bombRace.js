@@ -182,12 +182,13 @@ export function bombRaceAt({
 
   // --- who is standing in the site --------------------------------------
   const sites = sanitizeBombSites(network.bombSites);
-  const sitePiece = target.site ? sites[target.site] : null;
+  const sitePieces = target.site ? sites[target.site] || [] : [];
   let ctInSite = 0;
   let tInSite = 0;
-  if (sitePiece) {
-    for (const e of ct) if (pointInPiece(e.state.x, e.state.y, sitePiece)) ctInSite++;
-    for (const e of t) if (pointInPiece(e.state.x, e.state.y, sitePiece)) tInSite++;
+  if (sitePieces.length) {
+    const inSite = (state) => sitePieces.some((p) => pointInPiece(state.x, state.y, p));
+    for (const e of ct) if (inSite(e.state)) ctInSite++;
+    for (const e of t) if (inSite(e.state)) tInSite++;
   }
 
   // --- key zone possession -----------------------------------------------

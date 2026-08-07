@@ -13,7 +13,7 @@ export function emptyNetwork(map) {
     elevated: [],
     underpasses: [],
     ledges: [],
-    bombSites: { a: null, b: null },
+    bombSites: { a: [], b: [] },
     keyZones: { a: [], b: [] },
     positions: [],
     zones: [],
