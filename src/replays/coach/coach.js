@@ -253,14 +253,17 @@ function groupAround(seed, mates) {
  *   probability that has already priced the death in would report that every
  *   death cost nothing. The lookahead is a better account of the round and a
  *   useless one to coach against, so it rides alongside as `ctDuel`.
- * @returns {{series: Array, flags: Array, gate: object}}
+ * @param {{ smokes?: Array }} [args.coachSmokes]  admin-curated basic smoke
+ *   landings for this map (see coachSmokes.js). Available to utility rules.
+ * @returns {{series: Array, flags: Array, gate: object, coachSmokes: object|null}}
  */
 export function analyseRound({
   meta,
   sampleAt,
   network = null,
   track = null,
-  duelsAt = null
+  duelsAt = null,
+  coachSmokes = null
 }) {
   const tickRate = meta.tickRate || 64;
   const players = meta.players || [];
@@ -1082,7 +1085,13 @@ export function analyseRound({
   for (const f of flags) f.category = coachCategory(f.rule);
   // The states are only needed while the rules run; the graph wants numbers.
   for (const s of series) delete s.states;
-  return { series, flags, gate, decided: decidedMoment || null };
+  return {
+    series,
+    flags,
+    gate,
+    decided: decidedMoment || null,
+    coachSmokes: coachSmokes || null
+  };
 }
 
 /** Turn a flag into the note shape the round file stores. */

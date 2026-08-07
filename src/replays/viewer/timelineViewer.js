@@ -37,6 +37,7 @@ import { economyLabel, winningSide } from '../shared/roundId.js';
 import { iconImgHtml, inventoryAt } from './equipmentIcons.js';
 import { DRAW_COLORS, DrawingLayer } from './drawing.js';
 import { analyseRound, coachSampleStride, flagToNote } from '../coach/coach.js';
+import { loadCoachSmokes } from '../coach/coachSmokes.js';
 import { explainRoundLines } from '../rounds/roundExplain.js';
 import { phaseBounds } from '../coach/roundPhases.js';
 import {
@@ -427,6 +428,9 @@ export function createTimelineViewer({
   /** @type {object | null} */
   let zoneNetwork = null;
   let zoneNetworkMap = '';
+  /** @type {{ map: string, smokes: Array }|null} */
+  let coachSmokesArchive = null;
+  let coachSmokesMap = '';
 
   /** Bake vision / segments for the radar floor currently on screen (Nuke). */
   function prepareZones(network, mapCode, radarImage = renderer.image) {
@@ -1151,12 +1155,17 @@ export function createTimelineViewer({
     if (!map) {
       zoneNetwork = null;
       zoneNetworkMap = '';
+      coachSmokesArchive = null;
+      coachSmokesMap = '';
       return null;
     }
-    if (zoneNetwork && zoneNetworkMap === map) return zoneNetwork;
+    if (zoneNetwork && zoneNetworkMap === map) {
+      if (coachSmokesMap !== map) await ensureCoachSmokes(map);
+      return zoneNetwork;
+    }
     const load = ++zoneLoadId;
     try {
-      const net = await fetchZones(map);
+      const [net] = await Promise.all([fetchZones(map), ensureCoachSmokes(map)]);
       if (destroyed || load !== zoneLoadId) return zoneNetwork;
       zoneNetwork = net;
       zoneNetworkMap = map;
@@ -1179,9 +1188,28 @@ export function createTimelineViewer({
           updatedAt: 0
         };
         zoneNetworkMap = map;
+        await ensureCoachSmokes(map);
       }
       return zoneNetwork;
     }
+  }
+
+  async function ensureCoachSmokes(map) {
+    const code = String(map || '').toUpperCase();
+    if (!code) {
+      coachSmokesArchive = null;
+      coachSmokesMap = '';
+      return null;
+    }
+    if (coachSmokesArchive && coachSmokesMap === code) return coachSmokesArchive;
+    try {
+      coachSmokesArchive = await loadCoachSmokes(code);
+      coachSmokesMap = code;
+    } catch {
+      coachSmokesArchive = { map: code, smokes: [] };
+      coachSmokesMap = code;
+    }
+    return coachSmokesArchive;
   }
 
   /** Recompute first-visit ticks for the active round (cached once the round is full). */
@@ -2974,6 +3002,7 @@ export function createTimelineViewer({
         meta: roundMeta,
         track,
         network: zoneNetwork,
+        coachSmokes: coachSmokesArchive,
         sampleAt: (tick) => {
           track.sampleAll(tick, scratch);
           return scratch;
@@ -3919,6 +3948,12 @@ export function createTimelineViewer({
       if (destroyed || !coachOn) return;
       if (!meta?.players?.length) return;
       if (!store.get(file)?.full) return;
+
+      const mapCode = String(meta.map || '').toUpperCase();
+      if (mapCode && coachSmokesMap !== mapCode) {
+        await ensureCoachSmokes(mapCode);
+        coachCache.delete(file);
+      }
 
       const result = coachFor(index, meta);
       if (!result) return;

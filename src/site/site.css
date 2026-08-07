@@ -1675,6 +1675,16 @@ body.is-impersonating {
   padding: 4px 0 40px;
 }
 
+/* Autocoach smokes editor reuses Utility Archive chrome at full height. */
+.admin-coach-smokes-host {
+  margin-top: 12px;
+}
+
+.admin-coach-smokes-host .ua-shell {
+  height: calc(100vh - 200px);
+  min-height: 420px;
+}
+
 .admin-nav,
 .account-nav {
   display: flex;

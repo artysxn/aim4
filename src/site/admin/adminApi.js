@@ -98,6 +98,12 @@ export const adminApi = {
   /** Progress for an in-flight (or just-finished) stats rebuild. */
   refreshStatsStatus: () => get('/api/admin/stats/refresh'),
 
+  /** Recompute roles from tick player positions only (no full stats rebuild). */
+  refreshPositions: () => send('POST', '/api/admin/stats/refresh-positions', {}),
+
+  /** Progress for an in-flight (or just-finished) positions/roles scan. */
+  refreshPositionsStatus: () => get('/api/admin/stats/refresh-positions'),
+
   /** Model training. `kind` is 'duel' or 'round'. */
   trainingStatus: (kind) => get(`/api/admin/training/${kind}`),
   trainingWeights: (kind) => get(`/api/admin/training/${kind}/weights`),
@@ -106,6 +112,19 @@ export const adminApi = {
   trainingStop: (kind) => send('POST', `/api/admin/training/${kind}/stop`, {}),
 
   content: (store, op, payload) => send('POST', `/api/admin/content/${store}/${op}`, payload),
+
+  /** Private Autocoach smoke landing spots (per map). */
+  coachSmokeMaps: () => get('/api/admin/coach-smokes'),
+  coachSmokes: async (map) => {
+    const body = await get(`/api/admin/coach-smokes/${encodeURIComponent(map)}`);
+    return body.archive || null;
+  },
+  saveCoachSmokes: async (map, archive) => {
+    const body = await send('POST', `/api/admin/coach-smokes/${encodeURIComponent(map)}`, {
+      archive
+    });
+    return body.archive || null;
+  },
 
   audit: ({ actorId = '', targetUser = '', action = '', limit = 100, offset = 0 } = {}) => {
     const params = new URLSearchParams();

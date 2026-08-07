@@ -45,7 +45,7 @@ import {
   userDir
 } from '../replays/demoStore.js';
 import { SHARED_LIBRARY } from '../replays/auth.js';
-import { refreshLibraryStats } from '../replays/statsIndex.js';
+import { refreshLibraryPositions, refreshLibraryStats } from '../replays/statsIndex.js';
 import { getZones } from '../zonesStore.js';
 import {
   start as startTraining,
@@ -53,33 +53,55 @@ import {
   stop as stopTraining
 } from '../training/service.js';
 import { modelWeights } from '../training/weights.js';
+import {
+  getCoachSmokes,
+  listCoachSmokeMaps,
+  saveCoachSmokes
+} from '../coachSmokesStore.js';
 
 const statsIo = { userDir, readRoundMeta, readRoundTicks, getZones };
 
 /** Only one full-library stats rebuild at a time. */
 let statsRefreshJob = null;
+/** Positions/roles-only tick walk (separate from full stats rebuild). */
+let positionsRefreshJob = null;
+
+function jobStatus(job) {
+  if (!job) return { running: false };
+  const finishedAt = job.finishedAt || null;
+  const ageMs = finishedAt ? Date.now() - finishedAt : Date.now() - job.startedAt;
+  return {
+    running: !job.finished,
+    finished: Boolean(job.finished),
+    stale: Boolean(job.finished && ageMs > 15 * 60 * 1000),
+    startedAt: job.startedAt,
+    finishedAt,
+    startedBy: job.startedBy,
+    force: job.force,
+    kind: job.kind || null,
+    done: job.done || 0,
+    total: job.total || 0,
+    percent: job.percent || 0,
+    current: job.current || null,
+    ms: job.finished && finishedAt ? finishedAt - job.startedAt : Date.now() - job.startedAt,
+    report: job.report || null,
+    error: job.error || null
+  };
+}
 
 function statsRefreshStatus() {
-  if (!statsRefreshJob) return { running: false };
-  const j = statsRefreshJob;
-  const finishedAt = j.finishedAt || null;
-  const ageMs = finishedAt ? Date.now() - finishedAt : Date.now() - j.startedAt;
-  return {
-    running: !j.finished,
-    finished: Boolean(j.finished),
-    stale: Boolean(j.finished && ageMs > 15 * 60 * 1000),
-    startedAt: j.startedAt,
-    finishedAt,
-    startedBy: j.startedBy,
-    force: j.force,
-    done: j.done || 0,
-    total: j.total || 0,
-    percent: j.percent || 0,
-    current: j.current || null,
-    ms: j.finished && finishedAt ? finishedAt - j.startedAt : Date.now() - j.startedAt,
-    report: j.report || null,
-    error: j.error || null
-  };
+  return jobStatus(statsRefreshJob);
+}
+
+function positionsRefreshStatus() {
+  return jobStatus(positionsRefreshJob);
+}
+
+function libraryJobBusy() {
+  return (
+    (statsRefreshJob && !statsRefreshJob.finished) ||
+    (positionsRefreshJob && !positionsRefreshJob.finished)
+  );
 }
 
 const MAX_BODY = 256 * 1024;
@@ -565,10 +587,11 @@ async function route(req, res, url, me) {
   }
 
   if (req.method === 'POST' && p === '/api/admin/stats/refresh') {
-    if (statsRefreshJob && !statsRefreshJob.finished) {
+    if (libraryJobBusy()) {
       json(res, req, 409, {
-        error: 'A statistics recalculation is already running.',
-        ...statsRefreshStatus()
+        error: 'A library recalculation is already running.',
+        ...statsRefreshStatus(),
+        positions: positionsRefreshStatus()
       });
       return true;
     }
@@ -576,6 +599,7 @@ async function route(req, res, url, me) {
     const force = body.force !== false;
     const startedAt = Date.now();
     statsRefreshJob = {
+      kind: 'stats',
       startedAt,
       startedBy: me.id,
       force,
@@ -639,6 +663,83 @@ async function route(req, res, url, me) {
     return true;
   }
 
+  // Positions / roles only: walk tick bins for player x/y samples. Does not
+  // rebuild kill bags, PRW, possession, or other stats fields.
+  if (req.method === 'GET' && p === '/api/admin/stats/refresh-positions') {
+    json(res, req, 200, positionsRefreshStatus());
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/stats/refresh-positions') {
+    if (libraryJobBusy()) {
+      json(res, req, 409, {
+        error: 'A library recalculation is already running.',
+        ...positionsRefreshStatus(),
+        stats: statsRefreshStatus()
+      });
+      return true;
+    }
+    const startedAt = Date.now();
+    positionsRefreshJob = {
+      kind: 'positions',
+      startedAt,
+      startedBy: me.id,
+      force: true,
+      done: 0,
+      total: 0,
+      percent: 0,
+      current: null,
+      finished: false,
+      report: null,
+      error: null
+    };
+
+    setImmediate(async () => {
+      try {
+        const records = await listDemos(SHARED_LIBRARY);
+        const report = await refreshLibraryPositions(statsIo, SHARED_LIBRARY, records, {
+          onProgress: (p) => {
+            if (!positionsRefreshJob || positionsRefreshJob.startedAt !== startedAt) return;
+            positionsRefreshJob.done = p.done;
+            positionsRefreshJob.total = p.total;
+            positionsRefreshJob.percent = p.percent;
+            positionsRefreshJob.current = p.current;
+          }
+        });
+        if (!positionsRefreshJob || positionsRefreshJob.startedAt !== startedAt) return;
+        positionsRefreshJob.report = { ...report, ms: Date.now() - startedAt };
+        positionsRefreshJob.done = report.ready;
+        positionsRefreshJob.total = report.ready;
+        positionsRefreshJob.percent = 100;
+        positionsRefreshJob.current = null;
+        positionsRefreshJob.finished = true;
+        positionsRefreshJob.finishedAt = Date.now();
+        await writeAudit({
+          actorId: me.id,
+          targetUser: '',
+          action: 'stats.refresh_positions',
+          payload: {
+            total: report.total,
+            ready: report.ready,
+            updated: report.updated,
+            skipped: report.skipped,
+            failed: report.failed,
+            ms: Date.now() - startedAt
+          },
+          req: null
+        });
+      } catch (err) {
+        if (!positionsRefreshJob || positionsRefreshJob.startedAt !== startedAt) return;
+        positionsRefreshJob.error = err?.message || String(err);
+        positionsRefreshJob.finished = true;
+        positionsRefreshJob.finishedAt = Date.now();
+      }
+    });
+
+    json(res, req, 202, { ok: true, started: true, ...positionsRefreshStatus() });
+    return true;
+  }
+
   // ---- audit --------------------------------------------------------------
   if (req.method === 'GET' && p === '/api/admin/audit') {
     json(res, req, 200, {
@@ -651,6 +752,41 @@ async function route(req, res, url, me) {
       })
     });
     return true;
+  }
+
+  // ---- coach smokes (private basic landing spots for Autocoach) ------------
+  if (req.method === 'GET' && p === '/api/admin/coach-smokes') {
+    json(res, req, 200, { maps: await listCoachSmokeMaps() });
+    return true;
+  }
+  const coachSmokesMatch = p.match(/^\/api\/admin\/coach-smokes\/([A-Za-z0-9]{2,4})$/i);
+  if (coachSmokesMatch) {
+    const map = coachSmokesMatch[1];
+    if (req.method === 'GET') {
+      try {
+        json(res, req, 200, { archive: await getCoachSmokes(map) });
+      } catch (err) {
+        json(res, req, 400, { error: err.message || 'Invalid map.' });
+      }
+      return true;
+    }
+    if (req.method === 'POST') {
+      const body = await readJson(req);
+      try {
+        const archive = await saveCoachSmokes(map, body.archive || body);
+        await writeAudit({
+          actorId: me.id,
+          action: 'coach_smokes.save',
+          targetUser: '',
+          payload: { map: archive.map, count: archive.smokes.length },
+          req
+        });
+        json(res, req, 200, { ok: true, archive });
+      } catch (err) {
+        json(res, req, 400, { error: err.message || 'Invalid smokes payload.' });
+      }
+      return true;
+    }
   }
 
   json(res, req, 404, { error: 'Not found' });

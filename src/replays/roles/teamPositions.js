@@ -2,9 +2,12 @@
 // replays/roles/teamPositions.js
 // The position vocabulary the Roles & Positions table assigns from.
 //
-// One list per map per side, in the order a coach reads them (entry side
-// first, AWP always its own slot). This is the team's map pool, not the parsed
-// library, so Overpass is here even though no demo has been indexed on it.
+// Labels must match auto-assigned role labels in regionKeys.js (MAP_*_OPTIONS)
+// for maps with painted-zone rules. Slot order is stable so stratbook
+// roleNotes[i] stays aligned with each map's column.
+//
+// One list per map per side. AWP is always its own slot. This is the team's
+// map pool, not the parsed library, so Overpass is here even with no demos.
 // ---------------------------------------------------------------------------
 
 /** Map pool for the roles table, in the order the columns appear. */
@@ -22,24 +25,38 @@ export const POSITION_MAPS = [
 /** @type {Record<'T'|'CT', Record<string, string[]>>} */
 export const POSITIONS = {
   T: {
-    ANC: ['Mid', 'A Site', 'B Street', 'AWP', 'B Site'],
-    DD2: ['B Lower', 'B Upper', 'Mid', 'AWP', 'A Long'],
-    MIR: ['Rotation', 'A Site', 'B / UG', 'AWP', 'Mid'],
-    NUK: ['1. Yard', 'Lobby', 'Rotation', 'AWP', '2. Yard'],
-    INF: ['Banana', 'Rotation', 'Mid', 'AWP', 'A Site'],
-    OVP: ['A Site', 'B Site', 'Con', 'AWP', 'Rotation'],
-    ANU: ['Mid', 'A Site', 'Water', 'AWP', 'B Site'],
-    CCH: ['Rotation', 'A Site', 'Mid', 'AWP', 'B Site']
+    // Mid, A Lurk, Street, AWPer, B Lurk
+    ANC: ['Mid', 'A Lurk', 'Street', 'AWPer', 'B Lurk'],
+    // B Lower, B Upper, T Mid, AWPer, A Long
+    DD2: ['B Lower', 'B Upper', 'T Mid', 'AWPer', 'A Long'],
+    // Rotation, A Lurk, B / UG, AWPer, Mid
+    MIR: ['Rotation', 'A Lurk', 'B / UG', 'AWPer', 'Mid'],
+    // 1st Yard, Lobby, Rotation, AWPer, 2nd Yard
+    NUK: ['1st Yard', 'Lobby', 'Rotation', 'AWPer', '2nd Yard'],
+    // Banana, Ramp, 2nd Mid, AWPer, A Lurk
+    INF: ['Banana', 'Ramp', '2nd Mid', 'AWPer', 'A Lurk'],
+    OVP: ['A Site', 'B Site', 'Con', 'AWPer', 'Rotation'],
+    // Mid, A Lurk, Water, AWPer, B Lurk
+    ANU: ['Mid', 'A Lurk', 'Water', 'AWPer', 'B Lurk'],
+    // Rotation, A Lurk, Mid, AWPer, B Lurk
+    CCH: ['Rotation', 'A Lurk', 'Mid', 'AWPer', 'B Lurk']
   },
   CT: {
-    ANC: ['Mid', 'B Cave', 'B Site', 'AWP', 'A / Mid'],
-    DD2: ['A Short', 'A Long', 'B / Mid', 'AWP', 'B Site'],
-    MIR: ['A Con', 'B Site', 'A Site', 'AWP', 'B Short'],
-    NUK: ['Yard', 'A Site', 'Ramp', 'AWP', 'A Door'],
-    INF: ['B Banana', 'B Site', 'A Rotation', 'AWP', 'A Pit'],
-    OVP: ['A Site', 'B Monster', 'B Short', 'AWP', 'B Rotation'],
-    ANU: ['B Con', 'A Site', 'Mid', 'AWP', 'B Site'],
-    CCH: ['A / Mid', 'B Rotation', 'A Site', 'AWP', 'B Site']
+    // Mid, B Cave, B Site, AWPer, Mid / A
+    ANC: ['Mid', 'B Cave', 'B Site', 'AWPer', 'Mid / A'],
+    // A Short, A Long, B Mid, AWPer, B Anchor
+    DD2: ['A Short', 'A Long', 'B Mid', 'AWPer', 'B Anchor'],
+    // A Con, B Anchor, A Anchor, AWPer, B Short
+    MIR: ['A Con', 'B Anchor', 'A Anchor', 'AWPer', 'B Short'],
+    // Yard, A Site, Ramp, AWPer, A Door
+    NUK: ['Yard', 'A Site', 'Ramp', 'AWPer', 'A Door'],
+    // B Rotation, B Anchor, A Rotation, AWPer, A Anchor
+    INF: ['B Rotation', 'B Anchor', 'A Rotation', 'AWPer', 'A Anchor'],
+    OVP: ['A Site', 'B Monster', 'B Short', 'AWPer', 'B Rotation'],
+    // B Con, A Anchor, Mid, AWPer, B Site
+    ANU: ['B Con', 'A Anchor', 'Mid', 'AWPer', 'B Site'],
+    // Mid, B Rotation, A Anchor, AWPer, B Anchor
+    CCH: ['Mid', 'B Rotation', 'A Anchor', 'AWPer', 'B Anchor']
   }
 };
 

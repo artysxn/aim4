@@ -192,7 +192,7 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     if (!mode) return '';
     const opts =
       mode === 'position'
-        ? positionRoleOptions(side)
+        ? positionRoleOptions(side, singleMap())
         : side === 'CT'
           ? CT_TACTICAL
           : T_TACTICAL;

@@ -529,10 +529,12 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
 
 /**
  * Background pass: roles + PSDT/DT from ticks. Does not rebuild kill/phase bags.
+ * @param {{ forceRoles?: boolean }} [opts]  forceRoles rewalks ticks for roles
+ *   even when entry.roles.v already matches ROLES_VERSION.
  */
-async function enrichTickDerived(io, user, entry) {
+async function enrichTickDerived(io, user, entry, opts = {}) {
   if (!entry?.rounds?.length) return entry;
-  const wantRoles = needsRoleEnrichment(entry);
+  const wantRoles = Boolean(opts.forceRoles) || needsRoleEnrichment(entry);
   const wantMv = needsMovementEnrichment(entry);
   if (!wantRoles && !wantMv) return entry;
 
@@ -992,6 +994,90 @@ export async function refreshLibraryStats(io, user, records, { force = false, on
       if (wasMissing || force) report.built++;
       else if (wasStale) report.enriched++;
       else report.current++;
+    } catch (err) {
+      report.failed++;
+      report.errors.push({
+        id: record.id,
+        filename: record.filename,
+        error: err?.message || String(err)
+      });
+    }
+    i++;
+  }
+
+  emit(ready.length, null);
+  return report;
+}
+
+/**
+ * Walk every ready demo and recompute Autocoach / Database roles from tick
+ * player positions only. Does not rebuild kill bags, PRW, possession, or other
+ * stats fields — only reads .bin tick tracks for x/y samples.
+ *
+ * @param {object} io
+ * @param {string} user
+ * @param {object[]} records
+ * @param {{ onProgress?: Function }} [opts]
+ */
+export async function refreshLibraryPositions(io, user, records, { onProgress = null } = {}) {
+  const ready = (records || []).filter((r) => (r.status || 'ready') === 'ready');
+  const report = {
+    total: (records || []).length,
+    ready: ready.length,
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    errors: []
+  };
+
+  const emit = (done, current = null) => {
+    if (typeof onProgress !== 'function') return;
+    onProgress({
+      done,
+      total: ready.length,
+      percent: ready.length ? Math.round((done / ready.length) * 100) : 100,
+      current
+    });
+  };
+
+  emit(0, null);
+
+  let i = 0;
+  for (const record of ready) {
+    emit(i, record.filename || record.id || null);
+    try {
+      const key = versionKey(record);
+      let entry = await loadStoredEntry(io, user, record.id);
+      if (!entry || !keyMatchesRecord(entry.key, record)) {
+        // No compact index yet — build once so roles have a home, then roles
+        // are already included from ticks inside buildIndex.
+        entry = await demoIndex(io, user, record, { roles: true });
+        if (!entry) {
+          report.failed++;
+          report.errors.push({
+            id: record.id,
+            filename: record.filename,
+            error: 'No stats index produced.'
+          });
+        } else {
+          report.updated++;
+        }
+        i++;
+        continue;
+      }
+
+      if (!entry.rounds?.length) {
+        report.skipped++;
+        i++;
+        continue;
+      }
+
+      // Drop cached roles so the forced walk always rewrites them.
+      entry.roles = { v: 0, maps: {} };
+      await enrichTickDerived(io, user, entry, { forceRoles: true });
+      entry.key = key;
+      await persistEntry(io, user, key, entry);
+      report.updated++;
     } catch (err) {
       report.failed++;
       report.errors.push({

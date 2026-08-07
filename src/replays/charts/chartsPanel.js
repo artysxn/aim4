@@ -258,10 +258,16 @@ export function createChartsPanel({ escapeHtml }) {
       selectedMaps.length === 1 ||
       (!selectedMaps.length && (facts?.maps || []).length === 1);
     if (single) {
+      const mapCode =
+        selectedMaps.length === 1
+          ? selectedMaps[0]
+          : (facts?.maps || []).length === 1
+            ? facts.maps[0]
+            : '';
       const seen = new Set();
       const out = [];
       for (const side of ['T', 'CT']) {
-        for (const o of positionRoleOptions(side)) {
+        for (const o of positionRoleOptions(side, mapCode)) {
           if (seen.has(o.label)) continue;
           seen.add(o.label);
           out.push({ key: o.label, label: o.label });

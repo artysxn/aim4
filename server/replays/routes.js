@@ -22,6 +22,8 @@
 //   GET    /api/replays/zones                    maps that have a zone file
 //   GET    /api/replays/zones/:map               zone network for one map
 //   POST   /api/replays/zones/:map               save zone polygons + names
+//   GET    /api/replays/coach-smokes             maps with Autocoach smoke DB
+//   GET    /api/replays/coach-smokes/:map        basic smoke landing spots
 //
 // Uploads stream straight to disk: a demo / package is hundreds of megabytes
 // and must never be buffered in memory or pass through the JSON body reader.
@@ -100,6 +102,7 @@ import { spawnsForMap } from './spawnPoints.js';
 import { PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
 import { clusterTeams } from '../../src/replays/shared/teamClusters.js';
 import { getZones, listZoneMaps, saveZones } from '../zonesStore.js';
+import { getCoachSmokes, listCoachSmokeMaps } from '../coachSmokesStore.js';
 
 /** What the stats index needs from storage, without importing it back. */
 const statsIo = { userDir, readRoundMeta, readRoundTicks, getZones };
@@ -1306,6 +1309,23 @@ export async function handleReplayRequest(req, res, url) {
     json(res, 200, { maps: await listZoneMaps() });
     return true;
   }
+
+  // Private coach smoke landing spots (admin-curated). Readable so Autocoach
+  // can match thrown smokes; writes stay on /api/admin/coach-smokes.
+  if (req.method === 'GET' && p === '/api/replays/coach-smokes') {
+    json(res, 200, { maps: await listCoachSmokeMaps() });
+    return true;
+  }
+  const coachSmokesMatch = p.match(/^\/api\/replays\/coach-smokes\/([A-Za-z0-9]{2,4})$/i);
+  if (req.method === 'GET' && coachSmokesMatch) {
+    try {
+      json(res, 200, { archive: await getCoachSmokes(coachSmokesMatch[1]) });
+    } catch (err) {
+      json(res, 400, { error: err.message || 'Invalid map code.' });
+    }
+    return true;
+  }
+
   const zonesMatch = p.match(/^\/api\/replays\/zones\/([A-Za-z0-9]{2,4})$/i);
   if (zonesMatch) {
     const map = zonesMatch[1];

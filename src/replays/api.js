@@ -886,6 +886,25 @@ export async function deleteDrawingBoard(teamId, map, boardId) {
   );
 }
 
+/** Admin-curated basic smoke landings for Autocoach (read-only for clients). */
+export async function fetchCoachSmokes(map) {
+  const body = await asJson(
+    await safeFetch(`${API_BASE}/api/replays/coach-smokes/${encodeURIComponent(map)}`, {
+      headers: await headers()
+    })
+  );
+  return body.archive || null;
+}
+
+export async function fetchCoachSmokeMaps() {
+  const body = await asJson(
+    await safeFetch(`${API_BASE}/api/replays/coach-smokes`, {
+      headers: await headers()
+    })
+  );
+  return body.maps || [];
+}
+
 export async function fetchUtilityArchive(teamId, map) {
   const body = await asJson(
     await safeFetch(

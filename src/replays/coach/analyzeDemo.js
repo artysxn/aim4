@@ -8,6 +8,7 @@
 import { TickStore } from '../tickStore.js';
 import { fetchRoundMeta, saveRoundNotes } from '../api.js';
 import { analyseRound, flagToNote } from './coach.js';
+import { loadCoachSmokes } from './coachSmokes.js';
 
 function notesFromMeta(meta) {
   if (!meta) return [];
@@ -43,6 +44,8 @@ export async function analyzeDemoCoach({ demoId, side, rounds, onProgress }) {
   if (!files.length) return { wrote: 0, rounds: 0 };
 
   const store = new TickStore();
+  /** @type {Map<string, object>} */
+  const smokesByMap = new Map();
   let wrote = 0;
   try {
     for (let i = 0; i < files.length; i++) {
@@ -53,6 +56,11 @@ export async function analyzeDemoCoach({ demoId, side, rounds, onProgress }) {
       const track = await store.loadFull(file);
       if (!track) continue;
 
+      const mapCode = String(meta.map || '').toUpperCase();
+      if (mapCode && !smokesByMap.has(mapCode)) {
+        smokesByMap.set(mapCode, await loadCoachSmokes(mapCode));
+      }
+
       onProgress?.(`Analysing ${i + 1}/${files.length}…`);
       const scratch = [];
       let result;
@@ -61,6 +69,7 @@ export async function analyzeDemoCoach({ demoId, side, rounds, onProgress }) {
           meta,
           track,
           network: null,
+          coachSmokes: smokesByMap.get(mapCode) || null,
           sampleAt: (tick) => {
             track.sampleAll(tick, scratch);
             return scratch;

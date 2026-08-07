@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // src/site/admin/toolsPanel.js
-// Site-wide maintenance actions (stats rebuild, …).
+// Site-wide maintenance actions (stats rebuild, positions/roles scan, …).
 // ---------------------------------------------------------------------------
 
 import { adminApi } from './adminApi.js';
@@ -15,9 +15,9 @@ export function toolsPanel() {
   const progressWrap = el('div', 'ingest-progress');
   progressWrap.hidden = true;
   let running = false;
+  /** @type {'stats'|'positions'|null} */
+  let activeKind = null;
   let pollTimer = 0;
-  /** @type {object | null} */
-  let lastJob = null;
 
   function stopPoll() {
     if (pollTimer) {
@@ -26,12 +26,32 @@ export function toolsPanel() {
     }
   }
 
-  function drawProgress(job) {
-    lastJob = job;
+  function setButtonsBusy(busy) {
+    running = busy;
+    runBtn.disabled = busy;
+    posBtn.disabled = busy;
+    if (!busy) {
+      runBtn.textContent = 'Recalculate all statistics';
+      posBtn.textContent = 'Reload positions';
+      activeKind = null;
+    }
+  }
+
+  function drawProgress(job, kind) {
     const active = Boolean(job?.running);
-    running = active;
-    runBtn.disabled = active;
-    runBtn.textContent = active ? 'Recalculating…' : 'Recalculate all statistics';
+    if (active) {
+      activeKind = kind;
+      running = true;
+      runBtn.disabled = true;
+      posBtn.disabled = true;
+      if (kind === 'positions') {
+        posBtn.textContent = 'Scanning positions…';
+        runBtn.textContent = 'Recalculate all statistics';
+      } else {
+        runBtn.textContent = 'Recalculating…';
+        posBtn.textContent = 'Reload positions';
+      }
+    }
 
     if (!job || (!job.running && !job.finished)) {
       progressWrap.hidden = true;
@@ -72,12 +92,15 @@ export function toolsPanel() {
     if (job.running) {
       const secs = Math.max(0, Math.round((job.ms || 0) / 1000));
       status.className = 'admin-note';
-      status.textContent = `Recalculating… ${secs}s elapsed. Safe to leave this page; progress stays on the server.`;
+      status.textContent =
+        kind === 'positions'
+          ? `Scanning player positions… ${secs}s elapsed. Safe to leave this page.`
+          : `Recalculating… ${secs}s elapsed. Safe to leave this page; progress stays on the server.`;
     }
   }
 
-  function applyFinished(job) {
-    drawProgress(job);
+  function applyFinished(job, kind) {
+    drawProgress(job, kind);
     const report = job?.report;
     if (job?.error) {
       status.className = 'admin-error';
@@ -86,17 +109,27 @@ export function toolsPanel() {
     }
     if (!report) {
       status.className = 'admin-note';
-      status.textContent = 'Recalculation finished.';
+      status.textContent = kind === 'positions' ? 'Positions scan finished.' : 'Recalculation finished.';
       return;
     }
     const failed = report.failed || 0;
-    const parts = [
-      `Done in ${Math.round((report.ms || job.ms || 0) / 1000)}s.`,
-      `${report.ready || 0} ready demos.`,
-      `${report.built || 0} rebuilt`,
-      `${report.enriched || 0} enriched`,
-      `${report.current || 0} already current`
-    ];
+    let parts;
+    if (kind === 'positions') {
+      parts = [
+        `Done in ${Math.round((report.ms || job.ms || 0) / 1000)}s.`,
+        `${report.ready || 0} ready demos.`,
+        `${report.updated || 0} roles updated`,
+        `${report.skipped || 0} skipped`
+      ];
+    } else {
+      parts = [
+        `Done in ${Math.round((report.ms || job.ms || 0) / 1000)}s.`,
+        `${report.ready || 0} ready demos.`,
+        `${report.built || 0} rebuilt`,
+        `${report.enriched || 0} enriched`,
+        `${report.current || 0} already current`
+      ];
+    }
     if (failed) parts.push(`${failed} failed`);
     status.className = failed ? 'admin-error' : 'admin-note';
     status.textContent = parts.join(' ');
@@ -111,29 +144,44 @@ export function toolsPanel() {
 
   async function pollOnce() {
     try {
-      const job = await adminApi.refreshStatsStatus();
-      if (job.running) {
-        drawProgress(job);
+      const [statsJob, posJob] = await Promise.all([
+        adminApi.refreshStatsStatus(),
+        adminApi.refreshPositionsStatus()
+      ]);
+      if (statsJob.running) {
+        drawProgress(statsJob, 'stats');
         return true;
       }
-      if (job.finished && !job.stale) {
+      if (posJob.running) {
+        drawProgress(posJob, 'positions');
+        return true;
+      }
+      if (activeKind === 'stats' && statsJob.finished && !statsJob.stale) {
         stopPoll();
-        applyFinished(job);
-        running = false;
-        runBtn.disabled = false;
-        runBtn.textContent = 'Recalculate all statistics';
+        applyFinished(statsJob, 'stats');
+        setButtonsBusy(false);
         return false;
       }
+      if (activeKind === 'positions' && posJob.finished && !posJob.stale) {
+        stopPoll();
+        applyFinished(posJob, 'positions');
+        setButtonsBusy(false);
+        return false;
+      }
+      // Attach to a finished job that another tab just completed.
+      if (!activeKind && statsJob.finished && !statsJob.stale && statsJob.report) {
+        applyFinished(statsJob, 'stats');
+      } else if (!activeKind && posJob.finished && !posJob.stale && posJob.report) {
+        applyFinished(posJob, 'positions');
+      }
       stopPoll();
-      drawProgress(null);
+      if (!running) drawProgress(null, null);
       return false;
     } catch (err) {
       stopPoll();
       status.className = 'admin-error';
       status.textContent = err.message || 'Could not read recalculation status.';
-      running = false;
-      runBtn.disabled = false;
-      runBtn.textContent = 'Recalculate all statistics';
+      setButtonsBusy(false);
       return false;
     }
   }
@@ -156,8 +204,8 @@ export function toolsPanel() {
       ) {
         return;
       }
-      running = true;
-      runBtn.disabled = true;
+      setButtonsBusy(true);
+      activeKind = 'stats';
       runBtn.textContent = 'Recalculating…';
       status.className = 'admin-note';
       status.textContent = 'Starting recalculation…';
@@ -166,20 +214,23 @@ export function toolsPanel() {
         try {
           job = await adminApi.refreshStats({ force: true });
         } catch (err) {
-          // Another admin (or a previous tab) already started it — attach to that run.
           if (err.status === 409) {
             job = await adminApi.refreshStatsStatus();
+            if (!job.running) job = await adminApi.refreshPositionsStatus();
           } else {
             throw err;
           }
         }
-        drawProgress(job);
+        const kind = job.kind === 'positions' ? 'positions' : 'stats';
+        activeKind = kind;
+        drawProgress(job, kind);
         if (job.running) startPoll();
-        else if (job.finished) applyFinished(job);
+        else if (job.finished) {
+          applyFinished(job, kind);
+          setButtonsBusy(false);
+        }
       } catch (err) {
-        running = false;
-        runBtn.disabled = false;
-        runBtn.textContent = 'Recalculate all statistics';
+        setButtonsBusy(false);
         progressWrap.hidden = true;
         status.className = 'admin-error';
         status.textContent = err.message || 'Recalculation failed.';
@@ -187,6 +238,56 @@ export function toolsPanel() {
     },
     'btn primary'
   );
+
+  const posBtn = button(
+    'Reload positions',
+    async () => {
+      if (running) return;
+      if (
+        !window.confirm(
+          'Rescan player positions on every ready demo from 3D tick data and rebuild roles only?\n\nDoes not recalculate kills, PRW, possession, or other stats. Can take a while on a large library.'
+        )
+      ) {
+        return;
+      }
+      setButtonsBusy(true);
+      activeKind = 'positions';
+      posBtn.textContent = 'Scanning positions…';
+      status.className = 'admin-note';
+      status.textContent = 'Starting positions scan…';
+      try {
+        let job;
+        try {
+          job = await adminApi.refreshPositions();
+        } catch (err) {
+          if (err.status === 409) {
+            job = await adminApi.refreshPositionsStatus();
+            if (!job.running) job = await adminApi.refreshStatsStatus();
+          } else {
+            throw err;
+          }
+        }
+        const kind = job.kind === 'stats' ? 'stats' : 'positions';
+        activeKind = kind;
+        drawProgress(job, kind);
+        if (job.running) startPoll();
+        else if (job.finished) {
+          applyFinished(job, kind);
+          setButtonsBusy(false);
+        }
+      } catch (err) {
+        setButtonsBusy(false);
+        progressWrap.hidden = true;
+        status.className = 'admin-error';
+        status.textContent = err.message || 'Positions scan failed.';
+      }
+    },
+    'btn'
+  );
+
+  const actions = el('div', 'admin-inline');
+  actions.appendChild(runBtn);
+  actions.appendChild(posBtn);
 
   const card = el('div', 'admin-tool-card');
   card.appendChild(el('h3', 'admin-tool-title', 'Replay statistics'));
@@ -197,7 +298,14 @@ export function toolsPanel() {
       'Rebuild every demo’s compact stats index from already-parsed round files (rating inputs, PRW, possession, swing, duel PFW/PFO, and related fields). Use this after a stats schema change or if Database / Pattern Finder numbers look stale.'
     )
   );
-  card.appendChild(runBtn);
+  card.appendChild(
+    el(
+      'p',
+      'admin-note',
+      'Reload positions walks 3D tick tracks only, to reassign map roles from where players stood. It does not rebuild the rest of the stats index.'
+    )
+  );
+  card.appendChild(actions);
   card.appendChild(progressWrap);
   card.appendChild(status);
 

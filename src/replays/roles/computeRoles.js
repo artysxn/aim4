@@ -1,10 +1,14 @@
 // ---------------------------------------------------------------------------
 // Assign T/CT roles from tick samples + bombsite centers (backend index).
 //
-// T (after AWPer): 2 Pack (highest spatial diversity) + 2 Lurk (lowest),
-//   then A/B lurk by closer to bombsite A vs B.
-// CT (after AWPer): 2 Anchor (lowest PSDT on full buys) + 2 Rotation,
-//   then A/B by rounds closer to each site.
+// Generic maps:
+//   T (after AWPer): 2 Pack (highest spatial diversity) + 2 Lurk (lowest),
+//     then A/B lurk by closer to bombsite A vs B.
+//   CT (after AWPer): 2 Anchor (lowest PSDT on full buys) + 2 Rotation,
+//     then A/B by rounds closer to each site.
+//
+// INF / DD2 / ANU / CCH / ANC / MIR / NUK: painted-zone presence rules
+// (mapRoleAssign.js). AWPer is always most AWP rounds among the five.
 // ---------------------------------------------------------------------------
 
 import { P } from '../shared/statsMath.js';
@@ -21,9 +25,11 @@ import {
   tSampleTicks
 } from './roleMetrics.js';
 import { CT_POSITIONS, T_POSITIONS } from './regionKeys.js';
+import { assignMapRoles } from './mapRoleAssign.js';
+import { bumpZoneHits, MAP_ROLE_CODES, paintedZonesAt } from './mapRoleZones.js';
 
 /** Bump when role metrics change — background enrich rewrites entry.roles. */
-export const ROLES_VERSION = 2;
+export const ROLES_VERSION = 6;
 
 const SCRATCH = {};
 
@@ -54,7 +60,9 @@ function emptyPlayer(id) {
     tAwpShots: 0,
     ctAwpRounds: 0,
     ctAwpKills: 0,
-    ctAwpShots: 0
+    ctAwpShots: 0,
+    zoneHitsT: Object.create(null),
+    zoneHitsCT: Object.create(null)
   };
 }
 
@@ -139,6 +147,7 @@ export function accumulateRoundRoles(work, ctx) {
   const sitesOk = hasBombSites(network);
   const ctSitesOk = sitesOk || hasKeyZones(network);
   const tTicks = tSampleTicks(timing);
+  const mapRoles = MAP_ROLE_CODES.has(String(map).toUpperCase());
   // ~2 samples/sec is enough for PSDT; denser walks starve the event loop.
   const psdtStride = Math.max(1, Math.round(rate / 2));
   const siteStride = Math.max(1, Math.round(rate * 2));
@@ -178,11 +187,23 @@ export function accumulateRoundRoles(work, ctx) {
           p.tDistB += aff.distB;
           p.tSiteN += aff.n;
         }
+        if (mapRoles && network) {
+          bumpZoneHits(p.zoneHitsT, map, paintedZonesAt(pt.x, pt.y, network));
+        }
       }
     } else {
       if (awpOut) p.ctAwpRounds++;
       p.ctAwpKills += awpKills;
       p.ctAwpShots += awpShots;
+
+      // Zone roles: sample default clock ticks on every CT round.
+      if (mapRoles && network) {
+        for (const tick of tTicks) {
+          const s = track.sample(slot, tick, SCRATCH);
+          if (!s.alive) continue;
+          bumpZoneHits(p.zoneHitsCT, map, paintedZonesAt(s.x, s.y, network));
+        }
+      }
 
       const econ = buyBucket(team === 1 ? row.e1 : row.e2);
       if (econ === 4) {
@@ -374,6 +395,18 @@ function assignCT(list, sitesOk) {
  *   map → geometry flags. `true` means bombsites (legacy). Prefer
  *   `{ bomb, ct }` so CT can A/B-split from key zones alone.
  */
+function hasZoneHits(list, side) {
+  const key = side === 'T' ? 'zoneHitsT' : 'zoneHitsCT';
+  for (const p of list) {
+    const bag = p[key];
+    if (!bag) continue;
+    for (const n of Object.values(bag)) {
+      if (n > 0) return true;
+    }
+  }
+  return false;
+}
+
 export function finalizeRoles(work, sitesByMap = new Map()) {
   /** @type {{ v: number, maps: Record<string, { T: object, CT: object }> }} */
   const roles = { v: ROLES_VERSION, maps: {} };
@@ -382,13 +415,23 @@ export function finalizeRoles(work, sitesByMap = new Map()) {
     const flag = sitesByMap.get(map);
     const bombOk = flag === true || flag?.bomb === true;
     const ctOk = flag === true || flag?.ct === true || bombOk;
+    const mapCode = String(map || '').toUpperCase();
+    const useMapRoles = MAP_ROLE_CODES.has(mapCode);
     const T = {};
     const CT = {};
     for (const [, byPlayer] of byTeam) {
       const list = [...byPlayer.values()];
       if (!list.length) continue;
-      Object.assign(T, assignT(list, bombOk));
-      Object.assign(CT, assignCT(list, ctOk));
+      if (useMapRoles && hasZoneHits(list, 'T')) {
+        Object.assign(T, assignMapRoles(mapCode, list, 'T', setRole) || assignT(list, bombOk));
+      } else {
+        Object.assign(T, assignT(list, bombOk));
+      }
+      if (useMapRoles && hasZoneHits(list, 'CT')) {
+        Object.assign(CT, assignMapRoles(mapCode, list, 'CT', setRole) || assignCT(list, ctOk));
+      } else {
+        Object.assign(CT, assignCT(list, ctOk));
+      }
     }
     roles.maps[map] = { T, CT };
   }
