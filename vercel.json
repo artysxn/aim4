@@ -25,6 +25,7 @@
     { "source": "/admin", "destination": "/index.html" },
     { "source": "/i/(.*)", "destination": "/index.html" },
     { "source": "/s2/(.*)", "destination": "/index.html" },
+    { "source": "/d/(.*)", "destination": "/index.html" },
     { "source": "/replays", "destination": "/index.html" },
     { "source": "/replays/playlists", "destination": "/index.html" },
     { "source": "/replays/upload", "destination": "/index.html" },
