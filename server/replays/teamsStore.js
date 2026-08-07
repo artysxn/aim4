@@ -402,7 +402,9 @@ export async function setPosition(actor, teamId, memberId, side, map, position) 
 // ---------------------------------------------------------------------------
 
 export const MAX_DOCUMENTS = 200;
-export const DOC_MAX_BYTES = 400 * 1024;
+// Antistrat reports embed radar heatmaps as data URIs, so a document is no
+// longer bounded by what a person can type.
+export const DOC_MAX_BYTES = 4 * 1024 * 1024;
 
 const newDocId = () => `d_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 

@@ -79,11 +79,12 @@ export function sanitizeHtml(html) {
         const name = attr.name.toLowerCase();
         if (name === 'href' && el.tagName === 'A') {
           const href = attr.value.trim();
-          // Only http(s), mailto and in-document anchors. No javascript: links.
-          if (!/^(https?:|mailto:|#)/i.test(href)) el.removeAttribute('href');
-          else {
+          // http(s), mailto, in-document anchors and same-origin paths
+          // (antistrat round links). No javascript: links.
+          if (!/^(https?:|mailto:|#|\/[^/])/i.test(href)) el.removeAttribute('href');
+          else if (!href.startsWith('#') && !href.startsWith('/')) {
             el.setAttribute('rel', 'noopener noreferrer');
-            if (!href.startsWith('#')) el.setAttribute('target', '_blank');
+            el.setAttribute('target', '_blank');
           }
           continue;
         }

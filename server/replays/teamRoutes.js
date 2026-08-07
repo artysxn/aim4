@@ -301,7 +301,9 @@ export async function handleTeamRequest(req, res, url) {
         return true;
       }
       if (req.method === 'POST') {
-        const body = await readJson(req);
+        // Documents carry embedded heatmap images; the store enforces
+        // DOC_MAX_BYTES on the html itself.
+        const body = await readJson(req, 5 * 1024 * 1024);
         const existing = await listDocuments(teamId);
         // An edit of a document that already exists is not a new one, so the
         // cap only applies to creating.

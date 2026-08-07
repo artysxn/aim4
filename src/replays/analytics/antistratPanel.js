@@ -22,7 +22,9 @@ import {
   buildAntistratDocHtml,
   shortDate
 } from './antistratConfig.js';
-import { renderHeatmapDataUri, runAntistratScan } from './antistratScan.js';
+import { runAntistratScan } from './antistratScan.js';
+import { heatDataUri, heatGridDataUri, spacingChartDataUri } from './heatImage.js';
+import { PACE_TYPES } from './patternDefs.js';
 import { spinnerHtml } from '../../lib/spinner.js';
 
 /**
@@ -48,7 +50,7 @@ export function createAntistratPanel({ escapeHtml }) {
     /** @type {Set<string>} demo ids dropped from the run */
     excluded: new Set(),
     /** @type {Set<string>} selected category keys */
-    cats: new Set(ANTISTRAT_CATEGORIES.filter((c) => !c.wip).map((c) => c.key)),
+    cats: new Set(ANTISTRAT_CATEGORIES.map((c) => c.key)),
     destTeamId: '',
     busy: false,
     progress: '',
@@ -124,10 +126,7 @@ export function createAntistratPanel({ escapeHtml }) {
       !state.busy &&
       Boolean(state.teamKey && state.mapCode && state.destTeamId) &&
       includedMatches().length > 0 &&
-      [...state.cats].some((k) => {
-        const cat = ANTISTRAT_CATEGORIES.find((c) => c.key === k);
-        return cat && !cat.wip;
-      })
+      [...state.cats].some((k) => ANTISTRAT_CATEGORIES.some((c) => c.key === k))
     );
   }
 
@@ -234,15 +233,14 @@ export function createAntistratPanel({ escapeHtml }) {
     if (!state.teamKey || !state.mapCode) return '';
     const groups = ANTISTRAT_GROUPS.map((group) => {
       const rows = ANTISTRAT_CATEGORIES.filter((c) => c.group === group)
-        .map((c) => {
-          const on = state.cats.has(c.key) && !c.wip;
-          return `<label class="as-cat-main${c.wip ? ' wip' : ''}">
-            <input type="checkbox" data-as-cat="${escapeHtml(c.key)}" ${on ? 'checked' : ''} ${
-              c.wip ? 'disabled' : ''
+        .map(
+          (c) => `<label class="as-cat-main">
+            <input type="checkbox" data-as-cat="${escapeHtml(c.key)}" ${
+              state.cats.has(c.key) ? 'checked' : ''
             } />
-            <span>${escapeHtml(c.label)}${c.wip ? ' <span class="an-wip-chip">WIP</span>' : ''}</span>
-          </label>`;
-        })
+            <span>${escapeHtml(c.label)}</span>
+          </label>`
+        )
         .join('');
       return `<div class="as-cat-group">
         <p class="an-side-title">${escapeHtml(group)}</p>
@@ -344,18 +342,61 @@ export function createAntistratPanel({ escapeHtml }) {
         teamKey: state.teamKey,
         mapCode: state.mapCode,
         demoIds: included.map((d) => d.id),
+        paceKeys: PACE_TYPES.map((p) => p.key),
         onProgress: (done, total) => {
           state.progress = `Scanning round ${done} of ${total}…`;
           renderProgress();
         }
       });
-      state.progress = 'Writing document…';
+      state.progress = 'Rendering images…';
       renderProgress();
 
-      const heatmap = state.cats.has('firstEngagement')
-        ? await renderHeatmapDataUri(state.mapCode, results.sections.firstEngagement?.points)
-        : '';
+      const images = {};
+      const sections = results.sections;
+      if (state.cats.has('firstEngagement')) {
+        images.firstEngagement = {};
+        for (const side of ['T', 'CT']) {
+          const points = sections.firstEngagement?.[side]?.points;
+          if (points?.length) {
+            images.firstEngagement[side] = await heatDataUri(state.mapCode, points, {
+              label: `First engagements, ${side}`
+            });
+          }
+        }
+      }
+      images.spacing = {};
+      for (const key of ['fiveVfour', 'fourVfive']) {
+        if (!state.cats.has(key)) continue;
+        images.spacing[key] = {};
+        for (const side of ['T', 'CT']) {
+          const block = sections[key]?.[side];
+          if (block?.spacing?.n) {
+            images.spacing[key][side] = spacingChartDataUri(block.spacing, {
+              title: `Avg spacing after the opening kill, ${side} (${block.spacing.n} rounds)`
+            });
+          }
+        }
+      }
+      if (state.cats.has('players')) {
+        images.players = {};
+        for (const p of sections.players || []) {
+          images.players[p.name] = {};
+          for (const side of ['T', 'CT']) {
+            const bag = p.sides[side];
+            if (!bag) continue;
+            const uri = await heatGridDataUri(state.mapCode, [
+              { label: 'Early', points: bag.phases.early.points },
+              { label: 'Mid', points: bag.phases.mid.points },
+              { label: 'Late', points: bag.phases.late.points },
+              { label: 'All', points: bag.phases.all.points }
+            ]);
+            if (uri) images.players[p.name][side] = uri;
+          }
+        }
+      }
 
+      state.progress = 'Writing document…';
+      renderProgress();
       await saveTeamDocument(dest.id, {
         title,
         html: buildAntistratDocHtml(
@@ -365,7 +406,7 @@ export function createAntistratPanel({ escapeHtml }) {
             matches: included.map((d) => ({ label: matchLabel(d) })),
             categories: [...state.cats],
             results,
-            heatmap
+            images
           },
           escapeHtml
         )
