@@ -609,6 +609,21 @@ export function createDocsEditor({ escapeHtml, onSave, onDirty }) {
   surface.addEventListener('keyup', syncToolbar);
   surface.addEventListener('mouseup', syncToolbar);
 
+  // contenteditable swallows default link navigation, and same-origin links are
+  // stamped target=_blank so the SPA click router skips them. Open explicitly.
+  surface.addEventListener('click', (e) => {
+    if (e.defaultPrevented || e.button !== 0) return;
+    const a = e.target.closest?.('a[href]');
+    if (!a || !surface.contains(a)) return;
+    const href = (a.getAttribute('href') || '').trim();
+    if (!href || href.startsWith('#')) return;
+    // A drag-select across the link is editing, not navigating.
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && surface.contains(sel.anchorNode)) return;
+    e.preventDefault();
+    window.open(a.href, '_blank', 'noopener,noreferrer');
+  });
+
   function syncToolbar() {
     for (const btn of el.querySelectorAll('[data-cmd]')) {
       let on = false;

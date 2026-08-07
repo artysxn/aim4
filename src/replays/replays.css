@@ -6735,6 +6735,9 @@ table.rp-mine-table tbody tr {
 
 .doc-surface a {
   color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .doc-surface img {

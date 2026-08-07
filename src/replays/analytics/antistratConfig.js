@@ -39,6 +39,7 @@ export const ANTISTRAT_CATEGORIES = [
   { key: 'tEarly', group: 'T specific', label: 'Early rounds' },
   { key: 'tMid', group: 'T specific', label: 'Midrounds' },
   { key: 'tLate', group: 'T specific', label: 'Laterounds' },
+  { key: 'ctSites', group: 'CT specific', label: 'Winrate vs site hits' },
   { key: 'retakes', group: 'CT specific', label: 'Retakes and retake winrates' }
 ];
 
@@ -326,6 +327,23 @@ function renderPostplant(esc, s, word, heatmap = '') {
   return rows.length ? `${li(rows)}${img}` : NONE;
 }
 
+function renderCtSites(esc, s) {
+  if (!s.rounds) return NONE;
+  const rows = [];
+  for (const site of ['a', 'b']) {
+    const bag = s.sites[site];
+    if (!bag) continue;
+    const planted = bag.plantedRounds
+      ? `, ${bag.plantedWinrate}% once it was planted (${bag.plantedRounds})`
+      : '';
+    rows.push(
+      `${link(esc, `vs ${site.toUpperCase()} hits`, bag.files)}: ${bag.winrate}% won (${bag.rounds} rounds, ${bag.share}% of full buys)${esc(planted)}`
+    );
+  }
+  if (s.unresolved) rows.push(`${s.unresolved} rounds with no readable site`);
+  return `<p>${s.rounds} full buy vs full buy CT rounds</p>${li(rows)}`;
+}
+
 function renderRetakes(esc, s) {
   const rows = [];
   for (const site of ['a', 'b']) {
@@ -471,6 +489,7 @@ export function buildAntistratDocHtml(spec, esc) {
     players: (s) => renderPlayers(esc, s, images.players),
     tFormations: (s) => renderTFormations(esc, s),
     afterplants: (s) => renderPostplant(esc, s, 'afterplants', images.afterplants),
+    ctSites: (s) => renderCtSites(esc, s),
     retakes: (s) => renderRetakes(esc, s),
     tEarly: (s) => renderPhase(esc, s),
     tMid: (s) => renderPhase(esc, s),

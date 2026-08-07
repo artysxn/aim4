@@ -45,6 +45,13 @@ const ADVANTAGE_WINDOW_SECONDS = 20;
 const SPACING_SECONDS = 30;
 /** Afterplant / retake positions are read this long after the plant. */
 const POSTPLANT_SECONDS = 8;
+/** A set call commits between 1:50 and 1:20 on the round clock. */
+const SETCALL_FROM = 110;
+const SETCALL_TO = 80;
+/** Widest first-kill spread allowed inside one merged set call, in seconds. */
+const SETCALL_CLOCK_SPAN = 8;
+/** Field separator inside a utility signature key. */
+const UTIL_SEP = '\u0001';
 
 const round1 = (n) => Math.round(n * 10) / 10;
 const pct = (part, whole) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
@@ -333,6 +340,22 @@ function roundFeatures({ meta, track, row, teamIdx, opponent, network, utilDb, m
     return n;
   };
 
+  // Which site the T side committed to. On our own T rounds this is the call;
+  // on CT rounds it is what we were hit by, and since only our own players are
+  // sampled it has to come from the plant, or failing that from where the
+  // round's fighting happened.
+  let hitSite = plantSite;
+  if (!hitSite) {
+    let nearA = 0;
+    let nearB = 0;
+    for (const k of kills) {
+      if (k.x === null) continue;
+      if (nearAnyPiece(k.x, k.y, towardPieces.a)) nearA++;
+      if (nearAnyPiece(k.x, k.y, towardPieces.b)) nearB++;
+    }
+    hitSite = nearA > nearB ? 'a' : nearB > nearA ? 'b' : null;
+  }
+
   /** First sample with `count`+ of ours inside either site's pieces. */
   const siteEntry = (count) => {
     for (const s of series) {
@@ -363,6 +386,7 @@ function roundFeatures({ meta, track, row, teamIdx, opponent, network, utilDb, m
     plantTick,
     plantClock: plantTick != null ? clockOf(plantTick) : null,
     plantSite,
+    hitSite,
     bounds,
     tickRate,
     t0,
@@ -1165,64 +1189,112 @@ function aggOpenings(rounds) {
 }
 
 /**
- * Set calls: every T buy round that is not a default, merged when the site,
- * pace and lane spread agree. Utility named in half the group's rounds rides
- * along, and so does the first-kill window.
+ * Set calls: T buy rounds that are not defaults and that commit inside the
+ * set-call window. Two rounds merge only when the site, pace, lane spread AND
+ * the exact named utility all match, and even then only while their first
+ * kills sit within SETCALL_CLOCK_SPAN seconds of each other. A minute-wide
+ * "first kill somewhere in here" bucket is not one call, it is a dozen.
  */
 function aggSetCalls(rounds, mapCode, laneSets) {
+  /** The moment the round commits: a 2-man site entry, else the first kill. */
+  const commitClock = (r) => {
+    const entry = r.siteEntry(2);
+    if (entry) return entry.clock;
+    return Number.isFinite(r.firstKill?.clock) ? r.firstKill.clock : null;
+  };
+
   const set = rounds.filter((r) => {
     if (r.side !== 'T' || r.ownEcon < 2 || !r.hasTicks) return false;
     const pace = classifyPace(r);
-    return pace && pace !== 'default' && pace !== 'slow-default';
+    if (!pace || pace === 'default' || pace === 'slow-default') return false;
+    const c = commitClock(r);
+    return c !== null && c <= SETCALL_FROM && c >= SETCALL_TO;
   });
-  if (!set.length) return { rounds: 0, groups: [] };
+  if (!set.length) return { rounds: 0, files: [], groups: [] };
 
-  /** @type {Map<string, { rounds: object[], counts: number[]|null }>} */
+  /** @type {Map<string, { rounds: object[], counts: number[]|null, util: string[] }>} */
   const groups = new Map();
   for (const r of set) {
     const pace = classifyPace(r);
     const site = paceSite(r)?.toUpperCase() || '';
     const counts = laneCountsAt(r, mapCode, laneSets);
-    const key = `${site}\0${pace}\0${counts ? counts.join('-') : ''}`;
-    if (!groups.has(key)) groups.set(key, { rounds: [], counts });
+    // Only named utility, and only what was thrown before the window closes.
+    const util = [
+      ...new Set(
+        r.nades
+          .filter((n) => n.name && n.clock >= SETCALL_TO)
+          .map((n) => `${n.name}${UTIL_SEP}${n.type}`)
+      )
+    ].sort();
+    const key = `${site}\0${pace}\0${counts ? counts.join('-') : ''}\0${util.join('|')}`;
+    if (!groups.has(key)) groups.set(key, { rounds: [], counts, util });
     groups.get(key).rounds.push(r);
   }
 
-  const rows = [...groups.entries()]
-    .sort((a, b) => b[1].rounds.length - a[1].rounds.length)
-    .slice(0, 16)
-    .map(([key, g]) => {
-      const [site, pace] = key.split('\0');
-      const n = g.rounds.length;
-      // Named utility thrown in at least half the group's rounds.
-      const nadeRounds = new Map();
-      const types = new Map();
-      for (const r of g.rounds) {
-        const seen = new Set();
-        for (const nd of r.nades) {
-          if (!nd.name || seen.has(nd.name)) continue;
-          seen.add(nd.name);
-          bump(nadeRounds, nd.name);
-          types.set(nd.name, nd.type);
-        }
+  const rows = [];
+  for (const [key, g] of groups) {
+    const [site, pace] = key.split('\0');
+    const util = g.util.map((u) => {
+      const [name, type] = u.split(UTIL_SEP);
+      return { name, type };
+    });
+    // Walk the group from the earliest first kill and cut a new cluster the
+    // moment the spread would exceed the span.
+    const timed = g.rounds
+      .filter((r) => Number.isFinite(r.firstKill?.clock))
+      .sort((a, b) => b.firstKill.clock - a.firstKill.clock);
+    const untimed = g.rounds.filter((r) => !Number.isFinite(r.firstKill?.clock));
+    const clusters = [];
+    let cur = [];
+    for (const r of timed) {
+      if (cur.length && cur[0].firstKill.clock - r.firstKill.clock > SETCALL_CLOCK_SPAN) {
+        clusters.push(cur);
+        cur = [];
       }
-      const util = [...nadeRounds.entries()]
-        .filter(([, c]) => c / n >= 0.5)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 4)
-        .map(([name]) => ({ name, type: types.get(name) || '' }));
-      const clocks = g.rounds.map((r) => r.firstKill?.clock).filter(Number.isFinite);
-      return {
-        count: n,
+      cur.push(r);
+    }
+    if (cur.length) clusters.push(cur);
+    if (untimed.length) clusters.push(untimed);
+
+    for (const list of clusters) {
+      rows.push({
+        count: list.length,
         site,
         pace,
         spread: laneSpread(mapCode, g.counts),
         util,
-        clocks: clockRange(clocks),
-        files: filesOf(g.rounds)
-      };
-    });
-  return { rounds: set.length, files: filesOf(set), groups: rows };
+        clocks: clockRange(list.map((r) => r.firstKill?.clock).filter(Number.isFinite)),
+        files: filesOf(list)
+      });
+    }
+  }
+  rows.sort((a, b) => b.count - a.count);
+  return { rounds: set.length, files: filesOf(set), groups: rows.slice(0, 20) };
+}
+
+/**
+ * CT full buy vs full buy, split by which site the Ts hit: how often the
+ * defense holds, and how it does once the bomb is actually down.
+ */
+function aggCtSiteDefense(rounds) {
+  const set = rounds.filter((r) => r.side === 'CT' && r.ownEcon === 4 && r.oppEcon === 4);
+  const out = { rounds: set.length, sites: {}, unresolved: 0 };
+  if (!set.length) return out;
+  for (const site of ['a', 'b']) {
+    const list = set.filter((r) => r.hitSite === site);
+    if (!list.length) continue;
+    const planted = list.filter((r) => r.plantTick != null);
+    out.sites[site] = {
+      rounds: list.length,
+      share: pct(list.length, set.length),
+      winrate: pct(list.filter((r) => r.won).length, list.length),
+      plantedRounds: planted.length,
+      plantedWinrate: pct(planted.filter((r) => r.won).length, planted.length),
+      files: filesOf(list)
+    };
+  }
+  out.unresolved = set.filter((r) => !r.hitSite).length;
+  return out;
 }
 
 function aggPositions(mains, rolesOf) {
@@ -1514,6 +1586,7 @@ export async function runAntistratScan({
       patterns: aggPatterns(rounds, nameOf),
       openings: aggOpenings(rounds),
       setCalls: aggSetCalls(rounds, mapCode, laneSets),
+      ctSites: aggCtSiteDefense(rounds),
       tFormations: aggTFormations(rounds, mapCode, laneSets),
       afterplants: aggPostplant(rounds, 'T'),
       retakes: {
