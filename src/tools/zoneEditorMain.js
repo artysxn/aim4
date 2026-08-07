@@ -660,10 +660,14 @@ function draw() {
     const bb = pieceBounds(piece);
     return Math.max(0, bb.maxX - bb.minX) * Math.max(0, bb.maxY - bb.minY);
   };
+  // Other floor stays at 10% so upper/lower context is visible while editing
+  // the active Nuke level (and the reverse when that floor is selected).
+  const OFF_FLOOR_ALPHA = 0.1;
   for (const pos of network.positions || []) {
-    if ((pos.level || 'default') !== radarLevel) continue;
+    const onFloor = (pos.level || 'default') === radarLevel;
     const selected = selectedPositionIds.has(pos.id) || highlightPositionId === pos.id;
     const color = selected ? POSITION_SELECTED : POSITION_COLOR;
+    const alpha = posAlpha * (onFloor ? 1 : OFF_FLOOR_ALPHA);
     const pieces = pos.pieces || [];
     let mainIdx = 0;
     for (let i = 1; i < pieces.length; i++) {
@@ -671,7 +675,7 @@ function draw() {
     }
     pieces.forEach((piece, i) => {
       const label = i === mainIdx ? pos.name || 'Pos' : '';
-      drawPiece(piece, color, label, selected ? 2.5 : 1.5, posAlpha);
+      drawPiece(piece, color, label, selected ? 2.5 : 1.5, alpha);
     });
   }
 
