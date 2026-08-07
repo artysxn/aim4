@@ -10,6 +10,8 @@
 // and out, because the same document is rendered for every member of the team.
 // ---------------------------------------------------------------------------
 
+import { enhanceDocEmbeds } from './docEmbeds.js';
+
 const SIZES = [
   { key: '13', label: 'Small' },
   { key: '15', label: 'Normal' },
@@ -60,6 +62,22 @@ export function sanitizeHtml(html) {
         el.remove();
         continue;
       }
+      // Interactive embeds (antistrat utility map / spacing chart): the div
+      // keeps its two data attributes and nothing else. Children are the
+      // mounted widget, runtime-only, so they are dropped rather than saved.
+      if (el.tagName === 'DIV' && el.hasAttribute('data-embed')) {
+        const kind = el.getAttribute('data-kind') || '';
+        const embed = el.getAttribute('data-embed') || '';
+        el.replaceChildren();
+        for (const attr of [...el.attributes]) el.removeAttribute(attr.name);
+        if (/^[a-z-]{1,32}$/.test(kind) && embed.length <= 512 * 1024) {
+          el.setAttribute('data-kind', kind);
+          el.setAttribute('data-embed', embed);
+        } else {
+          el.remove();
+        }
+        continue;
+      }
       // Images carry only an embedded data URI (antistrat heatmaps). A remote
       // src would leak reader IPs to whoever controls the host, so it is not
       // an allowed shape at all.
@@ -80,9 +98,10 @@ export function sanitizeHtml(html) {
         if (name === 'href' && el.tagName === 'A') {
           const href = attr.value.trim();
           // http(s), mailto, in-document anchors and same-origin paths
-          // (antistrat round links). No javascript: links.
+          // (antistrat round links). No javascript: links. Everything but an
+          // in-document anchor opens a new tab, round links included.
           if (!/^(https?:|mailto:|#|\/[^/])/i.test(href)) el.removeAttribute('href');
-          else if (!href.startsWith('#') && !href.startsWith('/')) {
+          else if (!href.startsWith('#')) {
             el.setAttribute('rel', 'noopener noreferrer');
             el.setAttribute('target', '_blank');
           }
@@ -611,6 +630,7 @@ export function createDocsEditor({ escapeHtml, onSave, onDirty }) {
       const body = unwrapOnLoad(sanitizeHtml(doc.html || ''));
       surface.innerHTML = body.html || '<p><br></p>';
       ensureBlocks();
+      enhanceDocEmbeds(surface);
       surface.style.lineHeight = doc.lineHeight || body.gap;
       const gapSelect = el.querySelector('[data-gap]');
       if (gapSelect) gapSelect.value = surface.style.lineHeight;

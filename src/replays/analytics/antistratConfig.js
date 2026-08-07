@@ -141,7 +141,12 @@ function renderPace(esc, s) {
 
 const PHASE_LABEL = { early: 'Early round', mid: 'Midround', late: 'Late round' };
 
-function renderUtility(esc, s) {
+/** An interactive widget node; docEmbeds.js mounts it when the doc renders. */
+function embed(esc, kind, data) {
+  return `<div data-kind="${esc(kind)}" data-embed="${esc(JSON.stringify(data))}"></div>`;
+}
+
+function renderUtility(esc, s, mapCode) {
   const parts = [];
   for (const side of ['T', 'CT']) {
     const bag = s.sides[side];
@@ -152,26 +157,14 @@ function renderUtility(esc, s) {
     parts.push(
       `<p>Average per round: smokes ${bag.avg.smokegrenade}, molotovs ${bag.avg.molotov}, flashes ${bag.avg.flashbang}, HE ${bag.avg.hegrenade}.</p>`
     );
-    for (const phase of ['early', 'mid', 'late']) {
-      const kinds = bag.phases[phase];
-      const rows = [];
-      for (const [kind, top] of Object.entries(kinds)) {
-        const label = { smokegrenade: 'Smokes', molotov: 'Molotovs', flashbang: 'Flashes', hegrenade: 'HE' }[kind];
-        rows.push(
-          `<strong>${label}</strong>: ${top
-            .map((t) => `${esc(t.name)} (${t.share}%${t.clock ? `, avg ${esc(t.clock)}` : ''})`)
-            .join('. ')}.`
-        );
-      }
-      if (rows.length) {
-        parts.push(`<p><strong>${PHASE_LABEL[phase]}</strong></p>${li(rows)}`);
-      }
+    if (bag.items?.length) {
+      parts.push(embed(esc, 'util-map', { map: mapCode, side, items: bag.items }));
     }
   }
   return parts.length ? parts.join('') : NONE;
 }
 
-function renderAdvantageSide(esc, s, label, chart) {
+function renderAdvantageSide(esc, s, label) {
   if (!s || !s.rounds) return '';
   const rows = [];
   if (s.site) rows.push(`Preferred bombsite: ${s.site.a}% A, ${s.site.b}% B (${s.site.basis} rounds)`);
@@ -192,13 +185,20 @@ function renderAdvantageSide(esc, s, label, chart) {
   if (s.avgDistance !== null && s.avgDistance !== undefined) {
     rows.push(`Average player spacing at the kill: ${s.avgDistance} units`);
   }
-  const img = chart ? `<p><img src="${chart}" alt="Spacing after the opening kill"></p>` : '';
-  return `<p><strong>${label}</strong> (${link(esc, `${s.rounds} rounds`, s.files)})</p>${li(rows)}${img}`;
+  const chart = s.spacing?.n
+    ? embed(esc, 'spacing', {
+        title: `Avg spacing after the opening kill, ${label} (${s.spacing.n} rounds)`,
+        avg: s.spacing.avg,
+        kills: s.spacing.kills,
+        deaths: s.spacing.deaths,
+        rounds: s.spacing.rounds
+      })
+    : '';
+  return `<p><strong>${label}</strong> (${link(esc, `${s.rounds} rounds`, s.files)})</p>${li(rows)}${chart}`;
 }
 
-function renderAdvantage(esc, s, charts) {
-  const html =
-    renderAdvantageSide(esc, s.T, 'T', charts?.T) + renderAdvantageSide(esc, s.CT, 'CT', charts?.CT);
+function renderAdvantage(esc, s) {
+  const html = renderAdvantageSide(esc, s.T, 'T') + renderAdvantageSide(esc, s.CT, 'CT');
   return html || NONE;
 }
 
@@ -272,7 +272,7 @@ function renderTFormations(esc, s) {
   )}`;
 }
 
-function renderPostplant(esc, s, word) {
+function renderPostplant(esc, s, word, heatmap = '') {
   const rows = [];
   for (const site of ['a', 'b']) {
     const bag = s[site];
@@ -282,7 +282,8 @@ function renderPostplant(esc, s, word) {
       `<strong>${link(esc, `${site.toUpperCase()} ${word}`, bag.files)}</strong> (${bag.rounds} rounds): ${bag.avgZones !== null ? `${bag.avgZones} zones held, ` : ''}${top || 'no zone data'}`
     );
   }
-  return rows.length ? li(rows) : NONE;
+  const img = heatmap ? `<p><img src="${heatmap}" alt="Postplant positions"></p>` : '';
+  return rows.length ? `${li(rows)}${img}` : NONE;
 }
 
 function renderRetakes(esc, s) {
@@ -299,8 +300,8 @@ function renderRetakes(esc, s) {
   return `${rows.length ? li(rows) : NONE}${zones === NONE ? '' : zones}`;
 }
 
-function renderPhase(esc, s) {
-  if (!s.basis) return NONE;
+function renderPhaseSide(esc, s, label) {
+  if (!s || !s.basis) return '';
   const rows = [
     `Utility thrown and the core follows it: ${s.utilPush} of ${s.basis} rounds`,
     `No utility and the core still moves up: ${s.dryPush} of ${s.basis} rounds`
@@ -321,7 +322,12 @@ function renderPhase(esc, s) {
   if (s.ground.length) {
     rows.push(`Ground held: ${s.ground.map((g) => `${esc(g.name)} ${g.share}%`).join(', ')}`);
   }
-  return li(rows);
+  return `<p><strong>${label}</strong></p>${li(rows)}`;
+}
+
+function renderPhase(esc, s) {
+  const html = renderPhaseSide(esc, s.T, 'T') + renderPhaseSide(esc, s.CT, 'CT');
+  return html || NONE;
 }
 
 function renderPlayers(esc, s, images) {
@@ -334,8 +340,10 @@ function renderPlayers(esc, s, images) {
       const bag = p.sides[side];
       if (!bag) continue;
       parts.push(`<p><strong>${side} side</strong> (${bag.rounds} full buys)</p>`);
-      const img = images?.[p.name]?.[side];
+      const img = images?.heat?.[p.name]?.[side];
       if (img) parts.push(`<p><img src="${img}" alt="${esc(p.name)} ${side} heatmap"></p>`);
+      const nades = images?.nades?.[p.name]?.[side];
+      if (nades) parts.push(`<p><img src="${nades}" alt="${esc(p.name)} ${side} utility"></p>`);
       const rows = [];
       for (const phase of ['early', 'mid', 'late']) {
         const spots = bag.phases[phase]?.spots || [];
@@ -370,8 +378,11 @@ function renderPlayers(esc, s, images) {
  *   results: object,
  *   images?: {
  *     firstEngagement?: { T?: string, CT?: string },
- *     spacing?: { fiveVfour?: { T?: string, CT?: string }, fourVfive?: { T?: string, CT?: string } },
- *     players?: Record<string, { T?: string, CT?: string }>
+ *     afterplants?: string,
+ *     players?: {
+ *       heat?: Record<string, { T?: string, CT?: string }>,
+ *       nades?: Record<string, { T?: string, CT?: string }>
+ *     }
  *   }
  * }} spec
  * @param {(s: string) => string} esc
@@ -389,15 +400,15 @@ export function buildAntistratDocHtml(spec, esc) {
     pistols: (s) => renderPistols(esc, s),
     positions: (s) => renderPositions(esc, s),
     pace: (s) => renderPace(esc, s),
-    utility: (s) => renderUtility(esc, s),
-    fiveVfour: (s) => renderAdvantage(esc, s, images.spacing?.fiveVfour),
-    fourVfive: (s) => renderAdvantage(esc, s, images.spacing?.fourVfive),
+    utility: (s) => renderUtility(esc, s, spec.mapCode),
+    fiveVfour: (s) => renderAdvantage(esc, s),
+    fourVfive: (s) => renderAdvantage(esc, s),
     force: (s) => renderForce(esc, s),
     firstEngagement: (s) => renderFirstEngagement(esc, s, images.firstEngagement),
     patterns: (s) => renderPatterns(esc, s),
     players: (s) => renderPlayers(esc, s, images.players),
     tFormations: (s) => renderTFormations(esc, s),
-    afterplants: (s) => renderPostplant(esc, s, 'afterplants'),
+    afterplants: (s) => renderPostplant(esc, s, 'afterplants', images.afterplants),
     retakes: (s) => renderRetakes(esc, s),
     tEarly: (s) => renderPhase(esc, s),
     tMid: (s) => renderPhase(esc, s),

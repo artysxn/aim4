@@ -23,7 +23,7 @@ import {
   shortDate
 } from './antistratConfig.js';
 import { runAntistratScan } from './antistratScan.js';
-import { heatDataUri, heatGridDataUri, spacingChartDataUri } from './heatImage.js';
+import { heatDataUri, heatGridDataUri, nadePathsGridDataUri } from './heatImage.js';
 import { PACE_TYPES } from './patternDefs.js';
 import { spinnerHtml } from '../../lib/spinner.js';
 
@@ -364,33 +364,39 @@ export function createAntistratPanel({ escapeHtml }) {
           }
         }
       }
-      images.spacing = {};
-      for (const key of ['fiveVfour', 'fourVfive']) {
-        if (!state.cats.has(key)) continue;
-        images.spacing[key] = {};
-        for (const side of ['T', 'CT']) {
-          const block = sections[key]?.[side];
-          if (block?.spacing?.n) {
-            images.spacing[key][side] = spacingChartDataUri(block.spacing, {
-              title: `Avg spacing after the opening kill, ${side} (${block.spacing.n} rounds)`
-            });
+      if (state.cats.has('afterplants')) {
+        const panels = [];
+        for (const site of ['a', 'b']) {
+          const bag = sections.afterplants?.[site];
+          if (bag?.points?.length) {
+            panels.push({ label: `${site.toUpperCase()} afterplants`, points: bag.points });
           }
+        }
+        if (panels.length) {
+          images.afterplants = await heatGridDataUri(state.mapCode, panels);
         }
       }
       if (state.cats.has('players')) {
-        images.players = {};
+        images.players = { heat: {}, nades: {} };
         for (const p of sections.players || []) {
-          images.players[p.name] = {};
+          images.players.heat[p.name] = {};
+          images.players.nades[p.name] = {};
           for (const side of ['T', 'CT']) {
             const bag = p.sides[side];
             if (!bag) continue;
-            const uri = await heatGridDataUri(state.mapCode, [
+            const heat = await heatGridDataUri(state.mapCode, [
               { label: 'Early', points: bag.phases.early.points },
               { label: 'Mid', points: bag.phases.mid.points },
               { label: 'Late', points: bag.phases.late.points },
               { label: 'All', points: bag.phases.all.points }
             ]);
-            if (uri) images.players[p.name][side] = uri;
+            if (heat) images.players.heat[p.name][side] = heat;
+            const nades = await nadePathsGridDataUri(state.mapCode, [
+              { label: 'Early', paths: bag.nadePaths.early },
+              { label: 'Mid', paths: bag.nadePaths.mid },
+              { label: 'Late', paths: bag.nadePaths.late }
+            ]);
+            if (nades) images.players.nades[p.name][side] = nades;
           }
         }
       }

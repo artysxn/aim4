@@ -228,95 +228,88 @@ export async function heatGridDataUri(mapCode, panels, { cell = 300 } = {}) {
   }
 }
 
+/** Landing-dot / path colors per grenade type (shared with docEmbeds.js). */
+export const NADE_COLORS = {
+  smokegrenade: '#9fb4c7',
+  molotov: '#e0703c',
+  flashbang: '#e8d44a',
+  hegrenade: '#7fbf7f'
+};
+
 /**
- * Average player spacing per second after the opening kill, with kill/death
- * markers. `spacing` is the scan's { avg, kills, deaths, n } series.
- * @param {{ avg: Array<number|null>, kills: number[], deaths: number[], n: number }} spacing
- * @param {{ width?: number, height?: number, title?: string }} [opts]
+ * Grid of radar panels showing each grenade as a throw line (origin →
+ * landing) with a landing dot colored by type. Used for the per-player
+ * utility pictures, one panel per phase.
+ *
+ * @param {string} mapCode
+ * @param {Array<{ label: string, paths: Array<{type:string,fx:number|null,fy:number|null,x:number,y:number}> }>} panels
+ * @param {{ cell?: number, cols?: number }} [opts]
  */
-export function spacingChartDataUri(spacing, { width = 440, height = 170, title = '' } = {}) {
-  const avg = spacing?.avg || [];
-  const secs = avg.length;
-  if (!secs || !avg.some((v) => Number.isFinite(v))) return '';
+export async function nadePathsGridDataUri(mapCode, panels, { cell = 300, cols = 3 } = {}) {
+  const list = (panels || []).slice(0, 6);
+  if (!list.some((p) => p.paths?.length)) return '';
+  let radar = null;
+  try {
+    radar = await loadRadar(mapCode);
+  } catch {
+    return '';
+  }
+  const rows = Math.ceil(list.length / cols);
   const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = cols * cell;
+  canvas.height = rows * cell;
   const ctx = canvas.getContext('2d');
   if (!ctx) return '';
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  const padL = 44;
-  const padR = 10;
-  const padT = title ? 24 : 12;
-  const padB = 26;
-  const plotW = width - padL - padR;
-  const plotH = height - padT - padB;
+  const pt = {};
+  const proj = (wx, wy, dx, dy) => {
+    worldToRadar(mapCode, wx, wy, pt);
+    return { x: dx + (pt.x / RADAR_SIZE) * cell, y: dy + (pt.y / RADAR_SIZE) * cell };
+  };
 
-  ctx.fillStyle = '#101014';
-  ctx.fillRect(0, 0, width, height);
-
-  const vals = avg.filter((v) => Number.isFinite(v));
-  const maxY = Math.max(...vals) * 1.15 || 1;
-  const xAt = (i) => padL + (i / (secs - 1)) * plotW;
-  const yAt = (v) => padT + plotH - (v / maxY) * plotH;
-
-  // Axes and gridlines.
-  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-  ctx.fillStyle = 'rgba(255,255,255,0.55)';
-  ctx.font = '10px system-ui, sans-serif';
-  ctx.lineWidth = 1;
-  for (const frac of [0, 0.5, 1]) {
-    const v = maxY * frac;
-    const y = yAt(v);
+  for (let i = 0; i < list.length; i++) {
+    const dx = (i % cols) * cell;
+    const dy = Math.floor(i / cols) * cell;
+    ctx.drawImage(radar, dx, dy, cell, cell);
+    ctx.save();
     ctx.beginPath();
-    ctx.moveTo(padL, y);
-    ctx.lineTo(width - padR, y);
-    ctx.stroke();
-    ctx.fillText(String(Math.round(v)), 6, y + 3);
-  }
-  for (let s = 0; s < secs; s += 5) {
-    ctx.fillText(`${s}s`, xAt(s) - 6, height - 8);
-  }
-
-  // Kill / death markers under the plot: green their kills, red their deaths.
-  for (let s = 0; s < secs; s++) {
-    const k = spacing.kills?.[s] || 0;
-    const dth = spacing.deaths?.[s] || 0;
-    if (k) {
-      ctx.fillStyle = 'rgba(88, 214, 141, 0.9)';
-      ctx.fillRect(xAt(s) - 1.5, padT + plotH + 3, 3, Math.min(9, 3 + k * 2));
+    ctx.rect(dx, dy, cell, cell);
+    ctx.clip();
+    for (const p of list[i].paths || []) {
+      const color = NADE_COLORS[p.type] || '#cccccc';
+      const to = proj(p.x, p.y, dx, dy);
+      if (!Number.isFinite(to.x) || !Number.isFinite(to.y)) continue;
+      if (p.fx !== null && p.fy !== null) {
+        const from = proj(p.fx, p.fy, dx, dy);
+        if (Number.isFinite(from.x) && Number.isFinite(from.y)) {
+          ctx.strokeStyle = color;
+          ctx.globalAlpha = 0.3;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(from.x, from.y);
+          ctx.lineTo(to.x, to.y);
+          ctx.stroke();
+          ctx.globalAlpha = 0.55;
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(from.x, from.y, 1.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(to.x, to.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
     }
-    if (dth) {
-      ctx.fillStyle = 'rgba(231, 76, 60, 0.9)';
-      ctx.fillRect(xAt(s) + 2, padT + plotH + 3, 3, Math.min(9, 3 + dth * 2));
-    }
-  }
-
-  // The spacing line.
-  ctx.strokeStyle = '#e8b84a';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  let started = false;
-  for (let s = 0; s < secs; s++) {
-    const v = avg[s];
-    if (!Number.isFinite(v)) continue;
-    const x = xAt(s);
-    const y = yAt(v);
-    if (!started) {
-      ctx.moveTo(x, y);
-      started = true;
-    } else {
-      ctx.lineTo(x, y);
-    }
-  }
-  ctx.stroke();
-
-  if (title) {
-    ctx.fillStyle = 'rgba(255,255,255,0.75)';
-    ctx.font = '600 11px system-ui, sans-serif';
-    ctx.fillText(title, padL, 15);
+    ctx.restore();
+    panelLabel(ctx, list[i].label, dx, dy);
   }
   try {
-    return canvas.toDataURL('image/png');
+    return canvas.toDataURL('image/jpeg', 0.72);
   } catch {
     return '';
   }

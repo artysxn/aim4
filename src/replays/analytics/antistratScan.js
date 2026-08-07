@@ -262,7 +262,11 @@ function roundFeatures({ meta, track, row, teamIdx, opponent, network, utilDb, m
       player: g.player,
       x,
       y,
+      fx: Number.isFinite(g.from?.x) ? g.from.x : null,
+      fy: Number.isFinite(g.from?.y) ? g.from.y : null,
       name: db?.name || '',
+      sx: Number.isFinite(db?.detonate?.x) ? db.detonate.x : null,
+      sy: Number.isFinite(db?.detonate?.y) ? db.detonate.y : null,
       zone
     });
   }
@@ -425,37 +429,49 @@ function aggUtility(rounds) {
       for (const r of set) thrown += r.nades.filter((n) => n.type === kind).length;
       avg[kind] = round1(thrown / set.length);
     }
-    const phases = {};
-    for (const phase of ['early', 'mid', 'late']) {
-      const kinds = {};
-      for (const kind of NADE_KINDS) {
-        /** @type {Map<string, { rounds: Set<string>, clocks: number[] }>} */
-        const byName = new Map();
-        for (const r of set) {
-          for (const n of r.nades) {
-            if (n.type !== kind || n.phase !== phase) continue;
-            const label = nadeLabel(n);
-            if (!label) continue;
-            if (!byName.has(label)) byName.set(label, { rounds: new Set(), clocks: [] });
-            const rec = byName.get(label);
-            rec.rounds.add(r.file);
-            rec.clocks.push(n.clock);
-          }
+    // One record per (name, type, phase) with a landing point, for the
+    // hoverable utility map. Database spots keep their stored coordinates;
+    // zone-named landings average out.
+    /** @type {Map<string, { rounds: Set<string>, clocks: number[], xs: number[], ys: number[], name: string, type: string, phase: string, spot: {x:number,y:number}|null }>} */
+    const byKey = new Map();
+    for (const r of set) {
+      for (const n of r.nades) {
+        const label = nadeLabel(n);
+        if (!label) continue;
+        const key = `${label}\0${n.type}\0${n.phase}`;
+        if (!byKey.has(key)) {
+          byKey.set(key, {
+            rounds: new Set(),
+            clocks: [],
+            xs: [],
+            ys: [],
+            name: label,
+            type: n.type,
+            phase: n.phase,
+            spot: n.sx !== null && n.sy !== null ? { x: n.sx, y: n.sy } : null
+          });
         }
-        const top = [...byName.entries()]
-          .map(([name, rec]) => ({
-            name,
-            share: pct(rec.rounds.size, set.length),
-            clock: fmtClock(avgOf(rec.clocks))
-          }))
-          .sort((a, b) => b.share - a.share || a.name.localeCompare(b.name))
-          .filter((t) => t.share >= 10)
-          .slice(0, 8);
-        if (top.length) kinds[kind] = top;
+        const rec = byKey.get(key);
+        rec.rounds.add(r.file);
+        rec.clocks.push(n.clock);
+        rec.xs.push(n.x);
+        rec.ys.push(n.y);
       }
-      phases[phase] = kinds;
     }
-    out.sides[side] = { rounds: set.length, files: filesOf(set), avg, phases };
+    const items = [...byKey.values()]
+      .map((rec) => ({
+        name: rec.name,
+        type: rec.type,
+        phase: rec.phase,
+        share: pct(rec.rounds.size, set.length),
+        clock: fmtClock(avgOf(rec.clocks)),
+        x: Math.round(rec.spot ? rec.spot.x : avgOf(rec.xs)),
+        y: Math.round(rec.spot ? rec.spot.y : avgOf(rec.ys))
+      }))
+      .filter((t) => t.share >= 10)
+      .sort((a, b) => b.share - a.share)
+      .slice(0, 48);
+    out.sides[side] = { rounds: set.length, files: filesOf(set), avg, items };
   }
   return out;
 }
@@ -465,14 +481,15 @@ function spacingSeries(set) {
   const counts = new Array(SPACING_SECONDS + 1).fill(0);
   const killMarks = new Array(SPACING_SECONDS + 1).fill(0);
   const deathMarks = new Array(SPACING_SECONDS + 1).fill(0);
-  let n = 0;
+  const perRound = [];
   for (const r of set) {
     if (!r.firstKill || !r.hasTicks) continue;
-    n++;
     const k0 = r.firstKill.tick;
+    const values = [];
     for (let s = 0; s <= SPACING_SECONDS; s++) {
       const sample = r.sampleAt(k0 + s * r.tickRate);
       const d = sample ? avgPairDistance(sample.pts) : null;
+      values.push(d !== null ? Math.round(d) : null);
       if (d !== null) {
         sums[s] += d;
         counts[s]++;
@@ -485,12 +502,16 @@ function spacingSeries(set) {
       if (k.attackerOurs) killMarks[s]++;
       else deathMarks[s]++;
     }
+    if (perRound.length < 80) {
+      perRound.push({ label: `vs ${r.opponent} R${r.round}`, file: r.file, values });
+    }
   }
   return {
-    avg: sums.map((v, i) => (counts[i] ? v / counts[i] : null)),
+    avg: sums.map((v, i) => (counts[i] ? Math.round(v / counts[i]) : null)),
     kills: killMarks,
     deaths: deathMarks,
-    n
+    rounds: perRound,
+    n: perRound.length
   };
 }
 
@@ -786,12 +807,14 @@ function aggPostplant(rounds, side) {
     if (!set.length) continue;
     const zoneRounds = new Map();
     const distinct = [];
+    const points = [];
     for (const r of set) {
       const s = r.sampleAt(r.plantTick + POSTPLANT_SECONDS * r.tickRate);
       if (!s) continue;
       const seen = new Set();
       for (const p of s.pts) {
         if (p.pos) seen.add(p.pos);
+        points.push({ x: p.x, y: p.y });
       }
       for (const z of seen) bump(zoneRounds, z);
       distinct.push(seen.size);
@@ -800,6 +823,7 @@ function aggPostplant(rounds, side) {
       rounds: set.length,
       files: filesOf(set),
       avgZones: distinct.length ? round1(avgOf(distinct)) : null,
+      points,
       top: topCounts(zoneRounds).map((t) => ({ name: t.name, share: pct(t.count, set.length) }))
     };
   }
@@ -831,8 +855,8 @@ function aggRetakeWinrates(rounds) {
   return out;
 }
 
-function aggPhase(rounds, phase) {
-  const t = rounds.filter((r) => r.side === 'T' && r.hasTicks);
+function aggPhase(rounds, phase, side = 'T') {
+  const t = rounds.filter((r) => r.side === side && r.hasTicks);
   const windowOf = (r) => ({
     from: phase === 'early' ? r.t0 : phase === 'mid' ? r.bounds.midStartTick : r.bounds.lateStartTick,
     to: phase === 'early' ? r.bounds.midStartTick : phase === 'mid' ? r.bounds.lateStartTick : r.endTick
@@ -1070,6 +1094,7 @@ function aggPlayers(rounds, mains, rolesOf) {
         late: { samples: 0, spots: new Map(), points: [] },
         all: { points: [] }
       };
+      const nadePaths = { early: [], mid: [], late: [] };
       let present = 0;
       for (const r of set) {
         let seen = false;
@@ -1081,9 +1106,21 @@ function aggPlayers(rounds, mains, rolesOf) {
           const bag = phases[phase];
           bag.samples++;
           if (p.pos) bump(bag.spots, p.pos);
-          if (bag.points.length < PLAYER_POINT_CAP) bag.points.push({ x: p.x, y: p.y });
-          if (phases.all.points.length < PLAYER_POINT_CAP) {
+          // The heatmap skips spawn noise: nothing from the first 7s of the
+          // early round. Position time-shares keep the full phase.
+          const heatable = phase !== 'early' || s.elapsed >= 7;
+          if (heatable && bag.points.length < PLAYER_POINT_CAP) {
+            bag.points.push({ x: p.x, y: p.y });
+          }
+          if (heatable && phases.all.points.length < PLAYER_POINT_CAP) {
             phases.all.points.push({ x: p.x, y: p.y });
+          }
+        }
+        for (const n of r.nades) {
+          if (n.player !== m.id) continue;
+          const list = nadePaths[n.phase];
+          if (list && list.length < 400) {
+            list.push({ type: n.type, fx: n.fx, fy: n.fy, x: n.x, y: n.y });
           }
         }
         if (seen) present++;
@@ -1110,6 +1147,7 @@ function aggPlayers(rounds, mains, rolesOf) {
           late: phaseSpots(phases.late),
           all: { points: phases.all.points }
         },
+        nadePaths,
         utility: [...util.entries()]
           .map(([name, rec]) => ({
             name,
@@ -1286,9 +1324,9 @@ export async function runAntistratScan({
         zones: aggPostplant(rounds, 'CT'),
         winrates: aggRetakeWinrates(rounds)
       },
-      tEarly: aggPhase(rounds, 'early'),
-      tMid: aggPhase(rounds, 'mid'),
-      tLate: aggPhase(rounds, 'late'),
+      tEarly: { T: aggPhase(rounds, 'early', 'T'), CT: aggPhase(rounds, 'early', 'CT') },
+      tMid: { T: aggPhase(rounds, 'mid', 'T'), CT: aggPhase(rounds, 'mid', 'CT') },
+      tLate: { T: aggPhase(rounds, 'late', 'T'), CT: aggPhase(rounds, 'late', 'CT') },
       players: aggPlayers(rounds, mains, rolesOf)
     }
   };

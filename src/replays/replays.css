@@ -6730,6 +6730,53 @@ table.rp-mine-table tbody tr {
   border-radius: var(--radius-sm);
 }
 
+/* Interactive embeds mounted by docEmbeds.js (utility map, spacing chart). */
+.doc-embed {
+  position: relative;
+  margin: 10px 0;
+}
+
+.doc-embed-canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+}
+
+.doc-embed-chips {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.doc-embed-chips button {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: 600 11px var(--font-body);
+  cursor: pointer;
+}
+
+.doc-embed-chips button.active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.doc-embed-tip {
+  position: absolute;
+  z-index: 5;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(10, 10, 12, 0.92);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.3;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .doc-surface hr {
   height: 1px;
   border: 0;
