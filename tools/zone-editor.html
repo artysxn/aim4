@@ -224,6 +224,7 @@
     color: var(--muted);
   }
   #ze-canvas.ze-brush-cursor { cursor: none; }
+  #ze-canvas.ze-select-cursor { cursor: pointer; }
   .ze-brush-ring {
     position: absolute;
     pointer-events: none;
@@ -463,6 +464,7 @@
           <div class="ze-float-sep"></div>
           <button type="button" class="ze-shape-mode active" id="ze-shape-rect" title="Draw rectangles">Rectangle</button>
           <button type="button" class="ze-shape-mode" id="ze-shape-poly" title="Draw polygons">Polygon</button>
+          <button type="button" class="ze-shape-mode" id="ze-shape-select" title="Click positions to select them for zones / areas">Select</button>
           <div class="ze-float-sep" id="ze-floor-sep" hidden></div>
           <button type="button" class="ze-floor" id="ze-floor-default" title="Upper / default radar" hidden>Upper</button>
           <button type="button" class="ze-floor" id="ze-floor-lower" title="Lower radar" hidden>Lower</button>

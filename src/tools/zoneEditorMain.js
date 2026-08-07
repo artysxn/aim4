@@ -5,7 +5,7 @@
 
 import { MAPS, MAP_CODES, mapHasLowerRadar } from '../replays/shared/roundId.js';
 import { RADAR_SIZE, radarToWorld, worldToRadar } from '../replays/viewer/mapCalibration.js';
-import { pieceBounds } from '../replays/zones/zoneGeom.js';
+import { pieceBounds, pointInPiece } from '../replays/zones/zoneGeom.js';
 import { loadRadar } from '../replays/viewer/radarRenderer.js';
 import { emptyNetwork, worldPolyFromRadarVerts, worldRectFromRadarDrag } from '../replays/zones/zoneModel.js';
 import { fetchZones, saveZones } from '../replays/zones/zoneApi.js';
@@ -130,6 +130,7 @@ const el = {
   toolErase: document.querySelector('#ze-tool-erase'),
   shapeRect: document.querySelector('#ze-shape-rect'),
   shapePoly: document.querySelector('#ze-shape-poly'),
+  shapeSelect: document.querySelector('#ze-shape-select'),
   floorSep: document.querySelector('#ze-floor-sep'),
   floorDefault: document.querySelector('#ze-floor-default'),
   floorLower: document.querySelector('#ze-floor-lower'),
@@ -250,12 +251,77 @@ function isShapeTool(tool = paintTool) {
   return isBombTool(tool) || isKeyTool(tool) || tool === 'position';
 }
 
+function isSelectMode() {
+  return shapeMode === 'select';
+}
+
 function isRectTool(tool = paintTool) {
   return isShapeTool(tool) && shapeMode === 'rect';
 }
 
 function isPolyTool(tool = paintTool) {
   return isShapeTool(tool) && shapeMode === 'poly';
+}
+
+/** Topmost position on the active floor under a world point, or null. */
+function positionAtWorld(wx, wy) {
+  ensureRegionHierarchy(network);
+  const list = network.positions || [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const pos = list[i];
+    if ((pos.level || 'default') !== radarLevel) continue;
+    for (const piece of pos.pieces || []) {
+      if (pointInPiece(wx, wy, piece)) return pos;
+    }
+  }
+  return null;
+}
+
+/**
+ * Click-to-select positions (and zones that own them) for + Zone / + Area.
+ * Plain click replaces the selection; Shift/Ctrl toggles.
+ */
+function selectAtRadar(rx, ry, { additive = false } = {}) {
+  const w = radarToWorld(mapCode, rx, ry, {});
+  const pos = positionAtWorld(w.x, w.y);
+  if (!pos) {
+    if (!additive) {
+      selectedPositionIds.clear();
+      selectedZoneIds.clear();
+      highlightPositionId = '';
+      syncUi();
+      draw();
+      setStatus('Selection cleared');
+    }
+    return;
+  }
+  if (!additive) {
+    selectedPositionIds.clear();
+    selectedZoneIds.clear();
+    selectedPositionIds.add(pos.id);
+  } else if (selectedPositionIds.has(pos.id)) {
+    selectedPositionIds.delete(pos.id);
+  } else {
+    selectedPositionIds.add(pos.id);
+  }
+  highlightPositionId = selectedPositionIds.has(pos.id) ? pos.id : '';
+  // Keep zone checkboxes in sync when every member of a zone is selected.
+  for (const z of network.zones || []) {
+    const ids = z.positionIds || [];
+    if (ids.length && ids.every((id) => selectedPositionIds.has(id))) {
+      selectedZoneIds.add(z.id);
+    } else {
+      selectedZoneIds.delete(z.id);
+    }
+  }
+  syncUi();
+  draw();
+  const n = selectedPositionIds.size;
+  setStatus(
+    n
+      ? `Selected ${n} position${n === 1 ? '' : 's'} · use + Zone / + Area`
+      : 'Selection cleared'
+  );
 }
 
 function bombSiteForTool(tool = paintTool) {
@@ -400,6 +466,8 @@ function syncUi() {
   el.toolErase?.classList.toggle('active', paintTool === 'erase');
   el.shapeRect?.classList.toggle('active', shapeMode === 'rect');
   el.shapePoly?.classList.toggle('active', shapeMode === 'poly');
+  el.shapeSelect?.classList.toggle('active', shapeMode === 'select');
+  el.canvas?.classList.toggle('ze-select-cursor', isSelectMode());
   el.floorSep && (el.floorSep.hidden = !hasLower);
   if (el.floorDefault) {
     el.floorDefault.hidden = !hasLower;
@@ -456,6 +524,8 @@ function setEditorMode(mode) {
   polyVerts = [];
   brushing = null;
   ledgeStroke = null;
+  // Select is for positions / zones; leave it when going back to map paint.
+  if (editorMode === 'map' && shapeMode === 'select') shapeMode = 'rect';
   setPaintTool(editorMode === 'regions' ? 'position' : lastMapTool);
   setStatus(
     editorMode === 'regions'
@@ -465,15 +535,20 @@ function setEditorMode(mode) {
 }
 
 function setShapeMode(mode) {
-  shapeMode = mode === 'poly' ? 'poly' : 'rect';
+  shapeMode = mode === 'poly' ? 'poly' : mode === 'select' ? 'select' : 'rect';
   drawing = null;
   polyVerts = [];
+  if (shapeMode === 'select' && editorMode !== 'regions') {
+    setEditorMode('regions');
+  }
   syncUi();
   draw();
   setStatus(
     shapeMode === 'poly'
       ? 'Polygon: click vertices · double-click or Enter to finish'
-      : 'Rectangle: drag to draw'
+      : shapeMode === 'select'
+        ? 'Select: click a position · Shift-click to add or remove'
+        : 'Rectangle: drag to draw'
   );
 }
 
@@ -1421,6 +1496,10 @@ el.canvas.addEventListener('pointerdown', (e) => {
   }
   if (e.button !== 0) return;
   const r = radarFromClient(e.clientX, e.clientY);
+  if (isSelectMode()) {
+    selectAtRadar(r.x, r.y, { additive: e.shiftKey || e.ctrlKey || e.metaKey });
+    return;
+  }
   if (paintTool === 'ledge') {
     ledgeStroke = [[r.x, r.y]];
     el.canvas.setPointerCapture(e.pointerId);
@@ -1549,6 +1628,7 @@ el.toolLedge?.addEventListener('click', () => setPaintTool('ledge'));
 el.toolErase?.addEventListener('click', () => setPaintTool('erase'));
 el.shapeRect?.addEventListener('click', () => setShapeMode('rect'));
 el.shapePoly?.addEventListener('click', () => setShapeMode('poly'));
+el.shapeSelect?.addEventListener('click', () => setShapeMode('select'));
 el.floorDefault?.addEventListener('click', () => setRadarLevel('default'));
 el.floorLower?.addEventListener('click', () => setRadarLevel('lower'));
 el.btnMakeZone?.addEventListener('click', () => makeZoneFromSelection());
