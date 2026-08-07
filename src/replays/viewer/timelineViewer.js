@@ -127,7 +127,8 @@ export function createTimelineViewer({
       <div class="rv-map">
         <div class="rv-clock-row" id="rv-clock-row">
           <span class="rv-match-score" id="rv-score-left" data-side="T">0</span>
-          <div class="rv-clock" id="rv-clock">00:00</div>
+          <div class="rv-clock" id="rv-clock" role="button" tabindex="0"
+            title="Copy link to this moment">00:00</div>
           <span class="rv-match-score" id="rv-score-right" data-side="CT">0</span>
         </div>
         <div class="rv-feed-stack" id="rv-feed-stack">
@@ -233,10 +234,6 @@ export function createTimelineViewer({
           <div class="rv-scrub-handle" id="rv-scrub-handle"></div>
         </div>
         <span class="rv-time" id="rv-time">00:00</span>
-        <button type="button" class="rv-share" id="rv-share"
-          title="Copy a link to this moment" aria-label="Copy a link to this moment">
-          <svg viewBox="0 -960 960 960" width="16" height="16"><path d="M440-280H280q-83 0-141.5-58.5T80-480q0-83 58.5-141.5T280-680h160v80H280q-50 0-85 35t-35 85q0 50 35 85t85 35h160v80ZM320-440v-80h320v80H320Zm200 160v-80h160q50 0 85-35t35-85q0-50-35-85t-85-35H520v-80h160q83 0 141.5 58.5T880-480q0 83-58.5 141.5T680-280H520Z"/></svg>
-        </button>
       </div>
       <div class="rv-tools-anchor">
         <div class="rv-tools rv-tools-draw" id="rv-draw-tools" hidden>
@@ -301,7 +298,6 @@ export function createTimelineViewer({
   const marksEl = el.querySelector('#rv-scrub-marks');
   const handleEl = el.querySelector('#rv-scrub-handle');
   const timeEl = el.querySelector('#rv-time');
-  const shareBtn = el.querySelector('#rv-share');
   const playBtn = el.querySelector('#rv-play');
   const speedBtn = el.querySelector('#rv-speed');
   const team1El = el.querySelector('.rv-team-1');
@@ -1813,6 +1809,7 @@ export function createTimelineViewer({
     }
     syncPanCursor();
     draw();
+    syncMomentUrl({ immediate: true });
   }
 
   function syncPanCursor() {
@@ -2102,21 +2099,21 @@ export function createTimelineViewer({
     return Math.round(at.tick);
   }
 
-  // ---- moment links -------------------------------------------------------
+  // ---- moment URL ---------------------------------------------------------
   //
-  // A round already has a URL. A moment needs the tick as well, and the camera
-  // with it: "watch this" and "watch this, zoomed on B site" are different
-  // things to send someone, and the second one is most of why anyone shares a
-  // position at all.
+  // Round + tick (+ camera when zoomed) live in the address bar. Click the
+  // top clock to copy that link. Throttled while playing so replaceState is
+  // not on every frame.
 
-  /** `/demos?round=<file>&tick=<n>` plus the camera when it has been moved. */
-  function momentLink() {
+  let momentSyncTimer = 0;
+  let clockCopyTimer = 0;
+
+  function momentHref() {
     const file = files[activeIndex];
     if (!file) return '';
     const url = new URL('/demos', window.location.origin);
     url.searchParams.set('round', file);
     url.searchParams.set('tick', String(playheadTick()));
-    // A default camera is not worth putting in the link.
     if (renderer.zoom > 1.001) {
       url.searchParams.set('zoom', renderer.zoom.toFixed(2));
       url.searchParams.set('px', String(Math.round(renderer.panX)));
@@ -2125,9 +2122,55 @@ export function createTimelineViewer({
     return url.toString();
   }
 
+  function syncMomentUrl({ immediate = false } = {}) {
+    const file = files[activeIndex];
+    if (!file || destroyed) return;
+    const run = () => {
+      if (destroyed) return;
+      try {
+        const url = new URL(window.location.href);
+        // Stay on /demos (or whatever opened the viewer); only rewrite query.
+        if (!url.searchParams.has('round') && url.pathname.replace(/\/+$/, '') !== '/demos') {
+          url.pathname = '/demos';
+        }
+        url.searchParams.set('round', file);
+        url.searchParams.set('tick', String(playheadTick()));
+        if (renderer.zoom > 1.001) {
+          url.searchParams.set('zoom', renderer.zoom.toFixed(2));
+          url.searchParams.set('px', String(Math.round(renderer.panX)));
+          url.searchParams.set('py', String(Math.round(renderer.panY)));
+        } else {
+          url.searchParams.delete('zoom');
+          url.searchParams.delete('px');
+          url.searchParams.delete('py');
+        }
+        const want = url.pathname + url.search;
+        const cur = window.location.pathname + window.location.search;
+        if (cur === want) return;
+        window.history.replaceState(window.history.state, '', want);
+      } catch {
+        /* sandboxed frame */
+      }
+    };
+    if (immediate) {
+      if (momentSyncTimer) {
+        clearTimeout(momentSyncTimer);
+        momentSyncTimer = 0;
+      }
+      run();
+      return;
+    }
+    if (momentSyncTimer) clearTimeout(momentSyncTimer);
+    momentSyncTimer = window.setTimeout(() => {
+      momentSyncTimer = 0;
+      run();
+    }, 450);
+  }
+
   async function copyMomentLink() {
-    const link = momentLink();
-    if (!link) return;
+    syncMomentUrl({ immediate: true });
+    const link = momentHref();
+    if (!link || !clockEl) return;
     let ok = false;
     try {
       await navigator.clipboard.writeText(link);
@@ -2135,17 +2178,28 @@ export function createTimelineViewer({
     } catch {
       ok = false;
     }
-    if (!shareBtn) return;
-    shareBtn.classList.toggle('copied', ok);
-    shareBtn.title = ok ? 'Link copied' : 'Could not copy. Check clipboard permissions.';
-    window.setTimeout(() => {
-      if (destroyed || !shareBtn) return;
-      shareBtn.classList.remove('copied');
-      shareBtn.title = 'Copy a link to this moment';
+    clockEl.classList.toggle('copied', ok);
+    clockEl.title = ok ? 'Link copied' : 'Could not copy. Check clipboard permissions.';
+    if (clockCopyTimer) clearTimeout(clockCopyTimer);
+    clockCopyTimer = window.setTimeout(() => {
+      clockCopyTimer = 0;
+      if (destroyed || !clockEl) return;
+      clockEl.classList.remove('copied');
+      clockEl.title = 'Copy link to this moment';
     }, 1600);
   }
 
-  shareBtn?.addEventListener('click', () => void copyMomentLink());
+  clockEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    void copyMomentLink();
+  });
+  clockEl?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    e.stopPropagation();
+    void copyMomentLink();
+  });
 
   /**
    * Land on a shared moment, once the round it belongs to is loaded.
@@ -2176,6 +2230,7 @@ export function createTimelineViewer({
     }
     startAt = null;
     draw();
+    syncMomentUrl({ immediate: true });
   }
 
   function flushNoteText() {
@@ -4259,6 +4314,7 @@ export function createTimelineViewer({
     syncDuelFeed(duelOverlayFrame);
     if (chartOn) syncWinChart(tick);
     syncLoading();
+    syncMomentUrl({ immediate: !playback.playing });
   }
 
   function syncLoading() {
@@ -4492,6 +4548,14 @@ export function createTimelineViewer({
     el,
     destroy() {
       destroyed = true;
+      if (momentSyncTimer) {
+        clearTimeout(momentSyncTimer);
+        momentSyncTimer = 0;
+      }
+      if (clockCopyTimer) {
+        clearTimeout(clockCopyTimer);
+        clockCopyTimer = 0;
+      }
       if (noteSaveTimer) {
         clearTimeout(noteSaveTimer);
         noteSaveTimer = 0;

@@ -2183,6 +2183,23 @@ body.rv-open {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+}
+
+.rv-clock:hover {
+  background: rgba(20, 20, 24, 0.96);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.rv-clock.copied {
+  border-color: rgba(111, 207, 151, 0.55);
+  color: #6fcf97;
+}
+
+.rv-clock:focus-visible {
+  outline: 2px solid rgba(111, 207, 151, 0.7);
+  outline-offset: 2px;
 }
 
 .rv-match-score {
@@ -2718,34 +2735,7 @@ body.rv-open {
   text-align: right;
 }
 
-/* Copy a link to the exact tick (and camera) on screen. */
-.rv-share {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.rv-share svg {
-  fill: currentColor;
-}
-
-.rv-share:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
-}
-
-.rv-share.copied {
-  color: #6fcf97;
-}
-
+/* ---- transport ------------------------------------------------------------ */
 /* ---- Analyzer mode ------------------------------------------------------ */
 
 .rv-analyzer {
@@ -8777,8 +8767,8 @@ table.rp-mine-table tbody tr {
 }
 
 /* ---- Saved views strip --------------------------------------------------- */
-/* Shared by Charts, Pattern Finder and the Database, so it looks the same on
-   all three and nobody has to relearn it per page. */
+/* Optional named-view picker on Charts / Pattern Finder / Database. The live
+   filter state itself lives in the address bar — no Copy / Share chrome. */
 
 .sv-row {
   display: flex;
@@ -8787,17 +8777,13 @@ table.rp-mine-table tbody tr {
   gap: 6px;
 }
 
-.sv-url {
-  flex: 1 1 14em;
-  min-width: 0;
-  font: 500 11px var(--font-mono, ui-monospace, monospace);
-  color: var(--muted);
-  cursor: text;
+.sv-bar[hidden] {
+  display: none;
 }
 
 .sv-pick {
   min-width: 0;
-  flex: 0 1 8em;
+  flex: 0 1 12em;
   font-size: 12px;
   padding: 4px 8px;
 }
@@ -8806,10 +8792,6 @@ table.rp-mine-table tbody tr {
   flex-wrap: nowrap;
 }
 
-.st-saved .sv-url {
-  flex: 1 1 10em;
-}
-
 .st-saved .sv-pick {
-  max-width: 10em;
+  max-width: 14em;
 }

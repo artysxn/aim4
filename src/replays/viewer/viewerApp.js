@@ -15,16 +15,25 @@ import backIcon from '../../icons/icon_back.svg?raw';
  * Point the address bar at the round on screen so it can be copied and sent.
  * replaceState, not pushState: scrubbing through twenty rounds must not bury
  * the page the viewer was opened from under twenty history entries.
+ * Tick / camera are owned by the timeline and merged into the same query.
  */
 function syncUrl(round) {
-  const target = round?.file
-    ? `/demos?round=${encodeURIComponent(round.file)}`
-    : '/demos';
-  if (window.location.pathname + window.location.search === target) return;
   try {
+    const url = new URL(window.location.href);
+    url.pathname = '/demos';
+    if (round?.file) url.searchParams.set('round', round.file);
+    else {
+      url.searchParams.delete('round');
+      url.searchParams.delete('tick');
+      url.searchParams.delete('zoom');
+      url.searchParams.delete('px');
+      url.searchParams.delete('py');
+    }
+    const target = url.pathname + url.search;
+    if (window.location.pathname + window.location.search === target) return;
     window.history.replaceState(window.history.state, '', target);
   } catch {
-    /* a sandboxed frame; the viewer still works, the link just is not shareable */
+    /* a sandboxed frame; the viewer still works */
   }
 }
 

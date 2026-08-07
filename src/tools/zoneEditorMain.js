@@ -377,6 +377,9 @@ function positionAtWorld(wx, wy) {
 /**
  * Click-to-select positions (and zones that own them) for + Zone / + Area.
  * Plain click replaces the selection; Shift/Ctrl toggles.
+ *
+ * In zone / area color view, a click grabs every position in that group so you
+ * can reshape or regroup a whole painted region without clicking each piece.
  */
 function selectAtRadar(rx, ry, { additive = false } = {}) {
   const w = radarToWorld(mapCode, rx, ry, {});
@@ -392,14 +395,19 @@ function selectAtRadar(rx, ry, { additive = false } = {}) {
     }
     return;
   }
+
+  const idsToToggle = positionIdsForClick(pos.id);
   if (!additive) {
     selectedPositionIds.clear();
     selectedZoneIds.clear();
-    selectedPositionIds.add(pos.id);
-  } else if (selectedPositionIds.has(pos.id)) {
-    selectedPositionIds.delete(pos.id);
+    for (const id of idsToToggle) selectedPositionIds.add(id);
   } else {
-    selectedPositionIds.add(pos.id);
+    const allSelected = idsToToggle.every((id) => selectedPositionIds.has(id));
+    if (allSelected) {
+      for (const id of idsToToggle) selectedPositionIds.delete(id);
+    } else {
+      for (const id of idsToToggle) selectedPositionIds.add(id);
+    }
   }
   highlightPositionId = selectedPositionIds.has(pos.id) ? pos.id : '';
   // Keep zone checkboxes in sync when every member of a zone is selected.
@@ -414,11 +422,43 @@ function selectAtRadar(rx, ry, { additive = false } = {}) {
   syncUi();
   draw();
   const n = selectedPositionIds.size;
+  const group =
+    colorView === 'zone'
+      ? zoneOwningPosition(pos.id)
+      : colorView === 'area'
+        ? areaOwningPosition(pos.id)
+        : null;
   setStatus(
     n
-      ? `Selected ${n} position${n === 1 ? '' : 's'} · use + Zone / + Area`
+      ? group
+        ? `Selected ${group.name || 'group'} · ${n} position${n === 1 ? '' : 's'}`
+        : `Selected ${n} position${n === 1 ? '' : 's'} · use + Zone / + Area`
       : 'Selection cleared'
   );
+}
+
+/** Positions selected by a map click under the active color view. */
+function positionIdsForClick(posId) {
+  if (colorView === 'zone') {
+    const zone = zoneOwningPosition(posId);
+    if (zone?.positionIds?.length) return [...zone.positionIds];
+  } else if (colorView === 'area') {
+    const area = areaOwningPosition(posId);
+    if (area?.zoneIds?.length) {
+      const ids = [];
+      const seen = new Set();
+      for (const zid of area.zoneIds) {
+        const zone = (network.zones || []).find((z) => z.id === zid);
+        for (const pid of zone?.positionIds || []) {
+          if (seen.has(pid)) continue;
+          seen.add(pid);
+          ids.push(pid);
+        }
+      }
+      if (ids.length) return ids;
+    }
+  }
+  return [posId];
 }
 
 function bombSiteForTool(tool = paintTool) {
@@ -594,9 +634,9 @@ function setColorView(mode) {
   draw();
   setStatus(
     colorView === 'zone'
-      ? 'Coloring by zone · gray = not in a zone'
+      ? 'Coloring by zone · click selects the whole zone'
       : colorView === 'area'
-        ? 'Coloring by area · gray = not in an area'
+        ? 'Coloring by area · click selects every position in the area'
         : 'Coloring by position'
   );
 }
@@ -660,7 +700,7 @@ function setShapeMode(mode) {
     shapeMode === 'poly'
       ? 'Polygon: click vertices · double-click or Enter to finish'
       : shapeMode === 'select'
-        ? 'Select: click a position · Shift-click to add or remove'
+        ? 'Select: click a position · zone/area view grabs the whole group · Shift adds or removes'
         : 'Rectangle: drag to draw'
   );
 }

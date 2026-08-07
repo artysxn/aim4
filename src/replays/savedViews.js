@@ -1,20 +1,16 @@
 // ---------------------------------------------------------------------------
 // replays/savedViews.js
-// The save / load / share strip that sits above Charts, Pattern Finder and the
+// URL sync + optional named saved views for Charts, Pattern Finder and the
 // Database.
 //
-// All three pages are a small spec object over one cached payload: a chart is
-// its axes and filters, a pattern query is its shapes and subjects, a database
-// view is its filters and sort. So all three want the same things, and they
-// want them to look and behave identically:
+// Filter state lives in the address bar the same way Database already did:
+// change a filter (or draw a pattern rectangle) and `touch()` rewrites the
+// query string. There is no Copy / Share button — the browser URL is the link.
 //
-//   url     the current view encoded into a shareable link (always visible)
-//   load    put a named saved one back on screen
-//   share   hand someone a link to a named saved view
+// Charts and Pattern Finder pack the whole spec into `?v=…`. Database keeps
+// its own flat query params and only uses this module for named saved views.
 //
-// The host page supplies two functions and knows nothing else: `read()` returns
-// its current spec, `apply(spec)` puts one back. Everything between those two
-// lives here.
+// The host page supplies `read()` / `apply(spec)`. Everything else lives here.
 // ---------------------------------------------------------------------------
 
 import {
@@ -71,7 +67,7 @@ export function createSavedViews({ page, read, apply, escapeHtml, onStatus }) {
   function liveUrl() {
     const url = new URL(window.location.href);
     // Database already mirrors filters into the address bar; charts / patterns
-    // pack the whole spec into `v` so a pasted link restores them.
+    // pack the whole spec (axes, filters, drawn shapes) into `v`.
     if (page === 'database') {
       url.searchParams.delete('v');
       return url.toString();
@@ -99,16 +95,17 @@ export function createSavedViews({ page, read, apply, escapeHtml, onStatus }) {
 
   function render() {
     const list = mine();
-    const href = liveUrl();
+    // Named views are optional; the URL sync does not need chrome.
+    if (!list.length) {
+      el.innerHTML = '';
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
     el.innerHTML = `
       <div class="sv-row">
-        <input class="site-input sv-url" type="text" readonly data-sv-url
-          value="${escapeHtml(href)}" aria-label="View URL" title="Link with the current filters" />
-        <button type="button" class="btn btn-sm" data-sv-copy title="Copy view URL">Copy</button>
-        <select class="site-select sv-pick" data-sv-pick ${
-          list.length ? '' : 'disabled'
-        } title="Saved views">
-          <option value="">${list.length ? 'Saved views' : 'No saved views'}</option>
+        <select class="site-select sv-pick" data-sv-pick title="Saved views">
+          <option value="">Saved views</option>
           ${list
             .map(
               (v) =>
@@ -118,12 +115,8 @@ export function createSavedViews({ page, read, apply, escapeHtml, onStatus }) {
             )
             .join('')}
         </select>
-        <button type="button" class="btn btn-sm" data-sv-share ${
-          list.length ? '' : 'disabled'
-        } title="Copy a link to the selected saved view">Share</button>
-        <button type="button" class="btn btn-sm danger" data-sv-delete ${
-          list.length ? '' : 'disabled'
-        } title="Delete the selected view">Delete</button>
+        <button type="button" class="btn btn-sm danger" data-sv-delete
+          title="Delete the selected view">Delete</button>
       </div>`;
   }
 
@@ -141,17 +134,12 @@ export function createSavedViews({ page, read, apply, escapeHtml, onStatus }) {
     render();
   }
 
-  /** Refresh the URL field (and address bar) from the host's current spec. */
+  /** Refresh the address bar from the host's current spec. */
   function touch() {
-    const href = liveUrl();
-    syncAddressBar(href);
-    if (!loaded && !el.querySelector('[data-sv-url]')) {
-      render();
-      return;
-    }
-    const input = el.querySelector('[data-sv-url]');
-    if (input) input.value = href;
-    else render();
+    syncAddressBar(liveUrl());
+    if (!loaded) return;
+    // Keep the pick list mounted if it was already showing.
+    if (!el.hidden && !el.querySelector('[data-sv-pick]')) render();
   }
 
   async function doDelete() {
@@ -167,36 +155,8 @@ export function createSavedViews({ page, read, apply, escapeHtml, onStatus }) {
     render();
   }
 
-  async function doShare() {
-    const view = selected();
-    if (!view?.shareId) return;
-    const url = new URL(window.location.pathname, window.location.origin);
-    url.searchParams.set('view', view.shareId);
-    try {
-      await navigator.clipboard.writeText(url.toString());
-      say('Link copied.');
-    } catch {
-      say(url.toString());
-    }
-  }
-
-  async function doCopy() {
-    const href = el.querySelector('[data-sv-url]')?.value || liveUrl();
-    try {
-      await navigator.clipboard.writeText(href);
-      say('View link copied.');
-    } catch {
-      say(href);
-    }
-  }
-
   el.addEventListener('click', (e) => {
-    if (e.target.closest('[data-sv-copy]')) return void doCopy();
     if (e.target.closest('[data-sv-delete]')) return void doDelete();
-    if (e.target.closest('[data-sv-share]')) return void doShare();
-    if (e.target.closest('[data-sv-url]')) {
-      e.target.select?.();
-    }
   });
 
   el.addEventListener('change', (e) => {
@@ -214,7 +174,7 @@ export function createSavedViews({ page, read, apply, escapeHtml, onStatus }) {
     el,
     /** Load the list. Safe to call on every page entry. */
     refresh,
-    /** Recompute the live URL from `read()`. */
+    /** Recompute the live URL from `read()` and write it to the address bar. */
     touch,
     /**
      * Apply `?view=<shareId>` or `?v=<encoded spec>` if present.
@@ -226,7 +186,6 @@ export function createSavedViews({ page, read, apply, escapeHtml, onStatus }) {
         const spec = decodeViewSpec(packed);
         if (spec && typeof spec === 'object') {
           apply(spec);
-          say('Opened shared view.');
           touch();
           return true;
         }
