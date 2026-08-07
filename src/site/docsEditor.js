@@ -31,7 +31,7 @@ const INDENT_MAX_LEVEL = 12;
 /** Tags a stored document may contain. Anything else is unwrapped. */
 const ALLOWED = new Set([
   'B', 'STRONG', 'I', 'EM', 'U', 'A', 'P', 'DIV', 'BR', 'HR', 'UL', 'OL', 'LI',
-  'SPAN', 'H1', 'H2', 'H3', 'BLOCKQUOTE', 'CODE', 'PRE'
+  'SPAN', 'H1', 'H2', 'H3', 'BLOCKQUOTE', 'CODE', 'PRE', 'IMG'
 ]);
 
 /** Inline styles worth keeping. Everything else is dropped on save. */
@@ -58,6 +58,21 @@ export function sanitizeHtml(html) {
         const parent = el.parentNode;
         while (el.firstChild) parent.insertBefore(el.firstChild, el);
         el.remove();
+        continue;
+      }
+      // Images carry only an embedded data URI (antistrat heatmaps). A remote
+      // src would leak reader IPs to whoever controls the host, so it is not
+      // an allowed shape at all.
+      if (el.tagName === 'IMG') {
+        const src = String(el.getAttribute('src') || '');
+        if (!/^data:image\/(png|jpeg|webp);base64,/i.test(src)) {
+          el.remove();
+          continue;
+        }
+        const alt = el.getAttribute('alt') || '';
+        for (const attr of [...el.attributes]) el.removeAttribute(attr.name);
+        el.setAttribute('src', src);
+        if (alt) el.setAttribute('alt', alt);
         continue;
       }
       for (const attr of [...el.attributes]) {

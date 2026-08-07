@@ -2,10 +2,10 @@
 // Teams antistrat: scout a library team on one map and write the findings
 // into a team document.
 //
-// Flow: team → map (with a reliability warning under ANTISTRAT_MIN_MATCHES)
-// → included matches → categories with a detail level each → generate. The
-// generated document lands in the destination team's Documents tab; analysis
-// content is skeleton-only until the analyzers land (see antistratConfig.js).
+// Flow: team (typeahead search) → map (warns under ANTISTRAT_MIN_MATCHES) →
+// included matches → categories → generate. Generate runs the scan engine
+// over the selected demos (antistratScan.js) and saves the rendered report
+// into the destination team's Documents tab.
 // ---------------------------------------------------------------------------
 
 import { fetchTeams, saveTeamDocument, formatApiError } from '../api.js';
@@ -17,25 +17,13 @@ import { teamNameKey } from '../shared/statsMath.js';
 import { listTeams } from './analyticsMath.js';
 import {
   ANTISTRAT_CATEGORIES,
-  ANTISTRAT_DETAIL,
   ANTISTRAT_GROUPS,
   ANTISTRAT_MIN_MATCHES,
-  buildAntistratDocHtml
+  buildAntistratDocHtml,
+  shortDate
 } from './antistratConfig.js';
+import { renderHeatmapDataUri, runAntistratScan } from './antistratScan.js';
 import { spinnerHtml } from '../../lib/spinner.js';
-
-function matchDate(ts) {
-  if (!ts) return '';
-  try {
-    return new Date(ts).toLocaleDateString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-  } catch {
-    return '';
-  }
-}
 
 /**
  * @param {{ escapeHtml: (s: string) => string }} deps
@@ -51,6 +39,8 @@ export function createAntistratPanel({ escapeHtml }) {
   /** @type {Array<{id: string, name: string}>|null} own teams; null until fetched */
   let myTeams = null;
   let myTeamsError = '';
+  let teamSearch = '';
+  let teamMenuOpen = false;
 
   const state = {
     teamKey: '',
@@ -59,10 +49,9 @@ export function createAntistratPanel({ escapeHtml }) {
     excluded: new Set(),
     /** @type {Set<string>} selected category keys */
     cats: new Set(ANTISTRAT_CATEGORIES.filter((c) => !c.wip).map((c) => c.key)),
-    /** @type {Record<string, 'compact'|'detailed'>} */
-    detail: {},
     destTeamId: '',
     busy: false,
+    progress: '',
     /** '' | 'ok' | 'error' */
     outcome: '',
     outcomeMsg: ''
@@ -125,8 +114,8 @@ export function createAntistratPanel({ escapeHtml }) {
   }
 
   function matchLabel(d) {
-    const when = matchDate(d.uploadedAt);
-    return `vs ${d.opponent}${when ? `, ${when}` : ''}`;
+    const when = shortDate(d.uploadedAt);
+    return `vs ${d.opponent}${when ? ` (${when})` : ''}`;
   }
 
   function canGenerate() {
@@ -151,8 +140,36 @@ export function createAntistratPanel({ escapeHtml }) {
     )}.</div>`;
   }
 
+  function teamSuggestions() {
+    const q = teamSearch.trim().toLowerCase();
+    if (!q) return [];
+    return teams
+      .filter((t) => t.name.toLowerCase().includes(q) || t.key.includes(q))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, 12);
+  }
+
+  function refreshTeamMenu() {
+    const menu = el.querySelector('#as-team-menu');
+    if (!menu) return;
+    const opts = teamSuggestions();
+    const q = teamSearch.trim();
+    menu.hidden = !teamMenuOpen || (!opts.length && !q);
+    if (menu.hidden) return;
+    menu.innerHTML = opts.length
+      ? opts
+          .map(
+            (t) => `<button type="button" class="an-suggest" data-as-pick-team="${escapeHtml(t.key)}">
+              <span class="an-suggest-main"><strong>${escapeHtml(t.name)}</strong>
+              <span class="an-muted">${t.maps.length} ${t.maps.length === 1 ? 'map' : 'maps'}</span></span>
+            </button>`
+          )
+          .join('')
+      : `<p class="rp-typeahead-empty">No matches</p>`;
+  }
+
   function teamStepHtml() {
-    const sorted = [...teams].sort((a, b) => a.name.localeCompare(b.name));
+    const picked = selectedTeam();
     const counts = state.teamKey ? mapCounts(state.teamKey) : new Map();
     const mapOpts = [...counts.entries()]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
@@ -160,31 +177,30 @@ export function createAntistratPanel({ escapeHtml }) {
         ([code, n]) =>
           `<option value="${escapeHtml(code)}"${code === state.mapCode ? ' selected' : ''}>${escapeHtml(
             MAPS[code]?.name || code
-          )} (${n} ${n === 1 ? 'match' : 'matches'})</option>`
+          )} (${n})</option>`
       )
       .join('');
     const n = state.mapCode ? matches().length : 0;
     const warn =
       state.mapCode && n < ANTISTRAT_MIN_MATCHES
-        ? `<p class="an-warn">Only ${n} ${n === 1 ? 'match' : 'matches'} of ${escapeHtml(
-            MAPS[state.mapCode]?.name || state.mapCode
-          )} in the library. At least ${ANTISTRAT_MIN_MATCHES} are recommended for a reliable read.</p>`
+        ? `<p class="an-warn">Only ${n} ${n === 1 ? 'match' : 'matches'} on this map. At least ${ANTISTRAT_MIN_MATCHES} are recommended.</p>`
         : '';
     return `<section class="an-card as-step">
       <header class="an-card-head"><h3 class="an-section-title">Team and map</h3></header>
       <div class="as-step-body">
         <div class="as-controls">
-          <select class="site-select an-select" data-as-team aria-label="Team">
-            <option value="">Team</option>
-            ${sorted
-              .map(
-                (t) =>
-                  `<option value="${escapeHtml(t.key)}"${t.key === state.teamKey ? ' selected' : ''}>${escapeHtml(
-                    t.name
-                  )}</option>`
-              )
-              .join('')}
-          </select>
+          <div class="as-team-box" id="as-team-box">
+            ${
+              picked
+                ? `<button type="button" class="an-sel-chip" data-as-clear-team title="Change team">${escapeHtml(
+                    picked.name
+                  )} <span aria-hidden="true">×</span></button>`
+                : `<input type="search" class="site-input" id="as-team-search"
+                    placeholder="Search teams…" spellcheck="false" autocomplete="off"
+                    value="${escapeHtml(teamSearch)}" aria-label="Search teams" />
+                  <div class="rp-typeahead-menu as-team-menu" id="as-team-menu" hidden></div>`
+            }
+          </div>
           <select class="site-select an-select" data-as-map aria-label="Map" ${state.teamKey ? '' : 'disabled'}>
             <option value="">Map</option>
             ${mapOpts}
@@ -208,7 +224,7 @@ export function createAntistratPanel({ escapeHtml }) {
       .join('');
     return `<section class="an-card as-step">
       <header class="an-card-head">
-        <h3 class="an-section-title">Matches <small>${includedMatches().length} of ${matches().length} included</small></h3>
+        <h3 class="an-section-title">Matches <small>${includedMatches().length} of ${matches().length}</small></h3>
       </header>
       <div class="as-step-body as-match-list">${rows}</div>
     </section>`;
@@ -220,32 +236,12 @@ export function createAntistratPanel({ escapeHtml }) {
       const rows = ANTISTRAT_CATEGORIES.filter((c) => c.group === group)
         .map((c) => {
           const on = state.cats.has(c.key) && !c.wip;
-          const level = state.detail[c.key] === 'detailed' ? 'detailed' : 'compact';
-          return `<div class="as-cat${c.wip ? ' wip' : ''}">
-            <label class="as-cat-main">
-              <input type="checkbox" data-as-cat="${escapeHtml(c.key)}" ${on ? 'checked' : ''} ${
-                c.wip ? 'disabled' : ''
-              } />
-              <span class="as-cat-label">${escapeHtml(c.label)}${
-                c.wip ? ' <span class="an-wip-chip">WIP</span>' : ''
-              }</span>
-            </label>
-            ${c.wip ? '' : `<p class="as-cat-desc">${escapeHtml(c.desc)}</p>`}
-            ${
-              c.wip
-                ? ''
-                : `<select class="site-select an-select as-detail" data-as-detail="${escapeHtml(
-                    c.key
-                  )}" aria-label="Detail for ${escapeHtml(c.label)}">
-                    ${ANTISTRAT_DETAIL.map(
-                      (d) =>
-                        `<option value="${escapeHtml(d.key)}"${d.key === level ? ' selected' : ''}>${escapeHtml(
-                          d.label
-                        )}</option>`
-                    ).join('')}
-                  </select>`
-            }
-          </div>`;
+          return `<label class="as-cat-main${c.wip ? ' wip' : ''}">
+            <input type="checkbox" data-as-cat="${escapeHtml(c.key)}" ${on ? 'checked' : ''} ${
+              c.wip ? 'disabled' : ''
+            } />
+            <span>${escapeHtml(c.label)}${c.wip ? ' <span class="an-wip-chip">WIP</span>' : ''}</span>
+          </label>`;
         })
         .join('');
       return `<div class="as-cat-group">
@@ -265,7 +261,7 @@ export function createAntistratPanel({ escapeHtml }) {
     if (myTeams === null) {
       dest = `<p class="an-muted">${myTeamsError ? escapeHtml(myTeamsError) : 'Loading your teams…'}</p>`;
     } else if (!myTeams.length) {
-      dest = `<p class="an-muted">You are not in a team. The document needs a team to land in.</p>`;
+      dest = `<p class="an-muted">You are not in a team.</p>`;
     } else {
       dest = `<select class="site-select an-select" data-as-dest aria-label="Destination team">
         ${myTeams
@@ -278,8 +274,9 @@ export function createAntistratPanel({ escapeHtml }) {
           .join('')}
       </select>`;
     }
-    const status =
-      state.outcome === 'ok'
+    const status = state.busy
+      ? `<p class="as-status">${escapeHtml(state.progress || 'Scanning…')}</p>`
+      : state.outcome === 'ok'
         ? `<p class="as-status ok">${escapeHtml(state.outcomeMsg)} <a href="/team/documents">Open Documents</a></p>`
         : state.outcome === 'error'
           ? `<p class="as-status error">${escapeHtml(state.outcomeMsg)}</p>`
@@ -291,7 +288,7 @@ export function createAntistratPanel({ escapeHtml }) {
           ${dest}
           <button type="button" class="btn primary btn-sm" data-as-generate ${
             canGenerate() ? '' : 'disabled'
-          }>${state.busy ? 'Generating…' : 'Generate document'}</button>
+          }>${state.busy ? 'Analyzing…' : 'Analyze and save'}</button>
         </div>
         ${status}
       </div>
@@ -304,7 +301,7 @@ export function createAntistratPanel({ escapeHtml }) {
       return;
     }
     if (!teams.length) {
-      el.innerHTML = `<p class="view-empty">No teams in the library yet. Upload demos with team names to scout them.</p>`;
+      el.innerHTML = `<p class="view-empty">No teams in the library yet.</p>`;
       return;
     }
     el.innerHTML = `
@@ -315,6 +312,14 @@ export function createAntistratPanel({ escapeHtml }) {
         ${categoriesStepHtml()}
         ${outputStepHtml()}
       </div>`;
+    if (teamMenuOpen) refreshTeamMenu();
+  }
+
+  /** Update only the status line while a scan runs; a full render would drop focus. */
+  function renderProgress() {
+    const line = el.querySelector('.as-status');
+    if (line) line.textContent = state.progress;
+    else render();
   }
 
   // ---- generate -----------------------------------------------------------
@@ -326,47 +331,82 @@ export function createAntistratPanel({ escapeHtml }) {
     if (!team || !dest) return;
 
     state.busy = true;
+    state.progress = 'Preparing scan…';
     state.outcome = '';
     state.outcomeMsg = '';
     render();
 
     const included = includedMatches();
-    const spec = {
-      teamName: team.name,
-      mapCode: state.mapCode,
-      matches: included.map((d) => ({ id: d.id, label: matchLabel(d) })),
-      categories: [...state.cats],
-      detail: { ...state.detail },
-      generatedAt: Date.now()
-    };
     const title = `Antistrat: ${team.name} on ${MAPS[state.mapCode]?.name || state.mapCode}`;
     try {
+      const results = await runAntistratScan({
+        payload,
+        teamKey: state.teamKey,
+        mapCode: state.mapCode,
+        demoIds: included.map((d) => d.id),
+        onProgress: (done, total) => {
+          state.progress = `Scanning round ${done} of ${total}…`;
+          renderProgress();
+        }
+      });
+      state.progress = 'Writing document…';
+      renderProgress();
+
+      const heatmap = state.cats.has('firstEngagement')
+        ? await renderHeatmapDataUri(state.mapCode, results.sections.firstEngagement?.points)
+        : '';
+
       await saveTeamDocument(dest.id, {
         title,
-        html: buildAntistratDocHtml(spec, escapeHtml)
+        html: buildAntistratDocHtml(
+          {
+            teamName: team.name,
+            mapCode: state.mapCode,
+            matches: included.map((d) => ({ label: matchLabel(d) })),
+            categories: [...state.cats],
+            results,
+            heatmap
+          },
+          escapeHtml
+        )
       });
       state.outcome = 'ok';
-      state.outcomeMsg = `Saved "${title}" to ${dest.name}.`;
+      state.outcomeMsg = `Saved "${title}" to ${dest.name}. ${results.rounds} rounds scanned.`;
     } catch (err) {
       state.outcome = 'error';
       state.outcomeMsg = formatApiError(err).message || String(err);
     }
     state.busy = false;
+    state.progress = '';
     render();
   }
 
   // ---- events -------------------------------------------------------------
 
+  el.addEventListener('input', (e) => {
+    if (e.target.id === 'as-team-search') {
+      teamSearch = e.target.value;
+      teamMenuOpen = true;
+      refreshTeamMenu();
+    }
+  });
+
+  el.addEventListener('focusin', (e) => {
+    if (e.target.id === 'as-team-search') {
+      teamMenuOpen = true;
+      refreshTeamMenu();
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest?.('#as-team-box') && teamMenuOpen) {
+      teamMenuOpen = false;
+      refreshTeamMenu();
+    }
+  });
+
   el.addEventListener('change', (e) => {
     const t = e.target;
-    if (t.matches('[data-as-team]')) {
-      state.teamKey = t.value || '';
-      state.mapCode = '';
-      state.excluded.clear();
-      state.outcome = '';
-      render();
-      return;
-    }
     if (t.matches('[data-as-map]')) {
       state.mapCode = t.value || '';
       state.excluded.clear();
@@ -390,12 +430,6 @@ export function createAntistratPanel({ escapeHtml }) {
       render();
       return;
     }
-    const detail = t.closest('[data-as-detail]');
-    if (detail) {
-      state.detail[detail.dataset.asDetail] =
-        detail.value === 'detailed' ? 'detailed' : 'compact';
-      return;
-    }
     if (t.matches('[data-as-dest]')) {
       state.destTeamId = t.value || '';
       render();
@@ -403,6 +437,27 @@ export function createAntistratPanel({ escapeHtml }) {
   });
 
   el.addEventListener('click', (e) => {
+    const pick = e.target.closest('[data-as-pick-team]');
+    if (pick) {
+      state.teamKey = pick.dataset.asPickTeam;
+      state.mapCode = '';
+      state.excluded.clear();
+      state.outcome = '';
+      teamSearch = '';
+      teamMenuOpen = false;
+      render();
+      return;
+    }
+    if (e.target.closest('[data-as-clear-team]')) {
+      state.teamKey = '';
+      state.mapCode = '';
+      state.excluded.clear();
+      state.outcome = '';
+      render();
+      const input = el.querySelector('#as-team-search');
+      input?.focus();
+      return;
+    }
     if (e.target.closest('[data-as-generate]')) void generate();
   });
 

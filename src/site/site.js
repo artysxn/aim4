@@ -13,6 +13,11 @@ import footballIcon from '../icons/webmode_football.svg?raw';
 import toolsIcon from '../icons/webmode_tools.svg?raw';
 import trainingIcon from '../icons/webmode_training.svg?raw';
 import replaysIcon from '../icons/webmode_replays.svg?raw';
+import pfPlayers from '../icons/patternfinder/patternfinder_players.svg?raw';
+import pfAntistrat from '../icons/patternfinder/patternfinder_antistrat.svg?raw';
+import pfExplore from '../icons/patternfinder/patternfinder_explore.svg?raw';
+import pfMeta from '../icons/patternfinder/patternfinder_meta.svg?raw';
+import pfSearch from '../icons/patternfinder/patternfinder_search.svg?raw';
 import sideDemoManager from '../icons/sideicons/sideicon_replays.svg?raw';
 import sidePlaylists from '../icons/sideicons/sideicon_playlists.svg?raw';
 import sideDatabase from '../icons/sideicons/sideicon_database.svg?raw';
@@ -116,6 +121,11 @@ const ICONS = {
   database: sideDatabase,
   charts: sideCharts,
   'pattern-inspector': sideInspector,
+  'pf-players': pfPlayers,
+  'pf-antistrat': pfAntistrat,
+  'pf-explore': pfExplore,
+  'pf-meta': pfMeta,
+  'pf-search': pfSearch,
   uploads: sideUpload,
   gamemodes: sideGamemodes,
   leaderboards: sideLeaderboards,
@@ -607,6 +617,12 @@ function setView(name, push = false, params = null) {
 
   document.getElementById('page-title').textContent = route.title;
   document.title = routeName === 'home' ? 'AIM4.io' : `AIM4.io - ${route.title}`;
+
+  // The head-actions slot belongs to whichever page is on screen; the page
+  // repopulates it on show (e.g. the pattern finder's chapter tabs).
+  document.getElementById('page-head-actions')?.replaceChildren();
+  const patternsSub = document.getElementById('side-patterns-sub');
+  if (patternsSub) patternsSub.hidden = routeName !== 'patterns';
 
   if (push) {
     const q = { ...resolvedParams };

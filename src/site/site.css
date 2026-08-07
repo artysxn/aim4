@@ -363,6 +363,31 @@ a {
   fill: var(--accent);
 }
 
+/* Contextual sub-links (pattern finder chapters), indented under the parent. */
+.side-sub {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 2px;
+  padding-left: 14px;
+}
+
+.side-sub[hidden] {
+  display: none;
+}
+
+.side-sub .side-link {
+  padding: 5px 10px;
+}
+
+.side-sub .side-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.site-shell[data-collapsed='true'] .side-sub {
+  padding-left: 0;
+}
+
 .side-icon {
   width: 18px;
   height: 18px;

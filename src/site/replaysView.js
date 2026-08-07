@@ -3357,6 +3357,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       analyticsBodyEl.appendChild(analyticsPanel.el);
     }
     analyticsPanel.load();
+    const chapter = new URLSearchParams(window.location.search).get('chapter');
+    if (chapter) analyticsPanel.setChapter(chapter);
   }
 
   /** Mount the chart builder on first use; the payload is reused after that. */

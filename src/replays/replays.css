@@ -4731,28 +4731,29 @@ body.rv-open {
   color: #e8b84a;
 }
 
-/* ---- Pattern finder chapters -------------------------------------------- */
+/* ---- Pattern finder chapters (rendered in the page title row) ----------- */
 
 .an-chapters {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
-  margin-bottom: 14px;
 }
 
 .an-chapter-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 12px;
+  padding: 5px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--muted);
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .an-chapter-btn:hover {
@@ -4862,24 +4863,16 @@ body.rv-open {
 }
 
 .as-cats {
-  gap: 14px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 20px;
 }
 
 .as-cat-group {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-}
-
-.as-cat {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 2px 10px;
-  align-items: center;
-}
-
-.as-cat.wip {
-  opacity: 0.65;
+  gap: 7px;
+  min-width: 180px;
 }
 
 .as-cat-main {
@@ -4891,26 +4884,22 @@ body.rv-open {
   cursor: pointer;
 }
 
-.as-cat.wip .as-cat-main {
+.as-cat-main.wip {
+  opacity: 0.65;
   cursor: default;
 }
 
-.as-cat-desc {
-  grid-column: 1;
-  margin: 0 0 0 24px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.35;
+.as-team-box {
+  position: relative;
+  min-width: 220px;
 }
 
-.as-detail {
-  grid-row: 1 / span 2;
-  grid-column: 2;
-  width: 110px;
-}
-
-.as-cat.wip .as-detail {
-  display: none;
+.as-team-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 5;
 }
 
 .as-status {
@@ -6733,6 +6722,12 @@ table.rp-mine-table tbody tr {
 
 .doc-surface a {
   color: var(--accent);
+}
+
+.doc-surface img {
+  display: block;
+  max-width: min(480px, 100%);
+  border-radius: var(--radius-sm);
 }
 
 .doc-surface hr {

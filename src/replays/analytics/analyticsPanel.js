@@ -62,7 +62,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   const el = document.createElement('div');
   el.className = 'an-panel';
   el.innerHTML = `
-    <nav class="an-chapters" id="an-chapters" aria-label="Pattern finder chapters"></nav>
     <div class="an-chapter" data-chapter="players">
       <div class="an-layout">
         <aside class="an-sidebar" id="an-sidebar"></aside>
@@ -76,7 +75,15 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
   const sidebarEl = el.querySelector('#an-sidebar');
   const mainEl = el.querySelector('#an-main');
-  const chaptersEl = el.querySelector('#an-chapters');
+  // The chapter tabs live in the page title row, not inside the panel; the
+  // slot is cleared on every route change, so load() re-mounts them.
+  const chaptersEl = document.createElement('nav');
+  chaptersEl.className = 'an-chapters';
+  chaptersEl.setAttribute('aria-label', 'Pattern finder chapters');
+
+  function mountChapterNav() {
+    document.getElementById('page-head-actions')?.replaceChildren(chaptersEl);
+  }
 
   let chapter = 'players';
   /** @type {ReturnType<typeof createAntistratPanel> | null} */
@@ -140,6 +147,22 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       if (host) host.hidden = c.key !== chapter;
     }
     renderChapterNav();
+
+    // Sidebar sub-links and the URL mirror the active chapter.
+    document.querySelectorAll('[data-pf-chapter]').forEach((a) => {
+      a.classList.toggle('active', a.dataset.pfChapter === chapter);
+    });
+    if (window.location.pathname.replace(/\/+$/, '') === '/patterns') {
+      const params = new URLSearchParams(window.location.search);
+      if (chapter === 'players') params.delete('chapter');
+      else params.set('chapter', chapter);
+      const q = params.toString();
+      window.history.replaceState(
+        window.history.state,
+        '',
+        `/patterns${q ? `?${q}` : ''}`
+      );
+    }
 
     if (chapter === 'antistrat') {
       const host = chapterEl('antistrat');
@@ -873,6 +896,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
   async function load() {
     const token = ++loadToken;
+    mountChapterNav();
+    setChapter(chapter);
     mainEl.innerHTML = spinnerHtml('Loading pattern finder…');
     const cancelSlow = watchSlowLoad(mainEl, {
       message:
@@ -1102,12 +1127,14 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   return {
     el,
     load,
+    setChapter,
     destroy() {
       detachTips();
       radar?.destroy();
       radar = null;
       antistrat?.destroy();
       antistrat = null;
+      chaptersEl.remove();
       el.remove();
     }
   };
