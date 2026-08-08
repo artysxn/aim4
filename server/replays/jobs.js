@@ -42,10 +42,17 @@ import {
 } from './demoStore.js';
 import { unpackUpload } from './archive.js';
 import { getZones } from '../zonesStore.js';
+import { getCoachSmokes } from '../coachSmokesStore.js';
 import { deriveBatchTicks } from './hostMemory.js';
 import { scheduleStatsIndex } from './statsIndex.js';
 
-const statsIo = { userDir, readRoundMeta, readRoundTicks, getZones };
+const statsIo = {
+  userDir,
+  readRoundMeta,
+  readRoundTicks,
+  getZones,
+  getCoachUtilities: getCoachSmokes
+};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKER = path.join(__dirname, 'parseWorker.js');

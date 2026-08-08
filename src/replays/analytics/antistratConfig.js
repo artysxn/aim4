@@ -33,12 +33,14 @@ export const ANTISTRAT_CATEGORIES = [
   { key: 'patterns', group: 'General', label: 'Patterns' },
   { key: 'openings', group: 'General', label: 'Openings' },
   { key: 'players', group: 'General', label: 'Per player' },
+  { key: 'tRoundList', group: 'T specific', label: 'T Round list' },
   { key: 'setCalls', group: 'T specific', label: 'Set calls' },
   { key: 'tFormations', group: 'T specific', label: 'T formations in defaults' },
   { key: 'afterplants', group: 'T specific', label: 'Afterplants' },
   { key: 'tEarly', group: 'T specific', label: 'Early rounds' },
   { key: 'tMid', group: 'T specific', label: 'Midrounds' },
   { key: 'tLate', group: 'T specific', label: 'Laterounds' },
+  { key: 'ctRoundList', group: 'CT specific', label: 'CT Round list' },
   { key: 'ctSites', group: 'CT specific', label: 'Winrate vs site hits' },
   { key: 'retakes', group: 'CT specific', label: 'Retakes and retake winrates' }
 ];
@@ -358,6 +360,56 @@ function renderRetakes(esc, s) {
   return `${rows.length ? li(rows) : NONE}${zones === NONE ? '' : zones}`;
 }
 
+/**
+ * One side's round library: every named round type, run and faced.
+ *
+ * Two lines per type, because that is the whole point of the section. "Ran it"
+ * is the scouted team playing that side; "faced it" is the same call arriving
+ * from the other end while they defended it. Timings are averages of the
+ * moments that made the round match, written on the round clock.
+ */
+function renderRoundList(esc, s, teamName) {
+  if (!s || !s.types.length) return NONE;
+  const marks = (bag) =>
+    bag.marks.length
+      ? ` <em>${bag.marks.map((m) => `${esc(m.name)} ${esc(m.clock)}`).join(', ')}</em>`
+      : '';
+  const line = (bag, label) => {
+    if (!bag.rounds) return '';
+    return `${link(esc, label, bag.files)}: ${bag.winrate}% (${bag.wins}W ${bag.losses}L of ${bag.rounds}, ${bag.share}% of rounds)${marks(bag)}`;
+  };
+  const own = s.side === 'T' ? 'T' : 'CT';
+  const other = s.side === 'T' ? 'CT' : 'T';
+  const parts = [
+    `<p>${esc(teamName)} on ${esc(own)}: ${s.ownRounds} rounds. Facing the same calls on ${esc(other)}: ${s.facedRounds} rounds.</p>`
+  ];
+  for (const t of s.types) {
+    const rows = [
+      line(t.for, `Ran it (${own})`),
+      line(t.against, `Faced it (${other})`)
+    ].filter(Boolean);
+    parts.push(`<p><strong>${esc(t.label)}</strong></p>${li(rows)}`);
+  }
+  return parts.join('');
+}
+
+/** What the library could not read on this map, when anything is missing. */
+function renderRoundLibraryNote(esc, readiness) {
+  if (!readiness) return '';
+  const bits = [];
+  if (readiness.missingRegions.length) {
+    bits.push(`Unpainted ground: ${readiness.missingRegions.map(esc).join(', ')}`);
+  }
+  if (readiness.missingUtility.length) {
+    bits.push(`Unnamed utility spots: ${readiness.missingUtility.map(esc).join(', ')}`);
+  }
+  if (readiness.untagged) {
+    bits.push(`${readiness.untagged} rounds have no tags yet`);
+  }
+  if (!bits.length) return '';
+  return `<p><em>Round types built on these cannot fire: ${bits.join('. ')}.</em></p>`;
+}
+
 function renderPhaseSide(esc, s, label) {
   if (!s || !s.basis) return '';
   const rows = [
@@ -485,6 +537,10 @@ export function buildAntistratDocHtml(spec, esc) {
     firstEngagement: (s) => renderFirstEngagement(esc, s, images.firstEngagement),
     patterns: (s) => renderPatterns(esc, s),
     openings: (s) => renderOpenings(esc, s),
+    tRoundList: (s) =>
+      renderRoundList(esc, s, spec.teamName) + renderRoundLibraryNote(esc, spec.results?.roundLibrary),
+    ctRoundList: (s) =>
+      renderRoundList(esc, s, spec.teamName) + renderRoundLibraryNote(esc, spec.results?.roundLibrary),
     setCalls: (s) => renderSetCalls(esc, s),
     players: (s) => renderPlayers(esc, s, images.players),
     tFormations: (s) => renderTFormations(esc, s),

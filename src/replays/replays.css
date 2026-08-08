@@ -5708,8 +5708,121 @@ table.rp-mine-table tbody tr {
   overflow: auto;
 }
 
+.tm-overview-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
 .tm-overview-stats {
   min-width: 0;
+}
+
+/* Round library: name · N · win% · use/avg · index · bar · faced */
+.tm-roundlist {
+  min-width: 0;
+}
+
+.tm-rl-side + .tm-rl-side {
+  margin-top: 12px;
+}
+
+.tm-rl-side .an-side-title small {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.tm-rl-head,
+.tm-rl-row {
+  display: grid;
+  grid-template-columns: minmax(7em, 1fr) 2.4em 3.4em 6.4em 3.2em minmax(60px, 5em) 5em;
+  gap: 4px 8px;
+  align-items: center;
+  font: 500 12px var(--font-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-rl-head {
+  color: var(--muted);
+  font: 500 10px var(--font-body);
+  letter-spacing: 0.02em;
+  padding: 0 2px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tm-rl-head span:not(:first-child),
+.tm-rl-n,
+.tm-rl-wr,
+.tm-rl-share,
+.tm-rl-index,
+.tm-rl-vs {
+  text-align: right;
+}
+
+.tm-rl-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tm-rl-row {
+  padding: 3px 2px;
+  border-radius: 6px;
+}
+
+.tm-rl-row:nth-child(odd) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* A call this team has never run still earns its row: the gap is the finding. */
+.tm-rl-row.is-unused .tm-rl-name,
+.tm-rl-row.is-unused .tm-rl-n,
+.tm-rl-row.is-unused .tm-rl-wr {
+  color: var(--muted);
+}
+
+.tm-rl-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Anchored at the library average: left of the line is called less often than
+   everyone else does, right of it more. */
+.tm-rl-bar-track {
+  position: relative;
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.tm-rl-bar-track::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -1px;
+  bottom: -1px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.tm-rl-bar-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  background: var(--accent, #4e8fd9);
+}
+
+.tm-rl-note {
+  margin: 0;
+  color: var(--muted);
+  font: 500 11px var(--font-body);
 }
 
 .tm-overview-stats-mount {

@@ -104,6 +104,12 @@ export const adminApi = {
   /** Progress for an in-flight (or just-finished) positions/roles scan. */
   refreshPositionsStatus: () => get('/api/admin/stats/refresh-positions'),
 
+  /** Rewatch every round and re-tag it against the round library. */
+  rescanRounds: () => send('POST', '/api/admin/stats/rescan-rounds', {}),
+
+  /** Progress for an in-flight (or just-finished) round library scan. */
+  rescanRoundsStatus: () => get('/api/admin/stats/rescan-rounds'),
+
   /** Model training. `kind` is 'duel' or 'round'. */
   trainingStatus: (kind) => get(`/api/admin/training/${kind}`),
   trainingWeights: (kind) => get(`/api/admin/training/${kind}/weights`),

@@ -30,6 +30,9 @@ import {
 import { positionsAtPoint } from '../zones/pointInZone.js';
 import { pieceBounds } from '../zones/zoneGeom.js';
 import { FORMATIONS, formatFormation, clockSeconds } from './patternDefs.js';
+import { requiredRegionGroups, requiredUtilityNames, roundTypeRows } from './roundLibrary.js';
+import { rowTags } from './roundTags.js';
+import { createRegionIndex } from './roundFacts.js';
 
 /** Grenade must land within this of a stored spot to take its name. */
 export const UTILITY_MATCH_UNITS = 100;
@@ -370,6 +373,11 @@ function roundFeatures({ meta, track, row, teamIdx, opponent, network, utilDb, m
     return null;
   };
 
+  // Round library tags ride in on the stats row: they were computed once when
+  // the index was built, for both sides of the round, so they need no ticks
+  // here and mean the same thing whichever team is being scouted.
+  const tags = row.rl ? { T: rowTags(row, 'T'), CT: rowTags(row, 'CT') } : null;
+
   return {
     file: row.f,
     demoId: row.d,
@@ -377,6 +385,7 @@ function roundFeatures({ meta, track, row, teamIdx, opponent, network, utilDb, m
     opponent,
     side,
     won,
+    tags,
     ownEcon,
     oppEcon,
     situation: openingSituation(meta, teamIdx),
@@ -1297,6 +1306,89 @@ function aggCtSiteDefense(rounds) {
   return out;
 }
 
+/**
+ * Named round types of one side, measured from both ends.
+ *
+ * A call is two numbers, not one: how often it works when the scouted team
+ * runs it, and how often it works against them when someone else does. The
+ * first comes from their rounds on that side, the second from their rounds on
+ * the other side of the same call — the tags describe the round, not the team,
+ * so both readings come out of the same bag.
+ *
+ * @param {Array} rounds
+ * @param {string} mapCode
+ * @param {'T'|'CT'} side  which side the round types belong to
+ */
+function aggRoundList(rounds, mapCode, side) {
+  const defs = roundTypeRows(mapCode, side);
+  if (!defs.length) return null;
+  const own = rounds.filter((r) => r.side === side);
+  const faced = rounds.filter((r) => r.side !== side);
+
+  /** Average of every timing mark the matched rounds recorded. */
+  const marksOf = (list) => {
+    /** @type {Map<string, number[]>} */
+    const bag = new Map();
+    for (const { tag } of list) {
+      for (const [name, sec] of Object.entries(tag.m || {})) {
+        if (!Number.isFinite(sec)) continue;
+        if (!bag.has(name)) bag.set(name, []);
+        bag.get(name).push(sec);
+      }
+    }
+    return [...bag.entries()]
+      .map(([name, secs]) => ({
+        name,
+        clock: fmtClock(ROUND_SECONDS - avgOf(secs)),
+        seconds: round1(avgOf(secs)),
+        rounds: secs.length
+      }))
+      .sort((a, b) => a.seconds - b.seconds);
+  };
+
+  const bucket = (list, basis) => {
+    const wins = list.filter(({ r }) => r.won).length;
+    return {
+      rounds: list.length,
+      wins,
+      losses: list.length - wins,
+      winrate: pct(wins, list.length),
+      share: pct(list.length, basis),
+      files: list.map(({ r }) => r.file),
+      marks: marksOf(list)
+    };
+  };
+
+  const types = [];
+  for (const def of defs) {
+    const pick = (set) => {
+      const out = [];
+      for (const r of set) {
+        const tag = (r.tags?.[side] || []).find((t) => t.k === def.key);
+        if (tag) out.push({ r, tag });
+      }
+      return out;
+    };
+    const forList = pick(own);
+    const againstList = pick(faced);
+    if (!forList.length && !againstList.length) continue;
+    types.push({
+      key: def.key,
+      label: def.label,
+      desc: def.desc,
+      for: bucket(forList, own.length),
+      against: bucket(againstList, faced.length)
+    });
+  }
+  return {
+    side,
+    ownRounds: own.length,
+    facedRounds: faced.length,
+    tagged: rounds.filter((r) => r.tags).length,
+    types
+  };
+}
+
 function aggPositions(mains, rolesOf) {
   return mains.map((m) => ({
     name: m.name,
@@ -1437,6 +1529,29 @@ function phaseSpots(bag) {
 // The scan
 // ---------------------------------------------------------------------------
 
+/**
+ * What the round library is missing on this map.
+ *
+ * The definitions name ground and utility spots; anything not painted or not
+ * stored under that name makes the rules built on it silently unreachable, so
+ * the report says which rather than reporting zeroes as findings.
+ */
+function roundLibraryReadiness(mapCode, network, utilDb, rounds) {
+  const wantRegions = requiredRegionGroups(mapCode);
+  if (!wantRegions.length) return null;
+  const index = createRegionIndex(network, mapCode);
+  const stored = new Set(
+    (utilDb?.utilities || []).map((u) => String(u?.name || '').trim().toLowerCase())
+  );
+  return {
+    // A group is one piece of ground under whichever name the map paints it,
+    // so only a group where nothing resolves is actually missing.
+    missingRegions: wantRegions.filter((group) => !index.known(group)).map((g) => g.join(' / ')),
+    missingUtility: requiredUtilityNames(mapCode).filter((name) => !stored.has(name)),
+    untagged: rounds.filter((r) => !r.tags).length
+  };
+}
+
 async function eachLimit(items, limit, fn) {
   let next = 0;
   const worker = async () => {
@@ -1571,6 +1686,7 @@ export async function runAntistratScan({
     ticked: rounds.filter((r) => r.hasTicks).length,
     zonesReady: Boolean(network?.positions?.length),
     utilityDb: Boolean(utilDb?.utilities?.length),
+    roundLibrary: roundLibraryReadiness(mapCode, network, utilDb, rounds),
     focusIds: [...focusIds],
     tFullBuy: filesOf(rounds.filter((r) => r.side === 'T' && r.ownEcon === 4)),
     ctFullBuy: filesOf(rounds.filter((r) => r.side === 'CT' && r.ownEcon === 4)),
@@ -1593,6 +1709,8 @@ export async function runAntistratScan({
         zones: aggPostplant(rounds, 'CT'),
         winrates: aggRetakeWinrates(rounds)
       },
+      tRoundList: aggRoundList(rounds, mapCode, 'T'),
+      ctRoundList: aggRoundList(rounds, mapCode, 'CT'),
       tEarly: { T: aggPhase(rounds, 'early', 'T'), CT: aggPhase(rounds, 'early', 'CT') },
       tMid: { T: aggPhase(rounds, 'mid', 'T'), CT: aggPhase(rounds, 'mid', 'CT') },
       tLate: { T: aggPhase(rounds, 'late', 'T'), CT: aggPhase(rounds, 'late', 'CT') },

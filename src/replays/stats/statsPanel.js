@@ -1379,6 +1379,10 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     applyView,
     applyViewState,
     ensureLibraryPayload,
+    /** The loaded payload, so panels beside this one can reuse the fetch. */
+    getPayload: () => payload,
+    /** False while the payload is still narrowed to a team or a selection. */
+    isLibraryScope: () => !scope.demos?.length && !scope.files?.length,
     viewState,
     openPlayerDetail,
     openTeamDetail,

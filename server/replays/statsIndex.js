@@ -50,11 +50,13 @@ import {
 } from '../../src/replays/roles/computeRoles.js';
 import { applyMovementFields } from '../../src/replays/roles/movementFromTicks.js';
 import { roundDuelBag } from '../../src/replays/duels/duelStats.js';
+import { roundTagsFor, rowTagged, rowTags } from '../../src/replays/analytics/roundTags.js';
+import { hasRoundLibrary } from '../../src/replays/analytics/roundLibrary.js';
 
-// v17 adds per-player AWP primary hold seconds (row.aw) for Database aKPR.
-// Bumping this rebuilds every index from the round files already on disk; it
-// does NOT reparse demos.
-export const STATS_VERSION = 17;
+// v18 adds round library tags (row.rl): which named round type each side ran,
+// with the timings that decided it. Bumping this rebuilds every index from the
+// round files already on disk; it does NOT reparse demos.
+export const STATS_VERSION = 18;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -330,9 +332,23 @@ function needsMovementEnrichment(entry) {
   return entry.rounds.some((r) => !r.mv || typeof r.mv !== 'object');
 }
 
-/** Background tick walk for roles and/or movement metrics. */
+/**
+ * Round library tags missing, or written by an older set of definitions.
+ * Only asked on maps that have a library: everywhere else the empty bag is the
+ * final answer and rewalking the ticks would find nothing.
+ */
+function needsRoundLibraryEnrichment(entry) {
+  if (!entry?.rounds?.length) return false;
+  return entry.rounds.some((r) => hasRoundLibrary(r.m) && !rowTagged(r));
+}
+
+/** Background tick walk for roles, movement metrics and/or round tags. */
 function needsTickDerivedEnrichment(entry) {
-  return needsRoleEnrichment(entry) || needsMovementEnrichment(entry);
+  return (
+    needsRoleEnrichment(entry) ||
+    needsMovementEnrichment(entry) ||
+    needsRoundLibraryEnrichment(entry)
+  );
 }
 
 /** Load zone network for a map (bombsites + vision). Always returns an object. */
@@ -355,6 +371,36 @@ async function loadMapNetwork(io, mapCode) {
     };
   }
   return network;
+}
+
+/**
+ * Stored utility landing spots for a map, so a detonation can be read back as
+ * "navi1" instead of a coordinate. Absent, the smoke-wall round types simply
+ * never fire, which is the honest outcome for a map nobody has named yet.
+ */
+async function loadMapUtilities(io, mapCode, cache) {
+  if (!mapCode) return [];
+  if (cache.has(mapCode)) return cache.get(mapCode);
+  let list = [];
+  try {
+    const archive =
+      typeof io.getCoachUtilities === 'function' ? await io.getCoachUtilities(mapCode) : null;
+    list = Array.isArray(archive?.utilities) ? archive.utilities : [];
+  } catch {
+    list = [];
+  }
+  cache.set(mapCode, list);
+  return list;
+}
+
+/** Named round types each side ran, from the painted map and the ticks. */
+function applyRoundLibraryFields(row, meta, track, network, utilities) {
+  const mapCode = meta?.map || row.m || '';
+  if (!hasRoundLibrary(mapCode)) {
+    row.rl = null;
+    return;
+  }
+  row.rl = roundTagsFor({ meta, track, network, utilities, mapCode });
 }
 
 /**
@@ -536,7 +582,8 @@ async function enrichTickDerived(io, user, entry, opts = {}) {
   if (!entry?.rounds?.length) return entry;
   const wantRoles = Boolean(opts.forceRoles) || needsRoleEnrichment(entry);
   const wantMv = needsMovementEnrichment(entry);
-  if (!wantRoles && !wantMv) return entry;
+  const wantRl = needsRoundLibraryEnrichment(entry);
+  if (!wantRoles && !wantMv && !wantRl) return entry;
 
   if (typeof io.readRoundTicks !== 'function') {
     if (wantRoles) entry.roles = { v: ROLES_VERSION, maps: {} };
@@ -553,6 +600,7 @@ async function enrichTickDerived(io, user, entry, opts = {}) {
     slot: p.slot
   }));
   const zoneCache = new Map();
+  const utilCache = new Map();
   const roleWork = wantRoles ? createRoleWork() : null;
 
   for (const row of entry.rounds) {
@@ -594,11 +642,20 @@ async function enrichTickDerived(io, user, entry, opts = {}) {
     const track = new TickTrack(tickBuffer);
     if (wantMv) applyMovementFields(row, meta, track, roster);
 
+    const mapCode = meta.map || row.m || '';
+    if ((roleWork || wantRl) && !zoneCache.has(mapCode)) {
+      zoneCache.set(mapCode, await loadMapNetwork(io, mapCode));
+    }
+    if (wantRl && !rowTagged(row)) {
+      applyRoundLibraryFields(
+        row,
+        meta,
+        track,
+        zoneCache.get(mapCode),
+        await loadMapUtilities(io, mapCode, utilCache)
+      );
+    }
     if (roleWork) {
-      const mapCode = meta.map || row.m || '';
-      if (!zoneCache.has(mapCode)) {
-        zoneCache.set(mapCode, await loadMapNetwork(io, mapCode));
-      }
       const zones = zoneCache.get(mapCode);
       accumulateRoundRoles(roleWork, { meta, track, row, network: zones, roster });
     }
@@ -680,6 +737,7 @@ async function buildIndex(io, user, record) {
   }));
   const controlCache = new Map();
   const zoneCache = new Map();
+  const utilCache = new Map();
   const roleWork = createRoleWork();
 
   for (const file of files) {
@@ -744,6 +802,13 @@ async function buildIndex(io, user, record) {
       applyMovementFields(row, meta, track, roster);
       applyAwpHoldFields(row, meta, track, roster);
       const zones = zoneCache.get(meta.map || row.m) || network;
+      applyRoundLibraryFields(
+        row,
+        meta,
+        track,
+        zones,
+        await loadMapUtilities(io, meta.map || row.m, utilCache)
+      );
       accumulateRoundRoles(roleWork, {
         meta,
         track,
@@ -755,6 +820,7 @@ async function buildIndex(io, user, record) {
       row.du = null;
       row.mv = {};
       row.aw = {};
+      row.rl = null;
     }
 
     rounds.push(row);
@@ -1078,6 +1144,99 @@ export async function refreshLibraryPositions(io, user, records, { onProgress = 
       entry.key = key;
       await persistEntry(io, user, key, entry);
       report.updated++;
+    } catch (err) {
+      report.failed++;
+      report.errors.push({
+        id: record.id,
+        filename: record.filename,
+        error: err?.message || String(err)
+      });
+    }
+    i++;
+  }
+
+  emit(ready.length, null);
+  return report;
+}
+
+/**
+ * Re-tag every round in the library against the round library.
+ *
+ * Separate from the full stats rebuild because it is the pass people will run
+ * most often: the definitions are edited, or a map gets painted, or a utility
+ * spot is finally named, and none of that touches kills, PRW or possession.
+ * Existing tags are dropped first, so this is always a fresh read rather than
+ * a backfill of whatever happens to be missing.
+ *
+ * @param {object} io
+ * @param {string} user
+ * @param {object[]} records  from listDemos
+ * @returns {Promise<{
+ *   total: number, ready: number, scanned: number, skipped: number,
+ *   rounds: number, tagged: number, maps: Record<string, number>,
+ *   failed: number, errors: Array<{ id: string, filename?: string, error: string }>
+ * }>}
+ */
+export async function refreshLibraryRoundTags(io, user, records, { onProgress = null } = {}) {
+  const ready = (records || []).filter((r) => (r.status || 'ready') === 'ready');
+  const report = {
+    total: (records || []).length,
+    ready: ready.length,
+    scanned: 0,
+    skipped: 0,
+    rounds: 0,
+    tagged: 0,
+    /** Rounds tagged per map, so an unpainted map shows up as a zero. */
+    maps: {},
+    failed: 0,
+    errors: []
+  };
+
+  const emit = (done, current = null) => {
+    if (typeof onProgress !== 'function') return;
+    onProgress({
+      done,
+      total: ready.length,
+      percent: ready.length ? Math.round((done / ready.length) * 100) : 100,
+      current
+    });
+  };
+
+  emit(0, null);
+
+  let i = 0;
+  for (const record of ready) {
+    emit(i, record.filename || record.id || null);
+    try {
+      const key = versionKey(record);
+      let entry = await loadStoredEntry(io, user, record.id);
+      if (!entry || !keyMatchesRecord(entry.key, record)) {
+        entry = await demoIndex(io, user, record, { roles: true });
+      }
+      if (!entry?.rounds?.length) {
+        report.skipped++;
+        i++;
+        continue;
+      }
+      const library = entry.rounds.filter((r) => hasRoundLibrary(r.m));
+      if (!library.length) {
+        report.skipped++;
+        i++;
+        continue;
+      }
+      for (const row of library) row.rl = null;
+      await enrichTickDerived(io, user, entry);
+      for (const row of library) {
+        report.rounds++;
+        const tags = [...rowTags(row, 'T'), ...rowTags(row, 'CT')].filter(
+          (t) => t.k !== 'default'
+        );
+        if (tags.length) report.tagged++;
+        report.maps[row.m] = (report.maps[row.m] || 0) + (tags.length ? 1 : 0);
+      }
+      entry.key = key;
+      await persistEntry(io, user, key, entry);
+      report.scanned++;
     } catch (err) {
       report.failed++;
       report.errors.push({

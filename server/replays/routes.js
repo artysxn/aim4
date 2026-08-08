@@ -105,7 +105,13 @@ import { getZones, listZoneMaps, saveZones } from '../zonesStore.js';
 import { getCoachSmokes, listCoachSmokeMaps } from '../coachSmokesStore.js';
 
 /** What the stats index needs from storage, without importing it back. */
-const statsIo = { userDir, readRoundMeta, readRoundTicks, getZones };
+const statsIo = {
+  userDir,
+  readRoundMeta,
+  readRoundTicks,
+  getZones,
+  getCoachUtilities: getCoachSmokes
+};
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',

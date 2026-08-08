@@ -44,6 +44,7 @@ import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
 import { MAPS } from '../replays/shared/roundId.js';
 import { teamNameKey } from '../replays/shared/statsMath.js';
 import { createStatsPanel } from '../replays/stats/statsPanel.js';
+import { createRoundListPanel } from '../replays/analytics/roundListPanel.js';
 import { analyzeDemoCoach } from '../replays/coach/analyzeDemo.js';
 import { COACH_CATEGORY_LABELS } from '../replays/coach/coachMessages.js';
 import { POSITION_MAPS, positionsFor } from '../replays/roles/teamPositions.js';
@@ -168,6 +169,8 @@ export function initTeamView({ auth, escapeHtml }) {
   let boardMountKey = '';
   /** @type {ReturnType<typeof createStatsPanel>|null} */
   let overviewStatsPanel = null;
+  /** @type {ReturnType<typeof createRoundListPanel>|null} */
+  let overviewRoundList = null;
   let overviewStatsKey = '';
   let overviewMapsKey = '';
   /** Selected map code on Overview, or '' for all. */
@@ -698,6 +701,10 @@ export function initTeamView({ auth, escapeHtml }) {
       overviewStatsPanel.destroy();
       overviewStatsPanel = null;
     }
+    if (overviewRoundList) {
+      overviewRoundList.destroy();
+      overviewRoundList = null;
+    }
     overviewStatsKey = '';
     overviewMapsKey = '';
     overviewMapFilter = '';
@@ -806,6 +813,21 @@ export function initTeamView({ auth, escapeHtml }) {
     paintOverviewMaps();
   }
 
+  /**
+   * The round library panel reads the stats panel's payload rather than
+   * fetching again: a map pick already pulls the full library in for the
+   * compare columns, and that is exactly the basis the averages need.
+   */
+  function paintRoundList() {
+    if (!overviewRoundList) return;
+    overviewRoundList.update({
+      mapCode: overviewMapFilter,
+      teamName: team?.name || '',
+      payload: overviewStatsPanel?.getPayload?.() || null,
+      scoped: overviewStatsPanel?.isLibraryScope?.() === false
+    });
+  }
+
   function applyOverviewMapToStats() {
     if (!overviewStatsPanel?.applyView) return;
     // Maps only — do not reset Players/Teams; remounts and map picks used to force Teams.
@@ -814,10 +836,12 @@ export function initTeamView({ auth, escapeHtml }) {
     if (overviewMapFilter && overviewStatsPanel.ensureLibraryPayload) {
       void overviewStatsPanel.ensureLibraryPayload().then(() => {
         overviewStatsPanel.applyView({ maps });
+        paintRoundList();
       });
       return;
     }
     overviewStatsPanel.applyView({ maps });
+    paintRoundList();
   }
 
   function selectOverviewMap(code) {
@@ -836,6 +860,13 @@ export function initTeamView({ auth, escapeHtml }) {
 
   function mountOverviewExtras() {
     const teamDemos = demosForTeam();
+    const listMount = document.getElementById('tm-overview-roundlist');
+    if (listMount) {
+      if (!overviewRoundList) overviewRoundList = createRoundListPanel({ escapeHtml });
+      if (overviewRoundList.el.parentElement !== listMount) {
+        listMount.replaceChildren(overviewRoundList.el);
+      }
+    }
     const mount = document.getElementById('tm-overview-stats');
     if (mount) {
       const ids = teamDemos.map((d) => d.id).filter(Boolean);
@@ -858,6 +889,7 @@ export function initTeamView({ auth, escapeHtml }) {
             body.innerHTML =
               '<p class="view-empty">No replays with this team name yet. Rename demo teams to match, or upload matches.</p>';
           }
+          paintRoundList();
         } else {
           void overviewStatsPanel
             .load({
@@ -987,12 +1019,15 @@ export function initTeamView({ auth, escapeHtml }) {
           </section>
         </div>
 
-        <section class="tm-card tm-overview-stats">
-          <div class="tm-card-head">
-            <h3 class="tm-card-title">Statistics</h3>
-          </div>
-          <div id="tm-overview-stats" class="tm-overview-stats-mount"></div>
-        </section>
+        <div class="tm-overview-main">
+          <section class="tm-card tm-overview-stats">
+            <div class="tm-card-head">
+              <h3 class="tm-card-title">Statistics</h3>
+            </div>
+            <div id="tm-overview-stats" class="tm-overview-stats-mount"></div>
+          </section>
+          <div id="tm-overview-roundlist"></div>
+        </div>
       </div>`;
   }
 

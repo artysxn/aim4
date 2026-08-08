@@ -45,7 +45,11 @@ import {
   userDir
 } from '../replays/demoStore.js';
 import { SHARED_LIBRARY } from '../replays/auth.js';
-import { refreshLibraryPositions, refreshLibraryStats } from '../replays/statsIndex.js';
+import {
+  refreshLibraryPositions,
+  refreshLibraryRoundTags,
+  refreshLibraryStats
+} from '../replays/statsIndex.js';
 import { getZones } from '../zonesStore.js';
 import {
   start as startTraining,
@@ -59,12 +63,20 @@ import {
   saveCoachSmokes
 } from '../coachSmokesStore.js';
 
-const statsIo = { userDir, readRoundMeta, readRoundTicks, getZones };
+const statsIo = {
+  userDir,
+  readRoundMeta,
+  readRoundTicks,
+  getZones,
+  getCoachUtilities: getCoachSmokes
+};
 
 /** Only one full-library stats rebuild at a time. */
 let statsRefreshJob = null;
 /** Positions/roles-only tick walk (separate from full stats rebuild). */
 let positionsRefreshJob = null;
+/** Round library re-tag: rewatches every round against the round definitions. */
+let roundScanJob = null;
 
 function jobStatus(job) {
   if (!job) return { running: false };
@@ -97,10 +109,15 @@ function positionsRefreshStatus() {
   return jobStatus(positionsRefreshJob);
 }
 
+function roundScanStatus() {
+  return jobStatus(roundScanJob);
+}
+
 function libraryJobBusy() {
   return (
     (statsRefreshJob && !statsRefreshJob.finished) ||
-    (positionsRefreshJob && !positionsRefreshJob.finished)
+    (positionsRefreshJob && !positionsRefreshJob.finished) ||
+    (roundScanJob && !roundScanJob.finished)
   );
 }
 
@@ -737,6 +754,86 @@ async function route(req, res, url, me) {
     });
 
     json(res, req, 202, { ok: true, started: true, ...positionsRefreshStatus() });
+    return true;
+  }
+
+  // Round library only: rewatch every round and re-tag it against the round
+  // type definitions. Drops the stored tags first, so editing a definition or
+  // painting a map is picked up without a full stats rebuild.
+  if (req.method === 'GET' && p === '/api/admin/stats/rescan-rounds') {
+    json(res, req, 200, roundScanStatus());
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/stats/rescan-rounds') {
+    if (libraryJobBusy()) {
+      json(res, req, 409, {
+        error: 'A library recalculation is already running.',
+        ...roundScanStatus(),
+        stats: statsRefreshStatus(),
+        positions: positionsRefreshStatus()
+      });
+      return true;
+    }
+    const startedAt = Date.now();
+    roundScanJob = {
+      kind: 'rounds',
+      startedAt,
+      startedBy: me.id,
+      force: true,
+      done: 0,
+      total: 0,
+      percent: 0,
+      current: null,
+      finished: false,
+      report: null,
+      error: null
+    };
+
+    setImmediate(async () => {
+      try {
+        const records = await listDemos(SHARED_LIBRARY);
+        const report = await refreshLibraryRoundTags(statsIo, SHARED_LIBRARY, records, {
+          onProgress: (pr) => {
+            if (!roundScanJob || roundScanJob.startedAt !== startedAt) return;
+            roundScanJob.done = pr.done;
+            roundScanJob.total = pr.total;
+            roundScanJob.percent = pr.percent;
+            roundScanJob.current = pr.current;
+          }
+        });
+        if (!roundScanJob || roundScanJob.startedAt !== startedAt) return;
+        roundScanJob.report = { ...report, ms: Date.now() - startedAt };
+        roundScanJob.done = report.ready;
+        roundScanJob.total = report.ready;
+        roundScanJob.percent = 100;
+        roundScanJob.current = null;
+        roundScanJob.finished = true;
+        roundScanJob.finishedAt = Date.now();
+        await writeAudit({
+          actorId: me.id,
+          targetUser: '',
+          action: 'stats.rescan_rounds',
+          payload: {
+            ready: report.ready,
+            scanned: report.scanned,
+            rounds: report.rounds,
+            tagged: report.tagged,
+            maps: report.maps,
+            failed: report.failed,
+            ms: Date.now() - startedAt
+          },
+          req: null
+        });
+      } catch (err) {
+        if (!roundScanJob || roundScanJob.startedAt !== startedAt) return;
+        roundScanJob.error = err?.message || String(err);
+        roundScanJob.finished = true;
+        roundScanJob.finishedAt = Date.now();
+      }
+    });
+
+    json(res, req, 202, { ok: true, started: true, ...roundScanStatus() });
     return true;
   }
 
