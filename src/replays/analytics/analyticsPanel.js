@@ -170,13 +170,20 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         antistrat = createAntistratPanel({ escapeHtml });
         host.appendChild(antistrat.el);
       }
+      // Prefer the shared payload; if it is not ready yet, antistrat self-fetches
+      // so a failed / skipped Players spend cannot leave "Loading teams…" forever.
       antistrat?.load(payload);
       return;
     }
-    if (chapter !== 'players') {
-      const host = chapterEl(chapter);
-      if (host && !host.innerHTML) host.innerHTML = wipShellHtml(chapter);
+    if (chapter === 'players') {
+      if (payload) {
+        render();
+        mountSavedViews();
+      }
+      return;
     }
+    const host = chapterEl(chapter);
+    if (host && !host.innerHTML) host.innerHTML = wipShellHtml(chapter);
   }
 
   renderChapterNav();
@@ -898,6 +905,32 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     const token = ++loadToken;
     mountChapterNav();
     setChapter(chapter);
+
+    // Antistrat needs the stats library, not a pattern-finder spend. Fetch the
+    // shared payload without consuming, and hand it to the chapter.
+    if (chapter === 'antistrat') {
+      if (payload) {
+        antistrat?.load(payload);
+        return;
+      }
+      try {
+        const data = await fetchStats(null);
+        if (token !== loadToken) return;
+        payload = data;
+        players = listPlayers(payload);
+        teams = listTeams(payload);
+        maps = listMaps(payload);
+        antistrat?.load(payload);
+      } catch (err) {
+        if (token !== loadToken) return;
+        // Self-fetch path in antistrat surfaces the same error (or succeeds if
+        // this was a transient failure). Calling load() without a payload keeps
+        // the chapter off an orphan spinner when the parent fetch failed.
+        antistrat?.load();
+      }
+      return;
+    }
+
     mainEl.innerHTML = spinnerHtml('Loading pattern finder…');
     const cancelSlow = watchSlowLoad(mainEl, {
       message:

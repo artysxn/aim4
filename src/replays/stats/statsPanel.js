@@ -28,6 +28,7 @@ import {
   rowPasses,
   teamNameKey
 } from '../shared/statsMath.js';
+import { hasRoundLibrary, roundTypeRows } from '../analytics/roundLibrary.js';
 import {
   PLAYER_COLUMNS,
   PLAYER_FIXED_BASE,
@@ -128,7 +129,11 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     dateFrom: '',
     dateTo: '',
     /** @type {{ side: 'T'|'CT', value: string } | null} */
-    role: null
+    role: null,
+    /** Round-library key the subject side must have run (requires map + side). */
+    roundOwn: '',
+    /** Round-library key the opposing side must have run (requires map + side). */
+    roundOpp: ''
   };
 
   const detachTips = attachTips(el);
@@ -213,6 +218,37 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       <option value=""${!selected ? ' selected' : ''}>${anyLabel}</option>${options}</select>`;
   }
 
+  /** Round-library select for the subject's side or the opposing side. */
+  function roundSelectHtml(which) {
+    const map = singleMap();
+    const side = filter.side;
+    if (!map || (side !== 'T' && side !== 'CT') || !hasRoundLibrary(map)) return '';
+    const ownSide = side;
+    const oppSide = side === 'T' ? 'CT' : 'T';
+    const forSide = which === 'opp' ? oppSide : ownSide;
+    const selected = which === 'opp' ? filter.roundOpp : filter.roundOwn;
+    const rows = roundTypeRows(map, forSide);
+    if (!rows.length) return '';
+    const label =
+      which === 'opp' ? `vs ${oppSide} round` : `${ownSide} round`;
+    const opts = rows
+      .map(
+        (r) =>
+          `<option value="${escapeHtml(r.key)}" title="${escapeHtml(r.desc || '')}"${
+            r.key === selected ? ' selected' : ''
+          }>${escapeHtml(r.label)}</option>`
+      )
+      .join('');
+    return `<div class="st-filter-group st-filter-stack">
+      <span class="st-filter-label">${escapeHtml(label)}</span>
+      <select class="site-select st-round-select" data-filter="${
+        which === 'opp' ? 'roundOpp' : 'roundOwn'
+      }" aria-label="${escapeHtml(label)}">
+        <option value=""${!selected ? ' selected' : ''}>Any</option>${opts}
+      </select>
+    </div>`;
+  }
+
   function renderFilters() {
     const mode = roleMode();
     const sideBtn = (value, label) =>
@@ -241,6 +277,10 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       </div>`
         : '';
 
+    // Round-library picks need one map and a side so "our call" / "their call"
+    // resolve against absolute T/CT tags on each row.
+    const roundGroups = `${roundSelectHtml('own')}${roundSelectHtml('opp')}`;
+
     filtersEl.innerHTML = `
       <div class="st-filters-scroll">
         <div class="st-filter-group st-filter-stack">
@@ -251,6 +291,7 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
           <span class="st-filter-label">Side</span>
           <div class="rp-chips">${sideBtn('T', 'T')}${sideBtn('CT', 'CT')}</div>
         </div>
+        ${roundGroups}
         <div class="st-filter-group st-filter-stack">
           <span class="st-filter-label">Result</span>
           <div class="rp-chips">${resultBtn('won', 'Won')}${resultBtn('lost', 'Lost')}</div>
@@ -322,6 +363,9 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     const side = e.target.closest('[data-side]');
     if (side) {
       filter.side = filter.side === side.dataset.side ? '' : side.dataset.side;
+      // Round-library picks are side-relative; drop them when side clears/changes.
+      filter.roundOwn = '';
+      filter.roundOpp = '';
       resetListPage();
       render();
       return;
@@ -351,6 +395,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       filter.result = '';
       filter.advantage = '';
       filter.role = null;
+      filter.roundOwn = '';
+      filter.roundOpp = '';
       filter.dateFrom = '';
       filter.dateTo = '';
       filter.minRounds = defaultMinRounds({
@@ -386,6 +432,14 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     if (sel.dataset.filter === 'maps') {
       filter.maps = sel.value ? [sel.value] : [];
       filter.role = null;
+      filter.roundOwn = '';
+      filter.roundOpp = '';
+      resetListPage();
+      render();
+      return;
+    }
+    if (sel.dataset.filter === 'roundOwn' || sel.dataset.filter === 'roundOpp') {
+      filter[sel.dataset.filter] = String(sel.value || '').trim();
       resetListPage();
       render();
       return;
@@ -521,6 +575,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       dateFrom: filter.dateFrom || '',
       dateTo: filter.dateTo || '',
       role: filter.role ? { side: filter.role.side, value: filter.role.value } : null,
+      roundOwn: filter.roundOwn || '',
+      roundOpp: filter.roundOpp || '',
       sortKey: s?.key || (tab === 'teams' ? 'avgRating' : 'rating'),
       sortDir: s?.dir === 'asc' ? 'asc' : 'desc',
       page: Math.max(1, Number(activePage()) || 1),
@@ -557,11 +613,21 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       else if (typeof m === 'string' && m) filter.maps = [m];
       else if (next.map) filter.maps = [String(next.map)];
       else filter.maps = [];
+      if (filter.maps.length !== 1) {
+        filter.roundOwn = '';
+        filter.roundOpp = '';
+      }
     } else if (next.map) {
       filter.maps = [String(next.map)];
     }
 
-    if ('side' in next) filter.side = next.side === 'T' || next.side === 'CT' ? next.side : '';
+    if ('side' in next) {
+      filter.side = next.side === 'T' || next.side === 'CT' ? next.side : '';
+      if (!filter.side) {
+        filter.roundOwn = '';
+        filter.roundOpp = '';
+      }
+    }
     if ('result' in next) {
       filter.result = next.result === 'won' || next.result === 'lost' ? next.result : '';
     }
@@ -614,6 +680,16 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       } else {
         filter.role = null;
       }
+    }
+    if ('roundOwn' in next || 'round' in next) {
+      filter.roundOwn = String(next.roundOwn ?? next.round ?? '').trim();
+    }
+    if ('roundOpp' in next || 'vsRound' in next) {
+      filter.roundOpp = String(next.roundOpp ?? next.vsRound ?? '').trim();
+    }
+    if (!filter.side || filter.maps.length !== 1) {
+      filter.roundOwn = '';
+      filter.roundOpp = '';
     }
 
     const sortKey = String(next.sortKey || next.sort || '').trim();

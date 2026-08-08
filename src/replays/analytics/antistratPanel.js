@@ -8,7 +8,7 @@
 // into the destination team's Documents tab.
 // ---------------------------------------------------------------------------
 
-import { fetchTeams, saveTeamDocument, formatApiError } from '../api.js';
+import { fetchTeams, saveTeamDocument, formatApiError, fetchStats } from '../api.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { PLAN_NAMES } from '../../../shared/entitlements/catalogue.js';
 import { getEntitlements } from '../../lib/entitlements.js';
@@ -36,6 +36,9 @@ export function createAntistratPanel({ escapeHtml }) {
   el.innerHTML = spinnerHtml('Loading teams…');
 
   let payload = null;
+  let loadError = '';
+  let loadToken = 0;
+  let fetching = false;
   /** @type {ReturnType<typeof listTeams>} */
   let teams = [];
   /** @type {Array<{id: string, name: string}>|null} own teams; null until fetched */
@@ -295,6 +298,11 @@ export function createAntistratPanel({ escapeHtml }) {
 
   function render() {
     if (!payload) {
+      if (loadError) {
+        el.innerHTML = `<p class="view-empty">${escapeHtml(loadError)}</p>
+          <button type="button" class="btn btn-sm" data-as-retry>Retry</button>`;
+        return;
+      }
       el.innerHTML = spinnerHtml('Loading teams…');
       return;
     }
@@ -492,6 +500,10 @@ export function createAntistratPanel({ escapeHtml }) {
   });
 
   el.addEventListener('click', (e) => {
+    if (e.target.closest('[data-as-retry]')) {
+      void load(null);
+      return;
+    }
     const pick = e.target.closest('[data-as-pick-team]');
     if (pick) {
       state.teamKey = pick.dataset.asPickTeam;
@@ -518,9 +530,23 @@ export function createAntistratPanel({ escapeHtml }) {
 
   // ---- load ---------------------------------------------------------------
 
-  /** @param {object} statsPayload  the shared pattern finder payload */
-  function load(statsPayload) {
-    payload = statsPayload || payload;
+  function ensureMyTeams() {
+    if (myTeams !== null || myTeamsError) return;
+    void fetchTeams()
+      .then((list) => {
+        myTeams = (list || []).map((t) => ({ id: t.id, name: t.name }));
+        if (!state.destTeamId && myTeams.length) state.destTeamId = myTeams[0].id;
+        render();
+      })
+      .catch((err) => {
+        myTeamsError = formatApiError(err).message || 'Could not load your teams.';
+        render();
+      });
+  }
+
+  function applyPayload(statsPayload) {
+    payload = statsPayload;
+    loadError = '';
     teams = payload ? listTeams(payload) : [];
     if (state.teamKey && !teams.some((t) => t.key === state.teamKey)) {
       state.teamKey = '';
@@ -528,17 +554,40 @@ export function createAntistratPanel({ escapeHtml }) {
       state.excluded.clear();
     }
     render();
-    if (myTeams === null && !myTeamsError) {
-      void fetchTeams()
-        .then((list) => {
-          myTeams = (list || []).map((t) => ({ id: t.id, name: t.name }));
-          if (!state.destTeamId && myTeams.length) state.destTeamId = myTeams[0].id;
-          render();
-        })
-        .catch((err) => {
-          myTeamsError = formatApiError(err).message || 'Could not load your teams.';
-          render();
-        });
+    ensureMyTeams();
+  }
+
+  /**
+   * @param {object|null|undefined} statsPayload  shared pattern-finder payload, or
+   *   null/undefined to keep the current one / self-fetch when still empty
+   */
+  async function load(statsPayload) {
+    if (statsPayload) {
+      loadToken += 1;
+      fetching = false;
+      applyPayload(statsPayload);
+      return;
+    }
+    if (payload) {
+      render();
+      ensureMyTeams();
+      return;
+    }
+    if (fetching) return;
+    const token = ++loadToken;
+    loadError = '';
+    fetching = true;
+    el.innerHTML = spinnerHtml('Loading teams…');
+    try {
+      const data = await fetchStats(null);
+      if (token !== loadToken) return;
+      applyPayload(data);
+    } catch (err) {
+      if (token !== loadToken) return;
+      loadError = formatApiError(err).message || 'Could not load teams.';
+      render();
+    } finally {
+      if (token === loadToken) fetching = false;
     }
   }
 
@@ -546,6 +595,7 @@ export function createAntistratPanel({ escapeHtml }) {
     el,
     load,
     destroy() {
+      loadToken += 1;
       el.remove();
     }
   };

@@ -3462,7 +3462,8 @@ body.rv-open {
 }
 
 .st-map-select,
-.st-role-select {
+.st-role-select,
+.st-round-select {
   min-width: 132px;
 }
 

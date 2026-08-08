@@ -60,6 +60,8 @@ const div = (a, b) => (b > 0 ? a / b : 0);
  * @property {string} [teamName]  only count rounds while the subject played under this display name
  * @property {string} [dateFrom]  inclusive start day (YYYY-MM-DD, local)
  * @property {string} [dateTo]    inclusive end day (YYYY-MM-DD, local)
+ * @property {string} [roundOwn]  round-library key the subject side must have run
+ * @property {string} [roundOpp]  round-library key the opposing side must have run
  */
 
 /** Match / upload time for a demo (ms), or 0 when unknown. */
@@ -99,6 +101,19 @@ export function demoPassesDate(demo, filter = {}) {
     if (end != null && ts > end) return false;
   }
   return true;
+}
+
+/**
+ * Does a stored round-library bag carry `key` on the given absolute side?
+ * Tags are packed as `{ k, m }` on the row (see roundTags.js).
+ */
+export function rowHasRoundTag(row, side, key) {
+  if (!key) return true;
+  const bag = row?.rl;
+  if (!bag) return false;
+  const list = side === 'CT' ? bag.ct : bag.t;
+  if (!Array.isArray(list)) return false;
+  return list.some((t) => t && t.k === key);
 }
 
 /**
@@ -152,6 +167,18 @@ export function rowPasses(row, filter = {}, team = 0, players = null, demos = nu
     if (filter.advantage === '5v4' && !gotOk) return false;
     if (filter.advantage === '4v5' && !gotOd) return false;
     if (filter.advantage === 'even' && (gotOk || gotOd)) return false;
+  }
+
+  // Round-library filters are absolute T/CT tags on the row. Subject side must
+  // already be known (filter.side) so "our call" vs "their call" is unambiguous.
+  const roundOwn = String(filter.roundOwn || '').trim();
+  const roundOpp = String(filter.roundOpp || '').trim();
+  if (roundOwn || roundOpp) {
+    const ownSide = filter.side === 'CT' ? 'CT' : filter.side === 'T' ? 'T' : side;
+    if (ownSide !== 'T' && ownSide !== 'CT') return false;
+    const oppSide = ownSide === 'T' ? 'CT' : 'T';
+    if (roundOwn && !rowHasRoundTag(row, ownSide, roundOwn)) return false;
+    if (roundOpp && !rowHasRoundTag(row, oppSide, roundOpp)) return false;
   }
 
   return true;

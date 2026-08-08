@@ -3116,6 +3116,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     if (state.role?.side && state.role?.value) {
       q.set('role', `${state.role.side}:${state.role.value}`);
     }
+    if (state.roundOwn) q.set('round', String(state.roundOwn));
+    if (state.roundOpp) q.set('vsRound', String(state.roundOpp));
     if (state.sortKey) q.set('sort', String(state.sortKey));
     if (state.sortDir === 'asc' || state.sortDir === 'desc') q.set('dir', state.sortDir);
     if (Number(state.page) > 1) q.set('page', String(Math.floor(Number(state.page))));
@@ -3178,6 +3180,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         if ((side === 'T' || side === 'CT') && value) out.role = { side, value };
       }
     }
+    if (params.round) out.roundOwn = String(params.round);
+    if (params.vsRound) out.roundOpp = String(params.vsRound);
+    if (params.roundOwn) out.roundOwn = String(params.roundOwn);
+    if (params.roundOpp) out.roundOpp = String(params.roundOpp);
     if (params.sort) out.sortKey = String(params.sort);
     if (params.dir === 'asc' || params.dir === 'desc') out.sortDir = params.dir;
     if (params.page) out.page = Math.max(1, Math.floor(Number(params.page) || 1));
@@ -3265,6 +3271,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       delete merged.hasAwp;
       delete merged.oppHasAwp;
       delete merged.role;
+      delete merged.roundOwn;
+      delete merged.roundOpp;
       delete merged.player;
       delete merged.team;
       delete merged.minRounds;
@@ -3356,9 +3364,11 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       });
       analyticsBodyEl.appendChild(analyticsPanel.el);
     }
-    analyticsPanel.load();
+    // Chapter before load so antistrat mounts before the shared fetch finishes
+    // (and so a failed pattern-finder spend cannot strand it on "Loading teams…").
     const chapter = new URLSearchParams(window.location.search).get('chapter');
     if (chapter) analyticsPanel.setChapter(chapter);
+    analyticsPanel.load();
   }
 
   /** Mount the chart builder on first use; the payload is reused after that. */
@@ -3631,6 +3641,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
               fromUrl.hasAwp ||
               fromUrl.oppHasAwp ||
               fromUrl.role ||
+              fromUrl.roundOwn ||
+              fromUrl.roundOpp ||
               fromUrl.player ||
               fromUrl.team ||
               (fromUrl.minRounds != null && fromUrl.minRounds !== '')
