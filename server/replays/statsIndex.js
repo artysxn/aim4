@@ -53,10 +53,15 @@ import { roundDuelBag } from '../../src/replays/duels/duelStats.js';
 import { roundTagsFor, rowTagged, rowTags } from '../../src/replays/analytics/roundTags.js';
 import { hasRoundLibrary } from '../../src/replays/analytics/roundLibrary.js';
 
-// v18 adds round library tags (row.rl): which named round type each side ran,
-// with the timings that decided it. Bumping this rebuilds every index from the
-// round files already on disk; it does NOT reparse demos.
-export const STATS_VERSION = 18;
+// v17 adds per-player AWP primary hold seconds (row.aw) for Database aKPR.
+// Bumping this rebuilds every index from the round files already on disk; it
+// does NOT reparse demos.
+//
+// Do NOT bump this for round library tags. `needsPhaseEnrichment` treats a
+// lower entry.v as stale, and that path is awaited inside demoIndex, so a bump
+// makes the next GET /stats walk every tick buffer in the library before it
+// answers. Tags carry their own ROUND_LIBRARY_VERSION instead.
+export const STATS_VERSION = 17;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -342,13 +347,16 @@ function needsRoundLibraryEnrichment(entry) {
   return entry.rounds.some((r) => hasRoundLibrary(r.m) && !rowTagged(r));
 }
 
-/** Background tick walk for roles, movement metrics and/or round tags. */
+/**
+ * Background tick walk for roles and/or movement metrics.
+ *
+ * Round tags are deliberately NOT here. Every demo indexed before a map got a
+ * library is untagged, so including them would queue a tick walk for the whole
+ * library the first time anyone opens Statistics. They are written on a fresh
+ * build, and rewritten on demand by the admin round rescan.
+ */
 function needsTickDerivedEnrichment(entry) {
-  return (
-    needsRoleEnrichment(entry) ||
-    needsMovementEnrichment(entry) ||
-    needsRoundLibraryEnrichment(entry)
-  );
+  return needsRoleEnrichment(entry) || needsMovementEnrichment(entry);
 }
 
 /** Load zone network for a map (bombsites + vision). Always returns an object. */
