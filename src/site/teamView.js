@@ -2954,7 +2954,10 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
 
-    const kind = t.closest('[data-kind]');
+    // Scoped to the select itself: a document widget mounts a
+    // <div data-kind="util-map"> whose own controls would otherwise walk up
+    // into this handler and be read as a member id.
+    const kind = t.closest('select[data-kind]');
     if (kind) {
       const res = await run(
         () => teamMemberAction(team.id, kind.dataset.kind, 'role', { kind: kind.value }),
@@ -2967,7 +2970,7 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
 
-    const role = t.closest('[data-role]');
+    const role = t.closest('select[data-role]');
     if (role) {
       const res = await run(
         () => teamMemberAction(team.id, role.dataset.role, 'role', { role: role.value }),
@@ -2980,7 +2983,7 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
 
-    const pos = t.closest('[data-pos]');
+    const pos = t.closest('select[data-pos]');
     if (pos) {
       const [memberId, map] = pos.dataset.pos.split('|');
       const res = await run(

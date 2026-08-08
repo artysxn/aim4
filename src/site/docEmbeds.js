@@ -122,16 +122,24 @@ function filterBar(root, { buys = true, onChange }) {
     }
   }
 
-  function sync() {
+  function label() {
     readout.textContent =
       state.from === 0 && state.to === ROUND_SECONDS
         ? 'Whole round'
         : `${clockAt(state.from)} to ${clockAt(state.to)}`;
+  }
+
+  function sync() {
+    label();
     onChange({ ...state });
   }
 
+  // The bar does NOT paint on construction. Callers finish wiring themselves
+  // up and draw once, which is what keeps this from reaching into a widget
+  // that is still half-built: `const` members declared below the filter bar
+  // are in their dead zone while it runs.
   root.appendChild(bar);
-  sync();
+  label();
   return state;
 }
 
@@ -156,13 +164,27 @@ export function enhanceDocEmbeds(surface) {
     node.contentEditable = 'false';
     node.classList.add('doc-embed');
     node.replaceChildren();
+    // A widget's own controls belong to the widget. Without this their events
+    // bubble into whatever page is hosting the document, where a `data-kind`
+    // on this very div reads as a team member id.
+    for (const type of ['change', 'input']) {
+      node.addEventListener(type, (e) => e.stopPropagation());
+    }
     try {
       if (node.dataset.kind === 'util-map') mountUtilMap(node, data);
       else if (node.dataset.kind === 'heat') mountHeat(node, data);
       else if (node.dataset.kind === 'ct-spread') mountCtSpread(node, data);
       else if (node.dataset.kind === 'spacing') mountSpacing(node, data);
-    } catch {
-      /* a broken embed must not take the document down */
+    } catch (err) {
+      // A broken embed must not take the document down, but it must not
+      // disappear in silence either: half a widget on the page and nothing in
+      // the console is the worst of both.
+      console.warn('doc embed failed to mount', node.dataset.kind, err);
+      node.replaceChildren();
+      const note = document.createElement('p');
+      note.className = 'doc-embed-stale';
+      note.textContent = 'This widget could not be drawn.';
+      node.appendChild(note);
     }
   }
 }
