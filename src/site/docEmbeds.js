@@ -58,8 +58,13 @@ function clockAt(seconds) {
  *
  * @param {(state: {from: number, to: number, own: string, opp: string}) => void} onChange
  */
-function filterBar(root, { buys = true, onChange }) {
-  const state = { from: 0, to: ROUND_SECONDS, own: '', opp: '' };
+function filterBar(root, { buys = true, sliders = true, span = null, onChange }) {
+  // Most widgets run on the round clock; the afterplant ones run on the bomb,
+  // from five seconds before the plant to the forty it takes to go off.
+  const lo = span ? span.from : 0;
+  const hi = span ? span.to : ROUND_SECONDS;
+  const readAt = span ? (s) => `${s > 0 ? '+' : ''}${s}s` : clockAt;
+  const state = { from: lo, to: hi, own: '', opp: '' };
   const bar = document.createElement('div');
   bar.className = 'doc-embed-filters';
 
@@ -69,10 +74,10 @@ function filterBar(root, { buys = true, onChange }) {
   const slider = (which) => {
     const input = document.createElement('input');
     input.type = 'range';
-    input.min = '0';
-    input.max = String(ROUND_SECONDS);
+    input.min = String(lo);
+    input.max = String(hi);
     input.step = '1';
-    input.value = String(which === 'from' ? 0 : ROUND_SECONDS);
+    input.value = String(which === 'from' ? lo : hi);
     input.className = 'doc-embed-slider';
     input.setAttribute(
       'aria-label',
@@ -93,12 +98,12 @@ function filterBar(root, { buys = true, onChange }) {
     return input;
   };
 
-  const from = slider('from');
-  const to = slider('to');
-  const clocks = document.createElement('div');
-  clocks.className = 'doc-embed-sliders';
-  clocks.append(from, to);
-  bar.append(clocks, readout);
+  if (sliders) {
+    const clocks = document.createElement('div');
+    clocks.className = 'doc-embed-sliders';
+    clocks.append(slider('from'), slider('to'));
+    bar.append(clocks, readout);
+  }
 
   if (buys) {
     for (const [key, label] of [
@@ -124,9 +129,11 @@ function filterBar(root, { buys = true, onChange }) {
 
   function label() {
     readout.textContent =
-      state.from === 0 && state.to === ROUND_SECONDS
-        ? 'Whole round'
-        : `${clockAt(state.from)} to ${clockAt(state.to)}`;
+      state.from === lo && state.to === hi
+        ? span
+          ? 'Whole afterplant'
+          : 'Whole round'
+        : `${readAt(state.from)} to ${readAt(state.to)}`;
   }
 
   function sync() {
@@ -260,9 +267,11 @@ function mountHeat(node, data) {
   const count = document.createElement('span');
   count.className = 'doc-embed-count';
   let radar = null;
-  let state = { from: 0, to: ROUND_SECONDS, own: '', opp: '' };
+  const span = data.span || null;
+  let state = { from: span ? span.from : 0, to: span ? span.to : ROUND_SECONDS, own: '', opp: '' };
 
   filterBar(node, {
+    span,
     onChange(next) {
       state = next;
       draw();
@@ -326,7 +335,10 @@ function mountCtSpread(node, data) {
   count.className = 'doc-embed-count';
   let state = { from: 0, to: ROUND_SECONDS, own: '', opp: '' };
 
+  // No sliders here: the table IS the round over time, so cutting rows out of
+  // it would only hide the shape it exists to show.
   filterBar(node, {
+    sliders: false,
     onChange(next) {
       state = next;
       render();

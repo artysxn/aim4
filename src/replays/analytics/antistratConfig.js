@@ -32,6 +32,7 @@ export const ANTISTRAT_CATEGORIES = [
   { key: 'fourVfive', group: 'General', label: '4v5s' },
   { key: 'force', group: 'General', label: 'Force buys' },
   { key: 'antiBuy', group: 'General', label: 'Anti-eco and anti-force' },
+  { key: 'buyContext', group: 'General', label: 'First gun round and forced buys' },
   { key: 'firstEngagement', group: 'General', label: 'First engagement timing' },
   { key: 'patterns', group: 'General', label: 'Patterns' },
   { key: 'openings', group: 'General', label: 'Openings' },
@@ -237,7 +238,7 @@ function renderResponses(esc, s) {
     if (!bag?.calls.length) continue;
     const rows = bag.calls.flatMap((call) =>
       call.to.map((reply, i) => [
-        i === 0 ? esc(call.label) : '',
+        i === 0 ? `${esc(call.label)} (${call.rounds})` : '',
         esc(reply.label),
         `${reply.share}%`,
         link(esc, `${reply.rounds} of ${call.rounds}`, reply.files),
@@ -245,9 +246,9 @@ function renderResponses(esc, s) {
       ])
     );
     parts.push(
-      `<p><strong>${side}</strong> ${bag.answered} of ${bag.rounds} rounds answer something ${bag.other} did ${bag.lead}s+ earlier</p>`
+      `<p><strong>${side}</strong>, answering something ${bag.other} did ${bag.lead}s+ earlier, in ${bag.minShare}%+ of those rounds and at least ${bag.minRounds} times</p>`
     );
-    parts.push(table(['Our call', 'After their', 'Rate', 'Rounds', 'Win'], rows));
+    parts.push(table(['When they', 'We answer', 'Rate', 'Rounds', 'Win'], rows));
   }
   return parts.length ? parts.join('') : NONE;
 }
@@ -292,6 +293,33 @@ function renderAntiBuy(esc, s) {
         rows
       )
     );
+  }
+  return parts.length ? parts.join('') : NONE;
+}
+
+/**
+ * The three rounds of a half whose buy is decided for you: the first gun
+ * round, the force after a lost pistol, and the force after losing to one.
+ */
+function renderBuyContext(esc, s) {
+  const parts = [];
+  for (const side of ['T', 'CT']) {
+    const buckets = s?.sides?.[side];
+    if (!buckets?.length) continue;
+    const rows = buckets.map((b) => [
+      esc(b.label),
+      link(esc, String(b.rounds), b.files),
+      `${b.winrate}%`,
+      `${b.setShare}%`,
+      `${b.defaultShare}%`,
+      b.calls.length
+        ? b.calls
+            .map((c) => `${link(esc, esc(c.label), c.files)} ${c.rounds} (${c.winrate}%)`)
+            .join(', ')
+        : '—'
+    ]);
+    parts.push(`<p><strong>${side}</strong></p>`);
+    parts.push(table(['Round', 'N', 'Win', 'Set call', 'Default', 'Calls'], rows));
   }
   return parts.length ? parts.join('') : NONE;
 }
@@ -462,6 +490,8 @@ function renderPostplant(esc, s, word, mapCode) {
         embed(esc, 'heat', {
           map: mapCode,
           title: `${site.toUpperCase()} ${word}`,
+          // Read on the bomb rather than the round clock.
+          span: bag.span || { from: -5, to: 40 },
           points: bag.heat
         })
       );
@@ -509,31 +539,45 @@ function renderRetakes(esc, s, mapCode) {
  * from the other end while they defended it. Timings are averages of the
  * moments that made the round match, written on the round clock.
  */
+/**
+ * One side's round library as a table.
+ *
+ * Two columns per call rather than two bullet lists: running it and facing it
+ * are the same question asked from both ends, and reading them side by side is
+ * the only way to see that they hold a call better than they run it. Timings
+ * go in their own column instead of trailing the sentence.
+ */
 function renderRoundList(esc, s, teamName) {
   if (!s || !s.types.length) return NONE;
-  const marks = (bag) =>
-    bag.marks.length
-      ? ` <em>${bag.marks.map((m) => `${esc(m.name)} ${esc(m.clock)}`).join(', ')}</em>`
-      : '';
-  const line = (bag, label) => {
-    if (!bag.rounds) return '';
-    const when = bag.when ? ` at ${esc(bag.when.clock)}` : '';
-    return `${link(esc, label, bag.files)}${when}: ${bag.winrate}% (${bag.wins}W ${bag.losses}L of ${bag.rounds}, ${bag.share}% of rounds)${marks(bag)}`;
-  };
   const own = s.side === 'T' ? 'T' : 'CT';
   const other = s.side === 'T' ? 'CT' : 'T';
   const named = (n) => (Number.isFinite(n) ? `, ${n} named` : '');
-  const parts = [
-    `<p>${esc(teamName)} on ${esc(own)}: ${s.ownRounds} rounds${named(s.ownNamed)}. Facing the same calls on ${esc(other)}: ${s.facedRounds} rounds${named(s.facedNamed)}.</p>`
-  ];
-  for (const t of s.types) {
-    const rows = [
-      line(t.for, `Ran it (${own})`),
-      line(t.against, `Faced it (${other})`)
-    ].filter(Boolean);
-    parts.push(`<p><strong>${esc(t.label)}</strong></p>${li(rows.length ? rows : ['0 rounds'])}`);
-  }
-  return parts.join('');
+
+  const cell = (bag) => {
+    if (!bag.rounds) return '—';
+    return `${link(esc, `${bag.winrate}%`, bag.files)} <small>${bag.wins}W ${bag.losses}L of ${bag.rounds}</small>`;
+  };
+  const marks = (bag) =>
+    bag.marks.length
+      ? bag.marks
+          .slice(0, 3)
+          .map((m) => `${esc(m.name)} ${esc(m.clock)}`)
+          .join(', ')
+      : '—';
+
+  const rows = s.types.map((t) => [
+    esc(t.label),
+    t.for.when ? esc(t.for.when.clock) : '—',
+    cell(t.for),
+    t.for.rounds ? `${t.for.share}%` : '—',
+    cell(t.against),
+    marks(t.for.rounds ? t.for : t.against)
+  ]);
+
+  return `<p>${esc(teamName)} on ${esc(own)}: ${s.ownRounds} rounds${named(s.ownNamed)}. Facing the same calls on ${esc(other)}: ${s.facedRounds} rounds${named(s.facedNamed)}.</p>${table(
+    ['Call', 'When', `Ran it (${own})`, 'Use', `Faced it (${other})`, 'Timings'],
+    rows
+  )}`;
 }
 
 /** What the library could not read on this map, when anything is missing. */
@@ -701,6 +745,7 @@ export function buildAntistratDocHtml(spec, esc) {
     fourVfive: (s) => renderAdvantage(esc, s),
     force: (s) => renderForce(esc, s),
     antiBuy: (s) => renderAntiBuy(esc, s),
+    buyContext: (s) => renderBuyContext(esc, s),
     firstEngagement: (s) => renderFirstEngagement(esc, s, spec.mapCode),
     patterns: (s) => renderPatterns(esc, s),
     openings: (s) => renderOpenings(esc, s),

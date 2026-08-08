@@ -170,7 +170,7 @@ function bump(map, key, by = 1) {
 // Per-round feature extraction
 // ---------------------------------------------------------------------------
 
-function roundFeatures({ meta, track, row, teamIdx, opponent, network, utilDb, mapCode }) {
+function roundFeatures({ meta, track, row, teamIdx, opponent, context, network, utilDb, mapCode }) {
   const timing = timingFor(meta);
   const tickRate = timing.tickRate || 64;
   const t0 = timing.freezeEndTick;
@@ -305,6 +305,10 @@ function roundFeatures({ meta, track, row, teamIdx, opponent, network, utilDb, m
     nades.push({
       type,
       tick: det,
+      // Seconds since the round went live, at the detonation. The clock below
+      // is the throw, counting down; anything filtering on when a piece of
+      // utility was UP wants this one.
+      at: elapsedOf(det),
       clock: clockOf(Number(g.throwTick ?? det)),
       phase: phaseAtTick(det, bounds),
       player: g.player,
@@ -398,6 +402,10 @@ function roundFeatures({ meta, track, row, teamIdx, opponent, network, utilDb, m
     file: row.f,
     demoId: row.d,
     round: row.n,
+    // Where the round sits in its half, and the score going into it.
+    inHalf: context?.inHalf || 0,
+    ourHalf: context?.ourHalf || 0,
+    theirHalf: context?.theirHalf || 0,
     opponent,
     side,
     won,
@@ -588,11 +596,16 @@ function liveUtility(rounds, side, labels) {
       k: (r.tags?.[side] || []).map((t) => t.k).filter((k) => k !== 'default')
     });
     for (const n of hits) {
+      const x = n.sx !== null ? n.sx : n.x;
+      const y = n.sy !== null ? n.sy : n.y;
+      // Same rule as the heat points: an unreadable throw is left out, never
+      // carried as a null that the sliders would read as second zero.
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(n.at)) continue;
       throws.push(
         indexOf(nadeLabel(n)),
         NADE_KINDS.indexOf(n.type),
-        Math.round(n.sx !== null ? n.sx : n.x),
-        Math.round(n.sy !== null ? n.sy : n.y),
+        Math.round(x),
+        Math.round(y),
         Math.round(n.at),
         at
       );
@@ -1065,6 +1078,12 @@ function aggTFormations(rounds, mapCode, laneSets) {
   };
 }
 
+/**
+ * The afterplant window, relative to the plant: five seconds before it, and
+ * the forty the bomb takes to go off.
+ */
+export const PLANT_SPAN = { from: -5, to: 40 };
+
 function aggPostplant(rounds, side) {
   const out = {};
   for (const site of ['a', 'b']) {
@@ -1081,18 +1100,26 @@ function aggPostplant(rounds, side) {
       const seen = new Set();
       for (const p of s.pts) {
         if (p.pos) seen.add(p.pos);
-        // Stamped with the moment the snapshot was taken, which moves with the
-        // plant: the slider then separates an early plant held from a late one.
-        points.push({ x: p.x, y: p.y, t: s.elapsed, own: r.ownEcon, opp: r.oppEcon });
       }
       for (const z of seen) bump(zoneRounds, z);
       distinct.push(seen.size);
+      // The heat runs on the bomb, not the round clock: from five seconds
+      // before the plant to the forty it takes to go off. Sampled across the
+      // whole of it so the sliders have a window to cut rather than one frame.
+      for (let rel = PLANT_SPAN.from; rel <= PLANT_SPAN.to; rel += 2) {
+        const at = r.sampleAt(r.plantTick + rel * r.tickRate);
+        if (!at) continue;
+        for (const p of at.pts) {
+          points.push({ x: p.x, y: p.y, t: rel, own: r.ownEcon, opp: r.oppEcon });
+        }
+      }
     }
     out[site] = {
       rounds: set.length,
       files: filesOf(set),
       avgZones: distinct.length ? round1(avgOf(distinct)) : null,
       heat: packPoints(points),
+      span: PLANT_SPAN,
       top: topCounts(zoneRounds).map((t) => ({ name: t.name, share: pct(t.count, set.length) }))
     };
   }
@@ -1697,6 +1724,93 @@ function aggRoundList(rounds, mapCode, side) {
 }
 
 /**
+ * The three rounds of a half whose buy is decided for you.
+ *
+ * Every half runs through the same fork, and how a team plays it is a habit
+ * worth writing down:
+ *
+ *   First gun round  they won the pistol and the follow-up, so this is the
+ *                    first time both sides have money. Default or set call?
+ *   Second-round     they lost the pistol and forced into it.
+ *   Break force      they won the pistol, lost the second round to the other
+ *                    side's force, and are now forcing at 1-1 themselves.
+ *
+ * Each one carries its winrate, because the shape only matters once you know
+ * whether it works.
+ */
+const BUY_CONTEXTS = [
+  {
+    key: 'firstGun',
+    label: 'First gun round',
+    // Round 3 at 2-0 or round 4 at 3-0, both sides on a real buy.
+    test: (r) =>
+      r.ownEcon >= 4 &&
+      r.oppEcon >= 4 &&
+      ((r.inHalf === 3 && r.ourHalf === 2 && r.theirHalf === 0) ||
+        (r.inHalf === 4 && r.ourHalf === 3 && r.theirHalf === 0))
+  },
+  {
+    key: 'secondForce',
+    label: 'Second-round force',
+    test: (r) => r.inHalf === 2 && r.ownEcon === 3 && r.ourHalf === 0 && r.theirHalf === 1
+  },
+  {
+    key: 'breakForce',
+    label: 'Break force',
+    test: (r) => r.inHalf === 3 && r.ownEcon === 3 && r.ourHalf === 1 && r.theirHalf === 1
+  }
+];
+
+function aggBuyContext(rounds, mapCode) {
+  const out = { sides: {} };
+  for (const side of ['T', 'CT']) {
+    const labels = typeLabels(mapCode, side);
+    const buckets = [];
+    for (const ctx of BUY_CONTEXTS) {
+      const set = rounds.filter((r) => r.side === side && ctx.test(r));
+      if (!set.length) continue;
+      const wins = set.filter((r) => r.won).length;
+      // A set call is any named round type; everything else is a default.
+      let named = 0;
+      const calls = new Map();
+      for (const r of set) {
+        const tags = (r.tags?.[side] || []).filter((t) => t.k !== 'default');
+        if (tags.length) named++;
+        for (const tag of tags) {
+          if (!calls.has(tag.k)) calls.set(tag.k, { rounds: 0, wins: 0, files: [] });
+          const rec = calls.get(tag.k);
+          rec.rounds++;
+          if (r.won) rec.wins++;
+          if (rec.files.length < LINK_FILES_CAP) rec.files.push(r.file);
+        }
+      }
+      buckets.push({
+        key: ctx.key,
+        label: ctx.label,
+        rounds: set.length,
+        wins,
+        winrate: pct(wins, set.length),
+        files: filesOf(set),
+        setShare: pct(named, set.length),
+        defaultShare: pct(set.length - named, set.length),
+        calls: [...calls.entries()]
+          .map(([key, rec]) => ({
+            key,
+            label: labels.get(key) || key,
+            rounds: rec.rounds,
+            winrate: pct(rec.wins, rec.rounds),
+            files: rec.files
+          }))
+          .sort((a, b) => b.rounds - a.rounds || a.label.localeCompare(b.label))
+          .slice(0, 4)
+      });
+    }
+    if (buckets.length) out.sides[side] = buckets;
+  }
+  return Object.keys(out.sides).length ? out : null;
+}
+
+/**
  * The rounds where the other side could not buy: what our money bought us.
  *
  * Split by what THEY had, not what we had, because that is the call being
@@ -1796,6 +1910,10 @@ function topFormation(set, mapCode, laneSets) {
 
 /** How far ahead an enemy call has to be before ours can be a reply to it. */
 export const RESPONSE_LEAD_SECONDS = 5;
+/** And how many rounds it has to have happened in before it is a habit. */
+export const RESPONSE_MIN_ROUNDS = 4;
+/** As a share of the rounds their call happened in. */
+export const RESPONSE_MIN_SHARE = 50;
 
 /**
  * Calls this team makes in answer to the other side's.
@@ -1808,36 +1926,38 @@ export const RESPONSE_LEAD_SECONDS = 5;
  * Both directions of the round are already tagged, so this needs no extra
  * reading — it is the same bag looked at as a pair.
  */
-function aggResponses(rounds, mapCode, side) {
+export function aggResponses(rounds, mapCode, side) {
   const labels = typeLabels(mapCode, side);
   const other = side === 'T' ? 'CT' : 'T';
   const theirLabels = typeLabels(mapCode, other);
   const own = rounds.filter((r) => r.side === side && r.tags);
   if (!own.length) return null;
 
-  /** @type {Map<string, { key: string, rounds: Set<string>, replies: Map<string, { files: string[], seen: Set<string>, wins: number }> }>} */
-  const byCall = new Map();
+  // Keyed on THEIR call, because that is the condition. "When they do this, we
+  // do that" is a rate out of the rounds they did it in, not out of ours.
+  /** @type {Map<string, { seen: Set<string>, replies: Map<string, { seen: Set<string>, files: string[], wins: number }> }>} */
+  const byTheirs = new Map();
   let answered = 0;
   for (const r of own) {
     const ours = (r.tags[side] || []).filter((t) => t.k !== 'default');
     const theirs = (r.tags[other] || []).filter((t) => t.k !== 'default');
-    if (!ours.length) continue;
+    if (!theirs.length) continue;
     let anyReply = false;
-    for (const tag of ours) {
-      const at = tagTrigger(tag);
-      if (at === null) continue;
-      if (!byCall.has(tag.k)) {
-        byCall.set(tag.k, { key: tag.k, rounds: new Set(), replies: new Map() });
+    for (const theirTag of theirs) {
+      const lead = tagTrigger(theirTag);
+      if (lead === null) continue;
+      if (!byTheirs.has(theirTag.k)) {
+        byTheirs.set(theirTag.k, { seen: new Set(), replies: new Map() });
       }
-      const rec = byCall.get(tag.k);
-      rec.rounds.add(r.file);
-      for (const theirTag of theirs) {
-        const lead = tagTrigger(theirTag);
-        if (lead === null || lead > at - RESPONSE_LEAD_SECONDS) continue;
-        if (!rec.replies.has(theirTag.k)) {
-          rec.replies.set(theirTag.k, { files: [], seen: new Set(), wins: 0 });
+      const rec = byTheirs.get(theirTag.k);
+      rec.seen.add(r.file);
+      for (const tag of ours) {
+        const at = tagTrigger(tag);
+        if (at === null || lead > at - RESPONSE_LEAD_SECONDS) continue;
+        if (!rec.replies.has(tag.k)) {
+          rec.replies.set(tag.k, { seen: new Set(), files: [], wins: 0 });
         }
-        const reply = rec.replies.get(theirTag.k);
+        const reply = rec.replies.get(tag.k);
         if (reply.seen.has(r.file)) continue;
         reply.seen.add(r.file);
         if (reply.files.length < LINK_FILES_CAP) reply.files.push(r.file);
@@ -1848,29 +1968,44 @@ function aggResponses(rounds, mapCode, side) {
     if (anyReply) answered++;
   }
 
-  const calls = [...byCall.values()]
-    .map((rec) => ({
-      key: rec.key,
-      label: labels.get(rec.key) || rec.key,
-      rounds: rec.rounds.size,
-      to: [...rec.replies.entries()]
-        .map(([key, reply]) => ({
-          key,
-          label: theirLabels.get(key) || key,
-          rounds: reply.seen.size,
-          wins: reply.wins,
-          winrate: pct(reply.wins, reply.seen.size),
-          share: pct(reply.seen.size, rec.rounds.size),
-          files: reply.files
-        }))
-        .sort((a, b) => b.rounds - a.rounds || a.label.localeCompare(b.label))
-        .slice(0, 5)
-    }))
-    .filter((c) => c.to.length)
-    .sort((a, b) => b.to[0].rounds - a.to[0].rounds || a.label.localeCompare(b.label));
+  const calls = [];
+  for (const [key, rec] of byTheirs) {
+    // A habit, not a coincidence: it has to have happened enough times AND be
+    // what they usually do. Four rounds out of eight is a read; two out of
+    // three is noise, and four out of twenty is just their most common round.
+    const to = [...rec.replies.entries()]
+      .map(([ourKey, reply]) => ({
+        key: ourKey,
+        label: labels.get(ourKey) || ourKey,
+        rounds: reply.seen.size,
+        wins: reply.wins,
+        winrate: pct(reply.wins, reply.seen.size),
+        share: pct(reply.seen.size, rec.seen.size),
+        files: reply.files
+      }))
+      .filter((x) => x.rounds >= RESPONSE_MIN_ROUNDS && x.share >= RESPONSE_MIN_SHARE)
+      .sort((a, b) => b.share - a.share || b.rounds - a.rounds);
+    if (!to.length) continue;
+    calls.push({
+      key,
+      label: theirLabels.get(key) || key,
+      rounds: rec.seen.size,
+      to: to.slice(0, 5)
+    });
+  }
+  calls.sort((a, b) => b.to[0].share - a.to[0].share || a.label.localeCompare(b.label));
 
   if (!calls.length) return null;
-  return { side, other, rounds: own.length, answered, lead: RESPONSE_LEAD_SECONDS, calls };
+  return {
+    side,
+    other,
+    rounds: own.length,
+    answered,
+    lead: RESPONSE_LEAD_SECONDS,
+    minRounds: RESPONSE_MIN_ROUNDS,
+    minShare: RESPONSE_MIN_SHARE,
+    calls
+  };
 }
 
 /** Most rounds a response row keeps a link for. */
@@ -2049,11 +2184,17 @@ function aggPlayers(rounds, mains, rolesOf) {
  * worse picture than all of it at half the resolution.
  */
 export function packPoints(list, cap = HEAT_POINT_CAP) {
-  const step = list.length > cap ? Math.ceil(list.length / cap) : 1;
+  // Anything unreadable is dropped here rather than carried. JSON turns NaN
+  // into null, null compares as zero, and a sample that claims to have
+  // happened at the start of the round is worse than one that is missing.
+  const clean = list.filter(
+    (p) => Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.t)
+  );
+  const step = clean.length > cap ? Math.ceil(clean.length / cap) : 1;
   const out = [];
-  for (let i = 0; i < list.length; i += step) {
-    const p = list[i];
-    out.push(Math.round(p.x), Math.round(p.y), Math.round(p.t), p.own * 8 + p.opp);
+  for (let i = 0; i < clean.length; i += step) {
+    const p = clean[i];
+    out.push(Math.round(p.x), Math.round(p.y), Math.round(p.t), (p.own || 0) * 8 + (p.opp || 0));
   }
   return out;
 }
@@ -2151,9 +2292,27 @@ export async function runAntistratScan({
       rec.last = Math.max(rec.last, demo.uploadedAt || 0);
       playerStats.set(p.id, rec);
     }
-    for (const row of demo.rounds || []) {
-      if (row.m !== mapCode || !row.f) continue;
-      jobs.push({ row, teamIdx, opponent });
+    // Where each round sits in its half, and the score going into it. A
+    // pistol is both sides on nothing, which is what resets the count: it
+    // survives MR12, MR24 and overtime without knowing which it is.
+    let pistolAt = 0;
+    let ourHalf = 0;
+    let theirHalf = 0;
+    const ordered = [...(demo.rounds || [])].sort((a, b) => (a.n || 0) - (b.n || 0));
+    for (const row of ordered) {
+      if (buyBucket(row.e1) === 0 && buyBucket(row.e2) === 0) {
+        pistolAt = row.n;
+        ourHalf = 0;
+        theirHalf = 0;
+      }
+      const context = {
+        inHalf: pistolAt ? row.n - pistolAt + 1 : 0,
+        ourHalf,
+        theirHalf
+      };
+      if (row.m === mapCode && row.f) jobs.push({ row, teamIdx, opponent, context });
+      if (row.w === teamIdx) ourHalf++;
+      else if (row.w) theirHalf++;
     }
   }
   if (!jobs.length) throw new Error('No rounds of that team on this map.');
@@ -2208,6 +2367,7 @@ export async function runAntistratScan({
         row: job.row,
         teamIdx: job.teamIdx,
         opponent: job.opponent,
+        context: job.context,
         network,
         utilDb,
         mapCode
@@ -2242,6 +2402,7 @@ export async function runAntistratScan({
       fourVfive: aggAdvantage(rounds, '4v5'),
       force: aggForce(rounds),
       antiBuy: aggAntiBuy(rounds, mapCode, laneSets),
+      buyContext: aggBuyContext(rounds, mapCode),
       firstEngagement: aggFirstEngagement(rounds, nameOf, network),
       patterns: aggPatterns(rounds, nameOf),
       openings: aggOpenings(rounds),

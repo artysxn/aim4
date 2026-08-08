@@ -234,10 +234,38 @@ const SPREAD = {
 {
   const w = mount('ct-spread', SPREAD);
   assert.equal(w.count(), '2 CT rounds');
+  assert.equal(w.sliders().length, 0, 'the spread table IS the round over time, so no sliders');
   const [own] = w.selects();
   own.value = '4';
   own.fire('change');
   assert.equal(w.count(), '1 CT rounds', 'buys filter the table too');
+}
+
+// ---------------------------------------------------------------------------
+// The afterplant maps run on the bomb, not the round clock
+// ---------------------------------------------------------------------------
+
+{
+  const span = { from: -5, to: 40 };
+  const w = mount('heat', {
+    map: 'ANU',
+    title: 'A afterplants',
+    span,
+    // Five seconds before the plant, at it, and half a minute after.
+    points: [10, 10, -5, 36, 20, 20, 0, 36, 30, 30, 30, 36]
+  });
+  assert.equal(w.count(), '3 of 3 samples', 'the whole afterplant to start');
+
+  const [from, to] = w.sliders();
+  assert.equal(from.min, '-5', 'the window opens before the plant');
+  assert.equal(to.max, '40', 'and closes when the bomb does');
+
+  from.value = '0';
+  from.fire('input');
+  assert.equal(w.count(), '2 of 3 samples', 'dropping the pre-plant sample');
+  to.value = '10';
+  to.fire('input');
+  assert.equal(w.count(), '1 of 3 samples', 'and everything past ten seconds after it');
 }
 
 // ---------------------------------------------------------------------------

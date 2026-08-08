@@ -18,7 +18,7 @@ import {
 } from '../shared/statsMath.js';
 import { roundListStats } from './roundListStats.js';
 import { AWP_MARK, formatFormation } from './patternDefs.js';
-import { aggCtSpread, packPoints, pistolLean } from './antistratScan.js';
+import { aggCtSpread, aggResponses, packPoints, pistolLean } from './antistratScan.js';
 
 // ---------------------------------------------------------------------------
 // tagTrigger
@@ -284,6 +284,79 @@ const tag = (k, at) => ({ k, m: at === null ? {} : { When: at } });
     pistolLean({ sampleAt: () => null, towardCount: () => 0 }, 'DD2'),
     '',
     'and no snapshot is no read at all'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// packPoints drops what it cannot read
+// ---------------------------------------------------------------------------
+
+{
+  // NaN survives JSON as null, and null compares as second zero, so a sample
+  // with no clock on it would sit at the start of every window. Drop it.
+  const mixed = [
+    { x: 1, y: 2, t: 10, own: 4, opp: 4 },
+    { x: 3, y: 4, t: NaN, own: 4, opp: 4 },
+    { x: NaN, y: 6, t: 20, own: 4, opp: 4 },
+    { x: 7, y: 8, t: undefined, own: 4, opp: 4 }
+  ];
+  assert.deepEqual(packPoints(mixed, 100), [1, 2, 10, 36], 'only the readable sample survives');
+}
+
+// ---------------------------------------------------------------------------
+// Responses: a habit, not a coincidence
+// ---------------------------------------------------------------------------
+
+{
+  const tagged = (side, ours, theirs, won = true) => ({
+    side,
+    file: `r${Math.random()}`,
+    won,
+    tags: {
+      T: side === 'T' ? ours : theirs,
+      CT: side === 'T' ? theirs : ours
+    }
+  });
+  const at = (k, sec) => ({ k, m: { When: sec } });
+
+  // Their call at 10s, ours at 20s: a clear five seconds of lead.
+  const answered = (n) =>
+    Array.from({ length: n }, () => tagged('CT', [at('down-ramp', 20)], [at('fast-mid', 10)]));
+  // The same two calls, but ours lands two seconds behind theirs, which is not
+  // long enough to have been called off the back of it.
+  const ignored = (n) =>
+    Array.from({ length: n }, () => tagged('CT', [at('down-ramp', 12)], [at('fast-mid', 10)]));
+
+  // Four of eight is the threshold on both counts.
+  const hit = aggResponses([...answered(4), ...ignored(4)], 'ANC', 'CT');
+  assert.ok(hit, 'four rounds out of eight is a read');
+  assert.equal(hit.calls[0].rounds, 8, 'the denominator is THEIR call, not ours');
+  assert.equal(hit.calls[0].to[0].rounds, 4);
+  assert.equal(hit.calls[0].to[0].share, 50);
+
+  // Same rate, too few examples.
+  assert.equal(
+    aggResponses([...answered(3), ...ignored(3)], 'ANC', 'CT'),
+    null,
+    'three out of six is the same rate on too little'
+  );
+  // Enough examples, too low a rate.
+  assert.equal(
+    aggResponses([...answered(4), ...ignored(12)], 'ANC', 'CT'),
+    null,
+    'four out of sixteen is just their most common round'
+  );
+  // The lead has to be there at all.
+  assert.equal(
+    aggResponses(
+      Array.from({ length: 8 }, () =>
+        tagged('CT', [at('down-ramp', 12)], [at('fast-mid', 10)])
+      ),
+      'ANC',
+      'CT'
+    ),
+    null,
+    'two seconds is not a reaction'
   );
 }
 

@@ -5767,71 +5767,78 @@ table.rp-mine-table tbody tr {
   font-weight: 500;
 }
 
-.tm-rl-head,
-.tm-rl-row {
-  display: grid;
-  grid-template-columns: minmax(7em, 1fr) 3em 2.4em 3.4em 6.4em 3.2em minmax(60px, 5em) 5em;
-  gap: 4px 8px;
-  align-items: center;
+/* The round-type table: name, clock, our winrate, usage vs the library. */
+.tm-rl-scroll {
+  overflow-x: auto;
+}
+
+.tm-rl-table {
+  width: 100%;
+  border-collapse: collapse;
   font: 500 12px var(--font-body);
   font-variant-numeric: tabular-nums;
 }
 
-.tm-rl-head {
+.tm-rl-table th {
+  padding: 0 8px 4px 0;
+  border-bottom: 1px solid var(--border);
   color: var(--muted);
   font: 500 10px var(--font-body);
   letter-spacing: 0.02em;
-  padding: 0 2px 4px;
-  border-bottom: 1px solid var(--border);
-}
-
-.tm-rl-head span:not(:first-child),
-.tm-rl-when,
-.tm-rl-n,
-.tm-rl-wr,
-.tm-rl-share,
-.tm-rl-index,
-.tm-rl-vs {
+  text-transform: uppercase;
   text-align: right;
+  white-space: nowrap;
 }
 
-.tm-rl-when {
-  color: var(--muted);
+.tm-rl-table th:first-child {
+  text-align: left;
 }
 
-.tm-rl-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.tm-rl-table td {
+  padding: 4px 8px 4px 0;
+  white-space: nowrap;
 }
 
-.tm-rl-row {
-  padding: 3px 2px;
-  border-radius: 6px;
-}
-
-.tm-rl-row:nth-child(odd) {
+.tm-rl-table tbody tr:nth-child(odd) {
   background: rgba(255, 255, 255, 0.02);
 }
 
 /* A call this team has never run still earns its row: the gap is the finding. */
-.tm-rl-row.is-unused .tm-rl-name,
-.tm-rl-row.is-unused .tm-rl-n,
-.tm-rl-row.is-unused .tm-rl-wr {
+.tm-rl-table tr.is-unused td {
   color: var(--muted);
 }
 
 .tm-rl-name {
+  max-width: 14em;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  text-align: left;
+}
+
+.tm-rl-num {
+  text-align: right;
+}
+
+.tm-rl-sub {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tm-rl-dash {
+  color: var(--muted);
+}
+
+.tm-rl-barcell {
+  width: 5em;
+  min-width: 4em;
 }
 
 /* Anchored at the library average: left of the line is called less often than
    everyone else does, right of it more. */
+.tm-rl-bar {
+  display: block;
+}
+
 .tm-rl-bar-track {
   position: relative;
   display: block;
@@ -7074,6 +7081,18 @@ table.rp-mine-table tbody tr {
   font: 600 11px var(--font-body);
   letter-spacing: 0.02em;
   text-transform: uppercase;
+}
+
+/* The count that rides under a winrate, and the timings column. */
+.doc-surface td small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.doc-surface td em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 11px;
 }
 
 .doc-surface blockquote {

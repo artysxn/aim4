@@ -34,7 +34,7 @@ const INDENT_MAX_LEVEL = 12;
 const ALLOWED = new Set([
   'B', 'STRONG', 'I', 'EM', 'U', 'A', 'P', 'DIV', 'BR', 'HR', 'UL', 'OL', 'LI',
   'SPAN', 'H1', 'H2', 'H3', 'BLOCKQUOTE', 'CODE', 'PRE', 'IMG',
-  'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD'
+  'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'SMALL'
 ]);
 
 /** Inline styles worth keeping. Everything else is dropped on save. */
