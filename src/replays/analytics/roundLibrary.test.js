@@ -9,7 +9,14 @@ import {
   roundTypeRows,
   roundTypesFor
 } from './roundLibrary.js';
-import { burstWindow, clockAt, longestRun, secondsAtClock } from './roundFacts.js';
+import {
+  burstWindow,
+  clockAt,
+  createRegionIndex,
+  longestRun,
+  plainRegionName,
+  secondsAtClock
+} from './roundFacts.js';
 import { libraryMaps, roundListStats } from './roundListStats.js';
 import { TELL_MIN_ROUNDS, TELL_MIN_SHARE, aggTells } from './antistratScan.js';
 
@@ -96,8 +103,8 @@ assert.ok(hasRoundLibrary('NUK'), 'Nuke has a library');
 assert.ok(hasRoundLibrary('INF'), 'Inferno has a library');
 assert.ok(hasRoundLibrary('DD2'), 'Dust2 has a library');
 assert.ok(hasRoundLibrary('nuk'), 'the map code is case insensitive');
-assert.equal(hasRoundLibrary('MIR'), false, 'maps without one say so');
-assert.deepEqual(roundTypesFor('MIR', 'T'), [], 'and classify nothing');
+assert.equal(hasRoundLibrary('OVP'), false, 'maps without one say so');
+assert.deepEqual(roundTypesFor('OVP', 'T'), [], 'and classify nothing');
 
 for (const [code, sides] of Object.entries(ROUND_LIBRARY)) {
   for (const side of ['T', 'CT']) {
@@ -183,7 +190,7 @@ assert.ok(
   !requiredUtilityNames('INF').includes('navi1'),
   'each map lists only its own vocabulary'
 );
-assert.deepEqual(requiredUtilityNames('MIR'), []);
+assert.deepEqual(requiredUtilityNames('OVP'), []);
 assert.ok(requiredRegionNames('NUK').includes('A Anchor'));
 assert.ok(requiredRegionNames('INF').includes('FalleN'));
 
@@ -285,7 +292,7 @@ function fakeLibrary(defs) {
 }
 
 assert.deepEqual(classifyRoundTypes(null, 'NUK', 'T'), [], 'no facts, no tags');
-assert.deepEqual(classifyRoundTypes({}, 'MIR', 'T'), [], 'no library, no tags');
+assert.deepEqual(classifyRoundTypes({}, 'OVP', 'T'), [], 'no library, no tags');
 
 // ---------------------------------------------------------------------------
 // roundListStats: for, against, and the library average
@@ -330,7 +337,7 @@ const mkRound = ({ s1, w, t = [], ct = [] }) => ({
         ]
       },
       // A different map is not this map.
-      { map: 'MIR', name1: 'Vitality', name2: 'FaZe', rounds: [mkRound({ s1: 'T', w: 1, t: ['a-fake'] })] }
+      { map: 'OVP', name1: 'Vitality', name2: 'FaZe', rounds: [mkRound({ s1: 'T', w: 1, t: ['a-fake'] })] }
     ]
   };
 
@@ -370,7 +377,7 @@ const mkRound = ({ s1, w, t = [], ct = [] }) => ({
 }
 
 assert.equal(
-  roundListStats({ demos: [] }, { mapCode: 'MIR', teamName: 'Vitality' }),
+  roundListStats({ demos: [] }, { mapCode: 'OVP', teamName: 'Vitality' }),
   null,
   'a map with no library has no panel'
 );
@@ -396,6 +403,44 @@ assert.equal(
 }
 
 // ---------------------------------------------------------------------------
+// Region names: one name, two layers
+//
+// Ancient paints a B Ramp position inside a B Ramp zone and means different
+// ground by each. Unqualified stays the union, because that is what nearly
+// every definition wants; `pos:` and `zone:` are how the few that care ask.
+// ---------------------------------------------------------------------------
+
+{
+  const rect = (x, y) => ({ type: 'rect', x, y, w: 10, h: 10 });
+  const index = createRegionIndex(
+    {
+      positions: [
+        { id: 'p1', name: 'B Ramp', pieces: [rect(0, 0)] },
+        { id: 'p2', name: 'Lower', pieces: [rect(100, 100)] }
+      ],
+      zones: [{ id: 'z1', name: 'B Ramp', positionIds: ['p2'] }],
+      areas: []
+    },
+    'ANC'
+  );
+  const at = (names, x, y) => index.inside(names, x, y, 0);
+
+  assert.ok(at(['B Ramp'], 5, 5), 'the bare name still covers the position');
+  assert.ok(at(['B Ramp'], 105, 105), 'and the zone of the same name');
+  assert.ok(at(['pos:B Ramp'], 5, 5), 'pos: keeps the position');
+  assert.equal(at(['pos:B Ramp'], 105, 105), false, 'and drops the zone');
+  assert.ok(at(['zone:B Ramp'], 105, 105), 'zone: keeps the zone');
+  assert.equal(at(['zone:B Ramp'], 5, 5), false, 'and drops the position');
+  assert.ok(index.known(['pos:B Ramp']), 'a qualified name reads as painted');
+  assert.equal(index.known(['pos:Nope']), false, 'and an unpainted one does not');
+  assert.equal(at(['area:B Ramp'], 5, 5), false, 'neither layer is an area here');
+
+  assert.equal(plainRegionName('pos:B Ramp'), 'B Ramp', 'readiness notes print the plain name');
+  assert.equal(plainRegionName('B Ramp'), 'B Ramp');
+  assert.equal(plainRegionName('11:55 spot'), '11:55 spot', 'an unknown prefix is part of the name');
+}
+
+// ---------------------------------------------------------------------------
 // libraryMaps: which maps the team overview can show without a map picked
 // ---------------------------------------------------------------------------
 
@@ -406,7 +451,7 @@ assert.equal(
       { map: 'ANU', name1: 'FaZe', name2: 'Vitality' },
       { map: 'ANU', name1: 'Vitality', name2: 'G2' },
       // No library on Mirage, and Spirit's Nuke is not Vitality's.
-      { map: 'MIR', name1: 'Vitality', name2: 'FaZe' },
+      { map: 'OVP', name1: 'Vitality', name2: 'FaZe' },
       { map: 'NUK', name1: 'Spirit', name2: 'G2' }
     ]
   };

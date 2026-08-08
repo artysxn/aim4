@@ -22,8 +22,13 @@ import { classifyRoundTypes, hasRoundLibrary } from './roundLibrary.js';
  *      that spawn made true in every round now need a 5s hold
  *   4  Anubis; Dust2 T Short folded into A Short; Mid fight default held 20s
  *      from 1:39
+ *   5  Ancient
+ *   6  Mirage; Ancient B Ramp entry qualified to the position, 2 mid fight and
+ *      Mid retake retimed
+ *   7  Cache; decoys kept in the facts, and grenades matched to a stored spot
+ *      regardless of type
  */
-export const ROUND_LIBRARY_VERSION = 4;
+export const ROUND_LIBRARY_VERSION = 7;
 
 /**
  * @typedef {{ k: string, m: Record<string, number> }} RoundTag

@@ -30,7 +30,12 @@ import {
 import { positionsAtPoint } from '../zones/pointInZone.js';
 import { pieceBounds } from '../zones/zoneGeom.js';
 import { FORMATIONS, formatFormation, clockSeconds } from './patternDefs.js';
-import { requiredRegionGroups, requiredUtilityNames, roundTypeRows } from './roundLibrary.js';
+import {
+  regionGroupLabel,
+  requiredRegionGroups,
+  requiredUtilityNames,
+  roundTypeRows
+} from './roundLibrary.js';
 import { rowTags } from './roundTags.js';
 import { createRegionIndex } from './roundFacts.js';
 
@@ -1677,7 +1682,7 @@ function roundLibraryReadiness(mapCode, network, utilDb, rounds) {
   return {
     // A group is one piece of ground under whichever name the map paints it,
     // so only a group where nothing resolves is actually missing.
-    missingRegions: wantRegions.filter((group) => !index.known(group)).map((g) => g.join(' / ')),
+    missingRegions: wantRegions.filter((group) => !index.known(group)).map(regionGroupLabel),
     missingUtility: requiredUtilityNames(mapCode).filter((name) => !stored.has(name)),
     untagged: rounds.filter((r) => !r.tags).length
   };

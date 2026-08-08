@@ -33,7 +33,7 @@ export const UTILITY_MATCH_UNITS = 250;
 /** How long a smoke stays up, for the rules that ask "while it is up". */
 export const SMOKE_SECONDS = 18;
 
-const NADE_KINDS = new Set(['smokegrenade', 'molotov', 'flashbang', 'hegrenade']);
+const NADE_KINDS = new Set(['smokegrenade', 'molotov', 'flashbang', 'hegrenade', 'decoy']);
 
 /** "1:35" -> 20 seconds after the round went live. */
 export function secondsAtClock(clock) {
@@ -66,6 +66,33 @@ const SEP = '\u0001';
 // Named regions
 // ---------------------------------------------------------------------------
 
+/** Which painted layers a region name may resolve against. */
+const REGION_KINDS = new Set(['pos', 'zone', 'area']);
+
+/**
+ * Split `pos:B Ramp` into its layer and its name. An unknown prefix is part of
+ * the name rather than a qualifier, so a position genuinely called "foo:bar"
+ * still resolves.
+ *
+ * @returns {{ kind: string, want: string }}
+ */
+export function splitRegionName(name) {
+  const raw = String(name || '').trim();
+  const at = raw.indexOf(':');
+  if (at > 0) {
+    const kind = raw.slice(0, at).toLowerCase();
+    if (REGION_KINDS.has(kind)) return { kind, want: norm(raw.slice(at + 1)) };
+  }
+  return { kind: '', want: norm(raw) };
+}
+
+/** A qualified name as a coach would read it: `pos:B Ramp` -> `B Ramp`. */
+export function plainRegionName(name) {
+  const raw = String(name || '').trim();
+  const { kind } = splitRegionName(raw);
+  return kind ? raw.slice(kind.length + 1).trim() : raw;
+}
+
 /**
  * Resolve region names to the positions they cover.
  *
@@ -74,6 +101,12 @@ const SEP = '\u0001';
  * the same ground "the Lobby zone" in one line and "the Lobby position" in the
  * next, and a classifier that insisted on the distinction would silently never
  * fire on a map painted the other way round.
+ *
+ * Where a map paints a position and a zone under the SAME name and means two
+ * different pieces of ground — Ancient's B Ramp is both the whole ramp and the
+ * step at the top of it — a name can be qualified: `pos:B Ramp` is the
+ * position alone, `zone:B Ramp` the zone alone. Unqualified stays the union,
+ * because that is what almost every definition wants.
  *
  * @param {{positions?: Array, zones?: Array, areas?: Array}} network
  */
@@ -89,26 +122,32 @@ export function createRegionIndex(network, mapCode = '') {
 
   /** Position records covered by one name (position, zone or area). */
   function positionsNamed(name) {
-    const want = norm(name);
+    const { kind, want } = splitRegionName(name);
     if (!want) return [];
     const out = new Map();
-    for (const p of positions) {
-      if (norm(p.name) === want) out.set(p.id, p);
-    }
-    for (const z of zones) {
-      if (norm(z.name) !== want) continue;
-      for (const id of z.positionIds || []) {
-        const p = byId.get(id);
-        if (p) out.set(p.id, p);
+    if (!kind || kind === 'pos') {
+      for (const p of positions) {
+        if (norm(p.name) === want) out.set(p.id, p);
       }
     }
-    for (const a of areas) {
-      if (norm(a.name) !== want) continue;
-      for (const zid of a.zoneIds || []) {
-        const z = zones.find((x) => x.id === zid);
-        for (const id of z?.positionIds || []) {
+    if (!kind || kind === 'zone') {
+      for (const z of zones) {
+        if (norm(z.name) !== want) continue;
+        for (const id of z.positionIds || []) {
           const p = byId.get(id);
           if (p) out.set(p.id, p);
+        }
+      }
+    }
+    if (!kind || kind === 'area') {
+      for (const a of areas) {
+        if (norm(a.name) !== want) continue;
+        for (const zid of a.zoneIds || []) {
+          const z = zones.find((x) => x.id === zid);
+          for (const id of z?.positionIds || []) {
+            const p = byId.get(id);
+            if (p) out.set(p.id, p);
+          }
         }
       }
     }
@@ -304,9 +343,16 @@ export function buildRoundFacts({ meta, track, network, utilities = [], mapCode 
     const spot = utilities?.length
       ? matchCoachSmoke(utilities, x, y, UTILITY_MATCH_UNITS, type)
       : null;
+    // The same match ignoring type, for "a decoy in the spot the smoke goes".
+    // A stored spot carries the grenade it was recorded with, so a decoy on
+    // the a1 smoke never takes that name through `name`.
+    const anySpot = utilities?.length
+      ? matchCoachSmoke(utilities, x, y, UTILITY_MATCH_UNITS, '')
+      : null;
     nadesBySide[side].push({
       type,
       name: norm(spot?.name),
+      spot: norm(anySpot?.name),
       player: g.player,
       at: secOf(detTick),
       thrown: secOf(Number(g.throwTick ?? detTick)),
@@ -530,6 +576,18 @@ export function buildRoundFacts({ meta, track, network, utilities = [], mapCode 
     }
 
     /**
+     * Detonations of ours that landed on a stored spot, whatever they were.
+     *
+     * `nadesNamed` is type-strict, because "the blurk smoke" means the smoke.
+     * This is the other question: what landed where the blurk smoke goes, so
+     * a fake thrown as a decoy still reads as the call it is imitating.
+     */
+    function nadesAtSpot(name) {
+      const want = norm(name);
+      return nadesBySide[side].filter((n) => n.spot === want);
+    }
+
+    /**
      * Fights this side had with the other.
      *
      * @param {object} [opts]
@@ -632,6 +690,7 @@ export function buildRoundFacts({ meta, track, network, utilities = [], mapCode 
       nadesFrom,
       nadesNotIn,
       nadesNamed,
+      nadesAtSpot,
       fights,
       awper,
       heldAwp,

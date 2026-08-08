@@ -19,7 +19,14 @@
 // went live.
 // ---------------------------------------------------------------------------
 
-import { SAMPLE_SECONDS, SMOKE_SECONDS, burstWindow, longestRun, secondsAtClock } from './roundFacts.js';
+import {
+  SAMPLE_SECONDS,
+  SMOKE_SECONDS,
+  burstWindow,
+  longestRun,
+  plainRegionName,
+  secondsAtClock
+} from './roundFacts.js';
 
 /** "In quick succession": within this many seconds of the other actions. */
 export const QUICK_SECONDS = 6;
@@ -1932,6 +1939,1900 @@ const ANU_CT = [
 ];
 
 // ---------------------------------------------------------------------------
+// Ancient vocabulary
+// ---------------------------------------------------------------------------
+
+/** The staging ground: the whole ramp, zone and position alike. */
+const ANC_B_RAMP = ['B Ramp'];
+const ANC_B_SITE = ['B + Backsite'];
+const ANC_B_CAVE = ['B Cave'];
+/** Whoever is holding B: the site itself, or the cave beside it. */
+const ANC_B_DEFEND = ['B + Backsite', 'B Cave'];
+/**
+ * "Into B": the site, or the B Ramp POSITION at the top of it.
+ *
+ * Qualified, because Ancient paints a B Ramp position inside a B Ramp zone and
+ * they are different ground. Unqualified this would resolve to both, and the
+ * clause would be true of the stack that is already standing on the ramp.
+ */
+const ANC_B_ENTER = ['B + Backsite', 'pos:B Ramp'];
+const ANC_B_STREET = ['B Street'];
+const ANC_T_SPAWN = ['T Spawn'];
+const ANC_B_STAGE = ['B Ramp', 'B Street', 'T Spawn'];
+const ANC_LURK_GROUND = ['B Ramp', 'B + Backsite', 'NiKo'];
+const ANC_B_DOOR = ['B Door'];
+
+const ANC_MID_1 = ['Mid 1'];
+const ANC_MID_2 = ['Mid 2'];
+const ANC_MID_3 = ['Mid 3'];
+const ANC_ELBOW = ['Elbow'];
+const ANC_LEDGE = ['Ledge'];
+const ANC_RUNBOOST = ['runboost'];
+const ANC_STREET = ['Street'];
+const ANC_HEAVEN = ['Heaven'];
+const ANC_CT_MID = ['CT Mid'];
+const ANC_CT_WINDOW = ['CT Window'];
+const ANC_CT_DONUT = ['CT Donut'];
+const ANC_WINDOW = ['Window'];
+const ANC_MID_HOLD = ['CT Mid', 'CT Window', 'CT Donut'];
+const ANC_STEP_UP = ['Mid 2', 'Ledge'];
+
+const ANC_A_MAIN = ['A Main'];
+const ANC_A_POS = ['A'];
+/** Where an A smoke has to land before it is part of the call. */
+const ANC_A_SMOKE_GROUND = ['A Donut', 'Donut', 'A Default', 'A CT'];
+const ANC_A_SITE = ['A Site'];
+const ANC_CT_SPAWN = ['CT Spawn'];
+const ANC_A_DEFEND = ['A Site', 'CT Donut', 'CT Spawn'];
+const ANC_REDROOM = ['Redroom'];
+const ANC_CT_CAVE = ['CT Cave'];
+
+/** The street ground, and the door-smoke ground, are the same three names. */
+const ANC_STREET_TAKE = ['Heaven', 'Street', 'B Ramp'];
+/** And the positions a CT reaches once that take has actually gone through. */
+const ANC_STREET_THROUGH = ['Street', 'Bucket', 'Under boost', 'B Street'];
+const ANC_DOOR_FIGHT_GROUND = ['B Door', 'B Street', 'B Ramp'];
+
+/** T smokes that turn a B Ramp pop into a B Execute once they are down. */
+const ANC_B_EXEC_SMOKES = ['short', 'long', 'bcave'];
+/** The B fake's spend: any of these smokes, or the pillar molotov. */
+const ANC_B_FAKE_SMOKES = ['bcave', 'short', 'long'];
+const ANC_MID_FAKE_MOLLYS = ['jungle', 'heaven', 'tmid'];
+const ANC_MID_FAKE_THROW = ['T Spawn', 'T Mid', 'Elbow', 'Kabbah'];
+const ANC_MID_MOLLYS = ['elbowmolo', 'deepmid', 'closemid'];
+
+/** "Remain there": longer than this many consecutive seconds on the ground. */
+const ANC_STREET_HOLD_SECONDS = 2;
+/** How long three CTs have to share mid before it is a shape and not a walk. */
+const ANC_MID_HOLD_SECONDS = 6;
+
+/** First second each of ours was inside `names`, keyed by player. */
+function firstEntries(f, names) {
+  /** @type {Map<string, number>} */
+  const out = new Map();
+  for (const s of f.series) {
+    for (const p of f.ptsAt(s.sec)) {
+      if (out.has(p.id)) continue;
+      if (f.regions.inside(names, p.x, p.y, p.z)) out.set(p.id, s.sec);
+    }
+  }
+  return out;
+}
+
+/** True when this contact's enemy was standing inside `names`. */
+function enemyIn(f, fight, names) {
+  const at = f.pointAt(fight.enemy, fight.sec);
+  return Boolean(at) && f.regions.inside(names, at.x, at.y, at.z);
+}
+
+/** True when the player who took this contact was standing inside `names`. */
+function ourFighterIn(f, fight, names) {
+  const at = f.pointAt(fight.ours, fight.sec);
+  return Boolean(at) && f.regions.inside(names, at.x, at.y, at.z);
+}
+
+/**
+ * A kill or a death of ours on `names` inside the window.
+ *
+ * Both directions, because the lurk smoke asks whether anything happened on
+ * that ground at all: a lurker who trades and a lurker who gets traded are the
+ * same answer to "was this smoke live".
+ */
+function actionOn(f, names, from, to) {
+  for (const x of f.fights({ from, to, killsOnly: true })) {
+    if (x.killedThem ? enemyIn(f, x, names) : ourFighterIn(f, x, names)) return x;
+  }
+  return null;
+}
+
+/** `min`+ of ours on the street ground, held past the two-second floor. */
+function ancStreetTake(f, from, to, min) {
+  const run = longestRun(f.series, from, to, (sec) => f.countIn(ANC_STREET_TAKE, sec) >= min);
+  return run.seconds > ANC_STREET_HOLD_SECONDS ? run : null;
+}
+
+/**
+ * The B Ramp push, shared by B Pop and B Execute.
+ *
+ * Identical either way: three on the ramp, two of them trading with whoever
+ * holds the site after 1:40, and a body inside afterwards if anyone dropped.
+ * The one thing that separates the two calls is which side of the short / long
+ * / bcave smokes the fight happened on, so that is the only argument.
+ */
+function ancBRampPush(f, { afterSmokes }) {
+  const smoke = firstNamed(f, ANC_B_EXEC_SMOKES);
+  if (afterSmokes && !smoke) return null;
+  const opened = secondsAtClock('1:40');
+  for (const s of f.series) {
+    const group = f.playersIn(ANC_B_RAMP, s.sec);
+    if (group.size < 3) continue;
+    const duels = f
+      .fights({ from: Math.max(s.sec, opened), ours: group, enemyIn: ANC_B_DEFEND })
+      .filter((x) => (afterSmokes ? x.sec >= smoke.at : !smoke || x.sec < smoke.at));
+    if (new Set(duels.map((x) => x.ours)).size < 2) continue;
+    // Trading and then never walking in is a fake, not a push. Only asked of
+    // rounds where the trade actually landed.
+    const killed = duels.some((x) => x.killedThem);
+    const entered = f.firstSecWith(ANC_B_ENTER, 1, s.sec, f.lastSec);
+    if (killed && entered === null) continue;
+    const marks = { Staged: s.sec, Contact: duels[0].sec };
+    if (smoke) marks.Smoke = smoke.at;
+    if (entered !== null) marks['In B'] = entered;
+    return { marks };
+  }
+  return null;
+}
+
+/**
+ * Two of an A Main stack committing: onto the site, or into the holders.
+ *
+ * Shared by A Rush and A Execute, which differ only in how many smokes had to
+ * land and how early.
+ */
+function ancACommit(f, group, from) {
+  const inside = [...f.playersDuring(ANC_A_POS, from, f.lastSec)].filter((id) => group.has(id));
+  const duels = f.fights({ from, ours: group, enemyIn: ANC_A_DEFEND });
+  if (new Set([...inside, ...duels.map((x) => x.ours)]).size < 2) return null;
+  const onSite = f.firstSecWith(ANC_A_POS, 1, from);
+  const times = [duels[0]?.sec, onSite].filter((x) => Number.isFinite(x));
+  return times.length ? Math.min(...times) : from;
+}
+
+/** The A smokes: how many landed on the site ground, and by when they left the hand. */
+function ancASmokes(f, { thrownBy = null, thrownAfter = null } = {}) {
+  return f.nadesIn('smokegrenade', ANC_A_SMOKE_GROUND).filter((n) => {
+    if (thrownBy !== null && n.thrown > thrownBy) return false;
+    if (thrownAfter !== null && n.thrown < thrownAfter) return false;
+    return true;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// T side, Ancient
+// ---------------------------------------------------------------------------
+
+/** @type {RoundTypeDef[]} */
+const ANC_T = [
+  {
+    key: 'anc-b-rush',
+    label: 'B Rush',
+    desc: '4+ on B Ramp with two of them trading with the B + Backsite / B Cave holders by 1:40, and 2 into B by 1:33.',
+    match(f) {
+      for (const s of f.series) {
+        const group = f.playersIn(ANC_B_RAMP, s.sec);
+        if (group.size < 4) continue;
+        const duels = f.fights({
+          from: s.sec,
+          to: secondsAtClock('1:40'),
+          ours: group,
+          enemyIn: ANC_B_DEFEND
+        });
+        if (new Set(duels.map((x) => x.ours)).size < 2) continue;
+        const entered = f.firstSecWith(ANC_B_ENTER, 2, 0, secondsAtClock('1:33'));
+        if (entered === null) continue;
+        return { marks: { Staged: s.sec, Contact: duels[0].sec, 'Two in': entered } };
+      }
+      return null;
+    }
+  },
+  {
+    key: 'anc-b-awp',
+    label: 'B AWP search',
+    desc: '2+ on B Ramp, and the first of them to trade with a B holder by 1:28 had the AWP out.',
+    match(f) {
+      const staged = f.firstSecWith(ANC_B_RAMP, 2);
+      if (staged === null) return null;
+      // The FIRST contact, not the first one an AWPer happened to take: a
+      // rifler opening the round is a different call however it ends.
+      const fight = f.fights({
+        from: staged,
+        to: secondsAtClock('1:28'),
+        enemyIn: ANC_B_DEFEND
+      })[0];
+      if (!fight || !f.heldAwp(fight.ours, fight.sec)) return null;
+      return { marks: { Staged: staged, 'AWP contact': fight.sec } };
+    }
+  },
+  {
+    key: 'anc-b-pop',
+    label: 'B Pop',
+    desc: '3+ on B Ramp, two of them trading with the B holders after 1:40 and before any short / long / bcave smoke lands.',
+    match(f) {
+      return ancBRampPush(f, { afterSmokes: false });
+    }
+  },
+  {
+    key: 'anc-b-exec',
+    label: 'B Execute',
+    desc: 'The same push, with the trade coming after a short / long / bcave smoke has landed.',
+    match(f) {
+      return ancBRampPush(f, { afterSmokes: true });
+    }
+  },
+  {
+    key: 'anc-b-split',
+    label: 'B Split',
+    desc: 'A player in B Cave and one on B Ramp trading with a holder, a body following into B inside 12s from cave or 8s from ramp, and a smoke on the site.',
+    match(f) {
+      const smoke = f.nadesIn('smokegrenade', ANC_B_SITE)[0];
+      if (!smoke) return null;
+      for (const s of f.series) {
+        if (!f.countIn(ANC_B_CAVE, s.sec) || !f.countIn(ANC_B_RAMP, s.sec)) continue;
+        const fight = f.fights({
+          from: s.sec,
+          enemyIn: [...ANC_B_CAVE, ...ANC_B_RAMP, ...ANC_B_SITE]
+        })[0];
+        if (!fight) continue;
+        // Where the fight happened sets the follow-up: cave gives them longer,
+        // and cave alone is allowed to be the ground they follow onto.
+        const inCave = enemyIn(f, fight, ANC_B_CAVE);
+        const span = inCave ? 12 : 8;
+        const target = inCave ? [...ANC_B_CAVE, ...ANC_B_SITE] : ANC_B_SITE;
+        const follow = f.firstSecWith(target, 1, fight.sec, fight.sec + span);
+        if (follow === null) continue;
+        return { marks: { Split: s.sec, Contact: fight.sec, Follow: follow, Smoke: smoke.at } };
+      }
+      return null;
+    }
+  },
+  {
+    key: 'anc-b-fake',
+    label: 'B Fake',
+    desc: '2 or fewer on B Ramp / B Street / T Spawn spending a bcave, short or long smoke, the pillar molotov, or 2 flashes onto the site, and none of them goes in.',
+    match(f) {
+      for (const s of f.series) {
+        const group = f.playersIn(ANC_B_STAGE, s.sec);
+        if (!group.size || group.size > 2) continue;
+        const byGroup = (list) => list.filter((n) => group.has(n.player) && n.at >= s.sec);
+        const smoke = byGroup(
+          ANC_B_FAKE_SMOKES.flatMap((name) =>
+            f.nadesNamed(name).filter((n) => n.type === 'smokegrenade')
+          )
+        ).sort((a, b) => a.at - b.at)[0];
+        const pillar = byGroup(f.nadesNamed('pillar').filter((n) => n.type === 'molotov'))[0];
+        const flashes = byGroup(f.nadesIn('flashbang', ANC_B_SITE));
+        const spend = smoke || pillar || (flashes.length >= 2 ? flashes[1] : null);
+        if (!spend) continue;
+        // The fakers are the ones who must stay out; the rest of the side is
+        // free to be anywhere, which is rather the point of a fake.
+        const wentIn = [...f.playersDuring(ANC_B_SITE, s.sec, f.lastSec)].some((id) =>
+          group.has(id)
+        );
+        if (wentIn) continue;
+        return { marks: { Staged: s.sec, Spend: spend.at } };
+      }
+      return null;
+    }
+  },
+  {
+    key: 'anc-b-lurk',
+    label: 'B Lurk smoke',
+    group: 'anc-b-lurk',
+    desc: 'A blurk smoke, and while it is up somebody enters B + Backsite, or kills or dies on B Ramp / B + Backsite / NiKo.',
+    match(f) {
+      const smoke = f.nadesNamed('blurk')[0];
+      if (!smoke) return null;
+      const end = smoke.at + SMOKE_SECONDS;
+      const entered = f.firstSecWith(ANC_B_SITE, 1, smoke.at, end);
+      const traded = actionOn(f, ANC_LURK_GROUND, smoke.at, end);
+      if (entered === null && !traded) return null;
+      const marks = { 'blurk smoke': smoke.at };
+      if (entered !== null) marks['Into B'] = entered;
+      if (traded) marks.Contact = traded.sec;
+      return { marks };
+    }
+  },
+  {
+    key: 'anc-b-lurk-fake',
+    label: 'B Lurk smoke fake',
+    group: 'anc-b-lurk',
+    desc: 'The same blurk smoke with none of that: nobody enters B + Backsite and nothing trades on that ground while it is up.',
+    match(f) {
+      const smoke = f.nadesNamed('blurk')[0];
+      if (!smoke) return null;
+      const end = smoke.at + SMOKE_SECONDS;
+      if (f.firstSecWith(ANC_B_SITE, 1, smoke.at, end) !== null) return null;
+      if (actionOn(f, ANC_LURK_GROUND, smoke.at, end)) return null;
+      return { marks: { 'blurk smoke': smoke.at } };
+    }
+  },
+  {
+    key: 'anc-mid-rush',
+    label: 'Mid rush',
+    desc: 'A player crossing Elbow into Mid 1 by 1:46.',
+    match(f) {
+      const moved = f.transitions(ANC_ELBOW, ANC_MID_1, { from: 0, to: secondsAtClock('1:46') })[0];
+      if (!moved) return null;
+      return { marks: { 'Into mid': moved.arrivedAt } };
+    }
+  },
+  {
+    key: 'anc-mid-pop',
+    label: 'Mid pop',
+    desc: 'The same crossing after 1:46, made into a live CT elbow smoke.',
+    match(f) {
+      const moved = f.transitions(ANC_ELBOW, ANC_MID_1, {
+        from: secondsAtClock('1:46'),
+        to: f.lastSec
+      })[0];
+      if (!moved) return null;
+      const smoke = f.enemy
+        .nadesNamed('elbow')
+        .find((n) => moved.arrivedAt >= n.at && moved.arrivedAt <= n.at + SMOKE_SECONDS);
+      if (!smoke) return null;
+      return { marks: { 'CT elbow smoke': smoke.at, 'Into mid': moved.arrivedAt } };
+    }
+  },
+  {
+    key: 'anc-mid-split',
+    label: 'Mid split',
+    desc: 'Elbow into Mid 1 after 1:42 with Street into Heaven inside 3s, then a duel into CT Mid / Heaven / Mid 2, or 2 bodies past Mid 1 by 1:30.',
+    match(f) {
+      const inMid = f.transitions(ANC_ELBOW, ANC_MID_1, {
+        from: secondsAtClock('1:42'),
+        to: f.lastSec
+      });
+      const toHeaven = f.transitions(ANC_STREET, ANC_HEAVEN, { from: 0, to: f.lastSec });
+      // Ground inside CT Mid that is not Mid 1, counted body by body: the
+      // second clause is about getting PAST the choke, not standing in it.
+      const pastMid1 = (sec) =>
+        f
+          .ptsAt(sec)
+          .filter(
+            (p) =>
+              f.regions.inside(ANC_CT_MID, p.x, p.y, p.z) &&
+              !f.regions.inside(ANC_MID_1, p.x, p.y, p.z)
+          ).length;
+      for (const mid of inMid) {
+        const up = toHeaven.find((x) => Math.abs(x.arrivedAt - mid.arrivedAt) <= 3);
+        if (!up) continue;
+        const pair = new Set([mid.id, up.id]);
+        const from = Math.min(mid.arrivedAt, up.arrivedAt);
+        const duel =
+          f.fights({ from, ours: pair, enemyIn: [...ANC_CT_MID, ...ANC_HEAVEN] })[0] ||
+          f
+            .fights({ from, ours: pair, enemyIn: ANC_MID_2 })
+            .find((x) => ourFighterIn(f, x, ANC_STREET));
+        if (duel) {
+          return { marks: { 'Into mid': mid.arrivedAt, Heaven: up.arrivedAt, Duel: duel.sec } };
+        }
+        for (const s of f.series) {
+          if (s.sec < from || s.sec > secondsAtClock('1:30')) continue;
+          if (pastMid1(s.sec) >= 2) {
+            return { marks: { 'Into mid': mid.arrivedAt, Heaven: up.arrivedAt, 'Past mid': s.sec } };
+          }
+        }
+      }
+      return null;
+    }
+  },
+  {
+    key: 'anc-mid-fake',
+    label: 'Mid fake',
+    desc: 'A window smoke, then a jungle / heaven / tmid molotov, then 2 flashes out of T Spawn / T Mid / Elbow / Kabbah by 1:41, with nobody into Mid 1 by 1:41 or Heaven by 1:37.',
+    match(f) {
+      const smoke = f.nadesNamed('window').filter((n) => n.type === 'smokegrenade')[0];
+      if (!smoke) return null;
+      const molly = firstNamed(f, ANC_MID_FAKE_MOLLYS, 'molotov');
+      if (!molly || molly.at < smoke.at) return null;
+      const flashes = f
+        .nadesFrom('flashbang', ANC_MID_FAKE_THROW)
+        .filter((n) => n.at >= molly.at && n.at <= secondsAtClock('1:41'));
+      if (flashes.length < 2) return null;
+      // The whole call is the absence of the take behind the spend.
+      if (f.transitions(ANC_ELBOW, ANC_MID_1, { from: 0, to: secondsAtClock('1:41') }).length) {
+        return null;
+      }
+      if (f.playersDuring(ANC_HEAVEN, 0, secondsAtClock('1:37')).size) return null;
+      return {
+        marks: { 'Window smoke': smoke.at, Molotov: molly.at, 'Second flash': flashes[1].at }
+      };
+    }
+  },
+  {
+    key: 'anc-a-rush',
+    label: 'A Rush',
+    desc: 'A smoke onto A Donut / Donut / A Default / A CT thrown by 1:39, 3+ in A Main by 1:37, and two of them onto A or into its holders.',
+    match(f) {
+      const smoke = ancASmokes(f, { thrownBy: secondsAtClock('1:39') })[0];
+      if (!smoke) return null;
+      for (const s of f.series) {
+        if (s.sec > secondsAtClock('1:37')) break;
+        const group = f.playersIn(ANC_A_MAIN, s.sec);
+        if (group.size < 3) continue;
+        const commit = ancACommit(f, group, s.sec);
+        if (commit === null) continue;
+        return { marks: { Smoke: smoke.at, Staged: s.sec, Commit: commit } };
+      }
+      return null;
+    }
+  },
+  {
+    key: 'anc-a-exec',
+    label: 'A Execute',
+    desc: '2+ smokes onto A Donut / Donut / A Default / A CT, 3+ in A Main, and two of them onto A or into its holders.',
+    match(f) {
+      const smokes = ancASmokes(f);
+      if (smokes.length < 2) return null;
+      for (const s of f.series) {
+        const group = f.playersIn(ANC_A_MAIN, s.sec);
+        if (group.size < 3) continue;
+        const commit = ancACommit(f, group, s.sec);
+        if (commit === null) continue;
+        return { marks: { Smokes: smokes[1].at, Staged: s.sec, Commit: commit } };
+      }
+      return null;
+    }
+  },
+  {
+    key: 'anc-a-fake-fast',
+    label: 'Fast A fake',
+    desc: 'The same smoke thrown by 1:39, with at most 2 players in A Main by 1:37.',
+    match(f) {
+      const smoke = ancASmokes(f, { thrownBy: secondsAtClock('1:39') })[0];
+      if (!smoke) return null;
+      if (f.playersDuring(ANC_A_MAIN, 0, secondsAtClock('1:37')).size > 2) return null;
+      return { marks: { Smoke: smoke.at } };
+    }
+  },
+  {
+    key: 'anc-a-fake-late',
+    label: 'Late A fake',
+    desc: 'The smoke thrown after 1:39, at most 1 player into A Main behind it, and nobody in CT Donut for its first 10 seconds.',
+    match(f) {
+      const smoke = ancASmokes(f, { thrownAfter: secondsAtClock('1:39') })[0];
+      if (!smoke) return null;
+      if (f.playersDuring(ANC_A_MAIN, smoke.thrown, f.lastSec).size > 1) return null;
+      if (f.firstSecWith(ANC_CT_DONUT, 1, smoke.at, smoke.at + 10) !== null) return null;
+      return { marks: { Smoke: smoke.at } };
+    }
+  },
+  {
+    key: 'anc-a-split',
+    label: 'A Split',
+    desc: 'A player in A Main and one in CT Donut or CT Spawn, duelling holders on that same ground or on the A site.',
+    match(f) {
+      for (const s of f.series) {
+        if (!f.countIn(ANC_A_MAIN, s.sec)) continue;
+        for (const flank of [ANC_CT_DONUT, ANC_CT_SPAWN]) {
+          if (!f.countIn(flank, s.sec)) continue;
+          const duel = f.fights({ from: s.sec, enemyIn: [...flank, ...ANC_A_SITE] })[0];
+          if (!duel) continue;
+          return { marks: { Split: s.sec, Duel: duel.sec } };
+        }
+      }
+      return null;
+    }
+  },
+  {
+    key: 'anc-window-take',
+    label: 'Window take',
+    desc: 'A player into Redroom and then into CT Spawn within 15s.',
+    match(f) {
+      for (const [id, entered] of firstEntries(f, ANC_REDROOM)) {
+        for (const s of f.series) {
+          if (s.sec < entered || s.sec > entered + 15) continue;
+          if (f.playersIn(ANC_CT_SPAWN, s.sec).has(id)) {
+            return { marks: { Redroom: entered, 'CT Spawn': s.sec } };
+          }
+        }
+      }
+      return null;
+    }
+  },
+  {
+    key: 'anc-b-cave-take',
+    label: 'Fast B cave take',
+    desc: 'A player onto Street who is either fighting a CT in CT Cave or standing in it by 1:38.',
+    match(f) {
+      const by = secondsAtClock('1:38');
+      const street = f.playersDuring(ANC_STREET, 0, by);
+      if (!street.size) return null;
+      const moved = f.transitions(ANC_STREET, ANC_CT_CAVE, { from: 0, to: by })[0];
+      const duel = f.fights({ to: by, ours: street, enemyIn: ANC_CT_CAVE })[0];
+      if (!moved && !duel) return null;
+      const marks = { Street: f.firstSecWith(ANC_STREET, 1, 0, by) };
+      if (moved) marks['Into cave'] = moved.arrivedAt;
+      if (duel) marks.Contact = duel.sec;
+      return { marks };
+    }
+  }
+];
+
+// ---------------------------------------------------------------------------
+// CT side, Ancient
+// ---------------------------------------------------------------------------
+
+/** @type {RoundTypeDef[]} */
+const ANC_CT = [
+  {
+    key: 'anc-ct-mid-retake',
+    label: 'Mid retake',
+    group: 'anc-mid-count',
+    desc: 'Exactly 1 CT into CT Mid in the first 20s, still alive when 2+ come back into CT Mid after 1:35.',
+    match(f) {
+      const early = f.playersDuring(ANC_CT_MID, 0, secondsAtClock('1:35'));
+      if (early.size !== 1) return null;
+      const back = f.firstSecWith(ANC_CT_MID, 2, secondsAtClock('1:35'), f.lastSec);
+      if (back === null) return null;
+      // The man who was there has to be alive to be retaken to. A mid that was
+      // opened and then refilled over his body is a different round.
+      const died = f.deathSec([...early][0]);
+      if (died !== null && died <= back) return null;
+      const held = f.firstSecWith(ANC_CT_MID, 1, 0, secondsAtClock('1:35'));
+      return { marks: { Held: held, Retake: back } };
+    }
+  },
+  {
+    key: 'anc-ct-3-mid-pop',
+    label: '3 mid pop',
+    group: 'anc-mid-count',
+    desc: 'No three-man mid in the first 20s, then 3 into CT Mid / CT Window / CT Donut after 1:35.',
+    match(f) {
+      const early = longestRun(
+        f.series,
+        0,
+        secondsAtClock('1:35'),
+        (sec) => f.countIn(ANC_MID_HOLD, sec) >= 3
+      );
+      if (early.seconds >= ANC_MID_HOLD_SECONDS) return null;
+      const late = f.firstSecWith(ANC_MID_HOLD, 3, secondsAtClock('1:35'), f.lastSec);
+      if (late === null) return null;
+      return { marks: { 'Three in': late } };
+    }
+  },
+  {
+    key: 'anc-ct-3-mid',
+    label: '3 mid fight',
+    group: 'anc-mid-count',
+    desc: '3 CTs sharing CT Mid / CT Window / CT Donut for 6s+ at once.',
+    match(f) {
+      const run = longestRun(
+        f.series,
+        0,
+        f.lastSec,
+        (sec) => f.countIn(ANC_MID_HOLD, sec) >= 3
+      );
+      if (run.seconds < ANC_MID_HOLD_SECONDS) return null;
+      return { marks: { 'Set from': run.start } };
+    }
+  },
+  {
+    key: 'anc-ct-2-mid',
+    label: '2 mid fight',
+    group: 'anc-mid-count',
+    desc: '2 in CT Mid, or one there and one in CT Window, and one of them stepping to Mid 2 or Ledge, both by 1:35.',
+    match(f) {
+      const by = secondsAtClock('1:35');
+      // Both halves inside the window: the shape forms, then somebody steps up
+      // out of it, and neither event is allowed to be late.
+      for (const s of f.series) {
+        if (s.sec > by) break;
+        const mid = f.countIn(ANC_CT_MID, s.sec);
+        if (!(mid === 2 || (mid === 1 && f.countIn(ANC_CT_WINDOW, s.sec) === 1))) continue;
+        const up = f.firstSecWith(ANC_STEP_UP, 1, s.sec, by);
+        if (up === null) continue;
+        return { marks: { 'Set from': s.sec, 'Step up': up } };
+      }
+      return null;
+    }
+  },
+  {
+    key: 'anc-ct-double-molo-mid',
+    label: 'Double molotovs mid',
+    desc: '2+ elbowmolo, deepmid or closemid molotovs.',
+    match(f) {
+      const molos = ANC_MID_MOLLYS.flatMap((name) =>
+        f.nadesNamed(name).filter((n) => n.type === 'molotov')
+      ).sort((a, b) => a.at - b.at);
+      if (molos.length < 2) return null;
+      return { marks: { First: molos[0].at, Second: molos[1].at } };
+    }
+  },
+  {
+    key: 'anc-ct-smoke-mid',
+    label: 'Smoke mid',
+    desc: 'An elbow smoke by 1:44.',
+    match(f) {
+      const smoke = f
+        .nadesNamed('elbow')
+        .find((n) => n.type === 'smokegrenade' && n.at <= secondsAtClock('1:44'));
+      if (!smoke) return null;
+      return { marks: { Smoke: smoke.at } };
+    }
+  },
+  {
+    key: 'anc-ct-double-he-lane',
+    label: 'Double nades lane',
+    desc: '2 street HEs by 1:44.',
+    match(f) {
+      const nades = f
+        .nadesNamed('street')
+        .filter((n) => n.type === 'hegrenade' && n.at <= secondsAtClock('1:44'));
+      if (nades.length < 2) return null;
+      return { marks: { First: nades[0].at, Second: nades[1].at } };
+    }
+  },
+  {
+    key: 'anc-ct-double-he-ramp',
+    label: 'Double nades ramp',
+    desc: '2 HEs into B Ramp by 1:44.',
+    match(f) {
+      const nades = f
+        .nadesIn('hegrenade', ANC_B_RAMP)
+        .filter((n) => n.at <= secondsAtClock('1:44'));
+      if (nades.length < 2) return null;
+      return { marks: { First: nades[0].at, Second: nades[1].at } };
+    }
+  },
+  {
+    key: 'anc-ct-window-break',
+    label: 'Mid window break',
+    desc: 'Nobody on Mid 2 or Ledge before 1:40, and an HE into Window between 1:50 and 1:30.',
+    match(f) {
+      if (f.playersDuring(ANC_STEP_UP, 0, secondsAtClock('1:40')).size) return null;
+      const nade = f
+        .nadesIn('hegrenade', ANC_WINDOW)
+        .find((n) => n.at >= secondsAtClock('1:50') && n.at <= secondsAtClock('1:30'));
+      if (!nade) return null;
+      return { marks: { HE: nade.at } };
+    }
+  },
+  {
+    key: 'anc-ct-runboost',
+    label: 'Mid runboost',
+    desc: '2+ CTs on Mid 3 by 1:41, one of them up on the runboost by 1:41.',
+    match(f) {
+      const by = secondsAtClock('1:41');
+      for (const s of f.series) {
+        if (s.sec > by) break;
+        const group = f.playersIn(ANC_MID_3, s.sec);
+        if (group.size < 2) continue;
+        for (const t of f.series) {
+          if (t.sec < s.sec || t.sec > by) continue;
+          const up = [...f.playersIn(ANC_RUNBOOST, t.sec)].find((id) => group.has(id));
+          if (up) return { marks: { Staged: s.sec, Boost: t.sec } };
+        }
+      }
+      return null;
+    }
+  },
+  {
+    key: 'anc-ct-street-fast',
+    label: 'Fast Street take',
+    group: 'anc-street',
+    desc: '3+ CTs together on Heaven / Street / B Ramp for more than 2s, before 1:33.',
+    match(f) {
+      const run = ancStreetTake(f, 0, secondsAtClock('1:33'), 3);
+      if (!run) return null;
+      return { marks: { 'Set from': run.start } };
+    }
+  },
+  {
+    key: 'anc-ct-street-late',
+    label: 'Late Street take',
+    group: 'anc-street',
+    desc: 'The same three-man take, after 1:33.',
+    match(f) {
+      const run = ancStreetTake(f, secondsAtClock('1:33'), f.lastSec, 3);
+      if (!run) return null;
+      return { marks: { 'Set from': run.start } };
+    }
+  },
+  {
+    key: 'anc-ct-door-fight',
+    label: 'Door smoke fight B',
+    group: 'anc-door',
+    desc: 'A door smoke with a CT on Heaven / Street / B Ramp, then fighting on B Door / B Street / B Ramp or reaching Street / Bucket / Under boost / B Street.',
+    match(f) {
+      const smoke = f.nadesNamed('door')[0];
+      if (!smoke) return null;
+      const run = ancStreetTake(f, 0, f.lastSec, 1);
+      if (!run) return null;
+      const duel = f
+        .fights({ from: run.start })
+        .find(
+          (x) =>
+            enemyIn(f, x, ANC_DOOR_FIGHT_GROUND) || ourFighterIn(f, x, ANC_DOOR_FIGHT_GROUND)
+        );
+      const through = f.firstSecWith(ANC_STREET_THROUGH, 1, run.start, f.lastSec);
+      if (!duel && through === null) return null;
+      const marks = { 'door smoke': smoke.at, 'Set from': run.start };
+      if (duel) marks.Contact = duel.sec;
+      if (through !== null) marks.Through = through;
+      return { marks };
+    }
+  },
+  {
+    key: 'anc-ct-door-fake',
+    label: 'Door smoke fake',
+    group: 'anc-door',
+    desc: 'The door smoke with nobody holding Heaven / Street / B Ramp behind it.',
+    match(f) {
+      const smoke = f.nadesNamed('door')[0];
+      if (!smoke) return null;
+      if (ancStreetTake(f, 0, f.lastSec, 1)) return null;
+      return { marks: { 'door smoke': smoke.at } };
+    }
+  },
+  {
+    key: 'anc-ct-2a-main',
+    label: '2A Main',
+    desc: '2 CTs in A Main or on A for more than 5s, or taking a fight there.',
+    match(f) {
+      const ground = [...ANC_A_MAIN, ...ANC_A_POS];
+      const run = longestRun(f.series, 0, f.lastSec, (sec) => f.countIn(ground, sec) >= 2);
+      if (run.seconds > 5) return { marks: { 'Set from': run.start } };
+      for (const s of f.series) {
+        const group = f.playersIn(ground, s.sec);
+        if (group.size < 2) continue;
+        const duel = f.fights({ from: s.sec, ours: group })[0];
+        if (duel && ourFighterIn(f, duel, ground)) {
+          return { marks: { Staged: s.sec, Contact: duel.sec } };
+        }
+      }
+      return null;
+    }
+  }
+];
+
+// ---------------------------------------------------------------------------
+// Mirage vocabulary
+// ---------------------------------------------------------------------------
+
+const MIR_MID = ['Mid'];
+const MIR_T_MID = ['T Mid'];
+/** T Mid and Mid together. The bare name covers zone and position alike. */
+const MIR_MID_ALL = ['T Mid', 'Mid'];
+const MIR_MID_GROUND = ['T Mid', 'Mid', 'Underground'];
+/** Where a CT is allowed to be standing when they fight for mid. */
+const MIR_CT_MID_FROM = ['T Mid', 'Mid', 'Underground', 'Window', 'Con', 'B Short', 'Ladder'];
+
+const MIR_T_APS = ['T Aps'];
+const MIR_B_APS = ['B Aps'];
+const MIR_B_STAGE = ['T Aps', 'Underground', 'Short', 'Ladder'];
+const MIR_APS_THROW = ['T Aps', 'B Aps'];
+const MIR_B_SITE = ['B Site'];
+const MIR_B_DEFEND = ['T Aps', 'B Aps', 'B Short', 'B Site', 'B Kitchen'];
+const MIR_B_LAND = ['B Site', 'B Aps', 'B Short', 'B Kitchen'];
+const MIR_B_SPLIT_LANE = ['Short', 'Catwalk'];
+const MIR_B_SPLIT_DEFEND = ['B Aps', 'Short', 'Catwalk', 'B Site', 'B Kitchen'];
+
+const MIR_T_A = ['T A'];
+const MIR_A_RAMP = ['A Ramp'];
+const MIR_A_IN = ['Tetris', 'apEX'];
+const MIR_A_DEFEND = ['A Ramp', 'Tetris', 'apEX', 'CT Spawn', 'A Jungle', 'A Site'];
+const MIR_A_SITE = ['A Site'];
+const MIR_A_JUNGLE = ['A Jungle'];
+const MIR_A_SPLIT_DEFEND = ['T A', 'A Jungle', 'A Site', 'CT Spawn'];
+/** Where the palace duel is allowed to be taken from. */
+const MIR_PALACE_FROM = ['A Palace', 'A Balc'];
+const MIR_PALACE = ['A Palace'];
+const MIR_BALC = ['A Balc'];
+const MIR_PALACE_DEFEND = ['A Palace', 'CT Spawn', 'A Jungle', 'A Site'];
+/** Ground the utility has to land on to have set the palace duel up. */
+const MIR_A_LAND = ['A Site', 'CT Spawn'];
+
+const MIR_WINDOW = ['Window'];
+const MIR_T_OUTSIDE = ['T Outside A'];
+const MIR_AWP_START = ['B Car', 'B Balc', 'B Aps'];
+const MIR_BOOST = ['Boost'];
+/** Underground and the two positions that hang off it. */
+const MIR_UNDER_BLOCK = ['Underground', 'Ladder', 'Short'];
+const MIR_UNDER = ['Underground'];
+
+const MIR_A_EXEC_SMOKES = ['topcon', 'deepjungle', 'jungle', 'stairs', 'ct'];
+
+/** "More than 4 consecutive seconds" of a four-man mid. */
+const MIR_MID_RUN_SECONDS = 4;
+/** How long a body has to follow a split duel onto the site. */
+const MIR_SPLIT_FOLLOW = 15;
+/** And how long an execute's smokes stay a reason for the entry. */
+const MIR_EXEC_WINDOW = 15;
+/** A fake's spend buys this long of nobody walking in behind it. */
+const MIR_FAKE_WINDOW = 20;
+/** How close to the palace duel the utility has to land to have set it up. */
+const MIR_PALACE_UTIL = 4;
+/** Which side of the kitchen smoke the B contact fell on. */
+const MIR_KITCHEN_EDGE = 3;
+const MIR_RAMP_SEARCH_SECONDS = 20;
+const MIR_APS_SEARCH_SECONDS = 15;
+const MIR_BOOST_SECONDS = 3;
+const MIR_UNDER_SECONDS = 3;
+/**
+ * "Recently" for the two definitions that use the word: the window boost's
+ * second man, and the under push's rotation between its three pieces.
+ */
+const MIR_UNDER_RECENT = 6;
+
+/**
+ * The Mirage push: a stack that came through one position, reached the next,
+ * and traded with whoever was holding.
+ *
+ * Shared by both B and A. `needBoth` is the difference between B Rush, which
+ * asks for the entry AND the fight, and B Pop, which takes either.
+ */
+function mirPush(f, { stage, into, defend, from, to, min, needBoth = false }) {
+  const staged = f.playersDuring(stage, from, to);
+  if (staged.size < min) return null;
+  const inside = [...f.playersDuring(into, from, to)].filter((id) => staged.has(id));
+  const fight = f.fights({ from, to, ours: staged, enemyIn: defend })[0];
+  if (needBoth ? !inside.length || !fight : !inside.length && !fight) return null;
+  return {
+    staged: f.firstSecWith(stage, min, from, to),
+    entered: inside.length ? f.firstSecWith(into, 1, from, to) : null,
+    fight
+  };
+}
+
+/**
+ * A split: two lanes held at once, a duel out of one of them, and a body onto
+ * the site behind it. All four Mirage splits are this shape; they differ only
+ * in the ground, and in whether the first duel that qualifies was early.
+ */
+function mirSplit(f, { lanes, defend, site }) {
+  for (const s of f.series) {
+    if (!lanes.every((names) => f.countIn(names, s.sec))) continue;
+    const ours = new Set(lanes.flatMap((names) => [...f.playersIn(names, s.sec)]));
+    for (const duel of f.fights({ from: s.sec, ours, enemyIn: defend })) {
+      const onSite = f.firstSecWith(site, 1, duel.sec, duel.sec + MIR_SPLIT_FOLLOW);
+      if (onSite === null) continue;
+      return { split: s.sec, duel, onSite };
+    }
+  }
+  return null;
+}
+
+/** The palace shape, either side of the question "was it set up with utility". */
+function mirPalaceRead(f, { withUtil }) {
+  const been = f.playersDuring(MIR_PALACE, 0, f.lastSec);
+  if (been.size < 2) return null;
+  const setUp = (sec) =>
+    f.nadesIn(null, MIR_A_LAND).some((n) => n.at >= sec - MIR_PALACE_UTIL && n.at <= sec);
+
+  const duel = f
+    .fights({ ours: been, enemyIn: MIR_PALACE_DEFEND })
+    .find((x) => ourFighterIn(f, x, MIR_PALACE_FROM) && f.aliveCount(x.sec) >= 3);
+  if (duel) {
+    if (setUp(duel.sec) !== withUtil) return null;
+    return { marks: { Palace: f.firstSecWith(MIR_PALACE, 2) ?? duel.sec, Duel: duel.sec } };
+  }
+  // No duel at all is still a contact, so long as both of them walked onto
+  // balcony. A pop has to be a pop at something, so it has no such branch.
+  if (withUtil) return null;
+  const balc = [...f.playersDuring(MIR_BALC, 0, f.lastSec)].filter((id) => been.has(id));
+  if (balc.length < 2) return null;
+  const at = f.firstSecWith(MIR_BALC, 2, 0, f.lastSec);
+  if (at === null || f.aliveCount(at) < 3 || setUp(at)) return null;
+  return { marks: { Palace: f.firstSecWith(MIR_PALACE, 2) ?? at, Balcony: at } };
+}
+
+/** The two A smokes an execute or a fake is built on, in landing order. */
+function mirAExecSmokes(f) {
+  const smokes = MIR_A_EXEC_SMOKES.flatMap((name) =>
+    f.nadesNamed(name).filter((n) => n.type === 'smokegrenade')
+  ).sort((a, b) => a.at - b.at);
+  return smokes.length >= 2 ? smokes : null;
+}
+
+// ---------------------------------------------------------------------------
+// T side, Mirage
+// ---------------------------------------------------------------------------
+
+/** @type {RoundTypeDef[]} */
+const MIR_T = [
+  {
+    key: 'mir-mid-rush',
+    label: 'Mid rush',
+    desc: '2+ into Mid by 1:35, and if it is only two, a third still in T Mid behind them.',
+    match(f) {
+      const by = secondsAtClock('1:35');
+      for (const s of f.series) {
+        if (s.sec > by) break;
+        const inMid = f.countIn(MIR_MID, s.sec);
+        if (inMid < 2) continue;
+        if (inMid === 2 && f.countIn(MIR_T_MID, s.sec) < 1) continue;
+        return { marks: { 'Into mid': s.sec } };
+      }
+      return null;
+    }
+  },
+  {
+    key: 'mir-4mid',
+    label: '4Mid Default',
+    group: 'mir-mid-count',
+    desc: '4+ in T Mid / Mid for more than 4 consecutive seconds, by 1:30.',
+    match(f) {
+      const run = longestRun(f.series, 0, secondsAtClock('1:30'), (sec) =>
+        f.countIn(MIR_MID_ALL, sec) >= 4
+      );
+      if (run.seconds <= MIR_MID_RUN_SECONDS) return null;
+      return { marks: { 'Set from': run.start } };
+    }
+  },
+  {
+    key: 'mir-3mid',
+    label: '3Mid Default',
+    group: 'mir-mid-count',
+    desc: 'Exactly 3 in T Mid / Mid by 1:30.',
+    match(f) {
+      const at = f.series.find(
+        (s) => s.sec <= secondsAtClock('1:30') && f.countIn(MIR_MID_ALL, s.sec) === 3
+      );
+      if (!at) return null;
+      return { marks: { 'Three in': at.sec } };
+    }
+  },
+  {
+    key: 'mir-2mid',
+    label: '2Mid Default',
+    group: 'mir-mid-count',
+    desc: 'Exactly 2 in T Mid / Mid by 1:30.',
+    match(f) {
+      const at = f.series.find(
+        (s) => s.sec <= secondsAtClock('1:30') && f.countIn(MIR_MID_ALL, s.sec) === 2
+      );
+      if (!at) return null;
+      return { marks: { 'Two in': at.sec } };
+    }
+  },
+  {
+    key: 'mir-b-default',
+    label: 'B Default',
+    desc: '2+ in T Aps / Underground / Short / Ladder by 1:30, with nobody in T A.',
+    match(f) {
+      const by = secondsAtClock('1:30');
+      if (f.playersDuring(MIR_T_A, 0, by).size) return null;
+      const at = f.firstSecWith(MIR_B_STAGE, 2, 0, by);
+      if (at === null) return null;
+      return { marks: { 'Set from': at } };
+    }
+  },
+  {
+    key: 'mir-a-default',
+    label: 'A Default',
+    desc: '2+ in T A by 1:30 with nobody down B, or 3+ if one man is.',
+    match(f) {
+      const by = secondsAtClock('1:30');
+      const down = f.playersDuring(MIR_B_STAGE, 0, by).size;
+      if (down > 1) return null;
+      // One body down B is a lurk, and the A side has to be that much fuller
+      // before the round still reads as an A default.
+      const at = f.firstSecWith(MIR_T_A, down === 1 ? 3 : 2, 0, by);
+      if (at === null) return null;
+      return { marks: { 'Set from': at } };
+    }
+  },
+  {
+    key: 'mir-b-rush',
+    label: 'B rush',
+    desc: '3+ through T Aps by 1:35, into B Aps AND trading with the B holders, all by 1:35.',
+    match(f) {
+      const push = mirPush(f, {
+        stage: MIR_T_APS,
+        into: MIR_B_APS,
+        defend: MIR_B_DEFEND,
+        from: 0,
+        to: secondsAtClock('1:35'),
+        min: 3,
+        needBoth: true
+      });
+      if (!push) return null;
+      return { marks: { Staged: push.staged, 'Into aps': push.entered, Contact: push.fight.sec } };
+    }
+  },
+  {
+    key: 'mir-b-pop',
+    label: 'B pop',
+    desc: '2+ through T Aps after 1:35, into B Aps or trading with the B holders, with the contact at least 3s before the kitchen smoke lands.',
+    match(f) {
+      return mirBLate(f, { min: 2, beforeKitchen: true });
+    }
+  },
+  {
+    key: 'mir-b-exec',
+    label: 'B execute',
+    desc: 'The same push with 3+, and the contact no earlier than 3s before the kitchen smoke lands.',
+    match(f) {
+      return mirBLate(f, { min: 3, beforeKitchen: false });
+    }
+  },
+  {
+    key: 'mir-b-fake',
+    label: 'B Fake',
+    desc: 'A smoke and a flash out of T Aps / B Aps onto the B ground, at most 2 bodies in aps, 3+ alive, and at most one man into B Site for 20s.',
+    match(f) {
+      const lands = (n) => f.regions.inside(MIR_B_LAND, n.x, n.y, n.z);
+      const smokes = f.nadesFrom('smokegrenade', MIR_APS_THROW).filter(lands);
+      const flashes = f.nadesFrom('flashbang', MIR_APS_THROW).filter(lands);
+      if (!smokes.length || !flashes.length) return null;
+      for (const smoke of smokes) {
+        for (const flash of flashes) {
+          const at = Math.max(smoke.at, flash.at);
+          if (f.countIn(MIR_APS_THROW, at) > 2) continue;
+          if (f.aliveCount(at) < 3) continue;
+          if (f.playersDuring(MIR_B_SITE, at, at + MIR_FAKE_WINDOW).size > 1) continue;
+          return { marks: { Smoke: smoke.at, Flash: flash.at } };
+        }
+      }
+      return null;
+    }
+  },
+  {
+    key: 'mir-a-rush',
+    label: 'A rush',
+    desc: '2+ through A Ramp by 1:40, into Tetris or apEX AND trading with the A holders, all by 1:40.',
+    match(f) {
+      const push = mirPush(f, {
+        stage: MIR_A_RAMP,
+        into: MIR_A_IN,
+        defend: MIR_A_DEFEND,
+        from: 0,
+        to: secondsAtClock('1:40'),
+        min: 2,
+        needBoth: true
+      });
+      if (!push) return null;
+      return { marks: { Staged: push.staged, 'Into A': push.entered, Contact: push.fight.sec } };
+    }
+  },
+  {
+    key: 'mir-a-pop',
+    label: 'A pop',
+    desc: 'The same shape, all of it after 1:40.',
+    match(f) {
+      const push = mirPush(f, {
+        stage: MIR_A_RAMP,
+        into: MIR_A_IN,
+        defend: MIR_A_DEFEND,
+        from: secondsAtClock('1:40'),
+        to: f.lastSec,
+        min: 2,
+        needBoth: true
+      });
+      if (!push) return null;
+      return { marks: { Staged: push.staged, 'Into A': push.entered, Contact: push.fight.sec } };
+    }
+  },
+  {
+    key: 'mir-palace-contact',
+    label: 'A palace contact',
+    group: 'mir-palace',
+    desc: '2+ through palace who duel the A holders, or both walk onto balcony, with no utility onto A Site / CT Spawn in the 4s before.',
+    match(f) {
+      return mirPalaceRead(f, { withUtil: false });
+    }
+  },
+  {
+    key: 'mir-palace-pop',
+    label: 'A palace pop',
+    group: 'mir-palace',
+    desc: 'The same duel, with utility onto A Site / CT Spawn in the 4s before it.',
+    match(f) {
+      return mirPalaceRead(f, { withUtil: true });
+    }
+  },
+  {
+    key: 'mir-a-exec',
+    label: 'A execute',
+    group: 'mir-a-exec',
+    desc: '2+ of the topcon / deepjungle / jungle / stairs / ct smokes, then 3+ onto the A site inside 15s.',
+    match(f) {
+      const smokes = mirAExecSmokes(f);
+      if (!smokes) return null;
+      const from = smokes[1].at;
+      const entered = f.firstSecWith(MIR_A_SITE, 3, from, from + MIR_EXEC_WINDOW);
+      if (entered === null) return null;
+      return { marks: { Smokes: from, 'Three on site': entered } };
+    }
+  },
+  {
+    key: 'mir-a-fake',
+    label: 'A Fake',
+    group: 'mir-a-exec',
+    desc: 'The same two smokes thrown with at most 2 in T A, and exactly one man onto the site inside 15s.',
+    match(f) {
+      const smokes = mirAExecSmokes(f);
+      if (!smokes) return null;
+      // Measured at the throw, not the landing: the question is how many were
+      // standing there when the utility went out.
+      if (smokes.slice(0, 2).some((n) => f.countIn(MIR_T_A, n.thrown) > 2)) return null;
+      const from = smokes[1].at;
+      const went = f.playersDuring(MIR_A_SITE, from, from + MIR_EXEC_WINDOW).size;
+      if (went !== 1) return null;
+      return { marks: { Smokes: from, 'One man in': f.firstSecWith(MIR_A_SITE, 1, from) } };
+    }
+  },
+  {
+    key: 'mir-a-split-fast',
+    label: 'Fast A split',
+    group: 'mir-a-split',
+    desc: 'T A and A Jungle both held, a duel out of one of them before 1:27, and a body onto the site inside 15s.',
+    match(f) {
+      const hit = mirSplit(f, {
+        lanes: [MIR_T_A, MIR_A_JUNGLE],
+        defend: MIR_A_SPLIT_DEFEND,
+        site: MIR_A_SITE
+      });
+      if (!hit || hit.duel.sec >= secondsAtClock('1:27')) return null;
+      return { marks: { Split: hit.split, Duel: hit.duel.sec, 'On site': hit.onSite } };
+    }
+  },
+  {
+    key: 'mir-a-split',
+    label: 'A split',
+    group: 'mir-a-split',
+    desc: 'The same split with the first qualifying duel after 1:27.',
+    match(f) {
+      const hit = mirSplit(f, {
+        lanes: [MIR_T_A, MIR_A_JUNGLE],
+        defend: MIR_A_SPLIT_DEFEND,
+        site: MIR_A_SITE
+      });
+      if (!hit || hit.duel.sec < secondsAtClock('1:27')) return null;
+      return { marks: { Split: hit.split, Duel: hit.duel.sec, 'On site': hit.onSite } };
+    }
+  },
+  {
+    key: 'mir-b-split-fast',
+    label: 'Fast B split',
+    group: 'mir-b-split',
+    desc: 'B Aps and Short / Catwalk both held, a duel out of one of them before 1:30, and a body onto the site inside 15s.',
+    match(f) {
+      const hit = mirSplit(f, {
+        lanes: [MIR_B_APS, MIR_B_SPLIT_LANE],
+        defend: MIR_B_SPLIT_DEFEND,
+        site: MIR_B_SITE
+      });
+      if (!hit || hit.duel.sec >= secondsAtClock('1:30')) return null;
+      return { marks: { Split: hit.split, Duel: hit.duel.sec, 'On site': hit.onSite } };
+    }
+  },
+  {
+    key: 'mir-b-split',
+    label: 'B split',
+    group: 'mir-b-split',
+    desc: 'The same split with the first qualifying duel after 1:30.',
+    match(f) {
+      const hit = mirSplit(f, {
+        lanes: [MIR_B_APS, MIR_B_SPLIT_LANE],
+        defend: MIR_B_SPLIT_DEFEND,
+        site: MIR_B_SITE
+      });
+      if (!hit || hit.duel.sec < secondsAtClock('1:30')) return null;
+      return { marks: { Split: hit.split, Duel: hit.duel.sec, 'On site': hit.onSite } };
+    }
+  },
+  {
+    key: 'mir-window-boost',
+    label: 'Window boost',
+    desc: 'A player out of Mid into Window, with a second man who was in Mid within 6s of it and is not up there with him.',
+    match(f) {
+      for (const moved of f.transitions(MIR_MID, MIR_WINDOW, { from: 0, to: f.lastSec })) {
+        const at = moved.arrivedAt;
+        const booster = [...f.playersDuring(MIR_MID, Math.max(0, at - MIR_UNDER_RECENT), at)].find(
+          (id) => id !== moved.id && !f.playersIn(MIR_WINDOW, at).has(id)
+        );
+        if (!booster) continue;
+        return { marks: { Window: at } };
+      }
+      return null;
+    }
+  }
+];
+
+/**
+ * B Pop and B Execute: the same late push either side of the kitchen smoke.
+ *
+ * A pop with no kitchen smoke at all is still a pop — the contact cannot be
+ * late for a smoke nobody threw — but an execute without one is not an
+ * execute, so only that side of it requires the smoke to exist.
+ */
+function mirBLate(f, { min, beforeKitchen }) {
+  const from = secondsAtClock('1:35');
+  const push = mirPush(f, {
+    stage: MIR_T_APS,
+    into: MIR_B_APS,
+    defend: MIR_B_DEFEND,
+    from,
+    to: f.lastSec,
+    min
+  });
+  if (!push?.fight) return null;
+  const kitchen = firstNamed(f, ['kitchen']);
+  if (!kitchen) return beforeKitchen ? { marks: { Staged: push.staged, Contact: push.fight.sec } } : null;
+  const edge = kitchen.at - MIR_KITCHEN_EDGE;
+  if (beforeKitchen ? push.fight.sec > edge : push.fight.sec < edge) return null;
+  const marks = { Staged: push.staged, Contact: push.fight.sec, 'kitchen smoke': kitchen.at };
+  if (push.entered !== null) marks['Into aps'] = push.entered;
+  return { marks };
+}
+
+// ---------------------------------------------------------------------------
+// CT side, Mirage
+// ---------------------------------------------------------------------------
+
+/** A mid fight both CTs took part in, from ground a CT is allowed to hold. */
+function mirMidFight(f, { from, to, enemies }) {
+  const duels = f
+    .fights({ from, to, enemyIn: MIR_MID_GROUND })
+    .filter((x) => ourFighterIn(f, x, MIR_CT_MID_FROM));
+  if (new Set(duels.map((x) => x.ours)).size < 2) return null;
+  if (new Set(duels.map((x) => x.enemy)).size < enemies) return null;
+  return duels;
+}
+
+/** @type {RoundTypeDef[]} */
+const MIR_CT = [
+  {
+    key: 'mir-ct-mid-1st',
+    label: '1st timing mid fight',
+    group: 'mir-ct-mid',
+    desc: '2 CTs both trading with a T in T Mid / Mid / Underground by 1:40.',
+    match(f) {
+      const duels = mirMidFight(f, { from: 0, to: secondsAtClock('1:40'), enemies: 1 });
+      if (!duels) return null;
+      return { marks: { Contact: duels[0].sec } };
+    }
+  },
+  {
+    key: 'mir-ct-mid-2nd',
+    label: '2nd timing mid fight',
+    group: 'mir-ct-mid',
+    desc: '2 CTs both trading with 2 different Ts on that ground, after 1:40.',
+    match(f) {
+      const duels = mirMidFight(f, { from: secondsAtClock('1:40'), to: f.lastSec, enemies: 2 });
+      if (!duels) return null;
+      return { marks: { Contact: duels[0].sec } };
+    }
+  },
+  {
+    key: 'mir-ct-ramp-search',
+    label: 'Ramp search',
+    desc: 'A CT on A Ramp for 20s+, or killing someone in T Outside A from it, or walking into T Outside A.',
+    match(f) {
+      const run = longestRun(f.series, 0, f.lastSec, (sec) => f.countIn(MIR_A_RAMP, sec) >= 1);
+      if (run.seconds > MIR_RAMP_SEARCH_SECONDS) return { marks: { 'Held from': run.start } };
+      const been = f.playersDuring(MIR_A_RAMP, 0, f.lastSec);
+      if (!been.size) return null;
+      const kill = f
+        .fights({ ours: been, killsOnly: true, enemyIn: MIR_T_OUTSIDE })
+        .find((x) => x.killedThem);
+      if (kill) return { marks: { Kill: kill.sec } };
+      const out = [...f.playersDuring(MIR_T_OUTSIDE, 0, f.lastSec)].find((id) => been.has(id));
+      if (!out) return null;
+      return { marks: { Outside: f.firstSecWith(MIR_T_OUTSIDE, 1) } };
+    }
+  },
+  {
+    key: 'mir-ct-palace-search',
+    label: 'Palace search',
+    desc: 'A CT into A Palace.',
+    match(f) {
+      const at = f.firstSecWith(MIR_PALACE, 1);
+      if (at === null) return null;
+      return { marks: { Palace: at } };
+    }
+  },
+  {
+    key: 'mir-ct-awp-b',
+    label: 'AWP B start',
+    desc: 'The CT on B Car / B Balc / B Aps has the AWP out, before 1:30.',
+    match(f) {
+      const by = secondsAtClock('1:30');
+      for (const s of f.series) {
+        if (s.sec > by) break;
+        for (const id of f.playersIn(MIR_AWP_START, s.sec)) {
+          if (f.heldAwp(id, s.sec)) return { marks: { 'AWP set': s.sec } };
+        }
+      }
+      return null;
+    }
+  },
+  {
+    key: 'mir-ct-aps-search',
+    label: 'B aps search',
+    desc: 'A CT into B Aps who either fights there or stays 15s+.',
+    match(f) {
+      const been = f.playersDuring(MIR_B_APS, 0, f.lastSec);
+      if (!been.size) return null;
+      const run = longestRun(f.series, 0, f.lastSec, (sec) => f.countIn(MIR_B_APS, sec) >= 1);
+      if (run.seconds > MIR_APS_SEARCH_SECONDS) return { marks: { 'Held from': run.start } };
+      const duel = f.fights({ ours: been }).find((x) => ourFighterIn(f, x, MIR_B_APS));
+      if (!duel) return null;
+      return { marks: { Contact: duel.sec } };
+    }
+  },
+  {
+    key: 'mir-ct-boost',
+    label: 'B short boost',
+    desc: 'A CT on the Boost for more than 3 consecutive seconds.',
+    match(f) {
+      const run = longestRun(f.series, 0, f.lastSec, (sec) => f.countIn(MIR_BOOST, sec) >= 1);
+      if (run.seconds <= MIR_BOOST_SECONDS) return null;
+      return { marks: { Boost: run.start } };
+    }
+  },
+  {
+    key: 'mir-ct-under-push',
+    label: 'Under push',
+    desc: 'A CT more than 3 consecutive seconds across Underground / Ladder / Short, and if he moved between them, having been in Underground inside the last 6s.',
+    match(f) {
+      // Per player, because "remains in this block" is one body's run and two
+      // CTs passing each other through it is not the call.
+      for (const id of f.playersDuring(MIR_UNDER_BLOCK, 0, f.lastSec)) {
+        let start = null;
+        let seen = new Set();
+        for (const s of f.series) {
+          const here = MIR_UNDER_BLOCK.filter((name) => f.playersIn([name], s.sec).has(id));
+          if (!here.length) {
+            start = null;
+            seen = new Set();
+            continue;
+          }
+          if (start === null) start = s.sec;
+          for (const name of here) seen.add(name);
+          if (s.sec - start <= MIR_UNDER_SECONDS) continue;
+          // Rotating between the three only counts off the Underground.
+          if (seen.size > 1) {
+            const from = Math.max(0, s.sec - MIR_UNDER_RECENT);
+            if (!f.playersDuring(MIR_UNDER, from, s.sec).has(id)) continue;
+          }
+          return { marks: { 'Set from': start } };
+        }
+      }
+      return null;
+    }
+  }
+];
+
+// ---------------------------------------------------------------------------
+// Cache vocabulary
+// ---------------------------------------------------------------------------
+
+const CCH_A_MAIN = ['A main'];
+const CCH_A_POS = ['A'];
+const CCH_A_DOOR = ['A door'];
+const CCH_A_SITE = ['A Site'];
+/** Whoever is holding A, wherever the map paints them. */
+const CCH_A_DEFEND = ['A Site', 'A Heaven', 'Ticket'];
+const CCH_A_FLANK = ['Highway', 'Ticket', 'Whitebox'];
+const CCH_A_SPLIT_DEFEND = ['Highway', 'Ticket', 'Whitebox', 'A main', 'A door', 'A Site'];
+
+const CCH_B_MAIN = ['B Main'];
+const CCH_B_POS = ['B'];
+const CCH_B_SITE = ['B Site'];
+const CCH_B_DEFEND = ['B Site', 'B Checkers'];
+const CCH_CHECKERS = ['Checkers'];
+const CCH_VENTS = ['Vents'];
+const CCH_RIGHT_MID = ['Right mid'];
+
+const CCH_T_MID = ['T Mid'];
+const CCH_CT_MID = ['CT Mid'];
+const CCH_MID = ['mid'];
+const CCH_UNDER_BOOST = ['under boost'];
+const CCH_MID_IN = ['mid', 'under boost'];
+const CCH_MID_TRADE_IN = ['mid', 'right mid', 'under boost'];
+const CCH_BOOST = ['boost'];
+const CCH_MID_GARAGE = ['Mid Garage'];
+/** The mid ground a CT gives up, and comes back to on a retake. */
+const CCH_MID_HOLD = ['sandbags', 'roof', 'mid', 'under boost'];
+
+const CCH_A_SMOKES = ['a1', 'a2', 'awall1', 'awall2'];
+const CCH_B_SMOKES = ['blurk', 'heaven', 'tree'];
+/** The B contact only defers to two of the three: blurk is a lurk, not a wall. */
+const CCH_B_CONTACT_SMOKES = ['heaven', 'tree'];
+const CCH_MID_MOLLYS = ['sandbags', 'vents', 'underboost', 'whitebox'];
+
+/** How long a trade may lead the entry it belongs to. */
+const CCH_TRADE_FOLLOW = 8;
+/** And how long a contact's smokes have to arrive behind the first fight. */
+const CCH_CONTACT_SMOKE = 10;
+const CCH_SPLIT_FOLLOW = 10;
+const CCH_SEARCH_SECONDS = 5;
+const CCH_MID_FIGHT_SECONDS = 10;
+
+/**
+ * The earliest of these stored spots to land, of any grenade at all.
+ *
+ * A fake thrown as a decoy lands in the same place as the smoke it imitates,
+ * and the spot database records the grenade each spot was stored with, so the
+ * type-strict lookup would miss it. Both readings are here because the calls
+ * that want only the real smoke ask for it explicitly.
+ */
+function firstAtSpot(f, names) {
+  let best = null;
+  for (const name of names) {
+    for (const n of f.nadesAtSpot(name)) {
+      if (!best || n.at < best.at) best = n;
+    }
+  }
+  return best;
+}
+
+/**
+ * A Cache site take: the smoke, the bodies through the choke, and the bodies
+ * onto the site.
+ *
+ * Rush, execute and fake are one shape read at different counts and either
+ * side of a clock, so all three come through here.
+ */
+function cchTake(f, { smokes, main, into, from, to, mainMin, intoMin, cap = false, anyNade = false }) {
+  const smoke = anyNade ? firstAtSpot(f, smokes) : firstNamed(f, smokes);
+  if (!smoke || smoke.at < from || smoke.at > to) return null;
+  const onMain = f.playersDuring(main, from, to).size;
+  const inside = f.playersDuring(into, from, to).size;
+  if (cap ? onMain > mainMin || inside > intoMin : onMain < mainMin || inside < intoMin) return null;
+  return {
+    marks: {
+      Smoke: smoke.at,
+      'On main': onMain,
+      In: inside
+    }
+  };
+}
+
+/**
+ * A Cache contact: bodies through the choke and either onto the site or into
+ * the holders, with the smokes arriving behind the first fight rather than
+ * in front of it. Smokes in front of it make the round an execute.
+ */
+function cchContact(f, { smokes, main, into, defend, from, min }) {
+  if (f.playersDuring(main, from, f.lastSec).size < min) return null;
+  const inside = f.playersDuring(into, from, f.lastSec);
+  const duels = f.fights({ from, enemyIn: defend });
+  if (inside.size < min && !duels.length) return null;
+  const smoke = firstNamed(f, smokes);
+  if (smoke) {
+    const first = duels[0];
+    if (!first) return null;
+    if (smoke.at < first.sec || smoke.at > first.sec + CCH_CONTACT_SMOKE) return null;
+  }
+  const marks = { 'On main': f.playersDuring(main, from, f.lastSec).size };
+  if (duels[0]) marks.Contact = duels[0].sec;
+  if (smoke) marks.Smoke = smoke.at;
+  return { marks };
+}
+
+/**
+ * The mid take: bodies into mid, or a trade into CT Mid that a body follows
+ * within 8s. Shared by Mid rush and Mid retake, which differ in the clock, in
+ * where the follow-up counts, and in whether a molotov was part of it.
+ */
+function cchMidTake(f, { from, to, into, tradeInto, min }) {
+  const straight = f.firstSecWith(into, min, from, to);
+  if (straight !== null) return { at: straight, trade: null };
+  for (const duel of f.fights({ from, to, enemyIn: CCH_CT_MID })) {
+    for (const s of f.series) {
+      if (s.sec < duel.sec || s.sec > Math.min(to, duel.sec + CCH_TRADE_FOLLOW)) continue;
+      if (f.playersIn(tradeInto, s.sec).has(duel.ours)) {
+        return { at: s.sec, trade: duel.sec };
+      }
+    }
+  }
+  return null;
+}
+
+/** The mid spend both fakes are built on: a molotov, two smokes, two flashes. */
+function cchMidSpend(f, { from, to }) {
+  const inWindow = (n) => n.at >= from && n.at <= to;
+  const molly = CCH_MID_MOLLYS.flatMap((name) =>
+    f.nadesNamed(name).filter((n) => n.type === 'molotov')
+  ).filter(inWindow)[0];
+  if (!molly) return null;
+  const smokes = f.nadesIn('smokegrenade', CCH_CT_MID).filter(inWindow);
+  if (smokes.length < 2) return null;
+  const flashes = f
+    .nadesIn('flashbang', [...CCH_T_MID, ...CCH_CT_MID])
+    .filter(inWindow);
+  if (flashes.length < 2) return null;
+  return { marks: { Molotov: molly.at, Smokes: smokes[1].at, Flashes: flashes[1].at } };
+}
+
+// ---------------------------------------------------------------------------
+// T side, Cache
+// ---------------------------------------------------------------------------
+
+/** @type {RoundTypeDef[]} */
+const CCH_T = [
+  {
+    key: 'cch-a-rush',
+    label: 'A rush',
+    group: 'cch-a-take',
+    desc: 'An a1 / a2 / awall1 / awall2 smoke, 3+ through A main and 2+ onto A, all by 1:39.',
+    match(f) {
+      return cchTake(f, {
+        smokes: CCH_A_SMOKES,
+        main: CCH_A_MAIN,
+        into: CCH_A_POS,
+        from: 0,
+        to: secondsAtClock('1:39'),
+        mainMin: 3,
+        intoMin: 2
+      });
+    }
+  },
+  {
+    key: 'cch-a-rush-fake',
+    label: 'A rush fake',
+    group: 'cch-a-take',
+    desc: 'The same utility by 1:39, real or thrown as a decoy, with at most 2 through A main and at most 1 onto A.',
+    match(f) {
+      return cchTake(f, {
+        smokes: CCH_A_SMOKES,
+        main: CCH_A_MAIN,
+        into: CCH_A_POS,
+        from: 0,
+        to: secondsAtClock('1:39'),
+        mainMin: 2,
+        intoMin: 1,
+        cap: true,
+        anyNade: true
+      });
+    }
+  },
+  {
+    key: 'cch-a-exec',
+    label: 'A execute',
+    group: 'cch-a-take',
+    desc: 'The same smoke with 2+ through A main and 2+ onto A, all after 1:39.',
+    match(f) {
+      return cchTake(f, {
+        smokes: CCH_A_SMOKES,
+        main: CCH_A_MAIN,
+        into: CCH_A_POS,
+        from: secondsAtClock('1:39'),
+        to: f.lastSec,
+        mainMin: 2,
+        intoMin: 2
+      });
+    }
+  },
+  {
+    key: 'cch-a-contact',
+    label: 'A contact',
+    group: 'cch-a-take',
+    desc: '2+ through A main after 1:39, onto A or into the A holders, with any A smoke landing behind the first fight.',
+    match(f) {
+      return cchContact(f, {
+        smokes: CCH_A_SMOKES,
+        main: CCH_A_MAIN,
+        into: CCH_A_POS,
+        defend: CCH_A_DEFEND,
+        from: secondsAtClock('1:39'),
+        min: 2
+      });
+    }
+  },
+  {
+    key: 'cch-a-split',
+    label: 'A split',
+    desc: 'A body on Highway / Ticket / Whitebox and one in A main or A door, then two duels, a duel and an entry, or two entries onto the site.',
+    match(f) {
+      for (const s of f.series) {
+        const flank = f.playersIn(CCH_A_FLANK, s.sec);
+        const main = f.playersIn([...CCH_A_MAIN, ...CCH_A_DOOR], s.sec);
+        if (!flank.size || !main.size) continue;
+        const pair = new Set([...flank, ...main]);
+        const duels = f.fights({ from: s.sec, ours: pair, enemyIn: CCH_A_SPLIT_DEFEND });
+        const fighters = new Set(duels.map((x) => x.ours));
+        const entered = new Set(
+          [...f.playersDuring(CCH_A_SITE, s.sec, f.lastSec)].filter((id) => pair.has(id))
+        );
+        // Two men, and between them two commitments of any kind.
+        const committed = new Set([...fighters, ...entered]);
+        if (committed.size < 2) continue;
+        const onSite = f.firstSecWith(CCH_A_SITE, 1, s.sec, f.lastSec);
+        const marks = { Split: s.sec };
+        if (duels[0]) marks.Duel = duels[0].sec;
+        if (onSite !== null) marks['On site'] = onSite;
+        return { marks };
+      }
+      return null;
+    }
+  },
+  {
+    key: 'cch-b-rush',
+    label: 'B rush',
+    group: 'cch-b-take',
+    desc: 'A blurk / heaven / tree smoke, 3+ through B Main and 2+ onto B, all by 1:38.',
+    match(f) {
+      return cchTake(f, {
+        smokes: CCH_B_SMOKES,
+        main: CCH_B_MAIN,
+        into: CCH_B_POS,
+        from: 0,
+        to: secondsAtClock('1:38'),
+        mainMin: 3,
+        intoMin: 2
+      });
+    }
+  },
+  {
+    key: 'cch-b-rush-fake',
+    label: 'B rush fake',
+    group: 'cch-b-take',
+    desc: 'The same utility by 1:38, real or thrown as a decoy, with at most 2 through B Main and at most 1 onto B.',
+    match(f) {
+      return cchTake(f, {
+        smokes: CCH_B_SMOKES,
+        main: CCH_B_MAIN,
+        into: CCH_B_POS,
+        from: 0,
+        to: secondsAtClock('1:38'),
+        mainMin: 2,
+        intoMin: 1,
+        cap: true,
+        anyNade: true
+      });
+    }
+  },
+  {
+    key: 'cch-b-exec',
+    label: 'B execute',
+    group: 'cch-b-take',
+    desc: 'The same smoke with 3+ through B Main and 2+ onto B, all after 1:38.',
+    match(f) {
+      return cchTake(f, {
+        smokes: CCH_B_SMOKES,
+        main: CCH_B_MAIN,
+        into: CCH_B_POS,
+        from: secondsAtClock('1:38'),
+        to: f.lastSec,
+        mainMin: 3,
+        intoMin: 2
+      });
+    }
+  },
+  {
+    key: 'cch-b-contact',
+    label: 'B contact',
+    group: 'cch-b-take',
+    desc: '2+ through B Main after 1:38, onto B or into the B Site / B Checkers holders, with any heaven or tree smoke landing behind the first fight.',
+    match(f) {
+      return cchContact(f, {
+        smokes: CCH_B_CONTACT_SMOKES,
+        main: CCH_B_MAIN,
+        into: CCH_B_POS,
+        defend: CCH_B_DEFEND,
+        from: secondsAtClock('1:38'),
+        min: 2
+      });
+    }
+  },
+  {
+    key: 'cch-b-split',
+    label: 'B split',
+    desc: 'A player out of Right mid into Vents, with a second man onto B Checkers / B Site or fighting there inside 10s.',
+    match(f) {
+      for (const moved of f.transitions(CCH_RIGHT_MID, CCH_VENTS, { from: 0, to: f.lastSec })) {
+        const to = moved.arrivedAt + CCH_SPLIT_FOLLOW;
+        const onB = f.firstSecWith(CCH_B_DEFEND, 1, moved.arrivedAt, to);
+        const duel = f.fights({ from: moved.arrivedAt, to, enemyIn: CCH_B_DEFEND })[0];
+        if (onB === null && !duel) continue;
+        const marks = { Vents: moved.arrivedAt };
+        if (onB !== null) marks['On B'] = onB;
+        if (duel) marks.Contact = duel.sec;
+        return { marks };
+      }
+      return null;
+    }
+  },
+  {
+    key: 'cch-mid-rush',
+    label: 'Mid rush',
+    desc: '3+ into T Mid then 2 into mid, or a trade into CT Mid the same man follows inside 8s, all before 1:43, behind a smoke into CT Mid.',
+    match(f) {
+      const by = secondsAtClock('1:43');
+      if (f.playersDuring(CCH_T_MID, 0, by).size < 3) return null;
+      const smoke = f.nadesIn('smokegrenade', CCH_CT_MID).find((n) => n.at <= by);
+      if (!smoke) return null;
+      const take = cchMidTake(f, { from: 0, to: by, into: CCH_MID, tradeInto: CCH_MID, min: 2 });
+      if (!take) return null;
+      const marks = { Smoke: smoke.at, 'Into mid': take.at };
+      if (take.trade !== null) marks.Contact = take.trade;
+      return { marks };
+    }
+  },
+  {
+    key: 'cch-mid-retake',
+    label: 'Mid retake',
+    desc: 'The same take after 1:43 onto mid / under boost, behind a CT Mid smoke and a sandbags / vents / underboost / whitebox molotov.',
+    match(f) {
+      const from = secondsAtClock('1:43');
+      const smoke = f.nadesIn('smokegrenade', CCH_CT_MID).find((n) => n.at >= from);
+      if (!smoke) return null;
+      const molly = CCH_MID_MOLLYS.flatMap((name) =>
+        f.nadesNamed(name).filter((n) => n.type === 'molotov' && n.at >= from)
+      )[0];
+      if (!molly) return null;
+      const take = cchMidTake(f, {
+        from,
+        to: f.lastSec,
+        into: CCH_MID_IN,
+        tradeInto: CCH_MID_TRADE_IN,
+        min: 2
+      });
+      if (!take) return null;
+      const marks = { Smoke: smoke.at, Molotov: molly.at, 'Into mid': take.at };
+      if (take.trade !== null) marks.Contact = take.trade;
+      return { marks };
+    }
+  },
+  {
+    key: 'cch-mid-fake',
+    label: 'Mid fake',
+    group: 'cch-mid-fake',
+    desc: 'A mid molotov, 2 smokes into CT Mid and 2 flashes into T Mid / CT Mid, all before 1:43.',
+    match(f) {
+      return cchMidSpend(f, { from: 0, to: secondsAtClock('1:43') });
+    }
+  },
+  {
+    key: 'cch-mid-retake-fake',
+    label: 'Mid retake fake',
+    group: 'cch-mid-fake',
+    desc: 'The same spend after 1:43.',
+    match(f) {
+      return cchMidSpend(f, { from: secondsAtClock('1:43'), to: f.lastSec });
+    }
+  },
+  {
+    key: 'cch-fast-boost',
+    label: 'Fast boost',
+    desc: 'A player onto the boost by 1:43.',
+    match(f) {
+      const at = f.firstSecWith(CCH_BOOST, 1, 0, secondsAtClock('1:43'));
+      if (at === null) return null;
+      return { marks: { Boost: at } };
+    }
+  },
+  {
+    key: 'cch-fast-mid-peek',
+    label: 'Fast Mid peek',
+    desc: 'Exactly one player trading with a CT in CT Mid, out of Mid Garage, by 1:43.',
+    match(f) {
+      const duels = f
+        .fights({ to: secondsAtClock('1:43'), enemyIn: CCH_CT_MID })
+        .filter((x) => ourFighterIn(f, x, CCH_MID_GARAGE));
+      if (!duels.length) return null;
+      // Exactly one man: two is a mid take, however fast it was.
+      if (new Set(duels.map((x) => x.ours)).size !== 1) return null;
+      return { marks: { Peek: duels[0].sec } };
+    }
+  }
+];
+
+// ---------------------------------------------------------------------------
+// CT side, Cache
+// ---------------------------------------------------------------------------
+
+/** A CT holding one piece of ground with the AWP out. */
+function cchAwpStart(f, names) {
+  for (const s of f.series) {
+    for (const id of f.playersIn(names, s.sec)) {
+      if (f.heldAwp(id, s.sec)) return { marks: { 'AWP set': s.sec } };
+    }
+  }
+  return null;
+}
+
+/** @type {RoundTypeDef[]} */
+const CCH_CT = [
+  {
+    key: 'cch-ct-vents-boost',
+    label: 'Vents boost',
+    desc: 'A CT out of Checkers into Vents.',
+    match(f) {
+      const moved = f.transitions(CCH_CHECKERS, CCH_VENTS, { from: 0, to: f.lastSec })[0];
+      if (!moved) return null;
+      return { marks: { Vents: moved.arrivedAt } };
+    }
+  },
+  {
+    key: 'cch-ct-awp-b',
+    label: 'AWP B start',
+    desc: 'The AWP playing B Checkers or B Site.',
+    match(f) {
+      return cchAwpStart(f, CCH_B_DEFEND);
+    }
+  },
+  {
+    key: 'cch-ct-awp-a',
+    label: 'AWP A start',
+    desc: 'The AWP playing the A site.',
+    match(f) {
+      return cchAwpStart(f, CCH_A_SITE);
+    }
+  },
+  {
+    key: 'cch-ct-a-main-search',
+    label: 'A main search',
+    desc: 'A CT into A main behind a CT flash or smoke, or two of them, 8+ alive, and one of them there 5s+.',
+    match(f) {
+      const run = longestRun(f.series, 0, f.lastSec, (sec) => f.countIn(CCH_A_MAIN, sec) >= 1);
+      if (run.seconds < CCH_SEARCH_SECONDS) return null;
+      const been = f.playersDuring(CCH_A_MAIN, 0, f.lastSec);
+      if (!been.size) return null;
+      const alive = (sec) => f.aliveCount(sec) + f.enemy.aliveCount(sec) >= 8;
+      const pair = f.firstSecWith(CCH_A_MAIN, 2);
+      if (pair !== null && alive(pair)) return { marks: { 'Two in': pair } };
+      const thrown = [
+        ...f.nadesFrom('flashbang', CCH_A_MAIN),
+        ...f.nadesFrom('smokegrenade', CCH_A_MAIN)
+      ].sort((a, b) => a.at - b.at)[0];
+      if (!thrown || !alive(thrown.at)) return null;
+      return { marks: { Utility: thrown.at, 'Held from': run.start } };
+    }
+  },
+  {
+    key: 'cch-ct-door-push',
+    label: 'Door push',
+    desc: 'A CT on A door for 5s+.',
+    match(f) {
+      const run = longestRun(f.series, 0, f.lastSec, (sec) => f.countIn(CCH_A_DOOR, sec) >= 1);
+      if (run.seconds < CCH_SEARCH_SECONDS) return null;
+      return { marks: { 'Held from': run.start } };
+    }
+  },
+  {
+    key: 'cch-ct-3-mid',
+    label: '3 mid fight',
+    desc: '3 CTs starting in CT Mid and holding it, or fighting out of it, for 10s.',
+    match(f) {
+      const start = f.firstSecWith(CCH_CT_MID, 3);
+      if (start === null) return null;
+      const to = start + CCH_MID_FIGHT_SECONDS;
+      const run = longestRun(f.series, start, to, (sec) => f.countIn(CCH_CT_MID, sec) >= 3);
+      const fought = f
+        .fights({ from: start, to })
+        .some((x) => ourFighterIn(f, x, CCH_CT_MID));
+      if (run.seconds < CCH_MID_FIGHT_SECONDS && !fought) return null;
+      return { marks: { 'Set from': start } };
+    }
+  },
+  {
+    key: 'cch-ct-mid-retake',
+    label: 'Mid retake',
+    desc: 'Mid given up, a T stepping into mid / under boost / right mid, and a CT then taking that ground back or trading with him on it.',
+    match(f) {
+      // The T entry is the anchor: before it the ground has to be empty of CTs,
+      // after it somebody has to go and get it.
+      const stepped = f.enemy.firstSecWith(CCH_MID_TRADE_IN, 1);
+      if (stepped === null) return null;
+      if (f.playersDuring(CCH_MID_HOLD, 0, stepped).size) return null;
+      const back = f.firstSecWith(CCH_MID_HOLD, 1, stepped, f.lastSec);
+      const duel = f.fights({ from: stepped, enemyIn: CCH_MID_TRADE_IN })[0];
+      if (back === null && !duel) return null;
+      const marks = { 'T in': stepped };
+      if (back !== null) marks.Retaken = back;
+      if (duel) marks.Contact = duel.sec;
+      return { marks };
+    }
+  }
+];
+
+// ---------------------------------------------------------------------------
 // Catalogue
 // ---------------------------------------------------------------------------
 
@@ -1943,7 +3844,10 @@ export const ROUND_LIBRARY = {
   NUK: { T: NUK_T, CT: NUK_CT },
   INF: { T: INF_T, CT: INF_CT },
   DD2: { T: DD2_T, CT: DD2_CT },
-  ANU: { T: ANU_T, CT: ANU_CT }
+  ANU: { T: ANU_T, CT: ANU_CT },
+  ANC: { T: ANC_T, CT: ANC_CT },
+  MIR: { T: MIR_T, CT: MIR_CT },
+  CCH: { T: CCH_T, CT: CCH_CT }
 };
 
 export function hasRoundLibrary(mapCode) {
@@ -2125,6 +4029,93 @@ const READINESS = {
       ...WATER_SMOKE.map((n) => [n]),
       ...ANU_T_WATER_POS.map((n) => [n])
     ]
+  },
+  ANC: {
+    utility: [
+      ...ANC_B_EXEC_SMOKES,
+      'blurk',
+      'pillar',
+      'window',
+      ...ANC_MID_FAKE_MOLLYS,
+      ...ANC_MID_MOLLYS,
+      'elbow',
+      'street',
+      'door'
+    ],
+    regions: [
+      ANC_B_RAMP,
+      ANC_B_SITE,
+      ANC_B_CAVE,
+      ANC_B_STREET,
+      ANC_T_SPAWN,
+      ANC_B_DOOR,
+      ...ANC_LURK_GROUND.map((n) => [n]),
+      ANC_MID_1,
+      ANC_MID_2,
+      ANC_MID_3,
+      ANC_ELBOW,
+      ANC_LEDGE,
+      ANC_RUNBOOST,
+      ANC_STREET,
+      ANC_HEAVEN,
+      ANC_CT_MID,
+      ANC_CT_WINDOW,
+      ANC_CT_DONUT,
+      ANC_WINDOW,
+      ANC_A_MAIN,
+      ANC_A_POS,
+      ANC_A_SITE,
+      ANC_CT_SPAWN,
+      ANC_REDROOM,
+      ANC_CT_CAVE,
+      ...ANC_A_SMOKE_GROUND.map((n) => [n]),
+      ...ANC_STREET_THROUGH.map((n) => [n]),
+      ...ANC_MID_FAKE_THROW.map((n) => [n])
+    ]
+  },
+  MIR: {
+    utility: ['kitchen', ...MIR_A_EXEC_SMOKES],
+    regions: [
+      MIR_MID,
+      MIR_T_MID,
+      ...MIR_MID_GROUND.map((n) => [n]),
+      ...MIR_CT_MID_FROM.map((n) => [n]),
+      ...MIR_B_STAGE.map((n) => [n]),
+      ...MIR_B_DEFEND.map((n) => [n]),
+      ...MIR_B_SPLIT_LANE.map((n) => [n]),
+      MIR_T_A,
+      MIR_A_RAMP,
+      ...MIR_A_IN.map((n) => [n]),
+      ...MIR_A_DEFEND.map((n) => [n]),
+      ...MIR_PALACE_FROM.map((n) => [n]),
+      MIR_WINDOW,
+      MIR_T_OUTSIDE,
+      ...MIR_AWP_START.map((n) => [n]),
+      MIR_BOOST,
+      ...MIR_UNDER_BLOCK.map((n) => [n])
+    ]
+  },
+  CCH: {
+    utility: [...CCH_A_SMOKES, ...CCH_B_SMOKES, ...CCH_MID_MOLLYS],
+    regions: [
+      CCH_A_MAIN,
+      CCH_A_POS,
+      CCH_A_DOOR,
+      ...CCH_A_DEFEND.map((n) => [n]),
+      ...CCH_A_FLANK.map((n) => [n]),
+      CCH_B_MAIN,
+      CCH_B_POS,
+      ...CCH_B_DEFEND.map((n) => [n]),
+      CCH_CHECKERS,
+      CCH_VENTS,
+      CCH_RIGHT_MID,
+      CCH_T_MID,
+      CCH_CT_MID,
+      ...CCH_MID_TRADE_IN.map((n) => [n]),
+      ...CCH_MID_HOLD.map((n) => [n]),
+      CCH_BOOST,
+      CCH_MID_GARAGE
+    ]
   }
 };
 
@@ -2160,5 +4151,13 @@ export function requiredRegionGroups(mapCode) {
 
 /** The same groups as display strings, for tests and copy. */
 export function requiredRegionNames(mapCode) {
-  return requiredRegionGroups(mapCode).map((g) => g.join(' / '));
+  return requiredRegionGroups(mapCode).map(regionGroupLabel);
+}
+
+/**
+ * A group as a coach reads it. Layer qualifiers are an implementation detail
+ * of the lookup, not something to print in a readiness note.
+ */
+export function regionGroupLabel(group) {
+  return [...new Set(group.map(plainRegionName))].join(' / ');
 }
