@@ -107,6 +107,15 @@ function typeFiles(item, t) {
 }
 
 /**
+ * Can this dot be opened?
+ *
+ * Documents store their data, so a report written before the utility map
+ * carried round files has items with nothing to link. Those stay hover-only
+ * rather than opening an empty card: the report has to be regenerated.
+ */
+const hasRounds = (it) => Boolean(it?.files?.length);
+
+/**
  * @param {HTMLElement} node
  * @param {{ map: string, side: string, items: Array<{
  *   name, type, phase, rounds, share, clock, x, y, files?: string[],
@@ -201,9 +210,9 @@ function mountUtilMap(node, data) {
 
   /** The pinned card under the map: the same breakdown, as round links. */
   function showPicked(it) {
-    pinned = it;
+    pinned = hasRounds(it) ? it : null;
     picked.replaceChildren();
-    if (!it) {
+    if (!pinned) {
       picked.hidden = true;
       draw();
       return;
@@ -212,7 +221,7 @@ function mountUtilMap(node, data) {
     head.className = 'doc-embed-picked-head';
     head.append(
       roundsLink(
-        `${`${it.name} ${NADE_WORD[it.type] || ''}`.trim()}, ${it.rounds || it.files?.length || 0} rounds`,
+        `${`${it.name} ${NADE_WORD[it.type] || ''}`.trim()}, ${it.rounds || it.files.length} rounds`,
         it.files
       )
     );
@@ -246,7 +255,7 @@ function mountUtilMap(node, data) {
   canvas.addEventListener('mousemove', (ev) => {
     const it = pick(ev);
     draw(it);
-    canvas.style.cursor = it ? 'pointer' : '';
+    canvas.style.cursor = hasRounds(it) ? 'pointer' : '';
     if (it) {
       const rect = canvas.getBoundingClientRect();
       tip.showNodes(tipNodes(it), ev.clientX - rect.left, ev.clientY - rect.top);
