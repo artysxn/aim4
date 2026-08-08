@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // src/site/admin/toolsPanel.js
 // Site-wide maintenance actions (stats rebuild, positions/roles scan, round
-// library rescan, …).
+// library rescan, Steam-id player-name merge, …).
 //
 // Every action is the same shape: POST to start, GET to poll, one at a time
 // across the whole library. They are kept in one table rather than three
@@ -92,6 +92,35 @@ const JOBS = [
       // means the ground or the utility spots are not named yet.
       const maps = Object.entries(r.maps || {}).sort((a, b) => b[1] - a[1]);
       if (maps.length) parts.push(`(${maps.map(([m, n]) => `${m} ${n}`).join(', ')})`);
+      return parts;
+    }
+  },
+  {
+    kind: 'player-names',
+    idle: 'Rescan player names',
+    busy: 'Rescanning names…',
+    className: 'btn',
+    confirm:
+      'Merge every player by Steam ID and set their display name to the one they used most often?\n\nRewrites demo/round rosters, then rebuilds statistics. Aquwo/aRTYSAN-style aliases collapse to the majority name.',
+    running: 'Merging player names by Steam ID…',
+    starting: 'Starting player-name rescan…',
+    done: 'Player-name rescan finished.',
+    start: () => adminApi.rescanPlayerNames(),
+    status: () => adminApi.rescanPlayerNamesStatus(),
+    summary: (r, ms) => {
+      const parts = [
+        `Done in ${Math.round(ms / 1000)}s.`,
+        `${r.steamIds || 0} Steam IDs across ${r.ready || 0} demos.`,
+        `${r.withAliases || 0} had multiple names`,
+        `${r.demosUpdated || 0} demos / ${r.roundsUpdated || 0} rounds rewritten`
+      ];
+      const sample = (r.renames || [])
+        .slice(0, 5)
+        .map((x) => {
+          const alts = (x.aliases || []).map((a) => `${a.name}×${a.count}`).join(', ');
+          return `${x.name}←${alts || '?'}`;
+        });
+      if (sample.length) parts.push(`(${sample.join('; ')})`);
       return parts;
     }
   }

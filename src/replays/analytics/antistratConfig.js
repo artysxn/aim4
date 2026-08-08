@@ -26,6 +26,7 @@ export const ANTISTRAT_CATEGORIES = [
   { key: 'positions', group: 'General', label: 'Positions on T and CT' },
   { key: 'pace', group: 'General', label: 'Pace on T' },
   { key: 'utility', group: 'General', label: 'Default utility' },
+  { key: 'tells', group: 'General', label: 'Biggest tells' },
   { key: 'fiveVfour', group: 'General', label: '5v4s' },
   { key: 'fourVfive', group: 'General', label: '4v5s' },
   { key: 'force', group: 'General', label: 'Force buys' },
@@ -67,6 +68,20 @@ const LINK_FILES_MAX = 40;
 
 function li(items) {
   return items.length ? `<ul>${items.map((x) => `<li>${x}</li>`).join('')}</ul>` : '';
+}
+
+/**
+ * A table of already-escaped cells. Head cells are strings, body rows arrays
+ * of the same length. The sanitizer keeps these tags and drops every
+ * attribute, so styling lives on `.doc-surface table`.
+ */
+function table(head, rows) {
+  if (!rows.length) return '';
+  const cells = (list, tag) => list.map((c) => `<${tag}>${c}</${tag}>`).join('');
+  // No whitespace between the table tags: a stray text node inside a table is
+  // foster-parented out by the HTML parser and lands above it.
+  const body = rows.map((r) => `<tr>${cells(r, 'td')}</tr>`).join('');
+  return `<table><thead><tr>${cells(head, 'th')}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 /** Wrap a label in a timeline link over the given round files. */
@@ -167,6 +182,34 @@ function renderUtility(esc, s, mapCode) {
     }
   }
   return parts.length ? parts.join('') : NONE;
+}
+
+/**
+ * Utility that gives the round away: one grenade, one call, almost every time.
+ *
+ * The round column links the rounds behind the call, the total column links
+ * every round the grenade appeared in, so a row can be checked both ways.
+ */
+function renderTells(esc, s) {
+  const parts = [];
+  for (const side of ['T', 'CT']) {
+    const bag = s.sides?.[side];
+    if (!bag?.tells.length) continue;
+    const rows = bag.tells.map((t) => [
+      `${esc(t.name)} ${esc(NADE_WORD[t.type] || '')}`,
+      esc(t.label),
+      `${t.share}%`,
+      link(esc, `${t.hits} of ${t.rounds}`, t.hitFiles),
+      link(esc, String(t.rounds), t.files),
+      esc(t.others.map((o) => `${o.label} ${o.rounds}`).join(', ') || '—')
+    ]);
+    parts.push(`<p><strong>${side}</strong></p>`);
+    parts.push(table(['Utility', 'Call', 'Rate', 'Rounds', 'Thrown', 'Otherwise'], rows));
+  }
+  if (!parts.length) {
+    return `<p>No utility in ${s?.minRounds ?? 5}+ rounds reaches ${s?.minShare ?? 80}%.</p>`;
+  }
+  return parts.join('');
 }
 
 function renderAdvantageSide(esc, s, label) {
@@ -380,15 +423,16 @@ function renderRoundList(esc, s, teamName) {
   };
   const own = s.side === 'T' ? 'T' : 'CT';
   const other = s.side === 'T' ? 'CT' : 'T';
+  const named = (n) => (Number.isFinite(n) ? `, ${n} named` : '');
   const parts = [
-    `<p>${esc(teamName)} on ${esc(own)}: ${s.ownRounds} rounds. Facing the same calls on ${esc(other)}: ${s.facedRounds} rounds.</p>`
+    `<p>${esc(teamName)} on ${esc(own)}: ${s.ownRounds} rounds${named(s.ownNamed)}. Facing the same calls on ${esc(other)}: ${s.facedRounds} rounds${named(s.facedNamed)}.</p>`
   ];
   for (const t of s.types) {
     const rows = [
       line(t.for, `Ran it (${own})`),
       line(t.against, `Faced it (${other})`)
     ].filter(Boolean);
-    parts.push(`<p><strong>${esc(t.label)}</strong></p>${li(rows)}`);
+    parts.push(`<p><strong>${esc(t.label)}</strong></p>${li(rows.length ? rows : ['0 rounds'])}`);
   }
   return parts.join('');
 }
@@ -531,6 +575,7 @@ export function buildAntistratDocHtml(spec, esc) {
     positions: (s) => renderPositions(esc, s),
     pace: (s) => renderPace(esc, s),
     utility: (s) => renderUtility(esc, s, spec.mapCode),
+    tells: (s) => renderTells(esc, s),
     fiveVfour: (s) => renderAdvantage(esc, s),
     fourVfive: (s) => renderAdvantage(esc, s),
     force: (s) => renderForce(esc, s),

@@ -367,6 +367,10 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       s = {
         id,
         name: name || id,
+        /** Display-name votes across demos; most frequent wins at the end. */
+        nameCounts: new Map(),
+        /** Demo ids already counted toward nameCounts (one vote per match). */
+        nameVoted: new Set(),
         all: emptyBucket(),
         T: emptyBucket(),
         CT: emptyBucket(),
@@ -432,6 +436,11 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       }
       const line = row.p[id];
       const s = seat(id, who.name);
+      const label = String(who.name || '').trim();
+      if (label && !s.nameVoted.has(row.d)) {
+        s.nameVoted.add(row.d);
+        s.nameCounts.set(label, (s.nameCounts.get(label) || 0) + 1);
+      }
       const side = team === 1 ? row.s1 : row.s2;
       addBucket(s.all, line);
       if (side === 'T' || side === 'CT') addBucket(s[side], line);
@@ -533,6 +542,15 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
   const out = [];
   for (const s of acc.values()) {
     if (!s.all.rounds) continue;
+    let bestName = s.name || s.id;
+    let bestCount = -1;
+    for (const [label, count] of s.nameCounts) {
+      if (count > bestCount || (count === bestCount && label.localeCompare(bestName) < 0)) {
+        bestName = label;
+        bestCount = count;
+      }
+    }
+    s.name = bestName;
     const all = bucketRating(s.all);
     const fullVsFull = bucketRating(s.fullVsFull);
     const swing = s.swingRounds ? s.swingSum / s.swingRounds : null;

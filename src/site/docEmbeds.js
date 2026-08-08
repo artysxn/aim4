@@ -65,13 +65,21 @@ function tooltipFor(root) {
   tip.className = 'doc-embed-tip';
   tip.hidden = true;
   root.appendChild(tip);
+  const place = (x, y) => {
+    tip.hidden = false;
+    const w = root.clientWidth || 1;
+    tip.style.left = `${Math.min(x + 12, Math.max(0, w - tip.offsetWidth - 4))}px`;
+    tip.style.top = `${y + 14}px`;
+  };
   return {
     show(text, x, y) {
       tip.textContent = text;
-      tip.hidden = false;
-      const w = root.clientWidth || 1;
-      tip.style.left = `${Math.min(x + 12, w - 160)}px`;
-      tip.style.top = `${y + 14}px`;
+      place(x, y);
+    },
+    /** @param {Node[]} nodes  built by the caller, never parsed from a string */
+    showNodes(nodes, x, y) {
+      tip.replaceChildren(...nodes);
+      place(x, y);
     },
     hide() {
       tip.hidden = true;
@@ -79,11 +87,31 @@ function tooltipFor(root) {
   };
 }
 
+/** A timeline link over round files, or plain text when there are none. */
+function roundsLink(label, files) {
+  const list = (files || []).filter(Boolean);
+  if (!list.length) return document.createTextNode(label);
+  const a = document.createElement('a');
+  a.href = `/demos?rounds=${list.map(encodeURIComponent).join(',')}`;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.textContent = label;
+  return a;
+}
+
 // ---- util-map -------------------------------------------------------------
+
+/** Round files behind one round type of a utility item. */
+function typeFiles(item, t) {
+  return (t.idx || []).map((i) => item.files?.[i]).filter(Boolean);
+}
 
 /**
  * @param {HTMLElement} node
- * @param {{ map: string, side: string, items: Array<{name,type,phase,share,clock,x,y}> }} data
+ * @param {{ map: string, side: string, items: Array<{
+ *   name, type, phase, rounds, share, clock, x, y, files?: string[],
+ *   types?: Array<{ key: string, label: string, rounds: number, share: number, idx: number[] }>
+ * }> }} data
  */
 function mountUtilMap(node, data) {
   const size = 480;
@@ -99,7 +127,7 @@ function mountUtilMap(node, data) {
     btn.addEventListener('click', () => {
       phase = p.key;
       for (const b of chips.children) b.classList.toggle('active', b === btn);
-      draw();
+      showPicked(null);
     });
     chips.appendChild(btn);
   }
@@ -111,8 +139,15 @@ function mountUtilMap(node, data) {
   canvas.className = 'doc-embed-canvas';
   node.appendChild(canvas);
   const tip = tooltipFor(node);
+  // Clicking a dot pins its rounds under the map. The tooltip follows the
+  // cursor, so its links can never be clicked; this panel holds still.
+  const picked = document.createElement('div');
+  picked.className = 'doc-embed-picked';
+  picked.hidden = true;
+  node.appendChild(picked);
   const ctx = canvas.getContext('2d');
   let radar = null;
+  let pinned = null;
 
   const visible = () => (data.items || []).filter((it) => !phase || it.phase === phase);
   const radiusOf = (it) => 3.5 + Math.min(7, it.share / 12);
@@ -133,16 +168,62 @@ function mountUtilMap(node, data) {
       const p = project(it);
       if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
       const r = radiusOf(it);
-      ctx.globalAlpha = it === hot ? 1 : 0.85;
+      const lit = it === hot || it === pinned;
+      ctx.globalAlpha = lit ? 1 : 0.85;
       ctx.fillStyle = NADE_COLORS[it.type] || '#ccc';
       ctx.beginPath();
-      ctx.arc(p.x, p.y, it === hot ? r + 2 : r, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, lit ? r + 2 : r, 0, Math.PI * 2);
       ctx.fill();
       ctx.globalAlpha = 1;
-      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = it === pinned ? '#fff' : 'rgba(0,0,0,0.6)';
+      ctx.lineWidth = it === pinned ? 1.5 : 1;
       ctx.stroke();
     }
+  }
+
+  /** The hover card: what this grenade is, and which calls it belongs to. */
+  function tipNodes(it) {
+    const head = document.createElement('strong');
+    head.textContent = `${it.name} ${NADE_WORD[it.type] || ''}`.trim();
+    const sub = document.createElement('div');
+    const count = it.rounds ? `${it.rounds} rounds, ` : '';
+    sub.textContent = `${count}${it.share}%${it.clock ? `, avg ${it.clock}` : ''}${
+      it.phase ? `, ${it.phase}` : ''
+    }`;
+    const nodes = [head, sub];
+    for (const t of it.types || []) {
+      const row = document.createElement('div');
+      row.textContent = `${t.rounds} ${t.rounds === 1 ? 'round' : 'rounds'} ${t.label} (${t.share}%)`;
+      nodes.push(row);
+    }
+    return nodes;
+  }
+
+  /** The pinned card under the map: the same breakdown, as round links. */
+  function showPicked(it) {
+    pinned = it;
+    picked.replaceChildren();
+    if (!it) {
+      picked.hidden = true;
+      draw();
+      return;
+    }
+    const head = document.createElement('div');
+    head.className = 'doc-embed-picked-head';
+    head.append(
+      roundsLink(
+        `${`${it.name} ${NADE_WORD[it.type] || ''}`.trim()}, ${it.rounds || it.files?.length || 0} rounds`,
+        it.files
+      )
+    );
+    picked.appendChild(head);
+    for (const t of it.types || []) {
+      const row = document.createElement('div');
+      row.append(roundsLink(`${t.label} (${t.rounds})`, typeFiles(it, t)));
+      picked.appendChild(row);
+    }
+    picked.hidden = false;
+    draw();
   }
 
   function pick(ev) {
@@ -165,13 +246,10 @@ function mountUtilMap(node, data) {
   canvas.addEventListener('mousemove', (ev) => {
     const it = pick(ev);
     draw(it);
+    canvas.style.cursor = it ? 'pointer' : '';
     if (it) {
       const rect = canvas.getBoundingClientRect();
-      tip.show(
-        `${it.name} ${NADE_WORD[it.type] || ''}, ${it.share}%${it.clock ? `, avg ${it.clock}` : ''}${it.phase ? `, ${it.phase}` : ''}`,
-        ev.clientX - rect.left,
-        ev.clientY - rect.top
-      );
+      tip.showNodes(tipNodes(it), ev.clientX - rect.left, ev.clientY - rect.top);
     } else {
       tip.hide();
     }
@@ -179,6 +257,10 @@ function mountUtilMap(node, data) {
   canvas.addEventListener('mouseleave', () => {
     tip.hide();
     draw();
+  });
+  canvas.addEventListener('click', (ev) => {
+    const it = pick(ev);
+    showPicked(it && it !== pinned ? it : null);
   });
 
   draw();

@@ -110,6 +110,12 @@ export const adminApi = {
   /** Progress for an in-flight (or just-finished) round library scan. */
   rescanRoundsStatus: () => get('/api/admin/stats/rescan-rounds'),
 
+  /** Merge player display names by Steam ID (most-used name wins) + rebuild stats. */
+  rescanPlayerNames: () => send('POST', '/api/admin/players/rescan-names', {}),
+
+  /** Progress for an in-flight (or just-finished) player-name rescan. */
+  rescanPlayerNamesStatus: () => get('/api/admin/players/rescan-names'),
+
   /** Model training. `kind` is 'duel' or 'round'. */
   trainingStatus: (kind) => get(`/api/admin/training/${kind}`),
   trainingWeights: (kind) => get(`/api/admin/training/${kind}/weights`),

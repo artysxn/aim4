@@ -473,9 +473,71 @@ const filesOf = (list) => list.map((r) => r.file);
 /** Named label for a grenade: database name first, zone fallback. */
 const nadeLabel = (n) => n.name || n.zone || '';
 
-function aggUtility(rounds) {
+/** Round-type key to label for one map and side, Default included. */
+function typeLabels(mapCode, side) {
+  const out = new Map();
+  for (const def of roundTypeRows(mapCode, side)) out.set(def.key, def.label);
+  return out;
+}
+
+/**
+ * Most rounds one grenade record keeps a file list for. Matches the document
+ * renderer's own link cap, and keeps the embedded JSON small enough that a
+ * report with two utility maps on it still saves.
+ */
+const UTIL_FILES_MAX = 40;
+
+/**
+ * A grenade seen once per round: its rounds, a capped file list to link, and
+ * which round types those rounds were tagged as.
+ */
+function utilRecord(fields) {
+  return { ...fields, seen: new Set(), files: [], byType: new Map() };
+}
+
+/**
+ * Fold one round into a record. Counting is over every round; the file list
+ * and the per-type positions stop at the cap, because the whole structure ends
+ * up inside a document attribute.
+ */
+function addUtilRound(rec, file, tags) {
+  if (rec.seen.has(file)) return;
+  rec.seen.add(file);
+  const at = rec.files.length < UTIL_FILES_MAX ? rec.files.push(file) - 1 : -1;
+  for (const tag of tags || []) {
+    if (!rec.byType.has(tag.k)) rec.byType.set(tag.k, { n: 0, idx: [] });
+    const bag = rec.byType.get(tag.k);
+    bag.n++;
+    if (at >= 0) bag.idx.push(at);
+  }
+}
+
+/**
+ * Which round types a record's rounds were tagged as, biggest first.
+ *
+ * `idx` are positions in the record's file list rather than repeated file
+ * names: a round can carry several tags, so the lists overlap.
+ *
+ * @param {{ seen: Set<string>, byType: Map<string, { n: number, idx: number[] }> }} rec
+ * @param {Map<string, string>} labels
+ */
+function typeBreakdown(rec, labels) {
+  const total = rec.seen.size;
+  return [...rec.byType.entries()]
+    .map(([key, bag]) => ({
+      key,
+      label: labels.get(key) || key,
+      rounds: bag.n,
+      share: pct(bag.n, total),
+      idx: bag.idx
+    }))
+    .sort((a, b) => b.rounds - a.rounds || a.label.localeCompare(b.label));
+}
+
+function aggUtility(rounds, mapCode) {
   const out = { sides: {} };
   for (const side of ['T', 'CT']) {
+    const labels = typeLabels(mapCode, side);
     const set = rounds.filter((r) => r.side === side && r.ownEcon === 4 && r.oppEcon === 4);
     if (!set.length) continue;
     const avg = {};
@@ -487,7 +549,6 @@ function aggUtility(rounds) {
     // One record per (name, type, phase) with a landing point, for the
     // hoverable utility map. Database spots keep their stored coordinates;
     // zone-named landings average out.
-    /** @type {Map<string, { rounds: Set<string>, clocks: number[], xs: number[], ys: number[], name: string, type: string, phase: string, spot: {x:number,y:number}|null }>} */
     const byKey = new Map();
     for (const r of set) {
       for (const n of r.nades) {
@@ -495,22 +556,27 @@ function aggUtility(rounds) {
         if (!label) continue;
         const key = `${label}\0${n.type}\0${n.phase}`;
         if (!byKey.has(key)) {
-          byKey.set(key, {
-            rounds: new Set(),
-            clocks: [],
-            xs: [],
-            ys: [],
-            name: label,
-            type: n.type,
-            phase: n.phase,
-            spot: n.sx !== null && n.sy !== null ? { x: n.sx, y: n.sy } : null
-          });
+          byKey.set(
+            key,
+            utilRecord({
+              clocks: [],
+              xs: [],
+              ys: [],
+              name: label,
+              type: n.type,
+              phase: n.phase,
+              spot: n.sx !== null && n.sy !== null ? { x: n.sx, y: n.sy } : null
+            })
+          );
         }
         const rec = byKey.get(key);
-        rec.rounds.add(r.file);
         rec.clocks.push(n.clock);
         rec.xs.push(n.x);
         rec.ys.push(n.y);
+        // Once per round, however many of this grenade landed there: the
+        // question the map answers is "which rounds does this piece show up
+        // in", and a double smoke is still one round.
+        addUtilRound(rec, r.file, r.tags?.[side]);
       }
     }
     const items = [...byKey.values()]
@@ -518,15 +584,75 @@ function aggUtility(rounds) {
         name: rec.name,
         type: rec.type,
         phase: rec.phase,
-        share: pct(rec.rounds.size, set.length),
+        rounds: rec.seen.size,
+        share: pct(rec.seen.size, set.length),
         clock: fmtClock(avgOf(rec.clocks)),
         x: Math.round(rec.spot ? rec.spot.x : avgOf(rec.xs)),
-        y: Math.round(rec.spot ? rec.spot.y : avgOf(rec.ys))
+        y: Math.round(rec.spot ? rec.spot.y : avgOf(rec.ys)),
+        files: rec.files,
+        types: typeBreakdown(rec, labels).slice(0, 6)
       }))
       .filter((t) => t.share >= 10)
       .sort((a, b) => b.share - a.share)
       .slice(0, 48);
     out.sides[side] = { rounds: set.length, files: filesOf(set), avg, items };
+  }
+  return out;
+}
+
+/** A piece of utility has to appear this often before it can be a tell. */
+export const TELL_MIN_ROUNDS = 5;
+/** And this much of those rounds has to be the same call. */
+export const TELL_MIN_SHARE = 80;
+
+/**
+ * Utility that gives the round away.
+ *
+ * One grenade, one landing spot, and almost always the same call behind it:
+ * a Blue smoke that is a B Execute in eight of nine rounds is a read the
+ * moment it lands. Phases are merged (a tell is a tell whenever it comes) and
+ * so are buys, because the point is prediction, not economy.
+ *
+ * Default / Other can never be the answer — "they smoke Blue and then do
+ * nothing in particular" is not something to call a timeout over.
+ */
+export function aggTells(rounds, mapCode) {
+  const out = { sides: {}, minRounds: TELL_MIN_ROUNDS, minShare: TELL_MIN_SHARE };
+  for (const side of ['T', 'CT']) {
+    const labels = typeLabels(mapCode, side);
+    const set = rounds.filter((r) => r.side === side);
+    if (!set.length) continue;
+    const byKey = new Map();
+    for (const r of set) {
+      for (const n of r.nades) {
+        const label = nadeLabel(n);
+        if (!label) continue;
+        const key = `${label}\0${n.type}`;
+        if (!byKey.has(key)) byKey.set(key, utilRecord({ name: label, type: n.type }));
+        addUtilRound(byKey.get(key), r.file, r.tags?.[side]);
+      }
+    }
+    const tells = [];
+    for (const rec of byKey.values()) {
+      if (rec.seen.size < TELL_MIN_ROUNDS) continue;
+      const ranked = typeBreakdown(rec, labels).filter((t) => t.key !== 'default');
+      const top = ranked[0];
+      if (!top || top.share < TELL_MIN_SHARE) continue;
+      tells.push({
+        name: rec.name,
+        type: rec.type,
+        rounds: rec.seen.size,
+        label: top.label,
+        hits: top.rounds,
+        share: top.share,
+        files: rec.files,
+        hitFiles: top.idx.map((i) => rec.files[i]),
+        // What the rest of those rounds were, for the row's tail.
+        others: ranked.slice(1, 3).map((t) => ({ label: t.label, rounds: t.rounds }))
+      });
+    }
+    tells.sort((a, b) => b.share - a.share || b.rounds - a.rounds);
+    if (tells.length) out.sides[side] = { rounds: set.length, tells };
   }
   return out;
 }
@@ -1369,21 +1495,26 @@ function aggRoundList(rounds, mapCode, side) {
       }
       return out;
     };
-    const forList = pick(own);
-    const againstList = pick(faced);
-    if (!forList.length && !againstList.length) continue;
+    // Every definition earns a row, run or not. A call this side never made is
+    // as much of a read as one they made nine times, and dropping the empties
+    // is what makes a thin side (CT libraries are smaller) look like a missing
+    // section rather than a short one.
     types.push({
       key: def.key,
       label: def.label,
       desc: def.desc,
-      for: bucket(forList, own.length),
-      against: bucket(againstList, faced.length)
+      for: bucket(pick(own), own.length),
+      against: bucket(pick(faced), faced.length)
     });
   }
+  const named = (set) =>
+    set.filter((r) => (r.tags?.[side] || []).some((t) => t.k !== 'default')).length;
   return {
     side,
     ownRounds: own.length,
     facedRounds: faced.length,
+    ownNamed: named(own),
+    facedNamed: named(faced),
     tagged: rounds.filter((r) => r.tags).length,
     types
   };
@@ -1694,7 +1825,8 @@ export async function runAntistratScan({
       pistols: aggPistols(rounds, mapCode, laneSets),
       positions: aggPositions(mains, rolesOf),
       pace: aggPace(rounds, paceKeys || []),
-      utility: aggUtility(rounds),
+      utility: aggUtility(rounds, mapCode),
+      tells: aggTells(rounds, mapCode),
       fiveVfour: aggAdvantage(rounds, '5v4'),
       fourVfive: aggAdvantage(rounds, '4v5'),
       force: aggForce(rounds),

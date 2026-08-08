@@ -719,7 +719,7 @@ function roundStem(roundId, demoId) {
  * Write a round's meta+events, compressed. Any plaintext twin left over from
  * before compaction is removed, so a read can never pick up the stale copy.
  */
-async function writeRoundMeta(user, stem, meta) {
+export async function writeRoundMeta(user, stem, meta) {
   const dir = roundsDir(user);
   await fsp.writeFile(
     path.join(dir, `${stem}.json.zst`),

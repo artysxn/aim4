@@ -10,7 +10,8 @@ import {
   roundTypesFor
 } from './roundLibrary.js';
 import { burstWindow, clockAt, longestRun, secondsAtClock } from './roundFacts.js';
-import { roundListStats } from './roundListStats.js';
+import { libraryMaps, roundListStats } from './roundListStats.js';
+import { TELL_MIN_ROUNDS, TELL_MIN_SHARE, aggTells } from './antistratScan.js';
 
 // ---------------------------------------------------------------------------
 // Clocks
@@ -392,6 +393,87 @@ assert.equal(
   );
   assert.equal(stats.sides.T.ourRounds, 1, 'an untagged round is not counted against the share');
   assert.equal(stats.sides.T.types.find((x) => x.key === 'a-fake').ours.share, 100);
+}
+
+// ---------------------------------------------------------------------------
+// libraryMaps: which maps the team overview can show without a map picked
+// ---------------------------------------------------------------------------
+
+{
+  const payload = {
+    demos: [
+      { map: 'NUK', name1: 'Vitality', name2: 'FaZe' },
+      { map: 'ANU', name1: 'FaZe', name2: 'Vitality' },
+      { map: 'ANU', name1: 'Vitality', name2: 'G2' },
+      // No library on Mirage, and Spirit's Nuke is not Vitality's.
+      { map: 'MIR', name1: 'Vitality', name2: 'FaZe' },
+      { map: 'NUK', name1: 'Spirit', name2: 'G2' }
+    ]
+  };
+  assert.deepEqual(libraryMaps(payload), ['ANU', 'NUK'], 'most played first, no Mirage');
+  assert.deepEqual(
+    libraryMaps(payload, 'Vitality'),
+    ['ANU', 'NUK'],
+    'and only maps that team has been on'
+  );
+  assert.deepEqual(libraryMaps(payload, 'Spirit'), ['NUK']);
+  assert.deepEqual(libraryMaps(null), [], 'no payload, no maps');
+}
+
+// ---------------------------------------------------------------------------
+// aggTells: utility that gives one call away
+// ---------------------------------------------------------------------------
+
+{
+  /** One scanned round: the side played, its file, its grenades and its tags. */
+  const mkFeat = (file, side, names, tags) => ({
+    file,
+    side,
+    nades: names.map((name) => ({ name, type: 'smokegrenade', zone: '' })),
+    tags: { T: [], CT: [], [side]: tags.map((k) => ({ k, m: {} })) }
+  });
+
+  const rounds = [
+    // Blue is a B Execute in five of six rounds: a tell.
+    ...[1, 2, 3, 4, 5].map((i) => mkFeat(`b${i}`, 'T', ['blue'], ['anu-b-exec'])),
+    mkFeat('b6', 'T', ['blue'], ['anu-b-split']),
+    // Palace is thrown as often but splits evenly: not a tell.
+    ...[1, 2, 3].map((i) => mkFeat(`p${i}`, 'T', ['palace'], ['anu-a-rush'])),
+    ...[4, 5, 6].map((i) => mkFeat(`p${i}`, 'T', ['palace'], ['anu-mid-take'])),
+    // Camera is always a Mid take, but only four times: under the floor.
+    ...[1, 2, 3, 4].map((i) => mkFeat(`c${i}`, 'T', ['camera'], ['anu-mid-take']))
+  ];
+
+  const out = aggTells(rounds, 'ANU');
+  const tells = out.sides.T.tells;
+  assert.equal(out.minRounds, TELL_MIN_ROUNDS);
+  assert.equal(out.minShare, TELL_MIN_SHARE);
+  assert.deepEqual(
+    tells.map((t) => t.name),
+    ['blue'],
+    'only the grenade that is one call in 80%+ of five or more rounds'
+  );
+  const blue = tells[0];
+  assert.equal(blue.rounds, 6);
+  assert.equal(blue.hits, 5);
+  assert.equal(blue.share, 83);
+  assert.equal(blue.label, 'B Exec');
+  assert.deepEqual(blue.hitFiles, ['b1', 'b2', 'b3', 'b4', 'b5'], 'the rounds behind the call');
+  assert.equal(blue.files.length, 6, 'and every round it was thrown in');
+  assert.deepEqual(blue.others, [{ label: 'B Split', rounds: 1 }]);
+  assert.equal(out.sides.CT, undefined, 'a side with no rounds has no bag');
+}
+
+{
+  // Default / Other can never be the call: doing nothing in particular is not
+  // something to read off a grenade.
+  const rounds = [1, 2, 3, 4, 5, 6].map((i) => ({
+    file: `d${i}`,
+    side: 'CT',
+    nades: [{ name: 'heaven', type: 'smokegrenade', zone: '' }],
+    tags: { T: [], CT: [{ k: 'default', m: {} }] }
+  }));
+  assert.equal(aggTells(rounds, 'ANU').sides.CT, undefined);
 }
 
 console.log('roundLibrary.test.js ok');

@@ -33,7 +33,8 @@ const INDENT_MAX_LEVEL = 12;
 /** Tags a stored document may contain. Anything else is unwrapped. */
 const ALLOWED = new Set([
   'B', 'STRONG', 'I', 'EM', 'U', 'A', 'P', 'DIV', 'BR', 'HR', 'UL', 'OL', 'LI',
-  'SPAN', 'H1', 'H2', 'H3', 'BLOCKQUOTE', 'CODE', 'PRE', 'IMG'
+  'SPAN', 'H1', 'H2', 'H3', 'BLOCKQUOTE', 'CODE', 'PRE', 'IMG',
+  'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD'
 ]);
 
 /** Inline styles worth keeping. Everything else is dropped on save. */

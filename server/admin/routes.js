@@ -50,6 +50,7 @@ import {
   refreshLibraryRoundTags,
   refreshLibraryStats
 } from '../replays/statsIndex.js';
+import { rescanPlayerNames } from './rescanPlayerNames.js';
 import { getZones } from '../zonesStore.js';
 import {
   start as startTraining,
@@ -77,6 +78,8 @@ let statsRefreshJob = null;
 let positionsRefreshJob = null;
 /** Round library re-tag: rewatches every round against the round definitions. */
 let roundScanJob = null;
+/** Steam-id display-name merge across the shared library. */
+let playerNamesJob = null;
 
 function jobStatus(job) {
   if (!job) return { running: false };
@@ -113,11 +116,16 @@ function roundScanStatus() {
   return jobStatus(roundScanJob);
 }
 
+function playerNamesStatus() {
+  return jobStatus(playerNamesJob);
+}
+
 function libraryJobBusy() {
   return (
     (statsRefreshJob && !statsRefreshJob.finished) ||
     (positionsRefreshJob && !positionsRefreshJob.finished) ||
-    (roundScanJob && !roundScanJob.finished)
+    (roundScanJob && !roundScanJob.finished) ||
+    (playerNamesJob && !playerNamesJob.finished)
   );
 }
 
@@ -834,6 +842,86 @@ async function route(req, res, url, me) {
     });
 
     json(res, req, 202, { ok: true, started: true, ...roundScanStatus() });
+    return true;
+  }
+
+  // Merge player display names by Steam ID: most-used name wins, then rewrite
+  // every demo/round roster and rebuild stats so Database / profiles match.
+  if (req.method === 'GET' && p === '/api/admin/players/rescan-names') {
+    json(res, req, 200, playerNamesStatus());
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/players/rescan-names') {
+    if (libraryJobBusy()) {
+      json(res, req, 409, {
+        error: 'A library recalculation is already running.',
+        ...playerNamesStatus(),
+        stats: statsRefreshStatus(),
+        positions: positionsRefreshStatus(),
+        rounds: roundScanStatus()
+      });
+      return true;
+    }
+    const startedAt = Date.now();
+    playerNamesJob = {
+      kind: 'player-names',
+      startedAt,
+      startedBy: me.id,
+      force: true,
+      done: 0,
+      total: 0,
+      percent: 0,
+      current: null,
+      finished: false,
+      report: null,
+      error: null
+    };
+
+    setImmediate(async () => {
+      try {
+        const records = await listDemos(SHARED_LIBRARY);
+        const report = await rescanPlayerNames(statsIo, SHARED_LIBRARY, records, {
+          onProgress: (pr) => {
+            if (!playerNamesJob || playerNamesJob.startedAt !== startedAt) return;
+            playerNamesJob.done = pr.done;
+            playerNamesJob.total = pr.total;
+            playerNamesJob.percent = pr.percent;
+            playerNamesJob.current = pr.current;
+          }
+        });
+        if (!playerNamesJob || playerNamesJob.startedAt !== startedAt) return;
+        playerNamesJob.report = { ...report, ms: Date.now() - startedAt };
+        playerNamesJob.done = report.ready;
+        playerNamesJob.total = report.ready;
+        playerNamesJob.percent = 100;
+        playerNamesJob.current = null;
+        playerNamesJob.finished = true;
+        playerNamesJob.finishedAt = Date.now();
+        await writeAudit({
+          actorId: me.id,
+          targetUser: '',
+          action: 'players.rescan_names',
+          payload: {
+            ready: report.ready,
+            steamIds: report.steamIds,
+            withAliases: report.withAliases,
+            demosUpdated: report.demosUpdated,
+            roundsUpdated: report.roundsUpdated,
+            failed: report.failed,
+            ms: Date.now() - startedAt
+          },
+          req: null
+        });
+      } catch (err) {
+        if (!playerNamesJob || playerNamesJob.startedAt !== startedAt) return;
+        playerNamesJob.error = err?.message || String(err);
+        playerNamesJob.finished = true;
+        playerNamesJob.finishedAt = Date.now();
+      }
+    });
+
+    json(res, req, 202, { ok: true, started: true, ...playerNamesStatus() });
     return true;
   }
 

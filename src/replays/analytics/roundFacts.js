@@ -243,9 +243,14 @@ export function buildRoundFacts({ meta, track, network, utilities = [], mapCode 
 
   const regions = createRegionIndex(network, mapCode);
   const roster = meta.players || [];
+  // Team 2 is the opposite of team 1 when the round meta does not say, which
+  // is the reading everywhere else. Defaulting it to T instead would put both
+  // rosters on T: no CT grenades, no cross-side contacts, and every CT round
+  // type silently dead while the T ones still fire.
+  const side1 = meta.team1Side === 'CT' ? 'CT' : 'T';
   const sideOfTeam = {
-    1: meta.team1Side === 'CT' ? 'CT' : 'T',
-    2: meta.team2Side === 'CT' ? 'CT' : 'T'
+    1: side1,
+    2: meta.team2Side === 'CT' || meta.team2Side === 'T' ? meta.team2Side : side1 === 'CT' ? 'T' : 'CT'
   };
   const teamOf = new Map(roster.map((p) => [p.id, p.team]));
   const sideOf = new Map(roster.map((p) => [p.id, sideOfTeam[p.team] || '']));

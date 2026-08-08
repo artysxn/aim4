@@ -10,7 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import { teamNameKey } from '../shared/statsMath.js';
-import { roundTypeRows } from './roundLibrary.js';
+import { hasRoundLibrary, roundTypeRows } from './roundLibrary.js';
 import { rowTags } from './roundTags.js';
 
 const pct = (part, whole) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : null);
@@ -131,4 +131,30 @@ export function roundListStats(payload, { mapCode, teamName }) {
   }
 
   return { mapCode: code, demos, ourDemos, sides };
+}
+
+/**
+ * Every map in the payload the round library can read, most played first.
+ *
+ * The team overview shows the whole database when no map chip is picked, and
+ * "the whole database" is exactly this list — a map with no library has no
+ * round types to win or lose with.
+ *
+ * @param {{ demos?: Array }} payload
+ * @param {string} [teamName]  when given, only maps this team has played
+ * @returns {string[]}
+ */
+export function libraryMaps(payload, teamName = '') {
+  const want = teamName ? teamNameKey(teamName) : '';
+  /** @type {Map<string, number>} */
+  const counts = new Map();
+  for (const d of payload?.demos || []) {
+    const code = String(d.map || '').toUpperCase();
+    if (!code || !hasRoundLibrary(code)) continue;
+    if (want && teamNameKey(d.name1, d.t1) !== want && teamNameKey(d.name2, d.t2) !== want) continue;
+    counts.set(code, (counts.get(code) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([code]) => code);
 }
