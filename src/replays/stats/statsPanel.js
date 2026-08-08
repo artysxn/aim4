@@ -57,6 +57,9 @@ import { POSITION_MAPS } from '../roles/teamPositions.js';
 /** Default minimum rounds when opening the unfiltered Database (can still be set to 0). */
 export const DEFAULT_MIN_ROUNDS = 80;
 
+/** Floor once a specific map is picked in the clean Database. */
+export const MAP_MIN_ROUNDS = 5;
+
 /** True when the panel is scoped to a match, selection, or team — not the full library. */
 export function isStatsScopeFiltered(scope = {}) {
   return (
@@ -66,12 +69,20 @@ export function isStatsScopeFiltered(scope = {}) {
   );
 }
 
+/** True when the view names at least one map. */
+function scopeHasMap(scope = {}) {
+  if (Array.isArray(scope.maps) && scope.maps.length > 0) return true;
+  return Boolean(scope.map);
+}
+
 /**
- * Min-rounds default for a load.
- * Unfiltered Database → 80. Match / team / selection scopes → 0.
+ * Min-rounds default for a load / map change.
+ * Unfiltered Database → 80, or 5 when a map is selected.
+ * Match / team / selection scopes → 0.
  */
 export function defaultMinRounds(scope = {}) {
-  return isStatsScopeFiltered(scope) ? 0 : DEFAULT_MIN_ROUNDS;
+  if (isStatsScopeFiltered(scope)) return 0;
+  return scopeHasMap(scope) ? MAP_MIN_ROUNDS : DEFAULT_MIN_ROUNDS;
 }
 
 export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onBack }) {
@@ -354,6 +365,15 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       <button type="button" class="btn btn-sm st-filter-clear" data-clear>Clear</button>`;
   }
 
+  function scopeForMinRounds(maps = filter.maps) {
+    return {
+      demos: scope.demos,
+      files: scope.files,
+      teamName: lockedTeamName,
+      maps
+    };
+  }
+
   function resetListPage() {
     if (detail) detailPage = 1;
     else page[tab] = 1;
@@ -399,11 +419,7 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       filter.roundOpp = '';
       filter.dateFrom = '';
       filter.dateTo = '';
-      filter.minRounds = defaultMinRounds({
-        demos: scope.demos,
-        files: scope.files,
-        teamName: lockedTeamName
-      });
+      filter.minRounds = defaultMinRounds(scopeForMinRounds([]));
       resetListPage();
       render();
     }
@@ -430,10 +446,15 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     const sel = e.target.closest('[data-filter]');
     if (!sel) return;
     if (sel.dataset.filter === 'maps') {
+      const prevDefault = defaultMinRounds(scopeForMinRounds(filter.maps));
+      const wasDefault = filter.minRounds === prevDefault;
       filter.maps = sel.value ? [sel.value] : [];
       filter.role = null;
       filter.roundOwn = '';
       filter.roundOpp = '';
+      // Clean Database: Any map → 80, a specific map → 5. Keep a manual floor
+      // only when the user already moved off the previous auto default.
+      if (wasDefault) filter.minRounds = defaultMinRounds(scopeForMinRounds(filter.maps));
       resetListPage();
       render();
       return;
@@ -1374,7 +1395,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     filter.role = null;
     filter.dateFrom = '';
     filter.dateTo = '';
-    // Full Database keeps the 80-round floor; match / team / selection scopes do not.
+    // Full Database: 80 with Any map, 5 once a map is selected.
+    // Match / team / selection scopes stay at 0.
     filter.minRounds = defaultMinRounds(next);
     filter.result = '';
     filter.advantage = '';

@@ -3107,8 +3107,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
     if (state.hasAwp) q.set('awp', '1');
     if (state.oppHasAwp) q.set('oppAwp', '1');
-    // Always write minR when it differs from this scope's default, including 0
-    // on the unfiltered Database (default 80) or a raised floor on a match scope.
+    // Always write minR when it differs from this view's default, including 0
+    // on a match scope, 80 on clean Any-map Database, or 5 with a map selected.
     const minR = Math.max(0, Math.floor(Number(state.minRounds) || 0));
     if (minR !== defaultMinRounds(state)) q.set('minR', String(minR));
     if (state.dateFrom) q.set('from', String(state.dateFrom));

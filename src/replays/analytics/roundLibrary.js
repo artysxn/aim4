@@ -1594,6 +1594,344 @@ const DD2_CT = [
 ];
 
 // ---------------------------------------------------------------------------
+// Anubis vocabulary
+// ---------------------------------------------------------------------------
+
+const ANU_B_STAGE = ['B Main', 'B Lobby'];
+const ANU_B_MAIN = ['B Main'];
+const ANU_B_IN = ['jail', 'B', 'YEKINDAR'];
+const ANU_B_SITE = ['B Site'];
+const ANU_CT_CON = ['CT Con'];
+const ANU_B_DEFEND = ['B Site', 'CT Con'];
+const ANU_CON = ['Con', 'Top Con'];
+const BRIDGE = ['Bridge'];
+const BLUE_CRAB = ['Blue', 'Crab'];
+const BLUE_DOORS = ['Blue', 'Doors'];
+const ANU_T_MID = ['T_MID'];
+const ANU_MID_STAGE = ['Blue', 'Crab', 'Doors', 'Mid', 'Camera', 'NiKo'];
+const ANU_MID = ['Mid'];
+const CAMERA = ['Camera'];
+const TEMPLE = ['Temple'];
+const ANU_A_HOLD = ['A Site', 'Hell'];
+const ANU_A_WATER = ['A Water'];
+const ANU_A_SITE = ['A Site'];
+const WATER_HOLD = ['ZywOo', 'B Water', 'Water'];
+const WATER_FLASH = ['Water', 'm0NESY', 'B Water', 'Bridge', 'ZywOo'];
+const WATER_SMOKE = ['m0NESY', 'Stairs'];
+const ANU_A_MAIN = ['A Main'];
+const ANU_A_ANCHOR = ['A Main', 'Pillar'];
+const ANU_T_WATER_POS = ['Water', 'robot', 'm0NESY', 'Stairs', 'Carpets', 'B Water'];
+const B_EXEC_SMOKES = ['bleft', 'palace'];
+
+/** How long 2 CTs must sit on A before it is the 2A setup. */
+const TWO_A_SECONDS = 15;
+
+/** First landing of any of these stored smokes, or null. */
+function firstNamed(f, names, type = 'smokegrenade') {
+  let best = null;
+  for (const name of names) {
+    for (const n of f.nadesNamed(name)) {
+      if (type && n.type !== type) continue;
+      if (!best || n.at < best.at) best = n;
+    }
+  }
+  return best;
+}
+
+/** Players of ours who moved out of `from` into `to` inside the window. */
+const movedInto = (f, from, to, window) => f.transitions(from, to, window);
+
+// ---------------------------------------------------------------------------
+// T side, Anubis
+// ---------------------------------------------------------------------------
+
+/** @type {RoundTypeDef[]} */
+const ANU_T = [
+  {
+    key: 'anu-b-lurk',
+    label: 'B Lurk moves',
+    desc: 'A blurk smoke, then a player crossing B Main into jail / B / YEKINDAR within 15s.',
+    match(f) {
+      const smoke = f.nadesNamed('blurk')[0];
+      if (!smoke) return null;
+      const moved = movedInto(f, ANU_B_MAIN, ANU_B_IN, { from: smoke.at, to: smoke.at + 15 })[0];
+      if (!moved) return null;
+      return { marks: { 'blurk smoke': smoke.at, 'Into B': moved.arrivedAt } };
+    }
+  },
+  {
+    key: 'anu-b-fake',
+    label: 'B Fake',
+    desc: '2 players in B Main / B Lobby spend 2+ smokes and 2+ flashes onto CT Con or B, and at most 1 of them goes in.',
+    match(f) {
+      for (const s of f.series) {
+        const group = f.playersIn(ANU_B_STAGE, s.sec);
+        if (group.size < 2) continue;
+        const byGroup = (type) =>
+          f.nadesIn(type, ANU_B_DEFEND).filter((n) => group.has(n.player));
+        const smokes = byGroup('smokegrenade');
+        const flashes = byGroup('flashbang');
+        if (smokes.length < 2 || flashes.length < 2) continue;
+        if (f.playersDuring(ANU_B_IN, s.sec, f.lastSec).size > 1) continue;
+        return { marks: { Staged: s.sec, Smokes: smokes[1].at, Flashes: flashes[1].at } };
+      }
+      return null;
+    }
+  },
+  {
+    key: 'anu-b-awp',
+    label: 'B Contact with AWP',
+    desc: 'A B Pop where the first player to trade damage had the AWP out.',
+    match(f) {
+      return anuBPop(f, { awpFirst: true });
+    }
+  },
+  {
+    key: 'anu-b-pop',
+    label: 'B Pop',
+    excludes: ['anu-b-awp'],
+    desc: '4+ players in B Lobby / B Main, then inside 6s two of them are in jail / B / YEKINDAR and fighting, all before bleft or palace lands.',
+    match(f) {
+      return anuBPop(f);
+    }
+  },
+  {
+    key: 'anu-b-exec',
+    label: 'B Exec',
+    desc: '4+ players in B Lobby / B Main with a bleft or palace smoke, a flash and a molotov, all before they kill anyone holding B.',
+    match(f) {
+      for (const s of f.series) {
+        const group = f.playersIn(ANU_B_STAGE, s.sec);
+        if (group.size < 4) continue;
+        const smoke = firstNamed(f, B_EXEC_SMOKES);
+        if (!smoke) continue;
+        const byGroup = (type) =>
+          f.nades.filter((n) => n.type === type && group.has(n.player) && n.at >= s.sec);
+        const flash = byGroup('flashbang')[0];
+        const molly = byGroup('molotov')[0];
+        if (!flash || !molly) continue;
+        // The smoke has to be up before the first body drops on the site.
+        const firstKill = f
+          .fights({ from: s.sec, ours: group, killsOnly: true, enemyIn: ANU_B_DEFEND })
+          .find((x) => x.killedThem);
+        if (firstKill && smoke.at > firstKill.sec) continue;
+        return { marks: { Staged: s.sec, Smoke: smoke.at, Flash: flash.at, Molotov: molly.at } };
+      }
+      return null;
+    }
+  },
+  {
+    key: 'anu-b-split',
+    label: 'B Split',
+    desc: 'A player in B Main / B Lobby and one in Con / Top Con, then 2 CTs holding B or CT Con in duels within 8s, 3v3 or better.',
+    match(f) {
+      for (const s of f.series) {
+        if (f.aliveCount(s.sec) < 3 || f.enemy.aliveCount(s.sec) < 3) continue;
+        if (!f.countIn(ANU_B_STAGE, s.sec) || !f.countIn(ANU_CON, s.sec)) continue;
+        const duels = f.fights({ from: s.sec, to: s.sec + 8, enemyIn: ANU_B_DEFEND });
+        if (new Set(duels.map((x) => x.enemy)).size < 2) continue;
+        return { marks: { Split: s.sec, Duels: duels[0].sec } };
+      }
+      return null;
+    }
+  },
+  {
+    key: 'anu-mid-take',
+    label: 'Mid take',
+    desc: 'A player crosses Bridge into Blue / Crab by 1:00 with a smoke or molotov on Blue or Doors, or two players make the same move.',
+    match(f) {
+      const moved = movedInto(f, BRIDGE, BLUE_CRAB, { from: 0, to: secondsAtClock('1:00') });
+      if (!moved.length) return null;
+      if (moved.length >= 2) return { marks: { 'Second man': moved[1].arrivedAt } };
+      const util = [
+        ...f.nadesIn('smokegrenade', BLUE_DOORS),
+        ...f.nadesIn('molotov', BLUE_DOORS)
+      ].sort((a, b) => a.at - b.at)[0];
+      if (!util) return null;
+      return { marks: { 'Into mid': moved[0].arrivedAt, Utility: util.at } };
+    }
+  },
+  {
+    key: 'anu-mid-rush',
+    label: 'Mid rush',
+    desc: '2+ players cross Bridge into Crab / Blue by 1:30, with 4 in T_MID by 1:25.',
+    match(f) {
+      const moved = movedInto(f, BRIDGE, BLUE_CRAB, { from: 0, to: secondsAtClock('1:30') });
+      if (moved.length < 2) return null;
+      const filled = f.firstSecWith(ANU_T_MID, 4, 0, secondsAtClock('1:25'));
+      if (filled === null) return null;
+      return { marks: { 'Second man': moved[1].arrivedAt, 'Mid full': filled } };
+    }
+  },
+  {
+    key: 'anu-a-split',
+    label: 'A Split',
+    desc: 'A mid player crosses Mid into Camera and duels a CT on the A site or Hell.',
+    match(f) {
+      if (!f.playersDuring(ANU_MID_STAGE, 0, f.lastSec).size) return null;
+      const moved = movedInto(f, ANU_MID, CAMERA, { from: 0, to: f.lastSec })[0];
+      if (!moved) return null;
+      const duel = f.fights({ from: moved.arrivedAt, enemyIn: ANU_A_HOLD })[0];
+      if (!duel) return null;
+      return { marks: { 'Into camera': moved.arrivedAt, Duel: duel.sec } };
+    }
+  },
+  {
+    key: 'anu-mid-temple',
+    label: 'Mid to temple',
+    desc: 'A mid player crosses Mid into Temple.',
+    match(f) {
+      if (!f.playersDuring(ANU_MID_STAGE, 0, f.lastSec).size) return null;
+      const moved = movedInto(f, ANU_MID, TEMPLE, { from: 0, to: f.lastSec })[0];
+      if (!moved) return null;
+      return { marks: { 'Into temple': moved.arrivedAt } };
+    }
+  },
+  {
+    key: 'anu-a-rush',
+    label: 'A Rush',
+    desc: '4+ players in A Water or on the A site with a fight on an A holder before 1:35, and 3+ into the A site by 1:40.',
+    match(f) {
+      const staged = f.firstSecWith([...ANU_A_WATER, ...ANU_A_SITE], 4);
+      if (staged === null) return null;
+      const fight = f.fights({ to: secondsAtClock('1:35'), enemyIn: ANU_A_SITE })[0];
+      if (!fight) return null;
+      const entered = f.firstSecWith(ANU_A_SITE, 3, 0, secondsAtClock('1:40'));
+      if (entered === null) return null;
+      return { marks: { Staged: staged, Contact: fight.sec, 'Three on site': entered } };
+    }
+  },
+  {
+    key: 'anu-a-pop',
+    label: 'A Pop',
+    desc: '4+ players in A Water or on the A site, two of them entering and duelling two A holders inside 20s, before the heaven or camera smoke lands.',
+    match(f) {
+      const staged = f.firstSecWith([...ANU_A_WATER, ...ANU_A_SITE], 4);
+      if (staged === null) return null;
+      const smoke = firstNamed(f, ['heaven', 'camera']);
+      const duels = f
+        .fights({ from: staged, enemyIn: ANU_A_SITE })
+        .filter((x) => smoke === null || x.sec < smoke.at);
+      for (const seed of duels) {
+        const window = duels.filter((x) => x.sec >= seed.sec && x.sec <= seed.sec + 20);
+        if (new Set(window.map((x) => x.ours)).size < 2) continue;
+        if (new Set(window.map((x) => x.enemy)).size < 2) continue;
+        return { marks: { Staged: staged, Duels: seed.sec } };
+      }
+      return null;
+    }
+  }
+];
+
+/**
+ * The B Pop shape, shared by B Pop and B Contact with AWP.
+ *
+ * Everything has to land inside six seconds of the stack forming, and all of
+ * it before the execute smokes: a pop that waits for bleft is an execute.
+ */
+function anuBPop(f, { awpFirst = false } = {}) {
+  const smoke = firstNamed(f, B_EXEC_SMOKES);
+  for (const s of f.series) {
+    const group = f.playersIn(ANU_B_STAGE, s.sec);
+    if (group.size < 4) continue;
+    const end = s.sec + QUICK_SECONDS;
+    if (smoke && smoke.at <= end) continue;
+    const inside = f
+      .transitions(ANU_B_STAGE, ANU_B_IN, { from: s.sec, to: end })
+      .filter((x) => group.has(x.id));
+    if (inside.length < 2) continue;
+    const fight = f.fights({ from: s.sec, to: end, ours: group })[0];
+    if (!fight) continue;
+    if (awpFirst && !f.heldAwp(fight.ours, fight.sec)) continue;
+    return { marks: { Staged: s.sec, 'Second man in': inside[1].arrivedAt, Contact: fight.sec } };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// CT side, Anubis
+// ---------------------------------------------------------------------------
+
+/** The water hold shared by Water crunch and Delayed water fight. */
+function waterHold(f, { from, to }) {
+  for (const flash of f.nadesIn('flashbang', WATER_FLASH)) {
+    if (flash.at < from || flash.at > to) continue;
+    const held = f.playersIn(WATER_HOLD, flash.at);
+    if (!held.size) continue;
+    return { flash, held };
+  }
+  return null;
+}
+
+/** @type {RoundTypeDef[]} */
+const ANU_CT = [
+  {
+    key: 'anu-water-crunch',
+    label: 'Water crunch',
+    desc: 'A smoke on m0NESY or Stairs by 1:44, a CT holding ZywOo / B Water / Water, and a flash onto the water ground by 1:43.',
+    match(f) {
+      const smoke = f
+        .nadesIn('smokegrenade', WATER_SMOKE)
+        .find((n) => n.at <= secondsAtClock('1:44'));
+      if (!smoke) return null;
+      const hold = waterHold(f, { from: 0, to: secondsAtClock('1:43') });
+      if (!hold) return null;
+      return { marks: { Smoke: smoke.at, Flash: hold.flash.at } };
+    }
+  },
+  {
+    key: 'anu-delayed-water',
+    label: 'Delayed water fight',
+    desc: 'The same water hold, but the flash lands between 1:43 and 1:15 with 8+ players still alive, and turns into a gunfight.',
+    match(f) {
+      const hold = waterHold(f, { from: secondsAtClock('1:43'), to: secondsAtClock('1:15') });
+      if (!hold) return null;
+      const at = hold.flash.at;
+      if (f.aliveCount(at) + f.enemy.aliveCount(at) < 8) return null;
+      const fight = f.fights({ from: at, ours: hold.held, gunOnly: true })[0];
+      if (!fight) return null;
+      return { marks: { Flash: at, Contact: fight.sec } };
+    }
+  },
+  {
+    key: 'anu-b-search',
+    label: 'B Main search',
+    desc: '2+ CTs go into B Main, or one does with a CT flash landing in B Main or B Lobby.',
+    match(f) {
+      const been = f.playersDuring(ANU_B_MAIN, 0, f.lastSec);
+      if (!been.size) return null;
+      const at = f.firstSecWith(ANU_B_MAIN, 1);
+      if (been.size >= 2) return { marks: { 'In B main': at } };
+      const flash = f.nadesIn('flashbang', ANU_B_STAGE)[0];
+      if (!flash) return null;
+      return { marks: { 'In B main': at, Flash: flash.at } };
+    }
+  },
+  {
+    key: 'anu-2a-setup',
+    label: '2A setup',
+    desc: '2+ CTs in A Main or Pillar for more than 15s straight.',
+    match(f) {
+      const run = longestRun(f.series, 0, f.lastSec, (sec) => f.countIn(ANU_A_ANCHOR, sec) >= 2);
+      if (run.seconds <= TWO_A_SECONDS) return null;
+      return { marks: { 'Set from': run.start } };
+    }
+  },
+  {
+    key: 'anu-a-main-push',
+    label: 'A main push',
+    desc: 'A CT goes into A Main and takes a gunfight with a T on the water ground.',
+    match(f) {
+      const been = f.playersDuring(ANU_A_MAIN, 0, f.lastSec);
+      if (!been.size) return null;
+      const fight = f.fights({ ours: been, gunOnly: true, enemyIn: ANU_T_WATER_POS })[0];
+      if (!fight) return null;
+      return { marks: { Contact: fight.sec } };
+    }
+  }
+];
+
+// ---------------------------------------------------------------------------
 // Catalogue
 // ---------------------------------------------------------------------------
 
@@ -1604,7 +1942,8 @@ export const DEFAULT_TYPE = { key: 'default', label: 'Default / Other' };
 export const ROUND_LIBRARY = {
   NUK: { T: NUK_T, CT: NUK_CT },
   INF: { T: INF_T, CT: INF_CT },
-  DD2: { T: DD2_T, CT: DD2_CT }
+  DD2: { T: DD2_T, CT: DD2_CT },
+  ANU: { T: ANU_T, CT: ANU_CT }
 };
 
 export function hasRoundLibrary(mapCode) {
@@ -1762,6 +2101,29 @@ const READINESS = {
       ...SHORT_EXEC_MOLLY.map((n) => [n]),
       ...MID_PUSH.map((n) => [n]),
       LOWER
+    ]
+  },
+  ANU: {
+    utility: ['blurk', 'bleft', 'palace', 'heaven', 'camera'],
+    regions: [
+      ...ANU_B_STAGE.map((n) => [n]),
+      ...ANU_B_IN.map((n) => [n]),
+      ANU_B_SITE,
+      ANU_CT_CON,
+      ...ANU_CON.map((n) => [n]),
+      BRIDGE,
+      ...BLUE_CRAB.map((n) => [n]),
+      ...BLUE_DOORS.map((n) => [n]),
+      ANU_T_MID,
+      ...ANU_MID_STAGE.map((n) => [n]),
+      CAMERA,
+      TEMPLE,
+      ...ANU_A_HOLD.map((n) => [n]),
+      ANU_A_WATER,
+      ...ANU_A_ANCHOR.map((n) => [n]),
+      ...WATER_FLASH.map((n) => [n]),
+      ...WATER_SMOKE.map((n) => [n]),
+      ...ANU_T_WATER_POS.map((n) => [n])
     ]
   }
 };

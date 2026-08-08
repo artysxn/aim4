@@ -20,8 +20,10 @@ import { classifyRoundTypes, hasRoundLibrary } from './roundLibrary.js';
  *   2  Inferno; utility match radius 100 -> 250 units
  *   3  Dust2; the three Nuke smoke walls made mutually exclusive; setup rules
  *      that spawn made true in every round now need a 5s hold
+ *   4  Anubis; Dust2 T Short folded into A Short; Mid fight default held 20s
+ *      from 1:39
  */
-export const ROUND_LIBRARY_VERSION = 3;
+export const ROUND_LIBRARY_VERSION = 4;
 
 /**
  * @typedef {{ k: string, m: Record<string, number> }} RoundTag
