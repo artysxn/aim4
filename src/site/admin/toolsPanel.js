@@ -203,9 +203,23 @@ export function toolsPanel() {
     }
   }
 
+  /**
+   * Status for every job, tolerating ones the backend does not serve.
+   *
+   * A single missing route must not blank the panel: these are independent
+   * jobs, and a backend that predates one of them still has to report the
+   * other two. An unreachable job reads as idle and its own button surfaces
+   * the real error when someone presses it.
+   */
+  async function allStatuses() {
+    const settled = await Promise.allSettled(JOBS.map((j) => j.status()));
+    if (settled.every((r) => r.status === 'rejected')) throw settled[0].reason;
+    return settled.map((r) => (r.status === 'fulfilled' ? r.value : { running: false }));
+  }
+
   async function pollOnce() {
     try {
-      const states = await Promise.all(JOBS.map((j) => j.status()));
+      const states = await allStatuses();
       const live = states.findIndex((s) => s.running);
       if (live !== -1) {
         drawProgress(states[live], JOBS[live].kind);
@@ -256,7 +270,7 @@ export function toolsPanel() {
       } catch (err) {
         // 409: somebody else's job holds the library. Show theirs, not ours.
         if (err.status !== 409) throw err;
-        const states = await Promise.all(JOBS.map((j) => j.status()));
+        const states = await allStatuses();
         const live = states.findIndex((s) => s.running);
         job = live === -1 ? states[0] : states[live];
       }
