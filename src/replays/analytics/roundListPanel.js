@@ -42,8 +42,14 @@ export function createRoundListPanel({ escapeHtml }) {
 
   function rowHtml(t) {
     const dim = t.ours.rounds ? '' : ' is-unused';
+    // When the call comes is read off our own rounds where we have them, and
+    // off the library's otherwise, so an unused row still says when it happens.
+    const when = t.ours.timing || t.league.timing;
     return `<li class="tm-rl-row${dim}" title="${escapeHtml(t.desc || '')}">
       <span class="tm-rl-name">${escapeHtml(t.label)}</span>
+      <span class="tm-rl-when" title="${escapeHtml(
+        t.ours.timing ? 'Median clock we call it at' : 'Median clock the library calls it at'
+      )}">${escapeHtml(when ? when.clock : '—')}</span>
       <span class="tm-rl-n" title="Rounds we ran it">${t.ours.rounds || '—'}</span>
       <span class="tm-rl-wr" title="Our winrate running it">${escapeHtml(fmtPct(t.ours.winrate))}</span>
       <span class="tm-rl-share" title="Our share of rounds vs the library's">${escapeHtml(
@@ -66,7 +72,7 @@ export function createRoundListPanel({ escapeHtml }) {
     return `<div class="tm-rl-side">
       <p class="an-side-title">${escapeHtml(side)} rounds <small>${bag.ourRounds} run, ${bag.facedRounds} faced</small></p>
       <div class="tm-rl-head" aria-hidden="true">
-        <span></span><span>N</span><span>WIN</span><span>USE / AVG</span><span>vs avg</span><span></span><span>FACED</span>
+        <span></span><span>WHEN</span><span>N</span><span>WIN</span><span>USE / AVG</span><span>vs avg</span><span></span><span>FACED</span>
       </div>
       <ul class="tm-rl-list">${shown.map(rowHtml).join('')}</ul>
     </div>`;

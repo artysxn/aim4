@@ -27,9 +27,11 @@ export const ANTISTRAT_CATEGORIES = [
   { key: 'pace', group: 'General', label: 'Pace on T' },
   { key: 'utility', group: 'General', label: 'Default utility' },
   { key: 'tells', group: 'General', label: 'Biggest tells' },
+  { key: 'responses', group: 'General', label: 'Responses to their calls' },
   { key: 'fiveVfour', group: 'General', label: '5v4s' },
   { key: 'fourVfive', group: 'General', label: '4v5s' },
   { key: 'force', group: 'General', label: 'Force buys' },
+  { key: 'antiBuy', group: 'General', label: 'Anti-eco and anti-force' },
   { key: 'firstEngagement', group: 'General', label: 'First engagement timing' },
   { key: 'patterns', group: 'General', label: 'Patterns' },
   { key: 'openings', group: 'General', label: 'Openings' },
@@ -43,6 +45,7 @@ export const ANTISTRAT_CATEGORIES = [
   { key: 'tLate', group: 'T specific', label: 'Laterounds' },
   { key: 'ctRoundList', group: 'CT specific', label: 'CT Round list' },
   { key: 'ctSites', group: 'CT specific', label: 'Winrate vs site hits' },
+  { key: 'ctSpread', group: 'CT specific', label: 'Players on A and B over time' },
   { key: 'retakes', group: 'CT specific', label: 'Retakes and retake winrates' }
 ];
 
@@ -112,11 +115,19 @@ function renderPistols(esc, s) {
           const util = [];
           if (r.smokes.length) util.push(`${r.smokes.join(' & ')} smoke`);
           if (r.molotovs.length) util.push(`${r.molotovs.join(' and ')} molotov`);
+          // "Showed A, went B" is the read a coach wants off a pistol.
+          const turn = r.turnaround ? `, showed ${esc(r.shown)} and went ${esc(r.site)}` : '';
           const line = `${call || 'no read'}${util.length ? ` with ${util.join(', ')}` : ''}`;
-          return `${link(esc, `vs ${esc(r.opponent)}`, [r.file])}: ${esc(line)}${r.won ? ' (won)' : ''}`;
+          return `${link(esc, `vs ${esc(r.opponent)}`, [r.file])}: ${esc(line)}${turn}${r.won ? ' (won)' : ''}`;
         })
       )
     );
+    const turn = s.turnaround;
+    if (turn) {
+      parts.push(
+        `<p>Turnaround: ${link(esc, `${turn.turned} of ${turn.rounds}`, turn.files)} pistols show one site and take the other (${turn.share}%), winning ${turn.winrate}% of them against ${turn.heldWinrate}% when the early read holds.</p>`
+      );
+    }
   }
   if (s.ct.length) {
     const order = s.ctOrder?.length ? s.ctOrder : ['A', 'ee', 'B'];
@@ -177,8 +188,8 @@ function renderUtility(esc, s, mapCode) {
     parts.push(
       `<p>Average per round: smokes ${bag.avg.smokegrenade}, molotovs ${bag.avg.molotov}, flashes ${bag.avg.flashbang}, HE ${bag.avg.hegrenade}.</p>`
     );
-    if (bag.items?.length) {
-      parts.push(embed(esc, 'util-map', { map: mapCode, side, items: bag.items }));
+    if (bag.live) {
+      parts.push(embed(esc, 'util-map', { map: mapCode, side, live: bag.live }));
     }
   }
   return parts.length ? parts.join('') : NONE;
@@ -210,6 +221,79 @@ function renderTells(esc, s) {
     return `<p>No utility in ${s?.minRounds ?? 5}+ rounds reaches ${s?.minShare ?? 80}%.</p>`;
   }
   return parts.join('');
+}
+
+/**
+ * Calls made in answer to the other side's.
+ *
+ * One row per call of theirs, under the call of ours it triggered, so the
+ * table reads the way it gets used in a timeout: "when they do this, we do
+ * that, and here is how it has gone".
+ */
+function renderResponses(esc, s) {
+  const parts = [];
+  for (const side of ['T', 'CT']) {
+    const bag = s?.[side];
+    if (!bag?.calls.length) continue;
+    const rows = bag.calls.flatMap((call) =>
+      call.to.map((reply, i) => [
+        i === 0 ? esc(call.label) : '',
+        esc(reply.label),
+        `${reply.share}%`,
+        link(esc, `${reply.rounds} of ${call.rounds}`, reply.files),
+        reply.winrate === null ? '—' : `${reply.winrate}%`
+      ])
+    );
+    parts.push(
+      `<p><strong>${side}</strong> ${bag.answered} of ${bag.rounds} rounds answer something ${bag.other} did ${bag.lead}s+ earlier</p>`
+    );
+    parts.push(table(['Our call', 'After their', 'Rate', 'Rounds', 'Win'], rows));
+  }
+  return parts.length ? parts.join('') : NONE;
+}
+
+/**
+ * Anti-eco and anti-force, split by what the OTHER side had.
+ *
+ * The winrate is the point of the section: the shape of the round only matters
+ * once you know whether it is working.
+ */
+function renderAntiBuy(esc, s) {
+  const parts = [];
+  for (const side of ['T', 'CT']) {
+    const buckets = s?.sides?.[side];
+    if (!buckets?.length) continue;
+    const rows = buckets.map((b) => {
+      const shape =
+        side === 'T'
+          ? [b.formation, b.site ? `${b.site.a}% A, ${b.site.b}% B` : '']
+              .filter(Boolean)
+              .join(', ')
+          : b.lean
+            ? `leans A ${b.lean.a}%, B ${b.lean.b}%`
+            : '';
+      return [
+        esc(b.label),
+        link(esc, String(b.rounds), b.files),
+        `${b.winrate}%`,
+        esc(b.medianClock || '—'),
+        esc(shape || '—'),
+        b.calls.length
+          ? b.calls
+              .map((c) => `${link(esc, esc(c.label), c.files)} ${c.rounds} (${c.winrate}%)`)
+              .join(', ')
+          : '—'
+      ];
+    });
+    parts.push(`<p><strong>${side}</strong></p>`);
+    parts.push(
+      table(
+        ['Round', 'N', 'Win', side === 'T' ? 'Commit' : 'First fight', 'Shape', 'Calls'],
+        rows
+      )
+    );
+  }
+  return parts.length ? parts.join('') : NONE;
 }
 
 function renderAdvantageSide(esc, s, label) {
@@ -266,7 +350,7 @@ function renderForce(esc, s) {
   return rows.length ? li(rows) : NONE;
 }
 
-function renderFirstEngagement(esc, s, heatmaps) {
+function renderFirstEngagement(esc, s, mapCode) {
   const parts = [];
   for (const side of ['T', 'CT']) {
     const bag = s[side];
@@ -281,10 +365,14 @@ function renderFirstEngagement(esc, s, heatmaps) {
         .join(', ');
       rows.push(`${esc(k.name)} x${k.count}${zones ? ` (${zones})` : ''}`);
     }
-    const img = heatmaps?.[side]
-      ? `<p><img src="${heatmaps[side]}" alt="First engagements ${side}"></p>`
+    const map = bag.heat?.length
+      ? embed(esc, 'heat', {
+          map: mapCode,
+          title: `First engagements, ${side}`,
+          points: bag.heat
+        })
       : '';
-    parts.push(`<p><strong>${side}</strong> (${bag.rounds} rounds)</p>${li(rows)}${img}`);
+    parts.push(`<p><strong>${side}</strong> (${bag.rounds} rounds)</p>${li(rows)}${map}`);
   }
   return parts.length ? parts.join('') : NONE;
 }
@@ -358,8 +446,9 @@ function renderTFormations(esc, s) {
   )}`;
 }
 
-function renderPostplant(esc, s, word, heatmap = '') {
+function renderPostplant(esc, s, word, mapCode) {
   const rows = [];
+  const maps = [];
   for (const site of ['a', 'b']) {
     const bag = s[site];
     if (!bag) continue;
@@ -367,9 +456,18 @@ function renderPostplant(esc, s, word, heatmap = '') {
     rows.push(
       `<strong>${link(esc, `${site.toUpperCase()} ${word}`, bag.files)}</strong> (${bag.rounds} rounds): ${bag.avgZones !== null ? `${bag.avgZones} zones held, ` : ''}${top || 'no zone data'}`
     );
+    // One map per site rather than a grid, so each carries its own sliders.
+    if (bag.heat?.length) {
+      maps.push(
+        embed(esc, 'heat', {
+          map: mapCode,
+          title: `${site.toUpperCase()} ${word}`,
+          points: bag.heat
+        })
+      );
+    }
   }
-  const img = heatmap ? `<p><img src="${heatmap}" alt="Postplant positions"></p>` : '';
-  return rows.length ? `${li(rows)}${img}` : NONE;
+  return rows.length ? `${li(rows)}${maps.join('')}` : NONE;
 }
 
 function renderCtSites(esc, s) {
@@ -389,7 +487,7 @@ function renderCtSites(esc, s) {
   return `<p>${s.rounds} full buy vs full buy CT rounds</p>${li(rows)}`;
 }
 
-function renderRetakes(esc, s) {
+function renderRetakes(esc, s, mapCode) {
   const rows = [];
   for (const site of ['a', 'b']) {
     const w = s.winrates[site];
@@ -399,7 +497,7 @@ function renderRetakes(esc, s) {
       `<strong>${link(esc, `${site.toUpperCase()} retakes, full buy`, w.files)}</strong> (${w.rounds} rounds): ${w.winrate}% won${top ? `, from ${top}` : ''}`
     );
   }
-  const zones = renderPostplant(esc, s.zones, 'retake zones');
+  const zones = renderPostplant(esc, s.zones, 'retake zones', mapCode);
   return `${rows.length ? li(rows) : NONE}${zones === NONE ? '' : zones}`;
 }
 
@@ -419,7 +517,8 @@ function renderRoundList(esc, s, teamName) {
       : '';
   const line = (bag, label) => {
     if (!bag.rounds) return '';
-    return `${link(esc, label, bag.files)}: ${bag.winrate}% (${bag.wins}W ${bag.losses}L of ${bag.rounds}, ${bag.share}% of rounds)${marks(bag)}`;
+    const when = bag.when ? ` at ${esc(bag.when.clock)}` : '';
+    return `${link(esc, label, bag.files)}${when}: ${bag.winrate}% (${bag.wins}W ${bag.losses}L of ${bag.rounds}, ${bag.share}% of rounds)${marks(bag)}`;
   };
   const own = s.side === 'T' ? 'T' : 'CT';
   const other = s.side === 'T' ? 'CT' : 'T';
@@ -484,7 +583,7 @@ function renderPhase(esc, s) {
   return html || NONE;
 }
 
-function renderPlayers(esc, s, images) {
+function renderPlayers(esc, s, images, mapCode) {
   if (!s.length) return NONE;
   const parts = [];
   for (const p of s) {
@@ -493,9 +592,30 @@ function renderPlayers(esc, s, images) {
     for (const side of ['T', 'CT']) {
       const bag = p.sides[side];
       if (!bag) continue;
-      parts.push(`<p><strong>${side} side</strong> (${bag.rounds} full buys)</p>`);
-      const img = images?.heat?.[p.name]?.[side];
-      if (img) parts.push(`<p><img src="${img}" alt="${esc(p.name)} ${side} heatmap"></p>`);
+      parts.push(
+        `<p><strong>${side} side</strong> (${bag.rounds} rounds, ${bag.fullRounds ?? bag.rounds} full buys)</p>`
+      );
+      if (bag.heat?.length) {
+        parts.push(
+          embed(esc, 'heat', {
+            map: mapCode,
+            title: `${p.name}, ${side}`,
+            points: bag.heat
+          })
+        );
+      }
+      // The AWPer gets a second map over the rounds he actually held it: where
+      // a player stands with the AWP is a different answer from where he
+      // stands, and averaging the two hides both.
+      if (bag.awp?.heat?.length) {
+        parts.push(
+          embed(esc, 'heat', {
+            map: mapCode,
+            title: `${p.name}, ${side}, AWP rounds (${bag.awp.rounds})`,
+            points: bag.awp.heat
+          })
+        );
+      }
       const nades = images?.nades?.[p.name]?.[side];
       if (nades) parts.push(`<p><img src="${nades}" alt="${esc(p.name)} ${side} utility"></p>`);
       const rows = [];
@@ -576,10 +696,12 @@ export function buildAntistratDocHtml(spec, esc) {
     pace: (s) => renderPace(esc, s),
     utility: (s) => renderUtility(esc, s, spec.mapCode),
     tells: (s) => renderTells(esc, s),
+    responses: (s) => renderResponses(esc, s),
     fiveVfour: (s) => renderAdvantage(esc, s),
     fourVfive: (s) => renderAdvantage(esc, s),
     force: (s) => renderForce(esc, s),
-    firstEngagement: (s) => renderFirstEngagement(esc, s, images.firstEngagement),
+    antiBuy: (s) => renderAntiBuy(esc, s),
+    firstEngagement: (s) => renderFirstEngagement(esc, s, spec.mapCode),
     patterns: (s) => renderPatterns(esc, s),
     openings: (s) => renderOpenings(esc, s),
     tRoundList: (s) =>
@@ -587,11 +709,12 @@ export function buildAntistratDocHtml(spec, esc) {
     ctRoundList: (s) =>
       renderRoundList(esc, s, spec.teamName) + renderRoundLibraryNote(esc, spec.results?.roundLibrary),
     setCalls: (s) => renderSetCalls(esc, s),
-    players: (s) => renderPlayers(esc, s, images.players),
+    players: (s) => renderPlayers(esc, s, images.players, spec.mapCode),
     tFormations: (s) => renderTFormations(esc, s),
-    afterplants: (s) => renderPostplant(esc, s, 'afterplants', images.afterplants),
+    afterplants: (s) => renderPostplant(esc, s, 'afterplants', spec.mapCode),
     ctSites: (s) => renderCtSites(esc, s),
-    retakes: (s) => renderRetakes(esc, s),
+    ctSpread: (s) => embed(esc, 'ct-spread', s),
+    retakes: (s) => renderRetakes(esc, s, spec.mapCode),
     tEarly: (s) => renderPhase(esc, s),
     tMid: (s) => renderPhase(esc, s),
     tLate: (s) => renderPhase(esc, s)

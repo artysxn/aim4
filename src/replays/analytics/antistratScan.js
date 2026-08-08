@@ -16,7 +16,7 @@ import { ROUND_SECONDS, timingFor } from '../viewer/roundClock.js';
 import { phaseBounds, phaseAtTick } from '../coach/roundPhases.js';
 import { openingSituation } from '../shared/openingSituation.js';
 import { buyBucket } from '../shared/roundId.js';
-import { teamNameKey } from '../shared/statsMath.js';
+import { tagTrigger, teamNameKey } from '../shared/statsMath.js';
 import { loadCoachSmokes, matchCoachSmoke } from '../coach/coachSmokes.js';
 import { roleForPlayer } from '../roles/computeRoles.js';
 import { ensureRegionHierarchy } from '../zones/regionHierarchy.js';
@@ -212,7 +212,12 @@ function roundFeatures({ meta, track, row, teamIdx, opponent, network, utilDb, m
   }
   const aliveAt = (id, tick) => !deadAt.has(id) || deadAt.get(id) > tick;
 
-  // Sample series over the live round, 1s resolution.
+  // Sample series over the live round, 1s resolution. Points carry whether the
+  // body had the AWP out, which is what puts the ⊕ on a formation and what
+  // separates the AWPer's two heatmaps.
+  const weaponNames = (meta.weapons || []).map((w) =>
+    String(w || '').toLowerCase().replace(/^weapon_/, '')
+  );
   const series = [];
   if (track) {
     const states = [];
@@ -224,7 +229,13 @@ function roundFeatures({ meta, track, row, teamIdx, opponent, network, utilDb, m
         if (!s || !s.alive || !aliveAt(p.id, tick)) continue;
         if (!Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
         const names = network ? positionsAtPoint(s.x, s.y, network).map((z) => z.name) : [];
-        pts.push({ id: p.id, x: s.x, y: s.y, pos: names[0] || '' });
+        pts.push({
+          id: p.id,
+          x: s.x,
+          y: s.y,
+          pos: names[0] || '',
+          awp: weaponNames[s.weapon] === 'awp'
+        });
       }
       series.push({ tick, elapsed: elapsedOf(tick), pts });
     }
@@ -539,6 +550,60 @@ function typeBreakdown(rec, labels) {
     .sort((a, b) => b.rounds - a.rounds || a.label.localeCompare(b.label));
 }
 
+/**
+ * Every named grenade on one side, one record per throw.
+ *
+ * The written averages above stay a full-buy-vs-full-buy read, but the map
+ * carries the whole side, because the widget is where the slicing happens now:
+ * the reader sets a buy and a stretch of the round and the counts recompute.
+ * Aggregating here would fix a picture the reader wants to move.
+ *
+ * Throws are flat — `[nameIdx, typeIdx, x, y, t, roundIdx, ...]` — and rounds
+ * are listed once with their buys and their tags, so nothing is repeated per
+ * grenade.
+ */
+function liveUtility(rounds, side, labels) {
+  const set = rounds.filter((r) => r.side === side);
+  if (!set.length) return null;
+  const names = [];
+  const nameIdx = new Map();
+  const indexOf = (name) => {
+    if (!nameIdx.has(name)) {
+      nameIdx.set(name, names.length);
+      names.push(name);
+    }
+    return nameIdx.get(name);
+  };
+  const roundList = [];
+  const throws = [];
+  for (const r of set) {
+    const hits = r.nades.filter((n) => nadeLabel(n));
+    if (!hits.length) continue;
+    const at = roundList.length;
+    roundList.push({
+      f: r.file,
+      own: r.ownEcon,
+      opp: r.oppEcon,
+      w: r.won ? 1 : 0,
+      k: (r.tags?.[side] || []).map((t) => t.k).filter((k) => k !== 'default')
+    });
+    for (const n of hits) {
+      throws.push(
+        indexOf(nadeLabel(n)),
+        NADE_KINDS.indexOf(n.type),
+        Math.round(n.sx !== null ? n.sx : n.x),
+        Math.round(n.sy !== null ? n.sy : n.y),
+        Math.round(n.at),
+        at
+      );
+    }
+  }
+  if (!throws.length) return null;
+  const types = {};
+  for (const [key, label] of labels) types[key] = label;
+  return { names, kinds: NADE_KINDS, rounds: roundList, throws, types };
+}
+
 function aggUtility(rounds, mapCode) {
   const out = { sides: {} };
   for (const side of ['T', 'CT']) {
@@ -600,7 +665,13 @@ function aggUtility(rounds, mapCode) {
       .filter((t) => t.share >= 10)
       .sort((a, b) => b.share - a.share)
       .slice(0, 48);
-    out.sides[side] = { rounds: set.length, files: filesOf(set), avg, items };
+    out.sides[side] = {
+      rounds: set.length,
+      files: filesOf(set),
+      avg,
+      items,
+      live: liveUtility(rounds, side, labels)
+    };
   }
   return out;
 }
@@ -844,7 +915,17 @@ function aggFirstEngagement(rounds, nameOf, network) {
     for (const r of set) {
       const k = r.firstKill;
       clocks.push(k.clock);
-      if (k.x !== null && k.y !== null) points.push({ x: k.x, y: k.y });
+      // The opening kill's own clock is what the slider cuts on: an opening at
+      // 1:45 and one at 0:50 are different rounds, and this is where you see it.
+      if (k.x !== null && k.y !== null) {
+        points.push({
+          x: k.x,
+          y: k.y,
+          t: ROUND_SECONDS - k.clock,
+          own: r.ownEcon,
+          opp: r.oppEcon
+        });
+      }
       if (!k.attackerOurs) continue;
       oursFirst++;
       if (!killers.has(k.attacker)) killers.set(k.attacker, { count: 0, zones: new Map() });
@@ -866,7 +947,7 @@ function aggFirstEngagement(rounds, nameOf, network) {
       medianClock: fmtClock(clocks[Math.floor(clocks.length / 2)]),
       avgClock: fmtClock(avgOf(clocks)),
       wonShare: pct(oursFirst, set.length),
-      points,
+      heat: packPoints(points),
       killers: [...killers.entries()]
         .sort((a, b) => b[1].count - a[1].count)
         .slice(0, 6)
@@ -1000,7 +1081,9 @@ function aggPostplant(rounds, side) {
       const seen = new Set();
       for (const p of s.pts) {
         if (p.pos) seen.add(p.pos);
-        points.push({ x: p.x, y: p.y });
+        // Stamped with the moment the snapshot was taken, which moves with the
+        // plant: the slider then separates an early plant held from a late one.
+        points.push({ x: p.x, y: p.y, t: s.elapsed, own: r.ownEcon, opp: r.oppEcon });
       }
       for (const z of seen) bump(zoneRounds, z);
       distinct.push(seen.size);
@@ -1009,7 +1092,7 @@ function aggPostplant(rounds, side) {
       rounds: set.length,
       files: filesOf(set),
       avgZones: distinct.length ? round1(avgOf(distinct)) : null,
-      points,
+      heat: packPoints(points),
       top: topCounts(zoneRounds).map((t) => ({ name: t.name, share: pct(t.count, set.length) }))
     };
   }
@@ -1135,23 +1218,64 @@ function snapshotSample(r, mapCode) {
   return r.sampleAt(r.t0 + (ROUND_SECONDS - snap) * r.tickRate);
 }
 
+/**
+ * Where a T pistol was heading at the snapshot, before it committed.
+ *
+ * The lean is a headcount toward each site at the formation clock: whoever has
+ * more bodies pointed at them is the site the round is showing.
+ */
+export function pistolLean(r, mapCode) {
+  const snap = snapshotSample(r, mapCode);
+  if (!snap) return '';
+  const a = r.towardCount(snap, 'a');
+  const b = r.towardCount(snap, 'b');
+  if (a === b) return '';
+  return a > b ? 'A' : 'B';
+}
+
 function aggPistols(rounds, mapCode, laneSets) {
   const t = rounds.filter((r) => r.side === 'T' && r.ownEcon === 0);
   const ct = rounds.filter((r) => r.side === 'CT' && r.ownEcon === 0);
   const namesOf = (r, kind) =>
     [...new Set(r.nades.filter((n) => n.type === kind && n.name).map((n) => n.name))];
-  return {
-    ctOrder: (FORMATIONS[mapCode]?.ct || []).map((c) => c.label),
-    t: t.map((r) => ({
+  const tRows = t.map((r) => {
+    // Where they showed, and where the bomb actually went. A round that shows
+    // one site and plants the other is the turnaround.
+    const shown = pistolLean(r, mapCode);
+    const site = paceSite(r)?.toUpperCase() || '';
+    return {
       opponent: r.opponent,
       file: r.file,
       formation: laneFormation(r, mapCode, laneSets) || '',
       pace: classifyPace(r),
-      site: paceSite(r)?.toUpperCase() || '',
+      site,
+      shown,
+      planted: Boolean(r.plantTick != null && r.plantSite),
+      turnaround: Boolean(shown && site && shown !== site),
       smokes: namesOf(r, 'smokegrenade'),
       molotovs: namesOf(r, 'molotov'),
       won: r.won
-    })),
+    };
+  });
+  const read = tRows.filter((x) => x.shown && x.site);
+  const turned = read.filter((x) => x.turnaround);
+  return {
+    ctOrder: (FORMATIONS[mapCode]?.ct || []).map((c) => c.label),
+    turnaround: read.length
+      ? {
+          rounds: read.length,
+          turned: turned.length,
+          share: pct(turned.length, read.length),
+          wins: turned.filter((x) => x.won).length,
+          winrate: pct(turned.filter((x) => x.won).length, turned.length),
+          heldWinrate: pct(
+            read.filter((x) => !x.turnaround && x.won).length,
+            read.length - turned.length
+          ),
+          files: turned.map((x) => x.file)
+        }
+      : null,
+    t: tRows,
     ct: ct.map((r) => {
       const snap = snapshotSample(r, mapCode);
       const a = snap ? r.towardCount(snap, 'a', 0) : 0;
@@ -1215,19 +1339,23 @@ function laneCountsAt(r, mapCode, laneSets) {
   const snap = snapshotSample(r, mapCode);
   if (!snap || !snap.pts.length) return null;
   const counts = laneSets.map(() => 0);
+  // Which lane the AWP stood in at the snapshot, for the ⊕ on the notation.
+  let awpLane = -1;
   for (const p of snap.pts) {
     const key = String(p.pos || '').toLowerCase();
     let hit = key ? laneSets.findIndex((s) => s.has(key)) : -1;
     if (hit === -1) hit = Math.min(1, laneSets.length - 1);
     counts[hit]++;
+    if (p.awp && awpLane === -1) awpLane = hit;
   }
+  counts.awpLane = awpLane;
   return counts;
 }
 
 /** T formation notation at the snapshot clock, or '' when unresolvable. */
 function laneFormation(r, mapCode, laneSets) {
   const counts = laneCountsAt(r, mapCode, laneSets);
-  return counts ? formatFormation(mapCode, counts) : '';
+  return counts ? formatFormation(mapCode, counts, counts.awpLane) : '';
 }
 
 /** "4 B, 1 Mid" from lane counts, zeros skipped. */
@@ -1416,6 +1544,45 @@ function aggSetCalls(rounds, mapCode, laneSets) {
  * CT full buy vs full buy, split by which site the Ts hit: how often the
  * defense holds, and how it does once the bomb is actually down.
  */
+/** How often the CT spread is sampled across the round. */
+const CT_SPREAD_STEP = 8;
+
+/**
+ * Where the CT side's bodies are, every 8 seconds.
+ *
+ * One row per sample and one record per round, so the widget can average
+ * whichever slice of buys the reader asks for rather than being handed a fixed
+ * table. Counts are toward each site rather than inside it: a CT walking to B
+ * is defending B before he arrives.
+ */
+export function aggCtSpread(rounds) {
+  const set = rounds.filter((r) => r.side === 'CT' && r.hasTicks);
+  if (!set.length) return null;
+  const marks = [];
+  for (let sec = 0; sec <= ROUND_SECONDS; sec += CT_SPREAD_STEP) marks.push(sec);
+  const out = [];
+  for (const r of set) {
+    // Flat per round: [aliveA, aliveB, alive, ...] one triple per mark.
+    const counts = [];
+    let any = false;
+    for (const sec of marks) {
+      const s = r.sampleAt(r.t0 + sec * r.tickRate);
+      if (!s || sec > r.endTick / r.tickRate - r.t0 / r.tickRate) {
+        counts.push(-1, -1, -1);
+        continue;
+      }
+      const a = r.towardCount(s, 'a');
+      const b = r.towardCount(s, 'b');
+      counts.push(a, b, s.pts.length);
+      any = true;
+    }
+    if (!any) continue;
+    out.push({ own: r.ownEcon, opp: r.oppEcon, w: r.won ? 1 : 0, c: counts });
+  }
+  if (!out.length) return null;
+  return { step: CT_SPREAD_STEP, marks, rounds: out };
+}
+
 function aggCtSiteDefense(rounds) {
   const set = rounds.filter((r) => r.side === 'CT' && r.ownEcon === 4 && r.oppEcon === 4);
   const out = { rounds: set.length, sites: {}, unresolved: 0 };
@@ -1479,6 +1646,9 @@ function aggRoundList(rounds, mapCode, side) {
 
   const bucket = (list, basis) => {
     const wins = list.filter(({ r }) => r.won).length;
+    // When the read came true, across the rounds it came true in.
+    const triggers = list.map(({ tag }) => tagTrigger(tag)).filter((x) => x !== null);
+    const at = triggers.length ? avgOf(triggers) : null;
     return {
       rounds: list.length,
       wins,
@@ -1486,6 +1656,7 @@ function aggRoundList(rounds, mapCode, side) {
       winrate: pct(wins, list.length),
       share: pct(list.length, basis),
       files: list.map(({ r }) => r.file),
+      when: at === null ? null : { seconds: round1(at), clock: fmtClock(ROUND_SECONDS - at) },
       marks: marksOf(list)
     };
   };
@@ -1524,6 +1695,186 @@ function aggRoundList(rounds, mapCode, side) {
     types
   };
 }
+
+/**
+ * The rounds where the other side could not buy: what our money bought us.
+ *
+ * Split by what THEY had, not what we had, because that is the call being
+ * made — an anti-eco is a different round from an anti-force even though our
+ * own buy is the same. Every bucket carries its winrate, because a team that
+ * loses a third of its anti-ecos is the finding.
+ */
+const ANTI_BUYS = [
+  { key: 'eco', label: 'Anti-eco', econs: [0, 1] },
+  { key: 'force', label: 'Anti-force', econs: [2, 3] }
+];
+
+function aggAntiBuy(rounds, mapCode, laneSets) {
+  const out = { sides: {} };
+  for (const side of ['T', 'CT']) {
+    const labels = typeLabels(mapCode, side);
+    const buckets = [];
+    for (const bucket of ANTI_BUYS) {
+      // Ours has to be a real buy, or it is not an anti-anything.
+      const set = rounds.filter(
+        (r) => r.side === side && r.ownEcon >= 4 && bucket.econs.includes(r.oppEcon)
+      );
+      if (!set.length) continue;
+      const wins = set.filter((r) => r.won).length;
+      const clocks = [];
+      const sites = new Map();
+      let leanA = 0;
+      let leanB = 0;
+      const calls = new Map();
+      for (const r of set) {
+        if (side === 'T') {
+          const site = paceSite(r);
+          if (site) bump(sites, site.toUpperCase());
+          const c = r.plantClock ?? r.siteEntry(2)?.clock ?? null;
+          if (c !== null) clocks.push(c);
+        } else {
+          const s = r.sampleAt(r.t0 + 35 * r.tickRate);
+          if (s) {
+            const a = r.towardCount(s, 'a');
+            const b = r.towardCount(s, 'b');
+            if (a > b) leanA++;
+            else if (b > a) leanB++;
+          }
+          if (r.firstKill) clocks.push(r.firstKill.clock);
+        }
+        for (const tag of r.tags?.[side] || []) {
+          if (tag.k === 'default') continue;
+          if (!calls.has(tag.k)) calls.set(tag.k, { rounds: 0, wins: 0, files: [] });
+          const rec = calls.get(tag.k);
+          rec.rounds++;
+          if (r.won) rec.wins++;
+          if (rec.files.length < LINK_FILES_CAP) rec.files.push(r.file);
+        }
+      }
+      clocks.sort((a, b) => b - a);
+      const basis = [...sites.values()].reduce((a, b) => a + b, 0);
+      buckets.push({
+        key: bucket.key,
+        label: bucket.label,
+        rounds: set.length,
+        wins,
+        winrate: pct(wins, set.length),
+        files: filesOf(set),
+        formation: side === 'T' ? topFormation(set, mapCode, laneSets) : '',
+        site:
+          side === 'T' && basis
+            ? { a: pct(sites.get('A') || 0, basis), b: pct(sites.get('B') || 0, basis) }
+            : null,
+        lean: side === 'CT' ? { a: pct(leanA, set.length), b: pct(leanB, set.length) } : null,
+        medianClock: clocks.length ? fmtClock(clocks[Math.floor(clocks.length / 2)]) : '',
+        calls: [...calls.entries()]
+          .map(([key, rec]) => ({
+            key,
+            label: labels.get(key) || key,
+            rounds: rec.rounds,
+            winrate: pct(rec.wins, rec.rounds),
+            files: rec.files
+          }))
+          .sort((a, b) => b.rounds - a.rounds || a.label.localeCompare(b.label))
+          .slice(0, 4)
+      });
+    }
+    if (buckets.length) out.sides[side] = buckets;
+  }
+  return Object.keys(out.sides).length ? out : null;
+}
+
+/** The formation this set of rounds most often showed at the snapshot. */
+function topFormation(set, mapCode, laneSets) {
+  const seen = new Map();
+  for (const r of set) {
+    const f = laneFormation(r, mapCode, laneSets);
+    if (f) bump(seen, f);
+  }
+  return topCounts(seen, 1)[0]?.name || '';
+}
+
+/** How far ahead an enemy call has to be before ours can be a reply to it. */
+export const RESPONSE_LEAD_SECONDS = 5;
+
+/**
+ * Calls this team makes in answer to the other side's.
+ *
+ * A tag's marks are its criteria, so the latest of them is the second the read
+ * came true (see `tagTrigger`). Ours is a response when theirs was already
+ * complete a clear five seconds earlier: long enough that the round could have
+ * been called off the back of it, rather than the two simply happening.
+ *
+ * Both directions of the round are already tagged, so this needs no extra
+ * reading — it is the same bag looked at as a pair.
+ */
+function aggResponses(rounds, mapCode, side) {
+  const labels = typeLabels(mapCode, side);
+  const other = side === 'T' ? 'CT' : 'T';
+  const theirLabels = typeLabels(mapCode, other);
+  const own = rounds.filter((r) => r.side === side && r.tags);
+  if (!own.length) return null;
+
+  /** @type {Map<string, { key: string, rounds: Set<string>, replies: Map<string, { files: string[], seen: Set<string>, wins: number }> }>} */
+  const byCall = new Map();
+  let answered = 0;
+  for (const r of own) {
+    const ours = (r.tags[side] || []).filter((t) => t.k !== 'default');
+    const theirs = (r.tags[other] || []).filter((t) => t.k !== 'default');
+    if (!ours.length) continue;
+    let anyReply = false;
+    for (const tag of ours) {
+      const at = tagTrigger(tag);
+      if (at === null) continue;
+      if (!byCall.has(tag.k)) {
+        byCall.set(tag.k, { key: tag.k, rounds: new Set(), replies: new Map() });
+      }
+      const rec = byCall.get(tag.k);
+      rec.rounds.add(r.file);
+      for (const theirTag of theirs) {
+        const lead = tagTrigger(theirTag);
+        if (lead === null || lead > at - RESPONSE_LEAD_SECONDS) continue;
+        if (!rec.replies.has(theirTag.k)) {
+          rec.replies.set(theirTag.k, { files: [], seen: new Set(), wins: 0 });
+        }
+        const reply = rec.replies.get(theirTag.k);
+        if (reply.seen.has(r.file)) continue;
+        reply.seen.add(r.file);
+        if (reply.files.length < LINK_FILES_CAP) reply.files.push(r.file);
+        if (r.won) reply.wins++;
+        anyReply = true;
+      }
+    }
+    if (anyReply) answered++;
+  }
+
+  const calls = [...byCall.values()]
+    .map((rec) => ({
+      key: rec.key,
+      label: labels.get(rec.key) || rec.key,
+      rounds: rec.rounds.size,
+      to: [...rec.replies.entries()]
+        .map(([key, reply]) => ({
+          key,
+          label: theirLabels.get(key) || key,
+          rounds: reply.seen.size,
+          wins: reply.wins,
+          winrate: pct(reply.wins, reply.seen.size),
+          share: pct(reply.seen.size, rec.rounds.size),
+          files: reply.files
+        }))
+        .sort((a, b) => b.rounds - a.rounds || a.label.localeCompare(b.label))
+        .slice(0, 5)
+    }))
+    .filter((c) => c.to.length)
+    .sort((a, b) => b.to[0].rounds - a.to[0].rounds || a.label.localeCompare(b.label));
+
+  if (!calls.length) return null;
+  return { side, other, rounds: own.length, answered, lead: RESPONSE_LEAD_SECONDS, calls };
+}
+
+/** Most rounds a response row keeps a link for. */
+const LINK_FILES_CAP = 40;
 
 function aggPositions(mains, rolesOf) {
   return mains.map((m) => ({
@@ -1567,14 +1918,25 @@ function aggPace(rounds, allPaceKeys) {
 }
 
 const PLAYER_POINT_CAP = 6000;
+/**
+ * Samples one live heatmap embeds. Points are ~16 bytes each once packed, so
+ * this is ~48KB per widget and a report with ten of them stays well inside the
+ * document's budget.
+ */
+const HEAT_POINT_CAP = 3000;
+/** Rounds holding the AWP before a player earns his own AWP heatmap. */
+const AWP_ROUNDS_MIN = 5;
 
 function aggPlayers(rounds, mains, rolesOf) {
   const out = [];
   for (const m of mains) {
     const player = { name: m.name, tRole: rolesOf(m.id, 'T') || '', ctRole: rolesOf(m.id, 'CT') || '', sides: {} };
     for (const side of ['T', 'CT']) {
-      const set = rounds.filter((r) => r.side === side && r.ownEcon === 4 && r.hasTicks);
+      // Every buy, not just full buys: the widget filters, so the document
+      // carries the whole picture and the reader picks the slice.
+      const set = rounds.filter((r) => r.side === side && r.hasTicks);
       if (!set.length) continue;
+      const full = set.filter((r) => r.ownEcon === 4);
       const phases = {
         early: { samples: 0, spots: new Map(), points: [] },
         mid: { samples: 0, spots: new Map(), points: [] },
@@ -1582,20 +1944,35 @@ function aggPlayers(rounds, mains, rolesOf) {
         all: { points: [] }
       };
       const nadePaths = { early: [], mid: [], late: [] };
+      /** Every sample, timed and buy-stamped, for the live heatmap. */
+      const heat = [];
+      /** The same, but only from rounds he actually held the AWP in. */
+      const awpHeat = [];
+      let awpRounds = 0;
       let present = 0;
       for (const r of set) {
         let seen = false;
+        const heldAwp = r.series.some((s) => s.pts.some((x) => x.id === m.id && x.awp));
+        if (heldAwp) awpRounds++;
         for (const s of r.series) {
           const p = s.pts.find((x) => x.id === m.id);
           if (!p) continue;
           seen = true;
           const phase = phaseAtTick(s.tick, r.bounds);
-          const bag = phases[phase];
-          bag.samples++;
-          if (p.pos) bump(bag.spots, p.pos);
           // The heatmap skips spawn noise: nothing from the first 7s of the
           // early round. Position time-shares keep the full phase.
           const heatable = phase !== 'early' || s.elapsed >= 7;
+          if (heatable) {
+            const sample = { x: p.x, y: p.y, t: s.elapsed, own: r.ownEcon, opp: r.oppEcon };
+            heat.push(sample);
+            if (heldAwp) awpHeat.push(sample);
+          }
+          // The written position shares stay on full buys, which is the read
+          // they have always been.
+          if (r.ownEcon !== 4) continue;
+          const bag = phases[phase];
+          bag.samples++;
+          if (p.pos) bump(bag.spots, p.pos);
           if (heatable && bag.points.length < PLAYER_POINT_CAP) {
             bag.points.push({ x: p.x, y: p.y });
           }
@@ -1603,11 +1980,13 @@ function aggPlayers(rounds, mains, rolesOf) {
             phases.all.points.push({ x: p.x, y: p.y });
           }
         }
-        for (const n of r.nades) {
-          if (n.player !== m.id) continue;
-          const list = nadePaths[n.phase];
-          if (list && list.length < 400) {
-            list.push({ type: n.type, fx: n.fx, fy: n.fy, x: n.x, y: n.y });
+        if (r.ownEcon === 4) {
+          for (const n of r.nades) {
+            if (n.player !== m.id) continue;
+            const list = nadePaths[n.phase];
+            if (list && list.length < 400) {
+              list.push({ type: n.type, fx: n.fx, fy: n.fy, x: n.x, y: n.y });
+            }
           }
         }
         if (seen) present++;
@@ -1616,7 +1995,7 @@ function aggPlayers(rounds, mains, rolesOf) {
 
       /** @type {Map<string, { rounds: Set<string>, clocks: number[], type: string }>} */
       const util = new Map();
-      for (const r of set) {
+      for (const r of full) {
         for (const n of r.nades) {
           if (n.player !== m.id || !n.name) continue;
           if (!util.has(n.name)) util.set(n.name, { rounds: new Set(), clocks: [], type: n.type });
@@ -1628,6 +2007,11 @@ function aggPlayers(rounds, mains, rolesOf) {
 
       player.sides[side] = {
         rounds: present,
+        fullRounds: full.length,
+        heat: packPoints(heat),
+        // Only an actual AWPer gets the second map. One round with a picked-up
+        // AWP is not a role.
+        awp: awpRounds >= AWP_ROUNDS_MIN ? { rounds: awpRounds, heat: packPoints(awpHeat) } : null,
         phases: {
           early: phaseSpots(phases.early),
           mid: phaseSpots(phases.mid),
@@ -1648,6 +2032,28 @@ function aggPlayers(rounds, mains, rolesOf) {
       };
     }
     out.push(player);
+  }
+  return out;
+}
+
+/**
+ * Points for a live heatmap, flat and quantised.
+ *
+ * `[x, y, t, buys, ...]` per sample: world position rounded to the unit (the
+ * heat blurs by 14 radar pixels, so anything finer is thrown away anyway), the
+ * second it happened, and the two buys packed into one digit pair. Flat
+ * because this ends up inside a document attribute and every repeated JSON key
+ * is bytes on the wire.
+ *
+ * Over the cap it strides rather than truncating: half a round's movement is a
+ * worse picture than all of it at half the resolution.
+ */
+export function packPoints(list, cap = HEAT_POINT_CAP) {
+  const step = list.length > cap ? Math.ceil(list.length / cap) : 1;
+  const out = [];
+  for (let i = 0; i < list.length; i += step) {
+    const p = list[i];
+    out.push(Math.round(p.x), Math.round(p.y), Math.round(p.t), p.own * 8 + p.opp);
   }
   return out;
 }
@@ -1835,11 +2241,13 @@ export async function runAntistratScan({
       fiveVfour: aggAdvantage(rounds, '5v4'),
       fourVfive: aggAdvantage(rounds, '4v5'),
       force: aggForce(rounds),
+      antiBuy: aggAntiBuy(rounds, mapCode, laneSets),
       firstEngagement: aggFirstEngagement(rounds, nameOf, network),
       patterns: aggPatterns(rounds, nameOf),
       openings: aggOpenings(rounds),
       setCalls: aggSetCalls(rounds, mapCode, laneSets),
       ctSites: aggCtSiteDefense(rounds),
+      ctSpread: aggCtSpread(rounds),
       tFormations: aggTFormations(rounds, mapCode, laneSets),
       afterplants: aggPostplant(rounds, 'T'),
       retakes: {
@@ -1848,6 +2256,10 @@ export async function runAntistratScan({
       },
       tRoundList: aggRoundList(rounds, mapCode, 'T'),
       ctRoundList: aggRoundList(rounds, mapCode, 'CT'),
+      responses: {
+        T: aggResponses(rounds, mapCode, 'T'),
+        CT: aggResponses(rounds, mapCode, 'CT')
+      },
       tEarly: { T: aggPhase(rounds, 'early', 'T'), CT: aggPhase(rounds, 'early', 'CT') },
       tMid: { T: aggPhase(rounds, 'mid', 'T'), CT: aggPhase(rounds, 'mid', 'CT') },
       tLate: { T: aggPhase(rounds, 'late', 'T'), CT: aggPhase(rounds, 'late', 'CT') },

@@ -103,17 +103,74 @@ export function demoPassesDate(demo, filter = {}) {
   return true;
 }
 
+/** Tags carried by one absolute side of a stored row. Never null. */
+export function rowRoundTags(row, side) {
+  const bag = row?.rl;
+  if (!bag) return [];
+  const list = side === 'CT' ? bag.ct : bag.t;
+  return Array.isArray(list) ? list.filter(Boolean) : [];
+}
+
 /**
  * Does a stored round-library bag carry `key` on the given absolute side?
  * Tags are packed as `{ k, m }` on the row (see roundTags.js).
  */
 export function rowHasRoundTag(row, side, key) {
   if (!key) return true;
-  const bag = row?.rl;
-  if (!bag) return false;
-  const list = side === 'CT' ? bag.ct : bag.t;
-  if (!Array.isArray(list)) return false;
-  return list.some((t) => t && t.k === key);
+  return rowRoundTags(row, side).some((t) => t.k === key);
+}
+
+/**
+ * When a call finished being itself: the last of the moments that made the
+ * round match, in seconds since the round went live.
+ *
+ * A definition's marks ARE its criteria — every one of them has to have
+ * happened for the tag to exist — so the latest of them is the second the
+ * whole read came true. That is the moment to sort a call by, and the moment
+ * to compare two calls against each other. Tags with no marks (Default, and
+ * the handful of shapes that record none) have no time and answer null rather
+ * than pretending to sit at zero.
+ */
+export function tagTrigger(tag) {
+  const marks = tag?.m;
+  if (!marks || typeof marks !== 'object') return null;
+  let best = null;
+  for (const value of Object.values(marks)) {
+    if (!Number.isFinite(value)) continue;
+    if (best === null || value > best) best = value;
+  }
+  return best;
+}
+
+/** Earliest trigger among a side's named tags, or null when none is timed. */
+export function sideTrigger(row, side, key = '') {
+  let best = null;
+  for (const tag of rowRoundTags(row, side)) {
+    if (key ? tag.k !== key : tag.k === 'default') continue;
+    const at = tagTrigger(tag);
+    if (at === null) continue;
+    if (best === null || at < best) best = at;
+  }
+  return best;
+}
+
+/**
+ * Did a call on this side land inside the window?
+ *
+ * With a key, it asks about that call; without one, about any named call the
+ * side made. An untimed tag cannot answer, so a window always excludes it —
+ * "between 1:40 and 1:20" is a claim about a clock, and a round with no clock
+ * on it has not made that claim.
+ */
+export function rowTagInWindow(row, side, key, from, to) {
+  const lo = Number.isFinite(from) ? from : -Infinity;
+  const hi = Number.isFinite(to) ? to : Infinity;
+  for (const tag of rowRoundTags(row, side)) {
+    if (key ? tag.k !== key : tag.k === 'default') continue;
+    const at = tagTrigger(tag);
+    if (at !== null && at >= lo && at <= hi) return true;
+  }
+  return false;
 }
 
 /**
@@ -173,12 +230,19 @@ export function rowPasses(row, filter = {}, team = 0, players = null, demos = nu
   // already be known (filter.side) so "our call" vs "their call" is unambiguous.
   const roundOwn = String(filter.roundOwn || '').trim();
   const roundOpp = String(filter.roundOpp || '').trim();
-  if (roundOwn || roundOpp) {
+  const from = Number.isFinite(filter.fromSec) ? filter.fromSec : null;
+  const to = Number.isFinite(filter.toSec) ? filter.toSec : null;
+  const windowed = from !== null || to !== null;
+  if (roundOwn || roundOpp || windowed) {
     const ownSide = filter.side === 'CT' ? 'CT' : filter.side === 'T' ? 'T' : side;
     if (ownSide !== 'T' && ownSide !== 'CT') return false;
     const oppSide = ownSide === 'T' ? 'CT' : 'T';
     if (roundOwn && !rowHasRoundTag(row, ownSide, roundOwn)) return false;
     if (roundOpp && !rowHasRoundTag(row, oppSide, roundOpp)) return false;
+    // The window asks when the call happened. With a call picked it is that
+    // call's clock; with none picked, any named call the subject side made,
+    // which is what makes it usable as a filter on its own.
+    if (windowed && !rowTagInWindow(row, ownSide, roundOwn, from, to)) return false;
   }
 
   return true;

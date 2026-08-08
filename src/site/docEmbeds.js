@@ -9,16 +9,20 @@
 // are runtime-only and never survive a save).
 //
 // Kinds:
-//   util-map  radar with the team's named utility as hoverable dots,
-//             filterable by round phase.
+//   util-map  radar with the team's named utility as hoverable dots.
+//   heat      radar heatmap painted from the samples stored in the document.
 //   spacing   average player spacing after the opening kill: every round as a
 //             low-opacity line, the average as the trendline, kill/death
 //             ticks, hover to read values, click a line to open the round.
+//
+// The map widgets carry their rounds with them: the document holds the points
+// and the throws, not a picture of them, so the two round-clock sliders and
+// the buy pickers recompute rather than reload. Nothing here fetches.
 // ---------------------------------------------------------------------------
 
 import { loadRadar } from '../replays/viewer/radarRenderer.js';
 import { RADAR_SIZE, worldToRadar } from '../replays/viewer/mapCalibration.js';
-import { NADE_COLORS } from '../replays/analytics/heatImage.js';
+import { NADE_COLORS, paintPanel } from '../replays/analytics/heatImage.js';
 
 const NADE_WORD = {
   smokegrenade: 'smoke',
@@ -27,12 +31,113 @@ const NADE_WORD = {
   hegrenade: 'HE'
 };
 
-const PHASES = [
-  { key: '', label: 'All' },
-  { key: 'early', label: 'Early' },
-  { key: 'mid', label: 'Mid' },
-  { key: 'late', label: 'Late' }
+/** The round goes live at 1:55 and the clock runs to 0:00. */
+const ROUND_SECONDS = 115;
+
+const BUYS = [
+  { key: '', label: 'Any buy' },
+  { key: '0', label: 'Pistol' },
+  { key: '1', label: 'Eco' },
+  { key: '2', label: 'Half' },
+  { key: '3', label: 'Force' },
+  { key: '4', label: 'Full' }
 ];
+
+/** Seconds since the round went live, written the way a coach reads it. */
+function clockAt(seconds) {
+  const left = Math.max(0, Math.min(ROUND_SECONDS, Math.round(ROUND_SECONDS - seconds)));
+  return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+}
+
+/**
+ * The two round-clock sliders, plus optional buy pickers.
+ *
+ * Two handles rather than one: the first drops everything before it, the
+ * second everything after, so a reader can cut a stretch out of the middle of
+ * the round and see only what happened inside it. They cannot cross.
+ *
+ * @param {(state: {from: number, to: number, own: string, opp: string}) => void} onChange
+ */
+function filterBar(root, { buys = true, onChange }) {
+  const state = { from: 0, to: ROUND_SECONDS, own: '', opp: '' };
+  const bar = document.createElement('div');
+  bar.className = 'doc-embed-filters';
+
+  const readout = document.createElement('span');
+  readout.className = 'doc-embed-readout';
+
+  const slider = (which) => {
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = '0';
+    input.max = String(ROUND_SECONDS);
+    input.step = '1';
+    input.value = String(which === 'from' ? 0 : ROUND_SECONDS);
+    input.className = 'doc-embed-slider';
+    input.setAttribute(
+      'aria-label',
+      which === 'from' ? 'Hide everything before this point' : 'Hide everything after this point'
+    );
+    input.addEventListener('input', () => {
+      const v = Number(input.value);
+      // The handles never cross: each one pushes the other along.
+      if (which === 'from') {
+        state.from = Math.min(v, state.to);
+        input.value = String(state.from);
+      } else {
+        state.to = Math.max(v, state.from);
+        input.value = String(state.to);
+      }
+      sync();
+    });
+    return input;
+  };
+
+  const from = slider('from');
+  const to = slider('to');
+  const clocks = document.createElement('div');
+  clocks.className = 'doc-embed-sliders';
+  clocks.append(from, to);
+  bar.append(clocks, readout);
+
+  if (buys) {
+    for (const [key, label] of [
+      ['own', 'Team buy'],
+      ['opp', 'Opp buy']
+    ]) {
+      const sel = document.createElement('select');
+      sel.className = 'doc-embed-select';
+      sel.setAttribute('aria-label', label);
+      for (const b of BUYS) {
+        const opt = document.createElement('option');
+        opt.value = b.key;
+        opt.textContent = b.key === '' ? label : b.label;
+        sel.appendChild(opt);
+      }
+      sel.addEventListener('change', () => {
+        state[key] = sel.value;
+        sync();
+      });
+      bar.appendChild(sel);
+    }
+  }
+
+  function sync() {
+    readout.textContent =
+      state.from === 0 && state.to === ROUND_SECONDS
+        ? 'Whole round'
+        : `${clockAt(state.from)} to ${clockAt(state.to)}`;
+    onChange({ ...state });
+  }
+
+  root.appendChild(bar);
+  sync();
+  return state;
+}
+
+/** Does a round's pair of buys pass the pickers? */
+const buyPasses = (state, own, opp) =>
+  (!state.own || String(own) === state.own) && (!state.opp || String(opp) === state.opp);
 
 const mounted = new WeakSet();
 
@@ -53,6 +158,8 @@ export function enhanceDocEmbeds(surface) {
     node.replaceChildren();
     try {
       if (node.dataset.kind === 'util-map') mountUtilMap(node, data);
+      else if (node.dataset.kind === 'heat') mountHeat(node, data);
+      else if (node.dataset.kind === 'ct-spread') mountCtSpread(node, data);
       else if (node.dataset.kind === 'spacing') mountSpacing(node, data);
     } catch {
       /* a broken embed must not take the document down */
@@ -99,6 +206,176 @@ function roundsLink(label, files) {
   return a;
 }
 
+// ---- heat -----------------------------------------------------------------
+
+/**
+ * A live heatmap over samples stored in the document.
+ *
+ * Points arrive flat as `[x, y, t, buys, ...]`, which is what keeps a report
+ * with ten of these inside its size budget. Painting is the same pipeline the
+ * static pictures used, so a widget and the image it replaced look identical
+ * with the sliders wide open.
+ *
+ * @param {HTMLElement} node
+ * @param {{ map: string, title?: string, points: number[] }} data
+ */
+function mountHeat(node, data) {
+  const size = 480;
+  const pts = Array.isArray(data.points) ? data.points : [];
+  const total = Math.floor(pts.length / 4);
+
+  if (data.title) {
+    const head = document.createElement('div');
+    head.className = 'doc-embed-title';
+    head.textContent = data.title;
+    node.appendChild(head);
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  canvas.className = 'doc-embed-canvas';
+  const count = document.createElement('span');
+  count.className = 'doc-embed-count';
+  let radar = null;
+  let state = { from: 0, to: ROUND_SECONDS, own: '', opp: '' };
+
+  filterBar(node, {
+    onChange(next) {
+      state = next;
+      draw();
+    }
+  });
+  node.append(canvas, count);
+
+  /** The samples inside the window and the picked buys. */
+  function visible() {
+    const out = [];
+    for (let i = 0; i < pts.length; i += 4) {
+      const t = pts[i + 2];
+      if (t < state.from || t > state.to) continue;
+      const buys = pts[i + 3];
+      if (!buyPasses(state, Math.floor(buys / 8), buys % 8)) continue;
+      out.push({ x: pts[i], y: pts[i + 1] });
+    }
+    return out;
+  }
+
+  function draw() {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, size, size);
+    const list = visible();
+    count.textContent = `${list.length} of ${total} samples`;
+    if (radar) paintPanel(ctx, radar, data.map, list, 0, 0, size);
+  }
+
+  draw();
+  loadRadar(data.map)
+    .then((img) => {
+      radar = img;
+      draw();
+    })
+    .catch(() => {});
+}
+
+// ---- ct-spread ------------------------------------------------------------
+
+/**
+ * How many CTs are pointed at each site, every 8 seconds.
+ *
+ * The document carries one row per round rather than a finished table, so the
+ * averages recompute for whichever pair of buys the reader picks. Counts are
+ * "toward" a site rather than standing in it: a CT on his way to B is
+ * defending B before he gets there.
+ *
+ * @param {HTMLElement} node
+ * @param {{ step: number, marks: number[],
+ *   rounds: Array<{ own: number, opp: number, w: number, c: number[] }> }} data
+ */
+function mountCtSpread(node, data) {
+  const marks = Array.isArray(data.marks) ? data.marks : [];
+  const rounds = Array.isArray(data.rounds) ? data.rounds : [];
+  if (!marks.length || !rounds.length) return;
+
+  const holder = document.createElement('div');
+  holder.className = 'doc-embed-table';
+  const count = document.createElement('span');
+  count.className = 'doc-embed-count';
+  let state = { from: 0, to: ROUND_SECONDS, own: '', opp: '' };
+
+  filterBar(node, {
+    onChange(next) {
+      state = next;
+      render();
+    }
+  });
+  node.append(count, holder);
+
+  function render() {
+    const picked = rounds.filter((r) => buyPasses(state, r.own, r.opp));
+    count.textContent = `${picked.length} CT rounds`;
+    const head = ['Clock', 'A', 'B', 'Elsewhere', 'Alive'];
+    const body = [];
+    for (let i = 0; i < marks.length; i++) {
+      const sec = marks[i];
+      // The sliders bound which rows of the round the table shows at all.
+      if (sec < state.from || sec > state.to) continue;
+      let a = 0;
+      let b = 0;
+      let alive = 0;
+      let n = 0;
+      for (const r of picked) {
+        const va = r.c[i * 3];
+        // -1 marks a sample past the end of that round, which is not a zero.
+        if (va < 0) continue;
+        a += va;
+        b += r.c[i * 3 + 1];
+        alive += r.c[i * 3 + 2];
+        n++;
+      }
+      if (!n) continue;
+      const avg = (x) => (x / n).toFixed(1);
+      body.push([
+        clockAt(sec),
+        avg(a),
+        avg(b),
+        avg(Math.max(0, alive - a - b)),
+        avg(alive),
+        String(n)
+      ]);
+    }
+    holder.replaceChildren(buildTable([...head, 'Rounds'], body));
+  }
+
+  render();
+}
+
+/** A plain table element from already-plain strings. */
+function buildTable(head, rows) {
+  const t = document.createElement('table');
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  for (const h of head) {
+    const th = document.createElement('th');
+    th.textContent = h;
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  const tbody = document.createElement('tbody');
+  for (const row of rows) {
+    const tr = document.createElement('tr');
+    for (const cell of row) {
+      const td = document.createElement('td');
+      td.textContent = cell;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  t.append(thead, tbody);
+  return t;
+}
+
 // ---- util-map -------------------------------------------------------------
 
 /** Round files behind one round type of a utility item. */
@@ -107,58 +384,129 @@ function typeFiles(item, t) {
 }
 
 /**
- * Can this dot be opened?
+ * The team's named utility, recomputed inside the window and the picked buys.
  *
- * Documents store their data, so a report written before the utility map
- * carried round files has items with nothing to link. Those stay hover-only
- * rather than opening an empty card: the report has to be regenerated.
- */
-const hasRounds = (it) => Boolean(it?.files?.length);
-
-/**
+ * The document carries one record per throw rather than a finished picture, so
+ * everything on screen — which pieces show, how big each dot is, the round
+ * breakdown behind it — is worked out here against whatever the sliders and
+ * the buy pickers currently say.
+ *
  * @param {HTMLElement} node
- * @param {{ map: string, side: string, items: Array<{
- *   name, type, phase, rounds, share, clock, x, y, files?: string[],
- *   types?: Array<{ key: string, label: string, rounds: number, share: number, idx: number[] }>
- * }> }} data
+ * @param {{ map: string, side: string, live?: {
+ *   names: string[], kinds: string[], throws: number[],
+ *   rounds: Array<{ f: string, own: number, opp: number, w: number, k: string[] }>,
+ *   types: Record<string, string>
+ * } }} data
  */
 function mountUtilMap(node, data) {
   const size = 480;
-  let phase = '';
-
-  const chips = document.createElement('div');
-  chips.className = 'doc-embed-chips';
-  for (const p of PHASES) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = p.label;
-    btn.className = p.key === phase ? 'active' : '';
-    btn.addEventListener('click', () => {
-      phase = p.key;
-      for (const b of chips.children) b.classList.toggle('active', b === btn);
-      showPicked(null);
-    });
-    chips.appendChild(btn);
+  const live = data.live;
+  if (!live?.throws?.length) {
+    const note = document.createElement('p');
+    note.className = 'doc-embed-stale';
+    note.textContent = 'Regenerate this report to make the utility map live.';
+    node.appendChild(note);
+    return;
   }
-  node.appendChild(chips);
 
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   canvas.className = 'doc-embed-canvas';
-  node.appendChild(canvas);
   const tip = tooltipFor(node);
-  // Clicking a dot pins its rounds under the map. The tooltip follows the
-  // cursor, so its links can never be clicked; this panel holds still.
   const picked = document.createElement('div');
   picked.className = 'doc-embed-picked';
   picked.hidden = true;
-  node.appendChild(picked);
-  const ctx = canvas.getContext('2d');
-  let radar = null;
-  let pinned = null;
+  const count = document.createElement('span');
+  count.className = 'doc-embed-count';
 
-  const visible = () => (data.items || []).filter((it) => !phase || it.phase === phase);
+  let state = { from: 0, to: ROUND_SECONDS, own: '', opp: '' };
+  let items = [];
+  let pinned = null;
+  let radar = null;
+
+  filterBar(node, {
+    onChange(next) {
+      state = next;
+      rebuild();
+    }
+  });
+  node.append(canvas, count, picked);
+
+  /**
+   * Fold the throws inside the window into one item per piece of utility.
+   *
+   * A round counts once however many of the same grenade landed there, which
+   * is the question the map answers: which rounds does this piece show up in.
+   */
+  function rebuild() {
+    const byKey = new Map();
+    const rounds = new Set();
+    for (let i = 0; i < live.throws.length; i += 6) {
+      const t = live.throws[i + 4];
+      if (t < state.from || t > state.to) continue;
+      const round = live.rounds[live.throws[i + 5]];
+      if (!round || !buyPasses(state, round.own, round.opp)) continue;
+      rounds.add(round.f);
+      const nameIdx = live.throws[i];
+      const kindIdx = live.throws[i + 1];
+      const key = `${nameIdx}:${kindIdx}`;
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          name: live.names[nameIdx] || '',
+          type: live.kinds[kindIdx] || '',
+          xs: [],
+          ys: [],
+          ts: [],
+          seen: new Set(),
+          files: [],
+          byType: new Map()
+        });
+      }
+      const rec = byKey.get(key);
+      rec.xs.push(live.throws[i + 2]);
+      rec.ys.push(live.throws[i + 3]);
+      rec.ts.push(t);
+      if (rec.seen.has(round.f)) continue;
+      rec.seen.add(round.f);
+      const at = rec.files.push(round.f) - 1;
+      for (const k of round.k || []) {
+        if (!rec.byType.has(k)) rec.byType.set(k, []);
+        rec.byType.get(k).push(at);
+      }
+    }
+
+    const basis = rounds.size || 1;
+    const avg = (list) => list.reduce((a, b) => a + b, 0) / list.length;
+    items = [...byKey.values()]
+      .map((rec) => ({
+        name: rec.name,
+        type: rec.type,
+        rounds: rec.seen.size,
+        share: Math.round((rec.seen.size / basis) * 100),
+        clock: clockAt(avg(rec.ts)),
+        x: Math.round(avg(rec.xs)),
+        y: Math.round(avg(rec.ys)),
+        files: rec.files,
+        types: [...rec.byType.entries()]
+          .map(([key, idx]) => ({
+            key,
+            label: live.types[key] || key,
+            rounds: idx.length,
+            share: Math.round((idx.length / rec.seen.size) * 100),
+            idx
+          }))
+          .sort((a, b) => b.rounds - a.rounds || a.label.localeCompare(b.label))
+          .slice(0, 6)
+      }))
+      .sort((a, b) => b.share - a.share);
+
+    count.textContent = `${items.length} pieces over ${rounds.size} rounds`;
+    // Whatever was pinned may not exist in the new slice.
+    const keep = pinned && items.find((it) => it.name === pinned.name && it.type === pinned.type);
+    showPicked(keep || null);
+  }
+
   const radiusOf = (it) => 3.5 + Math.min(7, it.share / 12);
 
   const project = (it) => {
@@ -168,12 +516,13 @@ function mountUtilMap(node, data) {
   };
 
   function draw(hot = null) {
+    const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.clearRect(0, 0, size, size);
     if (radar) ctx.drawImage(radar, 0, 0, size, size);
     ctx.fillStyle = 'rgba(0,0,0,0.3)';
     ctx.fillRect(0, 0, size, size);
-    for (const it of visible()) {
+    for (const it of items) {
       const p = project(it);
       if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
       const r = radiusOf(it);
@@ -195,12 +544,9 @@ function mountUtilMap(node, data) {
     const head = document.createElement('strong');
     head.textContent = `${it.name} ${NADE_WORD[it.type] || ''}`.trim();
     const sub = document.createElement('div');
-    const count = it.rounds ? `${it.rounds} rounds, ` : '';
-    sub.textContent = `${count}${it.share}%${it.clock ? `, avg ${it.clock}` : ''}${
-      it.phase ? `, ${it.phase}` : ''
-    }`;
+    sub.textContent = `${it.rounds} rounds, ${it.share}%, avg ${it.clock}`;
     const nodes = [head, sub];
-    for (const t of it.types || []) {
+    for (const t of it.types) {
       const row = document.createElement('div');
       row.textContent = `${t.rounds} ${t.rounds === 1 ? 'round' : 'rounds'} ${t.label} (${t.share}%)`;
       nodes.push(row);
@@ -210,7 +556,7 @@ function mountUtilMap(node, data) {
 
   /** The pinned card under the map: the same breakdown, as round links. */
   function showPicked(it) {
-    pinned = hasRounds(it) ? it : null;
+    pinned = it && it.files.length ? it : null;
     picked.replaceChildren();
     if (!pinned) {
       picked.hidden = true;
@@ -221,14 +567,19 @@ function mountUtilMap(node, data) {
     head.className = 'doc-embed-picked-head';
     head.append(
       roundsLink(
-        `${`${it.name} ${NADE_WORD[it.type] || ''}`.trim()}, ${it.rounds || it.files.length} rounds`,
-        it.files
+        `${`${pinned.name} ${NADE_WORD[pinned.type] || ''}`.trim()}, ${pinned.rounds} rounds`,
+        pinned.files
       )
     );
     picked.appendChild(head);
-    for (const t of it.types || []) {
+    for (const t of pinned.types) {
       const row = document.createElement('div');
-      row.append(roundsLink(`${t.label} (${t.rounds})`, typeFiles(it, t)));
+      row.append(
+        roundsLink(
+          `${t.label} (${t.rounds})`,
+          t.idx.map((i) => pinned.files[i]).filter(Boolean)
+        )
+      );
       picked.appendChild(row);
     }
     picked.hidden = false;
@@ -241,7 +592,7 @@ function mountUtilMap(node, data) {
     const y = ((ev.clientY - rect.top) / rect.height) * size;
     let best = null;
     let bestD = 16;
-    for (const it of visible()) {
+    for (const it of items) {
       const p = project(it);
       const d = Math.hypot(p.x - x, p.y - y) - radiusOf(it);
       if (d < bestD) {
@@ -255,7 +606,7 @@ function mountUtilMap(node, data) {
   canvas.addEventListener('mousemove', (ev) => {
     const it = pick(ev);
     draw(it);
-    canvas.style.cursor = hasRounds(it) ? 'pointer' : '';
+    canvas.style.cursor = it ? 'pointer' : '';
     if (it) {
       const rect = canvas.getBoundingClientRect();
       tip.showNodes(tipNodes(it), ev.clientX - rect.left, ev.clientY - rect.top);
@@ -272,7 +623,7 @@ function mountUtilMap(node, data) {
     showPicked(it && it !== pinned ? it : null);
   });
 
-  draw();
+  rebuild();
   loadRadar(data.map)
     .then((img) => {
       radar = img;

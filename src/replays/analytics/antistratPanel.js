@@ -23,7 +23,7 @@ import {
   shortDate
 } from './antistratConfig.js';
 import { runAntistratScan } from './antistratScan.js';
-import { heatDataUri, heatGridDataUri, nadePathsGridDataUri } from './heatImage.js';
+import { nadePathsGridDataUri } from './heatImage.js';
 import { PACE_TYPES } from './patternDefs.js';
 import { spinnerHtml } from '../../lib/spinner.js';
 
@@ -356,49 +356,24 @@ export function createAntistratPanel({ escapeHtml }) {
           renderProgress();
         }
       });
-      state.progress = 'Rendering images…';
+      state.progress = 'Rendering utility paths…';
       renderProgress();
 
+      // Every heatmap in the report is a widget now: the samples ride in the
+      // document and the reader moves the sliders. The only picture left is
+      // the nade-path grid, which draws lines rather than points.
       const images = {};
       const sections = results.sections;
-      if (state.cats.has('firstEngagement')) {
-        images.firstEngagement = {};
-        for (const side of ['T', 'CT']) {
-          const points = sections.firstEngagement?.[side]?.points;
-          if (points?.length) {
-            images.firstEngagement[side] = await heatDataUri(state.mapCode, points, {
-              label: `First engagements, ${side}`
-            });
-          }
-        }
-      }
-      if (state.cats.has('afterplants')) {
-        const panels = [];
-        for (const site of ['a', 'b']) {
-          const bag = sections.afterplants?.[site];
-          if (bag?.points?.length) {
-            panels.push({ label: `${site.toUpperCase()} afterplants`, points: bag.points });
-          }
-        }
-        if (panels.length) {
-          images.afterplants = await heatGridDataUri(state.mapCode, panels);
-        }
-      }
       if (state.cats.has('players')) {
-        images.players = { heat: {}, nades: {} };
+        // Heatmaps are widgets now: the samples ride in the document and the
+        // reader moves the sliders, so there is no picture to render here.
+        // Nade paths stay a picture, since they are lines rather than points.
+        images.players = { nades: {} };
         for (const p of sections.players || []) {
-          images.players.heat[p.name] = {};
           images.players.nades[p.name] = {};
           for (const side of ['T', 'CT']) {
             const bag = p.sides[side];
             if (!bag) continue;
-            const heat = await heatGridDataUri(state.mapCode, [
-              { label: 'Early', points: bag.phases.early.points },
-              { label: 'Mid', points: bag.phases.mid.points },
-              { label: 'Late', points: bag.phases.late.points },
-              { label: 'All', points: bag.phases.all.points }
-            ]);
-            if (heat) images.players.heat[p.name][side] = heat;
             const nades = await nadePathsGridDataUri(
               state.mapCode,
               [

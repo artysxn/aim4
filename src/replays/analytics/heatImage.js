@@ -68,12 +68,16 @@ function heatColorAt(t) {
 
 /**
  * One heat panel (radar + heat) onto `ctx` at (dx, dy, size).
+ *
+ * Exported because the document's live heatmaps paint with exactly this, so a
+ * widget and the picture it replaced are the same pipeline at the same blur.
+ *
  * @param {CanvasRenderingContext2D} ctx
  * @param {HTMLImageElement} radar
  * @param {string} mapCode
  * @param {Array<{x: number, y: number}>} points  world coordinates
  */
-function paintPanel(ctx, radar, mapCode, points, dx, dy, size) {
+export function paintPanel(ctx, radar, mapCode, points, dx, dy, size) {
   ctx.drawImage(radar, dx, dy, size, size);
 
   if (!points?.length) return;

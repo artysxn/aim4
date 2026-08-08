@@ -9,17 +9,33 @@
 // runs 2 or 20.
 // ---------------------------------------------------------------------------
 
-import { teamNameKey } from '../shared/statsMath.js';
+import { tagTrigger, teamNameKey } from '../shared/statsMath.js';
+import { clockAt } from './roundFacts.js';
 import { hasRoundLibrary, roundTypeRows } from './roundLibrary.js';
 import { rowTags } from './roundTags.js';
 
 const pct = (part, whole) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : null);
 
 function emptyBag() {
-  return { rounds: 0, wins: 0 };
+  return { rounds: 0, wins: 0, at: [] };
 }
 
 const rate = (bag) => pct(bag.wins, bag.rounds);
+
+/** The middle of a set of trigger seconds, on the round clock. */
+function median(list) {
+  if (!list.length) return null;
+  const sorted = [...list].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/** `{ seconds, clock }` for a bag's timings, or null when none were recorded. */
+function timing(bag) {
+  const at = median(bag.at);
+  if (at === null) return null;
+  return { seconds: Math.round(at * 10) / 10, clock: clockAt(at) };
+}
 
 /**
  * @typedef {object} RoundTypeStatRow
@@ -89,6 +105,8 @@ export function roundListStats(payload, { mapCode, teamName }) {
           const bag = grab(bagSide.league, tag.k);
           bag.rounds++;
           if (row.w === runner) bag.wins++;
+          const at = tagTrigger(tag);
+          if (at !== null) bag.at.push(at);
         }
         if (!ours) continue;
         const weRan = ours === runner;
@@ -98,6 +116,8 @@ export function roundListStats(payload, { mapCode, teamName }) {
           const bag = grab(weRan ? bagSide.our : bagSide.faced, tag.k);
           bag.rounds++;
           if (row.w === ours) bag.wins++;
+          const at = tagTrigger(tag);
+          if (at !== null) bag.at.push(at);
         }
       }
     }
@@ -116,9 +136,14 @@ export function roundListStats(payload, { mapCode, teamName }) {
         key: def.key,
         label: def.label,
         desc: def.desc,
-        ours: { ...ourBag, winrate: rate(ourBag), share: ourShare },
-        faced: { ...facedBag, winrate: rate(facedBag) },
-        league: { ...leagueBag, winrate: rate(leagueBag), share: leagueShare },
+        ours: { ...ourBag, winrate: rate(ourBag), share: ourShare, timing: timing(ourBag) },
+        faced: { ...facedBag, winrate: rate(facedBag), timing: timing(facedBag) },
+        league: {
+          ...leagueBag,
+          winrate: rate(leagueBag),
+          share: leagueShare,
+          timing: timing(leagueBag)
+        },
         index: leagueShare ? Math.round((ourShare / leagueShare) * 100) / 100 : null
       };
     });

@@ -265,30 +265,42 @@ export function clockSeconds(clock) {
   return Number(m[1]) * 60 + Number(m[2]);
 }
 
+/** Marks the group the AWP is standing with in a formation notation. */
+export const AWP_MARK = '⊕';
+
 /**
  * Write a T formation notation from per-lane counts (notation order).
  * Applies the plan's rules: the 5-stack form, and lane omission where the map
  * allows it. Returns '' when counts do not line up with the map's lanes.
  *
+ * `awpLane` is the notation-order index of the lane the AWP is in, when it is
+ * known. That group takes the ⊕: 3-1-1 with the AWP among the three is
+ * ⊕3-1-1, and with the AWP as the first solo man it is 3-⊕1-1. Passing -1 or
+ * leaving it out writes the plain notation.
+ *
  * @param {string} mapCode
  * @param {number[]} counts
+ * @param {number} [awpLane]
  */
-export function formatFormation(mapCode, counts) {
+export function formatFormation(mapCode, counts, awpLane = -1) {
   const def = FORMATIONS[mapCode];
   if (!def || !Array.isArray(counts) || counts.length !== def.t.length) return '';
   const clean = counts.map((n) => (Number.isFinite(n) && n > 0 ? Math.floor(n) : 0));
+  // The AWP only marks a lane that actually has somebody in it.
+  const awp = Number.isInteger(awpLane) && clean[awpLane] > 0 ? awpLane : -1;
 
   const five = clean.findIndex((n) => n >= 5);
   if (five !== -1) {
     const lane = def.t[five];
-    return lane.short.length === 1 ? `5${lane.short}` : `5 ${lane.short}`;
+    const mark = awp === five ? AWP_MARK : '';
+    return lane.short.length === 1 ? `${mark}5${lane.short}` : `${mark}5 ${lane.short}`;
   }
 
   const parts = [];
   for (let i = 0; i < def.t.length; i++) {
     const lane = def.t[i];
     if (def.skip && def.skip.lane === lane.key && clean[i] === 0) continue;
-    parts.push(String(clean[i]));
+    parts.push(`${i === awp ? AWP_MARK : ''}${clean[i]}`);
   }
   return parts.join('-');
 }

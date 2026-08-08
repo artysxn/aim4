@@ -29,6 +29,8 @@ import {
   teamNameKey
 } from '../shared/statsMath.js';
 import { hasRoundLibrary, roundTypeRows } from '../analytics/roundLibrary.js';
+import { clockAt, secondsAtClock } from '../analytics/roundFacts.js';
+import { ROUND_SECONDS } from '../viewer/roundClock.js';
 import {
   PLAYER_COLUMNS,
   PLAYER_FIXED_BASE,
@@ -144,7 +146,14 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     /** Round-library key the subject side must have run (requires map + side). */
     roundOwn: '',
     /** Round-library key the opposing side must have run (requires map + side). */
-    roundOpp: ''
+    roundOpp: '',
+    /**
+     * When in the round the call came, in seconds since it went live. Null at
+     * both ends is the whole round, which is the default: a window is a claim
+     * about a clock, and most questions are not.
+     */
+    fromSec: null,
+    toSec: null
   };
 
   const detachTips = attachTips(el);
@@ -260,6 +269,33 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     </div>`;
   }
 
+  /**
+   * The round clock, as two clock inputs.
+   *
+   * Typed as a clock because that is how a coach reads a round, and stored as
+   * seconds because that is how the tags do. Blank at either end means open at
+   * that end, so blank at both is the whole round.
+   */
+  function roundWindowHtml() {
+    const box = (which, secs, label) => `<input
+      class="site-input st-clock"
+      type="text"
+      inputmode="numeric"
+      placeholder="${which === 'fromSec' ? '1:55' : '0:00'}"
+      data-filter="${which}"
+      value="${escapeHtml(Number.isFinite(secs) ? clockAt(secs) : '')}"
+      title="${escapeHtml(label)}"
+      aria-label="${escapeHtml(label)}"
+    />`;
+    return `<div class="st-filter-group st-filter-stack">
+      <span class="st-filter-label">In round</span>
+      <div class="st-filter-row st-clock-row">
+        ${box('fromSec', filter.fromSec, 'Calls from this point in the round')}
+        ${box('toSec', filter.toSec, 'Calls up to this point in the round')}
+      </div>
+    </div>`;
+  }
+
   function renderFilters() {
     const mode = roleMode();
     const sideBtn = (value, label) =>
@@ -303,6 +339,7 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
           <div class="rp-chips">${sideBtn('T', 'T')}${sideBtn('CT', 'CT')}</div>
         </div>
         ${roundGroups}
+        ${roundWindowHtml()}
         <div class="st-filter-group st-filter-stack">
           <span class="st-filter-label">Result</span>
           <div class="rp-chips">${resultBtn('won', 'Won')}${resultBtn('lost', 'Lost')}</div>
@@ -417,6 +454,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       filter.role = null;
       filter.roundOwn = '';
       filter.roundOpp = '';
+      filter.fromSec = null;
+      filter.toSec = null;
       filter.dateFrom = '';
       filter.dateTo = '';
       filter.minRounds = defaultMinRounds(scopeForMinRounds([]));
@@ -461,6 +500,23 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     }
     if (sel.dataset.filter === 'roundOwn' || sel.dataset.filter === 'roundOpp') {
       filter[sel.dataset.filter] = String(sel.value || '').trim();
+      resetListPage();
+      render();
+      return;
+    }
+    if (sel.dataset.filter === 'fromSec' || sel.dataset.filter === 'toSec') {
+      const key = sel.dataset.filter;
+      const raw = String(sel.value || '').trim();
+      // A bare number is seconds elapsed; anything with a colon is a clock.
+      const secs = raw === '' ? null : raw.includes(':') ? secondsAtClock(raw) : Number(raw);
+      filter[key] = Number.isFinite(secs) ? Math.max(0, Math.min(ROUND_SECONDS, secs)) : null;
+      // The round counts down, so "from 1:55 to 1:20" is 0s to 35s elapsed.
+      if (Number.isFinite(filter.fromSec) && Number.isFinite(filter.toSec)) {
+        if (filter.fromSec > filter.toSec) {
+          if (key === 'fromSec') filter.toSec = filter.fromSec;
+          else filter.fromSec = filter.toSec;
+        }
+      }
       resetListPage();
       render();
       return;
@@ -598,6 +654,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       role: filter.role ? { side: filter.role.side, value: filter.role.value } : null,
       roundOwn: filter.roundOwn || '',
       roundOpp: filter.roundOpp || '',
+      fromSec: Number.isFinite(filter.fromSec) ? filter.fromSec : null,
+      toSec: Number.isFinite(filter.toSec) ? filter.toSec : null,
       sortKey: s?.key || (tab === 'teams' ? 'avgRating' : 'rating'),
       sortDir: s?.dir === 'asc' ? 'asc' : 'desc',
       page: Math.max(1, Number(activePage()) || 1),
@@ -674,6 +732,20 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     }
     if ('minRounds' in next || 'minR' in next) {
       filter.minRounds = Math.max(0, Math.floor(Number(next.minRounds ?? next.minR) || 0));
+    }
+    for (const key of ['fromSec', 'toSec']) {
+      if (!(key in next)) continue;
+      const raw = next[key];
+      const secs = typeof raw === 'string' && raw.includes(':') ? secondsAtClock(raw) : Number(raw);
+      filter[key] =
+        raw === null || raw === '' || !Number.isFinite(secs)
+          ? null
+          : Math.max(0, Math.min(ROUND_SECONDS, secs));
+    }
+    if (Number.isFinite(filter.fromSec) && Number.isFinite(filter.toSec) && filter.fromSec > filter.toSec) {
+      const swap = filter.fromSec;
+      filter.fromSec = filter.toSec;
+      filter.toSec = swap;
     }
     if ('dateFrom' in next || 'from' in next) {
       const raw = String(next.dateFrom ?? next.from ?? '').trim();
