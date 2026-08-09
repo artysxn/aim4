@@ -62,6 +62,8 @@ class El {
     return {
       clearRect() {}, fillRect() {}, drawImage() {}, beginPath() {}, arc() {},
       fill() {}, stroke() {}, save() {}, restore() {}, putImageData() {},
+      moveTo() {}, lineTo() {}, closePath() {}, rect() {}, clip() {},
+      setTransform() {}, transform() {}, translate() {}, scale() {},
       createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
       getImageData: (w, h) => ({ data: new Uint8ClampedArray(4) }),
       measureText: () => ({ width: 10 }),
@@ -110,6 +112,7 @@ function mount(kind, data) {
   return {
     node,
     broken: Boolean(find('doc-embed-stale')),
+    why: warnings.join(' | '),
     count: () => find('doc-embed-count')?.textContent || '',
     canvas: () => find('doc-embed-canvas'),
     sliders: () => deep('doc-embed-sliders')?.children || [],
@@ -242,6 +245,37 @@ const SPREAD = {
 }
 
 // ---------------------------------------------------------------------------
+// Grenade throw lines
+// ---------------------------------------------------------------------------
+
+{
+  const w = mount('nade-paths', {
+    map: 'ANU',
+    title: 'lyoli, T, grenades',
+    kinds: ['smokegrenade', 'molotov', 'flashbang', 'hegrenade'],
+    // [kind, fromX, fromY, toX, toY, t, buys]
+    paths: [0, 10, 20, 300, 400, 25, 36, 1, 50, 60, 200, 100, 70, 1 * 8 + 4]
+  });
+  assert.equal(w.broken, false, `the throw lines mount: ${w.why}`);
+  assert.equal(w.count(), '2 of 2 grenades');
+
+  const [, to] = w.sliders();
+  to.value = '40';
+  to.fire('input');
+  assert.equal(w.count(), '1 of 2 grenades', 'the late throw is outside an early window');
+
+  const w2 = mount('nade-paths', {
+    map: 'ANU',
+    kinds: ['smokegrenade', 'molotov', 'flashbang', 'hegrenade'],
+    paths: [0, 10, 20, 300, 400, 25, 36, 1, 50, 60, 200, 100, 70, 1 * 8 + 4]
+  });
+  const [own] = w2.selects();
+  own.value = '1';
+  own.fire('change');
+  assert.equal(w2.count(), '1 of 2 grenades', 'and buys filter them the same way');
+}
+
+// ---------------------------------------------------------------------------
 // The afterplant maps run on the bomb, not the round clock
 // ---------------------------------------------------------------------------
 
@@ -266,6 +300,61 @@ const SPREAD = {
   to.value = '10';
   to.fire('input');
   assert.equal(w.count(), '1 of 3 samples', 'and everything past ten seconds after it');
+}
+
+// ---------------------------------------------------------------------------
+// Zoom and pan
+// ---------------------------------------------------------------------------
+
+{
+  const w = mount('heat', HEAT);
+  const c = w.canvas();
+  assert.ok(c.attributes.title.includes('Scroll to zoom'), 'the map says how to drive it');
+
+  // A wheel up over the middle zooms in; the canvas only offers a grab cursor
+  // once there is somewhere to drag to.
+  assert.equal(c.style.cursor || '', '', 'no grab handle at rest');
+  let prevented = false;
+  c.fire('wheel', {
+    deltaY: -1,
+    clientX: 240,
+    clientY: 240,
+    preventDefault: () => (prevented = true)
+  });
+  assert.ok(prevented, 'the page does not scroll out from under a zoom');
+  assert.equal(c.style.cursor, 'grab', 'and now it can be dragged');
+
+  // Panning is a drag, and a drag must not also count as a click: the utility
+  // map pins whatever is under the cursor otherwise.
+  c.fire('pointerdown', { pointerId: 1, clientX: 240, clientY: 240 });
+  assert.equal(c.style.cursor, 'grabbing');
+  c.fire('pointermove', { pointerId: 1, clientX: 300, clientY: 260 });
+  c.fire('pointerup', { pointerId: 1 });
+  assert.equal(c.style.cursor, 'grab', 'the handle comes back after the drag');
+
+  // Double-click puts it back where it started.
+  c.fire('dblclick', { preventDefault() {} });
+  assert.equal(c.style.cursor || '', '', 'reset means no more panning');
+}
+
+{
+  // Zooming all the way out never leaves the map off-centre, and the widget
+  // keeps drawing the same data throughout: the viewport is a view, not a
+  // filter.
+  const w = mount('util-map', UTIL);
+  const c = w.canvas();
+  const before = w.count();
+  for (let i = 0; i < 40; i++) {
+    c.fire('wheel', { deltaY: -1, clientX: 10, clientY: 10, preventDefault() {} });
+  }
+  c.fire('pointerdown', { pointerId: 1, clientX: 0, clientY: 0 });
+  c.fire('pointermove', { pointerId: 1, clientX: 9999, clientY: 9999 });
+  c.fire('pointerup', { pointerId: 1 });
+  assert.equal(w.count(), before, 'zoom and pan change nothing about what is shown');
+  for (let i = 0; i < 60; i++) {
+    c.fire('wheel', { deltaY: 1, clientX: 10, clientY: 10, preventDefault() {} });
+  }
+  assert.equal(c.style.cursor || '', '', 'and it settles back to no zoom');
 }
 
 // ---------------------------------------------------------------------------

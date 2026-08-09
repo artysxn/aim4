@@ -2061,6 +2061,8 @@ const PLAYER_POINT_CAP = 6000;
 const HEAT_POINT_CAP = 3000;
 /** Rounds holding the AWP before a player earns his own AWP heatmap. */
 const AWP_ROUNDS_MIN = 5;
+/** Throws one nade-path widget carries. */
+const NADE_PATH_CAP = 600;
 
 function aggPlayers(rounds, mains, rolesOf) {
   const out = [];
@@ -2078,7 +2080,8 @@ function aggPlayers(rounds, mains, rolesOf) {
         late: { samples: 0, spots: new Map(), points: [] },
         all: { points: [] }
       };
-      const nadePaths = { early: [], mid: [], late: [] };
+      /** Flat throws: [kind, fromX, fromY, toX, toY, t, buys] each. */
+      const paths = [];
       /** Every sample, timed and buy-stamped, for the live heatmap. */
       const heat = [];
       /** The same, but only from rounds he actually held the AWP in. */
@@ -2115,13 +2118,25 @@ function aggPlayers(rounds, mains, rolesOf) {
             phases.all.points.push({ x: p.x, y: p.y });
           }
         }
-        if (r.ownEcon === 4) {
-          for (const n of r.nades) {
-            if (n.player !== m.id) continue;
-            const list = nadePaths[n.phase];
-            if (list && list.length < 400) {
-              list.push({ type: n.type, fx: n.fx, fy: n.fy, x: n.x, y: n.y });
-            }
+        for (const n of r.nades) {
+          if (n.player !== m.id) continue;
+          // Every throw, flat and timed, so the widget can cut it the same way
+          // the heatmap cuts samples: origin, landing, when, and both buys.
+          if (
+            paths.length < NADE_PATH_CAP * 7 &&
+            Number.isFinite(n.x) &&
+            Number.isFinite(n.y) &&
+            Number.isFinite(n.at)
+          ) {
+            paths.push(
+              NADE_KINDS.indexOf(n.type),
+              Number.isFinite(n.fx) ? Math.round(n.fx) : Math.round(n.x),
+              Number.isFinite(n.fy) ? Math.round(n.fy) : Math.round(n.y),
+              Math.round(n.x),
+              Math.round(n.y),
+              Math.round(n.at),
+              r.ownEcon * 8 + r.oppEcon
+            );
           }
         }
         if (seen) present++;
@@ -2153,7 +2168,7 @@ function aggPlayers(rounds, mains, rolesOf) {
           late: phaseSpots(phases.late),
           all: { points: phases.all.points }
         },
-        nadePaths,
+        paths,
         utility: [...util.entries()]
           .map(([name, rec]) => ({
             name,

@@ -3,8 +3,9 @@
 //
 // Categories map 1:1 to sections of the generated team document and to the
 // aggregators in antistratScan.js. The renderer emits only tags the docs
-// editor's sanitizer keeps: numbers, round links (/demos?rounds=…) and
-// data-URI images. No prose beyond the data.
+// editor's sanitizer keeps: numbers, tables,
+// round links (/demos?rounds=…) and inert widget divs, which docEmbeds.js
+// mounts on load. No pictures, and no prose beyond the data.
 // ---------------------------------------------------------------------------
 
 import { MAPS } from '../shared/roundId.js';
@@ -95,6 +96,9 @@ function link(esc, label, files) {
   const href = `/demos?rounds=${list.map(encodeURIComponent).join(',')}`;
   return `<a href="${esc(href)}">${label}</a>`;
 }
+
+/** Grenade kinds, in the order the scan packs them. */
+const NADE_KINDS = ['smokegrenade', 'molotov', 'flashbang', 'hegrenade'];
 
 const NADE_WORD = {
   smokegrenade: 'smoke',
@@ -627,7 +631,7 @@ function renderPhase(esc, s) {
   return html || NONE;
 }
 
-function renderPlayers(esc, s, images, mapCode) {
+function renderPlayers(esc, s, mapCode) {
   if (!s.length) return NONE;
   const parts = [];
   for (const p of s) {
@@ -660,8 +664,16 @@ function renderPlayers(esc, s, images, mapCode) {
           })
         );
       }
-      const nades = images?.nades?.[p.name]?.[side];
-      if (nades) parts.push(`<p><img src="${nades}" alt="${esc(p.name)} ${side} utility"></p>`);
+      if (bag.paths?.length) {
+        parts.push(
+          embed(esc, 'nade-paths', {
+            map: mapCode,
+            title: `${p.name}, ${side}, grenades`,
+            kinds: NADE_KINDS,
+            paths: bag.paths
+          })
+        );
+      }
       const rows = [];
       for (const phase of ['early', 'mid', 'late']) {
         const spots = bag.phases[phase]?.spots || [];
@@ -693,21 +705,12 @@ function renderPlayers(esc, s, images, mapCode) {
  *   mapCode: string,
  *   matches: Array<{ label: string }>,
  *   categories: string[],
- *   results: object,
- *   images?: {
- *     firstEngagement?: { T?: string, CT?: string },
- *     afterplants?: string,
- *     players?: {
- *       heat?: Record<string, { T?: string, CT?: string }>,
- *       nades?: Record<string, { T?: string, CT?: string }>
- *     }
- *   }
+ *   results: object
  * }} spec
  * @param {(s: string) => string} esc
  */
 export function buildAntistratDocHtml(spec, esc) {
   const mapName = MAPS[spec.mapCode]?.name || spec.mapCode;
-  const images = spec.images || {};
   const parts = [];
   parts.push(`<h1>Antistrat: ${esc(spec.teamName)} on ${esc(mapName)}</h1>`);
   parts.push(`<p>${esc(spec.matches.map((m) => m.label).join(', '))}</p>`);
@@ -754,7 +757,7 @@ export function buildAntistratDocHtml(spec, esc) {
     ctRoundList: (s) =>
       renderRoundList(esc, s, spec.teamName) + renderRoundLibraryNote(esc, spec.results?.roundLibrary),
     setCalls: (s) => renderSetCalls(esc, s),
-    players: (s) => renderPlayers(esc, s, images.players, spec.mapCode),
+    players: (s) => renderPlayers(esc, s, spec.mapCode),
     tFormations: (s) => renderTFormations(esc, s),
     afterplants: (s) => renderPostplant(esc, s, 'afterplants', spec.mapCode),
     ctSites: (s) => renderCtSites(esc, s),

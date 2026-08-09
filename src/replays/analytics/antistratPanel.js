@@ -23,7 +23,6 @@ import {
   shortDate
 } from './antistratConfig.js';
 import { runAntistratScan } from './antistratScan.js';
-import { nadePathsGridDataUri } from './heatImage.js';
 import { PACE_TYPES } from './patternDefs.js';
 import { spinnerHtml } from '../../lib/spinner.js';
 
@@ -356,42 +355,8 @@ export function createAntistratPanel({ escapeHtml }) {
           renderProgress();
         }
       });
-      state.progress = 'Rendering utility paths…';
-      renderProgress();
-
-      // Every heatmap in the report is a widget now: the samples ride in the
-      // document and the reader moves the sliders. The only picture left is
-      // the nade-path grid, which draws lines rather than points.
-      const images = {};
-      const sections = results.sections;
-      if (state.cats.has('players')) {
-        // Heatmaps are widgets now: the samples ride in the document and the
-        // reader moves the sliders, so there is no picture to render here.
-        // Nade paths stay a picture, since they are lines rather than points.
-        images.players = { nades: {} };
-        for (const p of sections.players || []) {
-          images.players.nades[p.name] = {};
-          for (const side of ['T', 'CT']) {
-            const bag = p.sides[side];
-            if (!bag) continue;
-            const nades = await nadePathsGridDataUri(
-              state.mapCode,
-              [
-                { label: 'Early', paths: bag.nadePaths.early },
-                { label: 'Mid', paths: bag.nadePaths.mid },
-                { label: 'Late', paths: bag.nadePaths.late },
-                {
-                  label: 'All',
-                  paths: [...bag.nadePaths.early, ...bag.nadePaths.mid, ...bag.nadePaths.late]
-                }
-              ],
-              { cols: 2 }
-            );
-            if (nades) images.players.nades[p.name][side] = nades;
-          }
-        }
-      }
-
+      // Nothing in the report is a picture any more: every map carries its
+      // own rounds and draws them, so there is nothing to render here.
       state.progress = 'Writing document…';
       renderProgress();
       await saveTeamDocument(dest.id, {
@@ -402,8 +367,7 @@ export function createAntistratPanel({ escapeHtml }) {
             mapCode: state.mapCode,
             matches: included.map((d) => ({ label: matchLabel(d) })),
             categories: [...state.cats],
-            results,
-            images
+            results
           },
           escapeHtml
         )

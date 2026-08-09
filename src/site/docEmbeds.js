@@ -11,6 +11,7 @@
 // Kinds:
 //   util-map  radar with the team's named utility as hoverable dots.
 //   heat      radar heatmap painted from the samples stored in the document.
+//   nade-paths one throw line per grenade, origin to landing.
 //   spacing   average player spacing after the opening kill: every round as a
 //             low-opacity line, the average as the trendline, kill/death
 //             ticks, hover to read values, click a line to open the round.
@@ -154,6 +155,138 @@ function filterBar(root, { buys = true, sliders = true, span = null, onChange })
 const buyPasses = (state, own, opp) =>
   (!state.own || String(own) === state.own) && (!state.opp || String(opp) === state.opp);
 
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 8;
+
+/**
+ * Zoom and pan over a square canvas, on the macro analyzer's model: wheel
+ * zooms about the cursor, drag pans once zoomed in, double-click resets.
+ *
+ * Everything a widget draws stays in base coordinates (0..size). The viewport
+ * is a transform applied around the drawing and undone for hit-testing, so a
+ * dot is picked where it looks like it is however far in the reader has gone.
+ *
+ * @param {HTMLCanvasElement} canvas
+ * @param {number} size  the canvas's own coordinate space
+ * @param {() => void} redraw
+ */
+function viewport(canvas, size, redraw) {
+  let zoom = 1;
+  let panX = 0;
+  let panY = 0;
+  let dragging = false;
+  let moved = false;
+  let lastX = 0;
+  let lastY = 0;
+
+  const clamp = () => {
+    // Never drag the map off its own frame: the scaled square always covers.
+    const max = Math.max(0, (size * zoom - size) / 2);
+    panX = Math.max(-max, Math.min(max, panX));
+    panY = Math.max(-max, Math.min(max, panY));
+  };
+  const originX = () => (size - size * zoom) / 2 + panX;
+  const originY = () => (size - size * zoom) / 2 + panY;
+
+  /** Canvas-space point of an event; the canvas is usually displayed smaller. */
+  const canvasAt = (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: ((ev.clientX - rect.left) / (rect.width || 1)) * size,
+      y: ((ev.clientY - rect.top) / (rect.height || 1)) * size
+    };
+  };
+
+  const cursor = () => {
+    canvas.style.cursor = dragging ? 'grabbing' : zoom > 1.001 ? 'grab' : '';
+  };
+
+  canvas.addEventListener(
+    'wheel',
+    (ev) => {
+      ev.preventDefault();
+      const before = zoom;
+      zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * (ev.deltaY > 0 ? 0.9 : 1.12)));
+      if (zoom === before) return;
+      const k = zoom / before;
+      const at = canvasAt(ev);
+      // Keep whatever is under the cursor under the cursor.
+      panX = (at.x - size / 2) * (1 - k) + panX * k;
+      panY = (at.y - size / 2) * (1 - k) + panY * k;
+      if (zoom <= 1.001) {
+        zoom = 1;
+        panX = 0;
+        panY = 0;
+      }
+      clamp();
+      cursor();
+      redraw();
+    },
+    { passive: false }
+  );
+
+  canvas.addEventListener('pointerdown', (ev) => {
+    if (zoom <= 1.001) return;
+    dragging = true;
+    moved = false;
+    const at = canvasAt(ev);
+    lastX = at.x;
+    lastY = at.y;
+    canvas.setPointerCapture?.(ev.pointerId);
+    cursor();
+  });
+
+  canvas.addEventListener('pointermove', (ev) => {
+    if (!dragging) return;
+    const at = canvasAt(ev);
+    if (Math.abs(at.x - lastX) > 1 || Math.abs(at.y - lastY) > 1) moved = true;
+    panX += at.x - lastX;
+    panY += at.y - lastY;
+    lastX = at.x;
+    lastY = at.y;
+    clamp();
+    redraw();
+  });
+
+  const stop = (ev) => {
+    if (!dragging) return;
+    dragging = false;
+    canvas.releasePointerCapture?.(ev.pointerId);
+    cursor();
+  };
+  canvas.addEventListener('pointerup', stop);
+  canvas.addEventListener('pointercancel', stop);
+
+  canvas.addEventListener('dblclick', (ev) => {
+    ev.preventDefault();
+    zoom = 1;
+    panX = 0;
+    panY = 0;
+    cursor();
+    redraw();
+  });
+
+  canvas.setAttribute('title', 'Scroll to zoom, drag to pan, double-click to reset');
+
+  return {
+    /** True when the last pointer press turned into a drag, not a click. */
+    get panned() {
+      return moved;
+    },
+    apply(ctx) {
+      ctx.setTransform(zoom, 0, 0, zoom, originX(), originY());
+    },
+    reset(ctx) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    },
+    /** Base coordinates of an event, with zoom and pan undone. */
+    at(ev) {
+      const p = canvasAt(ev);
+      return { x: (p.x - originX()) / zoom, y: (p.y - originY()) / zoom };
+    }
+  };
+}
+
 const mounted = new WeakSet();
 
 /** Mount every embed under `surface`. Safe to call repeatedly. */
@@ -180,6 +313,7 @@ export function enhanceDocEmbeds(surface) {
     try {
       if (node.dataset.kind === 'util-map') mountUtilMap(node, data);
       else if (node.dataset.kind === 'heat') mountHeat(node, data);
+      else if (node.dataset.kind === 'nade-paths') mountNadePaths(node, data);
       else if (node.dataset.kind === 'ct-spread') mountCtSpread(node, data);
       else if (node.dataset.kind === 'spacing') mountSpacing(node, data);
     } catch (err) {
@@ -292,13 +426,136 @@ function mountHeat(node, data) {
     return out;
   }
 
+  const view = viewport(canvas, size, () => draw());
+
   function draw() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    view.reset(ctx);
     ctx.clearRect(0, 0, size, size);
     const list = visible();
     count.textContent = `${list.length} of ${total} samples`;
-    if (radar) paintPanel(ctx, radar, data.map, list, 0, 0, size);
+    if (!radar) return;
+    ctx.save();
+    view.apply(ctx);
+    paintPanel(ctx, radar, data.map, list, 0, 0, size);
+    ctx.restore();
+  }
+
+  draw();
+  loadRadar(data.map)
+    .then((img) => {
+      radar = img;
+      draw();
+    })
+    .catch(() => {});
+}
+
+// ---- nade-paths -----------------------------------------------------------
+
+/**
+ * A player's grenades as throw lines: where it left the hand, where it landed.
+ *
+ * Throws arrive flat as `[kind, fromX, fromY, toX, toY, t, buys, ...]`. The
+ * sliders replace what the Early / Mid / Late panels used to do and do it
+ * better: the phases were three fixed cuts, this is any cut.
+ *
+ * @param {HTMLElement} node
+ * @param {{ map: string, title?: string, kinds: string[], paths: number[] }} data
+ */
+function mountNadePaths(node, data) {
+  const size = 480;
+  const paths = Array.isArray(data.paths) ? data.paths : [];
+  const kinds = Array.isArray(data.kinds) ? data.kinds : [];
+  const total = Math.floor(paths.length / 7);
+
+  if (data.title) {
+    const head = document.createElement('div');
+    head.className = 'doc-embed-title';
+    head.textContent = data.title;
+    node.appendChild(head);
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  canvas.className = 'doc-embed-canvas';
+  const count = document.createElement('span');
+  count.className = 'doc-embed-count';
+  let radar = null;
+  let state = { from: 0, to: ROUND_SECONDS, own: '', opp: '' };
+
+  filterBar(node, {
+    onChange(next) {
+      state = next;
+      draw();
+    }
+  });
+  node.append(canvas, count);
+
+  const project = (wx, wy) => {
+    const pt = {};
+    worldToRadar(data.map, wx, wy, pt);
+    return { x: (pt.x / RADAR_SIZE) * size, y: (pt.y / RADAR_SIZE) * size };
+  };
+
+  function visible() {
+    const out = [];
+    for (let i = 0; i < paths.length; i += 7) {
+      const t = paths[i + 5];
+      if (t < state.from || t > state.to) continue;
+      const buys = paths[i + 6];
+      if (!buyPasses(state, Math.floor(buys / 8), buys % 8)) continue;
+      out.push({
+        type: kinds[paths[i]] || '',
+        fx: paths[i + 1],
+        fy: paths[i + 2],
+        x: paths[i + 3],
+        y: paths[i + 4]
+      });
+    }
+    return out;
+  }
+
+  const view = viewport(canvas, size, () => draw());
+
+  function draw() {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    view.reset(ctx);
+    ctx.clearRect(0, 0, size, size);
+    ctx.save();
+    view.apply(ctx);
+    if (radar) ctx.drawImage(radar, 0, 0, size, size);
+    const list = visible();
+    count.textContent = `${list.length} of ${total} grenades`;
+    for (const p of list) {
+      const color = NADE_COLORS[p.type] || '#cccccc';
+      const to = project(p.x, p.y);
+      if (!Number.isFinite(to.x) || !Number.isFinite(to.y)) continue;
+      const from = project(p.fx, p.fy);
+      if (Number.isFinite(from.x) && Number.isFinite(from.y)) {
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.3;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(from.x, from.y, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(to.x, to.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
   }
 
   draw();
@@ -457,6 +714,7 @@ function mountUtilMap(node, data) {
   let state = { from: 0, to: ROUND_SECONDS, own: '', opp: '' };
   let items = [];
   let pinned = null;
+  let hovered = null;
   let radar = null;
 
   filterBar(node, {
@@ -549,10 +807,16 @@ function mountUtilMap(node, data) {
     return { x: (pt.x / RADAR_SIZE) * size, y: (pt.y / RADAR_SIZE) * size };
   };
 
+  const view = viewport(canvas, size, () => draw(hovered));
+
   function draw(hot = null) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    hovered = hot;
+    view.reset(ctx);
     ctx.clearRect(0, 0, size, size);
+    ctx.save();
+    view.apply(ctx);
     if (radar) ctx.drawImage(radar, 0, 0, size, size);
     ctx.fillStyle = 'rgba(0,0,0,0.3)';
     ctx.fillRect(0, 0, size, size);
@@ -571,6 +835,7 @@ function mountUtilMap(node, data) {
       ctx.lineWidth = it === pinned ? 1.5 : 1;
       ctx.stroke();
     }
+    ctx.restore();
   }
 
   /** The hover card: what this grenade is, and which calls it belongs to. */
@@ -621,10 +886,10 @@ function mountUtilMap(node, data) {
   }
 
   function pick(ev) {
-    const rect = canvas.getBoundingClientRect();
-    const x = ((ev.clientX - rect.left) / rect.width) * size;
-    const y = ((ev.clientY - rect.top) / rect.height) * size;
+    const { x, y } = view.at(ev);
     let best = null;
+    // The grab radius is in base coordinates, so zooming in makes the dots
+    // easier to hit on screen rather than keeping them the same size to click.
     let bestD = 16;
     for (const it of items) {
       const p = project(it);
@@ -653,6 +918,7 @@ function mountUtilMap(node, data) {
     draw();
   });
   canvas.addEventListener('click', (ev) => {
+    if (view.panned) return;
     const it = pick(ev);
     showPicked(it && it !== pinned ? it : null);
   });
