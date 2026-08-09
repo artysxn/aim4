@@ -53,7 +53,8 @@ import { POSITION_MAPS } from '../roles/teamPositions.js';
  *   escapeHtml: (s: string) => string,
  *   onViewChange?: (state: object) => void,
  *   onDetailChange?: (detail: null | { kind: 'player'|'team', id?: string, name?: string, label: string }) => void,
- *   onBack?: () => boolean
+ *   onBack?: () => boolean,
+ *   onPlayRounds?: (files: string[], title: string) => void | Promise<void>
  * }} deps
  */
 /** Default minimum rounds when opening the unfiltered Database (can still be set to 0). */
@@ -87,7 +88,13 @@ export function defaultMinRounds(scope = {}) {
   return scopeHasMap(scope) ? MAP_MIN_ROUNDS : DEFAULT_MIN_ROUNDS;
 }
 
-export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onBack }) {
+export function createStatsPanel({
+  escapeHtml,
+  onViewChange,
+  onDetailChange,
+  onBack,
+  onPlayRounds
+}) {
   const el = document.createElement('div');
   el.className = 'st-panel';
   el.innerHTML = `
@@ -143,10 +150,10 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     dateTo: '',
     /** @type {{ side: 'T'|'CT', value: string } | null} */
     role: null,
-    /** Round-library key the subject side must have run (requires map + side). */
-    roundOwn: '',
-    /** Round-library key the opposing side must have run (requires map + side). */
-    roundOpp: '',
+    /** Round-library keys the subject side must have run (any; requires map + side). */
+    roundOwn: [],
+    /** Round-library keys the opposing side must have run (any; requires map + side). */
+    roundOpp: [],
     /**
      * When in the round the call came, in seconds since it went live. Null at
      * both ends is the whole round, which is the default: a window is a claim
@@ -238,7 +245,20 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       <option value=""${!selected ? ' selected' : ''}>${anyLabel}</option>${options}</select>`;
   }
 
-  /** Round-library select for the subject's side or the opposing side. */
+  function roundKeysOf(which) {
+    const raw = which === 'opp' ? filter.roundOpp : filter.roundOwn;
+    return Array.isArray(raw) ? raw.map(String).filter(Boolean) : [];
+  }
+
+  function roundSummaryLabel(rows, selected) {
+    if (!selected.length) return 'Any';
+    if (selected.length === 1) {
+      return rows.find((r) => r.key === selected[0])?.label || selected[0];
+    }
+    return `${selected.length} selected`;
+  }
+
+  /** Round-library multi-select for the subject's side or the opposing side. */
   function roundSelectHtml(which) {
     const map = singleMap();
     const side = filter.side;
@@ -246,26 +266,37 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     const ownSide = side;
     const oppSide = side === 'T' ? 'CT' : 'T';
     const forSide = which === 'opp' ? oppSide : ownSide;
-    const selected = which === 'opp' ? filter.roundOpp : filter.roundOwn;
+    const selected = roundKeysOf(which);
+    const selectedSet = new Set(selected);
     const rows = roundTypeRows(map, forSide);
     if (!rows.length) return '';
-    const label =
-      which === 'opp' ? `vs ${oppSide} round` : `${ownSide} round`;
-    const opts = rows
-      .map(
-        (r) =>
-          `<option value="${escapeHtml(r.key)}" title="${escapeHtml(r.desc || '')}"${
-            r.key === selected ? ' selected' : ''
-          }>${escapeHtml(r.label)}</option>`
+    const label = which === 'opp' ? `vs ${oppSide} round` : `${ownSide} round`;
+    const field = which === 'opp' ? 'roundOpp' : 'roundOwn';
+    const summary = roundSummaryLabel(rows, selected);
+    const checks = [
+      `<label class="st-round-opt">
+        <input type="checkbox" data-round-filter="${field}" value="" ${
+          selected.length ? '' : 'checked'
+        } />
+        <span>Any</span>
+      </label>`,
+      ...rows.map(
+        (r) => `<label class="st-round-opt" title="${escapeHtml(r.desc || '')}">
+          <input type="checkbox" data-round-filter="${field}" value="${escapeHtml(r.key)}" ${
+            selectedSet.has(r.key) ? 'checked' : ''
+          } />
+          <span>${escapeHtml(r.label)}</span>
+        </label>`
       )
-      .join('');
+    ].join('');
     return `<div class="st-filter-group st-filter-stack">
       <span class="st-filter-label">${escapeHtml(label)}</span>
-      <select class="site-select st-round-select" data-filter="${
-        which === 'opp' ? 'roundOpp' : 'roundOwn'
-      }" aria-label="${escapeHtml(label)}">
-        <option value=""${!selected ? ' selected' : ''}>Any</option>${opts}
-      </select>
+      <details class="st-round-multi" data-round-menu="${field}">
+        <summary class="site-select st-round-select" aria-label="${escapeHtml(label)}">${escapeHtml(
+          summary
+        )}</summary>
+        <div class="st-round-menu" role="group" aria-label="${escapeHtml(label)}">${checks}</div>
+      </details>
     </div>`;
   }
 
@@ -421,8 +452,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     if (side) {
       filter.side = filter.side === side.dataset.side ? '' : side.dataset.side;
       // Round-library picks are side-relative; drop them when side clears/changes.
-      filter.roundOwn = '';
-      filter.roundOpp = '';
+      filter.roundOwn = [];
+      filter.roundOpp = [];
       resetListPage();
       render();
       return;
@@ -452,8 +483,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       filter.result = '';
       filter.advantage = '';
       filter.role = null;
-      filter.roundOwn = '';
-      filter.roundOpp = '';
+      filter.roundOwn = [];
+      filter.roundOpp = [];
       filter.fromSec = null;
       filter.toSec = null;
       filter.dateFrom = '';
@@ -473,6 +504,26 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       render();
       return;
     }
+    const roundBox = e.target.closest('[data-round-filter]');
+    if (roundBox) {
+      const field = roundBox.dataset.roundFilter === 'roundOpp' ? 'roundOpp' : 'roundOwn';
+      const key = String(roundBox.value || '').trim();
+      if (!key) {
+        filter[field] = [];
+      } else {
+        const set = new Set(roundKeysOf(field === 'roundOpp' ? 'opp' : 'own'));
+        if (roundBox.checked) set.add(key);
+        else set.delete(key);
+        filter[field] = [...set];
+      }
+      const keepOpen = field;
+      resetListPage();
+      render();
+      filtersEl
+        .querySelector(`details[data-round-menu="${keepOpen}"]`)
+        ?.setAttribute('open', '');
+      return;
+    }
     const roleSel = e.target.closest('[data-role-filter]');
     if (roleSel) {
       const side = roleSel.dataset.roleFilter === 'CT' ? 'CT' : 'T';
@@ -489,17 +540,11 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       const wasDefault = filter.minRounds === prevDefault;
       filter.maps = sel.value ? [sel.value] : [];
       filter.role = null;
-      filter.roundOwn = '';
-      filter.roundOpp = '';
+      filter.roundOwn = [];
+      filter.roundOpp = [];
       // Clean Database: Any map → 80, a specific map → 5. Keep a manual floor
       // only when the user already moved off the previous auto default.
       if (wasDefault) filter.minRounds = defaultMinRounds(scopeForMinRounds(filter.maps));
-      resetListPage();
-      render();
-      return;
-    }
-    if (sel.dataset.filter === 'roundOwn' || sel.dataset.filter === 'roundOpp') {
-      filter[sel.dataset.filter] = String(sel.value || '').trim();
       resetListPage();
       render();
       return;
@@ -584,7 +629,127 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     return false;
   }
 
+  /** Aggregation key for a team row (strip per-map suffix used in locked-team map lists). */
+  function teamAggKey(r) {
+    if (r?.mapRow && r.mapCode) {
+      const suffix = `|${r.mapCode}`;
+      const k = String(r.key || '');
+      if (k.endsWith(suffix)) return k.slice(0, -suffix.length);
+    }
+    return r?.key || teamNameKey(r?.name);
+  }
+
+  /** Current list filters applied when collecting a team's Round WR rounds. */
+  function roundsFilterForTeam(teamRow) {
+    const maps = teamRow?.mapCode
+      ? [teamRow.mapCode]
+      : Array.isArray(filter.maps)
+        ? filter.maps.filter(Boolean)
+        : [];
+    return {
+      maps,
+      side: filter.side || '',
+      econ: filter.econ,
+      oppEcon: filter.oppEcon,
+      hasAwp: Boolean(filter.hasAwp),
+      oppHasAwp: Boolean(filter.oppHasAwp),
+      files: scope.files || null,
+      result: filter.result || '',
+      advantage: filter.advantage || '',
+      dateFrom: filter.dateFrom || '',
+      dateTo: filter.dateTo || '',
+      roundOwn: [...roundKeysOf('own')],
+      roundOpp: [...roundKeysOf('opp')],
+      fromSec: Number.isFinite(filter.fromSec) ? filter.fromSec : null,
+      toSec: Number.isFinite(filter.toSec) ? filter.toSec : null
+    };
+  }
+
+  function collectTeamRoundFiles(teamRow) {
+    if (!payload || !teamRow) return [];
+    const want = teamAggKey(teamRow);
+    if (!want) return [];
+    const { players, demos } = indexMaps(payload);
+    const active = roundsFilterForTeam(teamRow);
+    const files = [];
+    const seen = new Set();
+    for (const row of allRows(payload)) {
+      const demo = demos.get(row.d);
+      if (!demo) continue;
+      for (const team of [1, 2]) {
+        const shortId = team === 1 ? demo.t1 : demo.t2;
+        const displayName = team === 1 ? demo.name1 : demo.name2;
+        const key = teamNameKey(displayName, shortId);
+        if (key !== want) continue;
+        if (!rowPasses(row, active, team, players, demos)) continue;
+        const file = String(row.f || '').trim();
+        if (!file || seen.has(file)) continue;
+        seen.add(file);
+        files.push(file);
+      }
+    }
+    return files;
+  }
+
+  function teamRoundsTitle(teamRow) {
+    const parts = [teamRow?.name || 'Team'];
+    const mapCode = teamRow?.mapCode || singleMap();
+    if (mapCode) parts.push(MAPS[mapCode]?.name || mapCode);
+    if (filter.side === 'T' || filter.side === 'CT') parts.push(filter.side);
+    if (mapCode && (filter.side === 'T' || filter.side === 'CT')) {
+      const own = roundKeysOf('own');
+      if (own.length) {
+        parts.push(roundSummaryLabel(roundTypeRows(mapCode, filter.side), own));
+      }
+      const opp = roundKeysOf('opp');
+      if (opp.length) {
+        const oppSide = filter.side === 'T' ? 'CT' : 'T';
+        parts.push(`vs ${roundSummaryLabel(roundTypeRows(mapCode, oppSide), opp)}`);
+      }
+    }
+    return parts.join(' · ');
+  }
+
+  async function openTeamRounds(link) {
+    if (!onPlayRounds || !link || selectionInside(link)) return;
+    const key = String(link.dataset.stTeamRounds || '').trim();
+    if (!key) return;
+    const name = String(link.dataset.stTeamRoundsName || key).trim() || key;
+    const mapCode = String(link.dataset.stTeamRoundsMap || '').trim();
+    const teamRow = {
+      key,
+      name,
+      mapCode: mapCode || undefined,
+      mapRow: Boolean(mapCode)
+    };
+    const files = collectTeamRoundFiles(teamRow);
+    if (!files.length) return;
+    await onPlayRounds(files, teamRoundsTitle(teamRow));
+  }
+
+  function teamRoundWrCell(r) {
+    const col = TEAM_COLUMNS.find((c) => c.key === 'roundWinrate');
+    const text = col ? col.cell(r) : '—';
+    if (!onPlayRounds || !(r.rounds > 0)) return escapeHtml(text);
+    const key = teamAggKey(r);
+    if (!key) return escapeHtml(text);
+    const mapAttr = r.mapCode
+      ? ` data-st-team-rounds-map="${escapeHtml(r.mapCode)}"`
+      : '';
+    return `<span class="st-link st-round-wr" role="link" tabindex="0" data-st-team-rounds="${escapeHtml(
+      key
+    )}" data-st-team-rounds-name="${escapeHtml(r.name || '')}"${mapAttr} title="Open these rounds in the timeline">${escapeHtml(
+      text
+    )}</span>`;
+  }
+
   bodyEl.addEventListener('click', (e) => {
+    const wrLink = e.target.closest('[data-st-team-rounds]');
+    if (wrLink && onPlayRounds) {
+      e.preventDefault();
+      void openTeamRounds(wrLink);
+      return;
+    }
     const nameLink = e.target.closest('[data-st-player], [data-st-team]');
     if (nameLink && activateNameLink(nameLink)) return;
     const pageBtn = e.target.closest('[data-page]');
@@ -619,6 +784,12 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
 
   bodyEl.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
+    const wrLink = e.target.closest?.('[data-st-team-rounds]');
+    if (wrLink && e.target === wrLink && onPlayRounds) {
+      e.preventDefault();
+      void openTeamRounds(wrLink);
+      return;
+    }
     const nameLink = e.target.closest?.('[data-st-player], [data-st-team]');
     if (!nameLink || e.target !== nameLink) return;
     e.preventDefault();
@@ -652,8 +823,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       dateFrom: filter.dateFrom || '',
       dateTo: filter.dateTo || '',
       role: filter.role ? { side: filter.role.side, value: filter.role.value } : null,
-      roundOwn: filter.roundOwn || '',
-      roundOpp: filter.roundOpp || '',
+      roundOwn: [...roundKeysOf('own')],
+      roundOpp: [...roundKeysOf('opp')],
       fromSec: Number.isFinite(filter.fromSec) ? filter.fromSec : null,
       toSec: Number.isFinite(filter.toSec) ? filter.toSec : null,
       sortKey: s?.key || (tab === 'teams' ? 'avgRating' : 'rating'),
@@ -693,8 +864,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
       else if (next.map) filter.maps = [String(next.map)];
       else filter.maps = [];
       if (filter.maps.length !== 1) {
-        filter.roundOwn = '';
-        filter.roundOpp = '';
+        filter.roundOwn = [];
+        filter.roundOpp = [];
       }
     } else if (next.map) {
       filter.maps = [String(next.map)];
@@ -703,8 +874,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
     if ('side' in next) {
       filter.side = next.side === 'T' || next.side === 'CT' ? next.side : '';
       if (!filter.side) {
-        filter.roundOwn = '';
-        filter.roundOpp = '';
+        filter.roundOwn = [];
+        filter.roundOpp = [];
       }
     }
     if ('result' in next) {
@@ -774,15 +945,20 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
         filter.role = null;
       }
     }
+    const asRoundKeys = (raw) => {
+      if (Array.isArray(raw)) return raw.map(String).map((s) => s.trim()).filter(Boolean);
+      const s = String(raw || '').trim();
+      return s ? [s] : [];
+    };
     if ('roundOwn' in next || 'round' in next) {
-      filter.roundOwn = String(next.roundOwn ?? next.round ?? '').trim();
+      filter.roundOwn = asRoundKeys(next.roundOwn ?? next.round);
     }
     if ('roundOpp' in next || 'vsRound' in next) {
-      filter.roundOpp = String(next.roundOpp ?? next.vsRound ?? '').trim();
+      filter.roundOpp = asRoundKeys(next.roundOpp ?? next.vsRound);
     }
     if (!filter.side || filter.maps.length !== 1) {
-      filter.roundOwn = '';
-      filter.roundOpp = '';
+      filter.roundOwn = [];
+      filter.roundOpp = [];
     }
 
     const sortKey = String(next.sortKey || next.sort || '').trim();
@@ -1338,7 +1514,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
           escapeHtml,
           preserveOrder: true,
           showAverage: true,
-          nameCell: teamNameCell
+          nameCell: teamNameCell,
+          roundWrCell: teamRoundWrCell
         });
       } else if (lockedTeamName && oneMap) {
         // One map: us vs best / mid / worst on that map; footer = all-team average.
@@ -1357,7 +1534,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
           preserveOrder: true,
           showAverage: true,
           averageRows,
-          nameCell: teamNameCell
+          nameCell: teamNameCell,
+          roundWrCell: teamRoundWrCell
         });
       } else {
         let data = aggregateTeams(rows, players, demos, active);
@@ -1371,7 +1549,8 @@ export function createStatsPanel({ escapeHtml, onViewChange, onDetailChange, onB
           page: page.teams,
           pageSize: STATS_PAGE_SIZE,
           showAverage: true,
-          nameCell: teamNameCell
+          nameCell: teamNameCell,
+          roundWrCell: teamRoundWrCell
         });
       }
     }

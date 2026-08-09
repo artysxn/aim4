@@ -1102,6 +1102,8 @@ export function statsTableHtml(rows, opts) {
     nameCell = null,
     teamCell = null,
     opponentCell = null,
+    /** Optional custom renderer for Round WR (e.g. open-in-timeline link). */
+    roundWrCell = null,
     fixedCount = 0,
     showAverage = false,
     /** When set, footer averages these rows instead of the visible/sorted set. */
@@ -1166,6 +1168,14 @@ export function statsTableHtml(rows, opts) {
           if (c.key === 'opponent' && opponentCell) {
             const label = opponentCell(r);
             return `<td class="left${stick}">${label}</td>`;
+          }
+          if (c.key === 'roundWinrate' && roundWrCell) {
+            const label = roundWrCell(r);
+            const t = c.tip?.(r);
+            const cls = [t ? 'has-tip' : '', stick.trim()].filter(Boolean).join(' ');
+            return t
+              ? `<td class="${cls}" data-tip="${escapeHtml(t)}">${label}</td>`
+              : `<td class="${cls}">${label}</td>`;
           }
           const text = c.cell(r);
           const t = c.tip?.(r);

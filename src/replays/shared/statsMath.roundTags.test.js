@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { rowHasRoundTag, rowPasses } from './statsMath.js';
+import { rowHasAnyRoundTag, rowHasRoundTag, rowPasses } from './statsMath.js';
 
 const row = {
   f: 'r1',
@@ -48,6 +48,28 @@ assert.equal(
   rowPasses(row, { side: 'T', roundOwn: 'a-fake', roundOpp: 'default' }, 1),
   false,
   'vs miss rejects when both set'
+);
+
+// Multi-select: any selected own/opp key matches.
+assert.equal(
+  rowHasAnyRoundTag(row, 'T', ['default', 'a-fake']),
+  true,
+  'any-of own tags'
+);
+assert.equal(
+  rowPasses(row, { side: 'T', roundOwn: ['default', 'a-fake'] }, 1),
+  true,
+  'OR across selected own rounds'
+);
+assert.equal(
+  rowPasses(row, { side: 'T', roundOwn: ['default', 'ramp-rush'] }, 1),
+  false,
+  'OR still fails when none match'
+);
+assert.equal(
+  rowPasses(row, { side: 'T', roundOpp: ['default', 'lobby-crunch'] }, 1),
+  true,
+  'OR across selected vs rounds'
 );
 
 // Subject team 2 on CT

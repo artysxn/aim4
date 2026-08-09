@@ -14,6 +14,7 @@ import {
   fetchDemos,
   fetchPlaylists,
   fetchRoundMeta,
+  fetchStats,
   fetchStatus,
   fetchUploadBatch,
   findRounds,
@@ -38,6 +39,7 @@ import { collectRounds, matchesQuery, splitStoredName } from '../replays/shared/
 import { clusterTeams } from '../replays/shared/teamClusters.js';
 import { openingSituation, SITUATION_OPTIONS } from '../replays/shared/openingSituation.js';
 import { findRoundDecided } from '../replays/coach/roundDecided.js';
+import { hasRoundLibrary, roundTypeRows } from '../replays/analytics/roundLibrary.js';
 import { PACKAGE_EXT } from '../replays/shared/replayPackage.js';
 import { formatBytes } from '../replays/tickStore.js';
 import { createStatsPanel, defaultMinRounds } from '../replays/stats/statsPanel.js';
@@ -164,6 +166,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   const mineEl = document.getElementById('rp-mine');
   let teamSearch = '';
   let playerSearch = '';
+  let roundOwnSearch = '';
+  let roundOppSearch = '';
   let mapMenuOpen = false;
   /** @type {{ key: string, name: string, shortIds: string[] }[]} */
   let teamClusters = [];
@@ -191,6 +195,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     afterplant: false,
     /** @type {Set<string>} early|mid|late */
     decidedPhases: new Set(),
+    /**
+     * Round-library keys the selected side ran / faced (any match).
+     * Requires one map with a library and a side.
+     * @type {Set<string>}
+     */
+    roundOwn: new Set(),
+    /** @type {Set<string>} */
+    roundOpp: new Set(),
     /** Library visibility scope: public catalog vs own + team-unlisted. */
     /** @type {'public'|'mine'} */
     libraryScope: 'public',
@@ -200,6 +212,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   };
   /** @type {Map<string, object|null>} */
   const roundMetaCache = new Map();
+  /** Round-library tags from the stats index, keyed by round file. */
+  /** @type {Map<string, { t: string[], ct: string[] }>|null} */
+  let roundTagByFile = null;
+  let roundTagToken = 0;
 
   /**
    * The status line is shared between uploading and filtering, and an upload
@@ -1742,6 +1758,84 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     </div>`;
   }
 
+  /** One map with a round library + a side → round-type search is available. */
+  function roundFilterMap() {
+    if (filters.maps.size !== 1) return '';
+    const code = [...filters.maps][0];
+    return hasRoundLibrary(code) ? code : '';
+  }
+
+  function roundFiltersEnabled() {
+    return Boolean(roundFilterMap() && (filters.side === 'T' || filters.side === 'CT'));
+  }
+
+  function clearRoundTypeFilters() {
+    filters.roundOwn.clear();
+    filters.roundOpp.clear();
+    roundOwnSearch = '';
+    roundOppSearch = '';
+  }
+
+  /** Drop round-type picks that no longer apply (map/side changed). */
+  function pruneRoundTypeFilters() {
+    if (!roundFiltersEnabled()) {
+      clearRoundTypeFilters();
+      return;
+    }
+    const map = roundFilterMap();
+    const ownSide = filters.side;
+    const oppSide = ownSide === 'T' ? 'CT' : 'T';
+    const ownKeys = new Set(roundTypeRows(map, ownSide).map((r) => r.key));
+    const oppKeys = new Set(roundTypeRows(map, oppSide).map((r) => r.key));
+    for (const k of [...filters.roundOwn]) if (!ownKeys.has(k)) filters.roundOwn.delete(k);
+    for (const k of [...filters.roundOpp]) if (!oppKeys.has(k)) filters.roundOpp.delete(k);
+  }
+
+  function roundTypeFilterHtml() {
+    if (!roundFiltersEnabled()) return '';
+    const map = roundFilterMap();
+    const ownSide = filters.side;
+    const oppSide = ownSide === 'T' ? 'CT' : 'T';
+    const ownRows = roundTypeRows(map, ownSide);
+    const oppRows = roundTypeRows(map, oppSide);
+    if (!ownRows.length && !oppRows.length) return '';
+
+    const ownOptions = ownRows
+      .filter((r) => !filters.roundOwn.has(r.key))
+      .map((r) => [r.key, r.label]);
+    const oppOptions = oppRows
+      .filter((r) => !filters.roundOpp.has(r.key))
+      .map((r) => [r.key, r.label]);
+    const ownSelected = ownRows
+      .filter((r) => filters.roundOwn.has(r.key))
+      .map((r) => [r.key, r.label]);
+    const oppSelected = oppRows
+      .filter((r) => filters.roundOpp.has(r.key))
+      .map((r) => [r.key, r.label]);
+    const ownOpen = Boolean(roundOwnSearch.trim());
+    const oppOpen = Boolean(roundOppSearch.trim());
+
+    return `
+      <div class="rp-filter-group${ownOpen ? ' menu-open' : ''}">
+        <div class="rp-typeahead" id="rp-round-own-typeahead">
+          <input type="search" class="site-input rp-filter-search" id="rp-round-own-search"
+            placeholder="${escapeHtml(ownSide)} rounds…" spellcheck="false" autocomplete="off"
+            value="${escapeHtml(roundOwnSearch)}" aria-label="${escapeHtml(ownSide)} rounds" />
+          ${typeaheadMenuHtml('roundOwn', ownOptions, roundOwnSearch)}
+        </div>
+        ${selectedChipsHtml('roundOwn', ownSelected)}
+      </div>
+      <div class="rp-filter-group${oppOpen ? ' menu-open' : ''}">
+        <div class="rp-typeahead" id="rp-round-opp-typeahead">
+          <input type="search" class="site-input rp-filter-search" id="rp-round-opp-search"
+            placeholder="vs ${escapeHtml(oppSide)} rounds…" spellcheck="false" autocomplete="off"
+            value="${escapeHtml(roundOppSearch)}" aria-label="vs ${escapeHtml(oppSide)} rounds" />
+          ${typeaheadMenuHtml('roundOpp', oppOptions, roundOppSearch)}
+        </div>
+        ${selectedChipsHtml('roundOpp', oppSelected)}
+      </div>`;
+  }
+
   function selectedChipsHtml(group, items) {
     if (!items.length) return '';
     return `<div class="rp-chips rp-selected-chips">${items
@@ -1867,6 +1961,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           : ''
       }
       ${sideSegHtml(teamPicked)}
+      ${roundTypeFilterHtml()}
       ${situationSegHtml(teamPicked)}
       <div class="rp-filter-group rp-advanced-wrap">
         <div class="rp-advanced-body" id="rp-advanced-body">
@@ -1940,6 +2035,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       filters.situations.clear();
       filters.afterplant = false;
       filters.decidedPhases.clear();
+      clearRoundTypeFilters();
       filters.libraryScope = 'public';
       filters.tags.clear();
       // Early is not a valid decided filter anymore.
@@ -1953,16 +2049,36 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
   function refreshTypeaheadMenu(kind) {
     if (!filtersEl) return;
-    if (kind !== 'teams') return;
-    const group = filtersEl.querySelector('#rp-team-typeahead')?.closest('.rp-filter-group');
-    const wrap = filtersEl.querySelector('#rp-team-typeahead');
-    if (!wrap) return;
-    wrap.querySelector('.rp-typeahead-menu')?.remove();
-    const options = teamClusters
-      .filter((c) => !filters.teams.has(c.key))
-      .map((c) => [c.key, c.name]);
-    wrap.insertAdjacentHTML('beforeend', typeaheadMenuHtml('teams', options, teamSearch));
-    group?.classList.toggle('menu-open', Boolean(teamSearch.trim()));
+    if (kind === 'teams') {
+      const group = filtersEl.querySelector('#rp-team-typeahead')?.closest('.rp-filter-group');
+      const wrap = filtersEl.querySelector('#rp-team-typeahead');
+      if (!wrap) return;
+      wrap.querySelector('.rp-typeahead-menu')?.remove();
+      const options = teamClusters
+        .filter((c) => !filters.teams.has(c.key))
+        .map((c) => [c.key, c.name]);
+      wrap.insertAdjacentHTML('beforeend', typeaheadMenuHtml('teams', options, teamSearch));
+      group?.classList.toggle('menu-open', Boolean(teamSearch.trim()));
+      return;
+    }
+    if (kind === 'roundOwn' || kind === 'roundOpp') {
+      const map = roundFilterMap();
+      if (!map || (filters.side !== 'T' && filters.side !== 'CT')) return;
+      const ownSide = filters.side;
+      const forSide = kind === 'roundOpp' ? (ownSide === 'T' ? 'CT' : 'T') : ownSide;
+      const selected = kind === 'roundOpp' ? filters.roundOpp : filters.roundOwn;
+      const query = kind === 'roundOpp' ? roundOppSearch : roundOwnSearch;
+      const wrapId = kind === 'roundOpp' ? 'rp-round-opp-typeahead' : 'rp-round-own-typeahead';
+      const wrap = filtersEl.querySelector(`#${wrapId}`);
+      const group = wrap?.closest('.rp-filter-group');
+      if (!wrap) return;
+      wrap.querySelector('.rp-typeahead-menu')?.remove();
+      const options = roundTypeRows(map, forSide)
+        .filter((r) => !selected.has(r.key))
+        .map((r) => [r.key, r.label]);
+      wrap.insertAdjacentHTML('beforeend', typeaheadMenuHtml(kind, options, query));
+      group?.classList.toggle('menu-open', Boolean(query.trim()));
+    }
   }
 
   filtersEl?.addEventListener('input', (e) => {
@@ -1970,6 +2086,18 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     if (teamInput) {
       teamSearch = teamInput.value;
       refreshTypeaheadMenu('teams');
+      return;
+    }
+    const ownInput = e.target.closest('#rp-round-own-search');
+    if (ownInput) {
+      roundOwnSearch = ownInput.value;
+      refreshTypeaheadMenu('roundOwn');
+      return;
+    }
+    const oppInput = e.target.closest('#rp-round-opp-search');
+    if (oppInput) {
+      roundOppSearch = oppInput.value;
+      refreshTypeaheadMenu('roundOpp');
     }
   });
 
@@ -1979,8 +2107,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const code = mapBox.dataset.map;
     if (mapBox.checked) filters.maps.add(code);
     else filters.maps.delete(code);
+    pruneRoundTypeFilters();
     const toggle = filtersEl.querySelector('#rp-map-toggle');
     if (toggle) toggle.textContent = mapToggleLabel();
+    renderFilters();
     runQuery();
   });
 
@@ -2007,6 +2137,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     if (sideBtn && !sideBtn.disabled) {
       const side = sideBtn.dataset.advSide === 'CT' ? 'CT' : 'T';
       filters.side = filters.side === side ? '' : side;
+      pruneRoundTypeFilters();
       renderFilters();
       runQuery();
       return;
@@ -2054,13 +2185,25 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           filters.wonByMode = '';
           filters.side = '';
           filters.situations.clear();
+          clearRoundTypeFilters();
         }
         if (filters.teams.size !== 1) {
           filters.side = '';
           filters.situations.clear();
+          clearRoundTypeFilters();
         }
       }
       if (group === 'players') playerSearch = '';
+      renderFilters();
+      runQuery();
+      return;
+    }
+    if (group === 'roundOwn' || group === 'roundOpp') {
+      const set = filters[group];
+      if (set.has(value)) set.delete(value);
+      else set.add(value);
+      if (group === 'roundOwn') roundOwnSearch = '';
+      else roundOppSearch = '';
       renderFilters();
       runQuery();
     }
@@ -2110,8 +2253,14 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       filters.side ||
         filters.situations.size ||
         filters.afterplant ||
-        filters.decidedPhases.size
+        filters.decidedPhases.size ||
+        filters.roundOwn.size ||
+        filters.roundOpp.size
     );
+  }
+
+  function needsRoundTypeFilters() {
+    return Boolean(filters.roundOwn.size || filters.roundOpp.size);
   }
 
   function hasActiveFilters() {
@@ -2129,8 +2278,58 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         filters.side ||
         filters.situations.size ||
         filters.afterplant ||
-        filters.decidedPhases.size
+        filters.decidedPhases.size ||
+        filters.roundOwn.size ||
+        filters.roundOpp.size
     );
+  }
+
+  /**
+   * Load round-library tags from the stats index for the demos in `list`.
+   * Tags are not on round meta — they ride on the compact stats rows.
+   */
+  async function ensureRoundTags(list) {
+    if (!needsRoundTypeFilters()) return;
+    const demoIds = [
+      ...new Set(
+        (list || [])
+          .map((r) => r.demoId || splitStoredName(r.file)?.demoId)
+          .filter(Boolean)
+      )
+    ];
+    if (!demoIds.length) {
+      roundTagByFile = new Map();
+      return;
+    }
+    const token = ++roundTagToken;
+    try {
+      const payload = await fetchStats(demoIds);
+      if (token !== roundTagToken) return;
+      const next = new Map();
+      for (const d of payload?.demos || []) {
+        for (const row of d.rounds || []) {
+          if (!row?.f || !row.rl) continue;
+          next.set(row.f, {
+            t: (row.rl.t || []).map((x) => x.k).filter(Boolean),
+            ct: (row.rl.ct || []).map((x) => x.k).filter(Boolean)
+          });
+        }
+      }
+      roundTagByFile = next;
+    } catch {
+      if (token === roundTagToken) roundTagByFile = new Map();
+    }
+  }
+
+  function roundKeysOnSide(tags, side) {
+    if (!tags) return [];
+    return side === 'CT' ? tags.ct || [] : tags.t || [];
+  }
+
+  function roundHasAnyKey(keys, wanted) {
+    if (!wanted.size) return true;
+    for (const k of wanted) if (keys.includes(k)) return true;
+    return false;
   }
 
   function shortTeamId(value) {
@@ -2199,6 +2398,16 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     if (filters.decidedPhases.size) {
       const d = findRoundDecided(meta);
       if (!d || !filters.decidedPhases.has(d.phase)) return false;
+    }
+    if (needsRoundTypeFilters()) {
+      // Absolute T/CT tags on the stats row. Subject side is the filter side.
+      const ownSide = filters.side === 'CT' ? 'CT' : filters.side === 'T' ? 'T' : '';
+      if (ownSide !== 'T' && ownSide !== 'CT') return false;
+      const oppSide = ownSide === 'T' ? 'CT' : 'T';
+      const tags = roundTagByFile?.get(listRound?.file) || null;
+      if (!tags) return false;
+      if (!roundHasAnyKey(roundKeysOnSide(tags, ownSide), filters.roundOwn)) return false;
+      if (!roundHasAnyKey(roundKeysOnSide(tags, oppSide), filters.roundOpp)) return false;
     }
     return true;
   }
@@ -2317,6 +2526,12 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       if (token !== queryToken) return;
 
       if (needsMetaFilters()) {
+        if (needsRoundTypeFilters()) {
+          setQueryStatus('Loading round types…');
+          await ensureRoundTags(rounds);
+          if (token !== queryToken) return;
+        }
+        setQueryStatus('Applying advanced filters…');
         rounds = await applyAdvancedMetaFilters(rounds, token);
         if (token !== queryToken) return;
         setQueryStatus('');
@@ -3297,7 +3512,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           // Pop the detail entry; popstate re-applies the previous list URL.
           window.history.back();
           return true;
-        }
+        },
+        onPlayRounds: playAnalyticsRounds
       });
       statsBodyEl.appendChild(statsPanel.el);
     }

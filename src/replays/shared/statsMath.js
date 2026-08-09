@@ -60,9 +60,18 @@ const div = (a, b) => (b > 0 ? a / b : 0);
  * @property {string} [teamName]  only count rounds while the subject played under this display name
  * @property {string} [dateFrom]  inclusive start day (YYYY-MM-DD, local)
  * @property {string} [dateTo]    inclusive end day (YYYY-MM-DD, local)
- * @property {string} [roundOwn]  round-library key the subject side must have run
- * @property {string} [roundOpp]  round-library key the opposing side must have run
+ * @property {string|string[]} [roundOwn]  round-library key(s) the subject side must have run (any match)
+ * @property {string|string[]} [roundOpp]  round-library key(s) the opposing side must have run (any match)
  */
+
+/** Normalize a round-library filter field to a list of non-empty keys. */
+export function normalizeRoundKeys(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map((k) => String(k || '').trim()).filter(Boolean);
+  }
+  const s = String(raw || '').trim();
+  return s ? [s] : [];
+}
 
 /** Match / upload time for a demo (ms), or 0 when unknown. */
 export function demoTimestamp(demo) {
@@ -157,20 +166,29 @@ export function sideTrigger(row, side, key = '') {
 /**
  * Did a call on this side land inside the window?
  *
- * With a key, it asks about that call; without one, about any named call the
- * side made. An untimed tag cannot answer, so a window always excludes it —
- * "between 1:40 and 1:20" is a claim about a clock, and a round with no clock
- * on it has not made that claim.
+ * With key(s), it asks about those calls (any match); without one, about any
+ * named call the side made. An untimed tag cannot answer, so a window always
+ * excludes it — "between 1:40 and 1:20" is a claim about a clock, and a round
+ * with no clock on it has not made that claim.
  */
-export function rowTagInWindow(row, side, key, from, to) {
+export function rowTagInWindow(row, side, keyOrKeys, from, to) {
+  const keys = normalizeRoundKeys(keyOrKeys);
+  const keySet = keys.length ? new Set(keys) : null;
   const lo = Number.isFinite(from) ? from : -Infinity;
   const hi = Number.isFinite(to) ? to : Infinity;
   for (const tag of rowRoundTags(row, side)) {
-    if (key ? tag.k !== key : tag.k === 'default') continue;
+    if (keySet ? !keySet.has(tag.k) : tag.k === 'default') continue;
     const at = tagTrigger(tag);
     if (at !== null && at >= lo && at <= hi) return true;
   }
   return false;
+}
+
+/** True when the side carries any of the given keys (empty list always passes). */
+export function rowHasAnyRoundTag(row, side, keys) {
+  const list = normalizeRoundKeys(keys);
+  if (!list.length) return true;
+  return list.some((k) => rowHasRoundTag(row, side, k));
 }
 
 /**
@@ -228,19 +246,20 @@ export function rowPasses(row, filter = {}, team = 0, players = null, demos = nu
 
   // Round-library filters are absolute T/CT tags on the row. Subject side must
   // already be known (filter.side) so "our call" vs "their call" is unambiguous.
-  const roundOwn = String(filter.roundOwn || '').trim();
-  const roundOpp = String(filter.roundOpp || '').trim();
+  // Multiple keys are OR: a round passes if it ran any of the selected calls.
+  const roundOwn = normalizeRoundKeys(filter.roundOwn);
+  const roundOpp = normalizeRoundKeys(filter.roundOpp);
   const from = Number.isFinite(filter.fromSec) ? filter.fromSec : null;
   const to = Number.isFinite(filter.toSec) ? filter.toSec : null;
   const windowed = from !== null || to !== null;
-  if (roundOwn || roundOpp || windowed) {
+  if (roundOwn.length || roundOpp.length || windowed) {
     const ownSide = filter.side === 'CT' ? 'CT' : filter.side === 'T' ? 'T' : side;
     if (ownSide !== 'T' && ownSide !== 'CT') return false;
     const oppSide = ownSide === 'T' ? 'CT' : 'T';
-    if (roundOwn && !rowHasRoundTag(row, ownSide, roundOwn)) return false;
-    if (roundOpp && !rowHasRoundTag(row, oppSide, roundOpp)) return false;
-    // The window asks when the call happened. With a call picked it is that
-    // call's clock; with none picked, any named call the subject side made,
+    if (roundOwn.length && !rowHasAnyRoundTag(row, ownSide, roundOwn)) return false;
+    if (roundOpp.length && !rowHasAnyRoundTag(row, oppSide, roundOpp)) return false;
+    // The window asks when the call happened. With call(s) picked it is those
+    // calls' clocks; with none picked, any named call the subject side made,
     // which is what makes it usable as a filter on its own.
     if (windowed && !rowTagInWindow(row, ownSide, roundOwn, from, to)) return false;
   }
