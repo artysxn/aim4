@@ -261,6 +261,23 @@ export const PLAYER_METRIC_COLUMNS = [
       ])
   },
   {
+    key: 'copatt',
+    label: 'Copatt',
+    get: (p) => (Number.isFinite(p.copatt) ? p.copatt : -1),
+    cell: (p) => (Number.isFinite(p.copatt) ? f2(p.copatt) : '—'),
+    avgOf: (p) => (Number.isFinite(p.copatt) ? p.copatt : null),
+    avgFormat: f2,
+    tip: (p) =>
+      tip([
+        'Core opening attempts / round after 1:30.',
+        'First kill or death among teammates in the core.',
+        `Core opening kills: ${p.coreOpenKills || 0}`,
+        `Core opening deaths: ${p.coreOpenDeaths || 0}`,
+        `Attempts: ${(p.coreOpenKills || 0) + (p.coreOpenDeaths || 0)}`,
+        `Rounds: ${p.rounds}`
+      ])
+  },
+  {
     key: 'opkRate',
     label: 'OR',
     get: (p) =>
