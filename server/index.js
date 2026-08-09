@@ -23,6 +23,7 @@ import { handleTeamRequest } from './replays/teamRoutes.js';
 import { handleAdminRequest } from './admin/routes.js';
 import { handleAccountRequest } from './account/routes.js';
 import { handleBillingRequest } from './billing/routes.js';
+import { handleFaceitWebhookRequest } from './ingest/faceit/webhookRoutes.js';
 import { checkCaseSensitivity, sweepStaleUploads } from './replays/demoStore.js';
 import { resumeInterruptedParses, sweepBatchFiles } from './replays/jobs.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
@@ -113,6 +114,16 @@ const server = http.createServer(async (req, res) => {
     // computed over the exact bytes a provider sent, so the raw body has to
     // survive, and MAX_BODY / JSON.parse would consume it.
     if (url.pathname.startsWith('/api/billing') && (await handleBillingRequest(req, res, url))) {
+      return;
+    }
+
+    // Same raw-body reasoning as billing, plus one of its own: FACEIT retries
+    // any non-2xx, so this must answer fast and must not sit behind the JSON
+    // reader's 64 KB cap and parse.
+    if (
+      url.pathname.startsWith('/api/ingest/faceit') &&
+      (await handleFaceitWebhookRequest(req, res, url))
+    ) {
       return;
     }
 

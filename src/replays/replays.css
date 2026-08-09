@@ -5767,17 +5767,26 @@ table.rp-mine-table tbody tr {
   font-weight: 500;
 }
 
-/* The round-type table: name, clock, our winrate, usage vs the library. */
-.tm-rl-scroll {
-  overflow-x: auto;
-}
-
+/* The round-type table.
+   Fixed layout with a colgroup, so every map's table lines its columns up in
+   the same places: a panel showing five maps is five tables, and auto widths
+   would refit each one to its own longest call name. */
 .tm-rl-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font: 500 12px var(--font-body);
   font-variant-numeric: tabular-nums;
 }
+
+.tm-rl-c-name { width: auto; }
+.tm-rl-c-when { width: 3.4em; }
+.tm-rl-c-win { width: 6.4em; }
+.tm-rl-c-n { width: 2.4em; }
+.tm-rl-c-use { width: 6.4em; }
+.tm-rl-c-idx { width: 3.4em; }
+.tm-rl-c-bar { width: 4.5em; }
+.tm-rl-c-faced { width: 5em; }
 
 .tm-rl-table th {
   padding: 0 8px 4px 0;
@@ -5790,13 +5799,11 @@ table.rp-mine-table tbody tr {
   white-space: nowrap;
 }
 
-.tm-rl-table th:first-child {
-  text-align: left;
-}
-
 .tm-rl-table td {
   padding: 4px 8px 4px 0;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tm-rl-table tbody tr:nth-child(odd) {
@@ -5804,14 +5811,22 @@ table.rp-mine-table tbody tr {
 }
 
 /* A call this team has never run still earns its row: the gap is the finding. */
+.tm-rl-table tr.is-unused th,
 .tm-rl-table tr.is-unused td {
   color: var(--muted);
 }
 
+th.tm-rl-name,
+.tm-rl-table th.tm-rl-name {
+  text-align: left;
+}
+
 .tm-rl-name {
-  max-width: 14em;
+  padding: 4px 8px 4px 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
   text-align: left;
 }
 
@@ -5819,50 +5834,14 @@ table.rp-mine-table tbody tr {
   text-align: right;
 }
 
+/* Grey is the library average, everywhere it appears. */
 .tm-rl-sub {
   color: var(--muted);
   font-size: 11px;
 }
 
-.tm-rl-dash {
-  color: var(--muted);
-}
-
 .tm-rl-barcell {
-  width: 5em;
-  min-width: 4em;
-}
-
-/* Anchored at the library average: left of the line is called less often than
-   everyone else does, right of it more. */
-.tm-rl-bar {
-  display: block;
-}
-
-.tm-rl-bar-track {
-  position: relative;
-  display: block;
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.07);
-}
-
-.tm-rl-bar-track::before {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: -1px;
-  bottom: -1px;
-  width: 1px;
-  background: rgba(255, 255, 255, 0.22);
-}
-
-.tm-rl-bar-fill {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  border-radius: 2px;
-  background: var(--accent, #4e8fd9);
+  vertical-align: middle;
 }
 
 .tm-rl-note {
@@ -6922,6 +6901,103 @@ table.rp-mine-table tbody tr {
   display: flex;
   gap: 4px;
   margin-bottom: 6px;
+}
+
+/* The analyzer's grenade window readout, under its two-handle timeline. */
+.rv-az-nade-read {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font: 500 11px var(--font-body);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Two-handle range slider (lib/rangeSlider.js) ------------------------ */
+
+.rs {
+  position: relative;
+  height: 18px;
+  flex: 1 1 auto;
+  min-width: 120px;
+  touch-action: none;
+}
+
+.rs-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 4px;
+  margin-top: -2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.rs-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  background: var(--accent, #4e8fd9);
+}
+
+/* The inputs are invisible rails; only their thumbs take the pointer, so a
+   grab anywhere on the track still reaches the handle nearest to it. */
+.rs-input {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.rs-input.is-front {
+  z-index: 3;
+}
+
+.rs-input:focus {
+  outline: none;
+}
+
+.rs-input::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--surface, #14151a);
+  background: var(--accent, #4e8fd9);
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.rs-input::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--surface, #14151a);
+  background: var(--accent, #4e8fd9);
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.rs-input:active::-webkit-slider-thumb {
+  cursor: grabbing;
+}
+
+.rs-input:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.rs-input:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
 }
 
 /* The two round-clock sliders and the buy pickers above a live map. */

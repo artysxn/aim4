@@ -115,7 +115,8 @@ function mount(kind, data) {
     why: warnings.join(' | '),
     count: () => find('doc-embed-count')?.textContent || '',
     canvas: () => find('doc-embed-canvas'),
-    sliders: () => deep('doc-embed-sliders')?.children || [],
+    // One track, two handles: the inputs inside the range slider.
+    sliders: () => (deep('rs')?.children || []).filter((c) => c.tagName === 'INPUT'),
     selects: () => (deep('doc-embed-filters')?.children || []).filter((c) => c.tagName === 'SELECT')
   };
 }

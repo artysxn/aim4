@@ -24,6 +24,7 @@
 import { loadRadar } from '../replays/viewer/radarRenderer.js';
 import { RADAR_SIZE, worldToRadar } from '../replays/viewer/mapCalibration.js';
 import { NADE_COLORS, paintPanel } from '../replays/analytics/heatImage.js';
+import { createRangeSlider } from '../lib/rangeSlider.js';
 
 const NADE_WORD = {
   smokegrenade: 'smoke',
@@ -51,11 +52,11 @@ function clockAt(seconds) {
 }
 
 /**
- * The two round-clock sliders, plus optional buy pickers.
+ * The round-clock range, plus optional buy pickers.
  *
- * Two handles rather than one: the first drops everything before it, the
- * second everything after, so a reader can cut a stretch out of the middle of
- * the round and see only what happened inside it. They cannot cross.
+ * One track with two handles: the first drops everything before it, the second
+ * everything after, so a reader can cut a stretch out of the middle of the
+ * round and see only what happened inside it.
  *
  * @param {(state: {from: number, to: number, own: string, opp: string}) => void} onChange
  */
@@ -72,38 +73,18 @@ function filterBar(root, { buys = true, sliders = true, span = null, onChange })
   const readout = document.createElement('span');
   readout.className = 'doc-embed-readout';
 
-  const slider = (which) => {
-    const input = document.createElement('input');
-    input.type = 'range';
-    input.min = String(lo);
-    input.max = String(hi);
-    input.step = '1';
-    input.value = String(which === 'from' ? lo : hi);
-    input.className = 'doc-embed-slider';
-    input.setAttribute(
-      'aria-label',
-      which === 'from' ? 'Hide everything before this point' : 'Hide everything after this point'
-    );
-    input.addEventListener('input', () => {
-      const v = Number(input.value);
-      // The handles never cross: each one pushes the other along.
-      if (which === 'from') {
-        state.from = Math.min(v, state.to);
-        input.value = String(state.from);
-      } else {
-        state.to = Math.max(v, state.from);
-        input.value = String(state.to);
-      }
-      sync();
-    });
-    return input;
-  };
-
   if (sliders) {
-    const clocks = document.createElement('div');
-    clocks.className = 'doc-embed-sliders';
-    clocks.append(slider('from'), slider('to'));
-    bar.append(clocks, readout);
+    const pair = createRangeSlider({
+      min: lo,
+      max: hi,
+      label: span ? 'Time from the plant' : 'Point in the round',
+      onChange(a, b) {
+        state.from = a;
+        state.to = b;
+        sync();
+      }
+    });
+    bar.append(pair.el, readout);
   }
 
   if (buys) {

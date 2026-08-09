@@ -360,4 +360,89 @@ const tag = (k, at) => ({ k, m: at === null ? {} : { When: at } });
   );
 }
 
+// ---------------------------------------------------------------------------
+// The team overview table: fixed columns, and grey that means one thing
+// ---------------------------------------------------------------------------
+
+{
+  globalThis.document = globalThis.document || {
+    createElement: () => ({
+      className: '',
+      hidden: false,
+      innerHTML: '',
+      remove() {},
+      appendChild() {},
+      replaceChildren() {},
+      querySelector: () => null
+    })
+  };
+  const esc = (x) =>
+    String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const { createRoundListPanel } = await import('./roundListPanel.js');
+
+  const mk = (s1, w, t, ct) => ({
+    s1,
+    s2: s1 === 'T' ? 'CT' : 'T',
+    w,
+    rl: {
+      v: 7,
+      t: t.map((k) => ({ k, m: { When: 20 } })),
+      ct: ct.map((k) => ({ k, m: { When: 15 } }))
+    }
+  });
+  const panel = createRoundListPanel({ escapeHtml: esc });
+  panel.update({
+    mapCode: 'NUK',
+    teamName: 'Vitality',
+    payload: {
+      demos: [
+        {
+          map: 'NUK',
+          name1: 'Vitality',
+          name2: 'FaZe',
+          rounds: [mk('T', 1, ['a-fake'], ['two-ramp']), mk('T', 2, ['a-fake'], ['two-ramp'])]
+        },
+        {
+          map: 'NUK',
+          name1: 'Spirit',
+          name2: 'G2',
+          rounds: [mk('T', 1, ['a-fake'], ['default']), mk('T', 2, ['ramp-rush'], ['default'])]
+        }
+      ]
+    }
+  });
+  const html = panel.el.innerHTML;
+
+  // Every table declares the same columns, so a panel showing several maps
+  // lines them all up rather than refitting each to its own longest name.
+  assert.ok(html.includes('<colgroup>'), 'the table pins its columns');
+  assert.ok(html.includes('tm-rl-c-when'), 'by name, so the CSS can size them once');
+  assert.ok(html.includes('table-layout') === false, 'the layout mode lives in the CSS');
+
+  // Grey is the library, everywhere, and the panel says so.
+  assert.ok(
+    /Grey<\/span> is the library average/.test(html),
+    'the legend explains what grey means'
+  );
+
+  const body = html.slice(html.indexOf('<tbody>'), html.indexOf('</tbody>'));
+  const titles = [...body.matchAll(/title="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(
+    titles.some((t) => /We ran it 2 times and won 1 \(50\.0%\)\. Everyone else: 3 rounds at 66\.7%/.test(t)),
+    'the winrate cell shows its working, ours and theirs'
+  );
+  assert.ok(
+    titles.some((t) => /2 of our 2 T rounds is 100\.0%\. Everyone else: 3 of 4 is 75\.0%/.test(t)),
+    'and so does the usage cell'
+  );
+  assert.ok(
+    titles.some((t) => /100\.0% \/ 75\.0% = 1\.33x/.test(t)),
+    'the index says which division produced it'
+  );
+  assert.ok(
+    titles.some((t) => /Median clock we call it at/.test(t)),
+    'the clock says whose clock it is'
+  );
+}
+
 console.log('roundTiming.test.js ok');

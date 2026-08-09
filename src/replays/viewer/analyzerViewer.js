@@ -14,7 +14,8 @@ import { iconImgHtml, isGrenade } from './equipmentIcons.js';
 import { RADAR_SIZE, worldToRadar } from './mapCalibration.js';
 import { RadarRenderer, grenadeWorldPos } from './radarRenderer.js';
 import { Playback } from './playback.js';
-import { clockAt, timingFor } from './roundClock.js';
+import { ROUND_SECONDS, clockAt, timingFor } from './roundClock.js';
+import { createRangeSlider } from '../../lib/rangeSlider.js';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 const MIN_ZOOM = 1;
@@ -163,8 +164,17 @@ export function createAnalyzerViewer({
   let decidedPhaseFilter = new Set();
   /** Round-decided filters are always available (meta win% only). */
   let zoneNetworkReady = true;
-  /** @type {'regular'|'heatmap'} */
+  /** @type {'regular'|'heatmap'|'grenades'} */
   let viewMode = 'regular';
+  /**
+   * The stretch of the round the Grenades view draws, in seconds since the
+   * round went live. Grenades are plotted where they popped rather than played
+   * back, so the window is the whole control: it is how you ask "what goes
+   * down in the first fifteen seconds" and see only that.
+   */
+  let grenadeWindow = { from: 0, to: ROUND_SECONDS };
+  /** @type {ReturnType<typeof createRangeSlider>|null} */
+  let grenadeRange = null;
   /** Heatmap blur strength (slider); mapped to canvas Gaussian blur. */
   let heatmapSmooth = 18;
   /** @type {Set<string>} */
@@ -687,8 +697,20 @@ export function createAnalyzerViewer({
           <button type="button" class="rv-az-seg-btn${
             viewMode === 'heatmap' ? ' active' : ''
           }" data-view="heatmap">Heatmap</button>
+          <button type="button" class="rv-az-seg-btn${
+            viewMode === 'grenades' ? ' active' : ''
+          }" data-view="grenades">Grenades</button>
         </div>
       </div>
+      ${
+        viewMode === 'grenades'
+          ? `<div class="rv-az-group">
+        <h4>In the round</h4>
+        <div id="rv-az-nade-range"></div>
+        <p class="rv-az-nade-read" id="rv-az-nade-read"></p>
+      </div>`
+          : ''
+      }
       ${teamSwitcher}
       <div class="rv-az-group">
         <h4>Side</h4>
@@ -807,6 +829,51 @@ export function createAnalyzerViewer({
         </div>
       </div>`
       }`;
+    mountGrenadeRange();
+  }
+
+  /**
+   * The two-handle window over the round, rebuilt whenever the panel is.
+   *
+   * The slider is a real element rather than markup, so it is mounted into the
+   * slot the panel just laid out and its current window carried across.
+   */
+  function mountGrenadeRange() {
+    const slot = panelEl.querySelector('#rv-az-nade-range');
+    if (!slot) {
+      grenadeRange = null;
+      return;
+    }
+    grenadeRange = createRangeSlider({
+      min: 0,
+      max: ROUND_SECONDS,
+      from: grenadeWindow.from,
+      to: grenadeWindow.to,
+      label: 'Point in the round',
+      onChange(from, to) {
+        grenadeWindow = { from, to };
+        paintGrenadeRead();
+        draw(playback.position);
+      }
+    });
+    slot.replaceChildren(grenadeRange.el);
+    paintGrenadeRead();
+  }
+
+  function paintGrenadeRead() {
+    const read = panelEl.querySelector('#rv-az-nade-read');
+    if (!read) return;
+    const { from, to } = grenadeWindow;
+    read.textContent =
+      from === 0 && to === ROUND_SECONDS
+        ? 'Whole round'
+        : `${clockLabel(from)} to ${clockLabel(to)}`;
+  }
+
+  /** Seconds since the round went live, written the way the clock reads. */
+  function clockLabel(seconds) {
+    const left = Math.max(0, Math.round(ROUND_SECONDS - seconds));
+    return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
   }
 
   function pruneSelectionToVisible() {
@@ -1294,6 +1361,112 @@ export function createAnalyzerViewer({
     return snap;
   }
 
+  /** Which utility toggle a weapon belongs to. */
+  const UTIL_KEY = {
+    smokegrenade: 'smoke',
+    molotov: 'molotov',
+    incgrenade: 'molotov',
+    firebomb: 'molotov',
+    inferno: 'molotov',
+    flashbang: 'flash',
+    hegrenade: 'he'
+  };
+
+  const NADE_INK = {
+    smoke: '#9fb4c7',
+    molotov: '#e0703c',
+    flash: '#e8d44a',
+    he: '#7fbf7f'
+  };
+
+  /**
+   * Every grenade in the window, all rounds at once: O where it left the hand,
+   * X where it went off, a dashed line joining the two.
+   *
+   * This view is not a playback. The scrubber does nothing here, because the
+   * question is not "where is the round now" but "over these rounds, what goes
+   * down between these two moments" — which is what the window is for.
+   */
+  function paintGrenades() {
+    renderer.paintMapBase({ mapAlpha: 1 });
+    const { w, h } = renderer.resize();
+    const t = renderer.viewTransform(w, h);
+    const ctx = renderer.ctx;
+    const { from, to } = grenadeWindow;
+    const pt = { x: 0, y: 0 };
+    let shown = 0;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (const L of visibleLayers()) {
+      if (!L.meta) continue;
+      const allow = new Set(filterPlayers(L).map((p) => p.id));
+      if (!allow.size) continue;
+      for (const g of L.meta.events?.grenades || []) {
+        if (!allow.has(g.player) || !isGrenade(g.type)) continue;
+        const key = UTIL_KEY[String(g.type || '').toLowerCase().replace(/^weapon_/, '')];
+        if (!key || !utilityVisible[key]) continue;
+        const det = Number(g.detonateTick ?? g.throwTick);
+        if (!Number.isFinite(det)) continue;
+        const secs = (det - L.timing.freezeEndTick) / L.timing.tickRate;
+        if (secs < from || secs > to) continue;
+
+        const ax = Number(g.at?.x);
+        const ay = Number(g.at?.y);
+        if (!Number.isFinite(ax) || !Number.isFinite(ay)) continue;
+        renderer.project(t, ax, ay, pt);
+        const hit = { x: pt.x, y: pt.y };
+
+        const fx = Number(g.from?.x);
+        const fy = Number(g.from?.y);
+        const hasOrigin = Number.isFinite(fx) && Number.isFinite(fy);
+        let origin = null;
+        if (hasOrigin) {
+          renderer.project(t, fx, fy, pt);
+          origin = { x: pt.x, y: pt.y };
+        }
+
+        const ink = NADE_INK[key] || '#cccccc';
+        ctx.strokeStyle = ink;
+        ctx.fillStyle = ink;
+
+        if (origin) {
+          // The throw, dashed so it never reads as a wall or a sightline.
+          ctx.globalAlpha = 0.35;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.moveTo(origin.x, origin.y);
+          ctx.lineTo(hit.x, hit.y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // O: thrown from here.
+          ctx.globalAlpha = 0.8;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(origin.x, origin.y, 4, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // X: popped here.
+        ctx.globalAlpha = 0.95;
+        ctx.lineWidth = 2;
+        const r = 4.5;
+        ctx.beginPath();
+        ctx.moveTo(hit.x - r, hit.y - r);
+        ctx.lineTo(hit.x + r, hit.y + r);
+        ctx.moveTo(hit.x + r, hit.y - r);
+        ctx.lineTo(hit.x - r, hit.y + r);
+        ctx.stroke();
+        shown++;
+      }
+    }
+    ctx.restore();
+
+    clockEl.textContent = shown ? `${shown} grenades` : 'No grenades in this window';
+  }
+
   function paintHeatmap(pos) {
     const playerId = heatmapPlayerId();
     renderer.paintMapBase({ mapAlpha: 1 });
@@ -1333,6 +1506,16 @@ export function createAnalyzerViewer({
     if (!mapMeta) {
       renderer.paintMapBase({ mapAlpha: 1 });
       hideTip();
+      return;
+    }
+
+    if (viewMode === 'grenades') {
+      hideTip();
+      hoverHit = null;
+      paintGrenades();
+      const totalLoaded = layers.filter((L) => store.track(L.round.file)).length;
+      loadEl.textContent =
+        totalLoaded === layers.length ? '' : `${totalLoaded}/${layers.length} loaded`;
       return;
     }
 
@@ -1939,7 +2122,8 @@ export function createAnalyzerViewer({
     }
     const viewBtn = e.target.closest('[data-view]');
     if (viewBtn) {
-      const next = viewBtn.dataset.view === 'heatmap' ? 'heatmap' : 'regular';
+      const asked = viewBtn.dataset.view;
+      const next = asked === 'heatmap' || asked === 'grenades' ? asked : 'regular';
       if (next === viewMode) return;
       viewMode = next;
       heatLayerCache = null;

@@ -40,27 +40,67 @@ export function createRoundListPanel({ escapeHtml }) {
     </span></span>`;
   }
 
-  function rowHtml(t) {
-    const dim = t.ours.rounds ? ' class="is-unused"' : '';
-    // When the call comes is read off our own rounds where we have them, and
-    // off the library's otherwise, so an unused row still says when it happens.
-    const when = t.ours.timing || t.league.timing;
-    const faced = t.faced.rounds
-      ? `${t.faced.rounds} <span class="tm-rl-sub">${escapeHtml(fmtPct(t.faced.winrate))}</span>`
-      : '<span class="tm-rl-dash">0</span>';
-    const ran = t.ours.rounds
-      ? `${escapeHtml(fmtPct(t.ours.winrate))} <span class="tm-rl-sub">${t.ours.rounds}</span>`
-      : '<span class="tm-rl-dash">—</span>';
-    return `<tr${dim ? ' class="is-unused"' : ''} title="${escapeHtml(t.desc || '')}">
-      <td class="tm-rl-name">${escapeHtml(t.label)}</td>
-      <td class="tm-rl-num">${escapeHtml(when ? when.clock : '—')}</td>
-      <td class="tm-rl-num">${ran}</td>
-      <td class="tm-rl-num">${escapeHtml(fmtPct(t.ours.share))}<span class="tm-rl-sub"> / ${escapeHtml(
-        fmtPct(t.league.share)
-      )}</span></td>
-      <td class="tm-rl-num">${escapeHtml(fmtIndex(t.index))}</td>
-      <td class="tm-rl-barcell">${indexBar(t.index)}</td>
-      <td class="tm-rl-num">${faced}</td>
+  /** Grey is always the library: the same number for every other team. */
+  const dim = (text) => `<span class="tm-rl-sub">${text}</span>`;
+
+  function rowHtml(t, bag) {
+    const ours = t.ours;
+    const league = t.league;
+    const cell = (title, body) => `<td class="tm-rl-num" title="${escapeHtml(title)}">${body}</td>`;
+
+    const when = ours.timing || league.timing;
+    const whenTitle = ours.timing
+      ? `Median clock we call it at, over the ${ours.rounds} rounds we ran it.` +
+        (league.timing ? ` Everyone else: ${league.timing.clock}.` : '')
+      : league.timing
+        ? `We have never run this. Everyone else calls it around ${league.timing.clock}.`
+        : 'Nobody has run this on a tagged round yet.';
+
+    const winTitle = ours.rounds
+      ? `We ran it ${ours.rounds} times and won ${ours.wins} (${fmtPct(ours.winrate)}). ` +
+        `Everyone else: ${league.rounds} rounds at ${fmtPct(league.winrate)}.`
+      : `We have never run this. Everyone else: ${league.rounds} rounds at ${fmtPct(
+          league.winrate
+        )}.`;
+
+    const useTitle =
+      `${ours.rounds} of our ${bag.ourRounds} ${t.side || ''} rounds is ${fmtPct(ours.share)}. ` +
+      `Everyone else: ${league.rounds} of ${bag.leagueRounds} is ${fmtPct(league.share)}.`;
+
+    const indexTitle = Number.isFinite(t.index)
+      ? `Our share divided by the library's: ${fmtPct(ours.share)} / ${fmtPct(
+          league.share
+        )} = ${fmtIndex(t.index)}. Above 1x means we call it more than everyone else.`
+      : 'Nobody in the library has run this, so there is no average to compare against.';
+
+    const facedTitle = t.faced.rounds
+      ? `We faced it ${t.faced.rounds} times and won ${t.faced.wins} (${fmtPct(t.faced.winrate)}).`
+      : 'Nobody has run this against us.';
+
+    return `<tr${ours.rounds ? '' : ' class="is-unused"'}>
+      <th scope="row" class="tm-rl-name" title="${escapeHtml(t.desc || t.label)}">${escapeHtml(
+        t.label
+      )}</th>
+      ${cell(whenTitle, escapeHtml(when ? when.clock : '—'))}
+      ${cell(
+        winTitle,
+        ours.rounds
+          ? `${escapeHtml(fmtPct(ours.winrate))} ${dim(escapeHtml(fmtPct(league.winrate)))}`
+          : `— ${dim(escapeHtml(fmtPct(league.winrate)))}`
+      )}
+      ${cell(useTitle, ours.rounds ? String(ours.rounds) : '—')}
+      ${cell(
+        useTitle,
+        `${escapeHtml(fmtPct(ours.share))} ${dim(escapeHtml(fmtPct(league.share)))}`
+      )}
+      ${cell(indexTitle, escapeHtml(fmtIndex(t.index)))}
+      <td class="tm-rl-barcell" title="${escapeHtml(indexTitle)}">${indexBar(t.index)}</td>
+      ${cell(
+        facedTitle,
+        t.faced.rounds
+          ? `${t.faced.rounds} ${dim(escapeHtml(fmtPct(t.faced.winrate)))}`
+          : '—'
+      )}
     </tr>`;
   }
 
@@ -68,24 +108,35 @@ export function createRoundListPanel({ escapeHtml }) {
     if (!bag?.types.length) return '';
     const shown = bag.types.filter((t) => t.ours.rounds || t.faced.rounds || t.league.rounds);
     if (!shown.length) return '';
+    const th = (label, title, cls = '') =>
+      `<th${cls ? ` class="${cls}"` : ''} title="${escapeHtml(title)}">${escapeHtml(label)}</th>`;
     return `<div class="tm-rl-side">
       <p class="an-side-title">${escapeHtml(side)} rounds <small>${bag.ourRounds} run, ${bag.facedRounds} faced</small></p>
-      <div class="tm-rl-scroll">
-        <table class="tm-rl-table">
-          <thead>
-            <tr>
-              <th>Call</th>
-              <th title="Median clock the call comes at">When</th>
-              <th title="Our winrate running it, over the rounds we ran it">Ran it</th>
-              <th title="Our share of rounds against the library's">Use / avg</th>
-              <th title="How often we call it against the library average">vs avg</th>
-              <th aria-label="Usage against the average"></th>
-              <th title="Rounds we faced it, and our winrate against it">Faced</th>
-            </tr>
-          </thead>
-          <tbody>${shown.map(rowHtml).join('')}</tbody>
-        </table>
-      </div>
+      <table class="tm-rl-table">
+        <colgroup>
+          <col class="tm-rl-c-name" />
+          <col class="tm-rl-c-when" />
+          <col class="tm-rl-c-win" />
+          <col class="tm-rl-c-n" />
+          <col class="tm-rl-c-use" />
+          <col class="tm-rl-c-idx" />
+          <col class="tm-rl-c-bar" />
+          <col class="tm-rl-c-faced" />
+        </colgroup>
+        <thead>
+          <tr>
+            ${th('Call', 'The named round type, as the library defines it', 'tm-rl-name')}
+            ${th('When', 'Median clock the call comes at')}
+            ${th('Win', 'Our winrate running it, and the library average beside it')}
+            ${th('N', 'Rounds we ran it')}
+            ${th('Use', 'Our share of our own rounds, and the library share beside it')}
+            ${th('vs avg', 'Our share divided by the library share')}
+            ${th('', 'Usage against the average', 'tm-rl-barcell')}
+            ${th('Faced', 'Rounds we faced it, and our winrate against it')}
+          </tr>
+        </thead>
+        <tbody>${shown.map((t) => rowHtml({ ...t, side }, bag)).join('')}</tbody>
+      </table>
     </div>`;
   }
 
@@ -120,8 +171,12 @@ export function createRoundListPanel({ escapeHtml }) {
     const body =
       blocks.map((b) => mapHtml(b, !one)).join('') ||
       '<p class="view-empty">No tagged rounds yet.</p>';
+    // One rule for the whole table: grey is always everyone else. Without
+    // saying so the second number in each cell means three different things.
+    const legend =
+      `<p class="tm-rl-note"><span class="tm-rl-sub">Grey</span> is the library average across every team. Hover any number for how it is worked out.</p>`;
     const basis = scoped
-      ? `<p class="tm-rl-note">Averages are over this team's own matches only. Pick a map to compare against the full library.</p>`
+      ? `<p class="tm-rl-note">Those averages are over this team's own matches only. Pick a map to compare against the full library.</p>`
       : '';
     el.hidden = false;
     el.innerHTML = `
@@ -130,7 +185,7 @@ export function createRoundListPanel({ escapeHtml }) {
         ${count}
       </div>
       ${body}
-      ${basis}`;
+      ${legend}${basis}`;
   }
 
   /**
