@@ -175,6 +175,14 @@ export function createAnalyzerViewer({
   let grenadeWindow = { from: 0, to: ROUND_SECONDS };
   /** @type {ReturnType<typeof createRangeSlider>|null} */
   let grenadeRange = null;
+  /**
+   * Grenade calls the reader has picked out of the map.
+   * @type {Array<{mode:'both'|'landing'|'origin', key:string, label:string,
+   *   x:number, y:number, files:string[]}>}
+   */
+  let grenadePicks = [];
+  /** Screen and world positions of every grenade drawn in the last frame. */
+  let grenadeHits = [];
   /** Heatmap blur strength (slider); mapped to canvas Gaussian blur. */
   let heatmapSmooth = 18;
   /** @type {Set<string>} */
@@ -708,9 +716,11 @@ export function createAnalyzerViewer({
         <h4>In the round</h4>
         <div id="rv-az-nade-range"></div>
         <p class="rv-az-nade-read" id="rv-az-nade-read"></p>
+        <p class="rv-az-nade-read">Click a throw. Alt for landings, Shift+Alt for throw spots.</p>
       </div>`
           : ''
       }
+      ${grenadePicksHtml()}
       ${teamSwitcher}
       <div class="rv-az-group">
         <h4>Side</h4>
@@ -1132,6 +1142,7 @@ export function createAnalyzerViewer({
   }
 
   function clearSelection() {
+    grenadePicks = [];
     if (!selectedFiles.length) return;
     selectedFiles = [];
     clearHover();
@@ -1379,6 +1390,167 @@ export function createAnalyzerViewer({
     he: '#7fbf7f'
   };
 
+  const UTIL_LABEL = { smoke: 'Smoke', molotov: 'Molotov', flash: 'Flash', he: 'HE' };
+
+  const PICK_WORD = { both: 'throw', landing: 'lands', origin: 'thrown from' };
+
+  /**
+   * The calls picked off the grenade map.
+   *
+   * Rendered from the panel rather than the map, so it survives a change of
+   * view: pick a smoke in Grenades, switch to Heatmap, and the rounds it
+   * happened in are still the ones selected and still ready to play back.
+   */
+  function grenadePicksHtml() {
+    if (!grenadePicks.length) return '';
+    const total = Math.max(1, visibleLayers().length || layers.length);
+    const rows = grenadePicks
+      .map((pick, i) => {
+        const n = pick.files.length;
+        const pct = Math.round((n / total) * 100);
+        return `<li class="rv-az-pick">
+          <span class="rv-az-pick-dot" style="background:${NADE_INK[pick.key] || '#ccc'}"></span>
+          <span class="rv-az-pick-name">${escapeHtml(pick.label)} <small>${escapeHtml(
+            PICK_WORD[pick.mode] || pick.mode
+          )}</small></span>
+          <span class="rv-az-pick-n">${n} <small>${pct}%</small></span>
+          <button type="button" class="rv-az-pick-x" data-nade-drop="${i}" title="Remove"
+            aria-label="Remove this pick">×</button>
+        </li>`;
+      })
+      .join('');
+    return `<div class="rv-az-group">
+      <h4>Picked <small>${grenadePicks.length}</small></h4>
+      <ul class="rv-az-picks">${rows}</ul>
+      <button type="button" class="rv-az-pick-clear" data-nade-clear>Clear picks</button>
+    </div>`;
+  }
+
+  /** Drop one pick, and the rounds it alone contributed to the selection. */
+  function dropGrenadePick(index) {
+    const gone = grenadePicks[index];
+    if (!gone) return;
+    grenadePicks.splice(index, 1);
+    const keep = new Set(grenadePicks.flatMap((p) => p.files));
+    selectedFiles = selectedFiles.filter((f) => keep.has(f) || !gone.files.includes(f));
+    renderSelectedPanel();
+    renderFilters();
+    draw(playback.position);
+  }
+
+  /** How near a click has to land, in CSS pixels. */
+  const NADE_GRAB_PX = 10;
+  /** How near two grenades have to land to be the same call, in world units. */
+  const NADE_GROUP_UNITS = 220;
+
+  /** Shortest distance from a point to a line segment, all in screen space. */
+  function distToSegment(px, py, ax, ay, bx, by) {
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+  }
+
+  /**
+   * Which grenade the pointer is over, and by which part of it.
+   *
+   * A plain click takes the whole throw — the line, the O and the X are one
+   * object. Alt narrows it to where things land, Shift+Alt to where they are
+   * thrown from, which is how you separate "everything that ends up on site"
+   * from "everything thrown out of this corner".
+   *
+   * @param {'both'|'landing'|'origin'} mode
+   */
+  function grenadeAt(clientX, clientY, mode) {
+    const rect = mapEl.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    let best = null;
+    let bestD = NADE_GRAB_PX;
+    for (const g of grenadeHits) {
+      let d = Infinity;
+      if (mode !== 'origin') d = Math.min(d, Math.hypot(g.hx - x, g.hy - y));
+      if (mode !== 'landing' && g.hasOrigin) {
+        d = Math.min(d, Math.hypot(g.ox - x, g.oy - y));
+      }
+      if (mode === 'both' && g.hasOrigin) {
+        d = Math.min(d, distToSegment(x, y, g.ox, g.oy, g.hx, g.hy));
+      }
+      if (d < bestD) {
+        bestD = d;
+        best = g;
+      }
+    }
+    return best;
+  }
+
+  /** The world point a pick groups around: where it lands, or where it starts. */
+  const anchorOf = (g, mode) =>
+    mode === 'origin' ? { x: g.wox, y: g.woy } : { x: g.whx, y: g.why };
+
+  /**
+   * Every grenade of the same kind thrown at (or from) the same place.
+   *
+   * One click is one instance; what a coach wants is the call it belongs to,
+   * so the pick spreads to its neighbours and the round count that comes back
+   * is "how often do they do this", not "how often did they do this once".
+   */
+  function groupFor(seed, mode) {
+    const at = anchorOf(seed, mode);
+    const files = new Set();
+    const members = [];
+    for (const g of grenadeHits) {
+      if (g.key !== seed.key) continue;
+      if (mode === 'origin' && !g.hasOrigin) continue;
+      const p = anchorOf(g, mode);
+      if (Math.hypot(p.x - at.x, p.y - at.y) > NADE_GROUP_UNITS) continue;
+      members.push(g);
+      files.add(g.file);
+    }
+    return { at, files: [...files], members };
+  }
+
+  const pickId = (pick) => `${pick.mode}:${pick.key}:${Math.round(pick.x)}:${Math.round(pick.y)}`;
+
+  /** True when this grenade belongs to a pick, under that pick's own reading. */
+  function isPicked(g) {
+    for (const pick of grenadePicks) {
+      if (g.key !== pick.key) continue;
+      if (pick.mode === 'origin' && !g.hasOrigin) continue;
+      const p = anchorOf(g, pick.mode);
+      if (Math.hypot(p.x - pick.x, p.y - pick.y) <= NADE_GROUP_UNITS) return pick;
+    }
+    return null;
+  }
+
+  function addGrenadePick(seed, mode) {
+    const group = groupFor(seed, mode);
+    const pick = {
+      mode,
+      key: seed.key,
+      label: seed.label,
+      x: group.at.x,
+      y: group.at.y,
+      files: group.files
+    };
+    const id = pickId(pick);
+    if (grenadePicks.some((p) => pickId(p) === id)) return;
+    grenadePicks.push(pick);
+    // The round selection is the existing one, so the count, the percentage
+    // and the Replay button all come for free and survive a change of view.
+    addSelected(group.files);
+    renderFilters();
+  }
+
+  function clearGrenadePicks() {
+    if (!grenadePicks.length) return false;
+    grenadePicks = [];
+    renderFilters();
+    return true;
+  }
+
   /**
    * Every grenade in the window, all rounds at once: O where it left the hand,
    * X where it went off, a dashed line joining the two.
@@ -1386,6 +1558,9 @@ export function createAnalyzerViewer({
    * This view is not a playback. The scrubber does nothing here, because the
    * question is not "where is the round now" but "over these rounds, what goes
    * down between these two moments" — which is what the window is for.
+   *
+   * Once anything is picked the rest of the map dims, so the call stands out
+   * from the traffic around it.
    */
   function paintGrenades() {
     renderer.paintMapBase({ mapAlpha: 1 });
@@ -1394,10 +1569,8 @@ export function createAnalyzerViewer({
     const ctx = renderer.ctx;
     const { from, to } = grenadeWindow;
     const pt = { x: 0, y: 0 };
-    let shown = 0;
+    grenadeHits = [];
 
-    ctx.save();
-    ctx.lineCap = 'round';
     for (const L of visibleLayers()) {
       if (!L.meta) continue;
       const allow = new Set(filterPlayers(L).map((p) => p.id));
@@ -1411,60 +1584,111 @@ export function createAnalyzerViewer({
         const secs = (det - L.timing.freezeEndTick) / L.timing.tickRate;
         if (secs < from || secs > to) continue;
 
-        const ax = Number(g.at?.x);
-        const ay = Number(g.at?.y);
-        if (!Number.isFinite(ax) || !Number.isFinite(ay)) continue;
-        renderer.project(t, ax, ay, pt);
-        const hit = { x: pt.x, y: pt.y };
+        const whx = Number(g.at?.x);
+        const why = Number(g.at?.y);
+        if (!Number.isFinite(whx) || !Number.isFinite(why)) continue;
+        renderer.project(t, whx, why, pt);
+        const hit = cssFromCanvas(pt);
 
-        const fx = Number(g.from?.x);
-        const fy = Number(g.from?.y);
-        const hasOrigin = Number.isFinite(fx) && Number.isFinite(fy);
-        let origin = null;
+        const wox = Number(g.from?.x);
+        const woy = Number(g.from?.y);
+        const hasOrigin = Number.isFinite(wox) && Number.isFinite(woy);
+        let org = { x: hit.x, y: hit.y };
         if (hasOrigin) {
-          renderer.project(t, fx, fy, pt);
-          origin = { x: pt.x, y: pt.y };
+          renderer.project(t, wox, woy, pt);
+          org = cssFromCanvas(pt);
         }
 
-        const ink = NADE_INK[key] || '#cccccc';
-        ctx.strokeStyle = ink;
-        ctx.fillStyle = ink;
-
-        if (origin) {
-          // The throw, dashed so it never reads as a wall or a sightline.
-          ctx.globalAlpha = 0.35;
-          ctx.lineWidth = 1;
-          ctx.setLineDash([4, 4]);
-          ctx.beginPath();
-          ctx.moveTo(origin.x, origin.y);
-          ctx.lineTo(hit.x, hit.y);
-          ctx.stroke();
-          ctx.setLineDash([]);
-
-          // O: thrown from here.
-          ctx.globalAlpha = 0.8;
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.arc(origin.x, origin.y, 4, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-
-        // X: popped here.
-        ctx.globalAlpha = 0.95;
-        ctx.lineWidth = 2;
-        const r = 4.5;
-        ctx.beginPath();
-        ctx.moveTo(hit.x - r, hit.y - r);
-        ctx.lineTo(hit.x + r, hit.y + r);
-        ctx.moveTo(hit.x + r, hit.y - r);
-        ctx.lineTo(hit.x - r, hit.y + r);
-        ctx.stroke();
-        shown++;
+        grenadeHits.push({
+          file: L.round.file,
+          key,
+          label: UTIL_LABEL[key] || key,
+          hasOrigin,
+          whx,
+          why,
+          wox,
+          woy,
+          hx: hit.x,
+          hy: hit.y,
+          ox: org.x,
+          oy: org.y
+        });
       }
     }
+
+    // Screen positions above are CSS pixels, for hit testing. Painting wants
+    // canvas pixels, so the projection is redone per mark rather than scaled.
+    const rect = mapEl.getBoundingClientRect();
+    const toCanvas = (p) => ({
+      x: rect.width ? (p.x / rect.width) * w : p.x,
+      y: rect.height ? (p.y / rect.height) * h : p.y
+    });
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    let shown = 0;
+    for (const g of grenadeHits) {
+      const pick = grenadePicks.length ? isPicked(g) : null;
+      if (grenadePicks.length && !pick) {
+        // Still drawn, but faint: the traffic a call sits in is context.
+        ctx.globalAlpha = 0.12;
+      } else {
+        ctx.globalAlpha = 1;
+        if (pick) shown++;
+      }
+      const strong = !grenadePicks.length || Boolean(pick);
+      // A pick narrowed to one end draws only that end, so the reader sees
+      // exactly what they asked for.
+      const wantLine = !pick || pick.mode === 'both';
+      const wantOrigin = !pick || pick.mode !== 'landing';
+      const wantHit = !pick || pick.mode !== 'origin';
+
+      const ink = NADE_INK[g.key] || '#cccccc';
+      ctx.strokeStyle = ink;
+      ctx.fillStyle = ink;
+      const hitPt = toCanvas({ x: g.hx, y: g.hy });
+      const orgPt = toCanvas({ x: g.ox, y: g.oy });
+
+      if (g.hasOrigin && wantLine) {
+        ctx.globalAlpha *= 0.45;
+        ctx.lineWidth = strong ? 1.25 : 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(orgPt.x, orgPt.y);
+        ctx.lineTo(hitPt.x, hitPt.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha /= 0.45;
+      }
+
+      if (g.hasOrigin && wantOrigin) {
+        ctx.globalAlpha *= 0.85;
+        ctx.lineWidth = strong ? 2 : 1.5;
+        ctx.beginPath();
+        ctx.arc(orgPt.x, orgPt.y, strong ? 5 : 4, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha /= 0.85;
+      }
+
+      if (wantHit) {
+        ctx.lineWidth = strong ? 2.5 : 2;
+        const r = strong ? 5.5 : 4.5;
+        ctx.beginPath();
+        ctx.moveTo(hitPt.x - r, hitPt.y - r);
+        ctx.lineTo(hitPt.x + r, hitPt.y + r);
+        ctx.moveTo(hitPt.x + r, hitPt.y - r);
+        ctx.lineTo(hitPt.x - r, hitPt.y + r);
+        ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
     ctx.restore();
 
-    clockEl.textContent = shown ? `${shown} grenades` : 'No grenades in this window';
+    clockEl.textContent = grenadePicks.length
+      ? `${shown} of ${grenadeHits.length} grenades`
+      : grenadeHits.length
+        ? `${grenadeHits.length} grenades`
+        : 'No grenades in this window';
   }
 
   function paintHeatmap(pos) {
@@ -1862,7 +2086,9 @@ export function createAnalyzerViewer({
     const wantPan =
       e.button === 1 ||
       e.button === 2 ||
-      (e.button === 0 && e.altKey && renderer.zoom > MIN_ZOOM);
+      // Alt+left pans everywhere except the grenade map, where Alt is how you
+      // narrow a pick to landing spots. Middle and right still pan there.
+      (e.button === 0 && e.altKey && viewMode !== 'grenades' && renderer.zoom > MIN_ZOOM);
     if (wantPan && renderer.zoom > MIN_ZOOM) {
       panning = true;
       panBtn = e.button;
@@ -1972,6 +2198,22 @@ export function createAnalyzerViewer({
     }
 
     hideMarquee();
+
+    if (viewMode === 'grenades') {
+      // Plain click takes the whole throw; Alt narrows to where it lands,
+      // Shift+Alt to where it came from.
+      const mode = e.altKey ? (e.shiftKey ? 'origin' : 'landing') : 'both';
+      const g = grenadeAt(e.clientX, e.clientY, mode);
+      if (g) {
+        addGrenadePick(g, mode);
+      } else {
+        clearGrenadePicks();
+        clearSelection();
+      }
+      draw(playback.position);
+      return;
+    }
+
     const hit = hitAt(e.clientX, e.clientY);
     if (hit) openRoundTab(hit.file);
     else {
@@ -2118,6 +2360,17 @@ export function createAnalyzerViewer({
       if (!opt) return;
       applyFocusOption(opt);
       finishFocusSetup();
+      return;
+    }
+    const drop = e.target.closest('[data-nade-drop]');
+    if (drop) {
+      dropGrenadePick(Number(drop.dataset.nadeDrop));
+      return;
+    }
+    if (e.target.closest('[data-nade-clear]')) {
+      clearGrenadePicks();
+      clearSelection();
+      draw(playback.position);
       return;
     }
     const viewBtn = e.target.closest('[data-view]');
