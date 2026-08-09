@@ -1780,6 +1780,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   function pruneRoundTypeFilters() {
     if (!roundFiltersEnabled()) {
       clearRoundTypeFilters();
+      // Side without a focused team only exists to drive round-type search.
+      if (filters.teams.size !== 1) filters.side = '';
       return;
     }
     const map = roundFilterMap();
@@ -1921,6 +1923,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
 
     const teamMenuOpen = Boolean(teamSearch.trim());
     const teamPicked = filters.teams.size === 1;
+    // Side is needed for round-type search even with no team: tags are absolute
+    // T/CT. Situations stay team-scoped (opening duel from a subject side).
+    const sideEnabled = teamPicked || Boolean(roundFilterMap());
 
     filtersEl.innerHTML = `
       ${libraryScopeHtml()}
@@ -1960,7 +1965,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
             </div>`
           : ''
       }
-      ${sideSegHtml(teamPicked)}
+      ${sideSegHtml(sideEnabled)}
       ${roundTypeFilterHtml()}
       ${situationSegHtml(teamPicked)}
       <div class="rp-filter-group rp-advanced-wrap">
@@ -2181,16 +2186,16 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       else set.add(value);
       if (group === 'teams') {
         teamSearch = '';
-        if (!filters.teams.size) {
-          filters.wonByMode = '';
-          filters.side = '';
-          filters.situations.clear();
-          clearRoundTypeFilters();
-        }
+        if (!filters.teams.size) filters.wonByMode = '';
+        // Situations need a single subject team. Side + round types do not.
         if (filters.teams.size !== 1) {
-          filters.side = '';
           filters.situations.clear();
-          clearRoundTypeFilters();
+          if (!roundFilterMap()) {
+            filters.side = '';
+            clearRoundTypeFilters();
+          } else {
+            pruneRoundTypeFilters();
+          }
         }
       }
       if (group === 'players') playerSearch = '';
@@ -2385,8 +2390,9 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const focusIds = focusTeamIds();
     const idx = focusTeamIndex(meta, listRound, focusIds);
 
-    if (filters.side) {
-      if (!idx) return false;
+    if (filters.side && idx) {
+      // With a focused team, side means "that team is T/CT this round".
+      // Without a team, side only names which absolute tags round-types use.
       if (sideForIndex(meta, idx) !== filters.side) return false;
     }
     if (filters.situations.size) {
@@ -2401,6 +2407,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
     if (needsRoundTypeFilters()) {
       // Absolute T/CT tags on the stats row. Subject side is the filter side.
+      // No team required: "T rounds: Long pop" matches any round whose T side
+      // ran that call.
       const ownSide = filters.side === 'CT' ? 'CT' : filters.side === 'T' ? 'T' : '';
       if (ownSide !== 'T' && ownSide !== 'CT') return false;
       const oppSide = ownSide === 'T' ? 'CT' : 'T';
