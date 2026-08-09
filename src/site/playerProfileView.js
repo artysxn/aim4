@@ -250,7 +250,13 @@ export function initPlayerProfileView({ escapeHtml }) {
   function duelsHtml(p) {
     const kpr = p?.rounds ? p.kills / p.rounds : null;
     const over = Number.isFinite(p?.xk) && Number.isFinite(kpr) ? kpr - p.xk : null;
-    if (!Number.isFinite(p?.xk) && !Number.isFinite(p?.opatt)) return '';
+    if (
+      !Number.isFinite(p?.xk) &&
+      !Number.isFinite(p?.opatt) &&
+      !Number.isFinite(p?.copatt)
+    ) {
+      return '';
+    }
     return `
       <section class="pp-card">
         <h3 class="pp-card-title">Duels</h3>
@@ -275,7 +281,11 @@ export function initPlayerProfileView({ escapeHtml }) {
           </div>
           <div class="pp-cell">
             <span class="pp-cell-value">${f2(p?.opatt)}</span>
-            <span class="pp-cell-label">Opening attempts / r</span>
+            <span class="pp-cell-label">OPATT</span>
+          </div>
+          <div class="pp-cell" title="Core opening attempts per round after 1:30. First kill or death among teammates in the core.">
+            <span class="pp-cell-value">${f2(p?.copatt)}</span>
+            <span class="pp-cell-label">COPATT</span>
           </div>
           <div class="pp-cell">
             <span class="pp-cell-value">${pct(p?.opkRate)}</span>

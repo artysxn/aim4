@@ -52,8 +52,9 @@ import { applyMovementFields } from '../../src/replays/roles/movementFromTicks.j
 import { roundDuelBag } from '../../src/replays/duels/duelStats.js';
 import { roundTagsFor, rowTagged, rowTags } from '../../src/replays/analytics/roundTags.js';
 import { hasRoundLibrary } from '../../src/replays/analytics/roundLibrary.js';
+import { coreOpeningDuels } from '../../src/replays/shared/coreOpenings.js';
 
-// v17 adds per-player AWP primary hold seconds (row.aw) for Database aKPR.
+// v18 adds per-round core opening ids (row.cok / row.cod) for COPATT.
 // Bumping this rebuilds every index from the round files already on disk; it
 // does NOT reparse demos.
 //
@@ -61,7 +62,7 @@ import { hasRoundLibrary } from '../../src/replays/analytics/roundLibrary.js';
 // lower entry.v as stale, and that path is awaited inside demoIndex, so a bump
 // makes the next GET /stats walk every tick buffer in the library before it
 // answers. Tags carry their own ROUND_LIBRARY_VERSION instead.
-export const STATS_VERSION = 17;
+export const STATS_VERSION = 18;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -306,7 +307,7 @@ function applyPhaseBags(row, meta, playerIds, tickBuffer = null) {
   }
 }
 
-/** Phase bags / AWP Acc / PRW / duel bags missing or on a pre-v13 index. */
+/** Phase bags / AWP Acc / PRW / duel bags / core openings missing or stale. */
 function needsPhaseEnrichment(entry) {
   if (!entry?.rounds?.length) return false;
   if (Number(entry.v) < STATS_VERSION) return true;
@@ -320,7 +321,9 @@ function needsPhaseEnrichment(entry) {
       !Array.isArray(r.kt) ||
       !r.ev ||
       r.du === undefined ||
-      r.aw === undefined
+      r.aw === undefined ||
+      !Array.isArray(r.cok) ||
+      !Array.isArray(r.cod)
   );
 }
 
@@ -465,6 +468,26 @@ function applyDuelFields(row, meta, track, network) {
 }
 
 /**
+ * Core opening attempts after 1:30 (COPATT inputs).
+ * Needs ticks so findCore can see who was stacked; empty arrays when absent.
+ */
+function applyCoreOpeningFields(row, meta, track, roster) {
+  if (!track || !meta || !roster?.length) {
+    row.cok = [];
+    row.cod = [];
+    return;
+  }
+  try {
+    const { cok, cod } = coreOpeningDuels(meta, track, roster);
+    row.cok = cok;
+    row.cod = cod;
+  } catch {
+    row.cok = [];
+    row.cod = [];
+  }
+}
+
+/**
  * Refresh phase combat + AWP Acc + possession from ticks (no painted geography).
  * Also fills roles when ticks are already open (same pass).
  */
@@ -545,6 +568,7 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
       const track = new TickTrack(tickBuffer);
       await applyPossessionFields(row, meta, track, network);
       applyDuelFields(row, meta, track, network);
+      applyCoreOpeningFields(row, meta, track, roster);
       applyMovementFields(row, meta, track, roster);
       applyAwpHoldFields(row, meta, track, roster);
       if (roleWork) {
@@ -563,6 +587,8 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
       row.du = null;
       row.mv = row.mv || {};
       row.aw = row.aw || {};
+      row.cok = [];
+      row.cod = [];
     }
     await yieldEventLoop();
   }
@@ -807,6 +833,7 @@ async function buildIndex(io, user, record) {
       const track = new TickTrack(tickBuffer);
       await applyPossessionFields(row, meta, track, network);
       applyDuelFields(row, meta, track, network);
+      applyCoreOpeningFields(row, meta, track, roster);
       applyMovementFields(row, meta, track, roster);
       applyAwpHoldFields(row, meta, track, roster);
       const zones = zoneCache.get(meta.map || row.m) || network;
@@ -829,6 +856,8 @@ async function buildIndex(io, user, record) {
       row.mv = {};
       row.aw = {};
       row.rl = null;
+      row.cok = [];
+      row.cod = [];
     }
 
     rounds.push(row);

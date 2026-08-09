@@ -468,6 +468,10 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
         awpHits: 0,
         openKills: 0,
         openDeaths: 0,
+        coreOpenKills: 0,
+        coreOpenDeaths: 0,
+        /** Rounds whose index carried cok/cod (absent on pre-v18 indexes). */
+        coreOpenSeen: 0,
         swingSum: 0,
         swingRounds: 0,
         swingWonSum: 0,
@@ -540,6 +544,11 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       s.awpHits += line[P.AWP_HITS];
       if (row.ok === id) s.openKills++;
       if (row.od === id) s.openDeaths++;
+      if (Array.isArray(row.cok) || Array.isArray(row.cod)) {
+        s.coreOpenSeen++;
+        if (Array.isArray(row.cok) && row.cok.includes(id)) s.coreOpenKills++;
+        if (Array.isArray(row.cod) && row.cod.includes(id)) s.coreOpenDeaths++;
+      }
       if (row.sw && Number.isFinite(row.sw[id])) {
         const sw = row.sw[id];
         s.swingSum += sw;
@@ -641,6 +650,10 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
     const swingLost = s.swingLostRounds ? s.swingLostSum / s.swingLostRounds : null;
     const opkd = s.openKills - s.openDeaths;
     const opatt = all.rounds ? (s.openKills + s.openDeaths) / all.rounds : null;
+    const copatt =
+      s.coreOpenSeen > 0 && all.rounds
+        ? (s.coreOpenKills + s.coreOpenDeaths) / all.rounds
+        : null;
     const a4or = aim4OpeningRating({ opkd, swing, opatt });
     // Divided once, here, over exactly the rounds that passed the filter.
     const aim = aimRating(s.aim);
@@ -730,6 +743,10 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       opkd,
       /** Opening attempts per round: (OK + OD) / rounds. */
       opatt,
+      coreOpenKills: s.coreOpenKills,
+      coreOpenDeaths: s.coreOpenDeaths,
+      /** Core opening attempts per round after 1:30: (COK + COD) / rounds. */
+      copatt,
       /** Opening duel win rate, percent. */
       opkRate,
       prwSwing: swing,
