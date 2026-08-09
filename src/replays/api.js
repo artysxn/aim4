@@ -415,11 +415,73 @@ export async function saveRoundNote(file, note) {
  * stats page re-sorts and re-filters with no request, and the viewer's live
  * scoreboard can re-count rounds 1..N every time the round changes.
  *
+ * Uses an NDJSON progress stream by default so callers can show which demo is
+ * building or rebuilding. Falls back to a single JSON body if the stream is
+ * unavailable.
+ *
  * @param {string[]} [demoIds] limit to these demos; omit for the whole library
+ * @param {{ onProgress?: (p: object) => void }} [opts]
  */
-export async function fetchStats(demoIds = null) {
-  const q = demoIds?.length ? `?demos=${encodeURIComponent(demoIds.join(','))}` : '';
-  return asJson(await safeFetch(`${API_BASE}/api/replays/stats${q}`, { headers: await headers() }));
+export async function fetchStats(demoIds = null, opts = {}) {
+  const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
+  const params = new URLSearchParams();
+  if (demoIds?.length) params.set('demos', demoIds.join(','));
+  params.set('stream', '1');
+  const url = `${API_BASE}/api/replays/stats?${params}`;
+  const res = await safeFetch(url, {
+    headers: await headers({ Accept: 'application/x-ndjson, application/json' })
+  });
+  const type = String(res.headers.get('content-type') || '');
+  if (!res.ok) return asJson(res);
+  if (!/ndjson/i.test(type) || !res.body || typeof res.body.getReader !== 'function') {
+    return asJson(res);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let payload = null;
+  let streamError = null;
+
+  const handleLine = (line) => {
+    const raw = String(line || '').trim();
+    if (!raw) return;
+    let msg;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (msg.type === 'progress' || msg.type === 'start') {
+      onProgress?.(msg);
+      return;
+    }
+    if (msg.type === 'done') {
+      payload = msg.payload;
+      return;
+    }
+    if (msg.type === 'error') {
+      streamError = new Error(msg.error || 'Stats failed.');
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      handleLine(buf.slice(0, nl));
+      buf = buf.slice(nl + 1);
+    }
+  }
+  if (buf.trim()) handleLine(buf);
+
+  if (streamError) throw formatApiError(streamError);
+  if (!payload) {
+    throw formatApiError(new Error('Stats stream ended without a payload.'));
+  }
+  return payload;
 }
 
 /**

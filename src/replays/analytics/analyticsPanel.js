@@ -27,7 +27,12 @@ import {
   saveShapes,
   newShapeId
 } from './shapeFilters.js';
-import { spinnerHtml, watchSlowLoad } from '../../lib/spinner.js';
+import {
+  setSpinnerLabel,
+  spinnerHtml,
+  statsProgressLabel,
+  watchSlowLoad
+} from '../../lib/spinner.js';
 import { renderUpgradeError } from '../../site/upgradeGate.js';
 import { createSavedViews } from '../savedViews.js';
 import { createAntistratPanel } from './antistratPanel.js';
@@ -913,8 +918,14 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         antistrat?.load(payload);
         return;
       }
+      mainEl.innerHTML = spinnerHtml('Loading stats…');
       try {
-        const data = await fetchStats(null);
+        const data = await fetchStats(null, {
+          onProgress: (p) => {
+            if (token !== loadToken) return;
+            setSpinnerLabel(mainEl, statsProgressLabel(p));
+          }
+        });
         if (token !== loadToken) return;
         payload = data;
         players = listPlayers(payload);
@@ -932,17 +943,19 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     }
 
     mainEl.innerHTML = spinnerHtml('Loading pattern finder…');
-    const cancelSlow = watchSlowLoad(mainEl, {
-      message:
-        'Still loading after 4s. The stats API may be rebuilding or unreachable (Failed to fetch).'
-    });
+    const cancelSlow = watchSlowLoad(mainEl);
     try {
       await consumeCapability(CAP.ANALYTICS_PATTERN_FINDER);
       if (token !== loadToken) {
         cancelSlow();
         return;
       }
-      const data = await fetchStats(null);
+      const data = await fetchStats(null, {
+        onProgress: (p) => {
+          if (token !== loadToken) return;
+          setSpinnerLabel(mainEl, statsProgressLabel(p));
+        }
+      });
       cancelSlow();
       if (token !== loadToken) return;
       payload = data;

@@ -30,7 +30,12 @@ import {
 } from './chartFields.js';
 import { computeChart, correlationWords, filterWords } from './chartData.js';
 import { renderChart } from './chartRender.js';
-import { spinnerHtml, watchSlowLoad } from '../../lib/spinner.js';
+import {
+  setSpinnerLabel,
+  spinnerHtml,
+  statsProgressLabel,
+  watchSlowLoad
+} from '../../lib/spinner.js';
 import { createSavedViews } from '../savedViews.js';
 import { renderUpgradeError } from '../../site/upgradeGate.js';
 
@@ -1186,10 +1191,7 @@ export function createChartsPanel({ escapeHtml }) {
   async function load(scope = {}) {
     const token = ++loadToken;
     canvasEl.innerHTML = spinnerHtml('Loading charts…');
-    const cancelSlow = watchSlowLoad(canvasEl, {
-      message:
-        'Still loading charts after 4s. The stats API may be rebuilding or unreachable (Failed to fetch).'
-    });
+    const cancelSlow = watchSlowLoad(canvasEl);
     try {
       // Spending happens when the chart actually loads data, not when the route
       // opens. Free gets three of these per rolling day.
@@ -1198,7 +1200,12 @@ export function createChartsPanel({ escapeHtml }) {
         cancelSlow();
         return;
       }
-      const payload = await fetchStats(scope.demos || null);
+      const payload = await fetchStats(scope.demos || null, {
+        onProgress: (p) => {
+          if (token !== loadToken) return;
+          setSpinnerLabel(canvasEl, statsProgressLabel(p));
+        }
+      });
       cancelSlow();
       if (token !== loadToken) return;
       facts = buildFacts(payload);

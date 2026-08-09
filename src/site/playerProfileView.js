@@ -14,7 +14,7 @@
 import { fetchStats, formatApiError } from '../replays/api.js';
 import { MAPS } from '../replays/shared/roundId.js';
 import { aggregatePlayers, allRows, indexMaps } from '../replays/shared/statsMath.js';
-import { spinnerHtml } from '../lib/spinner.js';
+import { setSpinnerLabel, spinnerHtml, statsProgressLabel } from '../lib/spinner.js';
 
 /** Below this a split is noise, so it is shown as a dash rather than a number. */
 const MIN_SPLIT_ROUNDS = 20;
@@ -67,7 +67,12 @@ export function initPlayerProfileView({ escapeHtml }) {
   async function ensurePayload() {
     if (payload) return payload;
     if (!loading) {
-      loading = fetchStats()
+      loading = fetchStats(null, {
+        onProgress: (p) => {
+          if (!host) return;
+          setSpinnerLabel(host, statsProgressLabel(p));
+        }
+      })
         .then((res) => {
           payload = res;
           return res;

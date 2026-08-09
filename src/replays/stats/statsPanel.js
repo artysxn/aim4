@@ -44,7 +44,12 @@ import {
   teamMatchColumns,
   statsTableHtml
 } from './statsTables.js';
-import { spinnerHtml, watchSlowLoad } from '../../lib/spinner.js';
+import {
+  setSpinnerLabel,
+  spinnerHtml,
+  statsProgressLabel,
+  watchSlowLoad
+} from '../../lib/spinner.js';
 import { createSavedViews } from '../savedViews.js';
 import { POSITION_MAPS } from '../roles/teamPositions.js';
 
@@ -1637,7 +1642,7 @@ export function createStatsPanel({
     filtersEl.innerHTML = '';
     const cancelSlow = watchSlowLoad(bodyEl, {
       message:
-        'Still loading the database after 4s. Stats indexes may be rebuilding, or the API may be unreachable (Failed to fetch).'
+        'No response from the server yet. Check that the API is running and your connection is up.'
     });
     // Reset then overlay anything the URL / caller asked for.
     filter.maps = [];
@@ -1662,7 +1667,12 @@ export function createStatsPanel({
     detailSort = { key: 'date', dir: 'desc' };
     applyViewState(next, { notify: false });
     try {
-      const res = await fetchStats(scope.demos || null);
+      const res = await fetchStats(scope.demos || null, {
+        onProgress: (p) => {
+          if (token !== loadToken) return;
+          setSpinnerLabel(bodyEl, statsProgressLabel(p));
+        }
+      });
       cancelSlow();
       if (token !== loadToken) return;
       payload = res;

@@ -21,8 +21,39 @@
 export function spinnerHtml(label = '', opts = {}) {
   const size = opts.size === 'sm' ? ' spinner-sm' : opts.size === 'lg' ? ' spinner-lg' : '';
   const extra = opts.className ? ` ${opts.className}` : '';
-  const text = label ? `<span>${escapeHtml(label)}</span>` : '';
+  const text = label
+    ? `<span data-load-label>${escapeHtml(label)}</span>`
+    : '<span data-load-label hidden></span>';
   return `<div class="is-loading${extra}" role="status" aria-live="polite"><span class="spinner${size}" aria-hidden="true"></span>${text}<span class="sr-only">Loading</span></div>`;
+}
+
+/**
+ * Update the visible label on an in-place spinner (and clear a stale slow hint).
+ * @param {ParentNode|null} host
+ * @param {string} label
+ */
+export function setSpinnerLabel(host, label) {
+  if (!host) return;
+  const text = String(label || '').trim();
+  if (!text) return;
+  try {
+    const loading = host.classList?.contains('is-loading')
+      ? host
+      : host.querySelector?.('.is-loading');
+    if (!loading) return;
+    let el = loading.querySelector('[data-load-label]');
+    if (!el) {
+      el = document.createElement('span');
+      el.setAttribute('data-load-label', '');
+      loading.appendChild(el);
+    }
+    el.hidden = false;
+    el.textContent = text;
+    host.querySelector?.('.load-slow-hint')?.remove();
+    loading.parentElement?.querySelector?.('.load-slow-hint')?.remove();
+  } catch {
+    /* host may have been replaced mid-load */
+  }
 }
 
 /**
@@ -43,11 +74,11 @@ export function spinnerNode(label = '', opts = {}) {
   ring.setAttribute('aria-hidden', 'true');
   wrap.appendChild(ring);
 
-  if (label) {
-    const text = document.createElement('span');
-    text.textContent = label;
-    wrap.appendChild(text);
-  }
+  const text = document.createElement('span');
+  text.setAttribute('data-load-label', '');
+  if (label) text.textContent = label;
+  else text.hidden = true;
+  wrap.appendChild(text);
   return wrap;
 }
 
@@ -62,11 +93,14 @@ function escapeHtml(s) {
 export const SLOW_LOAD_MS = 4000;
 
 export const SLOW_LOAD_HINT =
-  'This is taking longer than usual. The API may be starting, rebuilding stats, or unreachable. Check the server and your connection.';
+  'No response from the server yet. Check that the API is running and your connection is up.';
 
 /**
  * After `delayMs`, append a hint under the first `.is-loading` in `host`
  * (or replace `host` contents if it is the loader). Cleared via the return value.
+ *
+ * Skips the hint when the spinner label has already been updated with real
+ * progress (that label is the honest status; a second vague line is noise).
  *
  * @param {ParentNode|null} host
  * @param {{ delayMs?: number, message?: string }} [opts]
@@ -76,11 +110,21 @@ export function watchSlowLoad(host, opts = {}) {
   if (!host) return () => {};
   const delayMs = Number.isFinite(opts.delayMs) ? opts.delayMs : SLOW_LOAD_MS;
   const message = opts.message || SLOW_LOAD_HINT;
+  const initialLabel = (() => {
+    try {
+      return host.querySelector?.('[data-load-label]')?.textContent || '';
+    } catch {
+      return '';
+    }
+  })();
   const timer = globalThis.setTimeout?.(() => {
     try {
       if (typeof host.isConnected === 'boolean' && !host.isConnected) return;
       const loading = host.querySelector?.('.is-loading') || host;
       if (!loading || loading.querySelector?.('.load-slow-hint')) return;
+      const labelNow = loading.querySelector?.('[data-load-label]')?.textContent || '';
+      // Progress already replaced the placeholder. Do not stack a second hint.
+      if (labelNow && labelNow !== initialLabel) return;
       const hint = document.createElement('p');
       hint.className = 'view-empty load-slow-hint';
       hint.textContent = message;
@@ -96,4 +140,34 @@ export function watchSlowLoad(host, opts = {}) {
   return () => {
     if (timer) globalThis.clearTimeout?.(timer);
   };
+}
+
+/**
+ * Human label for a stats-stream progress event.
+ * @param {{ done?: number, total?: number, current?: string|null, phase?: string }} p
+ */
+export function statsProgressLabel(p) {
+  if (!p || !Number(p.total)) return 'Loading stats…';
+  const done = Math.max(0, Number(p.done) || 0);
+  const total = Math.max(0, Number(p.total) || 0);
+  // `done` is completed count; while a demo is in flight show the current index.
+  const shown =
+    p.phase === 'ready' || p.phase === 'start'
+      ? `${done}/${total}`
+      : `${Math.min(done + 1, total)}/${total}`;
+  const name = p.current ? ` · ${String(p.current)}` : '';
+  switch (p.phase) {
+    case 'building':
+      return `Building stats ${shown}${name}`;
+    case 'rebuilding':
+      return `Rebuilding stats ${shown}${name}`;
+    case 'enriching':
+      return `Updating stats ${shown}${name}`;
+    case 'start':
+      return total ? `Loading stats · ${total} demos` : 'Loading stats…';
+    case 'ready':
+      return done < total ? `Loading stats ${shown}${name}` : `Loaded stats · ${total} demos`;
+    default:
+      return `Loading stats ${shown}${name}`;
+  }
 }

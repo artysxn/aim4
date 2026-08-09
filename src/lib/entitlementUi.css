@@ -32,10 +32,16 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 22px 4px;
   color: var(--muted);
   font-size: 14px;
+}
+.is-loading [data-load-label] {
+  max-width: min(36rem, 100%);
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 .load-slow-hint {
   margin: 0 0 12px;

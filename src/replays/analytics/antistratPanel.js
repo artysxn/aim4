@@ -24,7 +24,7 @@ import {
 } from './antistratConfig.js';
 import { runAntistratScan } from './antistratScan.js';
 import { PACE_TYPES } from './patternDefs.js';
-import { spinnerHtml } from '../../lib/spinner.js';
+import { setSpinnerLabel, spinnerHtml, statsProgressLabel } from '../../lib/spinner.js';
 
 /**
  * @param {{ escapeHtml: (s: string) => string }} deps
@@ -518,7 +518,12 @@ export function createAntistratPanel({ escapeHtml }) {
     fetching = true;
     el.innerHTML = spinnerHtml('Loading teams…');
     try {
-      const data = await fetchStats(null);
+      const data = await fetchStats(null, {
+        onProgress: (p) => {
+          if (token !== loadToken) return;
+          setSpinnerLabel(el, statsProgressLabel(p));
+        }
+      });
       if (token !== loadToken) return;
       applyPayload(data);
     } catch (err) {

@@ -946,11 +946,21 @@ async function stampTopPlayer(user, record, entry) {
 export async function demoIndex(io, user, record, opts = {}) {
   if (!record || record.status !== 'ready') return null;
 
+  const label = String(record.filename || record.mapName || record.id || 'demo');
+  const emit = (phase) => {
+    try {
+      opts.onProgress?.({ id: record.id, current: label, phase });
+    } catch {
+      /* progress UI must never break indexing */
+    }
+  };
+
   const key = versionKey(record);
   let entry = await loadStoredEntry(io, user, record.id);
   const keyOk = entry && keyMatchesRecord(entry.key, record);
 
   if (!entry || !keyOk) {
+    emit('building');
     entry = await buildIndex(io, user, record);
     await persistEntry(io, user, key, entry);
     await stampTopPlayer(user, record, entry);
@@ -963,6 +973,7 @@ export async function demoIndex(io, user, record, opts = {}) {
   if (entry.key !== key) entry.key = key;
 
   if (needsPhaseEnrichment(entry)) {
+    emit('rebuilding');
     await enrichPhases(io, user, entry, { roles: true });
     await persistEntry(io, user, key, entry);
     return entry;
@@ -970,6 +981,7 @@ export async function demoIndex(io, user, record, opts = {}) {
 
   if (needsTickDerivedEnrichment(entry)) {
     if (opts.roles) {
+      emit('enriching');
       await enrichTickDerived(io, user, entry);
       await persistEntry(io, user, key, entry);
     } else {
@@ -983,6 +995,7 @@ export async function demoIndex(io, user, record, opts = {}) {
     entry.pz = 0;
   }
 
+  emit('ready');
   memory.set(record.id, { key, entry });
   return entry;
 }
@@ -1012,15 +1025,48 @@ export function scheduleStatsIndex(io, user, record, done) {
 /**
  * Indexes for a whole library (or a subset of it).
  *
+ * @param {object} io
+ * @param {string} user
+ * @param {object[]} records
+ * @param {string[]|null} [demoIds]
+ * @param {{ onProgress?: (p: {
+ *   done: number,
+ *   total: number,
+ *   current: string|null,
+ *   phase: string,
+ *   id?: string
+ * }) => void }} [opts]
  * @returns {Promise<{demos: object[]}>}
  */
-export async function statsPayload(io, user, records, demoIds = null) {
+export async function statsPayload(io, user, records, demoIds = null, opts = {}) {
+  const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
   const wanted = demoIds?.length ? new Set(demoIds) : null;
-  const demos = [];
-  for (const record of records) {
+  const list = [];
+  for (const record of records || []) {
     if (wanted && !wanted.has(record.id)) continue;
-    const entry = await demoIndex(io, user, record);
+    list.push(record);
+  }
+  const total = list.length;
+  onProgress?.({ done: 0, total, current: null, phase: 'start' });
+
+  const demos = [];
+  let done = 0;
+  for (const record of list) {
+    const label = String(record.filename || record.mapName || record.id || 'demo');
+    onProgress?.({ done, total, current: label, phase: 'loading', id: record.id });
+    const entry = await demoIndex(io, user, record, {
+      onProgress: (p) =>
+        onProgress?.({
+          done,
+          total,
+          current: p.current || label,
+          phase: p.phase || 'loading',
+          id: p.id || record.id
+        })
+    });
+    done += 1;
     if (entry) demos.push(entry);
+    onProgress?.({ done, total, current: label, phase: 'ready', id: record.id });
   }
   return { demos };
 }

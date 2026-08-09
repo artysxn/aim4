@@ -975,11 +975,41 @@ export async function handleReplayRequest(req, res, url) {
     const only = csv(url, 'demos');
     const { allowed } = await readable();
     const records = allowed.filter((r) => (r.status || 'ready') === 'ready');
-    const payload = await statsPayload(statsIo, user, records, only);
-    // The aggregate is computed once and then trimmed to the caller's tier.
-    // Trimming here rather than in the client is the point: the client cannot
-    // reveal a metric it was never sent.
-    json(res, 200, gateStatsPayload(me, payload));
+    const stream =
+      url.searchParams.get('stream') === '1' ||
+      url.searchParams.get('stream') === 'true' ||
+      /application\/x-ndjson/i.test(String(req.headers.accept || ''));
+
+    if (!stream) {
+      const payload = await statsPayload(statsIo, user, records, only);
+      // The aggregate is computed once and then trimmed to the caller's tier.
+      // Trimming here rather than in the client is the point: the client cannot
+      // reveal a metric it was never sent.
+      json(res, 200, gateStatsPayload(me, payload));
+      return true;
+    }
+
+    // NDJSON progress so the Database/Analytics UIs can say which demo is
+    // building or rebuilding instead of a silent spinner for minutes.
+    res.writeHead(200, {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Accel-Buffering': 'no',
+      ...CORS
+    });
+    const writeLine = (obj) => {
+      if (res.writableEnded) return;
+      res.write(`${JSON.stringify(obj)}\n`);
+    };
+    try {
+      const payload = await statsPayload(statsIo, user, records, only, {
+        onProgress: (p) => writeLine({ type: 'progress', ...p })
+      });
+      writeLine({ type: 'done', payload: gateStatsPayload(me, payload) });
+    } catch (err) {
+      writeLine({ type: 'error', error: err?.message || 'Stats failed.' });
+    }
+    res.end();
     return true;
   }
 
