@@ -5304,11 +5304,17 @@ body.rv-open {
 }
 
 .ch-side {
+  --ch-ctrl-h: 32px;
+  --ch-ctrl-bg: #050505;
+  --ch-ctrl-bg-on: #141414;
+  --ch-ctrl-radius: var(--radius-sm);
+  --ch-ctrl-text: #5c5c62;
+  --ch-ctrl-text-on: var(--text);
   position: sticky;
   top: 12px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 6px;
   max-height: calc(100vh - 120px);
   overflow-y: auto;
   padding: 14px;
@@ -5320,19 +5326,26 @@ body.rv-open {
 .ch-block {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding-bottom: 12px;
+  gap: 6px;
+  padding-bottom: 8px;
   border-bottom: 0;
 }
 
 .ch-block.ch-after-series {
-  padding-bottom: 18px;
-  margin-bottom: 6px;
+  padding-bottom: 16px;
+  margin-bottom: 4px;
   border-bottom: 1px solid var(--border);
 }
 
 .ch-block.ch-no-rule {
   border-bottom: 0;
+  padding-bottom: 4px;
+}
+
+/* Players / Y / X / Color-by stack: tighter vertical rhythm */
+.ch-side > .ch-block.ch-no-rule {
+  gap: 4px;
+  padding-bottom: 4px;
 }
 
 .ch-subject-row {
@@ -5358,6 +5371,84 @@ body.rv-open {
 .ch-min-rounds::-webkit-outer-spin-button {
   -webkit-appearance: none;
   margin: 0;
+}
+
+/* Shared control chrome inside the Charts builder */
+.ch-side .site-select,
+.ch-side .site-input,
+.ch-side .ch-dd-summary,
+.ch-side .ch-gear,
+.ch-side .ch-date-toggle,
+.ch-side .rp-awp-toggle,
+.ch-side .btn.btn-sm,
+.ch-side .rp-seg {
+  box-sizing: border-box;
+  height: var(--ch-ctrl-h);
+  min-height: var(--ch-ctrl-h);
+  border-radius: var(--ch-ctrl-radius);
+}
+
+.ch-side .site-select,
+.ch-side .site-input,
+.ch-side .ch-dd-summary {
+  border: 0;
+  background: var(--ch-ctrl-bg);
+  color: var(--ch-ctrl-text);
+  font-weight: 300;
+  font-size: 13px;
+  line-height: calc(var(--ch-ctrl-h) - 2px);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.ch-side .site-select:hover,
+.ch-side .ch-dd-summary:hover {
+  color: var(--ch-ctrl-text);
+}
+
+.ch-side .site-input::placeholder {
+  color: var(--ch-ctrl-text);
+  font-weight: 300;
+}
+
+.ch-side .site-input:focus,
+.ch-side .site-select:focus,
+.ch-side .ch-dd-summary:focus {
+  outline: none;
+  box-shadow: none;
+  border: 0;
+  color: var(--ch-ctrl-text);
+}
+
+.ch-side .btn.btn-sm {
+  border: 0;
+  background: var(--ch-ctrl-bg);
+  color: var(--ch-ctrl-text-on);
+  font-weight: 500;
+}
+
+.ch-side .btn.btn-sm:hover {
+  background: var(--ch-ctrl-bg-on);
+  color: var(--ch-ctrl-text-on);
+}
+
+.ch-side .ch-chip {
+  border: 0;
+  background: var(--ch-ctrl-bg);
+  color: var(--ch-ctrl-text);
+  font-weight: 300;
+  border-radius: var(--ch-ctrl-radius);
+}
+
+.ch-side .ch-chip:hover {
+  color: var(--ch-ctrl-text);
+  border: 0;
+}
+
+.ch-side .ch-chip.on {
+  color: var(--ch-ctrl-text-on);
+  background: var(--ch-ctrl-bg-on);
+  border: 0;
 }
 
 .ch-label {
@@ -5400,18 +5491,18 @@ body.rv-open {
 .ch-gear {
   appearance: none;
   box-sizing: border-box;
-  flex: 0 0 32px;
-  width: 32px;
-  height: 32px;
+  flex: 0 0 var(--ch-ctrl-h, 32px);
+  width: var(--ch-ctrl-h, 32px);
+  height: var(--ch-ctrl-h, 32px);
   margin: 0;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-solid, #19191c);
-  color: var(--muted);
+  border: 0;
+  border-radius: var(--ch-ctrl-radius, var(--radius-sm));
+  background: var(--ch-ctrl-bg-on, #141414);
+  color: var(--ch-ctrl-text, #5c5c62);
   cursor: pointer;
 }
 
@@ -5419,18 +5510,18 @@ body.rv-open {
   display: block;
   width: 16px;
   height: 16px;
-  opacity: 0.85;
+  opacity: 0.75;
   pointer-events: none;
 }
 
 .ch-gear:hover,
 .ch-gear.active {
-  color: var(--text);
-  border-color: var(--accent-border, rgba(110, 168, 254, 0.55));
-  background: var(--accent-dim, rgba(110, 168, 254, 0.14));
+  color: var(--ch-ctrl-text-on, var(--text));
+  background: var(--ch-ctrl-bg-on, #141414);
 }
 
-.ch-gear.active img {
+.ch-gear.active img,
+.ch-gear:hover img {
   opacity: 1;
 }
 
@@ -5481,13 +5572,74 @@ body.rv-open {
   width: 100%;
 }
 
+/* Charts segs: no outer outline; keep the 1px split between halves */
+.ch-side .rp-seg {
+  border: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+.ch-side .rp-seg-btn {
+  border: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--ch-ctrl-bg);
+  color: var(--ch-ctrl-text);
+  font-weight: 300;
+  box-shadow: none;
+  height: 100%;
+  padding: 0 6px;
+}
+
+.ch-side .rp-seg-btn:last-child {
+  border-right: 0;
+}
+
+.ch-side .rp-seg-btn:hover {
+  background: var(--ch-ctrl-bg);
+  color: var(--ch-ctrl-text);
+}
+
+.ch-side .rp-seg-btn.active {
+  background: var(--ch-ctrl-bg-on);
+  color: var(--ch-ctrl-text-on);
+  box-shadow: none;
+}
+
+.ch-side .rp-seg-btn img {
+  opacity: 0.7;
+}
+
+.ch-side .rp-seg-btn.active img {
+  opacity: 1;
+}
+
 .ch-awp-toggle.rp-awp-toggle,
-.ch-filter-row .rp-awp-toggle {
+.ch-filter-row .rp-awp-toggle,
+.ch-side .rp-awp-toggle {
   flex: 0 0 auto;
   width: auto;
   min-width: 52px;
   padding: 0 10px;
   box-sizing: border-box;
+  border: 0;
+  border-radius: var(--ch-ctrl-radius);
+  background: var(--ch-ctrl-bg);
+  color: var(--ch-ctrl-text);
+  font-weight: 300;
+  letter-spacing: 0.04em;
+}
+
+.ch-side .rp-awp-toggle:hover {
+  border: 0;
+  color: var(--ch-ctrl-text);
+  background: var(--ch-ctrl-bg);
+}
+
+.ch-side .rp-awp-toggle.active,
+.ch-side .rp-awp-toggle:has(input:checked) {
+  border: 0;
+  background: var(--ch-ctrl-bg-on);
+  color: var(--ch-ctrl-text-on);
 }
 
 .ch-dd {
@@ -5609,14 +5761,14 @@ body.rv-open {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: var(--ch-ctrl-h, 32px);
+  height: var(--ch-ctrl-h, 32px);
   margin: 0;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-solid);
-  color: var(--muted);
+  border: 0;
+  border-radius: var(--ch-ctrl-radius, var(--radius-sm));
+  background: var(--ch-ctrl-bg-on, #141414);
+  color: var(--ch-ctrl-text, #5c5c62);
   cursor: pointer;
 }
 
@@ -5625,19 +5777,21 @@ body.rv-open {
   width: 18px;
   height: 18px;
   pointer-events: none;
-  opacity: 0.85;
+  opacity: 0.75;
 }
 
 .ch-date-toggle:hover,
 .ch-date-wrap.open .ch-date-toggle,
 .ch-date-toggle.active,
 .ch-date-wrap.has-range .ch-date-toggle {
-  color: var(--text);
-  border-color: var(--border-strong, rgba(255, 255, 255, 0.22));
+  color: var(--ch-ctrl-text-on, var(--text));
+  background: var(--ch-ctrl-bg-on, #141414);
+  border: 0;
 }
 
 .ch-date-toggle.active img,
-.ch-date-wrap.has-range .ch-date-toggle img {
+.ch-date-wrap.has-range .ch-date-toggle img,
+.ch-date-toggle:hover img {
   opacity: 1;
 }
 
@@ -5887,12 +6041,13 @@ body.rv-open {
   text-wrap: balance;
 }
 
-/* Counter-scale marks so zoom expands space without growing dots. */
-.ch-plot .ch-pt,
-.ch-plot .ch-dot {
-  transform-box: fill-box;
-  transform-origin: center;
-  transform: scale(calc(1 / var(--ch-zoom, 1)));
+.ch-marks {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
 }
 
 .ch-plot-actions {
@@ -5919,6 +6074,7 @@ body.rv-open {
 }
 
 .ch-plot-viewport {
+  position: relative;
   overflow: hidden;
   width: 100%;
   line-height: 0;

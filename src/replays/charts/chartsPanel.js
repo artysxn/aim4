@@ -33,7 +33,7 @@ import {
   filterWords,
   normalizeCompareSlot
 } from './chartData.js';
-import { renderChart } from './chartRender.js';
+import { marksToSvgCircles, renderChart } from './chartRender.js';
 import {
   setSpinnerLabel,
   spinnerHtml,
@@ -92,9 +92,15 @@ export function createChartsPanel({ escapeHtml }) {
   let loadToken = 0;
   /** @type {object[]} hover payloads, indexed by the mark's data-i */
   let hoverPoints = [];
-  /** @type {Element | null} */
-  let hotMark = null;
+  /** @type {{x:number,y:number,color:string}[]} viewBox-space scatter marks */
+  let plotMarks = [];
+  /** @type {{w:number,h:number}} */
+  let plotView = { w: 1000, h: 560 };
+  /** @type {number} hot mark index, or -1 */
+  let hotMark = -1;
   let lastModel = null;
+  /** @type {ResizeObserver | null} */
+  let marksResizeObs = null;
 
   let plotZoom = 1;
   let plotPanX = 0;
@@ -103,6 +109,9 @@ export function createChartsPanel({ escapeHtml }) {
   let panBtn = -1;
   let lastPanX = 0;
   let lastPanY = 0;
+  const MARK_R = 6;
+  const MARK_R_HOT = 9;
+  let marksDrawPending = 0;
 
   const state = {
     type: 'scatter',
@@ -975,7 +984,7 @@ export function createChartsPanel({ escapeHtml }) {
 
   function renderCanvas() {
     if (!facts) return;
-    hotMark = null;
+    hotMark = -1;
     let model;
     try {
       model = computeChart(state, facts);
@@ -986,9 +995,14 @@ export function createChartsPanel({ escapeHtml }) {
     }
     lastModel = model;
 
-    const { svg, points } = renderChart(model, { trendline: state.trendline });
+    const { svg, points, marks, view } = renderChart(model, { trendline: state.trendline });
     hoverPoints = points;
+    plotMarks = marks || [];
+    plotView = view || { w: 1000, h: 560 };
+    hotMark = -1;
     if (!svg) {
+      marksResizeObs?.disconnect();
+      marksResizeObs = null;
       canvasEl.innerHTML =
         '<p class="view-empty">Nothing matches those filters. Loosen a filter or lower Min rounds.</p>';
       detailsEl.innerHTML = '';
@@ -1027,12 +1041,15 @@ export function createChartsPanel({ escapeHtml }) {
         </div>
         <div class="ch-plot-viewport">
           <div class="ch-plot-stage">${svg}</div>
+          <canvas class="ch-marks" id="ch-marks" aria-hidden="true"></canvas>
         </div>
         <div class="ch-tip" id="ch-tip" hidden></div>
       </div>`;
 
     resetPlotView();
     applyPlotTransform();
+    bindMarksResize();
+    scheduleDrawMarks();
 
     detailsEl.innerHTML = detailsHtml(model);
   }
@@ -1059,15 +1076,114 @@ export function createChartsPanel({ escapeHtml }) {
     panBtn = -1;
   }
 
+  function marksCanvas() {
+    return canvasEl.querySelector('#ch-marks');
+  }
+
+  function bindMarksResize() {
+    marksResizeObs?.disconnect();
+    const viewport = plotViewport();
+    if (!viewport || typeof ResizeObserver !== 'function') return;
+    marksResizeObs = new ResizeObserver(() => scheduleDrawMarks());
+    marksResizeObs.observe(viewport);
+  }
+
+  /** Map viewBox → CSS pixels inside the untransformed SVG box. */
+  function viewBoxToBase(vx, vy) {
+    const stage = plotStage();
+    const svg = stage?.querySelector('svg');
+    if (!svg) return { x: 0, y: 0 };
+    const baseW = svg.clientWidth || 0;
+    const baseH = svg.clientHeight || 0;
+    const s = Math.min(baseW / plotView.w, baseH / plotView.h);
+    const ox = (baseW - plotView.w * s) / 2;
+    const oy = (baseH - plotView.h * s) / 2;
+    return { x: ox + vx * s, y: oy + vy * s };
+  }
+
+  function markScreenPos(m) {
+    const base = viewBoxToBase(m.x, m.y);
+    return {
+      x: plotPanX + plotZoom * base.x,
+      y: plotPanY + plotZoom * base.y
+    };
+  }
+
+  function scheduleDrawMarks() {
+    if (marksDrawPending) return;
+    marksDrawPending = requestAnimationFrame(() => {
+      marksDrawPending = 0;
+      drawMarks();
+    });
+  }
+
+  function drawMarks() {
+    const canvas = marksCanvas();
+    const viewport = plotViewport();
+    if (!canvas || !viewport) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = viewport.clientWidth;
+    const h = viewport.clientHeight;
+    if (w < 2 || h < 2) return;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    for (let i = 0; i < plotMarks.length; i++) {
+      const m = plotMarks[i];
+      const { x, y } = markScreenPos(m);
+      if (x < -20 || y < -20 || x > w + 20 || y > h + 20) continue;
+      const hot = i === hotMark;
+      const r = hot ? MARK_R_HOT : MARK_R;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = m.color;
+      ctx.globalAlpha = hot ? 1 : 0.82;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = hot ? 'rgba(255,255,255,0.85)' : 'rgba(20,20,20,0.9)';
+      ctx.stroke();
+    }
+  }
+
+  function hitTestMark(clientX, clientY) {
+    const viewport = plotViewport();
+    if (!viewport || !plotMarks.length) return -1;
+    const rect = viewport.getBoundingClientRect();
+    const mx = clientX - rect.left;
+    const my = clientY - rect.top;
+    const hitR = MARK_R_HOT + 2;
+    const hitR2 = hitR * hitR;
+    let best = -1;
+    let bestD = hitR2;
+    for (let i = 0; i < plotMarks.length; i++) {
+      const { x, y } = markScreenPos(plotMarks[i]);
+      const dx = x - mx;
+      const dy = y - my;
+      const d = dx * dx + dy * dy;
+      if (d <= bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
   function applyPlotTransform() {
     const stage = plotStage();
     const plot = plotRoot();
     if (!stage || !plot) return;
     stage.style.transform = `translate(${plotPanX}px, ${plotPanY}px) scale(${plotZoom})`;
-    // Keep scatter marks screen-sized while the plot zooms (easier to pick a dense cluster).
-    plot.style.setProperty('--ch-zoom', String(plotZoom));
     plot.classList.toggle('can-pan', plotZoom > MIN_ZOOM);
     plot.classList.toggle('panning', panning);
+    scheduleDrawMarks();
   }
 
   function setPlotZoom(next, clientX, clientY) {
@@ -1132,7 +1248,7 @@ export function createChartsPanel({ escapeHtml }) {
     panBtn = e.button;
     lastPanX = e.clientX;
     lastPanY = e.clientY;
-    setHotMark(null);
+    setHotIndex(-1);
     plot.classList.add('panning');
     plot.setPointerCapture(e.pointerId);
     e.preventDefault();
@@ -1589,10 +1705,17 @@ export function createChartsPanel({ escapeHtml }) {
     if (!e.target.closest('[data-save]') || !lastModel) return;
     const svg = canvasEl.querySelector('svg');
     if (!svg) return;
-    const blob = new Blob(
-      [`<?xml version="1.0" encoding="UTF-8"?>\n${svg.outerHTML}`],
-      { type: 'image/svg+xml' }
-    );
+    let markup = svg.outerHTML;
+    // Scatter marks live on the canvas; bake them into the export.
+    if (plotMarks.length) {
+      markup = markup.replace(
+        /<\/svg>\s*$/i,
+        `${marksToSvgCircles(plotMarks, MARK_R)}</svg>`
+      );
+    }
+    const blob = new Blob([`<?xml version="1.0" encoding="UTF-8"?>\n${markup}`], {
+      type: 'image/svg+xml'
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1602,18 +1725,20 @@ export function createChartsPanel({ escapeHtml }) {
   });
 
   function hideTip() {
-    hotMark?.classList.remove('hot');
-    hotMark = null;
+    hotMark = -1;
     const tip = canvasEl.querySelector('#ch-tip');
     if (tip) tip.hidden = true;
+    scheduleDrawMarks();
   }
 
-  function showTip(mark) {
+  function showTipAtIndex(i) {
     const tip = canvasEl.querySelector('#ch-tip');
     const plot = canvasEl.querySelector('#ch-plot');
-    if (!tip || !plot) return;
-    const data = hoverPoints[Number(mark.dataset.i)];
-    if (!data) return;
+    const viewport = plotViewport();
+    if (!tip || !plot || !viewport || i < 0) return;
+    const data = hoverPoints[i];
+    const mark = plotMarks[i];
+    if (!data || !mark) return;
     tip.innerHTML = `<strong>${escapeHtml(data.title)}</strong>${
       data.sub ? `<span class="ch-tip-sub">${escapeHtml(data.sub)}</span>` : ''
     }${data.rows
@@ -1623,62 +1748,68 @@ export function createChartsPanel({ escapeHtml }) {
       )
       .join('')}`;
     tip.hidden = false;
-    const box = mark.getBoundingClientRect();
+    const { x: sx, y: sy } = markScreenPos(mark);
+    const vRect = viewport.getBoundingClientRect();
     const host = plot.getBoundingClientRect();
-    const x = box.left - host.left + box.width / 2;
-    const y = box.top - host.top;
+    const x = vRect.left - host.left + sx;
+    const y = vRect.top - host.top + sy;
     tip.style.left = `${Math.round(x)}px`;
     tip.style.top = `${Math.round(y)}px`;
     tip.classList.toggle('flip', x > host.width * 0.6);
   }
 
-  function setHotMark(mark) {
-    if (hotMark === mark) {
-      if (mark) showTip(mark);
+  function setHotIndex(i) {
+    const next = Number.isFinite(i) ? i : -1;
+    if (hotMark === next) {
+      if (next >= 0) showTipAtIndex(next);
       return;
     }
-    hotMark?.classList.remove('hot');
-    hotMark = mark;
-    if (!mark) {
-      hideTip();
+    hotMark = next;
+    if (next < 0) {
+      const tip = canvasEl.querySelector('#ch-tip');
+      if (tip) tip.hidden = true;
+      scheduleDrawMarks();
       return;
     }
-    mark.classList.add('hot');
-    showTip(mark);
+    scheduleDrawMarks();
+    showTipAtIndex(next);
   }
 
   canvasEl.addEventListener('pointermove', (e) => {
     if (panning) return;
     const plot = canvasEl.querySelector('#ch-plot');
     if (!plot || !plot.contains(e.target)) {
-      setHotMark(null);
+      setHotIndex(-1);
       return;
     }
-    const mark = e.target.closest('[data-i]');
-    setHotMark(mark && plot.contains(mark) ? mark : null);
+    if (e.target.closest('.ch-plot-chrome, .ch-info, button, label')) {
+      setHotIndex(-1);
+      return;
+    }
+    setHotIndex(hitTestMark(e.clientX, e.clientY));
   });
 
-  canvasEl.addEventListener('pointerleave', () => setHotMark(null));
+  canvasEl.addEventListener('pointerleave', () => setHotIndex(-1));
 
   // Mirror macro viewer: kill sticky tips when the pointer leaves the plot
   // into side panels / chrome / another window.
   const onDocPointerMove = (e) => {
-    if (!canvasEl.isConnected || !hotMark) return;
+    if (!canvasEl.isConnected || hotMark < 0) return;
     const plot = canvasEl.querySelector('#ch-plot');
     if (!plot) return;
     if (plot.contains(e.target)) return;
-    setHotMark(null);
+    setHotIndex(-1);
   };
   document.addEventListener('pointermove', onDocPointerMove);
 
   detailsEl.addEventListener('pointerover', (e) => {
     const row = e.target.closest('[data-row]');
     if (!row) return;
-    const mark = canvasEl.querySelector(`[data-i="${row.dataset.row}"]`);
-    if (mark) setHotMark(mark);
+    const i = Number(row.dataset.row);
+    if (Number.isFinite(i)) setHotIndex(i);
   });
 
-  detailsEl.addEventListener('pointerleave', () => setHotMark(null));
+  detailsEl.addEventListener('pointerleave', () => setHotIndex(-1));
 
   // ---- load ---------------------------------------------------------------
 
@@ -1744,6 +1875,9 @@ export function createChartsPanel({ escapeHtml }) {
     mountPageHead,
     destroy() {
       document.removeEventListener('pointermove', onDocPointerMove);
+      marksResizeObs?.disconnect();
+      marksResizeObs = null;
+      if (marksDrawPending) cancelAnimationFrame(marksDrawPending);
       hideTip();
       if (pageHeadEl.isConnected) pageHeadEl.remove();
       el.remove();

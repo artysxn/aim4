@@ -59,12 +59,15 @@ function extent(values) {
 /**
  * @param {object} model  from computeChart
  * @param {{title?: string, trendline?: boolean, showZero?: boolean}} opts
- * @returns {{svg: string, points: object[]}} points are indexed by data-i
+ * @returns {{svg: string, points: object[], marks: {x:number,y:number,color:string}[], view: {w:number,h:number}}}
+ * Scatter marks are drawn on a canvas so zoom/pan never reflows SVG circles.
  */
 export function renderChart(model, opts = {}) {
   const plotW = VIEW.w - PAD.left - PAD.right;
   const plotH = VIEW.h - PAD.top - PAD.bottom;
   const hover = [];
+  /** @type {{x:number,y:number,color:string}[]} */
+  const marks = [];
 
   const isScatter = model.kind === 'scatter';
   const isBar = model.kind === 'bar';
@@ -74,7 +77,7 @@ export function renderChart(model, opts = {}) {
     ? model.points
     : model.seriesList.flatMap((s) => s.points.filter((p) => p.y !== null));
   if (!allPoints.length) {
-    return { svg: '', points: [] };
+    return { svg: '', points: [], marks: [], view: VIEW };
   }
 
   // ---- scales -------------------------------------------------------------
@@ -161,7 +164,6 @@ export function renderChart(model, opts = {}) {
     const keys = model.seriesList.length ? model.seriesList.map((s) => s.key) : [''];
     model.points.forEach((p) => {
       const ci = Math.max(0, keys.indexOf(p.seriesKey));
-      const i = hover.length;
       hover.push({
         title: p.name,
         sub: p.sub,
@@ -172,11 +174,13 @@ export function renderChart(model, opts = {}) {
           ['Rounds', String(p.rounds)]
         ]
       });
-      parts.push(
-        `<circle class="ch-pt" data-i="${i}" cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(
-          1
-        )}" r="6" fill="${colorOf(ci)}" />`
-      );
+      // Positions stay in viewBox space; the panel paints them on a canvas so
+      // zoom only redraws pixels at a fixed screen radius.
+      marks.push({
+        x: sx(p.x),
+        y: sy(p.y),
+        color: colorOf(ci)
+      });
     });
   } else {
     model.seriesList.forEach((s, si) => {
@@ -293,5 +297,17 @@ export function renderChart(model, opts = {}) {
       `${model.yLabel} against ${model.xLabel}`
     )}">${parts.join('')}</svg>`;
 
-  return { svg, points: hover };
+  return { svg, points: hover, marks, view: VIEW };
+}
+
+/** Bake canvas scatter marks into SVG markup for export. */
+export function marksToSvgCircles(marks, r = 6) {
+  return (marks || [])
+    .map(
+      (m, i) =>
+        `<circle class="ch-pt" data-i="${i}" cx="${Number(m.x).toFixed(1)}" cy="${Number(
+          m.y
+        ).toFixed(1)}" r="${r}" fill="${esc(m.color)}" />`
+    )
+    .join('');
 }
