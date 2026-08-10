@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
-import { launchContext, launchPersistentContext } from 'cloakbrowser';
+import { ensureBinary, launchContext, launchPersistentContext } from 'cloakbrowser';
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 60_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
@@ -93,6 +93,7 @@ function launchOptions(cfg = {}) {
     humanize,
     ...(humanize ? { humanPreset } : {}),
     ...(cfg.cloakLicenseKey ? { licenseKey: cfg.cloakLicenseKey } : {}),
+    geoip: bool(cfg.cloakGeoip ?? process.env.AIM4_CLOAK_GEOIP, true),
     ...(proxy ? { proxy } : {}),
     ...(downloadsPath ? { launchOptions: { downloadsPath } } : {}),
     contextOptions: {
@@ -179,6 +180,18 @@ async function clearStaleProfileLock(profilePath) {
   }
 }
 
+async function prepareLicensedProfile(profilePath, binaryPath, licensed) {
+  if (!profilePath || !licensed) return;
+  const marker = path.join(profilePath, '.licensed-browser');
+  if (await fsp.access(marker).then(() => true, () => false)) return;
+  const entries = await fsp.readdir(profilePath).catch(() => []);
+  for (const entry of entries) {
+    if (entry === '.fingerprint-seed') continue;
+    await fsp.rm(path.join(profilePath, entry), { recursive: true, force: true }).catch(() => {});
+  }
+  await fsp.writeFile(marker, path.basename(path.dirname(binaryPath)));
+}
+
 /**
  * @param {{
  *   cloakHeadless?: boolean,
@@ -187,6 +200,7 @@ async function clearStaleProfileLock(profilePath) {
  *   cloakDisableHttp2?: boolean,
  *   cloakFingerprintSeed?: string,
  *   cloakLicenseKey?: string,
+ *   cloakGeoip?: boolean,
  *   cloakProxy?: string,
  *   cloakSettleMs?: number,
  *   cloakProfileDir?: string,
@@ -219,6 +233,14 @@ export function createCloakSession(cfg = {}) {
         await clearStaleProfileLock(profilePath);
       }
       const options = launchOptions(cfg);
+      log(`Resolving CloakBrowser binary (${options.licenseKey ? 'licensed' : 'unlicensed'})`);
+      const binaryPath = await ensureBinary(
+        options.licenseKey,
+        options.browserVersion,
+        options.releaseChannel
+      );
+      log(`CloakBrowser binary: ${path.basename(path.dirname(binaryPath))}`);
+      await prepareLicensedProfile(profilePath, binaryPath, Boolean(options.licenseKey));
       if (options.headless === false) await ensureHeadedDisplay();
       const args = [];
       if (bool(cfg.cloakDisableHttp2, true)) args.push('--disable-http2');
