@@ -339,8 +339,7 @@ export function createStatsPanel({
       title="${escapeHtml(label)}"
       aria-label="${escapeHtml(label)}"
     />`;
-    return `<div class="st-filter-group st-filter-stack">
-      <span class="st-filter-label">In round</span>
+    return `<div class="st-filter-group">
       <div class="st-filter-row st-clock-row">
         ${box('fromSec', filter.fromSec, 'Calls from this point in the round')}
         ${box('toSec', filter.toSec, 'Calls up to this point in the round')}
@@ -459,8 +458,7 @@ export function createStatsPanel({
           )}${hasAwpCheck('oppHasAwp', filter.oppHasAwp)}</div>
         </div>
         ${dateRangeHtml()}
-        <div class="st-filter-group st-filter-stack">
-          <span class="st-filter-label">Min rounds</span>
+        <div class="st-filter-group">
           <input
             class="site-input st-min-rounds"
             type="number"
@@ -468,8 +466,9 @@ export function createStatsPanel({
             step="1"
             data-filter="minRounds"
             value="${filter.minRounds || 0}"
-            title="Hide rows with fewer rounds than this"
+            title="Minimum rounds played"
             aria-label="Minimum rounds played"
+            placeholder="Min"
           />
         </div>
       </div>

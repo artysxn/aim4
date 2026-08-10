@@ -136,6 +136,19 @@ export function createTimelineViewer({
           <div class="rv-duel-feed" id="rv-duel-feed" hidden></div>
         </div>
         <canvas class="rv-canvas" id="rv-canvas"></canvas>
+        <div class="rv-keys" id="rv-keys" aria-hidden="true">
+          <span class="rv-keys-key">Space</span><span class="rv-keys-action">Pause / Unpause</span>
+          <span class="rv-keys-key">Hover + S</span><span class="rv-keys-action">Copy setpos</span>
+          <span class="rv-keys-key">Scroll</span><span class="rv-keys-action">Zoom</span>
+          <span class="rv-keys-key">Mouse3</span><span class="rv-keys-action">Pan</span>
+          <span class="rv-keys-key">Mouse2</span><span class="rv-keys-action">Draw</span>
+          <span class="rv-keys-key">E</span><span class="rv-keys-action">Erase drawing</span>
+          <span class="rv-keys-key">J</span><span class="rv-keys-action">Previous round</span>
+          <span class="rv-keys-key">K</span><span class="rv-keys-action">Next round</span>
+          <span class="rv-keys-key">O</span><span class="rv-keys-action">Rewind 15s</span>
+          <span class="rv-keys-key">P</span><span class="rv-keys-action">Forward 15s</span>
+          <span class="rv-keys-key">M</span><span class="rv-keys-action">Toggle speed</span>
+        </div>
         <div class="rv-loading" id="rv-loading"></div>
       </div>
       <div class="rv-team-col">
@@ -4346,10 +4359,14 @@ export function createTimelineViewer({
       : '<svg viewBox="0 -960 960 960" width="18" height="18"><path d="M320-200v-560l440 280-440 280Z"/></svg>';
   }
 
-  speedBtn.addEventListener('click', () => {
+  function cycleSpeed() {
     speedIndex = (speedIndex + 1) % SPEEDS.length;
     playback.setSpeed(SPEEDS[speedIndex]);
     speedBtn.textContent = `x${SPEEDS[speedIndex]}`;
+  }
+
+  speedBtn.addEventListener('click', () => {
+    cycleSpeed();
   });
 
   /** Slot currently under the pointer in a side panel, or -1. */
@@ -4435,6 +4452,21 @@ export function createTimelineViewer({
       if (activeIndex < files.length - 1) selectRound(activeIndex + 1, { seek: true });
       return;
     }
+    if (key === 'o') {
+      e.preventDefault();
+      playback.nudge(-15);
+      return;
+    }
+    if (key === 'p') {
+      e.preventDefault();
+      playback.nudge(15);
+      return;
+    }
+    if (key === 'm') {
+      e.preventDefault();
+      cycleSpeed();
+      return;
+    }
     if (key === 's') {
       if (hoverSlot < 0) return;
       e.preventDefault();
@@ -4462,6 +4494,8 @@ export function createTimelineViewer({
     const overlap = rosterRow
       ? 0
       : Math.max(0, Math.min(chromeH - 12, stageH * 0.35));
+    // Keep the hotkey legend clear of the floating transport when it overlays the map.
+    el.style.setProperty('--rv-keys-inset', `${overlap + 10}px`);
     if (renderer.viewInset.bottom !== overlap) {
       renderer.viewInset.bottom = overlap;
       return true;

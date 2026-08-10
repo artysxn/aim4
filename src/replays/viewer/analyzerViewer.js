@@ -71,6 +71,7 @@ export function createAnalyzerViewer({
         <div class="rv-analyzer-clock" id="rv-az-clock">1:55</div>
         <div class="rv-az-marquee" id="rv-az-marquee" hidden></div>
         <div class="rv-az-tip" id="rv-az-tip" hidden></div>
+        <div class="rv-keys" id="rv-az-keys" hidden></div>
       </div>
       <aside class="rv-analyzer-selected" id="rv-az-selected">
         <ul class="rv-az-sel-list" id="rv-az-sel-list"></ul>
@@ -108,6 +109,7 @@ export function createAnalyzerViewer({
   const canvas = el.querySelector('#rv-az-canvas');
   const marqueeEl = el.querySelector('#rv-az-marquee');
   const tipEl = el.querySelector('#rv-az-tip');
+  const keysEl = el.querySelector('#rv-az-keys');
   const selListEl = el.querySelector('#rv-az-sel-list');
   const selSummaryEl = el.querySelector('#rv-az-sel-summary');
   const replayBtn = el.querySelector('#rv-az-replay');
@@ -716,7 +718,6 @@ export function createAnalyzerViewer({
         <h4>In the round</h4>
         <div id="rv-az-nade-range"></div>
         <p class="rv-az-nade-read" id="rv-az-nade-read"></p>
-        <p class="rv-az-nade-read">Click a throw. Alt for landings, Shift+Alt for throw spots.</p>
       </div>`
           : ''
       }
@@ -840,6 +841,7 @@ export function createAnalyzerViewer({
       </div>`
       }`;
     mountGrenadeRange();
+    syncKeysHint();
   }
 
   /**
@@ -878,6 +880,30 @@ export function createAnalyzerViewer({
       from === 0 && to === ROUND_SECONDS
         ? 'Whole round'
         : `${clockLabel(from)} to ${clockLabel(to)}`;
+  }
+
+  /** Bottom-right key legend on the map (grenade view only). */
+  function syncKeysHint() {
+    if (!keysEl) return;
+    if (viewMode !== 'grenades') {
+      keysEl.hidden = true;
+      keysEl.innerHTML = '';
+      return;
+    }
+    const rows = [
+      ['Left click', 'Select'],
+      ['Alt + Left click', 'Select detonation spots'],
+      ['Shift + Alt + Left click', 'Select release spots']
+    ];
+    keysEl.innerHTML = rows
+      .map(
+        ([key, action]) =>
+          `<span class="rv-keys-key">${escapeHtml(key)}</span><span class="rv-keys-action">${escapeHtml(
+            action
+          )}</span>`
+      )
+      .join('');
+    keysEl.hidden = false;
   }
 
   /** Seconds since the round went live, written the way the clock reads. */
