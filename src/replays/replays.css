@@ -5322,11 +5322,42 @@ body.rv-open {
   flex-direction: column;
   gap: 7px;
   padding-bottom: 12px;
+  border-bottom: 0;
+}
+
+.ch-block.ch-after-series {
+  padding-bottom: 18px;
+  margin-bottom: 6px;
   border-bottom: 1px solid var(--border);
 }
 
-.ch-block:last-child {
+.ch-block.ch-no-rule {
   border-bottom: 0;
+}
+
+.ch-subject-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ch-subject-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ch-min-rounds {
+  flex: 0 0 72px;
+  width: 72px;
+  min-width: 0;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.ch-min-rounds::-webkit-inner-spin-button,
+.ch-min-rounds::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .ch-label {
@@ -5362,7 +5393,8 @@ body.rv-open {
 .ch-axis-select {
   flex: 1 1 auto;
   min-width: 0;
-  max-width: 220px;
+  width: 100%;
+  max-width: none;
 }
 
 .ch-gear {
@@ -5417,11 +5449,13 @@ body.rv-open {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
 }
 
 .ch-filter-row .ch-dd {
   flex: 1 1 auto;
   min-width: 0;
+  width: auto;
 }
 
 .ch-round-segs {
@@ -5429,6 +5463,7 @@ body.rv-open {
   align-items: stretch;
   gap: 8px;
   flex-wrap: wrap;
+  width: 100%;
 }
 
 .ch-round-segs .rp-seg {
@@ -5437,43 +5472,22 @@ body.rv-open {
   width: auto;
 }
 
-.ch-seg-wl {
-  border-color: color-mix(in srgb, #e8c547 55%, var(--border));
-}
-
-.ch-seg-wl .rp-seg-btn.active {
-  border-color: color-mix(in srgb, #e8c547 70%, var(--border));
-  background: color-mix(in srgb, #e8c547 22%, transparent);
-  color: #f6e7a2;
-}
-
-.ch-seg-adv {
-  border-color: color-mix(in srgb, #6ea8fe 55%, var(--border));
-}
-
-.ch-seg-adv .rp-seg-btn.active {
-  border-color: color-mix(in srgb, #6ea8fe 70%, var(--border));
-  background: color-mix(in srgb, #6ea8fe 22%, transparent);
-  color: #c9ddff;
-}
-
-.ch-seg-half {
-  border-color: color-mix(in srgb, #6fcf97 55%, var(--border));
-}
-
-.ch-seg-half .rp-seg-btn.active {
-  border-color: color-mix(in srgb, #6fcf97 70%, var(--border));
-  background: color-mix(in srgb, #6fcf97 22%, transparent);
-  color: #c8f0d8;
-}
-
 .ch-side-seg {
-  width: 72px;
+  width: 100%;
   flex: 0 0 auto;
 }
 
-.ch-awp-toggle {
+.ch-filter > .ch-side-seg {
+  width: 100%;
+}
+
+.ch-awp-toggle.rp-awp-toggle,
+.ch-filter-row .rp-awp-toggle {
   flex: 0 0 auto;
+  width: auto;
+  min-width: 52px;
+  padding: 0 10px;
+  box-sizing: border-box;
 }
 
 .ch-dd {
@@ -5567,7 +5581,98 @@ body.rv-open {
 
 .ch-metric-dd {
   flex: 1 1 auto;
-  max-width: 220px;
+  min-width: 0;
+  max-width: none;
+  width: 100%;
+}
+
+.ch-compare-games-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.ch-compare-games-dd {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ch-date-wrap {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+}
+
+.ch-date-toggle {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.ch-date-toggle img {
+  display: block;
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+  opacity: 0.85;
+}
+
+.ch-date-toggle:hover,
+.ch-date-wrap.open .ch-date-toggle,
+.ch-date-toggle.active,
+.ch-date-wrap.has-range .ch-date-toggle {
+  color: var(--text);
+  border-color: var(--border-strong, rgba(255, 255, 255, 0.22));
+}
+
+.ch-date-toggle.active img,
+.ch-date-wrap.has-range .ch-date-toggle img {
+  opacity: 1;
+}
+
+.ch-date-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 200px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid, #19191c);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.ch-date-popover[hidden] {
+  display: none;
+}
+
+.ch-date-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font: 600 11px var(--font-body);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ch-date-field .site-input {
+  width: 100%;
 }
 
 .ch-range {
@@ -5760,7 +5865,7 @@ body.rv-open {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 12px 0;
+  padding: 16px 14px 10px;
   pointer-events: none;
 }
 
@@ -5771,14 +5876,23 @@ body.rv-open {
 
 .ch-title {
   margin: 0;
+  padding-bottom: 6px;
   max-width: min(70%, 36rem);
   font-family: var(--font-display);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  line-height: 1.25;
+  line-height: 1.35;
   color: var(--text);
   text-wrap: balance;
+}
+
+/* Counter-scale marks so zoom expands space without growing dots. */
+.ch-plot .ch-pt,
+.ch-plot .ch-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(calc(1 / var(--ch-zoom, 1)));
 }
 
 .ch-plot-actions {
@@ -6031,7 +6145,7 @@ table.ch-table {
 
 table.ch-table th,
 table.ch-table td {
-  padding: 6px 10px;
+  padding: 10px 12px;
   text-align: right;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
@@ -6060,6 +6174,17 @@ table.ch-table tbody tr:hover {
 
 .ch-name {
   color: var(--text);
+}
+
+.ch-link {
+  color: inherit;
+  text-decoration: underline dotted rgba(255, 255, 255, 0.28);
+  text-underline-offset: 3px;
+}
+
+.ch-link:hover {
+  color: var(--text);
+  text-decoration-color: rgba(255, 255, 255, 0.55);
 }
 
 /* Quieter labels use Mori Extralight */

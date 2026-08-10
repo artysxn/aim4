@@ -26,6 +26,7 @@ import {
   seriesFor
 } from './chartFields.js';
 import settingsIcon from '../../icons/icon_settings.svg?url';
+import calendarIcon from '../../icons/icon_calendar.svg?url';
 import {
   computeChart,
   correlationWords,
@@ -119,8 +120,8 @@ export function createChartsPanel({ escapeHtml }) {
     /** Two sides (A/B), each a player or team, optionally narrowed to maps or games. */
     compare: {
       on: false,
-      a: { kind: '', id: '', maps: [], matches: [] },
-      b: { kind: '', id: '', maps: [], matches: [] }
+      a: { kind: '', id: '', maps: [], matches: [], dateFrom: '', dateTo: '' },
+      b: { kind: '', id: '', maps: [], matches: [], dateFrom: '', dateTo: '' }
     }
   };
 
@@ -134,8 +135,11 @@ export function createChartsPanel({ escapeHtml }) {
   let axisFilterOpen = { x: false, y: false };
 
   function emptyCompareSlot() {
-    return { kind: '', id: '', maps: [], matches: [] };
+    return { kind: '', id: '', maps: [], matches: [], dateFrom: '', dateTo: '' };
   }
+
+  /** @type {Record<'a'|'b', boolean>} */
+  let compareCalendarOpen = { a: false, b: false };
 
   function compareSlotEntity(s) {
     const slot = normalizeCompareSlot(s || {});
@@ -587,8 +591,7 @@ export function createChartsPanel({ escapeHtml }) {
             { key: 'won', label: 'Won', short: 'W' },
             { key: 'lost', label: 'Lost', short: 'L' }
           ],
-          f.result || '',
-          'ch-seg-wl'
+          f.result || ''
         )}
         ${exclusiveSeg(
           scope,
@@ -597,8 +600,7 @@ export function createChartsPanel({ escapeHtml }) {
             { key: '5v4', label: '5v4', short: '5v4' },
             { key: '4v5', label: '4v5', short: '4v5' }
           ],
-          f.opening || '',
-          'ch-seg-adv'
+          f.opening || ''
         )}
         ${exclusiveSeg(
           scope,
@@ -607,8 +609,7 @@ export function createChartsPanel({ escapeHtml }) {
             { key: '1', label: '1st half', short: '1. half' },
             { key: '2', label: '2nd half', short: '2. half' }
           ],
-          f.half || '',
-          'ch-seg-half'
+          f.half || ''
         )}
       </div>`,
       `<div class="ch-range ch-range-fill">
@@ -687,12 +688,94 @@ export function createChartsPanel({ escapeHtml }) {
     <div class="rp-typeahead-menu an-subject-menu" id="ch-compare-menu-${slot}" hidden></div>`;
   }
 
+  function dayStartMs(iso) {
+    if (!iso) return null;
+    const t = Date.parse(`${iso}T00:00:00`);
+    return Number.isFinite(t) ? t : null;
+  }
+
+  function dayEndMs(iso) {
+    if (!iso) return null;
+    const t = Date.parse(`${iso}T23:59:59.999`);
+    return Number.isFinite(t) ? t : null;
+  }
+
+  /** Select compare-slot games whose upload date falls in the slot's date range. */
+  function applyCompareDateRange(slotKey) {
+    const slot = state.compare[slotKey];
+    if (!slot) return;
+    const from = dayStartMs(slot.dateFrom);
+    const to = dayEndMs(slot.dateTo);
+    if (from == null && to == null) {
+      slot.matches = [];
+      return;
+    }
+    const opts = matchesForCompareSlot(slot);
+    slot.matches = opts
+      .filter((m) => {
+        const t = Number(m.uploadedAt) || 0;
+        if (!t) return false;
+        if (from != null && t < from) return false;
+        if (to != null && t > to) return false;
+        return true;
+      })
+      .map((m) => String(m.id));
+  }
+
+  function compareGamesDropdown(slot, matchOpts, selected) {
+    const sel = (selected || []).map(String);
+    const selSet = new Set(sel);
+    const checks = matchOpts
+      .map(
+        (m) => `<label class="ch-dd-opt">
+        <input type="checkbox" data-compare-match-check="${slot}" value="${escapeHtml(String(m.id))}" ${
+          selSet.has(String(m.id)) ? 'checked' : ''
+        } />
+        <span>${escapeHtml(m.label)}</span>
+      </label>`
+      )
+      .join('');
+    const empty = 'Games';
+    const summary = !sel.length
+      ? empty
+      : sel.length === 1
+        ? matchOpts.find((m) => String(m.id) === sel[0])?.label || sel[0]
+        : `${sel.length} games`;
+    return `<details class="ch-dd ch-compare-games-dd" data-ch-dd="compare|${slot}">
+      <summary class="site-select ch-dd-summary" aria-label="Games">${escapeHtml(summary)}</summary>
+      <div class="ch-dd-menu" role="group" aria-label="Games">${checks}</div>
+    </details>`;
+  }
+
+  function compareCalendarHtml(slot, s) {
+    const open = Boolean(compareCalendarOpen[slot]);
+    const active = Boolean(s.dateFrom || s.dateTo);
+    return `<div class="ch-date-wrap${open ? ' open' : ''}${active ? ' has-range' : ''}">
+      <button type="button" class="ch-date-toggle${active ? ' active' : ''}" data-compare-calendar="${slot}"
+        aria-expanded="${open ? 'true' : 'false'}" aria-label="Date range" title="Date range">
+        <img src="${calendarIcon}" alt="" width="18" height="18" draggable="false" />
+      </button>
+      <div class="ch-date-popover" ${open ? '' : 'hidden'}>
+        <label class="ch-date-field">
+          <span>From</span>
+          <input class="site-input" type="date" data-compare-date="${slot}|from"
+            value="${escapeHtml(s.dateFrom || '')}" aria-label="From date" />
+        </label>
+        <label class="ch-date-field">
+          <span>To</span>
+          <input class="site-input" type="date" data-compare-date="${slot}|to"
+            value="${escapeHtml(s.dateTo || '')}" aria-label="To date" />
+        </label>
+      </div>
+    </div>`;
+  }
+
   function compareSlotHtml(slot) {
     const s = state.compare[slot] || emptyCompareSlot();
     const maps = (facts?.maps || []).map((m) => ({ key: m, label: MAPS[m]?.name || m }));
     const selMaps = new Set((s.maps || []).map(String));
     const matchOpts = matchesForCompareSlot(s);
-    const selMatches = new Set((s.matches || []).map(String));
+    const selMatches = (s.matches || []).map(String);
     const entity = compareSlotEntity(s);
     return `
       <div class="ch-compare-slot" data-compare-slot="${slot}">
@@ -716,18 +799,9 @@ export function createChartsPanel({ escapeHtml }) {
         }
         ${
           matchOpts.length
-            ? `<div class="ch-compare-games">
-                <span class="ch-label">Games${selMatches.size ? ` (${selMatches.size})` : ''}</span>
-                <div class="ch-chips ch-compare-match-chips" role="group" title="Optional: limit this side to specific games. None selected means all.">
-                  ${matchOpts
-                    .map((m) => {
-                      const on = selMatches.has(String(m.id));
-                      return `<button type="button" class="ch-chip${on ? ' on' : ''}" data-compare-match="${slot}" data-value="${escapeHtml(
-                        String(m.id)
-                      )}" aria-pressed="${on ? 'true' : 'false'}">${escapeHtml(m.label)}</button>`;
-                    })
-                    .join('')}
-                </div>
+            ? `<div class="ch-compare-games-row">
+                ${compareGamesDropdown(slot, matchOpts, selMatches)}
+                ${compareCalendarHtml(slot, s)}
               </div>`
             : entity
               ? `<p class="ch-hint">No games for this selection with the current maps.</p>`
@@ -750,17 +824,23 @@ export function createChartsPanel({ escapeHtml }) {
     const comparing = Boolean(state.compare?.on);
 
     sideEl.innerHTML = `
-      <div class="ch-block ch-saved" id="ch-saved"></div>
-      <div class="ch-block">
-        ${selectHtml(
-          'data-subject',
-          SUBJECTS.map((s) => ({ key: s.key, label: s.label })),
-          state.subject
-        )}
+      <div class="ch-block ch-saved ch-no-rule" id="ch-saved"></div>
+      <div class="ch-block ch-no-rule">
+        <div class="ch-subject-row">
+          ${selectHtml(
+            'data-subject',
+            SUBJECTS.map((s) => ({ key: s.key, label: s.label })),
+            state.subject,
+            { cls: 'site-select ch-subject-select' }
+          )}
+          <input class="site-input ch-min-rounds" type="number" min="0" value="${
+            state.minRounds
+          }" data-opt="minRounds" aria-label="Min rounds" title="Min rounds" />
+        </div>
         ${compareSlotsBlock()}
       </div>
 
-      <div class="ch-block">
+      <div class="ch-block ch-no-rule">
         <div class="ch-axis-row">
           ${metricSelect('y', state.y.metric, 'Y Axis')}
           ${axisGear('y')}
@@ -770,7 +850,7 @@ export function createChartsPanel({ escapeHtml }) {
         </div>
       </div>
 
-      <div class="ch-block">
+      <div class="ch-block ch-no-rule">
         <div class="ch-axis-row">
           ${metricSelect('x', state.x.metric, 'X Axis')}
           ${axisGear('x')}
@@ -780,19 +860,11 @@ export function createChartsPanel({ escapeHtml }) {
         </div>
       </div>
 
-      <div class="ch-block"${comparing ? ' hidden' : ''}>
+      <div class="ch-block ch-after-series"${comparing ? ' hidden' : ''}>
         ${selectHtml('data-series', seriesOpts, state.series, { placeholder: 'Color by' })}
       </div>
 
-      <div class="ch-block">
-        <div class="ch-range">
-          <label class="ch-mini">Min rounds<input class="site-input" type="number" min="0" value="${
-            state.minRounds
-          }" data-opt="minRounds" /></label>
-        </div>
-      </div>
-
-      <div class="ch-block">
+      <div class="ch-block ch-no-rule">
         ${filterHtml('g', state.filter)}
       </div>`;
     for (const slot of ['a', 'b']) refreshCompareMenu(slot);
@@ -822,14 +894,54 @@ export function createChartsPanel({ escapeHtml }) {
     return a ? name(a) : name(b);
   }
 
+  function dbPlayerHref(id, label) {
+    const q = new URLSearchParams();
+    q.set('player', String(id));
+    if (label && label !== id) q.set('label', String(label));
+    return `/database?${q.toString()}`;
+  }
+
+  function dbTeamHref(name, label = name) {
+    const q = new URLSearchParams();
+    q.set('team', String(name));
+    if (label && label !== name) q.set('label', String(label));
+    return `/database?${q.toString()}`;
+  }
+
+  function subjectCellHtml(p) {
+    const subj = findSubject(state.subject);
+    const name = p.name || '';
+    if (!name) return '';
+    if (subj.source === 'player') {
+      const playerId = String(p.id || '').split(':')[0];
+      if (!playerId) return escapeHtml(name);
+      return `<a class="ch-link" href="${escapeHtml(dbPlayerHref(playerId, name))}">${escapeHtml(name)}</a>`;
+    }
+    if (subj.source === 'round') {
+      return `<a class="ch-link" href="${escapeHtml(dbTeamHref(name))}">${escapeHtml(name)}</a>`;
+    }
+    return escapeHtml(name);
+  }
+
+  function subCellHtml(p) {
+    const text = p.sub || p.seriesLabel || '';
+    if (!text) return '';
+    const subj = findSubject(state.subject);
+    // Player rows carry the team name in `sub`.
+    if (subj.source === 'player' && p.sub) {
+      return `<a class="ch-link" href="${escapeHtml(dbTeamHref(p.sub))}">${escapeHtml(p.sub)}</a>`;
+    }
+    return escapeHtml(text);
+  }
+
   function detailsHtml(model) {
     if (model.kind === 'scatter') {
       const rows = model.points
         .slice(0, 40)
         .map(
           (p, i) =>
-            `<tr data-row="${i}"><td class="ch-name">${escapeHtml(p.name)}</td><td>${escapeHtml(
-              p.sub || p.seriesLabel || ''
+            `<tr data-row="${i}"><td class="ch-name">${subjectCellHtml(p)}</td><td>${subCellHtml(
+              p
             )}</td><td>${escapeHtml(formatValue(p.x, model.xFmt))}</td><td>${escapeHtml(
               formatValue(p.y, model.yFmt)
             )}</td><td>${p.rounds}</td></tr>`
@@ -952,6 +1064,8 @@ export function createChartsPanel({ escapeHtml }) {
     const plot = plotRoot();
     if (!stage || !plot) return;
     stage.style.transform = `translate(${plotPanX}px, ${plotPanY}px) scale(${plotZoom})`;
+    // Keep scatter marks screen-sized while the plot zooms (easier to pick a dense cluster).
+    plot.style.setProperty('--ch-zoom', String(plotZoom));
     plot.classList.toggle('can-pan', plotZoom > MIN_ZOOM);
     plot.classList.toggle('panning', panning);
   }
@@ -1202,8 +1316,20 @@ export function createChartsPanel({ escapeHtml }) {
       if (at >= 0) cur.splice(at, 1);
       else cur.push(val);
       slot.maps = cur;
-      const allowed = new Set(matchesForCompareSlot(slot).map((m) => String(m.id)));
-      slot.matches = (slot.matches || []).map(String).filter((id) => allowed.has(id));
+      if (slot.dateFrom || slot.dateTo) applyCompareDateRange(slotKey);
+      else {
+        const allowed = new Set(matchesForCompareSlot(slot).map((m) => String(m.id)));
+        slot.matches = (slot.matches || []).map(String).filter((id) => allowed.has(id));
+      }
+      afterChange();
+      return;
+    }
+    const compareCal = e.target.closest('[data-compare-calendar]');
+    if (compareCal) {
+      const slotKey = compareCal.dataset.compareCalendar === 'b' ? 'b' : 'a';
+      compareCalendarOpen[slotKey] = !compareCalendarOpen[slotKey];
+      const other = slotKey === 'a' ? 'b' : 'a';
+      compareCalendarOpen[other] = false;
       afterChange();
       return;
     }
@@ -1251,7 +1377,20 @@ export function createChartsPanel({ escapeHtml }) {
   });
 
   document.addEventListener('pointerdown', (e) => {
-    if (!sideEl.contains(e.target)) closeDdMenus();
+    if (!sideEl.contains(e.target)) {
+      closeDdMenus();
+      if (compareCalendarOpen.a || compareCalendarOpen.b) {
+        compareCalendarOpen = { a: false, b: false };
+        afterChange();
+      }
+      return;
+    }
+    if (!e.target.closest?.('.ch-date-wrap')) {
+      if (compareCalendarOpen.a || compareCalendarOpen.b) {
+        compareCalendarOpen = { a: false, b: false };
+        afterChange();
+      }
+    }
   });
   window.addEventListener(
     'scroll',
@@ -1332,6 +1471,38 @@ export function createChartsPanel({ escapeHtml }) {
 
   function onBuilderChange(e) {
     const t = e.target;
+    if (t.matches('[data-compare-match-check]')) {
+      const slotKey = t.dataset.compareMatchCheck === 'b' ? 'b' : 'a';
+      if (!state.compare[slotKey]) state.compare[slotKey] = emptyCompareSlot();
+      const boxes = [
+        ...sideEl.querySelectorAll(`input[type="checkbox"][data-compare-match-check="${slotKey}"]`)
+      ];
+      state.compare[slotKey].matches = boxes.filter((b) => b.checked).map((b) => b.value);
+      const details = t.closest('details.ch-dd');
+      const summary = details?.querySelector('summary');
+      if (summary) {
+        const n = state.compare[slotKey].matches.length;
+        summary.textContent =
+          n === 0
+            ? 'Games'
+            : n === 1
+              ? boxes.find((b) => b.checked)?.parentElement?.querySelector('span')?.textContent ||
+                '1 game'
+              : `${n} games`;
+      }
+      afterChange({ rebuildSide: false });
+      return;
+    }
+    if (t.matches('[data-compare-date]')) {
+      const [slotKey, which] = String(t.dataset.compareDate || '').split('|');
+      if (slotKey !== 'a' && slotKey !== 'b') return;
+      if (!state.compare[slotKey]) state.compare[slotKey] = emptyCompareSlot();
+      if (which === 'from') state.compare[slotKey].dateFrom = t.value || '';
+      if (which === 'to') state.compare[slotKey].dateTo = t.value || '';
+      applyCompareDateRange(slotKey);
+      afterChange();
+      return;
+    }
     if (t.matches('[data-chip-check]')) {
       const [scope, key] = t.dataset.chipCheck.split('|');
       const f = filterFor(scope);

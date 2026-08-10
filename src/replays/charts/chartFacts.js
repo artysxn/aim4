@@ -50,7 +50,7 @@ export function buildFacts(payload) {
   const teams = new Map();
   /** @type {Map<string, {id: string, name: string, rounds: number}>} */
   const players = new Map();
-  /** @type {Map<string, {id: string, label: string, map: string, rounds: number}>} */
+  /** @type {Map<string, {id: string, label: string, map: string, rounds: number, uploadedAt: number}>} */
   const matches = new Map();
   /** @type {Map<string, number>} */
   const maps = new Map();
@@ -291,8 +291,15 @@ export function buildFacts(payload) {
         teams.set(teamKey, t);
       }
 
-      const m = matches.get(demo.id) || { id: demo.id, label: matchLabel, map, rounds: 0 };
+      const m = matches.get(demo.id) || {
+        id: demo.id,
+        label: matchLabel,
+        map,
+        rounds: 0,
+        uploadedAt: Number(demo.uploadedAt) || 0
+      };
       m.rounds++;
+      if (!m.uploadedAt && demo.uploadedAt) m.uploadedAt = Number(demo.uploadedAt) || 0;
       matches.set(demo.id, m);
 
       // ---- kills ----------------------------------------------------------

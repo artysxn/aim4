@@ -19,7 +19,7 @@ export const SERIES_COLORS = [
 ];
 
 const VIEW = { w: 1000, h: 560 };
-const PAD = { top: 28, right: 28, bottom: 64, left: 78 };
+const PAD = { top: 56, right: 28, bottom: 64, left: 78 };
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);

@@ -28,23 +28,25 @@ function factsForSource(facts, source) {
  */
 export function normalizeCompareSlot(raw) {
   if (!raw || typeof raw !== 'object') {
-    return { kind: '', id: '', maps: [], matches: [] };
+    return { kind: '', id: '', maps: [], matches: [], dateFrom: '', dateTo: '' };
   }
   const maps = Array.isArray(raw.maps) ? raw.maps.map(String).filter(Boolean) : [];
   const matches = Array.isArray(raw.matches) ? raw.matches.map(String).filter(Boolean) : [];
+  const dateFrom = String(raw.dateFrom || '').trim();
+  const dateTo = String(raw.dateTo || '').trim();
   if (raw.kind === 'team') {
     const id = String(raw.id || raw.teamKey || '').trim();
-    return { kind: id ? 'team' : '', id, maps, matches };
+    return { kind: id ? 'team' : '', id, maps, matches, dateFrom, dateTo };
   }
   if (raw.kind === 'player') {
     const id = String(raw.id || raw.playerId || '').trim();
-    return { kind: id ? 'player' : '', id, maps, matches };
+    return { kind: id ? 'player' : '', id, maps, matches, dateFrom, dateTo };
   }
   const legacyPlayer = String(raw.playerId || raw.id || '').trim();
   if (legacyPlayer) {
-    return { kind: 'player', id: legacyPlayer, maps, matches };
+    return { kind: 'player', id: legacyPlayer, maps, matches, dateFrom, dateTo };
   }
-  return { kind: '', id: '', maps, matches };
+  return { kind: '', id: '', maps, matches, dateFrom, dateTo };
 }
 
 /** @returns {null | { kind: 'team'|'player', id: string }} */
