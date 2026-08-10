@@ -46,6 +46,11 @@ export function loadConfig(overrides = {}) {
     userAgent:
       env.AIM4_INGEST_USER_AGENT || 'aim4.io-ingest/1.0 (+https://aim4.io; contact@aim4.io)',
     maxArchiveBytes: num(env.AIM4_INGEST_MAX_ARCHIVE_BYTES, 2 * 1024 ** 3),
+    /** CloakBrowser transport shared by discovery, downloads, and the probe. */
+    cloakHeadless: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_HEADLESS || 'true'),
+    cloakHumanize: /^(1|true|yes|on)$/i.test(env.AIM4_CLOAK_HUMANIZE || ''),
+    cloakProxy: env.AIM4_CLOAK_PROXY || '',
+    cloakSettleMs: num(env.AIM4_CLOAK_SETTLE_MS, 5000),
 
     /** How often the continuous runner looks for newly finished matches. */
     pollIntervalMs: num(env.AIM4_INGEST_POLL_MS, 5 * 60 * 1000),

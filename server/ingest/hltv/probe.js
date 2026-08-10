@@ -3,11 +3,10 @@
 // One admin-triggered check: can this host download a demo archive from a
 // given URL, parse it, and keep only the .aim4replay packages?
 //
-// This is a measurement tool, not a crawler. It sends exactly one request
-// chain with the project's honest User-Agent, and when the answer is a
-// Cloudflare challenge it reports that and stops, same line fetcher.js draws:
-// no fingerprint games, no retries into a challenge, no workarounds. The
-// point is to produce an evidence log an operator can read and quote.
+// This is a measurement tool, not a crawler. It opens exactly one admin-supplied
+// URL in CloakBrowser and captures the first automatic download. The same
+// browser transport is used by the live ingestion source, so a successful
+// probe is representative of the pipeline rather than a separate fetch test.
 //
 // What a successful run leaves behind:
 //   <stateDir>/probe/<runId>/<map>.aim4replay     the kept packages
@@ -20,17 +19,15 @@
 // the API server down with it. One probe at a time, enforced here.
 // ---------------------------------------------------------------------------
 
-import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import net from 'node:net';
 import dns from 'node:dns/promises';
 import { fork } from 'node:child_process';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { looksLikeChallenge } from './fetcher.js';
+import { createCloakSession } from './cloakBrowser.js';
 import { unpackArchive } from './process.js';
 import { rarSupport } from '../../replays/archive.js';
 
@@ -439,7 +436,7 @@ function packageDemoForked(demoFile, outPath, meta, onProgress) {
 
 /**
  * Start a probe. Returns the initial state, or { busy: true } when one is
- * already running. `hooks.packageDemo` exists for tests, nothing else.
+ * already running. Hooks exist for isolated tests; production passes none.
  */
 export async function startProbe(url, hooks = {}) {
   if (state.current?.running) return { busy: true, ...state.current };
@@ -477,6 +474,7 @@ async function executeProbe(c, run, urlObj, hooks) {
   const outDir = path.join(c.stateDir, 'probe', run.runId);
   const packageDemo = hooks.packageDemo || packageDemoForked;
   let archivePath = null;
+  let browser = null;
 
   const finish = async (verdict, summary) => {
     run.running = false;
@@ -493,61 +491,39 @@ async function executeProbe(c, run, urlObj, hooks) {
   try {
     log('info', `Probe ${run.runId} starting on this server`);
     log('info', `Target: ${urlObj.href}`);
-    log('info', `User-Agent: ${c.userAgent} (the project's own, sent honestly)`);
+    log('info', 'Transport: CloakBrowser (the same transport used by ingestion)');
 
-    // -- fetch ------------------------------------------------------------
+    // -- browser + download ----------------------------------------------
     const t0 = Date.now();
-    const { res, finalUrl } = await follow(urlObj.href, {
-      userAgent: c.userAgent,
-      signal: state.abort.signal,
-      log,
-      allowPrivate: Boolean(hooks.allowPrivate)
+    await checkTarget(urlObj, Boolean(hooks.allowPrivate));
+    const makeBrowser = hooks.createBrowser || createCloakSession;
+    browser = makeBrowser({
+      ...c,
+      validateUrl: async (target) => {
+        const next = new URL(target);
+        await checkTarget(next, Boolean(hooks.allowPrivate));
+      },
+      onLog: (message) => log('info', message)
     });
-
-    const filename = filenameFromResponse(res, finalUrl);
-    const expectedBytes = Number(res.headers.get('content-length')) || 0;
-    log(
-      'ok',
-      `No challenge on the way in. Downloading "${filename}"${expectedBytes ? ` (${mb(expectedBytes)} expected)` : ''}`
-    );
-    if (expectedBytes && expectedBytes > c.maxArchiveBytes) {
-      throw new Error(`Archive is ${mb(expectedBytes)}, over the ${mb(c.maxArchiveBytes)} probe cap`);
-    }
-
-    // -- download ---------------------------------------------------------
     await fsp.mkdir(workDir, { recursive: true });
-    archivePath = path.join(workDir, path.basename(filename));
-    let received = 0;
     let lastPersist = 0;
-    const body = Readable.fromWeb(res.body, { signal: state.abort.signal });
-    let stallTimer = null;
-    const stall = () => {
-      if (stallTimer) clearTimeout(stallTimer);
-      stallTimer = setTimeout(
-        () => body.destroy(new Error(`No bytes for ${DOWNLOAD_STALL_MS / 1000}s, download is dead`)),
-        DOWNLOAD_STALL_MS
-      );
-      stallTimer.unref?.();
-    };
-    stall();
-    body.on('data', (chunk) => {
-      received += chunk.length;
-      stall();
-      if (received > c.maxArchiveBytes) {
-        body.destroy(new Error(`Exceeded the ${mb(c.maxArchiveBytes)} probe cap`));
-        return;
-      }
-      run.live = { stage: 'download', received, total: expectedBytes };
-      if (Date.now() - lastPersist > 2000) {
-        lastPersist = Date.now();
-        persist(c, run).catch(() => {});
+    run.live = { stage: 'browser', detail: 'Opening URL in CloakBrowser' };
+    const got = await browser.download(urlObj.href, workDir, {
+      fallbackName: 'download.bin',
+      maxBytes: c.maxArchiveBytes,
+      stallMs: DOWNLOAD_STALL_MS,
+      signal: state.abort.signal,
+      onProgress: ({ received, total }) => {
+        run.live = { stage: 'download', received, total };
+        if (Date.now() - lastPersist > 2000) {
+          lastPersist = Date.now();
+          persist(c, run).catch(() => {});
+        }
       }
     });
-    try {
-      await pipeline(body, fs.createWriteStream(archivePath));
-    } finally {
-      if (stallTimer) clearTimeout(stallTimer);
-    }
+    archivePath = got.path;
+    const filename = got.filename;
+    log('ok', `CloakBrowser started download "${filename}" from ${got.finalUrl}`);
 
     const dlMs = Date.now() - t0;
     const stat = await fsp.stat(archivePath);
@@ -572,8 +548,7 @@ async function executeProbe(c, run, urlObj, hooks) {
       const snippet = peek.subarray(0, got.bytesRead).toString('utf8');
       if (looksLikeChallenge(snippet)) {
         throw new BlockedError(
-          'The "download" was a Cloudflare challenge page served with HTTP 200. Automated download ' +
-            'is not possible from this host, and this probe does not attempt to defeat challenges.'
+          'CloakBrowser received a Cloudflare challenge page instead of the requested archive.'
         );
       }
       const title = pageTitle(snippet);
@@ -686,5 +661,7 @@ async function executeProbe(c, run, urlObj, hooks) {
     await fsp.rm(workDir, { recursive: true, force: true }).catch(() => {});
     const blocked = err instanceof BlockedError || err?.blocked;
     await finish(blocked ? 'blocked' : 'failed', err?.message || String(err));
+  } finally {
+    await browser?.close().catch(() => {});
   }
 }

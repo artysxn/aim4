@@ -1,8 +1,8 @@
-// The download probe, end to end against a stub server. What matters here:
-// every hop lands in the log, a challenge is a stop rather than a retry, the
-// downloaded bytes are classified by magic rather than by name, and a finished
-// run leaves .aim4replay packages and nothing else. Never touches the network
-// beyond loopback; the parse child is stubbed out.
+// The download probe end to end against a stub browser boundary. What matters:
+// the browser result is classified by magic rather than by name, challenge
+// failures are distinct, and a finished run leaves .aim4replay packages and
+// nothing else. Never touches the network beyond loopback; the parse child is
+// stubbed out and CloakBrowser itself is not launched.
 
 import fsp from 'node:fs/promises';
 import http from 'node:http';
@@ -64,6 +64,68 @@ const server = http.createServer((req, res) => {
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
 
+/**
+ * Browser boundary stub. The real probe uses CloakBrowser; this keeps the
+ * existing loopback test deterministic and avoids launching/downloading a
+ * browser during the unit suite.
+ */
+function createTestBrowser({ onLog } = {}) {
+  return {
+    async download(startUrl, directory, { fallbackName, onProgress } = {}) {
+      let current = new URL(startUrl);
+      const cookies = new Map();
+      for (let hop = 1; hop <= 6; hop++) {
+        const headers = {};
+        if (cookies.size) {
+          headers.Cookie = [...cookies.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+        }
+        const res = await fetch(current, { redirect: 'manual', headers });
+        onLog?.(`GET ${current} -> HTTP ${res.status}`);
+        for (const raw of res.headers.getSetCookie?.() || []) {
+          const eq = raw.indexOf('=');
+          const semi = raw.indexOf(';');
+          if (eq > 0) {
+            cookies.set(
+              raw.slice(0, eq).trim(),
+              raw.slice(eq + 1, semi > eq ? semi : undefined).trim()
+            );
+          }
+        }
+        if (res.headers.get('cf-mitigated') === 'challenge') {
+          const err = new Error('cf-mitigated: challenge');
+          err.blocked = true;
+          throw err;
+        }
+        if (res.status >= 300 && res.status < 400) {
+          current = new URL(res.headers.get('location'), current);
+          continue;
+        }
+        if (res.status === 403) {
+          const text = await res.text();
+          const err = new Error(/challenge/i.test(text) ? 'Cloudflare challenge page' : 'HTTP 403');
+          err.blocked = /challenge-platform|Just a moment|_cf_chl_opt/i.test(text);
+          throw err;
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const bytes = Buffer.from(await res.arrayBuffer());
+        const filename = filenameFromResponse(res, current) || fallbackName;
+        const target = path.join(directory, filename);
+        await fsp.mkdir(directory, { recursive: true });
+        await fsp.writeFile(target, bytes);
+        onProgress?.({ received: bytes.length, total: bytes.length });
+        return {
+          path: target,
+          filename,
+          bytes: bytes.length,
+          finalUrl: current.href
+        };
+      }
+      throw new Error('too many redirects');
+    },
+    async close() {}
+  };
+}
+
 async function waitDone(timeoutMs = 15_000) {
   const t0 = Date.now();
   for (;;) {
@@ -109,6 +171,7 @@ const logHas = (st, re) => st.log.some((l) => re.test(l.text));
   const packaged = [];
   const first = await startProbe(`${BASE}/download`, {
     allowPrivate: true,
+    createBrowser: createTestBrowser,
     packageDemo: async (demoFile, outPath, meta) => {
       packaged.push({ demoFile, outPath, meta });
       await fsp.writeFile(outPath, Buffer.from('AIM4RPLY-fake'));
@@ -126,7 +189,10 @@ const logHas = (st, re) => st.log.some((l) => re.test(l.text));
   assert(first.running === true, 'probe reports running');
 
   // A second start while one is live must refuse, not queue.
-  const second = await startProbe(`${BASE}/download`, { allowPrivate: true });
+  const second = await startProbe(`${BASE}/download`, {
+    allowPrivate: true,
+    createBrowser: createTestBrowser
+  });
   assert(second.busy === true, 'second probe is refused while one runs');
 
   const st = await waitDone();
@@ -160,7 +226,10 @@ const logHas = (st, re) => st.log.some((l) => re.test(l.text));
 // ---------------------------------------------------------------------------
 
 {
-  await startProbe(`${BASE}/blocked`, { allowPrivate: true });
+  await startProbe(`${BASE}/blocked`, {
+    allowPrivate: true,
+    createBrowser: createTestBrowser
+  });
   const st = await waitDone();
   assert(st.verdict === 'blocked', `403 challenge -> blocked, got ${st.verdict}`);
   assert(/challenge/i.test(st.summary), 'summary names the challenge');
@@ -168,7 +237,10 @@ const logHas = (st, re) => st.log.some((l) => re.test(l.text));
 
 // A cf-mitigated header alone is enough; no body reading needed.
 {
-  await startProbe(`${BASE}/mitigated`, { allowPrivate: true });
+  await startProbe(`${BASE}/mitigated`, {
+    allowPrivate: true,
+    createBrowser: createTestBrowser
+  });
   const st = await waitDone();
   assert(st.verdict === 'blocked', `cf-mitigated -> blocked, got ${st.verdict}`);
   assert(/cf-mitigated/.test(st.summary), 'summary names the header');
@@ -176,7 +248,10 @@ const logHas = (st, re) => st.log.some((l) => re.test(l.text));
 
 // An HTML page saved as a "download" is failed and named for what it is.
 {
-  await startProbe(`${BASE}/html`, { allowPrivate: true });
+  await startProbe(`${BASE}/html`, {
+    allowPrivate: true,
+    createBrowser: createTestBrowser
+  });
   const st = await waitDone();
   assert(st.verdict === 'failed', `html body -> failed, got ${st.verdict}`);
   assert(/HTML page/.test(st.summary) && /Demo not found/.test(st.summary), st.summary);

@@ -134,6 +134,7 @@ function probeBlock() {
   function liveLine() {
     const live = st?.live;
     if (!live) return null;
+    if (live.stage === 'browser') return live.detail || 'Opening URL in CloakBrowser';
     if (live.stage === 'download') {
       const total = live.total ? ` of ${bytes(live.total)}` : '';
       return `Downloading: ${bytes(live.received || 0)}${total}`;

@@ -31,6 +31,12 @@ RUN apt-get update \
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
+# CloakBrowser uses its own Chromium build but still needs Chromium's Linux
+# system libraries. Cache both the dependencies and signed browser binary in
+# the image so the first admin probe does not spend minutes provisioning them.
+RUN npx playwright-core install-deps chromium \
+  && npx cloakbrowser install
+
 # Server source. The client build (dist/) is hosted on Vercel and never served
 # here (AIM4_SERVE_STATIC is unset), but the server shares pure-data modules with
 # the client under src/multiplayer/ and src/utils/ (shot spread), so those dirs

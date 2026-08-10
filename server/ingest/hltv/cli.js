@@ -135,75 +135,78 @@ Flags: ${Object.keys(FLAGS).concat(Object.keys(BOOLS)).join(' ')}`);
   }
 
   const source = makeSource(cfg);
-
-  if (cmd === 'check') {
-    const checks = [];
-    checks.push(['rar extractor (bsdtar)', rarSupport() ? 'ok' : 'MISSING']);
-    try {
-      const r = await source.check();
-      checks.push([`source: ${source.name}`, r.detail || 'ok']);
-    } catch (err) {
-      checks.push([`source: ${source.name}`, `FAILED: ${err.message}`]);
+  try {
+    if (cmd === 'check') {
+      const checks = [];
+      checks.push(['rar extractor (bsdtar)', rarSupport() ? 'ok' : 'MISSING']);
+      try {
+        const r = await source.check();
+        checks.push([`source: ${source.name}`, r.detail || 'ok']);
+      } catch (err) {
+        checks.push([`source: ${source.name}`, `FAILED: ${err.message}`]);
+      }
+      checks.push(['library', cfg.library]);
+      checks.push(['state dir', cfg.stateDir]);
+      checks.push(['work dir', cfg.workDir]);
+      for (const [k, v] of checks) console.log(`${k.padEnd(24)} ${v}`);
+      return;
     }
-    checks.push(['library', cfg.library]);
-    checks.push(['state dir', cfg.stateDir]);
-    checks.push(['work dir', cfg.workDir]);
-    for (const [k, v] of checks) console.log(`${k.padEnd(24)} ${v}`);
-    return;
-  }
 
-  await fsp.mkdir(cfg.stateDir, { recursive: true });
-  await fsp.mkdir(cfg.workDir, { recursive: true });
-  await source.check();
+    await fsp.mkdir(cfg.stateDir, { recursive: true });
+    await fsp.mkdir(cfg.workDir, { recursive: true });
+    await source.check();
 
-  // Status is written on every event so the admin page has something to read.
-  // Best-effort: a failed status write must never stop an ingest.
-  let status = { ...emptyStatus(), running: true, pid: process.pid, startedAt: new Date().toISOString() };
-  let statusQueue = Promise.resolve();
-  const pushStatus = () => {
-    statusQueue = statusQueue
-      .then(() => writeStatus(cfg.statusPath, status))
-      .catch(() => {});
-  };
+    // Status is written on every event so the admin page has something to read.
+    // Best-effort: a failed status write must never stop an ingest.
+    let status = { ...emptyStatus(), running: true, pid: process.pid, startedAt: new Date().toISOString() };
+    let statusQueue = Promise.resolve();
+    const pushStatus = () => {
+      statusQueue = statusQueue
+        .then(() => writeStatus(cfg.statusPath, status))
+        .catch(() => {});
+    };
 
-  const pipe = createPipeline({
-    cfg,
-    ledger,
-    source,
-    onEvent: (e) => {
-      logEvent(e, cfg.verbose);
-      status = foldEvent(status, e, ledger);
-      pushStatus();
+    const pipe = createPipeline({
+      cfg,
+      ledger,
+      source,
+      onEvent: (e) => {
+        logEvent(e, cfg.verbose);
+        status = foldEvent(status, e, ledger);
+        pushStatus();
+      }
+    });
+    pushStatus();
+
+    if (cmd === 'discover') {
+      const r = await pipe.discover();
+      console.log(JSON.stringify({ ...r, counts: ledger.counts() }, null, 2));
+      return;
     }
-  });
-  pushStatus();
 
-  if (cmd === 'discover') {
-    const r = await pipe.discover();
-    console.log(JSON.stringify({ ...r, counts: ledger.counts() }, null, 2));
-    return;
+    if (cmd !== 'run') throw new Error(`Unknown command ${cmd}`);
+
+    const onSignal = () => {
+      console.log('\nstopping after the current match...');
+      pipe.requestStop();
+    };
+    process.on('SIGINT', onSignal);
+    process.on('SIGTERM', onSignal);
+
+    // --limit N is expressed in matches; the loop works in batches.
+    const maxBatches = opts.limit ? Math.ceil(opts.limit / cfg.batchSize) : Infinity;
+    const started = Date.now();
+    await pipe.run({ continuous: Boolean(opts.continuous), maxBatches });
+
+    const counts = ledger.counts();
+    console.log(
+      `\ndone in ${Math.round((Date.now() - started) / 1000)}s  ` +
+        `cleaned=${counts.cleaned} review=${counts.needs_review} failed=${counts.failed_permanent} ` +
+        `remaining=${counts.remaining}`
+    );
+  } finally {
+    await source.close?.().catch(() => {});
   }
-
-  if (cmd !== 'run') throw new Error(`Unknown command ${cmd}`);
-
-  const onSignal = () => {
-    console.log('\nstopping after the current match...');
-    pipe.requestStop();
-  };
-  process.on('SIGINT', onSignal);
-  process.on('SIGTERM', onSignal);
-
-  // --limit N is expressed in matches; the loop works in batches.
-  const maxBatches = opts.limit ? Math.ceil(opts.limit / cfg.batchSize) : Infinity;
-  const started = Date.now();
-  await pipe.run({ continuous: Boolean(opts.continuous), maxBatches });
-
-  const counts = ledger.counts();
-  console.log(
-    `\ndone in ${Math.round((Date.now() - started) / 1000)}s  ` +
-      `cleaned=${counts.cleaned} review=${counts.needs_review} failed=${counts.failed_permanent} ` +
-      `remaining=${counts.remaining}`
-  );
 }
 
 main().catch((err) => {
