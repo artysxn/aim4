@@ -56,6 +56,11 @@ export const adminApi = {
   ingestStart: () => send('POST', '/api/admin/ingest/start'),
   ingestStop: () => send('POST', '/api/admin/ingest/stop'),
 
+  // Download probe: one URL, one attempt, a step log to read back.
+  ingestProbeStatus: () => get('/api/admin/ingest/probe'),
+  ingestProbeStart: (url) => send('POST', '/api/admin/ingest/probe', { url }),
+  ingestProbeCancel: () => send('POST', '/api/admin/ingest/probe/cancel'),
+
   users: ({ q = '', tier = '', status = '', page = 0, sort = 'created_at' } = {}) => {
     const params = new URLSearchParams();
     if (q) params.set('q', q);

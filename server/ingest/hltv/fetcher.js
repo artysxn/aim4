@@ -46,8 +46,9 @@ export class HttpError extends Error {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** True when a 200 body is actually a challenge interstitial. */
-function looksLikeChallenge(text) {
+/** True when a 200 body is actually a challenge interstitial. Also used by
+ * probe.js, which applies the same test to whatever a download URL served. */
+export function looksLikeChallenge(text) {
   return (
     /cdn-cgi\/challenge-platform/.test(text) ||
     /<title>\s*Just a moment/i.test(text) ||

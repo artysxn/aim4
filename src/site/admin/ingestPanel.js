@@ -16,14 +16,200 @@
 // ---------------------------------------------------------------------------
 
 import { adminApi } from './adminApi.js';
-import { button, date, el, notice, row } from './dom.js';
+import { button, bytes, date, el, input, notice, row } from './dom.js';
 import { spinnerNode } from '../../lib/spinner.js';
 
 /** Fast enough to feel live, slow enough to be free on a weeks-long run. */
 const POLL_MS = 5000;
+/** A probe run is minutes, not weeks, so its poll is tighter while live. */
+const PROBE_POLL_MS = 1500;
+
+/**
+ * The download probe: paste a demo URL, watch the server try to fetch, parse
+ * and package it, copy the step log out to report on.
+ *
+ * Built once and re-appended on every panel redraw, so the URL input and the
+ * log keep their state while the rest of the panel repaints around them.
+ */
+function probeBlock() {
+  const root = el('div', 'ingest-probe');
+  let timer = 0;
+  let st = null;
+  let busy = false;
+
+  const head = el('div', 'ingest-head');
+  head.appendChild(el('h4', null, 'Download probe'));
+  const chip = el('span', 'ingest-chip is-stopped', 'Idle');
+  head.appendChild(chip);
+  root.appendChild(head);
+
+  const urlInput = input('text', '', 'https://www.hltv.org/download/demo/110202');
+  urlInput.className = 'ingest-probe-url';
+  const runBtn = button('Run probe', run, 'btn btn-primary btn-sm');
+  const cancelBtn = button('Cancel', cancel, 'btn btn-danger btn-sm');
+  const copyBtn = button('Copy log', copyLog, 'btn btn-sm');
+  root.appendChild(row(urlInput, runBtn, cancelBtn, copyBtn));
+
+  const out = el('div', 'ingest-probe-out');
+  root.appendChild(out);
+
+  async function run() {
+    const url = urlInput.value.trim();
+    if (!url) {
+      notice(root, 'Paste a demo download URL first.', 'error');
+      return;
+    }
+    if (busy) return;
+    busy = true;
+    draw();
+    try {
+      st = await adminApi.ingestProbeStart(url);
+      schedule(0);
+    } catch (err) {
+      notice(root, err.message, 'error');
+    } finally {
+      busy = false;
+      draw();
+    }
+  }
+
+  async function cancel() {
+    try {
+      st = await adminApi.ingestProbeCancel();
+      draw();
+    } catch (err) {
+      notice(root, err.message, 'error');
+    }
+  }
+
+  function logText() {
+    if (!st) return '';
+    const lines = (st.log || []).map(
+      (l) => `${l.at}  ${String(l.level || 'info').toUpperCase().padEnd(5)} ${l.text}`
+    );
+    return [
+      `AIM4 download probe ${st.runId || ''}`,
+      `URL: ${st.url || ''}`,
+      `Verdict: ${st.verdict || (st.running ? 'running' : 'none')}`,
+      '',
+      ...lines
+    ].join('\n');
+  }
+
+  async function copyLog() {
+    try {
+      await navigator.clipboard.writeText(logText());
+      notice(root, 'Log copied.');
+    } catch {
+      notice(root, 'Could not reach the clipboard. Select the log text instead.', 'error');
+    }
+  }
+
+  async function refresh() {
+    try {
+      st = await adminApi.ingestProbeStatus();
+      draw();
+    } catch {
+      /* transient; the next poll answers */
+    }
+    schedule(st?.running ? PROBE_POLL_MS : 0);
+  }
+
+  /** Poll fast while a run is live, otherwise sit still until reopened. */
+  function schedule(delay) {
+    if (timer) window.clearTimeout(timer);
+    timer = 0;
+    if (delay) timer = window.setTimeout(refresh, delay);
+  }
+
+  function verdictChip() {
+    if (!st || (!st.running && !st.verdict)) return ['is-stopped', 'Idle'];
+    if (st.running) return ['is-running', 'Running'];
+    if (st.verdict === 'ok') return ['is-running', 'Pass'];
+    if (st.verdict === 'blocked') return ['is-warn', 'Blocked'];
+    if (st.verdict === 'cancelled') return ['is-stopped', 'Cancelled'];
+    return ['is-warn', 'Failed'];
+  }
+
+  function liveLine() {
+    const live = st?.live;
+    if (!live) return null;
+    if (live.stage === 'download') {
+      const total = live.total ? ` of ${bytes(live.total)}` : '';
+      return `Downloading: ${bytes(live.received || 0)}${total}`;
+    }
+    if (live.stage === 'unpack') return 'Unpacking the archive';
+    if (live.stage === 'parse') {
+      const round = live.round ? `, round ${live.round}${live.total ? `/${live.total}` : ''}` : '';
+      return `Parsing ${live.detail || ''}${round} (${live.parseStage || 'working'})`;
+    }
+    return null;
+  }
+
+  function draw() {
+    const [chipClass, chipText] = verdictChip();
+    chip.className = `ingest-chip ${chipClass}`;
+    chip.textContent = chipText;
+
+    const running = Boolean(st?.running);
+    runBtn.disabled = busy || running;
+    runBtn.textContent = busy ? 'Starting...' : running ? 'Running...' : 'Run probe';
+    cancelBtn.style.display = running ? '' : 'none';
+    copyBtn.style.display = st?.log?.length ? '' : 'none';
+
+    const wrap = el('div');
+    if (st?.summary && !running) {
+      wrap.appendChild(
+        el('p', st.verdict === 'ok' ? 'ingest-probe-pass' : 'admin-error', st.summary)
+      );
+    }
+    const live = liveLine();
+    if (live) wrap.appendChild(el('p', 'ingest-probe-live', live));
+
+    if (st?.log?.length) {
+      const logEl = el('div', 'ingest-probe-log');
+      for (const entry of st.log) {
+        const lineEl = el('div', `ingest-probe-line is-${entry.level || 'info'}`);
+        lineEl.appendChild(
+          el('span', 'ingest-probe-time', String(entry.at || '').slice(11, 19))
+        );
+        lineEl.appendChild(el('span', 'ingest-probe-text', entry.text));
+        logEl.appendChild(lineEl);
+      }
+      wrap.appendChild(logEl);
+      // Keep the newest line in view while the run writes.
+      queueMicrotask(() => {
+        logEl.scrollTop = logEl.scrollHeight;
+      });
+    }
+    out.replaceChildren(wrap);
+  }
+
+  draw();
+  return {
+    root,
+    start() {
+      refresh();
+    },
+    stop() {
+      schedule(0);
+    },
+    hasFocus: () => document.activeElement === urlInput,
+    refocus() {
+      const { selectionStart, selectionEnd } = urlInput;
+      urlInput.focus();
+      try {
+        urlInput.setSelectionRange(selectionStart, selectionEnd);
+      } catch {
+        /* fine, focus is what matters */
+      }
+    }
+  };
+}
 
 export function ingestPanel() {
   const root = el('div', 'admin-ingest');
+  const probe = probeBlock();
   let timer = 0;
   let busy = false;
   let lastStatus = null;
@@ -219,11 +405,18 @@ export function ingestPanel() {
       wrap.appendChild(el('p', 'admin-muted', `Status updated ${date(status.updatedAt)}`));
     }
 
+    // The probe block is a persistent node: re-appending moves it, keeping its
+    // input, log scroll and poll state across this panel's redraws.
+    wrap.appendChild(probe.root);
+
+    const hadFocus = probe.hasFocus();
     root.replaceChildren(wrap);
+    if (hadFocus) probe.refocus();
   }
 
   function start() {
     refresh();
+    probe.start();
     // Polling belongs to the open panel, not to the page.
     timer = window.setInterval(refresh, POLL_MS);
   }
@@ -231,6 +424,7 @@ export function ingestPanel() {
   function stop() {
     if (timer) window.clearInterval(timer);
     timer = 0;
+    probe.stop();
   }
 
   root.addEventListener('admin:panel-hidden', stop);

@@ -26,6 +26,7 @@ import { invalidateUser, loadEntitlements } from '../entitlements/load.js';
 import { recomputeUser } from '../entitlements/recompute.js';
 import { invalidateAdmin, isSiteAdmin, siteAdmin } from '../entitlements/service.js';
 import * as ingest from '../ingest/hltv/service.js';
+import { cancelProbe, probeState, startProbe } from '../ingest/hltv/probe.js';
 import {
   assignSeat,
   cancelSubscription,
@@ -538,6 +539,42 @@ async function route(req, res, url, me) {
       req
     });
     json(res, req, 200, { ...result, ...(await ingest.status()) });
+    return true;
+  }
+
+  // One-shot download probe: can this server fetch, parse and package a demo
+  // archive from a given URL? Runs in-process (network) plus a capped child
+  // (parse); the panel polls GET for the step log.
+  if (req.method === 'GET' && p === '/api/admin/ingest/probe') {
+    json(res, req, 200, await probeState());
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/ingest/probe') {
+    const body = await readJson(req);
+    const result = await startProbe(body.url);
+    await writeAudit({
+      actorId: me.id,
+      action: 'ingest.probe',
+      payload: { url: String(body.url || '').slice(0, 500) },
+      req
+    });
+    if (result.busy) {
+      json(res, req, 409, { error: 'A probe is already running.', ...result });
+      return true;
+    }
+    if (result.invalid) {
+      json(res, req, 400, { error: result.error });
+      return true;
+    }
+    json(res, req, 200, result);
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/ingest/probe/cancel') {
+    const result = await cancelProbe();
+    await writeAudit({ actorId: me.id, action: 'ingest.probe.cancel', payload: result, req });
+    json(res, req, 200, { ...result, ...(await probeState()) });
     return true;
   }
 
