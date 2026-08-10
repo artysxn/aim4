@@ -136,19 +136,6 @@ export function createTimelineViewer({
           <div class="rv-duel-feed" id="rv-duel-feed" hidden></div>
         </div>
         <canvas class="rv-canvas" id="rv-canvas"></canvas>
-        <div class="rv-keys" id="rv-keys" aria-hidden="true">
-          <span class="rv-keys-key">Space</span><span class="rv-keys-action">Pause / Unpause</span>
-          <span class="rv-keys-key">Hover + S</span><span class="rv-keys-action">Copy setpos</span>
-          <span class="rv-keys-key">Scroll</span><span class="rv-keys-action">Zoom</span>
-          <span class="rv-keys-key">Mouse3</span><span class="rv-keys-action">Pan</span>
-          <span class="rv-keys-key">Mouse2</span><span class="rv-keys-action">Draw</span>
-          <span class="rv-keys-key">E</span><span class="rv-keys-action">Erase drawing</span>
-          <span class="rv-keys-key">J</span><span class="rv-keys-action">Previous round</span>
-          <span class="rv-keys-key">K</span><span class="rv-keys-action">Next round</span>
-          <span class="rv-keys-key">O</span><span class="rv-keys-action">Rewind 15s</span>
-          <span class="rv-keys-key">P</span><span class="rv-keys-action">Forward 15s</span>
-          <span class="rv-keys-key">M</span><span class="rv-keys-action">Toggle speed</span>
-        </div>
         <div class="rv-loading" id="rv-loading"></div>
       </div>
       <div class="rv-team-col">
@@ -294,10 +281,24 @@ export function createTimelineViewer({
         </div>
         <span class="rv-popover-msg" id="rv-playlist-msg"></span>
       </div>
-    </div>`;
+    </div>
+    <button type="button" class="rv-keys" id="rv-keys" title="Click to hide" aria-label="Keyboard shortcuts. Click to hide">
+      <span class="rv-keys-key">Space</span><span class="rv-keys-action">Pause / Unpause</span>
+      <span class="rv-keys-key">Hover + S</span><span class="rv-keys-action">Copy setpos</span>
+      <span class="rv-keys-key">Scroll</span><span class="rv-keys-action">Zoom</span>
+      <span class="rv-keys-key">Mouse3</span><span class="rv-keys-action">Pan</span>
+      <span class="rv-keys-key">Mouse2</span><span class="rv-keys-action">Draw</span>
+      <span class="rv-keys-key">E</span><span class="rv-keys-action">Erase drawing</span>
+      <span class="rv-keys-key">J</span><span class="rv-keys-action">Previous round</span>
+      <span class="rv-keys-key">K</span><span class="rv-keys-action">Next round</span>
+      <span class="rv-keys-key">O</span><span class="rv-keys-action">Rewind 15s</span>
+      <span class="rv-keys-key">P</span><span class="rv-keys-action">Forward 15s</span>
+      <span class="rv-keys-key">M</span><span class="rv-keys-action">Toggle speed</span>
+    </button>`;
 
   const canvas = el.querySelector('#rv-canvas');
   const mapEl = el.querySelector('.rv-map');
+  const keysEl = el.querySelector('#rv-keys');
   const clockEl = el.querySelector('#rv-clock');
   const scoreLeftEl = el.querySelector('#rv-score-left');
   const scoreRightEl = el.querySelector('#rv-score-right');
@@ -359,6 +360,24 @@ export function createTimelineViewer({
   const playlistListEl = el.querySelector('#rv-playlist-list');
   const playlistNewEl = el.querySelector('#rv-playlist-new');
   const playlistMsg = el.querySelector('#rv-playlist-msg');
+
+  // Hotkey legend: show on demo open, hide for later rounds / click / notes / bookmarks.
+  let keysSessionActive = true;
+
+  function syncKeysVisibility() {
+    if (!keysEl) return;
+    const blocked = !notePanel.hidden || !playlistPanel.hidden;
+    const show = keysSessionActive && !blocked;
+    keysEl.hidden = !show;
+    keysEl.setAttribute('aria-hidden', show ? 'false' : 'true');
+  }
+
+  keysEl?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    keysSessionActive = false;
+    syncKeysVisibility();
+  });
 
   const renderer = new RadarRenderer(canvas);
   renderer.onIconLoad = () => {
@@ -883,7 +902,13 @@ export function createTimelineViewer({
     // draws on every visit to a round that was already loaded.
     const resident = store.get(file)?.isFull ? peekMeta(file) : null;
 
+    // Legend only for the opening round of a demo session.
+    if (activeIndex >= 0 && activeIndex !== index) {
+      keysSessionActive = false;
+    }
+
     activeIndex = index;
+    syncKeysVisibility();
     // A new round arms the buy skip again — it is only ever disarmed for the
     // round the user dragged into.
     freezeSkip = true;
@@ -910,6 +935,7 @@ export function createTimelineViewer({
     notePanel.hidden = true;
     noteBtn.classList.remove('active');
     if (coachPicking) hideCoachPick();
+    syncKeysVisibility();
     // Pause early in coach mode so freezetime auto-skip can't race the seek.
     if (coachOn && seek) {
       playback.pause();
@@ -2052,6 +2078,14 @@ export function createTimelineViewer({
     noteBtn.classList.toggle('active', !notePanel.hidden);
     bookmarkBtn.classList.toggle('open', !playlistPanel.hidden);
     syncCoachBtn();
+    syncKeysVisibility();
+  }
+
+  function revealNotePanel() {
+    closePopovers(notePanel);
+    notePanel.hidden = false;
+    noteBtn.classList.add('active');
+    syncKeysVisibility();
   }
 
   function newNoteId() {
@@ -2467,9 +2501,7 @@ export function createTimelineViewer({
       return;
     }
     noteView = 'editor';
-    closePopovers(notePanel);
-    notePanel.hidden = false;
-    noteBtn.classList.add('active');
+    revealNotePanel();
     showNoteAt(at, { seek: true });
   }
 
@@ -2523,9 +2555,7 @@ export function createTimelineViewer({
     const vis = visibleNoteIndices();
     if (!vis.length) return;
     noteView = 'editor';
-    closePopovers(notePanel);
-    notePanel.hidden = false;
-    noteBtn.classList.add('active');
+    revealNotePanel();
     showNoteAt(vis[0], { seek: false });
   }
 
@@ -2533,9 +2563,7 @@ export function createTimelineViewer({
   function openNoteList() {
     flushNoteText();
     noteView = 'list';
-    closePopovers(notePanel);
-    notePanel.hidden = false;
-    noteBtn.classList.add('active');
+    revealNotePanel();
     renderNoteDock();
   }
 
@@ -2545,9 +2573,7 @@ export function createTimelineViewer({
     if (!mark) return;
     const index = roundNotes.findIndex((n) => n.id === mark.dataset.note);
     if (index < 0) return;
-    closePopovers(notePanel);
-    notePanel.hidden = false;
-    noteBtn.classList.add('active');
+    revealNotePanel();
     showNoteAt(index, { seek: true });
   });
 
@@ -2568,6 +2594,7 @@ export function createTimelineViewer({
       renderNoteDock();
       if (noteView === 'editor') noteText.focus();
     }
+    syncKeysVisibility();
   }
 
   /** Stamp a new note at the scrubber time and show it. */
@@ -2802,6 +2829,7 @@ export function createTimelineViewer({
       renderPlaylists();
       if (!playlists) loadPlaylists();
     }
+    syncKeysVisibility();
   });
 
   // ---- live scoreboard ----------------------------------------------------
@@ -4573,6 +4601,7 @@ export function createTimelineViewer({
     // background prefetch of the rest behind it.
     syncRostersLayout();
     syncChromeInset();
+    syncKeysVisibility();
     loadPlaylists();
     await buildSequence();
     await restorePersistedCoach();

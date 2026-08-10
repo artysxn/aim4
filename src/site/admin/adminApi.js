@@ -61,6 +61,11 @@ export const adminApi = {
   ingestProbeStart: (url) => send('POST', '/api/admin/ingest/probe', { url }),
   ingestProbeCancel: () => send('POST', '/api/admin/ingest/probe/cancel'),
 
+  // CloakBrowser proxy pool (public list + verified working set).
+  ingestProxies: () => get('/api/admin/ingest/proxies'),
+  ingestProxiesSave: (body) => send('POST', '/api/admin/ingest/proxies', body),
+  ingestProxiesRefresh: () => send('POST', '/api/admin/ingest/proxies/refresh'),
+
   users: ({ q = '', tier = '', status = '', page = 0, sort = 'created_at' } = {}) => {
     const params = new URLSearchParams();
     if (q) params.set('q', q);

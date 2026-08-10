@@ -27,6 +27,12 @@ import { recomputeUser } from '../entitlements/recompute.js';
 import { invalidateAdmin, isSiteAdmin, siteAdmin } from '../entitlements/service.js';
 import * as ingest from '../ingest/hltv/service.js';
 import { cancelProbe, probeState, startProbe } from '../ingest/hltv/probe.js';
+import { loadConfig as loadIngestConfig } from '../ingest/hltv/config.js';
+import {
+  proxyStatus,
+  startProxyRefresh,
+  writeProxySettings
+} from '../ingest/hltv/proxyPool.js';
 import {
   assignSeat,
   cancelSubscription,
@@ -575,6 +581,42 @@ async function route(req, res, url, me) {
     const result = await cancelProbe();
     await writeAudit({ actorId: me.id, action: 'ingest.probe.cancel', payload: result, req });
     json(res, req, 200, { ...result, ...(await probeState()) });
+    return true;
+  }
+
+  // CloakBrowser proxy pool: admin knobs + refresh from the public list.
+  if (req.method === 'GET' && p === '/api/admin/ingest/proxies') {
+    json(res, req, 200, await proxyStatus(loadIngestConfig()));
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/ingest/proxies') {
+    const body = await readJson(req);
+    const cfg = loadIngestConfig();
+    const settings = await writeProxySettings(cfg, {
+      attempts: body.attempts,
+      random: body.random
+    });
+    await writeAudit({
+      actorId: me.id,
+      action: 'ingest.proxies.settings',
+      payload: settings,
+      req
+    });
+    json(res, req, 200, await proxyStatus(cfg));
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/ingest/proxies/refresh') {
+    const cfg = loadIngestConfig();
+    const result = await startProxyRefresh(cfg);
+    await writeAudit({
+      actorId: me.id,
+      action: 'ingest.proxies.refresh',
+      payload: { started: result.started, busy: result.busy },
+      req
+    });
+    json(res, req, result.busy ? 409 : 200, result);
     return true;
   }
 

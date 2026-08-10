@@ -219,9 +219,154 @@ function probeBlock() {
   };
 }
 
+/**
+ * CloakBrowser proxy pool controls: attempts, random/sequential, refresh list.
+ * Persistent node like the probe so inputs survive panel redraws.
+ */
+function proxyBlock() {
+  const root = el('div', 'ingest-proxy');
+  let timer = 0;
+  let st = null;
+  let busy = false;
+
+  const head = el('div', 'ingest-head');
+  head.appendChild(el('h4', null, 'Proxies'));
+  const chip = el('span', 'ingest-chip is-stopped', 'Idle');
+  head.appendChild(chip);
+  root.appendChild(head);
+
+  const attemptsInput = input('number', '5', '');
+  attemptsInput.className = 'ingest-proxy-attempts site-input';
+  attemptsInput.min = '1';
+  attemptsInput.max = '50';
+  attemptsInput.setAttribute('aria-label', 'Proxy attempts');
+  attemptsInput.title = 'Proxy attempts';
+
+  const randomCheck = document.createElement('input');
+  randomCheck.type = 'checkbox';
+  randomCheck.checked = true;
+  randomCheck.id = 'ingest-proxy-random';
+  randomCheck.className = 'ingest-proxy-check';
+  const randomLabel = el('label', 'ingest-proxy-random');
+  randomLabel.htmlFor = 'ingest-proxy-random';
+  randomLabel.append(randomCheck, document.createTextNode(' Random'));
+
+  const saveBtn = button('Save', save, 'btn btn-sm');
+  const refreshBtn = button('Refresh list', refreshList, 'btn btn-primary btn-sm');
+  root.appendChild(row(attemptsInput, randomLabel, saveBtn, refreshBtn));
+
+  const meta = el('div', 'ingest-proxy-meta');
+  root.appendChild(meta);
+  const list = el('ul', 'ingest-proxy-list');
+  root.appendChild(list);
+
+  function applyForm() {
+    if (!st?.settings) return;
+    attemptsInput.value = String(st.settings.attempts ?? 5);
+    randomCheck.checked = st.settings.random !== false;
+  }
+
+  async function save() {
+    if (busy) return;
+    busy = true;
+    draw();
+    try {
+      st = await adminApi.ingestProxiesSave({
+        attempts: Number(attemptsInput.value) || 5,
+        random: randomCheck.checked
+      });
+      applyForm();
+      notice(root, 'Proxy settings saved.');
+    } catch (err) {
+      notice(root, err.message, 'error');
+    } finally {
+      busy = false;
+      draw();
+    }
+  }
+
+  async function refreshList() {
+    if (busy) return;
+    busy = true;
+    draw();
+    try {
+      st = await adminApi.ingestProxiesRefresh();
+      applyForm();
+      schedule(st?.refresh?.running ? 1500 : 0);
+    } catch (err) {
+      notice(root, err.message, 'error');
+    } finally {
+      busy = false;
+      draw();
+    }
+  }
+
+  async function refresh() {
+    try {
+      st = await adminApi.ingestProxies();
+      if (document.activeElement !== attemptsInput) applyForm();
+      draw();
+    } catch {
+      /* next poll */
+    }
+    schedule(st?.refresh?.running ? 1500 : 0);
+  }
+
+  function schedule(delay) {
+    if (timer) window.clearTimeout(timer);
+    timer = delay ? window.setTimeout(refresh, delay) : 0;
+  }
+
+  function draw() {
+    const refreshing = Boolean(st?.refresh?.running);
+    chip.className = `ingest-chip ${refreshing ? 'is-running' : 'is-stopped'}`;
+    chip.textContent = refreshing ? 'Refreshing' : 'Idle';
+    saveBtn.disabled = busy || refreshing;
+    refreshBtn.disabled = busy || refreshing;
+    refreshBtn.textContent = refreshing ? 'Refreshing...' : 'Refresh list';
+
+    const parts = [];
+    parts.push(`Working ${st?.workingCount ?? 0}`);
+    parts.push(`Cache ${st?.cacheCount ?? 0}`);
+    if (st?.cacheFetchedAt) parts.push(`Fetched ${date(st.cacheFetchedAt)}`);
+    if (st?.refresh?.summary) parts.push(st.refresh.summary);
+    else if (refreshing) {
+      parts.push(
+        `Verified ${st.refresh.verified || 0}` +
+          (st.refresh.candidates ? ` / ${st.refresh.candidates}` : '')
+      );
+    }
+    meta.textContent = parts.join(' · ');
+
+    list.replaceChildren();
+    for (const entry of st?.working || []) {
+      const item = el('li', 'ingest-proxy-item');
+      const host = el('span', 'ingest-proxy-host', entry.host || '');
+      const detail = el(
+        'span',
+        'ingest-dim',
+        [entry.country, entry.exitIp].filter(Boolean).join(' · ')
+      );
+      item.append(host, detail);
+      list.appendChild(item);
+    }
+  }
+
+  return {
+    root,
+    start() {
+      refresh();
+    },
+    stop() {
+      schedule(0);
+    }
+  };
+}
+
 export function ingestPanel() {
   const root = el('div', 'admin-ingest');
   const probe = probeBlock();
+  const proxies = proxyBlock();
   let timer = 0;
   let busy = false;
   let lastStatus = null;
@@ -432,8 +577,8 @@ export function ingestPanel() {
       wrap.appendChild(el('p', 'admin-muted', `Status updated ${date(status.updatedAt)}`));
     }
 
-    // The probe block is a persistent node: re-appending moves it, keeping its
-    // input, log scroll and poll state across this panel's redraws.
+    // Persistent nodes: re-appending moves them, keeping input/log/poll state.
+    wrap.appendChild(proxies.root);
     wrap.appendChild(probe.root);
 
     const hadFocus = probe.hasFocus();
@@ -443,6 +588,7 @@ export function ingestPanel() {
 
   function start() {
     refresh();
+    proxies.start();
     probe.start();
     // Polling belongs to the open panel, not to the page.
     timer = window.setInterval(refresh, POLL_MS);
@@ -451,6 +597,7 @@ export function ingestPanel() {
   function stop() {
     if (timer) window.clearInterval(timer);
     timer = 0;
+    proxies.stop();
     probe.stop();
   }
 

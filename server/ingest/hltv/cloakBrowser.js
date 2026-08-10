@@ -13,6 +13,15 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import { ensureBinary, launchContext, launchPersistentContext } from 'cloakbrowser';
+import {
+  applyProxySettings,
+  loadProxyPool,
+  markProxyFailed,
+  recordWorkingProxy,
+  redactProxy
+} from './proxyPool.js';
+
+export { parseProxyLines, loadProxyPool } from './proxyPool.js';
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 60_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
@@ -76,15 +85,23 @@ async function ensureHeadedDisplay() {
   return displayPromise;
 }
 
+function isProxyRetryable(err) {
+  if (!err) return false;
+  if (err.blocked || err.proxyRetryable) return true;
+  const msg = String(err.message || err);
+  return /proxy|SOCKS|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|ERR_TUNNEL|ERR_PROXY|tunnel|socket hang up|net::ERR_/i.test(
+    msg
+  );
+}
+
 /**
  * Launch options are environment-driven because the same code runs locally
  * and in the Linux deployment.
+ *
+ * Proxy is allowed with validateUrl: SSRF is enforced by the Playwright route
+ * guard on every request, not by refusing the exit IP.
  */
-function launchOptions(cfg = {}) {
-  const proxy = cfg.cloakProxy || process.env.AIM4_CLOAK_PROXY || undefined;
-  if (proxy && typeof cfg.validateUrl === 'function') {
-    throw new Error('A proxy cannot be used for an SSRF-guarded CloakBrowser session');
-  }
+function launchOptions(cfg = {}, proxy) {
   const downloadsPath = downloadsPathFor(cfg);
   const humanize = bool(cfg.cloakHumanize ?? process.env.AIM4_CLOAK_HUMANIZE, true);
   const humanPreset = cfg.cloakHumanPreset === 'default' ? 'default' : 'careful';
@@ -202,6 +219,10 @@ async function prepareLicensedProfile(profilePath, binaryPath, licensed) {
  *   cloakLicenseKey?: string,
  *   cloakGeoip?: boolean,
  *   cloakProxy?: string,
+ *   cloakProxyFile?: string,
+ *   cloakProxies?: string[],
+ *   cloakProxyAttempts?: number,
+ *   cloakProxyRandom?: boolean,
  *   cloakSettleMs?: number,
  *   cloakProfileDir?: string,
  *   cloakSessionName?: string,
@@ -212,6 +233,11 @@ async function prepareLicensedProfile(profilePath, binaryPath, licensed) {
 export function createCloakSession(cfg = {}) {
   let contextPromise = null;
   let closed = false;
+  let poolPromise = null;
+  let settingsPromise = null;
+  let activeProxy = undefined;
+  let proxyCursor = 0;
+  let binaryLogged = false;
 
   const log = (message) => {
     try {
@@ -220,6 +246,38 @@ export function createCloakSession(cfg = {}) {
       /* logging must not break a browser operation */
     }
   };
+
+  async function ensureSettings() {
+    if (!settingsPromise) {
+      settingsPromise = applyProxySettings(cfg).then(({ settings }) => {
+        log(
+          `Proxy settings: attempts=${settings.attempts}, ` +
+            `order=${settings.random ? 'random' : 'sequential'}`
+        );
+        return settings;
+      });
+    }
+    return settingsPromise;
+  }
+
+  async function ensurePool() {
+    if (!poolPromise) {
+      poolPromise = loadProxyPool(cfg).then((pool) => {
+        if (pool.length) log(`Proxy pool: ${pool.length} endpoint(s)`);
+        else log('Proxy pool: empty (direct exit IP)');
+        return pool;
+      });
+    }
+    return poolPromise;
+  }
+
+  async function resetContext() {
+    if (!contextPromise) return;
+    const pending = contextPromise;
+    contextPromise = null;
+    const ctx = await pending.catch(() => null);
+    await ctx?.close().catch(() => {});
+  }
 
   async function context() {
     if (closed) throw new Error('CloakBrowser session is closed');
@@ -232,23 +290,28 @@ export function createCloakSession(cfg = {}) {
         await fsp.mkdir(profilePath, { recursive: true });
         await clearStaleProfileLock(profilePath);
       }
-      const options = launchOptions(cfg);
+      const options = launchOptions(cfg, activeProxy);
+      if (options.proxy) log(`Transport proxy: ${redactProxy(options.proxy)}`);
+      else log('Transport proxy: none (direct exit IP)');
       log(`Resolving CloakBrowser binary (${options.licenseKey ? 'licensed' : 'unlicensed'})`);
       const binaryPath = await ensureBinary(
         options.licenseKey,
         options.browserVersion,
         options.releaseChannel
       );
-      log(`CloakBrowser binary: ${path.basename(path.dirname(binaryPath))}`);
+      if (!binaryLogged) {
+        log(`CloakBrowser binary: ${path.basename(path.dirname(binaryPath))}`);
+        binaryLogged = true;
+      }
       await prepareLicensedProfile(profilePath, binaryPath, Boolean(options.licenseKey));
       if (options.headless === false) await ensureHeadedDisplay();
-      const args = [];
+      const args = ['--fingerprint-windows-font-metrics'];
       if (bool(cfg.cloakDisableHttp2, true)) args.push('--disable-http2');
       if (profilePath) {
         const seed = await persistentFingerprintSeed(profilePath, cfg.cloakFingerprintSeed);
         args.push(`--fingerprint=${seed}`);
       }
-      if (args.length) options.args = [...(options.args || []), ...args];
+      options.args = [...(options.args || []), ...args];
       contextPromise = (
         profilePath
           ? launchPersistentContext({ ...options, userDataDir: profilePath })
@@ -277,40 +340,110 @@ export function createCloakSession(cfg = {}) {
     return contextPromise;
   }
 
+  function pickProxy(pool, used, random) {
+    if (!pool.length) return undefined;
+    if (!random) {
+      for (let i = 0; i < pool.length; i++) {
+        const candidate = pool[(proxyCursor + i) % pool.length];
+        if (!used.has(candidate)) return candidate;
+      }
+      return pool[proxyCursor % pool.length];
+    }
+    const unused = pool.filter((p) => !used.has(p));
+    const choices = unused.length ? unused : pool;
+    return choices[Math.floor(Math.random() * choices.length)];
+  }
+
+  async function withProxyFailover(opts, fn) {
+    await ensureSettings();
+    const pool = await ensurePool();
+    const random = Boolean(cfg.cloakProxyRandom);
+    const maxAttempts = Math.max(
+      1,
+      Math.min(Number(cfg.cloakProxyAttempts) || 5, pool.length || 1)
+    );
+    const used = new Set();
+    let lastErr;
+    for (let i = 0; i < maxAttempts; i++) {
+      if (opts.signal?.aborted) throw abortError(opts.signal);
+      const proxy = pickProxy(pool, used, random);
+      if (proxy) used.add(proxy);
+      if (proxy !== activeProxy || !contextPromise) {
+        if (contextPromise) await resetContext();
+        activeProxy = proxy;
+      }
+      try {
+        const result = await fn({
+          challengeRounds: pool.length > 1 ? 8 : 30
+        });
+        if (proxy) {
+          if (!random) proxyCursor = Math.max(0, pool.indexOf(proxy));
+          await recordWorkingProxy(cfg, { url: proxy }).catch(() => {});
+        }
+        return result;
+      } catch (err) {
+        lastErr = err;
+        if (proxy) await markProxyFailed(cfg, proxy).catch(() => {});
+        if (opts.signal?.aborted) throw abortError(opts.signal);
+        const canRetry = isProxyRetryable(err) && i < maxAttempts - 1;
+        if (!canRetry) {
+          if (err?.blocked) err.fatal = true;
+          throw err;
+        }
+        log(
+          `Proxy ${redactProxy(proxy) || 'direct'} failed: ${err.message}. ` +
+            `Trying next (${i + 2}/${maxAttempts})`
+        );
+        await resetContext();
+      }
+    }
+    if (lastErr?.blocked) lastErr.fatal = true;
+    throw lastErr;
+  }
+
   /**
    * Load one page through CloakBrowser and return its rendered HTML.
    */
   async function getText(url, opts = {}) {
-    await cfg.validateUrl?.(url);
-    const ctx = await context();
-    const page = await ctx.newPage();
-    const timeout = Number(opts.timeoutMs) || DEFAULT_NAVIGATION_TIMEOUT_MS;
-    const onAbort = () => void page.close().catch(() => {});
-    opts.signal?.addEventListener('abort', onAbort, { once: true });
-    try {
-      log(`Opening ${url}`);
-      const response = await page.goto(url, {
-        waitUntil: 'domcontentloaded',
-        timeout
-      });
-      if (opts.signal?.aborted) throw abortError(opts.signal);
-      // Native sleep, not page.waitForTimeout(): give redirects and browser
-      // challenges time to settle without adding a detectable CDP wait call.
-      const settleMs = Number(opts.settleMs ?? cfg.cloakSettleMs) || 0;
-      if (settleMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, settleMs));
+    return withProxyFailover(opts, async () => {
+      await cfg.validateUrl?.(url);
+      const ctx = await context();
+      const page = await ctx.newPage();
+      const timeout = Number(opts.timeoutMs) || DEFAULT_NAVIGATION_TIMEOUT_MS;
+      const onAbort = () => void page.close().catch(() => {});
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
+      try {
+        log(`Opening ${url}`);
+        const response = await page.goto(url, {
+          waitUntil: 'domcontentloaded',
+          timeout
+        });
+        if (opts.signal?.aborted) throw abortError(opts.signal);
+        // Native sleep, not page.waitForTimeout(): give redirects and browser
+        // challenges time to settle without adding a detectable CDP wait call.
+        const settleMs = Number(opts.settleMs ?? cfg.cloakSettleMs) || 0;
+        if (settleMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, settleMs));
+        }
+        if (opts.signal?.aborted) throw abortError(opts.signal);
+        const text = await page.content();
+        if (isChallengeHtml(text)) {
+          const err = new Error('CloakBrowser received a Cloudflare challenge page');
+          err.blocked = true;
+          err.proxyRetryable = true;
+          throw err;
+        }
+        return {
+          text,
+          url: page.url(),
+          status: response?.status() || 200,
+          headers: response ? await response.allHeaders() : {}
+        };
+      } finally {
+        opts.signal?.removeEventListener('abort', onAbort);
+        await page.close().catch(() => {});
       }
-      if (opts.signal?.aborted) throw abortError(opts.signal);
-      return {
-        text: await page.content(),
-        url: page.url(),
-        status: response?.status() || 200,
-        headers: response ? await response.allHeaders() : {}
-      };
-    } finally {
-      opts.signal?.removeEventListener('abort', onAbort);
-      await page.close().catch(() => {});
-    }
+    });
   }
 
   /**
@@ -334,6 +467,7 @@ export function createCloakSession(cfg = {}) {
    * }} [opts]
    */
   async function download(url, directory, opts = {}) {
+    return withProxyFailover(opts, async ({ challengeRounds }) => {
     await cfg.validateUrl?.(url);
     const ctx = await context();
     const page = await ctx.newPage();
@@ -434,7 +568,8 @@ export function createCloakSession(cfg = {}) {
           if (!response) return;
           const initialHeaders = await response.allHeaders().catch(() => ({}));
           const challengedByHeader = initialHeaders['cf-mitigated'] === 'challenge';
-          for (let attempt = 0; attempt < 30 && !downloadStarted; attempt++) {
+          const rounds = Number(challengeRounds) || 30;
+          for (let attempt = 0; attempt < rounds && !downloadStarted; attempt++) {
             const html = await page.content().catch(() => '');
             if (!(attempt === 0 && challengedByHeader) && !isChallengeHtml(html)) {
               waitPhase = 'waiting';
@@ -466,7 +601,7 @@ export function createCloakSession(cfg = {}) {
         if (isChallengeHtml(html)) {
           const err = new Error('CloakBrowser received a Cloudflare challenge page');
           err.blocked = true;
-          err.fatal = true;
+          err.proxyRetryable = true;
           throw err;
         }
         const response = navigationResult.value;
@@ -584,13 +719,12 @@ export function createCloakSession(cfg = {}) {
       if (target && !completed) await fsp.rm(target, { force: true }).catch(() => {});
       await page.close().catch(() => {});
     }
+    });
   }
 
   async function close() {
     closed = true;
-    if (!contextPromise) return;
-    const ctx = await contextPromise.catch(() => null);
-    await ctx?.close().catch(() => {});
+    await resetContext();
   }
 
   return { getText, download, close };

@@ -23,8 +23,20 @@ WORKDIR /app
 # complete RAR5 and solid-archive support and is preferred at runtime;
 # libarchive-tools (bsdtar) is the fallback. Drop this line and .rar uploads are
 # refused with an explanation rather than failing obscurely.
+# CloakBrowser baseline fonts (same set as nixpacks.toml) plus archive tools
+# and Xvfb for headed Chromium in the container.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends unar libarchive-tools xvfb xauth \
+  && apt-get install -y --no-install-recommends \
+    unar \
+    libarchive-tools \
+    xvfb \
+    xauth \
+    fonts-noto-color-emoji \
+    fonts-freefont-ttf \
+    fonts-unifont \
+    fonts-ipafont-gothic \
+    fonts-wqy-zenhei \
+    fonts-tlwg-loma-otf \
   && rm -rf /var/lib/apt/lists/*
 
 # Install production dependencies first for better layer caching.

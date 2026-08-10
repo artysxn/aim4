@@ -8184,25 +8184,34 @@ th.tm-rl-name,
   font-variant-numeric: tabular-nums;
 }
 
-/* Bottom-right hotkey legend (analyzer grenades + timeline).
-   Pure text: sit left of the notes dock (right 16px + max 300px + gap). */
+/* Bottom-right hotkey legend (analyzer grenades + timeline). */
 .rv-keys {
   position: absolute;
-  right: calc(16px + min(300px, calc(100vw - 32px)) + 16px);
+  right: 16px;
   bottom: 10px;
-  z-index: 3;
+  z-index: 4;
   display: grid;
   grid-template-columns: auto auto;
   column-gap: 14px;
   row-gap: 3px;
   margin: 0;
-  padding: 0;
+  padding: 6px 8px;
   border: 0;
+  border-radius: 6px;
   background: transparent;
   box-shadow: none;
-  pointer-events: none;
+  color: inherit;
   font: 500 11px var(--font-body);
   line-height: 1.35;
+  cursor: pointer;
+  pointer-events: auto;
+  appearance: none;
+  -webkit-appearance: none;
+  text-align: left;
+}
+
+.rv-keys:hover {
+  background: rgba(0, 0, 0, 0.35);
 }
 
 .rv-keys[hidden] {
@@ -8221,8 +8230,9 @@ th.tm-rl-name,
   white-space: nowrap;
 }
 
-/* Sit above the floating round strip / transport when it overlays the map. */
-.rv-timeline .rv-keys {
+/* Timeline: full-viewer bottom-right, above the floating chrome. */
+.rv-timeline > .rv-keys {
+  right: 16px;
   bottom: var(--rv-keys-inset, 10px);
 }
 

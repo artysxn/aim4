@@ -54,7 +54,18 @@ export function loadConfig(overrides = {}) {
     cloakFingerprintSeed: env.AIM4_CLOAK_FINGERPRINT_SEED || '',
     cloakLicenseKey: env.AIM4_CLOAK_LICENSE_KEY || env.CLOAKBROWSER_LICENSE_KEY || '',
     cloakGeoip: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_GEOIP || 'true'),
+    /** Single proxy URL, tried first before the file pool. */
     cloakProxy: env.AIM4_CLOAK_PROXY || '',
+    /**
+     * Newline-separated proxy list (http:// and socks5://). Default sits next
+     * to the ingest state dir (gitignored / volume-mounted). Override with
+     * AIM4_CLOAK_PROXY_FILE. Not baked into the Docker image.
+     */
+    cloakProxyFile: env.AIM4_CLOAK_PROXY_FILE || '',
+    /** How many proxies to try per download/page before giving up. */
+    cloakProxyAttempts: num(env.AIM4_CLOAK_PROXY_ATTEMPTS, 5),
+    /** Random pick (default) vs sequential cursor through the pool. */
+    cloakProxyRandom: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_PROXY_RANDOM || 'true'),
     cloakSettleMs: num(env.AIM4_CLOAK_SETTLE_MS, 5000),
     cloakDownloadDeadlineMs: num(env.AIM4_CLOAK_DOWNLOAD_DEADLINE_MS, 30 * 60_000),
 
@@ -87,6 +98,9 @@ export function loadConfig(overrides = {}) {
   cfg.ledgerPath = path.join(cfg.stateDir, 'ledger.json');
   cfg.lockPath = path.join(cfg.stateDir, 'ingest.lock');
   cfg.statusPath = path.join(cfg.stateDir, 'status.json');
+  if (!cfg.cloakProxyFile) {
+    cfg.cloakProxyFile = path.join(path.dirname(cfg.stateDir), 'cloak-proxies.txt');
+  }
   cfg.cloakDownloadsDir =
     env.AIM4_CLOAK_DOWNLOADS_DIR || path.join(cfg.workDir, '.cloakbrowser-downloads');
   cfg.cloakProfileDir =
