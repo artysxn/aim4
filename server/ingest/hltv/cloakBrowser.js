@@ -22,6 +22,9 @@ const bool = (value, fallback) => {
   return !/^(0|false|no|off)$/i.test(String(value).trim());
 };
 
+const downloadsPathFor = (cfg) =>
+  cfg.cloakDownloadsDir || (cfg.workDir ? path.join(cfg.workDir, '.cloakbrowser-downloads') : '');
+
 /**
  * Launch options are environment-driven because the same code runs locally
  * and in the Linux deployment.
@@ -31,8 +34,7 @@ function launchOptions(cfg = {}) {
   if (proxy && typeof cfg.validateUrl === 'function') {
     throw new Error('A proxy cannot be used for an SSRF-guarded CloakBrowser session');
   }
-  const downloadsPath =
-    cfg.cloakDownloadsDir || (cfg.workDir ? path.join(cfg.workDir, '.cloakbrowser-downloads') : '');
+  const downloadsPath = downloadsPathFor(cfg);
   return {
     headless: bool(cfg.cloakHeadless ?? process.env.AIM4_CLOAK_HEADLESS, true),
     humanize: bool(cfg.cloakHumanize ?? process.env.AIM4_CLOAK_HUMANIZE, true),
@@ -54,6 +56,18 @@ function safeName(value, fallback = 'download.bin') {
 function abortError(signal) {
   const reason = signal?.reason;
   return reason instanceof Error ? reason : new Error(reason ? String(reason) : 'Cancelled');
+}
+
+async function downloadFiles(directory) {
+  if (!directory) return [];
+  const names = await fsp.readdir(directory).catch(() => []);
+  const files = [];
+  for (const name of names) {
+    const file = path.join(directory, name);
+    const stat = await fsp.stat(file).catch(() => null);
+    if (stat?.isFile()) files.push({ name, file, size: stat.size, mtimeMs: stat.mtimeMs });
+  }
+  return files;
 }
 
 /**
@@ -82,8 +96,7 @@ export function createCloakSession(cfg = {}) {
     if (closed) throw new Error('CloakBrowser session is closed');
     if (!contextPromise) {
       log('Launching CloakBrowser');
-      const downloadsPath =
-        cfg.cloakDownloadsDir || (cfg.workDir ? path.join(cfg.workDir, '.cloakbrowser-downloads') : '');
+      const downloadsPath = downloadsPathFor(cfg);
       if (downloadsPath) await fsp.mkdir(downloadsPath, { recursive: true });
       contextPromise = launchContext(launchOptions(cfg)).then(async (ctx) => {
         // Guard every browser request, not just the first URL. An admin-supplied
@@ -157,7 +170,12 @@ export function createCloakSession(cfg = {}) {
    *   deadlineMs?: number,
    *   stallMs?: number,
    *   signal?: AbortSignal,
-   *   onProgress?: (p: {received: number, total: number}) => void
+   *   onProgress?: (p: {
+   *     received: number,
+   *     total: number,
+   *     phase?: string,
+   *     elapsedMs?: number
+   *   }) => void
    * }} [opts]
    */
   async function download(url, directory, opts = {}) {
@@ -175,6 +193,7 @@ export function createCloakSession(cfg = {}) {
     let target = null;
     let completed = false;
     let deadlineTimer = null;
+    let progressTimer = null;
     const onAbort = () => {
       const err = abortError(opts.signal);
       rejectPendingDownload?.(err);
@@ -186,6 +205,10 @@ export function createCloakSession(cfg = {}) {
 
     try {
       await fsp.mkdir(directory, { recursive: true });
+      const browserDownloadsPath = downloadsPathFor(cfg);
+      const baselineFiles = new Set(
+        (await downloadFiles(browserDownloadsPath)).map((entry) => entry.name)
+      );
       log(`Opening download URL ${url}`);
       deadlineTimer = setTimeout(() => {
         const err = new Error(
@@ -228,6 +251,17 @@ export function createCloakSession(cfg = {}) {
       const responses = new Map();
       const onResponse = (response) => responses.set(response.url(), response);
       page.on('response', onResponse);
+      const waitingStartedAt = Date.now();
+      const reportWaiting = () =>
+        opts.onProgress?.({
+          received: 0,
+          total: 0,
+          phase: 'waiting',
+          elapsedMs: Date.now() - waitingStartedAt
+        });
+      reportWaiting();
+      progressTimer = setInterval(reportWaiting, 1000);
+      progressTimer.unref?.();
 
       const navigationPromise = page
         .goto(url, { waitUntil: 'domcontentloaded', timeout })
@@ -244,6 +278,8 @@ export function createCloakSession(cfg = {}) {
       ]);
       page.off('popup', onPopup);
       page.off('response', onResponse);
+      clearInterval(progressTimer);
+      progressTimer = null;
       clearTimeout(downloadTimer);
       rejectPendingDownload = null;
       for (const candidate of attached) candidate.off('download', settleDownload);
@@ -278,9 +314,49 @@ export function createCloakSession(cfg = {}) {
         await item.cancel().catch(() => {});
         throw new Error(`Download is ${declaredBytes} bytes, over the ${maxBytes} byte cap`);
       }
+
+      // Playwright exposes the readable stream only after Chromium finishes
+      // its managed download. Poll that managed directory in the meantime so
+      // the admin UI still receives live bytes instead of appearing frozen.
+      const progressStartedAt = Date.now();
+      let progressFile = null;
+      let progressBusy = false;
+      let browserReceived = 0;
+      const reportBrowserProgress = async () => {
+        if (progressBusy) return;
+        progressBusy = true;
+        try {
+          const files = await downloadFiles(browserDownloadsPath);
+          let current = progressFile
+            ? files.find((entry) => entry.name === progressFile)
+            : null;
+          if (!current) {
+            current = files
+              .filter((entry) => !baselineFiles.has(entry.name))
+              .sort((a, b) => b.mtimeMs - a.mtimeMs)[0] || null;
+            progressFile = current?.name || null;
+          }
+          browserReceived = Math.max(browserReceived, current?.size || 0);
+          opts.onProgress?.({
+            received: browserReceived,
+            total: declaredBytes,
+            phase: 'browser',
+            elapsedMs: Date.now() - progressStartedAt
+          });
+        } finally {
+          progressBusy = false;
+        }
+      };
+      await reportBrowserProgress();
+      progressTimer = setInterval(() => void reportBrowserProgress(), 1000);
+      progressTimer.unref?.();
+
       const stream = await item.createReadStream();
       if (!stream) throw new Error('CloakBrowser download produced no readable stream');
       activeStream = stream;
+      clearInterval(progressTimer);
+      progressTimer = null;
+      await reportBrowserProgress();
 
       let received = 0;
       let stallTimer = null;
@@ -300,7 +376,12 @@ export function createCloakSession(cfg = {}) {
           void item.cancel().catch(() => {});
           return;
         }
-        opts.onProgress?.({ received, total: declaredBytes });
+        opts.onProgress?.({
+          received: Math.max(browserReceived, received),
+          total: declaredBytes,
+          phase: 'copy',
+          elapsedMs: Date.now() - progressStartedAt
+        });
       });
 
       try {
@@ -322,6 +403,7 @@ export function createCloakSession(cfg = {}) {
       };
     } finally {
       if (deadlineTimer) clearTimeout(deadlineTimer);
+      if (progressTimer) clearInterval(progressTimer);
       opts.signal?.removeEventListener('abort', onAbort);
       await activeDownload?.delete().catch(() => {});
       if (target && !completed) await fsp.rm(target, { force: true }).catch(() => {});

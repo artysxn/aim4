@@ -136,6 +136,12 @@ function probeBlock() {
     if (!live) return null;
     if (live.stage === 'browser') return live.detail || 'Opening URL in CloakBrowser';
     if (live.stage === 'download') {
+      if (live.phase === 'waiting') {
+        return `Waiting for an automatic download: ${Math.floor((live.elapsedMs || 0) / 1000)}s`;
+      }
+      if (!live.received && live.elapsedMs) {
+        return `Downloading in CloakBrowser: ${Math.floor(live.elapsedMs / 1000)}s`;
+      }
       const total = live.total ? ` of ${bytes(live.total)}` : '';
       return `Downloading: ${bytes(live.received || 0)}${total}`;
     }
@@ -284,9 +290,15 @@ export function ingestPanel() {
       if (current.event) line.appendChild(el('span', 'ingest-dim', current.event));
       const stage =
         current.stage === 'download'
-          ? `Downloading: ${bytes(current.received || 0)}${
-              current.totalBytes ? ` of ${bytes(current.totalBytes)}` : ''
-            }`
+          ? current.downloadPhase === 'waiting'
+            ? `Waiting for an automatic download: ${Math.floor(
+                (current.elapsedMs || 0) / 1000
+              )}s`
+            : !current.received && current.elapsedMs
+            ? `Downloading in CloakBrowser: ${Math.floor(current.elapsedMs / 1000)}s`
+            : `Downloading: ${bytes(current.received || 0)}${
+                current.totalBytes ? ` of ${bytes(current.totalBytes)}` : ''
+              }`
           : current.map
             ? `${current.stage || 'working'}: ${current.map}${
                 current.round ? ` round ${current.round}/${current.totalRounds || '?'}` : ''

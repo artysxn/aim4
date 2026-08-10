@@ -513,8 +513,8 @@ async function executeProbe(c, run, urlObj, hooks) {
       maxBytes: c.maxArchiveBytes,
       stallMs: DOWNLOAD_STALL_MS,
       signal: state.abort.signal,
-      onProgress: ({ received, total }) => {
-        run.live = { stage: 'download', received, total };
+      onProgress: (progress) => {
+        run.live = { stage: 'download', ...progress };
         if (Date.now() - lastPersist > 2000) {
           lastPersist = Date.now();
           persist(c, run).catch(() => {});
