@@ -170,7 +170,7 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
       <div class="sc-list">
         <div class="sc-list-head">
           <div class="sc-list-filters">
-            <select class="site-select" data-filter-map>
+            <select class="site-select" data-filter-map aria-label="Map">
               <option value="">All maps</option>
               ${maps
                 .map(
@@ -181,9 +181,17 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
                 )
                 .join('')}
             </select>
-            <div class="rp-chips">
-              <button type="button" class="rp-chip${sideFilter === 'T' ? ' active' : ''}" data-filter-side="T">T</button>
-              <button type="button" class="rp-chip${sideFilter === 'CT' ? ' active' : ''}" data-filter-side="CT">CT</button>
+            <div class="rp-seg rp-seg-side" role="group" aria-label="Side">
+              <button type="button" class="rp-seg-btn${
+                sideFilter === 'T' ? ' active' : ''
+              }" data-filter-side="T" aria-label="T" title="T">
+                <img src="/icons/icon_t.png" alt="" width="16" height="16" draggable="false" />
+              </button>
+              <button type="button" class="rp-seg-btn${
+                sideFilter === 'CT' ? ' active' : ''
+              }" data-filter-side="CT" aria-label="CT" title="CT">
+                <img src="/icons/icon_ct.png" alt="" width="16" height="16" draggable="false" />
+              </button>
             </div>
           </div>
         </div>

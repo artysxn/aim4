@@ -173,7 +173,6 @@ export function initReplayViewerView({ auth, escapeHtml, openSelf = null }) {
 
         <section class="rvw-section">
           <h3 class="rvw-section-title">Replays</h3>
-          <p class="rvw-section-hint">Last and best runs open in the trainer player.</p>
           ${
             supabaseConfigured()
               ? replaysHtml(rows, viewingOther)

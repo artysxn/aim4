@@ -521,7 +521,6 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       </div>
 
       <div class="an-side-block" ${ready ? '' : 'hidden'}>
-        <p class="an-side-hint">Per-player deep dive view: WIP.</p>
         <div class="an-field">
           ${menuSelect(
             'data-an-side',

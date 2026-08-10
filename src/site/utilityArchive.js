@@ -145,7 +145,7 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     toolsEl.innerHTML = `
       <div class="db-block">
         <select class="site-select" data-map>
-          <option value="">Pick a map</option>${mapOpts}
+          <option value="">Map</option>${mapOpts}
         </select>
       </div>
       <div class="db-block">
@@ -154,17 +154,17 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
             (n) =>
               `<button type="button" class="db-nade" data-drag-nade="${n.type}" title="${escapeHtml(
                 n.label
-              )} — drag onto map">
+              )}: drag onto map">
                 <img src="${n.icon}" alt="" width="16" height="20" draggable="false" />
               </button>`
           ).join('')}
         </div>
-        <p class="sc-note">Drag a grenade onto the map. Then click to add throw spots.</p>
+        <p class="sc-note">Drag a grenade onto the map, then click to add throw spots.</p>
       </div>
       <div class="db-block">
         <p class="sc-status${statusBad ? ' bad' : ''}" id="ua-status">${escapeHtml(status)}</p>
       </div>
-      <p class="sc-note">TIP: You can write &lt;!1234&gt; in the stratbook role editor to auto-link utility setpos/setang to the rounds you are making.</p>
+      <p class="sc-note">In the stratbook editor, write &lt;!1234&gt; to link setpos/setang to a utility spot.</p>
     `;
   }
 
@@ -180,11 +180,9 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
     const showActions = creating || dirty;
     detailEl.innerHTML = `
       <div class="db-block">
-        <span class="sc-label">Landing spot <code class="ua-id">&lt;!${escapeHtml(g.id)}&gt;</code></span>
-        <label class="ua-field">
-          <input class="site-input" data-name maxlength="80" value="${escapeHtml(g.name || '')}"
-            placeholder="Grenade name" />
-        </label>
+        <code class="ua-id" title="Landing spot id">&lt;!${escapeHtml(g.id)}&gt;</code>
+        <input class="site-input" data-name maxlength="80" value="${escapeHtml(g.name || '')}"
+          placeholder="Grenade name" aria-label="Grenade name" />
       </div>
       <div class="db-block">
         ${
@@ -415,7 +413,7 @@ export function mountUtilityArchive({ host, teamId, escapeHtml, headerHtml }) {
       await navigator.clipboard.writeText(text);
       setStatus(th.comment ? `Copied. ${th.comment}` : 'Copied setpos / setang.');
     } catch {
-      setStatus('Could not copy — select the fields manually.', true);
+      setStatus('Could not copy. Select the fields manually.', true);
     }
   }
 

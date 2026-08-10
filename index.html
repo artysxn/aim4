@@ -204,7 +204,7 @@
             <div class="view-pad">
               <div class="training-cats" id="training-cats"></div>
               <div class="training-search" id="training-search-wrap" hidden>
-                <input type="search" id="training-search" placeholder="Search by name or tag" spellcheck="false" autocomplete="off" aria-label="Search gamemodes" />
+                <input type="search" id="training-search" class="site-input" placeholder="Search by name or tag" spellcheck="false" autocomplete="off" aria-label="Search gamemodes" />
               </div>
               <div class="training-list" id="training-list"></div>
             </div>
@@ -287,8 +287,10 @@
           <section class="view" data-view="leaderboards">
             <div class="view-pad view-pad-fill">
               <div class="lb-head" id="lb-tabs">
-                <button type="button" class="seg-tab active" data-lb="elo">Ranked ELO</button>
-                <button type="button" class="seg-tab" data-lb="aim-rating">Aim Rating</button>
+                <div class="lb-seg" role="group" aria-label="Leaderboard type">
+                  <button type="button" class="seg-tab active" data-lb="elo">Ranked ELO</button>
+                  <button type="button" class="seg-tab" data-lb="aim-rating">Aim Rating</button>
+                </div>
                 <select id="lb-mode-select" class="site-select" aria-label="Gamemode leaderboard"></select>
               </div>
               <div id="lb-body" class="lb-body"></div>

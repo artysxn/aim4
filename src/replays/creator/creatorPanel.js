@@ -500,20 +500,18 @@ export function createCreatorPanel({
 
     leftEl.innerHTML = `
       <div class="sc-block">
-        <span class="sc-label">Name</span>
         <input class="site-input" id="sc-name" type="text" maxlength="120"
+          placeholder="Round name" aria-label="Round name"
           value="${escapeHtml(round.name || '')}" ${readOnly ? 'readonly' : ''} />
       </div>
 
       <div class="sc-block">
-        <span class="sc-label">Map</span>
-        <select class="site-select" data-map ${readOnly ? 'disabled' : ''}>
-          <option value="">Pick a map</option>${mapOptions}
+        <select class="site-select" data-map aria-label="Map" ${readOnly ? 'disabled' : ''}>
+          <option value="">Map</option>${mapOptions}
         </select>
       </div>
 
       <div class="sc-block">
-        <span class="sc-label">Side</span>
         <div class="rp-seg rp-seg-side" role="group" aria-label="Side">
           <button type="button" class="rp-seg-btn${
             round.side === 'T' ? ' active' : ''
@@ -529,9 +527,8 @@ export function createCreatorPanel({
       </div>
 
       <div class="sc-block">
-        <span class="sc-label">Stratbook entry</span>
-        <select class="site-select" data-strategy ${readOnly ? 'disabled' : ''}>
-          <option value="">Not linked</option>${stratOptions}
+        <select class="site-select" data-strategy aria-label="Stratbook entry" ${readOnly ? 'disabled' : ''}>
+          <option value="">Stratbook entry</option>${stratOptions}
         </select>
       </div>
 

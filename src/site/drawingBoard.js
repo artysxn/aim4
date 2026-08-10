@@ -141,13 +141,13 @@ export function mountDrawingBoard({ host, teamId, escapeHtml, headerHtml }) {
     toolsEl.innerHTML = `
       <div class="db-block">
         <select class="site-select" data-map>
-          <option value="">Pick a map</option>${mapOpts}
+          <option value="">Map</option>${mapOpts}
         </select>
       </div>
       <div class="db-block">
-        <div class="db-tool-row">
-          <button type="button" class="db-tool${tool === 'paint' ? ' active' : ''}" data-tool="paint">Paint</button>
-          <button type="button" class="db-tool${tool === 'erase' ? ' active' : ''}" data-tool="erase">Erase</button>
+        <div class="rp-seg" role="group" aria-label="Tool">
+          <button type="button" class="rp-seg-btn${tool === 'paint' ? ' active' : ''}" data-tool="paint">Paint</button>
+          <button type="button" class="rp-seg-btn${tool === 'erase' ? ' active' : ''}" data-tool="erase">Erase</button>
         </div>
       </div>
       <div class="db-block">
@@ -166,21 +166,19 @@ export function mountDrawingBoard({ host, teamId, escapeHtml, headerHtml }) {
             (n) =>
               `<button type="button" class="db-nade" data-drag-nade="${n.type}" title="${escapeHtml(
                 n.label
-              )} — drag onto map">
+              )}: drag onto map">
                 <img src="${n.icon}" alt="" width="16" height="20" draggable="false" />
               </button>`
           ).join('')}
-          <button type="button" class="db-nade db-player-chip" data-drag-player title="Player — drag onto map">
+          <button type="button" class="db-nade db-player-chip" data-drag-player title="Player: drag onto map">
             <span class="db-player-dot" style="background:${color}"></span>
           </button>
         </div>
       </div>
       <div class="db-block">
-        <label class="ua-field">Board name
-          <input class="site-input" data-save-name maxlength="80" value="${escapeHtml(
-            saveName || board.name || ''
-          )}" placeholder="Untitled" ${map ? '' : 'disabled'} />
-        </label>
+        <input class="site-input" data-save-name maxlength="80" value="${escapeHtml(
+          saveName || board.name || ''
+        )}" placeholder="Board name" aria-label="Board name" ${map ? '' : 'disabled'} />
         <div class="db-actions-row">
           <button type="button" class="btn btn-sm" data-clear ${!map ? 'disabled' : ''}>Clear</button>
           <button type="button" class="btn btn-sm" data-undo ${!board.strokes.length ? 'disabled' : ''}>Undo</button>
@@ -200,7 +198,6 @@ export function mountDrawingBoard({ host, teamId, escapeHtml, headerHtml }) {
     }
     libraryEl.innerHTML = `
       <div class="db-block">
-        <span class="sc-label">Saved boards</span>
         <button type="button" class="btn btn-sm" data-new-board>New blank</button>
       </div>
       <ul class="db-board-list">
@@ -264,7 +261,7 @@ export function mountDrawingBoard({ host, teamId, escapeHtml, headerHtml }) {
       else {
         board = emptyBoard(map);
         syncDrawingFromBoard();
-        setStatus('Empty board — drag utility or paint, then Save.');
+        setStatus('Empty board. Drag utility or paint, then Save.');
       }
     } catch (err) {
       board = emptyBoard(map);

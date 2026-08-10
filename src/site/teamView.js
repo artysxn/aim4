@@ -1357,7 +1357,7 @@ export function initTeamView({ auth, escapeHtml }) {
           <h3 class="tm-card-title">Roster</h3>
           ${
             canEdit
-              ? '<p class="tm-note">Drag a real member onto a placeholder to merge seats and positions.</p>'
+              ? '<p class="tm-note">Drag a member onto a placeholder to merge seats and positions.</p>'
               : ''
           }
           <table class="tm-table">
@@ -1373,9 +1373,17 @@ export function initTeamView({ auth, escapeHtml }) {
       <section class="tm-card">
         <div class="tm-card-head">
           <h3 class="tm-card-title">Positions</h3>
-          <div class="rp-chips">
-            <button type="button" class="rp-chip${rolesSide === 'T' ? ' active' : ''}" data-side="T">T side</button>
-            <button type="button" class="rp-chip${rolesSide === 'CT' ? ' active' : ''}" data-side="CT">CT side</button>
+          <div class="rp-seg rp-seg-side" role="group" aria-label="Side">
+            <button type="button" class="rp-seg-btn${
+              rolesSide === 'T' ? ' active' : ''
+            }" data-side="T" aria-label="T" title="T">
+              <img src="/icons/icon_t.png" alt="" width="16" height="16" draggable="false" />
+            </button>
+            <button type="button" class="rp-seg-btn${
+              rolesSide === 'CT' ? ' active' : ''
+            }" data-side="CT" aria-label="CT" title="CT">
+              <img src="/icons/icon_ct.png" alt="" width="16" height="16" draggable="false" />
+            </button>
           </div>
         </div>
         <div class="tm-table-scroll">
