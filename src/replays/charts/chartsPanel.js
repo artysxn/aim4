@@ -8,7 +8,9 @@
 // the cached facts in memory; nothing here refetches.
 // ---------------------------------------------------------------------------
 
-import { fetchStats, consumeCapability, formatApiError } from '../api.js';
+import { consumeCapability, formatApiError } from '../api.js';
+import { getStatsPayload, statsCacheGeneration, statsCacheKey } from '../statsCache.js';
+import { scheduleUiJob } from '../../lib/frameBudget.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { ECONOMIES, MAPS } from '../shared/roundId.js';
 import {
@@ -89,6 +91,10 @@ export function createChartsPanel({ escapeHtml }) {
     </div>`;
 
   let facts = null;
+  /** Cache key of the facts currently in memory (`library` or demos:…). */
+  let factsKey = '';
+  /** Matches `statsCacheGeneration()` when facts were built. */
+  let factsGeneration = -1;
   let loadToken = 0;
   /** @type {object[]} hover payloads, indexed by the mark's data-i */
   let hoverPoints = [];
@@ -1301,11 +1307,29 @@ export function createChartsPanel({ escapeHtml }) {
     return state.filter;
   }
 
+  /** @type {{ current: number }} */
+  const changeTokenRef = { current: 0 };
+
   function afterChange({ rebuildSide = true } = {}) {
     syncModeTabs();
-    if (rebuildSide) renderSide();
-    renderCanvas();
-    savedViews.touch();
+    // Keep the side chrome when only the plot changes; always yield so a
+    // sidebar click can interrupt mid-recompute.
+    if (rebuildSide) {
+      canvasEl.setAttribute('aria-busy', 'true');
+      canvasEl.innerHTML = spinnerHtml('Updating…');
+    } else {
+      canvasEl.setAttribute('aria-busy', 'true');
+    }
+    void scheduleUiJob({
+      tokenRef: changeTokenRef,
+      work(token) {
+        if (changeTokenRef.current !== token) return;
+        if (rebuildSide) renderSide();
+        renderCanvas();
+        canvasEl.removeAttribute('aria-busy');
+        savedViews.touch();
+      }
+    });
   }
 
   function placeDdMenu(details) {
@@ -1826,17 +1850,34 @@ export function createChartsPanel({ escapeHtml }) {
 
   async function load(scope = {}) {
     const token = ++loadToken;
+    const key = statsCacheKey(scope.demos || null);
+    // Warm revisit: keep the builder, skip another fetch/spend/buildFacts.
+    if (
+      facts?.playerFacts?.length &&
+      factsKey === key &&
+      factsGeneration === statsCacheGeneration()
+    ) {
+      mountPageHead();
+      renderSide();
+      renderCanvas();
+      canvasEl.removeAttribute('aria-busy');
+      mountSavedViews();
+      void savedViews.applyShareParam(scope.params || {}).then((hit) => {
+        if (!hit) savedViews.touch();
+      });
+      return;
+    }
     canvasEl.innerHTML = spinnerHtml('Loading charts…');
     const cancelSlow = watchSlowLoad(canvasEl);
     try {
-      // Spending happens when the chart actually loads data, not when the route
-      // opens. Free gets three of these per rolling day.
+      // Spending happens when Charts first builds facts for this session scope.
+      // Warm revisits return earlier; a Database cache hit still spends once.
       await consumeCapability(CAP.ANALYTICS_CHARTS);
       if (token !== loadToken) {
         cancelSlow();
         return;
       }
-      const payload = await fetchStats(scope.demos || null, {
+      const payload = await getStatsPayload(scope.demos || null, {
         onProgress: (p) => {
           if (token !== loadToken) return;
           setSpinnerLabel(canvasEl, statsProgressLabel(p));
@@ -1844,8 +1885,19 @@ export function createChartsPanel({ escapeHtml }) {
       });
       cancelSlow();
       if (token !== loadToken) return;
-      facts = buildFacts(payload);
-      if (!facts.playerFacts.length) {
+      setSpinnerLabel(canvasEl, statsProgressLabel({ phase: 'building-table' }));
+      await scheduleUiJob({
+        tokenRef: changeTokenRef,
+        isCurrent: () => token === loadToken,
+        work() {
+          if (token !== loadToken) return;
+          facts = buildFacts(payload);
+          factsKey = key;
+          factsGeneration = statsCacheGeneration();
+        }
+      });
+      if (token !== loadToken) return;
+      if (!facts?.playerFacts?.length) {
         sideEl.innerHTML = '';
         canvasEl.innerHTML =
           '<p class="view-empty">No parsed rounds to chart yet. Upload a replay first.</p>';
@@ -1855,6 +1907,7 @@ export function createChartsPanel({ escapeHtml }) {
       mountPageHead();
       renderSide();
       renderCanvas();
+      canvasEl.removeAttribute('aria-busy');
       mountSavedViews();
       void savedViews.refresh().then(mountSavedViews);
       // A share link wins over whatever the builder was left on.

@@ -9,7 +9,8 @@
 //            Chapter key stays `antistrat` for the same reason.
 // ---------------------------------------------------------------------------
 
-import { fetchStats, consumeCapability, formatApiError } from '../api.js';
+import { consumeCapability, formatApiError } from '../api.js';
+import { getStatsPayload, peekStatsCache, statsCacheGeneration } from '../statsCache.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
 import { attachTips } from '../stats/statsTables.js';
@@ -164,6 +165,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   });
 
   let payload = null;
+  /** Matches `statsCacheGeneration()` when `payload` was taken from the cache. */
+  let payloadGeneration = -1;
   /** @type {Array<{id:string,name:string,maps:string[],teamKeys:string[]}>} */
   let players = [];
   /** @type {Array<{key:string,name:string,playerIds:string[],maps:string[]}>} */
@@ -1023,14 +1026,26 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
     // Antistrat needs the stats library, not a pattern-finder spend. Fetch the
     // shared payload without consuming, and hand it to the chapter.
+    const cacheFresh = () => payloadGeneration === statsCacheGeneration();
+
     if (chapter === 'antistrat') {
-      if (payload) {
+      if (payload && cacheFresh()) {
+        antistrat?.load(payload);
+        return;
+      }
+      const cached = peekStatsCache(null);
+      if (cached) {
+        payload = cached;
+        payloadGeneration = statsCacheGeneration();
+        players = listPlayers(payload);
+        teams = listTeams(payload);
+        maps = listMaps(payload);
         antistrat?.load(payload);
         return;
       }
       mainEl.innerHTML = spinnerHtml('Loading stats…');
       try {
-        const data = await fetchStats(null, {
+        const data = await getStatsPayload(null, {
           onProgress: (p) => {
             if (token !== loadToken) return;
             setSpinnerLabel(mainEl, statsProgressLabel(p));
@@ -1038,6 +1053,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         });
         if (token !== loadToken) return;
         payload = data;
+        payloadGeneration = statsCacheGeneration();
         players = listPlayers(payload);
         teams = listTeams(payload);
         maps = listMaps(payload);
@@ -1052,6 +1068,35 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       return;
     }
 
+    // Revisit: reuse the shared library payload without another fetch/spend.
+    if (payload && cacheFresh()) {
+      render();
+      mountSavedViews();
+      antistrat?.load(payload);
+      return;
+    }
+    const cached = peekStatsCache(null);
+    if (cached) {
+      payload = cached;
+      payloadGeneration = statsCacheGeneration();
+      players = listPlayers(payload);
+      teams = listTeams(payload);
+      maps = listMaps(payload);
+      state.playerIds = state.playerIds.filter((id) => players.some((p) => p.id === id));
+      if (state.map && !maps.includes(state.map)) state.map = '';
+      loadShapesForMap();
+      render();
+      mountSavedViews();
+      antistrat?.load(payload);
+      void savedViews.refresh().then(mountSavedViews);
+      void savedViews
+        .applyShareParam(Object.fromEntries(new URLSearchParams(window.location.search)))
+        .then((hit) => {
+          if (!hit) savedViews.touch();
+        });
+      return;
+    }
+
     mainEl.innerHTML = spinnerHtml('Loading pattern finder…');
     const cancelSlow = watchSlowLoad(mainEl);
     try {
@@ -1060,7 +1105,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         cancelSlow();
         return;
       }
-      const data = await fetchStats(null, {
+      const data = await getStatsPayload(null, {
         onProgress: (p) => {
           if (token !== loadToken) return;
           setSpinnerLabel(mainEl, statsProgressLabel(p));
@@ -1069,6 +1114,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       cancelSlow();
       if (token !== loadToken) return;
       payload = data;
+      payloadGeneration = statsCacheGeneration();
       players = listPlayers(payload);
       teams = listTeams(payload);
       maps = listMaps(payload);

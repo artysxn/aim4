@@ -6,7 +6,9 @@
 // that is a re-aggregation in memory. Nothing here re-reads a round.
 // ---------------------------------------------------------------------------
 
-import { fetchStats, formatApiError } from '../api.js';
+import { formatApiError } from '../api.js';
+import { getStatsPayload } from '../statsCache.js';
+import { scheduleUiJob } from '../../lib/frameBudget.js';
 import {
   attachPlayerRoles,
   payloadHasRoles,
@@ -603,14 +605,15 @@ export function createStatsPanel({
       filter.roundOwn = [];
       filter.roundOpp = [];
       resetListPage();
-      render();
+      // Side change rebuilds round menus; other segs only need class sync.
+      scheduleRender({ rebuildFilters: true });
       return;
     }
     const result = e.target.closest('[data-result]');
     if (result) {
       filter.result = filter.result === result.dataset.result ? '' : result.dataset.result;
       resetListPage();
-      render();
+      scheduleRender({ rebuildFilters: false });
       return;
     }
     const adv = e.target.closest('[data-advantage]');
@@ -618,7 +621,7 @@ export function createStatsPanel({
       filter.advantage =
         filter.advantage === adv.dataset.advantage ? '' : adv.dataset.advantage;
       resetListPage();
-      render();
+      scheduleRender({ rebuildFilters: false });
       return;
     }
     if (e.target.closest('[data-clear]')) {
@@ -639,7 +642,7 @@ export function createStatsPanel({
       filter.dateTo = '';
       filter.minRounds = defaultMinRounds(scopeForMinRounds([]));
       resetListPage();
-      render();
+      scheduleRender({ rebuildFilters: true });
     }
   });
 
@@ -649,7 +652,7 @@ export function createStatsPanel({
       filter[awp.dataset.awp] = Boolean(awp.checked);
       awp.closest('.rp-awp-toggle')?.classList.toggle('active', awp.checked);
       resetListPage();
-      render();
+      scheduleRender({ rebuildFilters: false });
       return;
     }
     const roundBox = e.target.closest('[data-round-filter]');
@@ -666,12 +669,13 @@ export function createStatsPanel({
       }
       const keepOpen = field;
       resetListPage();
-      render();
-      const kept = filtersEl.querySelector(`details[data-round-menu="${keepOpen}"]`);
-      if (kept) {
-        kept.setAttribute('open', '');
-        placeRoundMenu(kept);
-      }
+      void scheduleRender({ rebuildFilters: true }).then(() => {
+        const kept = filtersEl.querySelector(`details[data-round-menu="${keepOpen}"]`);
+        if (kept) {
+          kept.setAttribute('open', '');
+          placeRoundMenu(kept);
+        }
+      });
       return;
     }
     const roleSel = e.target.closest('[data-role-filter]');
@@ -680,7 +684,7 @@ export function createStatsPanel({
       const value = roleSel.value || '';
       filter.role = value ? { side, value } : null;
       resetListPage();
-      render();
+      scheduleRender({ rebuildFilters: false });
       return;
     }
     const sel = e.target.closest('[data-filter]');
@@ -696,7 +700,7 @@ export function createStatsPanel({
       // only when the user already moved off the previous auto default.
       if (wasDefault) filter.minRounds = defaultMinRounds(scopeForMinRounds(filter.maps));
       resetListPage();
-      render();
+      scheduleRender({ rebuildFilters: true });
       return;
     }
     if (sel.dataset.filter === 'fromSec' || sel.dataset.filter === 'toSec') {
@@ -713,7 +717,7 @@ export function createStatsPanel({
         }
       }
       resetListPage();
-      render();
+      scheduleRender({ rebuildFilters: false });
       return;
     }
     if (sel.dataset.filter === 'minRounds') {
@@ -721,7 +725,7 @@ export function createStatsPanel({
       filter.minRounds = n;
       sel.value = String(n);
       resetListPage();
-      render();
+      scheduleRender({ rebuildFilters: false });
       return;
     }
     if (sel.dataset.filter === 'dateFrom' || sel.dataset.filter === 'dateTo') {
@@ -736,13 +740,13 @@ export function createStatsPanel({
       }
       calendarOpen = true;
       resetListPage();
-      render();
+      scheduleRender({ rebuildFilters: false });
       return;
     }
     const value = sel.value === '' ? null : Number(sel.value);
     filter[sel.dataset.filter] = value;
     resetListPage();
-    render();
+    scheduleRender({ rebuildFilters: false });
   });
 
   tabsEl?.addEventListener('click', (e) => {
@@ -750,7 +754,7 @@ export function createStatsPanel({
     if (!btn || btn.dataset.tab === tab || detail) return;
     tab = btn.dataset.tab;
     syncTabButtons();
-    render();
+    scheduleRender({ rebuildFilters: false });
   });
 
   document.addEventListener('pointerdown', (e) => {
@@ -922,7 +926,7 @@ export function createStatsPanel({
       if (!Number.isFinite(next) || next < 1) return;
       if (detail) detailPage = next;
       else page[tab] = next;
-      render();
+      scheduleRender({ rebuildFilters: false });
       return;
     }
     const th = e.target.closest('[data-sort]');
@@ -942,7 +946,7 @@ export function createStatsPanel({
     }
     if (detail) detailPage = 1;
     else page[tab] = 1;
-    render();
+    scheduleRender({ rebuildFilters: false });
   });
 
   bodyEl.addEventListener('keydown', (e) => {
@@ -1175,7 +1179,7 @@ export function createStatsPanel({
     if (Array.isArray(next.files)) scope = { ...scope, files: [...next.files] };
 
     syncTabButtons();
-    if (payload) render();
+    if (payload) scheduleRender({ rebuildFilters: true });
     else if (notify) emitViewChange();
   }
 
@@ -1183,7 +1187,7 @@ export function createStatsPanel({
     detail = null;
     detailPage = 1;
     detailSort = { key: 'date', dir: 'desc' };
-    render();
+    scheduleRender({ rebuildFilters: false });
   }
 
   function openPlayerDetail(id, label) {
@@ -1194,7 +1198,7 @@ export function createStatsPanel({
     detailSort = { key: 'date', dir: 'desc' };
     tab = 'players';
     syncTabButtons();
-    render();
+    scheduleRender({ rebuildFilters: false });
   }
 
   function openTeamDetail(name, label) {
@@ -1205,7 +1209,7 @@ export function createStatsPanel({
     detailSort = { key: 'date', dir: 'desc' };
     tab = 'teams';
     syncTabButtons();
-    render();
+    scheduleRender({ rebuildFilters: false });
   }
 
   // ---- saved views --------------------------------------------------------
@@ -1607,10 +1611,74 @@ export function createStatsPanel({
     });
   }
 
-  function render() {
+  /** @type {{ current: number }} */
+  const renderTokenRef = { current: 0 };
+
+  /** Sync seg/toggle active classes without rebuilding the filter DOM. */
+  function syncFilterChrome() {
+    for (const btn of filtersEl.querySelectorAll('[data-side]')) {
+      btn.classList.toggle('active', btn.dataset.side === filter.side);
+    }
+    for (const btn of filtersEl.querySelectorAll('[data-result]')) {
+      btn.classList.toggle('active', btn.dataset.result === filter.result);
+    }
+    for (const btn of filtersEl.querySelectorAll('[data-advantage]')) {
+      btn.classList.toggle('active', btn.dataset.advantage === filter.advantage);
+    }
+    for (const awp of filtersEl.querySelectorAll('[data-awp]')) {
+      const on = Boolean(filter[awp.dataset.awp]);
+      if (awp instanceof HTMLInputElement) awp.checked = on;
+      awp.closest('.rp-awp-toggle')?.classList.toggle('active', on);
+    }
+    const mapSel = filtersEl.querySelector('[data-filter="maps"]');
+    if (mapSel instanceof HTMLSelectElement) {
+      mapSel.value = filter.maps?.[0] || '';
+    }
+    for (const key of ['econ', 'oppEcon', 'minRounds', 'fromSec', 'toSec', 'dateFrom', 'dateTo']) {
+      const el = filtersEl.querySelector(`[data-filter="${key}"]`);
+      if (!(el instanceof HTMLInputElement || el instanceof HTMLSelectElement)) continue;
+      const v = filter[key];
+      if (key === 'fromSec' || key === 'toSec') {
+        el.value = Number.isFinite(v) ? String(v) : '';
+      } else if (key === 'econ' || key === 'oppEcon') {
+        el.value = v === null || v === undefined ? '' : String(v);
+      } else {
+        el.value = v == null ? '' : String(v);
+      }
+    }
+  }
+
+  /**
+   * Paint chrome, show a body spinner, then rebuild after a frame so the
+   * sidebar stays clickable during aggregates.
+   * @param {{ rebuildFilters?: boolean }} [opts]
+   */
+  function scheduleRender(opts = {}) {
+    const rebuildFilters = opts.rebuildFilters !== false;
+    if (!payload) return Promise.resolve();
+    if (rebuildFilters) {
+      // Structural filter changes still need a full filter bar rebuild, but do
+      // it after the spinner paints so nav clicks can interrupt.
+    } else {
+      syncFilterChrome();
+    }
+    bodyEl.setAttribute('aria-busy', 'true');
+    bodyEl.innerHTML = spinnerHtml('Updating…');
+    return scheduleUiJob({
+      tokenRef: renderTokenRef,
+      work(token) {
+        if (renderTokenRef.current !== token || !payload) return;
+        render({ rebuildFilters });
+      }
+    });
+  }
+
+  function render(opts = {}) {
     if (!payload) return;
+    const rebuildFilters = opts.rebuildFilters !== false;
     syncHead();
-    renderFilters();
+    if (rebuildFilters) renderFilters();
+    else syncFilterChrome();
     const { players, demos } = indexMaps(payload);
     const rows = allRows(payload);
     const active = {
@@ -1622,6 +1690,7 @@ export function createStatsPanel({
     if (detail) {
       renderDetail(active, players, demos);
       syncHead();
+      bodyEl.removeAttribute('aria-busy');
       bindStatsHScroll(bodyEl);
       emitViewChange();
       return;
@@ -1713,6 +1782,7 @@ export function createStatsPanel({
         });
       }
     }
+    bodyEl.removeAttribute('aria-busy');
     bindStatsHScroll(bodyEl);
     emitViewChange();
   }
@@ -1818,7 +1888,7 @@ export function createStatsPanel({
     detailSort = { key: 'date', dir: 'desc' };
     applyViewState(next, { notify: false });
     try {
-      const res = await fetchStats(scope.demos || null, {
+      const res = await getStatsPayload(scope.demos || null, {
         onProgress: (p) => {
           if (token !== loadToken) return;
           setSpinnerLabel(bodyEl, statsProgressLabel(p));
@@ -1836,12 +1906,16 @@ export function createStatsPanel({
         return;
       }
       // Let "Building table…" paint before the heavy aggregate blocks the thread.
-      // Without this the spinner stayed on the last stream label ("Loaded stats")
-      // for the whole first render and looked permanently stuck on large libraries.
       setSpinnerLabel(bodyEl, statsProgressLabel({ phase: 'building-table' }));
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      await scheduleUiJob({
+        tokenRef: renderTokenRef,
+        isCurrent: () => token === loadToken,
+        work() {
+          if (token !== loadToken) return;
+          render({ rebuildFilters: true });
+        }
+      });
       if (token !== loadToken) return;
-      render();
       void savedViews.refresh();
       void savedViews.applyShareParam(
         Object.fromEntries(new URLSearchParams(window.location.search))

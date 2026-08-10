@@ -437,9 +437,14 @@ export async function fetchStats(demoIds = null, opts = {}) {
     return asJson(res);
   }
 
+  const { parseJsonBuffer, parseJsonText } = await import('../lib/parseJsonOffthread.js');
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
-  let buf = '';
+  /** NDJSON header lines only (small). Body bytes stay in binary chunks. */
+  let headerText = '';
+  /** @type {Uint8Array[]} */
+  const bodyChunks = [];
+  let bodyBytes = 0;
   let payload = null;
   let streamError = null;
   /** After `{"type":"done"}`, the rest of the body is raw JSON (not NDJSON). */
@@ -484,30 +489,62 @@ export async function fetchStats(demoIds = null, opts = {}) {
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    if (awaitingBody) continue;
+    if (!value?.byteLength) continue;
+    if (awaitingBody) {
+      bodyChunks.push(value);
+      bodyBytes += value.byteLength;
+      continue;
+    }
+    headerText += decoder.decode(value, { stream: true });
     let nl;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl);
-      buf = buf.slice(nl + 1);
+    while ((nl = headerText.indexOf('\n')) >= 0) {
+      const line = headerText.slice(0, nl);
+      headerText = headerText.slice(nl + 1);
       handleLine(line);
-      if (awaitingBody) break;
+      if (awaitingBody) {
+        // Bytes after the done line belong to the JSON body.
+        if (headerText) {
+          const enc = new TextEncoder().encode(headerText);
+          bodyChunks.push(enc);
+          bodyBytes += enc.byteLength;
+          headerText = '';
+        }
+        break;
+      }
     }
   }
-  if (!awaitingBody && buf.trim()) handleLine(buf);
+  if (!awaitingBody && headerText.trim()) handleLine(headerText);
 
   if (streamError) throw formatApiError(streamError);
   if (!payload && awaitingBody) {
-    const raw = buf.trim();
-    if (!raw) {
+    if (!bodyBytes) {
       throw formatApiError(new Error('Stats stream ended without a payload.'));
     }
+    onProgress?.({
+      type: 'progress',
+      phase: 'building-table',
+      done: bodyTotal,
+      total: bodyTotal
+    });
     try {
-      payload = JSON.parse(raw);
+      const merged = new Uint8Array(bodyBytes);
+      let offset = 0;
+      for (const chunk of bodyChunks) {
+        merged.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      payload = await parseJsonBuffer(merged.buffer);
     } catch (err) {
       throw formatApiError(
         new Error(err?.message || 'Could not parse the stats database payload.')
       );
+    }
+  } else if (!payload && headerText.trim()) {
+    // Fallback: whole response was a single JSON document mislabeled as NDJSON.
+    try {
+      payload = await parseJsonText(headerText.trim());
+    } catch {
+      /* fall through */
     }
   }
   if (!payload) {

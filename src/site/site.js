@@ -44,15 +44,9 @@ import { AuthManager } from '../core/AuthManager.js';
 import { initTrainingView } from './trainingView.js';
 import { initLeaderboardsView } from './leaderboardsView.js';
 import { initFootballView } from './footballView.js';
-import { initReplaysView } from './replaysView.js';
-import { initReplayViewerView } from './replayViewerView.js';
-import { initTeamView } from './teamView.js';
-import { initStrategyCreatorView } from './strategyCreatorView.js';
 import { initPlayerProfileView } from './playerProfileView.js';
 import { initHomeView } from './homeView.js';
 import { initAccountView } from './account/accountView.js';
-import { initAdminView } from './admin/adminView.js';
-import { mountImpersonationBanner } from './admin/impersonate.js';
 import { getEntitlements } from '../lib/entitlements.js';
 import { upgradePrompt } from './upgradeGate.js';
 import { accountApi } from './account/accountApi.js';
@@ -65,6 +59,42 @@ import {
   initMobileChrome,
   initMobileFilterToggle
 } from './mobileMode.js';
+
+/**
+ * Defer heavy view modules until first visit so Home/Training boot stays light
+ * and the sidebar stays clickable during import.
+ * @param {() => Promise<object>} factory
+ */
+function lazyController(factory) {
+  let ctrl = null;
+  /** @type {Promise<object> | null} */
+  let loading = null;
+  const ensure = () => {
+    if (ctrl) return Promise.resolve(ctrl);
+    if (!loading) {
+      loading = Promise.resolve()
+        .then(factory)
+        .then((c) => {
+          ctrl = c || {};
+          return ctrl;
+        })
+        .catch((err) => {
+          loading = null;
+          throw err;
+        });
+    }
+    return loading;
+  };
+  return {
+    async onShow(params) {
+      const c = await ensure();
+      return c.onShow?.(params);
+    },
+    onHide() {
+      ctrl?.onHide?.();
+    }
+  };
+}
 
 // The mobile layout. The inline script in index.html has already resolved it
 // from the device and the saved preference, and set <html data-mobile="1">,
@@ -665,7 +695,12 @@ function setView(name, push = false, params = null) {
   // but the gate unapplied, and the next Back or nav click throws again from
   // the same place: the site looks stuck on a page it has already left.
   try {
-    viewControllers[shell]?.onShow?.(resolvedParams);
+    const shown = viewControllers[shell]?.onShow?.(resolvedParams);
+    // Lazy controllers return a Promise; keep the router from throwing across
+    // a dynamic import while still logging a failed open.
+    if (shown && typeof shown.then === 'function') {
+      shown.catch((err) => console.error(`[router] ${routeName} failed to open`, err));
+    }
   } catch (err) {
     console.error(`[router] ${routeName} failed to open`, err);
   }
@@ -734,13 +769,6 @@ function openProfile(userId, username = 'Player') {
 viewControllers.training = IS_MOBILE ? {} : initTrainingView({ escapeHtml, openLeaderboards });
 viewControllers.leaderboards = initLeaderboardsView({ auth, escapeHtml, openProfile });
 viewControllers.football = initFootballView({ auth, escapeHtml });
-viewControllers['replay-viewer'] = initReplayViewerView({
-  auth,
-  escapeHtml,
-  openSelf: () => setView('replay-viewer', true, {})
-});
-viewControllers.team = initTeamView({ auth, escapeHtml });
-viewControllers['strategy-creator'] = initStrategyCreatorView({ auth, escapeHtml });
 viewControllers.player = initPlayerProfileView({ escapeHtml });
 viewControllers.home = initHomeView({ auth, escapeHtml });
 // One manager per page, refreshed whenever the session changes. Gates read it
@@ -752,7 +780,43 @@ viewControllers.account = initAccountView(
   document.querySelector('.view[data-view="account"]'),
   { auth }
 );
-viewControllers.admin = initAdminView(document.querySelector('.view[data-view="admin"]'));
+
+// Heavy shells: import on first visit so cold Home/Training never parse demos,
+// team tools, creator, admin, or the aim-run replay codec.
+viewControllers['replay-viewer'] = lazyController(async () => {
+  const { initReplayViewerView } = await import('./replayViewerView.js');
+  return initReplayViewerView({
+    auth,
+    escapeHtml,
+    openSelf: () => setView('replay-viewer', true, {})
+  });
+});
+viewControllers.team = lazyController(async () => {
+  const { initTeamView } = await import('./teamView.js');
+  return initTeamView({ auth, escapeHtml });
+});
+viewControllers['strategy-creator'] = lazyController(async () => {
+  const { initStrategyCreatorView } = await import('./strategyCreatorView.js');
+  return initStrategyCreatorView({ auth, escapeHtml });
+});
+viewControllers.admin = lazyController(async () => {
+  const { initAdminView } = await import('./admin/adminView.js');
+  return initAdminView(document.querySelector('.view[data-view="admin"]'));
+});
+viewControllers.replays = lazyController(async () => {
+  const { initReplaysView } = await import('./replaysView.js');
+  return initReplaysView({
+    auth,
+    escapeHtml,
+    pathForPage(page) {
+      return ROUTES[PAGE_TO_ROUTE[page]]?.path || '/demos';
+    },
+    onNavigate(page, params = {}) {
+      const routeName = PAGE_TO_ROUTE[page] || 'demos';
+      setView(routeName, true, params);
+    }
+  });
+});
 
 // 404 / 403. One shell, two routes; the route decides the wording. The wrong
 // URL stays in the address bar on a 404 so the reader can see the typo.
@@ -782,19 +846,7 @@ document.getElementById('error-back')?.addEventListener('click', () => {
 });
 
 // A "view as" session must be unmissable on every page, not only on /admin.
-mountImpersonationBanner();
-
-viewControllers.replays = initReplaysView({
-  auth,
-  escapeHtml,
-  pathForPage(page) {
-    return ROUTES[PAGE_TO_ROUTE[page]]?.path || '/demos';
-  },
-  onNavigate(page, params = {}) {
-    const routeName = PAGE_TO_ROUTE[page] || 'demos';
-    setView(routeName, true, params);
-  }
-});
+void import('./admin/impersonate.js').then((m) => m.mountImpersonationBanner());
 
 document.querySelectorAll('[data-nav]').forEach((el) => {
   el.addEventListener('click', (e) => {

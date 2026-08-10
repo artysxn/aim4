@@ -1326,41 +1326,53 @@ export function syncMatchBoardTeamColWidths(root) {
   }
 }
 
+/** @type {WeakMap<Element, ResizeObserver>} */
+const hscrollObservers = new WeakMap();
+
 /**
  * Keep the top scrollbar in sync with the table body (call after render).
  * @param {ParentNode} root
  */
 export function bindStatsHScroll(root) {
   root.querySelectorAll('[data-st-hscroll]').forEach((wrap) => {
-    if (wrap.dataset.stHscrollBound === '1') {
-      // Re-measure after a re-render that reused the binder path.
-      const body = wrap.querySelector('[data-st-hscroll-body]');
-      const table = body?.querySelector('table');
-      const spacer = wrap.querySelector('[data-st-hscroll-spacer]');
-      requestAnimationFrame(() => {
-        layoutStickyColumns(table);
-        if (spacer && body) spacer.style.width = `${body.scrollWidth}px`;
-        syncMatchBoardTeamColWidths(root);
-      });
-      return;
-    }
-    wrap.dataset.stHscrollBound = '1';
-
     const bar = wrap.querySelector('[data-st-hscroll-bar]');
     const body = wrap.querySelector('[data-st-hscroll-body]');
     const spacer = wrap.querySelector('[data-st-hscroll-spacer]');
     const table = body?.querySelector('table');
     if (!bar || !body || !spacer) return;
 
-    let lock = false;
+    let syncRaf = 0;
+    let syncing = false;
     const sync = () => {
-      layoutStickyColumns(table);
-      spacer.style.width = `${body.scrollWidth}px`;
-      syncMatchBoardTeamColWidths(root);
+      if (syncing) return;
+      syncing = true;
+      try {
+        layoutStickyColumns(table);
+        // Read after writes settle; spacer only, never re-observe the table.
+        spacer.style.width = `${body.scrollWidth}px`;
+        syncMatchBoardTeamColWidths(root);
+      } finally {
+        // Allow the next observer tick only after this frame's writes settle.
+        requestAnimationFrame(() => {
+          syncing = false;
+        });
+      }
     };
-    // After paint — getBoundingClientRect is wrong before layout.
-    requestAnimationFrame(() => requestAnimationFrame(sync));
+    const scheduleSync = () => {
+      if (syncRaf) return;
+      syncRaf = requestAnimationFrame(() => {
+        syncRaf = 0;
+        sync();
+      });
+    };
 
+    if (wrap.dataset.stHscrollBound === '1') {
+      scheduleSync();
+      return;
+    }
+    wrap.dataset.stHscrollBound = '1';
+
+    let lock = false;
     bar.addEventListener('scroll', () => {
       if (lock) return;
       lock = true;
@@ -1374,11 +1386,17 @@ export function bindStatsHScroll(root) {
       lock = false;
     });
 
+    // Observe the scroll body only. Writing sticky cell widths on `table`
+    // used to retrigger a ResizeObserver on that same table every frame.
     if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver(() => requestAnimationFrame(sync));
+      hscrollObservers.get(wrap)?.disconnect();
+      const ro = new ResizeObserver(scheduleSync);
       ro.observe(body);
-      if (table) ro.observe(table);
+      hscrollObservers.set(wrap, ro);
     }
+
+    // After paint — getBoundingClientRect is wrong before layout.
+    requestAnimationFrame(() => requestAnimationFrame(sync));
   });
 }
 

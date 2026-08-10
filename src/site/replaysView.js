@@ -45,9 +45,11 @@ import { formatBytes } from '../replays/tickStore.js';
 import { createStatsPanel, defaultMinRounds } from '../replays/stats/statsPanel.js';
 import { createAnalyticsPanel } from '../replays/analytics/analyticsPanel.js';
 import { createChartsPanel } from '../replays/charts/chartsPanel.js';
+import { invalidateStatsCache } from '../replays/statsCache.js';
 import commentsIcon from '../icons/demos_comments.svg?raw';
 import bookmarkIcon from '../icons/demos_bookmarks_added.svg?raw';
 import { spinnerHtml, watchSlowLoad } from '../lib/spinner.js';
+import { yieldToPaint } from '../lib/frameBudget.js';
 
 const POLL_MS = 1500;
 
@@ -2492,12 +2494,20 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   async function runQuery() {
     const token = ++queryToken;
     const query = currentQuery();
+    // Spinner first so the sidebar can take a click while the library scan runs.
+    if (resultEl) {
+      resultEl.setAttribute('aria-busy', 'true');
+      resultEl.innerHTML = spinnerHtml('Updating…');
+    }
+    await yieldToPaint();
+    if (token !== queryToken) return;
     // Filter against the demo index immediately so an empty filter always
     // shows every round, even if the rounds API is slow or empty.
     rounds = filterLibraryRounds(query);
     if (needsMetaFilters()) setQueryStatus('Applying advanced filters…');
     else setQueryStatus('');
     renderResults();
+    resultEl?.removeAttribute('aria-busy');
 
     try {
       const [res, playlists] = await Promise.all([
@@ -3783,11 +3793,24 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       // reading the library page and claiming the cap is already full.
       if (Number.isFinite(list.owned)) mineOwnedCount = Number(list.owned);
       renderQuota(list.usage || status.usage);
-      demos = list.demos || [];
+      const nextDemos = list.demos || [];
+      // Only drop the shared stats cache when membership or readiness changes.
+      // The 1.5s parse poll would otherwise thrash Database/Charts every tick.
+      const statsSig = nextDemos
+        .map((d) => `${d.id}:${d.status || ''}:${d.updatedAt || d.uploadedAt || ''}`)
+        .join('|');
+      const prevSig = demos
+        .map((d) => `${d.id}:${d.status || ''}:${d.updatedAt || d.uploadedAt || ''}`)
+        .join('|');
+      demos = nextDemos;
       // Drop extras that are now on the page; keep the rest for active filters.
       for (const d of demos) extraDemos.delete(d.id);
       libraryTeamClusters = Array.isArray(list.teams) ? list.teams : [];
       rebuildTeamClusters();
+      if (statsSig !== prevSig) {
+        invalidateStatsCache();
+        loadedStatsKey = '';
+      }
       renderDemos();
       renderFilters();
       // My Uploads needs the full owned list — libraryLimit is only for /demos paging.
