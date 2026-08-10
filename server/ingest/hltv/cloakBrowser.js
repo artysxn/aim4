@@ -8,6 +8,7 @@
 
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
@@ -153,6 +154,30 @@ async function persistentFingerprintSeed(profilePath, configured) {
   return seed;
 }
 
+function processIsAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function clearStaleProfileLock(profilePath) {
+  const lock = path.join(profilePath, 'SingletonLock');
+  const target = await fsp.readlink(lock).catch(() => '');
+  const match = /^(.*)-(\d+)$/.exec(target);
+  const lockHost = match?.[1] || '';
+  const lockPid = Number(match?.[2]) || 0;
+  if (lockHost === os.hostname() && processIsAlive(lockPid)) {
+    throw new Error(`CloakBrowser profile is already in use by process ${lockPid}`);
+  }
+  for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+    await fsp.rm(path.join(profilePath, name), { force: true }).catch(() => {});
+  }
+}
+
 /**
  * @param {{
  *   cloakHeadless?: boolean,
@@ -187,7 +212,10 @@ export function createCloakSession(cfg = {}) {
       const downloadsPath = downloadsPathFor(cfg);
       const profilePath = profilePathFor(cfg);
       if (downloadsPath) await fsp.mkdir(downloadsPath, { recursive: true });
-      if (profilePath) await fsp.mkdir(profilePath, { recursive: true });
+      if (profilePath) {
+        await fsp.mkdir(profilePath, { recursive: true });
+        await clearStaleProfileLock(profilePath);
+      }
       const options = launchOptions(cfg);
       if (options.headless === false) await ensureHeadedDisplay();
       const args = [];
