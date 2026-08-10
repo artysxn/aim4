@@ -1,11 +1,12 @@
 // ---------------------------------------------------------------------------
-// Pattern finder, split into chapters (see the rework plan):
-//   Players        map-first filters + optional subjects → stats. This is the
-//                  pre-rework surface: sticky filter sidebar + main results.
-//   Antistrat      scout a library team, write a team document (antistratPanel).
-//   Teams explore  loose exploration counterpart to Antistrat. WIP shell.
-//   Meta           per-map tendencies across the whole library. WIP shell.
-//   Search         round search by map / players / sides. WIP shell.
+// Pattern finder, two chapters:
+//   Search   map-first filters + optional subjects → drawn-selection rules
+//            (each with its own feature and clock window), the matching
+//            rounds on the left under the filters, stats on the right with a
+//            players / teams switch. Chapter key stays `players` so old
+//            links and saved views keep resolving.
+//   Teams    scout a library team, write a team document (antistratPanel).
+//            Chapter key stays `antistrat` for the same reason.
 // ---------------------------------------------------------------------------
 
 import { fetchStats, consumeCapability, formatApiError } from '../api.js';
@@ -18,15 +19,18 @@ import {
   leaderboardFromFiles,
   listMaps,
   listPlayers,
-  listTeams
+  listTeams,
+  teamLeaderboardFromFiles
 } from './analyticsMath.js';
 import { createPresenceRadar } from './presenceRadar.js';
 import {
   SHAPE_FEATURES,
+  SHAPE_WINDOW_MAX_SECONDS,
   loadShapes,
   saveShapes,
   newShapeId
 } from './shapeFilters.js';
+import { createRangeSlider } from '../../lib/rangeSlider.js';
 import {
   setSpinnerLabel,
   spinnerHtml,
@@ -43,18 +47,27 @@ const PHASE_OPTS = [
   { key: 'late', label: 'Late' }
 ];
 
-/** Rework chapters. `wip` renders the shell and keeps the tab honest. */
+/** Chapters. Keys are load-bearing (URLs, saved views); labels are not. */
 const CHAPTERS = [
-  { key: 'players', label: 'Players' },
-  { key: 'antistrat', label: 'Teams: Antistrat' },
-  { key: 'teams-explore', label: 'Teams: Explore', wip: true },
-  { key: 'meta', label: 'Meta', wip: true },
-  { key: 'search', label: 'Search', wip: true }
+  { key: 'players', label: 'Search' },
+  { key: 'antistrat', label: 'Teams' }
 ];
 
 /** Format a finite number for leaderboard cells; `digits` = decimal places. */
 function fmt(n, digits = 2) {
   return Number.isFinite(n) ? Number(n).toFixed(digits) : '—';
+}
+
+/** Elapsed seconds → the round clock counting down from 1:55. */
+function clockLeft(elapsed) {
+  const left = Math.max(0, SHAPE_WINDOW_MAX_SECONDS - Math.round(elapsed));
+  return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+}
+
+/** A shape's clock window as words: "1:55 to 1:20", or '' for whole round. */
+function windowLabel(shape) {
+  if (!shape?.window) return '';
+  return `${clockLeft(shape.window.from)} to ${clockLeft(shape.window.to)}`;
 }
 
 /**
@@ -73,10 +86,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         <div class="an-main" id="an-main"><p class="view-empty">Select a map to begin.</p></div>
       </div>
     </div>
-    <div class="an-chapter" data-chapter="antistrat" hidden></div>
-    <div class="an-chapter" data-chapter="teams-explore" hidden></div>
-    <div class="an-chapter" data-chapter="meta" hidden></div>
-    <div class="an-chapter" data-chapter="search" hidden></div>`;
+    <div class="an-chapter" data-chapter="antistrat" hidden></div>`;
 
   const sidebarEl = el.querySelector('#an-sidebar');
   const mainEl = el.querySelector('#an-main');
@@ -101,47 +111,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
   function renderChapterNav() {
     chaptersEl.innerHTML = CHAPTERS.map(
       (c) => `<button type="button" class="an-chapter-btn${c.key === chapter ? ' active' : ''}"
-        data-an-chapter="${c.key}">${escapeHtml(c.label)}${
-        c.wip ? ' <span class="an-wip-chip">WIP</span>' : ''
-      }</button>`
+        data-an-chapter="${c.key}">${escapeHtml(c.label)}</button>`
     ).join('');
-  }
-
-  /** WIP shells: the planned selectors, inert, so the shape is already there. */
-  function wipShellHtml(key) {
-    if (key === 'teams-explore') {
-      return `<section class="an-card an-wip-card">
-        <header class="an-card-head"><h3 class="an-section-title">Teams: loose exploration</h3></header>
-        <div class="an-wip-body">
-          <p class="an-muted">Browse a team's rounds without a fixed question. WIP.</p>
-        </div>
-      </section>`;
-    }
-    if (key === 'meta') {
-      return `<section class="an-card an-wip-card">
-        <header class="an-card-head"><h3 class="an-section-title">Meta</h3></header>
-        <div class="an-wip-body">
-          <p class="an-muted">Pick a map and side to see the most common grenades from the utility database, how often teams push, and more. WIP.</p>
-          <div class="an-wip-controls">
-            <select class="site-select an-select" disabled aria-label="Map"><option>Map</option></select>
-            <select class="site-select an-select" disabled aria-label="Side"><option>Side</option></select>
-          </div>
-        </div>
-      </section>`;
-    }
-    if (key === 'search') {
-      return `<section class="an-card an-wip-card">
-        <header class="an-card-head"><h3 class="an-section-title">Search</h3></header>
-        <div class="an-wip-body">
-          <p class="an-muted">Pick a map, players or sides and see how often they do specific actions, and their rating when they do. WIP.</p>
-          <div class="an-wip-controls">
-            <select class="site-select an-select" disabled aria-label="Map"><option>Map</option></select>
-            <input class="site-input" disabled placeholder="Players or sides" aria-label="Players or sides" />
-          </div>
-        </div>
-      </section>`;
-    }
-    return '';
   }
 
   function setChapter(next) {
@@ -180,15 +151,10 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       antistrat?.load(payload);
       return;
     }
-    if (chapter === 'players') {
-      if (payload) {
-        render();
-        mountSavedViews();
-      }
-      return;
+    if (chapter === 'players' && payload) {
+      render();
+      mountSavedViews();
     }
-    const host = chapterEl(chapter);
-    if (host && !host.innerHTML) host.innerHTML = wipShellHtml(chapter);
   }
 
   renderChapterNav();
@@ -233,8 +199,13 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     /** @type {ShapeFeature|''} */
     drawFeature: '',
     /** @type {''|'rect'|'poly'|'lasso'} */
-    drawMode: ''
+    drawMode: '',
+    /** @type {'players'|'teams'} which leaderboard the stats card shows */
+    lbMode: 'players'
   };
+
+  /** Shape id whose clock-window slider is open in the sidebar, or ''. */
+  let editingWindow = '';
 
   /** @type {ReturnType<typeof createPresenceRadar> | null} */
   let radar = null;
@@ -658,26 +629,90 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
                       `${featureLabel(s.feature)} ${s.geometry?.type === 'poly' ? 'poly' : 'rect'} ${
                         i + 1
                       }`;
+                    const win = windowLabel(s);
+                    const editing = editingWindow === s.id;
                     return `<div class="an-shape-row${s.enabled === false ? ' off' : ''}">
                       <button type="button" class="an-shape-toggle" data-shape-toggle="${escapeHtml(
                         s.id
                       )}" title="Toggle">
                         ${s.enabled === false ? '○' : '●'} ${escapeHtml(label)}
                       </button>
+                      <button type="button" class="an-shape-clock${win ? ' set' : ''}" data-shape-clock="${escapeHtml(
+                        s.id
+                      )}" title="${win ? `Only between ${escapeHtml(win)} on the round clock` : 'Limit this rule to a stretch of the round clock'}">${
+                        win ? escapeHtml(win) : '🕒'
+                      }</button>
                       <button type="button" class="an-shape-del" data-shape-del="${escapeHtml(
                         s.id
                       )}" aria-label="Remove">×</button>
-                    </div>`;
+                    </div>${
+                      editing
+                        ? `<div class="an-shape-window" data-shape-window="${escapeHtml(s.id)}">
+                            <div class="an-shape-window-slider"></div>
+                            <div class="an-shape-window-row">
+                              <span class="an-shape-window-label"></span>
+                              <button type="button" class="btn btn-sm" data-shape-window-clear="${escapeHtml(
+                                s.id
+                              )}">Whole round</button>
+                            </div>
+                          </div>`
+                        : ''
+                    }`;
                   })
                   .join('')
-              : `<p class="an-muted an-shape-empty">No selections yet</p>`
+              : `<p class="an-muted an-shape-empty">No selections yet. Every drawn selection is its own rule; give each one a feature and, with the clock button, its own stretch of the round.</p>`
           }
         </div>
 
         <button type="button" class="btn btn-sm an-clear" data-an-clear>Clear filters</button>
-      </div>`;
+      </div>
+
+      <div class="an-side-rounds" id="an-side-rounds" ${ready ? '' : 'hidden'}></div>`;
 
     if (subjectMenuOpen || subjectSearch) refreshSubjectMenu();
+    mountWindowSlider();
+  }
+
+  /** Mount the two-handle clock slider for the shape being edited, if any. */
+  function mountWindowSlider() {
+    const host = sidebarEl.querySelector('.an-shape-window');
+    if (!host) return;
+    const shape = state.shapes.find((s) => s.id === host.dataset.shapeWindow);
+    const slot = host.querySelector('.an-shape-window-slider');
+    const label = host.querySelector('.an-shape-window-label');
+    if (!shape || !slot) return;
+    const paintLabel = (from, to) => {
+      if (label) label.textContent = `${clockLeft(from)} to ${clockLeft(to)}`;
+    };
+    const slider = createRangeSlider({
+      min: 0,
+      max: SHAPE_WINDOW_MAX_SECONDS,
+      from: shape.window?.from ?? 0,
+      to: shape.window?.to ?? SHAPE_WINDOW_MAX_SECONDS,
+      step: 1,
+      label: 'Round clock window',
+      onChange: (from, to) => {
+        paintLabel(from, to);
+        // Full span means "no window": the stored shape stays clean and the
+        // chip goes back to the plain clock.
+        if (from <= 0 && to >= SHAPE_WINDOW_MAX_SECONDS) delete shape.window;
+        else shape.window = { from, to };
+        persistShapes();
+        scheduleWindowRerender();
+      }
+    });
+    slot.replaceChildren(slider.el);
+    paintLabel(shape.window?.from ?? 0, shape.window?.to ?? SHAPE_WINDOW_MAX_SECONDS);
+  }
+
+  /** Re-run the search a beat after the slider stops moving, not per pixel. */
+  let windowRerenderTimer = 0;
+  function scheduleWindowRerender() {
+    clearTimeout(windowRerenderTimer);
+    windowRerenderTimer = setTimeout(() => {
+      renderMain();
+      savedViews.touch();
+    }, 350);
   }
 
   function renderRadarCard() {
@@ -694,16 +729,64 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     </section>`;
   }
 
-  function renderLeaderboard(rows, focusIds, roundCount) {
+  /** The Players | Teams switch in the statistics card head. */
+  function lbModeSwitchHtml() {
+    const btn = (key, label) =>
+      `<button type="button" class="seg-tab${state.lbMode === key ? ' active' : ''}" data-an-lb-mode="${key}">${label}</button>`;
+    return `<div class="st-tabs an-lb-tabs">${btn('players', 'Players')}${btn('teams', 'Teams')}</div>`;
+  }
+
+  function renderLeaderboard(rows, teamRows, focusIds, roundCount) {
+    const head = `<header class="an-card-head an-lb-head">
+        <h3 class="an-section-title">Statistics <small>${roundCount} rounds</small></h3>
+        ${lbModeSwitchHtml()}
+      </header>`;
+
+    if (state.lbMode === 'teams') {
+      if (!teamRows.length) {
+        return `<section class="an-card an-lb">${head}<p class="view-empty">No teams on matching rounds.</p></section>`;
+      }
+      return `<section class="an-card an-lb">
+        ${head}
+        <div class="an-lb-scroll">
+          <table class="an-lb-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Team</th>
+                <th>R</th>
+                <th>W</th>
+                <th>Round WR</th>
+                <th>Avg rating</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${teamRows
+                .slice(0, 40)
+                .map(
+                  (t, i) => `<tr class="an-lb-row">
+                    <td>${i + 1}</td>
+                    <td class="an-lb-name">${escapeHtml(t.name || t.key)}</td>
+                    <td>${t.rounds}</td>
+                    <td>${t.roundsWon}</td>
+                    <td>${fmt(t.roundWinrate, 1)}%</td>
+                    <td>${fmt(t.avgRating)}</td>
+                  </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+      </section>`;
+    }
+
     if (!rows.length) {
-      return `<section class="an-card"><p class="view-empty">No players on matching rounds.</p></section>`;
+      return `<section class="an-card an-lb">${head}<p class="view-empty">No players on matching rounds.</p></section>`;
     }
     const focus = new Set(focusIds || []);
     const top = rows.slice(0, 40);
     return `<section class="an-card an-lb">
-      <header class="an-card-head">
-        <h3 class="an-section-title">Leaderboard <small>${roundCount} rounds</small></h3>
-      </header>
+      ${head}
       <div class="an-lb-scroll">
         <table class="an-lb-table">
           <thead>
@@ -841,9 +924,35 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     ctl.setData(state.map, state.shapes, state.drawMode).catch(() => {});
   }
 
+  /** Last computed results, so the Players | Teams switch repaints for free. */
+  let lastResults = null;
+
+  function sideRoundsEl() {
+    return sidebarEl.querySelector('#an-side-rounds');
+  }
+
+  /** Paint the right card and the rounds list under the left filters. */
+  function paintResults() {
+    if (!lastResults) return;
+    const { agg, lb, teamLb, roundCount, needsPh } = lastResults;
+    rememberRadarView();
+    mainEl.innerHTML = `
+      ${
+        needsPh
+          ? `<p class="an-warn">Some rounds are still building phase data. Refresh shortly if numbers look incomplete.</p>`
+          : ''
+      }
+      ${renderRadarCard()}
+      ${renderLeaderboard(lb, teamLb, state.playerIds, roundCount)}`;
+    const slot = sideRoundsEl();
+    if (slot) slot.innerHTML = renderRounds(agg);
+    paintRadar();
+  }
+
   async function renderMain() {
     if (!state.map) {
       rememberRadarView();
+      lastResults = null;
       mainEl.innerHTML = `<p class="view-empty">Select a map in the sidebar. Subjects are optional — leave empty to search anyone.</p>`;
       return;
     }
@@ -868,26 +977,21 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       if (token !== renderToken) return;
 
       const lb = leaderboardFromFiles(payload, agg.files);
+      const teamLb = teamLeaderboardFromFiles(payload, agg.files);
       if (token !== renderToken) return;
 
       const needsPh = (payload.demos || []).some((d) =>
         (d.rounds || []).some((r) => r.m === state.map && !r.ph)
       );
       const roundCount = agg.anyone ? agg.files.length : agg.rounds;
-      rememberRadarView();
-      mainEl.innerHTML = `
-      ${
-        needsPh
-          ? `<p class="an-warn">Some rounds are still building phase data. Refresh shortly if numbers look incomplete.</p>`
-          : ''
-      }
-      ${renderRadarCard()}
-      ${renderLeaderboard(lb, state.playerIds, roundCount)}
-      ${renderRounds(agg)}`;
-      paintRadar();
+      lastResults = { agg, lb, teamLb, roundCount, needsPh };
+      paintResults();
     } catch (err) {
       if (token !== renderToken) return;
       rememberRadarView();
+      lastResults = null;
+      const slot = sideRoundsEl();
+      if (slot) slot.innerHTML = '';
       mainEl.innerHTML = `<p class="view-empty">Could not run filters. ${escapeHtml(
         err?.message || String(err)
       )}</p>${renderRadarCard()}`;
@@ -899,6 +1003,13 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     renderSidebar();
     renderMain();
     savedViews.touch();
+  }
+
+  /** Redraw the sidebar without losing the rounds list already computed. */
+  function repaintSidebar() {
+    renderSidebar();
+    const slot = sideRoundsEl();
+    if (slot && lastResults) slot.innerHTML = renderRounds(lastResults.agg);
   }
 
   function loadShapesForMap() {
@@ -1043,8 +1154,26 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       }
       return;
     }
+    const clock = e.target.closest('[data-shape-clock]');
+    if (clock) {
+      const id = clock.dataset.shapeClock;
+      editingWindow = editingWindow === id ? '' : id;
+      repaintSidebar();
+      return;
+    }
+    const winClear = e.target.closest('[data-shape-window-clear]');
+    if (winClear) {
+      const s = state.shapes.find((x) => x.id === winClear.dataset.shapeWindowClear);
+      if (s) {
+        delete s.window;
+        persistShapes();
+        render();
+      }
+      return;
+    }
     const del = e.target.closest('[data-shape-del]');
     if (del) {
+      if (editingWindow === del.dataset.shapeDel) editingWindow = '';
       state.shapes = state.shapes.filter((x) => x.id !== del.dataset.shapeDel);
       persistShapes();
       render();
@@ -1141,7 +1270,19 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     }
   });
 
-  mainEl.addEventListener('click', async (e) => {
+  // Play buttons live in the rounds list, which sits in the SIDEBAR now; the
+  // statistics card keeps its own clicks (the Players | Teams switch). One
+  // handler serves both so the buttons work wherever the list is mounted.
+  async function handleResultClicks(e) {
+    const mode = e.target.closest('[data-an-lb-mode]');
+    if (mode) {
+      const next = mode.dataset.anLbMode === 'teams' ? 'teams' : 'players';
+      if (next !== state.lbMode) {
+        state.lbMode = next;
+        paintResults();
+      }
+      return;
+    }
     const playOne = e.target.closest('[data-an-play]');
     if (playOne && onPlayRounds) {
       playOne.disabled = true;
@@ -1166,7 +1307,9 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
         btn.disabled = false;
       }
     }
-  });
+  }
+  mainEl.addEventListener('click', handleResultClicks);
+  sidebarEl.addEventListener('click', handleResultClicks);
 
   const detachTips = attachTips(el);
 

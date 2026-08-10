@@ -7,14 +7,18 @@ import { phaseAtTick, phaseBounds } from '../coach/roundPhases.js';
 import { readHeader, readRecord } from '../shared/tickFormat.js';
 import { pointInPiece } from '../zones/zoneGeom.js';
 
-/** @typedef {'player_in'|'kill_from'|'death_from'|'first_duel_in'} ShapeFeature */
+/** @typedef {'player_in'|'kill_from'|'death_from'|'first_duel_in'|'grenade_in'} ShapeFeature */
 
 export const SHAPE_FEATURES = [
   { key: 'player_in', label: 'Player in' },
   { key: 'kill_from', label: 'Kill from' },
   { key: 'death_from', label: 'Died in' },
-  { key: 'first_duel_in', label: 'First duel in' }
+  { key: 'first_duel_in', label: 'First duel in' },
+  { key: 'grenade_in', label: 'Grenade in' }
 ];
+
+/** The live round on the clock: 1:55. Shape windows are elapsed seconds. */
+export const SHAPE_WINDOW_MAX_SECONDS = 115;
 
 const STORAGE_PREFIX = 'aim4.an.shapes.';
 
@@ -60,6 +64,23 @@ export function saveShapes(map, shapes) {
   }
 }
 
+/**
+ * Optional per-shape time window, in seconds since the round went live.
+ * Absent means the whole round; a full-span window is stored as absent so
+ * "cleared the slider" and "never touched it" are the same shape.
+ */
+function sanitizeWindow(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const from = Number(raw.from);
+  const to = Number(raw.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+  const lo = Math.max(0, Math.min(SHAPE_WINDOW_MAX_SECONDS, Math.min(from, to)));
+  const hi = Math.max(0, Math.min(SHAPE_WINDOW_MAX_SECONDS, Math.max(from, to)));
+  if (hi <= lo) return null;
+  if (lo === 0 && hi === SHAPE_WINDOW_MAX_SECONDS) return null;
+  return { from: lo, to: hi };
+}
+
 function sanitizeShape(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const id = String(raw.id || '').trim() || newShapeId();
@@ -68,11 +89,13 @@ function sanitizeShape(raw) {
     : 'player_in';
   const geom = sanitizeGeometry(raw.geometry);
   if (!geom) return null;
+  const window = sanitizeWindow(raw.window);
   return {
     id,
     name: String(raw.name || '').trim(),
     feature,
     geometry: geom,
+    ...(window ? { window } : {}),
     enabled: raw.enabled !== false
   };
 }
@@ -156,6 +179,18 @@ export function shapePassesWindow({ meta, tickBuffer, playerId, phase, shape }) 
   const teamOf = new Map((meta.players || []).map((p) => [p.id, p.team]));
   const scratch = {};
 
+  // The shape's own clock window, as a tick test. Phases pick the coarse
+  // stretch; this narrows within it, so "mid, between 1:10 and 0:50" is the
+  // AND of the two. No window means the phase alone decides.
+  const tickRateOf = () => meta.tickRate || 64;
+  const inClockWindow = (tick) => {
+    if (!shape.window) return true;
+    const elapsed = ((tick || 0) - bounds.freezeEndTick) / Math.max(1, tickRateOf());
+    return elapsed >= shape.window.from && elapsed <= shape.window.to;
+  };
+  const eventTickPasses = (tick) =>
+    phaseAtTick(tick || 0, bounds) === phase && inClockWindow(tick);
+
   if (feature === 'player_in') {
     if (!tickBuffer) return false;
     let header;
@@ -169,18 +204,23 @@ export function shapePassesWindow({ meta, tickBuffer, playerId, phase, shape }) 
     if (slot == null) return false;
     const tickRate = header.tickRate || meta.tickRate || 64;
     const step = Math.max(1, tickRate);
-    const from =
+    let from =
       phase === 'early'
         ? bounds.freezeEndTick
         : phase === 'mid'
           ? bounds.midStartTick
           : bounds.lateStartTick;
-    const to =
+    let to =
       phase === 'early'
         ? bounds.midStartTick
         : phase === 'mid'
           ? bounds.lateStartTick
           : bounds.endTick;
+    if (shape.window) {
+      from = Math.max(from, bounds.freezeEndTick + Math.round(shape.window.from * tickRate));
+      to = Math.min(to, bounds.freezeEndTick + Math.round(shape.window.to * tickRate));
+      if (to <= from) return false;
+    }
     let hits = 0;
     for (let tick = from; tick < to; tick += step) {
       const pos = samplePlayerAt(view, header, slot, tick, scratch);
@@ -192,12 +232,29 @@ export function shapePassesWindow({ meta, tickBuffer, playerId, phase, shape }) 
     return false;
   }
 
+  if (feature === 'grenade_in') {
+    // A grenade this player threw that landed inside the shape during the
+    // window. Landing point and detonation tick come off the event, so no
+    // tick buffer is needed.
+    for (const g of meta.events?.grenades || []) {
+      if (g.player !== playerId) continue;
+      const x = Number(g.at?.x);
+      const y = Number(g.at?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      const tick = Number(g.detonateTick ?? g.throwTick);
+      if (!Number.isFinite(tick)) continue;
+      if (!eventTickPasses(tick)) continue;
+      if (pointInShape(x, y, shape.geometry)) return true;
+    }
+    return false;
+  }
+
   const kills = meta.events?.kills || [];
 
   if (feature === 'kill_from' || feature === 'death_from') {
     const wantAttacker = feature === 'kill_from';
     const relevant = kills.filter((k) => {
-      if (phaseAtTick(k.tick || 0, bounds) !== phase) return false;
+      if (!eventTickPasses(k.tick)) return false;
       return wantAttacker ? k.attacker === playerId : k.victim === playerId;
     });
     if (!relevant.length) return false;
@@ -235,7 +292,7 @@ export function shapePassesWindow({ meta, tickBuffer, playerId, phase, shape }) 
     const open = openingKill(meta, teamOf);
     if (!open) return false;
     if (open.attacker !== playerId && open.victim !== playerId) return false;
-    if (phaseAtTick(open.tick || 0, bounds) !== phase) return false;
+    if (!eventTickPasses(open.tick)) return false;
 
     if (
       open.victim === playerId &&
