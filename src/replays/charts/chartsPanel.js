@@ -582,17 +582,6 @@ export function createChartsPanel({ escapeHtml }) {
       facts?.teams?.length || (facts?.players?.length && !(scope === 'g' && state.compare?.on))
         ? entityFilterHtml(scope, f)
         : '',
-      facts?.matches?.length > 1 && !(scope === 'g' && state.compare?.on)
-        ? group(
-            'Matches',
-            multiSelect(
-              scope,
-              'matches',
-              facts.matches.map((m) => ({ key: m.id, label: m.label })),
-              arr('matches')
-            )
-          )
-        : '',
       killable && facts?.weapons?.length
         ? group(
             'Weapons',
@@ -697,24 +686,12 @@ export function createChartsPanel({ escapeHtml }) {
       </div>`;
   }
 
-  function compareHtml() {
-    const on = Boolean(state.compare?.on);
-    return `
-      <div class="ch-block">
-        <span class="ch-label">Compare</span>
-        <label class="ch-check">
-          <input type="checkbox" data-compare-on${on ? ' checked' : ''} />
-          A vs B
-        </label>
-        ${
-          on
-            ? `<div class="ch-compare-slots">
-                ${compareSlotHtml('a')}
-                ${compareSlotHtml('b')}
-              </div>`
-            : ''
-        }
-      </div>`;
+  function compareSlotsBlock() {
+    if (!state.compare?.on) return '';
+    return `<div class="ch-compare-slots">
+      ${compareSlotHtml('a')}
+      ${compareSlotHtml('b')}
+    </div>`;
   }
 
   function renderSide() {
@@ -752,9 +729,12 @@ export function createChartsPanel({ escapeHtml }) {
                 )
               )
         }
+        <label class="ch-check">
+          <input type="checkbox" data-compare-on${comparing ? ' checked' : ''} />
+          Compare mode
+        </label>
+        ${compareSlotsBlock()}
       </div>
-
-      ${compareHtml()}
 
       <div class="ch-block">
         <span class="ch-label">Y axis</span>

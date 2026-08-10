@@ -52,6 +52,8 @@ import {
 } from '../../lib/spinner.js';
 import { createSavedViews } from '../savedViews.js';
 import { POSITION_MAPS } from '../roles/teamPositions.js';
+import filtersIcon from '../../icons/icon_filters.svg?url';
+import calendarIcon from '../../icons/icon_calendar.svg?url';
 
 /**
  * @param {{
@@ -113,17 +115,29 @@ export function createStatsPanel({
         <span class="st-detail-label" id="st-detail-label" hidden></span>
       </div>
       <span class="st-scope" id="st-scope"></span>
-      <span class="st-saved" id="st-saved"></span>
+      <div class="st-head-actions">
+        <span class="st-saved" id="st-saved"></span>
+        <button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
+          <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
+          Filters
+        </button>
+      </div>
     </div>
-    <div class="st-filters" id="st-filters"></div>
+    <div class="st-filters" id="st-filters" hidden></div>
     <div class="st-body" id="st-body"><div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div></div>`;
 
   const filtersEl = el.querySelector('#st-filters');
+  const filtersToggleEl = el.querySelector('[data-st-filters-toggle]');
   const bodyEl = el.querySelector('#st-body');
   const scopeEl = el.querySelector('#st-scope');
   const tabsEl = el.querySelector('.st-tabs');
   const backEl = el.querySelector('[data-st-back]');
   const detailLabelEl = el.querySelector('#st-detail-label');
+
+  /** Filters bar is closed by default so the table owns the viewport. */
+  let filtersOpen = false;
+  /** Date-range popover under the calendar icon. */
+  let calendarOpen = false;
 
   let payload = null;
   let scope = {};
@@ -189,7 +203,7 @@ export function createStatsPanel({
     return [...set].sort();
   }
 
-  function econSelect(id, value) {
+  function econSelect(id, value, placeholder = 'Any buy') {
     const opts = Object.entries(ECONOMIES)
       .map(
         ([code, e]) =>
@@ -198,12 +212,14 @@ export function createStatsPanel({
           )}</option>`
       )
       .join('');
-    return `<select class="site-select" data-filter="${id}">
-      <option value=""${value === null ? ' selected' : ''}>Any buy</option>${opts}</select>`;
+    return `<select class="site-select st-econ-select" data-filter="${id}" aria-label="${escapeHtml(
+      placeholder
+    )}">
+      <option value=""${value === null ? ' selected' : ''}>${escapeHtml(placeholder)}</option>${opts}</select>`;
   }
 
   function hasAwpCheck(id, checked) {
-    return `<label class="rp-awp-toggle${checked ? ' active' : ''}" title="Has AWP">
+    return `<label class="rp-awp-toggle st-awp-toggle${checked ? ' active' : ''}" title="Has AWP">
       <input type="checkbox" data-awp="${id}" ${checked ? 'checked' : ''} aria-label="Has AWP" />
       <span>AWP</span>
     </label>`;
@@ -234,7 +250,7 @@ export function createStatsPanel({
           ? CT_TACTICAL
           : T_TACTICAL;
     const selected = filter.role?.side === side ? filter.role.value : '';
-    const anyLabel = mode === 'position' ? 'Any position' : 'Any role';
+    const anyLabel = side === 'CT' ? 'CT Role' : 'T Role';
     const options = opts
       .map((o) => {
         const label = o.label;
@@ -244,10 +260,10 @@ export function createStatsPanel({
         }>${escapeHtml(label)}</option>`;
       })
       .join('');
-    return `<select class="site-select st-role-select" data-role-filter="${side}" aria-label="${
-      side === 'CT' ? 'CT' : 'T'
-    } ${mode === 'position' ? 'position' : 'role'}">
-      <option value=""${!selected ? ' selected' : ''}>${anyLabel}</option>${options}</select>`;
+    return `<select class="site-select st-role-select" data-role-filter="${side}" aria-label="${escapeHtml(
+      anyLabel
+    )}">
+      <option value=""${!selected ? ' selected' : ''}>${escapeHtml(anyLabel)}</option>${options}</select>`;
   }
 
   function roundKeysOf(which) {
@@ -332,75 +348,27 @@ export function createStatsPanel({
     </div>`;
   }
 
-  function renderFilters() {
-    const mode = roleMode();
-    const sideBtn = (value, label) =>
-      `<button type="button" class="rp-chip${
-        filter.side === value ? ' active' : ''
-      }" data-side="${value}">${label}</button>`;
-    const resultBtn = (value, label) =>
-      `<button type="button" class="rp-chip${
-        filter.result === value ? ' active' : ''
-      }" data-result="${value}">${label}</button>`;
-    const advBtn = (value, label) =>
-      `<button type="button" class="rp-chip${
-        filter.advantage === value ? ' active' : ''
-      }" data-advantage="${value}">${label}</button>`;
+  function setFiltersOpen(open) {
+    filtersOpen = Boolean(open);
+    filtersEl.hidden = !filtersOpen;
+    filtersToggleEl?.classList.toggle('active', filtersOpen);
+    filtersToggleEl?.setAttribute('aria-expanded', filtersOpen ? 'true' : 'false');
+    if (!filtersOpen) calendarOpen = false;
+  }
 
-    const roleGroups =
-      mode && tab === 'players'
-        ? `
-      <div class="st-filter-group st-filter-stack">
-        <span class="st-filter-label">T ${mode === 'position' ? 'pos' : 'role'}</span>
-        ${roleSelectHtml('T')}
-      </div>
-      <div class="st-filter-group st-filter-stack">
-        <span class="st-filter-label">CT ${mode === 'position' ? 'pos' : 'role'}</span>
-        ${roleSelectHtml('CT')}
-      </div>`
-        : '';
-
-    // Round-library picks need one map and a side so "our call" / "their call"
-    // resolve against absolute T/CT tags on each row.
-    const roundGroups = `${roundSelectHtml('own')}${roundSelectHtml('opp')}`;
-
-    filtersEl.innerHTML = `
-      <div class="st-filters-scroll">
-        <div class="st-filter-group st-filter-stack">
-          <span class="st-filter-label">Map</span>
-          ${mapSelectHtml()}
-        </div>
-        <div class="st-filter-group st-filter-stack">
-          <span class="st-filter-label">Side</span>
-          <div class="rp-chips">${sideBtn('T', 'T')}${sideBtn('CT', 'CT')}</div>
-        </div>
-        ${roundGroups}
-        ${roundWindowHtml()}
-        <div class="st-filter-group st-filter-stack">
-          <span class="st-filter-label">Result</span>
-          <div class="rp-chips">${resultBtn('won', 'Won')}${resultBtn('lost', 'Lost')}</div>
-        </div>
-        <div class="st-filter-group st-filter-stack">
-          <span class="st-filter-label">Opening</span>
-          <div class="rp-chips">${advBtn('5v4', '5v4')}${advBtn('4v5', '4v5')}</div>
-        </div>
-        ${roleGroups}
-        <div class="st-filter-group st-filter-stack">
-          <span class="st-filter-label">${tab === 'teams' ? 'Team buy' : 'Own buy'}</span>
-          <div class="st-filter-row">${econSelect('econ', filter.econ)}${hasAwpCheck(
-            'hasAwp',
-            filter.hasAwp
-          )}</div>
-        </div>
-        <div class="st-filter-group st-filter-stack">
-          <span class="st-filter-label">Opp buy</span>
-          <div class="st-filter-row">${econSelect('oppEcon', filter.oppEcon)}${hasAwpCheck(
-            'oppHasAwp',
-            filter.oppHasAwp
-          )}</div>
-        </div>
-        <div class="st-filter-group st-filter-stack">
-          <span class="st-filter-label">From</span>
+  function dateRangeHtml() {
+    const active = Boolean(filter.dateFrom || filter.dateTo);
+    return `<div class="st-filter-group st-date-wrap${calendarOpen ? ' open' : ''}${
+      active ? ' has-range' : ''
+    }">
+      <button type="button" class="st-date-toggle${active ? ' active' : ''}" data-st-calendar
+        aria-expanded="${calendarOpen ? 'true' : 'false'}" aria-label="Date range"
+        title="Date range">
+        <img src="${calendarIcon}" alt="" width="18" height="18" draggable="false" />
+      </button>
+      <div class="st-date-popover" ${calendarOpen ? '' : 'hidden'}>
+        <label class="st-date-field">
+          <span>From</span>
           <input
             class="site-input st-date"
             type="date"
@@ -409,9 +377,9 @@ export function createStatsPanel({
             title="Games from this day (upload / parse date)"
             aria-label="From date"
           />
-        </div>
-        <div class="st-filter-group st-filter-stack">
-          <span class="st-filter-label">To</span>
+        </label>
+        <label class="st-date-field">
+          <span>To</span>
           <input
             class="site-input st-date"
             type="date"
@@ -420,7 +388,77 @@ export function createStatsPanel({
             title="Games through this day (upload / parse date)"
             aria-label="To date"
           />
+        </label>
+      </div>
+    </div>`;
+  }
+
+  function renderFilters() {
+    const mode = roleMode();
+    const sideSeg = `<div class="rp-seg rp-seg-side st-side-seg" role="group" aria-label="Side">
+      <button type="button" class="rp-seg-btn${
+        filter.side === 'T' ? ' active' : ''
+      }" data-side="T" aria-label="T" title="T">
+        <img src="/icons/icon_t.png" alt="" width="16" height="16" draggable="false" />
+      </button>
+      <button type="button" class="rp-seg-btn${
+        filter.side === 'CT' ? ' active' : ''
+      }" data-side="CT" aria-label="CT" title="CT">
+        <img src="/icons/icon_ct.png" alt="" width="16" height="16" draggable="false" />
+      </button>
+    </div>`;
+    const resultSeg = `<div class="rp-seg st-result-seg" role="group" aria-label="Result">
+      <button type="button" class="rp-seg-btn${
+        filter.result === 'won' ? ' active' : ''
+      }" data-result="won" aria-label="Won" title="Won">W</button>
+      <button type="button" class="rp-seg-btn${
+        filter.result === 'lost' ? ' active' : ''
+      }" data-result="lost" aria-label="Lost" title="Lost">L</button>
+    </div>`;
+    const openingSeg = `<div class="rp-seg st-opening-seg" role="group" aria-label="Opening">
+      <button type="button" class="rp-seg-btn${
+        filter.advantage === '5v4' ? ' active' : ''
+      }" data-advantage="5v4" title="5v4">5v4</button>
+      <button type="button" class="rp-seg-btn${
+        filter.advantage === '4v5' ? ' active' : ''
+      }" data-advantage="4v5" title="4v5">4v5</button>
+    </div>`;
+
+    const roleGroups =
+      mode && tab === 'players'
+        ? `
+      <div class="st-filter-group">${roleSelectHtml('T')}</div>
+      <div class="st-filter-group">${roleSelectHtml('CT')}</div>`
+        : '';
+
+    // Round-library picks need one map and a side so "our call" / "their call"
+    // resolve against absolute T/CT tags on each row.
+    const roundGroups = `${roundSelectHtml('own')}${roundSelectHtml('opp')}`;
+    const ownBuyLabel = tab === 'teams' ? 'Team buy' : 'Own buy';
+
+    filtersEl.innerHTML = `
+      <div class="st-filters-scroll">
+        <div class="st-filter-group">${mapSelectHtml()}</div>
+        <div class="st-filter-group">${sideSeg}</div>
+        ${roundGroups}
+        ${roundWindowHtml()}
+        <div class="st-filter-group">${resultSeg}</div>
+        <div class="st-filter-group">${openingSeg}</div>
+        ${roleGroups}
+        <div class="st-filter-group">
+          <div class="st-filter-row">${econSelect('econ', filter.econ, ownBuyLabel)}${hasAwpCheck(
+            'hasAwp',
+            filter.hasAwp
+          )}</div>
         </div>
+        <div class="st-filter-group">
+          <div class="st-filter-row">${econSelect(
+            'oppEcon',
+            filter.oppEcon,
+            'Enemy buy'
+          )}${hasAwpCheck('oppHasAwp', filter.oppHasAwp)}</div>
+        </div>
+        ${dateRangeHtml()}
         <div class="st-filter-group st-filter-stack">
           <span class="st-filter-label">Min rounds</span>
           <input
@@ -436,6 +474,7 @@ export function createStatsPanel({
         </div>
       </div>
       <button type="button" class="btn btn-sm st-filter-clear" data-clear>Clear</button>`;
+    setFiltersOpen(filtersOpen);
   }
 
   function scopeForMinRounds(maps = filter.maps) {
@@ -452,7 +491,22 @@ export function createStatsPanel({
     else page[tab] = 1;
   }
 
+  filtersToggleEl?.addEventListener('click', () => {
+    setFiltersOpen(!filtersOpen);
+  });
+
   filtersEl.addEventListener('click', (e) => {
+    const cal = e.target.closest('[data-st-calendar]');
+    if (cal) {
+      e.stopPropagation();
+      calendarOpen = !calendarOpen;
+      const wrap = cal.closest('.st-date-wrap');
+      wrap?.classList.toggle('open', calendarOpen);
+      cal.setAttribute('aria-expanded', calendarOpen ? 'true' : 'false');
+      const pop = wrap?.querySelector('.st-date-popover');
+      if (pop) pop.hidden = !calendarOpen;
+      return;
+    }
     const side = e.target.closest('[data-side]');
     if (side) {
       filter.side = filter.side === side.dataset.side ? '' : side.dataset.side;
@@ -589,6 +643,7 @@ export function createStatsPanel({
         if (key === 'dateFrom') filter.dateTo = filter.dateFrom;
         else filter.dateFrom = filter.dateTo;
       }
+      calendarOpen = true;
       resetListPage();
       render();
       return;
@@ -605,6 +660,17 @@ export function createStatsPanel({
     tab = btn.dataset.tab;
     el.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
     render();
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!calendarOpen) return;
+    if (e.target.closest?.('.st-date-wrap')) return;
+    calendarOpen = false;
+    const wrap = filtersEl.querySelector('.st-date-wrap');
+    wrap?.classList.remove('open');
+    wrap?.querySelector('[data-st-calendar]')?.setAttribute('aria-expanded', 'false');
+    const pop = wrap?.querySelector('.st-date-popover');
+    if (pop) pop.hidden = true;
   });
 
   backEl.addEventListener('click', () => {

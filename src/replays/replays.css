@@ -788,9 +788,11 @@ button.rp-side-name:hover {
 
 .st-filter-group .rp-awp-toggle {
   width: auto;
-  min-width: 52px;
+  min-width: 0;
   min-height: 30px;
-  padding: 5px 10px;
+  height: 30px;
+  padding: 0 10px;
+  box-sizing: border-box;
 }
 
 .rv-az-group .rp-awp-toggle {
@@ -3341,6 +3343,37 @@ body.rv-open {
   min-width: 0;
 }
 
+.st-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.st-filters-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.st-filters-toggle img {
+  display: block;
+  width: 16px;
+  height: 16px;
+  opacity: 0.85;
+}
+
+.st-filters-toggle.active {
+  border-color: var(--accent-border, rgba(110, 168, 254, 0.55));
+  background: var(--accent-dim, rgba(110, 168, 254, 0.14));
+  color: var(--text);
+}
+
+.st-filters-toggle.active img {
+  opacity: 1;
+}
+
 .st-back {
   flex: 0 0 auto;
 }
@@ -3444,6 +3477,131 @@ body.rv-open {
   border-radius: var(--radius);
   background: var(--surface);
   overflow: visible;
+}
+
+.st-filters[hidden] {
+  display: none;
+}
+
+.st-side-seg {
+  width: 72px;
+}
+
+.st-side-seg .rp-seg-btn {
+  padding: 5px 4px;
+}
+
+.st-side-seg .rp-seg-btn img {
+  width: 15px;
+  height: 15px;
+}
+
+.st-result-seg {
+  width: 72px;
+}
+
+.st-result-seg .rp-seg-btn {
+  padding: 6px 4px;
+  font: 650 12px var(--font-body);
+  letter-spacing: 0.02em;
+}
+
+.st-opening-seg {
+  width: 96px;
+}
+
+.st-opening-seg .rp-seg-btn {
+  padding: 6px 4px;
+  font: 600 11px var(--font-body);
+}
+
+.st-econ-select {
+  min-width: 118px;
+}
+
+.st-filter-row .st-awp-toggle,
+.st-filter-group .st-awp-toggle {
+  width: auto;
+  min-width: 0;
+  min-height: 30px;
+  height: 30px;
+  padding: 0 10px;
+  box-sizing: border-box;
+}
+
+.st-date-wrap {
+  position: relative;
+  align-self: flex-end;
+}
+
+.st-date-toggle {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 30px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.st-date-toggle:hover,
+.st-date-toggle.active,
+.st-date-wrap.open .st-date-toggle {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--text) 28%, var(--border));
+}
+
+.st-date-toggle.active,
+.st-date-wrap.has-range .st-date-toggle {
+  border-color: color-mix(in srgb, var(--accent, #6ea8fe) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 16%, transparent);
+}
+
+.st-date-toggle img {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.st-date-popover {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 6px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 11.5rem;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #14181f;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.st-date-popover[hidden] {
+  display: none;
+}
+
+.st-date-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font: 600 11px var(--font-body);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.st-date-field .st-date {
+  width: 100%;
+  min-width: 0;
 }
 
 /* Keep open round menus above the table (and above other filter chrome). */
@@ -5226,9 +5384,22 @@ body.rv-open {
 }
 
 .ch-entity-typeahead {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* Keep the open menu above the next compare slot / filter controls. */
+.ch-entity-typeahead:focus-within,
+.ch-entity-typeahead:has(.rp-typeahead-menu:not([hidden])) {
+  z-index: 40;
+}
+
+.ch-entity-typeahead .rp-typeahead-menu {
+  background: #14181f;
+  isolation: isolate;
 }
 
 .ch-entity-typeahead .an-sel-chips {
