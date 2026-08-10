@@ -12,3 +12,6 @@ Rules for any text written on the aim4.io site (landing page, tools pages, in-ga
 These apply to new copy going forward. Functional instructional text (level editor
 tooltips, keybind hints, football's in-match prompts) is not "filler" and can stay — it
 just should not use em dashes either.
+
+Control / filter UI (fields, switches, buttons, rounding, anti-label habits): see
+`.cursor/rules/aim4-ui-controls.mdc`.

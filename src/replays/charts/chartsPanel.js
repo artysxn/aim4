@@ -389,6 +389,13 @@ export function createChartsPanel({ escapeHtml }) {
       on ? ' checked' : ''
     } /> ${escapeHtml(label)}</label>`;
 
+  /** Full-width on/off switch (axis measure toggles). */
+  const switchFlag = (scope, key, label, on) =>
+    `<label class="ch-switch-btn${on ? ' active' : ''}">
+      <input type="checkbox" data-flag="${scope}|${key}"${on ? ' checked' : ''} />
+      <span>${escapeHtml(label)}</span>
+    </label>`;
+
   function selectHtml(attr, options, value, { placeholder = '', cls = 'site-select' } = {}) {
     const opts = options
       .map(
@@ -570,7 +577,9 @@ export function createChartsPanel({ escapeHtml }) {
     const arr = (key) => f[key] || [];
 
     const rows = [
-      scope === 'g' ? '' : checkFlag(scope, 'perRound', 'Divide by played rounds', Boolean(f.perRound)),
+      scope === 'g'
+        ? ''
+        : switchFlag(scope, 'perRound', 'Divide by played rounds', Boolean(f.perRound)),
       maps.length > 1 && !(scope === 'g' && state.compare?.on)
         ? multiDropdown(scope, 'maps', maps, arr('maps'), 'Map')
         : '',
@@ -873,7 +882,8 @@ export function createChartsPanel({ escapeHtml }) {
         ${selectHtml('data-series', seriesOpts, state.series, { placeholder: 'Color by' })}
       </div>
 
-      <div class="ch-block ch-no-rule">
+      <div class="ch-block ch-no-rule ch-general-filters">
+        <span class="ch-section-label">General filters</span>
         ${filterHtml('g', state.filter)}
       </div>`;
     for (const slot of ['a', 'b']) refreshCompareMenu(slot);
@@ -1657,6 +1667,7 @@ export function createChartsPanel({ escapeHtml }) {
       const [scope, key] = t.dataset.flag.split('|');
       filterFor(scope)[key] = Boolean(t.checked);
       t.closest?.('.rp-awp-toggle')?.classList.toggle('active', t.checked);
+      t.closest?.('.ch-switch-btn')?.classList.toggle('active', t.checked);
       afterChange({ rebuildSide: false });
       return;
     }

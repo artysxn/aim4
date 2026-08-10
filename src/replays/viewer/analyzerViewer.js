@@ -481,9 +481,8 @@ export function createAnalyzerViewer({
     }
     panelEl.innerHTML = `
       <div class="rv-az-group">
-        <h4>Team</h4>
         <p class="rv-az-pick-hint">These rounds share more than one team. Choose which side to analyze.</p>
-        <div class="rv-az-seg rv-az-teams">
+        <div class="rv-az-seg rv-az-teams" role="group" aria-label="Team">
           ${opts
             .map(
               (o) => `
@@ -667,8 +666,7 @@ export function createAnalyzerViewer({
     const teamSwitcher =
       teamOptions.length > 1
         ? `<div class="rv-az-group">
-        <h4>Team</h4>
-        <div class="rv-az-seg rv-az-teams">
+        <div class="rv-az-seg rv-az-teams" role="group" aria-label="Team">
           ${teamOptions
             .map((o) => {
               const active =

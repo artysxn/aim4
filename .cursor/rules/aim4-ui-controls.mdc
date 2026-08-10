@@ -1,0 +1,78 @@
+---
+description: AIM4 control UI style for Charts, Database, Analyzer, and new filter/tool panels
+alwaysApply: true
+---
+
+# AIM4 control UI style
+
+Use this when designing or restyling filters, toolbars, switches, dropdowns, or side panels on aim4.io (Charts, Database, Analyzer, Timeline, and new tools).
+
+## Do not
+
+- **Descriptive / marketing text is terrible.** Do not put captions, taglines, or “this section does X” copy under headings or next to controls. A control’s own label or placeholder is enough. (Same spirit as `CLAUDE.md` content rules.)
+- **Too many labels is terrible.** Prefer text inside the control (`Map`, `Own buy`, `Y Axis`, placeholder search) over uppercase section labels above every row. Drop redundant labels like a lone `TEAM` above a team switch. Use `aria-label` when the visible label is removed.
+- **1px outlines on fields/dropdowns are terrible.** Flat filled fields, no border. Do not wrap every input in a hairline box.
+- **Do not invent a third control palette.** Reuse the field theme and the analyzer switch theme below.
+
+Em dashes are still banned in UI copy (`CLAUDE.md`).
+
+## Color tokens (site)
+
+From `src/site/site.css`:
+
+| Token | Value | Use |
+|-------|-------|-----|
+| `--surface` | `#0c0c0c` | Panel / bar chrome |
+| `--text` | `#f2f2f2` | Selected / primary action text |
+| `--muted` | `#9c9ca2` | Inactive switch / button text |
+| `--border` | `#181818` | Switch outer edge + segment splits |
+| `--radius` | `12px` | Large panels |
+| `--radius-sm` | `8px` | Fields / dropdowns (preferred for inputs) |
+| Control radius (switches) | `6px` | Analyzer segs / action buttons |
+
+## Fields and dropdowns
+
+Selects, text inputs, multi-select summaries, min-rounds, clocks, search:
+
+- Background: `#050505`
+- Text: `#5c5c62`, **regular** weight (`400`), not light
+- Placeholder: same gray / weight
+- **No** 1px border, **no** focus ring border
+- Height: `32px`
+- Border radius: `var(--radius-sm)` (`8px`)
+- Custom chevron centered vertically (not floated high). Native `appearance: none` + SVG or `clip-path` caret.
+
+Reference: `.ch-side .site-select` / `.st-filters .site-select` in `src/replays/replays.css`.
+
+## Switches (2+ choices) and buttons
+
+Match the **analyzer** segmented control (`.rv-az-seg` / `.rv-az-seg-btn`):
+
+**Container (seg)**
+
+- `border: 1px solid var(--border)`
+- `border-radius: 6px`
+- `background: rgba(255, 255, 255, 0.03)`
+
+**Segment / button**
+
+- Idle: transparent (or same faint fill), `color: var(--muted)`, font weight `600`
+- Hover: `background: rgba(255, 255, 255, 0.04)`, `color: var(--text)`
+- Active / on: `background: rgba(255, 255, 255, 0.1)`, `color: var(--text)`, `box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12)`
+- Keep a **1px split** between segments (`border-right: 1px solid var(--border)`), not a second outer outline on each half
+
+Apply this theme to: T/CT, W/L, 5v4/4v5, half, team pickers, AWP toggles, Clear, gear, calendar icon buttons, full-width on/off rows (e.g. “Divide by played rounds”), and compare map/game chips when they act as toggles.
+
+Reference: `.rv-az-seg` in `src/replays/replays.css`; Charts/Database overrides under `.ch-side` and `.st-filters`.
+
+## Layout habits
+
+- Shared control height (`32px`) across a toolbar or sidebar row
+- Tight vertical gaps between stacked builder rows; one separator before a real section (e.g. “General filters”), not a line under every block
+- Buy dropdowns flex; compact AWP beside them; axis selects fill width minus a square gear
+- Prefer one job per row; do not add helper sentences under controls
+
+## Content
+
+- Functional hints (keybinds, editor tooltips) can stay; they still must not use em dashes
+- Section titles like “General filters” are OK once per block; do not label every filter “MAP”, “SIDE”, “ROLE” above the control
