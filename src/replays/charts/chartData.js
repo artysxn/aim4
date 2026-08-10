@@ -26,18 +26,29 @@ function factsForSource(facts, source) {
  * Active compare slots (A/B). Same player is allowed when maps or games differ.
  * @returns {null | Array<{ key: string, label: string, playerId: string, maps: string[], matches: string[] }>}
  */
+function compareSlotEntity(s) {
+  const kind = s?.kind === 'team' ? 'team' : s?.kind === 'player' ? 'player' : s?.playerId ? 'player' : '';
+  const id = String(s?.id || s?.playerId || '').trim();
+  if (!kind || !id) return null;
+  return { kind, id };
+}
+
 export function compareSlots(state, facts) {
   const c = state?.compare;
   if (!c?.on) return null;
-  const nameOf = (id) => {
+  const nameOf = (kind, id) => {
+    if (kind === 'team') {
+      const row = (facts?.teams || []).find((t) => String(t.key) === String(id));
+      return row?.name || String(id);
+    }
     const row = (facts?.players || []).find((p) => String(p.id) === String(id));
     return row?.name || String(id);
   };
   const slots = [];
   for (const key of ['a', 'b']) {
     const s = c[key] || {};
-    const playerId = String(s.playerId || '').trim();
-    if (!playerId) continue;
+    const entity = compareSlotEntity(s);
+    if (!entity) continue;
     const maps = Array.isArray(s.maps) ? s.maps.map(String).filter(Boolean) : [];
     const matches = Array.isArray(s.matches) ? s.matches.map(String).filter(Boolean) : [];
     const mapBit = maps.length
@@ -51,8 +62,10 @@ export function compareSlots(state, facts) {
           : '';
     slots.push({
       key,
-      label: `${nameOf(playerId)}${mapBit}${gameBit}`,
-      playerId,
+      label: `${nameOf(entity.kind, entity.id)}${mapBit}${gameBit}`,
+      kind: entity.kind,
+      id: entity.id,
+      playerId: entity.kind === 'player' ? entity.id : '',
       maps,
       matches
     });
@@ -70,7 +83,13 @@ function filterWithoutPlayersMaps(base) {
 }
 
 function factInCompareSlot(f, slot) {
-  if (String(f.playerId || '') !== slot.playerId) return false;
+  const kind = slot.kind || 'player';
+  const id = String(slot.id || slot.playerId || '');
+  if (kind === 'team') {
+    if (String(f.teamKey || '') !== id) return false;
+  } else if (String(f.playerId || '') !== id) {
+    return false;
+  }
   if (slot.maps.length && !slot.maps.includes(String(f.map || ''))) return false;
   if (slot.matches.length && !slot.matches.includes(String(f.demoId || ''))) return false;
   return true;

@@ -115,21 +115,211 @@ export function createChartsPanel({ escapeHtml }) {
     /** Two-player (or same player / different maps or games) comparison series. */
     compare: {
       on: false,
-      a: { playerId: '', maps: [], matches: [] },
-      b: { playerId: '', maps: [], matches: [] }
+      a: { kind: '', id: '', maps: [], matches: [] },
+      b: { kind: '', id: '', maps: [], matches: [] }
     }
   };
 
+  let compareSearch = { a: '', b: '' };
+  let compareMenuOpen = { a: false, b: false };
+  /** @type {Record<string, string>} */
+  let filterEntitySearch = { g: '', x: '', y: '' };
+  /** @type {Record<string, boolean>} */
+  let filterEntityMenuOpen = { g: false, x: false, y: false };
+
   function emptyCompareSlot() {
-    return { playerId: '', maps: [], matches: [] };
+    return { kind: '', id: '', maps: [], matches: [] };
   }
 
   function normalizeCompareSlot(raw) {
+    const legacyPlayer = String(raw?.playerId || '');
+    const kind =
+      raw?.kind === 'team' ? 'team' : raw?.kind === 'player' ? 'player' : legacyPlayer ? 'player' : '';
+    const id = String(raw?.id || legacyPlayer || '');
     return {
-      playerId: String(raw?.playerId || ''),
+      kind: kind && id ? kind : '',
+      id: kind && id ? id : '',
       maps: Array.isArray(raw?.maps) ? raw.maps.map(String) : [],
       matches: Array.isArray(raw?.matches) ? raw.matches.map(String) : []
     };
+  }
+
+  function compareSlotEntity(s) {
+    const slot = normalizeCompareSlot(s || {});
+    if (!slot.kind || !slot.id) return null;
+    return slot;
+  }
+
+  function entityLabel(kind, id) {
+    if (kind === 'team') {
+      const row = (facts?.teams || []).find((t) => String(t.key) === String(id));
+      return row?.name || String(id);
+    }
+    const row = (facts?.players || []).find((p) => String(p.id) === String(id));
+    return row?.name || String(id);
+  }
+
+  /** @returns {Map<string, Set<string>>} */
+  function teamPlayerIndex() {
+    /** @type {Map<string, Set<string>>} */
+    const byTeam = new Map();
+    for (const f of facts?.playerFacts || []) {
+      const tk = String(f.teamKey || '');
+      const pid = String(f.playerId || '');
+      if (!tk || !pid) continue;
+      if (!byTeam.has(tk)) byTeam.set(tk, new Set());
+      byTeam.get(tk).add(pid);
+    }
+    return byTeam;
+  }
+
+  /**
+   * @param {string} q
+   * @param {{ teams?: boolean, players?: boolean, selectedTeamKeys?: Set<string>, selectedPlayerIds?: Set<string> }} opts
+   */
+  function entitySuggestions(q, opts = {}) {
+    const {
+      teams: allowTeams = true,
+      players: allowPlayers = true,
+      selectedTeamKeys = new Set(),
+      selectedPlayerIds = new Set()
+    } = opts;
+    const needle = q.trim().toLowerCase();
+    const teamPlayers = teamPlayerIndex();
+    /** @type {{ kind: 'team'|'player', key: string, label: string, sub?: string }[]} */
+    const out = [];
+
+    if (allowTeams) {
+      const teamHits = (facts?.teams || [])
+        .filter((t) => !selectedTeamKeys.has(String(t.key)))
+        .filter((t) => !needle || t.name.toLowerCase().includes(needle) || String(t.key).includes(needle))
+        .slice(0, needle ? 8 : 12);
+      for (const t of teamHits) {
+        const n = teamPlayers.get(t.key)?.size || 0;
+        out.push({
+          kind: 'team',
+          key: t.key,
+          label: t.name,
+          sub: n ? `${n} player${n === 1 ? '' : 's'}` : ''
+        });
+      }
+    }
+
+    if (allowPlayers && needle.length >= 1) {
+      const playerHits = (facts?.players || [])
+        .filter((p) => !selectedPlayerIds.has(String(p.id)))
+        .filter(
+          (p) => p.name.toLowerCase().includes(needle) || String(p.id).toLowerCase().includes(needle)
+        )
+        .slice(0, 20);
+      for (const p of playerHits) {
+        out.push({ kind: 'player', key: p.id, label: p.name });
+      }
+    }
+
+    return out;
+  }
+
+  function entitySuggestMenuHtml(opts, pickAttr, pickScope = '') {
+    if (!opts.length) {
+      return `<p class="rp-typeahead-empty">No matches</p>`;
+    }
+    const pickVal = (o) =>
+      pickScope ? `${pickScope}|${o.kind}|${o.key}` : `${o.kind}|${o.key}`;
+    const teamsHtml = opts
+      .filter((o) => o.kind === 'team')
+      .map(
+        (o) => `<button type="button" class="an-suggest" ${pickAttr}="${escapeHtml(pickVal(o))}">
+          <span class="an-suggest-kind">Team</span>
+          <span class="an-suggest-main">
+            <strong>${escapeHtml(o.label)}</strong>
+            ${o.sub ? `<span class="an-muted">${escapeHtml(o.sub)}</span>` : ''}
+          </span>
+        </button>`
+      )
+      .join('');
+    const playersHtml = opts
+      .filter((o) => o.kind === 'player')
+      .map(
+        (o) => `<button type="button" class="an-suggest" ${pickAttr}="${escapeHtml(pickVal(o))}">
+          <span class="an-suggest-kind">Player</span>
+          <span class="an-suggest-main"><strong>${escapeHtml(o.label)}</strong></span>
+        </button>`
+      )
+      .join('');
+    return `
+      ${teamsHtml ? `<div class="an-suggest-group"><span class="an-suggest-group-label">Teams</span>${teamsHtml}</div>` : ''}
+      ${playersHtml ? `<div class="an-suggest-group"><span class="an-suggest-group-label">Players</span>${playersHtml}</div>` : ''}`;
+  }
+
+  function refreshCompareMenu(slot) {
+    const menu = sideEl.querySelector(`#ch-compare-menu-${slot}`);
+    if (!menu) return;
+    const q = compareSearch[slot] || '';
+    const opts = entitySuggestions(q, { players: q.length >= 1 });
+    const show = compareMenuOpen[slot] && (opts.length || q.length >= 1);
+    menu.hidden = !show;
+    if (!show) return;
+    menu.innerHTML = opts.length
+      ? entitySuggestMenuHtml(opts, 'data-compare-pick')
+      : `<p class="rp-typeahead-empty">${q ? 'No matches' : 'Type a name, or pick a team'}</p>`;
+  }
+
+  function refreshFilterEntityMenu(scope) {
+    const menu = sideEl.querySelector(`#ch-entity-menu-${scope}`);
+    if (!menu) return;
+    const f = filterFor(scope);
+    const hidePlayers = scope === 'g' && state.compare?.on;
+    const selectedTeamKeys = new Set((f.teams || []).map(String));
+    const selectedPlayerIds = new Set((f.players || []).map(String));
+    const q = filterEntitySearch[scope] || '';
+    const opts = entitySuggestions(q, {
+      teams: Boolean(facts?.teams?.length),
+      players: Boolean(facts?.players?.length) && !hidePlayers,
+      selectedTeamKeys,
+      selectedPlayerIds
+    });
+    const show = filterEntityMenuOpen[scope] && (opts.length || q.length >= 1);
+    menu.hidden = !show;
+    if (!show) return;
+    menu.innerHTML = opts.length
+      ? entitySuggestMenuHtml(opts, 'data-entity-pick', scope)
+      : `<p class="rp-typeahead-empty">${q ? 'No matches' : 'Type a name, or pick a team'}</p>`;
+  }
+
+  function entityFilterHtml(scope, f) {
+    const hidePlayers = scope === 'g' && state.compare?.on;
+    const hasTeams = Boolean(facts?.teams?.length);
+    const hasPlayers = Boolean(facts?.players?.length) && !hidePlayers;
+    if (!hasTeams && !hasPlayers) return '';
+
+    const teamKeys = (f.teams || []).map(String);
+    const playerIds = (f.players || []).map(String);
+    const chips = [
+      ...teamKeys.map(
+        (key) => `<button type="button" class="an-sel-chip" data-entity-remove="${scope}|team|${escapeHtml(
+          key
+        )}" title="Remove">${escapeHtml(entityLabel('team', key))} <span aria-hidden="true">×</span></button>`
+      ),
+      ...playerIds.map(
+        (id) => `<button type="button" class="an-sel-chip" data-entity-remove="${scope}|player|${escapeHtml(
+          id
+        )}" title="Remove">${escapeHtml(entityLabel('player', id))} <span aria-hidden="true">×</span></button>`
+      )
+    ].join('');
+
+    const label = hasTeams && hasPlayers ? 'Teams & players' : hasTeams ? 'Teams' : 'Players';
+
+    return group(
+      label,
+      `<div class="ch-entity-typeahead rp-typeahead" id="ch-entity-typeahead-${scope}">
+        ${chips ? `<div class="an-sel-chips">${chips}</div>` : ''}
+        <input type="search" class="site-input" data-entity-search="${scope}"
+          placeholder="Search teams or players…" spellcheck="false" autocomplete="off"
+          value="${escapeHtml(filterEntitySearch[scope] || '')}" aria-label="Search teams or players" />
+        <div class="rp-typeahead-menu an-subject-menu" id="ch-entity-menu-${scope}" hidden></div>
+      </div>`
+    );
   }
 
   const isScatter = () => state.type === 'scatter';
@@ -396,27 +586,8 @@ export function createChartsPanel({ escapeHtml }) {
             }" data-num="${scope}|timeTo" /></div>`
           )
         : '',
-      facts?.teams?.length
-        ? group(
-            'Teams',
-            multiSelect(
-              scope,
-              'teams',
-              facts.teams.map((t) => ({ key: t.key, label: `${t.name} (${t.rounds})` })),
-              arr('teams')
-            )
-          )
-        : '',
-      facts?.players?.length && !(scope === 'g' && state.compare?.on)
-        ? group(
-            'Players',
-            multiSelect(
-              scope,
-              'players',
-              facts.players.map((p) => ({ key: p.id, label: `${p.name} (${p.rounds})` })),
-              arr('players')
-            )
-          )
+      facts?.teams?.length || (facts?.players?.length && !(scope === 'g' && state.compare?.on))
+        ? entityFilterHtml(scope, f)
         : '',
       facts?.matches?.length > 1 && !(scope === 'g' && state.compare?.on)
         ? group(
@@ -449,39 +620,54 @@ export function createChartsPanel({ escapeHtml }) {
 
   // ---- builder ------------------------------------------------------------
 
-  /** Games this compare slot can include, given player + optional map chips. */
+  /** Games this compare slot can include, given entity + optional map chips. */
   function matchesForCompareSlot(s) {
-    const playerId = String(s?.playerId || '').trim();
-    if (!playerId || !facts) return [];
+    const entity = compareSlotEntity(s);
+    if (!entity || !facts) return [];
     const maps = new Set((s.maps || []).map(String).filter(Boolean));
     const ids = new Set();
-    for (const f of facts.playerFacts || []) {
-      if (String(f.playerId || '') !== playerId) continue;
-      if (maps.size && !maps.has(String(f.map || ''))) continue;
-      if (f.demoId) ids.add(String(f.demoId));
+    if (entity.kind === 'team') {
+      for (const f of facts.roundFacts || []) {
+        if (String(f.teamKey || '') !== entity.id) continue;
+        if (maps.size && !maps.has(String(f.map || ''))) continue;
+        if (f.demoId) ids.add(String(f.demoId));
+      }
+    } else {
+      for (const f of facts.playerFacts || []) {
+        if (String(f.playerId || '') !== entity.id) continue;
+        if (maps.size && !maps.has(String(f.map || ''))) continue;
+        if (f.demoId) ids.add(String(f.demoId));
+      }
     }
     return (facts.matches || []).filter((m) => ids.has(String(m.id)));
   }
 
+  function compareEntityHtml(slot, s) {
+    const entity = compareSlotEntity(s);
+    if (entity) {
+      return `<button type="button" class="an-sel-chip" data-compare-clear="${slot}" title="Change">${escapeHtml(
+        entityLabel(entity.kind, entity.id)
+      )} <span aria-hidden="true">×</span></button>`;
+    }
+    return `<input type="search" class="site-input" data-compare-search="${slot}"
+      placeholder="Search teams or players…" spellcheck="false" autocomplete="off"
+      value="${escapeHtml(compareSearch[slot] || '')}" aria-label="Search teams or players" />
+    <div class="rp-typeahead-menu an-subject-menu" id="ch-compare-menu-${slot}" hidden></div>`;
+  }
+
   function compareSlotHtml(slot) {
     const s = state.compare[slot] || emptyCompareSlot();
-    const players = (facts?.players || []).map((p) => ({
-      key: p.id,
-      label: `${p.name} (${p.rounds})`
-    }));
     const maps = (facts?.maps || []).map((m) => ({ key: m, label: MAPS[m]?.name || m }));
     const selMaps = new Set((s.maps || []).map(String));
     const matchOpts = matchesForCompareSlot(s);
     const selMatches = new Set((s.matches || []).map(String));
+    const entity = compareSlotEntity(s);
     return `
       <div class="ch-compare-slot" data-compare-slot="${slot}">
         <span class="ch-label">${slot === 'a' ? 'A' : 'B'}</span>
-        ${selectHtml(
-          `data-compare-player="${slot}"`,
-          players,
-          s.playerId || '',
-          { placeholder: 'Pick a player' }
-        )}
+        <div class="ch-entity-typeahead rp-typeahead" id="ch-compare-typeahead-${slot}">
+          ${compareEntityHtml(slot, s)}
+        </div>
         ${
           maps.length
             ? `<div class="ch-chips" role="group" title="Optional: limit this side to maps">
@@ -511,8 +697,8 @@ export function createChartsPanel({ escapeHtml }) {
                     .join('')}
                 </div>
               </div>`
-            : s.playerId
-              ? `<p class="ch-hint">No games for this player with the current maps.</p>`
+            : entity
+              ? `<p class="ch-hint">No games for this selection with the current maps.</p>`
               : ''
         }
       </div>`;
@@ -525,15 +711,14 @@ export function createChartsPanel({ escapeHtml }) {
         <span class="ch-label">Compare</span>
         <label class="ch-check">
           <input type="checkbox" data-compare-on${on ? ' checked' : ''} />
-          Two players (or one player on two maps)
+          A vs B
         </label>
         ${
           on
             ? `<div class="ch-compare-slots">
                 ${compareSlotHtml('a')}
                 ${compareSlotHtml('b')}
-              </div>
-              <p class="ch-hint">Same player on both sides is fine when maps or games differ. Leave Games empty to include all.</p>`
+              </div>`
             : ''
         }
       </div>`;
@@ -645,6 +830,8 @@ export function createChartsPanel({ escapeHtml }) {
         <span class="ch-label">Filters for the whole chart</span>
         ${filterHtml('g', state.filter)}
       </div>`;
+    for (const slot of ['a', 'b']) refreshCompareMenu(slot);
+    for (const scope of ['g', 'x', 'y']) refreshFilterEntityMenu(scope);
   }
 
   // ---- canvas -------------------------------------------------------------
@@ -662,13 +849,10 @@ export function createChartsPanel({ escapeHtml }) {
   }
 
   function compareSlotsLabel() {
-    const a = state.compare?.a?.playerId;
-    const b = state.compare?.b?.playerId;
+    const a = compareSlotEntity(state.compare?.a);
+    const b = compareSlotEntity(state.compare?.b);
     if (!a && !b) return 'compare';
-    const name = (id) => {
-      const row = (facts?.players || []).find((p) => String(p.id) === String(id));
-      return row?.name || id;
-    };
+    const name = (entity) => entityLabel(entity.kind, entity.id);
     if (a && b) return `${name(a)} vs ${name(b)}`;
     return a ? name(a) : name(b);
   }
@@ -926,6 +1110,61 @@ export function createChartsPanel({ escapeHtml }) {
   }
 
   sideEl.addEventListener('click', (e) => {
+    const comparePick = e.target.closest('[data-compare-pick]');
+    if (comparePick) {
+      const [kind, id] = String(comparePick.dataset.comparePick || '').split('|');
+      const slotEl = comparePick.closest('[data-compare-slot]');
+      const slot = slotEl?.dataset.compareSlot === 'b' ? 'b' : 'a';
+      if ((kind === 'team' || kind === 'player') && id) {
+        if (!state.compare[slot]) state.compare[slot] = emptyCompareSlot();
+        state.compare[slot] = { ...state.compare[slot], kind, id, matches: [] };
+        compareSearch[slot] = '';
+        compareMenuOpen[slot] = false;
+        afterChange();
+      }
+      return;
+    }
+    const compareClear = e.target.closest('[data-compare-clear]');
+    if (compareClear) {
+      const slot = compareClear.dataset.compareClear === 'b' ? 'b' : 'a';
+      if (!state.compare[slot]) state.compare[slot] = emptyCompareSlot();
+      state.compare[slot] = emptyCompareSlot();
+      compareSearch[slot] = '';
+      compareMenuOpen[slot] = false;
+      afterChange();
+      return;
+    }
+    const entityPick = e.target.closest('[data-entity-pick]');
+    if (entityPick) {
+      const [scope, kind, id] = String(entityPick.dataset.entityPick || '').split('|');
+      if ((scope === 'g' || scope === 'x' || scope === 'y') && (kind === 'team' || kind === 'player') && id) {
+        const f = filterFor(scope);
+        if (kind === 'team') {
+          const cur = [...(f.teams || [])].map(String);
+          if (!cur.includes(id)) cur.push(id);
+          f.teams = cur;
+        } else {
+          const cur = [...(f.players || [])].map(String);
+          if (!cur.includes(id)) cur.push(id);
+          f.players = cur;
+        }
+        filterEntitySearch[scope] = '';
+        filterEntityMenuOpen[scope] = false;
+        afterChange();
+      }
+      return;
+    }
+    const entityRemove = e.target.closest('[data-entity-remove]');
+    if (entityRemove) {
+      const [scope, kind, id] = String(entityRemove.dataset.entityRemove || '').split('|');
+      if ((scope === 'g' || scope === 'x' || scope === 'y') && id) {
+        const f = filterFor(scope);
+        if (kind === 'team') f.teams = (f.teams || []).map(String).filter((x) => x !== id);
+        else f.players = (f.players || []).map(String).filter((x) => x !== id);
+        afterChange();
+      }
+      return;
+    }
     const clear = e.target.closest('[data-clear]');
     if (clear) {
       const scope = clear.dataset.clear;
@@ -996,6 +1235,75 @@ export function createChartsPanel({ escapeHtml }) {
     }
   });
 
+  sideEl.addEventListener('input', (e) => {
+    const slot = e.target.dataset?.compareSearch;
+    if (slot === 'a' || slot === 'b') {
+      compareSearch[slot] = e.target.value;
+      compareMenuOpen[slot] = true;
+      refreshCompareMenu(slot);
+      return;
+    }
+    const scope = e.target.dataset?.entitySearch;
+    if (scope === 'g' || scope === 'x' || scope === 'y') {
+      filterEntitySearch[scope] = e.target.value;
+      filterEntityMenuOpen[scope] = true;
+      refreshFilterEntityMenu(scope);
+    }
+  });
+
+  sideEl.addEventListener('focusin', (e) => {
+    const slot = e.target.dataset?.compareSearch;
+    if (slot === 'a' || slot === 'b') {
+      compareMenuOpen[slot] = true;
+      refreshCompareMenu(slot);
+      return;
+    }
+    const scope = e.target.dataset?.entitySearch;
+    if (scope === 'g' || scope === 'x' || scope === 'y') {
+      filterEntityMenuOpen[scope] = true;
+      refreshFilterEntityMenu(scope);
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!sideEl.contains(e.target)) {
+      let changed = false;
+      for (const slot of ['a', 'b']) {
+        if (compareMenuOpen[slot]) {
+          compareMenuOpen[slot] = false;
+          refreshCompareMenu(slot);
+          changed = true;
+        }
+      }
+      for (const scope of ['g', 'x', 'y']) {
+        if (filterEntityMenuOpen[scope]) {
+          filterEntityMenuOpen[scope] = false;
+          refreshFilterEntityMenu(scope);
+          changed = true;
+        }
+      }
+      return;
+    }
+    const inCompare = e.target.closest?.('[id^="ch-compare-typeahead-"]');
+    if (!inCompare) {
+      for (const slot of ['a', 'b']) {
+        if (compareMenuOpen[slot]) {
+          compareMenuOpen[slot] = false;
+          refreshCompareMenu(slot);
+        }
+      }
+    }
+    const inFilter = e.target.closest?.('[id^="ch-entity-typeahead-"]');
+    if (!inFilter) {
+      for (const scope of ['g', 'x', 'y']) {
+        if (filterEntityMenuOpen[scope]) {
+          filterEntityMenuOpen[scope] = false;
+          refreshFilterEntityMenu(scope);
+        }
+      }
+    }
+  });
+
   sideEl.addEventListener('change', (e) => {
     const t = e.target;
     if (t.matches('[data-compare-on]')) {
@@ -1007,14 +1315,6 @@ export function createChartsPanel({ escapeHtml }) {
         };
       }
       state.compare.on = Boolean(t.checked);
-      afterChange();
-      return;
-    }
-    if (t.matches('[data-compare-player]')) {
-      const slot = t.dataset.comparePlayer === 'b' ? 'b' : 'a';
-      if (!state.compare[slot]) state.compare[slot] = emptyCompareSlot();
-      state.compare[slot].playerId = t.value || '';
-      state.compare[slot].matches = [];
       afterChange();
       return;
     }

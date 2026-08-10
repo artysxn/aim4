@@ -5168,6 +5168,18 @@ body.rv-open {
   background: rgba(255, 255, 255, 0.02);
 }
 
+.ch-entity-typeahead {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ch-entity-typeahead .an-sel-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
 .ch-compare-games {
   display: flex;
   flex-direction: column;
