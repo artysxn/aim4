@@ -64,7 +64,7 @@ function probeBlock() {
     draw();
     try {
       st = await adminApi.ingestProbeStart(url);
-      schedule(0);
+      schedule(PROBE_POLL_MS);
     } catch (err) {
       notice(root, err.message, 'error');
     } finally {
@@ -282,11 +282,16 @@ export function ingestPanel() {
       const line = el('div', 'ingest-current');
       line.appendChild(el('strong', null, current.label || current.matchId));
       if (current.event) line.appendChild(el('span', 'ingest-dim', current.event));
-      const stage = current.map
-        ? `${current.stage || 'working'}: ${current.map}${
-            current.round ? ` round ${current.round}/${current.totalRounds || '?'}` : ''
-          }`
-        : current.stage || 'working';
+      const stage =
+        current.stage === 'download'
+          ? `Downloading: ${bytes(current.received || 0)}${
+              current.totalBytes ? ` of ${bytes(current.totalBytes)}` : ''
+            }`
+          : current.map
+            ? `${current.stage || 'working'}: ${current.map}${
+                current.round ? ` round ${current.round}/${current.totalRounds || '?'}` : ''
+              }`
+            : current.stage || 'working';
       line.appendChild(el('span', 'ingest-stage', stage));
       if (current.playedAt) line.appendChild(el('span', 'ingest-dim', date(current.playedAt)));
       wrap.appendChild(line);

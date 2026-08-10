@@ -40,7 +40,7 @@ export const STATES = Object.freeze({
 const TERMINAL = new Set([STATES.CLEANED, STATES.FILTERED_OUT, STATES.FAILED]);
 
 /** States that mean "a process was working on this when it died". */
-const INTERRUPTED = new Set([STATES.DOWNLOADING, STATES.PARSING]);
+const INTERRUPTED = new Set([STATES.DOWNLOADING, STATES.DOWNLOADED, STATES.PARSING]);
 
 export class Ledger {
   /** @param {string} file */

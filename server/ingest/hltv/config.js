@@ -44,13 +44,14 @@ export function loadConfig(overrides = {}) {
     maxDelayMs: num(env.AIM4_INGEST_MAX_DELAY_MS, 40000),
     batchCooldownMs: num(env.AIM4_INGEST_BATCH_COOLDOWN_MS, 60000),
     userAgent:
-      env.AIM4_INGEST_USER_AGENT || 'aim4.io-ingest/1.0 (+https://aim4.io; contact@aim4.io)',
+      env.AIM4_INGEST_USER_AGENT || 'Mozilla/5.0',
     maxArchiveBytes: num(env.AIM4_INGEST_MAX_ARCHIVE_BYTES, 2 * 1024 ** 3),
     /** CloakBrowser transport shared by discovery, downloads, and the probe. */
     cloakHeadless: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_HEADLESS || 'true'),
-    cloakHumanize: /^(1|true|yes|on)$/i.test(env.AIM4_CLOAK_HUMANIZE || ''),
+    cloakHumanize: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_HUMANIZE || 'true'),
     cloakProxy: env.AIM4_CLOAK_PROXY || '',
     cloakSettleMs: num(env.AIM4_CLOAK_SETTLE_MS, 5000),
+    cloakDownloadDeadlineMs: num(env.AIM4_CLOAK_DOWNLOAD_DEADLINE_MS, 30 * 60_000),
 
     /** How often the continuous runner looks for newly finished matches. */
     pollIntervalMs: num(env.AIM4_INGEST_POLL_MS, 5 * 60 * 1000),
@@ -81,5 +82,7 @@ export function loadConfig(overrides = {}) {
   cfg.ledgerPath = path.join(cfg.stateDir, 'ledger.json');
   cfg.lockPath = path.join(cfg.stateDir, 'ingest.lock');
   cfg.statusPath = path.join(cfg.stateDir, 'status.json');
+  cfg.cloakDownloadsDir =
+    env.AIM4_CLOAK_DOWNLOADS_DIR || path.join(cfg.workDir, '.cloakbrowser-downloads');
   return cfg;
 }

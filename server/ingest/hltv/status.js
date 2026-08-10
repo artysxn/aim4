@@ -21,6 +21,7 @@ export function emptyStatus() {
     startedAt: null,
     stoppedAt: null,
     current: null,
+    downloads: [],
     counts: null,
     next: null,
     recent: [],
@@ -34,9 +35,45 @@ const RECENT_MAX = 25;
 
 export function foldEvent(status, event, ledger) {
   const s = { ...status, updatedAt: new Date().toISOString() };
+  s.downloads = Array.isArray(status.downloads) ? [...status.downloads] : [];
 
   switch (event.type) {
+    case 'download-start': {
+      const item = {
+        matchId: event.matchId,
+        label: event.label,
+        event: event.event,
+        playedAt: event.playedAt,
+        stage: 'download',
+        received: 0,
+        totalBytes: 0
+      };
+      s.downloads = [item, ...s.downloads.filter((d) => d.matchId !== event.matchId)];
+      if (!s.current || s.current.stage === 'download') s.current = item;
+      break;
+    }
+    case 'download-progress': {
+      s.downloads = s.downloads.map((d) =>
+        d.matchId === event.matchId
+          ? {
+              ...d,
+              received: event.received ?? d.received,
+              totalBytes: event.total ?? d.totalBytes
+            }
+          : d
+      );
+      const item = s.downloads.find((d) => d.matchId === event.matchId);
+      if (item && (!s.current || s.current.stage === 'download')) s.current = item;
+      break;
+    }
+    case 'download-complete':
+      s.downloads = s.downloads.filter((d) => d.matchId !== event.matchId);
+      if (s.current?.stage === 'download' && s.current.matchId === event.matchId) {
+        s.current = s.downloads[0] || null;
+      }
+      break;
     case 'match-start':
+      s.downloads = s.downloads.filter((d) => d.matchId !== event.matchId);
       s.current = {
         matchId: event.matchId,
         label: event.label,
@@ -69,13 +106,23 @@ export function foldEvent(status, event, ledger) {
       ].slice(0, RECENT_MAX);
       break;
     case 'match-failed':
+      s.lastError = event.error;
+      s.recent = [
+        { at: event.at, kind: 'failed', matchId: event.matchId, text: event.error },
+        ...s.recent
+      ].slice(0, RECENT_MAX);
+      s.current = null;
+      break;
     case 'download-failed':
       s.lastError = event.error;
       s.recent = [
-        { at: event.at, kind: 'failed', matchId: event.matchId, text: event.error }
-        , ...s.recent
+        { at: event.at, kind: 'failed', matchId: event.matchId, text: event.error },
+        ...s.recent
       ].slice(0, RECENT_MAX);
-      s.current = null;
+      s.downloads = s.downloads.filter((d) => d.matchId !== event.matchId);
+      if (s.current?.stage === 'download' && s.current.matchId === event.matchId) {
+        s.current = s.downloads[0] || null;
+      }
       break;
     case 'match-cleaned':
       s.current = null;

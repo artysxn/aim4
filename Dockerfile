@@ -34,6 +34,8 @@ RUN npm ci --omit=dev
 # CloakBrowser uses its own Chromium build but still needs Chromium's Linux
 # system libraries. Cache both the dependencies and signed browser binary in
 # the image so the first admin probe does not spend minutes provisioning them.
+ENV CLOAKBROWSER_AUTO_UPDATE=false \
+  CLOAKBROWSER_VERSION=146.0.7680.177.5
 RUN npx playwright-core install-deps chromium \
   && npx cloakbrowser install
 

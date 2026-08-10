@@ -14,6 +14,7 @@ import { launchContext } from 'cloakbrowser';
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 60_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
+const DEFAULT_DOWNLOAD_DEADLINE_MS = 30 * 60_000;
 const DEFAULT_STALL_MS = 60_000;
 
 const bool = (value, fallback) => {
@@ -27,11 +28,20 @@ const bool = (value, fallback) => {
  */
 function launchOptions(cfg = {}) {
   const proxy = cfg.cloakProxy || process.env.AIM4_CLOAK_PROXY || undefined;
+  if (proxy && typeof cfg.validateUrl === 'function') {
+    throw new Error('A proxy cannot be used for an SSRF-guarded CloakBrowser session');
+  }
+  const downloadsPath =
+    cfg.cloakDownloadsDir || (cfg.workDir ? path.join(cfg.workDir, '.cloakbrowser-downloads') : '');
   return {
     headless: bool(cfg.cloakHeadless ?? process.env.AIM4_CLOAK_HEADLESS, true),
-    humanize: bool(cfg.cloakHumanize ?? process.env.AIM4_CLOAK_HUMANIZE, false),
+    humanize: bool(cfg.cloakHumanize ?? process.env.AIM4_CLOAK_HUMANIZE, true),
     ...(proxy ? { proxy } : {}),
-    contextOptions: { acceptDownloads: true }
+    ...(downloadsPath ? { launchOptions: { downloadsPath } } : {}),
+    contextOptions: {
+      acceptDownloads: true,
+      serviceWorkers: 'block'
+    }
   };
 }
 
@@ -72,6 +82,9 @@ export function createCloakSession(cfg = {}) {
     if (closed) throw new Error('CloakBrowser session is closed');
     if (!contextPromise) {
       log('Launching CloakBrowser');
+      const downloadsPath =
+        cfg.cloakDownloadsDir || (cfg.workDir ? path.join(cfg.workDir, '.cloakbrowser-downloads') : '');
+      if (downloadsPath) await fsp.mkdir(downloadsPath, { recursive: true });
       contextPromise = launchContext(launchOptions(cfg)).then(async (ctx) => {
         // Guard every browser request, not just the first URL. An admin-supplied
         // public page must not redirect or embed its way into private services.
@@ -141,6 +154,7 @@ export function createCloakSession(cfg = {}) {
    *   fallbackName?: string,
    *   maxBytes?: number,
    *   timeoutMs?: number,
+   *   deadlineMs?: number,
    *   stallMs?: number,
    *   signal?: AbortSignal,
    *   onProgress?: (p: {received: number, total: number}) => void
@@ -151,11 +165,16 @@ export function createCloakSession(cfg = {}) {
     const ctx = await context();
     const page = await ctx.newPage();
     const timeout = Number(opts.timeoutMs) || DEFAULT_DOWNLOAD_TIMEOUT_MS;
+    const deadlineMs =
+      Number(opts.deadlineMs ?? cfg.cloakDownloadDeadlineMs) || DEFAULT_DOWNLOAD_DEADLINE_MS;
     const stallMs = Number(opts.stallMs) || DEFAULT_STALL_MS;
     const maxBytes = Number(opts.maxBytes) || Infinity;
     let rejectPendingDownload = null;
     let activeDownload = null;
     let activeStream = null;
+    let target = null;
+    let completed = false;
+    let deadlineTimer = null;
     const onAbort = () => {
       const err = abortError(opts.signal);
       rejectPendingDownload?.(err);
@@ -168,6 +187,16 @@ export function createCloakSession(cfg = {}) {
     try {
       await fsp.mkdir(directory, { recursive: true });
       log(`Opening download URL ${url}`);
+      deadlineTimer = setTimeout(() => {
+        const err = new Error(
+          `CloakBrowser download exceeded the ${Math.round(deadlineMs / 60000)} minute deadline`
+        );
+        rejectPendingDownload?.(err);
+        activeStream?.destroy(err);
+        void activeDownload?.cancel().catch(() => {});
+        void page.close().catch(() => {});
+      }, deadlineMs);
+      deadlineTimer.unref?.();
 
       // Listen on this page and popups opened by this page. Do not listen on
       // the whole shared context: ingestion can download several matches at
@@ -196,6 +225,9 @@ export function createCloakSession(cfg = {}) {
       const onPopup = (popup) => attach(popup);
       attach(page);
       page.on('popup', onPopup);
+      const responses = new Map();
+      const onResponse = (response) => responses.set(response.url(), response);
+      page.on('response', onResponse);
 
       const navigationPromise = page
         .goto(url, { waitUntil: 'domcontentloaded', timeout })
@@ -211,19 +243,41 @@ export function createCloakSession(cfg = {}) {
         navigationPromise
       ]);
       page.off('popup', onPopup);
+      page.off('response', onResponse);
       clearTimeout(downloadTimer);
       rejectPendingDownload = null;
       for (const candidate of attached) candidate.off('download', settleDownload);
       if (opts.signal?.aborted) throw abortError(opts.signal);
       if (downloadResult.status === 'rejected') {
         if (navigationResult.status === 'rejected') throw navigationResult.reason;
+        const html = await page.content().catch(() => '');
+        if (
+          /cdn-cgi\/challenge-platform|<title>\s*Just a moment|_cf_chl_opt/i.test(html)
+        ) {
+          const err = new Error('CloakBrowser received a Cloudflare challenge page');
+          err.blocked = true;
+          err.fatal = true;
+          throw err;
+        }
+        const response = navigationResult.value;
+        const status = response?.status?.();
+        if (status && (status < 200 || status >= 400)) {
+          throw new Error(`CloakBrowser navigation returned HTTP ${status} without a download`);
+        }
         throw downloadResult.reason;
       }
 
       const item = downloadResult.value;
       activeDownload = item;
       const filename = safeName(item.suggestedFilename(), opts.fallbackName);
-      const target = path.join(directory, filename);
+      target = path.join(directory, filename);
+      const response = responses.get(item.url());
+      const headers = response ? await response.allHeaders().catch(() => ({})) : {};
+      const declaredBytes = Number(headers['content-length']) || 0;
+      if (declaredBytes && declaredBytes > maxBytes) {
+        await item.cancel().catch(() => {});
+        throw new Error(`Download is ${declaredBytes} bytes, over the ${maxBytes} byte cap`);
+      }
       const stream = await item.createReadStream();
       if (!stream) throw new Error('CloakBrowser download produced no readable stream');
       activeStream = stream;
@@ -246,7 +300,7 @@ export function createCloakSession(cfg = {}) {
           void item.cancel().catch(() => {});
           return;
         }
-        opts.onProgress?.({ received, total: 0 });
+        opts.onProgress?.({ received, total: declaredBytes });
       });
 
       try {
@@ -259,6 +313,7 @@ export function createCloakSession(cfg = {}) {
       if (failure) throw new Error(`CloakBrowser download failed: ${failure}`);
       const stat = await fsp.stat(target);
       if (!stat.size) throw new Error('Downloaded file is empty');
+      completed = true;
       return {
         path: target,
         filename,
@@ -266,7 +321,10 @@ export function createCloakSession(cfg = {}) {
         finalUrl: item.url()
       };
     } finally {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
       opts.signal?.removeEventListener('abort', onAbort);
+      await activeDownload?.delete().catch(() => {});
+      if (target && !completed) await fsp.rm(target, { force: true }).catch(() => {});
       await page.close().catch(() => {});
     }
   }

@@ -42,6 +42,12 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
 
   /** Files for a row are needed while it is anything but finished-and-clean. */
   const isLive = (matchId) => {
+    if (
+      cfg.cloakDownloadsDir &&
+      path.resolve(cfg.workDir, String(matchId)) === path.resolve(cfg.cloakDownloadsDir)
+    ) {
+      return true;
+    }
     const row = ledger.get(matchId);
     if (!row) return false;
     return row.state !== STATES.CLEANED && row.state !== STATES.FILTERED_OUT;
@@ -87,6 +93,12 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         ledger.setState(row.matchId, STATES.DOWNLOADING);
         await ledger.save();
         try {
+          emit('download-start', {
+            matchId: row.matchId,
+            label: row.archiveName || row.matchId,
+            event: row.event || '',
+            playedAt: row.playedAt || null
+          });
           const got = await source.fetchArchive(row, dest, {
             onProgress: (p) => emit('download-progress', { matchId: row.matchId, ...p })
           });
@@ -97,6 +109,11 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
           ledger.setState(row.matchId, STATES.DOWNLOADED, {
             archiveBytes: got.bytes,
             workPath: got.path
+          });
+          emit('download-complete', {
+            matchId: row.matchId,
+            bytes: got.bytes,
+            label: row.archiveName || row.matchId
           });
           done.push(ledger.get(row.matchId));
         } catch (err) {
@@ -211,7 +228,8 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
 
     let done = 0;
     for (const row of downloaded) {
-      if (stopping) break;
+      // A stop prevents another batch. Finish every archive already downloaded
+      // so no row is left stranded in DOWNLOADED across the restart.
       const res = await processMatch(row);
       if (res.ok) done++;
     }
