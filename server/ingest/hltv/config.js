@@ -47,8 +47,11 @@ export function loadConfig(overrides = {}) {
       env.AIM4_INGEST_USER_AGENT || 'Mozilla/5.0',
     maxArchiveBytes: num(env.AIM4_INGEST_MAX_ARCHIVE_BYTES, 2 * 1024 ** 3),
     /** CloakBrowser transport shared by discovery, downloads, and the probe. */
-    cloakHeadless: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_HEADLESS || 'true'),
+    cloakHeadless: /^(1|true|yes|on)$/i.test(env.AIM4_CLOAK_HEADLESS || ''),
     cloakHumanize: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_HUMANIZE || 'true'),
+    cloakHumanPreset: env.AIM4_CLOAK_HUMAN_PRESET || 'careful',
+    cloakDisableHttp2: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_DISABLE_HTTP2 || 'true'),
+    cloakFingerprintSeed: env.AIM4_CLOAK_FINGERPRINT_SEED || '',
     cloakProxy: env.AIM4_CLOAK_PROXY || '',
     cloakSettleMs: num(env.AIM4_CLOAK_SETTLE_MS, 5000),
     cloakDownloadDeadlineMs: num(env.AIM4_CLOAK_DOWNLOAD_DEADLINE_MS, 30 * 60_000),
@@ -84,5 +87,7 @@ export function loadConfig(overrides = {}) {
   cfg.statusPath = path.join(cfg.stateDir, 'status.json');
   cfg.cloakDownloadsDir =
     env.AIM4_CLOAK_DOWNLOADS_DIR || path.join(cfg.workDir, '.cloakbrowser-downloads');
+  cfg.cloakProfileDir =
+    env.AIM4_CLOAK_PROFILE_DIR || path.join(cfg.stateDir, 'cloakbrowser-profile');
   return cfg;
 }

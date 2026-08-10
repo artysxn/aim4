@@ -24,7 +24,7 @@ WORKDIR /app
 # libarchive-tools (bsdtar) is the fallback. Drop this line and .rar uploads are
 # refused with an explanation rather than failing obscurely.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends unar libarchive-tools \
+  && apt-get install -y --no-install-recommends unar libarchive-tools xvfb xauth \
   && rm -rf /var/lib/apt/lists/*
 
 # Install production dependencies first for better layer caching.
@@ -63,5 +63,6 @@ COPY public/maps/radar ./public/maps/radar
 ENV NODE_ENV=production
 EXPOSE 8080
 
-# package.json ("type": "module") ships in the image so Node loads the ESM server.
-CMD ["node", "server/index.js"]
+# Headed CloakBrowser runs on a virtual display; package.json ("type": "module")
+# ships in the image so Node loads the ESM server.
+CMD ["xvfb-run", "-a", "-s", "-screen 0 1920x1080x24", "node", "server/index.js"]

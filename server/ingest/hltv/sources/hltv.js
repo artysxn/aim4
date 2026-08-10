@@ -48,7 +48,7 @@ function must(value, field, url) {
 }
 
 export function createHltvSource(cfg) {
-  const browser = createCloakSession(cfg);
+  const browser = createCloakSession({ ...cfg, cloakSessionName: 'ingest' });
   let inFlight = 0;
   let nextAllowedAt = 0;
 

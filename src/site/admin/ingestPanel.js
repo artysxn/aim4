@@ -136,6 +136,11 @@ function probeBlock() {
     if (!live) return null;
     if (live.stage === 'browser') return live.detail || 'Opening URL in CloakBrowser';
     if (live.stage === 'download') {
+      if (live.phase === 'challenge') {
+        return `Working through managed challenge: ${Math.floor(
+          (live.elapsedMs || 0) / 1000
+        )}s`;
+      }
       if (live.phase === 'waiting') {
         return `Waiting for an automatic download: ${Math.floor((live.elapsedMs || 0) / 1000)}s`;
       }
@@ -290,7 +295,11 @@ export function ingestPanel() {
       if (current.event) line.appendChild(el('span', 'ingest-dim', current.event));
       const stage =
         current.stage === 'download'
-          ? current.downloadPhase === 'waiting'
+          ? current.downloadPhase === 'challenge'
+            ? `Working through managed challenge: ${Math.floor(
+                (current.elapsedMs || 0) / 1000
+              )}s`
+            : current.downloadPhase === 'waiting'
             ? `Waiting for an automatic download: ${Math.floor(
                 (current.elapsedMs || 0) / 1000
               )}s`

@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { launchContext } from 'cloakbrowser';
+import { launchContext, launchPersistentContext } from 'cloakbrowser';
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 60_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
@@ -25,6 +25,11 @@ const bool = (value, fallback) => {
 const downloadsPathFor = (cfg) =>
   cfg.cloakDownloadsDir || (cfg.workDir ? path.join(cfg.workDir, '.cloakbrowser-downloads') : '');
 
+const profilePathFor = (cfg) =>
+  cfg.cloakProfileDir
+    ? path.join(cfg.cloakProfileDir, cfg.cloakSessionName || 'default')
+    : '';
+
 /**
  * Launch options are environment-driven because the same code runs locally
  * and in the Linux deployment.
@@ -35,9 +40,12 @@ function launchOptions(cfg = {}) {
     throw new Error('A proxy cannot be used for an SSRF-guarded CloakBrowser session');
   }
   const downloadsPath = downloadsPathFor(cfg);
+  const humanize = bool(cfg.cloakHumanize ?? process.env.AIM4_CLOAK_HUMANIZE, true);
+  const humanPreset = cfg.cloakHumanPreset === 'default' ? 'default' : 'careful';
   return {
-    headless: bool(cfg.cloakHeadless ?? process.env.AIM4_CLOAK_HEADLESS, true),
-    humanize: bool(cfg.cloakHumanize ?? process.env.AIM4_CLOAK_HUMANIZE, true),
+    headless: bool(cfg.cloakHeadless ?? process.env.AIM4_CLOAK_HEADLESS, false),
+    humanize,
+    ...(humanize ? { humanPreset } : {}),
     ...(proxy ? { proxy } : {}),
     ...(downloadsPath ? { launchOptions: { downloadsPath } } : {}),
     contextOptions: {
@@ -58,6 +66,26 @@ function abortError(signal) {
   return reason instanceof Error ? reason : new Error(reason ? String(reason) : 'Cancelled');
 }
 
+const isChallengeHtml = (html) =>
+  /cdn-cgi\/challenge-platform|<title>\s*Just a moment|_cf_chl_opt|verify you are human/i.test(
+    html || ''
+  );
+
+async function interactWithManagedChallenge(page) {
+  await page.mouse
+    .move(300 + Math.random() * 500, 200 + Math.random() * 300, { steps: 12 })
+    .catch(() => {});
+  await page.mouse.wheel(0, 80 + Math.random() * 160).catch(() => {});
+  for (const frame of page.frames()) {
+    const checkbox = frame.locator('input[type="checkbox"], [role="checkbox"]').first();
+    if (await checkbox.isVisible().catch(() => false)) {
+      await checkbox.click({ timeout: 5000 }).catch(() => {});
+      return true;
+    }
+  }
+  return false;
+}
+
 async function downloadFiles(directory) {
   if (!directory) return [];
   const names = await fsp.readdir(directory).catch(() => []);
@@ -70,12 +98,27 @@ async function downloadFiles(directory) {
   return files;
 }
 
+async function persistentFingerprintSeed(profilePath, configured) {
+  if (configured) return String(configured);
+  const file = path.join(profilePath, '.fingerprint-seed');
+  const saved = await fsp.readFile(file, 'utf8').catch(() => '');
+  if (/^\d{6,12}$/.test(saved.trim())) return saved.trim();
+  const seed = String(Math.floor(100_000_000 + Math.random() * 900_000_000));
+  await fsp.writeFile(file, seed);
+  return seed;
+}
+
 /**
  * @param {{
  *   cloakHeadless?: boolean,
  *   cloakHumanize?: boolean,
+ *   cloakHumanPreset?: string,
+ *   cloakDisableHttp2?: boolean,
+ *   cloakFingerprintSeed?: string,
  *   cloakProxy?: string,
  *   cloakSettleMs?: number,
+ *   cloakProfileDir?: string,
+ *   cloakSessionName?: string,
  *   validateUrl?: (url: string) => Promise<void>,
  *   onLog?: (message: string) => void
  * }} [cfg]
@@ -97,8 +140,22 @@ export function createCloakSession(cfg = {}) {
     if (!contextPromise) {
       log('Launching CloakBrowser');
       const downloadsPath = downloadsPathFor(cfg);
+      const profilePath = profilePathFor(cfg);
       if (downloadsPath) await fsp.mkdir(downloadsPath, { recursive: true });
-      contextPromise = launchContext(launchOptions(cfg)).then(async (ctx) => {
+      if (profilePath) await fsp.mkdir(profilePath, { recursive: true });
+      const options = launchOptions(cfg);
+      const args = [];
+      if (bool(cfg.cloakDisableHttp2, true)) args.push('--disable-http2');
+      if (profilePath) {
+        const seed = await persistentFingerprintSeed(profilePath, cfg.cloakFingerprintSeed);
+        args.push(`--fingerprint=${seed}`);
+      }
+      if (args.length) options.args = [...(options.args || []), ...args];
+      contextPromise = (
+        profilePath
+          ? launchPersistentContext({ ...options, userDataDir: profilePath })
+          : launchContext(options)
+      ).then(async (ctx) => {
         // Guard every browser request, not just the first URL. An admin-supplied
         // public page must not redirect or embed its way into private services.
         if (typeof cfg.validateUrl === 'function') {
@@ -226,10 +283,12 @@ export function createCloakSession(cfg = {}) {
       // once, and context-wide listeners could claim another match's file.
       let downloadTimer = null;
       let settleDownload;
+      let downloadStarted = false;
       const attached = new Set();
       const downloadPromise = new Promise((resolve, reject) => {
         rejectPendingDownload = reject;
         settleDownload = (item) => {
+          downloadStarted = true;
           clearTimeout(downloadTimer);
           rejectPendingDownload = null;
           resolve(item);
@@ -252,11 +311,12 @@ export function createCloakSession(cfg = {}) {
       const onResponse = (response) => responses.set(response.url(), response);
       page.on('response', onResponse);
       const waitingStartedAt = Date.now();
+      let waitPhase = 'waiting';
       const reportWaiting = () =>
         opts.onProgress?.({
           received: 0,
           total: 0,
-          phase: 'waiting',
+          phase: waitPhase,
           elapsedMs: Date.now() - waitingStartedAt
         });
       reportWaiting();
@@ -271,6 +331,24 @@ export function createCloakSession(cfg = {}) {
           if (!/download is starting|ERR_ABORTED/i.test(String(err?.message || err))) throw err;
           return null;
         });
+      const challengeTask = navigationPromise
+        .then(async (response) => {
+          if (!response) return;
+          const initialHeaders = await response.allHeaders().catch(() => ({}));
+          const challengedByHeader = initialHeaders['cf-mitigated'] === 'challenge';
+          for (let attempt = 0; attempt < 30 && !downloadStarted; attempt++) {
+            const html = await page.content().catch(() => '');
+            if (!(attempt === 0 && challengedByHeader) && !isChallengeHtml(html)) {
+              waitPhase = 'waiting';
+              return;
+            }
+            waitPhase = 'challenge';
+            reportWaiting();
+            await interactWithManagedChallenge(page);
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+          }
+        })
+        .catch(() => {});
 
       const [downloadResult, navigationResult] = await Promise.allSettled([
         downloadPromise,
@@ -287,9 +365,7 @@ export function createCloakSession(cfg = {}) {
       if (downloadResult.status === 'rejected') {
         if (navigationResult.status === 'rejected') throw navigationResult.reason;
         const html = await page.content().catch(() => '');
-        if (
-          /cdn-cgi\/challenge-platform|<title>\s*Just a moment|_cf_chl_opt/i.test(html)
-        ) {
+        if (isChallengeHtml(html)) {
           const err = new Error('CloakBrowser received a Cloudflare challenge page');
           err.blocked = true;
           err.fatal = true;
@@ -302,6 +378,7 @@ export function createCloakSession(cfg = {}) {
         }
         throw downloadResult.reason;
       }
+      await challengeTask;
 
       const item = downloadResult.value;
       activeDownload = item;

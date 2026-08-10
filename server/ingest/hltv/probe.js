@@ -499,6 +499,7 @@ async function executeProbe(c, run, urlObj, hooks) {
     const makeBrowser = hooks.createBrowser || createCloakSession;
     browser = makeBrowser({
       ...c,
+      cloakSessionName: 'probe',
       validateUrl: async (target) => {
         const next = new URL(target);
         await checkTarget(next, Boolean(hooks.allowPrivate));
