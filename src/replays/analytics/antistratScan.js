@@ -617,6 +617,7 @@ function liveUtility(rounds, side, labels) {
   return { names, kinds: NADE_KINDS, rounds: roundList, throws, types };
 }
 
+
 function aggUtility(rounds, mapCode) {
   const out = { sides: {} };
   for (const side of ['T', 'CT']) {

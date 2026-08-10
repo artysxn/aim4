@@ -442,6 +442,9 @@ export async function fetchStats(demoIds = null, opts = {}) {
   let buf = '';
   let payload = null;
   let streamError = null;
+  /** After `{"type":"done"}`, the rest of the body is raw JSON (not NDJSON). */
+  let awaitingBody = false;
+  let bodyTotal = 0;
 
   const handleLine = (line) => {
     const raw = String(line || '').trim();
@@ -457,7 +460,20 @@ export async function fetchStats(demoIds = null, opts = {}) {
       return;
     }
     if (msg.type === 'done') {
-      payload = msg.payload;
+      // Legacy servers nested the library in the done line. New servers send
+      // only a trailer, then the payload as the remainder of the response.
+      if (msg.payload) {
+        payload = msg.payload;
+        return;
+      }
+      awaitingBody = true;
+      bodyTotal = Number(msg.total) || 0;
+      onProgress?.({
+        type: 'progress',
+        phase: 'receiving',
+        done: bodyTotal,
+        total: bodyTotal
+      });
       return;
     }
     if (msg.type === 'error') {
@@ -469,15 +485,31 @@ export async function fetchStats(demoIds = null, opts = {}) {
     const { done, value } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
+    if (awaitingBody) continue;
     let nl;
     while ((nl = buf.indexOf('\n')) >= 0) {
-      handleLine(buf.slice(0, nl));
+      const line = buf.slice(0, nl);
       buf = buf.slice(nl + 1);
+      handleLine(line);
+      if (awaitingBody) break;
     }
   }
-  if (buf.trim()) handleLine(buf);
+  if (!awaitingBody && buf.trim()) handleLine(buf);
 
   if (streamError) throw formatApiError(streamError);
+  if (!payload && awaitingBody) {
+    const raw = buf.trim();
+    if (!raw) {
+      throw formatApiError(new Error('Stats stream ended without a payload.'));
+    }
+    try {
+      payload = JSON.parse(raw);
+    } catch (err) {
+      throw formatApiError(
+        new Error(err?.message || 'Could not parse the stats database payload.')
+      );
+    }
+  }
   if (!payload) {
     throw formatApiError(new Error('Stats stream ended without a payload.'));
   }

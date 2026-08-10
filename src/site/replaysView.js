@@ -135,6 +135,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
    * what the panel actually has. This does.
    */
   let loadedStatsKey = '';
+  /** Library key of an in-flight statsPanel.load, so a second open does not stack fetches. */
+  let inflightStatsKey = '';
   const libraryKeyOf = (s) =>
     JSON.stringify([s?.demos || null, s?.files || null, String(s?.teamName || '')]);
   /** From /status: who the backend thinks is calling, and what they may do. */
@@ -3536,19 +3538,56 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     // new scope with itself. It answered "same library" for every match, the
     // load was skipped, and the Database went on showing whichever match the
     // session had cached first.
-    const sameLibrary = !created && !scope.__fresh && loadedStatsKey === libraryKeyOf(merged);
+    //
+    // `__fresh` (sidebar Database) still wins on filter reset via applyViewState
+    // below — it must NOT force another full-library download. With ~450 demos
+    // that re-fetch left the UI stuck on the post-index stream for a long time.
+    const key = libraryKeyOf(merged);
+    const havePayload = Boolean(statsPanel.getPayload?.());
+    const sameLibrary = !created && havePayload && loadedStatsKey === key;
     if (sameLibrary) {
-      statsPanel.applyViewState(merged);
+      if (scope.__fresh) {
+        // Sidebar Database: clear sticky filters without re-downloading the library.
+        statsPanel.applyViewState({
+          tab: 'players',
+          maps: [],
+          side: '',
+          result: '',
+          advantage: '',
+          econ: null,
+          oppEcon: null,
+          hasAwp: false,
+          oppHasAwp: false,
+          role: null,
+          roundOwn: [],
+          roundOpp: [],
+          fromSec: null,
+          toSec: null,
+          dateFrom: '',
+          dateTo: '',
+          minRounds: defaultMinRounds({}),
+          player: '',
+          team: '',
+          page: 1
+        });
+      } else {
+        statsPanel.applyViewState(merged);
+      }
       syncStatsUrl(statsPanel.viewState());
       return;
     }
-    const key = libraryKeyOf(merged);
+    if (inflightStatsKey === key) return;
     loadedStatsKey = key;
-    void Promise.resolve(statsPanel.load(merged)).catch(() => {
-      // A failed load holds nothing, so the next visit must fetch again rather
-      // than trust this key.
-      if (loadedStatsKey === key) loadedStatsKey = '';
-    });
+    inflightStatsKey = key;
+    void Promise.resolve(statsPanel.load(merged))
+      .catch(() => {
+        // A failed load holds nothing, so the next visit must fetch again rather
+        // than trust this key.
+        if (loadedStatsKey === key) loadedStatsKey = '';
+      })
+      .finally(() => {
+        if (inflightStatsKey === key) inflightStatsKey = '';
+      });
   }
 
   /**

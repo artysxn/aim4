@@ -1684,6 +1684,12 @@ export function createStatsPanel({
         emitViewChange();
         return;
       }
+      // Let "Building table…" paint before the heavy aggregate blocks the thread.
+      // Without this the spinner stayed on the last stream label ("Loaded stats")
+      // for the whole first render and looked permanently stuck on large libraries.
+      setSpinnerLabel(bodyEl, statsProgressLabel({ phase: 'building-table' }));
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      if (token !== loadToken) return;
       render();
       void savedViews.refresh();
       void savedViews.applyShareParam(

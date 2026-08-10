@@ -147,12 +147,17 @@ export function watchSlowLoad(host, opts = {}) {
  * @param {{ done?: number, total?: number, current?: string|null, phase?: string }} p
  */
 export function statsProgressLabel(p) {
-  if (!p || !Number(p.total)) return 'Loading stats…';
+  if (!p || !Number(p.total)) {
+    if (p?.phase === 'packing') return 'Packing database…';
+    if (p?.phase === 'receiving') return 'Receiving database…';
+    if (p?.phase === 'building-table') return 'Building table…';
+    return 'Loading stats…';
+  }
   const done = Math.max(0, Number(p.done) || 0);
   const total = Math.max(0, Number(p.total) || 0);
   // `done` is completed count; while a demo is in flight show the current index.
   const shown =
-    p.phase === 'ready' || p.phase === 'start'
+    p.phase === 'ready' || p.phase === 'start' || p.phase === 'packing'
       ? `${done}/${total}`
       : `${Math.min(done + 1, total)}/${total}`;
   const name = p.current ? ` · ${String(p.current)}` : '';
@@ -166,7 +171,13 @@ export function statsProgressLabel(p) {
     case 'start':
       return total ? `Loading stats · ${total} demos` : 'Loading stats…';
     case 'ready':
-      return done < total ? `Loading stats ${shown}${name}` : `Loaded stats · ${total} demos`;
+      return done < total ? `Loading stats ${shown}${name}` : `Indexed ${total} demos`;
+    case 'packing':
+      return total ? `Packing database · ${total} demos` : 'Packing database…';
+    case 'receiving':
+      return total ? `Receiving database · ${total} demos` : 'Receiving database…';
+    case 'building-table':
+      return 'Building table…';
     default:
       return `Loading stats ${shown}${name}`;
   }

@@ -1005,7 +1005,24 @@ export async function handleReplayRequest(req, res, url) {
       const payload = await statsPayload(statsIo, user, records, only, {
         onProgress: (p) => writeLine({ type: 'progress', ...p })
       });
-      writeLine({ type: 'done', payload: gateStatsPayload(me, payload) });
+      const total = Array.isArray(payload?.demos) ? payload.demos.length : 0;
+      // Tell the client we are about to ship the body. The old protocol buried the
+      // whole library inside one NDJSON line (`{"type":"done","payload":…}`), which
+      // left the UI stuck on "Loaded stats · N demos" while Node stringified and the
+      // browser parsed a multi‑megabyte line with no further progress.
+      writeLine({ type: 'progress', phase: 'packing', done: total, total });
+      const gated = gateStatsPayload(me, payload);
+      writeLine({ type: 'done', total });
+      // Raw JSON after the NDJSON trailer — not escaped inside another JSON object.
+      const body = JSON.stringify(gated);
+      const chunk = 64 * 1024;
+      for (let i = 0; i < body.length; i += chunk) {
+        if (res.writableEnded) break;
+        const slice = body.slice(i, i + chunk);
+        if (!res.write(slice)) {
+          await new Promise((resolve) => res.once('drain', resolve));
+        }
+      }
     } catch (err) {
       writeLine({ type: 'error', error: err?.message || 'Stats failed.' });
     }

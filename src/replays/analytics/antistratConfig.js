@@ -543,6 +543,7 @@ function renderRetakes(esc, s, mapCode) {
  * from the other end while they defended it. Timings are averages of the
  * moments that made the round match, written on the round clock.
  */
+
 /**
  * One side's round library as a table.
  *
