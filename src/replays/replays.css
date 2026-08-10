@@ -3544,7 +3544,8 @@ body.rv-open {
 }
 
 .st-econ-select {
-  min-width: 118px;
+  min-width: 98px;
+  width: 98px;
 }
 
 .st-filter-row .st-awp-toggle,
@@ -3557,7 +3558,9 @@ body.rv-open {
 
 .st-date-wrap {
   position: relative;
+  z-index: 2;
   align-self: center;
+  flex: 0 0 auto;
 }
 
 .st-date-toggle {
@@ -3566,6 +3569,7 @@ body.rv-open {
   align-items: center;
   justify-content: center;
   width: var(--st-ctrl-h);
+  min-width: var(--st-ctrl-h);
   margin: 0;
   padding: 0;
   border: 1px solid var(--border);
@@ -3574,6 +3578,7 @@ body.rv-open {
   color: var(--muted);
   cursor: pointer;
   transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  touch-action: manipulation;
 }
 
 .st-date-toggle:hover,
@@ -3594,6 +3599,7 @@ body.rv-open {
   display: block;
   width: 18px;
   height: 18px;
+  pointer-events: none;
 }
 
 .st-date-popover {
@@ -3641,7 +3647,6 @@ body.rv-open {
   overflow-x: auto;
   overflow-y: hidden;
   padding: 0 2px 2px;
-  scrollbar-gutter: stable;
   scrollbar-width: thin;
 }
 
@@ -3656,15 +3661,28 @@ body.rv-open {
   flex: 0 0 auto;
 }
 
-.st-map-select,
-.st-role-select,
-.st-round-select {
+.st-map-select {
   min-width: 132px;
+}
+
+.st-role-select {
+  min-width: 92px;
+  width: 92px;
+}
+
+.st-round-select {
+  min-width: 0;
+  width: max-content;
+  max-width: 9.5rem;
+  padding-left: 10px;
+  padding-right: 22px;
 }
 
 .st-round-multi {
   position: relative;
-  min-width: 132px;
+  width: max-content;
+  min-width: 0;
+  max-width: 9.5rem;
 }
 
 .st-round-multi > summary {

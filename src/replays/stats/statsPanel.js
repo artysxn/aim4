@@ -513,26 +513,48 @@ export function createStatsPanel({
     setFiltersOpen(!filtersOpen);
   });
 
-  filtersEl.addEventListener('toggle', (e) => {
-    const details = e.target.closest?.('details.st-round-multi');
-    if (!details || e.target !== details) return;
-    if (details.open) {
-      closeRoundMenus(details);
-      placeRoundMenu(details);
-    }
+  // `toggle` does not bubble; capture so we can pin the fixed menu under the control.
+  filtersEl.addEventListener(
+    'toggle',
+    (e) => {
+      const details = e.target;
+      if (!(details instanceof HTMLDetailsElement)) return;
+      if (!details.classList.contains('st-round-multi')) return;
+      if (details.open) {
+        closeRoundMenus(details);
+        placeRoundMenu(details);
+        requestAnimationFrame(() => placeRoundMenu(details));
+      }
+    },
+    true
+  );
+
+  function setCalendarOpen(open) {
+    calendarOpen = Boolean(open);
+    const wrap = filtersEl.querySelector('.st-date-wrap');
+    if (!wrap) return;
+    wrap.classList.toggle('open', calendarOpen);
+    wrap.classList.toggle('has-range', Boolean(filter.dateFrom || filter.dateTo));
+    const btn = wrap.querySelector('[data-st-calendar]');
+    btn?.setAttribute('aria-expanded', calendarOpen ? 'true' : 'false');
+    btn?.classList.toggle('active', calendarOpen || Boolean(filter.dateFrom || filter.dateTo));
+    const pop = wrap.querySelector('.st-date-popover');
+    if (pop) pop.hidden = !calendarOpen;
+  }
+
+  filtersEl.addEventListener('pointerdown', (e) => {
+    const cal = e.target.closest('[data-st-calendar]');
+    if (!cal) return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeRoundMenus();
+    setCalendarOpen(!calendarOpen);
   });
 
   filtersEl.addEventListener('click', (e) => {
-    const cal = e.target.closest('[data-st-calendar]');
-    if (cal) {
+    if (e.target.closest('[data-st-calendar]')) {
+      e.preventDefault();
       e.stopPropagation();
-      calendarOpen = !calendarOpen;
-      closeRoundMenus();
-      const wrap = cal.closest('.st-date-wrap');
-      wrap?.classList.toggle('open', calendarOpen);
-      cal.setAttribute('aria-expanded', calendarOpen ? 'true' : 'false');
-      const pop = wrap?.querySelector('.st-date-popover');
-      if (pop) pop.hidden = !calendarOpen;
       return;
     }
     const side = e.target.closest('[data-side]');
@@ -692,18 +714,13 @@ export function createStatsPanel({
     render();
   });
 
-  document.addEventListener('click', (e) => {
+  document.addEventListener('pointerdown', (e) => {
     const inRoundMenu = e.target.closest?.('details.st-round-multi');
     if (!inRoundMenu) closeRoundMenus();
 
     if (!calendarOpen) return;
     if (e.target.closest?.('.st-date-wrap')) return;
-    calendarOpen = false;
-    const wrap = filtersEl.querySelector('.st-date-wrap');
-    wrap?.classList.remove('open');
-    wrap?.querySelector('[data-st-calendar]')?.setAttribute('aria-expanded', 'false');
-    const pop = wrap?.querySelector('.st-date-popover');
-    if (pop) pop.hidden = true;
+    setCalendarOpen(false);
   });
 
   window.addEventListener(
