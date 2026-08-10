@@ -110,6 +110,12 @@ export const adminApi = {
   /** Progress for an in-flight (or just-finished) round library scan. */
   rescanRoundsStatus: () => get('/api/admin/stats/rescan-rounds'),
 
+  /** Re-derive Rating 3.0 for every demo and re-stamp the cached card rating. */
+  refreshRatings: () => send('POST', '/api/admin/stats/refresh-ratings', {}),
+
+  /** Progress for an in-flight (or just-finished) rating recalculation. */
+  refreshRatingsStatus: () => get('/api/admin/stats/refresh-ratings'),
+
   /** Merge player display names by Steam ID (most-used name wins) + rebuild stats. */
   rescanPlayerNames: () => send('POST', '/api/admin/players/rescan-names', {}),
 

@@ -6,6 +6,7 @@
 import { P, PLAYER_SLOTS } from '../shared/statsMath.js';
 import { phaseAtTick, phaseBounds } from '../coach/roundPhases.js';
 import { eligibleAwpShotTicks } from '../shared/awpAccuracy.js';
+import { cappedDamageFromMeta } from '../shared/roundDamage.js';
 
 const PHASES = /** @type {const} */ (['early', 'mid', 'late']);
 
@@ -54,7 +55,13 @@ export function phaseCombatFromMeta(meta, playerIds, tickBuffer = null) {
   const tradeWindow = TRADE_SECONDS * tickRate;
 
   const kills = [...(meta.events?.kills || [])].sort((a, b) => (a.tick || 0) - (b.tick || 0));
-  const damage = meta.events?.damage || [];
+  // Health removed, not the raw figure the parser reports, so phase ADR agrees
+  // with the season ADR. `dealt` is 0 for friendly fire and self damage.
+  const capped = cappedDamageFromMeta(
+    meta,
+    new Map((meta.players || []).map((pl) => [pl.id, pl.team]))
+  );
+  const damage = capped ? capped.events : meta.events?.damage || [];
   const shots = meta.events?.shots || [];
   const eligibleAwp = tickBuffer ? eligibleAwpShotTicks(meta, tickBuffer) : null;
 
@@ -103,7 +110,7 @@ export function phaseCombatFromMeta(meta, playerIds, tickBuffer = null) {
   for (const d of damage) {
     if (!d.attacker || !out[d.attacker]) continue;
     const phase = phaseAtTick(d.tick || 0, bounds);
-    const hp = Number(d.hp ?? d.damage) || 0;
+    const hp = capped ? d.dealt : Number(d.hp ?? d.damage) || 0;
     if (hp > 0) out[d.attacker][phase].p[P.DAMAGE] += Math.round(hp);
     out[d.attacker][phase].p[P.HITS] += 1;
   }
@@ -199,7 +206,10 @@ export function phaseCombatFromMeta(meta, playerIds, tickBuffer = null) {
       weightSum += w;
     }
 
-    if (eventDmg <= 0) {
+    // Only when the round has no damage events at all. With a real event
+    // stream a player showing zero genuinely dealt none, and falling back to
+    // the parser total would hand them damage they never did.
+    if (!capped && eventDmg <= 0) {
       distribute(bag, weights, weightSum, st.damage, P.DAMAGE);
     }
     if (eventHits <= 0) {

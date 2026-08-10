@@ -1,0 +1,908 @@
+[
+ {
+  "label": "FNATIC vs K27: ANCIENT",
+  "pdfHeader": "FNATIC vs K27: ANCIENT",
+  "demo": "fnatic-vs-k27-m1-ancient",
+  "rows": [
+   {
+    "nick": "cairne",
+    "name": "Artem 'cairne' Mu2s3h-y1n0skyi",
+    "kd": null,
+    "swing": 8.28,
+    "adr": 109.1,
+    "kast": 90.5,
+    "rating": 1.91
+   },
+   {
+    "nick": "mazay",
+    "name": "Volodymyr 'mazay1'7 Io-1rh3achov",
+    "kd": null,
+    "swing": 1.29,
+    "adr": 77.2,
+    "kast": 76.2,
+    "rating": 1.25
+   },
+   {
+    "nick": "jambo",
+    "name": "Dmytro 'jambo' Se1m3-e8ra",
+    "kd": null,
+    "swing": 1.42,
+    "adr": 69.8,
+    "kast": 85.7,
+    "rating": 1.21
+   },
+   {
+    "nick": "fear",
+    "name": "Rodion 'fEAR' Sm1yk3-13",
+    "kd": [
+     3,
+     13
+    ],
+    "swing": 0.87,
+    "adr": 61.6,
+    "kast": 66.7,
+    "rating": 1.05
+   },
+   {
+    "nick": "jackasmo",
+    "name": "Nikita 'jackasmo' 1S0k-y1b1a",
+    "kd": null,
+    "swing": -1.25,
+    "adr": 62.0,
+    "kast": 81.0,
+    "rating": 1.01
+   },
+   {
+    "nick": "qwnk",
+    "name": "Daniil 'qw1nk1' Ka1b5i-l1o7v",
+    "kd": null,
+    "swing": 4.22,
+    "adr": 88.1,
+    "kast": 71.4,
+    "rating": 1.31
+   },
+   {
+    "nick": "kashld",
+    "name": "Danila 'kashl1d' D1ro1n-1o2v",
+    "kd": null,
+    "swing": 1.81,
+    "adr": 57.2,
+    "kast": 76.2,
+    "rating": 0.95
+   },
+   {
+    "nick": "xgv",
+    "name": "Daniil 'X5G7V' Ma1ry5s-h1e6v",
+    "kd": null,
+    "swing": -6.3,
+    "adr": 79.7,
+    "kast": 57.1,
+    "rating": 0.77
+   },
+   {
+    "nick": "xeedo",
+    "name": "Aleksey 'xeedo' M9ik-u1l8ich",
+    "kd": null,
+    "swing": -3.0,
+    "adr": 53.1,
+    "kast": 47.6,
+    "rating": 0.57
+   },
+   {
+    "nick": "clax",
+    "name": "Timur 'clax' Sabiro4v-13",
+    "kd": null,
+    "swing": -7.34,
+    "adr": 32.8,
+    "kast": 71.4,
+    "rating": 0.47
+   }
+  ]
+ },
+ {
+  "label": "FNATIC vs K27: MIRAGE",
+  "pdfHeader": "FNATIC vs K27: MIRAGE",
+  "demo": "fnatic-vs-k27-m2-mirage",
+  "rows": [
+   {
+    "nick": "cairne",
+    "name": "Artem 'cairne' Mu2s2h-y2n0skyi",
+    "kd": null,
+    "swing": 1.22,
+    "adr": 87.1,
+    "kast": 65.5,
+    "rating": 1.24
+   },
+   {
+    "nick": "mazay",
+    "name": "Volodymyr 'mazay2'2 Io-1rh9achov",
+    "kd": null,
+    "swing": 0.75,
+    "adr": 83.5,
+    "kast": 65.5,
+    "rating": 1.13
+   },
+   {
+    "nick": "jackasmo",
+    "name": "Nikita 'jackasmo' 1S9k-y2b2a",
+    "kd": null,
+    "swing": -1.55,
+    "adr": 73.5,
+    "kast": 72.4,
+    "rating": 0.94
+   },
+   {
+    "nick": "jambo",
+    "name": "Dmytro 'jambo' Se1m8-e1r7a",
+    "kd": null,
+    "swing": -0.69,
+    "adr": 58.1,
+    "kast": 69.0,
+    "rating": 0.91
+   },
+   {
+    "nick": "fear",
+    "name": "Rodion 'fEAR' Sm1yk0-18",
+    "kd": [
+     0,
+     18
+    ],
+    "swing": -4.83,
+    "adr": 44.9,
+    "kast": 62.1,
+    "rating": 0.68
+   },
+   {
+    "nick": "kashld",
+    "name": "Danila 'kashl1d' D2ro8n-1o7v",
+    "kd": null,
+    "swing": 7.8,
+    "adr": 77.2,
+    "kast": 72.4,
+    "rating": 1.55
+   },
+   {
+    "nick": "xeedo",
+    "name": "Aleksey 'xeedo' M2ik5u-l1ic8h",
+    "kd": null,
+    "swing": 3.49,
+    "adr": 85.8,
+    "kast": 82.8,
+    "rating": 1.34
+   },
+   {
+    "nick": "clax",
+    "name": "Timur 'clax' Sabiro2v1-19",
+    "kd": [
+     1,
+     19
+    ],
+    "swing": 0.82,
+    "adr": 80.9,
+    "kast": 69.0,
+    "rating": 1.13
+   },
+   {
+    "nick": "qwnk",
+    "name": "Daniil 'qw1nk1' Ka1b5i-l1o9v",
+    "kd": null,
+    "swing": -1.13,
+    "adr": 78.2,
+    "kast": 69.0,
+    "rating": 0.9
+   },
+   {
+    "nick": "xgv",
+    "name": "Daniil 'X5G7V' Ma7ry-1sh8ev",
+    "kd": null,
+    "swing": -5.88,
+    "adr": 38.0,
+    "kast": 69.0,
+    "rating": 0.58
+   }
+  ]
+ },
+ {
+  "label": "FNATIC vs K27: MIRAGE (2) [cache]",
+  "pdfHeader": "FNATIC vs K27: MIRAGE",
+  "demo": "fnatic-vs-k27-m3-cache",
+  "rows": [
+   {
+    "nick": "mazay",
+    "name": "Volodymyr 'mazay2'1 Io-1rh5achov",
+    "kd": null,
+    "swing": 1.72,
+    "adr": 93.6,
+    "kast": 69.6,
+    "rating": 1.29
+   },
+   {
+    "nick": "jackasmo",
+    "name": "Nikita 'jackasmo' 1S6k-y1b6a",
+    "kd": null,
+    "swing": -2.28,
+    "adr": 66.6,
+    "kast": 60.9,
+    "rating": 0.91
+   },
+   {
+    "nick": "fear",
+    "name": "Rodion 'fEAR' Sm1yk1-18",
+    "kd": [
+     1,
+     18
+    ],
+    "swing": -0.6,
+    "adr": 54.5,
+    "kast": 73.9,
+    "rating": 0.79
+   },
+   {
+    "nick": "jambo",
+    "name": "Dmytro 'jambo' Se1m2-e1r6a",
+    "kd": null,
+    "swing": -2.94,
+    "adr": 63.1,
+    "kast": 65.2,
+    "rating": 0.75
+   },
+   {
+    "nick": "cairne",
+    "name": "Artem 'cairne' Mu1s1h-y1n5skyi",
+    "kd": null,
+    "swing": -5.54,
+    "adr": 54.2,
+    "kast": 65.2,
+    "rating": 0.66
+   },
+   {
+    "nick": "xeedo",
+    "name": "Aleksey 'xeedo' M2ik2u-l1ic4h",
+    "kd": null,
+    "swing": 3.29,
+    "adr": 96.7,
+    "kast": 82.6,
+    "rating": 1.53
+   },
+   {
+    "nick": "qwnk",
+    "name": "Daniil 'qw1nk1' Ka1b7i-l1o4v",
+    "kd": null,
+    "swing": 4.66,
+    "adr": 89.2,
+    "kast": 91.3,
+    "rating": 1.49
+   },
+   {
+    "nick": "clax",
+    "name": "Timur 'clax' Sabiro1v4-14",
+    "kd": [
+     4,
+     14
+    ],
+    "swing": 3.09,
+    "adr": 76.0,
+    "kast": 82.6,
+    "rating": 1.32
+   },
+   {
+    "nick": "xgv",
+    "name": "Daniil 'X5G7V' Ma1ry3s-h1e7v",
+    "kd": null,
+    "swing": 1.42,
+    "adr": 55.9,
+    "kast": 52.2,
+    "rating": 0.93
+   },
+   {
+    "nick": "kashld",
+    "name": "Danila 'kashl1d' D1ro4n-1o3v",
+    "kd": null,
+    "swing": -2.8,
+    "adr": 55.8,
+    "kast": 69.6,
+    "rating": 0.93
+   }
+  ]
+ },
+ {
+  "label": "SASHI vs BIG: CACHE",
+  "pdfHeader": "SASHI vs BIG: CACHE",
+  "demo": "sashi-vs-big-m1-cache",
+  "rows": [
+   {
+    "nick": "anlelele",
+    "name": "Anton 'Anlelele' H1u2y-n1h3",
+    "kd": null,
+    "swing": 0.97,
+    "adr": 70.8,
+    "kast": 66.7,
+    "rating": 1.09
+   },
+   {
+    "nick": "cabbi",
+    "name": "Casper 'Cabbi' Jen1s3e-n15",
+    "kd": null,
+    "swing": -4.48,
+    "adr": 76.9,
+    "kast": 61.1,
+    "rating": 0.9
+   },
+   {
+    "nick": "zyphon",
+    "name": "Rasmus 'Zyphon' 9N-o1r5dfoss",
+    "kd": null,
+    "swing": -0.46,
+    "adr": 65.1,
+    "kast": 61.1,
+    "rating": 0.87
+   },
+   {
+    "nick": "acor",
+    "name": "Frederik 'acoR' Gy1ld1s-t1r4and",
+    "kd": null,
+    "swing": -9.16,
+    "adr": 62.6,
+    "kast": 38.9,
+    "rating": 0.66
+   },
+   {
+    "nick": "mistr",
+    "name": "Mikkel 'MistR' Tho8m-1s5en",
+    "kd": null,
+    "swing": -4.82,
+    "adr": 57.3,
+    "kast": 55.6,
+    "rating": 0.63
+   },
+   {
+    "nick": "grks",
+    "name": "Gleb 'gr1ks' Gazin16-8",
+    "kd": [
+     16,
+     8
+    ],
+    "swing": 13.18,
+    "adr": 92.2,
+    "kast": 72.2,
+    "rating": 1.85
+   },
+   {
+    "nick": "jdc",
+    "name": "Jon 'JDC' de Castr1o8-13",
+    "kd": [
+     8,
+     13
+    ],
+    "swing": 3.38,
+    "adr": 106.3,
+    "kast": 72.2,
+    "rating": 1.42
+   },
+   {
+    "nick": "blamef",
+    "name": "Benjamin 'blameF1' 3B-r9emer",
+    "kd": null,
+    "swing": 2.56,
+    "adr": 79.4,
+    "kast": 83.3,
+    "rating": 1.23
+   },
+   {
+    "nick": "tabsen",
+    "name": "Johannes 'tabseN1' 3W-1o0darz",
+    "kd": null,
+    "swing": -0.89,
+    "adr": 70.9,
+    "kast": 77.8,
+    "rating": 1.02
+   },
+   {
+    "nick": "faven",
+    "name": "Josef 'faveN' Baum12a-n1n3",
+    "kd": null,
+    "swing": -0.29,
+    "adr": 66.5,
+    "kast": 77.8,
+    "rating": 0.96
+   }
+  ]
+ },
+ {
+  "label": "SASHI vs BIG: INFERNO",
+  "pdfHeader": "SASHI vs BIG: INFERNO",
+  "demo": "sashi-vs-big-m2-inferno",
+  "rows": [
+   {
+    "nick": "zyphon",
+    "name": "Rasmus 'Zyphon' 2N3o-r1d4foss",
+    "kd": null,
+    "swing": 5.46,
+    "adr": 113.8,
+    "kast": 77.3,
+    "rating": 1.6
+   },
+   {
+    "nick": "mistr",
+    "name": "Mikkel 'MistR' Tho1m1-s1e3n",
+    "kd": null,
+    "swing": 3.21,
+    "adr": 72.5,
+    "kast": 90.9,
+    "rating": 1.16
+   },
+   {
+    "nick": "anlelele",
+    "name": "Anton 'Anlelele' H1u6y-n1h2",
+    "kd": null,
+    "swing": -2.99,
+    "adr": 69.0,
+    "kast": 77.3,
+    "rating": 1.08
+   },
+   {
+    "nick": "acor",
+    "name": "Frederik 'acoR' Gy1ld4s-t1r4and",
+    "kd": null,
+    "swing": 0.35,
+    "adr": 67.5,
+    "kast": 72.7,
+    "rating": 1.05
+   },
+   {
+    "nick": "cabbi",
+    "name": "Casper 'Cabbi' Jen1s4e-n13",
+    "kd": null,
+    "swing": 1.0,
+    "adr": 51.2,
+    "kast": 90.9,
+    "rating": 1.03
+   },
+   {
+    "nick": "tabsen",
+    "name": "Johannes 'tabseN1' 4W-1o5darz",
+    "kd": null,
+    "swing": 2.03,
+    "adr": 71.7,
+    "kast": 63.6,
+    "rating": 1.12
+   },
+   {
+    "nick": "jdc",
+    "name": "Jon 'JDC' de Castr1o5-16",
+    "kd": [
+     5,
+     16
+    ],
+    "swing": -1.48,
+    "adr": 82.6,
+    "kast": 68.2,
+    "rating": 1.01
+   },
+   {
+    "nick": "blamef",
+    "name": "Benjamin 'blameF1' 3B-r1e3mer",
+    "kd": null,
+    "swing": 1.2,
+    "adr": 67.6,
+    "kast": 72.7,
+    "rating": 0.93
+   },
+   {
+    "nick": "faven",
+    "name": "Josef 'faveN' Baum10a-n1n4",
+    "kd": null,
+    "swing": -2.51,
+    "adr": 45.4,
+    "kast": 77.3,
+    "rating": 0.71
+   },
+   {
+    "nick": "grks",
+    "name": "Gleb 'gr1ks' Gazin12-20",
+    "kd": [
+     12,
+     20
+    ],
+    "swing": -6.27,
+    "adr": 50.9,
+    "kast": 63.6,
+    "rating": 0.53
+   }
+  ]
+ },
+ {
+  "label": "100THIEVES vs 1WIN: ANCIENT",
+  "pdfHeader": "100THIEVES vs 1WIN: ANCIENT",
+  "demo": "100-thieves-vs-1win-m1-ancient",
+  "rows": [
+   {
+    "nick": "sirah",
+    "name": "William 'sirah' Kj\u00e62r1s-g1a5ard",
+    "kd": null,
+    "swing": 3.23,
+    "adr": 68.5,
+    "kast": 73.3,
+    "rating": 1.28
+   },
+   {
+    "nick": "poiii",
+    "name": "Alex 'poiii' Nyholm2 4S-u1n8dgren",
+    "kd": null,
+    "swing": 1.32,
+    "adr": 84.4,
+    "kast": 73.3,
+    "rating": 1.23
+   },
+   {
+    "nick": "device",
+    "name": "Nicolai 'device' Re2e2d-t1z9",
+    "kd": null,
+    "swing": -0.65,
+    "adr": 60.8,
+    "kast": 73.3,
+    "rating": 1.01
+   },
+   {
+    "nick": "rain",
+    "name": "H\u00e5vard 'rain' Nyga2a1r-d27",
+    "kd": null,
+    "swing": -1.24,
+    "adr": 92.0,
+    "kast": 70.0,
+    "rating": 1.0
+   },
+   {
+    "nick": "gizmy",
+    "name": "Jack 'Gizmy' von S1p7r-e2c2kelsen",
+    "kd": null,
+    "swing": 0.23,
+    "adr": 71.3,
+    "kast": 83.3,
+    "rating": 0.96
+   },
+   {
+    "nick": "nafany",
+    "name": "Vladislav 'nafany'2 G2o-r2s4hkov",
+    "kd": null,
+    "swing": 1.19,
+    "adr": 91.3,
+    "kast": 76.7,
+    "rating": 1.16
+   },
+   {
+    "nick": "belchonokk",
+    "name": "Andrey 'BELCHON1O9K-2K2' Yasinskiy",
+    "kd": null,
+    "swing": 2.94,
+    "adr": 69.3,
+    "kast": 73.3,
+    "rating": 1.13
+   },
+   {
+    "nick": "artfrst",
+    "name": "Artem 'ArtFr0st' K2h7a-2ri0tonov",
+    "kd": null,
+    "swing": -2.21,
+    "adr": 87.1,
+    "kast": 66.7,
+    "rating": 1.12
+   },
+   {
+    "nick": "axle",
+    "name": "Sergey 'Ax1Le' Ry1k6h-t1o7rov",
+    "kd": null,
+    "swing": -1.07,
+    "adr": 64.6,
+    "kast": 76.7,
+    "rating": 1.05
+   },
+   {
+    "nick": "fame",
+    "name": "Petr 'fame' Bolysh1e7v-24",
+    "kd": null,
+    "swing": -4.68,
+    "adr": 59.4,
+    "kast": 70.0,
+    "rating": 0.67
+   }
+  ]
+ },
+ {
+  "label": "100THIEVES vs 1WIN: ANUBIS",
+  "pdfHeader": "100THIEVES vs 1WIN: ANUBIS",
+  "demo": "100-thieves-vs-1win-m2-anubis",
+  "rows": [
+   {
+    "nick": "gizmy",
+    "name": "Jack 'Gizmy' von S1p9r-e1c0kelsen",
+    "kd": null,
+    "swing": 7.54,
+    "adr": 69.0,
+    "kast": 84.2,
+    "rating": 1.58
+   },
+   {
+    "nick": "device",
+    "name": "Nicolai 'device' Re1e8d-t9z",
+    "kd": null,
+    "swing": 4.46,
+    "adr": 90.2,
+    "kast": 84.2,
+    "rating": 1.45
+   },
+   {
+    "nick": "poiii",
+    "name": "Alex 'poiii' Nyholm1 6S-u1n5dgren",
+    "kd": null,
+    "swing": 4.42,
+    "adr": 108.3,
+    "kast": 89.5,
+    "rating": 1.44
+   },
+   {
+    "nick": "rain",
+    "name": "H\u00e5vard 'rain' Nyga1a2r-d13",
+    "kd": null,
+    "swing": 2.22,
+    "adr": 76.5,
+    "kast": 84.2,
+    "rating": 1.17
+   },
+   {
+    "nick": "sirah",
+    "name": "William 'sirah' Kj\u00e61r2s-g1a2ard",
+    "kd": null,
+    "swing": -1.57,
+    "adr": 77.5,
+    "kast": 63.2,
+    "rating": 0.9
+   },
+   {
+    "nick": "nafany",
+    "name": "Vladislav 'nafany'1 G5o-r1s6hkov",
+    "kd": null,
+    "swing": 0.35,
+    "adr": 67.1,
+    "kast": 73.7,
+    "rating": 1.28
+   },
+   {
+    "nick": "axle",
+    "name": "Sergey 'Ax1Le' Ry1k5h-t1o6rov",
+    "kd": null,
+    "swing": -1.53,
+    "adr": 97.1,
+    "kast": 84.2,
+    "rating": 1.08
+   },
+   {
+    "nick": "belchonokk",
+    "name": "Andrey 'BELCHON1O5K-1K4' Yasinskiy",
+    "kd": null,
+    "swing": -1.56,
+    "adr": 86.4,
+    "kast": 73.7,
+    "rating": 1.02
+   },
+   {
+    "nick": "artfrst",
+    "name": "Artem 'ArtFr0st' K9h-1a5ritonov",
+    "kd": null,
+    "swing": -6.39,
+    "adr": 45.9,
+    "kast": 57.9,
+    "rating": 0.71
+   },
+   {
+    "nick": "fame",
+    "name": "Petr 'fame' Bolysh5e-v17",
+    "kd": null,
+    "swing": -7.94,
+    "adr": 47.0,
+    "kast": 63.2,
+    "rating": 0.45
+   }
+  ]
+ },
+ {
+  "label": "HEROIC vs FNATIC: ANCIENT",
+  "pdfHeader": "HEROIC vs FNATIC: ANCIENT",
+  "demo": "heroic-vs-fnatic-m1-ancient",
+  "rows": [
+   {
+    "nick": "martinezsa",
+    "name": "Antonio 'MartinezS27a-' 1M5artinez",
+    "kd": null,
+    "swing": 11.98,
+    "adr": 127.7,
+    "kast": 77.3,
+    "rating": 2.21
+   },
+   {
+    "nick": "susp",
+    "name": "Tim 'susp' \u00c5ngstr\u00f61m6-16",
+    "kd": [
+     6,
+     16
+    ],
+    "swing": -1.15,
+    "adr": 88.0,
+    "kast": 77.3,
+    "rating": 1.1
+   },
+   {
+    "nick": "nilo",
+    "name": "Linus 'nilo' Bergm1a2n-15",
+    "kd": null,
+    "swing": -3.99,
+    "adr": 54.0,
+    "kast": 72.7,
+    "rating": 0.8
+   },
+   {
+    "nick": "chrzn",
+    "name": "Christoffer 'Chr1zN10' -S1t7orgaard",
+    "kd": null,
+    "swing": -7.08,
+    "adr": 46.6,
+    "kast": 72.7,
+    "rating": 0.67
+   },
+   {
+    "nick": "brollan",
+    "name": "Ludvig 'Brollan' Br9o-l1in7",
+    "kd": null,
+    "swing": -5.5,
+    "adr": 49.3,
+    "kast": 63.6,
+    "rating": 0.58
+   },
+   {
+    "nick": "jackasmo",
+    "name": "Nikita 'jackasmo' S1k3y-1b3a",
+    "kd": null,
+    "swing": 3.94,
+    "adr": 79.7,
+    "kast": 77.3,
+    "rating": 1.23
+   },
+   {
+    "nick": "cairne",
+    "name": "Artem 'cairne' Mus1h7y-1n6skyi",
+    "kd": null,
+    "swing": 2.82,
+    "adr": 72.3,
+    "kast": 63.6,
+    "rating": 1.15
+   },
+   {
+    "nick": "jambo",
+    "name": "Dmytro 'jambo' Se1m9-e1r6a",
+    "kd": null,
+    "swing": 0.12,
+    "adr": 95.9,
+    "kast": 72.7,
+    "rating": 1.14
+   },
+   {
+    "nick": "mazay",
+    "name": "Volodymyr 'mazay2' 0Io-1rh5achov",
+    "kd": null,
+    "swing": 0.24,
+    "adr": 86.0,
+    "kast": 68.2,
+    "rating": 1.1
+   },
+   {
+    "nick": "fear",
+    "name": "Rodion 'fEAR' Sm1y0k-15",
+    "kd": null,
+    "swing": -3.56,
+    "adr": 53.5,
+    "kast": 81.8,
+    "rating": 0.77
+   }
+  ]
+ },
+ {
+  "label": "HEROIC vs FNATIC: ANUBIS [inferno]",
+  "pdfHeader": "HEROIC vs FNATIC: ANUBIS",
+  "demo": "heroic-vs-fnatic-m2-inferno",
+  "rows": [
+   {
+    "nick": "martinezsa",
+    "name": "Antonio 'MartinezS20a-' 1M8artinez",
+    "kd": null,
+    "swing": 1.39,
+    "adr": 72.7,
+    "kast": 66.7,
+    "rating": 1.13
+   },
+   {
+    "nick": "nilo",
+    "name": "Linus 'nilo' Bergm1a4n-16",
+    "kd": null,
+    "swing": 0.94,
+    "adr": 56.0,
+    "kast": 58.3,
+    "rating": 0.99
+   },
+   {
+    "nick": "brollan",
+    "name": "Ludvig 'Brollan' Br1o4li-n18",
+    "kd": null,
+    "swing": 0.39,
+    "adr": 70.2,
+    "kast": 50.0,
+    "rating": 0.94
+   },
+   {
+    "nick": "chrzn",
+    "name": "Christoffer 'Chr1zN13' -S2t0orgaard",
+    "kd": null,
+    "swing": -3.19,
+    "adr": 71.3,
+    "kast": 62.5,
+    "rating": 0.81
+   },
+   {
+    "nick": "susp",
+    "name": "Tim 'susp' \u00c5ngstr\u00f61m0-20",
+    "kd": [
+     0,
+     20
+    ],
+    "swing": -1.46,
+    "adr": 56.0,
+    "kast": 58.3,
+    "rating": 0.7
+   },
+   {
+    "nick": "jackasmo",
+    "name": "Nikita 'jackasmo' S3k4y-1b3a",
+    "kd": null,
+    "swing": 7.08,
+    "adr": 148.6,
+    "kast": 87.5,
+    "rating": 2.22
+   },
+   {
+    "nick": "jambo",
+    "name": "Dmytro 'jambo' Se1m8-e1r8a",
+    "kd": null,
+    "swing": 1.63,
+    "adr": 72.8,
+    "kast": 79.2,
+    "rating": 1.25
+   },
+   {
+    "nick": "mazay",
+    "name": "Volodymyr 'mazay1' 7Io-1rh4achov",
+    "kd": null,
+    "swing": 2.02,
+    "adr": 68.1,
+    "kast": 79.2,
+    "rating": 1.19
+   },
+   {
+    "nick": "fear",
+    "name": "Rodion 'fEAR' Sm1y5k-14",
+    "kd": null,
+    "swing": -2.84,
+    "adr": 79.6,
+    "kast": 79.2,
+    "rating": 1.07
+   },
+   {
+    "nick": "cairne",
+    "name": "Artem 'cairne' Mus8h-1y4nskyi",
+    "kd": null,
+    "swing": -6.95,
+    "adr": 33.1,
+    "kast": 70.8,
+    "rating": 0.58
+   }
+  ]
+ }
+]

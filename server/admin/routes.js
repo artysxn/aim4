@@ -47,6 +47,7 @@ import {
 import { SHARED_LIBRARY } from '../replays/auth.js';
 import {
   refreshLibraryPositions,
+  refreshLibraryRatings,
   refreshLibraryRoundTags,
   refreshLibraryStats
 } from '../replays/statsIndex.js';
@@ -78,6 +79,8 @@ let statsRefreshJob = null;
 let positionsRefreshJob = null;
 /** Round library re-tag: rewatches every round against the round definitions. */
 let roundScanJob = null;
+/** Rating 3.0 recompute across the shared library. */
+let ratingsJob = null;
 /** Steam-id display-name merge across the shared library. */
 let playerNamesJob = null;
 
@@ -116,6 +119,10 @@ function roundScanStatus() {
   return jobStatus(roundScanJob);
 }
 
+function ratingsStatus() {
+  return jobStatus(ratingsJob);
+}
+
 function playerNamesStatus() {
   return jobStatus(playerNamesJob);
 }
@@ -125,6 +132,7 @@ function libraryJobBusy() {
     (statsRefreshJob && !statsRefreshJob.finished) ||
     (positionsRefreshJob && !positionsRefreshJob.finished) ||
     (roundScanJob && !roundScanJob.finished) ||
+    (ratingsJob && !ratingsJob.finished) ||
     (playerNamesJob && !playerNamesJob.finished)
   );
 }
@@ -842,6 +850,87 @@ async function route(req, res, url, me) {
     });
 
     json(res, req, 202, { ok: true, started: true, ...roundScanStatus() });
+    return true;
+  }
+
+  // Rating 3.0 only: re-derive the rating for every ready demo and re-stamp the
+  // figure cached on each demo card. Reads the stats index that is already on
+  // disk, so it is far cheaper than a full statistics rebuild.
+  if (req.method === 'GET' && p === '/api/admin/stats/refresh-ratings') {
+    json(res, req, 200, ratingsStatus());
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/stats/refresh-ratings') {
+    if (libraryJobBusy()) {
+      json(res, req, 409, {
+        error: 'A library recalculation is already running.',
+        ...ratingsStatus(),
+        stats: statsRefreshStatus(),
+        positions: positionsRefreshStatus(),
+        rounds: roundScanStatus()
+      });
+      return true;
+    }
+    const startedAt = Date.now();
+    ratingsJob = {
+      kind: 'ratings',
+      startedAt,
+      startedBy: me.id,
+      force: true,
+      done: 0,
+      total: 0,
+      percent: 0,
+      current: null,
+      finished: false,
+      report: null,
+      error: null
+    };
+
+    setImmediate(async () => {
+      try {
+        const records = await listDemos(SHARED_LIBRARY);
+        const report = await refreshLibraryRatings(statsIo, SHARED_LIBRARY, records, {
+          onProgress: (pr) => {
+            if (!ratingsJob || ratingsJob.startedAt !== startedAt) return;
+            ratingsJob.done = pr.done;
+            ratingsJob.total = pr.total;
+            ratingsJob.percent = pr.percent;
+            ratingsJob.current = pr.current;
+          }
+        });
+        if (!ratingsJob || ratingsJob.startedAt !== startedAt) return;
+        ratingsJob.report = { ...report, ms: Date.now() - startedAt };
+        ratingsJob.done = report.ready;
+        ratingsJob.total = report.ready;
+        ratingsJob.percent = 100;
+        ratingsJob.current = null;
+        ratingsJob.finished = true;
+        ratingsJob.finishedAt = Date.now();
+        await writeAudit({
+          actorId: me.id,
+          targetUser: '',
+          action: 'stats.refresh_ratings',
+          payload: {
+            ready: report.ready,
+            rated: report.rated,
+            enriched: report.enriched,
+            topPlayers: report.topPlayers,
+            skipped: report.skipped,
+            failed: report.failed,
+            ms: Date.now() - startedAt
+          },
+          req: null
+        });
+      } catch (err) {
+        if (!ratingsJob || ratingsJob.startedAt !== startedAt) return;
+        ratingsJob.error = err?.message || String(err);
+        ratingsJob.finished = true;
+        ratingsJob.finishedAt = Date.now();
+      }
+    });
+
+    json(res, req, 202, { ok: true, started: true, ...ratingsStatus() });
     return true;
   }
 

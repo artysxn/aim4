@@ -15,6 +15,14 @@ import { buyBucket, econHasAwp } from './roundId.js';
 import { addAim, aimRating } from './aimMetrics.js';
 import { AKPR_HOLD_SECONDS } from './awpHold.js';
 import { addUtility, utilityAverages } from './utilityMetrics.js';
+import {
+  addRating3Round,
+  emptyRating3,
+  rating3Breakdown,
+  rating3FromCounters,
+  rating3RoundContext,
+  rating3RoundFacts
+} from './rating3.js';
 
 /** Per-player, per-round counters, in the order the index packs them. */
 export const P = {
@@ -31,7 +39,11 @@ export const P = {
 };
 export const PLAYER_SLOTS = 10;
 
-/** HLTV 2.0, as published. KAST is the percentage, not the fraction. */
+/**
+ * HLTV 2.0, as published. KAST is the percentage, not the fraction.
+ * Superseded by Rating 3.0 (see rating3.js); kept because Impact and a few
+ * chart series are still defined against it.
+ */
 export function ratingOf({ kast, kpr, dpr, impact, adr }) {
   return 0.0073 * kast + 0.3591 * kpr - 0.5329 * dpr + 0.2372 * impact + 0.0032 * adr + 0.1587;
 }
@@ -272,28 +284,55 @@ export function rowPasses(row, filter = {}, team = 0, players = null, demos = nu
 // ---------------------------------------------------------------------------
 
 function emptyBucket() {
-  return { rounds: 0, kills: 0, deaths: 0, assists: 0, damage: 0, kast: 0 };
+  return { rounds: 0, kills: 0, deaths: 0, assists: 0, damage: 0, kast: 0, r3: emptyRating3() };
 }
 
-function addBucket(b, line) {
+/**
+ * @param {object} b
+ * @param {number[]} line
+ * @param {object} [facts]  rating3RoundFacts for this player/round. Absent when
+ *   the caller aggregates partial rounds (phase windows) and so has no duels to
+ *   weight; the bucket then falls back to the neutral-economy rating.
+ */
+function addBucket(b, line, facts = null) {
   b.rounds++;
   b.kills += line[P.KILLS];
   b.deaths += line[P.DEATHS];
   b.assists += line[P.ASSISTS];
   b.damage += line[P.DAMAGE];
   b.kast += line[P.KAST] ? 1 : 0;
+  if (facts && b.r3) addRating3Round(b.r3, facts);
 }
 
 /** Rating and its inputs for one bucket of rounds. */
 export function bucketRating(b) {
-  if (!b.rounds) return { rounds: 0, rating: 0, kast: 0, kpr: 0, dpr: 0, apr: 0, impact: 0, adr: 0 };
+  if (!b.rounds) {
+    return { rounds: 0, rating: 0, kast: 0, kpr: 0, dpr: 0, apr: 0, impact: 0, adr: 0, r3: null };
+  }
   const kpr = div(b.kills, b.rounds);
   const dpr = div(b.deaths, b.rounds);
   const apr = div(b.assists, b.rounds);
   const kast = div(b.kast, b.rounds) * 100;
   const adr = div(b.damage, b.rounds);
   const impact = impactOf({ kpr, apr });
-  return { rounds: b.rounds, rating: ratingOf({ kast, kpr, dpr, impact, adr }), kast, kpr, dpr, apr, impact, adr };
+  // Rating 3.0 needs the per-round duel context. Buckets built from whole
+  // rounds carry it; the phase-window aggregator does not, and gets the
+  // neutral-economy form of the same formula rather than a different one.
+  const detail =
+    b.r3 && b.r3.rounds
+      ? rating3Breakdown(b.r3)
+      : { value: rating3FromCounters({ rounds: b.rounds, kills: b.kills, deaths: b.deaths, assists: b.assists, damage: b.damage, kast: b.kast }), terms: [], rounds: b.rounds };
+  return {
+    rounds: b.rounds,
+    rating: detail.value,
+    ratingDetail: detail,
+    kast,
+    kpr,
+    dpr,
+    apr,
+    impact,
+    adr
+  };
 }
 
 /** Signed power: preserves sign so below-average cores stay real. */
@@ -510,6 +549,23 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
   };
 
   for (const row of rows) {
+    // The duel context behind Rating 3.0 is a property of the round, not of any
+    // one player, and the trade scan inside it is quadratic in the kill count.
+    // Resolve it at most once per round, and only if a player actually passes
+    // the filter, so a narrow query does not pay for the whole library.
+    let r3ctx = null;
+    const roundContext = () => {
+      if (!r3ctx) {
+        const teamById = new Map();
+        for (const pid of Object.keys(row.p)) {
+          const t = players.get(`${row.d}:${pid}`)?.team;
+          if (t) teamById.set(pid, t);
+        }
+        r3ctx = rating3RoundContext(row, teamById);
+      }
+      return r3ctx;
+    };
+
     for (const id of Object.keys(row.p)) {
       const who = players.get(`${row.d}:${id}`);
       const team = who?.team;
@@ -529,13 +585,14 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
         s.nameCounts.set(label, (s.nameCounts.get(label) || 0) + 1);
       }
       const side = team === 1 ? row.s1 : row.s2;
-      addBucket(s.all, line);
-      if (side === 'T' || side === 'CT') addBucket(s[side], line);
-      addBucket(row.w === team ? s.won : s.lost, line);
+      const facts = rating3RoundFacts(roundContext(), id, team);
+      addBucket(s.all, line, facts);
+      if (side === 'T' || side === 'CT') addBucket(s[side], line, facts);
+      addBucket(row.w === team ? s.won : s.lost, line, facts);
       const ownEcon = team === 1 ? row.e1 : row.e2;
       const oppEcon = team === 1 ? row.e2 : row.e1;
       if (buyBucket(ownEcon) === 4 && buyBucket(oppEcon) === 4) {
-        addBucket(s.fullVsFull, line);
+        addBucket(s.fullVsFull, line, facts);
       }
       s.shots += line[P.SHOTS];
       s.hits += line[P.HITS];
@@ -727,6 +784,8 @@ export function aggregatePlayers(rows, players, filter = {}, demos = null) {
       kast: all.kast,
       impact: all.impact,
       rating: all.rating,
+      /** Per-term Rating 3.0 breakdown for hover tips. */
+      ratingDetail: all.ratingDetail,
       ratingT: bucketRating(s.T).rating,
       ratingCT: bucketRating(s.CT).rating,
       ratingWon: bucketRating(s.won).rating,

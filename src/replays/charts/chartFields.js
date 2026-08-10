@@ -12,7 +12,8 @@
 // ---------------------------------------------------------------------------
 
 import { ECONOMIES, MAPS, economyLabel } from '../shared/roundId.js';
-import { aim4OpeningRating, aim4Rating, impactOf, ratingOf } from '../shared/statsMath.js';
+import { aim4OpeningRating, aim4Rating, impactOf } from '../shared/statsMath.js';
+import { rating3FromCounters } from '../shared/rating3.js';
 import { PHASE_CUTS } from './chartFacts.js';
 
 const div = (a, b) => (b > 0 ? a / b : 0);
@@ -51,14 +52,19 @@ export function formatValue(value, fmt) {
  * @property {string} [tip]
  */
 
+// Charts aggregate loose counters rather than whole rounds, so there is no
+// duel context to weight by. The neutral-economy form of Rating 3.0 keeps the
+// chart series on the same scale as the Statistics table.
 const ratingFromCounters = (rounds, seats, c) => {
   if (!rounds || !seats) return null;
-  const kpr = div(c.kills, seats);
-  const dpr = div(c.deaths, seats);
-  const apr = div(c.assists, seats);
-  const adr = div(c.damage, seats);
-  const kast = div(c.kast, seats) * 100;
-  return ratingOf({ kast, kpr, dpr, impact: impactOf({ kpr, apr }), adr });
+  return rating3FromCounters({
+    rounds: seats,
+    kills: c.kills,
+    deaths: c.deaths,
+    assists: c.assists,
+    damage: c.damage,
+    kast: c.kast
+  });
 };
 
 function playerCounters(facts) {

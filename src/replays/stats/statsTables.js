@@ -52,6 +52,27 @@ function a4rTip(p) {
   return tip(lines);
 }
 
+/** Hover breakdown for Rating: each sub-rating and what it contributed. */
+function ratingTip(p) {
+  const lines = [
+    `Rating: ${f2(p.rating)}`,
+    `On T: ${f2(p.ratingT)}`,
+    `On CT: ${f2(p.ratingCT)}`,
+    `In rounds won: ${f2(p.ratingWon)}`,
+    `In rounds lost: ${f2(p.ratingLost)}`
+  ];
+  const d = p.ratingDetail;
+  if (d?.terms?.length) {
+    lines.push('');
+    for (const t of d.terms) {
+      const input = t.key === 'swing' || t.key === 'share' ? signed(t.input) : f2(t.input);
+      lines.push(`${t.label} ${input} → ${signed(t.contrib)}`);
+    }
+    lines.push(`Baseline → ${signed(d.offset)}`);
+  }
+  return tip(lines);
+}
+
 /** Frozen left columns (before roles). */
 export const PLAYER_FIXED_BASE = [
   {
@@ -103,14 +124,7 @@ export const PLAYER_METRIC_COLUMNS = [
     avgOf: (p) => (Number.isFinite(p.rating) ? p.rating : null),
     avgFormat: f2,
     strong: true,
-    tip: (p) =>
-      tip([
-        `Rating: ${f2(p.rating)}`,
-        `On T: ${f2(p.ratingT)}`,
-        `On CT: ${f2(p.ratingCT)}`,
-        `In rounds won: ${f2(p.ratingWon)}`,
-        `In rounds lost: ${f2(p.ratingLost)}`
-      ])
+    tip: (p) => ratingTip(p)
   },
   {
     key: 'a4r',

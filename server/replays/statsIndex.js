@@ -22,6 +22,7 @@ import {
 } from '../../src/replays/shared/statsMath.js';
 import { setDemoTopPlayer } from './demoStore.js';
 import { awpAccuracyFromTicks } from '../../src/replays/shared/awpAccuracy.js';
+import { cappedDamageFromMeta, playerRoundDamage } from '../../src/replays/shared/roundDamage.js';
 import { applyAwpHoldFields } from '../../src/replays/shared/awpHold.js';
 import { aimFromRound } from '../../src/replays/shared/aimMetrics.js';
 import { utilityFromRound } from '../../src/replays/shared/utilityMetrics.js';
@@ -54,6 +55,10 @@ import { roundTagsFor, rowTagged, rowTags } from '../../src/replays/analytics/ro
 import { hasRoundLibrary } from '../../src/replays/analytics/roundLibrary.js';
 import { coreOpeningDuels } from '../../src/replays/shared/coreOpenings.js';
 
+// v19 recomputes per-round damage from the damage events, capped at what the
+// victim had left, so ADR is health removed rather than the raw figure the
+// parser reports (an AWP headshot logged 440 instead of 100).
+//
 // v18 adds per-round core opening ids (row.cok / row.cod) for COPATT.
 // Bumping this rebuilds every index from the round files already on disk; it
 // does NOT reparse demos.
@@ -62,7 +67,7 @@ import { coreOpeningDuels } from '../../src/replays/shared/coreOpenings.js';
 // lower entry.v as stale, and that path is awaited inside demoIndex, so a bump
 // makes the next GET /stats walk every tick buffer in the library before it
 // answers. Tags carry their own ROUND_LIBRARY_VERSION instead.
-export const STATS_VERSION = 18;
+export const STATS_VERSION = 19;
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -157,6 +162,7 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf, tickBuffer = null, 
   }
 
   const awpAcc = tickBuffer ? awpAccuracyFromTicks(meta, tickBuffer) : null;
+  const capped = cappedDamageFromMeta(meta, teamOf);
 
   const p = {};
   for (const id of playerIds) {
@@ -172,7 +178,7 @@ function rowFromRound(meta, demoId, file, playerIds, teamOf, tickBuffer = null, 
     line[P.KILLS] = kills0;
     line[P.DEATHS] = deaths0;
     line[P.ASSISTS] = assists0;
-    line[P.DAMAGE] = Math.round(st.damage || 0);
+    line[P.DAMAGE] = playerRoundDamage(capped, id, st.damage);
     if (st.hits !== undefined) {
       line[P.SHOTS] = st.gunShots ?? shotsByPlayer.get(id) ?? 0;
       line[P.HITS] = st.hits || 0;
@@ -541,6 +547,20 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
     delete row.z;
     delete row.ctTB;
 
+    // Damage is rewritten from the round's own events, capped at the health
+    // each victim had left. Needs the meta only, so an index written before
+    // v19 is corrected without reopening a demo.
+    if (row.p) {
+      const capped = cappedDamageFromMeta(meta, new Map(roster.map((pl) => [pl.id, pl.team])));
+      if (capped) {
+        for (const id of playerIds) {
+          const line = row.p[id];
+          if (!line) continue;
+          line[P.DAMAGE] = playerRoundDamage(capped, id, meta.stats?.[id]?.damage);
+        }
+      }
+    }
+
     if (tickBuffer && row.p) {
       const awpAcc = awpAccuracyFromTicks(meta, tickBuffer);
       for (const id of playerIds) {
@@ -904,7 +924,13 @@ export function topPlayerOf(entry) {
   if (!entry?.rounds?.length) return null;
   let list;
   try {
-    list = aggregatePlayers(entry.rounds, entry.players || []);
+    // aggregatePlayers keys players by `demoId:playerId`, not by id alone.
+    // Passing the bare roster array left every lookup undefined and the whole
+    // call throwing, so the card's rating was always blank.
+    const players = new Map(
+      (entry.players || []).map((p) => [`${entry.id}:${p.id}`, { name: p.name, team: p.team }])
+    );
+    list = aggregatePlayers(entry.rounds, players);
   } catch {
     return null;
   }
@@ -1320,6 +1346,96 @@ export async function refreshLibraryRoundTags(io, user, records, { onProgress = 
       entry.key = key;
       await persistEntry(io, user, key, entry);
       report.scanned++;
+    } catch (err) {
+      report.failed++;
+      report.errors.push({
+        id: record.id,
+        filename: record.filename,
+        error: err?.message || String(err)
+      });
+    }
+    i++;
+  }
+
+  emit(ready.length, null);
+  return report;
+}
+
+/**
+ * Recompute Rating 3.0 across the whole library.
+ *
+ * The rating is derived at query time from fields the index already stores
+ * (the kill timeline, per-player equipment value, economy, swing), so nothing
+ * has to be reparsed: what this pass does is make sure every demo actually has
+ * those fields, and re-stamp the rating cached on each demo card, which is the
+ * one place a stale number would survive a formula change.
+ *
+ * @param {object} io
+ * @param {string} user
+ * @param {object[]} records  from listDemos
+ * @returns {Promise<{
+ *   total: number, ready: number, rated: number, enriched: number,
+ *   skipped: number, failed: number, topPlayers: number,
+ *   errors: Array<{ id: string, filename?: string, error: string }>
+ * }>}
+ */
+export async function refreshLibraryRatings(io, user, records, { onProgress = null } = {}) {
+  const ready = (records || []).filter((r) => (r.status || 'ready') === 'ready');
+  const report = {
+    total: (records || []).length,
+    ready: ready.length,
+    rated: 0,
+    enriched: 0,
+    skipped: 0,
+    failed: 0,
+    topPlayers: 0,
+    errors: []
+  };
+
+  const emit = (done, current = null) => {
+    if (typeof onProgress !== 'function') return;
+    onProgress({
+      done,
+      total: ready.length,
+      percent: ready.length ? Math.round((done / ready.length) * 100) : 100,
+      current
+    });
+  };
+
+  emit(0, null);
+
+  let i = 0;
+  for (const record of ready) {
+    emit(i, record.filename || record.id || null);
+    try {
+      const key = versionKey(record);
+      let entry = await loadStoredEntry(io, user, record.id);
+      const keyOk = entry && keyMatchesRecord(entry.key, record);
+
+      if (!entry || !keyOk) {
+        entry = await demoIndex(io, user, record, { roles: false });
+        if (entry) report.enriched++;
+      } else if (needsPhaseEnrichment(entry)) {
+        // Missing the kill timeline or equipment values: fill them in, which is
+        // a walk of round files already on disk rather than a reparse.
+        await enrichPhases(io, user, entry, { roles: false });
+        entry.key = key;
+        await persistEntry(io, user, key, entry);
+        report.enriched++;
+      }
+
+      if (!entry?.rounds?.length) {
+        report.skipped++;
+        i++;
+        continue;
+      }
+
+      const top = topPlayerOf(entry);
+      if (top) {
+        await setDemoTopPlayer(user, record.id, top);
+        report.topPlayers++;
+      }
+      report.rated++;
     } catch (err) {
       report.failed++;
       report.errors.push({

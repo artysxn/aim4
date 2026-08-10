@@ -71,6 +71,26 @@ const JOBS = [
     ]
   },
   {
+    kind: 'ratings',
+    idle: 'Recalculate ratings',
+    busy: 'Recalculating ratings…',
+    className: 'btn',
+    confirm:
+      'Re-derive Rating 3.0 for every ready demo and refresh the rating shown on each demo card?\n\nReads the statistics already on disk, so it is much quicker than a full recalculation. Does not touch kills, PRW, possession or round tags.',
+    running: 'Recalculating ratings…',
+    starting: 'Starting rating recalculation…',
+    done: 'Rating recalculation finished.',
+    start: () => adminApi.refreshRatings(),
+    status: () => adminApi.refreshRatingsStatus(),
+    summary: (r, ms) => [
+      `Done in ${Math.round(ms / 1000)}s.`,
+      `${r.rated || 0} of ${r.ready || 0} demos rated.`,
+      `${r.topPlayers || 0} card ratings updated`,
+      `${r.enriched || 0} indexes filled in`,
+      `${r.skipped || 0} skipped`
+    ]
+  },
+  {
     kind: 'rounds',
     idle: 'Rescan round types',
     busy: 'Rescanning rounds…',
