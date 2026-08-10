@@ -271,8 +271,8 @@ export function createStatsPanel({
     return Array.isArray(raw) ? raw.map(String).filter(Boolean) : [];
   }
 
-  function roundSummaryLabel(rows, selected) {
-    if (!selected.length) return 'Any';
+  function roundSummaryLabel(rows, selected, emptyLabel) {
+    if (!selected.length) return emptyLabel;
     if (selected.length === 1) {
       return rows.find((r) => r.key === selected[0])?.label || selected[0];
     }
@@ -291,15 +291,16 @@ export function createStatsPanel({
     const selectedSet = new Set(selected);
     const rows = roundTypeRows(map, forSide);
     if (!rows.length) return '';
-    const label = which === 'opp' ? `vs ${oppSide} round` : `${ownSide} round`;
+    const emptyLabel = which === 'opp' ? 'Facing' : 'Running';
+    const ariaLabel = which === 'opp' ? `vs ${oppSide} round` : `${ownSide} round`;
     const field = which === 'opp' ? 'roundOpp' : 'roundOwn';
-    const summary = roundSummaryLabel(rows, selected);
+    const summary = roundSummaryLabel(rows, selected, emptyLabel);
     const checks = [
       `<label class="st-round-opt">
         <input type="checkbox" data-round-filter="${field}" value="" ${
           selected.length ? '' : 'checked'
         } />
-        <span>Any</span>
+        <span>${escapeHtml(emptyLabel)}</span>
       </label>`,
       ...rows.map(
         (r) => `<label class="st-round-opt" title="${escapeHtml(r.desc || '')}">
@@ -310,15 +311,31 @@ export function createStatsPanel({
         </label>`
       )
     ].join('');
-    return `<div class="st-filter-group st-filter-stack">
-      <span class="st-filter-label">${escapeHtml(label)}</span>
+    return `<div class="st-filter-group">
       <details class="st-round-multi" data-round-menu="${field}">
-        <summary class="site-select st-round-select" aria-label="${escapeHtml(label)}">${escapeHtml(
+        <summary class="site-select st-round-select" aria-label="${escapeHtml(ariaLabel)}">${escapeHtml(
           summary
         )}</summary>
-        <div class="st-round-menu" role="group" aria-label="${escapeHtml(label)}">${checks}</div>
+        <div class="st-round-menu" role="group" aria-label="${escapeHtml(ariaLabel)}">${checks}</div>
       </details>
     </div>`;
+  }
+
+  function placeRoundMenu(details) {
+    const menu = details?.querySelector?.('.st-round-menu');
+    const summary = details?.querySelector?.('summary');
+    if (!menu || !summary) return;
+    const r = summary.getBoundingClientRect();
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+    menu.style.left = `${Math.round(r.left)}px`;
+    menu.style.minWidth = `${Math.round(Math.max(r.width, 180))}px`;
+  }
+
+  function closeRoundMenus(except = null) {
+    for (const d of filtersEl.querySelectorAll('details.st-round-multi[open]')) {
+      if (except && d === except) continue;
+      d.removeAttribute('open');
+    }
   }
 
   /**
@@ -457,6 +474,8 @@ export function createStatsPanel({
             'Enemy buy'
           )}${hasAwpCheck('oppHasAwp', filter.oppHasAwp)}</div>
         </div>
+      </div>
+      <div class="st-filters-end">
         ${dateRangeHtml()}
         <div class="st-filter-group">
           <input
@@ -471,8 +490,8 @@ export function createStatsPanel({
             placeholder="Min"
           />
         </div>
-      </div>
-      <button type="button" class="btn btn-sm st-filter-clear" data-clear>Clear</button>`;
+        <button type="button" class="btn btn-sm st-filter-clear" data-clear>Clear</button>
+      </div>`;
     setFiltersOpen(filtersOpen);
   }
 
@@ -494,11 +513,21 @@ export function createStatsPanel({
     setFiltersOpen(!filtersOpen);
   });
 
+  filtersEl.addEventListener('toggle', (e) => {
+    const details = e.target.closest?.('details.st-round-multi');
+    if (!details || e.target !== details) return;
+    if (details.open) {
+      closeRoundMenus(details);
+      placeRoundMenu(details);
+    }
+  });
+
   filtersEl.addEventListener('click', (e) => {
     const cal = e.target.closest('[data-st-calendar]');
     if (cal) {
       e.stopPropagation();
       calendarOpen = !calendarOpen;
+      closeRoundMenus();
       const wrap = cal.closest('.st-date-wrap');
       wrap?.classList.toggle('open', calendarOpen);
       cal.setAttribute('aria-expanded', calendarOpen ? 'true' : 'false');
@@ -577,9 +606,11 @@ export function createStatsPanel({
       const keepOpen = field;
       resetListPage();
       render();
-      filtersEl
-        .querySelector(`details[data-round-menu="${keepOpen}"]`)
-        ?.setAttribute('open', '');
+      const kept = filtersEl.querySelector(`details[data-round-menu="${keepOpen}"]`);
+      if (kept) {
+        kept.setAttribute('open', '');
+        placeRoundMenu(kept);
+      }
       return;
     }
     const roleSel = e.target.closest('[data-role-filter]');
@@ -662,6 +693,9 @@ export function createStatsPanel({
   });
 
   document.addEventListener('click', (e) => {
+    const inRoundMenu = e.target.closest?.('details.st-round-multi');
+    if (!inRoundMenu) closeRoundMenus();
+
     if (!calendarOpen) return;
     if (e.target.closest?.('.st-date-wrap')) return;
     calendarOpen = false;
@@ -671,6 +705,16 @@ export function createStatsPanel({
     const pop = wrap?.querySelector('.st-date-popover');
     if (pop) pop.hidden = true;
   });
+
+  window.addEventListener(
+    'scroll',
+    () => {
+      for (const d of filtersEl.querySelectorAll('details.st-round-multi[open]')) {
+        placeRoundMenu(d);
+      }
+    },
+    true
+  );
 
   backEl.addEventListener('click', () => {
     // Prefer popping the detail history entry (opened via pushState). Pushing a

@@ -3569,23 +3569,25 @@ body.rv-open {
   margin: 0;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid);
   color: var(--muted);
   cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
 
 .st-date-toggle:hover,
-.st-date-toggle.active,
 .st-date-wrap.open .st-date-toggle {
   color: var(--text);
-  border-color: color-mix(in srgb, var(--text) 28%, var(--border));
+  border-color: var(--border-strong, rgba(255, 255, 255, 0.22));
 }
 
 .st-date-toggle.active,
-.st-date-wrap.has-range .st-date-toggle {
-  border-color: color-mix(in srgb, var(--accent, #6ea8fe) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent, #6ea8fe) 16%, transparent);
+.st-date-wrap.has-range .st-date-toggle,
+.st-date-wrap.open .st-date-toggle {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--text);
 }
 
 .st-date-toggle img {
@@ -3596,7 +3598,7 @@ body.rv-open {
 
 .st-date-popover {
   position: absolute;
-  z-index: 50;
+  z-index: 80;
   top: calc(100% + 6px);
   right: 0;
   display: flex;
@@ -3606,7 +3608,7 @@ body.rv-open {
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: #14181f;
+  background: var(--surface-solid, #19191c);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
 }
 
@@ -3629,12 +3631,6 @@ body.rv-open {
   min-width: 0;
 }
 
-/* Keep open round menus above the table (and above other filter chrome). */
-.st-filters:has(.st-round-multi[open]) {
-  position: relative;
-  z-index: 40;
-}
-
 .st-filters-scroll {
   display: flex;
   align-items: center;
@@ -3643,16 +3639,17 @@ body.rv-open {
   flex: 1;
   min-width: 0;
   overflow-x: auto;
-  padding-bottom: 2px;
+  overflow-y: hidden;
+  padding: 0 2px 2px;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
 }
 
-/*
- * overflow-x:auto makes overflow-y compute to auto too, which clips the
- * absolute round menu to the filter-row height. Drop the scrollport while open.
- */
-.st-filters-scroll:has(.st-round-multi[open]) {
-  overflow: visible;
+.st-filters-end {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
 }
 
 .st-filters-scroll .st-filter-group {
@@ -3692,20 +3689,25 @@ body.rv-open {
   opacity: 0.7;
 }
 
+/* Fixed so opening never toggles the filter-row scrollbar. */
 .st-round-menu {
-  position: absolute;
-  z-index: 50;
-  top: calc(100% + 4px);
+  position: fixed;
+  z-index: 80;
+  top: 0;
   left: 0;
-  min-width: max(100%, 180px);
+  min-width: 180px;
   max-height: min(280px, 50vh);
   overflow-x: hidden;
   overflow-y: auto;
   padding: 6px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface, #0e1014);
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid, #19191c);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.st-round-multi:not([open]) > .st-round-menu {
+  display: none;
 }
 
 .st-round-opt {
