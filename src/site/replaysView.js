@@ -3512,6 +3512,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       created = true;
       statsPanel = createStatsPanel({
         escapeHtml,
+        usePageHead: true,
         onViewChange(state) {
           if (subpage !== 'stats') return;
           syncStatsUrl(state);
@@ -3527,6 +3528,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       });
       statsBodyEl.appendChild(statsPanel.el);
     }
+    statsPanel.mountPageHead?.();
 
     // Same library scope + only the view (detail/filters) changed: apply without
     // refetching. Needed so Back (history.back) is instant and reliable.

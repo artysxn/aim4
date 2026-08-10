@@ -100,7 +100,9 @@ export function createStatsPanel({
   onViewChange,
   onDetailChange,
   onBack,
-  onPlayRounds
+  onPlayRounds,
+  /** Put Players / Teams / Filters in the site page-head next to DATABASE. */
+  usePageHead = false
 }) {
   const el = document.createElement('div');
   el.className = 'st-panel';
@@ -108,31 +110,72 @@ export function createStatsPanel({
     <div class="st-head">
       <div class="st-head-main">
         <button type="button" class="btn btn-sm st-back" data-st-back hidden>Back</button>
-        <div class="st-tabs">
+        ${
+          usePageHead
+            ? ''
+            : `<div class="st-tabs">
           <button type="button" class="seg-tab active" data-tab="players">Players</button>
           <button type="button" class="seg-tab" data-tab="teams">Teams</button>
-        </div>
+        </div>`
+        }
         <span class="st-detail-label" id="st-detail-label" hidden></span>
       </div>
       <span class="st-scope" id="st-scope"></span>
       <div class="st-head-actions">
         <span class="st-saved" id="st-saved"></span>
-        <button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
+        ${
+          usePageHead
+            ? ''
+            : `<button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
           <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
           Filters
-        </button>
+        </button>`
+        }
       </div>
     </div>
     <div class="st-filters" id="st-filters" hidden></div>
     <div class="st-body" id="st-body"><div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div></div>`;
 
+  /** @type {HTMLElement | null} */
+  let pageHeadEl = null;
+  if (usePageHead) {
+    pageHeadEl = document.createElement('div');
+    pageHeadEl.className = 'st-page-actions';
+    pageHeadEl.innerHTML = `
+      <div class="st-tabs">
+        <button type="button" class="seg-tab active" data-tab="players">Players</button>
+        <button type="button" class="seg-tab" data-tab="teams">Teams</button>
+      </div>
+      <button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
+        <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
+        Filters
+      </button>`;
+  }
+
   const filtersEl = el.querySelector('#st-filters');
-  const filtersToggleEl = el.querySelector('[data-st-filters-toggle]');
+  const filtersToggleEl =
+    pageHeadEl?.querySelector('[data-st-filters-toggle]') ||
+    el.querySelector('[data-st-filters-toggle]');
   const bodyEl = el.querySelector('#st-body');
   const scopeEl = el.querySelector('#st-scope');
-  const tabsEl = el.querySelector('.st-tabs');
+  const tabsEl = pageHeadEl?.querySelector('.st-tabs') || el.querySelector('.st-tabs');
   const backEl = el.querySelector('[data-st-back]');
   const detailLabelEl = el.querySelector('#st-detail-label');
+
+  function mountPageHead() {
+    if (!usePageHead || !pageHeadEl) return;
+    document.getElementById('page-head-actions')?.replaceChildren(pageHeadEl);
+    syncTabButtons();
+    filtersToggleEl?.classList.toggle('active', filtersOpen);
+    filtersToggleEl?.setAttribute('aria-expanded', filtersOpen ? 'true' : 'false');
+  }
+
+  function syncTabButtons() {
+    const root = pageHeadEl || el;
+    root.querySelectorAll('[data-tab]').forEach((b) =>
+      b.classList.toggle('active', b.dataset.tab === tab)
+    );
+  }
 
   /** Filters bar is closed by default so the table owns the viewport. */
   let filtersOpen = false;
@@ -706,11 +749,11 @@ export function createStatsPanel({
     render();
   });
 
-  tabsEl.addEventListener('click', (e) => {
+  tabsEl?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-tab]');
     if (!btn || btn.dataset.tab === tab || detail) return;
     tab = btn.dataset.tab;
-    el.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+    syncTabButtons();
     render();
   });
 
@@ -1142,9 +1185,7 @@ export function createStatsPanel({
     if (Array.isArray(next.demos)) scope = { ...scope, demos: [...next.demos] };
     if (Array.isArray(next.files)) scope = { ...scope, files: [...next.files] };
 
-    el.querySelectorAll('[data-tab]').forEach((b) =>
-      b.classList.toggle('active', b.dataset.tab === tab)
-    );
+    syncTabButtons();
     if (payload) render();
     else if (notify) emitViewChange();
   }
@@ -1163,9 +1204,7 @@ export function createStatsPanel({
     detailPage = 1;
     detailSort = { key: 'date', dir: 'desc' };
     tab = 'players';
-    el.querySelectorAll('[data-tab]').forEach((b) =>
-      b.classList.toggle('active', b.dataset.tab === 'players')
-    );
+    syncTabButtons();
     render();
   }
 
@@ -1176,9 +1215,7 @@ export function createStatsPanel({
     detailPage = 1;
     detailSort = { key: 'date', dir: 'desc' };
     tab = 'teams';
-    el.querySelectorAll('[data-tab]').forEach((b) =>
-      b.classList.toggle('active', b.dataset.tab === 'teams')
-    );
+    syncTabButtons();
     render();
   }
 
@@ -1873,6 +1910,7 @@ export function createStatsPanel({
     applyView,
     applyViewState,
     ensureLibraryPayload,
+    mountPageHead,
     /** The loaded payload, so panels beside this one can reuse the fetch. */
     getPayload: () => payload,
     /** False while the payload is still narrowed to a team or a selection. */
@@ -1883,6 +1921,10 @@ export function createStatsPanel({
     clearDetail,
     getDetail: () => detail,
     destroy() {
+      if (usePageHead && pageHeadEl) {
+        const slot = document.getElementById('page-head-actions');
+        if (slot?.contains(pageHeadEl)) slot.replaceChildren();
+      }
       detachTips();
       el.remove();
     }

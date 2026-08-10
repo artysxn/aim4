@@ -3349,6 +3349,17 @@ body.rv-open {
   margin-left: auto;
 }
 
+.st-page-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.st-page-actions .st-tabs {
+  display: flex;
+  gap: 6px;
+}
+
 .st-filters-toggle {
   display: inline-flex;
   align-items: center;
