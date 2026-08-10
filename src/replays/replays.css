@@ -4669,6 +4669,63 @@ body.rv-open {
   cursor: pointer;
 }
 
+/* Per-rule clock window: the chip on the row, the slider below it. */
+.an-shape-clock {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted, #9aa3b2);
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.an-shape-clock.set {
+  color: var(--text, #e8ecf3);
+}
+
+.an-shape-window {
+  padding: 6px 2px 10px;
+}
+
+.an-shape-window-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.an-shape-window-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The rounds list, under the filters. Same card innards as when it lived on
+   the right; the sidebar just caps its height. */
+.an-side-rounds {
+  margin-top: 12px;
+}
+
+.an-side-rounds .an-round-list {
+  max-height: 320px;
+}
+
+.an-lb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.an-lb-tabs {
+  flex-shrink: 0;
+}
+
 .an-break-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -5166,6 +5223,24 @@ body.rv-open {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.02);
+}
+
+/* Letter, the player/team switch, and (past two sides) a remove button. */
+.ch-compare-slot-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ch-compare-kind {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.ch-compare-remove {
+  margin-left: auto;
+  padding: 0 8px;
+  line-height: 1.4;
 }
 
 .ch-compare-games {

@@ -88,24 +88,12 @@
             </a>
             <div class="side-sub" id="side-patterns-sub" hidden>
               <a class="side-link side-sub-link" href="/patterns?chapter=players" data-pf-chapter="players">
-                <span class="side-icon" data-icon="pf-players"></span>
-                <span class="side-label">Players</span>
+                <span class="side-icon" data-icon="pf-search"></span>
+                <span class="side-label">Search</span>
               </a>
               <a class="side-link side-sub-link" href="/patterns?chapter=antistrat" data-pf-chapter="antistrat">
                 <span class="side-icon" data-icon="pf-antistrat"></span>
-                <span class="side-label">Teams: Antistrat</span>
-              </a>
-              <a class="side-link side-sub-link" href="/patterns?chapter=teams-explore" data-pf-chapter="teams-explore">
-                <span class="side-icon" data-icon="pf-explore"></span>
-                <span class="side-label">Teams: Explore</span>
-              </a>
-              <a class="side-link side-sub-link" href="/patterns?chapter=meta" data-pf-chapter="meta">
-                <span class="side-icon" data-icon="pf-meta"></span>
-                <span class="side-label">Meta</span>
-              </a>
-              <a class="side-link side-sub-link" href="/patterns?chapter=search" data-pf-chapter="search">
-                <span class="side-icon" data-icon="pf-search"></span>
-                <span class="side-label">Search</span>
+                <span class="side-label">Teams</span>
               </a>
             </div>
             <a class="side-link" href="/uploads" data-nav="uploads">
@@ -391,6 +379,21 @@
           <section class="view" data-view="admin">
             <div class="view-pad view-pad-fill">
               <div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div>
+            </div>
+          </section>
+
+          <!-- Error pages (404 / 403) -------------------------------------- -->
+          <section class="view" data-view="error">
+            <div class="view-pad">
+              <div class="error-card">
+                <p class="error-code" id="error-code">404</p>
+                <h2 class="error-title" id="error-title">Page not found</h2>
+                <p class="error-text" id="error-text"></p>
+                <div class="error-actions">
+                  <a class="btn primary" href="/" data-nav="home">Go to the home page</a>
+                  <button type="button" class="btn" id="error-back">Go back</button>
+                </div>
+              </div>
             </div>
           </section>
         </main>

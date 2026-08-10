@@ -492,7 +492,9 @@ const ROUTES = {
   // The panel itself refuses to render until /api/admin/me returns 200, and the
   // API answers 404 to everyone else. This entry only stops the deep link from
   // falling through to the trainer.
-  admin: { title: 'Admin', path: '/admin', shell: 'admin' }
+  admin: { title: 'Admin', path: '/admin', shell: 'admin' },
+  'not-found': { title: 'Page not found', path: '/404', shell: 'error' },
+  forbidden: { title: 'No access', path: '/403', shell: 'error' }
 };
 
 /** Old /replays/* bookmarks → new top-level paths. */
@@ -525,7 +527,10 @@ function routeFromPath(pathname = window.location.pathname) {
   if (LEGACY_PATHS[clean]) {
     return PATH_TO_ROUTE[LEGACY_PATHS[clean]] || 'home';
   }
-  return PATH_TO_ROUTE[clean] || 'home';
+  // A typo'd or dead link gets told so, not silently teleported home. The
+  // special prefixes (/i/, /d/, /s2/, /player/…) have already been rewritten
+  // to real routes by the time this runs.
+  return PATH_TO_ROUTE[clean] || 'not-found';
 }
 
 function searchParams() {
@@ -619,7 +624,7 @@ function syncSideNav(routeName) {
  * @param {object|null} [params]  extra query params (round, mode, …)
  */
 function setView(name, push = false, params = null) {
-  const routeName = ROUTES[name] ? name : 'home';
+  const routeName = ROUTES[name] ? name : 'not-found';
   const route = ROUTES[routeName];
   const shell = route.shell;
   const resolvedParams = { ...(params || searchParams()) };
@@ -748,6 +753,33 @@ viewControllers.account = initAccountView(
   { auth }
 );
 viewControllers.admin = initAdminView(document.querySelector('.view[data-view="admin"]'));
+
+// 404 / 403. One shell, two routes; the route decides the wording. The wrong
+// URL stays in the address bar on a 404 so the reader can see the typo.
+viewControllers.error = {
+  onShow() {
+    const code = document.getElementById('error-code');
+    const title = document.getElementById('error-title');
+    const text = document.getElementById('error-text');
+    if (!code || !title || !text) return;
+    if (activeRoute === 'forbidden') {
+      code.textContent = '403';
+      title.textContent = 'No access';
+      text.textContent = 'This page belongs to an account or plan with more access than this one. Sign in, or ask whoever sent the link.';
+    } else {
+      const at = cleanPath();
+      code.textContent = '404';
+      title.textContent = 'Page not found';
+      text.textContent =
+        at && at !== '/404' ? `Nothing lives at ${at}. The link may be old or mistyped.` : 'Nothing lives at this address. The link may be old or mistyped.';
+    }
+  }
+};
+document.getElementById('error-back')?.addEventListener('click', () => {
+  // A fresh tab that opened straight onto the 404 has nowhere to go back to.
+  if (window.history.length > 1) window.history.back();
+  else setView('home', true);
+});
 
 // A "view as" session must be unmissable on every page, not only on /admin.
 mountImpersonationBanner();

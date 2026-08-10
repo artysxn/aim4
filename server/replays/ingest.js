@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import { materializeDemo } from './materialize.js';
-import { writeMaterialized } from './demoStore.js';
+import { readRecord, writeMaterialized } from './demoStore.js';
 
 /**
  * Name and persist every round of a parsed demo.
@@ -19,6 +19,24 @@ import { writeMaterialized } from './demoStore.js';
  */
 export async function ingestDemo(user, demoId, demo, meta = {}, onProgress = () => {}) {
   const { record, files } = materializeDemo(demo, demoId, meta, onProgress);
+
+  // The materialized record REPLACES the placeholder written when the upload
+  // was accepted, and the parser knows nothing about accounts — so ownership
+  // has to be carried across the swap or every parsed demo falls back to the
+  // legacy uploader and, worse, a private upload comes out public. `meta` wins
+  // when a caller stamps it explicitly (imports do); the placeholder fills the
+  // rest.
+  let placeholder = null;
+  try {
+    placeholder = await readRecord(user, demoId);
+  } catch {
+    placeholder = null;
+  }
+  record.uploaderId = meta.uploaderId || placeholder?.uploaderId || '';
+  record.uploaderName = meta.uploaderName || placeholder?.uploaderName || '';
+  const visibility = meta.visibility || placeholder?.visibility || '';
+  if (visibility) record.visibility = visibility;
+
   await writeMaterialized(user, record, files);
   return record;
 }

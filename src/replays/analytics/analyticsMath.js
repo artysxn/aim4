@@ -11,7 +11,9 @@ import {
   P,
   PLAYER_SLOTS,
   aggregatePlayers,
+  aggregateTeams,
   bucketRating,
+  indexMaps,
   rowPasses
 } from '../shared/statsMath.js';
 import { filterWindowsByShapes } from './shapeFilters.js';
@@ -462,6 +464,24 @@ export function leaderboardFromFiles(payload, files) {
     }
   }
   return aggregatePlayers(rows, players, { files: [...want] }, demos);
+}
+
+/**
+ * Full-round TEAM leaderboard for a set of matching round files. The same
+ * rounds the player board shows, seated by team: rounds played, rounds won,
+ * and the members' average rating over those rounds.
+ */
+export function teamLeaderboardFromFiles(payload, files) {
+  const want = new Set((files || []).filter(Boolean));
+  if (!want.size) return [];
+  const { players, demos } = indexMaps(payload);
+  const rows = [];
+  for (const demo of payload?.demos || []) {
+    for (const row of demo.rounds || []) {
+      if (row?.f && want.has(row.f)) rows.push(row);
+    }
+  }
+  return aggregateTeams(rows, players, demos, {});
 }
 
 /** Unique maps across a stats payload. */
