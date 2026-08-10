@@ -23,86 +23,71 @@ function factsForSource(facts, source) {
 }
 
 /**
- * One comparison side, normalized. A slot is a player OR a team, optionally
- * narrowed to maps and/or specific games. Accepts the legacy player-only
- * shape (`{ playerId, maps, matches }`) so saved views keep loading.
+ * One comparison side, normalized to { kind, id, maps, matches }.
+ * Accepts legacy shapes: `{ playerId }`, `{ kind, playerId, teamKey }`, `{ kind, id }`.
  */
 export function normalizeCompareSlot(raw) {
-  const kind = raw?.kind === 'team' ? 'team' : 'player';
-  return {
-    kind,
-    playerId: String(raw?.playerId || ''),
-    teamKey: String(raw?.teamKey || ''),
-    maps: Array.isArray(raw?.maps) ? raw.maps.map(String).filter(Boolean) : [],
-    matches: Array.isArray(raw?.matches) ? raw.matches.map(String).filter(Boolean) : []
-  };
-}
-
-/** A slot counts once its subject is picked. */
-export function compareSlotActive(slot) {
-  return slot?.kind === 'team' ? Boolean(slot.teamKey) : Boolean(slot?.playerId);
-}
-
-/**
- * The compare state's slot list. New shape is `{ on, slots: [...] }`; the old
- * two-player `{ on, a, b }` is folded in so nothing saved before teams existed
- * breaks.
- */
-export function compareStateSlots(compare) {
-  if (Array.isArray(compare?.slots)) return compare.slots.map(normalizeCompareSlot);
-  if (compare?.a || compare?.b) {
-    return [normalizeCompareSlot(compare.a), normalizeCompareSlot(compare.b)];
+  if (!raw || typeof raw !== 'object') {
+    return { kind: '', id: '', maps: [], matches: [] };
   }
-  return [];
+  const maps = Array.isArray(raw.maps) ? raw.maps.map(String).filter(Boolean) : [];
+  const matches = Array.isArray(raw.matches) ? raw.matches.map(String).filter(Boolean) : [];
+  if (raw.kind === 'team') {
+    const id = String(raw.id || raw.teamKey || '').trim();
+    return { kind: id ? 'team' : '', id, maps, matches };
+  }
+  if (raw.kind === 'player') {
+    const id = String(raw.id || raw.playerId || '').trim();
+    return { kind: id ? 'player' : '', id, maps, matches };
+  }
+  const legacyPlayer = String(raw.playerId || raw.id || '').trim();
+  if (legacyPlayer) {
+    return { kind: 'player', id: legacyPlayer, maps, matches };
+  }
+  return { kind: '', id: '', maps, matches };
+}
+
+/** @returns {null | { kind: 'team'|'player', id: string }} */
+function compareSlotEntity(s) {
+  const slot = normalizeCompareSlot(s);
+  if (!slot.kind || !slot.id) return null;
+  return { kind: slot.kind, id: slot.id };
+}
+
+/** Slot entries from compare state (a/b or legacy slots array). */
+function compareStateEntries(compare) {
+  if (Array.isArray(compare?.slots)) {
+    return compare.slots.map((s, i) => ({ key: i === 0 ? 'a' : i === 1 ? 'b' : `s${i}`, slot: s }));
+  }
+  const out = [];
+  for (const key of ['a', 'b']) {
+    if (compare?.[key]) out.push({ key, slot: compare[key] });
+  }
+  return out;
 }
 
 /**
- * Active compare slots. Any mix of players and teams: two players, two teams,
- * a player against their team, one team across two maps.
- * @returns {null | Array<{ key: string, label: string, kind: string, playerId: string, teamKey: string, maps: string[], matches: string[] }>}
+ * Active compare slots (A/B). Same subject on both sides is fine when maps or games differ.
+ * @returns {null | Array<{ key: string, label: string, kind: string, id: string, playerId: string, maps: string[], matches: string[] }>}
  */
-function compareSlotEntity(s) {
-  const kind = s?.kind === 'team' ? 'team' : s?.kind === 'player' ? 'player' : s?.playerId ? 'player' : '';
-  const id = String(s?.id || s?.playerId || '').trim();
-  if (!kind || !id) return null;
-  return { kind, id };
-}
-
 export function compareSlots(state, facts) {
   const c = state?.compare;
   if (!c?.on) return null;
-<<<<<<< HEAD
   const nameOf = (kind, id) => {
     if (kind === 'team') {
       const row = (facts?.teams || []).find((t) => String(t.key) === String(id));
       return row?.name || String(id);
     }
-=======
-  const playerName = (id) => {
->>>>>>> eed960faff48547228c341ce761814761ae62169
     const row = (facts?.players || []).find((p) => String(p.id) === String(id));
     return row?.name || String(id);
   };
-  const teamName = (key) => {
-    const row = (facts?.teams || []).find((t) => String(t.key) === String(key));
-    return row?.name || String(key);
-  };
   const slots = [];
-<<<<<<< HEAD
-  for (const key of ['a', 'b']) {
-    const s = c[key] || {};
+  for (const { key, slot: raw } of compareStateEntries(c)) {
+    const s = normalizeCompareSlot(raw);
     const entity = compareSlotEntity(s);
     if (!entity) continue;
-    const maps = Array.isArray(s.maps) ? s.maps.map(String).filter(Boolean) : [];
-    const matches = Array.isArray(s.matches) ? s.matches.map(String).filter(Boolean) : [];
-    const mapBit = maps.length
-      ? ` (${maps.map((m) => MAPS[m]?.name || m).join(', ')})`
-=======
-  compareStateSlots(c).forEach((s, i) => {
-    if (!compareSlotActive(s)) return;
     const mapBit = s.maps.length
       ? ` (${s.maps.map((m) => MAPS[m]?.name || m).join(', ')})`
->>>>>>> eed960faff48547228c341ce761814761ae62169
       : '';
     const gameBit =
       !mapBit && s.matches.length
@@ -110,27 +95,16 @@ export function compareSlots(state, facts) {
         : s.matches.length
           ? ` · ${s.matches.length}g`
           : '';
-    const name = s.kind === 'team' ? teamName(s.teamKey) : playerName(s.playerId);
     slots.push({
-<<<<<<< HEAD
       key,
       label: `${nameOf(entity.kind, entity.id)}${mapBit}${gameBit}`,
       kind: entity.kind,
       id: entity.id,
       playerId: entity.kind === 'player' ? entity.id : '',
-      maps,
-      matches
-=======
-      key: `s${i}`,
-      label: `${name}${mapBit}${gameBit}`,
-      kind: s.kind,
-      playerId: s.playerId,
-      teamKey: s.teamKey,
       maps: s.maps,
       matches: s.matches
->>>>>>> eed960faff48547228c341ce761814761ae62169
     });
-  });
+  }
   return slots.length ? slots : null;
 }
 
@@ -144,20 +118,11 @@ function filterWithoutPlayersMaps(base) {
 }
 
 function factInCompareSlot(f, slot) {
-<<<<<<< HEAD
   const kind = slot.kind || 'player';
   const id = String(slot.id || slot.playerId || '');
   if (kind === 'team') {
     if (String(f.teamKey || '') !== id) return false;
   } else if (String(f.playerId || '') !== id) {
-=======
-  if (slot.kind === 'team') {
-    // A team slot matches every fact that side produced: its rounds on the
-    // round source, its players' rounds on the player source, its kills on
-    // the kill source. All three carry teamKey.
-    if (String(f.teamKey || '') !== slot.teamKey) return false;
-  } else if (String(f.playerId || '') !== slot.playerId) {
->>>>>>> eed960faff48547228c341ce761814761ae62169
     return false;
   }
   if (slot.maps.length && !slot.maps.includes(String(f.map || ''))) return false;
