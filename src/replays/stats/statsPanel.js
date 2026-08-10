@@ -60,7 +60,6 @@ import calendarIcon from '../../icons/icon_calendar.svg?url';
  *   escapeHtml: (s: string) => string,
  *   onViewChange?: (state: object) => void,
  *   onDetailChange?: (detail: null | { kind: 'player'|'team', id?: string, name?: string, label: string }) => void,
- *   onBack?: () => boolean,
  *   onPlayRounds?: (files: string[], title: string) => void | Promise<void>
  * }} deps
  */
@@ -99,7 +98,6 @@ export function createStatsPanel({
   escapeHtml,
   onViewChange,
   onDetailChange,
-  onBack,
   onPlayRounds,
   /** Put Players / Teams / Filters in the site page-head next to DATABASE. */
   usePageHead = false
@@ -109,7 +107,6 @@ export function createStatsPanel({
   el.innerHTML = `
     <div class="st-head">
       <div class="st-head-main">
-        <button type="button" class="btn btn-sm st-back" data-st-back hidden>Back</button>
         ${
           usePageHead
             ? ''
@@ -159,7 +156,6 @@ export function createStatsPanel({
   const bodyEl = el.querySelector('#st-body');
   const scopeEl = el.querySelector('#st-scope');
   const tabsEl = pageHeadEl?.querySelector('.st-tabs') || el.querySelector('.st-tabs');
-  const backEl = el.querySelector('[data-st-back]');
   const detailLabelEl = el.querySelector('#st-detail-label');
 
   function mountPageHead() {
@@ -776,13 +772,6 @@ export function createStatsPanel({
     true
   );
 
-  backEl.addEventListener('click', () => {
-    // Prefer popping the detail history entry (opened via pushState). Pushing a
-    // third "list" URL made browser Back return to the player/team view.
-    if (typeof onBack === 'function' && onBack()) return;
-    clearDetail();
-  });
-
   /** True when the user is dragging a text selection inside a name link. */
   function selectionInside(el) {
     const sel = window.getSelection?.();
@@ -1237,7 +1226,6 @@ export function createStatsPanel({
 
   function syncHead() {
     const inDetail = Boolean(detail);
-    backEl.hidden = !inDetail;
     tabsEl.hidden = inDetail;
     detailLabelEl.hidden = !inDetail;
     if (inDetail) {

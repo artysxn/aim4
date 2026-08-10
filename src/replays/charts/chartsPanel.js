@@ -18,16 +18,14 @@ import {
 } from '../roles/regionKeys.js';
 import { buildFacts, emptyFilter } from './chartFacts.js';
 import {
-  CHART_TYPES,
   SUBJECTS,
-  dimensionsFor,
-  findDimension,
   findMetric,
   findSubject,
   formatValue,
   metricsFor,
   seriesFor
 } from './chartFields.js';
+import settingsIcon from '../../icons/icon_settings.svg?url';
 import {
   computeChart,
   correlationWords,
@@ -48,13 +46,6 @@ import { renderUpgradeError } from '../../site/upgradeGate.js';
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 5;
 
-const SOURCES = [
-  { key: 'kill', label: 'Kills' },
-  { key: 'player', label: 'Player rounds' },
-  { key: 'round', label: 'Team rounds' }
-];
-
-const SIDES = ['T', 'CT'];
 const KILL_KINDS = [
   { key: 'opening', label: 'First kill' },
   { key: 'gun', label: 'Gun' },
@@ -87,6 +78,14 @@ export function createChartsPanel({ escapeHtml }) {
   const sideEl = el.querySelector('#ch-side');
   const canvasEl = el.querySelector('#ch-canvas');
   const detailsEl = el.querySelector('#ch-details');
+
+  const pageHeadEl = document.createElement('div');
+  pageHeadEl.className = 'ch-page-actions';
+  pageHeadEl.innerHTML = `
+    <div class="ch-mode-tabs" role="tablist" aria-label="Charts mode">
+      <button type="button" class="seg-tab active" data-ch-mode="graph" role="tab" aria-selected="true">Graph</button>
+      <button type="button" class="seg-tab" data-ch-mode="compare" role="tab" aria-selected="false">Compare</button>
+    </div>`;
 
   let facts = null;
   let loadToken = 0;
@@ -131,6 +130,8 @@ export function createChartsPanel({ escapeHtml }) {
   let filterEntitySearch = { g: '', x: '', y: '' };
   /** @type {Record<string, boolean>} */
   let filterEntityMenuOpen = { g: false, x: false, y: false };
+  /** Gear-opened advanced filters for each axis. */
+  let axisFilterOpen = { x: false, y: false };
 
   function emptyCompareSlot() {
     return { kind: '', id: '', maps: [], matches: [] };
@@ -300,22 +301,32 @@ export function createChartsPanel({ escapeHtml }) {
       )
     ].join('');
 
-    const label = hasTeams && hasPlayers ? 'Teams & players' : hasTeams ? 'Teams' : 'Players';
-
-    return group(
-      label,
-      `<div class="ch-entity-typeahead rp-typeahead" id="ch-entity-typeahead-${scope}">
+    return `<div class="ch-entity-typeahead rp-typeahead" id="ch-entity-typeahead-${scope}">
         ${chips ? `<div class="an-sel-chips">${chips}</div>` : ''}
         <input type="search" class="site-input" data-entity-search="${scope}"
           placeholder="Search teams or players…" spellcheck="false" autocomplete="off"
           value="${escapeHtml(filterEntitySearch[scope] || '')}" aria-label="Search teams or players" />
         <div class="rp-typeahead-menu an-subject-menu" id="ch-entity-menu-${scope}" hidden></div>
-      </div>`
-    );
+      </div>`;
   }
 
-  const isScatter = () => state.type === 'scatter';
-  const source = () => (isScatter() ? findSubject(state.subject).source : state.source);
+  /** Charts are scatter-only; Compare is a mode on top of the same graph. */
+  const isScatter = () => true;
+  const source = () => findSubject(state.subject).source;
+
+  function syncModeTabs() {
+    const comparing = Boolean(state.compare?.on);
+    pageHeadEl.querySelectorAll('[data-ch-mode]').forEach((btn) => {
+      const on = comparing ? btn.dataset.chMode === 'compare' : btn.dataset.chMode === 'graph';
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+  }
+
+  function mountPageHead() {
+    document.getElementById('page-head-actions')?.replaceChildren(pageHeadEl);
+    syncModeTabs();
+  }
 
   // ---- saved views --------------------------------------------------------
   //
@@ -343,6 +354,8 @@ export function createChartsPanel({ escapeHtml }) {
         }
         state[key] = value;
       }
+      state.type = 'scatter';
+      syncModeTabs();
       renderSide();
       renderCanvas();
       mountSavedViews();
@@ -378,33 +391,109 @@ export function createChartsPanel({ escapeHtml }) {
     return `<select class="${cls}" ${attr}>${head}${opts}</select>`;
   }
 
-  function metricSelect(scope, value) {
+  function metricSelect(scope, value, axisLabel) {
     const list = metricsFor(source());
     const groups = [...new Set(list.map((m) => m.group))];
     const body = groups
-      .map(
-        (g) =>
-          `<optgroup label="${escapeHtml(g)}">${list
-            .filter((m) => m.group === g)
-            .map(
-              (m) =>
-                `<option value="${escapeHtml(m.key)}"${m.key === value ? ' selected' : ''} title="${escapeHtml(
-                  m.tip || ''
-                )}">${escapeHtml(m.label)}</option>`
-            )
-            .join('')}</optgroup>`
-      )
+      .map((g) => {
+        const opts = list
+          .filter((m) => m.group === g)
+          .map(
+            (m) => `<label class="ch-dd-opt" title="${escapeHtml(m.tip || '')}">
+            <input type="radio" name="ch-metric-${scope}" data-metric-pick="${scope}" value="${escapeHtml(
+              m.key
+            )}" ${m.key === value ? 'checked' : ''} />
+            <span>${escapeHtml(m.label)}</span>
+          </label>`
+          )
+          .join('');
+        return `<div class="ch-dd-group"><span class="ch-dd-group-label">${escapeHtml(g)}</span>${opts}</div>`;
+      })
       .join('');
-    return `<select class="site-select" data-metric="${scope}">${body}</select>`;
+    return `<details class="ch-dd ch-metric-dd" data-ch-metric="${scope}">
+      <summary class="site-select ch-dd-summary ch-axis-select" aria-label="${escapeHtml(
+        axisLabel
+      )}">${escapeHtml(axisLabel)}</summary>
+      <div class="ch-dd-menu" role="listbox" aria-label="${escapeHtml(axisLabel)}">${body}</div>
+    </details>`;
   }
 
-  function dimensionSelect(value) {
-    const list = dimensionsFor(source());
-    return selectHtml(
-      'data-dimension="x"',
-      list.map((d) => ({ key: d.key, label: d.label })),
-      list.some((d) => d.key === value) ? value : list[0]?.key
-    );
+  function summaryLabel(options, selected, emptyLabel) {
+    const sel = (selected || []).map(String).filter(Boolean);
+    if (!sel.length) return emptyLabel;
+    if (sel.length === 1) {
+      return options.find((o) => String(o.key) === sel[0])?.label || sel[0];
+    }
+    return `${sel.length} selected`;
+  }
+
+  /** Multi-select dropdown (Map / Role / buys) with placeholder text in the closed control. */
+  function multiDropdown(scope, key, options, selected, emptyLabel) {
+    if (!options.length) return '';
+    const sel = (selected || []).map(String);
+    const selSet = new Set(sel);
+    const checks = options
+      .map(
+        (o) => `<label class="ch-dd-opt">
+        <input type="checkbox" data-chip-check="${scope}|${key}" value="${escapeHtml(String(o.key))}" ${
+          selSet.has(String(o.key)) ? 'checked' : ''
+        } />
+        <span>${escapeHtml(o.label)}</span>
+      </label>`
+      )
+      .join('');
+    return `<details class="ch-dd" data-ch-dd="${scope}|${key}">
+      <summary class="site-select ch-dd-summary" aria-label="${escapeHtml(emptyLabel)}">${escapeHtml(
+        summaryLabel(options, sel, emptyLabel)
+      )}</summary>
+      <div class="ch-dd-menu" role="group" aria-label="${escapeHtml(emptyLabel)}">${checks}</div>
+    </details>`;
+  }
+
+  function sideSegHtml(scope, f) {
+    const sides = new Set((f.sides || []).map(String));
+    const active =
+      sides.has('T') && !sides.has('CT') ? 'T' : sides.has('CT') && !sides.has('T') ? 'CT' : '';
+    return `<div class="rp-seg rp-seg-side ch-side-seg" role="group" aria-label="Side">
+      <button type="button" class="rp-seg-btn${active === 'T' ? ' active' : ''}" data-side-seg="${scope}" data-value="T" aria-label="T" title="T">
+        <img src="/icons/icon_t.png" alt="" width="16" height="16" draggable="false" />
+      </button>
+      <button type="button" class="rp-seg-btn${active === 'CT' ? ' active' : ''}" data-side-seg="${scope}" data-value="CT" aria-label="CT" title="CT">
+        <img src="/icons/icon_ct.png" alt="" width="16" height="16" draggable="false" />
+      </button>
+    </div>`;
+  }
+
+  function awpToggle(scope, key, on) {
+    return `<label class="rp-awp-toggle ch-awp-toggle${on ? ' active' : ''}" title="Has AWP">
+      <input type="checkbox" data-flag="${scope}|${key}" ${on ? 'checked' : ''} aria-label="Has AWP" />
+      <span>AWP</span>
+    </label>`;
+  }
+
+  function exclusiveSeg(scope, key, options, value, extraClass = '') {
+    return `<div class="rp-seg ${extraClass}" role="group">
+      ${options
+        .map((o) => {
+          const on = String(value || '') === String(o.key);
+          return `<button type="button" class="rp-seg-btn${on ? ' active' : ''}" data-exclusive-chip="${scope}|${key}" data-value="${escapeHtml(
+            String(o.key)
+          )}" aria-pressed="${on ? 'true' : 'false'}" title="${escapeHtml(o.label)}">${escapeHtml(
+            o.short || o.label
+          )}</button>`;
+        })
+        .join('')}
+    </div>`;
+  }
+
+  function axisGear(scope) {
+    const open = Boolean(axisFilterOpen[scope]);
+    const active = filterWords(state[scope].filter).length > 0 || open;
+    return `<button type="button" class="ch-gear${active ? ' active' : ''}" data-axis-gear="${scope}" aria-expanded="${
+      open ? 'true' : 'false'
+    }" aria-label="${scope === 'y' ? 'Y' : 'X'} filters" title="Filters">
+      <img src="${settingsIcon}" alt="" width="16" height="16" draggable="false" />
+    </button>`;
   }
 
   /** Clickable chips: click selects, click again clears (no Ctrl needed). */
@@ -419,23 +508,6 @@ export function createChartsPanel({ escapeHtml }) {
       })
       .join('')}</div>`;
   }
-
-  /** Single-choice chips: click selects, click the active one clears to Any. */
-  function exclusiveChips(scope, key, options, value) {
-    return `<div class="ch-chips" role="group">${options
-      .map((o) => {
-        const on = String(value || '') === String(o.key);
-        return `<button type="button" class="ch-chip${on ? ' on' : ''}" data-exclusive-chip="${scope}|${key}" data-value="${escapeHtml(
-          String(o.key)
-        )}" aria-pressed="${on ? 'true' : 'false'}">${escapeHtml(o.label)}</button>`;
-      })
-      .join('')}</div>`;
-  }
-
-  const group = (label, body, extra = '') =>
-    `<div class="ch-group${extra ? ` ${extra}` : ''}"><span class="ch-label">${escapeHtml(
-      label
-    )}</span>${body}</div>`;
 
   // ---- filter editor ------------------------------------------------------
 
@@ -485,112 +557,90 @@ export function createChartsPanel({ escapeHtml }) {
     const arr = (key) => f[key] || [];
 
     const rows = [
-      scope === 'g'
-        ? ''
-        : group(
-            'Measure',
-            checkFlag(scope, 'perRound', 'Divide by played rounds', Boolean(f.perRound))
-          ),
+      scope === 'g' ? '' : checkFlag(scope, 'perRound', 'Divide by played rounds', Boolean(f.perRound)),
       maps.length > 1 && !(scope === 'g' && state.compare?.on)
-        ? group('Map', multiSelect(scope, 'maps', maps, arr('maps')))
+        ? multiDropdown(scope, 'maps', maps, arr('maps'), 'Map')
         : '',
-      group(
-        'Side',
-        multiSelect(
-          scope,
-          'sides',
-          SIDES.map((s) => ({ key: s, label: s })),
-          arr('sides')
-        )
-      ),
+      sideSegHtml(scope, f),
       src === 'player' || src === 'kill'
-        ? group('Role', multiSelect(scope, 'roles', roleFilterOptions(f), arr('roles')))
+        ? multiDropdown(scope, 'roles', roleFilterOptions(f), arr('roles'), 'Role')
         : '',
-      group(
-        'Own buy',
-        `${multiSelect(scope, 'econ', econOpts, arr('econ'))}${checkFlag(
+      `<div class="ch-filter-row">${multiDropdown(
+        scope,
+        'econ',
+        econOpts,
+        arr('econ'),
+        'Own buy'
+      )}${awpToggle(scope, 'hasAwp', Boolean(f.hasAwp))}</div>`,
+      `<div class="ch-filter-row">${multiDropdown(
+        scope,
+        'oppEcon',
+        econOpts,
+        arr('oppEcon'),
+        'Enemy buy'
+      )}${awpToggle(scope, 'oppHasAwp', Boolean(f.oppHasAwp))}</div>`,
+      `<div class="ch-round-segs">
+        ${exclusiveSeg(
           scope,
-          'hasAwp',
-          'Has AWP',
-          Boolean(f.hasAwp)
-        )}`
-      ),
-      group(
-        'Enemy buy',
-        `${multiSelect(scope, 'oppEcon', econOpts, arr('oppEcon'))}${checkFlag(
+          'result',
+          [
+            { key: 'won', label: 'Won', short: 'W' },
+            { key: 'lost', label: 'Lost', short: 'L' }
+          ],
+          f.result || '',
+          'ch-seg-wl'
+        )}
+        ${exclusiveSeg(
           scope,
-          'oppHasAwp',
-          'Has AWP',
-          Boolean(f.oppHasAwp)
-        )}`
-      ),
-      group(
-        'Round',
-        `<div class="ch-select-stack">
-          ${exclusiveChips(
-            scope,
-            'result',
-            [
-              { key: 'won', label: 'Won' },
-              { key: 'lost', label: 'Lost' }
-            ],
-            f.result || ''
-          )}
-          ${exclusiveChips(
-            scope,
-            'opening',
-            [
-              { key: '5v4', label: '5v4' },
-              { key: '4v5', label: '4v5' },
-              { key: 'even', label: 'Even' }
-            ],
-            f.opening || ''
-          )}
-          ${exclusiveChips(
-            scope,
-            'half',
-            [
-              { key: '1', label: '1st half' },
-              { key: '2', label: '2nd half' }
-            ],
-            f.half || ''
-          )}
-        </div>`
-      ),
-      group(
-        'Round number',
-        `<div class="ch-range"><input class="site-input" type="number" min="1" max="99" placeholder="from" value="${
+          'opening',
+          [
+            { key: '5v4', label: '5v4', short: '5v4' },
+            { key: '4v5', label: '4v5', short: '4v5' }
+          ],
+          f.opening || '',
+          'ch-seg-adv'
+        )}
+        ${exclusiveSeg(
+          scope,
+          'half',
+          [
+            { key: '1', label: '1st half', short: '1. half' },
+            { key: '2', label: '2nd half', short: '2. half' }
+          ],
+          f.half || '',
+          'ch-seg-half'
+        )}
+      </div>`,
+      `<div class="ch-range ch-range-fill">
+        <input class="site-input" type="number" min="1" max="99" placeholder="from" value="${
           f.roundFrom ?? ''
-        }" data-num="${scope}|roundFrom" /><input class="site-input" type="number" min="1" max="99" placeholder="to" value="${
+        }" data-num="${scope}|roundFrom" aria-label="Round from" />
+        <input class="site-input" type="number" min="1" max="99" placeholder="to" value="${
           f.roundTo ?? ''
-        }" data-num="${scope}|roundTo" /></div>`
-      ),
+        }" data-num="${scope}|roundTo" aria-label="Round to" />
+      </div>`,
+      killable ? multiDropdown(scope, 'killKinds', KILL_KINDS, arr('killKinds'), 'Kill type') : '',
+      killable ? multiDropdown(scope, 'phases', PHASES, arr('phases'), 'Phase') : '',
       killable
-        ? group('Kill type', multiSelect(scope, 'killKinds', KILL_KINDS, arr('killKinds')))
-        : '',
-      killable ? group('Phase', multiSelect(scope, 'phases', PHASES, arr('phases'))) : '',
-      killable
-        ? group(
-            'Time in round',
-            `<div class="ch-range"><input class="site-input" type="number" step="1" placeholder="from s" value="${
+        ? `<div class="ch-range ch-range-fill">
+            <input class="site-input" type="number" step="1" placeholder="from s" value="${
               f.timeFrom ?? ''
-            }" data-num="${scope}|timeFrom" /><input class="site-input" type="number" step="1" placeholder="to s" value="${
+            }" data-num="${scope}|timeFrom" aria-label="Time from" />
+            <input class="site-input" type="number" step="1" placeholder="to s" value="${
               f.timeTo ?? ''
-            }" data-num="${scope}|timeTo" /></div>`
-          )
+            }" data-num="${scope}|timeTo" aria-label="Time to" />
+          </div>`
         : '',
       facts?.teams?.length || (facts?.players?.length && !(scope === 'g' && state.compare?.on))
         ? entityFilterHtml(scope, f)
         : '',
       killable && facts?.weapons?.length
-        ? group(
-            'Weapons',
-            multiSelect(
-              scope,
-              'weapons',
-              facts.weapons.slice(0, 40).map((w) => ({ key: w, label: w })),
-              arr('weapons')
-            )
+        ? multiDropdown(
+            scope,
+            'weapons',
+            facts.weapons.slice(0, 40).map((w) => ({ key: w, label: w })),
+            arr('weapons'),
+            'Weapons'
           )
         : ''
     ];
@@ -697,110 +747,52 @@ export function createChartsPanel({ escapeHtml }) {
   function renderSide() {
     const src = source();
     const seriesOpts = seriesFor(src).map((d) => ({ key: d.key, label: d.label }));
-    const dim = isScatter() ? null : findDimension(src, state.x.dimension);
-    const stepOpts = (dim?.steps || []).map((s) => ({ key: String(s), label: `${s}${dim.unit || ''}` }));
     const comparing = Boolean(state.compare?.on);
 
     sideEl.innerHTML = `
       <div class="ch-block ch-saved" id="ch-saved"></div>
       <div class="ch-block">
-        <span class="ch-label">Chart</span>
         ${selectHtml(
-          'data-type-select',
-          CHART_TYPES.map((t) => ({ key: t.key, label: t.label })),
-          state.type
+          'data-subject',
+          SUBJECTS.map((s) => ({ key: s.key, label: s.label })),
+          state.subject
         )}
-        ${
-          isScatter()
-            ? group(
-                'One point is',
-                selectHtml(
-                  'data-subject',
-                  SUBJECTS.map((s) => ({ key: s.key, label: s.label })),
-                  state.subject
-                )
-              )
-            : group(
-                'Measured over',
-                selectHtml(
-                  'data-source',
-                  SOURCES.map((s) => ({ key: s.key, label: s.label })),
-                  state.source
-                )
-              )
-        }
-        <label class="ch-check">
-          <input type="checkbox" data-compare-on${comparing ? ' checked' : ''} />
-          Compare mode
-        </label>
         ${compareSlotsBlock()}
       </div>
 
       <div class="ch-block">
-        <span class="ch-label">Y axis</span>
-        ${metricSelect('y', state.y.metric)}
-        <details class="ch-axis-filter"${filterWords(state.y.filter).length ? ' open' : ''}>
-          <summary>Y filters${
-            filterWords(state.y.filter).length ? ` (${escapeHtml(filterWords(state.y.filter).join(', '))})` : ''
-          }</summary>
+        <div class="ch-axis-row">
+          ${metricSelect('y', state.y.metric, 'Y Axis')}
+          ${axisGear('y')}
+        </div>
+        <div class="ch-axis-panel"${axisFilterOpen.y ? '' : ' hidden'}>
           ${filterHtml('y', state.y.filter)}
-        </details>
+        </div>
       </div>
 
       <div class="ch-block">
-        <span class="ch-label">X axis</span>
-        ${isScatter() ? metricSelect('x', state.x.metric) : dimensionSelect(state.x.dimension)}
-        ${
-          !isScatter() && stepOpts.length > 1
-            ? group('Bin width', selectHtml('data-step', stepOpts, String(state.binStep)))
-            : ''
-        }
-        ${
-          isScatter()
-            ? `<details class="ch-axis-filter"${
-                filterWords(state.x.filter).length ? ' open' : ''
-              }><summary>X filters${
-                filterWords(state.x.filter).length
-                  ? ` (${escapeHtml(filterWords(state.x.filter).join(', '))})`
-                  : ''
-              }</summary>${filterHtml('x', state.x.filter)}</details>`
-            : ''
-        }
+        <div class="ch-axis-row">
+          ${metricSelect('x', state.x.metric, 'X Axis')}
+          ${axisGear('x')}
+        </div>
+        <div class="ch-axis-panel"${axisFilterOpen.x ? '' : ' hidden'}>
+          ${filterHtml('x', state.x.filter)}
+        </div>
       </div>
 
       <div class="ch-block"${comparing ? ' hidden' : ''}>
-        <span class="ch-label">Split into series</span>
-        ${selectHtml('data-series', seriesOpts, state.series, { placeholder: 'No split' })}
+        ${selectHtml('data-series', seriesOpts, state.series, { placeholder: 'Color by' })}
       </div>
 
       <div class="ch-block">
-        <span class="ch-label">Options</span>
-        <div class="ch-select-stack">
-          <label class="ch-check"><input type="checkbox" data-toggle="trendline"${
-            state.trendline ? ' checked' : ''
-          } /> Trendline</label>
-          ${
-            isScatter()
-              ? ''
-              : `<label class="ch-check"><input type="checkbox" data-toggle="normalize"${
-                  state.normalize ? ' checked' : ''
-                } /> As share %</label>`
-          }
-        </div>
         <div class="ch-range">
           <label class="ch-mini">Min rounds<input class="site-input" type="number" min="0" value="${
             state.minRounds
           }" data-opt="minRounds" /></label>
-          ${
-            isScatter()
-              ? ''
-              : `<label class="ch-mini">Max groups<input class="site-input" type="number" min="2" value="${state.maxCats}" data-opt="maxCats" /></label>`
-          }
         </div>
       </div>
 
       <div class="ch-block">
-        <span class="ch-label">Filters for the whole chart</span>
         ${filterHtml('g', state.filter)}
       </div>`;
     for (const slot of ['a', 'b']) refreshCompareMenu(slot);
@@ -907,19 +899,24 @@ export function createChartsPanel({ escapeHtml }) {
     const infoPop = bits.map((b) => `<div>${escapeHtml(b)}</div>`).join('');
 
     canvasEl.innerHTML = `
-      <div class="ch-head">
-        <h3 class="ch-title">${escapeHtml(chartTitle(model))}</h3>
-        <button type="button" class="btn btn-sm" data-save>Save SVG</button>
-      </div>
       <div class="ch-plot" id="ch-plot">
+        <div class="ch-plot-chrome">
+          <h3 class="ch-title">${escapeHtml(chartTitle(model))}</h3>
+          <div class="ch-plot-actions">
+            <label class="ch-check ch-trendline"><input type="checkbox" data-toggle="trendline"${
+              state.trendline ? ' checked' : ''
+            } /> Trendline</label>
+            <button type="button" class="btn btn-sm" data-save>Save SVG</button>
+            <div class="ch-info">
+              <button type="button" class="ch-info-btn" aria-label="Chart fit details">i</button>
+              <div class="ch-info-pop" role="tooltip">${infoPop}</div>
+            </div>
+          </div>
+        </div>
         <div class="ch-plot-viewport">
           <div class="ch-plot-stage">${svg}</div>
         </div>
         <div class="ch-tip" id="ch-tip" hidden></div>
-        <div class="ch-info">
-          <button type="button" class="ch-info-btn" aria-label="Chart fit details">i</button>
-          <div class="ch-info-pop" role="tooltip">${infoPop}</div>
-        </div>
       </div>`;
 
     resetPlotView();
@@ -1003,7 +1000,7 @@ export function createChartsPanel({ escapeHtml }) {
     (e) => {
       const plot = plotRoot();
       if (!plot || !plot.contains(e.target)) return;
-      if (e.target.closest('.ch-info, .ch-head, button')) return;
+      if (e.target.closest('.ch-info, .ch-plot-chrome, button, label')) return;
       e.preventDefault();
       const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
       setPlotZoom(plotZoom * factor, e.clientX, e.clientY);
@@ -1014,7 +1011,7 @@ export function createChartsPanel({ escapeHtml }) {
   canvasEl.addEventListener('pointerdown', (e) => {
     const plot = plotRoot();
     if (!plot || !plot.contains(e.target)) return;
-    if (e.target.closest('.ch-info, button, .ch-head')) return;
+    if (e.target.closest('.ch-info, button, label, .ch-plot-chrome')) return;
     const isPanBtn = e.button === 0 || e.button === 1;
     if (!isPanBtn || plotZoom <= MIN_ZOOM) return;
     panning = true;
@@ -1065,24 +1062,71 @@ export function createChartsPanel({ escapeHtml }) {
   }
 
   function afterChange({ rebuildSide = true } = {}) {
+    syncModeTabs();
     if (rebuildSide) renderSide();
     renderCanvas();
     savedViews.touch();
   }
 
-  function applyChartType(type) {
-    state.type = type;
-    const src = source();
-    state.y.metric = findMetric(src, state.y.metric).key;
-    state.x.metric = findMetric(src, state.x.metric).key;
-    const dim = findDimension(src, state.x.dimension);
-    state.x.dimension = dim?.key || '';
-    state.binStep = dim?.step || 1;
-    if (state.series && !seriesFor(src).some((d) => d.key === state.series)) state.series = '';
+  function placeDdMenu(details) {
+    const menu = details?.querySelector?.('.ch-dd-menu');
+    const summary = details?.querySelector?.('summary');
+    if (!menu || !summary) return;
+    const r = summary.getBoundingClientRect();
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+    menu.style.left = `${Math.round(r.left)}px`;
+    menu.style.minWidth = `${Math.round(Math.max(r.width, 180))}px`;
+  }
+
+  function closeDdMenus(except = null) {
+    for (const d of sideEl.querySelectorAll('details.ch-dd[open]')) {
+      if (except && d === except) continue;
+      d.removeAttribute('open');
+    }
+  }
+
+  function setCompareMode(on) {
+    state.compare.on = Boolean(on);
+    state.type = 'scatter';
+    syncModeTabs();
     afterChange();
   }
 
+  pageHeadEl.addEventListener('click', (e) => {
+    const mode = e.target.closest('[data-ch-mode]')?.dataset?.chMode;
+    if (mode === 'graph') setCompareMode(false);
+    else if (mode === 'compare') setCompareMode(true);
+  });
+
+  sideEl.addEventListener('toggle', (e) => {
+    const details = e.target.closest?.('details.ch-dd');
+    if (!details || e.target !== details) return;
+    if (details.open) {
+      closeDdMenus(details);
+      placeDdMenu(details);
+    }
+  }, true);
+
   sideEl.addEventListener('click', (e) => {
+    const gear = e.target.closest('[data-axis-gear]');
+    if (gear) {
+      const scope = gear.dataset.axisGear;
+      if (scope === 'x' || scope === 'y') {
+        axisFilterOpen[scope] = !axisFilterOpen[scope];
+        afterChange();
+      }
+      return;
+    }
+    const sideBtn = e.target.closest('[data-side-seg]');
+    if (sideBtn) {
+      const scope = sideBtn.dataset.sideSeg;
+      const val = String(sideBtn.dataset.value || '');
+      const f = filterFor(scope);
+      const cur = String((f.sides || [])[0] || '');
+      f.sides = cur === val ? [] : [val];
+      afterChange();
+      return;
+    }
     const comparePick = e.target.closest('[data-compare-pick]');
     if (comparePick) {
       const [kind, id] = String(comparePick.dataset.comparePick || '').split('|');
@@ -1187,7 +1231,6 @@ export function createChartsPanel({ escapeHtml }) {
       if (at >= 0) cur.splice(at, 1);
       else cur.push(String(val));
       f[key] = key === 'econ' || key === 'oppEcon' ? cur.map(Number) : cur;
-      // Map chips reshape the Role list; rebuild so options stay in sync.
       if (key === 'maps') {
         afterChange();
         return;
@@ -1206,6 +1249,17 @@ export function createChartsPanel({ escapeHtml }) {
       afterChange();
     }
   });
+
+  document.addEventListener('pointerdown', (e) => {
+    if (!sideEl.contains(e.target)) closeDdMenus();
+  });
+  window.addEventListener(
+    'scroll',
+    () => {
+      for (const d of sideEl.querySelectorAll('details.ch-dd[open]')) placeDdMenu(d);
+    },
+    true
+  );
 
   sideEl.addEventListener('input', (e) => {
     const slot = e.target.dataset?.compareSearch;
@@ -1276,15 +1330,35 @@ export function createChartsPanel({ escapeHtml }) {
     }
   });
 
-  sideEl.addEventListener('change', (e) => {
+  function onBuilderChange(e) {
     const t = e.target;
-    if (t.matches('[data-compare-on]')) {
-      state.compare.on = Boolean(t.checked);
-      afterChange();
-      return;
-    }
-    if (t.matches('[data-type-select]')) {
-      applyChartType(t.value);
+    if (t.matches('[data-chip-check]')) {
+      const [scope, key] = t.dataset.chipCheck.split('|');
+      const f = filterFor(scope);
+      const boxes = [
+        ...sideEl.querySelectorAll(`input[type="checkbox"][data-chip-check="${scope}|${key}"]`)
+      ];
+      const cur = boxes.filter((b) => b.checked).map((b) => b.value);
+      f[key] = key === 'econ' || key === 'oppEcon' ? cur.map(Number) : cur;
+      const details = t.closest('details.ch-dd');
+      const summary = details?.querySelector('summary');
+      if (summary) {
+        const opts = boxes.map((b) => ({
+          key: b.value,
+          label: b.parentElement?.querySelector('span')?.textContent || b.value
+        }));
+        const emptyLabels = {
+          maps: 'Map',
+          roles: 'Role',
+          econ: 'Own buy',
+          oppEcon: 'Enemy buy',
+          killKinds: 'Kill type',
+          phases: 'Phase',
+          weapons: 'Weapons'
+        };
+        summary.textContent = summaryLabel(opts, cur, emptyLabels[key] || 'Selected');
+      }
+      afterChange({ rebuildSide: key === 'maps' });
       return;
     }
     if (t.matches('[data-toggle]')) {
@@ -1295,6 +1369,7 @@ export function createChartsPanel({ escapeHtml }) {
     if (t.matches('[data-flag]')) {
       const [scope, key] = t.dataset.flag.split('|');
       filterFor(scope)[key] = Boolean(t.checked);
+      t.closest?.('.rp-awp-toggle')?.classList.toggle('active', t.checked);
       afterChange({ rebuildSide: false });
       return;
     }
@@ -1307,33 +1382,13 @@ export function createChartsPanel({ escapeHtml }) {
       afterChange();
       return;
     }
-    if (t.matches('[data-source]')) {
-      state.source = t.value;
-      const src = source();
-      state.y.metric = findMetric(src, state.y.metric).key;
-      const dim = findDimension(src, state.x.dimension);
-      state.x.dimension = dim?.key || '';
-      state.binStep = dim?.step || 1;
-      if (state.series && !seriesFor(src).some((d) => d.key === state.series)) state.series = '';
-      afterChange();
-      return;
-    }
-    if (t.matches('[data-metric]')) {
-      const scope = t.dataset.metric;
-      state[scope].metric = t.value;
-      afterChange();
-      return;
-    }
-    if (t.matches('[data-dimension]')) {
-      state.x.dimension = t.value;
-      const dim = findDimension(source(), t.value);
-      state.binStep = dim?.step || 1;
-      afterChange();
-      return;
-    }
-    if (t.matches('[data-step]')) {
-      state.binStep = Number(t.value) || 1;
-      afterChange({ rebuildSide: false });
+    if (t.matches('[data-metric-pick]')) {
+      const scope = t.dataset.metricPick;
+      if ((scope === 'x' || scope === 'y') && t.value) {
+        state[scope].metric = t.value;
+        closeDdMenus();
+        afterChange();
+      }
       return;
     }
     if (t.matches('[data-series]')) {
@@ -1352,7 +1407,10 @@ export function createChartsPanel({ escapeHtml }) {
       filterFor(scope)[key] = raw === null || Number.isNaN(raw) ? null : raw;
       afterChange({ rebuildSide: false });
     }
-  });
+  }
+
+  sideEl.addEventListener('change', onBuilderChange);
+  canvasEl.addEventListener('change', onBuilderChange);
 
   // ---- hover / save -------------------------------------------------------
 
@@ -1480,10 +1538,8 @@ export function createChartsPanel({ escapeHtml }) {
           '<p class="view-empty">No parsed rounds to chart yet. Upload a replay first.</p>';
         return;
       }
-      if (!facts.hasKillTimes) {
-        // Pre-v10 indexes have no kill clock, so start on a chart that works.
-        state.type = 'scatter';
-      }
+      state.type = 'scatter';
+      mountPageHead();
       renderSide();
       renderCanvas();
       mountSavedViews();
@@ -1514,9 +1570,11 @@ export function createChartsPanel({ escapeHtml }) {
   return {
     el,
     load,
+    mountPageHead,
     destroy() {
       document.removeEventListener('pointermove', onDocPointerMove);
       hideTip();
+      if (pageHeadEl.isConnected) pageHeadEl.remove();
       el.remove();
     }
   };

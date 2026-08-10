@@ -3517,13 +3517,6 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
           if (subpage !== 'stats') return;
           syncStatsUrl(state);
         },
-        onBack() {
-          const q = new URLSearchParams(window.location.search);
-          if (!q.has('player') && !q.has('team')) return false;
-          // Pop the detail entry; popstate re-applies the previous list URL.
-          window.history.back();
-          return true;
-        },
         onPlayRounds: playAnalyticsRounds
       });
       statsBodyEl.appendChild(statsPanel.el);
@@ -3643,6 +3636,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       chartsPanel = createChartsPanel({ escapeHtml });
       chartsBodyEl.appendChild(chartsPanel.el);
     }
+    chartsPanel.mountPageHead?.();
     // `params` carries ?view=<shareId> through to the saved-views strip.
     chartsPanel.load({
       ...statsScope,
