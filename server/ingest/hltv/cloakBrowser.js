@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import { launchContext, launchPersistentContext } from 'cloakbrowser';
 
@@ -16,6 +17,8 @@ const DEFAULT_NAVIGATION_TIMEOUT_MS = 60_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
 const DEFAULT_DOWNLOAD_DEADLINE_MS = 30 * 60_000;
 const DEFAULT_STALL_MS = 60_000;
+let displayPromise = null;
+let xvfbProcess = null;
 
 const bool = (value, fallback) => {
   if (value === undefined || value === null || value === '') return fallback;
@@ -29,6 +32,48 @@ const profilePathFor = (cfg) =>
   cfg.cloakProfileDir
     ? path.join(cfg.cloakProfileDir, cfg.cloakSessionName || 'default')
     : '';
+
+async function ensureHeadedDisplay() {
+  if (process.platform !== 'linux' || process.env.DISPLAY) return;
+  if (displayPromise) return displayPromise;
+  displayPromise = (async () => {
+    const displayNumber = 99;
+    const display = `:${displayNumber}`;
+    const socket = `/tmp/.X11-unix/X${displayNumber}`;
+    if (await fsp.access(socket).then(() => true, () => false)) {
+      process.env.DISPLAY = display;
+      return;
+    }
+
+    xvfbProcess = spawn(
+      'Xvfb',
+      [display, '-screen', '0', '1920x1080x24', '-nolisten', 'tcp'],
+      { stdio: 'ignore' }
+    );
+    xvfbProcess.unref();
+    let launchError = null;
+    xvfbProcess.once('error', (err) => {
+      launchError = err;
+    });
+    process.once('exit', () => xvfbProcess?.kill());
+
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (launchError) {
+        throw new Error(
+          `Could not start Xvfb for headed CloakBrowser: ${launchError.message}. Rebuild the Docker image so the xvfb package is installed.`
+        );
+      }
+      if (await fsp.access(socket).then(() => true, () => false)) {
+        process.env.DISPLAY = display;
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error('Xvfb did not create a display within 5 seconds');
+  })();
+  return displayPromise;
+}
 
 /**
  * Launch options are environment-driven because the same code runs locally
@@ -144,6 +189,7 @@ export function createCloakSession(cfg = {}) {
       if (downloadsPath) await fsp.mkdir(downloadsPath, { recursive: true });
       if (profilePath) await fsp.mkdir(profilePath, { recursive: true });
       const options = launchOptions(cfg);
+      if (options.headless === false) await ensureHeadedDisplay();
       const args = [];
       if (bool(cfg.cloakDisableHttp2, true)) args.push('--disable-http2');
       if (profilePath) {
