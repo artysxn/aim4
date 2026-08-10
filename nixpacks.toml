@@ -1,2 +1,12 @@
 [phases.setup]
-aptPkgs = ["...", "xvfb", "xauth"]
+aptPkgs = [
+  "...",
+  "xvfb",
+  "xauth",
+  "fonts-noto-color-emoji",
+  "fonts-freefont-ttf",
+  "fonts-unifont",
+  "fonts-ipafont-gothic",
+  "fonts-wqy-zenhei",
+  "fonts-tlwg-loma-otf"
+]

@@ -92,6 +92,7 @@ function launchOptions(cfg = {}) {
     headless: bool(cfg.cloakHeadless ?? process.env.AIM4_CLOAK_HEADLESS, false),
     humanize,
     ...(humanize ? { humanPreset } : {}),
+    ...(cfg.cloakLicenseKey ? { licenseKey: cfg.cloakLicenseKey } : {}),
     ...(proxy ? { proxy } : {}),
     ...(downloadsPath ? { launchOptions: { downloadsPath } } : {}),
     contextOptions: {
@@ -185,6 +186,7 @@ async function clearStaleProfileLock(profilePath) {
  *   cloakHumanPreset?: string,
  *   cloakDisableHttp2?: boolean,
  *   cloakFingerprintSeed?: string,
+ *   cloakLicenseKey?: string,
  *   cloakProxy?: string,
  *   cloakSettleMs?: number,
  *   cloakProfileDir?: string,

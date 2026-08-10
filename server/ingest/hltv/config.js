@@ -52,6 +52,7 @@ export function loadConfig(overrides = {}) {
     cloakHumanPreset: env.AIM4_CLOAK_HUMAN_PRESET || 'careful',
     cloakDisableHttp2: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_DISABLE_HTTP2 || 'true'),
     cloakFingerprintSeed: env.AIM4_CLOAK_FINGERPRINT_SEED || '',
+    cloakLicenseKey: env.AIM4_CLOAK_LICENSE_KEY || env.CLOAKBROWSER_LICENSE_KEY || '',
     cloakProxy: env.AIM4_CLOAK_PROXY || '',
     cloakSettleMs: num(env.AIM4_CLOAK_SETTLE_MS, 5000),
     cloakDownloadDeadlineMs: num(env.AIM4_CLOAK_DOWNLOAD_DEADLINE_MS, 30 * 60_000),
