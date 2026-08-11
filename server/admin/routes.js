@@ -525,6 +525,13 @@ async function route(req, res, url, me) {
     return true;
   }
 
+  if (req.method === 'GET' && p === '/api/admin/ingest/log') {
+    const url = new URL(req.url, 'http://local');
+    const tail = Number(url.searchParams.get('tail')) || 999;
+    json(res, req, 200, await ingest.readIngestLog({ tail }));
+    return true;
+  }
+
   if (req.method === 'POST' && p === '/api/admin/ingest/start') {
     const result = await ingest.start();
     await writeAudit({

@@ -53,6 +53,7 @@ export const adminApi = {
   // status they return is the same shape as ingestStatus so the panel can
   // redraw from the response without a second round trip.
   ingestStatus: () => get('/api/admin/ingest'),
+  ingestLog: (tail = 999) => get(`/api/admin/ingest/log?tail=${encodeURIComponent(tail)}`),
   ingestStart: () => send('POST', '/api/admin/ingest/start'),
   ingestStop: () => send('POST', '/api/admin/ingest/stop'),
 

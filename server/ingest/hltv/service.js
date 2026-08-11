@@ -112,8 +112,11 @@ async function spawnIngester(c, options = {}) {
   await fsp.mkdir(c.workDir, { recursive: true });
 
   const args = [CLI, 'run', '--continuous'];
-  if (options.source || c.source) args.push('--source', options.source || c.source);
-  if (options.inbox || c.inbox) args.push('--inbox', options.inbox || c.inbox);
+  // Prefer resolved config (local-without-inbox already coerced to hltv).
+  const source = options.source || c.source || 'hltv';
+  const inbox = options.inbox || c.inbox || '';
+  args.push('--source', source === 'local' && !inbox ? 'hltv' : source);
+  if (inbox) args.push('--inbox', inbox);
   if (options.since || c.since) args.push('--since', options.since || c.since);
 
   // Raw descriptors, not pipes. A detached child that logs through a pipe to
@@ -346,4 +349,47 @@ export async function status() {
     },
     updatedAt: file.updatedAt || null
   };
+}
+
+const LOG_TAIL_DEFAULT = 999;
+const LOG_READ_BYTES_CAP = 2 * 1024 * 1024;
+
+/**
+ * Last N lines of the detached ingester's stdout/stderr log.
+ * Polled by the admin console while the panel is open.
+ */
+export async function readIngestLog({ tail = LOG_TAIL_DEFAULT } = {}) {
+  const c = cfg();
+  const logPath = path.join(c.stateDir, 'ingest.log');
+  const maxLines = Math.max(1, Math.min(LOG_TAIL_DEFAULT, Number(tail) || LOG_TAIL_DEFAULT));
+  try {
+    const stat = await fsp.stat(logPath);
+    const readSize = Math.min(stat.size, LOG_READ_BYTES_CAP);
+    const fh = await fsp.open(logPath, 'r');
+    try {
+      const buf = Buffer.alloc(readSize);
+      await fh.read(buf, 0, readSize, Math.max(0, stat.size - readSize));
+      let text = buf.toString('utf8');
+      if (stat.size > readSize) {
+        const cut = text.indexOf('\n');
+        text = cut >= 0 ? text.slice(cut + 1) : text;
+      }
+      const lines = text.split(/\r?\n/);
+      if (lines.length && lines[lines.length - 1] === '') lines.pop();
+      return {
+        path: logPath,
+        lines: lines.slice(-maxLines),
+        bytes: stat.size,
+        mtime: stat.mtime.toISOString(),
+        truncated: stat.size > readSize || lines.length > maxLines
+      };
+    } finally {
+      await fh.close();
+    }
+  } catch (err) {
+    if (err?.code === 'ENOENT') {
+      return { path: logPath, lines: [], bytes: 0, mtime: null, truncated: false };
+    }
+    throw err;
+  }
 }

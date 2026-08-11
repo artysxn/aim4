@@ -22,7 +22,7 @@ import { createLocalSource } from './sources/local.js';
 import { createHltvSource } from './sources/hltv.js';
 import { rarSupport } from '../../replays/archive.js';
 import { SHARED_LIBRARY } from '../../replays/auth.js';
-import { emptyStatus, foldEvent, writeStatus } from './status.js';
+import { emptyStatus, foldEvent, readStatus, writeStatus } from './status.js';
 
 const FLAGS = {
   '--source': 'source',
@@ -61,6 +61,11 @@ function makeSource(cfg) {
   if (cfg.source === 'hltv') return createHltvSource(cfg);
   if (cfg.source === 'local') return createLocalSource(cfg);
   throw new Error(`Unknown --source ${cfg.source}. Use "local" or "hltv".`);
+}
+
+function rarLabel() {
+  const rar = rarSupport();
+  return rar?.available ? rar.tool : 'MISSING';
 }
 
 const gb = (n) => `${(n / 1024 ** 3).toFixed(2)} GB`;
@@ -158,11 +163,12 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
     return;
   }
 
-  const source = makeSource(cfg);
+  let source = makeSource(cfg);
   try {
     if (cmd === 'check') {
       const checks = [];
-      checks.push(['rar extractor (bsdtar)', rarSupport() ? 'ok' : 'MISSING']);
+      checks.push(['rar extractor', rarLabel()]);
+      checks.push(['source mode', cfg.source]);
       try {
         const r = await source.check();
         checks.push([`source: ${source.name}`, r.detail || 'ok']);
@@ -172,23 +178,54 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
       checks.push(['library', cfg.library]);
       checks.push(['state dir', cfg.stateDir]);
       checks.push(['work dir', cfg.workDir]);
+      checks.push(['demo start', String(cfg.demoStart)]);
       for (const [k, v] of checks) console.log(`${k.padEnd(24)} ${v}`);
       return;
     }
 
     await fsp.mkdir(cfg.stateDir, { recursive: true });
     await fsp.mkdir(cfg.workDir, { recursive: true });
-    await source.check();
 
     // Status is written on every event so the admin page has something to read.
     // Best-effort: a failed status write must never stop an ingest.
-    let status = { ...emptyStatus(), running: true, pid: process.pid, startedAt: new Date().toISOString() };
+    let status = {
+      ...emptyStatus(),
+      running: true,
+      pid: process.pid,
+      startedAt: new Date().toISOString()
+    };
     let statusQueue = Promise.resolve();
     const pushStatus = () => {
       statusQueue = statusQueue
         .then(() => writeStatus(cfg.statusPath, status))
         .catch(() => {});
     };
+    const failStatus = async (err) => {
+      status = {
+        ...status,
+        running: false,
+        stoppedAt: new Date().toISOString(),
+        lastError: String(err?.message || err)
+      };
+      await writeStatus(cfg.statusPath, status).catch(() => {});
+    };
+
+    try {
+      await source.check();
+    } catch (err) {
+      // Legacy Coolify configs often have source=local with no inbox. Prefer
+      // sequential HLTV over a supervisor crash loop.
+      if (cfg.source === 'local') {
+        console.warn(`local source failed (${err.message}); switching to hltv`);
+        cfg.source = 'hltv';
+        await source.close?.().catch(() => {});
+        source = makeSource(cfg);
+        await source.check();
+      } else {
+        await failStatus(err);
+        throw err;
+      }
+    }
 
     const pipe = createPipeline({
       cfg,
@@ -217,8 +254,8 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
     process.on('SIGINT', onSignal);
     process.on('SIGTERM', onSignal);
 
-    // --limit N is expressed in matches; the loop works in batches.
-    const maxBatches = opts.limit ? Math.ceil(opts.limit / cfg.batchSize) : Infinity;
+    // --limit N is expressed in matches; the loop works in batches / demo ids.
+    const maxBatches = opts.limit ? Math.ceil(opts.limit / Math.max(1, cfg.batchSize)) : Infinity;
     const started = Date.now();
     await pipe.run({ continuous: Boolean(opts.continuous), maxBatches });
 
@@ -233,7 +270,21 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
   }
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error(`\n${err?.stack || err}`);
+  try {
+    const cfg = loadConfig({});
+    if (!cfg.library) cfg.library = SHARED_LIBRARY;
+    const prev = await readStatus(cfg.statusPath).catch(() => emptyStatus());
+    await writeStatus(cfg.statusPath, {
+      ...prev,
+      running: false,
+      pid: null,
+      stoppedAt: new Date().toISOString(),
+      lastError: String(err?.message || err)
+    });
+  } catch {
+    /* best-effort */
+  }
   process.exit(1);
 });

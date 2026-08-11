@@ -105,6 +105,11 @@ export function loadConfig(overrides = {}) {
     if (v !== undefined && v !== null) cfg[k] = v;
   }
 
+  // Local mode requires an inbox. An empty Coolify AIM4_INGEST_SOURCE=local
+  // (legacy) with no inbox used to crash-loop the supervisor; fall back to
+  // sequential HLTV instead.
+  if (cfg.source === 'local' && !cfg.inbox) cfg.source = 'hltv';
+
   cfg.ledgerPath = path.join(cfg.stateDir, 'ledger.json');
   cfg.lockPath = path.join(cfg.stateDir, 'ingest.lock');
   cfg.statusPath = path.join(cfg.stateDir, 'status.json');
