@@ -380,7 +380,11 @@ export function createCloakSession(cfg = {}) {
         binaryLogged = true;
       }
       await prepareLicensedProfile(profilePath, binaryPath, Boolean(options.licenseKey));
-      if (options.headless === false) await ensureHeadedDisplay();
+      if (options.headless === false) {
+        log('Ensuring headed display (Xvfb)');
+        await ensureHeadedDisplay();
+        log(`DISPLAY=${process.env.DISPLAY || '(unset)'}`);
+      }
       const args = ['--fingerprint-windows-font-metrics'];
       if (bool(cfg.cloakDisableHttp2, true)) args.push('--disable-http2');
       if (profilePath) {
@@ -388,30 +392,42 @@ export function createCloakSession(cfg = {}) {
         args.push(`--fingerprint=${seed}`);
       }
       options.args = [...(options.args || []), ...args];
+      log(
+        profilePath
+          ? `launchPersistentContext headless=${options.headless}`
+          : `launchContext headless=${options.headless}`
+      );
       contextPromise = (
         profilePath
           ? launchPersistentContext({ ...options, userDataDir: profilePath })
           : launchContext(options)
-      ).then(async (ctx) => {
-        // Guard every browser request, not just the first URL. An admin-supplied
-        // public page must not redirect or embed its way into private services.
-        if (typeof cfg.validateUrl === 'function') {
-          await ctx.route('**/*', async (route) => {
-            const url = route.request().url();
-            if (!/^https?:/i.test(url)) {
-              await route.continue();
-              return;
-            }
-            try {
-              await cfg.validateUrl(url);
-              await route.continue();
-            } catch {
-              await route.abort('blockedbyclient');
-            }
-          });
-        }
-        return ctx;
-      });
+      )
+        .then(async (ctx) => {
+          log('CloakBrowser context ready');
+          // Guard every browser request, not just the first URL. An admin-supplied
+          // public page must not redirect or embed its way into private services.
+          if (typeof cfg.validateUrl === 'function') {
+            await ctx.route('**/*', async (route) => {
+              const url = route.request().url();
+              if (!/^https?:/i.test(url)) {
+                await route.continue();
+                return;
+              }
+              try {
+                await cfg.validateUrl(url);
+                await route.continue();
+              } catch {
+                await route.abort('blockedbyclient');
+              }
+            });
+          }
+          return ctx;
+        })
+        .catch((err) => {
+          contextPromise = null;
+          log(`Launch failed: ${err?.message || err}`);
+          throw err;
+        });
     }
     return contextPromise;
   }

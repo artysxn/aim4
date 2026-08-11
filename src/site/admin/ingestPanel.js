@@ -76,8 +76,9 @@ function consoleBlock() {
   const title = el('span', 'ingest-console-title', 'Console');
   const count = el('span', 'ingest-console-count', '0');
   head.append(title, count);
+  const clearBtn = button('Clear', clearLog, 'btn btn-sm');
   const copyBtn = button('Copy', copyLog, 'btn btn-sm');
-  head.appendChild(copyBtn);
+  head.append(clearBtn, copyBtn);
   root.appendChild(head);
 
   const view = el('div', 'ingest-console-view');
@@ -94,6 +95,22 @@ function consoleBlock() {
       notice(root, 'Log copied.');
     } catch {
       notice(root, 'Could not copy log.', 'error');
+    }
+  }
+
+  async function clearLog() {
+    clearBtn.disabled = true;
+    try {
+      await adminApi.ingestLogClear();
+      lines = [];
+      lastFingerprint = '';
+      paint();
+      await refresh();
+      notice(root, 'Console cleared.');
+    } catch (err) {
+      notice(root, err.message, 'error');
+    } finally {
+      clearBtn.disabled = false;
     }
   }
 

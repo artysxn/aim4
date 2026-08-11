@@ -167,11 +167,17 @@ async function spawnIngester(c, options = {}) {
 
   child.on('exit', (code, signal) => {
     const shortLived = Date.now() - state.lastSpawnAt < 30_000;
-    // A child that dies almost immediately is failing, not finishing. Back off
-    // so a broken config cannot become a spawn loop.
-    if (shortLived && code !== 0 && signal !== 'SIGTERM') {
+    const killed = signal === 'SIGKILL' || signal === 'SIGTERM';
+    // Continuous ingest should not end in seconds. Treat short-lived exits
+    // (including mysterious code 0) as crashes so we back off and respawn.
+    if (shortLived && !killed) {
       state.failures = Math.min(state.failures + 1, 6);
-      state.nextSpawnAllowedAt = Date.now() + Math.min(2 ** state.failures * 30_000, 15 * 60_000);
+      state.nextSpawnAllowedAt =
+        Date.now() + Math.min(2 ** state.failures * 2_000, 60_000);
+    } else if (!killed && code !== 0) {
+      state.failures = Math.min(state.failures + 1, 6);
+      state.nextSpawnAllowedAt =
+        Date.now() + Math.min(2 ** state.failures * 5_000, 5 * 60_000);
     } else {
       state.failures = 0;
       state.nextSpawnAllowedAt = 0;
@@ -194,7 +200,8 @@ async function onChildExit(c, code, signal) {
       (state.failures ? ` failures=${state.failures}` : '')
   );
   const status = await readStatus(c.statusPath).catch(() => emptyStatus());
-  const clean = code === 0 || signal === 'SIGTERM';
+  const shortLived = Date.now() - state.lastSpawnAt < 30_000;
+  const clean = (code === 0 || signal === 'SIGTERM') && !shortLived;
   await writeStatus(c.statusPath, {
     ...status,
     running: false,
@@ -203,9 +210,19 @@ async function onChildExit(c, code, signal) {
     stoppedAt: new Date().toISOString(),
     lastError: clean
       ? status.lastError
-      : `Ingester exited with code ${code}${signal ? ` (${signal})` : ''}. ` +
-        'The supervisor will restart it while the switch is on.'
+      : `Ingester exited with code ${code}${signal ? ` (${signal})` : ''}` +
+        (shortLived ? ' after only a few seconds.' : '.') +
+        ' The supervisor will restart it while the switch is on.'
   }).catch(() => {});
+
+  // Do not wait for the supervisor interval — Starting for up to 60s feels stuck.
+  const desired = await readDesired(c);
+  if (desired.enabled) {
+    const delay = Math.max(0, state.nextSpawnAllowedAt - Date.now());
+    setTimeout(() => {
+      supervise().catch((err) => console.warn(`[ingest] supervisor: ${err.message}`));
+    }, Math.min(delay, 5_000)).unref?.();
+  }
 }
 
 /**
@@ -339,8 +356,8 @@ export async function hardRestart(options = {}) {
     lastError: null
   }).catch(() => {});
 
-  // Let chrome/Xvfb grandchildren die before the next launchPersistentContext.
-  await new Promise((resolve) => setTimeout(resolve, 900));
+  // Let chrome/Xvfb grandchildren die and license seats release before relaunch.
+  await new Promise((resolve) => setTimeout(resolve, 2_000));
 
   if (await isRunning()) {
     const still = await readPid(c.lockPath);
@@ -407,7 +424,7 @@ export async function supervise() {
  * The interval is the only thing standing between "the box rebooted at 3am" and
  * "the backfill has been off since 3am".
  */
-export function startSupervisor({ intervalMs = 60_000 } = {}) {
+export function startSupervisor({ intervalMs = 5_000 } = {}) {
   if (state.supervisor) return state.supervisor;
   supervise().catch((err) => console.warn(`[ingest] supervisor: ${err.message}`));
   state.supervisor = setInterval(() => {
@@ -525,6 +542,16 @@ export async function seek(nextId) {
 
 const LOG_TAIL_DEFAULT = 999;
 const LOG_READ_BYTES_CAP = 2 * 1024 * 1024;
+
+/** Truncate ingest.log (keeps the file; supervisor/child reopen with append). */
+export async function clearIngestLog() {
+  const c = cfg();
+  const logPath = ingestLogPath(c);
+  await fsp.mkdir(c.stateDir, { recursive: true });
+  await fsp.writeFile(logPath, '');
+  await appendIngestLog(c, 'console cleared');
+  return { ok: true, path: logPath };
+}
 
 /**
  * Last N lines of the detached ingester's stdout/stderr log.

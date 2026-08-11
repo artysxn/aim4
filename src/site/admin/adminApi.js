@@ -54,6 +54,7 @@ export const adminApi = {
   // redraw from the response without a second round trip.
   ingestStatus: () => get('/api/admin/ingest'),
   ingestLog: (tail = 999) => get(`/api/admin/ingest/log?tail=${encodeURIComponent(tail)}`),
+  ingestLogClear: () => send('DELETE', '/api/admin/ingest/log'),
   ingestStart: () => send('POST', '/api/admin/ingest/start'),
   ingestStop: () => send('POST', '/api/admin/ingest/stop'),
   ingestHardRestart: () => send('POST', '/api/admin/ingest/restart'),

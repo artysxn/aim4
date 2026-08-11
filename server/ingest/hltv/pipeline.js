@@ -395,7 +395,13 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         continue;
       }
 
-      if (outcome.stopped || stopping) break;
+      if (stopping) break;
+      // Aborted download without an Off request: retry same id, stay alive.
+      if (outcome.stopped) {
+        await sleepInterruptible(2_000);
+        cursorSnapshot = await readCursor(cfg);
+        continue;
+      }
 
       if (outcome.blocked) {
         if (!continuous) break;

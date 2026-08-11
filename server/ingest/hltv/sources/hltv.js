@@ -21,9 +21,9 @@ import {
 const BASE = 'https://www.hltv.org';
 
 export function createHltvSource(cfg) {
-  const tool = createProbeTool(cfg, {
-    onLog: (message) => console.log(`[probe-tool] ${message}`)
-  });
+  // Logging is already prefixed [cloak] inside createCloakSession; avoid a
+  // second [probe-tool] line for every transport step in ingest.log.
+  const tool = createProbeTool(cfg);
   let inFlight = 0;
   let nextAllowedAt = 0;
   let firstDownload = true;

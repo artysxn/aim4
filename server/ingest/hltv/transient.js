@@ -15,6 +15,13 @@ export function isTransientDownloadError(err) {
     /Timeout \d+ms exceeded/i.test(msg) ||
     /No browser download started/i.test(msg) ||
     /No archive download after page load/i.test(msg) ||
+    /Missing X server|without having a XServer|ozone_platform_x11|\$DISPLAY/i.test(
+      msg
+    ) ||
+    /session limit reached|license key is invalid|couldn't verify your license/i.test(
+      msg
+    ) ||
+    /Target page, context or browser has been closed/i.test(msg) ||
     /net::ERR_/i.test(msg) ||
     /ERR_TUNNEL|ERR_PROXY|socket hang up|ECONNRESET|ETIMEDOUT|ECONNREFUSED/i.test(
       msg

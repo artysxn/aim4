@@ -15,6 +15,7 @@
 
 import '../../env.js';
 import fsp from 'node:fs/promises';
+import path from 'node:path';
 import { loadConfig } from './config.js';
 import { openLedger } from './ledger.js';
 import { seekCursor } from './cursor.js';
@@ -24,6 +25,25 @@ import { createHltvSource } from './sources/hltv.js';
 import { rarSupport } from '../../replays/archive.js';
 import { SHARED_LIBRARY } from '../../replays/auth.js';
 import { emptyStatus, foldEvent, readStatus, writeStatus } from './status.js';
+
+/** File-backed stdout/stderr is block-buffered; force lines into ingest.log promptly. */
+try {
+  process.stdout._handle?.setBlocking?.(true);
+  process.stderr._handle?.setBlocking?.(true);
+} catch {
+  /* best-effort */
+}
+
+async function switchIsOn(cfg) {
+  try {
+    const raw = JSON.parse(
+      await fsp.readFile(path.join(cfg.stateDir, 'desired.json'), 'utf8')
+    );
+    return Boolean(raw.enabled);
+  } catch {
+    return false;
+  }
+}
 
 const FLAGS = {
   '--source': 'source',
@@ -314,13 +334,21 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
     );
 
     let stopping = false;
-    const onSignal = () => {
-      if (stopping) return;
-      stopping = true;
-      console.log('\n[ingest] stop requested; aborting download...');
-      pipe.requestStop();
-      // Close CloakBrowser immediately so Off is not blocked on CF waits.
-      void source.close?.().catch(() => {});
+    const onSignal = (sig) => {
+      void (async () => {
+        if (stopping) return;
+        // Off/Hard Restart use SIGKILL. Spurious SIGTERM (deploy helpers,
+        // process-group noise) used to end continuous ingest with code 0 and
+        // leave the UI stuck on Starting until the 60s supervisor tick.
+        if (opts.continuous && (await switchIsOn(cfg))) {
+          console.log(`[ingest] ignoring ${sig} (switch is on; use Off / Hard Restart)`);
+          return;
+        }
+        stopping = true;
+        console.log(`\n[ingest] ${sig}: aborting download...`);
+        pipe.requestStop();
+        void source.close?.().catch(() => {});
+      })();
     };
     process.on('SIGINT', onSignal);
     process.on('SIGTERM', onSignal);
@@ -329,6 +357,10 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
     const maxBatches = opts.limit ? Math.ceil(opts.limit / Math.max(1, cfg.batchSize)) : Infinity;
     const started = Date.now();
     await pipe.run({ continuous: Boolean(opts.continuous), maxBatches });
+
+    if (opts.continuous && !stopping) {
+      throw new Error('continuous ingest ended without stop request');
+    }
 
     const counts = ledger.counts();
     console.log(

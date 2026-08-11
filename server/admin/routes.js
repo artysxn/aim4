@@ -606,6 +606,18 @@ async function route(req, res, url, me) {
     return true;
   }
 
+  if (req.method === 'DELETE' && p === '/api/admin/ingest/log') {
+    const result = await ingest.clearIngestLog();
+    await writeAudit({
+      actorId: me.id,
+      action: 'ingest.log.clear',
+      payload: result,
+      req
+    });
+    json(res, req, 200, result);
+    return true;
+  }
+
   if (req.method === 'POST' && p === '/api/admin/ingest/start') {
     const result = await ingest.start();
     await writeAudit({
