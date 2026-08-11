@@ -33,15 +33,19 @@
 //   child  -> parent  status.json, rewritten on every pipeline event
 // ---------------------------------------------------------------------------
 
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { cursorProgress, readCursor, seekCursor } from './cursor.js';
 import { openLedger } from './ledger.js';
+import { cancelProbe } from './probe.js';
 import { emptyStatus, readStatus, writeStatus } from './status.js';
+
+const execFileAsync = promisify(execFile);
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.join(HERE, 'cli.js');
@@ -342,9 +346,21 @@ export async function start(options = {}) {
   return { started: true, pid, enabled: true };
 }
 
+/** Kill one PID. Never touches this API process. */
+function killPid(pid) {
+  const n = Number(pid);
+  if (!n || n === process.pid) return false;
+  try {
+    process.kill(n, 'SIGKILL');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Kill the detached ingest process group. Off must win immediately. */
 function killIngestPid(pid) {
-  if (!pid) return false;
+  if (!pid || Number(pid) === process.pid) return false;
   let killed = false;
   try {
     process.kill(-pid, 'SIGKILL');
@@ -352,13 +368,139 @@ function killIngestPid(pid) {
   } catch {
     /* Windows / not a group leader */
   }
-  try {
-    process.kill(pid, 'SIGKILL');
-    killed = true;
-  } catch {
-    /* already gone */
-  }
+  if (killPid(pid)) killed = true;
   return killed;
+}
+
+/** Children of pid (best-effort; macOS/Linux pgrep -P). */
+async function childPids(pid) {
+  try {
+    const { stdout } = await execFileAsync('pgrep', ['-P', String(pid)], {
+      encoding: 'utf8'
+    });
+    return stdout
+      .trim()
+      .split(/\s+/)
+      .map(Number)
+      .filter((n) => Number.isFinite(n) && n > 1 && n !== process.pid);
+  } catch {
+    return [];
+  }
+}
+
+/** Depth-first kill of a process tree (CloakBrowser/Xvfb grandchildren). */
+async function killProcessTree(pid) {
+  if (!pid || !alive(pid)) return [];
+  const killed = [];
+  for (const child of await childPids(pid)) {
+    killed.push(...(await killProcessTree(child)));
+  }
+  if (killPid(pid)) killed.push(pid);
+  return killed;
+}
+
+/**
+ * PIDs holding Chromium SingletonLock under the CloakBrowser profile root.
+ * Symlink target looks like `hostname-693`.
+ */
+async function profileLockPids(profileRoot) {
+  const pids = new Set();
+  if (!profileRoot) return pids;
+  const sessions = await fsp.readdir(profileRoot).catch(() => []);
+  for (const name of sessions) {
+    const dir = path.join(profileRoot, name);
+    const st = await fsp.stat(dir).catch(() => null);
+    if (!st?.isDirectory()) continue;
+    const target = await fsp.readlink(path.join(dir, 'SingletonLock')).catch(() => '');
+    const match = /-(\d+)$/.exec(String(target || ''));
+    const lockPid = Number(match?.[1]) || 0;
+    if (lockPid > 1 && lockPid !== process.pid) pids.add(lockPid);
+  }
+  return pids;
+}
+
+/** Drop Chromium Singleton* locks so a fresh child can open the profile. */
+async function clearProfileLocks(profileRoot) {
+  if (!profileRoot) return;
+  const sessions = await fsp.readdir(profileRoot).catch(() => []);
+  for (const name of sessions) {
+    const dir = path.join(profileRoot, name);
+    const st = await fsp.stat(dir).catch(() => null);
+    if (!st?.isDirectory()) continue;
+    for (const lock of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+      await fsp.rm(path.join(dir, lock), { force: true }).catch(() => {});
+    }
+  }
+}
+
+/**
+ * PIDs whose command line matches a pgrep -f pattern. Never includes our pid.
+ */
+async function pidsMatching(pattern) {
+  try {
+    const { stdout } = await execFileAsync('pgrep', ['-f', pattern], { encoding: 'utf8' });
+    return stdout
+      .trim()
+      .split(/\s+/)
+      .map(Number)
+      .filter((n) => Number.isFinite(n) && n > 1 && n !== process.pid);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Kill every process that can hold a CloakBrowser license seat or profile lock:
+ * ingest CLI, probe parse workers, Chromium using our profile dir, and Xvfb :99.
+ */
+async function killAllIngestRelated(c) {
+  const killed = new Set();
+  const log = (msg) => appendIngestLog(c, msg);
+
+  try {
+    const probe = await cancelProbe();
+    if (probe?.cancelled) await log('hard reset: cancelled running probe');
+  } catch (err) {
+    await log(`hard reset: probe cancel failed: ${err?.message || err}`);
+  }
+
+  const lockPid = await readPid(c.lockPath);
+  if (lockPid) {
+    for (const pid of await killProcessTree(lockPid)) killed.add(pid);
+    killIngestPid(lockPid);
+    killed.add(lockPid);
+    await log(`hard reset: killed ingest tree pid=${lockPid}`);
+  }
+  await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+
+  for (const pid of await profileLockPids(c.cloakProfileDir)) {
+    for (const child of await killProcessTree(pid)) killed.add(child);
+    if (killPid(pid)) killed.add(pid);
+    await log(`hard reset: killed profile lock holder pid=${pid}`);
+  }
+
+  // Narrow patterns only: never pkill bare "chromium" / "node".
+  const patterns = [
+    'ingest/hltv/cli\\.js',
+    'ingest/hltv/probeParseWorker\\.js',
+    'cloakbrowser-profile',
+    'Xvfb :99'
+  ];
+  for (const pattern of patterns) {
+    const matches = await pidsMatching(pattern);
+    for (const pid of matches) {
+      // CLI is a session leader; use group kill. Browser/Xvfb: tree kill.
+      if (pattern.includes('cli\\.js')) killIngestPid(pid);
+      else await killProcessTree(pid);
+      if (killPid(pid)) killed.add(pid);
+    }
+    if (matches.length) {
+      await log(`hard reset: pgrep ${pattern} -> ${matches.join(',')}`);
+    }
+  }
+
+  await clearProfileLocks(c.cloakProfileDir);
+  return [...killed];
 }
 
 /**
@@ -388,6 +530,7 @@ export async function stop() {
 
   await appendIngestLog(c, `stop requested; SIGKILL pid=${pid}`);
   killIngestPid(pid);
+  await killProcessTree(pid);
   await fsp.rm(c.lockPath, { force: true }).catch(() => {});
   // Second pass in case a grandchild survived the first signal.
   setTimeout(() => {
@@ -396,23 +539,10 @@ export async function stop() {
   return { stopped: true, pid, enabled: false, note: 'killed' };
 }
 
-/** Drop Chromium Singleton* locks so a fresh child can open the profile. */
-async function clearProfileLocks(profileRoot) {
-  if (!profileRoot) return;
-  const sessions = await fsp.readdir(profileRoot).catch(() => []);
-  for (const name of sessions) {
-    const dir = path.join(profileRoot, name);
-    const st = await fsp.stat(dir).catch(() => null);
-    if (!st?.isDirectory()) continue;
-    for (const lock of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
-      await fsp.rm(path.join(dir, lock), { force: true }).catch(() => {});
-    }
-  }
-}
-
 /**
- * Kill the child, clear lock/backoff/profile locks, wait briefly, then start.
- * Use when Off/On races leave CloakBrowser/Xvfb wedged.
+ * Kill every ingest/CloakBrowser/Xvfb/probe process, clear profile locks, wait
+ * for license seats, then start clean. Use when session-limit or
+ * "profile already in use" errors leave the host wedged.
  */
 export async function hardRestart(options = {}) {
   const c = cfg();
@@ -424,15 +554,12 @@ export async function hardRestart(options = {}) {
   state.nextSpawnAllowedAt = Date.now() + 30_000;
 
   const oldPid = await readPid(c.lockPath);
-  if (oldPid && alive(oldPid)) {
-    await appendIngestLog(c, `hard restart SIGKILL pid=${oldPid}`);
-    killIngestPid(oldPid);
-    setTimeout(() => {
-      if (alive(oldPid)) killIngestPid(oldPid);
-    }, 400).unref?.();
-  }
-  await fsp.rm(c.lockPath, { force: true }).catch(() => {});
-  await clearProfileLocks(c.cloakProfileDir);
+  const killed = await killAllIngestRelated(c);
+  await appendIngestLog(
+    c,
+    `hard reset: killed ${killed.length} pid(s)` +
+      (killed.length ? ` [${killed.slice(0, 20).join(',')}]` : '')
+  );
 
   await writeStatus(c.statusPath, {
     ...emptyStatus(),
@@ -443,15 +570,14 @@ export async function hardRestart(options = {}) {
     lastError: null
   }).catch(() => {});
 
-  // Let chrome/Xvfb grandchildren die and license seats release before relaunch.
-  await new Promise((resolve) => setTimeout(resolve, 2_000));
+  // CloakBrowser Pro seats and chrome grandchildren need a beat to drop.
+  await new Promise((resolve) => setTimeout(resolve, 3_000));
 
-  if (await isRunning()) {
-    const still = await readPid(c.lockPath);
-    await appendIngestLog(c, `hard restart: still alive pid=${still}; SIGKILL again`);
-    killIngestPid(still);
-    await fsp.rm(c.lockPath, { force: true }).catch(() => {});
-    await new Promise((resolve) => setTimeout(resolve, 500));
+  // Second sweep: anything that respawned or ignored the first SIGKILL.
+  const again = await killAllIngestRelated(c);
+  if (again.length) {
+    await appendIngestLog(c, `hard reset: second sweep killed ${again.length} pid(s)`);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
   }
 
   state.failures = 0;
@@ -468,7 +594,13 @@ export async function hardRestart(options = {}) {
     pid,
     startedAt: new Date().toISOString()
   });
-  return { restarted: true, pid, enabled: true, killedPid: oldPid || null };
+  return {
+    restarted: true,
+    pid,
+    enabled: true,
+    killedPid: oldPid || null,
+    killedPids: [...new Set([...killed, ...again])]
+  };
 }
 
 /**
