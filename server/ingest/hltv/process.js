@@ -25,7 +25,7 @@ import { parseDemo } from '../../demoparser/index.js';
 import { ingestDemo } from '../../replays/ingest.js';
 import { newDemoId } from '../../replays/demoStore.js';
 import { describeArchive, isOverpassFilename, parseDemoFilename } from './hltvNames.js';
-import { applyHltvTeams } from './teamNames.js';
+import { applyHltvTeams, teamsFromDemoFilename } from './teamNames.js';
 import { findLibraryDuplicate, fingerprintDemo } from './duplicates.js';
 
 /**
@@ -109,7 +109,9 @@ export async function parseAndIngest({ library, row, demos, concurrency = 1, onP
         });
 
         // The whole point of this program. Before ingestDemo, never after.
-        const naming = applyHltvTeams(demo, teams);
+        // Prefer the two org slugs baked into this .dem's own filename; the
+        // archive-level teams are only a fallback when the name does not parse.
+        const naming = applyHltvTeams(demo, teamsFromDemoFilename(entry.name, teams));
 
         const fingerprint = fingerprintDemo(demo, entry.sizeBytes);
         const dup = await findLibraryDuplicate(library, fingerprint);
