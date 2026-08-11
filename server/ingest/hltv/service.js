@@ -160,6 +160,7 @@ export async function disableForBoot() {
     killIngestPid(pid);
   }
   await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+  await releaseCloakProfiles();
   const status = await readStatus(c.statusPath).catch(() => emptyStatus());
   await writeStatus(c.statusPath, {
     ...status,
@@ -382,6 +383,8 @@ export async function stop() {
 
   if (!pid || !alive(pid)) {
     await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+    // Off in the UI but chrome may still hold the shared profile lock.
+    await releaseCloakProfiles();
     await appendIngestLog(c, 'stop requested; not running');
     return { stopped: false, reason: 'not running', enabled: false };
   }
@@ -389,6 +392,9 @@ export async function stop() {
   await appendIngestLog(c, `stop requested; SIGKILL pid=${pid}`);
   killIngestPid(pid);
   await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+  // Chromium often outlives the node child and keeps SingletonLock (probe then
+  // fails with "profile is already in use by process N").
+  await releaseCloakProfiles();
   // Second pass in case a grandchild survived the first signal.
   setTimeout(() => {
     if (alive(pid)) killIngestPid(pid);
@@ -396,18 +402,44 @@ export async function stop() {
   return { stopped: true, pid, enabled: false, note: 'killed' };
 }
 
-/** Drop Chromium Singleton* locks so a fresh child can open the profile. */
-async function clearProfileLocks(profileRoot) {
-  if (!profileRoot) return;
+/**
+ * Kill orphan Chromium holders of CloakBrowser profiles, then drop Singleton*
+ * locks. Ingest Off / SIGKILL often leaves chrome (e.g. pid in SingletonLock)
+ * alive; probe then fails with "profile is already in use by process N".
+ */
+export async function releaseCloakProfiles() {
+  const c = cfg();
+  const profileRoot = c.cloakProfileDir;
+  if (!profileRoot) return { killed: [], cleared: 0 };
+  const killed = [];
+  let cleared = 0;
   const sessions = await fsp.readdir(profileRoot).catch(() => []);
   for (const name of sessions) {
     const dir = path.join(profileRoot, name);
     const st = await fsp.stat(dir).catch(() => null);
     if (!st?.isDirectory()) continue;
-    for (const lock of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
-      await fsp.rm(path.join(dir, lock), { force: true }).catch(() => {});
+    const lock = path.join(dir, 'SingletonLock');
+    const target = await fsp.readlink(lock).catch(() => '');
+    const match = /^(.*)-(\d+)$/.exec(target);
+    const lockPid = Number(match?.[2]) || 0;
+    if (lockPid && lockPid !== process.pid && alive(lockPid)) {
+      killIngestPid(lockPid);
+      killed.push(lockPid);
+    }
+    for (const file of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+      const p = path.join(dir, file);
+      if (await fsp.rm(p, { force: true }).then(() => true, () => false)) cleared += 1;
     }
   }
+  if (killed.length) {
+    await appendIngestLog(
+      c,
+      `released cloak profiles; SIGKILL lock holder(s) ${killed.join(', ')}`
+    );
+    // Let chrome die before the next launchPersistentContext.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  return { killed, cleared };
 }
 
 /**
@@ -432,7 +464,7 @@ export async function hardRestart(options = {}) {
     }, 400).unref?.();
   }
   await fsp.rm(c.lockPath, { force: true }).catch(() => {});
-  await clearProfileLocks(c.cloakProfileDir);
+  await releaseCloakProfiles();
 
   await writeStatus(c.statusPath, {
     ...emptyStatus(),

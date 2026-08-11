@@ -41,7 +41,8 @@ export { parseProxyLines, loadProxyPool } from './proxyPool.js';
 export { isDisplayAlive } from './cloakDisplay.js';
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 60_000;
-const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
+/** page.goto + "download started" wait. 30s is enough to kill dead proxies. */
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 30_000;
 const DEFAULT_DOWNLOAD_DEADLINE_MS = 30 * 60_000;
 const DEFAULT_STALL_MS = 60_000;
 
@@ -919,7 +920,7 @@ export function createCloakSession(cfg = {}) {
             return;
           }
           // HTML page loaded but no download: give redirects a short window,
-          // then fail instead of sitting on "waiting" until the 120s timer.
+          // then fail instead of sitting on "waiting" until the goto timer.
           if (html && /<html/i.test(html)) {
             if (!htmlStableSince) htmlStableSince = Date.now();
             const stableFor = Date.now() - htmlStableSince;
