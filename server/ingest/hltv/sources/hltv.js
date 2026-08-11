@@ -21,22 +21,32 @@ import {
 const BASE = 'https://www.hltv.org';
 
 export function createHltvSource(cfg) {
-  const browser = createCloakSession({ ...cfg, cloakSessionName: 'ingest' });
+  // Same persistent profile as the admin probe so a successful probe's
+  // Cloudflare cookies are reused by the continuous ingester.
+  const browser = createCloakSession({
+    ...cfg,
+    cloakSessionName: cfg.cloakSessionName || 'hltv'
+  });
   let inFlight = 0;
   let nextAllowedAt = 0;
+  let firstDownload = true;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   async function gated(work) {
     while (inFlight >= Math.max(1, cfg.batchSize || 1)) await sleep(250);
-    const now = Date.now();
-    const startAt = Math.max(now, nextAllowedAt);
-    const wait = startAt - now;
-    nextAllowedAt =
-      startAt +
-      (cfg.minDelayMs || 0) +
-      Math.random() * Math.max(0, (cfg.maxDelayMs || 0) - (cfg.minDelayMs || 0));
-    if (wait > 0) await sleep(wait);
+    // Probe starts immediately; do not burn 20–40s before the first attempt.
+    if (!firstDownload) {
+      const now = Date.now();
+      const startAt = Math.max(now, nextAllowedAt);
+      const wait = startAt - now;
+      nextAllowedAt =
+        startAt +
+        (cfg.minDelayMs || 0) +
+        Math.random() * Math.max(0, (cfg.maxDelayMs || 0) - (cfg.minDelayMs || 0));
+      if (wait > 0) await sleep(wait);
+    }
+    firstDownload = false;
     inFlight++;
     try {
       return await work();
@@ -96,6 +106,10 @@ export function createHltvSource(cfg) {
       if (classified.kind === 'challenge') {
         await fsp.rm(target, { force: true }).catch(() => {});
         const err = new ChallengeError(url, 403);
+        // Browser-path challenge is weather, not a hard stop for the supervisor.
+        err.fatal = false;
+        err.blocked = true;
+        err.proxyRetryable = true;
         throw err;
       }
       if (classified.kind !== 'archive') {

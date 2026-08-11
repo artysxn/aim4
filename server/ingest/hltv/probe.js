@@ -508,7 +508,8 @@ async function executeProbe(c, run, urlObj, hooks) {
     const makeBrowser = hooks.createBrowser || createCloakSession;
     browser = makeBrowser({
       ...c,
-      cloakSessionName: 'probe',
+      // Shared with the continuous ingester so CF cookies survive probe → run.
+      cloakSessionName: c.cloakSessionName || 'hltv',
       validateUrl: async (target) => {
         const next = new URL(target);
         await checkTarget(next, Boolean(hooks.allowPrivate));

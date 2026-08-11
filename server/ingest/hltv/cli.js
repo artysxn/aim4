@@ -17,6 +17,7 @@ import '../../env.js';
 import fsp from 'node:fs/promises';
 import { loadConfig } from './config.js';
 import { openLedger } from './ledger.js';
+import { seekCursor } from './cursor.js';
 import { createPipeline } from './pipeline.js';
 import { createLocalSource } from './sources/local.js';
 import { createHltvSource } from './sources/hltv.js';
@@ -127,16 +128,23 @@ function logEvent(e, verbose) {
       break;
     case 'download-progress': {
       const phase = e.phase || 'download';
-      const key = `${phase}:${Math.floor((e.received || 0) / (5 * 1024 * 1024))}`;
+      const secs = e.elapsedMs != null ? Math.round(e.elapsedMs / 1000) : null;
+      const key = `${phase}:${e.detail || ''}:${Math.floor((e.received || 0) / (5 * 1024 * 1024))}:${secs != null ? Math.floor(secs / 5) : 0}`;
       const now = Date.now();
-      if (key === lastProgressKey && now - lastProgressLogAt < 5000) break;
+      if (key === lastProgressKey && now - lastProgressLogAt < 4000) break;
       lastProgressKey = key;
       lastProgressLogAt = now;
       const size =
         e.received > 0
           ? `${mb(e.received)}${e.total ? ` / ${mb(e.total)}` : ''}`
           : '';
-      console.log(`     ${phase}${size ? ` ${size}` : ''}`);
+      const bits = [
+        phase,
+        secs != null ? `${secs}s` : null,
+        e.detail || null,
+        size || null
+      ].filter(Boolean);
+      console.log(`     ${bits.join(' · ')}`);
       break;
     }
     case 'download-complete':
@@ -293,6 +301,11 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
     }
 
     if (cmd !== 'run') throw new Error(`Unknown command ${cmd}`);
+
+    if (Number(cfg.demoSeek) > 0) {
+      const sought = await seekCursor(cfg, cfg.demoSeek);
+      console.log(`[ingest] seek cursor -> demo/${sought.nextId} (AIM4_INGEST_DEMO_SEEK)`);
+    }
 
     console.log(
       `[ingest] run start pid=${process.pid} source=${cfg.source}` +

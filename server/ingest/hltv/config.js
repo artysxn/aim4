@@ -79,6 +79,12 @@ export function loadConfig(overrides = {}) {
      * 404 is observed. Does not stop the walker; only affects the progress bar.
      */
     demoHint: num(env.AIM4_INGEST_DEMO_HINT, 110206),
+    /**
+     * When set (>0), the runner seeks the cursor to this id once at process
+     * start. Use after a successful probe (e.g. 110101) instead of grinding
+     * cold ids. Prefer the admin Seek control for one-shots.
+     */
+    demoSeek: num(env.AIM4_INGEST_DEMO_SEEK, 0),
     /** Wait between retries when the next demo id is not published yet. */
     frontierWaitMs: num(env.AIM4_INGEST_FRONTIER_WAIT_MS, 10 * 60 * 1000),
 

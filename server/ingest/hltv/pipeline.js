@@ -19,6 +19,7 @@ import {
   readCursor
 } from './cursor.js';
 import { MissingDemoError } from './classify.js';
+import { isTransientDownloadError } from './transient.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -299,9 +300,9 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         return { advanced: false, missing: true };
       }
 
-      if (err?.blocked || /Cloudflare challenge/i.test(String(err?.message || ''))) {
-        // Challenge is usually proxy/IP weather. Keep the same demo id, back off,
-        // and let CloakBrowser rotate proxies on the next attempt. Do not exit.
+      if (isTransientDownloadError(err)) {
+        // Timeouts / CF / proxy weather are NOT proof the id is gone. Probe can
+        // clear the same URL a minute later; never skip ahead on these.
         ledger.setState(matchId, STATES.DISCOVERED, {
           lastError: String(err.message || err),
           lastAttemptAt: new Date().toISOString()
@@ -309,7 +310,7 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         await ledger.save();
         const waitMs = Math.max(
           cfg.minDelayMs || 20_000,
-          Math.min(Number(cfg.challengeWaitMs) || 120_000, cfg.frontierWaitMs || 600_000)
+          Math.min(Number(cfg.challengeWaitMs) || 90_000, cfg.frontierWaitMs || 600_000)
         );
         emit('download-failed', {
           matchId,

@@ -556,6 +556,24 @@ async function route(req, res, url, me) {
     return true;
   }
 
+  if (req.method === 'POST' && p === '/api/admin/ingest/cursor') {
+    const body = await readJson(req).catch(() => ({}));
+    const nextId = Number(body?.nextId);
+    if (!Number.isFinite(nextId) || nextId < 1) {
+      json(res, req, 400, { error: 'nextId required' });
+      return true;
+    }
+    const result = await ingest.seek(nextId);
+    await writeAudit({
+      actorId: me.id,
+      action: 'ingest.cursor.seek',
+      payload: { nextId },
+      req
+    });
+    json(res, req, 200, result);
+    return true;
+  }
+
   // One-shot download probe: can this server fetch, parse and package a demo
   // archive from a given URL? Runs in-process (network) plus a capped child
   // (parse); the panel polls GET for the step log.

@@ -484,6 +484,13 @@ export function ingestPanel() {
 
   const shell = el('div', 'ingest-shell');
   const hero = el('div', 'ingest-hero');
+  const seekRow = el('div', 'ingest-seek');
+  const seekInput = input('number', '', '110101');
+  seekInput.className = 'ingest-field ingest-field-narrow';
+  seekInput.setAttribute('aria-label', 'Demo id');
+  seekInput.min = '1';
+  const seekBtn = button('Seek', () => seek(), 'btn btn-sm');
+  seekRow.append(seekInput, seekBtn);
   const metrics = el('div', 'ingest-metrics');
   const stages = el('div', 'ingest-stages');
   const barWrap = el('div', 'ingest-progress');
@@ -491,7 +498,7 @@ export function ingestPanel() {
   const tools = el('div', 'ingest-tools');
   tools.append(proxies.root, disk.root, probe.root);
 
-  shell.append(hero, metrics, stages, barWrap, errorSlot, consoleUi.root, tools);
+  shell.append(hero, seekRow, metrics, stages, barWrap, errorSlot, consoleUi.root, tools);
   root.appendChild(shell);
 
   async function refresh() {
@@ -500,6 +507,27 @@ export function ingestPanel() {
       paint();
     } catch (err) {
       errorSlot.replaceChildren(el('p', 'admin-error', err.message));
+    }
+  }
+
+  async function seek() {
+    const nextId = Number(seekInput.value);
+    if (!Number.isFinite(nextId) || nextId < 1) {
+      notice(root, 'Enter a demo id.', 'error');
+      return;
+    }
+    if (busy) return;
+    busy = true;
+    seekBtn.disabled = true;
+    try {
+      lastStatus = await adminApi.ingestSeek(nextId);
+      notice(root, `Cursor at demo/${nextId}.`);
+      paint();
+    } catch (err) {
+      notice(root, err.message, 'error');
+    } finally {
+      busy = false;
+      seekBtn.disabled = false;
     }
   }
 
@@ -554,6 +582,10 @@ export function ingestPanel() {
     }
     titleRow.appendChild(el('span', `ingest-chip ${stateTone}`, stateLabel));
     hero.appendChild(titleRow);
+
+    if (document.activeElement !== seekInput) {
+      seekInput.value = String(demoId);
+    }
 
     const focus = el('div', 'ingest-focus');
     focus.appendChild(el('div', 'ingest-focus-id', `demo/${demoId}`));

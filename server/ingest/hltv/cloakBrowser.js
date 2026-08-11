@@ -17,9 +17,11 @@ import {
   applyProxySettings,
   loadProxyPool,
   markProxyFailed,
+  readWorkingProxies,
   recordWorkingProxy,
   redactProxy
 } from './proxyPool.js';
+import { looksLikeMissingPage, pageTitle } from './classify.js';
 
 export { parseProxyLines, loadProxyPool } from './proxyPool.js';
 
@@ -202,11 +204,36 @@ async function prepareLicensedProfile(profilePath, binaryPath, licensed) {
   const marker = path.join(profilePath, '.licensed-browser');
   if (await fsp.access(marker).then(() => true, () => false)) return;
   const entries = await fsp.readdir(profilePath).catch(() => []);
-  for (const entry of entries) {
-    if (entry === '.fingerprint-seed') continue;
-    await fsp.rm(path.join(profilePath, entry), { recursive: true, force: true }).catch(() => {});
+  // Keep a seeded probe profile (CF cookies). Only wipe empty / free-tier leftovers.
+  const hasBrowserData = entries.some((e) => e === 'Default' || e === 'Local State');
+  if (!hasBrowserData) {
+    for (const entry of entries) {
+      if (entry === '.fingerprint-seed') continue;
+      await fsp.rm(path.join(profilePath, entry), { recursive: true, force: true }).catch(() => {});
+    }
   }
   await fsp.writeFile(marker, path.basename(path.dirname(binaryPath)));
+}
+
+/**
+ * One-time copy of an older probe profile into the shared `hltv` profile so a
+ * successful admin probe is not thrown away when ingest starts cold.
+ */
+async function seedProfileFromProbe(profilePath, cfg, log) {
+  if (!profilePath || !cfg.cloakProfileDir) return;
+  const session = path.basename(profilePath);
+  if (session !== 'hltv') return;
+  const useful = (await fsp.readdir(profilePath).catch(() => [])).filter(
+    (e) => e !== '.fingerprint-seed' && e !== '.licensed-browser'
+  );
+  if (useful.length) return;
+  const probePath = path.join(cfg.cloakProfileDir, 'probe');
+  const probeUseful = (await fsp.readdir(probePath).catch(() => [])).filter(
+    (e) => e !== '.fingerprint-seed' && e !== '.licensed-browser'
+  );
+  if (!probeUseful.length) return;
+  await fsp.cp(probePath, profilePath, { recursive: true });
+  log?.('Seeded CloakBrowser profile from successful probe session');
 }
 
 /**
@@ -237,11 +264,16 @@ export function createCloakSession(cfg = {}) {
   let settingsPromise = null;
   let activeProxy = undefined;
   let proxyCursor = 0;
+  let preferredProxyCount = 0;
   let binaryLogged = false;
 
   const log = (message) => {
+    const line = String(message || '');
+    // Always surface transport steps in ingest.log / admin console. Callers can
+    // still attach onLog for structured sinks without silencing stdout.
+    console.log(`[cloak] ${line}`);
     try {
-      cfg.onLog?.(message);
+      cfg.onLog?.(line);
     } catch {
       /* logging must not break a browser operation */
     }
@@ -262,11 +294,18 @@ export function createCloakSession(cfg = {}) {
 
   async function ensurePool() {
     if (!poolPromise) {
-      poolPromise = loadProxyPool(cfg).then((pool) => {
-        if (pool.length) log(`Proxy pool: ${pool.length} endpoint(s)`);
-        else log('Proxy pool: empty (direct exit IP)');
+      poolPromise = (async () => {
+        const working = await readWorkingProxies(cfg);
+        preferredProxyCount = working.length;
+        const pool = await loadProxyPool(cfg);
+        if (pool.length) {
+          log(
+            `Proxy pool: ${pool.length} endpoint(s)` +
+              (preferredProxyCount ? `, ${preferredProxyCount} preferred` : '')
+          );
+        } else log('Proxy pool: empty (direct exit IP)');
         return pool;
-      });
+      })();
     }
     return poolPromise;
   }
@@ -288,6 +327,7 @@ export function createCloakSession(cfg = {}) {
       if (downloadsPath) await fsp.mkdir(downloadsPath, { recursive: true });
       if (profilePath) {
         await fsp.mkdir(profilePath, { recursive: true });
+        await seedProfileFromProbe(profilePath, cfg, log);
         await clearStaleProfileLock(profilePath);
       }
       const options = launchOptions(cfg, activeProxy);
@@ -349,8 +389,11 @@ export function createCloakSession(cfg = {}) {
       }
       return pool[proxyCursor % pool.length];
     }
+    // Working proxies are loaded first. Prefer those before random cache junk.
     const unused = pool.filter((p) => !used.has(p));
-    const choices = unused.length ? unused : pool;
+    const ordered = unused.length ? unused : pool;
+    const preferred = ordered.filter((p) => pool.indexOf(p) < preferredProxyCount);
+    const choices = preferred.length ? preferred : ordered;
     return choices[Math.floor(Math.random() * choices.length)];
   }
 
@@ -387,7 +430,8 @@ export function createCloakSession(cfg = {}) {
         if (opts.signal?.aborted) throw abortError(opts.signal);
         const canRetry = isProxyRetryable(err) && i < maxAttempts - 1;
         if (!canRetry) {
-          if (err?.blocked) err.fatal = true;
+          // Leave blocked/proxyRetryable for the pipeline to back off on the
+          // same demo id. fatal here used to kill the whole ingester.
           throw err;
         }
         log(
@@ -397,7 +441,6 @@ export function createCloakSession(cfg = {}) {
         await resetContext();
       }
     }
-    if (lastErr?.blocked) lastErr.fatal = true;
     throw lastErr;
   }
 
@@ -543,12 +586,16 @@ export function createCloakSession(cfg = {}) {
       const onResponse = (response) => responses.set(response.url(), response);
       page.on('response', onResponse);
       const waitingStartedAt = Date.now();
-      let waitPhase = 'waiting';
+      let waitPhase = 'navigating';
+      let waitDetail = 'opening page';
+      let navStatus = 0;
+      let settledHtml = false;
       const reportWaiting = () =>
         opts.onProgress?.({
           received: 0,
           total: 0,
           phase: waitPhase,
+          detail: waitDetail,
           elapsedMs: Date.now() - waitingStartedAt
         });
       reportWaiting();
@@ -560,28 +607,102 @@ export function createCloakSession(cfg = {}) {
         .catch((err) => {
           // Chromium aborts navigation when the response becomes a download.
           // The download event is the authoritative result in that case.
-          if (!/download is starting|ERR_ABORTED/i.test(String(err?.message || err))) throw err;
-          return null;
+          if (/download is starting|ERR_ABORTED/i.test(String(err?.message || err))) {
+            waitPhase = 'download';
+            waitDetail = 'browser started a file transfer';
+            reportWaiting();
+            return null;
+          }
+          throw err;
         });
+
+      // Inspect the page while we wait for a download event. Without this the
+      // console only said "waiting" for up to 2 minutes with no explanation.
+      const pageWatch = (async () => {
+        const rounds = Number(challengeRounds) || 30;
+        let challengeAttempts = 0;
+        let htmlStableSince = 0;
+        while (!downloadStarted && !opts.signal?.aborted) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          if (downloadStarted) return;
+          let html = '';
+          let title = '';
+          let href = '';
+          try {
+            html = await page.content();
+            title = pageTitle(html) || (await page.title().catch(() => ''));
+            href = page.url();
+          } catch {
+            waitPhase = 'navigating';
+            waitDetail = 'browser still loading';
+            reportWaiting();
+            continue;
+          }
+          settledHtml = Boolean(html);
+          if (isChallengeHtml(html)) {
+            waitPhase = 'challenge';
+            waitDetail = title || 'Cloudflare challenge';
+            reportWaiting();
+            if (challengeAttempts < rounds) {
+              challengeAttempts++;
+              log(`Challenge (${challengeAttempts}/${rounds}) on ${href || url}`);
+              await interactWithManagedChallenge(page);
+            }
+            continue;
+          }
+          if (looksLikeMissingPage(html) || /\/404\b/i.test(href)) {
+            waitPhase = 'missing';
+            waitDetail = title || 'Page not found';
+            reportWaiting();
+            const err = new Error(`HLTV page not found (${title || '404'})`);
+            err.missing = true;
+            rejectPendingDownload?.(err);
+            return;
+          }
+          // HTML page loaded but no download: give redirects a short window,
+          // then fail instead of sitting on "waiting" until the 120s timer.
+          if (html && /<html/i.test(html)) {
+            if (!htmlStableSince) htmlStableSince = Date.now();
+            const stableFor = Date.now() - htmlStableSince;
+            waitPhase = 'page';
+            waitDetail = title
+              ? `"${title}" (no file yet)`
+              : `HTML page, no file yet (${Math.round(stableFor / 1000)}s)`;
+            reportWaiting();
+            if (stableFor >= 12_000) {
+              const err = new Error(
+                `No archive download after page load` +
+                  `${title ? ` (title "${title}")` : ''}` +
+                  `${navStatus ? ` HTTP ${navStatus}` : ''}`
+              );
+              err.proxyRetryable = true;
+              rejectPendingDownload?.(err);
+              return;
+            }
+            continue;
+          }
+          waitPhase = 'waiting';
+          waitDetail = title || href || 'waiting for file';
+          reportWaiting();
+        }
+      })().catch((err) => {
+        log(`Page watch ended: ${err?.message || err}`);
+      });
+
       const challengeTask = navigationPromise
         .then(async (response) => {
           if (!response) return;
+          navStatus = response.status?.() || 0;
           const initialHeaders = await response.allHeaders().catch(() => ({}));
-          const challengedByHeader = initialHeaders['cf-mitigated'] === 'challenge';
-          const rounds = Number(challengeRounds) || 30;
-          for (let attempt = 0; attempt < rounds && !downloadStarted; attempt++) {
-            const html = await page.content().catch(() => '');
-            if (!(attempt === 0 && challengedByHeader) && !isChallengeHtml(html)) {
-              waitPhase = 'waiting';
-              return;
-            }
-            waitPhase = 'challenge';
-            reportWaiting();
-            await interactWithManagedChallenge(page);
-            await new Promise((resolve) => setTimeout(resolve, 3000));
-          }
+          waitPhase = downloadStarted ? 'download' : 'waiting';
+          waitDetail = `HTTP ${navStatus}` +
+            (initialHeaders['cf-mitigated'] === 'challenge' ? ' (cf challenge header)' : '');
+          reportWaiting();
+          log(`Navigated ${url} -> HTTP ${navStatus}`);
         })
-        .catch(() => {});
+        .catch((err) => {
+          log(`Navigation error: ${err?.message || err}`);
+        });
 
       const [downloadResult, navigationResult] = await Promise.allSettled([
         downloadPromise,
@@ -594,19 +715,28 @@ export function createCloakSession(cfg = {}) {
       clearTimeout(downloadTimer);
       rejectPendingDownload = null;
       for (const candidate of attached) candidate.off('download', settleDownload);
+      await pageWatch.catch(() => {});
       if (opts.signal?.aborted) throw abortError(opts.signal);
       if (downloadResult.status === 'rejected') {
         if (navigationResult.status === 'rejected') throw navigationResult.reason;
         const html = await page.content().catch(() => '');
-        if (isChallengeHtml(html)) {
+        if (downloadResult.reason?.missing || looksLikeMissingPage(html)) {
+          const err = new Error(
+            downloadResult.reason?.message ||
+              `HLTV page not found (${pageTitle(html) || '404'})`
+          );
+          err.missing = true;
+          throw err;
+        }
+        if (isChallengeHtml(html) || /challenge/i.test(String(downloadResult.reason?.message || ''))) {
           const err = new Error('CloakBrowser received a Cloudflare challenge page');
           err.blocked = true;
           err.proxyRetryable = true;
           throw err;
         }
         const response = navigationResult.value;
-        const status = response?.status?.();
-        if (status && (status < 200 || status >= 400)) {
+        const status = response?.status?.() || navStatus;
+        if (status && (status < 200 || status >= 400) && !settledHtml) {
           throw new Error(`CloakBrowser navigation returned HTTP ${status} without a download`);
         }
         throw downloadResult.reason;

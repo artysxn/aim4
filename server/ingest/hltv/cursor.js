@@ -70,6 +70,21 @@ export async function writeCursor(cfg, cursor) {
   return next;
 }
 
+/** Jump the walker to a demo id (e.g. one the probe already proved works). */
+export async function seekCursor(cfg, nextId) {
+  const cursor = await readCursor(cfg);
+  const id = Math.max(1, Math.floor(Number(nextId) || 0));
+  if (!Number.isFinite(id) || id < 1) {
+    throw new Error('nextId must be a positive demo id');
+  }
+  return writeCursor(cfg, {
+    ...cursor,
+    nextId: id,
+    startId: Math.min(Number(cursor.startId) || id, id),
+    frontierMisses: 0
+  });
+}
+
 /** Mark demo id finished (success, duplicate, or permanent fail) and advance. */
 export async function advanceCursor(cfg, cursor, { success = false } = {}) {
   const now = Date.now();

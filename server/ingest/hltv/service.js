@@ -35,7 +35,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
-import { cursorProgress, readCursor } from './cursor.js';
+import { cursorProgress, readCursor, seekCursor } from './cursor.js';
 import { openLedger } from './ledger.js';
 import { emptyStatus, readStatus, writeStatus } from './status.js';
 
@@ -392,6 +392,14 @@ export async function status() {
     },
     updatedAt: file.updatedAt || null
   };
+}
+
+/** Jump the sequential walker. Safe while stopped; while running takes effect on the next loop. */
+export async function seek(nextId) {
+  const c = cfg();
+  const cursor = await seekCursor(c, nextId);
+  await appendIngestLog(c, `seek cursor -> demo/${cursor.nextId}`);
+  return { ok: true, cursor: cursorProgress(cursor), ...(await status()) };
 }
 
 const LOG_TAIL_DEFAULT = 999;
