@@ -103,6 +103,21 @@ export async function isRunning() {
   return alive(await readPid(cfg().lockPath));
 }
 
+function ingestLogPath(c) {
+  return path.join(c.stateDir, 'ingest.log');
+}
+
+/** Supervisor lines go into the same file the admin console tails. */
+async function appendIngestLog(c, message) {
+  const line = `${new Date().toISOString()} [supervisor] ${message}\n`;
+  try {
+    await fsp.mkdir(c.stateDir, { recursive: true });
+    await fsp.appendFile(ingestLogPath(c), line);
+  } catch {
+    /* never block control plane on log IO */
+  }
+}
+
 /**
  * Launch the child. Internal: callers go through start() or the supervisor, so
  * the desired-state flag and the spawn cannot drift apart.
@@ -124,7 +139,11 @@ async function spawnIngester(c, options = {}) {
 
   // Raw descriptors, not pipes. A detached child that logs through a pipe to
   // its parent dies with the parent; one holding its own fd does not.
-  const logPath = path.join(c.stateDir, 'ingest.log');
+  const logPath = ingestLogPath(c);
+  await appendIngestLog(
+    c,
+    `spawning source=${source}${inbox ? ` inbox=${inbox}` : ''} args=${args.slice(1).join(' ')}`
+  );
   const logFd = fs.openSync(logPath, 'a');
 
   const childEnv = {
@@ -163,11 +182,17 @@ async function spawnIngester(c, options = {}) {
   child.unref();
   state.lastSpawnAt = Date.now();
   await fsp.writeFile(c.lockPath, String(child.pid));
+  await appendIngestLog(c, `spawned pid=${child.pid}`);
   return child.pid;
 }
 
 async function onChildExit(c, code, signal) {
   await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+  await appendIngestLog(
+    c,
+    `child exited code=${code}${signal ? ` signal=${signal}` : ''}` +
+      (state.failures ? ` failures=${state.failures}` : '')
+  );
   const status = await readStatus(c.statusPath).catch(() => emptyStatus());
   const clean = code === 0 || signal === 'SIGTERM';
   await writeStatus(c.statusPath, {
@@ -197,8 +222,12 @@ export async function start(options = {}) {
   state.failures = 0;
   state.nextSpawnAllowedAt = 0;
 
-  if (await isRunning()) return { started: false, reason: 'already running', enabled: true };
+  if (await isRunning()) {
+    await appendIngestLog(c, 'start requested but already running');
+    return { started: false, reason: 'already running', enabled: true };
+  }
 
+  await appendIngestLog(c, 'start requested');
   const pid = await spawnIngester(c, options);
   await writeStatus(c.statusPath, {
     ...emptyStatus(),
@@ -223,11 +252,14 @@ export async function stop() {
   const pid = await readPid(c.lockPath);
   if (!pid || !alive(pid)) {
     await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+    await appendIngestLog(c, 'stop requested but not running');
     return { stopped: false, reason: 'not running', enabled: false };
   }
   try {
+    await appendIngestLog(c, `stop requested; signaling pid=${pid}`);
     process.kill(pid, 'SIGTERM');
   } catch (err) {
+    await appendIngestLog(c, `stop failed: ${err.message}`);
     return { stopped: false, reason: err.message, enabled: false };
   }
   return { stopped: true, pid, enabled: false, note: 'finishing the current match first' };
@@ -254,6 +286,7 @@ export async function supervise() {
   }
   const pid = await spawnIngester(c, desired);
   console.log(`[ingest] supervisor restarted the ingester (pid ${pid})`);
+  await appendIngestLog(c, `supervisor restart pid=${pid}`);
   return { action: 'restarted', enabled: true, pid };
 }
 

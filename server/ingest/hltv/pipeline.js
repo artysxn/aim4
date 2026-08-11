@@ -299,7 +299,36 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         return { advanced: false, missing: true };
       }
 
-      if (err?.fatal || err?.blocked) {
+      if (err?.blocked || /Cloudflare challenge/i.test(String(err?.message || ''))) {
+        // Challenge is usually proxy/IP weather. Keep the same demo id, back off,
+        // and let CloakBrowser rotate proxies on the next attempt. Do not exit.
+        ledger.setState(matchId, STATES.DISCOVERED, {
+          lastError: String(err.message || err),
+          lastAttemptAt: new Date().toISOString()
+        });
+        await ledger.save();
+        const waitMs = Math.max(
+          cfg.minDelayMs || 20_000,
+          Math.min(Number(cfg.challengeWaitMs) || 120_000, cfg.frontierWaitMs || 600_000)
+        );
+        emit('download-failed', {
+          matchId,
+          error: String(err.message || err),
+          blocked: true,
+          nextCheckInMs: waitMs
+        });
+        emit('challenge', { demoId: id, nextCheckInMs: waitMs, error: String(err.message || err) });
+        current = {
+          matchId,
+          label: `demo/${id}`,
+          demoId: id,
+          stage: 'waiting',
+          reason: 'challenge'
+        };
+        return { advanced: false, missing: false, blocked: true, waitMs };
+      }
+
+      if (err?.fatal) {
         ledger.fail(matchId, err, cfg.maxAttempts);
         await ledger.save();
         emit('download-failed', { matchId, error: String(err.message || err) });
@@ -341,6 +370,19 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
           lastSuccessId: cursorSnapshot.lastSuccessId
         });
         await sleepInterruptible(cfg.frontierWaitMs);
+        cursorSnapshot = await readCursor(cfg);
+        continue;
+      }
+
+      if (outcome.blocked) {
+        if (!continuous) break;
+        const waitMs = outcome.waitMs || 120_000;
+        emit('idle', {
+          nextPollInMs: waitMs,
+          reason: 'challenge',
+          demoId: id
+        });
+        await sleepInterruptible(waitMs);
         cursorSnapshot = await readCursor(cfg);
         continue;
       }

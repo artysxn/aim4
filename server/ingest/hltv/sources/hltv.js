@@ -9,7 +9,7 @@
 
 import path from 'node:path';
 import fsp from 'node:fs/promises';
-import { ChallengeError, looksLikeChallenge } from '../fetcher.js';
+import { ChallengeError } from '../fetcher.js';
 import { parseArchiveFilename } from '../hltvNames.js';
 import { createCloakSession } from '../cloakBrowser.js';
 import {
@@ -51,12 +51,13 @@ export function createHltvSource(cfg) {
     sequential: true,
 
     async check() {
-      // Cheap reachability: open results; challenge is fatal and surfaces early.
-      const page = await gated(() => browser.getText(`${BASE}/results`, { settleMs: 2000 }));
-      if (looksLikeChallenge(page.text)) {
-        throw new ChallengeError(`${BASE}/results`, page.status);
-      }
-      return { ok: true, detail: 'hltv.org reachable through CloakBrowser' };
+      // Sequential demo walking never uses /results. That page is also a harder
+      // Cloudflare surface than /download/demo/{id}, so probing it used to kill
+      // the whole ingester before the first archive attempt.
+      return {
+        ok: true,
+        detail: 'hltv sequential demo ids (reachability deferred to first download)'
+      };
     },
 
     /**

@@ -177,8 +177,29 @@ export function foldEvent(status, event, ledger) {
       };
       s.idleUntil = Date.now() + (event.nextCheckInMs || 0);
       break;
+    case 'challenge':
+      s.lastError = event.error || s.lastError;
+      s.current = {
+        matchId: String(event.demoId),
+        label: `demo/${event.demoId}`,
+        demoId: event.demoId,
+        stage: 'waiting',
+        reason: 'challenge'
+      };
+      s.idleUntil = Date.now() + (event.nextCheckInMs || 0);
+      break;
     case 'idle':
-      if (event.reason !== 'frontier') s.current = null;
+      // Keep waiting UI for frontier / challenge; clear otherwise.
+      if (event.reason !== 'frontier' && event.reason !== 'challenge') s.current = null;
+      else if (event.reason === 'challenge' && event.demoId != null) {
+        s.current = {
+          matchId: String(event.demoId),
+          label: `demo/${event.demoId}`,
+          demoId: event.demoId,
+          stage: 'waiting',
+          reason: 'challenge'
+        };
+      }
       s.idleUntil = Date.now() + (event.nextPollInMs || 0);
       break;
     default:

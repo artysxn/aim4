@@ -77,6 +77,9 @@ function rarLabel() {
 const gb = (n) => `${(n / 1024 ** 3).toFixed(2)} GB`;
 const mb = (n) => `${(n / 1024 ** 2).toFixed(1)} MB`;
 
+let lastProgressLogAt = 0;
+let lastProgressKey = '';
+
 function logEvent(e, verbose) {
   switch (e.type) {
     case 'recovered':
@@ -91,11 +94,15 @@ function logEvent(e, verbose) {
     case 'match-start':
       console.log(`  -> ${e.label}`);
       break;
-    case 'match-progress':
-      if (verbose && e.stage === 'parse' && e.round) {
-        process.stdout.write(`\r     ${e.map} round ${e.round}/${e.total || '?'}   `);
+    case 'match-progress': {
+      const stage = e.stage || 'work';
+      if (e.round) {
+        console.log(`     ${stage}: ${e.map || ''} round ${e.round}/${e.total || '?'}`);
+      } else if (stage !== 'download') {
+        console.log(`     ${stage}${e.map ? `: ${e.map}` : ''}`);
       }
       break;
+    }
     case 'match-ingested':
       console.log(
         `\n     ingested ${e.maps} map(s)` +
@@ -113,9 +120,36 @@ function logEvent(e, verbose) {
     case 'match-failed':
       console.log(`\n     FAILED: ${e.error}`);
       break;
+    case 'download-start':
+      console.log(`\n-> demo/${e.demoId || e.matchId} download`);
+      lastProgressLogAt = 0;
+      lastProgressKey = '';
+      break;
+    case 'download-progress': {
+      const phase = e.phase || 'download';
+      const key = `${phase}:${Math.floor((e.received || 0) / (5 * 1024 * 1024))}`;
+      const now = Date.now();
+      if (key === lastProgressKey && now - lastProgressLogAt < 5000) break;
+      lastProgressKey = key;
+      lastProgressLogAt = now;
+      const size =
+        e.received > 0
+          ? `${mb(e.received)}${e.total ? ` / ${mb(e.total)}` : ''}`
+          : '';
+      console.log(`     ${phase}${size ? ` ${size}` : ''}`);
+      break;
+    }
+    case 'download-complete':
+      console.log(`     downloaded ${mb(e.bytes)} (${e.label || e.matchId})`);
+      break;
     case 'download-failed':
       console.log(
-        `     download ${e.missing ? 'missing' : 'failed'} for ${e.matchId}: ${e.error}`
+        `     download ${e.missing ? 'missing' : e.blocked ? 'blocked' : 'failed'} for ${e.matchId}: ${e.error}`
+      );
+      break;
+    case 'challenge':
+      console.log(
+        `challenge on demo/${e.demoId}; retry in ${Math.round((e.nextCheckInMs || 0) / 1000)}s`
       );
       break;
     case 'cursor':
@@ -134,8 +168,13 @@ function logEvent(e, verbose) {
       console.log(
         e.reason === 'frontier'
           ? `waiting for demo/${e.demoId}; next check in ${Math.round(e.nextPollInMs / 1000)}s`
-          : `idle; next poll in ${Math.round(e.nextPollInMs / 1000)}s`
+          : e.reason === 'challenge'
+            ? `waiting after challenge on demo/${e.demoId}; next try in ${Math.round(e.nextPollInMs / 1000)}s`
+            : `idle; next poll in ${Math.round(e.nextPollInMs / 1000)}s`
       );
+      break;
+    case 'run-end':
+      console.log(`run end: loops=${e.batches || 0}${e.stopped ? ' (stopped)' : ''}`);
       break;
     default:
       if (verbose) console.log(e.type, JSON.stringify(e));
@@ -217,7 +256,8 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
     };
 
     try {
-      await source.check();
+      const preflight = await source.check();
+      console.log(`[ingest] source check: ${preflight?.detail || 'ok'}`);
     } catch (err) {
       // Last resort if something still built a local source without inbox.
       if (/source=local needs --inbox/i.test(String(err?.message || ''))) {
@@ -226,10 +266,11 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
         cfg.inbox = '';
         await source.close?.().catch(() => {});
         source = makeSource(cfg);
-        await source.check();
+        const preflight = await source.check().catch((e) => ({ detail: e.message }));
+        console.log(`[ingest] source check: ${preflight?.detail || 'ok'}`);
       } else {
-        await failStatus(err);
-        throw err;
+        // Sequential HLTV can still try downloads even if a soft preflight fails.
+        console.warn(`[ingest] source check failed (${err.message}); continuing`);
       }
     }
 
@@ -253,8 +294,14 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
 
     if (cmd !== 'run') throw new Error(`Unknown command ${cmd}`);
 
+    console.log(
+      `[ingest] run start pid=${process.pid} source=${cfg.source}` +
+        ` continuous=${Boolean(opts.continuous)} demoStart=${cfg.demoStart}` +
+        ` library=${cfg.library}`
+    );
+
     const onSignal = () => {
-      console.log('\nstopping after the current match...');
+      console.log('\n[ingest] stop requested; finishing current match...');
       pipe.requestStop();
     };
     process.on('SIGINT', onSignal);
