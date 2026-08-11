@@ -20,10 +20,47 @@ export const SHAPE_FEATURES = [
 /** The live round on the clock: 1:55. Shape windows are elapsed seconds. */
 export const SHAPE_WINDOW_MAX_SECONDS = 115;
 
+/** Utility toggles used by Pattern Finder (and grenade_in matching). */
+export const UTIL_KEYS = ['smoke', 'molotov', 'flash', 'he'];
+
+const UTIL_KEY = {
+  smokegrenade: 'smoke',
+  molotov: 'molotov',
+  incgrenade: 'molotov',
+  firebomb: 'molotov',
+  inferno: 'molotov',
+  flashbang: 'flash',
+  hegrenade: 'he'
+};
+
 const STORAGE_PREFIX = 'aim4.an.shapes.';
 
 /** ≥1 sample at ~1 Hz inside the shape during the phase window. */
 const PLAYER_IN_MIN_SAMPLES = 1;
+
+/** @param {string|undefined} type */
+export function utilKeyForType(type) {
+  const t = String(type || '')
+    .toLowerCase()
+    .replace(/^weapon_/, '');
+  return UTIL_KEY[t] || null;
+}
+
+/** Optional global / per-shape clock window. Full span ⇒ null. */
+export function sanitizeTimeWindow(raw) {
+  return sanitizeWindow(raw);
+}
+
+export function hasNarrowTimeWindow(filter) {
+  return Boolean(sanitizeWindow(filter?.timeWindow));
+}
+
+/** True when at least one util type is turned off. */
+export function hasNarrowUtility(filter) {
+  const u = filter?.utility;
+  if (!u || typeof u !== 'object') return false;
+  return UTIL_KEYS.some((k) => u[k] === false);
+}
 
 function storageKey(map) {
   return `${STORAGE_PREFIX}${String(map || '').toUpperCase()}`;
@@ -162,6 +199,54 @@ function openingKill(meta, teamOf) {
   return null;
 }
 
+function phaseTickRange(bounds, phase) {
+  const from =
+    phase === 'early'
+      ? bounds.freezeEndTick
+      : phase === 'mid'
+        ? bounds.midStartTick
+        : bounds.lateStartTick;
+  const to =
+    phase === 'early'
+      ? bounds.midStartTick
+      : phase === 'mid'
+        ? bounds.lateStartTick
+        : bounds.endTick;
+  return { from, to };
+}
+
+/** Does the phase's elapsed span overlap a global clock window? */
+function phaseOverlapsTime(meta, phase, timeWin) {
+  if (!timeWin) return true;
+  const bounds = phaseBounds(meta);
+  const tickRate = Math.max(1, meta.tickRate || 64);
+  const { from, to } = phaseTickRange(bounds, phase);
+  const fromE = (from - bounds.freezeEndTick) / tickRate;
+  const toE = (to - bounds.freezeEndTick) / tickRate;
+  return fromE < timeWin.to && toE > timeWin.from;
+}
+
+/** Player threw an allowed util type in this phase (and optional clock window). */
+function playerThrewUtil(meta, playerId, phase, utility, timeWin) {
+  if (!utility) return true;
+  const bounds = phaseBounds(meta);
+  const tickRate = Math.max(1, meta.tickRate || 64);
+  for (const g of meta.events?.grenades || []) {
+    if (g.player !== playerId) continue;
+    const key = utilKeyForType(g.type);
+    if (!key || utility[key] === false) continue;
+    const tick = Number(g.detonateTick ?? g.throwTick);
+    if (!Number.isFinite(tick)) continue;
+    if (phaseAtTick(tick, bounds) !== phase) continue;
+    if (timeWin) {
+      const elapsed = (tick - bounds.freezeEndTick) / tickRate;
+      if (elapsed < timeWin.from || elapsed > timeWin.to) continue;
+    }
+    return true;
+  }
+  return false;
+}
+
 /**
  * Does this phase window satisfy one shape selection?
  * @param {{
@@ -169,24 +254,35 @@ function openingKill(meta, teamOf) {
  *   tickBuffer: ArrayBuffer|null,
  *   playerId: string,
  *   phase: string,
- *   shape: object
+ *   shape: object,
+ *   timeWindow?: { from: number, to: number }|null,
+ *   utility?: Record<string, boolean>|null
  * }} args
  */
-export function shapePassesWindow({ meta, tickBuffer, playerId, phase, shape }) {
+export function shapePassesWindow({
+  meta,
+  tickBuffer,
+  playerId,
+  phase,
+  shape,
+  timeWindow = null,
+  utility = null
+}) {
   if (!meta || !playerId || !shape?.geometry || shape.enabled === false) return true;
   const feature = shape.feature || 'player_in';
   const bounds = phaseBounds(meta);
   const teamOf = new Map((meta.players || []).map((p) => [p.id, p.team]));
   const scratch = {};
+  const globalWin = sanitizeWindow(timeWindow);
 
-  // The shape's own clock window, as a tick test. Phases pick the coarse
-  // stretch; this narrows within it, so "mid, between 1:10 and 0:50" is the
-  // AND of the two. No window means the phase alone decides.
+  // Shape window AND the finder's global clock window. Phases pick the coarse
+  // stretch; these narrow within it.
   const tickRateOf = () => meta.tickRate || 64;
   const inClockWindow = (tick) => {
-    if (!shape.window) return true;
     const elapsed = ((tick || 0) - bounds.freezeEndTick) / Math.max(1, tickRateOf());
-    return elapsed >= shape.window.from && elapsed <= shape.window.to;
+    if (shape.window && (elapsed < shape.window.from || elapsed > shape.window.to)) return false;
+    if (globalWin && (elapsed < globalWin.from || elapsed > globalWin.to)) return false;
+    return true;
   };
   const eventTickPasses = (tick) =>
     phaseAtTick(tick || 0, bounds) === phase && inClockWindow(tick);
@@ -204,23 +300,15 @@ export function shapePassesWindow({ meta, tickBuffer, playerId, phase, shape }) 
     if (slot == null) return false;
     const tickRate = header.tickRate || meta.tickRate || 64;
     const step = Math.max(1, tickRate);
-    let from =
-      phase === 'early'
-        ? bounds.freezeEndTick
-        : phase === 'mid'
-          ? bounds.midStartTick
-          : bounds.lateStartTick;
-    let to =
-      phase === 'early'
-        ? bounds.midStartTick
-        : phase === 'mid'
-          ? bounds.lateStartTick
-          : bounds.endTick;
-    if (shape.window) {
-      from = Math.max(from, bounds.freezeEndTick + Math.round(shape.window.from * tickRate));
-      to = Math.min(to, bounds.freezeEndTick + Math.round(shape.window.to * tickRate));
-      if (to <= from) return false;
-    }
+    let { from, to } = phaseTickRange(bounds, phase);
+    const clampWin = (win) => {
+      if (!win) return;
+      from = Math.max(from, bounds.freezeEndTick + Math.round(win.from * tickRate));
+      to = Math.min(to, bounds.freezeEndTick + Math.round(win.to * tickRate));
+    };
+    clampWin(shape.window);
+    clampWin(globalWin);
+    if (to <= from) return false;
     let hits = 0;
     for (let tick = from; tick < to; tick += step) {
       const pos = samplePlayerAt(view, header, slot, tick, scratch);
@@ -238,6 +326,8 @@ export function shapePassesWindow({ meta, tickBuffer, playerId, phase, shape }) 
     // tick buffer is needed.
     for (const g of meta.events?.grenades || []) {
       if (g.player !== playerId) continue;
+      const key = utilKeyForType(g.type);
+      if (utility && key && utility[key] === false) continue;
       const x = Number(g.at?.x);
       const y = Number(g.at?.y);
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
@@ -321,23 +411,29 @@ export function shapePassesWindow({ meta, tickBuffer, playerId, phase, shape }) 
 }
 
 /**
- * Filter phase windows by drawn shapes.
- * `matchMode`: `'all'` (AND, default) or `'any'` (OR). Empty / all-disabled ⇒ pass.
+ * Filter phase windows by drawn shapes and/or global clock / utility filters.
+ * `matchMode`: `'all'` (AND, default) or `'any'` (OR). Empty shapes + open
+ * clock + all util types on ⇒ pass-through.
  * Loads meta + ticks per distinct round file (cached by caller).
  *
  * @param {Array<{ file: string, phase: string, playerId: string, [k: string]: any }>} windows
  * @param {Array<object>} shapes
  * @param {Map<string, { meta: object|null, ticks: ArrayBuffer|null }>} [cache]
  * @param {'all'|'any'} [matchMode]
+ * @param {{ timeWindow?: object, utility?: Record<string, boolean> }|null} [filter]
  */
 export async function filterWindowsByShapes(
   windows,
   shapes,
   cache = new Map(),
-  matchMode = 'all'
+  matchMode = 'all',
+  filter = null
 ) {
   const active = (shapes || []).filter((s) => s && s.enabled !== false && s.geometry);
-  if (!active.length) return windows;
+  const timeWin = sanitizeWindow(filter?.timeWindow);
+  const utilNarrow = hasNarrowUtility(filter);
+  const utility = utilNarrow ? filter.utility : null;
+  if (!active.length && !timeWin && !utilNarrow) return windows;
   const requireAll = matchMode !== 'any';
 
   const out = [];
@@ -362,23 +458,34 @@ export async function filterWindowsByShapes(
     }
     if (!pack.meta) continue;
 
-    let ok = requireAll;
-    for (const shape of active) {
-      const pass = shapePassesWindow({
-        meta: pack.meta,
-        tickBuffer: pack.ticks,
-        playerId: w.playerId,
-        phase: w.phase,
-        shape
-      });
-      if (requireAll) {
-        if (!pass) {
-          ok = false;
+    let ok;
+    if (active.length) {
+      ok = requireAll;
+      for (const shape of active) {
+        const pass = shapePassesWindow({
+          meta: pack.meta,
+          tickBuffer: pack.ticks,
+          playerId: w.playerId,
+          phase: w.phase,
+          shape,
+          timeWindow: timeWin,
+          utility
+        });
+        if (requireAll) {
+          if (!pass) {
+            ok = false;
+            break;
+          }
+        } else if (pass) {
+          ok = true;
           break;
         }
-      } else if (pass) {
-        ok = true;
-        break;
+      }
+    } else {
+      ok = true;
+      if (timeWin && !phaseOverlapsTime(pack.meta, w.phase, timeWin)) ok = false;
+      if (ok && utilNarrow && !playerThrewUtil(pack.meta, w.playerId, w.phase, utility, timeWin)) {
+        ok = false;
       }
     }
     if (ok) out.push(w);

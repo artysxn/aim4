@@ -27,11 +27,15 @@ import { createPresenceRadar } from './presenceRadar.js';
 import {
   SHAPE_FEATURES,
   SHAPE_WINDOW_MAX_SECONDS,
+  UTIL_KEYS,
   loadShapes,
   saveShapes,
-  newShapeId
+  newShapeId,
+  sanitizeTimeWindow
 } from './shapeFilters.js';
 import { createRangeSlider } from '../../lib/rangeSlider.js';
+import { iconImgHtml } from '../viewer/equipmentIcons.js';
+import { hasRoundLibrary, roundTypeRows } from './roundLibrary.js';
 import {
   setSpinnerLabel,
   spinnerHtml,
@@ -47,6 +51,21 @@ const PHASE_OPTS = [
   { key: 'mid', label: 'Mid' },
   { key: 'late', label: 'Late' }
 ];
+
+const UTIL_ICONS = [
+  { key: 'smoke', weapon: 'smokegrenade', title: 'Smokes' },
+  { key: 'molotov', weapon: 'molotov', title: 'Molotovs' },
+  { key: 'flash', weapon: 'flashbang', title: 'Flashes' },
+  { key: 'he', weapon: 'hegrenade', title: 'HE' }
+];
+
+function defaultUtility() {
+  return { smoke: true, molotov: true, flash: true, he: true };
+}
+
+function defaultTimeWindow() {
+  return { from: 0, to: SHAPE_WINDOW_MAX_SECONDS };
+}
 
 /** Chapters. Keys are load-bearing (URLs, saved views); labels are not. */
 const CHAPTERS = [
@@ -193,8 +212,16 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     result: '',
     /** @type {''|'won'|'lost'} */
     opening: '',
+    /** Round-library keys the subject side ran (For). */
+    roundOwn: /** @type {string[]} */ ([]),
+    /** Round-library keys the opposing side ran (Against). */
+    roundOpp: /** @type {string[]} */ ([]),
     /** @type {Set<string>} */
     phases: new Set(),
+    /** Utility types included when searching grenades (analyzer util bar). */
+    utilityVisible: defaultUtility(),
+    /** Global round-clock window for when the searched thing happens. */
+    timeWindow: defaultTimeWindow(),
     /** @type {Array<object>} */
     shapes: [],
     /** @type {'all'|'any'|''} */
@@ -252,7 +279,11 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       oppHasAwp: state.oppHasAwp,
       result: state.result,
       opening: state.opening,
+      roundOwn: [...state.roundOwn],
+      roundOpp: [...state.roundOpp],
       phases: [...state.phases],
+      utility: { ...state.utilityVisible },
+      timeWindow: sanitizeTimeWindow(state.timeWindow),
       shapes: JSON.parse(JSON.stringify(state.shapes || [])),
       shapeMatch: state.shapeMatch
     }),
@@ -267,7 +298,17 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       state.oppHasAwp = Boolean(spec.oppHasAwp);
       state.result = spec.result === 'won' || spec.result === 'lost' ? spec.result : '';
       state.opening = spec.opening === 'won' || spec.opening === 'lost' ? spec.opening : '';
+      state.roundOwn = asRoundKeys(spec.roundOwn);
+      state.roundOpp = asRoundKeys(spec.roundOpp);
       state.phases = new Set(Array.isArray(spec.phases) ? spec.phases : []);
+      state.utilityVisible = defaultUtility();
+      if (spec.utility && typeof spec.utility === 'object') {
+        for (const k of UTIL_KEYS) {
+          if (typeof spec.utility[k] === 'boolean') state.utilityVisible[k] = spec.utility[k];
+        }
+      }
+      const tw = sanitizeTimeWindow(spec.timeWindow);
+      state.timeWindow = tw || defaultTimeWindow();
       state.shapes = Array.isArray(spec.shapes) ? spec.shapes : [];
       state.shapeMatch = spec.shapeMatch === 'any' ? 'any' : 'all';
       render();
@@ -281,6 +322,12 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     if (slot && !slot.contains(savedViews.el)) slot.replaceChildren(savedViews.el);
   }
 
+  function asRoundKeys(raw) {
+    if (Array.isArray(raw)) return raw.map((k) => String(k || '').trim()).filter(Boolean);
+    const s = String(raw || '').trim();
+    return s ? [s] : [];
+  }
+
   function filterObj() {
     return {
       playerIds: [...state.playerIds],
@@ -292,10 +339,80 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       oppHasAwp: state.oppHasAwp,
       result: state.result === 'won' || state.result === 'lost' ? state.result : '',
       opening: state.opening === 'won' || state.opening === 'lost' ? state.opening : '',
+      roundOwn: [...state.roundOwn],
+      roundOpp: [...state.roundOpp],
       phases: state.phases,
+      utility: { ...state.utilityVisible },
+      timeWindow: sanitizeTimeWindow(state.timeWindow),
       shapes: state.shapes,
       shapeMatch: state.shapeMatch === 'any' ? 'any' : 'all'
     };
+  }
+
+  function roundSummaryLabel(rows, selected, emptyLabel) {
+    if (!selected.length) return emptyLabel;
+    if (selected.length === 1) {
+      return rows.find((r) => r.key === selected[0])?.label || selected[0];
+    }
+    return `${selected.length} selected`;
+  }
+
+  /** Round-library multi-select: For = our call, Against = theirs. Needs map + side. */
+  function roundSelectHtml(which) {
+    const map = state.map;
+    const side = state.side === 'T' || state.side === 'CT' ? state.side : '';
+    if (!map || !side || !hasRoundLibrary(map)) return '';
+    const oppSide = side === 'T' ? 'CT' : 'T';
+    const forSide = which === 'opp' ? oppSide : side;
+    const selected = which === 'opp' ? state.roundOpp : state.roundOwn;
+    const selectedSet = new Set(selected);
+    const rows = roundTypeRows(map, forSide);
+    if (!rows.length) return '';
+    const emptyLabel = which === 'opp' ? 'Against' : 'For';
+    const ariaLabel = which === 'opp' ? 'Round against' : 'Round for';
+    const field = which === 'opp' ? 'roundOpp' : 'roundOwn';
+    const summary = roundSummaryLabel(rows, selected, emptyLabel);
+    const checks = [
+      `<label class="st-round-opt">
+        <input type="checkbox" data-an-round="${field}" value="" ${
+          selected.length ? '' : 'checked'
+        } />
+        <span>${escapeHtml(emptyLabel)}</span>
+      </label>`,
+      ...rows.map(
+        (r) => `<label class="st-round-opt" title="${escapeHtml(r.desc || '')}">
+          <input type="checkbox" data-an-round="${field}" value="${escapeHtml(r.key)}" ${
+            selectedSet.has(r.key) ? 'checked' : ''
+          } />
+          <span>${escapeHtml(r.label)}</span>
+        </label>`
+      )
+    ].join('');
+    return `<div class="an-field">
+      <details class="st-round-multi an-round-multi" data-an-round-menu="${field}">
+        <summary class="site-select an-select st-round-select" aria-label="${escapeHtml(
+          ariaLabel
+        )}">${escapeHtml(summary)}</summary>
+        <div class="st-round-menu" role="group" aria-label="${escapeHtml(ariaLabel)}">${checks}</div>
+      </details>
+    </div>`;
+  }
+
+  function placeRoundMenu(details) {
+    const menu = details?.querySelector?.('.st-round-menu');
+    const summary = details?.querySelector?.('summary');
+    if (!menu || !summary) return;
+    const r = summary.getBoundingClientRect();
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+    menu.style.left = `${Math.round(r.left)}px`;
+    menu.style.minWidth = `${Math.round(Math.max(r.width, 180))}px`;
+  }
+
+  function closeRoundMenus(except = null) {
+    for (const d of sidebarEl.querySelectorAll('details.an-round-multi[open]')) {
+      if (except && d === except) continue;
+      d.removeAttribute('open');
+    }
   }
 
   function featureLabel(key) {
@@ -536,6 +653,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
             { placeholder: 'Side' }
           )}
         </div>
+        ${roundSelectHtml('own')}
+        ${roundSelectHtml('opp')}
         <div class="an-field">
           ${menuSelect(
             'data-an-result',
@@ -579,6 +698,22 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
             phaseSelectValue(),
             { placeholder: 'Phase' }
           )}
+        </div>
+        <div class="an-field an-time-window">
+          <div id="an-time-range"></div>
+          <p class="rv-az-nade-read" id="an-time-read"></p>
+        </div>
+        <div class="an-field">
+          <div class="rv-az-util-bar" role="group" aria-label="Utility">
+            ${UTIL_ICONS.map(
+              (u) => `
+            <button type="button" class="rv-az-util-btn${
+              state.utilityVisible[u.key] ? ' active' : ''
+            }" data-an-util="${u.key}" title="${u.title}" aria-pressed="${
+                state.utilityVisible[u.key] ? 'true' : 'false'
+              }">${iconImgHtml(u.weapon, 'rv-az-util-icon')}</button>`
+            ).join('')}
+          </div>
         </div>
 
         <p class="an-side-title">Map selections</p>
@@ -673,6 +808,38 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
     if (subjectMenuOpen || subjectSearch) refreshSubjectMenu();
     mountWindowSlider();
+    mountTimeRange();
+  }
+
+  function paintTimeRead() {
+    const read = sidebarEl.querySelector('#an-time-read');
+    if (!read) return;
+    const { from, to } = state.timeWindow;
+    read.textContent =
+      from <= 0 && to >= SHAPE_WINDOW_MAX_SECONDS
+        ? 'Whole round'
+        : `${clockLeft(from)} to ${clockLeft(to)}`;
+  }
+
+  /** Global two-notch round clock (analyzer grenade viewer style). */
+  function mountTimeRange() {
+    const slot = sidebarEl.querySelector('#an-time-range');
+    if (!slot) return;
+    const slider = createRangeSlider({
+      min: 0,
+      max: SHAPE_WINDOW_MAX_SECONDS,
+      from: state.timeWindow.from,
+      to: state.timeWindow.to,
+      step: 1,
+      label: 'Point in the round',
+      onChange: (from, to) => {
+        state.timeWindow = { from, to };
+        paintTimeRead();
+        scheduleWindowRerender();
+      }
+    });
+    slot.replaceChildren(slider.el);
+    paintTimeRead();
   }
 
   /** Mount the two-handle clock slider for the shape being edited, if any. */
@@ -1224,6 +1391,15 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       render();
       return;
     }
+    const utilBtn = e.target.closest('[data-an-util]');
+    if (utilBtn) {
+      const key = utilBtn.dataset.anUtil;
+      if (key in state.utilityVisible) {
+        state.utilityVisible[key] = !state.utilityVisible[key];
+        render();
+      }
+      return;
+    }
     if (e.target.closest('[data-an-clear]')) {
       state.side = '';
       state.econ = null;
@@ -1232,7 +1408,11 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       state.oppHasAwp = false;
       state.result = '';
       state.opening = '';
+      state.roundOwn = [];
+      state.roundOpp = [];
       state.phases.clear();
+      state.utilityVisible = defaultUtility();
+      state.timeWindow = defaultTimeWindow();
       state.shapeMatch = '';
       state.drawFeature = '';
       state.drawMode = '';
@@ -1242,14 +1422,53 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     }
   });
 
+  // Fixed menus under the summary (same pattern as Database).
+  sidebarEl.addEventListener(
+    'toggle',
+    (e) => {
+      const details = e.target;
+      if (!(details instanceof HTMLDetailsElement)) return;
+      if (!details.classList.contains('an-round-multi')) return;
+      if (details.open) {
+        closeRoundMenus(details);
+        placeRoundMenu(details);
+        requestAnimationFrame(() => placeRoundMenu(details));
+      }
+    },
+    true
+  );
+
   sidebarEl.addEventListener('change', (e) => {
     const t = e.target;
     if (t.id === 'an-map') {
       state.map = t.value || '';
       state.drawMode = '';
+      state.roundOwn = [];
+      state.roundOpp = [];
       radarView = { zoom: 1, panX: 0, panY: 0 };
       loadShapesForMap();
       render();
+      return;
+    }
+    const roundBox = t.closest?.('[data-an-round]');
+    if (roundBox) {
+      const field = roundBox.dataset.anRound === 'roundOpp' ? 'roundOpp' : 'roundOwn';
+      const key = String(roundBox.value || '').trim();
+      if (!key) {
+        state[field] = [];
+      } else {
+        const set = new Set(state[field]);
+        if (roundBox.checked) set.add(key);
+        else set.delete(key);
+        state[field] = [...set];
+      }
+      const keepOpen = field;
+      render();
+      const kept = sidebarEl.querySelector(`details[data-an-round-menu="${keepOpen}"]`);
+      if (kept) {
+        kept.setAttribute('open', '');
+        placeRoundMenu(kept);
+      }
       return;
     }
     if (t.matches('[data-an-feature]')) {
@@ -1259,7 +1478,12 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       return;
     }
     if (t.matches('[data-an-side]')) {
-      state.side = t.value === 'CT' || t.value === 'T' || t.value === 'any' ? t.value : '';
+      const next = t.value === 'CT' || t.value === 'T' || t.value === 'any' ? t.value : '';
+      if (next !== state.side) {
+        state.roundOwn = [];
+        state.roundOpp = [];
+      }
+      state.side = next;
       render();
       return;
     }
@@ -1313,6 +1537,10 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       subjectMenuOpen = false;
       refreshSubjectMenu();
     }
+  });
+
+  document.addEventListener('pointerdown', (e) => {
+    if (!e.target.closest?.('details.an-round-multi')) closeRoundMenus();
   });
 
   // Play buttons live in the rounds list, which sits in the SIDEBAR now; the

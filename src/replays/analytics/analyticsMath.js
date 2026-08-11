@@ -16,7 +16,11 @@ import {
   indexMaps,
   rowPasses
 } from '../shared/statsMath.js';
-import { filterWindowsByShapes } from './shapeFilters.js';
+import {
+  filterWindowsByShapes,
+  hasNarrowTimeWindow,
+  hasNarrowUtility
+} from './shapeFilters.js';
 
 /**
  * @typedef {object} AnalyticsFilter
@@ -30,9 +34,13 @@ import { filterWindowsByShapes } from './shapeFilters.js';
  * @property {boolean} [oppHasAwp]
  * @property {''|'won'|'lost'} [result]
  * @property {''|'won'|'lost'} [opening]
+ * @property {string|string[]} [roundOwn]
+ * @property {string|string[]} [roundOpp]
  * @property {Set<string>|string[]} [phases]
  * @property {Array<object>} [shapes]
  * @property {'all'|'any'} [shapeMatch]
+ * @property {{ from: number, to: number }|null} [timeWindow]
+ * @property {Record<string, boolean>} [utility]
  */
 
 export const ANALYTICS_PLAYER_MAX = 5;
@@ -89,6 +97,10 @@ function selectedPhases(filter) {
 
 function hasActiveShapes(filter) {
   return (filter?.shapes || []).some((s) => s && s.enabled !== false && s.geometry);
+}
+
+function needsRoundMetaFilter(filter) {
+  return hasActiveShapes(filter) || hasNarrowTimeWindow(filter) || hasNarrowUtility(filter);
 }
 
 /** Resolve subject list (legacy playerId supported). Empty ⇒ anyone. */
@@ -213,14 +225,18 @@ export function matchingWindows(payload, filter) {
 }
 
 /**
- * Matching windows with optional drawn-shape filters.
+ * Matching windows with optional drawn-shape / clock / utility filters.
  */
 export async function matchingWindowsAsync(payload, filter, tickCache = new Map()) {
   const base = matchingWindows(payload, filter);
-  const shapes = filter?.shapes || [];
-  const active = shapes.filter((s) => s && s.enabled !== false && s.geometry);
-  if (!active.length) return base;
-  return filterWindowsByShapes(base, active, tickCache, filter.shapeMatch || 'all');
+  if (!needsRoundMetaFilter(filter)) return base;
+  return filterWindowsByShapes(
+    base,
+    filter?.shapes || [],
+    tickCache,
+    filter.shapeMatch || 'all',
+    filter
+  );
 }
 
 /**
@@ -235,7 +251,7 @@ export async function matchingFilesAsync(payload, filter, tickCache = new Map())
     return [...new Set(windows.map((w) => w.file).filter(Boolean))];
   }
 
-  if (hasActiveShapes(filter)) {
+  if (needsRoundMetaFilter(filter)) {
     const allIds = listPlayerIdsOnMap(payload, filter.map);
     const windows = await matchingWindowsAsync(
       payload,
