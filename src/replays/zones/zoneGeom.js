@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// replays/zones/zoneGeom.js
+// replays/zones/zoneGeom.js :)
 // Axis-aligned rect pieces in world space, plus point-in-piece tests.
 // Overlaps carve via rectangle difference so squares become rectilinear
 // "polygons" (multipart rects) without a clipping library.
