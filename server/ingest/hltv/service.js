@@ -38,6 +38,11 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resetHeadedDisplay } from './cloakDisplay.js';
+import {
+  clearCloakProfileLocks,
+  killCloakBrowserProcesses
+} from './cloakSessions.js';
 import { loadConfig } from './config.js';
 import { cursorProgress, readCursor, seekCursor } from './cursor.js';
 import { openLedger } from './ledger.js';
@@ -403,42 +408,53 @@ export async function stop() {
 }
 
 /**
- * Kill orphan Chromium holders of CloakBrowser profiles, then drop Singleton*
- * locks. Ingest Off / SIGKILL often leaves chrome (e.g. pid in SingletonLock)
- * alive; probe then fails with "profile is already in use by process N".
+ * Close every CloakBrowser Pro session we can find: cancel in-API probe,
+ * SIGKILL chromium under ~/.cloakbrowser and our profile dirs, drop
+ * Singleton* locks, reset Xvfb. Call on Off / boot / hard restart.
+ *
+ * @param {{ cancelActiveProbe?: boolean, settleMs?: number }} [opts]
+ *   cancelActiveProbe defaults true. Probe start must pass false.
  */
-export async function releaseCloakProfiles() {
+export async function releaseCloakProfiles(opts = {}) {
+  const cancelActiveProbe = opts.cancelActiveProbe !== false;
+  const settleMs = Number(opts.settleMs);
+  const waitMs = Number.isFinite(settleMs) ? settleMs : 1_500;
   const c = cfg();
-  const profileRoot = c.cloakProfileDir;
-  if (!profileRoot) return { killed: [], cleared: 0 };
-  const killed = [];
-  let cleared = 0;
-  const sessions = await fsp.readdir(profileRoot).catch(() => []);
-  for (const name of sessions) {
-    const dir = path.join(profileRoot, name);
-    const st = await fsp.stat(dir).catch(() => null);
-    if (!st?.isDirectory()) continue;
-    const lock = path.join(dir, 'SingletonLock');
-    const target = await fsp.readlink(lock).catch(() => '');
-    const match = /^(.*)-(\d+)$/.exec(target);
-    const lockPid = Number(match?.[2]) || 0;
-    if (lockPid && lockPid !== process.pid && alive(lockPid)) {
-      killIngestPid(lockPid);
-      killed.push(lockPid);
-    }
-    for (const file of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
-      const p = path.join(dir, file);
-      if (await fsp.rm(p, { force: true }).then(() => true, () => false)) cleared += 1;
+  const profileRoot = c.cloakProfileDir || '';
+
+  if (cancelActiveProbe) {
+    try {
+      const { cancelProbe } = await import('./probe.js');
+      await cancelProbe();
+    } catch {
+      /* probe module / no run */
     }
   }
-  if (killed.length) {
-    await appendIngestLog(
-      c,
-      `released cloak profiles; SIGKILL lock holder(s) ${killed.join(', ')}`
-    );
-    // Let chrome die before the next launchPersistentContext.
-    await new Promise((resolve) => setTimeout(resolve, 400));
+
+  // Two sweeps: chrome sometimes respawns a helper once before dying.
+  let killed = await killCloakBrowserProcesses({ profileRoot });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const killed2 = await killCloakBrowserProcesses({ profileRoot });
+  killed = [...new Set([...killed, ...killed2])];
+
+  const cleared = await clearCloakProfileLocks(profileRoot);
+  try {
+    resetHeadedDisplay();
+  } catch {
+    /* display optional */
   }
+
+  await appendIngestLog(
+    c,
+    killed.length
+      ? `closed cloak sessions; SIGKILL pid(s) ${killed.join(', ')}` +
+          `${cleared ? `; cleared ${cleared} lock file(s)` : ''}`
+      : `closed cloak sessions; no chromium pids` +
+          `${cleared ? `; cleared ${cleared} lock file(s)` : ''}`
+  );
+
+  // Pro license seats are process-backed; give Cloak a moment to release.
+  if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
   return { killed, cleared };
 }
 
@@ -464,7 +480,6 @@ export async function hardRestart(options = {}) {
     }, 400).unref?.();
   }
   await fsp.rm(c.lockPath, { force: true }).catch(() => {});
-  await releaseCloakProfiles();
 
   await writeStatus(c.statusPath, {
     ...emptyStatus(),
@@ -475,15 +490,15 @@ export async function hardRestart(options = {}) {
     lastError: null
   }).catch(() => {});
 
-  // Let chrome/Xvfb grandchildren die and license seats release before relaunch.
-  await new Promise((resolve) => setTimeout(resolve, 2_000));
+  // Kill every Cloak chromium + wait for Pro license seats to drop before spawn.
+  await releaseCloakProfiles({ cancelActiveProbe: true, settleMs: 2_500 });
 
   if (await isRunning()) {
     const still = await readPid(c.lockPath);
     await appendIngestLog(c, `hard restart: still alive pid=${still}; SIGKILL again`);
     killIngestPid(still);
     await fsp.rm(c.lockPath, { force: true }).catch(() => {});
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await releaseCloakProfiles({ cancelActiveProbe: true, settleMs: 1_500 });
   }
 
   state.failures = 0;
@@ -519,6 +534,7 @@ export async function supervise() {
       await appendIngestLog(c, `supervisor killing stray pid=${pid} (switch off)`);
       killIngestPid(pid);
       await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+      await releaseCloakProfiles({ settleMs: 500 });
       return { action: 'killed-stray', enabled: false };
     }
     return { action: 'none', enabled: false };

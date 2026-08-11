@@ -460,11 +460,14 @@ async function executeProbe(c, run, urlObj, hooks) {
         'Continuous ingest is still running and holds the CloakBrowser profile. Turn ingest Off, then probe again.'
       );
     }
-    const released = await releaseCloakProfiles();
+    const released = await releaseCloakProfiles({
+      cancelActiveProbe: false,
+      settleMs: 800
+    });
     if (released.killed?.length) {
       log(
         'info',
-        `Freed CloakBrowser profile (killed orphan process ${released.killed.join(', ')})`
+        `Closed leftover CloakBrowser session(s) pid ${released.killed.join(', ')}`
       );
     }
     const t0 = Date.now();
