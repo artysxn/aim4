@@ -54,7 +54,9 @@ const state = {
   failures: 0,
   nextSpawnAllowedAt: 0,
   lastSpawnAt: 0,
-  supervisor: null
+  supervisor: null,
+  /** Coalesce overlapping start/supervisor calls in this API process. */
+  spawnPromise: null
 };
 
 const cfg = () => loadConfig({});
@@ -75,6 +77,68 @@ async function readPid(file) {
   } catch {
     return null;
   }
+}
+
+const spawnLeasePath = (c) => `${c.lockPath}.spawn`;
+
+/**
+ * Cross-process spawn mutex. The API can briefly have two instances during a
+ * deploy, and several supervisor callbacks can overlap in one instance. A
+ * plain "is it running?" check followed by spawn lets all of them win.
+ */
+export async function acquireSpawnLease(c) {
+  const lease = spawnLeasePath(c);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await fsp.mkdir(lease);
+      await fsp
+        .writeFile(
+          path.join(lease, 'owner.json'),
+          JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() })
+        )
+        .catch(() => {});
+      return true;
+    } catch (err) {
+      if (err?.code !== 'EEXIST') throw err;
+      const stat = await fsp.stat(lease).catch(() => null);
+      if (stat && Date.now() - stat.mtimeMs > 30_000) {
+        await fsp.rm(lease, { recursive: true, force: true }).catch(() => {});
+        continue;
+      }
+      return false;
+    }
+  }
+  return false;
+}
+
+export async function releaseSpawnLease(c) {
+  await fsp.rm(spawnLeasePath(c), { recursive: true, force: true }).catch(() => {});
+}
+
+async function acquireSpawnLeaseWait(c, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await acquireSpawnLease(c)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
+}
+
+export async function waitForSpawnOwner(c, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const pid = await readPid(c.lockPath);
+    if (pid && alive(pid)) return pid;
+    if (!(await fsp.stat(spawnLeasePath(c)).catch(() => null))) return null;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return null;
+}
+
+async function writePid(file, pid) {
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fsp.writeFile(tmp, String(pid));
+  await fsp.rename(tmp, file);
 }
 
 const desiredPath = (c) => path.join(c.stateDir, 'desired.json');
@@ -185,7 +249,7 @@ async function writeDesired(c, patch) {
   const current = await readDesired(c);
   const next = { ...current, ...patch, changedAt: new Date().toISOString() };
   await fsp.mkdir(c.stateDir, { recursive: true });
-  const tmp = `${desiredPath(c)}.tmp`;
+  const tmp = `${desiredPath(c)}.${process.pid}.${Date.now()}.tmp`;
   await fsp.writeFile(tmp, JSON.stringify(next, null, 2));
   await fsp.rename(tmp, desiredPath(c));
   return next;
@@ -214,54 +278,143 @@ async function appendIngestLog(c, message) {
  * Launch the child. Internal: callers go through start() or the supervisor, so
  * the desired-state flag and the spawn cannot drift apart.
  */
-async function spawnIngester(c, options = {}) {
+async function spawnIngesterOwned(c, options = {}) {
   await fsp.mkdir(c.stateDir, { recursive: true });
   await fsp.mkdir(c.workDir, { recursive: true });
 
-  const args = [CLI, 'run', '--continuous'];
-  // Resolved config already coerces local-without-inbox → hltv. Still force
-  // both argv and child env so a leftover Coolify AIM4_INGEST_SOURCE=local
-  // cannot win inside the detached process.
-  let source = String(options.source || c.source || 'hltv').trim().toLowerCase() || 'hltv';
-  const inbox = String(options.inbox || c.inbox || '').trim();
-  if (source === 'local' && !inbox) source = 'hltv';
-  args.push('--source', source);
-  if (inbox) args.push('--inbox', inbox);
-  if (options.since || c.since) args.push('--since', options.since || c.since);
-
-  // Raw descriptors, not pipes. A detached child that logs through a pipe to
-  // its parent dies with the parent; one holding its own fd does not.
-  const logPath = ingestLogPath(c);
-  await appendIngestLog(
-    c,
-    `spawning source=${source}${inbox ? ` inbox=${inbox}` : ''} args=${args.slice(1).join(' ')}`
-  );
-  const logFd = fs.openSync(logPath, 'a');
-
-  const childEnv = {
-    ...process.env,
-    AIM4_INGEST_SOURCE: source
-  };
-  if (inbox) childEnv.AIM4_INGEST_INBOX = inbox;
-  else delete childEnv.AIM4_INGEST_INBOX;
-
-  let child;
-  try {
-    child = spawn(process.execPath, args, {
-      detached: true,
-      stdio: ['ignore', logFd, logFd],
-      env: childEnv
-    });
-  } finally {
-    // The child has inherited the descriptor; this process does not need it.
-    fs.closeSync(logFd);
+  const acquired = await acquireSpawnLease(c);
+  if (!acquired) {
+    const winner = await waitForSpawnOwner(c);
+    if (winner) {
+      await appendIngestLog(c, `spawn coalesced; pid=${winner} already owns ingest`);
+      return winner;
+    }
+    throw new Error('Another supervisor is spawning ingest; no live owner appeared');
   }
 
-  child.on('exit', (code, signal) => {
-    const shortLived = Date.now() - state.lastSpawnAt < 30_000;
+  try {
+    const existing = await readPid(c.lockPath);
+    if (existing && alive(existing)) {
+      await appendIngestLog(c, `spawn skipped; pid=${existing} already running`);
+      return existing;
+    }
+    if (existing) await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+
+    // Off may race a queued supervisor callback. Re-check after taking the
+    // cross-process lease so a stale callback cannot resurrect ingestion.
+    const desired = await readDesired(c);
+    if (!desired.enabled) throw new Error('Ingest was switched off before spawn');
+
+    const args = [CLI, 'run', '--continuous'];
+    // Resolved config already coerces local-without-inbox → hltv. Still force
+    // both argv and child env so a leftover Coolify AIM4_INGEST_SOURCE=local
+    // cannot win inside the detached process.
+    let source = String(options.source || c.source || 'hltv').trim().toLowerCase() || 'hltv';
+    const inbox = String(options.inbox || c.inbox || '').trim();
+    if (source === 'local' && !inbox) source = 'hltv';
+    args.push('--source', source);
+    if (inbox) args.push('--inbox', inbox);
+    if (options.since || c.since) args.push('--since', options.since || c.since);
+
+    // Raw descriptors, not pipes. A detached child that logs through a pipe to
+    // its parent dies with the parent; one holding its own fd does not.
+    const logPath = ingestLogPath(c);
+    await appendIngestLog(
+      c,
+      `spawning source=${source}${inbox ? ` inbox=${inbox}` : ''} args=${args.slice(1).join(' ')}`
+    );
+    const logFd = fs.openSync(logPath, 'a');
+
+    const childEnv = {
+      ...process.env,
+      AIM4_INGEST_SOURCE: source
+    };
+    if (inbox) childEnv.AIM4_INGEST_INBOX = inbox;
+    else delete childEnv.AIM4_INGEST_INBOX;
+
+    let child;
+    try {
+      child = spawn(process.execPath, args, {
+        detached: true,
+        stdio: ['ignore', logFd, logFd],
+        env: childEnv
+      });
+    } finally {
+      // The child has inherited the descriptor; this process does not need it.
+      fs.closeSync(logFd);
+    }
+
+    const childPid = child.pid;
+    const startedAt = Date.now();
+    // Register before writing the lock, but make exit handling wait until lock
+    // ownership is visible. This closes the "exited during write" race.
+    let lockReadyResolve;
+    const lockReady = new Promise((resolve) => {
+      lockReadyResolve = resolve;
+    });
+    child.once('exit', (code, signal) => {
+      void lockReady.then(() => onChildExit(c, childPid, startedAt, code, signal));
+    });
+
+    child.unref();
+    state.lastSpawnAt = startedAt;
+    try {
+      await writePid(c.lockPath, childPid);
+    } catch (err) {
+      killIngestPid(childPid);
+      lockReadyResolve();
+      throw err;
+    }
+    lockReadyResolve();
+
+    // A concurrent Off can land between the pre-spawn check and lock write.
+    // Kill immediately rather than leaving a child alive behind an Off switch.
+    if (!(await readDesired(c)).enabled) {
+      killIngestPid(childPid);
+      throw new Error('Ingest was switched off while spawning');
+    }
+
+    await appendIngestLog(c, `spawned pid=${childPid}`);
+    return childPid;
+  } finally {
+    await releaseSpawnLease(c);
+  }
+}
+
+async function spawnIngester(c, options = {}) {
+  if (!state.spawnPromise) {
+    state.spawnPromise = spawnIngesterOwned(c, options).finally(() => {
+      state.spawnPromise = null;
+    });
+  }
+  return state.spawnPromise;
+}
+
+async function onChildExit(c, childPid, startedAt, code, signal) {
+  const acquired = await acquireSpawnLeaseWait(c);
+  if (!acquired) {
+    await appendIngestLog(c, `child exit cleanup deferred pid=${childPid}; spawn lease busy`);
+    setTimeout(() => {
+      void onChildExit(c, childPid, startedAt, code, signal);
+    }, 1_000).unref?.();
+    return;
+  }
+
+  try {
+    const ownerPid = await readPid(c.lockPath);
+    if (ownerPid !== childPid) {
+      await appendIngestLog(
+        c,
+        `stale child exited pid=${childPid} code=${code}${signal ? ` signal=${signal}` : ''}; ` +
+          `current owner=${ownerPid || 'none'}`
+      );
+      return;
+    }
+
+    const shortLived = Date.now() - startedAt < 30_000;
     const killed = signal === 'SIGKILL' || signal === 'SIGTERM';
     // Continuous ingest should not end in seconds. Treat short-lived exits
-    // (including mysterious code 0) as crashes so we back off and respawn.
+    // (including code 0) as crashes so we back off instead of spawn-storming.
     if (shortLived && !killed) {
       state.failures = Math.min(state.failures + 1, 6);
       state.nextSpawnAllowedAt =
@@ -274,40 +427,33 @@ async function spawnIngester(c, options = {}) {
       state.failures = 0;
       state.nextSpawnAllowedAt = 0;
     }
-    void onChildExit(c, code, signal);
-  });
 
-  child.unref();
-  state.lastSpawnAt = Date.now();
-  await fsp.writeFile(c.lockPath, String(child.pid));
-  await appendIngestLog(c, `spawned pid=${child.pid}`);
-  return child.pid;
-}
+    await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+    await appendIngestLog(
+      c,
+      `child exited pid=${childPid} code=${code}${signal ? ` signal=${signal}` : ''}` +
+        (state.failures ? ` failures=${state.failures}` : '')
+    );
+    const status = await readStatus(c.statusPath).catch(() => emptyStatus());
+    const clean = (code === 0 || signal === 'SIGTERM') && !shortLived;
+    await writeStatus(c.statusPath, {
+      ...status,
+      running: false,
+      pid: null,
+      current: null,
+      stoppedAt: new Date().toISOString(),
+      lastError: clean
+        ? status.lastError
+        : `Ingester exited with code ${code}${signal ? ` (${signal})` : ''}` +
+          (shortLived ? ' after only a few seconds.' : '.') +
+          ' The supervisor will restart it while the switch is on.'
+    }).catch(() => {});
+  } finally {
+    await releaseSpawnLease(c);
+  }
 
-async function onChildExit(c, code, signal) {
-  await fsp.rm(c.lockPath, { force: true }).catch(() => {});
-  await appendIngestLog(
-    c,
-    `child exited code=${code}${signal ? ` signal=${signal}` : ''}` +
-      (state.failures ? ` failures=${state.failures}` : '')
-  );
-  const status = await readStatus(c.statusPath).catch(() => emptyStatus());
-  const shortLived = Date.now() - state.lastSpawnAt < 30_000;
-  const clean = (code === 0 || signal === 'SIGTERM') && !shortLived;
-  await writeStatus(c.statusPath, {
-    ...status,
-    running: false,
-    pid: null,
-    current: null,
-    stoppedAt: new Date().toISOString(),
-    lastError: clean
-      ? status.lastError
-      : `Ingester exited with code ${code}${signal ? ` (${signal})` : ''}` +
-        (shortLived ? ' after only a few seconds.' : '.') +
-        ' The supervisor will restart it while the switch is on.'
-  }).catch(() => {});
-
-  // Do not wait for the supervisor interval — Starting for up to 60s feels stuck.
+  // Do not wait for the supervisor interval. The spawn lease is released
+  // first so this callback and periodic supervisors all coalesce correctly.
   const desired = await readDesired(c);
   if (desired.enabled) {
     const delay = Math.max(0, state.nextSpawnAllowedAt - Date.now());
