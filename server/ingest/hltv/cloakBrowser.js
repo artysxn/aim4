@@ -69,9 +69,15 @@ function isDisplayError(err) {
   );
 }
 
+/** Cloak Pro remote seat is full. Never proxy-failover: each try opens chrome. */
+export function isSessionLimitError(err) {
+  return /session limit reached/i.test(String(err?.message || err || ''));
+}
+
 /** Launch infrastructure problems: retry without burning a proxy slot. */
 function isInfraLaunchError(err) {
   if (isDisplayError(err)) return true;
+  // Session-limit is NOT retried here: each attempt opens another chrome.
   const msg = String(err?.message || err || '');
   return (
     /spawn ETXTBSY/i.test(msg) ||
@@ -251,7 +257,10 @@ async function ensureHeadedDisplay() {
 
 function isProxyRetryable(err) {
   if (!err) return false;
-  // Display/Xvfb / binary-busy / profile-lock are host setup, not a bad proxy.
+  // Display/Xvfb / binary-busy / profile-lock / Pro seat are host setup, not a
+  // bad proxy. Retrying session-limit with the next proxy opens another chrome
+  // and makes the seat problem worse.
+  if (isSessionLimitError(err)) return false;
   if (isInfraLaunchError(err)) return false;
   if (err.blocked || err.proxyRetryable) return true;
   const msg = String(err.message || err);
@@ -484,7 +493,17 @@ export function createCloakSession(cfg = {}) {
     const pending = contextPromise;
     contextPromise = null;
     const ctx = await pending.catch(() => null);
-    await ctx?.close().catch(() => {});
+    if (!ctx) return;
+    // Close browser first when possible so the Pro seat drops with chrome,
+    // not only after GC of a half-closed persistent context.
+    let browser = null;
+    try {
+      browser = typeof ctx.browser === 'function' ? ctx.browser() : null;
+    } catch {
+      browser = null;
+    }
+    await ctx.close().catch(() => {});
+    await browser?.close?.().catch(() => {});
   }
 
   async function context() {
@@ -546,16 +565,23 @@ export function createCloakSession(cfg = {}) {
           // public page must not redirect or embed its way into private services.
           if (typeof cfg.validateUrl === 'function') {
             await ctx.route('**/*', async (route) => {
-              const url = route.request().url();
-              if (!/^https?:/i.test(url)) {
-                await route.continue();
-                return;
-              }
               try {
-                await cfg.validateUrl(url);
-                await route.continue();
-              } catch {
-                await route.abort('blockedbyclient');
+                const url = route.request().url();
+                if (!/^https?:/i.test(url)) {
+                  await route.continue();
+                  return;
+                }
+                try {
+                  await cfg.validateUrl(url);
+                  await route.continue();
+                } catch {
+                  await route.abort('blockedbyclient');
+                }
+              } catch (err) {
+                // Cloak license checks throw from isClosed inside Playwright's
+                // route dispatch. Abort quietly; the download path surfaces it.
+                await route.abort('failed').catch(() => {});
+                if (isSessionLimitError(err)) throw err;
               }
             });
           }
@@ -646,6 +672,14 @@ export function createCloakSession(cfg = {}) {
       } catch (err) {
         lastErr = err;
         if (opts.signal?.aborted) throw abortError(opts.signal);
+        if (isSessionLimitError(err)) {
+          // One seat, one chrome. Close what we opened and surface immediately
+          // so the pipeline can wait minutes instead of opening more sessions.
+          err.blocked = true;
+          err.sessionLimit = true;
+          await resetContext();
+          throw err;
+        }
         if (isDisplayError(err) && displayRetries < 2) {
           displayRetries += 1;
           log(

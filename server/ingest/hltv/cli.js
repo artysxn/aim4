@@ -250,6 +250,13 @@ function logEvent(e, verbose) {
   }
 }
 
+/** Set once the HLTV source exists so crash handlers can release Pro seats. */
+let emergencyClose = async () => {};
+
+function isSessionLimitCrash(err) {
+  return /session limit reached/i.test(String(err?.message || err || ''));
+}
+
 async function main() {
   const { cmd, opts } = parseArgs(process.argv.slice(2));
   const cfg = loadConfig(opts);
@@ -282,6 +289,9 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
   }
 
   let source = makeSource(cfg);
+  emergencyClose = async () => {
+    await source.close?.().catch(() => {});
+  };
   try {
     if (cmd === 'check') {
       const checks = [];
@@ -418,8 +428,14 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
   }
 }
 
-main().catch(async (err) => {
-  console.error(`\n${err?.stack || err}`);
+let exiting = false;
+async function crashExit(err, { uncaught = false } = {}) {
+  if (exiting) return;
+  exiting = true;
+  if (uncaught) console.error(`\n[ingest] uncaught: ${err?.stack || err}`);
+  else console.error(`\n${err?.stack || err}`);
+  await emergencyClose().catch(() => {});
+  const sessionLimit = isSessionLimitCrash(err);
   try {
     const cfg = loadConfig({});
     if (!cfg.library) cfg.library = SHARED_LIBRARY;
@@ -434,5 +450,26 @@ main().catch(async (err) => {
   } catch {
     /* best-effort */
   }
-  process.exit(1);
+  // 78 = session-limit: supervisor holds spawn so we do not burn more seats.
+  process.exit(sessionLimit ? 78 : 1);
+}
+
+main().catch((err) => crashExit(err));
+
+// Cloak license checks throw from Playwright route dispatch outside the
+// download await chain. Close the browser so the Pro seat can drop.
+process.on('uncaughtException', (err) => {
+  void crashExit(err, { uncaught: true });
+});
+process.on('unhandledRejection', (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  if (
+    isSessionLimitCrash(err) ||
+    /CloakBrowserLicenseError/i.test(String(err?.name || '')) ||
+    /license/i.test(String(err?.message || ''))
+  ) {
+    void crashExit(err, { uncaught: true });
+    return;
+  }
+  console.error(`[ingest] unhandledRejection: ${err?.stack || err}`);
 });

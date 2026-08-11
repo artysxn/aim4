@@ -368,43 +368,50 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         });
         await ledger.save();
         const errText = String(err.message || err);
+        const sessionLimit =
+          Boolean(err?.sessionLimit) || /session limit reached/i.test(errText);
         const infra =
+          sessionLimit ||
           /Missing X server|without having a XServer|ozone_platform_x11|\$DISPLAY|spawn ETXTBSY|profile is already in use|Opening in existing browser session/i.test(
             errText
           );
-        const waitMs = Math.max(
-          cfg.minDelayMs || 20_000,
-          Math.min(
-            infra ? 15_000 : Number(cfg.challengeWaitMs) || 45_000,
-            cfg.frontierWaitMs || 600_000
-          )
-        );
+        // Pro seats drop slowly after SIGKILL. Wait minutes, not 15s.
+        const waitMs = sessionLimit
+          ? Math.max(Number(cfg.sessionLimitWaitMs) || 180_000, 120_000)
+          : Math.max(
+              cfg.minDelayMs || 20_000,
+              Math.min(
+                infra ? 15_000 : Number(cfg.challengeWaitMs) || 45_000,
+                cfg.frontierWaitMs || 600_000
+              )
+            );
         emit('download-failed', {
           matchId,
           error: errText,
           blocked: true,
           infra,
+          sessionLimit,
           nextCheckInMs: waitMs
         });
         emit('challenge', {
           demoId: id,
           nextCheckInMs: waitMs,
           error: errText,
-          reason: infra ? 'infra' : 'challenge'
+          reason: sessionLimit ? 'session-limit' : infra ? 'infra' : 'challenge'
         });
         current = {
           matchId,
           label: `demo/${id}`,
           demoId: id,
           stage: 'waiting',
-          reason: infra ? 'infra' : 'challenge'
+          reason: sessionLimit ? 'session-limit' : infra ? 'infra' : 'challenge'
         };
         return {
           advanced: false,
           missing: false,
           blocked: true,
           waitMs,
-          reason: infra ? 'infra' : 'challenge'
+          reason: sessionLimit ? 'session-limit' : infra ? 'infra' : 'challenge'
         };
       }
 

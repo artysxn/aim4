@@ -63,6 +63,19 @@ const state = {
   holdSpawn: false
 };
 
+/**
+ * Cloak Pro tracks seats on their license server. After SIGKILL the local
+ * chrome is gone but the seat can linger for well over a minute. Hard Restart
+ * that respawns in a few seconds walks straight back into session-limit.
+ */
+const SESSION_LIMIT_BACKOFF_MS = 180_000;
+/** Extra settle after local cloak PIDs are gone (hard stop / hard restart). */
+const LICENSE_SETTLE_MS = 60_000;
+
+function isSessionLimitMessage(msg) {
+  return /session limit reached/i.test(String(msg || ''));
+}
+
 const cfg = () => loadConfig({});
 
 function alive(pid) {
@@ -227,6 +240,30 @@ async function spawnIngester(c, options = {}) {
       return existing;
     }
 
+    // Never launch a second chrome while an orphan still holds a Pro seat.
+    const leftovers = await remainingCloakPids(c);
+    if (leftovers.length) {
+      await appendIngestLog(
+        c,
+        `spawn: sweeping ${leftovers.length} leftover cloak pid(s) [${leftovers
+          .slice(0, 12)
+          .join(',')}]`
+      );
+      await killAllIngestRelated(c);
+      const clear = await waitUntilCloakClear(c, 'pre-spawn', 15_000);
+      if (!clear) {
+        state.nextSpawnAllowedAt = Math.max(
+          state.nextSpawnAllowedAt,
+          Date.now() + SESSION_LIMIT_BACKOFF_MS
+        );
+        throw new Error(
+          `CloakBrowser leftovers still alive; holding spawn ${Math.round(
+            SESSION_LIMIT_BACKOFF_MS / 1000
+          )}s`
+        );
+      }
+    }
+
     await fsp.mkdir(c.stateDir, { recursive: true });
     await fsp.mkdir(c.workDir, { recursive: true });
 
@@ -341,18 +378,37 @@ async function onChildExit(c, code, signal, exitedPid) {
   );
   const status = await readStatus(c.statusPath).catch(() => emptyStatus());
   const shortLived = Date.now() - state.lastSpawnAt < 30_000;
-  const clean = (code === 0 || signal === 'SIGTERM') && !shortLived;
+  const sessionLimit =
+    code === 78 ||
+    isSessionLimitMessage(status.lastError) ||
+    isSessionLimitMessage(status.current?.error);
+  if (sessionLimit) {
+    // Rapid respawn is what wedges the Pro seat. Sweep orphans and wait.
+    state.failures = Math.max(state.failures, 5);
+    state.nextSpawnAllowedAt = Date.now() + SESSION_LIMIT_BACKOFF_MS;
+    await appendIngestLog(
+      c,
+      `session-limit: sweeping cloak; holding spawn ${Math.round(
+        SESSION_LIMIT_BACKOFF_MS / 1000
+      )}s`
+    );
+    await killAllIngestRelated(c);
+    await waitUntilCloakClear(c, 'session-limit', 15_000);
+  }
+  const clean = (code === 0 || signal === 'SIGTERM') && !shortLived && !sessionLimit;
   await writeStatus(c.statusPath, {
     ...status,
     running: false,
     pid: null,
     current: null,
     stoppedAt: new Date().toISOString(),
-    lastError: clean
-      ? status.lastError
-      : `Ingester exited with code ${code}${signal ? ` (${signal})` : ''}` +
-        (shortLived ? ' after only a few seconds.' : '.') +
-        ' The supervisor will restart it while the switch is on.'
+    lastError: sessionLimit
+      ? String(status.lastError || 'CloakBrowser Pro: session limit reached')
+      : clean
+        ? status.lastError
+        : `Ingester exited with code ${code}${signal ? ` (${signal})` : ''}` +
+          (shortLived ? ' after only a few seconds.' : '.') +
+          ' The supervisor will restart it while the switch is on.'
   }).catch(() => {});
 
   // Do not wait for the supervisor interval — Starting for up to 60s feels stuck.
@@ -363,9 +419,11 @@ async function onChildExit(c, code, signal, exitedPid) {
   const desired = await readDesired(c);
   if (desired.enabled) {
     const delay = Math.max(0, state.nextSpawnAllowedAt - Date.now());
+    // Honor the full backoff (session-limit is minutes). Capping at 5s used to
+    // spam supervise() while seats were still held remotely.
     setTimeout(() => {
       supervise().catch((err) => console.warn(`[ingest] supervisor: ${err.message}`));
-    }, Math.min(delay, 5_000)).unref?.();
+    }, delay).unref?.();
   }
 }
 
@@ -379,9 +437,6 @@ async function onChildExit(c, code, signal, exitedPid) {
 export async function start(options = {}) {
   const c = cfg();
   await writeDesired(c, { enabled: true, ...options });
-  // Clear any backoff: an explicit start is a person saying "try again now".
-  state.failures = 0;
-  state.nextSpawnAllowedAt = 0;
 
   if (await isRunning()) {
     await appendIngestLog(c, 'start requested but already running');
@@ -389,6 +444,35 @@ export async function start(options = {}) {
   }
 
   await appendIngestLog(c, 'start requested');
+  // Explicit On still must not stack chrome on a full Pro seat. Sweep first;
+  // keep a short settle so a human click after Hard Stop can succeed.
+  const leftovers = await remainingCloakPids(c);
+  if (leftovers.length) {
+    await appendIngestLog(
+      c,
+      `start: sweeping ${leftovers.length} leftover cloak pid(s) before spawn`
+    );
+    await killAllIngestRelated(c);
+    await waitUntilCloakClear(c, 'start', 20_000);
+    await new Promise((resolve) => setTimeout(resolve, 8_000));
+  }
+  state.failures = 0;
+  // If a session-limit hold is still active, do not zero it on a frantic click.
+  if (Date.now() < state.nextSpawnAllowedAt) {
+    const wait = state.nextSpawnAllowedAt - Date.now();
+    await appendIngestLog(
+      c,
+      `start: session-limit hold active; supervisor will spawn in ${Math.round(wait / 1000)}s`
+    );
+    return {
+      started: false,
+      reason: 'session-limit backoff',
+      enabled: true,
+      retryInMs: wait
+    };
+  }
+  state.nextSpawnAllowedAt = 0;
+
   await resumeCursorFromState(c);
   const pid = await spawnIngester(c, options);
   await writeStatus(c.statusPath, {
@@ -518,15 +602,62 @@ function cloakKillPatterns(c) {
     'cloakbrowser-cache',
     `Xvfb :${cloakDisplay}`
   ];
-  // Absolute cache dir (escaped) so we catch chrome even if cwd differs.
-  const cacheDir = c.cloakBrowserCacheDir || '';
-  if (cacheDir) {
-    const esc = String(cacheDir).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Absolute cache / profile dirs (escaped) so we catch chrome even if cwd differs.
+  for (const dir of [c.cloakBrowserCacheDir, c.cloakProfileDir]) {
+    if (!dir) continue;
+    const esc = String(dir).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     patterns.push(esc);
   }
   // Licensed Pro chrome binary name from CloakBrowser packages.
   patterns.push('chromium-[0-9.]+-pro/chrome');
+  patterns.push('chromium-[0-9.]+-pro');
   return patterns;
+}
+
+/**
+ * Linux /proc scan for chrome/Xvfb that pgrep -f sometimes misses (truncated
+ * cmdline, altered argv0). Matches user-data-dir / cache / pro chrome paths.
+ */
+async function pidsFromProcCmdline(c) {
+  const found = new Set();
+  if (process.platform === 'win32') return found;
+  const needles = [
+    'cloakbrowser-profile',
+    'cloakbrowser-cache',
+    'chromium-',
+    '-pro/chrome',
+    `Xvfb :${process.env.AIM4_CLOAK_XVFB_DISPLAY || '100'}`
+  ];
+  if (c.cloakBrowserCacheDir) needles.push(String(c.cloakBrowserCacheDir));
+  if (c.cloakProfileDir) needles.push(String(c.cloakProfileDir));
+  let entries = [];
+  try {
+    entries = await fsp.readdir('/proc');
+  } catch {
+    return found;
+  }
+  for (const name of entries) {
+    if (!/^\d+$/.test(name)) continue;
+    const pid = Number(name);
+    if (!Number.isFinite(pid) || pid <= 1 || pid === process.pid) continue;
+    let cmd = '';
+    try {
+      cmd = (await fsp.readFile(`/proc/${pid}/cmdline`)).toString('utf8');
+    } catch {
+      continue;
+    }
+    const text = cmd.replace(/\0/g, ' ');
+    if (!text) continue;
+    // Require a cloak/pro marker so we never sweep the host's unrelated chrome.
+    const ours =
+      /cloakbrowser/i.test(text) ||
+      /chromium-[\d.]+-pro/i.test(text) ||
+      (c.cloakBrowserCacheDir && text.includes(c.cloakBrowserCacheDir)) ||
+      (c.cloakProfileDir && text.includes(c.cloakProfileDir));
+    if (!ours) continue;
+    if (needles.some((n) => n && text.includes(n))) found.add(pid);
+  }
+  return found;
 }
 
 /** Live PIDs that still look like our CloakBrowser / ingest stack. */
@@ -538,6 +669,7 @@ async function remainingCloakPids(c) {
   for (const pattern of cloakKillPatterns(c)) {
     for (const pid of await pidsMatching(pattern)) found.add(pid);
   }
+  for (const pid of await pidsFromProcCmdline(c)) found.add(pid);
   return [...found];
 }
 
@@ -585,6 +717,15 @@ async function killAllIngestRelated(c) {
     if (matches.length) {
       await log(`hard reset: pgrep ${pattern} -> ${matches.join(',')}`);
     }
+  }
+
+  const procHits = [...(await pidsFromProcCmdline(c))];
+  for (const pid of procHits) {
+    await killProcessTree(pid);
+    if (killPid(pid)) killed.add(pid);
+  }
+  if (procHits.length) {
+    await log(`hard reset: /proc cmdline -> ${procHits.join(',')}`);
   }
 
   await clearProfileLocks(c.cloakProfileDir);
@@ -713,9 +854,20 @@ async function hardKillSweep(c, label) {
   if (again.length) {
     await appendIngestLog(c, `${label}: second sweep killed ${again.length} pid(s)`);
   }
-  await waitUntilCloakClear(c, label, 20_000);
-  // Extra settle for remote Pro license accounting after SIGKILL.
-  await new Promise((resolve) => setTimeout(resolve, 3_000));
+  await waitUntilCloakClear(c, label, 25_000);
+  // Extra settle for remote Pro license accounting after SIGKILL. Too short
+  // and Hard Restart immediately hits "session limit reached".
+  await appendIngestLog(
+    c,
+    `${label}: waiting ${Math.round(LICENSE_SETTLE_MS / 1000)}s for Pro seat release`
+  );
+  await new Promise((resolve) => setTimeout(resolve, LICENSE_SETTLE_MS));
+  // One last sweep in case chrome respawned during the settle (supervisor race).
+  const final = await killAllIngestRelated(c);
+  if (final.length) {
+    await appendIngestLog(c, `${label}: post-settle sweep killed ${final.length} pid(s)`);
+    await waitUntilCloakClear(c, `${label}-post`, 10_000);
+  }
 
   state.failures = 0;
   state.nextSpawnAllowedAt = 0;
@@ -723,7 +875,7 @@ async function hardKillSweep(c, label) {
 
   return {
     oldPid: oldPid || null,
-    killedPids: [...new Set([...killed, ...again])]
+    killedPids: [...new Set([...killed, ...again, ...final])]
   };
 }
 
@@ -826,10 +978,28 @@ export async function supervise() {
       failures: state.failures
     };
   }
-  const pid = await spawnIngester(c, desired);
-  console.log(`[ingest] supervisor restarted the ingester (pid ${pid})`);
-  await appendIngestLog(c, `supervisor restart pid=${pid}`);
-  return { action: 'restarted', enabled: true, pid };
+  try {
+    const pid = await spawnIngester(c, desired);
+    console.log(`[ingest] supervisor restarted the ingester (pid ${pid})`);
+    await appendIngestLog(c, `supervisor restart pid=${pid}`);
+    return { action: 'restarted', enabled: true, pid };
+  } catch (err) {
+    const msg = String(err?.message || err);
+    await appendIngestLog(c, `supervisor spawn failed: ${msg}`);
+    if (isSessionLimitMessage(msg) || /leftovers still alive/i.test(msg)) {
+      state.nextSpawnAllowedAt = Date.now() + SESSION_LIMIT_BACKOFF_MS;
+    } else {
+      state.failures = Math.min(state.failures + 1, 6);
+      state.nextSpawnAllowedAt =
+        Date.now() + Math.min(2 ** state.failures * 5_000, 60_000);
+    }
+    return {
+      action: 'spawn-failed',
+      enabled: true,
+      error: msg,
+      retryInMs: Math.max(0, state.nextSpawnAllowedAt - Date.now())
+    };
+  }
 }
 
 /**
@@ -870,12 +1040,18 @@ export async function status() {
   const c = cfg();
   const desired = await readDesired(c);
   // Off must never look "still working" because a child outlived SIGTERM.
+  // Also reap orphan chrome that still holds a Pro seat (status polls often).
   if (!desired.enabled) {
     const stray = await readPid(c.lockPath);
-    if (stray && alive(stray)) {
-      await appendIngestLog(c, `status poll killing stray pid=${stray}`);
-      killIngestPid(stray);
-      await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+    const leftovers = await remainingCloakPids(c);
+    if ((stray && alive(stray)) || leftovers.length) {
+      await appendIngestLog(
+        c,
+        `status poll Off sweep` +
+          (stray && alive(stray) ? ` ingest=${stray}` : '') +
+          (leftovers.length ? ` cloak=[${leftovers.slice(0, 12).join(',')}]` : '')
+      );
+      await killAllIngestRelated(c);
     }
   }
 
