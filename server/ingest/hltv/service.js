@@ -950,6 +950,7 @@ export async function status() {
       since: c.since,
       demoStart: c.demoStart,
       frontierWaitMs: c.frontierWaitMs,
+      frontierLookahead: c.frontierLookahead,
       batchSize: c.batchSize,
       pollIntervalMs: c.pollIntervalMs,
       library: c.library || null

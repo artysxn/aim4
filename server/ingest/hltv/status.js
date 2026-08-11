@@ -167,6 +167,24 @@ export function foldEvent(status, event, ledger) {
         playedAt: null
       };
       break;
+    case 'frontier-miss':
+      s.current = {
+        matchId: String(event.demoId),
+        label: `demo/${event.demoId}`,
+        demoId: event.demoId,
+        stage: 'frontier',
+        lastSuccessId: event.lastSuccessId
+      };
+      break;
+    case 'frontier-lookahead':
+      s.current = {
+        matchId: String(event.demoId),
+        label: `demo/${event.demoId}`,
+        demoId: event.demoId,
+        stage: 'lookahead',
+        baseId: event.baseId
+      };
+      break;
     case 'frontier':
       s.current = {
         matchId: String(event.demoId),

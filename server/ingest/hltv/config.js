@@ -103,6 +103,11 @@ export function loadConfig(overrides = {}) {
     demoSeek: num(env.AIM4_INGEST_DEMO_SEEK, 0),
     /** Wait between retries when the next demo id is not published yet. */
     frontierWaitMs: num(env.AIM4_INGEST_FRONTIER_WAIT_MS, 10 * 60 * 1000),
+    /**
+     * When demo N 404s, also try N+1 .. N+lookahead before waiting.
+     * HLTV leaves gaps; the next published id is often a few ahead.
+     */
+    frontierLookahead: num(env.AIM4_INGEST_FRONTIER_LOOKAHEAD, 5),
 
     /** Refuse to start a batch below this much free disk. */
     minFreeBytes: num(env.AIM4_INGEST_MIN_FREE_BYTES, 10 * 1024 ** 3),

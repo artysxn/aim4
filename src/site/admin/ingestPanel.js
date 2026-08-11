@@ -635,6 +635,9 @@ export function ingestPanel() {
         stateLabel = status.restartBackoffMs
           ? `Restart ${Math.ceil(status.restartBackoffMs / 1000)}s`
           : 'Starting';
+      } else if (current?.stage === 'lookahead') {
+        stateTone = 'is-running';
+        stateLabel = 'Lookahead';
       } else if (current?.stage === 'waiting' || p.atFrontier) {
         stateTone = 'is-idle';
         stateLabel = 'Waiting';
@@ -662,6 +665,13 @@ export function ingestPanel() {
         : 0;
       detail =
         `Last ok ${p.lastSuccessId ?? 'none'}` + (secs ? ` · retry ${secs}s` : '');
+    } else if (current?.stage === 'lookahead') {
+      detail =
+        current.baseId != null
+          ? `ahead of ${current.baseId}`
+          : 'checking next ids';
+    } else if (current?.stage === 'frontier') {
+      detail = `Last ok ${p.lastSuccessId ?? 'none'} · checking ahead`;
     } else if (current?.stage === 'download') {
       detail = current.received
         ? `${bytes(current.received)}${current.totalBytes ? ` / ${bytes(current.totalBytes)}` : ''}`

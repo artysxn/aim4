@@ -199,17 +199,44 @@ function logEvent(e, verbose) {
         `cursor: demo/${e.nextId} · ${e.done}/${e.total} · ${e.loopsPerHour}/h · left ${e.left}`
       );
       break;
+    case 'frontier-miss':
+      console.log(
+        `frontier: demo/${e.demoId} missing` +
+          `${e.lastSuccessId != null ? ` (last ok ${e.lastSuccessId})` : ''}`
+      );
+      break;
+    case 'frontier-lookahead-start':
+      console.log(
+        `frontier: checking demo/${e.baseId + 1}..demo/${e.throughId} before wait`
+      );
+      break;
+    case 'frontier-lookahead':
+      console.log(
+        `frontier: trying demo/${e.demoId} (${e.attempt}/${e.of} ahead of ${e.baseId})`
+      );
+      break;
+    case 'frontier-gap-jump':
+      console.log(
+        `frontier: gap jump demo/${e.fromId} -> demo/${e.toId} (skipped ${e.skipped})`
+      );
+      break;
+    case 'gap-skipped':
+      console.log(`     gap: demo/${e.demoId} marked missing`);
+      break;
     case 'frontier':
       console.log(
         `frontier: demo/${e.demoId} missing` +
-          `${e.lastSuccessId != null ? ` (last ok ${e.lastSuccessId})` : ''}; ` +
+          `${e.lastSuccessId != null ? ` (last ok ${e.lastSuccessId})` : ''}` +
+          `${e.lookedAheadTo != null ? ` through demo/${e.lookedAheadTo}` : ''}; ` +
           `retry in ${Math.round(e.nextCheckInMs / 60000)} min`
       );
       break;
     case 'idle':
       console.log(
         e.reason === 'frontier'
-          ? `waiting for demo/${e.demoId}; next check in ${Math.round(e.nextPollInMs / 1000)}s`
+          ? `waiting for demo/${e.demoId}` +
+              `${e.lookedAheadTo != null ? ` (checked through ${e.lookedAheadTo})` : ''}` +
+              `; next check in ${Math.round(e.nextPollInMs / 1000)}s`
           : e.reason === 'challenge' || e.reason === 'infra'
             ? `waiting after ${e.reason} on demo/${e.demoId}; next try in ${Math.round(e.nextPollInMs / 1000)}s`
             : `idle; next poll in ${Math.round(e.nextPollInMs / 1000)}s`

@@ -3,8 +3,9 @@
 // Sequential HLTV demo-id loop (and the older local batch path).
 //
 // HLTV mode walks /download/demo/{N} one at a time: download → unpack → parse →
-// library → delete remains → N+1. A 404 frontier waits 10 minutes and retries
-// the same id. Local mode keeps the discover + batch barrier for inbox drops.
+// library → delete remains → N+1. A 404 frontier probes N+1 .. N+lookahead
+// before waiting 10 minutes and retrying N. Local mode keeps the discover +
+// batch barrier for inbox drops.
 // ---------------------------------------------------------------------------
 
 import path from 'node:path';
@@ -16,7 +17,8 @@ import {
   advanceCursor,
   cursorProgress,
   noteFrontierMiss,
-  readCursor
+  readCursor,
+  seekCursor
 } from './cursor.js';
 import { MissingDemoError } from './classify.js';
 import { isTransientDownloadError } from './transient.js';
@@ -341,20 +343,14 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
           cursorSnapshot || (await readCursor(cfg))
         );
         const progress = await emitCursor({ lastOutcome: 'missing' });
-        emit('frontier', {
+        // Wait / lookahead is decided by runSequential; do not idle here.
+        emit('frontier-miss', {
           demoId: id,
           lastSuccessId: progress.lastSuccessId,
-          nextCheckInMs: cfg.frontierWaitMs,
           frontierMisses: progress.frontierMisses
         });
-        current = {
-          matchId,
-          label: `demo/${id}`,
-          demoId: id,
-          stage: 'waiting',
-          lastSuccessId: progress.lastSuccessId
-        };
         emit('download-failed', { matchId, error: err.message, missing: true });
+        current = null;
         return { advanced: false, missing: true };
       }
 
@@ -433,6 +429,114 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
     }
   }
 
+  /** Permanently skip unpublished ids once a later demo proves the gap. */
+  async function markGapSkipped(demoId) {
+    const matchId = String(demoId);
+    if (!ledger.has(matchId)) {
+      ledger.upsertDiscovered({
+        matchId,
+        source: 'hltv',
+        hltvDemoId: demoId,
+        matchUrl: `https://www.hltv.org/download/demo/${demoId}`,
+        playedAt: null,
+        event: '',
+        teams: []
+      });
+    }
+    if (!ledger.isTerminal(matchId)) {
+      ledger.setState(matchId, STATES.FAILED, {
+        lastError: 'HLTV demo not published (gap before a later id)',
+        lastAttemptAt: new Date().toISOString()
+      });
+    }
+    await ledger.save();
+    emit('gap-skipped', { demoId, matchId });
+  }
+
+  /**
+   * After demo N 404s, try N+1 .. N+lookahead. If one exists, skip the gaps and
+   * continue. If none do, restore the cursor to N and wait frontierWaitMs.
+   */
+  async function resolveFrontierMiss(baseId, { continuous }) {
+    const lookahead = Math.max(0, Math.floor(Number(cfg.frontierLookahead) || 0));
+    if (lookahead > 0) {
+      emit('frontier-lookahead-start', {
+        baseId,
+        throughId: baseId + lookahead,
+        count: lookahead
+      });
+    }
+
+    for (let k = 1; k <= lookahead && !stopping; k++) {
+      const candidate = baseId + k;
+      emit('frontier-lookahead', {
+        baseId,
+        demoId: candidate,
+        attempt: k,
+        of: lookahead
+      });
+      cursorSnapshot = await seekCursor(cfg, candidate);
+      await emitCursor();
+      if (!stopping) await sleepInterruptible(cfg.minDelayMs || 0);
+      if (stopping) return { action: 'stopped' };
+
+      if (abort.signal.aborted) freshAbort();
+      const look = await runOneDemo(candidate);
+      if (stopping) return { action: 'stopped' };
+
+      if (look.missing) continue;
+
+      if (look.stopped) {
+        return { action: 'stopped' };
+      }
+
+      if (look.blocked) {
+        return { action: 'blocked', outcome: look, demoId: candidate };
+      }
+
+      // Found a later id: permanently skip the gap behind it.
+      for (let g = baseId; g < candidate; g++) {
+        await markGapSkipped(g);
+      }
+      emit('frontier-gap-jump', {
+        fromId: baseId,
+        toId: candidate,
+        skipped: candidate - baseId
+      });
+      return { action: 'advanced', outcome: look, demoId: candidate };
+    }
+
+    // True frontier: nothing through N+lookahead. Wait and retry N.
+    cursorSnapshot = await seekCursor(cfg, baseId);
+    cursorSnapshot = await noteFrontierMiss(cfg, cursorSnapshot);
+    const progress = await emitCursor({ lastOutcome: 'missing' });
+    emit('frontier', {
+      demoId: baseId,
+      lastSuccessId: progress.lastSuccessId,
+      nextCheckInMs: cfg.frontierWaitMs,
+      frontierMisses: progress.frontierMisses,
+      lookedAheadTo: baseId + lookahead
+    });
+    current = {
+      matchId: String(baseId),
+      label: `demo/${baseId}`,
+      demoId: baseId,
+      stage: 'waiting',
+      lastSuccessId: progress.lastSuccessId
+    };
+    if (!continuous) return { action: 'missing' };
+    emit('idle', {
+      nextPollInMs: cfg.frontierWaitMs,
+      reason: 'frontier',
+      demoId: baseId,
+      lastSuccessId: progress.lastSuccessId,
+      lookedAheadTo: baseId + lookahead
+    });
+    await sleepInterruptible(cfg.frontierWaitMs);
+    cursorSnapshot = await readCursor(cfg);
+    return { action: 'waited' };
+  }
+
   async function runSequential({ continuous = false, maxLoops = Infinity } = {}) {
     stopping = false;
     freshAbort();
@@ -444,19 +548,34 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
     while (!stopping && loops < maxLoops) {
       if (abort.signal.aborted) freshAbort();
       const id = Number(cursorSnapshot.nextId);
-      const outcome = await runOneDemo(id);
+      let outcome = await runOneDemo(id);
       if (stopping) break;
 
       if (outcome.missing) {
-        if (!continuous) break;
-        emit('idle', {
-          nextPollInMs: cfg.frontierWaitMs,
-          reason: 'frontier',
-          demoId: id,
-          lastSuccessId: cursorSnapshot.lastSuccessId
-        });
-        await sleepInterruptible(cfg.frontierWaitMs);
+        const resolved = await resolveFrontierMiss(id, { continuous });
+        if (resolved.action === 'stopped' || stopping) break;
+        if (resolved.action === 'missing') break;
+        if (resolved.action === 'waited') continue;
+        if (resolved.action === 'blocked') {
+          outcome = resolved.outcome;
+          // Fall through to the blocked handler using the candidate id.
+          if (!continuous) break;
+          const waitMs = outcome.waitMs || 45_000;
+          const blockedId = resolved.demoId || id;
+          emit('idle', {
+            nextPollInMs: waitMs,
+            reason: outcome.reason || 'challenge',
+            demoId: blockedId
+          });
+          await sleepInterruptible(waitMs);
+          cursorSnapshot = await readCursor(cfg);
+          continue;
+        }
+        // Advanced past a gap to a real demo.
+        loops++;
         cursorSnapshot = await readCursor(cfg);
+        if (!continuous && loops >= maxLoops) break;
+        if (!stopping) await sleepInterruptible(cfg.minDelayMs || 0);
         continue;
       }
 
