@@ -14,8 +14,10 @@ import { pipeline } from 'node:stream/promises';
 import { ensureBinary, launchContext, launchPersistentContext } from 'cloakbrowser';
 import {
   applyProxySettings,
+  CONFIRMED_ROTATION_SIZE,
   loadProxyPool,
   markProxyFailed,
+  readConfirmedProxies,
   readWorkingProxies,
   recordWorkingProxy,
   redactProxy
@@ -230,7 +232,9 @@ export function createCloakSession(cfg = {}) {
   let settingsPromise = null;
   let activeProxy = undefined;
   let proxyCursor = 0;
+  /** Prefix of the pool that is HLTV-confirmed. When >= 6, pick only from it. */
   let preferredProxyCount = 0;
+  const confirmedProxies = new Set();
   let binaryLogged = false;
 
   const log = (message) => {
@@ -261,14 +265,31 @@ export function createCloakSession(cfg = {}) {
   async function ensurePool() {
     if (!poolPromise) {
       poolPromise = (async () => {
-        const working = await readWorkingProxies(cfg);
-        preferredProxyCount = working.length;
+        const confirmed = await readConfirmedProxies(cfg);
+        confirmedProxies.clear();
+        for (const entry of confirmed.slice(0, CONFIRMED_ROTATION_SIZE)) {
+          confirmedProxies.add(entry.url);
+        }
+        preferredProxyCount = confirmedProxies.size;
         const pool = await loadProxyPool(cfg);
+        // Keep confirmed urls at the front even if disk order drifted.
+        for (const url of [...confirmedProxies].reverse()) {
+          const idx = pool.indexOf(url);
+          if (idx > 0) {
+            pool.splice(idx, 1);
+            pool.unshift(url);
+          }
+        }
+        preferredProxyCount = Math.min(
+          CONFIRMED_ROTATION_SIZE,
+          [...confirmedProxies].filter((u) => pool.includes(u)).length
+        );
         if (pool.length) {
-          log(
-            `Proxy pool: ${pool.length} endpoint(s)` +
-              (preferredProxyCount ? `, ${preferredProxyCount} preferred` : '')
-          );
+          const mode =
+            preferredProxyCount >= CONFIRMED_ROTATION_SIZE
+              ? `rotating ${preferredProxyCount} confirmed`
+              : `${preferredProxyCount}/${CONFIRMED_ROTATION_SIZE} confirmed (discovering)`;
+          log(`Proxy pool: ${pool.length} endpoint(s), ${mode}`);
         } else log('Proxy pool: empty (direct exit IP)');
         return pool;
       })();
@@ -362,26 +383,93 @@ export function createCloakSession(cfg = {}) {
     return contextPromise;
   }
 
+  /** Drop a dead exit from the in-memory pool so this session never retries it. */
+  function removeFromPool(pool, proxy) {
+    if (!proxy || !pool?.length) return;
+    const idx = pool.indexOf(proxy);
+    if (idx < 0) {
+      confirmedProxies.delete(proxy);
+      return;
+    }
+    pool.splice(idx, 1);
+    if (confirmedProxies.delete(proxy) || idx < preferredProxyCount) {
+      preferredProxyCount = Math.min(
+        CONFIRMED_ROTATION_SIZE,
+        [...confirmedProxies].filter((u) => pool.includes(u)).length
+      );
+    }
+    if (proxyCursor >= pool.length) proxyCursor = 0;
+  }
+
+  /** Promote a freshly confirmed exit into the rotation prefix. */
+  function rememberConfirmed(pool, proxy) {
+    if (!proxy || !pool?.length) return;
+    confirmedProxies.add(proxy);
+    const idx = pool.indexOf(proxy);
+    if (idx > 0) {
+      pool.splice(idx, 1);
+      pool.unshift(proxy);
+    } else if (idx < 0) {
+      pool.unshift(proxy);
+    }
+    // Cap the live rotation prefix at 6; extras stay in the discovery tail.
+    const confirmedInPool = pool.filter((u) => confirmedProxies.has(u));
+    if (confirmedInPool.length > CONFIRMED_ROTATION_SIZE) {
+      for (const url of confirmedInPool.slice(CONFIRMED_ROTATION_SIZE)) {
+        confirmedProxies.delete(url);
+      }
+    }
+    preferredProxyCount = Math.min(
+      CONFIRMED_ROTATION_SIZE,
+      pool.filter((u) => confirmedProxies.has(u)).length
+    );
+    // Keep confirmed urls packed at the front.
+    const head = pool.filter((u) => confirmedProxies.has(u));
+    const tail = pool.filter((u) => !confirmedProxies.has(u));
+    pool.splice(0, pool.length, ...head, ...tail);
+  }
+
   function pickProxy(pool, used, random) {
     if (!pool.length) return undefined;
-    // Always drain preferred (working) proxies in order first. Random among
-    // unproven cache entries only after those are exhausted. Sticky order is
-    // what makes a successful probe's exit IP get reused by ingest.
-    for (let i = 0; i < preferredProxyCount; i++) {
-      const candidate = pool[i];
-      if (candidate && !used.has(candidate)) return candidate;
+    const rotationOnly = preferredProxyCount >= CONFIRMED_ROTATION_SIZE;
+    const preferred = [];
+    for (let i = 0; i < preferredProxyCount && i < pool.length; i++) {
+      if (pool[i] && !used.has(pool[i])) preferred.push(pool[i]);
     }
-    if (!random) {
-      for (let i = 0; i < pool.length; i++) {
-        const candidate = pool[(proxyCursor + i) % pool.length];
-        if (!used.has(candidate)) return candidate;
+    const rest = [];
+    if (!rotationOnly) {
+      for (let i = preferredProxyCount; i < pool.length; i++) {
+        if (pool[i] && !used.has(pool[i])) rest.push(pool[i]);
       }
-      return pool[proxyCursor % pool.length];
     }
-    const unused = pool.filter((p) => !used.has(p) && pool.indexOf(p) >= preferredProxyCount);
-    const choices = unused.length ? unused : pool.filter((p) => !used.has(p));
-    if (!choices.length) return pool[0];
-    return choices[Math.floor(Math.random() * choices.length)];
+
+    if (random) {
+      // With 6 confirmed: rotate among those only. Below that: prefer confirmed,
+      // then explore the wider pool to fill the set.
+      const bucket = preferred.length
+        ? preferred
+        : rest.length
+          ? rest
+          : pool.filter((p) => !used.has(p));
+      if (!bucket.length) return rotationOnly ? preferred[0] || pool[0] : pool[0];
+      return bucket[Math.floor(Math.random() * bucket.length)];
+    }
+
+    if (preferred.length) return preferred[0];
+    if (rotationOnly) return undefined;
+    for (let i = 0; i < pool.length; i++) {
+      const candidate = pool[(proxyCursor + i) % pool.length];
+      if (!used.has(candidate)) return candidate;
+    }
+    return pool[proxyCursor % pool.length];
+  }
+
+  function isHardProxyFailure(err) {
+    if (!err) return false;
+    if (err.blocked) return true;
+    return /Cloudflare challenge|challenge page|cf-mitigated|Just a moment/i.test(
+      String(err.message || err)
+    );
   }
 
   async function withProxyFailover(opts, fn) {
@@ -397,6 +485,7 @@ export function createCloakSession(cfg = {}) {
     let displayRetries = 0;
     for (let i = 0; i < maxAttempts; i++) {
       if (opts.signal?.aborted) throw abortError(opts.signal);
+      if (!pool.length) break;
       const proxy = pickProxy(pool, used, random);
       if (proxy) used.add(proxy);
       if (proxy !== activeProxy || !contextPromise) {
@@ -412,7 +501,15 @@ export function createCloakSession(cfg = {}) {
         });
         if (proxy) {
           if (!random) proxyCursor = Math.max(0, pool.indexOf(proxy));
-          await recordWorkingProxy(cfg, { url: proxy }).catch(() => {});
+          await recordWorkingProxy(cfg, { url: proxy, confirmed: true }).catch(() => {});
+          const before = preferredProxyCount;
+          rememberConfirmed(pool, proxy);
+          if (before < CONFIRMED_ROTATION_SIZE && preferredProxyCount >= CONFIRMED_ROTATION_SIZE) {
+            log(
+              `Confirmed rotation full (${CONFIRMED_ROTATION_SIZE}): ` +
+                `rotating among these exits only`
+            );
+          }
         }
         return result;
       } catch (err) {
@@ -430,8 +527,19 @@ export function createCloakSession(cfg = {}) {
           i -= 1;
           continue;
         }
-        if (proxy) await markProxyFailed(cfg, proxy).catch(() => {});
-        const canRetry = isProxyRetryable(err) && i < maxAttempts - 1;
+        if (proxy) {
+          const hard = isHardProxyFailure(err);
+          const outcome = await markProxyFailed(cfg, proxy, {
+            hard,
+            reason: hard ? 'cloudflare-challenge' : 'transport-fail'
+          }).catch(() => ({ blacklisted: hard }));
+          // CF / blocked → 24h ban immediately. Soft preferred fails need 3 strikes.
+          if (outcome?.blacklisted || hard) {
+            removeFromPool(pool, proxy);
+            log(`Blacklisted ${redactProxy(proxy)} for 24h`);
+          }
+        }
+        const canRetry = isProxyRetryable(err) && i < maxAttempts - 1 && pool.some((p) => !used.has(p));
         if (!canRetry) {
           // Leave blocked/proxyRetryable for the pipeline to back off on the
           // same demo id. fatal here used to kill the whole ingester.

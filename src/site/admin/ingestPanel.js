@@ -251,7 +251,15 @@ function proxiesBlock() {
       return;
     }
     if (st?.refresh?.summary) meta.textContent = st.refresh.summary;
-    else meta.textContent = `Working ${n} · Cache ${st?.cacheCount ?? 0}`;
+    else {
+      const confirmed = st?.confirmedCount ?? 0;
+      const need = st?.rotationSize ?? 6;
+      const rot = st?.rotationOnly
+        ? `Rotating ${confirmed}`
+        : `Confirmed ${confirmed}/${need}`;
+      const banned = st?.blacklistCount ? ` · Banned ${st.blacklistCount}` : '';
+      meta.textContent = `${rot} · Working ${n} · Cache ${st?.cacheCount ?? 0}${banned}`;
+    }
   }
 
   return {
