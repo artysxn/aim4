@@ -252,13 +252,16 @@ function proxiesBlock() {
     }
     if (st?.refresh?.summary) meta.textContent = st.refresh.summary;
     else {
-      const confirmed = st?.confirmedCount ?? 0;
-      const need = st?.rotationSize ?? 6;
+      const tested = st?.testedCount ?? 0;
+      const target = st?.testTarget ?? 40;
+      const best = st?.confirmedCount ?? 0;
+      const need = st?.rotationSize ?? 5;
       const rot = st?.rotationOnly
-        ? `Rotating ${confirmed}`
-        : `Confirmed ${confirmed}/${need}`;
+        ? `Top ${best}/${need} by speed`
+        : `Tested ${tested}/${target}`;
+      const gray = st?.graylistCount ? ` · Gray ${st.graylistCount}` : '';
       const banned = st?.blacklistCount ? ` · Banned ${st.blacklistCount}` : '';
-      meta.textContent = `${rot} · Working ${n} · Cache ${st?.cacheCount ?? 0}${banned}`;
+      meta.textContent = `${rot} · Working ${n} · Cache ${st?.cacheCount ?? 0}${gray}${banned}`;
     }
   }
 

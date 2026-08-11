@@ -14,11 +14,20 @@ import { pipeline } from 'node:stream/promises';
 import { ensureBinary, launchContext, launchPersistentContext } from 'cloakbrowser';
 import {
   applyProxySettings,
-  CONFIRMED_ROTATION_SIZE,
+  createProgressSpeedMonitor,
+  filterPoolForPick,
+  formatBestProxyLog,
+  graylistProxy,
   loadProxyPool,
   markProxyFailed,
-  readConfirmedProxies,
-  readWorkingProxies,
+  MIN_DOWNLOAD_SPEED_BPS,
+  PROXY_BEST_ROTATION,
+  PROXY_SPEED_ATTEMPTS,
+  PROXY_TEST_TARGET,
+  rankBestProxies,
+  readBestProxies,
+  readProxyGraylist,
+  readTestedProxies,
   recordWorkingProxy,
   redactProxy
 } from './proxyPool.js';
@@ -57,9 +66,9 @@ function isProxyRetryable(err) {
   // Display/Xvfb failures are host setup, not a bad proxy. Burning the pool
   // on "Missing X server" is how ingest looked dead after a hard kill.
   if (isDisplayError(err)) return false;
-  if (err.blocked || err.proxyRetryable) return true;
+  if (err.blocked || err.proxyRetryable || err.slow) return true;
   const msg = String(err.message || err);
-  return /proxy|SOCKS|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|ERR_TUNNEL|ERR_PROXY|tunnel|socket hang up|net::ERR_/i.test(
+  return /proxy|SOCKS|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|ERR_TUNNEL|ERR_PROXY|tunnel|socket hang up|net::ERR_|too slow/i.test(
     msg
   );
 }
@@ -232,10 +241,38 @@ export function createCloakSession(cfg = {}) {
   let settingsPromise = null;
   let activeProxy = undefined;
   let proxyCursor = 0;
-  /** Prefix of the pool that is HLTV-confirmed. When >= 6, pick only from it. */
-  let preferredProxyCount = 0;
-  const confirmedProxies = new Set();
+  /** Top exits by MB/s once testedCount >= PROXY_TEST_TARGET. */
+  let bestProxies = [];
+  let testedProxyUrls = new Set();
+  let grayProxyUrls = new Set();
+  let testedCount = 0;
+  let rotationOnly = false;
   let binaryLogged = false;
+
+  async function refreshProxyRanks() {
+    const [tested, gray, best] = await Promise.all([
+      readTestedProxies(cfg),
+      readProxyGraylist(cfg),
+      readBestProxies(cfg, PROXY_BEST_ROTATION)
+    ]);
+    testedProxyUrls = new Set(tested.map((e) => e.url));
+    grayProxyUrls = new Set(gray.keys());
+    testedCount = tested.length;
+    rotationOnly = testedCount >= PROXY_TEST_TARGET;
+    bestProxies = (rotationOnly ? best : rankBestProxies(tested, { limit: PROXY_BEST_ROTATION }))
+      .map((e) => e.url)
+      .filter(Boolean);
+    return { tested, best, testedCount, rotationOnly };
+  }
+
+  function logBestProxies(extraBest) {
+    const best = extraBest?.length
+      ? extraBest
+      : bestProxies.map((url) => ({ url, mbps: null }));
+    for (const line of formatBestProxyLog(best, { testedCount }).split('\n')) {
+      log(line);
+    }
+  }
 
   const log = (message) => {
     const line = String(message || '');
@@ -265,31 +302,22 @@ export function createCloakSession(cfg = {}) {
   async function ensurePool() {
     if (!poolPromise) {
       poolPromise = (async () => {
-        const confirmed = await readConfirmedProxies(cfg);
-        confirmedProxies.clear();
-        for (const entry of confirmed.slice(0, CONFIRMED_ROTATION_SIZE)) {
-          confirmedProxies.add(entry.url);
-        }
-        preferredProxyCount = confirmedProxies.size;
+        const ranks = await refreshProxyRanks();
         const pool = await loadProxyPool(cfg);
-        // Keep confirmed urls at the front even if disk order drifted.
-        for (const url of [...confirmedProxies].reverse()) {
+        // Keep current best urls at the front even if disk order drifted.
+        for (const url of [...bestProxies].reverse()) {
           const idx = pool.indexOf(url);
           if (idx > 0) {
             pool.splice(idx, 1);
             pool.unshift(url);
           }
         }
-        preferredProxyCount = Math.min(
-          CONFIRMED_ROTATION_SIZE,
-          [...confirmedProxies].filter((u) => pool.includes(u)).length
-        );
         if (pool.length) {
-          const mode =
-            preferredProxyCount >= CONFIRMED_ROTATION_SIZE
-              ? `rotating ${preferredProxyCount} confirmed`
-              : `${preferredProxyCount}/${CONFIRMED_ROTATION_SIZE} confirmed (discovering)`;
+          const mode = ranks.rotationOnly
+            ? `rotating top ${Math.min(PROXY_BEST_ROTATION, bestProxies.length)} by speed`
+            : `tested ${ranks.testedCount}/${PROXY_TEST_TARGET} (discovering, skip gray ${grayProxyUrls.size})`;
           log(`Proxy pool: ${pool.length} endpoint(s), ${mode}`);
+          if (ranks.tested.length) logBestProxies(ranks.best.length ? ranks.best : ranks.tested.slice(0, 5));
         } else log('Proxy pool: empty (direct exit IP)');
         return pool;
       })();
@@ -387,81 +415,32 @@ export function createCloakSession(cfg = {}) {
   function removeFromPool(pool, proxy) {
     if (!proxy || !pool?.length) return;
     const idx = pool.indexOf(proxy);
-    if (idx < 0) {
-      confirmedProxies.delete(proxy);
-      return;
-    }
-    pool.splice(idx, 1);
-    if (confirmedProxies.delete(proxy) || idx < preferredProxyCount) {
-      preferredProxyCount = Math.min(
-        CONFIRMED_ROTATION_SIZE,
-        [...confirmedProxies].filter((u) => pool.includes(u)).length
-      );
-    }
+    if (idx >= 0) pool.splice(idx, 1);
+    testedProxyUrls.delete(proxy);
+    grayProxyUrls.delete(proxy);
+    bestProxies = bestProxies.filter((u) => u !== proxy);
     if (proxyCursor >= pool.length) proxyCursor = 0;
-  }
-
-  /** Promote a freshly confirmed exit into the rotation prefix. */
-  function rememberConfirmed(pool, proxy) {
-    if (!proxy || !pool?.length) return;
-    confirmedProxies.add(proxy);
-    const idx = pool.indexOf(proxy);
-    if (idx > 0) {
-      pool.splice(idx, 1);
-      pool.unshift(proxy);
-    } else if (idx < 0) {
-      pool.unshift(proxy);
-    }
-    // Cap the live rotation prefix at 6; extras stay in the discovery tail.
-    const confirmedInPool = pool.filter((u) => confirmedProxies.has(u));
-    if (confirmedInPool.length > CONFIRMED_ROTATION_SIZE) {
-      for (const url of confirmedInPool.slice(CONFIRMED_ROTATION_SIZE)) {
-        confirmedProxies.delete(url);
-      }
-    }
-    preferredProxyCount = Math.min(
-      CONFIRMED_ROTATION_SIZE,
-      pool.filter((u) => confirmedProxies.has(u)).length
-    );
-    // Keep confirmed urls packed at the front.
-    const head = pool.filter((u) => confirmedProxies.has(u));
-    const tail = pool.filter((u) => !confirmedProxies.has(u));
-    pool.splice(0, pool.length, ...head, ...tail);
   }
 
   function pickProxy(pool, used, random) {
     if (!pool.length) return undefined;
-    const rotationOnly = preferredProxyCount >= CONFIRMED_ROTATION_SIZE;
-    const preferred = [];
-    for (let i = 0; i < preferredProxyCount && i < pool.length; i++) {
-      if (pool[i] && !used.has(pool[i])) preferred.push(pool[i]);
+    const bucket = filterPoolForPick(pool, {
+      used,
+      gray: grayProxyUrls,
+      tested: testedProxyUrls,
+      best: bestProxies,
+      rotationOnly
+    });
+    if (!bucket.length) {
+      const fallback = pool.filter((p) => !used.has(p));
+      return fallback[0] || pool[0];
     }
-    const rest = [];
-    if (!rotationOnly) {
-      for (let i = preferredProxyCount; i < pool.length; i++) {
-        if (pool[i] && !used.has(pool[i])) rest.push(pool[i]);
-      }
-    }
-
-    if (random) {
-      // With 6 confirmed: rotate among those only. Below that: prefer confirmed,
-      // then explore the wider pool to fill the set.
-      const bucket = preferred.length
-        ? preferred
-        : rest.length
-          ? rest
-          : pool.filter((p) => !used.has(p));
-      if (!bucket.length) return rotationOnly ? preferred[0] || pool[0] : pool[0];
-      return bucket[Math.floor(Math.random() * bucket.length)];
-    }
-
-    if (preferred.length) return preferred[0];
-    if (rotationOnly) return undefined;
-    for (let i = 0; i < pool.length; i++) {
-      const candidate = pool[(proxyCursor + i) % pool.length];
+    if (random) return bucket[Math.floor(Math.random() * bucket.length)];
+    for (let i = 0; i < bucket.length; i++) {
+      const candidate = bucket[(proxyCursor + i) % bucket.length];
       if (!used.has(candidate)) return candidate;
     }
-    return pool[proxyCursor % pool.length];
+    return bucket[0];
   }
 
   function isHardProxyFailure(err) {
@@ -472,10 +451,18 @@ export function createCloakSession(cfg = {}) {
     );
   }
 
-  async function withProxyFailover(opts, fn) {
+  /**
+   * @param {object} opts
+   * @param {(ctx: { challengeRounds: number, opts: object }) => Promise<any>} fn
+   * @param {{ measureSpeed?: boolean }} [features]
+   *   measureSpeed: score MB/s from progress samples (log-equivalent) and
+   *   gray-list / failover when under 20 MB/s. Not used for page fetches.
+   */
+  async function withProxyFailover(opts, fn, features = {}) {
     await ensureSettings();
     const pool = await ensurePool();
     const random = Boolean(cfg.cloakProxyRandom);
+    const measureSpeed = Boolean(features.measureSpeed);
     const maxAttempts = Math.max(
       1,
       Math.min(Number(cfg.cloakProxyAttempts) || 5, pool.length || 1)
@@ -483,6 +470,9 @@ export function createCloakSession(cfg = {}) {
     const used = new Set();
     let lastErr;
     let displayRetries = 0;
+    let speedFails = 0;
+    const minMbps = MIN_DOWNLOAD_SPEED_BPS / (1024 * 1024);
+
     for (let i = 0; i < maxAttempts; i++) {
       if (opts.signal?.aborted) throw abortError(opts.signal);
       if (!pool.length) break;
@@ -492,33 +482,77 @@ export function createCloakSession(cfg = {}) {
         if (contextPromise) await resetContext();
         activeProxy = proxy;
       }
+
+      const attemptAc = new AbortController();
+      const onUserAbort = () => attemptAc.abort(opts.signal?.reason);
+      opts.signal?.addEventListener('abort', onUserAbort, { once: true });
+      const monitor = measureSpeed
+        ? createProgressSpeedMonitor({ minMbps })
+        : null;
+      let slowAbortErr = null;
+      const attemptOpts = {
+        ...opts,
+        signal: attemptAc.signal,
+        onProgress: (p) => {
+          try {
+            opts.onProgress?.(p);
+          } catch {
+            /* progress sinks must not break downloads */
+          }
+          if (!monitor || slowAbortErr) return;
+          const verdict = monitor.sample(p);
+          if (!verdict?.tooSlow) return;
+          slowAbortErr = new Error(
+            `Download too slow (${verdict.mbps.toFixed(1)} MB/s < ${minMbps} MB/s)`
+          );
+          slowAbortErr.slow = true;
+          slowAbortErr.proxyRetryable = true;
+          slowAbortErr.mbps = verdict.mbps;
+          attemptAc.abort(slowAbortErr);
+        }
+      };
+
       try {
         // Enough rounds to clear a soft CF interstitial; not so many that one
         // bad proxy burns two minutes before failover (probe feels "instant"
         // because it usually hits a good exit on the first try).
         const result = await fn({
-          challengeRounds: pool.length > 1 ? 10 : 24
+          challengeRounds: pool.length > 1 ? 10 : 24,
+          opts: attemptOpts
         });
-        if (proxy) {
+        if (proxy && measureSpeed) {
           if (!random) proxyCursor = Math.max(0, pool.indexOf(proxy));
-          await recordWorkingProxy(cfg, { url: proxy, confirmed: true }).catch(() => {});
-          const before = preferredProxyCount;
-          rememberConfirmed(pool, proxy);
-          if (before < CONFIRMED_ROTATION_SIZE && preferredProxyCount >= CONFIRMED_ROTATION_SIZE) {
-            log(
-              `Confirmed rotation full (${CONFIRMED_ROTATION_SIZE}): ` +
-                `rotating among these exits only`
-            );
+          const mbps = monitor?.averageMbps();
+          const outcome = await recordWorkingProxy(cfg, {
+            url: proxy,
+            confirmed: true,
+            tested: true,
+            mbps
+          }).catch(() => null);
+          const ranks = await refreshProxyRanks();
+          if (mbps != null) {
+            log(`Proxy ${redactProxy(proxy)} ok at ${mbps.toFixed(1)} MB/s`);
+          }
+          logBestProxies(outcome?.best || ranks.best);
+          if (ranks.rotationOnly) {
+            log(`Speed rotation locked: top ${PROXY_BEST_ROTATION} after ${PROXY_TEST_TARGET} tested`);
           }
         }
         return result;
       } catch (err) {
-        lastErr = err;
+        const reason = attemptAc.signal.reason;
+        const slowErr =
+          err?.slow || reason?.slow
+            ? err?.slow
+              ? err
+              : reason
+            : slowAbortErr;
+        lastErr = slowErr || err;
         if (opts.signal?.aborted) throw abortError(opts.signal);
-        if (isDisplayError(err) && displayRetries < 2) {
+        if (isDisplayError(lastErr) && displayRetries < 2) {
           displayRetries += 1;
           log(
-            `Display/Xvfb error: ${err.message}. Restarting Xvfb and retrying ` +
+            `Display/Xvfb error: ${lastErr.message}. Restarting Xvfb and retrying ` +
               `(${displayRetries}/2)`
           );
           resetHeadedDisplay();
@@ -527,8 +561,31 @@ export function createCloakSession(cfg = {}) {
           i -= 1;
           continue;
         }
+        if (proxy && slowErr?.slow) {
+          speedFails += 1;
+          const mbps = Number(slowErr.mbps) || monitor?.averageMbps();
+          await graylistProxy(cfg, proxy, { mbps, reason: 'slow' }).catch(() => {});
+          grayProxyUrls.add(proxy);
+          testedProxyUrls.add(proxy);
+          testedCount = Math.max(testedCount, testedProxyUrls.size);
+          log(
+            `Gray-listed ${redactProxy(proxy)}` +
+              `${mbps != null ? ` (${mbps.toFixed(1)} MB/s)` : ''}` +
+              ` · skip until untested exits are exhausted` +
+              ` (${speedFails}/${PROXY_SPEED_ATTEMPTS} slow tries)`
+          );
+          await refreshProxyRanks().catch(() => {});
+          const canRetrySlow =
+            speedFails < PROXY_SPEED_ATTEMPTS &&
+            i < maxAttempts - 1 &&
+            pool.some((p) => !used.has(p));
+          if (!canRetrySlow) throw slowErr;
+          log(`Trying next proxy (${i + 2}/${maxAttempts}) after slow download`);
+          await resetContext();
+          continue;
+        }
         if (proxy) {
-          const hard = isHardProxyFailure(err);
+          const hard = isHardProxyFailure(lastErr);
           const outcome = await markProxyFailed(cfg, proxy, {
             hard,
             reason: hard ? 'cloudflare-challenge' : 'transport-fail'
@@ -539,17 +596,20 @@ export function createCloakSession(cfg = {}) {
             log(`Blacklisted ${redactProxy(proxy)} for 24h`);
           }
         }
-        const canRetry = isProxyRetryable(err) && i < maxAttempts - 1 && pool.some((p) => !used.has(p));
+        const canRetry =
+          isProxyRetryable(lastErr) && i < maxAttempts - 1 && pool.some((p) => !used.has(p));
         if (!canRetry) {
           // Leave blocked/proxyRetryable for the pipeline to back off on the
           // same demo id. fatal here used to kill the whole ingester.
-          throw err;
+          throw lastErr;
         }
         log(
-          `Proxy ${redactProxy(proxy) || 'direct'} failed: ${err.message}. ` +
+          `Proxy ${redactProxy(proxy) || 'direct'} failed: ${lastErr.message}. ` +
             `Trying next (${i + 2}/${maxAttempts})`
         );
         await resetContext();
+      } finally {
+        opts.signal?.removeEventListener('abort', onUserAbort);
       }
     }
     throw lastErr;
@@ -559,27 +619,27 @@ export function createCloakSession(cfg = {}) {
    * Load one page through CloakBrowser and return its rendered HTML.
    */
   async function getText(url, opts = {}) {
-    return withProxyFailover(opts, async () => {
+    return withProxyFailover(opts, async ({ opts: attemptOpts }) => {
       await cfg.validateUrl?.(url);
       const ctx = await context();
       const page = await ctx.newPage();
-      const timeout = Number(opts.timeoutMs) || DEFAULT_NAVIGATION_TIMEOUT_MS;
+      const timeout = Number(attemptOpts.timeoutMs) || DEFAULT_NAVIGATION_TIMEOUT_MS;
       const onAbort = () => void page.close().catch(() => {});
-      opts.signal?.addEventListener('abort', onAbort, { once: true });
+      attemptOpts.signal?.addEventListener('abort', onAbort, { once: true });
       try {
         log(`Opening ${url}`);
         const response = await page.goto(url, {
           waitUntil: 'domcontentloaded',
           timeout
         });
-        if (opts.signal?.aborted) throw abortError(opts.signal);
+        if (attemptOpts.signal?.aborted) throw abortError(attemptOpts.signal);
         // Native sleep, not page.waitForTimeout(): give redirects and browser
         // challenges time to settle without adding a detectable CDP wait call.
-        const settleMs = Number(opts.settleMs ?? cfg.cloakSettleMs) || 0;
+        const settleMs = Number(attemptOpts.settleMs ?? cfg.cloakSettleMs) || 0;
         if (settleMs > 0) {
           await new Promise((resolve) => setTimeout(resolve, settleMs));
         }
-        if (opts.signal?.aborted) throw abortError(opts.signal);
+        if (attemptOpts.signal?.aborted) throw abortError(attemptOpts.signal);
         const text = await page.content();
         if (isChallengeHtml(text)) {
           const err = new Error('CloakBrowser received a Cloudflare challenge page');
@@ -594,7 +654,7 @@ export function createCloakSession(cfg = {}) {
           headers: response ? await response.allHeaders() : {}
         };
       } finally {
-        opts.signal?.removeEventListener('abort', onAbort);
+        attemptOpts.signal?.removeEventListener('abort', onAbort);
         await page.close().catch(() => {});
       }
     });
@@ -621,15 +681,17 @@ export function createCloakSession(cfg = {}) {
    * }} [opts]
    */
   async function download(url, directory, opts = {}) {
-    return withProxyFailover(opts, async ({ challengeRounds }) => {
+    return withProxyFailover(
+      opts,
+      async ({ challengeRounds, opts: attemptOpts }) => {
     await cfg.validateUrl?.(url);
     const ctx = await context();
     const page = await ctx.newPage();
-    const timeout = Number(opts.timeoutMs) || DEFAULT_DOWNLOAD_TIMEOUT_MS;
+    const timeout = Number(attemptOpts.timeoutMs) || DEFAULT_DOWNLOAD_TIMEOUT_MS;
     const deadlineMs =
-      Number(opts.deadlineMs ?? cfg.cloakDownloadDeadlineMs) || DEFAULT_DOWNLOAD_DEADLINE_MS;
-    const stallMs = Number(opts.stallMs) || DEFAULT_STALL_MS;
-    const maxBytes = Number(opts.maxBytes) || Infinity;
+      Number(attemptOpts.deadlineMs ?? cfg.cloakDownloadDeadlineMs) || DEFAULT_DOWNLOAD_DEADLINE_MS;
+    const stallMs = Number(attemptOpts.stallMs) || DEFAULT_STALL_MS;
+    const maxBytes = Number(attemptOpts.maxBytes) || Infinity;
     let rejectPendingDownload = null;
     let activeDownload = null;
     let activeStream = null;
@@ -638,13 +700,13 @@ export function createCloakSession(cfg = {}) {
     let deadlineTimer = null;
     let progressTimer = null;
     const onAbort = () => {
-      const err = abortError(opts.signal);
+      const err = abortError(attemptOpts.signal);
       rejectPendingDownload?.(err);
       activeStream?.destroy(err);
       void activeDownload?.cancel().catch(() => {});
       void page.close().catch(() => {});
     };
-    opts.signal?.addEventListener('abort', onAbort, { once: true });
+    attemptOpts.signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
       await fsp.mkdir(directory, { recursive: true });
@@ -702,7 +764,7 @@ export function createCloakSession(cfg = {}) {
       let navStatus = 0;
       let settledHtml = false;
       const reportWaiting = () =>
-        opts.onProgress?.({
+        attemptOpts.onProgress?.({
           received: 0,
           total: 0,
           phase: waitPhase,
@@ -733,7 +795,7 @@ export function createCloakSession(cfg = {}) {
         const rounds = Number(challengeRounds) || 30;
         let challengeAttempts = 0;
         let htmlStableSince = 0;
-        while (!downloadStarted && !opts.signal?.aborted) {
+        while (!downloadStarted && !attemptOpts.signal?.aborted) {
           await new Promise((resolve) => setTimeout(resolve, 1500));
           if (downloadStarted) return;
           let html = '';
@@ -835,7 +897,7 @@ export function createCloakSession(cfg = {}) {
       rejectPendingDownload = null;
       for (const candidate of attached) candidate.off('download', settleDownload);
       await pageWatch.catch(() => {});
-      if (opts.signal?.aborted) throw abortError(opts.signal);
+      if (attemptOpts.signal?.aborted) throw abortError(attemptOpts.signal);
       if (downloadResult.status === 'rejected') {
         if (navigationResult.status === 'rejected') throw navigationResult.reason;
         const html = await page.content().catch(() => '');
@@ -864,7 +926,7 @@ export function createCloakSession(cfg = {}) {
 
       const item = downloadResult.value;
       activeDownload = item;
-      const filename = safeName(item.suggestedFilename(), opts.fallbackName);
+      const filename = safeName(item.suggestedFilename(), attemptOpts.fallbackName);
       target = path.join(directory, filename);
       const response = responses.get(item.url());
       const headers = response ? await response.allHeaders().catch(() => ({})) : {};
@@ -896,7 +958,7 @@ export function createCloakSession(cfg = {}) {
             progressFile = current?.name || null;
           }
           browserReceived = Math.max(browserReceived, current?.size || 0);
-          opts.onProgress?.({
+          attemptOpts.onProgress?.({
             received: browserReceived,
             total: declaredBytes,
             phase: 'browser',
@@ -935,7 +997,7 @@ export function createCloakSession(cfg = {}) {
           void item.cancel().catch(() => {});
           return;
         }
-        opts.onProgress?.({
+        attemptOpts.onProgress?.({
           received: Math.max(browserReceived, received),
           total: declaredBytes,
           phase: 'copy',
@@ -963,13 +1025,14 @@ export function createCloakSession(cfg = {}) {
     } finally {
       if (deadlineTimer) clearTimeout(deadlineTimer);
       if (progressTimer) clearInterval(progressTimer);
-      opts.signal?.removeEventListener('abort', onAbort);
+      attemptOpts.signal?.removeEventListener('abort', onAbort);
       await activeDownload?.delete().catch(() => {});
       if (target && !completed) await fsp.rm(target, { force: true }).catch(() => {});
       await page.close().catch(() => {});
     }
-    });
+    }, { measureSpeed: true });
   }
+
 
   async function close() {
     closed = true;
