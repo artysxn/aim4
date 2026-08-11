@@ -140,7 +140,8 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
 
       const ok = results.filter((r) => r.ok);
       const dupes = ok.filter((r) => r.duplicate);
-      const stored = ok.filter((r) => !r.duplicate);
+      const skipped = ok.filter((r) => r.skipped);
+      const stored = ok.filter((r) => !r.duplicate && !r.skipped);
       const unnamed = stored.filter((r) => !r.naming?.applied);
       if (!ok.length) {
         throw new Error(
@@ -148,23 +149,35 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         );
       }
 
-      const allDuplicate = stored.length === 0 && dupes.length > 0;
-      ledger.setState(row.matchId, allDuplicate ? STATES.FILTERED_OUT : STATES.INGESTED, {
+      const allDuplicate = stored.length === 0 && dupes.length > 0 && skipped.length === 0;
+      const allSkipped = stored.length === 0 && skipped.length > 0;
+      const filteredOut = allDuplicate || allSkipped || (stored.length === 0 && dupes.length > 0);
+      ledger.setState(row.matchId, filteredOut ? STATES.FILTERED_OUT : STATES.INGESTED, {
         demoIds: stored.map((r) => r.demoId),
         event: described.event || row.event || '',
         teams: described.teams,
         mapsParsed: stored.length,
         mapsDuplicate: dupes.length,
+        mapsSkipped: skipped.length,
+        skipReasons: skipped.map((s) => s.reason).filter(Boolean),
         mapsFailed: results.length - ok.length,
         needsReview: unnamed.length > 0,
         lastError: results.find((r) => !r.ok)?.error || null
       });
       await ledger.save();
 
-      if (allDuplicate) {
+      if (allSkipped && !dupes.length) {
+        emit('match-skipped', {
+          matchId: row.matchId,
+          maps: skipped.length,
+          reason: skipped[0]?.reason || 'overpass',
+          names: skipped.map((s) => s.name)
+        });
+      } else if (filteredOut && !stored.length) {
         emit('match-duplicate', {
           matchId: row.matchId,
           maps: dupes.length,
+          skipped: skipped.length,
           duplicateOf: dupes.map((d) => d.duplicateOf)
         });
       } else {
@@ -172,6 +185,7 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
           matchId: row.matchId,
           maps: stored.length,
           duplicates: dupes.length,
+          skipped: skipped.length,
           failed: results.length - ok.length,
           teams: described.teams.map((t) => t.name),
           naming: stored.map((r) => r.naming?.confidence)
@@ -182,11 +196,16 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         const { freed } = await cleanMatch(cfg.workDir, row.matchId);
         emit('match-cleaned', { matchId: row.matchId, freed });
       }
-      if (!allDuplicate) {
+      if (!filteredOut) {
         ledger.setState(row.matchId, unnamed.length ? STATES.NEEDS_REVIEW : STATES.CLEANED);
         await ledger.save();
       }
-      return { ok: true, duplicate: allDuplicate, maps: stored.length };
+      return {
+        ok: true,
+        duplicate: allDuplicate,
+        skipped: allSkipped,
+        maps: stored.length
+      };
     } catch (err) {
       ledger.fail(row.matchId, err, cfg.maxAttempts);
       await cleanMatch(cfg.workDir, row.matchId).catch(() => {});
@@ -280,7 +299,15 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
       cursorSnapshot = await advanceCursor(cfg, cursorSnapshot || (await readCursor(cfg)), {
         success: Boolean(result.ok)
       });
-      await emitCursor({ lastOutcome: result.duplicate ? 'duplicate' : result.ok ? 'ok' : 'failed' });
+      await emitCursor({
+        lastOutcome: result.skipped
+          ? 'skipped'
+          : result.duplicate
+            ? 'duplicate'
+            : result.ok
+              ? 'ok'
+              : 'failed'
+      });
       return { advanced: true, missing: false, ...result };
     } catch (err) {
       await cleanMatch(cfg.workDir, matchId).catch(() => {});

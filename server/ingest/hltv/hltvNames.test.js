@@ -3,7 +3,14 @@
 //
 // Both fixtures are real download names.
 
-import { describeArchive, displayNameFor, parseArchiveFilename, parseDemoFilename, slugify } from './hltvNames.js';
+import {
+  describeArchive,
+  displayNameFor,
+  isOverpassFilename,
+  parseArchiveFilename,
+  parseDemoFilename,
+  slugify
+} from './hltvNames.js';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
@@ -31,6 +38,14 @@ function assert(cond, msg) {
   assert(h.mapNumber === 3 && h.map === 'DD2', `map, got ${h.map}`);
 
   assert(parseDemoFilename('not-a-demo.txt') === null, 'junk returns null');
+}
+
+{
+  assert(isOverpassFilename('mibr-vs-bestia-m2-overpass.dem'), 'HLTV overpass demo');
+  assert(isOverpassFilename('liquid-vs-vitality-m1-de_overpass.dem'), 'de_overpass slug');
+  assert(isOverpassFilename('de_overpass.dem'), 'bare de_overpass');
+  assert(!isOverpassFilename('mibr-vs-bestia-m1-cache.dem'), 'cache is kept');
+  assert(!isOverpassFilename('mibr-vs-bestia-m3-dust2.dem'), 'dust2 is kept');
 }
 
 {

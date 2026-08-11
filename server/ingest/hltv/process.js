@@ -24,7 +24,7 @@ import { unpackUpload } from '../../replays/archive.js';
 import { parseDemo } from '../../demoparser/index.js';
 import { ingestDemo } from '../../replays/ingest.js';
 import { newDemoId } from '../../replays/demoStore.js';
-import { describeArchive, parseDemoFilename } from './hltvNames.js';
+import { describeArchive, isOverpassFilename, parseDemoFilename } from './hltvNames.js';
 import { applyHltvTeams } from './teamNames.js';
 import { findLibraryDuplicate, fingerprintDemo } from './duplicates.js';
 
@@ -81,6 +81,26 @@ export async function parseAndIngest({ library, row, demos, concurrency = 1, onP
       if (!entry) return;
       const slot = byName.get(entry.name) || parseDemoFilename(entry.name) || {};
       const label = entry.name;
+
+      // Overpass is out of pool; never spend a parse on it. Other maps in the
+      // same archive still run, and the walker advances when every map is skipped.
+      if (isOverpassFilename(entry.name)) {
+        onProgress?.({
+          stage: 'parse',
+          map: label,
+          mapNumber: slot.mapNumber ?? null,
+          skipped: 'overpass'
+        });
+        results.push({
+          ok: true,
+          skipped: true,
+          reason: 'overpass',
+          name: entry.name,
+          mapNumber: slot.mapNumber ?? null
+        });
+        continue;
+      }
+
       onProgress?.({ stage: 'parse', map: label, mapNumber: slot.mapNumber ?? null });
 
       try {

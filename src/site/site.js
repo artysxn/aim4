@@ -51,6 +51,7 @@ import { getEntitlements } from '../lib/entitlements.js';
 import { upgradePrompt } from './upgradeGate.js';
 import { accountApi } from './account/accountApi.js';
 import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
+import { initIngestReminder } from './ingestReminder.js';
 import {
   isMobileSite,
   isPhoneDevice,
@@ -775,6 +776,7 @@ viewControllers.home = initHomeView({ auth, escapeHtml });
 // for UI state only; the server has already made every decision it reflects.
 const entitlements = getEntitlements(auth);
 entitlements.refresh();
+initIngestReminder(auth, entitlements);
 
 viewControllers.account = initAccountView(
   document.querySelector('.view[data-view="account"]'),

@@ -60,14 +60,53 @@ import { coreOpeningDuels } from '../../src/replays/shared/coreOpenings.js';
 // parser reports (an AWP headshot logged 440 instead of 100).
 //
 // v18 adds per-round core opening ids (row.cok / row.cod) for COPATT.
-// Bumping this rebuilds every index from the round files already on disk; it
-// does NOT reparse demos.
+// Written onto new indexes and selective field patches. It does NOT reparse
+// demos, and a bump alone must NOT force GET /stats to rewalk the library:
+// `needsPhaseEnrichment` keys off missing fields, not entry.v. Use the admin
+// "Patch selected fields" tool (or a dedicated pass) when one statistic changes.
 //
-// Do NOT bump this for round library tags. `needsPhaseEnrichment` treats a
-// lower entry.v as stale, and that path is awaited inside demoIndex, so a bump
-// makes the next GET /stats walk every tick buffer in the library before it
-// answers. Tags carry their own ROUND_LIBRARY_VERSION instead.
+// Do NOT bump this for round library tags. Tags carry their own
+// ROUND_LIBRARY_VERSION instead.
 export const STATS_VERSION = 19;
+
+/**
+ * Named field groups for selective library patches. Each group rewrites only
+ * its columns on the stored stats index from already-parsed round meta/ticks.
+ * Prefer this over bumping STATS_VERSION or "Recalculate all statistics".
+ *
+ * @type {ReadonlyArray<{ id: string, label: string }>}
+ */
+export const STATS_FIELD_GROUPS = Object.freeze([
+  { id: 'damage', label: 'Damage' },
+  { id: 'awpAcc', label: 'AWP Acc' },
+  { id: 'aim', label: 'Aim' },
+  { id: 'utility', label: 'Utility' },
+  { id: 'phase', label: 'Phase' },
+  { id: 'prw', label: 'PRW' },
+  { id: 'timing', label: 'Timing' },
+  { id: 'possession', label: 'Possession' },
+  { id: 'duels', label: 'Duels' },
+  { id: 'core', label: 'Core openings' },
+  { id: 'movement', label: 'Movement' },
+  { id: 'awpHold', label: 'AWP hold' },
+  { id: 'roles', label: 'Roles' }
+]);
+
+const STATS_FIELD_IDS = new Set(STATS_FIELD_GROUPS.map((g) => g.id));
+
+/** @param {unknown} raw */
+export function normalizeStatsFields(raw) {
+  const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [];
+  const out = [];
+  const seen = new Set();
+  for (const item of list) {
+    const id = String(item || '').trim();
+    if (!STATS_FIELD_IDS.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
 
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
@@ -313,10 +352,15 @@ function applyPhaseBags(row, meta, playerIds, tickBuffer = null) {
   }
 }
 
-/** Phase bags / AWP Acc / PRW / duel bags / core openings missing or stale. */
+/**
+ * Phase bags / AWP Acc / PRW / duel bags / core openings / aim / utility missing.
+ *
+ * Deliberately ignores entry.v: a STATS_VERSION bump must not make GET /stats
+ * rewalk thousands of tick buffers. Missing columns still backfill lazily;
+ * formula changes for existing columns go through refreshLibraryFields.
+ */
 function needsPhaseEnrichment(entry) {
   if (!entry?.rounds?.length) return false;
-  if (Number(entry.v) < STATS_VERSION) return true;
   return entry.rounds.some(
     (r) =>
       !r.ph ||
@@ -329,7 +373,9 @@ function needsPhaseEnrichment(entry) {
       r.du === undefined ||
       r.aw === undefined ||
       !Array.isArray(r.cok) ||
-      !Array.isArray(r.cod)
+      !Array.isArray(r.cod) ||
+      r.am === undefined ||
+      r.ut === undefined
   );
 }
 
@@ -494,11 +540,31 @@ function applyCoreOpeningFields(row, meta, track, roster) {
 }
 
 /**
- * Refresh phase combat + AWP Acc + possession from ticks (no painted geography).
- * Also fills roles when ticks are already open (same pass).
+ * Refresh selected (or all) derived columns from round meta/ticks already on
+ * disk. Never reparses a demo and never drops unrelated fields.
+ *
+ * @param {{
+ *   roles?: boolean,
+ *   fields?: string[]|null
+ * }} [opts]  `fields` null/empty = every enrichPhases column (legacy path).
  */
-async function enrichPhases(io, user, entry, { roles = true } = {}) {
+async function enrichPhases(io, user, entry, { roles = true, fields = null } = {}) {
   if (!entry?.rounds?.length) return entry;
+
+  const selected = fields?.length ? new Set(normalizeStatsFields(fields)) : null;
+  const want = (id) => !selected || selected.has(id);
+  const wantRoles = Boolean(roles) && want('roles');
+  const needTicks =
+    want('awpAcc') ||
+    want('aim') ||
+    want('utility') ||
+    want('phase') ||
+    want('possession') ||
+    want('duels') ||
+    want('core') ||
+    want('movement') ||
+    want('awpHold') ||
+    wantRoles;
 
   const rosterFallback = (entry.players || []).map((p) => ({
     id: p.id,
@@ -510,7 +576,7 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
   const canTicks = typeof io.readRoundTicks === 'function';
   const controlCache = new Map();
   const zoneCache = new Map();
-  const roleWork = roles ? createRoleWork() : null;
+  const roleWork = wantRoles ? createRoleWork() : null;
 
   for (const row of entry.rounds) {
     let meta = null;
@@ -534,7 +600,7 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
     const playerIds = roster.map((p) => p.id);
 
     let tickBuffer = null;
-    if (canTicks) {
+    if (needTicks && canTicks) {
       try {
         // Full-detail ticks for possession sampling; AWP Acc tolerates stride.
         tickBuffer = await io.readRoundTicks(user, row.f, 1);
@@ -550,7 +616,7 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
     // Damage is rewritten from the round's own events, capped at the health
     // each victim had left. Needs the meta only, so an index written before
     // v19 is corrected without reopening a demo.
-    if (row.p) {
+    if (want('damage') && row.p) {
       const capped = cappedDamageFromMeta(meta, new Map(roster.map((pl) => [pl.id, pl.team])));
       if (capped) {
         for (const id of playerIds) {
@@ -561,7 +627,7 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
       }
     }
 
-    if (tickBuffer && row.p) {
+    if (want('awpAcc') && tickBuffer && row.p) {
       const awpAcc = awpAccuracyFromTicks(meta, tickBuffer);
       for (const id of playerIds) {
         const line = row.p[id];
@@ -574,23 +640,30 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
       }
     }
 
-    applyPhaseBags(row, meta, playerIds, tickBuffer);
-    applyPrwFields(row, meta);
-    applyTimingFields(row, meta, playerIds);
+    if (want('phase')) applyPhaseBags(row, meta, playerIds, tickBuffer);
+    if (want('prw')) applyPrwFields(row, meta);
+    if (want('timing')) applyTimingFields(row, meta, playerIds);
 
-    if (tickBuffer) {
-      const network = await ensureMapControl(
-        io,
-        meta.map || row.m,
-        controlCache,
-        zoneCache
-      );
+    const needNetwork =
+      want('aim') ||
+      want('utility') ||
+      want('possession') ||
+      want('duels') ||
+      wantRoles;
+
+    if (tickBuffer && (needNetwork || want('core') || want('movement') || want('awpHold'))) {
+      const network = needNetwork
+        ? await ensureMapControl(io, meta.map || row.m, controlCache, zoneCache)
+        : null;
       const track = new TickTrack(tickBuffer);
-      await applyPossessionFields(row, meta, track, network);
-      applyDuelFields(row, meta, track, network);
-      applyCoreOpeningFields(row, meta, track, roster);
-      applyMovementFields(row, meta, track, roster);
-      applyAwpHoldFields(row, meta, track, roster);
+      if (want('aim') || want('utility')) {
+        applyAimUtility(row, meta, tickBuffer, network || zoneCache.get(meta.map || row.m));
+      }
+      if (want('possession')) await applyPossessionFields(row, meta, track, network);
+      if (want('duels')) applyDuelFields(row, meta, track, network);
+      if (want('core')) applyCoreOpeningFields(row, meta, track, roster);
+      if (want('movement')) applyMovementFields(row, meta, track, roster);
+      if (want('awpHold')) applyAwpHoldFields(row, meta, track, roster);
       if (roleWork) {
         const zones = zoneCache.get(meta.map || row.m) || network;
         accumulateRoundRoles(roleWork, {
@@ -602,13 +675,18 @@ async function enrichPhases(io, user, entry, { roles = true } = {}) {
         });
       }
     } else {
-      row.pos1 = null;
-      row.pos2 = null;
-      row.du = null;
-      row.mv = row.mv || {};
-      row.aw = row.aw || {};
-      row.cok = [];
-      row.cod = [];
+      if (want('aim') || want('utility')) applyAimUtility(row, meta, tickBuffer, null);
+      if (want('possession')) {
+        row.pos1 = null;
+        row.pos2 = null;
+      }
+      if (want('duels')) row.du = null;
+      if (want('movement')) row.mv = row.mv || {};
+      if (want('awpHold')) row.aw = row.aw || {};
+      if (want('core')) {
+        row.cok = [];
+        row.cod = [];
+      }
     }
     await yieldEventLoop();
   }
@@ -1169,6 +1247,93 @@ export async function refreshLibraryStats(io, user, records, { force = false, on
       if (wasMissing || force) report.built++;
       else if (wasStale) report.enriched++;
       else report.current++;
+    } catch (err) {
+      report.failed++;
+      report.errors.push({
+        id: record.id,
+        filename: record.filename,
+        error: err?.message || String(err)
+      });
+    }
+    i++;
+  }
+
+  emit(ready.length, null);
+  return report;
+}
+
+/**
+ * Patch only the chosen field groups on every ready demo's stored stats index.
+ *
+ * Reads round meta + tick bins already on disk (the same material that came
+ * out of .aim4replay / parse). Does not drop the index, does not reparse
+ * demos, and leaves unselected columns alone.
+ *
+ * @param {object} io
+ * @param {string} user
+ * @param {object[]} records
+ * @param {{ fields: string[], onProgress?: Function }} opts
+ */
+export async function refreshLibraryFields(io, user, records, { fields, onProgress = null } = {}) {
+  const selected = normalizeStatsFields(fields);
+  if (!selected.length) {
+    throw new Error('Select at least one stats field to patch.');
+  }
+
+  const ready = (records || []).filter((r) => (r.status || 'ready') === 'ready');
+  const report = {
+    total: (records || []).length,
+    ready: ready.length,
+    updated: 0,
+    built: 0,
+    skipped: 0,
+    failed: 0,
+    fields: selected,
+    errors: []
+  };
+
+  const emit = (done, current = null) => {
+    if (typeof onProgress !== 'function') return;
+    onProgress({
+      done,
+      total: ready.length,
+      percent: ready.length ? Math.round((done / ready.length) * 100) : 100,
+      current
+    });
+  };
+
+  emit(0, null);
+
+  let i = 0;
+  for (const record of ready) {
+    emit(i, record.filename || record.id || null);
+    try {
+      const key = versionKey(record);
+      let entry = await loadStoredEntry(io, user, record.id);
+      let built = false;
+      if (!entry || !keyMatchesRecord(entry.key, record)) {
+        // No usable index yet: build once, then the selected fields are already
+        // covered by the full pass.
+        entry = await demoIndex(io, user, record, { roles: true });
+        built = true;
+      }
+      if (!entry?.rounds?.length) {
+        report.skipped++;
+        i++;
+        continue;
+      }
+
+      if (!built) {
+        await enrichPhases(io, user, entry, {
+          roles: selected.includes('roles'),
+          fields: selected
+        });
+        entry.key = key;
+        await persistEntry(io, user, key, entry);
+        report.updated++;
+      } else {
+        report.built++;
+      }
     } catch (err) {
       report.failed++;
       report.errors.push({

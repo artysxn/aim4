@@ -283,10 +283,9 @@ backfillEffectiveEntitlements().then((r) => {
 // warning, and tidies quota counters. Entitlement resolution is time-aware on
 // its own, so a sweep that has not run is a reporting gap, not an access one.
 startSweep();
-// The demo ingester is a switch, not a button: if an admin left it on, it comes
-// back after a deploy or a reboot without anyone visiting the panel. The
-// supervisor also covers the ingester crashing on its own, with backoff so a
-// broken config cannot turn into a spawn loop.
+// Demo ingest starts Off on every API boot. Ledger/cursor keep progress so an
+// admin turning On resumes the walk. While On, the supervisor restarts a
+// crashed child with backoff; it does not auto-enable after a deploy.
 startIngestSupervisor();
 
 server.listen(PORT, HOST, async () => {

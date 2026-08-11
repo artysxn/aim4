@@ -125,6 +125,16 @@ export const adminApi = {
   /** Progress for an in-flight (or just-finished) stats rebuild. */
   refreshStatsStatus: () => get('/api/admin/stats/refresh'),
 
+  /**
+   * Rewrite only the chosen field groups on stored stats indexes (round
+   * meta/ticks already on disk). Prefer this when one statistic changes.
+   */
+  refreshFields: (fields = []) =>
+    send('POST', '/api/admin/stats/refresh-fields', { fields }),
+
+  /** Progress / available field groups for a selective stats patch. */
+  refreshFieldsStatus: () => get('/api/admin/stats/refresh-fields'),
+
   /** Recompute roles from tick player positions only (no full stats rebuild). */
   refreshPositions: () => send('POST', '/api/admin/stats/refresh-positions', {}),
 

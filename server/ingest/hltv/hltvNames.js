@@ -120,6 +120,23 @@ export function parseDemoFilename(filename) {
 }
 
 /**
+ * True when a .dem (or loose path) is Overpass, from the HLTV filename alone.
+ * `team-vs-team-m1-overpass.dem` and `de_overpass` both match; other maps do not.
+ */
+export function isOverpassFilename(filename) {
+  const base = String(filename || '')
+    .replace(/^.*[/\\]/, '')
+    .toLowerCase();
+  if (!base) return false;
+  const stem = base.replace(/\.dem$/i, '');
+  const parsed = parseDemoFilename(base);
+  if (parsed && slugify(parsed.mapSlug).replace(/^de-/, '') === 'overpass') return true;
+  // Fallback when the name is not the usual HLTV grammar.
+  return /(?:^|[^a-z0-9])de[_-]?overpass(?:[^a-z0-9]|$)/.test(stem) ||
+    /(?:^|[^a-z0-9])overpass(?:[^a-z0-9]|$)/.test(stem);
+}
+
+/**
  * Parse an archive filename, using the team slugs learned from the demos
  * inside it to find where the event name ends.
  *

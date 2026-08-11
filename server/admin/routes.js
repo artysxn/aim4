@@ -54,10 +54,13 @@ import {
 } from '../replays/demoStore.js';
 import { SHARED_LIBRARY } from '../replays/auth.js';
 import {
+  normalizeStatsFields,
+  refreshLibraryFields,
   refreshLibraryPositions,
   refreshLibraryRatings,
   refreshLibraryRoundTags,
-  refreshLibraryStats
+  refreshLibraryStats,
+  STATS_FIELD_GROUPS
 } from '../replays/statsIndex.js';
 import { rescanPlayerNames } from './rescanPlayerNames.js';
 import { getZones } from '../zonesStore.js';
@@ -83,6 +86,8 @@ const statsIo = {
 
 /** Only one full-library stats rebuild at a time. */
 let statsRefreshJob = null;
+/** Selective field patch across stored stats indexes. */
+let fieldsRefreshJob = null;
 /** Positions/roles-only tick walk (separate from full stats rebuild). */
 let positionsRefreshJob = null;
 /** Round library re-tag: rewatches every round against the round definitions. */
@@ -119,6 +124,15 @@ function statsRefreshStatus() {
   return jobStatus(statsRefreshJob);
 }
 
+function fieldsRefreshStatus() {
+  const base = jobStatus(fieldsRefreshJob);
+  return {
+    ...base,
+    fields: fieldsRefreshJob?.fields || base.report?.fields || [],
+    fieldGroups: STATS_FIELD_GROUPS
+  };
+}
+
 function positionsRefreshStatus() {
   return jobStatus(positionsRefreshJob);
 }
@@ -138,6 +152,7 @@ function playerNamesStatus() {
 function libraryJobBusy() {
   return (
     (statsRefreshJob && !statsRefreshJob.finished) ||
+    (fieldsRefreshJob && !fieldsRefreshJob.finished) ||
     (positionsRefreshJob && !positionsRefreshJob.finished) ||
     (roundScanJob && !roundScanJob.finished) ||
     (ratingsJob && !ratingsJob.finished) ||
@@ -916,6 +931,96 @@ async function route(req, res, url, me) {
     });
 
     json(res, req, 202, { ok: true, started: true, ...statsRefreshStatus() });
+    return true;
+  }
+
+  // Selective field patch: rewrite only chosen columns on stored indexes.
+  if (req.method === 'GET' && p === '/api/admin/stats/refresh-fields') {
+    json(res, req, 200, fieldsRefreshStatus());
+    return true;
+  }
+
+  if (req.method === 'POST' && p === '/api/admin/stats/refresh-fields') {
+    if (libraryJobBusy()) {
+      json(res, req, 409, {
+        error: 'A library recalculation is already running.',
+        ...fieldsRefreshStatus(),
+        stats: statsRefreshStatus(),
+        positions: positionsRefreshStatus()
+      });
+      return true;
+    }
+    const body = await readJson(req).catch(() => ({}));
+    const fields = normalizeStatsFields(body.fields);
+    if (!fields.length) {
+      json(res, req, 400, {
+        error: 'Select at least one stats field to patch.',
+        fieldGroups: STATS_FIELD_GROUPS
+      });
+      return true;
+    }
+    const startedAt = Date.now();
+    fieldsRefreshJob = {
+      kind: 'fields',
+      startedAt,
+      startedBy: me.id,
+      force: true,
+      fields,
+      done: 0,
+      total: 0,
+      percent: 0,
+      current: null,
+      finished: false,
+      report: null,
+      error: null
+    };
+
+    setImmediate(async () => {
+      try {
+        const records = await listDemos(SHARED_LIBRARY);
+        const report = await refreshLibraryFields(statsIo, SHARED_LIBRARY, records, {
+          fields,
+          onProgress: (pr) => {
+            if (!fieldsRefreshJob || fieldsRefreshJob.startedAt !== startedAt) return;
+            fieldsRefreshJob.done = pr.done;
+            fieldsRefreshJob.total = pr.total;
+            fieldsRefreshJob.percent = pr.percent;
+            fieldsRefreshJob.current = pr.current;
+          }
+        });
+        if (!fieldsRefreshJob || fieldsRefreshJob.startedAt !== startedAt) return;
+        fieldsRefreshJob.report = { ...report, ms: Date.now() - startedAt };
+        fieldsRefreshJob.done = report.ready;
+        fieldsRefreshJob.total = report.ready;
+        fieldsRefreshJob.percent = 100;
+        fieldsRefreshJob.current = null;
+        fieldsRefreshJob.finished = true;
+        fieldsRefreshJob.finishedAt = Date.now();
+        await writeAudit({
+          actorId: me.id,
+          targetUser: null,
+          action: 'stats.refreshFields',
+          payload: {
+            fields,
+            total: report.total,
+            ready: report.ready,
+            updated: report.updated,
+            built: report.built,
+            skipped: report.skipped,
+            failed: report.failed,
+            ms: Date.now() - startedAt
+          },
+          req: null
+        });
+      } catch (err) {
+        if (!fieldsRefreshJob || fieldsRefreshJob.startedAt !== startedAt) return;
+        fieldsRefreshJob.error = err?.message || String(err);
+        fieldsRefreshJob.finished = true;
+        fieldsRefreshJob.finishedAt = Date.now();
+      }
+    });
+
+    json(res, req, 202, { ok: true, started: true, ...fieldsRefreshStatus() });
     return true;
   }
 

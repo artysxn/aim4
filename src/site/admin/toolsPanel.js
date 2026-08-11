@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // src/site/admin/toolsPanel.js
-// Site-wide maintenance actions (stats rebuild, positions/roles scan, round
-// library rescan, Steam-id player-name merge, …).
+// Site-wide maintenance actions (selective field patch, full stats rebuild,
+// positions/roles scan, round library rescan, Steam-id player-name merge, …).
 //
 // Every action is the same shape: POST to start, GET to poll, one at a time
 // across the whole library. They are kept in one table rather than three
@@ -14,6 +14,23 @@ import { button, el, render } from './dom.js';
 
 /** Fast enough to feel live, slow enough not to hammer a long rebuild. */
 const POLL_MS = 1000;
+
+/** Fallback labels if GET /refresh-fields has not answered yet. */
+const DEFAULT_FIELD_GROUPS = [
+  { id: 'damage', label: 'Damage' },
+  { id: 'awpAcc', label: 'AWP Acc' },
+  { id: 'aim', label: 'Aim' },
+  { id: 'utility', label: 'Utility' },
+  { id: 'phase', label: 'Phase' },
+  { id: 'prw', label: 'PRW' },
+  { id: 'timing', label: 'Timing' },
+  { id: 'possession', label: 'Possession' },
+  { id: 'duels', label: 'Duels' },
+  { id: 'core', label: 'Core openings' },
+  { id: 'movement', label: 'Movement' },
+  { id: 'awpHold', label: 'AWP hold' },
+  { id: 'roles', label: 'Roles' }
+];
 
 /**
  * @typedef {object} ToolJob
@@ -29,124 +46,145 @@ const POLL_MS = 1000;
  * @property {(report: object, ms: number) => string[]} summary
  */
 
-/** @type {ToolJob[]} */
-const JOBS = [
-  {
-    kind: 'stats',
-    idle: 'Recalculate all statistics',
-    busy: 'Recalculating…',
-    className: 'btn primary',
-    confirm:
-      'Rebuild statistics for every ready demo from parsed round data?\n\nThis can take several minutes on a large library.',
-    running: 'Recalculating…',
-    starting: 'Starting recalculation…',
-    done: 'Recalculation finished.',
-    start: () => adminApi.refreshStats({ force: true }),
-    status: () => adminApi.refreshStatsStatus(),
-    summary: (r, ms) => [
-      `Done in ${Math.round(ms / 1000)}s.`,
-      `${r.ready || 0} ready demos.`,
-      `${r.built || 0} rebuilt`,
-      `${r.enriched || 0} enriched`,
-      `${r.current || 0} already current`
-    ]
-  },
-  {
-    kind: 'positions',
-    idle: 'Reload positions',
-    busy: 'Scanning positions…',
-    className: 'btn',
-    confirm:
-      'Rescan player positions on every ready demo from 3D tick data and rebuild roles only?\n\nDoes not recalculate kills, PRW, possession, or other stats. Can take a while on a large library.',
-    running: 'Scanning player positions…',
-    starting: 'Starting positions scan…',
-    done: 'Positions scan finished.',
-    start: () => adminApi.refreshPositions(),
-    status: () => adminApi.refreshPositionsStatus(),
-    summary: (r, ms) => [
-      `Done in ${Math.round(ms / 1000)}s.`,
-      `${r.ready || 0} ready demos.`,
-      `${r.updated || 0} roles updated`,
-      `${r.skipped || 0} skipped`
-    ]
-  },
-  {
-    kind: 'ratings',
-    idle: 'Recalculate ratings',
-    busy: 'Recalculating ratings…',
-    className: 'btn',
-    confirm:
-      'Re-derive Rating 3.0 for every ready demo and refresh the rating shown on each demo card?\n\nReads the statistics already on disk, so it is much quicker than a full recalculation. Does not touch kills, PRW, possession or round tags.',
-    running: 'Recalculating ratings…',
-    starting: 'Starting rating recalculation…',
-    done: 'Rating recalculation finished.',
-    start: () => adminApi.refreshRatings(),
-    status: () => adminApi.refreshRatingsStatus(),
-    summary: (r, ms) => [
-      `Done in ${Math.round(ms / 1000)}s.`,
-      `${r.rated || 0} of ${r.ready || 0} demos rated.`,
-      `${r.topPlayers || 0} card ratings updated`,
-      `${r.enriched || 0} indexes filled in`,
-      `${r.skipped || 0} skipped`
-    ]
-  },
-  {
-    kind: 'rounds',
-    idle: 'Rescan round types',
-    busy: 'Rescanning rounds…',
-    className: 'btn',
-    confirm:
-      'Rewatch every round of every ready demo and re-tag it against the round library?\n\nStored tags are dropped first, so this picks up edited definitions, newly painted zones and newly named utility spots. Does not touch kills, PRW or possession.',
-    running: 'Rewatching rounds…',
-    starting: 'Starting round scan…',
-    done: 'Round scan finished.',
-    start: () => adminApi.rescanRounds(),
-    status: () => adminApi.rescanRoundsStatus(),
-    summary: (r, ms) => {
-      const parts = [
+/**
+ * @param {() => string[]} selectedFields
+ * @returns {ToolJob[]}
+ */
+function buildJobs(selectedFields) {
+  return [
+    {
+      kind: 'fields',
+      idle: 'Patch selected fields',
+      busy: 'Patching fields…',
+      className: 'btn primary',
+      confirm: '',
+      running: 'Patching selected fields…',
+      starting: 'Starting field patch…',
+      done: 'Field patch finished.',
+      start: () => adminApi.refreshFields(selectedFields()),
+      status: () => adminApi.refreshFieldsStatus(),
+      summary: (r, ms) => [
         `Done in ${Math.round(ms / 1000)}s.`,
-        `${r.scanned || 0} of ${r.ready || 0} demos on library maps.`,
-        `${r.tagged || 0} of ${r.rounds || 0} rounds matched a named type`
-      ];
-      // Per map, because a map with zero matches is the whole finding: it
-      // means the ground or the utility spots are not named yet.
-      const maps = Object.entries(r.maps || {}).sort((a, b) => b[1] - a[1]);
-      if (maps.length) parts.push(`(${maps.map(([m, n]) => `${m} ${n}`).join(', ')})`);
-      return parts;
-    }
-  },
-  {
-    kind: 'player-names',
-    idle: 'Rescan player names',
-    busy: 'Rescanning names…',
-    className: 'btn',
-    confirm:
-      'Merge every player by Steam ID and set their display name to the one they used most often?\n\nRewrites demo/round rosters, then rebuilds statistics. Aquwo/aRTYSAN-style aliases collapse to the majority name.',
-    running: 'Merging player names by Steam ID…',
-    starting: 'Starting player-name rescan…',
-    done: 'Player-name rescan finished.',
-    start: () => adminApi.rescanPlayerNames(),
-    status: () => adminApi.rescanPlayerNamesStatus(),
-    summary: (r, ms) => {
-      const parts = [
+        `${r.ready || 0} ready demos.`,
+        `${r.updated || 0} patched`,
+        `${r.built || 0} built`,
+        `${r.skipped || 0} skipped`,
+        (r.fields || []).length ? `(${(r.fields || []).join(', ')})` : ''
+      ].filter(Boolean)
+    },
+    {
+      kind: 'stats',
+      idle: 'Recalculate all statistics',
+      busy: 'Recalculating…',
+      className: 'btn',
+      confirm:
+        'Rebuild every field on every ready demo from parsed round data?\n\nPrefer Patch selected fields when only one statistic changed. A full rebuild can take a long time on a large library.',
+      running: 'Recalculating…',
+      starting: 'Starting recalculation…',
+      done: 'Recalculation finished.',
+      start: () => adminApi.refreshStats({ force: true }),
+      status: () => adminApi.refreshStatsStatus(),
+      summary: (r, ms) => [
         `Done in ${Math.round(ms / 1000)}s.`,
-        `${r.steamIds || 0} Steam IDs across ${r.ready || 0} demos.`,
-        `${r.withAliases || 0} had multiple names`,
-        `${r.demosUpdated || 0} demos / ${r.roundsUpdated || 0} rounds rewritten`
-      ];
-      const sample = (r.renames || [])
-        .slice(0, 5)
-        .map((x) => {
-          const alts = (x.aliases || []).map((a) => `${a.name}×${a.count}`).join(', ');
-          return `${x.name}←${alts || '?'}`;
-        });
-      if (sample.length) parts.push(`(${sample.join('; ')})`);
-      return parts;
+        `${r.ready || 0} ready demos.`,
+        `${r.built || 0} rebuilt`,
+        `${r.enriched || 0} enriched`,
+        `${r.current || 0} already current`
+      ]
+    },
+    {
+      kind: 'positions',
+      idle: 'Reload positions',
+      busy: 'Scanning positions…',
+      className: 'btn',
+      confirm:
+        'Rescan player positions on every ready demo from 3D tick data and rebuild roles only?\n\nDoes not recalculate kills, PRW, possession, or other stats. Can take a while on a large library.',
+      running: 'Scanning player positions…',
+      starting: 'Starting positions scan…',
+      done: 'Positions scan finished.',
+      start: () => adminApi.refreshPositions(),
+      status: () => adminApi.refreshPositionsStatus(),
+      summary: (r, ms) => [
+        `Done in ${Math.round(ms / 1000)}s.`,
+        `${r.ready || 0} ready demos.`,
+        `${r.updated || 0} roles updated`,
+        `${r.skipped || 0} skipped`
+      ]
+    },
+    {
+      kind: 'ratings',
+      idle: 'Recalculate ratings',
+      busy: 'Recalculating ratings…',
+      className: 'btn',
+      confirm:
+        'Re-derive Rating 3.0 for every ready demo and refresh the rating shown on each demo card?\n\nReads the statistics already on disk, so it is much quicker than a full recalculation. Does not touch kills, PRW, possession or round tags.',
+      running: 'Recalculating ratings…',
+      starting: 'Starting rating recalculation…',
+      done: 'Rating recalculation finished.',
+      start: () => adminApi.refreshRatings(),
+      status: () => adminApi.refreshRatingsStatus(),
+      summary: (r, ms) => [
+        `Done in ${Math.round(ms / 1000)}s.`,
+        `${r.rated || 0} of ${r.ready || 0} demos rated.`,
+        `${r.topPlayers || 0} card ratings updated`,
+        `${r.enriched || 0} indexes filled in`,
+        `${r.skipped || 0} skipped`
+      ]
+    },
+    {
+      kind: 'rounds',
+      idle: 'Rescan round types',
+      busy: 'Rescanning rounds…',
+      className: 'btn',
+      confirm:
+        'Rewatch every round of every ready demo and re-tag it against the round library?\n\nStored tags are dropped first, so this picks up edited definitions, newly painted zones and newly named utility spots. Does not touch kills, PRW or possession.',
+      running: 'Rewatching rounds…',
+      starting: 'Starting round scan…',
+      done: 'Round scan finished.',
+      start: () => adminApi.rescanRounds(),
+      status: () => adminApi.rescanRoundsStatus(),
+      summary: (r, ms) => {
+        const parts = [
+          `Done in ${Math.round(ms / 1000)}s.`,
+          `${r.scanned || 0} of ${r.ready || 0} demos on library maps.`,
+          `${r.tagged || 0} of ${r.rounds || 0} rounds matched a named type`
+        ];
+        const maps = Object.entries(r.maps || {}).sort((a, b) => b[1] - a[1]);
+        if (maps.length) parts.push(`(${maps.map(([m, n]) => `${m} ${n}`).join(', ')})`);
+        return parts;
+      }
+    },
+    {
+      kind: 'player-names',
+      idle: 'Rescan player names',
+      busy: 'Rescanning names…',
+      className: 'btn',
+      confirm:
+        'Merge every player by Steam ID and set their display name to the one they used most often?\n\nRewrites demo/round rosters, then rebuilds statistics. Aquwo/aRTYSAN-style aliases collapse to the majority name.',
+      running: 'Merging player names by Steam ID…',
+      starting: 'Starting player-name rescan…',
+      done: 'Player-name rescan finished.',
+      start: () => adminApi.rescanPlayerNames(),
+      status: () => adminApi.rescanPlayerNamesStatus(),
+      summary: (r, ms) => {
+        const parts = [
+          `Done in ${Math.round(ms / 1000)}s.`,
+          `${r.steamIds || 0} Steam IDs across ${r.ready || 0} demos.`,
+          `${r.withAliases || 0} had multiple names`,
+          `${r.demosUpdated || 0} demos / ${r.roundsUpdated || 0} rounds rewritten`
+        ];
+        const sample = (r.renames || [])
+          .slice(0, 5)
+          .map((x) => {
+            const alts = (x.aliases || []).map((a) => `${a.name}×${a.count}`).join(', ');
+            return `${x.name}←${alts || '?'}`;
+          });
+        if (sample.length) parts.push(`(${sample.join('; ')})`);
+        return parts;
+      }
     }
-  }
-];
-
-const jobFor = (kind) => JOBS.find((j) => j.kind === kind) || JOBS[0];
+  ];
+}
 
 export function toolsPanel() {
   const root = el('div', 'admin-panel');
@@ -157,9 +195,19 @@ export function toolsPanel() {
   /** @type {string|null} */
   let activeKind = null;
   let pollTimer = 0;
+  /** @type {Set<string>} */
+  const selected = new Set();
+  /** @type {{ id: string, label: string }[]} */
+  let fieldGroups = DEFAULT_FIELD_GROUPS.slice();
+
+  const JOBS = buildJobs(() => [...selected]);
+  const jobFor = (kind) => JOBS.find((j) => j.kind === kind) || JOBS[0];
 
   /** @type {Map<string, HTMLButtonElement>} */
   const buttons = new Map();
+  const fieldSeg = el('div', 'admin-field-seg');
+  fieldSeg.setAttribute('role', 'group');
+  fieldSeg.setAttribute('aria-label', 'Stats fields to patch');
 
   function stopPoll() {
     if (pollTimer) {
@@ -172,10 +220,32 @@ export function toolsPanel() {
     running = busy;
     for (const job of JOBS) {
       const btn = buttons.get(job.kind);
+      if (!btn) continue;
       btn.disabled = busy;
       btn.textContent = busy && job.kind === kind ? job.busy : job.idle;
     }
+    fieldSeg.querySelectorAll('button').forEach((b) => {
+      b.disabled = busy;
+    });
     if (!busy) activeKind = null;
+  }
+
+  function drawFieldChips() {
+    fieldSeg.replaceChildren();
+    for (const group of fieldGroups) {
+      const on = selected.has(group.id);
+      const btn = el('button', `admin-field-chip${on ? ' is-on' : ''}`, group.label);
+      btn.type = 'button';
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      btn.disabled = running;
+      btn.addEventListener('click', () => {
+        if (running) return;
+        if (selected.has(group.id)) selected.delete(group.id);
+        else selected.add(group.id);
+        drawFieldChips();
+      });
+      fieldSeg.appendChild(btn);
+    }
   }
 
   function drawProgress(job, kind) {
@@ -248,7 +318,7 @@ export function toolsPanel() {
         .slice(0, 5)
         .map((e) => `${e.filename || e.id}: ${e.error}`)
         .join(' · ');
-      status.textContent += ` — ${sample}`;
+      status.textContent += `. ${sample}`;
     }
   }
 
@@ -269,6 +339,11 @@ export function toolsPanel() {
   async function pollOnce() {
     try {
       const states = await allStatuses();
+      const fieldsState = states[JOBS.findIndex((j) => j.kind === 'fields')];
+      if (Array.isArray(fieldsState?.fieldGroups) && fieldsState.fieldGroups.length) {
+        fieldGroups = fieldsState.fieldGroups;
+        drawFieldChips();
+      }
       const live = states.findIndex((s) => s.running);
       if (live !== -1) {
         drawProgress(states[live], JOBS[live].kind);
@@ -307,7 +382,22 @@ export function toolsPanel() {
 
   async function run(spec) {
     if (running) return;
-    if (!window.confirm(spec.confirm)) return;
+    if (spec.kind === 'fields') {
+      if (!selected.size) {
+        status.className = 'admin-error';
+        status.textContent = 'Select at least one field to patch.';
+        return;
+      }
+      if (
+        !window.confirm(
+          `Rewrite ${[...selected].join(', ')} on every ready demo from stored round files?\n\nOther fields stay as they are. Does not reparse demos.`
+        )
+      ) {
+        return;
+      }
+    } else if (spec.confirm && !window.confirm(spec.confirm)) {
+      return;
+    }
     setButtonsBusy(true, spec.kind);
     activeKind = spec.kind;
     status.className = 'admin-note';
@@ -346,29 +436,11 @@ export function toolsPanel() {
     actions.appendChild(btn);
   }
 
+  drawFieldChips();
+
   const card = el('div', 'admin-tool-card');
   card.appendChild(el('h3', 'admin-tool-title', 'Replay statistics'));
-  card.appendChild(
-    el(
-      'p',
-      'admin-note',
-      'Rebuild every demo’s compact stats index from already-parsed round files (rating inputs, PRW, possession, swing, duel PFW/PFO, and related fields). Use this after a stats schema change or if Database / Pattern Finder numbers look stale.'
-    )
-  );
-  card.appendChild(
-    el(
-      'p',
-      'admin-note',
-      'Reload positions walks 3D tick tracks only, to reassign map roles from where players stood. It does not rebuild the rest of the stats index.'
-    )
-  );
-  card.appendChild(
-    el(
-      'p',
-      'admin-note',
-      'Rescan round types rewatches every round against the round library and rewrites its tags. Run it after editing a round definition, painting a map, or naming a utility spot.'
-    )
-  );
+  card.appendChild(fieldSeg);
   card.appendChild(actions);
   card.appendChild(progressWrap);
   card.appendChild(status);

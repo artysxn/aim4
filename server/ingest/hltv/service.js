@@ -12,9 +12,13 @@
 //                                       ingester is spawned DETACHED with its
 //                                       own log file descriptors, so it has no
 //                                       remaining tie to the parent.
-//   3. The whole box rebooting, or the  Intent is persisted to desired.json,
-//      ingester itself dying.           and a supervisor re-spawns whenever the
-//                                       switch says "on" but nothing is alive.
+//   3. The API server restarting.       desired.json is forced Off on boot so a
+//                                       deploy never quietly resumes scraping.
+//                                       Ledger + demo-cursor (and ingest.log)
+//                                       still remember progress; flipping On
+//                                       continues from the next demo id.
+//   4. The ingester itself dying        While the switch is On, a supervisor
+//      while the switch is On.          re-spawns it with backoff.
 //
 // Point 2 is the subtle one. Piping a detached child's stdout back to the
 // parent keeps a handle open between them: when the parent dies the pipe breaks
@@ -76,9 +80,8 @@ const desiredPath = (c) => path.join(c.stateDir, 'desired.json');
 /**
  * The switch position, persisted.
  *
- * This is what makes the admin page a control panel rather than a launch
- * button: the answer to "should this be running" outlives every process
- * involved, so a reboot resumes instead of quietly staying off.
+ * While the API process is up, On stays On across child crashes (supervisor).
+ * A fresh API boot always forces Off; progress lives in the ledger/cursor.
  */
 async function readDesired(c) {
   try {
@@ -87,6 +90,89 @@ async function readDesired(c) {
   } catch {
     return { enabled: false };
   }
+}
+
+/**
+ * Parse the newest demo id mentioned in ingest.log so a missing/stale cursor
+ * can still resume after an operator clears state or a partial write.
+ * @returns {Promise<number|null>}
+ */
+async function lastDemoIdFromLog(c) {
+  try {
+    const { lines } = await readIngestLog({ tail: 999 });
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      const m =
+        line.match(/cursor:\s*demo\/(\d+)/i) ||
+        line.match(/->\s*demo\/(\d+)\s+download/i) ||
+        line.match(/seek cursor\s*->\s*demo\/(\d+)/i) ||
+        line.match(/demo\/(\d+)\s+(?:missing|waiting|challenge)/i);
+      if (m) {
+        const id = Number(m[1]);
+        if (Number.isFinite(id) && id > 0) return id;
+      }
+    }
+  } catch {
+    /* log is optional */
+  }
+  return null;
+}
+
+/**
+ * Prefer the on-disk cursor; if the log is ahead, seek forward so On does not
+ * re-walk demos that already finished in a prior run.
+ */
+async function resumeCursorFromState(c) {
+  const cursor = await readCursor(c);
+  const fromLog = await lastDemoIdFromLog(c);
+  if (fromLog == null) {
+    await appendIngestLog(
+      c,
+      `resume cursor demo/${cursor.nextId} (ledger/cursor; no newer log mark)`
+    );
+    return cursor;
+  }
+  if (fromLog > Number(cursor.nextId || 0)) {
+    const next = await seekCursor(c, fromLog);
+    await appendIngestLog(
+      c,
+      `resume cursor advanced from log demo/${fromLog} (was demo/${cursor.nextId})`
+    );
+    return next;
+  }
+  await appendIngestLog(
+    c,
+    `resume cursor demo/${cursor.nextId} (log last saw demo/${fromLog})`
+  );
+  return cursor;
+}
+
+/**
+ * API boot: always leave the switch Off and kill any orphaned child. Does not
+ * clear ledger, cursor, or ingest.log.
+ */
+export async function disableForBoot() {
+  const c = cfg();
+  await writeDesired(c, { enabled: false });
+  const pid = await readPid(c.lockPath);
+  if (pid && alive(pid)) {
+    await appendIngestLog(c, `boot: forcing Off; SIGKILL pid=${pid}`);
+    killIngestPid(pid);
+  }
+  await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+  const status = await readStatus(c.statusPath).catch(() => emptyStatus());
+  await writeStatus(c.statusPath, {
+    ...status,
+    running: false,
+    pid: null,
+    current: null,
+    stoppedAt: new Date().toISOString(),
+    lastError: null
+  }).catch(() => {});
+  state.failures = 0;
+  state.nextSpawnAllowedAt = 0;
+  await appendIngestLog(c, 'boot: ingest left Off (turn On manually to resume)');
+  return { enabled: false };
 }
 
 async function writeDesired(c, patch) {
@@ -245,6 +331,7 @@ export async function start(options = {}) {
   }
 
   await appendIngestLog(c, 'start requested');
+  await resumeCursorFromState(c);
   const pid = await spawnIngester(c, options);
   await writeStatus(c.statusPath, {
     ...emptyStatus(),
@@ -373,6 +460,7 @@ export async function hardRestart(options = {}) {
   await writeDesired(c, { enabled: true, ...options });
 
   await appendIngestLog(c, 'hard restart spawning');
+  await resumeCursorFromState(c);
   const pid = await spawnIngester(c, options);
   await writeStatus(c.statusPath, {
     ...emptyStatus(),
@@ -419,18 +507,30 @@ export async function supervise() {
 }
 
 /**
- * Boot hook. Reconciles once, then keeps watching.
- *
- * The interval is the only thing standing between "the box rebooted at 3am" and
- * "the backfill has been off since 3am".
+ * Boot hook. Forces the switch Off (manual On required after every API
+ * restart), then watches for crashes only while an operator has turned it On.
  */
 export function startSupervisor({ intervalMs = 5_000 } = {}) {
   if (state.supervisor) return state.supervisor;
-  supervise().catch((err) => console.warn(`[ingest] supervisor: ${err.message}`));
-  state.supervisor = setInterval(() => {
-    supervise().catch((err) => console.warn(`[ingest] supervisor: ${err.message}`));
-  }, intervalMs);
-  state.supervisor.unref?.();
+  // Sentinel so a second boot call is a no-op while disableForBoot runs.
+  // The real interval is armed only after Off is on disk, otherwise a stale
+  // desired.json=true could respawn the child before boot disable finishes.
+  let armed = null;
+  state.supervisor = {
+    unref() {
+      armed?.unref?.();
+    }
+  };
+  disableForBoot()
+    .then(() => supervise())
+    .then(() => {
+      armed = setInterval(() => {
+        supervise().catch((err) => console.warn(`[ingest] supervisor: ${err.message}`));
+      }, intervalMs);
+      armed.unref?.();
+      state.supervisor = armed;
+    })
+    .catch((err) => console.warn(`[ingest] supervisor: ${err.message}`));
   return state.supervisor;
 }
 

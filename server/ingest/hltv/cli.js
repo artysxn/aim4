@@ -117,7 +117,9 @@ function logEvent(e, verbose) {
       break;
     case 'match-progress': {
       const stage = e.stage || 'work';
-      if (e.round) {
+      if (e.skipped) {
+        console.log(`     skip ${e.map || ''}: ${e.skipped}`);
+      } else if (e.round) {
         console.log(`     ${stage}: ${e.map || ''} round ${e.round}/${e.total || '?'}`);
       } else if (stage !== 'download') {
         console.log(`     ${stage}${e.map ? `: ${e.map}` : ''}`);
@@ -134,6 +136,12 @@ function logEvent(e, verbose) {
       break;
     case 'match-duplicate':
       console.log(`\n     duplicate: skipped ${e.maps} map(s) already in library`);
+      break;
+    case 'match-skipped':
+      console.log(
+        `\n     skipped ${e.maps} map(s) (${e.reason || 'filtered'})` +
+          `${e.names?.length ? `: ${e.names.join(', ')}` : ''}; next download`
+      );
       break;
     case 'match-cleaned':
       console.log(`     cleaned, freed ${mb(e.freed)}`);
