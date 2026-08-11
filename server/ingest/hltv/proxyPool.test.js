@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict';
+import fsp from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {
-  createProgressSpeedMonitor,
-  filterPoolForPick,
-  isStickySpeed,
-  proxyUrlFromEntry,
+  blacklistProxy,
+  bpsFromTransfer,
+  clearProxyBlacklist,
+  loadProxyPool,
   parseProxyLines,
-  rankBestProxies,
+  proxyStatus,
+  proxyUrlFromEntry,
+  readProxyBlacklist,
+  recordWorkingProxy,
   redactProxy,
-  STICKY_MIN_MBPS
+  sortBySpeed
 } from './proxyPool.js';
 
 assert.equal(proxyUrlFromEntry({ protocol: 'socks4', host: '1.1.1.1', port: 1080 }), '');
@@ -23,101 +29,69 @@ assert.deepEqual(parseProxyLines('http://a:1\nsocks4://b:2\nsocks5://c:3\n# hi')
 ]);
 assert.equal(redactProxy('http://user:pass@10.0.0.1:8080'), '10.0.0.1:8080');
 
-// Log-style samples: 29s 200MB, 30s 205MB, 31s 211MB → ~5.5 MB/s
-{
-  const mon = createProgressSpeedMonitor({ minMbps: 20, minSamples: 2, minElapsedMs: 1000 });
-  const mb = (n) => n * 1024 * 1024;
-  assert.equal(mon.sample({ phase: 'browser', received: mb(200), elapsedMs: 29_000 }), null);
-  assert.equal(mon.sample({ phase: 'browser', received: mb(205), elapsedMs: 30_000 }), null);
-  const verdict = mon.sample({ phase: 'browser', received: mb(211), elapsedMs: 31_000 });
-  assert.ok(verdict);
-  assert.equal(verdict.tooSlow, true);
-  assert.ok(Math.abs(verdict.mbps - 5.5) < 0.05, `expected ~5.5 got ${verdict.mbps}`);
-}
+// -- speed samples ----------------------------------------------------------
 
-{
-  const mon = createProgressSpeedMonitor({ minMbps: 20, minSamples: 2, minElapsedMs: 1000 });
-  const mb = (n) => n * 1024 * 1024;
-  mon.sample({ phase: 'browser', received: mb(40), elapsedMs: 1_000 });
-  mon.sample({ phase: 'browser', received: mb(65), elapsedMs: 2_000 });
-  const verdict = mon.sample({ phase: 'browser', received: mb(90), elapsedMs: 3_000 });
-  assert.ok(verdict);
-  assert.equal(verdict.tooSlow, false);
-  assert.ok(verdict.mbps >= 20);
-}
+// 240 MB in 12s is 20 MB/s, the arithmetic the progress log shows by hand.
+assert.equal(bpsFromTransfer({ bytes: 240 * 1024 * 1024, ms: 12_000 }), 20_971_520);
+// Too small or too short to be a meaningful rate.
+assert.equal(bpsFromTransfer({ bytes: 1024, ms: 12_000 }), 0);
+assert.equal(bpsFromTransfer({ bytes: 240 * 1024 * 1024, ms: 100 }), 0);
+assert.equal(bpsFromTransfer(null), 0);
 
-assert.equal(isStickySpeed(24.9), false);
-assert.equal(isStickySpeed(STICKY_MIN_MBPS), true);
+assert.deepEqual(
+  sortBySpeed([
+    { url: 'http://slow:1', bps: 1000, lastOkAt: '2026-01-02' },
+    { url: 'http://unknown:2', lastOkAt: '2026-01-03' },
+    { url: 'http://fast:3', bps: 9000, lastOkAt: '2026-01-01' }
+  ]).map((e) => e.url),
+  ['http://fast:3', 'http://slow:1', 'http://unknown:2']
+);
 
-{
-  const pool = ['a', 'b', 'c', 'd'];
-  assert.deepEqual(
-    filterPoolForPick(pool, {
-      used: new Set(),
-      gray: new Set(['b']),
-      tested: new Set(['a']),
-      best: ['a'],
-      sticky: 'd',
-      rotationOnly: false
-    }),
-    ['d']
-  );
-  assert.deepEqual(
-    filterPoolForPick(pool, {
-      used: new Set(),
-      gray: new Set(['b']),
-      tested: new Set(['a']),
-      best: ['a'],
-      rotationOnly: false
-    }),
-    ['c', 'd']
-  );
-  assert.deepEqual(
-    filterPoolForPick(pool, {
-      used: new Set(['c', 'd']),
-      gray: new Set(['b']),
-      tested: new Set(['a']),
-      best: [],
-      rotationOnly: false
-    }),
-    ['a']
-  );
-  // Nothing better left: return to gray list.
-  assert.deepEqual(
-    filterPoolForPick(pool, {
-      used: new Set(['a', 'c', 'd']),
-      gray: new Set(['b']),
-      tested: new Set(['a']),
-      best: [],
-      rotationOnly: false
-    }),
-    ['b']
-  );
-  assert.deepEqual(
-    filterPoolForPick(pool, {
-      used: new Set(),
-      gray: new Set(),
-      tested: new Set(pool),
-      best: ['d', 'c'],
-      rotationOnly: true
-    }),
-    ['d', 'c']
-  );
-}
+// -- pool ordering and the challenge bench ----------------------------------
 
-{
-  const ranked = rankBestProxies(
-    [
-      { url: 'http://slow:1', confirmed: true, mbps: 8, tested: true },
-      { url: 'http://fast:1', confirmed: true, mbps: 55, tested: true },
-      { url: 'http://mid:1', confirmed: true, mbps: 30, tested: true }
-    ],
-    { limit: 2, confirmedOnly: true }
-  );
-  assert.deepEqual(
-    ranked.map((e) => e.url),
-    ['http://fast:1', 'http://mid:1']
-  );
-}
+const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'aim4-proxy-'));
+const cfg = { stateDir };
+
+await recordWorkingProxy(cfg, {
+  url: 'http://slow:1',
+  transfer: { bytes: 10 * 1024 * 1024, ms: 10_000 }
+});
+await recordWorkingProxy(cfg, {
+  url: 'http://fast:2',
+  transfer: { bytes: 200 * 1024 * 1024, ms: 10_000 }
+});
+assert.deepEqual(await loadProxyPool(cfg), ['http://fast:2', 'http://slow:1']);
+
+// Smoothing: one good burst is not enough to overtake a proven exit, two are.
+await recordWorkingProxy(cfg, {
+  url: 'http://slow:1',
+  transfer: { bytes: 400 * 1024 * 1024, ms: 10_000 }
+});
+assert.deepEqual(await loadProxyPool(cfg), ['http://fast:2', 'http://slow:1']);
+await recordWorkingProxy(cfg, {
+  url: 'http://slow:1',
+  transfer: { bytes: 400 * 1024 * 1024, ms: 10_000 }
+});
+assert.deepEqual(await loadProxyPool(cfg), ['http://slow:1', 'http://fast:2']);
+
+const benched = await blacklistProxy(cfg, 'http://slow:1', { reason: 'challenge' });
+assert.equal(benched.reason, 'challenge');
+assert.ok(Date.parse(benched.until) - Date.now() > 23 * 60 * 60 * 1000);
+assert.deepEqual(await loadProxyPool(cfg), ['http://fast:2']);
+
+const status = await proxyStatus(cfg);
+assert.equal(status.blacklistCount, 1);
+assert.equal(status.blacklist[0].host, 'slow:1');
+assert.equal(status.workingCount, 1);
+assert.ok(status.working[0].mbps > 0);
+
+// Expired entries drop themselves on read.
+await blacklistProxy(cfg, 'http://fast:2', { ms: -1000 });
+assert.deepEqual(Object.keys(await readProxyBlacklist(cfg)), ['http://slow:1']);
+
+await clearProxyBlacklist(cfg);
+assert.deepEqual(await readProxyBlacklist(cfg), {});
+
+await fsp.rm(stateDir, { recursive: true, force: true });
 
 console.log('proxyPool.test.js OK');

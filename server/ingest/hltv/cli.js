@@ -170,7 +170,8 @@ function logEvent(e, verbose) {
         phase,
         secs != null ? `${secs}s` : null,
         e.detail || null,
-        size || null
+        size || null,
+        e.bps ? `${Math.round((e.bps * 8) / 1e5) / 10} Mbps` : null
       ].filter(Boolean);
       console.log(`     ${bits.join(' · ')}`);
       break;

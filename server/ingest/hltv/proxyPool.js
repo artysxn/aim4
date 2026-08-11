@@ -20,114 +20,21 @@ const DEFAULT_SETTINGS = { attempts: 5, random: true };
 const VERIFY_TIMEOUT_MS = 10_000;
 const REFRESH_CANDIDATES = 40;
 const REFRESH_CONCURRENCY = 8;
-/** Dead exits stay out of the pool at least this long (Cloudflare burns). */
-export const PROXY_BLACKLIST_TTL_MS = 24 * 60 * 60 * 1000;
-/**
- * After this many unique exits have a measured HLTV download speed (ok or slow),
- * rotate among the PROXY_BEST_ROTATION fastest non-CF winners only.
- */
-export const PROXY_TEST_TARGET = 40;
-/** Final rotation size once PROXY_TEST_TARGET exits are scored. */
-export const PROXY_BEST_ROTATION = 5;
-/** @deprecated Use PROXY_BEST_ROTATION. Kept for older imports. */
-export const CONFIRMED_ROTATION_SIZE = PROXY_BEST_ROTATION;
-/** Abort + try another exit when sustained download rate is below this. */
-export const MIN_DOWNLOAD_SPEED_BPS = 20 * 1024 * 1024;
-/**
- * A confirmed HLTV download at/above this speed with no CF becomes the sticky
- * exit: reuse it for every following demo until it fails.
- */
-export const STICKY_MIN_MBPS = 25;
-/** Max slow-proxy aborts per download before giving up on speed failover. */
-export const PROXY_SPEED_ATTEMPTS = 3;
-/** Wait this long into the transfer phase before judging download speed. */
-export const SPEED_WARMUP_MS = 5_000;
 
 const settingsPath = (cfg) => path.join(cfg.stateDir, 'proxy-settings.json');
 const workingPath = (cfg) => path.join(cfg.stateDir, 'working-proxies.json');
 const cachePath = (cfg) => path.join(cfg.stateDir, 'proxy-cache.json');
 const refreshPath = (cfg) => path.join(cfg.stateDir, 'proxy-refresh.json');
 const blacklistPath = (cfg) => path.join(cfg.stateDir, 'proxy-blacklist.json');
-const graylistPath = (cfg) => path.join(cfg.stateDir, 'proxy-graylist.json');
 
-export function downloadSpeedBps(bytes, elapsedMs) {
-  const b = Number(bytes) || 0;
-  const ms = Number(elapsedMs) || 0;
-  if (b <= 0 || ms <= 0) return 0;
-  return (b * 1000) / ms;
-}
-
-export function mbpsFromBps(bps) {
-  return (Number(bps) || 0) / (1024 * 1024);
-}
+/** A proxy that served a Cloudflare challenge is useless for a whole day. */
+export const CHALLENGE_BLACKLIST_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Rolling MB/s from progress samples (same data as ingest log lines
- * `29s · 200.0 MB` → `30s · 205.0 MB` → ~5 MB/s deltas).
- *
- * Does not touch CloakBrowser internals; callers feed download-progress events.
+ * Weight of the newest speed sample. Low enough that one slow burst does not
+ * demote a fast exit, high enough to react within a few downloads.
  */
-export function createProgressSpeedMonitor({
-  minMbps = MIN_DOWNLOAD_SPEED_BPS / (1024 * 1024),
-  minSamples = 3,
-  minElapsedMs = SPEED_WARMUP_MS,
-  maxSamples = 12
-} = {}) {
-  /** @type {{ t: number, bytes: number }[]} */
-  const samples = [];
-
-  function ratesMbps() {
-    const rates = [];
-    for (let i = 1; i < samples.length; i++) {
-      const dtSec = (samples[i].t - samples[i - 1].t) / 1000;
-      const dBytes = samples[i].bytes - samples[i - 1].bytes;
-      if (dtSec <= 0 || dBytes < 0) continue;
-      rates.push(dBytes / dtSec / (1024 * 1024));
-    }
-    return rates;
-  }
-
-  function averageMbps() {
-    const rates = ratesMbps();
-    if (!rates.length) {
-      if (samples.length < 2) return null;
-      const first = samples[0];
-      const last = samples[samples.length - 1];
-      const dtSec = (last.t - first.t) / 1000;
-      if (dtSec <= 0) return null;
-      return (last.bytes - first.bytes) / dtSec / (1024 * 1024);
-    }
-    return rates.reduce((a, b) => a + b, 0) / rates.length;
-  }
-
-  return {
-    sample(p = {}) {
-      const phase = String(p.phase || '');
-      if (phase && phase !== 'browser' && phase !== 'copy') return null;
-      const bytes = Number(p.received) || 0;
-      const t = Number(p.elapsedMs) || 0;
-      if (bytes <= 0 || t <= 0) return null;
-      const last = samples[samples.length - 1];
-      if (last && last.t === t && last.bytes === bytes) return null;
-      samples.push({ t, bytes });
-      if (samples.length > maxSamples) samples.splice(0, samples.length - maxSamples);
-
-      const rates = ratesMbps();
-      if (rates.length < minSamples) return null;
-      if (samples[samples.length - 1].t < minElapsedMs) return null;
-      const mbps = rates.reduce((a, b) => a + b, 0) / rates.length;
-      return { tooSlow: mbps < minMbps, mbps };
-    },
-    averageMbps,
-    sampleCount: () => samples.length
-  };
-}
-
-function blacklistTtlMs(cfg = {}) {
-  const raw = Number(cfg.cloakProxyBlacklistMs ?? process.env.AIM4_CLOAK_PROXY_BLACKLIST_MS);
-  if (Number.isFinite(raw) && raw > 0) return raw;
-  return PROXY_BLACKLIST_TTL_MS;
-}
+const SPEED_EWMA_ALPHA = 0.4;
 
 async function atomicWrite(file, data) {
   await fsp.mkdir(path.dirname(file), { recursive: true });
@@ -222,389 +129,132 @@ export async function readWorkingProxies(cfg) {
   }
 }
 
-/**
- * Exits that completed a real HLTV download without Cloudflare (speed-ranked).
- * Blacklisted urls are omitted.
- */
-export async function readConfirmedProxies(cfg) {
-  const blocked = await readProxyBlacklist(cfg);
-  const list = await readWorkingProxies(cfg);
-  return list
-    .filter((e) => e.confirmed && !blocked.has(e.url))
-    .sort((a, b) => (Number(b.mbps) || 0) - (Number(a.mbps) || 0));
-}
-
-/** Unique exits that have a measured HLTV download speed (ok or slow abort). */
-export async function readTestedProxies(cfg) {
-  const blocked = await readProxyBlacklist(cfg);
-  const list = await readWorkingProxies(cfg);
-  return list
-    .filter((e) => e.tested && !blocked.has(e.url))
-    .sort((a, b) => (Number(b.mbps) || 0) - (Number(a.mbps) || 0));
-}
-
-/**
- * Best non-CF download winners by measured MB/s.
- * Prefers `confirmed` (full archive) over slow-only measurements.
- */
-export function rankBestProxies(list, { limit = PROXY_BEST_ROTATION, confirmedOnly = false } = {}) {
-  const rows = (Array.isArray(list) ? list : [])
-    .filter((e) => e?.url && isSupportedProxy(e.url))
-    .filter((e) => (confirmedOnly ? e.confirmed : e.tested || e.confirmed))
-    .slice()
-    .sort((a, b) => {
-      const conf = Number(Boolean(b.confirmed)) - Number(Boolean(a.confirmed));
-      if (conf) return conf;
-      return (Number(b.mbps) || 0) - (Number(a.mbps) || 0);
-    });
-  return rows.slice(0, Math.max(0, limit));
-}
-
-export async function readBestProxies(cfg, limit = PROXY_BEST_ROTATION) {
-  const blocked = await readProxyBlacklist(cfg);
-  const list = (await readWorkingProxies(cfg)).filter((e) => !blocked.has(e.url));
-  return rankBestProxies(list, { limit, confirmedOnly: true });
-}
-
 async function writeWorkingProxies(cfg, list) {
   await atomicWrite(workingPath(cfg), list);
 }
 
 /**
- * Once enough exits are scored, keep only the top PROXY_BEST_ROTATION as
- * `confirmed` for rotation. Before that, leave all confirmed flags alone.
+ * Bytes per second for one completed transfer.
+ * Ignores samples too small or too short to mean anything.
+ *
+ * @param {{ bytes?: number, ms?: number }} [transfer]
+ * @returns {number} 0 when the sample is not usable
  */
-function applyBestRotation(list, { testTarget = PROXY_TEST_TARGET, bestSize = PROXY_BEST_ROTATION } = {}) {
-  const tested = list.filter((e) => e.tested || e.confirmed);
-  if (tested.length < testTarget) return list;
-  const keep = new Set(
-    rankBestProxies(list, { limit: bestSize, confirmedOnly: true }).map((e) => e.url)
-  );
-  // Sticky fast exits always stay in the rotation set.
-  for (const e of list) {
-    if (e.sticky) keep.add(e.url);
-  }
-  // If fewer than `bestSize` full successes, fill from speed-tested rows.
-  if (keep.size < bestSize) {
-    for (const e of rankBestProxies(list, { limit: bestSize, confirmedOnly: false })) {
-      keep.add(e.url);
-      if (keep.size >= bestSize) break;
-    }
-  }
-  return list.map((e) => ({
-    ...e,
-    confirmed: keep.has(e.url),
-    rotation: keep.has(e.url)
-  }));
+export function bpsFromTransfer(transfer) {
+  const bytes = Number(transfer?.bytes) || 0;
+  const ms = Number(transfer?.ms) || 0;
+  if (bytes < 256 * 1024 || ms < 1000) return 0;
+  return Math.round(bytes / (ms / 1000));
 }
 
-export function isStickySpeed(mbps, min = STICKY_MIN_MBPS) {
-  return (Number(mbps) || 0) >= min;
-}
-
-/** Current sticky fast exit, if any (not blacklisted). */
-export async function readStickyProxy(cfg) {
-  const blocked = await readProxyBlacklist(cfg);
-  const list = await readWorkingProxies(cfg);
-  return (
-    list.find(
-      (e) =>
-        e.sticky &&
-        e.confirmed &&
-        !blocked.has(e.url) &&
-        isStickySpeed(e.mbps)
-    ) || null
-  );
-}
-
-export async function clearStickyProxy(cfg, url = null) {
-  const list = await readWorkingProxies(cfg);
-  let dirty = false;
-  const next = list.map((e) => {
-    if (!e.sticky) return e;
-    if (url && e.url !== url) return e;
-    dirty = true;
-    return { ...e, sticky: false };
-  });
-  if (dirty) await writeWorkingProxies(cfg, next);
-}
-
-function normalizeMbps(value) {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-/**
- * Record a proxy after an HLTV download attempt with a measured speed.
- * Successful archives set confirmed; slow aborts set tested + graylist separately.
- */
 export async function recordWorkingProxy(
   cfg,
-  { url, exitIp = '', country = '', confirmed = true, mbps = null, tested = true } = {}
+  { url, exitIp = '', country = '', transfer = null } = {}
 ) {
-  if (!url || !isSupportedProxy(url)) return null;
-  // A just-successful exit must not stay blacklisted or graylisted.
-  await clearProxyBlacklist(cfg, url).catch(() => {});
-  if (confirmed) await clearProxyGraylist(cfg, url).catch(() => {});
+  if (!url || !isSupportedProxy(url)) return;
   const list = await readWorkingProxies(cfg);
   const now = new Date().toISOString();
-  const speed = normalizeMbps(mbps);
+  const sample = bpsFromTransfer(transfer);
   const idx = list.findIndex((e) => e.url === url);
-  const effectiveMbps =
-    speed != null
-      ? Math.max(speed, idx >= 0 ? Number(list[idx].mbps) || 0 : 0)
-      : idx >= 0
-        ? list[idx].mbps || null
-        : null;
-  const makeSticky = Boolean(confirmed && isStickySpeed(effectiveMbps));
-
   if (idx >= 0) {
     const prev = list[idx];
+    const prevBps = Number(prev.bps) || 0;
     list[idx] = {
       ...prev,
       exitIp: exitIp || prev.exitIp || '',
       country: country || prev.country || '',
-      lastOkAt: confirmed ? now : prev.lastOkAt || now,
-      fails: confirmed ? 0 : prev.fails || 0,
-      confirmed: Boolean(confirmed || prev.confirmed),
-      tested: Boolean(tested || prev.tested || speed != null),
-      testedAt: tested || speed != null ? now : prev.testedAt || null,
-      mbps: effectiveMbps,
-      sticky: makeSticky ? true : confirmed ? false : Boolean(prev.sticky)
+      lastOkAt: now,
+      fails: 0,
+      // Exponential moving average, so ranking follows recent reality rather
+      // than one lucky first download.
+      bps: sample ? Math.round(prevBps ? prevBps * (1 - SPEED_EWMA_ALPHA) + sample * SPEED_EWMA_ALPHA : sample) : prevBps,
+      lastBps: sample || prev.lastBps || 0,
+      speedSamples: sample ? (Number(prev.speedSamples) || 0) + 1 : Number(prev.speedSamples) || 0,
+      lastSpeedAt: sample ? now : prev.lastSpeedAt || null
     };
   } else {
-    list.push({
+    list.unshift({
       url,
       exitIp: exitIp || '',
       country: country || '',
       verifiedAt: now,
-      lastOkAt: confirmed ? now : null,
+      lastOkAt: now,
       fails: 0,
-      confirmed: Boolean(confirmed),
-      tested: Boolean(tested || speed != null),
-      testedAt: now,
-      mbps: speed,
-      sticky: makeSticky
+      bps: sample,
+      lastBps: sample,
+      speedSamples: sample ? 1 : 0,
+      lastSpeedAt: sample ? now : null
     });
   }
-  // Only one sticky exit at a time.
-  if (makeSticky) {
-    for (let i = 0; i < list.length; i++) {
-      if (list[i].url !== url && list[i].sticky) list[i] = { ...list[i], sticky: false };
-    }
-  }
-  const next = applyBestRotation(list);
-  await writeWorkingProxies(cfg, next.slice(0, 200));
-  const sticky = next.find((e) => e.sticky) || null;
-  return {
-    testedCount: next.filter((e) => e.tested || e.confirmed).length,
-    best: rankBestProxies(next, { limit: PROXY_BEST_ROTATION, confirmedOnly: true }),
-    sticky
-  };
+  // Cap stored winners so the file stays small.
+  await writeWorkingProxies(cfg, sortBySpeed(list).slice(0, 200));
 }
 
-/**
- * Gray-list: skip while untested exits remain; reusable once discovery is exhausted.
- * @returns {Promise<Map<string, { mbps: number|null, at: string, reason: string }>>}
- */
-export async function readProxyGraylist(cfg) {
-  try {
-    const parsed = JSON.parse(await fsp.readFile(graylistPath(cfg), 'utf8'));
-    const raw = Array.isArray(parsed?.entries) ? parsed.entries : Array.isArray(parsed) ? parsed : [];
-    const map = new Map();
-    for (const entry of raw) {
-      const url = String(entry?.url || '');
-      if (!url || !isSupportedProxy(url)) continue;
-      map.set(url, {
-        mbps: normalizeMbps(entry.mbps),
-        at: entry.at || null,
-        reason: entry.reason || 'slow'
-      });
-    }
-    return map;
-  } catch {
-    return new Map();
-  }
-}
-
-async function writeProxyGraylist(cfg, map) {
-  const entries = [...map.entries()]
-    .map(([url, meta]) => ({
-      url,
-      mbps: meta?.mbps ?? null,
-      at: meta?.at || null,
-      reason: meta?.reason || 'slow'
-    }))
-    .sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
-  await atomicWrite(graylistPath(cfg), {
-    updatedAt: new Date().toISOString(),
-    entries
+/** Measured fastest first; unmeasured-but-working next, most recent first. */
+export function sortBySpeed(list) {
+  return [...(list || [])].sort((a, b) => {
+    const ab = Number(a.bps) || 0;
+    const bb = Number(b.bps) || 0;
+    if (ab !== bb) return bb - ab;
+    return String(b.lastOkAt || '').localeCompare(String(a.lastOkAt || ''));
   });
 }
 
-export async function clearProxyGraylist(cfg, url) {
-  if (!url) return;
-  const map = await readProxyGraylist(cfg);
-  if (!map.delete(url)) return;
-  await writeProxyGraylist(cfg, map);
-}
-
-/**
- * Mark a slow-but-valid exit. Skipped while untested proxies remain in the pool.
- */
-export async function graylistProxy(cfg, url, { mbps = null, reason = 'slow' } = {}) {
-  if (!url || !isSupportedProxy(url)) return null;
-  const map = await readProxyGraylist(cfg);
-  const at = new Date().toISOString();
-  const speed = normalizeMbps(mbps);
-  map.set(url, { mbps: speed, at, reason: reason || 'slow' });
-  await writeProxyGraylist(cfg, map);
-  // Persist the measurement so it counts toward the 40-tested target.
-  await recordWorkingProxy(cfg, {
-    url,
-    confirmed: false,
-    tested: true,
-    mbps: speed
-  }).catch(() => {});
-  return { url, mbps: speed, at, reason: reason || 'slow' };
-}
-
-/**
- * Pick order for discovery vs locked top-N rotation.
- * Gray-listed urls are omitted while any non-gray untested candidate exists.
- */
-export function filterPoolForPick(pool, {
-  used = new Set(),
-  gray = new Set(),
-  tested = new Set(),
-  best = [],
-  sticky = null,
-  rotationOnly = false
-} = {}) {
-  const available = (Array.isArray(pool) ? pool : []).filter((p) => p && !used.has(p));
-  if (!available.length) return [];
-
-  // Fast clean exit: pin to it until it fails (CF / slow / dead).
-  if (sticky && available.includes(sticky)) return [sticky];
-
-  if (rotationOnly && best.length) {
-    const avail = new Set(available);
-    const fromBest = best.filter((p) => avail.has(p));
-    if (fromBest.length) return fromBest;
-    return available.filter((p) => tested.has(p));
-  }
-
-  const fresh = available.filter((p) => !gray.has(p) && !tested.has(p));
-  if (fresh.length) return fresh;
-  const ungayed = available.filter((p) => !gray.has(p));
-  if (ungayed.length) return ungayed;
-  // Nothing better left: return to the gray list.
-  return available;
-}
-
-/**
- * Active blacklist map: proxy url -> epoch ms when it may be tried again.
- * Expired rows are pruned on read.
- * @returns {Promise<Map<string, number>>}
- */
+/** Expired entries are dropped on read, so the file self-heals. */
 export async function readProxyBlacklist(cfg) {
-  const now = Date.now();
-  let raw = [];
+  let raw = {};
   try {
-    const parsed = JSON.parse(await fsp.readFile(blacklistPath(cfg), 'utf8'));
-    raw = Array.isArray(parsed?.entries) ? parsed.entries : Array.isArray(parsed) ? parsed : [];
+    raw = JSON.parse(await fsp.readFile(blacklistPath(cfg), 'utf8')) || {};
   } catch {
-    return new Map();
+    return {};
   }
-  const map = new Map();
-  let dirty = false;
-  for (const entry of raw) {
-    const url = String(entry?.url || '');
-    const until = Number(entry?.untilMs) || 0;
-    if (!url || !isSupportedProxy(url) || until <= now) {
-      dirty = true;
-      continue;
-    }
-    map.set(url, until);
+  const now = Date.now();
+  const live = {};
+  for (const [url, entry] of Object.entries(raw)) {
+    const until = Date.parse(entry?.until || '');
+    if (Number.isFinite(until) && until > now) live[url] = entry;
   }
-  if (dirty) await writeProxyBlacklist(cfg, map).catch(() => {});
-  return map;
-}
-
-async function writeProxyBlacklist(cfg, map) {
-  const entries = [...map.entries()]
-    .map(([url, untilMs]) => ({ url, untilMs }))
-    .sort((a, b) => a.untilMs - b.untilMs);
-  await atomicWrite(blacklistPath(cfg), {
-    updatedAt: new Date().toISOString(),
-    entries
-  });
-}
-
-/** Drop one url from the blacklist (e.g. after a later success). */
-export async function clearProxyBlacklist(cfg, url) {
-  if (!url) return;
-  const map = await readProxyBlacklist(cfg);
-  if (!map.delete(url)) return;
-  await writeProxyBlacklist(cfg, map);
+  return live;
 }
 
 /**
- * Temporarily ban an exit. Default TTL is 24h.
- * Also removes it from the preferred working list.
+ * Bench a proxy for `ms` (default 24h). Used when an exit gets a Cloudflare
+ * challenge: the block is on the IP, so retrying it sooner just wastes an
+ * attempt and teaches Cloudflare the address is automated.
  */
-export async function blacklistProxy(
-  cfg,
-  url,
-  { reason = '', ttlMs = blacklistTtlMs(cfg) } = {}
-) {
-  if (!url || !isSupportedProxy(url)) return null;
-  const map = await readProxyBlacklist(cfg);
-  const untilMs = Date.now() + Math.max(60_000, Number(ttlMs) || PROXY_BLACKLIST_TTL_MS);
-  map.set(url, untilMs);
-  await writeProxyBlacklist(cfg, map);
-
-  const list = await readWorkingProxies(cfg);
-  const next = list.filter((e) => e.url !== url);
-  if (next.length !== list.length) await writeWorkingProxies(cfg, next);
-
-  return {
-    url,
-    untilMs,
-    untilAt: new Date(untilMs).toISOString(),
-    reason: reason || null
+export async function blacklistProxy(cfg, url, { reason = 'challenge', ms = CHALLENGE_BLACKLIST_MS } = {}) {
+  if (!url) return null;
+  const live = await readProxyBlacklist(cfg);
+  const prev = live[url];
+  const entry = {
+    reason,
+    hits: (Number(prev?.hits) || 0) + 1,
+    blockedAt: new Date().toISOString(),
+    until: new Date(Date.now() + ms).toISOString()
   };
+  live[url] = entry;
+  await atomicWrite(blacklistPath(cfg), live);
+  // A benched proxy must not stay in the preferred list.
+  const working = await readWorkingProxies(cfg);
+  const next = working.filter((e) => e.url !== url);
+  if (next.length !== working.length) await writeWorkingProxies(cfg, next);
+  return entry;
 }
 
-/**
- * @param {object} cfg
- * @param {string} url
- * @param {{ hard?: boolean, reason?: string }} [opts]
- *   hard=true (Cloudflare / blocked) → 24h blacklist.
- *   Soft fails still need three strikes, then blacklist.
- * @returns {Promise<{ blacklisted: boolean }>}
- */
-export async function markProxyFailed(cfg, url, { hard = false, reason = '' } = {}) {
-  if (!url) return { blacklisted: false };
-  if (hard) {
-    await blacklistProxy(cfg, url, { reason: reason || 'hard-fail' });
-    return { blacklisted: true };
-  }
+export async function clearProxyBlacklist(cfg) {
+  await atomicWrite(blacklistPath(cfg), {});
+  return { cleared: true };
+}
+
+export async function markProxyFailed(cfg, url) {
+  if (!url) return;
   const list = await readWorkingProxies(cfg);
   const idx = list.findIndex((e) => e.url === url);
-  if (idx < 0) {
-    // Cache/pool exit that never made preferred: still ban on hard only.
-    // Soft transport flakes on unproven exits are handled by `used` per attempt.
-    return { blacklisted: false };
-  }
+  if (idx < 0) return;
   const fails = (list[idx].fails || 0) + 1;
-  if (fails >= 3) {
-    await blacklistProxy(cfg, url, { reason: reason || 'soft-fail-x3' });
-    return { blacklisted: true };
-  }
-  list[idx] = { ...list[idx], fails };
+  if (fails >= 3) list.splice(idx, 1);
+  else list[idx] = { ...list[idx], fails };
   await writeWorkingProxies(cfg, list);
-  return { blacklisted: false };
 }
 
 async function readCache(cfg) {
@@ -651,30 +301,12 @@ export async function applyProxySettings(cfg) {
 }
 
 /**
- * Pool order: best confirmed winners, other working, optional AIM4_CLOAK_PROXY,
- * last fetch cache, file. Blacklisted exits (24h) are omitted entirely.
- *
- * When `testedCount >= PROXY_TEST_TARGET`, callers should rotate among the top
- * PROXY_BEST_ROTATION by MB/s only.
+ * Pool order: working winners, optional AIM4_CLOAK_PROXY, last fetch cache, file.
  */
 export async function loadProxyPool(cfg = {}) {
-  const blocked = await readProxyBlacklist(cfg);
-  const working = await readWorkingProxies(cfg);
-  const sticky = working.find(
-    (e) => e.sticky && e.confirmed && !blocked.has(e.url) && isStickySpeed(e.mbps)
-  );
-  const best = rankBestProxies(
-    working.filter((e) => !blocked.has(e.url) && e.url !== sticky?.url),
-    { limit: PROXY_BEST_ROTATION, confirmedOnly: true }
-  );
-  const bestSet = new Set(best.map((e) => e.url));
-  if (sticky) bestSet.add(sticky.url);
-  const otherWorking = working.filter((e) => !blocked.has(e.url) && !bestSet.has(e.url));
-
   const chunks = [];
-  if (sticky) chunks.push(sticky.url);
-  chunks.push(...best.map((e) => e.url));
-  chunks.push(...otherWorking.map((e) => e.url));
+  const working = sortBySpeed(await readWorkingProxies(cfg));
+  chunks.push(...working.map((e) => e.url));
 
   const single = cfg.cloakProxy || process.env.AIM4_CLOAK_PROXY || '';
   if (single) chunks.push(...parseProxyLines(single));
@@ -690,34 +322,8 @@ export async function loadProxyPool(cfg = {}) {
     const text = await fsp.readFile(file, 'utf8').catch(() => '');
     if (text) chunks.push(...parseProxyLines(text));
   }
-  return parseProxyLines(chunks.join('\n')).filter((url) => !blocked.has(url));
-}
-
-/** How many confirmed best exits are currently eligible for the rotation set. */
-export async function confirmedRotationCount(cfg) {
-  return (await readBestProxies(cfg, PROXY_BEST_ROTATION)).length;
-}
-
-export async function testedProxyCount(cfg) {
-  return (await readTestedProxies(cfg)).length;
-}
-
-/** Format a short leaderboard for ingest.log. */
-export function formatBestProxyLog(best, { testedCount = 0, target = PROXY_TEST_TARGET } = {}) {
-  const lines = [
-    `Best proxies (no CF, by MB/s): tested ${testedCount}/${target}` +
-      (testedCount >= target ? ` · rotating top ${PROXY_BEST_ROTATION}` : '')
-  ];
-  if (!best?.length) {
-    lines.push('  (none yet)');
-    return lines.join('\n');
-  }
-  best.forEach((e, i) => {
-    const speed = Number(e.mbps);
-    const speedText = Number.isFinite(speed) ? `${speed.toFixed(1)} MB/s` : '? MB/s';
-    lines.push(`  ${i + 1}. ${redactProxy(e.url)} ${speedText}`);
-  });
-  return lines.join('\n');
+  const benched = await readProxyBlacklist(cfg);
+  return parseProxyLines(chunks.join('\n')).filter((url) => !benched[url]);
 }
 
 export async function fetchRemoteProxies({ signal } = {}) {
@@ -870,7 +476,12 @@ export async function refreshProxyPool(cfg, { onLog, signal } = {}) {
     await writeCache(cfg, remote);
     log(`Cached ${remote.length} http/socks5 proxies`);
 
-    const candidates = shuffle(remote).slice(0, REFRESH_CANDIDATES);
+    const benched = await readProxyBlacklist(cfg);
+    const eligible = remote.filter((entry) => !benched[entry.url]);
+    if (eligible.length !== remote.length) {
+      log(`Skipping ${remote.length - eligible.length} proxy(s) benched for challenges`);
+    }
+    const candidates = shuffle(eligible).slice(0, REFRESH_CANDIDATES);
     log(`Verifying ${candidates.length} via ${VERIFY_URL}`);
     await writeRefreshState(cfg, {
       running: true,
@@ -916,16 +527,19 @@ export async function refreshProxyPool(cfg, { onLog, signal } = {}) {
     });
 
     const existing = await readWorkingProxies(cfg);
-    const blocked = await readProxyBlacklist(cfg);
     const byUrl = new Map(existing.map((e) => [e.url, e]));
     for (const w of winners) {
-      if (blocked.has(w.url)) continue;
       const prev = byUrl.get(w.url);
-      byUrl.set(w.url, prev ? { ...prev, ...w, fails: 0 } : w);
+      // Keep measured speed across a re-verify: httpbin says "reachable", it
+      // does not say "fast", so a fresh verify must not erase real samples.
+      byUrl.set(
+        w.url,
+        prev
+          ? { ...prev, ...w, bps: prev.bps || 0, lastBps: prev.lastBps || 0, speedSamples: prev.speedSamples || 0, fails: 0 }
+          : w
+      );
     }
-    const merged = [...byUrl.values()]
-      .filter((e) => !blocked.has(e.url))
-      .sort((a, b) => String(b.lastOkAt || '').localeCompare(String(a.lastOkAt || '')));
+    const merged = sortBySpeed([...byUrl.values()]);
     await writeWorkingProxies(cfg, merged.slice(0, 200));
 
     const done = {
@@ -957,82 +571,39 @@ export async function refreshProxyPool(cfg, { onLog, signal } = {}) {
 }
 
 export async function proxyStatus(cfg) {
-  const [settings, working, cache, refresh, blacklist, graylist, tested] = await Promise.all([
+  const [settings, workingRaw, cache, refresh, benched] = await Promise.all([
     readProxySettings(cfg),
     readWorkingProxies(cfg),
     readCache(cfg),
     readRefreshState(cfg),
-    readProxyBlacklist(cfg),
-    readProxyGraylist(cfg),
-    readTestedProxies(cfg)
+    readProxyBlacklist(cfg)
   ]);
-  const blacklisted = [...blacklist.entries()]
-    .sort((a, b) => a[1] - b[1])
-    .slice(0, 40)
-    .map(([url, untilMs]) => ({
+  const working = sortBySpeed(workingRaw);
+  const blacklist = Object.entries(benched)
+    .sort((a, b) => String(a[1].until).localeCompare(String(b[1].until)))
+    .map(([url, entry]) => ({
       host: redactProxy(url),
-      untilAt: new Date(untilMs).toISOString()
+      reason: entry.reason || 'challenge',
+      hits: entry.hits || 1,
+      until: entry.until
     }));
-  const eligible = working.filter((e) => !blacklist.has(e.url));
-  const rotation = rankBestProxies(eligible, {
-    limit: PROXY_BEST_ROTATION,
-    confirmedOnly: true
-  });
-  const testedCount = tested.length;
-  const rotationOnly = testedCount >= PROXY_TEST_TARGET;
-  const sticky = eligible.find((e) => e.sticky && isStickySpeed(e.mbps)) || null;
   return {
     settings,
     workingCount: working.length,
-    confirmedCount: rotation.length,
-    testedCount,
-    testTarget: PROXY_TEST_TARGET,
-    rotationSize: PROXY_BEST_ROTATION,
-    rotationOnly,
-    minSpeedMbps: MIN_DOWNLOAD_SPEED_BPS / (1024 * 1024),
-    stickyMinMbps: STICKY_MIN_MBPS,
-    sticky: sticky
-      ? {
-          host: redactProxy(sticky.url),
-          mbps: sticky.mbps ?? null,
-          lastOkAt: sticky.lastOkAt || sticky.verifiedAt || null
-        }
-      : null,
-    confirmed: rotation.map((e) => ({
-      host: redactProxy(e.url),
-      country: e.country || '',
-      exitIp: e.exitIp || '',
-      mbps: e.mbps ?? null,
-      sticky: Boolean(e.sticky),
-      lastOkAt: e.lastOkAt || e.verifiedAt || null
-    })),
-    best: rankBestProxies(eligible, { limit: 10, confirmedOnly: false }).map((e) => ({
-      host: redactProxy(e.url),
-      mbps: e.mbps ?? null,
-      confirmed: Boolean(e.confirmed),
-      tested: Boolean(e.tested)
-    })),
     working: working.slice(0, 40).map((e) => ({
       host: redactProxy(e.url),
       country: e.country || '',
       exitIp: e.exitIp || '',
-      mbps: e.mbps ?? null,
       lastOkAt: e.lastOkAt || e.verifiedAt || null,
-      confirmed: Boolean(e.confirmed),
-      tested: Boolean(e.tested)
-    })),
-    blacklistCount: blacklist.size,
-    blacklistTtlMs: blacklistTtlMs(cfg),
-    blacklisted,
-    graylistCount: graylist.size,
-    graylisted: [...graylist.entries()].slice(0, 40).map(([url, meta]) => ({
-      host: redactProxy(url),
-      mbps: meta?.mbps ?? null,
-      at: meta?.at || null
+      bps: Number(e.bps) || 0,
+      mbps: Number(e.bps) ? Math.round(((e.bps * 8) / 1e6) * 10) / 10 : 0,
+      speedSamples: Number(e.speedSamples) || 0
     })),
     cacheCount: cache.entries.length,
     cacheFetchedAt: cache.fetchedAt,
     refresh,
+    blacklistCount: blacklist.length,
+    blacklist: blacklist.slice(0, 40),
     source: PROXIES_JSON_URL,
     verifyUrl: VERIFY_URL
   };

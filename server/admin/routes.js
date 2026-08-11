@@ -29,6 +29,7 @@ import * as ingest from '../ingest/hltv/service.js';
 import { cancelProbe, probeState, startProbe } from '../ingest/hltv/probe.js';
 import { loadConfig as loadIngestConfig } from '../ingest/hltv/config.js';
 import {
+  clearProxyBlacklist,
   proxyStatus,
   startProxyRefresh,
   writeProxySettings
@@ -732,6 +733,12 @@ async function route(req, res, url, me) {
   if (req.method === 'POST' && p === '/api/admin/ingest/proxies') {
     const body = await readJson(req);
     const cfg = loadIngestConfig();
+    // Escape hatch: a whole subnet can get challenged during an incident and
+    // recover long before the 24h bench expires.
+    if (body.clearBlacklist) {
+      await clearProxyBlacklist(cfg);
+      await writeAudit({ actorId: me.id, action: 'ingest.proxies.unbench', req });
+    }
     const settings = await writeProxySettings(cfg, {
       attempts: body.attempts,
       random: body.random

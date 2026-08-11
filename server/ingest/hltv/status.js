@@ -62,7 +62,8 @@ export function foldEvent(status, event, ledger) {
               received: event.received ?? d.received,
               totalBytes: event.total ?? d.totalBytes,
               downloadPhase: event.phase || d.downloadPhase,
-              elapsedMs: event.elapsedMs ?? d.elapsedMs
+              elapsedMs: event.elapsedMs ?? d.elapsedMs,
+              bps: event.bps ?? d.bps
             }
           : d
       );

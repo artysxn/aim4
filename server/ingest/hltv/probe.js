@@ -27,7 +27,6 @@ import { loadConfig } from './config.js';
 import { looksLikeChallenge } from './fetcher.js';
 import { checkTarget, createProbeTool } from './downloadDemo.js';
 import { unpackArchive } from './process.js';
-import { isRunning, releaseCloakProfiles } from './service.js';
 import { rarSupport } from '../../replays/archive.js';
 import { SHARED_LIBRARY } from '../../replays/auth.js';
 import { INGEST_UPLOADER } from '../../replays/identity.js';
@@ -453,23 +452,6 @@ async function executeProbe(c, run, urlObj, hooks) {
     }
 
     // -- browser + download (the tool ingest also calls) -----------------
-    // Probe and ingest share the `hltv` CloakBrowser profile. If ingest was
-    // turned Off but Chromium survived, free the SingletonLock before launch.
-    if (await isRunning()) {
-      throw new Error(
-        'Continuous ingest is still running and holds the CloakBrowser profile. Turn ingest Off, then probe again.'
-      );
-    }
-    const released = await releaseCloakProfiles({
-      cancelActiveProbe: false,
-      settleMs: 800
-    });
-    if (released.killed?.length) {
-      log(
-        'info',
-        `Closed leftover CloakBrowser session(s) pid ${released.killed.join(', ')}`
-      );
-    }
     const t0 = Date.now();
     tool = createProbeTool(c, {
       allowPrivate: Boolean(hooks.allowPrivate),

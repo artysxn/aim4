@@ -194,7 +194,9 @@ function proxiesBlock() {
 
   const saveBtn = button('Save', save, 'btn btn-sm');
   const refreshBtn = button('Refresh', refreshList, 'btn btn-sm');
-  root.appendChild(row(attemptsInput, randomLabel, saveBtn, refreshBtn));
+  const unbenchBtn = button('Unbench', unbench, 'btn btn-sm');
+  unbenchBtn.title = 'Clear the 24h Cloudflare blacklist';
+  root.appendChild(row(attemptsInput, randomLabel, saveBtn, refreshBtn, unbenchBtn));
 
   const meta = el('div', 'ingest-tools-meta');
   root.appendChild(meta);
@@ -216,6 +218,25 @@ function proxiesBlock() {
       applyForm();
       paint();
       notice(root, 'Saved.');
+    } catch (err) {
+      notice(root, err.message, 'error');
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function unbench() {
+    if (busy) return;
+    busy = true;
+    try {
+      st = await adminApi.ingestProxiesSave({
+        attempts: Number(attemptsInput.value) || 5,
+        random: randomCheck.checked,
+        clearBlacklist: true
+      });
+      applyForm();
+      paint();
+      notice(root, 'Blacklist cleared.');
     } catch (err) {
       notice(root, err.message, 'error');
     } finally {
@@ -246,25 +267,18 @@ function proxiesBlock() {
     chip.className = `ingest-chip ${n ? 'is-running' : 'is-stopped'}`;
     const refreshing = Boolean(st?.refresh?.running);
     refreshBtn.disabled = busy || refreshing;
+    unbenchBtn.disabled = busy || !st?.blacklistCount;
     if (refreshing) {
       meta.textContent = `Verifying ${st.refresh.verified || 0}/${st.refresh.candidates || '?'}`;
       return;
     }
-    if (st?.refresh?.summary) meta.textContent = st.refresh.summary;
-    else {
-      const tested = st?.testedCount ?? 0;
-      const target = st?.testTarget ?? 40;
-      const best = st?.confirmedCount ?? 0;
-      const need = st?.rotationSize ?? 5;
-      const sticky = st?.sticky
-        ? `Sticky ${st.sticky.host}${st.sticky.mbps != null ? ` ${Number(st.sticky.mbps).toFixed(0)}MB/s` : ''}`
-        : st?.rotationOnly
-          ? `Top ${best}/${need} by speed`
-          : `Tested ${tested}/${target}`;
-      const gray = st?.graylistCount ? ` · Gray ${st.graylistCount}` : '';
-      const banned = st?.blacklistCount ? ` · Banned ${st.blacklistCount}` : '';
-      meta.textContent = `${sticky} · Working ${n} · Cache ${st?.cacheCount ?? 0}${gray}${banned}`;
-    }
+    const parts = [];
+    if (st?.refresh?.summary) parts.push(st.refresh.summary);
+    else parts.push(`Working ${n} · Cache ${st?.cacheCount ?? 0}`);
+    const fastest = (st?.working || []).find((p) => p.mbps > 0);
+    if (fastest) parts.push(`Fastest ${fastest.host} ${fastest.mbps} Mbps`);
+    if (st?.blacklistCount) parts.push(`Benched ${st.blacklistCount} (24h)`);
+    meta.textContent = parts.join(' · ');
   }
 
   return {
@@ -654,8 +668,9 @@ export function ingestPanel() {
       detail =
         `Last ok ${p.lastSuccessId ?? 'none'}` + (secs ? ` · retry ${secs}s` : '');
     } else if (current?.stage === 'download') {
+      const rate = current.bps ? ` · ${Math.round((current.bps * 8) / 1e5) / 10} Mbps` : '';
       detail = current.received
-        ? `${bytes(current.received)}${current.totalBytes ? ` / ${bytes(current.totalBytes)}` : ''}`
+        ? `${bytes(current.received)}${current.totalBytes ? ` / ${bytes(current.totalBytes)}` : ''}${rate}`
         : current.downloadPhase || 'download';
     } else if (current?.map) {
       detail = `${current.stage}: ${current.map}${

@@ -67,6 +67,8 @@ export function loadConfig(overrides = {}) {
     /** Random pick (default) vs sequential cursor through the pool. */
     cloakProxyRandom: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_PROXY_RANDOM || 'true'),
     cloakSettleMs: num(env.AIM4_CLOAK_SETTLE_MS, 5000),
+    /** How long one page may take to answer before the attempt is abandoned. */
+    cloakNavigationTimeoutMs: num(env.AIM4_CLOAK_NAV_TIMEOUT_MS, 30_000),
     cloakDownloadDeadlineMs: num(env.AIM4_CLOAK_DOWNLOAD_DEADLINE_MS, 30 * 60_000),
 
     /** How often the continuous runner looks for newly finished matches. */
