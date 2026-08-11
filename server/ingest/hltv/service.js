@@ -112,10 +112,13 @@ async function spawnIngester(c, options = {}) {
   await fsp.mkdir(c.workDir, { recursive: true });
 
   const args = [CLI, 'run', '--continuous'];
-  // Prefer resolved config (local-without-inbox already coerced to hltv).
-  const source = options.source || c.source || 'hltv';
-  const inbox = options.inbox || c.inbox || '';
-  args.push('--source', source === 'local' && !inbox ? 'hltv' : source);
+  // Resolved config already coerces local-without-inbox → hltv. Still force
+  // both argv and child env so a leftover Coolify AIM4_INGEST_SOURCE=local
+  // cannot win inside the detached process.
+  let source = String(options.source || c.source || 'hltv').trim().toLowerCase() || 'hltv';
+  const inbox = String(options.inbox || c.inbox || '').trim();
+  if (source === 'local' && !inbox) source = 'hltv';
+  args.push('--source', source);
   if (inbox) args.push('--inbox', inbox);
   if (options.since || c.since) args.push('--since', options.since || c.since);
 
@@ -124,12 +127,19 @@ async function spawnIngester(c, options = {}) {
   const logPath = path.join(c.stateDir, 'ingest.log');
   const logFd = fs.openSync(logPath, 'a');
 
+  const childEnv = {
+    ...process.env,
+    AIM4_INGEST_SOURCE: source
+  };
+  if (inbox) childEnv.AIM4_INGEST_INBOX = inbox;
+  else delete childEnv.AIM4_INGEST_INBOX;
+
   let child;
   try {
     child = spawn(process.execPath, args, {
       detached: true,
       stdio: ['ignore', logFd, logFd],
-      env: process.env
+      env: childEnv
     });
   } finally {
     // The child has inherited the descriptor; this process does not need it.

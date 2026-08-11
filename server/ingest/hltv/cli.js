@@ -58,6 +58,12 @@ function parseArgs(argv) {
 }
 
 function makeSource(cfg) {
+  // Belt-and-braces: never construct a local source with no inbox, even if a
+  // caller skipped loadConfig's coerce (or an old binary is mid-deploy).
+  if (cfg.source === 'local' && !cfg.inbox) {
+    console.warn('[ingest] source=local with no inbox; using hltv');
+    cfg.source = 'hltv';
+  }
   if (cfg.source === 'hltv') return createHltvSource(cfg);
   if (cfg.source === 'local') return createLocalSource(cfg);
   throw new Error(`Unknown --source ${cfg.source}. Use "local" or "hltv".`);
@@ -213,11 +219,11 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
     try {
       await source.check();
     } catch (err) {
-      // Legacy Coolify configs often have source=local with no inbox. Prefer
-      // sequential HLTV over a supervisor crash loop.
-      if (cfg.source === 'local') {
-        console.warn(`local source failed (${err.message}); switching to hltv`);
+      // Last resort if something still built a local source without inbox.
+      if (/source=local needs --inbox/i.test(String(err?.message || ''))) {
+        console.warn(`[ingest] ${err.message}; switching to hltv`);
         cfg.source = 'hltv';
+        cfg.inbox = '';
         await source.close?.().catch(() => {});
         source = makeSource(cfg);
         await source.check();
