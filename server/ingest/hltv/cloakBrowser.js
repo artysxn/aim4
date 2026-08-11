@@ -15,8 +15,10 @@ import { pipeline } from 'node:stream/promises';
 import { ensureBinary, launchContext, launchPersistentContext } from 'cloakbrowser';
 import {
   applyProxySettings,
+  DEFAULT_FALLBACK_PROXY,
   loadProxyPool,
   markProxyFailed,
+  normalizeProxyUrl,
   readWorkingProxies,
   recordWorkingProxy,
   redactProxy
@@ -24,6 +26,9 @@ import {
 import { looksLikeMissingPage, pageTitle } from './classify.js';
 
 export { parseProxyLines, loadProxyPool } from './proxyPool.js';
+
+/** After this many consecutive pool failures, force the default fallback proxy. */
+const FALLBACK_AFTER_CONSECUTIVE_FAILURES = 3;
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 60_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
@@ -462,12 +467,32 @@ export function createCloakSession(cfg = {}) {
       1,
       Math.min(Number(cfg.cloakProxyAttempts) || 5, pool.length || 1)
     );
+    const fallbackProxy = normalizeProxyUrl(
+      cfg.cloakFallbackProxy === undefined
+        ? DEFAULT_FALLBACK_PROXY
+        : cfg.cloakFallbackProxy
+    );
+    // One bonus slot so the default exit can still run after a full 5-attempt
+    // pool burn when every public proxy is challenged.
+    const hardMax = maxAttempts + (fallbackProxy ? 1 : 0);
     const used = new Set();
     let lastErr;
     let displayRetries = 0;
-    for (let i = 0; i < maxAttempts; i++) {
+    let consecutiveFails = 0;
+    for (let i = 0; i < hardMax; i++) {
       if (opts.signal?.aborted) throw abortError(opts.signal);
-      const proxy = pickProxy(pool, used, random);
+      const wantFallback =
+        Boolean(fallbackProxy) &&
+        consecutiveFails >= FALLBACK_AFTER_CONSECUTIVE_FAILURES &&
+        !used.has(fallbackProxy);
+      if (!wantFallback && i >= maxAttempts) break;
+      const proxy = wantFallback ? fallbackProxy : pickProxy(pool, used, random);
+      if (wantFallback) {
+        log(
+          `${consecutiveFails} proxies failed in a row; trying default fallback ` +
+            `${redactProxy(fallbackProxy)}`
+        );
+      }
       if (proxy) used.add(proxy);
       if (proxy !== activeProxy || !contextPromise) {
         if (contextPromise) await resetContext();
@@ -501,7 +526,13 @@ export function createCloakSession(cfg = {}) {
           continue;
         }
         if (proxy) await markProxyFailed(cfg, proxy).catch(() => {});
-        const canRetry = isProxyRetryable(err) && i < maxAttempts - 1;
+        consecutiveFails += 1;
+        const fallbackPending =
+          Boolean(fallbackProxy) &&
+          consecutiveFails >= FALLBACK_AFTER_CONSECUTIVE_FAILURES &&
+          !used.has(fallbackProxy);
+        const canRetry =
+          isProxyRetryable(err) && (i < maxAttempts - 1 || fallbackPending);
         if (!canRetry) {
           // Leave blocked/proxyRetryable for the pipeline to back off on the
           // same demo id. fatal here used to kill the whole ingester.
@@ -509,7 +540,7 @@ export function createCloakSession(cfg = {}) {
         }
         log(
           `Proxy ${redactProxy(proxy) || 'direct'} failed: ${err.message}. ` +
-            `Trying next (${i + 2}/${maxAttempts})`
+            `Trying next (${Math.min(i + 2, hardMax)}/${hardMax})`
         );
         await resetContext();
       }

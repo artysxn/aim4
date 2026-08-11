@@ -62,6 +62,14 @@ export function loadConfig(overrides = {}) {
      * AIM4_CLOAK_PROXY_FILE. Not baked into the Docker image.
      */
     cloakProxyFile: env.AIM4_CLOAK_PROXY_FILE || '',
+    /**
+     * Forced after 3 consecutive pool failures in one download (challenge /
+     * tunnel / dead exit). Bare host:port is fine; defaults to the known-good
+     * office proxy. Empty / AIM4_CLOAK_FALLBACK_PROXY=off disables.
+     */
+    cloakFallbackProxy: /^(0|false|no|off)$/i.test(env.AIM4_CLOAK_FALLBACK_PROXY || '')
+      ? ''
+      : env.AIM4_CLOAK_FALLBACK_PROXY || 'http://130.17.12.137:3128',
     /** How many proxies to try per download/page before giving up. */
     cloakProxyAttempts: num(env.AIM4_CLOAK_PROXY_ATTEMPTS, 5),
     /** Random pick (default) vs sequential cursor through the pool. */

@@ -16,6 +16,12 @@ import { SocksProxyAgent } from 'socks-proxy-agent';
 export const PROXIES_JSON_URL = 'https://stormsia.github.io/proxy-list/proxies.json';
 export const VERIFY_URL = 'https://httpbin.org/ip';
 
+/**
+ * Last-resort exit IP when the public pool is all challenged / dead.
+ * Used after 3 consecutive transport failures in one download/page attempt.
+ */
+export const DEFAULT_FALLBACK_PROXY = 'http://130.17.12.137:3128';
+
 const DEFAULT_SETTINGS = { attempts: 5, random: true };
 const VERIFY_TIMEOUT_MS = 10_000;
 const REFRESH_CANDIDATES = 40;
@@ -52,13 +58,26 @@ export function isSupportedProxy(proxy) {
   }
 }
 
+/**
+ * Accept full proxy URLs or bare `host:port` (assumed http).
+ * @param {unknown} value
+ * @returns {string}
+ */
+export function normalizeProxyUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
+  return isSupportedProxy(withScheme) ? withScheme : '';
+}
+
 export function parseProxyLines(text) {
   const seen = new Set();
   const out = [];
   for (const raw of String(text || '').split(/[\n,\r]+/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    if (!isSupportedProxy(line)) continue;
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const line = normalizeProxyUrl(trimmed);
+    if (!line) continue;
     if (seen.has(line)) continue;
     seen.add(line);
     out.push(line);
