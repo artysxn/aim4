@@ -72,6 +72,15 @@ export const adminApi = {
   ingestDisk: () => get('/api/admin/ingest/disk'),
   ingestDiskDelete: (ids) => send('DELETE', '/api/admin/ingest/disk', { ids }),
 
+  uploads: ({ unnamed = false, limit = 200 } = {}) => {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    if (unnamed) params.set('unnamed', '1');
+    return get(`/api/admin/uploads?${params}`);
+  },
+  renameUploadTeams: (demoId, team1, team2) =>
+    send('POST', `/api/admin/uploads/${encodeURIComponent(demoId)}/teams`, { team1, team2 }),
+
   users: ({ q = '', tier = '', status = '', page = 0, sort = 'created_at' } = {}) => {
     const params = new URLSearchParams();
     if (q) params.set('q', q);

@@ -515,6 +515,80 @@ async function route(req, res, url, me) {
     return true;
   }
 
+  // All library demos across every uploader (not ingest scratch Disk).
+  if (req.method === 'GET' && p === '/api/admin/uploads') {
+    const { ownerOf } = await import('../replays/visibility.js');
+    const { loadStandingTeams } = await import('../replays/teamStandingsDb.js');
+    const { resolveDemoTeams } = await import('../../src/replays/shared/teamStandings.js');
+    const records = await listDemos(SHARED_LIBRARY, { fresh: true });
+    const unnamedOnly = /^(1|true|yes)$/i.test(q.get('unnamed') || '');
+    const standings = unnamedOnly ? loadStandingTeams() : null;
+    const limit = Math.min(1000, Math.max(1, Number(q.get('limit')) || 200));
+
+    const mapped = [];
+    for (const r of records) {
+      const owner = ownerOf(r);
+      const team1Name = r.team1?.name || (typeof r.team1 === 'string' ? r.team1 : '') || '';
+      const team2Name = r.team2?.name || (typeof r.team2 === 'string' ? r.team2 : '') || '';
+      let vrsTeam1 = null;
+      let vrsTeam2 = null;
+      let lacksVrsName = true;
+      if (standings) {
+        const resolved = resolveDemoTeams(r.players || [], standings);
+        vrsTeam1 = resolved.team1?.name || null;
+        vrsTeam2 = resolved.team2?.name || null;
+        lacksVrsName = !resolved.team1 || !resolved.team2;
+        if (unnamedOnly && !lacksVrsName) continue;
+      }
+      mapped.push({
+        id: r.id,
+        map: r.mapName || r.map || '',
+        team1: team1Name,
+        team2: team2Name,
+        score: r.score || null,
+        status: r.status || '',
+        source: r.source || '',
+        visibility: owner.visibility,
+        uploaderId: owner.id,
+        uploaderName: owner.username,
+        uploaderExplicit: Boolean(r.uploaderId || r.uploaderName),
+        uploadedAt: r.uploadedAt || null,
+        sizeBytes: r.sizeBytes || 0,
+        roundCount: r.roundCount || (r.rounds || []).length || 0,
+        lacksVrsName,
+        vrsTeam1,
+        vrsTeam2
+      });
+    }
+    json(res, req, 200, {
+      total: records.length,
+      matched: mapped.length,
+      unnamed: unnamedOnly,
+      items: mapped.slice(0, limit)
+    });
+    return true;
+  }
+
+  const uploadTeamsMatch = p.match(/^\/api\/admin\/uploads\/([^/]+)\/teams$/);
+  if (req.method === 'POST' && uploadTeamsMatch) {
+    const demoId = decodeURIComponent(uploadTeamsMatch[1] || '');
+    const body = await readJson(req);
+    if (!demoId) {
+      json(res, req, 400, { error: 'demo id required' });
+      return true;
+    }
+    const { renameDemoTeams } = await import('../replays/demoStore.js');
+    const record = await renameDemoTeams(SHARED_LIBRARY, demoId, body.team1, body.team2);
+    await writeAudit({
+      actorId: me.id,
+      action: 'uploads.renameTeams',
+      payload: { demoId, team1: body.team1, team2: body.team2 },
+      req
+    });
+    json(res, req, 200, { ok: true, id: record.id, team1: record.team1, team2: record.team2 });
+    return true;
+  }
+
   // ---- demo ingest --------------------------------------------------------
   //
   // Start/stop a long-running backfill. The ingester is a separate process, so

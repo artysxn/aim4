@@ -16,10 +16,12 @@ import { initModelsPanel } from './modelsPanel.js';
 import { usersPanel } from './usersPanel.js';
 import { userDetail } from './userDetail.js';
 import { coachSmokesPanel } from './coachSmokesPanel.js';
+import { uploadsPanel } from './uploadsPanel.js';
 import { spinnerNode } from '../../lib/spinner.js';
 
 const TABS = [
   { id: 'users', label: 'Users' },
+  { id: 'uploads', label: 'Uploads' },
   { id: 'ingest', label: 'Ingest' },
   { id: 'tools', label: 'Tools' },
   { id: 'models', label: 'Models' },
@@ -69,6 +71,8 @@ export function initAdminView(host) {
     if (tab === 'ingest') {
       livePanel = ingestPanel();
       panel.appendChild(livePanel);
+    } else if (tab === 'uploads') {
+      panel.appendChild(uploadsPanel());
     } else if (tab === 'audit') {
       panel.appendChild(auditPanel());
     } else if (tab === 'tools') {

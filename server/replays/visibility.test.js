@@ -66,13 +66,13 @@ const A = {
 
 const byId = Object.fromEntries(records.map((r) => [r.id, r]));
 
-// ---- legacy uploads are credited to @artysan ---------------------------------
+// ---- unattributed uploads default to @admin ---------------------------------
 
 {
   const owner = ownerOf(byId.legacy);
-  assert(owner.username === 'artysan', `legacy uploader should be artysan, got ${owner.username}`);
+  assert(owner.username === 'admin', `unattributed uploader should be admin, got ${owner.username}`);
   assert(owner.visibility === 'public', 'legacy uploads stay public');
-  console.log('  pre-account uploads read as public, by @artysan');
+  console.log('  unattributed uploads read as public, by @admin');
 }
 
 // ---- public ------------------------------------------------------------------

@@ -15,7 +15,7 @@
 // fully usable for its owners.
 // ---------------------------------------------------------------------------
 
-import { LEGACY_UPLOADER } from './identity.js';
+import { INGEST_UPLOADER } from './identity.js';
 import { teammateIds } from './teamsStore.js';
 
 export const VISIBILITIES = ['public', 'unlisted', 'private'];
@@ -26,13 +26,23 @@ export function normalizeVisibility(raw) {
 }
 
 /**
- * Ownership fields for a record, filling in the pre-account default.
- * Records written before uploads were attributed belong to @artysan.
+ * Ownership fields for a record.
+ *
+ * Explicit uploader* wins. Unattributed records (empty fields) default to
+ * @admin so blanks / HLTV ingest are not credited to the historical @artysan
+ * identity. LEGACY_UPLOADER remains exported for older call sites.
  */
 export function ownerOf(record) {
+  if (record?.uploaderId || record?.uploaderName) {
+    return {
+      id: record.uploaderId || INGEST_UPLOADER.id,
+      username: record.uploaderName || INGEST_UPLOADER.username,
+      visibility: normalizeVisibility(record?.visibility)
+    };
+  }
   return {
-    id: record?.uploaderId || LEGACY_UPLOADER.id,
-    username: record?.uploaderName || LEGACY_UPLOADER.username,
+    id: INGEST_UPLOADER.id,
+    username: INGEST_UPLOADER.username,
     visibility: normalizeVisibility(record?.visibility)
   };
 }

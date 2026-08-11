@@ -108,6 +108,7 @@ export async function parseAndIngest({ library, row, demos, concurrency = 1, onP
 
         const demoId = newDemoId();
         onProgress?.({ stage: 'store', map: label });
+        const { INGEST_UPLOADER } = await import('../../replays/identity.js');
         const record = await ingestDemo(
           library,
           demoId,
@@ -116,7 +117,10 @@ export async function parseAndIngest({ library, row, demos, concurrency = 1, onP
             filename: entry.name,
             sizeBytes: entry.sizeBytes,
             source: 'hltv',
-            uploadedAt: Date.parse(row.playedAt) || Date.now()
+            uploadedAt: Date.parse(row.playedAt) || Date.now(),
+            uploaderId: INGEST_UPLOADER.id,
+            uploaderName: INGEST_UPLOADER.username,
+            visibility: 'public'
           },
           (p) => onProgress?.({ stage: 'store', map: label, ...p })
         );

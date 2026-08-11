@@ -28,6 +28,9 @@ import { looksLikeChallenge } from './fetcher.js';
 import { checkTarget, createProbeTool } from './downloadDemo.js';
 import { unpackArchive } from './process.js';
 import { rarSupport } from '../../replays/archive.js';
+import { SHARED_LIBRARY } from '../../replays/auth.js';
+import { INGEST_UPLOADER } from '../../replays/identity.js';
+import { importReplayPackage } from '../../replays/importPackage.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WORKER = path.join(HERE, 'probeParseWorker.js');
@@ -599,11 +602,33 @@ async function executeProbe(c, run, urlObj, hooks) {
 
     const keptBytes = run.packages.reduce((s, p) => s + (p.packageBytes || 0), 0);
     for (const p of run.packages) log('info', `Kept ${p.path}`);
+
+    // Land packages in the shared library so Timeline sees them (Disk is only
+    // the scratch copy under stateDir/probe/).
+    let imported = 0;
+    for (const p of run.packages) {
+      try {
+        const buf = await fsp.readFile(p.path);
+        await importReplayPackage(SHARED_LIBRARY, buf, {
+          filename: p.name,
+          uploaderId: INGEST_UPLOADER.id,
+          uploaderName: INGEST_UPLOADER.username,
+          visibility: 'public',
+          source: 'hltv-probe'
+        });
+        imported++;
+        log('ok', `Imported ${p.name} into library as @${INGEST_UPLOADER.username}`);
+      } catch (err) {
+        log('warn', `Library import skipped for ${p.name}: ${err?.message || err}`);
+      }
+    }
+
     await finish(
       'ok',
       `PASS. Downloaded ${mb(stat.size)} without a challenge, parsed ${parsedOk} of ${demos.length} ` +
-        `demo${demos.length === 1 ? '' : 's'}, kept ${parsedOk} .aim4replay package${parsedOk === 1 ? '' : 's'} ` +
-        `(${mb(keptBytes)}). Sources deleted.`
+        `demo${demos.length === 1 ? '' : 's'}, kept ${parsedOk} .aim4replay` +
+        `${imported ? `, imported ${imported} to library` : ''}` +
+        ` (${mb(keptBytes)}). Sources deleted.`
     );
   } catch (err) {
     // Whatever got half-made goes, except the packages already finished.

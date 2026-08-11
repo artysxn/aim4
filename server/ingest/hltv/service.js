@@ -238,41 +238,58 @@ export async function start(options = {}) {
   return { started: true, pid, enabled: true };
 }
 
+/** Kill the detached ingest process group. Off must win immediately. */
+function killIngestPid(pid) {
+  if (!pid) return false;
+  let killed = false;
+  try {
+    process.kill(-pid, 'SIGKILL');
+    killed = true;
+  } catch {
+    /* Windows / not a group leader */
+  }
+  try {
+    process.kill(pid, 'SIGKILL');
+    killed = true;
+  } catch {
+    /* already gone */
+  }
+  return killed;
+}
+
 /**
- * Turn it off.
- *
- * SIGTERM, not SIGKILL: the pipeline traps it, finishes the match it is on and
- * flushes the ledger. Killing mid-parse leaves a half-written record and a work
- * directory to sweep on the next start.
+ * Turn it off. Writes desired=false first, then SIGKILLs the child so parse /
+ * CloakBrowser cannot keep running while the UI says Off.
  */
 export async function stop() {
   const c = cfg();
   await writeDesired(c, { enabled: false });
 
   const pid = await readPid(c.lockPath);
+  const status = await readStatus(c.statusPath).catch(() => emptyStatus());
+  await writeStatus(c.statusPath, {
+    ...status,
+    running: false,
+    pid: null,
+    current: null,
+    stoppedAt: new Date().toISOString(),
+    lastError: null
+  }).catch(() => {});
+
   if (!pid || !alive(pid)) {
     await fsp.rm(c.lockPath, { force: true }).catch(() => {});
-    await appendIngestLog(c, 'stop requested but not running');
+    await appendIngestLog(c, 'stop requested; not running');
     return { stopped: false, reason: 'not running', enabled: false };
   }
-  try {
-    await appendIngestLog(c, `stop requested; SIGTERM pid=${pid}`);
-    process.kill(pid, 'SIGTERM');
-  } catch (err) {
-    await appendIngestLog(c, `stop failed: ${err.message}`);
-    return { stopped: false, reason: err.message, enabled: false };
-  }
-  // If CloakBrowser is wedged on a challenge, polite stop is not enough.
+
+  await appendIngestLog(c, `stop requested; SIGKILL pid=${pid}`);
+  killIngestPid(pid);
+  await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+  // Second pass in case a grandchild survived the first signal.
   setTimeout(() => {
-    if (!alive(pid)) return;
-    try {
-      process.kill(pid, 'SIGKILL');
-      void appendIngestLog(c, `stop escalated to SIGKILL pid=${pid}`);
-    } catch {
-      /* already gone */
-    }
-  }, 8_000).unref?.();
-  return { stopped: true, pid, enabled: false, note: 'aborting current download' };
+    if (alive(pid)) killIngestPid(pid);
+  }, 500).unref?.();
+  return { stopped: true, pid, enabled: false, note: 'killed' };
 }
 
 /**
@@ -284,7 +301,17 @@ export async function stop() {
 export async function supervise() {
   const c = cfg();
   const desired = await readDesired(c);
-  if (!desired.enabled) return { action: 'none', enabled: false };
+  if (!desired.enabled) {
+    // Belt-and-braces: a stray child must not keep ingesting after Off.
+    const pid = await readPid(c.lockPath);
+    if (pid && alive(pid)) {
+      await appendIngestLog(c, `supervisor killing stray pid=${pid} (switch off)`);
+      killIngestPid(pid);
+      await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+      return { action: 'killed-stray', enabled: false };
+    }
+    return { action: 'none', enabled: false };
+  }
   if (await isRunning()) return { action: 'none', enabled: true, running: true };
   if (Date.now() < state.nextSpawnAllowedAt) {
     return {
@@ -324,10 +351,20 @@ export function stopSupervisor() {
 /** Everything the admin page renders. */
 export async function status() {
   const c = cfg();
-  const [running, file, desired, cursor] = await Promise.all([
+  const desired = await readDesired(c);
+  // Off must never look "still working" because a child outlived SIGTERM.
+  if (!desired.enabled) {
+    const stray = await readPid(c.lockPath);
+    if (stray && alive(stray)) {
+      await appendIngestLog(c, `status poll killing stray pid=${stray}`);
+      killIngestPid(stray);
+      await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+    }
+  }
+
+  const [running, file, cursor] = await Promise.all([
     isRunning(),
     readStatus(c.statusPath),
-    readDesired(c),
     readCursor(c)
   ]);
 

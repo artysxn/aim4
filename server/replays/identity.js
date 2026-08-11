@@ -41,6 +41,12 @@ export const LEGACY_UPLOADER = {
   username: process.env.AIM4_LEGACY_UPLOADER_NAME || 'artysan'
 };
 
+/** Owner stamped on HLTV auto-ingest and probe imports into the library. */
+export const INGEST_UPLOADER = {
+  id: process.env.AIM4_INGEST_UPLOADER_ID || 'system:admin',
+  username: process.env.AIM4_INGEST_UPLOADER_NAME || 'admin'
+};
+
 /** Verified users, keyed by token. */
 const cache = new Map();
 const CACHE_MS = 60 * 1000;

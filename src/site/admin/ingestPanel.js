@@ -558,7 +558,8 @@ export function ingestPanel() {
     const p = status.progress || {};
     const counts = status.counts || {};
     const demoId = p.nextId ?? status.config?.demoStart ?? 109575;
-    const current = status.current;
+    // Never show live stage chrome when the switch is Off.
+    const current = status.enabled ? status.current : null;
 
     hero.replaceChildren();
     const titleRow = el('div', 'ingest-hero-top');
@@ -579,6 +580,9 @@ export function ingestPanel() {
         stateTone = 'is-running';
         stateLabel = 'Running';
       }
+    } else if (status.running) {
+      stateTone = 'is-warn';
+      stateLabel = 'Stopping';
     }
     titleRow.appendChild(el('span', `ingest-chip ${stateTone}`, stateLabel));
     hero.appendChild(titleRow);
