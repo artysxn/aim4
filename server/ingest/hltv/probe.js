@@ -21,13 +21,11 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import net from 'node:net';
-import dns from 'node:dns/promises';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { looksLikeChallenge } from './fetcher.js';
-import { createCloakSession } from './cloakBrowser.js';
+import { checkTarget, createProbeTool } from './downloadDemo.js';
 import { unpackArchive } from './process.js';
 import { rarSupport } from '../../replays/archive.js';
 
@@ -38,8 +36,6 @@ const WORKER = path.join(HERE, 'probeParseWorker.js');
 const WORKER_HEAP_MB = Number(process.env.AIM4_PARSE_HEAP_MB || 1024);
 /** A parse that reports nothing for this long is hung, not slow. */
 const PARSE_STALL_MS = Number(process.env.AIM4_PARSE_STALL_MS || 15 * 60 * 1000);
-/** A download that moves no bytes for this long is dead. */
-const DOWNLOAD_STALL_MS = 60_000;
 /** Per-request budget for headers to arrive. */
 const HEADERS_TIMEOUT_MS = 30_000;
 const MAX_HOPS = 6;
@@ -131,57 +127,6 @@ function makeLogger(c, run) {
 // Address hygiene. The URL is admin-supplied, but "admin panel can make the
 // server GET anything" should still not reach loopback or the private LAN.
 // ---------------------------------------------------------------------------
-
-function isPrivateV4(ip) {
-  const o = ip.split('.').map(Number);
-  if (o.length !== 4 || o.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
-  if (o[0] === 0 || o[0] === 10 || o[0] === 127) return true;
-  if (o[0] === 169 && o[1] === 254) return true;
-  if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true;
-  if (o[0] === 192 && o[1] === 168) return true;
-  if (o[0] === 100 && o[1] >= 64 && o[1] <= 127) return true; // CGNAT
-  if (o[0] >= 224) return true; // multicast + reserved + broadcast
-  return false;
-}
-
-function isPrivateAddress(ip) {
-  if (net.isIPv4(ip)) return isPrivateV4(ip);
-  const v6 = ip.toLowerCase();
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(v6);
-  if (mapped) return isPrivateV4(mapped[1]);
-  if (v6 === '::' || v6 === '::1') return true;
-  if (v6.startsWith('fc') || v6.startsWith('fd')) return true; // fc00::/7
-  if (/^fe[89ab]/.test(v6)) return true; // fe80::/10
-  return false;
-}
-
-/** Resolve a hostname and refuse anything that lands in private space.
- * `allowPrivate` exists so the test suite can point a probe at a stub server
- * on loopback; nothing in production passes it. */
-async function checkTarget(urlObj, allowPrivate = false) {
-  if (urlObj.protocol !== 'http:' && urlObj.protocol !== 'https:') {
-    throw new Error(`Only http(s) URLs can be probed, got ${urlObj.protocol}`);
-  }
-  const host = urlObj.hostname;
-  if (net.isIP(host)) {
-    if (!allowPrivate && isPrivateAddress(host)) {
-      throw new Error(`${host} is a private address, refusing`);
-    }
-    return [host];
-  }
-  let addrs;
-  try {
-    addrs = await dns.lookup(host, { all: true, verbatim: true });
-  } catch (err) {
-    throw new Error(`DNS lookup for ${host} failed: ${err?.code || err?.message || err}`);
-  }
-  const ips = addrs.map((a) => a.address);
-  const bad = ips.find((ip) => isPrivateAddress(ip));
-  if (!allowPrivate && bad) {
-    throw new Error(`${host} resolves to private address ${bad}, refusing`);
-  }
-  return ips;
-}
 
 // ---------------------------------------------------------------------------
 // The request chain. Manual redirects so every hop lands in the log, with any
@@ -474,7 +419,8 @@ async function executeProbe(c, run, urlObj, hooks) {
   const outDir = path.join(c.stateDir, 'probe', run.runId);
   const packageDemo = hooks.packageDemo || packageDemoForked;
   let archivePath = null;
-  let browser = null;
+  /** Shared with continuous ingest: createProbeTool() is the download tool. */
+  let tool = null;
 
   const finish = async (verdict, summary) => {
     run.running = false;
@@ -491,7 +437,7 @@ async function executeProbe(c, run, urlObj, hooks) {
   try {
     log('info', `Probe ${run.runId} starting on this server`);
     log('info', `Target: ${urlObj.href}`);
-    log('info', 'Transport: CloakBrowser (the same transport used by ingestion)');
+    log('info', 'Transport: createProbeTool (shared with continuous ingest)');
     {
       const rar = rarSupport();
       log(
@@ -502,27 +448,19 @@ async function executeProbe(c, run, urlObj, hooks) {
       );
     }
 
-    // -- browser + download ----------------------------------------------
+    // -- browser + download (the tool ingest also calls) -----------------
     const t0 = Date.now();
-    await checkTarget(urlObj, Boolean(hooks.allowPrivate));
-    const makeBrowser = hooks.createBrowser || createCloakSession;
-    browser = makeBrowser({
-      ...c,
-      // Shared with the continuous ingester so CF cookies survive probe → run.
-      cloakSessionName: c.cloakSessionName || 'hltv',
-      validateUrl: async (target) => {
-        const next = new URL(target);
-        await checkTarget(next, Boolean(hooks.allowPrivate));
-      },
+    tool = createProbeTool(c, {
+      allowPrivate: Boolean(hooks.allowPrivate),
+      createBrowser: hooks.createBrowser,
       onLog: (message) => log('info', message)
     });
     await fsp.mkdir(workDir, { recursive: true });
     let lastPersist = 0;
     run.live = { stage: 'browser', detail: 'Opening URL in CloakBrowser' };
-    const got = await browser.download(urlObj.href, workDir, {
+    const got = await tool.download(urlObj.href, workDir, {
       fallbackName: 'download.bin',
       maxBytes: c.maxArchiveBytes,
-      stallMs: DOWNLOAD_STALL_MS,
       signal: state.abort.signal,
       onProgress: (progress) => {
         run.live = { stage: 'download', ...progress };
@@ -673,6 +611,6 @@ async function executeProbe(c, run, urlObj, hooks) {
     const blocked = err instanceof BlockedError || err?.blocked;
     await finish(blocked ? 'blocked' : 'failed', err?.message || String(err));
   } finally {
-    await browser?.close().catch(() => {});
+    await tool?.close().catch(() => {});
   }
 }

@@ -256,13 +256,23 @@ export async function stop() {
     return { stopped: false, reason: 'not running', enabled: false };
   }
   try {
-    await appendIngestLog(c, `stop requested; signaling pid=${pid}`);
+    await appendIngestLog(c, `stop requested; SIGTERM pid=${pid}`);
     process.kill(pid, 'SIGTERM');
   } catch (err) {
     await appendIngestLog(c, `stop failed: ${err.message}`);
     return { stopped: false, reason: err.message, enabled: false };
   }
-  return { stopped: true, pid, enabled: false, note: 'finishing the current match first' };
+  // If CloakBrowser is wedged on a challenge, polite stop is not enough.
+  setTimeout(() => {
+    if (!alive(pid)) return;
+    try {
+      process.kill(pid, 'SIGKILL');
+      void appendIngestLog(c, `stop escalated to SIGKILL pid=${pid}`);
+    } catch {
+      /* already gone */
+    }
+  }, 8_000).unref?.();
+  return { stopped: true, pid, enabled: false, note: 'aborting current download' };
 }
 
 /**

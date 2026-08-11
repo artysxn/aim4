@@ -313,9 +313,14 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
         ` library=${cfg.library}`
     );
 
+    let stopping = false;
     const onSignal = () => {
-      console.log('\n[ingest] stop requested; finishing current match...');
+      if (stopping) return;
+      stopping = true;
+      console.log('\n[ingest] stop requested; aborting download...');
       pipe.requestStop();
+      // Close CloakBrowser immediately so Off is not blocked on CF waits.
+      void source.close?.().catch(() => {});
     };
     process.on('SIGINT', onSignal);
     process.on('SIGTERM', onSignal);

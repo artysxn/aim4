@@ -1,17 +1,17 @@
 // ---------------------------------------------------------------------------
 // server/ingest/hltv/sources/hltv.js
-// Archives from hltv.org via sequential /download/demo/{id} URLs.
+// Sequential demo-id walker.
 //
-// Downloads run through the shared CloakBrowser transport. The browser session
-// is reused for the life of the ingester so cookies and the proxy pool survive
-// across demo ids.
+// Download transport is exclusively createProbeTool() (the admin Probe tool).
+// This module only chooses the next /download/demo/{id} URL and classifies
+// the bytes for the ledger / cursor.
 // ---------------------------------------------------------------------------
 
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { ChallengeError } from '../fetcher.js';
 import { parseArchiveFilename } from '../hltvNames.js';
-import { createCloakSession } from '../cloakBrowser.js';
+import { createProbeTool } from '../downloadDemo.js';
 import {
   MissingDemoError,
   classifyDownloadedBytes,
@@ -21,11 +21,8 @@ import {
 const BASE = 'https://www.hltv.org';
 
 export function createHltvSource(cfg) {
-  // Same persistent profile as the admin probe so a successful probe's
-  // Cloudflare cookies are reused by the continuous ingester.
-  const browser = createCloakSession({
-    ...cfg,
-    cloakSessionName: cfg.cloakSessionName || 'hltv'
+  const tool = createProbeTool(cfg, {
+    onLog: (message) => console.log(`[probe-tool] ${message}`)
   });
   let inFlight = 0;
   let nextAllowedAt = 0;
@@ -34,8 +31,7 @@ export function createHltvSource(cfg) {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   async function gated(work) {
-    while (inFlight >= Math.max(1, cfg.batchSize || 1)) await sleep(250);
-    // Probe starts immediately; do not burn 20–40s before the first attempt.
+    while (inFlight >= 1) await sleep(250);
     if (!firstDownload) {
       const now = Date.now();
       const startAt = Math.max(now, nextAllowedAt);
@@ -57,32 +53,26 @@ export function createHltvSource(cfg) {
 
   return {
     name: 'hltv',
-    /** Pipeline uses sequential demo-id walking instead of /results crawl. */
     sequential: true,
 
     async check() {
-      // Sequential demo walking never uses /results. That page is also a harder
-      // Cloudflare surface than /download/demo/{id}, so probing it used to kill
-      // the whole ingester before the first archive attempt.
       return {
         ok: true,
-        detail: 'hltv sequential demo ids (reachability deferred to first download)'
+        detail: 'hltv sequential: one URL at a time via createProbeTool()'
       };
     },
 
-    /**
-     * Download one demo id. Throws MissingDemoError on HLTV 404 / Page not found,
-     * ChallengeError-shaped blocked errors from CloakBrowser, or generic errors.
-     */
-    async fetchDemoById(demoId, destPath, { onProgress } = {}) {
+    async fetchDemoById(demoId, destPath, { onProgress, signal } = {}) {
       const id = Number(demoId);
       const url = `${BASE}/download/demo/${id}`;
       let got;
       try {
+        // Exact probe tool. One URL. No parallel downloads.
         got = await gated(() =>
-          browser.download(url, path.dirname(destPath), {
+          tool.download(url, path.dirname(destPath), {
             fallbackName: path.basename(destPath),
             maxBytes: cfg.maxArchiveBytes,
+            signal,
             onProgress
           })
         );
@@ -106,7 +96,6 @@ export function createHltvSource(cfg) {
       if (classified.kind === 'challenge') {
         await fsp.rm(target, { force: true }).catch(() => {});
         const err = new ChallengeError(url, 403);
-        // Browser-path challenge is weather, not a hard stop for the supervisor.
         err.fatal = false;
         err.blocked = true;
         err.proxyRetryable = true;
@@ -131,10 +120,10 @@ export function createHltvSource(cfg) {
       };
     },
 
-    /** Compatibility for any leftover callers that still pass a ledger row. */
-    async fetchArchive(row, destPath, { onProgress } = {}) {
+    async fetchArchive(row, destPath, { onProgress, signal } = {}) {
       const got = await this.fetchDemoById(row.hltvDemoId || row.matchId, destPath, {
-        onProgress
+        onProgress,
+        signal
       });
       row.archiveName = got.filename;
       if (got.event && !row.event) row.event = got.event;
@@ -143,7 +132,7 @@ export function createHltvSource(cfg) {
     },
 
     async close() {
-      await browser.close();
+      await tool.close();
     }
   };
 }

@@ -382,6 +382,13 @@ export function createCloakSession(cfg = {}) {
 
   function pickProxy(pool, used, random) {
     if (!pool.length) return undefined;
+    // Always drain preferred (working) proxies in order first. Random among
+    // unproven cache entries only after those are exhausted. Sticky order is
+    // what makes a successful probe's exit IP get reused by ingest.
+    for (let i = 0; i < preferredProxyCount; i++) {
+      const candidate = pool[i];
+      if (candidate && !used.has(candidate)) return candidate;
+    }
     if (!random) {
       for (let i = 0; i < pool.length; i++) {
         const candidate = pool[(proxyCursor + i) % pool.length];
@@ -389,11 +396,9 @@ export function createCloakSession(cfg = {}) {
       }
       return pool[proxyCursor % pool.length];
     }
-    // Working proxies are loaded first. Prefer those before random cache junk.
-    const unused = pool.filter((p) => !used.has(p));
-    const ordered = unused.length ? unused : pool;
-    const preferred = ordered.filter((p) => pool.indexOf(p) < preferredProxyCount);
-    const choices = preferred.length ? preferred : ordered;
+    const unused = pool.filter((p) => !used.has(p) && pool.indexOf(p) >= preferredProxyCount);
+    const choices = unused.length ? unused : pool.filter((p) => !used.has(p));
+    if (!choices.length) return pool[0];
     return choices[Math.floor(Math.random() * choices.length)];
   }
 
@@ -416,8 +421,11 @@ export function createCloakSession(cfg = {}) {
         activeProxy = proxy;
       }
       try {
+        // Enough rounds to clear a soft CF interstitial; not so many that one
+        // bad proxy burns two minutes before failover (probe feels "instant"
+        // because it usually hits a good exit on the first try).
         const result = await fn({
-          challengeRounds: pool.length > 1 ? 8 : 30
+          challengeRounds: pool.length > 1 ? 10 : 24
         });
         if (proxy) {
           if (!random) proxyCursor = Math.max(0, pool.indexOf(proxy));
@@ -647,8 +655,16 @@ export function createCloakSession(cfg = {}) {
               challengeAttempts++;
               log(`Challenge (${challengeAttempts}/${rounds}) on ${href || url}`);
               await interactWithManagedChallenge(page);
+              continue;
             }
-            continue;
+            // Probe succeeds by moving on; sitting here for the full download
+            // timeout on one dead proxy is why ingest looked "stuck".
+            log(`Challenge uncleared after ${rounds} rounds; trying next proxy`);
+            const err = new Error('CloakBrowser received a Cloudflare challenge page');
+            err.blocked = true;
+            err.proxyRetryable = true;
+            rejectPendingDownload?.(err);
+            return;
           }
           if (looksLikeMissingPage(html) || /\/404\b/i.test(href)) {
             waitPhase = 'missing';

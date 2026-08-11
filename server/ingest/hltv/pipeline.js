@@ -33,6 +33,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
   const library = cfg.library;
   let stopping = false;
+  /** Cancels the in-flight CloakBrowser download (same as probe Cancel). */
+  let abort = new AbortController();
   /** What the admin page reports as "currently at". */
   let current = null;
   let cursorSnapshot = null;
@@ -41,6 +43,16 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
 
   function requestStop() {
     stopping = true;
+    try {
+      abort.abort(new Error('Ingest stop requested'));
+    } catch {
+      /* already aborted */
+    }
+  }
+
+  function freshAbort() {
+    abort = new AbortController();
+    return abort.signal;
   }
 
   const isLive = (matchId) => {
@@ -247,6 +259,7 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
 
     try {
       const got = await source.fetchDemoById(id, dest, {
+        signal: abort.signal,
         onProgress: (p) => emit('download-progress', { matchId, ...p })
       });
       const row = ledger.setState(matchId, STATES.DOWNLOADED, {
@@ -300,6 +313,11 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         return { advanced: false, missing: true };
       }
 
+      if (stopping || abort.signal.aborted) {
+        emit('download-failed', { matchId, error: 'stopped', blocked: true });
+        return { advanced: false, missing: false, blocked: true, waitMs: 0, stopped: true };
+      }
+
       if (isTransientDownloadError(err)) {
         // Timeouts / CF / proxy weather are NOT proof the id is gone. Probe can
         // clear the same URL a minute later; never skip ahead on these.
@@ -310,7 +328,7 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         await ledger.save();
         const waitMs = Math.max(
           cfg.minDelayMs || 20_000,
-          Math.min(Number(cfg.challengeWaitMs) || 90_000, cfg.frontierWaitMs || 600_000)
+          Math.min(Number(cfg.challengeWaitMs) || 45_000, cfg.frontierWaitMs || 600_000)
         );
         emit('download-failed', {
           matchId,
@@ -352,12 +370,14 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
 
   async function runSequential({ continuous = false, maxLoops = Infinity } = {}) {
     stopping = false;
+    freshAbort();
     await recover();
     cursorSnapshot = await readCursor(cfg);
     await emitCursor();
 
     let loops = 0;
     while (!stopping && loops < maxLoops) {
+      if (abort.signal.aborted) freshAbort();
       const id = Number(cursorSnapshot.nextId);
       const outcome = await runOneDemo(id);
       if (stopping) break;
@@ -375,9 +395,11 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         continue;
       }
 
+      if (outcome.stopped || stopping) break;
+
       if (outcome.blocked) {
         if (!continuous) break;
-        const waitMs = outcome.waitMs || 120_000;
+        const waitMs = outcome.waitMs || 45_000;
         emit('idle', {
           nextPollInMs: waitMs,
           reason: 'challenge',
