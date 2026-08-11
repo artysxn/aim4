@@ -30,6 +30,7 @@ const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
 const DEFAULT_DOWNLOAD_DEADLINE_MS = 30 * 60_000;
 const DEFAULT_STALL_MS = 60_000;
 let displayPromise = null;
+let displayStarting = false;
 let xvfbProcess = null;
 
 const bool = (value, fallback) => {
@@ -45,50 +46,85 @@ const profilePathFor = (cfg) =>
     ? path.join(cfg.cloakProfileDir, cfg.cloakSessionName || 'default')
     : '';
 
+function isDisplayError(err) {
+  return /Missing X server|without having a XServer|ozone_platform_x11|\$DISPLAY/i.test(
+    String(err?.message || err || '')
+  );
+}
+
+function resetHeadedDisplay() {
+  delete process.env.DISPLAY;
+  displayPromise = null;
+  displayStarting = false;
+  try {
+    xvfbProcess?.kill?.('SIGKILL');
+  } catch {
+    /* already gone */
+  }
+  xvfbProcess = null;
+}
+
 async function ensureHeadedDisplay() {
-  if (process.platform !== 'linux' || process.env.DISPLAY) return;
-  if (displayPromise) return displayPromise;
-  displayPromise = (async () => {
-    const displayNumber = 99;
-    const display = `:${displayNumber}`;
-    const socket = `/tmp/.X11-unix/X${displayNumber}`;
-    if (await fsp.access(socket).then(() => true, () => false)) {
-      process.env.DISPLAY = display;
-      return;
-    }
+  if (process.platform !== 'linux') return;
+  const displayNumber = 99;
+  const display = `:${displayNumber}`;
+  const socket = `/tmp/.X11-unix/X${displayNumber}`;
+  if (await fsp.access(socket).then(() => true, () => false)) {
+    process.env.DISPLAY = display;
+    return;
+  }
+  // Prior Xvfb died (common after SIGKILL of a sibling ingest). Do not trust
+  // a cached resolved promise or a stale DISPLAY value.
+  delete process.env.DISPLAY;
 
-    xvfbProcess = spawn(
-      'Xvfb',
-      [display, '-screen', '0', '1920x1080x24', '-nolisten', 'tcp'],
-      { stdio: 'ignore' }
-    );
-    xvfbProcess.unref();
-    let launchError = null;
-    xvfbProcess.once('error', (err) => {
-      launchError = err;
-    });
-    process.once('exit', () => xvfbProcess?.kill());
-
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
-      if (launchError) {
-        throw new Error(
-          `Could not start Xvfb for headed CloakBrowser: ${launchError.message}. Rebuild the Docker image so the xvfb package is installed.`
+  if (!displayStarting) {
+    displayStarting = true;
+    displayPromise = (async () => {
+      try {
+        try {
+          xvfbProcess?.kill?.('SIGKILL');
+        } catch {
+          /* ignore */
+        }
+        xvfbProcess = spawn(
+          'Xvfb',
+          [display, '-screen', '0', '1920x1080x24', '-nolisten', 'tcp'],
+          { stdio: 'ignore' }
         );
+        xvfbProcess.unref();
+        let launchError = null;
+        xvfbProcess.once('error', (err) => {
+          launchError = err;
+        });
+        process.once('exit', () => xvfbProcess?.kill());
+
+        const deadline = Date.now() + 5000;
+        while (Date.now() < deadline) {
+          if (launchError) {
+            throw new Error(
+              `Could not start Xvfb for headed CloakBrowser: ${launchError.message}. Rebuild the Docker image so the xvfb package is installed.`
+            );
+          }
+          if (await fsp.access(socket).then(() => true, () => false)) {
+            process.env.DISPLAY = display;
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        throw new Error('Xvfb did not create a display within 5 seconds');
+      } finally {
+        displayStarting = false;
       }
-      if (await fsp.access(socket).then(() => true, () => false)) {
-        process.env.DISPLAY = display;
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    throw new Error('Xvfb did not create a display within 5 seconds');
-  })();
+    })();
+  }
   return displayPromise;
 }
 
 function isProxyRetryable(err) {
   if (!err) return false;
+  // Display/Xvfb failures are host setup, not a bad proxy. Burning the pool
+  // on "Missing X server" is how ingest looked dead after a hard kill.
+  if (isDisplayError(err)) return false;
   if (err.blocked || err.proxyRetryable) return true;
   const msg = String(err.message || err);
   return /proxy|SOCKS|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|ERR_TUNNEL|ERR_PROXY|tunnel|socket hang up|net::ERR_/i.test(
@@ -412,6 +448,7 @@ export function createCloakSession(cfg = {}) {
     );
     const used = new Set();
     let lastErr;
+    let displayRetries = 0;
     for (let i = 0; i < maxAttempts; i++) {
       if (opts.signal?.aborted) throw abortError(opts.signal);
       const proxy = pickProxy(pool, used, random);
@@ -434,8 +471,20 @@ export function createCloakSession(cfg = {}) {
         return result;
       } catch (err) {
         lastErr = err;
-        if (proxy) await markProxyFailed(cfg, proxy).catch(() => {});
         if (opts.signal?.aborted) throw abortError(opts.signal);
+        if (isDisplayError(err) && displayRetries < 2) {
+          displayRetries += 1;
+          log(
+            `Display/Xvfb error: ${err.message}. Restarting Xvfb and retrying ` +
+              `(${displayRetries}/2)`
+          );
+          resetHeadedDisplay();
+          await resetContext();
+          if (proxy) used.delete(proxy);
+          i -= 1;
+          continue;
+        }
+        if (proxy) await markProxyFailed(cfg, proxy).catch(() => {});
         const canRetry = isProxyRetryable(err) && i < maxAttempts - 1;
         if (!canRetry) {
           // Leave blocked/proxyRetryable for the pipeline to back off on the

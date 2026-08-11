@@ -292,6 +292,80 @@ export async function stop() {
   return { stopped: true, pid, enabled: false, note: 'killed' };
 }
 
+/** Drop Chromium Singleton* locks so a fresh child can open the profile. */
+async function clearProfileLocks(profileRoot) {
+  if (!profileRoot) return;
+  const sessions = await fsp.readdir(profileRoot).catch(() => []);
+  for (const name of sessions) {
+    const dir = path.join(profileRoot, name);
+    const st = await fsp.stat(dir).catch(() => null);
+    if (!st?.isDirectory()) continue;
+    for (const lock of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+      await fsp.rm(path.join(dir, lock), { force: true }).catch(() => {});
+    }
+  }
+}
+
+/**
+ * Kill the child, clear lock/backoff/profile locks, wait briefly, then start.
+ * Use when Off/On races leave CloakBrowser/Xvfb wedged.
+ */
+export async function hardRestart(options = {}) {
+  const c = cfg();
+  await appendIngestLog(c, 'hard restart requested');
+
+  // Hold the supervisor off while we kill and settle. Writing enabled=true
+  // early used to let supervise() spawn a second child mid-wait.
+  await writeDesired(c, { enabled: false });
+  state.nextSpawnAllowedAt = Date.now() + 30_000;
+
+  const oldPid = await readPid(c.lockPath);
+  if (oldPid && alive(oldPid)) {
+    await appendIngestLog(c, `hard restart SIGKILL pid=${oldPid}`);
+    killIngestPid(oldPid);
+    setTimeout(() => {
+      if (alive(oldPid)) killIngestPid(oldPid);
+    }, 400).unref?.();
+  }
+  await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+  await clearProfileLocks(c.cloakProfileDir);
+
+  await writeStatus(c.statusPath, {
+    ...emptyStatus(),
+    running: false,
+    pid: null,
+    current: null,
+    stoppedAt: new Date().toISOString(),
+    lastError: null
+  }).catch(() => {});
+
+  // Let chrome/Xvfb grandchildren die before the next launchPersistentContext.
+  await new Promise((resolve) => setTimeout(resolve, 900));
+
+  if (await isRunning()) {
+    const still = await readPid(c.lockPath);
+    await appendIngestLog(c, `hard restart: still alive pid=${still}; SIGKILL again`);
+    killIngestPid(still);
+    await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  state.failures = 0;
+  state.nextSpawnAllowedAt = 0;
+  state.lastSpawnAt = 0;
+  await writeDesired(c, { enabled: true, ...options });
+
+  await appendIngestLog(c, 'hard restart spawning');
+  const pid = await spawnIngester(c, options);
+  await writeStatus(c.statusPath, {
+    ...emptyStatus(),
+    running: true,
+    pid,
+    startedAt: new Date().toISOString()
+  });
+  return { restarted: true, pid, enabled: true, killedPid: oldPid || null };
+}
+
 /**
  * Reconcile reality with the switch. Safe to call as often as you like.
  *

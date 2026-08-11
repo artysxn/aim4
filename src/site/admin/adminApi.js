@@ -56,6 +56,7 @@ export const adminApi = {
   ingestLog: (tail = 999) => get(`/api/admin/ingest/log?tail=${encodeURIComponent(tail)}`),
   ingestStart: () => send('POST', '/api/admin/ingest/start'),
   ingestStop: () => send('POST', '/api/admin/ingest/stop'),
+  ingestHardRestart: () => send('POST', '/api/admin/ingest/restart'),
   ingestSeek: (nextId) => send('POST', '/api/admin/ingest/cursor', { nextId }),
 
   // Download probe: one URL, one attempt, a step log to read back.

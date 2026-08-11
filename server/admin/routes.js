@@ -630,6 +630,18 @@ async function route(req, res, url, me) {
     return true;
   }
 
+  if (req.method === 'POST' && p === '/api/admin/ingest/restart') {
+    const result = await ingest.hardRestart();
+    await writeAudit({
+      actorId: me.id,
+      action: 'ingest.hardRestart',
+      payload: result,
+      req
+    });
+    json(res, req, 200, { ...result, ...(await ingest.status()) });
+    return true;
+  }
+
   if (req.method === 'POST' && p === '/api/admin/ingest/cursor') {
     const body = await readJson(req).catch(() => ({}));
     const nextId = Number(body?.nextId);
