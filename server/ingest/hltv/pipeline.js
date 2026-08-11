@@ -139,14 +139,31 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
       });
 
       const ok = results.filter((r) => r.ok);
+      const failed = results.filter((r) => !r.ok);
       const dupes = ok.filter((r) => r.duplicate);
       const skipped = ok.filter((r) => r.skipped);
       const stored = ok.filter((r) => !r.duplicate && !r.skipped);
       const unnamed = stored.filter((r) => !r.naming?.applied);
+      const crashed = failed.filter((r) => r.crashed);
+
+      // All maps failed (parser panic, corrupt dem, etc.): mark failed and let
+      // the walker advance. Never throw here — overnight must keep moving.
       if (!ok.length) {
-        throw new Error(
-          results.map((r) => r.error).filter(Boolean).join('; ') || 'no maps parsed'
-        );
+        const errMsg =
+          failed.map((r) => r.error).filter(Boolean).join('; ') || 'no maps parsed';
+        ledger.fail(row.matchId, new Error(errMsg), 1);
+        await ledger.save();
+        emit('match-failed', {
+          matchId: row.matchId,
+          error: errMsg,
+          crashed: crashed.length,
+          maps: failed.length
+        });
+        if (!cfg.keepSources) {
+          const { freed } = await cleanMatch(cfg.workDir, row.matchId);
+          emit('match-cleaned', { matchId: row.matchId, freed });
+        }
+        return { ok: false, error: errMsg, crashed: crashed.length > 0, maps: 0 };
       }
 
       const allDuplicate = stored.length === 0 && dupes.length > 0 && skipped.length === 0;
@@ -160,9 +177,9 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         mapsDuplicate: dupes.length,
         mapsSkipped: skipped.length,
         skipReasons: skipped.map((s) => s.reason).filter(Boolean),
-        mapsFailed: results.length - ok.length,
+        mapsFailed: failed.length,
         needsReview: unnamed.length > 0,
-        lastError: results.find((r) => !r.ok)?.error || null
+        lastError: failed[0]?.error || null
       });
       await ledger.save();
 
@@ -186,7 +203,8 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
           maps: stored.length,
           duplicates: dupes.length,
           skipped: skipped.length,
-          failed: results.length - ok.length,
+          failed: failed.length,
+          crashed: crashed.length,
           teams: described.teams.map((t) => t.name),
           naming: stored.map((r) => r.naming?.confidence)
         });

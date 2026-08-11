@@ -280,16 +280,27 @@ async function spawnIngester(c, options = {}) {
     child.on('exit', (code, signal) => {
       const shortLived = Date.now() - state.lastSpawnAt < 30_000;
       const killed = signal === 'SIGKILL' || signal === 'SIGTERM';
+      const nativeCrash =
+        signal === 'SIGABRT' ||
+        signal === 'SIGSEGV' ||
+        signal === 'SIGILL' ||
+        signal === 'SIGBUS';
       // Continuous ingest should not end in seconds. Treat short-lived exits
       // (including mysterious code 0) as crashes so we back off and respawn.
-      if (shortLived && !killed) {
+      // Cap backoff hard: overnight must not sit for many minutes after one
+      // native abort (parse is forked now; if the CLI still dies, recover fast).
+      if (nativeCrash) {
+        state.failures = Math.min(state.failures + 1, 4);
+        state.nextSpawnAllowedAt =
+          Date.now() + Math.min(2 ** state.failures * 3_000, 30_000);
+      } else if (shortLived && !killed) {
         state.failures = Math.min(state.failures + 1, 6);
         state.nextSpawnAllowedAt =
           Date.now() + Math.min(2 ** state.failures * 2_000, 60_000);
       } else if (!killed && code !== 0) {
         state.failures = Math.min(state.failures + 1, 6);
         state.nextSpawnAllowedAt =
-          Date.now() + Math.min(2 ** state.failures * 5_000, 5 * 60_000);
+          Date.now() + Math.min(2 ** state.failures * 5_000, 60_000);
       } else {
         state.failures = 0;
         state.nextSpawnAllowedAt = 0;
@@ -527,6 +538,7 @@ async function killAllIngestRelated(c) {
   // Narrow patterns only: never pkill bare "chromium" / "node" / Xvfb :99.
   const patterns = [
     'ingest/hltv/cli\\.js',
+    'ingest/hltv/ingestParseWorker\\.js',
     'ingest/hltv/probeParseWorker\\.js',
     'cloakbrowser-profile',
     `Xvfb :${cloakDisplay}`

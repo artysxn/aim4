@@ -130,7 +130,8 @@ function logEvent(e, verbose) {
       console.log(
         `\n     ingested ${e.maps} map(s)` +
           `${e.duplicates ? `, ${e.duplicates} duplicate` : ''}` +
-          `${e.failed ? `, ${e.failed} failed` : ''} ` +
+          `${e.failed ? `, ${e.failed} failed` : ''}` +
+          `${e.crashed ? ` (${e.crashed} crash)` : ''} ` +
           `as ${(e.teams || []).join(' vs ')} [${(e.naming || []).join(',')}]`
       );
       break;
@@ -147,7 +148,10 @@ function logEvent(e, verbose) {
       console.log(`     cleaned, freed ${mb(e.freed)}`);
       break;
     case 'match-failed':
-      console.log(`\n     FAILED: ${e.error}`);
+      console.log(
+        `\n     FAILED (skipped demo): ${e.error}` +
+          `${e.crashed ? ` [${e.crashed} map crash(es)]` : ''}`
+      );
       break;
     case 'download-start':
       console.log(`\n-> demo/${e.demoId || e.matchId} download`);

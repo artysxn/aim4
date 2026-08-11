@@ -2,38 +2,26 @@
 // server/ingest/hltv/process.js
 // One archive: unpack, parse each map, name the teams, write to the library.
 //
-// This is the stage that costs real time and real memory, and it reuses the
-// library's own machinery rather than reimplementing any of it:
-//
-//   unpackUpload   archive.js   .rar via bsdtar, .zip in process, junk filtered
-//   parseDemo      demoparser   the same parser the website runs
-//   ingestDemo     ingest.js    materialize + persist, the parser/store seam
-//
-// The only thing inserted between them is applyHltvTeams, which has to run
-// after the parse and before the ingest. See teamNames.js for why that window
-// is the only correct place for it.
-//
-// Maps are parsed one at a time by default. Three concurrent parses of a
-// 128-tick Bo3 will exhaust a small box, and jobs.js already documents how hard
-// the parser fights for memory.
+// Parsing runs in a forked ingestParseWorker.js. demoparser is native Rust; a
+// panic aborts that worker (SIGABRT) instead of the continuous ingest process,
+// so one corrupt overtime split cannot stop the overnight walk.
 // ---------------------------------------------------------------------------
 
+import { fork } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { unpackUpload } from '../../replays/archive.js';
-import { parseDemo } from '../../demoparser/index.js';
-import { ingestDemo } from '../../replays/ingest.js';
 import { newDemoId } from '../../replays/demoStore.js';
 import { describeArchive, isOverpassFilename, parseDemoFilename } from './hltvNames.js';
-import { applyHltvTeams, teamsFromDemoFilename } from './teamNames.js';
-import { findLibraryDuplicate, fingerprintDemo } from './duplicates.js';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const WORKER = path.join(HERE, 'ingestParseWorker.js');
+const WORKER_HEAP_MB = Number(process.env.AIM4_PARSE_HEAP_MB || 1024);
+const PARSE_STALL_MS = Number(process.env.AIM4_INGEST_PARSE_STALL_MS || 15 * 60 * 1000);
 
 /**
  * Unpack one archive into `dir`, keeping HLTV's own entry names.
- *
- * The names matter: `mibr-vs-bestia-m1-cache.dem` is where the team and map
- * metadata comes from, so flattening them to generated ids would throw away the
- * thing that makes offline naming possible.
  */
 export async function unpackArchive(archivePath, dir, { allowedBytes }) {
   await fsp.mkdir(dir, { recursive: true });
@@ -43,8 +31,6 @@ export async function unpackArchive(archivePath, dir, { allowedBytes }) {
     filename: path.basename(archivePath),
     allowedBytes,
     targetFor: (name) => {
-      // Collisions are not expected inside one match archive, but a duplicate
-      // entry name silently overwriting a map would be invisible later.
       let base = path.basename(name);
       while (seen.has(base)) base = `dup-${base}`;
       seen.add(base);
@@ -55,11 +41,81 @@ export async function unpackArchive(archivePath, dir, { allowedBytes }) {
 }
 
 /**
+ * Parse one .dem in a child process. Crashes become Error results, not process death.
+ */
+function parseOneMapForked(payload, onProgress) {
+  return new Promise((resolve, reject) => {
+    const child = fork(WORKER, [JSON.stringify(payload)], {
+      execArgv: [`--max-old-space-size=${WORKER_HEAP_MB}`],
+      stdio: ['ignore', 'inherit', 'inherit', 'ipc']
+    });
+
+    let settled = false;
+    let stallTimer = null;
+    const touch = () => {
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        child.kill('SIGKILL');
+        settle(
+          new Error(
+            `Parse made no progress for ${Math.round(PARSE_STALL_MS / 60000)} minutes`
+          )
+        );
+      }, PARSE_STALL_MS);
+      stallTimer.unref?.();
+    };
+
+    const settle = (err, result) => {
+      if (settled) return;
+      settled = true;
+      if (stallTimer) clearTimeout(stallTimer);
+      if (!child.killed) {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          /* already gone */
+        }
+      }
+      err ? reject(err) : resolve(result);
+    };
+
+    touch();
+    child.on('message', (msg) => {
+      if (msg?.type === 'progress') {
+        touch();
+        onProgress?.(msg);
+      } else if (msg?.type === 'done') {
+        settle(null, msg.result);
+      } else if (msg?.type === 'error') {
+        settle(new Error(msg.error || 'Parse worker error'));
+      }
+    });
+    child.on('error', (err) => settle(err));
+    child.on('exit', (code, signal) => {
+      if (settled) return;
+      const crashed =
+        signal === 'SIGABRT' ||
+        signal === 'SIGSEGV' ||
+        signal === 'SIGILL' ||
+        signal === 'SIGBUS' ||
+        code === null;
+      settle(
+        new Error(
+          crashed
+            ? `Parse worker crashed (${signal || 'no exit code'}); skipping this map`
+            : `Parse worker exited with code ${code}`
+        )
+      );
+    });
+  });
+}
+
+/**
  * Parse and ingest every map in an already-unpacked archive.
  *
  * @param {object} opts
- * @param {string} opts.library         library key to write into
- * @param {object} opts.row             the ledger row
+ * @param {string} opts.library
+ * @param {object} opts.row
  * @param {{name: string, path: string, sizeBytes: number}[]} opts.demos
  * @param {number} [opts.concurrency]
  * @param {(e: object) => void} [opts.onProgress]
@@ -67,9 +123,6 @@ export async function unpackArchive(archivePath, dir, { allowedBytes }) {
 export async function parseAndIngest({ library, row, demos, concurrency = 1, onProgress }) {
   const described = describeArchive(row.archiveName || '', demos.map((d) => d.name));
   const teams = described.teams;
-
-  // Map filename -> HLTV map slot, so a map is identified by its NAME and not
-  // by the order the archive happened to list entries in.
   const byName = new Map(described.maps.map((m) => [m.filename, m]));
 
   const results = [];
@@ -81,14 +134,13 @@ export async function parseAndIngest({ library, row, demos, concurrency = 1, onP
       if (!entry) return;
       const slot = byName.get(entry.name) || parseDemoFilename(entry.name) || {};
       const label = entry.name;
+      const mapNumber = slot.mapNumber ?? null;
 
-      // Overpass is out of pool; never spend a parse on it. Other maps in the
-      // same archive still run, and the walker advances when every map is skipped.
       if (isOverpassFilename(entry.name)) {
         onProgress?.({
           stage: 'parse',
           map: label,
-          mapNumber: slot.mapNumber ?? null,
+          mapNumber,
           skipped: 'overpass'
         });
         results.push({
@@ -96,85 +148,50 @@ export async function parseAndIngest({ library, row, demos, concurrency = 1, onP
           skipped: true,
           reason: 'overpass',
           name: entry.name,
-          mapNumber: slot.mapNumber ?? null
+          mapNumber
         });
         continue;
       }
 
-      onProgress?.({ stage: 'parse', map: label, mapNumber: slot.mapNumber ?? null });
+      onProgress?.({ stage: 'parse', map: label, mapNumber });
 
       try {
-        const demo = await parseDemo(entry.path, {
-          onProgress: (p) => onProgress?.({ stage: 'parse', map: label, ...p })
-        });
-
-        // The whole point of this program. Before ingestDemo, never after.
-        // Prefer the two org slugs baked into this .dem's own filename; the
-        // archive-level teams are only a fallback when the name does not parse.
-        const naming = applyHltvTeams(demo, teamsFromDemoFilename(entry.name, teams));
-
-        const fingerprint = fingerprintDemo(demo, entry.sizeBytes);
-        const dup = await findLibraryDuplicate(library, fingerprint);
-        if (dup) {
-          results.push({
-            ok: true,
-            duplicate: true,
-            demoId: dup.id,
-            name: entry.name,
-            mapNumber: slot.mapNumber ?? null,
-            naming,
-            duplicateOf: dup.id
-          });
-          continue;
-        }
-
-        const demoId = newDemoId();
-        onProgress?.({ stage: 'store', map: label });
-        const { INGEST_UPLOADER } = await import('../../replays/identity.js');
-        const record = await ingestDemo(
-          library,
-          demoId,
-          demo,
+        const result = await parseOneMapForked(
           {
-            filename: entry.name,
+            file: entry.path,
+            library,
+            demoId: newDemoId(),
             sizeBytes: entry.sizeBytes,
-            source: 'hltv',
-            uploadedAt: Date.parse(row.playedAt) || Date.now(),
-            uploaderId: INGEST_UPLOADER.id,
-            uploaderName: INGEST_UPLOADER.username,
-            visibility: 'public'
+            filename: entry.name,
+            archiveTeams: teams,
+            row: {
+              matchId: row.matchId,
+              matchUrl: row.matchUrl || null,
+              playedAt: row.playedAt || null,
+              event: row.event || '',
+              bestOf: row.bestOf ?? null,
+              archiveName: row.archiveName || ''
+            },
+            described: {
+              event: described.event || '',
+              bestOf: described.bestOf ?? null
+            },
+            mapNumber
           },
-          (p) => onProgress?.({ stage: 'store', map: label, ...p })
+          (p) => onProgress?.({ stage: p.stage || 'parse', map: label, ...p })
         );
-
-        // Provenance, so the naming decision is auditable and a future pass can
-        // re-resolve the ones that came back unnamed.
-        record.hltv = {
-          matchId: row.matchId,
-          matchUrl: row.matchUrl || null,
-          event: described.event || row.event || '',
-          bestOf: described.bestOf ?? row.bestOf ?? null,
-          mapNumber: slot.mapNumber ?? null,
-          archiveName: row.archiveName || '',
-          team1: naming.team1,
-          team2: naming.team2,
-          confidence: naming.confidence,
-          namedFromHltv: naming.applied
-        };
-        const { writeRecord } = await import('../../replays/demoStore.js');
-        await writeRecord(library, record);
-
-        results.push({
-          ok: true,
-          duplicate: false,
-          demoId,
-          name: entry.name,
-          mapNumber: slot.mapNumber ?? null,
-          naming
-        });
+        results.push(result);
       } catch (err) {
-        // One bad map must not lose the rest of the series.
-        results.push({ ok: false, name: entry.name, error: err?.message || String(err) });
+        // One bad / crashing map must not lose the rest of the series, and must
+        // not take down continuous ingest.
+        console.warn(`[parse] ${label}: ${err?.message || err}`);
+        results.push({
+          ok: false,
+          name: entry.name,
+          mapNumber,
+          error: err?.message || String(err),
+          crashed: /crashed|SIGABRT|SIGSEGV|SIGILL|SIGBUS/i.test(String(err?.message || err))
+        });
       }
     }
   };
