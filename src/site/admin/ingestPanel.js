@@ -564,6 +564,23 @@ export function ingestPanel() {
     }
   }
 
+  async function hardStop() {
+    if (busy) return;
+    busy = true;
+    paint();
+    try {
+      lastStatus = await adminApi.ingestHardStop();
+      notice(root, 'Hard stop done.');
+    } catch (err) {
+      notice(root, err.message, 'error');
+    } finally {
+      busy = false;
+      paint();
+      proxies.refresh();
+      disk.refresh();
+    }
+  }
+
   async function hardRestart() {
     if (busy) return;
     busy = true;
@@ -599,12 +616,17 @@ export function ingestPanel() {
     const titleRow = el('div', 'ingest-hero-top');
     titleRow.appendChild(el('h3', 'ingest-title', 'Ingest'));
     titleRow.appendChild(powerSeg(Boolean(status.enabled), busy, toggle));
-    const hardBtn = el('button', 'ingest-hard-btn', 'Hard Restart');
-    hardBtn.type = 'button';
-    hardBtn.disabled = busy;
-    hardBtn.setAttribute('aria-label', 'Hard restart ingest');
-    hardBtn.addEventListener('click', () => hardRestart());
-    titleRow.appendChild(hardBtn);
+    const hardStopBtn = el('button', 'ingest-hard-btn', 'Hard Stop');
+    hardStopBtn.type = 'button';
+    hardStopBtn.disabled = busy;
+    hardStopBtn.setAttribute('aria-label', 'Hard stop ingest');
+    hardStopBtn.addEventListener('click', () => hardStop());
+    const hardRestartBtn = el('button', 'ingest-hard-btn', 'Hard Restart');
+    hardRestartBtn.type = 'button';
+    hardRestartBtn.disabled = busy;
+    hardRestartBtn.setAttribute('aria-label', 'Hard restart ingest');
+    hardRestartBtn.addEventListener('click', () => hardRestart());
+    titleRow.append(hardStopBtn, hardRestartBtn);
     let stateTone = 'is-stopped';
     let stateLabel = 'Off';
     if (status.enabled) {

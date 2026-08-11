@@ -57,6 +57,7 @@ export const adminApi = {
   ingestLogClear: () => send('DELETE', '/api/admin/ingest/log'),
   ingestStart: () => send('POST', '/api/admin/ingest/start'),
   ingestStop: () => send('POST', '/api/admin/ingest/stop'),
+  ingestHardStop: () => send('POST', '/api/admin/ingest/hard-stop'),
   ingestHardRestart: () => send('POST', '/api/admin/ingest/restart'),
   ingestSeek: (nextId) => send('POST', '/api/admin/ingest/cursor', { nextId }),
 

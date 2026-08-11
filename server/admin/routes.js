@@ -657,6 +657,18 @@ async function route(req, res, url, me) {
     return true;
   }
 
+  if (req.method === 'POST' && p === '/api/admin/ingest/hard-stop') {
+    const result = await ingest.hardStop();
+    await writeAudit({
+      actorId: me.id,
+      action: 'ingest.hardStop',
+      payload: result,
+      req
+    });
+    json(res, req, 200, { ...result, ...(await ingest.status()) });
+    return true;
+  }
+
   if (req.method === 'POST' && p === '/api/admin/ingest/restart') {
     const result = await ingest.hardRestart();
     await writeAudit({

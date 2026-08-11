@@ -599,6 +599,73 @@ export async function stop() {
 }
 
 /**
+ * Shared kill sweep for Hard Stop / Hard Restart: ingest CLI, parse workers,
+ * CloakBrowser profile holders, Cloak Xvfb. Leaves desired=false.
+ */
+async function hardKillSweep(c, label) {
+  state.holdSpawn = true;
+  await writeDesired(c, { enabled: false });
+  state.nextSpawnAllowedAt = Date.now() + 30_000;
+
+  const oldPid = await readPid(c.lockPath);
+  const killed = await killAllIngestRelated(c);
+  await appendIngestLog(
+    c,
+    `${label}: killed ${killed.length} pid(s)` +
+      (killed.length ? ` [${killed.slice(0, 20).join(',')}]` : '')
+  );
+
+  await writeStatus(c.statusPath, {
+    ...emptyStatus(),
+    running: false,
+    pid: null,
+    current: null,
+    stoppedAt: new Date().toISOString(),
+    lastError: null
+  }).catch(() => {});
+
+  // CloakBrowser Pro seats and chrome grandchildren need a beat to drop.
+  await new Promise((resolve) => setTimeout(resolve, 3_000));
+
+  const again = await killAllIngestRelated(c);
+  if (again.length) {
+    await appendIngestLog(c, `${label}: second sweep killed ${again.length} pid(s)`);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+  }
+
+  state.failures = 0;
+  state.nextSpawnAllowedAt = 0;
+  state.lastSpawnAt = 0;
+
+  return {
+    oldPid: oldPid || null,
+    killedPids: [...new Set([...killed, ...again])]
+  };
+}
+
+/**
+ * Full kill sweep and leave Off. Use when Off alone leaves chrome/Xvfb/parse
+ * workers alive or the switch looks stuck on Stopping.
+ */
+export async function hardStop() {
+  const c = cfg();
+  await appendIngestLog(c, 'hard stop requested');
+  try {
+    const { oldPid, killedPids } = await hardKillSweep(c, 'hard stop');
+    await writeDesired(c, { enabled: false });
+    await appendIngestLog(c, 'hard stop done; switch Off');
+    return {
+      stopped: true,
+      enabled: false,
+      killedPid: oldPid,
+      killedPids
+    };
+  } finally {
+    state.holdSpawn = false;
+  }
+}
+
+/**
  * Kill every ingest/CloakBrowser/Xvfb/probe process, clear profile locks, wait
  * for license seats, then start clean. Use when session-limit or
  * "profile already in use" errors leave the host wedged.
@@ -607,40 +674,8 @@ export async function hardRestart(options = {}) {
   const c = cfg();
   await appendIngestLog(c, 'hard restart requested');
 
-  // Hold the supervisor off while we kill and settle. Writing enabled=true
-  // early used to let supervise() spawn a second child mid-wait; a late
-  // onChildExit from the killed pid used to clear the new lock too.
-  state.holdSpawn = true;
-  await writeDesired(c, { enabled: false });
-  state.nextSpawnAllowedAt = Date.now() + 30_000;
-
   try {
-    const oldPid = await readPid(c.lockPath);
-    const killed = await killAllIngestRelated(c);
-    await appendIngestLog(
-      c,
-      `hard reset: killed ${killed.length} pid(s)` +
-        (killed.length ? ` [${killed.slice(0, 20).join(',')}]` : '')
-    );
-
-    await writeStatus(c.statusPath, {
-      ...emptyStatus(),
-      running: false,
-      pid: null,
-      current: null,
-      stoppedAt: new Date().toISOString(),
-      lastError: null
-    }).catch(() => {});
-
-    // CloakBrowser Pro seats and chrome grandchildren need a beat to drop.
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
-
-    // Second sweep: anything that respawned or ignored the first SIGKILL.
-    const again = await killAllIngestRelated(c);
-    if (again.length) {
-      await appendIngestLog(c, `hard reset: second sweep killed ${again.length} pid(s)`);
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
-    }
+    const { oldPid, killedPids } = await hardKillSweep(c, 'hard reset');
 
     state.failures = 0;
     state.nextSpawnAllowedAt = 0;
@@ -660,8 +695,8 @@ export async function hardRestart(options = {}) {
       restarted: true,
       pid,
       enabled: true,
-      killedPid: oldPid || null,
-      killedPids: [...new Set([...killed, ...again])]
+      killedPid: oldPid,
+      killedPids
     };
   } finally {
     state.holdSpawn = false;
