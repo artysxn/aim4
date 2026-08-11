@@ -504,9 +504,47 @@ async function pidsMatching(pattern) {
 }
 
 /**
+ * pgrep -f patterns that identify our CloakBrowser chrome / ingest helpers.
+ * Pro seats track live chrome binaries, not profile locks — orphans often have
+ * the cache path in argv but not "cloakbrowser-profile".
+ */
+function cloakKillPatterns(c) {
+  const cloakDisplay = process.env.AIM4_CLOAK_XVFB_DISPLAY || '100';
+  const patterns = [
+    'ingest/hltv/cli\\.js',
+    'ingest/hltv/ingestParseWorker\\.js',
+    'ingest/hltv/probeParseWorker\\.js',
+    'cloakbrowser-profile',
+    'cloakbrowser-cache',
+    `Xvfb :${cloakDisplay}`
+  ];
+  // Absolute cache dir (escaped) so we catch chrome even if cwd differs.
+  const cacheDir = c.cloakBrowserCacheDir || '';
+  if (cacheDir) {
+    const esc = String(cacheDir).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    patterns.push(esc);
+  }
+  // Licensed Pro chrome binary name from CloakBrowser packages.
+  patterns.push('chromium-[0-9.]+-pro/chrome');
+  return patterns;
+}
+
+/** Live PIDs that still look like our CloakBrowser / ingest stack. */
+async function remainingCloakPids(c) {
+  const found = new Set();
+  for (const pid of await profileLockPids(c.cloakProfileDir)) {
+    if (alive(pid)) found.add(pid);
+  }
+  for (const pattern of cloakKillPatterns(c)) {
+    for (const pid of await pidsMatching(pattern)) found.add(pid);
+  }
+  return [...found];
+}
+
+/**
  * Kill every process that can hold a CloakBrowser license seat or profile lock:
- * ingest CLI, probe parse workers, Chromium using our profile dir, and Cloak Xvfb
- * (:100). Never kill the API server's xvfb-run display (:99).
+ * ingest CLI, probe parse workers, Chromium using our profile/cache dir, and
+ * Cloak Xvfb (:100). Never kill the API server's xvfb-run display (:99).
  */
 async function killAllIngestRelated(c) {
   const killed = new Set();
@@ -536,14 +574,7 @@ async function killAllIngestRelated(c) {
   }
 
   // Narrow patterns only: never pkill bare "chromium" / "node" / Xvfb :99.
-  const patterns = [
-    'ingest/hltv/cli\\.js',
-    'ingest/hltv/ingestParseWorker\\.js',
-    'ingest/hltv/probeParseWorker\\.js',
-    'cloakbrowser-profile',
-    `Xvfb :${cloakDisplay}`
-  ];
-  for (const pattern of patterns) {
+  for (const pattern of cloakKillPatterns(c)) {
     const matches = await pidsMatching(pattern);
     for (const pid of matches) {
       // CLI is a session leader; use group kill. Browser/Xvfb: tree kill.
@@ -563,12 +594,54 @@ async function killAllIngestRelated(c) {
 }
 
 /**
- * Turn it off. Writes desired=false first, then SIGKILLs the child so parse /
- * CloakBrowser cannot keep running while the UI says Off.
+ * Keep sweeping until no CloakBrowser-related PIDs remain (or timeout).
+ * Pro license seats drop only after the chrome process is actually gone.
+ */
+async function waitUntilCloakClear(c, label, maxMs = 20_000) {
+  const started = Date.now();
+  let pass = 0;
+  while (Date.now() - started < maxMs) {
+    const left = await remainingCloakPids(c);
+    if (!left.length) {
+      if (pass > 0) {
+        await appendIngestLog(
+          c,
+          `${label}: cloak clear after ${Math.round((Date.now() - started) / 1000)}s`
+        );
+      }
+      return true;
+    }
+    pass++;
+    await appendIngestLog(
+      c,
+      `${label}: waiting for ${left.length} cloak pid(s) to die [${left.slice(0, 12).join(',')}]`
+    );
+    for (const pid of left) {
+      await killProcessTree(pid);
+      killPid(pid);
+    }
+    await clearProfileLocks(c.cloakProfileDir);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  const leftover = await remainingCloakPids(c);
+  if (leftover.length) {
+    await appendIngestLog(
+      c,
+      `${label}: cloak still alive after ${Math.round(maxMs / 1000)}s: ${leftover.join(',')}`
+    );
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Turn it off. Writes desired=false first, then kills the ingest CLI and any
+ * orphan CloakBrowser chrome/Xvfb that can hold a Pro license seat.
  */
 export async function stop() {
   const c = cfg();
   await writeDesired(c, { enabled: false });
+  state.holdSpawn = true;
 
   const pid = await readPid(c.lockPath);
   const status = await readStatus(c.statusPath).catch(() => emptyStatus());
@@ -581,31 +654,41 @@ export async function stop() {
     lastError: null
   }).catch(() => {});
 
-  if (!pid || !alive(pid)) {
-    await fsp.rm(c.lockPath, { force: true }).catch(() => {});
-    await appendIngestLog(c, 'stop requested; not running');
-    return { stopped: false, reason: 'not running', enabled: false };
+  try {
+    await appendIngestLog(
+      c,
+      pid && alive(pid)
+        ? `stop requested; full cloak sweep (ingest pid=${pid})`
+        : 'stop requested; full cloak sweep (ingest not running)'
+    );
+    const killed = await killAllIngestRelated(c);
+    await waitUntilCloakClear(c, 'stop', 12_000);
+    await appendIngestLog(
+      c,
+      `stop done; killed ${killed.length} pid(s)` +
+        (killed.length ? ` [${killed.slice(0, 20).join(',')}]` : '')
+    );
+    return {
+      stopped: Boolean(pid) || killed.length > 0,
+      pid: pid || null,
+      enabled: false,
+      killedPids: killed,
+      note: 'killed'
+    };
+  } finally {
+    state.holdSpawn = false;
   }
-
-  await appendIngestLog(c, `stop requested; SIGKILL pid=${pid}`);
-  killIngestPid(pid);
-  await killProcessTree(pid);
-  await fsp.rm(c.lockPath, { force: true }).catch(() => {});
-  // Second pass in case a grandchild survived the first signal.
-  setTimeout(() => {
-    if (alive(pid)) killIngestPid(pid);
-  }, 500).unref?.();
-  return { stopped: true, pid, enabled: false, note: 'killed' };
 }
 
 /**
  * Shared kill sweep for Hard Stop / Hard Restart: ingest CLI, parse workers,
- * CloakBrowser profile holders, Cloak Xvfb. Leaves desired=false.
+ * CloakBrowser chrome (profile + cache), Cloak Xvfb. Leaves desired=false.
+ * Waits until no matching PIDs remain so Pro seats can drop before respawn.
  */
 async function hardKillSweep(c, label) {
   state.holdSpawn = true;
   await writeDesired(c, { enabled: false });
-  state.nextSpawnAllowedAt = Date.now() + 30_000;
+  state.nextSpawnAllowedAt = Date.now() + 45_000;
 
   const oldPid = await readPid(c.lockPath);
   const killed = await killAllIngestRelated(c);
@@ -624,14 +707,15 @@ async function hardKillSweep(c, label) {
     lastError: null
   }).catch(() => {});
 
-  // CloakBrowser Pro seats and chrome grandchildren need a beat to drop.
-  await new Promise((resolve) => setTimeout(resolve, 3_000));
-
+  // First beat, then keep sweeping until chrome is gone (Pro seat tracking).
+  await new Promise((resolve) => setTimeout(resolve, 2_000));
   const again = await killAllIngestRelated(c);
   if (again.length) {
     await appendIngestLog(c, `${label}: second sweep killed ${again.length} pid(s)`);
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
   }
+  await waitUntilCloakClear(c, label, 20_000);
+  // Extra settle for remote Pro license accounting after SIGKILL.
+  await new Promise((resolve) => setTimeout(resolve, 3_000));
 
   state.failures = 0;
   state.nextSpawnAllowedAt = 0;
@@ -713,12 +797,18 @@ export async function supervise() {
   const c = cfg();
   const desired = await readDesired(c);
   if (!desired.enabled) {
-    // Belt-and-braces: a stray child must not keep ingesting after Off.
+    // Belt-and-braces: while Off, also reap orphan CloakBrowser chrome that
+    // still holds a Pro seat after the CLI exited uncleanly.
     const pid = await readPid(c.lockPath);
-    if (pid && alive(pid)) {
-      await appendIngestLog(c, `supervisor killing stray pid=${pid} (switch off)`);
-      killIngestPid(pid);
-      await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+    const leftovers = await remainingCloakPids(c);
+    if ((pid && alive(pid)) || leftovers.length) {
+      await appendIngestLog(
+        c,
+        `supervisor Off sweep` +
+          (pid && alive(pid) ? ` ingest=${pid}` : '') +
+          (leftovers.length ? ` cloak=[${leftovers.slice(0, 12).join(',')}]` : '')
+      );
+      await killAllIngestRelated(c);
       return { action: 'killed-stray', enabled: false };
     }
     return { action: 'none', enabled: false };
