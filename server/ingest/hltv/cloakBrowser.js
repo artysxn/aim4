@@ -15,24 +15,17 @@ import { pipeline } from 'node:stream/promises';
 import { ensureBinary, launchContext, launchPersistentContext } from 'cloakbrowser';
 import {
   applyProxySettings,
-  blacklistProxy,
-  CHALLENGE_BLACKLIST_MS,
   loadProxyPool,
   markProxyFailed,
   readWorkingProxies,
   recordWorkingProxy,
-  redactProxy,
-  sortBySpeed
+  redactProxy
 } from './proxyPool.js';
 import { looksLikeMissingPage, pageTitle } from './classify.js';
 
 export { parseProxyLines, loadProxyPool } from './proxyPool.js';
 
-// Navigation is only "did the server answer at all". A dead proxy or a hung
-// edge cannot be fixed by waiting, so it is deliberately much shorter than the
-// download-start budget below: sitting on "opening page" for two minutes is
-// how one bad exit IP used to eat the whole attempt.
-const DEFAULT_NAVIGATION_TIMEOUT_MS = 30_000;
+const DEFAULT_NAVIGATION_TIMEOUT_MS = 60_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
 const DEFAULT_DOWNLOAD_DEADLINE_MS = 30 * 60_000;
 const DEFAULT_STALL_MS = 60_000;
@@ -47,42 +40,6 @@ const bool = (value, fallback) => {
 
 const downloadsPathFor = (cfg) =>
   cfg.cloakDownloadsDir || (cfg.workDir ? path.join(cfg.workDir, '.cloakbrowser-downloads') : '');
-
-const mbps = (bps) => Math.round(((Number(bps) || 0) * 8) / 1e5) / 10;
-
-/**
- * Throughput from (time, bytes) samples, the same arithmetic you would do by
- * hand off the progress log: 28s/200MB then 30s/240MB is 20 MB/s.
- *
- * Rate is taken from first byte to last byte, so the wait for the server to
- * start sending is not charged to the proxy's speed.
- */
-function makeRateMeter() {
-  let firstAt = 0;
-  let firstBytes = 0;
-  let lastAt = 0;
-  let lastBytes = 0;
-  return {
-    sample(bytes) {
-      const n = Number(bytes) || 0;
-      if (n <= 0) return;
-      const now = Date.now();
-      if (!firstAt) {
-        firstAt = now;
-        firstBytes = n;
-      }
-      lastAt = now;
-      lastBytes = Math.max(lastBytes, n);
-    },
-    /** @returns {{ bytes: number, ms: number, bps: number }} */
-    result() {
-      const bytes = Math.max(0, lastBytes - firstBytes);
-      const ms = Math.max(0, lastAt - firstAt);
-      const bps = bytes > 0 && ms >= 1000 ? Math.round(bytes / (ms / 1000)) : 0;
-      return { bytes: lastBytes, ms, bps };
-    }
-  };
-}
 
 const profilePathFor = (cfg) =>
   cfg.cloakProfileDir
@@ -216,14 +173,6 @@ const isChallengeHtml = (html) =>
   /cdn-cgi\/challenge-platform|<title>\s*Just a moment|_cf_chl_opt|verify you are human/i.test(
     html || ''
   );
-
-function cloudflareChallengeError() {
-  const err = new Error('CloakBrowser received a Cloudflare challenge page');
-  err.blocked = true;
-  err.cloudflareChallenge = true;
-  err.proxyRetryable = true;
-  return err;
-}
 
 async function interactWithManagedChallenge(page) {
   await page.mouse
@@ -382,33 +331,19 @@ export function createCloakSession(cfg = {}) {
   async function ensurePool() {
     if (!poolPromise) {
       poolPromise = (async () => {
+        const working = await readWorkingProxies(cfg);
+        preferredProxyCount = working.length;
         const pool = await loadProxyPool(cfg);
-        // loadProxyPool puts working proxies first, fastest measured first.
-        // Count how many of those survived the blacklist filter so pickProxy
-        // drains the proven-fast head before touching unverified cache entries.
-        const working = sortBySpeed(await readWorkingProxies(cfg));
-        const inPool = new Set(pool);
-        const preferred = working.filter((e) => inPool.has(e.url));
-        preferredProxyCount = preferred.length;
         if (pool.length) {
-          const fastest = preferred.find((e) => Number(e.bps) > 0);
           log(
             `Proxy pool: ${pool.length} endpoint(s)` +
-              (preferredProxyCount ? `, ${preferredProxyCount} preferred` : '') +
-              (fastest
-                ? `, fastest ${redactProxy(fastest.url)} at ${mbps(fastest.bps)} Mbps`
-                : '')
+              (preferredProxyCount ? `, ${preferredProxyCount} preferred` : '')
           );
         } else log('Proxy pool: empty (direct exit IP)');
         return pool;
       })();
     }
     return poolPromise;
-  }
-
-  /** Drop the cached pool so the next attempt re-reads speeds and the bench. */
-  function forgetPool() {
-    poolPromise = null;
   }
 
   async function resetContext() {
@@ -547,14 +482,7 @@ export function createCloakSession(cfg = {}) {
         });
         if (proxy) {
           if (!random) proxyCursor = Math.max(0, pool.indexOf(proxy));
-          // transfer carries bytes + ms, so the pool learns which exits are
-          // actually fast rather than merely reachable.
-          const transfer = result?.transfer || null;
-          await recordWorkingProxy(cfg, { url: proxy, transfer }).catch(() => {});
-          if (transfer?.bps) {
-            log(`Proxy ${redactProxy(proxy)} delivered ${mbps(transfer.bps)} Mbps`);
-            forgetPool();
-          }
+          await recordWorkingProxy(cfg, { url: proxy }).catch(() => {});
         }
         return result;
       } catch (err) {
@@ -572,19 +500,7 @@ export function createCloakSession(cfg = {}) {
           i -= 1;
           continue;
         }
-        // A challenge is a decision about the exit IP, not a transient fault.
-        // Bench the address for a day so neither this run nor the next one
-        // spends attempts on it.
-        if (proxy && err?.cloudflareChallenge === true) {
-          await blacklistProxy(cfg, proxy, { reason: 'challenge' }).catch(() => {});
-          forgetPool();
-          log(
-            `Proxy ${redactProxy(proxy)} hit a Cloudflare challenge; ` +
-              `blacklisted for ${Math.round(CHALLENGE_BLACKLIST_MS / 3_600_000)}h`
-          );
-        } else if (proxy) {
-          await markProxyFailed(cfg, proxy).catch(() => {});
-        }
+        if (proxy) await markProxyFailed(cfg, proxy).catch(() => {});
         const canRetry = isProxyRetryable(err) && i < maxAttempts - 1;
         if (!canRetry) {
           // Leave blocked/proxyRetryable for the pipeline to back off on the
@@ -609,10 +525,7 @@ export function createCloakSession(cfg = {}) {
       await cfg.validateUrl?.(url);
       const ctx = await context();
       const page = await ctx.newPage();
-      const timeout =
-        Number(opts.timeoutMs) ||
-        Number(cfg.cloakNavigationTimeoutMs) ||
-        DEFAULT_NAVIGATION_TIMEOUT_MS;
+      const timeout = Number(opts.timeoutMs) || DEFAULT_NAVIGATION_TIMEOUT_MS;
       const onAbort = () => void page.close().catch(() => {});
       opts.signal?.addEventListener('abort', onAbort, { once: true });
       try {
@@ -631,7 +544,10 @@ export function createCloakSession(cfg = {}) {
         if (opts.signal?.aborted) throw abortError(opts.signal);
         const text = await page.content();
         if (isChallengeHtml(text)) {
-          throw cloudflareChallengeError();
+          const err = new Error('CloakBrowser received a Cloudflare challenge page');
+          err.blocked = true;
+          err.proxyRetryable = true;
+          throw err;
         }
         return {
           text,
@@ -662,7 +578,6 @@ export function createCloakSession(cfg = {}) {
    *     received: number,
    *     total: number,
    *     phase?: string,
-   *     bps?: number,
    *     elapsedMs?: number
    *   }) => void
    * }} [opts]
@@ -673,15 +588,6 @@ export function createCloakSession(cfg = {}) {
     const ctx = await context();
     const page = await ctx.newPage();
     const timeout = Number(opts.timeoutMs) || DEFAULT_DOWNLOAD_TIMEOUT_MS;
-    // Reaching the page and being handed a file are separate waits. `timeout`
-    // is the whole download-start budget; navigation gets a much smaller slice
-    // so an unresponsive edge fails fast and the next proxy gets a turn.
-    const navTimeout = Math.min(
-      timeout,
-      Number(opts.navigationTimeoutMs) ||
-        Number(cfg.cloakNavigationTimeoutMs) ||
-        DEFAULT_NAVIGATION_TIMEOUT_MS
-    );
     const deadlineMs =
       Number(opts.deadlineMs ?? cfg.cloakDownloadDeadlineMs) || DEFAULT_DOWNLOAD_DEADLINE_MS;
     const stallMs = Number(opts.stallMs) || DEFAULT_STALL_MS;
@@ -692,9 +598,7 @@ export function createCloakSession(cfg = {}) {
     let target = null;
     let completed = false;
     let deadlineTimer = null;
-    let navigationTimer = null;
     let progressTimer = null;
-    let downloadSettled = false;
     const onAbort = () => {
       const err = abortError(opts.signal);
       rejectPendingDownload?.(err);
@@ -730,25 +634,15 @@ export function createCloakSession(cfg = {}) {
       let downloadStarted = false;
       const attached = new Set();
       const downloadPromise = new Promise((resolve, reject) => {
-        rejectPendingDownload = (err) => {
-          if (downloadSettled) return;
-          downloadSettled = true;
-          clearTimeout(downloadTimer);
-          reject(err);
-        };
+        rejectPendingDownload = reject;
         settleDownload = (item) => {
-          if (downloadSettled) return;
-          downloadSettled = true;
           downloadStarted = true;
           clearTimeout(downloadTimer);
           rejectPendingDownload = null;
           resolve(item);
         };
         downloadTimer = setTimeout(
-          () =>
-            rejectPendingDownload?.(
-              new Error(`No browser download started within ${Math.round(timeout / 1000)}s`)
-            ),
+          () => reject(new Error(`No browser download started within ${Math.round(timeout / 1000)}s`)),
           timeout
         );
         downloadTimer.unref?.();
@@ -781,23 +675,8 @@ export function createCloakSession(cfg = {}) {
       progressTimer = setInterval(reportWaiting, 1000);
       progressTimer.unref?.();
 
-      // Playwright's timeout is not sufficient on its own: a failed goto can
-      // leave Chromium loading redirects while pageWatch waits forever. This
-      // deadline settles the whole attempt, closes the page, and gives the
-      // next proxy a turn no later than navTimeout.
-      navigationTimer = setTimeout(() => {
-        if (downloadStarted || downloadSettled) return;
-        const dead = new Error(
-          `No page response from ${url} within ${Math.round(navTimeout / 1000)}s`
-        );
-        dead.proxyRetryable = true;
-        rejectPendingDownload?.(dead);
-        void page.close().catch(() => {});
-      }, navTimeout);
-      navigationTimer.unref?.();
-
       const navigationPromise = page
-        .goto(url, { waitUntil: 'domcontentloaded', timeout: navTimeout })
+        .goto(url, { waitUntil: 'domcontentloaded', timeout })
         .catch((err) => {
           // Chromium aborts navigation when the response becomes a download.
           // The download event is the authoritative result in that case.
@@ -807,9 +686,6 @@ export function createCloakSession(cfg = {}) {
             reportWaiting();
             return null;
           }
-          // Chromium can report a network error while a redirect/challenge is
-          // still rendering. pageWatch gets the remainder of the 30s window
-          // to classify it; navigationTimer is the hard stop.
           throw err;
         });
 
@@ -819,9 +695,9 @@ export function createCloakSession(cfg = {}) {
         const rounds = Number(challengeRounds) || 30;
         let challengeAttempts = 0;
         let htmlStableSince = 0;
-        while (!downloadSettled && !opts.signal?.aborted) {
+        while (!downloadStarted && !opts.signal?.aborted) {
           await new Promise((resolve) => setTimeout(resolve, 1500));
-          if (downloadSettled) return;
+          if (downloadStarted) return;
           let html = '';
           let title = '';
           let href = '';
@@ -849,7 +725,10 @@ export function createCloakSession(cfg = {}) {
             // Probe succeeds by moving on; sitting here for the full download
             // timeout on one dead proxy is why ingest looked "stuck".
             log(`Challenge uncleared after ${rounds} rounds; trying next proxy`);
-            rejectPendingDownload?.(cloudflareChallengeError());
+            const err = new Error('CloakBrowser received a Cloudflare challenge page');
+            err.blocked = true;
+            err.proxyRetryable = true;
+            rejectPendingDownload?.(err);
             return;
           }
           if (looksLikeMissingPage(html) || /\/404\b/i.test(href)) {
@@ -915,13 +794,12 @@ export function createCloakSession(cfg = {}) {
       clearInterval(progressTimer);
       progressTimer = null;
       clearTimeout(downloadTimer);
-      clearTimeout(navigationTimer);
-      navigationTimer = null;
       rejectPendingDownload = null;
       for (const candidate of attached) candidate.off('download', settleDownload);
       await pageWatch.catch(() => {});
       if (opts.signal?.aborted) throw abortError(opts.signal);
       if (downloadResult.status === 'rejected') {
+        if (navigationResult.status === 'rejected') throw navigationResult.reason;
         const html = await page.content().catch(() => '');
         if (downloadResult.reason?.missing || looksLikeMissingPage(html)) {
           const err = new Error(
@@ -932,13 +810,11 @@ export function createCloakSession(cfg = {}) {
           throw err;
         }
         if (isChallengeHtml(html) || /challenge/i.test(String(downloadResult.reason?.message || ''))) {
-          throw cloudflareChallengeError();
+          const err = new Error('CloakBrowser received a Cloudflare challenge page');
+          err.blocked = true;
+          err.proxyRetryable = true;
+          throw err;
         }
-        // A page watcher can positively identify Cloudflare after goto has
-        // already failed with a generic network error. Preserve that stronger
-        // classification so only actual challenges enter the 24h blacklist.
-        if (downloadResult.reason?.blocked) throw downloadResult.reason;
-        if (navigationResult.status === 'rejected') throw navigationResult.reason;
         const response = navigationResult.value;
         const status = response?.status?.() || navStatus;
         if (status && (status < 200 || status >= 400) && !settledHtml) {
@@ -964,7 +840,6 @@ export function createCloakSession(cfg = {}) {
       // its managed download. Poll that managed directory in the meantime so
       // the admin UI still receives live bytes instead of appearing frozen.
       const progressStartedAt = Date.now();
-      const rate = makeRateMeter();
       let progressFile = null;
       let progressBusy = false;
       let browserReceived = 0;
@@ -983,12 +858,10 @@ export function createCloakSession(cfg = {}) {
             progressFile = current?.name || null;
           }
           browserReceived = Math.max(browserReceived, current?.size || 0);
-          rate.sample(browserReceived);
           opts.onProgress?.({
             received: browserReceived,
             total: declaredBytes,
             phase: 'browser',
-            bps: rate.result().bps,
             elapsedMs: Date.now() - progressStartedAt
           });
         } finally {
@@ -1024,12 +897,10 @@ export function createCloakSession(cfg = {}) {
           void item.cancel().catch(() => {});
           return;
         }
-        rate.sample(Math.max(browserReceived, received));
         opts.onProgress?.({
           received: Math.max(browserReceived, received),
           total: declaredBytes,
           phase: 'copy',
-          bps: rate.result().bps,
           elapsedMs: Date.now() - progressStartedAt
         });
       });
@@ -1045,20 +916,14 @@ export function createCloakSession(cfg = {}) {
       const stat = await fsp.stat(target);
       if (!stat.size) throw new Error('Downloaded file is empty');
       completed = true;
-      rate.sample(stat.size);
-      const transfer = { ...rate.result(), bytes: stat.size };
-      if (transfer.bps) log(`Transfer ${mbps(transfer.bps)} Mbps for ${filename}`);
       return {
         path: target,
         filename,
         bytes: stat.size,
-        finalUrl: item.url(),
-        /** Read by withProxyFailover to rank this exit against the others. */
-        transfer
+        finalUrl: item.url()
       };
     } finally {
       if (deadlineTimer) clearTimeout(deadlineTimer);
-      if (navigationTimer) clearTimeout(navigationTimer);
       if (progressTimer) clearInterval(progressTimer);
       opts.signal?.removeEventListener('abort', onAbort);
       await activeDownload?.delete().catch(() => {});

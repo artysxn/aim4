@@ -25,16 +25,6 @@ const settingsPath = (cfg) => path.join(cfg.stateDir, 'proxy-settings.json');
 const workingPath = (cfg) => path.join(cfg.stateDir, 'working-proxies.json');
 const cachePath = (cfg) => path.join(cfg.stateDir, 'proxy-cache.json');
 const refreshPath = (cfg) => path.join(cfg.stateDir, 'proxy-refresh.json');
-const blacklistPath = (cfg) => path.join(cfg.stateDir, 'proxy-blacklist.json');
-
-/** A proxy that served a Cloudflare challenge is useless for a whole day. */
-export const CHALLENGE_BLACKLIST_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Weight of the newest speed sample. Low enough that one slow burst does not
- * demote a fast exit, high enough to react within a few downloads.
- */
-const SPEED_EWMA_ALPHA = 0.4;
 
 async function atomicWrite(file, data) {
   await fsp.mkdir(path.dirname(file), { recursive: true });
@@ -133,44 +123,18 @@ async function writeWorkingProxies(cfg, list) {
   await atomicWrite(workingPath(cfg), list);
 }
 
-/**
- * Bytes per second for one completed transfer.
- * Ignores samples too small or too short to mean anything.
- *
- * @param {{ bytes?: number, ms?: number }} [transfer]
- * @returns {number} 0 when the sample is not usable
- */
-export function bpsFromTransfer(transfer) {
-  const bytes = Number(transfer?.bytes) || 0;
-  const ms = Number(transfer?.ms) || 0;
-  if (bytes < 256 * 1024 || ms < 1000) return 0;
-  return Math.round(bytes / (ms / 1000));
-}
-
-export async function recordWorkingProxy(
-  cfg,
-  { url, exitIp = '', country = '', transfer = null } = {}
-) {
+export async function recordWorkingProxy(cfg, { url, exitIp = '', country = '' } = {}) {
   if (!url || !isSupportedProxy(url)) return;
   const list = await readWorkingProxies(cfg);
   const now = new Date().toISOString();
-  const sample = bpsFromTransfer(transfer);
   const idx = list.findIndex((e) => e.url === url);
   if (idx >= 0) {
-    const prev = list[idx];
-    const prevBps = Number(prev.bps) || 0;
     list[idx] = {
-      ...prev,
-      exitIp: exitIp || prev.exitIp || '',
-      country: country || prev.country || '',
+      ...list[idx],
+      exitIp: exitIp || list[idx].exitIp || '',
+      country: country || list[idx].country || '',
       lastOkAt: now,
-      fails: 0,
-      // Exponential moving average, so ranking follows recent reality rather
-      // than one lucky first download.
-      bps: sample ? Math.round(prevBps ? prevBps * (1 - SPEED_EWMA_ALPHA) + sample * SPEED_EWMA_ALPHA : sample) : prevBps,
-      lastBps: sample || prev.lastBps || 0,
-      speedSamples: sample ? (Number(prev.speedSamples) || 0) + 1 : Number(prev.speedSamples) || 0,
-      lastSpeedAt: sample ? now : prev.lastSpeedAt || null
+      fails: 0
     };
   } else {
     list.unshift({
@@ -179,71 +143,11 @@ export async function recordWorkingProxy(
       country: country || '',
       verifiedAt: now,
       lastOkAt: now,
-      fails: 0,
-      bps: sample,
-      lastBps: sample,
-      speedSamples: sample ? 1 : 0,
-      lastSpeedAt: sample ? now : null
+      fails: 0
     });
   }
   // Cap stored winners so the file stays small.
-  await writeWorkingProxies(cfg, sortBySpeed(list).slice(0, 200));
-}
-
-/** Measured fastest first; unmeasured-but-working next, most recent first. */
-export function sortBySpeed(list) {
-  return [...(list || [])].sort((a, b) => {
-    const ab = Number(a.bps) || 0;
-    const bb = Number(b.bps) || 0;
-    if (ab !== bb) return bb - ab;
-    return String(b.lastOkAt || '').localeCompare(String(a.lastOkAt || ''));
-  });
-}
-
-/** Expired entries are dropped on read, so the file self-heals. */
-export async function readProxyBlacklist(cfg) {
-  let raw = {};
-  try {
-    raw = JSON.parse(await fsp.readFile(blacklistPath(cfg), 'utf8')) || {};
-  } catch {
-    return {};
-  }
-  const now = Date.now();
-  const live = {};
-  for (const [url, entry] of Object.entries(raw)) {
-    const until = Date.parse(entry?.until || '');
-    if (Number.isFinite(until) && until > now) live[url] = entry;
-  }
-  return live;
-}
-
-/**
- * Bench a proxy for `ms` (default 24h). Used when an exit gets a Cloudflare
- * challenge: the block is on the IP, so retrying it sooner just wastes an
- * attempt and teaches Cloudflare the address is automated.
- */
-export async function blacklistProxy(cfg, url, { reason = 'challenge', ms = CHALLENGE_BLACKLIST_MS } = {}) {
-  if (!url) return null;
-  const live = await readProxyBlacklist(cfg);
-  const prev = live[url];
-  const entry = {
-    reason,
-    hits: (Number(prev?.hits) || 0) + 1,
-    blockedAt: new Date().toISOString(),
-    until: new Date(Date.now() + ms).toISOString()
-  };
-  live[url] = entry;
-  await atomicWrite(blacklistPath(cfg), live);
-  // A benched proxy must not stay in the preferred list.
-  const working = await readWorkingProxies(cfg);
-  const next = working.filter((e) => e.url !== url);
-  if (next.length !== working.length) await writeWorkingProxies(cfg, next);
-  return entry;
-}
-
-export async function clearProxyBlacklist(cfg) {
-  await atomicWrite(blacklistPath(cfg), {});
-  return { cleared: true };
+  await writeWorkingProxies(cfg, list.slice(0, 200));
 }
 
 export async function markProxyFailed(cfg, url) {
@@ -305,7 +209,7 @@ export async function applyProxySettings(cfg) {
  */
 export async function loadProxyPool(cfg = {}) {
   const chunks = [];
-  const working = sortBySpeed(await readWorkingProxies(cfg));
+  const working = await readWorkingProxies(cfg);
   chunks.push(...working.map((e) => e.url));
 
   const single = cfg.cloakProxy || process.env.AIM4_CLOAK_PROXY || '';
@@ -322,8 +226,7 @@ export async function loadProxyPool(cfg = {}) {
     const text = await fsp.readFile(file, 'utf8').catch(() => '');
     if (text) chunks.push(...parseProxyLines(text));
   }
-  const benched = await readProxyBlacklist(cfg);
-  return parseProxyLines(chunks.join('\n')).filter((url) => !benched[url]);
+  return parseProxyLines(chunks.join('\n'));
 }
 
 export async function fetchRemoteProxies({ signal } = {}) {
@@ -476,12 +379,7 @@ export async function refreshProxyPool(cfg, { onLog, signal } = {}) {
     await writeCache(cfg, remote);
     log(`Cached ${remote.length} http/socks5 proxies`);
 
-    const benched = await readProxyBlacklist(cfg);
-    const eligible = remote.filter((entry) => !benched[entry.url]);
-    if (eligible.length !== remote.length) {
-      log(`Skipping ${remote.length - eligible.length} proxy(s) benched for challenges`);
-    }
-    const candidates = shuffle(eligible).slice(0, REFRESH_CANDIDATES);
+    const candidates = shuffle(remote).slice(0, REFRESH_CANDIDATES);
     log(`Verifying ${candidates.length} via ${VERIFY_URL}`);
     await writeRefreshState(cfg, {
       running: true,
@@ -530,16 +428,11 @@ export async function refreshProxyPool(cfg, { onLog, signal } = {}) {
     const byUrl = new Map(existing.map((e) => [e.url, e]));
     for (const w of winners) {
       const prev = byUrl.get(w.url);
-      // Keep measured speed across a re-verify: httpbin says "reachable", it
-      // does not say "fast", so a fresh verify must not erase real samples.
-      byUrl.set(
-        w.url,
-        prev
-          ? { ...prev, ...w, bps: prev.bps || 0, lastBps: prev.lastBps || 0, speedSamples: prev.speedSamples || 0, fails: 0 }
-          : w
-      );
+      byUrl.set(w.url, prev ? { ...prev, ...w, fails: 0 } : w);
     }
-    const merged = sortBySpeed([...byUrl.values()]);
+    const merged = [...byUrl.values()].sort((a, b) =>
+      String(b.lastOkAt || '').localeCompare(String(a.lastOkAt || ''))
+    );
     await writeWorkingProxies(cfg, merged.slice(0, 200));
 
     const done = {
@@ -571,22 +464,12 @@ export async function refreshProxyPool(cfg, { onLog, signal } = {}) {
 }
 
 export async function proxyStatus(cfg) {
-  const [settings, workingRaw, cache, refresh, benched] = await Promise.all([
+  const [settings, working, cache, refresh] = await Promise.all([
     readProxySettings(cfg),
     readWorkingProxies(cfg),
     readCache(cfg),
-    readRefreshState(cfg),
-    readProxyBlacklist(cfg)
+    readRefreshState(cfg)
   ]);
-  const working = sortBySpeed(workingRaw);
-  const blacklist = Object.entries(benched)
-    .sort((a, b) => String(a[1].until).localeCompare(String(b[1].until)))
-    .map(([url, entry]) => ({
-      host: redactProxy(url),
-      reason: entry.reason || 'challenge',
-      hits: entry.hits || 1,
-      until: entry.until
-    }));
   return {
     settings,
     workingCount: working.length,
@@ -594,16 +477,11 @@ export async function proxyStatus(cfg) {
       host: redactProxy(e.url),
       country: e.country || '',
       exitIp: e.exitIp || '',
-      lastOkAt: e.lastOkAt || e.verifiedAt || null,
-      bps: Number(e.bps) || 0,
-      mbps: Number(e.bps) ? Math.round(((e.bps * 8) / 1e6) * 10) / 10 : 0,
-      speedSamples: Number(e.speedSamples) || 0
+      lastOkAt: e.lastOkAt || e.verifiedAt || null
     })),
     cacheCount: cache.entries.length,
     cacheFetchedAt: cache.fetchedAt,
     refresh,
-    blacklistCount: blacklist.length,
-    blacklist: blacklist.slice(0, 40),
     source: PROXIES_JSON_URL,
     verifyUrl: VERIFY_URL
   };

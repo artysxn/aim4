@@ -18,11 +18,6 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { loadConfig } from './config.js';
 import { openLedger } from './ledger.js';
-import {
-  OWNER_HEARTBEAT_MS,
-  removeOwner,
-  writeOwnerHeartbeat
-} from './ownerLease.js';
 import { seekCursor } from './cursor.js';
 import { createPipeline } from './pipeline.js';
 import { createLocalSource } from './sources/local.js';
@@ -175,8 +170,7 @@ function logEvent(e, verbose) {
         phase,
         secs != null ? `${secs}s` : null,
         e.detail || null,
-        size || null,
-        e.bps ? `${Math.round((e.bps * 8) / 1e5) / 10} Mbps` : null
+        size || null
       ].filter(Boolean);
       console.log(`     ${bits.join(' · ')}`);
       break;
@@ -251,10 +245,6 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
   }
 
   let source = makeSource(cfg);
-  const ownerToken = process.env.AIM4_INGEST_OWNER_TOKEN || '';
-  let ownerTimer = null;
-  let keepAliveTimer = null;
-  let ownerBusy = false;
   try {
     if (cmd === 'check') {
       const checks = [];
@@ -371,53 +361,6 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
     process.on('SIGINT', onSignal);
     process.on('SIGTERM', onSignal);
 
-    // A Promise by itself does not keep Node alive. CloakBrowser can be
-    // awaiting an IPC operation while all of its handles are unref'ed, which
-    // previously made continuous workers exit cleanly with code 0 immediately
-    // after "context ready".
-    if (opts.continuous) {
-      keepAliveTimer = setInterval(() => {}, 60_000);
-    }
-
-    // The owner heartbeat is visible across container PID namespaces. It also
-    // lets a new API container turn off a worker in an old container during a
-    // rolling deploy, where process.kill(pid) cannot reach it.
-    const heartbeat = async () => {
-      if (!ownerToken || ownerBusy || stopping) return;
-      ownerBusy = true;
-      try {
-        if (!(await switchIsOn(cfg))) {
-          stopping = true;
-          console.log('\n[ingest] switch is Off in shared state; stopping this container');
-          pipe.requestStop();
-          await Promise.race([
-            source.close?.().catch(() => {}),
-            new Promise((resolve) => setTimeout(resolve, 2_000))
-          ]);
-          await removeOwner(cfg, ownerToken);
-          // Kill the detached worker group so Chromium and Xvfb cannot survive
-          // after a remote container changes the switch.
-          try {
-            process.kill(-process.pid, 'SIGKILL');
-          } catch {
-            process.kill(process.pid, 'SIGKILL');
-          }
-          return;
-        }
-        await writeOwnerHeartbeat(cfg, { token: ownerToken });
-      } finally {
-        ownerBusy = false;
-      }
-    };
-    if (ownerToken) {
-      await heartbeat();
-      ownerTimer = setInterval(() => {
-        void heartbeat().catch((err) => {
-          console.warn(`[ingest] owner heartbeat failed: ${err.message}`);
-        });
-      }, OWNER_HEARTBEAT_MS);
-    }
-
     // --limit N is expressed in matches; the loop works in batches / demo ids.
     const maxBatches = opts.limit ? Math.ceil(opts.limit / Math.max(1, cfg.batchSize)) : Infinity;
     const started = Date.now();
@@ -434,9 +377,6 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
         `remaining=${counts.remaining}`
     );
   } finally {
-    if (ownerTimer) clearInterval(ownerTimer);
-    if (keepAliveTimer) clearInterval(keepAliveTimer);
-    if (ownerToken) await removeOwner(cfg, ownerToken);
     await source.close?.().catch(() => {});
   }
 }
