@@ -491,7 +491,7 @@ export function createCloakSession(cfg = {}) {
   function isDeadProxyFailure(err) {
     if (!err || err.slow) return false;
     const msg = String(err.message || err);
-    return /ERR_SOCKS_CONNECTION_FAILED|ERR_SOCKET_NOT_CONNECTED|ERR_CONNECTION_CLOSED|ERR_CONNECTION_REFUSED|ERR_CONNECTION_RESET|ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED|ERR_CERT_|ERR_SSL_|Privacy error|Timeout \d+ms exceeded|net::ERR_TIMED_OUT|net::ERR_NAME_NOT_RESOLVED/i.test(
+    return /ERR_SOCKS_CONNECTION_FAILED|ERR_SOCKET_NOT_CONNECTED|ERR_CONNECTION_CLOSED|ERR_CONNECTION_REFUSED|ERR_CONNECTION_RESET|ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED|ERR_CERT_|ERR_SSL_|Privacy error|Proxy TLS\/privacy|Timeout \d+ms exceeded|net::ERR_TIMED_OUT|net::ERR_NAME_NOT_RESOLVED|Target page, context or browser has been closed/i.test(
       msg
     );
   }
@@ -795,7 +795,17 @@ export function createCloakSession(cfg = {}) {
       let downloadTimer = null;
       let settleDownload;
       let downloadStarted = false;
+      /** Stop pageWatch / challenge loops immediately (dead nav, CF give-up, etc.). */
+      let abandoned = false;
       const attached = new Set();
+      const abandonAttempt = (err) => {
+        if (abandoned) return;
+        abandoned = true;
+        clearTimeout(downloadTimer);
+        rejectPendingDownload?.(err);
+        // Unblock interactWithManagedChallenge / page.content waits.
+        void page.close().catch(() => {});
+      };
       const downloadPromise = new Promise((resolve, reject) => {
         rejectPendingDownload = reject;
         settleDownload = (item) => {
@@ -805,7 +815,10 @@ export function createCloakSession(cfg = {}) {
           resolve(item);
         };
         downloadTimer = setTimeout(
-          () => reject(new Error(`No browser download started within ${Math.round(timeout / 1000)}s`)),
+          () =>
+            abandonAttempt(
+              new Error(`No browser download started within ${Math.round(timeout / 1000)}s`)
+            ),
           timeout
         );
         downloadTimer.unref?.();
@@ -858,9 +871,9 @@ export function createCloakSession(cfg = {}) {
         const rounds = Number(challengeRounds) || 30;
         let challengeAttempts = 0;
         let htmlStableSince = 0;
-        while (!downloadStarted && !attemptOpts.signal?.aborted) {
+        while (!downloadStarted && !abandoned && !attemptOpts.signal?.aborted) {
           await new Promise((resolve) => setTimeout(resolve, 1500));
-          if (downloadStarted) return;
+          if (downloadStarted || abandoned) return;
           let html = '';
           let title = '';
           let href = '';
@@ -869,11 +882,13 @@ export function createCloakSession(cfg = {}) {
             title = pageTitle(html) || (await page.title().catch(() => ''));
             href = page.url();
           } catch {
+            if (abandoned) return;
             waitPhase = 'navigating';
             waitDetail = 'browser still loading';
             reportWaiting();
             continue;
           }
+          if (abandoned) return;
           settledHtml = Boolean(html);
           if (isChallengeHtml(html)) {
             waitPhase = 'challenge';
@@ -891,7 +906,7 @@ export function createCloakSession(cfg = {}) {
             const err = new Error('CloakBrowser received a Cloudflare challenge page');
             err.blocked = true;
             err.proxyRetryable = true;
-            rejectPendingDownload?.(err);
+            abandonAttempt(err);
             return;
           }
           if (looksLikeMissingPage(html) || /\/404\b/i.test(href)) {
@@ -900,7 +915,7 @@ export function createCloakSession(cfg = {}) {
             reportWaiting();
             const err = new Error(`HLTV page not found (${title || '404'})`);
             err.missing = true;
-            rejectPendingDownload?.(err);
+            abandonAttempt(err);
             return;
           }
           // HTML page loaded but no download: give redirects a short window,
@@ -927,7 +942,7 @@ export function createCloakSession(cfg = {}) {
               );
               err.proxyRetryable = true;
               if (privacyDead) err.message = `${err.message}; net::ERR_CERT_AUTHORITY_INVALID`;
-              rejectPendingDownload?.(err);
+              abandonAttempt(err);
               return;
             }
             continue;
@@ -937,12 +952,12 @@ export function createCloakSession(cfg = {}) {
           reportWaiting();
         }
       })().catch((err) => {
-        log(`Page watch ended: ${err?.message || err}`);
+        if (!abandoned) log(`Page watch ended: ${err?.message || err}`);
       });
 
       const challengeTask = navigationPromise
         .then(async (response) => {
-          if (!response) return;
+          if (!response || abandoned) return;
           navStatus = response.status?.() || 0;
           const initialHeaders = await response.allHeaders().catch(() => ({}));
           waitPhase = downloadStarted ? 'download' : 'waiting';
@@ -953,11 +968,12 @@ export function createCloakSession(cfg = {}) {
         })
         .catch((err) => {
           log(`Navigation error: ${err?.message || err}`);
-          // Do not sit on "navigating" until the 120s download timer after a
-          // dead SOCKS/timeout/cert failure. Fail this exit and rotate.
+          // Dead SOCKS/timeout/cert: stop pageWatch challenge loops immediately.
+          // Previously we rejected the download promise but still awaited pageWatch,
+          // which burned Challenge (1/3)… after ERR_TIMED_OUT.
           if (!downloadStarted && isDeadProxyFailure(err)) {
             err.proxyRetryable = true;
-            rejectPendingDownload?.(err);
+            abandonAttempt(err);
           }
         });
 
@@ -965,6 +981,7 @@ export function createCloakSession(cfg = {}) {
         downloadPromise,
         navigationPromise
       ]);
+      abandoned = true;
       page.off('popup', onPopup);
       page.off('response', onResponse);
       clearInterval(progressTimer);
@@ -972,9 +989,23 @@ export function createCloakSession(cfg = {}) {
       clearTimeout(downloadTimer);
       rejectPendingDownload = null;
       for (const candidate of attached) candidate.off('download', settleDownload);
-      await pageWatch.catch(() => {});
+      // Do not wait out remaining challenge sleeps; page close already interrupted.
+      void pageWatch.catch(() => {});
       if (attemptOpts.signal?.aborted) throw abortError(attemptOpts.signal);
       if (downloadResult.status === 'rejected') {
+        // Prefer explicit CF / missing from pageWatch over a racing nav timeout.
+        const downloadErr = downloadResult.reason;
+        if (downloadErr?.blocked || downloadErr?.missing || downloadErr?.slow) {
+          throw downloadErr;
+        }
+        if (downloadErr && isDeadProxyFailure(downloadErr)) {
+          downloadErr.proxyRetryable = true;
+          throw downloadErr;
+        }
+        if (navigationResult.status === 'rejected' && isDeadProxyFailure(navigationResult.reason)) {
+          navigationResult.reason.proxyRetryable = true;
+          throw navigationResult.reason;
+        }
         if (navigationResult.status === 'rejected') throw navigationResult.reason;
         const html = await page.content().catch(() => '');
         if (downloadResult.reason?.missing || looksLikeMissingPage(html)) {
