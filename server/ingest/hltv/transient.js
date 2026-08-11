@@ -18,6 +18,8 @@ export function isTransientDownloadError(err) {
     /Missing X server|without having a XServer|ozone_platform_x11|\$DISPLAY/i.test(
       msg
     ) ||
+    /spawn ETXTBSY/i.test(msg) ||
+    /profile is already in use|Opening in existing browser session/i.test(msg) ||
     /session limit reached|license key is invalid|couldn't verify your license/i.test(
       msg
     ) ||

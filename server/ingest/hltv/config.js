@@ -137,5 +137,11 @@ export function loadConfig(overrides = {}) {
     env.AIM4_CLOAK_DOWNLOADS_DIR || path.join(cfg.workDir, '.cloakbrowser-downloads');
   cfg.cloakProfileDir =
     env.AIM4_CLOAK_PROFILE_DIR || path.join(cfg.stateDir, 'cloakbrowser-profile');
+  // Persist Pro Chromium under the state volume so container recreates do not
+  // re-download 214 MB into /root/.cloakbrowser while ingest tries to spawn it.
+  cfg.cloakBrowserCacheDir =
+    env.CLOAKBROWSER_CACHE_DIR ||
+    env.AIM4_CLOAK_CACHE_DIR ||
+    path.join(cfg.stateDir, 'cloakbrowser-cache');
   return cfg;
 }

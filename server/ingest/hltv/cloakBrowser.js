@@ -10,9 +10,21 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 import { pipeline } from 'node:stream/promises';
 import { ensureBinary, launchContext, launchPersistentContext } from 'cloakbrowser';
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Dedicated display for CloakBrowser. Must NOT be the API server's xvfb-run
+ * display (:99 is what xvfb-run -a usually takes first).
+ */
+const CLOAK_XVFB_DISPLAY = Math.max(
+  100,
+  Number(process.env.AIM4_CLOAK_XVFB_DISPLAY) || 100
+);
 import {
   applyProxySettings,
   DEFAULT_FALLBACK_PROXY,
@@ -57,8 +69,50 @@ function isDisplayError(err) {
   );
 }
 
-function resetHeadedDisplay() {
-  delete process.env.DISPLAY;
+/** Launch infrastructure problems: retry without burning a proxy slot. */
+function isInfraLaunchError(err) {
+  if (isDisplayError(err)) return true;
+  const msg = String(err?.message || err || '');
+  return (
+    /spawn ETXTBSY/i.test(msg) ||
+    /profile is already in use|Opening in existing browser session/i.test(msg)
+  );
+}
+
+async function pidsMatching(pattern) {
+  try {
+    const { stdout } = await execFileAsync('pgrep', ['-f', pattern], { encoding: 'utf8' });
+    return stdout
+      .trim()
+      .split(/\s+/)
+      .map(Number)
+      .filter((n) => Number.isFinite(n) && n > 1 && n !== process.pid);
+  } catch {
+    return [];
+  }
+}
+
+function killPidQuiet(pid) {
+  try {
+    process.kill(pid, 'SIGKILL');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True when an Xvfb process for our Cloak display is actually alive. */
+async function cloakXvfbAlive() {
+  if (xvfbProcess && !xvfbProcess.killed && xvfbProcess.exitCode == null) return true;
+  const pids = await pidsMatching(`Xvfb :${CLOAK_XVFB_DISPLAY}`);
+  return pids.length > 0;
+}
+
+/**
+ * Kill only the CloakBrowser Xvfb (:100 by default). Never touch the API
+ * server's xvfb-run display (usually :99).
+ */
+export async function killCloakXvfb() {
   displayPromise = null;
   displayStarting = false;
   try {
@@ -67,20 +121,80 @@ function resetHeadedDisplay() {
     /* already gone */
   }
   xvfbProcess = null;
+  for (const pid of await pidsMatching(`Xvfb :${CLOAK_XVFB_DISPLAY}`)) {
+    killPidQuiet(pid);
+  }
+  // Stale socket left behind after SIGKILL fools the next ensureHeadedDisplay.
+  await fsp.rm(`/tmp/.X11-unix/X${CLOAK_XVFB_DISPLAY}`, { force: true }).catch(() => {});
+  await fsp.rm(`/tmp/.X${CLOAK_XVFB_DISPLAY}-lock`, { force: true }).catch(() => {});
+}
+
+async function resetHeadedDisplay() {
+  // Do not delete a parent xvfb-run DISPLAY; Cloak uses its own :100.
+  displayPromise = null;
+  displayStarting = false;
+  await killCloakXvfb();
+}
+
+/** Serialize ensureBinary so extract/download cannot race spawn ETXTBSY. */
+let binaryReadyPromise = null;
+
+async function ensureCloakBinary(licenseKey, browserVersion, releaseChannel, log) {
+  if (!binaryReadyPromise) {
+    binaryReadyPromise = (async () => {
+      const pathReady = await ensureBinary(licenseKey, browserVersion, releaseChannel);
+      log?.(`Binary ready: ${pathReady}`);
+      return pathReady;
+    })().catch((err) => {
+      binaryReadyPromise = null;
+      throw err;
+    });
+  }
+  return binaryReadyPromise;
+}
+
+/**
+ * Download / verify CloakBrowser into the state-volume cache before ingest
+ * starts fighting ETXTBSY mid-extract. Safe to call on API boot.
+ */
+export async function warmCloakBrowserCache(cfg = {}) {
+  const cacheDir =
+    cfg.cloakBrowserCacheDir ||
+    process.env.CLOAKBROWSER_CACHE_DIR ||
+    process.env.AIM4_CLOAK_CACHE_DIR;
+  if (cacheDir) {
+    process.env.CLOAKBROWSER_CACHE_DIR = cacheDir;
+    await fsp.mkdir(cacheDir, { recursive: true });
+  }
+  const licenseKey = cfg.cloakLicenseKey || process.env.AIM4_CLOAK_LICENSE_KEY ||
+    process.env.CLOAKBROWSER_LICENSE_KEY || '';
+  console.log(
+    `[cloak] warming binary cache` +
+      (cacheDir ? ` dir=${cacheDir}` : '') +
+      (licenseKey ? ' (licensed)' : ' (free)')
+  );
+  try {
+    const binaryPath = await ensureCloakBinary(licenseKey || undefined, undefined, undefined, null);
+    console.log(`[cloak] binary warm: ${binaryPath}`);
+    return binaryPath;
+  } catch (err) {
+    console.warn(`[cloak] binary warm failed: ${err?.message || err}`);
+    return null;
+  }
 }
 
 async function ensureHeadedDisplay() {
   if (process.platform !== 'linux') return;
-  const displayNumber = 99;
-  const display = `:${displayNumber}`;
-  const socket = `/tmp/.X11-unix/X${displayNumber}`;
-  if (await fsp.access(socket).then(() => true, () => false)) {
+  const display = `:${CLOAK_XVFB_DISPLAY}`;
+  const socket = `/tmp/.X11-unix/X${CLOAK_XVFB_DISPLAY}`;
+
+  if (await cloakXvfbAlive()) {
     process.env.DISPLAY = display;
     return;
   }
-  // Prior Xvfb died (common after SIGKILL of a sibling ingest). Do not trust
-  // a cached resolved promise or a stale DISPLAY value.
-  delete process.env.DISPLAY;
+  // Socket without a live Xvfb is how "DISPLAY=:99" lied after Hard Restart.
+  await fsp.rm(socket, { force: true }).catch(() => {});
+  await fsp.rm(`/tmp/.X${CLOAK_XVFB_DISPLAY}-lock`, { force: true }).catch(() => {});
 
   if (!displayStarting) {
     displayStarting = true;
@@ -90,6 +204,9 @@ async function ensureHeadedDisplay() {
           xvfbProcess?.kill?.('SIGKILL');
         } catch {
           /* ignore */
+        }
+        for (const pid of await pidsMatching(`Xvfb :${CLOAK_XVFB_DISPLAY}`)) {
+          killPidQuiet(pid);
         }
         xvfbProcess = spawn(
           'Xvfb',
@@ -101,7 +218,9 @@ async function ensureHeadedDisplay() {
         xvfbProcess.once('error', (err) => {
           launchError = err;
         });
-        process.once('exit', () => xvfbProcess?.kill());
+        xvfbProcess.once('exit', () => {
+          xvfbProcess = null;
+        });
 
         const deadline = Date.now() + 5000;
         while (Date.now() < deadline) {
@@ -110,13 +229,18 @@ async function ensureHeadedDisplay() {
               `Could not start Xvfb for headed CloakBrowser: ${launchError.message}. Rebuild the Docker image so the xvfb package is installed.`
             );
           }
-          if (await fsp.access(socket).then(() => true, () => false)) {
+          if (
+            (await fsp.access(socket).then(() => true, () => false)) &&
+            (await cloakXvfbAlive())
+          ) {
             process.env.DISPLAY = display;
             return;
           }
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
-        throw new Error('Xvfb did not create a display within 5 seconds');
+        throw new Error(
+          `Xvfb :${CLOAK_XVFB_DISPLAY} did not become ready within 5 seconds`
+        );
       } finally {
         displayStarting = false;
       }
@@ -127,9 +251,8 @@ async function ensureHeadedDisplay() {
 
 function isProxyRetryable(err) {
   if (!err) return false;
-  // Display/Xvfb failures are host setup, not a bad proxy. Burning the pool
-  // on "Missing X server" is how ingest looked dead after a hard kill.
-  if (isDisplayError(err)) return false;
+  // Display/Xvfb / binary-busy / profile-lock are host setup, not a bad proxy.
+  if (isInfraLaunchError(err)) return false;
   if (err.blocked || err.proxyRetryable) return true;
   const msg = String(err.message || err);
   return /proxy|SOCKS|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|ERR_TUNNEL|ERR_PROXY|tunnel|socket hang up|net::ERR_/i.test(
@@ -374,11 +497,16 @@ export function createCloakSession(cfg = {}) {
       const options = launchOptions(cfg, activeProxy);
       if (options.proxy) log(`Transport proxy: ${redactProxy(options.proxy)}`);
       else log('Transport proxy: none (direct exit IP)');
+      if (cfg.cloakBrowserCacheDir) {
+        process.env.CLOAKBROWSER_CACHE_DIR = cfg.cloakBrowserCacheDir;
+        await fsp.mkdir(cfg.cloakBrowserCacheDir, { recursive: true });
+      }
       log(`Resolving CloakBrowser binary (${options.licenseKey ? 'licensed' : 'unlicensed'})`);
-      const binaryPath = await ensureBinary(
+      const binaryPath = await ensureCloakBinary(
         options.licenseKey,
         options.browserVersion,
-        options.releaseChannel
+        options.releaseChannel,
+        log
       );
       if (!binaryLogged) {
         log(`CloakBrowser binary: ${path.basename(path.dirname(binaryPath))}`);
@@ -516,12 +644,30 @@ export function createCloakSession(cfg = {}) {
         if (isDisplayError(err) && displayRetries < 2) {
           displayRetries += 1;
           log(
-            `Display/Xvfb error: ${err.message}. Restarting Xvfb and retrying ` +
+            `Display/Xvfb error: ${err.message}. Restarting Xvfb :${CLOAK_XVFB_DISPLAY} and retrying ` +
               `(${displayRetries}/2)`
           );
-          resetHeadedDisplay();
+          await resetHeadedDisplay();
           await resetContext();
           if (proxy) used.delete(proxy);
+          i -= 1;
+          continue;
+        }
+        if (isInfraLaunchError(err) && displayRetries < 4) {
+          displayRetries += 1;
+          log(
+            `Infra launch error (not a bad proxy): ${err.message}. ` +
+              `Clearing profile lock / waiting, retry (${displayRetries}/4)`
+          );
+          const profilePath = profilePathFor(cfg);
+          if (profilePath) {
+            for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+              await fsp.rm(path.join(profilePath, name), { force: true }).catch(() => {});
+            }
+          }
+          await resetContext();
+          if (proxy) used.delete(proxy);
+          await new Promise((r) => setTimeout(r, 1500 * displayRetries));
           i -= 1;
           continue;
         }

@@ -185,7 +185,9 @@ function logEvent(e, verbose) {
       break;
     case 'challenge':
       console.log(
-        `challenge on demo/${e.demoId}; retry in ${Math.round((e.nextCheckInMs || 0) / 1000)}s`
+        `${e.reason === 'infra' ? 'infra hold' : 'challenge'} on demo/${e.demoId}; ` +
+          `retry in ${Math.round((e.nextCheckInMs || 0) / 1000)}s` +
+          (e.reason === 'infra' && e.error ? ` (${String(e.error).split('\n')[0]})` : '')
       );
       break;
     case 'cursor':
@@ -204,8 +206,8 @@ function logEvent(e, verbose) {
       console.log(
         e.reason === 'frontier'
           ? `waiting for demo/${e.demoId}; next check in ${Math.round(e.nextPollInMs / 1000)}s`
-          : e.reason === 'challenge'
-            ? `waiting after challenge on demo/${e.demoId}; next try in ${Math.round(e.nextPollInMs / 1000)}s`
+          : e.reason === 'challenge' || e.reason === 'infra'
+            ? `waiting after ${e.reason} on demo/${e.demoId}; next try in ${Math.round(e.nextPollInMs / 1000)}s`
             : `idle; next poll in ${Math.round(e.nextPollInMs / 1000)}s`
       );
       break;
@@ -221,6 +223,10 @@ async function main() {
   const { cmd, opts } = parseArgs(process.argv.slice(2));
   const cfg = loadConfig(opts);
   if (!cfg.library) cfg.library = SHARED_LIBRARY;
+  if (cfg.cloakBrowserCacheDir) {
+    process.env.CLOAKBROWSER_CACHE_DIR = cfg.cloakBrowserCacheDir;
+    await fsp.mkdir(cfg.cloakBrowserCacheDir, { recursive: true }).catch(() => {});
+  }
 
   if (cmd === 'help' || opts.help) {
     console.log(`aim4 HLTV ingester

@@ -30,6 +30,8 @@ import { printHostBanner, fetchPublicIp } from './network.js';
 import { seedAdmins } from './entitlements/service.js';
 import { backfillEffectiveEntitlements } from './entitlements/load.js';
 import { startSweep } from './entitlements/sweep.js';
+import { warmCloakBrowserCache } from './ingest/hltv/cloakBrowser.js';
+import { loadConfig as loadIngestConfig } from './ingest/hltv/config.js';
 import { startSupervisor as startIngestSupervisor } from './ingest/hltv/service.js';
 
 // PORT (no prefix) is the convention most hosts inject; AIM4_API_PORT still
@@ -287,6 +289,9 @@ startSweep();
 // admin turning On resumes the walk. While On, the supervisor restarts a
 // crashed child with backoff; it does not auto-enable after a deploy.
 startIngestSupervisor();
+// Prefetch CloakBrowser into the state volume so Hard Restart / On does not
+// race a 214 MB extract (spawn ETXTBSY) while Chromium is still being written.
+warmCloakBrowserCache(loadIngestConfig()).catch(() => {});
 
 server.listen(PORT, HOST, async () => {
   if (SERVE_STATIC) {

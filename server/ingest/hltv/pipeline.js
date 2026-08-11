@@ -346,32 +346,52 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
       }
 
       if (isTransientDownloadError(err)) {
-        // Timeouts / CF / proxy weather are NOT proof the id is gone. Probe can
-        // clear the same URL a minute later; never skip ahead on these.
+        // Timeouts / CF / proxy / Xvfb / profile-lock weather are NOT proof the
+        // id is gone. Never skip ahead on these.
         ledger.setState(matchId, STATES.DISCOVERED, {
           lastError: String(err.message || err),
           lastAttemptAt: new Date().toISOString()
         });
         await ledger.save();
+        const errText = String(err.message || err);
+        const infra =
+          /Missing X server|without having a XServer|ozone_platform_x11|\$DISPLAY|spawn ETXTBSY|profile is already in use|Opening in existing browser session/i.test(
+            errText
+          );
         const waitMs = Math.max(
           cfg.minDelayMs || 20_000,
-          Math.min(Number(cfg.challengeWaitMs) || 45_000, cfg.frontierWaitMs || 600_000)
+          Math.min(
+            infra ? 15_000 : Number(cfg.challengeWaitMs) || 45_000,
+            cfg.frontierWaitMs || 600_000
+          )
         );
         emit('download-failed', {
           matchId,
-          error: String(err.message || err),
+          error: errText,
           blocked: true,
+          infra,
           nextCheckInMs: waitMs
         });
-        emit('challenge', { demoId: id, nextCheckInMs: waitMs, error: String(err.message || err) });
+        emit('challenge', {
+          demoId: id,
+          nextCheckInMs: waitMs,
+          error: errText,
+          reason: infra ? 'infra' : 'challenge'
+        });
         current = {
           matchId,
           label: `demo/${id}`,
           demoId: id,
           stage: 'waiting',
-          reason: 'challenge'
+          reason: infra ? 'infra' : 'challenge'
         };
-        return { advanced: false, missing: false, blocked: true, waitMs };
+        return {
+          advanced: false,
+          missing: false,
+          blocked: true,
+          waitMs,
+          reason: infra ? 'infra' : 'challenge'
+        };
       }
 
       if (err?.fatal) {
@@ -435,7 +455,7 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         const waitMs = outcome.waitMs || 45_000;
         emit('idle', {
           nextPollInMs: waitMs,
-          reason: 'challenge',
+          reason: outcome.reason || 'challenge',
           demoId: id
         });
         await sleepInterruptible(waitMs);

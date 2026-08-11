@@ -56,7 +56,11 @@ const state = {
   failures: 0,
   nextSpawnAllowedAt: 0,
   lastSpawnAt: 0,
-  supervisor: null
+  supervisor: null,
+  /** Serialize spawnIngester so Hard Restart + onChildExit cannot double-start. */
+  spawnChain: Promise.resolve(),
+  /** While true, supervise() must not spawn (hard restart owns the spawn). */
+  holdSpawn: false
 };
 
 const cfg = () => loadConfig({});
@@ -211,82 +215,117 @@ async function appendIngestLog(c, message) {
 /**
  * Launch the child. Internal: callers go through start() or the supervisor, so
  * the desired-state flag and the spawn cannot drift apart.
+ *
+ * Serialized: a late exit handler must never wipe the lock of a newer child
+ * and let supervise() start a second ingest (profile lock + ETXTBSY hell).
  */
 async function spawnIngester(c, options = {}) {
-  await fsp.mkdir(c.stateDir, { recursive: true });
-  await fsp.mkdir(c.workDir, { recursive: true });
-
-  const args = [CLI, 'run', '--continuous'];
-  // Resolved config already coerces local-without-inbox → hltv. Still force
-  // both argv and child env so a leftover Coolify AIM4_INGEST_SOURCE=local
-  // cannot win inside the detached process.
-  let source = String(options.source || c.source || 'hltv').trim().toLowerCase() || 'hltv';
-  const inbox = String(options.inbox || c.inbox || '').trim();
-  if (source === 'local' && !inbox) source = 'hltv';
-  args.push('--source', source);
-  if (inbox) args.push('--inbox', inbox);
-  if (options.since || c.since) args.push('--since', options.since || c.since);
-
-  // Raw descriptors, not pipes. A detached child that logs through a pipe to
-  // its parent dies with the parent; one holding its own fd does not.
-  const logPath = ingestLogPath(c);
-  await appendIngestLog(
-    c,
-    `spawning source=${source}${inbox ? ` inbox=${inbox}` : ''} args=${args.slice(1).join(' ')}`
-  );
-  const logFd = fs.openSync(logPath, 'a');
-
-  const childEnv = {
-    ...process.env,
-    AIM4_INGEST_SOURCE: source
-  };
-  if (inbox) childEnv.AIM4_INGEST_INBOX = inbox;
-  else delete childEnv.AIM4_INGEST_INBOX;
-
-  let child;
-  try {
-    child = spawn(process.execPath, args, {
-      detached: true,
-      stdio: ['ignore', logFd, logFd],
-      env: childEnv
-    });
-  } finally {
-    // The child has inherited the descriptor; this process does not need it.
-    fs.closeSync(logFd);
-  }
-
-  child.on('exit', (code, signal) => {
-    const shortLived = Date.now() - state.lastSpawnAt < 30_000;
-    const killed = signal === 'SIGKILL' || signal === 'SIGTERM';
-    // Continuous ingest should not end in seconds. Treat short-lived exits
-    // (including mysterious code 0) as crashes so we back off and respawn.
-    if (shortLived && !killed) {
-      state.failures = Math.min(state.failures + 1, 6);
-      state.nextSpawnAllowedAt =
-        Date.now() + Math.min(2 ** state.failures * 2_000, 60_000);
-    } else if (!killed && code !== 0) {
-      state.failures = Math.min(state.failures + 1, 6);
-      state.nextSpawnAllowedAt =
-        Date.now() + Math.min(2 ** state.failures * 5_000, 5 * 60_000);
-    } else {
-      state.failures = 0;
-      state.nextSpawnAllowedAt = 0;
+  const run = async () => {
+    if (await isRunning()) {
+      const existing = await readPid(c.lockPath);
+      await appendIngestLog(c, `spawn skipped; already running pid=${existing}`);
+      return existing;
     }
-    void onChildExit(c, code, signal);
-  });
 
-  child.unref();
-  state.lastSpawnAt = Date.now();
-  await fsp.writeFile(c.lockPath, String(child.pid));
-  await appendIngestLog(c, `spawned pid=${child.pid}`);
-  return child.pid;
+    await fsp.mkdir(c.stateDir, { recursive: true });
+    await fsp.mkdir(c.workDir, { recursive: true });
+
+    const args = [CLI, 'run', '--continuous'];
+    // Resolved config already coerces local-without-inbox → hltv. Still force
+    // both argv and child env so a leftover Coolify AIM4_INGEST_SOURCE=local
+    // cannot win inside the detached process.
+    let source = String(options.source || c.source || 'hltv').trim().toLowerCase() || 'hltv';
+    const inbox = String(options.inbox || c.inbox || '').trim();
+    if (source === 'local' && !inbox) source = 'hltv';
+    args.push('--source', source);
+    if (inbox) args.push('--inbox', inbox);
+    if (options.since || c.since) args.push('--since', options.since || c.since);
+
+    // Raw descriptors, not pipes. A detached child that logs through a pipe to
+    // its parent dies with the parent; one holding its own fd does not.
+    const logPath = ingestLogPath(c);
+    await appendIngestLog(
+      c,
+      `spawning source=${source}${inbox ? ` inbox=${inbox}` : ''} args=${args.slice(1).join(' ')}`
+    );
+    const logFd = fs.openSync(logPath, 'a');
+
+    const childEnv = {
+      ...process.env,
+      AIM4_INGEST_SOURCE: source,
+      // CloakBrowser uses its own Xvfb (:100). Do not inherit the API server's
+      // xvfb-run DISPLAY (:99) — Hard Restart used to kill that and leave a
+      // stale socket that lied about a working X server.
+      AIM4_CLOAK_XVFB_DISPLAY: process.env.AIM4_CLOAK_XVFB_DISPLAY || '100',
+      CLOAKBROWSER_CACHE_DIR:
+        process.env.CLOAKBROWSER_CACHE_DIR || c.cloakBrowserCacheDir || ''
+    };
+    delete childEnv.DISPLAY;
+    if (inbox) childEnv.AIM4_INGEST_INBOX = inbox;
+    else delete childEnv.AIM4_INGEST_INBOX;
+
+    let child;
+    try {
+      child = spawn(process.execPath, args, {
+        detached: true,
+        stdio: ['ignore', logFd, logFd],
+        env: childEnv
+      });
+    } finally {
+      // The child has inherited the descriptor; this process does not need it.
+      fs.closeSync(logFd);
+    }
+
+    const childPid = child.pid;
+    child.on('exit', (code, signal) => {
+      const shortLived = Date.now() - state.lastSpawnAt < 30_000;
+      const killed = signal === 'SIGKILL' || signal === 'SIGTERM';
+      // Continuous ingest should not end in seconds. Treat short-lived exits
+      // (including mysterious code 0) as crashes so we back off and respawn.
+      if (shortLived && !killed) {
+        state.failures = Math.min(state.failures + 1, 6);
+        state.nextSpawnAllowedAt =
+          Date.now() + Math.min(2 ** state.failures * 2_000, 60_000);
+      } else if (!killed && code !== 0) {
+        state.failures = Math.min(state.failures + 1, 6);
+        state.nextSpawnAllowedAt =
+          Date.now() + Math.min(2 ** state.failures * 5_000, 5 * 60_000);
+      } else {
+        state.failures = 0;
+        state.nextSpawnAllowedAt = 0;
+      }
+      void onChildExit(c, code, signal, childPid);
+    });
+
+    child.unref();
+    state.lastSpawnAt = Date.now();
+    await fsp.writeFile(c.lockPath, String(childPid));
+    await appendIngestLog(c, `spawned pid=${childPid}`);
+    return childPid;
+  };
+
+  const next = state.spawnChain.then(run, run);
+  state.spawnChain = next.catch(() => {});
+  return next;
 }
 
-async function onChildExit(c, code, signal) {
+async function onChildExit(c, code, signal, exitedPid) {
+  const lockPid = await readPid(c.lockPath);
+  if (exitedPid && lockPid && lockPid !== exitedPid) {
+    // Late exit of a SIGKILL'd previous child after Hard Restart already
+    // spawned a replacement. Clearing the lock here is what caused double
+    // ingest (profile-in-use + Missing X server storms).
+    await appendIngestLog(
+      c,
+      `child exited pid=${exitedPid} code=${code}` +
+        `${signal ? ` signal=${signal}` : ''} but lock holds pid=${lockPid}; leaving lock`
+    );
+    return;
+  }
   await fsp.rm(c.lockPath, { force: true }).catch(() => {});
   await appendIngestLog(
     c,
-    `child exited code=${code}${signal ? ` signal=${signal}` : ''}` +
+    `child exited pid=${exitedPid || '?'} code=${code}${signal ? ` signal=${signal}` : ''}` +
       (state.failures ? ` failures=${state.failures}` : '')
   );
   const status = await readStatus(c.statusPath).catch(() => emptyStatus());
@@ -306,6 +345,10 @@ async function onChildExit(c, code, signal) {
   }).catch(() => {});
 
   // Do not wait for the supervisor interval — Starting for up to 60s feels stuck.
+  if (state.holdSpawn) {
+    await appendIngestLog(c, 'child exit: spawn hold active; not auto-respawning');
+    return;
+  }
   const desired = await readDesired(c);
   if (desired.enabled) {
     const delay = Math.max(0, state.nextSpawnAllowedAt - Date.now());
@@ -451,11 +494,13 @@ async function pidsMatching(pattern) {
 
 /**
  * Kill every process that can hold a CloakBrowser license seat or profile lock:
- * ingest CLI, probe parse workers, Chromium using our profile dir, and Xvfb :99.
+ * ingest CLI, probe parse workers, Chromium using our profile dir, and Cloak Xvfb
+ * (:100). Never kill the API server's xvfb-run display (:99).
  */
 async function killAllIngestRelated(c) {
   const killed = new Set();
   const log = (msg) => appendIngestLog(c, msg);
+  const cloakDisplay = process.env.AIM4_CLOAK_XVFB_DISPLAY || '100';
 
   try {
     const probe = await cancelProbe();
@@ -479,12 +524,12 @@ async function killAllIngestRelated(c) {
     await log(`hard reset: killed profile lock holder pid=${pid}`);
   }
 
-  // Narrow patterns only: never pkill bare "chromium" / "node".
+  // Narrow patterns only: never pkill bare "chromium" / "node" / Xvfb :99.
   const patterns = [
     'ingest/hltv/cli\\.js',
     'ingest/hltv/probeParseWorker\\.js',
     'cloakbrowser-profile',
-    'Xvfb :99'
+    `Xvfb :${cloakDisplay}`
   ];
   for (const pattern of patterns) {
     const matches = await pidsMatching(pattern);
@@ -500,6 +545,8 @@ async function killAllIngestRelated(c) {
   }
 
   await clearProfileLocks(c.cloakProfileDir);
+  await fsp.rm(`/tmp/.X11-unix/X${cloakDisplay}`, { force: true }).catch(() => {});
+  await fsp.rm(`/tmp/.X${cloakDisplay}-lock`, { force: true }).catch(() => {});
   return [...killed];
 }
 
@@ -549,58 +596,64 @@ export async function hardRestart(options = {}) {
   await appendIngestLog(c, 'hard restart requested');
 
   // Hold the supervisor off while we kill and settle. Writing enabled=true
-  // early used to let supervise() spawn a second child mid-wait.
+  // early used to let supervise() spawn a second child mid-wait; a late
+  // onChildExit from the killed pid used to clear the new lock too.
+  state.holdSpawn = true;
   await writeDesired(c, { enabled: false });
   state.nextSpawnAllowedAt = Date.now() + 30_000;
 
-  const oldPid = await readPid(c.lockPath);
-  const killed = await killAllIngestRelated(c);
-  await appendIngestLog(
-    c,
-    `hard reset: killed ${killed.length} pid(s)` +
-      (killed.length ? ` [${killed.slice(0, 20).join(',')}]` : '')
-  );
+  try {
+    const oldPid = await readPid(c.lockPath);
+    const killed = await killAllIngestRelated(c);
+    await appendIngestLog(
+      c,
+      `hard reset: killed ${killed.length} pid(s)` +
+        (killed.length ? ` [${killed.slice(0, 20).join(',')}]` : '')
+    );
 
-  await writeStatus(c.statusPath, {
-    ...emptyStatus(),
-    running: false,
-    pid: null,
-    current: null,
-    stoppedAt: new Date().toISOString(),
-    lastError: null
-  }).catch(() => {});
+    await writeStatus(c.statusPath, {
+      ...emptyStatus(),
+      running: false,
+      pid: null,
+      current: null,
+      stoppedAt: new Date().toISOString(),
+      lastError: null
+    }).catch(() => {});
 
-  // CloakBrowser Pro seats and chrome grandchildren need a beat to drop.
-  await new Promise((resolve) => setTimeout(resolve, 3_000));
+    // CloakBrowser Pro seats and chrome grandchildren need a beat to drop.
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
 
-  // Second sweep: anything that respawned or ignored the first SIGKILL.
-  const again = await killAllIngestRelated(c);
-  if (again.length) {
-    await appendIngestLog(c, `hard reset: second sweep killed ${again.length} pid(s)`);
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    // Second sweep: anything that respawned or ignored the first SIGKILL.
+    const again = await killAllIngestRelated(c);
+    if (again.length) {
+      await appendIngestLog(c, `hard reset: second sweep killed ${again.length} pid(s)`);
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
+
+    state.failures = 0;
+    state.nextSpawnAllowedAt = 0;
+    state.lastSpawnAt = 0;
+    await writeDesired(c, { enabled: true, ...options });
+
+    await appendIngestLog(c, 'hard restart spawning');
+    await resumeCursorFromState(c);
+    const pid = await spawnIngester(c, options);
+    await writeStatus(c.statusPath, {
+      ...emptyStatus(),
+      running: true,
+      pid,
+      startedAt: new Date().toISOString()
+    });
+    return {
+      restarted: true,
+      pid,
+      enabled: true,
+      killedPid: oldPid || null,
+      killedPids: [...new Set([...killed, ...again])]
+    };
+  } finally {
+    state.holdSpawn = false;
   }
-
-  state.failures = 0;
-  state.nextSpawnAllowedAt = 0;
-  state.lastSpawnAt = 0;
-  await writeDesired(c, { enabled: true, ...options });
-
-  await appendIngestLog(c, 'hard restart spawning');
-  await resumeCursorFromState(c);
-  const pid = await spawnIngester(c, options);
-  await writeStatus(c.statusPath, {
-    ...emptyStatus(),
-    running: true,
-    pid,
-    startedAt: new Date().toISOString()
-  });
-  return {
-    restarted: true,
-    pid,
-    enabled: true,
-    killedPid: oldPid || null,
-    killedPids: [...new Set([...killed, ...again])]
-  };
 }
 
 /**
@@ -622,6 +675,10 @@ export async function supervise() {
       return { action: 'killed-stray', enabled: false };
     }
     return { action: 'none', enabled: false };
+  }
+  if (state.holdSpawn) {
+    await appendIngestLog(c, 'supervise: spawn hold (hard restart in progress)');
+    return { action: 'hold', enabled: true };
   }
   if (await isRunning()) return { action: 'none', enabled: true, running: true };
   if (Date.now() < state.nextSpawnAllowedAt) {
