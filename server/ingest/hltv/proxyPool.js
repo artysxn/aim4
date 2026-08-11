@@ -33,6 +33,11 @@ export const PROXY_BEST_ROTATION = 5;
 export const CONFIRMED_ROTATION_SIZE = PROXY_BEST_ROTATION;
 /** Abort + try another exit when sustained download rate is below this. */
 export const MIN_DOWNLOAD_SPEED_BPS = 20 * 1024 * 1024;
+/**
+ * A confirmed HLTV download at/above this speed with no CF becomes the sticky
+ * exit: reuse it for every following demo until it fails.
+ */
+export const STICKY_MIN_MBPS = 25;
 /** Max slow-proxy aborts per download before giving up on speed failover. */
 export const PROXY_SPEED_ATTEMPTS = 3;
 /** Wait this long into the transfer phase before judging download speed. */
@@ -275,6 +280,10 @@ function applyBestRotation(list, { testTarget = PROXY_TEST_TARGET, bestSize = PR
   const keep = new Set(
     rankBestProxies(list, { limit: bestSize, confirmedOnly: true }).map((e) => e.url)
   );
+  // Sticky fast exits always stay in the rotation set.
+  for (const e of list) {
+    if (e.sticky) keep.add(e.url);
+  }
   // If fewer than `bestSize` full successes, fill from speed-tested rows.
   if (keep.size < bestSize) {
     for (const e of rankBestProxies(list, { limit: bestSize, confirmedOnly: false })) {
@@ -287,6 +296,37 @@ function applyBestRotation(list, { testTarget = PROXY_TEST_TARGET, bestSize = PR
     confirmed: keep.has(e.url),
     rotation: keep.has(e.url)
   }));
+}
+
+export function isStickySpeed(mbps, min = STICKY_MIN_MBPS) {
+  return (Number(mbps) || 0) >= min;
+}
+
+/** Current sticky fast exit, if any (not blacklisted). */
+export async function readStickyProxy(cfg) {
+  const blocked = await readProxyBlacklist(cfg);
+  const list = await readWorkingProxies(cfg);
+  return (
+    list.find(
+      (e) =>
+        e.sticky &&
+        e.confirmed &&
+        !blocked.has(e.url) &&
+        isStickySpeed(e.mbps)
+    ) || null
+  );
+}
+
+export async function clearStickyProxy(cfg, url = null) {
+  const list = await readWorkingProxies(cfg);
+  let dirty = false;
+  const next = list.map((e) => {
+    if (!e.sticky) return e;
+    if (url && e.url !== url) return e;
+    dirty = true;
+    return { ...e, sticky: false };
+  });
+  if (dirty) await writeWorkingProxies(cfg, next);
 }
 
 function normalizeMbps(value) {
@@ -310,6 +350,14 @@ export async function recordWorkingProxy(
   const now = new Date().toISOString();
   const speed = normalizeMbps(mbps);
   const idx = list.findIndex((e) => e.url === url);
+  const effectiveMbps =
+    speed != null
+      ? Math.max(speed, idx >= 0 ? Number(list[idx].mbps) || 0 : 0)
+      : idx >= 0
+        ? list[idx].mbps || null
+        : null;
+  const makeSticky = Boolean(confirmed && isStickySpeed(effectiveMbps));
+
   if (idx >= 0) {
     const prev = list[idx];
     list[idx] = {
@@ -321,7 +369,8 @@ export async function recordWorkingProxy(
       confirmed: Boolean(confirmed || prev.confirmed),
       tested: Boolean(tested || prev.tested || speed != null),
       testedAt: tested || speed != null ? now : prev.testedAt || null,
-      mbps: speed != null ? Math.max(speed, Number(prev.mbps) || 0) : prev.mbps || null
+      mbps: effectiveMbps,
+      sticky: makeSticky ? true : confirmed ? false : Boolean(prev.sticky)
     };
   } else {
     list.push({
@@ -334,14 +383,23 @@ export async function recordWorkingProxy(
       confirmed: Boolean(confirmed),
       tested: Boolean(tested || speed != null),
       testedAt: now,
-      mbps: speed
+      mbps: speed,
+      sticky: makeSticky
     });
+  }
+  // Only one sticky exit at a time.
+  if (makeSticky) {
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].url !== url && list[i].sticky) list[i] = { ...list[i], sticky: false };
+    }
   }
   const next = applyBestRotation(list);
   await writeWorkingProxies(cfg, next.slice(0, 200));
+  const sticky = next.find((e) => e.sticky) || null;
   return {
     testedCount: next.filter((e) => e.tested || e.confirmed).length,
-    best: rankBestProxies(next, { limit: PROXY_BEST_ROTATION, confirmedOnly: true })
+    best: rankBestProxies(next, { limit: PROXY_BEST_ROTATION, confirmedOnly: true }),
+    sticky
   };
 }
 
@@ -420,10 +478,14 @@ export function filterPoolForPick(pool, {
   gray = new Set(),
   tested = new Set(),
   best = [],
+  sticky = null,
   rotationOnly = false
 } = {}) {
   const available = (Array.isArray(pool) ? pool : []).filter((p) => p && !used.has(p));
   if (!available.length) return [];
+
+  // Fast clean exit: pin to it until it fails (CF / slow / dead).
+  if (sticky && available.includes(sticky)) return [sticky];
 
   if (rotationOnly && best.length) {
     const avail = new Set(available);
@@ -598,14 +660,19 @@ export async function applyProxySettings(cfg) {
 export async function loadProxyPool(cfg = {}) {
   const blocked = await readProxyBlacklist(cfg);
   const working = await readWorkingProxies(cfg);
+  const sticky = working.find(
+    (e) => e.sticky && e.confirmed && !blocked.has(e.url) && isStickySpeed(e.mbps)
+  );
   const best = rankBestProxies(
-    working.filter((e) => !blocked.has(e.url)),
+    working.filter((e) => !blocked.has(e.url) && e.url !== sticky?.url),
     { limit: PROXY_BEST_ROTATION, confirmedOnly: true }
   );
   const bestSet = new Set(best.map((e) => e.url));
+  if (sticky) bestSet.add(sticky.url);
   const otherWorking = working.filter((e) => !blocked.has(e.url) && !bestSet.has(e.url));
 
   const chunks = [];
+  if (sticky) chunks.push(sticky.url);
   chunks.push(...best.map((e) => e.url));
   chunks.push(...otherWorking.map((e) => e.url));
 
@@ -913,6 +980,7 @@ export async function proxyStatus(cfg) {
   });
   const testedCount = tested.length;
   const rotationOnly = testedCount >= PROXY_TEST_TARGET;
+  const sticky = eligible.find((e) => e.sticky && isStickySpeed(e.mbps)) || null;
   return {
     settings,
     workingCount: working.length,
@@ -922,11 +990,20 @@ export async function proxyStatus(cfg) {
     rotationSize: PROXY_BEST_ROTATION,
     rotationOnly,
     minSpeedMbps: MIN_DOWNLOAD_SPEED_BPS / (1024 * 1024),
+    stickyMinMbps: STICKY_MIN_MBPS,
+    sticky: sticky
+      ? {
+          host: redactProxy(sticky.url),
+          mbps: sticky.mbps ?? null,
+          lastOkAt: sticky.lastOkAt || sticky.verifiedAt || null
+        }
+      : null,
     confirmed: rotation.map((e) => ({
       host: redactProxy(e.url),
       country: e.country || '',
       exitIp: e.exitIp || '',
       mbps: e.mbps ?? null,
+      sticky: Boolean(e.sticky),
       lastOkAt: e.lastOkAt || e.verifiedAt || null
     })),
     best: rankBestProxies(eligible, { limit: 10, confirmedOnly: false }).map((e) => ({

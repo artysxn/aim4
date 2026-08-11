@@ -256,12 +256,14 @@ function proxiesBlock() {
       const target = st?.testTarget ?? 40;
       const best = st?.confirmedCount ?? 0;
       const need = st?.rotationSize ?? 5;
-      const rot = st?.rotationOnly
-        ? `Top ${best}/${need} by speed`
-        : `Tested ${tested}/${target}`;
+      const sticky = st?.sticky
+        ? `Sticky ${st.sticky.host}${st.sticky.mbps != null ? ` ${Number(st.sticky.mbps).toFixed(0)}MB/s` : ''}`
+        : st?.rotationOnly
+          ? `Top ${best}/${need} by speed`
+          : `Tested ${tested}/${target}`;
       const gray = st?.graylistCount ? ` · Gray ${st.graylistCount}` : '';
       const banned = st?.blacklistCount ? ` · Banned ${st.blacklistCount}` : '';
-      meta.textContent = `${rot} · Working ${n} · Cache ${st?.cacheCount ?? 0}${gray}${banned}`;
+      meta.textContent = `${sticky} · Working ${n} · Cache ${st?.cacheCount ?? 0}${gray}${banned}`;
     }
   }
 

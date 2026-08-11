@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import {
   createProgressSpeedMonitor,
   filterPoolForPick,
+  isStickySpeed,
   proxyUrlFromEntry,
   parseProxyLines,
   rankBestProxies,
-  redactProxy
+  redactProxy,
+  STICKY_MIN_MBPS
 } from './proxyPool.js';
 
 assert.equal(proxyUrlFromEntry({ protocol: 'socks4', host: '1.1.1.1', port: 1080 }), '');
@@ -44,8 +46,22 @@ assert.equal(redactProxy('http://user:pass@10.0.0.1:8080'), '10.0.0.1:8080');
   assert.ok(verdict.mbps >= 20);
 }
 
+assert.equal(isStickySpeed(24.9), false);
+assert.equal(isStickySpeed(STICKY_MIN_MBPS), true);
+
 {
   const pool = ['a', 'b', 'c', 'd'];
+  assert.deepEqual(
+    filterPoolForPick(pool, {
+      used: new Set(),
+      gray: new Set(['b']),
+      tested: new Set(['a']),
+      best: ['a'],
+      sticky: 'd',
+      rotationOnly: false
+    }),
+    ['d']
+  );
   assert.deepEqual(
     filterPoolForPick(pool, {
       used: new Set(),

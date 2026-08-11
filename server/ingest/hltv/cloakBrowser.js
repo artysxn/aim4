@@ -14,6 +14,7 @@ import { pipeline } from 'node:stream/promises';
 import { ensureBinary, launchContext, launchPersistentContext } from 'cloakbrowser';
 import {
   applyProxySettings,
+  clearStickyProxy,
   createProgressSpeedMonitor,
   filterPoolForPick,
   formatBestProxyLog,
@@ -27,9 +28,11 @@ import {
   rankBestProxies,
   readBestProxies,
   readProxyGraylist,
+  readStickyProxy,
   readTestedProxies,
   recordWorkingProxy,
-  redactProxy
+  redactProxy,
+  STICKY_MIN_MBPS
 } from './proxyPool.js';
 import { looksLikeMissingPage, pageTitle } from './classify.js';
 import { ensureHeadedDisplay, resetHeadedDisplay } from './cloakDisplay.js';
@@ -247,22 +250,26 @@ export function createCloakSession(cfg = {}) {
   let grayProxyUrls = new Set();
   let testedCount = 0;
   let rotationOnly = false;
+  /** Confirmed ≥25 MB/s exit reused until CF / slow / dead. */
+  let stickyProxyUrl = null;
   let binaryLogged = false;
 
   async function refreshProxyRanks() {
-    const [tested, gray, best] = await Promise.all([
+    const [tested, gray, best, sticky] = await Promise.all([
       readTestedProxies(cfg),
       readProxyGraylist(cfg),
-      readBestProxies(cfg, PROXY_BEST_ROTATION)
+      readBestProxies(cfg, PROXY_BEST_ROTATION),
+      readStickyProxy(cfg)
     ]);
     testedProxyUrls = new Set(tested.map((e) => e.url));
     grayProxyUrls = new Set(gray.keys());
     testedCount = tested.length;
     rotationOnly = testedCount >= PROXY_TEST_TARGET;
+    stickyProxyUrl = sticky?.url || null;
     bestProxies = (rotationOnly ? best : rankBestProxies(tested, { limit: PROXY_BEST_ROTATION }))
       .map((e) => e.url)
       .filter(Boolean);
-    return { tested, best, testedCount, rotationOnly };
+    return { tested, best, testedCount, rotationOnly, sticky };
   }
 
   function logBestProxies(extraBest) {
@@ -312,10 +319,20 @@ export function createCloakSession(cfg = {}) {
             pool.unshift(url);
           }
         }
+        if (stickyProxyUrl) {
+          const idx = pool.indexOf(stickyProxyUrl);
+          if (idx > 0) {
+            pool.splice(idx, 1);
+            pool.unshift(stickyProxyUrl);
+          }
+        }
         if (pool.length) {
-          const mode = ranks.rotationOnly
-            ? `rotating top ${Math.min(PROXY_BEST_ROTATION, bestProxies.length)} by speed`
-            : `tested ${ranks.testedCount}/${PROXY_TEST_TARGET} (discovering, skip gray ${grayProxyUrls.size})`;
+          const mode = stickyProxyUrl
+            ? `sticky ${redactProxy(stickyProxyUrl)}` +
+              `${ranks.sticky?.mbps != null ? ` @ ${Number(ranks.sticky.mbps).toFixed(1)} MB/s` : ''}`
+            : ranks.rotationOnly
+              ? `rotating top ${Math.min(PROXY_BEST_ROTATION, bestProxies.length)} by speed`
+              : `tested ${ranks.testedCount}/${PROXY_TEST_TARGET} (discovering, skip gray ${grayProxyUrls.size})`;
           log(`Proxy pool: ${pool.length} endpoint(s), ${mode}`);
           if (ranks.tested.length) logBestProxies(ranks.best.length ? ranks.best : ranks.tested.slice(0, 5));
         } else log('Proxy pool: empty (direct exit IP)');
@@ -419,7 +436,21 @@ export function createCloakSession(cfg = {}) {
     testedProxyUrls.delete(proxy);
     grayProxyUrls.delete(proxy);
     bestProxies = bestProxies.filter((u) => u !== proxy);
+    if (proxy === stickyProxyUrl) stickyProxyUrl = null;
     if (proxyCursor >= pool.length) proxyCursor = 0;
+  }
+
+  async function dropSticky(proxy, reason = '') {
+    if (!proxy || proxy !== stickyProxyUrl) {
+      if (proxy) await clearStickyProxy(cfg, proxy).catch(() => {});
+      return;
+    }
+    stickyProxyUrl = null;
+    await clearStickyProxy(cfg, proxy).catch(() => {});
+    log(
+      `Sticky proxy dropped ${redactProxy(proxy)}` +
+        `${reason ? `: ${reason}` : ''}`
+    );
   }
 
   function pickProxy(pool, used, random) {
@@ -429,11 +460,16 @@ export function createCloakSession(cfg = {}) {
       gray: grayProxyUrls,
       tested: testedProxyUrls,
       best: bestProxies,
+      sticky: stickyProxyUrl,
       rotationOnly
     });
     if (!bucket.length) {
       const fallback = pool.filter((p) => !used.has(p));
       return fallback[0] || pool[0];
+    }
+    // Sticky bucket is size 1; never shuffle it away.
+    if (stickyProxyUrl && bucket.length === 1 && bucket[0] === stickyProxyUrl) {
+      return stickyProxyUrl;
     }
     if (random) return bucket[Math.floor(Math.random() * bucket.length)];
     for (let i = 0; i < bucket.length; i++) {
@@ -448,6 +484,15 @@ export function createCloakSession(cfg = {}) {
     if (err.blocked) return true;
     return /Cloudflare challenge|challenge page|cf-mitigated|Just a moment/i.test(
       String(err.message || err)
+    );
+  }
+
+  /** Dead tunnel / cert / hang: ban immediately, do not burn the full challenge loop. */
+  function isDeadProxyFailure(err) {
+    if (!err || err.slow) return false;
+    const msg = String(err.message || err);
+    return /ERR_SOCKS_CONNECTION_FAILED|ERR_SOCKET_NOT_CONNECTED|ERR_CONNECTION_CLOSED|ERR_CONNECTION_REFUSED|ERR_CONNECTION_RESET|ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED|ERR_CERT_|ERR_SSL_|Privacy error|Timeout \d+ms exceeded|net::ERR_TIMED_OUT|net::ERR_NAME_NOT_RESOLVED/i.test(
+      msg
     );
   }
 
@@ -513,11 +558,11 @@ export function createCloakSession(cfg = {}) {
       };
 
       try {
-        // Enough rounds to clear a soft CF interstitial; not so many that one
-        // bad proxy burns two minutes before failover (probe feels "instant"
-        // because it usually hits a good exit on the first try).
+        // Sticky exits get a bit more CF room; discovery fails over quickly so
+        // one dead IP does not burn ~2 minutes × 5 attempts.
+        const onSticky = Boolean(proxy && proxy === stickyProxyUrl);
         const result = await fn({
-          challengeRounds: pool.length > 1 ? 10 : 24,
+          challengeRounds: onSticky ? 8 : pool.length > 1 ? 3 : 24,
           opts: attemptOpts
         });
         if (proxy && measureSpeed) {
@@ -533,8 +578,15 @@ export function createCloakSession(cfg = {}) {
           if (mbps != null) {
             log(`Proxy ${redactProxy(proxy)} ok at ${mbps.toFixed(1)} MB/s`);
           }
+          if (outcome?.sticky?.url === proxy || stickyProxyUrl === proxy) {
+            log(
+              `Sticky fast proxy ${redactProxy(proxy)}` +
+                `${mbps != null ? ` @ ${mbps.toFixed(1)} MB/s` : ''}` +
+                ` (≥${STICKY_MIN_MBPS} MB/s, no CF). Reusing until it fails.`
+            );
+          }
           logBestProxies(outcome?.best || ranks.best);
-          if (ranks.rotationOnly) {
+          if (ranks.rotationOnly && !stickyProxyUrl) {
             log(`Speed rotation locked: top ${PROXY_BEST_ROTATION} after ${PROXY_TEST_TARGET} tested`);
           }
         }
@@ -564,6 +616,7 @@ export function createCloakSession(cfg = {}) {
         if (proxy && slowErr?.slow) {
           speedFails += 1;
           const mbps = Number(slowErr.mbps) || monitor?.averageMbps();
+          await dropSticky(proxy, 'too slow');
           await graylistProxy(cfg, proxy, { mbps, reason: 'slow' }).catch(() => {});
           grayProxyUrls.add(proxy);
           testedProxyUrls.add(proxy);
@@ -585,12 +638,22 @@ export function createCloakSession(cfg = {}) {
           continue;
         }
         if (proxy) {
-          const hard = isHardProxyFailure(lastErr);
+          const hard = isHardProxyFailure(lastErr) || isDeadProxyFailure(lastErr);
+          if (hard || proxy === stickyProxyUrl) {
+            await dropSticky(
+              proxy,
+              isHardProxyFailure(lastErr) ? 'cloudflare' : 'transport fail'
+            );
+          }
           const outcome = await markProxyFailed(cfg, proxy, {
             hard,
-            reason: hard ? 'cloudflare-challenge' : 'transport-fail'
+            reason: isHardProxyFailure(lastErr)
+              ? 'cloudflare-challenge'
+              : isDeadProxyFailure(lastErr)
+                ? 'dead-transport'
+                : 'transport-fail'
           }).catch(() => ({ blacklisted: hard }));
-          // CF / blocked → 24h ban immediately. Soft preferred fails need 3 strikes.
+          // CF / blocked / dead tunnel → 24h ban. Soft preferred fails need 3 strikes.
           if (outcome?.blacklisted || hard) {
             removeFromPool(pool, proxy);
             log(`Blacklisted ${redactProxy(proxy)} for 24h`);
@@ -850,13 +913,20 @@ export function createCloakSession(cfg = {}) {
               ? `"${title}" (no file yet)`
               : `HTML page, no file yet (${Math.round(stableFor / 1000)}s)`;
             reportWaiting();
-            if (stableFor >= 12_000) {
+            const privacyDead = /privacy error|your connection is not private|ERR_CERT/i.test(
+              `${title} ${href}`
+            );
+            const giveUpMs = privacyDead ? 3_000 : 12_000;
+            if (stableFor >= giveUpMs) {
               const err = new Error(
-                `No archive download after page load` +
-                  `${title ? ` (title "${title}")` : ''}` +
-                  `${navStatus ? ` HTTP ${navStatus}` : ''}`
+                privacyDead
+                  ? `Proxy TLS/privacy error${title ? ` (${title})` : ''}`
+                  : `No archive download after page load` +
+                      `${title ? ` (title "${title}")` : ''}` +
+                      `${navStatus ? ` HTTP ${navStatus}` : ''}`
               );
               err.proxyRetryable = true;
+              if (privacyDead) err.message = `${err.message}; net::ERR_CERT_AUTHORITY_INVALID`;
               rejectPendingDownload?.(err);
               return;
             }
@@ -883,6 +953,12 @@ export function createCloakSession(cfg = {}) {
         })
         .catch((err) => {
           log(`Navigation error: ${err?.message || err}`);
+          // Do not sit on "navigating" until the 120s download timer after a
+          // dead SOCKS/timeout/cert failure. Fail this exit and rotate.
+          if (!downloadStarted && isDeadProxyFailure(err)) {
+            err.proxyRetryable = true;
+            rejectPendingDownload?.(err);
+          }
         });
 
       const [downloadResult, navigationResult] = await Promise.allSettled([
