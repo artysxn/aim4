@@ -9,7 +9,11 @@ import {
 } from './service.js';
 
 const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'aim4-ingest-service-'));
-const cfg = { lockPath: path.join(root, 'ingest.lock') };
+const cfg = {
+  stateDir: root,
+  statusPath: path.join(root, 'status.json'),
+  lockPath: path.join(root, 'ingest.lock')
+};
 const lease = `${cfg.lockPath}.spawn`;
 
 try {

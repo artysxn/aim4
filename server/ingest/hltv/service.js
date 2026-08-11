@@ -34,14 +34,21 @@
 // ---------------------------------------------------------------------------
 
 import { execFile, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { loadConfig } from './config.js';
 import { cursorProgress, readCursor, seekCursor } from './cursor.js';
 import { openLedger } from './ledger.js';
+import {
+  findLiveOwner,
+  removeOwner,
+  writeOwnerHeartbeat
+} from './ownerLease.js';
 import { emptyStatus, readStatus, writeStatus } from './status.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -77,6 +84,30 @@ async function readPid(file) {
   } catch {
     return null;
   }
+}
+
+const LEGACY_LOCK_FRESH_MS = 60_000;
+
+/**
+ * Distributed owner lookup with compatibility for workers from the previous
+ * release. A PID from another container cannot be probed with process.kill,
+ * so a recently written legacy lock is treated as foreign and alive.
+ */
+async function findRunningOwner(c) {
+  const owner = await findLiveOwner(c, { localAlive: alive });
+  if (owner) return owner;
+  const pid = await readPid(c.lockPath);
+  if (!pid) return null;
+  if (alive(pid)) return { token: '', pid, host: os.hostname(), legacy: true };
+  const [lockStat, statusStat] = await Promise.all([
+    fsp.stat(c.lockPath).catch(() => null),
+    fsp.stat(c.statusPath).catch(() => null)
+  ]);
+  const newestWrite = Math.max(lockStat?.mtimeMs || 0, statusStat?.mtimeMs || 0);
+  if (newestWrite && Date.now() - newestWrite <= LEGACY_LOCK_FRESH_MS) {
+    return { token: '', pid, host: 'legacy-container', legacy: true };
+  }
+  return null;
 }
 
 const spawnLeasePath = (c) => `${c.lockPath}.spawn`;
@@ -127,6 +158,8 @@ async function acquireSpawnLeaseWait(c, timeoutMs = 5_000) {
 export async function waitForSpawnOwner(c, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    const owner = await findRunningOwner(c);
+    if (owner) return owner.pid;
     const pid = await readPid(c.lockPath);
     if (pid && alive(pid)) return pid;
     if (!(await fsp.stat(spawnLeasePath(c)).catch(() => null))) return null;
@@ -220,16 +253,31 @@ async function resumeCursorFromState(c) {
 export async function disableForBoot() {
   const c = cfg();
   await writeDesired(c, { enabled: false });
-  const pid = await readPid(c.lockPath);
+  const owner = await findRunningOwner(c);
+  const pid = owner
+    ? owner.host === os.hostname()
+      ? owner.pid
+      : null
+    : await readPid(c.lockPath);
   if (pid && alive(pid)) {
     await appendIngestLog(c, `boot: forcing Off; SIGKILL pid=${pid}`);
     killIngestPid(pid);
     await waitForExit(pid, 3_000);
+    if (owner?.token) await removeOwner(c, owner.token);
+    await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+  } else if (owner) {
+    await appendIngestLog(
+      c,
+      `boot: forcing Off; waiting for ${owner.host} pid=${owner.pid} to stop`
+    );
   }
-  await fsp.rm(c.lockPath, { force: true }).catch(() => {});
-  // A deploy replaces the API process, not the browsers the old one spawned.
-  await killStrayBrowsers(c).catch(() => []);
-  await clearProfileLocks(c.cloakProfileDir).catch(() => {});
+  const ownerGone = await waitForNoOwner(c);
+  if (ownerGone) {
+    await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+    // A deploy replaces the API process, not the browsers the old one spawned.
+    await killStrayBrowsers(c).catch(() => []);
+    await clearProfileLocks(c.cloakProfileDir).catch(() => {});
+  }
   const status = await readStatus(c.statusPath).catch(() => emptyStatus());
   await writeStatus(c.statusPath, {
     ...status,
@@ -256,7 +304,8 @@ async function writeDesired(c, patch) {
 }
 
 export async function isRunning() {
-  return alive(await readPid(cfg().lockPath));
+  const c = cfg();
+  return Boolean(await findRunningOwner(c));
 }
 
 function ingestLogPath(c) {
@@ -293,6 +342,15 @@ async function spawnIngesterOwned(c, options = {}) {
   }
 
   try {
+    const distributedOwner = await findRunningOwner(c);
+    if (distributedOwner) {
+      await appendIngestLog(
+        c,
+        `spawn skipped; ${distributedOwner.host} owns pid=${distributedOwner.pid}`
+      );
+      return distributedOwner.pid;
+    }
+
     const existing = await readPid(c.lockPath);
     if (existing && alive(existing)) {
       await appendIngestLog(c, `spawn skipped; pid=${existing} already running`);
@@ -329,6 +387,8 @@ async function spawnIngesterOwned(c, options = {}) {
       ...process.env,
       AIM4_INGEST_SOURCE: source
     };
+    const ownerToken = randomUUID();
+    childEnv.AIM4_INGEST_OWNER_TOKEN = ownerToken;
     if (inbox) childEnv.AIM4_INGEST_INBOX = inbox;
     else delete childEnv.AIM4_INGEST_INBOX;
 
@@ -353,15 +413,19 @@ async function spawnIngesterOwned(c, options = {}) {
       lockReadyResolve = resolve;
     });
     child.once('exit', (code, signal) => {
-      void lockReady.then(() => onChildExit(c, childPid, startedAt, code, signal));
+      void lockReady.then(() =>
+        onChildExit(c, ownerToken, childPid, startedAt, code, signal)
+      );
     });
 
     child.unref();
     state.lastSpawnAt = startedAt;
     try {
+      await writeOwnerHeartbeat(c, { token: ownerToken, pid: childPid });
       await writePid(c.lockPath, childPid);
     } catch (err) {
       killIngestPid(childPid);
+      await removeOwner(c, ownerToken);
       lockReadyResolve();
       throw err;
     }
@@ -371,6 +435,7 @@ async function spawnIngesterOwned(c, options = {}) {
     // Kill immediately rather than leaving a child alive behind an Off switch.
     if (!(await readDesired(c)).enabled) {
       killIngestPid(childPid);
+      await removeOwner(c, ownerToken);
       throw new Error('Ingest was switched off while spawning');
     }
 
@@ -390,17 +455,18 @@ async function spawnIngester(c, options = {}) {
   return state.spawnPromise;
 }
 
-async function onChildExit(c, childPid, startedAt, code, signal) {
+async function onChildExit(c, ownerToken, childPid, startedAt, code, signal) {
   const acquired = await acquireSpawnLeaseWait(c);
   if (!acquired) {
     await appendIngestLog(c, `child exit cleanup deferred pid=${childPid}; spawn lease busy`);
     setTimeout(() => {
-      void onChildExit(c, childPid, startedAt, code, signal);
+      void onChildExit(c, ownerToken, childPid, startedAt, code, signal);
     }, 1_000).unref?.();
     return;
   }
 
   try {
+    await removeOwner(c, ownerToken);
     const ownerPid = await readPid(c.lockPath);
     if (ownerPid !== childPid) {
       await appendIngestLog(
@@ -534,6 +600,15 @@ async function waitForExit(pid, timeoutMs = 3_000) {
   return !alive(pid);
 }
 
+async function waitForNoOwner(c, timeoutMs = 8_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await findRunningOwner(c))) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return !(await findRunningOwner(c));
+}
+
 /**
  * SIGKILL any browser still holding our CloakBrowser profile or downloads
  * directory.
@@ -601,7 +676,12 @@ export async function stop() {
   const c = cfg();
   await writeDesired(c, { enabled: false });
 
-  const pid = await readPid(c.lockPath);
+  const owner = await findRunningOwner(c);
+  const pid = owner
+    ? owner.host === os.hostname()
+      ? owner.pid
+      : null
+    : await readPid(c.lockPath);
   const status = await readStatus(c.statusPath).catch(() => emptyStatus());
   await writeStatus(c.statusPath, {
     ...status,
@@ -611,6 +691,27 @@ export async function stop() {
     stoppedAt: new Date().toISOString(),
     lastError: null
   }).catch(() => {});
+
+  if (owner && owner.host !== os.hostname()) {
+    await appendIngestLog(
+      c,
+      `stop requested; signalling ${owner.host} pid=${owner.pid} through shared state`
+    );
+    const gone = await waitForNoOwner(c);
+    if (!gone) {
+      await appendIngestLog(c, `stop: remote owner ${owner.host} did not exit within 8s`);
+      return {
+        stopped: false,
+        enabled: false,
+        pid: owner.pid,
+        note: 'remote stop signalled; owner heartbeat still active'
+      };
+    }
+    await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+    await clearProfileLocks(c.cloakProfileDir).catch(() => {});
+    await appendIngestLog(c, `stop confirmed; remote owner ${owner.host} exited`);
+    return { stopped: true, enabled: false, pid: owner.pid, note: 'remote owner stopped' };
+  }
 
   if (!pid || !alive(pid)) {
     await fsp.rm(c.lockPath, { force: true }).catch(() => {});
@@ -628,7 +729,6 @@ export async function stop() {
 
   await appendIngestLog(c, `stop requested; SIGKILL pid=${pid}`);
   killIngestPid(pid);
-  await fsp.rm(c.lockPath, { force: true }).catch(() => {});
   // Off has to be true when it returns, not eventually: confirm the group is
   // gone, then sweep whatever escaped it and free the profile for the next On.
   let gone = await waitForExit(pid, 3_000);
@@ -636,6 +736,9 @@ export async function stop() {
     killIngestPid(pid);
     gone = await waitForExit(pid, 2_000);
   }
+  if (owner?.token) await removeOwner(c, owner.token);
+  await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+  await waitForNoOwner(c, 2_000);
   const orphans = await killStrayBrowsers(c).catch(() => []);
   await clearProfileLocks(c.cloakProfileDir).catch(() => {});
   if (!gone) await appendIngestLog(c, `stop: pid=${pid} still alive after SIGKILL`);
@@ -675,11 +778,27 @@ export async function hardRestart(options = {}) {
   await writeDesired(c, { enabled: false });
   state.nextSpawnAllowedAt = Date.now() + 30_000;
 
-  const oldPid = await readPid(c.lockPath);
+  const oldOwner = await findRunningOwner(c);
+  const oldPid = oldOwner
+    ? oldOwner.host === os.hostname()
+      ? oldOwner.pid
+      : null
+    : await readPid(c.lockPath);
   if (oldPid && alive(oldPid)) {
     await appendIngestLog(c, `hard restart SIGKILL pid=${oldPid}`);
     killIngestPid(oldPid);
     if (!(await waitForExit(oldPid, 3_000))) killIngestPid(oldPid);
+    if (oldOwner?.token) await removeOwner(c, oldOwner.token);
+    await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+  } else if (oldOwner) {
+    await appendIngestLog(
+      c,
+      `hard restart waiting for ${oldOwner.host} pid=${oldOwner.pid} to stop`
+    );
+  }
+  if (!(await waitForNoOwner(c))) {
+    await appendIngestLog(c, 'hard restart aborted; remote owner heartbeat is still active');
+    throw new Error('The existing ingest worker did not stop within 8 seconds');
   }
   await fsp.rm(c.lockPath, { force: true }).catch(() => {});
   const killedBrowsers = await killStrayBrowsers(c).catch(() => []);
@@ -697,10 +816,14 @@ export async function hardRestart(options = {}) {
   // Let chrome/Xvfb grandchildren die and license seats release before relaunch.
   await new Promise((resolve) => setTimeout(resolve, 2_000));
 
-  if (await isRunning()) {
-    const still = await readPid(c.lockPath);
-    await appendIngestLog(c, `hard restart: still alive pid=${still}; SIGKILL again`);
-    killIngestPid(still);
+  const remaining = await findRunningOwner(c);
+  if (remaining) {
+    if (remaining.host !== os.hostname()) {
+      throw new Error(`A worker in ${remaining.host} became active during restart`);
+    }
+    await appendIngestLog(c, `hard restart: still alive pid=${remaining.pid}; SIGKILL again`);
+    killIngestPid(remaining.pid);
+    if (remaining.token) await removeOwner(c, remaining.token);
     await fsp.rm(c.lockPath, { force: true }).catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
@@ -723,7 +846,7 @@ export async function hardRestart(options = {}) {
     restarted: true,
     pid,
     enabled: true,
-    killedPid: oldPid || null,
+    killedPid: oldPid || oldOwner?.pid || null,
     killedBrowsers: killedBrowsers.length
   };
 }
@@ -739,7 +862,16 @@ export async function supervise() {
   const desired = await readDesired(c);
   if (!desired.enabled) {
     // Belt-and-braces: a stray child must not keep ingesting after Off.
-    const pid = await readPid(c.lockPath);
+    const owner = await findRunningOwner(c);
+    if (owner && owner.host !== os.hostname()) {
+      return {
+        action: 'remote-stop-pending',
+        enabled: false,
+        pid: owner.pid,
+        host: owner.host
+      };
+    }
+    const pid = owner?.pid || (await readPid(c.lockPath));
     if (pid && alive(pid)) {
       await appendIngestLog(c, `supervisor killing stray pid=${pid} (switch off)`);
       killIngestPid(pid);
@@ -804,7 +936,9 @@ export async function status() {
   const desired = await readDesired(c);
   // Off must never look "still working" because a child outlived SIGTERM.
   if (!desired.enabled) {
-    const stray = await readPid(c.lockPath);
+    const owner = await findRunningOwner(c);
+    const stray =
+      owner && owner.host !== os.hostname() ? null : owner?.pid || (await readPid(c.lockPath));
     if (stray && alive(stray)) {
       await appendIngestLog(c, `status poll killing stray pid=${stray}`);
       killIngestPid(stray);
@@ -812,11 +946,12 @@ export async function status() {
     }
   }
 
-  const [running, file, cursor] = await Promise.all([
-    isRunning(),
+  const [liveOwner, file, cursor] = await Promise.all([
+    findRunningOwner(c),
     readStatus(c.statusPath),
     readCursor(c)
   ]);
+  const running = Boolean(liveOwner);
 
   let counts = file.counts;
   let next = file.next;
@@ -851,7 +986,7 @@ export async function status() {
     /** The switch. True means "should be running", independent of whether it is. */
     enabled: Boolean(desired.enabled),
     running,
-    pid: running ? file.pid || (await readPid(c.lockPath)) : null,
+    pid: running ? liveOwner?.pid || file.pid || (await readPid(c.lockPath)) : null,
     startedAt: file.startedAt || null,
     stoppedAt: file.stoppedAt || null,
     current: running ? file.current : null,
