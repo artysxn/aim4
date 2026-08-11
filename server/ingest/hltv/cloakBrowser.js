@@ -10,7 +10,6 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import { ensureBinary, launchContext, launchPersistentContext } from 'cloakbrowser';
 import {
@@ -22,16 +21,15 @@ import {
   redactProxy
 } from './proxyPool.js';
 import { looksLikeMissingPage, pageTitle } from './classify.js';
+import { ensureHeadedDisplay, resetHeadedDisplay } from './cloakDisplay.js';
 
 export { parseProxyLines, loadProxyPool } from './proxyPool.js';
+export { isDisplayAlive } from './cloakDisplay.js';
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 60_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
 const DEFAULT_DOWNLOAD_DEADLINE_MS = 30 * 60_000;
 const DEFAULT_STALL_MS = 60_000;
-let displayPromise = null;
-let displayStarting = false;
-let xvfbProcess = null;
 
 const bool = (value, fallback) => {
   if (value === undefined || value === null || value === '') return fallback;
@@ -50,74 +48,6 @@ function isDisplayError(err) {
   return /Missing X server|without having a XServer|ozone_platform_x11|\$DISPLAY/i.test(
     String(err?.message || err || '')
   );
-}
-
-function resetHeadedDisplay() {
-  delete process.env.DISPLAY;
-  displayPromise = null;
-  displayStarting = false;
-  try {
-    xvfbProcess?.kill?.('SIGKILL');
-  } catch {
-    /* already gone */
-  }
-  xvfbProcess = null;
-}
-
-async function ensureHeadedDisplay() {
-  if (process.platform !== 'linux') return;
-  const displayNumber = 99;
-  const display = `:${displayNumber}`;
-  const socket = `/tmp/.X11-unix/X${displayNumber}`;
-  if (await fsp.access(socket).then(() => true, () => false)) {
-    process.env.DISPLAY = display;
-    return;
-  }
-  // Prior Xvfb died (common after SIGKILL of a sibling ingest). Do not trust
-  // a cached resolved promise or a stale DISPLAY value.
-  delete process.env.DISPLAY;
-
-  if (!displayStarting) {
-    displayStarting = true;
-    displayPromise = (async () => {
-      try {
-        try {
-          xvfbProcess?.kill?.('SIGKILL');
-        } catch {
-          /* ignore */
-        }
-        xvfbProcess = spawn(
-          'Xvfb',
-          [display, '-screen', '0', '1920x1080x24', '-nolisten', 'tcp'],
-          { stdio: 'ignore' }
-        );
-        xvfbProcess.unref();
-        let launchError = null;
-        xvfbProcess.once('error', (err) => {
-          launchError = err;
-        });
-        process.once('exit', () => xvfbProcess?.kill());
-
-        const deadline = Date.now() + 5000;
-        while (Date.now() < deadline) {
-          if (launchError) {
-            throw new Error(
-              `Could not start Xvfb for headed CloakBrowser: ${launchError.message}. Rebuild the Docker image so the xvfb package is installed.`
-            );
-          }
-          if (await fsp.access(socket).then(() => true, () => false)) {
-            process.env.DISPLAY = display;
-            return;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-        throw new Error('Xvfb did not create a display within 5 seconds');
-      } finally {
-        displayStarting = false;
-      }
-    })();
-  }
-  return displayPromise;
 }
 
 function isProxyRetryable(err) {
