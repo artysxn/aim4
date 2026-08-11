@@ -225,14 +225,21 @@ export async function applyProxySettings(cfg) {
 
 /**
  * Pool order: working winners, optional AIM4_CLOAK_PROXY, last fetch cache, file.
+ * When cloakProxyOnly is set (default), return only that single URL.
  */
 export async function loadProxyPool(cfg = {}) {
+  const single = normalizeProxyUrl(cfg.cloakProxy || process.env.AIM4_CLOAK_PROXY || '');
+  const only =
+    cfg.cloakProxyOnly !== undefined
+      ? Boolean(cfg.cloakProxyOnly)
+      : !/^(0|false|no|off)$/i.test(process.env.AIM4_CLOAK_PROXY_ONLY || 'true');
+  if (only && single) return [single];
+
   const chunks = [];
   const working = await readWorkingProxies(cfg);
   chunks.push(...working.map((e) => e.url));
 
-  const single = cfg.cloakProxy || process.env.AIM4_CLOAK_PROXY || '';
-  if (single) chunks.push(...parseProxyLines(single));
+  if (single) chunks.push(single);
   if (Array.isArray(cfg.cloakProxies)) {
     chunks.push(...parseProxyLines(cfg.cloakProxies.join('\n')));
   }

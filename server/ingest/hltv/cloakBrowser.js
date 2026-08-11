@@ -459,9 +459,14 @@ export function createCloakSession(cfg = {}) {
   async function ensurePool() {
     if (!poolPromise) {
       poolPromise = (async () => {
+        const pool = await loadProxyPool(cfg);
+        if (cfg.cloakProxyOnly && pool.length === 1) {
+          preferredProxyCount = 1;
+          log(`Proxy pinned: ${redactProxy(pool[0])} (only)`);
+          return pool;
+        }
         const working = await readWorkingProxies(cfg);
         preferredProxyCount = working.length;
-        const pool = await loadProxyPool(cfg);
         if (pool.length) {
           log(
             `Proxy pool: ${pool.length} endpoint(s)` +

@@ -54,26 +54,34 @@ export function loadConfig(overrides = {}) {
     cloakFingerprintSeed: env.AIM4_CLOAK_FINGERPRINT_SEED || '',
     cloakLicenseKey: env.AIM4_CLOAK_LICENSE_KEY || env.CLOAKBROWSER_LICENSE_KEY || '',
     cloakGeoip: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_GEOIP || 'true'),
-    /** Single proxy URL, tried first before the file pool. */
-    cloakProxy: env.AIM4_CLOAK_PROXY || '',
+    /**
+     * Transport proxy. Defaults to the known-good office exit; every download
+     * goes through it when cloakProxyOnly is on (default).
+     */
+    cloakProxy: env.AIM4_CLOAK_PROXY || 'http://130.17.12.137:3128',
+    /**
+     * When true (default), ignore working-proxy cache / public list / file and
+     * use only cloakProxy. Set AIM4_CLOAK_PROXY_ONLY=off to restore the pool.
+     */
+    cloakProxyOnly: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_PROXY_ONLY || 'true'),
     /**
      * Newline-separated proxy list (http:// and socks5://). Default sits next
      * to the ingest state dir (gitignored / volume-mounted). Override with
-     * AIM4_CLOAK_PROXY_FILE. Not baked into the Docker image.
+     * AIM4_CLOAK_PROXY_FILE. Not baked into the Docker image. Ignored when
+     * cloakProxyOnly is on.
      */
     cloakProxyFile: env.AIM4_CLOAK_PROXY_FILE || '',
     /**
-     * Forced after 3 consecutive pool failures in one download (challenge /
-     * tunnel / dead exit). Bare host:port is fine; defaults to the known-good
-     * office proxy. Empty / AIM4_CLOAK_FALLBACK_PROXY=off disables.
+     * Forced after 3 consecutive pool failures. Unused while cloakProxyOnly
+     * pins a single exit. Empty / AIM4_CLOAK_FALLBACK_PROXY=off disables.
      */
     cloakFallbackProxy: /^(0|false|no|off)$/i.test(env.AIM4_CLOAK_FALLBACK_PROXY || '')
       ? ''
       : env.AIM4_CLOAK_FALLBACK_PROXY || 'http://130.17.12.137:3128',
     /** How many proxies to try per download/page before giving up. */
-    cloakProxyAttempts: num(env.AIM4_CLOAK_PROXY_ATTEMPTS, 5),
-    /** Random pick (default) vs sequential cursor through the pool. */
-    cloakProxyRandom: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_PROXY_RANDOM || 'true'),
+    cloakProxyAttempts: num(env.AIM4_CLOAK_PROXY_ATTEMPTS, 1),
+    /** Random pick vs sequential. Off by default while pinned to one exit. */
+    cloakProxyRandom: /^(1|true|yes|on)$/i.test(env.AIM4_CLOAK_PROXY_RANDOM || ''),
     cloakSettleMs: num(env.AIM4_CLOAK_SETTLE_MS, 5000),
     cloakDownloadDeadlineMs: num(env.AIM4_CLOAK_DOWNLOAD_DEADLINE_MS, 30 * 60_000),
 
