@@ -35,6 +35,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
+import { cursorProgress, readCursor } from './cursor.js';
 import { openLedger } from './ledger.js';
 import { emptyStatus, readStatus, writeStatus } from './status.js';
 
@@ -267,10 +268,11 @@ export function stopSupervisor() {
 /** Everything the admin page renders. */
 export async function status() {
   const c = cfg();
-  const [running, file, desired] = await Promise.all([
+  const [running, file, desired, cursor] = await Promise.all([
     isRunning(),
     readStatus(c.statusPath),
-    readDesired(c)
+    readDesired(c),
+    readCursor(c)
   ]);
 
   let counts = file.counts;
@@ -294,8 +296,14 @@ export async function status() {
     }
   }
 
-  const total = counts?.total || 0;
-  const done = counts?.done || 0;
+  const seq = cursorProgress(cursor);
+  const liveCursor = running && file.cursor ? { ...seq, ...file.cursor } : seq;
+  if (!next && liveCursor.nextId) {
+    next = { matchId: String(liveCursor.nextId), label: `demo/${liveCursor.nextId}`, playedAt: null };
+  }
+
+  const total = liveCursor.total || counts?.total || 0;
+  const done = liveCursor.done || counts?.done || 0;
   return {
     /** The switch. True means "should be running", independent of whether it is. */
     enabled: Boolean(desired.enabled),
@@ -312,13 +320,26 @@ export async function status() {
         : 0,
     counts: counts || null,
     next,
-    progress: { done, total, percent: total ? Math.round((done / total) * 1000) / 10 : 0 },
+    cursor: liveCursor,
+    progress: {
+      done,
+      total,
+      left: liveCursor.left,
+      percent: liveCursor.percent,
+      loopsPerHour: liveCursor.loopsPerHour,
+      atFrontier: liveCursor.atFrontier,
+      nextId: liveCursor.nextId,
+      lastSuccessId: liveCursor.lastSuccessId,
+      startId: liveCursor.startId
+    },
     recent: file.recent || [],
     lastError: file.lastError || null,
     config: {
       source: c.source,
       inbox: c.inbox || null,
       since: c.since,
+      demoStart: c.demoStart,
+      frontierWaitMs: c.frontierWaitMs,
       batchSize: c.batchSize,
       pollIntervalMs: c.pollIntervalMs,
       library: c.library || null

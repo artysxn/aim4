@@ -363,7 +363,7 @@ function makeRar(files) {
       threw = e;
     });
     assert(threw && /cannot open \.rar/i.test(threw.message), 'missing extractor is explained');
-    assert(/\.zip or \.tar\.gz/.test(threw.message), 'the error says what to do instead');
+    assert(/unar|libarchive-tools/i.test(threw.message), 'the error names the packages to install');
     console.log('  rar: missing extractor reported with a way forward');
   } else {
     const m1 = fakeDem(7, 64);

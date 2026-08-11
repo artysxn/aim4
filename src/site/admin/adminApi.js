@@ -66,6 +66,10 @@ export const adminApi = {
   ingestProxiesSave: (body) => send('POST', '/api/admin/ingest/proxies', body),
   ingestProxiesRefresh: () => send('POST', '/api/admin/ingest/proxies/refresh'),
 
+  // Scratch downloads under the ingest work / probe dirs.
+  ingestDisk: () => get('/api/admin/ingest/disk'),
+  ingestDiskDelete: (ids) => send('DELETE', '/api/admin/ingest/disk', { ids }),
+
   users: ({ q = '', tier = '', status = '', page = 0, sort = 'created_at' } = {}) => {
     const params = new URLSearchParams();
     if (q) params.set('q', q);

@@ -26,6 +26,8 @@ export function emptyStatus() {
     next: null,
     recent: [],
     lastError: null,
+    idleUntil: null,
+    cursor: null,
     updatedAt: new Date().toISOString()
   };
 }
@@ -107,6 +109,17 @@ export function foldEvent(status, event, ledger) {
         ...s.recent
       ].slice(0, RECENT_MAX);
       break;
+    case 'match-duplicate':
+      s.recent = [
+        {
+          at: event.at,
+          kind: 'duplicate',
+          matchId: event.matchId,
+          text: `Duplicate of library demo (${event.maps} map${event.maps === 1 ? '' : 's'})`
+        },
+        ...s.recent
+      ].slice(0, RECENT_MAX);
+      break;
     case 'match-failed':
       s.lastError = event.error;
       s.recent = [
@@ -116,21 +129,56 @@ export function foldEvent(status, event, ledger) {
       s.current = null;
       break;
     case 'download-failed':
-      s.lastError = event.error;
+      if (!event.missing) s.lastError = event.error;
       s.recent = [
-        { at: event.at, kind: 'failed', matchId: event.matchId, text: event.error },
+        {
+          at: event.at,
+          kind: event.missing ? 'missing' : 'failed',
+          matchId: event.matchId,
+          text: event.error
+        },
         ...s.recent
       ].slice(0, RECENT_MAX);
       s.downloads = s.downloads.filter((d) => d.matchId !== event.matchId);
-      if (s.current?.stage === 'download' && s.current.matchId === event.matchId) {
+      if (!event.missing && s.current?.stage === 'download' && s.current.matchId === event.matchId) {
         s.current = s.downloads[0] || null;
       }
       break;
     case 'match-cleaned':
       s.current = null;
       break;
+    case 'cursor':
+      s.cursor = {
+        startId: event.startId,
+        nextId: event.nextId,
+        lastSuccessId: event.lastSuccessId,
+        highWaterId: event.highWaterId,
+        done: event.done,
+        total: event.total,
+        left: event.left,
+        percent: event.percent,
+        loopsPerHour: event.loopsPerHour,
+        atFrontier: event.atFrontier,
+        frontierMisses: event.frontierMisses
+      };
+      s.next = {
+        matchId: String(event.nextId),
+        label: `demo/${event.nextId}`,
+        playedAt: null
+      };
+      break;
+    case 'frontier':
+      s.current = {
+        matchId: String(event.demoId),
+        label: `demo/${event.demoId}`,
+        demoId: event.demoId,
+        stage: 'waiting',
+        lastSuccessId: event.lastSuccessId
+      };
+      s.idleUntil = Date.now() + (event.nextCheckInMs || 0);
+      break;
     case 'idle':
-      s.current = null;
+      if (event.reason !== 'frontier') s.current = null;
       s.idleUntil = Date.now() + (event.nextPollInMs || 0);
       break;
     default:
@@ -139,10 +187,12 @@ export function foldEvent(status, event, ledger) {
 
   if (ledger) {
     s.counts = ledger.counts();
-    const next = ledger.oldestPending();
-    s.next = next
-      ? { matchId: next.matchId, label: next.archiveName || next.matchId, playedAt: next.playedAt }
-      : null;
+    if (!s.next) {
+      const next = ledger.oldestPending();
+      s.next = next
+        ? { matchId: next.matchId, label: next.archiveName || next.matchId, playedAt: next.playedAt }
+        : null;
+    }
   }
   return s;
 }

@@ -33,6 +33,7 @@ import {
   startProxyRefresh,
   writeProxySettings
 } from '../ingest/hltv/proxyPool.js';
+import { deleteIngestDisk, listIngestDisk } from '../ingest/hltv/disk.js';
 import {
   assignSeat,
   cancelSubscription,
@@ -617,6 +618,26 @@ async function route(req, res, url, me) {
       req
     });
     json(res, req, result.busy ? 409 : 200, result);
+    return true;
+  }
+
+  // Scratch downloads: archives, demos, probe packages under workDir / probe/.
+  if (req.method === 'GET' && p === '/api/admin/ingest/disk') {
+    json(res, req, 200, await listIngestDisk(loadIngestConfig()));
+    return true;
+  }
+
+  if (req.method === 'DELETE' && p === '/api/admin/ingest/disk') {
+    const body = await readJson(req).catch(() => ({}));
+    const ids = Array.isArray(body.ids) ? body.ids : [];
+    const result = await deleteIngestDisk(loadIngestConfig(), ids);
+    await writeAudit({
+      actorId: me.id,
+      action: 'ingest.disk.delete',
+      payload: { deleted: result.deleted, freed: result.freed, errors: result.errors },
+      req
+    });
+    json(res, req, 200, result);
     return true;
   }
 

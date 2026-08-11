@@ -1,16 +1,10 @@
 // ---------------------------------------------------------------------------
 // server/ingest/hltv/pipeline.js
-// The loop: download a batch, parse it, clear the shelf, repeat.
+// Sequential HLTV demo-id loop (and the older local batch path).
 //
-// Stages run as barriers rather than as a continuous stream. All three archives
-// finish downloading before any of them is parsed, and all three are parsed
-// before any is deleted. That is slightly less efficient than a rolling
-// pipeline and dramatically easier to resume, because at any instant every row
-// in the batch is in the same state and the ledger says which one.
-//
-// Every transition is written to the ledger BEFORE the work it describes, so a
-// process killed at any point leaves a row that says what it was in the middle
-// of. Startup resets those rows and deletes their scratch files.
+// HLTV mode walks /download/demo/{N} one at a time: download → unpack → parse →
+// library → delete remains → N+1. A 404 frontier waits 10 minutes and retries
+// the same id. Local mode keeps the discover + batch barrier for inbox drops.
 // ---------------------------------------------------------------------------
 
 import path from 'node:path';
@@ -18,6 +12,13 @@ import fsp from 'node:fs/promises';
 import { STATES } from './ledger.js';
 import { cleanMatch, freeBytes, sweepOrphans } from './cleanup.js';
 import { parseAndIngest, unpackArchive } from './process.js';
+import {
+  advanceCursor,
+  cursorProgress,
+  noteFrontierMiss,
+  readCursor
+} from './cursor.js';
+import { MissingDemoError } from './classify.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -33,6 +34,7 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
   let stopping = false;
   /** What the admin page reports as "currently at". */
   let current = null;
+  let cursorSnapshot = null;
 
   const emit = (type, data = {}) => onEvent({ type, at: Date.now(), ...data });
 
@@ -40,7 +42,6 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
     stopping = true;
   }
 
-  /** Files for a row are needed while it is anything but finished-and-clean. */
   const isLive = (matchId) => {
     if (
       cfg.cloakDownloadsDir &&
@@ -53,7 +54,6 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
     return row.state !== STATES.CLEANED && row.state !== STATES.FILTERED_OUT;
   };
 
-  /** Once at startup: reset interrupted rows and bin their leftovers. */
   async function recover() {
     const recovered = ledger.recoverInterrupted();
     for (const row of recovered) {
@@ -63,13 +63,305 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
     const swept = await sweepOrphans(cfg.workDir, isLive);
     await ledger.save();
     if (recovered.length || swept.removed.length) {
-      emit('recovered', { requeued: recovered.length, orphansRemoved: swept.removed.length, freed: swept.freed });
+      emit('recovered', {
+        requeued: recovered.length,
+        orphansRemoved: swept.removed.length,
+        freed: swept.freed
+      });
     }
     return { recovered: recovered.length, ...swept };
   }
 
-  /** Ask the source what exists and fold it into the ledger. */
+  async function sleepInterruptible(ms) {
+    const step = 500;
+    for (let waited = 0; waited < ms && !stopping; waited += step) {
+      await sleep(Math.min(step, ms - waited));
+    }
+  }
+
+  async function emitCursor(extra = {}) {
+    cursorSnapshot = await readCursor(cfg);
+    const progress = cursorProgress(cursorSnapshot);
+    emit('cursor', { ...progress, ...extra });
+    return progress;
+  }
+
+  // ---- sequential HLTV path ----------------------------------------------
+
+  async function processDownloadedRow(row) {
+    const dir = path.join(cfg.workDir, String(row.matchId));
+    ledger.setState(row.matchId, STATES.PARSING);
+    await ledger.save();
+
+    current = {
+      matchId: row.matchId,
+      label: row.archiveName || `demo/${row.matchId}`,
+      event: row.event || '',
+      playedAt: row.playedAt || null,
+      stage: 'unpack',
+      map: null,
+      demoId: Number(row.hltvDemoId || row.matchId)
+    };
+    emit('match-start', { ...current });
+
+    try {
+      const extracted = await unpackArchive(row.workPath, dir, {
+        allowedBytes: cfg.maxArchiveBytes
+      });
+      const demos = extracted.filter((f) => f.name.toLowerCase().endsWith('.dem'));
+      if (!demos.length) throw new Error('Archive contained no .dem files');
+
+      const { described, results } = await parseAndIngest({
+        library,
+        row,
+        demos,
+        concurrency: cfg.parseConcurrency,
+        onProgress: (p) => {
+          if (current) {
+            current.stage = p.stage || current.stage;
+            current.map = p.map || current.map;
+          }
+          emit('match-progress', { matchId: row.matchId, ...p });
+        }
+      });
+
+      const ok = results.filter((r) => r.ok);
+      const dupes = ok.filter((r) => r.duplicate);
+      const stored = ok.filter((r) => !r.duplicate);
+      const unnamed = stored.filter((r) => !r.naming?.applied);
+      if (!ok.length) {
+        throw new Error(
+          results.map((r) => r.error).filter(Boolean).join('; ') || 'no maps parsed'
+        );
+      }
+
+      const allDuplicate = stored.length === 0 && dupes.length > 0;
+      ledger.setState(row.matchId, allDuplicate ? STATES.FILTERED_OUT : STATES.INGESTED, {
+        demoIds: stored.map((r) => r.demoId),
+        event: described.event || row.event || '',
+        teams: described.teams,
+        mapsParsed: stored.length,
+        mapsDuplicate: dupes.length,
+        mapsFailed: results.length - ok.length,
+        needsReview: unnamed.length > 0,
+        lastError: results.find((r) => !r.ok)?.error || null
+      });
+      await ledger.save();
+
+      if (allDuplicate) {
+        emit('match-duplicate', {
+          matchId: row.matchId,
+          maps: dupes.length,
+          duplicateOf: dupes.map((d) => d.duplicateOf)
+        });
+      } else {
+        emit('match-ingested', {
+          matchId: row.matchId,
+          maps: stored.length,
+          duplicates: dupes.length,
+          failed: results.length - ok.length,
+          teams: described.teams.map((t) => t.name),
+          naming: stored.map((r) => r.naming?.confidence)
+        });
+      }
+
+      if (!cfg.keepSources) {
+        const { freed } = await cleanMatch(cfg.workDir, row.matchId);
+        emit('match-cleaned', { matchId: row.matchId, freed });
+      }
+      if (!allDuplicate) {
+        ledger.setState(row.matchId, unnamed.length ? STATES.NEEDS_REVIEW : STATES.CLEANED);
+        await ledger.save();
+      }
+      return { ok: true, duplicate: allDuplicate, maps: stored.length };
+    } catch (err) {
+      ledger.fail(row.matchId, err, cfg.maxAttempts);
+      await cleanMatch(cfg.workDir, row.matchId).catch(() => {});
+      await ledger.save();
+      emit('match-failed', { matchId: row.matchId, error: String(err?.message || err) });
+      return { ok: false, error: String(err?.message || err) };
+    } finally {
+      current = null;
+    }
+  }
+
+  /**
+   * One demo id: download → unpack → parse → store → clean → advance.
+   * Returns { advanced, missing, blocked }.
+   */
+  async function runOneDemo(demoId) {
+    const id = Number(demoId);
+    const matchId = String(id);
+    const url = `https://www.hltv.org/download/demo/${id}`;
+
+    if (!ledger.has(matchId)) {
+      ledger.upsertDiscovered({
+        matchId,
+        source: 'hltv',
+        hltvDemoId: id,
+        matchUrl: url,
+        playedAt: null,
+        event: '',
+        teams: []
+      });
+      await ledger.save();
+    } else if (ledger.isTerminal(matchId)) {
+      // Already finished this id in a prior run; skip download and advance.
+      cursorSnapshot = await advanceCursor(cfg, cursorSnapshot || (await readCursor(cfg)), {
+        success: true
+      });
+      await emitCursor();
+      return { advanced: true, skipped: true };
+    }
+
+    const free = await freeBytes(cfg.workDir);
+    if (free < cfg.minFreeBytes) {
+      throw new Error(
+        `Only ${(free / 1024 ** 3).toFixed(1)} GB free on the work volume, ` +
+          `need ${(cfg.minFreeBytes / 1024 ** 3).toFixed(1)} GB.`
+      );
+    }
+
+    const dir = path.join(cfg.workDir, matchId);
+    await fsp.mkdir(dir, { recursive: true });
+    const dest = path.join(dir, `${id}.rar`);
+
+    ledger.setState(matchId, STATES.DOWNLOADING);
+    await ledger.save();
+    current = {
+      matchId,
+      label: `demo/${id}`,
+      demoId: id,
+      stage: 'download',
+      received: 0,
+      totalBytes: 0
+    };
+    emit('download-start', {
+      matchId,
+      label: `demo/${id}`,
+      event: '',
+      playedAt: null,
+      demoId: id
+    });
+
+    try {
+      const got = await source.fetchDemoById(id, dest, {
+        onProgress: (p) => emit('download-progress', { matchId, ...p })
+      });
+      const row = ledger.setState(matchId, STATES.DOWNLOADED, {
+        archiveBytes: got.bytes,
+        workPath: got.path,
+        archiveName: got.filename,
+        event: got.event || '',
+        bestOf: got.bestOf || null
+      });
+      await ledger.save();
+      emit('download-complete', {
+        matchId,
+        bytes: got.bytes,
+        label: got.filename || `demo/${id}`
+      });
+
+      const result = await processDownloadedRow(row);
+      cursorSnapshot = await advanceCursor(cfg, cursorSnapshot || (await readCursor(cfg)), {
+        success: Boolean(result.ok)
+      });
+      await emitCursor({ lastOutcome: result.duplicate ? 'duplicate' : result.ok ? 'ok' : 'failed' });
+      return { advanced: true, missing: false, ...result };
+    } catch (err) {
+      await cleanMatch(cfg.workDir, matchId).catch(() => {});
+
+      if (err instanceof MissingDemoError || err?.missing) {
+        ledger.setState(matchId, STATES.DISCOVERED, {
+          lastError: err.message,
+          lastAttemptAt: new Date().toISOString()
+        });
+        await ledger.save();
+        cursorSnapshot = await noteFrontierMiss(
+          cfg,
+          cursorSnapshot || (await readCursor(cfg))
+        );
+        const progress = await emitCursor({ lastOutcome: 'missing' });
+        emit('frontier', {
+          demoId: id,
+          lastSuccessId: progress.lastSuccessId,
+          nextCheckInMs: cfg.frontierWaitMs,
+          frontierMisses: progress.frontierMisses
+        });
+        current = {
+          matchId,
+          label: `demo/${id}`,
+          demoId: id,
+          stage: 'waiting',
+          lastSuccessId: progress.lastSuccessId
+        };
+        emit('download-failed', { matchId, error: err.message, missing: true });
+        return { advanced: false, missing: true };
+      }
+
+      if (err?.fatal || err?.blocked) {
+        ledger.fail(matchId, err, cfg.maxAttempts);
+        await ledger.save();
+        emit('download-failed', { matchId, error: String(err.message || err) });
+        throw err;
+      }
+
+      // Permanent-ish failure: do not stall the sequence on one bad id.
+      ledger.fail(matchId, err, 1);
+      await ledger.save();
+      emit('download-failed', { matchId, error: String(err?.message || err) });
+      cursorSnapshot = await advanceCursor(cfg, cursorSnapshot || (await readCursor(cfg)), {
+        success: false
+      });
+      await emitCursor({ lastOutcome: 'failed' });
+      return { advanced: true, missing: false, ok: false, error: String(err?.message || err) };
+    } finally {
+      if (current?.stage !== 'waiting') current = null;
+    }
+  }
+
+  async function runSequential({ continuous = false, maxLoops = Infinity } = {}) {
+    stopping = false;
+    await recover();
+    cursorSnapshot = await readCursor(cfg);
+    await emitCursor();
+
+    let loops = 0;
+    while (!stopping && loops < maxLoops) {
+      const id = Number(cursorSnapshot.nextId);
+      const outcome = await runOneDemo(id);
+      if (stopping) break;
+
+      if (outcome.missing) {
+        if (!continuous) break;
+        emit('idle', {
+          nextPollInMs: cfg.frontierWaitMs,
+          reason: 'frontier',
+          demoId: id,
+          lastSuccessId: cursorSnapshot.lastSuccessId
+        });
+        await sleepInterruptible(cfg.frontierWaitMs);
+        cursorSnapshot = await readCursor(cfg);
+        continue;
+      }
+
+      loops++;
+      cursorSnapshot = await readCursor(cfg);
+      if (!continuous && loops >= maxLoops) break;
+      // Brief politeness gap between successful ids (reuse min delay).
+      if (!stopping) await sleepInterruptible(cfg.minDelayMs || 0);
+    }
+
+    emit('run-end', { batches: loops, stopped: stopping });
+    return { batches: loops };
+  }
+
+  // ---- local inbox batch path (unchanged shape) --------------------------
+
   async function discover() {
+    if (typeof source.discover !== 'function') {
+      return { found: 0, added: 0 };
+    }
     const found = await source.discover({ since: cfg.since, until: cfg.until });
     let added = 0;
     for (const match of found) {
@@ -81,15 +373,12 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
     return { found: found.length, added };
   }
 
-  // ---- stage 1: download --------------------------------------------------
-
   async function downloadBatch(rows) {
     const done = [];
     await Promise.all(
       rows.map(async (row) => {
         const dir = path.join(cfg.workDir, String(row.matchId));
         const dest = path.join(dir, row.archiveName || `${row.matchId}.rar`);
-        // State first: a crash here leaves `downloading`, which startup resets.
         ledger.setState(row.matchId, STATES.DOWNLOADING);
         await ledger.save();
         try {
@@ -117,7 +406,7 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
           });
           done.push(ledger.get(row.matchId));
         } catch (err) {
-          if (err?.fatal) throw err; // a challenge stops everything
+          if (err?.fatal) throw err;
           ledger.fail(row.matchId, err, cfg.maxAttempts);
           await cleanMatch(cfg.workDir, row.matchId).catch(() => {});
           emit('download-failed', { matchId: row.matchId, error: String(err?.message || err) });
@@ -128,88 +417,10 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
     return done;
   }
 
-  // ---- stage 2 + 3: parse, then clear the shelf ---------------------------
-
   async function processMatch(row) {
-    const dir = path.join(cfg.workDir, String(row.matchId));
-    ledger.setState(row.matchId, STATES.PARSING);
-    await ledger.save();
-
-    current = {
-      matchId: row.matchId,
-      label: row.archiveName || row.matchId,
-      event: row.event || '',
-      playedAt: row.playedAt || null,
-      stage: 'unpack',
-      map: null
-    };
-    emit('match-start', { ...current });
-
-    try {
-      const extracted = await unpackArchive(row.workPath, dir, {
-        allowedBytes: cfg.maxArchiveBytes
-      });
-      const demos = extracted.filter((f) => f.name.toLowerCase().endsWith('.dem'));
-      if (!demos.length) throw new Error('Archive contained no .dem files');
-
-      const { described, results } = await parseAndIngest({
-        library,
-        row,
-        demos,
-        concurrency: cfg.parseConcurrency,
-        onProgress: (p) => {
-          if (current) {
-            current.stage = p.stage || current.stage;
-            current.map = p.map || current.map;
-          }
-          emit('match-progress', { matchId: row.matchId, ...p });
-        }
-      });
-
-      const ok = results.filter((r) => r.ok);
-      const unnamed = ok.filter((r) => !r.naming?.applied);
-      if (!ok.length) {
-        throw new Error(results.map((r) => r.error).filter(Boolean).join('; ') || 'no maps parsed');
-      }
-
-      ledger.setState(row.matchId, STATES.INGESTED, {
-        demoIds: ok.map((r) => r.demoId),
-        event: described.event || row.event || '',
-        teams: described.teams,
-        mapsParsed: ok.length,
-        mapsFailed: results.length - ok.length,
-        needsReview: unnamed.length > 0,
-        lastError: results.find((r) => !r.ok)?.error || null
-      });
-      await ledger.save();
-      emit('match-ingested', {
-        matchId: row.matchId,
-        maps: ok.length,
-        failed: results.length - ok.length,
-        teams: described.teams.map((t) => t.name),
-        naming: ok.map((r) => r.naming?.confidence)
-      });
-
-      // Stage 4, immediately. This is what keeps disk use flat.
-      if (!cfg.keepSources) {
-        const { freed } = await cleanMatch(cfg.workDir, row.matchId);
-        emit('match-cleaned', { matchId: row.matchId, freed });
-      }
-      ledger.setState(row.matchId, unnamed.length ? STATES.NEEDS_REVIEW : STATES.CLEANED);
-      await ledger.save();
-      return { ok: true, maps: ok.length };
-    } catch (err) {
-      ledger.fail(row.matchId, err, cfg.maxAttempts);
-      await cleanMatch(cfg.workDir, row.matchId).catch(() => {});
-      await ledger.save();
-      emit('match-failed', { matchId: row.matchId, error: String(err?.message || err) });
-      return { ok: false, error: String(err?.message || err) };
-    } finally {
-      current = null;
-    }
+    return processDownloadedRow(row);
   }
 
-  /** One full batch: download N, parse them, clean them. */
   async function runBatch() {
     const rows = ledger.nextBatch(cfg.batchSize);
     if (!rows.length) return { done: 0, empty: true };
@@ -218,18 +429,14 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
     if (free < cfg.minFreeBytes) {
       throw new Error(
         `Only ${(free / 1024 ** 3).toFixed(1)} GB free on the work volume, ` +
-          `need ${(cfg.minFreeBytes / 1024 ** 3).toFixed(1)} GB. ` +
-          'If the library is not full, cleanup is failing and archives are piling up.'
+          `need ${(cfg.minFreeBytes / 1024 ** 3).toFixed(1)} GB.`
       );
     }
 
     emit('batch-start', { size: rows.length, matchIds: rows.map((r) => r.matchId) });
     const downloaded = await downloadBatch(rows);
-
     let done = 0;
     for (const row of downloaded) {
-      // A stop prevents another batch. Finish every archive already downloaded
-      // so no row is left stranded in DOWNLOADED across the restart.
       const res = await processMatch(row);
       if (res.ok) done++;
     }
@@ -237,17 +444,9 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
     return { done, empty: false };
   }
 
-  /**
-   * Run until the queue empties or `stop()` is called.
-   *
-   * `continuous` keeps the process alive on an empty queue and re-runs
-   * discovery on the poll interval, which is how newly finished matches get
-   * picked up without a restart.
-   */
-  async function run({ continuous = false, maxBatches = Infinity } = {}) {
+  async function runLocal({ continuous = false, maxBatches = Infinity } = {}) {
     stopping = false;
     await recover();
-
     let batches = 0;
     while (!stopping && batches < maxBatches) {
       await discover();
@@ -266,12 +465,14 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
     return { batches };
   }
 
-  /** Sleep that wakes early when stop() lands, so the UI stays responsive. */
-  async function sleepInterruptible(ms) {
-    const step = 500;
-    for (let waited = 0; waited < ms && !stopping; waited += step) {
-      await sleep(Math.min(step, ms - waited));
+  async function run(opts = {}) {
+    if (source.sequential && typeof source.fetchDemoById === 'function') {
+      return runSequential({
+        continuous: opts.continuous,
+        maxLoops: opts.maxBatches ?? Infinity
+      });
     }
+    return runLocal(opts);
   }
 
   return {
@@ -282,6 +483,9 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
     requestStop,
     get current() {
       return current;
+    },
+    get cursor() {
+      return cursorSnapshot;
     },
     get stopping() {
       return stopping;

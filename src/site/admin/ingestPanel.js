@@ -220,6 +220,160 @@ function probeBlock() {
 }
 
 /**
+ * Scratch downloads: archives, demos, probe packages, with used/free space.
+ */
+function diskBlock() {
+  const root = el('div', 'ingest-disk');
+  let timer = 0;
+  let st = null;
+  let busy = false;
+  const selected = new Set();
+
+  const head = el('div', 'ingest-head');
+  head.appendChild(el('h4', null, 'Downloads'));
+  const chip = el('span', 'ingest-chip is-stopped', '0');
+  head.appendChild(chip);
+  root.appendChild(head);
+
+  const meta = el('div', 'ingest-disk-meta');
+  root.appendChild(meta);
+
+  const refreshBtn = button('Refresh', () => refresh(), 'btn btn-sm');
+  const deleteBtn = button('Delete selected', deleteSelected, 'btn btn-danger btn-sm');
+  const deleteAllBtn = button('Delete all', deleteAll, 'btn btn-danger btn-sm');
+  root.appendChild(row(refreshBtn, deleteBtn, deleteAllBtn));
+
+  const tableWrap = el('div', 'ingest-disk-table-wrap');
+  root.appendChild(tableWrap);
+
+  function syncSelection() {
+    const ids = new Set((st?.files || []).map((f) => f.id));
+    for (const id of [...selected]) {
+      if (!ids.has(id)) selected.delete(id);
+    }
+    deleteBtn.disabled = busy || selected.size === 0;
+    deleteAllBtn.disabled = busy || !(st?.files || []).length;
+    refreshBtn.disabled = busy;
+  }
+
+  async function refresh() {
+    try {
+      st = await adminApi.ingestDisk();
+      draw();
+    } catch (err) {
+      notice(root, err.message, 'error');
+    }
+  }
+
+  async function deleteIds(ids) {
+    if (!ids.length || busy) return;
+    busy = true;
+    syncSelection();
+    try {
+      st = await adminApi.ingestDiskDelete(ids);
+      for (const id of ids) selected.delete(id);
+      notice(root, `Deleted ${st.deleted?.length || 0}, freed ${bytes(st.freed || 0)}.`);
+      draw();
+    } catch (err) {
+      notice(root, err.message, 'error');
+    } finally {
+      busy = false;
+      syncSelection();
+    }
+  }
+
+  function deleteSelected() {
+    return deleteIds([...selected]);
+  }
+
+  function deleteAll() {
+    return deleteIds((st?.files || []).map((f) => f.id));
+  }
+
+  function draw() {
+    const files = st?.files || [];
+    chip.textContent = String(files.length);
+    chip.className = `ingest-chip ${files.length ? 'is-running' : 'is-stopped'}`;
+
+    const parts = [`Used ${bytes(st?.usedBytes || 0)}`];
+    if (st?.freeBytes != null) parts.push(`Free ${bytes(st.freeBytes)}`);
+    if (st?.breakdown) {
+      parts.push(`Work ${bytes(st.breakdown.work || 0)}`);
+      parts.push(`Probe ${bytes(st.breakdown.probe || 0)}`);
+    }
+    meta.textContent = parts.join(' · ');
+
+    tableWrap.replaceChildren();
+    if (!files.length) {
+      tableWrap.appendChild(el('p', 'admin-muted', 'No archives or demos on disk.'));
+      syncSelection();
+      return;
+    }
+
+    const table = el('table', 'admin-table ingest-disk-table');
+    const thead = el('thead');
+    const headRow = el('tr');
+    const checkTh = el('th');
+    const all = document.createElement('input');
+    all.type = 'checkbox';
+    all.checked = files.every((f) => selected.has(f.id));
+    all.addEventListener('change', () => {
+      if (all.checked) files.forEach((f) => selected.add(f.id));
+      else files.forEach((f) => selected.delete(f.id));
+      draw();
+    });
+    checkTh.appendChild(all);
+    headRow.append(checkTh, el('th', null, 'File'), el('th', null, 'Kind'), el('th', null, 'Size'), el('th', null, 'Modified'));
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = el('tbody');
+    for (const file of files) {
+      const tr = el('tr');
+      const tdCheck = el('td');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = selected.has(file.id);
+      box.addEventListener('change', () => {
+        if (box.checked) selected.add(file.id);
+        else selected.delete(file.id);
+        syncSelection();
+        all.checked = files.every((f) => selected.has(f.id));
+      });
+      tdCheck.appendChild(box);
+
+      const tdName = el('td');
+      tdName.appendChild(el('div', 'ingest-disk-name', file.name));
+      tdName.appendChild(el('div', 'ingest-dim', `${file.root}/${file.relative}`));
+
+      tr.append(
+        tdCheck,
+        tdName,
+        el('td', null, file.kind),
+        el('td', 'ingest-disk-size', bytes(file.bytes)),
+        el('td', 'ingest-dim', date(file.mtime))
+      );
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    tableWrap.appendChild(table);
+    syncSelection();
+  }
+
+  return {
+    root,
+    start() {
+      refresh();
+      timer = window.setInterval(refresh, POLL_MS);
+    },
+    stop() {
+      if (timer) window.clearInterval(timer);
+      timer = 0;
+    }
+  };
+}
+
+/**
  * CloakBrowser proxy pool controls: attempts, random/sequential, refresh list.
  * Persistent node like the probe so inputs survive panel redraws.
  */
@@ -367,6 +521,7 @@ export function ingestPanel() {
   const root = el('div', 'admin-ingest');
   const probe = probeBlock();
   const proxies = proxyBlock();
+  const disk = diskBlock();
   let timer = 0;
   let busy = false;
   let lastStatus = null;
@@ -412,52 +567,67 @@ export function ingestPanel() {
           : 'On, starting'
       );
     }
+    if (status.current?.stage === 'waiting' || (status.idleUntil && status.progress?.atFrontier)) {
+      return el('span', 'ingest-chip is-idle', 'On, waiting for next demo');
+    }
     if (status.idleUntil && !status.current) {
       return el('span', 'ingest-chip is-idle', 'On, waiting for new matches');
     }
     return el('span', 'ingest-chip is-running', 'Running');
   }
 
-  /** Chronological position: which match, of how many, and how far in. */
+  /** Sequential demo-id progress: current id, rate, remaining. */
   function progressBlock(status) {
     const wrap = el('div', 'ingest-progress');
-    const p = status.progress || { done: 0, total: 0, percent: 0 };
+    const p = status.progress || { done: 0, total: 0, percent: 0, left: 0, loopsPerHour: 0 };
 
     const bar = el('div', 'ingest-bar');
     const fill = el('div', 'ingest-bar-fill');
-    fill.style.width = `${Math.min(100, p.percent)}%`;
+    fill.style.width = `${Math.min(100, p.percent || 0)}%`;
     bar.appendChild(fill);
     wrap.appendChild(bar);
 
-    wrap.appendChild(
-      el('div', 'ingest-progress-meta', `${p.done} of ${p.total} matches (${p.percent}%)`)
-    );
+    const metaParts = [];
+    if (p.nextId != null) metaParts.push(`Demo ${p.nextId}`);
+    metaParts.push(`${p.done || 0} of ${p.total || 0} (${p.percent || 0}%)`);
+    metaParts.push(`${p.loopsPerHour || 0}/h`);
+    if (p.atFrontier) metaParts.push('Waiting for next');
+    else metaParts.push(`${p.left || 0} left`);
+    if (p.lastSuccessId != null) metaParts.push(`Last ok ${p.lastSuccessId}`);
+    wrap.appendChild(el('div', 'ingest-progress-meta', metaParts.join(' · ')));
 
     const current = status.current;
     if (current) {
       const line = el('div', 'ingest-current');
       line.appendChild(el('strong', null, current.label || current.matchId));
       if (current.event) line.appendChild(el('span', 'ingest-dim', current.event));
-      const stage =
-        current.stage === 'download'
-          ? current.downloadPhase === 'challenge'
-            ? `Working through managed challenge: ${Math.floor(
-                (current.elapsedMs || 0) / 1000
-              )}s`
+      let stage;
+      if (current.stage === 'waiting') {
+        const secs = status.idleUntil
+          ? Math.max(0, Math.ceil((status.idleUntil - Date.now()) / 1000))
+          : 0;
+        stage =
+          `Waiting for demo/${current.demoId || current.matchId}` +
+          (current.lastSuccessId != null ? ` (last ok ${current.lastSuccessId})` : '') +
+          (secs ? ` · retry in ${secs}s` : '');
+      } else if (current.stage === 'download') {
+        stage =
+          current.downloadPhase === 'challenge'
+            ? `Working through managed challenge: ${Math.floor((current.elapsedMs || 0) / 1000)}s`
             : current.downloadPhase === 'waiting'
-            ? `Waiting for an automatic download: ${Math.floor(
-                (current.elapsedMs || 0) / 1000
-              )}s`
-            : !current.received && current.elapsedMs
-            ? `Downloading in CloakBrowser: ${Math.floor(current.elapsedMs / 1000)}s`
-            : `Downloading: ${bytes(current.received || 0)}${
-                current.totalBytes ? ` of ${bytes(current.totalBytes)}` : ''
-              }`
-          : current.map
-            ? `${current.stage || 'working'}: ${current.map}${
-                current.round ? ` round ${current.round}/${current.totalRounds || '?'}` : ''
-              }`
-            : current.stage || 'working';
+              ? `Waiting for an automatic download: ${Math.floor((current.elapsedMs || 0) / 1000)}s`
+              : !current.received && current.elapsedMs
+                ? `Downloading in CloakBrowser: ${Math.floor(current.elapsedMs / 1000)}s`
+                : `Downloading: ${bytes(current.received || 0)}${
+                    current.totalBytes ? ` of ${bytes(current.totalBytes)}` : ''
+                  }`;
+      } else if (current.map) {
+        stage = `${current.stage || 'working'}: ${current.map}${
+          current.round ? ` round ${current.round}/${current.totalRounds || '?'}` : ''
+        }`;
+      } else {
+        stage = current.stage || 'working';
+      }
       line.appendChild(el('span', 'ingest-stage', stage));
       if (current.playedAt) line.appendChild(el('span', 'ingest-dim', date(current.playedAt)));
       wrap.appendChild(line);
@@ -545,12 +715,12 @@ export function ingestPanel() {
         'p',
         'admin-muted',
         status.enabled
-          ? 'Runs on the server. It keeps going with this page closed, and comes back by itself after a deploy or a reboot. Turning it off lets the match in progress finish first.'
-          : `Off. Turning it on starts a continuous backfill from ${
-              status.config?.since || 'the configured date'
-            }, checking for newly finished matches every ${Math.round(
-              (status.config?.pollIntervalMs || 0) / 60000
-            )} minutes.`
+          ? status.current?.stage === 'waiting'
+            ? `Waiting for demo/${status.current.demoId || status.progress?.nextId}. Last ok ${
+                status.progress?.lastSuccessId ?? 'none'
+              }.`
+            : `On demo/${status.progress?.nextId ?? '?'}. ${status.progress?.loopsPerHour || 0}/h.`
+          : `Off. Starts at demo/${status.config?.demoStart ?? 109575}, one id at a time.`
       )
     );
 
@@ -561,11 +731,22 @@ export function ingestPanel() {
     const meta = el('div', 'ingest-config');
     meta.appendChild(el('span', null, `Source: ${cfg.source || '?'}`));
     if (cfg.inbox) meta.appendChild(el('span', null, `Inbox: ${cfg.inbox}`));
-    meta.appendChild(el('span', null, `Since: ${cfg.since || '?'}`));
-    meta.appendChild(el('span', null, `Batch: ${cfg.batchSize ?? '?'}`));
-    meta.appendChild(
-      el('span', null, `Poll: every ${Math.round((cfg.pollIntervalMs || 0) / 60000)} min`)
-    );
+    if (cfg.source === 'hltv' || cfg.demoStart) {
+      meta.appendChild(el('span', null, `Start: ${cfg.demoStart ?? '?'}`));
+      meta.appendChild(
+        el(
+          'span',
+          null,
+          `Frontier wait: ${Math.round((cfg.frontierWaitMs || 0) / 60000)} min`
+        )
+      );
+    } else {
+      meta.appendChild(el('span', null, `Since: ${cfg.since || '?'}`));
+      meta.appendChild(el('span', null, `Batch: ${cfg.batchSize ?? '?'}`));
+      meta.appendChild(
+        el('span', null, `Poll: every ${Math.round((cfg.pollIntervalMs || 0) / 60000)} min`)
+      );
+    }
     wrap.appendChild(meta);
 
     if (status.lastError) {
@@ -578,6 +759,7 @@ export function ingestPanel() {
     }
 
     // Persistent nodes: re-appending moves them, keeping input/log/poll state.
+    wrap.appendChild(disk.root);
     wrap.appendChild(proxies.root);
     wrap.appendChild(probe.root);
 
@@ -588,6 +770,7 @@ export function ingestPanel() {
 
   function start() {
     refresh();
+    disk.start();
     proxies.start();
     probe.start();
     // Polling belongs to the open panel, not to the page.
@@ -597,6 +780,7 @@ export function ingestPanel() {
   function stop() {
     if (timer) window.clearInterval(timer);
     timer = 0;
+    disk.stop();
     proxies.stop();
     probe.stop();
   }

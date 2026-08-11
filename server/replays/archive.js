@@ -493,6 +493,8 @@ async function extractZip(source, targetFor, allowedBytes, onFile) {
 const RAR_TOOLS = [
   {
     bin: 'unar',
+    // Absolute paths first: some supervised Node launches strip a useful PATH.
+    candidates: ['unar', '/usr/bin/unar'],
     args: (src, dir, members) => [
       '-quiet',
       '-no-directory',
@@ -504,6 +506,7 @@ const RAR_TOOLS = [
   },
   {
     bin: 'bsdtar',
+    candidates: ['bsdtar', '/usr/bin/bsdtar'],
     args: (src, dir, members) => ['-x', '-f', src, '-C', dir, '--no-same-owner', ...members]
   }
 ];
@@ -515,12 +518,14 @@ function findRarTool() {
   if (rarTool !== undefined) return rarTool;
   rarTool = null;
   for (const tool of RAR_TOOLS) {
-    // No shell, and ENOENT is the only answer that matters: a binary that
-    // exists but dislikes --version is still a binary that exists.
-    const probe = spawnSync(tool.bin, ['--version'], { stdio: 'ignore' });
-    if (!(probe.error && probe.error.code === 'ENOENT')) {
-      rarTool = tool;
-      break;
+    for (const bin of tool.candidates || [tool.bin]) {
+      // No shell, and ENOENT is the only answer that matters: a binary that
+      // exists but dislikes --version is still a binary that exists.
+      const probe = spawnSync(bin, ['--version'], { stdio: 'ignore' });
+      if (!(probe.error && probe.error.code === 'ENOENT')) {
+        rarTool = { ...tool, bin };
+        return rarTool;
+      }
     }
   }
   return rarTool;
@@ -547,8 +552,8 @@ async function extractRar(source, targetFor, allowedBytes, onFile) {
   const tool = findRarTool();
   if (!tool) {
     throw new Error(
-      'This server cannot open .rar files (no extractor installed). ' +
-        'Repack the demos as .zip or .tar.gz and upload that.'
+      'This server cannot open .rar files (unar / bsdtar missing). ' +
+        'Install apt packages unar and libarchive-tools (Dockerfile and nixpacks.toml both list them), then redeploy.'
     );
   }
 

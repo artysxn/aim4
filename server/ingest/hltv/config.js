@@ -72,6 +72,16 @@ export function loadConfig(overrides = {}) {
     /** How often the continuous runner looks for newly finished matches. */
     pollIntervalMs: num(env.AIM4_INGEST_POLL_MS, 5 * 60 * 1000),
 
+    /** First HLTV /download/demo/{id} to walk when source=hltv. */
+    demoStart: num(env.AIM4_INGEST_DEMO_START, 109575),
+    /**
+     * Estimated newest working id for catch-up progress until a real frontier
+     * 404 is observed. Does not stop the walker; only affects the progress bar.
+     */
+    demoHint: num(env.AIM4_INGEST_DEMO_HINT, 110206),
+    /** Wait between retries when the next demo id is not published yet. */
+    frontierWaitMs: num(env.AIM4_INGEST_FRONTIER_WAIT_MS, 10 * 60 * 1000),
+
     /** Refuse to start a batch below this much free disk. */
     minFreeBytes: num(env.AIM4_INGEST_MIN_FREE_BYTES, 10 * 1024 ** 3),
 
@@ -79,10 +89,10 @@ export function loadConfig(overrides = {}) {
     maxAttempts: num(env.AIM4_INGEST_MAX_ATTEMPTS, 3),
 
     /**
-     * Where archives come from. `local` watches a directory, `hltv` crawls the
-     * site. See sources/ for what each needs.
+     * Where archives come from. `local` watches a directory, `hltv` walks
+     * sequential /download/demo/{id} URLs. See sources/ for what each needs.
      */
-    source: env.AIM4_INGEST_SOURCE || 'local',
+    source: env.AIM4_INGEST_SOURCE || 'hltv',
     /** For source=local: the directory holding .rar / .zip archives. */
     inbox: env.AIM4_INGEST_INBOX || '',
 

@@ -87,9 +87,14 @@ function logEvent(e, verbose) {
       break;
     case 'match-ingested':
       console.log(
-        `\n     ingested ${e.maps} map(s)${e.failed ? `, ${e.failed} failed` : ''} ` +
-          `as ${e.teams.join(' vs ')} [${e.naming.join(',')}]`
+        `\n     ingested ${e.maps} map(s)` +
+          `${e.duplicates ? `, ${e.duplicates} duplicate` : ''}` +
+          `${e.failed ? `, ${e.failed} failed` : ''} ` +
+          `as ${(e.teams || []).join(' vs ')} [${(e.naming || []).join(',')}]`
       );
+      break;
+    case 'match-duplicate':
+      console.log(`\n     duplicate: skipped ${e.maps} map(s) already in library`);
       break;
     case 'match-cleaned':
       console.log(`     cleaned, freed ${mb(e.freed)}`);
@@ -98,10 +103,28 @@ function logEvent(e, verbose) {
       console.log(`\n     FAILED: ${e.error}`);
       break;
     case 'download-failed':
-      console.log(`     download failed for ${e.matchId}: ${e.error}`);
+      console.log(
+        `     download ${e.missing ? 'missing' : 'failed'} for ${e.matchId}: ${e.error}`
+      );
+      break;
+    case 'cursor':
+      console.log(
+        `cursor: demo/${e.nextId} · ${e.done}/${e.total} · ${e.loopsPerHour}/h · left ${e.left}`
+      );
+      break;
+    case 'frontier':
+      console.log(
+        `frontier: demo/${e.demoId} missing` +
+          `${e.lastSuccessId != null ? ` (last ok ${e.lastSuccessId})` : ''}; ` +
+          `retry in ${Math.round(e.nextCheckInMs / 60000)} min`
+      );
       break;
     case 'idle':
-      console.log(`idle; next poll in ${Math.round(e.nextPollInMs / 1000)}s`);
+      console.log(
+        e.reason === 'frontier'
+          ? `waiting for demo/${e.demoId}; next check in ${Math.round(e.nextPollInMs / 1000)}s`
+          : `idle; next poll in ${Math.round(e.nextPollInMs / 1000)}s`
+      );
       break;
     default:
       if (verbose) console.log(e.type, JSON.stringify(e));
@@ -118,10 +141,11 @@ async function main() {
 
   check      preflight: extractor, source reachability, paths
   discover   populate the ledger, download nothing
-  run        download -> parse -> name -> ingest -> delete, in batches
+  run        download -> unpack -> parse -> ingest -> delete (HLTV: sequential demo ids)
   status     counts from the ledger
 
-Flags: ${Object.keys(FLAGS).concat(Object.keys(BOOLS)).join(' ')}`);
+Flags: ${Object.keys(FLAGS).concat(Object.keys(BOOLS)).join(' ')}
+Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
     return;
   }
 

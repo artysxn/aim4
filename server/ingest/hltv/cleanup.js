@@ -47,7 +47,7 @@ export async function sweepOrphans(workDir, isLive) {
   return { removed, freed };
 }
 
-async function dirBytes(dir) {
+export async function dirBytes(dir) {
   let total = 0;
   const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {

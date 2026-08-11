@@ -26,6 +26,7 @@ import { ingestDemo } from '../../replays/ingest.js';
 import { newDemoId } from '../../replays/demoStore.js';
 import { describeArchive, parseDemoFilename } from './hltvNames.js';
 import { applyHltvTeams } from './teamNames.js';
+import { findLibraryDuplicate, fingerprintDemo } from './duplicates.js';
 
 /**
  * Unpack one archive into `dir`, keeping HLTV's own entry names.
@@ -90,6 +91,21 @@ export async function parseAndIngest({ library, row, demos, concurrency = 1, onP
         // The whole point of this program. Before ingestDemo, never after.
         const naming = applyHltvTeams(demo, teams);
 
+        const fingerprint = fingerprintDemo(demo, entry.sizeBytes);
+        const dup = await findLibraryDuplicate(library, fingerprint);
+        if (dup) {
+          results.push({
+            ok: true,
+            duplicate: true,
+            demoId: dup.id,
+            name: entry.name,
+            mapNumber: slot.mapNumber ?? null,
+            naming,
+            duplicateOf: dup.id
+          });
+          continue;
+        }
+
         const demoId = newDemoId();
         onProgress?.({ stage: 'store', map: label });
         const record = await ingestDemo(
@@ -124,6 +140,7 @@ export async function parseAndIngest({ library, row, demos, concurrency = 1, onP
 
         results.push({
           ok: true,
+          duplicate: false,
           demoId,
           name: entry.name,
           mapNumber: slot.mapNumber ?? null,

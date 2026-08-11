@@ -492,6 +492,15 @@ async function executeProbe(c, run, urlObj, hooks) {
     log('info', `Probe ${run.runId} starting on this server`);
     log('info', `Target: ${urlObj.href}`);
     log('info', 'Transport: CloakBrowser (the same transport used by ingestion)');
+    {
+      const rar = rarSupport();
+      log(
+        rar.available ? 'info' : 'warn',
+        rar.available
+          ? `RAR extractor: ${rar.tool}`
+          : 'RAR extractor: missing (install unar + libarchive-tools and redeploy)'
+      );
+    }
 
     // -- browser + download ----------------------------------------------
     const t0 = Date.now();
@@ -578,13 +587,13 @@ async function executeProbe(c, run, urlObj, hooks) {
     } else {
       if (magic.kind === 'rar') {
         const rar = rarSupport();
-        if (!rar) {
+        if (!rar.available) {
           throw new Error(
             'The archive is RAR and this host has no extractor (unar or bsdtar). ' +
-              'The Docker image installs both, so this points at a broken deploy.'
+              'Install apt packages unar and libarchive-tools, then redeploy.'
           );
         }
-        log('info', `RAR extractor on this host: ${rar}`);
+        log('info', `RAR extractor on this host: ${rar.tool}`);
       }
       const extractDir = path.join(workDir, 'extract');
       run.live = { stage: 'unpack' };

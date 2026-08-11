@@ -2158,6 +2158,42 @@ body.is-impersonating {
   overflow-wrap: anywhere;
 }
 
+/* Ingest scratch downloads (archives / demos / probe packages). */
+.ingest-disk {
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.ingest-disk h4 {
+  margin: 0;
+  font-size: 13px;
+}
+.ingest-disk-meta {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ingest-disk-table-wrap {
+  margin-top: 10px;
+  max-height: 320px;
+  overflow: auto;
+}
+.ingest-disk-table {
+  width: 100%;
+}
+.ingest-disk-table th:first-child,
+.ingest-disk-table td:first-child {
+  width: 28px;
+}
+.ingest-disk-name {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.ingest-disk-size {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* CloakBrowser proxy pool controls. */
 .ingest-proxy {
   margin-top: 22px;

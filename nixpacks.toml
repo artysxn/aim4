@@ -3,6 +3,8 @@ aptPkgs = [
   "...",
   "xvfb",
   "xauth",
+  "unar",
+  "libarchive-tools",
   "fonts-noto-color-emoji",
   "fonts-freefont-ttf",
   "fonts-unifont",
