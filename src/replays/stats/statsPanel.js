@@ -31,6 +31,7 @@ import {
   teamNameKey
 } from '../shared/statsMath.js';
 import { hasRoundLibrary, roundTypeRows } from '../analytics/roundLibrary.js';
+import { listPlayers, listTeams } from '../analytics/analyticsMath.js';
 import { clockAt, secondsAtClock } from '../analytics/roundFacts.js';
 import { ROUND_SECONDS } from '../viewer/roundClock.js';
 import {
@@ -56,7 +57,7 @@ import { createSavedViews } from '../savedViews.js';
 import { POSITION_MAPS } from '../roles/teamPositions.js';
 import filtersIcon from '../../icons/icon_filters.svg?url';
 import calendarIcon from '../../icons/icon_calendar.svg?url';
-import { mbIcon, mbSummary, mbWrap } from '../../icons/menubuttons.js';
+import { MENU_BTN, mbIcon, mbSummary, mbWrap } from '../../icons/menubuttons.js';
 
 /**
  * @param {{
@@ -129,11 +130,16 @@ export function createStatsPanel({
             : `<button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
           <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
           Filters
+        </button>
+        <button type="button" class="btn btn-sm st-filters-toggle" data-st-search-toggle aria-expanded="false" aria-controls="st-search">
+          <img src="${MENU_BTN.search}" alt="" width="16" height="16" draggable="false" />
+          Search
         </button>`
         }
       </div>
     </div>
     <div class="st-filters" id="st-filters" hidden></div>
+    <div class="st-search" id="st-search" hidden></div>
     <div class="st-body" id="st-body"><div class="is-loading" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span class="sr-only">Loading</span></div></div>`;
 
   /** @type {HTMLElement | null} */
@@ -149,13 +155,21 @@ export function createStatsPanel({
       <button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
         <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
         Filters
+      </button>
+      <button type="button" class="btn btn-sm st-filters-toggle" data-st-search-toggle aria-expanded="false" aria-controls="st-search">
+        <img src="${MENU_BTN.search}" alt="" width="16" height="16" draggable="false" />
+        Search
       </button>`;
   }
 
   const filtersEl = el.querySelector('#st-filters');
+  const searchEl = el.querySelector('#st-search');
   const filtersToggleEl =
     pageHeadEl?.querySelector('[data-st-filters-toggle]') ||
     el.querySelector('[data-st-filters-toggle]');
+  const searchToggleEl =
+    pageHeadEl?.querySelector('[data-st-search-toggle]') ||
+    el.querySelector('[data-st-search-toggle]');
   const bodyEl = el.querySelector('#st-body');
   const scopeEl = el.querySelector('#st-scope');
   const tabsEl = pageHeadEl?.querySelector('.st-tabs') || el.querySelector('.st-tabs');
@@ -165,6 +179,7 @@ export function createStatsPanel({
     if (!usePageHead || !pageHeadEl) return;
     document.getElementById('page-head-actions')?.replaceChildren(pageHeadEl);
     syncTabButtons();
+    syncSearchToggle();
     filtersToggleEl?.classList.toggle('active', filtersOpen);
     filtersToggleEl?.setAttribute('aria-expanded', filtersOpen ? 'true' : 'false');
   }
@@ -178,6 +193,12 @@ export function createStatsPanel({
 
   /** Filters bar is closed by default so the table owns the viewport. */
   let filtersOpen = false;
+  /** Search bar is closed by default; selections still filter when closed. */
+  let searchOpen = false;
+  let searchQuery = '';
+  let searchMenuOpen = false;
+  /** @type {{ players: { id: string, name: string }[], teams: { key: string, name: string }[] }} */
+  let entityPick = { players: [], teams: [] };
   /** Date-range popover under the calendar icon. */
   let calendarOpen = false;
 
@@ -418,6 +439,256 @@ export function createStatsPanel({
     if (!filtersOpen) calendarOpen = false;
   }
 
+  function hasEntityPick() {
+    return entityPick.players.length > 0 || entityPick.teams.length > 0;
+  }
+
+  function syncSearchToggle() {
+    const on = searchOpen || hasEntityPick();
+    searchToggleEl?.classList.toggle('active', on);
+    searchToggleEl?.setAttribute('aria-expanded', searchOpen ? 'true' : 'false');
+  }
+
+  function setSearchOpen(open) {
+    searchOpen = Boolean(open);
+    searchEl.hidden = !searchOpen;
+    if (searchOpen) {
+      renderSearch();
+      searchEl.querySelector('#st-entity-search')?.focus?.();
+    } else {
+      searchMenuOpen = false;
+      searchQuery = '';
+    }
+    syncSearchToggle();
+  }
+
+  function entitySuggestions(q) {
+    const needle = String(q || '')
+      .trim()
+      .toLowerCase();
+    const selectedPlayers = new Set(entityPick.players.map((p) => String(p.id)));
+    const selectedTeams = new Set(entityPick.teams.map((t) => String(t.key)));
+    /** @type {{ kind: 'team'|'player', key: string, label: string, sub?: string }[]} */
+    const out = [];
+    const teams = payload ? listTeams(payload) : [];
+    const players = payload ? listPlayers(payload) : [];
+
+    const teamHits = teams
+      .filter((t) => !selectedTeams.has(String(t.key)))
+      .filter(
+        (t) =>
+          !needle ||
+          t.name.toLowerCase().includes(needle) ||
+          String(t.key).toLowerCase().includes(needle)
+      )
+      .slice(0, needle ? 8 : 12);
+    for (const t of teamHits) {
+      const n = t.playerIds?.length || 0;
+      out.push({
+        kind: 'team',
+        key: t.key,
+        label: t.name,
+        sub: n ? `${n} player${n === 1 ? '' : 's'}` : ''
+      });
+    }
+
+    if (needle.length >= 1) {
+      const playerHits = players
+        .filter((p) => !selectedPlayers.has(String(p.id)))
+        .filter(
+          (p) =>
+            p.name.toLowerCase().includes(needle) || String(p.id).toLowerCase().includes(needle)
+        )
+        .slice(0, 20);
+      for (const p of playerHits) {
+        out.push({ kind: 'player', key: p.id, label: p.name });
+      }
+    }
+    return out;
+  }
+
+  function searchSuggestMenuHtml(opts) {
+    if (!opts.length) {
+      return `<p class="rp-typeahead-empty">No matches</p>`;
+    }
+    const teamsHtml = opts
+      .filter((o) => o.kind === 'team')
+      .map(
+        (o) => `<button type="button" class="an-suggest" data-st-entity-pick="team|${escapeHtml(
+          o.key
+        )}">
+          <span class="an-suggest-kind">Team</span>
+          <span class="an-suggest-main">
+            <strong>${escapeHtml(o.label)}</strong>
+            ${o.sub ? `<span class="an-muted">${escapeHtml(o.sub)}</span>` : ''}
+          </span>
+        </button>`
+      )
+      .join('');
+    const playersHtml = opts
+      .filter((o) => o.kind === 'player')
+      .map(
+        (o) => `<button type="button" class="an-suggest" data-st-entity-pick="player|${escapeHtml(
+          o.key
+        )}">
+          <span class="an-suggest-kind">Player</span>
+          <span class="an-suggest-main"><strong>${escapeHtml(o.label)}</strong></span>
+        </button>`
+      )
+      .join('');
+    return `
+      ${teamsHtml ? `<div class="an-suggest-group"><span class="an-suggest-group-label">Teams</span>${teamsHtml}</div>` : ''}
+      ${playersHtml ? `<div class="an-suggest-group"><span class="an-suggest-group-label">Players</span>${playersHtml}</div>` : ''}`;
+  }
+
+  function refreshSearchMenu() {
+    const menu = searchEl.querySelector('#st-entity-menu');
+    if (!menu) return;
+    const q = searchQuery;
+    const opts = entitySuggestions(q);
+    const show = searchMenuOpen && (opts.length || q.trim().length >= 1);
+    menu.hidden = !show;
+    if (!show) return;
+    menu.innerHTML = opts.length
+      ? searchSuggestMenuHtml(opts)
+      : `<p class="rp-typeahead-empty">${q.trim() ? 'No matches' : 'Type a name, or pick a team'}</p>`;
+  }
+
+  function renderSearch() {
+    const chips = [
+      ...entityPick.teams.map(
+        (t) => `<button type="button" class="an-sel-chip" data-st-entity-remove="team|${escapeHtml(
+          t.key
+        )}" title="Remove">${escapeHtml(t.name)} <span aria-hidden="true">×</span></button>`
+      ),
+      ...entityPick.players.map(
+        (p) => `<button type="button" class="an-sel-chip" data-st-entity-remove="player|${escapeHtml(
+          p.id
+        )}" title="Remove">${escapeHtml(p.name)} <span aria-hidden="true">×</span></button>`
+      )
+    ].join('');
+
+    searchEl.innerHTML = `
+      <div class="st-search-typeahead rp-typeahead" id="st-search-typeahead">
+        ${chips ? `<div class="an-sel-chips">${chips}</div>` : ''}
+        ${mbWrap(
+          'search',
+          `<input type="search" class="site-input" id="st-entity-search"
+          placeholder="Search teams or players…" spellcheck="false" autocomplete="off"
+          value="${escapeHtml(searchQuery)}" aria-label="Search teams or players" />`
+        )}
+        <div class="rp-typeahead-menu an-subject-menu" id="st-entity-menu" hidden></div>
+      </div>
+      <button type="button" class="btn btn-sm st-filter-clear" data-st-search-clear${
+        hasEntityPick() ? '' : ' disabled'
+      }>Clear</button>`;
+    searchEl.hidden = !searchOpen;
+    syncSearchToggle();
+    refreshSearchMenu();
+  }
+
+  function pickEntity(kind, key) {
+    const id = String(key || '').trim();
+    if (!id || !payload) return;
+    if (kind === 'team') {
+      if (entityPick.teams.some((t) => t.key === id)) return;
+      const hit = listTeams(payload).find((t) => t.key === id);
+      entityPick.teams.push({ key: id, name: hit?.name || id });
+      if (tab !== 'teams' && !entityPick.players.length) {
+        tab = 'teams';
+        syncTabButtons();
+      }
+    } else if (kind === 'player') {
+      if (entityPick.players.some((p) => p.id === id)) return;
+      const hit = listPlayers(payload).find((p) => p.id === id);
+      entityPick.players.push({ id, name: hit?.name || id });
+      if (tab !== 'players' && !entityPick.teams.length) {
+        tab = 'players';
+        syncTabButtons();
+      }
+    } else {
+      return;
+    }
+    searchQuery = '';
+    searchMenuOpen = false;
+    resetListPage();
+    renderSearch();
+    scheduleRender({ rebuildFilters: false });
+  }
+
+  function removeEntity(kind, key) {
+    const id = String(key || '').trim();
+    if (!id) return;
+    if (kind === 'team') {
+      entityPick.teams = entityPick.teams.filter((t) => t.key !== id);
+    } else if (kind === 'player') {
+      entityPick.players = entityPick.players.filter((p) => p.id !== id);
+    } else {
+      return;
+    }
+    resetListPage();
+    renderSearch();
+    scheduleRender({ rebuildFilters: false });
+  }
+
+  function clearEntityPick() {
+    if (!hasEntityPick() && !searchQuery) return;
+    entityPick = { players: [], teams: [] };
+    searchQuery = '';
+    searchMenuOpen = false;
+    resetListPage();
+    renderSearch();
+    scheduleRender({ rebuildFilters: false });
+  }
+
+  /** Player ids allowed by the current search picks, or null when unrestricted. */
+  function allowedPlayerIds() {
+    if (!hasEntityPick()) return null;
+    const ids = new Set(entityPick.players.map((p) => String(p.id)));
+    if (entityPick.teams.length && payload) {
+      const teamKeys = new Set(entityPick.teams.map((t) => String(t.key)));
+      for (const t of listTeams(payload)) {
+        if (!teamKeys.has(String(t.key))) continue;
+        for (const id of t.playerIds || []) ids.add(String(id));
+      }
+    }
+    return ids;
+  }
+
+  /** Team keys allowed by the current search picks, or null when unrestricted. */
+  function allowedTeamKeys() {
+    if (!hasEntityPick()) return null;
+    const keys = new Set(entityPick.teams.map((t) => String(t.key)));
+    if (entityPick.players.length && payload) {
+      const playerIds = new Set(entityPick.players.map((p) => String(p.id)));
+      for (const t of listTeams(payload)) {
+        if ((t.playerIds || []).some((id) => playerIds.has(String(id)))) {
+          keys.add(String(t.key));
+        }
+      }
+    }
+    return keys;
+  }
+
+  function applyEntityPickPlayers(data) {
+    const ids = allowedPlayerIds();
+    if (!ids) return data;
+    return data.filter((p) => ids.has(String(p.id)));
+  }
+
+  function applyEntityPickTeams(data) {
+    const keys = allowedTeamKeys();
+    if (!keys) return data;
+    return data.filter((t) => {
+      const k = String(t.key || '');
+      if (keys.has(k)) return true;
+      // Locked-team per-map rows use `${teamKey}|${mapCode}`.
+      const pipe = k.indexOf('|');
+      if (pipe > 0 && keys.has(k.slice(0, pipe))) return true;
+      return keys.has(teamNameKey(t.name));
+    });
+  }
+
   function dateRangeHtml() {
     const active = Boolean(filter.dateFrom || filter.dateTo);
     return `<div class="st-filter-group st-date-wrap${calendarOpen ? ' open' : ''}${
@@ -557,6 +828,55 @@ export function createStatsPanel({
 
   filtersToggleEl?.addEventListener('click', () => {
     setFiltersOpen(!filtersOpen);
+  });
+
+  searchToggleEl?.addEventListener('click', () => {
+    setSearchOpen(!searchOpen);
+  });
+
+  searchEl.addEventListener('input', (e) => {
+    if (e.target?.id !== 'st-entity-search') return;
+    searchQuery = e.target.value || '';
+    searchMenuOpen = true;
+    refreshSearchMenu();
+  });
+
+  searchEl.addEventListener('focusin', (e) => {
+    if (e.target?.id !== 'st-entity-search') return;
+    searchMenuOpen = true;
+    refreshSearchMenu();
+  });
+
+  searchEl.addEventListener('click', (e) => {
+    const clear = e.target.closest('[data-st-search-clear]');
+    if (clear) {
+      e.preventDefault();
+      clearEntityPick();
+      return;
+    }
+    const remove = e.target.closest('[data-st-entity-remove]');
+    if (remove) {
+      e.preventDefault();
+      const [kind, ...rest] = String(remove.dataset.stEntityRemove || '').split('|');
+      removeEntity(kind, rest.join('|'));
+      return;
+    }
+    const pick = e.target.closest('[data-st-entity-pick]');
+    if (pick) {
+      e.preventDefault();
+      const [kind, ...rest] = String(pick.dataset.stEntityPick || '').split('|');
+      pickEntity(kind, rest.join('|'));
+    }
+  });
+
+  searchEl.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (searchMenuOpen) {
+      searchMenuOpen = false;
+      refreshSearchMenu();
+      return;
+    }
+    setSearchOpen(false);
   });
 
   // `toggle` does not bubble; capture so we can pin the fixed menu under the control.
@@ -766,6 +1086,11 @@ export function createStatsPanel({
     const inRoundMenu = e.target.closest?.('details.st-round-multi');
     if (!inRoundMenu) closeRoundMenus();
 
+    if (searchMenuOpen && !e.target.closest?.('#st-search-typeahead')) {
+      searchMenuOpen = false;
+      refreshSearchMenu();
+    }
+
     if (!calendarOpen) return;
     if (e.target.closest?.('.st-date-wrap')) return;
     setCalendarOpen(false);
@@ -929,9 +1254,7 @@ export function createStatsPanel({
       if (pageBtn.disabled) return;
       const next = Number(pageBtn.dataset.page);
       if (!Number.isFinite(next) || next < 1) return;
-      if (detail) detailPage = next;
-      else page[tab] = next;
-      scheduleRender({ rebuildFilters: false });
+      goToPage(next);
       return;
     }
     const th = e.target.closest('[data-sort]');
@@ -954,7 +1277,43 @@ export function createStatsPanel({
     scheduleRender({ rebuildFilters: false });
   });
 
+  function goToPage(next) {
+    const n = Math.floor(Number(next));
+    if (!Number.isFinite(n) || n < 1) return;
+    if (detail) {
+      if (detailPage === n) return;
+      detailPage = n;
+    } else {
+      if (page[tab] === n) return;
+      page[tab] = n;
+    }
+    scheduleRender({ rebuildFilters: false });
+  }
+
+  function commitPageInput(input) {
+    if (!(input instanceof HTMLInputElement)) return;
+    const max = Math.max(1, Math.floor(Number(input.dataset.stPageMax) || 1));
+    const raw = Math.floor(Number(input.value));
+    const next = Number.isFinite(raw) ? Math.min(max, Math.max(1, raw)) : 1;
+    input.value = String(next);
+    goToPage(next);
+  }
+
+  bodyEl.addEventListener('change', (e) => {
+    const input = e.target.closest?.('[data-st-page-input]');
+    if (!input) return;
+    commitPageInput(input);
+  });
+
   bodyEl.addEventListener('keydown', (e) => {
+    const pageInput = e.target.closest?.('[data-st-page-input]');
+    if (pageInput) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commitPageInput(pageInput);
+      }
+      return;
+    }
     if (e.key !== 'Enter' && e.key !== ' ') return;
     const wrLink = e.target.closest?.('[data-st-team-rounds]');
     if (wrLink && e.target === wrLink && onPlayRounds) {
@@ -1009,7 +1368,9 @@ export function createStatsPanel({
       demos: Array.isArray(scope.demos) ? [...scope.demos] : undefined,
       files: Array.isArray(scope.files) ? [...scope.files] : undefined,
       title: scope.title || '',
-      teamName: lockedTeamName || ''
+      teamName: lockedTeamName || '',
+      searchPlayers: entityPick.players.map((p) => ({ id: p.id, name: p.name })),
+      searchTeams: entityPick.teams.map((t) => ({ key: t.key, name: t.name }))
     };
   }
 
@@ -1182,6 +1543,27 @@ export function createStatsPanel({
     if ('title' in next && next.title != null) scopeEl.textContent = String(next.title || '');
     if (Array.isArray(next.demos)) scope = { ...scope, demos: [...next.demos] };
     if (Array.isArray(next.files)) scope = { ...scope, files: [...next.files] };
+
+    if ('searchPlayers' in next || 'searchTeams' in next) {
+      const players = Array.isArray(next.searchPlayers) ? next.searchPlayers : [];
+      const teams = Array.isArray(next.searchTeams) ? next.searchTeams : [];
+      entityPick = {
+        players: players
+          .map((p) => ({
+            id: String(p?.id || '').trim(),
+            name: String(p?.name || p?.id || '').trim()
+          }))
+          .filter((p) => p.id),
+        teams: teams
+          .map((t) => ({
+            key: String(t?.key || '').trim(),
+            name: String(t?.name || t?.key || '').trim()
+          }))
+          .filter((t) => t.key)
+      };
+      if (searchOpen) renderSearch();
+      else syncSearchToggle();
+    }
 
     syncTabButtons();
     if (payload) scheduleRender({ rebuildFilters: true });
@@ -1706,10 +2088,14 @@ export function createStatsPanel({
       ? playerColumnsWithRoles(mode)
       : { columns: PLAYER_COLUMNS, fixedCount: PLAYER_FIXED_BASE.length };
 
+    // Entity search means "show these rows"; do not also hide them under min-rounds.
+    const searching = hasEntityPick();
+    const minR = searching ? 0 : Math.max(0, Number(filter.minRounds) || 0);
+
     if (tab === 'players') {
       const filtered = enrichedPlayers(rows, players, active, demos);
-      const minR = Math.max(0, Number(filter.minRounds) || 0);
       let data = pinTeamRoster(rows, players, active, demos, filtered, minR);
+      data = applyEntityPickPlayers(data);
       const matchDemo = singleMatchDemo(payload, scope);
       if (matchDemo) {
         bodyEl.innerHTML = matchBoardsHtml(data, matchDemo, {
@@ -1734,13 +2120,13 @@ export function createStatsPanel({
         });
       }
     } else {
-      const minR = Math.max(0, Number(filter.minRounds) || 0);
       const maps = Array.isArray(active.maps) ? active.maps.filter(Boolean) : [];
       const oneMap = maps.length === 1 ? String(maps[0]) : '';
 
       if (lockedTeamName && !oneMap) {
         // Any map: one row per map for the locked team.
-        const data = lockedTeamPerMapRows(rows, players, demos, active);
+        let data = lockedTeamPerMapRows(rows, players, demos, active);
+        data = applyEntityPickTeams(data);
         bodyEl.innerHTML = statsTableHtml(data, {
           columns: TEAM_MAP_COLUMNS,
           fixedCount: 2,
@@ -1752,7 +2138,7 @@ export function createStatsPanel({
         });
       } else if (lockedTeamName && oneMap) {
         // One map: us vs best / mid / worst on that map; footer = all-team average.
-        const { rows: data, averageRows } = lockedTeamMapCompare(
+        const compared = lockedTeamMapCompare(
           rows,
           players,
           demos,
@@ -1760,19 +2146,21 @@ export function createStatsPanel({
           oneMap,
           minR
         );
+        const data = applyEntityPickTeams(compared.rows);
         bodyEl.innerHTML = statsTableHtml(data, {
           columns: TEAM_COLUMNS,
           fixedCount: 2,
           escapeHtml,
           preserveOrder: true,
           showAverage: true,
-          averageRows,
+          averageRows: searching ? undefined : compared.averageRows,
           nameCell: teamNameCell,
           roundWrCell: teamRoundWrCell
         });
       } else {
         let data = aggregateTeams(rows, players, demos, active);
         if (minR > 0) data = data.filter((t) => (t.rounds || 0) >= minR);
+        data = applyEntityPickTeams(data);
         bodyEl.innerHTML = statsTableHtml(data, {
           columns: TEAM_COLUMNS,
           fixedCount: 2,
@@ -1885,6 +2273,9 @@ export function createStatsPanel({
     filter.minRounds = defaultMinRounds(next);
     filter.result = '';
     filter.advantage = '';
+    entityPick = { players: [], teams: [] };
+    searchQuery = '';
+    searchMenuOpen = false;
     tab = 'players';
     sort = { players: { key: 'rating', dir: 'desc' }, teams: { key: 'avgRating', dir: 'desc' } };
     page = { players: 1, teams: 1 };
@@ -1892,6 +2283,8 @@ export function createStatsPanel({
     detailPage = 1;
     detailSort = { key: 'date', dir: 'desc' };
     applyViewState(next, { notify: false });
+    syncSearchToggle();
+    if (searchOpen) renderSearch();
     try {
       const res = await getStatsPayload(scope.demos || null, {
         onProgress: (p) => {
@@ -1912,6 +2305,8 @@ export function createStatsPanel({
       }
       // Let "Building table…" paint before the heavy aggregate blocks the thread.
       setSpinnerLabel(bodyEl, statsProgressLabel({ phase: 'building-table' }));
+      if (searchOpen) renderSearch();
+      else syncSearchToggle();
       await scheduleUiJob({
         tokenRef: renderTokenRef,
         isCurrent: () => token === loadToken,
@@ -1966,7 +2361,9 @@ export function createStatsPanel({
       minRounds: snap.minRounds,
       dateFrom: snap.dateFrom,
       dateTo: snap.dateTo,
-      role: snap.role
+      role: snap.role,
+      searchPlayers: snap.searchPlayers,
+      searchTeams: snap.searchTeams
     });
     return true;
   }

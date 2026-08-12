@@ -1045,7 +1045,22 @@ function pagerHtml({ page, pages, total, pageSize }) {
       <button type="button" class="btn btn-sm" data-page="${page - 1}"${
         page <= 1 ? ' disabled' : ''
       }>Prev</button>
-      <span class="st-pager-page">Page ${page} / ${pages}</span>
+      <label class="st-pager-page">Page
+        <input
+          class="site-input st-pager-input"
+          type="number"
+          inputmode="numeric"
+          min="1"
+          max="${pages}"
+          step="1"
+          value="${page}"
+          data-st-page-input
+          data-st-page-max="${pages}"
+          aria-label="Page number"
+          title="Go to page"
+        />
+        / ${pages}
+      </label>
       <button type="button" class="btn btn-sm" data-page="${page + 1}"${
         page >= pages ? ' disabled' : ''
       }>Next</button>
