@@ -29,6 +29,7 @@ import {
 } from './chartFields.js';
 import settingsIcon from '../../icons/icon_settings.svg?url';
 import calendarIcon from '../../icons/icon_calendar.svg?url';
+import { mbSummary, mbWrap } from '../../icons/menubuttons.js';
 import {
   computeChart,
   correlationWords,
@@ -322,9 +323,12 @@ export function createChartsPanel({ escapeHtml }) {
 
     return `<div class="ch-entity-typeahead rp-typeahead" id="ch-entity-typeahead-${scope}">
         ${chips ? `<div class="an-sel-chips">${chips}</div>` : ''}
-        <input type="search" class="site-input" data-entity-search="${scope}"
+        ${mbWrap(
+          'search',
+          `<input type="search" class="site-input" data-entity-search="${scope}"
           placeholder="Search teams or players…" spellcheck="false" autocomplete="off"
-          value="${escapeHtml(filterEntitySearch[scope] || '')}" aria-label="Search teams or players" />
+          value="${escapeHtml(filterEntitySearch[scope] || '')}" aria-label="Search teams or players" />`
+        )}
         <div class="rp-typeahead-menu an-subject-menu" id="ch-entity-menu-${scope}" hidden></div>
       </div>`;
   }
@@ -454,7 +458,7 @@ export function createChartsPanel({ escapeHtml }) {
   }
 
   /** Multi-select dropdown (Map / Role / buys) with placeholder text in the closed control. */
-  function multiDropdown(scope, key, options, selected, emptyLabel) {
+  function multiDropdown(scope, key, options, selected, emptyLabel, icon = '') {
     if (!options.length) return '';
     const sel = (selected || []).map(String);
     const selSet = new Set(sel);
@@ -468,10 +472,10 @@ export function createChartsPanel({ escapeHtml }) {
       </label>`
       )
       .join('');
+    const labelText = escapeHtml(summaryLabel(options, sel, emptyLabel));
+    const label = icon ? mbSummary(icon, labelText) : labelText;
     return `<details class="ch-dd" data-ch-dd="${scope}|${key}">
-      <summary class="site-select ch-dd-summary" aria-label="${escapeHtml(emptyLabel)}">${escapeHtml(
-        summaryLabel(options, sel, emptyLabel)
-      )}</summary>
+      <summary class="site-select ch-dd-summary" aria-label="${escapeHtml(emptyLabel)}">${label}</summary>
       <div class="ch-dd-menu" role="group" aria-label="${escapeHtml(emptyLabel)}">${checks}</div>
     </details>`;
   }
@@ -587,7 +591,7 @@ export function createChartsPanel({ escapeHtml }) {
         ? ''
         : switchFlag(scope, 'perRound', 'Divide by played rounds', Boolean(f.perRound)),
       maps.length > 1 && !(scope === 'g' && state.compare?.on)
-        ? multiDropdown(scope, 'maps', maps, arr('maps'), 'Map')
+        ? multiDropdown(scope, 'maps', maps, arr('maps'), 'Map', 'map')
         : '',
       sideSegHtml(scope, f),
       src === 'player' || src === 'kill'
@@ -706,9 +710,12 @@ export function createChartsPanel({ escapeHtml }) {
         entityLabel(entity.kind, entity.id)
       )} <span aria-hidden="true">×</span></button>`;
     }
-    return `<input type="search" class="site-input" data-compare-search="${slot}"
+    return `${mbWrap(
+      'search',
+      `<input type="search" class="site-input" data-compare-search="${slot}"
       placeholder="Search teams or players…" spellcheck="false" autocomplete="off"
-      value="${escapeHtml(compareSearch[slot] || '')}" aria-label="Search teams or players" />
+      value="${escapeHtml(compareSearch[slot] || '')}" aria-label="Search teams or players" />`
+    )}
     <div class="rp-typeahead-menu an-subject-menu" id="ch-compare-menu-${slot}" hidden></div>`;
   }
 

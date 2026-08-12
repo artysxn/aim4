@@ -149,8 +149,10 @@ function logEvent(e, verbose) {
       break;
     case 'match-failed':
       console.log(
-        `\n     FAILED (skipped demo): ${e.error}` +
-          `${e.crashed ? ` [${e.crashed} map crash(es)]` : ''}`
+        e.retryable
+          ? `\n     FAILED (will retry): ${e.error}`
+          : `\n     FAILED (skipped demo): ${e.error}` +
+              `${e.crashed ? ` [${e.crashed} map crash(es)]` : ''}`
       );
       break;
     case 'download-start':
@@ -237,7 +239,7 @@ function logEvent(e, verbose) {
           ? `waiting for demo/${e.demoId}` +
               `${e.lookedAheadTo != null ? ` (checked through ${e.lookedAheadTo})` : ''}` +
               `; next check in ${Math.round(e.nextPollInMs / 1000)}s`
-          : e.reason === 'challenge' || e.reason === 'infra'
+          : e.reason === 'challenge' || e.reason === 'infra' || e.reason === 'disk'
             ? `waiting after ${e.reason} on demo/${e.demoId}; next try in ${Math.round(e.nextPollInMs / 1000)}s`
             : `idle; next poll in ${Math.round(e.nextPollInMs / 1000)}s`
       );

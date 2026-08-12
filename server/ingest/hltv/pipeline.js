@@ -12,7 +12,7 @@ import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { STATES } from './ledger.js';
 import { cleanMatch, freeBytes, sweepOrphans } from './cleanup.js';
-import { parseAndIngest, unpackArchive } from './process.js';
+import { isRetryableProcessError, parseAndIngest, unpackArchive } from './process.js';
 import {
   advanceCursor,
   cursorProgress,
@@ -121,7 +121,7 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
 
     try {
       const extracted = await unpackArchive(row.workPath, dir, {
-        allowedBytes: cfg.maxArchiveBytes
+        allowedBytes: cfg.maxExtractBytes || cfg.maxArchiveBytes * 4
       });
       const demos = extracted.filter((f) => f.name.toLowerCase().endsWith('.dem'));
       if (!demos.length) throw new Error('Archive contained no .dem files');
@@ -227,11 +227,25 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         maps: stored.length
       };
     } catch (err) {
-      ledger.fail(row.matchId, err, cfg.maxAttempts);
+      const error = String(err?.message || err);
+      const retryable = isRetryableProcessError(err);
+      // Budget/disk: leave discovered for retry. Do not burn permanent attempts.
+      if (retryable) {
+        ledger.setState(row.matchId, STATES.DISCOVERED, {
+          lastError: error,
+          lastAttemptAt: new Date().toISOString()
+        });
+      } else {
+        ledger.fail(row.matchId, err, cfg.maxAttempts);
+      }
       await cleanMatch(cfg.workDir, row.matchId).catch(() => {});
       await ledger.save();
-      emit('match-failed', { matchId: row.matchId, error: String(err?.message || err) });
-      return { ok: false, error: String(err?.message || err) };
+      emit('match-failed', {
+        matchId: row.matchId,
+        error,
+        retryable
+      });
+      return { ok: false, error, retryable };
     } finally {
       current = null;
     }
@@ -316,6 +330,32 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
       });
 
       const result = await processDownloadedRow(row);
+      if (!result.ok && result.retryable) {
+        // Unpack budget / ENOSPC: keep the cursor on this id and retry.
+        await emitCursor({ lastOutcome: 'failed' });
+        current = {
+          matchId,
+          label: `demo/${id}`,
+          demoId: id,
+          stage: 'waiting',
+          reason: 'disk'
+        };
+        const waitMs = Math.max(cfg.minDelayMs || 20_000, 30_000);
+        emit('challenge', {
+          demoId: id,
+          nextCheckInMs: waitMs,
+          error: result.error,
+          reason: 'disk'
+        });
+        return {
+          advanced: false,
+          missing: false,
+          blocked: true,
+          waitMs,
+          reason: 'disk',
+          ...result
+        };
+      }
       cursorSnapshot = await advanceCursor(cfg, cursorSnapshot || (await readCursor(cfg)), {
         success: Boolean(result.ok)
       });

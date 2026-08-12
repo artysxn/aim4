@@ -45,7 +45,13 @@ export function loadConfig(overrides = {}) {
     batchCooldownMs: num(env.AIM4_INGEST_BATCH_COOLDOWN_MS, 60000),
     userAgent:
       env.AIM4_INGEST_USER_AGENT || 'Mozilla/5.0',
+    /** Compressed download cap (CloakBrowser aborts above this). */
     maxArchiveBytes: num(env.AIM4_INGEST_MAX_ARCHIVE_BYTES, 2 * 1024 ** 3),
+    /**
+     * Unpacked .dem budget per archive. BO5s expand well past the download
+     * size; defaults to 4× maxArchiveBytes (8 GB). Not free disk.
+     */
+    maxExtractBytes: num(env.AIM4_INGEST_MAX_EXTRACT_BYTES, 0),
     /** CloakBrowser transport shared by discovery, downloads, and the probe. */
     cloakHeadless: /^(1|true|yes|on)$/i.test(env.AIM4_CLOAK_HEADLESS || ''),
     cloakHumanize: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_HUMANIZE || 'true'),
@@ -134,6 +140,10 @@ export function loadConfig(overrides = {}) {
 
   cfg.source = String(cfg.source || 'hltv').trim().toLowerCase() || 'hltv';
   cfg.inbox = String(cfg.inbox || '').trim();
+  // 0 / unset => 4× download cap (same multiplier the admin probe uses).
+  if (!Number(cfg.maxExtractBytes)) {
+    cfg.maxExtractBytes = Math.max(1, Number(cfg.maxArchiveBytes) || 2 * 1024 ** 3) * 4;
+  }
 
   // Local mode requires an inbox. Coolify often still has AIM4_INGEST_SOURCE=local
   // with no AIM4_INGEST_INBOX from an older setup; that used to crash-loop the

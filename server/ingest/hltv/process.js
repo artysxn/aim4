@@ -20,24 +20,49 @@ const WORKER = path.join(HERE, 'ingestParseWorker.js');
 const WORKER_HEAP_MB = Number(process.env.AIM4_PARSE_HEAP_MB || 1024);
 const PARSE_STALL_MS = Number(process.env.AIM4_INGEST_PARSE_STALL_MS || 15 * 60 * 1000);
 
+function formatBytes(n) {
+  const gb = Number(n) / 1024 ** 3;
+  if (gb >= 1) return `${gb.toFixed(gb >= 10 ? 0 : 1)} GB`;
+  return `${Math.round(Number(n) / 1024 ** 2)} MB`;
+}
+
+/** Unpack budget / disk errors: retry same id, do not advance the cursor. */
+export function isRetryableProcessError(err) {
+  const msg = String(err?.message || err || '');
+  return (
+    /available space/i.test(msg) ||
+    /extract budget/i.test(msg) ||
+    /ENOSPC|no space left/i.test(msg)
+  );
+}
+
 /**
  * Unpack one archive into `dir`, keeping HLTV's own entry names.
  */
 export async function unpackArchive(archivePath, dir, { allowedBytes }) {
   await fsp.mkdir(dir, { recursive: true });
   const seen = new Set();
-  const extracted = await unpackUpload({
-    source: archivePath,
-    filename: path.basename(archivePath),
-    allowedBytes,
-    targetFor: (name) => {
-      let base = path.basename(name);
-      while (seen.has(base)) base = `dup-${base}`;
-      seen.add(base);
-      return path.join(dir, base);
+  try {
+    return await unpackUpload({
+      source: archivePath,
+      filename: path.basename(archivePath),
+      allowedBytes,
+      targetFor: (name) => {
+        let base = path.basename(name);
+        while (seen.has(base)) base = `dup-${base}`;
+        seen.add(base);
+        return path.join(dir, base);
+      }
+    });
+  } catch (err) {
+    if (/available space/i.test(String(err?.message || err))) {
+      throw new Error(
+        `Archive expands past the ${formatBytes(allowedBytes)} extract budget` +
+          ` (not free disk). Raise AIM4_INGEST_MAX_EXTRACT_BYTES.`
+      );
     }
-  });
-  return extracted;
+    throw err;
+  }
 }
 
 /**

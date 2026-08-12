@@ -25,6 +25,7 @@ import {
 import { runAntistratScan } from './antistratScan.js';
 import { PACE_TYPES } from './patternDefs.js';
 import { setSpinnerLabel, spinnerHtml, statsProgressLabel } from '../../lib/spinner.js';
+import { mbWrap } from '../../icons/menubuttons.js';
 
 /**
  * @param {{ escapeHtml: (s: string) => string }} deps
@@ -196,16 +197,24 @@ export function createAntistratPanel({ escapeHtml }) {
                 ? `<button type="button" class="an-sel-chip" data-as-clear-team title="Change team">${escapeHtml(
                     picked.name
                   )} <span aria-hidden="true">×</span></button>`
-                : `<input type="search" class="site-input" id="as-team-search"
+                : `${mbWrap(
+                    'search',
+                    `<input type="search" class="site-input" id="as-team-search"
                     placeholder="Search teams…" spellcheck="false" autocomplete="off"
-                    value="${escapeHtml(teamSearch)}" aria-label="Search teams" />
+                    value="${escapeHtml(teamSearch)}" aria-label="Search teams" />`
+                  )}
                   <div class="rp-typeahead-menu as-team-menu" id="as-team-menu" hidden></div>`
             }
           </div>
-          <select class="site-select an-select" data-as-map aria-label="Map" ${state.teamKey ? '' : 'disabled'}>
+          ${mbWrap(
+            'map',
+            `<select class="site-select an-select" data-as-map aria-label="Map" ${
+              state.teamKey ? '' : 'disabled'
+            }>
             <option value="">Map</option>
             ${mapOpts}
-          </select>
+          </select>`
+          )}
         </div>
         ${warn}
       </div>

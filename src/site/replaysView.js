@@ -48,6 +48,7 @@ import { createChartsPanel } from '../replays/charts/chartsPanel.js';
 import { invalidateStatsCache } from '../replays/statsCache.js';
 import commentsIcon from '../icons/demos_comments.svg?raw';
 import bookmarkIcon from '../icons/demos_bookmarks_added.svg?raw';
+import { mbWrap } from '../icons/menubuttons.js';
 import { spinnerHtml, watchSlowLoad } from '../lib/spinner.js';
 import { yieldToPaint } from '../lib/frameBudget.js';
 
@@ -1824,18 +1825,24 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     return `
       <div class="rp-filter-group${ownOpen ? ' menu-open' : ''}">
         <div class="rp-typeahead" id="rp-round-own-typeahead">
-          <input type="search" class="site-input rp-filter-search" id="rp-round-own-search"
+          ${mbWrap(
+            'menu',
+            `<input type="search" class="site-input rp-filter-search" id="rp-round-own-search"
             placeholder="${escapeHtml(ownSide)} rounds…" spellcheck="false" autocomplete="off"
-            value="${escapeHtml(roundOwnSearch)}" aria-label="${escapeHtml(ownSide)} rounds" />
+            value="${escapeHtml(roundOwnSearch)}" aria-label="${escapeHtml(ownSide)} rounds" />`
+          )}
           ${typeaheadMenuHtml('roundOwn', ownOptions, roundOwnSearch)}
         </div>
         ${selectedChipsHtml('roundOwn', ownSelected)}
       </div>
       <div class="rp-filter-group${oppOpen ? ' menu-open' : ''}">
         <div class="rp-typeahead" id="rp-round-opp-typeahead">
-          <input type="search" class="site-input rp-filter-search" id="rp-round-opp-search"
+          ${mbWrap(
+            'menu',
+            `<input type="search" class="site-input rp-filter-search" id="rp-round-opp-search"
             placeholder="vs ${escapeHtml(oppSide)} rounds…" spellcheck="false" autocomplete="off"
-            value="${escapeHtml(roundOppSearch)}" aria-label="vs ${escapeHtml(oppSide)} rounds" />
+            value="${escapeHtml(roundOppSearch)}" aria-label="vs ${escapeHtml(oppSide)} rounds" />`
+          )}
           ${typeaheadMenuHtml('roundOpp', oppOptions, roundOppSearch)}
         </div>
         ${selectedChipsHtml('roundOpp', oppSelected)}
@@ -1897,8 +1904,11 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       .join('');
     return `
       <div class="rp-multi${mapMenuOpen ? ' open' : ''}" id="rp-map-multi">
-        <button type="button" class="site-input rp-multi-toggle" id="rp-map-toggle"
-          aria-expanded="${mapMenuOpen ? 'true' : 'false'}">${escapeHtml(mapToggleLabel())}</button>
+        ${mbWrap(
+          'map',
+          `<button type="button" class="site-input rp-multi-toggle" id="rp-map-toggle"
+          aria-expanded="${mapMenuOpen ? 'true' : 'false'}">${escapeHtml(mapToggleLabel())}</button>`
+        )}
         <div class="rp-multi-menu" ${mapMenuOpen ? '' : 'hidden'}>${items}</div>
       </div>`;
   }
@@ -1906,13 +1916,15 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   function wonBySelectHtml() {
     const hasTeams = filters.teams.size > 0;
     const mode = filters.wonByMode;
-    return `
-      <select id="rp-won-by" class="site-input rp-econ-select" ${hasTeams ? '' : 'disabled'}
+    return mbWrap(
+      'star',
+      `<select id="rp-won-by" class="site-input rp-econ-select" ${hasTeams ? '' : 'disabled'}
         aria-label="Round winner" title="${hasTeams ? '' : 'Select a team first'}">
         <option value=""${mode === '' ? ' selected' : ''}>Round winner...</option>
         <option value="selected"${mode === 'selected' ? ' selected' : ''}>Selected team</option>
         <option value="opponent"${mode === 'opponent' ? ' selected' : ''}>Opponent</option>
-      </select>`;
+      </select>`
+    );
   }
 
   function renderFilters() {
@@ -1953,9 +1965,12 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
         teamClusters.length
           ? `<div class="rp-filter-group${teamMenuOpen ? ' menu-open' : ''}">
               <div class="rp-typeahead" id="rp-team-typeahead">
-                <input type="search" class="site-input rp-filter-search" id="rp-team-search"
+                ${mbWrap(
+                  'search',
+                  `<input type="search" class="site-input rp-filter-search" id="rp-team-search"
                   placeholder="Search teams" spellcheck="false" autocomplete="off"
-                  value="${escapeHtml(teamSearch)}" aria-label="Search teams" />
+                  value="${escapeHtml(teamSearch)}" aria-label="Search teams" />`
+                )}
                 ${typeaheadMenuHtml('teams', teamOptions, teamSearch)}
               </div>
               ${selectedChipsHtml('teams', selectedTeams)}

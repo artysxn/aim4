@@ -36,6 +36,7 @@ import {
 import { createRangeSlider } from '../../lib/rangeSlider.js';
 import { iconImgHtml } from '../viewer/equipmentIcons.js';
 import { hasRoundLibrary, roundTypeRows } from './roundLibrary.js';
+import { mbIcon, mbSummary, mbWrap } from '../../icons/menubuttons.js';
 import {
   setSpinnerLabel,
   spinnerHtml,
@@ -392,7 +393,7 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
       <details class="st-round-multi an-round-multi" data-an-round-menu="${field}">
         <summary class="site-select an-select st-round-select" aria-label="${escapeHtml(
           ariaLabel
-        )}">${escapeHtml(summary)}</summary>
+        )}">${mbSummary('menu', escapeHtml(summary))}</summary>
         <div class="st-round-menu" role="group" aria-label="${escapeHtml(ariaLabel)}">${checks}</div>
       </details>
     </div>`;
@@ -600,7 +601,9 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
     sidebarEl.innerHTML = `
       <div class="an-field an-saved" id="an-saved"></div>
       <div class="an-field">
-        <select class="site-select an-select" id="an-map" aria-label="Map">
+        ${mbWrap(
+          'map',
+          `<select class="site-select an-select" id="an-map" aria-label="Map">
           <option value="">Map</option>
           ${maps
             .map(
@@ -610,7 +613,8 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
                 )}</option>`
             )
             .join('')}
-        </select>
+        </select>`
+        )}
       </div>
 
       <div class="an-field">
@@ -631,9 +635,12 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
           }
           ${
             left
-              ? `<input type="search" class="site-input" id="an-subject-search"
+              ? `${mbWrap(
+                  'search',
+                  `<input type="search" class="site-input" id="an-subject-search"
                   placeholder="Search teams or players…" spellcheck="false" autocomplete="off"
-                  value="${escapeHtml(subjectSearch)}" aria-label="Search teams or players" />
+                  value="${escapeHtml(subjectSearch)}" aria-label="Search teams or players" />`
+                )}
                 <div class="rp-typeahead-menu an-subject-menu" id="an-subject-menu" hidden></div>`
               : ''
           }
@@ -900,9 +907,15 @@ export function createAnalyticsPanel({ escapeHtml, onPlayRounds }) {
 
   /** The Players | Teams switch in the statistics card head. */
   function lbModeSwitchHtml() {
-    const btn = (key, label) =>
-      `<button type="button" class="seg-tab${state.lbMode === key ? ' active' : ''}" data-an-lb-mode="${key}">${label}</button>`;
-    return `<div class="st-tabs an-lb-tabs">${btn('players', 'Players')}${btn('teams', 'Teams')}</div>`;
+    const btn = (key, label, icon) =>
+      `<button type="button" class="seg-tab${
+        state.lbMode === key ? ' active' : ''
+      }" data-an-lb-mode="${key}">${mbIcon(icon)}${label}</button>`;
+    return `<div class="st-tabs an-lb-tabs">${btn('players', 'Players', 'player')}${btn(
+      'teams',
+      'Teams',
+      'team'
+    )}</div>`;
   }
 
   function renderLeaderboard(rows, teamRows, focusIds, roundCount) {

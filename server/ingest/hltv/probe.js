@@ -540,7 +540,7 @@ async function executeProbe(c, run, urlObj, hooks) {
       const extractDir = path.join(workDir, 'extract');
       run.live = { stage: 'unpack' };
       demos = await unpackArchive(archivePath, extractDir, {
-        allowedBytes: c.maxArchiveBytes * 4
+        allowedBytes: c.maxExtractBytes || c.maxArchiveBytes * 4
       });
       if (!demos.length) throw new Error('The archive unpacked but contained no .dem files');
       for (const d of demos) log('ok', `Extracted ${d.name} (${mb(d.sizeBytes)})`);

@@ -22,6 +22,7 @@ import {
 } from '../replays/api.js';
 import { MAPS } from '../replays/shared/roundId.js';
 import { createCreatorPanel } from '../replays/creator/creatorPanel.js';
+import { mbWrap } from '../icons/menubuttons.js';
 import { spinnerHtml } from '../lib/spinner.js';
 
 const MAX_PER_MAP = 8;
@@ -170,7 +171,9 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
       <div class="sc-list">
         <div class="sc-list-head">
           <div class="sc-list-filters">
-            <select class="site-select" data-filter-map aria-label="Map">
+            ${mbWrap(
+              'map',
+              `<select class="site-select" data-filter-map aria-label="Map">
               <option value="">All maps</option>
               ${maps
                 .map(
@@ -180,7 +183,8 @@ export function initStrategyCreatorView({ auth, escapeHtml }) {
                     )}</option>`
                 )
                 .join('')}
-            </select>
+            </select>`
+            )}
             <div class="rp-seg rp-seg-side" role="group" aria-label="Side">
               <button type="button" class="rp-seg-btn${
                 sideFilter === 'T' ? ' active' : ''

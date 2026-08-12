@@ -3459,6 +3459,89 @@ body.rv-open {
   font-weight: 700;
 }
 
+/* Leading icons on map / search / winner / round filter controls. */
+.mb-control {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.mb-control > .mb-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+  opacity: 0.72;
+  z-index: 1;
+}
+
+.mb-control > select,
+.mb-control > input,
+.mb-control > button {
+  box-sizing: border-box;
+  width: 100%;
+  padding-left: 30px;
+}
+
+/* Filter chrome often resets padding; keep room for the leading icon. */
+.st-filters .mb-control > select,
+.st-filters .mb-control > input,
+.ch-side .mb-control > select,
+.ch-side .mb-control > input,
+.an-sidebar .mb-control > select,
+.an-sidebar .mb-control > input,
+.rp-filters .mb-control > select,
+.rp-filters .mb-control > input,
+.rp-filters .mb-control > button,
+.as-controls .mb-control > select,
+.as-controls .mb-control > input,
+.sc-list-filters .mb-control > select,
+.sc-list-filters .mb-control > input,
+.sc-list-filters .mb-control > button {
+  padding-left: 30px;
+}
+
+.an-sidebar .mb-control,
+.ch-side .mb-control,
+.rp-typeahead > .mb-control,
+.as-team-box .mb-control,
+.as-controls > .mb-control,
+.sc-block > .mb-control,
+.sc-list-filters > .mb-control {
+  width: 100%;
+}
+
+.as-controls > .mb-control--map {
+  width: auto;
+  min-width: 180px;
+}
+
+.mb-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mb-summary .mb-icon,
+.st-tabs .seg-tab .mb-icon,
+.an-lb-tabs .seg-tab .mb-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  opacity: 0.72;
+}
+
+.mb-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .st-tabs {
   display: inline-flex;
   overflow: hidden;
@@ -3469,6 +3552,10 @@ body.rv-open {
 }
 
 .st-tabs .seg-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   height: 32px;
   padding: 0 14px;
   border-right: 1px solid var(--border);
@@ -3783,7 +3870,17 @@ body.rv-open {
 }
 
 .st-map-select {
-  min-width: 132px;
+  min-width: 148px;
+}
+
+.st-filter-group > .mb-control {
+  width: max-content;
+  min-width: 148px;
+}
+
+.st-filter-group > .mb-control > .st-map-select {
+  width: 100%;
+  min-width: 148px;
 }
 
 .st-role-select {
@@ -3794,7 +3891,7 @@ body.rv-open {
 .st-round-select {
   min-width: 0;
   width: max-content;
-  max-width: 9.5rem;
+  max-width: 11rem;
   padding-left: 10px;
   padding-right: 10px;
 }
@@ -3803,7 +3900,7 @@ body.rv-open {
   position: relative;
   width: max-content;
   min-width: 0;
-  max-width: 9.5rem;
+  max-width: 11rem;
 }
 
 .st-round-multi > summary {

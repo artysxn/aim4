@@ -41,6 +41,7 @@ import {
   trackEndMs
 } from './recordingFormat.js';
 import backIcon from '../../icons/icon_back.svg?raw';
+import { mbWrap } from '../../icons/menubuttons.js';
 
 /** Maps that have a radar image to draw on. */
 const CREATOR_MAPS = Object.entries(MAPS).map(([code, m]) => ({ code, name: m.name }));
@@ -506,9 +507,12 @@ export function createCreatorPanel({
       </div>
 
       <div class="sc-block">
-        <select class="site-select" data-map aria-label="Map" ${readOnly ? 'disabled' : ''}>
+        ${mbWrap(
+          'map',
+          `<select class="site-select" data-map aria-label="Map" ${readOnly ? 'disabled' : ''}>
           <option value="">Map</option>${mapOptions}
-        </select>
+        </select>`
+        )}
       </div>
 
       <div class="sc-block">

@@ -56,6 +56,7 @@ import { createSavedViews } from '../savedViews.js';
 import { POSITION_MAPS } from '../roles/teamPositions.js';
 import filtersIcon from '../../icons/icon_filters.svg?url';
 import calendarIcon from '../../icons/icon_calendar.svg?url';
+import { mbIcon, mbSummary, mbWrap } from '../../icons/menubuttons.js';
 
 /**
  * @param {{
@@ -113,8 +114,8 @@ export function createStatsPanel({
           usePageHead
             ? ''
             : `<div class="st-tabs">
-          <button type="button" class="seg-tab active" data-tab="players">Players</button>
-          <button type="button" class="seg-tab" data-tab="teams">Teams</button>
+          <button type="button" class="seg-tab active" data-tab="players">${mbIcon('player')}Players</button>
+          <button type="button" class="seg-tab" data-tab="teams">${mbIcon('team')}Teams</button>
         </div>`
         }
         <span class="st-detail-label" id="st-detail-label" hidden></span>
@@ -142,8 +143,8 @@ export function createStatsPanel({
     pageHeadEl.className = 'st-page-actions';
     pageHeadEl.innerHTML = `
       <div class="st-tabs">
-        <button type="button" class="seg-tab active" data-tab="players">Players</button>
-        <button type="button" class="seg-tab" data-tab="teams">Teams</button>
+        <button type="button" class="seg-tab active" data-tab="players">${mbIcon('player')}Players</button>
+        <button type="button" class="seg-tab" data-tab="teams">${mbIcon('team')}Teams</button>
       </div>
       <button type="button" class="btn btn-sm st-filters-toggle" data-st-filters-toggle aria-expanded="false" aria-controls="st-filters">
         <img src="${filtersIcon}" alt="" width="16" height="16" draggable="false" />
@@ -277,8 +278,11 @@ export function createStatsPanel({
           )}</option>`
       )
       .join('');
-    return `<select class="site-select st-map-select" data-filter="maps" aria-label="Map">
-      <option value=""${!selected ? ' selected' : ''}>Any map</option>${opts}</select>`;
+    return mbWrap(
+      'map',
+      `<select class="site-select st-map-select" data-filter="maps" aria-label="Map">
+      <option value=""${!selected ? ' selected' : ''}>Any map</option>${opts}</select>`
+    );
   }
 
   function roleSelectHtml(side) {
@@ -354,8 +358,9 @@ export function createStatsPanel({
     ].join('');
     return `<div class="st-filter-group">
       <details class="st-round-multi" data-round-menu="${field}">
-        <summary class="site-select st-round-select" aria-label="${escapeHtml(ariaLabel)}">${escapeHtml(
-          summary
+        <summary class="site-select st-round-select" aria-label="${escapeHtml(ariaLabel)}">${mbSummary(
+          'menu',
+          escapeHtml(summary)
         )}</summary>
         <div class="st-round-menu" role="group" aria-label="${escapeHtml(ariaLabel)}">${checks}</div>
       </details>

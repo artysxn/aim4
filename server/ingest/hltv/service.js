@@ -1127,6 +1127,8 @@ export async function status() {
       demoStart: c.demoStart,
       frontierWaitMs: c.frontierWaitMs,
       frontierLookahead: c.frontierLookahead,
+      maxArchiveBytes: c.maxArchiveBytes,
+      maxExtractBytes: c.maxExtractBytes,
       batchSize: c.batchSize,
       pollIntervalMs: c.pollIntervalMs,
       library: c.library || null
