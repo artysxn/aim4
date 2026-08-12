@@ -9,6 +9,7 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_FALLBACK_PROXY } from './proxyPool.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -61,15 +62,23 @@ export function loadConfig(overrides = {}) {
     cloakLicenseKey: env.AIM4_CLOAK_LICENSE_KEY || env.CLOAKBROWSER_LICENSE_KEY || '',
     cloakGeoip: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_GEOIP || 'true'),
     /**
-     * Transport proxy. Defaults to the known-good office exit; every download
-     * goes through it when cloakProxyOnly is on (default).
+     * Exclusive pin used when cloakProxyOnly is on. Defaults to the office
+     * exit. AIM4_CLOAK_PROXY is ignored here on purpose: Coolify often still
+     * has a burned public proxy in that env var.
+     * Override with AIM4_CLOAK_PIN_PROXY only.
      */
-    cloakProxy: env.AIM4_CLOAK_PROXY || 'http://130.17.12.137:3128',
+    cloakPinProxy: env.AIM4_CLOAK_PIN_PROXY || DEFAULT_FALLBACK_PROXY,
+    /**
+     * Pool-mode single proxy (only when cloakProxyOnly=off).
+     */
+    cloakProxy: env.AIM4_CLOAK_PROXY || DEFAULT_FALLBACK_PROXY,
     /**
      * When true (default), ignore working-proxy cache / public list / file and
-     * use only cloakProxy. Set AIM4_CLOAK_PROXY_ONLY=off to restore the pool.
+     * use only cloakPinProxy. Set AIM4_CLOAK_PROXY_ONLY=off to restore the pool.
      */
     cloakProxyOnly: !/^(0|false|no|off)$/i.test(env.AIM4_CLOAK_PROXY_ONLY || 'true'),
+    /** Extra wait after local chrome dies before trusting Pro seats are free. */
+    sessionLimitWaitMs: num(env.AIM4_CLOAK_SESSION_LIMIT_WAIT_MS, 300_000),
     /**
      * Newline-separated proxy list (http:// and socks5://). Default sits next
      * to the ingest state dir (gitignored / volume-mounted). Override with

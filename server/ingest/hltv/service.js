@@ -65,18 +65,77 @@ const state = {
 
 /**
  * Cloak Pro tracks seats on their license server. After SIGKILL the local
- * chrome is gone but the seat can linger for well over a minute. Hard Restart
+ * chrome is gone but the seat can linger for several minutes. Hard Restart
  * that respawns in a few seconds walks straight back into session-limit.
  */
-const SESSION_LIMIT_BACKOFF_MS = 180_000;
+const SESSION_LIMIT_BACKOFF_MS = 300_000;
 /** Extra settle after local cloak PIDs are gone (hard stop / hard restart). */
-const LICENSE_SETTLE_MS = 60_000;
+const LICENSE_SETTLE_MS = 180_000;
 
 function isSessionLimitMessage(msg) {
   return /session limit reached/i.test(String(msg || ''));
 }
 
 const cfg = () => loadConfig({});
+
+const seatHoldPath = (c) => path.join(c.stateDir, 'cloak-seat-hold.json');
+
+/** Persist Pro-seat backoff across API reboots (in-memory alone is useless). */
+async function readSeatHold(c) {
+  try {
+    const raw = JSON.parse(await fsp.readFile(seatHoldPath(c), 'utf8'));
+    const until = Date.parse(raw.until || '') || 0;
+    if (!until || until <= Date.now()) {
+      await fsp.rm(seatHoldPath(c), { force: true }).catch(() => {});
+      return null;
+    }
+    return { until, reason: String(raw.reason || 'session-limit') };
+  } catch {
+    return null;
+  }
+}
+
+async function writeSeatHold(c, { ms, reason = 'session-limit' } = {}) {
+  const wait = Math.max(
+    Number(ms) || SESSION_LIMIT_BACKOFF_MS,
+    Number(c.sessionLimitWaitMs) || SESSION_LIMIT_BACKOFF_MS
+  );
+  const until = Date.now() + wait;
+  state.nextSpawnAllowedAt = Math.max(state.nextSpawnAllowedAt, until);
+  await fsp.mkdir(c.stateDir, { recursive: true });
+  const tmp = `${seatHoldPath(c)}.tmp`;
+  await fsp.writeFile(
+    tmp,
+    JSON.stringify(
+      {
+        until: new Date(until).toISOString(),
+        reason,
+        setAt: new Date().toISOString()
+      },
+      null,
+      2
+    )
+  );
+  await fsp.rename(tmp, seatHoldPath(c));
+  await appendIngestLog(
+    c,
+    `seat hold: ${reason}; no spawn until ${new Date(until).toISOString()} ` +
+      `(${Math.round(wait / 1000)}s)`
+  );
+  return until;
+}
+
+async function clearSeatHold(c) {
+  await fsp.rm(seatHoldPath(c), { force: true }).catch(() => {});
+}
+
+/** Apply on-disk seat hold into state.nextSpawnAllowedAt. */
+async function syncSeatHold(c) {
+  const hold = await readSeatHold(c);
+  if (!hold) return 0;
+  state.nextSpawnAllowedAt = Math.max(state.nextSpawnAllowedAt, hold.until);
+  return Math.max(0, hold.until - Date.now());
+}
 
 function alive(pid) {
   if (!pid) return false;
@@ -170,30 +229,50 @@ async function resumeCursorFromState(c) {
 
 /**
  * API boot: always leave the switch Off and kill any orphaned child. Does not
- * clear ledger, cursor, or ingest.log.
+ * clear ledger, cursor, or ingest.log. Preserves Pro seat-hold backoff so a
+ * deploy mid-download does not immediately respawn into session-limit.
  */
 export async function disableForBoot() {
   const c = cfg();
   await writeDesired(c, { enabled: false });
-  const pid = await readPid(c.lockPath);
-  if (pid && alive(pid)) {
-    await appendIngestLog(c, `boot: forcing Off; SIGKILL pid=${pid}`);
-    killIngestPid(pid);
+  state.holdSpawn = true;
+  try {
+    const pid = await readPid(c.lockPath);
+    const leftovers = await remainingCloakPids(c);
+    if ((pid && alive(pid)) || leftovers.length) {
+      await appendIngestLog(
+        c,
+        `boot: forcing Off; sweeping ingest/cloak` +
+          (pid && alive(pid) ? ` pid=${pid}` : '') +
+          (leftovers.length ? ` cloak=[${leftovers.slice(0, 8).join(',')}]` : '')
+      );
+      await killAllIngestRelated(c);
+      await waitUntilCloakClear(c, 'boot', 15_000);
+      // SIGKILL mid-download leaves the remote Pro seat busy. Hold spawn.
+      await writeSeatHold(c, {
+        ms: LICENSE_SETTLE_MS,
+        reason: 'boot-kill'
+      });
+    } else {
+      // Keep any prior seat hold from before the reboot.
+      await syncSeatHold(c);
+    }
+    await fsp.rm(c.lockPath, { force: true }).catch(() => {});
+    const status = await readStatus(c.statusPath).catch(() => emptyStatus());
+    await writeStatus(c.statusPath, {
+      ...status,
+      running: false,
+      pid: null,
+      current: null,
+      stoppedAt: new Date().toISOString(),
+      lastError: null
+    }).catch(() => {});
+    state.failures = 0;
+    await appendIngestLog(c, 'boot: ingest left Off (turn On manually to resume)');
+    return { enabled: false };
+  } finally {
+    state.holdSpawn = false;
   }
-  await fsp.rm(c.lockPath, { force: true }).catch(() => {});
-  const status = await readStatus(c.statusPath).catch(() => emptyStatus());
-  await writeStatus(c.statusPath, {
-    ...status,
-    running: false,
-    pid: null,
-    current: null,
-    stoppedAt: new Date().toISOString(),
-    lastError: null
-  }).catch(() => {});
-  state.failures = 0;
-  state.nextSpawnAllowedAt = 0;
-  await appendIngestLog(c, 'boot: ingest left Off (turn On manually to resume)');
-  return { enabled: false };
 }
 
 async function writeDesired(c, patch) {
@@ -252,16 +331,18 @@ async function spawnIngester(c, options = {}) {
       await killAllIngestRelated(c);
       const clear = await waitUntilCloakClear(c, 'pre-spawn', 15_000);
       if (!clear) {
-        state.nextSpawnAllowedAt = Math.max(
-          state.nextSpawnAllowedAt,
-          Date.now() + SESSION_LIMIT_BACKOFF_MS
-        );
+        await writeSeatHold(c, {
+          ms: SESSION_LIMIT_BACKOFF_MS,
+          reason: 'pre-spawn-leftovers'
+        });
         throw new Error(
           `CloakBrowser leftovers still alive; holding spawn ${Math.round(
             SESSION_LIMIT_BACKOFF_MS / 1000
           )}s`
         );
       }
+      // Brief remote-seat settle after a kill, even if local PIDs are gone.
+      await new Promise((r) => setTimeout(r, 5_000));
     }
 
     await fsp.mkdir(c.stateDir, { recursive: true });
@@ -385,15 +466,13 @@ async function onChildExit(c, code, signal, exitedPid) {
   if (sessionLimit) {
     // Rapid respawn is what wedges the Pro seat. Sweep orphans and wait.
     state.failures = Math.max(state.failures, 5);
-    state.nextSpawnAllowedAt = Date.now() + SESSION_LIMIT_BACKOFF_MS;
-    await appendIngestLog(
-      c,
-      `session-limit: sweeping cloak; holding spawn ${Math.round(
-        SESSION_LIMIT_BACKOFF_MS / 1000
-      )}s`
-    );
+    await appendIngestLog(c, 'session-limit: sweeping cloak; persisting seat hold');
     await killAllIngestRelated(c);
     await waitUntilCloakClear(c, 'session-limit', 15_000);
+    await writeSeatHold(c, {
+      ms: Number(c.sessionLimitWaitMs) || SESSION_LIMIT_BACKOFF_MS,
+      reason: 'session-limit'
+    });
   }
   const clean = (code === 0 || signal === 'SIGTERM') && !shortLived && !sessionLimit;
   await writeStatus(c.statusPath, {
@@ -444,6 +523,21 @@ export async function start(options = {}) {
   }
 
   await appendIngestLog(c, 'start requested');
+  // Disk-backed hold survives API reboot; frantic On clicks must wait it out.
+  const holdMs = await syncSeatHold(c);
+  if (holdMs > 0) {
+    await appendIngestLog(
+      c,
+      `start: Pro seat hold active; supervisor will spawn in ${Math.round(holdMs / 1000)}s`
+    );
+    return {
+      started: false,
+      reason: 'session-limit backoff',
+      enabled: true,
+      retryInMs: holdMs
+    };
+  }
+
   // Explicit On still must not stack chrome on a full Pro seat. Sweep first;
   // keep a short settle so a human click after Hard Stop can succeed.
   const leftovers = await remainingCloakPids(c);
@@ -454,16 +548,8 @@ export async function start(options = {}) {
     );
     await killAllIngestRelated(c);
     await waitUntilCloakClear(c, 'start', 20_000);
-    await new Promise((resolve) => setTimeout(resolve, 8_000));
-  }
-  state.failures = 0;
-  // If a session-limit hold is still active, do not zero it on a frantic click.
-  if (Date.now() < state.nextSpawnAllowedAt) {
-    const wait = state.nextSpawnAllowedAt - Date.now();
-    await appendIngestLog(
-      c,
-      `start: session-limit hold active; supervisor will spawn in ${Math.round(wait / 1000)}s`
-    );
+    await writeSeatHold(c, { ms: LICENSE_SETTLE_MS, reason: 'start-sweep' });
+    const wait = await syncSeatHold(c);
     return {
       started: false,
       reason: 'session-limit backoff',
@@ -471,7 +557,9 @@ export async function start(options = {}) {
       retryInMs: wait
     };
   }
+  state.failures = 0;
   state.nextSpawnAllowedAt = 0;
+  await clearSeatHold(c);
 
   await resumeCursorFromState(c);
   const pid = await spawnIngester(c, options);
@@ -572,16 +660,47 @@ async function clearProfileLocks(profileRoot) {
 }
 
 /**
- * PIDs whose command line matches a pgrep -f pattern. Never includes our pid.
+ * True when /proc/<pid>/cmdline looks like a real cloak/ingest process, not a
+ * fleeting `pgrep -f cloakbrowser-cache` (pgrep matches its own argv).
  */
-async function pidsMatching(pattern) {
+async function cmdlineLooksLikeOurs(pid, c) {
+  if (!pid || pid === process.pid) return false;
+  let text = '';
+  try {
+    text = (await fsp.readFile(`/proc/${pid}/cmdline`)).toString('utf8').replace(/\0/g, ' ');
+  } catch {
+    // Non-Linux or already dead: trust pgrep only for non-pgrep names below.
+    return process.platform !== 'linux';
+  }
+  if (!text.trim()) return false;
+  if (/\bpgrep\b|\bpkill\b|\bkillall\b/i.test(text)) return false;
+  return (
+    /ingest\/hltv\/(?:cli|ingestParseWorker|probeParseWorker)\.js/i.test(text) ||
+    /cloakbrowser(?:-profile|-cache)?/i.test(text) ||
+    /chromium-[\d.]+-pro/i.test(text) ||
+    (c?.cloakBrowserCacheDir && text.includes(c.cloakBrowserCacheDir)) ||
+    (c?.cloakProfileDir && text.includes(c.cloakProfileDir)) ||
+    new RegExp(`Xvfb :${process.env.AIM4_CLOAK_XVFB_DISPLAY || '100'}\\b`).test(text)
+  );
+}
+
+/**
+ * PIDs whose command line matches a pgrep -f pattern. Never includes our pid
+ * or the pgrep process itself (that used to create fake "Off sweep" ghosts).
+ */
+async function pidsMatching(pattern, c = cfg()) {
   try {
     const { stdout } = await execFileAsync('pgrep', ['-f', pattern], { encoding: 'utf8' });
-    return stdout
+    const raw = stdout
       .trim()
       .split(/\s+/)
       .map(Number)
       .filter((n) => Number.isFinite(n) && n > 1 && n !== process.pid);
+    const out = [];
+    for (const pid of raw) {
+      if (await cmdlineLooksLikeOurs(pid, c)) out.push(pid);
+    }
+    return out;
   } catch {
     return [];
   }
@@ -664,12 +783,14 @@ async function pidsFromProcCmdline(c) {
 async function remainingCloakPids(c) {
   const found = new Set();
   for (const pid of await profileLockPids(c.cloakProfileDir)) {
-    if (alive(pid)) found.add(pid);
+    if (alive(pid) && (await cmdlineLooksLikeOurs(pid, c))) found.add(pid);
   }
   for (const pattern of cloakKillPatterns(c)) {
-    for (const pid of await pidsMatching(pattern)) found.add(pid);
+    for (const pid of await pidsMatching(pattern, c)) found.add(pid);
   }
-  for (const pid of await pidsFromProcCmdline(c)) found.add(pid);
+  for (const pid of await pidsFromProcCmdline(c)) {
+    if (await cmdlineLooksLikeOurs(pid, c)) found.add(pid);
+  }
   return [...found];
 }
 
@@ -707,7 +828,7 @@ async function killAllIngestRelated(c) {
 
   // Narrow patterns only: never pkill bare "chromium" / "node" / Xvfb :99.
   for (const pattern of cloakKillPatterns(c)) {
-    const matches = await pidsMatching(pattern);
+    const matches = await pidsMatching(pattern, c);
     for (const pid of matches) {
       // CLI is a session leader; use group kill. Browser/Xvfb: tree kill.
       if (pattern.includes('cli\\.js')) killIngestPid(pid);
@@ -776,8 +897,8 @@ async function waitUntilCloakClear(c, label, maxMs = 20_000) {
 }
 
 /**
- * Turn it off. Writes desired=false first, then kills the ingest CLI and any
- * orphan CloakBrowser chrome/Xvfb that can hold a Pro license seat.
+ * Turn it off. Ask the child to close CloakBrowser (releases Pro seat), then
+ * SIGKILL anything left. Immediate SIGKILL is what wedges seats for minutes.
  */
 export async function stop() {
   const c = cfg();
@@ -799,11 +920,28 @@ export async function stop() {
     await appendIngestLog(
       c,
       pid && alive(pid)
-        ? `stop requested; full cloak sweep (ingest pid=${pid})`
+        ? `stop requested; graceful close then sweep (ingest pid=${pid})`
         : 'stop requested; full cloak sweep (ingest not running)'
     );
+    if (pid && alive(pid)) {
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch {
+        /* already gone */
+      }
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline && alive(pid)) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      if (!alive(pid)) {
+        await appendIngestLog(c, `stop: ingest pid=${pid} exited after SIGTERM`);
+      }
+    }
     const killed = await killAllIngestRelated(c);
     await waitUntilCloakClear(c, 'stop', 12_000);
+    if (killed.length || (pid && !alive(pid))) {
+      await writeSeatHold(c, { ms: LICENSE_SETTLE_MS, reason: 'stop' });
+    }
     await appendIngestLog(
       c,
       `stop done; killed ${killed.length} pid(s)` +
@@ -857,6 +995,7 @@ async function hardKillSweep(c, label) {
   await waitUntilCloakClear(c, label, 25_000);
   // Extra settle for remote Pro license accounting after SIGKILL. Too short
   // and Hard Restart immediately hits "session limit reached".
+  await writeSeatHold(c, { ms: LICENSE_SETTLE_MS, reason: label });
   await appendIngestLog(
     c,
     `${label}: waiting ${Math.round(LICENSE_SETTLE_MS / 1000)}s for Pro seat release`
@@ -867,11 +1006,12 @@ async function hardKillSweep(c, label) {
   if (final.length) {
     await appendIngestLog(c, `${label}: post-settle sweep killed ${final.length} pid(s)`);
     await waitUntilCloakClear(c, `${label}-post`, 10_000);
+    await writeSeatHold(c, { ms: LICENSE_SETTLE_MS, reason: `${label}-post` });
   }
 
   state.failures = 0;
-  state.nextSpawnAllowedAt = 0;
   state.lastSpawnAt = 0;
+  await syncSeatHold(c);
 
   return {
     oldPid: oldPid || null,
@@ -914,8 +1054,11 @@ export async function hardRestart(options = {}) {
     const { oldPid, killedPids } = await hardKillSweep(c, 'hard reset');
 
     state.failures = 0;
-    state.nextSpawnAllowedAt = 0;
     state.lastSpawnAt = 0;
+    // hardKillSweep already waited LICENSE_SETTLE_MS and wrote a seat hold.
+    // Clear hold only after that wait so we can spawn once.
+    await clearSeatHold(c);
+    state.nextSpawnAllowedAt = 0;
     await writeDesired(c, { enabled: true, ...options });
 
     await appendIngestLog(c, 'hard restart spawning');
@@ -961,6 +1104,10 @@ export async function supervise() {
           (leftovers.length ? ` cloak=[${leftovers.slice(0, 12).join(',')}]` : '')
       );
       await killAllIngestRelated(c);
+      // Do not spam seat-hold writes every 5s; only extend if none is active.
+      if (!(await readSeatHold(c))) {
+        await writeSeatHold(c, { ms: LICENSE_SETTLE_MS, reason: 'off-sweep' });
+      }
       return { action: 'killed-stray', enabled: false };
     }
     return { action: 'none', enabled: false };
@@ -970,11 +1117,12 @@ export async function supervise() {
     return { action: 'hold', enabled: true };
   }
   if (await isRunning()) return { action: 'none', enabled: true, running: true };
-  if (Date.now() < state.nextSpawnAllowedAt) {
+  const holdMs = await syncSeatHold(c);
+  if (holdMs > 0 || Date.now() < state.nextSpawnAllowedAt) {
     return {
       action: 'backoff',
       enabled: true,
-      retryInMs: state.nextSpawnAllowedAt - Date.now(),
+      retryInMs: Math.max(holdMs, state.nextSpawnAllowedAt - Date.now()),
       failures: state.failures
     };
   }

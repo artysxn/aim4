@@ -394,17 +394,21 @@ Env: AIM4_INGEST_DEMO_START=109575 AIM4_INGEST_FRONTIER_WAIT_MS=600000`);
     const onSignal = (sig) => {
       void (async () => {
         if (stopping) return;
-        // Off/Hard Restart use SIGKILL. Spurious SIGTERM (deploy helpers,
-        // process-group noise) used to end continuous ingest with code 0 and
-        // leave the UI stuck on Starting until the 60s supervisor tick.
+        // Off writes desired=false then SIGTERM so we can close CloakBrowser and
+        // drop the Pro seat. Ignore SIGTERM only while the switch is still On
+        // (deploy noise / process-group spam).
         if (opts.continuous && (await switchIsOn(cfg))) {
           console.log(`[ingest] ignoring ${sig} (switch is on; use Off / Hard Restart)`);
           return;
         }
         stopping = true;
-        console.log(`\n[ingest] ${sig}: aborting download...`);
+        console.log(`\n[ingest] ${sig}: closing browser (release Pro seat)...`);
         pipe.requestStop();
-        void source.close?.().catch(() => {});
+        try {
+          await source.close?.();
+        } catch {
+          /* best-effort seat release */
+        }
       })();
     };
     process.on('SIGINT', onSignal);

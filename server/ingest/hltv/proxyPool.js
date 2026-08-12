@@ -215,8 +215,22 @@ async function writeRefreshState(cfg, state) {
 
 /**
  * Merge admin/env proxy settings into a config object (used by probe + session).
+ * Exclusive pin mode ignores the admin attempts/random file so we never log
+ * "attempts=5, order=random" while only one exit is allowed.
  */
 export async function applyProxySettings(cfg) {
+  const only =
+    cfg.cloakProxyOnly !== undefined
+      ? Boolean(cfg.cloakProxyOnly)
+      : !/^(0|false|no|off)$/i.test(process.env.AIM4_CLOAK_PROXY_ONLY || 'true');
+  if (only) {
+    cfg.cloakProxyAttempts = 1;
+    cfg.cloakProxyRandom = false;
+    return {
+      cfg,
+      settings: { attempts: 1, random: false, updatedAt: null, fromFile: false, pinned: true }
+    };
+  }
   const settings = await readProxySettings(cfg);
   cfg.cloakProxyAttempts = settings.attempts;
   cfg.cloakProxyRandom = settings.random;
@@ -225,15 +239,24 @@ export async function applyProxySettings(cfg) {
 
 /**
  * Pool order: working winners, optional AIM4_CLOAK_PROXY, last fetch cache, file.
- * When cloakProxyOnly is set (default), return only that single URL.
+ * When cloakProxyOnly is set (default), return only the office pin.
  */
 export async function loadProxyPool(cfg = {}) {
-  const single = normalizeProxyUrl(cfg.cloakProxy || process.env.AIM4_CLOAK_PROXY || '');
   const only =
     cfg.cloakProxyOnly !== undefined
       ? Boolean(cfg.cloakProxyOnly)
       : !/^(0|false|no|off)$/i.test(process.env.AIM4_CLOAK_PROXY_ONLY || 'true');
-  if (only && single) return [single];
+  if (only) {
+    const pin =
+      normalizeProxyUrl(
+        cfg.cloakPinProxy ||
+          process.env.AIM4_CLOAK_PIN_PROXY ||
+          DEFAULT_FALLBACK_PROXY
+      ) || DEFAULT_FALLBACK_PROXY;
+    return [pin];
+  }
+
+  const single = normalizeProxyUrl(cfg.cloakProxy || process.env.AIM4_CLOAK_PROXY || '');
 
   const chunks = [];
   const working = await readWorkingProxies(cfg);

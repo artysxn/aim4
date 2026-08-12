@@ -471,7 +471,7 @@ export function createCloakSession(cfg = {}) {
         const pool = await loadProxyPool(cfg);
         if (cfg.cloakProxyOnly && pool.length === 1) {
           preferredProxyCount = 1;
-          log(`Proxy pinned: ${redactProxy(pool[0])} (only)`);
+          log(`Proxy pinned: ${redactProxy(pool[0])} (only; AIM4_CLOAK_PROXY ignored)`);
           return pool;
         }
         const working = await readWorkingProxies(cfg);
