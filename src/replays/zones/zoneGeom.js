@@ -85,9 +85,9 @@ export function rectDifference(a, b) {
   if (by0 > a.y) out.push(rect(a.x, a.y, a.w, by0 - a.y));
   // Bottom slab
   if (by1 < ay1) out.push(rect(a.x, by1, a.w, ay1 - by1));
-  // Middle left
+  // Middle-left
   if (bx0 > a.x) out.push(rect(a.x, by0, bx0 - a.x, by1 - by0));
-  // Middle right
+  // Middle-right
   if (bx1 < ax1) out.push(rect(bx1, by0, ax1 - bx1, by1 - by0));
   return out.filter((r) => r.w > 1e-6 && r.h > 1e-6);
 }
