@@ -41,7 +41,7 @@ against current game files or the wiki at implementation time, then freeze it in
 - [13. The 3D port path](#13-the-3d-port-path)
 - [14. IFs, BUTs, MAYBEs: risks and edge cases](#14-ifs-buts-maybes-risks-and-edge-cases)
 - [15. Build order and acceptance criteria](#15-build-order-and-acceptance-criteria)
-- [16. Decisions needed from artysan](#16-decisions-needed-from-artysan)
+- [16. Decisions (resolved)](#16-decisions-resolved)
 
 ---
 
@@ -128,21 +128,23 @@ just a round nobody had to play.
 
 ### 2.1 Access rule
 
-Only @artysan. The server identity layer already learned the hard lesson here:
-usernames are renameable and claimable, so **the server-side gate is by user UUID,
-never by username** (see the header comment in `server/replays/identity.js`).
+Only @artysan. **No new env var, no new UUID list.** The site already knows who
+he is: `whoami(req)` plus `isSiteAdmin(me.id)` against `site_admins`, the same
+gate `/admin` uses (`server/admin/routes.js`, `server/entitlements/service.js`).
+Usernames are renameable, so the check is the admin UUID table, not the string
+`artysan`.
 
-- New env var `AIM4_SIM_USER_IDS`: comma-separated Supabase `auth.users.id` UUIDs.
-- Guard logic in `server/sim/guard.js`:
-  1. `me = await whoami(req)`; not signed in → deny.
-  2. `me.impersonating` → deny (an admin viewing-as someone must not leak the page).
-  3. If `AIM4_SIM_USER_IDS` is set: allow iff `me.id` is in the list.
-  4. If unset: fall back to `isSiteAdmin(me.id)` (artysan is the site admin today), so the page works before the env var is deployed.
-- Every denial answers **404, not 403**, copying `server/admin/routes.js`: the
-  endpoint's existence is never confirmed to a prober. The client renders the same
-  "Page not found" view the router shows for unknown paths.
-- The client may additionally check `auth.displayName === 'artysan'` for cosmetics
-  (the `src/site/ingestReminder.js` pattern) but this is never the boundary.
+Guard logic in `server/sim/guard.js`:
+
+1. `me = await whoami(req)`; not signed in → deny.
+2. `me.impersonating` → deny (an admin viewing-as someone must not leak the page).
+3. `!(await isSiteAdmin(me.id))` → deny.
+
+Every denial answers **404, not 403**, copying admin: the endpoint's existence
+is never confirmed to a prober. The client renders the same "Page not found"
+view the router shows for unknown paths. The client may also check
+`auth.displayName === 'artysan'` for cosmetics (`ingestReminder.js`) but that
+is never the boundary.
 
 ### 2.2 Files to touch (exact)
 
@@ -157,8 +159,7 @@ never by username** (see the header comment in `server/replays/identity.js`).
 | API | `server/sim/routes.js` (new) | `handleSimRequest(req, res, url)` for `/api/sim/*`, own CORS like admin. First endpoint: `GET /api/sim/me` → `{ ok: true }` or 404. |
 | Dispatch | `server/index.js` | `if (url.pathname.startsWith('/api/sim') && (await handleSimRequest(req, res, url))) return;` placed with the other namespace handlers, before the generic JSON body reader and generic OPTIONS reply (same reasoning as `/api/admin`). |
 | WS | `server/index.js` upgrade router | Later phase: `/ws/sim` branch, bearer passed as query param or first message, guard checked before any state is sent, close code 4404 on denial. |
-| Env docs | `.env.example` | Document `AIM4_SIM_USER_IDS`. |
-| Tests | `server/sim/guard.test.js` (new), appended to the `test` script in `package.json` | Allowlist honored, admin fallback when unset, impersonation denied, anonymous denied, all denials are 404-shaped. |
+| Tests | `server/sim/guard.test.js` (new), appended to the `test` script in `package.json` | Site admin allowed, impersonation denied, anonymous denied, non-admin signed-in denied, all denials are 404-shaped. |
 
 ### 2.3 Secrecy checklist
 
@@ -269,8 +270,11 @@ browser page, the Node server, and the extraction scripts alike.
 ### 4.2 World representation per map
 
 Seven maps are calibrated and painted today: ANC, DD2, INF, CCH, MIR, NUK, ANU.
-Start with **Inferno** (richest role/call vocabulary, both brief examples use it),
-then Mirage, Dust2. Nuke last (two floors).
+Bots train on **every map that has baked nav and library demos**. There is no
+Inferno-only curriculum. Engine work still lands map-by-map as collision paint
+is reviewed (you cannot ship a map whose walkable mask is a lie), and Nuke's
+two floors stay the hardest bake, but a generation is not admitted until it
+has been trained and eval'd across the ready set, not one poster map.
 
 Per map, built once at load and cached:
 
@@ -386,9 +390,10 @@ match:  config -> halves(MR12) -> [OT MR3 @ $10,000]* -> result       [verify OT
 round:  freeze(15 s) -> live(115 s) -> [planted(40 s)] -> over -> payout -> next
 ```
 
-- Freeze 15 s (configurable; FACEIT-style 12 s as an option). The viewer's
-  `FREEZE_SECONDS=3` is only its fallback for rounds without a real
-  `freezeEndTick`; the sim writes honest tick bounds so the clock is right.
+- Freeze **15 s**. Configurable later if a FACEIT 12 s mode is wanted; it does
+  not matter for training. The viewer's `FREEZE_SECONDS=3` is only its fallback
+  for rounds without a real `freezeEndTick`; the sim writes honest tick bounds
+  so the clock is right.
 - Buy period: freeze + 20 s after live starts (`mp_buytime` 20) `[verify]`, buying
   only within X=1100 u geodesic of own spawn centroid (buy zone approximation).
 - Plant: hold 3.2 s inside a site polygon holding the bomb; sets `plantTick`,
@@ -406,7 +411,8 @@ round:  freeze(15 s) -> live(115 s) -> [planted(40 s)] -> over -> payout -> next
   3. Defuse channel completes → **defuse**.
   4. Live clock hits 0 with no plant → **time**, CT win.
 - Halftime swaps sides, resets money to start money, resets loss streaks
-  `[verify halftime streak reset]`. First to 13; 12-12 → OT toggle.
+  `[verify halftime streak reset]`. First to 13; 12-12 → **OT on by default:
+  MR3, $10,000 start**.
 - Round end grace ~5 s where survivors can still act (save runs are real), then
   payout, then next round. Spawns are **chosen by the bots** from the available
   pool, not rolled by the engine (4.12).
@@ -433,8 +439,9 @@ Emission events, each `{tick, type, pos, loudness}`:
 - Walking (shift) and crouching emit nothing. That is the whole tactical point.
 - Audibility: receiver hears the event if geodesic path distance (via the nav
   lattice, not euclidean, so sound does not cross solid walls unrealistically) ≤
-  radius. Percept delivered to the *team* blackboard (CS gives shared audio cues
-  poorly; individual-only hearing with comm delay is a v2 realism knob, 16).
+  radius. The bot who is in range gets the percept **immediately**. Relaying it
+  to teammates is a comm, delayed 0.5 to 1.5 s (5.1). CS radar does not share
+  footsteps.
 - The percept is noisy: direction quantized to 8 sectors, distance to 3 bands
   (close/mid/far), and mapped to the nearest named zone ("steps banana, close").
   Bots learn on the same degraded signal a human gets.
@@ -592,13 +599,13 @@ Why this exists, in order of importance:
 3. **Practice.** A real team loading these bots later will want "put your AWP
    on the banana spawn this round." The 2D page should already expose that.
 
-What this is **not**: a claim that CS2 lets players pick spawns. Section 13
-treats spawn choice as a 2D-only superpower. On a real server the plugin
-*observes* the assigned spawn and the same Playstyle network conditions on it
-(the permutation head is masked to the received assignment). Optional later:
-a practice-server teleport during freeze, behind a config flag, so a scrim
-can still pin the AWP to banana. Never on by default; never in competitive
-rulesets.
+What this is **not**: a claim that official matchmaking lets players pick
+spawns. On a practice CS2 server after the 3D port, the plugin will
+**`setpos` each bot during freeze** onto the spawn the Playstyle AI (or the
+pin UI) chose, from the same pool, one bot per point. That keeps mimicry and
+"AWP on banana" intact in 3D. Mid-round `setpos` is forbidden; freeze only.
+The DecisionInterface does not change: 2D writes the pose into the engine,
+3D calls `setpos` (4.12, 13.3).
 
 Implementation: `shared/sim/spawnAssign.js`.
 
@@ -633,7 +640,7 @@ tracker `shared/sim/knowledge.js` is a lift of the Team POV semantics, run
 | Kill feed | Global and exact, both teams: alive counts are common knowledge (CS shows the feed). Killer identity known; killer *position* only if the death was seen or the victim's team heard the shot. |
 | Damage taken | Victim's team learns direction sector + weapon class instantly. |
 | Bomb | T side always knows carrier/drop location (CS radar rule); CT learn plant site from the plant sound instantly (it is map-wide information in practice) and bomb position only when seen. |
-| Teammate state | Own team: full state sharing, instantaneous in v1 (CS radar shares spotted contacts instantly; human comm delay is a v2 knob, 16). |
+| Teammate state | Radar-like facts are instant: living teammates' positions, spotted enemies (vision contact by anyone on the side), bomb on T radar. Calls are not. Sound percepts heard by one bot, and Playstyle orders reaching a bot who did not see the event, land after a comm delay drawn uniformly from 0.5 to 1.5 s per message (seeded). That is v1, not a later knob. |
 | Economy | Own team exact. Enemy team: inferred (5.3). |
 
 ### 5.2 Belief state (per team blackboard + per bot)
@@ -799,6 +806,7 @@ RNG except the aim motor's seeded draws. Sub-modules:
 | objective.plant | Path into site polygon, channel 3.2 s, emits sound, writes flags. |
 | objective.defuse | Path to bomb, channel 5/10 s, break on damage. |
 | buy | Purchases through `economy.js` legality; order matters (armor before rifle when short). |
+| spawns (freeze) | 2D: place bots on chosen pool points. 3D: freeze-only `setpos` to those same points. |
 
 In the 3D port, this table is re-implemented as CS2 bot commands (13); the
 signatures do not change.
@@ -943,13 +951,16 @@ for play, eval, and curriculum, not for sneaking past aim gates.
 
 | Knob | Default | What it scales |
 |---|---|---|
-| Team skill `S_team` | `pro` | All five bots on that side, both aim-motor params (8.2) and decision noise |
+| Team skill `S_team` | `average` | All five bots on that side, both aim-motor params (8.2) and decision noise |
 | Per-bot `S_i` | inherit team | Overrides that one slot. Role-labelled in the UI (AWPer, Banana, …) |
 
 Named stops, internally a 0..1 lerp from an amateur floor to the pro envelope
 `[tune the floor against mix-level demos]`:
 
-`mix` → `t3` → `t2` → `t1` → `pro`
+`mix` → `t3` → **`average`** → `t2` → `t1` → `pro`
+
+Default for play is **`average`**. Training still always runs at the pro
+envelope. The page exposes the full seg; nothing is locked.
 
 What lower skill actually does (all of these, together, never "add random
 spread to an aimbot"):
@@ -1000,26 +1011,29 @@ Evolution across "generations" is the league: each generation is a checkpoint
 admitted to the opponent pool after passing eval gates. Retrieval and movement
 mimic (10.3) cover strategy diversity long before RL discovers it.
 
-### 9.2 Trainer runtime decision
+### 9.2 Trainer runtime: local 4090, never the prod box
 
-Training runs in **Python/PyTorch** under `tools/simtrainer/` (requirements.txt,
-no CUDA assumptions; CPU works, GPU helps). Rationale: PPO/league infrastructure in
-pure Node is months of yak-shaving; the house JS training pattern (`duels:train`)
-is right for 70-parameter models, wrong for 2 M. The seam is thin and file-based:
+Training runs in **Python/PyTorch** under `tools/simtrainer/` on **artysan's
+PC (RTX 4090)**. The production server has no GPU and does not train, does not
+run rollout workers, and does not grind self-play overnight. Prod only serves
+`/sim`, plays live matches for the signed-in admin, and loads exported weight
+files.
 
-- Node exports datasets/rollouts as flat binary + JSON manifests.
-- Python trains and exports weights as JSON/fp32 blobs + norm stats.
+The seam is thin and file-based:
+
+- Node on the PC exports datasets/rollouts as flat binary + JSON manifests
+  (library rounds can be copied, or extraction can read a local replay dir).
+- Python on the 4090 trains and exports weights as JSON/fp32 blobs + norm stats.
+- Copy the `models/<gen>/` folder onto the server (or into `AIM4_REPLAY_DIR/sim/`
+  on the PC for local `npm run host`). The website never needs CUDA.
 - Node/browser inference is the hand-rolled forward pass (6.3), so **the product
   has zero Python and zero native-ML dependencies at runtime**.
-- If Python is vetoed (16), fallback: BC-only in JS with a minibatch Adam loop
-  (slow but feasible), ship retrieval-planner + BC bots, defer RL. The plan
-  degrades gracefully.
 
-Self-play rollouts run in Node (the engine is JS): N worker processes
-(`server/sim/rollout.js`), each stepping matches with the current policy forward
-pass, writing trajectories to disk; the Python trainer watches the directory,
-updates weights, writes back a new manifest; workers hot-reload. Simple, robust,
-resumable, no gRPC.
+Self-play rollouts also run on the PC: N Node worker processes
+(`server/sim/rollout.js`) stepping matches with the current policy, writing
+trajectories to disk; the Python trainer watches the directory, updates weights,
+writes back a new manifest; workers hot-reload. Simple, robust, resumable, no
+gRPC, no prod CPU stolen from demo parsing.
 
 ### 9.3 Behavior cloning (generation 0)
 
@@ -1082,11 +1096,11 @@ no-enemy rounds; the round-library matcher must tag their executed calls correct
   = "a generation": must pass eval gates (9.8). This is the AlphaStar-lite recipe
   and it is what prevents strategy collapse (everyone camping) and rock-paper-
   scissors amnesia.
-- **Throughput math**: engine at ~6 rounds/sec/core (4.1); 16 workers ≈ 100
-  rounds/sec ≈ 8.6 M rounds/day ceiling; realistically with inference overhead
-  ~1 to 2 M rounds/day on one 16-core box. PPO generations at 50 k to 200 k
-  rounds each → several generations/day early, slowing as quality rises. Cloud
-  burst optional, not required.
+- **Throughput math**: engine at ~6 rounds/sec/core (4.1). On the 4090 PC,
+  CPU rollouts + GPU training share one box; size Node workers so they leave
+  the GPU fed, not so they starve Windows. A 16-core ceiling of ~1 to 2 M
+  rounds/day is the upper bound, not a prod-server claim. Cloud burst is not
+  in scope.
 
 ### 9.5 Reward design (the xK training wheels, requirement 3)
 
@@ -1291,8 +1305,8 @@ to know about: the local bot's contact is written onto the team blackboard
 (5.1, vision is already shared). The *movement* of the other four does not
 change until a team interrupt fires. That is the honest CS radar version of
 "I heard banana fighting, I am still walking toward A until someone calls."
-A future comm-delay knob (16) only changes how fast the blackboard updates,
-not this split.
+The 0.5 to 1.5 s comm delay (5.1) is how fast that blackboard update reaches
+bots who did not see the fight. It does not change the local vs team split.
 
 IF the other side is also on a tape (ghost both-sides, 10.3): the first
 kill that does not happen at the recorded clock ±0.5 s is a team interrupt
@@ -1420,7 +1434,7 @@ seg switches, no labels-on-everything, no marketing copy, no em dashes).
 
 - Map select (7 maps), mode seg: `Round | Match (MR12)`.
 - Per team: model/generation select (from the registry), skill seg
-  `mix | t3 | t2 | t1 | pro` (8.4), optional per-role skill overrides,
+  `mix | t3 | average | t2 | t1 | pro` (8.4, default `average`), optional per-role skill overrides,
   mimic select (team typeahead, then round filter or `Random matching`),
   starting command select (round-library calls for map+side, `Default`,
   `Auto`, `Mimic`).
@@ -1506,8 +1520,8 @@ accidental ingestion.
 ```jsonc
 { "map": "INF", "mode": "match", "seed": 421337,
   "teams": {
-    "T":  { "model": "gen12", "skill": "t1",
-            "skillSlots": { "AWPer": "pro" },
+    "T":  { "model": "gen12", "skill": "average",
+            "skillSlots": { "AWPer": "t1" },
             "mimic": { "team": "SPIRIT", "side": "T", "pick": "random-matching" },
             "command": "mimic", "spawns": "mimic" },
     "CT": { "model": "gen8", "skill": "t2", "mimic": null,
@@ -1526,7 +1540,8 @@ plan keeps this honest from day one via the layer boundaries (3).
 
 Both networks (weights), the DecisionInterface schema, the knowledge-tracker
 *specification* (percepts and belief shapes), role/call vocabularies, aim skill
-profiles (as targets for the 3D motor), the league/eval methodology.
+profiles (as targets for the 3D motor), spawn permutation (freeze `setpos` is
+the 3D translator for it), the league/eval methodology.
 
 ### 13.2 What is re-implemented per world
 
@@ -1539,8 +1554,9 @@ plugins already demonstrate. Fallbacks if bot control proves brittle: driving
 actual client instances (heavy), or partnering the sim as a coach/strat layer
 over native bots (degraded). **This is the single largest external risk in the
 whole project, so it is scheduled as an early spike (P8 can start any time after
-P3), not a final step**: a 2-week proof: plugin moves one bot to a named anchor,
-executes a peek template and a mined smoke lineup on de_inferno.
+P3), not a final step**: a 2-week proof: plugin `setpos`es one bot onto a
+named spawn during freeze, walks it to `banana_car`, peeks, throws a mined
+smoke on command from the DecisionInterface.
 
 ### 13.3 Sim-to-real gaps and mitigations
 
@@ -1550,7 +1566,7 @@ executes a peek template and a mined smoke lineup on de_inferno.
 | Grenade physics differ | Lineups are mined from *real 3D demos*: `setpos/setang`-style throws replay natively in 3D; the 2D flight was only a visualization |
 | Movement micro (air strafes, jump peeks) | Translator templates re-tuned in 3D against the same demo-calibrated timing targets; decisions unchanged. Mimic follow in 3D can use the real jump because the tape came from a real demo. |
 | Vision fidelity (2D LOS raster vs real geometry) | Knowledge tracker in 3D uses real engine traces: strictly better inputs than training; domain gap is conservative in the safe direction |
-| **Spawn choice is a 2D superpower** | On a real server the plugin *observes* the assigned spawn. The Playstyle permutation head is masked to that assignment (one legal action). Optional practice-server freeze teleport, behind a config flag, so a scrim can still pin the AWP to banana. Never on by default. |
+| **Spawn assign in 3D** | After the CS2 port, a freeze-only `setpos` places each bot on the chosen pool spawn (Playstyle permutation or pin UI). Same DecisionInterface as 2D. No mid-round teleport. |
 | Behavior drift after transfer | Fine-tune generations on a headless CS2 server farm later (slower ticks, tiny lr), with the 2D league as regression harness |
 
 ---
@@ -1575,8 +1591,10 @@ Engine and data:
    spots with straight-line flight; UI marks low-coverage maps.
 5. **Doors, breakables, boost spots** unmodeled in v1: known fidelity debt,
    listed per-map in `sim/meta`, revisit before 3D transfer relies on them.
-6. **Nuke** two-floor pathing and radar duality is genuinely hard: it is last on
-   purpose, and shipping 6 maps without it is acceptable.
+6. **Nuke** two-floor pathing and radar duality is genuinely hard. Bake it
+   honestly or leave it out of a generation's eval set; do not train on a
+   lying nav. The curriculum is "every map that is ready," not "skip Nuke
+   forever."
 7. **Smoke constant inconsistency** (18 vs 22 s in-repo): freeze 20 s in sim
    constants, file a small follow-up to unify the repo's two.
 8. **Determinism across platforms** (float drift Node versions/CPUs): pin the
@@ -1641,10 +1659,10 @@ Product and ops:
 22. **Secrecy leak via bundle**: route string is visible in `site.js`: acceptable
     (it 404s), but keep all sim UI text inside the lazy chunk; never reference
     `/sim` from public pages; keep `SIM-PLAN.md` out of any published docs page.
-23. **Long-running matches on the server**: instant-speed matches are CPU bursts;
-    cap concurrent sims (queue like the parse queue), nice the rollout workers,
-    and never share the event loop with the parser (separate worker threads,
-    same discipline `server/replays` already follows).
+23. **Long-running matches on the server**: live Play on `/sim` is a CPU burst
+    on prod (one match, admin only). Cap concurrent live sims at 1. Training
+    rollouts never run here; they run on the 4090 PC (9.2). Never share the
+    event loop with the parser.
 24. **Supabase outage** makes `whoami` anonymous: the guard then denies: fails
     closed, correct for a secret page.
 25. **Vercel catch-all**: forgetting the rewrite sends `/sim` to the trainer:
@@ -1672,14 +1690,14 @@ Each phase lands with tests appended to the `npm test` chain, house-style.
 | Phase | Scope | Acceptance |
 |---|---|---|
 | **P0** (day 1) | Hidden page + guard (section 2) | artysan sees the stub; everyone else and anonymous get 404 page and 404 API; guard tests green; `/sim` does not open the trainer on Vercel or `npm run host` |
-| **P1** | `shared/sim`: constants, movement2d, navGraph, engine skeleton (freeze/live/over, no combat), encode, **spawn choice**; bake Inferno | 10 scripted bots run named-anchor paths on Inferno at correct speeds; Playstyle-scripted spawn permutations never collide; encoded round plays in the existing timeline viewer with working clock; determinism hash test |
-| **P2** | Combat: weapons/damage/aim motor/sound; utility mining + effects; economy; full MR12 machine | Scripted 5v5 rounds complete with kills, plants, payouts; aim gates harness runs; economy golden tests: loss ladder, cap, T time-expiry $0, **all four kill-award buckets**, **explode-at-40s vs elim-at-39s after the same plant**; Team POV toggle on a sim round matches knowledge tracker (5.4 test) |
-| **P3** | Knowledge tracker, intents+masks, translator, **track follow**, **interrupt classifier**, scripted retrieval + **team-round mimic**, lineup executor; live WS + setup panel v1 | Command "A Execute (Inferno)" → library matcher tags the sim round `a-execute` ≥ 80% over 100 seeds (pre-interrupt); mimic follow vs frozen CT: median geodesic error < 60 u over first 20 s (10.4); a single banana peek stays `local` while four teammates keep walking A; watchable live at 1x/16x with POV, ghost tape, and interrupt log |
+| **P1** | `shared/sim`: constants, movement2d, navGraph, engine skeleton (freeze/live/over, no combat), encode, **spawn choice**; bake every map whose zones are ready | Scripted bots run named-anchor paths at correct speeds on each baked map; spawn permutations never collide; encoded round plays in the existing timeline viewer with working clock; determinism hash test |
+| **P2** | Combat: weapons/damage/aim motor/sound; utility mining + effects; economy; full MR12 + OT MR3 $10k; comm delay 0.5–1.5 s | Scripted 5v5 rounds complete with kills, plants, payouts; aim gates harness runs; economy golden tests: loss ladder, cap, T time-expiry $0, **all four kill-award buckets**, **explode-at-40s vs elim-at-39s after the same plant**; Team POV toggle on a sim round matches knowledge tracker (5.4 test); a sound heard by one bot reaches a teammate only after the delay |
+| **P3** | Knowledge tracker, intents+masks, translator, **track follow**, **interrupt classifier**, scripted retrieval + **team-round mimic**, lineup executor; live WS + setup panel v1 | Commanded execute on each baked map → library matcher tags it ≥ 80% over 100 seeds (pre-interrupt); mimic follow vs frozen CT: median geodesic error < 60 u over first 20 s (10.4); a single isolated peek stays `local` while four teammates keep the tape; watchable live at 1x/16x with POV, ghost tape, and interrupt log |
 | **P4** | BC: extractor, Python trainer, JS forward pass, mimic embeddings | BC bots beat scripted-random baseline ≥ 65%; call-validator ≥ 70% on commands; human-likeness KS within bands; page can pick `bc0` |
 | **P5** | RL: rollout workers, MAPPO, reward (9.5), league, eval harness, registry | gen1 admitted through gates (9.8); generations selectable in UI; paired-seed Elo report stored |
 | **P6** | UX polish: inspector overlays, ghost tape, interrupt log, skill knobs, match archive, saving/opening rounds in the standard viewer | artysan can run a Spirit-mimic T side vs t2 CT, pause, inspect a local vs team replan, save, and rewatch |
-| **P7** | Scale: curriculum C0 to C5 across 6 maps (Nuke deferred), mimic retrieval quality, buy-policy sanity | Per-map gates green; call entropy floor; eval dashboard data |
-| **P8** (parallel spike after P3) | CS2 server plugin proof (13.2) | One bot on a real server walks to `banana_car`, peeks, throws a mined smoke on command from the DecisionInterface |
+| **P7** | Scale: curriculum C0 to C5 across every baked map, mimic retrieval quality, buy-policy sanity | Per-map gates green; call entropy floor; eval dashboard data |
+| **P8** (parallel spike after P3) | CS2 server plugin proof (13.2) | Freeze `setpos` onto a chosen spawn, then one bot walks to `banana_car`, peeks, throws a mined smoke on command from the DecisionInterface |
 
 Rough effort intuition: P0 a day; P1 to P3 are the engine month(s) and carry most
 of the deterministic-correctness burden; P4 is a week once extraction runs; P5 is
@@ -1688,26 +1706,34 @@ should happen early because its result shapes how much 3D faith the rest deserve
 
 ---
 
-## 16. Decisions needed from artysan
+## 16. Decisions (resolved)
 
-1. **Python for training** (9.2): allowed as a dev-side tool (recommended), or
-   JS-only (BC-only fallback, RL deferred)?
-2. **artysan's Supabase UUID** for `AIM4_SIM_USER_IDS` (or accept the site-admin
-   fallback until set).
-3. **First map** confirmed Inferno? (Plan assumes yes.)
-4. **Freeze time** 15 s default or FACEIT 12 s as the sim default?
-5. **Compute**: is the prod box allowed to run rollout workers off-peak, or does
-   training get a separate machine (recommended: separate, prod only serves)?
-6. **OT rules** on by default (MR3, $10 k) or first-to-13 only for v1?
-7. **Decoys and wallbangs**: both deferred in this plan; veto if either is a
-   must-have for v1 realism.
-8. **Comm delay realism** (5.1): v1 shares team knowledge instantly like CS
-   radar; a 0.3 to 1.0 s human comm delay is more honest for 3D transfer but
-   makes early bots noticeably dumber. Ship instant now, add the knob later?
-9. **Default skill** for play (not training): `pro`, or `t1` so the first
-   demos do not look like a LAN final?
-10. **Spawn choice on a real server later**: observe-only (honest CS), or a
-    practice-server freeze teleport flag so scrims can still pin the AWP?
+1. **Training stack.** Python/PyTorch, on artysan's PC (RTX 4090). The website
+   server has no GPU and never trains. Weights are exported as files and copied
+   to wherever `/sim` should load them (9.2).
+2. **Access.** No `AIM4_SIM_USER_IDS`. Gate `/sim` the same way `/admin` is
+   gated: `whoami` + `isSiteAdmin`. The site already knows who artysan is (2.1).
+3. **Maps.** All of them. Bots train on every map with baked nav and library
+   demos. Engine still bakes map-by-map as collision paint is honest; a
+   generation is eval'd on the ready set, not on Inferno alone (4.2).
+4. **Freeze.** 15 s. Not worth a second mode.
+5. **Compute (what that question meant).** There are two machines in this
+   project: the **website** (serves pages, parses demos, no GPU) and **your
+   PC** (4090). The question was "should the website also grind training
+   simulations at night?" Answer: **no.** Your PC runs rollouts + PyTorch.
+   Prod only serves `/sim` and plays the live match you click. That is why
+   item 1 and item 5 are the same decision.
+6. **Overtime.** On. MR3, $10,000 start.
+7. **Decoys and wallbangs.** Out of v1.
+8. **Comm delay.** 0.5 to 1.5 s per call, v1, not a later knob. Radar-like
+   facts (teammate positions, spotted enemies) stay instant, like CS. Sound
+   relays and orders to bots who did not see the event are delayed (5.1).
+9. **Skill.** Adjustable per team and per bot. Play default is **`average`**.
+   Training still runs at the pro envelope (8.4).
+10. **Spawns after the CS2 port.** Freeze-only **`setpos`**: the plugin assigns
+    each bot to the spawn the Playstyle AI (or the pin UI) picked, from the
+    same pool, one bot per point. Mimicry and "AWP on banana" survive the
+    port. No mid-round `setpos` (4.12, 13.3).
 
 ---
 
