@@ -173,6 +173,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
   let playerSearch = '';
   let roundOwnSearch = '';
   let roundOppSearch = '';
+  let roundOwnMenuOpen = false;
+  let roundOppMenuOpen = false;
   let mapMenuOpen = false;
   /** @type {{ key: string, name: string, shortIds: string[] }[]} */
   let teamClusters = [];
@@ -1779,6 +1781,19 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     filters.roundOpp.clear();
     roundOwnSearch = '';
     roundOppSearch = '';
+    roundOwnMenuOpen = false;
+    roundOppMenuOpen = false;
+  }
+
+  function closeRoundTypeMenus(except = null) {
+    if (except !== 'roundOwn' && roundOwnMenuOpen) {
+      roundOwnMenuOpen = false;
+      refreshTypeaheadMenu('roundOwn');
+    }
+    if (except !== 'roundOpp' && roundOppMenuOpen) {
+      roundOppMenuOpen = false;
+      refreshTypeaheadMenu('roundOpp');
+    }
   }
 
   /** Drop round-type picks that no longer apply (map/side changed). */
@@ -1819,8 +1834,8 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const oppSelected = oppRows
       .filter((r) => filters.roundOpp.has(r.key))
       .map((r) => [r.key, r.label]);
-    const ownOpen = Boolean(roundOwnSearch.trim());
-    const oppOpen = Boolean(roundOppSearch.trim());
+    const ownOpen = roundOwnMenuOpen || Boolean(roundOwnSearch.trim());
+    const oppOpen = roundOppMenuOpen || Boolean(roundOppSearch.trim());
 
     return `
       <div class="rp-filter-group${ownOpen ? ' menu-open' : ''}">
@@ -1829,9 +1844,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
             'menu',
             `<input type="search" class="site-input rp-filter-search" id="rp-round-own-search"
             placeholder="${escapeHtml(ownSide)} rounds…" spellcheck="false" autocomplete="off"
-            value="${escapeHtml(roundOwnSearch)}" aria-label="${escapeHtml(ownSide)} rounds" />`
+            value="${escapeHtml(roundOwnSearch)}" aria-label="${escapeHtml(ownSide)} rounds"
+            aria-expanded="${ownOpen ? 'true' : 'false'}" aria-haspopup="listbox" />`
           )}
-          ${typeaheadMenuHtml('roundOwn', ownOptions, roundOwnSearch)}
+          ${typeaheadMenuHtml('roundOwn', ownOptions, roundOwnSearch, { openOnEmpty: ownOpen })}
         </div>
         ${selectedChipsHtml('roundOwn', ownSelected)}
       </div>
@@ -1841,9 +1857,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
             'menu',
             `<input type="search" class="site-input rp-filter-search" id="rp-round-opp-search"
             placeholder="vs ${escapeHtml(oppSide)} rounds…" spellcheck="false" autocomplete="off"
-            value="${escapeHtml(roundOppSearch)}" aria-label="vs ${escapeHtml(oppSide)} rounds" />`
+            value="${escapeHtml(roundOppSearch)}" aria-label="vs ${escapeHtml(oppSide)} rounds"
+            aria-expanded="${oppOpen ? 'true' : 'false'}" aria-haspopup="listbox" />`
           )}
-          ${typeaheadMenuHtml('roundOpp', oppOptions, roundOppSearch)}
+          ${typeaheadMenuHtml('roundOpp', oppOptions, roundOppSearch, { openOnEmpty: oppOpen })}
         </div>
         ${selectedChipsHtml('roundOpp', oppSelected)}
       </div>`;
@@ -1861,16 +1878,20 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       .join('')}</div>`;
   }
 
-  function typeaheadMenuHtml(group, options, query) {
+  function typeaheadMenuHtml(group, options, query, { openOnEmpty = false } = {}) {
     const needle = String(query || '')
       .trim()
       .toLowerCase();
-    if (!needle) return '';
-    const hits = options.filter(([, label]) => String(label).toLowerCase().includes(needle));
+    if (!needle && !openOnEmpty) return '';
+    const hits = needle
+      ? options.filter(([, label]) => String(label).toLowerCase().includes(needle))
+      : options;
     if (!hits.length) {
-      return `<div class="rp-typeahead-menu"><p class="rp-typeahead-empty">No matches</p></div>`;
+      return `<div class="rp-typeahead-menu"><p class="rp-typeahead-empty">${
+        needle ? 'No matches' : 'No rounds left'
+      }</p></div>`;
     }
-    return `<div class="rp-typeahead-menu">${hits
+    return `<div class="rp-typeahead-menu" role="listbox">${hits
       .map(
         ([value, label]) =>
           `<button type="button" class="rp-typeahead-option" data-group="${group}" data-value="${escapeHtml(
@@ -2092,18 +2113,43 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       const forSide = kind === 'roundOpp' ? (ownSide === 'T' ? 'CT' : 'T') : ownSide;
       const selected = kind === 'roundOpp' ? filters.roundOpp : filters.roundOwn;
       const query = kind === 'roundOpp' ? roundOppSearch : roundOwnSearch;
+      const menuOpen = kind === 'roundOpp' ? roundOppMenuOpen : roundOwnMenuOpen;
+      const open = menuOpen || Boolean(query.trim());
       const wrapId = kind === 'roundOpp' ? 'rp-round-opp-typeahead' : 'rp-round-own-typeahead';
       const wrap = filtersEl.querySelector(`#${wrapId}`);
       const group = wrap?.closest('.rp-filter-group');
+      const input = wrap?.querySelector(
+        kind === 'roundOpp' ? '#rp-round-opp-search' : '#rp-round-own-search'
+      );
       if (!wrap) return;
       wrap.querySelector('.rp-typeahead-menu')?.remove();
       const options = roundTypeRows(map, forSide)
         .filter((r) => !selected.has(r.key))
         .map((r) => [r.key, r.label]);
-      wrap.insertAdjacentHTML('beforeend', typeaheadMenuHtml(kind, options, query));
-      group?.classList.toggle('menu-open', Boolean(query.trim()));
+      wrap.insertAdjacentHTML(
+        'beforeend',
+        typeaheadMenuHtml(kind, options, query, { openOnEmpty: open })
+      );
+      group?.classList.toggle('menu-open', open);
+      input?.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
   }
+
+  filtersEl?.addEventListener('focusin', (e) => {
+    const ownInput = e.target.closest('#rp-round-own-search');
+    if (ownInput) {
+      roundOwnMenuOpen = true;
+      closeRoundTypeMenus('roundOwn');
+      refreshTypeaheadMenu('roundOwn');
+      return;
+    }
+    const oppInput = e.target.closest('#rp-round-opp-search');
+    if (oppInput) {
+      roundOppMenuOpen = true;
+      closeRoundTypeMenus('roundOpp');
+      refreshTypeaheadMenu('roundOpp');
+    }
+  });
 
   filtersEl?.addEventListener('input', (e) => {
     const teamInput = e.target.closest('#rp-team-search');
@@ -2115,12 +2161,16 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     const ownInput = e.target.closest('#rp-round-own-search');
     if (ownInput) {
       roundOwnSearch = ownInput.value;
+      roundOwnMenuOpen = true;
+      closeRoundTypeMenus('roundOwn');
       refreshTypeaheadMenu('roundOwn');
       return;
     }
     const oppInput = e.target.closest('#rp-round-opp-search');
     if (oppInput) {
       roundOppSearch = oppInput.value;
+      roundOppMenuOpen = true;
+      closeRoundTypeMenus('roundOpp');
       refreshTypeaheadMenu('roundOpp');
     }
   });
@@ -2226,14 +2276,36 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       const set = filters[group];
       if (set.has(value)) set.delete(value);
       else set.add(value);
-      if (group === 'roundOwn') roundOwnSearch = '';
-      else roundOppSearch = '';
+      if (group === 'roundOwn') {
+        roundOwnSearch = '';
+        roundOwnMenuOpen = false;
+      } else {
+        roundOppSearch = '';
+        roundOppMenuOpen = false;
+      }
       renderFilters();
       runQuery();
     }
   });
 
   document.addEventListener('click', (e) => {
+    const inRoundOwn = e.target.closest?.('#rp-round-own-typeahead');
+    const inRoundOpp = e.target.closest?.('#rp-round-opp-typeahead');
+    if (!inRoundOwn && (roundOwnMenuOpen || roundOwnSearch.trim())) {
+      roundOwnMenuOpen = false;
+      roundOwnSearch = '';
+      const ownInput = filtersEl?.querySelector('#rp-round-own-search');
+      if (ownInput) ownInput.value = '';
+      refreshTypeaheadMenu('roundOwn');
+    }
+    if (!inRoundOpp && (roundOppMenuOpen || roundOppSearch.trim())) {
+      roundOppMenuOpen = false;
+      roundOppSearch = '';
+      const oppInput = filtersEl?.querySelector('#rp-round-opp-search');
+      if (oppInput) oppInput.value = '';
+      refreshTypeaheadMenu('roundOpp');
+    }
+
     if (!mapMenuOpen) return;
     if (e.target.closest?.('#rp-map-multi')) return;
     mapMenuOpen = false;
