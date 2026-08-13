@@ -856,9 +856,10 @@ export function initSimView(host) {
     const exportControls = node('div', 'sim-controls');
     const mapFilter = select([{ value: '', label: 'All maps' }], '');
     const total = node('span', 'sim-field-name', '');
+    const selectAllBtn = node('button', 'sim-btn', 'Select all');
     const dlBtn = node('button', 'sim-btn sim-btn-primary', 'Download selected');
     dlBtn.disabled = true;
-    exportControls.append(field('Map', mapFilter), dlBtn, total);
+    exportControls.append(field('Map', mapFilter), selectAllBtn, dlBtn, total);
     const exportStatus = node('p', 'sim-note', '');
     const exportWrap = node('div', 'sim-scroll');
     panels.Export.append(exportControls, exportStatus, exportWrap);
@@ -921,6 +922,13 @@ export function initSimView(host) {
     }
 
     mapFilter.addEventListener('change', renderExport);
+
+    selectAllBtn.addEventListener('click', () => {
+      const rows = demos.filter((d) => !mapFilter.value || d.map === mapFilter.value);
+      for (const d of rows) picked.add(d.id);
+      renderExport();
+      updateTotal();
+    });
 
     dlBtn.addEventListener('click', async () => {
       dlBtn.disabled = true;

@@ -9,9 +9,10 @@
 // feet-only segmenter. The trainer does not change.
 //
 //   node scripts/sim-extract-demos.mjs --demos abc,def
-//   node scripts/sim-extract-demos.mjs --demos abc --out sim/datasets/from-demos.jsonl
+//   node scripts/sim-extract-demos.mjs --demos-file demos.txt --out sim/datasets/from-demos.jsonl
 // ---------------------------------------------------------------------------
 
+import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -34,10 +35,20 @@ const flag = (name, fallback) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : fallback;
 };
-const DEMOS = String(flag('demos', ''))
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+function demoIds() {
+  const ids = [];
+  const push = (raw) => {
+    for (const part of String(raw || '').split(/[,\r\n]+/)) {
+      const t = part.trim();
+      if (t) ids.push(t);
+    }
+  };
+  push(flag('demos', ''));
+  const file = flag('demos-file', '');
+  if (file) push(readFileSync(file, 'utf8'));
+  return ids;
+}
+const DEMOS = demoIds();
 const OUT = flag(
   'out',
   path.join(REPLAY_ROOT, 'sim', 'datasets', `bc-demos-${DEMOS.slice(0, 3).join('-') || 'none'}.jsonl`)
@@ -162,7 +173,7 @@ function obsAt(pose, mates, side, planted) {
 
 async function main() {
   if (!DEMOS.length) {
-    console.error('sim-extract-demos: pass --demos id,id');
+    console.error('sim-extract-demos: pass --demos id,id or --demos-file path');
     process.exit(1);
   }
   const users = await libraries();

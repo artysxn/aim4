@@ -192,15 +192,26 @@ function commandFor(job, python) {
           '--seed', String(p.seed)
         ]
       };
-    case 'extract':
+    case 'extract': {
+      const dir = jobDir(job.id);
+      fs.mkdirSync(dir, { recursive: true });
+      const listFile = path.join(dir, 'demos.txt');
+      fs.writeFileSync(
+        listFile,
+        String(p.demos || '')
+          .split(',')
+          .filter(Boolean)
+          .join('\n') + '\n'
+      );
       return {
         cmd: process.execPath,
         args: [
           path.join(REPO, 'scripts', 'sim-extract-demos.mjs'),
-          '--demos', p.demos,
+          '--demos-file', listFile,
           '--out', path.join(ROOT, 'sim', 'datasets', `bc-demos-${safe(p.name)}.jsonl`)
         ]
       };
+    }
     case 'train':
       return {
         cmd: python,
@@ -282,11 +293,13 @@ function normalizeParams(kind, raw = {}) {
         seed: num(raw.seed, 40, 0, 1e9)
       };
     case 'extract': {
+      // Local lab select-all can be hundreds of ids. The argv is a file so
+      // Windows' 8k command-line cap is not the limit; 2000 is a sanity lid.
       const ids = String(raw.demos || '')
         .split(',')
         .map((s) => safeName(s))
         .filter(Boolean)
-        .slice(0, 40);
+        .slice(0, 2000);
       return { demos: ids.join(','), name: safeName(raw.name || 'demos') };
     }
     case 'train':
@@ -367,7 +380,7 @@ export async function startJob(kind, rawParams = {}) {
   // caused it, not as a job that starts, runs, and dies thirty seconds later
   // in a log the operator has to go and find.
   if (kind === 'extract' && !params.demos) {
-    return { error: 'extract: select demos on Export first' };
+    return { error: 'extract: no demos selected' };
   }
   if (kind === 'match' || kind === 'collect' || kind === 'rollout') {
     if (!(await loadBake('navcache', params.map))) {

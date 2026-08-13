@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sim lab</title>
+  <style>
+    :root {
+      --surface: #0c0c0c;
+      --text: #f2f2f2;
+      --muted: #9c9ca2;
+      --border: #181818;
+      --radius: 12px;
+      --radius-sm: 8px;
+      --accent: #e23d3d;
+      --accent-hover: #c43333;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      background: #050505;
+      color: var(--text);
+      font: 13px/1.4 system-ui, "Segoe UI", sans-serif;
+    }
+    .root { padding: 20px 24px 48px; max-width: 1400px; }
+    .head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
+    h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; font-weight: 650; }
+    .who { color: var(--muted); font-size: 13px; }
+    h2 {
+      margin: 28px 0 10px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .controls {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px;
+    }
+    .field {
+      display: inline-flex; align-items: center; height: 32px;
+      border-radius: var(--radius-sm); background: #050505; padding: 0 4px 0 10px; gap: 8px;
+    }
+    .field-name { color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .field select, .field input, .text {
+      appearance: none; border: 0; outline: none; background: transparent;
+      color: #5c5c62; font: inherit; font-size: 13px; font-weight: 400;
+      height: 30px; padding: 0 8px 0 0; min-width: 56px;
+    }
+    .field select {
+      cursor: pointer; padding-right: 18px; color: #5c5c62;
+      background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position: right 8px center, right 3px center;
+      background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+    }
+    .field input[type='number'] { width: 74px; }
+    .text { min-width: 180px; color: #5c5c62; }
+    .btn {
+      appearance: none; height: 32px; padding: 0 16px;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: rgba(255,255,255,0.03); color: var(--muted);
+      font-weight: 600; font-size: 13px; cursor: pointer;
+    }
+    .btn:hover:not(:disabled) { background: rgba(255,255,255,0.08); color: var(--text); }
+    .btn:disabled { opacity: 0.45; cursor: default; }
+    .btn-on {
+      background: rgba(255,255,255,0.1); color: var(--text);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12);
+    }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); color: #fff; }
+    .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+    .error { color: var(--accent-hover); font-size: 13px; margin: 8px 0 0; }
+    .host {
+      color: var(--muted); font-size: 12px; display: flex; flex-wrap: wrap; gap: 16px;
+      margin-bottom: 8px;
+    }
+    .scroll {
+      max-height: 36vh; overflow: auto; border-radius: var(--radius-sm); background: #050505;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th {
+      text-align: left; color: var(--muted); font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 10px;
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    td {
+      padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,0.04);
+      color: #cfcfd4; white-space: nowrap;
+    }
+    tbody tr:hover { background: rgba(255,255,255,0.03); }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    td.dim { color: var(--muted); }
+    .empty { color: var(--muted); padding: 16px 10px; }
+    input[type='checkbox'] { accent-color: #cfcfd4; }
+  </style>
+</head>
+<body>
+  <div class="root">
+    <div class="head">
+      <h1>Sim lab</h1>
+      <span class="who" id="who"></span>
+    </div>
+    <div class="host" id="host"></div>
+
+    <h2>Match</h2>
+    <div class="controls" id="matchControls"></div>
+    <p class="note" id="matchStatus"></p>
+    <div class="scroll" id="matchesWrap"></div>
+
+    <h2>Train</h2>
+    <div class="controls" id="trainControls"></div>
+    <p class="note" id="trainStatus"></p>
+
+    <h2>Demos</h2>
+    <div class="controls" id="demoControls"></div>
+    <div class="scroll" id="demoWrap"></div>
+
+    <h2>Jobs</h2>
+    <div class="scroll" id="jobsWrap"></div>
+
+    <h2>Models</h2>
+    <div class="scroll" id="modelsWrap"></div>
+  </div>
+  <script>
+    const SKILLS = ['mix', 't3', 'average', 't2', 't1', 'pro'];
+    const BUILTIN = ['scripted', 'desire'];
+
+    const el = (id) => document.getElementById(id);
+    const node = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    };
+    const field = (name, control) => {
+      const wrap = node('label', 'field');
+      wrap.append(node('span', 'field-name', name), control);
+      return wrap;
+    };
+    const select = (options, value) => {
+      const s = document.createElement('select');
+      for (const o of options) {
+        const opt = document.createElement('option');
+        opt.value = typeof o === 'string' ? o : o.value;
+        opt.textContent = typeof o === 'string' ? o : o.label;
+        if (typeof o !== 'string' && o.disabled) opt.disabled = true;
+        if (opt.value === value) opt.selected = true;
+        s.append(opt);
+      }
+      return s;
+    };
+    const numberInput = (value, attrs = {}) => {
+      const i = document.createElement('input');
+      i.type = 'number';
+      i.value = String(value);
+      for (const [k, v] of Object.entries(attrs)) i.setAttribute(k, v);
+      return i;
+    };
+    const textInput = (value, placeholder) => {
+      const i = document.createElement('input');
+      i.type = 'text';
+      i.className = 'text';
+      i.value = value || '';
+      if (placeholder) i.placeholder = placeholder;
+      return i;
+    };
+    const btn = (label, cls) => {
+      const b = node('button', cls || 'btn', label);
+      return b;
+    };
+    const mb = (n) => (n / (1024 * 1024)).toFixed(1);
+    const table = (headers) => {
+      const t = node('table');
+      const thead = node('thead');
+      const tr = node('tr');
+      for (const h of headers) {
+        const th = node('th', null, typeof h === 'string' ? h : h.label);
+        if (h.align === 'right') th.style.textAlign = 'right';
+        tr.append(th);
+      }
+      thead.append(tr);
+      const tbody = node('tbody');
+      t.append(thead, tbody);
+      return { table: t, tbody };
+    };
+
+    async function api(path, opts) {
+      const res = await fetch(path, {
+        headers: { 'Content-Type': 'application/json' },
+        ...opts
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+      return body;
+    }
+
+    const picked = new Set();
+    let demos = [];
+    let mapFilter = '';
+
+    function visibleDemos() {
+      return demos.filter((d) => !mapFilter || d.map === mapFilter);
+    }
+
+    function setStatus(id, text, err) {
+      const n = el(id);
+      n.className = err ? 'error' : 'note';
+      n.textContent = text || '';
+    }
+
+    async function startJob(kind, params, statusId, onDone) {
+      setStatus(statusId, 'Queued.');
+      const r = await api('/api/jobs', { method: 'POST', body: JSON.stringify({ kind, params }) });
+      if (r.error) {
+        setStatus(statusId, r.error, true);
+        return null;
+      }
+      for (;;) {
+        await new Promise((x) => setTimeout(x, 1500));
+        const { job } = await api(`/api/jobs/${encodeURIComponent(r.job.id)}`);
+        refreshJobs().catch(() => {});
+        if (job.state === 'queued') setStatus(statusId, 'Queued.');
+        else if (job.state === 'running') {
+          setStatus(statusId, `${job.progress || 'Running.'} (${Math.round((job.elapsedMs || 0) / 1000)}s)`);
+        } else {
+          if (job.state === 'error') setStatus(statusId, job.error || 'Job failed.', true);
+          else setStatus(statusId, job.result || 'Done.');
+          if (onDone) await onDone(job);
+          await refreshJobs();
+          await refreshModels();
+          await refreshMatches();
+          return job;
+        }
+      }
+    }
+
+    function renderDemos() {
+      const wrap = el('demoWrap');
+      wrap.replaceChildren();
+      const rows = visibleDemos();
+      if (!rows.length) {
+        wrap.append(node('p', 'empty', demos.length ? 'No demos for this map.' : 'No demos in the local library.'));
+        return;
+      }
+      const { table: tbl, tbody } = table(['', 'Map', 'Teams', { label: 'Rounds', align: 'right' }, { label: 'Size', align: 'right' }, 'Id']);
+      for (const d of rows) {
+        const tr = node('tr');
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.checked = picked.has(d.id);
+        box.addEventListener('change', () => {
+          if (box.checked) picked.add(d.id);
+          else picked.delete(d.id);
+          updateDemoTotal();
+        });
+        const td = node('td');
+        td.append(box);
+        tr.append(
+          td,
+          node('td', null, d.map || ''),
+          node('td', null, d.teams?.length ? d.teams.join(' vs ') : ''),
+          node('td', 'num', d.rounds == null ? '' : String(d.rounds)),
+          node('td', 'num', `${mb(d.bytes || 0)} MB`),
+          node('td', 'dim', d.id)
+        );
+        tbody.append(tr);
+      }
+      wrap.append(tbl);
+    }
+
+    let demoTotal = null;
+    function updateDemoTotal() {
+      if (!demoTotal) return;
+      let bytes = 0;
+      for (const d of demos) if (picked.has(d.id)) bytes += d.bytes || 0;
+      demoTotal.textContent = picked.size ? `${picked.size} selected, ${mb(bytes)} MB` : `${demos.length} demos`;
+    }
+
+    async function refreshDemos() {
+      const res = await api('/api/demos');
+      demos = res.demos || [];
+      const maps = [...new Set(demos.map((d) => d.map).filter(Boolean))].sort();
+      const filter = el('demoMap');
+      const keep = filter.value;
+      filter.replaceChildren();
+      for (const o of [{ value: '', label: 'All maps' }, ...maps.map((m) => ({ value: m, label: m }))]) {
+        const opt = document.createElement('option');
+        opt.value = o.value;
+        opt.textContent = o.label;
+        if (o.value === keep) opt.selected = true;
+        filter.append(opt);
+      }
+      mapFilter = filter.value;
+      renderDemos();
+      updateDemoTotal();
+    }
+
+    async function refreshJobs() {
+      const wrap = el('jobsWrap');
+      const { jobs, host } = await api('/api/jobs');
+      wrap.replaceChildren();
+      if (!jobs.length) {
+        wrap.append(node('p', 'empty', 'Nothing has been queued on this host yet.'));
+        return;
+      }
+      const { table: tbl, tbody } = table(['Kind', 'Label', 'State', 'Result', '']);
+      for (const j of jobs) {
+        const tr = node('tr');
+        const stop = btn('Stop', 'btn');
+        stop.disabled = j.state !== 'running' && j.state !== 'queued';
+        stop.addEventListener('click', async () => {
+          await api(`/api/jobs/${encodeURIComponent(j.id)}/stop`, { method: 'POST', body: '{}' });
+          refreshJobs();
+        });
+        tr.append(
+          node('td', null, j.kind),
+          node('td', null, j.label || ''),
+          node('td', j.state === 'error' ? 'error' : null, j.state),
+          node('td', 'dim', j.error || j.result || ''),
+          (() => { const td = node('td'); td.append(stop); return td; })()
+        );
+        tbody.append(tr);
+      }
+      wrap.append(tbl);
+      if (jobs.some((j) => j.state === 'running' || j.state === 'queued')) {
+        setTimeout(() => refreshJobs().catch(() => {}), 1500);
+      }
+    }
+
+    async function refreshMatches() {
+      const wrap = el('matchesWrap');
+      const { matches } = await api('/api/matches').catch(() => ({ matches: [] }));
+      wrap.replaceChildren();
+      if (!matches.length) {
+        wrap.append(node('p', 'empty', 'No matches on this host yet.'));
+        return;
+      }
+      const { table: tbl, tbody } = table(['Map', { label: 'Score', align: 'right' }, 'Brains', 'Seed']);
+      for (const m of matches.slice(0, 20)) {
+        const tr = node('tr');
+        tr.append(
+          node('td', null, m.map || ''),
+          node('td', 'num', m.score ? `${m.score.A}-${m.score.B}` : ''),
+          node('td', 'dim', `${m.brainA || 'scripted'} vs ${m.brainB || 'scripted'}`),
+          node('td', 'dim', m.seed == null ? '' : String(m.seed))
+        );
+        tbody.append(tr);
+      }
+      wrap.append(tbl);
+    }
+
+    async function refreshModels() {
+      const wrap = el('modelsWrap');
+      const { models } = await api('/api/models');
+      wrap.replaceChildren();
+      const { datasets } = await api('/api/datasets').catch(() => ({ datasets: [] }));
+      const { table: tbl, tbody } = table(['Name', 'Source', 'Obs', { label: 'Val', align: 'right' }, 'Teacher']);
+      if (!models.length) {
+        wrap.append(node('p', 'empty', 'No models on this host yet.'));
+      } else {
+        for (const m of models) {
+          const tr = node('tr');
+          tr.append(
+            node('td', null, m.name),
+            node('td', 'dim', m.source || ''),
+            node('td', 'dim', m.ok ? String(m.obsVersion ?? '') : m.error || 'broken'),
+            node('td', 'num', m.valAccuracy != null ? `${(m.valAccuracy * 100).toFixed(0)}%` : ''),
+            node('td', 'dim', m.teacher || '')
+          );
+          tbody.append(tr);
+        }
+        wrap.append(tbl);
+      }
+      if (datasets.length) {
+        const keep = tDatasetPick.value;
+        tDatasetPick.replaceChildren();
+        const blank = document.createElement('option');
+        blank.value = '';
+        blank.textContent = 'Pick a dataset';
+        tDatasetPick.append(blank);
+        for (const d of datasets) {
+          const opt = document.createElement('option');
+          opt.value = d.path;
+          opt.textContent = d.name;
+          if (d.path === keep) opt.selected = true;
+          tDatasetPick.append(opt);
+        }
+        if (!tDataset.value && datasets[0]) tDataset.value = datasets[0].path;
+      }
+      fillBrains(models);
+    }
+
+    let brainA, brainB, tDataset, tDatasetPick, tMap, mMap;
+
+    function fillBrains(models) {
+      const opts = [
+        ...BUILTIN.map((b) => ({ value: b, label: b })),
+        ...(models || []).map((m) => ({
+          value: m.name,
+          label: m.ok ? m.name : `${m.name} (broken)`,
+          disabled: !m.ok
+        }))
+      ];
+      const keepA = brainA?.value;
+      const keepB = brainB?.value;
+      if (!brainA) return;
+      const rebuild = (sel, keep, fallback) => {
+        const v = keep && opts.some((o) => o.value === keep && !o.disabled) ? keep : fallback;
+        sel.replaceChildren();
+        for (const o of opts) {
+          const opt = document.createElement('option');
+          opt.value = o.value;
+          opt.textContent = o.label;
+          if (o.disabled) opt.disabled = true;
+          if (o.value === v) opt.selected = true;
+          sel.append(opt);
+        }
+      };
+      rebuild(brainA, keepA, 'desire');
+      rebuild(brainB, keepB, 'scripted');
+    }
+
+    function buildControls(status) {
+      const maps = (status.maps || []).filter((m) => m.angles).map((m) => m.map);
+      const mapList = maps.length ? maps : ['INF'];
+
+      mMap = select(mapList, mapList[0]);
+      const seed = numberInput(1, { min: '0' });
+      const rounds = numberInput(24, { min: '1', max: '60' });
+      const skillA = select(SKILLS, 'average');
+      const skillB = select(SKILLS, 'average');
+      brainA = select(BUILTIN, 'desire');
+      brainB = select(BUILTIN, 'scripted');
+      const runBtn = btn('Run match', 'btn btn-primary');
+      el('matchControls').append(
+        field('Map', mMap),
+        field('Seed', seed),
+        field('Rounds', rounds),
+        field('T side', skillA),
+        field('T brain', brainA),
+        field('CT side', skillB),
+        field('CT brain', brainB),
+        runBtn
+      );
+      runBtn.addEventListener('click', async () => {
+        runBtn.disabled = true;
+        try {
+          await startJob('match', {
+            map: mMap.value,
+            seed: Number(seed.value),
+            rounds: Number(rounds.value),
+            skillA: skillA.value,
+            skillB: skillB.value,
+            brainA: brainA.value,
+            brainB: brainB.value
+          }, 'matchStatus');
+        } catch (err) {
+          setStatus('matchStatus', err.message, true);
+        } finally {
+          runBtn.disabled = false;
+        }
+      });
+
+      tMap = select(mapList, mapList[0]);
+      const tMatches = numberInput(6, { min: '1', max: '200' });
+      const tRounds = numberInput(12, { min: '1', max: '30' });
+      const tSeed = numberInput(40, { min: '0' });
+      tDataset = textInput('', 'path to a .jsonl dataset');
+      tDatasetPick = select([{ value: '', label: 'Pick a dataset' }], '');
+      tDatasetPick.addEventListener('change', () => {
+        if (tDatasetPick.value) tDataset.value = tDatasetPick.value;
+      });
+      const tEpochs = numberInput(60, { min: '1', max: '500' });
+      const tEmbed = numberInput(16, { min: '0', max: '64' });
+      const tName = textInput('bc0');
+      const collectBtn = btn('Collect dataset', 'btn');
+      const extractBtn = btn('Extract selected demos', 'btn');
+      const trainBtn = btn('Train model', 'btn btn-primary');
+      const evalBtn = btn('Eval gates', 'btn');
+      const rlBtn = btn('RL fine-tune', 'btn');
+      el('trainControls').append(
+        field('Map', tMap),
+        field('Matches', tMatches),
+        field('Rounds', tRounds),
+        field('Seed', tSeed),
+        collectBtn,
+        extractBtn,
+        field('Dataset', tDatasetPick),
+        field('Path', tDataset),
+        field('Epochs', tEpochs),
+        field('Embed', tEmbed),
+        field('Name', tName),
+        trainBtn,
+        evalBtn,
+        rlBtn
+      );
+      collectBtn.addEventListener('click', async () => {
+        collectBtn.disabled = true;
+        try {
+          await startJob('collect', {
+            map: tMap.value,
+            matches: Number(tMatches.value),
+            rounds: Number(tRounds.value),
+            seed: Number(tSeed.value)
+          }, 'trainStatus', (job) => {
+            if (job.artifacts?.dataset) tDataset.value = job.artifacts.dataset;
+          });
+        } catch (err) {
+          setStatus('trainStatus', err.message, true);
+        } finally {
+          collectBtn.disabled = false;
+        }
+      });
+      extractBtn.addEventListener('click', async () => {
+        const ids = [...picked];
+        if (!ids.length) {
+          setStatus('trainStatus', 'Select demos first.', true);
+          return;
+        }
+        extractBtn.disabled = true;
+        try {
+          await startJob('extract', {
+            demos: ids.join(','),
+            name: tName.value.trim() || 'demos'
+          }, 'trainStatus', (job) => {
+            if (job.artifacts?.dataset) tDataset.value = job.artifacts.dataset;
+          });
+        } catch (err) {
+          setStatus('trainStatus', err.message, true);
+        } finally {
+          extractBtn.disabled = false;
+        }
+      });
+      trainBtn.addEventListener('click', async () => {
+        trainBtn.disabled = true;
+        try {
+          await startJob('train', {
+            dataset: tDataset.value.trim(),
+            epochs: Number(tEpochs.value),
+            embedDim: Number(tEmbed.value),
+            name: tName.value.trim() || 'bc0'
+          }, 'trainStatus');
+        } catch (err) {
+          setStatus('trainStatus', err.message, true);
+        } finally {
+          trainBtn.disabled = false;
+        }
+      });
+      evalBtn.addEventListener('click', async () => {
+        evalBtn.disabled = true;
+        try {
+          await startJob('eval', {
+            model: tName.value.trim() || 'bc0',
+            maps: tMap.value,
+            matches: Number(tMatches.value),
+            rounds: Number(tRounds.value)
+          }, 'trainStatus');
+        } catch (err) {
+          setStatus('trainStatus', err.message, true);
+        } finally {
+          evalBtn.disabled = false;
+        }
+      });
+      rlBtn.addEventListener('click', async () => {
+        rlBtn.disabled = true;
+        try {
+          await startJob('rl-train', {
+            dataset: tDataset.value.trim(),
+            init: tName.value.trim() || 'bc0',
+            name: 'gen1',
+            epochs: 8
+          }, 'trainStatus');
+        } catch (err) {
+          setStatus('trainStatus', err.message, true);
+        } finally {
+          rlBtn.disabled = false;
+        }
+      });
+
+      const demoMap = select([{ value: '', label: 'All maps' }], '');
+      demoMap.id = 'demoMap';
+      const selectAllBtn = btn('Select all', 'btn');
+      demoTotal = node('span', 'field-name', '');
+      el('demoControls').append(field('Map', demoMap), selectAllBtn, demoTotal);
+      demoMap.addEventListener('change', () => {
+        mapFilter = demoMap.value;
+        renderDemos();
+        updateDemoTotal();
+      });
+      selectAllBtn.addEventListener('click', () => {
+        for (const d of visibleDemos()) picked.add(d.id);
+        renderDemos();
+        updateDemoTotal();
+      });
+    }
+
+    (async () => {
+      const status = await api('/api/status');
+      el('who').textContent = status.replayDir || '';
+      const h = status.host || {};
+      el('host').append(
+        node('span', null, h.heavyJobs ? 'Heavy jobs on' : 'Heavy jobs off'),
+        node('span', null, h.trainer?.ok ? `Python ${h.trainer.version}, numpy ${h.trainer.numpy}` : (h.trainer?.error || 'no python')),
+        node('span', null, `${h.cpus || 0} cpus`)
+      );
+      buildControls(status);
+      await Promise.all([refreshDemos(), refreshJobs(), refreshModels(), refreshMatches()]);
+    })().catch((err) => {
+      el('who').textContent = err.message;
+    });
+  </script>
+</body>
+</html>
