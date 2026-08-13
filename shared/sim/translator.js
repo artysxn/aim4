@@ -25,10 +25,16 @@ import { createFollower, stepFollower, followErrorStats } from './trackFollow.js
  * @param {object} [opts]
  * @param {string[]} [opts.siteAnchorIds]  where a commanded plant may route to
  * @param {boolean} [opts.assertLegal]     throw on illegal intents (dev/tests)
+ * @param {number[]} [opts.slots]  which slots this translator owns; others are
+ *   untouched. A side controller MUST pass its own five: a translator that
+ *   steps all ten silently stops the other side's feet every decision step,
+ *   which looks like "the enemy never leaves spawn" and takes an evening to
+ *   find.
  */
 export function createTranslator(engine, opts = {}) {
   const graph = engine.graph;
   const bodies = engine.state.bodies;
+  const owned = opts.slots ? new Set(opts.slots) : null;
 
   /** Per-slot current intent, follower, and one-shot bookkeeping. */
   const slots = bodies.map(() => ({
@@ -114,6 +120,7 @@ export function createTranslator(engine, opts = {}) {
      */
     step() {
       for (let slot = 0; slot < slots.length; slot += 1) {
+        if (owned && !owned.has(slot)) continue;
         const s = slots[slot];
         const body = bodies[slot];
         if (!body?.alive) continue;

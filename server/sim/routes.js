@@ -20,7 +20,14 @@
 
 import { simGuard } from './guard.js';
 import { listExportableDemos, packageDemo } from './export.js';
-import { listMatches, readRoundMeta, readRoundTicks, runMatch, runStatus } from './matches.js';
+import {
+  listMatches,
+  readRoundMeta,
+  readRoundMotives,
+  readRoundTicks,
+  runMatch,
+  runStatus
+} from './matches.js';
 import { availableMaps } from './bakes.js';
 
 const NOT_FOUND = { error: 'Not found' };
@@ -213,14 +220,20 @@ async function route(req, res, url, me) {
     return true;
   }
 
-  // /api/sim/matches/<id>/round/<n>/{ticks,meta}
-  const m = p.match(/^\/api\/sim\/matches\/([^/]+)\/round\/(\d+)\/(ticks|meta)$/);
+  // /api/sim/matches/<id>/round/<n>/{ticks,meta,motives}
+  const m = p.match(/^\/api\/sim\/matches\/([^/]+)\/round\/(\d+)\/(ticks|meta|motives)$/);
   if (m && req.method === 'GET') {
     const [, id, round, kind] = m;
     if (kind === 'ticks') {
       const bytes = await readRoundTicks(id, round);
       if (!bytes) return notFound(res, req);
       sendBytes(res, req, bytes, `${id}-r${round}.ticks`);
+      return true;
+    }
+    if (kind === 'motives') {
+      const motives = await readRoundMotives(id, round);
+      if (!motives) return notFound(res, req);
+      json(res, req, 200, motives);
       return true;
     }
     const meta = await readRoundMeta(id, round);

@@ -59,6 +59,9 @@ export const simApi = {
   /** A stored round: the parser's own tick buffer, plus its meta. */
   roundMeta: (matchId, round) =>
     get(`/api/sim/matches/${encodeURIComponent(matchId)}/round/${round}/meta`),
+  /** The round's decision log ({A, B} motive arrays), 404 when brainless. */
+  roundMotives: (matchId, round) =>
+    get(`/api/sim/matches/${encodeURIComponent(matchId)}/round/${round}/motives`),
   roundTicks: async (matchId, round) => {
     const res = await fetch(
       `${API_BASE}/api/sim/matches/${encodeURIComponent(matchId)}/round/${round}/ticks`,

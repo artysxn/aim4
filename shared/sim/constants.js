@@ -214,6 +214,27 @@ export const POV_MEMORY_SECONDS = 0.75;
 export const COMM_DELAY_MIN = 0.5;
 export const COMM_DELAY_MAX = 1.5;
 
+/**
+ * Decision latency (5.7): an event may not change a bot's chosen option faster
+ * than a LogNormal draw with this median and p90 at the strong end. Separate
+ * from the aim reaction gate (8.1): noticing and re-planning are different
+ * faculties. The weak end is what "keeps running at a dead plan" looks like.
+ * `[calibrate]`
+ */
+export const DECISION_LATENCY_MEDIAN_PRO = 0.35;
+export const DECISION_LATENCY_MEDIAN_FLOOR = 0.7;
+export const DECISION_LATENCY_P90_RATIO = 2;
+
+/**
+ * Attention budget (5.7): enemy slots tracked at full fidelity per decision
+ * step, from `mix` to `pro`. The mechanism behind "he forgot about the lurker".
+ * `[calibrate against the coach unchecked-position and utility-unawareness rates]`
+ */
+export const ATTENTION_SLOTS_MIN = 1.5;
+export const ATTENTION_SLOTS_MAX = 3;
+/** Extra team-wide attention the dead may contribute, total, capped (5.8). */
+export const DEAD_ATTENTION_BONUS_CAP = 1;
+
 // ---------------------------------------------------------------------------
 // Derived helpers. Small enough to live with the numbers they read.
 // ---------------------------------------------------------------------------

@@ -36,12 +36,18 @@ import { paramVector } from '../duels/duelModelParams.js';
 import { computeDuelSnapshot, duelContext } from '../duels/duelSnapshot.js';
 import { blockingSmokesAt } from '../duels/sightRay.js';
 
+/**
+ * Feature normalisation, exported because any synthetic caller (the sim's
+ * foresight) must build bags in exactly these units: a raw dollar handed to a
+ * feature fitted on dollars-over-5500 saturates the term and silently ruins
+ * the number.
+ */
 /** Equipment average the model normalises against, matching winProbability. */
-const EQUIP_SCALE = 5500;
+export const EQUIP_SCALE = 5500;
 /** Utility value one side can plausibly hold, for normalising. */
-const UTIL_SCALE = 2000;
+export const UTIL_SCALE = 2000;
 /** World units the two sides' centroids are typically apart. */
-const DIST_SCALE = 2000;
+export const DIST_SCALE = 2000;
 
 /** Grenade stems, so loadout entries can be split from guns and armour. */
 const NADE_STEMS = new Set(Object.keys(NADE_COST));

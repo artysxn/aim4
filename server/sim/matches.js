@@ -25,6 +25,9 @@ import { loadBake } from './bakes.js';
 import { navGraphFromBake } from '../../shared/sim/navGraph.js';
 import { loadAngles } from '../../shared/sim/angles.js';
 import { playScriptedMatch } from '../../shared/sim/scriptedMatch.js';
+import { playVersusMatch, scriptedController } from '../../shared/sim/versusMatch.js';
+import { desireController } from '../../shared/sim/desireBot.js';
+import { loadPolicy } from '../../shared/sim/policy.js';
 import { RULES_VERSION } from '../../shared/sim/constants.js';
 
 const MATCHES_DIR = path.join(ROOT, 'sim', 'matches');
@@ -33,7 +36,23 @@ const MATCHES_DIR = path.join(ROOT, 'sim', 'matches');
 let running = null;
 
 const SKILLS = new Set(['mix', 't3', 'average', 't2', 't1', 'pro']);
+/**
+ * The brains a side can bring. 'desire' is the P3b arbiter; 'bc0' is the P4
+ * behavior clone proposing over the same arbiter (9.9's registry, first row).
+ */
+const BRAINS = new Set(['scripted', 'desire', 'bc0']);
+const MODELS_DIR = path.join(ROOT, 'sim', 'models');
 const safe = (s) => String(s || '').replace(/[^A-Za-z0-9_-]/g, '');
+
+/** A registered model, loaded and validated, or an explanation. */
+async function loadModel(name) {
+  try {
+    const json = JSON.parse(await fsp.readFile(path.join(MODELS_DIR, `${safe(name)}.json`), 'utf8'));
+    return { policy: loadPolicy(json) };
+  } catch (err) {
+    return { error: `model ${name}: ${err.message}` };
+  }
+}
 
 /**
  * Run one match. Clamped server-side: budgets typed into a browser are a
@@ -50,6 +69,8 @@ export async function runMatch(params = {}) {
   const maxRounds = Math.max(1, Math.min(60, Number(params.rounds) || 24));
   const skillA = SKILLS.has(params.skillA) ? params.skillA : 'average';
   const skillB = SKILLS.has(params.skillB) ? params.skillB : 'average';
+  const brainA = BRAINS.has(params.brainA) ? params.brainA : 'scripted';
+  const brainB = BRAINS.has(params.brainB) ? params.brainB : 'scripted';
   // Replays are the expensive part (~360 kB a round), so the sampling default
   // keeps a handful even when nobody asked, and never everything by accident.
   const recordEvery = Math.max(1, Math.min(100000, Number(params.recordEvery) || 1));
@@ -67,18 +88,48 @@ export async function runMatch(params = {}) {
     const angles = loadAngles(anglesBake.bake);
 
     const t0 = Date.now();
-    const { match, rounds } = playScriptedMatch({
-      graph,
-      angles,
-      map,
-      seed,
-      maxRounds,
-      skillA,
-      skillB,
-      record: 'events',
-      recordEvery,
-      replays: true
-    });
+    // Both brains scripted keeps the original single-loop path (and its exact
+    // replay bytes); any other pairing runs through the controller seam.
+    const versus = brainA !== 'scripted' || brainB !== 'scripted';
+    const models = {};
+    for (const name of [brainA, brainB]) {
+      if (name === 'scripted' || name === 'desire' || models[name]) continue;
+      const loaded = await loadModel(name);
+      if (loaded.error) return { error: loaded.error };
+      models[name] = loaded.policy;
+    }
+    const brainFactory = (name) => {
+      if (name === 'scripted') return scriptedController;
+      if (name === 'desire') return desireController({ angles });
+      return desireController({ angles, policy: models[name] });
+    };
+    const { match, rounds } = versus
+      ? playVersusMatch({
+          graph,
+          angles,
+          map,
+          controllerA: brainFactory(brainA),
+          controllerB: brainFactory(brainB),
+          seed,
+          maxRounds,
+          skillA,
+          skillB,
+          record: 'events',
+          recordEvery,
+          replays: true
+        })
+      : playScriptedMatch({
+          graph,
+          angles,
+          map,
+          seed,
+          maxRounds,
+          skillA,
+          skillB,
+          record: 'events',
+          recordEvery,
+          replays: true
+        });
 
     const dir = path.join(MATCHES_DIR, id);
     await fsp.mkdir(dir, { recursive: true });
@@ -91,6 +142,16 @@ export async function runMatch(params = {}) {
         path.join(dir, `round${r.round}.meta.json`),
         JSON.stringify(r.meta)
       );
+      const logs = r.brainLogs;
+      if (logs && (logs.A?.length || logs.B?.length)) {
+        // The motive log is the inspector's soul (6.17): what each side wanted
+        // and why, in English, tick by tick. Stored beside the replay so the
+        // viewer can scrub both together.
+        await fsp.writeFile(
+          path.join(dir, `round${r.round}.motives.json`),
+          JSON.stringify({ A: logs.A || [], B: logs.B || [] })
+        );
+      }
       storedRounds += 1;
     }
 
@@ -101,6 +162,8 @@ export async function runMatch(params = {}) {
       rulesVersion: RULES_VERSION,
       skillA,
       skillB,
+      brainA,
+      brainB,
       recordEvery,
       bakeSource: nav.source,
       createdAt: new Date().toISOString(),
@@ -165,6 +228,16 @@ export async function readRoundTicks(matchId, round) {
 
 export async function readRoundMeta(matchId, round) {
   const p = path.join(MATCHES_DIR, safe(matchId), `round${Number(round) || 0}.meta.json`);
+  try {
+    return JSON.parse(await fsp.readFile(p, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** A stored round's decision log ({A, B} motive arrays), or null. */
+export async function readRoundMotives(matchId, round) {
+  const p = path.join(MATCHES_DIR, safe(matchId), `round${Number(round) || 0}.motives.json`);
   try {
     return JSON.parse(await fsp.readFile(p, 'utf8'));
   } catch {

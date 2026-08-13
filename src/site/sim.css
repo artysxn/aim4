@@ -314,6 +314,40 @@
   padding: 14px 4px;
 }
 
+.sim-motives {
+  background: #050505;
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  margin-top: 10px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.sim-motives h3 {
+  margin: 4px 6px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.sim-motive {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: #cfcfd4;
+  border-radius: 4px;
+}
+.sim-motive-id {
+  font-weight: 600;
+  color: #e8e8ec;
+}
+.sim-motive-why {
+  flex-basis: 100%;
+  color: var(--muted);
+}
+
 @media (max-width: 900px) {
   .sim-viewer {
     grid-template-columns: minmax(0, 1fr);

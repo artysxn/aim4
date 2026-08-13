@@ -26,6 +26,11 @@ import { spinnerNode } from '../lib/spinner.js';
 import { readHeader, readRecord, PLAYER_SLOTS } from '../replays/shared/tickFormat.js';
 
 const SKILLS = ['mix', 't3', 'average', 't2', 't1', 'pro'];
+/**
+ * Brains a side can bring (server-validated). 'desire' is the P3b arbiter,
+ * 'bc0' the P4 behavior clone proposing over it.
+ */
+const BRAINS = ['scripted', 'desire', 'bc0'];
 
 function node(tag, className, text) {
   const n = document.createElement(tag);
@@ -140,6 +145,8 @@ export function initSimView(host) {
     const rounds = numberInput(24, { min: '1', max: '60' });
     const skillA = select(SKILLS, 'average');
     const skillB = select(SKILLS, 'average');
+    const brainA = select(BRAINS, 'desire');
+    const brainB = select(BRAINS, 'scripted');
     const recordEvery = numberInput(1, { min: '1' });
     const runBtn = node('button', 'sim-btn sim-btn-primary', 'Run match');
 
@@ -149,7 +156,9 @@ export function initSimView(host) {
       field('Seed', seed),
       field('Rounds', rounds),
       field('T side', skillA),
+      field('T brain', brainA),
       field('CT side', skillB),
+      field('CT brain', brainB),
       field('Record 1 in', recordEvery),
       runBtn
     );
@@ -174,6 +183,8 @@ export function initSimView(host) {
           rounds: Number(rounds.value),
           skillA: skillA.value,
           skillB: skillB.value,
+          brainA: brainA.value,
+          brainB: brainB.value,
           recordEvery: Number(recordEvery.value)
         });
         if (r.error) {
@@ -256,10 +267,14 @@ export function initSimView(host) {
           b.addEventListener('click', () => openRound(m.id, r.round, m.map));
           links.append(b);
         }
+        const sidesLabel =
+          m.brainA || m.brainB
+            ? `${m.brainA || 'scripted'} ${m.skillA} vs ${m.brainB || 'scripted'} ${m.skillB}`
+            : `${m.skillA} vs ${m.skillB}`;
         tr.append(
           node('td', 'sim-dim', m.id),
           node('td', null, m.map),
-          node('td', 'sim-dim', `${m.skillA} vs ${m.skillB}`),
+          node('td', 'sim-dim', sidesLabel),
           node('td', 'sim-num', `${m.score.A}-${m.score.B}`),
           node('td', 'sim-num', String(m.storedRounds)),
           links
@@ -289,7 +304,10 @@ export function initSimView(host) {
 
     const sideBar = node('div');
     const roster = node('div', 'sim-side-list');
-    sideBar.append(roster);
+    // The decision feed (6.17): what each bot wanted and why, in English,
+    // following the scrub. This is the reason the page is worth opening.
+    const motiveFeed = node('div', 'sim-motives');
+    sideBar.append(roster, motiveFeed);
     viewer.append(left, sideBar);
 
     const viewerEmpty = node('p', 'sim-empty', 'Pick a stored round from Run or Matches.');
@@ -308,10 +326,17 @@ export function initSimView(host) {
       if (stopPlayback) stopPlayback();
 
       try {
-        const [meta, bytes] = await Promise.all([
+        const [meta, bytes, motives] = await Promise.all([
           simApi.roundMeta(matchId, roundNo),
-          simApi.roundTicks(matchId, roundNo)
+          simApi.roundTicks(matchId, roundNo),
+          simApi.roundMotives(matchId, roundNo).catch(() => null)
         ]);
+        // One sorted feed across both sides; a scripted side simply has none.
+        const decisions = [];
+        for (const team of ['A', 'B']) {
+          for (const d of motives?.[team] || []) decisions.push({ team, ...d });
+        }
+        decisions.sort((a, b) => a.tick - b.tick);
         const header = readHeader(bytes);
         const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
@@ -338,7 +363,7 @@ export function initSimView(host) {
           frames.push(states);
         }
 
-        round = { meta, header, frames, map: map || meta.map };
+        round = { meta, header, frames, map: map || meta.map, decisions };
 
         if (!renderer) {
           const { RadarRenderer } = await import('../replays/viewer/radarRenderer.js');
@@ -395,6 +420,26 @@ export function initSimView(host) {
           rowEl.append(node('span', 'sim-hp', s.alive ? String(s.health) : 'dead'));
           roster.append(rowEl);
         });
+      }
+
+      // The last few decisions up to the scrub position, newest on top.
+      motiveFeed.replaceChildren();
+      if (round.decisions?.length) {
+        motiveFeed.append(node('h3', null, 'Decisions'));
+        const upTo = round.decisions.filter((d) => d.tick <= tick).slice(-8).reverse();
+        if (!upTo.length) {
+          motiveFeed.append(node('p', 'sim-empty', 'Nothing decided yet.'));
+        }
+        for (const d of upTo) {
+          const rowEl = node('div', 'sim-motive');
+          const at = ((d.tick - live) / rate).toFixed(1);
+          rowEl.append(
+            node('span', 'sim-dim', `${at}s p${d.slot}`),
+            node('span', 'sim-motive-id', d.id),
+            node('span', 'sim-motive-why', d.motive || '')
+          );
+          motiveFeed.append(rowEl);
+        }
       }
     }
 
