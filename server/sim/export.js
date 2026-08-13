@@ -5,10 +5,9 @@
 // The demo library lives on the server and is about 10 GB; the trainer lives
 // wherever it lives. Shipping the whole corpus back and forth is exactly what
 // SIM-PLAN 9.2c forbids, so the workflow is selection: list what exists with
-// enough metadata to choose by (map, teams, rounds, size), then download the
-// chosen demos one package at a time. The package format is the site's own
-// (.aim4replay v2), so anything that can import a local parse can import these,
-// including another aim4 instance.
+// enough metadata to choose by (map, teams, rounds, size), then download
+// the selection as one zip of .aim4replay packages. The package format is
+// the site's own (.aim4replay v2), so anything that can import a local parse
 //
 // Admin-only by the same guard as everything under /api/sim, and read-only by
 // construction: nothing here writes to the library, ever.
@@ -26,6 +25,7 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { crc32 } from 'node:zlib';
 
 import { encodeReplayPackage, PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
 import { ROOT, listDemos, listLibraryUsers, userKey } from '../replays/demoStore.js';
@@ -264,5 +264,67 @@ export async function packageDemo(demoId, io = defaultIo) {
   return {
     filename: `${id}${PACKAGE_EXT}`,
     bytes: encodeReplayPackage(entries)
+  };
+}
+
+/** Uncompressed zip of named files. One HTTP body, N .aim4replay entries. */
+function zipStore(files) {
+  const chunks = [];
+  const centrals = [];
+  let offset = 0;
+  for (const { name, bytes } of files) {
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const nameBuf = Buffer.from(String(name).replace(/\\/g, '/'), 'utf8');
+    const crc = crc32(data) >>> 0;
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBuf.length, 26);
+    const localFull = Buffer.concat([local, nameBuf, Buffer.from(data.buffer, data.byteOffset, data.byteLength)]);
+    chunks.push(localFull);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(nameBuf.length, 28);
+    central.writeUInt32LE(offset, 42);
+    centrals.push(Buffer.concat([central, nameBuf]));
+    offset += localFull.length;
+  }
+  const centralDir = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(files.length, 8);
+  eocd.writeUInt16LE(files.length, 10);
+  eocd.writeUInt32LE(centralDir.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  return new Uint8Array(Buffer.concat([...chunks, centralDir, eocd]));
+}
+
+/**
+ * One download for a selection. A single id stays a .aim4replay; two or more
+ * land in one .zip so the browser fires one save, not one per demo.
+ */
+export async function packageDemos(demoIds, io = defaultIo) {
+  const ids = [...new Set((demoIds || []).map(safeId).filter(Boolean))].slice(0, 2000);
+  if (!ids.length) return null;
+  if (ids.length === 1) return packageDemo(ids[0], io);
+
+  const files = [];
+  for (const id of ids) {
+    const pkg = await packageDemo(id, io);
+    if (pkg) files.push({ name: pkg.filename, bytes: pkg.bytes });
+  }
+  if (!files.length) return null;
+  if (files.length === 1) return { filename: files[0].name, bytes: files[0].bytes };
+  return {
+    filename: `aim4-export-${files.length}.zip`,
+    bytes: zipStore(files)
   };
 }

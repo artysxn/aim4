@@ -85,15 +85,16 @@ export const simApi = {
     return new Uint8Array(await res.arrayBuffer());
   },
 
-  // Dataset export: list what the library holds, then download a selection
-  // one .aim4replay at a time. Downloads go through fetch rather than a plain
-  // link because the guard reads the Authorization header, and an <a href>
-  // cannot carry one.
+  // Dataset export: list, then one download for the whole selection.
+  // Fetch, not an <a href>, because the guard reads Authorization.
   exportList: () => get('/api/sim/export/list'),
   experience: () => get('/api/sim/experience'),
-  exportDownload: async (id) => {
-    const res = await fetch(`${API_BASE}/api/sim/export/demo?id=${encodeURIComponent(id)}`, {
-      headers: await headers()
+  exportDownload: async (ids) => {
+    const list = Array.isArray(ids) ? ids : [ids];
+    const res = await fetch(`${API_BASE}/api/sim/export/bundle`, {
+      method: 'POST',
+      headers: await headers(),
+      body: JSON.stringify({ ids: list })
     });
     if (!res.ok) {
       const err = new Error(`Export failed (${res.status})`);
@@ -101,7 +102,7 @@ export const simApi = {
       throw err;
     }
     const dispo = res.headers.get('Content-Disposition') || '';
-    const name = /filename="([^"]+)"/.exec(dispo)?.[1] || `${id}.aim4replay`;
+    const name = /filename="([^"]+)"/.exec(dispo)?.[1] || `aim4-export-${list.length}.zip`;
     return { filename: name, blob: await res.blob() };
   }
 };

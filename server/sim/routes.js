@@ -19,7 +19,7 @@
 // ---------------------------------------------------------------------------
 
 import { simGuard } from './guard.js';
-import { listExportableDemos, packageDemo } from './export.js';
+import { listExportableDemos, packageDemo, packageDemos } from './export.js';
 import {
   listMatches,
   readRoundMeta,
@@ -190,6 +190,21 @@ async function route(req, res, url, me) {
 
   if (p === '/api/sim/export/demo' && req.method === 'GET') {
     const pkg = await packageDemo(q.get('id'));
+    if (!pkg) return notFound(res, req);
+    sendBytes(res, req, pkg.bytes, pkg.filename);
+    return true;
+  }
+
+  if (p === '/api/sim/export/bundle' && req.method === 'POST') {
+    let body;
+    try {
+      body = await readJson(req);
+    } catch {
+      json(res, req, 400, { error: 'bad body' });
+      return true;
+    }
+    const ids = Array.isArray(body.ids) ? body.ids : String(body.ids || '').split(',');
+    const pkg = await packageDemos(ids);
     if (!pkg) return notFound(res, req);
     sendBytes(res, req, pkg.bytes, pkg.filename);
     return true;

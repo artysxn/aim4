@@ -933,19 +933,16 @@ export function initSimView(host) {
     dlBtn.addEventListener('click', async () => {
       dlBtn.disabled = true;
       const ids = [...picked];
-      let n = 0;
+      exportStatus.className = 'sim-note';
+      exportStatus.textContent = `Packaging ${ids.length} demos.`;
       try {
-        for (const id of ids) {
-          n += 1;
-          exportStatus.textContent = `Downloading ${n} of ${ids.length}.`;
-          const { filename, blob } = await simApi.exportDownload(id);
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = filename;
-          a.click();
-          URL.revokeObjectURL(a.href);
-        }
-        exportStatus.textContent = `Done, ${ids.length} files.`;
+        const { filename, blob } = await simApi.exportDownload(ids);
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        exportStatus.textContent = `Done, ${ids.length} demos.`;
       } catch (err) {
         exportStatus.className = 'sim-error';
         exportStatus.textContent = err.message;

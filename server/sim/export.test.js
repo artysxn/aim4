@@ -10,7 +10,7 @@ import {
   decodeReplayPackage,
   PACKAGE_EXT
 } from '../../src/replays/shared/replayPackage.js';
-import { listExportableDemos, packageDemo } from './export.js';
+import { listExportableDemos, packageDemo, packageDemos } from './export.js';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
@@ -115,6 +115,40 @@ const io = {
   assert((await packageDemo('nope', io)) === null, 'an unknown demo is null, not a throw');
   assert((await packageDemo('../../etc/passwd', io)) === null, 'a hostile id is sanitized to nothing');
   assert((await packageDemo('', io)) === null, 'and an empty one too');
+}
+
+{
+  const extra = {
+    ...FILES,
+    '/demos/xyz.json': enc(JSON.stringify({ id: 'xyz', map: 'MIR' })),
+    '/rounds/r1~xyz.tickz': enc('xyz-ticks')
+  };
+  const io2 = {
+    ...io,
+    readFile: async (p) => {
+      const hit = extra[p.replace(/\\/g, '/')];
+      if (!hit) throw new Error(`ENOENT ${p}`);
+      return hit;
+    },
+    listFiles: async (dir) => {
+      const prefix = `${dir.replace(/\\/g, '/')}/`;
+      return Object.keys(extra)
+        .filter((p) => p.startsWith(prefix))
+        .map((p) => p.slice(prefix.length));
+    },
+    stat: async (p) => {
+      const hit = extra[p.replace(/\\/g, '/')];
+      return hit ? { size: hit.length } : null;
+    }
+  };
+  const one = await packageDemos(['abc'], io2);
+  assert(one && one.filename === `abc${PACKAGE_EXT}`, 'one id stays a replay package');
+  const many = await packageDemos(['abc', 'xyz'], io2);
+  assert(many && many.filename === 'aim4-export-2.zip', 'two ids land in one zip');
+  assert(many.bytes[0] === 0x50 && many.bytes[1] === 0x4b, 'with a zip magic');
+  const names = Buffer.from(many.bytes).toString('latin1');
+  assert(names.includes(`abc${PACKAGE_EXT}`) && names.includes(`xyz${PACKAGE_EXT}`), 'both packages inside');
+  assert((await packageDemos([], io2)) === null, 'an empty selection is null');
 }
 
 // ---- empty json listing, rounds still on disk --------------------------------

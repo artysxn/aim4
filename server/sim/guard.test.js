@@ -166,6 +166,7 @@ assert(new Set(refusals).size === 1, 'every 404 body is byte-identical');
   const surface = [
     '/api/sim/export/list',
     '/api/sim/export/demo?id=x',
+    '/api/sim/export/bundle',
     '/api/sim/matches',
     '/api/sim/matches/some-id/round/3/meta',
     '/api/sim/run',
