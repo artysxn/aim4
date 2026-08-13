@@ -15,20 +15,54 @@
 //
 // I/O is injected so the packaging logic is testable against a fixture
 // directory rather than against a real 10 GB library.
+//
+// Listing walks every library folder under the replay root, not only
+// SHARED_LIBRARY. Production often keeps demos under a former per-account
+// folder (AIM4_REPLAY_LIBRARY) or a sibling user key; a listing that only
+// asked `local` showed an empty Export tab while Database still had the
+// corpus. Round files whose `~demoId` suffix has no json record still appear,
+// because the files are the sample.
 // ---------------------------------------------------------------------------
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { encodeReplayPackage, PACKAGE_EXT } from '../../src/replays/shared/replayPackage.js';
-import { ROOT, listDemos, userKey } from '../replays/demoStore.js';
+import { ROOT, listDemos, listLibraryUsers, userKey } from '../replays/demoStore.js';
 import { SHARED_LIBRARY } from '../replays/auth.js';
+
+function libraryDirs(user) {
+  const key = userKey(user);
+  return {
+    user: key,
+    listDemos: () => listDemos(key),
+    demosDir: () => path.join(ROOT, key, 'demos'),
+    roundsDir: () => path.join(ROOT, key, 'rounds')
+  };
+}
 
 /** The real I/O, replaced wholesale in tests. */
 export const defaultIo = {
   listDemos: () => listDemos(SHARED_LIBRARY),
   demosDir: () => path.join(ROOT, userKey(SHARED_LIBRARY), 'demos'),
   roundsDir: () => path.join(ROOT, userKey(SHARED_LIBRARY), 'rounds'),
+  listLibraries: async () => {
+    let users = [];
+    try {
+      users = await listLibraryUsers();
+    } catch {
+      users = [];
+    }
+    const keys = [];
+    const seen = new Set();
+    for (const u of [SHARED_LIBRARY, ...users]) {
+      const key = userKey(u);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      keys.push(key);
+    }
+    return keys.map(libraryDirs);
+  },
   readFile: (p) => fsp.readFile(p),
   listFiles: async (dir) => {
     try {
@@ -48,54 +82,142 @@ export const defaultIo = {
 
 const safeId = (id) => String(id || '').replace(/[^A-Za-z0-9_-]/g, '');
 
+function callMaybe(fnOrVal) {
+  return typeof fnOrVal === 'function' ? fnOrVal() : fnOrVal;
+}
+
+/**
+ * One library to scan. Tests that omit listLibraries keep the old single-dir
+ * contract; production supplies every folder under the replay root.
+ */
+async function librariesOf(io) {
+  if (typeof io.listLibraries === 'function') {
+    const libs = await io.listLibraries();
+    if (libs?.length) return libs;
+  }
+  return [
+    {
+      listDemos: () => io.listDemos(),
+      demosDir: io.demosDir,
+      roundsDir: io.roundsDir
+    }
+  ];
+}
+
+function teamNames(r) {
+  const name = (t) => {
+    if (!t) return null;
+    if (typeof t === 'string') return t;
+    return t.name || null;
+  };
+  return [name(r.team1), name(r.team2)].filter(Boolean);
+}
+
+/** Round files are `<roundId>~<demoId>.<ext>`. */
+export function demoIdFromRoundFile(f) {
+  const at = String(f).indexOf('~');
+  if (at < 0) return '';
+  const rest = String(f).slice(at + 1);
+  const dot = rest.indexOf('.');
+  return safeId(dot < 0 ? rest : rest.slice(0, dot));
+}
+
+function rowFromRecord(r, files, bytes) {
+  const id = safeId(r.id || r.demoId);
+  return {
+    id,
+    filename: r.filename || `${id}${PACKAGE_EXT}`,
+    map: r.map || r.mapCode || null,
+    teams: teamNames(r),
+    score: r.score ? [r.score.team1 ?? 0, r.score.team2 ?? 0] : null,
+    rounds: r.roundCount ?? r.rounds ?? (files.length ? Math.round(files.length / 3) : null),
+    uploadedAt: r.uploadedAt || null,
+    files: files.length,
+    bytes,
+    library: r._library || null
+  };
+}
+
 /**
  * What can be exported, with enough metadata to select a sample by.
  *
  * @returns {Promise<Array<{id, filename, map, teams, rounds, uploadedAt, bytes}>>}
  */
 export async function listExportableDemos(io = defaultIo) {
-  const records = await io.listDemos();
-  const roundFiles = await io.listFiles(io.roundsDir());
+  const libs = await librariesOf(io);
+  const byId = new Map();
 
-  // Size per demo: sum of its round files. One directory listing plus stats,
-  // not a walk per request; the list endpoint is for a selection UI, and a
-  // selection UI needs sizes or the 10 GB problem gets rediscovered by download.
-  const byDemo = new Map();
-  for (const f of roundFiles) {
-    const at = f.indexOf('~');
-    if (at < 0) continue;
-    const rest = f.slice(at + 1);
-    const dot = rest.indexOf('.');
-    const demoId = dot < 0 ? rest : rest.slice(0, dot);
-    if (!byDemo.has(demoId)) byDemo.set(demoId, []);
-    byDemo.get(demoId).push(f);
-  }
-
-  const out = [];
-  for (const r of records) {
-    const id = safeId(r.id || r.demoId);
-    if (!id) continue;
-    const files = byDemo.get(id) || [];
-    let bytes = 0;
-    for (const f of files) {
-      const st = await io.stat(path.join(io.roundsDir(), f));
-      if (st) bytes += st.size;
+  for (const lib of libs) {
+    let records = [];
+    try {
+      records = (await lib.listDemos()) || [];
+    } catch {
+      records = [];
     }
-    out.push({
-      id,
-      filename: r.filename || `${id}${PACKAGE_EXT}`,
-      map: r.map || r.mapCode || null,
-      // team1/team2 are records, not strings. Reading them as strings is what
-      // put "[object Object] vs [object Object]" on every row of the panel.
-      teams: [r.team1?.name, r.team2?.name].filter(Boolean),
-      score: r.score ? [r.score.team1 ?? 0, r.score.team2 ?? 0] : null,
-      rounds: r.roundCount ?? r.rounds ?? (files.length ? Math.round(files.length / 3) : null),
-      uploadedAt: r.uploadedAt || null,
-      files: files.length,
-      bytes
-    });
+    const roundsDir = callMaybe(lib.roundsDir);
+    const roundFiles = await io.listFiles(roundsDir);
+    const filesByDemo = new Map();
+    for (const f of roundFiles) {
+      const demoId = demoIdFromRoundFile(f);
+      if (!demoId) continue;
+      if (!filesByDemo.has(demoId)) filesByDemo.set(demoId, []);
+      filesByDemo.get(demoId).push(f);
+    }
+
+    const seen = new Set();
+    for (const r of records) {
+      const id = safeId(r.id || r.demoId);
+      if (!id) continue;
+      seen.add(id);
+      const files = filesByDemo.get(id) || [];
+      let bytes = 0;
+      for (const f of files) {
+        const st = await io.stat(path.join(roundsDir, f));
+        if (st) bytes += st.size;
+      }
+      const prev = byId.get(id);
+      if (prev && prev.files >= files.length) continue;
+      byId.set(
+        id,
+        rowFromRecord({ ...r, _library: lib.user || r._library || null }, files, bytes)
+      );
+    }
+
+    // Round files with no json record still belong in a selection UI. The
+    // Database page can show a demo the Export tab used to skip because
+    // listDemos was pointed at an empty folder.
+    for (const [id, files] of filesByDemo) {
+      if (seen.has(id) || byId.has(id)) continue;
+      let bytes = 0;
+      for (const f of files) {
+        const st = await io.stat(path.join(roundsDir, f));
+        if (st) bytes += st.size;
+      }
+      byId.set(id, {
+        id,
+        filename: `${id}${PACKAGE_EXT}`,
+        map: null,
+        teams: [],
+        score: null,
+        rounds: files.length ? Math.round(files.length / 3) : null,
+        uploadedAt: null,
+        files: files.length,
+        bytes,
+        library: lib.user || null
+      });
+    }
   }
-  return out;
+
+  return [...byId.values()];
+}
+
+async function readManifest(io, lib, id) {
+  const dir = callMaybe(lib.demosDir);
+  try {
+    return await io.readFile(path.join(dir, `${id}.json`));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -108,20 +230,35 @@ export async function packageDemo(demoId, io = defaultIo) {
   const id = safeId(demoId);
   if (!id) return null;
 
-  let manifest;
-  try {
-    manifest = await io.readFile(path.join(io.demosDir(), `${id}.json`));
-  } catch {
-    return null;
+  const libs = await librariesOf(io);
+  let manifest = null;
+  let roundsDir = null;
+  let roundFiles = [];
+
+  for (const lib of libs) {
+    const hit = await readManifest(io, lib, id);
+    const dir = callMaybe(lib.roundsDir);
+    const files = (await io.listFiles(dir)).filter((f) => f.includes(`~${id}.`));
+    if (hit) {
+      manifest = hit;
+      roundsDir = dir;
+      roundFiles = files;
+      break;
+    }
+    if (!manifest && files.length) {
+      roundsDir = dir;
+      roundFiles = files;
+    }
   }
 
-  const roundFiles = (await io.listFiles(io.roundsDir())).filter((f) =>
-    f.includes(`~${id}.`)
-  );
+  if (!manifest && !roundFiles.length) return null;
+  if (!manifest) {
+    manifest = new TextEncoder().encode(JSON.stringify({ id, filename: `${id}${PACKAGE_EXT}` }));
+  }
 
   const entries = [['manifest.json', manifest]];
   for (const f of roundFiles) {
-    entries.push([`rounds/${f}`, await io.readFile(path.join(io.roundsDir(), f))]);
+    entries.push([`rounds/${f}`, await io.readFile(path.join(roundsDir, f))]);
   }
 
   return {

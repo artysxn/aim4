@@ -376,17 +376,23 @@ export class JointBelief {
    * as one layout saying "somebody is there".
    */
   _buildMassIndex() {
+    // Nested level -> anchor rather than one `${anchor}|${level}` key: the
+    // index is rebuilt after every belief update and read for every anchor on
+    // the map, so a template string per particle slot is 1,280 string
+    // allocations per rebuild and was the single hottest line in the engine.
     const mass = new Map();
     const seen = new Set();
     for (const p of this.particles) {
       seen.clear();
       for (const sl of p.slots) {
-        if (!sl) continue;
-        const key = `${sl.anchor}|${sl.level}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          mass.set(key, (mass.get(key) || 0) + p.weight);
+        if (!sl || seen.has(sl.anchor)) continue;
+        seen.add(sl.anchor);
+        let byAnchor = mass.get(sl.level);
+        if (!byAnchor) {
+          byAnchor = new Map();
+          mass.set(sl.level, byAnchor);
         }
+        byAnchor.set(sl.anchor, (byAnchor.get(sl.anchor) || 0) + p.weight);
       }
     }
     this._mass = mass;
@@ -417,7 +423,7 @@ export class JointBelief {
       return this._massByWeapon.get(`${anchor}|${level}|${weaponClass}`) || 0;
     }
     if (!this._mass) this._buildMassIndex();
-    return this._mass.get(`${anchor}|${level}`) || 0;
+    return this._mass.get(level)?.get(anchor) || 0;
   }
 
   /** How many enemies are believed alive at all. */

@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ROOT } from '../replays/demoStore.js';
 import { loadBake } from './bakes.js';
-import { isBrain } from './models.js';
+import { isBrain, LOCAL_DIR, SHIPPED_DIR } from './models.js';
 import { findPython } from '../../scripts/lib/simPython.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -59,13 +59,16 @@ const HEAVY_ENABLED = Number(process.env.AIM4_SIM_WORKERS || 0) > 0;
 const BUDGETS = Object.freeze({
   match: Number(process.env.AIM4_SIM_BUDGET_MATCH || 600),
   collect: Number(process.env.AIM4_SIM_BUDGET_COLLECT || 3600),
+  extract: Number(process.env.AIM4_SIM_BUDGET_EXTRACT || 3600),
   train: Number(process.env.AIM4_SIM_BUDGET_TRAIN || 3600),
-  eval: Number(process.env.AIM4_SIM_BUDGET_EVAL || 1800)
+  eval: Number(process.env.AIM4_SIM_BUDGET_EVAL || 1800),
+  rollout: Number(process.env.AIM4_SIM_BUDGET_ROLLOUT || 3600),
+  'rl-train': Number(process.env.AIM4_SIM_BUDGET_RLTRAIN || 3600)
 });
 
 /** Which kinds this host will accept at all. */
-export const JOB_KINDS = Object.freeze(['match', 'collect', 'train', 'eval']);
-const HEAVY_KINDS = new Set(['collect', 'train', 'eval']);
+export const JOB_KINDS = Object.freeze(['match', 'collect', 'extract', 'train', 'eval', 'rollout', 'rl-train']);
+const HEAVY_KINDS = new Set(['collect', 'extract', 'train', 'eval', 'rollout', 'rl-train']);
 
 /** How much log a job keeps in memory for the panel's tail. */
 const LOG_TAIL_LINES = 200;
@@ -189,6 +192,15 @@ function commandFor(job, python) {
           '--seed', String(p.seed)
         ]
       };
+    case 'extract':
+      return {
+        cmd: process.execPath,
+        args: [
+          path.join(REPO, 'scripts', 'sim-extract-demos.mjs'),
+          '--demos', p.demos,
+          '--out', path.join(ROOT, 'sim', 'datasets', `bc-demos-${safe(p.name)}.jsonl`)
+        ]
+      };
     case 'train':
       return {
         cmd: python,
@@ -204,12 +216,43 @@ function commandFor(job, python) {
       return {
         cmd: process.execPath,
         args: [
-          path.join(REPO, 'scripts', 'sim-eval-bc.mjs'),
+          path.join(REPO, 'scripts', 'sim-eval.mjs'),
           '--model', p.model,
           '--baseline', p.baseline,
           '--maps', p.maps,
           '--matches', String(p.matches),
           '--rounds', String(p.rounds)
+        ]
+      };
+    case 'rl-train': {
+      const initName = p.init || 'bc0';
+      const initFile = /[\\/]/.test(initName)
+        ? initName
+        : [path.join(LOCAL_DIR, `${safeName(initName)}.json`), path.join(SHIPPED_DIR, `${safeName(initName)}.json`)].find(
+            (f) => fs.existsSync(f)
+          ) || path.join(SHIPPED_DIR, 'bc0.json');
+      return {
+        cmd: python,
+        args: [
+          path.join(REPO, 'scripts', 'sim-train-rl.py'),
+          p.dataset,
+          '--init', initFile,
+          '--epochs', String(p.epochs),
+          '--out', path.join(ROOT, 'sim', 'models', `${safe(p.name)}.json`),
+          ...(p.aux ? ['--aux'] : [])
+        ]
+      };
+    }
+    case 'rollout':
+      return {
+        cmd: process.execPath,
+        args: [
+          path.join(REPO, 'server', 'sim', 'rollout.js'),
+          '--map', p.map,
+          '--matches', String(p.matches),
+          '--rounds', String(p.rounds),
+          '--seed', String(p.seed),
+          '--tau', String(p.tau)
         ]
       };
     default:
@@ -238,6 +281,14 @@ function normalizeParams(kind, raw = {}) {
         rounds: num(raw.rounds, 12, 1, 30),
         seed: num(raw.seed, 40, 0, 1e9)
       };
+    case 'extract': {
+      const ids = String(raw.demos || '')
+        .split(',')
+        .map((s) => safeName(s))
+        .filter(Boolean)
+        .slice(0, 40);
+      return { demos: ids.join(','), name: safeName(raw.name || 'demos') };
+    }
     case 'train':
       return {
         dataset: String(raw.dataset || ''),
@@ -250,8 +301,24 @@ function normalizeParams(kind, raw = {}) {
         model: safeName(raw.model || 'bc0'),
         baseline: safeName(raw.baseline || 'scripted'),
         maps: String(raw.maps || 'INF').replace(/[^A-Za-z0-9,]/g, ''),
-        matches: num(raw.matches, 10, 1, 200),
+        matches: num(raw.matches, 2, 1, 200),
         rounds: num(raw.rounds, 12, 1, 30)
+      };
+    case 'rl-train':
+      return {
+        dataset: String(raw.dataset || ''),
+        init: safeName(raw.init || 'bc0'),
+        epochs: num(raw.epochs, 8, 1, 200),
+        name: safeName(raw.name || 'gen1'),
+        aux: Boolean(raw.aux)
+      };
+    case 'rollout':
+      return {
+        map: safeName(raw.map || 'INF').toUpperCase(),
+        matches: num(raw.matches, 6, 1, 200),
+        rounds: num(raw.rounds, 12, 1, 30),
+        seed: num(raw.seed, 40, 0, 1e9),
+        tau: num(raw.tau, 0.3, 0, 1)
       };
     default:
       return {};
@@ -264,10 +331,16 @@ function labelFor(kind, p) {
       return `${p.map} ${p.brainA} vs ${p.brainB}, ${p.rounds} rounds`;
     case 'collect':
       return `${p.map} ${p.matches}x${p.rounds} rounds`;
+    case 'extract':
+      return `demos ${p.demos || '(none)'}`;
     case 'train':
       return `${p.name}, ${p.epochs} epochs${p.embedDim ? `, ${p.embedDim}d embed` : ''}`;
     case 'eval':
       return `${p.model} vs ${p.baseline} on ${p.maps}`;
+    case 'rl-train':
+      return `${p.name} from ${path.basename(p.init || 'scratch')}, ${p.epochs} epochs`;
+    case 'rollout':
+      return `${p.map} rl ${p.matches}x${p.rounds} tau=${p.tau}`;
     default:
       return kind;
   }
@@ -293,7 +366,10 @@ export async function startJob(kind, rawParams = {}) {
   // a map code or a brain name should come back as an answer to the click that
   // caused it, not as a job that starts, runs, and dies thirty seconds later
   // in a log the operator has to go and find.
-  if (kind === 'match' || kind === 'collect') {
+  if (kind === 'extract' && !params.demos) {
+    return { error: 'extract: select demos on Export first' };
+  }
+  if (kind === 'match' || kind === 'collect' || kind === 'rollout') {
     if (!(await loadBake('navcache', params.map))) {
       return { error: `no nav bake for ${params.map}` };
     }
@@ -307,17 +383,16 @@ export async function startJob(kind, rawParams = {}) {
     }
   }
 
-  if (kind === 'train') {
-    if (!params.dataset) return { error: 'train: no dataset' };
+  if (kind === 'train' || kind === 'rl-train') {
+    if (!params.dataset) return { error: `${kind}: no dataset` };
     try {
       await fsp.access(params.dataset);
     } catch {
-      return { error: `train: no dataset at ${params.dataset}` };
+      return { error: `${kind}: no dataset at ${params.dataset}` };
     }
     try {
       findPython();
     } catch (err) {
-      // 9.2b's last rail: no CUDA/numpy host attached means SAY SO.
       return { error: err.message };
     }
   }
@@ -363,7 +438,7 @@ function pump() {
   job.startedAt = Date.now();
 
   let python = null;
-  if (job.kind === 'train') {
+  if (job.kind === 'train' || job.kind === 'rl-train') {
     try {
       python = findPython().command;
     } catch (err) {

@@ -90,6 +90,7 @@ export const simApi = {
   // link because the guard reads the Authorization header, and an <a href>
   // cannot carry one.
   exportList: () => get('/api/sim/export/list'),
+  experience: () => get('/api/sim/experience'),
   exportDownload: async (id) => {
     const res = await fetch(`${API_BASE}/api/sim/export/demo?id=${encodeURIComponent(id)}`, {
       headers: await headers()

@@ -144,6 +144,10 @@ export function initSimView(host) {
       if (name === 'Jobs') refreshJobs().catch(() => {});
     }
 
+    /** Shared with Jobs extract: select on Export, train from that sample. */
+    const picked = new Set();
+    let demos = [];
+
     // ---- Run -------------------------------------------------------------
 
     const [mapsRes, modelsRes] = await Promise.all([
@@ -332,6 +336,9 @@ export function initSimView(host) {
     tName.value = 'bc0';
     tName.className = 'sim-text';
     const trainBtn = node('button', 'sim-btn sim-btn-primary', 'Train model');
+    const extractBtn = node('button', 'sim-btn', 'Extract selected demos');
+    const evalBtn = node('button', 'sim-btn', 'Eval gates');
+    const rlBtn = node('button', 'sim-btn', 'RL fine-tune');
 
     trainControls.append(
       field('Map', tMap),
@@ -339,11 +346,14 @@ export function initSimView(host) {
       field('Rounds', tRounds),
       field('Seed', tSeed),
       collectBtn,
+      extractBtn,
       field('Dataset', tDataset),
       field('Epochs', tEpochs),
       field('Embed', tEmbed),
       field('Name', tName),
-      trainBtn
+      trainBtn,
+      evalBtn,
+      rlBtn
     );
     panels.Jobs.append(hostBox, trainControls, trainStatus, jobsWrap);
 
@@ -377,6 +387,38 @@ export function initSimView(host) {
       }
     });
 
+    extractBtn.addEventListener('click', async () => {
+      const ids = [...picked];
+      if (!ids.length) {
+        trainStatus.className = 'sim-error';
+        trainStatus.textContent = 'Select demos on Export.';
+        return;
+      }
+      extractBtn.disabled = true;
+      trainStatus.className = 'sim-note';
+      trainStatus.textContent = 'Queued.';
+      try {
+        const r = await simApi.startJob('extract', {
+          demos: ids.join(','),
+          name: tName.value.trim() || 'demos'
+        });
+        if (r.error) {
+          trainStatus.className = 'sim-error';
+          trainStatus.textContent = r.error;
+          return;
+        }
+        await watchJob(r.job.id, trainStatus, async (job) => {
+          if (job.artifacts?.dataset) tDataset.value = job.artifacts.dataset;
+          await refreshJobs();
+        });
+      } catch (err) {
+        trainStatus.className = 'sim-error';
+        trainStatus.textContent = err.message;
+      } finally {
+        extractBtn.disabled = false;
+      }
+    });
+
     trainBtn.addEventListener('click', async () => {
       trainBtn.disabled = true;
       trainStatus.className = 'sim-note';
@@ -399,6 +441,58 @@ export function initSimView(host) {
         trainStatus.textContent = err.message;
       } finally {
         trainBtn.disabled = false;
+      }
+    });
+
+    evalBtn.addEventListener('click', async () => {
+      evalBtn.disabled = true;
+      trainStatus.className = 'sim-note';
+      trainStatus.textContent = 'Queued.';
+      try {
+        const r = await simApi.startJob('eval', {
+          model: tName.value.trim() || 'bc0',
+          baseline: 'scripted',
+          maps: tMap.value,
+          matches: Number(tMatches.value),
+          rounds: Number(tRounds.value)
+        });
+        if (r.error) {
+          trainStatus.className = 'sim-error';
+          trainStatus.textContent = r.error;
+          return;
+        }
+        await watchJob(r.job.id, trainStatus, () => refreshJobs());
+      } catch (err) {
+        trainStatus.className = 'sim-error';
+        trainStatus.textContent = err.message;
+      } finally {
+        evalBtn.disabled = false;
+      }
+    });
+
+    rlBtn.addEventListener('click', async () => {
+      rlBtn.disabled = true;
+      trainStatus.className = 'sim-note';
+      trainStatus.textContent = 'Queued.';
+      try {
+        const r = await simApi.startJob('rl-train', {
+          dataset: tDataset.value.trim(),
+          init: tName.value.trim() || 'bc0',
+          epochs: Math.min(8, Number(tEpochs.value) || 8),
+          name: 'gen1',
+          aux: true
+        });
+        if (r.error) {
+          trainStatus.className = 'sim-error';
+          trainStatus.textContent = r.error;
+          return;
+        }
+        await watchJob(r.job.id, trainStatus, () => refreshJobs());
+      } catch (err) {
+        trainStatus.className = 'sim-error';
+        trainStatus.textContent = err.message;
+      } finally {
+        rlBtn.disabled = false;
       }
     });
 
@@ -769,14 +863,19 @@ export function initSimView(host) {
     const exportWrap = node('div', 'sim-scroll');
     panels.Export.append(exportControls, exportStatus, exportWrap);
 
-    const picked = new Set();
-    let demos = [];
-
     function renderExport() {
       exportWrap.replaceChildren();
       const rows = demos.filter((d) => !mapFilter.value || d.map === mapFilter.value);
       if (!rows.length) {
-        exportWrap.append(node('p', 'sim-empty', 'No demos in the library on this host.'));
+        exportWrap.append(
+          node(
+            'p',
+            'sim-empty',
+            demos.length
+              ? 'No demos for this map.'
+              : 'No demos in the library on this host.'
+          )
+        );
         return;
       }
       const { table: tbl, tbody } = table([
@@ -848,8 +947,14 @@ export function initSimView(host) {
     });
 
     async function refreshExport() {
+      exportStatus.className = 'sim-note';
+      exportStatus.textContent = '';
       const res = await simApi.exportList();
       demos = res.demos || [];
+      if (res.error) {
+        exportStatus.className = 'sim-error';
+        exportStatus.textContent = res.error;
+      }
       const maps = [...new Set(demos.map((d) => d.map).filter(Boolean))].sort();
       mapFilter.replaceChildren();
       for (const o of [{ value: '', label: 'All maps' }, ...maps.map((m) => ({ value: m, label: m }))]) {
@@ -863,7 +968,13 @@ export function initSimView(host) {
     }
 
     selectTab('Run');
-    await Promise.all([refreshMatches().catch(() => {}), refreshExport().catch(() => {})]);
+    await Promise.all([
+      refreshMatches().catch(() => {}),
+      refreshExport().catch((err) => {
+        exportStatus.className = 'sim-error';
+        exportStatus.textContent = err.message || 'Export list failed.';
+      })
+    ]);
   }
 
   async function check() {

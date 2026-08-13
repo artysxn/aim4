@@ -79,6 +79,22 @@ export const TRIGGERS = Object.freeze([
     arms: ['execute_entry', 'fall_back'],
     when: (ctx) => Boolean(ctx.clockPastCommitWindow),
     motive: "the clock crossed the call's commit window"
+  },
+  {
+    id: 'lurk_arm',
+    leadSeconds: 4,
+    arms: ['lurk', 'take_space'],
+    when: (ctx) =>
+      Boolean(ctx.iAmLurk) &&
+      (Boolean(ctx.packContactFar) || Boolean(ctx.packCommitted) || Boolean(ctx.clockUnderLurk)),
+    motive: 'the pack made contact, the lurk is armed'
+  },
+  {
+    id: 'opportunity_refrag',
+    leadSeconds: 0,
+    arms: ['refrag', 'trade'],
+    when: (ctx) => Boolean(ctx.refragWindow),
+    motive: 'a teammate died, the killer window is open'
   }
 ]);
 

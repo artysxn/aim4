@@ -181,3 +181,35 @@ export async function isBrain(name) {
 export function clearModelCache() {
   cache.clear();
 }
+
+/**
+ * Generation manifests (9.9): genN.json next to genN.manifest.json.
+ * Exploiters in the pool are listed but shipped=false.
+ */
+export async function listGenerations() {
+  const models = await listModels();
+  const gens = [];
+  for (const m of models) {
+    if (!/^gen\d+$/i.test(m.name) && m.name !== 'bc0') continue;
+    let manifest = null;
+    for (const dir of [LOCAL_DIR, SHIPPED_DIR]) {
+      try {
+        manifest = JSON.parse(await fsp.readFile(path.join(dir, `${m.name}.manifest.json`), 'utf8'));
+        break;
+      } catch {
+        /* no manifest beside this copy */
+      }
+    }
+    gens.push({
+      name: m.name,
+      ok: m.ok,
+      source: m.source,
+      valAccuracy: m.valAccuracy,
+      parent: manifest?.parent ?? (m.name === 'bc0' ? null : 'bc0'),
+      gen: manifest?.gen ?? (m.name === 'bc0' ? 0 : null),
+      shipped: m.source === 'shipped',
+      league: manifest?.league || ['bc0', 'scripted']
+    });
+  }
+  return gens;
+}

@@ -41,7 +41,15 @@ const models = await import('./models.js');
   const t = await jobs.startJob('train', { dataset: 'nope.jsonl' });
   assert(t.error, 'and refuses training');
 
-  const bogus = await jobs.startJob('rollout', {});
+  const ex = await jobs.startJob('extract', { demos: 'abc' });
+  assert(ex.error, 'and refuses demo extract');
+  assert(/AIM4_SIM_WORKERS/.test(ex.error), 'extract is heavy');
+
+  const roll = await jobs.startJob('rollout', { map: 'INF' });
+  assert(roll.error, 'rollout is heavy and refused when workers=0');
+  assert(/AIM4_SIM_WORKERS/.test(roll.error), 'and says how to turn it on');
+
+  const bogus = await jobs.startJob('not-a-kind', {});
   assert(bogus.error, 'an unknown kind is refused rather than spawned');
 }
 

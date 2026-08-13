@@ -252,7 +252,7 @@ export const OPTION_DEFS = Object.freeze({
   // ---- objective: the bomb outranks everything -----------------------------
   execute_entry: {
     family: 'objective',
-    params: ['site', 'target'],
+    params: ['site', 'target', 'preAim'],
     terminate: ['arrived', 'damaged', 'timeout'],
     timeoutSeconds: 20,
     exposure: 0.9
@@ -567,7 +567,10 @@ export function microIntent(active, tick, view = {}) {
     // ---- objectives --------------------------------------------------------
     case 'execute_entry': {
       intent.move = { mode: 'rotate', target: p.target ?? p.site, gait: 'run' };
-      intent.combat = { posture: 'free', preAim: null };
+      // The slice this body was assigned by the entry partition (19.5), and
+      // nothing else. An entry who pre-aims four angles pre-aims none of them;
+      // the breadth belongs to the team, the commitment belongs to the body.
+      intent.combat = { posture: 'free', preAim: p.preAim ?? null };
       return intent;
     }
     case 'plant': {

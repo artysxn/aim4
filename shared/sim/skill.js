@@ -110,6 +110,8 @@ export function skillProfile(level = 'average', overrides = {}) {
   // Not on the ladder: a logit offset on the PFW a bot decides with (8.2),
   // zero at every level. Filled by the mimic fit (confidence.js) or a knob.
   profile.confidenceBias = 0;
+  // 20.9: the trait is the BASELINE of riskQuantile; state moves it.
+  profile.riskQuantile = 0.5;
 
   Object.assign(profile, overrides);
   return clampToEnvelope(profile);

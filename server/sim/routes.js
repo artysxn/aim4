@@ -28,8 +28,12 @@ import {
   runStatus
 } from './matches.js';
 import { availableMaps } from './bakes.js';
-import { listModels } from './models.js';
+import { listGenerations, listModels } from './models.js';
 import { getJob, hostStatus, listJobs, loadJobHistory, startJob, stopJob } from './jobs.js';
+import { ROOT } from '../replays/demoStore.js';
+import { EXPERIENCE_VERSION } from '../../shared/sim/experience.js';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
 
 const NOT_FOUND = { error: 'Not found' };
 
@@ -241,7 +245,30 @@ async function route(req, res, url, me) {
   // ---- the model registry (SIM-PLAN 9.9) -------------------------------------
 
   if (p === '/api/sim/models' && req.method === 'GET') {
-    json(res, req, 200, { models: await listModels(), host: hostStatus() });
+    json(res, req, 200, {
+      models: await listModels(),
+      generations: await listGenerations(),
+      host: hostStatus()
+    });
+    return true;
+  }
+
+  // Experience index rows (SIM-PLAN 18.3). The Memory tab is P6; the rows are
+  // addressable now so a later panel does not invent a second store.
+  if (p === '/api/sim/experience' && req.method === 'GET') {
+    const file = path.join(ROOT, 'sim', 'experience', 'career.json');
+    let body = { v: EXPERIENCE_VERSION, rows: [], scopes: ['session', 'opponent', 'career'] };
+    try {
+      const json = JSON.parse(await fsp.readFile(file, 'utf8'));
+      body = {
+        v: json.v || EXPERIENCE_VERSION,
+        rows: json.rows || json.career || [],
+        scopes: json.scopes || body.scopes
+      };
+    } catch {
+      /* empty until a match writes the shard */
+    }
+    json(res, req, 200, body);
     return true;
   }
 

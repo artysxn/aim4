@@ -114,7 +114,7 @@ async function main() {
     obsSize: OBSERVATION_SIZE,
     vocab: OPTION_IDS,
     players: [...new Set(samples.map((s) => s.player))].sort(),
-    teacher: 'desire-p3b',
+    teacher: 'desire-p3d',
     map: MAP,
     seed: SEED,
     matches: MATCHES,

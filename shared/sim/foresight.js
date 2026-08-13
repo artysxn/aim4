@@ -189,6 +189,8 @@ export function drawLayouts(belief, m, rng) {
  * @param {import('./rng.js').Rng} args.rng
  * @param {Float64Array} [args.v]  duel params; defaults to the fitted vector
  * @param {number} [args.layoutCount]
+ * @param {number} [args.quantile]  20.9: maximize this quantile of layout pWin
+ *        instead of the mean. Omitted keeps the mean so existing tests hold.
  * @returns {{pWin:number, ctPct:number, parts:object}}
  */
 export function priceOption({
@@ -205,7 +207,8 @@ export function priceOption({
   contacts = {},
   rng,
   v = null,
-  layoutCount = HYPOTHESIS_COUNT
+  layoutCount = HYPOTHESIS_COUNT,
+  quantile = null
 }) {
   const def = OPTION_DEFS[option.id];
   if (!def) throw new Error(`foresight: unknown option ${option.id}`);
@@ -296,6 +299,7 @@ export function priceOption({
   let ctSum = 0;
   let contactLayouts = 0;
   let duelCount = 0;
+  const layoutWins = [];
 
   for (const layout of layouts) {
     // Which hypotheses can trade fire with my arrival pose?
@@ -419,14 +423,23 @@ export function priceOption({
     const resolved = duels.length
       ? expectedCtOverDuels({ base, duels, bySlot, evaluate: (s) => scoreBag(bag, s) })
       : null;
-    ctSum += resolved
+    const layoutCt = resolved
       ? resolved.ct
       : scoreBag(bag, { ...base });
+    ctSum += layoutCt;
+    layoutWins.push(round.mySide === 'CT' ? layoutCt / 100 : 1 - layoutCt / 100);
   }
 
   let ct = ctSum / layouts.length;
   const pContact = contactLayouts / layouts.length;
   let pWin = round.mySide === 'CT' ? ct / 100 : 1 - ct / 100;
+  if (Number.isFinite(quantile) && layoutWins.length) {
+    const q = Math.min(1, Math.max(0, quantile));
+    const sorted = layoutWins.slice().sort((a, b) => a - b);
+    const i = Math.min(sorted.length - 1, Math.max(0, Math.floor(q * (sorted.length - 1))));
+    pWin = sorted[i];
+    ct = round.mySide === 'CT' ? pWin * 100 : (1 - pWin) * 100;
+  }
 
   // The exposure spent getting there: mass that overlooks the path, times the
   // style's share of its duration spent visible. A jiggle pays a quarter of
@@ -445,4 +458,97 @@ export function priceOption({
       phase
     }
   };
+}
+
+/**
+ * How much a drawn shot is worth to the body who collects it. `[calibrate]`
+ *
+ * A shoulder peek does not reveal anything; it CHANGES THE ENEMY'S STATE
+ * (19.6). The AWP is cycling, the rifler is in recoil recovery, and both have
+ * committed a crosshair to a place the baiter is no longer in. The fitted duel
+ * model already prices exactly that through the defender's awareness term, so
+ * the bait is expressed as a bump to the partner's information advantage
+ * rather than as a bonus somebody invented.
+ */
+export const BAIT_INFO_SECONDS = 0.6;
+
+/**
+ * Price two bodies as ONE decision (SIM-PLAN 19.6).
+ *
+ * A bait and its punish are not two options that happen to be adjacent: the
+ * peeker's price IS the partner's gain inside the window, minus the peeker's
+ * own risk of being clipped. Single-body foresight cannot express that shape at
+ * all, because the value never lands on the body paying for it.
+ *
+ * It stops at two, deliberately and permanently. Two is where Counter-Strike's
+ * coupling actually lives (trade pairs, bait and punish, entry and refrag), and
+ * the combinatorics past two are neither affordable nor true to the game.
+ *
+ * @param {object} args
+ * @param {object} args.bait     {option, pose, me} for the body drawing the shot
+ * @param {object} args.punish   {option, pose, me} for the body collecting it
+ * @param {object} args.shared   everything priceOption needs that both share
+ *   (belief, footprint per body, tick, pathDistance, anchorWorld, canSee,
+ *   round, contacts, rng, layoutCount)
+ * @param {number} [args.windowSeconds]  how long the drawn shot stays paid for
+ * @returns {{pWin:number, parts:object}} the PAIR's value, attributed
+ */
+export function priceOptionPair({ bait, punish, shared, windowSeconds = 1.4 }) {
+  const priceOne = (body, extra = {}) =>
+    priceOption({
+      option: body.option,
+      pose: body.pose,
+      me: body.me,
+      footprint: body.footprint ?? shared.footprint,
+      ...shared,
+      ...extra
+    });
+
+  // What each body is worth alone, which is the baseline the pair has to beat.
+  const soloBait = priceOne(bait);
+  const soloPunish = priceOne(punish);
+
+  // The punisher's world with the shot already drawn: the enemy's crosshair is
+  // committed elsewhere and his weapon is cycling, so the partner arrives with
+  // an information advantage he did not have to buy himself.
+  const baitedPunish = priceOne(punish, {
+    contacts: withBaitInfo(shared.contacts || {}, shared.tick, windowSeconds)
+  });
+
+  // The peeker pays his exposure and collects nothing directly; the pair's
+  // value is what the partner gains, minus what the bait costs the baiter.
+  // That cost is not invented here: it is the exposure term priceOption has
+  // already subtracted from the bait's own price, read back out of its card.
+  const partnerGain = baitedPunish.pWin - soloPunish.pWin;
+  const baitCost = EXPOSURE_LAMBDA * soloBait.parts.exposure * soloBait.parts.pContact;
+  const pWin = soloPunish.pWin + partnerGain - baitCost;
+
+  return {
+    pWin,
+    parts: {
+      soloBait: soloBait.pWin,
+      soloPunish: soloPunish.pWin,
+      baitedPunish: baitedPunish.pWin,
+      partnerGain,
+      baitCost,
+      windowSeconds,
+      // The pair is only worth running if the drawn shot actually pays for the
+      // peek. This is the number the motive string should quote.
+      worthIt: partnerGain > baitCost
+    }
+  };
+}
+
+/**
+ * Age every contact by the bait window, which is how the duel model reads
+ * "they just committed a shot somewhere else" (infoAdvSecsHat consumes the
+ * contact log). Copied rather than mutated: pricing must never move state.
+ */
+function withBaitInfo(contacts, tick, windowSeconds) {
+  const out = {};
+  const bump = Math.round(BAIT_INFO_SECONDS * 64);
+  for (const [slot, c] of Object.entries(contacts)) {
+    out[slot] = { ...c, myLastSeenTick: (c.myLastSeenTick ?? tick) + bump };
+  }
+  return out;
 }

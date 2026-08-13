@@ -144,6 +144,9 @@ export function scriptedController() {
  * @param {number} [args.recordEvery]  keep 1 round in N (engine sampling)
  * @param {boolean} [args.replays]     capture tick buffers for sampled rounds
  * @param {(round: object) => void} [args.onRound]
+ * @param {(step: {engine: object, tick: number}) => void} [args.onStep]
+ *        optional, AFTER engine.step() each tick (P5 RL collect). Omitted
+ *        callers and existing tests are unchanged.
  * @returns {{match: object, rounds: Array<object>, winsA: number, winsB: number}}
  */
 export function playVersusMatch({
@@ -159,7 +162,8 @@ export function playVersusMatch({
   record = 'events',
   recordEvery = 1,
   replays = false,
-  onRound = null
+  onRound = null,
+  onStep = null
 }) {
   const canSee = catalogueCanSee(angles);
   const pathDistance = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
@@ -236,6 +240,7 @@ export function playVersusMatch({
       ctrlA.tick({ engine, i, tick: engine.state.tick });
       ctrlB.tick({ engine, i, tick: engine.state.tick });
       engine.step();
+      if (onStep) onStep({ engine, tick: engine.state.tick });
       if (recorder) recorder.sample();
       if (engine.state.phase === PHASE.OVER) break;
     }
@@ -262,6 +267,8 @@ export function playVersusMatch({
       }
     };
     rounds.push(round);
+    if (typeof ctrlA.roundEnd === 'function') ctrlA.roundEnd({ outcome, side: sideA, round });
+    if (typeof ctrlB.roundEnd === 'function') ctrlB.roundEnd({ outcome, side: sideB, round });
     if (onRound) onRound(round);
   }
 

@@ -25,25 +25,70 @@
 //     attacker on the damage event
 // ---------------------------------------------------------------------------
 
-import { ADHOC_THROW_MAX, DECISION_EVERY_TICKS, FREEZE_SECONDS, TICK_RATE, ticksFor } from './constants.js';
+import {
+  ADHOC_THROW_MAX,
+  DECISION_EVERY_TICKS,
+  FREEZE_SECONDS,
+  ROUND_SECONDS,
+  TICK_RATE,
+  ticksFor
+} from './constants.js';
+import { ZONE, classifyZones, bombIsSafe, frontier } from './zones.js';
+import { EnemyUtilityTracker } from './conservation.js';
+import {
+  angleFor,
+  clearPartition,
+  massFromBelief,
+  partitionMotive,
+  pTradedFromGeometry
+} from './clearPartition.js';
+import { readLedgers, threatLedger, timingLedger, utilityLedger } from './ledgers.js';
 import { JointBelief, UPDATE_EVERY_TICKS } from './knowledge.js';
 import { SelfFootprint } from './exposure.js';
 import { LatencyGate } from './attention.js';
-import { OptionRunner, initiationSet } from './options.js';
+import { OPTION_DEFS, OPTION_IDS, OptionRunner, initiationSet } from './options.js';
 import { DesireArbiter } from './arbiter.js';
-import { priceOption } from './foresight.js';
+import { ENEMY_KIT_VALUE, HYPOTHESIS_COUNT, priceOption } from './foresight.js';
 import { firedTriggers } from './triggers.js';
-import { makeShape, backfill, uncoveredPosts } from './shape.js';
+import { makeShape, backfill, uncoveredPosts, homeOf } from './shape.js';
 import { computeSpaceField, bestSpace } from './spaceField.js';
 import { createTranslator } from './translator.js';
 import { skillProfile } from './skill.js';
 import { isSilenced } from './weapons.js';
 import { buildObservation, weaponClassOf } from './observe.js';
 import { applyProposals } from './policy.js';
-import { ENEMY_KIT_VALUE } from './foresight.js';
 import { weaponInfo } from '../../src/replays/shared/weaponTable.js';
 import { SOUND_RADIUS } from './constants.js';
-import { sector, rangeBand } from './sound.js';
+import { SOUND, sector, rangeBand } from './sound.js';
+import { buildClassIndex, threatField, SNIPER_CLASS, awpThreat } from './threat.js';
+import { budgetDecision } from './voi.js';
+import { CommBus, LEVEL, willSay } from './comms.js';
+import { clutchMask, maskInitiation, riskQuantile } from './clutch.js';
+import { ProtocolRunner, protocolInitiationSet } from './protocols.js';
+import { classifyEvent, INTERRUPT } from './interrupts.js';
+import { keywordPreset, applyKeyword } from './keywords.js';
+import { buildLayerGraph, legalLayerActions, pickLayerAction, libraryLabel, PROTOCOL_BODIES } from './layers.js';
+import { assignZoneOwners, roleInZone } from './ownership.js';
+import { sacrificeIsPriced, refragArmed } from './sacrifice.js';
+import { makeSync, mixAnchor, reached } from './sync.js';
+import { assignExecute, repairLadder } from './execute.js';
+import { catalogFor, templateFor } from './executeCatalog.js';
+import { TendencyTracker, Exp3Bandit, banditKey, econBucket, mixPolicyExp3 } from './opponentModel.js';
+import { decisionSearch, ExpertIterLog } from './search.js';
+import { assignContracts, maskByContract, reassignOnDeath } from './contracts.js';
+import { ownCore, enemyCoreFromBelief } from './cores.js';
+import { situationKey, shapeFromCore } from './situationKey.js';
+import { ExperienceIndex } from './experience.js';
+import { StrategyAI } from './strategy.js';
+
+/** Layer protocol names are dash form; the runner speaks underscore ids (20.3, 20.5). */
+const LAYER_PROTOCOL = Object.freeze({
+  'three-man': 'three_man_take',
+  'four-man': 'wick',
+  'five-man': 'sync_peek'
+});
+/** Options that walk the bomb out of Safe. Execute is the exception. */
+const LEAVES_SAFE = Object.freeze(['take_space', 'rotate', 'flank', 'advance', 'lurk']);
 
 /** Anchors a body is "at" within this range, world units. */
 const AT_ANCHOR_UNITS = 64;
@@ -56,6 +101,56 @@ const PLAN_SPEED = 200;
  * public clock. The enemy's economy is BELIEVED (mean loadout value over the
  * particles), never their wallet.
  */
+/**
+ * Solve the entry's clear partition, once per decision tick per side (19.5).
+ *
+ * The route is the pack's approach to the target site, and the angle set is
+ * what the catalogue says overlooks it. Cached on the tick because five bots
+ * asking the same question in the same 125 ms must get the same answer: the
+ * whole point is that the breadth is partitioned rather than duplicated.
+ */
+function entryPartition(R, angles, myLiving, tick) {
+  if (R.partitionTick === tick) return R.partition;
+  R.partitionTick = tick;
+  R.partition = null;
+  if (!myLiving.length) return null;
+
+  // The corridor: from the pack's centre of mass to the site being taken.
+  const cx = myLiving.reduce((s, b) => s + b.pos.x, 0) / myLiving.length;
+  const cy = myLiving.reduce((s, b) => s + b.pos.y, 0) / myLiving.length;
+  const route = [
+    { x: cx, y: cy },
+    { x: R.target.world.x, y: R.target.world.y }
+  ];
+  const encounters = angles.anchorEncountersAlong(route);
+  if (!encounters.length) return null;
+
+  R.partition = clearPartition({
+    angles: encounters,
+    // Arrival order along the corridor is what decides who takes which slice,
+    // and it is distance to the site: the man in front meets the first angle.
+    // Positions ride along because the trade geometry reads the OTHER bodies
+    // out of this same list: who can trade me is a fact about where my mates
+    // are standing, not a separate argument.
+    bodies: myLiving.map((b) => ({
+      slot: b.slot,
+      x: b.pos.x,
+      y: b.pos.y,
+      level: b.level,
+      arrival: Math.hypot(R.target.world.x - b.pos.x, R.target.world.y - b.pos.y) / PLAN_SPEED
+    })),
+    mass: massFromBelief(R.belief),
+    pTraded: pTradedFromGeometry({
+      spotOf: (a) => {
+        const anchor = R.graph.anchor(a.anchor);
+        return anchor ? { x: anchor.world.x, y: anchor.world.y, level: anchor.level } : null;
+      },
+      canSee: (ax, ay, bx, by, level) => angles.canSee(ax, ay, bx, by, level)
+    })
+  });
+  return R.partition;
+}
+
 function buildObs(R, s, b, round, myLiving, tick, angles) {
   const zoneOf = (site) => (anchor) => {
     const a = R.graph.anchor(anchor);
@@ -116,8 +211,62 @@ function buildObs(R, s, b, round, myLiving, tick, angles) {
     recency: {
       sinceSeenSeconds: (tick - (R.lastSeenTick ?? -Infinity)) / TICK_RATE,
       sinceHeardSeconds: (tick - (R.lastHeardTick ?? -Infinity)) / TICK_RATE
-    }
+    },
+    // The team's doctrine frame, shared by all five bots (20.4).
+    doctrine: R.ledgers,
+    viz: vizFrame(R, s, b, myLiving, inTarget, inOther)
   });
+}
+
+function vizFrame(R, s, b, myLiving, inTarget, inOther) {
+  let awp = 0;
+  let rifle = 0;
+  if (R.threat?.rows?.length) {
+    let best = null;
+    let bestD = Infinity;
+    for (const row of R.threat.rows) {
+      const d = Math.hypot(row.spot.x - b.pos.x, row.spot.y - b.pos.y);
+      if (d < bestD) {
+        bestD = d;
+        best = row;
+      }
+    }
+    if (best) {
+      awp = best.byClass?.[SNIPER_CLASS] ?? awpThreat(R.threat, best.spot);
+      rifle = best.byClass?.rifle ?? 0;
+    }
+  }
+  const modes = R.belief.layoutModes(
+    [
+      { name: 'target', test: inTarget },
+      { name: 'other', test: inOther }
+    ],
+    2
+  );
+  const mate = myLiving.find((m) => m.slot !== s);
+  const reqTo = R.comms?.openRequests?.(s)?.length ?? 0;
+  const reqFrom = R.comms?.openRequests?.()?.filter((m) => m.from === s).length ?? 0;
+  const mine = R.partition ? angleFor(R.partition, s) : null;
+  return {
+    awpThreat: awp,
+    rifleThreat: rifle,
+    uncoveredMass: R.partition?.uncoveredMass ?? 0,
+    voi: R.budget?.parts?.voi ?? 0,
+    secondsAffordable: R.budget?.parts?.perSecond
+      ? (R.budget.parts.voi || 0) / Math.max(1e-6, R.budget.parts.perSecond)
+      : 0,
+    breadth: R.budget?.budget != null ? R.budget.budget / HYPOTHESIS_COUNT : 0,
+    pairDx: mate ? mate.pos.x - b.pos.x : 0,
+    pairDy: mate ? mate.pos.y - b.pos.y : 0,
+    pairWindow: R.sync?.toleranceSeconds ?? 0,
+    requestToMe: reqTo,
+    requestFromMe: reqFrom,
+    layout0: modes[0]?.mass ?? 0,
+    layout1: modes[1]?.mass ?? 0,
+    novelty: Boolean(R.budget?.parts?.capped),
+    vizSpend: R.vizSpend ?? 0,
+    assigned: Boolean(mine)
+  };
 }
 
 /**
@@ -144,11 +293,25 @@ export function desireController({
   seedOffset = 7,
   skill = 'average',
   policy = null,
-  collect = null
+  collect = null,
+  keyword = null,
+  searchEnabled = true,
+  memoryEnabled = true
 } = {}) {
   return () => {
     /** Per-round state, rebuilt in roundStart. */
     let R = null;
+
+    // Match-level brains (6.10, 18). Survive roundStart. Off during bulk RL
+    // via searchEnabled; memoryEnabled false keeps the determinism hash of a
+    // run that never reads the index.
+    const tracker = new TendencyTracker();
+    const bandit = new Exp3Bandit();
+    const index = new ExperienceIndex();
+    const strategy = new StrategyAI({ index, bandit });
+    const expert = new ExpertIterLog();
+    let matchRng = null;
+    let contracts = null;
 
     // ---- geometry helpers, per graph ------------------------------------
 
@@ -166,6 +329,34 @@ export function desireController({
       const map = new Map();
       for (const [id, a] of graph.anchors) {
         map.set(id, nearestAnchors(graph, a.world.x, a.world.y, a.level, 4).filter((o) => o !== id));
+      }
+      return (anchor) => map.get(anchor) || [];
+    }
+
+    /**
+     * What gates each zone, for the doctrine classifier (20.2).
+     *
+     * The doctrine's Safe clause is "an enemy cannot reach it without first
+     * taking another zone we are watching", so the classifier needs to know
+     * which zones sit between a zone and the enemy. The honest derivation is a
+     * path query per zone; the approximation used here is a neighbour that is
+     * closer to the enemy's half than the zone itself, which is the same claim
+     * for the overwhelming majority of map geometry and costs one distance
+     * comparison instead of a search. `[refine: derive from findPath once the
+     * layer graph is baked, 20.3]`
+     */
+    function buildGates(graph, neighbours, enemyOrigin) {
+      const map = new Map();
+      const distTo = (id) => {
+        const a = graph.anchor(id);
+        return a ? Math.hypot(a.world.x - enemyOrigin.x, a.world.y - enemyOrigin.y) : Infinity;
+      };
+      for (const [id] of graph.anchors) {
+        const mine = distTo(id);
+        map.set(
+          id,
+          neighbours(id).filter((n) => distTo(n) < mine)
+        );
       }
       return (anchor) => map.get(anchor) || [];
     }
@@ -275,8 +466,71 @@ export function desireController({
           afterplant: null,
           retakeStage: null,
           lastEvidenceTick: -Infinity,
-          lastRotate: {}
+          lastRotate: {},
+          /** Tick each zone was last swept by our eyes, for the classifier. */
+          sweptAt: {},
+          /** The doctrine reads, recomputed on the team frame (20.2, 20.4). */
+          zones: null,
+          ledgers: null,
+          /** What we believe the enemy still holds (19.7, law 2). */
+          enemyUtility: new EnemyUtilityTracker({ side: side === 'T' ? 'CT' : 'T', alive: 5 }),
+          comms: new CommBus({ rng: rng.fork() }),
+          protocol: new ProtocolRunner(),
+          lastEffectTick: -1,
+          keyword: keywordPreset(keyword),
+          owners: null,
+          layerGraph: null,
+          layerAction: null,
+          sync: makeSync({
+            kind: mixAnchor(rng),
+            event: 'detonate',
+            atSeconds: 70
+          }),
+          opportunity: null,
+          lastOurDeathTick: null,
+          lastOurDeathPos: null,
+          threat: null,
+          budget: null,
+          iglSlot: slots[0],
+          /** Drawn once per round: the spread around the risk quantile (20.9). */
+          audacity: rng.next(),
+          executes: catalogFor(engine.state.map),
+          executeBySlot: null,
+          executeTick: -1,
+          vizSpend: 0
         };
+        // Gates point away from the enemy's half, so each side's map is
+        // shielded from where its opponents come from.
+        const enemySpawns = graph.spawns.filter((s) => s.side !== side);
+        const ox = enemySpawns.reduce((s, p) => s + p.x, 0) / Math.max(1, enemySpawns.length);
+        const oy = enemySpawns.reduce((s, p) => s + p.y, 0) / Math.max(1, enemySpawns.length);
+        R.gates = buildGates(graph, R.neighbours, { x: ox, y: oy });
+        // Which anchors belong to which site, resolved once. The threat ledger
+        // asks this of every particle slot several times a second.
+        R.siteZones = [target, other].filter(Boolean).map((site) => {
+          const members = new Set();
+          for (const [id, a] of graph.anchors) {
+            if (Math.hypot(a.world.x - site.world.x, a.world.y - site.world.y) < 1200) {
+              members.add(id);
+            }
+          }
+          return { id: site.id, world: site.world, contains: (anchor) => members.has(anchor) };
+        });
+        R.owners = assignZoneOwners({
+          zones: [...graph.anchors.keys()],
+          roster: R.shape.posts,
+          iglSlot: R.iglSlot,
+          distance: (home, zone) => {
+            const a = graph.anchor(home);
+            const b = graph.anchor(zone);
+            if (!a || !b) return Infinity;
+            return Math.hypot(a.world.x - b.world.x, a.world.y - b.world.y);
+          }
+        });
+        R.layerGraph = buildLayerGraph(graph, { neighbours: R.neighbours, gates: R.gates });
+        if (!matchRng) matchRng = rng.fork();
+        contracts = assignContracts({ map: engine.state.map, side, slots });
+        R.contracts = contracts;
       },
 
       tick({ engine, i, tick }) {
@@ -291,13 +545,62 @@ export function desireController({
         // ---- A. percepts into the team belief ---------------------------
 
         const myLiving = R.slots.map((s) => bodies[s]).filter((b) => b.alive);
+        R.ownCore = ownCore(myLiving);
+        R.enemyCore = enemyCoreFromBelief(R.belief, R.graph);
 
         // Kill feed: public in CS, public here.
         R.enemySlots.forEach((es, idx) => {
-          if (!bodies[es].alive && !R.belief.dead.has(idx)) R.belief.killed(idx);
+          if (!bodies[es].alive && !R.belief.dead.has(idx)) {
+            const dead = bodies[es];
+            R.belief.killed(idx);
+            const dOther = R.other
+              ? Math.hypot(dead.pos.x - R.other.world.x, dead.pos.y - R.other.world.y)
+              : Infinity;
+            const dTarget = Math.hypot(dead.pos.x - R.target.world.x, dead.pos.y - R.target.world.y);
+            const classified = classifyEvent(
+              { type: 'death', slot: es },
+              {
+                side: R.side,
+                sideOf: (slot) => bodies[slot]?.side,
+                teamDeaths: 0,
+                brokenCount: 0,
+                roundSeconds: (tick - state.liveTick) / TICK_RATE,
+                farSide: dOther + 400 < dTarget,
+                awperSlot: /awp/i.test(dead.weapon || '') ? es : null
+              }
+            );
+            if (classified.clazz === INTERRUPT.OPPORTUNITY) {
+              R.opportunity = { tick, reason: classified.reason, at: { x: dead.pos.x, y: dead.pos.y } };
+            }
+          }
         });
         for (const s of R.slots) {
           if (!bodies[s].alive && R.footprints[s].deadSinceTick === null) {
+            const last = R.last[s];
+            R.lastOurDeathTick = tick;
+            R.lastOurDeathPos = last
+              ? { x: last.x, y: last.y, level: bodies[s].level }
+              : { x: bodies[s].pos.x, y: bodies[s].pos.y, level: bodies[s].level };
+            const moved = reassignOnDeath({ contracts: R.contracts || [], deadSlot: s, tick });
+            if (moved?.directive) {
+              this.log.push({
+                tick,
+                slot: s,
+                id: 'reassign',
+                motive: `cover ${moved.directive.cover} from ${moved.directive.toSlot}`
+              });
+              if (moved.to) {
+                R.contracts = (R.contracts || []).map((c) => (c.slot === moved.to.slot ? moved.to : c));
+              }
+            }
+            const victim = R.lastOurDeathPos;
+            R.belief.deathRecord({
+              canSeeFrom: (anchor) => {
+                const a = R.graph.anchor(anchor);
+                if (!a || a.level !== victim.level) return false;
+                return angles.canSee(a.world.x, a.world.y, victim.x, victim.y, a.level);
+              }
+            });
             R.footprints[s].noteDeath(tick);
             for (const o of R.slots) {
               if (o !== s) R.runners[o].gate.onEvent(tick, 'death');
@@ -340,15 +643,40 @@ export function desireController({
           }
         }
         if (swept.size) R.belief.cleared(swept);
+        // Ground we are looking at right now is ground the doctrine calls
+        // checked, and it goes stale on its own clock (20.2).
+        for (const id of swept) R.sweptAt[id] = tick;
+        for (const id of seenAnchors) R.sweptAt[id] = tick;
 
         // Sound: the engine's own degraded percepts, teammate steps excluded
         // the way a human excludes them — "that's just where Dan is". The log
         // is a sliding window, so items are claimed by tick, never by index.
+        //
+        // Grenade conservation (19.7): throw and detonate both emit type
+        // 'grenade'. A new enemy effect this tick is the pop; a grenade sound
+        // without one is a throw that left their hands.
+        const popsThisTick = new Set();
+        for (const e of state.effects) {
+          if (e.startTick <= R.lastEffectTick) continue;
+          if (e.side === R.side) continue;
+          const seen = myLiving.some(
+            (w) =>
+              w.level === e.level &&
+              angles.canSee(w.pos.x, w.pos.y, e.x, e.y, w.level)
+          );
+          if (seen) R.enemyUtility.sawDetonation({ type: e.type, tick: e.startTick });
+          popsThisTick.add(e.startTick);
+        }
+        R.lastEffectTick = tick;
+
         for (const p of engine.sounds.items) {
           if (p.tick <= R.lastSoundTick) continue;
           const listener = bodies[p.listener];
           if (!listener || listener.side !== R.side || !listener.alive) continue;
-          if (p.type !== 'footstep' && p.type !== 'gunshot' && p.type !== 'landing') continue;
+          const isGrenade = p.type === SOUND.GRENADE;
+          if (!isGrenade && p.type !== 'footstep' && p.type !== 'gunshot' && p.type !== 'landing') {
+            continue;
+          }
 
           const radius = SOUND_RADIUS[p.type] ?? 1100;
           const explainedByMate = myLiving.some((m) => {
@@ -360,6 +688,10 @@ export function desireController({
             );
           });
           if (explainedByMate) continue;
+
+          if (isGrenade && !popsThisTick.has(p.tick)) {
+            R.enemyUtility.heardThrow({ tick: p.tick });
+          }
 
           R.lastEvidenceTick = tick;
           R.lastHeardTick = tick;
@@ -458,6 +790,251 @@ export function desireController({
           },
           dangerMass: (id) => massAt(id, R.graph.anchor(id)?.level || 'default')
         });
+
+        // ---- C2. the doctrine frame (20.2, 20.4) ------------------------
+        //
+        // The four-class map and the four ledgers, computed once for the team
+        // rather than once per bot: they are a property of what the side knows,
+        // and five bots on one side know the same thing. This is the block the
+        // observation carries (7.2) and the reason a policy can learn the
+        // theory instead of a map's vocabulary.
+        const holdingSet = new Set();
+        for (const b of myLiving) {
+          const at = angles.nearestAnchor(b.pos.x, b.pos.y);
+          if (at) holdingSet.add(at.id);
+        }
+        R.zones = classifyZones({
+          zones: [...R.graph.anchors.keys()],
+          holding: (z) => holdingSet.has(z),
+          enemyMass: (z) => massAt(z, R.graph.anchor(z)?.level || 'default'),
+          sweptTick: (z) => R.sweptAt[z],
+          gates: R.gates,
+          tick
+        });
+
+        // Law 1 acting on law 2 (19.7): a body that dies takes its unthrown
+        // utility with it, so the ceiling falls with the roster.
+        R.enemyUtility.bodiesLost(R.belief.aliveCount());
+        R.ledgers = readLedgers({
+          classification: R.zones,
+          // Ours exact, theirs BELIEVED and bounded by what their buy could
+          // contain minus every throw we heard and every detonation we saw
+          // (19.7, law 2). The asymmetry is the point: it is the position a
+          // real team is in, and it makes the late round a count rather than
+          // a guess.
+          utility: R.enemyUtility.ledger({
+            ours: myLiving.flatMap((b) => b.grenades)
+          }),
+          threat: threatLedger({
+            sites: R.siteZones.map((s) => s.id),
+            // Membership is fixed for the round, so the belief's per-particle
+            // test is a Set lookup rather than a distance query: countDist
+            // walks 256 particles x 5 slots per site per decision tick, and
+            // doing geometry inside that loop was the single most expensive
+            // thing the doctrine frame added.
+            countDist: (siteId) =>
+              R.belief.countDist(R.siteZones.find((s) => s.id === siteId).contains),
+            secondsToConvert: (siteId) => {
+              const site = R.siteZones.find((s) => s.id === siteId);
+              let best = Infinity;
+              for (const b of myLiving) {
+                best = Math.min(
+                  best,
+                  Math.hypot(site.world.x - b.pos.x, site.world.y - b.pos.y) / PLAN_SPEED
+                );
+              }
+              return best;
+            }
+          }),
+          timing: timingLedger({
+            contested: [...R.zones.entries()]
+              .filter(([, c]) => c === ZONE.UNKNOWN)
+              .slice(0, 8)
+              .map(([z]) => z),
+            ourEta: (z) => Math.min(...R.slots.map((s) => travelSeconds(s, z))),
+            theirEta: (z) => {
+              const m = massAt(z, R.graph.anchor(z)?.level || 'default');
+              return m > 0.05 ? 0 : m > 0.005 ? 4 : Infinity;
+            }
+          }),
+          tick,
+          liveTick: state.liveTick,
+          roundSeconds: ROUND_SECONDS
+        });
+
+        // ---- C3. threat, budget, layers, protocols, comms (19.3–19.4, 20.x)
+
+        R.comms.deliver(tick);
+
+        const teamClock = Math.max(0, engine.clock());
+        const inTarget = (anchor) => {
+          const a = R.graph.anchor(anchor);
+          return a
+            ? Math.hypot(a.world.x - R.target.world.x, a.world.y - R.target.world.y) < 1200
+            : false;
+        };
+        const inOther = (anchor) => {
+          if (!R.other) return false;
+          const a = R.graph.anchor(anchor);
+          return a
+            ? Math.hypot(a.world.x - R.other.world.x, a.world.y - R.other.world.y) < 1200
+            : false;
+        };
+        const split = R.belief.splitEntropy([
+          { name: 'target', test: inTarget },
+          { name: 'other', test: inOther }
+        ]);
+        // Split entropy is bits of ignorance; VOI here is a scalar stand-in so
+        // we do not price every option twice per tick. `[calibrate]`
+        R.budget = budgetDecision({
+          voi: Math.max(0, split) * 0.02,
+          resolvable: 0.35,
+          dPRWPerSecond: teamClock < 40 ? 0.02 : 0.004,
+          layoutCount: 8,
+          cap: HYPOTHESIS_COUNT,
+          gatherAvailable: true
+        });
+        if (R.budget.decision === 'widen') {
+          R.vizSpend = Math.min(1, (R.vizSpend || 0) + 1 / 32);
+        }
+
+        const threatSpots = [];
+        const seenSpot = new Set();
+        const pushSpot = (id) => {
+          if (!id || seenSpot.has(id) || threatSpots.length >= 8) return;
+          const a = R.graph.anchor(id);
+          if (!a) return;
+          seenSpot.add(id);
+          threatSpots.push({ x: a.world.x, y: a.world.y, level: a.level, anchor: id });
+        };
+        for (const b of myLiving) {
+          const at = angles.nearestAnchor(b.pos.x, b.pos.y);
+          if (at) pushSpot(at.id);
+        }
+        pushSpot(R.target.id);
+        if (R.other) pushSpot(R.other.id);
+        R.threat = threatSpots.length
+          ? threatField({
+              belief: R.belief,
+              catalogue: angles,
+              spots: threatSpots,
+              cap: 8
+            })
+          : null;
+
+        const ourNades = myLiving.flatMap((b) => b.grenades);
+        const layerUtil = {
+          smoke: ourNades.filter((g) => g === 'smokegrenade').length,
+          flash: ourNades.filter((g) => g === 'flashbang').length,
+          molotov: ourNades.filter((g) => g === 'molotov' || g === 'incgrenade').length
+        };
+        const front = frontier(R.zones, R.gates);
+        const layerCandidates = legalLayerActions({
+          classification: R.zones,
+          frontier: front,
+          utility: layerUtil,
+          alive: myLiving.length,
+          gates: R.gates
+        });
+        const heuristic = pickLayerAction(layerCandidates, { clock: teamClock, utility: layerUtil });
+        const ourEquip =
+          myLiving.reduce((s, b) => s + (weaponInfo(b.weapon).price || 0), 0) /
+          Math.max(1, myLiving.length);
+        const econNow = econBucket(ourEquip);
+        const sit = situationKey({
+          map: engine.state.map,
+          side: R.side,
+          phase: state.bomb.planted ? 'after-plant' : 'early',
+          secondsLeft: teamClock,
+          ours: myLiving.length,
+          theirs: R.belief.aliveCount(),
+          econUs: econNow,
+          shape: shapeFromCore(R.ownCore),
+          read: shapeFromCore(R.enemyCore)
+        });
+        const idOf = (c) => libraryLabel(c);
+        let layered = heuristic;
+        if (memoryEnabled && matchRng && layerCandidates.length) {
+          layered = strategy.select(layerCandidates, {
+            key: sit.hash,
+            policyPick: heuristic,
+            rng: matchRng,
+            idOf,
+            side: R.side,
+            econ: econNow
+          });
+        } else if (matchRng && layerCandidates.length) {
+          layered = mixPolicyExp3(layerCandidates, {
+            policyPick: heuristic,
+            bandit,
+            key: banditKey({ side: R.side, econ: econNow }),
+            rng: matchRng,
+            idOf
+          });
+        }
+        if (searchEnabled && layerCandidates.length) {
+          const searched = decisionSearch({
+            candidates: layerCandidates,
+            policyPick: layered,
+            evaluate: (c) => (PROTOCOL_BODIES[c.protocol] || 1) * 0.05 - (R.belief.massAt?.(c.convert) || 0),
+            sampleLayouts: () => [{}],
+            K: 8,
+            maxMs: 4,
+            rng: matchRng,
+            enabled: true,
+            idOf
+          });
+          layered = searched.pick || layered;
+          expert.push(searched.disagreement);
+        }
+        R.layerAction = layered;
+        R.situation = sit;
+
+        const commandedKeyword = keyword != null && keyword !== 'default';
+        const manAdv = myLiving.length - R.belief.aliveCount();
+        if (!commandedKeyword && manAdv >= 2 && R.keyword.id === 'default') {
+          R.keyword = keywordPreset('vp');
+        }
+
+        const protoTarget = R.layerAction?.convert ?? front[0] ?? R.target.id;
+        const protoCtx = {
+          side: R.side,
+          clockSeconds: teamClock,
+          ours: myLiving.length,
+          theirs: R.belief.aliveCount(),
+          available: myLiving.length,
+          targetZone: protoTarget,
+          targetZoneClass: R.zones.get(protoTarget) ?? null,
+          zoneClass: R.zones.get(protoTarget) ?? null,
+          utilityInHand: layerUtil.smoke + layerUtil.molotov + layerUtil.flash > 0,
+          utilityLeft: layerUtil.smoke + layerUtil.molotov + layerUtil.flash,
+          abort: R.layerAction?.abort ?? null
+        };
+        const protoId = LAYER_PROTOCOL[R.layerAction?.protocol];
+        if (
+          protoId &&
+          R.protocol.mayReplace(tick) &&
+          R.protocol.active?.id !== protoId &&
+          protocolInitiationSet(protoCtx).has(protoId)
+        ) {
+          R.protocol.begin(tick, protoId, {
+            params: {
+              target: protoTarget,
+              site: R.target.id,
+              spot: protoTarget,
+              abort: R.layerAction.abort
+            },
+            roster: R.shape.posts.map((p) => ({
+              slot: p.slot,
+              role: p.role,
+              focus: p.focus,
+              alive: bodies[p.slot]?.alive
+            }))
+          });
+        }
+        const protoStep = R.protocol.step(tick, protoCtx);
+        R.protocolBySlot = new Map();
+        for (const a of protoStep.assignments) R.protocolBySlot.set(a.slot, a);
 
         // ---- D. decide, per living bot ----------------------------------
 
@@ -605,8 +1182,10 @@ export function desireController({
             for (const n of R.neighbours(home.home)) {
               const a = R.graph.anchor(n);
               const m = a ? massAt(n, a.level) : 0;
-              if (m > preMass) {
-                preMass = m;
+              const row = R.threat?.rows.find((r) => r.anchor === n);
+              const score = m + (row ? (row.byClass[SNIPER_CLASS] || 0) * 0.5 : 0);
+              if (score > preMass) {
+                preMass = score;
                 preAim = n;
               }
             }
@@ -673,6 +1252,29 @@ export function desireController({
                 id: 'take_space',
                 params: { target: run.anchor, gait: 'walk' },
                 prior: 0.45 + Math.max(0, Math.min(0.2, run.opportunity / 4))
+              });
+            }
+          }
+          if (
+            R.opportunity &&
+            tick - R.opportunity.tick < ticksFor(8) &&
+            R.side === 'T' &&
+            !state.bomb.planted &&
+            !bombMasked
+          ) {
+            const dest = nearestAnchors(
+              R.graph,
+              R.opportunity.at.x,
+              R.opportunity.at.y,
+              b.level,
+              1
+            )[0];
+            if (dest) {
+              candidates.push({
+                id: 'take_space',
+                params: { target: dest, gait: 'run' },
+                prior: 0.7,
+                motive: R.opportunity.reason
               });
             }
           }
@@ -745,22 +1347,110 @@ export function desireController({
           }
 
           const hurtMate = myLiving.find((m) => m.slot !== s && m.focus !== null && m.health < 50);
+          const myPost = homeOf(R.shape, s);
+          const packAtTarget = myLiving.filter((m) => {
+            const d = Math.hypot(m.pos.x - R.target.world.x, m.pos.y - R.target.world.y);
+            return d < 1400;
+          }).length;
           const trigCtx = {
             clockPastCommitWindow: R.side === 'T' && !state.bomb.planted && elapsed > 30,
-            matePfw: hurtMate ? 0.3 : null
+            matePfw: hurtMate ? 0.3 : null,
+            iAmLurk: myPost?.role === 'lurk',
+            packContactFar: Boolean(R.lastSeenTick) && packAtTarget >= 2 && myPost?.role === 'lurk',
+            packCommitted: R.side === 'T' && elapsed > 20 && packAtTarget >= 2,
+            clockUnderLurk: secondsLeft < 55,
+            refragWindow: refragArmed({ tick, deathTick: R.lastOurDeathTick })
           };
+          const syncGo = reached(R.sync, {
+            secondsLeft,
+            percepts: engine.sounds.items.slice(-8)
+          });
           for (const t of firedTriggers(trigCtx, {
             anticipation: R.profiles[s].anticipation ?? 0.5,
             rng: R.rng
           })) {
             for (const armId of t.arms) {
               if (armId === 'execute_entry') {
+                const mate = myLiving.find((m) => m.slot !== s);
+                const sac = sacrificeIsPriced({
+                  tradeCovered: myLiving.length >= 2,
+                  partnerArrivalSeconds: mate
+                    ? Math.hypot(mate.pos.x - b.pos.x, mate.pos.y - b.pos.y) / PLAN_SPEED
+                    : Infinity
+                });
+                if (sac.donation) continue;
+                if (!syncGo.go && !syncGo.late && secondsLeft > 25) continue;
+                const partition = entryPartition(R, angles, myLiving, tick);
+                const mine = partition ? angleFor(partition, s) : null;
+                if (R.executeTick !== tick) {
+                  R.executeTick = tick;
+                  R.executeBySlot = null;
+                  const tpl = templateFor(R.executes, { site: R.target.id });
+                  if (tpl) {
+                    const nades = myLiving.flatMap((m) => m.grenades || []);
+                    const ladder = repairLadder({
+                      template: tpl,
+                      availableMeans: new Set(nades),
+                      availableNades: nades,
+                      bodies: myLiving
+                    });
+                    R.executeLadder = ladder;
+                    if (ladder.steps?.length) {
+                      const asg = assignExecute({
+                        steps: ladder.steps,
+                        bodies: myLiving.map((m) => ({
+                          slot: m.slot,
+                          x: m.pos.x,
+                          y: m.pos.y,
+                          grenades: m.grenades || [],
+                          role: homeOf(R.shape, m.slot)?.role,
+                          deathPermission: true
+                        }))
+                      });
+                      R.executeBySlot = new Map();
+                      for (const p of asg.pairs) {
+                        const slot = p.row.slot;
+                        const effect = p.col.effect;
+                        R.executeBySlot.set(slot, {
+                          optionId: effect === 'grantExposure' || effect === 'denySightline'
+                            ? 'utility_setup'
+                            : 'execute_entry',
+                          params: { site: R.target.id, step: p.col.id },
+                          motive: asg.motive
+                        });
+                      }
+                    }
+                  }
+                }
                 candidates.push({
                   id: 'execute_entry',
-                  params: { site: R.target.id, target: R.target.id },
+                  params: {
+                    site: R.target.id,
+                    target: R.target.id,
+                    preAim: mine?.anchor ?? null
+                  },
                   trigger: { id: t.id, motive: t.motive },
-                  prior: 0.6
+                  prior: 0.6,
+                  motive: partition
+                    ? `entry: ${mine ? `mine is ${mine.label}` : 'no angle assigned'}, ${partitionMotive(partition)}`
+                    : undefined
                 });
+                if (
+                  willSay(LEVEL.REQUEST, R.profiles[s], R.rng) &&
+                  R.comms.requestsLeft(s) > 0
+                ) {
+                  R.comms.send(tick, {
+                    level: LEVEL.REQUEST,
+                    from: s,
+                    request: {
+                      type: 'request',
+                      what: 'flash',
+                      where: R.target.id,
+                      by: 2,
+                      worth: 0.05
+                    }
+                  });
+                }
               } else if (armId === 'trade' && hurtMate) {
                 const mateAnchor = angles.nearestAnchor(hurtMate.pos.x, hurtMate.pos.y);
                 if (mateAnchor) {
@@ -771,8 +1461,70 @@ export function desireController({
                     prior: 0.6
                   });
                 }
+              } else if (armId === 'lurk') {
+                const lurkSpot = myPost?.home ?? myAnchor?.id;
+                if (lurkSpot) {
+                  candidates.push({
+                    id: 'lurk',
+                    params: { spot: lurkSpot },
+                    trigger: { id: t.id, motive: t.motive },
+                    prior: 0.62
+                  });
+                }
+              } else if (armId === 'refrag' && R.lastOurDeathPos) {
+                const spot = nearestAnchors(
+                  R.graph,
+                  R.lastOurDeathPos.x,
+                  R.lastOurDeathPos.y,
+                  R.lastOurDeathPos.level,
+                  1
+                )[0];
+                if (spot) {
+                  candidates.push({
+                    id: 'refrag',
+                    params: { spot },
+                    trigger: { id: t.id, motive: t.motive },
+                    prior: 0.65
+                  });
+                }
+              } else if (armId === 'take_space' && t.id === 'lurk_arm') {
+                const dest = myPost?.home ?? myAnchor?.id;
+                if (dest) {
+                  candidates.push({
+                    id: 'take_space',
+                    params: { target: dest, gait: 'walk' },
+                    trigger: { id: t.id, motive: t.motive },
+                    prior: 0.55
+                  });
+                }
               }
             }
+          }
+
+          const assigned = R.protocolBySlot?.get(s) || R.executeBySlot?.get(s);
+          if (assigned?.optionId && OPTION_DEFS[assigned.optionId]) {
+            candidates.push({
+              id: assigned.optionId,
+              params: assigned.params || {},
+              prior: 0.78,
+              motive: assigned.motive || 'protocol assignment'
+            });
+          }
+
+          for (const msg of R.comms.openRequests(s)) {
+            if (msg.request?.what !== 'flash' || !b.grenades.includes('flashbang')) continue;
+            candidates.push({
+              id: 'utility_setup',
+              params: {
+                spot: myAnchor?.id ?? msg.request.where,
+                utilityType: 'flashbang',
+                at: msg.request.where
+              },
+              prior: 0.68,
+              motive: `serving flash at ${msg.request.where}`
+            });
+            R.comms.serve(msg.id);
+            break;
           }
 
           if (b.hasBomb && !state.bomb.planted) {
@@ -855,12 +1607,75 @@ export function desireController({
           if (obs) decideSeat += 1;
           if (policy && obs) applyProposals(candidates, policy.probs(obs, seatKey));
 
-          // Price through foresight and let the arbiter want something.
+          const clutch = clutchMask({
+            side: R.side,
+            alive: myLiving.length,
+            enemiesAlive: R.belief.aliveCount(),
+            bombDown: state.bomb.planted,
+            hasBomb: b.hasBomb,
+            hasKit: Boolean(b.hasKit),
+            secondsLeft,
+            bombSecondsLeft: round.bombSecondsLeft,
+            defusing: Boolean(b.channel),
+            secondsToObjective: travelSeconds(s, R.target.id),
+            posture:
+              R.keyword.id === 'vp' ? 'vp' : R.keyword.id === 'liquid' ? 'liquid' : null,
+            syncPeers: myLiving.filter(
+              (m) =>
+                m.slot !== s &&
+                Math.hypot(m.pos.x - b.pos.x, m.pos.y - b.pos.y) < 400
+            ).length
+          });
+          let legal = maskInitiation(initiationSet(engine, s), clutch);
+          legal = applyKeyword(legal, R.keyword, {
+            slot: s,
+            hasTradeCover: myLiving.length >= 2
+          });
+          const myContract = (R.contracts || []).find((c) => c.slot === s);
+          if (myContract) {
+            const paramsById = {};
+            for (const c of candidates) paramsById[c.id] = c.params;
+            legal = maskByContract(legal, myContract, { paramsById, clock: secondsLeft });
+          }
+          if (R.owners && myAnchor) {
+            const role = roleInZone({ assignment: R.owners, slot: s, zone: myAnchor.id });
+            if (role.status === 'guest') {
+              for (const id of OPTION_IDS) {
+                if (OPTION_DEFS[id].family === 'peek') legal.delete(id);
+              }
+            }
+          }
+          if (
+            R.side === 'T' &&
+            b.hasBomb &&
+            !state.bomb.planted &&
+            myAnchor &&
+            bombIsSafe(R.zones, myAnchor.id) &&
+            !LAYER_PROTOCOL[R.layerAction?.protocol]
+          ) {
+            for (const id of LEAVES_SAFE) legal.delete(id);
+          }
+          if (assigned?.optionId) legal.add(assigned.optionId);
+
+          const layoutCount =
+            R.budget?.decision === 'widen'
+              ? Math.min(HYPOTHESIS_COUNT, R.budget.budget || HYPOTHESIS_COUNT)
+              : 4;
+
+          const q = riskQuantile({
+            pWin: 0.5,
+            manDelta: myLiving.length - R.belief.aliveCount(),
+            baseline: R.profiles[s].riskQuantile ?? 0.5,
+            audacity: R.audacity,
+            posture:
+              R.keyword.id === 'vp' ? 'vp' : R.keyword.id === 'liquid' ? 'liquid' : null,
+            role: homeOf(R.shape, s)?.role
+          });
           const decision = R.arbiters[s].decide({
             tick,
             runner,
             candidates,
-            initiation: initiationSet(engine, s),
+            initiation: legal,
             price: (c) => {
               const spotId = c.params.spot ?? c.params.target ?? c.params.site ?? myAnchor?.id;
               const a = spotId ? R.graph.anchor(spotId) : null;
@@ -897,7 +1712,8 @@ export function desireController({
                 round,
                 contacts: R.contacts,
                 rng: R.rng,
-                layoutCount: 8
+                layoutCount,
+                quantile: q
               });
             }
           });
@@ -932,6 +1748,28 @@ export function desireController({
         }
 
         R.translator.step();
+      },
+
+      roundEnd({ outcome } = {}) {
+        if (!R) return;
+        const won = outcome?.winner === R.side;
+        const call = R.layerAction ? libraryLabel(R.layerAction) : null;
+        if (memoryEnabled && R.situation) {
+          strategy.last = {
+            key: R.situation.hash,
+            call,
+            banditKey: banditKey({ side: R.side, econ: 'full' })
+          };
+          strategy.observeRound({ won, attrib: 'call' });
+        } else if (call) {
+          bandit.reward(banditKey({ side: R.side, econ: 'full' }), call, won ? 1 : 0);
+        }
+        tracker.observe({
+          site: R.target?.id,
+          firstContactSeconds: 20,
+          lurkSeen: (R.ownCore?.lurkers?.length || 0) > 0,
+          buy: 'full'
+        });
       }
     };
   };

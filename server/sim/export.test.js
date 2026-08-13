@@ -70,7 +70,8 @@ const io = {
 
 {
   const list = await listExportableDemos(io);
-  assert(list.length === 2, 'every record is listed');
+  assert(list.find((d) => d.id === 'abc'), 'every record is listed');
+  assert(list.find((d) => d.id === 'ghost'), 'including a record whose files are gone');
 
   const abc = list.find((d) => d.id === 'abc');
   assert(abc.map === 'INF', 'with its map');
@@ -114,6 +115,57 @@ const io = {
   assert((await packageDemo('nope', io)) === null, 'an unknown demo is null, not a throw');
   assert((await packageDemo('../../etc/passwd', io)) === null, 'a hostile id is sanitized to nothing');
   assert((await packageDemo('', io)) === null, 'and an empty one too');
+}
+
+// ---- empty json listing, rounds still on disk --------------------------------
+//
+// Production showed Database with demos and Export with none when listDemos
+// pointed at an empty SHARED_LIBRARY folder while the round files lived
+// next door. A selection UI that cannot see files cannot ship a sample.
+
+{
+  const orphanIo = {
+    listDemos: async () => [],
+    demosDir: () => '/demos',
+    roundsDir: () => '/rounds',
+    readFile: io.readFile,
+    listFiles: io.listFiles,
+    stat: io.stat
+  };
+  const list = await listExportableDemos(orphanIo);
+  const abc = list.find((d) => d.id === 'abc');
+  assert(abc, 'a demo with only round files is still listed');
+  assert(abc.files === 6, 'and still owns those files');
+  const pkg = await packageDemo('abc', orphanIo);
+  assert(pkg, 'and still packages, with a synthesized manifest');
+}
+
+{
+  const twoLibs = {
+    listLibraries: async () => [
+      {
+        user: 'local',
+        listDemos: async () => [{ id: 'aaa', map: 'INF', filename: 'a.dem' }],
+        demosDir: () => '/empty-demos',
+        roundsDir: () => '/empty-rounds'
+      },
+      {
+        user: 'uuid',
+        listDemos: async () => io.listDemos(),
+        demosDir: () => '/demos',
+        roundsDir: () => '/rounds'
+      }
+    ],
+    readFile: io.readFile,
+    listFiles: async (dir) => {
+      if (String(dir).includes('empty')) return [];
+      return io.listFiles(dir);
+    },
+    stat: io.stat
+  };
+  const list = await listExportableDemos(twoLibs);
+  assert(list.some((d) => d.id === 'aaa'), 'the shared-library record is listed');
+  assert(list.some((d) => d.id === 'abc'), 'and so is the sibling library');
 }
 
 console.log('sim export: ok');

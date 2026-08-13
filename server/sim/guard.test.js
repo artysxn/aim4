@@ -173,7 +173,8 @@ assert(new Set(refusals).size === 1, 'every 404 body is byte-identical');
     // else here: what this host trains and how well it scores are strategy.
     '/api/sim/jobs',
     '/api/sim/jobs/some-job',
-    '/api/sim/models'
+    '/api/sim/models',
+    '/api/sim/experience'
   ];
   const anonBodies = [];
   for (const pathq of surface) {
@@ -197,6 +198,15 @@ assert(new Set(refusals).size === 1, 'every 404 body is byte-identical');
   {
     const { res } = await call('/api/sim/matches', asAdmin);
     assert(res.status === 200 && Array.isArray(JSON.parse(res.body).matches), 'matches list answers');
+  }
+  {
+    const { res } = await call('/api/sim/models', asAdmin);
+    assert(res.status === 200, 'the admin can list models');
+  }
+  {
+    const { res } = await call('/api/sim/experience', asAdmin);
+    assert(res.status === 200, 'the admin can read experience rows');
+    assert(Array.isArray(JSON.parse(res.body).rows), 'as an array');
   }
   {
     const { res } = await call('/api/sim/run', asAdmin);

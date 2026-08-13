@@ -540,8 +540,18 @@ export class NavGraph {
     return { attached, skipped, empty };
   }
 
-  /** @returns {{cx: number, cy: number, cells: number[]}|null} */
+  /**
+   * @returns {{cx: number, cy: number, cells: number[]}|null}
+   *
+   * The map's keys are already canonical, and almost every caller passes an id
+   * that came out of the graph, so the common case is a plain lookup. Slugging
+   * first made two regexes the price of every anchor read, which the doctrine
+   * frame and the space field turn into six figures of regex per round.
+   * Normalization stays for callers passing a display name.
+   */
   anchor(id) {
+    const direct = this.anchors.get(id);
+    if (direct) return direct;
     return this.anchors.get(anchorId(id)) || null;
   }
 
