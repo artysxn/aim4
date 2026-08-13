@@ -295,7 +295,7 @@ built.
 | O1 | Evolution generations are startable and steerable from the /sim panel, not only from the PC | 9.2, 9.2b |
 | O2 | Round simulations run from the panel too | 9.2b, 11 |
 | O3 | Both pull from the dataset to tighten improvement and inform decisions | 9.2c |
-| O4 | 2,500+ demos: reading all of it is not an option | 9.2c |
+| O4 | 3,500+ demos: reading all of it is not an option | 9.2c, 9.3b |
 | O5 | Stacked maps work from per-height data that already exists | 4.2, 14.6 |
 
 Three corrections:
@@ -308,10 +308,11 @@ Three corrections:
    real constraint.
 2. **The plan assumed the library could be read.** Nothing said so outright,
    and several features (flow priors, timing tables, baselines, BC extraction)
-   quietly implied a full pass over thousands of demos. At 2,500 demos that is
+   quietly implied a full pass over thousands of demos. At 3,500 demos that is
    minutes of CPU on the box that is also parsing. 9.2c makes the rule explicit:
    the sim reads aggregates and individual rounds by id, never the corpus, and
-   the working set stops growing with the library.
+   the working set stops growing with the library. Knowledge is built from the
+   whole set first (9.3b); experience stays off until that is done.
 3. **Nuke was overstated as a hazard.** `lowerZ`, `isLowerLevel`, per-level
    painted positions, and a second radar all already exist. A body's floor is a
    property of its z, one comparison per tick; the bake produces a lattice per
@@ -2632,9 +2633,9 @@ those, a run started from a browser is a run nobody can find again.
 Jobs are `AIM4_REPLAY_DIR/sim/jobs/<id>/`, which keeps them under the same
 directory 12.1 already isolates from everything users can see.
 
-### 9.2c Reading a 2,500-demo library without reading it
+### 9.2c Reading a 3,500-demo library without reading it
 
-The library is over 2,500 demos and growing. Nothing in this plan may ever
+The library is about 3,500 demos and growing. Nothing in this plan may ever
 scan it. Not at decision time, not at round start, not at the beginning of a
 generation, and not "just once" at boot, because a full pass over parsed ticks
 is minutes of CPU and gigabytes of memory and it will be triggered by something
@@ -2685,9 +2686,10 @@ whatever is convenient.
 
 **What this buys, and it is the point of the whole section:** the sim's working
 set is a few hundred megabytes of tables regardless of whether the library holds
-2,500 demos or 25,000. Growth makes the aggregates better and does not make
+3,500 demos or 25,000. Growth makes the aggregates better and does not make
 anything slower, which is the only relationship with a growing dataset worth
-having.
+having. How those aggregates become a Banana player, and what the network
+is allowed to learn from the 3,500, is 9.3b.
 
 ### 9.3 Behavior cloning (generation 0)
 
@@ -2728,6 +2730,133 @@ Player-mimic embedding (16-d, keyed by SteamID64) trained jointly (10.3).
 Metrics: per-head top-1/top-3, calibration, and a behavioral eval: BC bots run 500
 no-enemy rounds; the round-library matcher must tag their executed calls correctly
 ≥ 70% when commanded (10.1 validator).
+
+The pipeline stub that ships today (pose-only extract, 68-d obs, one softmax
+over options, numpy MLP) is generation-0 *plumbing*, not generation-0 *play*.
+How the 3,500-demo library actually trains a Banana player, and what the
+network becomes, is 9.3b.
+
+### 9.3b Dataset-first knowledge, then experience
+
+18.1 splits competence (weights) from experience (the situation index). That
+split is load-bearing, and the order was implied rather than stated: experience
+is a memory of *this match*, so it is worthless until the bot already knows
+what Banana looks like on Inferno. **Knowledge is built from the whole library
+first. The experience index stays off until G0 from 9.3b has passed its
+behavioral eval.** Switching it on earlier just writes noise into the index.
+
+The unit of knowledge is not "a demo" and not "a player". It is
+`(map, side, contract position)`: Inferno T Banana, Inferno CT Banana,
+Mirage T Mid, and so on. Contracts are already keyed by map position (decision
+31). A Banana bot is trained on every round in the 3,500 where a T occupied
+that contract, not on a handful of famous demos and not on a global soup where
+mid players drown him.
+
+#### What the 3,500 actually buy
+
+Naive 8 Hz × 10 players × every round is ~700 M correlated ticks. Adjacent
+ticks are almost the same sample. The useful set is smaller and denser:
+
+| Slice | How it is drawn | What it is for |
+|---|---|---|
+| **Event-aligned** | Utility throw, first contact, death, plant, defuse, rotate start, flash pop | Reactions. The thing that just happened is the label's cause |
+| **Stride** | 4 Hz on the rest of the round, not 8 Hz | Movement, spacing, default holds |
+| **Role-sliced** | Index filter `(map, side, contract)`, then every matching round id | Banana sees all Banana, Apps sees all Apps |
+| **Match holdout** | Train/val split by *match*, never by round | 9.3's leakage rule, unchanged |
+
+A Banana T on Inferno, at ~15 to 20% Inferno share of 3,500 demos, is on the
+order of 10k to 15k round-tracks. That is enough for a role embedding and for
+timing/spacing tables. It is not enough for a separate 2 M-param expert. So:
+**one shared torso, conditioned on map + side + contract. Never 70 tiny nets.**
+Batches are stratified so Banana is not 2% of a mid-heavy minibatch.
+
+#### Knowledge tables, not memorized demos
+
+9.23 already says most skill is fitted, mined, or baked. The 3,500 update
+those tables. The network does not have to rediscover that Banana T arrives
+around 1:42.
+
+Per `(map, side, contract)`, baked incrementally (9.2c) from every matching
+round:
+
+| Table | Signal | Example (Inferno T Banana) |
+|---|---|---|
+| **Timing** | First-arrival and time-to-contact distributions vs clock and econ | When Banana is occupied, when Apps is peeked, when the door fight starts |
+| **Spacing** | Distances and sectors to each other living contract, geodesic | Banana vs mid, vs Apps, vs boiler: the 400 u trade shape, not a blob |
+| **Co-occupancy** | Who is alive in which zone given this contract is held | Banana held with mid alive vs Banana as a 1-man lurk |
+| **Utility** | Lineup cluster, throw clock, detonation vs first contact | Flash for Apps, molly for car, smoke for CT spawn, and when |
+| **Mini-plays** | Option n-grams (3 to 8 s chains) with their interrupt | Hold, flash, peek, fall off; or default, hear, lurk cut |
+| **Reactions** | Next option given a percept class in the last 1.5 s | CT peeked, teammate died, molly landed, AWP shot |
+
+These tables are the knowledge tracker and the desire prior. They are what a
+Banana player *knows about Banana* before any gradient step. BC then learns
+the residual: given this knowledge, what did the human actually do.
+
+#### Labels the current extract does not have
+
+`sim-extract-demos.mjs` rebuilds pose, zeros belief, and labels one option
+from the feet-only segmenter. That is a smoke test. Generation 0 from the
+3,500 needs 9.3's full heads, plus three that 9.3 listed as implied:
+
+| Head | Label | Why |
+|---|---|---|
+| Move / option | 9.3 path-to-anchor, already | Where |
+| Combat | Shots, cone, pre-aim vs last known | How they take the fight |
+| Utility | Grenade event matched to a mined lineup | What they throw, not that they walked |
+| Spacing target | The teammate-relative cell they held for the next 2 s | "Play off mid" is a label, not a hope |
+| Reaction | Option at t+0.5 s after a percept | Mini-plays live here |
+| Next n-gram | The 3-option chain they ran | Sequence, not a single softmax |
+
+Belief in the observation is the knowledge tracker replayed on that round
+(9.3 step 2), never zeros, never god-view. A Banana player who never saw the
+CT is not trained as if he did.
+
+#### The network, given 3,500 demos
+
+The numpy 64-hidden MLP is the pipeline. It cannot express a flash-then-peek.
+The architecture that matches this data, and still exports to `policy.js`:
+
+1. **Shared torso, ~2 M params.** Two dense layers, width 512, tanh. Same
+   export as today. Do not grow this because 3,500 feels big; the data is
+   correlated CS, not ImageNet.
+2. **Conditioners, concatenated, trained jointly.** Map embedding (8-d), side
+   (±1 already in obs), contract-position embedding (16-d, keyed by the 6.19
+   table), player-mimic embedding (16-d, 10.3). Banana is a row in the
+   contract table, not a separate checkpoint.
+3. **Multi-head BC** (9.3), with utility and reaction weighted higher than
+   hold. Inverse-frequency weights stay, cap 8.
+4. **A short temporal encoder, and this is the one real upgrade.** Last 12
+   steps at 4 Hz (3 seconds of history) through a 2-layer causal transformer,
+   d_model 128, then the MLP heads. Mini-plays and reactions are sequences.
+   Independent 8 Hz cross-entropy cannot learn "wait for the flash, then peek".
+   Inference unrolls the same 12-step window from the knowledge tracker; the
+   JS forward pass stays a loop plus a tiny attention, not a new runtime.
+5. **Auxiliary heads, training-only, dropped at export** (9.14 plus two):
+   enemy position, time to contact, next utility type, geodesic to trade
+   partner. They force the torso to use spacing and timing instead of ignoring
+   them.
+6. **PyTorch on the 4090.** Numpy cannot hold 20 to 80 M samples, a temporal
+   encoder, and aux heads. The export is still JSON weights. The product still
+   has zero Python.
+
+What is explicitly not the upgrade: pixels, a 12-layer transformer, one expert
+per contract, or RL before this BC is honest. 9.23 still holds. RL decides
+when to peek. The 3,500 teach what Banana *is*.
+
+#### Order, now that it is stated
+
+| Stage | On | Off |
+|---|---|---|
+| **K0** | Incremental aggregates from all 3,500, by `(map, side, contract)` | Experience index, RL |
+| **K1** | Knowledge-tracker BC, role-conditioned, temporal encoder, aux heads | Experience index, RL |
+| **K2** | Behavioral eval: Banana occupancy, spacing, utility clock, reaction after contact, vs the library band | Experience index |
+| **G1+** | MAPPO as 9.4, KL to this BC | Experience index until the G0 behavioral eval is green |
+| **E** | Experience index and Strategy AI (18), once competence is real | Nothing 18 already forbids |
+
+A bot that has never seen 3,500 Banana rounds has nothing useful to write
+into an experience key. That is why E is last, and why it was always last
+(9.24 G30+), and why this section exists: so K0 and K1 are not skipped in
+favor of turning the index on because it is already coded.
 
 ### 9.4 Reinforcement learning (generations 1+)
 
@@ -2816,6 +2945,7 @@ r_t = R_win(terminal ±1)
 | Stage | Content | Gate to next |
 |---|---|---|
 | C0 | Movement only, no enemies: follow real-team tapes and execute library calls | ≥ 90% call-validator pass; mimic follow error vs frozen world meets 10.4 (< 60 u median / 20 s) |
+| C0k | Knowledge from the 3,500: aggregates + role-conditioned BC (9.3b). Experience off | Library-band occupancy, spacing, utility clock, and post-contact reaction per `(map, side, contract)` |
 | C1 | 1v1 arena duels, all weapon classes | aim gates (8.3) green |
 | C2 | 2v2 site micro (retakes, afterplants, trades) | trade rate and untraded-death rate within pro bands |
 | C3 | 5v5 single rounds, fixed full-buy economy | > 55% vs BC anchor both sides |
@@ -3226,11 +3356,12 @@ all.** It is fitted, mined, or baked, and only decision quality is left for RL.
 | Aim and recoil | The calibrated aim motor (8), fitted to real pro `aimMetrics` and capped at the pro envelope | RL. A policy that has to discover mouse control burns its entire sample budget on it |
 | Movement quality | Source movement in the translator plus BC on real player tracks | RL |
 | Pathing and angle clearing order | Baked nav plus CS-style spot analysis and spot encounters (4.2, 17.1) | RL |
-| Utility execution | Mined lineups: the throw is exact by construction, because it was thrown by a pro | RL, physics |
-| Utility selection and timing | Desire pricing plus RL | Mining, which knows the throw but not the moment |
 | Angle and duel selection | Foresight pricing (6.7) plus RL | Hand rules |
-| Timing and information edges | Particle filter, exposure, earliest-occupy tables | RL |
-| Trades and spacing | Contracts, cores, shape, plus the trade shaping term with team spirit annealing | Hope |
+| Timing and information edges | Particle filter, exposure, earliest-occupy tables, plus the 9.3b timing table from all matching rounds | RL |
+| Trades and spacing | Contracts, cores, shape, the 9.3b spacing table, plus the trade shaping term with team spirit annealing | Hope |
+| Mini-plays and reactions | Temporal BC on event-aligned shards (9.3b), then RL for which play to pick | Independent 8 Hz CE |
+| Utility execution | Mined lineups: the throw is exact by construction, because it was thrown by a pro | RL, physics |
+| Utility selection and timing | Desire pricing plus the 9.3b utility table, then RL | Mining, which knows the throw but not the moment |
 | Round calls | Playstyle RL over library `z` | Scripts, past generation 0 |
 | Adaptation inside a match | Opponent model and EXP3 (6.10) | RL |
 | Adaptation across matches | The experience index and Strategy AI (18) | RL |
@@ -3244,7 +3375,7 @@ pixels" is not, and is not being attempted.
 
 | Generations | Stage | What is being bought | Expected tier verdict |
 |---|---|---|---|
-| G0 | BC on the library | Human-shaped movement, buys, and executes. Macro-naive, loses to its own scripted planner | Below tier 2 on quality, near the pro band on mechanics only |
+| G0 | BC on the 3,500, role-conditioned, knowledge tracker honest (9.3b) | Human-shaped movement, spacing, utility clock, and reactions per contract. Macro-naive, loses to its own scripted planner. Experience off | Below tier 2 on quality, near the pro band on mechanics and on Banana-like defaults |
 | G1 to G3 | C1, C1b, C2 | Duel selection, peek timing, trade micro | Duel-selection axis reaches tier 2 |
 | G4 to G8 | C2b, C3 | Information game, 5v5 shape, contract compliance | Teamwork and information axes reach tier 2 |
 | G9 to G15 | C4 | Economy, full matches, save and force discipline | Macro axis stops being the worst axis |
@@ -4457,6 +4588,19 @@ Resolved in the seventh pass (operations):
 72. **Stacked maps need no new architecture** (4.2, 14.6). One lattice per
     level, a body's floor from its z, and real floor transitions mined from demo
     z crossings rather than painted.
+73. **Knowledge before experience** (9.3b, 18.1). The 3,500-demo library builds
+    competence: aggregates and role-conditioned BC, per `(map, side, contract)`.
+    The experience index stays off until that G0 passes its behavioral eval.
+    Banana on Inferno is trained on every Banana track in the set, not on a
+    global soup and not on a separate expert net.
+74. **The one network upgrade that earns its keep is short history** (9.3b).
+    A 12-step causal encoder over 3 s of knowledge-tracker obs, plus multi-head
+    BC and aux heads. Not pixels, not a 12-layer transformer, not one checkpoint
+    per contract. Mini-plays and reactions are sequences; independent 8 Hz
+    cross-entropy cannot learn them.
+75. **The numpy MLP is plumbing** (9.3, 9.3b). Generation 0 play comes from
+    PyTorch on the 4090, exported as JSON, after the extract is honest
+    (knowledge tracker, not pose-only zeros).
 
 ---
 
@@ -4696,6 +4840,11 @@ more than the first in the regime CS actually lives in: repeated opponents,
 recurring situations, a 24-round match against the same five people. It is also
 a claim that is easy to state loosely and easy to test exactly, so it is stated
 exactly here (18.8) and tested by exam E10 (9.19).
+
+**Competence is filled from the library before experience is allowed to write.**
+A Banana player who has not seen the 3,500 Inferno T Banana tracks (9.3b) has
+no prior worth counting against. The index stays empty through C0k. E10 is a
+test of the second column given a real first column, not a substitute for it.
 
 Why not just let the weights learn it? Because gradients are the wrong
 instrument for one-shot, opponent-specific facts. A gradient step averages over

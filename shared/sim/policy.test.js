@@ -148,9 +148,9 @@ const obs = () => new Array(OBSERVATION_SIZE).fill(0);
 // ---- v2: the player embedding ---------------------------------------------------
 
 {
-  assert(POLICY_VERSION === 2, 'POLICY_VERSION is the max supported version');
+  assert(POLICY_VERSION === 3, 'POLICY_VERSION is the max supported version');
 
-  // Both versions still load; the gate is about UNKNOWN versions.
+  // Both older versions still load; the gate is about UNKNOWN versions.
   loadPolicy(model()); // v1 file still loads
   loadPolicy(modelV2()); // v2 file loads
 
@@ -235,6 +235,92 @@ const obs = () => new Array(OBSERVATION_SIZE).fill(0);
   for (const id of p1.vocab) {
     assert(plain.get(id) === keyed.get(id), 'a v1 model ignores the player key');
   }
+}
+
+// ---- v3: last-query history + still-load older files ---------------------------
+
+{
+  const D = 2;
+  const inW = [new Array(OBSERVATION_SIZE).fill(0), new Array(OBSERVATION_SIZE).fill(0)];
+  inW[0][0] = 1;
+  const ident = [
+    [1, 0],
+    [0, 1]
+  ];
+  const width = D + EMBED_DIM;
+  const W0 = [new Array(width).fill(0), new Array(width).fill(0)];
+  W0[0][0] = 1;
+  W0[1][D] = 1;
+  function modelV3(over = {}) {
+    return {
+      v: 3,
+      obsVersion: OBSERVE_VERSION,
+      vocab: ['hold_angle', 'wide_swing', 'rotate'],
+      activation: 'tanh',
+      temporal: {
+        steps: 2,
+        dModel: D,
+        inProj: { W: inW.map((r) => r.slice()), b: [0, 0] },
+        attnOut: { W: ident.map((r) => r.slice()), b: [0, 0] }
+      },
+      embed: {
+        dim: EMBED_DIM,
+        default: [0, 0],
+        players: { aggro: [1, 0], passive: [-1, 0] }
+      },
+      layers: [
+        { W: W0.map((r) => r.slice()), b: [0, 0] },
+        {
+          W: [
+            [2, 0],
+            [0, 2],
+            [0, 0]
+          ],
+          b: [0, 0, 0]
+        }
+      ],
+      ...over
+    };
+  }
+
+  loadPolicy(modelV3());
+  for (const [label, bad] of [
+    ['v3 without temporal', modelV3({ temporal: undefined })],
+    ['v3 steps 1', modelV3({ temporal: { steps: 1, dModel: D, inProj: { W: inW, b: [0, 0] }, attnOut: { W: ident, b: [0, 0] } } })]
+  ]) {
+    let threw = false;
+    try {
+      loadPolicy(bad);
+    } catch {
+      threw = true;
+    }
+    assert(threw, `${label} fails at load`);
+  }
+
+  const p3 = loadPolicy(modelV3());
+  const zero = p3.probs(obs());
+  let sum = 0;
+  for (const v of zero.values()) sum += v;
+  assert(Math.abs(sum - 1) < 1e-9, 'v3 softmax sums to one');
+
+  const up = p3.probs(obs(), 'aggro');
+  const down = p3.probs(obs(), 'passive');
+  assert(
+    up.get('wide_swing') > zero.get('wide_swing') &&
+      down.get('wide_swing') < zero.get('wide_swing'),
+    'v3 still steers through the player embedding'
+  );
+
+  const past = obs();
+  past[0] = 8;
+  const withHist = p3.probs(obs(), { history: [past] });
+  assert(
+    withHist.get('hold_angle') > zero.get('hold_angle'),
+    'a past observation moves the last-query head'
+  );
+
+  const keyed = p3.probs(obs(), { player: 'aggro', map: 'INF', history: [] });
+  assert(keyed.get('wide_swing') > zero.get('wide_swing'), 'object ctx still looks up the player');
 }
 
 // ---- proposals ------------------------------------------------------------------

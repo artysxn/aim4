@@ -21,7 +21,7 @@
 // ---------------------------------------------------------------------------
 
 import './sim.css';
-import { simApi } from './simApi.js';
+import { EXPORT_BATCH, simApi } from './simApi.js';
 import { spinnerNode } from '../lib/spinner.js';
 import { readHeader, readRecord, FLAG_HAS_HELMET, PLAYER_SLOTS } from '../replays/shared/tickFormat.js';
 
@@ -933,16 +933,24 @@ export function initSimView(host) {
     dlBtn.addEventListener('click', async () => {
       dlBtn.disabled = true;
       const ids = [...picked];
+      const batch = EXPORT_BATCH;
+      const parts = [];
+      for (let i = 0; i < ids.length; i += batch) parts.push(ids.slice(i, i + batch));
       exportStatus.className = 'sim-note';
-      exportStatus.textContent = `Packaging ${ids.length} demos.`;
       try {
-        const { filename, blob } = await simApi.exportDownload(ids);
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(a.href);
-        exportStatus.textContent = `Done, ${ids.length} demos.`;
+        for (let i = 0; i < parts.length; i += 1) {
+          exportStatus.textContent = `Packaging ${i + 1} of ${parts.length} (${parts[i].length} demos).`;
+          const { blob } = await simApi.exportDownload(parts[i]);
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download =
+            parts.length === 1 && parts[i].length === 1
+              ? `${parts[i][0]}.aim4replay`
+              : `aim4-export-${i + 1}-of-${parts.length}.zip`;
+          a.click();
+          URL.revokeObjectURL(a.href);
+        }
+        exportStatus.textContent = `Done, ${ids.length} demos in ${parts.length} file${parts.length === 1 ? '' : 's'}.`;
       } catch (err) {
         exportStatus.className = 'sim-error';
         exportStatus.textContent = err.message;

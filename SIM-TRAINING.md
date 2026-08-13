@@ -89,12 +89,20 @@ automatically, and every job carries a wall-clock budget it is killed at.
 
 ## Training on demo data
 
-Today's datasets come from the scripted arbiter playing itself, which is what
-generation 0 clones. Learning from real demos needs the observation
-reconstruction that reads what players actually knew rather than god-view, and
-that lands with the phases after this one (SIM-PLAN 9.3 step 2). When it does,
-the file format does not change and neither does this workflow: the same
-trainer reads the same JSONL and writes the same model.
+The 3,500-demo library is the knowledge source, not self-play. Order is
+SIM-PLAN 9.3b: bake per-contract tables from the whole set, extract BC through
+the knowledge tracker (what the player knew, not god-view), train the
+role-conditioned net, and leave the experience index off until that G0 is
+honest. Banana on Inferno is every Inferno T Banana track in the 3,500, not a
+global soup.
+
+Run extract and train from the local sim lab (`npm run sim:lab` or
+`tools/sim-lab.bat`), not from production. Self-play collect is still available
+for plumbing tests; it is not generation 0 play.
+
+The trainer file format does not change: JSONL in, JSON weights out. The
+extract has to stop zeroing belief and start labelling spacing, utility,
+reactions, and short option chains, or the bigger net has nothing to learn.
 
 What already works with your own library: point `AIM4_REPLAY_DIR` at it, and
 the /sim Export tab packages demos out of it for local use.

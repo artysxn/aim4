@@ -56,7 +56,7 @@ import { createTranslator } from './translator.js';
 import { skillProfile } from './skill.js';
 import { isSilenced } from './weapons.js';
 import { buildObservation, weaponClassOf } from './observe.js';
-import { applyProposals } from './policy.js';
+import { applyProposals, POLICY_HISTORY_STEPS } from './policy.js';
 import { weaponInfo } from '../../src/replays/shared/weaponTable.js';
 import { SOUND_RADIUS } from './constants.js';
 import { SOUND, sector, rangeBand } from './sound.js';
@@ -531,6 +531,7 @@ export function desireController({
         if (!matchRng) matchRng = rng.fork();
         contracts = assignContracts({ map: engine.state.map, side, slots });
         R.contracts = contracts;
+        R.obsHist = new Map();
       },
 
       tick({ engine, i, tick }) {
@@ -1605,7 +1606,25 @@ export function desireController({
               : null;
           const seatKey = `${R.side}${decideSeat}`;
           if (obs) decideSeat += 1;
-          if (policy && obs) applyProposals(candidates, policy.probs(obs, seatKey));
+          const myContract = (R.contracts || []).find((c) => c.slot === s);
+          const hist = (R.obsHist && R.obsHist.get(s)) || [];
+          if (policy && obs) {
+            applyProposals(
+              candidates,
+              policy.probs(obs, {
+                player: seatKey,
+                map: engine.state.map,
+                contract: myContract?.position,
+                history: hist
+              })
+            );
+          }
+          if (obs) {
+            if (!R.obsHist) R.obsHist = new Map();
+            const next = hist.concat([obs]);
+            while (next.length > POLICY_HISTORY_STEPS - 1) next.shift();
+            R.obsHist.set(s, next);
+          }
 
           const clutch = clutchMask({
             side: R.side,
@@ -1631,7 +1650,6 @@ export function desireController({
             slot: s,
             hasTradeCover: myLiving.length >= 2
           });
-          const myContract = (R.contracts || []).find((c) => c.slot === s);
           if (myContract) {
             const paramsById = {};
             for (const c of candidates) paramsById[c.id] = c.params;
@@ -1723,7 +1741,17 @@ export function desireController({
           // a policy that never holds anything.
           if (collect && obs) {
             const label = decision.chosen?.id ?? runner.active?.id ?? null;
-            if (label) collect({ obs, label, side: R.side, map: state.map, tick });
+            if (label) {
+              collect({
+                obs,
+                label,
+                side: R.side,
+                map: state.map,
+                tick,
+                contract: myContract?.position || null,
+                hist
+              });
+            }
           }
 
           if (decision.chosen) {

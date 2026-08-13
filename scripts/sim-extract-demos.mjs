@@ -182,6 +182,7 @@ async function main() {
   let tracks = 0;
   let coverages = [];
 
+  const histByPlayer = new Map();
   for (const id of DEMOS) {
     let found = false;
     for (const user of users) {
@@ -202,17 +203,23 @@ async function main() {
             histogram[s.option] = (histogram[s.option] || 0) + 1;
             const midTick = Math.floor(((s.startTick || 0) + (s.endTick || 0)) / 2);
             const pose = byTick.find((po) => po.tick >= midTick) || byTick[0];
+            const player = `${id}:${p.slot}`;
+            const obs = obsAt(
+              pose,
+              [pose],
+              p.side,
+              Boolean(meta?.events?.bomb?.some((b) => b.type === 'planted'))
+            );
+            const hist = histByPlayer.get(player) || [];
             samples.push({
-              obs: obsAt(
-                pose,
-                [pose],
-                p.side,
-                Boolean(meta?.events?.bomb?.some((b) => b.type === 'planted'))
-              ),
+              obs,
+              hist,
               label: s.option,
               side: p.side,
-              player: `${id}:${p.slot}`
+              player,
+              map: meta?.map || meta?.mapCode || null
             });
+            histByPlayer.set(player, hist.concat([obs]).slice(-11));
           }
         }
       }
@@ -223,7 +230,7 @@ async function main() {
 
   const meta = {
     type: 'meta',
-    v: 2,
+    v: 3,
     obsVersion: OBSERVE_VERSION,
     obsSize: OBSERVATION_SIZE,
     vocab: OPTION_IDS,
@@ -239,7 +246,9 @@ async function main() {
         obs: s.obs.map((x) => Number(x.toFixed(5))),
         label: OPTION_IDS.includes(s.label) ? s.label : 'hold_angle',
         side: s.side,
-        player: s.player
+        player: s.player,
+        map: s.map || null,
+        hist: (s.hist || []).map((h) => h.map((x) => Number(x.toFixed(5))))
       })
     );
   }

@@ -106,3 +106,6 @@ export const simApi = {
     return { filename: name, blob: await res.blob() };
   }
 };
+
+/** Demos per zip. Bigger packs trip NetworkError on long fetches. */
+export const EXPORT_BATCH = 50;

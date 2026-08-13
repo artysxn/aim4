@@ -34,8 +34,11 @@
 import { OBSERVATION_SIZE, OBSERVE_VERSION } from './observe.js';
 import { OPTION_DEFS } from './options.js';
 
-/** The highest model version this build loads; v1 files still load. */
-export const POLICY_VERSION = 2;
+/** The highest model version this build loads; v1 and v2 files still load. */
+export const POLICY_VERSION = 3;
+
+/** Past observations the v3 temporal encoder reads, plus the current step. */
+export const POLICY_HISTORY_STEPS = 12;
 
 /**
  * Below this top-probability over the CANDIDATE set the head is guessing,
@@ -43,19 +46,102 @@ export const POLICY_VERSION = 2;
  */
 export const CONFIDENCE_FLOOR = 0.15;
 
+function gemv(W, b, x) {
+  const y = new Array(W.length);
+  for (let i = 0; i < W.length; i += 1) {
+    let s = b ? b[i] : 0;
+    const row = W[i];
+    for (let j = 0; j < row.length; j += 1) s += row[j] * x[j];
+    y[i] = s;
+  }
+  return y;
+}
+
+function tanhVec(v) {
+  const y = new Array(v.length);
+  for (let i = 0; i < v.length; i += 1) y[i] = Math.tanh(v[i]);
+  return y;
+}
+
+function checkRow(row, dim, label) {
+  if (!Array.isArray(row) || row.length !== dim) {
+    throw new Error(`policy: ${label} is ${row?.length} floats, dim says ${dim}`);
+  }
+}
+
+function tableEmbed(spec, label) {
+  if (!spec || !Number.isInteger(spec.dim) || spec.dim < 1) {
+    throw new Error(`policy: ${label} carries no usable dim (${spec?.dim})`);
+  }
+  checkRow(spec.default, spec.dim, `${label} default`);
+  const rows = new Map(
+    Object.entries(spec.keys ?? spec.players ?? spec.maps ?? spec.contracts ?? {})
+  );
+  for (const [key, row] of rows) checkRow(row, spec.dim, `${label} ${key}`);
+  return { dim: spec.dim, default: spec.default, rows };
+}
+
+function lookupEmbed(table, key) {
+  if (!table) return [];
+  if (key == null || key === '') return table.default;
+  return table.rows.get(String(key)) ?? table.default;
+}
+
+/** Last-query causal attention over T encoded steps (SIM-PLAN 9.3b). */
+function lastQueryAttn(frames, temporal) {
+  const { inProj, attnOut } = temporal;
+  const Z = frames.map((f) => tanhVec(gemv(inProj.W, inProj.b, f)));
+  const q = Z[Z.length - 1];
+  const scale = 1 / Math.sqrt(q.length);
+  const scores = new Array(Z.length);
+  let max = -Infinity;
+  for (let t = 0; t < Z.length; t += 1) {
+    let s = 0;
+    const z = Z[t];
+    for (let d = 0; d < q.length; d += 1) s += q[d] * z[d];
+    s *= scale;
+    scores[t] = s;
+    if (s > max) max = s;
+  }
+  let sum = 0;
+  const w = new Array(Z.length);
+  for (let t = 0; t < Z.length; t += 1) {
+    const e = Math.exp(scores[t] - max);
+    w[t] = e;
+    sum += e;
+  }
+  const ctx = new Array(q.length).fill(0);
+  for (let t = 0; t < Z.length; t += 1) {
+    const a = w[t] / sum;
+    const z = Z[t];
+    for (let d = 0; d < q.length; d += 1) ctx[d] += a * z[d];
+  }
+  return tanhVec(gemv(attnOut.W, attnOut.b, ctx));
+}
+
+function padHistory(obs, history, steps) {
+  const past = Array.isArray(history)
+    ? history.filter((h) => Array.isArray(h) && h.length === obs.length)
+    : [];
+  const frames = past.slice(-(steps - 1));
+  while (frames.length < steps - 1) frames.unshift(obs);
+  frames.push(obs);
+  return frames;
+}
+
 /**
  * Load and validate a trained policy.
  *
  * @param {object} json  the trainer's artifact:
  *   {v, obsVersion, vocab: string[], activation: 'tanh',
  *    layers: [{W: number[][], b: number[]}, ...]}
- *   and, when v === 2, the jointly trained player embedding (SIM-PLAN 9.3):
- *   {embed: {dim, default: number[], players: {key: number[]}}}
+ *   v2 adds {embed: {dim, default, players}}
+ *   v3 adds last-query history attention plus map/contract tables (9.3b)
  * @returns {{vocab: string[],
- *            probs(obs: number[], playerKey?: string): Map<string, number>}}
+ *            probs(obs: number[], playerKey?: string|object): Map<string, number>}}
  */
 export function loadPolicy(json) {
-  if (!json || (json.v !== 1 && json.v !== POLICY_VERSION)) {
+  if (!json || !Number.isInteger(json.v) || json.v < 1 || json.v > POLICY_VERSION) {
     throw new Error(`policy: version ${json?.v} is not 1..${POLICY_VERSION}`);
   }
   if (json.obsVersion !== OBSERVE_VERSION) {
@@ -73,37 +159,50 @@ export function loadPolicy(json) {
     throw new Error(`policy: unknown activation ${json.activation}`);
   }
 
-  // The v2 embedding, checked as loudly as everything else: every row —
-  // default included — must be exactly `dim` floats, and the first layer
-  // must read exactly obs + dim. A Map keeps hostile keys ("toString")
-  // from reaching Object.prototype.
-  const embed = json.v === 2 ? json.embed : null;
-  let embedRows = null;
+  // v2/v3 player embedding. A Map keeps hostile keys ("toString") off Object.prototype.
+  let playerEmbed = null;
+  let mapEmbed = null;
+  let contractEmbed = null;
   if (json.v === 2) {
-    if (!embed || !Number.isInteger(embed.dim) || embed.dim < 1) {
-      throw new Error(`policy: v2 model carries no usable embed.dim (${embed?.dim})`);
+    playerEmbed = tableEmbed(json.embed, 'embed');
+  } else if (json.v >= 3 && json.embed && Number.isInteger(json.embed.dim) && json.embed.dim > 0) {
+    playerEmbed = tableEmbed(json.embed, 'embed');
+  }
+  if (json.v >= 3) {
+    if (json.embed?.map) mapEmbed = tableEmbed(json.embed.map, 'map embed');
+    if (json.embed?.contract) contractEmbed = tableEmbed(json.embed.contract, 'contract embed');
+  }
+
+  const temporal = json.v >= 3 ? json.temporal : null;
+  if (json.v >= 3) {
+    if (!temporal || !Number.isInteger(temporal.steps) || temporal.steps < 2) {
+      throw new Error(`policy: v3 model carries no usable temporal.steps (${temporal?.steps})`);
     }
-    if (!Array.isArray(embed.default) || embed.default.length !== embed.dim) {
-      throw new Error(
-        `policy: embed default row is ${embed.default?.length} floats, dim says ${embed.dim}`
-      );
+    if (!Number.isInteger(temporal.dModel) || temporal.dModel < 1) {
+      throw new Error(`policy: v3 model carries no usable temporal.dModel (${temporal?.dModel})`);
     }
-    embedRows = new Map(Object.entries(embed.players ?? {}));
-    for (const [key, row] of embedRows) {
-      if (!Array.isArray(row) || row.length !== embed.dim) {
-        throw new Error(`policy: embed row for ${key} is ${row?.length} floats, dim says ${embed.dim}`);
-      }
+    const { inProj, attnOut } = temporal;
+    if (!inProj?.W || inProj.W.length !== temporal.dModel || inProj.W[0].length !== OBSERVATION_SIZE) {
+      throw new Error('policy: temporal.inProj does not map observations to dModel');
+    }
+    if (!attnOut?.W || attnOut.W.length !== temporal.dModel || attnOut.W[0].length !== temporal.dModel) {
+      throw new Error('policy: temporal.attnOut is not dModel by dModel');
     }
   }
-  const inputWidth = OBSERVATION_SIZE + (embed ? embed.dim : 0);
+
+  const condWidth =
+    (playerEmbed ? playerEmbed.dim : 0) +
+    (mapEmbed ? mapEmbed.dim : 0) +
+    (contractEmbed ? contractEmbed.dim : 0);
+  const inputWidth = temporal
+    ? temporal.dModel + condWidth
+    : OBSERVATION_SIZE + (playerEmbed ? playerEmbed.dim : 0);
 
   const layers = json.layers;
   if (!Array.isArray(layers) || layers.length < 1) throw new Error('policy: no layers');
   if (layers[0].W[0].length !== inputWidth) {
     throw new Error(
-      `policy: first layer reads ${layers[0].W[0].length} floats, observations${
-        embed ? ' + embedding' : ''
-      } carry ${inputWidth}`
+      `policy: first layer reads ${layers[0].W[0].length} floats, trunk carries ${inputWidth}`
     );
   }
   const lastW = layers[layers.length - 1].W;
@@ -113,7 +212,7 @@ export function loadPolicy(json) {
     );
   }
 
-  function forward(obs) {
+  function mlp(obs) {
     let x = obs;
     for (let l = 0; l < layers.length; l += 1) {
       const { W, b } = layers[l];
@@ -134,16 +233,28 @@ export function loadPolicy(json) {
 
     /**
      * Softmax over the vocabulary. Stable: the max logit is subtracted.
-     * `playerKey` is 10.3's conditioning knob: a v1 model ignores it, a v2
-     * model appends that player's embedding — or the default row when the
-     * key is absent or unseen — to the observation before the forward pass.
+     * Second argument is a player key (v2) or `{ player, map, contract, history }` (v3).
+     * v1 ignores it. Missing keys ride the default row.
      */
     probs(obs, playerKey) {
       if (obs.length !== OBSERVATION_SIZE) {
         throw new Error(`policy: observation is ${obs.length} floats, expected ${OBSERVATION_SIZE}`);
       }
-      const x = embed ? obs.concat(embedRows.get(playerKey) ?? embed.default) : obs;
-      const logits = forward(x);
+      const ctx =
+        playerKey && typeof playerKey === 'object'
+          ? playerKey
+          : { player: playerKey };
+      let x;
+      if (temporal) {
+        const frames = padHistory(obs, ctx.history, temporal.steps);
+        x = lastQueryAttn(frames, temporal);
+        if (playerEmbed) x = x.concat(lookupEmbed(playerEmbed, ctx.player));
+        if (mapEmbed) x = x.concat(lookupEmbed(mapEmbed, ctx.map));
+        if (contractEmbed) x = x.concat(lookupEmbed(contractEmbed, ctx.contract));
+      } else {
+        x = playerEmbed ? obs.concat(lookupEmbed(playerEmbed, ctx.player ?? playerKey)) : obs;
+      }
+      const logits = mlp(x);
       let max = -Infinity;
       for (const z of logits) if (z > max) max = z;
       let total = 0;

@@ -109,7 +109,7 @@ async function main() {
 
   const meta = {
     type: 'meta',
-    v: 2,
+    v: 3,
     obsVersion: OBSERVE_VERSION,
     obsSize: OBSERVATION_SIZE,
     vocab: OPTION_IDS,
@@ -127,7 +127,12 @@ async function main() {
         obs: s.obs.map((x) => Number(x.toFixed(5))),
         label: s.label,
         side: s.side,
-        player: s.player
+        player: s.player,
+        map: s.map || MAP,
+        contract: s.contract || null,
+        hist: Array.isArray(s.hist)
+          ? s.hist.map((h) => h.map((x) => Number(x.toFixed(5))))
+          : []
       })
     );
   }

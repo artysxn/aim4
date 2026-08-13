@@ -220,6 +220,9 @@ function commandFor(job, python) {
           p.dataset,
           '--epochs', String(p.epochs),
           '--embed-dim', String(p.embedDim),
+          '--hidden', '256',
+          '--history', '12',
+          '--d-model', '64',
           '--out', path.join(ROOT, 'sim', 'models', `${safe(p.name)}.json`)
         ]
       };

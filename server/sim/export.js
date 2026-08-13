@@ -309,10 +309,13 @@ function zipStore(files) {
 
 /**
  * One download for a selection. A single id stays a .aim4replay; two or more
- * land in one .zip so the browser fires one save, not one per demo.
+ * land in one .zip. The client batches at 50; this cap is the server's lid
+ * so a long fetch cannot rebuild the 10 GB problem in one body.
  */
+export const EXPORT_BUNDLE_MAX = 100;
+
 export async function packageDemos(demoIds, io = defaultIo) {
-  const ids = [...new Set((demoIds || []).map(safeId).filter(Boolean))].slice(0, 2000);
+  const ids = [...new Set((demoIds || []).map(safeId).filter(Boolean))].slice(0, EXPORT_BUNDLE_MAX);
   if (!ids.length) return null;
   if (ids.length === 1) return packageDemo(ids[0], io);
 

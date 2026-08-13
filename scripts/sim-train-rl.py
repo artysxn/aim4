@@ -106,17 +106,55 @@ def load_init(path):
     return model, W0, b0, W1, b1
 
 
-def embed_matrix(embed, players):
-    if not embed:
-        return None
-    dim = int(embed["dim"])
-    default = np.array(embed["default"], dtype=np.float64)
-    table = embed.get("players") or {}
-    E = np.zeros((len(players), dim), dtype=np.float64)
-    for i, key in enumerate(players):
-        row = table.get(key)
+def table_rows(spec, keys):
+    dim = int(spec["dim"])
+    default = np.array(spec["default"], dtype=np.float64)
+    table = spec.get("keys") or spec.get("maps") or spec.get("contracts") or spec.get("players") or {}
+    E = np.zeros((len(keys), dim), dtype=np.float64)
+    for i, key in enumerate(keys):
+        row = table.get(str(key or ""))
         E[i] = np.array(row, dtype=np.float64) if row is not None else default
     return E
+
+
+def embed_matrix(embed, players):
+    if not embed or not embed.get("dim"):
+        return None
+    return table_rows({ "dim": embed["dim"], "default": embed["default"], "keys": embed.get("players") or {} }, players)
+
+
+def encode_v3(H, temporal):
+    Win = np.array(temporal["inProj"]["W"], dtype=np.float64)
+    bin_ = np.array(temporal["inProj"]["b"], dtype=np.float64)
+    Wo = np.array(temporal["attnOut"]["W"], dtype=np.float64)
+    bo = np.array(temporal["attnOut"]["b"], dtype=np.float64)
+    Z = np.tanh(H @ Win.T + bin_)
+    q = Z[:, -1, :]
+    scale = 1.0 / np.sqrt(q.shape[1])
+    scores = (Z * q[:, None, :]).sum(axis=2) * scale
+    scores = scores - scores.max(axis=1, keepdims=True)
+    a = np.exp(scores)
+    a = a / a.sum(axis=1, keepdims=True)
+    ctx = (a[:, :, None] * Z).sum(axis=1)
+    return np.tanh(ctx @ Wo.T + bo)
+
+
+def stack_obs_history(rows, T, d):
+    n = len(rows)
+    H = np.zeros((n, T, d), dtype=np.float64)
+    for i, r in enumerate(rows):
+        obs = np.asarray(r["obs"], dtype=np.float64)
+        past = [
+            np.asarray(p, dtype=np.float64)
+            for p in (r.get("hist") or [])
+            if hasattr(p, "__len__") and len(p) == d
+        ][-(T - 1) :]
+        frames = list(past)
+        while len(frames) < T - 1:
+            frames.insert(0, obs.copy())
+        frames.append(obs)
+        H[i] = np.stack(frames)
+    return H
 
 
 def softmax(Z):
@@ -135,7 +173,7 @@ def forward(X, W0, b0, W1, b1):
 def dump_model(path, meta, vocab, W0, b0, W1, b1, init, teacher="ppo"):
     embed = (init or {}).get("embed") if init else None
     model = {
-        "v": POLICY_VERSION if embed else (init or {}).get("v", 1),
+        "v": (init or {}).get("v") or (POLICY_VERSION if embed else 1),
         "obsVersion": meta["obsVersion"],
         "vocab": vocab,
         "activation": "tanh",
@@ -144,6 +182,9 @@ def dump_model(path, meta, vocab, W0, b0, W1, b1, init, teacher="ppo"):
     }
     if embed:
         model["embed"] = embed
+    if init and init.get("temporal"):
+        model["v"] = 3
+        model["temporal"] = init["temporal"]
     model["layers"] = [
         {"W": [[round(float(w), 6) for w in row] for row in W0], "b": [round(float(v), 6) for v in b0]},
         {"W": [[round(float(w), 6) for w in row] for row in W1], "b": [round(float(v), 6) for v in b1]},
@@ -204,7 +245,19 @@ def main():
     has_aux = args.aux and np.isfinite(wins).any()
 
     E = embed_matrix(embed, players)
-    X = np.concatenate([Xobs, E], axis=1) if E is not None else Xobs
+    if init and init.get("v") == 3 and init.get("temporal"):
+        T = int(init["temporal"]["steps"])
+        U = encode_v3(stack_obs_history(rows, T, Xobs.shape[1]), init["temporal"])
+        extras = [U]
+        if E is not None:
+            extras.append(E)
+        if embed and embed.get("map"):
+            extras.append(table_rows(embed["map"], [r.get("map") for r in rows]))
+        if embed and embed.get("contract"):
+            extras.append(table_rows(embed["contract"], [r.get("contract") for r in rows]))
+        X = np.concatenate(extras, axis=1)
+    else:
+        X = np.concatenate([Xobs, E], axis=1) if E is not None else Xobs
     if W0.shape[1] != X.shape[1]:
         sys.exit(f"first layer reads {W0.shape[1]}, observations carry {X.shape[1]}")
     if W1.shape[0] != n_out:
