@@ -21,6 +21,7 @@
 import { simGuard } from './guard.js';
 import { listExportableDemos, packageDemo } from './export.js';
 import { listMatches, readRoundMeta, readRoundTicks, runMatch, runStatus } from './matches.js';
+import { availableMaps } from './bakes.js';
 
 const NOT_FOUND = { error: 'Not found' };
 
@@ -199,6 +200,11 @@ async function route(req, res, url, me) {
 
   if (p === '/api/sim/run' && req.method === 'GET') {
     json(res, req, 200, runStatus());
+    return true;
+  }
+
+  if (p === '/api/sim/maps' && req.method === 'GET') {
+    json(res, req, 200, { maps: await availableMaps() });
     return true;
   }
 

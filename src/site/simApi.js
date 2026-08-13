@@ -54,6 +54,23 @@ export const simApi = {
   run: (params) => post('/api/sim/run', params),
   runStatus: () => get('/api/sim/run'),
   matches: () => get('/api/sim/matches'),
+  maps: () => get('/api/sim/maps'),
+
+  /** A stored round: the parser's own tick buffer, plus its meta. */
+  roundMeta: (matchId, round) =>
+    get(`/api/sim/matches/${encodeURIComponent(matchId)}/round/${round}/meta`),
+  roundTicks: async (matchId, round) => {
+    const res = await fetch(
+      `${API_BASE}/api/sim/matches/${encodeURIComponent(matchId)}/round/${round}/ticks`,
+      { headers: await headers() }
+    );
+    if (!res.ok) {
+      const err = new Error(`Round unavailable (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+    return new Uint8Array(await res.arrayBuffer());
+  },
 
   // Dataset export: list what the library holds, then download a selection
   // one .aim4replay at a time. Downloads go through fetch rather than a plain

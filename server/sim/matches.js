@@ -21,28 +21,19 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { ROOT } from '../replays/demoStore.js';
+import { loadBake } from './bakes.js';
 import { navGraphFromBake } from '../../shared/sim/navGraph.js';
 import { loadAngles } from '../../shared/sim/angles.js';
 import { playScriptedMatch } from '../../shared/sim/scriptedMatch.js';
 import { RULES_VERSION } from '../../shared/sim/constants.js';
 
 const MATCHES_DIR = path.join(ROOT, 'sim', 'matches');
-const NAV_DIR = path.join(ROOT, 'sim', 'navcache');
-const ANGLES_DIR = path.join(ROOT, 'sim', 'angles');
 
 /** The one-at-a-time latch. */
 let running = null;
 
 const SKILLS = new Set(['mix', 't3', 'average', 't2', 't1', 'pro']);
 const safe = (s) => String(s || '').replace(/[^A-Za-z0-9_-]/g, '');
-
-async function loadBake(dir, map) {
-  try {
-    return JSON.parse(await fsp.readFile(path.join(dir, `${map}.json`), 'utf8'));
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Run one match. Clamped server-side: budgets typed into a browser are a
@@ -63,21 +54,17 @@ export async function runMatch(params = {}) {
   // keeps a handful even when nobody asked, and never everything by accident.
   const recordEvery = Math.max(1, Math.min(100000, Number(params.recordEvery) || 1));
 
-  const navBake = await loadBake(NAV_DIR, map);
-  if (!navBake) {
-    return { error: `no nav bake for ${map}: run npm run sim:bake on this host` };
-  }
-  const anglesBake = await loadBake(ANGLES_DIR, map);
-  if (!anglesBake) {
-    return { error: `no angle catalogue for ${map}: run npm run sim:angles on this host` };
-  }
+  const nav = await loadBake('navcache', map);
+  if (!nav) return { error: `no nav bake for ${map}` };
+  const anglesBake = await loadBake('angles', map);
+  if (!anglesBake) return { error: `no angle catalogue for ${map}` };
 
   const id = `${map}-${Date.now().toString(36)}-${seed}`;
   running = { id, map, startedAt: Date.now() };
 
   try {
-    const graph = navGraphFromBake(navBake);
-    const angles = loadAngles(anglesBake);
+    const graph = navGraphFromBake(nav.bake);
+    const angles = loadAngles(anglesBake.bake);
 
     const t0 = Date.now();
     const { match, rounds } = playScriptedMatch({
@@ -115,6 +102,7 @@ export async function runMatch(params = {}) {
       skillA,
       skillB,
       recordEvery,
+      bakeSource: nav.source,
       createdAt: new Date().toISOString(),
       elapsedMs: Date.now() - t0,
       score: match.state.score,

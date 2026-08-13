@@ -85,7 +85,10 @@ export async function listExportableDemos(io = defaultIo) {
       id,
       filename: r.filename || `${id}${PACKAGE_EXT}`,
       map: r.map || r.mapCode || null,
-      teams: r.teams || [r.team1, r.team2].filter(Boolean),
+      // team1/team2 are records, not strings. Reading them as strings is what
+      // put "[object Object] vs [object Object]" on every row of the panel.
+      teams: [r.team1?.name, r.team2?.name].filter(Boolean),
+      score: r.score ? [r.score.team1 ?? 0, r.score.team2 ?? 0] : null,
       rounds: r.roundCount ?? r.rounds ?? (files.length ? Math.round(files.length / 3) : null),
       uploadedAt: r.uploadedAt || null,
       files: files.length,

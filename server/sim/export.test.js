@@ -31,8 +31,20 @@ const FILES = {
 };
 
 const io = {
+  // team1/team2 are RECORDS with a name, not strings. Reading them as strings
+  // is what put "[object Object] vs [object Object]" on every panel row, so the
+  // fixture uses the real shape.
   listDemos: async () => [
-    { id: 'abc', map: 'INF', filename: 'spirit-vs-faze.dem', teams: ['Spirit', 'FaZe'], roundCount: 2, uploadedAt: 123 },
+    {
+      id: 'abc',
+      map: 'INF',
+      filename: 'spirit-vs-faze.dem',
+      team1: { id: 't1', name: 'Team Spirit' },
+      team2: { id: 't2', name: 'FaZe' },
+      score: { team1: 13, team2: 9 },
+      roundCount: 2,
+      uploadedAt: 123
+    },
     { id: 'ghost', map: 'MIR' } // a record whose files are gone
   ],
   demosDir: () => '/demos',
@@ -62,7 +74,8 @@ const io = {
 
   const abc = list.find((d) => d.id === 'abc');
   assert(abc.map === 'INF', 'with its map');
-  assert(abc.teams.join('/') === 'Spirit/FaZe', 'and its teams');
+  assert(abc.teams.join(' vs ') === 'Team Spirit vs FaZe', `and its teams as names (${abc.teams})`);
+  assert(abc.score.join('-') === '13-9', 'and the score');
   assert(abc.rounds === 2, 'and its round count');
   assert(abc.files === 6, 'and how many files it owns');
   const expectBytes = ['ticks-one', 'meta-one', 'coarse-one', 'ticks-two', 'meta-two', 'coarse-two']
@@ -71,6 +84,8 @@ const io = {
 
   const ghost = list.find((d) => d.id === 'ghost');
   assert(ghost.files === 0 && ghost.bytes === 0, 'a record with no files says so honestly');
+  assert(Array.isArray(ghost.teams) && ghost.teams.length === 0, 'and a nameless record has no teams, not [object Object]');
+  assert(ghost.score === null, 'and no score');
 }
 
 // ---- packaging --------------------------------------------------------------

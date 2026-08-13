@@ -2,6 +2,11 @@ node_modules/
 dist/
 server/data/
 
+# Baked map geometry SHIPS: it is derived from public map data, it changes
+# only when the maps or the bake code change, and without it a deployed /sim
+# can do nothing but tell you to re-bake. simdata/ is the committed copy;
+# server/data/replays/sim/ stays ignored and overrides it per host.
+
 # Extracted duel corpus + training logs. Regenerate with:
 #   node scripts/extract-duel-episodes.mjs
 scripts/duel-cache/

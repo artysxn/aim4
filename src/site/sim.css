@@ -1,0 +1,321 @@
+/* ---------------------------------------------------------------------------
+ * src/site/sim.css
+ * The /sim panel.
+ *
+ * Follows .cursor/rules/aim4-ui-controls.mdc: flat filled fields with no
+ * hairline borders, the analyzer segmented control for tabs and toggles, one
+ * shared 32px control height, and no captions under anything.
+ * ------------------------------------------------------------------------- */
+
+.sim-root {
+  padding: 20px 24px 48px;
+  max-width: 1400px;
+}
+
+.sim-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.sim-head h1 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+.sim-who {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Tabs: the analyzer seg, verbatim. */
+.sim-tabs {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+.sim-tab {
+  appearance: none;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 13px;
+  height: 32px;
+  padding: 0 16px;
+  cursor: pointer;
+}
+.sim-tab:last-child {
+  border-right: 0;
+}
+.sim-tab:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+.sim-tab[aria-selected='true'] {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.sim-panel[hidden] {
+  display: none;
+}
+
+/* Controls */
+.sim-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.sim-field {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: #050505;
+  padding: 0 4px 0 10px;
+  gap: 8px;
+}
+.sim-field-name {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.sim-field select,
+.sim-field input {
+  appearance: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #cfcfd4;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  height: 30px;
+  padding: 0 8px 0 0;
+  min-width: 56px;
+}
+.sim-field select {
+  cursor: pointer;
+  padding-right: 18px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: right 8px center, right 3px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.sim-field input[type='number'] {
+  width: 74px;
+}
+
+.sim-btn {
+  appearance: none;
+  height: 32px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+.sim-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+.sim-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.sim-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.sim-btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: #fff;
+}
+
+.sim-note {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+.sim-error {
+  color: var(--accent-hover);
+  font-size: 13px;
+  margin: 8px 0 0;
+}
+
+/* Tables: one row per thing, aligned columns, no wall of text. */
+.sim-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.sim-table th {
+  text-align: left;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.sim-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: #cfcfd4;
+  white-space: nowrap;
+}
+.sim-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.sim-table td.sim-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.sim-table td.sim-dim {
+  color: var(--muted);
+}
+.sim-scroll {
+  max-height: 60vh;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: #050505;
+}
+
+.sim-pill {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+}
+.sim-pill-t {
+  background: rgba(240, 180, 60, 0.16);
+  color: #f0b43c;
+}
+.sim-pill-ct {
+  background: rgba(90, 150, 230, 0.16);
+  color: #5a96e6;
+}
+
+.sim-row-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.sim-row-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+/* Viewer */
+.sim-viewer {
+  display: grid;
+  /* The radar is square and the roster is a fixed column. Capping the map at
+     a sensible size matters more than filling the width: a 1:1 canvas in a
+     1400px column is 1400px tall and pushes the transport off the screen. */
+  grid-template-columns: minmax(0, min(62vh, 720px)) 240px;
+  gap: 16px;
+  align-items: start;
+}
+.sim-canvas-wrap {
+  position: relative;
+  background: #050505;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  aspect-ratio: 1;
+  max-height: 62vh;
+}
+.sim-canvas-wrap canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.sim-transport {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.sim-transport input[type='range'] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+.sim-clock {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 13px;
+  min-width: 84px;
+}
+.sim-side-list {
+  background: #050505;
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+.sim-side-list h3 {
+  margin: 4px 6px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.sim-player {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: #cfcfd4;
+  border-radius: 4px;
+}
+.sim-player.is-dead {
+  opacity: 0.38;
+}
+.sim-hp {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.sim-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.sim-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 14px 4px;
+}
+
+@media (max-width: 900px) {
+  .sim-viewer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
