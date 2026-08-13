@@ -21,6 +21,7 @@ import { tryServeStatic, distExists } from './static.js';
 import { handleReplayRequest } from './replays/routes.js';
 import { handleTeamRequest } from './replays/teamRoutes.js';
 import { handleAdminRequest } from './admin/routes.js';
+import { handleSimRequest } from './sim/routes.js';
 import { handleAccountRequest } from './account/routes.js';
 import { handleBillingRequest } from './billing/routes.js';
 import { handleFaceitWebhookRequest } from './ingest/faceit/webhookRoutes.js';
@@ -109,6 +110,13 @@ const server = http.createServer(async (req, res) => {
     // answers with Access-Control-Allow-Origin: *, which is right for a public
     // demo library and wrong for an endpoint that can grant subscriptions.
     if (url.pathname.startsWith('/api/admin') && (await handleAdminRequest(req, res, url))) {
+      return;
+    }
+
+    // Sim, for the same reason as admin, plus one of its own: the generic
+    // OPTIONS reply below would confirm the prefix exists to any origin, and
+    // this surface is meant to be invisible to everyone but one account.
+    if (url.pathname.startsWith('/api/sim') && (await handleSimRequest(req, res, url))) {
       return;
     }
 

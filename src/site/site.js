@@ -524,6 +524,11 @@ const ROUTES = {
   // API answers 404 to everyone else. This entry only stops the deep link from
   // falling through to the trainer.
   admin: { title: 'Admin', path: '/admin', shell: 'admin' },
+  // Same arrangement as admin, and more strictly: no nav entry anywhere, the
+  // API answers 404 to everyone else, and the heavy chunk is only fetched once
+  // /api/sim/me has said yes. This entry only stops the deep link from falling
+  // through to the trainer.
+  sim: { title: 'Sim', path: '/sim', shell: 'sim' },
   'not-found': { title: 'Page not found', path: '/404', shell: 'error' },
   forbidden: { title: 'No access', path: '/403', shell: 'error' }
 };
@@ -804,6 +809,10 @@ viewControllers['strategy-creator'] = lazyController(async () => {
 viewControllers.admin = lazyController(async () => {
   const { initAdminView } = await import('./admin/adminView.js');
   return initAdminView(document.querySelector('.view[data-view="admin"]'));
+});
+viewControllers.sim = lazyController(async () => {
+  const { initSimView } = await import('./simView.js');
+  return initSimView(document.querySelector('.view[data-view="sim"]'));
 });
 viewControllers.replays = lazyController(async () => {
   const { initReplaysView } = await import('./replaysView.js');

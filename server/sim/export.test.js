@@ -1,0 +1,104 @@
+// Run: node server/sim/export.test.js
+//
+// The export is how a training sample leaves a 10 GB library, so the two
+// properties worth money are: the package round-trips byte for byte through
+// the site's own container format, and a demo's package contains exactly that
+// demo's files — nothing of its neighbours', because a selection tool that
+// leaks other demos rebuilds the 10 GB problem one download at a time.
+
+import {
+  decodeReplayPackage,
+  PACKAGE_EXT
+} from '../../src/replays/shared/replayPackage.js';
+import { listExportableDemos, packageDemo } from './export.js';
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assert failed');
+}
+
+const enc = (s) => new TextEncoder().encode(s);
+
+/** A two-demo library, entirely in memory. */
+const FILES = {
+  '/demos/abc.json': enc(JSON.stringify({ id: 'abc', map: 'INF' })),
+  '/rounds/r1~abc.tickz': enc('ticks-one'),
+  '/rounds/r1~abc.json.zst': enc('meta-one'),
+  '/rounds/r1~abc.c100.bin': enc('coarse-one'),
+  '/rounds/r2~abc.tickz': enc('ticks-two'),
+  '/rounds/r2~abc.json.zst': enc('meta-two'),
+  '/rounds/r2~abc.c100.bin': enc('coarse-two'),
+  '/rounds/r1~other.tickz': enc('not-yours')
+};
+
+const io = {
+  listDemos: async () => [
+    { id: 'abc', map: 'INF', filename: 'spirit-vs-faze.dem', teams: ['Spirit', 'FaZe'], roundCount: 2, uploadedAt: 123 },
+    { id: 'ghost', map: 'MIR' } // a record whose files are gone
+  ],
+  demosDir: () => '/demos',
+  roundsDir: () => '/rounds',
+  readFile: async (p) => {
+    const hit = FILES[p.replace(/\\/g, '/')];
+    if (!hit) throw new Error(`ENOENT ${p}`);
+    return hit;
+  },
+  listFiles: async (dir) => {
+    const prefix = `${dir.replace(/\\/g, '/')}/`;
+    return Object.keys(FILES)
+      .filter((p) => p.startsWith(prefix))
+      .map((p) => p.slice(prefix.length));
+  },
+  stat: async (p) => {
+    const hit = FILES[p.replace(/\\/g, '/')];
+    return hit ? { size: hit.length } : null;
+  }
+};
+
+// ---- listing ----------------------------------------------------------------
+
+{
+  const list = await listExportableDemos(io);
+  assert(list.length === 2, 'every record is listed');
+
+  const abc = list.find((d) => d.id === 'abc');
+  assert(abc.map === 'INF', 'with its map');
+  assert(abc.teams.join('/') === 'Spirit/FaZe', 'and its teams');
+  assert(abc.rounds === 2, 'and its round count');
+  assert(abc.files === 6, 'and how many files it owns');
+  const expectBytes = ['ticks-one', 'meta-one', 'coarse-one', 'ticks-two', 'meta-two', 'coarse-two']
+    .reduce((a, s) => a + s.length, 0);
+  assert(abc.bytes === expectBytes, `and their true size (${abc.bytes})`);
+
+  const ghost = list.find((d) => d.id === 'ghost');
+  assert(ghost.files === 0 && ghost.bytes === 0, 'a record with no files says so honestly');
+}
+
+// ---- packaging --------------------------------------------------------------
+
+{
+  const pkg = await packageDemo('abc', io);
+  assert(pkg, 'a known demo packages');
+  assert(pkg.filename === `abc${PACKAGE_EXT}`, 'under its own name');
+
+  // decodeReplayPackage answers {version, files: Map<name, bytes>}.
+  const decoded = decodeReplayPackage(pkg.bytes).files;
+  const names = [...decoded.keys()].sort();
+  assert(names[0] === 'manifest.json', 'the manifest is inside');
+  assert(names.length === 7, `manifest plus six round files (${names.length})`);
+  assert(!names.some((n) => n.includes('other')), "and nothing of the neighbour's");
+
+  // Byte-for-byte: the importer on the far end must land exactly what the
+  // library holds, or the sample is not the library.
+  const tick = decoded.get('rounds/r1~abc.tickz');
+  assert(new TextDecoder().decode(tick) === 'ticks-one', 'round bytes survive untouched');
+  const manifest = JSON.parse(new TextDecoder().decode(decoded.get('manifest.json')));
+  assert(manifest.id === 'abc', 'and so does the manifest');
+}
+
+{
+  assert((await packageDemo('nope', io)) === null, 'an unknown demo is null, not a throw');
+  assert((await packageDemo('../../etc/passwd', io)) === null, 'a hostile id is sanitized to nothing');
+  assert((await packageDemo('', io)) === null, 'and an empty one too');
+}
+
+console.log('sim export: ok');

@@ -117,11 +117,19 @@ export function decodePng(buf) {
 
 /**
  * Walkable bitmask for a map code, or null when the radar is missing.
+ *
+ * Stacked maps have two radars and therefore two masks. Nuke's `lowerFile` is
+ * a genuinely different floor plan over the same world x/y, split at the
+ * calibration's `lowerZ`, so asking for the wrong level gives a mask that is
+ * confidently wrong rather than empty.
+ *
  * @param {string} mapCode
+ * @param {'default'|'lower'} [level]
  * @returns {Promise<Uint8Array|null>}
  */
-export async function loadRadarMask(mapCode) {
-  const file = MAPS[mapCode]?.file;
+export async function loadRadarMask(mapCode, level = 'default') {
+  const entry = MAPS[mapCode];
+  const file = level === 'lower' ? entry?.lowerFile : entry?.file;
   if (!file) return null;
   let buf;
   try {

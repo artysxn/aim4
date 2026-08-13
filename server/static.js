@@ -59,6 +59,10 @@ const SITE_VIEW_PATHS = new Set([
   '/team',
   '/account',
   '/admin',
+  // Deep link only. The API answers 404 to everyone but one account, and the
+  // view renders nothing until it says otherwise. This entry exists so the
+  // path reaches the SPA shell instead of falling through to the trainer.
+  '/sim',
   // Legacy bookmarks still land on the SPA shell (client redirects).
   '/replays',
   '/replays/playlists',
