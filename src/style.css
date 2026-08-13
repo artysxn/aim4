@@ -2,7 +2,7 @@
    style.css
    The UI layer is HTML/CSS stacked over the WebGL canvas. Dark gray base with
    red accent highlights. The 3D canvas and crosshair sit underneath;
-   #ui-root is click-through except for actual panels/buttons.
+   #ui-root is click-through except for actual panels/buttons...
 --------------------------------------------------------------------------- */
 
 @import './lib/entitlementUi.css';
