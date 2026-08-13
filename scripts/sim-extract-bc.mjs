@@ -75,13 +75,16 @@ function tracksFromTicks(bytes, meta) {
       p.lastHealth = out.health;
     }
   }
-  // The planter's channel, from the engine's own meta.
-  if (meta?.plantTick && meta?.planterSlot != null) {
-    const p = players[meta.planterSlot];
+  // The planter's channel, from the parser-shaped bomb events the sim meta
+  // now carries (the planted entry names the player; slots come from roster).
+  const planted = meta?.events?.bomb?.find((b) => b.type === 'planted');
+  if (planted) {
+    const slot = meta.players?.find((pl) => pl.id === planted.player)?.slot;
+    const p = slot != null ? players[slot] : null;
     if (p) {
       p.events.push(
-        { type: 'plant_start', tick: meta.plantTick - Math.round(3.2 * 64) },
-        { type: 'plant_end', tick: meta.plantTick }
+        { type: 'plant_start', tick: planted.tick - Math.round(3.2 * 64) },
+        { type: 'plant_end', tick: planted.tick }
       );
     }
   }

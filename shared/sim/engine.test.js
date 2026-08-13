@@ -571,7 +571,17 @@ if (graph) {
     assert(meta.freezeEndTick === e.state.liveTick, 'and the freeze end the clock needs');
     assert(meta.players.length === 10, 'and ten players');
     assert(meta.weapons.includes('ak47'), 'and a weapon dictionary the indices point into');
-    assert(meta.events.some((ev) => ev.type === 'freeze_end'), 'and the events that happened');
+    // Events are stored in the parser's own RoundEvents shape, because the
+    // whole point of the meta is that the existing viewer stack reads it.
+    assert(
+      meta.events &&
+        Array.isArray(meta.events.kills) &&
+        Array.isArray(meta.events.grenades) &&
+        Array.isArray(meta.events.bomb),
+      'and the events in the parser schema'
+    );
+    assert(meta.stats && meta.players.every((p) => meta.stats[p.id]?.loadout?.length > 0),
+      'and a freeze-end loadout per player');
   }
 
   mapChecked = true;

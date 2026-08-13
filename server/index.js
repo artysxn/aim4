@@ -26,7 +26,8 @@ import { handleAccountRequest } from './account/routes.js';
 import { handleBillingRequest } from './billing/routes.js';
 import { handleFaceitWebhookRequest } from './ingest/faceit/webhookRoutes.js';
 import { checkCaseSensitivity, sweepStaleUploads } from './replays/demoStore.js';
-import { resumeInterruptedParses, sweepBatchFiles } from './replays/jobs.js';
+import { parseQueueBusy, resumeInterruptedParses, sweepBatchFiles } from './replays/jobs.js';
+import { setParserBusyProbe } from './sim/jobs.js';
 import { printHostBanner, fetchPublicIp } from './network.js';
 import { seedAdmins } from './entitlements/service.js';
 import { backfillEffectiveEntitlements } from './entitlements/load.js';
@@ -280,6 +281,10 @@ sweepStaleUploads().catch(() => {});
 // interrupted parses must not hold the port closed.
 resumeInterruptedParses().catch(() => {});
 sweepBatchFiles().catch(() => {});
+// Sim work yields to demo parsing (SIM-PLAN 9.2b). The probe is injected here
+// rather than imported inside the sim runner so the two queues stay unaware of
+// each other's internals, and so a test can drive it.
+setParserBusyProbe(parseQueueBusy);
 // Admins are a table, not an env list. AIM4_ADMIN_USER_IDS only bootstraps it,
 // so a fresh project has someone who can reach the panel. Never awaited and
 // never fatal: no admins configured is a normal state for a local run.

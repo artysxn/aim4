@@ -107,6 +107,9 @@ export function skillProfile(level = 'average', overrides = {}) {
     profile[key] = lerp(AMATEUR_FLOOR[key], PRO_ENVELOPE[key], k);
   }
   for (const key of DECISION_TRAITS) profile[key] = k;
+  // Not on the ladder: a logit offset on the PFW a bot decides with (8.2),
+  // zero at every level. Filled by the mimic fit (confidence.js) or a knob.
+  profile.confidenceBias = 0;
 
   Object.assign(profile, overrides);
   return clampToEnvelope(profile);

@@ -307,6 +307,40 @@
   border-radius: 50%;
   flex: none;
 }
+.sim-eq {
+  color: var(--muted);
+  font-size: 11px;
+}
+.sim-util {
+  color: #8fae8f;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.sim-armor {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.sim-host {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line, #232326);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.sim-host-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.sim-text {
+  min-width: 180px;
+}
 
 .sim-empty {
   color: var(--muted);

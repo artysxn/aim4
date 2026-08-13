@@ -14,7 +14,6 @@ import {
   fetchDemos,
   fetchPlaylists,
   fetchRoundMeta,
-  fetchStats,
   fetchStatus,
   fetchUploadBatch,
   findRounds,
@@ -45,7 +44,7 @@ import { formatBytes } from '../replays/tickStore.js';
 import { createStatsPanel, defaultMinRounds } from '../replays/stats/statsPanel.js';
 import { createAnalyticsPanel } from '../replays/analytics/analyticsPanel.js';
 import { createChartsPanel } from '../replays/charts/chartsPanel.js';
-import { invalidateStatsCache } from '../replays/statsCache.js';
+import { invalidateStatsCache, getStatsPayload } from '../replays/statsCache.js';
 import commentsIcon from '../icons/demos_comments.svg?raw';
 import bookmarkIcon from '../icons/demos_bookmarks_added.svg?raw';
 import { mbWrap } from '../icons/menubuttons.js';
@@ -2399,7 +2398,7 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
     }
     const token = ++roundTagToken;
     try {
-      const payload = await fetchStats(demoIds);
+      const payload = await getStatsPayload(demoIds);
       if (token !== roundTagToken) return;
       const next = new Map();
       for (const d of payload?.demos || []) {

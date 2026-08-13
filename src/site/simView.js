@@ -23,14 +23,17 @@
 import './sim.css';
 import { simApi } from './simApi.js';
 import { spinnerNode } from '../lib/spinner.js';
-import { readHeader, readRecord, PLAYER_SLOTS } from '../replays/shared/tickFormat.js';
+import { readHeader, readRecord, FLAG_HAS_HELMET, PLAYER_SLOTS } from '../replays/shared/tickFormat.js';
 
 const SKILLS = ['mix', 't3', 'average', 't2', 't1', 'pro'];
 /**
- * Brains a side can bring (server-validated). 'desire' is the P3b arbiter,
- * 'bc0' the P4 behavior clone proposing over it.
+ * The brains that are not files. Everything else on the dropdown comes from
+ * the host's model registry, so a model trained ten minutes ago is playable
+ * without a deploy (SIM-PLAN 9.9).
  */
-const BRAINS = ['scripted', 'desire', 'bc0'];
+const BUILTIN_BRAINS = ['scripted', 'desire'];
+/** How often a watched job is re-read while it runs. */
+const JOB_POLL_MS = 1500;
 
 function node(tag, className, text) {
   const n = document.createElement(tag);
@@ -51,6 +54,10 @@ function select(options, value) {
     const opt = document.createElement('option');
     opt.value = typeof o === 'string' ? o : o.value;
     opt.textContent = typeof o === 'string' ? o : o.label;
+    if (typeof o !== 'string') {
+      if (o.disabled) opt.disabled = true;
+      if (o.title) opt.title = o.title;
+    }
     if (opt.value === value) opt.selected = true;
     el.append(opt);
   }
@@ -113,7 +120,7 @@ export function initSimView(host) {
 
     const tabs = node('div', 'sim-tabs');
     const panels = {};
-    const tabNames = ['Run', 'Matches', 'Viewer', 'Export'];
+    const tabNames = ['Run', 'Jobs', 'Matches', 'Viewer', 'Export'];
     const tabButtons = {};
 
     for (const name of tabNames) {
@@ -134,19 +141,37 @@ export function initSimView(host) {
         panels[n].hidden = n !== name;
       }
       if (name !== 'Viewer' && stopPlayback) stopPlayback();
+      if (name === 'Jobs') refreshJobs().catch(() => {});
     }
 
     // ---- Run -------------------------------------------------------------
 
-    const mapsRes = await simApi.maps().catch(() => ({ maps: [] }));
+    const [mapsRes, modelsRes] = await Promise.all([
+      simApi.maps().catch(() => ({ maps: [] })),
+      simApi.models().catch(() => ({ models: [], host: null }))
+    ]);
     const playable = mapsRes.maps.filter((m) => m.angles).map((m) => m.map);
+    // A broken model stays on the list, disabled, with its reason: "bc0 is
+    // missing" and "bc0 speaks an older observation version" are different
+    // problems and the panel should not flatten them into an empty dropdown.
+    const brainOptions = [
+      ...BUILTIN_BRAINS.map((b) => ({ value: b, label: b })),
+      ...(modelsRes.models || []).map((m) => ({
+        value: m.name,
+        label: m.ok
+          ? `${m.name}${m.valAccuracy != null ? ` (${(m.valAccuracy * 100).toFixed(0)}%)` : ''}`
+          : `${m.name} (broken)`,
+        disabled: !m.ok,
+        title: m.ok ? `${m.source}, trained ${m.trainedAt?.slice(0, 10) || ''}` : m.error
+      }))
+    ];
     const mapSel = select(playable.length ? playable : ['INF'], playable[0] || 'INF');
     const seed = numberInput(1, { min: '0' });
     const rounds = numberInput(24, { min: '1', max: '60' });
     const skillA = select(SKILLS, 'average');
     const skillB = select(SKILLS, 'average');
-    const brainA = select(BRAINS, 'desire');
-    const brainB = select(BRAINS, 'scripted');
+    const brainA = select(brainOptions, 'desire');
+    const brainB = select(brainOptions, 'scripted');
     const recordEvery = numberInput(1, { min: '1' });
     const runBtn = node('button', 'sim-btn sim-btn-primary', 'Run match');
 
@@ -171,10 +196,46 @@ export function initSimView(host) {
       runStatus.textContent = 'No baked maps on this host.';
     }
 
+    /**
+     * Watch a queued job to its end, reporting progress into `statusEl`.
+     * Polling rather than a socket: a job's whole output is one line of text
+     * and the panel is open for minutes, not hours.
+     */
+    async function watchJob(id, statusEl, onDone) {
+      for (;;) {
+        await new Promise((r) => setTimeout(r, JOB_POLL_MS));
+        let job;
+        try {
+          ({ job } = await simApi.job(id));
+        } catch (err) {
+          statusEl.className = 'sim-error';
+          statusEl.textContent = err.message;
+          return null;
+        }
+        if (jobsPanelVisible()) renderJobsSoon();
+        if (job.state === 'queued') {
+          statusEl.textContent = 'Queued.';
+        } else if (job.state === 'running') {
+          const secs = Math.round((job.elapsedMs || 0) / 1000);
+          statusEl.textContent = `${job.progress || 'Running.'} (${secs}s)`;
+        } else {
+          if (job.state === 'error') {
+            statusEl.className = 'sim-error';
+            statusEl.textContent = job.error || 'Job failed.';
+          } else {
+            statusEl.className = 'sim-note';
+            statusEl.textContent = job.result || 'Done.';
+          }
+          if (onDone) await onDone(job);
+          return job;
+        }
+      }
+    }
+
     runBtn.addEventListener('click', async () => {
       runBtn.disabled = true;
       runStatus.className = 'sim-note';
-      runStatus.textContent = 'Running.';
+      runStatus.textContent = 'Queued.';
       runResult.replaceChildren();
       try {
         const r = await simApi.run({
@@ -192,44 +253,16 @@ export function initSimView(host) {
           runStatus.textContent = r.error;
           return;
         }
-        const m = r.match;
-        runStatus.textContent =
-          `${m.id}: ${m.score.A} to ${m.score.B}` +
-          (m.winner ? `, ${m.winner} wins` : '') +
-          `, ${m.storedRounds} of ${m.rounds.length} rounds stored, ${m.elapsedMs} ms`;
-
-        const { table: tbl, tbody } = table([
-          '#',
-          'Winner',
-          'How',
-          { label: 'Kills', align: 'right' },
-          'Score',
-          ''
-        ]);
-        for (const x of m.rounds) {
-          const tr = node('tr');
-          const num = node('td', 'sim-num', String(x.round));
-          const win = node('td');
-          win.append(sidePill(x.winner));
-          const tds = [
-            num,
-            win,
-            node('td', 'sim-dim', x.reason),
-            node('td', 'sim-num', String(x.kills)),
-            node('td', 'sim-num', `${x.score.A}-${x.score.B}`)
-          ];
-          const act = node('td');
-          if (x.recorded) {
-            const b = node('button', 'sim-row-btn', 'Watch');
-            b.addEventListener('click', () => openRound(m.id, x.round, m.map));
-            act.append(b);
-          }
-          tds.push(act);
-          tr.append(...tds);
-          tbody.append(tr);
-        }
-        runResult.append(tbl);
-        await refreshMatches();
+        await watchJob(r.job.id, runStatus, async (job) => {
+          await refreshMatches();
+          if (job.state !== 'done') return;
+          // The match is on disk now; show its rounds from the stored list
+          // rather than from a response the job never sent back.
+          const { matches } = await simApi.matches();
+          const m = matches[0];
+          if (!m) return;
+          runResult.replaceChildren(matchRoundsTable(m));
+        });
       } catch (err) {
         runStatus.className = 'sim-error';
         runStatus.textContent = err.message;
@@ -237,6 +270,204 @@ export function initSimView(host) {
         runBtn.disabled = false;
       }
     });
+
+    /** The per-round table a finished match shows, with Watch buttons. */
+    function matchRoundsTable(m) {
+      const { table: tbl, tbody } = table([
+        '#',
+        'Winner',
+        'How',
+        { label: 'Kills', align: 'right' },
+        'Score',
+        ''
+      ]);
+      for (const x of m.rounds) {
+        const tr = node('tr');
+        const win = node('td');
+        win.append(sidePill(x.winner));
+        const act = node('td');
+        if (x.recorded) {
+          const b = node('button', 'sim-row-btn', 'Watch');
+          b.addEventListener('click', () => openRound(m.id, x.round, m.map));
+          act.append(b);
+        }
+        tr.append(
+          node('td', 'sim-num', String(x.round)),
+          win,
+          node('td', 'sim-dim', x.reason),
+          node('td', 'sim-num', String(x.kills)),
+          node('td', 'sim-num', `${x.score.A}-${x.score.B}`),
+          act
+        );
+        tbody.append(tr);
+      }
+      return tbl;
+    }
+
+    // ---- Jobs ------------------------------------------------------------
+    //
+    // The control surface SIM-PLAN 9.2b says has to exist: what is running,
+    // what this host will and will not do, and a way to stop it. Without it a
+    // run started from a browser is a run nobody can find again.
+
+    const hostBox = node('div', 'sim-host');
+    const trainControls = node('div', 'sim-controls');
+    const trainStatus = node('p', 'sim-note', '');
+    const jobsWrap = node('div', 'sim-scroll');
+
+    const tMap = select(playable.length ? playable : ['INF'], playable[0] || 'INF');
+    const tMatches = numberInput(6, { min: '1', max: '200' });
+    const tRounds = numberInput(12, { min: '1', max: '30' });
+    const tSeed = numberInput(40, { min: '0' });
+    const collectBtn = node('button', 'sim-btn', 'Collect dataset');
+
+    const tDataset = document.createElement('input');
+    tDataset.type = 'text';
+    tDataset.placeholder = 'path to a .jsonl dataset';
+    tDataset.className = 'sim-text';
+    const tEpochs = numberInput(60, { min: '1', max: '500' });
+    const tEmbed = numberInput(16, { min: '0', max: '64' });
+    const tName = document.createElement('input');
+    tName.type = 'text';
+    tName.value = 'bc0';
+    tName.className = 'sim-text';
+    const trainBtn = node('button', 'sim-btn sim-btn-primary', 'Train model');
+
+    trainControls.append(
+      field('Map', tMap),
+      field('Matches', tMatches),
+      field('Rounds', tRounds),
+      field('Seed', tSeed),
+      collectBtn,
+      field('Dataset', tDataset),
+      field('Epochs', tEpochs),
+      field('Embed', tEmbed),
+      field('Name', tName),
+      trainBtn
+    );
+    panels.Jobs.append(hostBox, trainControls, trainStatus, jobsWrap);
+
+    collectBtn.addEventListener('click', async () => {
+      collectBtn.disabled = true;
+      trainStatus.className = 'sim-note';
+      trainStatus.textContent = 'Queued.';
+      try {
+        const r = await simApi.startJob('collect', {
+          map: tMap.value,
+          matches: Number(tMatches.value),
+          rounds: Number(tRounds.value),
+          seed: Number(tSeed.value)
+        });
+        if (r.error) {
+          trainStatus.className = 'sim-error';
+          trainStatus.textContent = r.error;
+          return;
+        }
+        await watchJob(r.job.id, trainStatus, async (job) => {
+          // The runner picked the written dataset out of the stream, so
+          // Collect then Train is two clicks with nothing typed between them.
+          if (job.artifacts?.dataset) tDataset.value = job.artifacts.dataset;
+          await refreshJobs();
+        });
+      } catch (err) {
+        trainStatus.className = 'sim-error';
+        trainStatus.textContent = err.message;
+      } finally {
+        collectBtn.disabled = false;
+      }
+    });
+
+    trainBtn.addEventListener('click', async () => {
+      trainBtn.disabled = true;
+      trainStatus.className = 'sim-note';
+      trainStatus.textContent = 'Queued.';
+      try {
+        const r = await simApi.startJob('train', {
+          dataset: tDataset.value.trim(),
+          epochs: Number(tEpochs.value),
+          embedDim: Number(tEmbed.value),
+          name: tName.value.trim() || 'bc0'
+        });
+        if (r.error) {
+          trainStatus.className = 'sim-error';
+          trainStatus.textContent = r.error;
+          return;
+        }
+        await watchJob(r.job.id, trainStatus, () => refreshJobs());
+      } catch (err) {
+        trainStatus.className = 'sim-error';
+        trainStatus.textContent = err.message;
+      } finally {
+        trainBtn.disabled = false;
+      }
+    });
+
+    const jobsPanelVisible = () => !panels.Jobs.hidden;
+    let jobsSoon = null;
+    function renderJobsSoon() {
+      if (jobsSoon) return;
+      jobsSoon = setTimeout(() => {
+        jobsSoon = null;
+        refreshJobs().catch(() => {});
+      }, JOB_POLL_MS);
+    }
+
+    async function refreshJobs() {
+      const { jobs, host } = await simApi.jobs();
+
+      hostBox.replaceChildren();
+      if (host) {
+        const line = (label, value, cls) => {
+          const row = node('div', 'sim-host-row');
+          row.append(node('span', 'sim-field-name', label), node('span', cls || null, value));
+          return row;
+        };
+        hostBox.append(
+          line('Heavy jobs', host.heavyJobs ? 'on' : 'off (set AIM4_SIM_WORKERS)', host.heavyJobs ? null : 'sim-dim'),
+          line(
+            'Trainer',
+            host.trainer?.ok ? `${host.trainer.version}, numpy ${host.trainer.numpy}` : 'no python with numpy',
+            host.trainer?.ok ? null : 'sim-dim'
+          ),
+          line('Cores', String(host.cpus)),
+          line('Queue', host.parserBusy ? 'waiting on demo parsing' : `${host.queued} waiting`)
+        );
+      }
+
+      jobsWrap.replaceChildren();
+      if (!jobs.length) {
+        jobsWrap.append(node('p', 'sim-empty', 'Nothing has been queued on this host yet.'));
+        return;
+      }
+      const { table: tbl, tbody } = table(['Job', 'What', 'State', 'Elapsed', 'Last line', '']);
+      for (const j of jobs) {
+        const tr = node('tr');
+        const act = node('td');
+        if (j.state === 'running' || j.state === 'queued') {
+          const stop = node('button', 'sim-row-btn', 'Stop');
+          stop.addEventListener('click', async () => {
+            stop.disabled = true;
+            await simApi.stopJob(j.id).catch(() => {});
+            await refreshJobs();
+          });
+          act.append(stop);
+        }
+        tr.append(
+          node('td', 'sim-dim', j.kind),
+          node('td', null, j.label || ''),
+          node('td', j.state === 'error' ? 'sim-error' : null, j.state),
+          node('td', 'sim-num', `${Math.round((j.elapsedMs || 0) / 1000)}s`),
+          node('td', 'sim-dim', (j.error || j.progress || '').slice(0, 90)),
+          act
+        );
+        tbody.append(tr);
+      }
+      jobsWrap.append(tbl);
+      // Keep the list live while anything is still moving.
+      if (jobs.some((j) => j.state === 'running' || j.state === 'queued') && jobsPanelVisible()) {
+        renderJobsSoon();
+      }
+    }
 
     // ---- Matches ---------------------------------------------------------
 
@@ -357,7 +588,11 @@ export function initSimView(host) {
               alive: out.alive,
               side: out.side,
               flags: out.flags,
-              weapon: ''
+              armor: out.armor,
+              flash: out.flash,
+              // Dictionary index, resolved through meta.weapons at draw time,
+              // exactly as the timeline viewer does it.
+              weapon: out.weapon
             });
           }
           frames.push(states);
@@ -384,20 +619,27 @@ export function initSimView(host) {
     function drawFrame(row) {
       if (!round || !renderer) return;
       const states = round.frames[row] || [];
-      const players = states.map((s, slot) => ({
-        id: `p${slot}`,
-        slot,
-        name: round.meta.players?.[slot]?.name || `p${slot}`,
-        team: s.side === 'CT' ? 2 : 1,
-        side: s.side
-      }));
+      const players = states.map((s, slot) => {
+        const p = round.meta.players?.[slot];
+        return {
+          id: p?.id || `p${slot}`,
+          slot,
+          name: p?.name || `p${slot}`,
+          team: p?.team ?? (slot < 5 ? 1 : 2),
+          side: s.side
+        };
+      });
 
       renderer.render({
         players,
         states,
         tick: (round.header.firstTick || 0) + row,
         tickRate: round.header.tickRate || 64,
-        grenades: [],
+        // The parser-shaped events and the roster-to-side map are what the
+        // utility layer draws from: smokes, fires, flashes, flights.
+        events: round.meta.events || { kills: [], shots: [], grenades: [], bomb: [] },
+        weapons: round.meta.weapons || [],
+        teamSides: { 1: round.meta.team1Side, 2: round.meta.team2Side },
         mapCode: round.map
       });
 
@@ -408,15 +650,48 @@ export function initSimView(host) {
       const secs = (tick - live) / rate;
       clock.textContent = secs < 0 ? `freeze ${(-secs).toFixed(1)}` : `${secs.toFixed(1)}s`;
 
+      // Utility still in the pocket: the freeze-end loadout minus everything
+      // this player has thrown by the scrub position.
+      const NADE_LETTER = {
+        smokegrenade: 'S',
+        flashbang: 'F',
+        hegrenade: 'H',
+        molotov: 'M',
+        incgrenade: 'M',
+        decoy: 'D'
+      };
+      const utilAt = (playerId) => {
+        const held = [];
+        for (const item of round.meta.stats?.[playerId]?.loadout || []) {
+          if (NADE_LETTER[item]) held.push(item);
+        }
+        for (const g of round.meta.events?.grenades || []) {
+          if (g.player !== playerId || g.throwTick > tick) continue;
+          const i = held.indexOf(g.type);
+          if (i >= 0) held.splice(i, 1);
+        }
+        return held.map((n) => NADE_LETTER[n]).join(' ');
+      };
+
       roster.replaceChildren();
       for (const side of ['T', 'CT']) {
         roster.append(node('h3', null, side));
         states.forEach((s, slot) => {
           if (s.side !== side) return;
+          const p = round.meta.players?.[slot];
           const rowEl = node('div', `sim-player${s.alive ? '' : ' is-dead'}`);
           const dot = node('span', 'sim-dot');
           dot.style.background = side === 'T' ? '#f0b43c' : '#5a96e6';
-          rowEl.append(dot, node('span', null, round.meta.players?.[slot]?.name || `p${slot}`));
+          rowEl.append(dot, node('span', null, p?.name || `p${slot}`));
+          if (s.alive) {
+            const weapon = round.meta.weapons?.[s.weapon] || '';
+            if (weapon && weapon !== 'knife') rowEl.append(node('span', 'sim-eq', weapon));
+            const util = utilAt(p?.id || `p${slot}`);
+            if (util) rowEl.append(node('span', 'sim-util', util));
+            if (s.armor > 0) {
+              rowEl.append(node('span', 'sim-armor', s.flags & FLAG_HAS_HELMET ? 'HK' : 'K'));
+            }
+          }
           rowEl.append(node('span', 'sim-hp', s.alive ? String(s.health) : 'dead'));
           roster.append(rowEl);
         });

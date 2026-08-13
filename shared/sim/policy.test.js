@@ -4,7 +4,10 @@
 // tests are the contract: version gates fail loudly, shapes are checked at
 // load, softmax is a distribution, proposals renormalize over the candidates
 // on offer, forced candidates are untouchable, and an unconfident head
-// changes nothing.
+// changes nothing. v2 adds the player embedding (SIM-PLAN 9.3 / 10.3):
+// lookup vs the default row, dimension gates, and — because every current
+// call site passes no key — v1 files must keep loading and a keyless v2
+// call must ride the default row.
 
 import { CONFIDENCE_FLOOR, POLICY_VERSION, applyProposals, loadPolicy } from './policy.js';
 import { OBSERVATION_SIZE, OBSERVE_VERSION } from './observe.js';
@@ -13,16 +16,53 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
 }
 
-/** A tiny hand-built model: obs -> 2 hidden -> 3 options. */
+/** A tiny hand-built v1 model: obs -> 2 hidden -> 3 options. */
 function model(over = {}) {
   const W0 = [new Array(OBSERVATION_SIZE).fill(0), new Array(OBSERVATION_SIZE).fill(0)];
   W0[0][0] = 1; // hidden0 reads obs[0]
   W0[1][2] = 1; // hidden1 reads obs[2] (hp)
   return {
-    v: POLICY_VERSION,
+    v: 1,
     obsVersion: OBSERVE_VERSION,
     vocab: ['hold_angle', 'wide_swing', 'rotate'],
     activation: 'tanh',
+    layers: [
+      { W: W0, b: [0, 0] },
+      {
+        W: [
+          [2, 0],
+          [0, 2],
+          [0, 0]
+        ],
+        b: [0, 0, 0]
+      }
+    ],
+    ...over
+  };
+}
+
+/**
+ * A tiny v2 model: (obs + 2-d embedding) -> 2 hidden -> 3 options.
+ * hidden1 reads embed[0], so the player key steers the wide_swing logit:
+ * "aggro" pushes it up, "passive" pushes it down, the default row (zero)
+ * leaves it alone.
+ */
+const EMBED_DIM = 2;
+function modelV2(over = {}) {
+  const width = OBSERVATION_SIZE + EMBED_DIM;
+  const W0 = [new Array(width).fill(0), new Array(width).fill(0)];
+  W0[0][0] = 1; // hidden0 reads obs[0]
+  W0[1][OBSERVATION_SIZE] = 1; // hidden1 reads embed[0]
+  return {
+    v: 2,
+    obsVersion: OBSERVE_VERSION,
+    vocab: ['hold_angle', 'wide_swing', 'rotate'],
+    activation: 'tanh',
+    embed: {
+      dim: EMBED_DIM,
+      default: [0, 0],
+      players: { aggro: [1, 0], passive: [-1, 0] }
+    },
     layers: [
       { W: W0, b: [0, 0] },
       {
@@ -103,6 +143,98 @@ const obs = () => new Array(OBSERVATION_SIZE).fill(0);
     threw = true;
   }
   assert(threw, 'a wrong-width observation is a loud error');
+}
+
+// ---- v2: the player embedding ---------------------------------------------------
+
+{
+  assert(POLICY_VERSION === 2, 'POLICY_VERSION is the max supported version');
+
+  // Both versions still load; the gate is about UNKNOWN versions.
+  loadPolicy(model()); // v1 file still loads
+  loadPolicy(modelV2()); // v2 file loads
+
+  // The v2 load gates: every embedding shape failure is a load error.
+  for (const [label, bad] of [
+    ['v2 without embed', modelV2({ embed: undefined })],
+    ['zero embed dim', modelV2({ embed: { dim: 0, default: [], players: {} } })],
+    [
+      'default row off-dimension',
+      modelV2({ embed: { dim: EMBED_DIM, default: [0], players: {} } })
+    ],
+    [
+      'player row off-dimension',
+      modelV2({ embed: { dim: EMBED_DIM, default: [0, 0], players: { aggro: [1, 0, 0] } } })
+    ],
+    [
+      'first layer sized for bare observations',
+      (() => {
+        const m = modelV2();
+        m.layers[0].W = m.layers[0].W.map((row) => row.slice(0, OBSERVATION_SIZE));
+        return m;
+      })()
+    ],
+    [
+      'v1 first layer sized for obs + embedding',
+      (() => {
+        const m = model();
+        m.layers[0].W = m.layers[0].W.map((row) => row.concat([0, 0]));
+        return m;
+      })()
+    ]
+  ]) {
+    let threw = false;
+    try {
+      loadPolicy(bad);
+    } catch {
+      threw = true;
+    }
+    assert(threw, `${label} fails at load, not at decision time`);
+  }
+
+  // Lookup vs the default row. hidden1 reads embed[0], feeding wide_swing.
+  const p2 = loadPolicy(modelV2());
+  const base = p2.probs(obs()); // no key -> default row (zero)
+  const unseen = p2.probs(obs(), 'never-in-training'); // unknown key -> default row
+  const up = p2.probs(obs(), 'aggro');
+  const down = p2.probs(obs(), 'passive');
+  assert(
+    Math.abs(base.get('wide_swing') - unseen.get('wide_swing')) < 1e-12,
+    'an unseen key rides the default row, exactly'
+  );
+  assert(
+    up.get('wide_swing') > base.get('wide_swing') &&
+      down.get('wide_swing') < base.get('wide_swing'),
+    'a known key steers the head through its embedding'
+  );
+  let sum = 0;
+  for (const v of up.values()) sum += v;
+  assert(Math.abs(sum - 1) < 1e-9, 'the conditioned head is still a distribution');
+
+  // A key on Object.prototype must not leak a "row" out of the prototype.
+  const proto = p2.probs(obs(), 'toString');
+  assert(
+    Math.abs(proto.get('wide_swing') - base.get('wide_swing')) < 1e-12,
+    'prototype keys are unseen players, not accidents'
+  );
+
+  // The caller still hands over BARE observations; the model appends the
+  // embedding itself. Pre-widened input is the bug this gate exists for.
+  let threw = false;
+  try {
+    p2.probs(new Array(OBSERVATION_SIZE + EMBED_DIM).fill(0), 'aggro');
+  } catch {
+    threw = true;
+  }
+  assert(threw, 'a pre-widened observation is a loud error');
+
+  // v1 semantics are untouched: the second argument is ignored.
+  const p1 = loadPolicy(model());
+  const plain = p1.probs(obs());
+  const keyed = p1.probs(obs(), 'aggro');
+  for (const id of p1.vocab) {
+    assert(plain.get(id) === keyed.get(id), 'a v1 model ignores the player key');
+  }
 }
 
 // ---- proposals ------------------------------------------------------------------

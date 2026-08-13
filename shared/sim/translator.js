@@ -110,6 +110,11 @@ export function createTranslator(engine, opts = {}) {
       return followErrorStats(slots[slot].followErrors);
     },
 
+    /** Whether the slot's current utility order has fired its one shot. */
+    hasThrown(slot) {
+      return Boolean(slots[slot]?.thrown);
+    },
+
     isBroken(slot) {
       return Boolean(slots[slot].follower?.broken);
     },

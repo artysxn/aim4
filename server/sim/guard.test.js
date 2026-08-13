@@ -168,7 +168,12 @@ assert(new Set(refusals).size === 1, 'every 404 body is byte-identical');
     '/api/sim/export/demo?id=x',
     '/api/sim/matches',
     '/api/sim/matches/some-id/round/3/meta',
-    '/api/sim/run'
+    '/api/sim/run',
+    // The job runner and the model registry are the same secret as everything
+    // else here: what this host trains and how well it scores are strategy.
+    '/api/sim/jobs',
+    '/api/sim/jobs/some-job',
+    '/api/sim/models'
   ];
   const anonBodies = [];
   for (const pathq of surface) {

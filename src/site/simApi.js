@@ -50,11 +50,21 @@ async function post(path, body) {
 export const simApi = {
   me: () => get('/api/sim/me'),
 
-  // Scripted matches, run server-side and stored under the sim directory.
+  // Matches are queued work, not a blocking call: run() answers with a job id
+  // and the panel watches it (SIM-PLAN 9.2b).
   run: (params) => post('/api/sim/run', params),
   runStatus: () => get('/api/sim/run'),
   matches: () => get('/api/sim/matches'),
   maps: () => get('/api/sim/maps'),
+
+  /** The model registry: which brains this host can put on the map (9.9). */
+  models: () => get('/api/sim/models'),
+
+  // Jobs: start, list, watch, stop.
+  startJob: (kind, params) => post('/api/sim/jobs', { kind, params }),
+  jobs: () => get('/api/sim/jobs'),
+  job: (id) => get(`/api/sim/jobs/${encodeURIComponent(id)}`),
+  stopJob: (id) => post(`/api/sim/jobs/${encodeURIComponent(id)}/stop`, {}),
 
   /** A stored round: the parser's own tick buffer, plus its meta. */
   roundMeta: (matchId, round) =>

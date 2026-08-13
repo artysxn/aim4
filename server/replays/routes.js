@@ -68,7 +68,7 @@ import {
   writeRoundNotes
 } from './demoStore.js';
 import { cpuProbe, memorySnapshot } from './hostMemory.js';
-import { forgetDemoIndex, refreshLibraryStats, scheduleStatsIndex, statsPayload } from './statsIndex.js';
+import { forgetDemoIndex, refreshLibraryStats, scheduleStatsIndex, STATS_LIBRARY_PAGE, statsPayload } from './statsIndex.js';
 import { isAcceptedUpload, rarSupport } from './archive.js';
 import { allJobs, batchStatus, enqueueParse, forgetJob, getBatch, jobStatus, startIngest } from './jobs.js';
 import { SHARED_LIBRARY, authStatus, identify } from './auth.js';
@@ -968,9 +968,9 @@ export async function handleReplayRequest(req, res, url) {
   }
 
   // ---- stats --------------------------------------------------------------
-  // Returns the compact per-round index, not finished tables: the client
-  // re-filters and re-aggregates it locally, so changing a filter (or scrubbing
-  // the viewer's live scoreboard round by round) costs no request at all.
+  // Compact per-round index, one page at a time (STATS_LIBRARY_PAGE). The
+  // client paints the first page, then asks for the next. Filtering still
+  // happens in the browser against whatever has arrived so far.
   if (req.method === 'GET' && p === '/api/replays/stats') {
     const only = csv(url, 'demos');
     const { allowed } = await readable();
@@ -979,9 +979,18 @@ export async function handleReplayRequest(req, res, url) {
       url.searchParams.get('stream') === '1' ||
       url.searchParams.get('stream') === 'true' ||
       /application\/x-ndjson/i.test(String(req.headers.accept || ''));
+    const offset = Math.max(0, Math.floor(Number(url.searchParams.get('offset') || 0) || 0));
+    const rawLimit = url.searchParams.get('limit');
+    const limit =
+      rawLimit === null || rawLimit === ''
+        ? only?.length
+          ? Math.min(STATS_LIBRARY_PAGE, only.length)
+          : STATS_LIBRARY_PAGE
+        : Math.max(1, Math.min(STATS_LIBRARY_PAGE, Math.floor(Number(rawLimit) || STATS_LIBRARY_PAGE)));
+    const pageOpts = { offset, limit };
 
     if (!stream) {
-      const payload = await statsPayload(statsIo, user, records, only);
+      const payload = await statsPayload(statsIo, user, records, only, pageOpts);
       // The aggregate is computed once and then trimmed to the caller's tier.
       // Trimming here rather than in the client is the point: the client cannot
       // reveal a metric it was never sent.
@@ -1003,6 +1012,7 @@ export async function handleReplayRequest(req, res, url) {
     };
     try {
       const payload = await statsPayload(statsIo, user, records, only, {
+        ...pageOpts,
         onProgress: (p) => writeLine({ type: 'progress', ...p })
       });
       const total = Array.isArray(payload?.demos) ? payload.demos.length : 0;
@@ -1012,7 +1022,13 @@ export async function handleReplayRequest(req, res, url) {
       // browser parsed a multi‑megabyte line with no further progress.
       writeLine({ type: 'progress', phase: 'packing', done: total, total });
       const gated = gateStatsPayload(me, payload);
-      writeLine({ type: 'done', total });
+      writeLine({
+        type: 'done',
+        total,
+        offset: payload.offset,
+        libraryTotal: payload.total,
+        hasMore: payload.hasMore
+      });
       // Raw JSON after the NDJSON trailer — not escaped inside another JSON object.
       const body = JSON.stringify(gated);
       const chunk = 64 * 1024;

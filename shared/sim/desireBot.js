@@ -25,7 +25,7 @@
 //     attacker on the damage event
 // ---------------------------------------------------------------------------
 
-import { DECISION_EVERY_TICKS, FREEZE_SECONDS, TICK_RATE, ticksFor } from './constants.js';
+import { ADHOC_THROW_MAX, DECISION_EVERY_TICKS, FREEZE_SECONDS, TICK_RATE, ticksFor } from './constants.js';
 import { JointBelief, UPDATE_EVERY_TICKS } from './knowledge.js';
 import { SelfFootprint } from './exposure.js';
 import { LatencyGate } from './attention.js';
@@ -531,6 +531,11 @@ export function desireController({
           return intent;
         };
 
+        // Seat counter for the mimic key: the BC dataset stamps decisions
+        // "T0".."CT4" in decision order within a tick (sim-collect-bc.mjs),
+        // so inference keys the embedding the same positional way. Real
+        // SteamID64 keys replace this when demo-labelled datasets arrive.
+        let decideSeat = 0;
         for (const s of R.slots) {
           const b = bodies[s];
           if (!b.alive) continue;
@@ -549,7 +554,9 @@ export function desireController({
             arrived,
             planted: state.bomb.planted,
             defused: Boolean(state.bomb.defusedBy),
-            thrown: false
+            // The translator owns the one-shot, so it is the authority on
+            // whether this slot's utility order has fired.
+            thrown: R.translator.hasThrown(s)
           });
 
           if (runner.active && !runner.mayReplace(tick)) {
@@ -667,6 +674,53 @@ export function desireController({
                 params: { target: run.anchor, gait: 'walk' },
                 prior: 0.45 + Math.max(0, Math.min(0.2, run.opportunity / 4))
               });
+            }
+          }
+
+          // Utility: the reactive rung of the ladder (6.22). A held heavy
+          // nade wants the ground the belief is angriest about inside throw
+          // range: the T smokes the watcher he is about to walk at, the CT
+          // burns the approach he is holding. One shot, priced through
+          // foresight like every other want; the arbiter is free to prefer
+          // holding it, which is what saving utility for the late round IS.
+          if (!bombMasked && !state.bomb.planted && b.grenades.length) {
+            const heavy = b.grenades.find(
+              (g) => g === 'smokegrenade' || g === 'molotov' || g === 'incgrenade'
+            );
+            if (heavy) {
+              let at = null;
+              let atMass = 0;
+              for (const id of nearestAnchors(R.graph, b.pos.x, b.pos.y, b.level, 12)) {
+                if (id === myAnchor?.id) continue;
+                const a = R.graph.anchor(id);
+                if (!a || a.level !== b.level) continue;
+                const d = Math.hypot(a.world.x - b.pos.x, a.world.y - b.pos.y);
+                if (d < 260 || d > ADHOC_THROW_MAX) continue;
+                // The ad-hoc throw is a straight lob that stops at the first
+                // wall (engine.throwGrenade walks this exact line), so gate on
+                // the same walk: a blocked line means smoking one's own feet.
+                const ux = (a.world.x - b.pos.x) / d;
+                const uy = (a.world.y - b.pos.y) / d;
+                let carry = 0;
+                for (let step = 20; step <= d; step += 20) {
+                  if (R.graph.isSolidWorld(b.pos.x + ux * step, b.pos.y + uy * step, b.level)) break;
+                  carry = step;
+                }
+                if (carry < d * 0.7) continue;
+                const m = massAt(id, a.level);
+                if (m > atMass) {
+                  atMass = m;
+                  at = id;
+                }
+              }
+              if (at && atMass > 0.2) {
+                candidates.push({
+                  id: 'utility_setup',
+                  params: { spot: myAnchor?.id ?? at, utilityType: heavy, at },
+                  prior: 0.5 + Math.min(0.25, atMass * 0.5),
+                  motive: `${heavy === 'smokegrenade' ? 'smoking' : 'burning'} ${at}: the read puts ${atMass.toFixed(2)} there`
+                });
+              }
             }
           }
           if (holes.length && home && !holes.includes(home.home)) {
@@ -797,7 +851,9 @@ export function desireController({
             policy || collect
               ? buildObs(R, s, b, round, myLiving, tick, angles)
               : null;
-          if (policy && obs) applyProposals(candidates, policy.probs(obs));
+          const seatKey = `${R.side}${decideSeat}`;
+          if (obs) decideSeat += 1;
+          if (policy && obs) applyProposals(candidates, policy.probs(obs, seatKey));
 
           // Price through foresight and let the arbiter want something.
           const decision = R.arbiters[s].decide({
@@ -826,7 +882,8 @@ export function desireController({
                   hp: b.health,
                   armor: b.armor,
                   helmet: b.helmet,
-                  weapon: b.weapon
+                  weapon: b.weapon,
+                  confidenceBias: R.profiles[s].confidenceBias ?? 0
                 },
                 belief: R.belief,
                 footprint: R.footprints[s],

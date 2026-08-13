@@ -408,6 +408,9 @@ export async function saveRoundNote(file, note) {
   );
 }
 
+/** Demos per GET /stats page. The Database paints after the first page. */
+export const STATS_LIBRARY_PAGE = 300;
+
 /**
  * The stats database: a compact per-round index, not finished tables.
  *
@@ -420,13 +423,17 @@ export async function saveRoundNote(file, note) {
  * unavailable.
  *
  * @param {string[]} [demoIds] limit to these demos; omit for the whole library
- * @param {{ onProgress?: (p: object) => void }} [opts]
+ * @param {{ onProgress?: (p: object) => void, offset?: number, limit?: number }} [opts]
  */
 export async function fetchStats(demoIds = null, opts = {}) {
   const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
   const params = new URLSearchParams();
   if (demoIds?.length) params.set('demos', demoIds.join(','));
   params.set('stream', '1');
+  const offset = Math.max(0, Math.floor(Number(opts.offset) || 0));
+  const limit = Math.max(0, Math.floor(Number(opts.limit) || 0));
+  if (offset) params.set('offset', String(offset));
+  if (limit) params.set('limit', String(limit));
   const url = `${API_BASE}/api/replays/stats?${params}`;
   const res = await safeFetch(url, {
     headers: await headers({ Accept: 'application/x-ndjson, application/json' })
@@ -541,8 +548,10 @@ export async function fetchStats(demoIds = null, opts = {}) {
     }
   } else if (!payload && headerText.trim()) {
     // Fallback: whole response was a single JSON document mislabeled as NDJSON.
+    // A truncated progress line is also valid JSON and must not become the payload.
     try {
-      payload = await parseJsonText(headerText.trim());
+      const parsed = await parseJsonText(headerText.trim());
+      if (parsed && Array.isArray(parsed.demos)) payload = parsed;
     } catch {
       /* fall through */
     }

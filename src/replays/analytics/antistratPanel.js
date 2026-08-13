@@ -8,7 +8,8 @@
 // into the destination team's Documents tab.
 // ---------------------------------------------------------------------------
 
-import { fetchTeams, saveTeamDocument, formatApiError, fetchStats } from '../api.js';
+import { fetchTeams, saveTeamDocument, formatApiError } from '../api.js';
+import { getStatsPayload } from '../statsCache.js';
 import { CAP } from '../../../shared/entitlements/keys.js';
 import { PLAN_NAMES } from '../../../shared/entitlements/catalogue.js';
 import { getEntitlements } from '../../lib/entitlements.js';
@@ -527,7 +528,7 @@ export function createAntistratPanel({ escapeHtml }) {
     fetching = true;
     el.innerHTML = spinnerHtml('Loading teams…');
     try {
-      const data = await fetchStats(null, {
+      const data = await getStatsPayload(null, {
         onProgress: (p) => {
           if (token !== loadToken) return;
           setSpinnerLabel(el, statsProgressLabel(p));

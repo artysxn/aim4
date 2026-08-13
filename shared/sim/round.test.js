@@ -160,7 +160,7 @@ if (!graph) {
     const header = readHeader(rec.encodeTicks());
     assert(header.tickCount === rec.frames.length, 'the round encodes');
     const meta = rec.encodeMeta();
-    assert(meta.events.some((x) => x.type === 'death'), 'and its meta carries the deaths');
+    assert(meta.events.kills.length > 0, 'and its meta carries the deaths as parser kills');
   }
 
   // ---- a round that ends in a wipe pays out ----

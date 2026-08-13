@@ -36,6 +36,7 @@
 // top few candidates plus the incumbent; bulk RL rollouts skip it entirely.
 // ---------------------------------------------------------------------------
 
+import { decidedPfw } from './confidence.js';
 import { predictDuel } from '../../src/replays/duels/duelModel.js';
 import { paramVector } from '../../src/replays/duels/duelModelParams.js';
 import { watcherSpreadDeg } from '../../src/replays/duels/duelSnapshot.js';
@@ -373,10 +374,14 @@ export function priceOption({
           a: myFighter,
           b: foe
         };
-        const pa = predictDuel(
+        let pa = predictDuel(
           { pair, threatsOnA, threatsOnB: [], spreadA, spreadB: 0 },
           params
         );
+        // The PFW a bot DECIDES with (8.2): the fitted confidence bias
+        // distorts the predicted duel before anything is priced on it. A
+        // zero bias is exactly the model's own number.
+        if (me.confidenceBias) pa = decidedPfw(pa, me.confidenceBias);
         duels.push({ aSlot: myFighter.slot, bSlot: foe.slot, pa });
         bySlot[foe.slot] = {
           side: enemySide,

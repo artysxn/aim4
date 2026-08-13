@@ -64,10 +64,25 @@ export class JointBelief {
     this.dead = new Set();
     /** @type {Layout[]} */
     this.particles = [];
+    /**
+     * Lazy mass-by-anchor index. massAt is asked hundreds of times per
+     * decision tick (the space field alone asks twice per anchor), and a
+     * full particle scan per question is what made the desire bot 18x
+     * slower than the scripted one. One scan builds every answer at once;
+     * any update throws the index away.
+     */
+    this._mass = null;
+    this._massByWeapon = null;
     this.reset();
   }
 
+  _invalidateMass() {
+    this._mass = null;
+    this._massByWeapon = null;
+  }
+
   reset() {
+    this._invalidateMass();
     this.particles = [];
     for (let i = 0; i < this.count; i += 1) {
       this.particles.push({
@@ -102,6 +117,7 @@ export class JointBelief {
    * memory of the last contact rather than a projection.
    */
   propagate(neighbours, rate = 0.25) {
+    this._invalidateMass();
     for (const p of this.particles) {
       for (let s = 0; s < 5; s += 1) {
         const cur = p.slots[s];
@@ -116,6 +132,7 @@ export class JointBelief {
 
   /** Positive contact: a slot was seen, so every layout agrees about it. */
   sighting(slot, anchor, { level = 'default', weapon = null } = {}) {
+    this._invalidateMass();
     this.dead.delete(slot);
     for (const p of this.particles) {
       p.slots[slot] = {
@@ -135,6 +152,7 @@ export class JointBelief {
    * how a human's read actually updates.
    */
   cleared(anchorSet) {
+    this._invalidateMass();
     const empty = anchorSet instanceof Set ? anchorSet : new Set(anchorSet);
     let survivors = 0;
     for (const p of this.particles) {
@@ -157,6 +175,7 @@ export class JointBelief {
 
   /** A death removes a body. Bodies are conserved; the kill feed is public. */
   killed(slot) {
+    this._invalidateMass();
     this.dead.add(slot);
     for (const p of this.particles) p.slots[slot] = null;
   }
@@ -170,6 +189,7 @@ export class JointBelief {
    * well a sound localizes is a property of the map's geometry.
    */
   heard(likelihood) {
+    this._invalidateMass();
     for (const p of this.particles) {
       let best = 0;
       for (const sl of p.slots) {
@@ -194,6 +214,7 @@ export class JointBelief {
    * without having seen him.
    */
   deathRecord({ canSeeFrom, weapon = null }) {
+    this._invalidateMass();
     for (const p of this.particles) {
       let ok = false;
       for (const sl of p.slots) {
@@ -211,10 +232,12 @@ export class JointBelief {
 
   /** Weapon evidence: the feed names the killer's gun, so that slot holds it. */
   sawWeapon(slot, weapon) {
+    this._invalidateMass();
     for (const p of this.particles) if (p.slots[slot]) p.slots[slot].weapon = weapon;
   }
 
   normalize() {
+    this._invalidateMass();
     let total = 0;
     for (const p of this.particles) total += p.weight;
     if (!(total > 0)) return false;
@@ -239,6 +262,7 @@ export class JointBelief {
    * alive without inventing evidence.
    */
   resample(neighbours) {
+    this._invalidateMass();
     const cdf = [];
     let acc = 0;
     for (const p of this.particles) {
@@ -345,18 +369,55 @@ export class JointBelief {
       .map(([signature, mass]) => ({ signature, mass }));
   }
 
-  /** Belief mass that an enemy of a weapon class is at an anchor (19.3). */
-  massAt(anchor, level = 'default', weaponClass = null) {
-    let m = 0;
+  /**
+   * One pass over the particles answers every massAt question at once. A
+   * particle contributes its weight once per key it occupies, matching the
+   * scan's break-on-first-match: two slots on the same anchor still count
+   * as one layout saying "somebody is there".
+   */
+  _buildMassIndex() {
+    const mass = new Map();
+    const seen = new Set();
     for (const p of this.particles) {
+      seen.clear();
       for (const sl of p.slots) {
-        if (!sl || sl.anchor !== anchor || sl.level !== level) continue;
-        if (weaponClass && sl.weapon !== weaponClass) continue;
-        m += p.weight;
-        break;
+        if (!sl) continue;
+        const key = `${sl.anchor}|${sl.level}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          mass.set(key, (mass.get(key) || 0) + p.weight);
+        }
       }
     }
-    return m;
+    this._mass = mass;
+  }
+
+  /** The weapon-keyed index pays for itself only when somebody asks (19.3). */
+  _buildWeaponMassIndex() {
+    const byWeapon = new Map();
+    const seen = new Set();
+    for (const p of this.particles) {
+      seen.clear();
+      for (const sl of p.slots) {
+        if (!sl) continue;
+        const wkey = `${sl.anchor}|${sl.level}|${sl.weapon}`;
+        if (!seen.has(wkey)) {
+          seen.add(wkey);
+          byWeapon.set(wkey, (byWeapon.get(wkey) || 0) + p.weight);
+        }
+      }
+    }
+    this._massByWeapon = byWeapon;
+  }
+
+  /** Belief mass that an enemy of a weapon class is at an anchor (19.3). */
+  massAt(anchor, level = 'default', weaponClass = null) {
+    if (weaponClass) {
+      if (!this._massByWeapon) this._buildWeaponMassIndex();
+      return this._massByWeapon.get(`${anchor}|${level}|${weaponClass}`) || 0;
+    }
+    if (!this._mass) this._buildMassIndex();
+    return this._mass.get(`${anchor}|${level}`) || 0;
   }
 
   /** How many enemies are believed alive at all. */

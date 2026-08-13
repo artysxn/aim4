@@ -25,10 +25,11 @@ import {
   readRoundMeta,
   readRoundMotives,
   readRoundTicks,
-  runMatch,
   runStatus
 } from './matches.js';
 import { availableMaps } from './bakes.js';
+import { listModels } from './models.js';
+import { getJob, hostStatus, listJobs, loadJobHistory, startJob, stopJob } from './jobs.js';
 
 const NOT_FOUND = { error: 'Not found' };
 
@@ -190,9 +191,15 @@ async function route(req, res, url, me) {
     return true;
   }
 
-  // ---- scripted matches ------------------------------------------------------
+  // ---- jobs (SIM-PLAN 9.2b) --------------------------------------------------
+  //
+  // Everything that costs real CPU is started here and watched afterwards.
+  // The request returns as soon as the work is QUEUED, never when it is done:
+  // a 24-round match is half a minute of one core, and a browser holding a
+  // request open for that is how a panel ends up with a spinner and no way to
+  // find out what happened.
 
-  if (p === '/api/sim/run' && req.method === 'POST') {
+  if (p === '/api/sim/jobs' && req.method === 'POST') {
     let body;
     try {
       body = await readJson(req);
@@ -200,13 +207,63 @@ async function route(req, res, url, me) {
       json(res, req, 400, { error: 'bad body' });
       return true;
     }
-    const result = await runMatch(body);
+    const result = await startJob(String(body.kind || ''), body.params || {});
+    json(res, req, result.error ? 409 : 200, result);
+    return true;
+  }
+
+  if (p === '/api/sim/jobs' && req.method === 'GET') {
+    const live = listJobs();
+    // History from earlier processes fills in behind the live list, so a job
+    // survives a restart as a record even though its process did not.
+    const history = await loadJobHistory();
+    const seen = new Set(live.jobs.map((j) => j.id));
+    const merged = [...live.jobs, ...history.filter((j) => !seen.has(j.id))].slice(0, 40);
+    json(res, req, 200, { jobs: merged, host: live.host });
+    return true;
+  }
+
+  const jobDetail = p.match(/^\/api\/sim\/jobs\/([A-Za-z0-9_.-]+)$/);
+  if (jobDetail && req.method === 'GET') {
+    const job = getJob(jobDetail[1]);
+    if (!job) return notFound(res, req);
+    json(res, req, 200, { job });
+    return true;
+  }
+
+  const jobStop = p.match(/^\/api\/sim\/jobs\/([A-Za-z0-9_.-]+)\/stop$/);
+  if (jobStop && req.method === 'POST') {
+    const result = stopJob(jobStop[1]);
+    json(res, req, result.error ? 404 : 200, result);
+    return true;
+  }
+
+  // ---- the model registry (SIM-PLAN 9.9) -------------------------------------
+
+  if (p === '/api/sim/models' && req.method === 'GET') {
+    json(res, req, 200, { models: await listModels(), host: hostStatus() });
+    return true;
+  }
+
+  // ---- scripted matches ------------------------------------------------------
+
+  if (p === '/api/sim/run' && req.method === 'POST') {
+    // Kept as the panel's Run button, now a queued job rather than a blocking
+    // call. Same parameters, different contract: the answer is a job id.
+    let body;
+    try {
+      body = await readJson(req);
+    } catch {
+      json(res, req, 400, { error: 'bad body' });
+      return true;
+    }
+    const result = await startJob('match', body);
     json(res, req, result.error ? 409 : 200, result);
     return true;
   }
 
   if (p === '/api/sim/run' && req.method === 'GET') {
-    json(res, req, 200, runStatus());
+    json(res, req, 200, { ...runStatus(), host: hostStatus() });
     return true;
   }
 

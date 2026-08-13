@@ -14,7 +14,7 @@
 // only as the baseline the first learned generation has to beat.
 // ---------------------------------------------------------------------------
 
-import { FREEZE_SECONDS, ticksFor } from './constants.js';
+import { ADHOC_THROW_MAX, FREEZE_SECONDS, ticksFor } from './constants.js';
 import { PHASE, createEngine } from './engine.js';
 import { createMatch } from './match.js';
 import { skillProfile } from './skill.js';
@@ -54,6 +54,26 @@ export function catalogueCanSee(angles) {
     if (watcher.level !== target.level) return false;
     return angles.canSee(watcher.pos.x, watcher.pos.y, target.pos.x, target.pos.y, watcher.level);
   };
+}
+
+/**
+ * Whether an ad-hoc lob from this body toward a point would actually carry.
+ * Walks the same 20-unit line engine.throwGrenade walks; anything under 70%
+ * of the capped distance is a grenade at the thrower's own feet.
+ */
+export function throwLineCarries(graph, body, world) {
+  const dx = world.x - body.pos.x;
+  const dy = world.y - body.pos.y;
+  const d = Math.hypot(dx, dy) || 1;
+  const want = Math.min(d, ADHOC_THROW_MAX);
+  const ux = dx / d;
+  const uy = dy / d;
+  let carry = 0;
+  for (let step = 20; step <= want; step += 20) {
+    if (graph.isSolidWorld(body.pos.x + ux * step, body.pos.y + uy * step, body.level)) break;
+    carry = step;
+  }
+  return carry >= want * 0.7;
 }
 
 /**
@@ -150,6 +170,7 @@ export function playScriptedMatch({
     const target = graph.anchor(rng.pick(sites));
     const other = graph.anchor(sites.find((s) => s !== target.id) || sites[0]);
     let rotated = false;
+    let smoked = false;
 
     for (let i = 0; i < ticksFor(FREEZE_SECONDS + 130); i += 1) {
       if (i === ticksFor(FREEZE_SECONDS) + 1) {
@@ -158,10 +179,15 @@ export function playScriptedMatch({
           engine.setIntent(b.slot, { moveTo: { cx: dest.cx, cy: dest.cy, level: dest.level } });
         }
       }
-      if (i === ticksFor(FREEZE_SECONDS + 6)) {
+      // The approach smoke, thrown by the first T whose line to the site
+      // actually carries. Throwing on a fixed tick regardless landed the
+      // smoke at the thrower's feet whenever a wall was first in line.
+      if (!smoked && i >= ticksFor(FREEZE_SECONDS + 6) && i <= ticksFor(FREEZE_SECONDS + 30) && i % 8 === 0) {
         for (const b of engine.state.bodies) {
           if (b.side !== 'T' || !b.alive || !b.grenades.includes('smokegrenade')) continue;
+          if (!throwLineCarries(graph, b, target.world)) continue;
           engine.throwGrenade(b.slot, 'smokegrenade', { x: target.world.x, y: target.world.y });
+          smoked = true;
           break;
         }
       }

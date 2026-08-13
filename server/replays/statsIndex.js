@@ -111,8 +111,28 @@ export function normalizeStatsFields(raw) {
 /** A death counts as traded when the killer dies inside this window. */
 const TRADE_SECONDS = 5;
 
-/** demoId -> { key, entry } for the current process. */
+/**
+ * How many demos one GET /stats response may carry. The Database pages this
+ * size; holding the whole library (thousands of indexes) plus JSON.stringify
+ * of it is what blew the default ~2 GB heap.
+ */
+export const STATS_LIBRARY_PAGE = 300;
+
+/** Keep a little more than one page so a follow-up batch still hits RAM. */
+const MEMORY_CAP = STATS_LIBRARY_PAGE + 100;
+
+/** demoId -> { key, entry } for the current process. Insertion order = LRU. */
 const memory = new Map();
+
+function remember(id, value) {
+  if (!id) return;
+  if (memory.has(id)) memory.delete(id);
+  memory.set(id, value);
+  while (memory.size > MEMORY_CAP) {
+    const oldest = memory.keys().next().value;
+    memory.delete(oldest);
+  }
+}
 
 /** demoIds currently computing roles in the background. */
 const roleJobs = new Set();
@@ -843,7 +863,7 @@ function scheduleTickDerivedEnrichment(io, user, record) {
 }
 
 async function persistEntry(io, user, key, entry) {
-  memory.set(entry.id, { key, entry });
+  remember(entry.id, { key, entry });
   try {
     const dir = statsDir(io.userDir(user));
     await fsp.mkdir(dir, { recursive: true });
@@ -1019,7 +1039,10 @@ export function topPlayerOf(entry) {
 
 async function loadStoredEntry(io, user, demoId) {
   const cached = memory.get(demoId);
-  if (cached?.entry) return cached.entry;
+  if (cached?.entry) {
+    remember(demoId, cached);
+    return cached.entry;
+  }
   const file = path.join(statsDir(io.userDir(user)), `${demoId}.json`);
   try {
     return JSON.parse(await fsp.readFile(file, 'utf8'));
@@ -1088,7 +1111,7 @@ export async function demoIndex(io, user, record, opts = {}) {
       emit('enriching');
       await enrichTickDerived(io, user, entry);
       await persistEntry(io, user, key, entry);
-    } else {
+    } else if (!opts.skipBackgroundEnrichment) {
       scheduleTickDerivedEnrichment(io, user, record);
     }
   }
@@ -1100,7 +1123,7 @@ export async function demoIndex(io, user, record, opts = {}) {
   }
 
   emit('ready');
-  memory.set(record.id, { key, entry });
+  remember(record.id, { key, entry });
   return entry;
 }
 
@@ -1127,20 +1150,28 @@ export function scheduleStatsIndex(io, user, record, done) {
 }
 
 /**
- * Indexes for a whole library (or a subset of it).
+ * Indexes for a whole library (or a subset of it). One page at a time:
+ * offset/limit cap each response at STATS_LIBRARY_PAGE so the process never
+ * stringifies thousands of indexes in one go.
  *
  * @param {object} io
  * @param {string} user
  * @param {object[]} records
  * @param {string[]|null} [demoIds]
- * @param {{ onProgress?: (p: {
+ * @param {{ offset?: number, limit?: number, onProgress?: (p: {
  *   done: number,
  *   total: number,
  *   current: string|null,
  *   phase: string,
  *   id?: string
  * }) => void }} [opts]
- * @returns {Promise<{demos: object[]}>}
+ * @returns {Promise<{
+ *   demos: object[],
+ *   total: number,
+ *   offset: number,
+ *   count: number,
+ *   hasMore: boolean
+ * }>}
  */
 export async function statsPayload(io, user, records, demoIds = null, opts = {}) {
   const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
@@ -1150,19 +1181,47 @@ export async function statsPayload(io, user, records, demoIds = null, opts = {})
     if (wanted && !wanted.has(record.id)) continue;
     list.push(record);
   }
-  const total = list.length;
-  onProgress?.({ done: 0, total, current: null, phase: 'start' });
+  const libraryTotal = list.length;
+  const offset = Math.max(0, Math.floor(Number(opts.offset) || 0));
+  const rawLimit = Number(opts.limit);
+  const limit =
+    Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(STATS_LIBRARY_PAGE, Math.floor(rawLimit))
+      : wanted
+        ? Math.min(STATS_LIBRARY_PAGE, list.length)
+        : STATS_LIBRARY_PAGE;
+  const page = list.slice(offset, offset + limit);
+  const total = page.length;
+  onProgress?.({
+    done: 0,
+    total,
+    offset,
+    libraryTotal,
+    current: null,
+    phase: 'start'
+  });
 
   const demos = [];
   let done = 0;
-  for (const record of list) {
+  for (const record of page) {
     const label = String(record.filename || record.mapName || record.id || 'demo');
-    onProgress?.({ done, total, current: label, phase: 'loading', id: record.id });
+    onProgress?.({
+      done,
+      total,
+      offset,
+      libraryTotal,
+      current: label,
+      phase: 'loading',
+      id: record.id
+    });
     const entry = await demoIndex(io, user, record, {
+      skipBackgroundEnrichment: true,
       onProgress: (p) =>
         onProgress?.({
           done,
           total,
+          offset,
+          libraryTotal,
           current: p.current || label,
           phase: p.phase || 'loading',
           id: p.id || record.id
@@ -1170,9 +1229,24 @@ export async function statsPayload(io, user, records, demoIds = null, opts = {})
     });
     done += 1;
     if (entry) demos.push(entry);
-    onProgress?.({ done, total, current: label, phase: 'ready', id: record.id });
+    onProgress?.({
+      done,
+      total,
+      offset,
+      libraryTotal,
+      current: label,
+      phase: 'ready',
+      id: record.id
+    });
   }
-  return { demos };
+  const next = offset + page.length;
+  return {
+    demos,
+    total: libraryTotal,
+    offset,
+    count: demos.length,
+    hasMore: next < libraryTotal
+  };
 }
 
 /**

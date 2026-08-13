@@ -11,7 +11,8 @@
 // fetches. Nothing new is computed server-side and nothing re-reads a round.
 // ---------------------------------------------------------------------------
 
-import { fetchStats, formatApiError } from '../replays/api.js';
+import { formatApiError } from '../replays/api.js';
+import { getStatsPayload } from '../replays/statsCache.js';
 import { MAPS } from '../replays/shared/roundId.js';
 import { aggregatePlayers, allRows, indexMaps } from '../replays/shared/statsMath.js';
 import { setSpinnerLabel, spinnerHtml, statsProgressLabel } from '../lib/spinner.js';
@@ -67,7 +68,7 @@ export function initPlayerProfileView({ escapeHtml }) {
   async function ensurePayload() {
     if (payload) return payload;
     if (!loading) {
-      loading = fetchStats(null, {
+      loading = getStatsPayload(null, {
         onProgress: (p) => {
           if (!host) return;
           setSpinnerLabel(host, statsProgressLabel(p));

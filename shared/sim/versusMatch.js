@@ -26,7 +26,7 @@ import { FREEZE_SECONDS, ticksFor } from './constants.js';
 import { PHASE, createEngine } from './engine.js';
 import { createMatch } from './match.js';
 import { skillProfile } from './skill.js';
-import { scriptedLoadout, catalogueCanSee } from './scriptedMatch.js';
+import { scriptedLoadout, catalogueCanSee, throwLineCarries } from './scriptedMatch.js';
 import { RoundRecorder } from './encode.js';
 import { Rng } from './rng.js';
 
@@ -42,7 +42,7 @@ export function scriptedController() {
     name: 'scripted',
 
     roundStart({ engine, side, target, other, graph }) {
-      my = { engine, side, target, other, graph, rotated: false };
+      my = { engine, side, target, other, graph, rotated: false, smoked: false };
     },
 
     tick({ i }) {
@@ -56,10 +56,21 @@ export function scriptedController() {
           engine.setIntent(b.slot, { moveTo: { cx: dest.cx, cy: dest.cy, level: dest.level } });
         }
       }
-      if (i === ticksFor(FREEZE_SECONDS + 6) && side === 'T') {
+      // The approach smoke, from the first T whose line actually carries
+      // (same rule as scriptedMatch): a fixed-tick throw put the smoke at
+      // the thrower's feet whenever a wall came first.
+      if (
+        !my.smoked &&
+        side === 'T' &&
+        i >= ticksFor(FREEZE_SECONDS + 6) &&
+        i <= ticksFor(FREEZE_SECONDS + 30) &&
+        i % 8 === 0
+      ) {
         for (const b of state.bodies) {
           if (b.side !== 'T' || !b.alive || !b.grenades.includes('smokegrenade')) continue;
+          if (!throwLineCarries(graph, b, target.world)) continue;
           engine.throwGrenade(b.slot, 'smokegrenade', { x: target.world.x, y: target.world.y });
+          my.smoked = true;
           break;
         }
       }

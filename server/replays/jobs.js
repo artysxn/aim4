@@ -137,6 +137,15 @@ export function allJobs(user) {
     .map(([, v]) => v);
 }
 
+/**
+ * Is the box parsing, or about to? The sim's job runner asks before it starts
+ * anything, because SIM-PLAN 9.2b makes parse work outrank sim work: demos
+ * ingesting is the site doing its job, a sim run is one admin's errand.
+ */
+export function parseQueueBusy() {
+  return Boolean(running) || queue.length > 0;
+}
+
 /** Drop an in-memory parse job so a deleted demo cannot reappear as a ghost. */
 export function forgetJob(user, demoId) {
   return jobs.delete(jobKey(user, demoId));

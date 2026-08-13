@@ -114,9 +114,14 @@ export function createStatsPanel({
         ${
           usePageHead
             ? ''
-            : `<div class="st-tabs">
+            : `<div class="st-tabs-row">
+          <span class="st-library-load" data-st-library-load hidden role="status" aria-live="polite" aria-label="Loading more demos">
+            <span class="spinner spinner-sm" aria-hidden="true"></span>
+          </span>
+          <div class="st-tabs">
           <button type="button" class="seg-tab active" data-tab="players">${mbIcon('player')}Players</button>
           <button type="button" class="seg-tab" data-tab="teams">${mbIcon('team')}Teams</button>
+        </div>
         </div>`
         }
         <span class="st-detail-label" id="st-detail-label" hidden></span>
@@ -148,6 +153,9 @@ export function createStatsPanel({
     pageHeadEl = document.createElement('div');
     pageHeadEl.className = 'st-page-actions';
     pageHeadEl.innerHTML = `
+      <span class="st-library-load" data-st-library-load hidden role="status" aria-live="polite" aria-label="Loading more demos">
+        <span class="spinner spinner-sm" aria-hidden="true"></span>
+      </span>
       <div class="st-tabs">
         <button type="button" class="seg-tab active" data-tab="players">${mbIcon('player')}Players</button>
         <button type="button" class="seg-tab" data-tab="teams">${mbIcon('team')}Teams</button>
@@ -189,6 +197,13 @@ export function createStatsPanel({
     root.querySelectorAll('[data-tab]').forEach((b) =>
       b.classList.toggle('active', b.dataset.tab === tab)
     );
+  }
+
+  function setLibraryLoading(on) {
+    const root = pageHeadEl || el;
+    root.querySelectorAll('[data-st-library-load]').forEach((mark) => {
+      mark.hidden = !on;
+    });
   }
 
   /** Filters bar is closed by default so the table owns the viewport. */
@@ -2252,6 +2267,8 @@ export function createStatsPanel({
     };
     lockedTeamName = String(next.teamName || '').trim();
     scopeEl.textContent = next.title || '';
+    payload = null;
+    setLibraryLoading(false);
     bodyEl.innerHTML = spinnerHtml('Loading database…');
     filtersEl.innerHTML = '';
     const cancelSlow = watchSlowLoad(bodyEl, {
@@ -2286,15 +2303,43 @@ export function createStatsPanel({
     syncSearchToggle();
     if (searchOpen) renderSearch();
     try {
+      let painted = false;
       const res = await getStatsPayload(scope.demos || null, {
         onProgress: (p) => {
-          if (token !== loadToken) return;
+          if (token !== loadToken || painted) return;
           setSpinnerLabel(bodyEl, statsProgressLabel(p));
+        },
+        onBatch: (batch) => {
+          if (token !== loadToken) return;
+          payload = batch.payload;
+          setLibraryLoading(Boolean(batch.hasMore));
+          const rounds = (payload.demos || []).reduce((n, d) => n + (d.rounds?.length || 0), 0);
+          if (!rounds) {
+            if (!batch.hasMore) {
+              cancelSlow();
+              filtersEl.innerHTML = '';
+              bodyEl.innerHTML =
+                '<p class="view-empty">No parsed rounds to measure yet. Upload a replay first.</p>';
+            }
+            return;
+          }
+          cancelSlow();
+          const rebuildFilters = !painted;
+          painted = true;
+          void scheduleUiJob({
+            tokenRef: renderTokenRef,
+            isCurrent: () => token === loadToken,
+            work() {
+              if (token !== loadToken) return;
+              render({ rebuildFilters });
+            }
+          });
         }
       });
       cancelSlow();
       if (token !== loadToken) return;
       payload = res;
+      setLibraryLoading(false);
       const rounds = (res.demos || []).reduce((n, d) => n + (d.rounds?.length || 0), 0);
       if (!rounds) {
         filtersEl.innerHTML = '';
@@ -2303,18 +2348,19 @@ export function createStatsPanel({
         emitViewChange();
         return;
       }
-      // Let "Building table…" paint before the heavy aggregate blocks the thread.
-      setSpinnerLabel(bodyEl, statsProgressLabel({ phase: 'building-table' }));
-      if (searchOpen) renderSearch();
-      else syncSearchToggle();
-      await scheduleUiJob({
-        tokenRef: renderTokenRef,
-        isCurrent: () => token === loadToken,
-        work() {
-          if (token !== loadToken) return;
-          render({ rebuildFilters: true });
-        }
-      });
+      if (!painted) {
+        setSpinnerLabel(bodyEl, statsProgressLabel({ phase: 'building-table' }));
+        if (searchOpen) renderSearch();
+        else syncSearchToggle();
+        await scheduleUiJob({
+          tokenRef: renderTokenRef,
+          isCurrent: () => token === loadToken,
+          work() {
+            if (token !== loadToken) return;
+            render({ rebuildFilters: true });
+          }
+        });
+      }
       if (token !== loadToken) return;
       void savedViews.refresh();
       void savedViews.applyShareParam(
@@ -2322,7 +2368,9 @@ export function createStatsPanel({
       );
     } catch (err) {
       cancelSlow();
+      setLibraryLoading(false);
       if (token !== loadToken) return;
+      if (payload?.demos?.some((d) => d.rounds?.length)) return;
       filtersEl.innerHTML = '';
       const msg = formatApiError(err).message || 'Could not load stats.';
       bodyEl.innerHTML = `<p class="view-empty">${escapeHtml(msg)}</p>
@@ -2385,6 +2433,7 @@ export function createStatsPanel({
     clearDetail,
     getDetail: () => detail,
     destroy() {
+      setLibraryLoading(false);
       if (usePageHead && pageHeadEl) {
         const slot = document.getElementById('page-head-actions');
         if (slot?.contains(pageHeadEl)) slot.replaceChildren();

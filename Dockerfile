@@ -69,6 +69,16 @@ COPY scripts/lib ./scripts/lib
 COPY scripts/extract-round-snapshots.mjs scripts/extract-duel-episodes.mjs ./scripts/
 COPY scripts/train-round-model.mjs scripts/train-duel-model.mjs ./scripts/
 COPY scripts/train-model-server.mjs ./scripts/
+# The sim's own scripts: the job runner (server/sim/jobs.js) spawns these, so
+# the panel's Run button is a missing file without them.
+COPY scripts/sim-run-match.mjs scripts/sim-collect-bc.mjs scripts/sim-eval-bc.mjs ./scripts/
+COPY scripts/sim-train-bc.py ./scripts/
+# The bots' brains and the ground they walk on. simdata/ is derived, committed
+# data (baked nav + angle catalogues, trained models); without it a deployed
+# /sim can only say "no nav bake for INF", which is exactly the failure
+# server/sim/bakes.js's header says shipping them prevents.
+COPY simdata ./simdata
+COPY shared ./shared
 COPY public/maps/radar ./public/maps/radar
 
 ENV NODE_ENV=production

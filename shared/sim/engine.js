@@ -743,7 +743,8 @@ export function createEngine(cfg) {
         side: n.side
       });
       state.effects.push(effect);
-      log('grenade_detonate', { type: n.type, x: n.x, y: n.y, slot: n.thrownBy });
+      // `nade`, not `type`: the spread would overwrite the event label.
+      log('grenade_detonate', { nade: n.type, x: n.x, y: n.y, slot: n.thrownBy });
       pendingSounds.push(
         emit({
           type: SOUND.GRENADE,
@@ -940,6 +941,7 @@ export function createEngine(cfg) {
       const x = body.pos.x + ux * landed;
       const y = body.pos.y + uy * landed;
 
+      const detonateTick = state.tick + ticksFor(ADHOC_FUSE_SECONDS);
       state.nades.push({
         type,
         x,
@@ -948,9 +950,20 @@ export function createEngine(cfg) {
         thrownBy: slot,
         side: body.side,
         throwTick: state.tick,
-        detonateTick: state.tick + ticksFor(ADHOC_FUSE_SECONDS)
+        detonateTick
       });
-      log('grenade_throw', { slot, type, x, y });
+      // `nade`, not `type`: the spread would overwrite the event label. The
+      // origin and fuse ride along so the viewer can draw the flight without
+      // reverse-engineering it from tick buffers.
+      log('grenade_throw', {
+        slot,
+        nade: type,
+        x,
+        y,
+        fromX: body.pos.x,
+        fromY: body.pos.y,
+        detonateTick
+      });
       pendingSounds.push(
         emit({
           type: SOUND.GRENADE,

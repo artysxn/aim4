@@ -22,12 +22,12 @@ import path from 'node:path';
 
 import { ROOT } from '../replays/demoStore.js';
 import { loadBake } from './bakes.js';
+import { BUILTIN_BRAINS, loadModel } from './models.js';
 import { navGraphFromBake } from '../../shared/sim/navGraph.js';
 import { loadAngles } from '../../shared/sim/angles.js';
 import { playScriptedMatch } from '../../shared/sim/scriptedMatch.js';
 import { playVersusMatch, scriptedController } from '../../shared/sim/versusMatch.js';
 import { desireController } from '../../shared/sim/desireBot.js';
-import { loadPolicy } from '../../shared/sim/policy.js';
 import { RULES_VERSION } from '../../shared/sim/constants.js';
 
 const MATCHES_DIR = path.join(ROOT, 'sim', 'matches');
@@ -36,22 +36,17 @@ const MATCHES_DIR = path.join(ROOT, 'sim', 'matches');
 let running = null;
 
 const SKILLS = new Set(['mix', 't3', 'average', 't2', 't1', 'pro']);
-/**
- * The brains a side can bring. 'desire' is the P3b arbiter; 'bc0' is the P4
- * behavior clone proposing over the same arbiter (9.9's registry, first row).
- */
-const BRAINS = new Set(['scripted', 'desire', 'bc0']);
-const MODELS_DIR = path.join(ROOT, 'sim', 'models');
 const safe = (s) => String(s || '').replace(/[^A-Za-z0-9_-]/g, '');
 
-/** A registered model, loaded and validated, or an explanation. */
-async function loadModel(name) {
-  try {
-    const json = JSON.parse(await fsp.readFile(path.join(MODELS_DIR, `${safe(name)}.json`), 'utf8'));
-    return { policy: loadPolicy(json) };
-  } catch (err) {
-    return { error: `model ${name}: ${err.message}` };
-  }
+/**
+ * Which brain a side asked for. Anything that is not built in has to be a
+ * registered model (models.js), so the set of legal answers is whatever this
+ * host actually holds rather than a list compiled into the server: training a
+ * gen1 and dropping it in the model directory makes it playable immediately.
+ */
+function brainName(raw) {
+  const name = safe(raw);
+  return name || 'scripted';
 }
 
 /**
@@ -69,11 +64,15 @@ export async function runMatch(params = {}) {
   const maxRounds = Math.max(1, Math.min(60, Number(params.rounds) || 24));
   const skillA = SKILLS.has(params.skillA) ? params.skillA : 'average';
   const skillB = SKILLS.has(params.skillB) ? params.skillB : 'average';
-  const brainA = BRAINS.has(params.brainA) ? params.brainA : 'scripted';
-  const brainB = BRAINS.has(params.brainB) ? params.brainB : 'scripted';
+  const brainA = brainName(params.brainA);
+  const brainB = brainName(params.brainB);
   // Replays are the expensive part (~360 kB a round), so the sampling default
   // keeps a handful even when nobody asked, and never everything by accident.
   const recordEvery = Math.max(1, Math.min(100000, Number(params.recordEvery) || 1));
+  // Only the in-process caller (the job's CLI wrapper) can pass this; it is
+  // how a match started from the panel reports rounds as they land instead of
+  // going quiet for its whole duration.
+  const onRound = typeof params.onRound === 'function' ? params.onRound : null;
 
   const nav = await loadBake('navcache', map);
   if (!nav) return { error: `no nav bake for ${map}` };
@@ -92,11 +91,13 @@ export async function runMatch(params = {}) {
     // replay bytes); any other pairing runs through the controller seam.
     const versus = brainA !== 'scripted' || brainB !== 'scripted';
     const models = {};
+    const modelMeta = {};
     for (const name of [brainA, brainB]) {
-      if (name === 'scripted' || name === 'desire' || models[name]) continue;
+      if (BUILTIN_BRAINS.includes(name) || models[name]) continue;
       const loaded = await loadModel(name);
       if (loaded.error) return { error: loaded.error };
       models[name] = loaded.policy;
+      modelMeta[name] = loaded.meta;
     }
     const brainFactory = (name) => {
       if (name === 'scripted') return scriptedController;
@@ -116,7 +117,8 @@ export async function runMatch(params = {}) {
           skillB,
           record: 'events',
           recordEvery,
-          replays: true
+          replays: true,
+          onRound
         })
       : playScriptedMatch({
           graph,
@@ -128,7 +130,8 @@ export async function runMatch(params = {}) {
           skillB,
           record: 'events',
           recordEvery,
-          replays: true
+          replays: true,
+          onRound
         });
 
     const dir = path.join(MATCHES_DIR, id);
@@ -164,6 +167,14 @@ export async function runMatch(params = {}) {
       skillB,
       brainA,
       brainB,
+      // Which weights actually played, so a result stays attributable after
+      // the model directory has moved on (9.9).
+      models: Object.fromEntries(
+        Object.entries(modelMeta).map(([name, meta]) => [
+          name,
+          { source: meta.source, valAccuracy: meta.valAccuracy, trainedAt: meta.trainedAt }
+        ])
+      ),
       recordEvery,
       bakeSource: nav.source,
       createdAt: new Date().toISOString(),

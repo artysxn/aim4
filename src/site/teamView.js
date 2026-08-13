@@ -18,7 +18,6 @@ import {
   fetchDemo,
   fetchDemos,
   fetchInvite,
-  fetchStats,
   fetchStatus,
   fetchTeamAutocoach,
   fetchTeamDocument,
@@ -44,6 +43,7 @@ import { PLAN_NAMES } from '../../shared/entitlements/catalogue.js';
 import { MAPS } from '../replays/shared/roundId.js';
 import { teamNameKey } from '../replays/shared/statsMath.js';
 import { createStatsPanel } from '../replays/stats/statsPanel.js';
+import { getStatsPayload } from '../replays/statsCache.js';
 import { createRoundListPanel } from '../replays/analytics/roundListPanel.js';
 import { analyzeDemoCoach } from '../replays/coach/analyzeDemo.js';
 import { COACH_CATEGORY_LABELS } from '../replays/coach/coachMessages.js';
@@ -728,7 +728,7 @@ export function initTeamView({ auth, escapeHtml }) {
       return;
     }
     try {
-      const payload = await fetchStats(ids);
+      const payload = await getStatsPayload(ids);
       if (token !== overviewMapsToken) return;
       const want = teamNameKey(team?.name || '');
       /** @type {Map<string, {matches: number, wins: number, losses: number, rounds: number, won: number, prwSum: number, prwN: number}>} */

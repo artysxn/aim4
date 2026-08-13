@@ -30,6 +30,8 @@ import {
   writeRecord,
   totalBytes
 } from '../../src/replays/shared/tickFormat.js';
+import { weaponInfo } from '../../src/replays/shared/weaponTable.js';
+import { END_REASON } from './engine.js';
 import { TICK_RATE } from './constants.js';
 
 /** Flags for one body, in the parser's own bit order. */
@@ -80,6 +82,17 @@ export class RoundRecorder {
   /** Call once per engine tick, after step(). */
   sample() {
     const { bodies } = this.engine.state;
+    // The parser records loadouts "at freezetime end", so the sim does too:
+    // the first sampled tick at or past live start is that snapshot.
+    if (!this.freezeLoadouts && this.engine.state.tick >= this.engine.state.liveTick) {
+      this.freezeLoadouts = bodies.map((b) => {
+        const items = [b.weapon];
+        if (b.armor > 0) items.push(b.helmet ? 'assaultsuit' : 'kevlar');
+        if (b.hasKit) items.push('defuser');
+        items.push(...b.grenades);
+        return items;
+      });
+    }
     const row = new Array(PLAYER_SLOTS);
     for (let slot = 0; slot < PLAYER_SLOTS; slot += 1) {
       const b = bodies[slot];
@@ -135,6 +148,114 @@ export class RoundRecorder {
    */
   encodeMeta(extra = {}) {
     const s = this.engine.state;
+    const idOf = (slot) => (slot == null || slot < 0 ? '' : s.bodies[slot]?.id || `p${slot}`);
+
+    // The engine's flat log into the parser's RoundEvents shape
+    // (demoparser/schema.js). This is the convention rule doing its job: the
+    // radar's whole utility layer, the kill feed, and the round analytics all
+    // read `events.grenades` and friends, so a sim round that stores anything
+    // else is a round they silently cannot draw.
+    const events = { kills: [], shots: [], grenades: [], bomb: [] };
+    for (const e of s.events) {
+      if (e.type === 'death') {
+        events.kills.push({
+          tick: e.tick,
+          attacker: idOf(e.by),
+          victim: idOf(e.slot),
+          assister: '',
+          weapon: e.weapon || '',
+          headshot: false,
+          noscope: false,
+          throughSmoke: false,
+          penetrated: false,
+          attackerBlind: false
+        });
+      } else if (e.type === 'shot') {
+        events.shots.push({
+          tick: e.tick,
+          player: idOf(e.slot),
+          weapon: e.weapon || '',
+          x: e.x,
+          y: e.y,
+          z: 0,
+          yaw: 0,
+          pitch: 0
+        });
+      } else if (e.type === 'grenade_throw') {
+        events.grenades.push({
+          type: e.nade,
+          player: idOf(e.slot),
+          throwTick: e.tick,
+          detonateTick: e.detonateTick ?? e.tick,
+          from: { x: e.fromX ?? e.x, y: e.fromY ?? e.y, z: 0 },
+          at: { x: e.x, y: e.y, z: 0 },
+          path: []
+        });
+      } else if (e.type === 'bomb_planted') {
+        events.bomb.push({
+          type: 'planted',
+          tick: e.tick,
+          player: idOf(e.slot),
+          site: e.site || s.bomb.site || '',
+          x: e.x,
+          y: e.y
+        });
+      } else if (e.type === 'bomb_defused') {
+        events.bomb.push({ type: 'defused', tick: e.tick, player: idOf(e.slot), site: s.bomb.site || '' });
+      } else if (e.type === 'bomb_dropped') {
+        events.bomb.push({
+          type: 'dropped',
+          tick: e.tick,
+          player: idOf(e.slot),
+          site: '',
+          x: e.x,
+          y: e.y
+        });
+      } else if (e.type === 'bomb_pickup') {
+        events.bomb.push({ type: 'pickup', tick: e.tick, player: idOf(e.slot), site: '' });
+      }
+    }
+    if (s.endReason === END_REASON.BOMB_EXPLODED) {
+      events.bomb.push({
+        type: 'exploded',
+        tick: s.endTick ?? s.tick,
+        player: '',
+        site: s.bomb.site || '',
+        x: s.bomb.x,
+        y: s.bomb.y
+      });
+    }
+
+    // Per-player stats in the parser's shape. Kills and deaths come from the
+    // log; damage and shots exist only under record 'full' and honestly read
+    // zero otherwise. Money is the match layer's, not the engine's, so it is
+    // absent unless the caller passes it in `extra.stats`.
+    const damageBy = {};
+    for (const e of s.events) {
+      if (e.type !== 'damage' || e.by == null) continue;
+      damageBy[e.by] = (damageBy[e.by] || 0) + (e.amount || 0);
+    }
+    const stats = {};
+    for (const [slot, b] of s.bodies.entries()) {
+      const loadout = this.freezeLoadouts?.[slot] || [b.weapon];
+      let equipValue = 0;
+      for (const item of loadout) {
+        if (item === 'kevlar') equipValue += 650;
+        else if (item === 'assaultsuit') equipValue += 1000;
+        else if (item === 'defuser') equipValue += 400;
+        else equipValue += weaponInfo(item).price || 0;
+      }
+      stats[b.id] = {
+        kills: events.kills.filter((k) => k.attacker === b.id && k.victim !== b.id).length,
+        deaths: events.kills.filter((k) => k.victim === b.id).length,
+        assists: 0,
+        damage: damageBy[slot] || 0,
+        shots: events.shots.filter((sh) => sh.player === b.id).length,
+        equipValue,
+        loadout
+      };
+    }
+
     return {
       map: s.map,
       tickRate: TICK_RATE,
@@ -145,13 +266,22 @@ export class RoundRecorder {
       winner: s.winner,
       endReason: s.endReason,
       weapons: this.weaponDict,
+      // Sides A and B are slot-contiguous (versusMatch seats A on 0-4, B on
+      // 5-9), so roster team follows the seat and the per-round side comes
+      // from the seat's body, halves and overtime included.
+      team1Side: s.bodies[0]?.side || 'T',
+      team2Side: s.bodies[5]?.side || 'CT',
       players: s.bodies.map((b, slot) => ({
         slot,
+        id: b.id,
         name: b.id,
+        steamId: '',
+        team: slot < 5 ? 1 : 2,
         side: b.side,
         role: b.role
       })),
-      events: s.events,
+      events,
+      stats,
       ...extra
     };
   }

@@ -3358,6 +3358,25 @@ body.rv-open {
   gap: 10px;
 }
 
+.st-tabs-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.st-library-load {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 32px;
+  flex: 0 0 auto;
+}
+
+.st-library-load[hidden] {
+  display: none;
+}
+
 .st-filters-toggle {
   display: inline-flex;
   align-items: center;
