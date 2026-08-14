@@ -15,37 +15,22 @@
 // ---------------------------------------------------------------------------
 
 import { ADHOC_THROW_MAX, FREEZE_SECONDS, ticksFor } from './constants.js';
+import { buyFor, buySide } from './buy.js';
 import { PHASE, createEngine } from './engine.js';
 import { createMatch } from './match.js';
 import { skillProfile } from './skill.js';
 import { RoundRecorder } from './encode.js';
 import { Rng } from './rng.js';
 
-/** The scripted buy. Replaced by the learned buy head in P4. */
-export function scriptedLoadout(money, side) {
-  if (money >= 5100 && side === 'CT') {
-    return {
-      cost: 5100,
-      weapon: 'm4a1',
-      armor: 100,
-      helmet: true,
-      hasKit: true,
-      grenades: ['smokegrenade', 'flashbang']
-    };
-  }
-  if (money >= 4700) {
-    return {
-      cost: 4700,
-      weapon: side === 'T' ? 'ak47' : 'm4a1',
-      armor: 100,
-      helmet: true,
-      grenades: ['smokegrenade', 'flashbang']
-    };
-  }
-  if (money >= 2400) {
-    return { cost: 2400, weapon: 'mac10', armor: 100, helmet: false, grenades: [] };
-  }
-  return { cost: 0, weapon: side === 'T' ? 'glock' : 'usp_silencer', armor: 0, grenades: [] };
+/**
+ * The scripted buy, now a thin shim over shared/sim/buy.js.
+ *
+ * Kept as an export because both match loops and their tests call it, but the
+ * rules live in buy.js: side-legal guns, an AWP that somebody actually holds,
+ * armour before utility, and a save that the whole side takes together.
+ */
+export function scriptedLoadout(money, side, opts = {}) {
+  return buyFor({ money, side, ...opts });
 }
 
 /** Visibility from the angle catalogue: the page's own geometry. */
@@ -129,11 +114,28 @@ export function playScriptedMatch({
     let ti = 0;
     let ci = 0;
     const spend = {};
+    // Buys are a TEAM decision: who holds the AWP, who takes the kit, and
+    // whether this is a save at all cannot be answered one wallet at a time.
+    // The AWPer is the same seat each half, which is what a role is.
+    const buys = new Map();
+    for (const [first, awpSlot] of [[0, 2], [5, 7]]) {
+      const group = [first, first + 1, first + 2, first + 3, first + 4];
+      const side = match.sideOf(first);
+      for (const [slot, buy] of buySide({
+        slots: group,
+        moneyOf: (s2) => setup.money[s2] ?? 0,
+        side,
+        awpSlot,
+        forceBuy: match.state.round >= 24
+      })) {
+        buys.set(slot, buy);
+      }
+    }
     const roster = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) => {
       const side = match.sideOf(slot);
       const pool = side === 'T' ? tPool : ctPool;
       const sp = pool[(side === 'T' ? ti++ : ci++) % pool.length];
-      const buy = scriptedLoadout(setup.money[slot] ?? 0, side);
+      const buy = buys.get(slot) || scriptedLoadout(setup.money[slot] ?? 0, side);
       spend[slot] = buy.cost;
       return {
         id: `p${slot}`,

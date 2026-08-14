@@ -1,0 +1,22 @@
+# ---------------------------------------------------------------------------
+# requirements-sim.txt
+# What scripts/sim-train-demos.py needs. Nothing here reaches the product:
+# training is Python, inference is shared/sim/policyNet.js, and the only thing
+# that crosses is a JSON weights file. A machine that only RUNS the sim needs
+# none of this.
+#
+# torch is NOT installed by a bare `pip install torch` on Windows: the default
+# wheel is CPU-only and the trainer would silently fall back to --device cpu.
+# Install from the CUDA 12.4 index:
+#
+#   python -m pip install -r requirements-sim.txt --extra-index-url https://download.pytorch.org/whl/cu124
+#
+# Verified on the training box (2026-08-14):
+#   Python 3.13, torch 2.6.0+cu124, RTX 4090 24 GB, torch.cuda.is_available() True
+#
+# scripts/sim-train-bc.py, the older numpy BC path, needs only numpy and is
+# unaffected by any of this.
+# ---------------------------------------------------------------------------
+
+torch==2.6.0+cu124
+numpy>=1.26

@@ -1,268 +1,910 @@
 #!/usr/bin/env node
 // ---------------------------------------------------------------------------
 // scripts/sim-extract-demos.mjs
-// BC samples from selected library demos (SIM-PLAN 9.2c / 9.3).
+// K1 of SIM-PLAN 9.3b: behaviour-cloning samples from real demos.
 //
-// Selection, never a corpus scan: --demos is an id list. Observations are
-// rebuilt from that player's own pose and living teammates; enemy belief is
-// zeros because a demo tick is not a Team POV frame. Labels come from the
-// feet-only segmenter. The trainer does not change.
+// K0 (sim-mine-knowledge.mjs) mined what a position IS: where winners stand on
+// Banana, when they get there, what they throw. This script mines what a
+// winner DID at one moment, so a network can learn the residual: given that
+// knowledge and this situation, what did the human actually do.
 //
-//   node scripts/sim-extract-demos.mjs --demos abc,def
-//   node scripts/sim-extract-demos.mjs --demos-file demos.txt --out sim/datasets/from-demos.jsonl
+// What the operator asked to be captured, and where each lands:
+//
+//   positions in situations   `moveTo`, the anchor they were heading for over
+//                             the next 3 s, plus `contract` as a conditioner
+//   teammate configuration    the observation's teammate block already carries
+//                             four living mates as relative offsets, so "when
+//                             mid is alive and short is dead" is IN the input
+//   how to clear on a call    `call` is a conditioner on every sample and the
+//                             clearing order falls out of moveTo + aim over
+//                             the steps after the call commits
+//   copying movement          `gait`, `peek`, and the 12-step history window,
+//                             which is what makes a jiggle distinguishable
+//                             from a wide swing at all
+//   refrag                    `refrag` marks the seconds after a teammate died
+//                             near this player, and those samples are weighted
+//                             up: it is the highest-value behaviour in the
+//                             corpus and the rarest
+//   where they aim            `aim`, the OFFSET from where they looked to the
+//                             bearing of the thing that mattered. Absolute yaw
+//                             is map trivia; the offset transfers
+//
+// Two rules inherited from the operator's brief, unchanged: only WINNING sides
+// are labelled, and belief is replayed through the knowledge tracker so a bot
+// is trained on what the player could SEE, never on god-view.
+//
+//   node scripts/sim-extract-demos.mjs --limit 20 --maps INF
+//   node scripts/sim-extract-demos.mjs --batch 400
 // ---------------------------------------------------------------------------
 
-import { readFileSync } from 'node:fs';
-import fs from 'node:fs/promises';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
+import { fork } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-import {
-  ROOT as REPLAY_ROOT,
-  listLibraryUsers,
-  readRoundTicks,
-  readRoundMeta,
-  userKey
-} from '../server/replays/demoStore.js';
-import { SHARED_LIBRARY } from '../server/replays/auth.js';
-import { demoIdFromRoundFile } from '../server/sim/export.js';
-import { coverage, segmentTrack } from '../shared/sim/optionSegmenter.js';
+import { ROOT as REPLAY_ROOT } from '../server/replays/demoStore.js';
+import { decodeReplayPackage } from '../src/replays/shared/replayPackage.js';
+import { decodeTickz } from '../server/replays/tickCodec.js';
+import { TickTrack } from '../src/replays/tickStore.js';
+import { roundTagsFor } from '../src/replays/analytics/roundTags.js';
+import { loadBake } from '../server/sim/bakes.js';
+import { navGraphFromBake } from '../shared/sim/navGraph.js';
+import { loadAngles } from '../shared/sim/angles.js';
+import { JointBelief } from '../shared/sim/knowledge.js';
+import { Rng } from '../shared/sim/rng.js';
+import { buildObservation, OBSERVATION_SIZE, OBSERVE_VERSION, weaponClassOf } from '../shared/sim/observe.js';
 import { OPTION_IDS } from '../shared/sim/options.js';
-import { OBSERVE_VERSION, OBSERVATION_SIZE, buildObservation, weaponClassOf } from '../shared/sim/observe.js';
-import { readHeader, readRecord, PLAYER_SLOTS, FLAG_HAS_HELMET } from '../src/replays/shared/tickFormat.js';
+import { weaponInfo } from '../src/replays/shared/weaponTable.js';
+import {
+  AIM_BUCKETS,
+  DEMO_DATASET_VERSION,
+  HISTORY_HZ,
+  HISTORY_STEPS,
+  PEEK_STYLES,
+  REFRAG_RADIUS,
+  REFRAG_WINDOW_SECONDS
+} from '../shared/sim/demoContracts.js';
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : fallback;
 };
-function demoIds() {
-  const ids = [];
-  const push = (raw) => {
-    for (const part of String(raw || '').split(/[,\r\n]+/)) {
-      const t = part.trim();
-      if (t) ids.push(t);
+const has = (name) => args.includes(`--${name}`);
+
+const DIR = flag('dir', 'D:/Dev/trainingdemos');
+const OUT = flag('out', path.join(REPLAY_ROOT, 'sim', 'datasets', 'demos'));
+const ONLY_MAPS = String(flag('maps', '') || '')
+  .split(',')
+  .map((s) => s.trim().toUpperCase())
+  .filter(Boolean);
+const LIMIT = Number(flag('limit', 0)) || 0;
+const BATCH = Number(flag('batch', 0)) || 0;
+const SHARD_SAMPLES = Number(flag('shard-samples', 250000));
+const CHECKPOINT_EVERY = Number(flag('checkpoint', 25));
+const REBUILD = has('rebuild');
+const IS_WORKER = has('worker');
+/**
+ * Parallel workers. Demos are independent, so this scales almost linearly to
+ * the core count; the ceiling is cores minus two so the desktop stays usable,
+ * and each worker holds one package at a time, so memory is JOBS x one demo
+ * rather than JOBS x the corpus.
+ */
+const JOBS = (() => {
+  const asked = Number(flag('jobs', 1)) || 1;
+  return Math.max(1, Math.min(asked, Math.max(1, os.cpus().length - 2)));
+})();
+
+/** Sampling cadence for the stride half of 9.3b's table. */
+const STRIDE_HZ = 4;
+/** Seconds ahead the move label looks to decide where they were going. */
+const MOVE_LOOKAHEAD = 3;
+/** Under this displacement over the lookahead they were holding, not moving. */
+const HOLD_UNITS = 110;
+/** Running, in units per second, from the engine's own walk/run split. */
+const RUN_SPEED = 150;
+/**
+ * How long a sighting stays a fair thing to have your crosshair on. Past this
+ * the information is stale and "he is not looking at it" stops being a
+ * mistake. `[calibrate]`
+ */
+const AIM_MEMORY_SECONDS = 6;
+/** Sample weights. Refrag and utility are rare and precious (9.3). */
+const W_HOLD = 0.6;
+const W_MOVE = 1;
+const W_UTILITY = 3;
+const W_REFRAG = 4;
+
+const round3 = (x) => Math.round(x * 1e3) / 1e3;
+const wrapDeg = (d) => ((((d + 180) % 360) + 360) % 360) - 180;
+
+function writeAtomic(file, text) {
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, text);
+  fs.renameSync(tmp, file);
+}
+
+function fmtDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0s';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  return h ? `${h}h${String(m).padStart(2, '0')}m` : m ? `${m}m${String(s).padStart(2, '0')}s` : `${s}s`;
+}
+
+// ---------------------------------------------------------------------------
+
+const mapCache = new Map();
+async function mapState(map) {
+  if (mapCache.has(map)) return mapCache.get(map);
+  let state = null;
+  try {
+    const nav = await loadBake('navcache', map);
+    const ang = await loadBake('angles', map);
+    if (!nav || !ang) throw new Error('no bake');
+    let network = null;
+    try {
+      network = JSON.parse(await fsp.readFile(path.join(REPLAY_ROOT, 'zones', `${map}.json`), 'utf8'));
+    } catch {
+      network = null;
     }
-  };
-  push(flag('demos', ''));
-  const file = flag('demos-file', '');
-  if (file) push(readFileSync(file, 'utf8'));
-  return ids;
-}
-const DEMOS = demoIds();
-const OUT = flag(
-  'out',
-  path.join(REPLAY_ROOT, 'sim', 'datasets', `bc-demos-${DEMOS.slice(0, 3).join('-') || 'none'}.jsonl`)
-);
-const STRIDE = 8;
-
-async function libraries() {
-  let users = [];
-  try {
-    users = await listLibraryUsers();
+    state = { graph: navGraphFromBake(nav.bake), angles: loadAngles(ang.bake), network };
   } catch {
-    users = [];
+    state = null;
   }
-  const keys = [];
-  const seen = new Set();
-  for (const u of [SHARED_LIBRARY, ...users]) {
-    const k = userKey(u);
-    if (seen.has(k)) continue;
-    seen.add(k);
-    keys.push(k);
-  }
-  return keys;
+  mapCache.set(map, state);
+  return state;
 }
 
-async function stemsFor(user, demoId) {
-  const dir = path.join(REPLAY_ROOT, userKey(user), 'rounds');
-  let files = [];
-  try {
-    files = await fs.readdir(dir);
-  } catch {
-    return [];
+/**
+ * How a player showed himself over the last second, from the pose trace.
+ *
+ * The shapes are deliberately crude and deliberately about EXPOSURE rather
+ * than about speed: a jiggle is ground given and taken straight back, a wide
+ * swing is ground given and kept while moving fast. Getting this wrong makes
+ * a bot that "peeks" by walking in a straight line, which is the tell every
+ * scripted bot has ever had.
+ */
+function peekStyle(trail, lastPeekSeconds) {
+  if (trail.length < 3) return 'none';
+  // A peek STARTS FROM A HOLD. Without this, a player running down mid scores
+  // as a wide swing and a player who ran twice scores as a repeek, which is
+  // how the first pass ended up with more repeeks than holds. Rotating is
+  // travel; showing yourself from a position you were holding is a peek.
+  if ((trail[0].speed || 0) > 60) return 'none';
+  const start = trail[0];
+  const end = trail[trail.length - 1];
+  let maxOut = 0;
+  for (const p of trail) {
+    const d = Math.hypot(p.x - start.x, p.y - start.y);
+    if (d > maxOut) maxOut = d;
   }
-  const stems = new Set();
-  for (const f of files) {
-    if (demoIdFromRoundFile(f) !== demoId) continue;
-    const stem = f.replace(/\.(tickz|json\.zst|c100\.bin|bin|json)$/i, '');
-    stems.add(stem);
+  const net = Math.hypot(end.x - start.x, end.y - start.y);
+  const speed = trail.reduce((s, p) => s + (p.speed || 0), 0) / trail.length;
+
+  if (maxOut < 30) return 'hold';
+  // Went out and came back: the ground was given and taken straight back.
+  if (maxOut > 60 && net < maxOut * 0.45) {
+    return maxOut < 140 ? 'jiggle' : 'shoulder';
   }
-  return [...stems];
+  if (net > 120 && speed > RUN_SPEED * 0.8) {
+    return lastPeekSeconds != null && lastPeekSeconds < 3 ? 'repeek' : 'wide';
+  }
+  return 'none';
 }
 
-function tracksFromTicks(bytes, meta) {
-  const header = readHeader(bytes);
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const players = [];
-  for (let slot = 0; slot < PLAYER_SLOTS; slot += 1) {
-    players.push({ slot, poses: [], events: [], lastHealth: 100, dead: false, side: null });
+/** Which bucket the aim offset falls in. The offset is the transferable part. */
+function aimBucket(offsetDeg) {
+  const a = Math.abs(offsetDeg);
+  if (a <= 10) return 'on';
+  if (a <= 35) return 'near';
+  if (a <= 90) return 'off';
+  return 'away';
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Turn one round into samples for the winning side.
+ *
+ * Belief is a real JointBelief fed only percepts that side could have had:
+ * a sighting when a LIVING teammate has line of sight through the angle
+ * catalogue, and the kill feed, which is public in CS. Nothing reads an enemy
+ * position directly, so a player who never saw the CT is never trained as if
+ * he did.
+ */
+function extractRound({ meta, track, state, map, rng, onSample }) {
+  const tickRate = meta.tickRate || 64;
+  const t0 = meta.freezeEndTick ?? meta.startTick ?? 0;
+  const endTick = Math.min(meta.endTick ?? t0, t0 + 115 * tickRate);
+  if (!(endTick > t0)) return 0;
+
+  const side1 = meta.team1Side === 'CT' ? 'CT' : 'T';
+  const sideOfTeam = { 1: side1, 2: side1 === 'CT' ? 'T' : 'CT' };
+  const winnerTeam = meta.winner === 2 ? 2 : 1;
+  const winSide = meta.winnerSide || sideOfTeam[winnerTeam];
+
+  let call = 'default';
+  if (state.network) {
+    try {
+      const tags = roundTagsFor({ meta, track, network: state.network, utilities: [], mapCode: map });
+      const list = winSide === 'CT' ? tags.ct : tags.t;
+      if (list?.length) call = list[0].k;
+    } catch {
+      /* untaggable round is a default round */
+    }
   }
-  const tmp = {};
-  for (let row = 0; row < header.tickCount; row += STRIDE) {
-    const tick = (header.firstTick || 0) + row;
-    for (const p of players) {
-      if (p.dead) continue;
-      readRecord(view, row, p.slot, tmp);
-      if (!tmp.alive) {
-        p.dead = true;
-        continue;
+
+  const roster = meta.players || [];
+  const winners = roster.filter((p) => p.team === winnerTeam);
+  const foes = roster.filter((p) => p.team !== winnerTeam);
+  if (winners.length === 0 || foes.length === 0) return 0;
+
+  const belief = new JointBelief({
+    anchors: [...state.graph.anchors.keys()],
+    rng: rng.fork()
+  });
+
+  // Deaths, from the public kill feed: when, where, and who.
+  const deaths = [];
+  for (const k of meta.events?.kills || []) {
+    deaths.push({ tick: k.tick, victim: k.victim, attacker: k.attacker });
+  }
+  const deathTickOf = new Map();
+  for (const d of deaths) if (!deathTickOf.has(d.victim)) deathTickOf.set(d.victim, d.tick);
+
+  const grenades = meta.events?.grenades || [];
+  const step = Math.max(1, Math.round(tickRate / STRIDE_HZ));
+  const historyStep = Math.max(1, Math.round(tickRate / HISTORY_HZ));
+  const states = [];
+  const trails = new Map(); // slot -> recent poses
+  const lastPeek = new Map(); // slot -> seconds
+  const deadFoes = new Set();
+  /**
+   * Where this side last actually SAW an enemy, and when. Shared across the
+   * five, because a sighting is team knowledge the moment it happens. This is
+   * the honest reference for the aim label: a crosshair is worth measuring
+   * against something the player could have been looking at.
+   */
+  let lastSeen = null;
+  const roundKey = `${meta.demoId || ''}:${meta.round ?? 0}`;
+  let stepIndex = -1;
+
+  let written = 0;
+
+  for (let tick = t0; tick <= endTick; tick += step) {
+    track.sampleAll(tick, states);
+    const seconds = (tick - t0) / tickRate;
+    stepIndex += 1;
+
+    // ---- percepts: what this side could legitimately know ----------------
+    for (const f of foes) {
+      const ft = deathTickOf.get(f.id);
+      if (ft != null && tick >= ft && !deadFoes.has(f.id)) {
+        deadFoes.add(f.id);
+        belief.killed(foes.indexOf(f));
       }
-      p.side = tmp.side === 3 ? 'CT' : 'T';
-      p.poses.push({
-        tick,
-        x: tmp.x,
-        y: tmp.y,
-        hp: tmp.health,
-        armor: tmp.armor,
-        helmet: Boolean(tmp.flags & FLAG_HAS_HELMET),
-        weapon: tmp.weapon
+    }
+    for (const f of foes) {
+      if (deadFoes.has(f.id)) continue;
+      const fs2 = states[f.slot];
+      if (!fs2?.alive) continue;
+      for (const w of winners) {
+        const ws = states[w.slot];
+        if (!ws?.alive) continue;
+        if (!state.angles.canSee(ws.x, ws.y, fs2.x, fs2.y, 'default')) continue;
+        const at = state.angles.nearestAnchor(fs2.x, fs2.y);
+        if (at) belief.sighting(foes.indexOf(f), at.id, { weapon: 'ak47' });
+        lastSeen = { x: fs2.x, y: fs2.y, seconds };
+        break;
+      }
+    }
+
+    const aliveWinners = winners.filter((p) => states[p.slot]?.alive);
+    const aliveFoes = foes.filter((p) => !deadFoes.has(p.id));
+
+    // ---- one sample per living winner -------------------------------------
+    for (const p of winners) {
+      const me = states[p.slot];
+      if (!me?.alive) continue;
+
+      // Pose trail, for the peek shape and the gait.
+      let trail = trails.get(p.slot);
+      if (!trail) {
+        trail = [];
+        trails.set(p.slot, trail);
+      }
+      const prev = trail.length ? trail[trail.length - 1] : null;
+      const dtSec = step / tickRate;
+      const speed = prev ? Math.hypot(me.x - prev.x, me.y - prev.y) / dtSec : 0;
+      trail.push({ x: me.x, y: me.y, yaw: me.yaw, speed, seconds });
+      while (trail.length > 5) trail.shift();
+
+      // Where were they going? The anchor nearest their pose in 3 seconds.
+      const aheadTick = Math.min(endTick, tick + MOVE_LOOKAHEAD * tickRate);
+      const ahead = track.sample(p.slot, aheadTick, {});
+      const displaced = Math.hypot(ahead.x - me.x, ahead.y - me.y);
+      const goingTo = displaced > HOLD_UNITS ? state.angles.nearestAnchor(ahead.x, ahead.y) : null;
+      const here = state.angles.nearestAnchor(me.x, me.y);
+
+      // Refrag: did a teammate just die near me?
+      let refrag = 0;
+      let refragBearing = null;
+      for (const d of deaths) {
+        const dt = (tick - d.tick) / tickRate;
+        if (dt < 0 || dt > REFRAG_WINDOW_SECONDS) continue;
+        const victim = roster.find((r) => r.id === d.victim);
+        if (!victim || victim.team !== winnerTeam || victim.id === p.id) continue;
+        const vs = track.sample(victim.slot, d.tick, {});
+        const dist = Math.hypot(vs.x - me.x, vs.y - me.y);
+        if (dist > REFRAG_RADIUS) continue;
+        refrag = 1;
+        refragBearing = (Math.atan2(vs.y - me.y, vs.x - me.x) * 180) / Math.PI;
+        break;
+      }
+
+      // What mattered to look at, in priority order: the cell a mate just died
+      // in, else the last place this side actually saw somebody. When neither
+      // exists there is NO LABEL, and that is the whole fix.
+      //
+      // The first pass used the highest-mass belief anchor as the reference.
+      // Early in a round the belief is near uniform, so that argmax is
+      // arbitrary and the label was noise: the head scored 0.383 against a
+      // 0.359 majority floor, which is to say it learned nothing at all. A
+      // masked sample teaches nothing; a wrong one teaches wrongly.
+      let target = refragBearing;
+      if (target == null && lastSeen && seconds - lastSeen.seconds <= AIM_MEMORY_SECONDS) {
+        target = (Math.atan2(lastSeen.y - me.y, lastSeen.x - me.x) * 180) / Math.PI;
+      }
+      const aimOffset = target == null ? null : wrapDeg(me.yaw - target);
+
+      const style = peekStyle(trail, lastPeek.get(p.slot) != null ? seconds - lastPeek.get(p.slot) : null);
+      if (style === 'jiggle' || style === 'shoulder' || style === 'wide' || style === 'repeek') {
+        lastPeek.set(p.slot, seconds);
+      }
+
+      // Utility thrown in this window.
+      let util = 'none';
+      for (const g of grenades) {
+        if (g.player !== p.id) continue;
+        const gs = (g.throwTick - t0) / tickRate;
+        if (Math.abs(gs - seconds) <= 0.5) {
+          util = g.type;
+          break;
+        }
+      }
+
+      // ---- the observation, from what this side knew ---------------------
+      const mates = aliveWinners
+        .filter((m) => m.slot !== p.slot)
+        .slice(0, 4)
+        .map((m) => ({
+          dx: states[m.slot].x - me.x,
+          dy: states[m.slot].y - me.y,
+          hp: states[m.slot].health
+        }));
+
+      const stat = meta.stats?.[p.id] || {};
+      const weaponName = (meta.weapons || [])[me.weapon] || '';
+      const obs = buildObservation({
+        me: {
+          x: me.x,
+          y: me.y,
+          hp: me.health,
+          armor: me.armor,
+          helmet: (me.flags & 128) !== 0,
+          weaponClass: weaponClassOf(weaponInfo(weaponName).category),
+          hasBomb: (me.flags & 32) !== 0,
+          side: winSide
+        },
+        round: {
+          elapsed: seconds,
+          secondsLeft: Math.max(0, 115 - seconds),
+          planted: meta.plantTick != null && tick >= meta.plantTick,
+          bombSecondsLeft:
+            meta.plantTick != null && tick >= meta.plantTick
+              ? Math.max(0, 40 - (tick - meta.plantTick) / tickRate)
+              : 0,
+          myEquipAvg: stat.equipValue || 0,
+          enemyEquipAvgBelieved: 3000
+        },
+        myAlive: aliveWinners.length,
+        enemyAliveBelieved: aliveFoes.length,
+        belief: {
+          siteExpected: [0, 0],
+          sitePEmpty: [0, 0],
+          splitEntropy: belief.splitEntropy([
+            { name: 'here', test: (anchor) => anchor === here?.id },
+            { name: 'rest', test: (anchor) => anchor !== here?.id }
+          ]),
+          threatAtMe: Math.min(1, belief.massAt(here?.id || '', 'default'))
+        },
+        teammates: mates,
+        recency: { sinceSeenSeconds: 10, sinceHeardSeconds: 10 }
       });
-      if (tmp.health < p.lastHealth) p.events.push({ type: 'damage', tick });
-      p.lastHealth = tmp.health;
+
+      const isEvent = refrag || util !== 'none' || style !== 'none';
+      const w = refrag ? W_REFRAG : util !== 'none' ? W_UTILITY : goingTo ? W_MOVE : W_HOLD;
+
+      onSample({
+        obs: obs.map(round3),
+        // No history array on the line. Samples for one (round, slot) are
+        // emitted in order at HISTORY_HZ, so the trainer rebuilds the 12-step
+        // window from `seq` for a thirteenth of the disk: storing it inline
+        // would have cost about 320 GB over the corpus.
+        seq: { round: roundKey, slot: p.slot, i: stepIndex },
+        cond: {
+          map,
+          side: winSide,
+          call,
+          contract: here?.id || 'any',
+          player: p.steamId || p.id
+        },
+        y: {
+          moveTo: goingTo?.id || null,
+          gait: speed > RUN_SPEED ? 'run' : speed > 20 ? 'walk' : 'stand',
+          peek: style,
+          refrag,
+          // null becomes -1 in the trainer, which masks it out of the loss.
+          aim: aimOffset == null ? null : aimBucket(aimOffset),
+          // The aux regression is not masked, so an unreferenced step reads 0
+          // rather than a fabricated angle. It is dropped at export anyway.
+          aimOffset: aimOffset == null ? 0 : round3(aimOffset),
+          utility: util,
+          option: goingTo ? 'advance' : 'hold_angle'
+        },
+        w: isEvent ? w : w * 0.8,
+        ev: isEvent ? 1 : 0
+      });
+      written += 1;
+
+
     }
   }
-  const planted = meta?.events?.bomb?.find((b) => b.type === 'planted');
-  if (planted) {
-    const slot = meta.players?.find((pl) => pl.id === planted.player)?.slot;
-    const p = slot != null ? players[slot] : null;
-    if (p) {
-      p.events.push(
-        { type: 'plant_start', tick: planted.tick - Math.round(3.2 * 64) },
-        { type: 'plant_end', tick: planted.tick }
-      );
-    }
-  }
-  return players.filter((p) => p.poses.length > 2);
+  return written;
 }
 
-function obsAt(pose, mates, side, planted) {
-  const teammates = mates
-    .filter((m) => m !== pose)
-    .slice(0, 4)
-    .map((m) => ({
-      dx: (m.x - pose.x) / 4096,
-      dy: (m.y - pose.y) / 4096,
-      hp: (m.hp || 100) / 100
-    }));
-  return buildObservation({
-    me: {
-      x: pose.x,
-      y: pose.y,
-      hp: pose.hp ?? 100,
-      armor: pose.armor ?? 0,
-      helmet: Boolean(pose.helmet),
-      weaponClass: weaponClassOf(pose.weapon) || 'other',
-      hasBomb: false,
-      side
-    },
-    round: {
-      elapsed: Math.max(0, (pose.tick || 0) / 64),
-      secondsLeft: 115,
-      planted: Boolean(planted),
-      bombSecondsLeft: 40,
-      myEquipAvg: 0,
-      enemyEquipAvgBelieved: 0
-    },
-    myAlive: 1 + teammates.length,
-    enemyAliveBelieved: 5,
-    belief: { siteExpected: [0, 0], sitePEmpty: [1, 1], splitEntropy: 0, threatAtMe: 0 },
-    teammates,
-    recency: { sinceSeenSeconds: 30, sinceHeardSeconds: 30 }
+// ---------------------------------------------------------------------------
+
+class Progress {
+  constructor(total, outDir) {
+    this.total = total;
+    this.outDir = outDir;
+    this.done = 0;
+    this.samples = 0;
+    this.rounds = 0;
+    this.failed = 0;
+    this.reasons = new Map();
+    this.labels = new Map();
+    this.calls = new Map();
+    this.startedAt = Date.now();
+    this.lastWrite = 0;
+  }
+
+  note(y) {
+    const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+    bump(this.labels, `peek:${y.peek}`);
+    if (y.refrag) bump(this.labels, 'refrag');
+    if (y.utility !== 'none') bump(this.labels, `util:${y.utility}`);
+    bump(this.labels, `aim:${y.aim}`);
+  }
+
+  tick(map, rounds, samples) {
+    this.done += 1;
+    this.rounds += rounds;
+    this.samples += samples;
+    const elapsed = (Date.now() - this.startedAt) / 1000;
+    const rate = this.done / Math.max(0.001, elapsed);
+    const eta = rate > 0 ? (this.total - this.done) / rate : 0;
+    console.log(
+      `[${String(this.done).padStart(5)}/${this.total}] ` +
+        `${((this.done / Math.max(1, this.total)) * 100).toFixed(1).padStart(5)}%  ` +
+        `${(map || '???').padEnd(4)} ${String(rounds).padStart(2)}r  ` +
+        `${this.samples.toLocaleString()} samples  ${rate.toFixed(1)}/s  ` +
+        `ETA ${fmtDuration(eta)}  heap ${(process.memoryUsage().heapUsed / 1e6).toFixed(0)}MB` +
+        (this.failed ? `  skipped ${this.failed}` : '')
+    );
+    if (Date.now() - this.lastWrite > 2000) this.write();
+  }
+
+  write() {
+    this.lastWrite = Date.now();
+    const elapsed = (Date.now() - this.startedAt) / 1000;
+    const rate = this.done / Math.max(0.001, elapsed);
+    writeAtomic(
+      path.join(this.outDir, 'progress.json'),
+      JSON.stringify(
+        {
+          phase: 'extract-demos',
+          done: this.done,
+          total: this.total,
+          percent: Math.round((this.done / Math.max(1, this.total)) * 1000) / 10,
+          rounds: this.rounds,
+          samples: this.samples,
+          failed: this.failed,
+          reasons: Object.fromEntries(this.reasons),
+          labels: Object.fromEntries(this.labels),
+          calls: Object.fromEntries(this.calls),
+          demosPerSecond: Math.round(rate * 100) / 100,
+          etaSeconds: Math.round(rate > 0 ? (this.total - this.done) / rate : 0),
+          heapMB: Math.round(process.memoryUsage().heapUsed / 1e6),
+          startedAt: new Date(this.startedAt).toISOString(),
+          updatedAt: new Date().toISOString()
+        },
+        null,
+        2
+      )
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+/** The meta line every shard opens with, so a shard is self-describing. */
+function metaLine() {
+  return JSON.stringify({
+    type: 'meta',
+    v: DEMO_DATASET_VERSION,
+    obsVersion: OBSERVE_VERSION,
+    obsSize: OBSERVATION_SIZE,
+    historySteps: HISTORY_STEPS,
+    historyHz: HISTORY_HZ,
+    vocab: OPTION_IDS,
+    peekStyles: PEEK_STYLES,
+    aimBuckets: AIM_BUCKETS,
+    source: DIR
   });
 }
 
+/**
+ * One demo, start to finish. The only unit of work either mode deals in, so
+ * the serial path and the parallel workers cannot drift apart.
+ *
+ * @returns {{demoId, map, rounds, samples, labels, calls, error}}
+ */
+async function processDemo(file, rng, emit) {
+  const demoId = path.basename(file, '.aim4replay');
+  const out = { demoId, map: null, rounds: 0, samples: 0, labels: {}, calls: {}, error: null };
+  try {
+    const { files } = decodeReplayPackage(await fsp.readFile(path.join(DIR, file)));
+    const stems = new Set();
+    for (const name of files.keys()) {
+      const m = /^rounds\/(.+?)\.(tickz|json\.zst)$/.exec(name);
+      if (m) stems.add(m[1]);
+    }
+    for (const stem of stems) {
+      const metaRaw = files.get(`rounds/${stem}.json.zst`);
+      const tickRaw = files.get(`rounds/${stem}.tickz`);
+      if (!metaRaw || !tickRaw) continue;
+      const meta = JSON.parse(zlib.zstdDecompressSync(Buffer.from(metaRaw)).toString('utf8'));
+      const code = String(meta.map || '').toUpperCase();
+      if (!code) continue;
+      if (ONLY_MAPS.length && !ONLY_MAPS.includes(code)) break;
+      const state = await mapState(code);
+      if (!state) continue;
+      out.map = code;
+      const track = new TickTrack(decodeTickz(Buffer.from(tickRaw)));
+      out.samples += extractRound({
+        meta,
+        track,
+        state,
+        map: code,
+        rng,
+        onSample: (s) => {
+          const k = `peek:${s.y.peek}`;
+          out.labels[k] = (out.labels[k] || 0) + 1;
+          const a = `aim:${s.y.aim}`;
+          out.labels[a] = (out.labels[a] || 0) + 1;
+          if (s.y.refrag) out.labels.refrag = (out.labels.refrag || 0) + 1;
+          if (s.y.utility !== 'none') {
+            const u = `util:${s.y.utility}`;
+            out.labels[u] = (out.labels[u] || 0) + 1;
+          }
+          out.calls[s.cond.call] = (out.calls[s.cond.call] || 0) + 1;
+          emit(s);
+        }
+      });
+      out.rounds += 1;
+    }
+  } catch (err) {
+    out.error = String(err.message || err).slice(0, 60);
+  }
+  return out;
+}
+
+/**
+ * Worker mode. Owns its OWN shard files so no two processes ever write the
+ * same one, reports a message per demo, and holds one package at a time like
+ * the serial path did: N workers cost N packages, not N corpora.
+ */
+async function runWorker() {
+  const id = Number(flag('worker-id', 0));
+  const rng = new Rng(4242 + id);
+  let shardIndex = 0;
+  let lines = [metaLine()];
+  let count = 0;
+  const shards = [];
+
+  const closeShard = () => {
+    if (!count) return;
+    const name = `shard-w${id}-${String(shardIndex).padStart(3, '0')}.jsonl`;
+    writeAtomic(path.join(OUT, name), lines.join('\n'));
+    shards.push({ file: name, samples: count });
+    shardIndex += 1;
+    lines = [metaLine()];
+    count = 0;
+  };
+
+  let stopping = false;
+  process.on('message', (msg) => {
+    if (msg?.type === 'stop') stopping = true;
+  });
+
+  const files = await new Promise((resolve) => {
+    process.on('message', (msg) => {
+      if (msg?.type === 'files') resolve(msg.files);
+    });
+    process.send({ type: 'ready' });
+  });
+
+  const done = [];
+  for (const file of files) {
+    if (stopping) break;
+    const r = await processDemo(file, rng, (s) => {
+      lines.push(JSON.stringify(s));
+      count += 1;
+      if (count >= SHARD_SAMPLES) closeShard();
+    });
+    if (!r.error) done.push(r.demoId);
+    process.send({ type: 'demo', ...r });
+  }
+  closeShard();
+  process.send({ type: 'done', shards, demos: done });
+  process.exit(0);
+}
+
 async function main() {
-  if (!DEMOS.length) {
-    console.error('sim-extract-demos: pass --demos id,id or --demos-file path');
+  if (IS_WORKER) return runWorker();
+  await fsp.mkdir(OUT, { recursive: true });
+  const manifestFile = path.join(OUT, 'manifest.json');
+
+  let manifest = { v: DEMO_DATASET_VERSION, obsVersion: OBSERVE_VERSION, demos: [], shards: [], samples: 0 };
+  if (!REBUILD) {
+    try {
+      const prev = JSON.parse(await fsp.readFile(manifestFile, 'utf8'));
+      if (prev.v === DEMO_DATASET_VERSION && prev.obsVersion === OBSERVE_VERSION) manifest = prev;
+    } catch {
+      /* first run */
+    }
+  }
+  const seen = new Set(manifest.demos);
+
+  let all;
+  try {
+    all = (await fsp.readdir(DIR)).filter((f) => f.endsWith('.aim4replay'));
+  } catch (err) {
+    console.error(`cannot read ${DIR}: ${err.message}`);
     process.exit(1);
   }
-  const users = await libraries();
-  const samples = [];
-  const histogram = {};
-  let tracks = 0;
-  let coverages = [];
+  all.sort();
 
-  const histByPlayer = new Map();
-  for (const id of DEMOS) {
-    let found = false;
-    for (const user of users) {
-      const stems = await stemsFor(user, id);
-      if (!stems.length) continue;
-      found = true;
-      for (const stem of stems) {
-        const ticks = await readRoundTicks(user, stem);
-        if (!ticks) continue;
-        const meta = await readRoundMeta(user, stem).catch(() => null);
-        const bytes = ticks instanceof ArrayBuffer ? new Uint8Array(ticks) : ticks;
-        for (const p of tracksFromTicks(bytes, meta)) {
-          const segments = segmentTrack({ poses: p.poses, events: p.events });
-          tracks += 1;
-          coverages.push(coverage(segments, p.poses));
-          const byTick = p.poses;
-          for (const s of segments) {
-            histogram[s.option] = (histogram[s.option] || 0) + 1;
-            const midTick = Math.floor(((s.startTick || 0) + (s.endTick || 0)) / 2);
-            const pose = byTick.find((po) => po.tick >= midTick) || byTick[0];
-            const player = `${id}:${p.slot}`;
-            const obs = obsAt(
-              pose,
-              [pose],
-              p.side,
-              Boolean(meta?.events?.bomb?.some((b) => b.type === 'planted'))
-            );
-            const hist = histByPlayer.get(player) || [];
-            samples.push({
-              obs,
-              hist,
-              label: s.option,
-              side: p.side,
-              player,
-              map: meta?.map || meta?.mapCode || null
+  let todo = all.filter((f) => !seen.has(path.basename(f, '.aim4replay')));
+  if (LIMIT) todo = todo.slice(0, LIMIT);
+  if (BATCH) todo = todo.slice(0, BATCH);
+
+  console.log(`corpus ${all.length} demos in ${DIR}`);
+  console.log(`already extracted ${seen.size}, this run ${todo.length}` + (ONLY_MAPS.length ? `, maps ${ONLY_MAPS.join(',')}` : ''));
+  if (!todo.length) {
+    console.log('nothing to do. --rebuild to start over.');
+    return;
+  }
+
+  const progress = new Progress(todo.length, OUT);
+  const rng = new Rng(4242);
+
+  // ---- parallel path ------------------------------------------------------
+  //
+  // Demos are completely independent, so this is the one place in the project
+  // where fanning out is free of correctness questions. Each worker owns its
+  // own shard files; the parent owns the manifest, the progress line and the
+  // decision to stop. Serial stays the default because it is the easier thing
+  // to debug, and because one core is plenty for `--limit 5`.
+  if (JOBS > 1) {
+    const workers = [];
+    const buckets = Array.from({ length: JOBS }, () => []);
+    // Round robin rather than contiguous blocks: the corpus is sorted, maps
+    // cluster in it, and a contiguous split would give one worker every Nuke
+    // demo and the map bakes that come with them.
+    todo.forEach((f, i) => buckets[i % JOBS].push(f));
+
+    console.log(`fanning out over ${JOBS} workers (${os.cpus().length} cores)`);
+
+    let stopping = false;
+    const stopAll = () => {
+      if (stopping) process.exit(1);
+      stopping = true;
+      console.log('\nstopping after the demos in flight. progress is kept; re-run to continue.');
+      for (const w of workers) w.send({ type: 'stop' });
+    };
+    process.on('SIGINT', stopAll);
+
+    await Promise.all(
+      buckets.map(
+        (files, id) =>
+          new Promise((resolve) => {
+            if (!files.length) return resolve();
+            const w = fork(fileURLToPath(import.meta.url), [...args, '--worker', '--worker-id', String(id)], {
+              stdio: ['ignore', 'inherit', 'inherit', 'ipc']
             });
-            histByPlayer.set(player, hist.concat([obs]).slice(-11));
-          }
-        }
-      }
-      break;
-    }
-    if (!found) console.log(`demo ${id}: no round files on this host`);
+            workers.push(w);
+            w.on('message', (msg) => {
+              if (msg?.type === 'ready') {
+                w.send({ type: 'files', files });
+                return;
+              }
+              if (msg?.type === 'demo') {
+                if (msg.error) {
+                  progress.failed += 1;
+                  progress.reasons.set(msg.error, (progress.reasons.get(msg.error) || 0) + 1);
+                } else {
+                  manifest.demos.push(msg.demoId);
+                }
+                for (const [k, n] of Object.entries(msg.labels || {})) {
+                  progress.labels.set(k, (progress.labels.get(k) || 0) + n);
+                }
+                for (const [k, n] of Object.entries(msg.calls || {})) {
+                  progress.calls.set(k, (progress.calls.get(k) || 0) + n);
+                }
+                progress.tick(msg.map, msg.rounds, msg.samples);
+                return;
+              }
+              if (msg?.type === 'done') {
+                for (const s of msg.shards || []) manifest.shards.push(s);
+              }
+            });
+            w.on('exit', () => resolve());
+          })
+      )
+    );
+
+    manifest.samples = (manifest.samples || 0) + progress.samples;
+    manifest.updatedAt = new Date().toISOString();
+    writeAtomic(manifestFile, JSON.stringify(manifest, null, 2));
+    progress.write();
+    report(progress, manifest, all, seen);
+    return;
   }
 
-  const meta = {
-    type: 'meta',
-    v: 3,
-    obsVersion: OBSERVE_VERSION,
-    obsSize: OBSERVATION_SIZE,
-    vocab: OPTION_IDS,
-    players: [...new Set(samples.map((s) => s.player))].sort(),
-    teacher: 'demo-segmenter',
-    demos: DEMOS,
-    samples: samples.length
-  };
-  const lines = [JSON.stringify(meta)];
-  for (const s of samples) {
-    lines.push(
+  let shardIndex = manifest.shards.length;
+  let shardLines = [];
+  let shardCount = 0;
+
+  const openShard = () => {
+    shardLines = [
       JSON.stringify({
-        obs: s.obs.map((x) => Number(x.toFixed(5))),
-        label: OPTION_IDS.includes(s.label) ? s.label : 'hold_angle',
-        side: s.side,
-        player: s.player,
-        map: s.map || null,
-        hist: (s.hist || []).map((h) => h.map((x) => Number(x.toFixed(5))))
+        type: 'meta',
+        v: DEMO_DATASET_VERSION,
+        obsVersion: OBSERVE_VERSION,
+        obsSize: OBSERVATION_SIZE,
+        historySteps: HISTORY_STEPS,
+        historyHz: HISTORY_HZ,
+        vocab: OPTION_IDS,
+        peekStyles: PEEK_STYLES,
+        aimBuckets: AIM_BUCKETS,
+        source: DIR
       })
-    );
+    ];
+    shardCount = 0;
+  };
+  const closeShard = () => {
+    if (!shardCount) return;
+    const name = `shard-${String(shardIndex).padStart(4, '0')}.jsonl`;
+    writeAtomic(path.join(OUT, name), shardLines.join('\n'));
+    manifest.shards.push({ file: name, samples: shardCount });
+    shardIndex += 1;
+    shardLines = [];
+    shardCount = 0;
+  };
+  openShard();
+
+  let stopping = false;
+  process.on('SIGINT', () => {
+    if (stopping) process.exit(1);
+    stopping = true;
+    console.log('\nstopping after this demo. progress is kept; re-run to continue.');
+  });
+
+  const saveManifest = async () => {
+    manifest.samples = progress.samples;
+    manifest.updatedAt = new Date().toISOString();
+    writeAtomic(manifestFile, JSON.stringify(manifest, null, 2));
+    progress.write();
+  };
+
+  for (const file of todo) {
+    if (stopping) break;
+    const demoId = path.basename(file, '.aim4replay');
+    let map = null;
+    let rounds = 0;
+    let samples = 0;
+    try {
+      const { files } = decodeReplayPackage(await fsp.readFile(path.join(DIR, file)));
+      const stems = new Set();
+      for (const name of files.keys()) {
+        const m = /^rounds\/(.+?)\.(tickz|json\.zst)$/.exec(name);
+        if (m) stems.add(m[1]);
+      }
+      for (const stem of stems) {
+        const metaRaw = files.get(`rounds/${stem}.json.zst`);
+        const tickRaw = files.get(`rounds/${stem}.tickz`);
+        if (!metaRaw || !tickRaw) continue;
+        const meta = JSON.parse(zlib.zstdDecompressSync(Buffer.from(metaRaw)).toString('utf8'));
+        const code = String(meta.map || '').toUpperCase();
+        if (!code) continue;
+        if (ONLY_MAPS.length && !ONLY_MAPS.includes(code)) break;
+        const state = await mapState(code);
+        if (!state) continue;
+        map = code;
+        const track = new TickTrack(decodeTickz(Buffer.from(tickRaw)));
+        const n = extractRound({
+          meta,
+          track,
+          state,
+          map: code,
+          rng,
+          onSample: (s) => {
+            progress.note(s.y);
+            progress.calls.set(s.cond.call, (progress.calls.get(s.cond.call) || 0) + 1);
+            shardLines.push(JSON.stringify(s));
+            shardCount += 1;
+            if (shardCount >= SHARD_SAMPLES) {
+              closeShard();
+              openShard();
+            }
+          }
+        });
+        samples += n;
+        rounds += 1;
+      }
+      manifest.demos.push(demoId);
+    } catch (err) {
+      progress.failed += 1;
+      const reason = String(err.message || err).slice(0, 60);
+      progress.reasons.set(reason, (progress.reasons.get(reason) || 0) + 1);
+    }
+    progress.tick(map, rounds, samples);
+    if (progress.done % CHECKPOINT_EVERY === 0) {
+      closeShard();
+      openShard();
+      await saveManifest();
+    }
   }
-  await fs.mkdir(path.dirname(OUT), { recursive: true });
-  await fs.writeFile(OUT, lines.join('\n'));
-  const meanCov = coverages.length ? coverages.reduce((a, b) => a + b, 0) / coverages.length : 0;
-  console.log(`${samples.length} samples from ${DEMOS.length} demos, ${tracks} tracks, coverage ${(meanCov * 100).toFixed(0)}% -> ${OUT}`);
-  const total = Object.values(histogram).reduce((a, b) => a + b, 0) || 1;
-  for (const [option, n] of Object.entries(histogram).sort((a, b) => b[1] - a[1])) {
-    console.log(`  ${option.padEnd(14)} ${String(n).padStart(5)}  ${((n / total) * 100).toFixed(1)}%`);
+
+  closeShard();
+  await saveManifest();
+  report(progress, manifest, all, seen);
+}
+
+/** The closing summary, shared by the serial and parallel paths. */
+function report(progress, manifest, all, seen) {
+  const elapsed = (Date.now() - progress.startedAt) / 1000;
+  console.log(`\n${progress.samples.toLocaleString()} samples from ${progress.rounds} rounds of ${progress.done} demos in ${fmtDuration(elapsed)}`);
+  console.log(`shards: ${manifest.shards.length} in ${OUT}`);
+  const top = [...progress.labels.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
+  for (const [k, n] of top) console.log(`  ${k.padEnd(20)} ${n.toLocaleString()}`);
+  const calls = [...progress.calls.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+  console.log('calls:');
+  for (const [k, n] of calls) console.log(`  ${k.padEnd(20)} ${n.toLocaleString()}`);
+  const remaining = all.length - (seen.size + progress.done);
+  if (remaining > 0) {
+    console.log(`\n${remaining} demos left, about ${fmtDuration((elapsed / Math.max(1, progress.done)) * remaining)} at this rate. Re-run to continue.`);
   }
 }
 
-main().catch((e) => {
-  console.error(e);
+main().catch((err) => {
+  console.error(err.stack || err.message || err);
   process.exit(1);
 });

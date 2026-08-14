@@ -1,0 +1,16 @@
+{
+  "gen": 1,
+  "parent": "bc0",
+  "phase": "C3",
+  "individual": {
+    "arch": "mlp",
+    "weights": "gen1.json"
+  },
+  "league": [
+    "bc0",
+    "scripted"
+  ],
+  "evals": {
+    "smoke": true
+  }
+}

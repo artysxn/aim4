@@ -1,0 +1,39 @@
+{
+  "phase": "train-demos",
+  "epoch": 8,
+  "epochs": 8,
+  "percent": 100.0,
+  "samplesPerSecond": 233335.77,
+  "losses": {
+    "train.option": 0.46377,
+    "train.moveTo": 0.88178,
+    "train.gait": 0.11734,
+    "train.peek": 0.19474,
+    "train.aim": 1.23029,
+    "train.utility": 0.70653,
+    "train.refrag": 0.14089,
+    "train.aimOffset": 0.08132,
+    "val.option": 0.46619,
+    "val.moveTo": 0.8874,
+    "val.gait": 0.11725,
+    "val.peek": 0.19882,
+    "val.aim": 1.23609,
+    "val.utility": 0.74646,
+    "val.refrag": 0.14363,
+    "val.aimOffset": 0.08139
+  },
+  "accuracies": {
+    "option": 0.78755,
+    "moveTo": 0.35031,
+    "gait": 0.94795,
+    "peek": 0.95815,
+    "aim": 0.41928,
+    "utility": 0.8874
+  },
+  "etaSeconds": 0,
+  "device": "cuda",
+  "elapsedSeconds": 2515,
+  "gpuMemoryMB": 18960,
+  "samples": 586865336,
+  "updatedAt": "2026-08-14T01:48:49Z"
+}

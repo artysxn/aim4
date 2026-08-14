@@ -52,7 +52,7 @@ import { seekDirection, stepBody, unit } from './movement2d.js';
 import { BODY_RADIUS } from './constants.js';
 import { findPath } from './navGraph.js';
 import { Rng } from './rng.js';
-import { acquire, createMotor, release, resolveShot, stepMotor } from './aimMotor.js';
+import { acquire, angleDelta, createMotor, release, resolveShot, stepMotor } from './aimMotor.js';
 import { skillProfile } from './skill.js';
 import { applyBullet, simWeapon, tagFactor } from './weapons.js';
 import { killAward } from './economy.js';
@@ -150,6 +150,27 @@ export function createEngine(cfg) {
     createMotor(cfg.profiles?.[i] || skillProfile(cfg.skill || 'average'))
   );
   for (let i = 0; i < bodies.length; i += 1) motors[i].yaw = bodies[i].yaw;
+
+  /**
+   * Turn a body toward a commanded facing at its own turn rate.
+   *
+   * The crosshair used to TELEPORT here: any intent yaw, from a pre-aim or a
+   * rotation, was assigned straight onto body.yaw, so bots snapped 180 degrees
+   * in a single tick and every duel started already on target. The motor's
+   * maxTurnRate (8.2, clamped by the pro envelope) existed the whole time and
+   * only governed yaw once a fight had a focus; out of combat nothing did.
+   *
+   * That is why the bots looked like they were spinning: the pre-aim target
+   * moves with the belief, and an instant turn to each new one reads as a
+   * flick to nowhere.
+   */
+  function turnToward(body, wantYaw) {
+    const rate = motors[body.slot]?.profile?.maxTurnRate ?? 400;
+    const step = rate * TICK_DT;
+    const delta = angleDelta(body.yaw, wantYaw);
+    const move = Math.max(-step, Math.min(step, delta));
+    body.yaw = ((((body.yaw + move) % 360) + 540) % 360) - 180;
+  }
 
   const sounds = new SoundLog();
 
@@ -290,7 +311,7 @@ export function createEngine(cfg) {
       // stationary, which is the whole point of it).
       stepBody(body, seekDirection(body.pos, body.vel, body.pos, 0, 0), 0, TICK_DT, isSolidFor(body));
       if (body.intent.yaw !== null && body.intent.yaw !== undefined && body.focus === null) {
-        body.yaw = body.intent.yaw;
+        turnToward(body, body.intent.yaw);
       }
       return;
     }
@@ -453,10 +474,11 @@ export function createEngine(cfg) {
     stepBody(body, wish, cap, TICK_DT, isSolidFor(body));
 
     if (body.intent.yaw !== null && body.intent.yaw !== undefined) {
-      body.yaw = body.intent.yaw;
+      turnToward(body, body.intent.yaw);
     } else if (Math.hypot(body.vel.x, body.vel.y) > 1) {
-      // Facing follows movement until an aim model owns the crosshair (P2).
-      body.yaw = (Math.atan2(body.vel.y, body.vel.x) * 180) / Math.PI;
+      // Facing follows movement, and follows it at a human turn rate: a body
+      // rounding a corner sweeps its crosshair round rather than teleporting.
+      turnToward(body, (Math.atan2(body.vel.y, body.vel.x) * 180) / Math.PI);
     }
   }
 

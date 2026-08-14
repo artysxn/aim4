@@ -107,6 +107,7 @@
     <p class="note" id="matchStatus"></p>
     <div class="scroll" id="matchesWrap"></div>
 
+
     <h2>Train</h2>
     <div class="controls" id="trainControls"></div>
     <p class="note" id="trainStatus"></p>
@@ -335,14 +336,22 @@
         wrap.append(node('p', 'empty', 'No matches on this host yet.'));
         return;
       }
-      const { table: tbl, tbody } = table(['Map', { label: 'Score', align: 'right' }, 'Brains', 'Seed']);
+      const { table: tbl, tbody } = table(['Map', { label: 'Score', align: 'right' }, 'Brains', 'Seed', 'Rounds']);
       for (const m of matches.slice(0, 20)) {
         const tr = node('tr');
+        const rounds = node('td');
+        for (const r of (m.rounds || []).filter((r) => r.recorded).slice(0, 16)) {
+          const b = node('button', 'rowBtn', 'R' + r.round);
+          b.addEventListener('click', () =>
+            window.open('/view?match=' + encodeURIComponent(m.id) + '&round=' + r.round, '_blank'));
+          rounds.append(b);
+        }
         tr.append(
           node('td', null, m.map || ''),
           node('td', 'num', m.score ? `${m.score.A}-${m.score.B}` : ''),
           node('td', 'dim', `${m.brainA || 'scripted'} vs ${m.brainB || 'scripted'}`),
-          node('td', 'dim', m.seed == null ? '' : String(m.seed))
+          node('td', 'dim', m.seed == null ? '' : String(m.seed)),
+          rounds
         );
         tbody.append(tr);
       }

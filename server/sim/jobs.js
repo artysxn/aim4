@@ -53,7 +53,17 @@ const JOBS_DIR = path.join(ROOT, 'sim', 'jobs');
  * are seconds of one core) and refuses collection and training (which are
  * minutes to hours of it). The PC sets this; prod is not expected to.
  */
-const HEAVY_ENABLED = Number(process.env.AIM4_SIM_WORKERS || 0) > 0;
+/**
+ * Read at CALL time, never captured at module load.
+ *
+ * ESM hoists imports above every statement in a file, so tools/sim-lab.mjs
+ * setting `process.env.AIM4_SIM_WORKERS = '1'` on its first line still runs
+ * AFTER this module has been evaluated. Captured in a const, this read the
+ * unset value and the lab silently refused every collect, extract and train
+ * job it exists to run. A getter costs nothing and cannot be defeated by
+ * import order.
+ */
+const heavyEnabled = () => Number(process.env.AIM4_SIM_WORKERS || 0) > 0;
 
 /** Wall-clock ceilings, seconds. A job that hits one is killed, not warned. */
 const BUDGETS = Object.freeze({
@@ -90,7 +100,25 @@ const jobs = new Map();
 /** Waiting jobs, oldest first. */
 const queue = [];
 /** The one running job, or null. */
-let active = null;
+const active = new Map();
+
+/**
+ * How many sim jobs may run at once.
+ *
+ * One, on the box that serves the site: a training grind must never be the
+ * reason an upload sits in a parse queue. On the operator's own PC that rail
+ * is protecting nothing, because the site runs on an external backend and the
+ * only thing competing for the cores is the work he actually asked for. So
+ * the lab raises it, and the ceiling is CPU count minus two: rollouts are
+ * whole processes stepping the engine, and leaving Windows a couple of cores
+ * is the difference between a fast run and an unusable desktop.
+ */
+export function concurrency() {
+  const asked = Number(process.env.AIM4_SIM_CONCURRENCY || 0);
+  const ceiling = Math.max(1, os.cpus().length - 2);
+  if (asked > 0) return Math.min(asked, ceiling);
+  return 1;
+}
 
 /**
  * Whether demo parsing wants the box right now. Wired by server/index.js so
@@ -368,7 +396,7 @@ function labelFor(kind, p) {
  */
 export async function startJob(kind, rawParams = {}) {
   if (!JOB_KINDS.includes(kind)) return { error: `unknown job kind ${kind}` };
-  if (HEAVY_KINDS.has(kind) && !HEAVY_ENABLED) {
+  if (HEAVY_KINDS.has(kind) && !heavyEnabled()) {
     return {
       error:
         `${kind} jobs are off on this host. Set AIM4_SIM_WORKERS=1 to enable them ` +
@@ -434,22 +462,25 @@ export async function startJob(kind, rawParams = {}) {
 }
 
 /**
- * Start the next job if the box is free. Re-entered on every finish and on a
- * timer while the parser holds the box, because "preempted" has to mean
- * "resumes on its own", not "needs another button press".
+ * Start as many queued jobs as this host allows. Re-entered on every finish
+ * and on a timer while the parser holds the box, because "preempted" has to
+ * mean "resumes on its own", not "needs another button press".
  */
 function pump() {
-  if (active || !queue.length) return;
-  if (parserBusy()) {
-    // Demo parsing outranks everything here. Look again shortly; the timer is
-    // unref'd so it never keeps the process alive on its own.
-    const t = setTimeout(pump, 5000);
-    if (t.unref) t.unref();
-    return;
+  while (active.size < concurrency() && queue.length) {
+    if (parserBusy()) {
+      // Demo parsing outranks everything here. Look again shortly; the timer
+      // is unref'd so it never keeps the process alive on its own.
+      const t = setTimeout(pump, 5000);
+      if (t.unref) t.unref();
+      return;
+    }
+    startOne(queue.shift());
   }
+}
 
-  const job = queue.shift();
-  active = job;
+function startOne(job) {
+  active.set(job.id, job);
   job.state = 'running';
   job.startedAt = Date.now();
 
@@ -535,7 +566,7 @@ function finish(job, patch) {
   job.logStream?.end();
   job.logStream = null;
   job.child = null;
-  if (active === job) active = null;
+  active.delete(job.id);
   // The result the panel wants is the last few lines: a match's score, a
   // trainer's val accuracy, an eval's verdict. They are already in the log.
   job.result = job.log.slice(-6).join('\n') || null;
@@ -589,13 +620,16 @@ export function hostStatus() {
     python = { ok: false, error: err.message };
   }
   return {
-    heavyJobs: HEAVY_ENABLED,
+    heavyJobs: heavyEnabled(),
     workers: Number(process.env.AIM4_SIM_WORKERS || 0),
+    concurrency: concurrency(),
     cpus: os.cpus().length,
     trainer: python,
     parserBusy: parserBusy(),
     queued: queue.length,
-    running: active ? publicJob(active) : null,
+    // Every job in flight, not just the first: the lab runs a pool and a
+    // status that reported one of eight would read as broken.
+    running: [...active.values()].map(publicJob),
     budgets: BUDGETS
   };
 }
@@ -632,6 +666,6 @@ export async function loadJobHistory() {
 export function _reset() {
   jobs.clear();
   queue.length = 0;
-  active = null;
+  active.clear();
   parserBusy = () => false;
 }

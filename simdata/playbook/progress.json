@@ -1,0 +1,21 @@
+{
+  "phase": "mine-playbook",
+  "done": 3025,
+  "total": 3097,
+  "percent": 97.7,
+  "entries": 63766,
+  "failed": 0,
+  "byMap": {
+    "MIR": 11011,
+    "CCH": 2630,
+    "DD2": 13583,
+    "ANU": 7053,
+    "NUK": 9889,
+    "INF": 8242,
+    "ANC": 11358
+  },
+  "demosPerSecond": 6.13,
+  "etaSeconds": 12,
+  "heapMB": 56,
+  "updatedAt": "2026-08-14T02:13:15.027Z"
+}

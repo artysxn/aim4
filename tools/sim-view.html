@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sim view</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #0b0b0c; color: #e6e6e8;
+    font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 14px;
+    padding: 10px 16px; border-bottom: 1px solid #1e1e21; flex: none;
+  }
+  header h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  .dim { color: #85858c; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  .stage { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 12px; gap: 10px; }
+  .canvasWrap { flex: 1; min-height: 0; position: relative; }
+  canvas { width: 100%; height: 100%; display: block; }
+
+  .transport { display: flex; align-items: center; gap: 12px; flex: none; }
+  .transport input[type=range] { flex: 1; accent-color: #d33; }
+  button {
+    background: #171719; color: #e6e6e8; border: 1px solid #2a2a2e;
+    border-radius: 5px; padding: 6px 14px; cursor: pointer; font: inherit;
+  }
+  button:hover { background: #202024; }
+  button.primary { background: #c8322b; border-color: #c8322b; }
+
+  aside { width: 320px; flex: none; border-left: 1px solid #1e1e21; overflow-y: auto; padding: 12px; }
+  h2 {
+    margin: 14px 0 6px; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .05em; color: #85858c;
+  }
+  h2:first-child { margin-top: 0; }
+
+  .p { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 4px; }
+  .p.dead { opacity: .35; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .p .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .eq { color: #85858c; font-size: 11px; }
+  .util { color: #8fae8f; font-size: 10px; font-weight: 700; letter-spacing: .09em; }
+  .armor { color: #6f6f77; font-size: 10px; font-weight: 700; }
+  .hp { width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+  .hp.low { color: #d9534f; }
+
+  .bar { height: 3px; background: #1e1e21; border-radius: 2px; overflow: hidden; margin-top: 2px; }
+  .bar i { display: block; height: 100%; background: #4b8; }
+
+  .feed div { padding: 3px 6px; font-size: 12px; }
+  .feed .t { color: #f0b43c; }
+  .feed .ct { color: #5a96e6; }
+  .feed .hs { color: #85858c; }
+  .empty { color: #85858c; padding: 8px 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Sim view</h1>
+  <span class="dim" id="sub"></span>
+  <span class="dim num" id="score" style="margin-left:auto"></span>
+</header>
+<main>
+  <div class="stage">
+    <div class="canvasWrap"><canvas id="c"></canvas></div>
+    <div class="transport">
+      <button class="primary" id="play">Play</button>
+      <input type="range" id="scrub" min="0" max="0" value="0">
+      <span class="num" id="clock">0.0s</span>
+      <select id="roundSel"></select>
+      <label class="dim"><input type="checkbox" id="fast"> 2x</label>
+    </div>
+  </div>
+  <aside>
+    <div id="rosterT"></div>
+    <div id="rosterCT"></div>
+    <h2>Kill feed</h2>
+    <div class="feed" id="feed"></div>
+  </aside>
+</main>
+
+<script type="module">
+const qs = new URLSearchParams(location.search);
+const matchId = qs.get('match');
+let roundNo = Number(qs.get('round') || 1);
+
+const el = (id) => document.getElementById(id);
+const NADE = { smokegrenade: 'S', flashbang: 'F', hegrenade: 'H', molotov: 'M', incgrenade: 'M', decoy: 'D' };
+
+const tf = await import('/src/replays/shared/tickFormat.js');
+const { RadarRenderer } = await import('/src/replays/viewer/radarRenderer.js');
+const renderer = new RadarRenderer(el('c'));
+
+let round = null;
+let stopPlay = null;
+
+async function load(n) {
+  roundNo = n;
+  const [meta, buf] = await Promise.all([
+    fetch(`/api/round/${encodeURIComponent(matchId)}/${n}/meta`).then((r) => r.json()),
+    fetch(`/api/round/${encodeURIComponent(matchId)}/${n}/ticks`).then((r) => r.arrayBuffer())
+  ]);
+  const header = tf.readHeader(new Uint8Array(buf));
+  const dv = new DataView(buf);
+  const frames = [];
+  const out = {};
+  for (let row = 0; row < header.tickCount; row += 1) {
+    const st = [];
+    for (let slot = 0; slot < tf.PLAYER_SLOTS; slot += 1) {
+      tf.readRecord(dv, row, slot, out);
+      st.push({ x: out.x, y: out.y, z: out.z, yaw: out.yaw, health: out.health, alive: out.alive,
+        side: out.side, flags: out.flags, armor: out.armor, flash: out.flash, weapon: out.weapon });
+    }
+    frames.push(st);
+  }
+  round = { meta, header, frames, map: meta.map };
+  await renderer.setMap(round.map);
+  el('scrub').max = String(frames.length - 1);
+  el('scrub').value = '0';
+  el('title').textContent = `${round.map} round ${n}`;
+  el('sub').textContent = `${matchId} · ${meta.endReason || ''} · ${meta.winner || ''} win`;
+  draw(0);
+}
+
+function draw(row) {
+  const states = round.frames[row] || [];
+  const tick = (round.header.firstTick || 0) + row;
+  const rate = round.header.tickRate || 64;
+  const players = states.map((s, slot) => {
+    const p = round.meta.players?.[slot];
+    return { id: p?.id || `p${slot}`, slot, name: p?.name || `p${slot}`,
+      team: p?.team ?? (slot < 5 ? 1 : 2), side: s.side };
+  });
+
+  renderer.render({
+    players, states, tick, tickRate: rate,
+    events: round.meta.events || { kills: [], shots: [], grenades: [], bomb: [] },
+    weapons: round.meta.weapons || [],
+    teamSides: { 1: round.meta.team1Side, 2: round.meta.team2Side },
+    mapCode: round.map
+  });
+
+  const live = round.meta.freezeEndTick ?? 0;
+  const secs = (tick - live) / rate;
+  el('clock').textContent = secs < 0 ? `freeze ${(-secs).toFixed(1)}` : `${secs.toFixed(1)}s`;
+
+  // Utility still in the pocket: the freeze-end loadout minus what they threw.
+  const heldUtil = (pid) => {
+    const held = [];
+    for (const item of round.meta.stats?.[pid]?.loadout || []) if (NADE[item]) held.push(item);
+    for (const g of round.meta.events?.grenades || []) {
+      if (g.player !== pid || g.throwTick > tick) continue;
+      const i = held.indexOf(g.type);
+      if (i >= 0) held.splice(i, 1);
+    }
+    return held.map((n) => NADE[n]).join(' ');
+  };
+
+  let alive = { T: 0, CT: 0 };
+  for (const side of ['T', 'CT']) {
+    const box = el(side === 'T' ? 'rosterT' : 'rosterCT');
+    box.replaceChildren();
+    const h = document.createElement('h2');
+    h.textContent = side;
+    box.append(h);
+    states.forEach((s, slot) => {
+      if (s.side !== side) return;
+      if (s.alive) alive[side] += 1;
+      const p = round.meta.players?.[slot];
+      const pid = p?.id || `p${slot}`;
+      const row2 = document.createElement('div');
+      row2.className = 'p' + (s.alive ? '' : ' dead');
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.background = side === 'T' ? '#f0b43c' : '#5a96e6';
+      const nm = document.createElement('span');
+      nm.className = 'nm';
+      nm.textContent = p?.name || `p${slot}`;
+      row2.append(dot, nm);
+      if (s.alive) {
+        const w = round.meta.weapons?.[s.weapon] || '';
+        if (w && w !== 'knife') {
+          const e = document.createElement('span');
+          e.className = 'eq';
+          e.textContent = w;
+          row2.append(e);
+        }
+        const u = heldUtil(pid);
+        if (u) {
+          const e = document.createElement('span');
+          e.className = 'util';
+          e.textContent = u;
+          row2.append(e);
+        }
+        if (s.armor > 0) {
+          const a = document.createElement('span');
+          a.className = 'armor';
+          a.textContent = (s.flags & tf.FLAG_HAS_HELMET) ? 'HK' : 'K';
+          row2.append(a);
+        }
+      }
+      const hp = document.createElement('span');
+      hp.className = 'hp' + (s.alive && s.health <= 35 ? ' low' : '');
+      hp.textContent = s.alive ? String(s.health) : 'dead';
+      row2.append(hp);
+      const wrap = document.createElement('div');
+      wrap.append(row2);
+      if (s.alive) {
+        const bar = document.createElement('div');
+        bar.className = 'bar';
+        const i = document.createElement('i');
+        i.style.width = Math.max(0, Math.min(100, s.health)) + '%';
+        if (s.health <= 35) i.style.background = '#d9534f';
+        bar.append(i);
+        wrap.append(bar);
+      }
+      box.append(wrap);
+    });
+  }
+  el('score').textContent = `${alive.T} v ${alive.CT} alive`;
+
+  // Kill feed up to now, newest first.
+  const feed = el('feed');
+  feed.replaceChildren();
+  const sideOf = (pid) => {
+    const p = (round.meta.players || []).find((x) => x.id === pid);
+    if (!p) return '';
+    return (p.team === 1 ? round.meta.team1Side : round.meta.team2Side) || '';
+  };
+  const kills = (round.meta.events?.kills || []).filter((k) => k.tick <= tick).slice(-10).reverse();
+  if (!kills.length) feed.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: 'No kills yet.' }));
+  for (const k of kills) {
+    const d = document.createElement('div');
+    const a = document.createElement('span');
+    a.className = sideOf(k.attacker) === 'T' ? 't' : 'ct';
+    a.textContent = k.attacker || 'world';
+    const w = document.createElement('span');
+    w.className = 'hs';
+    w.textContent = ` ${k.weapon || ''}${k.headshot ? ' HS' : ''} `;
+    const v = document.createElement('span');
+    v.className = sideOf(k.victim) === 'T' ? 't' : 'ct';
+    v.textContent = k.victim;
+    const at = document.createElement('span');
+    at.className = 'hs';
+    at.textContent = `  ${((k.tick - live) / rate).toFixed(0)}s`;
+    d.append(a, w, v, at);
+    feed.append(d);
+  }
+}
+
+el('scrub').addEventListener('input', (e) => draw(Number(e.target.value)));
+el('play').addEventListener('click', () => {
+  if (stopPlay) return stopPlay();
+  el('play').textContent = 'Pause';
+  const rate = (round.header.tickRate || 64) * (el('fast').checked ? 2 : 1);
+  let last = performance.now();
+  let acc = 0;
+  let raf = 0;
+  const step = (now) => {
+    acc += (now - last) / 1000;
+    last = now;
+    const adv = Math.floor(acc * rate);
+    if (adv > 0) {
+      acc -= adv / rate;
+      const next = Number(el('scrub').value) + adv;
+      if (next >= round.frames.length - 1) { draw(round.frames.length - 1); return stopPlay(); }
+      el('scrub').value = String(next);
+      draw(next);
+    }
+    raf = requestAnimationFrame(step);
+  };
+  raf = requestAnimationFrame(step);
+  stopPlay = () => { cancelAnimationFrame(raf); stopPlay = null; el('play').textContent = 'Play'; };
+});
+
+// Round switcher, from the match summary.
+const summary = await fetch(`/api/matches`).then((r) => r.json()).catch(() => ({ matches: [] }));
+const match = (summary.matches || []).find((m) => m.id === matchId);
+for (const r of (match?.rounds || []).filter((r) => r.recorded)) {
+  const o = document.createElement('option');
+  o.value = String(r.round);
+  o.textContent = `round ${r.round}  ${r.winner} ${r.reason}`;
+  el('roundSel').append(o);
+}
+el('roundSel').value = String(roundNo);
+el('roundSel').addEventListener('change', (e) => { if (stopPlay) stopPlay(); load(Number(e.target.value)); });
+
+window.addEventListener('resize', () => { if (round) draw(Number(el('scrub').value)); });
+await load(roundNo);
+</script>
+</body>
+</html>

@@ -39,6 +39,38 @@ import { promisify } from 'node:util';
 
 import { ROOT as REPLAY_ROOT } from '../replays/demoStore.js';
 import { loadPolicy } from '../../shared/sim/policy.js';
+import { loadPolicyNet } from '../../shared/sim/policyNet.js';
+
+/**
+ * Wrap a demo-trained net in the interface the bot already speaks.
+ *
+ * desireBot already keeps a per-slot observation history and passes
+ * `{player, map, contract, history}` to probs(), because policy.js v3 wants
+ * the same thing. So this adapter is thin on purpose: it forwards that context
+ * and adds nothing. Keeping a second history here would silently ignore the
+ * bot's own and desynchronize the two.
+ *
+ * One honest mismatch: the bot's history is sampled at the DECISION cadence,
+ * while training built its windows at 4 Hz. The encoder therefore sees 1.5 s
+ * of play where it was trained on 3 s. `[fix: resample the bot's ring to 4 Hz,
+ * or train the next generation against the decision cadence]`
+ */
+function adaptPolicyNet(net) {
+  return {
+    kind: 'policyNet',
+    vocab: net.vocab,
+    probs(obs, ctx = {}) {
+      const c = typeof ctx === 'string' ? { player: ctx } : ctx;
+      return net.probs(obs, {
+        history: c.history || [],
+        map: c.map,
+        call: c.call,
+        contract: c.contract,
+        player: c.player
+      });
+    }
+  };
+}
 
 const gunzip = promisify(zlib.gunzip);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -97,7 +129,12 @@ export async function loadModel(rawName) {
 
     try {
       const json = await readJson(c.file);
-      const policy = loadPolicy(json);
+      // Two artefact families now: the small policy.js clone and the bigger
+      // demo-trained policyNet. Dispatch on `kind` so a net trained tonight is
+      // playable tonight, instead of listed as broken for lacking a field it
+      // was never supposed to have.
+      const policy =
+        json?.kind === 'policyNet' ? adaptPolicyNet(loadPolicyNet(json)) : loadPolicy(json);
       const meta = describe(name, json, c, stat);
       cache.set(name, { file: c.file, mtimeMs: stat.mtimeMs, policy, meta });
       return { policy, meta };
@@ -116,6 +153,26 @@ export async function loadModel(rawName) {
 /** The inspectable summary: everything the panel shows about a model. */
 function describe(name, json, c, stat) {
   const layers = Array.isArray(json.layers) ? json.layers : [];
+  if (json?.kind === 'policyNet') {
+    return {
+      name,
+      source: c.source,
+      kind: 'policyNet',
+      v: json.v ?? null,
+      obsVersion: json.obsVersion ?? null,
+      vocab: Array.isArray(json.vocab?.option) ? json.vocab.option.length : 0,
+      teacher: 'demos',
+      dataset: json.trained?.samples ? `${json.trained.samples} samples` : null,
+      valAccuracy: json.trained?.accuracies?.option ?? null,
+      calls: Object.keys(json.embed?.call?.keys || {}).length,
+      contracts: Object.keys(json.embed?.contract?.keys || {}).length,
+      players: Object.keys(json.embed?.player?.keys || {}).length,
+      parameters: json.trained?.parameters ?? null,
+      bytes: stat.size,
+      trainedAt: stat.mtime.toISOString(),
+      ok: true
+    };
+  }
   return {
     name,
     source: c.source,

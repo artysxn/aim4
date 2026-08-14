@@ -1,0 +1,17 @@
+{
+  "phase": "mine-knowledge",
+  "done": 2,
+  "total": 2,
+  "percent": 100,
+  "rounds": 0,
+  "minedTracks": 0,
+  "failed": 0,
+  "reasons": {},
+  "byMap": {},
+  "demosPerSecond": 3.0769,
+  "etaSeconds": 0,
+  "heapMB": 124,
+  "current": "d18901b132fcaf54",
+  "startedAt": "2026-08-14T00:25:57.119Z",
+  "updatedAt": "2026-08-14T00:25:57.769Z"
+}
