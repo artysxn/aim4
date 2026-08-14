@@ -692,7 +692,10 @@ def main():
     ap = argparse.ArgumentParser(description="GPU trainer for the SIM-PLAN 9.3b demo policy")
     ap.add_argument("dataset", nargs="?", default=str(DEFAULT_DATASET),
                     help="dataset directory (with manifest.json) or a single .jsonl")
-    ap.add_argument("--out", default=str(DEFAULT_OUT))
+    ap.add_argument("--out", default=None)
+    ap.add_argument("--name", default=None,
+                    help="model id, e.g. paracord-1. Sets the output filename and "
+                         "stamps the id into the artifact so the registry can name it.")
     ap.add_argument("--limit", type=int, default=0, help="train on the first N samples only")
     ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--batch", type=int, default=4096,
@@ -812,9 +815,24 @@ def main():
     # no_grad evaluation, and enable_grad there would quietly build a graph.
     amp_ctx = (lambda: torch.autocast("cuda", dtype=torch.bfloat16)) if use_amp else contextlib.nullcontext
 
-    out_path = Path(args.out)
+    # --name is the normal way in; --out stays for one-off paths. A named run
+    # lands as `<name>.json` beside the other models, which is what the
+    # registry lists and what the lab loads.
+    if args.out:
+        out_path = Path(args.out)
+    elif args.name:
+        out_path = DEFAULT_OUT.parent / f"{args.name}.json"
+    else:
+        out_path = DEFAULT_OUT
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    prog = Progress(out_path.parent / "progress.json", args.epochs, args.epochs * steps_per_epoch, device)
+    # Progress is per-model, not per-directory: training the players and the
+    # IGL on the same box must not have one run overwrite the other's ETA.
+    prog = Progress(
+        out_path.parent / f"{out_path.stem}.progress.json",
+        args.epochs,
+        args.epochs * steps_per_epoch,
+        device,
+    )
 
     stopping = {"flag": False}
 
@@ -1001,6 +1019,9 @@ def build_export(model, meta, args, val_acc, val_loss, stats):
     return {
         "v": POLICYNET_VERSION,
         "kind": "policyNet",
+        # The id travels inside the artifact as well as in its filename, so a
+        # model that gets copied into simdata/ still knows what it is.
+        "id": args.name or "demo-g0",
         "obsVersion": meta["obsVersion"],
         "obsSize": meta["obsSize"],
         "datasetVersion": meta["datasetVersion"],

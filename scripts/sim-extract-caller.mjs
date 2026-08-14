@@ -96,6 +96,33 @@ const OUT = flag(
   path.join(REPLAY_ROOT, 'sim', 'datasets', `igl-${MAP.toLowerCase()}-s${SEED}x${MATCHES}.jsonl`)
 );
 
+function fmtDuration(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
+}
+
+/**
+ * The machine-readable half of the progress line, for the lab's job panel.
+ * Named after the output so an IGL extract and a player extract running at the
+ * same time do not overwrite each other's ETA.
+ */
+const PROGRESS_PATH = path.join(
+  path.dirname(OUT),
+  `${path.basename(OUT, '.jsonl')}.progress.json`
+);
+async function writeProgress(body) {
+  const tmp = `${PROGRESS_PATH}.tmp`;
+  try {
+    await fs.mkdir(path.dirname(PROGRESS_PATH), { recursive: true });
+    await fs.writeFile(tmp, JSON.stringify(body, null, 2));
+    await fs.rename(tmp, PROGRESS_PATH);
+  } catch {
+    /* progress is never worth failing a run over */
+  }
+}
+
 async function load(kind, map) {
   return JSON.parse(await fs.readFile(path.join(REPLAY_ROOT, 'sim', kind, `${map}.json`), 'utf8'));
 }
@@ -397,6 +424,7 @@ async function demoSourceRows({ network }) {
   let rounds = 0;
   let skipped = 0;
   let done = 0;
+  const startedAt = Date.now();
   for (const file of all) {
     const demoId = path.basename(file, '.aim4replay');
     try {
@@ -425,7 +453,31 @@ async function demoSourceRows({ network }) {
     }
     done += 1;
     if (done % 25 === 0 || done === all.length) {
-      process.stdout.write(`\r  ${done}/${all.length} packages, ${out.length} rows`);
+      // A pass over 3122 packages is a coffee-length job, so it says how long
+      // it has left rather than only how far it has come.
+      const elapsed = (Date.now() - startedAt) / 1000;
+      const rate = done / Math.max(0.001, elapsed);
+      const eta = rate > 0 ? (all.length - done) / rate : 0;
+      process.stdout.write(
+        `\r  ${String(done).padStart(5)}/${all.length}  ` +
+          `${((done / all.length) * 100).toFixed(1).padStart(5)}%  ` +
+          `${out.length.toLocaleString()} rows  ${rate.toFixed(1)}/s  ` +
+          `ETA ${fmtDuration(eta)}   `
+      );
+      await writeProgress({
+        phase: 'extract-caller',
+        map: MAP,
+        done,
+        total: all.length,
+        percent: Math.round((done / all.length) * 1000) / 10,
+        rows: out.length,
+        rounds,
+        skipped,
+        perSecond: Math.round(rate * 10) / 10,
+        etaSeconds: Math.round(eta),
+        elapsedSeconds: Math.round(elapsed),
+        updatedAt: new Date().toISOString()
+      });
     }
   }
   process.stdout.write('\n');

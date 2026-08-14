@@ -788,15 +788,46 @@ async function main() {
   const manifestFile = path.join(OUT, 'manifest.json');
 
   let manifest = { v: DEMO_DATASET_VERSION, obsVersion: OBSERVE_VERSION, demos: [], shards: [], samples: 0 };
+  let carried = false;
   if (!REBUILD) {
     try {
       const prev = JSON.parse(await fsp.readFile(manifestFile, 'utf8'));
-      if (prev.v === DEMO_DATASET_VERSION && prev.obsVersion === OBSERVE_VERSION) manifest = prev;
+      if (prev.v === DEMO_DATASET_VERSION && prev.obsVersion === OBSERVE_VERSION) {
+        manifest = prev;
+        carried = true;
+      }
     } catch {
       /* first run */
     }
   }
   const seen = new Set(manifest.demos);
+
+  // A fresh manifest means the labels changed, and the shards already on disk
+  // were written against the old ones. They MUST go.
+  //
+  // Workers name their shards `shard-w{id}-{NNN}`, so a re-run overwrites the
+  // indices it happens to reach and leaves every higher one sitting there. The
+  // trainer globs `shard-*.jsonl` and cannot tell the two apart, so a run that
+  // looked clean would train the aim head on a mixture of the fixed labels and
+  // the noise they were meant to replace. That is the exact failure this
+  // re-extract exists to undo, arriving through the back door.
+  if (!carried) {
+    const stale = (await fsp.readdir(OUT).catch(() => [])).filter((f) =>
+      /^shard-.*\.jsonl$/.test(f)
+    );
+    if (stale.length) {
+      let bytes = 0;
+      for (const f of stale) {
+        const p = path.join(OUT, f);
+        bytes += (await fsp.stat(p).catch(() => ({ size: 0 }))).size;
+        await fsp.rm(p, { force: true });
+      }
+      console.log(
+        `cleared ${stale.length} stale shards (${(bytes / 1e9).toFixed(1)} GB) ` +
+          `written against older labels`
+      );
+    }
+  }
 
   let all;
   try {
