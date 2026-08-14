@@ -164,6 +164,7 @@ export function playVersusMatch({
   record = 'events',
   recordEvery = 1,
   replays = false,
+  infiniteMoney = false,
   onRound = null,
   onStep = null
 }) {
@@ -185,6 +186,12 @@ export function playVersusMatch({
 
   while (!match.isOver() && match.state.round <= maxRounds) {
     const setup = match.roundSetup();
+    // Bootcamp economics (operator spec): drills are about decisions, not
+    // wallets, so every player buys from a full purse every round. The match
+    // still settles money normally afterwards; it is simply never short.
+    if (infiniteMoney) {
+      for (const slot of Object.keys(setup.money)) setup.money[slot] = 16000;
+    }
 
     const tPool = graph.spawns.filter((s) => s.side === 'T');
     const ctPool = graph.spawns.filter((s) => s.side === 'CT');

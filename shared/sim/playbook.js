@@ -127,8 +127,8 @@ function sample(scored, rng, temperature = TEMPERATURE) {
  *
  * @returns {PlaybookEntry|null}
  */
-export function pickRound(index, { side, call = null, econ = null, econEnemy = null, exclude = null, rng }) {
-  const scored = scoreRounds(index, { side, call, econ, econEnemy, exclude });
+export function pickRound(index, { side, call = null, econ = null, econEnemy = null, exclude = null, pinCall = false, rng }) {
+  const scored = scoreRounds(index, { side, call, econ, econEnemy, exclude, pinCall });
   if (!scored.length) return null;
   return sample(scored.slice(0, TOP_K), rng);
 }
@@ -150,13 +150,16 @@ export function pickRound(index, { side, call = null, econ = null, econEnemy = n
  * antiforce round instead of a coin-flip standard. Weighted below own econ:
  * what we can buy is certain, what they bought is a read.
  */
-function scoreRounds(index, { side, call = null, econ = null, econEnemy = null, exclude = null } = {}) {
+function scoreRounds(index, { side, call = null, econ = null, econEnemy = null, exclude = null, pinCall = false } = {}) {
   const pool = index?.bySide?.[side] || [];
   if (!pool.length) return [];
   const scored = [];
   const pistol = econ === 0;
   for (const e of pool) {
     if (exclude && e.id === exclude) continue;
+    // A pinned call is a drill (Bootcamp): the same round type every time,
+    // never the nearest neighbour of it.
+    if (pinCall && call && e.call !== call) continue;
     if (econ != null && e.econ != null && pistol !== (e.econ === 0)) continue;
     let d = 0;
     if (call && e.call !== call) d += 1;
@@ -177,8 +180,8 @@ function scoreRounds(index, { side, call = null, econ = null, econEnemy = null, 
  *
  * @returns {Array<{entry: PlaybookEntry, decision: string, distance: number}>}
  */
-export function openingCandidates(index, { side, call = null, econ = null, econEnemy = null } = {}, k = TOP_K) {
-  return scoreRounds(index, { side, call, econ, econEnemy })
+export function openingCandidates(index, { side, call = null, econ = null, econEnemy = null, pinCall = false } = {}, k = TOP_K) {
+  return scoreRounds(index, { side, call, econ, econEnemy, pinCall })
     .slice(0, k)
     .map((s) => ({ entry: s.entry, decision: decisionFor(s.entry), distance: s.distance }));
 }

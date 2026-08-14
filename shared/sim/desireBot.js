@@ -89,6 +89,7 @@ import { situationKey, shapeFromCore } from './situationKey.js';
 import { ExperienceIndex } from './experience.js';
 import { StrategyAI } from './strategy.js';
 import { createCaller, CALLER_MODE, TAPE_ERROR_UNITS, TAPE_FIT, TAPE_LAG_SECONDS, fightEV, pictureWinrate, shapeRole } from './caller.js';
+import { nextWaypointAt, tapeEndSeconds } from './playbook.js';
 import { PRW_REASON, createPrwLog, truePictureFrom } from './prw.js';
 import { comparePlans, indexValueOf, pickPlan } from './callValue.js';
 import { averageMoney, shouldSave } from './saving.js';
@@ -108,6 +109,24 @@ const LAYER_PROTOCOL = Object.freeze({
 const LEAVES_SAFE = Object.freeze(['take_space', 'rotate', 'flank', 'advance', 'lurk']);
 /** Geodesic gap (knowledge spacing mean) above which a contract plays lurk. */
 const LURK_SPACING_UNITS = 1400;
+/** A successor waypoint this close behind the current one is a corridor, not a hold. */
+const TAPE_PASSTHROUGH_SECONDS = 3;
+/** Waiting longer than this at a station hands the micro game back to the bot. */
+const TAPE_IDLE_DWELL_SECONDS = 2.5;
+/** Stations this close to own spawn are not stations: nobody defends spawn. */
+const SPAWN_STATION_UNITS = 500;
+/**
+ * Rounds an opening must have behind it (18.3's lower bound over `open|key`)
+ * before its record may steer the next match's opening prior. Below this the
+ * EXP3 bandit explores alone, exactly as it did before openings persisted.
+ *
+ * Kept low on purpose: the Wilson lower bound is the real gate — a thin
+ * record prices itself down — and the floor only exists to stop a 1-for-1
+ * from outranking everything on day one. The first ablation had it at 6 and
+ * watched the exact counter to the drilled round sit at 4-of-5, one sample
+ * short of ever being allowed to steer.
+ */
+const OPENING_MEMORY_MIN_N = 5;
 /** Geodesic gap below which the pack should stay together. */
 const PACK_SPACING_UNITS = 700;
 
@@ -622,7 +641,27 @@ export function desireController({
    * to have an opinion — the index answers instead, which is why both are
    * passed rather than one replacing the other.
    */
-  callerNet = null
+  callerNet = null,
+  /**
+   * Bootcamp (drill mode): a function `({side, round}) => call id | null`.
+   * When it names a call, the round is DICTATED, not sampled — the drill IGL
+   * calls the same round every time until the trainee earns the next one, so
+   * the bandit and the head stand down for that round. Null falls through to
+   * the normal opening.
+   */
+  forceCallOf = null,
+  /**
+   * An ExperienceIndex to use instead of a fresh one (18.8). Handed in when
+   * something outside a single match owns the learning — a bootcamp ladder, a
+   * series, a generation — so that what was LEARNED survives the match
+   * boundary while what was merely REMEMBERED about one match does not. The
+   * caller resets the session scope between matches (`endSession`); career
+   * and the calibration table carry.
+   *
+   * Null keeps the old behaviour exactly: one index per match, born and
+   * discarded with it.
+   */
+  experience = null
 } = {}) {
   // A caller model implies stage 1. Kept as one derived flag so the three
   // places that gate on it cannot drift apart.
@@ -634,9 +673,16 @@ export function desireController({
     // Match-level brains (6.10, 18). Survive roundStart. Off during bulk RL
     // via searchEnabled; memoryEnabled false keeps the determinism hash of a
     // run that never reads the index.
+    //
+    // The tracker and the bandit are IN-MATCH memory and are rebuilt here
+    // every match by design: EXP3 weights are a read on the series being
+    // played, and carrying them into a different match quotes one opponent's
+    // pattern at another. The index is EXPERIENCE, and is injectable so it
+    // can outlive the match (18.8) — the two live at different timescales
+    // and this is the line between them.
     const tracker = new TendencyTracker();
     const bandit = new Exp3Bandit();
-    const index = new ExperienceIndex();
+    const index = experience || new ExperienceIndex();
     const strategy = new StrategyAI({ index, bandit });
     const expert = new ExpertIterLog();
     let matchRng = null;
@@ -1001,14 +1047,55 @@ export function desireController({
         R.econTape = econTape;
 
         let openingCall = call;
+        // Bootcamp: the drill dictates the round. Everything that would vary
+        // the opening — bandit, head, sampling — stands down for it.
+        const drillCall =
+          typeof forceCallOf === 'function'
+            ? forceCallOf({ side, round: match?.state?.round ?? null })
+            : null;
+        if (drillCall) openingCall = drillCall;
         // The call head is deliberately NOT consulted here. Wiring its top
         // call in as the opener produced the same call every round of a match
         // — the argmax mono-strat stage 0 bans, worn as a prior. The net's
         // read of the opening enters through `pickPlan` below, which prices
         // the tapes answering a SAMPLED call; variety stays with the draw.
-        if (callBandit && matchRng && playbook?.calls?.[side]?.length) {
+        if (!drillCall && callBandit && matchRng && playbook?.calls?.[side]?.length) {
           const legal = playbook.calls[side].map(([name]) => ({ id: name }));
-          const prior = legal.find((c) => c.id === openingCall) || legal[0];
+          let prior = legal.find((c) => c.id === openingCall) || legal[0];
+          // What has actually opened well from HERE, across every match this
+          // index has lived through (18.8). The EXP3 weights that learned it
+          // tonight are deliberately not carried between matches — they are a
+          // read on one series — but the ledger they fed is, and it steers
+          // the PRIOR only: the bandit still explores around it, so a stale
+          // record decays instead of ruling.
+          //
+          // The steer requires BETTER, never merely well-known: its first
+          // version took the best call among those with enough data, and the
+          // ablation caught the loop that creates — the most-sampled call is
+          // the only one that qualifies, so the prior points at the incumbent
+          // regardless of its record, which feeds it more samples, which
+          // keeps it the only qualifier. A candidate now has to clear the
+          // key's own pooled winrate on a lower bound before it may steer,
+          // so a mediocre favourite leaves the prior to the sampled draw and
+          // the exploration that draw carries.
+          if (memoryEnabled) {
+            const pooled = index.read(`open|${R.banditKey}`);
+            if (pooled.n >= OPENING_MEMORY_MIN_N) {
+              let best = null;
+              for (const c of legal) {
+                const m = index.read(`open|${R.banditKey}`, c.id);
+                if (m.n >= OPENING_MEMORY_MIN_N && (!best || m.lower > best.lower)) {
+                  best = { id: c.id, lower: m.lower };
+                }
+              }
+              // The MEMBER of `legal`, never a fresh object: mixPolicyExp3
+              // finds the prior by reference, and a synthesized pick lands
+              // its whole 0.6 mass on legal[0] without a word of complaint.
+              const steered =
+                best && best.lower > pooled.mean ? legal.find((c) => c.id === best.id) : null;
+              if (steered) prior = steered;
+            }
+          }
           openingCall =
             mixPolicyExp3(legal, {
               policyPick: prior,
@@ -1031,6 +1118,7 @@ export function desireController({
           // 9.25 stage 1: the prior, not a hint. Stage 2's bandit may have
           // already moved it off the strategy's suggestion.
           strategyCall: openingCall,
+          forceCall: drillCall || null,
           econ: econTape,
           econEnemy: econEnemyGuess,
           picture: freezePicture,
@@ -1825,6 +1913,12 @@ export function desireController({
           return intent;
         };
 
+        // One anchor, one bot (operator rule): a stack of four on one point is
+        // the anchor mesh collapsing four real positions into one, not a play.
+        // Claims are per decide pass, in slot order, and only STATIONS claim —
+        // bots travelling may share a corridor, bots standing may not.
+        const anchorClaims = new Map();
+
         // Seat counter for the mimic key: the BC dataset stamps decisions
         // "T0".."CT4" in decision order within a tick (sim-collect-bc.mjs),
         // so inference keys the embedding the same positional way. Real
@@ -1931,6 +2025,11 @@ export function desireController({
           }
 
           const onTape = R.caller && R.caller.isOnTape(s, elapsed);
+          // Set by the tape block, read by the knowledge gate below: a bot
+          // WAITING at a station (or refused one) plays its own micro game
+          // from the tables and the net until the schedule reclaims it.
+          let tapeIdle = false;
+          let tapeParked = false;
           if (onTape) {
             // Steer at where the tape is GOING, never at where the pro was:
             // chasing the passed waypoint teleports the error to the full
@@ -1944,31 +2043,109 @@ export function desireController({
             // reads to outvote a leg of the route, and lineups thrown only
             // when the bot happens to be near the spot.
             const loose = R.caller.looseness() === TAPE_FIT.LOOSE;
-            const next = R.caller.nextWaypoint(s, elapsed);
+            const role = R.caller.roleOf(s);
+            const spent = role ? elapsed > tapeEndSeconds(role) : false;
+            let next = R.caller.nextWaypoint(s, elapsed);
+            // A spent schedule stations on the CONTRACT — the mined settled
+            // position — never on the last breadcrumb, which is only where
+            // the pro's round happened to stop being recorded.
+            if (next && spent && role?.contract) next = { t: next.t, anchor: role.contract };
             if (next) {
-              const a = R.graph.anchor(next.anchor);
-              const err = a ? Math.hypot(a.world.x - b.pos.x, a.world.y - b.pos.y) : 0;
+              let a = R.graph.anchor(next.anchor);
+              let err = a ? Math.hypot(a.world.x - b.pos.x, a.world.y - b.pos.y) : 0;
               // Off the tape means far AND long past when the tape wanted you
               // there. Far alone is just mid-segment.
               if (err > TAPE_ERROR_UNITS && elapsed - next.t > TAPE_LAG_SECONDS * (loose ? 2 : 1)) {
                 R.caller.markLocal(s);
               }
               if (R.caller.isOnTape(s, elapsed)) {
-                const arrivedTape = err < AT_ANCHOR_UNITS * (loose ? 5 : 2);
+                let arrivedTape = err < AT_ANCHOR_UNITS * (loose ? 5 : 2);
+                // Corridor chaining. Arrived early at a waypoint whose
+                // successor is imminent means this anchor is somewhere the
+                // pro PASSED, not somewhere the pro STOOD — a doorway, a
+                // stair, a connector. Flow straight into the successor; the
+                // statue-in-a-doorway look was this case rendered literally,
+                // and the CT "walked to a site then back to spawn" was a
+                // rotation THROUGH spawn treated as a destination.
+                if (arrivedTape && !spent && role) {
+                  let hops = 0;
+                  while (hops < 6) {
+                    const after = nextWaypointAt(role, next.t);
+                    if (!after || after.anchor === next.anchor) break;
+                    if (after.t - next.t > TAPE_PASSTHROUGH_SECONDS) break;
+                    next = after;
+                    hops += 1;
+                  }
+                  a = R.graph.anchor(next.anchor);
+                  err = a ? Math.hypot(a.world.x - b.pos.x, a.world.y - b.pos.y) : 0;
+                  arrivedTape = err < AT_ANCHOR_UNITS * (loose ? 5 : 2);
+                }
                 const frozen = R.caller.decision() === 'freeze';
-                if (!frozen || arrivedTape) {
-                  // Arrived early: hold the spot until the tape's own clock
-                  // says move, which is what makes five bots leave on the
-                  // pro round's timing rather than on their own.
+                // No heatmap stations a defender at its own spawn (operator
+                // rule): a tape whose station lands there — a truncated
+                // rotation, a death spot — goes quiet for this bot, and the
+                // knowledge tables place it where a human would stand.
+                // Saving is the one exception, and it is the save rule's
+                // call, not the tape's.
+                const spawn = R.caller.spawn() || null;
+                const stationDist =
+                  a && spawn ? Math.hypot(a.world.x - spawn.x, a.world.y - spawn.y) : Infinity;
+                if (
+                  arrivedTape &&
+                  elapsed > 10 &&
+                  stationDist < SPAWN_STATION_UNITS &&
+                  !shouldSave({ pWin: R.pWin, weapon: b.weapon, moneyAvg: R.moneyAvg, alive: b.alive })
+                    .save
+                ) {
+                  tapeParked = true;
+                } else if (!frozen || arrivedTape) {
+                  // One anchor, one bot: a stack of four on one point is the
+                  // anchor mesh collapsing four real positions, not a play.
+                  // A claimed station spreads to the nearest free anchor.
+                  let spot = next.anchor;
+                  if (arrivedTape && a && anchorClaims.has(spot) && anchorClaims.get(spot) !== s) {
+                    const level = R.graph.levelFor(a.world.z ?? 0);
+                    for (const id of nearestAnchors(R.graph, a.world.x, a.world.y, level, 8)) {
+                      if (anchorClaims.has(id)) continue;
+                      const alt = R.graph.anchor(id);
+                      if (!alt) continue;
+                      if (Math.hypot(alt.world.x - a.world.x, alt.world.y - a.world.y) > 420) break;
+                      spot = id;
+                      break;
+                    }
+                  }
+                  if (arrivedTape) anchorClaims.set(spot, s);
+                  // Arrived EARLY at a genuine hold: the tape yields. The
+                  // station keeps a reduced prior so the bot's own micro game
+                  // — the jiggle, the off-angle, the re-check — can outvote
+                  // standing still, and the schedule reclaims the bot when
+                  // its clock comes. The statues were this branch at 0.86.
+                  const waiting =
+                    arrivedTape && !spent && next.t - elapsed > TAPE_IDLE_DWELL_SECONDS;
+                  if (waiting) tapeIdle = true;
                   candidates.push({
                     id: arrivedTape || frozen ? 'hold_angle' : 'advance',
                     params:
                       arrivedTape || frozen
-                        ? { spot: next.anchor, yaw: next.anchor }
+                        ? { spot, yaw: spot }
                         : { target: next.anchor, gait: 'run' },
-                    prior: loose ? 0.72 : 0.86,
+                    prior: waiting ? 0.55 : loose ? 0.72 : 0.86,
                     motive: loose ? `tape loose: ${next.anchor}` : `tape: ${next.anchor}`
                   });
+                  if (waiting || (arrivedTape && spent)) {
+                    candidates.push({
+                      id: 'jiggle',
+                      params: { spot, cover: spot, yaw: R.target?.id || spot },
+                      prior: 0.5,
+                      motive: 'tape idle: checking the angle'
+                    });
+                    candidates.push({
+                      id: 'off_angle_hold',
+                      params: { spot, yaw: R.target?.id || spot },
+                      prior: 0.45,
+                      motive: 'tape idle: off angle'
+                    });
+                  }
                 }
               }
             }
@@ -1997,7 +2174,13 @@ export function desireController({
             }
           }
 
-          if (!(R.caller && R.caller.isOnTape(s, elapsed))) {
+          // The knowledge tables speak when the tape does not have the bot:
+          // off tape entirely, WAITING at a station (the tape yielded), or
+          // PARKED (the tape wanted spawn and was refused). This is the
+          // heatmap game — where humans actually stand at this clock — and
+          // muzzling it whenever a tape was merely present is most of why
+          // the rounds looked robotic.
+          if (!(R.caller && R.caller.isOnTape(s, elapsed)) || tapeIdle || tapeParked) {
             spacingTypical = pushKnowledgeCandidates({
               R,
               s,
@@ -2677,6 +2860,21 @@ export function desireController({
         // never filled by anything. `R.banditKey` is built at freeze from
         // (side, econ, score) and is the same key throughout.
         const bk = R.banditKey || banditKey({ side: R.side, econ: 'full' });
+        // The opening's own ledger, keyed the way openings repeat — (side,
+        // econ, score) — rather than by a mid-round situation hash. This is
+        // the record the NEXT match's prior reads (the block above), across
+        // the boundary the EXP3 weights deliberately do not cross. `perc`
+        // rounds are counted without moving a win counter, exactly as the
+        // situation writes are (18.6b.2).
+        if (memoryEnabled && callBandit && R.openingCall) {
+          index.write({
+            key: `open|${bk}`,
+            call: R.openingCall,
+            won,
+            attrib,
+            scopes: ['session', 'career']
+          });
+        }
         if (memoryEnabled && R.situation) {
           strategy.last = {
             key: R.situation.hash,

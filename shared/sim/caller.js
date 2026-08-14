@@ -584,7 +584,7 @@ export function createCaller({
       memoryOf = typeof fn === 'function' ? fn : null;
     },
 
-    roundStart({ econ = null, econEnemy = null, contractOf = () => null, awpOf = () => false, strategyCall = null, picture = null, spawn: sp, goal: g } = {}) {
+    roundStart({ econ = null, econEnemy = null, contractOf = () => null, awpOf = () => false, strategyCall = null, forceCall = null, picture = null, spawn: sp, goal: g } = {}) {
       if (sp) spawn = sp;
       if (g) goal = g;
       lastRedecideClock = -Infinity;
@@ -594,14 +594,18 @@ export function createCaller({
         applyTape(null, null, contractOf, awpOf);
         return { mode: CALLER_MODE.FREESTYLE };
       }
-      call = pickCall(playbook, { side, prefer: strategyCall, rng }) || 'default';
+      // A FORCED call is a drill (Bootcamp): the caller does not sample, it
+      // runs the named round. Tapes are pinned to that call too — drilling
+      // the same round means the same round, not its nearest neighbour.
+      const pinCall = Boolean(forceCall);
+      call = forceCall || pickCall(playbook, { side, prefer: strategyCall, rng }) || 'default';
       // 9.25 stage 1: with a head on, `strategyCall` stops being a polite
       // hint to `pickCall` and becomes the prior — it still picks the call,
       // and the head then prices the tapes that answer it against the freeze
       // picture instead of drawing one on distance alone.
       if (pick && picture) {
         const chosen = pick({
-          candidates: openingCandidates(playbook, { side, call, econ, econEnemy }),
+          candidates: openingCandidates(playbook, { side, call, econ, econEnemy, pinCall }),
           picture: { ...picture, side, contactRel: null },
           memoryOf,
           model,
@@ -612,12 +616,16 @@ export function createCaller({
           return { mode: teamMode, call, entry, fit: tapeFit, value: chosen.value };
         }
       }
-      let picked = pickRound(playbook, { side, call, econ, econEnemy, rng });
+      let picked = pickRound(playbook, { side, call, econ, econEnemy, pinCall, rng });
       // The operator's partition has no fourth mode: a call the library
       // cannot answer on this economy is played as a mined DEFAULT, loosely,
       // not improvised. The only way to freestyle a round start now is a
-      // library with nothing in it at all.
+      // library with nothing in it at all. (A pinned drill with no pistol
+      // tapes still drops the pistol gate before it drops the drill.)
       let fit = null;
+      if (!picked && pinCall) {
+        picked = pickRound(playbook, { side, call, pinCall, rng });
+      }
       if (!picked && call !== 'default') {
         picked = pickRound(playbook, { side, call: 'default', econ, econEnemy, rng });
         fit = TAPE_FIT.LOOSE;

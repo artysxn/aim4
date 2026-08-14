@@ -86,6 +86,26 @@ export class ExperienceIndex {
   }
 
   /**
+   * A match ended; the next one starts fresh but not ignorant (18.8).
+   *
+   * The scopes already draw this line and this method is what makes it
+   * usable across matches: SESSION is what is true about the match being
+   * played — this opponent, tonight, on this economy — and it must not leak
+   * into the next one, or a read built against one series is quoted at
+   * another. CAREER and the calibration table are what was LEARNED, and
+   * throwing those away between matches is how a trainee arrives at every
+   * match as new as the first.
+   *
+   * The opponent scope survives on purpose: it is keyed by who is on the
+   * other side, and in a drill ladder that is deliberately the same team all
+   * the way through.
+   */
+  endSession() {
+    this.session = new Map();
+    return this;
+  }
+
+  /**
    * Library prior as Beta pseudo-counts, capped so a well-populated prior
    * does not become unmovable.
    */
