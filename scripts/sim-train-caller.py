@@ -421,7 +421,11 @@ def main():
         },
     }
 
-    out = args.out or str(Path(args.dataset).parent.parent / "models" / "igl-caller.json")
+    # --name decides the filename as well as the id inside it. It used to only
+    # do the latter, so every caller ever trained overwrote igl-caller.json and
+    # the name it carried was the only way to tell two of them apart.
+    models_dir = Path(args.dataset).parent.parent / "models"
+    out = args.out or str(models_dir / f"{args.name or 'igl-caller'}.json")
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w") as fh:
         json.dump(model, fh)
