@@ -25,7 +25,7 @@ const settings = new SettingsManager();
 const auth = new AuthManager(settings);
 // The trainer is its own entry point, so it has to build the entitlement
 // manager itself. Without this, getEntitlements() inside UIOverlay returns null
-// and every aim trainer gate silently passes.
+// and every aim trainer gate silently passes. :)
 const entitlements = getEntitlements(auth);
 const engine = new Engine(settings);
 const input = new InputManager(engine, settings);
