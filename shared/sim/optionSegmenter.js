@@ -29,7 +29,9 @@
 // engine's own recorder. DOM-free, model-free, deterministic.
 // ---------------------------------------------------------------------------
 
-export const SEGMENTER_VERSION = 1;
+import { REFRAG_RADIUS, REFRAG_WINDOW_SECONDS } from './demoContracts.js';
+
+export const SEGMENTER_VERSION = 2;
 
 /** Below this ground speed a body is standing, units/s. `[calibrate]` */
 export const STILL_SPEED = 30;
@@ -45,6 +47,10 @@ export const ROTATE_DISPLACEMENT = 2000;
 export const FALL_BACK_WINDOW_SECONDS = 1.5;
 /** Segments shorter than this are folded into their neighbours. Seconds. */
 export const MIN_SEGMENT_SECONDS = 0.4;
+/** Isolated from the pack by this much is a lurk, not a slow advance. */
+export const LURK_SPACING = 1400;
+/** Teammates inside this radius count as the pack for an execute. */
+export const PACK_RADIUS = 900;
 
 /**
  * @typedef {object} Segment
@@ -71,6 +77,48 @@ function turn(h1, h2) {
   return d;
 }
 
+/** Last pose on a teammate track at or before `tick`. */
+function poseAt(track, tick) {
+  if (!track?.length) return null;
+  let best = track[0];
+  for (const p of track) {
+    if (p.tick > tick) break;
+    best = p;
+  }
+  return best;
+}
+
+function packCentroid(teammates, tick) {
+  let x = 0;
+  let y = 0;
+  let n = 0;
+  for (const track of teammates) {
+    const p = poseAt(track, tick);
+    if (!p) continue;
+    x += p.x;
+    y += p.y;
+    n += 1;
+  }
+  return n ? { x: x / n, y: y / n, n } : null;
+}
+
+function countNear(teammates, origin, tick, radius) {
+  let n = 0;
+  for (const track of teammates) {
+    const p = poseAt(track, tick);
+    if (p && dist(origin, p) <= radius) n += 1;
+  }
+  return n;
+}
+
+function headingToward(from, to, head) {
+  if (head == null || !to) return false;
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy) || 1;
+  return Math.cos(head) * (dx / len) + Math.sin(head) * (dy / len) > 0.2;
+}
+
 /**
  * Label one player's round.
  *
@@ -80,10 +128,22 @@ function turn(h1, h2) {
  * @param {Array<{type:string, tick:number}>} [args.events]  this player's own
  *   attested events: 'damage' (taken), 'plant_start', 'plant_end',
  *   'defuse_start', 'defuse_end'
+ * @param {Array<Array<{tick:number, x:number, y:number}>>} [args.teammates]
+ *   living teammates' pose tracks, for pack spacing / execute / lurk
+ * @param {{x:number, y:number}|null} [args.site]  the site the round is hitting
+ * @param {Array<{tick:number, x:number, y:number}>} [args.deaths]
+ *   teammate deaths, for the trade window
  * @param {number} [args.tickRate]
  * @returns {Segment[]}
  */
-export function segmentTrack({ poses, events = [], tickRate = 64 }) {
+export function segmentTrack({
+  poses,
+  events = [],
+  tickRate = 64,
+  teammates = [],
+  site = null,
+  deaths = []
+}) {
   if (!poses || poses.length < 2) return [];
 
   // ---- objectives first: a channel outranks feet, in labels as in play ----
@@ -189,12 +249,17 @@ export function segmentTrack({ poses, events = [], tickRate = 64 }) {
     }
 
     // Moving. The peek was decided on the whole run, before any splitting.
+    const pack = packCentroid(teammates, a.tick);
+    const spacing =
+      pack != null ? { dx: Math.round(pack.x - a.x), dy: Math.round(pack.y - a.y) } : null;
+    const withSpacing = (detail) => (spacing ? { ...detail, spacing } : detail);
+
     if (seg.peek) {
       out.push({
         option: 'jiggle',
         startTick: a.tick,
         endTick: b.tick,
-        detail: { excursion: Math.round(seg.maxOut) }
+        detail: withSpacing({ excursion: Math.round(seg.maxOut) })
       });
       continue;
     }
@@ -216,17 +281,30 @@ export function segmentTrack({ poses, events = [], tickRate = 64 }) {
           option: 'fall_back',
           startTick: a.tick,
           endTick: b.tick,
-          detail: { reversalDeg: Math.round((turn(before, now) * 180) / Math.PI) }
+          detail: withSpacing({ reversalDeg: Math.round((turn(before, now) * 180) / Math.PI) })
         });
         continue;
       }
     }
 
+    let option = dist(a, b) >= ROTATE_DISPLACEMENT ? 'rotate' : 'advance';
+    const nowHead = heading(poses, seg.from, seg.to);
+    if (option !== 'rotate' && nowHead != null) {
+      const window = REFRAG_WINDOW_SECONDS * tickRate;
+      const death = deaths.find(
+        (d) => a.tick - d.tick >= 0 && a.tick - d.tick <= window && dist(a, d) <= REFRAG_RADIUS
+      );
+      if (death && headingToward(a, death, nowHead)) option = 'trade';
+      else if (site && countNear(teammates, a, a.tick, PACK_RADIUS) >= 2 && headingToward(a, site, nowHead)) {
+        option = 'execute_entry';
+      } else if (pack && dist(a, pack) >= LURK_SPACING) option = 'lurk';
+    }
+
     out.push({
-      option: dist(a, b) >= ROTATE_DISPLACEMENT ? 'rotate' : 'advance',
+      option,
       startTick: a.tick,
       endTick: b.tick,
-      detail: { displacement: Math.round(dist(a, b)) }
+      detail: withSpacing({ displacement: Math.round(dist(a, b)) })
     });
   }
 
@@ -279,4 +357,18 @@ export function coverage(segments, poses, tickRate = 64) {
   let labeled = 0;
   for (const s of segments) labeled += (s.endTick - s.startTick) / tickRate;
   return Math.min(1, labeled / total);
+}
+
+/**
+ * The segment covering `tick`, or null when the track has a gap there.
+ */
+export function optionAt(segments, tick) {
+  if (!segments?.length) return null;
+  for (const s of segments) {
+    if (tick >= s.startTick && tick < s.endTick) return s;
+  }
+  for (const s of segments) {
+    if (tick >= s.startTick && tick <= s.endTick) return s;
+  }
+  return null;
 }

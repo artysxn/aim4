@@ -21,7 +21,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { ROOT } from '../replays/demoStore.js';
-import { loadBake } from './bakes.js';
+import { loadBake, loadPlaybook, loadKnowledgeBake } from './bakes.js';
 import { BUILTIN_BRAINS, loadModel } from './models.js';
 import { navGraphFromBake } from '../../shared/sim/navGraph.js';
 import { loadAngles } from '../../shared/sim/angles.js';
@@ -99,10 +99,12 @@ export async function runMatch(params = {}) {
       models[name] = loaded.policy;
       modelMeta[name] = loaded.meta;
     }
+    const playbook = (await loadPlaybook(map))?.index || null;
+    const knowledge = (await loadKnowledgeBake(map))?.knowledge || null;
     const brainFactory = (name) => {
       if (name === 'scripted') return scriptedController;
-      if (name === 'desire') return desireController({ angles });
-      return desireController({ angles, policy: models[name] });
+      if (name === 'desire') return desireController({ angles, playbook, knowledge });
+      return desireController({ angles, policy: models[name], playbook, knowledge });
     };
     const { match, rounds } = versus
       ? playVersusMatch({

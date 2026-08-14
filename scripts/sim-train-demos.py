@@ -18,8 +18,8 @@
 #   index instead and THIS file rebuilds the causal window. See build_history().
 #
 #   MULTI-HEAD. One torso feeds six behaviour heads (option, moveTo, gait,
-#   peek, aim, utility) plus two auxiliary heads (aimOffset, refrag) that exist
-#   only to shape the torso and are dropped at export.
+#   peek, aim, utility) plus three auxiliary heads (aimOffset, refrag, spacing)
+#   that exist only to shape the torso and are dropped at export.
 #
 #   THE CALL IS A CONDITIONER. map / contract / call / player each get their own
 #   jointly-trained embedding table. The call table is the point of the whole
@@ -64,7 +64,9 @@ DEFAULT_OUT = REPO / "server" / "data" / "replays" / "sim" / "models" / "demo-g0
 # Bumped when the exported schema changes. policyNet.js refuses anything else.
 POLICYNET_VERSION = 1
 # Bumped when the CACHE layout changes, so a stale cache is rebuilt not reused.
-CACHE_VERSION = 3
+CACHE_VERSION = 4
+# Keep in sync with shared/sim/demoContracts.js DEMO_DATASET_VERSION.
+DATASET_VERSION = 2
 
 # Fixed-order label vocabularies. Order is part of the export; these mirror
 # shared/sim/demoContracts.js so a relabelled dataset cannot silently reindex.
@@ -93,6 +95,7 @@ HEAD_LOSS_WEIGHT = {
     # Auxiliary: shape the torso, never exported.
     "aimOffset": 0.2,
     "refrag": 0.5,
+    "spacing": 0.2,
 }
 
 # Inverse-frequency class weights are capped here, matching sim-train-bc.py.
@@ -155,6 +158,7 @@ def stream_shards(shards, limit, cache_dir, log=print):
                                          "option", "moveTo", "gait", "peek", "aim", "utility", "refrag")}
     weights = array.array("f")
     aim_offsets = array.array("f")
+    spacings = array.array("f")
 
     option_vocab = None
     obs_size = None
@@ -204,6 +208,11 @@ def stream_shards(shards, limit, cache_dir, log=print):
                         obs_size = int(rec["obsSize"])
                         obs_version = int(rec["obsVersion"])
                         dataset_v = int(rec["v"])
+                        if dataset_v != DATASET_VERSION:
+                            sys.exit(
+                                f"dataset v{dataset_v} is not v{DATASET_VERSION}; "
+                                "re-extract with scripts/sim-extract-demos.mjs"
+                            )
                         if int(rec.get("historySteps", HISTORY_STEPS)) != HISTORY_STEPS:
                             sys.exit(
                                 f"dataset says historySteps {rec.get('historySteps')}, "
@@ -245,6 +254,8 @@ def stream_shards(shards, limit, cache_dir, log=print):
                 col["utility"].append(util_ix.get(y.get("utility"), -1))
                 col["refrag"].append(1 if y.get("refrag") else 0)
                 aim_offsets.append(float(y.get("aimOffset") or 0.0))
+                spacings.append(float(y.get("spacingDx") or 0.0))
+                spacings.append(float(y.get("spacingDy") or 0.0))
                 weights.append(float(rec.get("w", 1.0)))
 
                 n += 1
@@ -263,6 +274,7 @@ def stream_shards(shards, limit, cache_dir, log=print):
     out = {k: np.frombuffer(v, dtype=np.int32).copy() for k, v in col.items()}
     out["w"] = np.frombuffer(weights, dtype=np.float32).copy()
     out["aimOffset"] = np.frombuffer(aim_offsets, dtype=np.float32).copy()
+    out["spacing"] = np.frombuffer(spacings, dtype=np.float32).copy().reshape(-1, 2)
     out["n"] = n
     out["obsSize"] = obs_size
     out["obsVersion"] = obs_version
@@ -393,6 +405,7 @@ def prepare(shards, limit, cache_dir, move_cap, log=print):
         "round": raw["round"], "option": raw["option"], "moveTo": move_y, "gait": raw["gait"],
         "peek": raw["peek"], "aim": raw["aim"], "utility": raw["utility"],
         "refrag": raw["refrag"], "w": raw["w"], "aimOffset": raw["aimOffset"],
+        "spacing": raw["spacing"],
     }
     np.savez(cdir / "cols.npz", **cols)
     meta = {
@@ -499,6 +512,7 @@ class PolicyNet(nn.Module):
         self.heads = nn.ModuleDict({k: nn.Linear(width, len(vocab[k])) for k in CLASS_HEADS})
         self.aim_offset = nn.Linear(width, 1)
         self.refrag = nn.Linear(width, 2)
+        self.spacing = nn.Linear(width, 2)
         self.register_buffer("mask", torch.triu(torch.ones(T, T, dtype=torch.bool), diagonal=1))
 
     def trunk(self, hist, cond):
@@ -522,6 +536,7 @@ class PolicyNet(nn.Module):
         out = {k: self.heads[k](e) for k in CLASS_HEADS}
         out["aimOffset"] = self.aim_offset(e).squeeze(1)
         out["refrag"] = self.refrag(e)
+        out["spacing"] = self.spacing(e)
         return out
 
 
@@ -538,7 +553,7 @@ def param_report(model):
         "embed.player": ["emb_player"],
         "torso": ["torso"],
         "heads": ["heads"],
-        "aux (not exported)": ["aim_offset", "refrag"],
+        "aux (not exported)": ["aim_offset", "refrag", "spacing"],
     }
     for label, prefixes in groups.items():
         total = sum(p.numel() for name, p in model.named_parameters()
@@ -814,6 +829,7 @@ def main():
     y_dev = {k: torch.from_numpy(cols[k].astype(np.int64)).to(device) for k in CLASS_HEADS}
     y_dev["refrag"] = torch.from_numpy(cols["refrag"].astype(np.int64)).to(device)
     y_off = torch.from_numpy(cols["aimOffset"].astype(np.float32) / 180.0).to(device)
+    y_sp = torch.from_numpy(cols["spacing"].astype(np.float32) / 2000.0).to(device)
     w_dev = torch.from_numpy(cols["w"].astype(np.float32)).to(device)
 
     def losses_for(out, batch_idx_t, train=True):
@@ -831,13 +847,14 @@ def main():
         sw = w_dev[batch_idx_t] * cw["refrag"][y]
         per["refrag"] = (ce * sw).sum() / sw.sum().clamp_min(1e-6)
         per["aimOffset"] = F.smooth_l1_loss(out["aimOffset"].float(), y_off[batch_idx_t])
+        per["spacing"] = F.smooth_l1_loss(out["spacing"].float(), y_sp[batch_idx_t])
         return per
 
     @torch.no_grad()
     def evaluate(idx, cap=200000):
         model.eval()
         use = idx if len(idx) <= cap else idx[np.linspace(0, len(idx) - 1, cap).astype(np.int64)]
-        agg_loss = {k: 0.0 for k in list(CLASS_HEADS) + ["refrag", "aimOffset"]}
+        agg_loss = {k: 0.0 for k in list(CLASS_HEADS) + ["refrag", "aimOffset", "spacing"]}
         hits = {k: 0 for k in CLASS_HEADS}
         seen = {k: 0 for k in CLASS_HEADS}
         nb = 0
@@ -916,7 +933,7 @@ def main():
             f"{train_rate:,.0f} samp/s  gpu {gpu:,.0f}MB  {fmt_secs(elapsed)} elapsed  eta {fmt_secs(eta)}")
         log("   loss  " + "  ".join(
             f"{k}={train_loss.get(k, 0):.3f}/{val_loss.get(k, 0):.3f}"
-            for k in list(CLASS_HEADS) + ["refrag", "aimOffset"]))
+            for k in list(CLASS_HEADS) + ["refrag", "aimOffset", "spacing"]))
         log("   val   " + "  ".join(f"{k}={val_acc[k]:.3f}" for k in CLASS_HEADS))
         best = (val_loss, val_acc)
         if stopping["flag"]:
@@ -1008,7 +1025,7 @@ def build_export(model, meta, args, val_acc, val_loss, stats):
             "activation": "tanh",
             "layers": [{"W": rw(l.weight), "b": rv(l.bias)} for l in model.torso],
         },
-        # Auxiliary heads (aimOffset, refrag) are deliberately absent: they
+        # Auxiliary heads (aimOffset, refrag, spacing) are deliberately absent: they
         # exist to shape the torso during training and mean nothing at runtime.
         "heads": {k: {"W": rw(model.heads[k].weight), "b": rv(model.heads[k].bias)} for k in CLASS_HEADS},
         "trained": {

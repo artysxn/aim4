@@ -143,6 +143,25 @@ export function pickRound(index, { side, call = null, econ = null, exclude = nul
 }
 
 /**
+ * Sample a named call from how often winners ran it. Frequent calls sit
+ * closer, a StrategyAI hint (`prefer`) is a bonus rather than a filter, and
+ * the same softmax as pickRound keeps a side from opening every round the
+ * same way.
+ *
+ * @returns {string|null}
+ */
+export function pickCall(index, { side, prefer = null, rng }) {
+  const list = index?.calls?.[side] || [];
+  if (!list.length) return null;
+  const scored = list.map(([call, n]) => ({
+    entry: call,
+    distance: (prefer && call !== prefer ? 1 : 0) + 1 / Math.max(1, n)
+  }));
+  scored.sort((a, b) => a.distance - b.distance);
+  return sample(scored.slice(0, TOP_K), rng);
+}
+
+/**
  * The re-call: given what just happened, what did winning rounds do next?
  *
  * `contactRel` is the operator's key inference. A contact BEHIND means the
@@ -196,14 +215,30 @@ export function matchSituation(index, { side, clock, alive, enemyAlive, contactR
  * @param {number[]} slots
  * @param {PlaybookEntry} entry
  * @param {(slot: number) => string|null} contractOf  where each bot is now
+ * @param {object} [opts]
+ * @param {(slot: number) => boolean} [opts.awpOf]  the AWPer seat, matched first
  * @returns {Map<number, PlaybookRole>}
  */
-export function assignRoles(slots, entry, contractOf = () => null) {
+export function assignRoles(slots, entry, contractOf = () => null, { awpOf = () => false } = {}) {
   const out = new Map();
   const roles = [...(entry?.roles || [])];
   const free = new Set(slots);
 
-  // First pass: anybody already standing on a role's contract keeps it.
+  // AWP roles go to AWP seats before anyone else is placed, so the big gun
+  // keeps playing the AWPer's tape rather than inheriting a lurk by order.
+  for (const role of roles.slice()) {
+    if (!role.awp) continue;
+    for (const slot of free) {
+      if (!awpOf(slot)) continue;
+      out.set(slot, role);
+      free.delete(slot);
+      roles.splice(roles.indexOf(role), 1);
+      break;
+    }
+  }
+
+  // Anybody already standing on a role's contract keeps it, so a re-call
+  // mid-round does not swap everyone's job.
   for (const role of roles.slice()) {
     for (const slot of free) {
       if (contractOf(slot) && contractOf(slot) === role.contract) {
@@ -214,7 +249,7 @@ export function assignRoles(slots, entry, contractOf = () => null) {
       }
     }
   }
-  // Second pass: whoever is left, in order.
+  // Whoever is left, in order.
   for (const slot of [...free]) {
     const role = roles.shift();
     if (!role) break;
@@ -239,12 +274,33 @@ export function waypointAt(role, seconds) {
   return cur;
 }
 
-/** Throws whose clock has come and which have not been thrown yet. */
+/** A throw this many seconds past its clock is skipped rather than pinning the bot. */
+export const UTILITY_STALE_SECONDS = 8;
+
+/**
+ * When this role's schedule is exhausted: the later of its last waypoint and
+ * its last throw. Past this plus a grace window the tape is no longer a plan.
+ */
+export function tapeEndSeconds(role) {
+  let end = 0;
+  for (const [t] of role?.waypoints || []) {
+    if (Number.isFinite(t) && t > end) end = t;
+  }
+  for (const u of role?.utility || []) {
+    if (Number.isFinite(u.t) && u.t > end) end = u.t;
+  }
+  return end;
+}
+
+/** Throws whose clock has come, which have not been thrown, and which are not stale. */
 export function dueUtility(role, seconds, thrown = new Set()) {
   const out = [];
   for (let i = 0; i < (role?.utility || []).length; i += 1) {
     const u = role.utility[i];
-    if (u.t <= seconds && !thrown.has(i)) out.push({ index: i, ...u });
+    if (u.t > seconds) continue;
+    if (seconds - u.t > UTILITY_STALE_SECONDS) continue;
+    if (thrown.has(i)) continue;
+    out.push({ index: i, ...u });
   }
   return out;
 }

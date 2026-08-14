@@ -19,7 +19,7 @@ import {
   speedCap,
   ticksFor
 } from './constants.js';
-import { END_REASON, PHASE, createEngine } from './engine.js';
+import { END_REASON, PHASE, LINEUP_FROM_UNITS, createEngine } from './engine.js';
 import { RoundRecorder } from './encode.js';
 import { navGraphFromBake } from './navGraph.js';
 import { assignSpawns, hungarian, randomSpawns } from './spawnChoice.js';
@@ -421,6 +421,30 @@ if (graph) {
       const burned = e.state.events.find((x) => x.type === 'death' && x.slot === 5);
       assert(burned, 'standing in the fire is lethal');
       assert(burned.by === 0, 'and the thrower gets the credit');
+    }
+
+    {
+      const { e } = mk(['smokegrenade', 'flashbang']);
+      const from = { x: e.state.bodies[0].pos.x, y: e.state.bodies[0].pos.y };
+      const at = { x: (spawns[0].x + spawns[5].x) / 2, y: (spawns[0].y + spawns[5].y) / 2 };
+      assert(
+        e.throwLineup(0, { type: 'smokegrenade', from, at, travelTicks: 64 }),
+        'a lineup leaves the hand'
+      );
+      assert(
+        e.state.nades.some((n) => n.type === 'smokegrenade' && n.thrownBy === 0),
+        'and is in flight at the mined landing'
+      );
+      assert(
+        !e.throwLineup(0, { type: 'smokegrenade', from, at, travelTicks: 64 }),
+        'the pocket is empty after the copy'
+      );
+      const far = { x: from.x + LINEUP_FROM_UNITS + 80, y: from.y };
+      assert(
+        !e.throwLineup(0, { type: 'flashbang', from: far, at, travelTicks: 32 }),
+        'too far from the lineup origin refuses without consuming'
+      );
+      assert(e.state.bodies[0].grenades.includes('flashbang'), 'the flash is still in the pocket');
     }
   }
 

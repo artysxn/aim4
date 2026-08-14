@@ -29,6 +29,7 @@ import { loadAngles } from '../shared/sim/angles.js';
 import { playVersusMatch, scriptedController } from '../shared/sim/versusMatch.js';
 import { desireController } from '../shared/sim/desireBot.js';
 import { loadPolicy } from '../shared/sim/policy.js';
+import { loadPlaybook, loadKnowledgeBake } from '../server/sim/bakes.js';
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
@@ -46,20 +47,22 @@ async function load(kind, map) {
   return JSON.parse(await fs.readFile(path.join(REPLAY_ROOT, 'sim', kind, `${map}.json`), 'utf8'));
 }
 
-async function brainFactory(name, angles) {
+async function brainFactory(name, angles, playbook, knowledge) {
   if (name === 'scripted') return scriptedController;
-  if (name === 'desire') return desireController({ angles });
+  if (name === 'desire') return desireController({ angles, playbook, knowledge });
   const json = JSON.parse(
     await fs.readFile(path.join(REPLAY_ROOT, 'sim', 'models', `${name}.json`), 'utf8')
   );
-  return desireController({ angles, policy: loadPolicy(json) });
+  return desireController({ angles, policy: loadPolicy(json), playbook, knowledge });
 }
 
 async function main() {
   const graph = navGraphFromBake(await load('navcache', MAP));
   const angles = loadAngles(await load('angles', MAP));
-  const challenger = await brainFactory(CHALLENGER, angles);
-  const baseline = await brainFactory(BASELINE, angles);
+  const playbook = (await loadPlaybook(MAP))?.index || null;
+  const knowledge = (await loadKnowledgeBake(MAP))?.knowledge || null;
+  const challenger = await brainFactory(CHALLENGER, angles, playbook, knowledge);
+  const baseline = await brainFactory(BASELINE, angles, playbook, knowledge);
 
   let challengerRounds = 0;
   let baselineRounds = 0;

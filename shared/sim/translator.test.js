@@ -370,5 +370,29 @@ if (!graph) {
     assert(st.n === 4, 'all four measured');
   }
 
+  {
+    const e = mk(7);
+    for (let i = 0; i < ticksFor(FREEZE_SECONDS) + 1; i += 1) e.step();
+    const t = createTranslator(e, { slots: [0, 1, 2, 3, 4] });
+    const body = e.state.bodies[0];
+    const at = { x: body.pos.x + 200, y: body.pos.y };
+    t.setIntent(0, {
+      ...idleIntent(),
+      utility: {
+        type: 'smokegrenade',
+        atX: at.x,
+        atY: at.y,
+        flight: 1,
+        tapeIndex: 2
+      }
+    });
+    t.step();
+    assert(t.tapeIndex(0) === 2, 'tapeIndex reports the copied throw');
+    assert(
+      e.state.events.some((x) => x.type === 'grenade_throw' && x.lineup),
+      'and the translator took the throwLineup path'
+    );
+  }
+
   console.log('translator: ok (interrupts, masks, follow acceptance, isolated peek)');
 }

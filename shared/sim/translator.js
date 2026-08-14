@@ -42,7 +42,8 @@ export function createTranslator(engine, opts = {}) {
     follower: null,
     followStartTick: 0,
     followErrors: [],
-    thrown: false
+    thrown: false,
+    tapeIndex: null
   }));
 
   /** Follow-side events for the interrupt classifier: {tick, type, slot}. */
@@ -88,6 +89,7 @@ export function createTranslator(engine, opts = {}) {
       // does not, so a planner may re-send its intent every step harmlessly.
       if (intent.utility && JSON.stringify(intent.utility) !== JSON.stringify(s.intent.utility)) {
         s.thrown = false;
+        s.tapeIndex = null;
       }
       s.intent = intent;
       if (intent.move?.mode !== 'follow') s.follower = null;
@@ -113,6 +115,12 @@ export function createTranslator(engine, opts = {}) {
     /** Whether the slot's current utility order has fired its one shot. */
     hasThrown(slot) {
       return Boolean(slots[slot]?.thrown);
+    },
+
+    /** Playbook utility index of the last successful throw, or null. */
+    tapeIndex(slot) {
+      const i = slots[slot]?.tapeIndex;
+      return Number.isInteger(i) ? i : null;
     },
 
     isBroken(slot) {
@@ -182,9 +190,35 @@ export function createTranslator(engine, opts = {}) {
 
         // ---- one-shot utility ----
         if (intent.utility && !s.thrown && !body.channel) {
-          const at = graph.anchor(intent.utility.at);
-          if (at && engine.throwGrenade(slot, intent.utility.type, at.world)) {
-            s.thrown = true;
+          const u = intent.utility;
+          const travel = Number.isFinite(u.flight)
+            ? Math.max(1, Math.round(u.flight * TICK_RATE))
+            : Math.max(0, Math.round(u.travelTicks || 0));
+          const atWorld = Number.isFinite(u.atX)
+            ? { x: u.atX, y: u.atY }
+            : graph.anchor(u.at)?.world;
+          const fromWorld = Number.isFinite(u.fromX)
+            ? { x: u.fromX, y: u.fromY }
+            : graph.anchor(u.from)?.world;
+          if (atWorld && travel > 0) {
+            if (fromWorld) {
+              const d = Math.hypot(body.pos.x - fromWorld.x, body.pos.y - fromWorld.y);
+              if (d > 80) {
+                const cell = graph.nearestWalkable(fromWorld.x, fromWorld.y, 16, body.level);
+                if (cell) engine.setIntent(slot, { moveTo: { ...cell }, gait: 'run' });
+                continue;
+              }
+            }
+            if (engine.throwLineup(slot, { type: u.type, from: fromWorld, at: atWorld, travelTicks: travel })) {
+              s.thrown = true;
+              s.tapeIndex = Number.isInteger(u.tapeIndex) ? u.tapeIndex : null;
+            }
+          } else {
+            const at = atWorld || graph.anchor(u.at)?.world;
+            if (at && engine.throwGrenade(slot, u.type, at)) {
+              s.thrown = true;
+              s.tapeIndex = Number.isInteger(u.tapeIndex) ? u.tapeIndex : null;
+            }
           }
         }
 

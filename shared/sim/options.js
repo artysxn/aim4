@@ -560,7 +560,18 @@ export function microIntent(active, tick, view = {}) {
     case 'utility_setup': {
       intent.move = { mode: 'hold', target: p.spot, gait: 'run' };
       intent.combat = { posture: 'holdAngle', preAim: p.at ?? null };
-      intent.utility = { type: p.utilityType, at: p.at };
+      intent.utility = {
+        type: p.utilityType,
+        at: p.at,
+        from: p.from,
+        fromX: p.fromX,
+        fromY: p.fromY,
+        atX: p.atX,
+        atY: p.atY,
+        flight: p.flight,
+        travelTicks: p.travelTicks,
+        tapeIndex: p.tapeIndex
+      };
       return intent;
     }
 

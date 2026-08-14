@@ -28,6 +28,7 @@ import { createMatch } from './match.js';
 import { skillProfile } from './skill.js';
 import { scriptedLoadout, catalogueCanSee, throwLineCarries } from './scriptedMatch.js';
 import { buySide } from './buy.js';
+import { awpSlotOf } from './contracts.js';
 import { RoundRecorder } from './encode.js';
 import { Rng } from './rng.js';
 
@@ -194,9 +195,10 @@ export function playVersusMatch({
     // whether this is a save at all cannot be answered one wallet at a time.
     // The AWPer is the same seat each half, which is what a role is.
     const buys = new Map();
-    for (const [first, awpSlot] of [[0, 2], [5, 7]]) {
+    for (const first of [0, 5]) {
       const group = [first, first + 1, first + 2, first + 3, first + 4];
       const side = match.sideOf(first);
+      const awpSlot = awpSlotOf({ map, side, slots: group });
       for (const [slot, buy] of buySide({
         slots: group,
         moneyOf: (s2) => setup.money[s2] ?? 0,

@@ -31,6 +31,23 @@ the side they play on Thursday and scrimming against it, with the bots sampling
 how those specific players clear angles, peek, and time their utility (10.3).
 Every trade-off in this document resolves toward that.
 
+**How to read this file.** Three numbering systems used to live on top of each
+other. They are not the same thing.
+
+| You see | What it is | Not |
+|---|---|---|
+| **§4, §6.2, §18.6b** | Chapters of the spec. Where a rule is written | The order you build in |
+| **0.1 … 0.8** | Changelog of briefs that *changed* the spec | Steps. Skip them unless you need the argument |
+| **P0 … P8, P3b, P5e** | Retired phase names | Use the IDs in [§15](#15-build-order-and-acceptance-criteria) |
+
+The build order is **§15**, numbered `major.minor` with a letter when two slices
+can run in parallel (`2.2a`, `2.2b`):
+
+`1` engine → `2` see and follow → `3` clone → `4` remember and call → `5` improve
+
+You are in **4** (remember and call). `4.3a` (the librarian) is in the tree.
+`4.2b` (believed PRW vs true PRW) and `4.3b` (score the tapes) are next.
+
 Everything in this plan is grounded in code that exists today. File paths are real.
 Where a CS2 constant is quoted from memory it is marked `[verify]`, meaning: check
 against current game files or the wiki at implementation time, then freeze it into
@@ -66,6 +83,10 @@ against current game files or the wiki at implementation time, then freeze it in
 
 ## 0. Requirements traceability
 
+Section 0 is a **changelog of briefs**, not a build order. `0.7` and `0.8` are
+the eighth and ninth times the brief moved. The work those briefs created lives
+under `4.2` / `4.3` in [§15](#15-build-order-and-acceptance-criteria).
+
 The brief, mapped to where this plan answers it.
 
 | # | Requirement (from the brief) | Sections |
@@ -75,9 +96,9 @@ The brief, mapped to where this plan answers it.
 | C | One round at a time, LIVE knowledge via Team POV + possession | 5, 11.2 |
 | D | 2D sim behaves like real demos: movement speed, velocity, step sound, shot sound | 4.4, 4.7, 4.8 |
 | E | ML is decisions only; fixed decision-to-input translator; portable to 3D | 6, 13 |
-| F | Hivemind + individuals: Playstyle AI and Individual AI | 6.2, 6.3, 9.6 |
+| F | Hivemind + individuals: Playstyle AI and Individual AI | 6.2, 6.3, 9.6, 9.25 |
 | 1 | Bots take round-library calls as commands and execute them | 10.1 |
-| 2 | Follow the plan until something happens; affected bots or the whole team re-plan | 10.2, 10.4 |
+| 2 | Follow the plan until recalled; affected bots or the whole team re-plan only if continuing is -EV | 6.2, 10.2, 10.4 |
 | 3 | xK as evolution training wheels; copy real demos for decisions | 9.5, 10.3 |
 | 4 | Assigned roles and positions per map | 6.4, 6.19 |
 | 5 | Bots modelled on real players; mimic a team's actual movement | 10.3, 10.4 |
@@ -131,7 +152,7 @@ memory across rounds lives.
 | T3 | Run them, evolve them, turn them into good players | 9.20 to 9.22, 9.24 |
 | T4 | Are roles integrated properly? | 6.19 (they were not; role contracts fix it) |
 | T5 | Do bots understand cores? | 6.18 |
-| T6 | Do bots learn from their own mistakes? | 18.6 |
+| T6 | Do bots learn from their own mistakes? | 18.6, 18.6b |
 | T7 | A strategy network that learns across rounds, not inside them | 18.4 |
 | T8 | Recognize a situation the team keeps losing, and avoid it | 18.2, 18.3, 18.5 |
 | T9 | Experience: 10k rounds at 90% beats 10 rounds at 99% | 18.1, 18.8 |
@@ -173,7 +194,7 @@ that already talks about cores). `antistratScan.js` is most of an opponent model
 | F5 | Contracts keyed by map position | 6.19 |
 | F6 | Deception at any scale, not a formation head | 6.21 |
 | F7 | Utility as a general tool with a competency ladder and a round economy | 6.22 |
-| F8 | In-round knowledge is sight and sound, pooled; post-round is PRW and PFW | 5.1, 5.2, 18.6 |
+| F8 | In-round knowledge is sight and sound, pooled; post-round is PRW and PFW | 5.1, 5.2, 18.6, 18.6b |
 | F9 | Dead players see what living teammates see | 5.8 |
 | F10 | Mimicry down to individual players' habits | 10.3 |
 | F11 | God mode with mid-round calls, time control, and savestate branching | 11.5 |
@@ -256,7 +277,7 @@ section 20 turns it into state, actions, masks, features, rewards, and grades.
 | # | Requirement (sixth brief) | Sections |
 |---|---|---|
 | D1 | Bots operate on the doctrine's principles | 20, throughout |
-| D2 | The hivemind calls rounds according to the document's round theory | 20.3, 20.5, 20.6, 20.9 |
+| D2 | The hivemind calls rounds according to the document's round theory | 6.2, 9.25, 20.3, 20.5, 20.6, 20.9 |
 | D3 | The knowledge becomes something a network can represent and master | 20.2, 20.3, 20.4 |
 | D4 | Mastery accrues over generations and over rounds of experience | 20.15, and 18 unchanged |
 | D5 | Individual brilliance is balanced against the system, and is the late-stage goal rather than the starting point | 20.14 |
@@ -319,6 +340,59 @@ Three corrections:
    level; and where players actually change floors is mined from demo z
    transitions rather than painted by hand (4.2). The residual risk is
    calibration, not architecture (14.6).
+
+### 0.7 Brief 8: the hivemind is a librarian, not a fifth bot
+
+Created build IDs **4.3a / 4.3b**. The Playstyle AI that actually runs is
+`shared/sim/caller.js` plus the playbook, not the 200 k-parameter net in 6.2.
+
+| # | Requirement (eighth brief) | Sections |
+|---|---|---|
+| H1 | Plans in motion stay in motion until recalled. Continue is the default | 6.2, 10.2 |
+| H2 | A recall is priced: own information, believed picture, predicted winrate, then the round library | 6.2, 9.25 |
+| H3 | Freeze, delay, fake, turnaround, commit are library answers. Freeze-when-ahead is a team posture, not the default | 6.2, 9.25, 20.6 |
+| H4 | The hivemind is not trained with the bots' 8 Hz clone or the same credit | 9.6, 9.25 |
+
+Three corrections:
+
+1. **A team interrupt was a replan.** 10.2 fired a new TeamDirective on every
+   TEAM class. That is how INFURITY and 2022 Virtus.pro / Avangar looked in a
+   5v4: freeze, pause the plan, no matter what, as long as they were ahead.
+   Default teams keep walking. The interrupt classifier still *classifies*; the
+   caller *evaluates*. Behind is a read, not a recall.
+2. **Generation 0 Playstyle was going to be a cloned net.** Label supply is
+   one call per round per team. The 3,500 already *are* that dataset, as
+   winning tapes. Softmax over the playbook is G0. The net in 6.2 is stage 4
+   of 9.25, after a value head and a bandit have earned it.
+3. **Round calls were listed as Playstyle RL in 9.23.** They are mined, then
+   ranked, then (late) a small SMDP. Same split as everything else in that
+   table: most of the skill is not a gradient.
+
+### 0.8 Brief 9: teach the why, calibrate the picture
+
+Created build ID **4.2b**. Imitation learning (Cambridge 2021, CSKnow, our own G0) teaches what a pro did,
+not why. A chaotic 2v3 afterplant that was not in the HLTV set has no nearest
+demo worth copying. The bots already *price* options in predicted round winrate
+from the picture they hold (6.2, 6.7). After the round, the same model can be
+run on the true world. The residual between those two numbers is how a team
+learns that its perception was wrong, without ever being handed positions.
+
+| # | Requirement (ninth brief) | Sections |
+|---|---|---|
+| W1 | Live decisions log the picture, the believed PRW, and the motive | 18.6b, 9.25 |
+| W2 | After the round, the same PRW model is run on the true state. The residual calibrates perception | 18.6b, 9.14 |
+| W3 | True positions never enter the live belief or the next round's filter | 5.4, 18.6, 18.6b |
+| W4 | OpenAI Five's usable lesson is the value function as why, plus a privileged critic at train time, not 180 years/day of self-play | 17.4, 9.10 |
+
+Two corrections:
+
+1. **18.6 already walks a PRW timeline, and it was ambiguous which PRW.** The
+   encoded round's timeline is god-view (the same pass we run on demos). The
+   search in step 3 is from belief. Those are two different numbers and the
+   gap is the lesson. 18.6b names them `pWin_belief` and `pWin_true`.
+2. **9.14's belief-value head was labelled with round outcome.** A binary per
+   round is 24 samples a match. `pWin_true` at every logged decision is a dense
+   float. That is the label. Round W/L remains the RL return (9.5).
 
 ---
 
@@ -543,6 +617,9 @@ shared/sim/                    # pure rules, DOM-free, imported by browser, serv
   spawnAssign.js               # legal spawn permutations, mimic matching, freeze pick
   trackFollow.js               # follow a recorded tick path with CS movement (no teleport)
   interrupts.js                # local vs team interrupt classifier (10.2, 10.4)
+  playbook.js                  # winning-round tapes, pickCall / pickRound / matchSituation
+  caller.js                    # the hivemind librarian: sample a tape, recall only on -EV (6.2, 9.25)
+  knowledgeBake.js             # per-contract occupancy / utility / spacing tables (9.3b)
   skill.js                     # trait vector, presets, per-bot overrides (6.16, 8.4)
   engine.js                    # round + match state machine, seeded, deterministic
   encode.js                    # engine history -> tickFormat buffer + round meta
@@ -557,8 +634,12 @@ src/site/simView.js            # the page shell (lazy)
 src/sim/                       # client UI: setup panel, live viewer glue, inspectors
 scripts/
   sim-mine-lineups.mjs         # grenade lineup tables from library demos
+  sim-mine-playbook.mjs        # winning round-sides as runnable tapes (6.2, 9.25)
+  sim-mine-knowledge.mjs       # per-(map, side, contract) tables (9.3b)
   sim-mine-timings.mjs         # per-zone first-arrival distributions, flow priors (5.6)
   sim-extract-bc.mjs           # BC dataset (obs via knowledge tracker replay, labels)
+  sim-extract-caller.mjs       # IGL rows: picture, pWin_belief, pWin_true, attrib (9.25, 18.6b)
+  sim-train-caller.py          # optional playstyle net on those rows, JSON out (9.25 stage 4)
   sim-eval.mjs                 # eval suites, Elo ladder, human-likeness + surprise gates
   sim-scorecard.mjs            # pro percentile scorecard + tier verdict (9.17, 9.18)
   sim-exams.mjs                # the certification scenarios, pass bands from demos (9.19)
@@ -1275,9 +1356,31 @@ call actually sounds.
 ### 6.2 Playstyle AI (the hivemind)
 
 - One instance per team. Runs at freeze start (pick **spawns**, call, roles, buy
-  posture, whether this round is FOLLOW or AUTONOMOUS) and then **only on team
-  interrupts** (10.2), plus a slow 5 s heartbeat that is allowed to fire a team
-  replan only if a trigger is armed. It does **not** chatter every contact.
+  posture, whether this round is FOLLOW or AUTONOMOUS) and then **only when the
+  recall gate fires** (9.25). A slow 5 s heartbeat may *evaluate* the picture; it
+  does not chatter every contact and it does not replan because an interrupt
+  class said TEAM.
+- **Plans in motion stay in motion until recalled.** Continue is the default.
+  The four steps, in order: process own information (percepts the bot already
+  computed), estimate the rest of the picture (belief: bodies, sites, clock),
+  predicted round winrate plus the EV of the fight we think we would take, then
+  compare against the round library. A recall is the exception. Answers are
+  tapes: another site, a fake, freeze, commit, delayed execute. Hundreds of
+  them. The gate names why the plan moved (`commit`, `delay`, `turnaround`,
+  `freeze`, `fake`); it is not a three-way enum that *is* the plan.
+- Freeze-when-ahead is a **posture**, not a default. INFURITY and 2022
+  Virtus.pro / Avangar paused 5v4s no matter what. Default teams keep walking
+  until continuing is -EV (example: 80% to win, and the next fight where we
+  think they are is negative). `CALLER_POSTURE` in `caller.js` holds the
+  thresholds: default almost never freezes, `vp` / `freeze` pause on a man
+  advantage, `liquid` sits between. Some jitter, on purpose.
+- Generation 0 is a **librarian**, not a net. `playbook.js` is the library of
+  winning round-sides (`sim-mine-playbook.mjs`). `caller.js` samples a call and
+  a tape at freeze (`pickCall` / `pickRound`, softmax over the top k, never
+  argmax), copies it role by role, and on new information asks
+  `shouldRecall`. A miss after a true recall is freestyle. A miss when the
+  current plan is still +EV keeps the tape. Sampling is what stops a side from
+  playing one demo forever.
 - It is not the top of the stack. Above it sits the **Strategy AI** (18.4), which
   runs between rounds, reads the experience index, and hands down a prior over
   calls, a risk posture, an economy plan, a utility budget, and an avoid-set. The
@@ -1287,10 +1390,13 @@ call actually sounds.
 - It is the "conjoined mind": it sees the *team* belief (blackboard) and emits the
   TeamDirective. It owns strategy: spawn permutation, call selection, role/task
   assignment, tempo, rotations, save calls, utility budgeting, and the promote-
-  to-team decision when too many bots have already broken locally.
-- Network: small (attention pooling over 10 entity slots into a 256-wide MLP torso,
-  heads per directive field, ~200 k params). Small on purpose: strategic decisions
-  are low-frequency and the label supply (one call per round per team) is thin.
+  to-team *evaluation* when too many bots have already broken locally.
+- Network: later, and small (attention pooling over 10 entity slots into a
+  256-wide MLP torso, heads per directive field, ~200 k params). Small on
+  purpose: strategic decisions are low-frequency and the label supply (one call
+  per round per team) is thin. How it is trained, and why it is not the
+  individual trainer, is 9.25. Until that net exists the librarian *is* the
+  Playstyle AI. The registry's `playstyle.bin` is optional through 4.3.
 
 ### 6.3 Individual AI
 
@@ -1428,8 +1534,10 @@ where they have to become the actual decision rule.
 | The bridge | `coach/duelLookahead.js: expectedCtOverDuels` | Prices a round state over the joint outcomes of the open fights, averaging prices rather than bodies | Already written, already tested. This is the missing link and it is sitting in the repo |
 
 **The rule: bots maximize PRW. PFW is how PRW is computed through fights. xK is a
-readout.** Three consequences worth stating because each one is a bug the first
-pass would have shipped:
+readout.** Live PRW is `pictureWinrate` (6.2): the model run on the *believed*
+picture. After the round, the same model is run on the true bodies. Those two
+numbers, and the residual between them, are 18.6b. Three consequences worth
+stating because each one is a bug the first pass would have shipped:
 
 1. An xK-maximizing bot never enters a site, because entering is always a worse
    fight than holding. CS is not symmetric: the T side has a clock and a bomb, and
@@ -2557,15 +2665,15 @@ as overrides (11.1).
 
 ### 9.1 Strategy in one paragraph
 
-Behavior-clone both AIs from the demo library first, so generation 0 already moves,
-buys, and executes like humans. Generation 0's Playstyle can also be the scripted
-follow-until-interrupt planner (10.4), which is already a product. Then improve
-by self-play PPO in the deterministic engine with a reward that starts heavily
-shaped (xK training wheels, round-win potential, coach penalties) and anneals
-toward pure round wins, while a KL leash to the BC policy keeps play human-shaped.
-Evolution across "generations" is the league: each generation is a checkpoint
-admitted to the opponent pool after passing eval gates. Retrieval and movement
-mimic (10.3) cover strategy diversity long before RL discovers it.
+Behavior-clone the Individual AI from the demo library first, so generation 0
+already moves, buys, and executes like humans. Generation 0's Playstyle is the
+scripted librarian (6.2, 9.25): softmax over winning tapes, recall only when
+the picture says continuing is -EV. That is already a product. Then improve
+the individuals by self-play PPO with shaped reward (9.5) and a KL leash to
+BC, and improve the hivemind on a *different* dataset (one row per freeze or
+recall, round-level credit). Evolution across "generations" is the league.
+Retrieval and movement mimic (10.3) cover strategy diversity long before RL
+discovers it.
 
 ### 9.2 Trainer runtime: two hosts, one control surface
 
@@ -2940,6 +3048,10 @@ r_t = R_win(terminal ±1)
   mimic profiles, not from 5 divergent networks (which would quintuple sample
   cost for no strategic gain).
 
+How the Playstyle side of this split is actually trained, and why it does not
+share `sim-train-demos.py`, is 9.25. The rule that must not be skipped: a
+whiffed flick never updates a situation's value.
+
 ### 9.7 Curriculum
 
 | Stage | Content | Gate to next |
@@ -3088,7 +3200,8 @@ inference (the heads can be dropped from the exported weights):
 
 | Head | Label source | Why |
 |---|---|---|
-| Belief value | Round outcome | A learned P(win) from *belief* observations. Eventually replaces `predictRoundCalibrated` as the foresight leaf evaluator, because the fitted one reads god-view features |
+| Belief value | `pWin_true` at each logged decision (18.6b), denser than round W/L | A learned P(win) from *belief* observations. Eventually replaces `predictRoundCalibrated` as the foresight leaf evaluator, because the fitted one reads god-view features. The residual `pWin_true − pWin_belief` is the perception lesson |
+| PRW calibration | Same residual, keyed by situation | A bias the hivemind adds to `pictureWinrate` live, never a position |
 | Enemy belief | The enemy team's true tracker at training time | Fakes, 6.10 |
 | Exposure | The true `infoAdvantageSeconds` | Replaces the fixed estimator in 5.6 |
 | Enemy position | True enemy positions | The classic auxiliary that teaches a torso to actually use its percepts |
@@ -3362,7 +3475,7 @@ all.** It is fitted, mined, or baked, and only decision quality is left for RL.
 | Mini-plays and reactions | Temporal BC on event-aligned shards (9.3b), then RL for which play to pick | Independent 8 Hz CE |
 | Utility execution | Mined lineups: the throw is exact by construction, because it was thrown by a pro | RL, physics |
 | Utility selection and timing | Desire pricing plus the 9.3b utility table, then RL | Mining, which knows the throw but not the moment |
-| Round calls | Playstyle RL over library `z` | Scripts, past generation 0 |
+| Round calls | Playbook mine, softmax pick, then a value head over (picture, plan); Playstyle SMDP last (9.25) | 8 Hz BC, or treating a TEAM interrupt as a replan |
 | Adaptation inside a match | Opponent model and EXP3 (6.10) | RL |
 | Adaptation across matches | The experience index and Strategy AI (18) | RL |
 
@@ -3417,13 +3530,182 @@ hard fail rather than a band:
     deviation licences exist (20.14), but only if the licence ledger explains
     which rules it outgrew and shows the record that earned it.
 
+### 9.25 Training the hivemind (the caller)
+
+The hivemind is not a fifth bot. Bots decide thousands of times a round. The
+caller decides a handful of times: freeze, first contact, a pick, two deaths.
+Put that through the individual trainer and it either copies one demo forever
+or gets blamed for a missed spray.
+
+Three brains, one of them the hivemind:
+
+| Brain | Cadence | Emits | Learns by |
+|---|---|---|---|
+| Individual | 8 Hz | options (walk, peek, throw) | BC, then RL, then league (9.3, 9.4) |
+| Playstyle / caller | freeze + recalls | the plan (tape, freeze, delay, turn, fake) | library, then a value head, then SMDP |
+| Strategy | between rounds | priors, posture, avoid-set | experience index + EXP3 (18.4) |
+
+The live caller (`caller.js`) is already the inference half: picture → predicted
+winrate → library match → recall or keep. Training is teaching it **which plan
+is good in that picture**, not teaching it how to peek.
+
+#### Why a different trainer
+
+| | Individual | Hivemind |
+|---|---|---|
+| Samples per match | ~40,000 | 24 to 80 |
+| Action | option at 8 Hz | a tape, or a named recall |
+| Credit | per-agent advantage, MAPPO | SMDP on the round. Never a flick |
+| Artifact | `individual` in the registry | `playstyle`, optional until stage 4 |
+| Collapse mode | everyone peeks the same angle | one Ancient execute forever, or freeze the moment ahead |
+
+`sim-train-demos.py` / `sim-train-bc.py` / `sim-train-rl.py` stay the bot
+trainers. The caller JSONL is one row per freeze or recall: picture, candidate
+plans, the decision taken, won, attribution (`call` vs `exec`). That file is
+`sim-extract-caller.mjs` → (optional) `sim-train-caller.py`. Same export
+discipline: JSON weights, JS forward pass, no Python in the product.
+
+#### Stage 0: mine, do not gradient (G0, in the tree)
+
+Pros did the gradient descent. Index it.
+
+- `sim-mine-playbook.mjs` writes one entry per **winning** round-side: call,
+  econ, plant, first contact (`front` / `site` / `behind`), five roles with
+  waypoints and throws. Losing sides are context, never tape.
+- `pickCall` / `pickRound` softmax over the top k (`TEMPERATURE` 0.35). Argmax
+  is banned: it is a team that plays the same round forever and is trivially
+  exploitable.
+- `matchSituation` is the answer book, not the trigger. Contact behind, late
+  plant, no plant: those *label* commit / delay / turnaround. The gate that
+  *asks* is `shouldRecall`.
+- Freeze / fake are postures and library answers, not a default class. The
+  miner can tag a 5v4 that stopped walking; most winning 5v4s did not.
+
+A caller that only does this is already trained, in the CS sense.
+
+#### Stage 1: a value head, not an 8 Hz policy
+
+Target: **P(this side wins | picture, candidate plan)**.
+
+Picture is what the caller already builds: living bodies, clock, bomb, kit,
+believed mass at our site vs the other, experience mean once `n ≥ 8`. Candidate
+plan is a playbook entry plus a decision. Data:
+
+1. Library rounds: situation at freeze / contact / man-count change, the plan
+   they ran, whether they won. Winning tapes are copied; **both** outcomes train
+   the head or every execute looks like 100%.
+2. Self-play: the same rows from `situationKey` + `ExperienceIndex` after each
+   round.
+
+This is contextual-bandit learning, not RL. `StrategyAI` already stores
+`P(win | situation, call)` as Wilson/mean counts for **layer** candidates.
+Stage 1 is using that head as the **caller's** score when it compares the
+current tape to the close matches.
+
+Then the recall rule is one comparison:
+
+- `V(current tape)` vs `V(best close match)`
+- if current is still better, keep walking
+- if an alternative wins by the posture's `recallMargin`, that *is* the recall
+- freeze is "ahead, and every fight we would take is -EV versus holding"
+
+No new action space. The hundred answers are still library tapes. The table
+(or later, the net) only ranks them. `strategyCall` stops being a polite hint
+to `pickCall` and becomes this prior.
+
+Library priors can be on for the caller immediately. Individual experience
+stays off until G0 bots pass 9.3b, unchanged.
+
+#### Stage 2: EXP3 inside a match
+
+24 rounds is not a backprop set. It is a bandit.
+
+EXP3 over legal calls, keyed by `(side, econ, score)`, already exists (6.10).
+That is how a series looks like a series: two losses on the B hit and the
+weight falls. No trainer, no generation. Posture jitter lives here: default
+stays greedy-continue, VP's freeze line can wiggle so a 5v4 still hits
+sometimes.
+
+#### Stage 3: log IGL rows
+
+`sim-extract-caller.mjs` (library) and the live match writer (self-play) emit:
+
+```
+{ picture, decision, tapeId, call, pWin_belief, pWin_true, fightEv, recalled, won, attrib }
+```
+
+`pWin_true` is filled after the round (18.6b). `attrib` is the 18.6 split plus
+`perc`. Only `call` rows update situation value. `exec` and `perc` go to the
+mistake ledger and the calibration table, not to "never do this call again."
+
+This JSONL is the dataset. Grade it like BC: match-level holdout, stratified
+by `(map, side, call, econ)`, never by round.
+
+#### Stage 4: a small Playstyle net, only after 1–3 are the bottleneck
+
+The 6.2 net, when it earns its keep:
+
+- **In:** team belief summary, ledgers, econ, score, Strategy priors,
+  experience stats (`n`, lower bound, recency, scope, attribution) as
+  *features*. Memory stays data; weights learn when to trust it (18.4).
+- **Out:** layer action / call, pace, spend/keep, whether to recall, freeze vs
+  delay vs turn. Library call remains a **label** (`libraryLabel`), not the
+  enumerated action (20.3).
+- **Not out:** waypoints, aim, which grenade. Those stay on the tape and on
+  the individual net.
+- **Labels:** what the winning side did at freeze and at each real recall in
+  the 3,500, plus the stage-3 self-play rows.
+- **Then SMDP** with the round as the step, γ = 1, advantage = round win
+  (economy-aware, 9.5). The caller is never credited or blamed for a flick.
+
+Same GPU box, different loss, different file. Do not fold it into `bc0.json`.
+
+#### Stage 5: evolution of knobs and that net, not of five brains
+
+The outer loop (9.20) may mutate, for the hivemind:
+
+- playstyle weights, once they exist
+- posture (`freezePWin`, `freezeManAdv`, `recallMargin`, jitter)
+- softmax temperature (diversity vs collapse)
+- which library slice it prefers (team-style: VP vs Liquid)
+
+It may not mutate the five individual policies as five objects. Those share
+weights and condition on role. A new generation **inherits the experience
+index separately from the weights** (18.8). Mix them and gen-12 is scared of
+gen-0 Banana.
+
+Honesty genes stay frozen (9.21): KL floor, aim caps, surprise band. A
+population allowed to evolve "never freeze" into "always freeze" will, on the
+first 5v4.
+
+#### What not to copy from bot training
+
+- Do not BC the caller at 8 Hz.
+- Do not put the playbook through a net that memorizes one round.
+- Do not evolve freeze thresholds by mutating bots.
+- Do not train caller and individuals on one reward.
+- Do not treat `matchSituation` as the gate. It is the answer book. The gate
+  is `shouldRecall`, later `V(alt) - V(current)`.
+
+#### Where this sits on the road (9.24)
+
+G0 Playstyle is stage 0 (librarian) plus stage 1 priors. G1 to G3 keep that
+librarian while individuals learn duels. The value head should be on before
+C3 (5v5), or the side that gets the first pick will freeze like VP by
+accident (the old auto-keyword on `manAdv >= 2`). The Playstyle net is a
+G9+ luxury, same band as C4 / full matches. League admission still requires
+call entropy (9.8.4) and the doctrine axis (9.8.15). A generation that
+discovered "freeze every 5v4" has collapsed on posture, which is the same
+failure as mono-strat, and the scorecard should say so.
+
 ---
 
 ## 10. Commands, following, interrupts, and mimicry
 
 The default life of a round, in one sentence: **pick spawns, start the plan,
-run it until something happens, then either the bots who were hit or the
-whole team make a new plan.**
+run it until recalled, then either the bots who were hit stay local or the
+whole team takes a new plan.** Continue is the default. A TEAM classification
+is a chance to *evaluate* the picture, not a forced replan (6.2, 9.25).
 
 That is true whether the plan came from a round-library call, from a mimicked
 team's actual demo tracks, or from the Playstyle AI itself. The machinery is
@@ -3486,18 +3768,26 @@ FOLLOW if they get back within 80 u of the tape and no enemy is in cone: a
 replan. Re-sync exists so a jiggle peek that won a fight can return to the
 execute. It is not a second brain.
 
-**Team** (Playstyle AI fires, new TeamDirective, all living bots drop the old
-tape and take new orders, typically `autonomous` under the new call):
+**Team** (the hivemind *evaluates*; a new TeamDirective only if `shouldRecall`
+says continuing is -EV, or this posture freezes when ahead):
 
-- Two or more deaths on this side, or the AWPer dies in the first 40 s.
+- Two or more deaths on this side, or the AWPer dies in the first 40 s. A 3v5
+  that is already losing may recall; a 5v5 execute that just lost its lurk
+  usually keeps walking.
 - Three or more bots already locally broken (the execute has dissolved even
   if the call has not been formally cancelled).
 - First contact at a site the plan was not hitting (T defaulting mid, CT
-  hears a B hit while stacked A).
+  hears a B hit while stacked A). Behind is a *read*. 5v5 behind keeps the
+  tape. 4v5 behind with no close match may go freestyle because the current
+  plan is already -EV.
+- A pick (enemy death), including `opportunity` (19.8). This is how VP
+  freezes a 5v4. Default does not. The old auto-keyword on `manAdv >= 2` was
+  the infamous pause-when-ahead, accidentally the default, and is banned.
 - Utility that invalidates the execute for the pack, not one body: a smoke
   wall across the rush path, a molly on the plant spot the tape was walking
   onto. The B-rush example lives here: 2 dead + banana smoked + xK through
-  the smoke ≈ 0.1 → team replan, not "the remaining three keep running in."
+  the smoke ≈ 0.1 → evaluate, and likely recall, not "the remaining three
+  keep running in" *and not* "always abort."
 - Bomb events the plan did not own (they planted against us; we planted off
   tape).
 - Execute window missed (tape clock is 20 s ahead of the bots, or live clock
@@ -4310,59 +4600,79 @@ Doctrine (20):
 
 ## 15. Build order and acceptance criteria
 
-**The 2D build is one build.** The table below is a dependency order, not a
-release schedule: everything for the 2D simulation is built together and the
-phases exist because P2 cannot be tested before P1 exists, not because P1 ships
-and then P2 ships. Read the Acceptance column as "this is how we know that piece
-works", and expect several rows to be in flight at once. The only genuinely
-sequential thing in the project is the 3D port (13), which waits for the 2D
-build to be a working whole.
+One sequence. `major.minor`, then `a`/`b` when two slices share a parent and can
+move together. Chapters (`§6.2`) are where the rule is written. Old `P*` names
+are aliases at the bottom of this section.
 
-Each phase lands with tests appended to the `npm test` chain, house-style.
+The 2D sim is one build: several IDs can be in flight at once. A later ID still
+cannot be *tested* before its parent exists. The only hard wait for a different
+product is `2.3` (the CS2 plugin), which needs `2.0` and then can run beside
+everything else.
 
-| Phase | Scope | Acceptance |
-|---|---|---|
-| **P0** (day 1) | Hidden page + guard (section 2) | artysan sees the stub; everyone else and anonymous get 404 page and 404 API; guard tests green; `/sim` does not open the trainer on Vercel or `npm run host` |
-| **P1** | `shared/sim`: constants, movement2d, navGraph, engine skeleton (freeze/live/over, no combat), encode, **spawn choice**; bake every map whose zones are ready, including the CS-style analysis pass (visibility, hiding spots, spot encounters, `earliestOccupy` per side, edge attributes) and one lattice per level on stacked maps (4.2) | Scripted bots run named-anchor paths at correct speeds on each baked map; spawn permutations never collide; the analysis bake is inspectable in an overlay and its `earliestOccupy` numbers match hand-timed runs within 0.5 s on three known routes per map; encoded round plays in the existing timeline viewer with working clock; determinism hash test; on Nuke a route from an upper anchor to a lower one exists and changes floor exactly once |
-| **P2** | Combat: weapons/damage/aim motor/sound; utility mining + effects; economy; full MR12 + OT MR3 $10k; comm delay 0.5 to 1.5 s | Scripted 5v5 rounds complete with kills, plants, payouts; aim gates harness runs; economy golden tests: loss ladder, cap, T time-expiry $0, **all four kill-award buckets**, **explode-at-40s vs elim-at-39s after the same plant**; Team POV toggle on a sim round matches knowledge tracker (5.4 test); a sound heard by one bot reaches a teammate only after the delay |
-| **P3** | Knowledge tracker, intents+masks, translator, **track follow**, **interrupt classifier**, scripted retrieval + **team-round mimic**, lineup executor; live WS + setup panel v1 | Commanded execute on each baked map → library matcher tags it ≥ 80% over 100 seeds (pre-interrupt); mimic follow vs frozen CT: median geodesic error < 60 u over first 20 s (10.4); a single isolated peek stays `local` while four teammates keep the tape; watchable live at 1x/16x with POV, ghost tape, and interrupt log |
-| **P3b** (the off-script phase) | Particle filter (5.5), exposure estimator (5.6), attention + decision latency (5.7), angle catalogue and spot-encounter bake (6.8), option layer (6.6), foresight pricing (6.7), trade/spacing/crossfire geometry (6.12), shape and role/focus (6.13), space field and backfill (6.14), trigger table (6.15), trait vector (6.16), desire arbiter with motives (6.17) | Belief beats the flow-prior baseline on held-out demos; negative information visibly deletes cleared ground in the overlay; **the scripted desire arbiter alone is a watchable CS bot**: it beats the P3 scripted planner ≥ 65%, holds shape, backfills a vacated site within 3 s, and clears spot-encounter lists in order; foresight parity test within tolerance (14.21); a bot crosses a smoke at 0:22 and refuses at 1:40 in the same scripted scenario, with the price card and motive explaining both |
-| **P3c** (the visualization phase) | Joint belief with the mined co-occupancy prior (19.2), typed threat field and the weapon-class sound percept (19.3), the visualization budget and its novelty cap (19.4, 20.11), `clearPartition` (19.5), paired two-body options and the support request (19.6), the three conservation laws and econ-conditioned priors (19.7), lurk triggers and the `opportunity` interrupt class (19.8), the death record and sacrifice gating (19.9), `sim-mine-executes.mjs` plus the repair ladder (19.10), sync anchors (19.11) | Belief calibration beats the marginal filter on `countDist` and on `pEmpty(site)` by a stated margin on held-out demos; the commitment-texture distribution sits inside the library band; an entry with a covered partition and an entry without it price differently and behave differently in the same scripted scenario; E11 to E13 run and produce stable numbers; a lurker kill visibly fires an `opportunity` replan and re-routes the carrier, with the motive string explaining the route choice |
-| **P3d** (the doctrine phase) | `zones.js` live four-class classifier (20.2), the per-map layer graph baked with the nav pass, `LayerAction` as the macro action space (20.3), `ledgers.js` (20.4), the protocol library including WICK and the block cycle (20.5), keyword presets (20.6), the five-level comm schema with negative confirmation as a comm (20.7), zone ownership and the overcall protocol (20.8), the state-dependent risk quantile (20.9), clutch masks (20.12), the solved execute assignment (20.13) | The zone overlay is watchable and a human agrees with its four-class read on sampled rounds; the bomb-in-Safe mask is never violated without a directive; WICK produces the man-count-at-contact distribution the doctrine claims, or the discrepancy is reported; commanded keywords visibly change behaviour and the log names them; `predictRoundCalibrated` on library first-pick states is compared against the 82 percent anchor and the result is reported either way; E14 and E15 run |
-| **P4** | BC: extractor, Python trainer, JS forward pass, mimic embeddings, option segmentation, `confidenceBias` fitted from pfw/pfo | BC bots beat scripted-random baseline ≥ 65%; call-validator ≥ 70% on commands; human-likeness KS within bands; surprise rates inside the two-sided band (9.8.6); page can pick `bc0` |
-| **P4b** (the plumbing phase) | The job runner (9.2b): child-process rollout pool, declared budgets, preemption by parse jobs, job list and host status in the panel. The aggregate pipeline (9.2c): incremental per-map tables, stratified sampling, staleness reporting | A generation can be started, watched, and stopped from /sim on both hosts; killing the API process leaves the job resumable; demo parse throughput is unchanged while a rollout pool runs, measured rather than assumed; a shard's `(map, side, call, econ)` histogram matches the index's; every aggregate reports its library version and the panel shows a stale one as stale |
-| **P5** | RL: rollout workers, MAPPO, reward (9.5), team spirit τ (9.10), z-conditioning (9.11), three-population league (9.12), auxiliary heads (9.14), eval harness, registry | gen1 admitted through gates (9.8) including surprise, team-play, belief and exploitability; generations selectable in UI; paired-seed Elo report stored |
-| **P5b** | Opponent modeling (6.10): tendency tracker, EXP3 over calls, antistrat reuse, enemy-belief head; decision-time search (6.11) and expert iteration (9.13) | In a 24-round match against a fixed scripted opponent with an exploitable habit, the bandit's weights move measurably and the win rate in the second half beats the first; search-versus-policy disagreements are logged and distillable |
-| **P5c** (the grading phase) | Role contracts (6.19) and live core reads (6.18); `sim-baselines.mjs` mines the per-tier pro distributions; `sim-scorecard.mjs`, `sim-exams.mjs`, the four-verdict report (9.16 to 9.19) | The BC anchor scores through the pipeline with a plausible tier verdict and a stated correction term; exams E1 to E9 run in under 10 minutes and produce stable numbers across seeds; a deliberately role-breaking agent fails the contract gate while winning on Elo, proving the gate has teeth |
-| **P5d** (the memory phase) | Situation keys (18.2), the experience index with library priors (18.3), post-round review and attribution (18.6), the Strategy AI's supervised value head and selector (18.4), the avoid-set (18.5) | Exam E10 is strictly positive: against an opponent repeating one call ten times, the second half win rate beats the first; the ablation (18.8) reports a `Δ_E`; the Memory tab shows the rows behind a call and links to the rounds that produced them; determinism hash unchanged with memory enabled |
-| **P6** | UX polish: inspector overlays, ghost tape, interrupt log, skill knobs, match archive, saving/opening rounds in the standard viewer, the Memory tab and the "what the team learned" timeline (18.9) | artysan can run a Spirit-mimic T side vs t2 CT, pause, inspect a local vs team replan, read why the call changed at round 14, save, and rewatch |
-| **P7** | Scale: curriculum C0 to C5 across every baked map, mimic retrieval quality, buy-policy sanity, PBT population and the behavior archive (9.21, 9.22), the late-round tablebase solve (18.7) | Per-map gates green; call entropy floor; eval dashboard data; the archive holds occupants in at least half its cells and PFSP samples from it; exam E2 regret against the tablebase falls generation over generation |
-| **P8** (parallel spike after P3) | CS2 server plugin proof (13.2) | Freeze `setpos` onto a chosen spawn, then one bot walks to `banana_car`, peeks, throws a mined smoke on command from the DecisionInterface |
+Each ID lands with tests on the `npm test` chain, house-style.
 
-Rough effort intuition: P0 a day; P1 to P3 are the engine month(s) and carry most
-of the deterministic-correctness burden; P3b is three to four weeks and is the
-phase that decides whether the bots are worth watching; P4 is a week once
-extraction runs; P5 is open-ended by nature (that is the research part); P5b is a
-week of very high product value for very little code; P8 is two focused weeks
-that should happen early because its result shapes how much 3D faith the rest
-deserves.
+### 15.1 The order
 
-Sequencing note: P3b before P4 is deliberate. Behaviour cloning onto the option
-vocabulary is far easier than cloning onto per-step movement heads, and the
-angle catalogue and particle filter are the inputs those labels need. Building
-BC first and retrofitting options means labelling the dataset twice.
+| ID | Do this | Spec | Status | Done when |
+|---|---|---|---|---|
+| **1.0** | Hidden `/sim` page + admin guard | §2 | done | artysan sees it; everyone else 404 |
+| **1.1** | Nav, movement, freeze/live/over, encode, spawns, map bake | §4 | done | scripted paths at real speeds; determinism hash |
+| **1.2** | Combat, aim motor, sound, utility, economy, MR12 | §4.5–4.10, §8 | done | 5v5 rounds complete with plants and payouts |
+| **2.0** | Belief tracker, translator, tape follow, interrupts, live watch | §5, §10, §6.5 | done | commanded execute tags; local peek does not abort the pack |
+| **2.1** | Desire arbiter: particles, options, foresight, shape, motives | §5.5–5.7, §6.6–6.17 | done | scripted desire is a watchable CS bot |
+| **2.2a** | Joint belief, typed threat, conservation, lurks, executes | §19 | done | `countDist` / `pEmpty` beat the marginal filter |
+| **2.2b** | Doctrine: zones, layers, ledgers, keywords, risk, clutch | §20 | done | bomb-in-Safe mask holds; keywords change behaviour |
+| **2.3** | CS2 plugin spike: `setpos`, walk, peek, throw one smoke | §13 | later | one bot does that on a real server (parallel after 2.0) |
+| **3.0** | Behaviour clone: extract, train, JS forward, `bc0` | §9.3, §9.3b | done | beats scripted-random; page can pick `bc0` |
+| **3.1** | Job runner, rollout pool, aggregate pipeline | §9.2b, §9.2c | done | start/stop a job from `/sim`; parse still wins |
+| **4.0** | Opponent model, EXP3, search, expert iteration | §6.10, §6.11, §9.13 | now | bandit weights move inside a 24-round match |
+| **4.1** | Scorecard, exams, role contracts, tier verdict | §6.18–6.19, §9.16–9.19 | now | E1–E9 stable; a role-breaker fails the contract gate |
+| **4.2a** | Experience index, situation keys, Strategy AI, avoid-set | §18.1–18.5, §18.8 | now | E10 positive; memory off does not change the hash |
+| **4.2b** | Two PRWs: log `pWin_belief`, grade with `pWin_true`, calibrate | §18.6, §18.6b, §9.14 | now | both curves on the inspector; `perc` does not move call value |
+| **4.3a** | Hivemind librarian: playbook, softmax tape, `shouldRecall`, postures | §6.2, §9.25 stage 0 | now | 5v5 behind keeps; default 5v4 walks; VP 5v4 freezes |
+| **4.3b** | Score tapes with the value head; IGL JSONL; playstyle net last | §9.25 stages 1–4 | now | `strategyCall` is a prior; playstyle JSON ≠ `bc0` |
+| **4.4** | Inspector: ghost tape, interrupt log, Memory tab, save/rewatch | §11, §18.9 | now | pause a mimic match, read why the call changed, rewatch |
+| **5.0** | RL: MAPPO, team spirit, league, aux heads, gen1 gates | §9.4–9.12 | later | gen1 admitted; Elo vs parent stored |
+| **5.1** | Curriculum every map, PBT, behaviour archive, tablebase | §9.7, §9.21–9.22, §18.7 | later | per-map gates; archive occupied; E2 regret falls |
 
-The same argument extends to P3c and P3d, and more strongly. P3c changes the
-belief's data structure, so every observation block and every BC label that
-reads belief summaries would have to be rebuilt if it landed after P4. P3d
-changes the *macro action space* from a per-map string to a map-independent
-layer action, and behaviour cloning onto the wrong action space is the single
-most expensive mistake available in this project: it would produce a Playstyle
-net that has learned seven vocabularies instead of one theory, and no amount of
-later training fixes a bad action space. Both phases are therefore ordered
-before any cloning happens. P3c is roughly two weeks on top of P3b, P3d is three
-to four, and P3d is the phase that decides whether the bots are *calling* rounds
-or merely playing them.
+`a`/`b` siblings: `2.2a` and `2.2b` both follow `2.1`. `4.2a` and `4.2b` both
+follow `4.0`. `4.3a` is the caller that already runs; `4.3b` is how it learns.
+
+### 15.2 Why this order
+
+- **2 before 3.** Clone onto options and a joint belief, not onto raw WASD and a
+  belief you are about to throw away.
+- **4 before 5.** A caller that freezes every 5v4, or a value head that cannot
+  tell believed PRW from true PRW, will poison RL. The librarian and the two
+  PRWs have to exist as the prior.
+- **4.3a before 4.3b.** Softmax over winning tapes is generation 0. The net is
+  not the gate. Same mistake as cloning the macro action space too early.
+- **2.3 whenever, after 2.0.** It answers whether the DecisionInterface ports.
+  It does not block 3 or 4.
+
+### 15.3 Old P-names
+
+| Old | Now |
+|---|---|
+| P0 | 1.0 |
+| P1 | 1.1 |
+| P2 | 1.2 |
+| P3 | 2.0 |
+| P3b | 2.1 |
+| P3c | 2.2a |
+| P3d | 2.2b |
+| P4 | 3.0 |
+| P4b | 3.1 |
+| P5 | 5.0 |
+| P5b | 4.0 |
+| P5c | 4.1 |
+| P5d | 4.2a + 4.2b |
+| P5e | 4.3a + 4.3b |
+| P6 | 4.4 |
+| P7 | 5.1 |
+| P8 | 2.3 |
+
+Briefs `0.7` / `0.8` are not IDs. They are why `4.3` and `4.2b` exist.
 
 ---
 
@@ -4449,9 +4759,10 @@ Resolved in the fourth pass (the twenty questions):
     tracker supplies the fast, low-sample in-match updates the scan cannot make.
 27. **In-round knowledge is what the team sees and hears** (5.1, 5.2). Pooled
     across teammates with the comm delay. Nothing else.
-28. **Post-round knowledge is PRW and PFW, not positions** (18.6). A team reviews
-    the round in the currency of the models: where the round was won and lost,
-    and which fights were good or bad. It does not get the enemy's coordinates.
+28. **Post-round knowledge is PRW and PFW, not positions** (18.6, 18.6b). A team
+    reviews the round in the currency of the models: believed PRW, true PRW, the
+    residual, and which fights were good or bad. It does not get the enemy's
+    coordinates. The residual calibrates the next similar picture.
 29. **A dead bot sees what living teammates see** (5.8). Spectating adds no new
     percepts to the team, because it is a view of the same players. What it adds
     is thinking time, and that is what the plan gives it.
@@ -4602,6 +4913,32 @@ Resolved in the seventh pass (operations):
     PyTorch on the 4090, exported as JSON, after the extract is honest
     (knowledge tracker, not pose-only zeros).
 
+Resolved in the eighth pass (the hivemind):
+
+76. **Plans in motion stay in motion until recalled** (6.2, 10.2). Continue is
+    the default. A TEAM classification is an evaluation, not a new directive.
+    Behind is a read. Default does not freeze a 5v4.
+77. **Freeze-when-ahead is a posture** (6.2, 20.6). VP / Freeze / INFURITY pause
+    on a man advantage. Liquid sits between. Thresholds and jitter live in
+    `CALLER_POSTURE`. The auto-keyword on `manAdv >= 2` is banned.
+78. **Generation 0 Playstyle is the playbook librarian** (9.25). Softmax over
+    winning tapes, `shouldRecall` as the gate, `matchSituation` as the answer
+    book. The 200 k-parameter net is stage 4, after a value head and EXP3, and
+    it is a separate registry artifact from the individual JSON.
+79. **Hivemind credit is round-level, never a flick** (9.6, 9.25). IGL rows
+    carry `attrib: call | exec | perc`. Only call updates situation value. Evolution
+    may mutate playstyle weights, posture, and temperature; it may not train
+    the caller and the five bots as one animal.
+
+Resolved in the ninth pass (the why):
+
+80. **Live PRW is believed; true PRW is a training label** (18.6b). Decisions
+    log `pWin_belief`. After the round, `predictRoundCalibrated` on the encoded
+    tick is `pWin_true`. The residual calibrates `pictureWinrate` by situation
+    key and trains the belief-value head. True positions never enter the live
+    filter (5.4). Cloning teaches what; this residual teaches why the picture
+    was worth what the bot thought.
+
 ---
 
 ## 17. Prior art: bots that work in other games
@@ -4722,9 +5059,34 @@ directly, including the two details that look like trivia and are not: the nil
 fallback, which is the cleanest scripted-to-learned seam anyone has shipped, and
 the motive string, which is the entire debugging story of the /sim page.
 
-**OpenAI Five** is the other Dota lesson and lives in 9.10: five agents on one
-reward need team spirit annealed from selfish to selfless, or early training has
-no usable credit signal.
+**OpenAI Five** is the other Dota lesson, and it is larger than team spirit
+(9.10). The public tutorial code ([DPPO on Gym](https://github.com/llSourcell/OpenAI_Five_vs_Dota2_Explained))
+is not Five; it is clipped PPO with rollout workers. Five itself was five
+shared-weight agents, each an LSTM on its own fog-of-war observation, trained
+with PPO on the true win plus a handful of shaping terms, at a scale we will
+never match (on the order of a century of self-play per day). What transfers,
+and what does not:
+
+| Five | Ours |
+|---|---|
+| The *why* is the value function, trained on actual returns. Imitation was not the product | BC is G0 (9.3b). The why, live, is ΔPRW from the picture (6.7). The why, after the round, is `pWin_true − pWin_belief` (18.6b) |
+| Five independent actors, shared weights, role via observation | Same (6.3) |
+| Team spirit τ annealed 0.3 → 1.0 so five agents on one reward have a credit signal early | 9.10, unchanged |
+| Each hero sees fog, not the map | Knowledge tracker, 5.4. The critic may see more *only in the loss* |
+| Self-play from scratch at industrial scale | Banned in 17.8. We have 3,500 human rounds; random flailing is not a substitute |
+| Reward shaping on kills, towers, barracks | xK wheels that anneal off (9.5). Same shape, different game |
+| Independent PPO, same obs for actor and critic | We can do better on a home GPU: a **privileged label**, not a privileged actor. `pWin_true` is computed after the round from the encoded tick, the way we already score demos. It never reaches `tick()` |
+
+The CS research the ninth pass is answering (Cambridge 2021, CSKnow, and every
+demo-cloned deathmatch bot) stopped at Five's missing half: they cloned the
+action and never trained a value on a return. Five's half that we cannot copy
+is the compute. The half we can copy, and that those projects did not, is:
+**decisions are justified by a predicted win, then graded by a truer one.**
+
+A 2v3 afterplant that was not in the HLTV set is the ceiling of cloning. It is
+not a ceiling of PRW: hold, peek, and defuse still have prices under the
+picture the bots actually hold. If that picture was wrong, 18.6b is how they
+find out, as a residual on a situation, not as a replay of where the CTs stood.
 
 ### 17.5 StarCraft II: managers, combat simulation, and the league
 
@@ -4773,7 +5135,7 @@ limits on action rate and camera so the result means something (5.7, 8).
 | **GT Sophy** | Human-likeness as a hard term inside training, not a filter after it | 8.3, 9.8 |
 | **Left 4 Dead AI Director** | Pacing as a designed dial, for practice modes only | 11.4 |
 
-### 17.7 The five ideas that matter most
+### 17.7 The ideas that matter most
 
 **Run at space, not at the ball** (FIFA 17). Everything else in this plan is
 contact-reactive. This is the one change that makes five bots look like a team
@@ -4789,6 +5151,12 @@ clearing while walking, for one offline pass and zero learning.
 **Attributes wired to mechanisms, not a difficulty slider** (Football Manager). It
 is how "t2 team" becomes a personality instead of a handicap, and how the aim
 envelope stays sealed while everything else stays adjustable.
+
+**The value function is the why; the privileged residual is how a POMDP
+learns it** (OpenAI Five's half we can copy, plus 18.6b). Cloning the action
+is G0. Pricing the action in believed PRW is the live why. Grading that price
+against true PRW after the round is how a 2v3 that was not in the demos still
+has a lesson.
 
 **League with exploiters and `z` conditioning** (AlphaStar). Self-play against your
 own latest checkpoint polishes one strategy forever; in CS that looks like ten bots
@@ -4979,6 +5347,10 @@ Three components, in the order they are built:
    fine-tuning the head against the economy plan's long-horizon effects. Small,
    slow, and only worth doing once the first two are stable.
 
+The same head is the caller's score at freeze and at recall (9.25 stage 1).
+Strategy tilts the *next* round; Playstyle ranks tapes *inside* this one. They
+share memory and they do not share a trainer.
+
 The architectural point that makes the whole scheme work: **the retrieved
 statistics are inputs to the network.** The Strategy AI sees `n`, the lower
 bound, the recency, the scope, and the attribution split for each candidate call
@@ -5002,11 +5374,12 @@ avoid-set from finding it.
    decision if its lower bound is materially below the library prior for the
    same key. Small-sample misery is noise, and noise should not change a call.
 3. **Attribution gates the update.** Losing in a situation does not make the
-   situation bad. It may mean somebody whiffed. Only losses the review
-   attributes to the *call* update the situation's value; losses attributed to
-   *execution* go to the mistake ledger and the training queue instead (18.6).
-   This is the single most important rule in the memory design: without it, the
-   Strategy AI learns to avoid every situation its worst bot has ever died in.
+   situation bad. It may mean somebody whiffed, or that the picture was wrong.
+   Only losses the review attributes to the *call* update the situation's value;
+   `exec` goes to the mistake ledger and the training queue; `perc` goes to the
+   calibration table (18.6b). This is the single most important rule in the
+   memory design: without it, the Strategy AI learns to avoid every situation
+   its worst bot has ever died in, or every situation it once misread.
 4. **Optimism keeps the team curious.** A UCB bonus on rarely-visited keys, so
    the index cannot ossify around generation-0 opinions and can discover that
    the B hit works now that the anchor rotates earlier.
@@ -5050,9 +5423,12 @@ So after every round, both teams run the review:
    quality, and synchronization flags go to the offending bot's ledger; praise
    flags go there too, because reinforcing what worked is half of learning and
    the repo already detects it.
-2. **Find where the round was lost.** Walk the PRW timeline
-   (`winProbability.js`, `roundDecided.js`) and take the k largest drops. Those
-   moments are the round, and everything else is context.
+2. **Find where the round was lost.** Walk **both** PRW timelines (18.6b).
+   The true timeline (`winProbability.js` / `predictRoundCalibrated` on the
+   encoded round) is where the round actually dropped. The believed timeline
+   is what the hivemind thought at each logged decision. The k largest *true*
+   drops are still the moments; the residual at those moments is the perception
+   lesson.
 3. **Ask what should have happened.** At the decision point preceding each drop,
    run the search (6.11) offline with a generous budget, and record its
    distribution. This is the **regret log**, and it is simultaneously the
@@ -5082,6 +5458,75 @@ available at the next freeze, and changing that angle is a concrete decision.
 Across generations, the ledger is a dataset, and the rules it counts are the
 same rules that grade the generation (9.17), so improving the grade and
 improving the play are the same activity by construction.
+
+### 18.6b The two PRWs: how a team learns that it was wrong
+
+BC teaches *what*. ΔPRW at decision time is *why*, given the picture. The
+ceiling on cloning is real: a hyper-specific 2v3 afterplant that was not in
+the library has no nearest demo. The ceiling on ΔPRW is different, and it is
+almost always **perception**: the option was priced honestly on a picture that
+was not the round.
+
+So every priced decision (Individual arbiter at 8 Hz is too dense; log the
+team frame, every recall, every plant/death/opportunity) writes a row while
+the round is live:
+
+```
+{
+  tick, situation, picture,          // what we knew and estimated (6.2)
+  pWin_belief, fightEv,              // pictureWinrate / fightEV
+  decision, motive,                  // freeze / delay / turn / option id
+  attrib: null                       // filled in review
+}
+```
+
+After the round, the encoded tick is a demo. Run the **same** PRW model
+(`predictRoundCalibrated`, or `winProbability` on `roundFeatures` built from
+true alive counts, bomb, kit, site occupancy) at each logged tick. That number
+is `pWin_true`. It is god-view in the same way a VOD review is god-view, and
+it is allowed here for the same reason 9.5's potentials may read engine state:
+**training-only, never an actor input.**
+
+```
+residual = pWin_true − pWin_belief
+```
+
+Three uses, and they are not the same thing:
+
+1. **Perception calibration.** A residual of −0.25 with high `pEmpty(site)`
+   and no sweep means the picture was overconfident, not that the call was
+   stupid. Write a bias, keyed by situation, into the experience index:
+   `calibrations[key] = mean residual`. Live, `pictureWinrate` adds that bias
+   (clamped, Wilson-gated like every other memory, 18.3). Round 10's particle
+   filter still does not know where anyone stood in round 9. It knows that
+   *this kind of picture* has been 12 points too high. That is a number on a
+   situation, which 18.6 already permits.
+2. **Attribution gets a third bucket.** 18.6's walk already splits `call` vs
+   `exec`. Add `perc`: the believed ranking of options matched the true
+   ranking, but `pWin_belief` was off by more than a margin. The hivemind is
+   not punished for freezing a 5v4 it *believed* was 80% when truth was 78%.
+   It *is* told, as calibration, when it believed 80% and truth was 51%
+   because the site it had empty was full. `shouldRecall` keeps using
+   `pWin_belief`; the next similar picture is a better `pWin_belief`.
+3. **The belief-value aux head** (9.14) trains on `pWin_true`, not on W/L.
+   One float per decision, from the library (replay the knowledge tracker on
+   demos, score true PRW on the same ticks) and from self-play. This is how
+   G0, which is still a clone, acquires a *why* without waiting for PPO: the
+   clone proposes, the calibrated value ranks.
+
+What this must not become:
+
+- A dump of true enemy positions into the filter. 5.4 fails, the POV overlay
+  lies, and the next round's lurk is a cheat.
+- A replacement for ΔPRW at decision time. Live, the bot still maximizes
+  believed PRW. Calibration changes the *input* to that maximization, slowly.
+- A second round-library. The chaotic 2v3 is still priced from the picture
+  plus the tablebase (18.7) when the abstraction fits. The residual only
+  answers "was that picture's value honest."
+
+The inspector shows both curves on the same clock, believed vs true, and the
+motive string already in the log. That is the "why" a human can read, and it
+is the same "why" the hivemind uses to re-call.
 
 ### 18.7 The late-round tablebase
 

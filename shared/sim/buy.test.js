@@ -5,7 +5,7 @@
 // allowed to buy, somebody eventually holds an AWP, and a broke side saves
 // together instead of buying five half-buys.
 
-import { buyFor, buySide, KEVLAR, HELMET_KIT, RIFLES, SMGS } from './buy.js';
+import { buyFor, buySide, econBucketOf, KEVLAR, HELMET_KIT, RIFLES, SMGS } from './buy.js';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
@@ -114,6 +114,25 @@ function assert(cond, msg) {
     t.grenades.filter((g) => g === 'flashbang').length <= 2,
     'and no more than two flashes, which is the real limit'
   );
+}
+
+{
+  const pistols = Array.from({ length: 5 }, () => ({
+    weapon: 'glock',
+    armor: 0,
+    helmet: false,
+    grenades: []
+  }));
+  assert(econBucketOf(pistols) === 0, 'pistols-only is bucket 0');
+  const rifles = Array.from({ length: 5 }, () => ({
+    weapon: 'ak47',
+    armor: 100,
+    helmet: true,
+    grenades: ['flashbang', 'smokegrenade']
+  }));
+  assert(econBucketOf(rifles) === 4, 'five rifles is a full buy');
+  const withAwp = rifles.map((b, i) => (i === 0 ? { ...b, weapon: 'awp' } : b));
+  assert(econBucketOf(withAwp) === 5, 'and an AWP on a full buy is bucket 5');
 }
 
 console.log('buy: ok (side legality, the AWP, team saves, utility rules)');

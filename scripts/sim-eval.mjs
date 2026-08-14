@@ -21,6 +21,7 @@ import { navGraphFromBake } from '../shared/sim/navGraph.js';
 import { loadAngles } from '../shared/sim/angles.js';
 import { playVersusMatch, scriptedController } from '../shared/sim/versusMatch.js';
 import { desireController } from '../shared/sim/desireBot.js';
+import { loadPlaybook, loadKnowledgeBake } from '../server/sim/bakes.js';
 import { loadPolicy } from '../shared/sim/policy.js';
 import { entropy, ksDistance, surpriseBand } from '../shared/sim/surprise.js';
 import { validatorRate } from '../shared/sim/callValidator.js';
@@ -53,11 +54,11 @@ function modelPath(name) {
   return path.join(REPLAY_ROOT, 'sim', 'models', `${name}.json`);
 }
 
-async function brainFactory(name, angles) {
+async function brainFactory(name, angles, playbook, knowledge) {
   if (name === 'scripted') return scriptedController;
-  if (name === 'desire') return desireController({ angles });
+  if (name === 'desire') return desireController({ angles, playbook, knowledge });
   const json = JSON.parse(await fs.readFile(modelPath(name), 'utf8'));
-  return desireController({ angles, policy: loadPolicy(json) });
+  return desireController({ angles, policy: loadPolicy(json), playbook, knowledge });
 }
 
 function wilson(wins, n) {
@@ -81,8 +82,10 @@ async function main() {
   for (const MAP of MAPS) {
     const graph = navGraphFromBake(await load('navcache', MAP));
     const angles = loadAngles(await load('angles', MAP));
-    const challenger = await brainFactory(MODEL, angles);
-    const baseline = await brainFactory(BASELINE, angles);
+    const playbook = (await loadPlaybook(MAP))?.index || null;
+    const knowledge = (await loadKnowledgeBake(MAP))?.knowledge || null;
+    const challenger = await brainFactory(MODEL, angles, playbook, knowledge);
+    const baseline = await brainFactory(BASELINE, angles, playbook, knowledge);
 
     let mapWins = 0;
     let kills = 0;

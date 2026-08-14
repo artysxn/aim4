@@ -28,6 +28,8 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { ROOT as REPLAY_ROOT } from '../replays/demoStore.js';
+import { indexPlaybook } from '../../shared/sim/playbook.js';
+import { loadKnowledge } from '../../shared/sim/knowledgeBake.js';
 
 const gunzip = promisify(zlib.gunzip);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -66,6 +68,70 @@ export async function loadBake(kind, map) {
     try {
       const bake = await readJson(c.file);
       const out = { bake, source: c.source };
+      cache.set(key, out);
+      return out;
+    } catch {
+      /* try the next source */
+    }
+  }
+  return null;
+}
+
+/**
+ * Winning-round tapes for one map, indexed. JSONL, one PlaybookEntry per line.
+ * Same local-wins-over-shipped rule as the geometry bakes.
+ *
+ * @returns {Promise<{index: object, source: 'local'|'shipped', size: number}|null>}
+ */
+export async function loadPlaybook(map) {
+  const key = `playbook:${map}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+
+  const candidates = [
+    { file: path.join(LOCAL_DIR, 'playbook', `${map}.jsonl`), source: 'local' },
+    { file: path.join(SHIPPED_DIR, 'playbook', `${map}.jsonl`), source: 'shipped' }
+  ];
+
+  for (const c of candidates) {
+    try {
+      const text = await fsp.readFile(c.file, 'utf8');
+      const entries = [];
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue;
+        const e = JSON.parse(line);
+        if (e?.roles) entries.push(e);
+      }
+      const out = { index: indexPlaybook(entries), source: c.source, size: entries.length };
+      cache.set(key, out);
+      return out;
+    } catch {
+      /* try the next source */
+    }
+  }
+  return null;
+}
+
+/**
+ * Mined per-position tables for one map.
+ *
+ * @returns {Promise<{knowledge: object, source: 'local'|'shipped'}|null>}
+ */
+export async function loadKnowledgeBake(map) {
+  const key = `knowledge:${map}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+
+  const candidates = [
+    { file: path.join(LOCAL_DIR, 'knowledge', `${map}.json`), source: 'local' },
+    { file: path.join(SHIPPED_DIR, 'knowledge', `${map}.json.gz`), source: 'shipped' },
+    { file: path.join(SHIPPED_DIR, 'knowledge', `${map}.json`), source: 'shipped' }
+  ];
+
+  for (const c of candidates) {
+    try {
+      const bake = await readJson(c.file);
+      const out = { knowledge: loadKnowledge(bake), source: c.source };
       cache.set(key, out);
       return out;
     } catch {

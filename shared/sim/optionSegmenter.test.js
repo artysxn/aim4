@@ -9,7 +9,7 @@
 //   channels outrank feet, and clip the segments they overlap
 //   every label is a real option id, and coverage is honest
 
-import { coverage, segmentTrack } from './optionSegmenter.js';
+import { coverage, optionAt, segmentTrack } from './optionSegmenter.js';
 import { OPTION_DEFS } from './options.js';
 
 function assert(cond, msg) {
@@ -158,6 +158,63 @@ function track(steps, stepSeconds = 0.125) {
 
   const again = segmentTrack({ poses, events: [] });
   assert(JSON.stringify(again) === JSON.stringify(segs), 'deterministic');
+}
+
+// ---- lurk, trade, execute_entry, spacing --------------------------------------
+
+function teammateTrack(x, y, seconds, stepSeconds = 0.125) {
+  const poses = [];
+  let tick = 0;
+  const n = Math.round(seconds / stepSeconds);
+  for (let i = 0; i <= n; i += 1) {
+    poses.push({ tick, x, y });
+    tick += stepSeconds * RATE;
+  }
+  return poses;
+}
+
+{
+  const me = track([['move', 600, 0, 3]]);
+  const far = teammateTrack(0, 2500, 3);
+  const segs = segmentTrack({ poses: me, teammates: [far] });
+  assert(
+    segs.some((s) => s.option === 'lurk'),
+    `isolated from the pack is a lurk (${segs.map((s) => s.option).join(',')})`
+  );
+  assert(segs.some((s) => s.detail?.spacing), 'and the spacing is on the move');
+}
+
+{
+  const poses = track([['move', 500, 0, 2]]);
+  const deaths = [{ tick: 0, x: 400, y: 0 }];
+  const segs = segmentTrack({ poses, deaths, teammates: [teammateTrack(0, 0, 2)] });
+  assert(
+    segs.some((s) => s.option === 'trade'),
+    `moving toward a recent teammate death is a trade (${segs.map((s) => s.option).join(',')})`
+  );
+}
+
+{
+  const me = track([['move', 800, 0, 3]]);
+  const t1 = teammateTrack(50, 40, 3);
+  const t2 = teammateTrack(-30, 20, 3);
+  const segs = segmentTrack({
+    poses: me,
+    teammates: [t1, t2],
+    site: { x: 2000, y: 0 }
+  });
+  assert(
+    segs.some((s) => s.option === 'execute_entry'),
+    `a pack walking the site is execute_entry (${segs.map((s) => s.option).join(',')})`
+  );
+}
+
+{
+  const poses = track([['move', 400, 0, 2]]);
+  const segs = segmentTrack({ poses, teammates: [teammateTrack(80, 0, 2)] });
+  const hit = optionAt(segs, poses[Math.floor(poses.length / 2)].tick);
+  assert(hit && hit.option === 'advance', 'optionAt finds the covering segment');
+  assert(optionAt(segs, -1) == null, 'and misses ticks before the track');
 }
 
 console.log('optionSegmenter: ok');

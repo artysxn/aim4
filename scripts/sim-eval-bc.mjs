@@ -42,6 +42,7 @@ import { loadAngles } from '../shared/sim/angles.js';
 import { playVersusMatch, scriptedController } from '../shared/sim/versusMatch.js';
 import { desireController } from '../shared/sim/desireBot.js';
 import { loadPolicy } from '../shared/sim/policy.js';
+import { loadPlaybook, loadKnowledgeBake } from '../server/sim/bakes.js';
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
@@ -142,8 +143,15 @@ async function main() {
   for (const map of MAPS) {
     const graph = navGraphFromBake(await load('navcache', map));
     const angles = loadAngles(await load('angles', map));
-    const candidate = policy ? desireController({ angles, policy }) : desireController({ angles });
-    const baseline = BASELINE === 'scripted' ? scriptedController : desireController({ angles });
+    const playbook = (await loadPlaybook(map))?.index || null;
+    const knowledge = (await loadKnowledgeBake(map))?.knowledge || null;
+    const candidate = policy
+      ? desireController({ angles, policy, playbook, knowledge })
+      : desireController({ angles, playbook, knowledge });
+    const baseline =
+      BASELINE === 'scripted'
+        ? scriptedController
+        : desireController({ angles, playbook, knowledge });
 
     let wins = 0;
     let candRoundsTotal = 0;

@@ -18,6 +18,9 @@ import { playVersusMatch, scriptedController } from './versusMatch.js';
 import { desireController } from './desireBot.js';
 import { navGraphFromBake } from './navGraph.js';
 import { loadAngles } from './angles.js';
+import { indexPlaybook } from './playbook.js';
+import { loadKnowledge } from './knowledgeBake.js';
+import { KNOWLEDGE_VERSION } from './demoContracts.js';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
@@ -113,6 +116,104 @@ if (!graph) {
       different.log.length === first.log.length &&
       different.log.every((d, i) => d.tick === first.log[i]?.tick && d.id === first.log[i]?.id);
     assert(!sameScore, 'a different seed plays a different match');
+  }
+
+  // ---- a tiny playbook is followed, not just loaded ---------------------------
+
+  {
+    const tSpawn = graph.spawns.find((s) => s.side === 'T') || { x: 0, y: 0 };
+    const ctSpawn = graph.spawns.find((s) => s.side === 'CT') || { x: 0, y: 0 };
+    const near = (origin) =>
+      [...graph.anchors.values()]
+        .map((a) => ({ id: a.id, d: Math.hypot(a.world.x - origin.x, a.world.y - origin.y) }))
+        .sort((a, b) => a.d - b.d)
+        .slice(0, 5)
+        .map((a) => a.id);
+    const tIds = near(tSpawn);
+    const ctIds = near(ctSpawn);
+    const rolesOf = (ids, side) =>
+      ids.map((id, i) => ({
+        contract: id,
+        steamId: `${side}${i}`,
+        awp: i === 3,
+        waypoints: [
+          [0, id],
+          [8, id]
+        ],
+        utility: []
+      }));
+    const playbook = indexPlaybook([
+      {
+        id: 'tiny-t',
+        map: 'INF',
+        side: 'T',
+        call: 'default',
+        econ: 4,
+        plant: { site: tIds[0], t: 40 },
+        firstContact: { t: 12, rel: 'front' },
+        roles: rolesOf(tIds, 'T')
+      },
+      {
+        id: 'tiny-ct',
+        map: 'INF',
+        side: 'CT',
+        call: 'default',
+        econ: 4,
+        plant: null,
+        firstContact: { t: 10, rel: 'front' },
+        roles: rolesOf(ctIds, 'CT')
+      }
+    ]);
+    const knowledge = loadKnowledge({
+      v: KNOWLEDGE_VERSION,
+      map: 'INF',
+      rounds: 20,
+      wonRounds: 20,
+      tables: {
+        [`INF|T|default|${tIds[0]}`]: {
+          n: 20,
+          occupancy: [{ anchor: tIds[0], share: 0.8, yaw: 45, seconds: 6 }],
+          utility: [],
+          spacing: { [tIds[1]]: { n: 12, mean: 600, sd: 40, p10: 500, p50: 600, p90: 700 } }
+        },
+        [`INF|CT|default|${ctIds[0]}`]: {
+          n: 20,
+          occupancy: [{ anchor: ctIds[0], share: 0.7, yaw: 90, seconds: 8 }],
+          utility: [],
+          spacing: {}
+        }
+      }
+    });
+    const playTaped = (seed) => {
+      const result = playVersusMatch({
+        graph,
+        angles,
+        map: 'INF',
+        controllerA: desireController({ angles, playbook, knowledge }),
+        controllerB: scriptedController,
+        seed,
+        maxRounds: 2
+      });
+      const log = result.rounds.flatMap((r) => r.brainLogs?.A || []);
+      return { ...result, log };
+    };
+    const taped = playTaped(11);
+    assert(taped.rounds.length === 2, 'a playbook match completes');
+    assert(taped.winsA + taped.winsB === 2, 'and the score adds up');
+    assert(
+      taped.log.some((d) => typeof d.motive === 'string' && d.motive.startsWith('tape:')),
+      'a bot followed the tape'
+    );
+    const tapedAgain = playTaped(11);
+    assert(tapedAgain.log.length === taped.log.length, 'the same seed with a playbook matches');
+    for (let i = 0; i < taped.log.length; i += 1) {
+      assert(
+        tapedAgain.log[i].tick === taped.log[i].tick &&
+          tapedAgain.log[i].id === taped.log[i].id &&
+          tapedAgain.log[i].slot === taped.log[i].slot,
+        `playbook decision ${i} identical under the seed`
+      );
+    }
   }
 
   console.log('desireBot: ok (4 rounds vs the scripted baseline on the baked Inferno)');

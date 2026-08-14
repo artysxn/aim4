@@ -34,7 +34,7 @@
 /** Bumped when a table's meaning changes, so a stale bake is refused loudly. */
 export const KNOWLEDGE_VERSION = 1;
 /** Bumped when the sample schema changes. The trainer refuses a mismatch. */
-export const DEMO_DATASET_VERSION = 1;
+export const DEMO_DATASET_VERSION = 2;
 
 /**
  * The key every table and every sample is filed under.

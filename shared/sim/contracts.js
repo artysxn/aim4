@@ -139,6 +139,18 @@ export function assignContracts({ map, side, slots = [0, 1, 2, 3, 4] } = {}) {
   });
 }
 
+/**
+ * The seat that buys the AWP: the slot whose teamPositions name is AWPer.
+ * Falls back to the third seat when a map has no AWP column, matching the
+ * old hardcoded index rather than inventing a new one.
+ */
+export function awpSlotOf({ map, side, slots = [0, 1, 2, 3, 4] } = {}) {
+  const positions = positionsFor(side, String(map || '').toUpperCase());
+  const i = positions.findIndex((p) => /awp/i.test(p));
+  const idx = i >= 0 ? i : Math.min(2, Math.max(0, slots.length - 1));
+  return slots[idx];
+}
+
 export { POSITIONS, positionsFor };
 
 function targetOf(params) {

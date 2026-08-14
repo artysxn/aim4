@@ -46,7 +46,8 @@ import {
   heDamage,
   inFire,
   isActive,
-  smokeBlocks
+  smokeBlocks,
+  throwLineup as lineupInFlight
 } from './grenades.js';
 import { seekDirection, stepBody, unit } from './movement2d.js';
 import { BODY_RADIUS } from './constants.js';
@@ -71,6 +72,9 @@ export const END_REASON = Object.freeze({
   T_ELIMINATED: 't_eliminated',
   CT_ELIMINATED: 'ct_eliminated'
 });
+
+/** How close the thrower must stand to a mined `from` before the lineup leaves the hand. */
+export const LINEUP_FROM_UNITS = 160;
 
 /**
  * One body. Mirrors SIM-PLAN 4.3, minus the fields P2 adds (ammo, channels
@@ -985,6 +989,62 @@ export function createEngine(cfg) {
         fromX: body.pos.x,
         fromY: body.pos.y,
         detonateTick
+      });
+      pendingSounds.push(
+        emit({
+          type: SOUND.GRENADE,
+          x: body.pos.x,
+          y: body.pos.y,
+          level: body.level,
+          slot,
+          side: body.side,
+          tick: state.tick
+        })
+      );
+      return true;
+    },
+
+    /**
+     * Throw a mined lineup: land at `at` after `travelTicks`, which is a
+     * measurement from a real demo rather than an ad-hoc fuse. The thrower
+     * has to be near `from` (the tape walked them there); a molly at the
+     * feet still goes through throwGrenade.
+     */
+    throwLineup(slot, { type, from = null, at, travelTicks }) {
+      const body = bodies[slot];
+      if (!body?.alive || body.channel) return false;
+      if (state.phase !== PHASE.LIVE) return false;
+      if (!at || !Number.isFinite(at.x) || !Number.isFinite(at.y)) return false;
+      const i = body.grenades.indexOf(type);
+      if (i < 0) return false;
+      if (from && Number.isFinite(from.x) && Number.isFinite(from.y)) {
+        if (Math.hypot(body.pos.x - from.x, body.pos.y - from.y) > LINEUP_FROM_UNITS) return false;
+      }
+      const travel = Math.max(1, Math.round(Number(travelTicks) || 0));
+      body.grenades.splice(i, 1);
+      const flight = lineupInFlight(
+        { id: 'copied', type, from: from || { x: body.pos.x, y: body.pos.y }, at, travelTicks: travel },
+        { tick: state.tick, thrownBy: slot, side: body.side, level: body.level }
+      );
+      state.nades.push({
+        type: flight.type,
+        x: flight.at.x,
+        y: flight.at.y,
+        level: flight.level,
+        thrownBy: flight.thrownBy,
+        side: flight.side,
+        throwTick: flight.throwTick,
+        detonateTick: flight.detonateTick
+      });
+      log('grenade_throw', {
+        slot,
+        nade: type,
+        x: flight.at.x,
+        y: flight.at.y,
+        fromX: (from || body.pos).x,
+        fromY: (from || body.pos).y,
+        detonateTick: flight.detonateTick,
+        lineup: true
       });
       pendingSounds.push(
         emit({

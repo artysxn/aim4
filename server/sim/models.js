@@ -68,6 +68,16 @@ function adaptPolicyNet(net) {
         contract: c.contract,
         player: c.player
       });
+    },
+    forward(obs, ctx = {}) {
+      const c = typeof ctx === 'string' ? { player: ctx } : ctx;
+      return net.forward(obs, {
+        history: c.history || [],
+        map: c.map,
+        call: c.call,
+        contract: c.contract,
+        player: c.player
+      });
     }
   };
 }

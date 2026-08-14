@@ -27,6 +27,7 @@
 
 import {
   ADHOC_THROW_MAX,
+  BOMB_SECONDS,
   DECISION_EVERY_TICKS,
   FREEZE_SECONDS,
   ROUND_SECONDS,
@@ -65,7 +66,7 @@ import { budgetDecision } from './voi.js';
 import { CommBus, LEVEL, willSay } from './comms.js';
 import { clutchMask, maskInitiation, riskQuantile } from './clutch.js';
 import { ProtocolRunner, protocolInitiationSet } from './protocols.js';
-import { classifyEvent, INTERRUPT } from './interrupts.js';
+import { classifyEvent, INTERRUPT, shouldPromote } from './interrupts.js';
 import { keywordPreset, applyKeyword } from './keywords.js';
 import { buildLayerGraph, legalLayerActions, pickLayerAction, libraryLabel, PROTOCOL_BODIES } from './layers.js';
 import { assignZoneOwners, roleInZone } from './ownership.js';
@@ -75,11 +76,14 @@ import { assignExecute, repairLadder } from './execute.js';
 import { catalogFor, templateFor } from './executeCatalog.js';
 import { TendencyTracker, Exp3Bandit, banditKey, econBucket, mixPolicyExp3 } from './opponentModel.js';
 import { decisionSearch, ExpertIterLog } from './search.js';
-import { assignContracts, maskByContract, reassignOnDeath } from './contracts.js';
+import { assignContracts, maskByContract, reassignOnDeath, awpSlotOf } from './contracts.js';
 import { ownCore, enemyCoreFromBelief } from './cores.js';
 import { situationKey, shapeFromCore } from './situationKey.js';
 import { ExperienceIndex } from './experience.js';
 import { StrategyAI } from './strategy.js';
+import { createCaller, CALLER_MODE, TAPE_ERROR_SECONDS, TAPE_ERROR_UNITS, pictureWinrate, shapeRole } from './caller.js';
+import { clockCovers } from './knowledgeBake.js';
+import { econBucketOf } from './buy.js';
 
 /** Layer protocol names are dash form; the runner speaks underscore ids (20.3, 20.5). */
 const LAYER_PROTOCOL = Object.freeze({
@@ -89,6 +93,181 @@ const LAYER_PROTOCOL = Object.freeze({
 });
 /** Options that walk the bomb out of Safe. Execute is the exception. */
 const LEAVES_SAFE = Object.freeze(['take_space', 'rotate', 'flank', 'advance', 'lurk']);
+/** Geodesic gap (knowledge spacing mean) above which a contract plays lurk. */
+const LURK_SPACING_UNITS = 1400;
+/** Geodesic gap below which the pack should stay together. */
+const PACK_SPACING_UNITS = 700;
+
+function callerPosture(keyword) {
+  if (keyword === 'vp' || keyword === 'liquid' || keyword === 'freeze') return keyword;
+  return 'default';
+}
+
+/**
+ * The believed round: bodies we know, bodies we estimate, clock, and where
+ * the filter puts the other side. The caller prices this, then asks the
+ * library whether continuing is still the plan.
+ */
+function callerPicture(R, engine, myLiving, extra = {}) {
+  const state = engine.state;
+  const tick = extra.tick ?? state.tick;
+  const clock = extra.clock ?? (tick - state.liveTick) / TICK_RATE;
+  const zoneOf = (site) => (anchor) => {
+    if (!site) return false;
+    const a = R.graph.anchor(anchor);
+    return a ? Math.hypot(a.world.x - site.world.x, a.world.y - site.world.y) < 1200 : false;
+  };
+  const exp = extra.experience || null;
+  return {
+    alive: extra.alive ?? myLiving.length,
+    enemyAlive: extra.enemyAlive ?? R.belief.aliveCount(),
+    clock,
+    secondsLeft: extra.secondsLeft ?? Math.max(0, engine.clock()),
+    bombSecondsLeft: state.bomb.planted
+      ? Math.max(0, BOMB_SECONDS - (tick - state.plantTick) / TICK_RATE)
+      : BOMB_SECONDS,
+    planted: Boolean(state.bomb.planted),
+    hasKit: myLiving.some((b) => b.hasKit),
+    contactRel: extra.contactRel || null,
+    siteExpectedTarget: R.belief.expected(zoneOf(R.target)),
+    siteExpectedOther: R.other ? R.belief.expected(zoneOf(R.other)) : 0,
+    packAtTarget: myLiving.filter(
+      (b) => Math.hypot(b.pos.x - R.target.world.x, b.pos.y - R.target.world.y) < 1200
+    ).length,
+    teamBroken: Boolean(extra.teamBroken),
+    experienceMean: exp?.mean,
+    experienceN: exp?.n
+  };
+}
+
+function applyCallerDecision(R, result) {
+  if (result?.decision === 'turnaround' && R.other) {
+    const swap = R.target;
+    R.target = R.other;
+    R.other = swap;
+    R.caller.setGoal(R.target.world);
+  }
+}
+
+/** Neighbour whose bearing is closest to a mined hold yaw, in degrees. */
+function neighbourFacing(graph, neighboursFn, fromId, yawDeg) {
+  const a = graph.anchor(fromId);
+  if (!a || !Number.isFinite(yawDeg)) return null;
+  const rad = (yawDeg * Math.PI) / 180;
+  const fx = Math.cos(rad);
+  const fy = Math.sin(rad);
+  let best = null;
+  let bestDot = -Infinity;
+  for (const n of neighboursFn(fromId) || []) {
+    const b = graph.anchor(n);
+    if (!b) continue;
+    const dx = b.world.x - a.world.x;
+    const dy = b.world.y - a.world.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const dot = (dx / len) * fx + (dy / len) * fy;
+    if (dot > bestDot) {
+      bestDot = dot;
+      best = n;
+    }
+  }
+  return best;
+}
+
+/**
+ * Freestyle candidates from the mined knowledge tables: holds winners held,
+ * throws they threw at this clock, and a spacing prior on lurk vs pack.
+ */
+function pushKnowledgeCandidates({ R, s, b, myAnchor, elapsed, candidates, angles, tick, myLiving }) {
+  const know = R.knowledge;
+  if (!know) return;
+  const key = {
+    map: R.engine.state.map,
+    side: R.side,
+    call: R.caller?.call() || 'default',
+    contract: myAnchor?.id || 'any'
+  };
+  const occ = know.anglesFor(key);
+  for (let i = 0; i < Math.min(4, occ.length); i += 1) {
+    const row = occ[i];
+    if (!row.anchor || !R.graph.anchor(row.anchor)) continue;
+    const yaw = neighbourFacing(R.graph, R.neighbours, row.anchor, row.yaw) || row.anchor;
+    candidates.push({
+      id: i === 0 ? 'hold_angle' : 'off_angle_hold',
+      params: { spot: row.anchor, yaw },
+      prior: 0.5 + Math.min(0.2, (row.share || 0) * 0.4),
+      motive: `knowledge hold ${row.anchor}`
+    });
+  }
+
+  let nUtil = 0;
+  for (const row of know.utilityFor(key)) {
+    if (nUtil >= 3) break;
+    if (!clockCovers(row.clock, elapsed)) continue;
+    const fromIsMine = row.from && row.from === myAnchor?.id;
+    const mateOnFrom = myLiving.find((m) => {
+      if (m.slot === s) return false;
+      return angles.nearestAnchor(m.pos.x, m.pos.y)?.id === row.from;
+    });
+    if (fromIsMine && b.grenades.includes(row.type)) {
+      candidates.push({
+        id: 'utility_setup',
+        params: {
+          spot: row.from,
+          from: row.from,
+          at: row.at,
+          utilityType: row.type
+        },
+        prior: 0.64,
+        motive: `knowledge ${row.type} from ${row.from}`
+      });
+      nUtil += 1;
+    } else if (mateOnFrom && !R.knowledgeFlashAsked[s]) {
+      const what =
+        row.type === 'flashbang'
+          ? 'flash'
+          : row.type === 'smokegrenade'
+            ? 'smoke'
+            : row.type === 'molotov' || row.type === 'incgrenade'
+              ? 'molotov'
+              : null;
+      if (what && R.comms.requestsLeft(s) > 0 && willSay(LEVEL.REQUEST, R.profiles[s], R.rng)) {
+        R.comms.send(tick, {
+          level: LEVEL.REQUEST,
+          from: s,
+          request: { type: 'request', what, where: row.at, by: 2, worth: 0.05 }
+        });
+        R.knowledgeFlashAsked[s] = true;
+      }
+      candidates.push({
+        id: 'hold_angle',
+        params: { spot: myAnchor?.id ?? row.from, yaw: row.at },
+        prior: 0.58,
+        motive: `peeking a knowledge ${row.type}`
+      });
+      nUtil += 1;
+    }
+  }
+
+  const means = Object.values(know.spacingFor(key))
+    .map((d) => d?.mean)
+    .filter((v) => Number.isFinite(v));
+  if (!means.length) return null;
+  return means.reduce((a, c) => a + c, 0) / means.length;
+}
+
+/** Bias lurk vs pack travel once those candidates actually exist. */
+function applySpacingBias(candidates, typical) {
+  if (!Number.isFinite(typical)) return;
+  for (const c of candidates) {
+    if (typical > LURK_SPACING_UNITS) {
+      if (c.id === 'lurk') c.prior = (c.prior || 0.4) + 0.12;
+      if (c.id === 'advance') c.prior = Math.max(0.05, (c.prior || 0.4) - 0.08);
+    } else if (typical < PACK_SPACING_UNITS) {
+      if (c.id === 'advance') c.prior = (c.prior || 0.4) + 0.1;
+      if (c.id === 'lurk') c.prior = Math.max(0.05, (c.prior || 0.4) - 0.08);
+    }
+  }
+}
 
 /** Anchors a body is "at" within this range, world units. */
 const AT_ANCHOR_UNITS = 64;
@@ -296,7 +475,10 @@ export function desireController({
   collect = null,
   keyword = null,
   searchEnabled = true,
-  memoryEnabled = true
+  memoryEnabled = true,
+  playbook = null,
+  knowledge = null,
+  call = null
 } = {}) {
   return () => {
     /** Per-round state, rebuilt in roundStart. */
@@ -366,8 +548,9 @@ export function desireController({
      * happening. CT splits the sites and keeps a rotator; T stacks the
      * target's approach. Baked library shapes replace this table in P4.
      */
-    function buildShape(graph, side, slots, target, other) {
+    function buildShape(graph, side, slots, target, other, positionOf = () => null) {
       const posts = [];
+      const roleAt = (slot, i, fallback) => shapeRole(positionOf(slot)) || fallback[i];
       if (side === 'CT') {
         const nearA = nearestAnchors(graph, target.world.x, target.world.y, target.level, 2);
         const nearB = nearestAnchors(graph, other.world.x, other.world.y, other.level, 2);
@@ -375,8 +558,10 @@ export function desireController({
         const midY = (target.world.y + other.world.y) / 2;
         const mid = nearestAnchors(graph, midX, midY, target.level, 1);
         const homes = [nearA[0], nearA[1] || nearA[0], nearB[0], nearB[1] || nearB[0], mid[0]];
-        const roles = ['anchor', 'support', 'anchor', 'support', 'rotator'];
-        slots.forEach((slot, i) => posts.push({ slot, role: roles[i], home: homes[i] }));
+        const fallback = ['anchor', 'support', 'anchor', 'support', 'rotator'];
+        slots.forEach((slot, i) =>
+          posts.push({ slot, role: roleAt(slot, i, fallback), home: homes[i] })
+        );
       } else {
         // Rally OUTSIDE the site, on the spawn side of it. The nearest
         // anchors to a site are that site's own defensive spots; a T shape
@@ -401,8 +586,10 @@ export function desireController({
         const midY = (target.world.y + other.world.y) / 2;
         const lurk = nearestAnchors(graph, midX, midY, target.level, 1)[0];
         const homes = [rally[0], rally[1], rally[2], rally[3], lurk];
-        const roles = ['entry', 'support', 'support', 'support', 'lurk'];
-        slots.forEach((slot, i) => posts.push({ slot, role: roles[i], home: homes[i] }));
+        const fallback = ['entry', 'support', 'support', 'support', 'lurk'];
+        slots.forEach((slot, i) =>
+          posts.push({ slot, role: roleAt(slot, i, fallback), home: homes[i] })
+        );
       }
       return makeShape({ call: side === 'T' ? `hit_${target.id}` : 'default_ct', posts });
     }
@@ -531,6 +718,60 @@ export function desireController({
         if (!matchRng) matchRng = rng.fork();
         contracts = assignContracts({ map: engine.state.map, side, slots });
         R.contracts = contracts;
+        const positionOf = (slot) => contracts.find((c) => c.slot === slot)?.position || null;
+        R.shape = buildShape(graph, side, slots, target, other, positionOf);
+
+        const ownSpawns = graph.spawns.filter((s) => s.side === side);
+        const spawn = {
+          x: ownSpawns.reduce((s, p) => s + p.x, 0) / Math.max(1, ownSpawns.length),
+          y: ownSpawns.reduce((s, p) => s + p.y, 0) / Math.max(1, ownSpawns.length)
+        };
+        R.caller = createCaller({
+          playbook,
+          rng: rng.fork(),
+          map: engine.state.map,
+          side,
+          slots,
+          posture: callerPosture(keyword)
+        });
+        R.knowledge = knowledge;
+        R.tapeErrorSince = {};
+        R.callerNotedBehind = false;
+        R.knowledgeFlashAsked = {};
+        R.promotedAtDeaths = 0;
+        R.promotedAtBroken = 0;
+        R.commandedKeyword = keyword != null && keyword !== 'default';
+        const awpSeat = awpSlotOf({ map: engine.state.map, side, slots });
+        R.caller.roundStart({
+          contractOf: () => null,
+          awpOf: (slot) => slot === awpSeat,
+          strategyCall: call,
+          econ: econBucketOf(slots.map((s) => engine.state.bodies[s])),
+          spawn,
+          goal: target.world
+        });
+        if (R.caller.teamMode() === CALLER_MODE.TAPE) {
+          const posts = R.shape.posts.map((p) => {
+            const role = R.caller.roleOf(p.slot);
+            const home = role ? role.waypoints?.[0]?.[1] || role.contract : null;
+            if (home && graph.anchor(home)) {
+              return { ...p, home, role: role.awp ? 'awp' : p.role };
+            }
+            return p;
+          });
+          R.shape = makeShape({ call: R.caller.call() || R.shape.call, posts });
+        }
+        R.owners = assignZoneOwners({
+          zones: [...graph.anchors.keys()],
+          roster: R.shape.posts,
+          iglSlot: R.iglSlot,
+          distance: (home, zone) => {
+            const a = graph.anchor(home);
+            const b = graph.anchor(zone);
+            if (!a || !b) return Infinity;
+            return Math.hypot(a.world.x - b.world.x, a.world.y - b.world.y);
+          }
+        });
         R.obsHist = new Map();
       },
 
@@ -573,6 +814,33 @@ export function desireController({
             if (classified.clazz === INTERRUPT.OPPORTUNITY) {
               R.opportunity = { tick, reason: classified.reason, at: { x: dead.pos.x, y: dead.pos.y } };
             }
+            if (R.caller) {
+              const clock = (tick - state.liveTick) / TICK_RATE;
+              const contractOf = (slot) => {
+                const body = bodies[slot];
+                return body?.alive ? angles.nearestAnchor(body.pos.x, body.pos.y)?.id || null : null;
+              };
+              const awpOf = (slot) =>
+                /awp/i.test((R.contracts || []).find((row) => row.slot === slot)?.position || '');
+              const picture = callerPicture(R, engine, myLiving, { tick, clock });
+              if (classified.clazz === INTERRUPT.IGNORE) {
+                applyCallerDecision(
+                  R,
+                  R.caller.considerPicture(picture, { contractOf, awpOf })
+                );
+              } else {
+                applyCallerDecision(
+                  R,
+                  R.caller.onInterrupt({
+                    clazz: classified.clazz,
+                    slots: classified.slots || [],
+                    contractOf,
+                    awpOf,
+                    ...picture
+                  })
+                );
+              }
+            }
           }
         });
         for (const s of R.slots) {
@@ -603,6 +871,7 @@ export function desireController({
               }
             });
             R.footprints[s].noteDeath(tick);
+            events.push({ type: 'death', slot: s });
             for (const o of R.slots) {
               if (o !== s) R.runners[o].gate.onEvent(tick, 'death');
             }
@@ -627,6 +896,22 @@ export function desireController({
             c.myLastSeenTick = tick;
             if (c.myFirstSeenTick === undefined) c.myFirstSeenTick = tick;
             R.contacts[idx] = c;
+            if (R.caller && !R.callerNotedBehind && c.myFirstSeenTick === tick) {
+              const clock = (tick - state.liveTick) / TICK_RATE;
+              const intel = R.caller.considerIntel({
+                x: enemy.pos.x,
+                y: enemy.pos.y,
+                ...callerPicture(R, engine, myLiving, { tick, clock }),
+                contractOf: (slot) => {
+                  const body = bodies[slot];
+                  return body?.alive ? angles.nearestAnchor(body.pos.x, body.pos.y)?.id || null : null;
+                },
+                awpOf: (slot) =>
+                  /awp/i.test((R.contracts || []).find((row) => row.slot === slot)?.position || '')
+              });
+              if (intel.rel === 'behind') R.callerNotedBehind = true;
+              applyCallerDecision(R, intel);
+            }
             break;
           }
         });
@@ -758,6 +1043,64 @@ export function desireController({
         if (state.bomb.planted && !R.planted) {
           R.planted = true;
           for (const s of R.slots) R.runners[s].gate.onEvent(tick, 'bomb_planted');
+          R.caller?.retire();
+        }
+
+        if (R.caller) {
+          const clock = (tick - state.liveTick) / TICK_RATE;
+          const contractOf = (slot) => {
+            const body = bodies[slot];
+            return body?.alive ? angles.nearestAnchor(body.pos.x, body.pos.y)?.id || null : null;
+          };
+          const awpOf = (slot) =>
+            /awp/i.test((R.contracts || []).find((row) => row.slot === slot)?.position || '');
+          const ctx = {
+            side: R.side,
+            sideOf: (slot) => bodies[slot]?.side,
+            teamDeaths: R.slots.filter((slot) => !bodies[slot].alive).length,
+            brokenCount: R.caller.brokenCount(),
+            roundSeconds: clock,
+            awperSlot: R.slots.find((slot) => awpOf(slot)) ?? null,
+            plannedSite: R.caller.plannedSite(),
+            contactExpected: R.caller.teamMode() === CALLER_MODE.TAPE
+          };
+          const picture = callerPicture(R, engine, myLiving, { tick, clock });
+          for (const ev of events) {
+            const deathsBefore = Number.isInteger(ev.slot)
+              ? R.slots.filter((slot) => slot !== ev.slot && !bodies[slot].alive).length
+              : ctx.teamDeaths;
+            const classified = classifyEvent(ev, { ...ctx, teamDeaths: deathsBefore });
+            applyCallerDecision(
+              R,
+              R.caller.onInterrupt({
+                clazz: classified.clazz,
+                slots: classified.slots || [],
+                contractOf,
+                awpOf,
+                ...picture
+              })
+            );
+          }
+          const promo = shouldPromote({
+            brokenCount: R.caller.brokenCount(),
+            teamDeaths: ctx.teamDeaths
+          });
+          const deathsUp = ctx.teamDeaths > (R.promotedAtDeaths || 0);
+          const brokenUp = R.caller.brokenCount() > (R.promotedAtBroken || 0);
+          if (promo.promote && (deathsUp || brokenUp)) {
+            R.promotedAtDeaths = Math.max(R.promotedAtDeaths || 0, ctx.teamDeaths);
+            R.promotedAtBroken = Math.max(R.promotedAtBroken || 0, R.caller.brokenCount());
+            applyCallerDecision(
+              R,
+              R.caller.onInterrupt({
+                clazz: INTERRUPT.TEAM,
+                contractOf,
+                awpOf,
+                ...picture,
+                teamBroken: true
+              })
+            );
+          }
         }
 
         // ---- C. the shared team frame -----------------------------------
@@ -991,10 +1334,21 @@ export function desireController({
         R.layerAction = layered;
         R.situation = sit;
 
-        const commandedKeyword = keyword != null && keyword !== 'default';
-        const manAdv = myLiving.length - R.belief.aliveCount();
-        if (!commandedKeyword && manAdv >= 2 && R.keyword.id === 'default') {
-          R.keyword = keywordPreset('vp');
+        const exp = memoryEnabled ? index.read(sit.hash) : null;
+        R.picture = callerPicture(R, engine, myLiving, {
+          tick,
+          clock: (tick - state.liveTick) / TICK_RATE,
+          secondsLeft: teamClock,
+          experience: exp
+        });
+        R.pWin = pictureWinrate(R.picture);
+
+        if (!R.commandedKeyword && R.caller) {
+          const freezeKw = R.caller.freezeKeyword();
+          if (freezeKw) R.keyword = keywordPreset(freezeKw);
+          else if (R.keyword.id === 'vp' || R.keyword.id === 'freeze') {
+            R.keyword = keywordPreset('default');
+          }
         }
 
         const protoTarget = R.layerAction?.convert ?? front[0] ?? R.target.id;
@@ -1174,6 +1528,7 @@ export function desireController({
           }
 
           const candidates = [];
+          let spacingTypical = null;
           if (home) {
             // Pre-aim the approach the belief points at: preAim moves offA at
             // contact, offA moves crossW, and crossW is the largest fitted
@@ -1210,6 +1565,69 @@ export function desireController({
               isHome: true,
               prior: 0.55,
               motive: 'holding my post'
+            });
+          }
+
+          const onTape = R.caller && R.caller.isOnTape(s, elapsed);
+          if (onTape) {
+            const wp = R.caller.waypoint(s, elapsed);
+            if (wp) {
+              const a = R.graph.anchor(wp);
+              const err = a ? Math.hypot(a.world.x - b.pos.x, a.world.y - b.pos.y) : 0;
+              if (err > TAPE_ERROR_UNITS) {
+                R.tapeErrorSince[s] = R.tapeErrorSince[s] ?? tick;
+                if ((tick - R.tapeErrorSince[s]) / TICK_RATE > TAPE_ERROR_SECONDS) {
+                  R.caller.markLocal(s);
+                }
+              } else {
+                R.tapeErrorSince[s] = null;
+              }
+              if (R.caller.isOnTape(s, elapsed)) {
+                const arrivedTape = err < AT_ANCHOR_UNITS * 2;
+                const frozen = R.caller.decision() === 'freeze';
+                if (!frozen || arrivedTape) {
+                  candidates.push({
+                    id: arrivedTape || frozen ? 'hold_angle' : 'advance',
+                    params: arrivedTape || frozen ? { spot: wp, yaw: wp } : { target: wp, gait: 'run' },
+                    prior: 0.86,
+                    motive: `tape: ${wp}`
+                  });
+                }
+              }
+            }
+            for (const u of R.caller.due(s, elapsed)) {
+              if (!b.grenades.includes(u.type)) continue;
+              candidates.push({
+                id: 'utility_setup',
+                params: {
+                  spot: u.from,
+                  from: u.from,
+                  at: u.at,
+                  utilityType: u.type,
+                  fromX: u.fx,
+                  fromY: u.fy,
+                  atX: u.ax,
+                  atY: u.ay,
+                  flight: u.flight,
+                  tapeIndex: u.index
+                },
+                prior: 0.92,
+                motive: `tape throw ${u.type}`
+              });
+            }
+          }
+
+          if (!(R.caller && R.caller.isOnTape(s, elapsed))) {
+            spacingTypical = pushKnowledgeCandidates({
+              R,
+              s,
+              b,
+              myAnchor,
+              elapsed,
+              candidates,
+              angles,
+              tick,
+              myLiving
             });
           }
 
@@ -1608,16 +2026,27 @@ export function desireController({
           if (obs) decideSeat += 1;
           const myContract = (R.contracts || []).find((c) => c.slot === s);
           const hist = (R.obsHist && R.obsHist.get(s)) || [];
+          const policyCtx = {
+            player: seatKey,
+            map: engine.state.map,
+            contract: myContract?.position,
+            call: R.caller?.call() || null,
+            history: hist
+          };
+          applySpacingBias(candidates, spacingTypical);
           if (policy && obs) {
-            applyProposals(
-              candidates,
-              policy.probs(obs, {
-                player: seatKey,
-                map: engine.state.map,
-                contract: myContract?.position,
-                history: hist
-              })
-            );
+            applyProposals(candidates, policy.probs(obs, policyCtx));
+            if (typeof policy.forward === 'function') {
+              const heads = policy.forward(obs, policyCtx);
+              const utilProbs = heads?.utility;
+              if (utilProbs) {
+                for (const c of candidates) {
+                  if (c.id !== 'utility_setup') continue;
+                  const p = utilProbs.get?.(c.params.utilityType) ?? 0;
+                  c.prior = Math.min(0.95, (c.prior || 0.4) + p * 0.35);
+                }
+              }
+            }
           }
           if (obs) {
             if (!R.obsHist) R.obsHist = new Map();
@@ -1650,11 +2079,13 @@ export function desireController({
             slot: s,
             hasTradeCover: myLiving.length >= 2
           });
+          const afterKeyword = new Set(legal);
           if (myContract) {
             const paramsById = {};
             for (const c of candidates) paramsById[c.id] = c.params;
             legal = maskByContract(legal, myContract, { paramsById, clock: secondsLeft });
           }
+          const afterContract = new Set(legal);
           if (R.owners && myAnchor) {
             const role = roleInZone({ assignment: R.owners, slot: s, zone: myAnchor.id });
             if (role.status === 'guest') {
@@ -1668,12 +2099,30 @@ export function desireController({
             b.hasBomb &&
             !state.bomb.planted &&
             myAnchor &&
-            bombIsSafe(R.zones, myAnchor.id) &&
-            !LAYER_PROTOCOL[R.layerAction?.protocol]
+            bombIsSafe(R.zones, myAnchor.id)
           ) {
-            for (const id of LEAVES_SAFE) legal.delete(id);
+            const executeOn = Boolean(R.executeBySlot?.get(s));
+            const committed = R.caller?.decision() === 'commit';
+            const wp = R.caller?.isOnTape(s, elapsed) ? R.caller.waypoint(s, elapsed) : null;
+            const wpOutside = Boolean(wp && R.graph.anchor(wp) && !bombIsSafe(R.zones, wp));
+            if (!executeOn && !committed && !wpOutside) {
+              for (const id of LEAVES_SAFE) legal.delete(id);
+            }
           }
           if (assigned?.optionId) legal.add(assigned.optionId);
+          if (R.caller) {
+            for (const c of candidates) {
+              if (typeof c.motive !== 'string' || !c.motive.startsWith('tape')) continue;
+              if (legal.has(c.id)) continue;
+              let reason = 'mask';
+              if (!afterKeyword.has(c.id)) reason = clutch.restricted ? clutch.motive : `keyword ${R.keyword.id}`;
+              else if (!afterContract.has(c.id)) reason = 'contract';
+              else reason = 'carrier or guest';
+              if (R.caller.noteVeto(s, c.id, reason)) {
+                this.log.push({ tick, slot: s, id: 'tape_veto', motive: `${c.id} masked by ${reason}` });
+              }
+            }
+          }
 
           const layoutCount =
             R.budget?.decision === 'widen'
@@ -1681,7 +2130,7 @@ export function desireController({
               : 4;
 
           const q = riskQuantile({
-            pWin: 0.5,
+            pWin: Number.isFinite(R.pWin) ? R.pWin : 0.5,
             manDelta: myLiving.length - R.belief.aliveCount(),
             baseline: R.profiles[s].riskQuantile ?? 0.5,
             audacity: R.audacity,
@@ -1776,6 +2225,13 @@ export function desireController({
         }
 
         R.translator.step();
+        if (R.caller) {
+          for (const s of R.slots) {
+            if (!R.translator.hasThrown(s)) continue;
+            const idx = R.translator.tapeIndex(s);
+            if (idx != null) R.caller.noteThrown(s, idx);
+          }
+        }
       },
 
       roundEnd({ outcome } = {}) {

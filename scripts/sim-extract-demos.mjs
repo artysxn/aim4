@@ -57,6 +57,7 @@ import { JointBelief } from '../shared/sim/knowledge.js';
 import { Rng } from '../shared/sim/rng.js';
 import { buildObservation, OBSERVATION_SIZE, OBSERVE_VERSION, weaponClassOf } from '../shared/sim/observe.js';
 import { OPTION_IDS } from '../shared/sim/options.js';
+import { optionAt, PACK_RADIUS, segmentTrack } from '../shared/sim/optionSegmenter.js';
 import { weaponInfo } from '../src/replays/shared/weaponTable.js';
 import {
   AIM_BUCKETS,
@@ -273,6 +274,67 @@ function extractRound({ meta, track, state, map, rng, onSample }) {
   const roundKey = `${meta.demoId || ''}:${meta.round ?? 0}`;
   let stepIndex = -1;
 
+  let site = null;
+  const planted = (meta.events?.bomb || []).find((b) => b.type === 'planted' || b.type === 'plant');
+  if (planted && Number.isFinite(planted.x) && Number.isFinite(planted.y)) {
+    site = { x: planted.x, y: planted.y };
+  }
+
+  const deathPos = [];
+  for (const d of deaths) {
+    const victim = roster.find((r) => r.id === d.victim);
+    if (!victim || victim.team !== winnerTeam) continue;
+    const vs = track.sample(victim.slot, d.tick, {});
+    if (vs) deathPos.push({ tick: d.tick, x: vs.x, y: vs.y, slot: victim.slot });
+  }
+
+  const poseTracks = new Map();
+  for (const p of winners) poseTracks.set(p.slot, []);
+  const aSite = state.graph.anchor('a_site')?.world;
+  const bSite = state.graph.anchor('b_site')?.world;
+  let deepest = null;
+  const scratch = {};
+  for (let tick = t0; tick <= endTick; tick += step) {
+    const living = [];
+    for (const p of winners) {
+      const me = track.sample(p.slot, tick, scratch);
+      if (me?.alive) {
+        const pose = { tick, x: me.x, y: me.y };
+        poseTracks.get(p.slot).push(pose);
+        living.push(pose);
+      }
+    }
+    if (!site && living.length >= 2 && (aSite || bSite)) {
+      const cx = living.reduce((s, p) => s + p.x, 0) / living.length;
+      const cy = living.reduce((s, p) => s + p.y, 0) / living.length;
+      const dA = aSite ? Math.hypot(cx - aSite.x, cy - aSite.y) : Infinity;
+      const dB = bSite ? Math.hypot(cx - bSite.x, cy - bSite.y) : Infinity;
+      const cand = dA <= dB ? aSite : bSite;
+      const d = Math.min(dA, dB);
+      const near = living.filter((p) => Math.hypot(p.x - cand.x, p.y - cand.y) <= PACK_RADIUS).length;
+      if (near >= 2 && (!deepest || d < deepest.d)) deepest = { site: cand, d };
+    }
+  }
+  if (!site) site = deepest?.site || null;
+
+  const segmentsBySlot = new Map();
+  for (const p of winners) {
+    const poses = poseTracks.get(p.slot) || [];
+    const teammates = winners
+      .filter((m) => m.slot !== p.slot)
+      .map((m) => poseTracks.get(m.slot) || []);
+    segmentsBySlot.set(
+      p.slot,
+      segmentTrack({
+        poses,
+        tickRate,
+        teammates,
+        site,
+        deaths: deathPos.filter((d) => d.slot !== p.slot)
+      })
+    );
+  }
+
   let written = 0;
 
   for (let tick = t0; tick <= endTick; tick += step) {
@@ -428,6 +490,7 @@ function extractRound({ meta, track, state, map, rng, onSample }) {
 
       const isEvent = refrag || util !== 'none' || style !== 'none';
       const w = refrag ? W_REFRAG : util !== 'none' ? W_UTILITY : goingTo ? W_MOVE : W_HOLD;
+      const covering = optionAt(segmentsBySlot.get(p.slot) || [], tick);
 
       onSample({
         obs: obs.map(round3),
@@ -454,7 +517,9 @@ function extractRound({ meta, track, state, map, rng, onSample }) {
           // rather than a fabricated angle. It is dropped at export anyway.
           aimOffset: aimOffset == null ? 0 : round3(aimOffset),
           utility: util,
-          option: goingTo ? 'advance' : 'hold_angle'
+          option: covering?.option || (goingTo ? 'advance' : 'hold_angle'),
+          spacingDx: covering?.detail?.spacing?.dx ?? 0,
+          spacingDy: covering?.detail?.spacing?.dy ?? 0
         },
         w: isEvent ? w : w * 0.8,
         ev: isEvent ? 1 : 0
@@ -487,6 +552,7 @@ class Progress {
   note(y) {
     const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
     bump(this.labels, `peek:${y.peek}`);
+    bump(this.labels, `option:${y.option}`);
     if (y.refrag) bump(this.labels, 'refrag');
     if (y.utility !== 'none') bump(this.labels, `util:${y.utility}`);
     bump(this.labels, `aim:${y.aim}`);
