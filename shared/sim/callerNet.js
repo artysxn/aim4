@@ -68,6 +68,19 @@ export const CALLER_FEATURES = Object.freeze([
   'isFreeze'
 ]);
 
+/**
+ * The fitted feature list for a model. Everything in CALLER_FEATURES is
+ * map-agnostic, which is what lets one caller learn from every map at once; a
+ * cross-map model appends a map one-hot after them, in the order it lists in
+ * `maps`. A single-map model has no map columns, so old artifacts keep their
+ * exact geometry.
+ */
+export function featuresFor(maps = []) {
+  return maps.length > 1
+    ? [...CALLER_FEATURES, ...maps.map((m) => `map_${m}`)]
+    : [...CALLER_FEATURES];
+}
+
 const REL_SLOT = Object.freeze({ front: 1, site: 2, behind: 3 });
 
 /** Below this much training support a call's number is a rumour, not a head. */
@@ -87,8 +100,11 @@ const clamp01 = (x) => (Number.isFinite(x) ? Math.min(1, Math.max(0, x)) : 0.5);
  * @param {{event?: string|null, econ?: number|null}} [ctx]
  * @returns {number[]}
  */
-export function callerFeatures(picture = {}, { event = null, econ = null } = {}) {
-  const f = new Array(CALLER_FEATURES.length).fill(0);
+export function callerFeatures(
+  picture = {},
+  { event = null, econ = null, map = null, maps = [] } = {}
+) {
+  const f = new Array(featuresFor(maps).length).fill(0);
   const alive = Number.isFinite(picture.alive) ? picture.alive : 5;
   const enemy = Number.isFinite(picture.enemyAlive) ? picture.enemyAlive : 5;
   const planted = Boolean(picture.planted);
@@ -108,6 +124,10 @@ export function callerFeatures(picture = {}, { event = null, econ = null } = {})
   f[9 + (REL_SLOT[picture.contactRel] ?? 0)] = 1;
   if (Number.isFinite(econ) && econ >= 0 && econ <= 5) f[13 + Math.round(econ)] = 1;
   f[19] = event === 'freeze' ? 1 : 0;
+  if (maps.length > 1) {
+    const i = maps.indexOf(String(map || '').toUpperCase());
+    if (i >= 0) f[CALLER_FEATURES.length + i] = 1;
+  }
   return f;
 }
 
@@ -183,17 +203,26 @@ export function loadCallerNet(json) {
   if (json.v !== CALLER_NET_VERSION) {
     throw new Error(`callerNet: v${json.v}, this build speaks v${CALLER_NET_VERSION}`);
   }
+  // A cross-map model carries the maps it was fitted over, and its feature
+  // list is the base plus one column per map. The check stays exact either
+  // way: the point is that a disagreement is refused, not that it is tolerated.
+  const maps = Array.isArray(json.maps) ? json.maps : [];
+  const expected = featuresFor(maps);
   const features = Array.isArray(json.features) ? json.features : [];
-  if (features.length !== CALLER_FEATURES.length ||
-      features.some((f, i) => f !== CALLER_FEATURES[i])) {
+  if (features.length !== expected.length || features.some((f, i) => f !== expected[i])) {
     throw new Error('callerNet: feature list does not match this build');
   }
   const calls = Array.isArray(json.calls) ? json.calls : [];
   if (!calls.length) throw new Error('callerNet: no call vocabulary');
 
+  // Which calls each map may answer with. A cross-map head shares one softmax
+  // over every map's calls, so without this it could name a Mirage execute on
+  // Nuke -- legal in the vocabulary, nonsense on the map.
+  const callsByMap = json.callsByMap && typeof json.callsByMap === 'object' ? json.callsByMap : null;
+
   const win = checkHead(json.win, 'win');
   if (!win) throw new Error('callerNet: no win head');
-  if (win.layers[0].W[0].length !== CALLER_FEATURES.length + calls.length) {
+  if (win.layers[0].W[0].length !== expected.length + calls.length) {
     throw new Error('callerNet: win head input does not match features plus vocabulary');
   }
   const call = checkHead(json.call, 'call');
@@ -215,7 +244,7 @@ export function loadCallerNet(json) {
     const side = picture?.side;
     const i = index.get(`${side}:${callKey || 'default'}`);
     if (i === undefined) return null;
-    const x = callerFeatures(picture, ctx).concat(
+    const x = callerFeatures(picture, { ...ctx, maps }).concat(
       calls.map((_, j) => (j === i ? 1 : 0))
     );
     const h = tanhLayer(x, win.layers[0]);
@@ -247,11 +276,27 @@ export function loadCallerNet(json) {
    * to the net, so a T caller is never handed probability mass sitting on a CT
    * call it cannot run.
    */
-  function callPrior(picture, side = picture?.side) {
+  function callPrior(picture, side = picture?.side, map = json.map) {
     if (!call) return [];
-    const legal = bySide.get(side) || [];
+    let legal = bySide.get(side) || [];
+    // On a cross-map head the vocabulary spans every map, so the side filter
+    // alone would leave Mirage executes on the table during a Nuke round.
+    if (callsByMap) {
+      const allowed = callsByMap[String(map || '').toUpperCase()];
+      if (!Array.isArray(allowed)) {
+        // Falling through unmasked here would hand back a plausible-looking
+        // prior over every map's calls, and nothing downstream could tell.
+        // A cross-map head asked without a map is a wiring bug, so it says so.
+        throw new Error(
+          `callerNet: this head covers ${maps.join(', ')} and needs the map to mask its calls` +
+            (map ? `, got "${map}"` : ', got none')
+        );
+      }
+      const ok = new Set(allowed.map((c) => (typeof c === 'string' ? c : `${c.side}:${c.call}`)));
+      legal = legal.filter((c) => ok.has(`${c.side}:${c.call}`));
+    }
     if (!legal.length) return [];
-    const h = tanhLayer(callerFeatures(picture, { event: 'freeze' }), call.layers[0]);
+    const h = tanhLayer(callerFeatures(picture, { event: 'freeze', map, maps }), call.layers[0]);
     const p = softmax(linearLayer(h, call.layers[1]));
     let total = 0;
     for (const c of legal) total += p[c.i];
@@ -263,6 +308,7 @@ export function loadCallerNet(json) {
   return {
     name: json.name || null,
     map: json.map || null,
+    maps,
     kind: 'caller',
     lineage: 'hivemind',
     calls,
@@ -273,8 +319,8 @@ export function loadCallerNet(json) {
     headFor,
     callPrior,
     /** The single call this head would open with, for `strategyCall`. */
-    topCall(picture, side = picture?.side) {
-      return callPrior(picture, side)[0]?.call || null;
+    topCall(picture, side = picture?.side, map = json.map) {
+      return callPrior(picture, side, map)[0]?.call || null;
     }
   };
 }

@@ -56,7 +56,7 @@ CALLER_NET_VERSION = 1
 # The picture, as the head reads it. This list is the contract with
 # shared/sim/callerNet.js: same names, same order, or the JS forward pass is
 # evaluating a different function than the one that was fitted.
-FEATURES = [
+BASE_FEATURES = [
     "side_ct",       # 1 for CT, 0 for T
     "alive",         # /5
     "enemyAlive",    # /5
@@ -77,10 +77,24 @@ FEATURES = [
 REL_INDEX = {None: 0, "front": 1, "site": 2, "behind": 3}
 
 
-def featurize(row):
+def feature_names(maps):
+    """
+    The fitted feature list. Everything in BASE_FEATURES is map-agnostic on
+    purpose -- "4v5, thirty seconds, contact behind" reads the same on every
+    map -- which is what lets one caller learn from the whole corpus. The map
+    one-hot is appended so the head can still tell Nuke from Mirage where that
+    matters, most obviously in which calls are even available.
+
+    A single-map set gets no map columns at all, so old artifacts keep their
+    exact geometry and nothing has to be re-fitted to stay loadable.
+    """
+    return list(BASE_FEATURES) + ([f"map_{m}" for m in maps] if len(maps) > 1 else [])
+
+
+def featurize(row, features=None, map_index=None):
     """One picture as the fitted feature vector. Mirrors callerNet.js exactly."""
     p = row.get("picture") or {}
-    f = np.zeros(len(FEATURES), dtype=np.float64)
+    f = np.zeros(len(features) if features is not None else len(BASE_FEATURES), dtype=np.float64)
     alive = float(p.get("alive", 5) or 0)
     enemy = float(p.get("enemyAlive", 5) or 0)
     planted = bool(p.get("planted"))
@@ -101,6 +115,10 @@ def featurize(row):
     if isinstance(econ, (int, float)) and 0 <= int(econ) <= 5:
         f[13 + int(econ)] = 1.0
     f[19] = 1.0 if row.get("event") == "freeze" else 0.0
+    if map_index:
+        m = map_index.get(str(row.get("map") or "").upper())
+        if m is not None:
+            f[len(BASE_FEATURES) + m] = 1.0
     return f
 
 
@@ -161,6 +179,12 @@ class MLP:
         self.vW1 = np.zeros_like(self.W1)
         self.vb1 = np.zeros_like(self.b1)
 
+    def snapshot(self):
+        return (self.W0.copy(), self.b0.copy(), self.W1.copy(), self.b1.copy())
+
+    def restore(self, snap):
+        self.W0, self.b0, self.W1, self.b1 = (a.copy() for a in snap)
+
     def forward(self, X):
         H = np.tanh(X @ self.W0.T + self.b0)
         Z = H @ self.W1.T + self.b1
@@ -208,14 +232,20 @@ def train_binary(net, Xt, yt, Xv, yv, epochs, lr, batch, momentum, l2, rng, log,
         if epoch % max(1, epochs // 10) == 0 or epoch == epochs:
             tr = binary_scores(net, Xt, yt)
             va = binary_scores(net, Xv, yv)
+            # Keep the weights that earned the number, not just the number.
+            # Reporting the best epoch while exporting the last one describes a
+            # model that was never saved, and this head overfits well before
+            # the epoch budget runs out.
             if best is None or va["logloss"] < best["logloss"]:
-                best = va
+                best, best_w = va, net.snapshot()
             if log:
                 print(
                     f"  {label} epoch {epoch:4d}  "
                     f"train logloss {tr['logloss']:.4f} acc {tr['acc']:.3f}  |  "
                     f"val logloss {va['logloss']:.4f} acc {va['acc']:.3f}"
                 )
+    if best is not None:
+        net.restore(best_w)
     return best or binary_scores(net, Xv, yv)
 
 
@@ -232,7 +262,21 @@ def binary_scores(net, X, y):
     }
 
 
-def train_softmax(net, Xt, yt, Xv, yv, k, epochs, lr, batch, momentum, l2, rng, log, label):
+def apply_mask(P, M):
+    """
+    Renormalise a softmax over the legal classes only. Zeroing then rescaling
+    is exactly a softmax with the illegal logits at -inf, so the usual (P - Y)
+    gradient still holds: an illegal class carries P=0 and Y=0, and therefore
+    no update.
+    """
+    if M is None:
+        return P
+    P = P * M
+    return P / np.clip(P.sum(axis=1, keepdims=True), 1e-12, None)
+
+
+def train_softmax(net, Xt, yt, Xv, yv, k, epochs, lr, batch, momentum, l2, rng, log, label,
+                  mask_t=None, mask_v=None):
     Yt = np.zeros((len(yt), k))
     Yt[np.arange(len(yt)), yt] = 1.0
     best = None
@@ -242,25 +286,29 @@ def train_softmax(net, Xt, yt, Xv, yv, k, epochs, lr, batch, momentum, l2, rng, 
             idx = perm[start : start + batch]
             Xb, Yb = Xt[idx], Yt[idx]
             _, P = net.forward(Xb)
+            P = apply_mask(P, None if mask_t is None else mask_t[idx])
             net.step(Xb, (P - Yb) / len(idx), lr, momentum, l2)
         if epoch % max(1, epochs // 10) == 0 or epoch == epochs:
-            tr = softmax_scores(net, Xt, yt)
-            va = softmax_scores(net, Xv, yv)
+            tr = softmax_scores(net, Xt, yt, mask_t)
+            va = softmax_scores(net, Xv, yv, mask_v)
             if best is None or va["logloss"] < best["logloss"]:
-                best = va
+                best, best_w = va, net.snapshot()
             if log:
                 print(
                     f"  {label} epoch {epoch:4d}  "
                     f"train logloss {tr['logloss']:.4f} acc {tr['acc']:.3f}  |  "
                     f"val logloss {va['logloss']:.4f} acc {va['acc']:.3f}"
                 )
-    return best or softmax_scores(net, Xv, yv)
+    if best is not None:
+        net.restore(best_w)
+    return best or softmax_scores(net, Xv, yv, mask_v)
 
 
-def softmax_scores(net, X, y):
+def softmax_scores(net, X, y, mask=None):
     if not len(y):
         return {"logloss": 0.0, "acc": 0.0, "n": 0}
     _, P = net.forward(X)
+    P = apply_mask(P, mask)
     p = np.clip(P, 1e-7, 1.0)
     return {
         "logloss": float(-np.log(p[np.arange(len(y)), y]).mean()),
@@ -292,13 +340,35 @@ def main():
     k = len(keys)
     rng = np.random.default_rng(args.seed)
 
+    # The maps actually present, not the ones the meta claims, so a set that
+    # was filtered down after extraction still fits the geometry it needs.
+    maps = sorted({str(r.get("map") or "").upper() for r in rows if r.get("map")})
+    map_index = {m: i for i, m in enumerate(maps)}
+    FEATURES = feature_names(maps)
+
+    # Which calls each map can legally make. `default` exists everywhere; the
+    # rest are map-named, so this is what stops a cross-map head from ever
+    # answering "anc-ct-3-mid" on Mirage.
+    legal = {m: np.zeros(k) for m in maps}
+    for r in rows:
+        m = str(r.get("map") or "").upper()
+        if m in legal:
+            legal[m][key_index[f"{r.get('side')}:{r.get('call') or 'default'}"]] = 1.0
+
     print(
         f"{len(rows):,} rows, {k} (side, call) pairs, map {meta.get('map')}, "
         f"from {meta.get('from')}, {meta.get('wins')}W/{meta.get('losses')}L"
     )
+    if len(maps) > 1:
+        print(
+            f"  cross-map: {len(maps)} maps ({' '.join(maps)}), "
+            f"{len(FEATURES)} features, calls masked to each map's own"
+        )
+        for m in maps:
+            print(f"    {m}  {int(legal[m].sum()):>3} legal calls")
 
     # ---- win head: every row, both outcomes -------------------------------
-    F = np.array([featurize(r) for r in rows])
+    F = np.array([featurize(r, FEATURES, map_index) for r in rows])
     C = np.array([onehot(k, key_index[f"{r.get('side')}:{r.get('call') or 'default'}"]) for r in rows])
     Xw = np.hstack([F, C])
     yw = np.array([1.0 if r.get("won") else 0.0 for r in rows])
@@ -350,9 +420,16 @@ def main():
     call_base_acc = 0.0
     call = MLP(len(FEATURES), args.hidden_call, k, rng, softmax=True)
     if len(call_rows) >= 50:
-        Xc = np.array([featurize(r) for r in call_rows])
+        Xc = np.array([featurize(r, FEATURES, map_index) for r in call_rows])
         yc = np.array([key_index[f"{r.get('side')}:{r.get('call') or 'default'}"] for r in call_rows])
         cv = np.array([r.get("split") == "val" for r in call_rows])
+        # One mask row per sample: the softmax is renormalised over that map's
+        # calls, so the illegal ones cost no probability mass and take no
+        # gradient. Without it the head spends its capacity learning which map
+        # it is on, which the map one-hot already told it.
+        Mc = np.array([
+            legal.get(str(r.get("map") or "").upper(), np.ones(k)) for r in call_rows
+        ]) if len(maps) > 1 else None
         print(
             f"\ncall head: {len(FEATURES)} in -> {args.hidden_call} -> {k}, "
             f"{(~cv).sum():,} train / {cv.sum():,} val (winning freezes only)"
@@ -360,19 +437,27 @@ def main():
         call_val = train_softmax(
             call, Xc[~cv], yc[~cv], Xc[cv], yc[cv], k,
             args.epochs_call, args.lr, args.batch, args.momentum, args.l2, rng, log, "call",
+            mask_t=None if Mc is None else Mc[~cv],
+            mask_v=None if Mc is None else Mc[cv],
         )
-        # The floor: always name that side's most common winning call.
+        # The floor: always name the most common winning call for that side.
+        # Keyed by (map, side) rather than side alone, because on a cross-map
+        # set "the most common T call overall" is a strawman no one would ship
+        # -- the thing to beat is the per-map habit.
+        def floor_key(r):
+            return (str(r.get("map") or "").upper(), r.get("side")) if len(maps) > 1 else r.get("side")
+
         by_side = {}
         for r, v in zip(call_rows, cv):
             if v:
                 continue
-            by_side.setdefault(r.get("side"), Counter())[f"{r.get('side')}:{r.get('call') or 'default'}"] += 1
+            by_side.setdefault(floor_key(r), Counter())[f"{r.get('side')}:{r.get('call') or 'default'}"] += 1
         top = {s: c.most_common(1)[0][0] for s, c in by_side.items()}
         held = [r for r, v in zip(call_rows, cv) if v]
         if held:
             call_base_acc = float(
                 np.mean([
-                    1.0 if top.get(r.get("side")) == f"{r.get('side')}:{r.get('call') or 'default'}" else 0.0
+                    1.0 if top.get(floor_key(r)) == f"{r.get('side')}:{r.get('call') or 'default'}" else 0.0
                     for r in held
                 ])
             )
@@ -392,6 +477,13 @@ def main():
         "iglVersion": meta.get("iglVersion"),
         "roundLibraryVersion": meta.get("roundLibraryVersion") or None,
         "features": FEATURES,
+        # The runtime has to mask exactly as the fit did, so the legal set
+        # travels with the weights rather than being re-derived from a
+        # playbook that may have moved on.
+        "maps": maps,
+        "callsByMap": {
+            m: [keys[i] for i in range(k) if legal[m][i]] for m in maps
+        } if len(maps) > 1 else None,
         "calls": [{"side": keys[i].split(":", 1)[0], "call": keys[i].split(":", 1)[1]} for i in range(k)],
         # Support travels with the weights: the JS head discounts a call the
         # net barely saw, exactly as the Wilson bound discounts a thin cell.

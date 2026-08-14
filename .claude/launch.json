@@ -18,6 +18,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "host"],
       "port": 3784
+    },
+    {
+      "name": "sim-lab",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "sim:lab"],
+      "port": 8742
     }
   ]
 }

@@ -402,13 +402,22 @@
     let brainA, brainB, tDataset, tDatasetPick, tMap, mMap;
 
     function fillBrains(models) {
+      // A caller is not a brain. The registry lists both because both are
+      // models, but picking a hivemind head here queues a match that dies on
+      // the engine's own "pass it as callerA/callerB" a tenth of a second in.
+      // Two names for one model (shipped and local) is a two-source artifact,
+      // not two choices, so the list is deduped by name as well.
+      const seen = new Set(BUILTIN);
       const opts = [
         ...BUILTIN.map((b) => ({ value: b, label: b })),
-        ...(models || []).map((m) => ({
-          value: m.name,
-          label: m.ok ? m.name : `${m.name} (broken)`,
-          disabled: !m.ok
-        }))
+        ...(models || [])
+          .filter((m) => m.kind !== 'caller' && m.lineage !== 'hivemind')
+          .filter((m) => (seen.has(m.name) ? false : seen.add(m.name)))
+          .map((m) => ({
+            value: m.name,
+            label: m.ok ? m.name : `${m.name} (broken)`,
+            disabled: !m.ok
+          }))
       ];
       const keepA = brainA?.value;
       const keepB = brainB?.value;

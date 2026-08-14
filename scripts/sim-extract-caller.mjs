@@ -81,7 +81,19 @@ const flag = (name, fallback) => {
 };
 const has = (name) => args.includes(`--${name}`);
 
-const MAP = String(flag('map', 'INF')).toUpperCase();
+// The caller's picture is map-agnostic -- side, alive counts, clock, bomb,
+// contact, econ -- so one map's worth of rows was never a modelling
+// requirement, only what this script could read. `--map ALL` walks the corpus
+// once and keeps every map it has a zone network for; `--map ANC,MIR` takes a
+// subset. The library and self-play sources still need per-map bakes, so they
+// stay single-map.
+const ALL_MAPS = ['ANC', 'ANU', 'CCH', 'DD2', 'INF', 'MIR', 'NUK'];
+const MAP_ARG = String(flag('map', 'INF')).toUpperCase();
+const MAPS = MAP_ARG === 'ALL' ? [...ALL_MAPS] : MAP_ARG.split(',').map((s) => s.trim()).filter(Boolean);
+/** The single map, for the sources and messages that only make sense with one. */
+const MAP = MAPS[0];
+const MULTI = MAPS.length > 1;
+const MAP_TAG = MULTI ? (MAP_ARG === 'ALL' ? 'all' : MAPS.join('-').toLowerCase()) : MAP.toLowerCase();
 const FROM = String(flag('from', 'self-play'));
 const MATCHES = Number(flag('matches', 8));
 const ROUNDS = Number(flag('rounds', 24));
@@ -93,7 +105,7 @@ const DEMO_DIR = flag('demos', 'D:/Dev/trainingdemos');
 const DEMO_LIMIT = Number(flag('limit', 0)) || 0;
 const OUT = flag(
   'out',
-  path.join(REPLAY_ROOT, 'sim', 'datasets', `igl-${MAP.toLowerCase()}-s${SEED}x${MATCHES}.jsonl`)
+  path.join(REPLAY_ROOT, 'sim', 'datasets', `igl-${MAP_TAG}-s${SEED}x${MATCHES}.jsonl`)
 );
 
 function fmtDuration(seconds) {
@@ -408,7 +420,7 @@ function demoRows({ meta, track, angles, network, map, demoId }) {
 }
 
 /** Walk the packages and tag every round-side. */
-async function demoSourceRows({ network }) {
+async function demoSourceRows({ networks }) {
   let all;
   try {
     all = (await fs.readdir(DEMO_DIR)).filter((f) => f.endsWith('.aim4replay'));
@@ -421,6 +433,7 @@ async function demoSourceRows({ network }) {
   console.log(`${all.length} packages in ${DEMO_DIR}`);
 
   const out = [];
+  const byMap = new Map();
   let rounds = 0;
   let skipped = 0;
   let done = 0;
@@ -441,11 +454,18 @@ async function demoSourceRows({ network }) {
         const meta = JSON.parse(zlib.zstdDecompressSync(Buffer.from(metaRaw)).toString('utf8'));
         // 12.1: nothing the sim produced may re-enter a training set.
         if (isSynthetic(meta)) continue;
-        if (String(meta.map || '').toUpperCase() !== MAP) continue;
+        // The round names its own map, and the zone network for it decides
+        // whether it is usable at all. A map we have no network for would tag
+        // every round `default`, which is worse than not having the round.
+        const roundMap = String(meta.map || '').toUpperCase();
+        const network = networks.get(roundMap);
+        if (!network) continue;
         const track = new TickTrack(decodeTickz(Buffer.from(tickRaw)));
-        const rows = demoRows({ meta, track, network, map: MAP, demoId });
-        if (rows.length) rounds += 1;
-        else skipped += 1;
+        const rows = demoRows({ meta, track, network, map: roundMap, demoId });
+        if (rows.length) {
+          rounds += 1;
+          byMap.set(roundMap, (byMap.get(roundMap) || 0) + rows.length);
+        } else skipped += 1;
         out.push(...rows);
       }
     } catch {
@@ -482,6 +502,11 @@ async function demoSourceRows({ network }) {
   }
   process.stdout.write('\n');
   console.log(`  ${rounds} round-sides tagged, ${skipped} rounds unusable`);
+  if (byMap.size > 1) {
+    for (const [m, n] of [...byMap].sort((a, b) => b[1] - a[1])) {
+      console.log(`    ${m}  ${n.toLocaleString()} rows`);
+    }
+  }
   return out;
 }
 
@@ -517,16 +542,30 @@ async function main() {
   const wantSelfPlay = FROM === 'self-play' || FROM === 'both';
   const wantDemos = FROM === 'demos';
 
+  if (MULTI && !wantDemos) {
+    console.error(
+      `--map ${MAP_ARG} needs --from demos. The library and self-play sources read a\n` +
+        'per-map bake (playbook, navcache, angles) and only produce rows for one map.'
+    );
+    process.exit(1);
+  }
+
   let rows = [];
   if (wantDemos) {
-    let network = null;
-    try {
-      network = JSON.parse(await fs.readFile(path.join(REPLAY_ROOT, 'zones', `${MAP}.json`), 'utf8'));
-    } catch {
-      console.error(`no zone network for ${MAP}; every round would tag as default`);
-      process.exit(1);
+    const networks = new Map();
+    for (const m of MAPS) {
+      try {
+        networks.set(
+          m,
+          JSON.parse(await fs.readFile(path.join(REPLAY_ROOT, 'zones', `${m}.json`), 'utf8'))
+        );
+      } catch {
+        console.error(`no zone network for ${m}; every round would tag as default`);
+        process.exit(1);
+      }
     }
-    rows = rows.concat(await demoSourceRows({ network }));
+    console.log(`maps: ${MAPS.join(' ')}`);
+    rows = rows.concat(await demoSourceRows({ networks }));
   }
   if (wantLibrary) {
     const bake = await load('playbook', MAP);
@@ -554,7 +593,7 @@ async function main() {
     process.exit(1);
   }
 
-  const { train, val, holdout, strata } = splitMatches(rows, { fraction: HOLDOUT, salt: `igl:${MAP}` });
+  const { train, val, holdout, strata } = splitMatches(rows, { fraction: HOLDOUT, salt: `igl:${MAP_TAG}` });
   const trainable = trainableRows(rows).length;
   const byAttrib = rows.reduce((a, r) => {
     const k = r.attrib || 'none';
@@ -570,7 +609,10 @@ async function main() {
     prwVersion: PRW_LOG_VERSION,
     teacher: wantDemos ? 'demos' : 'desire-4.3b',
     valueHead: VALUE_HEAD,
-    map: MAP,
+    // `map` stays a single label so every existing reader keeps working; a
+    // cross-map set says ALL and lists what it actually contains.
+    map: MULTI ? 'ALL' : MAP,
+    maps: MULTI ? [...new Set(rows.map((r) => r.map).filter(Boolean))].sort() : [MAP],
     seed: SEED,
     from: FROM,
     matches: wantDemos ? new Set(rows.map((r) => r.matchId)).size : MATCHES,

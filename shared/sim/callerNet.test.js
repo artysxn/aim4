@@ -5,6 +5,7 @@ import {
   CALLER_NET_VERSION,
   SUPPORT_MIN,
   callerFeatures,
+  featuresFor,
   loadCallerNet
 } from './callerNet.js';
 import { blendMemory } from './callValue.js';
@@ -196,6 +197,104 @@ function flatModel({ bias = 0, support = {}, withCall = true } = {}) {
     () => loadCallerNet({ ...flatModel(), calls: [...CALLS, { side: 'T', call: 'extra' }] }),
     /input does not match/,
     'a vocabulary the win head was not fitted for'
+  );
+}
+
+// ---- cross-map heads -------------------------------------------------------
+//
+// The caller's picture is map-agnostic, so one head is fitted over every map at
+// once and told which map it is on by a one-hot. Two things must hold: the
+// feature geometry has to grow by exactly the number of maps, and the shared
+// softmax must never offer a call that belongs to a different map.
+{
+  const MAPS = ['ANC', 'MIR', 'NUK'];
+  const XCALLS = [
+    { side: 'T', call: 'default' },
+    { side: 'T', call: 'anc-b-split' },
+    { side: 'T', call: 'mir-3mid' },
+    { side: 'CT', call: 'default' }
+  ];
+
+  assert(
+    featuresFor(MAPS).length === CALLER_FEATURES.length + 3,
+    'a cross-map feature list is the base plus one column per map'
+  );
+  assert(
+    featuresFor(['ANC']).length === CALLER_FEATURES.length,
+    'and a single-map model keeps the exact old geometry'
+  );
+
+  const pic = { side: 'T', alive: 5, enemyAlive: 5, clock: 0, secondsLeft: 115 };
+  const onNuke = callerFeatures(pic, { map: 'NUK', maps: MAPS });
+  assert(
+    onNuke[CALLER_FEATURES.length + 2] === 1 && onNuke[CALLER_FEATURES.length] === 0,
+    'the map one-hot lands in the slot its position in `maps` says'
+  );
+
+  const nIn = featuresFor(MAPS).length + XCALLS.length;
+  const zeros = (rows, cols) => Array.from({ length: rows }, () => new Array(cols).fill(0));
+  const cross = {
+    v: CALLER_NET_VERSION,
+    kind: 'caller',
+    name: 'igl-cross-1',
+    map: 'ALL',
+    maps: MAPS,
+    features: featuresFor(MAPS),
+    calls: XCALLS,
+    callsByMap: {
+      ANC: ['T:default', 'T:anc-b-split', 'CT:default'],
+      MIR: ['T:default', 'T:mir-3mid', 'CT:default'],
+      NUK: ['T:default', 'CT:default']
+    },
+    support: {},
+    win: { layers: [{ W: zeros(4, nIn), b: [0, 0, 0, 0] }, { W: [[0, 0, 0, 0]], b: [0] }] },
+    // Flat logits: every legal call ends up equally likely, so what the prior
+    // contains is purely a question of what the mask let through.
+    call: {
+      layers: [
+        { W: zeros(4, featuresFor(MAPS).length), b: [0, 0, 0, 0] },
+        { W: zeros(XCALLS.length, 4), b: [0, 0, 0, 0] }
+      ]
+    }
+  };
+
+  const net = loadCallerNet(cross);
+  assert(net.maps.length === 3, 'the head reports the maps it was fitted over');
+
+  const anc = net.callPrior(pic, 'T', 'ANC').map((c) => c.call).sort();
+  const nuke = net.callPrior(pic, 'T', 'NUK').map((c) => c.call).sort();
+  assert(
+    anc.join(',') === 'anc-b-split,default',
+    `an Ancient round is offered Ancient calls (${anc.join(',')})`
+  );
+  assert(
+    nuke.join(',') === 'default',
+    `and a Nuke round is never offered mir-3mid (${nuke.join(',')})`
+  );
+  assert(
+    Math.abs(net.callPrior(pic, 'T', 'ANC').reduce((s, c) => s + c.p, 0) - 1) < 1e-9,
+    'the masked prior still sums to one'
+  );
+
+  // Nothing wires the call head yet, so the first caller to forget the map
+  // must hear about it rather than get another map's calls back.
+  throws(
+    () => net.callPrior(pic, 'T'),
+    /needs the map/,
+    'a cross-map head asked without a map'
+  );
+  throws(
+    () => net.callPrior(pic, 'T', 'DD2'),
+    /needs the map/,
+    'and one asked for a map it was never fitted on'
+  );
+
+  // The geometry guard has to survive the change, or a cross-map artifact
+  // could be run by a build that cannot featurize it.
+  throws(
+    () => loadCallerNet({ ...cross, maps: ['ANC', 'MIR'] }),
+    /feature list does not match/,
+    'a model whose map list disagrees with its features'
   );
 }
 
