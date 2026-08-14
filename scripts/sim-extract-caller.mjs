@@ -627,12 +627,27 @@ async function main() {
     val: val.length
   };
 
-  const lines = [JSON.stringify(meta)];
-  for (const r of rows) {
-    lines.push(JSON.stringify({ ...r, split: holdout.has(r.matchId) ? 'val' : 'train' }));
-  }
+  // Written in batches rather than one join. A single map's worth of rows fits
+  // in a string; the whole corpus is about half a gigabyte of JSON and joining
+  // it throws `Invalid string length` off V8's cap, after the seven minutes of
+  // work are already done and thrown away with it.
   await fs.mkdir(path.dirname(OUT), { recursive: true });
-  await fs.writeFile(OUT, lines.join('\n'));
+  const fh = await fs.open(OUT, 'w');
+  try {
+    let batch = [JSON.stringify(meta)];
+    let written = 0;
+    for (const r of rows) {
+      batch.push(JSON.stringify({ ...r, split: holdout.has(r.matchId) ? 'val' : 'train' }));
+      if (batch.length >= 10000) {
+        await fh.write((written ? '\n' : '') + batch.join('\n'));
+        written += batch.length;
+        batch = [];
+      }
+    }
+    if (batch.length) await fh.write((written ? '\n' : '') + batch.join('\n'));
+  } finally {
+    await fh.close();
+  }
 
   console.log(`${rows.length} IGL rows (${meta.wins}W / ${meta.losses}L) -> ${OUT}`);
   console.log(`  train ${train.length}  val ${val.length}  over ${strata} strata`);
