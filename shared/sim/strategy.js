@@ -66,6 +66,13 @@ export class StrategyAI {
     return candidates[idx];
   }
 
+  /**
+   * `attrib: 'perc'` is 18.6b's third bucket: the ranking was right and the
+   * picture was wrong. The index already refuses to move a win counter for
+   * it, and the bandit must refuse too — rewarding EXP3 for a round the call
+   * did not lose teaches the selector to avoid a call that was fine. The
+   * lesson for that round is the calibration bias, written separately.
+   */
   observeRound({ won, attrib = 'call' } = {}) {
     if (!this.last.key || !this.last.call) return;
     this.index.write({
@@ -76,6 +83,7 @@ export class StrategyAI {
       gen: this.gen,
       scopes: ['session', 'career']
     });
+    if (attrib === 'perc') return;
     this.bandit.reward(this.last.banditKey, this.last.call, won ? 1 : 0);
   }
 }

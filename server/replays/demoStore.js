@@ -35,6 +35,11 @@ import { collectRounds, sortRounds } from '../../src/replays/shared/roundFilter.
 import { readHeader, sliceStride } from '../../src/replays/shared/tickFormat.js';
 import { encodePacked } from '../../src/replays/shared/tickPacked.js';
 import { TICKZ_EXT, decodeTickz, decodeTickzStride, encodeTickz } from './tickCodec.js';
+import {
+  assertNotReservedKey,
+  assertReal,
+  isReservedLibraryKey
+} from '../../shared/sim/firewall.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -65,7 +70,15 @@ export const MAX_UPLOAD_BYTES = Number(
 export function userKey(raw) {
   const s = String(raw || '').trim();
   const safe = s.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
-  return safe || 'local';
+  const key = safe || 'local';
+  // The firewall (12.1). `sim/` sits under ROOT beside the libraries, so
+  // without this every reader in this module — and therefore every extractor,
+  // trainer, and the stats index — is one library key away from ingesting
+  // simulated rounds. Refuse rather than fall back to the default library: a
+  // silent redirect turns "read the sim tree" into "train on real demos
+  // instead", which is a different wrong answer, not a refusal.
+  assertNotReservedKey(key, 'demoStore');
+  return key;
 }
 
 export const userDir = (user) => path.join(ROOT, userKey(user));
@@ -83,7 +96,13 @@ export const uploadsDir = (user) => path.join(userDir(user), 'uploads');
 export async function listLibraryUsers() {
   try {
     const entries = await fsp.readdir(ROOT, { withFileTypes: true });
-    return entries.filter((e) => e.isDirectory() && e.name !== 'zones').map((e) => e.name);
+    // `zones` was already excluded here by hand; `sim` joins it, from the one
+    // list in firewall.js. Boot-time parse resume walks whatever is actually
+    // on the volume, so this is the walker that would otherwise discover the
+    // sim tree the moment the first match is written (12.1).
+    return entries
+      .filter((e) => e.isDirectory() && !isReservedLibraryKey(e.name))
+      .map((e) => e.name);
   } catch {
     return [];
   }
@@ -788,7 +807,14 @@ export async function readRoundMeta(user, file) {
   for (const ext of META_EXTS) {
     const raw = await readIfPresent(path.join(dir, `${stem}${ext}`));
     if (!raw) continue;
-    return JSON.parse(ext.endsWith('.zst') ? zlib.zstdDecompressSync(raw) : raw.toString('utf8'));
+    const meta = JSON.parse(
+      ext.endsWith('.zst') ? zlib.zstdDecompressSync(raw) : raw.toString('utf8')
+    );
+    // The second firewall check (12.1), the one that travels with the file.
+    // The key check above cannot help once a round has been copied into a
+    // real library by hand; the marker can. Neither check subsumes the other.
+    assertReal(meta, 'demoStore');
+    return meta;
   }
   return null;
 }

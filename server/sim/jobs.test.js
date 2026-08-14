@@ -108,21 +108,29 @@ const models = await import('./models.js');
   await fsp.mkdir(localDir, { recursive: true });
 
   const shipped = await models.listModels();
-  const bc0 = shipped.find((m) => m.name === 'bc0');
-  assert(bc0, 'bc0 ships with the repo, so an empty host still has a brain');
-  assert(bc0.source === 'shipped', 'and reports where it came from');
-  assert(bc0.ok && bc0.vocab > 0, 'and it loads');
+  const navaja1 = shipped.find((m) => m.name === 'navaja-1');
+  assert(navaja1, 'Navaja 1 ships with the repo, so an empty host still has a brain');
+  assert(navaja1.source === 'shipped', 'and reports where it came from');
+  assert(navaja1.ok && navaja1.vocab > 0, 'and it loads');
+  assert(navaja1.display === 'Navaja 1', 'the panel has something to print');
+
+  // The name it used to have still resolves (modelNames.js LEGACY_ALIASES).
+  // Shipped match records and the scorecard's frozen references still say
+  // `bc0`, and those must keep pointing at something.
+  const legacy = await models.loadModel('bc0');
+  assert(!legacy.error, `the old name still loads (${legacy.error || ''})`);
+  assert(legacy.meta.name === 'navaja-1', 'and resolves to what it became');
 
   // A local file of the same name wins, which is what makes training on the
   // PC and playing immediately work without a deploy.
   const json = JSON.parse(
-    await fsp.readFile(path.join(models.SHIPPED_DIR, 'bc0.json'), 'utf8')
+    await fsp.readFile(path.join(models.SHIPPED_DIR, 'navaja-1.json'), 'utf8')
   );
   json.teacher = 'local-copy';
-  await fsp.writeFile(path.join(localDir, 'bc0.json'), JSON.stringify(json));
+  await fsp.writeFile(path.join(localDir, 'navaja-1.json'), JSON.stringify(json));
   models.clearModelCache();
 
-  const after = await models.loadModel('bc0');
+  const after = await models.loadModel('navaja-1');
   assert(!after.error, 'the local copy loads');
   assert(after.meta.source === 'local', 'and it is the one that wins');
   assert(after.meta.teacher === 'local-copy', 'reading the local bytes, not the shipped ones');

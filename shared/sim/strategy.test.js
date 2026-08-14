@@ -48,4 +48,29 @@ function assert(cond, msg) {
   assert(cands.includes(pick), 'and select still returns a legal call');
 }
 
+// ---- 18.6b: a perceptual loss is not a bad call --------------------------
+
+{
+  const index = new ExperienceIndex();
+  const sit = situationKey({ map: 'INF', side: 'T' });
+  const ai = new StrategyAI({ index });
+  for (let i = 0; i < 6; i += 1) {
+    ai.last = { key: sit.hash, call: 'a-execute', banditKey: 'T|full|even' };
+    ai.observeRound({ won: i % 2 === 0, attrib: 'call' });
+  }
+  const before = index.read(sit.hash, 'a-execute');
+  const weightBefore = ai.bandit.weight('T|full|even', 'a-execute');
+
+  // It ranked its options right and could not see the site was full.
+  ai.last = { key: sit.hash, call: 'a-execute', banditKey: 'T|full|even' };
+  ai.observeRound({ won: false, attrib: 'perc' });
+
+  const after = index.read(sit.hash, 'a-execute');
+  assert(after.n === before.n && after.w === before.w, 'perc adds no pull to the head');
+  assert(after.lower === before.lower, 'so the call value does not move');
+  assert(after.attrib.perc > 0, 'the bucket is counted instead');
+  const weightAfter = ai.bandit.weight('T|full|even', 'a-execute');
+  assert(weightAfter === weightBefore, 'and EXP3 is not punished for it either');
+}
+
 console.log('strategy: ok');

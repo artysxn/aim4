@@ -28,6 +28,7 @@ import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { sliceStride } from '../src/replays/shared/tickFormat.js';
 import { decodeTickz, decodeTickzStride, encodeTickz } from '../server/replays/tickCodec.js';
+import { isReservedLibraryKey } from '../shared/sim/firewall.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.AIM4_REPLAY_DIR || path.join(__dirname, '..', 'server', 'data', 'replays');
@@ -46,7 +47,12 @@ const fmt = (n) => {
 async function listUsers() {
   const out = [];
   for (const e of await fsp.readdir(ROOT, { withFileTypes: true }).catch(() => [])) {
-    if (e.isDirectory() && !e.name.startsWith('.')) out.push(e.name);
+    if (!e.isDirectory() || e.name.startsWith('.')) continue;
+    // Not every directory under ROOT is somebody's demos (12.1). `sim/` holds
+    // simulated matches in the same codecs, which is exactly what makes it
+    // look compactable to a walker that only checks for a directory.
+    if (isReservedLibraryKey(e.name)) continue;
+    out.push(e.name);
   }
   return out;
 }

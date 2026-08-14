@@ -275,6 +275,9 @@ export function playVersusMatch({
       outcome,
       kills: engine.state.events.filter((e) => e.type === 'death').length,
       winnerTeam: outcome.winner === sideA ? 'A' : 'B',
+      // Which team played which side this round, so a per-side log (the
+      // collect tap stamps 'T'/'CT') can be joined to a per-team one.
+      sides: { A: sideA, B: sideB },
       score: { ...match.state.score },
       recorded: engine.recorded,
       ticks: recorder ? recorder.encodeTicks() : null,
@@ -289,6 +292,18 @@ export function playVersusMatch({
     rounds.push(round);
     if (typeof ctrlA.roundEnd === 'function') ctrlA.roundEnd({ outcome, side: sideA, round });
     if (typeof ctrlB.roundEnd === 'function') ctrlB.roundEnd({ outcome, side: sideB, round });
+    // After roundEnd, because that is where the two PRWs are graded (18.6b):
+    // a row drained before the review carries belief and no truth.
+    round.prw = {
+      A: typeof ctrlA.prwRows === 'function' ? ctrlA.prwRows() : null,
+      B: typeof ctrlB.prwRows === 'function' ? ctrlB.prwRows() : null
+    };
+    // Same reason, one stage later: the caller's rows are sealed by roundEnd
+    // with the outcome, the attribution and the true price (9.25 stage 3).
+    round.igl = {
+      A: typeof ctrlA.iglRows === 'function' ? ctrlA.iglRows() : null,
+      B: typeof ctrlB.iglRows === 'function' ? ctrlB.iglRows() : null
+    };
     if (onRound) onRound(round);
   }
 

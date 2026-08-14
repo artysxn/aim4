@@ -7,7 +7,9 @@ import {
   createCaller,
   CALLER_MODE,
   CALL_DECISION,
+  TAPE_FIT,
   classifyContactRel,
+  fitOf,
   pictureWinrate,
   shouldRecall
 } from './caller.js';
@@ -179,8 +181,13 @@ function picture(extra = {}) {
     awpOf
   });
   assert(intel.rel === 'behind', 'still behind');
-  assert(intel.mode === CALLER_MODE.FREESTYLE, 'a -EV miss is freestyle, not a bad tape');
-  assert(!c.isOnTape(0), 'nobody stays on the old tape');
+  // The operator's partition has no fourth mode: a miss is not a licence to
+  // improvise. The caller falls back to a mined tape and runs it LOOSELY —
+  // the idea of a round, not its choreography — and only an empty library
+  // can produce a freestyle round.
+  assert(intel.mode === CALLER_MODE.TAPE, 'a -EV miss falls back to a mined tape');
+  assert(c.looseness() === TAPE_FIT.LOOSE, 'and copies it loosely, not verbatim');
+  assert(c.isOnTape(0), 'so the bots have a plan again');
 }
 
 {
@@ -310,6 +317,19 @@ function picture(extra = {}) {
   assert(vp.entry()?.id === vpId, 'same tape while frozen');
   assert(vp.freezeKeyword() === 'freeze', 'and names the hold keyword');
   assert(vp.isOnTape(0), 'bots stay on the tape');
+}
+
+{
+  // Direct or loose is decided by how well the tape answers what was called:
+  // the called call on its own economy is a copy; everything else is an idea
+  // being borrowed, and the follower is told to hold it loosely.
+  const tape = { call: 'inf-a-exec', econ: 4 };
+  assert(fitOf(tape, { call: 'inf-a-exec', econ: 4 }) === TAPE_FIT.DIRECT, 'the round it was mined for');
+  assert(fitOf(tape, { call: 'inf-a-exec', econ: 3 }) === TAPE_FIT.DIRECT, 'one bucket off is the same buy');
+  assert(fitOf(tape, { call: 'inf-a-exec', econ: 1 }) === TAPE_FIT.LOOSE, 'an eco running a full-buy round is borrowing it');
+  assert(fitOf(tape, { call: 'inf-b-exec', econ: 4 }) === TAPE_FIT.LOOSE, 'a different call is a different round');
+  assert(fitOf(tape, { call: null, econ: null }) === TAPE_FIT.DIRECT, 'nothing asked, nothing violated');
+  assert(fitOf(null, { call: 'x' }) === null, 'no tape, no fit');
 }
 
 console.log('caller: ok');

@@ -24,6 +24,8 @@ import {
   listMatches,
   readRoundMeta,
   readRoundMotives,
+  readRoundPrw,
+  readRoundIgl,
   readRoundTicks,
   runStatus
 } from './matches.js';
@@ -272,12 +274,20 @@ async function route(req, res, url, me) {
   // addressable now so a later panel does not invent a second store.
   if (p === '/api/sim/experience' && req.method === 'GET') {
     const file = path.join(ROOT, 'sim', 'experience', 'career.json');
-    let body = { v: EXPERIENCE_VERSION, rows: [], scopes: ['session', 'opponent', 'career'] };
+    let body = {
+      v: EXPERIENCE_VERSION,
+      rows: [],
+      // Perception biases per situation (18.6b.1), beside the win records so
+      // the Memory tab reads one store rather than two.
+      calibrations: [],
+      scopes: ['session', 'opponent', 'career']
+    };
     try {
       const json = JSON.parse(await fsp.readFile(file, 'utf8'));
       body = {
         v: json.v || EXPERIENCE_VERSION,
         rows: json.rows || json.career || [],
+        calibrations: json.calibrations || [],
         scopes: json.scopes || body.scopes
       };
     } catch {
@@ -319,8 +329,8 @@ async function route(req, res, url, me) {
     return true;
   }
 
-  // /api/sim/matches/<id>/round/<n>/{ticks,meta,motives}
-  const m = p.match(/^\/api\/sim\/matches\/([^/]+)\/round\/(\d+)\/(ticks|meta|motives)$/);
+  // /api/sim/matches/<id>/round/<n>/{ticks,meta,motives,prw,igl}
+  const m = p.match(/^\/api\/sim\/matches\/([^/]+)\/round\/(\d+)\/(ticks|meta|motives|prw|igl)$/);
   if (m && req.method === 'GET') {
     const [, id, round, kind] = m;
     if (kind === 'ticks') {
@@ -333,6 +343,18 @@ async function route(req, res, url, me) {
       const motives = await readRoundMotives(id, round);
       if (!motives) return notFound(res, req);
       json(res, req, 200, motives);
+      return true;
+    }
+    if (kind === 'prw') {
+      const prw = await readRoundPrw(id, round);
+      if (!prw) return notFound(res, req);
+      json(res, req, 200, prw);
+      return true;
+    }
+    if (kind === 'igl') {
+      const igl = await readRoundIgl(id, round);
+      if (!igl) return notFound(res, req);
+      json(res, req, 200, igl);
       return true;
     }
     const meta = await readRoundMeta(id, round);

@@ -16,6 +16,8 @@
 // Usage:
 //   node scripts/sim-run-match.mjs --map INF --rounds 24 --seed 1
 //   node scripts/sim-run-match.mjs --brain-a bc0 --brain-b desire
+//   node scripts/sim-run-match.mjs --map CCH --brain-a paracord-lite-1 \
+//     --caller-a igl-paracord-lite-1 --brain-b navaja-3 --caller-b igl-paracord-lite-1
 // ---------------------------------------------------------------------------
 
 import { runMatch } from '../server/sim/matches.js';
@@ -34,6 +36,8 @@ const params = {
   skillB: flag('skill-b', 'average'),
   brainA: flag('brain-a', 'scripted'),
   brainB: flag('brain-b', 'scripted'),
+  callerA: flag('caller-a', null),
+  callerB: flag('caller-b', null),
   recordEvery: Number(flag('record-every', 1))
 };
 

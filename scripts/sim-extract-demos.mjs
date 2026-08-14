@@ -57,6 +57,7 @@ import { JointBelief } from '../shared/sim/knowledge.js';
 import { Rng } from '../shared/sim/rng.js';
 import { buildObservation, OBSERVATION_SIZE, OBSERVE_VERSION, weaponClassOf } from '../shared/sim/observe.js';
 import { OPTION_IDS } from '../shared/sim/options.js';
+import { isSynthetic } from '../shared/sim/firewall.js';
 import { optionAt, PACK_RADIUS, segmentTrack } from '../shared/sim/optionSegmenter.js';
 import { weaponInfo } from '../src/replays/shared/weaponTable.js';
 import {
@@ -317,6 +318,49 @@ function extractRound({ meta, track, state, map, rng, onSample }) {
   }
   if (!site) site = deepest?.site || null;
 
+  // The objective channels, per slot.
+  //
+  // optionSegmenter labels `plant` and `defuse` from attested channel events
+  // and says so — "a channel outranks feet, in labels as in play" — but it was
+  // never given any, so those two options could not be produced at all. In a
+  // corpus of 3,248 Cache rounds the option head saw seven of the thirty-two
+  // words, and neither of these was among them.
+  //
+  // The demo meta records the END of each channel (the plant, the defuse), so
+  // the start is backed off by how long the channel takes. Both durations are
+  // the game's, not ours: 3.2 s to plant, 10 s to defuse bare-handed and 5 s
+  // with a kit.
+  const eventsBySlot = new Map();
+  const pushEvent = (slot, ev) => {
+    if (slot == null) return;
+    if (!eventsBySlot.has(slot)) eventsBySlot.set(slot, []);
+    eventsBySlot.get(slot).push(ev);
+  };
+  const slotOfId = (id) => roster.find((r) => r.id === id)?.slot ?? null;
+  const hasKit = (id) =>
+    (meta.stats?.[id]?.loadout || []).some((item) => /defus|kit/i.test(String(item)));
+
+  for (const b of meta.events?.bomb || []) {
+    const slot = slotOfId(b.player);
+    if (slot == null || !Number.isFinite(b.tick)) continue;
+    if (b.type === 'planted' || b.type === 'plant') {
+      pushEvent(slot, { type: 'plant_start', tick: b.tick - Math.round(3.2 * tickRate) });
+      pushEvent(slot, { type: 'plant_end', tick: b.tick });
+    } else if (b.type === 'defused' || b.type === 'defuse') {
+      const seconds = hasKit(b.player) ? 5 : 10;
+      pushEvent(slot, { type: 'defuse_start', tick: b.tick - Math.round(seconds * tickRate) });
+      pushEvent(slot, { type: 'defuse_end', tick: b.tick });
+    }
+  }
+  // Damage taken, which the segmenter reads for its reactive labels. The kill
+  // feed is the only attested source here; a demo carries no per-tick health
+  // delta this pass reads.
+  for (const d of deaths) {
+    const slot = slotOfId(d.victim);
+    if (slot != null) pushEvent(slot, { type: 'damage', tick: d.tick });
+  }
+  for (const list of eventsBySlot.values()) list.sort((a, b) => a.tick - b.tick);
+
   const segmentsBySlot = new Map();
   for (const p of winners) {
     const poses = poseTracks.get(p.slot) || [];
@@ -330,6 +374,7 @@ function extractRound({ meta, track, state, map, rng, onSample }) {
         tickRate,
         teammates,
         site,
+        events: eventsBySlot.get(p.slot) || [],
         deaths: deathPos.filter((d) => d.slot !== p.slot)
       })
     );
@@ -646,6 +691,11 @@ async function processDemo(file, rng, emit) {
       const tickRaw = files.get(`rounds/${stem}.tickz`);
       if (!metaRaw || !tickRaw) continue;
       const meta = JSON.parse(zlib.zstdDecompressSync(Buffer.from(metaRaw)).toString('utf8'));
+      // 9.3 step 1's "exclude synthetic", enforced rather than assumed (12.1).
+      // This path reads packages from a folder, not the server library, so the
+      // demo store's guards never see it: a sim round exported into the
+      // training folder would otherwise be cloned as if a human had played it.
+      if (isSynthetic(meta)) continue;
       const code = String(meta.map || '').toUpperCase();
       if (!code) continue;
       if (ONLY_MAPS.length && !ONLY_MAPS.includes(code)) break;
@@ -908,6 +958,9 @@ async function main() {
         const tickRaw = files.get(`rounds/${stem}.tickz`);
         if (!metaRaw || !tickRaw) continue;
         const meta = JSON.parse(zlib.zstdDecompressSync(Buffer.from(metaRaw)).toString('utf8'));
+        // Same refusal as the worker path (12.1). Both loops decode packages
+        // independently, so a guard on one of them is a guard on neither.
+        if (isSynthetic(meta)) continue;
         const code = String(meta.map || '').toUpperCase();
         if (!code) continue;
         if (ONLY_MAPS.length && !ONLY_MAPS.includes(code)) break;

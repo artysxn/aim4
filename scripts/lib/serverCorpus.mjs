@@ -20,6 +20,7 @@
 import { SHARED_LIBRARY } from '../../server/replays/auth.js';
 import { listDemos, readRoundMeta, readRoundTicks } from '../../server/replays/demoStore.js';
 import { TickTrack } from '../../src/replays/tickStore.js';
+import { isSynthetic } from '../../shared/sim/firewall.js';
 
 /**
  * Walk every round of every ready demo in a library.
@@ -64,6 +65,15 @@ export async function* eachLibraryRound({
     } catch {
       firstMeta = null;
     }
+    // The firewall, said out loud (12.1). `readRoundMeta` already refuses a
+    // synthetic round, but that refusal arrives here as an unreadable-round
+    // warning, and "training quietly skipped 400 demos" is the failure this
+    // walk is least able to notice. Name it instead.
+    if (isSynthetic(firstMeta)) {
+      onWarn?.(`${name}: synthetic, not ingested (12.1)`);
+      continue;
+    }
+
     const map = firstMeta?.map || record.map || '';
     if (!map) continue;
     if (maps?.length && !maps.includes(map)) continue;

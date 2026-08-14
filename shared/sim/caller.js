@@ -16,12 +16,23 @@
 // Sampling, not argmax: pickCall / pickRound already softmax over the top k.
 // The same situation produces a family of plausible rounds, which is what
 // stops a side from playing one demo forever.
+//
+// Step 4 has two implementations and the second is 9.25 stage 1. With no head
+// injected this is the stage 0 librarian: the -EV heuristic asks, the library
+// answers, and one tape is drawn on distance. With `compare` / `pick` injected
+// (callValue.js), the same step becomes the spec's one comparison — V(current
+// tape) vs V(best close match), recall when an alternative wins by the
+// posture's margin — and the shortlist is priced rather than drawn blind.
+// Nothing about the action space changes: the answers are still library tapes.
 // ---------------------------------------------------------------------------
 
 import {
   assignRoles,
+  closeMatches,
   dueUtility,
   matchSituation,
+  nextWaypointAt,
+  openingCandidates,
   pickCall,
   pickRound,
   tapeEndSeconds,
@@ -32,6 +43,31 @@ import { BOMB_SECONDS, ROUND_SECONDS } from './constants.js';
 import { costOfDeath, roundFeatures, valueOfKill, winProbability } from './objective.js';
 
 export const CALLER_MODE = Object.freeze({ TAPE: 'tape', FREESTYLE: 'freestyle' });
+
+/**
+ * How faithfully the tape is to be copied. The operator's partition: every
+ * round is a DIRECT copy of a library round, a LOOSE copy of one (each player
+ * half-asses the job — wider radii, slack timings, utility optional), or a
+ * mined default. There is no fourth mode: a caller with a library never
+ * improvises a round from nothing.
+ */
+export const TAPE_FIT = Object.freeze({ DIRECT: 'direct', LOOSE: 'loose' });
+
+/** Econ buckets this far apart still count as the same kind of buy. */
+export const FIT_ECON_SLACK = 1;
+
+/**
+ * Direct or loose, decided by how well the tape answers the situation it was
+ * drawn for: the called call, run on the economy it was mined at, is a copy;
+ * anything else is an idea being borrowed.
+ */
+export function fitOf(entry, { call = null, econ = null } = {}) {
+  if (!entry) return null;
+  const callFits = !call || call === entry.call;
+  const econFits =
+    econ == null || entry.econ == null || Math.abs(entry.econ - econ) <= FIT_ECON_SLACK;
+  return callFits && econFits ? TAPE_FIT.DIRECT : TAPE_FIT.LOOSE;
+}
 
 /** What a recall can name. The tape is the plan; these are why it moved. */
 export const CALL_DECISION = Object.freeze({
@@ -58,6 +94,15 @@ export const CALLER_POSTURE = Object.freeze({
 export const TAPE_ERROR_UNITS = 180;
 /** Seconds of that error before the bot is marked local. */
 export const TAPE_ERROR_SECONDS = 1.5;
+/**
+ * Seconds BEHIND SCHEDULE before distance from the tape means having left it.
+ * Falling off is far AND late, never far alone: mid-segment a follower is
+ * always the whole segment from its next waypoint, and a fight that holds a
+ * bot up for a few seconds is a delay, not a desertion. What this must catch
+ * is the bot that is somewhere else entirely — pinned, lost, or dragged off
+ * by an interrupt — long after the tape wanted it moved on.
+ */
+export const TAPE_LAG_SECONDS = 10;
 /** Seconds after the last waypoint/throw before the tape is exhausted. */
 export const TAPE_GRACE_SECONDS = 10;
 /** A TEAM redecide inside this window keeps the current tape. */
@@ -99,7 +144,15 @@ function postureOf(name) {
   return CALLER_POSTURE[name] || CALLER_POSTURE.default;
 }
 
-function featuresFrom(picture) {
+/**
+ * A picture — believed or true — as the fitted model's feature bag.
+ *
+ * Exported because 18.6b's residual is only meaningful if both PRWs are built
+ * by the same arithmetic: prw.js runs this over the god-view snapshot and the
+ * caller runs it over the belief, and the difference between the two numbers
+ * is then the picture and nothing else.
+ */
+export function pictureFeatures(picture) {
   const alive = Number.isFinite(picture.alive) ? picture.alive : 5;
   const enemy = Number.isFinite(picture.enemyAlive) ? picture.enemyAlive : 5;
   const tAlive = picture.side === 'T' ? alive : enemy;
@@ -132,13 +185,21 @@ function featuresFrom(picture) {
  * Predicted P(this side wins) from the believed picture: bodies, clock, bomb,
  * and where the belief puts the other side. Optional experience mean is a
  * blend once it has seen the situation a handful of times.
+ *
+ * `picture.calBias` is 18.6b's perception calibration: the mean residual this
+ * kind of picture has run, already gated and capped by the experience index.
+ * It changes the INPUT to the maximization, slowly, and nothing else — the
+ * bot still plays believed PRW, and no position ever came back from a review.
  */
 export function pictureWinrate(picture, model = null) {
-  let p = winProbability(featuresFrom(picture), picture.side, model);
+  let p = winProbability(pictureFeatures(picture), picture.side, model);
   const n = picture.experienceN || 0;
   if (n >= 8 && Number.isFinite(picture.experienceMean)) {
     const w = Math.min(0.35, n / 40);
     p = (1 - w) * p + w * picture.experienceMean;
+  }
+  if (Number.isFinite(picture.calBias)) {
+    p = Math.min(1, Math.max(0, p + picture.calBias));
   }
   return p;
 }
@@ -149,7 +210,7 @@ export function pictureWinrate(picture, model = null) {
  * walking into it is -EV even if the round is currently winning.
  */
 export function fightEV(picture, model = null) {
-  const features = featuresFrom(picture);
+  const features = pictureFeatures(picture);
   const side = picture.side;
   const dKill = valueOfKill(features, side, model);
   const dDie = -costOfDeath(features, side, model);
@@ -162,24 +223,65 @@ export function fightEV(picture, model = null) {
  * The gate. Plans in motion stay in motion. A recall is the exception:
  * continuing is -EV, or this posture freezes when ahead.
  *
+ * `compare` is 9.25 stage 1, injected rather than imported: callValue.js
+ * prices plans with `pictureWinrate` and `fightEV` from this file, so the
+ * dependency has to run one way. When a head is supplied the -EV heuristic
+ * below is replaced by the spec's one comparison, V(alt) vs V(current), over
+ * the library's close matches. When it is not, stage 0's librarian answers,
+ * unchanged — which is what keeps "5v5 behind keeps; default 5v4 walks; VP
+ * 5v4 freezes" true with the head off.
+ *
+ * The posture freeze is tested FIRST either way, and deliberately: freezing
+ * when ahead is doctrine (6.2 H3), not arithmetic. Letting the value head
+ * decide it would hand every posture VP's trigger finger, which is exactly
+ * the collapse 9.25 warns about ("a generation that discovered freeze every
+ * 5v4 has collapsed on posture").
+ *
  * @returns {{recall: boolean, decision: string|null, reason: string, pWin: number, fightEv: number}}
  */
 export function shouldRecall({
   picture,
   hit = null,
   currentDecision = null,
+  currentEntry = null,
+  candidates = null,
   posture = 'default',
+  compare = null,
+  memoryOf = null,
+  model = null,
   rng = null
 } = {}) {
   const spec = postureOf(posture);
-  const pWin = pictureWinrate(picture);
-  const ev = fightEV(picture);
+  const pWin = pictureWinrate(picture, model);
+  const ev = fightEV(picture, model);
   const manAdv = (picture.alive ?? 5) - (picture.enemyAlive ?? 5);
   const freezeLine =
     spec.freezePWin + (spec.jitter && rng?.next ? (rng.next() - 0.5) * spec.jitter : 0);
 
   if (manAdv >= spec.freezeManAdv && pWin >= freezeLine) {
     return { recall: true, decision: CALL_DECISION.FREEZE, reason: 'ahead: next fight is not required', pWin, fightEv: ev };
+  }
+
+  if (compare) {
+    const verdict = compare({
+      picture,
+      candidates: candidates || (hit ? [{ entry: hit.entry, decision: hit.decision, distance: 0 }] : []),
+      currentDecision,
+      currentEntry,
+      recallMargin: spec.recallMargin,
+      memoryOf,
+      model
+    });
+    return {
+      recall: Boolean(verdict.recall),
+      decision: verdict.recall ? verdict.decision : currentDecision,
+      entry: verdict.recall ? verdict.entry || null : null,
+      reason: verdict.reason,
+      pWin,
+      fightEv: ev,
+      margin: verdict.margin,
+      ranked: verdict.ranked
+    };
   }
 
   const losing = pWin < 0.5 - spec.recallMargin || ev < -spec.recallMargin;
@@ -218,11 +320,32 @@ export function shouldRecall({
  * @param {string} args.map
  * @param {'T'|'CT'} args.side
  * @param {string} [args.posture]  'default' | 'vp' | 'liquid' | 'freeze'
+ * @param {function} [args.compare]  9.25 stage 1: `comparePlans` from
+ *   callValue.js, injected so this file never learns about the head. Null is
+ *   stage 0 and the librarian answers alone.
+ * @param {function} [args.pick]  `pickPlan`, the value-scored freeze draw
+ * @param {object} [args.model]  the fitted round model, when one is loaded
  */
-export function createCaller({ playbook = null, rng, map, side, slots, posture = 'default' }) {
+export function createCaller({
+  playbook = null,
+  rng,
+  map,
+  side,
+  slots,
+  posture = 'default',
+  compare = null,
+  pick = null,
+  model = null
+}) {
+  // The situation's tabular read, refreshed by the bot each team frame: the
+  // head is a function the caller is handed, which is what lets stage 4 swap
+  // a net in without touching this file (9.25 stage 4).
+  let memoryOf = null;
   let entry = null;
   let call = null;
   let decision = null;
+  let tapeFit = null;
+  let econSeen = null;
   let teamMode = CALLER_MODE.FREESTYLE;
   let roles = new Map();
   const thrown = new Map();
@@ -245,9 +368,10 @@ export function createCaller({ playbook = null, rng, map, side, slots, posture =
     return s;
   }
 
-  function applyTape(next, nextDecision, contractOf, awpOf) {
+  function applyTape(next, nextDecision, contractOf, awpOf, fit = null) {
     entry = next || null;
     decision = nextDecision || null;
+    tapeFit = entry ? fit || fitOf(entry, { call, econ: econSeen }) : null;
     thrown.clear();
     localOff.clear();
     vetoed.clear();
@@ -286,6 +410,21 @@ export function createCaller({ playbook = null, rng, map, side, slots, posture =
     });
   }
 
+  /**
+   * The same answer book, unsampled. With a head on we want the shortlist to
+   * rank rather than one draw from it, and taking it this way consumes no rng:
+   * the sampling that stage 0 does at this point is the head's job now.
+   */
+  function candidatesFor(picture, contactRel) {
+    if (!playbook) return [];
+    return closeMatches(playbook, {
+      side,
+      clock: picture.clock,
+      contactRel: contactRel || picture.contactRel,
+      call
+    });
+  }
+
   function evaluate(picture, { contactRel = null, teamBroken = false, contractOf, awpOf } = {}) {
     const snap = {
       side,
@@ -302,14 +441,24 @@ export function createCaller({ playbook = null, rng, map, side, slots, posture =
       packAtTarget: picture.packAtTarget,
       teamBroken: teamBroken || picture.teamBroken,
       experienceMean: picture.experienceMean,
-      experienceN: picture.experienceN
+      experienceN: picture.experienceN,
+      calBias: picture.calBias
     };
-    const hit = lookup(snap, snap.contactRel);
+    // Stage 0 samples one answer here; stage 1 takes the whole shortlist and
+    // lets the head order it. Only one of the two runs, so the head never
+    // pays for a draw it is about to overrule.
+    const hit = compare ? null : lookup(snap, snap.contactRel);
+    const candidates = compare ? candidatesFor(snap, snap.contactRel) : null;
     const gate = shouldRecall({
       picture: snap,
       hit,
+      candidates,
       currentDecision: decision,
+      currentEntry: entry,
       posture,
+      compare,
+      memoryOf,
+      model,
       rng
     });
     if (!gate.recall) {
@@ -335,6 +484,31 @@ export function createCaller({ playbook = null, rng, map, side, slots, posture =
         recalled: true,
         decision: CALL_DECISION.DELAY,
         reason: gate.reason,
+        pWin: gate.pWin,
+        fightEv: gate.fightEv,
+        rel: snap.contactRel
+      };
+    }
+    // The head named a tape, so run that tape. Resampling here would throw
+    // away the one thing stage 1 exists to produce.
+    if (gate.entry) {
+      if (
+        Number.isFinite(lastRedecideClock) &&
+        Number.isFinite(snap.clock) &&
+        snap.clock - lastRedecideClock < REPLAN_COOLDOWN_SECONDS
+      ) {
+        return { kept: true, reason: 'cooldown', pWin: gate.pWin, fightEv: gate.fightEv, rel: snap.contactRel };
+      }
+      if (Number.isFinite(snap.clock)) lastRedecideClock = snap.clock;
+      applyTape(gate.entry, gate.decision, contractOf, awpOf);
+      return {
+        kept: false,
+        recalled: true,
+        mode: CALLER_MODE.TAPE,
+        decision: gate.decision,
+        entry: gate.entry,
+        reason: gate.reason,
+        margin: gate.margin,
         pWin: gate.pWin,
         fightEv: gate.fightEv,
         rel: snap.contactRel
@@ -379,11 +553,21 @@ export function createCaller({ playbook = null, rng, map, side, slots, posture =
       rng
     });
     if (!hit) {
+      // No close match is not a licence to improvise (operator rule): the
+      // round falls back to a mined DEFAULT, joined at the current clock —
+      // the follower steers by nextWaypoint, so a tape entered at t=40 is
+      // simply picked up from its 40-second mark. Loose by definition: the
+      // situation only half fits, so the copy is only half meant.
+      const fallback = pickRound(playbook, { side, call: 'default', econ: econSeen, rng });
+      if (fallback) {
+        applyTape(fallback, null, contractOf, awpOf, TAPE_FIT.LOOSE);
+        return { mode: CALLER_MODE.TAPE, decision: null, entry: fallback, fit: TAPE_FIT.LOOSE };
+      }
       applyTape(null, null, contractOf, awpOf);
       return { mode: CALLER_MODE.FREESTYLE, reason: 'no close match' };
     }
     applyTape(hit.entry, hit.decision, contractOf, awpOf);
-    return { mode: CALLER_MODE.TAPE, decision: hit.decision, entry: hit.entry };
+    return { mode: CALLER_MODE.TAPE, decision: hit.decision, entry: hit.entry, fit: tapeFit };
   }
 
   return {
@@ -391,19 +575,55 @@ export function createCaller({ playbook = null, rng, map, side, slots, posture =
     side,
     slots,
 
-    roundStart({ econ = null, contractOf = () => null, awpOf = () => false, strategyCall = null, spawn: sp, goal: g } = {}) {
+    /**
+     * The head, refreshed for the situation the bot is currently in. Handed
+     * in rather than read, so the caller never imports the experience index
+     * and stage 4 can pass a net's forward pass instead (9.25 stage 4).
+     */
+    useHead(fn) {
+      memoryOf = typeof fn === 'function' ? fn : null;
+    },
+
+    roundStart({ econ = null, econEnemy = null, contractOf = () => null, awpOf = () => false, strategyCall = null, picture = null, spawn: sp, goal: g } = {}) {
       if (sp) spawn = sp;
       if (g) goal = g;
       lastRedecideClock = -Infinity;
       vetoCount = 0;
+      econSeen = econ;
       if (!playbook) {
         applyTape(null, null, contractOf, awpOf);
         return { mode: CALLER_MODE.FREESTYLE };
       }
       call = pickCall(playbook, { side, prefer: strategyCall, rng }) || 'default';
-      const picked = pickRound(playbook, { side, call, econ, rng });
-      applyTape(picked, picked?.plant ? 'commit' : null, contractOf, awpOf);
-      return { mode: teamMode, call, entry };
+      // 9.25 stage 1: with a head on, `strategyCall` stops being a polite
+      // hint to `pickCall` and becomes the prior — it still picks the call,
+      // and the head then prices the tapes that answer it against the freeze
+      // picture instead of drawing one on distance alone.
+      if (pick && picture) {
+        const chosen = pick({
+          candidates: openingCandidates(playbook, { side, call, econ, econEnemy }),
+          picture: { ...picture, side, contactRel: null },
+          memoryOf,
+          model,
+          rng
+        });
+        if (chosen?.entry) {
+          applyTape(chosen.entry, chosen.entry.plant ? 'commit' : null, contractOf, awpOf);
+          return { mode: teamMode, call, entry, fit: tapeFit, value: chosen.value };
+        }
+      }
+      let picked = pickRound(playbook, { side, call, econ, econEnemy, rng });
+      // The operator's partition has no fourth mode: a call the library
+      // cannot answer on this economy is played as a mined DEFAULT, loosely,
+      // not improvised. The only way to freestyle a round start now is a
+      // library with nothing in it at all.
+      let fit = null;
+      if (!picked && call !== 'default') {
+        picked = pickRound(playbook, { side, call: 'default', econ, econEnemy, rng });
+        fit = TAPE_FIT.LOOSE;
+      }
+      applyTape(picked, picked?.plant ? 'commit' : null, contractOf, awpOf, fit);
+      return { mode: teamMode, call, entry, fit: tapeFit };
     },
 
     /**
@@ -502,6 +722,10 @@ export function createCaller({ playbook = null, rng, map, side, slots, posture =
     decision() {
       return decision;
     },
+    /** How faithfully the current tape is being copied: direct, loose, or null. */
+    looseness() {
+      return tapeFit;
+    },
     posture() {
       return posture;
     },
@@ -533,6 +757,10 @@ export function createCaller({ playbook = null, rng, map, side, slots, posture =
     },
     waypoint(slot, seconds) {
       return waypointAt(roles.get(slot), seconds);
+    },
+    /** Where this slot's tape is going: `{t, anchor}`. Followers steer by this. */
+    nextWaypoint(slot, seconds) {
+      return nextWaypointAt(roles.get(slot), seconds);
     },
     due(slot, seconds) {
       return dueUtility(roles.get(slot), seconds, thrownSet(slot));

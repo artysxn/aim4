@@ -127,19 +127,60 @@ function sample(scored, rng, temperature = TEMPERATURE) {
  *
  * @returns {PlaybookEntry|null}
  */
-export function pickRound(index, { side, call = null, econ = null, exclude = null, rng }) {
+export function pickRound(index, { side, call = null, econ = null, econEnemy = null, exclude = null, rng }) {
+  const scored = scoreRounds(index, { side, call, econ, econEnemy, exclude });
+  if (!scored.length) return null;
+  return sample(scored.slice(0, TOP_K), rng);
+}
+
+/**
+ * Every tape scored against the freeze (call, econ, enemy econ), nearest
+ * first.
+ *
+ * Two of these are principled rather than soft:
+ *
+ * PISTOL IS A GATE, not a distance. A pistol round copied from a full-buy
+ * tape peeks angles only rifles win, and a gun round copied from a pistol
+ * tape rushes spots pros only rush with glocks. The operator's rule is that
+ * pistol calls come from real pistol rounds, so bucket 0 draws bucket 0 and
+ * nothing else — both directions.
+ *
+ * THE ENEMY'S MONEY IS PART OF THE SITUATION. Entries carry `econEnemy`, and
+ * matching it is what makes "they are forcing, we are full" draw a real
+ * antiforce round instead of a coin-flip standard. Weighted below own econ:
+ * what we can buy is certain, what they bought is a read.
+ */
+function scoreRounds(index, { side, call = null, econ = null, econEnemy = null, exclude = null } = {}) {
   const pool = index?.bySide?.[side] || [];
-  if (!pool.length) return null;
+  if (!pool.length) return [];
   const scored = [];
+  const pistol = econ === 0;
   for (const e of pool) {
     if (exclude && e.id === exclude) continue;
+    if (econ != null && e.econ != null && pistol !== (e.econ === 0)) continue;
     let d = 0;
     if (call && e.call !== call) d += 1;
     if (econ != null && e.econ != null) d += Math.min(1, Math.abs(e.econ - econ) / 5);
+    if (econEnemy != null && e.econEnemy != null) {
+      d += 0.5 * Math.min(1, Math.abs(e.econEnemy - econEnemy) / 5);
+    }
     scored.push({ entry: e, distance: d });
   }
   scored.sort((a, b) => a.distance - b.distance);
-  return sample(scored.slice(0, TOP_K), rng);
+  return scored;
+}
+
+/**
+ * The freeze-time shortlist, without the sampling. `closeMatches` is the same
+ * idea for a recall; this is the one for round start, because 9.25 stage 1 is
+ * explicit that "the same head is the caller's score at freeze and at recall".
+ *
+ * @returns {Array<{entry: PlaybookEntry, decision: string, distance: number}>}
+ */
+export function openingCandidates(index, { side, call = null, econ = null, econEnemy = null } = {}, k = TOP_K) {
+  return scoreRounds(index, { side, call, econ, econEnemy })
+    .slice(0, k)
+    .map((s) => ({ entry: s.entry, decision: decisionFor(s.entry), distance: s.distance }));
 }
 
 /**
@@ -172,9 +213,51 @@ export function pickCall(index, { side, prefer = null, rng }) {
  * @returns {{entry: PlaybookEntry, decision: 'commit'|'delay'|'turnaround'}|null}
  */
 export function matchSituation(index, { side, clock, alive, enemyAlive, contactRel, call, rng }) {
-  const pool = index?.bySide?.[side] || [];
-  if (!pool.length) return null;
+  const scored = scoreMatches(index, { side, clock, contactRel, call });
+  if (!scored.length) return null;
+  // No close match is a real answer: freestyle beats a badly matched tape.
+  if (scored[0].distance > MATCH_CUTOFF) return null;
 
+  const entry = sample(scored.slice(0, TOP_K), rng);
+  if (!entry) return null;
+  return { entry, decision: decisionFor(entry) };
+}
+
+/** How far a tape may sit from the situation before it is not an answer. */
+export const MATCH_CUTOFF = 1.5;
+
+/**
+ * The shortlist behind `matchSituation`, without the sampling.
+ *
+ * SIM-PLAN 9.25 stage 1 needs the close matches as CANDIDATES rather than as
+ * an answer: the library says which plans are plausible here, and the value
+ * head says which of them is worth more than the one already running. Same
+ * scoring, same cutoff, same order — this is the shortlist `matchSituation`
+ * samples from, handed over unsampled.
+ *
+ * @returns {Array<{entry: PlaybookEntry, decision: string, distance: number}>}
+ */
+export function closeMatches(index, { side, clock, contactRel, call } = {}, k = TOP_K) {
+  const scored = scoreMatches(index, { side, clock, contactRel, call });
+  if (!scored.length || scored[0].distance > MATCH_CUTOFF) return [];
+  return scored.slice(0, k).map((s) => ({
+    entry: s.entry,
+    decision: decisionFor(s.entry),
+    distance: s.distance
+  }));
+}
+
+/**
+ * Every tape scored against the situation, nearest first.
+ *
+ * `contactRel` is the operator's key inference. A contact BEHIND means the
+ * enemy spent bodies being aggressive somewhere we are not, which is exactly
+ * the read that makes turning around correct rather than panicked. Rounds
+ * where the same thing happened are the evidence for what to do about it.
+ */
+function scoreMatches(index, { side, clock, contactRel, call } = {}) {
+  const pool = index?.bySide?.[side] || [];
+  if (!pool.length) return [];
   const scored = [];
   for (const e of pool) {
     const fc = e.firstContact;
@@ -187,22 +270,20 @@ export function matchSituation(index, { side, clock, alive, enemyAlive, contactR
     if (call && e.call !== call) d += 0.3;
     scored.push({ entry: e, distance: d });
   }
-  if (!scored.length) return null;
   scored.sort((a, b) => a.distance - b.distance);
-  // No close match is a real answer: freestyle beats a badly matched tape.
-  if (scored[0].distance > 1.5) return null;
+  return scored;
+}
 
-  const entry = sample(scored.slice(0, TOP_K), rng);
-  if (!entry) return null;
-
-  // What that round did next, read off its own shape rather than authored:
-  // it planted somewhere after contact (commit), planted late (delay), or
-  // never planted at all after a contact behind (turnaround).
-  const fc = entry.firstContact;
-  let decision = 'commit';
-  if (!entry.plant) decision = fc?.rel === 'behind' ? 'turnaround' : 'delay';
-  else if (entry.plant.t - (fc?.t ?? 0) > 25) decision = 'delay';
-  return { entry, decision };
+/**
+ * What a tape did next, read off its own shape rather than authored: it
+ * planted somewhere after contact (commit), planted late (delay), or never
+ * planted at all after a contact behind (turnaround).
+ */
+export function decisionFor(entry) {
+  const fc = entry?.firstContact;
+  if (!entry?.plant) return fc?.rel === 'behind' ? 'turnaround' : 'delay';
+  if (entry.plant.t - (fc?.t ?? 0) > 25) return 'delay';
+  return 'commit';
 }
 
 /**
@@ -272,6 +353,31 @@ export function waypointAt(role, seconds) {
     cur = anchor;
   }
   return cur;
+}
+
+/**
+ * Where the tape is GOING: the first waypoint whose time has not come yet,
+ * or the last one once the schedule is spent.
+ *
+ * This is the one a follower must steer by. `waypointAt` answers "where was
+ * the pro at t" — correct for grading, fatal for following, because a bot
+ * steering at it is always chasing a position the tape has already left:
+ * every waypoint change teleports its error to the full segment length, and
+ * a fall-off test reading that error kicks the whole team local within
+ * seconds of leaving spawn. Steering at the NEXT waypoint inverts that — the
+ * bot arrives early, holds until the tape's own clock catches up, and moves
+ * out on the pro's timing.
+ *
+ * @returns {{t: number, anchor: string}|null}
+ */
+export function nextWaypointAt(role, seconds) {
+  const w = role?.waypoints || [];
+  if (!w.length) return null;
+  for (const [t, anchor] of w) {
+    if (t > seconds) return { t, anchor };
+  }
+  const [t, anchor] = w[w.length - 1];
+  return { t, anchor };
 }
 
 /** A throw this many seconds past its clock is skipped rather than pinning the bot. */

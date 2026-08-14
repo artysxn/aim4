@@ -40,6 +40,14 @@ import { promisify } from 'node:util';
 import { ROOT as REPLAY_ROOT } from '../replays/demoStore.js';
 import { loadPolicy } from '../../shared/sim/policy.js';
 import { loadPolicyNet } from '../../shared/sim/policyNet.js';
+import { loadCallerNet } from '../../shared/sim/callerNet.js';
+import {
+  LINEAGE,
+  TEST_TIER,
+  compareModelNames,
+  parseModelId,
+  resolveModelName
+} from '../../shared/sim/modelNames.js';
 
 /**
  * Wrap a demo-trained net in the interface the bot already speaks.
@@ -91,7 +99,11 @@ export const SHIPPED_DIR = path.join(__dirname, '..', '..', 'simdata', 'models')
 export const LOCAL_DIR = path.join(REPLAY_ROOT, 'sim', 'models');
 
 /** The brains that are not files: the scripted baseline and the P3b arbiter. */
-export const BUILTIN_BRAINS = Object.freeze(['scripted', 'desire']);
+// `nomad-1` is the test harness — the bare desire arbiter plus the knobs in
+// its model file (kind `nomad`), for testing one aspect at a time. `desire`
+// is its old name, kept so shipped match records and old CLI habits still
+// resolve; the seams map it forward.
+export const BUILTIN_BRAINS = Object.freeze(['scripted', 'nomad-1', 'desire']);
 
 const safe = (s) => String(s || '').replace(/[^A-Za-z0-9_-]/g, '');
 
@@ -103,6 +115,16 @@ async function readJson(file) {
   if (file.endsWith('.gz')) return JSON.parse((await gunzip(bytes)).toString('utf8'));
   return JSON.parse(bytes.toString('utf8'));
 }
+
+/**
+ * Files that live in the model directory without being models.
+ *
+ * `*.manifest.json` already falls out of the scan regex (the dot is not in the
+ * name character class), but the miners drop a `progress.json` beside their
+ * output, and a bookkeeping file listed as a broken brain is a permanent red
+ * mark in the panel for something that is working correctly.
+ */
+const SIDECARS = new Set(['progress', 'index']);
 
 /** Where a model of this name would be read from, local first. */
 function candidates(name) {
@@ -121,7 +143,11 @@ function candidates(name) {
  * @returns {Promise<{policy: object, meta: object}|{error: string}>}
  */
 export async function loadModel(rawName) {
-  const name = safe(rawName);
+  // Legacy ids resolve to what they became (modelNames.js). Shipped match
+  // records, scorecard frozen refs, and job defaults all still say `bc0`, and
+  // a rename that orphaned those would make old results unattributable — the
+  // one thing 9.9 asks this registry to prevent.
+  const name = safe(resolveModelName(rawName));
   if (!name) return { error: 'model: no name' };
 
   for (const c of candidates(name)) {
@@ -139,12 +165,20 @@ export async function loadModel(rawName) {
 
     try {
       const json = await readJson(c.file);
-      // Two artefact families now: the small policy.js clone and the bigger
-      // demo-trained policyNet. Dispatch on `kind` so a net trained tonight is
-      // playable tonight, instead of listed as broken for lacking a field it
-      // was never supposed to have.
+      // Three artefact families now: the small policy.js clone, the bigger
+      // demo-trained policyNet, and the caller head. Dispatch on `kind` so a
+      // net trained tonight is playable tonight, instead of listed as broken
+      // for lacking a field it was never supposed to have — which is exactly
+      // what happened to the first caller model, rejected for having no
+      // `obsVersion` when a caller has never observed a tick in its life.
       const policy =
-        json?.kind === 'policyNet' ? adaptPolicyNet(loadPolicyNet(json)) : loadPolicy(json);
+        json?.kind === 'caller'
+          ? loadCallerNet(json)
+          : json?.kind === 'nomad'
+            ? Object.freeze({ ...(json.knobs || {}) })
+            : json?.kind === 'policyNet'
+              ? adaptPolicyNet(loadPolicyNet(json))
+              : loadPolicy(json);
       const meta = describe(name, json, c, stat);
       cache.set(name, { file: c.file, mtimeMs: stat.mtimeMs, policy, meta });
       return { policy, meta };
@@ -160,12 +194,76 @@ export async function loadModel(rawName) {
   return { error: `model ${name}: not on this host` };
 }
 
+/**
+ * What this model is called, for anything with a screen.
+ *
+ * A file that does not parse as a scheme name still gets a display string —
+ * its own name — rather than being left blank. An unnameable file is exactly
+ * the one somebody is trying to find.
+ */
+function naming(name) {
+  const p = parseModelId(name);
+  return {
+    display: p ? p.display : name,
+    lineage: p ? p.lineage : null,
+    tier: p ? p.tier : null,
+    variant: p ? p.variant : null,
+    major: p ? p.major : null,
+    minor: p ? p.minor : null
+  };
+}
+
 /** The inspectable summary: everything the panel shows about a model. */
 function describe(name, json, c, stat) {
   const layers = Array.isArray(json.layers) ? json.layers : [];
+  if (json?.kind === 'nomad') {
+    // The harness has no weights, no accuracy, no dataset: its whole state
+    // is the knobs, so that is what the panel shows.
+    return {
+      name,
+      ...naming(name),
+      source: c.source,
+      kind: 'nomad',
+      v: json.v ?? null,
+      knobs: json.knobs || {},
+      notes: json.notes || null,
+      bytes: stat.size,
+      trainedAt: stat.mtime.toISOString(),
+      ok: true
+    };
+  }
+  if (json?.kind === 'caller') {
+    // A caller is graded on different things than a bot, so it reports
+    // different things: no observation version, no option vocabulary, and a
+    // win-head accuracy that is over ROUND-SIDES rather than over ticks.
+    return {
+      name,
+      ...naming(name),
+      source: c.source,
+      kind: 'caller',
+      v: json.v ?? null,
+      map: json.map || null,
+      calls: Array.isArray(json.calls) ? json.calls.length : 0,
+      teacher: 'demos',
+      dataset: json.dataset || null,
+      valAccuracy: json.trained?.valAccuracy?.win ?? null,
+      callAccuracy: json.trained?.valAccuracy?.call ?? null,
+      // The floor the win head had to clear: the (side, call) lookup table
+      // this net exists to replace. Listed next to the score because the
+      // score alone cannot say whether the net earned its keep.
+      tableFloor: json.trained?.floors?.table ?? null,
+      valLogloss: json.trained?.valLogloss?.win ?? null,
+      rows: json.trained?.rows ?? null,
+      hasCallHead: Boolean(json.call),
+      bytes: stat.size,
+      trainedAt: stat.mtime.toISOString(),
+      ok: true
+    };
+  }
   if (json?.kind === 'policyNet') {
     return {
       name,
+      ...naming(name),
       source: c.source,
       kind: 'policyNet',
       v: json.v ?? null,
@@ -173,7 +271,10 @@ function describe(name, json, c, stat) {
       vocab: Array.isArray(json.vocab?.option) ? json.vocab.option.length : 0,
       teacher: 'demos',
       dataset: json.trained?.samples ? `${json.trained.samples} samples` : null,
-      valAccuracy: json.trained?.accuracies?.option ?? null,
+      // The demo trainer writes `trained.valAccuracy` as a per-head map;
+      // `accuracies` was the field this once expected and never the one that
+      // got written, so every policyNet has been listed as unscored.
+      valAccuracy: json.trained?.valAccuracy?.option ?? json.trained?.accuracies?.option ?? null,
       calls: Object.keys(json.embed?.call?.keys || {}).length,
       contracts: Object.keys(json.embed?.contract?.keys || {}).length,
       players: Object.keys(json.embed?.player?.keys || {}).length,
@@ -185,6 +286,7 @@ function describe(name, json, c, stat) {
   }
   return {
     name,
+    ...naming(name),
     source: c.source,
     v: json.v ?? null,
     obsVersion: json.obsVersion ?? null,
@@ -218,7 +320,8 @@ export async function listModels() {
     }
     for (const f of files) {
       const m = /^([A-Za-z0-9_-]+)\.json(\.gz)?$/.exec(f);
-      if (m && !seen.has(m[1])) seen.set(m[1], source);
+      if (!m || SIDECARS.has(m[1]) || seen.has(m[1])) continue;
+      seen.set(m[1], source);
     }
   };
   await scan(LOCAL_DIR, 'local');
@@ -228,12 +331,14 @@ export async function listModels() {
   for (const name of seen.keys()) {
     const loaded = await loadModel(name);
     if (loaded.error) {
-      out.push({ name, ok: false, error: loaded.error, source: seen.get(name) });
+      out.push({ name, ...naming(name), ok: false, error: loaded.error, source: seen.get(name) });
     } else {
       out.push(loaded.meta);
     }
   }
-  out.sort((a, b) => a.name.localeCompare(b.name));
+  // Lineage, then tier, then version (modelNames.js) rather than alphabetical,
+  // which used to put gen1 ahead of gen9 and bc0 ahead of both.
+  out.sort((a, b) => compareModelNames(a.name, b.name));
   return out;
 }
 
@@ -256,8 +361,20 @@ export function clearModelCache() {
 export async function listGenerations() {
   const models = await listModels();
   const gens = [];
+  // Already sorted by lineage/tier/version, so "the one before this" is simply
+  // the previous entry in the same lineage. That is what `parent` meant when
+  // every model was genN, and it keeps meaning it now that they have names.
+  const previous = new Map();
+
   for (const m of models) {
-    if (!/^gen\d+$/i.test(m.name) && m.name !== 'bc0') continue;
+    // Anything the scheme can name is a generation of one of the two brains.
+    // A file it cannot name is a one-off and is left out of the lineage view
+    // rather than being wedged into it with a made-up number.
+    if (!m.lineage) continue;
+    // The Nomad is a harness, not a generation: it wanders beside the ladder
+    // and would otherwise sit "before" Navaja 1 and shift every ordinal.
+    if (m.tier === TEST_TIER) continue;
+
     let manifest = null;
     for (const dir of [LOCAL_DIR, SHIPPED_DIR]) {
       try {
@@ -267,16 +384,34 @@ export async function listGenerations() {
         /* no manifest beside this copy */
       }
     }
-    gens.push({
+
+    const prior = previous.get(m.lineage) || null;
+    const ordinal = prior ? prior.gen + 1 : 0;
+    const entry = {
       name: m.name,
+      display: m.display,
+      lineage: m.lineage,
+      tier: m.tier,
+      variant: m.variant,
       ok: m.ok,
       source: m.source,
       valAccuracy: m.valAccuracy,
-      parent: manifest?.parent ?? (m.name === 'bc0' ? null : 'bc0'),
-      gen: manifest?.gen ?? (m.name === 'bc0' ? 0 : null),
+      // Manifests were written before the rename and still name their parent
+      // and league in the old vocabulary, so those strings resolve too. A
+      // lineage view that says a model descends from `bc0` while listing no
+      // such model is a graph with a dangling edge.
+      parent: manifest?.parent ? resolveModelName(manifest.parent) : (prior?.name ?? null),
+      gen: manifest?.gen ?? ordinal,
       shipped: m.source === 'shipped',
-      league: manifest?.league || ['bc0', 'scripted']
-    });
+      // The league a candidate is measured against. Defaults to the frozen
+      // references plus whatever it descends from, which for the very first
+      // model of a lineage is just the references.
+      league: (manifest?.league || [prior?.name, 'scripted'].filter(Boolean)).map((n) =>
+        resolveModelName(n)
+      )
+    };
+    gens.push(entry);
+    previous.set(m.lineage, entry);
   }
   return gens;
 }

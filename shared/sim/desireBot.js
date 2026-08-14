@@ -74,16 +74,29 @@ import { sacrificeIsPriced, refragArmed } from './sacrifice.js';
 import { makeSync, mixAnchor, reached } from './sync.js';
 import { assignExecute, repairLadder } from './execute.js';
 import { catalogFor, templateFor } from './executeCatalog.js';
-import { TendencyTracker, Exp3Bandit, banditKey, econBucket, mixPolicyExp3 } from './opponentModel.js';
+import {
+  TendencyTracker,
+  Exp3Bandit,
+  banditKey,
+  econBucket,
+  mixPolicyExp3,
+  scoreSituation
+} from './opponentModel.js';
 import { decisionSearch, ExpertIterLog } from './search.js';
 import { assignContracts, maskByContract, reassignOnDeath, awpSlotOf } from './contracts.js';
 import { ownCore, enemyCoreFromBelief } from './cores.js';
 import { situationKey, shapeFromCore } from './situationKey.js';
 import { ExperienceIndex } from './experience.js';
 import { StrategyAI } from './strategy.js';
-import { createCaller, CALLER_MODE, TAPE_ERROR_SECONDS, TAPE_ERROR_UNITS, pictureWinrate, shapeRole } from './caller.js';
+import { createCaller, CALLER_MODE, TAPE_ERROR_UNITS, TAPE_FIT, TAPE_LAG_SECONDS, fightEV, pictureWinrate, shapeRole } from './caller.js';
+import { PRW_REASON, createPrwLog, truePictureFrom } from './prw.js';
+import { comparePlans, indexValueOf, pickPlan } from './callValue.js';
+import { averageMoney, shouldSave } from './saving.js';
+import { IGL_EVENT, createIglLog } from './iglLog.js';
+import { reviewRound } from './review.js';
 import { clockCovers } from './knowledgeBake.js';
 import { econBucketOf } from './buy.js';
+import { isPistolRound } from './match.js';
 
 /** Layer protocol names are dash form; the runner speaks underscore ids (20.3, 20.5). */
 const LAYER_PROTOCOL = Object.freeze({
@@ -119,6 +132,13 @@ function callerPicture(R, engine, myLiving, extra = {}) {
   };
   const exp = extra.experience || null;
   return {
+    // Whose round this is. `pictureFeatures` splits alive/enemyAlive into
+    // ct/t by this field, so a picture without it prices a 5v2 as a 2v2 and
+    // asks `winProbability` for an undefined side. The caller's own gate was
+    // safe (it rebuilds the snap with `side` explicitly), but everything that
+    // reads R.picture was not: `pWin_belief` in both logs, and `R.pWin`,
+    // which feeds `riskQuantile` and therefore how boldly every bot peeks.
+    side: R.side,
     alive: extra.alive ?? myLiving.length,
     enemyAlive: extra.enemyAlive ?? R.belief.aliveCount(),
     clock,
@@ -136,17 +156,109 @@ function callerPicture(R, engine, myLiving, extra = {}) {
     ).length,
     teamBroken: Boolean(extra.teamBroken),
     experienceMean: exp?.mean,
-    experienceN: exp?.n
+    experienceN: exp?.n,
+    // 18.6b.1: how wrong this KIND of picture has been, gated by the index.
+    // A number on a situation, never a position.
+    calBias: R.calBias ?? 0
   };
 }
 
-function applyCallerDecision(R, result) {
+/** Bodies standing on a site, by the same 1200u ring the picture counts with. */
+function nearSite(site) {
+  if (!site) return null;
+  return (b) => Math.hypot(b.pos.x - site.world.x, b.pos.y - site.world.y) < 1200;
+}
+
+/**
+ * One PRW row (18.6b). The believed number is what the caller acted on; the
+ * true snapshot rides along SEALED — prw.js parks it out of reach until the
+ * round is over, because the engine is gone by review time and a live actor
+ * must never see it.
+ */
+function logPrw(R, engine, { tick, reason, picture = null, pWin = null, fightEv = null, decision = null, motive = null } = {}) {
+  if (!R?.prw || !engine) return null;
+  const pic = picture || R.picture;
+  if (!pic) return null;
+  return R.prw.log({
+    tick,
+    reason,
+    situation: R.situation?.hash || null,
+    picture: pic,
+    pWinBelief: Number.isFinite(pWin) ? pWin : pictureWinrate(pic),
+    fightEv: Number.isFinite(fightEv) ? fightEv : fightEV(pic),
+    decision: decision || R.caller?.decision() || null,
+    motive,
+    truth: truePictureFrom(engine, {
+      side: R.side,
+      ourSlots: R.slots,
+      enemySlots: R.enemySlots,
+      inTarget: nearSite(R.target),
+      inOther: nearSite(R.other),
+      clock: (tick - engine.state.liveTick) / TICK_RATE
+    })
+  });
+}
+
+/**
+ * One IGL row (9.25 stage 3): the caller spoke, so the dataset gets a line.
+ * `pWin_true` and `won` stay null until roundEnd seals them — at the moment
+ * of the decision the true price is not something this side can know.
+ */
+function logIgl(R, { tick, event, picture = null, result = null, entry = null, candidates = null }) {
+  if (!R?.igl) return null;
+  const pic = picture || R.picture;
+  return R.igl.log({
+    tick,
+    round: R.roundNumber ?? null,
+    event,
+    situation: R.situation?.hash || null,
+    picture: pic,
+    decision: result?.decision || R.caller?.decision() || null,
+    entry: entry || R.caller?.entry() || null,
+    call: R.caller?.call() || null,
+    candidates: candidates || result?.ranked || null,
+    pWinBelief: Number.isFinite(result?.pWin) ? result.pWin : pic ? pictureWinrate(pic) : null,
+    fightEv: Number.isFinite(result?.fightEv) ? result.fightEv : pic ? fightEV(pic) : null,
+    margin: result?.margin,
+    recalled: event === IGL_EVENT.RECALL,
+    posture: R.caller?.posture() || null,
+    motive: result?.reason || null
+  });
+}
+
+/**
+ * `ctx` is the log's, not the caller's: a recall is a priced team decision and
+ * therefore a PRW row (18.6b). A gate that fired and kept the plan in motion
+ * is not a recall and writes nothing.
+ */
+function applyCallerDecision(R, result, ctx = null) {
   if (result?.decision === 'turnaround' && R.other) {
     const swap = R.target;
     R.target = R.other;
     R.other = swap;
     R.caller.setGoal(R.target.world);
   }
+  if (!ctx?.engine || !result) return;
+  const moved = result.recalled === true || result.kept === false;
+  if (!moved) return;
+  logPrw(R, ctx.engine, {
+    tick: ctx.tick,
+    reason: ctx.reason || PRW_REASON.RECALL,
+    picture: ctx.picture,
+    pWin: result.pWin,
+    fightEv: result.fightEv,
+    decision: result.decision || null,
+    motive: result.reason || (result.mode ? `recall: ${result.mode}` : null)
+  });
+  // The same event, in the caller's own dataset. One row per recall is the
+  // whole cadence 9.25 insists on: 24 to 80 a match, never 8 Hz.
+  logIgl(R, {
+    tick: ctx.tick,
+    event: IGL_EVENT.RECALL,
+    picture: ctx.picture,
+    result,
+    entry: result.entry || null
+  });
 }
 
 /** Neighbour whose bearing is closest to a mined hold yaw, in degrees. */
@@ -478,8 +590,43 @@ export function desireController({
   memoryEnabled = true,
   playbook = null,
   knowledge = null,
-  call = null
+  call = null,
+  matchId = null,
+  /**
+   * 9.25 stage 1. Off by default, and that default is a scheduling decision
+   * rather than a design one: turning the head on changes which tape a caller
+   * draws at freeze and which one it recalls to, which is exactly what §15.1's
+   * 4.3a acceptance row measures ("5v5 behind keeps; default 5v4 walks; VP 5v4
+   * freezes"). It is one word here once the sweep has graded it, and 9.25 is
+   * clear that it must be on before C3 (5v5) or the side that gets the first
+   * pick starts freezing like VP by accident.
+   */
+  valueHead = false,
+  /**
+   * 9.25 stage 2: the opening call becomes an EXP3 arm keyed by
+   * (side, econ, score), so two losses on the B hit make the third less
+   * likely. Off by the same scheduling logic as `valueHead` — it changes which
+   * call a side opens with, which is a measured behaviour — and on it is what
+   * makes a series look like a series (6.10, P5b).
+   */
+  callBandit = false,
+  /**
+   * 9.25 stages 1 and 4: a trained caller head (`shared/sim/callerNet.js`),
+   * the hivemind half of a generation. Handing one in turns the value head on
+   * by itself — the net IS the value head, and a caller carrying weights it
+   * was told not to use would be the worst of both.
+   *
+   * It enters as `memoryOf`, the same slot the tabular ExperienceIndex read
+   * enters through, so it obeys the same `blendMemory` cap and the same
+   * support floor. When the net declines a call — too little training support
+   * to have an opinion — the index answers instead, which is why both are
+   * passed rather than one replacing the other.
+   */
+  callerNet = null
 } = {}) {
+  // A caller model implies stage 1. Kept as one derived flag so the three
+  // places that gate on it cannot drift apart.
+  const headOn = valueHead || Boolean(callerNet);
   return () => {
     /** Per-round state, rebuilt in roundStart. */
     let R = null;
@@ -599,7 +746,29 @@ export function desireController({
       /** The decision log the inspector reads: {tick, slot, id, motive}. */
       log: [],
 
-      roundStart({ engine, graph, side, slots, target, other, sites }) {
+      /**
+       * The round's graded PRW rows (18.6b), drained after `roundEnd` has
+       * scored them. Both curves on one clock, which is what the inspector
+       * draws; the row is also the aux head's training sample (9.14).
+       */
+      prwRows() {
+        return R?.prw ? R.prw.drain() : null;
+      },
+
+      /**
+       * The round's IGL rows (9.25 stage 3), sealed by `roundEnd`: one per
+       * freeze or recall, with `pWin_true`, `won` and `attrib` filled in.
+       */
+      iglRows() {
+        return R?.igl ? R.igl.drain() : null;
+      },
+
+      /** The last review: drops, attributions, calibrations, residuals. */
+      review() {
+        return R?.review || null;
+      },
+
+      roundStart({ engine, graph, side, slots, target, other, sites, match = null }) {
         const profiles = {};
         for (const slot of slots) profiles[slot] = skillProfile(skill);
 
@@ -621,6 +790,12 @@ export function desireController({
           sites,
           rng,
           profiles,
+          // The side's money after the buy, for the in-round save rule
+          // (saving.js). Sampled once here because the engine never touches
+          // money — the match layer settles it between rounds — so this is
+          // constant for the whole round and reading it per tick would be
+          // asking the same question 5,000 times.
+          moneyAvg: averageMoney(match?.state?.money || null, slots),
           enemySlots,
           translator: createTranslator(engine, { siteAnchorIds: sites, slots }),
           belief: new JointBelief({ anchors: [...graph.anchors.keys()], rng: rng.fork() }),
@@ -732,9 +907,30 @@ export function desireController({
           map: engine.state.map,
           side,
           slots,
-          posture: callerPosture(keyword)
+          posture: callerPosture(keyword),
+          // 9.25 stage 1. Injected, never imported: callValue.js prices plans
+          // with caller.js's own arithmetic, so the dependency runs one way.
+          // With these null the caller is stage 0's librarian, unchanged.
+          compare: headOn ? comparePlans : null,
+          pick: headOn ? pickPlan : null
         });
         R.knowledge = knowledge;
+        // One PRW log per side per round (18.6b). Always on: the inspector's
+        // two curves do not depend on memory being enabled, and nothing the
+        // log does can reach a decision.
+        R.prw = createPrwLog({ side, map: engine.state.map });
+        R.prwOpened = false;
+        R.calBias = 0;
+        R.roundNumber = match?.state?.round ?? null;
+        // The caller's own dataset (9.25 stage 3): one row per freeze or
+        // recall. Always on for the same reason the PRW log is — observing a
+        // decision cannot change it — and drained per round like the rest.
+        R.igl = createIglLog({
+          side,
+          map: engine.state.map,
+          econ: econBucketOf(slots.map((s) => engine.state.bodies[s])),
+          matchId: matchId || null
+        });
         R.tapeErrorSince = {};
         R.callerNotedBehind = false;
         R.knowledgeFlashAsked = {};
@@ -742,14 +938,109 @@ export function desireController({
         R.promotedAtBroken = 0;
         R.commandedKeyword = keyword != null && keyword !== 'default';
         const awpSeat = awpSlotOf({ map: engine.state.map, side, slots });
+        // Two econ units, deliberately. The playbook matches tapes on the
+        // miner's 0-5 bucket; the bandit keys on 6.10's named bucket. They are
+        // not interchangeable and conflating them silently produces a key
+        // space nothing else in the file shares.
+        const ourBodies = slots.map((s) => engine.state.bodies[s]);
+        const econTape = econBucketOf(ourBodies);
+        // The enemy's buy, read the way an IGL actually reads it: the pistol
+        // round is known from the score, the rest is loss-bonus arithmetic
+        // (their money, as tracked all half) — never their loadout, which at
+        // freeze nobody has seen (9.5). It feeds tape selection only: force
+        // and antiforce rounds are mined from real advantage situations, and
+        // matching `econEnemy` is what lets the library answer with one.
+        const enemyMoneyAvg = averageMoney(match?.state?.money || null, enemySlots);
+        const econEnemyGuess =
+          match?.state && isPistolRound(match.state)
+            ? 0
+            : enemyMoneyAvg == null
+              ? null
+              : enemyMoneyAvg < 1500
+                ? 1
+                : enemyMoneyAvg < 4000
+                  ? 3
+                  : 4;
+        const econKey = econBucket(
+          ourBodies.filter(Boolean).reduce((s, b) => s + (weaponInfo(b.weapon).price || 0), 0) /
+            Math.max(1, ourBodies.filter(Boolean).length)
+        );
+
+        // ---- 9.25 stage 2: EXP3 over legal calls -------------------------
+        // "24 rounds is not a backprop set. It is a bandit." The machinery is
+        // 6.10's and already runs for layer actions; what was missing is that
+        // the CALL was never an arm and the key's `score` slot was never
+        // filled, so a series could not look like a series. Two losses on the
+        // B hit and the weight falls — that is the whole feature.
+        //
+        // Keyed by (side, econ, score) exactly as written: score is coarse
+        // (up / even / down, pistol tagged) because a 24-round horizon cannot
+        // afford a key per scoreline.
+        const scoreState = match?.state?.score || null;
+        const ourTeam = match?.teamOf ? match.teamOf(slots[0]) : null;
+        R.banditKey = banditKey({
+          side,
+          econ: econKey,
+          score: scoreSituation({
+            us: ourTeam && scoreState ? scoreState[ourTeam] || 0 : 0,
+            them: ourTeam && scoreState ? scoreState[ourTeam === 'A' ? 'B' : 'A'] || 0 : 0,
+            pistol: match?.state ? isPistolRound(match.state) : false
+          })
+        });
+        // The freeze picture: 5v5, full clock, nothing believed yet. Built by
+        // the same function every later picture is, so the head is scoring one
+        // arithmetic all round rather than two. Built before the opening call
+        // rather than after it, because with a caller model the picture is an
+        // INPUT to that call.
+        const freezePicture = callerPicture(
+          R,
+          engine,
+          slots.map((s) => engine.state.bodies[s]).filter((b) => b && b.alive !== false),
+          { clock: 0 }
+        );
+        R.econTape = econTape;
+
+        let openingCall = call;
+        // The call head is deliberately NOT consulted here. Wiring its top
+        // call in as the opener produced the same call every round of a match
+        // — the argmax mono-strat stage 0 bans, worn as a prior. The net's
+        // read of the opening enters through `pickPlan` below, which prices
+        // the tapes answering a SAMPLED call; variety stays with the draw.
+        if (callBandit && matchRng && playbook?.calls?.[side]?.length) {
+          const legal = playbook.calls[side].map(([name]) => ({ id: name }));
+          const prior = legal.find((c) => c.id === openingCall) || legal[0];
+          openingCall =
+            mixPolicyExp3(legal, {
+              policyPick: prior,
+              bandit,
+              key: R.banditKey,
+              rng: matchRng,
+              idOf: (c) => c.id
+            })?.id || call;
+        }
+        R.openingCall = openingCall;
+        // The head is live for the freeze draw too, not only for recalls: with
+        // a caller model, `pickPlan` prices the opening shortlist instead of
+        // drawing it on distance alone.
+        if (headOn && callerNet) {
+          R.caller.useHead(callerNet.headFor({ ...freezePicture, side }, { event: 'freeze', econ: econTape }));
+        }
         R.caller.roundStart({
           contractOf: () => null,
           awpOf: (slot) => slot === awpSeat,
-          strategyCall: call,
-          econ: econBucketOf(slots.map((s) => engine.state.bodies[s])),
+          // 9.25 stage 1: the prior, not a hint. Stage 2's bandit may have
+          // already moved it off the strategy's suggestion.
+          strategyCall: openingCall,
+          econ: econTape,
+          econEnemy: econEnemyGuess,
+          picture: freezePicture,
           spawn,
           goal: target.world
         });
+        // Deliberately NOT assigned to R.picture: the PRW log falls back to
+        // R.picture, and seeding it here would put a row on the board before
+        // the first team frame, which is 4.2b's cadence and not this one.
+        logIgl(R, { tick: engine.state.tick, event: IGL_EVENT.FREEZE, picture: freezePicture });
         if (R.caller.teamMode() === CALLER_MODE.TAPE) {
           const posts = R.shape.posts.map((p) => {
             const role = R.caller.roleOf(p.slot);
@@ -823,10 +1114,20 @@ export function desireController({
               const awpOf = (slot) =>
                 /awp/i.test((R.contracts || []).find((row) => row.slot === slot)?.position || '');
               const picture = callerPicture(R, engine, myLiving, { tick, clock });
+              const prwCtx = {
+                engine,
+                tick,
+                picture,
+                reason:
+                  classified.clazz === INTERRUPT.OPPORTUNITY
+                    ? PRW_REASON.OPPORTUNITY
+                    : PRW_REASON.RECALL
+              };
               if (classified.clazz === INTERRUPT.IGNORE) {
                 applyCallerDecision(
                   R,
-                  R.caller.considerPicture(picture, { contractOf, awpOf })
+                  R.caller.considerPicture(picture, { contractOf, awpOf }),
+                  prwCtx
                 );
               } else {
                 applyCallerDecision(
@@ -837,7 +1138,8 @@ export function desireController({
                     contractOf,
                     awpOf,
                     ...picture
-                  })
+                  }),
+                  prwCtx
                 );
               }
             }
@@ -871,6 +1173,15 @@ export function desireController({
               }
             });
             R.footprints[s].noteDeath(tick);
+            logPrw(R, engine, {
+              tick,
+              reason: PRW_REASON.DEATH,
+              picture: callerPicture(R, engine, myLiving, {
+                tick,
+                clock: (tick - state.liveTick) / TICK_RATE
+              }),
+              motive: `lost slot ${s}`
+            });
             events.push({ type: 'death', slot: s });
             for (const o of R.slots) {
               if (o !== s) R.runners[o].gate.onEvent(tick, 'death');
@@ -898,10 +1209,11 @@ export function desireController({
             R.contacts[idx] = c;
             if (R.caller && !R.callerNotedBehind && c.myFirstSeenTick === tick) {
               const clock = (tick - state.liveTick) / TICK_RATE;
+              const picture = callerPicture(R, engine, myLiving, { tick, clock });
               const intel = R.caller.considerIntel({
                 x: enemy.pos.x,
                 y: enemy.pos.y,
-                ...callerPicture(R, engine, myLiving, { tick, clock }),
+                ...picture,
                 contractOf: (slot) => {
                   const body = bodies[slot];
                   return body?.alive ? angles.nearestAnchor(body.pos.x, body.pos.y)?.id || null : null;
@@ -910,7 +1222,7 @@ export function desireController({
                   /awp/i.test((R.contracts || []).find((row) => row.slot === slot)?.position || '')
               });
               if (intel.rel === 'behind') R.callerNotedBehind = true;
-              applyCallerDecision(R, intel);
+              applyCallerDecision(R, intel, { engine, tick, picture });
             }
             break;
           }
@@ -1044,6 +1356,15 @@ export function desireController({
           R.planted = true;
           for (const s of R.slots) R.runners[s].gate.onEvent(tick, 'bomb_planted');
           R.caller?.retire();
+          logPrw(R, engine, {
+            tick,
+            reason: PRW_REASON.PLANT,
+            picture: callerPicture(R, engine, myLiving, {
+              tick,
+              clock: (tick - state.liveTick) / TICK_RATE
+            }),
+            motive: 'bomb down'
+          });
         }
 
         if (R.caller) {
@@ -1078,7 +1399,8 @@ export function desireController({
                 contractOf,
                 awpOf,
                 ...picture
-              })
+              }),
+              { engine, tick, picture }
             );
           }
           const promo = shouldPromote({
@@ -1098,7 +1420,8 @@ export function desireController({
                 awpOf,
                 ...picture,
                 teamBroken: true
-              })
+              }),
+              { engine, tick, picture }
             );
           }
         }
@@ -1335,13 +1658,52 @@ export function desireController({
         R.situation = sit;
 
         const exp = memoryEnabled ? index.read(sit.hash) : null;
+        // 18.6b.1 lands here and nowhere else: the bias is an INPUT to the
+        // maximization the bot already performs. Memory off leaves it zero,
+        // so a run that never reads the index still hashes the same.
+        R.calBias = memoryEnabled ? index.calibrationFor(sit.hash) : 0;
         R.picture = callerPicture(R, engine, myLiving, {
           tick,
           clock: (tick - state.liveTick) / TICK_RATE,
           secondsLeft: teamClock,
           experience: exp
         });
+        // 9.25 stage 1's third ingredient, refreshed for the situation the
+        // caller is actually in. Set AFTER the picture, because a trained head
+        // prices `(picture, call)` and has to close over the picture it is
+        // pricing; the tabular read keys on the situation hash alone and does
+        // not care either way.
+        //
+        // Memory off leaves the tabular read null — a head that read an index
+        // a run never touched would change that run's hash — but the net is
+        // weights on disk rather than state accumulated by this run, so it
+        // stays on and the hash stays reproducible.
+        if (headOn) {
+          const tabular = memoryEnabled ? indexValueOf(index, sit.hash) : null;
+          const net = callerNet
+            ? callerNet.headFor(R.picture, { econ: R.econTape ?? null })
+            : null;
+          R.caller.useHead(
+            net && tabular
+              ? // The net first, the table where the net has no support. A call
+                // with ninety rows behind it is exactly where 18.4's counts are
+                // worth more than a fit.
+                (callName) => net(callName) || tabular(callName)
+              : net || tabular
+          );
+        }
         R.pWin = pictureWinrate(R.picture);
+
+        // The team frame is the logging cadence 18.6b asks for; prw.js rate-
+        // limits it, and the events above are never rate-limited.
+        logPrw(R, engine, {
+          tick,
+          reason: R.prwOpened ? PRW_REASON.FRAME : PRW_REASON.FREEZE,
+          picture: R.picture,
+          pWin: R.pWin,
+          motive: R.layerAction ? libraryLabel(R.layerAction) : R.caller?.call() || null
+        });
+        R.prwOpened = true;
 
         if (!R.commandedKeyword && R.caller) {
           const freezeKw = R.caller.freezeKeyword();
@@ -1570,33 +1932,51 @@ export function desireController({
 
           const onTape = R.caller && R.caller.isOnTape(s, elapsed);
           if (onTape) {
-            const wp = R.caller.waypoint(s, elapsed);
-            if (wp) {
-              const a = R.graph.anchor(wp);
+            // Steer at where the tape is GOING, never at where the pro was:
+            // chasing the passed waypoint teleports the error to the full
+            // segment length at every waypoint change, and the old fall-off
+            // test (far for 1.5s) then kicked the whole team local before it
+            // cleared spawn — which is why versus rounds camped at spawn while
+            // the tapes underneath them held full pro routes.
+            // A LOOSE copy is half-assed on purpose (operator mode #2): the
+            // idea of the round, not its choreography. Wider arrival radii,
+            // twice the schedule slack, a prior low enough for a bot's own
+            // reads to outvote a leg of the route, and lineups thrown only
+            // when the bot happens to be near the spot.
+            const loose = R.caller.looseness() === TAPE_FIT.LOOSE;
+            const next = R.caller.nextWaypoint(s, elapsed);
+            if (next) {
+              const a = R.graph.anchor(next.anchor);
               const err = a ? Math.hypot(a.world.x - b.pos.x, a.world.y - b.pos.y) : 0;
-              if (err > TAPE_ERROR_UNITS) {
-                R.tapeErrorSince[s] = R.tapeErrorSince[s] ?? tick;
-                if ((tick - R.tapeErrorSince[s]) / TICK_RATE > TAPE_ERROR_SECONDS) {
-                  R.caller.markLocal(s);
-                }
-              } else {
-                R.tapeErrorSince[s] = null;
+              // Off the tape means far AND long past when the tape wanted you
+              // there. Far alone is just mid-segment.
+              if (err > TAPE_ERROR_UNITS && elapsed - next.t > TAPE_LAG_SECONDS * (loose ? 2 : 1)) {
+                R.caller.markLocal(s);
               }
               if (R.caller.isOnTape(s, elapsed)) {
-                const arrivedTape = err < AT_ANCHOR_UNITS * 2;
+                const arrivedTape = err < AT_ANCHOR_UNITS * (loose ? 5 : 2);
                 const frozen = R.caller.decision() === 'freeze';
                 if (!frozen || arrivedTape) {
+                  // Arrived early: hold the spot until the tape's own clock
+                  // says move, which is what makes five bots leave on the
+                  // pro round's timing rather than on their own.
                   candidates.push({
                     id: arrivedTape || frozen ? 'hold_angle' : 'advance',
-                    params: arrivedTape || frozen ? { spot: wp, yaw: wp } : { target: wp, gait: 'run' },
-                    prior: 0.86,
-                    motive: `tape: ${wp}`
+                    params:
+                      arrivedTape || frozen
+                        ? { spot: next.anchor, yaw: next.anchor }
+                        : { target: next.anchor, gait: 'run' },
+                    prior: loose ? 0.72 : 0.86,
+                    motive: loose ? `tape loose: ${next.anchor}` : `tape: ${next.anchor}`
                   });
                 }
               }
             }
             for (const u of R.caller.due(s, elapsed)) {
               if (!b.grenades.includes(u.type)) continue;
+              // A loose copy does not cross the map for a lineup; it throws
+              // the tape's grenade when it is already standing near the spot.
+              if (loose && Math.hypot((u.fx || 0) - b.pos.x, (u.fy || 0) - b.pos.y) > 400) continue;
               candidates.push({
                 id: 'utility_setup',
                 params: {
@@ -1611,7 +1991,7 @@ export function desireController({
                   flight: u.flight,
                   tapeIndex: u.index
                 },
-                prior: 0.92,
+                prior: loose ? 0.8 : 0.92,
                 motive: `tape throw ${u.type}`
               });
             }
@@ -1957,6 +2337,29 @@ export function desireController({
               motive: `carrying: getting the bomb down at ${R.target.id}`
             });
           }
+          // The in-round save (saving.js). Checked BEFORE the retake, and with
+          // a higher prior, because it is the same decision made the other
+          // way: a retake priced at ten percent is not a retake, it is a
+          // handover of two rifles. Both are forced, so whichever is pushed
+          // with the higher prior is the rule that applies.
+          const saveCall = shouldSave({
+            pWin: R.pWin,
+            weapon: b.weapon,
+            moneyAvg: R.moneyAvg,
+            alive: b.alive
+          });
+          if (saveCall.save) {
+            candidates.push({
+              id: 'save',
+              // Away from the bomb when there is one, otherwise back toward
+              // our own half: the exit is wherever the enemy is not.
+              params: { target: R.retakeStage || R.other?.id || R.target?.id || null },
+              prior: 0.97,
+              forced: true,
+              motive: saveCall.reason
+            });
+          }
+
           if (R.side === 'CT' && state.bomb.planted && !state.bomb.defusedBy) {
             // The retake is a rule (not retaking loses by forfeit), but
             // commitment is a TEAM act (19.5): converging strung out feeds
@@ -2103,8 +2506,10 @@ export function desireController({
           ) {
             const executeOn = Boolean(R.executeBySlot?.get(s));
             const committed = R.caller?.decision() === 'commit';
-            const wp = R.caller?.isOnTape(s, elapsed) ? R.caller.waypoint(s, elapsed) : null;
-            const wpOutside = Boolean(wp && R.graph.anchor(wp) && !bombIsSafe(R.zones, wp));
+            const next = R.caller?.isOnTape(s, elapsed) ? R.caller.nextWaypoint(s, elapsed) : null;
+            const wpOutside = Boolean(
+              next && R.graph.anchor(next.anchor) && !bombIsSafe(R.zones, next.anchor)
+            );
             if (!executeOn && !committed && !wpOutside) {
               for (const id of LEAVES_SAFE) legal.delete(id);
             }
@@ -2238,15 +2643,51 @@ export function desireController({
         if (!R) return;
         const won = outcome?.winner === R.side;
         const call = R.layerAction ? libraryLabel(R.layerAction) : null;
+
+        // ---- the review (18.6b) -----------------------------------------
+        // The round is over, so the sealed truth may be scored. The largest
+        // TRUE drop is the moment; the residual there says whether the team
+        // called badly or simply could not see. The former is a lesson about
+        // the call, the latter is a lesson about the picture, and writing the
+        // second one as the first is how a caller learns to be timid.
+        const graded = R.prw ? R.prw.grade() : [];
+        const verdict = graded.length ? reviewRound({ rows: graded, k: 1 }) : null;
+        const attrib = verdict?.attribs?.[0]?.kind === 'perc' ? 'perc' : 'call';
+        R.review = verdict;
+        if (memoryEnabled && verdict) {
+          // One sample per situation per ROUND, not per row. A situation that
+          // held for forty team frames is one visit's worth of evidence, and
+          // writing it forty times would let frame density walk straight
+          // through a gate that exists to require repeated evidence (18.3).
+          for (const [key, row] of verdict.calibrations) {
+            index.writeCalibration({ key, residual: row.mean });
+          }
+        }
+
+        // 9.25 stage 3: the round's outcome and its 18.6 verdict go onto every
+        // decision the caller made in it, and the true price is joined off the
+        // graded PRW rows. A trainer then drops `exec` and `perc` without
+        // having to re-run the review.
+        if (R.igl) R.igl.seal({ won, attrib, prwRows: graded });
+
+        // The key the round was actually keyed on. This used to be a hardcoded
+        // `(side, full, even)`, which meant a round SELECTED on `T|eco|even`
+        // paid its reward into `T|full|even` — the weights never moved for the
+        // key that drew them, and the `score` slot 9.25 stage 2 names was
+        // never filled by anything. `R.banditKey` is built at freeze from
+        // (side, econ, score) and is the same key throughout.
+        const bk = R.banditKey || banditKey({ side: R.side, econ: 'full' });
         if (memoryEnabled && R.situation) {
           strategy.last = {
             key: R.situation.hash,
-            call,
-            banditKey: banditKey({ side: R.side, econ: 'full' })
+            // With the call bandit on, the arm that was pulled is the opening
+            // call it chose, not the layer action's label.
+            call: callBandit && R.openingCall ? R.openingCall : call,
+            banditKey: bk
           };
-          strategy.observeRound({ won, attrib: 'call' });
+          strategy.observeRound({ won, attrib });
         } else if (call) {
-          bandit.reward(banditKey({ side: R.side, econ: 'full' }), call, won ? 1 : 0);
+          bandit.reward(bk, call, won ? 1 : 0);
         }
         tracker.observe({
           site: R.target?.id,

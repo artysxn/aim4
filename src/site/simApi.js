@@ -72,6 +72,9 @@ export const simApi = {
   /** The round's decision log ({A, B} motive arrays), 404 when brainless. */
   roundMotives: (matchId, round) =>
     get(`/api/sim/matches/${encodeURIComponent(matchId)}/round/${round}/motives`),
+  /** The round's two PRW curves ({A, B} graded rows, 18.6b), 404 when brainless. */
+  roundPrw: (matchId, round) =>
+    get(`/api/sim/matches/${encodeURIComponent(matchId)}/round/${round}/prw`),
   roundTicks: async (matchId, round) => {
     const res = await fetch(
       `${API_BASE}/api/sim/matches/${encodeURIComponent(matchId)}/round/${round}/ticks`,

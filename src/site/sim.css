@@ -382,6 +382,59 @@
   color: var(--muted);
 }
 
+/* The two PRWs (18.6b): what the side believed, and what was true. */
+.sim-prw {
+  background: #050505;
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  margin-top: 10px;
+}
+.sim-prw-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 6px 8px;
+}
+.sim-prw-head h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.sim-prw canvas {
+  display: block;
+  width: 100%;
+  height: 96px;
+}
+.sim-prw-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 6px 6px 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.sim-prw-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.sim-prw-swatch {
+  width: 14px;
+  height: 0;
+  border-top: 2px solid currentColor;
+}
+.sim-prw-swatch.is-belief {
+  border-top-style: dashed;
+}
+.sim-prw-now {
+  color: #cfcfd4;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 900px) {
   .sim-viewer {
     grid-template-columns: minmax(0, 1fr);

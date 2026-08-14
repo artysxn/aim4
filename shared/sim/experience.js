@@ -12,9 +12,14 @@
 // cannot change a determinism hash that does not read the index.
 // ---------------------------------------------------------------------------
 
-export const EXPERIENCE_VERSION = 1;
+export const EXPERIENCE_VERSION = 2;
 export const PRIOR_CAP = 20;
 export const WILSON_Z = 1.96; // 95% lower bound: 2-and-0 must not beat 40-and-25
+
+/** Calibration is a memory too (18.6b.1), so it is gated, shrunk and capped. */
+export const CAL_MIN_N = 4;
+export const CAL_SHRINK = 8;
+export const CAL_CAP = 0.15;
 
 export function wilsonLower(wins, n, z = WILSON_Z) {
   if (!(n > 0)) return 0;
@@ -26,6 +31,17 @@ export function wilsonLower(wins, n, z = WILSON_Z) {
   return Math.max(0, Math.min(1, (centre - spread) / denom));
 }
 
+/**
+ * The bias a mean residual is allowed to become. A handful of rows is not a
+ * lesson, so the mean is shrunk toward zero by count and capped: the same
+ * shape as every other memory read here, for the same reason.
+ */
+export function calibrationBias({ n = 0, sum = 0 } = {}, { minN = CAL_MIN_N, shrink = CAL_SHRINK, cap = CAL_CAP } = {}) {
+  if (!(n >= minN)) return 0;
+  const shrunk = (sum / n) * (n / (n + shrink));
+  return Math.max(-cap, Math.min(cap, shrunk));
+}
+
 function emptyRecord(key) {
   return {
     key,
@@ -35,7 +51,9 @@ function emptyRecord(key) {
     gen: 0,
     lastSeq: 0,
     byCall: {},
-    attrib: { call: 0, exec: 0 }
+    // `perc` is 18.6b's third bucket. It is counted beside call and exec and
+    // deliberately does NOT feed the win counters below.
+    attrib: { call: 0, exec: 0, perc: 0 }
   };
 }
 
@@ -57,6 +75,8 @@ export class ExperienceIndex {
     this.session = new Map();
     this.opponent = new Map();
     this.career = new Map();
+    // situation hash -> { n, sum } of PRW residuals (18.6b.1).
+    this.cal = new Map();
   }
 
   _bag(scope) {
@@ -75,10 +95,19 @@ export class ExperienceIndex {
     this.prior.set(key, { n: nn, w: ww });
   }
 
+  /**
+   * One round's result against one situation.
+   *
+   * `attrib: 'perc'` is the exception and the whole point of 18.6b.2: the
+   * believed ranking of options was right and only the price was wrong, so the
+   * hivemind is told about it as CALIBRATION and is not punished for the call.
+   * The bucket is counted; no win counter moves, at any scope, for any call.
+   */
   write({ key, call, won, dprw = 0, attrib = null, gen = 0, scopes = ['session', 'career'] } = {}) {
     if (!key) return;
     this.seq += 1;
     const hash = typeof key === 'string' ? key : key.hash;
+    const perceptual = attrib === 'perc';
     for (const scope of scopes) {
       const bag = this._bag(scope);
       let rec = bag.get(hash);
@@ -86,20 +115,61 @@ export class ExperienceIndex {
         rec = emptyRecord(hash);
         bag.set(hash, rec);
       }
+      rec.gen = gen;
+      rec.lastSeq = this.seq;
+      if (attrib === 'call' || attrib === 'exec' || perceptual) {
+        rec.attrib[attrib] = (rec.attrib[attrib] || 0) + 1;
+      }
+      if (perceptual) continue;
       rec.n += 1;
       rec.w += won ? 1 : 0;
       rec.sumDprw += dprw;
-      rec.gen = gen;
-      rec.lastSeq = this.seq;
       if (call) {
         const c = touchCall(rec, call);
         c.n += 1;
         c.w += won ? 1 : 0;
         c.sumDprw += dprw;
       }
-      if (attrib === 'call' || attrib === 'exec') rec.attrib[attrib] += 1;
     }
     this._lru(this.career);
+  }
+
+  /**
+   * 18.6b.1: `calibrations[key] = mean residual`. Deliberately NOT split by
+   * scope like the win records are: how this lineage reads a kind of picture
+   * is a property of the lineage, not of the current match or the current
+   * opponent, so there is one table and it survives both.
+   */
+  writeCalibration({ key, residual } = {}) {
+    if (!key || !Number.isFinite(residual)) return;
+    const hash = typeof key === 'string' ? key : key.hash;
+    const cur = this.cal.get(hash) || { n: 0, sum: 0 };
+    cur.n += 1;
+    cur.sum += residual;
+    this.cal.set(hash, cur);
+    if (this.cal.size > this.maxRows) {
+      // Same LRU shape as the records: the least-seen keys go first.
+      const ranked = [...this.cal.entries()].sort((a, b) => a[1].n - b[1].n);
+      for (const [k] of ranked.slice(0, this.cal.size - this.maxRows)) this.cal.delete(k);
+    }
+  }
+
+  /**
+   * The gated bias to add to `pictureWinrate` for this situation. Zero until
+   * the key has been seen enough times to be a lesson rather than a fluke.
+   */
+  calibrationFor(key) {
+    if (!key) return 0;
+    const hash = typeof key === 'string' ? key : key.hash;
+    return calibrationBias(this.cal.get(hash));
+  }
+
+  /** Raw entry, for the inspector and the scorecard. */
+  calibrationRow(key) {
+    const hash = typeof key === 'string' ? key : key.hash;
+    const cur = this.cal.get(hash);
+    if (!cur) return null;
+    return { key: hash, n: cur.n, mean: cur.sum / cur.n, bias: calibrationBias(cur) };
   }
 
   toJSON() {
@@ -107,7 +177,13 @@ export class ExperienceIndex {
       v: EXPERIENCE_VERSION,
       seq: this.seq,
       scopes: ['session', 'opponent', 'career'],
-      rows: [...this.career.values()]
+      rows: [...this.career.values()],
+      calibrations: [...this.cal.entries()].map(([key, c]) => ({
+        key,
+        n: c.n,
+        mean: c.sum / c.n,
+        bias: calibrationBias(c)
+      }))
     };
   }
 
@@ -131,15 +207,18 @@ export class ExperienceIndex {
     ];
     let n = 0;
     let w = 0;
-    let attrib = { call: 0, exec: 0 };
+    let attrib = { call: 0, exec: 0, perc: 0 };
     for (const layer of layers) {
       if (!layer.rec) continue;
+      // Buckets first: a situation whose only history is perceptual has no
+      // win counters at all, and its `perc` count is still worth reading.
+      attrib.call += layer.rec.attrib.call || 0;
+      attrib.exec += layer.rec.attrib.exec || 0;
+      attrib.perc += layer.rec.attrib.perc || 0;
       const src = call ? layer.rec.byCall[call] : layer.rec;
       if (!src || !src.n) continue;
       n += src.n * layer.weight;
       w += src.w * layer.weight;
-      attrib.call += layer.rec.attrib.call;
-      attrib.exec += layer.rec.attrib.exec;
     }
     const prior = this.prior.get(hash);
     if (prior) {
@@ -154,6 +233,7 @@ export class ExperienceIndex {
       lower: wilsonLower(w, n),
       mean: n ? w / n : prior && prior.n ? prior.w / prior.n : 0.5,
       attrib,
+      cal: this.calibrationFor(hash),
       prior: prior || null
     };
   }

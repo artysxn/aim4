@@ -56,6 +56,16 @@ export const PISTOLS = Object.freeze({
 
 const price = (w) => weaponInfo(w).price || 0;
 
+/** Below this money an eco buys NOTHING; the round is for the bank. */
+export const SAVE_KEVLAR_MONEY = 2000;
+/**
+ * A pistol upgrade on an eco must leave at least this much in the pocket.
+ * A five-seven over a kept USP is $500 of sidegrade, and five of them is a
+ * quarter of a rifle — the upgrade is only ever bought on a rich eco, and
+ * armour always comes first.
+ */
+export const SAVE_UPGRADE_KEEP = 2000;
+
 /**
  * A full buy for one player.
  *
@@ -76,17 +86,26 @@ export function buyFor({ money, side, awper = false, wantsKit = false, save = fa
     out.cost += amount;
   };
 
-  // A save is a decision, not a shortfall: keep the money, take a pistol, and
-  // buy nothing that would leave the next round broke.
+  // A save is a decision, not a shortfall: keep the STARTER pistol, keep the
+  // money, and buy only what survives contact with the plan. Armour is the
+  // one purchase that is never wrong on an eco; the pistol upgrade is the one
+  // that usually is — it used to be bought first here, which is how every eco
+  // walked out with five matching tec-9s/five-sevens and no kevlar, the exact
+  // opposite of what a tier-1 side does with the same money.
   if (save) {
-    for (const p of PISTOLS[side]) {
-      if (price(p) <= left) {
-        out.weapon = p;
-        take(price(p));
-        break;
+    out.weapon = side === 'T' ? 'glock' : 'usp_silencer';
+    if (left >= SAVE_KEVLAR_MONEY) {
+      out.armor = 100;
+      take(KEVLAR);
+      // Rich eco only: an upgrade that still leaves a full buy banked.
+      for (const p of PISTOLS[side]) {
+        if (price(p) <= left - SAVE_UPGRADE_KEEP) {
+          out.weapon = p;
+          take(price(p));
+          break;
+        }
       }
     }
-    if (!out.weapon) out.weapon = side === 'T' ? 'glock' : 'usp_silencer';
     return out;
   }
 

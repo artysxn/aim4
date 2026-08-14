@@ -24,6 +24,7 @@ import './sim.css';
 import { EXPORT_BATCH, simApi } from './simApi.js';
 import { spinnerNode } from '../lib/spinner.js';
 import { readHeader, readRecord, FLAG_HAS_HELMET, PLAYER_SLOTS } from '../replays/shared/tickFormat.js';
+import { drawPrwChart } from './prwChart.js';
 
 const SKILLS = ['mix', 't3', 'average', 't2', 't1', 'pro'];
 /**
@@ -632,8 +633,31 @@ export function initSimView(host) {
     // The decision feed (6.17): what each bot wanted and why, in English,
     // following the scrub. This is the reason the page is worth opening.
     const motiveFeed = node('div', 'sim-motives');
-    sideBar.append(roster, motiveFeed);
+
+    // The two PRWs (18.6b): the believed curve is what the hivemind acted on,
+    // the true curve is what the round was actually worth. Where they part is
+    // a perception problem, and it is the one thing a motive string cannot
+    // say by itself.
+    const prwPanel = node('div', 'sim-prw');
+    const prwHead = node('div', 'sim-prw-head');
+    const prwTitle = node('h3', null, 'Round winrate');
+    const prwSideBtn = node('button', 'sim-btn', 'A');
+    prwHead.append(prwTitle, prwSideBtn);
+    const prwCanvas = document.createElement('canvas');
+    const prwLegend = node('div', 'sim-prw-legend');
+    prwPanel.append(prwHead, prwCanvas, prwLegend);
+    prwPanel.hidden = true;
+
+    sideBar.append(roster, prwPanel, motiveFeed);
     viewer.append(left, sideBar);
+
+    /** Which side's pair of curves is on screen. */
+    let prwSide = 'A';
+    prwSideBtn.addEventListener('click', () => {
+      prwSide = prwSide === 'A' ? 'B' : 'A';
+      prwSideBtn.textContent = prwSide;
+      drawFrame(Number(scrub.value) || 0);
+    });
 
     const viewerEmpty = node('p', 'sim-empty', 'Pick a stored round from Run or Matches.');
     panels.Viewer.append(viewerEmpty, viewer);
@@ -651,10 +675,11 @@ export function initSimView(host) {
       if (stopPlayback) stopPlayback();
 
       try {
-        const [meta, bytes, motives] = await Promise.all([
+        const [meta, bytes, motives, prw] = await Promise.all([
           simApi.roundMeta(matchId, roundNo),
           simApi.roundTicks(matchId, roundNo),
-          simApi.roundMotives(matchId, roundNo).catch(() => null)
+          simApi.roundMotives(matchId, roundNo).catch(() => null),
+          simApi.roundPrw(matchId, roundNo).catch(() => null)
         ]);
         // One sorted feed across both sides; a scripted side simply has none.
         const decisions = [];
@@ -692,7 +717,11 @@ export function initSimView(host) {
           frames.push(states);
         }
 
-        round = { meta, header, frames, map: map || meta.map, decisions };
+        round = { meta, header, frames, map: map || meta.map, decisions, prw };
+        prwSide = prw?.A?.length ? 'A' : 'B';
+        prwSideBtn.textContent = prwSide;
+        prwSideBtn.hidden = !(prw?.A?.length && prw?.B?.length);
+        prwPanel.hidden = !(prw?.A?.length || prw?.B?.length);
 
         if (!renderer) {
           const { RadarRenderer } = await import('../replays/viewer/radarRenderer.js');
@@ -810,6 +839,21 @@ export function initSimView(host) {
           motiveFeed.append(rowEl);
         }
       }
+
+      drawPrw(tick, live, rate);
+    }
+
+    function drawPrw(tick, live, rate) {
+      if (prwPanel.hidden || !round?.prw) return;
+      drawPrwChart({
+        canvas: prwCanvas,
+        legend: prwLegend,
+        rows: round.prw[prwSide] || [],
+        tick,
+        live,
+        rate,
+        node
+      });
     }
 
     scrub.addEventListener('input', () => drawFrame(Number(scrub.value)));

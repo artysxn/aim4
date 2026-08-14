@@ -21,6 +21,7 @@ import { loadAngles } from './angles.js';
 import { indexPlaybook } from './playbook.js';
 import { loadKnowledge } from './knowledgeBake.js';
 import { KNOWLEDGE_VERSION } from './demoContracts.js';
+import { FRAME_EVERY_TICKS, PICTURE_FIELDS, residualStats } from './prw.js';
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assert failed');
@@ -214,6 +215,58 @@ if (!graph) {
         `playbook decision ${i} identical under the seed`
       );
     }
+  }
+
+  // ---- the two PRWs, from a played round (18.6b) ---------------------------
+
+  {
+    const res = play(11);
+    const rows = res.rounds.flatMap((r) => r.prw?.A || []);
+    assert(rows.length > 0, 'a played round writes PRW rows');
+    assert(
+      res.rounds.every((r) => (r.prw?.A || []).length > 0),
+      'every round has its own, drained per round like the motive log'
+    );
+
+    // The honesty guarantee: a review is PRW and PFW, never positions (18.6).
+    for (const row of rows) {
+      for (const field of Object.keys(row.picture || {})) {
+        assert(PICTURE_FIELDS.includes(field), `${field} does not reach a stored row`);
+      }
+    }
+
+    // Both curves on one clock, which is what the inspector draws.
+    assert(rows.every((r) => Number.isFinite(r.pWin_belief)), 'every row has the believed number');
+    assert(
+      rows.every((r) => Number.isFinite(r.pWin_true)),
+      'roundEnd graded them all against the true state'
+    );
+    assert(
+      rows.every((r) => Math.abs(r.residual - (r.pWin_true - r.pWin_belief)) < 1e-9),
+      'and the residual is the difference'
+    );
+    const stats = residualStats(rows);
+    assert(stats.mae > 0, 'the picture and the round are not the same thing');
+    assert(stats.mae < 0.5, `nor wildly unrelated (mae ${stats.mae.toFixed(3)})`);
+
+    // The density 18.6b asks for: the team frame and the events, not 8 Hz.
+    const reasons = new Set(rows.map((r) => r.reason));
+    assert(reasons.has('freeze') && reasons.has('frame'), 'the team frame is logged');
+    for (const r of res.rounds) {
+      const frames = (r.prw?.A || [])
+        .filter((row) => row.reason === 'frame')
+        .map((row) => row.tick)
+        .sort((a, b) => a - b);
+      for (let i = 1; i < frames.length; i += 1) {
+        assert(frames[i] - frames[i - 1] >= FRAME_EVERY_TICKS, 'frames keep their spacing');
+      }
+      assert((r.prw?.A || []).length < 130 * 64, 'and nothing is logged at engine rate');
+    }
+
+    // Logging is an observation, not a decision: the same seed still plays
+    // the same round, and the truth never turned into an actor input.
+    const again = play(11);
+    assert(again.log.length === res.log.length, 'the seed still reproduces the round');
   }
 
   console.log('desireBot: ok (4 rounds vs the scripted baseline on the baked Inferno)');

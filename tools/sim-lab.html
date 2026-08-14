@@ -124,7 +124,7 @@
   </div>
   <script>
     const SKILLS = ['mix', 't3', 'average', 't2', 't1', 'pro'];
-    const BUILTIN = ['scripted', 'desire'];
+    const BUILTIN = ['scripted', 'nomad-1'];
 
     const el = (id) => document.getElementById(id);
     const node = (tag, cls, text) => {
@@ -425,7 +425,7 @@
           sel.append(opt);
         }
       };
-      rebuild(brainA, keepA, 'desire');
+      rebuild(brainA, keepA, 'nomad-1');
       rebuild(brainB, keepB, 'scripted');
     }
 
@@ -438,7 +438,7 @@
       const rounds = numberInput(24, { min: '1', max: '60' });
       const skillA = select(SKILLS, 'average');
       const skillB = select(SKILLS, 'average');
-      brainA = select(BUILTIN, 'desire');
+      brainA = select(BUILTIN, 'nomad-1');
       brainB = select(BUILTIN, 'scripted');
       const runBtn = btn('Run match', 'btn btn-primary');
       el('matchControls').append(

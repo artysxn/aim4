@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "kind": "nomad",
+  "name": "nomad-1",
+  "notes": "The test harness — the clue is in the name: a Nomad wanders outside the tier ladder. This is the bare desire arbiter plus the knobs below, passed straight into desireController. Editing this file IS the experiment: no retrain, no rebuild, one aspect at a time. It is never a generation, never has a successor, and never carries weights.",
+  "knobs": {
+    "valueHead": false,
+    "callBandit": false
+  }
+}

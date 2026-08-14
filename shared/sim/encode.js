@@ -33,6 +33,7 @@ import {
 import { weaponInfo } from '../../src/replays/shared/weaponTable.js';
 import { END_REASON } from './engine.js';
 import { TICK_RATE } from './constants.js';
+import { markSynthetic } from './firewall.js';
 
 /** Flags for one body, in the parser's own bit order. */
 export function flagsFor(body) {
@@ -282,7 +283,12 @@ export class RoundRecorder {
       })),
       events,
       stats,
-      ...extra
+      ...extra,
+      // The firewall marker (12.1), stamped last so no caller can clear it
+      // through `extra`. Every meta this module writes describes a round that
+      // was simulated, and 9.3's extractor filters on exactly this field.
+      // Where the round came from is a fact, not an option.
+      ...markSynthetic({})
     };
   }
 }
