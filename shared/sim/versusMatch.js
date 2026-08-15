@@ -318,6 +318,10 @@ export function playVersusMatch({
       A: typeof ctrlA.orderRows === 'function' ? ctrlA.orderRows() : null,
       B: typeof ctrlB.orderRows === 'function' ? ctrlB.orderRows() : null
     };
+    // 12.3: the memory fingerprint, taken AFTER roundEnd committed, so it
+    // describes what the round left behind rather than what it started with.
+    if (typeof ctrlA.experienceHash === 'function') round.experienceHashA = ctrlA.experienceHash();
+    if (typeof ctrlB.experienceHash === 'function') round.experienceHashB = ctrlB.experienceHash();
     if (orderRows.A || orderRows.B) {
       round.orders = orderRows;
       round.humanCalled = Boolean(orderRows.A?.humanCalled || orderRows.B?.humanCalled);

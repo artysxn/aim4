@@ -73,6 +73,8 @@ const BUDGETS = Object.freeze({
   // A grind is meant to run for hours. Its own SIGINT handler checkpoints, so
   // the budget is a backstop against a hang, not a schedule.
   grind: Number(process.env.AIM4_SIM_BUDGET_GRIND || 43200),
+  // 9.8 asks for 400 paired matches. That is hours, not minutes.
+  admit: Number(process.env.AIM4_SIM_BUDGET_ADMIT || 21600),
   collect: Number(process.env.AIM4_SIM_BUDGET_COLLECT || 3600),
   extract: Number(process.env.AIM4_SIM_BUDGET_EXTRACT || 3600),
   train: Number(process.env.AIM4_SIM_BUDGET_TRAIN || 3600),
@@ -82,9 +84,9 @@ const BUDGETS = Object.freeze({
 });
 
 /** Which kinds this host will accept at all. */
-export const JOB_KINDS = Object.freeze(['match', 'branch', 'grind', 'collect', 'extract', 'train', 'eval', 'rollout', 'rl-train']);
+export const JOB_KINDS = Object.freeze(['match', 'branch', 'grind', 'admit', 'collect', 'extract', 'train', 'eval', 'rollout', 'rl-train']);
 // Grind is heavy by definition: it is a night of matches with the brakes off.
-const HEAVY_KINDS = new Set(['grind', 'collect', 'extract', 'train', 'eval', 'rollout', 'rl-train']);
+const HEAVY_KINDS = new Set(['grind', 'admit', 'collect', 'extract', 'train', 'eval', 'rollout', 'rl-train']);
 
 /** How much log a job keeps in memory for the panel's tail. */
 const LOG_TAIL_LINES = 200;
@@ -235,6 +237,21 @@ function commandFor(job, python) {
           '--skill-a', p.skillA,
           '--skill-b', p.skillB,
           ...(p.fresh ? ['--fresh'] : [])
+        ]
+      };
+    case 'admit':
+      return {
+        cmd: process.execPath,
+        args: [
+          path.join(REPO, 'scripts', 'sim-admit.mjs'),
+          '--model', p.model,
+          ...(p.parent ? ['--parent', p.parent] : []),
+          '--maps', p.maps,
+          '--matches', String(p.matches),
+          '--rounds', String(p.rounds),
+          '--seed', String(p.seed),
+          ...(p.allowSkipped ? ['--allow-skipped'] : []),
+          ...(p.dryRun ? ['--dry-run'] : [])
         ]
       };
     case 'branch':
@@ -398,6 +415,22 @@ function normalizeParams(kind, raw = {}) {
         skillB: safeName(raw.skillB || 'average'),
         fresh: Boolean(raw.fresh)
       };
+    case 'admit':
+      return {
+        model: safeName(raw.model || ''),
+        ...(raw.parent ? { parent: safeName(raw.parent) } : {}),
+        maps: String(raw.maps || 'INF')
+          .split(',')
+          .map((s2) => safeName(s2.trim()).toUpperCase())
+          .filter(Boolean)
+          .slice(0, 7)
+          .join(','),
+        matches: num(raw.matches, 8, 1, 400),
+        rounds: num(raw.rounds, 12, 1, 60),
+        seed: num(raw.seed, 100, 0, 1e9),
+        allowSkipped: Boolean(raw.allowSkipped),
+        dryRun: Boolean(raw.dryRun)
+      };
     case 'collect':
       return {
         map: safeName(raw.map || 'INF').toUpperCase(),
@@ -462,6 +495,8 @@ function labelFor(kind, p) {
       return `${p.map} branch ${p.side}: ${p.calls.split(',').join(' | ')}`;
     case 'grind':
       return `${p.map} grind ${p.matches}x${p.rounds} rounds, ${p.brain}`;
+    case 'admit':
+      return `admit ${p.model}${p.parent ? ` vs ${p.parent}` : ''} on ${p.maps}`;
     case 'collect':
       return `${p.map} ${p.matches}x${p.rounds} rounds`;
     case 'extract':
@@ -532,6 +567,18 @@ export async function startJob(kind, rawParams = {}) {
     }
     if (params.caller && !(await isCaller(params.caller))) {
       return { error: `model ${params.caller}: not a caller on this host` };
+    }
+  }
+  if (kind === 'admit') {
+    if (!params.model) return { error: 'admit: no model' };
+    if (!(await isBrain(params.model))) {
+      return { error: `model ${params.model}: not a bot brain on this host` };
+    }
+    if (params.parent && !(await isBrain(params.parent))) {
+      return { error: `parent ${params.parent}: not a bot brain on this host` };
+    }
+    for (const map of params.maps.split(',')) {
+      if (!(await loadBake('navcache', map))) return { error: `no nav bake for ${map}` };
     }
   }
   if (kind === 'branch') {

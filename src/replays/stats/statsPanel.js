@@ -118,6 +118,7 @@ export function createStatsPanel({
           <span class="st-library-load" data-st-library-load hidden role="status" aria-live="polite" aria-label="Loading more demos">
             <span class="spinner spinner-sm" aria-hidden="true"></span>
           </span>
+          <button type="button" class="btn btn-sm" data-st-library-retry hidden>Retry</button>
           <div class="st-tabs">
           <button type="button" class="seg-tab active" data-tab="players">${mbIcon('player')}Players</button>
           <button type="button" class="seg-tab" data-tab="teams">${mbIcon('team')}Teams</button>
@@ -156,6 +157,7 @@ export function createStatsPanel({
       <span class="st-library-load" data-st-library-load hidden role="status" aria-live="polite" aria-label="Loading more demos">
         <span class="spinner spinner-sm" aria-hidden="true"></span>
       </span>
+      <button type="button" class="btn btn-sm" data-st-library-retry hidden>Retry</button>
       <div class="st-tabs">
         <button type="button" class="seg-tab active" data-tab="players">${mbIcon('player')}Players</button>
         <button type="button" class="seg-tab" data-tab="teams">${mbIcon('team')}Teams</button>
@@ -204,7 +206,27 @@ export function createStatsPanel({
     root.querySelectorAll('[data-st-library-load]').forEach((mark) => {
       mark.hidden = !on;
     });
+    if (on) setLibraryRetry(false);
   }
+
+  function setLibraryRetry(on) {
+    const root = pageHeadEl || el;
+    root.querySelectorAll('[data-st-library-retry]').forEach((btn) => {
+      btn.hidden = !on;
+    });
+  }
+
+  function bindLibraryRetry() {
+    const roots = [el, pageHeadEl].filter(Boolean);
+    for (const root of roots) {
+      root.querySelectorAll('[data-st-library-retry]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          void resumeLibrary();
+        });
+      });
+    }
+  }
+  bindLibraryRetry();
 
   /** Filters bar is closed by default so the table owns the viewport. */
   let filtersOpen = false;
@@ -2269,6 +2291,7 @@ export function createStatsPanel({
     scopeEl.textContent = next.title || '';
     payload = null;
     setLibraryLoading(false);
+    setLibraryRetry(false);
     bodyEl.innerHTML = spinnerHtml('Loading database…');
     filtersEl.innerHTML = '';
     const cancelSlow = watchSlowLoad(bodyEl, {
@@ -2340,6 +2363,7 @@ export function createStatsPanel({
       if (token !== loadToken) return;
       payload = res;
       setLibraryLoading(false);
+      setLibraryRetry(false);
       const rounds = (res.demos || []).reduce((n, d) => n + (d.rounds?.length || 0), 0);
       if (!rounds) {
         filtersEl.innerHTML = '';
@@ -2352,15 +2376,15 @@ export function createStatsPanel({
         setSpinnerLabel(bodyEl, statsProgressLabel({ phase: 'building-table' }));
         if (searchOpen) renderSearch();
         else syncSearchToggle();
-        await scheduleUiJob({
-          tokenRef: renderTokenRef,
-          isCurrent: () => token === loadToken,
-          work() {
-            if (token !== loadToken) return;
-            render({ rebuildFilters: true });
-          }
-        });
       }
+      await scheduleUiJob({
+        tokenRef: renderTokenRef,
+        isCurrent: () => token === loadToken,
+        work() {
+          if (token !== loadToken) return;
+          render({ rebuildFilters: !painted });
+        }
+      });
       if (token !== loadToken) return;
       void savedViews.refresh();
       void savedViews.applyShareParam(
@@ -2370,12 +2394,55 @@ export function createStatsPanel({
       cancelSlow();
       setLibraryLoading(false);
       if (token !== loadToken) return;
-      if (payload?.demos?.some((d) => d.rounds?.length)) return;
+      if (payload?.demos?.some((d) => d.rounds?.length)) {
+        setLibraryRetry(true);
+        void scheduleUiJob({
+          tokenRef: renderTokenRef,
+          isCurrent: () => token === loadToken,
+          work() {
+            if (token !== loadToken) return;
+            render({ rebuildFilters: !painted });
+          }
+        });
+        return;
+      }
       filtersEl.innerHTML = '';
       const msg = formatApiError(err).message || 'Could not load stats.';
       bodyEl.innerHTML = `<p class="view-empty">${escapeHtml(msg)}</p>
         <button type="button" class="btn btn-sm" data-st-retry>Retry</button>`;
       bodyEl.querySelector('[data-st-retry]')?.addEventListener('click', () => load({ ...scope, ...next }));
+    }
+  }
+
+  async function resumeLibrary() {
+    const token = loadToken;
+    setLibraryRetry(false);
+    setLibraryLoading(true);
+    try {
+      const res = await getStatsPayload(scope.demos || null, {
+        onBatch: (batch) => {
+          if (token !== loadToken) return;
+          payload = batch.payload;
+          setLibraryLoading(Boolean(batch.hasMore));
+          void scheduleUiJob({
+            tokenRef: renderTokenRef,
+            isCurrent: () => token === loadToken,
+            work() {
+              if (token !== loadToken) return;
+              render({ rebuildFilters: false });
+            }
+          });
+        }
+      });
+      if (token !== loadToken) return;
+      payload = res;
+      setLibraryLoading(false);
+      setLibraryRetry(false);
+      render({ rebuildFilters: false });
+    } catch {
+      if (token !== loadToken) return;
+      setLibraryLoading(false);
+      setLibraryRetry(true);
     }
   }
 
@@ -2434,6 +2501,7 @@ export function createStatsPanel({
     getDetail: () => detail,
     destroy() {
       setLibraryLoading(false);
+      setLibraryRetry(false);
       if (usePageHead && pageHeadEl) {
         const slot = document.getElementById('page-head-actions');
         if (slot?.contains(pageHeadEl)) slot.replaceChildren();

@@ -1052,6 +1052,21 @@ export function initSimView(host) {
     const genNote = node('p', 'sim-note', '');
     panels.Generations.append(genNote, genWrap);
 
+    /** Latest admission verdict per model, filled by loadEvals. */
+    let evalsByModel = new Map();
+
+    async function loadEvals() {
+      try {
+        const { evals = [] } = await simApi.evals();
+        // Newest first from the server, so the first row per model wins.
+        const byModel = new Map();
+        for (const e of evals) if (!byModel.has(e.model)) byModel.set(e.model, e);
+        evalsByModel = byModel;
+      } catch {
+        evalsByModel = new Map();
+      }
+    }
+
     function renderGenerations(res) {
       const gens = (res && res.generations) || [];
       genWrap.replaceChildren();
@@ -1070,25 +1085,38 @@ export function initSimView(host) {
           'Model',
           'Parent',
           { label: 'Val', align: 'right' },
-          'Source',
-          'League'
+          'Admission',
+          { label: 'Elo', align: 'right' },
+          'Source'
         ]);
         for (const g of gens.filter((x) => x.lineage === lineage)) {
           const tr = node('tr');
+          const ev = evalsByModel.get(g.name) || null;
+          // A model with no admission run is not a failed one, and the two
+          // must not read the same: "never judged" is its own state.
+          const verdictCell = ev
+            ? node(
+                'td',
+                ev.verdict === 'rejected' ? 'sim-error' : null,
+                ev.verdict === 'rejected' ? `rejected: ${ev.failed || 'gates unscored'}` : ev.verdict
+              )
+            : node('td', 'sim-dim', 'not run');
+          if (ev) verdictCell.title = ev.reason || '';
           tr.append(
             node('td', 'sim-num', String(g.gen)),
             node('td', null, g.display || g.name),
             node('td', 'sim-dim', g.parent || ''),
             node('td', 'sim-num', g.valAccuracy == null ? '' : (g.valAccuracy * 100).toFixed(1) + '%'),
-            node('td', 'sim-dim', g.shipped ? 'shipped' : g.source),
-            node('td', 'sim-dim', (g.league || []).join(', '))
+            verdictCell,
+            node('td', 'sim-num', ev && ev.elo ? ev.elo.elo.toFixed(0) : ''),
+            node('td', 'sim-dim', g.shipped ? 'shipped' : g.source)
           );
           gt.tbody.append(tr);
         }
         genWrap.append(gt.table);
       }
     }
-    renderGenerations(modelsRes);
+    loadEvals().then(() => renderGenerations(modelsRes));
 
     // ---- Export ----------------------------------------------------------
 

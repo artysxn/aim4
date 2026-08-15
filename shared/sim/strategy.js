@@ -73,15 +73,19 @@ export class StrategyAI {
    * did not lose teaches the selector to avoid a call that was fine. The
    * lesson for that round is the calibration bias, written separately.
    */
-  observeRound({ won, attrib = 'call' } = {}) {
+  observeRound({ won, attrib = 'call', scopes = ['session', 'career'] } = {}) {
     if (!this.last.key || !this.last.call) return;
+    // `scopes` is passed in rather than fixed here because 18.8's ingest rule
+    // is a property of WHO WAS PLAYED, which this class does not know. Fixed,
+    // it would quietly route an exploiter's lessons into career while the
+    // opening ledger beside it obeyed the quarantine.
     this.index.write({
       key: this.last.key,
       call: this.last.call,
       won,
       attrib,
       gen: this.gen,
-      scopes: ['session', 'career']
+      scopes
     });
     if (attrib === 'perc') return;
     this.bandit.reward(this.last.banditKey, this.last.call, won ? 1 : 0);

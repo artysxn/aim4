@@ -94,6 +94,10 @@ export const simApi = {
     return new Uint8Array(await res.arrayBuffer());
   },
 
+  /** Admission reports (7.0): the verdict on each checkpoint. */
+  evals: () => get('/api/sim/evals'),
+  evalReport: (id) => get(`/api/sim/evals/${encodeURIComponent(id)}`),
+
   // Dataset export: list, then one download for the whole selection.
   // Fetch, not an <a href>, because the guard reads Authorization.
   exportList: () => get('/api/sim/export/list'),

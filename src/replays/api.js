@@ -457,6 +457,8 @@ export async function fetchStats(demoIds = null, opts = {}) {
   /** After `{"type":"done"}`, the rest of the body is raw JSON (not NDJSON). */
   let awaitingBody = false;
   let bodyTotal = 0;
+  /** Trailer fields. The JSON body can omit hasMore/total; paging still needs them. */
+  let streamMeta = null;
 
   const handleLine = (line) => {
     const raw = String(line || '').trim();
@@ -472,6 +474,10 @@ export async function fetchStats(demoIds = null, opts = {}) {
       return;
     }
     if (msg.type === 'done') {
+      streamMeta = {
+        hasMore: msg.hasMore,
+        libraryTotal: Number(msg.libraryTotal) || 0
+      };
       // Legacy servers nested the library in the done line. New servers send
       // only a trailer, then the payload as the remainder of the response.
       if (msg.payload) {
@@ -558,6 +564,14 @@ export async function fetchStats(demoIds = null, opts = {}) {
   }
   if (!payload) {
     throw formatApiError(new Error('Stats stream ended without a payload.'));
+  }
+  if (streamMeta) {
+    if (!Object.prototype.hasOwnProperty.call(payload, 'hasMore') && streamMeta.hasMore != null) {
+      payload.hasMore = streamMeta.hasMore;
+    }
+    if (!(Number(payload.total) > 0) && streamMeta.libraryTotal > 0) {
+      payload.total = streamMeta.libraryTotal;
+    }
   }
   return payload;
 }

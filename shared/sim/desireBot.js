@@ -664,6 +664,19 @@ export function desireController({
    */
   experience = null,
   /**
+   * 18.8: who is on the other side, when the runner knows.
+   *
+   * `{ role, elo }`. Supplied, it decides which scopes this match may write
+   * to: an exploiter's results are quarantined and a weak opponent's never
+   * reach career, because career is what the next generation inherits and a
+   * naive B rush that beats our own gen-3 anchors is not evidence.
+   *
+   * Absent, the old behaviour stands (session + career). That is deliberate:
+   * a self-play grind has no ratings to compare and refusing to learn from it
+   * would make the floor a way of learning nothing at all.
+   */
+  opponent = null,
+  /**
    * 6.1: god mode's Call. An order queue (shared/sim/orders.js) the viewer
    * fills; this side drains the orders addressed to it at the tick they were
    * issued for, prices them, and takes or refuses them.
@@ -799,6 +812,18 @@ export function desireController({
 
     return {
       name: 'desire',
+
+      /**
+       * 12.3 / 18.10: the fingerprint of the memory this side played with.
+       *
+       * Stored in the match config so a reproduction can prove it loaded the
+       * same index the original had. Without it, "same seed" is only half a
+       * claim: the seed fixes the dice, and the index fixes what the bots
+       * believed before the first one was rolled.
+       */
+      experienceHash() {
+        return index.hash();
+      },
       /** The decision log the inspector reads: {tick, slot, id, motive}. */
       log: [],
 
@@ -2954,6 +2979,10 @@ export function desireController({
 
       roundEnd({ outcome } = {}) {
         if (!R) return;
+        // 18.10: commits are legal again. Released here, at the top of the
+        // only place that writes, so everything below is the round-end batch
+        // by construction rather than by discipline.
+        index.endRound();
         const won = outcome?.winner === R.side;
         const call = R.layerAction ? libraryLabel(R.layerAction) : null;
 
@@ -3002,13 +3031,22 @@ export function desireController({
         // gate that every learning path passes through beats N readers each
         // remembering to check.
         const learn = memoryEnabled && !R.humanCalled;
+        // 18.8's ingest rule. Without an opponent the default stands, so a
+        // grind still fills career; with one, the floor and the exploiter
+        // quarantine decide where this match is allowed to land.
+        const ingest = opponent
+          ? ExperienceIndex.scopesFor({
+              opponentRole: opponent.role,
+              opponentElo: opponent.elo
+            })
+          : { scopes: ['session', 'career'], reason: 'no opponent given' };
         if (learn && callBandit && R.openingCall) {
           index.write({
             key: `open|${bk}`,
             call: R.openingCall,
             won,
             attrib,
-            scopes: ['session', 'career']
+            scopes: ingest.scopes
           });
         }
         if (learn && R.situation) {
@@ -3019,7 +3057,7 @@ export function desireController({
             call: callBandit && R.openingCall ? R.openingCall : call,
             banditKey: bk
           };
-          strategy.observeRound({ won, attrib });
+          strategy.observeRound({ won, attrib, scopes: ingest.scopes });
         } else if (call) {
           bandit.reward(bk, call, won ? 1 : 0);
         }
@@ -3029,6 +3067,10 @@ export function desireController({
           lurkSeen: (R.ownCore?.lurkers?.length || 0) > 0,
           buy: 'full'
         });
+        // Re-armed for the next round. From here to the next roundEnd the
+        // index is retrieval only, which is what makes the determinism gate
+        // an enforced property rather than a convention (18.10).
+        index.beginRound();
       }
     };
   };

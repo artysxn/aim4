@@ -3377,6 +3377,16 @@ body.rv-open {
   display: none;
 }
 
+.st-page-actions [data-st-library-retry],
+.st-tabs-row [data-st-library-retry] {
+  height: 32px;
+}
+
+.st-page-actions [data-st-library-retry][hidden],
+.st-tabs-row [data-st-library-retry][hidden] {
+  display: none;
+}
+
 .st-filters-toggle {
   display: inline-flex;
   align-items: center;

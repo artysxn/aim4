@@ -5,8 +5,8 @@
 
 import { fetchStats as fetchStatsNetwork, STATS_LIBRARY_PAGE } from './api.js';
 
-/** @type {{ key: string, payload: any, at: number, generation: number, complete: boolean }} */
-let cache = { key: '', payload: null, at: 0, generation: 0, complete: false };
+/** @type {{ key: string, payload: any, at: number, generation: number, complete: boolean, nextOffset: number }} */
+let cache = { key: '', payload: null, at: 0, generation: 0, complete: false, nextOffset: 0 };
 
 /** @type {Map<string, Promise<any>>} */
 const inflight = new Map();
@@ -34,15 +34,16 @@ export function peekStatsCache(demoIds = null) {
 }
 
 export function invalidateStatsCache() {
+  // Drop the stored payload so the next idle fetch is fresh. Leave an in-flight
+  // pull and its batch listeners alone so later pages still paint.
   cache = {
     key: '',
     payload: null,
     at: 0,
     generation: (cache.generation || 0) + 1,
-    complete: false
+    complete: false,
+    nextOffset: 0
   };
-  inflight.clear();
-  batchListeners.clear();
 }
 
 function emitBatch(key, info) {
@@ -72,7 +73,13 @@ function listenBatch(key, fn) {
 function mergeChunk(merged, chunk) {
   const incoming = Array.isArray(chunk?.demos) ? chunk.demos : [];
   if (!merged.demos) merged.demos = [];
-  merged.demos.push(...incoming);
+  const seen = new Set(merged.demos.map((d) => d?.id).filter(Boolean));
+  for (const demo of incoming) {
+    const id = demo?.id;
+    if (id && seen.has(id)) continue;
+    if (id) seen.add(id);
+    merged.demos.push(demo);
+  }
   if (chunk?.entitlements) merged.entitlements = chunk.entitlements;
   for (const [k, v] of Object.entries(chunk || {})) {
     if (k === 'demos' || k === 'offset' || k === 'count' || k === 'hasMore' || k === 'total') {
@@ -81,6 +88,53 @@ function mergeChunk(merged, chunk) {
     if (merged[k] === undefined) merged[k] = v;
   }
   return incoming.length;
+}
+
+/**
+ * Whether another GET /stats page is still owed.
+ *
+ * A missing `hasMore` must not mean "done": that is how a full first page
+ * (300 demos) was treated as the whole library. A full page means keep going
+ * until the server says otherwise or a short page arrives.
+ *
+ * @param {{
+ *   scoped: boolean,
+ *   scopedLen: number,
+ *   offset: number,
+ *   pageSize: number,
+ *   chunk: object | null | undefined,
+ *   incomingLen: number
+ * }} args
+ */
+export function statsPageHasMore(args) {
+  const pageSize = Math.max(1, Number(args.pageSize) || STATS_LIBRARY_PAGE);
+  const offset = Math.max(0, Number(args.offset) || 0);
+  if (args.scoped) return offset + pageSize < (Number(args.scopedLen) || 0);
+  const chunk = args.chunk;
+  if (chunk && Object.prototype.hasOwnProperty.call(chunk, 'hasMore')) {
+    return Boolean(chunk.hasMore);
+  }
+  const total = Math.max(Number(chunk?.total) || 0, Number(chunk?.libraryTotal) || 0);
+  if (total > 0) return offset + pageSize < total;
+  return (Number(args.incomingLen) || 0) >= pageSize;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchStatsPage(slice, opts) {
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await fetchStatsNetwork(slice, opts);
+    } catch (err) {
+      lastErr = err;
+      if (attempt === 2) break;
+      await delay(400 * (attempt + 1));
+    }
+  }
+  throw lastErr;
 }
 
 /**
@@ -126,30 +180,46 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
   let pending = inflight.get(key);
   if (!pending) {
     pending = (async () => {
-      const merged = { demos: [] };
+      const resume =
+        !opts.force && cache.key === key && cache.payload && !cache.complete;
+      const merged = resume && cache.payload ? cache.payload : { demos: [] };
+      if (!merged.demos) merged.demos = [];
       const scoped = demoIds?.length ? [...demoIds] : null;
       const page = STATS_LIBRARY_PAGE;
-      let offset = 0;
+      let offset = resume ? Math.max(0, Number(cache.nextOffset) || 0) : 0;
+      let hasMore = true;
       while (true) {
         const slice = scoped ? scoped.slice(offset, offset + page) : null;
-        if (scoped && !slice.length) break;
-        const chunk = await fetchStatsNetwork(slice, {
+        if (scoped && !slice.length) {
+          hasMore = false;
+          break;
+        }
+        const chunk = await fetchStatsPage(slice, {
           onProgress: opts.onProgress,
           offset: scoped ? 0 : offset,
           limit: page
         });
-        mergeChunk(merged, chunk);
+        const incomingLen = mergeChunk(merged, chunk);
         const loaded = merged.demos.length;
         const total = scoped
           ? scoped.length
-          : Math.max(Number(chunk?.total) || 0, loaded);
-        const hasMore = scoped ? offset + page < scoped.length : Boolean(chunk?.hasMore);
+          : Math.max(Number(chunk?.total) || 0, Number(chunk?.libraryTotal) || 0, loaded);
+        hasMore = statsPageHasMore({
+          scoped: Boolean(scoped),
+          scopedLen: scoped ? scoped.length : 0,
+          offset,
+          pageSize: page,
+          chunk,
+          incomingLen
+        });
+        const nextOffset = offset + (scoped ? slice.length : page);
         cache = {
           key,
           payload: merged,
           at: Date.now(),
           generation: cache.generation || 0,
-          complete: !hasMore
+          complete: !hasMore,
+          nextOffset
         };
         emitBatch(key, {
           payload: merged,
@@ -160,15 +230,15 @@ export async function getStatsPayload(demoIds = null, opts = {}) {
           complete: !hasMore
         });
         if (!hasMore) break;
-        offset += scoped ? slice.length : page;
-        if (offset >= total) break;
+        offset = nextOffset;
       }
       cache = {
         ...cache,
         key,
         payload: merged,
         at: Date.now(),
-        complete: true
+        complete: !hasMore,
+        nextOffset: hasMore ? offset : merged.demos.length
       };
       return merged;
     })().finally(() => {

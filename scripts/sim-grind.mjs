@@ -52,7 +52,16 @@ const flag = (name, fallback) => {
 };
 const has = (name) => args.includes(`--${name}`);
 
-const MAP = String(flag('map', 'INF')).toUpperCase();
+// One map or many. An overnight run on a single map teaches the index one
+// map's situations and nothing about the other six, which is a night spent
+// narrowing rather than broadening. Rotated per match so an interrupted run
+// still covers everything rather than finishing map one and stopping.
+const MAPS = String(flag('maps', flag('map', 'INF')))
+  .toUpperCase()
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const MAP = MAPS[0];
 const MATCHES = Math.max(1, Number(flag('matches', 100)));
 const ROUNDS = Math.max(1, Math.min(60, Number(flag('rounds', 24))));
 const SEED = Number(flag('seed', 1));
@@ -99,16 +108,24 @@ function outcomeSignature(rounds) {
 }
 
 async function main() {
-  const nav = await loadBake('navcache', MAP);
-  const anglesBake = await loadBake('angles', MAP);
-  if (!nav || !anglesBake) {
-    console.error(`no bakes for ${MAP}`);
-    process.exit(1);
+  // Bakes are loaded once per map and reused: a nav graph is megabytes and
+  // rebuilding it per match would be most of the run.
+  const worlds = new Map();
+  for (const map of MAPS) {
+    const nav = await loadBake('navcache', map);
+    const anglesBake = await loadBake('angles', map);
+    if (!nav || !anglesBake) {
+      console.error(`no bakes for ${map}`);
+      process.exit(1);
+    }
+    worlds.set(map, {
+      map,
+      graph: navGraphFromBake(nav.bake),
+      angles: loadAngles(anglesBake.bake),
+      playbook: (await loadPlaybook(map))?.index || null,
+      knowledge: (await loadKnowledgeBake(map))?.knowledge || null
+    });
   }
-  const graph = navGraphFromBake(nav.bake);
-  const angles = loadAngles(anglesBake.bake);
-  const playbook = (await loadPlaybook(MAP))?.index || null;
-  const knowledge = (await loadKnowledgeBake(MAP))?.knowledge || null;
 
   const models = {};
   const modelMeta = {};
@@ -137,12 +154,17 @@ async function main() {
       console.error(`${CALLER} is not a caller model`);
       process.exit(1);
     }
-    const covered = loaded.meta.maps
-      ? loaded.meta.maps.includes(MAP)
-      : !loaded.meta.map || loaded.meta.map === MAP;
-    if (!covered) {
+    // EVERY map, not the first one. A caller asked for a map it was not
+    // fitted on throws at the point of use, which on an overnight run means
+    // discovering it at 3am with the night spent.
+    const uncovered = MAPS.filter((map) =>
+      loaded.meta.maps
+        ? !loaded.meta.maps.includes(map)
+        : loaded.meta.map && loaded.meta.map !== map
+    );
+    if (uncovered.length) {
       const hasMaps = loaded.meta.maps ? loaded.meta.maps.join(', ') : loaded.meta.map;
-      console.error(`caller ${CALLER} covers ${hasMaps}, not ${MAP}`);
+      console.error(`caller ${CALLER} covers ${hasMaps}; it cannot play ${uncovered.join(', ')}`);
       process.exit(1);
     }
     callerNet = loaded.policy;
@@ -168,14 +190,14 @@ async function main() {
     }
   }
 
-  const mk = (name) =>
+  const mk = (name, world) =>
     name === 'scripted'
       ? scriptedController
       : desireController({
-          angles,
+          angles: world.angles,
           policy: models[name] || null,
-          playbook,
-          knowledge,
+          playbook: world.playbook,
+          knowledge: world.knowledge,
           callerNet,
           callBandit: BANDIT,
           // The whole point of grinding: one index across every match, so
@@ -183,7 +205,7 @@ async function main() {
           experience: index
         });
 
-  console.log(`grind ${MAP}: ${MATCHES} matches x ${ROUNDS} rounds, ${BRAIN} vs ${BRAIN_B}` +
+  console.log(`grind ${MAPS.join(',')}: ${MATCHES} matches x ${ROUNDS} rounds, ${BRAIN} vs ${BRAIN_B}` +
     (CALLER ? ` (caller ${CALLER})` : ''));
   console.log(`index ${carried ? `${carried} career rows carried` : 'starting empty'} -> ${INDEX_FILE}`);
 
@@ -207,7 +229,7 @@ async function main() {
       JSON.stringify(
         {
           phase: 'grind',
-          map: MAP,
+          maps: MAPS,
           done: played,
           total: MATCHES,
           percent: Math.round((played / MATCHES) * 1000) / 10,
@@ -225,12 +247,15 @@ async function main() {
 
   for (let m = 0; m < MATCHES && !stopping; m += 1) {
     const seed = SEED + m;
+    // Round robin rather than blocks: an overnight run that is stopped early
+    // has still seen every map.
+    const world = worlds.get(MAPS[m % MAPS.length]);
     const result = playVersusMatch({
-      graph,
-      angles,
-      map: MAP,
-      controllerA: mk(BRAIN),
-      controllerB: mk(BRAIN_B),
+      graph: world.graph,
+      angles: world.angles,
+      map: world.map,
+      controllerA: mk(BRAIN, world),
+      controllerB: mk(BRAIN_B, world),
       seed,
       maxRounds: ROUNDS,
       skillA: SKILL_A,
@@ -253,7 +278,7 @@ async function main() {
     console.log(
       `[${String(played).padStart(5)}/${MATCHES}] ` +
         `${((played / MATCHES) * 100).toFixed(1).padStart(5)}%  ` +
-        `${result.winsA}-${result.winsB}  ` +
+        `${world.map} ${result.winsA}-${result.winsB}  ` +
         `${rounds.toLocaleString()} rounds  ${rate.toFixed(2)} match/s  ` +
         `ETA ${fmtDuration((MATCHES - played) / rate)}  ` +
         `career ${index.career.size.toLocaleString()}`
@@ -277,22 +302,23 @@ async function main() {
     // was at the top of this run. Same seed, same signature, or the grind is
     // not reproducible and nothing built on it can be trusted.
     const fresh = new ExperienceIndex();
+    const w0 = worlds.get(MAPS[0]);
     const mkFresh = (name) =>
       name === 'scripted'
         ? scriptedController
         : desireController({
-            angles,
+            angles: w0.angles,
             policy: models[name] || null,
-            playbook,
-            knowledge,
+            playbook: w0.playbook,
+            knowledge: w0.knowledge,
             callerNet,
             callBandit: BANDIT,
             experience: fresh
           });
     const again = playVersusMatch({
-      graph,
-      angles,
-      map: MAP,
+      graph: w0.graph,
+      angles: w0.angles,
+      map: w0.map,
       controllerA: mkFresh(BRAIN),
       controllerB: mkFresh(BRAIN_B),
       seed: SEED,

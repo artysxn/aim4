@@ -3895,7 +3895,10 @@ export function initReplaysView({ auth = null, escapeHtml, pathForPage = null, o
       rebuildTeamClusters();
       if (statsSig !== prevSig) {
         invalidateStatsCache();
-        loadedStatsKey = '';
+        // A listing change must not restart Database mid-page. Clearing this
+        // key while a load is running made the next click refetch and left
+        // the first page's totals on screen.
+        if (!inflightStatsKey) loadedStatsKey = '';
       }
       renderDemos();
       renderFilters();

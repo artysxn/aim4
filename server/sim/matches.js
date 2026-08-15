@@ -295,6 +295,13 @@ export async function runMatch(params = {}) {
         ])
       ),
       recordEvery,
+      // 12.3: which memory each side played with. A reproduction that loads a
+      // different index is not a reproduction, and this is the only place that
+      // would say so.
+      experience: {
+        A: typeof rounds[0]?.experienceHashA === 'string' ? rounds[0].experienceHashA : null,
+        B: typeof rounds[0]?.experienceHashB === 'string' ? rounds[0].experienceHashB : null
+      },
       bakeSource: nav.source,
       createdAt: new Date().toISOString(),
       elapsedMs: Date.now() - t0,

@@ -32,6 +32,7 @@ import {
 } from './matches.js';
 import { availableMaps } from './bakes.js';
 import { listGenerations, listModels } from './models.js';
+import { listEvals, readEval } from './evals.js';
 import { getJob, hostStatus, listJobs, loadJobHistory, startJob, stopJob } from './jobs.js';
 import { ROOT } from '../replays/demoStore.js';
 import { EXPERIENCE_VERSION } from '../../shared/sim/experience.js';
@@ -269,6 +270,23 @@ async function route(req, res, url, me) {
       host: hostStatus()
     });
     return true;
+  }
+
+  // Admission reports (7.0): what the pipeline decided about each checkpoint.
+  // The generation browser (6.4) reads this beside the registry, so a listing
+  // shows both what a model is and whether it earned the name.
+  if (p === '/api/sim/evals' && req.method === 'GET') {
+    json(res, req, 200, { evals: await listEvals(Number(url.searchParams.get('limit')) || 50) });
+    return true;
+  }
+  {
+    const m2 = p.match(/^\/api\/sim\/evals\/([A-Za-z0-9_.-]+)$/);
+    if (m2 && req.method === 'GET') {
+      const report = await readEval(m2[1]);
+      if (!report) return notFound(res, req);
+      json(res, req, 200, report);
+      return true;
+    }
   }
 
   // Experience index rows (SIM-PLAN 18.3). The Memory tab is P6; the rows are
