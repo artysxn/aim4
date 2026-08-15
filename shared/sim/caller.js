@@ -584,6 +584,16 @@ export function createCaller({
       memoryOf = typeof fn === 'function' ? fn : null;
     },
 
+    /**
+     * The head as a plain price lookup, for anyone who needs to ask what a
+     * call is worth without being the caller (6.1's refusals). Null when no
+     * head has been given, which is what stops a priced refusal from being
+     * invented out of nothing.
+     */
+    get priceOf() {
+      return memoryOf;
+    },
+
     roundStart({ econ = null, econEnemy = null, contractOf = () => null, awpOf = () => false, strategyCall = null, forceCall = null, picture = null, spawn: sp, goal: g } = {}) {
       if (sp) spawn = sp;
       if (g) goal = g;
@@ -639,6 +649,42 @@ export function createCaller({
      * is a read, not a recall: we only move the plan when the picture says
      * continuing is -EV, or this posture freezes when ahead.
      */
+    /**
+     * 6.1: take a call from outside, mid-round.
+     *
+     * Not `considerIntel`, which asks the situation matcher what the picture
+     * now deserves. An order is not intel: the call is already decided, so
+     * this pins the tape to it exactly as a freeze-time forced call does and
+     * only chooses WHICH round of that call to copy.
+     *
+     * Returns what it did, so a caller that has no tape for the ordered call
+     * can be reported honestly rather than silently doing nothing.
+     */
+    orderCall(nextCall, { contractOf = () => null, awpOf = () => false } = {}) {
+      call = nextCall;
+      if (!playbook) {
+        applyTape(null, null, contractOf, awpOf);
+        return { mode: CALLER_MODE.FREESTYLE, reason: 'no playbook' };
+      }
+      const picked = pickRound(playbook, {
+        side,
+        call: nextCall,
+        econ: econSeen,
+        pinCall: true,
+        rng
+      });
+      if (!picked) {
+        // The call is legal but this side has no mined round for it at this
+        // economy. Freestyle under the ordered call rather than refusing
+        // after the fact: the order was accepted, so the label stands.
+        applyTape(null, null, contractOf, awpOf);
+        return { mode: CALLER_MODE.FREESTYLE, reason: 'no tape for that call' };
+      }
+      lastRedecideClock = -Infinity;
+      applyTape(picked, picked.plant ? 'commit' : null, contractOf, awpOf, TAPE_FIT.DIRECT);
+      return { mode: CALLER_MODE.TAPE, entry: picked, decision: decision, fit: tapeFit };
+    },
+
     considerIntel(args = {}) {
       if (teamMode !== CALLER_MODE.TAPE && !retired) {
         return { kept: true, rel: null };

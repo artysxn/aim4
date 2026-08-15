@@ -167,6 +167,48 @@ function flatModel({ bias = 0, support = {}, withCall = true } = {}) {
   assert(net.headFor({ side: 'T' })('a-exec') !== null, 'while the value head still answers');
 }
 
+// ---- a cross-map head needs the map --------------------------------------
+
+{
+  // Minimal cross-map fixture: two maps, so the feature list grows two map
+  // columns and the win head widens to match.
+  const MAPS = ['ANC', 'NUK'];
+  const nF = CALLER_FEATURES.length + MAPS.length;
+  const zeros = (rows, cols) => Array.from({ length: rows }, () => new Array(cols).fill(0));
+  const net = loadCallerNet({
+    v: CALLER_NET_VERSION,
+    kind: 'caller',
+    name: 'igl-test-x',
+    map: 'ALL',
+    maps: MAPS,
+    features: [...CALLER_FEATURES, 'map_ANC', 'map_NUK'],
+    calls: CALLS,
+    callsByMap: { ANC: ['T:a-exec', 'T:b-exec', 'CT:default'], NUK: ['CT:default'] },
+    support: { 'T:a-exec': 500 },
+    win: {
+      layers: [
+        { W: zeros(4, nF + CALLS.length), b: [0, 0, 0, 0] },
+        { W: [[0, 0, 0, 0]], b: [0] }
+      ]
+    },
+    call: null
+  });
+  const picture = { side: 'T', alive: 5, enemyAlive: 5 };
+  assert(net.headFor(picture, { map: 'ANC' })('a-exec') !== null, 'with the map it answers');
+  // Without the map the one-hot is all zeros and the price is a seven-map
+  // average wearing this map's call name. That must be a refusal, not a number.
+  throws(
+    () => net.headFor(picture)('a-exec'),
+    /needs the map/,
+    'without the map it refuses'
+  );
+  throws(
+    () => net.headFor(picture, { map: 'MIR' })('a-exec'),
+    /needs the map/,
+    'and a map it never saw is the same refusal'
+  );
+}
+
 // ---- what a bad file must not do -----------------------------------------
 
 {

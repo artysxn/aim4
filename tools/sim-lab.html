@@ -105,8 +105,16 @@
     <h2>Match</h2>
     <div class="controls" id="matchControls"></div>
     <p class="note" id="matchStatus"></p>
+
+    <h2>Branch</h2>
+    <div class="controls" id="branchControls"></div>
+    <p class="note" id="branchStatus"></p>
+
     <div class="scroll" id="matchesWrap"></div>
 
+    <h2>Grind</h2>
+    <div class="controls" id="grindControls"></div>
+    <p class="note" id="grindStatus"></p>
 
     <h2>Train</h2>
     <div class="controls" id="trainControls"></div>
@@ -399,7 +407,7 @@
       fillBrains(models);
     }
 
-    let brainA, brainB, tDataset, tDatasetPick, tMap, mMap;
+    let brainA, brainB, callerA, callerB, bBrain, bCaller, bMap, gBrain, gCaller, gMap, tDataset, tDatasetPick, tMap, mMap;
 
     function fillBrains(models) {
       // A caller is not a brain. The registry lists both because both are
@@ -421,6 +429,12 @@
       ];
       const keepA = brainA?.value;
       const keepB = brainB?.value;
+      const keepBBrain = bBrain?.value;
+      const keepGBrain = gBrain?.value;
+      const keepCallerA = callerA?.value;
+      const keepCallerB = callerB?.value;
+      const keepBCaller = bCaller?.value;
+      const keepGCaller = gCaller?.value;
       if (!brainA) return;
       const rebuild = (sel, keep, fallback) => {
         const v = keep && opts.some((o) => o.value === keep && !o.disabled) ? keep : fallback;
@@ -436,6 +450,37 @@
       };
       rebuild(brainA, keepA, 'nomad-1');
       rebuild(brainB, keepB, 'scripted');
+      if (bBrain) rebuild(bBrain, keepBBrain, 'nomad-1');
+      if (gBrain) rebuild(gBrain, keepGBrain, 'nomad-1');
+
+      // The callers the brain list just filtered out. 'none' is the default
+      // and the empty value, so the match params only carry a caller that was
+      // actually chosen.
+      if (callerA && callerB) {
+        const callerSeen = new Set();
+        const callerOpts = [
+          { value: '', label: 'none' },
+          ...(models || [])
+            .filter((m) => m.kind === 'caller' && m.ok)
+            .filter((m) => (callerSeen.has(m.name) ? false : callerSeen.add(m.name)))
+            .map((m) => ({ value: m.name, label: m.name }))
+        ];
+        const rebuildCaller = (sel, keep) => {
+          const v = keep && callerOpts.some((o) => o.value === keep) ? keep : '';
+          sel.replaceChildren();
+          for (const o of callerOpts) {
+            const opt = document.createElement('option');
+            opt.value = o.value;
+            opt.textContent = o.label;
+            if (o.value === v) opt.selected = true;
+            sel.append(opt);
+          }
+        };
+        rebuildCaller(callerA, keepCallerA);
+        rebuildCaller(callerB, keepCallerB);
+        if (bCaller) rebuildCaller(bCaller, keepBCaller);
+        if (gCaller) rebuildCaller(gCaller, keepGCaller);
+      }
     }
 
     function buildControls(status) {
@@ -449,6 +494,8 @@
       const skillB = select(SKILLS, 'average');
       brainA = select(BUILTIN, 'nomad-1');
       brainB = select(BUILTIN, 'scripted');
+      callerA = select([{ value: '', label: 'none' }], '');
+      callerB = select([{ value: '', label: 'none' }], '');
       const runBtn = btn('Run match', 'btn btn-primary');
       el('matchControls').append(
         field('Map', mMap),
@@ -456,8 +503,10 @@
         field('Rounds', rounds),
         field('T side', skillA),
         field('T brain', brainA),
+        field('T caller', callerA),
         field('CT side', skillB),
         field('CT brain', brainB),
+        field('CT caller', callerB),
         runBtn
       );
       runBtn.addEventListener('click', async () => {
@@ -470,12 +519,92 @@
             skillA: skillA.value,
             skillB: skillB.value,
             brainA: brainA.value,
-            brainB: brainB.value
+            brainB: brainB.value,
+            ...(callerA.value ? { callerA: callerA.value } : {}),
+            ...(callerB.value ? { callerB: callerB.value } : {})
           }, 'matchStatus');
         } catch (err) {
           setStatus('matchStatus', err.message, true);
         } finally {
           runBtn.disabled = false;
+        }
+      });
+
+      // Branch: one freeze, several calls, exact worlds apart (6.0). The
+      // calls box is free text because the playbook's call names are the
+      // vocabulary and it changes per map; `none` is the control branch.
+      bMap = select(mapList, mapList[0]);
+      const bSeed = numberInput(1, { min: '0' });
+      const bSide = select(['T', 'CT'], 'T');
+      const bCalls = textInput('none', 'calls, comma separated; none = own choice');
+      bBrain = select(BUILTIN, 'nomad-1');
+      bCaller = select([{ value: '', label: 'none' }], '');
+      const branchBtn = btn('Run branches', 'btn btn-primary');
+      el('branchControls').append(
+        field('Map', bMap),
+        field('Seed', bSeed),
+        field('Side', bSide),
+        field('Calls', bCalls),
+        field('Brain', bBrain),
+        field('Caller', bCaller),
+        branchBtn
+      );
+      branchBtn.addEventListener('click', async () => {
+        branchBtn.disabled = true;
+        try {
+          await startJob('branch', {
+            map: bMap.value,
+            seed: Number(bSeed.value),
+            side: bSide.value,
+            calls: bCalls.value,
+            brain: bBrain.value,
+            ...(bCaller.value ? { caller: bCaller.value } : {})
+          }, 'branchStatus');
+        } catch (err) {
+          setStatus('branchStatus', err.message, true);
+        } finally {
+          branchBtn.disabled = false;
+        }
+      });
+
+      // Grind: matches at the machine ceiling, nothing recorded, the index
+      // carried match to match (6.2). Hours, not seconds, so it is its own
+      // section rather than a checkbox on Match.
+      gMap = select(mapList, mapList[0]);
+      const gMatches = numberInput(100, { min: '1', max: '100000' });
+      const gRounds = numberInput(24, { min: '1', max: '60' });
+      const gSeed = numberInput(1, { min: '0' });
+      gBrain = select(BUILTIN, 'nomad-1');
+      gCaller = select([{ value: '', label: 'none' }], '');
+      const gFresh = document.createElement('input');
+      gFresh.type = 'checkbox';
+      const grindBtn = btn('Start grind', 'btn btn-primary');
+      el('grindControls').append(
+        field('Map', gMap),
+        field('Matches', gMatches),
+        field('Rounds', gRounds),
+        field('Seed', gSeed),
+        field('Brain', gBrain),
+        field('Caller', gCaller),
+        field('Fresh index', gFresh),
+        grindBtn
+      );
+      grindBtn.addEventListener('click', async () => {
+        grindBtn.disabled = true;
+        try {
+          await startJob('grind', {
+            map: gMap.value,
+            matches: Number(gMatches.value),
+            rounds: Number(gRounds.value),
+            seed: Number(gSeed.value),
+            brain: gBrain.value,
+            ...(gCaller.value ? { caller: gCaller.value } : {}),
+            fresh: gFresh.checked
+          }, 'grindStatus');
+        } catch (err) {
+          setStatus('grindStatus', err.message, true);
+        } finally {
+          grindBtn.disabled = false;
         }
       });
 

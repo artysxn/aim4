@@ -435,6 +435,36 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Inspect and Generations section headings, inside a scrolling panel. */
+.sim-h3 {
+  margin: 18px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.sim-h3:first-child {
+  margin-top: 0;
+}
+
+/* One bot's round, collapsed until asked for. Ten open threads is not a
+   readable page, and the summary carries the count so a bot that decided
+   nothing is visible without expanding it. */
+.sim-details {
+  margin: 6px 0;
+}
+
+.sim-details > summary {
+  cursor: pointer;
+  padding: 6px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sim-details[open] > summary {
+  color: var(--text);
+}
+
 @media (max-width: 900px) {
   .sim-viewer {
     grid-template-columns: minmax(0, 1fr);

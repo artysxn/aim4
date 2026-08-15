@@ -28,6 +28,7 @@ import { invalidateAdmin, isSiteAdmin, siteAdmin } from '../entitlements/service
 import * as ingest from '../ingest/hltv/service.js';
 import { cancelProbe, probeState, startProbe } from '../ingest/hltv/probe.js';
 import { loadConfig as loadIngestConfig } from '../ingest/hltv/config.js';
+import { resetPerf, snapshot } from '../perf.js';
 import {
   proxyStatus,
   startProxyRefresh,
@@ -1355,6 +1356,21 @@ async function route(req, res, url, me) {
   }
 
   // ---- audit --------------------------------------------------------------
+  // What this host is actually spending its time on. Read-only and cheap: it
+  // reports counters already in memory and touches no disk.
+  if (req.method === 'GET' && p === '/api/admin/perf') {
+    json(res, req, 200, snapshot());
+    return true;
+  }
+
+  // Clearing the counters is how you tell whether a fix worked: reset, use the
+  // site, look again. It discards observations, never data.
+  if (req.method === 'POST' && p === '/api/admin/perf/reset') {
+    resetPerf();
+    json(res, req, 200, { ok: true });
+    return true;
+  }
+
   if (req.method === 'GET' && p === '/api/admin/audit') {
     json(res, req, 200, {
       entries: await listAudit({

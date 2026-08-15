@@ -30,6 +30,7 @@ import { promisify } from 'node:util';
 import { ROOT as REPLAY_ROOT } from '../replays/demoStore.js';
 import { indexPlaybook } from '../../shared/sim/playbook.js';
 import { loadKnowledge } from '../../shared/sim/knowledgeBake.js';
+import { recordBake } from '../perf.js';
 
 const gunzip = promisify(zlib.gunzip);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -95,6 +96,7 @@ export async function loadPlaybook(map) {
 
   for (const c of candidates) {
     try {
+      const t0 = process.hrtime.bigint();
       const text = await fsp.readFile(c.file, 'utf8');
       const entries = [];
       for (const line of text.split('\n')) {
@@ -103,6 +105,17 @@ export async function loadPlaybook(map) {
         if (e?.roles) entries.push(e);
       }
       const out = { index: indexPlaybook(entries), source: c.source, size: entries.length };
+      // A tape file is tens of megabytes and every line of it is parsed. The
+      // cost lands on one request and is then cached out of sight, so it is
+      // recorded here or it is never seen again.
+      recordBake({
+        kind: 'playbook',
+        map,
+        bytes: Buffer.byteLength(text),
+        parseMs: Number(process.hrtime.bigint() - t0) / 1e6,
+        source: c.source,
+        entries: entries.length
+      });
       cache.set(key, out);
       return out;
     } catch {
@@ -130,8 +143,22 @@ export async function loadKnowledgeBake(map) {
 
   for (const c of candidates) {
     try {
+      const t0 = process.hrtime.bigint();
       const bake = await readJson(c.file);
       const out = { knowledge: loadKnowledge(bake), source: c.source };
+      let bytes = 0;
+      try {
+        bytes = (await fsp.stat(c.file)).size;
+      } catch {
+        /* the size is a nicety, not worth failing a load over */
+      }
+      recordBake({
+        kind: 'knowledge',
+        map,
+        bytes,
+        parseMs: Number(process.hrtime.bigint() - t0) / 1e6,
+        source: c.source
+      });
       cache.set(key, out);
       return out;
     } catch {

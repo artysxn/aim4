@@ -244,6 +244,16 @@ export function loadCallerNet(json) {
     const side = picture?.side;
     const i = index.get(`${side}:${callKey || 'default'}`);
     if (i === undefined) return null;
+    // Without the map, a cross-map head's one-hot is all zeros and the price
+    // that comes back is an average over seven maps wearing this one's call
+    // name. That is the silently-wrong number this module exists to refuse,
+    // so an absent or unknown map is an error at the call site, not a shrug.
+    if (maps.length > 1 && !maps.includes(String(ctx.map || '').toUpperCase())) {
+      throw new Error(
+        `callerNet: this head covers ${maps.join(', ')} and needs the map in ctx` +
+          (ctx.map ? `, got "${ctx.map}"` : ', got none')
+      );
+    }
     const x = callerFeatures(picture, { ...ctx, maps }).concat(
       calls.map((_, j) => (j === i ? 1 : 0))
     );

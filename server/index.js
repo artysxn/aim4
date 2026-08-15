@@ -35,6 +35,7 @@ import { startSweep } from './entitlements/sweep.js';
 import { warmCloakBrowserCache } from './ingest/hltv/cloakBrowser.js';
 import { loadConfig as loadIngestConfig } from './ingest/hltv/config.js';
 import { startSupervisor as startIngestSupervisor } from './ingest/hltv/service.js';
+import { recordRequest } from './perf.js';
 
 // PORT (no prefix) is the convention most hosts inject; AIM4_API_PORT still
 // wins so existing local/host scripts are unaffected.
@@ -90,6 +91,19 @@ const server = http.createServer(async (req, res) => {
   setSecurityHeaders(res);
 
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+
+  // Timed on 'close' rather than 'finish': a client that disconnects mid-stream
+  // still cost the server the work, and a route that only ever gets abandoned
+  // is exactly the one worth seeing in the panel.
+  const startedNs = process.hrtime.bigint();
+  res.once('close', () => {
+    recordRequest(
+      req.method || 'GET',
+      url.pathname,
+      Number(process.hrtime.bigint() - startedNs) / 1e6,
+      res.statusCode || 0
+    );
+  });
 
   try {
     // Replays own their transport: a .dem upload streams to disk and a tick

@@ -76,6 +76,51 @@ export const END_REASON = Object.freeze({
 /** How close the thrower must stand to a mined `from` before the lineup leaves the hand. */
 export const LINEUP_FROM_UNITS = 160;
 
+// ---- savestate transport (6.0) -------------------------------------------
+//
+// A snapshot is exact in memory and JSON is not: bodies carry ±Infinity
+// sentinels (`lastHitTick`, `reactionReadyTick`) that JSON.stringify would
+// silently turn into null, and a restore from that file would put every bot
+// one reaction into a fight it never saw. The walker maps them through a
+// tagged object and back, and nothing else is transformed.
+
+const INF = '$inf';
+
+function mapInfinity(value) {
+  if (typeof value === 'number' && !Number.isFinite(value) && !Number.isNaN(value)) {
+    return { [INF]: value > 0 ? 1 : -1 };
+  }
+  if (Array.isArray(value)) return value.map(mapInfinity);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = mapInfinity(v);
+    return out;
+  }
+  return value;
+}
+
+function unmapInfinity(value) {
+  if (Array.isArray(value)) return value.map(unmapInfinity);
+  if (value && typeof value === 'object') {
+    if (value[INF] === 1) return Infinity;
+    if (value[INF] === -1) return -Infinity;
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = unmapInfinity(v);
+    return out;
+  }
+  return value;
+}
+
+/** A savestate as a string that survives disk and HTTP. */
+export function serializeSnapshot(snap) {
+  return JSON.stringify(mapInfinity(snap));
+}
+
+/** The exact snapshot back, ±Infinity included. */
+export function parseSnapshot(text) {
+  return unmapInfinity(JSON.parse(text));
+}
+
 /**
  * One body. Mirrors SIM-PLAN 4.3, minus the fields P2 adds (ammo, channels
  * other than planting, tagging), so the shape does not have to change later.
@@ -826,9 +871,90 @@ export function createEngine(cfg) {
     }
   }
 
+  // ---- savestates (6.0) ---------------------------------------------------
+  //
+  // The 11.5 constraint, honoured from day one and cashed in here: every
+  // mutable thing a round owns lives in plain data — `state`, one uint32 of
+  // RNG, the motors' scalar fields, the sound window, killCash — so a
+  // savestate is a structured clone and a branch is exact, not approximate.
+  //
+  // What a snapshot deliberately does NOT contain: the graph, the profiles,
+  // the visibility catalogue, or anything else from cfg. Those are the round's
+  // physics, not its state; a restore is handed the same cfg by the caller,
+  // and the guard below checks the shape so a snapshot cannot be quietly
+  // rehydrated onto the wrong map or roster.
+  //
+  // Controllers are not the engine's to save. A snapshot taken at the freeze
+  // boundary branches exactly (controllers start fresh there by definition);
+  // one taken mid-round restores an exact WORLD under controllers that wake
+  // without their accumulated beliefs. 6.1 owns their side of it.
+
+  /** Everything a round owns, cloned. Take it between steps, never during. */
+  function snapshot() {
+    return structuredClone({
+      v: 1,
+      map: state.map,
+      slots: bodies.length,
+      state,
+      rngState: rng.state,
+      motors: motors.map((m) => ({
+        yaw: m.yaw,
+        yawRate: m.yawRate,
+        wobble: m.wobble,
+        targetId: m.targetId,
+        reactionReadyTick: m.reactionReadyTick,
+        burst: m.burst,
+        lastFireTick: m.lastFireTick,
+        lastSeenTick: m.lastSeenTick
+      })),
+      sounds: sounds.items,
+      killCash,
+      pendingSounds
+    });
+  }
+
+  /**
+   * Graft a snapshot onto this engine, in place.
+   *
+   * In place matters: `bodies` and `motors` are captured by identity all over
+   * the step functions, so a restore may replace their contents and never the
+   * arrays or the objects themselves. The snapshot is re-cloned first, so one
+   * savestate can seed any number of branches without the branches sharing
+   * mutable guts.
+   */
+  function applySnapshot(snap) {
+    if (!snap || snap.v !== 1) throw new Error('engine: not a v1 snapshot');
+    if (snap.map !== state.map || snap.slots !== bodies.length) {
+      throw new Error(
+        `engine: snapshot is ${snap.map}/${snap.slots} slots, this engine is ${state.map}/${bodies.length}`
+      );
+    }
+    const s = structuredClone(snap);
+    for (const key of Object.keys(s.state)) {
+      if (key === 'bodies') continue;
+      state[key] = s.state[key];
+    }
+    for (let i = 0; i < bodies.length; i += 1) {
+      Object.assign(bodies[i], s.state.bodies[i]);
+    }
+    state.bodies = bodies;
+    for (let i = 0; i < motors.length; i += 1) Object.assign(motors[i], s.motors[i]);
+    rng.state = s.rngState >>> 0;
+    sounds.items = s.sounds;
+    for (const key of Object.keys(killCash)) delete killCash[key];
+    Object.assign(killCash, s.killCash);
+    pendingSounds.length = 0;
+    pendingSounds.push(...s.pendingSounds);
+  }
+
+  if (cfg.resume) applySnapshot(cfg.resume);
+
   return {
     state,
     rng,
+    snapshot,
+    /** Rewind this engine to a savestate. The branch runner's inner loop. */
+    restore: applySnapshot,
     graph,
     motors,
     /** Whether this round is one of the sampled ones worth keeping. */

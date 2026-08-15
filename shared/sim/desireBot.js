@@ -90,6 +90,7 @@ import { ExperienceIndex } from './experience.js';
 import { StrategyAI } from './strategy.js';
 import { createCaller, CALLER_MODE, TAPE_ERROR_UNITS, TAPE_FIT, TAPE_LAG_SECONDS, fightEV, pictureWinrate, shapeRole } from './caller.js';
 import { nextWaypointAt, tapeEndSeconds } from './playbook.js';
+import { ORDER_SOURCE, ORDER_VERDICT, evaluateOrder } from './orders.js';
 import { PRW_REASON, createPrwLog, truePictureFrom } from './prw.js';
 import { comparePlans, indexValueOf, pickPlan } from './callValue.js';
 import { averageMoney, shouldSave } from './saving.js';
@@ -661,7 +662,16 @@ export function desireController({
    * Null keeps the old behaviour exactly: one index per match, born and
    * discarded with it.
    */
-  experience = null
+  experience = null,
+  /**
+   * 6.1: god mode's Call. An order queue (shared/sim/orders.js) the viewer
+   * fills; this side drains the orders addressed to it at the tick they were
+   * issued for, prices them, and takes or refuses them.
+   *
+   * A round that received one is QUARANTINED: no experience write, no BC
+   * sample. See `R.humanCalled`.
+   */
+  orders = null
 } = {}) {
   // A caller model implies stage 1. Kept as one derived flag so the three
   // places that gate on it cannot drift apart.
@@ -793,6 +803,16 @@ export function desireController({
       log: [],
 
       /**
+       * 6.1: what this side was ordered to do and what it did about it,
+       * drained per round like the other logs. Carries `humanCalled` so the
+       * match layer can stamp the round without re-deriving it.
+       */
+      orderRows() {
+        if (!R?.orderLog?.length) return null;
+        return { humanCalled: R.humanCalled, orders: R.orderLog.splice(0) };
+      },
+
+      /**
        * The round's graded PRW rows (18.6b), drained after `roundEnd` has
        * scored them. Both curves on one clock, which is what the inspector
        * draws; the row is also the aux head's training sample (9.14).
@@ -831,6 +851,15 @@ export function desireController({
           graph,
           side,
           slots,
+          /** 6.1: every order this side was given, with what it did about it. */
+          orderLog: [],
+          /**
+           * True once a human has called into this round. Checked by every
+           * write path that feeds learning, and never cleared: a refused order
+           * still means a human was in the loop and the round is no longer a
+           * clean sample of what the team does unwatched.
+           */
+          humanCalled: false,
           target,
           other,
           sites,
@@ -984,6 +1013,10 @@ export function desireController({
         R.promotedAtBroken = 0;
         R.commandedKeyword = keyword != null && keyword !== 'default';
         const awpSeat = awpSlotOf({ map: engine.state.map, side, slots });
+        // On R as well as in scope: a mid-round order re-pins the tape and
+        // has to hand the caller the same AWP seat the freeze did, or the
+        // ordered round assigns its AWP role to somebody else.
+        R.awpSeat = awpSeat;
         // Two econ units, deliberately. The playbook matches tapes on the
         // miner's 0-5 bucket; the bandit keys on 6.10's named bucket. They are
         // not interchangeable and conflating them silently produces a key
@@ -1047,6 +1080,11 @@ export function desireController({
         R.econTape = econTape;
 
         let openingCall = call;
+        // 6.1: an order issued for the freeze (tick 0) is the viewer choosing
+        // the opening. It is offered here, before the bandit and the sampler,
+        // so a refusal falls back to whatever the team would have done anyway
+        // rather than to nothing.
+        const freezeOrder = orders ? orders.due(0, side)[0] || null : null;
         // Bootcamp: the drill dictates the round. Everything that would vary
         // the opening — bandit, head, sampling — stands down for it.
         const drillCall =
@@ -1110,7 +1148,54 @@ export function desireController({
         // a caller model, `pickPlan` prices the opening shortlist instead of
         // drawing it on distance alone.
         if (headOn && callerNet) {
-          R.caller.useHead(callerNet.headFor({ ...freezePicture, side }, { event: 'freeze', econ: econTape }));
+          // The map rides in ctx because a cross-map head needs it for its
+          // one-hot and its call mask; a single-map head ignores it.
+          R.caller.useHead(
+            callerNet.headFor(
+              { ...freezePicture, side },
+              { event: 'freeze', econ: econTape, map: engine.state.map }
+            )
+          );
+        }
+        // The order is priced against what the team was about to do. A
+        // refusal is logged and the opening stands; an acceptance replaces it
+        // and pins the tape, because a called round means that round.
+        let orderedCall = null;
+        if (freezeOrder) {
+          const verdict = evaluateOrder({
+            order: freezeOrder,
+            legalCalls: (playbook?.calls?.[side] || []).map(([name]) => name),
+            clock: 0,
+            bodies: engine.state.bodies.filter((b) => b.side === side),
+            currentCall: openingCall,
+            priceOf: headOn && callerNet
+              ? (c) => callerNet.headFor({ ...freezePicture, side }, {
+                  event: 'freeze',
+                  econ: econTape,
+                  map: engine.state.map
+                })(c)
+              : null
+          });
+          if (freezeOrder.source === ORDER_SOURCE.HUMAN) R.humanCalled = true;
+          R.orderLog.push({
+            tick: engine.state.tick,
+            order: freezeOrder,
+            source: freezeOrder.source,
+            ...verdict
+          });
+          // A refusal with its motive is the most interesting thing this page
+          // can print (11.5), so it goes in the decision log the inspector
+          // already reads rather than into a channel of its own.
+          this.log.push({
+            tick: engine.state.tick,
+            slot: null,
+            id: `order_${verdict.verdict}`,
+            motive: `${freezeOrder.call}: ${verdict.motive}`
+          });
+          if (verdict.verdict === ORDER_VERDICT.ACCEPTED) {
+            orderedCall = freezeOrder.call;
+            openingCall = orderedCall;
+          }
         }
         R.caller.roundStart({
           contractOf: () => null,
@@ -1118,7 +1203,9 @@ export function desireController({
           // 9.25 stage 1: the prior, not a hint. Stage 2's bandit may have
           // already moved it off the strategy's suggestion.
           strategyCall: openingCall,
-          forceCall: drillCall || null,
+          // An accepted order pins the tape exactly as a drill does: a called
+          // round is that round, not its nearest neighbour.
+          forceCall: drillCall || orderedCall || null,
           econ: econTape,
           econEnemy: econEnemyGuess,
           picture: freezePicture,
@@ -1769,7 +1856,7 @@ export function desireController({
         if (headOn) {
           const tabular = memoryEnabled ? indexValueOf(index, sit.hash) : null;
           const net = callerNet
-            ? callerNet.headFor(R.picture, { econ: R.econTape ?? null })
+            ? callerNet.headFor(R.picture, { econ: R.econTape ?? null, map: R.engine.state.map })
             : null;
           R.caller.useHead(
             net && tabular
@@ -1781,6 +1868,46 @@ export function desireController({
           );
         }
         R.pWin = pictureWinrate(R.picture);
+
+        // 6.1: mid-round orders land on the team frame, which is where a
+        // recall would land anyway. The head is already pointed at THIS
+        // picture by the block above, so the price a refusal quotes is the
+        // price right now rather than the freeze's.
+        if (orders) {
+          for (const order of orders.due(tick, R.side)) {
+            const verdict = evaluateOrder({
+              order,
+              legalCalls: (playbook?.calls?.[R.side] || []).map(([name]) => name),
+              clock: (tick - state.liveTick) / TICK_RATE,
+              bodies: state.bodies.filter((b) => b.side === R.side),
+              currentCall: R.caller?.call() || null,
+              priceOf: R.caller?.priceOf || null
+            });
+            if (order.source === ORDER_SOURCE.HUMAN) R.humanCalled = true;
+            R.orderLog.push({ tick, order, source: order.source, ...verdict });
+            this.log.push({
+              tick,
+              slot: null,
+              id: `order_${verdict.verdict}`,
+              motive: `${order.call}: ${verdict.motive}`
+            });
+            if (verdict.verdict === ORDER_VERDICT.ACCEPTED && R.caller) {
+              // An order is not intel: the call is decided, so the tape is
+              // pinned to it rather than re-matched against the picture.
+              const took = R.caller.orderCall(order.call, {
+                awpOf: (slot) => slot === R.awpSeat
+              });
+              if (took.reason) {
+                this.log.push({
+                  tick,
+                  slot: null,
+                  id: 'order_freestyle',
+                  motive: `${order.call}: ${took.reason}`
+                });
+              }
+            }
+          }
+        }
 
         // The team frame is the logging cadence 18.6b asks for; prw.js rate-
         // limits it, and the events above are never rate-limited.
@@ -2776,7 +2903,10 @@ export function desireController({
           // The dataset tap: what was decided, where. Staying with the
           // incumbent is a decision too — a dataset of only switches teaches
           // a policy that never holds anything.
-          if (collect && obs) {
+          // A human-called round produces no BC samples, for the same reason
+          // it writes no experience: the next generation would be imitating a
+          // viewer's decisions through the bots' hands (11.5).
+          if (collect && obs && !R.humanCalled) {
             const label = decision.chosen?.id ?? runner.active?.id ?? null;
             if (label) {
               collect({
@@ -2837,7 +2967,7 @@ export function desireController({
         const verdict = graded.length ? reviewRound({ rows: graded, k: 1 }) : null;
         const attrib = verdict?.attribs?.[0]?.kind === 'perc' ? 'perc' : 'call';
         R.review = verdict;
-        if (memoryEnabled && verdict) {
+        if (memoryEnabled && !R.humanCalled && verdict) {
           // One sample per situation per ROUND, not per row. A situation that
           // held for forty team frames is one visit's worth of evidence, and
           // writing it forty times would let frame density walk straight
@@ -2866,7 +2996,13 @@ export function desireController({
         // the boundary the EXP3 weights deliberately do not cross. `perc`
         // rounds are counted without moving a win counter, exactly as the
         // situation writes are (18.6b.2).
-        if (memoryEnabled && callBandit && R.openingCall) {
+        // 6.1 / 11.5: a human called into this round, so nothing it produced
+        // is evidence about what the Strategy AI would have chosen. The
+        // quarantine is here, at the write, rather than at the reader: one
+        // gate that every learning path passes through beats N readers each
+        // remembering to check.
+        const learn = memoryEnabled && !R.humanCalled;
+        if (learn && callBandit && R.openingCall) {
           index.write({
             key: `open|${bk}`,
             call: R.openingCall,
@@ -2875,7 +3011,7 @@ export function desireController({
             scopes: ['session', 'career']
           });
         }
-        if (memoryEnabled && R.situation) {
+        if (learn && R.situation) {
           strategy.last = {
             key: R.situation.hash,
             // With the call bandit on, the arm that was pulled is the opening

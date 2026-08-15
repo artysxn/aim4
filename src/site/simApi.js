@@ -75,6 +75,12 @@ export const simApi = {
   /** The round's two PRW curves ({A, B} graded rows, 18.6b), 404 when brainless. */
   roundPrw: (matchId, round) =>
     get(`/api/sim/matches/${encodeURIComponent(matchId)}/round/${round}/prw`),
+  /** The caller's rows: the call, its price, and how the round graded it (9.25). */
+  roundIgl: (matchId, round) =>
+    get(`/api/sim/matches/${encodeURIComponent(matchId)}/round/${round}/igl`),
+  /** Orders a viewer gave and what the bots did about them (6.1). */
+  roundOrders: (matchId, round) =>
+    get(`/api/sim/matches/${encodeURIComponent(matchId)}/round/${round}/orders`),
   roundTicks: async (matchId, round) => {
     const res = await fetch(
       `${API_BASE}/api/sim/matches/${encodeURIComponent(matchId)}/round/${round}/ticks`,

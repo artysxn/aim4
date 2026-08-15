@@ -147,3 +147,42 @@ export function assertReal(meta, who = 'this reader') {
 export function markSynthetic(meta) {
   return { ...meta, [SYNTHETIC_KEY]: true };
 }
+
+/**
+ * The field a round carries when a human called it (6.1 / 11.5).
+ *
+ * A second firewall beside the synthetic one, and for the same reason: a
+ * human call is not evidence about what the Strategy AI would have chosen.
+ * Letting one into the experience index teaches the bots that a call they did
+ * not make worked; letting one into a BC shard teaches the next generation to
+ * imitate a human's decisions through the bots' hands. Both are silent.
+ */
+export const HUMAN_KEY = 'humanCalled';
+
+/** True when a viewer issued an order in this round, refused or not. */
+export function isHumanCalled(meta) {
+  if (!meta || typeof meta !== 'object') return false;
+  const v = meta[HUMAN_KEY];
+  if (v === undefined || v === null) return false;
+  return v !== false && v !== 'false';
+}
+
+/** Stamp a round as human-called. */
+export function markHumanCalled(meta) {
+  return { ...meta, [HUMAN_KEY]: true };
+}
+
+/**
+ * Refuse a round that a human called, for readers that train on rounds.
+ *
+ * The mirror of `assertReal`: that one keeps simulated rounds out of the demo
+ * library, this one keeps human-called rounds out of the learning paths.
+ */
+export function assertNotHumanCalled(meta, who = 'this reader') {
+  if (isHumanCalled(meta)) {
+    throw new FirewallError(
+      `${who} was handed a human-called round. A human call is not evidence ` +
+        'about what the Strategy AI would have chosen (11.5).'
+    );
+  }
+}

@@ -201,10 +201,47 @@ export class ExperienceIndex {
       calibrations: [...this.cal.entries()].map(([key, c]) => ({
         key,
         n: c.n,
+        // `mean` is for a human reading the file. `sum` is what reloads:
+        // calibrationBias needs the raw total, and rebuilding it from a
+        // rounded mean loses the arithmetic the bias is made of.
+        sum: c.sum,
         mean: c.sum / c.n,
         bias: calibrationBias(c)
       }))
     };
+  }
+
+  /**
+   * Read an index back (18.8: experience inherits).
+   *
+   * CAREER and the calibration table only, which is the same line `endSession`
+   * draws: what was learned survives, what was true about one series does not.
+   * A file written by an older build is refused rather than half-read, because
+   * a row shape that has drifted would still add up and would be quietly wrong.
+   */
+  static fromJSON(json, opts = {}) {
+    const index = new ExperienceIndex(opts);
+    if (!json) return index;
+    if (json.v !== EXPERIENCE_VERSION) {
+      throw new Error(`experience: v${json.v}, this build speaks v${EXPERIENCE_VERSION}`);
+    }
+    for (const row of json.rows || []) {
+      if (!row?.key) continue;
+      index.career.set(row.key, {
+        ...emptyRecord(row.key),
+        ...row,
+        byCall: { ...(row.byCall || {}) },
+        attrib: { call: 0, exec: 0, perc: 0, ...(row.attrib || {}) }
+      });
+    }
+    for (const c of json.calibrations || []) {
+      if (!c?.key || !c.n) continue;
+      // Tolerate a file that predates `sum` by reconstructing it from the mean.
+      const sum = Number.isFinite(c.sum) ? c.sum : (c.mean || 0) * c.n;
+      index.cal.set(c.key, { n: c.n, sum });
+    }
+    index.seq = Number(json.seq) || 0;
+    return index;
   }
 
   _lru(bag) {

@@ -24,6 +24,7 @@ import {
   listMatches,
   readRoundMeta,
   readRoundMotives,
+  readRoundOrders,
   readRoundPrw,
   readRoundIgl,
   readRoundTicks,
@@ -329,14 +330,22 @@ async function route(req, res, url, me) {
     return true;
   }
 
-  // /api/sim/matches/<id>/round/<n>/{ticks,meta,motives,prw,igl}
-  const m = p.match(/^\/api\/sim\/matches\/([^/]+)\/round\/(\d+)\/(ticks|meta|motives|prw|igl)$/);
+  // /api/sim/matches/<id>/round/<n>/{ticks,meta,motives,prw,igl,orders}
+  const m = p.match(/^\/api\/sim\/matches\/([^/]+)\/round\/(\d+)\/(ticks|meta|motives|prw|igl|orders)$/);
   if (m && req.method === 'GET') {
     const [, id, round, kind] = m;
     if (kind === 'ticks') {
       const bytes = await readRoundTicks(id, round);
       if (!bytes) return notFound(res, req);
       sendBytes(res, req, bytes, `${id}-r${round}.ticks`);
+      return true;
+    }
+    if (kind === 'orders') {
+      // 6.1's record: what the viewer asked for and what the bots did about
+      // it. Absent on every round nobody called into, which is most of them.
+      const orders = await readRoundOrders(id, round);
+      if (!orders) return notFound(res, req);
+      json(res, req, 200, orders);
       return true;
     }
     if (kind === 'motives') {

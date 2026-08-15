@@ -121,7 +121,7 @@ export function initSimView(host) {
 
     const tabs = node('div', 'sim-tabs');
     const panels = {};
-    const tabNames = ['Run', 'Jobs', 'Matches', 'Viewer', 'Export'];
+    const tabNames = ['Run', 'Jobs', 'Matches', 'Viewer', 'Inspect', 'Generations', 'Export'];
     const tabButtons = {};
 
     for (const name of tabNames) {
@@ -159,9 +159,14 @@ export function initSimView(host) {
     // A broken model stays on the list, disabled, with its reason: "bc0 is
     // missing" and "bc0 speaks an older observation version" are different
     // problems and the panel should not flatten them into an empty dropdown.
+    // A caller is a model and is not a brain. Offering it here queues a match
+    // that dies in the engine on "pass it as callerA/callerB", so the two
+    // rosters are split at the picker (6.5).
+    const botModels = (modelsRes.models || []).filter((m) => m.kind !== 'caller');
+    const callerModels = (modelsRes.models || []).filter((m) => m.kind === 'caller' && m.ok);
     const brainOptions = [
       ...BUILTIN_BRAINS.map((b) => ({ value: b, label: b })),
-      ...(modelsRes.models || []).map((m) => ({
+      ...botModels.map((m) => ({
         value: m.name,
         label: m.ok
           ? `${m.name}${m.valAccuracy != null ? ` (${(m.valAccuracy * 100).toFixed(0)}%)` : ''}`
@@ -175,8 +180,18 @@ export function initSimView(host) {
     const rounds = numberInput(24, { min: '1', max: '60' });
     const skillA = select(SKILLS, 'average');
     const skillB = select(SKILLS, 'average');
+    const callerOptions = [
+      { value: '', label: 'none' },
+      ...callerModels.map((m) => ({
+        value: m.name,
+        label: `${m.name}${m.valAccuracy != null ? ` (${(m.valAccuracy * 100).toFixed(0)}%)` : ''}`,
+        title: m.maps ? `covers ${m.maps.join(', ')}` : `trained on ${m.map || 'one map'}`
+      }))
+    ];
     const brainA = select(brainOptions, 'desire');
     const brainB = select(brainOptions, 'scripted');
+    const callerASel = select(callerOptions, '');
+    const callerBSel = select(callerOptions, '');
     const recordEvery = numberInput(1, { min: '1' });
     const runBtn = node('button', 'sim-btn sim-btn-primary', 'Run match');
 
@@ -187,8 +202,10 @@ export function initSimView(host) {
       field('Rounds', rounds),
       field('T side', skillA),
       field('T brain', brainA),
+      field('T caller', callerASel),
       field('CT side', skillB),
       field('CT brain', brainB),
+      field('CT caller', callerBSel),
       field('Record 1 in', recordEvery),
       runBtn
     );
@@ -250,6 +267,8 @@ export function initSimView(host) {
           skillA: skillA.value,
           skillB: skillB.value,
           brainA: brainA.value,
+          ...(callerASel.value ? { callerA: callerASel.value } : {}),
+          ...(callerBSel.value ? { callerB: callerBSel.value } : {}),
           brainB: brainB.value,
           recordEvery: Number(recordEvery.value)
         });
@@ -668,6 +687,10 @@ export function initSimView(host) {
     let renderer = null;
 
     async function openRound(matchId, roundNo, map) {
+      // Inspect reads the same round the viewer is showing, so opening one
+      // round and then switching tabs never shows two different rounds.
+      inspecting = { matchId, round: roundNo };
+      loadInspect().catch(() => {});
       selectTab('Viewer');
       viewerEmpty.textContent = 'Loading.';
       viewerEmpty.hidden = false;
@@ -894,6 +917,178 @@ export function initSimView(host) {
         playBtn.textContent = 'Play';
       };
     });
+
+
+    // ---- Inspect (6.3) -----------------------------------------------------
+    //
+    // The rows of 11.3 that have data behind them today: the caller's own
+    // record of what it called and what that cost, the orders a viewer gave
+    // and whether the bots took them, and the decision log split by bot so one
+    // bot's round reads as a thread rather than as a merged feed.
+    //
+    // The overlays 11.3 also asks for (belief cloud, angle shading, price
+    // card, shape, space, ribbon, cores) are NOT here, and not because they
+    // were skipped: none of that state is written per tick. Adding them is an
+    // engine-side recording change, not a panel.
+
+    const inspectWrap = node('div', 'sim-scroll');
+    const inspectNote = node('p', 'sim-note', 'Open a round from Matches, then come here.');
+    panels.Inspect.append(inspectNote, inspectWrap);
+
+    /** The round Inspect is looking at, set when a round is opened. */
+    let inspecting = null;
+
+    async function loadInspect() {
+      if (!inspecting) return;
+      const { matchId, round } = inspecting;
+      inspectNote.textContent = matchId + ' round ' + round;
+      inspectWrap.replaceChildren();
+
+      const [igl, orders, motives] = await Promise.all([
+        simApi.roundIgl(matchId, round).catch(() => null),
+        simApi.roundOrders(matchId, round).catch(() => null),
+        simApi.roundMotives(matchId, round).catch(() => null)
+      ]);
+
+      // Orders first. A human call changes what everything below means, so it
+      // is not buried under the caller's own reasoning.
+      if (orders) {
+        inspectWrap.append(node('h3', 'sim-h3', 'Orders'));
+        inspectWrap.append(
+          node(
+            'p',
+            'sim-error',
+            'A viewer called into this round. It teaches nothing: no experience row, no BC sample.'
+          )
+        );
+        const ot = table(['Side', 'Tick', 'Call', 'Verdict', 'Motive']);
+        for (const side of ['A', 'B']) {
+          for (const o of (orders[side] && orders[side].orders) || []) {
+            const tr = node('tr');
+            tr.append(
+              node('td', null, side),
+              node('td', 'sim-num', String(o.tick)),
+              node('td', null, (o.order && o.order.call) || ''),
+              node('td', o.verdict === 'refused' ? 'sim-error' : null, o.verdict),
+              node('td', 'sim-dim', o.motive || '')
+            );
+            ot.tbody.append(tr);
+          }
+        }
+        inspectWrap.append(ot.table);
+      }
+
+      // The caller's record: what it called, what it thought that was worth,
+      // and what the round said about it afterwards.
+      const iglRows = [
+        ...((igl && igl.A) || []).map((r) => ({ side: 'A', ...r })),
+        ...((igl && igl.B) || []).map((r) => ({ side: 'B', ...r }))
+      ].sort((a, b) => (a.tick || 0) - (b.tick || 0));
+      if (iglRows.length) {
+        inspectWrap.append(node('h3', 'sim-h3', 'Caller'));
+        const it = table(['Side', 'Tick', 'Event', 'Call', 'pWin', 'Won', 'Attrib']);
+        for (const r of iglRows) {
+          const tr = node('tr');
+          tr.append(
+            node('td', null, r.side),
+            node('td', 'sim-num', String(r.tick == null ? '' : r.tick)),
+            node('td', 'sim-dim', r.event || ''),
+            node('td', null, r.call || ''),
+            node('td', 'sim-num', typeof r.pWin === 'number' ? r.pWin.toFixed(3) : ''),
+            node('td', null, r.won == null ? '' : r.won ? 'yes' : 'no'),
+            node('td', 'sim-dim', r.attrib || '')
+          );
+          it.tbody.append(tr);
+        }
+        inspectWrap.append(it.table);
+      }
+
+      // The decision log, per bot. 11.3 wants a bot's round readable as one
+      // thread, which a tick-sorted merge of ten bots is not.
+      const bySlot = new Map();
+      for (const team of ['A', 'B']) {
+        for (const d of (motives && motives[team]) || []) {
+          const key = d.slot == null ? team + ' team' : team + ' slot ' + d.slot;
+          if (!bySlot.has(key)) bySlot.set(key, []);
+          bySlot.get(key).push(d);
+        }
+      }
+      if (bySlot.size) {
+        inspectWrap.append(node('h3', 'sim-h3', 'Decisions'));
+        for (const [who, rows] of [...bySlot.entries()].sort()) {
+          const det = node('details', 'sim-details');
+          det.append(node('summary', null, who + ' (' + rows.length + ')'));
+          const dt = table(['Tick', 'Option', 'Motive']);
+          for (const d of rows.sort((a, b) => a.tick - b.tick)) {
+            const tr = node('tr');
+            tr.append(
+              node('td', 'sim-num', String(d.tick)),
+              node('td', null, d.id || ''),
+              node('td', 'sim-dim', d.motive || '')
+            );
+            dt.tbody.append(tr);
+          }
+          det.append(dt.table);
+          inspectWrap.append(det);
+        }
+      }
+
+      if (!inspectWrap.children.length) {
+        inspectWrap.append(
+          node('p', 'sim-note', 'This round has no decision record. A scripted side writes none.')
+        );
+      }
+    }
+
+    // ---- Generations (6.4) -------------------------------------------------
+    //
+    // The registry as a ladder: who descends from whom, what each scored, and
+    // which league it was measured against. Elo curves and eval reports are
+    // the other half of 11.4 and wait on 7.0's admission job, which is the
+    // thing that writes them. This reads what the registry holds today rather
+    // than drawing an empty chart.
+
+    const genWrap = node('div', 'sim-scroll');
+    const genNote = node('p', 'sim-note', '');
+    panels.Generations.append(genNote, genWrap);
+
+    function renderGenerations(res) {
+      const gens = (res && res.generations) || [];
+      genWrap.replaceChildren();
+      if (!gens.length) {
+        genNote.textContent = 'No named generations on this host.';
+        return;
+      }
+      const lineages = [...new Set(gens.map((g) => g.lineage))];
+      genNote.textContent =
+        gens.length + ' generations across ' + lineages.length +
+        (lineages.length === 1 ? ' lineage' : ' lineages');
+      for (const lineage of lineages) {
+        genWrap.append(node('h3', 'sim-h3', lineage));
+        const gt = table([
+          'Gen',
+          'Model',
+          'Parent',
+          { label: 'Val', align: 'right' },
+          'Source',
+          'League'
+        ]);
+        for (const g of gens.filter((x) => x.lineage === lineage)) {
+          const tr = node('tr');
+          tr.append(
+            node('td', 'sim-num', String(g.gen)),
+            node('td', null, g.display || g.name),
+            node('td', 'sim-dim', g.parent || ''),
+            node('td', 'sim-num', g.valAccuracy == null ? '' : (g.valAccuracy * 100).toFixed(1) + '%'),
+            node('td', 'sim-dim', g.shipped ? 'shipped' : g.source),
+            node('td', 'sim-dim', (g.league || []).join(', '))
+          );
+          gt.tbody.append(tr);
+        }
+        genWrap.append(gt.table);
+      }
+    }
+    renderGenerations(modelsRes);
 
     // ---- Export ----------------------------------------------------------
 

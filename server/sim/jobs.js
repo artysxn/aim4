@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ROOT } from '../replays/demoStore.js';
 import { loadBake } from './bakes.js';
-import { isBrain, LOCAL_DIR, SHIPPED_DIR } from './models.js';
+import { isBrain, isCaller, LOCAL_DIR, SHIPPED_DIR } from './models.js';
 import { findPython } from '../../scripts/lib/simPython.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -68,6 +68,11 @@ const heavyEnabled = () => Number(process.env.AIM4_SIM_WORKERS || 0) > 0;
 /** Wall-clock ceilings, seconds. A job that hits one is killed, not warned. */
 const BUDGETS = Object.freeze({
   match: Number(process.env.AIM4_SIM_BUDGET_MATCH || 600),
+  // Six full rounds at most, seconds each; the match budget covers it easily.
+  branch: Number(process.env.AIM4_SIM_BUDGET_BRANCH || 300),
+  // A grind is meant to run for hours. Its own SIGINT handler checkpoints, so
+  // the budget is a backstop against a hang, not a schedule.
+  grind: Number(process.env.AIM4_SIM_BUDGET_GRIND || 43200),
   collect: Number(process.env.AIM4_SIM_BUDGET_COLLECT || 3600),
   extract: Number(process.env.AIM4_SIM_BUDGET_EXTRACT || 3600),
   train: Number(process.env.AIM4_SIM_BUDGET_TRAIN || 3600),
@@ -77,8 +82,9 @@ const BUDGETS = Object.freeze({
 });
 
 /** Which kinds this host will accept at all. */
-export const JOB_KINDS = Object.freeze(['match', 'collect', 'extract', 'train', 'eval', 'rollout', 'rl-train']);
-const HEAVY_KINDS = new Set(['collect', 'extract', 'train', 'eval', 'rollout', 'rl-train']);
+export const JOB_KINDS = Object.freeze(['match', 'branch', 'grind', 'collect', 'extract', 'train', 'eval', 'rollout', 'rl-train']);
+// Grind is heavy by definition: it is a night of matches with the brakes off.
+const HEAVY_KINDS = new Set(['grind', 'collect', 'extract', 'train', 'eval', 'rollout', 'rl-train']);
 
 /** How much log a job keeps in memory for the panel's tail. */
 const LOG_TAIL_LINES = 200;
@@ -206,7 +212,46 @@ function commandFor(job, python) {
           '--skill-b', p.skillB,
           '--brain-a', p.brainA,
           '--brain-b', p.brainB,
+          // Normalization kept the callers and this arg list dropped them, so
+          // a caller picked in the lab was validated, labelled, and then never
+          // reached the match. The whole chain or none of it.
+          ...(p.callerA ? ['--caller-a', p.callerA] : []),
+          ...(p.callerB ? ['--caller-b', p.callerB] : []),
           '--record-every', String(p.recordEvery)
+        ]
+      };
+    case 'grind':
+      return {
+        cmd: process.execPath,
+        args: [
+          path.join(REPO, 'scripts', 'sim-grind.mjs'),
+          '--map', p.map,
+          '--matches', String(p.matches),
+          '--rounds', String(p.rounds),
+          '--seed', String(p.seed),
+          '--brain', p.brain,
+          ...(p.brainB ? ['--brain-b', p.brainB] : []),
+          ...(p.caller ? ['--caller', p.caller] : []),
+          '--skill-a', p.skillA,
+          '--skill-b', p.skillB,
+          ...(p.fresh ? ['--fresh'] : [])
+        ]
+      };
+    case 'branch':
+      return {
+        cmd: process.execPath,
+        args: [
+          path.join(REPO, 'scripts', 'sim-run-branch.mjs'),
+          '--map', p.map,
+          '--seed', String(p.seed),
+          '--side', p.side,
+          '--calls', p.calls,
+          '--brain', p.brain,
+          ...(p.brainOpp ? ['--brain-opp', p.brainOpp] : []),
+          ...(p.caller ? ['--caller', p.caller] : []),
+          '--money', String(p.money),
+          '--skill-a', p.skillA,
+          '--skill-b', p.skillB
         ]
       };
     case 'collect':
@@ -314,7 +359,44 @@ function normalizeParams(kind, raw = {}) {
         skillB: safeName(raw.skillB || 'average'),
         brainA: safeName(raw.brainA || 'scripted'),
         brainB: safeName(raw.brainB || 'scripted'),
+        // Callers are optional and absent means none: matches.js reads the
+        // key's presence, so an empty string must not survive normalization.
+        ...(raw.callerA ? { callerA: safeName(raw.callerA) } : {}),
+        ...(raw.callerB ? { callerB: safeName(raw.callerB) } : {}),
         recordEvery: num(raw.recordEvery, 1, 1, 100000)
+      };
+    case 'branch':
+      return {
+        map: safeName(raw.map || 'INF').toUpperCase(),
+        seed: num(raw.seed, 1, 0, 1e9),
+        side: raw.side === 'CT' ? 'CT' : 'T',
+        // A csv of calls; `none` is the control branch. Kept as the string the
+        // CLI takes, capped at the branch runner's own limit.
+        calls: String(raw.calls || 'none')
+          .split(',')
+          .map((s) => safeName(s.trim()))
+          .filter(Boolean)
+          .slice(0, 6)
+          .join(','),
+        brain: safeName(raw.brain || 'nomad-1'),
+        ...(raw.brainOpp ? { brainOpp: safeName(raw.brainOpp) } : {}),
+        ...(raw.caller ? { caller: safeName(raw.caller) } : {}),
+        money: num(raw.money, 16000, 800, 16000),
+        skillA: safeName(raw.skillA || 'average'),
+        skillB: safeName(raw.skillB || 'average')
+      };
+    case 'grind':
+      return {
+        map: safeName(raw.map || 'INF').toUpperCase(),
+        matches: num(raw.matches, 100, 1, 100000),
+        rounds: num(raw.rounds, 24, 1, 60),
+        seed: num(raw.seed, 1, 0, 1e9),
+        brain: safeName(raw.brain || 'nomad-1'),
+        ...(raw.brainB ? { brainB: safeName(raw.brainB) } : {}),
+        ...(raw.caller ? { caller: safeName(raw.caller) } : {}),
+        skillA: safeName(raw.skillA || 'average'),
+        skillB: safeName(raw.skillB || 'average'),
+        fresh: Boolean(raw.fresh)
       };
     case 'collect':
       return {
@@ -371,8 +453,15 @@ function normalizeParams(kind, raw = {}) {
 
 function labelFor(kind, p) {
   switch (kind) {
-    case 'match':
-      return `${p.map} ${p.brainA} vs ${p.brainB}, ${p.rounds} rounds`;
+    case 'match': {
+      const a = p.callerA ? `${p.brainA}+${p.callerA}` : p.brainA;
+      const b = p.callerB ? `${p.brainB}+${p.callerB}` : p.brainB;
+      return `${p.map} ${a} vs ${b}, ${p.rounds} rounds`;
+    }
+    case 'branch':
+      return `${p.map} branch ${p.side}: ${p.calls.split(',').join(' | ')}`;
+    case 'grind':
+      return `${p.map} grind ${p.matches}x${p.rounds} rounds, ${p.brain}`;
     case 'collect':
       return `${p.map} ${p.matches}x${p.rounds} rounds`;
     case 'extract':
@@ -396,6 +485,10 @@ function labelFor(kind, p) {
  */
 export async function startJob(kind, rawParams = {}) {
   if (!JOB_KINDS.includes(kind)) return { error: `unknown job kind ${kind}` };
+  // A kind in the list but not in the budget table would fork and then be
+  // killed "at its undefineds budget" — which is how the drift actually
+  // presented. Refuse at the click instead.
+  if (!Number.isFinite(BUDGETS[kind])) return { error: `job kind ${kind} has no budget` };
   if (HEAVY_KINDS.has(kind) && !heavyEnabled()) {
     return {
       error:
@@ -413,7 +506,7 @@ export async function startJob(kind, rawParams = {}) {
   if (kind === 'extract' && !params.demos) {
     return { error: 'extract: no demos selected' };
   }
-  if (kind === 'match' || kind === 'collect' || kind === 'rollout') {
+  if (kind === 'match' || kind === 'branch' || kind === 'grind' || kind === 'collect' || kind === 'rollout') {
     if (!(await loadBake('navcache', params.map))) {
       return { error: `no nav bake for ${params.map}` };
     }
@@ -423,7 +516,33 @@ export async function startJob(kind, rawParams = {}) {
   }
   if (kind === 'match') {
     for (const brain of [params.brainA, params.brainB]) {
-      if (!(await isBrain(brain))) return { error: `model ${brain}: not on this host` };
+      if (!(await isBrain(brain))) return { error: `model ${brain}: not a bot brain on this host` };
+    }
+    for (const caller of [params.callerA, params.callerB]) {
+      if (caller && !(await isCaller(caller))) {
+        return { error: `model ${caller}: not a caller on this host` };
+      }
+    }
+  }
+  if (kind === 'grind') {
+    for (const brain of [params.brain, params.brainB]) {
+      if (brain && !(await isBrain(brain))) {
+        return { error: `model ${brain}: not a bot brain on this host` };
+      }
+    }
+    if (params.caller && !(await isCaller(params.caller))) {
+      return { error: `model ${params.caller}: not a caller on this host` };
+    }
+  }
+  if (kind === 'branch') {
+    if (!params.calls) return { error: 'branch: no calls' };
+    for (const brain of [params.brain, params.brainOpp]) {
+      if (brain && !(await isBrain(brain))) {
+        return { error: `model ${brain}: not a bot brain on this host` };
+      }
+    }
+    if (params.caller && !(await isCaller(params.caller))) {
+      return { error: `model ${params.caller}: not a caller on this host` };
     }
   }
 

@@ -243,6 +243,9 @@ function describe(name, json, c, stat) {
       kind: 'caller',
       v: json.v ?? null,
       map: json.map || null,
+      // A cross-map head lists what it was fitted over; the match seam checks
+      // coverage against this rather than demanding one exact map.
+      maps: Array.isArray(json.maps) && json.maps.length ? json.maps : null,
       calls: Array.isArray(json.calls) ? json.calls.length : 0,
       teacher: 'demos',
       dataset: json.dataset || null,
@@ -346,7 +349,16 @@ export async function listModels() {
 export async function isBrain(name) {
   if (BUILTIN_BRAINS.includes(name)) return true;
   const loaded = await loadModel(name);
-  return !loaded.error;
+  // A caller loads fine and is still not a brain. Answering true here let a
+  // caller-as-brain job fork and die 147ms later in the engine; the job
+  // runner's whole contract is that a typo answers the click instead.
+  return !loaded.error && loaded.meta?.kind !== 'caller';
+}
+
+/** The other half of the seam: a name that must be a caller, checked early. */
+export async function isCaller(name) {
+  const loaded = await loadModel(name);
+  return !loaded.error && loaded.meta?.kind === 'caller';
 }
 
 /** Tests and the trainer invalidate through here. */

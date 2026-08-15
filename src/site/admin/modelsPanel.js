@@ -18,7 +18,8 @@
 // ---------------------------------------------------------------------------
 
 import { adminApi } from './adminApi.js';
-import { button, el, field, input, row, table } from './dom.js';
+import { button, el, field, input, render, row, table } from './dom.js';
+import { spinnerNode } from '../../lib/spinner.js';
 
 const POLL_MS = 2000;
 
@@ -56,11 +57,61 @@ export function initModelsPanel() {
     root.appendChild(buildCard(model, timers));
   }
 
+  // 6.5: the sim registry, read only. Training and admission happen on the
+  // operator's own box, so this is a window on what that box shipped, never a
+  // control for it. It says so rather than offering buttons that would 404.
+  root.appendChild(buildSimCard());
+
   root._stopPolling = () => {
     for (const t of timers) clearInterval(t);
     timers.length = 0;
   };
   return root;
+}
+
+/**
+ * The sim's model registry as a card: which brains and callers exist, what
+ * each scored, and where it came from. Read only on purpose (11.4): the
+ * generation ladder is driven from /sim on the machine that trains, and a
+ * second set of controls here would be a second source of truth.
+ */
+function buildSimCard() {
+  const card = el('div', 'admin-tool-card');
+  card.appendChild(el('h3', 'admin-tool-title', 'Sim registry'));
+  const body = el('div');
+  card.appendChild(body);
+  render(body, spinnerNode());
+
+  adminApi
+    .simModels()
+    .then(({ models = [], generations = [] }) => {
+      if (!models.length) {
+        render(body, el('p', 'admin-hint', 'No sim models on this host.'));
+        return;
+      }
+      const wrap = el('div');
+      const brains = models.filter((m) => m.kind !== 'caller');
+      const callers = models.filter((m) => m.kind === 'caller');
+      wrap.appendChild(
+        table(
+          ['Model', 'Kind', 'Val', 'Source', 'Trained'],
+          [...brains, ...callers].map((m) => [
+            m.display || m.name,
+            m.kind || 'policy',
+            m.valAccuracy == null ? '' : `${(m.valAccuracy * 100).toFixed(1)}%`,
+            m.source,
+            (m.trainedAt || '').slice(0, 10)
+          ])
+        )
+      );
+      if (generations.length) {
+        wrap.appendChild(el('p', 'admin-hint', `${generations.length} named generations`));
+      }
+      render(body, wrap);
+    })
+    .catch((err) => render(body, el('p', 'admin-error', err.message)));
+
+  return card;
 }
 
 function buildCard(model, timers) {

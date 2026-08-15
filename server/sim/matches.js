@@ -27,9 +27,11 @@ import { navGraphFromBake } from '../../shared/sim/navGraph.js';
 import { loadAngles } from '../../shared/sim/angles.js';
 import { playScriptedMatch } from '../../shared/sim/scriptedMatch.js';
 import { playVersusMatch, scriptedController } from '../../shared/sim/versusMatch.js';
+import { MAX_BRANCH_CALLS, playBranchSet } from '../../shared/sim/branch.js';
+import { createOrderQueue } from '../../shared/sim/orders.js';
 import { desireController } from '../../shared/sim/desireBot.js';
 import { RULES_VERSION } from '../../shared/sim/constants.js';
-import { markSynthetic } from '../../shared/sim/firewall.js';
+import { markHumanCalled, markSynthetic } from '../../shared/sim/firewall.js';
 
 const MATCHES_DIR = path.join(ROOT, 'sim', 'matches');
 
@@ -82,6 +84,12 @@ export async function runMatch(params = {}) {
   // how a match started from the panel reports rounds as they land instead of
   // going quiet for its whole duration.
   const onRound = typeof params.onRound === 'function' ? params.onRound : null;
+  // 6.1: orders a viewer wants issued, as [{call, side, slots, tick}]. Shared
+  // by both controllers because the queue routes by side; a round that gets
+  // one is quarantined from every learning path (11.5).
+  const orderQueue = Array.isArray(params.orders) && params.orders.length
+    ? createOrderQueue(params.orders)
+    : null;
 
   const nav = await loadBake('navcache', map);
   if (!nav) return { error: `no nav bake for ${map}` };
@@ -125,9 +133,15 @@ export async function runMatch(params = {}) {
         return { error: `${name} is not a caller model; pass it as brainA/brainB` };
       }
       // A Cache caller on Mirage would price calls it has never seen against a
-      // picture it cannot read. Refuse rather than return numbers.
-      if (loaded.meta.map && loaded.meta.map !== map) {
-        return { error: `caller ${name} was trained on ${loaded.meta.map}, not ${map}` };
+      // picture it cannot read. Refuse rather than return numbers. A cross-map
+      // head declares its coverage in `maps` and its `map` field says ALL, so
+      // the check is containment, not equality.
+      const covered = loaded.meta.maps
+        ? loaded.meta.maps.includes(map)
+        : !loaded.meta.map || loaded.meta.map === map;
+      if (!covered) {
+        const has = loaded.meta.maps ? loaded.meta.maps.join(', ') : loaded.meta.map;
+        return { error: `caller ${name} covers ${has}, not ${map}` };
       }
       callers[name] = loaded.policy;
       modelMeta[name] = loaded.meta;
@@ -153,9 +167,23 @@ export async function runMatch(params = {}) {
         // The test harness: the bare arbiter plus whatever the knobs file
         // turns on. Editing simdata/models/nomad-1.json IS the experiment —
         // no retrain, no rebuild, one aspect at a time.
-        return desireController({ angles, playbook, knowledge, callerNet, ...(models[name] || {}) });
+        return desireController({
+          angles,
+          playbook,
+          knowledge,
+          callerNet,
+          orders: orderQueue,
+          ...(models[name] || {})
+        });
       }
-      return desireController({ angles, policy: models[name], playbook, knowledge, callerNet });
+      return desireController({
+        angles,
+        policy: models[name],
+        playbook,
+        knowledge,
+        callerNet,
+        orders: orderQueue
+      });
     };
     const { match, rounds } = versus
       ? playVersusMatch({
@@ -233,6 +261,17 @@ export async function runMatch(params = {}) {
           JSON.stringify(markSynthetic({ A: r.igl.A || [], B: r.igl.B || [] }))
         );
       }
+      // 6.1: the orders this round was given and what the bots did about them.
+      // Stamped human-called on the way to disk, so the file answers the
+      // question every learning reader asks without re-deriving it.
+      if (r.orders && (r.orders.A || r.orders.B)) {
+        await fsp.writeFile(
+          path.join(dir, `round${r.round}.orders.json`),
+          JSON.stringify(
+            markHumanCalled(markSynthetic({ A: r.orders.A || null, B: r.orders.B || null }))
+          )
+        );
+      }
       storedRounds += 1;
     }
 
@@ -287,6 +326,185 @@ export async function runMatch(params = {}) {
 
 export function runStatus() {
   return running ? { running } : { running: null };
+}
+
+/**
+ * 6.0: run a branch set and store it as a match.
+ *
+ * Stored as a match on purpose: a branch is a watchable round, and the viewer,
+ * the round switcher, and the motive files already know how to show one. Round
+ * N of a branch match is call N of the set, and `match.json` says which call
+ * each round is, so nothing downstream needs a second reader.
+ *
+ * @param {object} params  map, seed, calls (array or csv), side, brain,
+ *                         caller, brainOpp, skillA, skillB, money
+ */
+export async function runBranches(params = {}) {
+  if (running) {
+    return { error: 'busy', running };
+  }
+
+  const map = safe(params.map || 'INF').toUpperCase();
+  const seed = Number.isFinite(Number(params.seed)) ? Number(params.seed) : 1;
+  const side = params.side === 'CT' ? 'CT' : 'T';
+  const money = Math.max(800, Math.min(16000, Number(params.money) || 16000));
+  const skillA = SKILLS.has(params.skillA) ? params.skillA : 'average';
+  const skillB = SKILLS.has(params.skillB) ? params.skillB : 'average';
+  const brain = brainName(params.brain || params.brainA);
+  const brainOpp = brainName(params.brainOpp || params.brainB || brain);
+  const callerName = params.caller || params.callerA ? safe(params.caller || params.callerA) : null;
+  // null is the control branch: the side left to choose for itself. The csv
+  // spelling for it is the word none.
+  const calls = (Array.isArray(params.calls) ? params.calls : String(params.calls || '').split(','))
+    .map((c) => String(c || '').trim())
+    .filter(Boolean)
+    .map((c) => (c === 'none' ? null : safe(c)));
+  if (!calls.length) return { error: 'branch: no calls' };
+  if (calls.length > MAX_BRANCH_CALLS) return { error: `branch: at most ${MAX_BRANCH_CALLS} calls` };
+
+  const nav = await loadBake('navcache', map);
+  if (!nav) return { error: `no nav bake for ${map}` };
+  const anglesBake = await loadBake('angles', map);
+  if (!anglesBake) return { error: `no angle catalogue for ${map}` };
+
+  const id = `BR-${map}-${Date.now().toString(36)}-${seed}`;
+  running = { id, map, startedAt: Date.now() };
+
+  try {
+    const graph = navGraphFromBake(nav.bake);
+    const angles = loadAngles(anglesBake.bake);
+    const t0 = Date.now();
+
+    const models = {};
+    const modelMeta = {};
+    for (const name of [brain, brainOpp]) {
+      if (BUILTIN_BRAINS.includes(name) || models[name]) continue;
+      const loaded = await loadModel(name);
+      if (loaded.error) return { error: loaded.error };
+      if (loaded.meta?.kind === 'caller') {
+        return { error: `${name} is a caller, not a bot brain; pass it as caller` };
+      }
+      models[name] = loaded.policy;
+      modelMeta[name] = loaded.meta;
+    }
+    let callerNet = null;
+    if (callerName) {
+      const loaded = await loadModel(callerName);
+      if (loaded.error) return { error: loaded.error };
+      if (loaded.meta?.kind !== 'caller') {
+        return { error: `${callerName} is not a caller model` };
+      }
+      const covered = loaded.meta.maps
+        ? loaded.meta.maps.includes(map)
+        : !loaded.meta.map || loaded.meta.map === map;
+      if (!covered) {
+        const has = loaded.meta.maps ? loaded.meta.maps.join(', ') : loaded.meta.map;
+        return { error: `caller ${callerName} covers ${has}, not ${map}` };
+      }
+      callerNet = loaded.policy;
+      modelMeta[callerName] = loaded.meta;
+    }
+
+    const playbook = (await loadPlaybook(map))?.index || null;
+    const knowledge = (await loadKnowledgeBake(map))?.knowledge || null;
+    // desireController(opts) returns a per-match factory; the branch runner
+    // wants one live controller per branch, so the factory is invoked here.
+    const mkDesire = (name, forceCall) =>
+      name === 'scripted'
+        ? scriptedController()
+        : desireController({
+            angles,
+            policy: models[name] || null,
+            playbook,
+            knowledge,
+            callerNet,
+            ...(forceCall !== undefined
+              ? { forceCallOf: () => forceCall }
+              : {})
+          })();
+
+    const { branches, savestate, setup } = playBranchSet({
+      graph,
+      angles,
+      map,
+      calls,
+      side,
+      seed,
+      money,
+      skillA,
+      skillB,
+      controllerFor: ({ forceCall }) => mkDesire(brain, forceCall),
+      opponentFor: () => mkDesire(brainOpp, undefined)
+    });
+
+    const dir = path.join(MATCHES_DIR, id);
+    await fsp.mkdir(dir, { recursive: true });
+    let stored = 0;
+    for (let i = 0; i < branches.length; i += 1) {
+      const b = branches[i];
+      const round = i + 1;
+      await fsp.writeFile(path.join(dir, `round${round}.ticks`), b.ticks);
+      await fsp.writeFile(path.join(dir, `round${round}.meta.json`), JSON.stringify(b.meta));
+      const logs = b.brainLogs;
+      if (logs && (logs.A?.length || logs.B?.length)) {
+        await fsp.writeFile(
+          path.join(dir, `round${round}.motives.json`),
+          JSON.stringify(markSynthetic({ A: logs.A || [], B: logs.B || [] }))
+        );
+      }
+      stored += 1;
+    }
+    // The frozen world every branch decided from. 6.1 restores this; until
+    // then it documents that the branches truly shared a prelude.
+    await fsp.writeFile(path.join(dir, 'savestate.json'), savestate);
+
+    const record = markSynthetic({
+      id,
+      kind: 'branch',
+      map,
+      seed,
+      rulesVersion: RULES_VERSION,
+      side,
+      money,
+      skillA,
+      skillB,
+      brainA: brain,
+      brainB: brainOpp,
+      callerA: callerName,
+      callerB: null,
+      models: Object.fromEntries(
+        Object.entries(modelMeta).map(([name, meta]) => [
+          name,
+          { source: meta.source, valAccuracy: meta.valAccuracy, trainedAt: meta.trainedAt }
+        ])
+      ),
+      bakeSource: nav.source,
+      createdAt: new Date().toISOString(),
+      elapsedMs: Date.now() - t0,
+      // A branch set has no score. The per-round rows carry each call and its
+      // outcome, which is the comparison the set exists to draw.
+      score: null,
+      winner: null,
+      storedRounds: stored,
+      setup,
+      rounds: branches.map((b, i) => ({
+        round: i + 1,
+        call: b.call ?? 'own choice',
+        pistol: false,
+        winner: b.outcome.winner,
+        reason: b.outcome.reason,
+        kills: b.kills,
+        recorded: true,
+        score: null
+      }))
+    });
+    await fsp.writeFile(path.join(dir, 'match.json'), JSON.stringify(record, null, 2));
+    return { ok: true, match: record };
+  } catch (err) {
+    return { error: err.message || 'branch failed' };
+  } finally {
+    running = null;
+  }
 }
 
 export async function listMatches() {
@@ -351,6 +569,15 @@ export async function readRoundPrw(matchId, round) {
 }
 
 /** A stored round's IGL rows ({A, B} sealed caller decisions), or null. */
+export async function readRoundOrders(matchId, round) {
+  const p = path.join(MATCHES_DIR, safe(matchId), `round${Number(round) || 0}.orders.json`);
+  try {
+    return JSON.parse(await fsp.readFile(p, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 export async function readRoundIgl(matchId, round) {
   const p = path.join(MATCHES_DIR, safe(matchId), `round${Number(round) || 0}.igl.json`);
   try {

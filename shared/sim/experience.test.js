@@ -68,4 +68,41 @@ function assert(cond, msg) {
   assert(idx.seq > 0, 'and recency keeps counting across the boundary');
 }
 
+// ---- the index survives disk (18.8 / 6.2) ---------------------------------
+
+{
+  // Grind's whole premise: match 200 starts knowing what 1-199 cost, and the
+  // knowing goes through a file. What survives is CAREER and calibration --
+  // the same line endSession draws.
+  const idx = new ExperienceIndex();
+  idx.write({ key: 'sit', call: 'a-exec', won: true, attrib: 'call' });
+  idx.write({ key: 'sit', call: 'a-exec', won: false, attrib: 'call' });
+  idx.write({ key: 'other', call: 'b-exec', won: true, attrib: 'exec' });
+  idx.writeCalibration({ key: 'sit', residual: 0.2 });
+  idx.writeCalibration({ key: 'sit', residual: 0.4 });
+
+  const back = ExperienceIndex.fromJSON(JSON.parse(JSON.stringify(idx.toJSON())));
+  assert(back.career.size === idx.career.size, 'every career row comes back');
+  // Compared AFTER endSession, which is the state a grind checkpoints in:
+  // read() weights session 4x over career, so an unended index would read
+  // higher than any file could and the mismatch would mean nothing.
+  idx.endSession();
+  assert(back.read('sit', 'a-exec').n === idx.read('sit', 'a-exec').n, 'with its counts');
+  assert(back.session.size === 0, 'and no session scope, which does not cross a boundary');
+  // The bias is arithmetic over the raw sum; a file that only kept the rounded
+  // mean would come back subtly different and nothing would say so.
+  assert(
+    Math.abs(back.calibrationFor('sit') - idx.calibrationFor('sit')) < 1e-12,
+    'the calibration bias is identical, not merely close'
+  );
+
+  let threw = false;
+  try {
+    ExperienceIndex.fromJSON({ v: 0, rows: [] });
+  } catch {
+    threw = true;
+  }
+  assert(threw, 'a file from another build is refused, not half-read');
+}
+
 console.log('experience: ok');

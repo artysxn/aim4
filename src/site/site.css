@@ -1984,6 +1984,64 @@ body.is-impersonating .ingest-off-toast {
   color: var(--accent-hover);
 }
 
+/* Performance panel. The strip of headline numbers, then two tables. */
+.perf-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.perf-stat {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--panel);
+}
+
+.perf-stat-value {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.perf-stat-label {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+/* A number worth looking at twice, not an error. */
+.perf-stat.warn .perf-stat-value,
+.perf-bad {
+  color: var(--accent-hover);
+}
+
+.perf-heading {
+  font-size: 14px;
+  font-weight: 500;
+  margin: 22px 0 8px;
+}
+
+.perf-note {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.perf-note.warn {
+  color: var(--accent-hover);
+}
+
+.perf-note.dim {
+  font-size: 12px;
+  margin-top: 18px;
+}
+
+/* Shipped means it came from the repo rather than this host's own data, which
+   is the distinction that matters when a deploy changed what gets loaded. */
+.perf-shipped {
+  color: var(--muted);
+}
+
 .admin-note {
   color: var(--muted);
   font-size: 13px;

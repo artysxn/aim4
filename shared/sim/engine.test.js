@@ -19,7 +19,14 @@ import {
   speedCap,
   ticksFor
 } from './constants.js';
-import { END_REASON, PHASE, LINEUP_FROM_UNITS, createEngine } from './engine.js';
+import {
+  END_REASON,
+  PHASE,
+  LINEUP_FROM_UNITS,
+  createEngine,
+  parseSnapshot,
+  serializeSnapshot
+} from './engine.js';
 import { RoundRecorder } from './encode.js';
 import { navGraphFromBake } from './navGraph.js';
 import { assignSpawns, hungarian, randomSpawns } from './spawnChoice.js';
@@ -606,6 +613,74 @@ if (graph) {
     );
     assert(meta.stats && meta.players.every((p) => meta.stats[p.id]?.loadout?.length > 0),
       'and a freeze-end loadout per player');
+  }
+
+  // ---- savestates (6.0) ----
+
+  {
+    // The claim a branch stands on: restore is exact. Run a round with real
+    // movement and combat to a mid-live tick, snapshot, finish it twice from
+    // that state, and demand the same world tick for tick.
+    const sig = (e) =>
+      JSON.stringify([
+        e.state.tick,
+        e.state.endReason,
+        e.state.winner,
+        e.rng.state,
+        e.state.events.filter((ev) => ev.type === 'death').map((ev) => [ev.tick, ev.slot]),
+        e.state.bodies.map((b) => [Math.round(b.pos.x), Math.round(b.pos.y), b.health])
+      ]);
+    const drive = (e) => {
+      // Walk everyone at the other side's spawn so the round has contact,
+      // deaths, sound, and routes in flight when the snapshot is taken.
+      const cells = [...e.graph.anchors.values()];
+      for (const b of e.state.bodies) {
+        const dest = cells[b.side === 'T' ? 0 : cells.length - 1];
+        e.setIntent(b.slot, { moveTo: { cx: dest.cx, cy: dest.cy, level: dest.level } });
+      }
+    };
+    const canSee = (w, t) => w.level === t.level;
+    const mk = () =>
+      createEngine({ map: 'INF', graph, seed: 31, roster: roster(graph), pathDistance, canSee });
+
+    const live = mk();
+    drive(live);
+    for (let i = 0; i < ticksFor(FREEZE_SECONDS + 20); i += 1) live.step();
+    const snap = live.snapshot();
+    const finishedA = sig((() => { live.runToEnd(); return live; })());
+
+    // Branch 1: a fresh engine, resumed from the wire format.
+    const b1 = createEngine({
+      map: 'INF', graph, seed: 31, roster: roster(graph), pathDistance, canSee,
+      resume: parseSnapshot(serializeSnapshot(snap))
+    });
+    b1.runToEnd();
+    assert(sig(b1) === finishedA, 'a snapshot resumed through JSON finishes identically');
+
+    // Branch 2: the same engine rewound in place.
+    b1.restore(snap);
+    assert(
+      b1.state.tick === snap.state.tick && b1.rng.state === snap.rngState,
+      'restore rewinds tick and rng'
+    );
+    b1.runToEnd();
+    assert(sig(b1) === finishedA, 'and a rewound engine walks the same future');
+
+    // The point of it all: change one decision at the savestate and the
+    // futures may part. The world must still be legal, not identical.
+    const b2 = mk();
+    b2.restore(snap);
+    const alive = b2.state.bodies.find((b) => b.alive && b.side === 'T');
+    b2.setIntent(alive.slot, { moveTo: null });
+    b2.runToEnd();
+    assert(b2.state.phase === PHASE.OVER, 'a diverged branch still completes');
+
+    // Guards: the wrong shape is refused, never quietly rehydrated.
+    let threw = false;
+    try {
+      createEngine({ map: 'MIR', graph, seed: 31, roster: roster(graph), pathDistance, resume: snap });
+    } catch { threw = true; }
+    assert(threw, 'a snapshot refuses the wrong map');
   }
 
   mapChecked = true;

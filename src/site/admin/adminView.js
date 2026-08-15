@@ -17,6 +17,7 @@ import { usersPanel } from './usersPanel.js';
 import { userDetail } from './userDetail.js';
 import { coachSmokesPanel } from './coachSmokesPanel.js';
 import { uploadsPanel } from './uploadsPanel.js';
+import { perfPanel } from './perfPanel.js';
 import { spinnerNode } from '../../lib/spinner.js';
 
 const TABS = [
@@ -26,6 +27,7 @@ const TABS = [
   { id: 'tools', label: 'Tools' },
   { id: 'models', label: 'Models' },
   { id: 'smokes', label: 'Utility' },
+  { id: 'perf', label: 'Performance' },
   { id: 'audit', label: 'Audit' }
 ];
 
@@ -82,6 +84,9 @@ export function initAdminView(host) {
       panel.appendChild(livePanel);
     } else if (tab === 'smokes') {
       livePanel = coachSmokesPanel();
+      panel.appendChild(livePanel);
+    } else if (tab === 'perf') {
+      livePanel = perfPanel();
       panel.appendChild(livePanel);
     } else if (openUserId) {
       panel.appendChild(

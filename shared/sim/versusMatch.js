@@ -311,6 +311,17 @@ export function playVersusMatch({
       A: typeof ctrlA.iglRows === 'function' ? ctrlA.iglRows() : null,
       B: typeof ctrlB.iglRows === 'function' ? ctrlB.iglRows() : null
     };
+    // 6.1: what each side was ordered to do and whether it complied. A round
+    // is one artifact, so if either side heard from a viewer the whole round
+    // is stamped: half a clean round is not a clean round.
+    const orderRows = {
+      A: typeof ctrlA.orderRows === 'function' ? ctrlA.orderRows() : null,
+      B: typeof ctrlB.orderRows === 'function' ? ctrlB.orderRows() : null
+    };
+    if (orderRows.A || orderRows.B) {
+      round.orders = orderRows;
+      round.humanCalled = Boolean(orderRows.A?.humanCalled || orderRows.B?.humanCalled);
+    }
     if (onRound) onRound(round);
   }
 
