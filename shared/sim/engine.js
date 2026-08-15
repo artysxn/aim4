@@ -159,7 +159,16 @@ function makeBody(slot, spec) {
     /** Who this body is currently trying to kill, as a slot index. */
     focus: null,
     /** Set by the controller each decision step; the engine only reads it. */
-    intent: { moveTo: null, gait: 'run', yaw: null, chase: false, holdFire: false },
+    intent: { moveTo: null, gait: 'run', yaw: null, chase: false, holdFire: false, knife: false },
+    /**
+     * Knife in hand. Pros cross the map at 250 u/s with the knife out and pay
+     * for it by having nothing to shoot with when something appears; a bot
+     * that ran with its rifle up could never keep a knife-running pro's tape.
+     * The price is real here too: putting the gun back up costs a draw delay
+     * during which the trigger is dead.
+     */
+    knifeOut: false,
+    drawReadyTick: 0,
     /** Current route, recomputed when the target changes. */
     route: null,
     routeStep: 0,
@@ -304,6 +313,12 @@ export function createEngine(cfg) {
   const plantTicks = ticksFor(PLANT_SECONDS);
   /** Ticks before an unreachable target is searched for again. */
   const REPATH_COOLDOWN = ticksFor(1);
+  /**
+   * Rifle-from-knife draw time [verify: CS2 deploy ~1.0s for rifles]. The
+   * asymmetry is deliberate: pulling the knife is free, getting the gun back
+   * is not, which is exactly the bet a knife-runner is making.
+   */
+  const DRAW_TICKS = ticksFor(1.0);
   /** How long a body may make no ground before its route is thrown away. */
   const STUCK_TICKS = ticksFor(0.6);
 
@@ -402,7 +417,7 @@ export function createEngine(cfg) {
     // Tagging: a body that was just shot moves at a fraction of its speed for
     // half a second. It is the difference between an exit frag landing and not.
     const cap =
-      speedCap(body.weapon, body.intent.gait || 'run') *
+      speedCap(body.knifeOut ? 'knife' : body.weapon, body.intent.gait || 'run') *
       tagFactor(state.tick - body.lastHitTick);
     let node = route.cells[body.routeStep];
     let world = graph.worldAt(node.cx, node.cy);
@@ -476,7 +491,7 @@ export function createEngine(cfg) {
       // almost always take the two orthogonal steps that make it up, because
       // each of those keeps it aligned with the corridor it is in.
       const capNow =
-        speedCap(body.weapon, body.intent.gait || 'run') * tagFactor(state.tick - body.lastHitTick);
+        speedCap(body.knifeOut ? 'knife' : body.weapon, body.intent.gait || 'run') * tagFactor(state.tick - body.lastHitTick);
 
       const next = route.cells[Math.min(body.routeStep + 1, route.cells.length - 1)];
       const nextWorld = graph.worldAt(next.cx, next.cy);
@@ -684,6 +699,18 @@ export function createEngine(cfg) {
     const motor = motors[body.slot];
     const target = visibleTarget(body);
 
+    // The knife state machine. Out when asked and nothing is visible; the
+    // instant a target appears (or the controller stops asking) the gun comes
+    // back up, and the draw delay starts. Drawing the knife itself is free.
+    if (body.knifeOut) {
+      if (target || !body.intent.knife) {
+        body.knifeOut = false;
+        body.drawReadyTick = state.tick + DRAW_TICKS;
+      }
+    } else if (body.intent.knife && !target && body.channel === null) {
+      body.knifeOut = true;
+    }
+
     if (!target) {
       if (body.focus !== null) {
         release(motor);
@@ -714,7 +741,13 @@ export function createEngine(cfg) {
       weapon: body.weapon,
       rng,
       canFire:
-        !reloading && body.magAmmo > 0 && body.channel === null && !body.intent.holdFire
+        !reloading &&
+        body.magAmmo > 0 &&
+        body.channel === null &&
+        !body.intent.holdFire &&
+        // The knife-runner's bill arrives here: caught mid-draw, the trigger
+        // is dead until the gun is actually up.
+        state.tick >= body.drawReadyTick
     });
     body.yaw = r.yaw;
 

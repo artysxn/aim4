@@ -37,6 +37,7 @@ import zlib from 'node:zlib';
 import { ROOT as REPLAY_ROOT } from '../server/replays/demoStore.js';
 import { decodeReplayPackage } from '../src/replays/shared/replayPackage.js';
 import { decodeTickz } from '../server/replays/tickCodec.js';
+import { buildMeta } from '../server/sim/playbookStore.js';
 import { TickTrack } from '../src/replays/tickStore.js';
 import { roundTagsFor } from '../src/replays/analytics/roundTags.js';
 import { loadBake } from '../server/sim/bakes.js';
@@ -64,10 +65,42 @@ const REBUILD = has('rebuild');
 
 /** Waypoint sampling cadence. Anchor changes are what get recorded. */
 const WAYPOINT_HZ = 2;
+/**
+ * Hz for the COORDINATE path: where the pro actually was, and where they were
+ * looking, sampled straight off the tick buffer.
+ *
+ * The anchor waypoints above are landmarks -- one every 2.0s at median, 3.7s
+ * at mean -- and a bot steering by them navigates to places the pro passed
+ * through rather than following the pro. Between two anchors it has no
+ * guidance at all, which is why copied rounds never looked copied.
+ *
+ * 32 Hz is every second tick at 64-tick. That is deliberately FINER than the
+ * engine's decision cadence (DECISION_EVERY_TICKS = 8): decisions are made
+ * eight times a second, but movement is executed sixty-four times a second,
+ * and a follower steering at a target two ticks old can reproduce a pro's
+ * path -- the strafes, the shoulder peeks, the exact stop -- in a way one
+ * refreshed every eight ticks cannot. The cost is linear in the sample rate
+ * and it is the one thing here worth spending bytes on.
+ */
+const PATH_HZ = Number(flag('path-hz', 32));
+/** [x, y, yaw] per sample. Time is the index, not a stored field. */
+export const PATH_FIELDS = 3;
 /** Seconds after live before a position counts as the settled contract. */
 const SETUP_SECONDS = 12;
 /** Cap per role so a knife-run round cannot produce a hundred waypoints. */
 const MAX_WAYPOINTS = 48;
+/**
+ * How long everyone in a round may read as dead before the tape really ends.
+ *
+ * Tick buffers contain single-row dropouts: one row where every slot decodes
+ * as not-alive, with all ten alive again on the next. Treating the first such
+ * sample as death cost most of the corpus -- the 2 Hz waypoint loop stepped
+ * over the bad row, the 32 Hz path loop landed on it and stopped, so DD2
+ * tapes ended at a median 16s against 38s of landmarks and half of MIR did
+ * the same. A real death lasts the rest of the round, so a gap this short is
+ * always the recording and never the player.
+ */
+const DROPOUT_GRACE_SECONDS = 1;
 
 const round1 = (x) => Math.round(x * 10) / 10;
 
@@ -193,10 +226,20 @@ function mineEntry({ meta, track, state, map, demoId }) {
     const occ = new Map();
     const settled = new Map();
     let lastAnchor = null;
+    const waypointGrace = Math.max(1, Math.round(DROPOUT_GRACE_SECONDS * WAYPOINT_HZ));
+    let deadRun = 0;
     for (let tick = t0; tick <= Math.min(endTick, died); tick += step) {
       track.sample(p.slot, tick, states[0] = states[0] || {});
       const st = track.sample(p.slot, tick, {});
-      if (!st.alive) break;
+      // A dropout records nothing and costs nothing here, because waypoints
+      // carry their own timestamps: skipping one leaves a gap in the
+      // schedule, not a shift in it.
+      if (!st.alive) {
+        deadRun += 1;
+        if (deadRun > waypointGrace) break;
+        continue;
+      }
+      deadRun = 0;
       const a = state.angles.nearestAnchor(st.x, st.y);
       if (!a) continue;
       const t = (tick - t0) / tickRate;
@@ -208,6 +251,61 @@ function mineEntry({ meta, track, state, map, demoId }) {
       }
     }
     if (waypoints.length === 0) continue;
+
+    // The coordinate path: [x, y, yaw] repeated, flat.
+    //
+    // NO TIMESTAMP. Samples are uniformly spaced at `pathHz` from the freeze
+    // end, so sample i is at i / pathHz seconds and storing that is storing
+    // the loop counter. Dropping it is a quarter of the bytes, and it fixes a
+    // real defect: `t` was rounded to one decimal, and at 32 Hz the interval
+    // is 0.031s, so consecutive samples collided on the same timestamp and
+    // the tape could not be read back in order.
+    //
+    // Flat rather than nested because the brackets and commas of two thousand
+    // little arrays are most of the file. Coordinates are whole world units (a
+    // bot is 32 units wide, so a unit is already past visible precision) and
+    // yaw is whole degrees.
+    const pathStep = Math.max(1, Math.round(tickRate / PATH_HZ));
+    const path = [];
+    const pathGrace = Math.max(1, Math.round(DROPOUT_GRACE_SECONDS * PATH_HZ));
+    let lastGood = -1; // sample index, not array index
+    let leading = 0;
+    let gap = 0;
+    for (let tick = t0; tick <= Math.min(endTick, died); tick += pathStep) {
+      const st = track.sample(p.slot, tick, {});
+      if (st.alive) {
+        gap = 0;
+        path.push(Math.round(st.x), Math.round(st.y), Math.round(st.yaw));
+        lastGood = path.length / PATH_FIELDS - 1;
+        continue;
+      }
+      // Time is the index here, so a dropout cannot be skipped -- dropping a
+      // sample would slide every later one earlier and desynchronise the tape
+      // from the round. Hold the last known position instead, which is also
+      // what a missing update physically means.
+      gap += 1;
+      if (gap > pathGrace) break;
+      if (lastGood < 0) {
+        leading += 1;
+        path.push(0, 0, 0);
+        continue;
+      }
+      const j = lastGood * PATH_FIELDS;
+      path.push(path[j], path[j + 1], path[j + 2]);
+    }
+    // Trailing holds are guesses about a player who never came back; the tape
+    // ends at the last position actually recorded.
+    path.length = Math.max(0, (lastGood + 1) * PATH_FIELDS);
+    // A gap before the first real sample was padded with zeroes to keep the
+    // spacing; backfill it from the first position now that one exists.
+    if (leading > 0 && path.length >= (leading + 1) * PATH_FIELDS) {
+      const j = leading * PATH_FIELDS;
+      for (let i = 0; i < leading; i += 1) {
+        path[i * PATH_FIELDS] = path[j];
+        path[i * PATH_FIELDS + 1] = path[j + 1];
+        path[i * PATH_FIELDS + 2] = path[j + 2];
+      }
+    }
 
     const source = settled.size ? settled : occ;
     let contract = null;
@@ -244,7 +342,7 @@ function mineEntry({ meta, track, state, map, demoId }) {
       });
     }
 
-    roles.push({ contract, steamId: p.steamId || p.id, awp, waypoints, utility });
+    roles.push({ contract, steamId: p.steamId || p.id, awp, waypoints, path, pathHz: PATH_HZ, utility });
   }
   if (roles.length < 4) return null;
 
@@ -401,9 +499,24 @@ async function main() {
     }
   }
 
-  for (const s of streams.values()) s.end();
+  await Promise.all([...streams.values()].map((s) => new Promise((r) => s.end(r))));
   writeAtomic(indexFile, JSON.stringify(index));
   writeProgress();
+
+  // A tape file is gigabytes and the loader reads it by byte offset, so it
+  // needs a sidecar of where every entry starts -- and a mine invalidates
+  // every offset in the old one. Built here so the first person to open the
+  // sim page is not the one who pays for the scan.
+  for (const map of perMap.keys()) {
+    const file = path.join(OUT, `${map}.jsonl`);
+    try {
+      const t0 = Date.now();
+      const { entries: n } = await buildMeta(file);
+      console.log(`  indexed ${map}: ${n.length.toLocaleString()} tapes in ${fmtDuration((Date.now() - t0) / 1000)}`);
+    } catch (err) {
+      console.error(`  index ${map} FAILED: ${err.message} -- run npm run sim:playbook-index`);
+    }
+  }
 
   const elapsed = (Date.now() - startedAt) / 1000;
   console.log(`\n${entries.toLocaleString()} playbook entries from ${done} demos in ${fmtDuration(elapsed)}`);

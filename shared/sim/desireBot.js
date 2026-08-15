@@ -90,6 +90,9 @@ import { ExperienceIndex } from './experience.js';
 import { StrategyAI } from './strategy.js';
 import { createCaller, CALLER_MODE, TAPE_ERROR_UNITS, TAPE_FIT, TAPE_LAG_SECONDS, fightEV, pictureWinrate, shapeRole } from './caller.js';
 import { nextWaypointAt, tapeEndSeconds } from './playbook.js';
+import { scanOffset, watchAngles } from './scan.js';
+/** How far a bot will walk to reach a mined grenade's throwing spot. */
+const LINEUP_WALK_UNITS = 1200;
 import { ORDER_SOURCE, ORDER_VERDICT, evaluateOrder } from './orders.js';
 import { PRW_REASON, createPrwLog, truePictureFrom } from './prw.js';
 import { comparePlans, indexValueOf, pickPlan } from './callValue.js';
@@ -708,10 +711,74 @@ export function desireController({
     const index = experience || new ExperienceIndex();
     const strategy = new StrategyAI({ index, bandit });
     const expert = new ExpertIterLog();
+
+    /**
+     * How much of the match was actually copied from the pros.
+     *
+     * "They are not following calls step by step" is a claim about behaviour,
+     * and until this existed there was no number that could confirm or refute
+     * it -- a tape could be picked, pinned, and then quietly ignored by every
+     * bot for the whole round with nothing to show for it. `onTape` counts
+     * decisions where a tape had a position to offer, `steered` counts those
+     * that became a trace target, and `errSum` is the distance between the
+     * bot and where the pro stood at that moment. A high onTape with a large
+     * error means the tape is being read but not followed, which is a
+     * different fault from not having a tape at all.
+     */
+    const tape = {
+      onTape: 0,
+      offTape: 0,
+      steered: 0,
+      errSum: 0,
+      errN: 0,
+      lineups: 0,
+      lineupsDue: 0,
+      // The decomposition of the error, because 1037u mean said "not obeying"
+      // without saying which of three different diseases it was:
+      //   frz    decisions during freeze, when nobody can move and the only
+      //          "error" is engine spawn point vs demo spawn point
+      //   lag    near the tape but at an earlier sample: ran the route slower
+      //   off    far from every sample the pro had walked: a different route
+      frz: { n: 0, err: 0 },
+      lag: { n: 0, sum: 0 },
+      off: { n: 0, err: 0 },
+      // Split at first blood. Before it, the round still resembles the demo
+      // and following is the whole job. After it, the rounds have diverged
+      // and a tape written in a world where different people died is not a
+      // plan any more -- that is the re-call problem (#17), not a steering
+      // fault, and blending the two made the steering look broken forever.
+      pre: { n: 0, err: 0 },
+      post: { n: 0, err: 0 }
+    };
+
     let matchRng = null;
     let contracts = null;
 
     // ---- geometry helpers, per graph ------------------------------------
+
+    /**
+     * The arrivals a bot holding `anchorId` should be checking, and the phase
+     * offset that stops five holders sweeping in lockstep.
+     *
+     * Computed here rather than in the option runner because it needs the
+     * graph, the visibility catalogue and the belief, and the runner is a pure
+     * tick-to-intent compiler. Threat comes from the joint belief, so the
+     * rotation spends most of itself on the door the team actually fears.
+     */
+    function watchFor(R2, slot, anchorId) {
+      const a = R2.graph.anchor(anchorId);
+      if (!a) return null;
+      return {
+        watch: watchAngles({
+          graph: R2.graph,
+          angles,
+          spot: { x: a.world.x, y: a.world.y, level: a.level },
+          threatOf: (id) => R2.belief?.massAt?.(id) || 0,
+          exclude: [anchorId]
+        }),
+        scanOffset: scanOffset(slot)
+      };
+    }
 
     function nearestAnchors(graph, x, y, level, n) {
       const out = [];
@@ -823,6 +890,34 @@ export function desireController({
        */
       experienceHash() {
         return index.hash();
+      },
+
+      /**
+       * How closely this side copied the tapes it was given, match to date.
+       *
+       * `follow` is the share of decisions with a tape position to steer to,
+       * `errorUnits` the mean distance from where the pro actually stood
+       * (a bot is 32 units wide, so anything under ~100 is the same line) and
+       * `lineupRate` the share of due throws the engine accepted.
+       */
+      tapeStats() {
+        const decisions = tape.onTape + tape.offTape;
+        return {
+          decisions,
+          follow: decisions ? tape.onTape / decisions : 0,
+          steered: tape.steered,
+          errorUnits: tape.errN ? tape.errSum / tape.errN : null,
+          lineupsDue: tape.lineupsDue,
+          lineups: tape.lineups,
+          lineupRate: tape.lineupsDue ? tape.lineups / tape.lineupsDue : 0,
+          // The decomposition: freeze noise, behind-schedule, and off-route
+          // are three different diseases wearing one mean.
+          freeze: { n: tape.frz.n, errorUnits: tape.frz.n ? tape.frz.err / tape.frz.n : null },
+          lag: { n: tape.lag.n, seconds: tape.lag.n ? tape.lag.sum / tape.lag.n : null },
+          offPath: { n: tape.off.n, errorUnits: tape.off.n ? tape.off.err / tape.off.n : null },
+          preContact: { n: tape.pre.n, errorUnits: tape.pre.n ? tape.pre.err / tape.pre.n : null },
+          postContact: { n: tape.post.n, errorUnits: tape.post.n ? tape.post.err / tape.post.n : null }
+        };
       },
       /** The decision log the inspector reads: {tick, slot, id, motive}. */
       log: [],
@@ -1012,7 +1107,13 @@ export function desireController({
           // with caller.js's own arithmetic, so the dependency runs one way.
           // With these null the caller is stage 0's librarian, unchanged.
           compare: headOn ? comparePlans : null,
-          pick: headOn ? pickPlan : null
+          pick: headOn ? pickPlan : null,
+          // Live feet, read at assignment time, so a mid-round re-call also
+          // places roles on whoever is nearest rather than by file order.
+          posOf: (slot) => {
+            const b = engine.state.bodies[slot];
+            return b?.alive ? { x: b.pos.x, y: b.pos.y } : null;
+          }
         });
         R.knowledge = knowledge;
         // One PRW log per side per round (18.6b). Always on: the inspector's
@@ -1996,6 +2097,24 @@ export function desireController({
         // ---- D. decide, per living bot ----------------------------------
 
         const elapsed = (tick - state.liveTick) / TICK_RATE;
+        // Same clock the tape was mined on: seconds since the freeze ended.
+        const elapsedForTrace = elapsed;
+        // Has this round shown its teeth yet? Sticky once true: a death on
+        // either side, one of ours with an enemy on screen, or one of ours
+        // shot at. Gates the knife-out approach; a pro re-knifes mid-round
+        // sometimes, but never on a read this coarse, so the conservative
+        // side of the coin is the honest one.
+        R.contactMade =
+          R.contactMade ||
+          state.bodies.some(
+            (bb) =>
+              !bb.alive ||
+              (bb.side === R.side &&
+                bb.alive &&
+                // focus is set by the engine's fight frame only while an
+                // enemy is actually on screen, and cleared when none is.
+                (bb.focus !== null || state.tick - bb.lastHitTick < TICK_RATE))
+          );
         const secondsLeft = Math.max(0, engine.clock());
         const equip = (b) => (weaponInfo(b.weapon).price || 0) + (b.armor > 0 ? 1000 : 0);
         let ctSum = 0;
@@ -2045,6 +2164,137 @@ export function desireController({
               1
             )[0]
           : null;
+        /**
+         * Steer a bot at the spot its next mined grenade is thrown from.
+         *
+         * Applied after the option runner, so it overrides where the option
+         * wanted to walk without having to win a price comparison against it.
+         * A lineup has a moment: arriving late is the same as not throwing.
+         */
+        const patchLineup = (slot, intent) => {
+          const spot = R.lineupSpot?.get(slot);
+          if (!spot) return intent;
+          // `move.target` is an ANCHOR ID: the translator resolves it with
+          // graph.anchor(). Handing it a cell object silently produced an
+          // undefined anchor and killed the move outright, which is worse
+          // than not steering at all.
+          const near = nearestAnchors(R.graph, spot.x, spot.y, bodies[slot].level, 1)[0];
+          if (!near) return intent;
+          intent.move = { mode: 'advance', target: near, gait: 'run' };
+          return intent;
+        };
+
+        /**
+         * Follow the pro's own path, sample by sample (v2 tapes).
+         *
+         * The anchor waypoints steer a bot at LANDMARKS the pro passed
+         * through -- one every 2.0s at median, 3.7s at mean, and up to 89s --
+         * so between them a follower has no guidance and pathfinds its own
+         * route. That is why copied rounds never looked copied: the bots were
+         * navigating to places the pro had been, not following the pro.
+         *
+         * A v2 tape carries [x, y, yaw] at 32 Hz. This steers at the position
+         * and hands the motor the view angle, so the follower reproduces the
+         * route AND what the pro was looking at while walking it. Applied
+         * after the option runner for the same reason the lineup patch is:
+         * following the call is not a preference to be priced against holding
+         * an angle, it is what the call MEANS.
+         *
+         * Only while the bot is genuinely on the tape. A local interrupt, a
+         * fight, a fall-off all hand control back to the arbiter, which is
+         * what keeps a follower from walking a dead pro's path into a wall.
+         */
+        const patchTrace = (slot, intent) => {
+          if (!R.caller || !R.caller.isOnTape(slot, elapsedForTrace)) {
+            tape.offTape += 1;
+            return intent;
+          }
+          const trace = R.caller.traceAt(slot, elapsedForTrace);
+          if (!trace) {
+            tape.offTape += 1;
+            return intent;
+          }
+          tape.onTape += 1;
+          const b2 = bodies[slot];
+          if (!b2?.alive || b2.channel) return intent;
+          tape.steered += 1;
+          const errClock = Math.hypot(b2.pos.x - trace.x, b2.pos.y - trace.y);
+          tape.errSum += errClock;
+          tape.errN += 1;
+          if (elapsedForTrace >= 0) {
+            const blooded = state.bodies.some((bb) => !bb.alive);
+            const bucket = blooded ? tape.post : tape.pre;
+            bucket.n += 1;
+            bucket.err += errClock;
+          }
+          /**
+           * PURSUIT, not clock-chasing. The first fidelity run steered every
+           * bot at the sample the WALL CLOCK named, and measured a 1037u mean
+           * error that decomposed into 44% "on the route but 12.7s behind"
+           * and 56% "off the route entirely". Both are one mechanism: a bot
+           * and its target move at the same top speed, so a chased point that
+           * runs on the clock preserves any initial gap forever -- the engine
+           * spawn is not the demo spawn, every fight adds a stall -- and past
+           * enough lag the follower reads as lost.
+           *
+           * So the target is chosen from where the bot IS on the tape: the
+           * nearest walked sample, plus a short lookahead. That point stands
+           * still until the bot advances, which is what makes the gap close.
+           * The clock stays as a CAP -- min(elapsed, ...) -- so a bot can run
+           * its route late but never early: timing is part of the call, and
+           * arriving before the pro did would be a different round.
+           */
+          let target = trace;
+          if (elapsedForTrace < 0) {
+            tape.frz.n += 1;
+            tape.frz.err += errClock;
+          } else {
+            // Monotonic pursuit: search forward of this bot's own progress,
+            // never the whole tape. Nearest-point against the full walked
+            // stretch resolves to the earliest pass wherever the route
+            // crosses itself, which reset progress backwards and was why the
+            // clock-chasing fix measured no better than the clock-chasing bug.
+            R.tapeCursor = R.tapeCursor || new Map();
+            const cursor = R.tapeCursor.get(slot) ?? 0;
+            const p = R.caller.pursue(slot, b2.pos, cursor, elapsedForTrace);
+            if (p) {
+              R.tapeCursor.set(slot, p.cursor);
+              if (p.d <= 160) {
+                tape.lag.n += 1;
+                tape.lag.sum += elapsedForTrace - p.cursor;
+              } else {
+                tape.off.n += 1;
+                tape.off.err += p.d;
+              }
+              // Off the route, the pursuit answer still stands: its target is
+              // the route itself, and the path is the line the pro actually
+              // cleared, where a beeline at the clock's point crosses space
+              // nobody swept.
+              target = p.target;
+            } else {
+              tape.off.n += 1;
+              tape.off.err += errClock;
+            }
+          }
+          intent.move = {
+            mode: 'trace',
+            point: { x: target.x, y: target.y },
+            yaw: target.yaw,
+            // The pro's own pace: walking where they walked matters as much
+            // as the line, because a run past an angle they cleared slowly is
+            // a different round.
+            gait: intent.move?.gait || 'run',
+            // Knife out while the round has no teeth yet, exactly like the
+            // pro whose tape this is: 250 u/s was part of how they made
+            // their timing, and a rifle-up follower is 15% late everywhere
+            // by construction. The engine charges the draw delay if this
+            // read is wrong, and first blood or a sighting ends it for the
+            // round.
+            knife: !R.contactMade
+          };
+          return intent;
+        };
+
         const patchLooseBomb = (slot, intent) => {
           if (R.side !== 'T' || !state.bomb.dropped) return intent;
           const b = bodies[slot];
@@ -2169,11 +2419,66 @@ export function desireController({
             }
             candidates.push({
               id: 'hold_angle',
-              params: { spot: home.home, yaw: preAim },
+              params: { spot: home.home, yaw: preAim, ...(watchFor(R, s, home.home) || {}) },
               isHome: true,
               prior: 0.55,
               motive: 'holding my post'
             });
+          }
+
+          // ---- the mined utility, thrown (4.8 / 6.22) -------------------
+          //
+          // 87% of mined roles carry a pro's grenade with real coordinates:
+          // where they stood, where it landed, how long it flew. None of it
+          // was ever thrown, because nothing connected `caller.due()` to
+          // `engine.throwLineup()` -- so every grenade in every round was the
+          // ad-hoc fallback lob, which is why the utility looked random.
+          //
+          // Placed before the option arbiter deliberately. A lineup is a
+          // SCHEDULED act with a moment: the pro threw it at 31.7s from a
+          // specific spot, and a smoke that lands after the execute has
+          // already walked through it is worse than no smoke. It should not
+          // have to win a price comparison against holding an angle.
+          // Where a due lineup wants this bot standing, if it is not there
+          // yet. Read after the option runner sets its intent, exactly like
+          // the loose-bomb patch: a grenade that has to be thrown from a spot
+          // is a reason to walk to the spot, which is what the pro did.
+          R.lineupSpot = R.lineupSpot || new Map();
+          R.lineupSpot.delete(s);
+          if (R.caller && b.alive && !b.channel && b.grenades.length) {
+            for (const u of R.caller.due(s, elapsed)) {
+              if (!b.grenades.includes(u.type)) continue;
+              const at = Number.isFinite(u.ax) ? { x: u.ax, y: u.ay } : null;
+              if (!at) continue;
+              tape.lineupsDue += 1;
+              // `from` is the pro's own throwing spot. The engine refuses the
+              // throw when the bot is not near it (LINEUP_FROM_UNITS), which
+              // is the check that keeps a copied lineup honest: a smoke is a
+              // line from a place, and thrown from somewhere else it is a
+              // different smoke.
+              const from = Number.isFinite(u.fx) ? { x: u.fx, y: u.fy } : null;
+              const travelTicks = Math.max(1, Math.round((u.flight || 1.5) * TICK_RATE));
+              if (engine.throwLineup(s, { type: u.type, from, at, travelTicks })) {
+                tape.lineups += 1;
+                R.caller.noteThrown(s, u.index);
+                this.log.push({
+                  tick,
+                  slot: s,
+                  id: 'lineup',
+                  motive: `${u.type} from ${u.from || 'here'} at ${u.at || 'the spot'}, as mined`
+                });
+                break;
+              }
+              // Refused: almost always because the bot is not within
+              // LINEUP_FROM_UNITS of the pro's throwing spot. Measured before
+              // this existed, that was nearly every lineup -- one thrown in
+              // three rounds -- because the tape steers to anchors and a
+              // lineup spot is a position. So remember it and walk there.
+              if (from && Math.hypot(b.pos.x - from.x, b.pos.y - from.y) < LINEUP_WALK_UNITS) {
+                R.lineupSpot.set(s, { ...from, type: u.type });
+                break;
+              }
+            }
           }
 
           const onTape = R.caller && R.caller.isOnTape(s, elapsed);
@@ -2293,7 +2598,7 @@ export function desireController({
                     });
                     candidates.push({
                       id: 'off_angle_hold',
-                      params: { spot, yaw: R.target?.id || spot },
+                      params: { spot, yaw: R.target?.id || spot, ...(watchFor(R, s, spot) || {}) },
                       prior: 0.45,
                       motive: 'tape idle: off angle'
                     });
@@ -2964,7 +3269,7 @@ export function desireController({
               })
             : stepped;
 
-          R.translator.setIntent(s, patchLooseBomb(s, out.intent));
+          R.translator.setIntent(s, patchLineup(s, patchTrace(s, patchLooseBomb(s, out.intent))));
         }
 
         R.translator.step();

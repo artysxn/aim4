@@ -34,6 +34,9 @@
     "sim:eval": "node scripts/sim-eval-bc.mjs",
     "sim:pipeline": "node scripts/sim-pipeline.mjs",
     "sim:bootcamp": "node scripts/sim-bootcamp.mjs",
+    "sim:playbook": "node scripts/sim-mine-playbook.mjs",
+    "sim:playbook-index": "node scripts/sim-index-playbook.mjs",
+    "sim:tape": "node scripts/sim-tape-fidelity.mjs",
     "sim:lab": "node tools/sim-lab.mjs"
   },
   "dependencies": {

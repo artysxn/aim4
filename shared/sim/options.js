@@ -32,6 +32,7 @@
 // ---------------------------------------------------------------------------
 
 import { TICK_RATE, ticksFor } from './constants.js';
+import { scanPick } from './scan.js';
 import { INTENTS_VERSION, idleIntent } from './intents.js';
 
 export const OPTIONS_VERSION = 1;
@@ -53,21 +54,24 @@ export const OPTION_DEFS = Object.freeze({
   // ---- hold: stand somewhere on purpose -----------------------------------
   hold_angle: {
     family: 'hold',
-    params: ['spot', 'yaw'],
+    // `watch` is the rotation: the arrivals that can see `spot`, most
+    // dangerous first. Absent, a hold stares at `yaw` forever, which is what
+    // it used to do.
+    params: ['spot', 'yaw', 'watch'],
     terminate: ['contact', 'damaged', 'timeout'],
     timeoutSeconds: 20,
     exposure: 0.15
   },
   off_angle_hold: {
     family: 'hold',
-    params: ['spot', 'yaw'],
+    params: ['spot', 'yaw', 'watch'],
     terminate: ['contact', 'damaged', 'timeout'],
     timeoutSeconds: 12,
     exposure: 0.1
   },
   crossfire_hold: {
     family: 'hold',
-    params: ['spot', 'yaw', 'mate'],
+    params: ['spot', 'yaw', 'mate', 'watch'],
     terminate: ['contact', 'damaged', 'timeout'],
     timeoutSeconds: 20,
     exposure: 0.15
@@ -443,7 +447,12 @@ export function microIntent(active, tick, view = {}) {
       // Run to the post, hold at it: a CT that shift-walks to its site meets
       // the execute in a corridor instead of behind its angle.
       intent.move = { mode: 'hold', target: p.spot, gait: 'run' };
-      intent.combat = { posture: 'holdAngle', preAim: p.yaw ?? null };
+      // Holding an angle is checking several. The rotation is a pure function
+      // of the tick (scan.js), so a hold is still bit-identical on a replay.
+      intent.combat = {
+        posture: 'holdAngle',
+        preAim: scanPick(p.watch, tick, { offset: p.scanOffset || 0 }) ?? p.yaw ?? null
+      };
       return intent;
     }
     case 'stand_off': {

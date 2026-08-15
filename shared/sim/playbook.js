@@ -30,7 +30,10 @@
 // ---------------------------------------------------------------------------
 
 /** Bumped when an entry's shape changes, so a stale mine is refused loudly. */
-export const PLAYBOOK_VERSION = 1;
+// v2 adds the coordinate path: [t, x, y, yaw] at 8 Hz per role. A v1 tape
+// carries anchor waypoints only and cannot be followed step by step, so the
+// version is what tells a runtime which kind of copy it is holding.
+export const PLAYBOOK_VERSION = 2;
 
 /** How many candidates a draw considers before the softmax. `[calibrate]` */
 export const TOP_K = 12;
@@ -130,7 +133,23 @@ function sample(scored, rng, temperature = TEMPERATURE) {
 export function pickRound(index, { side, call = null, econ = null, econEnemy = null, exclude = null, pinCall = false, rng }) {
   const scored = scoreRounds(index, { side, call, econ, econEnemy, exclude, pinCall });
   if (!scored.length) return null;
-  return sample(scored.slice(0, TOP_K), rng);
+  return hydrated(index, sample(scored.slice(0, TOP_K), rng));
+}
+
+/**
+ * Fetch the chosen tape's coordinates, if the loader can.
+ *
+ * A v2 tape carries 71 seconds of [x, y, yaw] per role and the corpus is 9 GB
+ * of it, so the server-side loader keeps only the light half in memory and
+ * hands over an `index.hydrate` that reads the rest off disk by byte offset.
+ * Doing it HERE rather than at each call site means every consumer of a
+ * picked tape -- caller, inspector, trainer -- gets the fine path without
+ * knowing the storage exists. No hydrate (the browser, a v1 file) simply
+ * leaves `role.path` null, which `pathAt` already reads as "steer by
+ * landmarks".
+ */
+function hydrated(index, entry) {
+  return entry && index?.hydrate ? index.hydrate(entry) : entry;
 }
 
 /**
@@ -221,7 +240,7 @@ export function matchSituation(index, { side, clock, alive, enemyAlive, contactR
   // No close match is a real answer: freestyle beats a badly matched tape.
   if (scored[0].distance > MATCH_CUTOFF) return null;
 
-  const entry = sample(scored.slice(0, TOP_K), rng);
+  const entry = hydrated(index, sample(scored.slice(0, TOP_K), rng));
   if (!entry) return null;
   return { entry, decision: decisionFor(entry) };
 }
@@ -301,9 +320,15 @@ export function decisionFor(entry) {
  * @param {(slot: number) => string|null} contractOf  where each bot is now
  * @param {object} [opts]
  * @param {(slot: number) => boolean} [opts.awpOf]  the AWPer seat, matched first
+ * @param {(slot: number) => {x: number, y: number}|null} [opts.posOf]
+ *        where each bot stands. When given, the leftover roles are matched to
+ *        minimize total distance from each bot to its tape's first sample,
+ *        because handing a bot a tape that starts across the spawn zone
+ *        creates a gap it can never close: follower and tape move at the
+ *        same speed, so the starting error is carried the whole round.
  * @returns {Map<number, PlaybookRole>}
  */
-export function assignRoles(slots, entry, contractOf = () => null, { awpOf = () => false } = {}) {
+export function assignRoles(slots, entry, contractOf = () => null, { awpOf = () => false, posOf = null } = {}) {
   const out = new Map();
   const roles = [...(entry?.roles || [])];
   const free = new Set(slots);
@@ -333,8 +358,54 @@ export function assignRoles(slots, entry, contractOf = () => null, { awpOf = () 
       }
     }
   }
-  // Whoever is left, in order.
-  for (const slot of [...free]) {
+  // Whoever is left: nearest-to-tape-start when positions are known, file
+  // order when they are not. Five or fewer remain, so the assignment is
+  // solved exactly rather than greedily -- greedy leaves the last pairing
+  // with whatever is left, and the last pairing is the one that hurts.
+  const rest = [...free];
+  const starts = roles.map((role) => {
+    const p = role?.path;
+    return p && p.length >= PATH_FIELDS ? { x: p[0], y: p[1] } : null;
+  });
+  const canPlace = posOf && rest.length > 1 && starts.some(Boolean);
+  if (canPlace) {
+    const depth = Math.min(rest.length, roles.length);
+    let bestOrder = null;
+    let bestCost = Infinity;
+    const perm = (order, remaining) => {
+      if (order.length === depth) {
+        let cost = 0;
+        for (let i = 0; i < order.length; i += 1) {
+          const pos = posOf(rest[i]);
+          const start = starts[order[i]];
+          // An unknown position or a v1 tape contributes nothing either way.
+          if (pos && start) cost += Math.hypot(pos.x - start.x, pos.y - start.y);
+        }
+        if (cost < bestCost) {
+          bestCost = cost;
+          bestOrder = order.slice();
+        }
+        return;
+      }
+      for (let k = 0; k < remaining.length; k += 1) {
+        order.push(remaining[k]);
+        perm(order, remaining.slice(0, k).concat(remaining.slice(k + 1)));
+        order.pop();
+      }
+    };
+    perm([], roles.map((_, i) => i));
+    if (bestOrder) {
+      rest.forEach((slot, i) => {
+        const role = roles[bestOrder[i]];
+        if (role) {
+          out.set(slot, role);
+          free.delete(slot);
+        }
+      });
+      return out;
+    }
+  }
+  for (const slot of rest) {
     const role = roles.shift();
     if (!role) break;
     out.set(slot, role);
@@ -348,6 +419,163 @@ export function assignRoles(slots, entry, contractOf = () => null, { awpOf = () 
  * The tape is a schedule, not a rail: the caller asks where to be, and the
  * usual movement layer works out how to get there.
  */
+/** [x, y, yaw] per path sample. Time is the index, not a stored field. */
+export const PATH_FIELDS = 3;
+
+/**
+ * Where the pro was, and where they were looking, at this moment.
+ *
+ * The tape's fine half (v2). `waypointAt` answers with a LANDMARK the pro
+ * passed through, which is what a bot navigates to; this answers with the
+ * position they actually occupied, which is what a bot follows. Interpolated
+ * between samples so a 64 Hz engine gets a smooth target from a 32 Hz tape
+ * rather than a staircase.
+ *
+ * Null when the role has no path (a v1 tape) or the moment is past its end,
+ * which is what tells a follower to fall back to the anchor waypoints.
+ *
+ * @returns {{x: number, y: number, yaw: number, i: number, last: boolean}|null}
+ */
+export function pathAt(role, seconds) {
+  const path = role?.path;
+  const hz = role?.pathHz || 0;
+  if (!path || !hz || !path.length) return null;
+  const n = Math.floor(path.length / PATH_FIELDS);
+  const f = Math.max(0, seconds) * hz;
+  const i = Math.floor(f);
+  if (i >= n) return null;
+  const at = (k) => k * PATH_FIELDS;
+  const j = at(i);
+  if (i + 1 >= n) {
+    return { x: path[j], y: path[j + 1], yaw: path[j + 2], i, last: true };
+  }
+  const k = at(i + 1);
+  const w = f - i;
+  // Yaw is an angle: interpolating 179 to -179 the long way round would spin
+  // the crosshair a full turn between two samples a thirtieth of a second
+  // apart, which is the flick-to-nowhere the aim fix already removed once.
+  let dy = path[k + 2] - path[j + 2];
+  if (dy > 180) dy -= 360;
+  if (dy < -180) dy += 360;
+  return {
+    x: path[j] + (path[k] - path[j]) * w,
+    y: path[j + 1] + (path[k + 1] - path[j + 1]) * w,
+    yaw: path[j + 2] + dy * w,
+    i,
+    last: false
+  };
+}
+
+/** Seconds of fine path this role carries, or 0 for a v1 tape. */
+export function pathEndSeconds(role) {
+  const hz = role?.pathHz || 0;
+  if (!role?.path || !hz) return 0;
+  return Math.floor(role.path.length / PATH_FIELDS) / hz;
+}
+
+/**
+ * The point on the tape nearest to `pos`, looking only at the stretch the pro
+ * had walked by `toSeconds`.
+ *
+ * This is the question that separates a follower's two failure modes. A bot
+ * near the tape but at an earlier sample than the clock's is BEHIND: it ran
+ * the pro's route slower than the pro. A bot far from every sample is OFF the
+ * path: it spawned elsewhere, detoured, or got displaced by a fight. The
+ * clock-indexed error (`pathAt` distance) cannot tell those apart, and they
+ * need opposite fixes, so the follower asks this instead.
+ *
+ * Bounded at `toSeconds` on purpose: matching against path the pro had not
+ * walked yet would let a bot skip ahead of its own schedule.
+ *
+ * @returns {{t: number, d: number, x: number, y: number, yaw: number}|null}
+ */
+export function nearestPathPoint(role, pos, { fromSeconds = 0, toSeconds } = {}) {
+  const path = role?.path;
+  const hz = role?.pathHz || 0;
+  if (!path || !hz || !path.length || !pos) return null;
+  const n = Math.floor(path.length / PATH_FIELDS);
+  const i0 = Math.max(0, Math.floor(fromSeconds * hz));
+  const i1 = Math.min(n - 1, Math.floor((Number.isFinite(toSeconds) ? toSeconds : n / hz) * hz));
+  if (i1 < i0) return null;
+  let best = -1;
+  let bestD = Infinity;
+  for (let i = i0; i <= i1; i += 1) {
+    const j = i * PATH_FIELDS;
+    const d = Math.hypot(path[j] - pos.x, path[j + 1] - pos.y);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  if (best < 0) return null;
+  const j = best * PATH_FIELDS;
+  return { t: best / hz, d: bestD, x: path[j], y: path[j + 1], yaw: path[j + 2] };
+}
+
+/**
+ * The tape-follower's steering answer: where to walk, given where the bot is
+ * and how far along the tape it has already gotten.
+ *
+ * Three rules, each of which exists because its absence was measured as a
+ * specific failure:
+ *
+ * MONOTONIC. The search starts at `cursor`, the bot's own furthest progress,
+ * never at zero. Nearest-point against the whole walked stretch resolves to
+ * the EARLIEST pass wherever a route crosses itself or lingers, which teleports
+ * the follower's notion of progress backwards and pins it near spawn. The
+ * cursor only ratchets forward.
+ *
+ * STANDS ARE SKIPPED WHEN BEHIND. A pro who stands for four seconds produces
+ * 128 colocated samples. A lagging follower that re-stands them re-enacts the
+ * pause without the reason for the pause (the pro was waiting on the clock,
+ * and the clock has moved), compounding the very lag it needs to shed. So on
+ * arrival at a stand, the cursor jumps to its end. The pause is still honoured
+ * when it should be, by the third rule:
+ *
+ * THE CLOCK IS A CAP. The target never sits past `clock`, so a caught-up bot
+ * walks the tape in the pro's own time, stands where they stood, and only a
+ * bot BEHIND schedule hurries. Early is not faithful: timing is the call.
+ *
+ * @param {object} role       with a v2 path
+ * @param {{x,y}} pos         where the bot is
+ * @param {number} cursor     furthest tape-seconds this bot has reached
+ * @param {number} clock      seconds since freeze end
+ * @returns {{target: {x,y,yaw}, cursor: number, d: number}|null}
+ */
+export function pursuitPoint(role, pos, cursor, clock, {
+  window = 8,
+  lookahead = 1.5,
+  standUnits = 48
+} = {}) {
+  const hz = role?.pathHz || 0;
+  if (!role?.path || !hz || clock < 0) return null;
+  const from = Math.max(0, cursor);
+  const near = nearestPathPoint(role, pos, {
+    fromSeconds: from,
+    toSeconds: Math.min(clock, from + window)
+  });
+  if (!near) return null;
+  let t = Math.max(from, near.t);
+  if (near.d <= standUnits) {
+    // On the route here. If the samples ahead sit on this same spot (the pro
+    // stood), advance the cursor across the run so the follower does not
+    // idle out a pause the clock has already spent.
+    const path = role.path;
+    const n = Math.floor(path.length / PATH_FIELDS);
+    const cap = Math.min(n - 1, Math.floor(clock * hz));
+    let i = Math.floor(t * hz);
+    const j0 = i * PATH_FIELDS;
+    while (i + 1 <= cap) {
+      const j = (i + 1) * PATH_FIELDS;
+      if (Math.hypot(path[j] - path[j0], path[j + 1] - path[j0 + 1]) > standUnits) break;
+      i += 1;
+    }
+    t = i / hz;
+  }
+  const at = pathAt(role, Math.min(clock, t + lookahead));
+  return { target: at || near, cursor: t, d: near.d };
+}
+
 export function waypointAt(role, seconds) {
   const w = role?.waypoints || [];
   let cur = null;

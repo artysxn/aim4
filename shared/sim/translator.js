@@ -183,7 +183,7 @@ export function createTranslator(engine, opts = {}) {
           const d = engine.state.bomb.dropped;
           const cell = graph.nearestWalkable(d.x, d.y, 16, d.level);
           if (cell) {
-            engine.setIntent(slot, { moveTo: { ...cell }, gait: 'run' });
+            engine.setIntent(slot, { moveTo: { ...cell }, gait: 'run', knife: false });
             continue;
           }
         }
@@ -205,7 +205,7 @@ export function createTranslator(engine, opts = {}) {
               const d = Math.hypot(body.pos.x - fromWorld.x, body.pos.y - fromWorld.y);
               if (d > 80) {
                 const cell = graph.nearestWalkable(fromWorld.x, fromWorld.y, 16, body.level);
-                if (cell) engine.setIntent(slot, { moveTo: { ...cell }, gait: 'run' });
+                if (cell) engine.setIntent(slot, { moveTo: { ...cell }, gait: 'run', knife: false });
                 continue;
               }
             }
@@ -227,6 +227,10 @@ export function createTranslator(engine, opts = {}) {
         const preAim = intent.combat?.preAim ? graph.anchor(intent.combat.preAim) : null;
         engine.setIntent(slot, {
           holdFire: posture === 'avoid',
+          // Off unless this frame's move re-asks: setIntent merges, and a
+          // knife left out by a stale flag is a bot that forgot it is holding
+          // a knife.
+          knife: false,
           yaw: preAim && !body.focusVisible ? bearingTo(body, preAim.world) : null
         });
 
@@ -235,6 +239,38 @@ export function createTranslator(engine, opts = {}) {
           case 'stop':
             engine.setIntent(slot, { moveTo: null, chase: false });
             break;
+
+          // v2 tape following: steer at the pro's actual position, not at a
+          // landmark near it. `point` is a world coordinate, resolved to the
+          // nearest walkable cell so the engine's pathing still owns collision
+          // and the follower cannot be pushed inside geometry by a sample
+          // taken on a ledge the nav graph does not have.
+          case 'trace': {
+            const pt = move.point;
+            if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) {
+              engine.setIntent(slot, { moveTo: null });
+              break;
+            }
+            const d = Math.hypot(pt.x - body.pos.x, pt.y - body.pos.y);
+            const cell = graph.nearestWalkable(pt.x, pt.y, 16, body.level);
+            engine.setIntent(slot, {
+              // Inside a body's width of the sample, stand: a follower that
+              // keeps re-pathing to a point it is already on jitters in place,
+              // which reads as the back-and-forth shuffle.
+              moveTo: d > 32 && cell ? cell : null,
+              chase: false,
+              gait: move.gait || 'run',
+              // Knife out on request: the engine owns the mechanics (speed,
+              // the draw delay when the gun must come back), the bot layer
+              // owns the judgment of when the map is safe enough to ask.
+              knife: Boolean(move.knife),
+              // The pro's own view angle, when the tape carries one. This is
+              // the half that turns "hold one spot forever" into a bot that
+              // checks the angles a human checked.
+              ...(Number.isFinite(move.yaw) ? { yaw: move.yaw } : {})
+            });
+            break;
+          }
 
           case 'advance':
           case 'rotate': {

@@ -38,7 +38,7 @@ other. They are not the same thing.
 | You see               | What it is                                    | Not                                                           |
 | --------------------- | --------------------------------------------- | ------------------------------------------------------------- |
 | **§4, §6.2, §18.6b**  | Chapters of the spec. Where a rule is written | The order you build in                                        |
-| **0.1 … 0.8**         | Changelog of briefs that *changed* the spec   | Steps. Skip them unless you need the argument                 |
+| **0.1 … 0.9**         | Changelog of briefs that *changed* the spec   | Steps. Skip them unless you need the argument                 |
 | **P0 … P8, P3b, P5e** | Retired phase names                           | Use the IDs in [§15](#15-build-order-and-acceptance-criteria) |
 
 
@@ -84,6 +84,7 @@ against current game files or the wiki at implementation time, then freeze it in
 - [18. Experience: what a team carries between rounds](#18-experience-what-a-team-carries-between-rounds)
 - [19. Visualization: the tier-1 faculty](#19-visualization-the-tier-1-faculty)
 - [20. The doctrine layer: Counter-Strike 101 as an architecture](#20-the-doctrine-layer-counter-strike-101-as-an-architecture)
+- [21. The WHY layer: supervised beliefs, graded reasons, and the human loop](#21-the-why-layer-supervised-beliefs-graded-reasons-and-the-human-loop)
 
 ---
 
@@ -417,6 +418,50 @@ Two corrections:
 2. **9.14's belief-value head was labelled with round outcome.** A binary per
   round is 24 samples a match. `pWin_true` at every logged decision is a dense
    float. That is the label. Round W/L remains the RL return (9.5).
+
+### 0.9 Brief 10: the WHY is supervised, and humans grade the reasons
+
+Created chapter **21** and build IDs **4.5**, **6.6**, **6.7**, **9.7**, **9.8**.
+The brief asked three questions and proposed one machine. Should training be
+pure self-play for a lot of generations, or guided by the 3,100+ pro demos?
+Should there be custom exams, such as T-side full buys against a named team's
+scraped CT rounds until a winrate bar is held? And should the bots first learn
+the WHY of pro decisions ("Ts push B because CTs pushed A; Ts choose B because
+they estimated 1 on B"), graded through an interface where a human watches a
+decision, reads the bot's proposed reason, and corrects it?
+
+
+| #   | Requirement (tenth brief)                                                             | Sections               |
+| --- | -------------------------------------------------------------------------------------- | ---------------------- |
+| U1  | Self-play versus demo-guided: settle it                                                | 21.1, 17.3, 17.4, 9.12 |
+| U2  | Custom exams built from scraped pro rounds                                             | 21.8                   |
+| U3  | Learn the WHY first: predictive assumptions behind mid-round decisions                 | 21.1, 21.2             |
+| U4  | A machine-to-human interface where a viewer grades the bot's reasons and it re-trains | 21.3, 21.5, 21.6       |
+| U5  | A large registry of action types and decision types, each connected to its reasons    | 21.4                   |
+
+
+U1 is settled by the prior art we already imported: AlphaStar's supervised
+policy alone reached the top 16% of humans before any RL, and OpenAI Five's
+demo-free alternative cost 180 years of gameplay per day for ten months (17.3,
+17.4). At our compute, and under a humanized aim cap that makes pro play the
+closest existing thing to the optimal policy, the demos are the backbone and RL
+is the refinement. That was already this plan's shape; the brief confirms it.
+
+Three corrections, found while writing the chapter:
+
+1. **The winrate bar in U2 was unmeasurable as stated.** "50.1%+ over 100
+  consecutive rounds" is inside the noise: 100 rounds carries a ±10-point
+   interval, and a sliding window of consecutive rounds crosses any bar by
+   luck eventually. The gate becomes a Wilson lower bound over a pre-declared
+   N, the same machinery admission already uses (21.8).
+2. **A scraped round cannot react.** Playing against a named team's recorded
+  rounds fails the moment the sim diverges from the demo, which our own tape
+   follower demonstrates every match. Scraped rounds are demoted from
+   opponents to initial conditions: real setups, live bots (21.8).
+3. **An explanation head would be graded fiction.** If the "proposed reason"
+  is generated separately from the decision, the human corrects a narrator
+   while the policy learns nothing. The reason shown must be the computation
+   that decided (21.3), which the priced-desire architecture already provides.
 
 ---
 
@@ -4785,6 +4830,7 @@ Each ID lands with tests on the `npm test` chain, house-style.
 | **4.3a** | Hivemind librarian: playbook, softmax tape, `shouldRecall`, postures                                                                        | §6.2, §9.25 stage 0     | now    | 5v5 behind keeps; default 5v4 walks; VP 5v4 freezes                                 |
 | **4.3b** | Score tapes with the value head; IGL JSONL; playstyle net last                                                                              | §9.25 stages 1–4        | now    | `strategyCall` is a prior; playstyle JSON ≠ `bc0`                                   |
 | **4.4**  | Inspector: ghost tape, interrupt log, Memory tab, save/rewatch                                                                              | §11, §18.9              | now    | pause a mimic match, read why the call changed, rewatch                             |
+| **4.5**  | WHY heads: demo-supervised belief targets (occupancy, count, enemy call, intent)                                                            | §21.2                   | later  | E17 beats the marginal filter on held-out demos; call head clears its table floor   |
 | **5.0**  | RL: MAPPO, team spirit, league, aux heads, gen1 gates                                                                                       | §9.4–9.12               | later  | gen1 admitted; Elo vs parent stored                                                 |
 | **5.1**  | Curriculum every map, PBT, behaviour archive, tablebase                                                                                     | §9.7, §9.21–9.22, §18.7 | later  | per-map gates; archive occupied; E2 regret falls                                    |
 | **6.0**  | Branch: serializable round snapshot + seed                                                                                                  | §11.5                   | later  | three calls from one freeze differ only in the decision                             |
@@ -4793,6 +4839,8 @@ Each ID lands with tests on the `npm test` chain, house-style.
 | **6.3**  | Inspector remainder: angles, price, awareness, bandit, activity, shape, space, ribbon, contract, cores, learned timeline, post-round review | §11.3                   | later  | every 11.3 row is on the page                                                       |
 | **6.4**  | Generation browser, Elo curves, eval reports, match archive, A/B, aim-gate dash                                                             | §11.4                   | later  | every number links a watchable sim round                                            |
 | **6.5**  | Registry and archive roster in the setup panel                                                                                              | §9.9, §9.22             | later  | pick gen12 vs gen8, or an aggressive low-util cell                                  |
+| **6.6**  | Decision records: every priced decision as a typed, gradeable row                                                                           | §21.3, §21.4            | later  | the inspector can show the factors behind any decision in any round                 |
+| **6.7**  | Review queue: shadow mode over pro rounds, factor verdicts, correction store                                                                | §21.5                   | later  | a correction names a subsystem, not a feeling; queue ranked by disagreement         |
 | **7.0**  | Admission job: gates 1–15 as one pipeline, writes the registry                                                                              | §9.8, §9.24             | later  | a checkpoint becomes gen N or the fail names the gate                               |
 | **7.1**  | Three populations, PFSP, exploiter reset, exploitability gate                                                                               | §9.12                   | later  | exploiters never shipped; fresh exploiter WR in the manifest                        |
 | **7.2**  | `z` conditioning in train, and as the setup-panel starting command                                                                          | §9.11                   | later  | entropy gate uses library `z`; "run it like Spirit" is a vector                     |
@@ -4823,6 +4871,8 @@ Each ID lands with tests on the `npm test` chain, house-style.
 | **9.4**  | One smoke duration; write `FLAG_PLANTING`                                                                                                   | §1.1                    | later  | 18 vs 22 is gone; ticks are honest                                                  |
 | **9.5**  | Firewall: `synthetic: true`, scripts refuse `sim/`                                                                                          | §12.1                   | later  | a CI test tries to ingest a sim round and is rejected                               |
 | **9.6**  | Remaining APIs: mimic-rounds, bake, models, match config with memory hash                                                                   | §12.2–12.3              | later  | 404 on deny; a reproduction loads the same memory                                   |
+| **9.7**  | Grader model over decision records; corrections routed to their subsystems                                                                  | §21.6                   | later  | grader agreement audited on holdout; labels firewalled like human calls             |
+| **9.8**  | E16 scraped-setup exams and E17 belief exam, Wilson-bound pass gates                                                                        | §21.8                   | later  | N pre-declared; no sliding windows; E16 setups reproducible by id                   |
 | **10.0** | Mimic layers 1–3 in the UI                                                                                                                  | §10.3                   | later  | pick a team, random-matching 24 rounds, tape until interrupt                        |
 | **10.1** | Layer 4 habit mining with sample-size fallback                                                                                              | §10.3                   | later  | clearing order, peek, pre-aim, trigger, util, lurk; UI shows `n`                    |
 | **10.2** | Command validator as BC, RL, and CI metric                                                                                                  | §10.1                   | later  | ≥70% tag when commanded, fair until the first team interrupt                        |
@@ -4866,6 +4916,9 @@ that 2.2's "done when" did not cover.
 attach to the admission job. Honesty is a pipeline, not a paragraph.
 - **10 after 6 and 3.** Mimicry is the 2D product. It needs the page, the tape
 follower, and the BC embedding. It does not need a CS2 server.
+- **4.5 before 6.7.** Free supervision before human hours. The reviewer's time
+is the scarcest resource in the whole program, so it corrects a belief that
+already mostly works instead of hand-teaching one from zero.
 - **11.0 last.** If a v1 2D sentence in this file still has no ID, it belongs
 in 6–10, not in a new major.
 
@@ -7239,6 +7292,291 @@ E15 is deliberately the machine version of the exam the document itself links on
 every page. If a human is graded on this material, a generation can be graded on
 it too, and the two grades are comparable, which is the most direct possible
 answer to whether the bots have learned what the document teaches.
+
+---
+
+## 21. The WHY layer: supervised beliefs, graded reasons, and the human loop
+
+### 21.1 The claim: most WHYs have free ground truth
+
+"Ts push B because CTs pushed A. Ts choose B over A because they estimated only
+1 player on B." Read that sentence as an engineer and it decomposes into two
+different kinds of statement. *"They estimated 1 on B"* is a claim about a
+belief, and *"so they chose B"* is a claim about a policy over beliefs. The
+policy half is what imitation already learns. The belief half is the part no
+amount of action-cloning teaches, because the demo shows what a pro did and
+never what he thought.
+
+Except that it does, indirectly, at scale. At the moment of any decision in any
+of the 3,122 demos, the *actual* enemy positions are in the tick data. The
+decision-maker's information set at that moment is reconstructible: which
+enemies his team has seen, which deaths are known, what utility has been heard,
+how much time has passed since a zone was last swept. So "how many enemies are
+on B, given what the T side knew at 1:12" is not a hand-label. It is a
+**supervised learning target with ground truth attached**, available at every
+decision point of every round in the library, and the model that predicts it is
+learning exactly the thing the sentence above calls an estimate.
+
+This is the load-bearing observation of the chapter, and it dictates the order
+of everything in it: **the WHY splits into a part that is free and a part that
+is expensive, and the free part is trained first.** Belief content (occupancy,
+counts, timing, the opponent's likely call) is supervised from demos with no
+human in the loop. What remains genuinely expensive is judgment: whether
+checking left before right was correct, whether pushing the smoke beat turning
+back, whether the estimate *should* have been acted on. That is where the human
+goes (21.5), and only there.
+
+The relationship to 0.8 matters and is easy to misread. Brief 9 built the
+residual between `pWin_belief` and `pWin_true`: a signal that says *how wrong
+the picture was* after the fact. This chapter trains *the picture's content*
+directly. The residual is a thermometer; the WHY heads are the medicine. They
+share infrastructure (the same logged decision points, the same god-view
+grading pass) and answer different questions.
+
+### 21.2 The WHY heads (build 4.5)
+
+Concrete targets, minable from the corpus today at decision cadence (every 8
+ticks, matching `DECISION_EVERY_TICKS`), each conditioned on the acting side's
+reconstructed information set and each checkable against the demo's own future:
+
+
+| Head           | Predicts                                                              | Ground truth from                       | Used by                            |
+| -------------- | --------------------------------------------------------------------- | --------------------------------------- | ---------------------------------- |
+| `occupancy`    | Count distribution per named zone (0, 1, 2, 3+)                       | Actual positions at that tick           | Belief (19.2), arbiter pricing     |
+| `nextContact`  | Seconds until the next damage event, and its zone                     | The round's own timeline                | Peek/hold pricing, VOI (19.4)      |
+| `enemyCall`    | The opponent's current call label                                     | The other half of the same demo         | Caller freeze features, re-call    |
+| `intent`       | Per known enemy: push / hold / rotate / lurk over the next 5 s        | Their actual movement in the next 5 s   | Threat typing (19.3), watch order  |
+
+
+Three notes that keep this honest:
+
+1. **These are the 9.14 aux heads, arriving early.** 9.14 planned them as RL
+  auxiliaries that shape the torso during self-play. Nothing about them
+   requires RL: the supervised versions train now on the library, and when 5.0
+   arrives the same heads keep training on rollouts. The plan's order was an
+   artifact of when compute arrives, not of any dependency.
+2. **This is the call head's missing food.** The cross-map IGL call head sits
+  at 0.407 against a 0.399 table floor because at freeze nearly every row
+   looks identical: the features cannot see the story that distinguishes one
+   pistol round from another. `enemyCall` predictions, the previous round's
+   outcome and attribution, and the opponent-tendency read (18.8) are freeze
+   features that actually vary. The call head does not need more rows; it
+   needs these columns.
+3. **The firewall applies** (12.1). WHY heads train on demo-derived data and on
+  synthetic rounds kept strictly apart. A sim round's occupancy target comes
+   from the sim's own god view and is marked synthetic like everything else it
+   produces.
+
+The training pass reuses the K1 extractor's reconstruction of the information
+set. The extraction defect found in the fidelity work (the sticky `dead` flag
+that truncated 2.4% of player-rounds) is fixed in the same pass, because these
+heads are only as good as the information sets they condition on.
+
+### 21.3 A decision already carries its reasons
+
+The grading loop's central design risk is confabulation. If the "proposed
+reason" a human grades is produced by an explanation head, separate from the
+machinery that decided, then the human spends scarce hours correcting a
+narrator while the policy underneath learns nothing. RLHF on chat models
+tolerates this because the narration *is* the product. Here the decision is the
+product, so the reason shown must be **the computation that decided**, or the
+whole loop is theater.
+
+This architecture can promise that, and most cannot. A desireBot decision is a
+priced comparison: each candidate option arrives at the arbiter with explicit
+inputs (belief mass in the relevant zones, knowledge-table value, experience
+prior with its sample size, tape instruction if one is live, doctrine mask,
+surprise budget) and the winner won on numbers that were all observable at the
+moment of choice. The motive log already records a prose shadow of this. Build
+**6.6** replaces prose with a typed **decision record**:
+
+```
+{
+  id, matchId, round, tick, slot, family,      // where and what kind
+  belief: <digest>,                            // the picture at that moment
+  chosen: { option, params },
+  rejected: [ { option, params, margin } ],    // top-k, nearest first
+  factors: {                                   // per option, the actual inputs
+    beliefMass, knowledgeValue, experiencePrior: {v, n},
+    tapeInstruction, doctrineMask, surprise, price
+  },
+  outcome: <filled by roundEnd>                // what happened after
+}
+```
+
+The record is complete when the decision can be *re-priced from the record
+alone* and produce the same winner. That property is the test suite's job to
+hold, and it is what makes a correction actionable: a graded record points at a
+factor, and a factor points at the subsystem that produced it.
+
+### 21.4 The taxonomy: what counts as a decision (build 6.6)
+
+The brief asks for "a FUCKTON of different actions and a FUCKTON of types of
+decisions." The instinct is right and the implementation must resist inventing
+a parallel vocabulary: **the taxonomy is the arbiter's own option set,
+enumerated**, plus the caller's decisions above it and the reflex layer below
+it. If a new option lands in `options.js`, it is a new decision family by
+construction, with its factor vector already defined, and the taxonomy cannot
+drift from the code because it is generated from the code.
+
+The families, by layer, with the question a grader is actually answering:
+
+
+| Layer      | Family                        | Decided by                       | The gradeable question                                     |
+| ---------- | ----------------------------- | -------------------------------- | ---------------------------------------------------------- |
+| Crosshair  | Watch set and scan order      | `watchAngles` / `threatOf` (B)   | Was left before right correct, given the believed threat?  |
+| Crosshair  | Pre-aim on movement           | Trace yaw / option preAim        | Looking where a pro would look on this path?               |
+| Body       | Peek vs hold vs re-peek       | Option arbiter                   | Did the price of information justify the exposure?         |
+| Body       | Push smoke vs turn back       | Arbiter + surprise budget        | Was the surprise spent at a moment it could pay?           |
+| Body       | Trade positioning             | Shape / protocol                 | Close enough to trade, far enough to survive the opener?   |
+| Route      | Advance line and pace         | Trace / waypoints / translator   | The pro's line at the pro's pace, or a reasoned deviation? |
+| Utility    | Throw now vs hold it          | Tape schedule / arbiter          | Was the smoke worth more later?                            |
+| Team       | Rotate vs hold on contact     | Caller + `occupancy`             | Was the read on the other site right, and acted on in time? |
+| Team       | Execute vs delay vs turnaround| Caller (`matchSituation`)        | Did the situation match the tape that was picked?          |
+| Team       | Re-call vs ride the chaos     | Caller (`shouldRecall`)          | Was the tape dead, or merely uncomfortable?                |
+| Team       | Save vs force                 | Economy layer                    | Priced against the next two rounds, not this one?          |
+| Discipline | Refusal of an order           | Orders (6.1)                     | Was the refusal's price honest?                            |
+
+
+Every row exists in code today except the grading column. That is the point:
+6.6 is instrumentation, not invention.
+
+### 21.5 The review queue (build 6.7)
+
+The interface the brief describes, built on the two viewers that already exist
+(the replay viewer and the sim inspector), in two modes that share one grading
+surface:
+
+**Shadow mode, over pro rounds.** The viewer plays a section of a real round.
+At each extracted decision point it freezes. The bot policy runs on the
+reconstructed information set of the player whose decision it was, and the
+panel shows three things side by side: what the pro actually did, what the bot
+would have done, and the bot's factor breakdown (21.3). The human grades:
+*match* (bot agrees with the pro), *acceptable* (different but defensible), or
+*wrong*, and when wrong, **names the factor**: the belief was wrong (it
+estimated 2 on B and the evidence available said 1), the price was wrong (right
+belief, wrong weighting), or the option was never considered (arbiter coverage
+hole). Every pro decision the bot disagrees with is a free candidate for the
+queue, which is 7.5's disagreement queue generalized from search-vs-policy to
+pro-vs-policy.
+
+**Own-play mode, over sim rounds.** The same surface over the bot's own
+decision records from any watched match. This is where "why did he check left"
+gets asked of an actual sim round and answered from the actual record, and
+where the operator's running complaints about bot behaviour become labeled
+data instead of prose in a chat log.
+
+Queue discipline, because grading hours are the budget: ranked by disagreement
+severity times situation frequency, deduplicated by situation key (18.2), and
+seeded from exam failures (a failed E-exam names a scenario; the queue pulls
+its decision points first). The target is that an hour of grading touches the
+hundred most informative decisions the system produced that week, not a random
+walk through 65,000 tapes.
+
+### 21.6 Corrections route by factor, and the grader learns to generalize (build 9.7)
+
+A verdict-only label ("wrong") trains a discriminator at best. The factor label
+is what makes the loop converge, because each factor has an owner:
+
+
+| Factor named        | Routed to                                                        |
+| ------------------- | ---------------------------------------------------------------- |
+| Belief wrong        | 4.5 WHY heads: the record's information set becomes a training row with the human-attested target |
+| Price wrong         | Knowledge tables / value head: the record joins its calibration set |
+| Never considered    | A bug, not a label. Arbiter coverage issue, filed as code work   |
+| Tape mismatched     | Playbook matcher: the situation key that picked it is the sample |
+
+
+Scale is the reason for the grader model. One human cannot label the tail, so
+human verdicts train a grader over decision records (inputs: the record, the
+factors, the outcome; output: the human's verdict distribution), and the
+grader labels what the human never sees. The human's ongoing job shifts from
+labeling everything to **auditing the grader**: spot-checks on a holdout, with
+the agreement rate published per generation. A grader whose agreement decays
+is retired, exactly like a generation that fails a gate. Labels are firewalled
+like human calls (6.1, 12.1): they train the grader and the named subsystem,
+and they never masquerade as pro data in a BC tape.
+
+### 21.7 The scarcity ledger: where human time goes
+
+Every signal in the program, by cost, and the rule that follows from the table:
+
+
+| Signal                       | Cost      | Teaches                                        |
+| ---------------------------- | --------- | ---------------------------------------------- |
+| Round outcomes               | Free      | Duels, trades, whether a plan cashed out       |
+| Demo actions (BC)            | Free      | Positioning, routes, timing, utility           |
+| WHY-head targets (21.2)      | Free      | Belief content: occupancy, counts, intent      |
+| PRW residual (18.6b)         | Free      | How miscalibrated the picture was              |
+| Exam scores (9.19)           | Cheap     | Which competency regressed                     |
+| Human factor verdicts (21.5) | Precious  | Judgment: the WHY of acting on the picture     |
+
+
+The rule: **a human hour is spent only where every row above it is silent.**
+Whether to check left or right first, given a correct belief, is a judgment
+question; the rows above are silent on it; it goes to the queue. Whether there
+were two on B is not a judgment question, and a human who spends an hour
+correcting occupancy estimates is doing 4.5's job by hand at a thousand times
+the cost.
+
+### 21.8 Exams from scraped setups, and honest statistics (build 9.8)
+
+The brief's exam: T-side full buy against full buy, defending side drawn at
+random from a named team's real CT rounds, until the T side holds a winrate
+bar. Two things in it survive contact with what we know; two do not.
+
+**What does not survive.** A scraped round used as an *opponent* cannot react.
+The recorded CTs walk their schedule into a world that diverged from their
+demo at first contact, and a T side trained against ghosts learns to farm
+non-reaction, which is worse than useless: it is confidently wrong. Our own
+tape follower is the existence proof, it is the same mechanism. And the bar
+"50.1%+ over 100 consecutive rounds" is unmeasurable: at N=100 the 95%
+interval spans ±10 points, so the observed number says nothing about 50.1
+versus 49.9, and a *sliding* window of consecutive rounds is guaranteed to
+cross any fixed bar eventually by luck alone. A gate that can be passed by
+patience is not a gate.
+
+**What survives, upgraded.** The scraped rounds become **initial conditions**:
+positions at the settle moment (the miner's `SETUP_SECONDS` boundary), economy,
+utility held, and the defending side's *tendencies* (18.8 opponent scopes, and
+the mimic layers of §10.3) rather than their literal schedule. Live bots play
+both sides from there. The exam then measures the thing the brief actually
+wanted measured: can this generation crack a named team's real setups, played
+by an opponent that fights back. And the bar becomes the admission machinery's
+own statistics: **N declared before the run, pass = Wilson lower bound of the
+win rate > 0.5 at that N.** At N=400 that means observing roughly 55%, which
+is the honest version of "meaningfully better than a coin flip." No sliding
+windows, no stopping early on a good streak, and the same paired-seed
+discipline as the Elo gate (both sides play the same seeds, swapped).
+
+Two exams join 9.19:
+
+
+| Exam                   | Setup                                                                          | Scored on                                              | Pass band from                          |
+| ---------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------ | --------------------------------------- |
+| **E16 Named setups**   | Scraped setups from one team: positions at settle, econ, utility, tendencies   | Win rate vs a live defending side, Wilson LB over pre-declared N | > 0.5 LB; setups reproducible by id     |
+| **E17 The estimate**   | Held-out demo decision points; predict occupancy, counts, next contact         | Accuracy and calibration vs the demo's actual state    | Must beat the marginal filter (19.2)    |
+
+
+E17 is the WHY layer's own gate, and it is deliberately the cheapest exam in
+the battery: no rounds are played at all. A generation whose E17 regresses has
+a worse picture of the game than its parent, whatever its Elo did, and the
+plan's position is that such a generation is not an improvement, it is a
+gambler on a streak.
+
+### 21.9 Order of operations
+
+4.5 first, because it is free and everything else in the chapter consumes its
+output. 6.6 next, because records must exist before anything grades them, and
+the inspector gets its factor view in the same stroke. 6.7 when there is a
+human hour to spend and a queue worth spending it on. 9.7 only after 6.7 has
+produced enough verdicts to audit a grader against. 9.8's E17 can land with
+4.5 (they are the same evaluation run twice); E16 lands with the admission
+machinery it borrows.
+
+The order encodes the chapter's one conviction: teach the picture from the
+demos, show the reasons the machine already has, and save the human for the
+judgment calls no dataset contains.
 
 ---
 

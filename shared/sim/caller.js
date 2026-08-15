@@ -31,8 +31,11 @@ import {
   closeMatches,
   dueUtility,
   matchSituation,
+  nearestPathPoint,
   nextWaypointAt,
   openingCandidates,
+  pathAt,
+  pursuitPoint,
   pickCall,
   pickRound,
   tapeEndSeconds,
@@ -335,7 +338,15 @@ export function createCaller({
   posture = 'default',
   compare = null,
   pick = null,
-  model = null
+  model = null,
+  /**
+   * Where each slot's body stands right now, for tape-role placement. A tape
+   * that starts across the spawn zone from the bot it lands on opens with a
+   * gap the follower can never close (equal speeds carry a starting error the
+   * whole round), so leftover roles go to the nearest feet. Optional: without
+   * it, assignment is by file order, as before.
+   */
+  posOf = null
 }) {
   // The situation's tabular read, refreshed by the bot each team frame: the
   // head is a function the caller is handed, which is what lets stage 4 swap
@@ -386,7 +397,7 @@ export function createCaller({
     teamMode = CALLER_MODE.TAPE;
     call = entry.call || call;
     plannedSite = entry.plant?.site || plannedSite;
-    roles = assignRoles(slots, entry, contractOf, { awpOf });
+    roles = assignRoles(slots, entry, contractOf, { awpOf, posOf });
     tapeEnd = 0;
     for (const role of roles.values()) {
       tapeEnd = Math.max(tapeEnd, tapeEndSeconds(role));
@@ -818,6 +829,32 @@ export function createCaller({
     },
     due(slot, seconds) {
       return dueUtility(roles.get(slot), seconds, thrownSet(slot));
+    },
+
+    /**
+     * Where the pro this slot is copying actually stood, and looked, now.
+     * Null on a v1 tape, which is what makes the follower fall back to
+     * anchor waypoints rather than stopping.
+     */
+    traceAt(slot, seconds) {
+      return pathAt(roles.get(slot), seconds);
+    },
+
+    /**
+     * Where this bot stands relative to its tape: the nearest point on the
+     * stretch the pro had walked by `seconds`. The follower uses it to tell
+     * "behind schedule" from "off the path", which need opposite responses.
+     */
+    tapeFix(slot, pos, seconds) {
+      return nearestPathPoint(roles.get(slot), pos, { toSeconds: seconds });
+    },
+
+    /**
+     * The follower's steering answer: monotonic progress along the tape,
+     * stands skipped when behind, clock as the cap. See pursuitPoint.
+     */
+    pursue(slot, pos, cursor, clock) {
+      return pursuitPoint(roles.get(slot), pos, cursor, clock);
     }
   };
 }

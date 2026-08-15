@@ -29,6 +29,7 @@ import { promisify } from 'node:util';
 
 import { ROOT as REPLAY_ROOT } from '../replays/demoStore.js';
 import { indexPlaybook } from '../../shared/sim/playbook.js';
+import { openPlaybookFile } from './playbookStore.js';
 import { loadKnowledge } from '../../shared/sim/knowledgeBake.js';
 import { recordBake } from '../perf.js';
 
@@ -97,24 +98,26 @@ export async function loadPlaybook(map) {
   for (const c of candidates) {
     try {
       const t0 = process.hrtime.bigint();
-      const text = await fsp.readFile(c.file, 'utf8');
-      const entries = [];
-      for (const line of text.split('\n')) {
-        if (!line.trim()) continue;
-        const e = JSON.parse(line);
-        if (e?.roles) entries.push(e);
-      }
-      const out = { index: indexPlaybook(entries), source: c.source, size: entries.length };
-      // A tape file is tens of megabytes and every line of it is parsed. The
-      // cost lands on one request and is then cached out of sight, so it is
-      // recorded here or it is never seen again.
+      const bytes = (await fsp.stat(c.file)).size;
+      // Never readFile this one. A v2 tape file is gigabytes; see
+      // playbookStore.js for why the coordinates stay on disk.
+      const { entries, hydrate, scanned } = await openPlaybookFile(c.file);
+      const index = indexPlaybook(entries);
+      // The picker returns an entry; this is what puts the pro's coordinates
+      // on it. Absent in the browser, where the tapes are landmarks only and
+      // pathAt correctly answers null.
+      index.hydrate = hydrate;
+      const out = { index, source: c.source, size: entries.length };
+      // A tape file is read once and cached out of sight, so its cost lands
+      // on one request and then vanishes -- recorded here or never seen.
       recordBake({
         kind: 'playbook',
         map,
-        bytes: Buffer.byteLength(text),
+        bytes,
         parseMs: Number(process.hrtime.bigint() - t0) / 1e6,
         source: c.source,
-        entries: entries.length
+        entries: entries.length,
+        note: scanned ? 'built meta sidecar' : 'meta sidecar'
       });
       cache.set(key, out);
       return out;
