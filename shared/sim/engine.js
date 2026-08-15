@@ -1079,6 +1079,11 @@ export function createEngine(cfg) {
       if (body.level !== graph.levelFor(state.bomb.z)) return false;
       const d = Math.hypot(body.pos.x - state.bomb.x, body.pos.y - state.bomb.y);
       if (d > DEFUSE_RADIUS) return false;
+      // One wire, one pair of hands: the bomb is a single use entity, so a
+      // second CT asking while anyone is on it is refused, like the game.
+      // One defuses, the rest cover — the refusal is what makes covering the
+      // only thing left for them to do.
+      if (bodies.some((b) => b.alive && b.channel === 'defusing')) return false;
       body.channel = 'defusing';
       body.channelUntil =
         state.tick + ticksFor(body.hasKit ? DEFUSE_SECONDS_KIT : DEFUSE_SECONDS);

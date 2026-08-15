@@ -38,7 +38,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 /** Bump when the sidecar's shape changes; a mismatch rebuilds it. */
-export const META_VERSION = 1;
+export const META_VERSION = 2;
 
 /** Bytes per read while scanning. Big enough that syscalls stop mattering. */
 const CHUNK = 1 << 22;
@@ -76,17 +76,29 @@ const NL = 0x0a;
 function stripPaths(line) {
   const KEY = '"path":[';
   let i = line.indexOf(KEY);
-  if (i < 0) return line;
+  if (i < 0) return { line, samples: null };
   let out = '';
   let from = 0;
+  // Sample count per stripped path, in occurrence order — which is role
+  // order, because every v2 role serialises its own path key. The light
+  // entry keeps the LENGTH of what was cut so tapeEndSeconds can price a
+  // tape's reach without hydrating it.
+  const samples = [];
   while (i >= 0) {
     const end = line.indexOf(']', i + KEY.length);
     if (end < 0) break;
+    const inner = line.slice(i + KEY.length, end);
+    let values = 0;
+    if (inner.length) {
+      values = 1;
+      for (let c = inner.indexOf(','); c >= 0; c = inner.indexOf(',', c + 1)) values += 1;
+    }
+    samples.push(Math.floor(values / 3));
     out += `${line.slice(from, i)}"path":null`;
     from = end + 1;
     i = line.indexOf(KEY, from);
   }
-  return out + line.slice(from);
+  return { line: out + line.slice(from), samples };
 }
 
 function metaPathFor(file) {
@@ -152,8 +164,20 @@ export async function buildMeta(file, onProgress = null) {
           // stray \r inside the record. The offset and length stay measured
           // against the RAW bytes: that is what hydration seeks to, and
           // JSON.parse tolerates the trailing whitespace on the way back.
-          const e = JSON.parse(stripPaths(chunk.toString('utf8', from, nl).trimEnd()));
+          const stripped = stripPaths(chunk.toString('utf8', from, nl).trimEnd());
+          const e = JSON.parse(stripped.line);
           if (e?.roles) {
+            // The reach of the cut path, in seconds, stamped per role: the
+            // matcher prices "does this tape still have anything to say at
+            // this clock" from the light entry alone (tapeEndSeconds).
+            if (stripped.samples) {
+              for (let r = 0; r < e.roles.length && r < stripped.samples.length; r += 1) {
+                const hz = e.roles[r]?.pathHz;
+                if (hz > 0 && stripped.samples[r] > 0) {
+                  e.roles[r].pathSeconds = Math.round(stripped.samples[r] / hz);
+                }
+              }
+            }
             e._at = [off, len];
             entries.push(e);
             // Re-serialised rather than spliced. Appending the offset by

@@ -32,7 +32,8 @@ function role(contract, extra = {}) {
       [0, 't_spawn'],
       [8, contract]
     ],
-    utility: extra.utility || []
+    utility: extra.utility || [],
+    ...(extra.pathSeconds ? { pathSeconds: extra.pathSeconds } : {})
   };
 }
 
@@ -69,7 +70,21 @@ const index = indexPlaybook([
   entry('behind-late', {
     call: 'default',
     firstContact: { t: 90, rel: 'behind' },
-    plant: null
+    plant: null,
+    // A tape whose contact came at 90 s had a pro alive at 90 s: its reach
+    // has to say so, or the join filter (rightly) refuses it at a late clock.
+    roles: [
+      role('banana', {
+        waypoints: [
+          [0, 't_spawn'],
+          [95, 'banana']
+        ]
+      }),
+      role('apps'),
+      role('mid', { awp: true }),
+      role('arch'),
+      role('library')
+    ]
   })
 ]);
 
@@ -181,6 +196,59 @@ const index = indexPlaybook([
   // same as matchSituation returning null rather than a bad tape.
   const far = closeMatches(index, { side: 'T', clock: 50, contactRel: 'site', call: 'default' });
   assert(far.length === 0, 'and past the cutoff there is no shortlist at all, same as matchSituation');
+}
+
+// ---- a re-call cannot join a tape that is already over ---------------------
+
+{
+  // Two tapes with the same opening shape; one's pro died at 20 s, the other
+  // holds to 85 s (a defensive tape: last waypoint early, path long — the
+  // sidecar's pathSeconds stamp carries the reach). At a 60 s join clock the
+  // spent tape is not an answer, however well its shape matches.
+  const joinIndex = indexPlaybook([
+    entry('died-early', {
+      firstContact: { t: 55, rel: 'front' },
+      plant: null,
+      roles: [
+        role('banana', {
+          waypoints: [
+            [0, 't_spawn'],
+            [20, 'banana']
+          ]
+        })
+      ]
+    }),
+    entry('held-long', {
+      firstContact: { t: 55, rel: 'front' },
+      plant: null,
+      roles: [
+        role('banana', {
+          waypoints: [
+            [0, 't_spawn'],
+            [12, 'banana']
+          ],
+          pathSeconds: 85
+        })
+      ]
+    })
+  ]);
+  for (let seed = 1; seed <= 20; seed += 1) {
+    const hit = matchSituation(joinIndex, {
+      side: 'T',
+      clock: 60,
+      alive: 4,
+      enemyAlive: 4,
+      contactRel: 'front',
+      call: 'default',
+      rng: new Rng(seed)
+    });
+    assert(hit, 'a tape with reach at the join clock is offered');
+    assert(hit.entry.id === 'held-long', `and never the spent one (${hit.entry.id})`);
+  }
+  assert(
+    tapeEndSeconds(role('banana', { pathSeconds: 85 })) === 85,
+    'the sidecar stamp is the reach when it outlives the schedule'
+  );
 }
 
 {

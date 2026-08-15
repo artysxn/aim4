@@ -284,6 +284,14 @@ function scoreMatches(index, { side, clock, contactRel, call } = {}) {
   for (const e of pool) {
     const fc = e.firstContact;
     if (!fc) continue;
+    // A re-call joins the tape AT THE CURRENT CLOCK, so a tape whose whole
+    // reach is already over by now — the pro died early, or the round was
+    // short — has nothing to say: every follower would land past tapeEnd on
+    // arrival and freestyle anyway. tapeEndSeconds reads the light entry
+    // (waypoints, utility, the sidecar's pathSeconds stamp) so this needs no
+    // hydration. The margin matches the follower's own grace (caller.js
+    // TAPE_GRACE_SECONDS).
+    if (Number.isFinite(clock) && clock > reachEnd(e) + 10) continue;
     let d = 0;
     // The shape of the opening is what has to match: where contact happened
     // and roughly when. Everything else is a tiebreak.
@@ -294,6 +302,16 @@ function scoreMatches(index, { side, clock, contactRel, call } = {}) {
   }
   scored.sort((a, b) => a.distance - b.distance);
   return scored;
+}
+
+/** The furthest second any of an entry's roles reaches (tapeEndSeconds). */
+function reachEnd(e) {
+  let end = 0;
+  for (const r of e.roles || []) {
+    const t = tapeEndSeconds(r);
+    if (t > end) end = t;
+  }
+  return end;
 }
 
 /**
@@ -626,7 +644,16 @@ export function tapeEndSeconds(role) {
   for (const u of role?.utility || []) {
     if (Number.isFinite(u.t) && u.t > end) end = u.t;
   }
-  return end;
+  // The fine path usually outlives the schedule: waypoints are written only
+  // on anchor CHANGE, so a tape that ends in a hold — every defensive tape,
+  // every pre-execute wait — has its last waypoint minutes before its last
+  // sample. The tape's reach is the LONGER of the two. `pathSeconds` is the
+  // sidecar's stamp of the path it cut (playbookStore), so a light entry
+  // prices its reach without hydration; a hydrated or committed-full entry
+  // measures the path itself.
+  if (Number.isFinite(role?.pathSeconds) && role.pathSeconds > end) end = role.pathSeconds;
+  const fine = pathEndSeconds(role);
+  return fine > end ? fine : end;
 }
 
 /** Throws whose clock has come, which have not been thrown, and which are not stale. */

@@ -767,16 +767,27 @@ export function createCaller({
       return localOff.size;
     },
     isOnTape(slot, seconds) {
-      if (retired) return false;
-      if (teamMode !== CALLER_MODE.TAPE || !roles.has(slot) || localOff.has(slot)) return false;
+      return this.offTapeReason(slot, seconds) === null;
+    },
+    /**
+     * Why this slot is NOT on the tape right now, or null if it is. The
+     * fidelity harness sums these, because "follow 56%" without the reason
+     * split cannot tell a short tape from a recall from a fall-off — three
+     * different diseases with three different cures.
+     */
+    offTapeReason(slot, seconds) {
+      if (retired) return 'retired';
+      if (teamMode !== CALLER_MODE.TAPE) return 'mode';
+      if (!roles.has(slot)) return 'role';
+      if (localOff.has(slot)) return 'local';
       if (
         Number.isFinite(seconds) &&
         Number.isFinite(tapeEnd) &&
         seconds > tapeEnd + TAPE_GRACE_SECONDS
       ) {
-        return false;
+        return 'end';
       }
-      return true;
+      return null;
     },
     modeOf(slot) {
       return this.isOnTape(slot) ? CALLER_MODE.TAPE : CALLER_MODE.FREESTYLE;

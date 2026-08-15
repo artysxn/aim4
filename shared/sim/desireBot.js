@@ -748,7 +748,14 @@ export function desireController({
       // plan any more -- that is the re-call problem (#17), not a steering
       // fault, and blending the two made the steering look broken forever.
       pre: { n: 0, err: 0 },
-      post: { n: 0, err: 0 }
+      post: { n: 0, err: 0 },
+      // WHY off-tape decisions were off, split at first blood the same way,
+      // because "follow 56%" alone cannot tell a short tape ('end') from a
+      // recall ('mode'/'retired') from a fall-off ('local') from a v1 tape
+      // with no coordinates ('noTrace') — different diseases, different
+      // cures. Keys come from caller.offTapeReason, plus the two local ones.
+      offPre: {},
+      offPost: {}
     };
 
     let matchRng = null;
@@ -916,7 +923,10 @@ export function desireController({
           lag: { n: tape.lag.n, seconds: tape.lag.n ? tape.lag.sum / tape.lag.n : null },
           offPath: { n: tape.off.n, errorUnits: tape.off.n ? tape.off.err / tape.off.n : null },
           preContact: { n: tape.pre.n, errorUnits: tape.pre.n ? tape.pre.err / tape.pre.n : null },
-          postContact: { n: tape.post.n, errorUnits: tape.post.n ? tape.post.err / tape.post.n : null }
+          postContact: { n: tape.post.n, errorUnits: tape.post.n ? tape.post.err / tape.post.n : null },
+          // Why the off-tape decisions were off, split at first blood.
+          offReasonsPre: { ...tape.offPre },
+          offReasonsPost: { ...tape.offPost }
         };
       },
       /** The decision log the inspector reads: {tick, slot, id, motive}. */
@@ -1022,6 +1032,8 @@ export function desireController({
           planted: false,
           afterplant: null,
           retakeStage: null,
+          /** Posts that see the planted bomb, for the non-defusers to hold. */
+          defuseCover: null,
           lastEvidenceTick: -Infinity,
           lastRotate: {},
           /** Tick each zone was last swept by our eyes, for the classifier. */
@@ -2205,13 +2217,23 @@ export function desireController({
          * what keeps a follower from walking a dead pro's path into a wall.
          */
         const patchTrace = (slot, intent) => {
-          if (!R.caller || !R.caller.isOnTape(slot, elapsedForTrace)) {
+          const offBucket = state.bodies.some((bb) => !bb.alive) ? tape.offPost : tape.offPre;
+          const countOff = (why) => {
             tape.offTape += 1;
+            offBucket[why] = (offBucket[why] || 0) + 1;
+          };
+          if (!R.caller) {
+            countOff('noCaller');
+            return intent;
+          }
+          const gate = R.caller.offTapeReason(slot, elapsedForTrace);
+          if (gate) {
+            countOff(gate);
             return intent;
           }
           const trace = R.caller.traceAt(slot, elapsedForTrace);
           if (!trace) {
-            tape.offTape += 1;
+            countOff('noTrace');
             return intent;
           }
           tape.onTape += 1;
@@ -2350,7 +2372,15 @@ export function desireController({
           });
 
           if (runner.active && !runner.mayReplace(tick)) {
-            R.translator.setIntent(s, patchLooseBomb(s, stepped.intent));
+            // The full patch chain, not just the bomb rule: the committed path
+            // re-sends its intent every decide pass, and an override applied
+            // only on full decides loses to that re-send within 125 ms. This
+            // was the tape-follow hole: an option commits for seconds, so the
+            // one patched intent at the option boundary was stomped by the
+            // next pass's unpatched one — bots left the tape (and holstered
+            // the knife, paying the draw delay) for the length of every
+            // commitment.
+            R.translator.setIntent(s, patchLineup(s, patchTrace(s, patchLooseBomb(s, stepped.intent))));
             continue;
           }
 
@@ -3037,16 +3067,63 @@ export function desireController({
               assembled >= Math.min(2, livingCt) ||
               round.bombSecondsLeft < 22;
             if (ready) {
-              candidates.push({
-                id: 'defuse',
-                params: { mode: 'direct' },
-                prior: 0.95,
-                forced: true,
-                motive:
-                  round.bombSecondsLeft < 22
-                    ? 'the clock decides: retaking now'
-                    : `retaking together, ${assembled} of ${livingCt} assembled`
-              });
+              // One wire, one pair of hands (the engine refuses a second
+              // defuser): the kit if we have one, else the nearest body,
+              // takes the bomb; the REST take posts that SEE it, because a
+              // retake stacked on the wire is five bodies in one grenade —
+              // one defuses, the rest cover.
+              const pool = myLiving.some((m) => m.hasKit)
+                ? myLiving.filter((m) => m.hasKit)
+                : myLiving;
+              let defuser = null;
+              let bestDefD = Infinity;
+              for (const m of pool) {
+                const dd = Math.hypot(m.pos.x - state.bomb.x, m.pos.y - state.bomb.y);
+                if (dd < bestDefD) {
+                  bestDefD = dd;
+                  defuser = m.slot;
+                }
+              }
+              if (s === defuser) {
+                candidates.push({
+                  id: 'defuse',
+                  params: { mode: 'direct' },
+                  prior: 0.95,
+                  forced: true,
+                  motive:
+                    round.bombSecondsLeft < 22
+                      ? 'the clock decides: retaking now'
+                      : `retaking together, ${assembled} of ${livingCt} assembled`
+                });
+              } else {
+                if (!R.defuseCover) {
+                  const covering = nearestAnchors(
+                    R.graph,
+                    state.bomb.x,
+                    state.bomb.y,
+                    R.graph.levelFor(state.bomb.z),
+                    12
+                  ).filter((id) => {
+                    const a = R.graph.anchor(id);
+                    return (
+                      a &&
+                      angles.canSee(a.world.x, a.world.y, state.bomb.x, state.bomb.y, a.level)
+                    );
+                  });
+                  R.defuseCover = covering.length
+                    ? covering.slice(0, 2)
+                    : [R.retakeStage || R.target.id];
+                }
+                const coverers = R.slots.filter((sl) => bodies[sl].alive && sl !== defuser);
+                const post = R.defuseCover[coverers.indexOf(s) % R.defuseCover.length];
+                candidates.push({
+                  id: 'crossfire_hold',
+                  params: { spot: post },
+                  prior: 0.9,
+                  forced: true,
+                  motive: `covering the defuse from ${post}`
+                });
+              }
             } else {
               candidates.push({
                 id: 'rotate',

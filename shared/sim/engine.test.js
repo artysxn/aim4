@@ -276,6 +276,26 @@ if (graph) {
       assert(e.state.endReason === END_REASON.BOMB_EXPLODED, 'but the bomb beats it');
       assert(e.state.winner === 'T', 'and the T win');
     }
+
+    {
+      // One wire, one pair of hands: with two CTs in radius, the second ask is
+      // refused while anyone channels — one defuses, the rest cover — and the
+      // wire frees up the moment the channel breaks.
+      const r = spawns.map((sp, i) =>
+        i === 6 ? { ...sp, x: spawns[0].x - 20, y: spawns[0].y } : sp
+      );
+      const e = createEngine({ map: 'INF', graph, seed: 2, roster: r, pathDistance, record: 'full' });
+      for (let i = 0; i < ticksFor(FREEZE_SECONDS) + 1; i += 1) e.step();
+      e.beginPlant(0);
+      for (let i = 0; i < ticksFor(3.3); i += 1) e.step();
+      assert(e.state.bomb.planted, 'the bomb went down');
+      assert(e.beginDefuse(5), 'the first CT takes the wire');
+      assert(!e.beginDefuse(6), 'the second is refused while it is held');
+      assert(!e.beginDefuse(5), 'so is the holder asking again');
+      e.hurt(5, 10, 0);
+      assert(e.state.bodies[5].channel === null, 'damage breaks the hold');
+      assert(e.beginDefuse(6), 'and the wire is free for the cover');
+    }
   }
 
   // ---- the bomb is picked up, not lost ----

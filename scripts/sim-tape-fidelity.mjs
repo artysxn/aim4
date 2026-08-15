@@ -84,7 +84,9 @@ function blank() {
     lagN: 0,
     lagSum: 0,
     offN: 0,
-    offErr: 0
+    offErr: 0,
+    offReasonsPre: {},
+    offReasonsPost: {}
   };
 }
 
@@ -111,6 +113,14 @@ function fold(acc, s) {
     acc.offN += s.offPath.n;
     acc.offErr += s.offPath.errorUnits * s.offPath.n;
   }
+  for (const [bucket, key] of [
+    ['offReasonsPre', 'offReasonsPre'],
+    ['offReasonsPost', 'offReasonsPost']
+  ]) {
+    for (const [why, n] of Object.entries(s[key] || {})) {
+      acc[bucket][why] = (acc[bucket][why] || 0) + n;
+    }
+  }
   return acc;
 }
 
@@ -133,6 +143,19 @@ function report(label, a) {
         `on-path-behind ${share(a.lagN)} by ${a.lagN ? (a.lagSum / a.lagN).toFixed(1) : 0}s | ` +
         `off-path ${share(a.offN)} at ${a.offN ? (a.offErr / a.offN).toFixed(0) : 0}u`
     );
+  }
+  // The off-tape reasons, so a low follow names its disease: 'end' is a
+  // short tape, 'mode'/'retired' a recall, 'local' a fall-off, 'noTrace' a
+  // v1 tape with no coordinates.
+  for (const [label2, key] of [
+    ['off pre: ', 'offReasonsPre'],
+    ['off post:', 'offReasonsPost']
+  ]) {
+    const entries = Object.entries(a[key] || {}).sort((x, y) => y[1] - x[1]);
+    if (!entries.length) continue;
+    const total = entries.reduce((s2, [, n]) => s2 + n, 0);
+    const parts = entries.map(([why, n]) => `${why} ${((n / total) * 100).toFixed(0)}%`);
+    console.log(`${''.padEnd(10)} ${label2} ${parts.join(' | ')}  (${total.toLocaleString()})`);
   }
 }
 
@@ -217,7 +240,13 @@ for (const map of MAPS) {
 }
 
 function fold2(acc, s) {
-  for (const k of Object.keys(acc)) acc[k] += s[k];
+  for (const k of Object.keys(acc)) {
+    if (typeof acc[k] === 'object') {
+      for (const [why, n] of Object.entries(s[k] || {})) acc[k][why] = (acc[k][why] || 0) + n;
+    } else {
+      acc[k] += s[k];
+    }
+  }
   return acc;
 }
 

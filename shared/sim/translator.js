@@ -231,7 +231,10 @@ export function createTranslator(engine, opts = {}) {
           // knife left out by a stale flag is a bot that forgot it is holding
           // a knife.
           knife: false,
-          yaw: preAim && !body.focusVisible ? bearingTo(body, preAim.world) : null
+          // `focus` is the engine's own record of an enemy on screen; while it
+          // is set the aim motor owns the view, and a pre-aim yaw handed in
+          // over it would fight the fight.
+          yaw: preAim && body.focus === null ? bearingTo(body, preAim.world) : null
         });
 
         // ---- feet ----

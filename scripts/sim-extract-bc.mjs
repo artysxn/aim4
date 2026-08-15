@@ -43,6 +43,15 @@ const SEED = Number(flag('seed', 9));
 const OUT = flag('out', null);
 /** Pose sampling stride in rows; the decision cadence, so labels line up. */
 const STRIDE = 8;
+/**
+ * Tick buffers contain single-row dropouts: one row where every slot decodes
+ * as not-alive, with all ten alive again on the next (see the identical
+ * constant in sim-mine-playbook.mjs, where the same bug truncated 5.3% of the
+ * corpus). A real death lasts the rest of the round, so a gap this short is
+ * always the recording and never the player. Rows are engine ticks (64 Hz),
+ * sampled every STRIDE.
+ */
+const DEAD_GRACE_ROWS = Math.max(1, Math.round((1 * 64) / STRIDE));
 
 async function load(kind, map) {
   return JSON.parse(await fs.readFile(path.join(REPLAY_ROOT, 'sim', kind, `${map}.json`), 'utf8'));
@@ -59,7 +68,7 @@ function tracksFromTicks(bytes, meta) {
   const out = {};
   const players = [];
   for (let slot = 0; slot < PLAYER_SLOTS; slot += 1) {
-    players.push({ slot, poses: [], events: [], lastHealth: 100, dead: false });
+    players.push({ slot, poses: [], events: [], lastHealth: 100, dead: false, deadRun: 0 });
   }
   for (let row = 0; row < header.tickCount; row += STRIDE) {
     const tick = (header.firstTick || 0) + row;
@@ -67,9 +76,13 @@ function tracksFromTicks(bytes, meta) {
       if (p.dead) continue;
       readRecord(view, row, p.slot, out);
       if (!out.alive) {
-        p.dead = true;
+        // Poses carry their own ticks, so skipping a dropout leaves a gap in
+        // the track, not a shift; only a run past the grace is a death.
+        p.deadRun += 1;
+        if (p.deadRun > DEAD_GRACE_ROWS) p.dead = true;
         continue;
       }
+      p.deadRun = 0;
       p.poses.push({ tick, x: out.x, y: out.y });
       if (out.health < p.lastHealth) p.events.push({ type: 'damage', tick });
       p.lastHealth = out.health;
