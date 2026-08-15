@@ -121,15 +121,47 @@ export const STATS_LIBRARY_PAGE = 300;
 /** Keep a little more than one page so a follow-up batch still hits RAM. */
 const MEMORY_CAP = STATS_LIBRARY_PAGE + 100;
 
-/** demoId -> { key, entry } for the current process. Insertion order = LRU. */
+/**
+ * The cap that actually protects the process, in bytes.
+ *
+ * The entry-count cap alone let this map grow to the heap ceiling: 400
+ * entries sounds bounded, but an entry is a demo's whole stats row -- players,
+ * rounds, ev tables -- and a long demo's row is megabytes. Four hundred of
+ * those is a gigabyte of heap, which on the deployed container put the GC in
+ * permanent overtime and stalled every request on the box, cheap or not. The
+ * perf panel's shape for it: /api/me at an 8-second p95 next to heap 1158 of
+ * 1202 MB.
+ *
+ * Sized by stringified length at insert. That is an estimate and costs one
+ * stringify per index build or disk read -- never per request -- and being a
+ * third off does not matter: the point is that total retention is measured in
+ * MB, not in entries of unknown size.
+ */
+const MEMORY_BYTES_CAP = Number(process.env.AIM4_STATS_MEMORY_MB || 192) * 1024 * 1024;
+
+/** demoId -> { key, entry, bytes } for the current process. Insertion order = LRU. */
 const memory = new Map();
+let memoryBytes = 0;
 
 function remember(id, value) {
   if (!id) return;
-  if (memory.has(id)) memory.delete(id);
+  const prior = memory.get(id);
+  if (prior) {
+    memoryBytes -= prior.bytes || 0;
+    memory.delete(id);
+  }
+  if (value.bytes == null) {
+    try {
+      value.bytes = JSON.stringify(value.entry)?.length || 0;
+    } catch {
+      value.bytes = 0;
+    }
+  }
   memory.set(id, value);
-  while (memory.size > MEMORY_CAP) {
+  memoryBytes += value.bytes;
+  while (memory.size > MEMORY_CAP || (memoryBytes > MEMORY_BYTES_CAP && memory.size > 1)) {
     const oldest = memory.keys().next().value;
+    memoryBytes -= memory.get(oldest)?.bytes || 0;
     memory.delete(oldest);
   }
 }
@@ -1692,6 +1724,7 @@ export async function refreshLibraryRatings(io, user, records, { onProgress = nu
 
 /** Drop a demo's index when the demo goes. */
 export async function forgetDemoIndex(io, user, demoId) {
+  memoryBytes -= memory.get(demoId)?.bytes || 0;
   memory.delete(demoId);
   try {
     await fsp.rm(path.join(statsDir(io.userDir(user)), `${demoId}.json`), { force: true });

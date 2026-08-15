@@ -535,34 +535,59 @@ export function invalidateDemoList(user = undefined) {
   usageCache.delete(key);
 }
 
+/**
+ * Cold-cache builds in flight, so concurrent misses share one scan.
+ *
+ * Without this, the requests a page fires on load -- demos, stats, status, a
+ * round open -- each miss the empty cache of a freshly deployed container and
+ * each run the FULL library read side by side. Ten tabs' worth of that on a
+ * few thousand records is tens of thousands of file reads doing the same work,
+ * which is what a post-deploy "API may be down" actually was.
+ *
+ * @type {Map<string, Promise<object[]>>}
+ */
+const recordListInflight = new Map();
+
 export async function listDemos(user, { fresh = false } = {}) {
   const key = userKey(user);
   if (!fresh) {
     const hit = recordListCache.get(key);
     // A copy of the array: callers sort and splice their own view of it.
     if (hit && hit.expires > Date.now()) return hit.records.slice();
+    const inflight = recordListInflight.get(key);
+    if (inflight) return (await inflight).slice();
   }
 
-  const dir = demosDir(user);
-  const files = (await listFiles(dir)).filter((f) => f.endsWith('.json'));
-  const records = [];
-  for (let i = 0; i < files.length; i += READ_CONCURRENCY) {
-    const batch = await Promise.all(
-      files.slice(i, i + READ_CONCURRENCY).map(async (f) => {
-        try {
-          return JSON.parse(await fsp.readFile(path.join(dir, f), 'utf8'));
-        } catch {
-          /* skip a corrupt record rather than fail the whole listing */
-          return null;
-        }
-      })
-    );
-    for (const record of batch) if (record) records.push(record);
-  }
-  records.sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
+  const build = (async () => {
+    const dir = demosDir(user);
+    const files = (await listFiles(dir)).filter((f) => f.endsWith('.json'));
+    const records = [];
+    for (let i = 0; i < files.length; i += READ_CONCURRENCY) {
+      const batch = await Promise.all(
+        files.slice(i, i + READ_CONCURRENCY).map(async (f) => {
+          try {
+            return JSON.parse(await fsp.readFile(path.join(dir, f), 'utf8'));
+          } catch {
+            /* skip a corrupt record rather than fail the whole listing */
+            return null;
+          }
+        })
+      );
+      for (const record of batch) if (record) records.push(record);
+    }
+    records.sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
+    recordListCache.set(key, { records, expires: Date.now() + RECORD_LIST_TTL_MS });
+    return records;
+  })();
 
-  recordListCache.set(key, { records, expires: Date.now() + RECORD_LIST_TTL_MS });
-  return records.slice();
+  // `fresh` builds register too: a quota check that is already re-reading the
+  // directory may as well be the scan everyone else piggybacks on.
+  recordListInflight.set(key, build);
+  try {
+    return (await build).slice();
+  } finally {
+    recordListInflight.delete(key);
+  }
 }
 
 /**

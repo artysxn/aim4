@@ -52,21 +52,42 @@ export function clusterTeams(demoList) {
     else byNormName.set(norm, i);
   }
 
+  // Union appearances sharing >= 3 players, through an inverted index rather
+  // than pairwise set intersection. The pairwise loop was O(n^2) over every
+  // team appearance in the library and ran on EVERY listing request; at a few
+  // thousand demos that is tens of millions of set probes inside the event
+  // loop, which the perf panel showed as an 8-second p50 on /api/replays/demos.
+  //
+  // Same equivalence classes, provably: a pair reaches union() here exactly
+  // when it shares 3 players, which is exactly when the old loop unioned it,
+  // and union-find does not care in which order the unions arrive. Pairs that
+  // share no player -- almost all of them -- are never visited at all.
+  const byPlayer = new Map();
   for (let i = 0; i < appearances.length; i++) {
-    for (let j = i + 1; j < appearances.length; j++) {
-      if (find(i) === find(j)) continue;
-      const a = appearances[i].players;
-      const b = appearances[j].players;
-      if (a.size < 3 || b.size < 3) continue;
-      let shared = 0;
-      for (const p of a) {
-        if (b.has(p)) {
-          shared++;
-          if (shared >= 3) {
-            union(i, j);
-            break;
-          }
-        }
+    // Fewer than 3 players can never reach 3 shared; keep them out of the
+    // index so a lurker-only record does not fan out pairs for nothing.
+    if (appearances[i].players.size < 3) continue;
+    for (const p of appearances[i].players) {
+      let list = byPlayer.get(p);
+      if (!list) {
+        list = [];
+        byPlayer.set(p, list);
+      }
+      list.push(i);
+    }
+  }
+  const sharedCounts = new Map();
+  for (const list of byPlayer.values()) {
+    for (let a = 0; a < list.length; a++) {
+      for (let b = a + 1; b < list.length; b++) {
+        // Already together -- usually via the name pass, which catches the
+        // whole org in one union. Counting their remaining shared players
+        // would be most of this loop's work for zero information.
+        if (find(list[a]) === find(list[b])) continue;
+        const key = list[a] * appearances.length + list[b];
+        const seen = (sharedCounts.get(key) || 0) + 1;
+        if (seen === 3) union(list[a], list[b]);
+        sharedCounts.set(key, seen);
       }
     }
   }

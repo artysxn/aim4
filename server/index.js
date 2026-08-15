@@ -318,7 +318,16 @@ startSweep();
 startIngestSupervisor();
 // Prefetch CloakBrowser into the state volume so Hard Restart / On does not
 // race a 214 MB extract (spawn ETXTBSY) while Chromium is still being written.
-warmCloakBrowserCache(loadIngestConfig()).catch(() => {});
+//
+// DEFERRED, not at boot. Every deploy cold-starts the container with empty
+// listing and stats caches, so the first minute is already the most expensive
+// of the process's life; unpacking 214 MB of Chromium in the middle of it was
+// part of why a fresh deploy answered "API may be down". Ingest starts Off on
+// every boot, so nothing needs this binary for at least as long as it takes
+// an admin to reach the panel -- and Hard Restart / On still awaits its own
+// warm, exactly as before. The delay only moves the prefetch out of the
+// window where real requests are fighting for the box.
+setTimeout(() => warmCloakBrowserCache(loadIngestConfig()).catch(() => {}), 90 * 1000);
 
 server.listen(PORT, HOST, async () => {
   if (SERVE_STATIC) {
