@@ -1,3 +1,11 @@
+# Pin the provider. tools/cs3d-tex/ is a local-only .NET texture exporter
+# (source in git, never built or run in the image), but nixpacks globs for
+# *.csproj recursively, detects .NET, and makes `dotnet restore` the install
+# phase. That runs at /app, where there is no project or solution file, so it
+# dies with MSB1003 and the whole deploy rolls back. This is a Node service:
+# say so rather than letting detection guess.
+providers = ["node"]
+
 [phases.setup]
 aptPkgs = [
   "...",

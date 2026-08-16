@@ -10,7 +10,19 @@ vite.config.js
 vercel.json
 Dockerfile
 .dockerignore
-server/data
+# Host-mode data stays out — except the packed map the renderer serves. The
+# build is nixpacks (COPY . /app), so /api/cs3d can only find a pack that
+# survives this file; excluding all of server/data ships the route with
+# nothing behind it. Docker, unlike git, honours a negation inside an excluded
+# directory, but the stepwise form is what buildkit reliably matches.
+#
+# This is fine for one 91 MB map. Before the other six land, move the packs to
+# a volume (CS3D_PACK_DIR) or a bucket (VITE_CS3D_ASSET_BASE) and put the plain
+# `server/data` line back — half a gig does not belong in a build context.
+server/data/*
+!server/data/cs3d
+server/data/cs3d/*
+!server/data/cs3d/pack
 *.bat
 .env
 .env.*
