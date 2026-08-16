@@ -22,6 +22,29 @@ import {
 } from './cursor.js';
 import { MissingDemoError } from './classify.js';
 import { isTransientDownloadError } from './transient.js';
+import { PARSER_REVISION } from '../../demoparser/schema.js';
+
+/**
+ * A finished row is only finished if the parser that produced it is current.
+ *
+ * ingestParseWorker already upgrades a stale copy in place (see
+ * upgradeGate.test.js), but that gate only runs on a demo the crawler actually
+ * downloaded — and runOneDemo used to return early on state alone, so a match
+ * parsed by an older revision was skipped before the gate could ever see it.
+ * The library then kept the old parse forever: rev 2 has no jump or crouch.
+ *
+ * Rows written before this field existed carry no revision at all, so an
+ * absent value has to read as stale, not as current.
+ *
+ * `failed_permanent` is deliberately excluded: those never produced a parse, so
+ * there is nothing to upgrade, and the set includes genuine unpublished-id gaps
+ * that would cost a download each to re-confirm.
+ */
+export function needsParserUpgrade(row) {
+  if (!row) return false;
+  if (row.state === STATES.FAILED) return false;
+  return (row.parserRevision ?? 0) < PARSER_REVISION;
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -172,6 +195,9 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
       const allSkipped = stored.length === 0 && skipped.length > 0;
       const filteredOut = allDuplicate || allSkipped || (stored.length === 0 && dupes.length > 0);
       ledger.setState(row.matchId, filteredOut ? STATES.FILTERED_OUT : STATES.INGESTED, {
+        // Also stamped here: a filtered_out row is terminal, so without this it
+        // would read as stale on every future crawl and re-download forever.
+        parserRevision: PARSER_REVISION,
         demoIds: stored.map((r) => r.demoId),
         event: described.event || row.event || '',
         teams: described.teams,
@@ -217,7 +243,11 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         emit('match-cleaned', { matchId: row.matchId, freed });
       }
       if (!filteredOut) {
-        ledger.setState(row.matchId, unnamed.length ? STATES.NEEDS_REVIEW : STATES.CLEANED);
+        // Stamp the parser that produced this copy, so the next crawl can tell
+        // a finished row from one that predates the current revision.
+        ledger.setState(row.matchId, unnamed.length ? STATES.NEEDS_REVIEW : STATES.CLEANED, {
+          parserRevision: PARSER_REVISION
+        });
         await ledger.save();
       }
       return {
@@ -271,13 +301,22 @@ export function createPipeline({ cfg, ledger, source, onEvent = () => {} }) {
         teams: []
       });
       await ledger.save();
-    } else if (ledger.isTerminal(matchId)) {
-      // Already finished this id in a prior run; skip download and advance.
+    } else if (ledger.isTerminal(matchId) && !needsParserUpgrade(ledger.get(matchId))) {
+      // Already finished this id in a prior run, by the CURRENT parser; skip
+      // download and advance. A stale row falls through and is re-downloaded,
+      // re-parsed, and overwritten in place by the upgrade gate.
       cursorSnapshot = await advanceCursor(cfg, cursorSnapshot || (await readCursor(cfg)), {
         success: true
       });
       await emitCursor();
       return { advanced: true, skipped: true };
+    } else if (ledger.isTerminal(matchId)) {
+      emit('parser-upgrade', {
+        matchId,
+        demoId: id,
+        from: ledger.get(matchId)?.parserRevision ?? null,
+        to: PARSER_REVISION
+      });
     }
 
     const free = await freeBytes(cfg.workDir);

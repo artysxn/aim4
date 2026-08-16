@@ -42,10 +42,11 @@ const SUN_SCALE = 1.0;
 /**
  * Extra sun on top of what `light_environment` authored, applied to the lights
  * only and never to the exposure calibration (see below). Dialled in against
- * the game with the `sun x` slider and settled at 3 on every map: the bakes are
- * indirect-only, so the maps read flat and low-contrast outdoors at 1.
+ * the game with the `sun x` slider: the bakes are indirect-only, so the maps
+ * read flat and low-contrast outdoors at 1. Settled at 3, then raised to 5 —
+ * 3 still read dim once the map colour grade was ruled out as a way to lift it.
  */
-const SUN_BOOST = 3.0;
+const SUN_BOOST = 5.0;
 /** Ambient for lightmapped surfaces = baked irradiance × this. */
 const LIGHTMAP_SCALE = 1.0;
 /** Bounds on the sky-probe intensity when calibrating it to the atlas mean. */
@@ -278,7 +279,7 @@ export class MapLighting {
     // boosted sun would darken everything by the same factor and cancel the
     // change out. Applying it only to the lights widens the gap between what
     // the sun reaches and what it does not, which is the contrast the maps were
-    // missing outdoors. This is exactly what the `sun ×` slider does at 3.
+    // missing outdoors. This is exactly what the `sun ×` slider does.
     this.sunIntensity = sunBase * SUN_BOOST;
     if (this.renderer) this.renderer.toneMappingExposure = this.exposure;
     // Until the real sky is measured, the probe carries the same ambient

@@ -81,7 +81,12 @@ class Cs3dMaterial extends THREE.MeshStandardNodeMaterial {
   constructor(cs3d) {
     super();
     this.cs3d = cs3d;
-    if (cs3d.lightmap) this.lightsNode = lights([]);
+    // Scene lights off for anything whose sun is baked. Charted geometry has
+    // always done this; a prop joins it once the pack ships `_sun`, and that is
+    // what takes the leaky runtime shadow map out of the picture. Without the
+    // baked term a prop still needs the real light, or it loses the sun
+    // entirely — hence the `sun` check rather than `probeAmbient` alone.
+    if (cs3d.lightmap || (cs3d.probeAmbient && cs3d.sun)) this.lightsNode = lights([]);
   }
 
   setupLightMap(builder) {
@@ -97,7 +102,18 @@ class Cs3dMaterial extends THREE.MeshStandardNodeMaterial {
     // for both. The probe keeps its reflection (setupEnvironment) and loses its
     // diffuse — exactly the split lightmapped world geometry already uses.
     if (!lm && this.cs3d.probeAmbient) {
-      return new IrradianceNode(attribute('_amb', 'vec3').mul(float(LM_TO_IRRADIANCE)));
+      let irr = attribute('_amb', 'vec3').mul(float(LM_TO_IRRADIANCE));
+      // The sun, the same analytic term the charted world uses, gated by baked
+      // per-vertex visibility instead of the mask atlas. A prop was previously
+      // the only thing still lit by the real DirectionalLight, whose shadow map
+      // leaks through thin geometry: indoor cables and conduit sampled lit and
+      // glowed as `sun ×` came up while the wall behind them stayed dark.
+      const psun = this.cs3d.sun;
+      if (psun) {
+        const nDotL = max(dot(transformedNormalWorld, psun.direction), float(0));
+        irr = irr.add(psun.color.mul(psun.intensity).mul(nDotL).mul(attribute('_sun', 'float')));
+      }
+      return new IrradianceNode(irr);
     }
     if (!lm) return super.setupLightMap(builder);
     const t = texture(lm.texture, uv(1));
@@ -216,6 +232,8 @@ export class MaterialLibrary {
     this.lightmapIntensity = makeLightmapUniform(opts.lightmapIntensity ?? 1);
     /** The pack baked CS2's light probes into the vertices of chartless geometry. */
     this.probeAmbient = !!opts.probeAmbient;
+    /** ...and its sun visibility, so a prop is shadowed by the bake, not the map. */
+    this.sunVis = !!manifest.sunVis;
     /** Seconds since load, for the effect cards' drifting masks. */
     this.time = uniform(0);
     // The analytic sun lightmapped materials add on top of the baked indirect.
@@ -568,7 +586,9 @@ export class MaterialLibrary {
       mat = new Cs3dMaterial({
         lightmap: lightmapped ? this.lightmap : null,
         blend,
-        sun: lightmapped ? this.sun : null,
+        // Both paths now take the analytic sun: charted geometry gates it on
+        // the mask atlas, chartless on its baked `_sun` vertex term.
+        sun: lightmapped || (this.probeAmbient && this.sunVis) ? this.sun : null,
         probeAmbient: !lightmapped && this.probeAmbient
       });
       // `factor` is only the tints the pack invents (water fog, glass, unlit

@@ -186,6 +186,16 @@ function normalizeTile(mesh, wantColor, tint, wantAmb) {
     const ab = new Float32Array(n * 3);
     if (amb) for (let i = 0; i < n; i++) { ab[i * 3] = amb.getX(i); ab[i * 3 + 1] = amb.getY(i); ab[i * 3 + 2] = amb.getZ(i); }
     g.setAttribute('_amb', new THREE.BufferAttribute(ab, 3));
+
+    // Baked sun visibility, 1 = daylight. Charted geometry reads this from the
+    // shadow-mask atlas; a prop has no chart, so it rides the vertex instead.
+    // Missing (a pack from before the bake) means full sun, which is the old
+    // behaviour rather than a black map.
+    const svis = src.getAttribute('_sun');
+    const sb = new Float32Array(n);
+    if (svis) for (let i = 0; i < n; i++) sb[i] = svis.getX(i);
+    else sb.fill(1);
+    g.setAttribute('_sun', new THREE.BufferAttribute(sb, 1));
   }
 
   const idx = src.index;

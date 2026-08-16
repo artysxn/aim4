@@ -155,6 +155,11 @@ function logEvent(e, verbose) {
               `${e.crashed ? ` [${e.crashed} map crash(es)]` : ''}`
       );
       break;
+    case 'parser-upgrade':
+      console.log(
+        `\n^ demo/${e.demoId} re-parse: stored by parser rev ${e.from ?? '<pre-2>'}, now ${e.to}`
+      );
+      break;
     case 'download-start':
       console.log(`\n-> demo/${e.demoId || e.matchId} download`);
       lastProgressLogAt = 0;

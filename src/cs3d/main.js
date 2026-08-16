@@ -445,7 +445,9 @@ function setupGradePanel(knobs) {
     /* first run */
   }
   const defs = [
-    { key: 'sun', label: 'sun ×', min: 0, max: 3, step: 0.05 },
+    // Multiplies SUN_BOOST, so 1 is already the baked-in default: max 5 reaches
+    // 5× that, which is well past anything that still looks like the game.
+    { key: 'sun', label: 'sun ×', min: 0, max: 5, step: 0.05 },
     { key: 'bake', label: 'bounce ×', min: 0, max: 3, step: 0.05 },
     { key: 'sky', label: 'sky probe ×', min: 0, max: 3, step: 0.05 },
     { key: 'brightness', label: 'brightness', min: 0.2, max: 3, step: 0.01 },

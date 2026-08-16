@@ -1393,6 +1393,122 @@ function bakeProbeAmbient(doc, lmByMat, probes) {
 }
 
 /**
+ * Per-vertex sun visibility for chartless geometry: 1 in daylight, 0 occluded.
+ *
+ * Charted world geometry gets this from `shadowmask.webp`, a 4096² atlas the
+ * game baked. Props have no chart, so until now they were the only things in
+ * the map still relying on the runtime shadow map to be blocked — and it leaks.
+ * A single ortho cascade with `normalBias = 2.5` units pushes the lookup off
+ * thin geometry entirely, so cables and conduit indoors sampled lit and glowed
+ * as the sun scaled up, while the wall behind them stayed correctly dark.
+ *
+ * Occluders are every world triangle, charted or not, which is what makes the
+ * roof over an indoor prop count. Rays that leave the map hit nothing and read
+ * as full sun, so anything outside a building is unaffected.
+ *
+ * This is per VERTEX, so it resolves at the density of the mesh: excellent at
+ * the question that actually matters ("is this prop under a roof"), and poor at
+ * a crisp shadow edge across a large low-poly prop, which smears over the span
+ * between its corners instead. That trade is deliberate.
+ */
+function bakeSunVisibility(doc, lmByMat, sunDir, THREE, MeshBVH) {
+  // ---- occluder set: every triangle in the world, flattened to a soup ------
+  let triTotal = 0;
+  const prims = [];
+  for (const mesh of doc.getRoot().listMeshes()) {
+    for (const prim of mesh.listPrimitives()) {
+      const pos = prim.getAttribute('POSITION');
+      if (!pos) continue;
+      const idx = prim.getIndices();
+      const count = idx ? idx.getCount() : pos.getCount();
+      prims.push({ prim, pos, idx, count });
+      triTotal += Math.floor(count / 3);
+    }
+  }
+  const verts = new Float32Array(triTotal * 9);
+  let w = 0;
+  const v = [];
+  for (const { pos, idx, count } of prims) {
+    for (let i = 0; i + 2 < count; i += 3) {
+      for (let k = 0; k < 3; k++) {
+        pos.getElement(idx ? idx.getScalar(i + k) : i + k, v);
+        verts[w++] = v[0];
+        verts[w++] = v[1];
+        verts[w++] = v[2];
+      }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+  const bvh = new MeshBVH(geo, { targetLeafSize: 8 });
+
+  // ---- toward the sun, with a small cone for a soft edge -------------------
+  // sun.dir is the direction the light travels, so the ray runs against it.
+  const L = new THREE.Vector3(-sunDir[0], -sunDir[1], -sunDir[2]).normalize();
+  const t1 = new THREE.Vector3();
+  const t2 = new THREE.Vector3();
+  t1.set(0, 1, 0);
+  if (Math.abs(L.dot(t1)) > 0.9) t1.set(1, 0, 0);
+  t2.crossVectors(L, t1).normalize();
+  t1.crossVectors(t2, L).normalize();
+  // ~2.5°: wider than the real sun, but this is sampled 4×, and a per-vertex
+  // term wants its penumbra from the cone rather than from mesh density.
+  const SPREAD = 0.044;
+  const taps = [
+    [0, 0],
+    [SPREAD, 0],
+    [-SPREAD * 0.5, SPREAD * 0.87],
+    [-SPREAD * 0.5, -SPREAD * 0.87]
+  ];
+  const dirs = taps.map(([a, b]) =>
+    new THREE.Vector3().copy(L).addScaledVector(t1, a).addScaledVector(t2, b).normalize()
+  );
+
+  const ray = new THREE.Ray();
+  const origin = new THREE.Vector3();
+  let baked = 0;
+  let lit = 0;
+  let skipped = 0;
+  for (const mesh of doc.getRoot().listMeshes()) {
+    for (const prim of mesh.listPrimitives()) {
+      const lm = lmByMat.get(prim.getMaterial());
+      if (lm && lm.lm > 0) continue; // charted: the atlas already has it
+      const pos = prim.getAttribute('POSITION');
+      const nrm = prim.getAttribute('NORMAL');
+      if (!pos) continue;
+      const n = pos.getCount();
+      const vis = new Float32Array(n);
+      const p = [];
+      const q = [0, 1, 0];
+      for (let i = 0; i < n; i++) {
+        pos.getElement(i, p);
+        if (nrm) nrm.getElement(i, q);
+        // Facing away from the sun: N·L kills the term in the shader anyway,
+        // so the ray would be wasted. About a third of every mesh.
+        const nDotL = q[0] * L.x + q[1] * L.y + q[2] * L.z;
+        if (nDotL <= 0) {
+          vis[i] = 1;
+          skipped++;
+          continue;
+        }
+        // Off the surface along the normal, or every ray hits its own triangle.
+        origin.set(p[0] + q[0] * 0.5, p[1] + q[1] * 0.5, p[2] + q[2] * 0.5);
+        let open = 0;
+        for (const d of dirs) {
+          ray.set(origin, d);
+          if (!bvh.raycastFirst(ray, THREE.DoubleSide, 0, 1e6)) open++;
+        }
+        vis[i] = open / dirs.length;
+        if (vis[i] > 0) lit++;
+        baked++;
+      }
+      prim.setAttribute('_SUN', doc.createAccessor().setType('SCALAR').setArray(vis));
+    }
+  }
+  return { baked, lit, skipped, occluders: triTotal };
+}
+
+/**
  * A prim's lightmap chart: the highest TEXCOORD_n (n ≥ 1) that stays inside the
  * atlas, or null when the prim has none. Props are the null case — CS2 lights
  * them from `env_light_probe_volume_atlas`, not the lightmap, so VRF exports
@@ -1771,8 +1887,9 @@ async function writeGroupGlb(io, srcDoc, meshes, outFile) {
  * @param {boolean} o.lightmapped  false for the skybox (its charts are not in our atlas)
  * @param {string} o.label
  */
-async function packWorld({ io, worldGlb, bundle, idBase, lmScale, lightmapped, label, probes }) {
+async function packWorld({ io, worldGlb, bundle, idBase, lmScale, lightmapped, label, probes, sunDir }) {
   let probeStats = null;
+  let sunStats = null;
   const doc = quietDoc(await io.read(worldGlb));
   const root = doc.getRoot();
   const stats = {
@@ -1829,6 +1946,21 @@ async function packWorld({ io, worldGlb, bundle, idBase, lmScale, lightmapped, l
         `${r.missed ? `, ${r.missed} outside every volume` : ''}, peak ${r.peak.toFixed(2)}, ${((Date.now() - t0) / 1000).toFixed(1)}s`
     );
     probeStats = r;
+  }
+  // Sun visibility rides with the probe bake: both answer "what light reaches
+  // this vertex" for the geometry the lightmap never covered, and both need
+  // positions already in scene space.
+  if (probes && sunDir) {
+    const t0 = Date.now();
+    // Namespace import: three's ESM build has no default export.
+    const [THREE, { MeshBVH }] = await Promise.all([import('three'), import('three-mesh-bvh')]);
+    const r = bakeSunVisibility(doc, norm.lmByMat, sunDir, THREE, MeshBVH);
+    console.log(
+      `  ${label} sun: baked ${r.baked} vertices against ${r.occluders} occluders ` +
+        `(${r.skipped} back-facing skipped), ${Math.round((100 * r.lit) / Math.max(1, r.baked))}% see sun, ` +
+        `${((Date.now() - t0) / 1000).toFixed(1)}s`
+    );
+    sunStats = r;
   }
 
   // Textures: resolved from the vmat's own slots (see the section comment
@@ -2298,7 +2430,9 @@ async function packMap(entry) {
     lmScale: worldInfo.lightmapUvScale,
     lightmapped: haveLightmap,
     label: 'world',
-    probes
+    probes,
+    // Already scene space (y-up, y negative pointing down), same as positions.
+    sunDir: meta.sun?.dir
   });
   const geo = await writeGroups(io, world, out, 'geo');
   stats.tris = geo.tris;
@@ -2476,6 +2610,9 @@ async function packMap(entry) {
     post,
     // Chartless geometry carries baked probe irradiance in its `_AMB` attribute.
     probeAmbient: !!probes,
+    // ...and baked sun visibility in `_SUN`, so props take the analytic sun the
+    // charted world takes rather than the runtime shadow map.
+    sunVis: !!(probes && meta.sun?.dir),
     phys: 'phys.glb',
     tex: { file: 'tex.bin', bytes: tex.bytes, dir: tex.dir },
     lightmap,
